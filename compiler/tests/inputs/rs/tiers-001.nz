@@ -1,0 +1,1 @@
+fn sq(n: Int) -> Int { n * n }

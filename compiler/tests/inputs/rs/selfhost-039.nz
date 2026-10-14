@@ -1,0 +1,1 @@
+fn m() -> Int { let mut i = 0; while i < 2 { let mut j = 0; while j < 2 { j = j + 1; } i = i + 1; } i }

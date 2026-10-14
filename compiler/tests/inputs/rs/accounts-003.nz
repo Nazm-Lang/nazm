@@ -1,0 +1,5 @@
+fn owns(caller: Int, s: State) -> Bool ! {} { caller == s.owner }
+pub fn mint(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} {
+let ok = owns(caller, s);
+if ok { Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + n, bob: s.bob, paused: s.paused)) } else { Result[State, Int].Err(error: 4) }
+}

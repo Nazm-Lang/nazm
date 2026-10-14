@@ -1,0 +1,1 @@
+struct P { x: Int, } enum S { At(p: P), D, } fn m() -> Int { match S.At(p: P(x: 3)) { S.D() => 0, S.At(p: q) => q.x, } }

@@ -1,0 +1,4 @@
+use "@std/hash";
+use "@std/hashmap";
+struct R { w: (Int, Vec[Int]), }
+fn main() -> Int { let m = hashmap_new[R, Int](); 0 }

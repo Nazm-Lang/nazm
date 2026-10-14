@@ -1,0 +1,10 @@
+fn work(n: Int) -> Int {
+    let mut i = 0;
+    let mut acc = 0;
+    while i < n {
+        acc = (acc + i * 7) % 1000003;
+        i = i + 1;
+    }
+    acc
+}
+fn main() -> Int { work(120000000) }

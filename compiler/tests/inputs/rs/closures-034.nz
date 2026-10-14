@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let p = fn(c: IoCap) -> Str ! { io } { read_file("cfg") }; write_file(p(io), "x") }

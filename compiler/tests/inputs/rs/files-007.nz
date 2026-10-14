@@ -1,0 +1,17 @@
+use "@std/ioerror";
+fn main(io: IoCap) -> Int ! { io } {
+let h = os_stdin();
+let buf = bytes_new(5);
+let mut total = 0;
+let mut n = os_read(h, buf);
+while n > 0 {
+print(bytes_to_str(bytes_slice(buf, 0, n)));
+total = total + n;
+n = os_read(h, buf);
+}
+print(str_concat("|", int_to_str(total)));
+print(str_concat("|", io_kind_name(io_kind_of(os_write(h, buf)))));
+print(str_concat("|", io_kind_name(io_kind_of(os_seek(h, 0, 0)))));
+print(str_concat("|", int_to_str(os_status(os_stdin()))));
+0
+}

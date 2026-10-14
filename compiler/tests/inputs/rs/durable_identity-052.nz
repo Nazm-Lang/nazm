@@ -1,0 +1,5 @@
+pub enum State {
+    Waiting,
+    Done(code: Int, why: Str),
+}
+pub fn start() -> State { State.Waiting() }

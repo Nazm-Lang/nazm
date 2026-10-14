@@ -1,0 +1,16 @@
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 6 {
+        total = total + bit(same(text(i), text(i)), 1) + bit(same(item(i), item(i + 1)), 10);
+        total = total + bit(same(shape(i), shape(i)), 100) + bit(wrap(Option[Str].Some(value: text(i)), Option[Str].Some(value: text(i))), 1000);
+        total = total + bit(same(Result[Str, Str].Ok(value: text(i)), Result[Str, Str].Ok(value: text(i))), 10000);
+        churn();
+        i = i + 1;
+    }
+    let a = item(4);
+    let b = item(4);
+    let s = same(a, b);
+    churn();
+    total + bit(s, 100000) + 1000000 * (str_len(a.name) + str_len(b.name))
+}

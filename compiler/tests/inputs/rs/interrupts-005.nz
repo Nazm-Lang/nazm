@@ -1,0 +1,2 @@
+@interrupt("timer")
+fn h(io: IoCap) -> Int ! {io} { 0 }

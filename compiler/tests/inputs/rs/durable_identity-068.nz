@@ -1,0 +1,8 @@
+use "b.nz";
+fn size(m: Maybe[Str]) -> Int { match m { Maybe.None() => 0, Maybe.Some(value: s) => str_len(s), } }
+fn main() -> Int {
+    let b = Box[Int](value: 1);
+    let xs = vec_new[Box[Int]]();
+    vec_push(xs, b);
+    identity(b.value) + identity[Int](2) + size(Maybe[Str].Some(value: "abc")) + vec_get(xs, 0).value
+}

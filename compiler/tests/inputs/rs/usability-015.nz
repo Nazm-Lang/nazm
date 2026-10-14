@@ -1,0 +1,4 @@
+fn helper(n: Int) -> Int { ping(n) + 1 }
+fn ping(n: Int) -> Int { pong(n + 1) }
+fn pong(n: Int) -> Int { helper(n + 1) }
+fn main() -> Int { ping(0) }

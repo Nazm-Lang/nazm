@@ -1,0 +1,10 @@
+
+enum E { A(s: Str), B }
+fn g(x: Int) -> Int { x + 1 }
+fn pick(e: E) -> Int { match e { E.A(s: s) => str_len(s), E.B() => 0 } }
+fn main() -> Int {
+    let s = int_to_str(g(4));
+    let n = pick(E.A(s: s));
+    scope { }
+    n
+}

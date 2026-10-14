@@ -1,0 +1,2 @@
+fn helper() -> Int { 7 }
+fn main() -> Int { helper() }

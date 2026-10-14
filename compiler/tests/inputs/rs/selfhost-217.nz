@@ -1,0 +1,2 @@
+fn f[T](xs: Vec[T]) -> Int { 0 }
+fn m() -> Int { f(1) }

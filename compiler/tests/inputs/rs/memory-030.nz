@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let z = str_from_byte(0);
+    let s = str_concat(str_concat("a", z), "b");
+    str_len(s) * 1000 + str_byte(s, 1) * 10 + str_byte(str_slice(s, 1, 3), 1)
+}

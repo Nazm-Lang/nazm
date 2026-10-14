@@ -1,0 +1,2 @@
+use "counter.nz";
+fn main() -> Int { let c = counter(); bump(c, 20); bump(c, 22); count(c) }

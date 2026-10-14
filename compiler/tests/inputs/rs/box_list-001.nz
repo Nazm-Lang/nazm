@@ -1,0 +1,48 @@
+enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), Neg(e: Box[Expr]), }
+struct Node { name: Str, kids: List[Node], }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}
+
+fn eval(e: Expr) -> Int {
+    match e {
+        Expr.Num(v: v) => v,
+        Expr.Add(l: l, r: r) => eval(box_get(l)) + eval(box_get(r)),
+        Expr.Neg(e: x) => 0 - eval(box_get(x)),
+    }
+}
+
+fn count(n: Node) -> Int {
+    let mut c = 1;
+    for k in n.kids { c = c + count(k); }
+    c
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    // A tree of boxes: 1 + -(5).
+    let e = Expr.Add(l: box_new(Expr.Num(v: 1)), r: box_new(Expr.Neg(e: box_new(Expr.Num(v: 5)))));
+    show(out, num_to_str(eval(e)));
+    // A box is shared: two references, one value.
+    let b = box_new("shared");
+    let c = b;
+    show(out, str_concat(box_get(b), box_get(c)));
+    // A list is a snapshot: what is pushed onto the vector afterwards does not reach it.
+    let leaves = vec_new[Node]();
+    vec_push(leaves, Node(name: "a", kids: list_empty[Node]()));
+    vec_push(leaves, Node(name: "b", kids: list_empty[Node]()));
+    let root = Node(name: "r", kids: list_from_vec(leaves));
+    vec_push(leaves, Node(name: "late", kids: list_empty[Node]()));
+    show(out, num_to_str(count(root)));
+    show(out, num_to_str(list_len(root.kids)));
+    show(out, list_get(root.kids, 1).name);
+    // Nested: a list of lists.
+    let row = vec_new[Int]();
+    vec_push(row, 7);
+    let rows = vec_new[List[Int]]();
+    vec_push(rows, list_from_vec(row));
+    vec_push(rows, list_empty[Int]());
+    let grid = list_from_vec(rows);
+    show(out, num_to_str(list_get(list_get(grid, 0), 0) + list_len(list_get(grid, 1))));
+    0
+}

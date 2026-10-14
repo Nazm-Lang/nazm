@@ -1,0 +1,5 @@
+pub fn adder(k: Int) -> fn() -> Int {
+    let data = vec_new[Int]();
+    vec_push(data, k);
+    fn() -> Int { vec_get(data, 0) * 10 }
+}

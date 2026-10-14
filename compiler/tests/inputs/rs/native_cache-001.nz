@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(out: OutCap) -> Int { print(int_to_str(twice(21))); 0 }

@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let t = os_mkdtemp("."); write_file(str_concat(t, "/x"), "y"); os_unlink(str_concat(t, "/x")); os_rmdir(t) }

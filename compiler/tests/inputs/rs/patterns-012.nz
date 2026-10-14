@@ -1,0 +1,1 @@
+fn f(x: Float64) -> Int { match x { 1.5 => 1, _ => 2, } }

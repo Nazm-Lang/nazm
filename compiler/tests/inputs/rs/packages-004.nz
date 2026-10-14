@@ -1,0 +1,3 @@
+use "geo:lib.nz";
+use "shapes:poly.nz";
+fn main() -> Int { perimeter(4, 10) + sides(2) }

@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let yyy = 1;
+    yyy = 2;
+    yyy
+}

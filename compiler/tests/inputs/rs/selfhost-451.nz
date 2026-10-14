@@ -1,0 +1,3 @@
+use "@std/num";
+use "half.nz";
+fn main() -> Int { num_abs(0 - 9) * 10 + half(6) + num_min(4, 2) }

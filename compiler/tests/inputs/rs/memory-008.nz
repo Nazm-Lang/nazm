@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 200 {
+        let each = ints_new();
+        ints_push(each, i);
+        total = total + ints_get(each, 0);
+        i = i + 1;
+    }
+    total
+}

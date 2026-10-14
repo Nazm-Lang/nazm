@@ -1,0 +1,6 @@
+fn double(x: Int) -> Int { x * 2 }
+fn pure_user(x: Int) -> Int ! {} { double(x) }
+fn report(out: OutCap, n: Int) { println(f"n = {n}") }
+fn main() {
+    report(out, pure_user(21))
+}

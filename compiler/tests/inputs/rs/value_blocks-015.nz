@@ -1,0 +1,31 @@
+fn mk(log: Ints, ok: Bool) -> Result[Str, Str] {
+    ints_push(log, 1);
+    if ok { return Result[Str, Str].Ok(value: int_to_str(4321)); }
+    Result[Str, Str].Err(error: int_to_str(9))
+}
+fn f(log: Ints, c: Bool, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {
+    let a = (if c { mk(log, ok) } else { mk(log, true) })?;
+    let b = ({
+        let r = mk(log, ok);
+        r
+    })?;
+    let m = (match Option[Int].Some(value: 1) {
+        Option.None() => {
+            mk(log, true)
+        },
+        Option.Some(value: q) => {
+            let r2 = mk(log, ok);
+            r2
+        },
+    })?;
+    Result[Int, Str].Ok(value: str_len(a) + str_len(b) + str_len(m))
+}
+fn main(tasks: SpawnCap) -> Int {
+    let log = ints_new();
+    let x = f(log, true, true, tasks);
+    let y = f(log, true, false, tasks);
+    churn();
+    let vx = match x { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, };
+    let vy = match y { Result.Ok(value: n) => 0 - 1, Result.Err(error: e) => str_len(e), };
+    vx * 1000 + vy * 100 + ints_len(log)
+}

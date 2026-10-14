@@ -1,0 +1,2 @@
+fn both[A: Equality, B: Equality](a: A, b: B) -> Int { 0 }
+fn main() -> Int { both(1, vec_new[Int]()) }

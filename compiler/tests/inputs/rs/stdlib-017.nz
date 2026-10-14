@@ -1,0 +1,24 @@
+use "@std/option";
+use "@std/result";
+use "@std/seq";
+struct P { x: Int, name: Str }
+fn i(n: Int) -> Str { int_to_str(n) }
+fn b(x: Bool) -> Str { if x { "T" } else { "F" } }
+fn show(io: IoCap, s: Str) -> Int { print(s); print("|") }
+fn main(io: IoCap) -> Int {
+    let some = Option[Str].Some(value: "v"); let none = Option[Str].None();
+    show(io, b(option_is_some(some))); show(io, b(option_is_none(none))); show(io, option_unwrap_or(none, "fallback")); show(io, option_unwrap_or(some, "fallback"));
+    let ok = Result[P, Str].Ok(value: P(x: 3, name: "p")); let bad = Result[P, Str].Err(error: "e");
+    show(io, b(result_is_ok(ok))); show(io, b(result_is_err(bad))); show(io, result_unwrap_or(bad, P(x: 9, name: "d")).name);
+    show(io, match result_ok(ok) { Option.Some(value: v) => i(v.x), Option.None() => "none" });
+    show(io, match result_err(bad) { Option.Some(value: e) => e, Option.None() => "none" });
+    show(io, match result_err(ok) { Option.Some(value: e) => e, Option.None() => "none" });
+    let xs = ints_new(); ints_push(xs, 4); ints_push(xs, 0 - 2); ints_push(xs, 9); ints_push(xs, 4);
+    show(io, i(ints_sum(xs))); show(io, i(option_unwrap_or(ints_max(xs), 0))); show(io, i(option_unwrap_or(ints_min(xs), 0)));
+    show(io, i(option_unwrap_or(ints_index_of(xs, 4), 0 - 1))); show(io, i(option_unwrap_or(ints_index_of(xs, 5), 0 - 1))); show(io, b(ints_contains(xs, 9)));
+    let empty = ints_new(); show(io, b(option_is_none(ints_max(empty)))); show(io, b(option_is_none(ints_min(empty)))); show(io, i(ints_sum(empty)));
+    let ss = strs_new(); strs_push(ss, "a"); strs_push(ss, "b"); show(io, i(option_unwrap_or(strs_index_of(ss, "b"), 0 - 1))); show(io, b(strs_contains(ss, "c")));
+    let ps = vec_new[P](); vec_push(ps, P(x: 1, name: "a")); vec_push(ps, P(x: 2, name: "b"));
+    show(io, i(option_unwrap_or(vec_index_of(ps, P(x: 2, name: "b")), 0 - 1))); show(io, i(option_unwrap_or(vec_index_of(ps, P(x: 2, name: "c")), 0 - 1)));
+    0
+}

@@ -1,0 +1,10 @@
+fn churn() -> Int {
+    let mut noise = vec_new[Str]();
+    let mut k = 0;
+    while k < 64 {
+        vec_push(noise, str_concat("noise-", int_to_str(k)));
+        k = k + 1;
+    }
+    noise = vec_new[Str]();
+    vec_len(noise)
+}

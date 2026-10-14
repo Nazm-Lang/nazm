@@ -1,0 +1,1 @@
+fn main() -> Int { let v: Vec[Int] = strs_new(); 0 }

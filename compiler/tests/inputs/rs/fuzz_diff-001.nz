@@ -1,0 +1,6 @@
+struct P { a: Int, b: Int }
+struct Q { flag: Bool, name: Str, n: Int }
+enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }
+fn q_of(x: Int, y: Int) -> Q { Q(flag: x < y, name: int_to_str(x), n: y) }
+fn s_of(x: Int, y: Int) -> S { if x < y { S.Pair(q: q_of(x, y), k: x) } else { if x == y { S.Empty() } else { S.Num(n: y) } } }
+fn s_val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 - str_len(q.name) }) + k % 7, S.Empty() => 3, } }

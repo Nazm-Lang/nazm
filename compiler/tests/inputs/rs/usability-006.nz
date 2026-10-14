@@ -1,0 +1,19 @@
+
+fn seen(tag: Str, v: Bool, out: OutCap) -> Bool { print(str_concat(tag, "\n")); v }
+fn boom() -> Bool { 1 / (1 - 1) == 0 }
+fn b(v: Bool) -> Int { if v { 1 } else { 0 } }
+fn main(io: IoCap) -> Int {
+    let mut n = 0;
+    n = n * 2 + b(seen("a", false, io) && seen("never-1", true, io));
+    n = n * 2 + b(seen("b", true, io) || seen("never-2", true, io));
+    n = n * 2 + b(seen("c", true, io) && seen("d", true, io));
+    n = n * 2 + b(seen("e", false, io) || seen("f", false, io));
+    n = n * 2 + b(false && boom());
+    n = n * 2 + b(true || boom());
+    // `||` loosest, then `&&`, then comparison; `!` as tight as `-`.
+    n = n * 2 + b(1 == 2 && 3 < 4 || 5 > 4);
+    n = n * 2 + b(!(1 == 1) || !false && 2 < 1);
+    n = n * 2 + b(!!true);
+    n = n * 2 + b(true || false && false);
+    n
+}

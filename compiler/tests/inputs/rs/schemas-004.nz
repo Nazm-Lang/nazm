@@ -1,0 +1,10 @@
+use "lib.nz";
+struct P {
+    x: Int,
+}
+enum S {
+    A,
+    B(v: Int),
+}
+fn f(p: P, s: S) -> Int { let y = 1 + "s"; g(p.x) }
+fn h() -> Int { f(P(x: 1), S.A()) }

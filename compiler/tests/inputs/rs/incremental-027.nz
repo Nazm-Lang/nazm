@@ -1,0 +1,1 @@
+pub fn save(io: SpawnCap, n: Int) -> Int ! { io } { n }

@@ -1,0 +1,36 @@
+struct P { y: Int, x: Int, }
+struct Q { tag: Str, at: P, small: Int8, flag: Bool, }
+enum L { Zed, Alpha(n: Int), Mid(s: Str), }
+enum Expr { Num(v: Int), Neg(e: Box[Expr]), }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn b(c: Bool) -> Str { if c { "1" } else { "0" } }
+
+fn main(out: OutCap) -> Int ! {io} {
+    // Strings by bytes, a prefix first; `false` before `true`.
+    show(out, str_concat(b("apple" < "banana"), str_concat(b("ab" < "a"),
+        str_concat(b("" < "a"), b(false < true)))));
+    // A record by its fields in the order of their names: `x` before `y`.
+    show(out, str_concat(b(P(y: 9, x: 1) < P(y: 0, x: 2)), b(P(y: 1, x: 5) < P(y: 2, x: 5))));
+    // Nested, with a narrow signed integer and a `Bool`: `at`, `flag`, `small`, `tag`.
+    let q1 = Q(tag: "z", at: P(y: 1, x: 1), small: Int8(-3), flag: true);
+    let q2 = Q(tag: "a", at: P(y: 1, x: 1), small: Int8(2), flag: true);
+    show(out, str_concat(b(q1 < q2), str_concat(b(q1 >= q1), b(q2 > q1))));
+    // An enum by its variants' names — `Alpha`, `Mid`, `Zed` — then the payload.
+    show(out, str_concat(b(L.Alpha(n: 5) < L.Zed()), str_concat(b(L.Mid(s: "a") < L.Alpha(n: 0)),
+        str_concat(b(L.Alpha(n: 1) < L.Alpha(n: 2)), b(L.Mid(s: "b") <= L.Mid(s: "a"))))));
+    // A tuple by position.
+    show(out, str_concat(b((1, "b") < (2, "a")), str_concat(b((1, "b") <= (1, "b")),
+        b((2, P(y: 0, x: 0)) > (2, P(y: 0, x: 1))))));
+    // A `Box` and a `List` compare by what they hold, through a recursive type.
+    let e1 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));
+    let e2 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));
+    let e3 = Expr.Neg(e: box_new(Expr.Num(v: 3)));
+    let xs = vec_new[Str]();
+    vec_push(xs, "a");
+    let l1 = list_from_vec(xs);
+    let l2 = list_from_vec(xs);
+    show(out, str_concat(b(e1 == e2), str_concat(b(e1 != e3), str_concat(b(l1 == l2),
+        b(l1 == list_empty[Str]())))));
+    0
+}

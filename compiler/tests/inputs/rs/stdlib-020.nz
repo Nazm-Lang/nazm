@@ -1,0 +1,2 @@
+use "@std/process";
+fn main() -> Int { strs_len(process_args(0)) }

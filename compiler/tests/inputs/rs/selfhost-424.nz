@@ -1,0 +1,24 @@
+struct Inner {
+    text: Str,
+}
+struct Outer {
+    inner: Inner,
+    values: Ints,
+}
+fn make(n: Int) -> Outer {
+    Outer(inner: Inner(text: int_to_str(n)), values: ints_new())
+}
+fn main() -> Int {
+    let mut o = make(7);
+    let p = o;
+    o.inner.text = str_concat(o.inner.text, "!");
+    ints_push(p.values, 1);
+    let mut i = 0;
+    let mut total = 0;
+    while i < 30 {
+        let each = make(i);
+        total = total + str_len(each.inner.text);
+        i = i + 1;
+    }
+    total + str_len(o.inner.text) + ints_len(p.values)
+}

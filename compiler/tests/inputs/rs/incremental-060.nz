@@ -1,0 +1,2 @@
+use "b.nz";
+pub fn other() -> Int { twice(1) }

@@ -1,0 +1,3 @@
+struct Tag[T] { n: Int, }
+struct S { t: Tag[S], xs: Vec[Vec[Int]], }
+fn m() -> Int { 0 }

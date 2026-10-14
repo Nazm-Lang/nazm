@@ -1,0 +1,2 @@
+@codec(untagged)
+fn g() -> Int { 0 }

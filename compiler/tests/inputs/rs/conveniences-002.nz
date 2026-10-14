@@ -1,0 +1,19 @@
+fn half(n: Int) -> Option[Int] { if n % 2 == 0 { Some(n / 2) } else { None } }
+
+fn quarter(n: Int) -> Option[Int] {
+    let h = half(n)?
+    half(h)
+}
+
+fn name(n: Int) -> Option[Str] {
+    let q = quarter(n)?
+    Some(f"q{q}")
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(match quarter(8) { Some(x) => x, None => 0 - 1 })
+    println(match quarter(6) { Some(x) => x, None => 0 - 1 })
+    println(match name(12) { Some(s) => s, None => "none" })
+    println(match name(2) { Some(s) => s, None => "none" })
+    0
+}

@@ -1,0 +1,6 @@
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+@bench
+fn fib_fifteen() -> Int { fib(15) }
+
+fn main() -> Int { 0 }

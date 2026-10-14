@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { write_file(read_file("m.nz"), "x"); 0 }

@@ -1,0 +1,4 @@
+fn say(io: IoCap, n: Int) -> Int
+{ n * 3 + 1 }
+fn main(io: IoCap, tasks: SpawnCap) -> Int
+{ say(io, 4); 0 }

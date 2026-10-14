@@ -1,0 +1,3 @@
+fn loud(n: Int) -> Int ! {io} { n }
+fn pick() -> fn(Int) -> Int ! {} { loud }
+fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn m() -> Bool { 1 == true }

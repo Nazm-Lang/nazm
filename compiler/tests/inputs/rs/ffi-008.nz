@@ -1,0 +1,3 @@
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+pub fn one(f: ForeignCap) -> Int ! { foreign }
+{ c_add(1, 0) }

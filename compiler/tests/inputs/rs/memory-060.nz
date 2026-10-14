@@ -1,0 +1,23 @@
+struct Message {
+    id: Int,
+    text: Str,
+    reply: Chan,
+}
+fn worker(m: Message) -> Int {
+    let t = str_slice(m.text, 0, 2);
+    chan_send(m.reply, m.id + str_len(t));
+    0
+}
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(4);
+    let m = Message(id: 1, text: str_concat("ab", "cd"), reply: c);
+    scope {
+        spawn worker(m);
+        spawn worker(m);
+    }
+    chan_close(c);
+    let got = ints_new();
+    while chan_recv(c, got) {
+    }
+    ints_get(got, 0) + ints_get(got, 1)
+}

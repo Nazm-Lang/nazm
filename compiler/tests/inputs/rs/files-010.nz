@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { os_status(os_open_read(read_file("cfg"))) }

@@ -1,0 +1,17 @@
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, " ")) }
+fn main(out: OutCap) -> Int ! {io} {
+show(out, num_to_str(1.5));
+show(out, num_to_str(0.1 + 0.2));
+show(out, num_to_str(1e21));
+show(out, num_to_str(0.00000015));
+show(out, num_to_str(100.0));
+show(out, num_to_str(0.0 * (0.0 - 1.0)));
+show(out, num_to_str(Float32(0.1)));
+show(out, num_to_str(Float32(16777217.0)));
+show(out, num_to_str(1.0 / 0.0));
+show(out, num_to_str(0.0 - 1.0 / 0.0));
+show(out, num_to_str(0.0 / 0.0));
+show(out, num_to_str(UInt64(18446744073709551615)));
+show(out, num_to_str(UInt64(0)));
+0
+}

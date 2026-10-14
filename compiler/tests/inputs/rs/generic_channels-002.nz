@@ -1,0 +1,23 @@
+
+enum Msg { Word(text: Str), Stop, }
+
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Msg](3);
+    chan_send_of(c, Msg.Word(text: str_concat("he", "y")));
+    chan_send_of(c, Msg.Stop());
+    chan_close_of(c);
+    let got = vec_new[Msg]();
+    let mut n = 0;
+    while chan_recv_of(c, got) {
+        match vec_pop(got) {
+            Msg.Word(text: w) => { print(w); n = n + 1; },
+            Msg.Stop() => { print("."); n = n + 10; },
+        }
+    }
+    let b = chan_new_of[Bool](1);
+    chan_send_of(b, true);
+    let bs = vec_new[Bool]();
+    if chan_recv_of(b, bs) { if vec_pop(bs) { n = n + 100; } }
+    print(int_to_str(n));
+    0
+}

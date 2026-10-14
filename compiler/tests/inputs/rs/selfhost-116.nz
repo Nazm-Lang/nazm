@@ -1,0 +1,2 @@
+fn w(a: Strs) -> Int { strs_len(a) }
+fn m() -> Int { let a = strs_new(); scope { spawn w(a); } 0 }

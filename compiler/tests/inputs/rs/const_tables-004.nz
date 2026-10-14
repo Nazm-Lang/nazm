@@ -1,0 +1,2 @@
+use "lib.nz" as lib;
+fn main() -> Int { lib::KEYWORDS[1].code * 10 + lib::N }

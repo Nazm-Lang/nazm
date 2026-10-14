@@ -1,0 +1,10 @@
+enum Holder {
+    Nothing,
+    Text(value: Str),
+    Many(items: Strs),
+}
+fn main() -> Int {
+    let h = Holder.Text(value: int_to_str(1234));
+    let copy = h;
+    match copy { Holder.Nothing() => 0, Holder.Many(items: _) => 0, Holder.Text(value: s) => str_len(s), }
+}

@@ -1,0 +1,1 @@
+fn m(c: Bool) -> Int { let mut a = 2; let x = 1 + 2 * if c { a = 3; a } else { 4 } - 5; x + a }

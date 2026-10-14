@@ -1,0 +1,4 @@
+struct P { a: Str, b: Int, }
+enum E { A(s: Str), B, }
+fn f(c: Chan[P], d: Chan[E], e: Chan[Str], g: Chan[Bool]) -> Int { 0 }
+fn main() -> Int { 0 }

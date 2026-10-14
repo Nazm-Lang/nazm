@@ -1,0 +1,8 @@
+use "lib.nz";
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int ! {io} {
+let (n, s) = split("abc");
+let q = swap((n, s));
+show(out, str_concat(q.0, num_to_str(q.1)));
+0
+}

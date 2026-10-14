@@ -1,0 +1,11 @@
+use "geo.nz";
+use "geo.nz" as g;
+
+@derive(json)
+struct Line { a: Pt, b: g::Pt, }
+
+fn main(out: OutCap) -> Int ! {io} {
+    print(str_concat(line_to_json(Line(a: Pt(x: 1, y: 2), b: Pt(x: 3, y: 4))), "\n"));
+    print(str_concat(line_json_schema(), "\n"));
+    0
+}

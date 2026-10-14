@@ -1,0 +1,3 @@
+use "lib.nz";
+use "@std/text";
+fn main(io: IoCap) -> Int { print(shout("  hi ")); print(text_repeat("-", 2)); 0 }

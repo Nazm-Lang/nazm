@@ -1,0 +1,6 @@
+fn fill(xs: Ints) -> Int { ints_push(xs, 9) }
+fn main() -> Int {
+    let xs = ints_new();
+    fill(xs);
+    ints_get(xs, 0) + ints_len(xs)
+}

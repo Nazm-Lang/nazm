@@ -1,0 +1,2 @@
+fn one() -> Int { 1 }
+fn two() -> Int { one() + one() }

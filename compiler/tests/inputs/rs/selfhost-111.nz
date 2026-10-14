@@ -1,0 +1,2 @@
+fn a(p: Int) -> Int { p }
+fn m() -> Int { p }

@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let xs = if 1 < 2 { ints_new() } else { ints_new() };
+    ints_push(xs, 3)
+}

@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let b = box_new(read_file("cfg")); write_file(box_get(b), "x") }

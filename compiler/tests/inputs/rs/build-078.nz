@@ -1,0 +1,2 @@
+fn safe(n: Int) -> Int { if n > 0 { return 3; } 10 / n }
+fn main() -> Int { safe(1) }

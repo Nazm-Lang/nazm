@@ -1,0 +1,6 @@
+use "a.nz";
+use "b.nz";
+enum State { Here, }
+fn main() -> Int {
+    match State.Here() { State.Here() => 1, } + from_a() + from_b()
+}

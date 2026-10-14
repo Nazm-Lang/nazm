@@ -1,0 +1,2 @@
+use "tri.nz";
+pub fn make() -> Tri { Tri(a: 1) }

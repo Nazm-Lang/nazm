@@ -1,0 +1,2 @@
+fn f(v: Vec) -> Int { 0 }
+fn m() -> Int { 0 }

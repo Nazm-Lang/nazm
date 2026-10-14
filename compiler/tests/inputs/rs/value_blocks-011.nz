@@ -1,0 +1,22 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 10 {
+        i = i + 1;
+        let o = if i % 2 == 0 { Option[Str].Some(value: int_to_str(i * 100)) } else { Option[Str].None() };
+        let v = match o {
+            Option.None() => {
+                let wasted = str_concat("skip-", int_to_str(i));
+                continue;
+            },
+            Option.Some(value: s) => {
+                let kept = s;
+                if i == 8 { break; }
+                kept
+            },
+        };
+        churn();
+        total = total + str_len(v);
+    }
+    total
+}

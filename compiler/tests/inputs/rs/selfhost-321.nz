@@ -1,0 +1,2 @@
+fn wrap[T: Equality](a: T, b: T) -> Bool { same(a, b) }
+fn main() -> Int { if wrap(1, 1) { 1 } else { 0 } }

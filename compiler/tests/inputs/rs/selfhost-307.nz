@@ -1,0 +1,3 @@
+struct Pair[A, B] { first: A, second: B, }
+fn f(a: Pair[Strs, Int], b: Pair[Strs, Int]) -> Bool { a == b }
+fn main() -> Int { 0 }

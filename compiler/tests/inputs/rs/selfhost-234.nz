@@ -1,0 +1,2 @@
+fn pass[T, E](r: Result[T, E]) -> Result[T, E] { let v = r?; Result[T, E].Ok(value: v) }
+fn m() -> Int { 0 }

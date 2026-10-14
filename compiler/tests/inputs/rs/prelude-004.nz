@@ -1,0 +1,19 @@
+pub struct ParseError {
+    at: Int,
+}
+pub fn parse(s: Str) -> Result[Int, ParseError] {
+    let mut i = 0;
+    let mut n = 0;
+    while i < str_len(s) {
+        let d = str_byte(s, i) - 48;
+        if d < 0 {
+            return Result[Int, ParseError].Err(error: ParseError(at: i));
+        }
+        if d > 9 {
+            return Result[Int, ParseError].Err(error: ParseError(at: i));
+        }
+        n = n * 10 + d;
+        i = i + 1;
+    }
+    Result[Int, ParseError].Ok(value: n)
+}

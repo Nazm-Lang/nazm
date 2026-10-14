@@ -1,0 +1,16 @@
+
+struct Note { text: Str, }
+
+fn main(out: OutCap) -> Int {
+    let a = chan_new_of[Note](1);
+    let b = chan_new_of[Note](1);
+    chan_send_of(a, Note(text: str_concat("fi", "rst")));
+    chan_send_of(b, Note(text: str_concat("sec", "ond")));
+    let cs = vec_new[Chan[Note]]();
+    vec_push(cs, a);
+    vec_push(cs, b);
+    let got = vec_new[Note]();
+    chan_select_of(cs, got);
+    print(vec_pop(got).text);
+    0
+}

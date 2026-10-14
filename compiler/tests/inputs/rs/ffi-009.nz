@@ -1,0 +1,4 @@
+use "lib.nz";
+extern "C" fn wrong(a: Int) -> Bool = "c_add";
+fn main(f: ForeignCap) -> Int
+{ if wrong(1) { one(f) } else { 0 } }

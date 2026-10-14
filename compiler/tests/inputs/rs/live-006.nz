@@ -1,0 +1,4 @@
+struct P { y: Int, x: Int }
+fn f(p: P) -> Int { p.x * p.y }
+fn g() -> Int { 4 }
+fn main() -> Int { f(P(x: 1, y: 2)) + g() }

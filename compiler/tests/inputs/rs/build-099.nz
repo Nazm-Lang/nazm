@@ -1,0 +1,4 @@
+use "util.nz";
+use "sub/deep.nz";
+
+fn main() -> Int { quad(5) * 100 + str_len(greet()) + twice(1) }

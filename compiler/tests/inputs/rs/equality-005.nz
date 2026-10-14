@@ -1,0 +1,16 @@
+struct Name { text: Str, }
+struct Person { name: Name, age: Int, }
+enum Shape { Dot, Circle(centre: Person, r: Int), }
+struct Drawing { shape: Shape, }
+enum Layer { Hidden, Shown(top: Drawing), }
+struct Box[T] { value: T, }
+fn person(t: Str, age: Int) -> Person { Person(name: Name(text: t), age: age) }
+fn layer(t: Str) -> Layer { Layer.Shown(top: Drawing(shape: Shape.Circle(centre: person(t, 1), r: 2))) }
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn main() -> Int {
+    bit(person("a", 1) == person("a", 1), 1) + bit(person("a", 1) == person("b", 1), 2)
+    + bit(layer("a") == layer("a"), 4) + bit(layer("a") == layer("q"), 8) + bit(layer("a") == Layer.Hidden(), 16)
+    + bit(Option[Person].Some(value: person("a", 1)) == Option[Person].Some(value: person("a", 1)), 32)
+    + bit(Result[Shape, Person].Err(error: person("a", 1)) == Result[Shape, Person].Ok(value: Shape.Dot()), 64)
+    + bit(Box[Shape](value: Shape.Dot()) == Box[Shape](value: Shape.Dot()), 128)
+}

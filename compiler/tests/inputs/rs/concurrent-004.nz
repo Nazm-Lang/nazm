@@ -1,0 +1,23 @@
+
+        fn flood(jobs: Chan, results: Chan) -> Int {
+            let mut refused = 0;
+            let mut i = 0;
+            while i < 100 {
+                if chan_send(jobs, i) == false { refused = refused + 1; }
+                i = i + 1;
+            }
+            chan_send(results, refused);
+            0
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let jobs = chan_new(2);
+            let results = chan_new(1);
+            scope {
+                spawn flood(jobs, results);
+                chan_close(jobs);
+            }
+            let buf = ints_new();
+            chan_recv(results, buf);
+            if ints_pop(buf) > 0 { 1 } else { 0 }
+        }
+        

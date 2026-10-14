@@ -1,0 +1,11 @@
+struct Pair[A, B] { first: A, second: B, }
+enum Maybe[T] { None, Some(value: T), }
+fn identity[T](value: T) -> T { value }
+fn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }
+fn main() -> Int {
+    let xs = vec_new[Pair[Int, Str]]();
+    vec_push(xs, Pair[Int, Str](first: 7, second: "nazm"));
+    let p = vec_get(xs, 0);
+    let m = Maybe[Int].Some(value: 42);
+    identity[Int](p.first) + identity(str_len(p.second)) + or(m, 0) + or(Maybe[Int].None(), 1)
+}

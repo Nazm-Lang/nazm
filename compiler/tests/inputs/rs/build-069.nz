@@ -1,0 +1,16 @@
+fn keep(n: Int) -> Bool { n % 4 != 0 }
+fn main() -> Int {
+    let mut o = 0;
+    let mut total = 0;
+    while o < 6 {
+        o = o + 1;
+        if o == 5 { break; }
+        let mut j = 0;
+        while j * 1 < o {
+            j = j + 1;
+            if keep(j) { total = total + (if j > 2 { continue; } else { j }); } else { break; }
+        }
+        if o % 2 == 0 { continue; } else { total = total + 100; }
+    }
+    total
+}

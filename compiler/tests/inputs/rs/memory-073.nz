@@ -1,0 +1,13 @@
+enum E {
+    Empty,
+    Text(value: Str),
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 50 {
+        n = n + match E.Text(value: int_to_str(i)) { E.Empty() => 0, E.Text(value: _) => 1, };
+        i = i + 1;
+    }
+    n
+}

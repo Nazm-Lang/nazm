@@ -1,0 +1,10 @@
+struct Point { x: Int, y: Int, }
+fn main() -> Int {
+    bit(same(1, 1), 1) + bit(same[Int](1, 2), 2) + bit(same(text(1), "t-1"), 4)
+    + bit(same(Point(x: 1, y: 2), Point(x: 1, y: 2)), 8) + bit(same(Shape.Plain(), Shape.Named(label: text(1))), 16)
+    + bit(same(Option[Int].Some(value: 3), Option[Int].Some(value: 3)), 32)
+    + bit(same(Result[Int, Str].Err(error: text(2)), Result[Int, Str].Err(error: text(2))), 64)
+    + bit(same(Box[Int](value: 4), Box[Int](value: 5)), 128)
+    + bit(box_same(Box[Option[Str]](value: Option[Str].Some(value: text(9))), Box[Option[Str]](value: Option[Str].Some(value: text(9)))), 256)
+    + bit(wrap(Result[Box[Int], Str].Ok(value: Box[Int](value: 1)), Result[Box[Int], Str].Ok(value: Box[Int](value: 1))), 512)
+}

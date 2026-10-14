@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let fss = vec_new[Vec[fn() -> Int]]();
+    let f = fn() -> Int { vec_len(fss) };
+    f()
+}

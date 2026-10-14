@@ -1,0 +1,2 @@
+pub fn shown(n: Int) -> Int { helper(1) + n }
+fn helper(k: Int) -> Int { k }

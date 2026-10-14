@@ -1,0 +1,1 @@
+fn m() -> Int { if 1 { 2 } else { 3 } }

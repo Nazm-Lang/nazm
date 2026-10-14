@@ -1,0 +1,2 @@
+struct C { n: Cell[Int], s: Cell[Str], }
+fn main() -> Int { 0 }

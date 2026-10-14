@@ -1,0 +1,57 @@
+@derive(json)
+@codec(rename_all = "camelCase", deny_unknown)
+pub struct User {
+    @codec(rename = "id")
+    user_id: Int,
+    display_name: Str,
+    @codec(omit_none)
+    email: Option[Str],
+    @codec(default)
+    tags: Vec[Str],
+}
+
+@derive(json)
+@codec(tag = "kind")
+pub enum Event { Started, Moved(x: Int, y: Int), }
+
+@derive(json)
+@codec(untagged)
+pub enum Value { Nothing, Num(n: Int), Text(s: Str, @codec(default) lang: Str), }
+
+@derive(json)
+@codec(rename_all = "SCREAMING_SNAKE_CASE")
+pub enum Level { LowPower, @codec(rename = "hi") High, }
+
+fn show(out: OutCap, s: Str) -> Int ! { io } { print(str_concat(s, "\n")) }
+
+fn user(out: OutCap, text: Str) -> Int ! { io } {
+    match user_from_json(text) {
+        Result.Ok(value: u) => show(out, f"ok: {user_to_json(u)}"),
+        Result.Err(error: e) => show(out, f"err: {e}"),
+    }
+}
+
+fn main(out: OutCap) -> Int ! { io } {
+    let u = User(user_id: 7, display_name: "Ann", email: Option[Str].None(), tags: vec_new[Str]());
+    show(out, user_to_json(u));
+    user(out, "{\"id\": 1, \"displayName\": \"B\"}");
+    user(out, "{\"id\": 1, \"displayName\": \"B\", \"email\": \"b@x\", \"tags\": [\"t\"]}");
+    user(out, "{\"id\": 1, \"displayName\": \"B\", \"extra\": 1}");
+    user(out, "{\"id\": 1}");
+    show(out, event_to_json(Event.Started()));
+    show(out, event_to_json(Event.Moved(x: 1, y: 2)));
+    match event_from_json("{\"kind\": \"Moved\", \"x\": 3, \"y\": 4}") { Result.Ok(value: e) => show(out, event_to_json(e)), Result.Err(error: e) => show(out, e), };
+    match event_from_json("{\"kind\": \"Jumped\"}") { Result.Ok(value: e) => show(out, "WRONG"), Result.Err(error: e) => show(out, e), };
+    show(out, value_to_json(Value.Num(n: 5)));
+    show(out, value_to_json(Value.Text(s: "hi", lang: "en")));
+    show(out, value_to_json(Value.Nothing()));
+    match value_from_json("{\"s\": \"yo\"}") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };
+    match value_from_json("{\"n\": 9}") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };
+    match value_from_json("{\"q\": true}") { Result.Ok(value: v) => show(out, "WRONG"), Result.Err(error: e) => show(out, e), };
+    show(out, level_to_json(Level.LowPower()));
+    show(out, level_to_json(Level.High()));
+    show(out, user_json_schema());
+    show(out, event_json_schema());
+    show(out, value_json_schema());
+    0
+}

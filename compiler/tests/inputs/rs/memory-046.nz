@@ -1,0 +1,9 @@
+struct Work {
+    values: Ints,
+}
+fn main() -> Int {
+    let a = Work(values: ints_new());
+    let b = a;
+    ints_push(a.values, 7);
+    ints_get(b.values, 0) + ints_len(b.values)
+}

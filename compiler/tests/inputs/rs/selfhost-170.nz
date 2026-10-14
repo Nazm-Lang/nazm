@@ -1,0 +1,1 @@
+enum E { V(x: Int, y: Int), } fn m() -> Int { match E.V(x: 1) { E.V(x: a, y: b) => a + b, } }

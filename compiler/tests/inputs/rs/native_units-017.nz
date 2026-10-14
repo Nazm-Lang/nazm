@@ -1,0 +1,3 @@
+use "a.nz";
+pub fn g(n: Int) -> Int { f(n) }
+pub fn k(n: Int) -> Int { h(n + 1) }

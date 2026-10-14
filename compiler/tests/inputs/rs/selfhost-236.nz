@@ -1,0 +1,4 @@
+struct P { x: Int, }
+fn mk() -> Result[P, Str] { Result[P, Str].Ok(value: P(x: 1)) }
+fn g() -> Result[Int, Str] { Result[Int, Str].Ok(value: -mk()?.x) }
+fn m() -> Int { 0 }

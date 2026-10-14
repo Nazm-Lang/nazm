@@ -1,0 +1,2 @@
+fn widen(o: OutCap) -> IoCap ! {} { o }
+fn main(o: OutCap) -> Int ! {io} { 0 }

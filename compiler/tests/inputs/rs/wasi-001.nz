@@ -1,0 +1,2 @@
+fn work(n: Int) -> Int ! {} { n }
+fn main(t: SpawnCap) -> Int ! { spawn } { scope { spawn work(1); } 0 }

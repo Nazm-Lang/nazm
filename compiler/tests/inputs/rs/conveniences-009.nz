@@ -1,0 +1,2 @@
+fn f(o: Option[Int]) -> Int { let x = o?; x }
+fn main() -> Int { f(None) }

@@ -1,0 +1,2 @@
+fn f[effects E, effects F](g: fn() -> Int ! { E }) -> Int ! { E } { g() }
+fn main() -> Int { 0 }

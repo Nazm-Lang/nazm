@@ -1,0 +1,4 @@
+use "lib.nz";
+fn g(n: Int) -> Int
+{ c_add(n, 1) }
+fn main(f: ForeignCap) -> Int { g(1) }

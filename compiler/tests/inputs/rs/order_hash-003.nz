@@ -1,0 +1,2 @@
+struct F { x: Float64, }
+fn main() -> Int { if F(x: 1.0) < F(x: 2.0) { 1 } else { 0 } }

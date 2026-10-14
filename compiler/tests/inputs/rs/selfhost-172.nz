@@ -1,0 +1,1 @@
+enum E { A(x: Int), } fn m() -> Int { E.A(x: 1).x }

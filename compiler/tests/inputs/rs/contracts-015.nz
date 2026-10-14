@@ -1,0 +1,4 @@
+pub fn half(n: Int) -> Int ! {}
+    requires n >= 0
+    requires n % 2 == 0
+{ n / 2 }

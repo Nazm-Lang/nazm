@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(out: OutCap) -> Int { let p = at(21); print(int_to_str(p.x + p.x)); 0 }

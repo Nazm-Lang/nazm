@@ -1,0 +1,2 @@
+use "absent.nz";
+fn main() -> Int { 0 }

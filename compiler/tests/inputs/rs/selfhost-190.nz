@@ -1,0 +1,2 @@
+fn identity[T](value: T) -> T { value }
+fn m() -> Int { identity[Int](7) + identity(3) + str_len(identity("ab")) }

@@ -1,0 +1,1 @@
+fn main() -> Int { let s = read_file("x"); 0 }

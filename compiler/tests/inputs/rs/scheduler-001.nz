@@ -1,0 +1,11 @@
+fn work(c: Chan, s: Str, n: Int) -> Int { let t = str_concat(s, int_to_str(n)); chan_send(c, str_len(t)); 0 }
+fn main(t: SpawnCap) -> Int {
+let c = chan_new(25); let buf = ints_new(); let mut round = 0; let mut total = 0;
+while round < 200 {
+let s = str_concat("task", "-");
+scope { let mut i = 0; while i < 25 { spawn work(c, s, i); i = i + 1; } }
+let mut k = 0; while k < 25 { chan_recv(c, buf); k = k + 1; }
+round = round + 1;
+}
+let mut j = 0; while j < ints_len(buf) { total = total + ints_get(buf, j); j = j + 1; }
+total }

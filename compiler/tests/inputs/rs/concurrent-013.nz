@@ -1,0 +1,16 @@
+
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    let started = chan_new(1);
+    let go = chan_new(1);
+    let buf = ints_new();
+    let mut top = 1;
+    scope {
+        spawn worker(started, go, io);
+        chan_recv(started, buf);
+        ints_pop(buf);
+        chan_send(go, 1);
+        let mut n = 0;
+        while n < 64 { top = top + top; n = n + 1; }
+    }
+    top
+}

@@ -1,0 +1,3 @@
+pub struct State { n: Int }
+fn init() -> State ! {} { State(n: 0) }
+fn main() -> Int ! {} { 0 }

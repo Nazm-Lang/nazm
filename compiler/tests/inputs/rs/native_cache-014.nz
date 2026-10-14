@@ -1,0 +1,4 @@
+use "a.nz";
+use "b.nz";
+use "c.nz";
+fn main() -> Int { ea() + eb() + ec() }

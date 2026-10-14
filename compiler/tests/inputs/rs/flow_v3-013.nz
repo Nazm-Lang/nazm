@@ -1,0 +1,2 @@
+fn pick(io: IoCap) -> Result[Str, Str] ! { io } { let mut r = Result[Str, Str].Ok(value: arg(1)); r = Result[Str, Str].Err(error: read_file("c")); let p = r?; Result[Str, Str].Ok(value: p) }
+fn main(io: IoCap) -> Int ! { io } { match pick(io) { Result.Ok(value: p) => write_file(p, "x"), Result.Err(error: e) => 0 } }

@@ -1,0 +1,1 @@
+fn main() -> Int { if same[Result[Int, Str]](Result[Int, Str].Ok(value: 1), Result[Int, Str].Ok(value: 1)) { 1 } else { 0 } }

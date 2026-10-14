@@ -1,0 +1,15 @@
+
+        fn bad(c: Chan) -> Int {
+            let buf = ints_new();
+            chan_recv(c, buf);
+            1 / ints_pop(buf)
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let c = chan_new(1);
+            scope {
+                spawn bad(c);
+                chan_send(c, 0);
+            }
+            0
+        }
+    

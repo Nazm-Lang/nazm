@@ -1,0 +1,2 @@
+use "geometry.nz" as main;
+fn main() -> Int { 0 }

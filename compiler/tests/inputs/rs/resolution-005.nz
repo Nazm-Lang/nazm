@@ -1,0 +1,3 @@
+use "left.nz";
+use "right.nz";
+fn main() -> Int { l() + r() }

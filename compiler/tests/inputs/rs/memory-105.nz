@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    str_len(vec_pop(xs))
+}

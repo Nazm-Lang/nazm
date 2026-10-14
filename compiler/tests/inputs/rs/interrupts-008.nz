@@ -1,0 +1,4 @@
+@interrupt("timer")
+fn h() -> Int ! {} { 0 }
+@interrupt("timer")
+fn g() -> Int ! {} { 0 }

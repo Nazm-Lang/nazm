@@ -1,0 +1,3 @@
+use "@std/text";
+use "@std/result";
+fn main() -> Int { let mut n = 0; let mut i = 0; while i < 1000000 { n = n + result_unwrap_or(text_parse_int(int_to_str(i)), 0) % 7; i = i + 1; } n }

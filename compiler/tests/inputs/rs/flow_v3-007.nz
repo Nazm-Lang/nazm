@@ -1,0 +1,2 @@
+fn named(io: IoCap) -> Str ! { io } { "out.txt" }
+fn main(io: IoCap) -> Int ! { io } { let f = named; write_file(f(io), "x") }

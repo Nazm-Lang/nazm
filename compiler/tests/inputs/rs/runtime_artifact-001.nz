@@ -1,0 +1,12 @@
+fn count(n: Int) -> Int { if n == 0 { 0 } else { 1 + count(n - 1) } }
+fn work(io: IoCap, c: Chan) -> Int ! { io } { chan_send(c, 7); chan_close(c); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let xs = strs_new(); strs_push(xs, "a"); strs_push(xs, "b");
+let joined = str_join(xs, "-");
+let add = fn(x: Int) -> Int { x + 1 };
+let c = chan_new(4);
+scope { spawn work(io, c); }
+let got = ints_new(); let ok = chan_recv(c, got);
+print(joined); print(int_to_str(add(ints_pop(got)) + count(5) + args_count()));
+0
+}

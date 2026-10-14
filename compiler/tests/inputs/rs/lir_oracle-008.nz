@@ -1,0 +1,13 @@
+struct Q { flag: Bool, name: Str, n: Int }
+enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }
+fn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }
+fn main(out: OutCap) -> Int {
+let a = Q(flag: true, name: str_concat("ab", "c"), n: 10);
+let b = Q(flag: true, name: "abc", n: 10);
+let c = Q(flag: false, name: "abc", n: 10);
+print(int_to_str(val(S.Pair(q: a, k: 4)) + val(S.Num(n: 5)) + val(S.Empty())));
+print(if b == Q(flag: true, name: "abc", n: 10) { "same" } else { "differ" });
+print(if b != c { "differ" } else { "same" });
+print(if S.Num(n: 1) == S.Num(n: 1) && S.Empty() == S.Empty() && S.Num(n: 1) != S.Empty() { "enums" } else { "wrong" });
+0
+}

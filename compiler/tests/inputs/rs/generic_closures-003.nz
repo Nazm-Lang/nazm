@@ -1,0 +1,8 @@
+fn bump(x: Int) -> Int { x + 1 }
+pub fn fold[T](xs: Vec[T], f: fn(T) -> Int) -> Int {
+let mut acc = 0;
+let add = fn(x: T) -> Int { acc = acc + f(x); 0 };
+for x in xs { add(x); }
+let b = bump;
+b(acc)
+}

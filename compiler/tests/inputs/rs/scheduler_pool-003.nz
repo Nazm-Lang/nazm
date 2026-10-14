@@ -1,0 +1,7 @@
+fn leaf(io: IoCap, c: Chan) -> Int ! { io } { chan_send(c, 1); 0 }
+fn branch(io: IoCap, t: SpawnCap, c: Chan) -> Int ! { io, spawn } { scope { spawn leaf(io, c); spawn leaf(io, c); } 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let c = chan_new(16); let got = ints_new();
+scope { spawn branch(io, t, c); spawn branch(io, t, c); }
+let mut k = 0; while k < 4 { let r = chan_recv(c, got); k = k + 1; }
+print(int_to_str(ints_len(got))); 0 }

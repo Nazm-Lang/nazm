@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(io: IoCap) -> Int ! { io } { let xs = names(io); write_file(strs_get(xs, 0), "x") }

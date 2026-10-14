@@ -1,0 +1,12 @@
+
+fn main() -> Int {
+    let min = -9223372036854775807 - 1;
+    let a = min % -1;
+    let b = -7 / 2;
+    let c = -7 % 2;
+    let d = 7 % -2;
+    let e = if -1 < 0 { 1 } else { 0 };
+    let f = if min < 0 { 10 } else { 0 };
+    let g = 9223372036854775807 - 9223372036854775806;
+    a + b + c + d + e + f + g
+}

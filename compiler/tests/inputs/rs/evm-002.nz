@@ -1,0 +1,4 @@
+pub struct State { n: Int }
+fn init() -> State ! {} { State(n: 0) }
+pub fn name(s: State, caller: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(n: str_len("abc"))) }
+fn main() -> Int ! {} { 0 }

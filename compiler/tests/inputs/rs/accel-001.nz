@@ -1,0 +1,20 @@
+fn square(x: Int) -> Int ! {} { x * x }
+fn collatz(n: Int) -> Int ! {} {
+let mut x = n;
+let mut steps = 0;
+while x > 1 {
+if x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; }
+steps = steps + 1;
+}
+steps + square(n % 7)
+}
+fn grow(x: Int) -> Int ! {} { x * 3037000500 }
+fn inverse(x: Int) -> Int ! {} { 100 / (x - 3) }
+fn edges(x: Int) -> Int ! {} { if x == 0 { (0 - 9223372036854775807 - 1) % -1 } else { if x == 1 { (0 - 9223372036854775807 - 1) / 2 } else { -x } } }
+fn record(x: Int) -> Int ! {} { let p = Option[Int].Some(value: x); 0 }
+fn rec(x: Int) -> Int ! {} { if x == 0 { 0 } else { rec(x - 1) } }
+fn loud(x: Int) -> Int ! { io } { 0 }
+fn strs(x: Int) -> Int ! {} { str_len("ab") + x }
+fn two(x: Int, y: Int) -> Int ! {} { x + y }
+fn three(x: Int, y: Int, z: Int) -> Int ! {} { x + y + z }
+fn main() -> Int { 0 }

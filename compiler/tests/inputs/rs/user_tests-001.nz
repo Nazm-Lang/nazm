@@ -1,0 +1,49 @@
+use "@std/test";
+use "@std/random";
+
+fn double(n: Int) -> Int { n * 2 }
+
+fn main() -> Int { double(21) }
+
+@test
+fn doubles() -> Result[Int, Str] {
+    assert_eq_int("double(2)", double(2), 4)?;
+    assert_true("positive", double(1) > 0)
+}
+
+@test
+fn reports_its_failure() -> Result[Int, Str] {
+    assert_eq_int("double(3)", double(3), 7)
+}
+
+@test(fails)
+fn expects_to_trap() -> Result[Int, Str] {
+    let zero = 0;
+    Result[Int, Str].Ok(value: 5 / zero)
+}
+
+@test(fails)
+fn wrongly_expects_to_fail() -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn holds_authority(out: OutCap) -> Result[Int, Str] {
+    print("from a test\n");
+    assert_some("a value", Option[Int].Some(value: 1))?;
+    assert_ok("ok", Result[Int, Str].Ok(value: 2))
+}
+
+@test
+fn a_property() -> Result[Int, Str] {
+    property(UInt64(7), 50, fn(r: Rng) -> Result[Int, Str] {
+        let n = random_int(r, 0, 1000);
+        assert_eq_int("halved", double(n) / 2, n)
+    })
+}
+
+@cfg(os = "nowhere")
+@test
+fn never_built() -> Result[Int, Str] {
+    Result[Int, Str].Err(error: "ran")
+}

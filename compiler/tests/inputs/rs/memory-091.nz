@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut s = str_concat("kept", "!");
+    let mut i = 0;
+    while i < 3 {
+        i = i + 1;
+        s = if i >= 1 { continue; } else { int_to_str(i) };
+    }
+    str_len(s) * 10 + str_byte(s, 0) - 100
+}

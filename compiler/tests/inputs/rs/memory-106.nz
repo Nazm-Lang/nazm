@@ -1,0 +1,16 @@
+struct Pair {
+    a: Str,
+    b: Str,
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 300 {
+        let xs = vec_new[Pair]();
+        vec_push(xs, Pair(a: int_to_str(i), b: str_concat("b", int_to_str(i))));
+        vec_push(xs, Pair(a: "lit", b: int_to_str(i + 1)));
+        total = total + str_len(vec_get(xs, 1).b);
+        i = i + 1;
+    }
+    total
+}

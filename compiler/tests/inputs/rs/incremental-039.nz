@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(io: IoCap) -> Int ! { io } { let f = maker(); write_file(f(io), "x") }

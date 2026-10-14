@@ -1,0 +1,2 @@
+use "a.nz";
+pub fn pong(n: Int) -> Int { ping(n) }

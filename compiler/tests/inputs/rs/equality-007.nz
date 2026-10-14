@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let a = outer(4);
+    let b = outer(4);
+    let c = outer(5);
+    let same = a == b;
+    let differ = a != c;
+    churn();
+    let mut n = 0;
+    if same { n = n + 1; }
+    if differ { n = n + 10; }
+    n + 100 * (str_len(a.item.name) + str_len(b.item.name) + str_len(c.item.name))
+}

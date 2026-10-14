@@ -1,0 +1,4 @@
+pub struct Point {
+    x: Str,
+}
+pub fn at(n: Int) -> Point { Point(x: int_to_str(n)) }

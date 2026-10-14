@@ -1,0 +1,2 @@
+struct Pair[A, B] { first: A, second: B, }
+fn m() -> Int { 0 }

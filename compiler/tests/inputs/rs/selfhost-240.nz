@@ -1,0 +1,2 @@
+fn g(o: Option[Int]) -> Result[Int, Str] { let n = o?; Result[Int, Str].Ok(value: n) }
+fn m() -> Int { 0 }

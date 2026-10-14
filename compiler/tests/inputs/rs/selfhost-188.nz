@@ -1,0 +1,2 @@
+struct Pair[A, B] { first: A, second: B, }
+fn m() -> Int { let p = Pair[Int, Str](first: 1, second: "x"); p.first }

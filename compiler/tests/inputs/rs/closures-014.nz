@@ -1,0 +1,2 @@
+struct H { f: fn() -> Int, }
+fn main() -> Int { let mut h = H(f: fn() -> Int { 1 }); let f = fn() -> Int { 0 }; let k = fn() -> Int { let x = h; f() }; k() }

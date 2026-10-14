@@ -1,0 +1,26 @@
+
+fn later(t: TimeCap, go: Chan[Int], c: Chan[Str]) -> Bool ! {} {
+    let g = vec_new[Int]();
+    chan_recv_of(go, g);
+    time_sleep_ms(50);
+    chan_send_of(c, str_concat("wo", "ke"))
+}
+
+fn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {
+    let go = chan_new_of[Int](1);
+    let c = chan_new_of[Str](1);
+    let idle = chan_new_of[Str](1);
+    let cs = vec_new[Chan[Str]]();
+    vec_push(cs, idle);
+    vec_push(cs, c);
+    let got = vec_new[Str]();
+    let mut i = 0;
+    scope {
+        spawn later(t, go, c);
+        chan_send_of(go, 1);
+        i = chan_select_of(cs, got);
+    }
+    print(int_to_str(i));
+    print(vec_pop(got));
+    0
+}

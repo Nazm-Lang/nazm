@@ -1,0 +1,2 @@
+use "d.nz";
+pub fn from_c() -> Int { shared() * 2 }

@@ -1,0 +1,14 @@
+fn make() -> Str {
+    let s = str_concat("ab", "cd");
+    str_slice(s, 1, 3)
+}
+fn main() -> Int {
+    let x = make();
+    let mut i = 0;
+    let mut noise = "";
+    while i < 20 {
+        noise = str_concat("zz", noise);
+        i = i + 1;
+    }
+    str_byte(x, 0)
+}

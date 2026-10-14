@@ -1,0 +1,1 @@
+fn main() -> Int { let c = chan_new_of[Str](1); chan_send_of(c, 3); 0 }

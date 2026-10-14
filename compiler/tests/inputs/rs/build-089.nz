@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let words = strs_new();
+    strs_push(words, "alpha");
+    strs_push(words, str_concat("be", "ta"));
+    let first = strs_get(words, 0);
+    strs_set(words, 0, "x");
+    let mut chars = 0;
+    let mut i = 0;
+    while i < strs_len(words) { chars = chars + str_len(strs_get(words, i)); i = i + 1; }
+    str_len(first) * 100 + chars
+}

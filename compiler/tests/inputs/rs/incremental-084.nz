@@ -1,0 +1,10 @@
+pub enum State {
+    Ready,
+    Done(code: Int),
+}
+enum Hidden {
+    A(n: Str),
+    B,
+}
+fn secret() -> Int { match Hidden.B() { Hidden.A(n: s) => str_len(s), Hidden.B() => 0, } }
+pub fn start() -> State { State.Ready() }

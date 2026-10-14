@@ -1,0 +1,4 @@
+struct Secret {
+    value: Int,
+}
+pub fn take(s: Secret) -> Int { s.value }

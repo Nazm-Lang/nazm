@@ -1,0 +1,1 @@
+fn same[T: Equality, U, V :Equality](a: T, b: U, c: V) -> Bool { a == a }

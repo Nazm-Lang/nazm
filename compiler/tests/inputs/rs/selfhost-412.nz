@@ -1,0 +1,2 @@
+pub enum Result[T, E] { Ok(value: T), Err(error: E), }
+pub fn helper() -> Int { 1 }

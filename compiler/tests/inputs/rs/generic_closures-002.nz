@@ -1,0 +1,40 @@
+struct P { x: Int, y: Int, }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn each(xs: Vec[Int], f: fn(Int) -> Int) -> Int {
+    for x in xs { f(x); }
+    0
+}
+
+fn count_where[T](xs: Vec[T], p: fn(T) -> Bool) -> Int {
+    let mut n = 0;
+    for x in xs { let hit = fn() -> Int { if p(x) { n = n + 1; } 0 }; hit(); }
+    n
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);
+    // A closure updates what its function then reads.
+    let mut total = 0;
+    let mut seen = "";
+    each(xs, fn(x: Int) -> Int { total = total + x; seen = str_concat(seen, num_to_str(x)); x });
+    show(out, str_concat(seen, num_to_str(total)));
+    // A field of a shared record, written through the closure.
+    let mut p = P(x: 1, y: 2);
+    let swap = fn() -> Int { p.x = p.y; 0 };
+    swap();
+    show(out, num_to_str(p.x * 10 + p.y));
+    // The function writes after the closure is made, and the closure sees it.
+    let mut k = 1;
+    let read = fn() -> Int { k };
+    k = 7;
+    show(out, num_to_str(read()));
+    // Nested closures share one variable; a generic function's too.
+    let mut n = 0;
+    let outer = fn() -> Int { let inner = fn() -> Int { n = n + 10; n }; inner() + inner() };
+    show(out, num_to_str(outer() + n));
+    show(out, num_to_str(count_where(xs, fn(x: Int) -> Bool { x > 1 })));
+    0
+}

@@ -1,0 +1,18 @@
+fn total(xs: Vec[Int]) -> Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let v: Vec[Int] = [1, 2, 3]
+    v.push(4)
+    println(f"{v.len()} {total(v)} {total([10, 20])}")
+    let names: Vec[Str] = ["a", "b"]
+    println(names[1])
+    let none: Vec[Int] = []
+    println(none.len())
+    let fixed = [7, 8]
+    println(fixed[1])
+    0
+}

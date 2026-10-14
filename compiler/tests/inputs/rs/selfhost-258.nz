@@ -1,0 +1,2 @@
+struct P { a: Int, s: Str, }
+fn main() -> Int { let p = P(a: { let z = 4; z }, s: { let t = int_to_str(9); t }); p.a }

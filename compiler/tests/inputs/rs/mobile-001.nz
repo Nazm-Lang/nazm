@@ -1,0 +1,3 @@
+fn square(x: Int) -> Int ! {} { x * x }
+pub extern "C" fn sum_squares(a: Int, b: Int) -> Int ! {} = "nazm_sum_squares" { square(a) + square(b) }
+pub extern "C" fn label_len(n: Int) -> Int ! {} = "nazm_label_len" { str_len(str_concat("item-", int_to_str(n))) }

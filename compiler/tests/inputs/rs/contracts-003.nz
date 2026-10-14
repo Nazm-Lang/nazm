@@ -1,0 +1,4 @@
+fn sq(n: Int) -> Int ! {}
+    ensures result == n * n
+{ n }
+fn main() -> Int { sq(9223372036854775807) }

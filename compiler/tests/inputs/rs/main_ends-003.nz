@@ -1,0 +1,13 @@
+use "noise.nz";
+
+fn greet(out: OutCap, who: Str) {
+    if who == "" { return }
+    println(f"hello, {who}")
+    str_len(who)
+}
+
+fn main() {
+    greet(out, "")
+    greet(out, "you")
+    noise(out)
+}

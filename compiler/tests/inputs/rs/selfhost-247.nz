@@ -1,0 +1,2 @@
+fn g(r: Result[Int, Str]) -> Result[Str, Str] { Result[Str, Str].Ok(value: r?) }
+fn m() -> Int { 0 }

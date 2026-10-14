@@ -1,0 +1,1 @@
+struct I { x: Int, } enum I { A, } fn m() -> Int { 0 }

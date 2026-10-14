@@ -1,0 +1,5 @@
+fn f(out: OutCap) -> Int ! {} {
+    print("x");
+    0
+}
+fn main(out: OutCap) -> Int ! {io} { f(out) }

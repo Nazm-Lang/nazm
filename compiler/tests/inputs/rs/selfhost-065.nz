@@ -1,0 +1,1 @@
+fn m(x: Int) -> Int { let mut i = 0; while if i < x { true } else { false } { i = i + 1; } i }

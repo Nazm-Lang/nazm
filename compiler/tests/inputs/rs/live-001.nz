@@ -1,0 +1,12 @@
+fn g(x: Int) -> Int { x + 1 }
+fn f(x: Int) -> Int { g(x) * 2 }
+f(3)
+fn g(x: Int) -> Int { x + 10 }
+f(3)
+fn g(x: Bool) -> Int { 0 }
+f(3)
+f(3) == 26
+"text"
+:defs
+:quit
+f(4)

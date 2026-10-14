@@ -1,0 +1,2 @@
+enum Maybe[T] { None, Some(value: T), }
+fn m() -> Int { let x = Maybe[Int].Some(value: "s"); 0 }

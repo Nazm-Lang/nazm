@@ -1,0 +1,17 @@
+
+use "parity.nz";
+struct Node { value: Int, label: Str, }
+fn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * fact(n - 1) } }
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn count[T](items: Vec[T], i: Int) -> Int { if i >= vec_len(items) { 0 } else { 1 + count(items, i + 1) } }
+fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }
+fn labels(n: Int) -> Str { if n == 0 { "" } else { str_concat(Node(value: n, label: int_to_str(n)).label, labels(n - 1)) } }
+fn main(out: OutCap) -> Int {
+    let v = vec_new[Str]();
+    vec_push(v, "a");
+    vec_push(v, "b");
+    vec_push(v, "c");
+    print(str_concat(labels(5), "\n"));
+    let e = if is_even(10) { 1 } else { 0 };
+    fact(10) % 1000 + fib(15) + count(v, 0) + depth(400) + e
+}

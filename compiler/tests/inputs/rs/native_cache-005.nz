@@ -1,0 +1,6 @@
+pub fn twice(n: Int) -> Int { n * 2 }
+fn helper() -> Int {
+    let a = ints_new();
+    let b = a;
+    ints_push(b, 1)
+}

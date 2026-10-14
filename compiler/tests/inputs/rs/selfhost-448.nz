@@ -1,0 +1,2 @@
+use "dep:util.nz";
+fn main() -> Int { 0 }

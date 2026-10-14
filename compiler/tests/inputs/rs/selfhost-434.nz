@@ -1,0 +1,8 @@
+fn id[T](x: T) -> T { x }
+fn twice[T](x: T) -> Vec[T] { let v = vec_new[T](); vec_push(v, id(x)); vec_push(v, x); v }
+fn main() -> Int {
+    let a = twice(3);
+    let b = twice("q");
+    let c = twice(a);
+    vec_len(a) + vec_len(b) + vec_len(c) + vec_get(vec_get(c, 1), 0) + str_len(vec_pop(b))
+}

@@ -1,0 +1,8 @@
+fn compute(n: Int) -> Int {
+    let a = n * 2;
+    let b = a + 1;
+    b
+}
+fn main() -> Int {
+    compute(20)
+}

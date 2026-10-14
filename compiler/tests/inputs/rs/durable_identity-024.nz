@@ -1,0 +1,2 @@
+use "c.nz";
+pub fn mid() -> Int { deep() }

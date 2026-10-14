@@ -1,0 +1,1 @@
+fn main() -> Int { let v = ints_new(); ints_push(v, 4); ints_len(v) + str_len(str_concat("a", "b")) }

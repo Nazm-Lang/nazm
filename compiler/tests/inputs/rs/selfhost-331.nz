@@ -1,0 +1,2 @@
+fn other[T](a: T, b: T) -> Bool { a == b }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+use "d.nz";
+pub fn fb() -> Int { fd() }

@@ -1,0 +1,8 @@
+    Result[Int, Str].Ok(value: str_len(s) + v0 + v29)
+}
+fn main() -> Int {
+    let mut t = 0;
+    let mut k = 0;
+    while k < 20 { t = t + match chain(k) { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e) }; k = k + 1; }
+    t
+}

@@ -1,0 +1,28 @@
+fn scalar(start: Int, v: Ints) -> Int {
+let mut s = start;
+let mut i = 0;
+while i < ints_len(v) { s = ints_get(v, i) + s; i = i + 1; }
+s
+}
+fn main() -> Int {
+let mut bad = 0;
+let mut n = 0;
+while n <= 200 {
+let mut m = 0;
+while m < 3 {
+let v = ints_new();
+let mut k = 0;
+while k < n {
+let big = if m == 0 { 1000 } else { if m == 1 { 72057594037927936 } else { 72057594037927937 } };
+let x = if k % 2 == 0 { big - k } else { k - big };
+ints_push(v, x);
+k = k + 1;
+}
+let start = if n % 3 == 0 { 0 } else { 4611686018427387000 - n * 1000 };
+if ints_sum_from(start, v) != scalar(start, v) { bad = bad + 1; }
+m = m + 1;
+}
+n = n + 1;
+}
+bad
+}

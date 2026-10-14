@@ -1,0 +1,3 @@
+use "geometry.nz" as g;
+fn f(p: g::Nope) -> Int { 0 }
+fn main() -> Int { 0 }

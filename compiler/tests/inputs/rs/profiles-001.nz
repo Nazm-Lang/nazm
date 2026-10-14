@@ -1,0 +1,3 @@
+fn w(c: Chan) -> Int { chan_send(c, 1); 0 }
+fn show(io: IoCap, n: Int) -> Int { print(int_to_str(n)) }
+fn main(io: IoCap, t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } show(io, 1); 0 }

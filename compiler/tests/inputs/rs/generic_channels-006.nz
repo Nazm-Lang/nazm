@@ -1,0 +1,2 @@
+pub struct Item { tag: Str, }
+pub fn put(c: Chan[Item], s: Str) -> Bool ! {} { chan_send_of(c, Item(tag: s)) }

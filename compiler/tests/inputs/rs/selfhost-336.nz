@@ -1,0 +1,2 @@
+struct B[T: Equality] { v: T, }
+fn main() -> Int { 0 }

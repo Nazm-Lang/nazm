@@ -1,0 +1,18 @@
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    let mut i = 0;
+    while i < 20 {
+        vec_push(xs, int_to_str(i * 111));
+        vec_push(xs, str_slice(str_concat("abc", int_to_str(i)), 1, 4));
+        i = i + 1;
+    }
+    let got = vec_get(xs, 4);
+    vec_set(xs, 4, "literal");
+    vec_set(xs, 5, vec_get(xs, 5));
+    let popped = vec_pop(xs);
+    let mut noise = "";
+    let mut k = 0;
+    while k < 30 { noise = str_concat("z", noise); k = k + 1; }
+    str_len(got) * 1000 + str_len(popped) * 100 + str_len(vec_get(xs, 5)) * 10 + vec_len(xs)
+        + str_len(noise) - 30
+}

@@ -1,0 +1,3 @@
+@deprecated(why)
+pub fn f() -> Int { 0 }
+fn main() -> Int { 0 }

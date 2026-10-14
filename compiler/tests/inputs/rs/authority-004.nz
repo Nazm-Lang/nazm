@@ -1,0 +1,2 @@
+fn inc(n: Int) -> Int ! {} { n + 1 }
+fn main(o: OutCap) -> Int ! {io} { print("hi\n"); inc(41) }

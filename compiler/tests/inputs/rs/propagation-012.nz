@@ -1,0 +1,14 @@
+fn pass[T, E](r: Result[T, E]) -> Result[T, E] {
+    let value = r?;
+    Result[T, E].Ok(value: value)
+}
+fn main() -> Int {
+    let a = match pass(Result[Int, Str].Err(error: int_to_str(123))) { Result.Ok(value: n) => n, Result.Err(error: s) => str_len(s), };
+    let b = match pass(Result[Item, Vec[Diag]].Ok(value: item(4))) { Result.Ok(value: i) => ints_get(i.tags, 0), Result.Err(error: ds) => 0, };
+    let c = match pass(Result[Vec[Item], Shape].Err(error: Shape.Named(label: int_to_str(55555)))) {
+        Result.Ok(value: xs) => 0,
+        Result.Err(error: sh) => match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, },
+    };
+    churn();
+    a * 100 + b * 10 + c
+}

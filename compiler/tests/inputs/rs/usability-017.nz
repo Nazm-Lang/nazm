@@ -1,0 +1,4 @@
+pub struct Point { x: Int, y: Int, }
+pub enum Shape { Dot(at: Point), Square(side: Int), }
+pub fn area(s: Shape) -> Int { match s { Shape.Dot(at: _) => 0, Shape.Square(side: n) => n * n, } }
+pub fn parse(s: Str) -> Int { str_len(s) }

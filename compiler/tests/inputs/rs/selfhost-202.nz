@@ -1,0 +1,3 @@
+struct Box[T] { v: T, }
+fn f(b: Box[Int, Str]) -> Int { 0 }
+fn m() -> Int { 0 }

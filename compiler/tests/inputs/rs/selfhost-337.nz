@@ -1,0 +1,2 @@
+enum E[T: Equality] { A(v: T), }
+fn main() -> Int { 0 }

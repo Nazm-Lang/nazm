@@ -1,0 +1,5 @@
+use "lib.nz";
+fn direct(p: P) -> Str ! {} { p.show() }
+fn named(p: P) -> Str ! {} { Show.show(p) }
+fn builtin(n: Int) -> Str ! {} { n.show() }
+fn main() -> Int { str_len(direct(P(x: 7))) + str_len(named(P(x: 10))) + str_len(builtin(123)) }

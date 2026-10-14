@@ -1,0 +1,4 @@
+struct Thing {
+    n: Int,
+}
+pub fn from_a() -> Int { Thing(n: 10).n }

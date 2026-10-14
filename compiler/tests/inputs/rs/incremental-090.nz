@@ -1,0 +1,2 @@
+use "b.nz";
+fn main() -> Int { vec_len(keep(vec_new[Int]())) }

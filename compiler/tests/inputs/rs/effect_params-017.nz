@@ -1,0 +1,7 @@
+
+fn helper(c: IoCap) -> Int ! { io } { print("h"); 0 }
+fn main(io: IoCap) -> Int ! { io } {
+    let f = fn(x: Int) -> Int ! { io } { print("c"); helper(io) + x };
+    let g = f;
+    g(0)
+}

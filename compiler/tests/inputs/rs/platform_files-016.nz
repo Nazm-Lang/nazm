@@ -1,0 +1,3 @@
+fn os_lstat(a: Int) -> Int ! {} { a + 1 }
+fn os_mkdtemp() -> Int ! {} { 5 }
+fn main() -> Int ! {} { os_lstat(1) + os_mkdtemp() }

@@ -1,0 +1,3 @@
+use "@std/ordmap";
+struct P { x: Int, }
+fn main() -> Int { let m = ordmap_new[P, Int](); ordmap_len(m) }

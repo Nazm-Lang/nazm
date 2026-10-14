@@ -1,0 +1,14 @@
+
+fn show(s: Str, out: OutCap) -> Int { print(s) }
+fn main(io: IoCap) -> Int ! { io } {
+    let secret = read_file("prog.nz");
+    show(str_slice(secret, 0, 2), io);
+    let names = strs_new();
+    strs_push(names, "x");
+    print(strs_get(names, 0));
+    let echo = fn(t: Str) -> Int ! { io } { eprint(t) };
+    echo("plain");
+    write_file(str_concat("o", "ut.txt"), secret);
+    print(arg(0));
+    0
+}

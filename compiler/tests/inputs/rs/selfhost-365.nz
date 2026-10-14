@@ -1,0 +1,3 @@
+trait Say { fn say(self: Self) -> Int ! {}; }
+impl Say for Int { fn say(self: Int) -> Int ! { io } { 0 } }
+fn main() -> Int { 0 }

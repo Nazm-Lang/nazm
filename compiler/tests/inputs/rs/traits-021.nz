@@ -1,0 +1,3 @@
+use "t.nz";
+enum E { A, B, }
+fn main() -> Int { match E.A() { E.A() => 1, E.B() => 2, } }

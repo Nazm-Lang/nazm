@@ -1,0 +1,4 @@
+use "t.nz";
+use "p.nz";
+fn g[T: Named](x: T) -> Str { x.greet() }
+fn main(out: OutCap) -> Int ! {io} { let p = P(x: 1); print(str_concat(p.greet(), g(p))); 0 }

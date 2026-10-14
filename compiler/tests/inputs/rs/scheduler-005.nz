@@ -1,0 +1,6 @@
+fn ok(c: Chan, s: Str) -> Int { chan_send(c, str_len(s)); 0 }
+fn bad(n: Int) -> Int { 9223372036854775807 + n }
+fn main(t: SpawnCap) -> Int {
+let c = chan_new(8); let s = str_concat("a", "b");
+scope { spawn ok(c, s); scope { spawn ok(c, s); scope { spawn ok(c, s); spawn bad(1); spawn ok(c, s); } spawn ok(c, s); } }
+0 }

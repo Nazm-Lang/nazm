@@ -1,0 +1,28 @@
+struct P { x: Int, y: Int }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let mut a = 10
+    a += 5
+    a -= 3
+    a *= 4
+    a /= 3
+    a %= 7
+    let mut b = 12
+    b &= 10
+    b |= 1
+    b ^= 3
+    b <<= 2
+    b >>= 1
+    let mut w = UInt8(250)
+    w -= UInt8(9)
+    let mut p = P(x: 1, y: 2)
+    p.x += 40
+    p.y *= p.x
+    let mut arr = [1, 2, 3]
+    let i = 1
+    arr[i] += 10
+    arr[0] *= 7
+    arr[2] -= arr[i]
+    print(f"{a} {b} {w} {p.x} {p.y} {arr[0]} {arr[1]} {arr[2]}\n")
+    0
+}

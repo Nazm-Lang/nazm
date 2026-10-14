@@ -1,0 +1,2 @@
+pub extern "C" fn f(x: Int) -> Int ! {} = "9f" { x }
+fn main() -> Int { 0 }

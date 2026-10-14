@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 1000 {
+        total = total + str_len(f"w{i}");
+        i = i + 1;
+    }
+    total
+}

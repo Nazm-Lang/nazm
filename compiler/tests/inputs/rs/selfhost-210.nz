@@ -1,0 +1,2 @@
+struct Box[T] { v: T, }
+fn m() -> Int { let b = Box[Int, Str](v: 1); 0 }

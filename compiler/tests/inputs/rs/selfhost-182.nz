@@ -1,0 +1,2 @@
+enum W { N, V(xs: Ints), } fn w(e: W) -> Int { match e { W.N() => 0, W.V(xs: x) => ints_len(x), } }
+fn m() -> Int { scope { spawn w(W.N()); } 0 }

@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int { let io = 0; println("x"); io }

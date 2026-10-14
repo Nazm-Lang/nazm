@@ -1,0 +1,23 @@
+struct M {
+    text: Str,
+}
+enum E {
+    Empty,
+    Text(value: Str),
+}
+fn worker(m: M, e: E, out: Chan) -> Int {
+    let n = str_len(m.text) + match e { E.Empty() => 0, E.Text(value: s) => str_len(s), };
+    if chan_send(out, n) { 1 } else { 0 }
+}
+fn main(tasks: SpawnCap) -> Int {
+    let s = str_concat("he", "llo");
+    let out = chan_new(4);
+    let got = ints_new();
+    scope {
+        spawn worker(M(text: s), E.Text(value: s), out);
+        spawn worker(M(text: s), E.Text(value: s), out);
+    }
+    if chan_recv(out, got) { 0 } else { 0 };
+    if chan_recv(out, got) { 0 } else { 0 };
+    ints_get(got, 0) + ints_get(got, 1)
+}

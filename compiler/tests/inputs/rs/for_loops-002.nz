@@ -1,0 +1,61 @@
+
+fn main(out: OutCap) -> Int ! {io} {
+    // An element pushed during the loop is visited: the length is read before every step.
+    let xs = ints_new();
+    ints_push(xs, 1);
+    ints_push(xs, 2);
+    ints_push(xs, 3);
+    let mut a = "";
+    for x in xs {
+        a = str_concat(a, num_to_str(x));
+        if x == 1 { ints_push(xs, 9); }
+    }
+    show(out, a);
+    // A pop that shortens the sequence ends the loop sooner.
+    let mut b = "";
+    for x in xs {
+        b = str_concat(b, num_to_str(x));
+        b = str_concat(b, num_to_str(ints_pop(xs)));
+    }
+    show(out, b);
+    // `continue` moves on, `break` leaves.
+    let ss = strs_new();
+    strs_push(ss, "a");
+    strs_push(ss, "skip");
+    strs_push(ss, "b");
+    strs_push(ss, "stop");
+    strs_push(ss, "c");
+    let mut c = "";
+    for s in ss {
+        if s == "skip" { continue; }
+        if s == "stop" { break; }
+        c = str_concat(c, s);
+    }
+    show(out, c);
+    // Records, with a range nested inside, bounded by a field.
+    let ps = vec_new[P]();
+    vec_push(ps, P(name: "x", n: 2));
+    vec_push(ps, P(name: "y", n: 0));
+    vec_push(ps, P(name: "z", n: 1));
+    let mut d = "";
+    for p in ps {
+        for k in 0..p.n { d = str_concat(d, p.name); }
+        d = str_concat(d, ".");
+    }
+    show(out, d);
+    // Bytes, each a `UInt8`.
+    let bs = bytes_from_str("AB");
+    let mut e = 0;
+    for v in bs { e = e + Int(v); }
+    show(out, num_to_str(e));
+    // Ranges: an empty and a backwards one run no step; a negative start counts up.
+    let mut f = "";
+    for i in 3..3 { f = str_concat(f, "never"); }
+    for i in 5..2 { f = str_concat(f, "never"); }
+    for i in -2..1 { f = str_concat(f, num_to_str(i)); }
+    show(out, f);
+    // `in` is still an ordinary name.
+    let in = 7;
+    show(out, num_to_str(in));
+    0
+}

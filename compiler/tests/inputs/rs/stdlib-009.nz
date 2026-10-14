@@ -1,0 +1,23 @@
+use "@std/json";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int {
+    match json_parse("[1, 2.5]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    match json_parse_floats("{\"a\": [1, 2.5, -0.125e2, 1e400, 12345678901234567890], \"b\": {}, \"c\": []}") {
+        Result.Ok(value: d) => {
+            line(out, json_encode(d));
+            line(out, json_encode_pretty(d));
+            let a = match json_get(d, json_root(d), "a") { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            let x = match json_at(d, a, 1) { Option.Some(value: n) => n, Option.None() => 0 - 1 };
+            line(out, match json_float(d, x) { Option.Some(value: f) => num_to_str(f), Option.None() => "none" });
+            line(out, match json_int(d, x) { Option.Some(value: i) => int_to_str(i), Option.None() => "not an integer" });
+            line(out, json_kind(d, x));
+        },
+        Result.Err(error: e) => line(out, e),
+    };
+    match json_parse_floats("[01.5]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    match json_parse_floats("[1.]") { Result.Ok(value: d) => line(out, "accepted"), Result.Err(error: e) => line(out, e) };
+    let d = json_new();
+    let n = json_add_float(d, 3.0);
+    line(out, json_encode(json_with_root(d, n)));
+    0
+}

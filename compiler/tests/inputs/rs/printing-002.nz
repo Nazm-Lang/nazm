@@ -1,0 +1,2 @@
+struct Q { y: Int }
+fn main(out: OutCap) -> Int ! {io} { println(Q(y: 1)); 0 }

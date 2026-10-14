@@ -1,0 +1,1 @@
+extern "C" fn a(x: Int) -> Int ! { io } = "a";

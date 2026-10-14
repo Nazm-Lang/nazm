@@ -1,0 +1,5 @@
+use "lib.nz";
+fn main(out: OutCap) -> Int ! {io} {
+print(str_concat(text_as_str(greet("añ")), "\n"));
+Int(bytes_get(fill(bytes_new(2), 9), 0))
+}

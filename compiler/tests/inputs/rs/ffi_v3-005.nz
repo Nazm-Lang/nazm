@@ -1,0 +1,2 @@
+extern "C" fn g(f: fn(Str) -> Int) -> Int = "g";
+{main}

@@ -1,0 +1,3 @@
+fn down(n: Int) -> Int { down(n + 1) + 1 }
+fn job(c: Chan) -> Int { chan_send(c, 1); down(0) }
+fn main(t: SpawnCap) -> Int { let c = chan_new(4); scope { spawn job(c); spawn job(c); } 0 }

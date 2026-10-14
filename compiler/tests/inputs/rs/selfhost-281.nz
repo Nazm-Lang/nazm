@@ -1,0 +1,4 @@
+fn churn() -> Int { let mut noise = vec_new[Str](); let mut k = 0; while k < 64 { vec_push(noise, str_concat("noise-", int_to_str(k))); k = k + 1; } noise = vec_new[Str](); vec_len(noise) }
+struct Item { name: Str, tags: Ints, }
+enum Shape { Named(label: Str), Plain, }
+fn item(n: Int) -> Item { let t = ints_new(); ints_push(t, n); Item(name: str_concat("item-", int_to_str(n)), tags: t) }

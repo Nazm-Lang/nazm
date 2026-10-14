@@ -1,0 +1,4 @@
+struct Thing {
+    m: Str,
+}
+pub fn from_b() -> Int { let t = Thing(m: int_to_str(22)); let u = t; str_len(u.m) }

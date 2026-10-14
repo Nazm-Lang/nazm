@@ -1,0 +1,2 @@
+pub fn split(s: Str) -> (Int, Str) ! {} { (str_len(s), s) }
+pub fn swap[A, B](p: (A, B)) -> (B, A) ! {} { let (a, b) = p; (b, a) }

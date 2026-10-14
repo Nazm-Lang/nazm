@@ -1,0 +1,21 @@
+struct Bag { xs: Ints, name: Str, n: Int }
+
+fn total(b: Bag) -> Int {
+    let mut t = 0
+    let mut i = 0
+    while i < ints_len(b.xs) {
+        t += ints_get(b.xs, i)
+        i += 1
+    }
+    t + str_len(b.name) + b.n
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = ints_new()
+    ints_push(xs, 3)
+    ints_push(xs, 4)
+    let b = Bag(xs: xs, name: "bag", n: 1)
+    println(total(b))
+    println(ints_get(b.xs, 5))
+    0
+}

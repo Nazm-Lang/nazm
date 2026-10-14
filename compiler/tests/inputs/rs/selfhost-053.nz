@@ -1,0 +1,2 @@
+fn w(c: Chan) -> Int { 0 }
+fn m() -> Int { let c = chan_new(1); scope { spawn w(c); spawn w(c); } 0 }

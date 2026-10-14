@@ -1,0 +1,4 @@
+use "@std/ioerror";
+use "@std/file";
+fn sneak(f: File) -> Int ! { io } { os_status(os_open_read("other")) }
+fn main() -> Int { 0 }

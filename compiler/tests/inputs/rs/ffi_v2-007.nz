@@ -1,0 +1,1 @@
+pub extern "C" fn f[T](x: T) -> T ! {} = "nz_f" { x }

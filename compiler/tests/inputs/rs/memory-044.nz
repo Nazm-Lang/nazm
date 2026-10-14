@@ -1,0 +1,7 @@
+struct Holder {
+    part: Str,
+}
+fn main() -> Int {
+    let h = Holder(part: str_slice(str_concat("abcd", "ef"), 1, 4));
+    str_len(h.part) * 100 + str_byte(h.part, 0)
+}

@@ -1,0 +1,11 @@
+fn first_byte_later(s: Str, n: Int) -> Int {
+    let noise = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 { vec_push(noise, str_concat("zz", "zz")); i = i + 1; }
+    str_byte(s, 0) + n * 0
+}
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, str_concat("ab", "cd"));
+    first_byte_later(vec_get(xs, 0), vec_set(xs, 0, int_to_str(7)))
+}

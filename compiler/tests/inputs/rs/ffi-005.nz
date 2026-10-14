@@ -1,0 +1,2 @@
+struct P { x: Int }
+extern "C" fn a(p: P) -> Int = "a";

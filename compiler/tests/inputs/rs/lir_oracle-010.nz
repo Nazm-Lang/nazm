@@ -1,0 +1,6 @@
+use "@std/process";
+fn main(io: IoCap, out: OutCap) -> Int {
+let args = process_args(io);
+print(str_join(args, "+"));
+strs_len(args)
+}

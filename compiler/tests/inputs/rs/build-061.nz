@@ -1,0 +1,11 @@
+fn limit() -> Int { 5 }
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i * 1 < limit() {
+        i = i + 1;
+        n = n + 1;
+        continue;
+    }
+    n
+}

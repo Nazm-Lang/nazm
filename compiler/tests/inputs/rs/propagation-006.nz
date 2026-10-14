@@ -1,0 +1,25 @@
+fn leaf(ds: Vec[Diag]) -> Result[Int, Vec[Diag]] { Result[Int, Vec[Diag]].Err(error: ds) }
+fn one(ds: Vec[Diag]) -> Result[Int, Vec[Diag]] {
+    let n = leaf(ds)?;
+    Result[Int, Vec[Diag]].Ok(value: n)
+}
+fn two(ds: Vec[Diag]) -> Result[Int, Vec[Diag]] {
+    let n = one(ds)?;
+    Result[Int, Vec[Diag]].Ok(value: n)
+}
+fn three(ds: Vec[Diag]) -> Result[Int, Vec[Diag]] {
+    let n = two(ds)?;
+    Result[Int, Vec[Diag]].Ok(value: n)
+}
+fn grow(ds: Vec[Diag]) -> Int {
+    vec_push(ds, Diag(code: "N0999", start: 9));
+    vec_len(ds)
+}
+fn main() -> Int {
+    let mine = diags(2);
+    let got = match three(mine) {
+        Result.Ok(value: n) => 0,
+        Result.Err(error: ds) => grow(ds),
+    };
+    got * 10 + vec_len(mine)
+}

@@ -1,0 +1,4 @@
+@on_failure
+fn h(code: Int) -> Int ! {} { 0 }
+@on_failure
+fn g(code: Int) -> Int ! {} { 0 }

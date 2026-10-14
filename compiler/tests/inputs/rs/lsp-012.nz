@@ -1,0 +1,3 @@
+use "lib.nz";
+fn helper(n: Int) -> Int { n } // é→😀
+fn main() -> Int { let s = "é→😀"; helper(str_len(s)) + helper(exported()) }

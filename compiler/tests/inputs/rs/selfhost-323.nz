@@ -1,0 +1,2 @@
+fn pick[A: Equality, B](a: A, b: B) -> Int { 0 }
+fn main() -> Int { pick(1, vec_new[Int]()) }

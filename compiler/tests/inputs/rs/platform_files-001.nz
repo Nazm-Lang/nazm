@@ -1,0 +1,14 @@
+fn main(io: IoCap) -> Int ! { io } {
+    let o = os_stdout();
+    print("a\n");
+    os_write(o, bytes_from_str("b\n"));
+    print("c\n");
+    let e = os_stderr();
+    os_write(e, bytes_from_str("to errors\n"));
+    let buf = bytes_new(4);
+    print(f"read {os_read(o, buf)} seek {os_seek(o, 0, 0)} sync {os_sync(e)} list {os_dir_next(e, buf)}\n");
+    print(f"lock {os_lock(o, true)} try {os_try_lock(e, false)} unlock {os_unlock(o)}\n");
+    print(f"close {os_close(os_stdout())} again {os_status(o)} write {os_write(os_stdout(), buf)}\n");
+    print("still printed\n");
+    0
+}

@@ -1,0 +1,62 @@
+use "@std/ioerror";
+
+fn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }
+
+fn list(a: Str, b: Str) -> Strs ! {} {
+    let x = strs_new();
+    if str_len(a) > 0 { strs_push(x, a); }
+    if str_len(b) > 0 { strs_push(x, b); }
+    x
+}
+
+// Everything the child writes to its output, to its end.
+fn output(h: OsHandle) -> Str ! { io } {
+    let pipe = os_child_pipe(h, 1);
+    let buf = bytes_new(4096);
+    let mut all = "";
+    let mut n = os_read(pipe, buf);
+    while n > 0 {
+        all = str_concat(all, bytes_to_str(bytes_slice(buf, 0, n)));
+        n = os_read(pipe, buf);
+    }
+    os_close(pipe);
+    os_close(os_child_pipe(h, 2));
+    os_close(os_child_pipe(h, 0));
+    all
+}
+
+fn run(io: IoCap, h: OsHandle) -> Int ! { io } {
+    print(output(h));
+    print(f"exit {kind(os_wait(h))}\n");
+    os_close(h);
+    0
+}
+
+fn main(p: ProcessCap, io: IoCap) -> Int ! { io } {
+    let env = strs_new();
+    strs_push(env, "ZED=last");
+    strs_push(env, "A=first");
+    strs_push(env, "PATH=/usr/bin:/bin");
+    strs_push(env, "MID=x=y");
+    strs_push(env, "AB=second");
+    // Exactly that environment, ordered by name, from a program found on this process's PATH.
+    run(io, os_spawn_in("env", strs_new(), "", env));
+    // A program named with a `/` is taken relative to the directory.
+    run(io, os_spawn_in("./run.sh", strs_new(), "sub", env));
+    run(io, os_spawn_in("sh", list("-c", "pwd -P | sed 's|.*/||'"), "sub", env));
+    // Refused before anything starts.
+    let noeq = kind(os_status(os_spawn_in("env", strs_new(), "", list("NOEQ", ""))));
+    let unnamed = kind(os_status(os_spawn_in("env", strs_new(), "", list("=x", ""))));
+    let twice = kind(os_status(os_spawn_in("env", strs_new(), "", list("A=1", "A=2"))));
+    let flag = kind(os_status(os_spawn_with("env", strs_new(), "", env, 4)));
+    print(f"no = {noeq}\nempty name {unnamed}\ntwice {twice}\nflag {flag}\n");
+    let nodir = kind(os_status(os_spawn_in("env", strs_new(), "nowhere", env)));
+    let afile = kind(os_status(os_spawn_in("env", strs_new(), "sub/run.sh", env)));
+    let noprog = kind(os_status(os_spawn_in("no-such-program-nazm", strs_new(), "", env)));
+    print(f"no dir {nodir}\ndir a file {afile}\nno program {noprog}\n");
+    // A null standard input reads as empty, and its pipe is closed.
+    let h = os_spawn_with("sh", list("-c", "cat; echo read nothing"), "", env, 2);
+    print(f"input {kind(os_status(os_child_pipe(h, 0)))}\n");
+    run(io, h);
+    0
+}

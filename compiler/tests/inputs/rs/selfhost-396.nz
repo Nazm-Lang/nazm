@@ -1,0 +1,2 @@
+fn mk(n: Int) -> fn(Int) -> Int { fn(x: Int) -> Int { x * n } }
+fn main() -> Int { let t = mk(3); let u = t; u(7) + t(1) }

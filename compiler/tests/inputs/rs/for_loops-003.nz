@@ -1,0 +1,20 @@
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = ints_new();
+    ints_push(xs, 1);
+    ints_push(xs, 2);
+    let ps = vec_new[P]();
+    vec_push(ps, P(name: "x", n: 2));
+    vec_push(ps, P(name: "y", n: 1));
+    let mut a = "";
+    for x in xs {
+        if x == 1 { ints_push(xs, 9); continue; }
+        a = str_concat(a, num_to_str(x));
+    }
+    for p in ps {
+        if p.n == 1 { break; }
+        for k in 0..p.n { a = str_concat(a, p.name); }
+    }
+    show(out, a);
+    0
+}

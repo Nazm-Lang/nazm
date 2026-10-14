@@ -1,0 +1,8 @@
+fn worker(started: Chan, go: Chan, out: OutCap) -> Int {
+let buf = ints_new();
+chan_send(started, 1);
+chan_recv(go, buf);
+ints_pop(buf);
+print("worker finished");
+0
+}

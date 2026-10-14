@@ -1,0 +1,4 @@
+trait T { fn A(self: Self) -> Int; }
+enum E { A, B, }
+impl T for E { fn A(self: E) -> Int { 9 } }
+fn main() -> Int { match E.A() { E.A() => 1, E.B() => 2, } }

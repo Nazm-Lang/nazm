@@ -1,0 +1,3 @@
+struct P { x: Int, ok: Bool }
+struct N { s: Str, n: Int }
+fn main() -> Int { let a = vec_new[P](); vec_push(a, P(x: 2, ok: true)); let b = vec_new[N](); vec_push(b, N(s: "hi", n: 5)); vec_push(b, N(s: "abc", n: 6)); vec_push(b, N(s: "defg", n: 7)); vec_push(b, N(s: "hijkl", n: 8)); let mut k = 0; let mut t = 0; while k < vec_len(b) { t = t + str_len(vec_get(b, k).s) * 10 + vec_get(b, k).n; k = k + 1; } let c = vec_new[Int](); vec_push(c, 7); vec_get(a, 0).x + t + vec_get(c, 0) }

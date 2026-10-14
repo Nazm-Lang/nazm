@@ -1,0 +1,12 @@
+@deprecated("use `area` instead")
+pub fn size(n: Int) -> Int { n * n }
+
+pub fn area(n: Int) -> Int { n * n }
+
+@deprecated
+pub struct Old { x: Int, }
+
+@deprecated("one shape now")
+pub enum Shape { Square, }
+
+fn main() -> Int { size(2) }

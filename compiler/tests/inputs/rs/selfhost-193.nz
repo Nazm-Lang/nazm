@@ -1,0 +1,3 @@
+struct Box[T] { v: T, }
+fn un[T](b: Box[T]) -> T { b.v }
+fn m() -> Int { un(Box[Int](v: 3)) }

@@ -1,0 +1,3 @@
+struct H[T] { b: Vec[Box[T]], }
+struct Node { h: H[Node], }
+fn main() -> Int { 0 }

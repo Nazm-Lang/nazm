@@ -1,0 +1,1 @@
+fn main(m: MmioCap) -> Int ! {} { mmio_write64(150994944, 1); mmio_read64(150994944) }

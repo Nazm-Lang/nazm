@@ -1,0 +1,16 @@
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 6 {
+        total = total + bit(item(i) == item(i), 1) + bit(item(i) != item(i + 1), 10);
+        total = total + bit(shape(i) == shape(i), 100) + bit(shape(i) == shape(i + 1), 1000);
+        total = total + bit(outer(i) == outer(i), 10000);
+        total = total + bit(Option[Str].Some(value: text(i)) == Option[Str].Some(value: text(i)), 100000);
+        total = total + bit(Result[Str, Str].Ok(value: text(i)) == Result[Str, Str].Err(error: text(i)), 1000000);
+        total = total + bit(some_text(i) == some_text(i + 1), 10000000);
+        churn();
+        i = i + 1;
+    }
+    total
+}

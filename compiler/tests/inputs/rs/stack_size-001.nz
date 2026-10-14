@@ -1,0 +1,9 @@
+fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }
+fn task(c: Chan) -> Int { chan_send(c, down(250000)); 0 }
+fn main(t: SpawnCap) -> Int ! {spawn} {
+    let c = chan_new(1);
+    scope { spawn task(c); }
+    let got = ints_new();
+    chan_recv(c, got);
+    down(250000) + ints_get(got, 0)
+}

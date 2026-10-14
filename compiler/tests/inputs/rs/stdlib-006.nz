@@ -1,0 +1,3 @@
+use "@std/text";
+fn text_trim(s: Str) -> Str { s }
+fn main() -> Int { 0 }

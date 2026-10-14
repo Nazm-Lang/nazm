@@ -1,0 +1,3 @@
+fn i(n: Int) -> Result[Result[Int, Str], Str] { Result[Result[Int, Str], Str].Ok(value: Result[Int, Str].Ok(value: n)) }
+fn g() -> Result[Int, Str] { let a = i(1)??; let b = (i(2)?)?; Result[Int, Str].Ok(value: a + b) }
+fn m() -> Int { 0 }

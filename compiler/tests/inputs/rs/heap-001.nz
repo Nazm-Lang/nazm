@@ -1,0 +1,18 @@
+fn main(m: MmioCap) -> Int ! {} {
+    let v = vec_new[Int]();
+    let mut i = 0;
+    while i < 1000 {
+        vec_push(v, i);
+        i = i + 1;
+    }
+    let s = str_concat("ab", "cd");
+    let b = bytes_new(16);
+    bytes_set(b, 3, 7);
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(v) {
+        total = total + vec_get(v, k);
+        k = k + 1;
+    }
+    total + str_len(s) + Int(bytes_get(b, 3))
+}

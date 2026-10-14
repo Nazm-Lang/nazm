@@ -1,0 +1,2 @@
+fn w(c: Chan) -> Int ! {} { chan_send(c, 1); 0 }
+fn main(t: SpawnCap) -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 }

@@ -1,0 +1,2 @@
+use "b.nz";
+fn main() -> Int { let b = Box[Str](value: "s", count: 1); let m = Maybe[Int].Some(value: 2); b.count + b.nope }

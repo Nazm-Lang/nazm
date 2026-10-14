@@ -1,0 +1,2 @@
+fn first[T](xs: Vec[T]) -> T { vec_get(xs, 0) }
+fn m() -> Int { let v = vec_new[Int](); vec_push(v, 1); first(v) }

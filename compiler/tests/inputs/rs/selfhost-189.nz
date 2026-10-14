@@ -1,0 +1,3 @@
+enum Maybe[T] { None, Some(value: T), }
+fn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }
+fn m() -> Int { or(Maybe[Int].Some(value: 4), 0) }

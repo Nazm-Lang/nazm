@@ -1,0 +1,2 @@
+trait T { fn a(self: Self) -> Int; fn b(self: Self, n: Int) -> Int; }
+struct P { x: Int, }

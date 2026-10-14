@@ -1,0 +1,2 @@
+struct Node { children: Vec[Node], }
+fn m() -> Int { 0 }

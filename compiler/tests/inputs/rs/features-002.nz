@@ -1,0 +1,16 @@
+use "shapes:poly.nz";
+
+@cfg(feature = "verbose")
+fn tag() -> Int { 400 }
+
+@cfg(not(feature = "verbose"))
+fn tag() -> Int { 0 }
+
+// `fast` is `shapes`'s, not this package's: never on here.
+@cfg(feature = "fast")
+fn leaked() -> Int { 5000 }
+
+@cfg(not(feature = "fast"))
+fn leaked() -> Int { 0 }
+
+fn main() -> Int { speed() + round() + tag() + leaked() }

@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let kept = chan_new(4);
+    let chans = vec_new[Chan]();
+    vec_push(chans, kept);
+    vec_push(chans, chan_new(1));
+    vec_push(chans, chan_new(2));
+    chan_send(vec_get(chans, 0), 7);
+    let got = ints_new();
+    chan_recv(kept, got);
+    vec_pop(chans);
+    vec_len(chans) * 100 + ints_get(got, 0)
+}

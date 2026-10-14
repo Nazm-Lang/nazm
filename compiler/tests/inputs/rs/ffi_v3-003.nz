@@ -1,0 +1,4 @@
+extern "C" struct Point { x: Int, flag: Bool, y: Int }
+extern "C" fn point_sum(p: Point) -> Int = "point_sum";
+extern "C" fn twice(n: Int) -> Int = "twice";
+fn main(f: ForeignCap) -> Int ! { foreign } { point_sum(Point(x: 1, flag: true, y: 2)) + twice(3) }

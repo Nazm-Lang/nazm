@@ -1,0 +1,7 @@
+@cfg(profile = "general")
+fn f() -> Int { "held" }
+
+@cfg(not(profile = "general"))
+fn f() -> Int { 0 }
+
+fn main() -> Int { f() }

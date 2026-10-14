@@ -1,0 +1,1 @@
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } { let p = read_file("prog.nz"); write_file(str_vouch(str_slice(p, 0, 0)), "x") }

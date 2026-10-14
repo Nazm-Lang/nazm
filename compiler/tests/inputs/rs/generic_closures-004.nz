@@ -1,0 +1,6 @@
+use "seq.nz";
+fn main() -> Int {
+let xs = vec_new[Int](); vec_push(xs, 10); vec_push(xs, 20);
+let ss = vec_new[Str](); vec_push(ss, "abc");
+fold(xs, fn(x: Int) -> Int { x }) + fold(ss, fn(s: Str) -> Int { str_len(s) })
+}

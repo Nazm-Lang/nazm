@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main(io: IoCap) -> Int ! { io } { print(int_to_str(apply(fn(x: Int) -> Int ! { io } { print("in"); x + 1 }, 4))); 0 }

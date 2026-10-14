@@ -1,0 +1,3 @@
+struct P { x: Int, }
+fn f[T: P](x: T) -> Int { 0 }
+fn main() -> Int { 0 }

@@ -1,0 +1,3 @@
+struct C { ch: Chan, }
+fn f(a: C, b: C) -> Bool { a == b }
+fn main() -> Int { 0 }

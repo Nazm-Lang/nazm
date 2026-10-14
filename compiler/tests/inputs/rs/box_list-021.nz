@@ -1,0 +1,2 @@
+struct List { n: Int, }
+fn main() -> Int { List(n: 9).n }

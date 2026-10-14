@@ -1,0 +1,12 @@
+
+        fn main() -> Int {
+            let c = chan_new(4);
+            chan_send(c, 3);
+            chan_send(c, 4);
+            chan_close(c);
+            let buf = ints_new();
+            let mut total = 0;
+            while chan_recv(c, buf) { total = total + ints_pop(buf); }
+            total
+        }
+        

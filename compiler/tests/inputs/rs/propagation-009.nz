@@ -1,0 +1,30 @@
+struct Three {
+    a: Str,
+    b: Int,
+    c: Ints,
+}
+enum Held {
+    Three(a: Str, b: Int, c: Ints),
+    Nothing,
+}
+fn may_fail(n: Int) -> Result[Int, Str] {
+    if n > 2 { return Result[Int, Str].Err(error: int_to_str(n)); }
+    Result[Int, Str].Ok(value: n)
+}
+fn rec(n: Int) -> Result[Three, Str] {
+    Result[Three, Str].Ok(value: Three(a: int_to_str(n * 11), b: may_fail(n)?, c: ints_new()))
+}
+fn var(n: Int) -> Result[Held, Str] {
+    Result[Held, Str].Ok(value: Held.Three(a: int_to_str(n * 11), b: may_fail(n)?, c: ints_new()))
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut t = 0;
+    while i < 6 {
+        t = t + match rec(i) { Result.Ok(value: r) => str_len(r.a) + r.b, Result.Err(error: e) => 100, };
+        t = t + match var(i) { Result.Ok(value: h) => match h { Held.Three(a: a, b: b, c: c) => str_len(a) + b, Held.Nothing() => 0, }, Result.Err(error: e) => 1000, };
+        i = i + 1;
+    }
+    churn();
+    t
+}

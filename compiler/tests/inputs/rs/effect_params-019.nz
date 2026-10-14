@@ -1,0 +1,1 @@
+pub fn loud(x: Int, out: OutCap) -> Int { print("x"); x }

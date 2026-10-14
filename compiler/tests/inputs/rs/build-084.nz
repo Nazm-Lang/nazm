@@ -1,0 +1,19 @@
+fn count(s: Str, want: Int) -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == want { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+fn repeat(s: Str, times: Int) -> Str {
+    let mut out = "";
+    let mut i = 0;
+    while i < times { out = str_concat(out, s); i = i + 1; }
+    out
+}
+fn pick(c: Bool) -> Str { if c { "yes" } else { "no" } }
+fn main() -> Int {
+    count(repeat("ab", 5), 97) * 100 + str_len(pick(true)) * 10 + str_len(pick(false))
+}

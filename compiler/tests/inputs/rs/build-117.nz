@@ -1,0 +1,15 @@
+struct Holder {
+    name: Str,
+    n: Int,
+}
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 {
+        let mut h = Holder(name: int_to_str(i), n: i);
+        h.name = str_concat(h.name, "x");
+        total = total + str_len(h.name) + h.n;
+        i = i + 1;
+    }
+    total
+}

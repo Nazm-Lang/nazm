@@ -1,0 +1,3 @@
+struct D { c: Str, }
+fn w(r: Result[Int, Vec[D]]) -> Int { 0 }
+fn m() -> Int { let r = Result[Int, Vec[D]].Ok(value: 1); scope { spawn w(r); } 0 }

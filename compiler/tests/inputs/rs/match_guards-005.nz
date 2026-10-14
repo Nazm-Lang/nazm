@@ -1,0 +1,1 @@
+fn main() -> Int { match 1 { n if m > 0 => 1, _ => 0 } }

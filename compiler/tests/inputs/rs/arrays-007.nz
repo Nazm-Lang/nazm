@@ -1,0 +1,3 @@
+const X: Int = Y;
+const Y: Int = X;
+fn main() -> Int { X }

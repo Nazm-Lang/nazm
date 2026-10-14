@@ -1,0 +1,2 @@
+fn w(c: Chan) -> Int { let b = ints_new(); chan_recv(c, b); ints_pop(b) }
+fn m() -> Int { let c = chan_new(1); scope { spawn w(c); chan_send(c, 7); } 0 }

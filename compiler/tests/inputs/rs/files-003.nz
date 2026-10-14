@@ -1,0 +1,9 @@
+use "@std/ioerror";
+use "@std/file";
+fn first(f: File) -> Int ! { io } {
+let b = bytes_new(3);
+match file_read(f, b) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, }
+}
+fn main(io: IoCap) -> Int ! { io } {
+match file_open(io, "prog.nz") { Result.Ok(value: f) => first(f), Result.Err(error: e) => 0 - 1, }
+}

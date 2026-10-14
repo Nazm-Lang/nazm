@@ -1,0 +1,24 @@
+fn make() -> Ints {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < 64 {
+        ints_push(xs, i + 100);
+        i = i + 1;
+    }
+    return xs;
+}
+fn noise() -> Int {
+    let ys = ints_new();
+    let mut i = 0;
+    while i < 64 {
+        ints_push(ys, 7);
+        i = i + 1;
+    }
+    ints_len(ys)
+}
+fn main() -> Int {
+    let got = make();
+    noise();
+    noise();
+    ints_get(got, 0) + ints_len(got)
+}

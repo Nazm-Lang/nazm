@@ -1,0 +1,2 @@
+trait T { fn n(self: Self) -> Int; fn len(self: Self) -> Int { str_len(self) } }
+fn main() -> Int { 0 }

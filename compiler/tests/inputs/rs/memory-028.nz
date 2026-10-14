@@ -1,0 +1,7 @@
+fn last() -> Str {
+    let xs = strs_new();
+    strs_push(xs, int_to_str(11));
+    strs_push(xs, int_to_str(22));
+    strs_pop(xs)
+}
+fn main() -> Int { str_len(last()) + str_byte(last(), 0) }

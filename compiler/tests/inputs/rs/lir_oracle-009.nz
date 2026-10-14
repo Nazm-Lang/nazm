@@ -1,0 +1,18 @@
+struct Op { name: Str, apply: fn(Int) -> Int }
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int { fn(x: Int) -> Int { f(g(x)) } }
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * apply(fact, n - 1) } }
+fn main(out: OutCap) -> Int {
+let tag = str_concat("ab", "cd");
+let xs = ints_new();
+ints_push(xs, 3);
+let len_plus = fn(x: Int) -> Int { x + str_len(tag) + ints_get(xs, 0) };
+let op = Op(name: tag, apply: len_plus);
+let fs = vec_new[fn(Int) -> Int]();
+vec_push(fs, len_plus);
+vec_push(fs, compose(len_plus, op.apply));
+let both = vec_get(fs, 1);
+let ap = op.apply;
+print(int_to_str(both(1) + ap(0) + fact(5)));
+0
+}

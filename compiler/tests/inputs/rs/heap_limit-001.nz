@@ -1,0 +1,11 @@
+fn main(out: OutCap) -> Int ! {io} {
+    print("start\n");
+    let xs = strs_new();
+    let mut i = 0;
+    while i < 3000 {
+        strs_push(xs, str_concat("the item numbered ", int_to_str(i)));
+        i = i + 1;
+    }
+    print(f"{strs_len(xs)} {strs_get(xs, 2999)}\n");
+    0
+}

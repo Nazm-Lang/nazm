@@ -1,0 +1,8 @@
+fn twice(f: fn(Int) -> Int ! {}, x: Int) -> Int {
+    f(f(x))
+}
+
+fn main() -> Int {
+    let k = 2;
+    twice(fn(x: Int) -> Int { x * k }, 1)
+}

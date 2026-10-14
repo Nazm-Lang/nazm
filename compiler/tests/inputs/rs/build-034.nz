@@ -1,0 +1,5 @@
+fn g(n: Int) -> Int { n }
+fn main() -> Int {
+    let g = 5;
+    g + g(1)
+}

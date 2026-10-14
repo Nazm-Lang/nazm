@@ -1,0 +1,2 @@
+fn shout() -> Int { print("!"); 0 }
+fn main(io: IoCap) -> Int { shout() }

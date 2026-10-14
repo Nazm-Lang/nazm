@@ -1,0 +1,2 @@
+fn swap[A, B](a: A, b: B) -> B { b }
+fn m() -> Int { swap("a", 1) }

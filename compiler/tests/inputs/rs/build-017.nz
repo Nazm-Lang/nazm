@@ -1,0 +1,2 @@
+fn div(a: Int, b: Int) -> Int { a / b }
+fn main() -> Int { div(100, 7) }

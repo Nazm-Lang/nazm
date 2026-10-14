@@ -1,0 +1,10 @@
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, str_concat("keep", "me"));
+    vec_set(xs, 0, vec_get(xs, 0));
+    let mut noise = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 { vec_push(noise, str_concat("n", int_to_str(i))); i = i + 1; }
+    noise = vec_new[Str]();
+    str_len(vec_get(xs, 0)) + str_byte(vec_get(xs, 0), 0) + vec_len(noise)
+}

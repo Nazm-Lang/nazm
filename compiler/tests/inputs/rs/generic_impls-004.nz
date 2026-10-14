@@ -1,0 +1,4 @@
+use "show.nz";
+use "wrap.nz";
+fn g[T: Show](x: T) -> Str { x.show() }
+fn main(out: OutCap) -> Int ! {io} { let w = wrap(4); print(str_concat(w.show(), g(w))); 0 }

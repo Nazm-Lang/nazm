@@ -1,0 +1,2 @@
+impl[A, B] Show for P[B, A] { fn show(self: P[B, A]) -> Str { "p" } }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+fn f70[T](x: T) -> Int { 0 }
+fn main() -> Int { f0(1) }

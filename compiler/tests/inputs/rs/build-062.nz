@@ -1,0 +1,10 @@
+fn dbl(n: Int) -> Int { n * 2 }
+fn main() -> Int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < 5 {
+        i = i + 1;
+        s = s + dbl(if i == 3 { break; } else { i });
+    }
+    s
+}

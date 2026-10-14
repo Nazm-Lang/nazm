@@ -1,0 +1,3 @@
+use "@std/net";
+use "@std/ioerror";
+fn main(net: NetCap) -> Int ! { io } { match tcp_listen(net, "127.0.0.1:0") { Result.Ok(value: l) => 1, Result.Err(error: e) => 0, } }

@@ -1,0 +1,56 @@
+use "@std/ioerror";
+
+fn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }
+
+fn list(a: Str, b: Str) -> Strs ! {} {
+    let x = strs_new();
+    strs_push(x, a);
+    strs_push(x, b);
+    x
+}
+
+// One string either way, so the interpreter's `ENOSYS` allocates what a count does natively.
+fn peak(r: Int) -> Str ! {} {
+    let text = int_to_str(r);
+    if r > 0 { "positive" } else { text }
+}
+
+fn main(p: ProcessCap, io: IoCap, t: TimeCap) -> Int ! { io } {
+    let env = strs_new();
+    strs_push(env, "PATH=/usr/bin:/bin");
+    // A child that ends at once: every wait answers its status, the same every time.
+    let quick = os_spawn_with("sh", list("-c", "exit 3"), "", env, 2);
+    let far = time_now_ms() + 30000;
+    let id = os_child_pid(quick);
+    print(f"until {kind(os_wait_until(quick, far))} try {kind(os_try_wait(quick))} wait {kind(os_wait(quick))}\n");
+    print(f"id kept {os_child_pid(quick) == id} {id > 1} {id != os_pid()} {os_pid() > 1}\n");
+    print(f"peak {peak(os_child_rusage(quick))}\n");
+    os_close(quick);
+    // A child leading its own group, with a child of its own: still running at the deadline.
+    let long = os_spawn_with("sh", list("-c", "sleep 30 & sleep 30; wait"), "", env, 3);
+    let group = os_child_pid(long);
+    eprint(str_concat(str_concat("group ", int_to_str(group)), "\n"));
+    print(f"try {kind(os_try_wait(long))} peak before {kind(os_child_rusage(long))}\n");
+    let start = time_now_ms();
+    print(f"until {kind(os_wait_until(long, start + 100))} waited {time_now_ms() - start >= 100}\n");
+    print(f"past deadline {kind(os_wait_until(long, start))}\n");
+    print(f"asked {kind(os_kill_group(group, 0))} terminated {kind(os_kill_group(group, 15))}\n");
+    print(f"ended {kind(os_wait(long))} again {kind(os_try_wait(long))} {kind(os_wait_until(long, 0))}\n");
+    // The group's other process ended with it; wait until the system has let it go.
+    let mut gone = os_kill_group(group, 0);
+    let mut tries = 0;
+    while gone == 0 && tries < 500 {
+        time_sleep_ms(10);
+        gone = os_kill_group(group, 0);
+        tries = tries + 1;
+    }
+    // Gone: the system says so as `ESRCH`, or — macOS, for a group whose last process is a zombie
+    // another parent will reap — `EPERM`.
+    let said = gone == 0 - 3 || gone == 0 - 1;
+    print(f"group gone {said} after {tries < 500}\n");
+    print(f"refused {kind(os_kill_group(1, 0))} {kind(os_kill_group(0, 9))} {kind(os_kill_group(group, 32))} {kind(os_kill_group(group, 0 - 1))} {kind(os_kill_group(2147483648, 0))}\n");
+    os_close(long);
+    // Not a child.
+    print(f"not a child {kind(os_try_wait(os_stdin()))} {kind(os_child_pid(os_stdin()))} {kind(os_child_rusage(os_stdin()))}\n");
+    0
+}

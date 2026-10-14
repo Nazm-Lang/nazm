@@ -1,0 +1,2 @@
+trait T { fn a(x: Int) -> Int; }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+extern "C" fn name() -> Ints = "c_name";
+fn main() -> Int { 0 }

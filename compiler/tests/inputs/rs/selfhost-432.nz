@@ -1,0 +1,31 @@
+struct Named { name: Str, n: Int, }
+enum Tok { Word(text: Str), Num(v: Int), End, }
+fn first[T](xs: Vec[T]) -> T { vec_get(xs, 0) }
+fn keep[T](xs: Vec[T], x: T) -> Int { vec_push(xs, x) }
+fn score(t: Tok) -> Int { match t { Tok.Word(text: s) => str_len(s), Tok.Num(v: v) => v, Tok.End() => 0, } }
+fn main() -> Int {
+    let names = vec_new[Named]();
+    let toks = vec_new[Tok]();
+    let strs = vec_new[Str]();
+    let nest = vec_new[Vec[Int]]();
+    let mut i = 0;
+    while i < 50 {
+        keep(names, Named(name: str_concat("n", int_to_str(i)), n: i));
+        keep(toks, Tok.Word(text: int_to_str(i * 7)));
+        keep(toks, Tok.Num(v: i));
+        vec_push(strs, str_concat("s", int_to_str(i)));
+        let inner = vec_new[Int]();
+        vec_push(inner, i);
+        vec_push(nest, inner);
+        i = i + 1;
+    }
+    vec_set(names, 3, Named(name: "replaced", n: 1000));
+    vec_set(strs, 0, vec_get(strs, 1));
+    let popped = vec_pop(toks);
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(toks) { total = total + score(vec_get(toks, k)); k = k + 1; }
+    let p = first(names);
+    total + vec_get(names, 3).n + str_len(first(strs)) + score(popped) + str_len(p.name)
+        + vec_get(vec_get(nest, 9), 0) + vec_len(nest)
+}

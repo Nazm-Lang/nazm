@@ -1,0 +1,2 @@
+use "../lib/util.nz";
+fn main() -> Int { boom(2) }

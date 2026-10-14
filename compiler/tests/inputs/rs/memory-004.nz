@@ -1,0 +1,9 @@
+fn make() -> Ints {
+    let xs = ints_new();
+    ints_push(xs, 4);
+    xs
+}
+fn main() -> Int {
+    let got = make();
+    ints_get(got, 0)
+}

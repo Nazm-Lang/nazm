@@ -1,0 +1,3 @@
+use "lib/util.nz";
+use "other.nz";
+fn main() -> Int { v() + w() }

@@ -1,0 +1,2 @@
+fn d(x: Int) -> Int { 10 / x }
+fn main() -> Int { d(0) }

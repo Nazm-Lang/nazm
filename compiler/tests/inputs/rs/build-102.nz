@@ -1,0 +1,2 @@
+use "b.nz";
+fn main() -> Int { from_b() + 1 }

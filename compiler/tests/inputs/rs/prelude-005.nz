@@ -1,0 +1,15 @@
+use "b.nz";
+fn sum(x: Str, y: Str) -> Result[Int, ParseError] {
+    Result[Int, ParseError].Ok(value: parse(x)? + parse(y)?)
+}
+fn main() -> Int {
+    let good = match sum("40", "2") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    };
+    let bad = match sum("4", "x2") {
+        Result.Ok(value: n) => 0 - 1,
+        Result.Err(error: e) => e.at,
+    };
+    good * 10 + bad
+}

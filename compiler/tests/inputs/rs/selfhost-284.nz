@@ -1,0 +1,3 @@
+struct N { name: Str, n: Int, flag: Bool, }
+fn f(a: N, b: N) -> Bool { a != b }
+fn main() -> Int { 0 }

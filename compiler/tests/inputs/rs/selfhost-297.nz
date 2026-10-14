@@ -1,0 +1,4 @@
+struct B { values: Ints, }
+struct D { n: Int, inner: B, }
+fn f(a: D, b: D) -> Bool { a != b }
+fn main() -> Int { 0 }

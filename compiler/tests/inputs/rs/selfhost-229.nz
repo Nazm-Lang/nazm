@@ -1,0 +1,2 @@
+struct Strange[T] { next: Vec[Strange[Vec[T]]], }
+fn m() -> Int { 0 }

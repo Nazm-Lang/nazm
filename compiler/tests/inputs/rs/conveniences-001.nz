@@ -1,0 +1,40 @@
+/* A program /* with a nested */ block comment. */
+struct Point { x: Int, y: Int }
+
+impl Point {
+    fn sum(self: Point) -> Int { self.x + self.y }
+    fn scaled(self: Point, k: Int) -> Point { Point(x: self.x * k, y: self.y * k) }
+}
+
+fn empty() -> Vec[Int] { vec_new() }
+
+fn popped(v: Vec[Int]) -> Option[Int] {
+    if v.len() == 0 { None } else { Some(vec_pop(v)) }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let p = Point(x: 2, y: 3)
+    println(p.scaled(10).sum()) /* inline */
+    let o: Option[Int] = None
+    let n: UInt8 = 200
+    let mut names: Vec[Str] = vec_new()
+    names.push("x")
+    match o {
+        Some(x) => println(x),
+        None => println(f"{n} {names.len()} {point_sum(p)}"),
+    }
+    let mut k = 0
+    loop {
+        k += 1
+        if k == 4 { break }
+    }
+    println(k)
+    let v = empty()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    while let Some(x) = popped(v) {
+        println(x)
+    }
+    0
+}

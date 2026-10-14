@@ -1,0 +1,8 @@
+fn waiter(io: IoCap, a: Chan, done: Chan) -> Int ! { io } {
+let got = ints_new(); let r = chan_recv(a, got); chan_send(done, 1); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let mut i = 0; let got = ints_new();
+while i < 20000 { let a = chan_new(1); let done = chan_new(1);
+scope { spawn waiter(io, a, done); chan_send(a, i); let r = chan_recv(done, got); ints_pop(got); }
+i = i + 1; }
+0 }

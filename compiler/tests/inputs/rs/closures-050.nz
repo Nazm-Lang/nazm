@@ -1,0 +1,47 @@
+
+struct Tagged {
+    tag: Int,
+    f: fn(Int) -> Int,
+}
+
+fn double(x: Int) -> Int { x * 2 }
+
+fn keep(fs: Vec[fn(Int) -> Int], f: fn(Int) -> Int) -> Int { vec_push(fs, f) }
+
+fn ident[T](x: T) -> T { x }
+
+fn run_all(fs: Vec[fn(Int) -> Int], x: Int) -> Int {
+    let mut acc = 0;
+    let mut i = 0;
+    while i < vec_len(fs) {
+        let g = vec_get(fs, i);
+        acc = acc + g(x);
+        i = i + 1;
+    }
+    acc
+}
+
+fn main(out: OutCap) -> Int {
+    let fs = vec_new[fn(Int) -> Int]();
+    let others = vec_new[fn(Int) -> Int]();
+    let n = 10;
+    let word = str_concat("ab", "c");
+    let data = vec_new[Int]();
+    vec_push(data, 5);
+    let add_n = fn(x: Int) -> Int { x + n };
+    let len_w = fn(x: Int) -> Int { x + str_len(word) };
+    let sum_d = fn(x: Int) -> Int { x + vec_get(data, 0) };
+    let twice_add = fn(x: Int) -> Int { add_n(add_n(x)) };
+    let t = Tagged(tag: 7, f: double);
+    let tagged = fn(x: Int) -> Int { let g = t.f; g(x) + t.tag };
+    vec_push(fs, double);
+    vec_push(fs, add_n);
+    keep(fs, len_w);
+    vec_push(fs, ident(sum_d));
+    vec_push(others, twice_add);
+    vec_push(others, tagged);
+    vec_push(data, 100);
+    print(int_to_str(run_all(fs, 1)));
+    print("\n");
+    run_all(others, 1)
+}

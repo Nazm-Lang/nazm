@@ -1,0 +1,45 @@
+
+const SIZE: Int = 4;
+const STEP: Float64 = 0.25;
+
+struct Point { x: Int, y: Float64, }
+struct Frame { data: [UInt8; SIZE], tag: Bool, }
+enum Cell { Empty, Full(value: [Int; 2]), }
+
+fn total(f: Frame) -> Int {
+    let mut t = 0;
+    let mut i = 0;
+    while i < SIZE {
+        t = t + Int(f.data[i]);
+        i = i + 1;
+    }
+    t
+}
+
+fn make(n: Int) -> [Point; 3] {
+    let mut ps = [Point(x: 0, y: 0.0); 3];
+    let mut i = 0;
+    while i < 3 {
+        ps[i].x = n + i;
+        ps[i].y = Float64(i) * STEP;
+        i = i + 1;
+    }
+    ps
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let mut f = Frame(data: [UInt8(1), 2, 3, 4], tag: true);
+    f.data[3] = 40;
+    print(str_concat(int_to_str(total(f)), "\n"));
+    let ps = make(10);
+    print(str_concat(int_to_str(ps[2].x), "\n"));
+    print(str_concat(num_to_str(ps[2].y), "\n"));
+    let c = Cell.Full(value: [5, 6]);
+    match c {
+        Cell.Empty() => print("empty\n"),
+        Cell.Full(value: v) => print(str_concat(int_to_str(v[0] * v[1]), "\n")),
+    };
+    let g = Frame(data: [UInt8(1), 2, 3, 40], tag: true);
+    if f == g { print("frames equal\n"); } else { print("frames differ\n"); };
+    0
+}

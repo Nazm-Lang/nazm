@@ -1,0 +1,1 @@
+fn main(t: TimeCap) -> Int ! {} { time_now_ms() }

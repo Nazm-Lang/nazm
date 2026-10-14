@@ -1,0 +1,2 @@
+fn parse(n: Int) -> Result[Int, Str] { if n > 0 { Result[Int, Str].Ok(value: n) } else { Result[Int, Str].Err(error: "no") } }
+fn main() -> Int { match parse(0) { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e) + 40 } }

@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main(io: IoCap) -> Int ! {} { apply(fn(x: Int) -> Int ! { io } { print("in"); x }, 4) }

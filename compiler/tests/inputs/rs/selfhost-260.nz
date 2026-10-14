@@ -1,0 +1,2 @@
+fn f() -> Int { return { let q = 5; q + 1 }; }
+fn main() -> Int { f() }

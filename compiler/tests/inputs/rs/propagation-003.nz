@@ -1,0 +1,23 @@
+fn none() -> Option[Str] { Option[Str].None() }
+fn some_int() -> Option[Int] { Option[Int].Some(value: 4) }
+fn some_str() -> Option[Str] { Option[Str].Some(value: int_to_str(55)) }
+fn some_rec() -> Option[Item] { Option[Item].Some(value: item(6)) }
+fn some_vec() -> Option[Vec[Str]] {
+    let xs = vec_new[Str]();
+    vec_push(xs, int_to_str(1));
+    vec_push(xs, int_to_str(2));
+    Option[Vec[Str]].Some(value: xs)
+}
+fn main() -> Int {
+    let n = none();
+    let n2 = n;
+    let s = some_str();
+    let s2 = s;
+    let v = some_vec();
+    let v2 = v;
+    match n2 { Option.None() => 1000, Option.Some(value: x) => 0, }
+        + match some_int() { Option.None() => 0, Option.Some(value: x) => x * 100, }
+        + match s2 { Option.None() => 0, Option.Some(value: x) => str_len(x) * 10, }
+        + match some_rec() { Option.None() => 0, Option.Some(value: i) => ints_get(i.tags, 0), }
+        + match v2 { Option.None() => 0, Option.Some(value: xs) => vec_len(xs) * 10000, }
+}

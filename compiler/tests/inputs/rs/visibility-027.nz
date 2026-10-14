@@ -1,0 +1,5 @@
+use "b.nz";
+pub struct Ay {
+    n: Int,
+}
+pub fn via_a() -> Int { Ay(n: 2).n * via_b() }

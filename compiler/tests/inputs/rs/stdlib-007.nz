@@ -1,0 +1,77 @@
+use "@std/hash";
+use "@std/hashmap";
+use "@std/hashset";
+use "@std/deque";
+
+struct Point { x: Int, y: Int, }
+
+impl Hash for Point {
+    fn hash(self: Point) -> UInt64 ! {} { hash_combine(self.x.hash(), self.y.hash()) }
+    fn same(self: Point, other: Point) -> Bool ! {} { self == other }
+}
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn get_or(m: HashMap[Str, Int], k: Str) -> Int {
+    match hashmap_get(m, k) {
+        Option.Some(value: v) => v,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Str, Int]();
+    hashmap_set(m, "one", 1);
+    hashmap_set(m, "two", 2);
+    if hashmap_set(m, "one", 11) { show(out, "replaced"); } else { show(out, "new"); };
+    show(out, int_to_str(get_or(m, "one") + get_or(m, "two") + get_or(m, "three")));
+    let big = hashmap_new[Int, Int]();
+    let mut i = 0;
+    while i < 1000 {
+        hashmap_set(big, i, i * i);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 1000 {
+        if j % 3 == 0 { hashmap_remove(big, j); };
+        j = j + 1;
+    }
+    let mut total = 0;
+    let vs = hashmap_values(big);
+    let mut k = 0;
+    while k < vec_len(vs) { total = total + vec_get(vs, k); k = k + 1; }
+    show(out, int_to_str(hashmap_len(big)));
+    show(out, int_to_str(total));
+    hashmap_set(big, 3, 7);
+    show(out, int_to_str(hashmap_len(big)));
+    let pts = hashset_new[Point]();
+    hashset_add(pts, Point(x: 1, y: 2));
+    if hashset_add(pts, Point(x: 1, y: 2)) { show(out, "added twice"); } else { show(out, "already there"); };
+    hashset_add(pts, Point(x: 2, y: 1));
+    show(out, int_to_str(hashset_len(pts)));
+    if hashset_has(pts, Point(x: 2, y: 1)) && !hashset_has(pts, Point(x: 3, y: 3)) { show(out, "set ok"); } else { show(out, "set wrong"); };
+    show(out, num_to_str(hash_bytes("")));
+    show(out, num_to_str(hash_bytes("nazm")));
+    show(out, num_to_str(UInt8(7).hash()));
+    let d = deque_new[Int]();
+    let mut n = 0;
+    while n < 10 {
+        deque_push_back(d, n);
+        deque_push_front(d, 0 - n);
+        n = n + 1;
+    }
+    let mut line = "";
+    let mut p = 0;
+    while p < deque_len(d) {
+        match deque_get(d, p) {
+            Option.Some(value: v) => { line = str_concat(line, str_concat(int_to_str(v), " ")); },
+            Option.None() => {},
+        };
+        p = p + 1;
+    }
+    show(out, line);
+    match deque_pop_front(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, "empty"), };
+    match deque_pop_back(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, "empty"), };
+    show(out, int_to_str(deque_len(d)));
+    0
+}

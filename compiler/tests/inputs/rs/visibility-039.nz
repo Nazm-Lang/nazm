@@ -1,0 +1,5 @@
+use "deep.nz";
+pub enum State {
+    V(i: Inner),
+}
+pub fn make() -> State { State.V(i: Inner(n: 42)) }

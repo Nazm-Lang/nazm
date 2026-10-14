@@ -1,0 +1,15 @@
+static SEEN: Atomic = atomic_new(0);
+
+@interrupt("poke")
+fn poked(m: MmioCap) -> Int ! {} {
+    mmio_write8(1073758208, 33);
+    atomic_store(SEEN, 1)
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    mmio_write32(3758154240, 8);
+    while atomic_load(SEEN) == 0 {
+        0;
+    }
+    3
+}

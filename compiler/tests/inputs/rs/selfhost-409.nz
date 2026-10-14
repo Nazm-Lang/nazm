@@ -1,0 +1,71 @@
+use "analyse.nz";
+use "module.nz";
+// arg(0) the prelude, arg(1) the root, arg(2) its dependency, arg(3) `last`, `between` or `none`.
+fn main(io: IoCap) -> Int {
+    let core = arg(0);
+    let root = read_file(arg(1));
+    let dep = read_file(arg(2));
+    let nl = str_from_byte(10);
+    let mpath = strs_new();
+    let mstart = ints_new();
+    let mfirst = ints_new();
+    let mcount = ints_new();
+    let mto = ints_new();
+    let mat = ints_new();
+    let mut src = "";
+    if arg(3) != "between" {
+        // The loader's layout: root, dep, then `attach_core` — or, for `none`, no prelude.
+        strs_push(mpath, "root.nz");
+        strs_push(mpath, "dep.nz");
+        ints_push(mstart, 0);
+        ints_push(mstart, str_len(root) + 1);
+        ints_push(mfirst, 0);
+        ints_push(mcount, 1);
+        ints_push(mto, 1);
+        ints_push(mat, 0);
+        ints_push(mfirst, 1);
+        ints_push(mcount, 0);
+        src = str_concat(str_concat(root, nl), dep);
+        if arg(3) == "last" {
+            src = attach_core(core, src, mpath, mstart, mfirst, mcount, mto, mat, io);
+        }
+    } else {
+        // The prelude between the two, keyed as the prelude, so it is neither last nor
+        // any particular index the checker could assume.
+        let text = read_file(core);
+        strs_push(mpath, "root.nz");
+        strs_push(mpath, core_key());
+        strs_push(mpath, "dep.nz");
+        ints_push(mstart, 0);
+        ints_push(mstart, str_len(root) + 1);
+        ints_push(mstart, str_len(root) + 1 + str_len(text) + 1);
+        ints_push(mfirst, 0);
+        ints_push(mcount, 2);
+        ints_push(mto, 2);
+        ints_push(mat, 0);
+        ints_push(mto, 1);
+        ints_push(mat, 0 - 1);
+        ints_push(mfirst, 2);
+        ints_push(mcount, 0);
+        ints_push(mfirst, 2);
+        ints_push(mcount, 1);
+        ints_push(mto, 1);
+        ints_push(mat, 0 - 1);
+        src = str_concat(str_concat(str_concat(str_concat(root, nl), text), nl), dep);
+    }
+    let out = strs_new();
+    match check_program(src, mpath, mstart, mfirst, mcount, mto, mat, io) {
+        Result.Ok(value: checked) => {
+            strs_push(out, "ok");
+        },
+        Result.Err(error: found) => {
+            let mut d = 0;
+            while d < vec_len(found) {
+                strs_push(out, vec_get(found, d).code);
+                d = d + 1;
+            }
+        },
+    };
+    print(str_concat(str_join(out, ","), nl));
+    0
+}

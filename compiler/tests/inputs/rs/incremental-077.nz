@@ -1,0 +1,7 @@
+pub struct Point {
+    x: Int,
+}
+pub struct Other {
+    y: Int,
+}
+pub fn at(n: Int) -> Point { Point(x: n) }

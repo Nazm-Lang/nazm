@@ -1,0 +1,8 @@
+fn grow[T](x: T, n: Int) -> Int {
+    if n == 0 { 0 } else {
+        let v = vec_new[T]();
+        vec_push(v, x);
+        grow(v, n - 1) + 1
+    }
+}
+fn main() -> Int { grow(1, 3) }

@@ -1,0 +1,9 @@
+fn counter(fs: Vec[fn() -> Int]) -> fn() -> Int {
+    fn() -> Int { vec_len(fs) }
+}
+
+fn main() -> Int {
+    let fs = vec_new[fn() -> Int]();
+    vec_push(fs, counter(fs));
+    0
+}

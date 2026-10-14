@@ -1,0 +1,16 @@
+fn drain(c: Chan) -> Int {
+    let buf = ints_new();
+    while chan_recv(c, buf) {
+    }
+    ints_len(buf)
+}
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(2);
+    scope {
+        spawn drain(c);
+        chan_send(c, 1);
+        chan_send(c, 2);
+        chan_close(c);
+    }
+    0
+}

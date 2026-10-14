@@ -1,0 +1,2 @@
+pub fn shown(n: Str) -> Int { helper() + str_len(n) }
+fn helper() -> Int { 1 }

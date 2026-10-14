@@ -1,0 +1,8 @@
+enum E {
+    Empty,
+    Text(value: Str),
+}
+fn main() -> Int {
+    let z = 0;
+    match E.Text(value: str_concat("ab", "cd")) { E.Empty() => 0, E.Text(value: s) => str_len(s) / z, }
+}

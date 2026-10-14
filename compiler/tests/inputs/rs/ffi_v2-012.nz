@@ -1,0 +1,3 @@
+pub extern "C" fn f(x: Int) -> Int ! {} = "nz_same" { x }
+pub extern "C" fn g(x: Int) -> Int ! {} = "nz_same" { x + 1 }
+fn main() -> Int { f(1) + g(1) }

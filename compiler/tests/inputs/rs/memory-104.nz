@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    vec_push(xs, int_to_str(1));
+    vec_push(xs, int_to_str(2));
+    str_len(vec_get(xs, 5))
+}

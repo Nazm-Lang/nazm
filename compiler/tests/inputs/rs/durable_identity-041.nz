@@ -1,0 +1,8 @@
+pub struct Place {
+    x: Int,
+    y: Int,
+}
+struct Hidden {
+    n: Int,
+}
+pub fn at() -> Place { Place(x: 1, y: 2) }

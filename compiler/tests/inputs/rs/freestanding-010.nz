@@ -1,0 +1,2 @@
+fn poke() -> Int { mmio_write32(0, 0) }
+fn main(m: MmioCap) -> Int ! {} { poke() }

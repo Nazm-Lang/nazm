@@ -1,0 +1,10 @@
+fn in(in: Int) -> Int { in + 1 }
+fn main() -> Int {
+    let x = 1;
+    let xs = ints_new();
+    ints_push(xs, 5);
+    let mut t = 0;
+    for x in xs { t = t + x; }
+    let y = in(x);
+    t + y
+}

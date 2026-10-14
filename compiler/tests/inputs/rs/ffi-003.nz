@@ -1,0 +1,4 @@
+use "lib.nz";
+extern "C" fn add(a: Int, b: Int) -> Int = "c_add";
+fn main(io: IoCap, f: ForeignCap) -> Int
+{ print(int_to_str(twice(f, 21) + add(0, 1))); 0 }

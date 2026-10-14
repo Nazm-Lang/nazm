@@ -1,0 +1,37 @@
+enum E {
+    A,
+    B,
+    C,
+}
+fn g(ok: Bool) -> Result[Int, Str] {
+    if ok { return Result[Int, Str].Ok(value: 5); }
+    Result[Int, Str].Err(error: str_concat("x", "y"))
+}
+fn f(e: E, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {
+    let v = match e {
+        E.A() => {
+            let gone = int_to_str(1);
+            return Result[Int, Str].Ok(value: 100);
+        },
+        E.B() => {
+            let s = str_concat("ab", "c");
+            str_len(s)
+        },
+        E.C() => {
+            let held = int_to_str(22);
+            g(ok)? + str_len(held)
+        },
+    };
+    Result[Int, Str].Ok(value: v)
+}
+fn show(r: Result[Int, Str]) -> Int {
+    match r { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - str_len(e), }
+}
+fn main(tasks: SpawnCap) -> Int {
+    let a = show(f(E.A(), true, tasks));
+    let b = show(f(E.B(), true, tasks));
+    let c = show(f(E.C(), true, tasks));
+    let d = show(f(E.C(), false, tasks));
+    churn();
+    a * 10000 + b * 1000 + c * 10 + d
+}

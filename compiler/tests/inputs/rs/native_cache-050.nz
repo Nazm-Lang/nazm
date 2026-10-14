@@ -1,0 +1,2 @@
+use "b.nz";
+fn main() -> Int { if identity(true) { identity(3) } else { 0 } }

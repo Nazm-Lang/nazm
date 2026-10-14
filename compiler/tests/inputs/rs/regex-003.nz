@@ -1,0 +1,53 @@
+use "@std/regex";
+
+fn spans(ms: Vec[Match]) -> Str {
+    let mut out = "";
+    for i in 0..vec_len(ms) {
+        let m = vec_get(ms, i);
+        out = f"{out}({m.start},{m.end})";
+    }
+    out
+}
+
+fn main(io: IoCap) -> Int ! {io} {
+    let text = "It's 12345 cafés...\n\n  OK, naïve 日本語!";
+    match regex_compile("(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
+        Result.Ok(value: r) => {
+            let ms = regex_find_all(r, text);
+            let pieces = strs_new();
+            for i in 0..vec_len(ms) {
+                let m = vec_get(ms, i);
+                strs_push(pieces, str_slice(text, m.start, m.end));
+            }
+            print(f"{spans(ms)}\n{str_join(pieces, "|")}\n");
+        },
+        Result.Err(error: e) => print(f"error: {e}\n"),
+    };
+    match regex_compile("(\\w+)@(\\w+)(?:\\.(com|org))?") {
+        Result.Ok(value: r) => {
+            print(f"groups: {regex_groups(r)}\n");
+            match regex_captures(r, "to: bob@example.org, amy@home", 0) {
+                Option.Some(value: gs) => {
+                    for i in 0..vec_len(gs) {
+                        match vec_get(gs, i) {
+                            Option.Some(value: m) => print(f"{i}: {m.start}..{m.end}\n"),
+                            Option.None() => print(f"{i}: -\n"),
+                        };
+                    }
+                },
+                Option.None() => print("no match\n"),
+            };
+            match regex_find(r, "to: bob@example.org, amy@home", 20) {
+                Option.Some(value: m) => print(f"from 20: {m.start}..{m.end}\n"),
+                Option.None() => print("from 20: none\n"),
+            };
+            print(f"{regex_is_match(r, "nobody")} {regex_is_match(r, "a@b")}\n");
+        },
+        Result.Err(error: e) => print(f"error: {e}\n"),
+    };
+    match regex_compile("[a-") {
+        Result.Ok(value: r) => print("compiled\n"),
+        Result.Err(error: e) => print(f"error: {e}\n"),
+    };
+    0
+}

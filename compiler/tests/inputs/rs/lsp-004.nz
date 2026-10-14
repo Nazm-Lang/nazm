@@ -1,0 +1,2 @@
+fn helper(n: Int) -> Int
+inferred effects: {}

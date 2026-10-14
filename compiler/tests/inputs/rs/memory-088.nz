@@ -1,0 +1,23 @@
+fn pick(a: Str, b: Int) -> Int {
+    str_byte(a, 0) + b
+}
+fn main() -> Int {
+    let mut j = 0;
+    pick(int_to_str(1234), if j == 0 {
+        while j < 3 {
+            j = j + 1;
+            if j == 2 {
+                continue;
+            }
+        }
+        let mut k = 0;
+        let mut noise = "";
+        while k < 30 {
+            noise = str_concat("wxyz", noise);
+            k = k + 1;
+        }
+        j + str_len(noise) - 120
+    } else {
+        0
+    })
+}

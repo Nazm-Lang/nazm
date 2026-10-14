@@ -1,0 +1,8 @@
+pub fn work(tasks: SpawnCap) -> Int {
+    let got = ints_new();
+    let c = chan_new(1);
+    scope { spawn feed(c); }
+    let more = chan_recv(c, got);
+    ints_get(got, 0) + 4
+}
+pub fn feed(c: Chan) -> Int { chan_send(c, 30); chan_close(c); 0 }

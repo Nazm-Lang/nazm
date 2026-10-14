@@ -1,0 +1,12 @@
+@derive(toml)
+struct Package { name: Str, version: Str, main: Option[Str], }
+
+@derive(toml)
+struct Manifest { schema: Str, package: Package, }
+
+fn main(io: IoCap) -> Int ! {io} {
+    match manifest_from_toml(read_file("nazm.toml")) {
+        Result.Ok(value: m) => { print(f"{m.schema} {m.package.name} {m.package.version}\n"); 0 },
+        Result.Err(error: e) => { print(f"{e}\n"); 1 },
+    }
+}

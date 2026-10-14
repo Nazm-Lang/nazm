@@ -1,0 +1,2 @@
+pub use "cyca.nz";
+pub fn b() -> Int { 2 }

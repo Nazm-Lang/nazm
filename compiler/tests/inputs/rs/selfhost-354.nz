@@ -1,0 +1,4 @@
+trait Area { fn area(self: Self) -> Int; }
+struct Sq { s: Int }
+impl Area for Sq { fn area(self: Sq) -> Int { 1 } fn zz(self: Sq) -> Int { 2 } }
+fn main() -> Int { 0 }

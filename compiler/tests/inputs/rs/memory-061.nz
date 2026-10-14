@@ -1,0 +1,14 @@
+struct Pair {
+    a: Str,
+    b: Str,
+}
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 200 {
+        let p = Pair(a: int_to_str(i), b: int_to_str(i * 2));
+        total = total + str_len(p.a);
+        i = i + 1;
+    }
+    total
+}

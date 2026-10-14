@@ -1,0 +1,2 @@
+fn f(x: Int) -> Int { let y = x + 1; y * 2 }
+fn main() -> Int { f(1) }

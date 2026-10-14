@@ -1,0 +1,2 @@
+fn half(x: Float64) -> Float64 { x / 2.0 }
+fn main(m: MmioCap) -> Int ! {} { 0 }

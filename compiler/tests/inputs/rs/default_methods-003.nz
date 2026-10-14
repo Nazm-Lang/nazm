@@ -1,0 +1,3 @@
+use "t.nz";
+pub struct P { x: Int, }
+impl Named for P { fn name(self: P) -> Str { "p" } }

@@ -1,0 +1,2 @@
+use "lib:lib.nz";
+fn main() -> Int ! {} { spin(3) }

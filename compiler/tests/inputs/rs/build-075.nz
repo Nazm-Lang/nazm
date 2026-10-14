@@ -1,0 +1,9 @@
+fn twice(n: Int) -> Int { n * 2 }
+fn rhs(n: Int) -> Int { let mut s = 1; s = if n > 0 { return 7; } else { 2 }; s }
+fn operand(n: Int) -> Int { 100 + (if n > 0 { return 8; } else { 3 }) }
+fn argument(n: Int) -> Int { twice(if n > 0 { return 9; } else { 4 }) }
+fn condition(n: Int) -> Int { if (if n > 0 { return 10; } else { true }) { 5 } else { 6 } }
+fn main() -> Int {
+    rhs(1) * 10000 + operand(1) * 1000 + argument(1) * 100 + condition(1) * 10
+        + rhs(0 - 1) + operand(0 - 1) + argument(0 - 1) + condition(0 - 1)
+}

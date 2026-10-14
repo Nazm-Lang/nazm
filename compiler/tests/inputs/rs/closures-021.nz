@@ -1,0 +1,3 @@
+fn inc(y: Int) -> Int { y + 1 }
+fn g[T](x: T) -> T { let f = inc; x }
+fn main() -> Int { g(1) }

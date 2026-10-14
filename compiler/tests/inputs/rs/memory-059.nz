@@ -1,0 +1,8 @@
+struct Holder {
+    name: Str,
+    values: Ints,
+}
+fn main() -> Int {
+    let h = Holder(name: int_to_str(9), values: ints_new());
+    ints_get(h.values, 0)
+}

@@ -1,0 +1,2 @@
+fn make(io: IoCap, p: Str) -> Int ! { io } { let w = fn(d: Str) -> Int ! { io } { write_file(p, d) }; w("x") }
+fn main(io: IoCap) -> Int ! { io } { make(io, arg(1)) }

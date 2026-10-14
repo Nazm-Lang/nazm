@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let s = str_concat("abcdef", "");
+    let a = str_slice(s, 1, 5);
+    let b = str_slice(a, 1, 3);
+    str_byte(b, 0)
+}

@@ -1,0 +1,5 @@
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+fn worker(f: ForeignCap, c: Chan, n: Int) -> Int
+{ chan_send(c, c_add(n, 1)); 0 }
+fn main(io: IoCap, t: SpawnCap, f: ForeignCap) -> Int
+{ let c = chan_new(4); let buf = ints_new(); scope { spawn worker(f, c, 10); spawn worker(f, c, 20); } chan_recv(c, buf); chan_recv(c, buf); print(int_to_str(ints_get(buf, 0) + ints_get(buf, 1))); 0 }

@@ -1,0 +1,2 @@
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn main() -> Int { let mut i = 0; let mut t = 0; while i < 15 { if i == 3 { i = i + 1; continue; } t = t + fib(i); i = i + 1; } t }

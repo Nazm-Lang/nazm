@@ -1,0 +1,2 @@
+struct Node { next: Option[Vec[Node]], }
+fn m() -> Int { 0 }

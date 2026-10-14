@@ -1,0 +1,11 @@
+fn f(n: Int) -> Int {
+    let outer = n + 1;
+    if n > 0 {
+        let inner = outer * 2;
+        inner + 1
+    } else {
+        let other = outer - 1;
+        other
+    }
+}
+fn main() -> Int { f(3) }

@@ -1,0 +1,2 @@
+use "state.nz";
+fn main() -> Int { match Hidden.A() { Hidden.A() => 1, } }

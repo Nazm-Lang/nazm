@@ -1,0 +1,6 @@
+fn table() -> Int ! {} { let mut i = 0; let mut s = 0; while i < 10 { s = s + i * i; i = i + 1; } s }
+fn reads(io: IoCap) -> Int ! { io } { print("x"); 0 }
+fn loud() -> Int ! { io } { 0 }
+fn ambient(out: OutCap) -> Int { print("hi"); 0 }
+fn forever() -> Int ! {} { let mut i = 0; while i >= 0 { i = i + 0; } i }
+fn main() -> Int { table() }

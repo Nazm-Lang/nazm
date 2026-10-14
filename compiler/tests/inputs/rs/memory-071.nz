@@ -1,0 +1,9 @@
+enum E {
+    Empty,
+    Text(value: Str),
+}
+fn take(e: E) -> Str { match e { E.Empty() => "", E.Text(value: s) => s, } }
+fn main() -> Int {
+    let s = take(E.Text(value: str_concat("ab", "cde")));
+    str_len(s)
+}

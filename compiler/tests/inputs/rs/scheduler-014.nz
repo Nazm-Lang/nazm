@@ -1,0 +1,2 @@
+fn nothing(n: Int) -> Int { n }
+fn main(t: SpawnCap) -> Int { let mut r = 0; while r < 200 { scope { let mut i = 0; while i < 50 { spawn nothing(i); i = i + 1; } } r = r + 1; } 0 }

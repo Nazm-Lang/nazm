@@ -1,0 +1,1 @@
+fn m(x: Int) -> Int { return if x > 0 { 1 } else { 2 }; }

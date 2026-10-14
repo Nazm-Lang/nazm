@@ -1,0 +1,25 @@
+
+        fn slow(out: Chan, n: Int) -> Int {
+            let mut i = 0;
+            while i < 3000000 { i = i + 1; }
+            chan_send(out, n);
+            0
+        }
+        fn early(out: Chan, tasks: SpawnCap) -> Int {
+            scope {
+                spawn slow(out, 5);
+                spawn slow(out, 5);
+                return 1;
+            }
+            0
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let out = chan_new(8);
+            early(out, tasks);
+            chan_close(out);
+            let buf = ints_new();
+            let mut total = 0;
+            while chan_recv(out, buf) { total = total + ints_pop(buf); }
+            total
+        }
+        

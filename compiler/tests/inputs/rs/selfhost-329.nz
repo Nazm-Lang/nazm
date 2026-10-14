@@ -1,0 +1,2 @@
+enum Work { Empty, Values(value: Vec[Int]), }
+fn main() -> Int { if same(Work.Empty(), Work.Empty()) { 1 } else { 0 } }

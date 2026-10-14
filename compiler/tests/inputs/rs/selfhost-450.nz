@@ -1,0 +1,2 @@
+use "@std/num";
+pub fn half(n: Int) -> Int { num_max(n / 2, 1) }

@@ -1,0 +1,2 @@
+use "a.nz";
+pub fn b_value() -> Int { a_value() * 10 }

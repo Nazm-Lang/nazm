@@ -1,0 +1,2 @@
+pub fn g(n: Int) -> Int { n + 1 }
+pub fn k() -> Int { 2 }

@@ -1,0 +1,6 @@
+fn main() -> Int {
+    let a = ints_new();
+    let b = a;
+    ints_push(a, 7);
+    ints_get(b, 0)
+}

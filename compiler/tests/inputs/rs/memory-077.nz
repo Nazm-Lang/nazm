@@ -1,0 +1,9 @@
+enum E {
+    Values(items: Ints),
+}
+fn main() -> Int {
+    let xs = ints_new();
+    ints_push(xs, 1);
+    match E.Values(items: xs) { E.Values(items: ys) => ints_push(ys, 2), };
+    ints_len(xs) * 10 + ints_get(xs, 1)
+}

@@ -1,0 +1,2 @@
+use "a/m.nz";
+fn main() -> Int { v() }

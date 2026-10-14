@@ -1,0 +1,7 @@
+// a comment
+fn f(x: Int) -> Int {
+    let renamed   = x + 1;
+    renamed * 2
+}
+
+fn main() -> Int { f(1) }

@@ -1,0 +1,2 @@
+@section(x)
+fn f() -> Int { 0 }

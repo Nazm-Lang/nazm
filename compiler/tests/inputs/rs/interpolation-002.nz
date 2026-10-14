@@ -1,0 +1,1 @@
+fn main() -> Int { str_len(str_pad_start("a", 3, "ab")) }

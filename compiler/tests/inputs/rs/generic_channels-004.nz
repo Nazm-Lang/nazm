@@ -1,0 +1,19 @@
+
+fn put(c: Chan[Str]) -> Bool {
+    let s = str_concat("ab", "cd");
+    chan_send_of(c, s)
+}
+
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Str](1);
+    put(c);
+    let junk = vec_new[Str]();
+    let mut i = 0;
+    while i < 64 {
+        vec_push(junk, str_concat("zz", "zz"));
+        i = i + 1;
+    }
+    let got = vec_new[Str]();
+    if chan_recv_of(c, got) { print(vec_pop(got)); }
+    0
+}

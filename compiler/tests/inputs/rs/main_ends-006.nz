@@ -1,0 +1,2 @@
+fn quiet() { }
+fn main() -> Int { let x = quiet(); x }

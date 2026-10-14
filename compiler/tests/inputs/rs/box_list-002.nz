@@ -1,0 +1,23 @@
+enum Chain { End, Link(v: Int, next: Box[Chain]), }
+fn length(c: Chain) -> Int {
+    let mut n = 0;
+    let mut at = c;
+    let mut going = true;
+    while going {
+        match at {
+            Chain.End() => { going = false; },
+            Chain.Link(v: v, next: next) => { n = n + 1; at = box_get(next); },
+        }
+    }
+    n
+}
+fn main(out: OutCap) -> Int ! {io} {
+    let mut c = Chain.End();
+    let mut i = 0;
+    while i < 1000000 {
+        c = Chain.Link(v: i, next: box_new(c));
+        i = i + 1;
+    }
+    print(str_concat(num_to_str(length(c)), "\n"));
+    0
+}

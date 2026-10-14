@@ -1,0 +1,17 @@
+
+fn pick(n: Int) -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < n {
+        let s = str_concat("v", int_to_str(i));
+        let f = fn(x: Int) -> Int { x + str_len(s) };
+        if i == 7 { return total + f(0); }
+        total = total + f(i);
+        i = i + 1;
+    }
+    total
+}
+fn main(out: OutCap) -> Int {
+    print(int_to_str(pick(10)));
+    0
+}

@@ -1,0 +1,40 @@
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = ints_new();
+    ints_push(xs, 1);
+    ints_push(xs, 2);
+    let ps = vec_new[P]();
+    vec_push(ps, P(name: "x", n: 2));
+    vec_push(ps, P(name: "y", n: 1));
+    let mut a = "";
+    {
+        let seq = xs;
+        let mut i = 0;
+        while i < ints_len(seq) {
+            let x = ints_get(seq, i);
+            i = i + 1;
+            if x == 1 { ints_push(xs, 9); continue; }
+            a = str_concat(a, num_to_str(x));
+        }
+    }
+    {
+        let seq = ps;
+        let mut i = 0;
+        while i < vec_len(seq) {
+            let p = vec_get(seq, i);
+            i = i + 1;
+            if p.n == 1 { break; }
+            {
+                let mut j = 0;
+                let end = p.n;
+                while j < end {
+                    let k = j;
+                    j = j + 1;
+                    a = str_concat(a, p.name);
+                }
+            }
+        }
+    }
+    show(out, a);
+    0
+}

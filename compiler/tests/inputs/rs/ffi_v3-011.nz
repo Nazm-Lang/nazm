@@ -1,0 +1,6 @@
+use "lib.nz";
+fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    let c = counter_new(1);
+    print(int_to_str(counter_bump(c, 1) + point_sum(Point(y: 2, flag: true, x: 3))));
+    0
+}

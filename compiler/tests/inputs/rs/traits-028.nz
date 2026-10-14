@@ -1,0 +1,2 @@
+fn trait() -> Int { 1 }
+fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn m() -> Int { str_len("ab") }

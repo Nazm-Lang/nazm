@@ -1,0 +1,46 @@
+struct Entry { key: Str, at: (Int, Int), }
+enum Cell { Empty, Full(v: (Str, Int)), }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+// A generic function over a tuple, and a tuple returned.
+fn swap[A, B](p: (A, B)) -> (B, A) { let (a, b) = p; (b, a) }
+fn div_mod(a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
+
+// Tuple patterns in a `match`: literals, names and `_` inside, nested.
+fn classify(p: ((Int, Int), Str)) -> Str {
+    match p {
+        ((0, 0), _) => "origin",
+        ((0, _), name) | ((_, 0), name) => str_concat("axis ", name),
+        ((x, y), _) => num_to_str(x * y),
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let (q, r) = div_mod(17, 5);
+    show(out, num_to_str(q * 10 + r));
+    let s = swap(("left", 2));
+    show(out, str_concat(num_to_str(s.0), s.1));
+    let nested = ((1, (2, 3)), "n");
+    show(out, num_to_str(nested.0.1.1 * 100 + nested.0.0));
+    show(out, str_concat(classify(((0, 0), "a")), str_concat(classify(((0, 4), "b")),
+        str_concat(classify(((5, 0), "c")), classify(((2, 3), "d"))))));
+    // Assignment through a mutable binding, element by element.
+    let mut m = ((0, 0), "was");
+    m.0.1 = 7;
+    m.1 = "is";
+    show(out, str_concat(m.1, num_to_str(m.0.1)));
+    // A `for` loop that takes each element apart; owning elements released.
+    let xs = vec_new[(Str, Int)]();
+    vec_push(xs, ("a", 1));
+    vec_push(xs, ("bb", 2));
+    let mut total = 0;
+    for (k, v) in xs { total = total + str_len(k) * v; }
+    show(out, num_to_str(total));
+    // In a record's field and an enum's payload; equality is element by element.
+    let e = Entry(key: "k", at: (3, 4));
+    let c = Cell.Full(v: ("x", 9));
+    if let Cell.Full(v: (_, n)) = c { show(out, num_to_str(n + e.at.1)); }
+    if (1, "a") == (1, "a") && (1, "a") != (1, "b") { show(out, "equal"); }
+    0
+}

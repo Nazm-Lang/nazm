@@ -1,0 +1,10 @@
+use "@std/test"
+
+fn main() {
+    println("hello")
+}
+
+@test
+fn passes() -> Result[Int, Str] {
+    assert_true("yes", true)
+}

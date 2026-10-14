@@ -1,0 +1,3 @@
+use "b.nz";
+use "c.nz";
+fn main() -> Int { identity(40) + from_c() }

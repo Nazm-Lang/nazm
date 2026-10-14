@@ -1,0 +1,2 @@
+fn id[T](x: T) -> T { x }
+fn m() -> Int { id[Str](1) }

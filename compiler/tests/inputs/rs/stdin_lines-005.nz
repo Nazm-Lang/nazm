@@ -1,0 +1,6 @@
+fn main(io: IoCap) -> Int ! { io } {
+let buf = bytes_new(64);
+let n = os_read_line(os_stdin(), buf);
+write_file(bytes_to_str(bytes_slice(buf, 0, n)), "x");
+0
+}

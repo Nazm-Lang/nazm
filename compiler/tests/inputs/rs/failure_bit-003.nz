@@ -1,0 +1,19 @@
+trait Walk { fn walk(self: Self, n: Int, k: Int) -> Int; }
+
+struct W { name: Str, }
+
+impl Walk for W {
+    fn walk(self: W, n: Int, k: Int) -> Int {
+        let held = str_concat(self.name, "!")
+        if n == 0 { 10 / k } else { W(name: held).walk(n - 1, k) + str_len(self.name) }
+    }
+}
+
+fn go[T: Walk](x: T, n: Int, k: Int) -> Int { x.walk(n, k) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(go(W(name: "w"), 3, 5))
+    println(go(W(name: "w"), 400, 0))
+    println(7)
+    0
+}

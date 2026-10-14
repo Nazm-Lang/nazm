@@ -1,0 +1,3 @@
+use "a.nz";
+use "b.nz";
+fn main() -> Int { same() }

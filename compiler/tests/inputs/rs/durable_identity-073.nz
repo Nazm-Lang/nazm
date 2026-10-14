@@ -1,0 +1,8 @@
+use "b.nz";
+fn main() -> Int {
+    let mut n = 0;
+    if at(1) == Point(x: 1, label: "p") { n = n + 1; }
+    if start() != State.Done(code: 1, why: "w") { n = n + 10; }
+    if maybe(2) == maybe(2) { n = n + 100; }
+    n
+}

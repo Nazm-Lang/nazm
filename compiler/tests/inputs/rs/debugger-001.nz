@@ -1,0 +1,10 @@
+fn greet(name: Str, times: Int, loud: Bool) -> Int {
+    let line = str_concat("hello ", name);
+    let n = str_len(line) * times;
+    if loud { n + 1 } else { n }
+}
+
+fn main() -> Int {
+    let who = str_concat("wor", "ld");
+    greet(who, 2, true)
+}

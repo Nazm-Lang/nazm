@@ -1,0 +1,2 @@
+enum State { Alpha, Beta(n: Int), }
+pub fn from_a() -> Int { match State.Beta(n: 10) { State.Alpha() => 0, State.Beta(n: n) => n, } }

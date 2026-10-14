@@ -1,0 +1,2 @@
+use "math.nz";
+pub fn four() -> Int ! {} { double(2) }

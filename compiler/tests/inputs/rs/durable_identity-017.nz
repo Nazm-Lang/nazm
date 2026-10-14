@@ -1,0 +1,3 @@
+pub fn shown(n: Int) -> Int { helper() + n }
+pub fn also(n: Int) -> Int { n }
+fn helper() -> Int { 1 }

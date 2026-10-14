@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let a = ints_new();
+    let mut i = 0;
+    while i < 1000 { ints_push(a, i); i = i + 1; }
+    let mut s = 0;
+    let mut j = 0;
+    while j < ints_len(a) { s = s + ints_get(a, j); j = j + 1; }
+    s * 10 + ints_len(a) / 1000
+}

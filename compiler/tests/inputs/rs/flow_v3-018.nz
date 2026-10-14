@@ -1,0 +1,2 @@
+fn show(s: Str, out: OutCap) -> Int { print(s) }
+fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file("c")); show(strs_get(xs, 0), io); print(arg(0)); 0 }

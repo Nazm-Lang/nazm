@@ -1,0 +1,3 @@
+use "lib.nz";
+fn main() -> Int
+{ total(4) }

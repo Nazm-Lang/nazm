@@ -1,0 +1,2 @@
+// a comment, and nothing else
+pub fn id(n: Int) -> Int { n }

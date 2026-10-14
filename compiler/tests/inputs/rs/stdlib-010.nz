@@ -1,0 +1,49 @@
+use "@std/binary";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn hex(b: Bytes) -> Str {
+    let digits = "0123456789abcdef";
+    let mut out = "";
+    let mut i = 0;
+    while i < bytes_len(b) {
+        let v = Int(bytes_get(b, i));
+        out = str_concat(out, str_concat(str_slice(digits, v / 16, v / 16 + 1), str_slice(digits, v % 16, v % 16 + 1)));
+        i = i + 1;
+    }
+    out
+}
+fn main(out: OutCap) -> Int {
+    let w = binary_writer();
+    binary_put_u8(w, UInt8(255));
+    binary_put_u16_be(w, UInt16(0x1234));
+    binary_put_u32_le(w, UInt32(0xDEADBEEF));
+    binary_put_i64_be(w, 0 - 2);
+    binary_put_f64_le(w, 1.5);
+    binary_put_varint(w, UInt64(300));
+    binary_put_varint(w, UInt64(18446744073709551615));
+    binary_put_zigzag(w, 0 - 1);
+    binary_put_zigzag(w, 0 - 9223372036854775807 - 1);
+    binary_put_str(w, "héllo");
+    let b = binary_finish(w);
+    line(out, hex(b));
+    line(out, int_to_str(binary_len(w)));
+    let r = binary_reader(b);
+    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_u16_be(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_u32_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_i64_be(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_f64_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_str(r) { Result.Ok(value: v) => v, Result.Err(error: e) => e });
+    line(out, int_to_str(binary_remaining(r)));
+    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    let bad = binary_reader(bytes_from_str("\x7f"));
+    let over = bytes_new(11);
+    let mut i = 0;
+    while i < 10 { bytes_set(over, i, UInt8(255)); i = i + 1; }
+    line(out, match binary_get_varint(binary_reader(over)) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });
+    line(out, match binary_get_bytes(bad) { Result.Ok(value: v) => "bytes", Result.Err(error: e) => e });
+    0
+}

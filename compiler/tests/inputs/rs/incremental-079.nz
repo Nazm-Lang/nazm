@@ -1,0 +1,5 @@
+pub struct Point {
+    y: Int,
+    x: Int,
+}
+pub fn at(n: Int) -> Point { Point(x: n, y: 0) }

@@ -1,0 +1,3 @@
+fn g() -> Result[Int, Str] { Result[Int, Str].Ok(value: 1) }
+fn f(c: Bool) -> Result[Int, Str] { let a = (if c { g() } else { g() })?; let b = ({ let r = g(); r })?; Result[Int, Str].Ok(value: a + b) }
+fn main() -> Int { 0 }

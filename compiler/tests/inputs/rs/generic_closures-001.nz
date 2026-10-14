@@ -1,0 +1,38 @@
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn inc(x: Int) -> Int { x + 1 }
+
+fn map_all[T](xs: Vec[T], f: fn(T) -> T) -> Vec[T] {
+    let out = vec_new[T]();
+    for x in xs { vec_push(out, f(x)); }
+    out
+}
+
+// A closure over the function's own parameter type, calling a function value it captured.
+fn twice_each[T](xs: Vec[T], g: fn(T) -> T) -> Vec[T] {
+    map_all(xs, fn(x: T) -> T { g(g(x)) })
+}
+
+// A closure nested in a closure, both in a generic function, and a named function's value.
+fn nested[T](x: T, f: fn(T) -> Int) -> Int {
+    let outer = fn() -> Int {
+        let inner = fn(y: T) -> Int { f(y) * 10 };
+        inner(x)
+    };
+    let step = inc;
+    step(outer())
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);
+    let ys = twice_each(xs, fn(x: Int) -> Int { x * 3 });
+    show(out, num_to_str(vec_get(ys, 0) + vec_get(ys, 1) + vec_get(ys, 2)));
+    let ss = vec_new[Str]();
+    vec_push(ss, "a"); vec_push(ss, "bb");
+    let ts = twice_each(ss, fn(s: Str) -> Str { str_concat(s, "!") });
+    show(out, str_concat(vec_get(ts, 0), vec_get(ts, 1)));
+    show(out, num_to_str(nested("abc", fn(s: Str) -> Int { str_len(s) })));
+    show(out, num_to_str(nested(4, fn(n: Int) -> Int { n })));
+    0
+}

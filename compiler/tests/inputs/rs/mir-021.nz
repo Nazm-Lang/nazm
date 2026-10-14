@@ -1,0 +1,3 @@
+fn f(x: Int) -> Int { x + 1 }
+fn other() -> Int { 7 }
+fn main() -> Int { f(1) + other() }

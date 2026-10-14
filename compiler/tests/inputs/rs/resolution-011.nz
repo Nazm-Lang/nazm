@@ -1,0 +1,2 @@
+fn str_len(s: Str) -> Int { 0 }
+fn main() -> Int { 1 }

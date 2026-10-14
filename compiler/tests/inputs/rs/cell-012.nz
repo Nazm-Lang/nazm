@@ -1,0 +1,2 @@
+fn one() -> Int { 1 }
+fn main() -> Int { let c = cell_new(one); let f = fn() -> Int { let g = cell_get(c); g() }; f() }

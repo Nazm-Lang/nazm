@@ -1,0 +1,2 @@
+struct P { x: Int, }
+fn m() -> Int { let p = P[Int](x: 1); p.x }

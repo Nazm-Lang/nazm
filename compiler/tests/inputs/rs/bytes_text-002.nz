@@ -1,0 +1,2 @@
+fn w(b: Bytes) -> Int ! {spawn} { 0 }
+fn main(s: SpawnCap) -> Int ! {spawn} { scope { spawn w(bytes_new(1)); } 0 }

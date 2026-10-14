@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main() -> Int { let s = "é→😀"; helper(1) + again() + helper(3) }

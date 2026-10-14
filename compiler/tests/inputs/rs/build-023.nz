@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int { n * 3 }
+fn main() -> Int {
+    if f(2) > 5 { f(1) + f(2) } else { 0 }
+}

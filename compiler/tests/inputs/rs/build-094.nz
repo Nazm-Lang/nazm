@@ -1,0 +1,7 @@
+fn main(io: IoCap) -> Int {
+    let path = arg(0);
+    let payload = str_concat("bytes: ", int_to_str(1234));
+    write_file(path, payload);
+    let back = read_file(path);
+    if back == payload { str_len(back) } else { 0 - 1 }
+}

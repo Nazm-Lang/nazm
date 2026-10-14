@@ -1,0 +1,2 @@
+fn save(p: Str, io: IoCap) -> Int { write_file(p, "x") }
+fn main(io: IoCap) -> Int { save(arg(1), io) }

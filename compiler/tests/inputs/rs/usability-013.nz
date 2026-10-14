@@ -1,0 +1,2 @@
+fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }
+fn main() -> Int { depth(50000) }

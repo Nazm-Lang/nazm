@@ -1,0 +1,2 @@
+fn f(x: Int) -> Int { x }
+fn m() -> Int { f[Int](1) }

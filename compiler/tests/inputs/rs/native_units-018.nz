@@ -1,0 +1,4 @@
+use "b.nz";
+pub fn f(n: Int) -> Int { if n == 0 { 0 } else { g(n - 1) + 1 } }
+pub fn h(n: Int) -> Int { k(n + 1) }
+fn main() -> Int { h(0) }

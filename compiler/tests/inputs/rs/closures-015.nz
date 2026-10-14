@@ -1,0 +1,2 @@
+fn use_it(c: IoCap) -> Int ! {} { 0 }
+fn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { use_it(io) }; f(1) }

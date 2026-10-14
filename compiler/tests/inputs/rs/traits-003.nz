@@ -1,0 +1,15 @@
+use "@std/show";
+struct P { x: Int, }
+impl Show for P { fn show(self: P) -> Str { str_concat("P", int_to_str(self.x)) } }
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+let v = vec_new[P]();
+vec_push(v, P(x: 1));
+vec_push(v, P(x: 2));
+let w = vec_new[Int]();
+vec_push(w, 3);
+vec_push(w, 4);
+print(str_concat(show_all(v, ", "), "\n"));
+print(str_concat(show_all(w, "|"), "\n"));
+print(str_concat(true.show(), "\n"));
+0
+}

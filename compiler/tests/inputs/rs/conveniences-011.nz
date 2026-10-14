@@ -1,0 +1,4 @@
+struct P { x: Int }
+impl P { fn twice(self: P) -> Int { self.x * 2 } }
+fn p_twice(p: P) -> Int { 0 }
+fn main() -> Int { 0 }

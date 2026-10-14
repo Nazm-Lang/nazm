@@ -1,0 +1,1 @@
+fn main(m: MmioCap) -> Int ! {} { mmio_read32(0) }

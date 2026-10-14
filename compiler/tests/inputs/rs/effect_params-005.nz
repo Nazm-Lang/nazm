@@ -1,0 +1,15 @@
+
+use "@std/seq";
+fn run[effects F](f: fn(Int) -> Int ! { F }) -> Int ! { F } {
+    let xs = vec_new[Int]();
+    vec_push(xs, 1);
+    vec_push(xs, 2);
+    vec_len(vec_map(xs, f))
+}
+fn twice[T, effects E](f: fn(T) -> T ! { E }, x: T) -> T ! { E } { f(f(x)) }
+fn main(io: IoCap) -> Int ! { io } {
+    let n = run(fn(x: Int) -> Int ! { io } { print(int_to_str(x)); x });
+    let m = twice(fn(s: Str) -> Str { str_concat(s, "!") }, "hi");
+    print(m);
+    n - 2
+}

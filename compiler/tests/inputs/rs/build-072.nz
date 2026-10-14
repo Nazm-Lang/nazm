@@ -1,0 +1,13 @@
+fn meet(target: Int) -> Int {
+    let mut a = 0;
+    while a < 5 {
+        let mut b = 0;
+        while b < 5 {
+            if a * b == target { return a * 10 + b; }
+            b = b + 1;
+        }
+        a = a + 1;
+    }
+    0 - 1
+}
+fn main() -> Int { meet(6) * 1000 + meet(99) }

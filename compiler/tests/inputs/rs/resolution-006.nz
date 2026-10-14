@@ -1,0 +1,2 @@
+use "shared.nz";
+pub fn l() -> Int { s() }

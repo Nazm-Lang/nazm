@@ -1,0 +1,2 @@
+use "math.nz";
+pub fn twice_tripled(n: Int) -> Int { triple(n) + triple(n) }

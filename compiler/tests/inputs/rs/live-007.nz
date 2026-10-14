@@ -1,0 +1,3 @@
+struct P { x: Int, y: Int, z: Int }
+fn f(p: P, k: Int) -> Int { p.x + p.y + k }
+fn main() -> Int { f(P(x: 1, y: 2, z: 3), 1) }

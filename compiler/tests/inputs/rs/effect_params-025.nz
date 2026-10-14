@@ -1,0 +1,2 @@
+use "@std/seq";
+fn main(io: IoCap) -> Int ! { io } { let xs = vec_new[Int](); vec_len(vec_map(xs, fn(x: Int) -> Int ! { io } { print("a"); x })) }

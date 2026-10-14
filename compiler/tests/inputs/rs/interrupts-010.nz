@@ -1,0 +1,2 @@
+@interrupt("two words")
+fn h() -> Int ! {} { 0 }

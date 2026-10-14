@@ -1,0 +1,2 @@
+use "dep.nz";
+pub fn v() -> Int { d() }

@@ -1,0 +1,8 @@
+struct Holder {
+    name: Str,
+}
+fn make() -> Holder { Holder(name: str_concat("ab", "cd")) }
+fn main() -> Int {
+    let s = make().name;
+    str_len(s) * 100 + str_byte(s, 3)
+}

@@ -1,0 +1,1 @@
+enum E { S(xs: Ints), } fn m() -> Int { let a = ints_new(); match E.S(xs: a) { E.S(xs: b) => ints_push(b, 1), }; ints_len(a) }

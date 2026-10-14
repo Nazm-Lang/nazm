@@ -1,0 +1,2 @@
+enum M { T(v: Str), C(n: Int), } fn w(e: M) -> Int { match e { M.T(v: s) => str_len(s), M.C(n: n) => n, } }
+fn m() -> Int { let c = chan_new(1); scope { } w(M.T(v: "a")) }

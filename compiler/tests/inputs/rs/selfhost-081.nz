@@ -1,0 +1,1 @@
+fn m() -> Int { h(identity[Str]("a"), Box[Int](v: vec_new[Maybe[Int]]())) }

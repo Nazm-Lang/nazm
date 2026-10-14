@@ -1,0 +1,2 @@
+enum E { A, B(maybe: Option[Vec[Int]]), }
+fn main() -> Int { if E.A() == E.A() { 1 } else { 0 } }

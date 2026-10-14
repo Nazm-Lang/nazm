@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let a = [str_concat("a", "b"), "c"];
+    str_len(a[0])
+}

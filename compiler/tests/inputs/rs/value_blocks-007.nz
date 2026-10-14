@@ -1,0 +1,20 @@
+fn choose[T](x: Option[T], fallback: T) -> T {
+    match x {
+        Option.None() => {
+            let f = fallback;
+            f
+        },
+        Option.Some(value: v) => {
+            let w = v;
+            w
+        },
+    }
+}
+fn main() -> Int {
+    let a = choose(Option[Str].None(), int_to_str(1234));
+    let b = choose(Option[Str].Some(value: str_concat("x", "yz")), int_to_str(5));
+    let i = choose(Option[Item].Some(value: item(6)), item(9));
+    let v = choose(Option[Vec[Str]].None(), vec_new[Str]());
+    churn();
+    str_len(a) * 1000 + str_len(b) * 100 + ints_get(i.tags, 0) * 10 + vec_len(v)
+}

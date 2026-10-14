@@ -1,0 +1,1 @@
+fn main() -> Int { match E.Done(code: 1, why: "ab") { E.Ready() => 0, E.Done(code: c, why: w) => c + str_len(w), } }

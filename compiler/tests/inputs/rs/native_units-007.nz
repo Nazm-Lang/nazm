@@ -1,0 +1,4 @@
+use "b.nz";
+use "c.nz";
+fn helper() -> Int { 1 }
+fn main() -> Int { helper() + from_b() + from_c() }

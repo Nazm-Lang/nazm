@@ -1,0 +1,1 @@
+fn main() -> Int { let mut s = ""; let mut i = 0; while i < 100000 { s = str_concat(s, "x"); i = i + 1; } str_len(s) }

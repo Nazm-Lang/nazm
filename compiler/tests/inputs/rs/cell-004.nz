@@ -1,0 +1,3 @@
+struct A { b: Cell[B], }
+struct B { a: Box[A], }
+fn main() -> Int { 0 }

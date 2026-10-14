@@ -1,0 +1,20 @@
+struct Point {
+    y: Int,
+    x: Int,
+}
+enum State {
+    Ready,
+    Done(code: Int),
+}
+fn a(p: Point) -> Int {
+    let s = "é😀"; let n = p.
+    0
+}
+fn b() -> Int {
+    let s = "é😀"; let t = State.
+    0
+}
+fn c() -> Int {
+    let s = "p."; // State.
+    0
+}

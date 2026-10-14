@@ -1,0 +1,7 @@
+use "@std/file";
+fn main(io: IoCap) -> Int ! { io } {
+let out = bytes_new(48);
+let a = os_write(os_stdout(), bytes_from_str("x")) + os_lstat("x", out) + str_len(os_mkdtemp("."));
+let b = os_chmod("x", 420) + os_realpath("x", out) + os_lock(os_open_read("x"), true);
+a + b
+}

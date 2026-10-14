@@ -1,0 +1,2 @@
+fn f[T](a: T, b: T) -> Bool { a == b }
+fn m() -> Int { 0 }

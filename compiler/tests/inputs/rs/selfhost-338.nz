@@ -1,0 +1,2 @@
+fn say(io: IoCap) -> Int ! { io } { print("x"); 0 }
+fn main(io: IoCap) -> Int ! { io } { say(io) }

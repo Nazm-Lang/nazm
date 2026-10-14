@@ -1,0 +1,2 @@
+fn f(v: Vec[Int, Int]) -> Int { 0 }
+fn m() -> Int { 0 }

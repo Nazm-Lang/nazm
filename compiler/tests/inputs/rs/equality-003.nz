@@ -1,0 +1,12 @@
+enum MaybeInt { None, Some(value: Int), }
+enum Twins { Left(n: Int), Right(n: Int), }
+enum P { Empty, Pair(left: Int, right: Str), }
+enum Solo { Only, }
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn main() -> Int {
+    bit(MaybeInt.None() == MaybeInt.None(), 1) + bit(MaybeInt.None() == MaybeInt.Some(value: 0), 2)
+    + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 1), 4) + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 2), 8)
+    + bit(Twins.Left(n: 1) == Twins.Right(n: 1), 16) + bit(Twins.Right(n: 1) != Twins.Right(n: 2), 32)
+    + bit(P.Pair(left: 1, right: "a") == P.Pair(right: "a", left: 1), 64) + bit(P.Pair(left: 1, right: "a") == P.Pair(left: 1, right: "b"), 128)
+    + bit(P.Empty() == P.Empty(), 256) + bit(Solo.Only() == Solo.Only(), 512)
+}

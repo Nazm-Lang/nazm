@@ -1,0 +1,1 @@
+fn main() -> Int { let x = if true { 1 } else { "a" }; 0 }

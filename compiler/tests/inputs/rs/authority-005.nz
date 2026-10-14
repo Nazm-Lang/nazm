@@ -1,0 +1,3 @@
+fn say(out: OutCap, n: Int) -> Int { print(int_to_str(n)); n }
+fn twice[T](x: T, out: OutCap) -> Int { print("!"); 0 }
+fn main(io: IoCap) -> Int { say(io, 7) - 7 + twice(true, io) }

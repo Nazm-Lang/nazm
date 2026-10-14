@@ -1,0 +1,10 @@
+struct Job {
+    run: fn() -> Int,
+}
+
+fn main() -> Int {
+    let jobs = vec_new[Job]();
+    let f = fn() -> Int { vec_len(jobs) };
+    vec_push(jobs, Job(run: f));
+    0
+}

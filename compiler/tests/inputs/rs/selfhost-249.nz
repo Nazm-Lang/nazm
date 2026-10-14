@@ -1,0 +1,2 @@
+struct Option { x: Int, }
+fn m() -> Int { 0 }

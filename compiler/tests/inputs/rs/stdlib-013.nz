@@ -1,0 +1,2 @@
+use "@std/random";
+fn main() -> Int ! {} { Int(random_u64(random_new(UInt64(1))) % UInt64(10)) }

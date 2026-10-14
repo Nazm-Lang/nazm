@@ -1,0 +1,1 @@
+pub fn same[Value: Equality](a: Value, b: Value) -> Bool { a == b }

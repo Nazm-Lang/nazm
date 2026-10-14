@@ -1,0 +1,1 @@
+fn m() -> Int { match load()? { A.B() => 1, A.C(v: v) => v?, } }

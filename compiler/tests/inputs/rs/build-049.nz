@@ -1,0 +1,11 @@
+fn below(n: Int, limit: Int) -> Bool { n < limit }
+fn twice(n: Int) -> Int { n * 2 }
+fn main() -> Int {
+    let mut i = 1;
+    let mut steps = 0;
+    while below(i, 100) {
+        i = twice(i);
+        steps = steps + 1;
+    }
+    i + steps
+}

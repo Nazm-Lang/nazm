@@ -1,0 +1,7 @@
+fn main() -> Int {
+    let c = chan_new(2);
+    chan_send(c, 7);
+    let buf = ints_new();
+    chan_recv(c, buf);
+    ints_get(buf, 0)
+}

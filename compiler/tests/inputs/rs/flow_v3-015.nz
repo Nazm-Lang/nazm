@@ -1,0 +1,2 @@
+pub extern "C" fn kept(x: Int) -> Int ! {} = "kept" { let xs = ints_new(); ints_push(xs, x); 0 }
+fn main(io: IoCap) -> Int ! { io } { let ys = ints_new(); ints_push(ys, 1); print(int_to_str(ints_get(ys, 0))); 0 }

@@ -1,0 +1,1 @@
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }

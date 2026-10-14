@@ -1,0 +1,34 @@
+use "@std/map";
+use "@std/path";
+use "@std/fs";
+use "@std/time";
+use "@std/test";
+use "@std/chan";
+fn producer(io: IoCap, c: Chan[Int]) -> Int ! { io } {
+let xs = vec_new[Int](); vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);
+let n = chan_send_all_ints(c, xs); chan_close_of(c); n }
+fn check() -> Result[Int, Str] ! {} {
+let a = test_int("sum", 1 + 1, 2)?;
+let b = test_str("name", "x", "y")?;
+Result[Int, Str].Ok(value: a) }
+fn lines2() -> Strs { let s = strs_new(); strs_push(s, "one"); strs_push(s, "two"); s }
+fn main(io: IoCap, tm: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {
+let m = map_new[Int]();
+let r1 = map_set(m, "b", 2); let r2 = map_set(m, "a", 1); let r3 = map_set(m, "c", 3); let r4 = map_set(m, "b", 20);
+print(str_join(map_keys(m), ",")); print(if r4 && !r1 { "R" } else { "?" }); print("|");
+print(match map_get(m, "b") { Option.Some(value: v) => int_to_str(v), Option.None() => "none" }); print("|");
+print(match map_remove(m, "a") { Option.Some(value: v) => int_to_str(v), Option.None() => "none" });
+print(match map_remove(m, "zz") { Option.Some(value: v) => int_to_str(v), Option.None() => "none" }); print(int_to_str(map_len(m))); print("|");
+print(path_join("a/b", "c.txt")); print(" "); print(path_join("a/", "/abs")); print(" "); print(path_base("/x/y/z.tar.gz")); print(" "); print(path_dir("/x")); print(" "); print(path_dir("z")); print(" ");
+print(path_ext("/x/y/z.tar.gz")); print(" "); print(path_stem("z.tar.gz")); print(" "); print(path_ext(".profile")); print(" ");
+print(path_normalize("/a/./b/../../../c//d")); print(" "); print(path_normalize("x/../../y")); print(" "); print(path_normalize("")); print("|");
+let w = fs_write_lines(io, "t.txt", lines2());
+print(match fs_read_lines(io, "t.txt") { Result.Ok(value: ls) => int_to_str(strs_len(ls)), Result.Err(error: e) => e }); print(" ");
+print(match fs_read(io, "nope.txt") { Result.Ok(value: s) => s, Result.Err(error: e) => e }); print("|");
+let d = time_deadline(tm, 0); print(if time_passed(tm, d) && time_since(tm, time_ms(tm)) >= 0 { "passed" } else { "not" }); print("|");
+print(match check() { Result.Ok(value: v) => "ok", Result.Err(error: e) => e }); print("|");
+let c = chan_new_of[Int](1);
+let mut got = vec_new[Int]();
+scope { spawn producer(io, c); got = chan_drain_ints(c); }
+print(int_to_str(vec_len(got)));
+0 }

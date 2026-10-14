@@ -1,0 +1,2 @@
+use "shapes.nz";
+fn main() -> Int { Sq(s: 3).area() + apply(fn(x: Int) -> Int { x + 1 }, 4) }

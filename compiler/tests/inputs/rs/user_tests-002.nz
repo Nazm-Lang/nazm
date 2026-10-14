@@ -1,0 +1,9 @@
+@fuzz
+fn short_inputs(input: Bytes) -> Result[Int, Str] {
+    if bytes_len(input) < 40 { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: int_to_str(bytes_len(input))) }
+}
+
+@fuzz
+fn any_input(input: Bytes) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: bytes_len(input))
+}

@@ -1,0 +1,3 @@
+use "../util/math.nz";
+fn twice(x: Int) -> Int ! {} { x }
+pub fn quad(x: Int) -> Int ! {} { double(twice(x)) }

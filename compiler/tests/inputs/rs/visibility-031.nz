@@ -1,0 +1,11 @@
+use "state.nz";
+fn weight(s: State) -> Int { match s { State.Ready() => 0, State.Failed(why: w, code: c) => str_len(w) + c, } }
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 10 {
+        total = total + weight(failure(i));
+        i = i + 1;
+    }
+    total
+}

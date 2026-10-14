@@ -1,0 +1,2 @@
+pub use "shapes.nz" as s;
+fn main() -> Int { 0 }

@@ -1,0 +1,12 @@
+fn f(o: Option[Int], tasks: SpawnCap) -> Int {
+    match o {
+        Option.None() => {
+            1
+        },
+        Option.Some(value: v) => {
+            let s = int_to_str(v);
+            s
+        },
+    }
+}
+fn main(tasks: SpawnCap) -> Int { f(Option[Int].None(), tasks) }

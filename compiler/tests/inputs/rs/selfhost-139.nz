@@ -1,0 +1,1 @@
+fn m() -> Int { let mut i = 0; let mut t = 0; while i < 3 { i = i + 1; t = t + if i == 1 { i } else { break; }; } t }

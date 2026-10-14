@@ -1,0 +1,2 @@
+use "@std/seq";
+fn main() -> Int ! {} { ints_sum(ints_new()) }

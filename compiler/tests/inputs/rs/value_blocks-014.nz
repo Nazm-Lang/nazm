@@ -1,0 +1,25 @@
+fn record(fail: Bool) -> Int {
+    let it = Item(name: str_concat("nm-", int_to_str(7)), tags: {
+        let ts = ints_new();
+        ints_push(ts, 3);
+        if fail { return 0 - 1; }
+        ts
+    });
+    str_len(it.name) * 10 + ints_get(it.tags, 0)
+}
+fn variant(fail: Bool) -> Int {
+    let sh = Shape.Named(label: {
+        let l = int_to_str(4444);
+        if fail { return 0 - 1; }
+        l
+    });
+    match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }
+}
+fn main() -> Int {
+    let a = record(false);
+    let b = record(true);
+    let c = variant(false);
+    let d = variant(true);
+    churn();
+    a * 1000 + (b + 1) * 100 + c * 10 + (d + 1)
+}

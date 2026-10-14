@@ -1,0 +1,14 @@
+enum E {
+    Empty,
+    Text(value: Str),
+}
+fn take(e: E) -> Str { match e { E.Empty() => "", E.Text(value: s) => s, } }
+fn main() -> Int {
+    let held = take(E.Text(value: str_concat("abcde", "fghij")));
+    let mut i = 0;
+    while i < 100 {
+        let churn = str_concat("xxxxxxxxxx", int_to_str(i));
+        i = i + str_len(churn) - str_len(churn) + 1;
+    }
+    str_len(held) * 100 + str_byte(held, 0)
+}

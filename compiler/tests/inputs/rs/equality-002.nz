@@ -1,0 +1,10 @@
+struct Point { x: Int, y: Int, }
+struct Named { name: Str, count: Int, flag: Bool, }
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn main() -> Int {
+    let p = Point(x: 1, y: 2);
+    bit(p == Point(x: 1, y: 2), 1) + bit(p == Point(x: 9, y: 2), 2) + bit(p == Point(x: 1, y: 9), 4)
+    + bit(p != Point(x: 1, y: 9), 8) + bit(p != p, 16)
+    + bit(Named(name: str_concat("a", "b"), count: 2, flag: true) == Named(flag: true, count: 2, name: "ab"), 32)
+    + bit(Named(name: "ab", count: 2, flag: true) == Named(name: "ab", count: 2, flag: false), 64)
+}

@@ -1,0 +1,2 @@
+fn id[T](x: T) -> T { x }
+fn main() -> Int { str_len(id[Str]("ab")) + id[Int](3) }

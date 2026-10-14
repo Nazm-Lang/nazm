@@ -1,0 +1,1 @@
+fn main(f: ForeignCap) -> Int ! { foreign } { c_errno() }

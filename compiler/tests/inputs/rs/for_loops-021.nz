@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { for i in 0..str_len(read_file("cfg")) { write_file(num_to_str(i), "x"); } 0 }

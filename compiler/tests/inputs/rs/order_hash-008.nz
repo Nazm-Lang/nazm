@@ -1,0 +1,4 @@
+use "@std/hash";
+struct P[T] { v: T, }
+fn f[T: Hash](x: P[T]) -> UInt64 { Hash.hash(x) }
+fn main() -> Int { 0 }

@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let xs = strs_new();
+    let mut s = str_concat("ab", "cd");
+    strs_push(xs, s);
+    s = "";
+    let mut i = 0;
+    while i < 20 {
+        s = str_concat("z", s);
+        i = i + 1;
+    }
+    str_len(strs_get(xs, 0)) + str_byte(strs_get(xs, 0), 0)
+}

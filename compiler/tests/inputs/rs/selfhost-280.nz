@@ -1,0 +1,2 @@
+fn f(r: Result[Int, Str]) -> Int { let x = { let n = r?; n }; x }
+fn main() -> Int { 0 }

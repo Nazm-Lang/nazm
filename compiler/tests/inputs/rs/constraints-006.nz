@@ -1,0 +1,2 @@
+fn same_int(a: Int, b: Int) -> Bool { a == b }
+fn main() -> Int { if same_int(1, 2) { 1 } else { 0 } }

@@ -1,0 +1,2 @@
+pub fn twice(n: Int, label: Str) -> Int { n * 2 }
+         pub fn identity[T](value: T) -> T { value }

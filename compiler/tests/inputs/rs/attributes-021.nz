@@ -1,0 +1,3 @@
+@cfg(all(os = "a" os = "b"))
+fn f() -> Int { 0 }
+fn main() -> Int { 0 }

@@ -1,0 +1,6 @@
+fn first(go: Chan, seen: Ints) -> Int { chan_recv(go, seen); 9223372036854775807 + ints_len(seen) }
+fn second(go: Chan, z: Int) -> Int { chan_send(go, 1); 10 / z }
+fn main(t: SpawnCap) -> Int {
+let go = chan_new(1);
+scope { spawn first(go, ints_new()); spawn second(go, 0); }
+0 }

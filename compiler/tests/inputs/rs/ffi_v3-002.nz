@@ -1,0 +1,7 @@
+extern "C" fn apply_on_small_thread(f: fn(Int) -> Int, x: Int, bytes: Int) -> Int = "apply_on_small_thread";
+pub extern "C" fn deep(n: Int) -> Int ! {} = "nz_deep" { if n == 0 { 0 } else { deep(n - 1) + 1 } }
+fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    print(int_to_str(apply_on_small_thread(deep, 100, 131072))); print("|");
+    print(int_to_str(apply_on_small_thread(deep, 10000000, 131072))); print("|");
+    0
+}

@@ -1,0 +1,2 @@
+const X: UInt8 = 256;
+fn main() -> Int { 0 }

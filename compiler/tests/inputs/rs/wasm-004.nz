@@ -1,0 +1,1 @@
+fn main() -> Int { str_len(int_to_str(42)) }

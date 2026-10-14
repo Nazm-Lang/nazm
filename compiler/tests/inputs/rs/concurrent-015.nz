@@ -1,0 +1,17 @@
+
+fn divide(a: Int, b: Int) -> Int { a / b }
+fn deeper(a: Int, b: Int) -> Int { divide(a, b) + 1 }
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    let started = chan_new(1);
+    let go = chan_new(1);
+    let buf = ints_new();
+    let mut r = 0;
+    scope {
+        spawn worker(started, go, io);
+        chan_recv(started, buf);
+        ints_pop(buf);
+        chan_send(go, 1);
+        r = deeper(1, 0);
+    }
+    r
+}

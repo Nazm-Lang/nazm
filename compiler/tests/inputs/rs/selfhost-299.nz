@@ -1,0 +1,2 @@
+enum Work { Empty, Values(value: Vec[Int]), Count(n: Int), }
+fn main() -> Int { if Work.Empty() == Work.Empty() { 1 } else { 0 } }

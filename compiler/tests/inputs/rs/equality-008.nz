@@ -1,0 +1,7 @@
+fn right(k: Int) -> Int {
+    if item(k) == Item(name: text(k), n: { return 7; }) { 1 } else { 2 }
+}
+fn left(k: Int) -> Int {
+    if Item(name: text(k), n: { return 8; }) == item(k) { 1 } else { 2 }
+}
+fn main() -> Int { let a = right(1); churn(); let b = left(2); a * 10 + b }

@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let mut b = true;
+    b = 1;
+    0
+}

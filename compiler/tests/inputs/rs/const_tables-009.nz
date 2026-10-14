@@ -1,0 +1,4 @@
+struct P { x: Int, }
+fn f() -> Int { 1 }
+const A: P = P(x: f());
+fn main() -> Int { 0 }

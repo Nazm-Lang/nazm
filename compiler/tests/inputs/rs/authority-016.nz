@@ -1,0 +1,2 @@
+fn say(o: OutCap) -> Int ! {io} { exit_with(1); 0 }
+fn main(io: IoCap) -> Int ! {io} { say(io) }

@@ -1,0 +1,2 @@
+fn mix(a: Int, b: Int, c: Int) -> Int { a * 100 + b * 10 + c }
+fn main() -> Int { mix(1, 2, 3) }

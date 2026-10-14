@@ -1,0 +1,11 @@
+use "model.nz";
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 10 {
+        let p = at(i);
+        total = total + str_len(p.label) + p.x;
+        i = i + 1;
+    }
+    total
+}

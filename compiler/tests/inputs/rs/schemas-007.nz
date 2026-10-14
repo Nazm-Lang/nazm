@@ -1,0 +1,6 @@
+use "lib.nz";
+struct P {
+    x: Int,
+}
+fn g(p: P) -> Int { let y = p.x; y + far() }
+fn main() -> Int { g(P(x: 1)) }

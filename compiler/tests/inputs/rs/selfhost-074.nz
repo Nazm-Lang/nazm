@@ -1,0 +1,2 @@
+struct Box[T] { v: Vec[Maybe[T]], }
+fn m() -> Int { 0 }

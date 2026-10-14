@@ -1,0 +1,2 @@
+fn str_pad_start(n: Int) -> Int { n }
+fn main() -> Int { str_pad_start(3) }

@@ -1,0 +1,6 @@
+
+fn wrap[effects E](f: fn() -> Int ! { E }) -> fn() -> Int ! { E } ! { E } { f }
+fn main(io: IoCap) -> Int ! { io } {
+    let g = wrap(fn() -> Int ! { io } { print("w"); 0 });
+    g()
+}

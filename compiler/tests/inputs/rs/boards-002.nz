@@ -1,0 +1,2 @@
+fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write8(268435456, c) }
+fn main(m: MmioCap) -> Int ! {} { put(m, 72); 0 }

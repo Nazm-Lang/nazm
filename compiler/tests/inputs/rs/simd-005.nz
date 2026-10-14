@@ -1,0 +1,2 @@
+fn from_one(v: Ints) -> Int { let mut s = 0; let mut i = 1; while i < ints_len(v) { s = s + ints_get(v, i); i = i + 1; } s }
+fn by_two(v: Ints) -> Int { let mut s = 0; let mut i = 0; while i < ints_len(v) { s = s + ints_get(v, i); i = i + 2; } s }

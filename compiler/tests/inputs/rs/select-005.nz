@@ -1,0 +1,17 @@
+
+fn main(io: IoCap, t: TimeCap) -> Int ! { io } {
+    let quiet = chan_new_of[Int](1);
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, quiet);
+    let got = vec_new[Int]();
+    let t0 = time_now_ms();
+    print(int_to_str(chan_select_until(cs, got, 40)));
+    if time_now_ms() - t0 >= 40 { print(" waited") } else { print(" early") };
+    print(" ");
+    print(int_to_str(chan_select_until(cs, got, 0)));
+    chan_send_of(quiet, 7);
+    print(" ");
+    print(int_to_str(chan_select_until(cs, got, 0)));
+    print(int_to_str(vec_pop(got)));
+    0
+}

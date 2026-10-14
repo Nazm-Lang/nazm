@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(io: IoCap) -> Int ! { io, spawn } { old(1, io) }

@@ -1,0 +1,1 @@
+fn m() -> Int { P(a: { 1 }, b: E.V(c: { let d = 2; d })).a }

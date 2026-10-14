@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let existing = vec_new[Str]();
+    vec_push(existing, int_to_str(5));
+    let xs = {
+        let ys = existing;
+        ys
+    };
+    vec_push(xs, int_to_str(66));
+    churn();
+    vec_len(existing) * 10 + str_len(vec_get(existing, 1))
+}

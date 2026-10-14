@@ -1,0 +1,5 @@
+fn f(n: Int) -> Int {
+    let x = if n > 10 { return 999; } else { n * 2 };
+    x + 1
+}
+fn main() -> Int { f(3) * 1000 + f(20) }

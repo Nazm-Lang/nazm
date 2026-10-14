@@ -1,0 +1,1 @@
+fn main(f: ForeignCap) -> Int { c_add(1, 2) }

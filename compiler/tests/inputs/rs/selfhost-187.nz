@@ -1,0 +1,1 @@
+enum E { A, B, } fn m() -> Int { let mut i = 0; while i < 3 { i = i + 1; let n = match (if i == 1 { continue; } else { break; }) { E.A() => 1, E.B() => 2, }; } i }

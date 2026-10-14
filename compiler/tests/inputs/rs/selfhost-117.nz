@@ -1,0 +1,1 @@
+fn m() -> Int { let c = chan_new(1); chan_send(c, c); 0 }

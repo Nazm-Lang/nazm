@@ -1,0 +1,2 @@
+pub fn shown() -> Int { size() }
+fn size() -> Int { 2 }

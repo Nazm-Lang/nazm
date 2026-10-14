@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let e = str_slice("abc", 1, 1);
+    let f = str_concat("", "");
+    str_len(e) + str_len(f) + str_len(str_slice(f, 0, 0))
+}

@@ -1,0 +1,2 @@
+struct Node { next: Option[Node], }
+fn m() -> Int { 0 }

@@ -1,0 +1,18 @@
+use "@std/ioerror";
+use "@std/io";
+use "@std/env";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(io: IoCap) -> Int {
+line(io, match env_get(io, "NAZM_TEST_VALUE") { Option.Some(value: v) => v, Option.None() => "unset" });
+line(io, match env_get(io, "NAZM_SURELY_UNSET") { Option.Some(value: v) => v, Option.None() => "unset" });
+let vars = env_vars(io);
+let mut found = 0;
+let mut i = 0;
+while i < strs_len(vars) { if strs_get(vars, i) == "NAZM_TEST_VALUE=a=b c" { found = found + 1; } i = i + 1; }
+line(io, int_to_str(found));
+match io_stdin_lines(io) {
+Result.Ok(value: lines) => { line(io, str_join(lines, "|")); },
+Result.Err(error: e) => { line(io, io_kind_name(e.kind)); },
+};
+0
+}

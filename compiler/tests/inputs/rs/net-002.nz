@@ -1,0 +1,46 @@
+fn serve(l: TcpListener, n: Int) -> Int ! { io } {
+let mut k = 0;
+while k < n {
+match tcp_accept(l) {
+Result.Ok(value: c) => {
+let buf = bytes_new(5);
+tcp_read_exact(c, buf);
+tcp_write(c, buf);
+tcp_close(c);
+},
+Result.Err(error: e) => {},
+};
+k = k + 1;
+}
+0
+}
+fn ask(net: NetCap, addr: Str, word: Str) -> Str ! { io } {
+match tcp_connect(net, addr, 2000) {
+Result.Ok(value: c) => {
+tcp_write_str(c, word);
+let buf = bytes_new(5);
+let got = match tcp_read_exact(c, buf) { Result.Ok(value: n) => bytes_to_str(buf), Result.Err(error: e) => io_kind_name(e.kind), };
+let peer = tcp_peer_addr(c);
+tcp_close(c);
+if peer == addr { got } else { "wrong peer" }
+},
+Result.Err(error: e) => io_kind_name(e.kind),
+}
+}
+fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
+match tcp_listen(net, "127.0.0.1:0") {
+Result.Ok(value: l) => {
+let addr = tcp_listener_addr(l);
+line(out, if str_len(addr) > 10 && str_slice(addr, 0, 10) == "127.0.0.1:" { "listening" } else { addr });
+scope {
+spawn serve(l, 3);
+line(out, ask(net, addr, "alpha"));
+line(out, ask(net, addr, "bravo"));
+line(out, ask(net, addr, "delta"));
+}
+tcp_listener_close(l);
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

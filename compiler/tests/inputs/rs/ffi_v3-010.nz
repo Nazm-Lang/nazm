@@ -1,0 +1,5 @@
+pub extern "C" struct Counter;
+pub extern "C" struct Point { x: Int, flag: Bool, y: Int }
+pub extern "C" fn counter_new(start: Int) -> Counter = "counter_new";
+pub extern "C" fn counter_bump(c: Counter, by: Int) -> Int = "counter_bump";
+pub extern "C" fn point_sum(p: Point) -> Int = "point_sum";

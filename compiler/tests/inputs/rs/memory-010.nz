@@ -1,0 +1,10 @@
+fn inner(xs: Ints) -> Int {
+    let mine = ints_new();
+    ints_push(mine, 1);
+    ints_len(xs) / 0
+}
+fn main() -> Int {
+    let xs = ints_new();
+    ints_push(xs, 2);
+    inner(xs)
+}

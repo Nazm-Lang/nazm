@@ -1,0 +1,12 @@
+fn main(out: OutCap) -> Int ! {io} {
+    let a = 0 - 9223372036854775807 - 1;
+    let b = UInt64(18446744073709551615);
+    let c = Int8(0 - 127) - Int8(1);
+    let d = UInt32(4294967295);
+    let e = Int16(0 - 7);
+    let f = UInt8(255);
+    print(f"a{a} b{b} c{c} d{d} e{e} f{f} z{0} n{0 - 42} m{9223372036854775807}\n");
+    print(f"{a}{b}|{c}\n");
+    print(str_concat(int_to_str(a), "\n"));
+    0
+}

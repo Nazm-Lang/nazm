@@ -1,0 +1,2 @@
+fn secret(n: Int) -> Int { n * 2 }
+pub fn twice[T](x: T, n: Int) -> Int { secret(n) }

@@ -1,0 +1,3 @@
+pub fn save(io: IoCap, path: Str, text: Str) -> Int ! { io } {
+    write_file(path, text)
+}

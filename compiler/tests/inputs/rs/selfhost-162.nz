@@ -1,0 +1,1 @@
+enum A { R, } enum B { R, } fn m() -> Int { match A.R() { B.R() => 1, } }

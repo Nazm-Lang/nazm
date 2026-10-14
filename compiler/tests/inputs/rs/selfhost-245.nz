@@ -1,0 +1,4 @@
+struct A { c: Int, }
+struct B { c: Int, }
+fn g(r: Result[Int, A]) -> Result[Int, B] { let n = r?; Result[Int, B].Ok(value: n) }
+fn m() -> Int { 0 }

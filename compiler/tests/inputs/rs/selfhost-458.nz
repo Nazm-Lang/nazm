@@ -1,0 +1,5 @@
+use "cycle-b.nz";
+pub fn ping(n: Int) -> Int {
+    if n == 0 { 7 } else { pong(n - 1) }
+}
+fn main() -> Int { ping(4) }

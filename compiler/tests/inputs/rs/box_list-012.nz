@@ -1,0 +1,3 @@
+struct A { kids: Vec[B], }
+struct B { up: Box[A], }
+fn main() -> Int { 0 }

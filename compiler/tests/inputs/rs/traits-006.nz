@@ -1,0 +1,3 @@
+use "shape.nz" as s;
+use "tri.nz";
+fn main() -> Int { let t = Tri(a: 1); t.sides() + s::Shape.sides(t) }

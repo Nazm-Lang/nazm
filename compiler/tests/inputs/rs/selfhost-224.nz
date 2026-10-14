@@ -1,0 +1,2 @@
+fn w(v: Vec[Int]) -> Int { 0 }
+fn m() -> Int { let v = vec_new[Int](); scope { spawn w(v); } 0 }

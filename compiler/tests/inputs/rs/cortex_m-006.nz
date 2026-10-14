@@ -1,0 +1,11 @@
+static TICKS: Atomic = atomic_new(0);
+
+@interrupt("timer")
+fn tick() -> Int ! {} { atomic_add(TICKS, 1) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    while atomic_load(TICKS) < 5 {
+        0;
+    }
+    atomic_load(TICKS)
+}

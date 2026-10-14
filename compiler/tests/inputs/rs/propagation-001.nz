@@ -1,0 +1,26 @@
+struct Item {
+    name: Str,
+    tags: Ints,
+}
+enum Shape {
+    Named(label: Str),
+    Plain,
+}
+struct Diag {
+    code: Str,
+    start: Int,
+}
+fn item(n: Int) -> Item {
+    let tags = ints_new();
+    ints_push(tags, n);
+    Item(name: str_concat("item-", int_to_str(n)), tags: tags)
+}
+fn diags(n: Int) -> Vec[Diag] {
+    let ds = vec_new[Diag]();
+    let mut i = 0;
+    while i < n {
+        vec_push(ds, Diag(code: str_concat("N0", int_to_str(300 + i)), start: i));
+        i = i + 1;
+    }
+    ds
+}

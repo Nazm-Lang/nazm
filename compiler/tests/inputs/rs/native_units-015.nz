@@ -1,0 +1,3 @@
+use "a.nz";
+pub fn g() -> Int { 37 }
+pub fn unused() -> Int { shared() }

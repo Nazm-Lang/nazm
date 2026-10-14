@@ -1,0 +1,23 @@
+fn main() -> Int {
+    let mut name = str_concat("start", "");
+    let mut i = 0;
+    while i < 6 {
+        let o = if i % 3 == 0 { Option[Str].None() } else { Option[Str].Some(value: int_to_str(i * 1000)) };
+        match o {
+            Option.None() => {
+                name = str_concat(name, ".");
+            },
+            Option.Some(value: s) => {
+                let t = s;
+                name = t;
+            },
+        };
+        i = i + 1;
+    }
+    {
+        let tail = str_concat(name, "");
+        name = tail;
+    }
+    churn();
+    str_len(name)
+}

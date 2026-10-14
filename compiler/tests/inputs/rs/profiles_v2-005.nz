@@ -1,0 +1,1 @@
+fn mk(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }

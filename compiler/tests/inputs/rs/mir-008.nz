@@ -1,0 +1,8 @@
+fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }
+fn a(n: Int) -> Int { if n == 0 { 0 } else { b(n - 1) } }
+fn b(n: Int) -> Int { a(n) }
+fn leaf(n: Int) -> Int { n + 1 }
+fn job(c: Chan) -> Int { chan_send(c, 1); 0 }
+fn again(c: Chan, t: SpawnCap) -> Int { scope { spawn job(c); } 0 }
+fn w(n: Int, tasks: SpawnCap) -> Int { if n <= 0 { 0 } else { scope { spawn w(n - 1, tasks); } 0 } }
+fn main(t: SpawnCap) -> Int { let c = chan_new(2); again(c, t); f(3) + a(2) + leaf(1) + w(2, t) }

@@ -1,0 +1,24 @@
+
+        fn worker(jobs: Chan, results: Chan) -> Int {
+            let buf = ints_new();
+            while chan_recv(jobs, buf) { chan_send(results, ints_pop(buf) * 2); }
+            0
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let jobs = chan_new(4);
+            let results = chan_new(64);
+            scope {
+                spawn worker(jobs, results);
+                spawn worker(jobs, results);
+                spawn worker(jobs, results);
+                let mut i = 1;
+                while i <= 10 { chan_send(jobs, i); i = i + 1; }
+                chan_close(jobs);
+            }
+            chan_close(results);
+            let buf = ints_new();
+            let mut total = 0;
+            while chan_recv(results, buf) { total = total + ints_pop(buf); }
+            total
+        }
+        

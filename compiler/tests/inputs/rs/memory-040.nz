@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let xs = ints_new();
+    ints_push(xs, 1)
+}

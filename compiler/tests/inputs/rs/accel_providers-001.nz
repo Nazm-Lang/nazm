@@ -1,0 +1,19 @@
+fn square(x: Int) -> Int ! {} { x * x }
+fn collatz(n: Int) -> Int ! {} {
+let mut x = n;
+let mut steps = 0;
+while x > 1 {
+if x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; }
+steps = steps + 1;
+}
+steps + square(n % 7)
+}
+fn inverse(x: Int) -> Int ! {} { 100 / (x - 3) }
+fn poly(x: Float64) -> Float64 ! {} { let y = x * 0.5 + 1.25; float_sqrt(float_abs(y * x - 3.0)) / (x + 0.1) }
+fn polyf(x: Float32) -> Float32 ! {} { let y = x * 0.5 + 1.25; float_sqrt(float_abs(y * x - 3.0)) / (x + 0.1) }
+fn rem(a: Float64, b: Float64) -> Float64 ! {} { if a < b { a % b } else { -b } }
+fn axpy(a: Float32, b: Float32) -> Float32 ! {} { 2.5 * a + b }
+fn mixed(x: Float64) -> Float64 ! {} { let n = 3; x }
+fn wide(x: Float32) -> Float64 ! {} { 0.0 }
+fn sine(x: Float64) -> Float64 ! {} { float_sin(x) }
+fn main() -> Int { 0 }

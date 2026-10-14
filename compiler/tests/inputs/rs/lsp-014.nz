@@ -1,0 +1,3 @@
+fn pair(a: Str, b: Int) -> Int { b }
+fn ping() -> Int { 0 }
+fn main() -> Int { let s = "é😀"; pair("😀, é", str_len(s)) + ping() + pair(s, 1, 2) }

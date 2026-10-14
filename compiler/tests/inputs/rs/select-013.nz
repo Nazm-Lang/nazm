@@ -1,0 +1,27 @@
+
+fn wait(io: IoCap, t: TimeCap, done: Chan[Int]) -> Int ! { io } {
+    let quiet = chan_new_of[Int](1);
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, quiet);
+    let got = vec_new[Int]();
+    let t0 = time_now_ms();
+    let r = chan_select_until(cs, got, 1000);
+    time_sleep_ms(300);
+    chan_send_of(done, time_now_ms() - t0);
+    r
+}
+
+fn main(io: IoCap, t: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {
+    let done = chan_new_of[Int](2);
+    let mine = wait(io, t, done);
+    scope { spawn wait(io, t, done); }
+    let got = vec_new[Int]();
+    chan_recv_of(done, got);
+    chan_recv_of(done, got);
+    let b = vec_pop(got);
+    let a = vec_pop(got);
+    if a >= 1300 && b >= 1300 && a < 4000 && b < 4000 { print("on time") } else { print("off") };
+    print(" ");
+    print(int_to_str(mine));
+    0
+}

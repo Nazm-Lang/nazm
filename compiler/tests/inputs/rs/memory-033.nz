@@ -1,0 +1,13 @@
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 30 {
+        let c = chan_new(1);
+        chan_send(c, i);
+        let buf = ints_new();
+        chan_recv(c, buf);
+        total = total + ints_get(buf, 0);
+        i = i + 1;
+    }
+    total
+}

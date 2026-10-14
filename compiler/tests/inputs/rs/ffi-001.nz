@@ -1,0 +1,2 @@
+fn main(io: IoCap, f: ForeignCap) -> Int
+{ let s = int_to_str(c_add(1, 2)); let v = ints_new(); ints_push(v, c_neg(5)); ints_push(v, c_add(ints_get(v, 0), 10)); print(s); print(int_to_str(ints_get(v, 1))); let t = str_concat(s, int_to_str(c_tick())); print(t); ints_get(v, c_add(5, 0)) }

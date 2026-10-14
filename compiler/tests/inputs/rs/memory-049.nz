@@ -1,0 +1,12 @@
+struct Inner {
+    text: Str,
+}
+struct Outer {
+    inner: Inner,
+    values: Ints,
+}
+fn main() -> Int {
+    let o = Outer(inner: Inner(text: int_to_str(77)), values: ints_new());
+    ints_push(o.values, 1);
+    str_len(o.inner.text) + ints_len(o.values)
+}

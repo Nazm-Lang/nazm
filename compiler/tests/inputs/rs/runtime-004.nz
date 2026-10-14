@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int { let s = str_concat("a", "b"); print(s); exit_with(5); 0 }

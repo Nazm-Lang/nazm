@@ -1,0 +1,2 @@
+use "@std/text";
+fn main() -> Int ! {} { str_len(text_trim(" a ")) }

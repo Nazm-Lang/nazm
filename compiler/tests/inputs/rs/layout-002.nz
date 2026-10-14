@@ -1,0 +1,2 @@
+struct P { a: Int, b: Bool, c: Int }
+fn main() -> Int { let ps = vec_new[P](); vec_push(ps, P(a: 1, b: true, c: 3)); vec_push(ps, P(c: 30, a: 10, b: false)); let p = vec_get(ps, 1); p.a + p.c + if vec_get(ps, 0).b { 100 } else { 0 } }

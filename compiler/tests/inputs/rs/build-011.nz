@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let a = 6;
+    if a > 5 { a * 7 } else { 0 }
+}

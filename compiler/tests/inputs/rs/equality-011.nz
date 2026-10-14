@@ -1,0 +1,2 @@
+enum E { A(n: Int), B, }
+fn main() -> Int { if E.A(n: 1) != E.A(n: 1) { 1 } else { 0 } }

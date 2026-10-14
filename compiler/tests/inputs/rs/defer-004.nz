@@ -1,0 +1,2 @@
+fn f() -> Result[Int, Str] { defer { let x = Result[Int, Str].Ok(value: 1)?; } Result[Int, Str].Ok(value: 2) }
+fn main() -> Int { 0 }

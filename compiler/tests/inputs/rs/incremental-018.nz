@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(io: IoCap) -> Int ! { io } { twice(io, 21) }

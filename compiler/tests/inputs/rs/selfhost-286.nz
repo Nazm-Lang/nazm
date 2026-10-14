@@ -1,0 +1,2 @@
+enum Solo { Only, }
+fn main() -> Int { if Solo.Only() == Solo.Only() { 1 } else { 0 } }

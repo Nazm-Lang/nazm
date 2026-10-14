@@ -1,0 +1,1 @@
+fn main() -> Int { let fs = list_empty[fn() -> Int](); let f = fn() -> Int { list_len(fs) }; f() }

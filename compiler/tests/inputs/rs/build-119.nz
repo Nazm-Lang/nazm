@@ -1,0 +1,15 @@
+enum E {
+    Text(value: Str),
+    Count(n: Int),
+}
+fn size(e: E) -> Int { match e { E.Text(value: s) => str_len(s), E.Count(n: n) => n, } }
+fn main() -> Int {
+    let mut total = 0;
+    let mut i = 0;
+    while i < 50 {
+        let e = if i > 24 { E.Text(value: int_to_str(i)) } else { E.Count(n: i) };
+        total = total + size(e);
+        i = i + 1;
+    }
+    total
+}

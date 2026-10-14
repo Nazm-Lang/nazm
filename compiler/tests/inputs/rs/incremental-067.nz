@@ -1,0 +1,2 @@
+use "../lib/common.nz";
+fn main() -> Int { shared(2) }

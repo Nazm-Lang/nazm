@@ -1,0 +1,2 @@
+use "facade.nz";
+fn main() -> Int { double(1) }

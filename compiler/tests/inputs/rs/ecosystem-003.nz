@@ -1,0 +1,11 @@
+// A point on the grid.
+pub struct Point { x: Int, y: Int }
+
+pub enum Dir { North, To(p: Point) }
+
+// C's adder.
+pub extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+pub extern "C" fn nazm_triple(x: Int) -> Int ! {} = "nazm_triple" { x * 3 }
+pub fn shout(io: IoCap, s: Str) -> Int ! { io } { print(s); 0 }
+fn hidden() -> Int { 1 }
+fn main(io: IoCap) -> Int ! { io } { shout(io, "x") }

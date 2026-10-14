@@ -1,0 +1,4 @@
+use "lib.nz";
+const DOUBLE: Int = N * 2;
+const FIRST: [Keyword; 1] = [Keyword(text: GREETING, code: DOUBLE)];
+fn main() -> Int { KEYWORDS[1].code * 100 + FIRST[0].code * 10 + str_len(GREETING) }

@@ -1,0 +1,23 @@
+
+use "@std/seq";
+struct Item { name: Str, cost: Int, }
+enum Size { Small, Large(by: Int), }
+fn size_of(i: Item) -> Size { if i.cost > 10 { Size.Large(by: i.cost - 10) } else { Size.Small() } }
+fn extra(acc: Int, s: Size) -> Int {
+    match s { Size.Small() => acc, Size.Large(by: n) => acc + n, }
+}
+fn main(out: OutCap) -> Int {
+    let items = vec_new[Item]();
+    vec_push(items, Item(name: "a", cost: 4));
+    vec_push(items, Item(name: "b", cost: 15));
+    vec_push(items, Item(name: "c", cost: 30));
+    let limit = 5;
+    let dear = vec_filter(items, fn(i: Item) -> Bool { i.cost > limit });
+    let sizes = vec_map(dear, size_of);
+    let names = vec_map(dear, fn(i: Item) -> Str { i.name });
+    let total = vec_fold(sizes, 0, extra);
+    let joined = vec_fold(names, "", fn(acc: Str, s: Str) -> Str { str_concat(acc, s) });
+    print(joined);
+    print(int_to_str(total));
+    0
+}

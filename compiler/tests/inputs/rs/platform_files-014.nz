@@ -1,0 +1,2 @@
+fn lock(h: OsHandle) -> Int ! { io } { os_lock(h, true) + os_try_lock(h, false) + os_unlock(h) }
+fn main(io: IoCap) -> Int ! { io } { lock(os_open_read("x")) }

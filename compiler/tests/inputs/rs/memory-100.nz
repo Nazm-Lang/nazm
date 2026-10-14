@@ -1,0 +1,26 @@
+struct Pair {
+    left: Str,
+    right: Int,
+}
+enum Maybe[T] {
+    None,
+    Some(value: T),
+}
+fn identity[T](x: T) -> T {
+    let y = x;
+    y
+}
+fn main() -> Int {
+    let n = identity(40);
+    let s = identity(str_concat("ab", "cd"));
+    let p = identity(Pair(left: int_to_str(12345), right: 1));
+    let m = identity(Maybe[Str].Some(value: int_to_str(7)));
+    let v = identity(vec_new[Str]());
+    vec_push(v, int_to_str(99));
+    let c = identity(chan_new(1));
+    chan_send(c, 3);
+    let got = ints_new();
+    chan_recv(c, got);
+    let from_m = match m { Maybe.None() => 0, Maybe.Some(value: t) => str_len(t), };
+    n + str_len(s) * 10 + str_len(p.left) * 100 + p.right + from_m + vec_len(v) + ints_get(got, 0)
+}

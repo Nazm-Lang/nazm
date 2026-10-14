@@ -1,0 +1,2 @@
+{h}extern "C" fn g(d: Option[Db]) -> Int = "g";
+{main}

@@ -1,0 +1,24 @@
+
+fn view(b: Bytes) -> Bytes { bytes_slice(b, 1, 3) }
+fn main() -> Int {
+    let mut i = 0;
+    let mut keep = bytes_new(1);
+    while i < 5 {
+        let b = bytes_new(8);
+        let v = view(b);
+        bytes_set(v, 0, 7);
+        keep = v;
+        let t = Text("añb");
+        let u = text_slice(text_concat(t, scalar_text(66)), 1, 3);
+        i = i + 1;
+    }
+    let a = bytes_new(8);
+    bytes_set(a, 1, 9);
+    let b = bytes_new(8);
+    bytes_set(b, 1, 9);
+    let c = bytes_new(8);
+    bytes_set(c, 1, 9);
+    let e = bytes_new(8);
+    bytes_set(e, 1, 9);
+    Int(bytes_get(keep, 0))
+}

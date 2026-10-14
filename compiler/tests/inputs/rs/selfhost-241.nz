@@ -1,0 +1,3 @@
+enum MyResult[T, E] { Ok(value: T), Err(error: E), }
+fn g(r: MyResult[Int, Str]) -> Result[Int, Str] { let n = r?; Result[Int, Str].Ok(value: n) }
+fn m() -> Int { 0 }

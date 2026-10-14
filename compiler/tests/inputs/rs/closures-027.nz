@@ -1,0 +1,1 @@
+fn main() -> Bool { let f = fn(x: Int) -> Int { x }; f == f }

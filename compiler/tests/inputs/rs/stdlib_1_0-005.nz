@@ -1,0 +1,20 @@
+use "@std/json";
+fn show(r: Result[JsonDoc, Str]) -> Str { match r { Result.Ok(value: d) => json_encode(d), Result.Err(error: e) => str_concat("ERR ", e) } }
+fn main(io: IoCap) -> Int ! { io } {
+print(show(json_parse(" {\"a\": [1, -2, true, null, \"x\\ny\\u0041\\u00e9\"], \"b\": {}, \"c\": [] } "))); print("|");
+print(show(json_parse("[1, 2"))); print("|");
+print(show(json_parse("1.5"))); print("|");
+print(show(json_parse("{\"a\" 1}"))); print("|");
+print(show(json_parse("-9223372036854775808"))); print("|");
+print(show(json_parse("9223372036854775808"))); print("|");
+print(show(json_parse("[1] x"))); print("|");
+print(show(json_parse("01"))); print("|");
+print(show(json_parse(""))); print("|");
+let b = json_new(); let ks = strs_new(); strs_push(ks, "k"); strs_push(ks, "q\"t"); let vs = ints_new(); ints_push(vs, json_add_int(b, 7)); ints_push(vs, json_add_bool(b, false));
+let built = json_with_root(b, json_add_object(b, ks, vs));
+print(json_encode(built)); print("|");
+print(show(json_parse(json_encode(built)))); print("|");
+let r = json_root(built);
+print(json_kind(built, r)); print(json_kind(built, 999));
+print(match json_get(built, r, "k") { Option.Some(value: n) => match json_int(built, n) { Option.Some(value: v) => int_to_str(v), Option.None() => "?" }, Option.None() => "none" });
+0 }

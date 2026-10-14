@@ -1,0 +1,41 @@
+fn vv(c: Bool) -> Str {
+    if c {
+        let a = int_to_str(1);
+        a
+    } else {
+        let b = int_to_str(22);
+        b
+    }
+}
+fn vd(c: Bool) -> Str {
+    let s = if c {
+        let a = int_to_str(333);
+        a
+    } else {
+        let b = int_to_str(0);
+        return b;
+    };
+    s
+}
+fn dv(c: Bool) -> Str {
+    let s = if c {
+        let a = int_to_str(0);
+        return a;
+    } else {
+        let b = int_to_str(4444);
+        b
+    };
+    s
+}
+fn dd(c: Bool) -> Str {
+    if c {
+        return int_to_str(55555);
+    } else {
+        return int_to_str(666666);
+    }
+}
+fn main() -> Int {
+    let t = str_len(vv(true)) + str_len(vv(false)) * 10 + str_len(vd(true)) * 100 + str_len(vd(false)) * 1000 + str_len(dv(false)) * 10000 + str_len(dv(true)) * 100000;
+    churn();
+    t + str_len(dd(true)) * 1000000 + str_len(dd(false)) * 10000000
+}

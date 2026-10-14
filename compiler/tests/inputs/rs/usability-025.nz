@@ -1,0 +1,2 @@
+use "geometry.nz" as g;
+fn main() -> Int { h::area(g::Shape.Square(side: 1)) }

@@ -1,0 +1,19 @@
+fn f(o: Option[Str], tasks: SpawnCap) -> Int {
+    let n = match o {
+        Option.None() => {
+            let s = int_to_str(11);
+            return str_len(s);
+        },
+        Option.Some(value: v) => {
+            let w = v;
+            return str_len(w) * 10;
+        },
+    };
+    n
+}
+fn main(tasks: SpawnCap) -> Int {
+    let a = f(Option[Str].None(), tasks);
+    let b = f(Option[Str].Some(value: str_concat("ab", "c")), tasks);
+    churn();
+    a + b
+}

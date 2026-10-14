@@ -1,0 +1,1 @@
+fn m() -> Int { let s = strs_new(); strs_push(s, "x"); str_len(strs_get(s, 0)) }

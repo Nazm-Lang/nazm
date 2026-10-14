@@ -1,0 +1,1 @@
+fn main() -> Int { Int(Int128(42) / Int128(2)) }

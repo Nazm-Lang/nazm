@@ -1,0 +1,2 @@
+fn helper() -> Int { 300 }
+pub fn from_c() -> Int { helper() }

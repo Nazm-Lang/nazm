@@ -1,0 +1,8 @@
+pub struct Point {
+    x: Int,
+}
+struct Hidden {
+    n: Int,
+}
+fn secret() -> Int { Hidden(n: 1).n }
+pub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }

@@ -1,0 +1,5 @@
+// what it does
+///   with documentation
+pub    fn f( n : Int )   ->   Int {
+    n
+}

@@ -1,0 +1,3 @@
+use "@std/seq";
+fn run[effects F](f: fn(Int) -> Int ! { F }) -> Int ! {} { let xs = vec_new[Int](); vec_len(vec_map(xs, f)) }
+fn main() -> Int { 0 }

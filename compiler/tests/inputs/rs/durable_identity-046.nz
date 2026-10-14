@@ -1,0 +1,10 @@
+pub enum State {
+    Ready,
+    Failed(why: Str, code: Int),
+    Done(code: Int),
+}
+enum Hidden {
+    Never,
+}
+pub fn start() -> State { State.Ready() }
+fn secret() -> Int { match Hidden.Never() { Hidden.Never() => 1, } }

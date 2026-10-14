@@ -1,0 +1,3 @@
+trait Area { fn area(self: Self) -> Int; }
+impl Area for Ints { fn area(self: Ints) -> Int { 0 } }
+fn main() -> Int { 0 }

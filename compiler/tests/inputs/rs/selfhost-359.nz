@@ -1,0 +1,5 @@
+trait A { fn m(self: Self) -> Int; }
+trait B { fn m(self: Self) -> Int; }
+impl A for Int { fn m(self: Int) -> Int { 1 } }
+impl B for Int { fn m(self: Int) -> Int { 2 } }
+fn main() -> Int { 3.m() }

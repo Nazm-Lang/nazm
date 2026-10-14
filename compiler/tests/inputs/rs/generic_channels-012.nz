@@ -1,0 +1,2 @@
+struct Bag { xs: Ints, }
+fn main() -> Int { let c = chan_new_of[Bag](1); 0 }

@@ -1,0 +1,15 @@
+struct Point { x: Int, label: Str, }
+enum Inner { Some(n: Int), None, }
+enum Outer { Wrapped(value: Inner), At(p: Point), Empty, }
+fn depth(o: Outer) -> Int {
+    match o {
+        Outer.Empty() => 0,
+        Outer.At(p: p) => p.x + str_len(p.label),
+        Outer.Wrapped(value: v) => match v { Inner.None() => 1, Inner.Some(n: n) => n, },
+    }
+}
+fn main() -> Int {
+    depth(Outer.Empty()) + depth(Outer.Wrapped(value: Inner.None()))
+        + depth(Outer.Wrapped(value: Inner.Some(n: 30)))
+        + depth(Outer.At(p: Point(x: 9, label: "ab")))
+}

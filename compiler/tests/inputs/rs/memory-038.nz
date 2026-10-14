@@ -1,0 +1,12 @@
+fn bad(c: Chan) -> Int {
+    let xs = ints_new();
+    chan_send(c, 1);
+    ints_get(xs, 0)
+}
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(2);
+    scope {
+        spawn bad(c);
+    }
+    0
+}

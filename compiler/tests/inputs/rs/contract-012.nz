@@ -1,0 +1,2 @@
+fn f(x: Int) -> Int ! {} { x * 3 - 7 }
+fn main() -> Int ! {} { f(14) + f(-2) }

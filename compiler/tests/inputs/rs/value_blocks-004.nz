@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let sh = {
+        let txt = str_concat("lab", int_to_str(1234));
+        let made = Shape.Named(label: txt);
+        made
+    };
+    churn();
+    match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }
+}

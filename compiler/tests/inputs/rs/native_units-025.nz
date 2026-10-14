@@ -1,0 +1,2 @@
+fn hidden_helper() -> Int { 2 }
+pub fn shared(n: Int) -> Int { n * hidden_helper() }

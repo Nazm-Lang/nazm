@@ -1,0 +1,7 @@
+fn main(io: IoCap) -> Int ! { io } {
+print(num_to_str(saturate_convert[Int8](-300.5)));
+print(num_to_str(saturate_convert[UInt16](70000.0)));
+match try_convert[Int8](-128.9) { Option.Some(value: v) => print(num_to_str(v)), Option.None() => print("none"), };
+match try_convert[UInt8](200.0) { Option.Some(value: v) => print(num_to_str(v)), Option.None() => print("none"), };
+0
+}

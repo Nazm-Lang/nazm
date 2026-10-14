@@ -1,0 +1,3 @@
+fn main() -> Int { twice(3) + indirect(5) }
+fn twice(n: Int) -> Int { n * 2 }
+fn indirect(n: Int) -> Int { twice(n) + 1 }

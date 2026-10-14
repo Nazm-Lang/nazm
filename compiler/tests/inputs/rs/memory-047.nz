@@ -1,0 +1,10 @@
+struct Bag {
+    items: Strs,
+}
+fn main() -> Int {
+    let g = Bag(items: strs_new());
+    strs_push(g.items, int_to_str(1));
+    strs_push(g.items, int_to_str(2));
+    let h = g;
+    strs_len(h.items)
+}

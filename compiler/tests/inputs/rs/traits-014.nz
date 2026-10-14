@@ -1,0 +1,4 @@
+trait A { fn go(self: Self) -> Int; }
+trait B { fn go(self: Self) -> Int; }
+impl A for Int { fn go(self: Int) -> Int { 1 } }
+impl B for Int { fn go(self: Int) -> Int { 2 } }

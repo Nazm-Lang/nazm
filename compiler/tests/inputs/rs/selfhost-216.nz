@@ -1,0 +1,2 @@
+fn same[T](a: T, b: T) -> T { a }
+fn m() -> Int { same(1, "x") }

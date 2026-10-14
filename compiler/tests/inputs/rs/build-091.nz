@@ -1,0 +1,1 @@
+fn main() -> Int { let a = ints_new(); ints_push(a, 5); ints_get(a, 0) }

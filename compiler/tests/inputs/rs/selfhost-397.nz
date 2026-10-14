@@ -1,0 +1,2 @@
+fn once(f: fn(Int) -> Int) -> Int { f(1) }
+fn main(io: IoCap) -> Int ! { io } { let s = int_to_str(42); let n = once(fn(x: Int) -> Int { str_len(s) + x }); let t = int_to_str(77); print(s); print(t); n }

@@ -1,0 +1,15 @@
+fn inner(n: Int) -> Int {
+    let mut count = 0;
+    let mut total = 0;
+    while count < n { total = total + 1; count = count + 1; }
+    total
+}
+fn main() -> Int {
+    let mut count = 0;
+    let mut total = 0;
+    while count < 4 {
+        total = total + inner(count);
+        count = count + 1;
+    }
+    total * 100 + count
+}

@@ -1,0 +1,22 @@
+
+        fn one(out: Chan) -> Int { chan_send(out, 1); 0 }
+        fn main(tasks: SpawnCap) -> Int {
+            let out = chan_new(2048);
+            let mut round = 0;
+            while round < 200 {
+                scope {
+                    spawn one(out);
+                    spawn one(out);
+                    spawn one(out);
+                    spawn one(out);
+                    spawn one(out);
+                }
+                round = round + 1;
+            }
+            chan_close(out);
+            let buf = ints_new();
+            let mut total = 0;
+            while chan_recv(out, buf) { total = total + ints_pop(buf); }
+            total
+        }
+        

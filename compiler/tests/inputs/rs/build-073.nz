@@ -1,0 +1,6 @@
+fn shout() -> Int { return 5; }
+fn main() -> Int {
+    let mut i = 0;
+    while i < 10 { if i == 4 { return i * 11 + shout(); } i = i + 1; }
+    0
+}

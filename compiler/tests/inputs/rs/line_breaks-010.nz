@@ -1,0 +1,7 @@
+fn main(out: OutCap) -> Int ! { io } {
+    let a = 1
+    let b = a +
+            2
+    if a > 0 { print("x\n") } else if b > 0 { print("y\n") }
+    b
+}

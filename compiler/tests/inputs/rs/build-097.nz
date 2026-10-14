@@ -1,0 +1,6 @@
+fn main(io: IoCap) -> Int {
+    eprint("before");
+    exit_with(7);
+    print("after");
+    0
+}

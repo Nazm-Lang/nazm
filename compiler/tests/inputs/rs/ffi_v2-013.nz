@@ -1,0 +1,2 @@
+pub extern "C" fn triple(x: Int) -> Int ! {} = "nz_triple" { x * 3 }
+fn main(io: IoCap) -> Int ! { io } { print(int_to_str(triple(14))); 0 }

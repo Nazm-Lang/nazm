@@ -1,0 +1,1 @@
+pub extern "C" fn nz_add(a: Int, b: Int) -> Int ! {} = "nz_add" { a + b }

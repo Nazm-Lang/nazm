@@ -1,0 +1,27 @@
+use "@std/ioerror";
+use "@std/file";
+use "@std/process";
+fn reader(c: OsHandle, done: Chan) -> Int ! { io } {
+let buf = bytes_new(16);
+let n = os_read(os_child_pipe(c, 1), buf);
+chan_send(done, 1);
+0
+}
+fn busy(done: Chan) -> Int { let mut i = 0; let mut s = 0; while i < 100000 { s = s + i % 3; i = i + 1; } chan_send(done, 2); 0 }
+fn main(p: ProcessCap, sp: SpawnCap, out: OutCap) -> Int {
+let a = strs_new();
+strs_push(a, "-c");
+strs_push(a, "sleep 0.3; echo done");
+let c = os_spawn("sh", a);
+let done = chan_new(4);
+let got = ints_new();
+scope {
+spawn reader(c, done);
+spawn busy(done);
+chan_recv(done, got);
+chan_recv(done, got);
+}
+os_wait(c);
+print(str_concat(int_to_str(ints_get(got, 0)), int_to_str(ints_get(got, 1))));
+0
+}

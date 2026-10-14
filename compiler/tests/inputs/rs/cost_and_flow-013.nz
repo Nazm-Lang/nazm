@@ -1,0 +1,1 @@
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } { print(str_vouch("a")) }

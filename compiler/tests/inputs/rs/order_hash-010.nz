@@ -1,0 +1,5 @@
+use "@std/hash";
+use "@std/hashmap";
+struct K { n: Int, }
+impl Hash for K { fn hash(self: K) -> UInt64 ! {} { hash_u64(UInt64(0)) } fn same(self: K, other: K) -> Bool ! {} { true } }
+fn main() -> Int { let m = hashmap_new[K, Int](); hashmap_set(m, K(n: 1), 1); hashmap_set(m, K(n: 2), 2); hashmap_len(m) }

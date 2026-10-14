@@ -1,0 +1,11 @@
+static BIG: Atomic = atomic_new(9223372036854775807);
+
+@interrupt("timer")
+fn tick() -> Int ! {} { atomic_add(BIG, 1) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    while true {
+        0;
+    }
+    0
+}

@@ -1,0 +1,3 @@
+use "b.nz";
+pub fn ping(n: Int) -> Int { n }
+fn main() -> Int { pong(3) }

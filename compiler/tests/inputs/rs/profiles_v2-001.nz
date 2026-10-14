@@ -1,0 +1,2 @@
+fn count(n: Int) -> Int ! {} { if n == 0 { 0 } else { count(n - 1) + 1 } }
+fn main() -> Int ! {} { count(3) }

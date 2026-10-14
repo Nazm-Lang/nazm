@@ -1,0 +1,2 @@
+struct Point { x: Int, y: Int, }
+fn main() -> Int { if Point(x: 1, y: 2) == Point(x: 1, y: 2) { 1 } else { 0 } }

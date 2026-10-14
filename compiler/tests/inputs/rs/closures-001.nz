@@ -1,0 +1,22 @@
+
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+fn inc(x: Int) -> Int { x + 1 }
+fn make_adder(n: Int) -> fn(Int) -> Int {
+    fn(x: Int) -> Int { x + n }
+}
+fn main(out: OutCap) -> Int {
+    let s = str_concat("hel", "lo");
+    let k = 10;
+    let add = make_adder(5);
+    let g = fn(x: Int) -> Int { x * k + str_len(s) };
+    let h = inc;
+    let nested = fn(y: Int) -> Int {
+        let inner = fn(z: Int) -> Int { z + k + y };
+        inner(1)
+    };
+    print(int_to_str(twice(add, 1)));
+    print(int_to_str(twice(g, 2)));
+    print(int_to_str(twice(h, 3)));
+    print(int_to_str(nested(100)));
+    0
+}

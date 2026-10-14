@@ -1,0 +1,2 @@
+fn f(io: IoCap, x: Int) -> Int { x }
+fn main(io: IoCap) -> Int { f(io, 1) }

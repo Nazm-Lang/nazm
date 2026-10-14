@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let mut s = "";
+    let mut i = 0;
+    while i < 50 {
+        s = str_concat("x", s);
+        i = i + 1;
+    }
+    str_len(s)
+}

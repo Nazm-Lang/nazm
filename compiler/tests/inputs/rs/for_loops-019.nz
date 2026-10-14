@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file("cfg")); let ys = vec_new[Int](); vec_push(ys, 1); for n in ys { write_file(num_to_str(n), "x"); } 0 }

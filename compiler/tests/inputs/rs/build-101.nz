@@ -1,0 +1,2 @@
+use "../util.nz";
+pub fn quad(n: Int) -> Int { twice(twice(n)) }

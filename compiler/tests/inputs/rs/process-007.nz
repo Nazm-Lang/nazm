@@ -1,0 +1,1 @@
+fn main() -> Int ! { io } { str_len(os_env_get("HOME")) }

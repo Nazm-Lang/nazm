@@ -1,0 +1,2 @@
+fn m() -> Int { b() }
+fn b() -> Int { 1 }

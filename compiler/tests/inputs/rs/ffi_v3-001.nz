@@ -1,0 +1,16 @@
+extern "C" struct Counter;
+extern "C" struct Point { x: Int, flag: Bool, y: Int }
+extern "C" struct Seg { a: Point, owner: Counter, b: Point, tag: Int }
+extern "C" fn counter_new(start: Int) -> Counter = "counter_new";
+extern "C" fn counter_maybe(start: Int) -> Option[Counter] = "counter_maybe";
+extern "C" fn counter_bump(c: Counter, by: Int) -> Int = "counter_bump";
+extern "C" fn counter_free(c: Counter) -> Int = "counter_free";
+extern "C" fn greeting(which: Int) -> Option[Str] = "greeting";
+extern "C" fn point_sum(p: Point) -> Int = "point_sum";
+extern "C" fn point_offsets(p: Point) -> Int = "point_offsets";
+extern "C" fn seg_score(s: Seg) -> Int = "seg_score";
+extern "C" fn fail_with(e: Int) -> Int = "fail_with";
+extern "C" fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int = "apply_twice";
+extern "C" fn apply_on_thread(f: fn(Int) -> Int, x: Int) -> Int = "apply_on_thread";
+extern "C" fn blocks_in_use() -> Int = "blocks_in_use";
+pub extern "C" fn triple(x: Int) -> Int ! {} = "nz_triple" { x * 3 }

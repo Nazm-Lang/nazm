@@ -1,0 +1,12 @@
+pub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+if caller != 1 || s.alice < amount { return Result[State, Int].Err(error: 2); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, paused: s.paused))
+}
+pub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {
+if caller != s.owner { return Result[State, Int].Err(error: 4); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, paused: on == 1))
+}
+pub fn peek(s: State, caller: Int) -> Result[State, Int] ! {} {
+if s.paused { return Result[State, Int].Err(error: 3); }
+Result[State, Int].Ok(value: s)
+}

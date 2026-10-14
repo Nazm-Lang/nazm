@@ -1,0 +1,17 @@
+fn make(n: Int) -> Result[Shape, Str] {
+    if n == 0 { return Result[Shape, Str].Err(error: int_to_str(12345)); }
+    Result[Shape, Str].Ok(value: Shape.Named(label: str_concat("shape-", int_to_str(n))))
+}
+fn f(n: Int) -> Result[Int, Str] {
+    let k = match make(n)? {
+        Shape.Named(label: l) => str_len(l),
+        Shape.Plain() => 0,
+    };
+    churn();
+    Result[Int, Str].Ok(value: k)
+}
+fn main() -> Int {
+    let a = match f(7) { Result.Ok(value: k) => k, Result.Err(error: e) => 0, };
+    let b = match f(0) { Result.Ok(value: k) => 0, Result.Err(error: e) => str_len(e), };
+    a * 10 + b
+}

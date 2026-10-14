@@ -1,0 +1,2 @@
+fn f(a: Int) -> Int { a = 2; a }
+fn m() -> Int { f(1) }

@@ -1,0 +1,4 @@
+pub fn twice( n : Int ) -> Int {
+    helper() * n
+}
+fn helper() -> Int { 2 }

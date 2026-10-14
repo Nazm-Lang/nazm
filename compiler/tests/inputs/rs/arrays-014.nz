@@ -1,0 +1,2 @@
+use "lib.nz";
+fn main() -> Int { sum3([1, 2, 3]) + Int(make()[1]) }

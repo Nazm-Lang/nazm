@@ -1,0 +1,4 @@
+pub fn helper(x: Int) -> Int { x + 1 }
+pub struct P { a: Int, }
+pub enum E { A, B(v: Int), }
+fn private_detail() -> Int { 7 }

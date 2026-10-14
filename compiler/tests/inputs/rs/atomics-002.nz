@@ -1,0 +1,1 @@
+fn main() -> Int { let a = atomic_new(1); if a == a { 1 } else { 0 } }

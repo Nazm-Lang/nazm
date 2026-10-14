@@ -1,0 +1,10 @@
+use "@std/io";
+use "@std/time";
+fn main(io: IoCap, t: TimeCap) -> Int ! { io } {
+let a = time_ms(t);
+time_sleep(t, time_duration_ms(120));
+let waited = time_ms(t) - a;
+io_println(io, if waited >= 120 { "slept" } else { int_to_str(waited) });
+let v = vec_new[Int]();
+vec_get(v, args_count())
+}

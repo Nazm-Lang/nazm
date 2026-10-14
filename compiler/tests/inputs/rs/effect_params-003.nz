@@ -1,0 +1,2 @@
+fn apply[effects E](f: fn() -> Int ! { E }) -> Int ! { E } { f() }
+fn main(io: IoCap) -> Int ! {} { apply(fn() -> Int ! { io } { print("a"); 1 }) }

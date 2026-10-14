@@ -1,0 +1,38 @@
+
+fn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {
+    let cs = vec_new[Chan[Int]]();
+    vec_push(cs, stop);
+    vec_push(cs, jobs);
+    let got = vec_new[Int]();
+    let mut running = true;
+    let mut done = 0;
+    while running {
+        let i = chan_select_of(cs, got);
+        if i == 1 && vec_len(got) > 0 {
+            chan_send_of(out, vec_pop(got) * 2);
+            done = done + 1;
+        } else {
+            running = false;
+        }
+    }
+    done
+}
+
+fn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {
+    let stop = chan_new_of[Int](1);
+    let jobs = chan_new_of[Int](4);
+    let out = chan_new_of[Int](4);
+    let r = vec_new[Int]();
+    let mut sum = 0;
+    scope {
+        spawn worker(stop, jobs, out);
+        chan_send_of(jobs, 5);
+        chan_send_of(jobs, 6);
+        if chan_recv_of(out, r) { sum = sum + vec_pop(r); }
+        if chan_recv_of(out, r) { sum = sum + vec_pop(r); }
+        time_sleep_ms(50);
+        chan_close_of(stop);
+    }
+    print(int_to_str(sum));
+    0
+}
