@@ -39,6 +39,7 @@ list="$out/inputs.txt"
 (
   cd "$root"
   find tests/compat/v1 corpus examples compiler/conformance compiler/parity compiler/tests/inputs \
+    crates/nazm-cli/tests crates/nazm-cli/templates \
     -name '*.nz' -type f 2>/dev/null
   ls compiler/*.nz
 ) | LC_ALL=C sort > "$list"
