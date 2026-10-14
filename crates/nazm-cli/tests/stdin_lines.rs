@@ -136,7 +136,9 @@ fn headers_frames_and_lines_read_alike_everywhere() {
     let mut runs: Vec<(String, Command)> = Vec::new();
     for trickle in [false, true] {
         let mut interp = Command::new(differential::NAZM);
-        interp.current_dir(d.path()).args(["run", "prog.nz"]);
+        interp
+            .current_dir(d.path())
+            .args(["run", "--interpret", "prog.nz"]);
         runs.push((format!("interpreter trickle={trickle}"), interp));
     }
     for (label, backend, opt) in [

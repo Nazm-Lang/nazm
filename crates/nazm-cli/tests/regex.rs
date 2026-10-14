@@ -109,7 +109,7 @@ fn program(f: &str, cases: &[(&str, &str)]) -> String {
 fn lines(f: &str, cases: &[(&str, &str)]) -> Vec<String> {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), program(f, cases)).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
     r.stdout.lines().map(str::to_owned).collect()
 }
@@ -378,7 +378,7 @@ fn pathological_patterns_take_linear_time() {
         )
     };
     let started = std::time::Instant::now();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
     assert_eq!(r.stdout, want(40));
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
@@ -488,7 +488,7 @@ fn a_tokeniser_split_agrees_everywhere() {
     std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         runs.push((

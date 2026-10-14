@@ -27,7 +27,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         out.push((
@@ -220,7 +220,7 @@ fn reordering_a_declaration_changes_no_order_and_no_hash() {
         run_bounded(
             Command::new(NAZM)
                 .current_dir(d.path())
-                .args(["run", "p.nz"]),
+                .args(["run", "--interpret", "p.nz"]),
             "nazm run",
         )
         .stdout
@@ -346,7 +346,7 @@ fn a_type_with_a_written_impl_keeps_it() {
     let r = run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())
-            .args(["run", "p.nz"]),
+            .args(["run", "--interpret", "p.nz"]),
         "nazm run",
     );
     // Every `K` is the same key by its own `same`: one entry, not two.

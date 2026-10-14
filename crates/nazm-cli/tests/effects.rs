@@ -119,7 +119,7 @@ fn a_declared_effect_set_leaves_no_trace_in_the_native_program() {
 /// Interpret `root` in `dir`, then build and run it at `-O0` and `-O2`: all three agree.
 fn agree(dir: &Path, root: &str) -> String {
     let interpreted = Command::new(NAZM)
-        .args(["run", root])
+        .args(["run", "--interpret", root])
         .current_dir(dir)
         .output()
         .expect("run");

@@ -37,7 +37,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
         run_bounded(
             Command::new(NAZM)
                 .current_dir(d.path())
-                .args(["run", "prog.nz"]),
+                .args(["run", "--interpret", "prog.nz"]),
             "nazm run",
         ),
     )];
@@ -412,7 +412,7 @@ fn main() -> Int {
         Command::new(NAZM)
             .current_dir(d.path())
             .env("NAZM_MEMORY_REPORT", "1")
-            .args(["run", "prog.nz"]),
+            .args(["run", "--interpret", "prog.nz"]),
         "nazm run",
     );
     assert!(r.stderr.contains(report), "interpreter: {}", r.stderr);
@@ -467,7 +467,7 @@ fn bytes_and_text_cross_a_public_signature_cold_and_cached() {
         let r = nazm(d.path(), &["check", "main.nz"]);
         assert_eq!(r.code, Some(0), "{pass}: {}", r.stderr);
     }
-    let r = nazm(d.path(), &["run", "main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.stdout, "hi añ\n9\n", "{}", r.stderr);
     for backend in ["llvm", "cranelift"] {
         let exe = d.path().join(backend);
@@ -576,7 +576,7 @@ fn main(io: IoCap) -> Int ! {{ io }} {{
                 Command::new(NAZM)
                     .current_dir(d.path())
                     .env("NAZM_MEMORY_REPORT", "1")
-                    .args(["run", &format!("{name}.nz")]),
+                    .args(["run", "--interpret", &format!("{name}.nz")]),
                 "nazm run",
             ),
         )];

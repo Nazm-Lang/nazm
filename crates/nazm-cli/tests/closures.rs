@@ -603,7 +603,7 @@ fn a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape(
     // And nothing is run: `nazm run` refuses it as `nazm check` does.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), shapes[0].1).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(1), "{}", r.stderr);
     assert!(r.stderr.contains("error[N0616]"), "{}", r.stderr);
     assert!(

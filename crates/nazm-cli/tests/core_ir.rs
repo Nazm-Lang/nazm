@@ -141,6 +141,7 @@ fn both(example: &str) -> ((Option<i32>, String), (Option<i32>, String)) {
     let dir = tempfile::tempdir().expect("tempdir");
     let ran = Command::new(NAZM)
         .arg("run")
+        .arg("--interpret")
         .arg(&src)
         .current_dir(dir.path())
         .output()

@@ -153,7 +153,7 @@ fn a_derived_toml_codec_agrees_everywhere() {
     std::fs::write(d.path().join("t.nz"), PROGRAM).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "t.nz"][..]),
+        ("interpreter", &["run", "--interpret", "t.nz"][..]),
         ("lir oracle", &["lir", "--run", "t.nz"][..]),
     ] {
         runs.push((
@@ -231,7 +231,7 @@ fn a_package_manifest_reads_through_a_derived_record() {
          Result.Err(error: e) => { print(f\"{e}\\n\"); 1 },\n    }\n}\n",
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "m.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "m.nz"]);
     assert_eq!(r.stdout, "nazm.package/1 app 0.1.0\n0\n", "{r:?}");
 }
 

@@ -405,7 +405,7 @@ fn nothing_that_runs_changes() {
                    print(j.path); f(j.body)\n\
                }\n";
     let d = program(src);
-    let run = nazm(d.path(), &["run", "p.nz"]);
+    let run = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(run.status.success(), "{}", text(&run));
     let o = nazm(
         d.path(),

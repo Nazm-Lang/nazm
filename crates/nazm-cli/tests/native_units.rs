@@ -79,7 +79,7 @@ fn interpret(dir: &Path, files: &[(&str, &str)]) -> Ran {
         write(dir, name, text);
     }
     ran(&Command::new(NAZM)
-        .args(["run", files[0].0])
+        .args(["run", "--interpret", files[0].0])
         .current_dir(dir)
         .output()
         .expect("run"))

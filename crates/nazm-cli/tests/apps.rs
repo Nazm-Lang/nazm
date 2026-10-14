@@ -68,6 +68,7 @@ fn every_way(
             &[
                 NAZM.to_owned(),
                 "run".to_owned(),
+                "--interpret".to_owned(),
                 file.to_owned(),
                 "--".to_owned(),
             ],

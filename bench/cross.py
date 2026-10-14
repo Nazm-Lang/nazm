@@ -130,7 +130,7 @@ def main():
             ("nazm cranelift", [nazm, "build", "--no-cache", "--backend", "cranelift",
                                 str(source), "-o", str(work / f"{name}.clif")],
              [str(work / f"{name}.clif")], env, "checked arithmetic and bounds"),
-            ("nazm interpreter", None, [nazm, "run", str(source)], env,
+            ("nazm interpreter", None, [nazm, "run", "--interpret", str(source)], env,
              "checked arithmetic and bounds"),
         ]
         refs = {

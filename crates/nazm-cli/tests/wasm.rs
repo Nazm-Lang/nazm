@@ -378,6 +378,7 @@ fn the_corpus_runs_as_webassembly_as_the_interpreter_runs_it() {
     for (d, src) in &built {
         let run = Command::new(NAZM)
             .arg("run")
+            .arg("--interpret")
             .arg(d.join("prog.nz"))
             .output()
             .unwrap();

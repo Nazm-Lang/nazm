@@ -149,7 +149,7 @@ fn a_section_and_a_64_bit_register_are_a_boards_alone() {
         "{}",
         built.stderr
     );
-    let ran = nazm(d.path(), &["run", "prog.nz"]);
+    let ran = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(ran.code, Some(1), "{ran:?}");
     assert!(ran.stderr.contains("N0392"), "{}", ran.stderr);
     let wasm = nazm(
@@ -169,7 +169,7 @@ fn a_section_and_a_64_bit_register_are_a_boards_alone() {
         "fn main(m: MmioCap) -> Int ! {} { mmio_write64(150994944, 1); mmio_read64(150994944) }\n",
     )
     .unwrap();
-    let hosted = nazm(d.path(), &["run", "reg.nz"]);
+    let hosted = nazm(d.path(), &["run", "--interpret", "reg.nz"]);
     assert!(hosted.stderr.contains("N0392"), "{}", hosted.stderr);
     assert!(hosted.stderr.contains("mmio_write64"), "{}", hosted.stderr);
     let board = nazm(

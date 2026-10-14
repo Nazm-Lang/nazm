@@ -461,13 +461,13 @@ fn nazm_run_refuses_a_foreign_call_before_running_anything() {
         "fn main(io: IoCap, f: ForeignCap) -> Int\n{ print(\"started\"); print(int_to_str(c_add(1, 2))); 0 }\n",
     );
     let d = Dir::new(&[("prog.nz", &src)]);
-    let o = d.nazm(&["run", "--json", "prog.nz"]);
+    let o = d.nazm(&["run", "--interpret", "--json", "prog.nz"]);
     assert!(!o.status.success());
     assert_eq!(codes(&o), ["N0385"]);
     assert_eq!(String::from_utf8_lossy(&o.stdout), "", "nothing ran");
     // A program that only declares one runs.
     let d = Dir::new(&[("prog.nz", &with_decls("fn main() -> Int { 3 }\n"))]);
-    let o = d.nazm(&["run", "prog.nz"]);
+    let o = d.nazm(&["run", "--interpret", "prog.nz"]);
     assert!(o.status.success(), "{}", stderr(&o));
 }
 

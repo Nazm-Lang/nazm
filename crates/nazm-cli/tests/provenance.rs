@@ -55,7 +55,7 @@ fn run_native(dir: &Path) -> (Option<i32>, String) {
 /// Interpret `root` in `dir`, then build and run it at `-O0` and `-O2`: all three agree.
 fn agree(dir: &Path, root: &str) -> String {
     let interpreted = Command::new(NAZM)
-        .args(["run", root])
+        .args(["run", "--interpret", root])
         .current_dir(dir)
         .output()
         .expect("run");

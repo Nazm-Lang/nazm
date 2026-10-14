@@ -120,7 +120,7 @@ fn a_failure_hook_takes_the_number_and_there_is_one() {
         format!("@on_failure\nfn h(code: Int) -> Int ! {{}} {{ code }}\n{MAIN}"),
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(r.stderr.contains("N0392"), "{}", r.stderr);
     assert!(r.stderr.contains("`@on_failure` on `h`"), "{}", r.stderr);
 }

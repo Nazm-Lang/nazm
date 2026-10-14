@@ -166,6 +166,10 @@ pub(crate) enum Command {
         /// The machine-readable form is the contract; the rendered text is a view of it.
         #[arg(long)]
         json: bool,
+        /// Run the program in the interpreter, the oracle every equivalence test compares the
+        /// backends against (R1.5, D11).
+        #[arg(long)]
+        interpret: bool,
         /// Stop after this many loop iterations.
         ///
         /// An interpreter guard, not a language rule: with no `break` and no I/O a

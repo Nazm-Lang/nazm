@@ -185,7 +185,7 @@ fn a_project_file_under_a_directory_named_core_is_not_the_prelude() {
     );
     let ((ok, _, _), codes) = check(dir.path(), "main.nz");
     assert!(ok, "{codes:?}");
-    let out = nazm(dir.path(), &["run", "main.nz"]);
+    let out = nazm(dir.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "3");
 }
 
@@ -214,7 +214,7 @@ fn a_and_b(dir: &Path, b: &str) {
 fn a_dependency_s_result_propagates_in_its_importer() {
     let dir = tempfile::tempdir().expect("tempdir");
     a_and_b(dir.path(), B);
-    let interpreted = nazm(dir.path(), &["run", "a.nz"]);
+    let interpreted = nazm(dir.path(), &["run", "--interpret", "a.nz"]);
     assert_eq!(String::from_utf8_lossy(&interpreted.stdout).trim(), "420");
     build(dir.path(), "a.nz");
     let native = Command::new(dir.path().join("prog")).output().expect("run");
