@@ -7,6 +7,7 @@
 
 use "syntax.nz";
 use "lex.nz";
+use "diag.nz";
 
 fn main(io: IoCap) -> Int {
     if args_count() < 1 {
@@ -20,24 +21,21 @@ fn main(io: IoCap) -> Int {
     }
     let src = read_file(path);
     let t = sx_tree();
-    let dc = strs_new();
-    let ds = ints_new();
-    let de = ints_new();
-    let dm = strs_new();
-    let program = sx_parse_source(src, t, dc, ds, de, dm);
+    let d = dg_new();
+    let program = sx_parse_source(src, t, d);
     let out = strs_new();
     sx_print(t, program, 0, out, strs_new());
     strs_push(out, "\n");
     let mut i = 0;
-    while i < strs_len(dc) {
+    while i < dg_len(d) {
         strs_push(out, "error ");
-        strs_push(out, strs_get(dc, i));
+        strs_push(out, strs_get(d.code, i));
         strs_push(out, " ");
-        strs_push(out, int_to_str(ints_get(ds, i)));
+        strs_push(out, int_to_str(ints_get(d.start, i)));
         strs_push(out, " ");
-        strs_push(out, int_to_str(ints_get(de, i)));
+        strs_push(out, int_to_str(ints_get(d.end, i)));
         strs_push(out, " ");
-        strs_push(out, lex_esc(strs_get(dm, i)));
+        strs_push(out, lex_esc(strs_get(d.message, i)));
         strs_push(out, "\n");
         i = i + 1;
     }

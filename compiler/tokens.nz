@@ -8,6 +8,7 @@
 // Exits 1 when there was a diagnostic.
 
 use "lex.nz";
+use "diag.nz";
 
 fn main(io: IoCap) -> Int {
     if args_count() < 1 {
@@ -27,12 +28,8 @@ fn main(io: IoCap) -> Int {
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    let ecode = strs_new();
-    let estart = ints_new();
-    let eend = ints_new();
-    let emsg = strs_new();
-    let ehelp = strs_new();
-    lex_all(src, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+    let d = dg_new();
+    lex_all(src, kinds, starts, ends, texts, d);
 
     let nl = str_from_byte(10);
     let out = strs_new();
@@ -59,19 +56,19 @@ fn main(io: IoCap) -> Int {
         i = i + 1;
     }
     let mut e = 0;
-    while e < strs_len(ecode) {
+    while e < dg_len(d) {
         strs_push(out, "error ");
-        strs_push(out, strs_get(ecode, e));
+        strs_push(out, strs_get(d.code, e));
         strs_push(out, " ");
-        strs_push(out, int_to_str(ints_get(estart, e)));
+        strs_push(out, int_to_str(ints_get(d.start, e)));
         strs_push(out, " ");
-        strs_push(out, int_to_str(ints_get(eend, e)));
+        strs_push(out, int_to_str(ints_get(d.end, e)));
         strs_push(out, " ");
-        strs_push(out, lex_esc(strs_get(emsg, e)));
+        strs_push(out, lex_esc(strs_get(d.message, e)));
         strs_push(out, nl);
         e = e + 1;
     }
     print(str_join(out, ""));
-    if strs_len(ecode) > 0 { exit_with(1); }
+    if dg_len(d) > 0 { exit_with(1); }
     0
 }
