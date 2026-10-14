@@ -75,11 +75,24 @@ renumbered in creation order.
 | The impl a `call_trait` resolves to at a type, and derived `Hash` | No | Recovered from the impl functions' names (`Trait/Self/method`, first parameter unified with the concrete type); no impl and the trait `Hash` means derived. A trait's *default* body at a type (L11a) is not recoverable; no input uses one |
 | Which calls close a call cycle | Calls yes; a call through a bound is not marked | A `call_trait` counts as an indirect call, as the Rust facts treat it (every generic body making one checks its stack) |
 
-The request to the coordinator is a `types` table (each record and enum: definition key, type
-parameters, fields in declaration order with their types, canonical order; each variant likewise),
-function and array types spelled (`fn(Int) -> Str`, `[Int; 4]`), a function's `closure`, `captures`
-and attributes, the statics, and the impl table (trait, self type, method, target definition and
-type arguments). These are facts the checker already has; printing them changes no decision.
+LIR (`nazm lir`, `nazm.lir/2`) needs more than MIR does, and none of it is recoverable from Core IR
+/2: a function's visibility (`pub` makes it `hidden` rather than `internal`); the type table **in the
+checker's own order** (a unit lists its records and enums by the checker's type ids, which interning
+decides — `Point`, then `@std/json`'s records, then a tuple, then `HashSet[Point]`, in one input),
+with each type's display name (`HashMap[Point, Bool]`, as `Types::show` writes it) and its fields'
+names, whose order by name is the layout order; the modules in load order with each one's source
+name (`@std/hashset` has a unit with no functions); the attributes; the statics; and the source
+text of every module, which the instruction-level text needs for the `file:line:column` of each
+failure message. The instruction-level text itself (`crates/nazm-lir/src/op/`, ~6k lines) is the
+bulk of slice 6.
+
+The request to the coordinator is `nazm.core-ir/3`: a `types` table in the checker's id order (each
+record and enum: definition key, display name, type arguments, fields in declaration order with
+their names and types, canonical order; each variant likewise), function and array types spelled
+(`fn(Int) -> Str`, `[Int; 4]`), a function's visibility, `closure`, `captures` and attributes
+(`@export` symbol, `@section`, `@interrupt`, `@task`, `@on_failure`), the statics, the modules in
+load order with their source names, and the impl table (trait, self type, method, target
+definition and type arguments, defaults included). These are facts the checker already has; printing them changes no decision.
 
 ## Order of work
 
@@ -96,5 +109,8 @@ type arguments). These are facts the checker already has; printing them changes 
 
 - **The type table recovered from uses** is a workaround, not a design: it is replaced by Core IR
   /3's table the day it exists, and every input it cannot serve is counted as a difference.
-- **Speed:** `@std/json` parses an 800 kB Core IR document in ~40 ms; lowering is linear. Not a
-  concern at this size.
+- **Speed:** measured on the largest input, this pipeline's own Core IR (3.9 MB, ~500 functions):
+  2.3 s against `nazm mir`'s 0.09 s, which includes checking. Several whole-document walks (the
+  type table, closures, the plan, call cycles, the array fixpoint) over `@std/json`'s linear key
+  lookups are the likely cost; a budget is R3 work at integration, once Core IR /3 removes the
+  recovery walks.
