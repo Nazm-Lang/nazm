@@ -41,7 +41,7 @@ fn score(s: Str) -> Int {
     }
 }
 
-fn main() -> Int {
+fn main() {
     let xs = vec_new[Int]();
     vec_push(xs, 3);
     vec_push(xs, 8);
@@ -49,5 +49,5 @@ fn main() -> Int {
         Option.None() => 0,
         Option.Some(value: x) => x,
     };
-    score("42") + score("4x2") + even
+    println(score("42") + score("4x2") + even)
 }

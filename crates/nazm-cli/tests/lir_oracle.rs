@@ -134,8 +134,13 @@ fn integers_and_their_failures_agree_with_the_oracle() {
 
 #[test]
 fn control_flow_and_recursion_agree_with_the_oracle() {
-    agree(include_str!("../../../examples/primes.nz"), &[], "1060\n");
-    agree(include_str!("../../../examples/sum.nz"), &[], "6074\n");
+    // Each prints its answer and returns 0 (R1, 5b.3), which the result report adds.
+    agree(
+        include_str!("../../../examples/primes.nz"),
+        &[],
+        "1060\n0\n",
+    );
+    agree(include_str!("../../../examples/sum.nz"), &[], "6074\n0\n");
     agree(
         "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\
          fn main() -> Int { let mut i = 0; let mut t = 0; while i < 15 { if i == 3 { i = i + 1; continue; } t = t + fib(i); i = i + 1; } t }\n",

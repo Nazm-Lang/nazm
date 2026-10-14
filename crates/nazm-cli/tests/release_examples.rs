@@ -6,6 +6,9 @@
 //! notice. Every tour program is checked, formatted, interpreted, and built and run under both
 //! backends. Every `console` block of the page is run, command by command, in a scratch
 //! directory holding the files the page itself defines.
+//!
+//! Everything runs as a reader runs it: without the result report the rest of the suite sets
+//! (R1, 5b.3), so a program shows what it prints and `main`'s result is its exit status.
 
 #![allow(
     clippy::unwrap_used,
@@ -20,9 +23,9 @@ use std::process::Command;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
-/// Every tour program and exactly what it prints: its own output, then `main`'s value.
+/// Every tour program and exactly what it prints.
 const TOUR: &[(&str, &str)] = &[
-    ("hello.nz", "Hello, Nazm!\n0\n"),
+    ("hello.nz", "Hello, Nazm!\n"),
     ("result-option.nz", "49\n"),
     ("records-enums.nz", "75\n"),
     ("generics.nz", "131\n"),
@@ -43,6 +46,7 @@ fn nazm(args: &[&str], cwd: &Path) -> std::process::Output {
     Command::new(NAZM)
         .args(args)
         .current_dir(cwd)
+        .env_remove(nazm_lir::RESULT_VARIABLE)
         .output()
         .expect("run nazm")
 }
@@ -94,7 +98,10 @@ fn every_tour_program_checks_formats_runs_and_builds_alike_under_both_backends()
                 Some(0),
                 "build {file} ({backend}): {out:?}"
             );
-            let ran = Command::new(&exe).output().expect("run the executable");
+            let ran = Command::new(&exe)
+                .env_remove(nazm_lir::RESULT_VARIABLE)
+                .output()
+                .expect("run the executable");
             assert_eq!(ran.status.code(), Some(0), "{file} ({backend}): {ran:?}");
             assert_eq!(
                 String::from_utf8_lossy(&ran.stdout),
@@ -203,6 +210,7 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
         let out = Command::new("sh")
             .args(["-c", &command])
             .current_dir(scratch.path())
+            .env_remove(nazm_lir::RESULT_VARIABLE)
             .output()
             .expect("sh");
         let shows = format!(

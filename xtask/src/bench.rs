@@ -284,6 +284,11 @@ fn measure(
 }
 
 pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
+    // Every program here runs as a user runs it (R1, 5b.3): it prints its answer and ends with
+    // status 0. `cargo xtask` inherits `.cargo/config.toml`'s result report, which would add
+    // `main`'s `0` to what a program prints and to no reference's; it is removed before any
+    // program is started, and before any thread exists.
+    std::env::remove_var("NAZM_RESULT_REPORT");
     let root = crate::guide::root();
     let nazm = target_dir().join("release/nazm");
     if !nazm.exists() {

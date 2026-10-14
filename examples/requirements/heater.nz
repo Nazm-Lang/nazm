@@ -13,7 +13,9 @@ fn power(demand: Int) -> Int ! {}
 /// Above 80.0 degrees the heater trips.
 fn over(t: Int) -> Bool ! {} { t > 800 }
 
-fn main() -> Int ! {} { power(50) }
+fn main(out: OutCap) ! { io } {
+    println(power(50))
+}
 
 @test
 fn power_is_bounded() -> Result[Int, Str] {

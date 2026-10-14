@@ -14,11 +14,26 @@
 use std::process::Command;
 
 fn nazm(args: &[&str]) -> (String, String, i32) {
-    let out = Command::new(env!("CARGO_BIN_EXE_nazm"))
-        .args(args)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .expect("run nazm");
+    finish(
+        Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .args(args)
+            .current_dir(env!("CARGO_MANIFEST_DIR")),
+    )
+}
+
+/// `nazm run` of an example as a user runs it: without the result report the suite sets
+/// (R1, 5b.3), so what it prints is what it printed, and its status is `main`'s.
+fn run_as_user(name: &str) -> (String, String, i32) {
+    finish(
+        Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .args(["run", &example(name)])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .env_remove(nazm_lir::RESULT_VARIABLE),
+    )
+}
+
+fn finish(c: &mut Command) -> (String, String, i32) {
+    let out = c.output().expect("run nazm");
     (
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
@@ -33,8 +48,8 @@ fn example(name: &str) -> String {
 
 #[test]
 fn running_the_example_prints_its_value_and_exits_zero() {
-    let (stdout, _, code) = nazm(&["run", &example("max.nz")]);
-    assert_eq!(stdout.trim(), "25");
+    let (stdout, _, code) = run_as_user("max.nz");
+    assert_eq!(stdout, "25\n");
     assert_eq!(code, 0);
 }
 
@@ -193,8 +208,8 @@ fn one_mistake_produces_one_diagnostic() {
 
 #[test]
 fn recursion_runs_and_runaway_recursion_reports() {
-    let (stdout, _, code) = nazm(&["run", &example("search.nz")]);
-    assert_eq!(stdout.trim(), "1723", "17 * 23 = 391");
+    let (stdout, _, code) = run_as_user("search.nz");
+    assert_eq!(stdout, "1723\n", "17 * 23 = 391");
     assert_eq!(code, 0);
 
     // The iteration budget does not bound recursion: without its own guard this would
@@ -224,8 +239,8 @@ fn recursion_runs_and_runaway_recursion_reports() {
 
 #[test]
 fn loops_and_mutation_run() {
-    let (stdout, _, code) = nazm(&["run", &example("sum.nz")]);
-    assert_eq!(stdout.trim(), "6074");
+    let (stdout, _, code) = run_as_user("sum.nz");
+    assert_eq!(stdout, "6074\n");
     assert_eq!(code, 0);
 }
 
@@ -249,7 +264,7 @@ fn a_runaway_loop_reports_instead_of_hanging() {
 
 #[test]
 fn break_and_continue_run() {
-    let (stdout, _, code) = nazm(&["run", &example("primes.nz")]);
-    assert_eq!(stdout.trim(), "1060", "the sum of the primes below 100");
+    let (stdout, _, code) = run_as_user("primes.nz");
+    assert_eq!(stdout, "1060\n", "the sum of the primes below 100");
     assert_eq!(code, 0);
 }

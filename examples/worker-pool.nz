@@ -16,7 +16,7 @@ fn feeder(jobs: Chan) -> Int {
     0
 }
 
-fn main(tasks: SpawnCap) -> Int {
+fn main(out: OutCap, tasks: SpawnCap) -> Int {
     let jobs = chan_new(4);
     let results = chan_new(4);
     let buf = ints_new();
@@ -33,5 +33,6 @@ fn main(tasks: SpawnCap) -> Int {
         }
     }
     chan_close(results);
-    total
+    print(str_concat(int_to_str(total), "\n"));
+    0
 }

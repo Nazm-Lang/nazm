@@ -22,15 +22,15 @@ fn consume(jobs: Chan, out: Chan) -> Int {
     0
 }
 
-fn main(tasks: SpawnCap) -> Int {
+fn main(tasks: SpawnCap) {
     let jobs = chan_new(1);
-    let out = chan_new(1);
+    let done = chan_new(1);
     scope {
-        spawn consume(jobs, out);
+        spawn consume(jobs, done);
         scope { spawn produce(jobs); }
         chan_close(jobs);
     }
     let buf = ints_new();
-    chan_recv(out, buf);
-    ints_pop(buf)
+    chan_recv(done, buf);
+    println(ints_pop(buf))
 }

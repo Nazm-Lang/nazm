@@ -24,6 +24,7 @@ fn double_n_times(start: Int, times: Int) -> Int {
     value
 }
 
-fn main() -> Int {
-    sum_to(100) + double_n_times(1, 10)
+fn main(out: OutCap) -> Int {
+    print(str_concat(int_to_str(sum_to(100) + double_n_times(1, 10)), "\n"));
+    0
 }

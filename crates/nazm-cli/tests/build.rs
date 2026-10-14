@@ -621,14 +621,16 @@ fn run_and_check_are_unchanged_by_the_new_subcommand() {
         ("examples/pipeline.nz", "42925"),
     ] {
         let path = root.join(file);
+        // As a user runs it (R1, 5b.3): each prints its answer and ends with status 0.
         let out = Command::new(NAZM)
             .args(["run", path.to_str().unwrap()])
+            .env_remove(nazm_lir::RESULT_VARIABLE)
             .output()
             .expect("run");
         assert_eq!(out.status.code(), Some(0), "{file}");
         assert_eq!(
-            String::from_utf8_lossy(&out.stdout).trim(),
-            expected,
+            String::from_utf8_lossy(&out.stdout),
+            format!("{expected}\n"),
             "{file}"
         );
 
@@ -4194,16 +4196,17 @@ fn the_spec_worker_pool_example_terminates_and_answers_ninety() {
          the program that is actually run."
     );
 
+    // It prints 90 (R1, 5b.3); the result report the suite sets adds `main`'s 0.
     let ran = interpret(&src);
     assert_eq!(ran.code, Some(0), "interpreted: {}", ran.stderr);
-    assert_eq!(ran.stdout.trim(), "90", "interpreted");
+    assert_eq!(ran.stdout.trim(), "90\n0", "interpreted");
 
     for opt in [0_u8, 2] {
         let built =
             build_at(&src, opt).unwrap_or_else(|r| panic!("-O{opt} did not compile: {}", r.stderr));
         let ran = run_exe(&built);
         assert_eq!(ran.code, Some(0), "-O{opt}: {}", ran.stderr);
-        assert_eq!(ran.stdout.trim(), "90", "-O{opt}");
+        assert_eq!(ran.stdout.trim(), "90\n0", "-O{opt}");
     }
 }
 

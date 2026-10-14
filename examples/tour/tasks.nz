@@ -15,7 +15,7 @@ fn squares(from: Int, to: Int, out: Chan) -> Int ! {} {
     0
 }
 
-fn main(tasks: SpawnCap) -> Int ! { spawn } {
+fn main(tasks: SpawnCap) ! { spawn, io } {
     let results = chan_new(2);
     scope {
         spawn squares(1, 5, results);
@@ -31,5 +31,5 @@ fn main(tasks: SpawnCap) -> Int ! { spawn } {
         }
         n = n + 1;
     }
-    total
+    println(total)
 }

@@ -2714,7 +2714,9 @@ fn main() {
 exit status, and this one is outside 0 to 255*, ending with status 2, as `exit_with` of one is. A
 `main` with no result type ends with `0`. Until R1 the result was printed in decimal on standard
 output and the status was `0`; set `NAZM_RESULT_REPORT` (to anything) and a program still does
-that — a report, as `NAZM_MEMORY_REPORT` is, which the tests read results by. On a board, which
+that — a report, as `NAZM_MEMORY_REPORT` is, which the tests read results by. `nazm test` runs
+every recorded-output case with it set, whatever its caller's environment, so a case's `.expected`
+is what the program prints and then `main`'s result, as every one was before R1. On a board, which
 has no exit status, the result is written as before.
 
 ### Packages — `nazm.toml`, `use "NAME:path"` and `nazm.lock`
@@ -2978,7 +2980,7 @@ fn feeder(jobs: Chan) -> Int {
     0
 }
 
-fn main(tasks: SpawnCap) -> Int {
+fn main(out: OutCap, tasks: SpawnCap) -> Int {
     let jobs = chan_new(4);
     let results = chan_new(4);
     let buf = ints_new();
@@ -2995,7 +2997,8 @@ fn main(tasks: SpawnCap) -> Int {
         }
     }
     chan_close(results);
-    total
+    print(str_concat(int_to_str(total), "\n"));
+    0
 }
 ```
 

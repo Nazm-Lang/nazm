@@ -3,7 +3,7 @@
 // `critical` refuse its `spawn`; `critical` and `cyber` also require a locked package build.
 fn worker(c: Chan, n: Int) -> Int ! {} { chan_send(c, n * n); 0 }
 
-fn main(t: SpawnCap) -> Int ! { spawn } {
+fn main(t: SpawnCap) ! { spawn, io } {
     let c = chan_new(4);
     let got = ints_new();
     scope {
@@ -12,5 +12,5 @@ fn main(t: SpawnCap) -> Int ! { spawn } {
     }
     chan_recv(c, got);
     chan_recv(c, got);
-    ints_get(got, 0) + ints_get(got, 1)
+    println(ints_get(got, 0) + ints_get(got, 1))
 }
