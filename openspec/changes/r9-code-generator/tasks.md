@@ -25,7 +25,13 @@
       (`corpus/` holds no program yet; the suite also runs `tests/compat/v1/trap/`, `bench/`,
       `examples/`, `crates/nazm-cli/tests/transfers/` and the generator's own
       `tests/programs/`: 106 agree, 0 differ, 0 refused)
-- [ ] 4.4 Stage B: the linear-scan allocator; the performance report against LLVM
+- [x] 4.4 Stage B: the linear-scan allocator; the performance report against LLVM
+      (`common.nz` `allocate`: intervals from block liveness, callee-saved registers only —
+      x19–x28, rbx/r12–r15 — so no call clobbers an allocated value. `tests/perf.sh`, aarch64,
+      best of five: fib 163 ms against LLVM -O0 164 and -O2 72; words over 2,000,000 words
+      816 against 725 and 201; bench/programs within 0.9–1.7× of -O0; every output agrees)
+- [ ] 4.5 Selection that reads and writes allocated registers in place of the scratch copies,
+      and caller-saved registers for values that cross no call
 
 ## 5. Line tables
 

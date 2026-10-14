@@ -179,3 +179,296 @@ pub fn add_reloc(c: Code, at: Int, kind: Int, sym: Int, pcrel: Int, len: Int) {
     ints_push(c.rel_pcrel, pcrel)
     ints_push(c.rel_len, len)
 }
+
+// ---------------------------------------------------------------------------------------------
+// Stage B (design D3): a linear scan over live intervals, into callee-saved registers only, so
+// a call never clobbers an allocated value and the selection's scratch and argument registers
+// stay its own. Names are a function's values (0..n) and then its variables (n..n + vars).
+
+/// The names an instruction reads.
+fn uses_of(x: Ins, n: Int, out: Ints) {
+    let op = x.op
+    if op == OP_LOC || op == OP_PARAM || op == OP_CONST || op == OP_ADDR || op == OP_SLOT {
+        return
+    }
+    if op == OP_GET {
+        ints_push(out, n + x.imm)
+        return
+    }
+    if x.a >= 0 { ints_push(out, x.a) }
+    if x.b >= 0 { ints_push(out, x.b) }
+    if x.c >= 0 { ints_push(out, x.c) }
+    if op == OP_CALL || op == OP_CALLI {
+        for v in x.args { ints_push(out, v) }
+    }
+}
+
+/// The names an instruction writes.
+fn defs_of(x: Ins, n: Int, out: Ints) {
+    if x.op == OP_SET {
+        ints_push(out, n + x.imm)
+        return
+    }
+    if x.op == OP_LOC { return }
+    if x.dst >= 0 { ints_push(out, x.dst) }
+    if x.dst2 >= 0 { ints_push(out, x.dst2) }
+}
+
+fn term_uses(t: Ins, out: Ints) {
+    if (t.op == T_BRANCH || t.op == T_SWITCH || t.op == T_RETURN) && t.a >= 0 { ints_push(out, t.a) }
+}
+
+fn succs(t: Ins, out: Ints) {
+    if t.op == T_JUMP {
+        ints_push(out, t.imm)
+    } else if t.op == T_BRANCH {
+        ints_push(out, t.imm)
+        ints_push(out, t.c)
+    } else if t.op == T_SWITCH {
+        let mut k = 1
+        while k < ints_len(t.args) {
+            ints_push(out, t.args[k])
+            k += 2
+        }
+        ints_push(out, t.imm)
+    }
+}
+
+fn bit_get(s: Ints, base: Int, i: Int) -> Bool {
+    ((s[base + (i >> 5)] >> (i & 31)) & 1) == 1
+}
+
+fn bit_set(s: Ints, base: Int, i: Int) {
+    let w = base + (i >> 5)
+    s[w] = s[w] | (1 << (i & 31))
+}
+
+/// Each name's register, as an index into `nregs` callee-saved registers, or -1 for its frame
+/// slot. A `bit` to `i64`, `ptr` or float value or variable may be allocated (all are held in
+/// a general register as bits); an `i128` never is.
+pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
+    let nv = ints_len(f.vars)
+    let names = n + nv
+    let loc = ints_new()
+    let mut i = 0
+    while i < names {
+        ints_push(loc, -1)
+        i += 1
+    }
+    let nb = ints_len(f.block_first)
+    if nregs == 0 || names == 0 || nb == 0 || f.terms.len() != nb { return loc }
+    let words = (names + 31) / 32
+    // Per block: what it reads before writing, what it writes; then live-in and live-out.
+    let use_s = ints_new()
+    let def_s = ints_new()
+    let live_in = ints_new()
+    let live_out = ints_new()
+    i = 0
+    while i < nb * words {
+        ints_push(use_s, 0)
+        ints_push(def_s, 0)
+        ints_push(live_in, 0)
+        ints_push(live_out, 0)
+        i += 1
+    }
+    let tmp = ints_new()
+    let mut b = 0
+    while b < nb {
+        let base = b * words
+        let mut k = f.block_first[b]
+        while k < f.block_end[b] {
+            let x = f.insts[k]
+            clear(tmp)
+            uses_of(x, n, tmp)
+            for v in tmp {
+                if v < names && !bit_get(def_s, base, v) { bit_set(use_s, base, v) }
+            }
+            clear(tmp)
+            defs_of(x, n, tmp)
+            for v in tmp {
+                if v < names { bit_set(def_s, base, v) }
+            }
+            k += 1
+        }
+        clear(tmp)
+        term_uses(f.terms[b], tmp)
+        for v in tmp {
+            if v < names && !bit_get(def_s, base, v) { bit_set(use_s, base, v) }
+        }
+        b += 1
+    }
+    let mut changed = true
+    while changed {
+        changed = false
+        b = nb - 1
+        while b >= 0 {
+            let base = b * words
+            clear(tmp)
+            succs(f.terms[b], tmp)
+            let mut w = 0
+            while w < words {
+                let mut o = 0
+                for s in tmp {
+                    if s >= 0 && s < nb { o = o | live_in[s * words + w] }
+                }
+                let inn = use_s[base + w] | (o & ~def_s[base + w])
+                if o != live_out[base + w] || inn != live_in[base + w] {
+                    live_out[base + w] = o
+                    live_in[base + w] = inn
+                    changed = true
+                }
+                w += 1
+            }
+            b -= 1
+        }
+    }
+    // Intervals over positions in block order: each block's start, one per instruction, its
+    // terminator. A name's interval spans every point it is defined, read, or live at a
+    // block's edge.
+    let start = ints_new()
+    let end = ints_new()
+    i = 0
+    while i < names {
+        ints_push(start, -1)
+        ints_push(end, -1)
+        i += 1
+    }
+    let mut pos = 0
+    b = 0
+    while b < nb {
+        let base = b * words
+        let first = pos
+        let mut k = f.block_first[b]
+        let mut p = pos + 1
+        while k < f.block_end[b] {
+            let x = f.insts[k]
+            clear(tmp)
+            uses_of(x, n, tmp)
+            defs_of(x, n, tmp)
+            for v in tmp {
+                if v < names {
+                    if start[v] < 0 || p < start[v] { start[v] = p }
+                    if p > end[v] { end[v] = p }
+                }
+            }
+            p += 1
+            k += 1
+        }
+        let last = p
+        clear(tmp)
+        term_uses(f.terms[b], tmp)
+        for v in tmp {
+            if v < names {
+                if start[v] < 0 || last < start[v] { start[v] = last }
+                if last > end[v] { end[v] = last }
+            }
+        }
+        let mut v = 0
+        while v < names {
+            if bit_get(live_in, base, v) {
+                if start[v] < 0 || first < start[v] { start[v] = first }
+                if first > end[v] { end[v] = first }
+            }
+            if bit_get(live_out, base, v) {
+                if start[v] < 0 || last < start[v] { start[v] = last }
+                if last > end[v] { end[v] = last }
+            }
+            v += 1
+        }
+        pos = last + 1
+        b += 1
+    }
+    // Names in order of their start (a counting sort over positions).
+    let count = ints_new()
+    i = 0
+    while i <= pos {
+        ints_push(count, 0)
+        i += 1
+    }
+    let order = ints_new()
+    i = 0
+    while i < names {
+        let c = if i < n { if i < ints_len(vcls) { vcls[i] } else { -1 } } else { f.vars[i - n] }
+        if start[i] >= 0 && c != C_I128 && c >= 0 { count[start[i]] = count[start[i]] + 1 }
+        ints_push(order, -1)
+        i += 1
+    }
+    let at = ints_new()
+    let mut sum = 0
+    i = 0
+    while i <= pos {
+        ints_push(at, sum)
+        sum += count[i]
+        i += 1
+    }
+    let sorted = ints_new()
+    i = 0
+    while i < sum {
+        ints_push(sorted, 0)
+        i += 1
+    }
+    i = 0
+    while i < names {
+        let c = if i < n { if i < ints_len(vcls) { vcls[i] } else { -1 } } else { f.vars[i - n] }
+        if start[i] >= 0 && c != C_I128 && c >= 0 {
+            sorted[at[start[i]]] = i
+            at[start[i]] = at[start[i]] + 1
+        }
+        i += 1
+    }
+    // The scan: free registers, and the active names holding them.
+    let holder = ints_new()
+    i = 0
+    while i < nregs {
+        ints_push(holder, -1)
+        i += 1
+    }
+    for v in sorted {
+        // Expire every active name that ended before this one starts.
+        let mut r = 0
+        while r < nregs {
+            let h = holder[r]
+            if h >= 0 && end[h] < start[v] { holder[r] = -1 }
+            r += 1
+        }
+        let mut free = -1
+        let mut furthest = -1
+        r = 0
+        while r < nregs {
+            if holder[r] < 0 && free < 0 { free = r }
+            if holder[r] >= 0 && (furthest < 0 || end[holder[r]] > end[holder[furthest]]) { furthest = r }
+            r += 1
+        }
+        if free >= 0 {
+            holder[free] = v
+            loc[v] = free
+        } else if end[holder[furthest]] > end[v] {
+            // The name that lives longest gives up its register, for its whole life.
+            loc[holder[furthest]] = -1
+            holder[furthest] = v
+            loc[v] = furthest
+        }
+    }
+    loc
+}
+
+/// Which registers of `nregs` an allocation uses.
+pub fn used_regs(loc: Ints, nregs: Int) -> Ints {
+    let used = ints_new()
+    let mut r = 0
+    while r < nregs {
+        let mut any = false
+        for l in loc {
+            if l == r { any = true }
+        }
+        if any { ints_push(used, r) }
+        r += 1
+    }
+    used
+}
+
+fn clear(xs: Ints) {
+    while ints_len(xs) > 0 {
+        let x = ints_pop(xs)
+    }
+}
