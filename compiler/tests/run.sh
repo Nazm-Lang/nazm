@@ -71,7 +71,7 @@ for mode in $modes; do
         timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
       check)
         { "$R2_NAZM" check --json --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep "^{" > "$want" || true
-        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" > "$got" 2>&1 || true ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;

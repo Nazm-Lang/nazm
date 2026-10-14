@@ -1,0 +1,315 @@
+// Following `use` from a root file to the whole compilation (R2, slice 3.1) — a port of
+// `crates/nazm-service/src/load.rs`.
+//
+// The root first, then its imports depth-first in source order, each file read once; a standard
+// module (`@std/name`) is the toolchain's copy, from the library directory; the core prelude is
+// last. Every file is held with the trailing newline a compilation's source map gives it, and a
+// diagnostic is published at its offset in the concatenation of them all, as the reference's
+// `SourceMap::global` does.
+//
+// Where it differs from the reference, and why: a file's identity is its **textually normalised**
+// path, not its canonical one — the runtime has no `realpath` — so one file reached through a
+// symbolic link under two names is read twice (`docs/bootstrap.md` records the same of
+// `module.nz`). Packages (`NAME:path` of a declared dependency, N46) and derives (R1c, L2) are
+// not carried yet: an import of a package is refused as the reference refuses one outside a
+// package, and a file is read as written.
+
+use "syntax.nz";
+use "diag.nz";
+
+pub struct Loaded {
+    // Per file, in load order: the name it is published under and its text, newline included.
+    names: Strs,
+    texts: Strs,
+    // Per file, whether it is a standard module.
+    standard: Ints,
+}
+
+// The standard modules, by name (`nazm-sema/src/stdlib.rs`, `MODULES`, in its order).
+fn std_names() -> Strs {
+    let s = strs_new();
+    strs_push(s, "args");
+    strs_push(s, "audit");
+    strs_push(s, "binary");
+    strs_push(s, "bitset");
+    strs_push(s, "blake3");
+    strs_push(s, "bytebuf");
+    strs_push(s, "chan");
+    strs_push(s, "deque");
+    strs_push(s, "dist");
+    strs_push(s, "env");
+    strs_push(s, "error");
+    strs_push(s, "file");
+    strs_push(s, "fmt");
+    strs_push(s, "fs");
+    strs_push(s, "hal");
+    strs_push(s, "hash");
+    strs_push(s, "hashmap");
+    strs_push(s, "hashset");
+    strs_push(s, "io");
+    strs_push(s, "ioerror");
+    strs_push(s, "json");
+    strs_push(s, "linalg");
+    strs_push(s, "log");
+    strs_push(s, "map");
+    strs_push(s, "net");
+    strs_push(s, "num");
+    strs_push(s, "option");
+    strs_push(s, "ordmap");
+    strs_push(s, "path");
+    strs_push(s, "process");
+    strs_push(s, "random");
+    strs_push(s, "regex");
+    strs_push(s, "result");
+    strs_push(s, "seq");
+    strs_push(s, "sha256");
+    strs_push(s, "show");
+    strs_push(s, "sort");
+    strs_push(s, "test");
+    strs_push(s, "text");
+    strs_push(s, "time");
+    strs_push(s, "toml");
+    s
+}
+
+fn starts_with(s: Str, prefix: Str) -> Bool {
+    if str_len(prefix) > str_len(s) { return false; }
+    str_slice(s, 0, str_len(prefix)) == prefix
+}
+
+fn contains(list: Strs, s: Str) -> Bool {
+    let mut i = 0;
+    while i < strs_len(list) {
+        if strs_get(list, i) == s { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn index_of(list: Strs, s: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(list) {
+        if strs_get(list, i) == s { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// The text with the trailing newline a source map gives a file that lacks one.
+pub fn ld_with_newline(text: Str) -> Str {
+    if str_len(text) == 0 { return "\n"; }
+    if str_byte(text, str_len(text) - 1) != 10 { return str_concat(text, "\n"); }
+    text
+}
+
+// `path`'s directory as `Path::parent` gives it: "" when there is none.
+fn parent(path: Str) -> Str {
+    let mut i = str_len(path);
+    while i > 0 {
+        if str_byte(path, i - 1) == 47 {
+            if i - 1 == 0 { return "/"; }
+            return str_slice(path, 0, i - 1);
+        }
+        i = i - 1;
+    }
+    ""
+}
+
+// `Path::join`: an absolute `rel` replaces `dir`; otherwise one `/` between them.
+fn join_path(dir: Str, rel: Str) -> Str {
+    if starts_with(rel, "/") { return rel; }
+    if dir == "" { return rel; }
+    if str_byte(dir, str_len(dir) - 1) == 47 { return str_concat(dir, rel); }
+    str_concat(str_concat(dir, "/"), rel)
+}
+
+// `.` and `..` folded away, so two spellings of one file are one identity. A leading `..` of a
+// relative path is kept.
+fn normalise(path: Str) -> Str {
+    let parts = strs_new();
+    let n = str_len(path);
+    let absolute = starts_with(path, "/");
+    let mut from = 0;
+    let mut i = 0;
+    while i <= n {
+        if i == n || str_byte(path, i) == 47 {
+            let seg = str_slice(path, from, i);
+            if seg == ".." {
+                let k = strs_len(parts);
+                if k > 0 && strs_get(parts, k - 1) != ".." {
+                    strs_pop(parts);
+                } else {
+                    if absolute == false { strs_push(parts, ".."); }
+                }
+            } else {
+                if seg != "" && seg != "." { strs_push(parts, seg); }
+            }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    let body = str_join(parts, "/");
+    if absolute { return str_concat("/", body); }
+    body
+}
+
+// A diagnostic raised while loading, kept against the file it is in until every file's offset is
+// known.
+struct Pending {
+    file: Ints,
+    start: Ints,
+    end: Ints,
+    message: Strs,
+    help: Strs,
+    code: Strs,
+}
+
+fn pend(p: Pending, code: Str, file: Int, start: Int, end: Int, message: Str, help: Str) -> Int {
+    strs_push(p.code, code);
+    ints_push(p.file, file);
+    ints_push(p.start, start);
+    ints_push(p.end, end);
+    strs_push(p.message, message);
+    strs_push(p.help, help);
+    0
+}
+
+// Read `root` and everything it imports, the standard modules from `library/std` and the core
+// prelude from `library/core/prelude.nz`. Every loading error goes to `d`, published at its
+// global offset; the compilation is loaded even then, as far as it could be.
+pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
+    let names = strs_new();
+    let texts = strs_new();
+    let standard = ints_new();
+    let identities = strs_new();
+    let pending = Pending(file: ints_new(), start: ints_new(), end: ints_new(), message: strs_new(), help: strs_new(), code: strs_new());
+    let stds = std_names();
+    // The stack: each entry a path, and whether it is a standard module (its name then).
+    let stack = strs_new();
+    let stack_std = ints_new();
+    strs_push(stack, root);
+    ints_push(stack_std, 0);
+    while strs_len(stack) > 0 {
+        let path = strs_pop(stack);
+        let is_std = ints_pop(stack_std) == 1;
+        let mut identity = normalise(path);
+        let mut name = path;
+        if is_std {
+            identity = str_concat(str_concat("@std/", path), ".nz");
+            name = identity;
+        }
+        if contains(identities, identity) { continue; }
+        let id = strs_len(names);
+        let mut file = path;
+        if is_std { file = str_concat(str_concat(str_concat(library, "/std/"), path), ".nz"); }
+        if file_exists(file) == false {
+            strs_push(identities, identity);
+            strs_push(names, name);
+            strs_push(texts, "\n");
+            ints_push(standard, 0);
+            pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), "No such file or directory (os error 2)");
+            continue;
+        }
+        let text = read_file(file);
+        // Parsed for its imports only; its diagnostics are the caller's, from its own parse.
+        let t = sx_tree();
+        let scratch = dg_new();
+        let program = sx_parse_source(text, t, scratch);
+        let imports = sx_items(t, sx_field(t, program, "imports"));
+        let dir = parent(path);
+        let children = strs_new();
+        let children_std = ints_new();
+        let mut i = 0;
+        while i < ints_len(imports) {
+            let imp = ints_get(imports, i);
+            let ipath = sx_name(t, imp, "path");
+            let span = sx_field(t, imp, "path_span");
+            let s = sx_s(t, span);
+            let e = sx_e(t, span);
+            i = i + 1;
+            if starts_with(ipath, "@std/") {
+                let sname = str_slice(ipath, 5, str_len(ipath));
+                if contains(stds, sname) {
+                    strs_push(children, sname);
+                    ints_push(children_std, 1);
+                } else {
+                    let known = strs_new();
+                    let mut k = 0;
+                    while k < strs_len(stds) {
+                        strs_push(known, str_concat(str_concat("`@std/", strs_get(stds, k)), "`"));
+                        k = k + 1;
+                    }
+                    pend(pending, "N0205", id, s, e, str_concat(str_concat("there is no standard module `", ipath), "`"),
+                            str_concat("a path beginning with `@std/` names a module the toolchain provides; the standard modules are ", str_join(known, ", ")));
+                }
+                continue;
+            }
+            if is_std {
+                pend(pending, "N0205", id, s, e, str_concat(str_concat("a standard module cannot import `", ipath), "`"), "");
+                continue;
+            }
+            let colon = index_of_byte(ipath, 58);
+            if colon >= 0 {
+                let pkg = str_slice(ipath, 0, colon);
+                pend(pending, "N0508", id, s, e, str_concat(str_concat("`", pkg), ":` names a package, and this compilation is not a package's"),
+                        "a package is a directory holding `nazm.toml`; build it by naming its directory");
+                continue;
+            }
+            let target = join_path(dir, ipath);
+            if file_exists(target) {
+                strs_push(children, target);
+                ints_push(children_std, 0);
+            } else {
+                pend(pending, "N0205", id, s, e, str_concat(str_concat("cannot find `", ipath), "`"),
+                        str_concat(str_concat("looked for `", target), "`, relative to the importing file"));
+            }
+        }
+        // Pushed in reverse, so they are read in source order.
+        let mut c = strs_len(children) - 1;
+        while c >= 0 {
+            strs_push(stack, strs_get(children, c));
+            ints_push(stack_std, ints_get(children_std, c));
+            c = c - 1;
+        }
+        strs_push(identities, identity);
+        strs_push(names, name);
+        strs_push(texts, ld_with_newline(text));
+        if is_std { ints_push(standard, 1); } else { ints_push(standard, 0); }
+    }
+    // The core prelude, last.
+    strs_push(names, "@core/prelude.nz");
+    strs_push(texts, ld_with_newline(read_file(str_concat(library, "/core/prelude.nz"))));
+    ints_push(standard, 1);
+    let loaded = Loaded(names: names, texts: texts, standard: standard);
+    let mut k = 0;
+    while k < strs_len(pending.code) {
+        let base = ld_base(loaded, ints_get(pending.file, k));
+        dg_error(d, strs_get(pending.code, k), base + ints_get(pending.start, k), base + ints_get(pending.end, k),
+                strs_get(pending.message, k), "", strs_get(pending.help, k));
+        k = k + 1;
+    }
+    loaded
+}
+
+fn index_of_byte(s: Str, b: Int) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == b { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
+pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
+
+// Where file `i` begins in the concatenation of the compilation's files.
+pub fn ld_base(l: Loaded, i: Int) -> Int {
+    let mut base = 0;
+    let mut k = 0;
+    while k < i {
+        base = base + str_len(strs_get(l.texts, k));
+        k = k + 1;
+    }
+    base
+}
