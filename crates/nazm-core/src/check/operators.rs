@@ -413,6 +413,7 @@ impl Checker<'_> {
         expected: Option<Type>,
     ) -> Type {
         let shift = matches!(op, BinOp::Shl | BinOp::Shr);
+        let before = self.errors.len();
         let hint = if op.is_comparison() || op.is_logical() {
             None
         } else {
@@ -441,6 +442,25 @@ impl Checker<'_> {
         };
         if shift {
             self.refuse_constant_shift(lt, rhs);
+        }
+        // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, checked as that call and keyed by
+        // the `+`, which Core IR lowering reads as the call — unless an operand was refused.
+        if op == BinOp::Add && lt == Type::Str && rt == Type::Str && self.errors.len() == before {
+            let call = Expr::Call {
+                qualifier: None,
+                callee: "str_concat".to_owned(),
+                callee_span: op_span,
+                type_args: None,
+                args: vec![lhs.clone(), rhs.clone()],
+                span: lhs.span().join(rhs.span()),
+            };
+            if self.env.get("str_concat").is_some() {
+                self.res.record_named_method(op_span);
+                return match self.check_expr(&call, expected) {
+                    Completion::Value(t) => t,
+                    Completion::Unit | Completion::Diverges => Type::Str,
+                };
+            }
         }
         self.check_binary(
             &BinaryCheck {
