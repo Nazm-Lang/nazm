@@ -11382,8 +11382,8 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_cycle_a
 name = "n63-the-board-reuses-objects"
 why = "a board build reads cached objects, which report no frame sizes, so its stack bound is computed from nothing"
 file = "crates/nazm-cli/src/build/objects.rs"
-find = '        .filter(|_| !freestanding)'
-replace = '        .filter(|_| true)'
+find = '    let usable = backend.settled().filter(|_| !freestanding).is_some();'
+replace = '    let usable = backend.settled().filter(|_| true).is_some();'
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "realtime::a_board_build_states_its_stack_bound_with_the_path" }]
 
 [[mutation]]
@@ -19450,3 +19450,27 @@ file = "crates/nazm-core/src/provenance.rs"
 find = "                        Some(_) if f.name.is_empty() => Shaped::whole(v.flow.clone()),"
 replace = "                        Some(_) if f.name.is_empty() => Shaped::default(),"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_secret_bound_by_position_is_still_a_secret" }]
+
+[[mutation]]
+name = "r1-5-a-shared-unit-is-filed-with-the-project"
+why = "the runtime's and the standard library's objects are kept in each project's `.nazm/`, never in the user cache, so every new project compiles them again"
+file = "crates/nazm-cli/src/build/stores.rs"
+find = "            self.user.as_ref().or(self.project.as_ref())"
+replace = "            self.project.as_ref()"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "user_cache::a_second_project_reuses_the_runtime_and_the_standard_library_from_the_user_cache" }]
+
+[[mutation]]
+name = "r1-5-a-standard-module-is-the-programs"
+why = "a standard module's own unit is taken for the program's, so it is filed in the project and compiled once per project"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "                            .is_some_and(|k| k.is_std() || k.is_prelude())"
+replace = "                            .is_some_and(|k| k.is_prelude())"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "user_cache::a_second_project_reuses_the_runtime_and_the_standard_library_from_the_user_cache" }]
+
+[[mutation]]
+name = "r1-5-an-empty-user-cache-variable-is-a-directory"
+why = "an empty `NAZM_USER_CACHE_DIR` names the working directory rather than turning the user cache off, so objects are written beside the sources"
+file = "crates/nazm-cli/src/derived.rs"
+find = "        return (!dir.is_empty()).then(|| PathBuf::from(dir));"
+replace = "        return Some(PathBuf::from(dir));"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "user_cache::the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it" }]

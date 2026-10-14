@@ -97,7 +97,15 @@ than being silently ignored, and a signal ends `run` with `128 +` its number.
 cache directory (`~/Library/Caches/nazm` on macOS, `$XDG_CACHE_HOME/nazm` elsewhere, or
 `NAZM_CACHE_DIR`'s), keyed by its content digest, and linked from there; `@std` units' objects are
 cached there too, by the same keys the project store uses. A project's own objects stay in its
-`.nazm/`. Deleting the cache changes no program.
+`.nazm/`. Deleting the cache changes no program. *Taken while the copyright holder was away
+(2026-10-15):* the runtime's text is specialised to the services a program reaches (N82), so the
+cache holds one object per distinct runtime text, keyed by the existing `nazm.object/1` key over its
+exact bytes, the compiler's identity and its resolved configuration — never the whole-runtime
+archive `nazm runtime build` makes, whose thread-local failure state would make a cached build a
+different executable from an uncached one; `NAZM_USER_CACHE_DIR` names the user cache on its own
+(empty turns it off, and `.cargo/config.toml` turns it off for every cargo-started test, so no test
+writes to a real user cache), and objects are copied out of the cache into the build's working
+directory rather than linked in place, since an entry is a header followed by the object.
 
 **D13 — word frequency (3.1–3.5).** A size-class allocator in the runtime for blocks up to 512 bytes
 (per-thread free lists, falling back to `malloc`); a native string-hash built-in that computes

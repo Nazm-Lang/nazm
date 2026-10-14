@@ -14,7 +14,7 @@ pub(super) fn lowered(
     target: &nazm_lir::backend::Target,
     freestanding: bool,
     chosen: &(dyn nazm_lir::backend::Backend + Sync),
-    clif_store: &Option<ObjectStore>,
+    clif_store: &Stores,
     clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
     clock: &Clock,
     heap_limit: Option<u64>,
@@ -136,15 +136,31 @@ pub(super) fn lowered(
                 })
                 .collect();
             exported.sort_by(|a, b| a.0.cmp(&b.0));
-            let cached = |k: &str| match clif_store.as_ref().map(|s| s.get(&clif_key(k))) {
+            let cached = |k: &str, shared: bool| match clif_store
+                .for_unit(shared)
+                .map(|s| s.get(&clif_key(k)))
+            {
                 Some(ObjectFound::Hit(bytes)) => Some(bytes),
                 _ => None,
             };
+            // Which units every project shares (R1.5, D12): a standard or prelude module's own
+            // unit. A generic instance is the program's, since its type arguments are.
+            let shared: Vec<bool> = nazm_lir::backend::units(&native)
+                .iter()
+                .map(|(_, u, instance)| {
+                    !instance
+                        && loaded
+                            .graph
+                            .key(u.module)
+                            .is_some_and(|k| k.is_std() || k.is_prelude())
+                })
+                .collect();
             let made = emit_artefacts(
                 &native,
                 &names,
                 chosen,
                 &cached,
+                &shared,
                 choice.library,
                 freestanding.then_some(Freestanding {
                     unhosted: &mut unhosted,
@@ -289,6 +305,9 @@ pub(super) struct Artefact {
     pub(super) key: Option<String>,
     /// Whether the object came from the store under that key rather than being generated.
     pub(super) reused: bool,
+    /// Whether every project shares this unit (R1.5, D12): the runtime's, and a standard or
+    /// prelude module's own. Its object is filed in the user cache.
+    pub(super) shared: bool,
 }
 
 /// Whether `code` is a refusal only a native build makes, of a program the interpreter runs: the
@@ -328,7 +347,8 @@ fn emit_artefacts(
     native: &nazm_lir::Native,
     names: &nazm_lir::SourceNames<'_>,
     backend: &dyn nazm_lir::backend::Backend,
-    cached: &dyn Fn(&str) -> Option<Vec<u8>>,
+    cached: &dyn Fn(&str, bool) -> Option<Vec<u8>>,
+    shared_units: &[bool],
     library: bool,
     freestanding: Option<Freestanding<'_>>,
     prebuilt: bool,
@@ -344,13 +364,15 @@ fn emit_artefacts(
     // requested by two modules is one object, and a module's object does not change when
     // another module starts instantiating something. `docs/architecture.md` §7.12.
     for (i, plan) in backend.plan(native, names).into_iter().enumerate() {
-        if let Some(bytes) = plan.key.as_deref().and_then(cached) {
+        let shared = shared_units.get(i).copied().unwrap_or(false);
+        if let Some(bytes) = plan.key.as_deref().and_then(|k| cached(k, shared)) {
             out.push(Artefact {
                 name: plan.name,
                 code: nazm_lir::backend::Code::Object(bytes),
                 instance: plan.instance,
                 key: plan.key,
                 reused: true,
+                shared,
             });
             continue;
         }
@@ -363,6 +385,7 @@ fn emit_artefacts(
                     instance: plan.instance,
                     key: plan.key,
                     reused: false,
+                    shared,
                 });
             }
             Err(mut e) => errors.append(&mut e),
@@ -453,6 +476,7 @@ fn emit_artefacts(
                 instance: false,
                 key: None,
                 reused: false,
+                shared: true,
             });
         }
         if !library {
@@ -482,6 +506,7 @@ fn emit_artefacts(
                 instance: false,
                 key: None,
                 reused: false,
+                shared: false,
             });
         }
         return Ok(out);
@@ -501,6 +526,7 @@ fn emit_artefacts(
             instance: false,
             key: None,
             reused: false,
+            shared: true,
         });
         // The task pool's context switch (N83, §7.84), for this target, wherever the runtime
         // has tasks or channels.
@@ -513,6 +539,7 @@ fn emit_artefacts(
                     instance: false,
                     key: None,
                     reused: false,
+                    shared: true,
                 });
             }
         }
@@ -525,6 +552,7 @@ fn emit_artefacts(
                     instance: false,
                     key: None,
                     reused: false,
+                    shared: true,
                 });
             }
         }
@@ -538,6 +566,7 @@ fn emit_artefacts(
                     instance: false,
                     key: None,
                     reused: false,
+                    shared: true,
                 });
             }
         }
@@ -550,6 +579,7 @@ fn emit_artefacts(
                     instance: false,
                     key: None,
                     reused: false,
+                    shared: true,
                 });
             }
         }
@@ -562,6 +592,7 @@ fn emit_artefacts(
                     instance: false,
                     key: None,
                     reused: false,
+                    shared: true,
                 });
             }
         }
@@ -581,6 +612,7 @@ fn emit_artefacts(
             instance: false,
             key: None,
             reused: false,
+            shared: true,
         });
     }
     // A library has no process entry: C's `main` is the caller's (N55).
@@ -615,6 +647,7 @@ fn emit_artefacts(
         instance: false,
         key: None,
         reused: false,
+        shared: false,
     });
     Ok(out)
 }

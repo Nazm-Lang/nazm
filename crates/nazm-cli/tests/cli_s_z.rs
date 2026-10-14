@@ -49,6 +49,7 @@ mod trace;
 mod traits;
 mod tuples;
 mod usability;
+mod user_cache;
 mod user_tests;
 mod value_blocks;
 mod visibility;
