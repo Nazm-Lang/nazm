@@ -55,3 +55,39 @@ pub fn render(code: Str, message: Str, help: Str, file: Str, text: Str, lo: Int,
     }
     out
 }
+
+/// `s` as a JSON string, escaped as `serde_json` escapes it.
+fn quote(s: Str) -> Str {
+    let mut out = "\""
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b == 34 {
+            out = out + "\\\""
+        } else if b == 92 {
+            out = out + "\\\\"
+        } else if b == 10 {
+            out = out + "\\n"
+        } else if b == 13 {
+            out = out + "\\r"
+        } else if b == 9 {
+            out = out + "\\t"
+        } else if b == 8 {
+            out = out + "\\b"
+        } else if b == 12 {
+            out = out + "\\f"
+        } else if b < 32 {
+            let hexits = "0123456789abcdef"
+            out = out + "\\u00" + str_slice(hexits, b / 16, b / 16 + 1) + str_slice(hexits, b % 16, b % 16 + 1)
+        } else {
+            out = out + str_slice(s, i, i + 1)
+        }
+    }
+    out + "\""
+}
+
+/// One `nazm.diagnostic/1` object (`Diagnostic::to_json`), without its newline.
+pub fn render_json(code: Str, message: Str, help: Str, lo: Int, hi: Int) -> Str {
+    let m = quote(message)
+    let h = if help == "" { "null" } else { quote(help) }
+    f"{{\"schema\":\"nazm.diagnostic/1\",\"code\":\"{code}\",\"severity\":\"error\",\"message\":{m},\"primary\":{{\"span\":{{\"start\":{lo},\"end\":{hi}}},\"message\":{m}}},\"secondary\":[],\"help\":{h},\"fixes\":[]}}"
+}

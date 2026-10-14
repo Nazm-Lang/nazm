@@ -1,6 +1,7 @@
 // `interp`: the Nazm interpreter written in Nazm (R4, `openspec/changes/r4-interpreter/`).
 //
-//     interp [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report]
+//     interp [--json] [--std DIR] [--max-iterations N] [--max-depth N] [--memory-report]
+//            [--sched-report] [--result-report]
 //            CORE_IR.json ROOT.nz [-- ARGS...]
 //
 // Runs the checked program whose Core IR `nazm core-ir --json ROOT.nz` printed, as `nazm run ROOT.nz
@@ -20,7 +21,7 @@ use "diag.nz"
 use "sched.nz"
 
 fn usage(out: OutCap) -> Int {
-    eprint("usage: interp [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
+    eprint("usage: interp [--json] [--std DIR] [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
     64
 }
 
@@ -53,14 +54,49 @@ fn module_of(key: Str) -> Str {
 }
 
 /// The failure, as `nazm run` writes it.
-fn report(out: OutCap, io: IoCap, p: Prog, vm: Vm, root: Str) {
+/// The failure, as `nazm run` writes it: rendered, or with `--json` one `nazm.diagnostic/1` line.
+///
+/// The root module is the file as the user named it; another of the program's modules is its key
+/// beside the root; a library module (`@std/seq`) is its key with `.nz`, read from `std` — the
+/// library the Rust toolchain embeds.
+fn report(out: OutCap, io: IoCap, p: Prog, vm: Vm, root: Str, std: Str, json: Bool) {
     let m = ints_get(vm.errat, 0)
     let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
     let root_key = module_of(strs_get(p.fkey, p.entry))
-    let file = if key == root_key { root } else { dir_of(root) + key }
-    let text = if file_exists(file) { read_file(file) } else { "" }
-    eprint(render(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), file, text,
-            ints_get(vm.errat, 1), ints_get(vm.errat, 2)))
+    let file = display(key, root_key, root)
+    let text = source(io, key, root_key, root, std)
+    let lo = ints_get(vm.errat, 1)
+    let hi = ints_get(vm.errat, 2)
+    if json {
+        // Offsets into the concatenation of every file, as `SourceMap::global` gives them: the
+        // files in the order they were loaded, which is the order the Core IR's functions first
+        // name their modules in — a module with no function is not counted (`design.md`).
+        let mut base = 0
+        for i in 0..strs_len(p.morder) {
+            let k = strs_get(p.morder, i)
+            if k == key { break }
+            base += str_len(source(io, k, root_key, root, std))
+        }
+        eprint(render_json(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), base + lo, base + hi) + "\n")
+    } else {
+        eprint(render(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), file, text, lo, hi))
+    }
+}
+
+/// The name a module's file goes by: the root as the user named it, another of the program's
+/// modules its key beside the root, a library module (`@std/seq`) its key with `.nz`.
+fn display(key: Str, root_key: Str, root: Str) -> Str {
+    if key == root_key { root } else if str_len(key) > 0 && str_byte(key, 0) == 64 { key + ".nz" } else { dir_of(root) + key }
+}
+
+/// A module's text: a library module's from `std`, the library the Rust toolchain embeds.
+fn source(io: IoCap, key: Str, root_key: Str, root: Str, std: Str) -> Str {
+    let path = if str_len(key) > 0 && str_byte(key, 0) == 64 {
+        std + "/" + str_slice(key, 1, str_len(key)) + ".nz"
+    } else {
+        display(key, root_key, root)
+    }
+    if file_exists(path) { read_file(path) } else { "" }
 }
 
 /// The memory report's line (`interpret.rs`): allocated, reclaimed and live per class.
@@ -97,6 +133,8 @@ fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rn
     let mut memory = false
     let mut result_report = false
     let mut sched_report = false
+    let mut json = false
+    let mut std = "library"
     while i < args_count() {
         let a = arg(i)
         if rest {
@@ -105,6 +143,11 @@ fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rn
             rest = true
         } else if a == "--memory-report" {
             memory = true
+        } else if a == "--json" {
+            json = true
+        } else if a == "--std" && i + 1 < args_count() {
+            std = arg(i + 1)
+            i += 1
         } else if a == "--sched-report" {
             sched_report = true
         } else if a == "--result-report" {
@@ -155,7 +198,7 @@ fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rn
     }
     let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
     if failed(vm) {
-        report(out, io, p, vm, root)
+        report(out, io, p, vm, root, std, json)
         return 2
     }
     if result_report {

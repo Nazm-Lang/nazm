@@ -48,20 +48,28 @@ for path in $cases; do
         unchecked=$((unchecked + 1))
         continue
     fi
-    for mode in plain reports; do
+    # Plainly; with the reports; and, for a program that fails at run time, with `--json`.
+    modes="plain reports"
+    while [ -n "$modes" ]; do
+        mode=${modes%% *}
+        if [ "$mode" = "$modes" ]; then modes=""; else modes=${modes#* }; fi
         # The interpreter takes the reports as flags: as a compiled Nazm program, its own runtime
         # would answer the variables about itself (main.nz).
+        json=""
         if [ "$mode" = reports ]; then
             set -- env NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 NAZM_RESULT_REPORT=1
             flags="--memory-report --sched-report --result-report"
         else
             set -- env
             flags=""
+            [ "$mode" = json ] && json="--json"
         fi
-        (cd "$dir" && bounded "$@" "$NAZM" run "$file" </dev/null >"$work/rust.out" 2>"$work/rust.err")
+        (cd "$dir" && bounded "$@" "$NAZM" run $json "$file" </dev/null >"$work/rust.out" 2>"$work/rust.err")
         rust=$?
-        (cd "$dir" && bounded "$work/interp" $flags "$work/ir.json" "$file" </dev/null >"$work/nazm.out" 2>"$work/nazm.err")
+        (cd "$dir" && bounded "$work/interp" $json $flags --std "$repo/library" "$work/ir.json" "$file" \
+            </dev/null >"$work/nazm.out" 2>"$work/nazm.err")
         nazm=$?
+        [ "$mode" = plain ] && [ "$rust" = 2 ] && modes="$modes json"
         what=""
         cmp -s "$work/rust.out" "$work/nazm.out" || what="$what stdout"
         cmp -s "$work/rust.err" "$work/nazm.err" || what="$what stderr"
