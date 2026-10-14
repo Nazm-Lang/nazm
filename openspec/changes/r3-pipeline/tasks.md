@@ -28,8 +28,15 @@
 
 ## 5. The MIR validator
 
-- [ ] 5.1 Structure and typing
-- [ ] 5.2 The ownership dataflow
+- [x] 5.1 Structure and typing — all of Rust's checks but a primitive's argument and result types
+      (the built-ins' signature table is the checker's; to be shared with R2) and the signatures of
+      function values and arrays (spelled `?` in Core IR /2)
+- [x] 5.2 The ownership dataflow, as Rust's: empty, owned or either per tracked local, joined by
+      union, source blocks first
+- [x] 5.3 `pipeline mutants`: five kinds of breakage (a drop removed from a source block, a
+      failure edge removed, a jump past the last block, a return of another type, a parameter
+      moved), the first place each fits in every function: 6317 made over the inputs, all caught;
+      `pipeline mir` prints only what the validator accepted, as `nazm mir` does
 
 ## 6. LIR
 

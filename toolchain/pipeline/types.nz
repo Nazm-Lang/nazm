@@ -436,3 +436,11 @@ fn walk(c: Cir, tt: TypeTable, f: CirFn, n: Int) {
         }
     }
 }
+
+/// How many variants an enum has, as its `match`es list them, or -1 when no `match` showed it.
+pub fn variant_count(tt: TypeTable, enum_ty: Str) -> Int ! {} {
+    match hashmap_get(tt.variants, spell(enum_ty).head) {
+        Some(vs) => strs_len(vs),
+        None => 0 - 1,
+    }
+}
