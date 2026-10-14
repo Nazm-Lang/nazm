@@ -1,0 +1,46 @@
+// The parser's comparison driver (R2, `openspec/changes/r2-front-end/design.md`, D3).
+//
+// Usage: tree FILE
+// Output: the file's syntax tree as the reference parser's `{:#?}` prints it, spans written
+// `start..end`, then every lexing and parsing diagnostic, `error CODE start end message`. It is
+// what `compiler/tests/refdump tree` prints for the reference, byte for byte, when they agree.
+
+use "syntax.nz";
+use "lex.nz";
+
+fn main(io: IoCap) -> Int {
+    if args_count() < 1 {
+        eprint("usage: tree FILE\n");
+        exit_with(2);
+    }
+    let path = arg(0);
+    if file_exists(path) == false {
+        eprint(str_concat(str_concat("cannot read ", path), "\n"));
+        exit_with(2);
+    }
+    let src = read_file(path);
+    let t = sx_tree();
+    let dc = strs_new();
+    let ds = ints_new();
+    let de = ints_new();
+    let dm = strs_new();
+    let program = sx_parse_source(src, t, dc, ds, de, dm);
+    let out = strs_new();
+    sx_print(t, program, 0, out, strs_new());
+    strs_push(out, "\n");
+    let mut i = 0;
+    while i < strs_len(dc) {
+        strs_push(out, "error ");
+        strs_push(out, strs_get(dc, i));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(ds, i)));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(de, i)));
+        strs_push(out, " ");
+        strs_push(out, lex_esc(strs_get(dm, i)));
+        strs_push(out, "\n");
+        i = i + 1;
+    }
+    print(str_join(out, ""));
+    0
+}

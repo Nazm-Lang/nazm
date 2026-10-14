@@ -1,0 +1,44 @@
+use "a.nz";
+use "b.nz" as b;
+pub use "c.nz";
+pub use "d.nz" { one, two as three, };
+@test
+@cfg(feature = "x")
+@section(".data", all(unix, not(windows)), key = "v")
+pub fn tested() -> Int { 0 }
+pub const LIMIT: Int = 10;
+static COUNT: Atomic = atomic_new(0);
+const TABLE: [Int; 4] = [1, 2, 3, 4];
+extern "C" struct Handle;
+pub extern "C" struct Point { x: Int, y: Int, }
+extern "C" fn labs(x: Int) -> Int = "labs";
+extern "C" fn exported(x: Int) -> Int = "nz_exported" { x }
+pub struct Pair[A, B] { a: A, b: B, }
+struct Coded { @codec(rename = "id") id: Int, }
+enum Tree[T] { Leaf, Node(left: Int, @codec(skip) right: Int), }
+pub trait Show {
+    fn show(self: Self) -> Str;
+    fn twice(self: Self) -> Str ! {} { str_concat(self.show(), self.show()) }
+}
+impl Show for Int { fn show(self: Int) -> Str { int_to_str(self) } }
+impl[T: Show] Show for Option[T] {
+    fn show(self: Option[T]) -> Str { "opt" }
+}
+impl Point { fn area(self: Point) -> Int { self.x * self.y } }
+impl[T] Pair[T, T] { fn first(self: Pair[T, T]) -> T { self.a } }
+fn generic[T: Equality, effects E](f: fn(T) -> T ! {E}, x: T) -> T ! {E} { f(x) }
+fn contract(x: Int) -> Int requires x > 0 ensures result > 0 { x }
+fn nothing(x: Int) {
+    print(x);
+    if x > 0 { return }
+    return;
+}
+fn main() {
+    println("hi");
+    println();
+    eprintln(1);
+    print("s");
+    eprint(2);
+    let s = f"a {x:>4} b {y:.2} c";
+}
+fn main2(io: IoCap) -> Int { 0 }

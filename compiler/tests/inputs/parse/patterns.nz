@@ -1,0 +1,19 @@
+enum Shape { Circle(r: Int), Square(side: Int), Dot, }
+fn f(s: Shape, t: (Int, Int), n: Int) -> Int {
+    let a = match s {
+        Shape.Circle(r: 0) | Shape.Square(side: 0) => 1,
+        Shape.Circle(r: x) if x > 10 => x,
+        Shape.Square(side: _) => 2,
+        Shape.Dot => 3,
+        _ => 4,
+    };
+    let b = match t { (0, y) => y, (x, -1) => x, (_, _) => 0 };
+    let c = match n { 1 | 2 | 3 => 1, -5 => 2, 9223372036854775807 => 3, _ => 4 };
+    let d = match "s" { "a" => 1, _ => 0 };
+    let e = match true { true => 1, false => 0 };
+    let f = match Some(n) { Some(v) => v, None => 0 };
+    let g = match Ok(n) { Ok(v) => v, Err(e) => e };
+    let h = match m::E.V(x: 1) { m::E.V(x: q) => q, _ => 0 };
+    let ((i, j), k) = ((1, 2), 3);
+    a + b + c + d + e + f + g + h + i + j + k
+}
