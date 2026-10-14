@@ -93,6 +93,15 @@ digits with `_` removed (a hexadecimal, octal or binary literal converted to dec
 reference's value), a float's text with `_` removed, a string's decoded bytes, an interpolation's
 pieces in D2's form. Whether an integer fits `Int` is a separate kind, `IntTooLarge`, as in Rust.
 
+**D12 — Budgets are measured, not chased, in R2.** `compiler/tests/budget.sh` times the Nazm
+lexer and parser drivers (built by the reference at `-O0`, heap-limited) against the reference
+dumper on the three largest sources. First measurement (2026-10-15, this host): lexing
+`analyse.nz` (7.4k lines) 0.04 s and 24 MB against the reference's 0.02 s and 11 MB; lexing and
+parsing it and printing its tree 0.11 s and 65 MB, where the reference takes 1.01 s and 66 MB — but
+the reference's time there is almost all Rust's `{:#?}` and the span compaction, so only the lexing
+row compares like with like. The budgets `rewrite-in-nazm` 1.4 asks for are set from these when
+the checker exists to measure (3.3).
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
