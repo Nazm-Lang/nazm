@@ -1,0 +1,180 @@
+// The outside world (Gate 2, R1d; `crates/nazm-core/src/eval/os.rs`, `process.rs`, `net.rs`):
+// files and directories, standard streams, the environment, processes, sockets, randomness and
+// atomics. Each is the same built-in of the language this interpreter is written in — the
+// specification gives both the same statuses and answers, and the differential tests hold the
+// native runtime to the Rust interpreter — run with the interpreter's own capabilities: the
+// program's authority was proved by the checker, and the interpreter only exercises it
+// (`design.md`, D10). Every `Str` answered is a new allocation, counted, as in Rust.
+
+use "types.nz"
+use "heap.nz"
+use "names.nz"
+use "vm.nz"
+
+fn argo(vm: Vm, n: Int, i: Int) -> V {
+    vec_get(vm.ops, vec_len(vm.ops) - n + i)
+}
+
+fn i_of(v: V) -> Int {
+    match v {
+        V.Int(v: x) => x,
+        _ => 0,
+    }
+}
+
+fn s_of(v: V) -> Str {
+    match v {
+        V.Str(s: x, obj: o, start: st) => x,
+        _ => "",
+    }
+}
+
+fn b_of(v: V) -> Bytes {
+    match v {
+        V.Byt(b: x, obj: o) => x,
+        _ => bytes_new(0),
+    }
+}
+
+fn h_of(io: IoCap, v: V) -> OsHandle {
+    match v {
+        V.Osh(h: x) => x,
+        _ => os_stdin(),
+    }
+}
+
+fn a_of(v: V) -> Atomic {
+    match v {
+        V.Atm(a: x) => x,
+        _ => atomic_new(0),
+    }
+}
+
+/// A `Strs` the program holds, as the host's.
+fn strs_of(h: Heap, v: V) -> Strs {
+    let out = strs_new()
+    match v {
+        V.Ref(obj: o) => {
+            for x in items(h, o) { strs_push(out, s_of(x)) }
+        },
+        _ => { },
+    }
+    out
+}
+
+/// An OS built-in on the top `n` operands.
+pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> V {
+    let h = vm.heap
+    if op == B_OS_OPEN_READ { return V.Osh(h: os_open_read(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_OPEN_WRITE { return V.Osh(h: os_open_write(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_DIR_OPEN { return V.Osh(h: os_dir_open(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_STDIN { return V.Osh(h: os_stdin()) }
+    if op == B_OS_STDOUT { return V.Osh(h: os_stdout()) }
+    if op == B_OS_STDERR { return V.Osh(h: os_stderr()) }
+    if op == B_OS_STATUS { return V.Int(v: os_status(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_READ { return V.Int(v: os_read(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_READ_LINE { return V.Int(v: os_read_line(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_WRITE { return V.Int(v: os_write(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_SEEK { return V.Int(v: os_seek(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)), i_of(argo(vm, n, 2)))) }
+    if op == B_OS_SYNC { return V.Int(v: os_sync(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_CLOSE { return V.Int(v: os_close(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_DIR_NEXT { return V.Int(v: os_dir_next(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_STAT || op == B_OS_LSTAT {
+        let out = b_of(argo(vm, n, 1))
+        let wants = if op == B_OS_LSTAT { 48 } else { 32 }
+        let len = bytes_len(out)
+        if len < wants {
+            let name = strs_get(builtin_names(), op)
+            return fail(p, vm, pc, "N0405", "this buffer is too short for the answer",
+                    f"`{name}` writes {wants} bytes; this `Bytes` is {len} long")
+        }
+        let path = s_of(argo(vm, n, 0))
+        return V.Int(v: if op == B_OS_STAT { os_stat(path, out) } else { os_lstat(path, out) })
+    }
+    if op == B_OS_MKDIR { return V.Int(v: os_mkdir(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_RMDIR { return V.Int(v: os_rmdir(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_UNLINK { return V.Int(v: os_unlink(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_RENAME { return V.Int(v: os_rename(s_of(argo(vm, n, 0)), s_of(argo(vm, n, 1)))) }
+    if op == B_OS_CHMOD { return V.Int(v: os_chmod(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_REALPATH { return V.Int(v: os_realpath(s_of(argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_MKDTEMP { return heap_str(h, os_mkdtemp(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_FAMILY { return V.Int(v: os_family()) }
+    if op == B_OS_ERROR_TEXT { return heap_str(h, os_error_text(i_of(argo(vm, n, 0)))) }
+    if op == B_OS_ENV_GET { return heap_str(h, os_env_get(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_ENV_HAS { return V.Bool(v: os_env_has(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_ENV_COUNT { return V.Int(v: os_env_count()) }
+    if op == B_OS_ENV_AT {
+        let i = i_of(argo(vm, n, 0))
+        let count = os_env_count()
+        if i < 0 || i >= count {
+            return fail(p, vm, pc, "N0405", "this index is outside the environment", f"asked for entry {i} of {count}")
+        }
+        return heap_str(h, os_env_at(i))
+    }
+    if op == B_OS_PID { return V.Int(v: os_pid()) }
+    if op == B_OS_SPAWN { return V.Osh(h: os_spawn(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)))) }
+    if op == B_OS_SPAWN_IN {
+        return V.Osh(h: os_spawn_in(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3))))
+    }
+    if op == B_OS_SPAWN_WITH {
+        return V.Osh(h: os_spawn_with(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3)), i_of(argo(vm, n, 4))))
+    }
+    if op == B_OS_CHILD_PIPE { return V.Osh(h: os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_WAIT { return V.Int(v: os_wait(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_TRY_WAIT { return V.Int(v: os_try_wait(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_WAIT_UNTIL { return V.Int(v: os_wait_until(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_KILL { return V.Int(v: os_kill(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_KILL_GROUP { return V.Int(v: os_kill_group(i_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_CHILD_PID { return V.Int(v: os_child_pid(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_CHILD_RUSAGE { return V.Int(v: os_child_rusage(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_LOCK { return V.Int(v: os_lock(h_of(io, argo(vm, n, 0)), bool_of(argo(vm, n, 1)))) }
+    if op == B_OS_TRY_LOCK { return V.Int(v: os_try_lock(h_of(io, argo(vm, n, 0)), bool_of(argo(vm, n, 1)))) }
+    if op == B_OS_UNLOCK { return V.Int(v: os_unlock(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_RANDOM_BYTES { return V.Int(v: os_random_bytes(b_of(argo(vm, n, 0)))) }
+    if op == B_OS_TCP_LISTEN { return V.Osh(h: os_tcp_listen(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_TCP_ACCEPT { return V.Osh(h: os_tcp_accept(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_TCP_CONNECT { return V.Osh(h: os_tcp_connect(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_UDP_BIND { return V.Osh(h: os_udp_bind(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_UDP_SEND_TO { return V.Int(v: os_udp_send_to(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), s_of(argo(vm, n, 2)))) }
+    if op == B_OS_UDP_RECV_FROM { return V.Int(v: os_udp_recv_from(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))) }
+    if op == B_OS_SET_TIMEOUT { return V.Int(v: os_set_timeout(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_SHUTDOWN { return V.Int(v: os_shutdown(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_LOCAL_ADDR { return heap_str(h, os_local_addr(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_PEER_ADDR { return heap_str(h, os_peer_addr(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_RESOLVE { return V.Int(v: os_resolve(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))) }
+    if op == B_ATOMIC_NEW { return V.Atm(a: atomic_new(i_of(argo(vm, n, 0)))) }
+    if op == B_ATOMIC_LOAD { return V.Int(v: atomic_load(a_of(argo(vm, n, 0)))) }
+    if op == B_ATOMIC_STORE { return V.Int(v: atomic_store(a_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_ATOMIC_SWAP { return V.Int(v: atomic_swap(a_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_ATOMIC_COMPARE_SWAP {
+        return V.Bool(v: atomic_compare_swap(a_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)), i_of(argo(vm, n, 2))))
+    }
+    if op == B_ATOMIC_ADD {
+        // The cell is left as it was when the sum would leave `Int` (`intrinsic.rs`).
+        let a = a_of(argo(vm, n, 0))
+        let d = i_of(argo(vm, n, 1))
+        let old = atomic_load(a)
+        match checked_add(old, d) {
+            Some(x) => { },
+            None => {
+                return fail(p, vm, pc, "N0400", "this addition overflows `Int`",
+                        "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping")
+            },
+        }
+        return V.Int(v: atomic_add(a, d))
+    }
+    let name = strs_get(builtin_names(), op)
+    fail(p, vm, pc, "N0900", f"the built-in `{name}` is not in this interpreter yet", "")
+}
+
+fn bool_of(v: V) -> Bool {
+    match v {
+        V.Bool(v: b) => b,
+        _ => false,
+    }
+}
+
+/// Whether built-in `op` is one of this family's.
+pub fn is_os(op: Int) -> Bool {
+    (op >= B_OS_OPEN_READ && op <= B_OS_RANDOM_BYTES) || (op >= B_ATOMIC_NEW && op <= B_ATOMIC_COMPARE_SWAP)
+}

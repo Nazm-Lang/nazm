@@ -27,9 +27,9 @@ fi
 if [ $# -gt 0 ]; then
     cases="$*"
 else
-    cases=$(ls "$repo"/tests/compat/v1/run/*.nz "$repo"/tests/compat/v1/run/*/main.nz \
-        "$repo"/tests/compat/v1/trap/*.nz "$repo"/examples/*.nz "$repo"/examples/tour/*.nz \
-        "$repo"/toolchain/interp/tests/cases/*.nz 2>/dev/null)
+    cases=$( (ls "$repo"/tests/compat/v1/run/*.nz "$repo"/tests/compat/v1/run/*/main.nz \
+        "$repo"/tests/compat/v1/trap/*.nz "$repo"/toolchain/interp/tests/cases/*.nz;
+        find "$repo/examples" -name '*.nz' | sort) 2>/dev/null)
 fi
 
 # A run is bounded, so a hang in either interpreter is a difference rather than a stuck suite.
@@ -42,7 +42,9 @@ for path in $cases; do
     dir=$(dirname "$path")
     file=$(basename "$path")
     name=${path#"$repo"/}
-    if ! (cd "$dir" && "$NAZM" core-ir --json "$file" >"$work/ir.json" 2>/dev/null); then
+    # A program that does not check, or a library with no `main`, is the checker's to refuse.
+    if ! (cd "$dir" && "$NAZM" core-ir --json "$file" >"$work/ir.json" 2>/dev/null) ||
+        grep -q '^{"schema":"nazm.core-ir/2","entry":null' "$work/ir.json"; then
         unchecked=$((unchecked + 1))
         continue
     fi
