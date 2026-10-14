@@ -381,8 +381,6 @@ fn type_name(v: &Value) -> &'static str {
         Value::Array(_) => "an array",
         Value::Bool(_) => "Bool",
         Value::Str(_) => "Str",
-        Value::Ints(_) => "Ints",
-        Value::Strs(_) => "Strs",
         Value::Chan(_) => "Chan",
         Value::Bytes(_) => "Bytes",
         Value::OsHandle(_) => "OsHandle",

@@ -207,8 +207,10 @@ fn run_page(page: &str, min_runs: usize, min_commands: usize) {
     for step in runs.iter().flatten() {
         // `nazm` is this build's binary, wherever it appears in the command line.
         let command = step.command.replace("nazm ", &format!("'{NAZM}' "));
+        // Both streams in the order a terminal shows them (R1: `nazm build`'s authority line
+        // is on standard error, ahead of the path on standard output).
         let out = Command::new("sh")
-            .args(["-c", &command])
+            .args(["-c", &format!("exec 2>&1; {command}")])
             .current_dir(scratch.path())
             .env_remove(nazm_lir::RESULT_VARIABLE)
             .output()

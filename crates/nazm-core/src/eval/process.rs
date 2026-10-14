@@ -58,6 +58,14 @@ fn text(s: &Str) -> String {
     String::from_utf8_lossy(s.bytes()).into_owned()
 }
 
+/// A `Strs`'s strings (R1, 5b.18: a `Vec[Str]`'s), as text; `None` for an element that is not one.
+fn texts(v: &Value) -> Option<String> {
+    match v {
+        Value::Str(s) => Some(text(s)),
+        _ => None,
+    }
+}
+
 /// The environment's entries, `NAME=value`, in the order the process holds them; an entry with
 /// no `=` after its first byte is not one, as natively.
 fn entries() -> Vec<Vec<u8>> {
@@ -139,25 +147,28 @@ pub(super) fn process_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             buf.write(0, &got);
             int(i64::try_from(buf.len).unwrap_or(-EINVAL))
         }
-        (Intrinsic::OsSpawn, [Value::Str(program), Value::Strs(list)]) => {
-            let argv: Vec<String> = list.lock().ok()?.iter().map(text).collect();
+        (Intrinsic::OsSpawn, [Value::Str(program), Value::Vec(list)]) => {
+            let argv: Vec<String> = list.lock().ok()?.iter().map(texts).collect::<Option<_>>()?;
             handle(spawn(&text(program), &argv))
         }
         (
             Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith,
-            [Value::Str(program), Value::Strs(list), Value::Str(dir), Value::Strs(env), rest @ ..],
+            [Value::Str(program), Value::Vec(list), Value::Str(dir), Value::Vec(env), rest @ ..],
         ) => {
             let flags = match rest {
                 [Value::Int(f)] => *f,
                 _ => 0,
             };
-            let argv: Vec<String> = list.lock().ok()?.iter().map(text).collect();
+            let argv: Vec<String> = list.lock().ok()?.iter().map(texts).collect::<Option<_>>()?;
             let entries: Vec<Vec<u8>> = env
                 .lock()
                 .ok()?
                 .iter()
-                .map(|e| e.bytes().to_vec())
-                .collect();
+                .map(|e| match e {
+                    Value::Str(e) => Some(e.bytes().to_vec()),
+                    _ => None,
+                })
+                .collect::<Option<_>>()?;
             handle(spawn_in(
                 program.bytes(),
                 &argv,

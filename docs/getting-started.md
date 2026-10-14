@@ -84,18 +84,22 @@ process at run time. It produces the same output:
 <!-- run -->
 ```console
 $ nazm build hello.nz -o hello
+authority: OutCap (given to main): prints to standard output and error
 hello
 $ ./hello
 Hello, Nazm!
 ```
 
-There are two code generators, held to the same results. LLVM is the default; Cranelift
+The `authority:` line says what the program may touch — here only the screen, which `main` is
+given without asking; files, the network or other programs would each be named, because each must
+be written in `main`'s signature. There are two code generators, held to the same results. LLVM is the default; Cranelift
 generates code in process instead of through clang (`performance.md` has a dated build-time
 comparison):
 
 <!-- run -->
 ```console
 $ nazm build hello.nz -o hello-fast --backend cranelift
+authority: OutCap (given to main): prints to standard output and error
 hello-fast
 $ ./hello-fast
 Hello, Nazm!
@@ -204,6 +208,7 @@ nazm: 1 of 1 passed
 $ nazm lock demo
 nazm: wrote demo/nazm.lock (1 package)
 $ nazm build demo -o demo/demo --locked
+authority: IoCap: files, arguments, the terminal and the process's exit
 demo/demo
 $ ./demo/demo
 hello, world

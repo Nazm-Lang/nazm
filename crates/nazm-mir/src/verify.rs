@@ -106,6 +106,10 @@ impl Ctx<'_> {
                 Some(Type::Vec(v)) => Some(Type::Cell(v)),
                 _ => None,
             },
+            // One list type (R1, 5b.18): the checker gave these built-ins `Vec[Int]` and
+            // `Vec[Str]`.
+            Shape::Ints => self.program.types.vec_of(Type::Int).or(Some(Type::Ints)),
+            Shape::Strs => self.program.types.vec_of(Type::Str).or(Some(Type::Strs)),
             other => other.monomorphic(),
         }
     }
