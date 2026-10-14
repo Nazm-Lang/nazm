@@ -1,0 +1,10 @@
+// expect: N0361
+// `?` on an `Option` in a function returning a `Result` (R1, 5b.17): there is no `None` to give
+// back, and it is refused as a `?` outside its carrier, not converted.
+fn first(o: Option[Int]) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: o? + 1)
+}
+
+fn main() -> Int {
+    0
+}

@@ -25,6 +25,6 @@ fn double_n_times(start: Int, times: Int) -> Int {
 }
 
 fn main(out: OutCap) -> Int {
-    print(str_concat(int_to_str(sum_to(100) + double_n_times(1, 10)), "\n"));
+    print(str_concat(int_to_str(sum_to(100) + double_n_times(1, 10)), str_from_byte(10)));
     0
 }

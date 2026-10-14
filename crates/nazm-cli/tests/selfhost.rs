@@ -637,6 +637,17 @@ fn dump_expr(e: &nazm_core::__syntax::Expr, out: &mut String) {
         }
         // A tuple (L5), outside the Nazm-written compiler's subset until R2.
         E::Tuple { span, .. } => push_node(out, "tuple", 0, span.start, span.end, ""),
+        // `print(e)` and `eprint(e)` read as `print(f"{e}")` (R1, 5b.13): the parser's rewrite,
+        // whose one hole spans the call's parentheses, around the expression — a hole written in
+        // `f"…"` lies inside its literal. The program as written is the expression.
+        E::Interp { parts, span }
+            if matches!(parts.as_slice(), [nazm_core::__syntax::InterpPart::Hole { span: hole, .. }]
+                if hole.start < span.start && hole.end > span.end) =>
+        {
+            if let [nazm_core::__syntax::InterpPart::Hole { expr, .. }] = parts.as_slice() {
+                dump_expr(expr, out);
+            }
+        }
         // An interpolation (L4), outside the Nazm-written compiler's subset until R2.
         E::Interp { span, .. } => push_node(out, "interp", 0, span.start, span.end, ""),
         // Gate 2's numbers, outside the Nazm-written compiler's subset: no agreement corpus
@@ -2327,7 +2338,9 @@ fn the_nazm_checker_agrees_with_the_reference_on_the_n102_features() {
         "trait Say { fn say(self: Self) -> Int ! {}; }\nimpl Say for Int { fn say(self: Int) -> Int ! { io } { 0 } }\nfn main() -> Int { 0 }",
         // Closures and function values: accepted, and their refusals.
         "fn double(n: Int) -> Int { n * 2 }\nfn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn main() -> Int { let step = 3; let add = fn(x: Int) -> Int { x + step }; twice(double, 5) + twice(add, 1) }",
-        "fn main() -> Int { let mut k = 3; let f = fn(x: Int) -> Int { x + k }; f(1) }",
+        // A `let mut` an `Int` closure captures is shared through a cell since R1b (L10), outside
+        // the Nazm-written compiler's subset; one that can hold a function value is still refused.
+        "fn main() -> Int { let mut g = fn(x: Int) -> Int { x }; let f = fn(x: Int) -> Int { g(x) }; f(1) }",
         "fn main() -> Int { let f = str_len; 0 }",
         "fn id[T](x: T) -> T { x }\nfn main() -> Int { let f = id; 0 }",
         "fn main() -> Int { let x = 3; x(1) }",
@@ -2336,7 +2349,8 @@ fn the_nazm_checker_agrees_with_the_reference_on_the_n102_features() {
         "fn main() -> Int { let f = fn(x: Int) -> Int { true }; f(1) }",
         // Authority is held, never inherited (N104): a built-in or a `spawn` with no capability
         // of its kind in scope, in a declared or an undeclared function, and what holds it.
-        "fn main() -> Int { print(\"x\"); 0 }",
+        // (`main` itself holds an `OutCap` since R1, 5b.1: a function it calls does not.)
+        "fn say() -> Int { print(\"x\"); 0 }\nfn main() -> Int { say() }",
         "fn shout() -> Int { print(\"!\"); 0 }\nfn main(io: IoCap) -> Int { shout() }",
         "fn shout(o: OutCap) -> Int { print(\"!\"); write_file(\"f\", \"x\"); print(\"?\"); 0 }\nfn main(io: IoCap) -> Int { shout(io) }",
         "fn shout(o: OutCap) -> Int { print(\"!\"); 0 }\nfn main(io: IoCap) -> Int { shout(io) }",
@@ -3482,10 +3496,12 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
             "fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 7)\n}\n",
             "1",
         ),
-        // Short-lived heap strings: the workload that used to grow without bound.
+        // Short-lived heap strings: the workload that used to grow without bound. Prepended, so
+        // each step makes a string of its own: the reference appends `s = str_concat(s, t)` in
+        // place since R1b (D2), and the Nazm-written compiler does not, so an append's counts differ.
         (
             "fn main() -> Int {\n    let mut s = \"\";\n    let mut i = 0;\n    \
-             while i < 40 {\n        s = str_concat(s, \"x\");\n        i = i + 1;\n    }\n    \
+             while i < 40 {\n        s = str_concat(\"x\", s);\n        i = i + 1;\n    }\n    \
              str_len(s)\n}\n",
             "40",
         ),

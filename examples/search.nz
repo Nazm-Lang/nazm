@@ -18,6 +18,6 @@ fn first_pair_with_product(target: Int, limit: Int) -> Int {
 }
 
 fn main(out: OutCap) -> Int {
-    print(str_concat(int_to_str(first_pair_with_product(391, 40)), "\n"));
+    print(str_concat(int_to_str(first_pair_with_product(391, 40)), str_from_byte(10)));
     0
 }

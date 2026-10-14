@@ -34,6 +34,6 @@ fn sum_primes_below(limit: Int) -> Int {
 }
 
 fn main(out: OutCap) -> Int {
-    print(str_concat(int_to_str(sum_primes_below(100)), "\n"));
+    print(str_concat(int_to_str(sum_primes_below(100)), str_from_byte(10)));
     0
 }
