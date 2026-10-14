@@ -194,7 +194,7 @@ fn what_an_interpolation_refuses_and_by_which_code() {
         (
             "let v = vec_new[Int](); let s = f\"{v}\"; 0",
             "N0300",
-            "`Vec[Int]`",
+            "`Ints`", // `Vec[Int]` by its shorter name (R1, 5b.18)
         ),
         ("let s = f\"{nope}\"; 0", "N0200", "nope"),
     ] {

@@ -247,7 +247,8 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
         assert!(origins(&src, f).is_empty(), "{f}: {:?}", origins(&src, f));
     }
     // One write of a file's contents anywhere reaches every read of that type — and only
-    // that type: a `Vec[Int]` filled from the command line stays the command line's.
+    // that type. Since R1 (5b.18) a `Vec[Int]` is an `Ints`, so the file's length received into
+    // an `Ints` below reaches it too.
     let src = format!(
         "fn fill(io: IoCap) -> Int {{ let ys = strs_new(); strs_push(ys, read_file(\"f\")); 0 }}\n\
          fn from_seq() -> Str {{ let xs = strs_new(); strs_push(xs, \"lit\"); strs_get(xs, 0) }}\n\
@@ -255,9 +256,9 @@ fn a_container_carries_what_any_container_of_its_type_was_given() {
          fn through_chan(io: IoCap) -> Int {{ let c = chan_new(1); chan_send(c, str_len(read_file(\"f\"))); let b = ints_new(); chan_recv(c, b); ints_pop(b) }}\n{MAIN}"
     );
     assert_eq!(origins(&src, "from_seq"), ["file"]);
-    assert_eq!(origins(&src, "from_vec"), ["argument"]);
-    // A receive moves the channel's cell into the `Ints`.
-    assert_eq!(origins(&src, "through_chan"), ["file"]);
+    assert_eq!(origins(&src, "from_vec"), ["argument", "file"]);
+    // A receive moves the channel's cell into the `Ints` — which `from_vec`'s argument reached.
+    assert_eq!(origins(&src, "through_chan"), ["argument", "file"]);
     // A container in generic code may be any container: a write there reaches every cell.
     let src = format!(
         "fn put[T](v: Vec[T], x: T) -> Int {{ vec_push(v, x); 0 }}\n\

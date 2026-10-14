@@ -263,7 +263,10 @@ fn a_written_argument_without_equality_is_refused_at_the_callee() {
     );
     refused(&src, codes::UNSATISFIED_REQUIREMENT, "same", 1);
     let m = message(&src);
-    assert!(m.contains("`value`") && m.contains("`Vec[Int]`"), "{m}");
+    assert!(
+        m.contains("`value`") && m.contains("`Ints`"), /* `Vec[Int]`, R1 5b.18 */
+        "{m}"
+    );
 }
 
 #[test]
