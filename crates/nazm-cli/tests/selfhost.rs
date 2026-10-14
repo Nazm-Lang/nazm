@@ -1078,6 +1078,17 @@ fn the_nazm_parser_produces_the_same_tree_as_the_reference() {
 
 #[test]
 fn the_nazm_parser_agrees_with_the_reference_on_every_source_in_the_tree() {
+    // The reference parses whole files, recursing with their shape: on the stack the parser
+    // documents (`PARSE_STACK_BYTES`), not a test thread's default.
+    std::thread::Builder::new()
+        .stack_size(nazm_core::__syntax::PARSE_STACK_BYTES)
+        .spawn(the_nazm_parser_agrees_on_a_parse_stack)
+        .expect("a thread for the parser")
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
+}
+
+fn the_nazm_parser_agrees_on_a_parse_stack() {
     // The real test of a parser: whole files, including its own source and the
     // tokeniser's — the largest and most varied Nazm programs that exist.
     let dir = tempfile::tempdir().expect("tempdir");
