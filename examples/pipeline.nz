@@ -71,6 +71,6 @@ fn main(out: OutCap, tasks: SpawnCap) -> Int {
     while chan_recv(results, buf) {
         sum = sum + ints_pop(buf);
     }
-    print(str_concat(int_to_str(sum), "\n"));
+    print(str_concat(int_to_str(sum), str_from_byte(10)));
     0
 }

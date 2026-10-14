@@ -1,7 +1,8 @@
 // expect: N0360
-// `?` on an `Option`: the core `Result` is the only thing `?` propagates.
-fn first(o: Option[Int]) -> Result[Int, Str] {
-    Result[Int, Str].Ok(value: o? + 1)
+// `?` on an `Int`: the core `Result` is the only thing `?` propagates here (an `Option`'s `?`
+// belongs to a function returning one, R1; see `propagate-option-in-result.nz`).
+fn first(n: Int) -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: n? + 1)
 }
 
 fn main() -> Int {
