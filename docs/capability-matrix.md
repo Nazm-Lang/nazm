@@ -298,6 +298,16 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *Fields by position, variants without their enum* (`spec.md`, *Shorter
+forms*; R1.5 design D4). `Point(1, 2)`, `Shape.Rect(3, 4)`, `Circle(2)`, `Dot`, and in a pattern
+`Rect(w, h)` and `Circle(r)`: the checker names positional fields in declaration order and finds a
+variant written alone among the enums in scope (`N0636` where two share it; in a pattern, the
+value's own enum); Core IR lowers such a construction or name as the variant it was read as, and
+provenance takes a positional payload whole, which is sound. Semantic epoch 79; EXPERIMENTAL until
+R1.5 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` — every form under every
+implementation, the refusals by name, a secret bound by position still refused at a write; three
+mutants.
+
 **R1.5 (2026-10-15)** · *Short closures* (`spec.md`, *Shorter forms*; R1.5 design D3).
 `|a, b| a < b`, `|n: Int| n + 1`, `|| e`: the closure node a function expression makes, its
 unwritten types taken from the function type expected where it is written, or — with none

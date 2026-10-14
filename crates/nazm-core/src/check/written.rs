@@ -923,6 +923,16 @@ impl Checker<'_> {
     /// to — the **definition**, not a type: `Maybe` in `Maybe.Some(value: x)` names the
     /// generic enum whose instance the scrutinee already is, and `Pair` in
     /// `Pair[Int, Str](…)` is applied by its arguments afterwards.
+    /// The type `name` means here, asked without reporting or recording anything (R1.5, D4):
+    /// what a construction's positional fields are named by, before it is checked.
+    pub(super) fn quiet_type(&self, name: &str, span: Span) -> Type {
+        if let Some((_, p)) = self.type_scope.iter().find(|(n, _)| n == name) {
+            return *p;
+        }
+        let mut discarded = Vec::new();
+        resolve_name(&self.types, self.res, name, span, &mut discarded)
+    }
+
     fn resolve_type(&mut self, name: &str, span: Span) -> Type {
         // Split borrow: the environment and the error list are both behind `self`.
         let mut errors = std::mem::take(&mut self.errors);
