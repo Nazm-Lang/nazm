@@ -1,0 +1,252 @@
+// Numbers other than `Int` (Gate 2), kind by kind: the range checks and conversions
+// `nazm_sema::numeric` makes (`crates/nazm-sema/src/numeric.rs`), through the language's own
+// conversions of each width. Generated: one arm per kind.
+
+pub const NK_I8: Int = 1
+pub const NK_I16: Int = 2
+pub const NK_I32: Int = 3
+pub const NK_I64: Int = 4
+pub const NK_I128: Int = 5
+pub const NK_U8: Int = 6
+pub const NK_U16: Int = 7
+pub const NK_U32: Int = 8
+pub const NK_U64: Int = 9
+pub const NK_U128: Int = 10
+pub const NK_F32: Int = 11
+pub const NK_F64: Int = 12
+
+/// A numeric type's kind, or 0 for a type that is not numeric.
+pub fn kind_of_type(t: Str) -> Int {
+    if t == "Int8" { return 1 }
+    if t == "Int16" { return 2 }
+    if t == "Int32" { return 3 }
+    if t == "Int" { return 4 }
+    if t == "Int128" { return 5 }
+    if t == "UInt8" { return 6 }
+    if t == "UInt16" { return 7 }
+    if t == "UInt32" { return 8 }
+    if t == "UInt64" { return 9 }
+    if t == "UInt128" { return 10 }
+    if t == "Float32" { return 11 }
+    if t == "Float64" { return 12 }
+    0
+}
+
+/// `NumKind::name`.
+pub fn kind_name(k: Int) -> Str {
+    if k == 1 { return "Int8" }
+    if k == 2 { return "Int16" }
+    if k == 3 { return "Int32" }
+    if k == 4 { return "Int" }
+    if k == 5 { return "Int128" }
+    if k == 6 { return "UInt8" }
+    if k == 7 { return "UInt16" }
+    if k == 8 { return "UInt32" }
+    if k == 9 { return "UInt64" }
+    if k == 10 { return "UInt128" }
+    if k == 11 { return "Float32" }
+    if k == 12 { return "Float64" }
+    "?"
+}
+
+/// `NumKind::bits`.
+pub fn kind_bits(k: Int) -> Int {
+    if k == NK_I8 || k == NK_U8 { 8 } else if k == NK_I16 || k == NK_U16 { 16 } else if k == NK_I32 || k == NK_U32 || k == NK_F32 { 32 } else if k == NK_I128 || k == NK_U128 { 128 } else { 64 }
+}
+
+pub fn is_float(k: Int) -> Bool {
+    k == NK_F32 || k == NK_F64
+}
+
+pub fn is_signed(k: Int) -> Bool {
+    k <= NK_I128 || k == NK_F32 || k == NK_F64
+}
+
+/// Whether `x` (an exact value; for `UInt128` its bits, always in range) is in `k`'s range.
+pub fn in_range(k: Int, x: Int128) -> Bool {
+    if k == 1 {
+        match try_convert[Int8](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 2 {
+        match try_convert[Int16](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 3 {
+        match try_convert[Int32](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 4 {
+        match try_convert[Int](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 5 { return true }
+    if k == 6 {
+        match try_convert[UInt8](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 7 {
+        match try_convert[UInt16](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 8 {
+        match try_convert[UInt32](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 9 {
+        match try_convert[UInt64](x) {
+            Some(y) => { return true },
+            None => { return false },
+        }
+    }
+    if k == 10 { return true }
+    false
+}
+
+/// `x`'s low `k`-width bits, extended by `k`'s signedness: a wrapping result.
+pub fn wrap(k: Int, x: Int128) -> Int128 {
+    if k == 1 { return Int128(wrap_convert[Int8](x)) }
+    if k == 2 { return Int128(wrap_convert[Int16](x)) }
+    if k == 3 { return Int128(wrap_convert[Int32](x)) }
+    if k == 4 { return Int128(wrap_convert[Int](x)) }
+    if k == 5 { return x }
+    if k == 6 { return Int128(wrap_convert[UInt8](x)) }
+    if k == 7 { return Int128(wrap_convert[UInt16](x)) }
+    if k == 8 { return Int128(wrap_convert[UInt32](x)) }
+    if k == 9 { return Int128(wrap_convert[UInt64](x)) }
+    if k == 10 { return x }
+    x
+}
+
+/// A float truncated to kind `k` if `k` holds it (`numeric.rs`, `truncated`), as an exact value.
+pub fn float_to(k: Int, f: Float64) -> Option[Int128] {
+    if k == 1 {
+        match try_convert[Int8](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 2 {
+        match try_convert[Int16](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 3 {
+        match try_convert[Int32](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 4 {
+        match try_convert[Int](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 5 {
+        match try_convert[Int128](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 6 {
+        match try_convert[UInt8](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 7 {
+        match try_convert[UInt16](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 8 {
+        match try_convert[UInt32](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 9 {
+        match try_convert[UInt64](f) {
+            Some(y) => { return Some(Int128(y)) },
+            None => { return None },
+        }
+    }
+    if k == 10 {
+        match try_convert[UInt128](f) {
+            Some(y) => { return Some(wrap_convert[Int128](y)) },
+            None => { return None },
+        }
+    }
+    None
+}
+
+/// A float clamped into kind `k`, a NaN to 0 (`saturate_convert`).
+pub fn float_saturate(k: Int, f: Float64) -> Int128 {
+    if k == 1 { return Int128(saturate_convert[Int8](f)) }
+    if k == 2 { return Int128(saturate_convert[Int16](f)) }
+    if k == 3 { return Int128(saturate_convert[Int32](f)) }
+    if k == 4 { return Int128(saturate_convert[Int](f)) }
+    if k == 5 { return Int128(saturate_convert[Int128](f)) }
+    if k == 6 { return Int128(saturate_convert[UInt8](f)) }
+    if k == 7 { return Int128(saturate_convert[UInt16](f)) }
+    if k == 8 { return Int128(saturate_convert[UInt32](f)) }
+    if k == 9 { return Int128(saturate_convert[UInt64](f)) }
+    if k == 10 { return wrap_convert[Int128](saturate_convert[UInt128](f)) }
+    Int128(0)
+}
+
+/// An integer of kind `from` (exact; a `UInt128`'s bits) clamped into kind `k`.
+pub fn int_saturate(k: Int, from: Int, x: Int128) -> Int128 {
+    if from == NK_U128 {
+        let u = wrap_convert[UInt128](x)
+        if k == 1 { return Int128(saturate_convert[Int8](u)) }
+        if k == 2 { return Int128(saturate_convert[Int16](u)) }
+        if k == 3 { return Int128(saturate_convert[Int32](u)) }
+        if k == 4 { return Int128(saturate_convert[Int](u)) }
+        if k == 5 { return saturate_convert[Int128](u) }
+        if k == 6 { return Int128(saturate_convert[UInt8](u)) }
+        if k == 7 { return Int128(saturate_convert[UInt16](u)) }
+        if k == 8 { return Int128(saturate_convert[UInt32](u)) }
+        if k == 9 { return Int128(saturate_convert[UInt64](u)) }
+        if k == 10 { return x }
+        return x
+    }
+    if k == 1 { return Int128(saturate_convert[Int8](x)) }
+    if k == 2 { return Int128(saturate_convert[Int16](x)) }
+    if k == 3 { return Int128(saturate_convert[Int32](x)) }
+    if k == 4 { return Int128(saturate_convert[Int](x)) }
+    if k == 5 { return x }
+    if k == 6 { return Int128(saturate_convert[UInt8](x)) }
+    if k == 7 { return Int128(saturate_convert[UInt16](x)) }
+    if k == 8 { return Int128(saturate_convert[UInt32](x)) }
+    if k == 9 { return Int128(saturate_convert[UInt64](x)) }
+    if k == 10 { return wrap_convert[Int128](saturate_convert[UInt128](x)) }
+    x
+}
+
+/// An integer of kind `from` converted to a float of kind `k`, rounded once from the exact value.
+pub fn int_to_float(k: Int, from: Int, x: Int128) -> Float64 {
+    if from == NK_U128 {
+        let u = wrap_convert[UInt128](x)
+        if k == NK_F32 { return Float64(Float32(u)) }
+        return Float64(u)
+    }
+    if k == NK_F32 { Float64(Float32(x)) } else { Float64(x) }
+}

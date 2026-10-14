@@ -1,0 +1,114 @@
+// What the printed Core IR says about each record and enum: the names of its fields, variants and
+// payload fields, gathered from the nodes that carry them (`openspec/changes/r4-interpreter/
+// design.md`, D8). From the names come the canonical orders (L6) a derived order and a derived hash
+// walk — fields and variants sorted by name — which `cir::Program::orders` holds and the printed
+// form leaves out (*Requests*).
+
+use "@std/hash"
+use "@std/hashmap"
+
+pub struct Shapes {
+    // A record definition's key to its fields' names, by declaration index.
+    fields: HashMap[Str, Strs],
+    // An enum definition's key to its variants' names, by declaration index.
+    variants: HashMap[Str, Strs],
+    // `ENUM#VARIANT` to that variant's payload names, by declaration index.
+    payloads: HashMap[Str, Strs],
+}
+
+pub fn shapes_new() -> Shapes {
+    Shapes(fields: hashmap_new[Str, Strs](), variants: hashmap_new[Str, Strs](),
+            payloads: hashmap_new[Str, Strs]())
+}
+
+/// A type's definition key: its text without type arguments, `M::record Pair` of
+/// `M::record Pair[Int, Str]`.
+pub fn def_key(t: Str) -> Str {
+    for i in 0..str_len(t) {
+        if str_byte(t, i) == 91 { return str_slice(t, 0, i) }
+    }
+    t
+}
+
+fn put(m: HashMap[Str, Strs], key: Str, i: Int, name: Str) {
+    let names = match hashmap_get(m, key) {
+        Some(n) => n,
+        None => {
+            let n = strs_new()
+            hashmap_set(m, key, n)
+            n
+        },
+    }
+    while strs_len(names) <= i { strs_push(names, "") }
+    strs_set(names, i, name)
+}
+
+pub fn note_field(s: Shapes, ty: Str, i: Int, name: Str) {
+    put(s.fields, def_key(ty), i, name)
+}
+
+pub fn note_variant(s: Shapes, ty: Str, i: Int, name: Str) {
+    put(s.variants, def_key(ty), i, name)
+}
+
+pub fn note_payload(s: Shapes, ty: Str, variant: Int, i: Int, name: Str) {
+    put(s.payloads, f"{def_key(ty)}#{variant}", i, name)
+}
+
+fn names_of(m: HashMap[Str, Strs], key: Str) -> Strs {
+    match hashmap_get(m, key) {
+        Some(n) => n,
+        None => strs_new(),
+    }
+}
+
+/// Indices `0..n` stably sorted by their names.
+fn sorted(names: Strs, n: Int) -> Ints {
+    let order = ints_new()
+    for i in 0..n { ints_push(order, i) }
+    // Insertion sort: definitions are short.
+    for i in 1..n {
+        let x = ints_get(order, i)
+        let nx = name_at(names, x)
+        let mut j = i - 1
+        while j >= 0 && before(nx, name_at(names, ints_get(order, j))) {
+            ints_set(order, j + 1, ints_get(order, j))
+            j -= 1
+        }
+        ints_set(order, j + 1, x)
+    }
+    order
+}
+
+fn name_at(names: Strs, i: Int) -> Str {
+    if i < strs_len(names) { strs_get(names, i) } else { "" }
+}
+
+/// Whether name `a` sorts before name `b`: byte order, as `RecordTable::complete` sorts (a tuple's
+/// positions too, so `10` before `2`).
+fn before(a: Str, b: Str) -> Bool {
+    a < b
+}
+
+/// A record's `n` fields in canonical order.
+pub fn record_order(s: Shapes, ty: Str, n: Int) -> Ints {
+    sorted(names_of(s.fields, def_key(ty)), n)
+}
+
+/// An enum's variant `v`'s `n` payload fields in canonical order.
+pub fn payload_order(s: Shapes, ty: Str, v: Int, n: Int) -> Ints {
+    sorted(names_of(s.payloads, f"{def_key(ty)}#{v}"), n)
+}
+
+/// Variant `v`'s name.
+pub fn variant_name(s: Shapes, ty: Str, v: Int) -> Str {
+    name_at(names_of(s.variants, def_key(ty)), v)
+}
+
+/// Where variant `a` stands against variant `b` in the canonical order: by name.
+pub fn variant_rank(s: Shapes, ty: Str, a: Int, b: Int) -> Int {
+    let names = names_of(s.variants, def_key(ty))
+    let x = name_at(names, a)
+    let y = name_at(names, b)
+    if x < y { 0 - 1 } else if x > y { 1 } else { 0 }
+}
