@@ -16,10 +16,24 @@ use "@std/hash"
 use "@std/hashmap"
 use "dispatch.nz"
 
-pub fn vm_new(max_iterations: Int, max_depth: Int, args: Strs) -> Vm {
-    Vm(ops: vec_new[V](), slots: vec_new[V](), frames: ints_new(), heap: heap_new(),
-            st: [max_iterations, max_depth, 0, 0, 0], err: ["", "", ""], errat: [0 - 1, 0, 0], args: args)
+/// A task's state with nothing on its stacks: `heap` shared by every task of the run.
+pub fn vm_new(heap: Heap, max_iterations: Int, max_depth: Int, args: Strs) -> Vm {
+    let st = ints_new()
+    for i in 0..ST_SIZE { ints_push(st, 0) }
+    ints_set(st, ST_ITER, max_iterations)
+    ints_set(st, ST_MAXDEPTH, max_depth)
+    Vm(ops: vec_new[V](), slots: vec_new[V](), frames: ints_new(), heap: heap,
+            st: st, err: ["", "", ""], errat: [0 - 1, 0, 0], args: args, scopes: ints_new(),
+            kids: ints_new(), res: vec_new[V]())
 }
+
+// What a turn of `exec` ended with.
+pub const X_DONE: Int = 1
+pub const X_FAILED: Int = 2
+pub const X_BLOCKED: Int = 3
+pub const X_YIELD: Int = 4
+pub const X_SPAWN: Int = 5
+pub const X_JOIN: Int = 6
 
 /// Record a failure at instruction `pc`'s span.
 pub fn fail(p: Prog, vm: Vm, pc: Int, code: Str, message: Str, help: Str) -> V {
@@ -99,27 +113,36 @@ fn store(vm: Vm, at: Int, v: V) {
     release(vm.heap, old)
 }
 
-/// Run the program's `main`; its value, or `Unset` when the run failed (the failure is in `vm`).
-pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
+/// `main`'s frame: each capability parameter is handed one (`eval/mod.rs`, `run_main`).
+pub fn start_main(p: Prog, vm: Vm) {
+    let entry = p.entry
+    for i in 0..ints_get(p.flocals, entry) {
+        vec_push(vm.slots, if i < ints_get(p.fparams, entry) { V.Cap(kind: 0) } else { V.Unset })
+    }
+    ints_push(vm.frames, entry)
+    ints_push(vm.frames, 0 - 1)
+    ints_push(vm.frames, 0)
+    ints_push(vm.frames, 0)
+    ints_set(vm.st, ST_PC, ints_get(p.fentry, entry))
+    ints_set(vm.st, ST_BASE, 0)
+}
+
+/// Run a task until it returns from its first frame, fails, waits, gives way, or reaches a `spawn`
+/// or the end of a `scope` - which the scheduler carries out (`sched.nz`). The task resumes where
+/// it stopped.
+pub fn exec(p: Prog, vm: Vm, out: OutCap, io: IoCap, time: TimeCap) -> Int {
     let h = vm.heap
     let ops = vm.ops
     let slots = vm.slots
     let frames = vm.frames
-    let entry = p.entry
-    // `main`'s frame: each capability parameter is handed one (`eval/mod.rs`, `run_main`).
-    let mut base = 0
-    for i in 0..ints_get(p.flocals, entry) {
-        vec_push(slots, if i < ints_get(p.fparams, entry) { V.Cap(kind: 0) } else { V.Unset })
-    }
-    ints_push(frames, entry)
-    ints_push(frames, 0 - 1)
-    ints_push(frames, 0)
-    ints_push(frames, 0)
-    let mut pc = ints_get(p.fentry, entry)
-    let mut result = V.Unset
+    let mut base = ints_get(vm.st, ST_BASE)
+    let mut pc = ints_get(vm.st, ST_PC)
+    let mut status = 0
+    let mut steps = 0
     let code = p.op
     let pa = p.a
     loop {
+        steps += 1
         let op = ints_get(code, pc)
         if op == OP_LOCAL {
             push_local(vm, base, ints_get(pa, pc))
@@ -192,7 +215,8 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
             let x3 = ints_pop(frames)
             let x4 = ints_pop(frames)
             if ret < 0 {
-                result = v
+                vec_push(vm.res, v)
+                status = X_DONE
                 break
             }
             ints_set(vm.st, ST_DEPTH, ints_get(vm.st, ST_DEPTH) - 1)
@@ -217,9 +241,25 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
             }
             ints_set(vm.st, ST_ITER, left - 1)
             pc += 1
+            // Another task gets a turn now and then, so one that waits on this one by polling
+            // proceeds, as it would on a thread of its own.
+            let turns = ints_get(vm.st, ST_TURNS) + 1
+            ints_set(vm.st, ST_TURNS, turns)
+            if turns >= 1000 && ints_get(h.sched, SC_LIVE) > 1 {
+                ints_set(vm.st, ST_TURNS, 0)
+                status = X_YIELD
+                break
+            }
         } else if op == OP_BUILTIN {
             let n = ints_get(p.b, pc)
-            let v = builtin(p, vm, pc, ints_get(pa, pc), n, out, io)
+            let v = builtin(p, vm, pc, ints_get(pa, pc), n, out, io, time)
+            if ints_get(vm.st, ST_BLOCKED) == 1 {
+                // Not yet: the task waits, and this instruction runs again when it resumes.
+                ints_set(vm.st, ST_BLOCKED, 0)
+                steps -= 1
+                status = X_BLOCKED
+                break
+            }
             if failed(vm) { break }
             for i in 0..n {
                 release(h, vec_pop(ops))
@@ -368,6 +408,15 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
                 },
             }
             pc += 1
+        } else if op == OP_SCOPE {
+            ints_push(vm.scopes, ints_len(vm.kids))
+            pc += 1
+        } else if op == OP_SPAWN {
+            status = X_SPAWN
+            break
+        } else if op == OP_JOIN {
+            status = X_JOIN
+            break
         } else if op == OP_DEFECT {
             let x = fail(p, vm, pc, "N0900", "the interpreter met an expression it cannot evaluate", "")
             break
@@ -489,10 +538,14 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
             pc += 1
         }
     }
+    ints_set(vm.st, ST_PC, pc)
+    ints_set(vm.st, ST_BASE, base)
+    ints_set(vm.st, ST_STEPS, steps)
     if failed(vm) {
         unwind(vm)
+        return X_FAILED
     }
-    result
+    status
 }
 
 /// Enter function `f`: a fresh frame whose first `n` slots are the top `n` operands, in order.
@@ -520,7 +573,7 @@ pub fn enter(p: Prog, vm: Vm, f: Int, n: Int, ret: Int, base: Int, skip: Int) ->
 
 /// A failure ends the run: every frame's slots and operands are released, as Rust's `Drop`
 /// releases them while the error travels out.
-fn unwind(vm: Vm) {
+pub fn unwind(vm: Vm) {
     let h = vm.heap
     while vec_len(vm.ops) > 0 { release(h, vec_pop(vm.ops)) }
     while vec_len(vm.slots) > 0 { release(h, vec_pop(vm.slots)) }

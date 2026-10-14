@@ -81,6 +81,10 @@ pub struct Heap {
     busy: Ints,
     // The storage of every object that has none: one empty sequence, never written.
     none: Vec[V],
+    // A channel's flag: 1 once closed.
+    flag: Ints,
+    // The scheduler's counts, `SC_` below.
+    sched: Ints,
 }
 
 /// One task's stacks (D3) and the run's state.
@@ -90,12 +94,17 @@ pub struct Vm {
     // Per frame: the function, the return address, the slot base and the operand base.
     frames: Ints,
     heap: Heap,
-    // [iterations left, max depth, depth, calls, failed]
+    // The task's state, by the `ST_` indices below.
     st: Ints,
     // A failure: code, message, help; and its span: module, start, end.
     err: Strs,
     errat: Ints,
     args: Strs,
+    // Open `scope`s: where each one's tasks start in `kids`; and the tasks started, by number.
+    scopes: Ints,
+    kids: Ints,
+    // `main`'s value, once it returns.
+    res: Vec[V],
 }
 
 // Object kinds.
@@ -121,3 +130,24 @@ pub const ST_MAXDEPTH: Int = 1
 pub const ST_DEPTH: Int = 2
 pub const ST_CALLS: Int = 3
 pub const ST_FAILED: Int = 4
+// Where the task resumes: its instruction and its frame's slot base.
+pub const ST_PC: Int = 5
+pub const ST_BASE: Int = 6
+// Set by a built-in that cannot proceed yet: the task waits and the instruction runs again.
+pub const ST_BLOCKED: Int = 7
+// A waiting built-in's deadline on the monotonic clock, in milliseconds, or 0.
+pub const ST_DEADLINE: Int = 8
+// Whether the waiting built-in has begun: what it counts once is counted.
+pub const ST_PENDING: Int = 9
+// Instructions run in the last turn, and loop turns since the task last gave way.
+pub const ST_STEPS: Int = 10
+pub const ST_TURNS: Int = 11
+pub const ST_SIZE: Int = 12
+
+// `Heap.sched`: tasks started and joined, selects and their timeouts (`NAZM_SCHED_REPORT`), and
+// how many tasks are live.
+pub const SC_SPAWNED: Int = 0
+pub const SC_JOINED: Int = 1
+pub const SC_SELECTS: Int = 2
+pub const SC_TIMEOUTS: Int = 3
+pub const SC_LIVE: Int = 4

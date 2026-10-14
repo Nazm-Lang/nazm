@@ -29,6 +29,6 @@
 
 ## 5. Slice 5 — concurrency, files, processes, time
 
-- [ ] 5.1 The task scheduler; `scope`, `spawn`, channels, select; `NAZM_SCHED_REPORT`
+- [x] 5.1 The task scheduler; `scope`, `spawn`, channels, select; `NAZM_SCHED_REPORT`
 - [ ] 5.2 Files, directories, processes, environment, time, network, atomics
 - [ ] 5.3 `--json` diagnostics; the whole suite agrees, every difference reported

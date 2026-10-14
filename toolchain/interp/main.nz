@@ -1,6 +1,6 @@
 // `interp`: the Nazm interpreter written in Nazm (R4, `openspec/changes/r4-interpreter/`).
 //
-//     interp [--max-iterations N] [--max-depth N] [--memory-report] [--result-report]
+//     interp [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report]
 //            CORE_IR.json ROOT.nz [-- ARGS...]
 //
 // Runs the checked program whose Core IR `nazm core-ir --json ROOT.nz` printed, as `nazm run ROOT.nz
@@ -17,9 +17,10 @@ use "load.nz"
 use "vm.nz"
 use "heap.nz"
 use "diag.nz"
+use "sched.nz"
 
 fn usage(out: OutCap) -> Int {
-    eprint("usage: interp [--max-iterations N] [--max-depth N] [--memory-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
+    eprint("usage: interp [--max-iterations N] [--max-depth N] [--memory-report] [--sched-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
     64
 }
 
@@ -86,7 +87,7 @@ fn show(v: V) -> Str {
     }
 }
 
-fn main(out: OutCap, io: IoCap) -> Int {
+fn main(out: OutCap, io: IoCap, time: TimeCap) -> Int {
     let mut max_iterations = 10000000
     let mut max_depth = 512
     let positional = strs_new()
@@ -95,6 +96,7 @@ fn main(out: OutCap, io: IoCap) -> Int {
     let mut rest = false
     let mut memory = false
     let mut result_report = false
+    let mut sched_report = false
     while i < args_count() {
         let a = arg(i)
         if rest {
@@ -103,6 +105,8 @@ fn main(out: OutCap, io: IoCap) -> Int {
             rest = true
         } else if a == "--memory-report" {
             memory = true
+        } else if a == "--sched-report" {
+            sched_report = true
         } else if a == "--result-report" {
             result_report = true
         } else if a == "--max-iterations" && i + 1 < args_count() {
@@ -129,11 +133,26 @@ fn main(out: OutCap, io: IoCap) -> Int {
         eprint("error[N0201]: this program has no `main` function\n")
         return 2
     }
-    let vm = vm_new(max_iterations, max_depth, program_args)
-    let result = run(p, vm, out, io)
+    let vm = vm_new(heap_new(), max_iterations, max_depth, program_args)
+    let ran = run_program(p, vm, out, io, time)
+    if ran == 2 {
+        // The Rust interpreter's threads would wait for ever here; this one says so (`design.md`,
+        // open question 1).
+        eprint("interp: every task is waiting and none can proceed\n")
+        return 70
+    }
     if memory {
         memory_line(out, vm.heap)
     }
+    if sched_report {
+        let c = vm.heap.sched
+        let spawned = ints_get(c, SC_SPAWNED)
+        let joined = ints_get(c, SC_JOINED)
+        let selects = ints_get(c, SC_SELECTS)
+        let timeouts = ints_get(c, SC_TIMEOUTS)
+        eprint(f"nazm-sched: spawned={spawned} joined={joined} selects={selects} timeouts={timeouts}\n")
+    }
+    let result = if vec_len(vm.res) > 0 { vec_get(vm.res, 0) } else { V.Unset }
     if failed(vm) {
         report(out, io, p, vm, root)
         return 2

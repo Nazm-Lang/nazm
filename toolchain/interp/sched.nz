@@ -1,0 +1,182 @@
+// Tasks (`openspec/changes/r4-interpreter/design.md`, D9): each a stack of its own, scheduled
+// cooperatively on this one thread. A task runs until it waits — on a channel, a `scope`'s end, a
+// deadline — or gives way; `spawn` starts one at once, as the Rust interpreter starts a thread
+// (`crates/nazm-core/src/eval/task.rs`), and a `scope` joins its tasks before anything leaves it,
+// a failure of its body included.
+
+use "types.nz"
+use "heap.nz"
+use "vm.nz"
+
+// A task's state.
+const T_RUN: Int = 0
+const T_WAIT: Int = 1
+const T_JOINING: Int = 2
+const T_FAILING: Int = 3
+const T_DONE: Int = 4
+const T_FAILED: Int = 5
+
+fn finished(state: Ints, t: Int) -> Bool {
+    let s = ints_get(state, t)
+    s == T_DONE || s == T_FAILED
+}
+
+/// Whether task `vm`'s tasks of its innermost open scope from `from` have all ended.
+fn all_finished(vm: Vm, state: Ints, from: Int) -> Bool {
+    for i in from..ints_len(vm.kids) {
+        if !finished(state, ints_get(vm.kids, i)) { return false }
+    }
+    true
+}
+
+/// Start function `f` as a task with the top `n` operands of `parent`, which it takes.
+fn start_task(p: Prog, tasks: Vec[Vm], state: Ints, parent: Vm, f: Int, n: Int) {
+    let child = vm_new(parent.heap, ints_get(parent.st, ST_ITER), ints_get(parent.st, ST_MAXDEPTH), parent.args)
+    let from = vec_len(parent.ops) - n
+    for i in 0..ints_get(p.flocals, f) {
+        vec_push(child.slots, if i < n { vec_get(parent.ops, from + i) } else { V.Unset })
+    }
+    for i in 0..n {
+        let x = vec_pop(parent.ops)
+    }
+    ints_push(child.frames, f)
+    ints_push(child.frames, 0 - 1)
+    ints_push(child.frames, 0)
+    ints_push(child.frames, 0)
+    ints_set(child.st, ST_PC, ints_get(p.fentry, f))
+    vec_push(tasks, child)
+    ints_push(state, T_RUN)
+    ints_push(parent.kids, vec_len(tasks) - 1)
+    let s = parent.heap.sched
+    ints_set(s, SC_SPAWNED, ints_get(s, SC_SPAWNED) + 1)
+    ints_set(s, SC_LIVE, ints_get(s, SC_LIVE) + 1)
+}
+
+fn ended(vm: Vm, state: Ints, t: Int, s: Int) {
+    ints_set(state, t, s)
+    let c = vm.heap.sched
+    ints_set(c, SC_LIVE, ints_get(c, SC_LIVE) - 1)
+    // A task's own value is not anyone's (`task.rs`: `.map(|_| ())`); `main`'s is the run's.
+    if t > 0 {
+        while vec_len(vm.res) > 0 { release(vm.heap, vec_pop(vm.res)) }
+    }
+}
+
+/// A failed task waits for every task its open scopes started, then has failed (`exec.rs`, `Scope`).
+fn failing(vm: Vm, state: Ints, t: Int) {
+    if all_finished(vm, state, 0) {
+        let c = vm.heap.sched
+        ints_set(c, SC_JOINED, ints_get(c, SC_JOINED) + ints_len(vm.kids))
+        while ints_len(vm.kids) > 0 { let x = ints_pop(vm.kids) }
+        while ints_len(vm.scopes) > 0 { let x = ints_pop(vm.scopes) }
+        ended(vm, state, t, T_FAILED)
+    } else {
+        ints_set(state, t, T_FAILING)
+    }
+}
+
+/// The end of task `t`'s innermost scope, once its tasks have ended: counted joined, and the first
+/// of them to have failed, in the order started, fails the scope (`task.rs`, `join_all`).
+fn join(tasks: Vec[Vm], state: Ints, t: Int) -> Bool {
+    let vm = vec_get(tasks, t)
+    let from = ints_get(vm.scopes, ints_len(vm.scopes) - 1)
+    if !all_finished(vm, state, from) { return false }
+    let c = vm.heap.sched
+    ints_set(c, SC_JOINED, ints_get(c, SC_JOINED) + ints_len(vm.kids) - from)
+    let mut first = 0 - 1
+    for i in from..ints_len(vm.kids) {
+        let k = ints_get(vm.kids, i)
+        if first < 0 && ints_get(state, k) == T_FAILED { first = k }
+    }
+    while ints_len(vm.kids) > from { let x = ints_pop(vm.kids) }
+    let x = ints_pop(vm.scopes)
+    if first < 0 {
+        ints_set(vm.st, ST_PC, ints_get(vm.st, ST_PC) + 1)
+        ints_set(state, t, T_RUN)
+        return true
+    }
+    // The task's failure, now its parent's.
+    let child = vec_get(tasks, first)
+    ints_set(vm.st, ST_FAILED, 1)
+    for i in 0..3 {
+        strs_set(vm.err, i, strs_get(child.err, i))
+        ints_set(vm.errat, i, ints_get(child.errat, i))
+    }
+    unwind(vm)
+    failing(vm, state, t)
+    true
+}
+
+/// Run `main`'s task and every task it starts: 0 when `main` returned (its value in `main.res`),
+/// 1 when it failed (the failure in `main`), 2 when every task waits and none can proceed.
+pub fn run_program(p: Prog, main: Vm, out: OutCap, io: IoCap, time: TimeCap) -> Int {
+    let tasks = vec_new[Vm]()
+    vec_push(tasks, main)
+    let state: Ints = [T_RUN]
+    start_main(p, main)
+    let mut cur = 0
+    let mut idle = 0
+    loop {
+        let ms = ints_get(state, 0)
+        if ms == T_DONE { return 0 }
+        if ms == T_FAILED { return 1 }
+        let t = cur
+        let vm = vec_get(tasks, t)
+        let s = ints_get(state, t)
+        let mut progressed = false
+        let mut stay = false
+        if s == T_RUN || s == T_WAIT {
+            let x = exec(p, vm, out, io, time)
+            progressed = ints_get(vm.st, ST_STEPS) > 0
+            if x == X_DONE {
+                ended(vm, state, t, T_DONE)
+                progressed = true
+            } else if x == X_FAILED {
+                failing(vm, state, t)
+                progressed = true
+            } else if x == X_BLOCKED {
+                ints_set(state, t, T_WAIT)
+            } else if x == X_YIELD {
+                ints_set(state, t, T_RUN)
+            } else if x == X_SPAWN {
+                let pc = ints_get(vm.st, ST_PC)
+                start_task(p, tasks, state, vm, ints_get(p.a, pc), ints_get(p.b, pc))
+                ints_set(vm.st, ST_PC, pc + 1)
+                progressed = true
+                stay = true
+            } else if x == X_JOIN {
+                ints_set(state, t, T_JOINING)
+            }
+        }
+        if ints_get(state, t) == T_JOINING {
+            if join(tasks, state, t) {
+                progressed = true
+                stay = ints_get(state, t) == T_RUN
+            }
+        } else if ints_get(state, t) == T_FAILING {
+            failing(vm, state, t)
+            if ints_get(state, t) == T_FAILED { progressed = true }
+        }
+        if !stay {
+            cur = (cur + 1) % vec_len(tasks)
+        }
+        if progressed {
+            idle = 0
+        } else {
+            idle += 1
+        }
+        if idle > vec_len(tasks) {
+            // No task can proceed: wait for the earliest deadline, if one waits for one.
+            let mut earliest = 0 - 1
+            for k in 0..vec_len(tasks) {
+                let d = ints_get(vec_get(tasks, k).st, ST_DEADLINE)
+                if ints_get(state, k) == T_WAIT && d > 0 && (earliest < 0 || d < earliest) { earliest = d }
+            }
+            if earliest < 0 { return 2 }
+            let wait = earliest - time_now_ms()
+            if wait > 0 { let z = time_sleep_ms(wait) }
+            idle = 0
+        }
+    }
+    0
+}

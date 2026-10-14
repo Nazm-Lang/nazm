@@ -1,0 +1,141 @@
+// Channels, selection and time (`crates/nazm-core/src/eval/channel.rs`, `intrinsic.rs`): a channel
+// is a heap object — its queue the object's storage, its capacity its room, closed its flag — and
+// an operation that cannot proceed sets `ST_BLOCKED`, so the task waits and the built-in runs
+// again when it resumes (`sched.nz`). What a waiting built-in counts once — a select — it counts
+// when it begins.
+
+use "types.nz"
+use "heap.nz"
+use "names.nz"
+use "vm.nz"
+
+fn argc(vm: Vm, n: Int, i: Int) -> V {
+    vec_get(vm.ops, vec_len(vm.ops) - n + i)
+}
+
+fn obj(v: V) -> Int {
+    match v {
+        V.Ref(obj: o) => o,
+        _ => 0,
+    }
+}
+
+fn int_arg(v: V) -> Int {
+    match v {
+        V.Int(v: x) => x,
+        _ => 0,
+    }
+}
+
+fn wait(vm: Vm) -> V {
+    ints_set(vm.st, ST_BLOCKED, 1)
+    V.Unset
+}
+
+fn done_waiting(vm: Vm) {
+    ints_set(vm.st, ST_PENDING, 0)
+    ints_set(vm.st, ST_DEADLINE, 0)
+}
+
+/// The front of a queue, taken out of it: the rest move up, and the last place, now a copy, goes.
+fn take_front(q: Vec[V]) -> V {
+    let v = vec_get(q, 0)
+    for i in 1..vec_len(q) { vec_set(q, i - 1, vec_get(q, i)) }
+    let copy = vec_pop(q)
+    v
+}
+
+/// A channel or time built-in on the top `n` operands.
+pub fn channel_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, time: TimeCap) -> V {
+    let h = vm.heap
+    if op == B_CHAN_NEW || op == B_CHAN_NEW_OF {
+        let capacity = int_arg(argc(vm, n, 0))
+        if capacity < 1 {
+            return fail(p, vm, pc, "N0405", "a channel needs a capacity of at least 1",
+                    f"asked for a capacity of {capacity}. `Str` is indexed in bytes, from 0; `str_len` gives the length in bytes")
+        }
+        return V.Ref(obj: alloc(h, K_CHAN, capacity))
+    }
+    if op == B_CHAN_SEND || op == B_CHAN_SEND_OF {
+        let c = obj(argc(vm, n, 0))
+        if ints_get(h.flag, c) == 1 { return V.Bool(v: false) }
+        let q = items(h, c)
+        if vec_len(q) >= ints_get(h.room, c) { return wait(vm) }
+        // A copy: the sender's binding is untouched (N53).
+        let v = argc(vm, n, 1)
+        retain(h, v)
+        vec_push(q, v)
+        return V.Bool(v: true)
+    }
+    if op == B_CHAN_RECV || op == B_CHAN_RECV_OF {
+        let c = obj(argc(vm, n, 0))
+        let q = items(h, c)
+        if vec_len(q) > 0 {
+            // Moved out of the channel onto the vector (N53).
+            vec_push(items(h, obj(argc(vm, n, 1))), take_front(q))
+            return V.Bool(v: true)
+        }
+        if ints_get(h.flag, c) == 1 { return V.Bool(v: false) }
+        return wait(vm)
+    }
+    if op == B_CHAN_CLOSE || op == B_CHAN_CLOSE_OF {
+        ints_set(h.flag, obj(argc(vm, n, 0)), 1)
+        return V.Int(v: 0)
+    }
+    if op == B_CHAN_SELECT_OF || op == B_CHAN_SELECT_UNTIL {
+        // N54: the lowest ready channel's value moved onto `out`, or its index alone once closed.
+        let chans = items(h, obj(argc(vm, n, 0)))
+        if vec_len(chans) == 0 { return V.Int(v: 0 - 1) }
+        if ints_get(vm.st, ST_PENDING) == 0 {
+            ints_set(vm.st, ST_PENDING, 1)
+            ints_set(h.sched, SC_SELECTS, ints_get(h.sched, SC_SELECTS) + 1)
+            if op == B_CHAN_SELECT_UNTIL {
+                let ms = int_arg(argc(vm, n, 2))
+                ints_set(vm.st, ST_DEADLINE, time_now_ms() + (if ms > 0 { ms } else { 0 }) + 1)
+            }
+        }
+        for i in 0..vec_len(chans) {
+            let c = obj(vec_get(chans, i))
+            let q = items(h, c)
+            if vec_len(q) > 0 {
+                vec_push(items(h, obj(argc(vm, n, 1))), take_front(q))
+                done_waiting(vm)
+                return V.Int(v: i)
+            }
+            if ints_get(h.flag, c) == 1 {
+                done_waiting(vm)
+                return V.Int(v: i)
+            }
+        }
+        let deadline = ints_get(vm.st, ST_DEADLINE)
+        if op == B_CHAN_SELECT_UNTIL && time_now_ms() >= deadline - 1 {
+            ints_set(h.sched, SC_TIMEOUTS, ints_get(h.sched, SC_TIMEOUTS) + 1)
+            done_waiting(vm)
+            return V.Int(v: 0 - 2)
+        }
+        return wait(vm)
+    }
+    if op == B_TIME_SLEEP_MS {
+        let ms = int_arg(argc(vm, n, 0))
+        if ms <= 0 { return V.Int(v: 0) }
+        if ints_get(vm.st, ST_PENDING) == 0 {
+            ints_set(vm.st, ST_PENDING, 1)
+            ints_set(vm.st, ST_DEADLINE, time_now_ms() + ms + 1)
+            return wait(vm)
+        }
+        if time_now_ms() >= ints_get(vm.st, ST_DEADLINE) - 1 {
+            done_waiting(vm)
+            return V.Int(v: 0)
+        }
+        return wait(vm)
+    }
+    if op == B_TIME_NOW_MS { return V.Int(v: time_now_ms()) }
+    if op == B_TIME_NOW_NS { return V.Int(v: time_now_ns()) }
+    if op == B_TIME_WALL_NS { return V.Int(v: time_wall_ns()) }
+    fail(p, vm, pc, "N0900", "a channel built-in this interpreter does not know", "")
+}
+
+/// Whether built-in `op` is one of this family's.
+pub fn is_channel(op: Int) -> Bool {
+    op == B_CHAN_NEW || op == B_CHAN_SEND || op == B_CHAN_RECV || op == B_CHAN_CLOSE || (op >= B_CHAN_NEW_OF && op <= B_TIME_SLEEP_MS)
+}

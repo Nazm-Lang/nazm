@@ -11,6 +11,7 @@ use "values.nz"
 use "num.nz"
 use "numbuiltins.nz"
 use "bytestext.nz"
+use "chans.nz"
 
 fn arg_v(vm: Vm, n: Int, i: Int) -> V {
     vec_get(vm.ops, vec_len(vm.ops) - n + i)
@@ -49,7 +50,7 @@ fn bug(p: Prog, vm: Vm, pc: Int, id: Int, what: Str) -> V {
 }
 
 /// Built-in `id` on the top `n` operands.
-pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap) -> V {
+pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap, time: TimeCap) -> V {
     let h = vm.heap
     // `Ints`, `Strs`, `Box` and `List` operations are the `Vec` ones (`intrinsic.rs`, `same`).
     let op = if id == B_INTS_NEW || id == B_STRS_NEW || id == B_BOX_FRESH || id == B_LIST_EMPTY {
@@ -66,6 +67,9 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap
         B_VEC_POP
     } else {
         id
+    }
+    if is_channel(op) {
+        return channel_builtin(p, vm, pc, op, n, time)
     }
     if is_bytes_text(op) {
         return bytes_text(p, vm, pc, op, n, strs_get(p.names, ints_get(p.c, pc)))

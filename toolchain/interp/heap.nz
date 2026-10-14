@@ -6,11 +6,13 @@ use "types.nz"
 
 pub fn heap_new() -> Heap {
     let h = Heap(kind: ints_new(), rc: ints_new(), room: ints_new(), items: vec_new[Vec[V]](),
-            free: ints_new(), counts: [0, 0, 0, 0, 0, 0, 0, 0], work: vec_new[V](), busy: [0], none: vec_new[V]())
+            free: ints_new(), counts: [0, 0, 0, 0, 0, 0, 0, 0], work: vec_new[V](), busy: [0], none: vec_new[V](),
+            flag: ints_new(), sched: [0, 0, 0, 0, 1])
             // Object 0 is never allocated: a `Str` whose `obj` is 0 is immortal.
             ints_push(h.kind, K_FREE)
     ints_push(h.rc, 0)
     ints_push(h.room, 0)
+    ints_push(h.flag, 0)
     vec_push(h.items, h.none)
     h
 }
@@ -42,12 +44,14 @@ pub fn alloc(h: Heap, kind: Int, room: Int) -> Int {
         ints_set(h.kind, id, kind)
         ints_set(h.rc, id, 1)
         ints_set(h.room, id, room)
+        ints_set(h.flag, id, 0)
         vec_set(h.items, id, items)
         id
     } else {
         ints_push(h.kind, kind)
         ints_push(h.rc, 1)
         ints_push(h.room, room)
+        ints_push(h.flag, 0)
         vec_push(h.items, items)
         ints_len(h.kind) - 1
     }
