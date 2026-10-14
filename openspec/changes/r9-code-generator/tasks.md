@@ -36,6 +36,7 @@
 ## 5. Line tables
 
 - [ ] 5.1 DWARF `.debug_line` from `loc`, a compile unit and subprograms; compared with LLVM's rows
+      (blocked: `nazm lir --ops` prints no `loc`; needs `nazm lir --debug`, see design, *As built*)
 - [ ] 5.2 Unwind information (compact unwind) for backtraces
 
 ## 6. ELF and x86_64
