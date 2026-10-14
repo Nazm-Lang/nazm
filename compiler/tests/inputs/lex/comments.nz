@@ -1,0 +1,8 @@
+fn main() -> Int {
+    /* one /* nested */ still comment */ let a = 1;
+    /**/ /* * / */
+    // line
+    let b = 2; // trailing
+    0
+}
+/* never /* closed */

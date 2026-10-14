@@ -1,0 +1,15 @@
+fn main() -> Int {
+    let n = 3;
+    let a = f"n is {n} and {n + 1:>8} and {ratio:.2} and {x:<4.1} {{braces}} done";
+    let b = f"nested {f(g(1), "}")} and {m::x} and {a[0]} {s:}";
+    let c = f"bad }" ;
+    let d = f"empty { } hole";
+    let e = f"badspec {x:abc} {y:99999999999}";
+    let g = f"unclosed {x";
+    let h = f"""
+        line {n}
+        two {{x}} \t
+        """;
+    let i = f"esc \n \q";
+    0
+}

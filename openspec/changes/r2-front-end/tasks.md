@@ -10,7 +10,7 @@
 
 ## 2. Lexer and parser complete
 
-- [ ] 2.1 Every token (group A): escapes, `::`, `..`, bit and compound operators, `@`, radix
+- [x] 2.1 Every token (group A): escapes, `::`, `..`, bit and compound operators, `@`, radix
       integers, `IntTooLarge`, floats, raw, multi-line and interpolated strings, block comments;
       every lexing error collected — compared on every input (`tokens`)
 - [ ] 2.2 The tree printer: the arena printed as the Rust parser's `{:#?}` (D3)

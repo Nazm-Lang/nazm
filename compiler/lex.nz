@@ -1,27 +1,32 @@
 // The Nazm tokeniser, written in Nazm — the library.
 //
-// `compiler/lexer.nz` is the command-line driver over this file. They are separate
-// because every top-level function is visible to every importer (`docs/spec.md`,
-// *Visibility is not expressible yet*), so a library that carried a `main` would
-// collide with the `main` of anything that imported it. That is the missing visibility
-// showing up in practice on the very first multi-file program, and splitting the driver
-// out is the honest workaround until privacy exists.
+// `compiler/lexer.nz` and `compiler/tokens.nz` are command-line drivers over this file. They
+// are separate because a library that carried a `main` would collide with the `main` of
+// anything that imported it.
 //
-// The first component of the self-hosted compiler, and the first real test of the
-// bootstrap subset. It follows `docs/bootstrap.md` §1 exactly: tokens live in
-// parallel `Ints`/`Strs` arrays addressed by index, spans are byte offsets so they mean
-// the same thing as `nazm-span::Span`, and **every loop is a loop** — there is no
-// recursion anywhere, which is what lets this compile natively today.
+// The first component of the self-hosted compiler. It follows `docs/bootstrap.md` §1: tokens
+// live in parallel `Ints`/`Strs` arrays addressed by index, spans are byte offsets so they mean
+// the same thing as `nazm-span::Span`, and every loop is a loop.
 //
-// Usage: nazmc-lex FILE
-// Output: one token per line, `kind start end`, then a final `EOF` line. A lexing error
-// prints `error N000n at OFFSET` to standard error and exits 1.
+// # The whole language (R2)
+//
+// Since R2 (`openspec/changes/r2-front-end/`) this scans every token the reference lexer,
+// `crates/nazm-syntax/src/lexer.rs`, scans — escapes, radix integers, floats, raw, multi-line
+// and interpolated strings, block comments, every operator — and, like it, **does not stop at
+// the first error**: `lex_all` records every diagnostic and keeps going exactly where the
+// reference does, so a file with three bad characters reports three. `lex`, which the parser
+// and the checker call, still stops at the first, until the parser recovers as the reference's
+// does (design D9).
+//
+// A token's text (`texts`) is its decoded value (design D10): an integer's decimal digits with
+// `_` removed — a radix literal converted to decimal — a float's text with `_` removed, a
+// string's decoded bytes, an interpolation's pieces in the comparison's form, an identifier's
+// name. Whether an integer fits `Int` is `lex_int_too_large` of its text, as the parser asks.
 
 // --- token kinds -------------------------------------------------------------------
 //
-// Integers rather than an enum, because the language has none. The numbering matches
-// `crates/nazm-syntax/src/lexer.rs` in *meaning*, not in value: the differential test
-// maps one to the other in one place.
+// Integers, numbered as `crates/nazm-cli/tests/selfhost.rs` maps the reference's kinds, so the
+// old driver's comparison still holds; `compiler/tokens.nz` prints each by its reference name.
 
 pub fn k_int() -> Int { 1 }
 pub fn k_str() -> Int { 2 }
@@ -38,24 +43,12 @@ pub fn k_break() -> Int { 18 }
 pub fn k_continue() -> Int { 19 }
 pub fn k_return() -> Int { 20 }
 pub fn k_use() -> Int { 21 }
-// `scope` and `spawn` are reserved here. They were reserved before this compiler could
-// emit them, so that the two lexers would agree on every input; it emits them now., so
-// that the two lexers agree on every input. A word that is a keyword to one and an
-// identifier to the other is a divergence the differential test would have to excuse.
 pub fn k_scope() -> Int { 22 }
 pub fn k_spawn() -> Int { 23 }
-// `pub` — the visibility keyword, added 2026-09-22. Same rule as above: a word that is
-// a keyword to one lexer and an identifier to the other is a divergence, so it is here
-// as soon as it is a keyword at all, whatever the later stages do with it.
 pub fn k_pub() -> Int { 24 }
-// `struct` — the record declaration keyword, added by N9. It was reserved by name in the
-// reference parser long before it meant anything, for the reason above: a word that is a
-// keyword to one lexer and an identifier to the other is a divergence.
 pub fn k_struct() -> Int { 25 }
-// `enum` and `match`, added by N10. Reserved by name from v0.1 and refused until then.
 pub fn k_enum() -> Int { 26 }
 pub fn k_match() -> Int { 27 }
-// `trait` and `impl` (N78; this lexer's since N102).
 pub fn k_trait() -> Int { 28 }
 pub fn k_impl() -> Int { 29 }
 pub fn k_lparen() -> Int { 30 }
@@ -65,11 +58,11 @@ pub fn k_rbrace() -> Int { 33 }
 pub fn k_comma() -> Int { 34 }
 pub fn k_colon() -> Int { 35 }
 pub fn k_semi() -> Int { 36 }
-// `.` — field projection. Never part of a number: the language has no float, so a dot is
-// always this and never the start of one.
-pub fn k_dot() -> Int { 39 }
 pub fn k_arrow() -> Int { 37 }
 pub fn k_eq() -> Int { 38 }
+// `.` — field projection, and the separator between an enum and a variant. A float's `.` is
+// part of the float token, which needs a digit after it, so `1.f` is a projection.
+pub fn k_dot() -> Int { 39 }
 pub fn k_plus() -> Int { 40 }
 pub fn k_minus() -> Int { 41 }
 pub fn k_star() -> Int { 42 }
@@ -81,21 +74,122 @@ pub fn k_lt() -> Int { 47 }
 pub fn k_lteq() -> Int { 48 }
 pub fn k_gt() -> Int { 49 }
 pub fn k_gteq() -> Int { 50 }
-// `=>`, between a `match` pattern and the arm it selects. Its own token rather than `=`
-// followed by `>`: written as two, `x = > 1` would be accepted.
 pub fn k_fatarrow() -> Int { 51 }
-// `[` and `]`, added by N11: they enclose type parameters and type arguments, and mean
-// nothing else. There is no indexing syntax.
 pub fn k_lbracket() -> Int { 52 }
 pub fn k_rbracket() -> Int { 53 }
-// `?`, added by N12: propagation, a postfix after an operand whose type is the core
-// prelude's `Result`. `??` is two of them.
 pub fn k_question() -> Int { 54 }
-// `!`, added by N102: the effect set's opening (`! { io }`). Alone; `!=` is its own token.
 pub fn k_bang() -> Int { 55 }
-// `&&` and `||` (N49; this lexer's since N102).
 pub fn k_ampamp() -> Int { 56 }
 pub fn k_pipepipe() -> Int { 57 }
+// `::` (N49): between a module alias and the item it names.
+pub fn k_coloncolon() -> Int { 58 }
+// Gate 2's numbers and bit operators.
+pub fn k_float() -> Int { 60 }
+pub fn k_amp() -> Int { 61 }
+pub fn k_pipe() -> Int { 62 }
+pub fn k_caret() -> Int { 63 }
+pub fn k_tilde() -> Int { 64 }
+pub fn k_shl() -> Int { 65 }
+pub fn k_shr() -> Int { 66 }
+// `@` (Gate 2): an attribute.
+pub fn k_at() -> Int { 67 }
+// `..` (R1a): between a `for` range's bounds.
+pub fn k_dotdot() -> Int { 68 }
+// `f"…"` (R1a, L4): an interpolated string, its pieces in `texts`.
+pub fn k_fstr() -> Int { 69 }
+// Compound assignment (R1, 5b.12), each one token. The old driver prints all ten as 70, as the
+// reference's mapping in `selfhost.rs` does.
+pub fn k_pluseq() -> Int { 70 }
+pub fn k_minuseq() -> Int { 71 }
+pub fn k_stareq() -> Int { 72 }
+pub fn k_slasheq() -> Int { 73 }
+pub fn k_percenteq() -> Int { 74 }
+pub fn k_ampeq() -> Int { 75 }
+pub fn k_pipeeq() -> Int { 76 }
+pub fn k_careteq() -> Int { 77 }
+pub fn k_shleq() -> Int { 78 }
+pub fn k_shreq() -> Int { 79 }
+
+// The reference's name for a kind — its `TokenKind` variant — as the comparison prints it.
+// An `Int` too large for `Int` is `IntTooLarge` there; here it is told by its digits.
+pub fn lex_kind_name(k: Int, text: Str) -> Str {
+    if k == k_int() {
+        if lex_int_too_large(text) { return "IntTooLarge"; }
+        return "Int";
+    }
+    if k == k_str() { return "Str"; }
+    if k == k_ident() { return "Ident"; }
+    if k == k_fn() { return "Fn"; }
+    if k == k_let() { return "Let"; }
+    if k == k_if() { return "If"; }
+    if k == k_else() { return "Else"; }
+    if k == k_true() { return "True"; }
+    if k == k_false() { return "False"; }
+    if k == k_mut() { return "Mut"; }
+    if k == k_while() { return "While"; }
+    if k == k_break() { return "Break"; }
+    if k == k_continue() { return "Continue"; }
+    if k == k_return() { return "Return"; }
+    if k == k_use() { return "Use"; }
+    if k == k_scope() { return "Scope"; }
+    if k == k_spawn() { return "Spawn"; }
+    if k == k_pub() { return "Pub"; }
+    if k == k_struct() { return "Struct"; }
+    if k == k_enum() { return "Enum"; }
+    if k == k_match() { return "Match"; }
+    if k == k_trait() { return "Trait"; }
+    if k == k_impl() { return "Impl"; }
+    if k == k_lparen() { return "LParen"; }
+    if k == k_rparen() { return "RParen"; }
+    if k == k_lbrace() { return "LBrace"; }
+    if k == k_rbrace() { return "RBrace"; }
+    if k == k_comma() { return "Comma"; }
+    if k == k_colon() { return "Colon"; }
+    if k == k_semi() { return "Semi"; }
+    if k == k_arrow() { return "Arrow"; }
+    if k == k_eq() { return "Eq"; }
+    if k == k_dot() { return "Dot"; }
+    if k == k_plus() { return "Plus"; }
+    if k == k_minus() { return "Minus"; }
+    if k == k_star() { return "Star"; }
+    if k == k_slash() { return "Slash"; }
+    if k == k_percent() { return "Percent"; }
+    if k == k_eqeq() { return "EqEq"; }
+    if k == k_noteq() { return "NotEq"; }
+    if k == k_lt() { return "Lt"; }
+    if k == k_lteq() { return "LtEq"; }
+    if k == k_gt() { return "Gt"; }
+    if k == k_gteq() { return "GtEq"; }
+    if k == k_fatarrow() { return "FatArrow"; }
+    if k == k_lbracket() { return "LBracket"; }
+    if k == k_rbracket() { return "RBracket"; }
+    if k == k_question() { return "Question"; }
+    if k == k_bang() { return "Bang"; }
+    if k == k_ampamp() { return "AmpAmp"; }
+    if k == k_pipepipe() { return "PipePipe"; }
+    if k == k_coloncolon() { return "ColonColon"; }
+    if k == k_float() { return "Float"; }
+    if k == k_amp() { return "Amp"; }
+    if k == k_pipe() { return "Pipe"; }
+    if k == k_caret() { return "Caret"; }
+    if k == k_tilde() { return "Tilde"; }
+    if k == k_shl() { return "Shl"; }
+    if k == k_shr() { return "Shr"; }
+    if k == k_at() { return "At"; }
+    if k == k_dotdot() { return "DotDot"; }
+    if k == k_fstr() { return "FStr"; }
+    if k == k_pluseq() { return "PlusEq"; }
+    if k == k_minuseq() { return "MinusEq"; }
+    if k == k_stareq() { return "StarEq"; }
+    if k == k_slasheq() { return "SlashEq"; }
+    if k == k_percenteq() { return "PercentEq"; }
+    if k == k_ampeq() { return "AmpEq"; }
+    if k == k_pipeeq() { return "PipeEq"; }
+    if k == k_careteq() { return "CaretEq"; }
+    if k == k_shleq() { return "ShlEq"; }
+    if k == k_shreq() { return "ShrEq"; }
+    "?"
+}
 
 // --- byte classification -----------------------------------------------------------
 
@@ -110,20 +204,167 @@ fn is_alpha(b: Int) -> Bool {
 
 fn is_alnum(b: Int) -> Bool { if is_alpha(b) { true } else { is_digit(b) } }
 
+// ASCII whitespace as Rust's `u8::is_ascii_whitespace`: space, tab, line feed, form feed and
+// carriage return — not the vertical tab.
 fn is_space(b: Int) -> Bool {
     if b == 32 { return true; }
     if b == 9 { return true; }
     if b == 10 { return true; }
+    if b == 12 { return true; }
     if b == 13 { return true; }
     false
 }
 
-// The byte at `i`, or -1 past the end. One place where "off the end" is expressed, so
-// the scanning loops below never index out of bounds.
+// A hexadecimal digit's value, or -1.
+fn hex_value(b: Int) -> Int {
+    if is_digit(b) { return b - 48; }
+    if b >= 97 { if b <= 102 { return b - 87; } }
+    if b >= 65 { if b <= 70 { return b - 55; } }
+    0 - 1
+}
+
+// The byte at `i`, or -1 past either end.
 fn at(src: Str, i: Int) -> Int {
     if i < 0 { return 0 - 1; }
     if i >= str_len(src) { return 0 - 1; }
     str_byte(src, i)
+}
+
+// The bytes a UTF-8 sequence starting with `b` takes.
+pub fn lex_utf8_len(b: Int) -> Int {
+    if b >= 240 { return 4; }
+    if b >= 224 { return 3; }
+    if b >= 192 { return 2; }
+    1
+}
+
+fn bs() -> Str { str_from_byte(92) }
+fn dq() -> Str { str_from_byte(34) }
+fn tick() -> Str { str_from_byte(96) }
+fn triple() -> Str { str_concat(str_concat(dq(), dq()), dq()) }
+
+// `s` with every byte outside `0x20..0x7e`, `\` and `|` written `\xHH` — the comparison's
+// encoding of a payload or a message (design D2).
+pub fn lex_esc(s: Str) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    let n = str_len(s);
+    let mut from = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        let mut plain = true;
+        if b < 32 { plain = false; }
+        if b > 126 { plain = false; }
+        if b == 92 { plain = false; }
+        if b == 124 { plain = false; }
+        if plain == false {
+            strs_push(out, str_slice(s, from, i));
+            strs_push(out, bs());
+            strs_push(out, "x");
+            strs_push(out, lower_hex2(b));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, n));
+    str_join(out, "")
+}
+
+fn lower_hex_digit(d: Int) -> Str {
+    if d < 10 { return int_to_str(d); }
+    str_from_byte(87 + d)
+}
+
+fn lower_hex2(b: Int) -> Str { str_concat(lower_hex_digit(b / 16), lower_hex_digit(b % 16)) }
+
+// --- numbers as digit strings ----------------------------------------------------------
+
+// Whether decimal `digits` (no sign, no `_`) is above `limit`. Leading zeros do not count.
+fn digits_above(digits: Str, limit: Str) -> Bool {
+    let mut s = 0;
+    let n = str_len(digits);
+    while s < n - 1 {
+        if str_byte(digits, s) != 48 { break; }
+        s = s + 1;
+    }
+    let len = n - s;
+    if len > str_len(limit) { return true; }
+    if len < str_len(limit) { return false; }
+    let mut i = 0;
+    while i < len {
+        let a = str_byte(digits, s + i);
+        let b = str_byte(limit, i);
+        if a > b { return true; }
+        if a < b { return false; }
+        i = i + 1;
+    }
+    false
+}
+
+// Whether a decimal literal's digits are above `Int::MAX` — the reference's `IntTooLarge`.
+pub fn lex_int_too_large(digits: Str) -> Bool { digits_above(digits, "9223372036854775807") }
+
+// `digits` without leading zeros, as Rust prints a parsed value.
+fn strip_zeros(digits: Str) -> Str {
+    let mut s = 0;
+    let n = str_len(digits);
+    while s < n - 1 {
+        if str_byte(digits, s) != 48 { break; }
+        s = s + 1;
+    }
+    str_slice(digits, s, n)
+}
+
+// The decimal digits of the number written in `digits` in `radix`, or "" when a digit is not
+// one of the radix's or there are none — what `u128::from_str_radix` refuses, overflow aside.
+fn radix_to_decimal(digits: Str, radix: Int) -> Str {
+    let n = str_len(digits);
+    if n == 0 { return ""; }
+    // Little-endian decimal digits of the value so far.
+    let acc = ints_new();
+    ints_push(acc, 0);
+    let mut i = 0;
+    while i < n {
+        let d = hex_value(str_byte(digits, i));
+        if d < 0 { return ""; }
+        if d >= radix { return ""; }
+        let mut carry = d;
+        let mut k = 0;
+        while k < ints_len(acc) {
+            let v = ints_get(acc, k) * radix + carry;
+            ints_set(acc, k, v % 10);
+            carry = v / 10;
+            k = k + 1;
+        }
+        while carry > 0 {
+            ints_push(acc, carry % 10);
+            carry = carry / 10;
+        }
+        i = i + 1;
+    }
+    let out = strs_new();
+    let mut k = ints_len(acc) - 1;
+    while k >= 0 {
+        strs_push(out, int_to_str(ints_get(acc, k)));
+        k = k - 1;
+    }
+    strip_zeros(str_join(out, ""))
+}
+
+// `s` with every `_` removed.
+fn no_underscores(s: Str) -> Str {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 95 {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, str_len(s)));
+    str_join(out, "")
 }
 
 // --- keywords ----------------------------------------------------------------------
@@ -153,9 +394,6 @@ fn keyword_kind(word: Str) -> Int {
 }
 
 // --- the scanner --------------------------------------------------------------------
-//
-// One pass, no backtracking, no recursion. `kinds`, `starts` and `ends` grow together
-// and are always the same length, which is the invariant the whole design rests on.
 
 fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, from: Int, to: Int, text: Str) -> Int {
     ints_push(kinds, kind);
@@ -165,7 +403,17 @@ fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, fro
     ints_len(kinds)
 }
 
-// Report and stop. Errors are located, which is the whole point of carrying byte offsets.
+// One diagnostic, recorded; `help` is "" when there is none.
+fn report(ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs, code: Str, from: Int, to: Int, message: Str, help: Str) -> Int {
+    strs_push(ecode, code);
+    ints_push(estart, from);
+    ints_push(eend, to);
+    strs_push(emsg, message);
+    strs_push(ehelp, help);
+    strs_len(ecode)
+}
+
+// Report and stop. The old drivers' form, `error CODE at OFFSET: detail`.
 pub fn fail(code: Str, at_offset: Int, detail: Str, io: IoCap) -> Int {
     eprint(str_concat("error ", code));
     eprint(str_concat(" at ", int_to_str(at_offset)));
@@ -175,27 +423,796 @@ pub fn fail(code: Str, at_offset: Int, detail: Str, io: IoCap) -> Int {
     0
 }
 
+// Tokenise, stopping at the first error — what the parser and the checker call (design D9).
 pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoCap) -> Int {
+    let ecode = strs_new();
+    let estart = ints_new();
+    let eend = ints_new();
+    let emsg = strs_new();
+    let ehelp = strs_new();
+    lex_all(src, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+    if strs_len(ecode) > 0 {
+        fail(strs_get(ecode, 0), ints_get(estart, 0), strs_get(emsg, 0), io);
+    }
+    ints_len(kinds)
+}
+
+// A literal's bytes with its escapes decoded (`docs/spec.md`, *String escapes*). An error's
+// span is `base + k` for the bytes written, or `fixed_from..fixed_to` when `fixed_from` is not
+// -1 (a multi-line string reports every escape at its opening delimiter, as the reference does).
+fn decode_escapes(raw: Str, base: Int, fixed_from: Int, fixed_to: Int,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Str {
+    let n = str_len(raw);
+    let mut has = false;
+    let mut j = 0;
+    while j < n {
+        if str_byte(raw, j) == 92 { has = true; break; }
+        j = j + 1;
+    }
+    if has == false { return raw; }
+    let out = strs_new();
+    let mut k = 0;
+    let mut from = 0;
+    while k < n {
+        let b = str_byte(raw, k);
+        if b != 92 { k = k + 1; continue; }
+        strs_push(out, str_slice(raw, from, k));
+        let next = at(raw, k + 1);
+        // A backslash ending a line of a multi-line string joins it to the next.
+        if next == 10 { k = k + 2; from = k; continue; }
+        let mut value = 0 - 1;
+        let mut width = 2;
+        if next == 110 { value = 10; }
+        if next == 116 { value = 9; }
+        if next == 114 { value = 13; }
+        if next == 48 { value = 0; }
+        if next == 92 { value = 92; }
+        if next == 34 { value = 34; }
+        if next == 120 {
+            let hi = hex_value(at(raw, k + 2));
+            let lo = hex_value(at(raw, k + 3));
+            if hi >= 0 && lo >= 0 {
+                if hi * 16 + lo <= 127 { value = hi * 16 + lo; width = 4; }
+            }
+        }
+        if value >= 0 {
+            strs_push(out, str_from_byte(value));
+            k = k + width;
+            from = k;
+            continue;
+        }
+        if next == 117 {
+            let w = unicode_escape_width(raw, k);
+            if w > 0 {
+                strs_push(out, utf8_of(unicode_escape_value(raw, k)));
+                k = k + w;
+                from = k;
+                continue;
+            }
+            let bad = 0 - w;
+            let mut written = str_concat(bs(), "u");
+            if k + bad <= n { written = str_slice(raw, k, k + bad); }
+            let mut ef = base + k;
+            let mut et = base + k + bad;
+            if fixed_from >= 0 { ef = fixed_from; et = fixed_to; }
+            let msg = str_concat(str_concat(tick(), written), str_concat(tick(), " is not a Unicode escape this language has"));
+            let help = str_concat(str_concat("a Unicode escape is ", tick()), str_concat(str_concat(bs(), "u{"), str_concat(tick(),
+                    " and one to six hexadecimal digits naming a scalar value — not a surrogate, at most 10FFFF — and `}`")));
+            report(ecode, estart, eend, emsg, ehelp, "N0004", ef, et, msg, help);
+            k = k + bad;
+            from = k;
+            continue;
+        }
+        // Refused: the backslash and the character after it, or a whole `\xHH` above `7F`.
+        let mut bad = 1;
+        if next >= 0 {
+            if next < 128 { bad = 2; } else { bad = 1 + lex_utf8_len(next); }
+            if next == 120 {
+                if hex_value(at(raw, k + 2)) >= 0 && hex_value(at(raw, k + 3)) >= 0 { bad = 4; }
+            }
+        }
+        let mut written = bs();
+        if k + bad <= n { written = str_slice(raw, k, k + bad); }
+        let mut ef = base + k;
+        let mut et = base + k + bad;
+        if fixed_from >= 0 { ef = fixed_from; et = fixed_to; }
+        let msg = str_concat(str_concat(tick(), written), str_concat(tick(), " is not an escape this language has"));
+        let b2 = str_concat(bs(), bs());
+        let help = str_join_all9("the escapes are ", str_concat(bs(), "n "), str_concat(bs(), "t "), str_concat(bs(), "r "),
+                str_concat(bs(), "0 "), str_concat(b2, " "), str_concat(str_concat(bs(), dq()), " "),
+                str_concat(bs(), "xHH up to "), str_join_all9(bs(), "x7F and ", bs(), "u{H…}; write ", tick(), b2, tick(),
+                " for a backslash, and use ", "`str_from_byte` for a byte above 127"));
+        report(ecode, estart, eend, emsg, ehelp, "N0004", ef, et, msg, help);
+        k = k + bad;
+        from = k;
+    }
+    strs_push(out, str_slice(raw, from, n));
+    str_join(out, "")
+}
+
+fn str_join_all9(a: Str, b: Str, c: Str, d: Str, e: Str, f: Str, g: Str, h: Str, i: Str) -> Str {
+    let out = strs_new();
+    strs_push(out, a);
+    strs_push(out, b);
+    strs_push(out, c);
+    strs_push(out, d);
+    strs_push(out, e);
+    strs_push(out, f);
+    strs_push(out, g);
+    strs_push(out, h);
+    strs_push(out, i);
+    str_join(out, "")
+}
+
+// `\u{H…}` at `raw[k]`: the escape's width when it names a scalar value, or minus the width of
+// what is refused.
+fn unicode_escape_width(raw: Str, k: Int) -> Int {
+    if at(raw, k + 2) != 123 { return 0 - 2; }
+    let mut digits = 0;
+    while hex_value(at(raw, k + 3 + digits)) >= 0 { digits = digits + 1; }
+    let close = k + 3 + digits;
+    if at(raw, close) != 125 { return 0 - (3 + digits); }
+    let width = 4 + digits;
+    if digits == 0 { return 0 - width; }
+    if digits > 6 { return 0 - width; }
+    let v = unicode_escape_value(raw, k);
+    if v > 1114111 { return 0 - width; }
+    if v >= 55296 { if v <= 57343 { return 0 - width; } }
+    width
+}
+
+fn unicode_escape_value(raw: Str, k: Int) -> Int {
+    let mut v = 0;
+    let mut i = k + 3;
+    while hex_value(at(raw, i)) >= 0 {
+        v = v * 16 + hex_value(at(raw, i));
+        i = i + 1;
+    }
+    v
+}
+
+// The UTF-8 bytes of scalar value `c`.
+fn utf8_of(c: Int) -> Str {
+    if c < 128 { return str_from_byte(c); }
+    if c < 2048 {
+        return str_concat(str_from_byte(192 + c / 64), str_from_byte(128 + c % 64));
+    }
+    if c < 65536 {
+        return str_concat(str_from_byte(224 + c / 4096),
+                str_concat(str_from_byte(128 + (c / 64) % 64), str_from_byte(128 + c % 64)));
+    }
+    str_concat(str_concat(str_from_byte(240 + c / 262144), str_from_byte(128 + (c / 4096) % 64)),
+            str_concat(str_from_byte(128 + (c / 64) % 64), str_from_byte(128 + c % 64)))
+}
+
+// Whether `s` holds only ASCII whitespace (what `str::trim().is_empty()` asks, for ASCII).
+fn blank(s: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if is_space(b) == false { if b != 11 { return false; } }
+        i = i + 1;
+    }
+    true
+}
+
+// The length of `s`'s run of leading spaces and tabs.
+fn indent_len(s: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b != 32 { if b != 9 { break; } }
+        i = i + 1;
+    }
+    i
+}
+
+// Whether `s` begins with `prefix`.
+fn starts_with(s: Str, prefix: Str) -> Bool {
+    if str_len(prefix) > str_len(s) { return false; }
+    str_slice(s, 0, str_len(prefix)) == prefix
+}
+
+// --- multi-line layout (R1a, L9) ------------------------------------------------------
+//
+// The lines of a multi-line literal whose opening delimiter is `open` bytes at `start`: each
+// kept line's offset and text pushed onto `loffs`/`ltexts`. Returns the offset past the
+// closing `"""`, or minus one minus the offset to resume at when there is no literal to read —
+// in which case the invalid region is `start..resume`.
+fn multi_line_layout(src: Str, start: Int, open: Int, loffs: Ints, ltexts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let n = str_len(src);
+    let after = start + open;
+    let mut line_end = 0 - 1;
+    let mut j = after;
+    while j < n {
+        if str_byte(src, j) == 10 { line_end = j; break; }
+        j = j + 1;
+    }
+    let mut tail_end = n;
+    if line_end >= 0 { tail_end = line_end; }
+    let tail = str_slice(src, after, tail_end);
+    if line_end < 0 || blank(tail) == false {
+        let msg = str_concat(str_concat("a multi-line string's text begins on the line after its ", tick()), str_concat(triple(), tick()));
+        let help = str_join_all9("write ", tick(), triple(), tick(), ", a line break, the lines, and ", tick(), triple(), tick(), " on a line of its own");
+        report(ecode, estart, eend, emsg, ehelp, "N0005", after, tail_end, msg, help);
+        if line_end < 0 { return 0 - 1 - tail_end; }
+    }
+    let first = line_end + 1;
+    let roffs = ints_new();
+    let rtexts = strs_new();
+    let mut pos = first;
+    let mut close_at = 0 - 1;
+    let mut indent = "";
+    while pos <= n {
+        let mut end = n;
+        let mut q = pos;
+        while q < n {
+            if str_byte(src, q) == 10 { end = q; break; }
+            q = q + 1;
+        }
+        let mut line = str_slice(src, pos, end);
+        if str_len(line) > 0 {
+            if str_byte(line, str_len(line) - 1) == 13 { line = str_slice(line, 0, str_len(line) - 1); }
+        }
+        let il = indent_len(line);
+        if starts_with(str_slice(line, il, str_len(line)), triple()) {
+            close_at = pos;
+            indent = str_slice(line, 0, il);
+            break;
+        }
+        ints_push(roffs, pos);
+        strs_push(rtexts, line);
+        if end >= n { break; }
+        pos = end + 1;
+    }
+    if close_at < 0 {
+        let msg = str_concat(str_concat("this multi-line string has no closing ", tick()), str_concat(triple(), tick()));
+        report(ecode, estart, eend, emsg, ehelp, "N0002", start, n, msg, "");
+        return 0 - 1 - n;
+    }
+    let end = close_at + str_len(indent) + 3;
+    let mut r = 0;
+    while r < ints_len(roffs) {
+        let offset = ints_get(roffs, r);
+        let line = strs_get(rtexts, r);
+        if blank(line) {
+            ints_push(loffs, offset);
+            strs_push(ltexts, "");
+        } else {
+            if starts_with(line, indent) {
+                ints_push(loffs, offset + str_len(indent));
+                strs_push(ltexts, str_slice(line, str_len(indent), str_len(line)));
+            } else {
+                let msg = str_join_all9("this line of a multi-line string does not begin with its closing ", tick(), triple(), tick(), "'s indentation", "", "", "", "");
+                let help = str_join_all9("every line is indented at least as far as the closing ", tick(), triple(), tick(),
+                        ", which is taken off each; indent this line, or the delimiter less", "", "", "", "");
+                report(ecode, estart, eend, emsg, ehelp, "N0005", offset, offset + str_len(line), msg, help);
+                let il = indent_len(line);
+                ints_push(loffs, offset + il);
+                strs_push(ltexts, str_slice(line, il, str_len(line)));
+            }
+        }
+        r = r + 1;
+    }
+    end
+}
+
+// --- interpolation (R1a, L4) ------------------------------------------------------------
+
+// The offset of the `}` closing a hole whose text starts at `from` in `s`, or -1 at a line
+// break or the end: braces balanced, a string inside skipped whole.
+fn hole_end(s: Str, from: Int) -> Int {
+    let mut depth = 0;
+    let mut i = from;
+    while true {
+        let b = at(s, i);
+        if b < 0 { return 0 - 1; }
+        if b == 10 { return 0 - 1; }
+        if b == 123 { depth = depth + 1; }
+        if b == 125 {
+            if depth == 0 { return i; }
+            depth = depth - 1;
+        }
+        if b == 34 {
+            i = i + 1;
+            while true {
+                let c = at(s, i);
+                if c < 0 { return 0 - 1; }
+                if c == 34 { break; }
+                if c == 10 { return 0 - 1; }
+                if c == 92 { i = i + 1; }
+                i = i + 1;
+            }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// A hole's format, `[<|>][width][.precision]`, as the comparison writes it —
+// `align:width:precision`, `-` for each absent — or "" when `t` is not one.
+fn format_spec(t: Str) -> Str {
+    let n = str_len(t);
+    let mut i = 0;
+    let mut align = "-";
+    if at(t, 0) == 60 { align = "<"; i = 1; }
+    if at(t, 0) == 62 { align = ">"; i = 1; }
+    let ws = i;
+    while is_digit(at(t, i)) { i = i + 1; }
+    let mut width = "-";
+    if i > ws {
+        let w = str_slice(t, ws, i);
+        if digits_above(w, "4294967295") { return ""; }
+        width = strip_zeros(w);
+    }
+    let mut precision = "-";
+    if i < n {
+        if at(t, i) != 46 { return ""; }
+        let ps = i + 1;
+        let mut q = ps;
+        while is_digit(at(t, q)) { q = q + 1; }
+        if q == ps { return ""; }
+        if q != n { return ""; }
+        let p = str_slice(t, ps, q);
+        if digits_above(p, "4294967295") { return ""; }
+        precision = strip_zeros(p);
+        i = n;
+    }
+    if align == "-" { if width == "-" { if precision == "-" { return ""; } } }
+    str_concat(str_concat(str_concat(align, ":"), str_concat(width, ":")), precision)
+}
+
+// The offset of the colon that begins a hole's format — the last `:` outside brackets and
+// strings and not half of a `::` — or -1.
+fn hole_colon(s: Str) -> Int {
+    let n = str_len(s);
+    let mut depth = 0;
+    let mut colon = 0 - 1;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        if b == 40 || b == 91 || b == 123 { depth = depth + 1; }
+        if b == 41 || b == 93 || b == 125 { depth = depth - 1; }
+        if b == 34 {
+            i = i + 1;
+            while i < n {
+                if str_byte(s, i) == 34 { break; }
+                if str_byte(s, i) == 92 { i = i + 1; }
+                i = i + 1;
+            }
+        }
+        if b == 58 {
+            if depth == 0 {
+                if at(s, i + 1) != 58 {
+                    if i == 0 || at(s, i - 1) != 58 { colon = i; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    colon
+}
+
+// The text gathered so far (`raw`, starting at source offset `raw_at`), its escapes decoded,
+// as one piece.
+fn flush_text(raw: Strs, raw_at: Int, pieces: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let text = str_join(raw, "");
+    while strs_len(raw) > 0 { strs_pop(raw); }
+    if str_len(text) == 0 { return 0; }
+    let value = decode_escapes(text, raw_at, 0 - 1, 0 - 1, ecode, estart, eend, emsg, ehelp);
+    strs_push(pieces, str_concat("T:", lex_esc(value)));
+    0
+}
+
+// One line of an interpolation's text (`line`, starting at source offset `offset`). `raw_at`
+// is a one-element array: where the text being gathered began.
+fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let n = str_len(line);
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(line, i);
+        if b == 92 {
+            let mut to = i + 2;
+            if to > n { to = n; }
+            strs_push(raw, str_slice(line, i, to));
+            i = i + 2;
+            continue;
+        }
+        if b == 123 && at(line, i + 1) == 123 {
+            strs_push(raw, "{");
+            i = i + 2;
+            continue;
+        }
+        if b == 125 && at(line, i + 1) == 125 {
+            strs_push(raw, "}");
+            i = i + 2;
+            continue;
+        }
+        if b == 125 {
+            let msg = str_concat(str_concat("a ", tick()), str_concat("}", str_concat(tick(), " in an interpolation's text closes nothing")));
+            let help = str_concat(str_concat("write ", tick()), str_concat("}}", str_concat(tick(), " for a brace in the text")));
+            report(ecode, estart, eend, emsg, ehelp, "N0006", offset + i, offset + i + 1, msg, help);
+            i = i + 1;
+            continue;
+        }
+        if b == 123 {
+            let close = hole_end(line, i + 1);
+            if close < 0 {
+                let msg = str_concat(str_concat("this hole has no closing ", tick()), str_concat("}", str_concat(tick(), " on its line")));
+                let help = str_join_all9("a hole is ", tick(), "{expr}", tick(), " on one line; write ", tick(), "{{", tick(), " for a brace in the text");
+                report(ecode, estart, eend, emsg, ehelp, "N0006", offset + i, offset + n, msg, help);
+                return 0;
+            }
+            flush_text(raw, ints_get(raw_at, 0), pieces, ecode, estart, eend, emsg, ehelp);
+            let inside = str_slice(line, i + 1, close);
+            let hs = offset + i;
+            let he = offset + close + 1;
+            let c = hole_colon(inside);
+            let mut expr = inside;
+            let mut spec = "-:-:-";
+            let mut ok = true;
+            if c >= 0 {
+                spec = format_spec(str_slice(inside, c + 1, str_len(inside)));
+                if spec == "" { ok = false; }
+                expr = str_slice(inside, 0, c);
+            }
+            if ok {
+                if blank(expr) {
+                    report(ecode, estart, eend, emsg, ehelp, "N0006", hs, he, "this hole holds no expression", "");
+                } else {
+                    let parts = strs_new();
+                    strs_push(parts, "H:");
+                    strs_push(parts, int_to_str(offset + i + 1));
+                    strs_push(parts, ":");
+                    strs_push(parts, spec);
+                    strs_push(parts, ":");
+                    strs_push(parts, int_to_str(hs));
+                    strs_push(parts, ":");
+                    strs_push(parts, int_to_str(he));
+                    strs_push(parts, ":");
+                    strs_push(parts, lex_esc(expr));
+                    strs_push(pieces, str_join(parts, ""));
+                }
+            } else {
+                let help = str_join_all9("a format is ", tick(), "[<|>][width][.precision]", tick(), ": ", tick(), "{x:>8}", tick(),
+                        str_concat(", ", str_concat(tick(), str_concat("{ratio:.2}", tick()))));
+                report(ecode, estart, eend, emsg, ehelp, "N0006", hs, he, "this hole's format is not one interpolation has", help);
+            }
+            i = close + 1;
+            ints_set(raw_at, 0, offset + i);
+            continue;
+        }
+        let len = lex_utf8_len(b);
+        let mut to = i + len;
+        if to > n { to = n; }
+        strs_push(raw, str_slice(line, i, to));
+        i = i + len;
+    }
+    0
+}
+
+// --- one lexeme ------------------------------------------------------------------------
+//
+// Each scanner below handles the lexeme that begins at `start` and returns the offset just past
+// it, pushing a token if it made one and a diagnostic for every error.
+
+fn scan_interpolated(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let loffs = ints_new();
+    let ltexts = strs_new();
+    let mut end = 0;
+    let multi = at(src, start + 1) == 34 && at(src, start + 2) == 34 && at(src, start + 3) == 34;
+    if multi {
+        let r = multi_line_layout(src, start, 4, loffs, ltexts, ecode, estart, eend, emsg, ehelp);
+        if r < 0 { return 0 - 1 - r; }
+        end = r;
+    } else {
+        let content = start + 2;
+        let mut i = content;
+        while true {
+            let b = at(src, i);
+            if b < 0 || b == 10 {
+                report(ecode, estart, eend, emsg, ehelp, "N0002", start, i, "this string has no closing quote", "");
+                return i;
+            }
+            if b == 92 { i = i + 2; continue; }
+            if b == 123 && at(src, i + 1) == 123 { i = i + 2; continue; }
+            if b == 123 {
+                let close = hole_end(src, i + 1);
+                if close >= 0 { i = close + 1; } else { i = i + 1; }
+                continue;
+            }
+            if b == 34 { break; }
+            i = i + 1;
+        }
+        ints_push(loffs, content);
+        strs_push(ltexts, str_slice(src, content, i));
+        end = i + 1;
+    }
+    let pieces = strs_new();
+    let raw = strs_new();
+    let raw_at = ints_new();
+    if ints_len(loffs) > 0 { ints_push(raw_at, ints_get(loffs, 0)); } else { ints_push(raw_at, start); }
+    let mut l = 0;
+    while l < ints_len(loffs) {
+        if l > 0 { strs_push(raw, str_from_byte(10)); }
+        split_pieces(strs_get(ltexts, l), ints_get(loffs, l), raw, raw_at, pieces, ecode, estart, eend, emsg, ehelp);
+        l = l + 1;
+    }
+    flush_text(raw, ints_get(raw_at, 0), pieces, ecode, estart, eend, emsg, ehelp);
+    push_token(kinds, starts, ends, texts, k_fstr(), start, end, str_join(pieces, "|"));
+    end
+}
+
+fn scan_raw_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let n = str_len(src);
+    let mut hashes = 0;
+    while at(src, start + 1 + hashes) == 35 { hashes = hashes + 1; }
+    let open = start + 1 + hashes;
+    if at(src, open) != 34 {
+        let msg = str_concat(str_concat("a raw string's ", tick()), str_concat("#", str_concat(tick(), "s are followed by its opening quote")));
+        let help = str_join_all9("a raw string is ", tick(), "r", dq(), "…", dq(), tick(), " or ",
+                str_join_all9(tick(), "r#", dq(), "…", dq(), "#", tick(), ", with as many ", str_concat(tick(), str_concat("#", str_concat(tick(), "s at each end")))));
+        report(ecode, estart, eend, emsg, ehelp, "N0002", start, open, msg, help);
+        return open;
+    }
+    let body = open + 1;
+    let mut p = body;
+    let mut found = 0 - 1;
+    while p + 1 + hashes <= n {
+        if str_byte(src, p) == 34 {
+            let mut h = 0;
+            while h < hashes {
+                if str_byte(src, p + 1 + h) != 35 { break; }
+                h = h + 1;
+            }
+            if h == hashes { found = p; break; }
+        }
+        p = p + 1;
+    }
+    if found < 0 {
+        report(ecode, estart, eend, emsg, ehelp, "N0002", start, n, "this raw string has no closing quote", "");
+        return n;
+    }
+    // A line break written as CR LF is one LF.
+    let text = str_slice(src, body, found);
+    let out = strs_new();
+    let mut from = 0;
+    let mut q = 0;
+    while q < str_len(text) {
+        if str_byte(text, q) == 13 && at(text, q + 1) == 10 {
+            strs_push(out, str_slice(text, from, q));
+            from = q + 1;
+        }
+        q = q + 1;
+    }
+    strs_push(out, str_slice(text, from, str_len(text)));
+    let end = found + 1 + hashes;
+    push_token(kinds, starts, ends, texts, k_str(), start, end, str_join(out, ""));
+    end
+}
+
+fn scan_multi_line(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let loffs = ints_new();
+    let ltexts = strs_new();
+    let r = multi_line_layout(src, start, 3, loffs, ltexts, ecode, estart, eend, emsg, ehelp);
+    if r < 0 { return 0 - 1 - r; }
+    let body = str_join(ltexts, str_from_byte(10));
+    let value = decode_escapes(body, 0, start, start + 3, ecode, estart, eend, emsg, ehelp);
+    push_token(kinds, starts, ends, texts, k_str(), start, r, value);
+    r
+}
+
+fn scan_number(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let mut i = start;
+    let c = at(src, i);
+    let d = at(src, i + 1);
+    let mut radix = 10;
+    if c == 48 {
+        if d == 120 || d == 88 { radix = 16; }
+        if d == 111 || d == 79 { radix = 8; }
+        if d == 98 || d == 66 { radix = 2; }
+    }
+    if radix != 10 {
+        i = i + 2;
+        let ds = i;
+        while is_alnum(at(src, i)) { i = i + 1; }
+        let digits = no_underscores(str_slice(src, ds, i));
+        let value = radix_to_decimal(digits, radix);
+        if value == "" || digits_above(value, "340282366920938463463374607431768211455") {
+            let mut name = "binary";
+            if radix == 16 { name = "hexadecimal"; }
+            if radix == 8 { name = "octal"; }
+            report(ecode, estart, eend, emsg, ehelp, "N0001", start, i, str_concat(str_concat("this is not a ", name), " integer"), "");
+            return i;
+        }
+        push_token(kinds, starts, ends, texts, k_int(), start, i, value);
+        return i;
+    }
+    while is_digit(at(src, i)) || at(src, i) == 95 { i = i + 1; }
+    let mut float = false;
+    if at(src, i) == 46 && is_digit(at(src, i + 1)) {
+        float = true;
+        i = i + 1;
+        while is_digit(at(src, i)) || at(src, i) == 95 { i = i + 1; }
+    }
+    let e = at(src, i);
+    if e == 101 || e == 69 {
+        let mut sign = 0;
+        if at(src, i + 1) == 43 || at(src, i + 1) == 45 { sign = 1; }
+        if is_digit(at(src, i + 1 + sign)) {
+            float = true;
+            i = i + 1 + sign;
+            while is_digit(at(src, i)) || at(src, i) == 95 { i = i + 1; }
+        }
+    }
+    let raw = no_underscores(str_slice(src, start, i));
+    if float {
+        push_token(kinds, starts, ends, texts, k_float(), start, i, raw);
+        return i;
+    }
+    // A value that fits is its digits as Rust prints the parsed value; one that does not keeps
+    // the digits as written.
+    if lex_int_too_large(raw) {
+        push_token(kinds, starts, ends, texts, k_int(), start, i, raw);
+    } else {
+        push_token(kinds, starts, ends, texts, k_int(), start, i, strip_zeros(raw));
+    }
+    i
+}
+
+fn scan_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+    let mut i = start + 1;
+    let content = i;
+    while true {
+        let b = at(src, i);
+        if b < 0 || b == 34 || b == 10 { break; }
+        if b == 92 {
+            let nb = at(src, i + 1);
+            if nb >= 0 && nb != 10 { i = i + 1; }
+        }
+        i = i + 1;
+    }
+    let b = at(src, i);
+    if b < 0 || b == 10 {
+        report(ecode, estart, eend, emsg, ehelp, "N0002", start, i, "this string has no closing quote", "");
+        return i;
+    }
+    let value = decode_escapes(str_slice(src, content, i), content, 0 - 1, 0 - 1, ecode, estart, eend, emsg, ehelp);
+    push_token(kinds, starts, ends, texts, k_str(), start, i + 1, value);
+    i + 1
+}
+
+// The operator at `i` and its width, as `kind * 4 + width`, or 0.
+fn operator_at(src: Str, i: Int) -> Int {
+    let c = at(src, i);
+    let d = at(src, i + 1);
+    let e = at(src, i + 2);
+    if c == 60 && d == 60 && e == 61 { return k_shleq() * 4 + 3; }
+    if c == 62 && d == 62 && e == 61 { return k_shreq() * 4 + 3; }
+    if c == 45 && d == 62 { return k_arrow() * 4 + 2; }
+    if c == 61 && d == 61 { return k_eqeq() * 4 + 2; }
+    if c == 61 && d == 62 { return k_fatarrow() * 4 + 2; }
+    if c == 33 && d == 61 { return k_noteq() * 4 + 2; }
+    if c == 60 && d == 61 { return k_lteq() * 4 + 2; }
+    if c == 62 && d == 61 { return k_gteq() * 4 + 2; }
+    if c == 38 && d == 38 { return k_ampamp() * 4 + 2; }
+    if c == 58 && d == 58 { return k_coloncolon() * 4 + 2; }
+    if c == 46 && d == 46 { return k_dotdot() * 4 + 2; }
+    if c == 124 && d == 124 { return k_pipepipe() * 4 + 2; }
+    if c == 60 && d == 60 { return k_shl() * 4 + 2; }
+    if c == 62 && d == 62 { return k_shr() * 4 + 2; }
+    if c == 43 && d == 61 { return k_pluseq() * 4 + 2; }
+    if c == 45 && d == 61 { return k_minuseq() * 4 + 2; }
+    if c == 42 && d == 61 { return k_stareq() * 4 + 2; }
+    if c == 47 && d == 61 { return k_slasheq() * 4 + 2; }
+    if c == 37 && d == 61 { return k_percenteq() * 4 + 2; }
+    if c == 38 && d == 61 { return k_ampeq() * 4 + 2; }
+    if c == 124 && d == 61 { return k_pipeeq() * 4 + 2; }
+    if c == 94 && d == 61 { return k_careteq() * 4 + 2; }
+    let mut k = 0;
+    if c == 40 { k = k_lparen(); }
+    if c == 41 { k = k_rparen(); }
+    if c == 123 { k = k_lbrace(); }
+    if c == 125 { k = k_rbrace(); }
+    if c == 91 { k = k_lbracket(); }
+    if c == 93 { k = k_rbracket(); }
+    if c == 44 { k = k_comma(); }
+    if c == 58 { k = k_colon(); }
+    if c == 46 { k = k_dot(); }
+    if c == 59 { k = k_semi(); }
+    if c == 63 { k = k_question(); }
+    if c == 33 { k = k_bang(); }
+    if c == 61 { k = k_eq(); }
+    if c == 43 { k = k_plus(); }
+    if c == 45 { k = k_minus(); }
+    if c == 42 { k = k_star(); }
+    if c == 47 { k = k_slash(); }
+    if c == 37 { k = k_percent(); }
+    if c == 60 { k = k_lt(); }
+    if c == 62 { k = k_gt(); }
+    if c == 38 { k = k_amp(); }
+    if c == 124 { k = k_pipe(); }
+    if c == 94 { k = k_caret(); }
+    if c == 126 { k = k_tilde(); }
+    if c == 64 { k = k_at(); }
+    if k == 0 { return 0; }
+    k * 4 + 1
+}
+
+// Tokenise all of `src`, recording every diagnostic — code, span, message, help ("" for none) —
+// and continuing exactly as the reference lexer does.
+pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
+        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
     let n = str_len(src);
     let mut i = 0;
     while i < n {
         let b = at(src, i);
+        let next = at(src, i + 1);
 
-        // Whitespace.
-        if is_space(b) { i = i + 1; continue; }
-
-        // `//` to end of line. A single `/` is division, so the second byte decides.
-        if b == 47 {
-            if at(src, i + 1) == 47 {
-                while i < n {
-                    if at(src, i) == 10 { break; }
-                    i = i + 1;
-                }
-                continue;
-            }
+        if is_space(b) {
+            while is_space(at(src, i)) { i = i + 1; }
+            continue;
         }
 
-        // Identifiers and keywords.
+        // Block comments (R1, 5b.17), nesting.
+        if b == 47 && next == 42 {
+            let from = i;
+            let mut depth = 0;
+            while i < n {
+                let c = str_byte(src, i);
+                let c2 = at(src, i + 1);
+                if c == 47 && c2 == 42 {
+                    depth = depth + 1;
+                    i = i + 2;
+                } else {
+                    if c == 42 && c2 == 47 {
+                        depth = depth - 1;
+                        i = i + 2;
+                        if depth == 0 { break; }
+                    } else {
+                        i = i + 1;
+                    }
+                }
+            }
+            if depth > 0 {
+                let msg = str_concat(str_concat("this comment has no closing ", tick()), str_concat("*/", tick()));
+                report(ecode, estart, eend, emsg, ehelp, "N0007", from, from + 2, msg, "");
+            }
+            continue;
+        }
+
+        // `//` to the end of the line.
+        if b == 47 && next == 47 {
+            while i < n {
+                if str_byte(src, i) == 10 { break; }
+                i = i + 1;
+            }
+            continue;
+        }
+
+        if is_digit(b) {
+            i = scan_number(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            continue;
+        }
+
+        if b == 102 && next == 34 {
+            i = scan_interpolated(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            continue;
+        }
+
+        if b == 114 && (next == 34 || next == 35) {
+            i = scan_raw_string(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            continue;
+        }
+
         if is_alpha(b) {
             let from = i;
             while is_alnum(at(src, i)) { i = i + 1; }
@@ -204,130 +1221,31 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoC
             continue;
         }
 
-        // Integers, with `_` as a separator. The value is not computed here: the parser
-        // needs the digits, and overflow is its decision, not the scanner's.
-        if is_digit(b) {
-            let from = i;
-            while true {
-                let c = at(src, i);
-                if is_digit(c) { i = i + 1; continue; }
-                if c == 95 { i = i + 1; continue; }
-                break;
-            }
-            push_token(kinds, starts, ends, texts, k_int(), from, i, str_slice(src, from, i));
+        if b == 34 && next == 34 && at(src, i + 2) == 34 {
+            i = scan_multi_line(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
             continue;
         }
 
-        // Strings. A closing quote or a newline ends the scan, and a newline is an error.
-        // This compiler does not decode escapes (N49), so a backslash is refused by name
-        // rather than read as itself, which is what it meant before escapes existed.
         if b == 34 {
-            let from = i;
-            i = i + 1;
-            while true {
-                let c = at(src, i);
-                if c == 34 { break; }
-                if c == 10 { fail("N0002", from, "this string has no closing quote", io); }
-                if c < 0 { fail("N0002", from, "this string has no closing quote", io); }
-                if c == 92 { fail("N0004", i, "string escapes are not in the bootstrap subset", io); }
-                i = i + 1;
-            }
-            let text = str_slice(src, from + 1, i);
-            i = i + 1;
-            push_token(kinds, starts, ends, texts, k_str(), from, i, text);
+            i = scan_string(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
             continue;
         }
 
-        // Two-byte operators, checked before their one-byte prefixes.
-        let next = at(src, i + 1);
-        if b == 45 {
-            if next == 62 {
-                push_token(kinds, starts, ends, texts, k_arrow(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
-        if b == 61 {
-            if next == 61 {
-                push_token(kinds, starts, ends, texts, k_eqeq(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-            if next == 62 {
-                push_token(kinds, starts, ends, texts, k_fatarrow(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
-        if b == 33 {
-            if next == 61 {
-                push_token(kinds, starts, ends, texts, k_noteq(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-            push_token(kinds, starts, ends, texts, k_bang(), i, i + 1, "");
-            i = i + 1;
+        let op = operator_at(src, i);
+        if op > 0 {
+            let width = op % 4;
+            push_token(kinds, starts, ends, texts, op / 4, i, i + width, "");
+            i = i + width;
             continue;
         }
-        // `::` (N49), a qualified name, is not in the bootstrap subset.
-        if b == 58 {
-            if next == 58 { fail("N0001", i, "`::` is not in the bootstrap subset", io); }
-        }
-        // `&&` and `||` (N49).
-        if b == 38 {
-            if next == 38 {
-                push_token(kinds, starts, ends, texts, k_ampamp(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
-        if b == 124 {
-            if next == 124 {
-                push_token(kinds, starts, ends, texts, k_pipepipe(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
-        if b == 60 {
-            if next == 61 {
-                push_token(kinds, starts, ends, texts, k_lteq(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
-        if b == 62 {
-            if next == 61 {
-                push_token(kinds, starts, ends, texts, k_gteq(), i, i + 2, "");
-                i = i + 2;
-                continue;
-            }
-        }
 
-        // One-byte tokens.
-        let mut kind = 0;
-        if b == 40 { kind = k_lparen(); }
-        if b == 41 { kind = k_rparen(); }
-        if b == 123 { kind = k_lbrace(); }
-        if b == 125 { kind = k_rbrace(); }
-        if b == 44 { kind = k_comma(); }
-        if b == 58 { kind = k_colon(); }
-        if b == 59 { kind = k_semi(); }
-        if b == 46 { kind = k_dot(); }
-        if b == 61 { kind = k_eq(); }
-        if b == 43 { kind = k_plus(); }
-        if b == 45 { kind = k_minus(); }
-        if b == 42 { kind = k_star(); }
-        if b == 47 { kind = k_slash(); }
-        if b == 37 { kind = k_percent(); }
-        if b == 60 { kind = k_lt(); }
-        if b == 62 { kind = k_gt(); }
-        if b == 91 { kind = k_lbracket(); }
-        if b == 93 { kind = k_rbracket(); }
-        if b == 63 { kind = k_question(); }
-
-        if kind == 0 { fail("N0001", i, "this character is not part of the language", io); }
-        push_token(kinds, starts, ends, texts, kind, i, i + 1, "");
-        i = i + 1;
+        // Not part of the language: one diagnostic per character, not per byte.
+        let len = lex_utf8_len(b);
+        let mut to = i + len;
+        if to > n { to = n; }
+        let msg = str_concat(str_concat(tick(), str_slice(src, i, to)), str_concat(tick(), " is not valid here"));
+        report(ecode, estart, eend, emsg, ehelp, "N0001", i, to, msg, "");
+        i = to;
     }
     ints_len(kinds)
 }

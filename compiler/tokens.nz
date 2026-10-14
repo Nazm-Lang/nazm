@@ -1,0 +1,77 @@
+// The tokeniser's comparison driver (R2, `openspec/changes/r2-front-end/design.md`, D2).
+//
+// Usage: tokens FILE
+// Output: one token per line, `Kind start end payload` — `Kind` the reference's `TokenKind`
+// name, the payload the decoded value — then each lexing diagnostic, `error CODE start end
+// message`. Payloads and messages are written with `lex_esc`. It is what
+// `compiler/tests/refdump` prints for the reference lexer, byte for byte, when the two agree.
+// Exits 1 when there was a diagnostic.
+
+use "lex.nz";
+
+fn main(io: IoCap) -> Int {
+    if args_count() < 1 {
+        eprint("usage: tokens FILE");
+        eprint(str_from_byte(10));
+        exit_with(2);
+    }
+    let path = arg(0);
+    if file_exists(path) == false {
+        eprint(str_concat("cannot read ", path));
+        eprint(str_from_byte(10));
+        exit_with(2);
+    }
+    let src = read_file(path);
+
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    let ecode = strs_new();
+    let estart = ints_new();
+    let eend = ints_new();
+    let emsg = strs_new();
+    let ehelp = strs_new();
+    lex_all(src, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+
+    let nl = str_from_byte(10);
+    let out = strs_new();
+    let mut i = 0;
+    while i < ints_len(kinds) {
+        let k = ints_get(kinds, i);
+        let text = strs_get(texts, i);
+        strs_push(out, lex_kind_name(k, text));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(starts, i)));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(ends, i)));
+        strs_push(out, " ");
+        // An interpolation's pieces are already in the comparison's form; every other payload
+        // is the value, written byte by byte.
+        if k == k_fstr() {
+            strs_push(out, text);
+        } else {
+            if k == k_str() || k == k_ident() || k == k_int() || k == k_float() {
+                strs_push(out, lex_esc(text));
+            }
+        }
+        strs_push(out, nl);
+        i = i + 1;
+    }
+    let mut e = 0;
+    while e < strs_len(ecode) {
+        strs_push(out, "error ");
+        strs_push(out, strs_get(ecode, e));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(estart, e)));
+        strs_push(out, " ");
+        strs_push(out, int_to_str(ints_get(eend, e)));
+        strs_push(out, " ");
+        strs_push(out, lex_esc(strs_get(emsg, e)));
+        strs_push(out, nl);
+        e = e + 1;
+    }
+    print(str_join(out, ""));
+    if strs_len(ecode) > 0 { exit_with(1); }
+    0
+}

@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let a = r"no \escape here";
+    let b = r#"a "quoted" word"#;
+    let c = r##"one "# inside"##;
+    let d = r#"line
+break"#;
+    let e = r"multi
+line";
+    let f = r#x;
+    0
+}
+fn tail() -> Str { r#"never closed
