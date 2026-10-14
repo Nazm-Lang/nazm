@@ -744,7 +744,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             smod: ints_new(), slo: ints_new(), shi: ints_new(), aux: ints_new(),
             fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
             fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
-            consts: vec_new[V](), names: strs_new(), mods: strs_new(), entry: 0 - 1,
+            consts: vec_new[V](), names: strs_new(), mods: strs_new(), morder: strs_new(), entry: 0 - 1,
             fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int]())
     let bmap = hashmap_new[Str, Int]()
     let bnames = builtin_names()
@@ -768,6 +768,14 @@ pub fn load(text: Str) -> Result[Prog, Str] {
         hashmap_set(l.fmap, key, i)
         strs_push(p.fkey, key)
         strs_push(p.fname, gs(l, f, "name"))
+        let module = gs(l, f, "module")
+        if strs_len(p.morder) == 0 || strs_get(p.morder, strs_len(p.morder) - 1) != module {
+            let mut seen = false
+            for k in 0..strs_len(p.morder) {
+                if strs_get(p.morder, k) == module { seen = true }
+            }
+            if !seen { strs_push(p.morder, module) }
+        }
         ints_push(p.fentry, 0)
         ints_push(p.flocals, len(l, g(l, f, "locals")))
         ints_push(p.fparams, gi(l, f, "params"))
@@ -787,7 +795,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
             fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
             fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
-            entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache))
+            morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache))
 }
 
 fn str_contains_byte(s: Str, b: Int) -> Bool {

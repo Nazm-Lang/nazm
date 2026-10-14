@@ -1,0 +1,6 @@
+use "@std/seq"
+
+fn main() {
+    let xs: Ints = [9223372036854775807, 1]
+    println(ints_sum(xs))
+}

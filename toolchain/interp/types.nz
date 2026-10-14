@@ -70,6 +70,9 @@ pub struct Prog {
     names: Strs,
     // Module keys, by index; a span's module is one.
     mods: Strs,
+    // The modules in the order their functions first appear: the order they were loaded in, which
+    // a JSON diagnostic's offsets count through.
+    morder: Strs,
     // The root's `main`, by function index.
     entry: Int,
     // Function keys to indices: what a trait call's impl is found by (D8).
