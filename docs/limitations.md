@@ -22,44 +22,44 @@ found only by reading all of it.
   the 64-bit `Int` exist (`spec.md`, *Numbers*). *Narrowed in R1a:* `for x in e` and `for x in a..b`
   exist (`spec.md`, *`for` loops*); a `for` of any other shape is still refused by name. The
   compiler written in Nazm (`compiler/*.nz`) does not carry `for` until R2 of the rewrite.
-- Patterns (R1a, EXPERIMENTAL until R1 closes): no guards, range, record or `@` patterns, no `..`
+- Patterns (R1a, stable since 0.10.0; guards since R1, 5b.17): no range, record or `@` patterns, no `..`
   in a payload; the compiler written in Nazm parses only the plain variant pattern until R2.
-- Warnings (R1b, L15, EXPERIMENTAL until R1 closes): `nazm check`, `nazm build` and the language
+- Warnings (R1b, L15, stable since 0.10.0): `nazm check`, `nazm build` and the language
   service report them; `nazm run` and `nazm test` do not. A module that warns is checked again on
   every run rather than reused from the check cache. A use of a `@deprecated` item still draws no
   warning (`N0620` stays reserved): that needs deprecation carried in a module's interface.
-- Interpolation (R1a, EXPERIMENTAL until R1 closes): a hole stays on one line; a format is
+- Interpolation (R1a, stable since 0.10.0): a hole stays on one line; a format is
   alignment, width in bytes and a float's precision — no fill character, no zero padding, no
   hexadecimal (`@std/fmt` has `fmt_int_zero` and `fmt_hex`); a hole's own parse errors are one
   `N0006` at its braces rather than the parser's own diagnostic; the compiler written in Nazm does
   not read `f"…"` until R2.
-- Multi-line and raw strings (R1a, EXPERIMENTAL until R1 closes): an escape refused inside a
+- Multi-line and raw strings (R1a, stable since 0.10.0): an escape refused inside a
   multi-line string is reported at its opening delimiter rather than at the escape; the compiler
   written in Nazm does not read either form until R2.
-- Constant tables (R1a, EXPERIMENTAL until R1 closes): every use of an aggregate constant builds
+- Constant tables (R1a, stable since 0.10.0): every use of an aggregate constant builds
   it where it is used, so indexing a large table in a loop builds the table each time — a
   read-only table in the binary is an optimisation not yet made; an imported constant is not an
   array's length in a type declaration (field types are resolved before imports' constants are
   known); a constant's parts are not calls, so a table of function values is not a constant.
-- Derived ordering and hashing (R1a, EXPERIMENTAL until R1 closes): no `T: Ordered` requirement on
+- Derived ordering and hashing (R1a, stable since 0.10.0): no `T: Ordered` requirement on
   a type parameter until `@std/ordmap` (S3); no customised `<`; inside a generic body `Pair[T]` does
   not derive `Hash`, only a concrete type does; a record holding a type with a written `Hash` impl
   needs its own impl, which a generic type has through an impl of the generic type (L11b) and a
   tuple cannot have.
-- `defer` (R1b, EXPERIMENTAL until R1 closes) runs on the ways a block is left, not on a failure
+- `defer` (R1b, stable since 0.10.0) runs on the ways a block is left, not on a failure
   that stops the program — there is no unwinding. The compiler written in Nazm does not carry it
   until R2.
-- Impls of generic types (R1b, EXPERIMENTAL until R1 closes) are for a generic record or enum
+- Impls of generic types (R1b, stable since 0.10.0) are for a generic record or enum
   applied to exactly the impl's parameters: no impl for one instance (`Pair[Int, Str]`), none for
   `Vec[T]` or the other built-in generic types, and no specialisation. The compiler written in Nazm
   carries neither L11 part until R2.
-- Tuples (R1a, EXPERIMENTAL until R1 closes): two to eight elements, no unit type `()`, no tuple
+- Tuples (R1a, stable since 0.10.0): two to eight elements, no unit type `()`, no tuple
   structs; the compiler written in Nazm does not carry tuples until R2.
-- `Box[T]` and `List[T]` (R1a, EXPERIMENTAL until R1 closes) compare by what they hold (L6) but
+- `Box[T]` and `List[T]` (R1a, stable since 0.10.0) compare by what they hold (L6) but
   have no order or derived hash, and do not cross into a task (`N0321`); a `List` is built
   only from a `Vec` (`list_from_vec`) or empty — there is no functional push, by design, since one
   would copy. The compiler written in Nazm does not carry either until R2.
-- `Cell[T]` (R1b, EXPERIMENTAL until R1 closes) has no equality and does not cross into a task, as
+- `Cell[T]` (R1b, stable since 0.10.0) has no equality and does not cross into a task, as
   a `Vec` does not; there is no swap or update-in-place, only `cell_get` and `cell_set`. The
   compiler written in Nazm does not carry it until R2.
 - Arrays (Gate 2) hold plain data only — numbers, `Bool`s, and records, enums and arrays of them —
@@ -101,7 +101,7 @@ found only by reading all of it.
   closures exist since N50, and effect parameters since N51 — one per function, named only in
   function types (`N0388`), with effect subsumption only where a function value is passed or
   returned (N79); a closure captures by copy, except a `let mut` binding, which it shares
-  (R1b, EXPERIMENTAL), and never one whose type can hold a function value (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
+  (R1b), and never one whose type can hold a function value (`N0386`); no attenuation beyond `OutCap` (N79) and no revocation
   (`architecture.md` §7.53); a field of function type is called by
   binding it first; no function value crosses into a task (`N0321`); a path that went through a
   function value carries what every function value of its type may return, and a call through a

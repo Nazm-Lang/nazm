@@ -318,6 +318,18 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *R1 promoted to stable* (8.1; `spec.md`, *Stability classification for 1.0*).
+Nineteen R1 sections and every inline "EXPERIMENTAL until R1 closes" became STABLE 1.0, as a 1.x
+addition stable since R1 closed (0.10.0); `stability.md` and `limitations.md` follow. Seven cases
+joined the 1.0 compatibility corpus, pinned (`tests/compat/v1/run/r1-*`): syntax, methods and
+maps, patterns and tuples, strings, cells, `defer` and `for`, derived ordering and JSON, and R1e's
+libraries — each run interpreted and by both backends. Writing them found three defects, fixed
+under epoch 75: a `defer`'s last value was refused (it is discarded, as a loop body's is), a
+pattern `let` needed its `;`, and a line beginning with `(` or `[` was read as a call or index of
+the line before (`let (a, b) = p` then `(b, a)`); a call's `(` and an index's `[` are now on the
+line of what they apply to. Evidence: `crates/nazm-cli/tests/compat_v1.rs`, `defer.rs`,
+`line_breaks.rs`. Three mutants.
+
 **R1 (2026-10-14)** · *The interpreter's stack bounds its depth* (4.9). Each evaluation thread —
 the main one and every task's — records where its stack ends (`eval::mark_stack`), and a call
 made past that, less the margin the shape-recursive passes need, is `N0403` ("recursed deeper than

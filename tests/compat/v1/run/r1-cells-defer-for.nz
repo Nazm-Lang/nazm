@@ -1,0 +1,23 @@
+// `for` over a sequence and a range, `Box` and `List`, `Cell`, and `defer`
+// (spec: for, box-list, cell, defer).
+fn sum_to(n: Int) -> Int {
+    let mut s = 0
+    for i in 1..n + 1 { s += i }
+    s
+}
+
+fn count(out: OutCap) -> Int {
+    defer { println("deferred") }
+    println("body")
+    3
+}
+
+fn main() {
+    println(sum_to(10))
+    let c = cell_new(1)
+    cell_set(c, cell_get(c) + 41)
+    println(cell_get(c))
+    let b = box_new(7)
+    println(box_get(b))
+    println(count(out))
+}

@@ -157,22 +157,12 @@ impl Checker<'_> {
             Stmt::Defer(d) => {
                 // Run at every exit of the enclosing block (R1b, L12): it completes there, and
                 // leaves nothing — no value, and no `return`, `?`, `break` or `continue` out.
+                // A value its last line produces is discarded, as a loop body's is (R1, 5b.19):
+                // `defer { println("done") }` is the ordinary way to write one.
                 let saved = self.defer_floor.replace(self.loop_depth);
-                let completion = self.check_block(&d.body, None);
+                self.discard_tail = true;
+                let _ = self.check_block(&d.body, None);
                 self.defer_floor = saved;
-                if let (Completion::Value(t), Some(tail)) = (completion, &d.body.tail) {
-                    self.errors.push(
-                        Diagnostic::error(
-                            codes::TYPE_MISMATCH,
-                            tail.span(),
-                            format!(
-                                "a `defer` has no value, but this produces `{}`",
-                                self.show(t)
-                            ),
-                        )
-                        .help("add `;` to discard it"),
-                    );
-                }
                 false
             }
             Stmt::Spawn(s) => {

@@ -8331,10 +8331,11 @@ Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entr
 Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused.
 Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused.
 Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused.
-Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused."""
+Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused.
+Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 74;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 73;"
+find = "pub const SEMANTIC_EPOCH: u32 = 75;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 74;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -18186,16 +18187,20 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::else_i
 name = "r1-a-line-break-ends-no-statement"
 why = "a line break no longer stands for a statement's `;`, so only `;` and `}` end one"
 file = "crates/nazm-syntax/src/parser.rs"
-find = '''            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
-replace = '''            && self.at(&TokenKind::RBrace)'''
+find = '''        if matches!(kind, TokenKind::Semi)
+            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
+replace = '''        if matches!(kind, TokenKind::Semi)
+            && self.at(&TokenKind::RBrace)'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_program_without_semicolons_runs_alike_everywhere" }]
 
 [[mutation]]
 name = "r1-a-closing-brace-ends-no-statement"
 why = "a statement before its block's `}` on the same line needs its `;` again, so `{ break }` is refused"
 file = "crates/nazm-syntax/src/parser.rs"
-find = '''            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
-replace = '''            && self.line_break_before()'''
+find = '''        if matches!(kind, TokenKind::Semi)
+            && (self.line_break_before() || self.at(&TokenKind::RBrace))'''
+replace = '''        if matches!(kind, TokenKind::Semi)
+            && self.line_break_before()'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_program_without_semicolons_runs_alike_everywhere" }]
 
 [[mutation]]
@@ -19050,6 +19055,35 @@ file = "crates/nazm-core/src/eval/exec.rs"
 find = '''                let exhausted = self.depth <= self.max_depth && super::stack::stack_exhausted();'''
 replace = '''                let exhausted = false && self.depth <= self.max_depth && super::stack::stack_exhausted();'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stack_floor::heavy_recursion_reports_n0403_and_never_crashes" }]
+
+[[mutation]]
+name = "r1-a-call-paren-may-start-a-line"
+why = "a `(` beginning a line is read as a call of the line before: `let (a, b) = p` then `(b, a)` is `p(b, a)`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        if self.at(&TokenKind::LParen) && !self.line_break_before() {
+            // Taken only once the `(` is there'''
+replace = '''        if self.at(&TokenKind::LParen) {
+            // Taken only once the `(` is there'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_line_beginning_with_a_paren_or_bracket_is_a_new_statement" }]
+
+[[mutation]]
+name = "r1-a-pattern-let-needs-its-semicolon"
+why = "a pattern `let` ended by a line break is refused, wanting `;` or `else`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            || (!self.at(&TokenKind::Else)
+                && (self.line_break_before() || self.at(&TokenKind::RBrace)))'''
+replace = '''            || (false
+                && (self.line_break_before() || self.at(&TokenKind::RBrace)))'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "line_breaks::a_line_beginning_with_a_paren_or_bracket_is_a_new_statement" }]
+
+[[mutation]]
+name = "r1-a-defer-s-value-is-refused"
+why = "a deferred block's last value is not discarded, so `defer { 5 }` is `N0300`"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = '''                self.discard_tail = true;
+                let _ = self.check_block(&d.body, None);'''
+replace = '''                let _ = self.check_block(&d.body, None);'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::a_deferred_body_leaves_nothing" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 

@@ -20,7 +20,11 @@ parameters, provenance and declassification, structured concurrency with generic
 selection, modules and re-exports, packages, the standard library, the C boundary, and the
 refusals that keep absent constructs absent. Gate 2 added numbers, arrays and constants, bytes
 and text, the collections and binary encoding, the seeded generator, attributes and conditional
-compilation, the shape of a test, and exports of every number.
+compilation, the shape of a test, and exports of every number. R1 added its sections when they
+became stable at 0.10.0, in the `run/r1-*` cases: lines without `;`, `else if`, compound
+assignment, match guards, short variants, methods and indexes by name, maps by index, one list
+type, patterns, tuples, string forms and interpolation, `for`, `Box`, `Cell`, `defer`, derived
+ordering, hashing and JSON, constant tables, and R1e's libraries.
 
 ## The rules
 

@@ -1,0 +1,27 @@
+// R1e's libraries: SHA-256, regular expressions, ordered maps and bit sets
+// (spec: std; library/std/API-1.0).
+use "@std/sha256"
+use "@std/regex"
+use "@std/ordmap"
+use "@std/bitset"
+
+fn main() {
+    println(sha256_hex(bytes_from_str("abc")))
+    match regex_compile("b+c") {
+        Ok(r) => println(regex_is_match(r, "aabbbcd")),
+        Err(e) => println(e),
+    }
+    let m = ordmap_new[Str, Int]()
+    m["pear"] = 3
+    m["apple"] = 1
+    m["fig"] = 2
+    match ordmap_first(m) {
+        Some(k) => println(k),
+        None => println("empty"),
+    }
+    let s = bitset_new()
+    bitset_add(s, 3)
+    bitset_add(s, 64)
+    bitset_add(s, 3)
+    println(bitset_count(s))
+}

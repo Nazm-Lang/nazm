@@ -1,0 +1,26 @@
+// Methods and indexes by name, maps by index, one list type, `+` on strings and array literals
+// as sequences (spec: named-methods, sequences, conveniences).
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
+
+fn total(xs: Vec[Int]) -> Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main() {
+    let xs: Ints = [3, 4, 5]
+    xs.push(6)
+    xs[0] = 10
+    xs[1] += 1
+    println(f"{total(xs)} {xs.len()} {xs[1]}")
+    let words = "b a b c b a".split(" ")
+    let counts = hashmap_new[Str, Int]()
+    for w in words { counts[w] += 1 }
+    let (a, b, c) = (counts["a"], counts["b"], counts["c"])
+    println(f"{a} {b} {c} {counts.len()}")
+    let s = "nazm" + "-" + "lang"
+    println(s + " " + s.len().to_str())
+}
