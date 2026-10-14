@@ -13,12 +13,16 @@
 - [x] 2.1 Every token (group A): escapes, `::`, `..`, bit and compound operators, `@`, radix
       integers, `IntTooLarge`, floats, raw, multi-line and interpolated strings, block comments;
       every lexing error collected — compared on every input (`tokens`)
-- [ ] 2.2 The tree printer: the arena printed as the Rust parser's `{:#?}` (D3)
-- [ ] 2.3 Declarations (group B) parsed
-- [ ] 2.4 Types (group C) parsed
-- [ ] 2.5 Statements (group D) parsed
-- [ ] 2.6 Expressions and patterns (group E) parsed
-- [ ] 2.7 Syntax diagnostics and recovery as the reference's — every input's tree agrees (`tree`)
+- [x] 2.2 The tree printer: the arena printed as the Rust parser's `{:#?}` (D3) — `compiler/syntax.nz`,
+      `sx_print`; `compiler/tree.nz` is the driver
+- [x] 2.3 Declarations (group B) parsed
+- [x] 2.4 Types (group C) parsed
+- [x] 2.5 Statements (group D) parsed
+- [x] 2.6 Expressions and patterns (group E) parsed
+- [x] 2.7 Syntax diagnostics and recovery as the reference's — every input's tree agrees (`tree`):
+      code, span and message, with the reference's recovery, cascade muting and nesting limit; the
+      labels, help and fixes are compared with the checker's in 4.1
+- [ ] 2.8 The checker and emitter read `syntax.nz`'s tree; `parse.nz` retired
 
 ## 3. Names and types
 

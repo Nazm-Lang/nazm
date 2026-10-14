@@ -1,0 +1,4029 @@
+// The whole-language parser, written in Nazm (R2, `openspec/changes/r2-front-end/`).
+//
+// A port of `crates/nazm-syntax/src/parser.rs`, function by function, so that every program
+// parses to the reference's tree and every syntax error is the reference's diagnostic — the
+// same code, span and message, the same recovery and the same cascade muting. The concrete
+// tree the reference builds beside the abstract one is not ported: nothing downstream reads it.
+//
+// # The tree
+//
+// Without recursive types a tree is an arena, and this one is shaped as the reference's
+// derived `Debug` shows its tree: a node is a **struct** (a type name and named fields), a
+// **tuple** (a name, possibly empty, and positional values), a **list**, an **atom** (a word
+// printed as it is: `None`, `true`, `Gt`, `12`), a **string** (printed quoted) or a **span**.
+// Field names are the reference's, written once here where each node is built, so printing the
+// tree (`sx_print`) is one function and the comparison with the reference's `{:#?}` (design D3)
+// holds for every node by construction. Spans are nodes too: `start..end`.
+//
+// Every parse function returns the node it built, or -1 where the reference returns `None`.
+
+use "lex.nz";
+
+// --- the tree ------------------------------------------------------------------------------
+
+pub struct Tree {
+    kind: Ints,
+    start: Ints,
+    end: Ints,
+    text: Strs,
+    first: Ints,
+    count: Ints,
+    kids: Ints,
+    names: Strs,
+}
+
+pub fn sx_tree() -> Tree {
+    Tree(kind: ints_new(), start: ints_new(), end: ints_new(), text: strs_new(), first: ints_new(),
+            count: ints_new(), kids: ints_new(), names: strs_new())
+}
+
+pub fn tk_struct() -> Int { 1 }
+pub fn tk_tuple() -> Int { 2 }
+pub fn tk_list() -> Int { 3 }
+pub fn tk_atom() -> Int { 4 }
+pub fn tk_str() -> Int { 5 }
+pub fn tk_span() -> Int { 6 }
+
+fn raw_node(t: Tree, kind: Int, s: Int, e: Int, text: Str) -> Int {
+    ints_push(t.kind, kind);
+    ints_push(t.start, s);
+    ints_push(t.end, e);
+    strs_push(t.text, text);
+    ints_push(t.first, ints_len(t.kids));
+    ints_push(t.count, 0);
+    ints_len(t.kind) - 1
+}
+
+pub fn sx_atom(t: Tree, text: Str) -> Int { raw_node(t, tk_atom(), 0, 0, text) }
+pub fn sx_str(t: Tree, text: Str) -> Int { raw_node(t, tk_str(), 0, 0, text) }
+pub fn sx_span(t: Tree, s: Int, e: Int) -> Int { raw_node(t, tk_span(), s, e, "") }
+pub fn sx_none(t: Tree) -> Int { sx_atom(t, "None") }
+pub fn sx_bool(t: Tree, b: Bool) -> Int { if b { sx_atom(t, "true") } else { sx_atom(t, "false") } }
+
+fn commit(t: Tree, id: Int, ids: Ints, names: Strs) -> Int {
+    ints_set(t.first, id, ints_len(t.kids));
+    ints_set(t.count, id, ints_len(ids));
+    let mut i = 0;
+    while i < ints_len(ids) {
+        ints_push(t.kids, ints_get(ids, i));
+        if i < strs_len(names) { strs_push(t.names, strs_get(names, i)); } else { strs_push(t.names, ""); }
+        i = i + 1;
+    }
+    id
+}
+
+// A struct's fields, gathered before the struct is made, so its kids are contiguous.
+pub struct Fields {
+    ids: Ints,
+    names: Strs,
+}
+
+pub fn fs() -> Fields { Fields(ids: ints_new(), names: strs_new()) }
+
+pub fn fa(f: Fields, name: Str, v: Int) -> Int {
+    ints_push(f.ids, v);
+    strs_push(f.names, name);
+    0
+}
+
+pub fn mk_struct(t: Tree, name: Str, f: Fields) -> Int {
+    commit(t, raw_node(t, tk_struct(), 0, 0, name), f.ids, f.names)
+}
+
+pub fn mk_tuple(t: Tree, name: Str, ids: Ints) -> Int {
+    commit(t, raw_node(t, tk_tuple(), 0, 0, name), ids, strs_new())
+}
+
+pub fn mk_list(t: Tree, ids: Ints) -> Int {
+    commit(t, raw_node(t, tk_list(), 0, 0, ""), ids, strs_new())
+}
+
+pub fn mk_some(t: Tree, v: Int) -> Int { mk_tuple(t, "Some", one(v)) }
+
+// `v` as an `Option`: -1 is `None`.
+pub fn opt(t: Tree, v: Int) -> Int { if v < 0 { sx_none(t) } else { mk_some(t, v) } }
+
+pub fn one(a: Int) -> Ints {
+    let l = ints_new();
+    ints_push(l, a);
+    l
+}
+
+pub fn two(a: Int, b: Int) -> Ints {
+    let l = ints_new();
+    ints_push(l, a);
+    ints_push(l, b);
+    l
+}
+
+pub fn empty_list(t: Tree) -> Int { mk_list(t, ints_new()) }
+
+pub fn sx_kind(t: Tree, n: Int) -> Int { ints_get(t.kind, n) }
+pub fn sx_text(t: Tree, n: Int) -> Str { strs_get(t.text, n) }
+pub fn sx_count(t: Tree, n: Int) -> Int { ints_get(t.count, n) }
+pub fn sx_kid(t: Tree, n: Int, i: Int) -> Int { ints_get(t.kids, ints_get(t.first, n) + i) }
+pub fn sx_s(t: Tree, span: Int) -> Int { ints_get(t.start, span) }
+pub fn sx_e(t: Tree, span: Int) -> Int { ints_get(t.end, span) }
+
+// The value of field `name` of struct `n`, or -1.
+pub fn sx_field(t: Tree, n: Int, name: Str) -> Int {
+    let f = ints_get(t.first, n);
+    let c = ints_get(t.count, n);
+    let mut i = 0;
+    while i < c {
+        if strs_get(t.names, f + i) == name { return ints_get(t.kids, f + i); }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+pub fn sx_set(t: Tree, n: Int, name: Str, v: Int) -> Int {
+    let f = ints_get(t.first, n);
+    let c = ints_get(t.count, n);
+    let mut i = 0;
+    while i < c {
+        if strs_get(t.names, f + i) == name { ints_set(t.kids, f + i, v); return 0; }
+        i = i + 1;
+    }
+    0
+}
+
+// The text of a string field — a name.
+pub fn sx_name(t: Tree, n: Int, field: Str) -> Str { sx_text(t, sx_field(t, n, field)) }
+
+// The list `l`'s elements, as a fresh array.
+pub fn sx_items(t: Tree, l: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < sx_count(t, l) {
+        ints_push(out, sx_kid(t, l, i));
+        i = i + 1;
+    }
+    out
+}
+
+// Whether an option node is `Some`, and its value.
+pub fn sx_is_some(t: Tree, o: Int) -> Bool { sx_kind(t, o) == tk_tuple() && sx_text(t, o) == "Some" }
+pub fn sx_unwrap(t: Tree, o: Int) -> Int { sx_kid(t, o, 0) }
+
+pub fn join(t: Tree, a: Int, b: Int) -> Int {
+    let mut s = sx_s(t, a);
+    if sx_s(t, b) < s { s = sx_s(t, b); }
+    let mut e = sx_e(t, a);
+    if sx_e(t, b) > e { e = sx_e(t, b); }
+    sx_span(t, s, e)
+}
+
+pub fn point(t: Tree, at: Int) -> Int { sx_span(t, at, at) }
+
+// An expression's span: every variant has a `span` field but `Block`, which is its block's.
+pub fn expr_span(t: Tree, e: Int) -> Int {
+    if sx_kind(t, e) == tk_tuple() { return sx_field(t, sx_kid(t, e, 0), "span"); }
+    sx_field(t, e, "span")
+}
+
+pub fn pattern_span(t: Tree, p: Int) -> Int {
+    if sx_kind(t, p) == tk_tuple() {
+        if sx_text(t, p) == "Literal" { return expr_span(t, sx_kid(t, p, 0)); }
+        return sx_field(t, sx_kid(t, p, 0), "span");
+    }
+    sx_field(t, p, "span")
+}
+
+// --- printing, as the reference's `{:#?}` (design D3) ------------------------------------------
+
+fn pad(pads: Strs, n: Int) -> Str {
+    while strs_len(pads) <= n {
+        let k = strs_len(pads);
+        if k == 0 { strs_push(pads, ""); } else { strs_push(pads, str_concat(strs_get(pads, k - 1), " ")); }
+    }
+    strs_get(pads, n)
+}
+
+// A string as Rust's `Debug` writes it: quoted, with `\0 \t \n \r \" \\` and `\u{…}` for any
+// other control byte. Bytes above 127 are written as they are.
+pub fn debug_quote(s: Str) -> Str {
+    let out = strs_new();
+    strs_push(out, "\"");
+    let mut from = 0;
+    let n = str_len(s);
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        let mut rep = "";
+        if b == 0 { rep = "\\0"; }
+        if b == 9 { rep = "\\t"; }
+        if b == 10 { rep = "\\n"; }
+        if b == 13 { rep = "\\r"; }
+        if b == 34 { rep = "\\\""; }
+        if b == 92 { rep = "\\\\"; }
+        if rep == "" {
+            if b < 32 || b == 127 { rep = str_concat(str_concat("\\u{", hex_of(b)), "}"); }
+        }
+        // A character Rust's `Debug` does not print as itself: the C1 controls, the soft hyphen,
+        // the invisible formatting characters and the combining marks — `\u{…}`, whole.
+        let mut width = 1;
+        if b >= 192 {
+            width = lex_utf8_len(b);
+            if i + width > n { width = n - i; }
+            let c = scalar_at(s, i, width);
+            if invisible(c) { rep = str_concat(str_concat("\\u{", hex_long(c)), "}"); }
+        }
+        if rep != "" {
+            strs_push(out, str_slice(s, from, i));
+            strs_push(out, rep);
+            from = i + width;
+        }
+        i = i + width;
+    }
+    strs_push(out, str_slice(s, from, n));
+    strs_push(out, "\"");
+    str_join(out, "")
+}
+
+fn scalar_at(s: Str, i: Int, width: Int) -> Int {
+    let b = str_byte(s, i);
+    if width == 2 { return (b % 32) * 64 + str_byte(s, i + 1) % 64; }
+    if width == 3 { return (b % 16) * 4096 + (str_byte(s, i + 1) % 64) * 64 + str_byte(s, i + 2) % 64; }
+    if width == 4 {
+        return (b % 8) * 262144 + (str_byte(s, i + 1) % 64) * 4096 + (str_byte(s, i + 2) % 64) * 64 + str_byte(s, i + 3) % 64;
+    }
+    b
+}
+
+fn invisible(c: Int) -> Bool {
+    if c >= 128 && c <= 159 { return true; }
+    if c == 173 { return true; }
+    if c >= 768 && c <= 879 { return true; }
+    if c >= 8203 && c <= 8207 { return true; }
+    if c >= 8232 && c <= 8238 { return true; }
+    if c >= 8288 && c <= 8292 { return true; }
+    if c >= 65024 && c <= 65039 { return true; }
+    c == 65279
+}
+
+fn hex_long(c: Int) -> Str {
+    if c < 16 { return hex_of(c); }
+    let out = strs_new();
+    let mut v = c;
+    while v > 0 {
+        strs_push(out, hex_of(v % 16));
+        v = v / 16;
+    }
+    let rev = strs_new();
+    let mut k = strs_len(out) - 1;
+    while k >= 0 {
+        strs_push(rev, strs_get(out, k));
+        k = k - 1;
+    }
+    str_join(rev, "")
+}
+
+fn hex_of(b: Int) -> Str {
+    let digits = "0123456789abcdef";
+    if b < 16 { return str_slice(digits, b, b + 1); }
+    str_concat(str_slice(digits, b / 16, b / 16 + 1), str_slice(digits, b % 16, b % 16 + 1))
+}
+
+pub fn sx_print(t: Tree, n: Int, indent: Int, out: Strs, pads: Strs) -> Int {
+    let k = sx_kind(t, n);
+    if k == tk_atom() { strs_push(out, sx_text(t, n)); return 0; }
+    if k == tk_str() { strs_push(out, debug_quote(sx_text(t, n))); return 0; }
+    if k == tk_span() {
+        strs_push(out, int_to_str(sx_s(t, n)));
+        strs_push(out, "..");
+        strs_push(out, int_to_str(sx_e(t, n)));
+        return 0;
+    }
+    let c = sx_count(t, n);
+    let inner = pad(pads, indent + 4);
+    if k == tk_list() {
+        if c == 0 { strs_push(out, "[]"); return 0; }
+        strs_push(out, "[\n");
+    }
+    if k == tk_tuple() {
+        strs_push(out, sx_text(t, n));
+        strs_push(out, "(\n");
+    }
+    if k == tk_struct() {
+        strs_push(out, sx_text(t, n));
+        if c == 0 { return 0; }
+        strs_push(out, " {\n");
+    }
+    let f = ints_get(t.first, n);
+    let mut i = 0;
+    while i < c {
+        strs_push(out, inner);
+        if k == tk_struct() {
+            strs_push(out, strs_get(t.names, f + i));
+            strs_push(out, ": ");
+        }
+        sx_print(t, ints_get(t.kids, f + i), indent + 4, out, pads);
+        strs_push(out, ",\n");
+        i = i + 1;
+    }
+    strs_push(out, pad(pads, indent));
+    if k == tk_list() { strs_push(out, "]"); }
+    if k == tk_tuple() { strs_push(out, ")"); }
+    if k == tk_struct() { strs_push(out, "}"); }
+    0
+}
+
+// --- the parser's state ------------------------------------------------------------------------
+
+pub struct Px {
+    kinds: Ints,
+    starts: Ints,
+    ends: Ints,
+    texts: Strs,
+    src: Str,
+    // pos, depth, built, reported_too_deep, poisoned, item_start, drop_item, muted, no_result,
+    // and the slots a function returns its second and later results in.
+    st: Ints,
+    t: Tree,
+    // Diagnostics: code, span, message, primary label and help ("" for none).
+    dc: Strs,
+    ds: Ints,
+    de: Ints,
+    dm: Strs,
+    dl: Strs,
+    dh: Strs,
+}
+
+fn s_pos() -> Int { 0 }
+fn s_depth() -> Int { 1 }
+fn s_built() -> Int { 2 }
+fn s_reported() -> Int { 3 }
+fn s_poisoned() -> Int { 4 }
+fn s_item_start() -> Int { 5 }
+fn s_drop() -> Int { 6 }
+fn s_muted() -> Int { 7 }
+fn s_no_result() -> Int { 8 }
+fn s_r1() -> Int { 9 }
+fn s_r2() -> Int { 10 }
+fn s_r3() -> Int { 11 }
+fn s_r4() -> Int { 12 }
+fn s_item_kind() -> Int { 13 }
+
+fn g(p: Px, slot: Int) -> Int { ints_get(p.st, slot) }
+fn sv(p: Px, slot: Int, v: Int) -> Int { ints_set(p.st, slot, v); 0 }
+fn flag(p: Px, slot: Int) -> Bool { ints_get(p.st, slot) != 0 }
+fn setf(p: Px, slot: Int, b: Bool) -> Int { if b { ints_set(p.st, slot, 1); } else { ints_set(p.st, slot, 0); } 0 }
+
+pub fn sx_parser(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, src: Str, t: Tree) -> Px {
+    let st = ints_new();
+    let mut i = 0;
+    while i < 16 { ints_push(st, 0); i = i + 1; }
+    Px(kinds: kinds, starts: starts, ends: ends, texts: texts, src: src, st: st, t: t,
+            dc: strs_new(), ds: ints_new(), de: ints_new(), dm: strs_new(), dl: strs_new(), dh: strs_new())
+}
+
+// The parser's own kinds beyond the lexer's: the end of the file, past it, and an integer too
+// large for `Int` — a kind of its own to the reference.
+fn k_eof() -> Int { 0 }
+fn k_none() -> Int { 0 - 1 }
+fn k_wide() -> Int { 59 }
+
+fn ntok(p: Px) -> Int { ints_len(p.kinds) }
+fn pos(p: Px) -> Int { g(p, s_pos()) }
+
+fn kat(p: Px, i: Int) -> Int {
+    let n = ntok(p);
+    if i == n { return k_eof(); }
+    if i > n || i < 0 { return k_none(); }
+    let k = ints_get(p.kinds, i);
+    if k == k_int() { if lex_int_too_large(strs_get(p.texts, i)) { return k_wide(); } }
+    k
+}
+
+fn tat(p: Px, i: Int) -> Str {
+    if i < 0 || i >= ntok(p) { return ""; }
+    strs_get(p.texts, i)
+}
+
+fn sat(p: Px, i: Int) -> Int {
+    let n = ntok(p);
+    if i == n { return str_len(p.src); }
+    if i > n || i < 0 { return 0; }
+    ints_get(p.starts, i)
+}
+
+fn eat_at(p: Px, i: Int) -> Int {
+    let n = ntok(p);
+    if i == n { return str_len(p.src); }
+    if i > n || i < 0 { return 0; }
+    ints_get(p.ends, i)
+}
+
+fn peek(p: Px) -> Int { kat(p, pos(p)) }
+fn peek_text(p: Px) -> Str { tat(p, pos(p)) }
+fn span_at(p: Px, i: Int) -> Int { sx_span(p.t, sat(p, i), eat_at(p, i)) }
+fn peek_span(p: Px) -> Int { span_at(p, pos(p)) }
+fn at(p: Px, k: Int) -> Bool { peek(p) == k }
+fn word_at(p: Px, i: Int, w: Str) -> Bool { kat(p, i) == k_ident() && tat(p, i) == w }
+fn at_word(p: Px, w: Str) -> Bool { word_at(p, pos(p), w) }
+
+fn bump(p: Px) -> Int {
+    if peek(p) != k_eof() { sv(p, s_pos(), pos(p) + 1); }
+    0
+}
+
+// Consume the current token and return its index, for its kind and text.
+fn advance(p: Px) -> Int {
+    let i = pos(p);
+    bump(p);
+    i
+}
+
+fn eat(p: Px, k: Int) -> Bool {
+    if at(p, k) { bump(p); return true; }
+    false
+}
+
+fn tick() -> Str { "`" }
+fn ticked(s: Str) -> Str { str_concat(str_concat("`", s), "`") }
+
+// How a token is written, for "expected X, found Y" (the reference's `TokenKind::describe`).
+fn describe(p: Px, i: Int) -> Str {
+    let k = kat(p, i);
+    if k == k_int() { return str_concat("integer ", ticked(tat(p, i))); }
+    if k == k_wide() { return str_concat("integer ", ticked(tat(p, i))); }
+    if k == k_float() { return str_concat("number ", ticked(tat(p, i))); }
+    if k == k_str() { return "string literal"; }
+    if k == k_fstr() { return "interpolated string"; }
+    if k == k_ident() { return ticked(tat(p, i)); }
+    if k == k_eof() || k == k_none() { return "end of file"; }
+    kind_describe(k)
+}
+
+fn kind_describe(k: Int) -> Str {
+    if k == k_eof() { return "end of file"; }
+    ticked(kind_written(k))
+}
+
+fn kind_written(k: Int) -> Str {
+    if k == k_fn() { return "fn"; }
+    if k == k_let() { return "let"; }
+    if k == k_if() { return "if"; }
+    if k == k_else() { return "else"; }
+    if k == k_true() { return "true"; }
+    if k == k_false() { return "false"; }
+    if k == k_mut() { return "mut"; }
+    if k == k_pub() { return "pub"; }
+    if k == k_while() { return "while"; }
+    if k == k_break() { return "break"; }
+    if k == k_continue() { return "continue"; }
+    if k == k_return() { return "return"; }
+    if k == k_use() { return "use"; }
+    if k == k_scope() { return "scope"; }
+    if k == k_spawn() { return "spawn"; }
+    if k == k_trait() { return "trait"; }
+    if k == k_impl() { return "impl"; }
+    if k == k_struct() { return "struct"; }
+    if k == k_enum() { return "enum"; }
+    if k == k_match() { return "match"; }
+    if k == k_lparen() { return "("; }
+    if k == k_rparen() { return ")"; }
+    if k == k_lbrace() { return "{"; }
+    if k == k_rbrace() { return "}"; }
+    if k == k_lbracket() { return "["; }
+    if k == k_rbracket() { return "]"; }
+    if k == k_comma() { return ","; }
+    if k == k_colon() { return ":"; }
+    if k == k_dot() { return "."; }
+    if k == k_dotdot() { return ".."; }
+    if k == k_semi() { return ";"; }
+    if k == k_question() { return "?"; }
+    if k == k_bang() { return "!"; }
+    if k == k_ampamp() { return "&&"; }
+    if k == k_coloncolon() { return "::"; }
+    if k == k_pipepipe() { return "||"; }
+    if k == k_arrow() { return "->"; }
+    if k == k_fatarrow() { return "=>"; }
+    if k == k_eq() { return "="; }
+    if k == k_plus() { return "+"; }
+    if k == k_minus() { return "-"; }
+    if k == k_star() { return "*"; }
+    if k == k_slash() { return "/"; }
+    if k == k_percent() { return "%"; }
+    if k == k_eqeq() { return "=="; }
+    if k == k_noteq() { return "!="; }
+    if k == k_lt() { return "<"; }
+    if k == k_lteq() { return "<="; }
+    if k == k_gt() { return ">"; }
+    if k == k_gteq() { return ">="; }
+    if k == k_amp() { return "&"; }
+    if k == k_pipe() { return "|"; }
+    if k == k_caret() { return "^"; }
+    if k == k_tilde() { return "~"; }
+    if k == k_shl() { return "<<"; }
+    if k == k_shr() { return ">>"; }
+    if k == k_pluseq() { return "+="; }
+    if k == k_minuseq() { return "-="; }
+    if k == k_stareq() { return "*="; }
+    if k == k_slasheq() { return "/="; }
+    if k == k_percenteq() { return "%="; }
+    if k == k_ampeq() { return "&="; }
+    if k == k_pipeeq() { return "|="; }
+    if k == k_careteq() { return "^="; }
+    if k == k_shleq() { return "<<="; }
+    if k == k_shreq() { return ">>="; }
+    if k == k_at() { return "@"; }
+    "?"
+}
+
+// Record a syntax diagnostic, unless it would be a cascade (the reference's `report`).
+fn report(p: Px, code: Str, span: Int, message: Str, primary: Str, help: Str) -> Int {
+    if flag(p, s_muted()) { return 0; }
+    strs_push(p.dc, code);
+    ints_push(p.ds, sx_s(p.t, span));
+    ints_push(p.de, sx_e(p.t, span));
+    strs_push(p.dm, message);
+    strs_push(p.dl, primary);
+    strs_push(p.dh, help);
+    0
+}
+
+fn found_msg(p: Px, before: Str, i: Int) -> Str { str_concat(str_concat(before, ", found "), describe(p, i)) }
+
+fn line_break_before(p: Px) -> Bool {
+    let i = pos(p) - 1;
+    if i < 0 { return false; }
+    let from = eat_at(p, i);
+    let to = sat(p, pos(p));
+    let mut j = from;
+    while j < to {
+        if str_byte(p.src, j) == 10 { return true; }
+        j = j + 1;
+    }
+    false
+}
+
+fn previous_end(p: Px) -> Int {
+    let i = pos(p) - 1;
+    if i < 0 { return 0; }
+    eat_at(p, i)
+}
+
+fn expect(p: Px, k: Int, context: Str) -> Int {
+    if at(p, k) {
+        let s = peek_span(p);
+        bump(p);
+        return s;
+    }
+    // A line break stands for a statement's `;` (R1, 5b.19), as the block's `}` does.
+    if k == k_semi() {
+        if line_break_before(p) || at(p, k_rbrace()) { return point(p.t, previous_end(p)); }
+    }
+    let span = peek_span(p);
+    let msg = str_concat(str_concat(str_concat("expected ", kind_describe(k)), str_concat(" ", context)), str_concat(", found ", describe(p, pos(p))));
+    report(p, "N0100", span, msg, str_concat("expected ", kind_describe(k)), "");
+    0 - 1
+}
+
+fn max_nesting() -> Int { 512 }
+
+fn too_deep(p: Px) -> Int {
+    if flag(p, s_reported()) { return 0; }
+    setf(p, s_reported(), true);
+    report(p, "N0102", peek_span(p), "expressions and blocks may nest 512 deep", "",
+            "this is the parser's limit, not the language's: a deeper tree would exhaust the stack in a later pass, where it could only crash rather than report");
+    0
+}
+
+fn built(p: Px, depth: Int) -> Bool {
+    sv(p, s_built(), depth);
+    if depth > max_nesting() { too_deep(p); return false; }
+    true
+}
+
+fn child(p: Px) -> Int { g(p, s_built()) }
+
+fn enter(p: Px) -> Bool {
+    sv(p, s_depth(), g(p, s_depth()) + 1);
+    if g(p, s_depth()) > max_nesting() { too_deep(p); return false; }
+    true
+}
+
+fn leave(p: Px) -> Int { sv(p, s_depth(), g(p, s_depth()) - 1); 0 }
+
+fn imax(a: Int, b: Int) -> Int { if a > b { a } else { b } }
+
+// Whether the current item's braces, parentheses and brackets balance, from where it began to
+// the next token that can only start an item.
+fn delimiters_balanced(p: Px) -> Bool {
+    let base = g(p, s_item_start());
+    let mut i = 0;
+    while kat(p, base + i) == k_pub() || kat(p, base + i) == k_fn() { i = i + 1; }
+    let mut b0 = 0;
+    let mut b1 = 0;
+    let mut b2 = 0;
+    while kat(p, base + i) != k_none() {
+        let k = kat(p, base + i);
+        i = i + 1;
+        let item_fn = k == k_fn() && kat(p, base + i) == k_ident();
+        if k == k_fn() && item_fn == false { continue; }
+        if k == k_fn() || k == k_pub() || k == k_at() || k == k_eof() { break; }
+        if k == k_lbrace() { b0 = b0 + 1; }
+        if k == k_lparen() { b1 = b1 + 1; }
+        if k == k_lbracket() { b2 = b2 + 1; }
+        if k == k_rbrace() { if b0 == 0 { return false; } b0 = b0 - 1; }
+        if k == k_rparen() { if b1 == 0 { return false; } b1 = b1 - 1; }
+        if k == k_rbracket() { if b2 == 0 { return false; } b2 = b2 - 1; }
+    }
+    b0 == 0 && b1 == 0 && b2 == 0
+}
+
+fn at_item_fn(p: Px) -> Bool { at(p, k_fn()) && kat(p, pos(p) + 1) == k_ident() }
+
+fn at_item_start(p: Px) -> Bool {
+    if at_item_fn(p) { return true; }
+    let k = peek(p);
+    k == k_at() || k == k_pub() || k == k_struct() || k == k_enum() || k == k_use() || k == k_trait() || k == k_impl()
+}
+
+fn recover_to_item(p: Px, start: Int) -> Int {
+    if pos(p) == start { bump(p); }
+    while at(p, k_eof()) == false && at_item_start(p) == false { bump(p); }
+    0
+}
+
+fn supported() -> Str {
+    "Nazm (the 1.0 draft) has functions and `let`/`let mut`, `while` with `break` and `continue`, `return`, `if`/`else`, `Int`, `Bool` and `Str`, fixed-width integers, `Float32` and `Float64` with bit operators, `struct` records, `enum` and `match`, generics and `Vec[T]`, `Result`, `Option` and `?`, function values and closures, `trait`, `impl` and methods, declared effects, capabilities and provenance, `scope`/`spawn` with channels, selection and deadlines, `extern \"C\"`, and modules and packages with `use` — see docs/spec.md, or run `nazm capabilities`"
+}
+
+fn reserved(p: Px, name: Str, span: Int) -> Bool {
+    let mut why = "";
+    if name == "for" { why = "`for` begins a loop, `for x in xs { … }`, and is not a name"; }
+    if name == "label" { why = "there are no loop labels; `break` leaves the innermost loop"; }
+    if name == "mod" { why = "a file is the module; import one with `use \"other.nz\";`"; }
+    if why == "" { return false; }
+    report(p, "N0101", span, str_concat(ticked(name), " is not supported yet"), str_concat(ticked(name), " is reserved"),
+            str_concat(str_concat(why, ". In general, "), supported()));
+    true
+}
+
+// --- items ---------------------------------------------------------------------------------
+
+fn item_function() -> Int { 1 }
+fn item_record() -> Int { 2 }
+fn item_enum() -> Int { 3 }
+fn item_import() -> Int { 4 }
+fn item_trait() -> Int { 5 }
+fn item_impl() -> Int { 6 }
+fn item_methods() -> Int { 7 }
+fn item_const() -> Int { 8 }
+
+// The program's lists, filled item by item.
+pub struct Prog {
+    functions: Ints,
+    records: Ints,
+    enums: Ints,
+    imports: Ints,
+    traits: Ints,
+    impls: Ints,
+    consts: Ints,
+}
+
+pub fn new_prog() -> Prog {
+    Prog(functions: ints_new(), records: ints_new(), enums: ints_new(), imports: ints_new(), traits: ints_new(),
+            impls: ints_new(), consts: ints_new())
+}
+
+pub fn sx_program(t: Tree, pr: Prog) -> Int {
+    let f = fs();
+    fa(f, "functions", mk_list(t, pr.functions));
+    fa(f, "records", mk_list(t, pr.records));
+    fa(f, "enums", mk_list(t, pr.enums));
+    fa(f, "imports", mk_list(t, pr.imports));
+    fa(f, "traits", mk_list(t, pr.traits));
+    fa(f, "impls", mk_list(t, pr.impls));
+    fa(f, "consts", mk_list(t, pr.consts));
+    fa(f, "hole", sx_none(t));
+    mk_struct(t, "Program", f)
+}
+
+fn type_plain(t: Tree, name: Str, span: Int) -> Int {
+    let f = fs();
+    fa(f, "qualifier", sx_none(t));
+    fa(f, "function", sx_none(t));
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", span);
+    fa(f, "span", span);
+    fa(f, "args", sx_none(t));
+    fa(f, "length", sx_none(t));
+    mk_struct(t, "TypeName", f)
+}
+
+// Put one item where the program keeps its kind (the reference's `Item::push_into`).
+fn push_item(p: Px, pr: Prog, kind: Int, item: Int, extra: Int) -> Int {
+    let t = p.t;
+    if kind == item_function() { ints_push(pr.functions, item); }
+    if kind == item_record() { ints_push(pr.records, item); }
+    if kind == item_enum() { ints_push(pr.enums, item); }
+    if kind == item_import() { ints_push(pr.imports, item); }
+    if kind == item_const() { ints_push(pr.consts, item); }
+    if kind == item_methods() {
+        let ms = sx_items(t, item);
+        let mut i = 0;
+        while i < ints_len(ms) { ints_push(pr.functions, ints_get(ms, i)); i = i + 1; }
+    }
+    if kind == item_impl() {
+        ints_push(pr.impls, item);
+        let ms = sx_items(t, extra);
+        let mut i = 0;
+        while i < ints_len(ms) { ints_push(pr.functions, ints_get(ms, i)); i = i + 1; }
+    }
+    if kind == item_trait() {
+        // Each default body (R1b, L11) is a function generic over `Self`.
+        let trait_name = sx_name(t, item, "name");
+        let ms = sx_items(t, sx_field(t, item, "methods"));
+        let mut i = 0;
+        while i < ints_len(ms) {
+            let m = ints_get(ms, i);
+            let body = sx_field(t, m, "body");
+            if sx_is_some(t, body) {
+                let name_span = sx_field(t, m, "name_span");
+                let req = fs();
+                fa(req, "name", sx_str(t, trait_name));
+                fa(req, "span", sx_field(t, item, "name_span"));
+                let tp = fs();
+                fa(tp, "name", sx_str(t, "Self"));
+                fa(tp, "span", name_span);
+                fa(tp, "effect", sx_bool(t, false));
+                fa(tp, "requires", mk_some(t, mk_struct(t, "Requirement", req)));
+                let mut effects = sx_field(t, m, "effects");
+                if sx_is_some(t, effects) == false {
+                    let ed = fs();
+                    fa(ed, "span", sx_field(t, sx_field(t, m, "return_type"), "span"));
+                    fa(ed, "names", empty_list(t));
+                    effects = mk_some(t, mk_struct(t, "EffectDecl", ed));
+                }
+                let f = fs();
+                fa(f, "attrs", empty_list(t));
+                fa(f, "name", sx_str(t, str_concat(str_concat(trait_name, "/default/"), sx_name(t, m, "name"))));
+                fa(f, "name_span", name_span);
+                fa(f, "pub_span", sx_none(t));
+                fa(f, "type_params", mk_list(t, one(mk_struct(t, "TypeParam", tp))));
+                fa(f, "effect_params", empty_list(t));
+                fa(f, "params", sx_field(t, m, "params"));
+                fa(f, "return_type", sx_field(t, m, "return_type"));
+                fa(f, "effects", effects);
+                fa(f, "contracts", empty_list(t));
+                fa(f, "body", body);
+                fa(f, "foreign", sx_none(t));
+                fa(f, "export", sx_none(t));
+                fa(f, "method_of", sx_none(t));
+                fa(f, "span", sx_field(t, m, "span"));
+                ints_push(pr.functions, mk_struct(t, "Function", f));
+            }
+            i = i + 1;
+        }
+        ints_push(pr.traits, item);
+    }
+    0
+}
+
+// Parse every item of the file into `pr` (the reference's `parse_region` over a whole file).
+pub fn sx_parse_items(p: Px, pr: Prog) -> Int {
+    let t = p.t;
+    while at(p, k_eof()) == false {
+        let start = pos(p);
+        sv(p, s_depth(), 0);
+        sv(p, s_built(), 0);
+        setf(p, s_reported(), false);
+        setf(p, s_poisoned(), false);
+        setf(p, s_drop(), false);
+        let mut attrs = empty_list(t);
+        let mut has_attrs = false;
+        if at(p, k_at()) {
+            setf(p, s_muted(), false);
+            attrs = attributes(p);
+            has_attrs = sx_count(t, attrs) > 0;
+        }
+        sv(p, s_item_start(), pos(p));
+        let k = peek(p);
+        if k == k_fn() || k == k_at() || k == k_pub() || k == k_struct() || k == k_enum() || k == k_use() || k == k_trait() || k == k_impl() {
+            setf(p, s_muted(), false);
+        }
+        let pub_use = at(p, k_pub()) && kat(p, pos(p) + 1) == k_use();
+        let mut item = 0 - 1;
+        let mut kind = 0;
+        let mut extra = 0 - 1;
+        if (at(p, k_use()) || pub_use) && has_attrs {
+            let span = sx_field(t, sx_kid(t, attrs, 0), "span");
+            report(p, "N0100", span, "an attribute belongs to a declaration, not to an import", "before an import",
+                    "write it before a `fn`, `struct`, `enum`, `trait`, `impl` or `const`");
+            item = import(p);
+            kind = item_import();
+        } else {
+            if at(p, k_use()) || pub_use {
+                item = import(p);
+                kind = item_import();
+            } else {
+                if at(p, k_impl()) {
+                    item = impl_decl(p);
+                    // An impl with a trait is its header, its methods in r1; one without is the
+                    // list of its methods.
+                    kind = item_impl();
+                    extra = g(p, s_r1());
+                    if item >= 0 { if sx_kind(t, item) == tk_list() { kind = item_methods(); } }
+                } else {
+                    let mut next = pos(p);
+                    if at(p, k_pub()) { next = next + 1; }
+                    if word_at(p, next, "extern") && kat(p, next + 1) == k_str() && kat(p, next + 2) == k_struct() {
+                        next = next + 2;
+                    }
+                    let after = kat(p, next);
+                    let constant = (word_at(p, next, "const") || word_at(p, next, "static"))
+                            && kat(p, next + 1) == k_ident() && kat(p, next + 2) == k_colon();
+                    if constant {
+                        item = constant_item(p);
+                        kind = item_const();
+                    } else {
+                        if after == k_struct() {
+                            item = record(p);
+                            kind = item_record();
+                        } else {
+                            if after == k_enum() {
+                                item = enumeration(p);
+                                kind = item_enum();
+                            } else {
+                                if after == k_trait() {
+                                    item = trait_decl(p);
+                                    kind = item_trait();
+                                } else {
+                                    item = function(p);
+                                    kind = item_function();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if flag(p, s_drop()) { item = 0 - 1; }
+        if item >= 0 {
+            // `item`, given the attributes written before it. An impl's are its header's; an impl
+            // without a trait has none of its own, so they are each method's.
+            if kind == item_methods() {
+                let ms = sx_items(t, item);
+                let mut i = 0;
+                while i < ints_len(ms) { sx_set(t, ints_get(ms, i), "attrs", attrs); i = i + 1; }
+            } else {
+                if kind != item_import() { sx_set(t, item, "attrs", attrs); }
+            }
+            push_item(p, pr, kind, item, extra);
+        } else {
+            if flag(p, s_drop()) == false { recover_to_item(p, start); }
+        }
+    }
+    0
+}
+
+// `@name` and `@name(arguments)`, as many as are written (Gate 2).
+fn attributes(p: Px) -> Int {
+    let t = p.t;
+    let out = ints_new();
+    while at(p, k_at()) {
+        let start = peek_span(p);
+        bump(p);
+        let name_span = peek_span(p);
+        if at(p, k_ident()) == false {
+            report(p, "N0100", name_span, found_msg(p, "expected an attribute's name after `@`", pos(p)), "expected a name", "");
+            break;
+        }
+        let name = peek_text(p);
+        bump(p);
+        let mut end = name_span;
+        let mut args = sx_none(t);
+        if at(p, k_lparen()) {
+            bump(p);
+            let a = attribute_args(p, 1);
+            let mut open = 0;
+            if a >= 0 {
+                let close = expect(p, k_rparen(), "to end an attribute's arguments");
+                if close >= 0 { end = close; args = mk_some(t, a); } else { open = 1; }
+            } else {
+                open = g(p, s_r1());
+            }
+            if open > 0 {
+                skip_attribute(p, open);
+                continue;
+            }
+        }
+        let f = fs();
+        fa(f, "name", sx_str(t, name));
+        fa(f, "name_span", name_span);
+        fa(f, "args", args);
+        fa(f, "span", join(t, start, end));
+        ints_push(out, mk_struct(t, "Attribute", f));
+    }
+    mk_list(t, out)
+}
+
+// An attribute's arguments, up to its `)`; -1 on a mistake, with how many `(` are open in r1.
+fn attribute_args(p: Px, open: Int) -> Int {
+    let t = p.t;
+    let args = ints_new();
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let span = peek_span(p);
+        let k = peek(p);
+        if k == k_str() {
+            let value = peek_text(p);
+            bump(p);
+            let f = fs();
+            fa(f, "value", sx_str(t, value));
+            fa(f, "span", span);
+            ints_push(args, mk_struct(t, "Str", f));
+        } else {
+            if k == k_ident() {
+                let name = peek_text(p);
+                bump(p);
+                if at(p, k_eq()) {
+                    bump(p);
+                    let vspan = peek_span(p);
+                    if at(p, k_str()) == false {
+                        report(p, "N0100", vspan, found_msg(p, str_concat(str_concat("expected a string after `", name), " =`"), pos(p)), "expected a string", "");
+                        sv(p, s_r1(), open);
+                        return 0 - 1;
+                    }
+                    let value = peek_text(p);
+                    bump(p);
+                    let f = fs();
+                    fa(f, "key", sx_str(t, name));
+                    fa(f, "key_span", span);
+                    fa(f, "value", sx_str(t, value));
+                    fa(f, "span", join(t, span, vspan));
+                    ints_push(args, mk_struct(t, "Pair", f));
+                } else {
+                    if at(p, k_lparen()) {
+                        bump(p);
+                        let inner = attribute_args(p, open + 1);
+                        if inner < 0 { return 0 - 1; }
+                        let close = expect(p, k_rparen(), str_concat(str_concat("to end `", name), "(…)`"));
+                        if close < 0 { sv(p, s_r1(), open + 1); return 0 - 1; }
+                        let f = fs();
+                        fa(f, "name", sx_str(t, name));
+                        fa(f, "name_span", span);
+                        fa(f, "args", inner);
+                        fa(f, "span", join(t, span, close));
+                        ints_push(args, mk_struct(t, "Call", f));
+                    } else {
+                        let f = fs();
+                        fa(f, "name", sx_str(t, name));
+                        fa(f, "span", span);
+                        ints_push(args, mk_struct(t, "Word", f));
+                    }
+                }
+            } else {
+                report(p, "N0100", span, found_msg(p, "expected a string, a word or `name(…)` in an attribute", pos(p)), "not an attribute argument", "");
+                sv(p, s_r1(), open);
+                return 0 - 1;
+            }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    mk_list(t, args)
+}
+
+fn skip_attribute(p: Px, open0: Int) -> Int {
+    let mut open = open0;
+    while at(p, k_eof()) == false && at_item_start(p) == false {
+        if at(p, k_lparen()) {
+            open = open + 1;
+        } else {
+            if at(p, k_rparen()) {
+                open = open - 1;
+                if open == 0 { bump(p); return 0; }
+            }
+        }
+        bump(p);
+    }
+    0
+}
+
+fn import(p: Px) -> Int {
+    let first = pos(p);
+    let parsed = import_inner(p);
+    if parsed < 0 {
+        while pos(p) > first && at(p, k_semi()) == false && at(p, k_eof()) == false && at_item_start(p) == false { bump(p); }
+        eat(p, k_semi());
+    }
+    parsed
+}
+
+fn import_inner(p: Px) -> Int {
+    let t = p.t;
+    let mut pub_span = 0 - 1;
+    if at(p, k_pub()) { pub_span = peek_span(p); bump(p); }
+    let mut start = expect(p, k_use(), "to start an import");
+    if start < 0 { return 0 - 1; }
+    if pub_span >= 0 { start = join(t, pub_span, start); }
+    let path_span = peek_span(p);
+    let pi = advance(p);
+    if kat(p, pi) != k_str() {
+        report(p, "N0100", path_span, found_msg(p, "expected a quoted path", pi), "", "an import is written `use \"other.nz\";`");
+        return 0 - 1;
+    }
+    let path = tat(p, pi);
+    let mut alias = sx_none(t);
+    let mut has_alias = false;
+    let mut alias_span = 0 - 1;
+    if at_word(p, "as") {
+        advance(p);
+        alias_span = peek_span(p);
+        let ai = advance(p);
+        if kat(p, ai) != k_ident() {
+            report(p, "N0100", alias_span, found_msg(p, "expected a name after `as`", ai), "", "an import under a name is written `use \"other.nz\" as other;`");
+            return 0 - 1;
+        }
+        let q = fs();
+        fa(q, "name", sx_str(t, tat(p, ai)));
+        fa(q, "span", alias_span);
+        alias = mk_some(t, mk_struct(t, "Qualifier", q));
+        has_alias = true;
+    }
+    let mut reexport = sx_none(t);
+    if pub_span >= 0 {
+        if has_alias {
+            report(p, "N0100", alias_span, "a re-export is not imported under a name", "",
+                    "`pub use \"other.nz\";` re-exports every name it exports;                          `pub use \"other.nz\" { name, other as alias };` chooses");
+            return 0 - 1;
+        }
+        let mut names = sx_none(t);
+        if eat(p, k_lbrace()) {
+            let list = ints_new();
+            while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+                let span = peek_span(p);
+                let ni = advance(p);
+                if kat(p, ni) != k_ident() {
+                    report(p, "N0100", span, "expected a name to re-export", "", "");
+                    return 0 - 1;
+                }
+                let mut renamed = sx_none(t);
+                if at_word(p, "as") {
+                    advance(p);
+                    let rspan = peek_span(p);
+                    let ri = advance(p);
+                    if kat(p, ri) != k_ident() {
+                        report(p, "N0100", rspan, "expected the name to re-export it under, after `as`", "", "");
+                        return 0 - 1;
+                    }
+                    renamed = mk_some(t, mk_tuple(t, "", two(sx_str(t, tat(p, ri)), rspan)));
+                }
+                let f = fs();
+                fa(f, "name", sx_str(t, tat(p, ni)));
+                fa(f, "span", span);
+                fa(f, "alias", renamed);
+                ints_push(list, mk_struct(t, "ReexportName", f));
+                if eat(p, k_comma()) == false { break; }
+            }
+            if expect(p, k_rbrace(), "to close the names re-exported") < 0 { return 0 - 1; }
+            names = mk_some(t, mk_list(t, list));
+        }
+        let r = fs();
+        fa(r, "pub_span", pub_span);
+        fa(r, "names", names);
+        reexport = mk_some(t, mk_struct(t, "Reexport", r));
+    }
+    let end = expect(p, k_semi(), "to end an import");
+    if end < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "path", sx_str(t, path));
+    fa(f, "path_span", path_span);
+    fa(f, "alias", alias);
+    fa(f, "reexport", reexport);
+    fa(f, "span", join(t, start, end));
+    mk_struct(t, "Import", f)
+}
+
+fn pub_prefix(p: Px) -> Int {
+    if at(p, k_pub()) {
+        let s = peek_span(p);
+        advance(p);
+        return mk_some(p.t, s);
+    }
+    sx_none(p.t)
+}
+
+// The name after a declaration's keyword, or -1 having reported: `what` names the declaration.
+fn decl_name(p: Px, what: Str, help: Str) -> Int {
+    let name_span = peek_span(p);
+    let i = advance(p);
+    if kat(p, i) == k_ident() {
+        if reserved(p, tat(p, i), name_span) { return 0 - 1; }
+        sv(p, s_r1(), name_span);
+        return i;
+    }
+    report(p, "N0100", name_span, found_msg(p, str_concat("expected ", what), i), "", help);
+    0 - 1
+}
+
+fn record(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    let pub_span = pub_prefix(p);
+    let mut foreign = 0 - 1;
+    let mut abi = "";
+    let mut abi_span = 0 - 1;
+    if at_word(p, "extern") {
+        advance(p);
+        abi_span = peek_span(p);
+        let ai = advance(p);
+        if kat(p, ai) == k_str() { abi = tat(p, ai); foreign = 1; }
+    }
+    if expect(p, k_struct(), "to start a record") < 0 { return 0 - 1; }
+    let ni = decl_name(p, "a record name", "a record is declared `struct Point { x: Int, y: Int, }`");
+    if ni < 0 { return 0 - 1; }
+    let name_span = g(p, s_r1());
+    let type_params = only_type_params(p);
+    if type_params < 0 { return 0 - 1; }
+    let mut fields = empty_list(t);
+    let mut close = 0 - 1;
+    let mut opaque = false;
+    if foreign > 0 && at(p, k_semi()) {
+        close = peek_span(p);
+        advance(p);
+        opaque = true;
+    } else {
+        if expect(p, k_lbrace(), "to start the fields") < 0 { return 0 - 1; }
+        let list = ints_new();
+        while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+            let fstart = pos(p);
+            let fd = field_decl(p, "each field is written `name: Type,`", "after a field name");
+            if fd >= 0 {
+                ints_push(list, fd);
+            } else {
+                if recover_member(p, fstart, k_rbrace()) == false { return 0 - 1; }
+            }
+            if eat(p, k_comma()) == false { break; }
+        }
+        close = expect(p, k_rbrace(), "to close the fields");
+        if close < 0 { return 0 - 1; }
+        fields = mk_list(t, list);
+    }
+    setf(p, s_drop(), flag(p, s_poisoned()));
+    let mut fnode = sx_none(t);
+    if foreign > 0 {
+        let fsx = fs();
+        fa(fsx, "abi", sx_str(t, abi));
+        fa(fsx, "abi_span", abi_span);
+        fa(fsx, "opaque", sx_bool(t, opaque));
+        fnode = mk_some(t, mk_struct(t, "ForeignStruct", fsx));
+    }
+    let f = fs();
+    fa(f, "attrs", empty_list(t));
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "pub_span", pub_span);
+    fa(f, "type_params", type_params);
+    fa(f, "fields", fields);
+    fa(f, "foreign", fnode);
+    fa(f, "span", join(t, start, close));
+    mk_struct(t, "Record", f)
+}
+
+fn enumeration(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    let pub_span = pub_prefix(p);
+    if expect(p, k_enum(), "to start an enum") < 0 { return 0 - 1; }
+    let ni = decl_name(p, "an enum name", "an enum is declared `enum State { Ready, Failed(code: Int), }`");
+    if ni < 0 { return 0 - 1; }
+    let name_span = g(p, s_r1());
+    let type_params = only_type_params(p);
+    if type_params < 0 { return 0 - 1; }
+    if expect(p, k_lbrace(), "to start the variants") < 0 { return 0 - 1; }
+    let list = ints_new();
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        let vstart = pos(p);
+        let v = variant_decl(p);
+        if v >= 0 {
+            ints_push(list, v);
+        } else {
+            if recover_member(p, vstart, k_rbrace()) == false { return 0 - 1; }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rbrace(), "to close the variants");
+    if close < 0 { return 0 - 1; }
+    setf(p, s_drop(), flag(p, s_poisoned()));
+    let f = fs();
+    fa(f, "attrs", empty_list(t));
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "pub_span", pub_span);
+    fa(f, "type_params", type_params);
+    fa(f, "variants", mk_list(t, list));
+    fa(f, "span", join(t, start, close));
+    mk_struct(t, "Enum", f)
+}
+
+fn trait_decl(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    let pub_span = pub_prefix(p);
+    if expect(p, k_trait(), "to start a trait") < 0 { return 0 - 1; }
+    let ni = decl_name(p, "a trait name", "a trait is declared `trait Show { fn show(self: Self) -> Str; }`");
+    if ni < 0 { return 0 - 1; }
+    let name_span = g(p, s_r1());
+    if expect(p, k_lbrace(), "to start the trait's methods") < 0 { return 0 - 1; }
+    let methods = ints_new();
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        let m = trait_method(p);
+        if m < 0 { return 0 - 1; }
+        ints_push(methods, m);
+    }
+    let close = expect(p, k_rbrace(), "to close the trait");
+    if close < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "attrs", empty_list(t));
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "pub_span", pub_span);
+    fa(f, "methods", mk_list(t, methods));
+    fa(f, "span", join(t, start, close));
+    mk_struct(t, "Trait", f)
+}
+
+fn trait_method(p: Px) -> Int {
+    let t = p.t;
+    let start = expect(p, k_fn(), "to start a trait method");
+    if start < 0 { return 0 - 1; }
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() {
+        report(p, "N0100", name_span, found_msg(p, "expected a method name", ni), "", "");
+        return 0 - 1;
+    }
+    let params = param_list(p, "after the method name");
+    if params < 0 { return 0 - 1; }
+    if expect(p, k_arrow(), "before the return type") < 0 { return 0 - 1; }
+    let return_type = type_name(p);
+    if return_type < 0 { return 0 - 1; }
+    let effects = effect_set(p);
+    if effects == 0 - 1 { return 0 - 1; }
+    let mut body = sx_none(t);
+    let mut end = 0 - 1;
+    if at(p, k_lbrace()) {
+        let b = block(p);
+        if b < 0 { return 0 - 1; }
+        end = sx_field(t, b, "span");
+        body = mk_some(t, b);
+    } else {
+        end = peek_span(p);
+        if at(p, k_semi()) == false {
+            report(p, "N0100", end, found_msg(p, "expected `;` or a default body after a trait method's signature", pos(p)), "",
+                    "a trait method is a signature ended by `;`, which each `impl` of the trait writes, or one with a body, which an `impl` that writes none gets");
+            return 0 - 1;
+        }
+        advance(p);
+    }
+    let f = fs();
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "params", params);
+    fa(f, "return_type", return_type);
+    fa(f, "effects", opt_effects(t, effects));
+    fa(f, "body", body);
+    fa(f, "span", join(t, start, end));
+    mk_struct(t, "TraitMethod", f)
+}
+
+// `effect_set`'s answer as an `Option`: -2 is none written.
+fn opt_effects(t: Tree, e: Int) -> Int { if e == 0 - 2 { sx_none(t) } else { mk_some(t, e) } }
+
+// `impl Trait for Type { … }` or (R1, 5b.17) `impl Type { … }`. Sets the item kind, and for an
+// impl with a trait its methods' list in r1.
+fn impl_decl(p: Px) -> Int {
+    let t = p.t;
+    let impl_span = expect(p, k_impl(), "to start an impl");
+    if impl_span < 0 { return 0 - 1; }
+    let type_params = only_type_params(p);
+    if type_params < 0 { return 0 - 1; }
+    let trait_name = type_name(p);
+    if trait_name < 0 { return 0 - 1; }
+    if at(p, k_lbrace()) { return inherent_methods(p, trait_name, type_params); }
+    if at_word(p, "for") {
+        advance(p);
+    } else {
+        report(p, "N0100", peek_span(p), found_msg(p, "expected `for` after the trait's name", pos(p)), "", "an impl is written `impl Show for Point { … }`");
+        return 0 - 1;
+    }
+    let self_ty = type_name(p);
+    if self_ty < 0 { return 0 - 1; }
+    if expect(p, k_lbrace(), "to start the impl's methods") < 0 { return 0 - 1; }
+    let methods = ints_new();
+    let mut recovered = false;
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        if at_item_fn(p) == false {
+            report(p, "N0100", peek_span(p), found_msg(p, "expected a method, `fn NAME(…)`", pos(p)), "", "an impl holds the trait's methods and nothing else");
+            return 0 - 1;
+        }
+        setf(p, s_poisoned(), false);
+        setf(p, s_drop(), false);
+        let f = function(p);
+        if f < 0 { return 0 - 1; }
+        if flag(p, s_drop()) { recovered = true; }
+        prepend_type_params(t, f, type_params);
+        let mo = fs();
+        fa(mo, "trait_name", trait_name);
+        fa(mo, "self_ty", self_ty);
+        fa(mo, "impl_span", impl_span);
+        sx_set(t, f, "method_of", mk_some(t, mk_struct(t, "MethodOf", mo)));
+        ints_push(methods, f);
+    }
+    let close = expect(p, k_rbrace(), "to close the impl");
+    if close < 0 { return 0 - 1; }
+    setf(p, s_drop(), recovered);
+    let d = fs();
+    fa(d, "attrs", empty_list(t));
+    fa(d, "type_params", type_params);
+    fa(d, "trait_name", trait_name);
+    fa(d, "self_ty", self_ty);
+    fa(d, "impl_span", impl_span);
+    fa(d, "span", join(t, impl_span, close));
+    let decl = mk_struct(t, "ImplDecl", d);
+    sv(p, s_r1(), mk_list(t, methods));
+    decl
+}
+
+fn prepend_type_params(t: Tree, f: Int, type_params: Int) -> Int {
+    if sx_count(t, type_params) == 0 { return 0; }
+    let all = sx_items(t, type_params);
+    let own = sx_items(t, sx_field(t, f, "type_params"));
+    let mut i = 0;
+    while i < ints_len(own) { ints_push(all, ints_get(own, i)); i = i + 1; }
+    sx_set(t, f, "type_params", mk_list(t, all));
+    0
+}
+
+fn lower_ascii(s: Str) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b >= 65 && b <= 90 { strs_push(out, str_from_byte(b + 32)); } else { strs_push(out, str_slice(s, i, i + 1)); }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+fn inherent_methods(p: Px, of: Int, type_params: Int) -> Int {
+    let t = p.t;
+    let prefix = lower_ascii(sx_name(t, of, "name"));
+    if expect(p, k_lbrace(), "to start the methods") < 0 { return 0 - 1; }
+    let methods = ints_new();
+    let mut recovered = false;
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        if at_item_fn(p) == false {
+            report(p, "N0100", peek_span(p), found_msg(p, "expected a method, `fn NAME(…)`", pos(p)), "", "an impl holds methods and nothing else");
+            return 0 - 1;
+        }
+        setf(p, s_poisoned(), false);
+        setf(p, s_drop(), false);
+        let f = function(p);
+        if f < 0 { return 0 - 1; }
+        if flag(p, s_drop()) { recovered = true; }
+        prepend_type_params(t, f, type_params);
+        sx_set(t, f, "name", sx_str(t, str_concat(str_concat(prefix, "_"), sx_name(t, f, "name"))));
+        ints_push(methods, f);
+    }
+    if expect(p, k_rbrace(), "to close the impl") < 0 { return 0 - 1; }
+    setf(p, s_drop(), recovered);
+    mk_list(t, methods)
+}
+
+fn variant_decl(p: Px) -> Int {
+    let t = p.t;
+    let mut attrs = empty_list(t);
+    if at(p, k_at()) { attrs = attributes(p); }
+    let variant_span = peek_span(p);
+    let vi = advance(p);
+    if kat(p, vi) != k_ident() {
+        report(p, "N0100", variant_span, found_msg(p, "expected a variant name", vi), "",
+                "a variant is written `Name,` or `Name(field: Type,),` — the parentheses are the payload, so a variant without one has none");
+        return 0 - 1;
+    }
+    let name = tat(p, vi);
+    let list = ints_new();
+    let mut last = variant_span;
+    if at(p, k_lparen()) {
+        bump(p);
+        if at(p, k_rparen()) {
+            let close = peek_span(p);
+            advance(p);
+            report(p, "N0101", join(t, variant_span, close), str_concat(ticked(name), " has an empty payload, which is written by writing nothing"), "",
+                    "a variant with no payload is declared `Name,` — the brackets are the payload. Construction and patterns write them anyway, because there they are what separates a variant from a field read");
+            return 0 - 1;
+        }
+        while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+            let fstart = pos(p);
+            let fd = field_decl(p, "each payload field is written `name: Type,`", "after a payload field name");
+            if fd >= 0 {
+                ints_push(list, fd);
+            } else {
+                if recover_member(p, fstart, k_rparen()) == false { return 0 - 1; }
+            }
+            if eat(p, k_comma()) == false { break; }
+        }
+        last = expect(p, k_rparen(), "to close the payload");
+        if last < 0 { return 0 - 1; }
+    }
+    let f = fs();
+    fa(f, "attrs", attrs);
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", variant_span);
+    fa(f, "fields", mk_list(t, list));
+    fa(f, "span", join(t, variant_span, last));
+    mk_struct(t, "Variant", f)
+}
+
+fn field_decl(p: Px, help: Str, after: Str) -> Int {
+    let t = p.t;
+    let mut attrs = empty_list(t);
+    if at(p, k_at()) { attrs = attributes(p); }
+    let field_span = peek_span(p);
+    let fi = advance(p);
+    if kat(p, fi) != k_ident() {
+        report(p, "N0100", field_span, found_msg(p, "expected a field name", fi), "", help);
+        return 0 - 1;
+    }
+    if expect(p, k_colon(), after) < 0 { return 0 - 1; }
+    let ty = type_name(p);
+    if ty < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "attrs", attrs);
+    fa(f, "name", sx_str(t, tat(p, fi)));
+    fa(f, "name_span", field_span);
+    fa(f, "ty", ty);
+    fa(f, "span", join(t, field_span, sx_field(t, ty, "span")));
+    mk_struct(t, "Field", f)
+}
+
+fn recover_member(p: Px, start: Int, close: Int) -> Bool {
+    if flag(p, s_poisoned()) == false && delimiters_balanced(p) == false { setf(p, s_muted(), true); }
+    setf(p, s_poisoned(), true);
+    skip_member(p, start, close)
+}
+
+fn opens(k: Int) -> Bool { k == k_lparen() || k == k_lbrace() || k == k_lbracket() }
+fn closes(k: Int) -> Bool { k == k_rparen() || k == k_rbrace() || k == k_rbracket() }
+
+fn skip_member(p: Px, start: Int, close: Int) -> Bool {
+    let mut open = 0;
+    let mut i = start;
+    while i < pos(p) {
+        let k = kat(p, i);
+        if opens(k) { open = open + 1; }
+        if closes(k) { if open > 0 { open = open - 1; } }
+        i = i + 1;
+    }
+    while true {
+        let here = peek(p);
+        if here == k_fn() && at_item_fn(p) == false { bump(p); continue; }
+        if here == k_eof() || here == k_fn() || here == k_pub() || here == k_struct() || here == k_enum() || here == k_use() { return false; }
+        if here == k_comma() && open == 0 { return true; }
+        if here == close && open == 0 { return true; }
+        if open == 0 {
+            if here == k_rbrace() || here == k_semi() || here == k_let() || here == k_while() || here == k_return() || here == k_break()
+                    || here == k_continue() || here == k_scope() || here == k_spawn() {
+                return false;
+            }
+        }
+        if opens(here) { open = open + 1; bump(p); continue; }
+        if closes(here) { if open > 0 { open = open - 1; } bump(p); continue; }
+        bump(p);
+    }
+    false
+}
+
+fn function(p: Px) -> Int {
+    let t = p.t;
+    let first = pos(p);
+    let start = peek_span(p);
+    let pub_span = pub_prefix(p);
+    let mut foreign = false;
+    let mut abi = "";
+    let mut abi_span = 0 - 1;
+    if at_word(p, "extern") && kat(p, pos(p) + 1) == k_str() {
+        advance(p);
+        abi_span = peek_span(p);
+        let ai = advance(p);
+        if kat(p, ai) == k_str() { abi = tat(p, ai); foreign = true; }
+    }
+    if at(p, k_ident()) {
+        let rs = peek_span(p);
+        if reserved(p, peek_text(p), rs) { advance(p); return 0 - 1; }
+    }
+    if expect(p, k_fn(), "to start a function") < 0 { return 0 - 1; }
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() {
+        report(p, "N0100", name_span, found_msg(p, "expected a function name", ni), "", "");
+        return 0 - 1;
+    }
+    let name = tat(p, ni);
+    let tps = type_params(p);
+    if tps < 0 { return 0 - 1; }
+    let effect_params = ints_new();
+    let type_params = ints_new();
+    let all = sx_items(t, tps);
+    let mut i = 0;
+    while i < ints_len(all) {
+        let tp = ints_get(all, i);
+        if sx_text(t, sx_field(t, tp, "effect")) == "true" { ints_push(effect_params, tp); } else { ints_push(type_params, tp); }
+        i = i + 1;
+    }
+    let pl = param_list(p, "after the function name");
+    if pl < 0 { return 0 - 1; }
+    let params = sx_items(t, pl);
+    // Option C (R1, 5b.1): a `main` holding neither an `OutCap` nor an `IoCap` is given an
+    // `OutCap` named `out`, at a span of no width after its parameters.
+    if name == "main" && foreign == false {
+        let mut holds = false;
+        let mut j = 0;
+        while j < ints_len(params) {
+            let prm = ints_get(params, j);
+            let tn = sx_name(t, sx_field(t, prm, "ty"), "name");
+            if tn == "OutCap" || tn == "IoCap" || sx_name(t, prm, "name") == "out" { holds = true; }
+            j = j + 1;
+        }
+        if holds == false {
+            let none = point(t, previous_end(p));
+            let f = fs();
+            fa(f, "name", sx_str(t, "out"));
+            fa(f, "name_span", none);
+            fa(f, "ty", type_plain(t, "OutCap", none));
+            fa(f, "span", none);
+            ints_push(params, mk_struct(t, "Param", f));
+        }
+    }
+    let no_result = at(p, k_arrow()) == false && foreign == false;
+    let mut return_type = 0 - 1;
+    if no_result {
+        return_type = type_plain(t, "Int", point(t, previous_end(p)));
+    } else {
+        if expect(p, k_arrow(), "before the return type") < 0 { return 0 - 1; }
+        return_type = type_name(p);
+        if return_type < 0 { return 0 - 1; }
+    }
+    let effects = effect_set(p);
+    if effects == 0 - 1 { return 0 - 1; }
+    let mut export = sx_none(t);
+    if foreign {
+        if expect(p, k_eq(), "before a foreign function's symbol") < 0 { return 0 - 1; }
+        let symbol_span = peek_span(p);
+        let si = advance(p);
+        if kat(p, si) != k_str() {
+            report(p, "N0100", symbol_span, found_msg(p, "expected the foreign function's symbol as a string", si), "", "");
+            return 0 - 1;
+        }
+        let d = fs();
+        fa(d, "abi", sx_str(t, abi));
+        fa(d, "abi_span", abi_span);
+        fa(d, "symbol", sx_str(t, tat(p, si)));
+        fa(d, "symbol_span", symbol_span);
+        let decl = mk_struct(t, "ForeignDecl", d);
+        if at(p, k_lbrace()) {
+            export = mk_some(t, decl);
+        } else {
+            let end = peek_span(p);
+            if expect(p, k_semi(), "after a foreign function's symbol") < 0 { return 0 - 1; }
+            setf(p, s_drop(), flag(p, s_poisoned()));
+            return function_node(t, name, name_span, pub_span, type_params, effect_params, params, return_type, effects,
+                    empty_list(t), sx_none(t), mk_some(t, decl), sx_none(t), join(t, start, end));
+        }
+    }
+    let contracts = contracts(p);
+    if contracts < 0 { return 0 - 1; }
+    let header_recovered = flag(p, s_poisoned());
+    let outer = g(p, s_no_result());
+    setf(p, s_no_result(), no_result);
+    let mut b = block(p);
+    sv(p, s_no_result(), outer);
+    if b >= 0 && no_result { b = returning_nothing(t, b); }
+    let mut body = sx_none(t);
+    if b >= 0 {
+        if flag(p, s_poisoned()) == false { body = mk_some(t, b); }
+    } else {
+        recover_to_item(p, first);
+    }
+    let mut span_end = sx_field(t, return_type, "span");
+    if sx_is_some(t, body) { span_end = sx_field(t, sx_unwrap(t, body), "span"); }
+    setf(p, s_drop(), header_recovered);
+    function_node(t, name, name_span, pub_span, type_params, effect_params, params, return_type, effects,
+            contracts, body, sx_none(t), export, join(t, start, span_end))
+}
+
+fn function_node(t: Tree, name: Str, name_span: Int, pub_span: Int, type_params: Ints, effect_params: Ints, params: Ints,
+        return_type: Int, effects: Int, contracts: Int, body: Int, foreign: Int, export: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "attrs", empty_list(t));
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", name_span);
+    fa(f, "pub_span", pub_span);
+    fa(f, "type_params", mk_list(t, type_params));
+    fa(f, "effect_params", mk_list(t, effect_params));
+    fa(f, "params", mk_list(t, params));
+    fa(f, "return_type", return_type);
+    fa(f, "effects", opt_effects(t, effects));
+    fa(f, "contracts", contracts);
+    fa(f, "body", body);
+    fa(f, "foreign", foreign);
+    fa(f, "export", export);
+    fa(f, "method_of", sx_none(t));
+    fa(f, "span", span);
+    mk_struct(t, "Function", f)
+}
+
+// The body of a function written with no result type (R1, 5b.2): its last value becomes a
+// statement, and the block's value is a `0` at a span of no width at its end.
+fn returning_nothing(t: Tree, b: Int) -> Int {
+    let tail = sx_field(t, b, "tail");
+    if sx_is_some(t, tail) {
+        let stmts = sx_items(t, sx_field(t, b, "statements"));
+        ints_push(stmts, mk_tuple(t, "Expr", one(sx_unwrap(t, tail))));
+        sx_set(t, b, "statements", mk_list(t, stmts));
+    }
+    let end = sx_e(t, sx_field(t, b, "span"));
+    sx_set(t, b, "tail", mk_some(t, int_expr(t, "0", point(t, end))));
+    b
+}
+
+fn int_expr(t: Tree, value: Str, span: Int) -> Int {
+    let f = fs();
+    fa(f, "value", sx_atom(t, value));
+    fa(f, "span", span);
+    mk_struct(t, "Int", f)
+}
+
+fn contracts(p: Px) -> Int {
+    let t = p.t;
+    let out = ints_new();
+    let mut seen_ensures = false;
+    while true {
+        let mut kind = "";
+        if at_word(p, "requires") { kind = "Requires"; }
+        if at_word(p, "ensures") { kind = "Ensures"; }
+        if kind == "" { return mk_list(t, out); }
+        let keyword_span = peek_span(p);
+        if kind == "Requires" && seen_ensures {
+            report(p, "N0100", keyword_span, "a `requires` after an `ensures`", "", "write every `requires` first: preconditions are checked before the body");
+        }
+        if kind == "Ensures" { seen_ensures = true; }
+        advance(p);
+        let e = expr(p);
+        if e < 0 { return 0 - 1; }
+        let f = fs();
+        fa(f, "kind", sx_atom(t, kind));
+        fa(f, "keyword_span", keyword_span);
+        fa(f, "expr", e);
+        fa(f, "span", join(t, keyword_span, expr_span(t, e)));
+        ints_push(out, mk_struct(t, "Contract", f));
+    }
+    0 - 1
+}
+
+fn param_list(p: Px, after: Str) -> Int {
+    if expect(p, k_lparen(), after) < 0 { return 0 - 1; }
+    let list = ints_new();
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let pstart = pos(p);
+        let prm = param(p);
+        if prm >= 0 {
+            ints_push(list, prm);
+        } else {
+            if recover_member(p, pstart, k_rparen()) == false { return 0 - 1; }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    if expect(p, k_rparen(), "to close the parameter list") < 0 { return 0 - 1; }
+    mk_list(p.t, list)
+}
+
+fn param(p: Px) -> Int {
+    let t = p.t;
+    let p_span = peek_span(p);
+    if at(p, k_mut()) {
+        advance(p);
+        report(p, "N0311", p_span, "parameters cannot be `mut`", "",
+                "a mutable parameter is a local copy, which reads as an out-parameter. Bind one in the body instead: `let mut n = n;`");
+        return 0 - 1;
+    }
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() {
+        report(p, "N0100", p_span, found_msg(p, "expected a parameter name", ni), "", "");
+        return 0 - 1;
+    }
+    if expect(p, k_colon(), "after a parameter name") < 0 { return 0 - 1; }
+    let ty = type_name(p);
+    if ty < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", p_span);
+    fa(f, "ty", ty);
+    fa(f, "span", join(t, p_span, sx_field(t, ty, "span")));
+    mk_struct(t, "Param", f)
+}
+
+// `! { name, … }`, or nothing: -2 for nothing written, -1 for a mistake.
+fn effect_set(p: Px) -> Int {
+    let t = p.t;
+    if at(p, k_bang()) == false { return 0 - 2; }
+    let start = peek_span(p);
+    bump(p);
+    if expect(p, k_lbrace(), "after `!`, to open the effect set") < 0 { return 0 - 1; }
+    let names = ints_new();
+    if at(p, k_rbrace()) == false {
+        while true {
+            let span = peek_span(p);
+            let i = advance(p);
+            let k = kat(p, i);
+            if k == k_ident() {
+                ints_push(names, mk_tuple(t, "", two(sx_str(t, tat(p, i)), span)));
+            } else {
+                if k == k_spawn() {
+                    ints_push(names, mk_tuple(t, "", two(sx_str(t, "spawn"), span)));
+                } else {
+                    report(p, "N0100", span, found_msg(p, "expected an effect name", i), "", "");
+                    return 0 - 1;
+                }
+            }
+            if eat(p, k_comma()) == false { break; }
+        }
+    }
+    let end = peek_span(p);
+    if expect(p, k_rbrace(), "to close the effect set") < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "span", join(t, start, end));
+    fa(f, "names", mk_list(t, names));
+    mk_struct(t, "EffectDecl", f)
+}
+
+fn only_type_params(p: Px) -> Int {
+    let t = p.t;
+    let list = type_params(p);
+    if list < 0 { return 0 - 1; }
+    let all = sx_items(t, list);
+    let mut i = 0;
+    while i < ints_len(all) {
+        let tp = ints_get(all, i);
+        if sx_text(t, sx_field(t, tp, "effect")) == "true" {
+            report(p, "N0100", sx_field(t, tp, "span"), str_concat(ticked(sx_name(t, tp, "name")), " is an effect parameter, and only a function has one"), "",
+                    "a record or an enum performs nothing; a function value it holds carries its effects in its own type");
+            return 0 - 1;
+        }
+        i = i + 1;
+    }
+    list
+}
+
+fn type_params(p: Px) -> Int {
+    let t = p.t;
+    let out = ints_new();
+    if at(p, k_lbracket()) == false { return mk_list(t, out); }
+    bump(p);
+    while true {
+        let span = peek_span(p);
+        let i = advance(p);
+        let k = kat(p, i);
+        if k == k_ident() && tat(p, i) == "effects" && at(p, k_ident()) {
+            let at_span = peek_span(p);
+            let ni = advance(p);
+            let f = fs();
+            fa(f, "name", sx_str(t, tat(p, ni)));
+            fa(f, "span", at_span);
+            fa(f, "effect", sx_bool(t, true));
+            fa(f, "requires", sx_none(t));
+            ints_push(out, mk_struct(t, "TypeParam", f));
+        } else {
+            if k == k_ident() {
+                let mut requires = sx_none(t);
+                if eat(p, k_colon()) {
+                    let rspan = peek_span(p);
+                    let ri = advance(p);
+                    if kat(p, ri) != k_ident() {
+                        report(p, "N0100", rspan, found_msg(p, "expected a capability after `:`", ri), "",
+                                "a type parameter may require equality: `fn same[T: Equality](a: T, b: T) -> Bool`");
+                        return 0 - 1;
+                    }
+                    let r = fs();
+                    fa(r, "name", sx_str(t, tat(p, ri)));
+                    fa(r, "span", rspan);
+                    requires = mk_some(t, mk_struct(t, "Requirement", r));
+                }
+                let f = fs();
+                fa(f, "name", sx_str(t, tat(p, i)));
+                fa(f, "span", span);
+                fa(f, "effect", sx_bool(t, false));
+                fa(f, "requires", requires);
+                ints_push(out, mk_struct(t, "TypeParam", f));
+            } else {
+                report(p, "N0100", span, found_msg(p, "expected a type parameter", i), "", "type parameters are names: `fn identity[T](value: T) -> T`");
+                return 0 - 1;
+            }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    if expect(p, k_rbracket(), "to close the type parameters") < 0 { return 0 - 1; }
+    mk_list(t, out)
+}
+
+// `m::` before a name (N49), consumed: a `Qualifier`, or -1 with nothing consumed.
+fn qualifier_before_name(p: Px) -> Int {
+    if at(p, k_ident()) == false { return 0 - 1; }
+    if kat(p, pos(p) + 1) != k_coloncolon() { return 0 - 1; }
+    let t = p.t;
+    let span = peek_span(p);
+    let name = peek_text(p);
+    advance(p);
+    advance(p);
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "span", span);
+    mk_struct(t, "Qualifier", f)
+}
+
+fn fn_type(p: Px) -> Int {
+    let t = p.t;
+    let fn_span = peek_span(p);
+    bump(p);
+    if expect(p, k_lparen(), "after `fn` in a function type") < 0 { return 0 - 1; }
+    let params = ints_new();
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let ty = type_name(p);
+        if ty < 0 { return 0 - 1; }
+        ints_push(params, ty);
+        if eat(p, k_comma()) == false { break; }
+    }
+    if expect(p, k_rparen(), "to close a function type's parameters") < 0 { return 0 - 1; }
+    if expect(p, k_arrow(), "before a function type's result") < 0 { return 0 - 1; }
+    let ret = type_name(p);
+    if ret < 0 { return 0 - 1; }
+    let effects = effect_set(p);
+    if effects == 0 - 1 { return 0 - 1; }
+    let mut end = sx_field(t, ret, "span");
+    if effects >= 0 { end = sx_field(t, effects, "span"); }
+    let ft = fs();
+    fa(ft, "params", mk_list(t, params));
+    fa(ft, "ret", ret);
+    fa(ft, "effects", opt_effects(t, effects));
+    let f = fs();
+    fa(f, "qualifier", sx_none(t));
+    fa(f, "function", mk_some(t, mk_struct(t, "FnTypeName", ft)));
+    fa(f, "name", sx_str(t, "fn"));
+    fa(f, "name_span", fn_span);
+    fa(f, "span", join(t, fn_span, end));
+    fa(f, "args", sx_none(t));
+    fa(f, "length", sx_none(t));
+    mk_struct(t, "TypeName", f)
+}
+
+fn closure(p: Px) -> Int {
+    let t = p.t;
+    let fn_span = peek_span(p);
+    bump(p);
+    let params = param_list(p, "after `fn` in a closure");
+    if params < 0 { return 0 - 1; }
+    if expect(p, k_arrow(), "before a closure's result type") < 0 { return 0 - 1; }
+    let return_type = type_name(p);
+    if return_type < 0 { return 0 - 1; }
+    let effects = effect_set(p);
+    if effects == 0 - 1 { return 0 - 1; }
+    let outer = g(p, s_no_result());
+    sv(p, s_no_result(), 0);
+    let body = block(p);
+    sv(p, s_no_result(), outer);
+    if body < 0 { return 0 - 1; }
+    if built(p, child(p) + 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "params", params);
+    fa(f, "return_type", return_type);
+    fa(f, "effects", opt_effects(t, effects));
+    fa(f, "body", body);
+    fa(f, "fn_span", fn_span);
+    fa(f, "span", join(t, fn_span, sx_field(t, body, "span")));
+    mk_struct(t, "Closure", f)
+}
+
+fn type_name(p: Px) -> Int {
+    if enter(p) == false { return 0 - 1; }
+    let out = type_name_inner(p);
+    leave(p);
+    out
+}
+
+fn type_name_inner(p: Px) -> Int {
+    let t = p.t;
+    if at(p, k_fn()) { return fn_type(p); }
+    if at(p, k_lbracket()) { return array_type(p); }
+    if at(p, k_lparen()) { return tuple_type(p); }
+    let mut name_span = peek_span(p);
+    let qualifier = qualifier_before_name(p);
+    if qualifier >= 0 { name_span = peek_span(p); }
+    let i = advance(p);
+    if kat(p, i) != k_ident() {
+        report(p, "N0100", name_span, found_msg(p, "expected a type", i), "", "");
+        return 0 - 1;
+    }
+    let mut args = sx_none(t);
+    let mut end = name_span;
+    if at(p, k_lbracket()) {
+        let a = type_args(p);
+        if a < 0 { return 0 - 1; }
+        args = mk_some(t, a);
+        end = g(p, s_r1());
+    }
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "function", sx_none(t));
+    fa(f, "name", sx_str(t, tat(p, i)));
+    fa(f, "name_span", name_span);
+    fa(f, "span", join(t, name_span, end));
+    fa(f, "args", args);
+    fa(f, "length", sx_none(t));
+    mk_struct(t, "TypeName", f)
+}
+
+fn tuple_type(p: Px) -> Int {
+    let t = p.t;
+    let open = expect(p, k_lparen(), "to start a tuple type");
+    if open < 0 { return 0 - 1; }
+    let first = type_name(p);
+    if first < 0 { return 0 - 1; }
+    if at(p, k_comma()) == false {
+        if expect(p, k_rparen(), "to close the parenthesised type") < 0 { return 0 - 1; }
+        return first;
+    }
+    let elems = one(first);
+    while eat(p, k_comma()) {
+        if at(p, k_rparen()) { break; }
+        let e = type_name(p);
+        if e < 0 { return 0 - 1; }
+        ints_push(elems, e);
+    }
+    let close = expect(p, k_rparen(), "to close a tuple type");
+    if close < 0 { return 0 - 1; }
+    let span = join(t, open, close);
+    if two_or_more(p, ints_len(elems), span) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "qualifier", sx_none(t));
+    fa(f, "function", sx_none(t));
+    fa(f, "name", sx_str(t, "()"));
+    fa(f, "name_span", span);
+    fa(f, "span", span);
+    fa(f, "args", mk_some(t, mk_list(t, elems)));
+    fa(f, "length", sx_none(t));
+    mk_struct(t, "TypeName", f)
+}
+
+fn two_or_more(p: Px, len: Int, span: Int) -> Bool {
+    if len > 8 {
+        report(p, "N0101", span, "a tuple has at most eight elements", "", "past eight, the elements want names: declare a `struct`");
+        return false;
+    }
+    if len >= 2 { return true; }
+    report(p, "N0101", span, "a tuple has two or more elements", "",
+            "`(x)` is `x`, parenthesised: drop the comma, or add the elements the tuple holds");
+    false
+}
+
+fn array_type(p: Px) -> Int {
+    let t = p.t;
+    let open = expect(p, k_lbracket(), "to start an array type");
+    if open < 0 { return 0 - 1; }
+    let elem = type_name(p);
+    if elem < 0 { return 0 - 1; }
+    if expect(p, k_semi(), "between an array's element type and its length") < 0 { return 0 - 1; }
+    let length = primary(p);
+    if length < 0 { return 0 - 1; }
+    let close = expect(p, k_rbracket(), "to close an array type");
+    if close < 0 { return 0 - 1; }
+    let span = join(t, open, close);
+    let f = fs();
+    fa(f, "qualifier", sx_none(t));
+    fa(f, "function", sx_none(t));
+    fa(f, "name", sx_str(t, "[]"));
+    fa(f, "name_span", span);
+    fa(f, "span", span);
+    fa(f, "args", mk_some(t, mk_list(t, one(elem))));
+    fa(f, "length", mk_some(t, length));
+    mk_struct(t, "TypeName", f)
+}
+
+fn constant_item(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    let pub_span = pub_prefix(p);
+    let wi = advance(p);
+    let is_static = kat(p, wi) == k_ident() && tat(p, wi) == "static";
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() { return 0 - 1; }
+    if reserved(p, tat(p, ni), name_span) { return 0 - 1; }
+    if expect(p, k_colon(), "before a constant's type") < 0 { return 0 - 1; }
+    let ty = type_name(p);
+    if ty < 0 { return 0 - 1; }
+    if expect(p, k_eq(), "before a constant's value") < 0 { return 0 - 1; }
+    let value = expr(p);
+    if value < 0 { return 0 - 1; }
+    let end = expect(p, k_semi(), "to end a constant");
+    if end < 0 { return 0 - 1; }
+    setf(p, s_drop(), flag(p, s_poisoned()));
+    let f = fs();
+    fa(f, "attrs", empty_list(t));
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "pub_span", pub_span);
+    fa(f, "ty", ty);
+    fa(f, "value", value);
+    fa(f, "span", join(t, start, end));
+    fa(f, "is_static", sx_bool(t, is_static));
+    mk_struct(t, "Const", f)
+}
+
+fn bracket_is_type_args(p: Px, open: Int) -> Bool {
+    let mut depth = 0;
+    let mut i = open;
+    while true {
+        let k = kat(p, i);
+        if k == k_none() { return false; }
+        let mut other = true;
+        if k == k_lbracket() || k == k_lparen() || k == k_lbrace() { depth = depth + 1; other = false; }
+        if k == k_rbracket() || k == k_rparen() || k == k_rbrace() {
+            if depth > 0 { depth = depth - 1; }
+            if depth == 0 { break; }
+            other = false;
+        }
+        if k == k_ident() || k == k_comma() || k == k_coloncolon() || k == k_fn() || k == k_arrow() || k == k_bang() || k == k_colon() { other = false; }
+        if other { return bracket_closes(p, open) == false; }
+        i = i + 1;
+    }
+    let next = kat(p, i + 1);
+    if next == k_lparen() { return true; }
+    if next == k_dot() { return kat(p, i + 2) == k_ident() && kat(p, i + 3) == k_lparen(); }
+    false
+}
+
+fn bracket_closes(p: Px, open: Int) -> Bool {
+    let mut depth = 0;
+    let mut i = open;
+    while kat(p, i) != k_none() {
+        let k = kat(p, i);
+        i = i + 1;
+        if k == k_lbracket() || k == k_lparen() { depth = depth + 1; continue; }
+        if k == k_rbracket() || k == k_rparen() {
+            if depth > 0 { depth = depth - 1; }
+            if depth == 0 { return k == k_rbracket(); }
+            continue;
+        }
+        if k == k_semi() || k == k_lbrace() || k == k_rbrace() || k == k_eof() { return false; }
+    }
+    false
+}
+
+fn array_literal(p: Px) -> Int {
+    let t = p.t;
+    let open = expect(p, k_lbracket(), "to start an array");
+    if open < 0 { return 0 - 1; }
+    let mut deepest = 0;
+    if at(p, k_rbracket()) == false {
+        let first = expr(p);
+        if first < 0 { return 0 - 1; }
+        deepest = imax(deepest, child(p));
+        if eat(p, k_semi()) {
+            let count = expr(p);
+            if count < 0 { return 0 - 1; }
+            deepest = imax(deepest, child(p));
+            let close = expect(p, k_rbracket(), "to close an array");
+            if close < 0 { return 0 - 1; }
+            if built(p, deepest + 1) == false { return 0 - 1; }
+            let f = fs();
+            fa(f, "value", first);
+            fa(f, "count", count);
+            fa(f, "span", join(t, open, close));
+            return mk_struct(t, "ArrayRepeat", f);
+        }
+        let elems = one(first);
+        while eat(p, k_comma()) {
+            if at(p, k_rbracket()) { break; }
+            let e = expr(p);
+            if e < 0 { return 0 - 1; }
+            ints_push(elems, e);
+            deepest = imax(deepest, child(p));
+        }
+        let close = expect(p, k_rbracket(), "to close an array");
+        if close < 0 { return 0 - 1; }
+        if built(p, deepest + 1) == false { return 0 - 1; }
+        let f = fs();
+        fa(f, "elems", mk_list(t, elems));
+        fa(f, "span", join(t, open, close));
+        return mk_struct(t, "Array", f);
+    }
+    let close = expect(p, k_rbracket(), "to close an array");
+    if close < 0 { return 0 - 1; }
+    if built(p, 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "elems", empty_list(t));
+    fa(f, "span", join(t, open, close));
+    mk_struct(t, "Array", f)
+}
+
+// `[T, U]`: the list, with the `]`'s span in r1.
+fn type_args(p: Px) -> Int {
+    if expect(p, k_lbracket(), "to start the type arguments") < 0 { return 0 - 1; }
+    let args = ints_new();
+    if at(p, k_rbracket()) == false {
+        while true {
+            let ty = type_name(p);
+            if ty < 0 { return 0 - 1; }
+            ints_push(args, ty);
+            if eat(p, k_comma()) == false { break; }
+        }
+    }
+    let close = expect(p, k_rbracket(), "to close the type arguments");
+    if close < 0 { return 0 - 1; }
+    let l = mk_list(p.t, args);
+    sv(p, s_r1(), close);
+    l
+}
+
+// --- blocks and statements -----------------------------------------------------------------
+
+fn block_node(t: Tree, stmts: Int, tail: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "statements", stmts);
+    fa(f, "tail", tail);
+    fa(f, "span", span);
+    mk_struct(t, "Block", f)
+}
+
+fn else_branch(p: Px) -> Int {
+    let t = p.t;
+    if at(p, k_if()) == false { return block(p); }
+    if enter(p) == false { return 0 - 1; }
+    let inner = primary_inner(p);
+    leave(p);
+    if inner < 0 { return 0 - 1; }
+    block_node(t, empty_list(t), mk_some(t, inner), expr_span(t, inner))
+}
+
+fn block(p: Px) -> Int {
+    if enter(p) == false { return 0 - 1; }
+    let out = block_inner(p);
+    leave(p);
+    out
+}
+
+fn block_inner(p: Px) -> Int {
+    let t = p.t;
+    let open = expect(p, k_lbrace(), "to start a block");
+    if open < 0 { return 0 - 1; }
+    let deepest = ints_new();
+    ints_push(deepest, 0);
+    let items = block_items(p, deepest);
+    if items < 0 { return 0 - 1; }
+    let tail = g(p, s_r1());
+    let close = expect(p, k_rbrace(), "to close the block");
+    if close < 0 { return 0 - 1; }
+    if built(p, ints_get(deepest, 0) + 1) == false { return 0 - 1; }
+    block_node(t, items, tail, join(t, open, close))
+}
+
+fn deeper(p: Px, deepest: Ints) -> Int { ints_set(deepest, 0, imax(ints_get(deepest, 0), child(p))); 0 }
+
+fn wildcard(t: Tree, span: Int) -> Int {
+    let f = fs();
+    fa(f, "span", span);
+    mk_struct(t, "Wildcard", f)
+}
+
+fn arm_node(t: Tree, pattern: Int, guard: Int, body: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "pattern", pattern);
+    fa(f, "guard", guard);
+    fa(f, "body", body);
+    fa(f, "span", span);
+    mk_struct(t, "MatchArm", f)
+}
+
+fn match_node(t: Tree, scrutinee: Int, arms: Ints, source: Str, span: Int) -> Int {
+    let f = fs();
+    fa(f, "scrutinee", scrutinee);
+    fa(f, "arms", mk_list(t, arms));
+    fa(f, "source", sx_atom(t, source));
+    fa(f, "span", span);
+    mk_struct(t, "Match", f)
+}
+
+fn block_expr(t: Tree, b: Int) -> Int { mk_tuple(t, "Block", one(b)) }
+
+// A block's statements, up to its `}`: the list, and its tail as an `Option` in r1.
+fn block_items(p: Px, deepest: Ints) -> Int {
+    let t = p.t;
+    let statements = ints_new();
+    let mut tail = sx_none(t);
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        let start = pos(p);
+        let parsed = statement(p, deepest);
+        let pk = g(p, s_item_kind());
+        if parsed >= 0 {
+            if pk == 1 { ints_push(statements, parsed); }
+            if pk == 2 { tail = mk_some(t, parsed); break; }
+            if pk == 3 {
+                let pattern = g(p, s_r1());
+                let value = g(p, s_r2());
+                let otherwise = g(p, s_r3());
+                let span = g(p, s_r4());
+                let rest_start = sat(p, pos(p));
+                let rest = block_items(p, deepest);
+                if rest < 0 { return 0 - 1; }
+                let rest_tail = g(p, s_r1());
+                let rest_end = sat(p, pos(p));
+                let rest_block = block_node(t, rest, rest_tail, sx_span(t, rest_start, rest_end));
+                let first = arm_node(t, pattern, sx_none(t), block_expr(t, rest_block), join(t, pattern_span(t, pattern), sx_field(t, rest_block, "span")));
+                let arms = one(first);
+                let mut source = "Let";
+                if otherwise >= 0 {
+                    let os = sx_field(t, otherwise, "span");
+                    let wild = wildcard(t, point(t, sx_s(t, os)));
+                    ints_push(arms, arm_node(t, wild, sx_none(t), block_expr(t, otherwise), os));
+                    source = "LetElse";
+                }
+                tail = mk_some(t, match_node(t, value, arms, source, join(t, span, point(t, rest_end))));
+                break;
+            }
+        } else {
+            if flag(p, s_poisoned()) == false && delimiters_balanced(p) == false { setf(p, s_muted(), true); }
+            setf(p, s_poisoned(), true);
+            let resumable = skip_statement(p, start);
+            if resumable && pos(p) == start && at(p, k_rbrace()) == false { bump(p); }
+            if resumable == false { return 0 - 1; }
+        }
+    }
+    let l = mk_list(t, statements);
+    sv(p, s_r1(), tail);
+    l
+}
+
+// One statement, or the block's tail: the node, with what it is in the item-kind slot — 1 a
+// statement, 2 the tail, 3 a `let … else` whose parts are in r1–r4.
+fn statement(p: Px, deepest: Ints) -> Int {
+    let t = p.t;
+    if at(p, k_let()) && plain_let_ahead(p) == false {
+        let r = let_else(p);
+        if r < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        sv(p, s_item_kind(), 3);
+        return r;
+    }
+    if at(p, k_let()) {
+        let l = let_stmt(p);
+        if l < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "Let", l);
+    }
+    if at_word(p, "loop") && kat(p, pos(p) + 1) == k_lbrace() {
+        let start = peek_span(p);
+        advance(p);
+        let body = block(p);
+        if body < 0 { return 0 - 1; }
+        sv(p, s_built(), child(p));
+        let w = while_node(t, bool_expr(t, true, start), body, join(t, start, sx_field(t, body, "span")));
+        deeper(p, deepest);
+        return stmt(p, "While", w);
+    }
+    if at(p, k_while()) {
+        let w = while_stmt(p);
+        if w < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "While", w);
+    }
+    if at_word(p, "for") {
+        let f = for_stmt(p);
+        if f < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "For", f);
+    }
+    if at(p, k_return()) {
+        let r = return_stmt(p);
+        if r < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "Return", r);
+    }
+    if at(p, k_break()) || at(p, k_continue()) {
+        let c = loop_control(p);
+        if c < 0 { return 0 - 1; }
+        sv(p, s_item_kind(), 1);
+        return c;
+    }
+    if at(p, k_scope()) {
+        let sc = scope_stmt(p);
+        if sc < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "Scope", sc);
+    }
+    if at_word(p, "defer") && kat(p, pos(p) + 1) == k_lbrace() {
+        let d = defer(p);
+        if d < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "Defer", d);
+    }
+    if at(p, k_spawn()) {
+        let s = spawn_stmt(p);
+        if s < 0 { return 0 - 1; }
+        deeper(p, deepest);
+        return stmt(p, "Spawn", s);
+    }
+    let a = try_assign(p);
+    if a == 0 - 1 { return 0 - 1; }
+    if a >= 0 {
+        deeper(p, deepest);
+        return stmt(p, "Assign", a);
+    }
+    let block_like = at(p, k_if()) || at(p, k_lbrace());
+    let e = expr(p);
+    if e < 0 { return 0 - 1; }
+    deeper(p, deepest);
+    if eat(p, k_semi()) { return stmt(p, "Expr", e); }
+    if at(p, k_rbrace()) {
+        sv(p, s_item_kind(), 2);
+        return e;
+    }
+    if block_like || line_break_before(p) { return stmt(p, "Expr", e); }
+    report(p, "N0100", peek_span(p), found_msg(p, "expected `;` or `}` after this expression", pos(p)), "",
+            "an expression with no `;` after it is the block's value, so it must be last");
+    0 - 1
+}
+
+fn stmt(p: Px, variant: Str, inner: Int) -> Int {
+    sv(p, s_item_kind(), 1);
+    mk_tuple(p.t, variant, one(inner))
+}
+
+fn bool_expr(t: Tree, b: Bool, span: Int) -> Int {
+    let f = fs();
+    fa(f, "value", sx_bool(t, b));
+    fa(f, "span", span);
+    mk_struct(t, "Bool", f)
+}
+
+fn while_node(t: Tree, cond: Int, body: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "cond", cond);
+    fa(f, "body", body);
+    fa(f, "span", span);
+    mk_struct(t, "While", f)
+}
+
+fn skip_statement(p: Px, start: Int) -> Bool {
+    let mut braces = left_open(p, start);
+    while true {
+        let k = peek(p);
+        if k == k_fn() && at_item_fn(p) == false { bump(p); continue; }
+        if k == k_eof() || k == k_fn() || k == k_pub() { return false; }
+        if k == k_rbrace() {
+            if braces == 0 { return true; }
+            braces = braces - 1;
+            bump(p);
+            continue;
+        }
+        if k == k_lbrace() { braces = braces + 1; bump(p); continue; }
+        if k == k_semi() {
+            bump(p);
+            if braces == 0 { return true; }
+            continue;
+        }
+        if braces == 0 && pos(p) > start {
+            if k == k_let() || k == k_while() || k == k_return() || k == k_break() || k == k_continue() || k == k_scope() || k == k_spawn() {
+                return true;
+            }
+        }
+        bump(p);
+    }
+    false
+}
+
+fn left_open(p: Px, start: Int) -> Int {
+    let mut braces = 0;
+    let mut i = start;
+    while i < pos(p) {
+        let k = kat(p, i);
+        if k == k_lbrace() { braces = braces + 1; }
+        if k == k_rbrace() { if braces > 0 { braces = braces - 1; } }
+        i = i + 1;
+    }
+    braces
+}
+
+fn loop_control(p: Px) -> Int {
+    let t = p.t;
+    let is_break = at(p, k_break());
+    let span = peek_span(p);
+    advance(p);
+    let mut word = "continue";
+    if is_break { word = "break"; }
+    let semi = expect(p, k_semi(), str_concat(str_concat("after `", word), "`"));
+    if semi < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "span", join(t, span, semi));
+    if is_break { return mk_struct(t, "Break", f); }
+    mk_struct(t, "Continue", f)
+}
+
+fn return_node(t: Tree, value: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "value", value);
+    fa(f, "span", span);
+    mk_struct(t, "Return", f)
+}
+
+fn return_stmt(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    advance(p);
+    if flag(p, s_no_result()) && (at(p, k_semi()) || at(p, k_rbrace()) || line_break_before(p)) {
+        let end = previous_end(p);
+        let semi = expect(p, k_semi(), "after `return`");
+        if semi < 0 { return 0 - 1; }
+        return return_node(t, int_expr(t, "0", point(t, end)), join(t, start, semi));
+    }
+    if at(p, k_semi()) {
+        let span = peek_span(p);
+        advance(p);
+        report(p, "N0101", join(t, start, span), "`return;` with no value is not supported", "",
+                "every function returns a value, so `return` needs one. There is no unit type to mean `return nothing` yet");
+        return 0 - 1;
+    }
+    let value = expr(p);
+    if value < 0 { return 0 - 1; }
+    let semi = expect(p, k_semi(), "after `return`");
+    if semi < 0 { return 0 - 1; }
+    return_node(t, value, join(t, start, semi))
+}
+
+fn plain_let_ahead(p: Px) -> Bool {
+    let i = pos(p);
+    if kat(p, i + 1) == k_mut() { return true; }
+    if kat(p, i + 1) == k_ident() && tat(p, i + 1) != "_" {
+        let k2 = kat(p, i + 2);
+        return (k2 == k_dot() || k2 == k_lbracket() || k2 == k_lparen()) == false;
+    }
+    false
+}
+
+// `let P = e else { D };`: r1 the pattern, r2 the value, r3 the `else` block or -1, r4 the span.
+fn let_else(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    advance(p);
+    let pattern = pattern(p);
+    if pattern < 0 { return 0 - 1; }
+    if expect(p, k_eq(), "between a `let` pattern and its value") < 0 { return 0 - 1; }
+    let value = expr(p);
+    if value < 0 { return 0 - 1; }
+    if at(p, k_semi()) || (at(p, k_else()) == false && (line_break_before(p) || at(p, k_rbrace()))) {
+        let semi = expect(p, k_semi(), "after a `let`");
+        if semi < 0 { return 0 - 1; }
+        sv(p, s_r1(), pattern);
+        sv(p, s_r2(), value);
+        sv(p, s_r3(), 0 - 1);
+        sv(p, s_r4(), join(t, start, semi));
+        return 0;
+    }
+    if expect(p, k_else(), "after a `let` pattern's value: `;`, or `else { … };` if it can fail") < 0 { return 0 - 1; }
+    let otherwise = block(p);
+    if otherwise < 0 { return 0 - 1; }
+    let semi = expect(p, k_semi(), "after a `let … else`");
+    if semi < 0 { return 0 - 1; }
+    sv(p, s_r1(), pattern);
+    sv(p, s_r2(), value);
+    sv(p, s_r3(), otherwise);
+    sv(p, s_r4(), join(t, start, semi));
+    0
+}
+
+fn let_stmt(p: Px) -> Int {
+    let t = p.t;
+    let let_span = peek_span(p);
+    advance(p);
+    let mutable = eat(p, k_mut());
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() {
+        report(p, "N0100", name_span, found_msg(p, "expected a variable name", ni), "", "");
+        return 0 - 1;
+    }
+    if reserved(p, tat(p, ni), name_span) { return 0 - 1; }
+    let mut ty = sx_none(t);
+    if eat(p, k_colon()) {
+        let tn = type_name(p);
+        if tn < 0 { return 0 - 1; }
+        ty = mk_some(t, tn);
+    }
+    if expect(p, k_eq(), "in a `let` binding") < 0 { return 0 - 1; }
+    let value = expr(p);
+    if value < 0 { return 0 - 1; }
+    let semi = expect(p, k_semi(), "after a `let` binding");
+    if semi < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "name", sx_str(t, tat(p, ni)));
+    fa(f, "name_span", name_span);
+    fa(f, "mutable", sx_bool(t, mutable));
+    fa(f, "ty", ty);
+    fa(f, "value", value);
+    fa(f, "span", join(t, let_span, semi));
+    mk_struct(t, "Let", f)
+}
+
+fn for_node(t: Tree, name: Str, name_span: Int, iter: Int, body: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", name_span);
+    fa(f, "iter", iter);
+    fa(f, "body", body);
+    fa(f, "span", span);
+    mk_struct(t, "For", f)
+}
+
+// What a `for` iterates: `Each(e)` or `Range { start, end }`; the depth in r1.
+fn for_iter(p: Px) -> Int {
+    let t = p.t;
+    let first = expr(p);
+    if first < 0 { return 0 - 1; }
+    let mut depth = child(p);
+    if eat(p, k_dotdot()) {
+        let end = expr(p);
+        if end < 0 { return 0 - 1; }
+        depth = imax(depth, child(p));
+        let f = fs();
+        fa(f, "start", first);
+        fa(f, "end", end);
+        sv(p, s_r1(), depth);
+        return mk_struct(t, "Range", f);
+    }
+    sv(p, s_r1(), depth);
+    mk_tuple(t, "Each", one(first))
+}
+
+fn for_stmt(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    advance(p);
+    let name_span = peek_span(p);
+    let shaped = at(p, k_ident()) && word_at(p, pos(p) + 1, "in");
+    if at(p, k_lparen()) { return for_pattern(p, start); }
+    if shaped == false {
+        report(p, "N0101", start, "a `for` loop is written `for NAME in …`", "not a `for` loop of either form",
+                str_concat("iterate a sequence with `for x in xs { … }`, or integers with `for i in 0..n { … }`. In general, ", supported()));
+        return 0 - 1;
+    }
+    let ni = advance(p);
+    let name = tat(p, ni);
+    if reserved(p, name, name_span) { return 0 - 1; }
+    advance(p);
+    let iter = for_iter(p);
+    if iter < 0 { return 0 - 1; }
+    let depth = g(p, s_r1());
+    let body = block(p);
+    if body < 0 { return 0 - 1; }
+    sv(p, s_built(), imax(depth, child(p)));
+    for_node(t, name, name_span, iter, body, join(t, start, sx_field(t, body, "span")))
+}
+
+fn for_pattern(p: Px, start: Int) -> Int {
+    let t = p.t;
+    let pattern = pattern(p);
+    if pattern < 0 { return 0 - 1; }
+    let name_span = pattern_span(t, pattern);
+    if at_word(p, "in") == false {
+        report(p, "N0100", peek_span(p), found_msg(p, "expected `in` after a `for` loop's pattern", pos(p)), "", "");
+        return 0 - 1;
+    }
+    advance(p);
+    let iter = for_iter(p);
+    if iter < 0 { return 0 - 1; }
+    let depth = g(p, s_r1());
+    let written = block(p);
+    if written < 0 { return 0 - 1; }
+    sv(p, s_built(), imax(depth, child(p)));
+    let name = "for#item";
+    let item = var_expr(t, name, name_span);
+    let body_span = sx_field(t, written, "span");
+    let arm = arm_node(t, pattern, sx_none(t), block_expr(t, written), join(t, pattern_span(t, pattern), body_span));
+    let m = match_node(t, item, one(arm), "Let", body_span);
+    let body = block_node(t, empty_list(t), mk_some(t, m), body_span);
+    for_node(t, name, name_span, iter, body, join(t, start, body_span))
+}
+
+fn var_expr(t: Tree, name: Str, span: Int) -> Int {
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "span", span);
+    mk_struct(t, "Var", f)
+}
+
+fn while_stmt(p: Px) -> Int {
+    let t = p.t;
+    let start = peek_span(p);
+    advance(p);
+    if at(p, k_let()) {
+        advance(p);
+        let pattern = pattern(p);
+        if pattern < 0 { return 0 - 1; }
+        if expect(p, k_eq(), "between a `while let` pattern and its value") < 0 { return 0 - 1; }
+        let scrutinee = expr(p);
+        if scrutinee < 0 { return 0 - 1; }
+        let body = block(p);
+        if body < 0 { return 0 - 1; }
+        sv(p, s_built(), child(p));
+        let bs = sx_field(t, body, "span");
+        let none = point(t, sx_e(t, bs));
+        let arm1 = arm_node(t, pattern, sx_none(t), block_expr(t, body), join(t, pattern_span(t, pattern), bs));
+        let brk = fs();
+        fa(brk, "span", none);
+        let leave_block = block_node(t, mk_list(t, one(mk_struct(t, "Break", brk))), sx_none(t), none);
+        let arm2 = arm_node(t, wildcard(t, none), sx_none(t), block_expr(t, leave_block), none);
+        let span = join(t, start, none);
+        let m = match_node(t, scrutinee, two(arm1, arm2), "IfLet", span);
+        return while_node(t, bool_expr(t, true, start), block_node(t, empty_list(t), mk_some(t, m), span), span);
+    }
+    let cond = expr(p);
+    if cond < 0 { return 0 - 1; }
+    let cond_depth = child(p);
+    let body = block(p);
+    if body < 0 { return 0 - 1; }
+    sv(p, s_built(), imax(cond_depth, child(p)));
+    while_node(t, cond, body, join(t, start, sx_field(t, body, "span")))
+}
+
+fn compound_op(k: Int) -> Str {
+    if k == k_pluseq() { return "Add"; }
+    if k == k_minuseq() { return "Sub"; }
+    if k == k_stareq() { return "Mul"; }
+    if k == k_slasheq() { return "Div"; }
+    if k == k_percenteq() { return "Rem"; }
+    if k == k_ampeq() { return "BitAnd"; }
+    if k == k_pipeeq() { return "BitOr"; }
+    if k == k_careteq() { return "BitXor"; }
+    if k == k_shleq() { return "Shl"; }
+    if k == k_shreq() { return "Shr"; }
+    ""
+}
+
+// Whether a float's text is two positions, `0.1` after a `.` (L5).
+fn positions_ok(text: Str) -> Bool {
+    let n = str_len(text);
+    let mut dot = 0 - 1;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(text, i);
+        if b == 46 {
+            if dot >= 0 { return false; }
+            dot = i;
+        } else {
+            if b < 48 || b > 57 { return false; }
+        }
+        i = i + 1;
+    }
+    dot > 0 && dot < n - 1
+}
+
+fn dot_at(text: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(text) {
+        if str_byte(text, i) == 46 { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn simple_index(t: Tree, e: Int) -> Bool {
+    let name = sx_text(t, e);
+    if sx_kind(t, e) != tk_struct() { return false; }
+    if name == "Var" || name == "Int" || name == "Str" { return true; }
+    if name == "Field" { return simple_index(t, sx_field(t, e, "base")); }
+    false
+}
+
+fn place_field(t: Tree, name: Str, span: Int) -> Int {
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", span);
+    mk_tuple(t, "Field", one(mk_struct(t, "PlaceField", f)))
+}
+
+// An assignment, if what follows is a place and `=`: the `Assign`, -2 for "not an assignment",
+// -1 for one that failed.
+fn try_assign(p: Px) -> Int {
+    let t = p.t;
+    if at(p, k_ident()) == false { return 0 - 2; }
+    let mut i = pos(p) + 1;
+    while true {
+        let k = kat(p, i);
+        if k == k_eq() || compound_op(k) != "" { break; }
+        if k == k_lbracket() {
+            let mut depth = 0;
+            while true {
+                let kb = kat(p, i);
+                if kb == k_lbracket() { depth = depth + 1; }
+                if kb == k_rbracket() {
+                    depth = depth - 1;
+                    if depth == 0 { break; }
+                }
+                if kb == k_eof() || kb == k_semi() || kb == k_lbrace() || kb == k_none() { return 0 - 2; }
+                i = i + 1;
+            }
+            i = i + 1;
+            continue;
+        }
+        if k == k_dot() {
+            let k1 = kat(p, i + 1);
+            if k1 == k_ident() || k1 == k_int() || (k1 == k_float() && positions_ok(tat(p, i + 1))) {
+                i = i + 2;
+                continue;
+            }
+        }
+        return 0 - 2;
+    }
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    let name = tat(p, ni);
+    let path = ints_new();
+    let mut last = name_span;
+    while true {
+        if at(p, k_lbracket()) {
+            let open = peek_span(p);
+            advance(p);
+            let index = expr(p);
+            if index < 0 { return 0 - 1; }
+            let close = expect(p, k_rbracket(), "to close an index");
+            if close < 0 { return 0 - 1; }
+            last = close;
+            let f = fs();
+            fa(f, "index", index);
+            fa(f, "span", join(t, open, close));
+            ints_push(path, mk_struct(t, "Index", f));
+            continue;
+        }
+        if eat(p, k_dot()) == false { break; }
+        let field_span = peek_span(p);
+        let fi = advance(p);
+        let fk = kat(p, fi);
+        if fk == k_float() {
+            let text = tat(p, fi);
+            if positions_ok(text) == false { return 0 - 2; }
+            let d = dot_at(text);
+            let cut = sx_s(t, field_span) + d;
+            ints_push(path, place_field(t, str_slice(text, 0, d), sx_span(t, sx_s(t, field_span), cut)));
+            let second = sx_span(t, cut + 1, sx_e(t, field_span));
+            last = second;
+            ints_push(path, place_field(t, str_slice(text, d + 1, str_len(text)), second));
+            continue;
+        }
+        if fk != k_ident() && fk != k_int() { return 0 - 2; }
+        last = field_span;
+        ints_push(path, place_field(t, tat(p, fi), field_span));
+    }
+    let op = compound_op(peek(p));
+    let op_span = peek_span(p);
+    advance(p);
+    let rhs = expr(p);
+    if rhs < 0 { return 0 - 1; }
+    let mut value = rhs;
+    if op != "" {
+        let mut j = 0;
+        while j < ints_len(path) {
+            let step = ints_get(path, j);
+            if sx_text(t, step) == "Index" {
+                let index = sx_field(t, step, "index");
+                if simple_index(t, index) == false {
+                    report(p, "N0100", expr_span(t, index), "a compound assignment's index is a name, a number or a string",
+                            "computed here, and it would be computed twice", "bind the index first: `let i = …;`, then `v[i] += …`");
+                    return 0 - 1;
+                }
+            }
+            j = j + 1;
+        }
+        let mut lhs = var_expr(t, name, name_span);
+        j = 0;
+        while j < ints_len(path) {
+            let step = ints_get(path, j);
+            if sx_text(t, step) == "Index" {
+                let ss = sx_field(t, step, "span");
+                let f = fs();
+                fa(f, "base", lhs);
+                fa(f, "index", sx_field(t, step, "index"));
+                fa(f, "bracket_span", point(t, sx_s(t, ss)));
+                fa(f, "span", join(t, expr_span(t, lhs), ss));
+                lhs = mk_struct(t, "Index", f);
+            } else {
+                let pf = sx_kid(t, step, 0);
+                let ns = sx_field(t, pf, "name_span");
+                lhs = field_expr(t, lhs, sx_name(t, pf, "name"), ns, join(t, expr_span(t, lhs), ns));
+            }
+            j = j + 1;
+        }
+        value = binary_node(t, op, lhs, rhs, op_span, join(t, name_span, expr_span(t, rhs)));
+    }
+    let semi = expect(p, k_semi(), "after an assignment");
+    if semi < 0 { return 0 - 1; }
+    let pl = fs();
+    fa(pl, "name", sx_str(t, name));
+    fa(pl, "name_span", name_span);
+    fa(pl, "path", mk_list(t, path));
+    fa(pl, "span", join(t, name_span, last));
+    let f = fs();
+    fa(f, "place", mk_struct(t, "Place", pl));
+    fa(f, "value", value);
+    fa(f, "span", join(t, name_span, semi));
+    mk_struct(t, "Assign", f)
+}
+
+fn field_expr(t: Tree, base: Int, name: Str, name_span: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "base", base);
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", name_span);
+    fa(f, "span", span);
+    mk_struct(t, "Field", f)
+}
+
+fn binary_node(t: Tree, op: Str, lhs: Int, rhs: Int, op_span: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "op", sx_atom(t, op));
+    fa(f, "lhs", lhs);
+    fa(f, "rhs", rhs);
+    fa(f, "op_span", op_span);
+    fa(f, "span", span);
+    mk_struct(t, "Binary", f)
+}
+
+fn defer(p: Px) -> Int {
+    let t = p.t;
+    let keyword_span = peek_span(p);
+    advance(p);
+    let body = block(p);
+    if body < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "keyword_span", keyword_span);
+    fa(f, "body", body);
+    fa(f, "span", join(t, keyword_span, sx_field(t, body, "span")));
+    mk_struct(t, "Defer", f)
+}
+
+fn scope_stmt(p: Px) -> Int {
+    let t = p.t;
+    let start = expect(p, k_scope(), "to start a scope");
+    if start < 0 { return 0 - 1; }
+    let body = block(p);
+    if body < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "body", body);
+    fa(f, "span", join(t, start, sx_field(t, body, "span")));
+    mk_struct(t, "Scope", f)
+}
+
+fn spawn_stmt(p: Px) -> Int {
+    let t = p.t;
+    let start = expect(p, k_spawn(), "to start a task");
+    if start < 0 { return 0 - 1; }
+    let callee_span = peek_span(p);
+    let ci = advance(p);
+    if kat(p, ci) != k_ident() {
+        report(p, "N0100", callee_span, found_msg(p, "expected a function name after `spawn`", ci), "",
+                "a task runs a named function: `spawn worker(jobs);`. There are no function values to pass instead");
+        return 0 - 1;
+    }
+    if expect(p, k_lparen(), "to start the arguments") < 0 { return 0 - 1; }
+    let args = ints_new();
+    if at(p, k_rparen()) == false {
+        while true {
+            let e = expr(p);
+            if e < 0 { return 0 - 1; }
+            ints_push(args, e);
+            if eat(p, k_comma()) == false { break; }
+        }
+    }
+    if expect(p, k_rparen(), "to end the arguments") < 0 { return 0 - 1; }
+    let end = expect(p, k_semi(), "to end a `spawn`");
+    if end < 0 { return 0 - 1; }
+    let f = fs();
+    fa(f, "callee", sx_str(t, tat(p, ci)));
+    fa(f, "callee_span", callee_span);
+    fa(f, "args", mk_list(t, args));
+    fa(f, "span", join(t, start, end));
+    mk_struct(t, "Spawn", f)
+}
+
+// --- expressions ---------------------------------------------------------------------------
+
+// `( field: value, … )`: the list, with the `)` in r1 and the deepest initialiser in r2.
+fn field_inits(p: Px) -> Int {
+    if expect(p, k_lparen(), "to start the fields") < 0 { return 0 - 1; }
+    let fields = ints_new();
+    let mut deepest = 0;
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let start = pos(p);
+        let fi = field_init(p);
+        if fi >= 0 {
+            ints_push(fields, fi);
+            deepest = imax(deepest, child(p));
+        } else {
+            if recover_member(p, start, k_rparen()) == false { return 0 - 1; }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rparen(), "to close the fields");
+    if close < 0 { return 0 - 1; }
+    let l = mk_list(p.t, fields);
+    sv(p, s_r1(), close);
+    sv(p, s_r2(), deepest);
+    l
+}
+
+fn method_call(p: Px, qualifier: Int, receiver: Int, method: Str, method_span: Int) -> Int {
+    let t = p.t;
+    let mut deepest = child(p);
+    if expect(p, k_lparen(), "to start the arguments") < 0 { return 0 - 1; }
+    let args = ints_new();
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let start = pos(p);
+        let e = expr(p);
+        if e >= 0 {
+            ints_push(args, e);
+            deepest = imax(deepest, child(p));
+        } else {
+            if recover_member(p, start, k_rparen()) == false { return 0 - 1; }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rparen(), "to close the argument list");
+    if close < 0 { return 0 - 1; }
+    if built(p, deepest + 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "receiver", receiver);
+    fa(f, "method", sx_str(t, method));
+    fa(f, "method_span", method_span);
+    fa(f, "args", mk_list(t, args));
+    fa(f, "span", join(t, expr_span(t, receiver), close));
+    mk_struct(t, "MethodCall", f)
+}
+
+fn field_init(p: Px) -> Int {
+    let t = p.t;
+    let name_span = peek_span(p);
+    let ni = advance(p);
+    if kat(p, ni) != k_ident() {
+        report(p, "N0100", name_span, found_msg(p, "expected a field name", ni), "",
+                "every field is named when a value is built: `Point(x: 1, y: 2)`, `State.Failed(code: 1)`");
+        return 0 - 1;
+    }
+    if expect(p, k_colon(), "after a field name") < 0 { return 0 - 1; }
+    let value = expr(p);
+    if value < 0 { return 0 - 1; }
+    field_init_node(t, tat(p, ni), name_span, value, join(t, name_span, expr_span(t, value)))
+}
+
+fn field_init_node(t: Tree, name: Str, name_span: Int, value: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", name_span);
+    fa(f, "value", value);
+    fa(f, "span", span);
+    mk_struct(t, "FieldInit", f)
+}
+
+fn construct_node(t: Tree, qualifier: Int, ty: Str, ty_span: Int, type_args: Int, fields: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "ty", sx_str(t, ty));
+    fa(f, "ty_span", ty_span);
+    fa(f, "type_args", opt(t, type_args));
+    fa(f, "fields", fields);
+    fa(f, "span", span);
+    mk_struct(t, "Construct", f)
+}
+
+fn variant_node(t: Tree, qualifier: Int, ty: Str, ty_span: Int, type_args: Int, variant: Str, variant_span: Int, fields: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "ty", sx_str(t, ty));
+    fa(f, "ty_span", ty_span);
+    fa(f, "type_args", opt(t, type_args));
+    fa(f, "variant", sx_str(t, variant));
+    fa(f, "variant_span", variant_span);
+    fa(f, "fields", fields);
+    fa(f, "span", span);
+    mk_struct(t, "Variant", f)
+}
+
+fn construction(p: Px, qualifier: Int, ty: Str, ty_span: Int, type_args: Int) -> Int {
+    let fields = field_inits(p);
+    if fields < 0 { return 0 - 1; }
+    let close = g(p, s_r1());
+    if built(p, g(p, s_r2()) + 1) == false { return 0 - 1; }
+    construct_node(p.t, qualifier, ty, ty_span, type_args, fields, join(p.t, ty_span, close))
+}
+
+fn variant_construction(p: Px, qualifier: Int, ty: Str, ty_span: Int, type_args: Int) -> Int {
+    advance(p);
+    let variant_span = peek_span(p);
+    let vi = advance(p);
+    if kat(p, vi) != k_ident() { return 0 - 1; }
+    let fields = field_inits(p);
+    if fields < 0 { return 0 - 1; }
+    let close = g(p, s_r1());
+    if built(p, g(p, s_r2()) + 1) == false { return 0 - 1; }
+    variant_node(p.t, qualifier, ty, ty_span, type_args, tat(p, vi), variant_span, fields, join(p.t, ty_span, close))
+}
+
+fn match_arm(p: Px) -> Int {
+    let t = p.t;
+    let pattern = pattern(p);
+    if pattern < 0 { return 0 - 1; }
+    let mut guard = sx_none(t);
+    let mut end = sx_e(t, pattern_span(t, pattern));
+    if eat(p, k_if()) {
+        let gd = expr(p);
+        if gd < 0 { return 0 - 1; }
+        guard = mk_some(t, gd);
+        end = sx_e(t, expr_span(t, gd));
+    }
+    if expect(p, k_fatarrow(), "between a pattern and its arm") < 0 { return 0 - 1; }
+    let body = expr(p);
+    if body < 0 { return 0 - 1; }
+    arm_node(t, pattern, guard, body, join(t, pattern_span(t, pattern), expr_span(t, body)))
+}
+
+fn pattern(p: Px) -> Int {
+    let t = p.t;
+    let first = pattern_one(p);
+    if first < 0 { return 0 - 1; }
+    if at(p, k_pipe()) == false { return first; }
+    let alts = one(first);
+    while eat(p, k_pipe()) {
+        let a = pattern_one(p);
+        if a < 0 { return 0 - 1; }
+        ints_push(alts, a);
+    }
+    let f = fs();
+    fa(f, "alts", mk_list(t, alts));
+    fa(f, "span", join(t, pattern_span(t, first), pattern_span(t, ints_get(alts, ints_len(alts) - 1))));
+    mk_struct(t, "Or", f)
+}
+
+fn short_variant_ty(name: Str) -> Str {
+    if name == "Some" { return "Option"; }
+    if name == "Ok" { return "Result"; }
+    if name == "Err" { return "Result"; }
+    ""
+}
+
+fn short_variant_label(name: Str) -> Str {
+    if name == "Err" { return "error"; }
+    "value"
+}
+
+fn variant_pattern_node(t: Tree, qualifier: Int, ty: Str, ty_span: Int, variant: Str, variant_span: Int, fields: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "ty", sx_str(t, ty));
+    fa(f, "ty_span", ty_span);
+    fa(f, "variant", sx_str(t, variant));
+    fa(f, "variant_span", variant_span);
+    fa(f, "fields", fields);
+    fa(f, "span", span);
+    mk_tuple(t, "Variant", one(mk_struct(t, "VariantPattern", f)))
+}
+
+fn pattern_field(t: Tree, name: Str, name_span: Int, pattern: Int) -> Int {
+    let f = fs();
+    fa(f, "name", sx_str(t, name));
+    fa(f, "name_span", name_span);
+    fa(f, "pattern", pattern);
+    mk_struct(t, "PatternField", f)
+}
+
+fn pattern_one(p: Px) -> Int {
+    let t = p.t;
+    let span = peek_span(p);
+    let k = peek(p);
+    if k == k_int() || k == k_wide() || k == k_float() || k == k_true() || k == k_false() || k == k_str() || k == k_minus() {
+        let lit = primary(p);
+        if lit < 0 { return 0 - 1; }
+        return mk_tuple(t, "Literal", one(lit));
+    }
+    if k == k_lparen() {
+        advance(p);
+        let first = pattern(p);
+        if first < 0 { return 0 - 1; }
+        if at(p, k_comma()) == false {
+            if expect(p, k_rparen(), "to close the parenthesised pattern") < 0 { return 0 - 1; }
+            return first;
+        }
+        let elems = one(first);
+        while eat(p, k_comma()) {
+            if at(p, k_rparen()) { break; }
+            let e = pattern(p);
+            if e < 0 { return 0 - 1; }
+            ints_push(elems, e);
+        }
+        let close = expect(p, k_rparen(), "to close a tuple pattern");
+        if close < 0 { return 0 - 1; }
+        if two_or_more(p, ints_len(elems), join(t, span, close)) == false { return 0 - 1; }
+        let f = fs();
+        fa(f, "elems", mk_list(t, elems));
+        fa(f, "span", join(t, span, close));
+        return mk_struct(t, "Tuple", f);
+    }
+    if k == k_ident() {
+        let name = peek_text(p);
+        let next = kat(p, pos(p) + 1);
+        if next == k_dot() || next == k_coloncolon() { return variant_pattern(p); }
+        let ty = short_variant_ty(name);
+        if ty != "" && next == k_lparen() {
+            advance(p);
+            let open = peek_span(p);
+            advance(p);
+            let inner = pattern(p);
+            if inner < 0 { return 0 - 1; }
+            let close = expect(p, k_rparen(), "to close the payload");
+            if close < 0 { return 0 - 1; }
+            let fields = mk_list(t, one(pattern_field(t, short_variant_label(name), open, inner)));
+            return variant_pattern_node(t, 0 - 1, ty, span, name, span, fields, join(t, span, close));
+        }
+        if name == "None" {
+            advance(p);
+            return variant_pattern_node(t, 0 - 1, "Option", span, name, span, empty_list(t), span);
+        }
+        advance(p);
+        if name == "_" { return wildcard(t, span); }
+        if reserved(p, name, span) { return 0 - 1; }
+        let f = fs();
+        fa(f, "name", sx_str(t, name));
+        fa(f, "span", span);
+        return mk_struct(t, "Bind", f);
+    }
+    report(p, "N0100", span, found_msg(p, "expected a pattern", pos(p)), "",
+            "a pattern is `_`, a name, a literal, `Enum.Variant(field: pattern)`, or several of them separated by `|`");
+    0 - 1
+}
+
+fn variant_pattern(p: Px) -> Int {
+    let t = p.t;
+    let qualifier = qualifier_before_name(p);
+    let ty_span = peek_span(p);
+    let ti = advance(p);
+    if kat(p, ti) != k_ident() {
+        report(p, "N0100", ty_span, found_msg(p, "expected an enum name", ti), "",
+                "a variant pattern names the variant it selects, qualified by its enum: `State.Ready() => 0,`");
+        return 0 - 1;
+    }
+    if expect(p, k_dot(), "between an enum and one of its variants") < 0 { return 0 - 1; }
+    let variant_span = peek_span(p);
+    let vi = advance(p);
+    if kat(p, vi) != k_ident() {
+        report(p, "N0100", variant_span, found_msg(p, "expected a variant name", vi), "",
+                "a variant pattern selects one variant: `State.Failed(code: c) => c,`");
+        return 0 - 1;
+    }
+    let mut fields = empty_list(t);
+    let mut close = variant_span;
+    if at(p, k_lparen()) {
+        fields = pattern_fields(p);
+        if fields < 0 { return 0 - 1; }
+        close = g(p, s_r1());
+    }
+    variant_pattern_node(t, qualifier, tat(p, ti), ty_span, tat(p, vi), variant_span, fields, join(t, ty_span, close))
+}
+
+fn match_expr(p: Px, start: Int) -> Int {
+    let t = p.t;
+    let scrutinee = expr(p);
+    if scrutinee < 0 { return 0 - 1; }
+    let mut deepest = child(p);
+    if expect(p, k_lbrace(), "to start the arms") < 0 { return 0 - 1; }
+    let arms = ints_new();
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        let astart = pos(p);
+        let a = match_arm(p);
+        if a >= 0 {
+            ints_push(arms, a);
+            deepest = imax(deepest, child(p));
+        } else {
+            if recover_member(p, astart, k_rbrace()) == false { return 0 - 1; }
+        }
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rbrace(), "to close the arms");
+    if close < 0 { return 0 - 1; }
+    if built(p, deepest + 1) == false { return 0 - 1; }
+    match_node(t, scrutinee, arms, "Written", join(t, start, close))
+}
+
+// `( field: pattern, … )`: the list, with the `)` in r1.
+fn pattern_fields(p: Px) -> Int {
+    let t = p.t;
+    if expect(p, k_lparen(), "to start the payload") < 0 { return 0 - 1; }
+    let fields = ints_new();
+    while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+        let name_span = peek_span(p);
+        let ni = advance(p);
+        if kat(p, ni) != k_ident() {
+            report(p, "N0100", name_span, found_msg(p, "expected a payload field name", ni), "",
+                    "a pattern names every payload field: `V(left: a, right: _)`");
+            return 0 - 1;
+        }
+        if expect(p, k_colon(), "after a payload field name") < 0 { return 0 - 1; }
+        let pt = pattern(p);
+        if pt < 0 { return 0 - 1; }
+        ints_push(fields, pattern_field(t, tat(p, ni), name_span, pt));
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rparen(), "to close the payload");
+    if close < 0 { return 0 - 1; }
+    let l = mk_list(t, fields);
+    sv(p, s_r1(), close);
+    l
+}
+
+pub fn expr(p: Px) -> Int { binary(p, 0) }
+
+fn binop_of(k: Int) -> Str {
+    if k == k_pipepipe() { return "Or"; }
+    if k == k_ampamp() { return "And"; }
+    if k == k_eqeq() { return "Eq"; }
+    if k == k_noteq() { return "NotEq"; }
+    if k == k_lt() { return "Lt"; }
+    if k == k_lteq() { return "LtEq"; }
+    if k == k_gt() { return "Gt"; }
+    if k == k_gteq() { return "GtEq"; }
+    if k == k_pipe() { return "BitOr"; }
+    if k == k_caret() { return "BitXor"; }
+    if k == k_amp() { return "BitAnd"; }
+    if k == k_shl() { return "Shl"; }
+    if k == k_shr() { return "Shr"; }
+    if k == k_plus() { return "Add"; }
+    if k == k_minus() { return "Sub"; }
+    if k == k_star() { return "Mul"; }
+    if k == k_slash() { return "Div"; }
+    if k == k_percent() { return "Rem"; }
+    ""
+}
+
+fn binding_power(k: Int) -> Int {
+    if k == k_pipepipe() { return 1; }
+    if k == k_ampamp() { return 2; }
+    if k == k_eqeq() || k == k_noteq() || k == k_lt() || k == k_lteq() || k == k_gt() || k == k_gteq() { return 3; }
+    if k == k_pipe() { return 4; }
+    if k == k_caret() { return 5; }
+    if k == k_amp() { return 6; }
+    if k == k_shl() || k == k_shr() { return 7; }
+    if k == k_plus() || k == k_minus() { return 8; }
+    if k == k_star() || k == k_slash() || k == k_percent() { return 9; }
+    0
+}
+
+fn binary(p: Px, min_bp: Int) -> Int {
+    let t = p.t;
+    let mut lhs = primary(p);
+    if lhs < 0 { return 0 - 1; }
+    let mut lhs_depth = child(p);
+    while true {
+        let k = peek(p);
+        let bp = binding_power(k);
+        if bp == 0 { break; }
+        if bp < min_bp { break; }
+        let op = binop_of(k);
+        let op_span = peek_span(p);
+        advance(p);
+        let rhs = binary(p, bp + 1);
+        if rhs < 0 { return 0 - 1; }
+        lhs_depth = imax(lhs_depth, child(p)) + 1;
+        if built(p, lhs_depth) == false { return 0 - 1; }
+        lhs = binary_node(t, op, lhs, rhs, op_span, join(t, expr_span(t, lhs), expr_span(t, rhs)));
+    }
+    sv(p, s_built(), lhs_depth);
+    lhs
+}
+
+pub fn primary(p: Px) -> Int {
+    if enter(p) == false { return 0 - 1; }
+    let inner = primary_inner(p);
+    let mut out = 0 - 1;
+    if inner >= 0 { out = projections(p, inner); }
+    leave(p);
+    out
+}
+
+fn capitalised(name: Str) -> Bool {
+    if str_len(name) == 0 { return false; }
+    let b = str_byte(name, 0);
+    b >= 65 && b <= 90
+}
+
+fn projections(p: Px, base: Int) -> Int {
+    let t = p.t;
+    let mut out = base;
+    let mut depth = child(p);
+    while true {
+        if at(p, k_question()) {
+            let op_span = peek_span(p);
+            advance(p);
+            depth = depth + 1;
+            if built(p, depth) == false { return 0 - 1; }
+            let f = fs();
+            fa(f, "operand", out);
+            fa(f, "op_span", op_span);
+            fa(f, "span", join(t, expr_span(t, out), op_span));
+            out = mk_struct(t, "Propagate", f);
+            continue;
+        }
+        if at(p, k_lbracket()) && line_break_before(p) == false {
+            let open = peek_span(p);
+            advance(p);
+            let index = expr(p);
+            if index < 0 { return 0 - 1; }
+            let close = expect(p, k_rbracket(), "to close an index");
+            if close < 0 { return 0 - 1; }
+            depth = imax(depth, child(p)) + 1;
+            if built(p, depth) == false { return 0 - 1; }
+            let f = fs();
+            fa(f, "base", out);
+            fa(f, "index", index);
+            fa(f, "bracket_span", join(t, open, close));
+            fa(f, "span", join(t, expr_span(t, out), close));
+            out = mk_struct(t, "Index", f);
+            continue;
+        }
+        if at(p, k_dot()) == false { break; }
+        advance(p);
+        let name_span = peek_span(p);
+        if line_break_before(p) {
+            report(p, "N0100", name_span, found_msg(p, "expected a field name after `.` on its line", pos(p)), "expected a field name", "");
+            return 0 - 1;
+        }
+        let ni = advance(p);
+        let nk = kat(p, ni);
+        let mut name = "";
+        if nk == k_ident() || nk == k_int() {
+            name = tat(p, ni);
+        } else {
+            if nk == k_float() && positions_ok(tat(p, ni)) {
+                let text = tat(p, ni);
+                let d = dot_at(text);
+                let cut = sx_s(t, name_span) + d;
+                let first = sx_span(t, sx_s(t, name_span), cut);
+                let second = sx_span(t, cut + 1, sx_e(t, name_span));
+                depth = depth + 1;
+                if built(p, depth) == false { return 0 - 1; }
+                out = field_expr(t, out, str_slice(text, 0, d), first, join(t, expr_span(t, out), first));
+                depth = depth + 1;
+                if built(p, depth) == false { return 0 - 1; }
+                out = field_expr(t, out, str_slice(text, d + 1, str_len(text)), second, join(t, expr_span(t, out), second));
+                continue;
+            }
+            report(p, "N0100", name_span, found_msg(p, "expected a field name after `.`", ni), "", "`.` reads a field out of a record: `p.x`");
+            return 0 - 1;
+        }
+        if at(p, k_lparen()) && line_break_before(p) == false {
+            out = method_call(p, 0 - 1, out, name, name_span);
+            if out < 0 { return 0 - 1; }
+            depth = child(p);
+            continue;
+        }
+        depth = depth + 1;
+        if built(p, depth) == false { return 0 - 1; }
+        if sx_kind(t, out) == tk_struct() && sx_text(t, out) == "Var" {
+            let ty = sx_name(t, out, "name");
+            if capitalised(ty) && capitalised(name) {
+                let ty_span = sx_field(t, out, "span");
+                out = variant_node(t, 0 - 1, ty, ty_span, 0 - 1, name, name_span, empty_list(t), join(t, ty_span, name_span));
+                continue;
+            }
+        }
+        out = field_expr(t, out, name, name_span, join(t, expr_span(t, out), name_span));
+    }
+    sv(p, s_built(), depth);
+    out
+}
+
+fn label_at(p: Px, i: Int) -> Bool { kat(p, i) == k_ident() && kat(p, i + 1) == k_colon() }
+
+fn call_node(t: Tree, qualifier: Int, callee: Str, callee_span: Int, type_args: Int, args: Ints, span: Int) -> Int {
+    let f = fs();
+    fa(f, "qualifier", opt(t, qualifier));
+    fa(f, "callee", sx_str(t, callee));
+    fa(f, "callee_span", callee_span);
+    fa(f, "type_args", opt(t, type_args));
+    fa(f, "args", mk_list(t, args));
+    fa(f, "span", span);
+    mk_struct(t, "Call", f)
+}
+
+fn ident_primary(p: Px, name0: Str, span0: Int) -> Int {
+    let t = p.t;
+    if reserved(p, name0, span0) { advance(p); return 0 - 1; }
+    advance(p);
+    let mut qualifier = 0 - 1;
+    let mut name = name0;
+    let mut span = span0;
+    if at(p, k_coloncolon()) {
+        advance(p);
+        let item_span = peek_span(p);
+        let ii = advance(p);
+        if kat(p, ii) != k_ident() {
+            report(p, "N0100", item_span, found_msg(p, "expected a name after `::`", ii), "", "");
+            return 0 - 1;
+        }
+        let q = fs();
+        fa(q, "name", sx_str(t, name0));
+        fa(q, "span", span0);
+        qualifier = mk_struct(t, "Qualifier", q);
+        name = tat(p, ii);
+        span = item_span;
+    }
+    let mut targs = 0 - 1;
+    if at(p, k_lbracket()) && bracket_is_type_args(p, pos(p)) {
+        let a = type_args(p);
+        if a < 0 { return 0 - 1; }
+        let applies = at(p, k_lparen()) || (at(p, k_dot()) && kat(p, pos(p) + 1) == k_ident() && kat(p, pos(p) + 2) == k_lparen());
+        if applies == false {
+            report(p, "N0100", peek_span(p), found_msg(p, str_concat(str_concat("expected `(` after the type arguments of `", name), "`"), pos(p)), "",
+                    "type arguments are written where something is called or built: `identity[Int](7)`, `Box[Int](value: 7)`, `Maybe[Int].None()`");
+            return 0 - 1;
+        }
+        targs = a;
+    }
+    let i = pos(p);
+    let variant = at(p, k_dot()) && kat(p, i + 1) == k_ident() && kat(p, i + 2) == k_lparen();
+    let unlabelled = variant && kat(p, i + 3) != k_rparen() && label_at(p, i + 3) == false;
+    if unlabelled {
+        if targs >= 0 {
+            report(p, "N0100", span, str_concat(str_concat("type arguments cannot be written on `", name), "` before a method call"), "",
+                    "a method's types come from its receiver: `x.show()`");
+            return 0 - 1;
+        }
+        let receiver = var_expr(t, name, span);
+        if built(p, 1) == false { return 0 - 1; }
+        advance(p);
+        let method_span = peek_span(p);
+        let mi = advance(p);
+        if kat(p, mi) != k_ident() { return 0 - 1; }
+        return method_call(p, qualifier, receiver, tat(p, mi), method_span);
+    }
+    if variant { return variant_construction(p, qualifier, name, span, targs); }
+    let constructing = at(p, k_lparen()) && kat(p, i + 1) == k_ident() && kat(p, i + 2) == k_colon();
+    if constructing { return construction(p, qualifier, name, span, targs); }
+    if at(p, k_lparen()) && line_break_before(p) == false {
+        bump(p);
+        let args = ints_new();
+        let mut deepest = 0;
+        while at(p, k_rparen()) == false && at(p, k_eof()) == false {
+            let start = pos(p);
+            let e = expr(p);
+            if e >= 0 {
+                ints_push(args, e);
+                deepest = imax(deepest, child(p));
+            } else {
+                if recover_member(p, start, k_rparen()) == false { return 0 - 1; }
+            }
+            if eat(p, k_comma()) == false { break; }
+        }
+        let close = expect(p, k_rparen(), "to close the argument list");
+        if close < 0 { return 0 - 1; }
+        if built(p, deepest + 1) == false { return 0 - 1; }
+        let parens = sx_span(t, sx_e(t, span), sx_e(t, close));
+        let mut callee = name;
+        let mut final_args = args;
+        if qualifier < 0 && targs < 0 {
+            final_args = printed(t, name, args, parens);
+            callee = g_printed_name(name, ints_len(args), final_args, t);
+        }
+        // `Some(x)`, `Ok(x)`, `Err(e)` (R1, 5b.14).
+        let ty = short_variant_ty(callee);
+        if qualifier < 0 && targs < 0 && ty != "" && ints_len(final_args) == 1 {
+            let value = ints_get(final_args, 0);
+            let field = field_init_node(t, short_variant_label(callee), parens, value, expr_span(t, value));
+            return variant_node(t, 0 - 1, ty, span, 0 - 1, callee, span, mk_list(t, one(field)), join(t, span, close));
+        }
+        return call_node(t, qualifier, callee, span, targs, final_args, join(t, span, close));
+    }
+    if qualifier >= 0 {
+        if built(p, 1) == false { return 0 - 1; }
+        let qn = sx_name(t, qualifier, "name");
+        return var_expr(t, str_concat(str_concat(qn, "::"), name), join(t, sx_field(t, qualifier, "span"), span));
+    }
+    if built(p, 1) == false { return 0 - 1; }
+    if name == "None" {
+        return variant_node(t, 0 - 1, "Option", span, 0 - 1, name, span, empty_list(t), span);
+    }
+    var_expr(t, name, span)
+}
+
+// The name `printed` leaves a call with: `println` becomes `print` and `eprintln` `eprint` when
+// it rewrote the arguments, and every other name stays.
+fn g_printed_name(name: Str, before: Int, after: Ints, t: Tree) -> Str {
+    let mut target = name;
+    let mut newline = false;
+    if name == "println" { target = "print"; newline = true; }
+    if name == "eprintln" { target = "eprint"; newline = true; }
+    if name != "print" && name != "eprint" && newline == false { return name; }
+    if newline && before == 0 { return target; }
+    if before != 1 { return name; }
+    target
+}
+
+// `print(e)` and its kin (R1, 5b.13): the arguments a call of `name` is given — `print(x)` is
+// `print(f"{x}")`, `println(x)` is `print(f"{x}\n")`, a `Str` printed unchanged.
+fn printed(t: Tree, name: Str, args: Ints, parens: Int) -> Ints {
+    let mut newline = false;
+    if name == "println" || name == "eprintln" { newline = true; }
+    if name != "print" && name != "eprint" && newline == false { return args; }
+    if newline && ints_len(args) == 0 {
+        let f = fs();
+        fa(f, "value", sx_str(t, "\n"));
+        fa(f, "span", parens);
+        return one(mk_struct(t, "Str", f));
+    }
+    if ints_len(args) != 1 { return args; }
+    let value = ints_get(args, 0);
+    if newline == false && sx_kind(t, value) == tk_struct() && sx_text(t, value) == "Str" { return args; }
+    let span = expr_span(t, value);
+    let parts = one(hole_part(t, value, default_spec(t), parens));
+    if newline { ints_push(parts, mk_tuple(t, "Text", one(sx_str(t, "\n")))); }
+    let f = fs();
+    fa(f, "parts", mk_list(t, parts));
+    fa(f, "span", span);
+    one(mk_struct(t, "Interp", f))
+}
+
+fn default_spec(t: Tree) -> Int { spec_node(t, "-", "-", "-") }
+
+fn spec_node(t: Tree, align: Str, width: Str, precision: Str) -> Int {
+    let f = fs();
+    if align == "<" { fa(f, "align", mk_some(t, sx_atom(t, "Left"))); }
+    if align == ">" { fa(f, "align", mk_some(t, sx_atom(t, "Right"))); }
+    if align == "-" { fa(f, "align", sx_none(t)); }
+    if width == "-" { fa(f, "width", sx_none(t)); } else { fa(f, "width", mk_some(t, sx_atom(t, width))); }
+    if precision == "-" { fa(f, "precision", sx_none(t)); } else { fa(f, "precision", mk_some(t, sx_atom(t, precision))); }
+    mk_struct(t, "FormatSpec", f)
+}
+
+fn hole_part(t: Tree, e: Int, spec: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "expr", e);
+    fa(f, "spec", spec);
+    fa(f, "span", span);
+    mk_struct(t, "Hole", f)
+}
+
+fn complement(p: Px) -> Int {
+    let t = p.t;
+    let op_span = peek_span(p);
+    advance(p);
+    let operand = primary(p);
+    if operand < 0 { return 0 - 1; }
+    if built(p, child(p) + 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "operand", operand);
+    fa(f, "op_span", op_span);
+    fa(f, "span", join(t, op_span, expr_span(t, operand)));
+    mk_struct(t, "BitNot", f)
+}
+
+// The decimal digits of a wide literal's value: the digits without leading zeros, or `u128::MAX`
+// when they do not fit.
+fn wide_value(digits: Str) -> Str {
+    let mut s = 0;
+    while s < str_len(digits) - 1 && str_byte(digits, s) == 48 { s = s + 1; }
+    let d = str_slice(digits, s, str_len(digits));
+    if fits_u128(d) { return d; }
+    u128_max()
+}
+
+fn u128_max() -> Str { "340282366920938463463374607431768211455" }
+
+fn fits_u128(d: Str) -> Bool {
+    let mut s = 0;
+    while s < str_len(d) - 1 && str_byte(d, s) == 48 { s = s + 1; }
+    let x = str_slice(d, s, str_len(d));
+    let m = u128_max();
+    if str_len(x) < str_len(m) { return true; }
+    if str_len(x) > str_len(m) { return false; }
+    let mut i = 0;
+    while i < str_len(x) {
+        if str_byte(x, i) < str_byte(m, i) { return true; }
+        if str_byte(x, i) > str_byte(m, i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn number(p: Px, span: Int) -> Int {
+    let t = p.t;
+    let i = advance(p);
+    let k = kat(p, i);
+    let mut e = 0 - 1;
+    if k == k_wide() {
+        let f = fs();
+        fa(f, "value", sx_atom(t, wide_value(tat(p, i))));
+        fa(f, "span", span);
+        e = mk_struct(t, "WideInt", f);
+    }
+    if k == k_float() {
+        let f = fs();
+        fa(f, "text", sx_str(t, tat(p, i)));
+        fa(f, "span", span);
+        e = mk_struct(t, "Float", f);
+    }
+    if e < 0 { return 0 - 1; }
+    if built(p, 1) == false { return 0 - 1; }
+    e
+}
+
+fn int_message(digits: Str) -> Str { str_concat(ticked(digits), " does not fit in `Int`") }
+
+fn int_help() -> Str { "`Int` is a 64-bit signed integer: -9223372036854775808 to 9223372036854775807" }
+
+fn unary(t: Tree, variant: Str, operand: Int, op_span: Int, span: Int) -> Int {
+    let f = fs();
+    fa(f, "operand", operand);
+    fa(f, "op_span", op_span);
+    fa(f, "span", span);
+    mk_struct(t, variant, f)
+}
+
+fn primary_inner(p: Px) -> Int {
+    let t = p.t;
+    let span = peek_span(p);
+    if at(p, k_bang()) {
+        let op_span = peek_span(p);
+        advance(p);
+        let operand = primary(p);
+        if operand < 0 { return 0 - 1; }
+        if built(p, child(p) + 1) == false { return 0 - 1; }
+        return unary(t, "Not", operand, op_span, join(t, op_span, expr_span(t, operand)));
+    }
+    if at(p, k_tilde()) { return complement(p); }
+    if at(p, k_lbracket()) { return array_literal(p); }
+    if at(p, k_minus()) {
+        let op_span = peek_span(p);
+        advance(p);
+        if at(p, k_wide()) {
+            let lit_span = peek_span(p);
+            let li = advance(p);
+            let digits = tat(p, li);
+            let full = join(t, op_span, lit_span);
+            let stripped = wide_value(digits);
+            if fits_u128(digits) && stripped == "9223372036854775808" {
+                if built(p, 1) == false { return 0 - 1; }
+                return int_expr(t, "-9223372036854775808", full);
+            }
+            if fits_u128(digits) {
+                if built(p, 1) == false { return 0 - 1; }
+                let w = fs();
+                fa(w, "value", sx_atom(t, stripped));
+                fa(w, "span", lit_span);
+                return unary(t, "Neg", mk_struct(t, "WideInt", w), op_span, full);
+            }
+            report(p, "N0003", full, int_message(str_concat("-", digits)), "", int_help());
+            return 0 - 1;
+        }
+        let operand = primary(p);
+        if operand < 0 { return 0 - 1; }
+        if built(p, child(p) + 1) == false { return 0 - 1; }
+        return unary(t, "Neg", operand, op_span, join(t, op_span, expr_span(t, operand)));
+    }
+    let k = peek(p);
+    if k == k_int() {
+        let i = advance(p);
+        if built(p, 1) == false { return 0 - 1; }
+        return int_expr(t, tat(p, i), span);
+    }
+    if k == k_wide() {
+        if fits_u128(peek_text(p)) { return number(p, span); }
+        let i = advance(p);
+        report(p, "N0003", span, int_message(tat(p, i)), "", int_help());
+        return 0 - 1;
+    }
+    if k == k_float() { return number(p, span); }
+    if k == k_true() || k == k_false() {
+        advance(p);
+        if built(p, 1) == false { return 0 - 1; }
+        return bool_expr(t, k == k_true(), span);
+    }
+    if k == k_str() {
+        let i = advance(p);
+        if built(p, 1) == false { return 0 - 1; }
+        let f = fs();
+        fa(f, "value", sx_str(t, tat(p, i)));
+        fa(f, "span", span);
+        return mk_struct(t, "Str", f);
+    }
+    if k == k_fstr() { return interpolation(p, span); }
+    if k == k_if() && kat(p, pos(p) + 1) == k_let() { return if_let(p, span); }
+    if k == k_if() {
+        advance(p);
+        let cond = expr(p);
+        if cond < 0 { return 0 - 1; }
+        let mut deepest = child(p);
+        let then_block = block(p);
+        if then_block < 0 { return 0 - 1; }
+        deepest = imax(deepest, child(p));
+        let mut else_block = sx_none(t);
+        let mut end = sx_field(t, then_block, "span");
+        if eat(p, k_else()) {
+            let b = else_branch(p);
+            if b < 0 { return 0 - 1; }
+            deepest = imax(deepest, child(p));
+            else_block = mk_some(t, b);
+            end = sx_field(t, b, "span");
+        }
+        if built(p, deepest + 1) == false { return 0 - 1; }
+        let f = fs();
+        fa(f, "cond", cond);
+        fa(f, "then_block", then_block);
+        fa(f, "else_block", else_block);
+        fa(f, "span", join(t, span, end));
+        return mk_struct(t, "If", f);
+    }
+    if k == k_lparen() {
+        advance(p);
+        let inner = expr(p);
+        if inner < 0 { return 0 - 1; }
+        if at(p, k_comma()) {
+            let mut deepest = child(p);
+            let elems = one(inner);
+            while eat(p, k_comma()) {
+                if at(p, k_rparen()) { break; }
+                let e = expr(p);
+                if e < 0 { return 0 - 1; }
+                ints_push(elems, e);
+                deepest = imax(deepest, child(p));
+            }
+            let close = expect(p, k_rparen(), "to close a tuple");
+            if close < 0 { return 0 - 1; }
+            if two_or_more(p, ints_len(elems), join(t, span, close)) == false { return 0 - 1; }
+            if built(p, deepest + 1) == false { return 0 - 1; }
+            let f = fs();
+            fa(f, "elems", mk_list(t, elems));
+            fa(f, "span", join(t, span, close));
+            return mk_struct(t, "Tuple", f);
+        }
+        if expect(p, k_rparen(), "to close the group") < 0 { return 0 - 1; }
+        return inner;
+    }
+    if k == k_lbrace() {
+        let b = block(p);
+        if b < 0 { return 0 - 1; }
+        if built(p, child(p) + 1) == false { return 0 - 1; }
+        return block_expr(t, b);
+    }
+    if k == k_ident() { return ident_primary(p, peek_text(p), span); }
+    if k == k_fn() { return closure(p); }
+    if k == k_match() {
+        advance(p);
+        return match_expr(p, span);
+    }
+    if k == k_struct() || k == k_enum() {
+        let mut word = "enum";
+        let mut what = "An enum";
+        if k == k_struct() { word = "struct"; what = "A record"; }
+        advance(p);
+        report(p, "N0100", span, str_concat(lower_ascii(what), " can only be declared at the top level"), "",
+                str_concat(str_concat(str_concat("move the `", word), "` out of the function. "), str_concat(what, " is a module-level declaration, like a function")));
+        return 0 - 1;
+    }
+    if k == k_break() || k == k_continue() {
+        let mut word = "continue";
+        if k == k_break() { word = "break"; }
+        advance(p);
+        report(p, "N0314", span, str_concat(ticked(word), " has no value, so it cannot be used as one"), "",
+                "`break` and `continue` are statements. Write `if c { break; }` rather than using it where a value is expected");
+        return 0 - 1;
+    }
+    report(p, "N0100", span, found_msg(p, "expected an expression", pos(p)), "", "");
+    0 - 1
+}
+
+fn if_let(p: Px, span: Int) -> Int {
+    let t = p.t;
+    advance(p);
+    advance(p);
+    let pattern = pattern(p);
+    if pattern < 0 { return 0 - 1; }
+    if expect(p, k_eq(), "between an `if let` pattern and its value") < 0 { return 0 - 1; }
+    let scrutinee = expr(p);
+    if scrutinee < 0 { return 0 - 1; }
+    let mut deepest = child(p);
+    let then_block = block(p);
+    if then_block < 0 { return 0 - 1; }
+    deepest = imax(deepest, child(p));
+    let ts = sx_field(t, then_block, "span");
+    let mut end = ts;
+    let mut otherwise = 0 - 1;
+    if eat(p, k_else()) {
+        otherwise = else_branch(p);
+        if otherwise < 0 { return 0 - 1; }
+        deepest = imax(deepest, child(p));
+        end = sx_field(t, otherwise, "span");
+    }
+    if built(p, deepest + 1) == false { return 0 - 1; }
+    if otherwise < 0 { otherwise = block_node(t, empty_list(t), sx_none(t), point(t, sx_e(t, ts))); }
+    let os = sx_field(t, otherwise, "span");
+    let wild = wildcard(t, point(t, sx_s(t, os)));
+    let arm1 = arm_node(t, pattern, sx_none(t), block_expr(t, then_block), join(t, pattern_span(t, pattern), ts));
+    let arm2 = arm_node(t, wild, sx_none(t), block_expr(t, otherwise), os);
+    match_node(t, scrutinee, two(arm1, arm2), "IfLet", join(t, span, end))
+}
+
+// --- interpolation (R1a, L4) ----------------------------------------------------------------
+
+// `lex_esc` undone: `\xHH` back to its byte.
+fn unesc(s: Str) -> Str {
+    let out = strs_new();
+    let n = str_len(s);
+    let mut from = 0;
+    let mut i = 0;
+    while i < n {
+        if str_byte(s, i) == 92 && i + 3 < n {
+            strs_push(out, str_slice(s, from, i));
+            strs_push(out, str_from_byte(hexv(str_byte(s, i + 2)) * 16 + hexv(str_byte(s, i + 3))));
+            i = i + 4;
+            from = i;
+            continue;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, n));
+    str_join(out, "")
+}
+
+fn hexv(b: Int) -> Int {
+    if b >= 48 && b <= 57 { return b - 48; }
+    if b >= 97 && b <= 102 { return b - 87; }
+    if b >= 65 && b <= 70 { return b - 55; }
+    0
+}
+
+// `s` split at every `sep` byte.
+fn split(s: Str, sep: Int) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == sep {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, str_len(s)));
+    out
+}
+
+fn to_int(s: Str) -> Int {
+    let mut v = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        v = v * 10 + (str_byte(s, i) - 48);
+        i = i + 1;
+    }
+    v
+}
+
+fn interpolation(p: Px, span: Int) -> Int {
+    let t = p.t;
+    let i = advance(p);
+    let text = tat(p, i);
+    let parts = ints_new();
+    let mut deepest = 0;
+    if str_len(text) > 0 {
+        let pieces = split(text, 124);
+        let mut j = 0;
+        while j < strs_len(pieces) {
+            let piece = strs_get(pieces, j);
+            if str_byte(piece, 0) == 84 {
+                ints_push(parts, mk_tuple(t, "Text", one(sx_str(t, unesc(str_slice(piece, 2, str_len(piece)))))));
+            } else {
+                // `H:at:align:width:precision:start:end:text`, the text last and possibly holding `:`.
+                let cuts = ints_new();
+                let mut q = 0;
+                while q < str_len(piece) && ints_len(cuts) < 7 {
+                    if str_byte(piece, q) == 58 { ints_push(cuts, q); }
+                    q = q + 1;
+                }
+                let fld = strs_new();
+                let mut c = 0;
+                while c < 6 {
+                    strs_push(fld, str_slice(piece, ints_get(cuts, c) + 1, ints_get(cuts, c + 1)));
+                    c = c + 1;
+                }
+                let htext = unesc(str_slice(piece, ints_get(cuts, 6) + 1, str_len(piece)));
+                let from = to_int(strs_get(fld, 0));
+                let braces = sx_span(t, to_int(strs_get(fld, 4)), to_int(strs_get(fld, 5)));
+                let e = hole(p, htext, from, braces);
+                if e >= 0 {
+                    deepest = imax(deepest, g(p, s_r1()));
+                    ints_push(parts, hole_part(t, e, spec_node(t, strs_get(fld, 1), strs_get(fld, 2), strs_get(fld, 3)), braces));
+                }
+            }
+            j = j + 1;
+        }
+    }
+    if built(p, deepest + 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "parts", mk_list(t, parts));
+    fa(f, "span", span);
+    mk_struct(t, "Interp", f)
+}
+
+// A hole's text, parsed as the tail of a function of its own and moved to where it is written;
+// its depth bound in r1. One that is not one expression is one error, at its braces.
+fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
+    let t = p.t;
+    let prefix = "fn hole() -> Int { ";
+    let wrapped = str_concat(str_concat(prefix, text), "\n}\n");
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    let ec = strs_new();
+    let es = ints_new();
+    let ee = ints_new();
+    let em = strs_new();
+    let eh = strs_new();
+    lex_all(wrapped, kinds, starts, ends, texts, ec, es, ee, em, eh);
+    let mark = ints_len(t.kind);
+    let sub = sx_parser(kinds, starts, ends, texts, wrapped, t);
+    let pr = new_prog();
+    sx_parse_items(sub, pr);
+    let mut tail = 0 - 1;
+    if strs_len(ec) == 0 && strs_len(sub.dc) == 0 && ints_len(pr.functions) == 1 {
+        let body = sx_field(t, ints_get(pr.functions, 0), "body");
+        if sx_is_some(t, body) {
+            let b = sx_unwrap(t, body);
+            let tl = sx_field(t, b, "tail");
+            if sx_count(t, sx_field(t, b, "statements")) == 0 && sx_is_some(t, tl) { tail = sx_unwrap(t, tl); }
+        }
+    }
+    if tail < 0 {
+        report(p, "N0006", braces, "this hole is not one expression", "", "a hole holds one expression: `{count}`, `{a + b}`, `{name.show()}`");
+        return 0 - 1;
+    }
+    let by = from - str_len(prefix);
+    let mut n = mark;
+    while n < ints_len(t.kind) {
+        if ints_get(t.kind, n) == tk_span() {
+            let mut s = ints_get(t.start, n) + by;
+            let mut e = ints_get(t.end, n) + by;
+            if s < 0 { s = 0; }
+            if e < 0 { e = 0; }
+            ints_set(t.start, n, s);
+            ints_set(t.end, n, e);
+        }
+        n = n + 1;
+    }
+    let mut nests = 0;
+    let mut i = 0;
+    while i < str_len(text) {
+        let b = str_byte(text, i);
+        if b == 40 || b == 91 || b == 123 || b == 46 || b == 43 || b == 45 || b == 42 || b == 47 || b == 37 || b == 60 || b == 62
+                || b == 61 || b == 33 || b == 38 || b == 124 || b == 94 || b == 126 || b == 63 {
+            nests = nests + 1;
+        }
+        i = i + 1;
+    }
+    sv(p, s_r1(), nests + 2);
+    tail
+}
+
+// --- the whole file ----------------------------------------------------------------------------
+
+// Lex and parse `src`: the `Program` node, with every diagnostic — the lexer's first, then the
+// parser's — in the given arrays (code, start, end, message).
+pub fn sx_parse_source(src: Str, t: Tree, dc: Strs, ds: Ints, de: Ints, dm: Strs) -> Int {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    let eh = strs_new();
+    lex_all(src, kinds, starts, ends, texts, dc, ds, de, dm, eh);
+    let p = sx_parser(kinds, starts, ends, texts, src, t);
+    let pr = new_prog();
+    sx_parse_items(p, pr);
+    let mut i = 0;
+    while i < strs_len(p.dc) {
+        strs_push(dc, strs_get(p.dc, i));
+        ints_push(ds, ints_get(p.ds, i));
+        ints_push(de, ints_get(p.de, i));
+        strs_push(dm, strs_get(p.dm, i));
+        i = i + 1;
+    }
+    sx_program(t, pr)
+}

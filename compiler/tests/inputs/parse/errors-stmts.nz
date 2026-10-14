@@ -1,0 +1,42 @@
+fn a() -> Int {
+    let x = ;
+    let y = 1;
+    return;
+}
+fn b() -> Int {
+    let 1 = 2;
+    x 1;
+    struct S {}
+    0
+}
+fn c() -> Int {
+    let v = break;
+    for x { }
+    for (a, b) of xs { }
+    v.
+    1
+}
+fn d() -> Int {
+    f(1, , 2);
+    g(a: );
+    0
+}
+fn e() -> Int {
+    let x = 99999999999999999999999999999999999999999;
+    let y = -99999999999999999999999999999999999999999;
+    let z = (1,);
+    let w = (1, 2, 3, 4, 5, 6, 7, 8, 9);
+    let q = f[Int];
+    let r = x.m[Int](1);
+    0
+}
+fn f() -> Int {
+    v[g(1)] += 1;
+    let s = f"{1 +}";
+    let t = f"{a; b}";
+    0
+}
+fn g() -> Int {
+    if x { 1 } else { 2
+}
+fn h() -> Int { 0 }
