@@ -1,0 +1,114 @@
+// The validator held to account: each mutant breaks one MIR invariant in one function of a lowered
+// program, and the validator must report it. A mutant it accepts is a validator defect.
+
+use "mir.nz"
+use "types.nz"
+use "verify.nz"
+
+/// The kinds of breakage, by number: a drop removed (a leak), a failure edge removed, a jump to a
+/// block that does not exist, a return of the wrong local, and a move of a parameter.
+fn kinds() -> Int { 5 }
+
+fn kind_name(k: Int) -> Str {
+    if k == 0 { "a drop removed" } else if k == 1 { "a failure edge removed" } else if k == 2 { "a jump past the last block" } else if k == 3 { "a return of a local of another type" } else { "a parameter moved" }
+}
+
+/// Apply mutant `kind` to the first place it fits in `f`; whether it found one. `undo` receives the
+/// block index and the original block, to restore.
+fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
+    for bi in 0..vec_len(f.blocks) {
+        let b = vec_get(f.blocks, bi)
+        // A drop in a failure block may release what no failing path owns: removing it is no fault.
+        if (kind == 0 && b.origin == origin_source() && !exits(b)) || kind == 1 || kind == 4 {
+            for si in 0..vec_len(b.stmts) {
+                let s = vec_get(b.stmts, si)
+                let replacement = mutate_stmt(f, s, kind)
+                if vec_len(replacement) == 1 || (kind == 0 && is_drop(s)) {
+                    let stmts: Vec[Stmt] = vec_new()
+                    for j in 0..vec_len(b.stmts) {
+                        if j != si { vec_push(stmts, vec_get(b.stmts, j)) } else if vec_len(replacement) == 1 { vec_push(stmts, vec_get(replacement, 0)) }
+                    }
+                    vec_push(undo, b)
+                    ints_push(at, bi)
+                    vec_set(f.blocks, bi, Block(stmts: stmts, term: b.term, origin: b.origin))
+                    return true
+                }
+            }
+        } else if vec_len(b.term) == 1 {
+            let t = vec_get(b.term, 0)
+            let nt: Vec[Term] = vec_new()
+            match t {
+                Term.Goto(b: _) => { if kind == 2 { vec_push(nt, Term.Goto(b: vec_len(f.blocks))) } },
+                Term.Return(l: l) => {
+                    if kind == 3 {
+                        for x in 0..vec_len(f.locals) {
+                            if vec_len(nt) == 0 && vec_get(f.locals, x).ty != f.ret && vec_get(f.locals, x).ty != "Tasks" { vec_push(nt, Term.Return(l: x)) }
+                        }
+                    }
+                },
+                _ => {},
+            }
+            if vec_len(nt) == 1 {
+                vec_push(undo, b)
+                ints_push(at, bi)
+                vec_set(f.blocks, bi, Block(stmts: b.stmts, term: nt, origin: b.origin))
+                return true
+            }
+        }
+    }
+    false
+}
+
+/// Whether a block ends the process: what it still owns is never released, by design.
+fn exits(b: Block) -> Bool {
+    if vec_len(b.term) == 0 { return false }
+    match vec_get(b.term, 0) {
+        Term.Exit(o: _) => true,
+        _ => false,
+    }
+}
+
+fn is_drop(s: Stmt) -> Bool {
+    match s {
+        Stmt.Drop(l: _) => true,
+        _ => false,
+    }
+}
+
+/// The statement mutant `kind` makes of `s`: none, or one.
+fn mutate_stmt(f: MirFn, s: Stmt, kind: Int) -> Vec[Stmt] {
+    let out: Vec[Stmt] = vec_new()
+    match s {
+        Stmt.Assign(dst: d, value: v, unwind: u) => {
+            if kind == 1 && u >= 0 { vec_push(out, Stmt.Assign(dst: d, value: v, unwind: 0 - 1)) }
+            if kind == 4 && f.params > 0 && vec_get(f.locals, 0).ty == vec_get(f.locals, d).ty {
+                vec_push(out, Stmt.Assign(dst: d, value: Rvalue.Move(l: 0), unwind: 0 - 1))
+            }
+        },
+        _ => {},
+    }
+    out
+}
+
+/// Run every mutant over every function of `p`; one line per mutant the validator missed, then a
+/// summary: how many were made and how many caught.
+pub fn mutants(p: MirProgram, tt: TypeTable) -> Strs ! {} {
+    let out = strs_new()
+    let mut made = 0
+    let mut caught = 0
+    for f in p.fns {
+        if f.foreign == "" {
+            for k in 0..kinds() {
+                let undo: Vec[Block] = vec_new()
+                let at = ints_new()
+                if apply(f, k, undo, at) {
+                    made += 1
+                    if strs_len(verify_fn(p, tt, f)) > 0 { caught += 1 } else { strs_push(out, "missed: " + kind_name(k) + " in `" + f.identity + "`") }
+                    vec_set(f.blocks, ints_get(at, 0), vec_get(undo, 0))
+                }
+            }
+        }
+    }
+    strs_push(out, int_to_str(made) + " mutants, " + int_to_str(caught) + " caught")
+    out
+}
