@@ -318,6 +318,14 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *The interpreter's stack bounds its depth* (4.9). Each evaluation thread —
+the main one and every task's — records where its stack ends (`eval::mark_stack`), and a call
+made past that, less the margin the shape-recursive passes need, is `N0403` ("recursed deeper than
+the interpreter's stack holds"), so a call nested in an expression, several evaluator frames on a
+debug build, reports instead of crashing below `--max-depth`. Evidence:
+`crates/nazm-cli/tests/stack_floor.rs` — a million-deep nested recursion at the default and at
+`--max-depth 15000`, `N0403` and never a signal. One mutant.
+
 **R1 (2026-10-14)** · *Word frequency at 195.5 ms* (5b.9; `docs/performance.md`). The idiomatic
 5b.10 program went from 531 to 195.5 ms (Apple M1 Pro, hyperfine median of 20): `@std/text`'s
 `text_split` compares a slice only where the first byte matches and `text_lines` is one pass;

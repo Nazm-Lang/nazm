@@ -29,12 +29,14 @@ each new construct by name until R2 carries it.
 - [x] 4.2 L10 closures in generic functions; `let mut` capture (shared, see design.md)
 - [x] 4.3 L11 impls for generic types; default methods (L11a default methods, L11b impls of generic types, 2026-10-13)
 - [x] 4.4 L12 `defer`
-- [ ] 4.9 Open finding (2026-10-13, found measuring L13b's stack): on a **debug** build a call
+- [x] 4.9 Open finding (2026-10-13, found measuring L13b's stack): on a **debug** build a call
   nested in an expression in the recursive position (`1 + f(g(down(n - 1)))`) costs several
   evaluator frames per Nazm call, so it overflows the host stack at about 361 calls, below the
   default `--max-depth` of 512, where it should report `N0403`. Present before L13b (`ee7ce87`
   measures the same); a release build carries 15,000. The budget must bound the frames per Nazm
-  call, or the evaluator must not recurse per nested call. Fix before R1 closes.
+  call, or the evaluator must not recurse per nested call. Fix before R1 closes. — Fixed 2026-10-14:
+  each evaluation thread records where its stack ends and a call past that, less the margin the
+  shape-recursive passes need, is `N0403`, whatever a call costs (`stack_floor.rs`)
 - [x] 4.5 L13 checked arithmetic, widening multiply, `Int128`/`UInt128` — checked arithmetic (L13a), `Int128`/`UInt128` and `widening_mul` (L13b), 2026-10-13
 - [x] 4.6 L14 stack size (`nazm build --stack-size`; the interpreter keeps `--max-depth`)
 - [x] 4.8 L15 a warning severity, `--deny-warnings`; L3's covering warning on `_` (`nazm check`, `nazm build`, the service; `nazm run`/`test` and a `@deprecated` use remain)
@@ -93,9 +95,9 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 
 ## 6. R1d — the platform
 
-- [ ] 6.1 D5 `--heap-limit`
-- [ ] 6.2 D4 built-ins: `os_spawn_in`, `os_stdout`/`os_stderr`, `os_lock`/`os_unlock`
-- [ ] 6.3 P1 process control; P2 filesystem; P3 streaming standard input
+- [x] 6.1 D5 `--heap-limit` (0f45abe5)
+- [x] 6.2 D4 built-ins: `os_spawn_in`, `os_stdout`/`os_stderr`, `os_lock`/`os_unlock` (c92eb117)
+- [x] 6.3 P1 process control; P2 filesystem; P3 streaming standard input (0f45abe5, c92eb117)
 
 ## 7. R1e — libraries in Nazm
 
