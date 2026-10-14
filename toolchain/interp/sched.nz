@@ -109,7 +109,7 @@ fn join(tasks: Vec[Vm], state: Ints, t: Int) -> Bool {
 
 /// Run `main`'s task and every task it starts: 0 when `main` returned (its value in `main.res`),
 /// 1 when it failed (the failure in `main`), 2 when every task waits and none can proceed.
-pub fn run_program(p: Prog, main: Vm, out: OutCap, io: IoCap, time: TimeCap) -> Int {
+pub fn run_program(p: Prog, main: Vm, caps: Caps) -> Int {
     let tasks = vec_new[Vm]()
     vec_push(tasks, main)
     let state: Ints = [T_RUN]
@@ -126,7 +126,7 @@ pub fn run_program(p: Prog, main: Vm, out: OutCap, io: IoCap, time: TimeCap) -> 
         let mut progressed = false
         let mut stay = false
         if s == T_RUN || s == T_WAIT {
-            let x = exec(p, vm, out, io, time)
+            let x = exec(p, vm, caps)
             progressed = ints_get(vm.st, ST_STEPS) > 0
             if x == X_DONE {
                 ended(vm, state, t, T_DONE)
@@ -173,6 +173,7 @@ pub fn run_program(p: Prog, main: Vm, out: OutCap, io: IoCap, time: TimeCap) -> 
                 if ints_get(state, k) == T_WAIT && d > 0 && (earliest < 0 || d < earliest) { earliest = d }
             }
             if earliest < 0 { return 2 }
+            let time = caps.time
             let wait = earliest - time_now_ms()
             if wait > 0 { let z = time_sleep_ms(wait) }
             idle = 0

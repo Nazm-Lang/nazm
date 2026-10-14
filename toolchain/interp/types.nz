@@ -26,6 +26,20 @@ pub enum V {
     // A `Bytes`: a view of a buffer, by reference (Gate 2), and the heap object that counts the
     // buffer.
     Byt(b: Bytes, obj: Int),
+    // An `OsHandle` (Gate 2): the host's, which this interpreter's own runtime keeps.
+    Osh(h: OsHandle),
+    // An `Atomic` (Gate 3): one cell, by reference.
+    Atm(a: Atomic),
+}
+
+/// The authority the interpreter holds and exercises for the program it runs (`design.md`, D10).
+pub struct Caps {
+    out: OutCap,
+    io: IoCap,
+    time: TimeCap,
+    net: NetCap,
+    proc: ProcessCap,
+    rnd: RandomCap,
 }
 
 /// The loaded program: its code, as parallel arrays, and its tables.

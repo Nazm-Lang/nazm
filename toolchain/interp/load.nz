@@ -37,6 +37,8 @@ struct L {
     brk: Ints,
     brkloop: Ints,
     errs: Strs,
+    // A static `Atomic`'s name to its constant's index.
+    cells: HashMap[Str, Int],
 }
 
 // --- JSON access --------------------------------------------------------------------------------
@@ -379,15 +381,20 @@ fn assign(l: L, s: Int, at: (Int, Int, Int)) {
         return
     }
     // The path: a field (0, field) or an index (1, length) per step, outermost first.
-    let start = ints_len(l.p.aux)
-    aux(l, len(l, path))
+    // The indexes first, outermost first; then the path, after any run their code recorded.
     let mut nidx = 0
     for i in 0..len(l, path) {
-        let step = nth(l, path, i)
-        let index = g(l, step, "index")
+        let index = g(l, nth(l, path, i), "index")
         if index >= 0 {
             expr(l, index, at)
             nidx += 1
+        }
+    }
+    let start = ints_len(l.p.aux)
+    aux(l, len(l, path))
+    for i in 0..len(l, path) {
+        let step = nth(l, path, i)
+        if g(l, step, "index") >= 0 {
             aux(l, 1)
             aux(l, gi(l, step, "len"))
         } else {
@@ -475,15 +482,18 @@ fn law(s: Str) -> Int {
     if s == "int" { 0 } else if s == "bool" { 1 } else if s == "bytes" { 2 } else if s == "structural" { 3 } else if s == "parametric" { 4 } else { 5 }
 }
 
-/// Initialisers: each value pushed in the order written, its field recorded in `aux`.
-fn inits(l: L, fields: Int, at: (Int, Int, Int)) {
+/// Initialisers: each value pushed in the order written, then their fields recorded in `aux` —
+/// after the values, whose own code may record runs there too. Returns where the fields start.
+fn inits(l: L, fields: Int, at: (Int, Int, Int)) -> Int {
     for i in 0..len(l, fields) {
         let f = nth(l, fields, i)
         expr(l, g(l, f, "value"), at)
     }
+    let start = ints_len(l.p.aux)
     for i in 0..len(l, fields) {
         aux(l, gi(l, nth(l, fields, i), "field"))
     }
+    start
 }
 
 /// One expression, leaving its value pushed.
@@ -554,8 +564,7 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
             let f = nth(l, fields, i)
             note_field(l.p.shapes, ty, gi(l, f, "field"), gs(l, f, "name"))
         }
-        let start = ints_len(l.p.aux)
-        inits(l, fields, at)
+        let start = inits(l, fields, at)
         let o = emit(l, OP_RECORD, name(l, ty), len(l, fields), start, at)
     } else if op == "variant" {
         let fields = g(l, e, "fields")
@@ -665,6 +674,18 @@ fn constant(l: L, c: Int) -> V {
         V.Str(s: decode(gs(l, c, "value")), obj: 0, start: 0)
     } else if kind_of_type(ty) > 0 {
         parse_const(kind_of_type(ty), gs(l, c, "value"))
+    } else if ty == "Atomic" {
+        // A static `Atomic`'s one cell (Gate 3), by its name: the printed Core IR names the static
+        // but not its module or its initial value, so every cell starts at 0 (`design.md`,
+        // *Requests*).
+        let key = gs(l, c, "value")
+        match hashmap_get(l.cells, key) {
+            Some(i) => vec_get(l.p.consts, i),
+            None => {
+                hashmap_set(l.cells, key, vec_len(l.p.consts))
+                V.Atm(a: atomic_new(0))
+            },
+        }
     } else {
         defect(l, f"a constant of type `{ty}`, which this interpreter does not load yet")
         V.Int(v: 0)
@@ -733,7 +754,8 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     let l = L(doc: doc, p: p, fmap: p.fmap, imap: hashmap_new[Str, Int](),
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
-            lhead: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new())
+            lhead: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
+            cells: hashmap_new[Str, Int]())
     let root = json_root(doc)
     if gs(l, root, "schema") != "nazm.core-ir/2" {
         return Err(f"the Core IR is `{gs(l, root, "schema")}`, and this interpreter reads `nazm.core-ir/2`")

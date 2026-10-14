@@ -87,7 +87,7 @@ fn show(v: V) -> Str {
     }
 }
 
-fn main(out: OutCap, io: IoCap, time: TimeCap) -> Int {
+fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> Int {
     let mut max_iterations = 10000000
     let mut max_depth = 512
     let positional = strs_new()
@@ -134,7 +134,8 @@ fn main(out: OutCap, io: IoCap, time: TimeCap) -> Int {
         return 2
     }
     let vm = vm_new(heap_new(), max_iterations, max_depth, program_args)
-    let ran = run_program(p, vm, out, io, time)
+    let caps = Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd)
+    let ran = run_program(p, vm, caps)
     if ran == 2 {
         // The Rust interpreter's threads would wait for ever here; this one says so (`design.md`,
         // open question 1).

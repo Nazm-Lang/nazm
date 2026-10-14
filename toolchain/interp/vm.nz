@@ -130,7 +130,7 @@ pub fn start_main(p: Prog, vm: Vm) {
 /// Run a task until it returns from its first frame, fails, waits, gives way, or reaches a `spawn`
 /// or the end of a `scope` - which the scheduler carries out (`sched.nz`). The task resumes where
 /// it stopped.
-pub fn exec(p: Prog, vm: Vm, out: OutCap, io: IoCap, time: TimeCap) -> Int {
+pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
     let h = vm.heap
     let ops = vm.ops
     let slots = vm.slots
@@ -252,7 +252,7 @@ pub fn exec(p: Prog, vm: Vm, out: OutCap, io: IoCap, time: TimeCap) -> Int {
             }
         } else if op == OP_BUILTIN {
             let n = ints_get(p.b, pc)
-            let v = builtin(p, vm, pc, ints_get(pa, pc), n, out, io, time)
+            let v = builtin(p, vm, pc, ints_get(pa, pc), n, caps)
             if ints_get(vm.st, ST_BLOCKED) == 1 {
                 // Not yet: the task waits, and this instruction runs again when it resumes.
                 ints_set(vm.st, ST_BLOCKED, 0)
