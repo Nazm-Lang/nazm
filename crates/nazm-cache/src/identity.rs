@@ -359,7 +359,9 @@ use crate::digest::{self, Framed};
 /// pattern `let` ended by a line break or `}` from refused to accepted, and a line beginning with `(`
 /// or `[` stopped continuing the previous line's call or index (found writing R1's compatibility
 /// cases).
-pub const SEMANTIC_EPOCH: u32 = 75;
+/// `76` — R1.5, 2026-10-15. A result type written after `:` — `fn f(n: Int): Int`, `fn(Int): Int`,
+/// a closure's and a trait method's — moved from refused (a syntax error) to accepted (D1).
+pub const SEMANTIC_EPOCH: u32 = 76;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

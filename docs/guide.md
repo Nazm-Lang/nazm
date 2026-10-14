@@ -510,14 +510,15 @@ accepts.
 | `attribute_arg` | `STRING \| IDENT , [ "=" , STRING \| "(" , [ attribute_arg , { "," , attribute_arg } , [ "," ] ] , ")" ]` |
 | `constant` | `[ visibility ] , ( "const" \| "static" ) , IDENT , ":" , type , "=" , expression , ";"` |
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
-| `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" \| block )` |
+| `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , result , [ effect_set ] , ( ";" \| block )` |
 | `impl_item` | `"impl" , [ type_parameters ] , type , IDENT , type , "{" , { function } , "}"` |
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
 | `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
 | `qualifier` | `IDENT , "::"` |
-| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , { contract } , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , block` |
+| `result` | `( ":" \| "->" ) , type` |
 | `contract` | `( "requires" \| "ensures" ) , expression` |
-| `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";"` |
+| `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , result , "=" , STRING , ";"` |
 | `effect_set` | `"!" , "{" , [ effect_name , { "," , effect_name } ] , "}"` |
 | `effect_name` | `IDENT \| "spawn"` |
 | `type_parameters` | `"[" , type_parameter , { "," , type_parameter } , "]"` |
@@ -536,7 +537,7 @@ accepts.
 | `type` | `function_type \| array_type \| tuple_type \| [ qualifier ] , IDENT , [ type_arguments ]` |
 | `tuple_type` | `"(" , type , "," , type , { "," , type } , [ "," ] , ")"` |
 | `array_type` | `"[" , type , ";" , ( INTEGER \| IDENT ) , "]"` |
-| `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ]` |
+| `function_type` | `"fn" , "(" , [ type , { "," , type } ] , ")" , result , [ effect_set ]` |
 | `type_arguments` | `"[" , [ type , { "," , type } ] , "]"` |
 | `block` | `"{" , { statement } , [ expression ] , "}"` |
 | `statement` | `let_statement \| assignment \| while_statement \| for_statement \| let_else_statement \| return_statement \| break_statement \| continue_statement \| scope_statement \| defer_statement \| spawn_statement \| expression_statement` |
@@ -569,7 +570,7 @@ accepts.
 | `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
 | `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
-| `closure` | `"fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block` |
+| `closure` | `"fn" , "(" , [ parameters ] , ")" , result , [ effect_set ] , block` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
@@ -706,7 +707,7 @@ pub trait Show { fn show(self: Self) -> Str; fn shout(self: Self, n: Int) -> Str
 ### `trait_method`
 
 ```ebnf
-trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" | block ) ;
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , result , [ effect_set ] , ( ";" | block ) ;
 ```
 
 ```nazm
@@ -796,7 +797,7 @@ use "shapes.nz" as s; fn f(x: s::Shape) -> Int { match x { s::Shape.Dot() => 0, 
 ### `function`
 
 ```ebnf
-function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , { contract } , block ;
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , block ;
 ```
 
 ```nazm
@@ -813,6 +814,23 @@ pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) }
 
 ```nazm
 fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
+```
+
+```nazm
+fn add(a: Int, b: Int): Int { a + b } fn main(): Int { add(1, 2) }
+```
+
+### `result`
+
+```ebnf
+result = ( ":" | "->" ) , type ;
+```
+
+A result type is written after `:` (R1.5, D1), as a parameter's is; `->` is still read until
+1.0. A function that writes none returns nothing (R1, 5b.2).
+
+```nazm
+fn add(a: Int, b: Int): Int { a + b } fn main() -> Int { add(1, 2) }
 ```
 
 ### `contract`
@@ -834,7 +852,7 @@ fn half(n: Int) -> Int ! {} requires n >= 0 ensures result * 2 <= n { n / 2 } fn
 ### `foreign_function`
 
 ```ebnf
-foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , "=" , STRING , ";" ;
+foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , result , "=" , STRING , ";" ;
 ```
 
 A foreign function (N42): a C function this program calls, declared by its signature and
@@ -1162,7 +1180,7 @@ const N: Int = 3; fn f(xs: [UInt8; N]) -> Int { Int(xs[2]) } fn main() -> Int { 
 ### `function_type`
 
 ```ebnf
-function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ] ;
+function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , result , [ effect_set ] ;
 ```
 
 A function type (N50): its parameters' types, its result's, and the effects a call
@@ -1675,7 +1693,7 @@ fn main() -> Int { let a = [1, 2, 3]; let b = [0; 4]; a[2] + b[3] }
 ### `closure`
 
 ```ebnf
-closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
+closure = "fn" , "(" , [ parameters ] , ")" , result , [ effect_set ] , block ;
 ```
 
 A closure (N50): a function written where a value is, its parameters and result in

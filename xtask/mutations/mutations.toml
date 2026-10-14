@@ -8332,10 +8332,11 @@ Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines wit
 Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused.
 Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused.
 Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused.
-Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused."""
+Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused.
+Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 75;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 74;"
+find = "pub const SEMANTIC_EPOCH: u32 = 76;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 75;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19334,3 +19335,19 @@ file = "crates/nazm-codegen-clif/src/lib.rs"
 find = '''        b.set("enable_llvm_abi_extensions", "true")'''
 replace = '''        b.set("enable_llvm_abi_extensions", "false")'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::a_128_bit_value_crosses_a_call_in_a_cranelift_build_for_x86_64" }]
+
+[[mutation]]
+name = "r1-5-a-colon-begins-no-result-type"
+why = "a function whose result type is written after `:` is read as one with no result type"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        self.at(&TokenKind::Colon) || self.at(&TokenKind::Arrow)"
+replace = "        self.at(&TokenKind::Arrow)"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_after_a_colon_means_the_arrow_everywhere" }]
+
+[[mutation]]
+name = "r1-5-only-an-arrow-is-taken-before-a-result"
+why = "a function type's or a closure's `:` before its result is refused"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "        self.expect(&TokenKind::Colon, context)"
+replace = "        self.expect(&TokenKind::Arrow, context)"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_after_a_colon_means_the_arrow_everywhere" }]

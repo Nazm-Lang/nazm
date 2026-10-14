@@ -71,6 +71,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `blocks` | STABLE 1.0 | |
 | `line-breaks` | STABLE 1.0 | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; a 1.x addition, stable since R1 closed (0.10.0) |
 | `short-variants` | STABLE 1.0 | R1, 5b.14: an enum construction infers its type arguments; `Some`, `None`, `Ok`, `Err`; a variant without `()`; a 1.x addition, stable since R1 closed (0.10.0) |
+| `shorter-forms` | EXPERIMENTAL | R1.5's spellings (D1–D8 of its design); stable when R1.5 closes |
 | `named-methods` | STABLE 1.0 | R1, 5b.15: a method no trait gives is a function by name; `xs[i]` and `xs[i] = v` on a sequence; a 1.x addition, stable since R1 closed (0.10.0) |
 | `conveniences` | STABLE 1.0 | R1, 5b.16 and 5b.17: `let x: T`, inference from the wanted type, block comments, `loop`, `while let`, an impl without a trait; a 1.x addition, stable since R1 closed (0.10.0) |
 | `no-result` | STABLE 1.0 | R1, 5b.2: a function with no result type; a 1.x addition, stable since R1 closed (0.10.0) |
@@ -1604,6 +1605,16 @@ already had, and means exactly that.
 | `while let P = e { … }` | `while true { match e { P => { … }, _ => { break } } }`: `e` evaluated afresh each time |
 | `o?` on an `Option[T]`, in a function returning an `Option[U]` | `match o { Some(v) => v, None => return None }`: `T`, or `None` leaving the function; in a function returning anything else, `N0361` as a `Result`'s `?` there is |
 | `impl Point { fn area(self: Point) -> Int { … } }` | the function `point_area(self: Point) -> Int` — the type's name in lower case, then the method's — which `p.area()` reads by name (*Methods and indexes by name*); an impl without a trait has no other effect |
+
+### Shorter forms (R1.5)
+<!-- id: shorter-forms -->
+
+*R1.5 (`openspec/changes/r1-5-performance-and-dx`, *design.md*); EXPERIMENTAL until R1.5 closes.*
+Each is a spelling of something the language already had, and means exactly that.
+
+| Written | Means |
+| --- | --- |
+| `fn fib(n: Int): Int { … }` (D1) | `fn fib(n: Int) -> Int { … }`: a result type is written after `:`, as a parameter's is — in a function, a trait method, a function type (`fn(Int): Int`) and a function expression (`fn(n: Int): Int { … }`). `->` is still read and is removed at 1.0; the effect set follows the type either way, `fn read(io: IoCap): Str ! {io}` |
 
 ### Methods and indexes by name
 <!-- id: named-methods -->
