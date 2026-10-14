@@ -329,7 +329,8 @@ fn a_128_bit_constant_crosses_modules_and_the_cache() {
     .unwrap();
     let want = "340282366920938463463374607431768211455\n\
                 -170141183460469231731687303715884105728\n-5\n0\n";
-    // Twice: the second reads `lib.nz`'s interface back from the cache.
+    // Twice, then built. `nazm run` keeps no check cache; the interface's copy of each value is
+    // read back by `durable_identity::a_128_bit_constant_reads_back_from_its_interface_whole`.
     for _ in 0..2 {
         let r = nazm(d.path(), &["run", "main.nz"]);
         assert_eq!(r.stdout, want, "{r:?}");
