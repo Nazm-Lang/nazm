@@ -452,6 +452,7 @@ impl Checker<'_> {
             effect_param: false,
             preconditions: 0,
             pure: false,
+            no_result: false,
         };
         self.record_checked_call(at, span, args, &sig, None, false);
         fsig.ret
@@ -520,6 +521,7 @@ impl Checker<'_> {
             foreign: None,
             export: None,
             preconditions: 0,
+            no_result: false,
             closure: Some(nazm_sema::ClosureInfo {
                 enclosing,
                 at: span,

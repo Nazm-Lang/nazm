@@ -18,7 +18,7 @@
 
 use std::fmt::Write as _;
 
-use crate::{preamble, Needs};
+use crate::{escape, preamble, Needs, RESULT_STATUS, RESULT_VARIABLE};
 
 /// The module every import comes from.
 pub const WASI_MODULE: &str = "wasi_snapshot_preview1";
@@ -973,8 +973,24 @@ pub fn emit_entry(entry: &str, roots: usize) -> String {
          declare void @nz.report()\ndeclare ptr @malloc(i64)\ndeclare i64 @write(i32, ptr, i64)\n\
          declare i64 @nz.format_int(ptr, i64)\n\
          declare i32 @wasi.args_sizes_get(ptr, ptr) #0\ndeclare i32 @wasi.args_get(ptr, ptr) #1\n\
-         declare void @wasi.proc_exit(i32) #2\n"
+         declare void @wasi.proc_exit(i32) #2\n\
+         declare i32 @wasi.environ_sizes_get(ptr, ptr) #4\ndeclare i32 @wasi.environ_get(ptr, ptr) #5\n\
+         declare i32 @memcmp(ptr, ptr, i64)\n"
     );
+    // `main`'s result (R1, 5b.3): the exit status, unless the environment holds the result
+    // report's variable, looked for as `NAME=` at the start of an entry.
+    let wanted = format!("{RESULT_VARIABLE}=");
+    let _ = writeln!(
+        out,
+        "@.resultvar = private unnamed_addr constant [{} x i8] c\"{}\"\n\
+         @.resultmsg = private unnamed_addr constant [{} x i8] c\"{}\\0A\"",
+        wanted.len(),
+        escape(&wanted),
+        RESULT_STATUS.len() + 1,
+        escape(RESULT_STATUS)
+    );
+    let wanted_len = wanted.len();
+    let msg_len = RESULT_STATUS.len() + 1;
     let _ = write!(
         out,
         r"define void @_start() #3 {{
@@ -1004,6 +1020,37 @@ reported:
   call void @nz.report()
   unreachable
 finished:
+  %ecountp = alloca i32, align 4
+  %esizep = alloca i32, align 4
+  %ee = call i32 @wasi.environ_sizes_get(ptr %ecountp, ptr %esizep)
+  %ecount = load i32, ptr %ecountp
+  %esize = load i32, ptr %esizep
+  %ecount64 = zext i32 %ecount to i64
+  %eslots = add i64 %ecount64, 1
+  %evbytes = shl i64 %eslots, 2
+  %environ = call ptr @malloc(i64 %evbytes)
+  %esize64 = zext i32 %esize to i64
+  %ebytes = add i64 %esize64, 1
+  %ebuf = call ptr @malloc(i64 %ebytes)
+  %ee2 = call i32 @wasi.environ_get(ptr %environ, ptr %ebuf)
+  %ei = alloca i64, align 8
+  store i64 0, ptr %ei
+  br label %scan
+scan:
+  %i = load i64, ptr %ei
+  %more = icmp ult i64 %i, %ecount64
+  br i1 %more, label %entry_check, label %status
+entry_check:
+  %slot = getelementptr i32, ptr %environ, i64 %i
+  %addr = load i32, ptr %slot
+  %eaddr = zext i32 %addr to i64
+  %entryp = inttoptr i64 %eaddr to ptr
+  %cmp = call i32 @memcmp(ptr %entryp, ptr @.resultvar, i64 {wanted_len})
+  %hit = icmp eq i32 %cmp, 0
+  %next = add i64 %i, 1
+  store i64 %next, ptr %ei
+  br i1 %hit, label %print, label %scan
+print:
   %digits = alloca [24 x i8], align 1
   %len = call i64 @nz.format_int(ptr %digits, i64 %result)
   %nl = getelementptr i8, ptr %digits, i64 %len
@@ -1011,6 +1058,17 @@ finished:
   %all = add i64 %len, 1
   %w = call i64 @write(i32 1, ptr %digits, i64 %all)
   call void @wasi.proc_exit(i32 0)
+  unreachable
+status:
+  %inside = icmp ule i64 %result, 255
+  br i1 %inside, label %exit_status, label %bad_status
+exit_status:
+  %code = trunc i64 %result to i32
+  call void @wasi.proc_exit(i32 %code)
+  unreachable
+bad_status:
+  %bw = call i64 @write(i32 2, ptr @.resultmsg, i64 {msg_len})
+  call void @wasi.proc_exit(i32 2)
   unreachable
 }}
 "
@@ -1020,7 +1078,9 @@ finished:
         "attributes #0 = {{ \"wasm-import-module\"=\"{WASI_MODULE}\" \"wasm-import-name\"=\"args_sizes_get\" }}\n\
          attributes #1 = {{ \"wasm-import-module\"=\"{WASI_MODULE}\" \"wasm-import-name\"=\"args_get\" }}\n\
          attributes #2 = {{ \"wasm-import-module\"=\"{WASI_MODULE}\" \"wasm-import-name\"=\"proc_exit\" }}\n\
-         attributes #3 = {{ \"wasm-export-name\"=\"_start\" }}"
+         attributes #3 = {{ \"wasm-export-name\"=\"_start\" }}\n\
+         attributes #4 = {{ \"wasm-import-module\"=\"{WASI_MODULE}\" \"wasm-import-name\"=\"environ_sizes_get\" }}\n\
+         attributes #5 = {{ \"wasm-import-module\"=\"{WASI_MODULE}\" \"wasm-import-name\"=\"environ_get\" }}"
     );
     out
 }

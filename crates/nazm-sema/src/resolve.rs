@@ -169,6 +169,9 @@ pub struct FnDef {
     pub export: Option<String>,
     /// How many `requires` clauses it states (N87).
     pub preconditions: u32,
+    /// Whether it was written with no result type (R1, 5b.2): it returns nothing, and a call
+    /// of it is a statement.
+    pub no_result: bool,
     /// For a closure (N50): the function whose body wrote it, where, and what it captured.
     /// A closure has no declaration of its own — `decl` is its enclosing function's — and
     /// no name a program can write.

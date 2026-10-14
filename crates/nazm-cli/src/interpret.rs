@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use nazm_core::Outcome;
 use nazm_service::root;
 
-use crate::{emit, exit, report_ok};
+use crate::{emit, exit};
 
 /// `nazm run`: check the program and, when it passes, evaluate it.
 pub(crate) fn run(
@@ -86,7 +86,7 @@ pub(crate) fn run(
     }
 
     match outcome {
-        Outcome::Value(v) => report_ok(&v.to_string(), None),
+        Outcome::Value(v) => crate::end_with_result(&v),
         Outcome::CheckFailed(ds) => {
             emit(&ds, map, json);
             eprintln!(

@@ -96,6 +96,8 @@ pub struct Export {
     pub foreign: Option<String>,
     /// How many `requires` clauses it states (N87): each call of it is an obligation.
     pub preconditions: u32,
+    /// Whether it returns nothing (R1, 5b.2): a call of it is a statement in the importer too.
+    pub no_result: bool,
     /// For a re-export (N103), the module that defines it and the name it has there — the
     /// identity a persisted interface writes. `None` for this module's own definition.
     pub origin: Option<(ModuleId, String)>,

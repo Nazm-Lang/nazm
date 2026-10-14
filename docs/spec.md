@@ -70,6 +70,8 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `blocks` | STABLE 1.0 | |
 | `line-breaks` | EXPERIMENTAL | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; EXPERIMENTAL until R1 closes |
 | `short-variants` | EXPERIMENTAL | R1, 5b.14: an enum construction infers its type arguments; `Some`, `None`, `Ok`, `Err`; a variant without `()`; EXPERIMENTAL until R1 closes |
+| `no-result` | EXPERIMENTAL | R1, 5b.2: a function with no result type; EXPERIMENTAL until R1 closes |
+| `main-ends` | EXPERIMENTAL | R1, 5b.1 and 5b.3: `main` holds an `OutCap` unwritten; its result is the exit status; EXPERIMENTAL until R1 closes |
 | `break-continue` | STABLE 1.0 | |
 | `return` | STABLE 1.0 | |
 | `unreachable-code` | STABLE 1.0 | |
@@ -1712,8 +1714,27 @@ fn classify(n: Int) -> Str {
 its value must match the declared return type. A function whose every path returns needs no
 tail expression.
 
-**`return;` with no value is not supported.** It would need a unit type to mean anything,
-and that is a decision this language has not made. Refused by name.
+**`return;` with no value is not supported** in a function with a result type. It would need
+a unit type to mean anything, and that is a decision this language has not made. Refused by
+name. In a function written with no result type it returns (below).
+
+#### A function with no result type
+<!-- id: no-result -->
+
+*R1, 5b.2; EXPERIMENTAL until R1 closes.*
+
+```nazm
+fn greet(out: OutCap, who: Str) {
+    println(f"hello, {who}")
+}
+```
+
+A function written without `-> T` returns nothing. Its body's last value, if it has one, is
+discarded as a statement's is; `return` alone leaves it; and a call of it is a statement: using
+one where a value is wanted is `N0300`, in its own module and in an importer's, which reads it
+from the interface. There is still no unit type — the function is `Int` underneath, returning
+`0` — so nothing below the checker is new, and a function value of it is an ordinary `fn() -> Int`.
+A foreign declaration and a trait method still write their result type.
 
 A function's value is still its final expression; `return` is for the paths that leave
 early, which is the case it earns its keep on.
@@ -2609,6 +2630,31 @@ compilation were a duplicate definition, so imported files had to rename theirs.
 
 `main` need not be `pub`. Being the entry point is not the same as being importable, and
 requiring the keyword would suggest the runtime resolves it by name from outside.
+
+#### What `main` holds, and how it ends
+<!-- id: main-ends -->
+
+*R1, 5b.1 and 5b.3; EXPERIMENTAL until R1 closes.*
+
+**Printing needs nothing written (option C).** A function named `main` that holds neither an
+`OutCap` nor an `IoCap` holds an `OutCap` named `out`, as if `out: OutCap` were written after
+its parameters: it may print, and pass `out` to a function that prints. Every other authority —
+`IoCap`, `NetCap`, `ProcessCap`, `SpawnCap`, `RandomCap`, `TimeCap`, `ForeignCap` — is still
+written, so what a program can do beyond writing to its own output is in `main`'s signature.
+
+```nazm
+fn main() {
+    println("Hello, world!")
+}
+```
+
+**`main`'s result is the exit status.** It is written to no stream: a program ends with status
+`main`'s `Int`, which must be `0..=255` — one outside is `N0416`'s failure, *`main`'s result is an
+exit status, and this one is outside 0 to 255*, ending with status 2, as `exit_with` of one is. A
+`main` with no result type ends with `0`. Until R1 the result was printed in decimal on standard
+output and the status was `0`; set `NAZM_RESULT_REPORT` (to anything) and a program still does
+that — a report, as `NAZM_MEMORY_REPORT` is, which the tests read results by. On a board, which
+has no exit status, the result is written as before.
 
 ### Packages — `nazm.toml`, `use "NAME:path"` and `nazm.lock`
 <!-- id: packages -->

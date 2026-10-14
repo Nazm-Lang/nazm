@@ -7,7 +7,8 @@ use std::fmt::Write as _;
 use super::core::runtime_declarations;
 use super::os::declarations;
 use crate::{
-    escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, SCHED_FORMAT, SCHED_VARIABLE,
+    escape, preamble, Needs, MEMORY_FORMAT, MEMORY_VARIABLE, RESULT_STATUS, RESULT_VARIABLE,
+    SCHED_FORMAT, SCHED_VARIABLE,
 };
 
 /// The scheduler a program runs when the environment does not say (N106, `docs/architecture.md`
@@ -90,6 +91,19 @@ pub fn emit_entry_for(
         escape(MEMORY_FORMAT)
     );
     let _ = writeln!(out, "@.membuf = private global [512 x i8] zeroinitializer");
+    // `main`'s result (R1, 5b.3): the exit status, unless the result report is asked for.
+    let _ = writeln!(
+        out,
+        "@.resultvar = private unnamed_addr constant [{} x i8] c\"{}\\00\"",
+        RESULT_VARIABLE.len() + 1,
+        escape(RESULT_VARIABLE)
+    );
+    let _ = writeln!(
+        out,
+        "@.resultmsg = private unnamed_addr constant [{} x i8] c\"{}\\0A\"",
+        RESULT_STATUS.len() + 1,
+        escape(RESULT_STATUS)
+    );
     // The scheduler's counters (N54), on their own variable: asking for one report is not
     // asking for the other.
     let _ = writeln!(
@@ -280,11 +294,34 @@ pub fn emit_entry_for(
     let _ = writeln!(out, "  call void @nz.report()");
     let _ = writeln!(out, "  unreachable");
     let _ = writeln!(out, "nz.finished:");
+    let _ = writeln!(out, "  %rwant = call ptr @getenv(ptr @.resultvar)");
+    let _ = writeln!(out, "  %rquiet = icmp eq ptr %rwant, null");
+    let _ = writeln!(
+        out,
+        "  br i1 %rquiet, label %nz.status, label %nz.printresult"
+    );
+    let _ = writeln!(out, "nz.printresult:");
     let _ = writeln!(
         out,
         "  %print = call i32 (ptr, ...) @printf(ptr @.fmt, i64 %result)"
     );
     let _ = writeln!(out, "  ret i32 0");
+    let _ = writeln!(out, "nz.status:");
+    let _ = writeln!(out, "  %rinside = icmp ule i64 %result, 255");
+    let _ = writeln!(
+        out,
+        "  br i1 %rinside, label %nz.exitstatus, label %nz.badstatus"
+    );
+    let _ = writeln!(out, "nz.exitstatus:");
+    let _ = writeln!(out, "  %rcode = trunc i64 %result to i32");
+    let _ = writeln!(out, "  ret i32 %rcode");
+    let _ = writeln!(out, "nz.badstatus:");
+    let _ = writeln!(
+        out,
+        "  %rwrote = call i64 @write(i32 2, ptr @.resultmsg, i64 {})",
+        RESULT_STATUS.len() + 1
+    );
+    let _ = writeln!(out, "  ret i32 2");
     let _ = writeln!(out, "}}");
     out
 }

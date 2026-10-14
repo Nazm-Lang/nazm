@@ -4,3 +4,9 @@ xtask = "run --package xtask --"
 # spelling the flags out again, so the two cannot drift. Until that workflow existed this
 # comment described a comparison with nothing on the other side of it.
 lint = "clippy --workspace --all-targets --locked -- -D warnings"
+
+# Every test and every program cargo starts reads `main`'s result as the result report prints it
+# (R1, 5b.3): the tests compare that value, and a test of the default — the result as the exit
+# status — removes the variable for its own run. `crates/nazm-runtime/src/core.rs`, `RESULT_VARIABLE`.
+[env]
+NAZM_RESULT_REPORT = "1"

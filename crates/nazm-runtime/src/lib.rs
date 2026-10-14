@@ -27,7 +27,7 @@ use std::fmt::Write as _;
 
 pub use self::core::{
     emit_runtime, inline_reference_counting, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE,
-    SCHED_FORMAT, SCHED_VARIABLE,
+    RESULT_STATUS, RESULT_VARIABLE, SCHED_FORMAT, SCHED_VARIABLE,
 };
 pub use self::entry::{emit_entry, emit_entry_for, policy as scheduler_policy};
 pub use self::os::declarations;

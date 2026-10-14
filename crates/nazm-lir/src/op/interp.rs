@@ -131,8 +131,20 @@ pub fn run(
         return Ok(m.outcome(2));
     }
     let r = result.unwrap_or(0) as i64;
-    m.stdout.extend_from_slice(format!("{r}\n").as_bytes());
-    Ok(m.outcome(0))
+    // `main`'s result is the exit status unless the result report is asked for (R1, 5b.3), as
+    // the compiled program's entry does it.
+    if std::env::var_os(crate::RESULT_VARIABLE).is_some() {
+        m.stdout.extend_from_slice(format!("{r}\n").as_bytes());
+        return Ok(m.outcome(0));
+    }
+    match u8::try_from(r) {
+        Ok(code) => Ok(m.outcome(i32::from(code))),
+        Err(_) => {
+            m.stderr
+                .extend_from_slice(format!("{}\n", crate::RESULT_STATUS).as_bytes());
+            Ok(m.outcome(2))
+        }
+    }
 }
 
 impl Machine<'_> {

@@ -395,6 +395,15 @@ pub struct PersistentExport {
     /// How many `requires` clauses it states (N87). **Absent** where it states none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub requires: u32,
+    /// Whether it returns nothing (R1, 5b.2). **Absent** where it returns a value, so a module
+    /// with no such function is written exactly as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_result: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1089,6 +1098,7 @@ impl PersistentUnitInterface {
                     .map(|s| s.names().into_iter().map(str::to_owned).collect()),
                 foreign: e.foreign.clone(),
                 requires: e.preconditions,
+                no_result: e.no_result,
             });
         }
         // By name: the order a module declares its functions in is not part of what it
@@ -1655,6 +1665,7 @@ impl PersistentUnitInterface {
                     .map(|names| names.iter().filter_map(|n| effect_named(n)).collect()),
                 foreign: e.foreign.clone(),
                 preconditions: e.requires,
+                no_result: e.no_result,
                 // Session ids are this reader's; the durable identity stays in `def`.
                 origin: None,
             });
