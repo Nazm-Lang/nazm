@@ -399,13 +399,21 @@ fn dispatch(command: Command) -> ExitCode {
             source_root,
             ops,
             soa,
+            debug,
             run,
             args,
         } => {
             if run {
                 return lir::oracle(&file, source_root.as_deref(), &args);
             }
-            lir::run(&file, target.as_deref(), source_root.as_deref(), ops, soa)
+            lir::run(
+                &file,
+                target.as_deref(),
+                source_root.as_deref(),
+                ops,
+                soa,
+                debug,
+            )
         }
         Command::Runtime { action } => match action {
             RuntimeAction::Build {

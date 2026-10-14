@@ -179,10 +179,11 @@ fn ops(
     names: &nazm_lir::SourceNames<'_>,
     target: &Target,
     soa: bool,
+    debug: bool,
 ) -> Result<String, Vec<nazm_diag::Diagnostic>> {
     let mut out = String::new();
     for (_, u, _) in nazm_lir::backend::units(native) {
-        let m = nazm_lir::op::lower_unit(native, u, names, DataLayout::of(target), false, soa)?;
+        let m = nazm_lir::op::lower_unit(native, u, names, DataLayout::of(target), debug, soa)?;
         if let Err(e) = nazm_lir::op::validate::module(&m) {
             return Err(vec![nazm_diag::Diagnostic::error(
                 nazm_diag::codes::COMPILER_DEFECT,
@@ -191,6 +192,27 @@ fn ops(
             )]);
         }
         out.push_str(&nazm_lir::op::print::module(&m));
+        if debug {
+            // What each position's file index names, as the backends' debug information names
+            // it (R9: a code generator's line table needs the names, which the module holds
+            // only as indices).
+            let mut files = std::collections::BTreeSet::new();
+            for f in &m.functions {
+                if let Some((file, _)) = f.at {
+                    files.insert(file);
+                }
+                for b in &f.blocks {
+                    for i in &b.insts {
+                        if let nazm_lir::op::ir::Inst::Loc(p) = i {
+                            files.insert(p.file);
+                        }
+                    }
+                }
+            }
+            for i in files {
+                out.push_str(&format!("; file {i} {}\n", names.debug_file(i)));
+            }
+        }
         out.push('\n');
     }
     Ok(out)
@@ -202,6 +224,7 @@ pub(crate) fn run(
     declared: Option<&Path>,
     as_ops: bool,
     soa: bool,
+    debug: bool,
 ) -> ExitCode {
     let target = match target.map_or_else(Target::host, Target::parse) {
         Ok(t) => t,
@@ -224,7 +247,7 @@ pub(crate) fn run(
             let program = crate::mir::lower(core, res, &loaded.graph)?;
             let native = nazm_lir::lower(program, &names).map_err(|e| e.diagnostics)?;
             if as_ops {
-                return ops(&native, &names, &target, soa).map(Value::String);
+                return ops(&native, &names, &target, soa, debug).map(Value::String);
             }
             printed(&native, &names, &target)
         },

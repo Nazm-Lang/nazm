@@ -126,6 +126,32 @@ fn the_tables_are_the_same_bytes_every_time() {
     assert_eq!(String::from_utf8_lossy(&ops.stdout), texts);
 }
 
+/// R9: `nazm lir --ops --debug` lowers as `nazm build --debug` does, so the positions a code
+/// generator makes line tables from — each function's `at` and every `loc` — are printed;
+/// without `--debug` there are none.
+#[test]
+fn debug_ops_print_positions_and_plain_ops_do_not() {
+    let d = program();
+    let plain = nazm(d.path(), &["lir", "--ops", "p.nz"]);
+    let debug = nazm(d.path(), &["lir", "--ops", "--debug", "p.nz"]);
+    assert!(plain.status.success() && debug.status.success());
+    let plain = String::from_utf8_lossy(&plain.stdout);
+    let debug = String::from_utf8_lossy(&debug.stdout);
+    let positions = |t: &str, k: &str| t.lines().filter(|l| l.trim_start().starts_with(k)).count();
+    assert_eq!(positions(&plain, "loc "), 0, "{plain}");
+    assert_eq!(positions(&plain, "at "), 0, "{plain}");
+    assert!(positions(&debug, "loc ") > 0, "{debug}");
+    assert!(positions(&debug, "at ") > 0, "{debug}");
+    // The files the positions name, by name.
+    assert!(
+        debug
+            .lines()
+            .any(|l| l.starts_with("; file ") && l.ends_with("p.nz")),
+        "{debug}"
+    );
+    assert!(!plain.contains("; file "), "{plain}");
+}
+
 #[test]
 fn fields_follow_the_canonical_order_at_natural_alignment() {
     let d = program();
