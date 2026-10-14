@@ -1,0 +1,247 @@
+// MIR as text: one canonical rendering of each statement and terminator, shared by the printed
+// form (`nazm.mir/1`) and the executable digest, so the two cannot describe a function
+// differently. Everything is named durably: a type by its canonical key, a callee by its
+// identity, a local as `_N`, a block as `bbN`.
+
+use "mir.nz"
+use "types.nz"
+use "@std/blake3"
+
+fn hex2(b: Int) -> Str {
+    let digits = "0123456789abcdef"
+    str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1)
+}
+
+pub fn const_text(c: MConst) -> Str ! {} {
+    match c {
+        MConst.Int(v: v) => int_to_str(v),
+        MConst.Bool(v: v) => if v { "true" } else { "false" },
+        MConst.Num(text: t, kind: k) => t + ":" + k,
+        MConst.Cell(name: n) => "static " + n,
+        MConst.Str(bytes: s) => {
+            let parts = strs_new()
+            strs_push(parts, "b\"")
+            for i in 0..str_len(s) {
+                let b = str_byte(s, i)
+                if (b > 32 && b < 127 && b != 34 && b != 92) || b == 32 {
+                    strs_push(parts, str_from_byte(b))
+                } else {
+                    strs_push(parts, "\\x" + hex2(b))
+                }
+            }
+            strs_push(parts, "\"")
+            str_join(parts, "")
+        },
+    }
+}
+
+pub fn operand_text(o: Operand) -> Str ! {} {
+    match o {
+        Operand.Local(l: l) => "_" + int_to_str(l),
+        Operand.Const(c: c) => const_text(c),
+    }
+}
+
+fn operands_text(os: Vec[Operand]) -> Str {
+    let parts = strs_new()
+    for o in os { strs_push(parts, operand_text(o)) }
+    str_join(parts, ", ")
+}
+
+fn field_text(f: FieldRef) -> Str {
+    key(f.rec) + "." + f.name
+}
+
+fn callee_text(p: MirProgram, f: Int) -> Str {
+    if f < 0 || f >= vec_len(p.fns) { "?fn" } else { vec_get(p.fns, f).identity }
+}
+
+fn moved(names: Strs, locals: Ints) -> Str {
+    let parts = strs_new()
+    for i in 0..strs_len(names) {
+        strs_push(parts, strs_get(names, i) + ": move _" + int_to_str(ints_get(locals, i)))
+    }
+    str_join(parts, ", ")
+}
+
+pub fn rvalue_text(p: MirProgram, v: Rvalue) -> Str ! {} {
+    match v {
+        Rvalue.Use(o: o) => operand_text(o),
+        Rvalue.Copy(l: l) => "copy _" + int_to_str(l),
+        Rvalue.Move(l: l) => "move _" + int_to_str(l),
+        Rvalue.Neg(o: o) => "neg " + operand_text(o),
+        Rvalue.Arith(op: op, a: a, b: b) => operand_text(a) + " " + op + " " + operand_text(b),
+        Rvalue.Bits(op: op, a: a, b: b) => operand_text(a) + " " + op + " " + operand_text(b),
+        Rvalue.Complement(o: o) => "~" + operand_text(o),
+        Rvalue.Convert(mode: m, to: t, o: o) => "convert." + m + " " + operand_text(o) + " to " + key(t),
+        Rvalue.Fits(to: t, o: o) => "fits " + operand_text(o) + " in " + key(t),
+        Rvalue.Array(elems: es) => "[" + operands_text(es) + "]",
+        Rvalue.ArrayRepeat(value: x, count: n) => "[" + operand_text(x) + "; " + int_to_str(n) + "]",
+        Rvalue.Index(base: b, index: i) => operand_text(b) + "[" + operand_text(i) + "]",
+        Rvalue.Compare(op: op, law: law, operand: t, a: a, b: b) => operand_text(a) + " " + op + " " + operand_text(b) + " (" + law + " on " + key(t) + ")",
+        Rvalue.Hash(operand: t, value: x) => "hash " + operand_text(x) + " (" + key(t) + ")",
+        Rvalue.Call(callee: c, args: args) => "call " + callee_text(p, c) + "(" + operands_text(args) + ")",
+        Rvalue.CallIndirect(callee: c, args: args) => "call_indirect " + operand_text(c) + "(" + operands_text(args) + ")",
+        Rvalue.Closure(func: f, captures: cs) => "closure " + callee_text(p, f) + "[" + operands_text(cs) + "]",
+        Rvalue.Capture(env: e, index: i) => "capture _" + int_to_str(e) + "." + int_to_str(i),
+        Rvalue.Primitive(op: op, elem: e, args: args) => if e == "" { op + "(" + operands_text(args) + ")" } else { op + "[" + key(e) + "](" + operands_text(args) + ")" },
+        Rvalue.Record(ty: t, fields: _, names: ns, locals: ls) => key(t) + " { " + moved(ns, ls) + " }",
+        Rvalue.Variant(ty: t, variant: _, vname: vn, fields: _, names: ns, locals: ls) => key(t) + "." + vn + "(" + moved(ns, ls) + ")",
+        Rvalue.Field(base: b, f: f) => operand_text(b) + " . " + field_text(f),
+        Rvalue.FieldBorrow(base: b, f: f) => "borrow " + operand_text(b) + " . " + field_text(f),
+        Rvalue.Payload(base: b, ty: t, variant: _, vname: vn, field: _, fname: fname) => "payload _" + int_to_str(b) + " as " + key(t) + "." + vn + " . " + fname,
+    }
+}
+
+fn edge(u: Int) -> Str {
+    if u < 0 { "" } else { " unwind bb" + int_to_str(u) }
+}
+
+pub fn stmt_text(p: MirProgram, s: Stmt) -> Str ! {} {
+    match s {
+        Stmt.Assign(dst: d, value: v, unwind: u) => "_" + int_to_str(d) + " = " + rvalue_text(p, v) + edge(u),
+        Stmt.SetField(base: b, path: path, value: v) => {
+            let parts = strs_new()
+            for f in path { strs_push(parts, field_text(f)) }
+            "_" + int_to_str(b) + ".[" + str_join(parts, " / ") + "] = move _" + int_to_str(v)
+        },
+        Stmt.SetElement(base: b, path: path, value: v, unwind: u) => {
+            let parts = strs_new()
+            for step in path {
+                strs_push(parts, match step {
+                    PathRef.Field(f: f) => field_text(f),
+                    PathRef.Index(local: i, len: n) => "[_" + int_to_str(i) + " of " + int_to_str(n) + "]",
+                })
+            }
+            "_" + int_to_str(b) + ".[" + str_join(parts, " / ") + "] = _" + int_to_str(v) + edge(u)
+        },
+        Stmt.Drop(l: l) => "drop _" + int_to_str(l),
+        Stmt.ScopeOpen(list: l, unwind: u) => "_" + int_to_str(l) + " = scope_open()" + edge(u),
+        Stmt.Spawn(list: l, callee: c, args: args, unwind: u) => "spawn _" + int_to_str(l) + " " + callee_text(p, c) + "(" + operands_text(args) + ")" + edge(u),
+        Stmt.ScopeJoin(list: l) => "scope_join _" + int_to_str(l),
+        Stmt.CheckFailed(unwind: u) => "check_failed" + edge(u),
+        Stmt.StackCheck(unwind: u) => "stack_check" + edge(u),
+    }
+}
+
+pub fn term_text(t: Term) -> Str ! {} {
+    match t {
+        Term.Goto(b: b) => "goto bb" + int_to_str(b),
+        Term.Branch(cond: c, then: a, other: b) => "branch " + operand_text(c) + " bb" + int_to_str(a) + " bb" + int_to_str(b),
+        Term.Switch(scrutinee: s, ty: _, variants: _, names: ns, blocks: bs) => {
+            let parts = strs_new()
+            for i in 0..strs_len(ns) {
+                strs_push(parts, strs_get(ns, i) + " => bb" + int_to_str(ints_get(bs, i)))
+            }
+            "switch _" + int_to_str(s) + " [" + str_join(parts, ", ") + "]"
+        },
+        Term.Return(l: l) => "return move _" + int_to_str(l),
+        Term.Unwind => "unwind",
+        Term.Exit(o: o) => "exit " + operand_text(o),
+    }
+}
+
+/// A local's type, as text: its key, or `Tasks`.
+pub fn local_ty_text(t: Str) -> Str ! {} {
+    if t == "Tasks" { t } else { key(t) }
+}
+
+fn term_of(b: Block) -> Term {
+    if vec_len(b.term) == 0 { Term.Unwind } else { vec_get(b.term, 0) }
+}
+
+/// The canonical text a function's executable digest is taken over.
+pub fn canonical(p: MirProgram, f: MirFn) -> Str ! {} {
+    let lines = strs_new()
+    strs_push(lines, "nazm.mir/1 function")
+    if f.foreign != "" { strs_push(lines, "foreign " + f.foreign) }
+    let args = strs_new()
+    for a in f.type_args { strs_push(args, key(a)) }
+    strs_push(lines, "args [" + str_join(args, ",") + "]")
+    strs_push(lines, "params " + int_to_str(f.params))
+    strs_push(lines, "ret " + key(f.ret))
+    for i in 0..vec_len(f.locals) {
+        strs_push(lines, "local _" + int_to_str(i) + " " + local_ty_text(vec_get(f.locals, i).ty))
+    }
+    for i in 0..vec_len(f.blocks) {
+        let b = vec_get(f.blocks, i)
+        strs_push(lines, "bb" + int_to_str(i))
+        for s in b.stmts { strs_push(lines, "  " + stmt_text(p, s)) }
+        strs_push(lines, "  " + term_text(term_of(b)))
+    }
+    str_join(lines, "\n") + "\n"
+}
+
+/// A function's executable digest: BLAKE3 over its canonical text.
+pub fn digest(p: MirProgram, f: MirFn) -> Str ! {} {
+    blake3_hex(bytes_from_str(canonical(p, f)))
+}
+
+/// `s` as a JSON string, as the Rust printer escapes it.
+pub fn quote(s: Str) -> Str ! {} {
+    let parts = strs_new()
+    strs_push(parts, "\"")
+    let mut start = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        let esc = if b == 34 { "\\\"" } else if b == 92 { "\\\\" } else if b == 10 { "\\n" } else if b == 13 { "\\r" } else if b == 9 { "\\t" } else if b < 32 { "\\u00" + hex2(b) } else { "" }
+        if esc != "" {
+            strs_push(parts, str_slice(s, start, i))
+            strs_push(parts, esc)
+            start = i + 1
+        }
+    }
+    strs_push(parts, str_slice(s, start, str_len(s)))
+    strs_push(parts, "\"")
+    str_join(parts, "")
+}
+
+fn origin_text(o: Int) -> Str {
+    if o == 0 { "source" } else if o == 1 { "failure-cleanup" } else { "unwind" }
+}
+
+/// The whole program, as `nazm mir` prints it (indented, without spans).
+pub fn print_mir(p: MirProgram) -> Str ! {} {
+    let out = strs_new()
+    strs_push(out, "{\n  \"schema\": \"nazm.mir/1\",\n")
+    let entry = if p.entry < 0 { "null" } else { quote(vec_get(p.fns, p.entry).identity) }
+    strs_push(out, "  \"entry\": " + entry + ",\n")
+    strs_push(out, "  \"functions\": [")
+    for i in 0..vec_len(p.fns) {
+        let f = vec_get(p.fns, i)
+        if i > 0 { strs_push(out, ",") }
+        strs_push(out, "\n    {")
+        strs_push(out, "\"id\": " + int_to_str(i) + ", ")
+        strs_push(out, "\"identity\": " + quote(f.identity) + ", ")
+        strs_push(out, "\"name\": " + quote(f.name) + ", ")
+        let effects = strs_new()
+        for e in f.effects { strs_push(effects, quote(e)) }
+        strs_push(out, "\"effects\": [" + str_join(effects, ", ") + "], ")
+        if f.foreign != "" { strs_push(out, "\"foreign\": " + quote(f.foreign) + ", ") }
+        strs_push(out, "\"params\": " + int_to_str(f.params) + ", ")
+        strs_push(out, "\"ret\": " + quote(key(f.ret)) + ", ")
+        strs_push(out, "\"digest\": " + quote(digest(p, f)) + ", ")
+        strs_push(out, "\"locals\": [")
+        for j in 0..vec_len(f.locals) {
+            if j > 0 { strs_push(out, ", ") }
+            let l = vec_get(f.locals, j)
+            strs_push(out, "{\"local\": \"_" + int_to_str(j) + "\", \"ty\": " + quote(local_ty_text(l.ty)) + ", \"name\": " + quote(l.name) + ", \"origin\": \"" + l.origin + "\"}")
+        }
+        strs_push(out, "], \"blocks\": [")
+        for j in 0..vec_len(f.blocks) {
+            if j > 0 { strs_push(out, ", ") }
+            let b = vec_get(f.blocks, j)
+            strs_push(out, "\n      {\"block\": \"bb" + int_to_str(j) + "\", \"origin\": \"" + origin_text(b.origin) + "\", \"stmts\": [")
+            let mut k = 0
+            for s in b.stmts {
+                if k > 0 { strs_push(out, ", ") }
+                strs_push(out, quote(stmt_text(p, s)))
+                k += 1
+            }
+            strs_push(out, "], \"term\": " + quote(term_text(term_of(b))) + "}")
+        }
+        strs_push(out, "]}")
+    }
+    strs_push(out, "\n  ]\n}\n")
+    str_join(out, "")
+}
