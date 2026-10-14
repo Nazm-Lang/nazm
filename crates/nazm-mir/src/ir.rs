@@ -363,7 +363,9 @@ impl Rvalue {
             Self::Record { fields, .. } | Self::Variant { fields, .. } => {
                 out.extend(fields.iter().map(|(_, l)| *l));
             }
-            Self::Field { base, .. } => operand_locals(base, &mut out),
+            Self::Field { base, .. } | Self::FieldBorrow { base, .. } => {
+                operand_locals(base, &mut out);
+            }
             Self::Payload { base, .. } => out.push(*base),
         }
         out
@@ -595,6 +597,10 @@ pub enum Rvalue {
     },
     /// A field of a record, as a new reference.
     Field { base: Operand, field: FieldRef },
+    /// A field of a record, **borrowed** (R1, 5b.9): the same reference, not a new one. Written
+    /// only into a temporary that is an operation's operand, never dropped, and read while
+    /// `base` — a local nothing in the same operation can reassign — still holds it.
+    FieldBorrow { base: Operand, field: FieldRef },
     /// A payload field of the variant `base` holds, as a new reference. Valid only in the arm
     /// of a `switch` on `base` for `variant`.
     Payload {

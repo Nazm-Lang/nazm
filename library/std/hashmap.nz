@@ -20,8 +20,9 @@ pub enum Slot[K, V] {
 /// A map from `K` to `V`. The table, `slots`, holds for each slot `-1` (never used), `-2`
 /// (used and emptied) or the position of its entry in `hashes`, `keys` and `values`, which are
 /// dense: a probe compares hashes, and touches a key only when they are equal, and replacing a
-/// value allocates nothing. `meta` holds how many entries there are and how many slots are not
-/// `-1`. The table's length is a power of two.
+/// value allocates nothing. `meta` holds how many entries there are, how many slots are not
+/// `-1`, and the entry the last look-up of `m[k]` found, or `-1` (R1, 5b.9: `m[k] += n` then
+/// writes without a second probe). The table's length is a power of two.
 pub struct HashMap[K, V] {
     slots: Vec[Int],
     hashes: Vec[UInt64],
@@ -48,6 +49,7 @@ pub fn hashmap_with_seed[K: Hash, V](seed: UInt64) -> HashMap[K, V] ! {} {
     let meta = vec_new[Int]();
     vec_push(meta, 0);
     vec_push(meta, 0);
+    vec_push(meta, 0 - 1);
     HashMap[K, V](
         slots: slots,
         hashes: vec_new[UInt64](),
@@ -69,13 +71,17 @@ fn key_hash[K: Hash](seed: UInt64, key: K) -> UInt64 ! {} {
 
 // Where `key` is: its slot when present, and `-(the slot it would take) - 1` when not.
 fn hashmap_find[K: Hash, V](m: HashMap[K, V], key: K, h: UInt64) -> Int ! {} {
-    let mask = vec_len(m.slots) - 1;
+    // The three vectors read once, not at every step of the probe (R1, 5b.9).
+    let slots = m.slots;
+    let hashes = m.hashes;
+    let keys = m.keys;
+    let mask = vec_len(slots) - 1;
     let mut i = Int(h & UInt64(mask));
     let mut free = 0 - 1;
     let mut found = 0 - 1;
     let mut looking = true;
     while looking {
-        let e = vec_get(m.slots, i);
+        let e = vec_get(slots, i);
         if e == 0 - 1 {
             if free < 0 { free = i; }
             looking = false;
@@ -83,7 +89,7 @@ fn hashmap_find[K: Hash, V](m: HashMap[K, V], key: K, h: UInt64) -> Int ! {} {
             if e == 0 - 2 {
                 if free < 0 { free = i; }
             } else {
-                if vec_get(m.hashes, e) == h && key.same(vec_get(m.keys, e)) {
+                if vec_get(hashes, e) == h && key.same(vec_get(keys, e)) {
                     found = i;
                     looking = false;
                 }
@@ -130,6 +136,12 @@ fn hashmap_grow[K: Hash, V](m: HashMap[K, V]) -> Int ! {} {
 
 /// Give `key` the value `value` in `m`, replacing any it had; whether one was replaced.
 pub fn hashmap_set[K: Hash, V](m: HashMap[K, V], key: K, value: V) -> Bool ! {} {
+    // The entry `m[key]` just read, written without probing again.
+    let hit = vec_get(m.meta, 2);
+    if hit >= 0 && key.same(vec_get(m.keys, hit)) {
+        vec_set(m.values, hit, value);
+        return true;
+    }
     if (vec_get(m.meta, 1) + 1) * 4 > vec_len(m.slots) * 3 {
         hashmap_grow(m);
     }
@@ -171,10 +183,17 @@ pub fn hashmap_at[K: Hash, V](m: HashMap[K, V], key: K) -> V ! {} {
     vec_get(m.values, vec_get(m.slots, at))
 }
 
-/// The value `m` holds for `key`, or `fallback`: what `m[key] += n` reads (R1, 5b.7).
+/// The value `m` holds for `key`, or `fallback`: what `m[key] += n` reads (R1, 5b.7). The entry
+/// found is remembered for the write that follows (5b.9).
 pub fn hashmap_at_or[K: Hash, V](m: HashMap[K, V], key: K, fallback: V) -> V ! {} {
     let at = hashmap_find(m, key, key_hash(m.seed, key));
-    if at < 0 { fallback } else { vec_get(m.values, vec_get(m.slots, at)) }
+    if at < 0 {
+        fallback
+    } else {
+        let e = vec_get(m.slots, at);
+        vec_set(m.meta, 2, e);
+        vec_get(m.values, e)
+    }
 }
 
 /// Whether `m` holds `key`.
@@ -190,6 +209,8 @@ pub fn hashmap_remove[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {} {
     } else {
         let e = vec_get(m.slots, at);
         let gone = vec_get(m.values, e);
+        // Entries move below: no remembered entry survives a removal.
+        vec_set(m.meta, 2, 0 - 1);
         vec_set(m.slots, at, 0 - 2);
         vec_set(m.meta, 0, vec_get(m.meta, 0) - 1);
         // The last entry takes the removed one's place, so the arrays stay dense and nothing
