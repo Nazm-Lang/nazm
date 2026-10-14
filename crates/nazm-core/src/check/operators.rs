@@ -714,7 +714,7 @@ impl Checker<'_> {
             Type::Ints => "ints",
             Type::Strs => "strs",
             Type::Bytes => "bytes",
-            t if matches!(t, Type::Vec(_)) => "vec",
+            Type::Vec(_) => "vec",
             _ => return None,
         };
         let name = format!("{prefix}_{op}");

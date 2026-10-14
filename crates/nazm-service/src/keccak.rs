@@ -79,7 +79,7 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut state = [0u64; 25];
     let mut padded = data.to_vec();
     padded.push(0x01);
-    while padded.len() % RATE != 0 {
+    while !padded.len().is_multiple_of(RATE) {
         padded.push(0);
     }
     if let Some(last) = padded.last_mut() {
