@@ -298,6 +298,14 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *Short closures* (`spec.md`, *Shorter forms*; R1.5 design D3).
+`|a, b| a < b`, `|n: Int| n + 1`, `|| e`: the closure node a function expression makes, its
+unwritten types taken from the function type expected where it is written, or — with none
+expected — the result type its body's (settled after the body is checked) and each parameter's
+written (`N0635`). Semantic epoch 78; EXPERIMENTAL until R1.5 closes. Evidence:
+`crates/nazm-cli/tests/shorter_forms.rs` — arguments, a typed `let`, captures and `||` under every
+implementation; the refusal; two mutants.
+
 **R1.5 (2026-10-15)** · *Expression bodies* (`spec.md`, *Shorter forms*; R1.5 design D2).
 `fn double(n: Int): Int = n * 2`; a private function may leave its result type to the expression,
 `fn add(a: Int, b: Int) = a + b`. Those bodies are checked first, each after the inferred functions

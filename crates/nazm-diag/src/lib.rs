@@ -529,6 +529,9 @@ pub mod codes {
     /// A function whose result type cannot be left to its expression body (R1.5, D2): a `pub`
     /// one, a method, or one whose body reaches itself (`docs/spec.md`, *Shorter forms*).
     pub const RESULT_TYPE_NOT_INFERRED: Code = Code::new("N0634");
+    /// A short closure's parameter written without a type where no function type is expected
+    /// to take it from (R1.5, D3; `docs/spec.md`, *Shorter forms*).
+    pub const CLOSURE_PARAMETER_UNTYPED: Code = Code::new("N0635");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

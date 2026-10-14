@@ -631,6 +631,16 @@ impl Resolution {
         self.functions.get(id.index())
     }
 
+    /// A short closure's result type and function type, settled from its body (R1.5, D3).
+    pub fn settle_closure(&mut self, id: FnId, ret: Type, ty: Type) {
+        if let Some(d) = self.functions.get_mut(id.index()) {
+            d.ret = ret;
+            if let Some(c) = d.closure.as_mut() {
+                c.ty = ty;
+            }
+        }
+    }
+
     /// A function's result type, settled from its expression body (R1.5, D2): its type, or —
     /// where the expression has no value — a function that returns nothing.
     pub fn settle_result(&mut self, id: FnId, ret: Type, no_result: bool) {

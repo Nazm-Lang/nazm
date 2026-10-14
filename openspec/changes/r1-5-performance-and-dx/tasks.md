@@ -26,7 +26,8 @@
       (design D1) — 2026-10-15: parser, grammar, spec *Shorter forms*, epoch 76
 - [ ] 6.2 `[1, 2, 3]` is a list by default; a fixed array only where its type says `[Int; 3]`
 - [ ] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]`
-- [ ] 6.4 Short closures `|a, b| a < b`, parameter and result types inferred
+- [x] 6.4 Short closures `|a, b| a < b`, parameter and result types inferred — 2026-10-15 (D3):
+      parser `short_closure`, types from the expected function type, `N0635`, epoch 78
 - [ ] 6.5 Positional enum payloads `Circle(2)` and patterns `Circle(r)`; the enum prefix only where
       a variant name is ambiguous
 - [ ] 6.6 `use std.json` without quotes or `@`; `List[Int]` taught for `Ints`/`Strs` (the old names
