@@ -1,0 +1,35 @@
+// N9's rule, held from outside the compiler: a value type that contains itself inline — directly,
+// through another record, or through an enum's payload — is refused (`N0336`) before anything else
+// looks at it. Ported from `crates/nazm-cli/tests/ownership_cycles.rs` (R7).
+//
+// Run as `nazm check` with a deadline: with the refusal gone the checker does not answer at all,
+// and that loss is a failure of this test at its own deadline.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// Ample for a refusal the checker reaches in milliseconds.
+const LIMIT_MS: Int = 30000;
+
+/// `src`, checked by the binary within `LIMIT_MS`: refused, and with `N0336`.
+fn refused_as_a_cycle(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let ran = run_within(h, nazm_bin(h.io), words("check p.nz"), d, suite_env(h), LIMIT_MS);
+    scratch_remove(h, d);
+    if ran.code == TIMED_OUT {
+        return Result[Int, Str].Err(error: f"`nazm check` did not finish within {LIMIT_MS} ms: the cycle was not refused\n{src}");
+    }
+    check_that(ran.code == 1, f"{src}\n{ran.stderr}")?;
+    check_that(text_contains(ran.stderr, "N0336"), f"{src}\n{ran.stderr}")
+}
+
+@test
+fn every_inline_cycle_is_refused_within_a_bound(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_as_a_cycle(h, "struct Node { next: Node, }\nfn main() -> Int { 0 }\n")?;
+    refused_as_a_cycle(h, "struct A { b: B, }\nstruct B { a: A, }\nfn main() -> Int { 0 }\n")?;
+    refused_as_a_cycle(h, "struct A { b: B, }\nenum B { V(a: A), }\nfn main() -> Int { 0 }\n")?;
+    refused_as_a_cycle(h, "enum A { V(b: B), }\nenum B { V(a: A), }\nfn main() -> Int { 0 }\n")
+}

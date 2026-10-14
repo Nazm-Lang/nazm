@@ -27,7 +27,9 @@
 - [x] 4.3 `short_variants` (the brief's `shorter_forms`)
 - [x] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
       (`tests/mutants.sh`: 18 mutations, each caught by the Rust killer and the Nazm test)
-- [ ] 4.5 The remaining black-box files, `common`/`differential`-only first
+- [ ] 4.5 The remaining black-box files, `common`/`differential`-only first — 30 of them so far
+      (33 files, 98 tests, every one agreeing with its Rust test on the tree; `tests/mutants.sh`
+      over the mutations they kill: see each commit)
 
 ## 5. The mutation runner's core
 - [x] 5.1 Read the catalogue; apply exactly once; restore byte for byte, in the Rust runner's own

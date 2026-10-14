@@ -1,0 +1,150 @@
+// Gate 3: the `accounts` profile and account metadata (`docs/spec.md`, *Contracts*). A write no
+// signer decides on is refused by name, however the new state is built; a check made only in a
+// helper is not trusted; and the account metadata states every instruction's constraints. Ported
+// from `crates/nazm-cli/tests/accounts.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const HEAD: Str = "pub struct State { owner: Int, alice: Int, bob: Int, paused: Bool }\nfn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, paused: false) }\n";
+
+fn signed() -> Str ! {} {
+    r#"pub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {
+if caller != 1 || s.alice < amount { return Result[State, Int].Err(error: 2); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, paused: s.paused))
+}
+pub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {
+if caller != s.owner { return Result[State, Int].Err(error: 4); }
+Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, paused: on == 1))
+}
+pub fn peek(s: State, caller: Int) -> Result[State, Int] ! {} {
+if s.paused { return Result[State, Int].Err(error: 3); }
+Result[State, Int].Ok(value: s)
+}
+"#
+}
+
+/// The contract `HEAD` + `body` + an empty `main`, as `c.nz` in a new scratch directory.
+fn contract(h: Caps, body: Str) -> Result[Str, Str] ! { io } {
+    prog_dir(h, "c.nz", f"{HEAD}{body}fn main() -> Int ! {{}} {{ 0 }}\n")
+}
+
+@test
+fn a_write_no_signer_decides_on_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = contract(h, f"{signed()}pub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {{}} {{ Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, paused: s.paused)) }}\n")?;
+    let o = nazm(h, d, words("check --profile accounts c.nz"));
+    let web3 = nazm(h, d, words("check --profile web3 c.nz"));
+    scratch_remove(h, d);
+    let e = o.stderr;
+    check_that(o.code != 0, e)?;
+    check_that(text_contains(e, "rule `signed-writes`"), e)?;
+    check_that(text_contains(e, "`airdrop` writes the state and never decides on its caller"), e)?;
+    // Only `airdrop`: the others decide on their caller, or write nothing.
+    check_that(!text_contains(e, "`transfer`") && !text_contains(e, "`pause`") && !text_contains(e, "`peek`"), e)?;
+    // `web3` alone does not ask for signers.
+    check_that(web3.code == 0, ran_show(web3))
+}
+
+/// Q1-C-03: a new state the analysis cannot see into — made by a helper, read out of a wrapper's
+/// field or an array, returned by a trait method — may write every field, so an entrypoint
+/// returning one without deciding on its caller is refused, as one building it in place is.
+@test
+fn a_state_built_out_of_sight_is_a_write(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let new = "State(owner: s.owner, alice: s.alice, bob: s.bob + n, paused: s.paused)";
+    let whats = text_split("a helper|a wrapper's field|an array element|a trait method", "|");
+    let defs = strs_new();
+    strs_push(defs, f"fn give(s: State, n: Int) -> State ! {{}} {{ {new} }}\n");
+    strs_push(defs, "struct W { st: State }\n");
+    strs_push(defs, "");
+    strs_push(defs, f"trait G {{ fn give(self: Self, n: Int) -> State ! {{}}; }}\nimpl G for State {{ fn give(self: State, n: Int) -> State ! {{}} {{ let s = self; {new} }} }}\n");
+    let values = strs_new();
+    strs_push(values, "give(s, n)");
+    strs_push(values, f"W(st: {new}).st");
+    strs_push(values, f"[{new}][0]");
+    strs_push(values, "s.give(n)");
+    let mut i = 0;
+    while i < 4 {
+        let what = strs_get(whats, i);
+        let d = contract(h, f"{strs_get(defs, i)}pub fn airdrop(s: State, caller: Int, n: Int) -> Result[State, Int] ! {{}} {{ Result[State, Int].Ok(value: {strs_get(values, i)}) }}\n")?;
+        let o = nazm(h, d, words("check --profile accounts c.nz"));
+        scratch_remove(h, d);
+        check_that(o.code != 0, f"{what}: {o.stderr}")?;
+        check_that(text_contains(o.stderr, "`airdrop` writes the state and never decides on its caller"), f"{what}: {o.stderr}")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_check_made_only_in_a_helper_is_not_trusted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = contract(h, r#"fn owns(caller: Int, s: State) -> Bool ! {} { caller == s.owner }
+pub fn mint(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} {
+let ok = owns(caller, s);
+if ok { Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + n, bob: s.bob, paused: s.paused)) } else { Result[State, Int].Err(error: 4) }
+}
+"#)?;
+    let o = nazm(h, d, words("check --profile accounts c.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "`mint` writes the state and never decides on its caller"), o.stderr)
+}
+
+/// The instruction named `name`'s index in the metadata, or `-1`.
+fn instruction(doc: JsonDoc, name: Str) -> Int ! {} {
+    let mut i = 0;
+    while jq(doc, f"instructions/{i}") >= 0 {
+        if jstr(doc, f"instructions/{i}/name") == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn flags(doc: JsonDoc, name: Str) -> Str ! {} {
+    let i = instruction(doc, name);
+    let writable = jtext(doc, f"instructions/{i}/accounts/0/writable");
+    let signer = jtext(doc, f"instructions/{i}/accounts/1/signer");
+    f"{writable} {signer}"
+}
+
+@test
+fn the_account_metadata_states_every_instructions_constraints(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = contract(h, signed())?;
+    let o = nazm(h, d, words("contract c.nz --accounts out"));
+    let text = read_text(h, f"{d}/out/accounts.json");
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let doc = jparse(text?)?;
+    check_that(jstr(doc, "schema") == "nazm.sbpf-accounts/1", jtext(doc, "schema"))?;
+    check_that(jstr(doc, "profile") == "accounts", jtext(doc, "profile"))?;
+    check_that(text_starts_with(jstr(doc, "execution"), "BLOCKED"), jtext(doc, "execution"))?;
+    check_that(jint(doc, "state_account/data/version") == 1, jtext(doc, "state_account"))?;
+    check_that(jint(doc, "state_account/data/size") == 1 + 8 * 4, jtext(doc, "state_account"))?;
+    let offsets = strs_new();
+    let mut k = 0;
+    while jq(doc, f"state_account/data/fields/{k}") >= 0 {
+        strs_push(offsets, jtext(doc, f"state_account/data/fields/{k}/offset"));
+        k = k + 1;
+    }
+    let shown = str_join(offsets, ",");
+    check_that(shown == "1,9,17,25", shown)?;
+    check_that(jstr(doc, "state_account/data/fields/3/type") == "bool as u64", jtext(doc, "state_account/data/fields/3"))?;
+    // The first eight bytes of keccak256("nazm.instruction.transfer").
+    let ti = instruction(doc, "transfer");
+    check_that(jstr(doc, f"instructions/{ti}/discriminator") == "75bf341e84e6d97c", jtext(doc, f"instructions/{ti}"))?;
+    check_that(jint(doc, f"instructions/{ti}/args/0/offset") == 8, jtext(doc, f"instructions/{ti}"))?;
+    check_that(flags(doc, "transfer") == "true true", flags(doc, "transfer"))?;
+    check_that(flags(doc, "pause") == "true true", flags(doc, "pause"))?;
+    // Read-only: no write, and no signer asked for.
+    check_that(flags(doc, "peek") == "false false", flags(doc, "peek"))?;
+    check_that(jstr(doc, "cross_program_calls") == "none: an entrypoint calls only Nazm functions", jtext(doc, "cross_program_calls"))
+}

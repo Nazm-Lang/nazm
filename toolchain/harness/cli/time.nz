@@ -1,0 +1,108 @@
+// Gate 2: time (`docs/general-purpose.md` §11 and the spec's *Time*). The monotonic clock advances
+// by at least what a sleep waited, the wall clock is after 2023, `@std/time`'s types compose, a
+// sleep on the task pool parks its task, and every clock and the sleep need a `TimeCap` and are
+// what `critical` refuses. Ported from `crates/nazm-cli/tests/time.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+@test
+fn the_clocks_and_a_sleep_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, r#"use "@std/time";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(t: TimeCap, out: OutCap) -> Int {
+let start = time_now(t);
+time_sleep(t, time_duration_ms(25));
+let d = time_elapsed(t, start);
+line(out, if time_duration_to_ms(d) >= 25 && time_duration_to_ms(d) < 5000 { "slept at least 25 ms" } else { int_to_str(d.nanos) });
+let deadline = time_after(t, time_duration_ms(10));
+line(out, if time_reached(t, deadline) { "too soon" } else { "not yet" });
+time_sleep_ms(15);
+line(out, if time_reached(t, deadline) { "reached" } else { "not reached" });
+line(out, if time_wall(t).unix_nanos > 1700000000000000000 { "after 2023" } else { "before" });
+line(out, int_to_str(time_duration_to_ms(time_duration_add(time_duration_ms(2), time_duration_ns(3000000)))));
+line(out, int_to_str(time_sleep_ms(0 - 5)));
+0
+}
+"#, "slept at least 25 ms\nnot yet\nreached\nafter 2023\n5\n0\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn pool() -> Str ! {} {
+    r#"fn napper(t: TimeCap, done: Chan) -> Int { time_sleep_ms(300); chan_send(done, 1); 0 }
+fn busy(done: Chan) -> Int { let mut i = 0; let mut s = 0; while i < 100000 { s = s + i % 3; i = i + 1; } chan_send(done, 2); 0 }
+fn main(t: TimeCap, sp: SpawnCap, out: OutCap) -> Int {
+let done = chan_new(4);
+let got = ints_new();
+scope {
+spawn napper(t, done);
+spawn busy(done);
+chan_recv(done, got);
+chan_recv(done, got);
+}
+print(str_concat(int_to_str(ints_get(got, 0)), int_to_str(ints_get(got, 1))));
+0
+}
+"#
+}
+
+@test
+fn a_sleeping_task_does_not_hold_its_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The sleeper is started first; on one worker the computing task can only finish first if the
+    // sleep parked.
+    let d = prog_dir(h, "prog.nz", pool())?;
+    let mut failure = "";
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --no-cache --backend {backend} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        let r = bounded_exe(h, exe, d, env_set(suite_env(h), "NAZM_WORKERS", "1"));
+        if str_len(failure) == 0 && b.code != 0 {
+            failure = b.stderr;
+        } else if str_len(failure) == 0 && r.code != 0 {
+            failure = f"{backend}: {r.stderr}";
+        } else if str_len(failure) == 0 && text_trim_end(r.stdout) != "210" {
+            failure = f"{backend}: {ran_show(r)}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}
+
+@test
+fn every_clock_and_the_sleep_need_a_time_cap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for call in text_split("time_now_ns()|time_wall_ns()|time_sleep_ms(1)", "|") {
+        let refused = codes(h, f"fn main() -> Int {{ {call} }}\n");
+        let mut has = false;
+        for c in refused {
+            if c == "N0369" {
+                has = true;
+            }
+        }
+        let shown = str_join(refused, ", ");
+        check_that(has, f"{call}: [{shown}]")?;
+        let held = codes(h, f"fn main(t: TimeCap) -> Int {{ {call} }}\n");
+        let shown_held = str_join(held, ", ");
+        check_that(strs_len(held) == 0, f"{call}: [{shown_held}]")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn critical_refuses_every_clock_and_the_sleep(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for call in text_split("time_now_ns()|time_wall_ns()|time_sleep_ms(1)", "|") {
+        let d = prog_dir(h, "prog.nz", f"fn main(t: TimeCap) -> Int ! {{}} {{ {call} }}\n")?;
+        let r = nazm(h, d, words("check --profile critical prog.nz"));
+        scratch_remove(h, d);
+        check_that(r.code == 1, call)?;
+        check_that(text_contains(r.stderr, "rule `no-ambient-time`"), f"{call}: {r.stderr}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

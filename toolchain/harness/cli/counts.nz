@@ -1,0 +1,88 @@
+// The delivery report's test counts add up to the suite's total. Ported from
+// `crates/nazm-cli/tests/counts.rs` (R7).
+//
+// A release report breaks the suite into groups; this checks that the rows of its results table
+// sum to the total it states — a group updated and the total left alone, or the reverse.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// Every frozen release report under `docs/releases/`, sorted.
+fn release_reports(h: Caps) -> Result[Strs, Str] ! { io } {
+    let io = h.io;
+    let dir = f"{repo_root(h)}/docs/releases";
+    let names = match dir_list(io, dir) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"{dir}: {rust_io_error(e)}"); },
+    };
+    let found = strs_new();
+    for n in names {
+        if text_ends_with(n, ".md") && str_len(n) > 3 {
+            strs_push(found, f"{dir}/{n}");
+        }
+    }
+    if strs_len(found) == 0 {
+        return Result[Strs, Str].Err(error: f"no release report in {dir}");
+    }
+    Result[Strs, Str].Ok(value: found)
+}
+
+/// The total the report states: `**N passed, 0 failed, M ignored.**`, or `-1`.
+fn stated_total(text: Str) -> Int ! {} {
+    for chunk in text_split(text, "**") {
+        match text_find(chunk, " passed, 0 failed, ") {
+            Option.Some(value: at) => {
+                let n = str_slice(chunk, 0, at);
+                let rest = text_trim_end(str_slice(chunk, at + 19, str_len(chunk)));
+                if text_ends_with(rest, "ignored.") {
+                    let v = parse_usize(n);
+                    if v >= 0 {
+                        return v;
+                    }
+                }
+            },
+            Option.None() => {},
+        }
+    }
+    0 - 1
+}
+
+fn check_one(h: Caps, path: Str) -> Result[Int, Str] ! { io } {
+    let text = read_text(h, path)?;
+    let total = stated_total(text);
+    if total < 0 {
+        return Result[Int, Str].Err(error: f"{path} should state `**N passed, 0 failed, M ignored.**`");
+    }
+    let mut rows = 0;
+    let mut sum = 0;
+    for line in text_lines(text) {
+        let t = text_trim(line);
+        if !text_starts_with(t, "| ") {
+            continue;
+        }
+        let cells = text_split(str_slice(t, 2, str_len(t)), " | ");
+        if strs_len(cells) < 2 {
+            continue;
+        }
+        let v = parse_usize(text_trim(strs_get(cells, 1)));
+        if v >= 0 {
+            rows = rows + 1;
+            sum = sum + v;
+        }
+    }
+    check_that(rows >= 8, f"only found {rows} counted rows")?;
+    check_that(sum == total, f"the results table sums to {sum} and the total says {total}. One of them was updated and the other was not.")
+}
+
+@test
+fn the_delivery_reports_groups_sum_to_its_total(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for path in release_reports(h)? {
+        check_one(h, path)?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

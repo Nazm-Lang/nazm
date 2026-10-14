@@ -1,0 +1,107 @@
+// `main`'s authority decides whether the failure state and the stack limit are thread-local: a
+// program that can start no thread keeps them in plain globals, its check inlined; one that can —
+// a task, the reactor, C, a library — makes them thread-local. Either way failures are reported.
+// Ported from `crates/nazm-cli/tests/single_thread.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+const DOWN: Str = "fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }\n";
+
+/// The IR a build of `main_src` writes, every unit concatenated, or `Err`.
+fn ir(h: Caps, main_src: Str, library: Bool) -> Result[Str, Str] ! { io, spawn } {
+    let io = h.io;
+    let d = prog_dir(h, "p.nz", f"{DOWN}{main_src}")?;
+    let args = words("build --no-cache --emit-ir p.nz -o p");
+    if library {
+        strs_push(args, "--lib");
+    }
+    let b = nazm(h, d, args);
+    if b.code != 0 {
+        scratch_remove(h, d);
+        return Result[Str, Str].Err(error: f"{main_src}: {ran_show(b)}");
+    }
+    let parts = strs_new();
+    match dir_list(io, d) {
+        Result.Ok(value: names) => {
+            for n in names {
+                if text_ends_with(n, ".ll") {
+                    strs_push(parts, read_text(h, f"{d}/{n}")?);
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    };
+    scratch_remove(h, d);
+    Result[Str, Str].Ok(value: str_join(parts, ""))
+}
+
+/// How many of the failure state's and stack limit's declarations and definitions are
+/// thread-local.
+fn thread_local_state(ir: Str) -> Int ! {} {
+    let mut n = 0;
+    for l in text_lines(ir) {
+        let named = text_starts_with(l, "@nz.failed = ") || text_starts_with(l, "@nz.errmsg = ") || text_starts_with(l, "@nz.errlen = ") || text_starts_with(l, "@nz.stack_limit = ");
+        if named && text_contains(l, "thread_local") {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+@test
+fn main_s_authority_decides_whether_the_state_is_thread_local(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let one = ir(h, "fn main(out: OutCap) -> Int ! {io} { print(\"x\\n\"); down(3) }\n", false)?;
+    check_that(thread_local_state(one) == 0, one)?;
+    // The check is inlined: the runtime is called only on its slow path.
+    check_that(text_contains(one, "sc.slow."), one)?;
+    let mains = text_split("fn main(t: SpawnCap) -> Int ! {spawn} { scope { spawn down(3); } 0 }\n|fn main(n: NetCap) -> Int { down(3) }\n|fn main(f: ForeignCap) -> Int { down(3) }\n", "|");
+    let whys = text_split("a task|the reactor|C", "|");
+    let mut i = 0;
+    while i < 3 {
+        let many = ir(h, strs_get(mains, i), false)?;
+        check_that(thread_local_state(many) > 0, f"{strs_get(whys, i)}: {many}")?;
+        i = i + 1;
+    }
+    let library = ir(h, "pub extern \"C\" fn twice(n: Int) -> Int ! {} = \"twice\" { down(n) * 2 }\n", true)?;
+    check_that(thread_local_state(library) > 0, f"a library: {library}")
+}
+
+@test
+fn a_program_of_one_thread_still_reports_its_failures(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let mains = text_split("fn main() -> Int { down(100000000) }\n|fn main() -> Int { down(3) + 9223372036854775807 }\n", "|");
+    let codes_wanted = words("N0408 N0400");
+    let mut failure = "";
+    for backend in words("llvm cranelift") {
+        let mut k = 0;
+        while k < 2 && str_len(failure) == 0 {
+            let main = strs_get(mains, k);
+            let code = strs_get(codes_wanted, k);
+            k = k + 1;
+            scratch_write(h, d, "p.nz", f"{DOWN}{main}")?;
+            let exe = f"{d}/p-{backend}";
+            let a = words(f"build --no-cache --backend {backend} p.nz -o");
+            strs_push(a, exe);
+            let b = nazm(h, d, a);
+            if b.code != 0 {
+                failure = f"{backend}: {ran_show(b)}";
+                continue;
+            }
+            let r = bounded_exe(h, exe, d, suite_env(h));
+            if r.code != 2 {
+                failure = f"{backend} {main}: {ran_show(r)}";
+            } else if !text_contains(r.stderr, f"error[{code}]") {
+                failure = f"{backend}: {ran_show(r)}";
+            }
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}

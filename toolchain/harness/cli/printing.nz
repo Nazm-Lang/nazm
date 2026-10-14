@@ -1,0 +1,64 @@
+// R1, 5b.4 and 5b.13 (`docs/spec.md`, *Output*): `print` and `eprint` of any value an
+// interpolation's hole takes, and `println` and `eprintln`, which add a newline. Ported from
+// `crates/nazm-cli/tests/printing.rs` (R7).
+//
+// The same bytes on each stream in every implementation, nothing live; what has no text is refused
+// by name, and `println` cannot be redefined.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/differential.nz"
+
+@test
+fn every_kind_of_value_prints_its_text_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = everywhere_one(h, r#"use "@std/show"
+
+struct P { x: Int }
+
+impl Show for P { fn show(self: P) -> Str { f"P({self.x})" } }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let s = "str"
+    println("hello")
+    println(42)
+    println(0 - 7)
+    println(3.5)
+    println(true)
+    println(s)
+    println(P(x: 7))
+    println(UInt8(200))
+    print(5)
+    print(" ")
+    print(s)
+    println()
+    eprintln("to stderr")
+    eprint(9)
+    eprint("\n")
+    0
+}
+"#)?;
+    let first = memory_line(vec_get(runs, 0).ran);
+    for r in runs {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == "hello\n42\n-7\n3.5\ntrue\nstr\nP(7)\n200\n5 str\n0\n", r.label)?;
+        check_that(text_starts_with(r.ran.stderr, "to stderr\n9"), f"{r.label}: {ran_show(r.ran)}")?;
+        let line = memory_line(r.ran);
+        check_that(line == first, r.label)?;
+        check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn what_has_no_text_or_takes_the_name_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("a record with no `Show`", codes(h, "struct Q { y: Int }\nfn main(out: OutCap) -> Int ! {io} { println(Q(y: 1)); 0 }\n"), words("N0300"))?;
+    same_strs("a function named `println`", codes(h, "fn println(s: Str) -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0203"))?;
+    // `main` holds an `OutCap` it was not written (R1, 5b.1); a function of its that holds none
+    // still may not print.
+    same_strs("printing without the authority to", codes(h, "fn say() -> Int { println(\"x\"); 0 }\nfn main() -> Int { say() }\n"), words("N0369"))?;
+    // Nor may a `main` that writes an `IoCap` and so is given no `OutCap`, once it has lost the
+    // `IoCap`'s binding.
+    same_strs("a main that wrote its authority and shadowed it", codes(h, "fn main(io: IoCap) -> Int { let io = 0; println(\"x\"); io }\n"), words("N0369"))
+}

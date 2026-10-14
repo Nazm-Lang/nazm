@@ -92,3 +92,18 @@ fn a_differential_run_that_disagrees_is_reported(io: IoCap, p: ProcessCap, sp: S
         Result.Err(error: e) => if text_contains(e, "printed") { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: e) },
     }
 }
+
+@test
+fn a_child_reads_the_input_it_is_given(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = run_input(h, "sh", argv("-c", "cat; echo end"), "", env_here(io), "line one\nline two\n");
+    if r.code != 0 || r.stdout != "line one\nline two\nend\n" {
+        return Result[Int, Str].Err(error: ran_show(r));
+    }
+    // Without input, standard input is empty rather than the harness's own.
+    let empty = run(h, "sh", argv("-c", "cat; echo end"), "", env_here(io));
+    if empty.stdout != "end\n" {
+        return Result[Int, Str].Err(error: ran_show(empty));
+    }
+    Result[Int, Str].Ok(value: 0)
+}

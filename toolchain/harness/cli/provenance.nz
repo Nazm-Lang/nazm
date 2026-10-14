@@ -1,0 +1,78 @@
+// N52 and Q1-D-19: provenance. Every example in `examples/provenance/` runs the same interpreted
+// and compiled; a restricted flow is refused before anything is built; and a file's contents
+// carried through `Bytes` and `Text` keep their provenance. Ported from
+// `crates/nazm-cli/tests/provenance.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn copy_examples(h: Caps, from: Str, to: Str) -> Result[Int, Str] ! { io } {
+    let io = h.io;
+    let src = f"{repo_root(h)}/{from}";
+    let names = match dir_list(io, src) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "examples"); },
+    };
+    for n in names {
+        if text_ends_with(n, ".nz") {
+            scratch_write(h, to, n, read_text(h, f"{src}/{n}")?)?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn every_provenance_example_runs_the_same_interpreted_and_compiled(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    copy_examples(h, "examples/provenance", d)?;
+    let text = read_text(h, f"{d}/tally.nz")?;
+    let lines = text_count(text, "\n");
+    let got = agree_native(h, d, "tally.nz");
+    // And it wrote where it chose to.
+    let wrote = read_text(h, f"{d}/tally.out");
+    scratch_remove(h, d);
+    check_that(got? == f"{lines}\n", "tally.nz")?;
+    check_that(wrote? == f"{lines}", "tally.out")
+}
+
+@test
+fn a_restricted_flow_is_refused_before_anything_is_built(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "fn main(io: IoCap) -> Int ! { io } { write_file(read_file(\"m.nz\"), \"x\"); 0 }\n")?;
+    let built = nazm(h, d, words("build m.nz -o prog --no-cache"));
+    let exists = file_exists_at(io, f"{d}/prog");
+    scratch_remove(h, d);
+    check_that(built.code != 0, ran_show(built))?;
+    check_that(text_contains(built.stderr, "N0372"), built.stderr)?;
+    check_that(!exists, "the refused build wrote prog")
+}
+
+/// Q1-D-19: a file's contents carried through `Bytes` and `Text` — made from, sliced, turned back
+/// into a `Str` — keep their provenance: as a write's path each is refused with `N0372`; as the
+/// data written, each is accepted.
+@test
+fn provenance_survives_bytes_and_text(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let paths = text_split("bytes_to_str(bytes_from_str(read_file(\"cfg\")))|bytes_to_str(bytes_slice(bytes_from_str(read_file(\"cfg\")), 0, 2))|text_as_str(Text(read_file(\"cfg\")))|text_as_str(text_slice(Text(read_file(\"cfg\")), 0, 1))", "|");
+    let mut failure = "";
+    for path in paths {
+        scratch_write(h, d, "p.nz", f"fn main(io: IoCap) -> Int ! {{ io }} {{ write_file({path}, \"x\") }}\n")?;
+        let a = nazm(h, d, words("check p.nz"));
+        scratch_write(h, d, "p.nz", f"fn main(io: IoCap) -> Int ! {{ io }} {{ write_file(arg(0), {path}) }}\n")?;
+        let b = nazm(h, d, words("check p.nz"));
+        if str_len(failure) == 0 && (a.code != 1 || !text_contains(a.stderr, "N0372")) {
+            failure = f"{path}: {a.stderr}";
+        } else if str_len(failure) == 0 && b.code != 0 {
+            failure = f"{path} as data: {b.stderr}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}

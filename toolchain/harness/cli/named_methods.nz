@@ -1,0 +1,173 @@
+// R1, 5b.15 (`docs/spec.md`, *Methods and indexes by name*): `x.f(a)` is `T_f(x, a)` for the
+// type's family where no trait gives `f`, `x[i]` is its `_get` and `x[i] = v` its `_set`; map
+// entries read, write and count by index; lines and splits keep their edges. Ported from
+// `crates/nazm-cli/tests/named_methods.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/differential.nz"
+
+@test
+fn methods_and_indexes_by_name_run_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, r#"use "@std/text"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/show"
+
+struct P { x: Int }
+
+// A trait's method of the name wins over a function by name.
+trait Size { fn len(self: Self) -> Int; }
+impl Size for P { fn len(self: P) -> Int { 100 + self.x } }
+fn p_len(p: P) -> Int { 0 }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let v = vec_new[Int]()
+    v.push(10)
+    v.push(20)
+    v[1] = v[0] + 5
+    v[0] += 1
+    println(f"{v[0]} {v[1]} {v.len()} {v.get(1)}")
+    let s = vec_new[Str]()
+    s.push("a")
+    s[0] = f"{s[0]}b"
+    println(s[0])
+    let words = "x y z".split(" ")
+    println(f"{strs_len(words)} {words[2]} {"hello".len()} {42.to_str().len()}")
+    let b = bytes_new(2)
+    b[1] = UInt8(7)
+    println(b[1])
+    let m = hashmap_new[Str, Int]()
+    m.set("k", 5)
+    match m.get("k") {
+        Some(x) => println(x),
+        None => println("none"),
+    }
+    println(P(x: 3).len())
+    0
+}
+"#, "11 15 2 15\nab\n3 z 5 2\n7\n5\n103\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn first_code_is(h: Caps, src: Str, code: Str, why: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = codes(h, src);
+    let first = if strs_len(got) > 0 { strs_get(got, 0) } else { "(none)" };
+    let all = str_join(got, ", ");
+    check_that(first == code, f"{why}: [{all}]")
+}
+
+@test
+fn what_has_no_function_of_the_name_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    first_code_is(h, "fn main() -> Int { let v = vec_new[Int](); v.nothing() }\n", "N0605", "a method no trait gives and no function names")?;
+    // What `ints_push(v, "a")` says, said of the method call.
+    first_code_is(h, "fn main() -> Int { let v = vec_new[Int](); v.push(\"a\"); 0 }\n", "N0300", "a by-name call's argument checked as the function's")?;
+    first_code_is(h, "struct Q { y: Int }\nfn main() -> Int { let q = Q(y: 1); q[0] }\n", "N0624", "an index on something that is neither an array nor a sequence")
+}
+
+@test
+fn map_entries_read_write_and_count_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // R1, 5b.7: `m[k]` is `<map>_at`, `m[k] = v` its `_set`, and a compound update starts an
+    // absent entry from its value type's zero.
+    agrees(h, r#"use "@std/hash"
+use "@std/hashmap"
+use "@std/ordmap"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let counts = hashmap_new[Str, Int]()
+    let words = vec_new[Str]()
+    words.push("a")
+    words.push("b")
+    words.push("a")
+    let mut i = 0
+    while i < words.len() {
+        let w = words[i]
+        counts[w] += 1
+        i += 1
+    }
+    counts["c"] = 9
+    counts["c"] -= 2
+    println(f"{counts["a"]} {counts["b"]} {counts["c"]} {counts.len()}")
+    let names = hashmap_new[Int, Str]()
+    names[1] += "x"
+    names[1] += "y"
+    let scale = ordmap_new[Int, Float64]()
+    scale[3] += 1.5
+    scale[3] *= 2.0
+    println(f"{names[1]} {scale[3]}")
+    0
+}
+"#, "2 1 7 3\nxy 3\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_absent_map_entry_read_by_index_fails(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = everywhere_one(h, "use \"@std/hash\"\nuse \"@std/hashmap\"\n\nfn main(out: OutCap) -> Int ! {io} {\n    let m = hashmap_new[Str, Int]()\n    m[\"a\"] = 1\n    println(m[\"b\"])\n    0\n}\n")?;
+    for r in runs {
+        check_that(r.ran.code != 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(str_len(r.ran.stdout) == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_contains(r.ran.stderr, "N0405"), f"{r.label}: {ran_show(r.ran)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_remembered_entry_is_only_ever_its_own_key_s(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // R1, 5b.9: `m[k]` remembers the entry it found so `m[k] += n` writes without a second probe;
+    // a write of another key, or one after a removal moved the entries, is never it.
+    agrees(h, r#"use "@std/hash"
+use "@std/hashmap"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Str, Int]()
+    m["a"] = 1
+    m["b"] = 2
+    m["c"] = 3
+    let x = m["a"]
+    m["b"] = 20
+    m["a"] += 10
+    let y = m["c"]
+    // `c`, the last entry, remembered; the removal moves it and shortens the entries, so what
+    // was remembered is past their end.
+    m["c"] += 0
+    hashmap_remove(m, "a")
+    m["e"] = 5
+    m["c"] += 100
+    m["d"] += 4
+    println(f"{x} {y} {m["b"]} {m["c"]} {m["d"]} {m["e"]} {m.len()} {m.has("a")}")
+    0
+}
+"#, "1 3 20 103 4 5 4 false\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn lines_and_splits_keep_their_edges(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, r#"use "@std/text"
+
+fn show(xs: Strs) -> Str {
+    let mut s = ""
+    for x in xs { s += f"[{x}]" }
+    s
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(show("a\nb\r\n\nc\n".lines()))
+    println(show("\n".lines()))
+    println(show("".lines()))
+    println(show("x".lines()))
+    println(show("a  b ".split(" ")))
+    println(show("a--b---c".split("--")))
+    println(show("abc".split("")))
+    0
+}
+"#, "[a][b][][c]\n[]\n\n[x]\n[a][][b][]\n[a][b][-c]\n[abc]\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}

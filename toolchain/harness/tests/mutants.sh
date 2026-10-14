@@ -8,7 +8,9 @@
 # `nazm` and the Rust test binary rebuilt, the Rust killer and the Nazm test of the same name run,
 # and the mutation restored. FILEs are ported test files (`line_breaks`, …); default every one in
 # `cli/`. One line per mutation and a summary `N agree, M differ`: a mutation agrees when the Rust
-# killer and the Nazm test both fail it.
+# killer and the Nazm test give one verdict — both fail it (caught), or both pass (a catalogued
+# killer that no longer catches its mutation: a finding for the catalogue, said on its line). The
+# harness is copied before the first mutation, so editing it while this runs changes nothing here.
 #
 # Environment: HARNESS_NAZM (builds and runs the harness; default the 0.10.0 release) and
 # CARGO_TARGET_DIR (the scratch tree's own; default ~/.cache/nazm-target-R7-mut).
@@ -29,6 +31,9 @@ catalogue=$tree/xtask/mutations/mutations.toml
 
 log=$(mktemp -d "${TMPDIR:-/tmp}/r7-mutants.XXXXXX")
 trap 'rm -rf "$log"' EXIT
+mkdir -p "$log/harness"
+cp -R "$here/." "$log/harness/"
+here=$log/harness
 mutate=$log/nazm-mutate
 "$HARNESS_NAZM" build "$here/mutate/main.nz" -o "$mutate" >"$log/build.out" 2>&1 || {
     cat "$log/build.out" >&2; exit 1; }
@@ -68,6 +73,9 @@ for file in "${files[@]}"; do
             "$mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
             if [ "$rust" = fail ] && [ "$nazm" = fail ]; then
                 agree=$((agree + 1)); echo "agree   $name: $test caught by both"
+            elif [ "$rust" = pass ] && [ "$nazm" = pass ]; then
+                agree=$((agree + 1))
+                echo "agree   $name: $test survived by both (the catalogued killer does not catch it here)"
             else
                 differ=$((differ + 1)); echo "DIFFER  $name: $test rust $rust, nazm $nazm"
             fi

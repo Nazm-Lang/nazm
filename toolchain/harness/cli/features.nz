@@ -1,0 +1,101 @@
+// Gate 2: package features (`docs/spec.md`, *Package features*). Each package sees its own enabled
+// set in every implementation; a feature nobody declares is refused before anything is checked; the
+// lockfile records the enabled sets, and one with no feature anywhere stays `nazm.lock/1`. Ported
+// from `crates/nazm-cli/tests/features.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn shapes_manifest() -> Str ! {} {
+    "schema = \"nazm.package/1\"\n[package]\nname = \"shapes\"\nversion = \"0.1.0\"\n[features]\ndefault = [\"round\"]\nround = []\nfast = []\nunused = []\n"
+}
+
+/// `shapes` declares `round` (on by default), `fast` and `unused`; `app` asks `shapes` for `fast`,
+/// and declares `verbose`, which nobody enables by default.
+fn packages(h: Caps, root: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, root, "shapes/nazm.toml", shapes_manifest())?;
+    scratch_write(h, root, "shapes/src/poly.nz", "@cfg(feature = \"fast\")\npub fn speed() -> Int { 2 }\n\n@cfg(not(feature = \"fast\"))\npub fn speed() -> Int { 1 }\n\n@cfg(all(feature = \"round\", not(feature = \"unused\")))\npub fn round() -> Int { 30 }\n\n@cfg(not(all(feature = \"round\", not(feature = \"unused\"))))\npub fn round() -> Int { 0 }\n")?;
+    scratch_write(h, root, "app/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n[dependencies]\nshapes = { path = \"../shapes\", version = \"0.1.0\", features = [\"fast\"] }\n[features]\nverbose = []\nall = [\"verbose\", \"shapes/unused\"]\n")?;
+    scratch_write(h, root, "app/src/main.nz", "use \"shapes:poly.nz\";\n\n@cfg(feature = \"verbose\")\nfn tag() -> Int { 400 }\n\n@cfg(not(feature = \"verbose\"))\nfn tag() -> Int { 0 }\n\n// `fast` is `shapes`'s, not this package's: never on here.\n@cfg(feature = \"fast\")\nfn leaked() -> Int { 5000 }\n\n@cfg(not(feature = \"fast\"))\nfn leaked() -> Int { 0 }\n\nfn main() -> Int { speed() + round() + tag() + leaked() }\n")
+}
+
+fn both(r: Ran) -> Str ! {} {
+    f"{r.stdout}{r.stderr}"
+}
+
+@test
+fn each_package_sees_its_own_features_in_every_implementation(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    packages(h, d)?;
+    let plain = nazm(h, d, words("run app/src/main.nz"));
+    let verbose = nazm(h, d, words("run --features verbose app/src/main.nz"));
+    let all = nazm(h, d, words("run --features all app/src/main.nz"));
+    let a = words("build --features all app/src/main.nz -o");
+    strs_push(a, f"{d}/app-all");
+    let built = nazm(h, d, a);
+    let ran = run(h, f"{d}/app-all", strs_new(), "", suite_env(h));
+    let checked = nazm(h, d, words("check --features verbose,all app/src/main.nz"));
+    scratch_remove(h, d);
+    check_that(text_trim(plain.stdout) == "32", both(plain))?;
+    check_that(text_trim(verbose.stdout) == "432", both(verbose))?;
+    check_that(text_trim(all.stdout) == "402", both(all))?;
+    check_that(built.code == 0, both(built))?;
+    check_that(text_trim(ran.stdout) == "402", ran_show(ran))?;
+    check_that(checked.code == 0, both(checked))
+}
+
+@test
+fn a_feature_nobody_declares_is_refused_before_anything_is_checked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    packages(h, d)?;
+    let r = nazm(h, d, words("run --features nope app/src/main.nz"));
+    scratch_write(h, d, "solo.nz", "fn main() -> Int { 0 }\n")?;
+    let outside = nazm(h, d, words("check --features x solo.nz"));
+    // A manifest whose feature enables something that is not one.
+    scratch_write(h, d, "shapes/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"shapes\"\nversion = \"0.1.0\"\n[features]\nfast = [\"turbo\"]\n")?;
+    let bad = nazm(h, d, words("check app/src/main.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, both(r))?;
+    check_that(text_contains(both(r), "N0500") && text_contains(both(r), "`nope`"), both(r))?;
+    check_that(outside.code == 5, both(outside))?;
+    check_that(bad.code != 0, both(bad))?;
+    check_that(text_contains(both(bad), "N0500") && text_contains(both(bad), "`turbo`"), both(bad))
+}
+
+@test
+fn the_lockfile_records_enabled_features_and_a_featureless_one_stays_version_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    packages(h, d)?;
+    let l = nazm(h, d, words("lock app"));
+    let lock = read_text(h, f"{d}/app/nazm.lock");
+    let locked = nazm(h, d, words("check --locked app/src/main.nz"));
+    // `shapes` no longer turns `round` on by default: the recorded set is stale.
+    scratch_write(h, d, "shapes/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"shapes\"\nversion = \"0.1.0\"\n[features]\nround = []\nfast = []\nunused = []\n")?;
+    let stale = nazm(h, d, words("check --locked app/src/main.nz"));
+    scratch_remove(h, d);
+    check_that(l.code == 0, both(l))?;
+    let text = lock?;
+    check_that(text_contains(text, "schema = \"nazm.lock/2\""), text)?;
+    check_that(text_contains(text, "features = [\"fast\", \"round\"]"), text)?;
+    check_that(text_contains(text, "name = \"app\""), text)?;
+    check_that(locked.code == 0, both(locked))?;
+    check_that(stale.code != 0, both(stale))?;
+    check_that(text_contains(both(stale), "N0506"), both(stale))?;
+    check_that(text_contains(both(stale), "`shapes` resolves with the features [fast], and `nazm.lock` records [fast, round]"), both(stale))?;
+    // Without a feature anywhere, the lockfile is a `nazm.lock/1`, as before Gate 2.
+    let plain = scratch_new(h);
+    scratch_write(h, plain, "p/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"p\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n")?;
+    scratch_write(h, plain, "p/src/main.nz", "fn main() -> Int { 0 }\n")?;
+    let pl = nazm(h, plain, words("lock p"));
+    let plock = read_text(h, f"{plain}/p/nazm.lock");
+    scratch_remove(h, plain);
+    check_that(pl.code == 0, both(pl))?;
+    let ptext = plock?;
+    check_that(text_contains(ptext, "schema = \"nazm.lock/1\""), ptext)?;
+    check_that(!text_contains(ptext, "features"), ptext)
+}

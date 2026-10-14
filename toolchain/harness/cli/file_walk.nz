@@ -1,0 +1,119 @@
+// R1e, S1 and R1d, D4: `file_walk` lists every regular file, directory and symbolic link under a
+// directory, sorted by bytes, and never follows a link. Ported from
+// `crates/nazm-cli/tests/file_walk.rs` (R7).
+
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn walker() -> Str ! {} {
+    r#"use "@std/file";
+use "@std/ioerror";
+
+fn show(io: IoCap, dir: Str) -> Int ! {io} {
+    match file_walk(io, dir) {
+        Result.Ok(value: paths) => {
+            print(f"{dir}: {strs_len(paths)}\n");
+            for p in paths { print(f"  {p}\n"); }
+            0
+        },
+        Result.Err(error: e) => { print(f"{dir}: {io_kind_name(e.kind)}\n"); 0 },
+    }
+}
+
+fn main(io: IoCap) -> Int ! {io} {
+    show(io, "tree");
+    show(io, "tree/");
+    show(io, "tree/empty");
+    show(io, "missing");
+    show(io, "tree/a.txt");
+    0
+}
+"#
+}
+
+fn expected() -> Str ! {} {
+    "tree: 9\n  tree/Z\n  tree/a\n  tree/a.txt\n  tree/a/x\n  tree/b\n  tree/b/c\n  tree/b/c/deep\n  tree/b/z\n  tree/empty\ntree/: 9\n  tree/Z\n  tree/a\n  tree/a.txt\n  tree/a/x\n  tree/b\n  tree/b/c\n  tree/b/c/deep\n  tree/b/z\n  tree/empty\ntree/empty: 0\nmissing: NotFound\ntree/a.txt: NotADirectory\n0\n"
+}
+
+/// `tree/` with its directories and files, each file holding its own name.
+fn make_tree(h: Caps, root: Str) -> Result[Int, Str] ! { io } {
+    for f in words("a.txt a/x b/c/deep b/z Z") {
+        scratch_write(h, root, f"tree/{f}", f)?;
+    }
+    let io = h.io;
+    let v = h.v;
+    match dir_create_all(io, str_vouch(f"{root}/tree/empty")) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: "mkdir tree/empty"),
+    }
+}
+
+/// The walker's output under the interpreter and under LLVM.
+fn walk_everywhere(h: Caps, dir: Str, program: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", program)?;
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: nazm(h, dir, words("run prog.nz"))));
+    let a = words("build --no-cache --backend llvm prog.nz -o");
+    strs_push(a, f"{dir}/walker");
+    let b = nazm(h, dir, a);
+    if b.code != 0 {
+        return Result[Vec[Labeled], Str].Err(error: b.stderr);
+    }
+    vec_push(runs, Labeled(label: "llvm", ran: bounded_exe(h, f"{dir}/walker", dir, suite_env(h))));
+    Result[Vec[Labeled], Str].Ok(value: runs)
+}
+
+@test
+fn a_walk_lists_every_file_and_directory_sorted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    make_tree(h, d)?;
+    let runs = walk_everywhere(h, d, walker());
+    scratch_remove(h, d);
+    for r in runs? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == expected(), f"{r.label}: {r.ran.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn symlink(h: Caps, target: Str, at: Str) -> Result[Int, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-s");
+    strs_push(a, target);
+    strs_push(a, at);
+    let r = run(h, "ln", a, "", env_here(h.io));
+    check_that(r.code == 0, ran_show(r))
+}
+
+@test
+fn a_symbolic_link_is_listed_and_never_followed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    make_tree(h, d)?;
+    symlink(h, "../a.txt", f"{d}/tree/b/link-file")?;
+    symlink(h, "../a", f"{d}/tree/b/link-dir")?;
+    symlink(h, "nowhere", f"{d}/tree/dangling")?;
+    scratch_write(h, d, "loop/.keep", "")?;
+    symlink(h, "..", f"{d}/loop/up")?;
+    let program = text_replace(walker(), "    show(io, \"tree/\");\n    show(io, \"tree/empty\");\n    show(io, \"missing\");\n    show(io, \"tree/a.txt\");\n", "    show(io, \"loop\");\n");
+    // `loop/.keep` makes the directory here; the Rust test makes it empty. Its walk is one entry
+    // more, so it is taken out before the walk.
+    let io2 = h.io;
+    let v2 = h.v;
+    match file_remove(io2, str_vouch(f"{d}/loop/.keep")) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    };
+    let want = "tree: 12\n  tree/Z\n  tree/a\n  tree/a.txt\n  tree/a/x\n  tree/b\n  tree/b/c\n  tree/b/c/deep\n  tree/b/link-dir\n  tree/b/link-file\n  tree/b/z\n  tree/dangling\n  tree/empty\nloop: 1\n  loop/up\n0\n";
+    let runs = walk_everywhere(h, d, program);
+    scratch_remove(h, d);
+    for r in runs? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == want, f"{r.label}: {r.ran.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

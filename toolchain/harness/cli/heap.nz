@@ -1,0 +1,90 @@
+// Gate 3: a board's heap, and `no-heap` (`docs/spec.md`, *Boards*; `docs/systems-domains.md`
+// Part B). A board whose manifest gives a heap builds a program that allocates, which a board
+// without one refuses, naming what it reaches and where a heap is given; the linker script bounds
+// the arena; and the `kernel` profile refuses every allocation site whatever the board. Ported
+// from `crates/nazm-cli/tests/heap.rs` (R7).
+//
+// The Rust file's ignored test, `the_arena_allocates_and_runs_out_under_qemu`, starts a container;
+// it is not ported here (Docker stays with the Rust harness and contained runs).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// QEMU `virt`'s AArch64 board with a heap of `size` bytes.
+fn board(size: Str) -> Str ! {} {
+    f"name = \"virt, with a heap\"\nisa = \"aarch64\"\nload_address = 0x40080000\n\n[uart]\nkind = \"pl011\"\naddress = 0x9000000\n\n[stop]\nkind = \"semihosting\"\n\n[heap]\nsize = {size}\n"
+}
+
+/// A thousand numbers in a `Vec`, a string built at run time, and a buffer: 499500 + 4 + 7.
+fn allocates() -> Str ! {} {
+    r#"fn main(m: MmioCap) -> Int ! {} {
+    let v = vec_new[Int]();
+    let mut i = 0;
+    while i < 1000 {
+        vec_push(v, i);
+        i = i + 1;
+    }
+    let s = str_concat("ab", "cd");
+    let b = bytes_new(16);
+    bytes_set(b, 3, 7);
+    let mut total = 0;
+    let mut k = 0;
+    while k < vec_len(v) {
+        total = total + vec_get(v, k);
+        k = k + 1;
+    }
+    total + str_len(s) + Int(bytes_get(b, 3))
+}
+"#
+}
+
+/// `src` built for the AArch64 board in a new scratch directory, with `manifest` as `board.toml`
+/// where one is given (`""`: none): the directory and the build's run.
+fn build(h: Caps, src: Str, manifest: Str, opt: Str) -> Result[Labeled, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let args = words(f"build --opt-level {opt} --target aarch64-unknown-none --objects o");
+    if str_len(manifest) > 0 {
+        scratch_write(h, d, "board.toml", manifest)?;
+        strs_push(args, "--board");
+        strs_push(args, "board.toml");
+    }
+    strs_push(args, "prog.nz");
+    Result[Labeled, Str].Ok(value: Labeled(label: d, ran: nazm(h, d, args)))
+}
+
+@test
+fn a_board_with_a_heap_allocates_and_one_without_refuses_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let refused = build(h, allocates(), "", "0")?;
+    scratch_remove(h, refused.label);
+    let r = refused.ran;
+    check_that(r.code == 1, ran_show(r))?;
+    for named in text_split("sequences|strings|`[heap]`", "|") {
+        check_that(text_contains(r.stderr, named), f"{named}: {r.stderr}")?;
+    }
+    let built = build(h, allocates(), board("0x100000"), "0")?;
+    let script = read_text(h, f"{built.label}/o/link.ld");
+    scratch_remove(h, built.label);
+    check_that(built.ran.code == 0, built.ran.stderr)?;
+    let text = script?;
+    check_that(text_contains(text, "__heap_start = .;\n  . = . + 0x100000;\n  __heap_end = .;"), text)
+}
+
+@test
+fn the_kernel_profile_refuses_every_allocation_site_whatever_the_board(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "a.nz", allocates())?;
+    scratch_write(h, d, "b.nz", "static T: Atomic = atomic_new(0);\nfn main(m: MmioCap) -> Int ! {} { atomic_add(T, 1) }\n")?;
+    let r = nazm(h, d, words("check --profile kernel a.nz"));
+    let rb = nazm(h, d, words("check --profile kernel b.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0510"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`no-heap`"), r.stderr)?;
+    for site in text_split("`vec_new` allocates|`str_concat` allocates|`bytes_new` allocates", "|") {
+        check_that(text_contains(r.stderr, site), f"{site}: {r.stderr}")?;
+    }
+    check_that(rb.code == 0, rb.stderr)
+}

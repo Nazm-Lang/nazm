@@ -1,0 +1,60 @@
+// A field read out of a record parameter is a borrow: nobody releases it, on the normal path or the
+// failure path. Ported from `crates/nazm-cli/tests/borrowed_fields.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn program() -> Str ! {} {
+    r#"struct Bag { xs: Ints, name: Str, n: Int }
+
+fn total(b: Bag) -> Int {
+    let mut t = 0
+    let mut i = 0
+    while i < ints_len(b.xs) {
+        t += ints_get(b.xs, i)
+        i += 1
+    }
+    t + str_len(b.name) + b.n
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = ints_new()
+    ints_push(xs, 3)
+    ints_push(xs, 4)
+    let b = Bag(xs: xs, name: "bag", n: 1)
+    println(total(b))
+    println(ints_get(b.xs, 5))
+    0
+}
+"#
+}
+
+@test
+fn a_borrowed_field_is_released_by_nobody_on_either_path(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The last read fails (`N0405`) with the borrowed `b.xs` live: the failure path releases what
+    // the frames own, and the borrow is not among them.
+    let runs = everywhere_one(h, program())?;
+    let first = memory_line(vec_get(runs, 0).ran);
+    for r in runs {
+        check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == "11\n", r.label)?;
+        check_that(text_contains(r.ran.stderr, "N0405"), f"{r.label}: {ran_show(r.ran)}")?;
+        let line = memory_line(r.ran);
+        check_that(line == first, r.label)?;
+        check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_mir_names_the_borrow(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", program())?;
+    let r = nazm(h, d, words("mir prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_contains(r.stdout, "borrow"), r.stdout)
+}

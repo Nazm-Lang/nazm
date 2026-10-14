@@ -1,0 +1,65 @@
+// v1, Q1-B-05: `exit_with`'s status is one contract in every implementation (`docs/spec.md`,
+// *Ending*): `0..=255` reaches the host unchanged; anything outside fails with `N0416` and status
+// 2 — in the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, Cranelift, and from inside a
+// task. Ported from `crates/nazm-cli/tests/exit_status.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn ending(status: Str) -> Str ! {} {
+    f"fn main(io: IoCap) -> Int ! {{ io }} {{ print(\"x\\n\"); exit_with({status}) }}\n"
+}
+
+@test
+fn a_status_in_range_reaches_the_host_unchanged_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for status in words("0 1 7 2 254 255") {
+        let want = match text_parse_int(status) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0 - 1,
+        };
+        for r in everywhere_with_oracle(h, ending(status), false)? {
+            check_that(r.ran.code == want, f"{r.label}: {ran_show(r.ran)}")?;
+            check_that(text_starts_with(r.ran.stdout, "x"), f"{r.label}: {ran_show(r.ran)}")?;
+            check_that(!text_contains(r.ran.stderr, "N0416"), f"{r.label}: {ran_show(r.ran)}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_status_outside_0_to_255_fails_with_n0416_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for status in text_split("256|0 - 1|4294967298|0 - 9223372036854775807|512", "|") {
+        for r in everywhere_with_oracle(h, ending(status), false)? {
+            check_that(r.ran.code == 2, f"{r.label} exit_with({status}): {ran_show(r.ran)}")?;
+            check_that(text_contains(r.ran.stderr, "N0416") && text_contains(r.ran.stderr, "outside 0 to 255"), f"{r.label} exit_with({status}): {ran_show(r.ran)}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn task(status: Str) -> Str ! {} {
+    f"fn stop(io: IoCap, n: Int) -> Int ! {{ io }} {{ exit_with(n) }}\nfn main(io: IoCap, t: SpawnCap) -> Int ! {{ io, spawn }} {{\nscope {{ spawn stop(io, {status}); }}\n0 }}\n"
+}
+
+@test
+fn a_task_s_status_is_held_to_the_same_contract(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The LIR oracle runs the sequential subset only, and refuses a task by name.
+    for r in everywhere_with_oracle(h, task("9"), false)? {
+        if r.label != "lir oracle" {
+            check_that(r.ran.code == 9, f"{r.label}: {ran_show(r.ran)}")?;
+        }
+    }
+    for r in everywhere_with_oracle(h, task("300"), false)? {
+        if r.label != "lir oracle" {
+            check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+            check_that(text_contains(r.ran.stderr, "N0416"), f"{r.label}: {ran_show(r.ran)}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
