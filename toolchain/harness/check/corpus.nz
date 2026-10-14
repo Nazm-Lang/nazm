@@ -1,0 +1,1036 @@
+// The docs-corpus gate (R7, ported from `crates/nazm-docs` as `xtask/src/checks/docs.rs`'s
+// `check_docs_corpus` loads it): every allowlisted document exists and is UTF-8, every section id
+// is unique, every in-corpus link and every generated guide rule resolves, and the grammar parses
+// into productions whose references are all defined. What the corpus serves — digests, indexes,
+// sections — is not this gate's, and is not ported here; only what `Corpus::load` refuses.
+
+use "@std/text"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+const GUIDE_BEGIN: Str = "<!-- generated from docs/grammar.ebnf: begin -->";
+const GUIDE_END: Str = "<!-- generated from docs/grammar.ebnf: end -->";
+
+/// One allowlisted document: `manifest.rs`'s `CORPUS`, in its order.
+struct Doc {
+    id: Str,
+    path: Str,
+    guide: Bool,
+    ebnf: Bool,
+}
+
+fn corpus() -> Vec[Doc] ! {} {
+    let out = vec_new[Doc]();
+    let ids = words("goals master architecture spec capabilities roadmap research bootstrap diagnostics mcp performance runbook guide grammar");
+    let paths = words("docs/NAZM_LANGUAGE_GOALS.md docs/master-architecture.md docs/architecture.md docs/spec.md docs/capability-matrix.md docs/roadmap.md docs/research-register.md docs/bootstrap.md docs/diagnostics.md docs/mcp.md docs/performance.md docs/runbook.md docs/guide.md docs/grammar.ebnf");
+    let mut i = 0;
+    while i < strs_len(ids) {
+        let id = strs_get(ids, i);
+        vec_push(out, Doc(id: id, path: strs_get(paths, i), guide: id == "guide", ebnf: id == "grammar"));
+        i = i + 1;
+    }
+    out
+}
+
+/// A problem, `Problem` in `nazm-docs`: its kind, document, one-based line (`0`: none) and value.
+struct Problem {
+    kind: Str,
+    document: Str,
+    line: Int,
+    value: Str,
+}
+
+/// `Problem::at`: a zero-based line, made one-based.
+fn at(kind: Str, document: Str, line: Int, value: Str) -> Problem ! {} {
+    Problem(kind: kind, document: document, line: line + 1, value: value)
+}
+
+/// `Problem::of`: no line, no value.
+fn of(kind: Str, document: Str) -> Problem ! {} {
+    Problem(kind: kind, document: document, line: 0, value: "")
+}
+
+/// As `check_docs_corpus` prints one: `DOC[:LINE]: KIND[ `VALUE`]`.
+fn shown(p: Problem) -> Str ! {} {
+    let line = if p.line > 0 { f":{p.line}" } else { "" };
+    let value = if str_len(p.value) > 0 { f" `{p.value}`" } else { "" };
+    f"{p.document}{line}: {p.kind}{value}"
+}
+
+// --- characters ------------------------------------------------------------------------------
+
+/// The scalar value starting at byte `i` and its length, read leniently (the text is UTF-8).
+fn char_at(s: Str, i: Int) -> Ints ! {} {
+    let out = ints_new();
+    let b = str_byte(s, i);
+    let m = str_len(s);
+    let n = if b < 128 { 1 } else if b >= 240 { 4 } else if b >= 224 { 3 } else if b >= 192 { 2 } else { 1 };
+    let mut c = if n == 1 { b } else if n == 2 { b & 31 } else if n == 3 { b & 15 } else { b & 7 };
+    let mut k = 1;
+    while k < n && i + k < m {
+        c = (c << 6) | (str_byte(s, i + k) & 63);
+        k = k + 1;
+    }
+    ints_push(out, c);
+    ints_push(out, n);
+    out
+}
+
+/// `char::is_alphanumeric`: ASCII letters and digits, and — beyond ASCII — the letters and
+/// numbers of Latin-1, Latin Extended, Greek, Cyrillic and CJK. Every heading in the corpus today
+/// is ASCII apart from punctuation (`—`, `·`, `–`, `…`, quotation marks), none of which is.
+fn is_alnum(c: Int) -> Bool ! {} {
+    if c < 128 {
+        return (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122);
+    }
+    c == 170 || c == 178 || c == 179 || c == 181 || c == 185 || c == 186 || (c >= 188 && c <= 190)
+        || (c >= 192 && c <= 591 && c != 215 && c != 247)
+        || (c >= 880 && c <= 1023 && c != 894 && c != 903)
+        || (c >= 1024 && c <= 1327 && !(c >= 1154 && c <= 1161))
+        || (c >= 19968 && c <= 40959)
+}
+
+/// `char::to_lowercase` for the letters `is_alnum` admits.
+fn lower(c: Int) -> Int ! {} {
+    if c >= 65 && c <= 90 {
+        return c + 32;
+    }
+    if (c >= 192 && c <= 222 && c != 215) || (c >= 913 && c <= 937) || (c >= 1040 && c <= 1071) {
+        return c + 32;
+    }
+    if c >= 1024 && c <= 1039 {
+        return c + 80;
+    }
+    if c >= 256 && c <= 383 && c % 2 == 0 && c != 304 {
+        return c + 1;
+    }
+    c
+}
+
+fn encode(c: Int) -> Str ! {} {
+    if c < 128 {
+        return str_from_byte(c);
+    }
+    if c < 2048 {
+        return f"{str_from_byte(192 | (c >> 6))}{str_from_byte(128 | (c & 63))}";
+    }
+    if c < 65536 {
+        return f"{str_from_byte(224 | (c >> 12))}{str_from_byte(128 | ((c >> 6) & 63))}{str_from_byte(128 | (c & 63))}";
+    }
+    f"{str_from_byte(240 | (c >> 18))}{str_from_byte(128 | ((c >> 12) & 63))}{str_from_byte(128 | ((c >> 6) & 63))}{str_from_byte(128 | (c & 63))}"
+}
+
+/// `markdown::github_slug`: lower case; letters, digits, `-` and `_` kept; a space a `-`.
+fn github_slug(title: Str) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(title) {
+        let cn = char_at(title, i);
+        let c = ints_get(cn, 0);
+        if is_alnum(c) || c == 45 || c == 95 {
+            strs_push(out, encode(lower(c)));
+        } else if c == 32 {
+            strs_push(out, "-");
+        }
+        i = i + ints_get(cn, 1);
+    }
+    str_join(out, "")
+}
+
+/// `markdown::slug`: letters and digits lower-cased, each run of anything else one `-`.
+fn slug(title: Str) -> Str ! {} {
+    let out = strs_new();
+    let mut gap = false;
+    let mut i = 0;
+    while i < str_len(title) {
+        let cn = char_at(title, i);
+        let c = ints_get(cn, 0);
+        if is_alnum(c) {
+            if gap && strs_len(out) > 0 {
+                strs_push(out, "-");
+            }
+            gap = false;
+            strs_push(out, encode(lower(c)));
+        } else {
+            gap = true;
+        }
+        i = i + ints_get(cn, 1);
+    }
+    str_join(out, "")
+}
+
+fn is_digit(b: Int) -> Bool ! {} {
+    b >= 48 && b <= 57
+}
+
+fn digits_from(s: Str, i: Int) -> Int ! {} {
+    let mut n = 0;
+    while i + n < str_len(s) && is_digit(str_byte(s, i + n)) {
+        n = n + 1;
+    }
+    n
+}
+
+/// `dotted`: past `.N` groups from `at`.
+fn dotted(title: Str, from: Int) -> Int ! {} {
+    let mut at = from;
+    while at < str_len(title) && str_byte(title, at) == 46 {
+        let n = digits_from(title, at + 1);
+        if n == 0 {
+            return at;
+        }
+        at = at + 1 + n;
+    }
+    at
+}
+
+/// `label`: a heading's own number — `7.2`, `5b`, `A3.1` before ` — ` — as its identity, or `""`.
+fn heading_label(title: Str) -> Str ! {} {
+    let m = str_len(title);
+    let digits = digits_from(title, 0);
+    if digits > 0 {
+        let mut end = digits;
+        if end < m {
+            let b = str_byte(title, end);
+            if (b >= 65 && b <= 90) || (b >= 97 && b <= 122) {
+                end = end + 1;
+            }
+        }
+        end = dotted(title, end);
+        let mut rest = str_slice(title, end, m);
+        if text_starts_with(rest, ".") {
+            rest = str_slice(rest, 1, str_len(rest));
+        }
+        if text_starts_with(rest, " ") {
+            return str_slice(title, 0, end);
+        }
+    }
+    if m > 0 {
+        let first = str_byte(title, 0);
+        if first >= 65 && first <= 90 {
+            let d = digits_from(title, 1);
+            if d > 0 {
+                let end = dotted(title, 1 + d);
+                match strip_prefix(str_slice(title, end, m), " ") {
+                    Option.Some(value: rest) => {
+                        if text_starts_with(rest, "—") || text_starts_with(rest, "·") || text_starts_with(rest, "- ") {
+                            return str_slice(title, 0, end);
+                        }
+                    },
+                    Option.None() => {},
+                }
+            }
+        }
+    }
+    ""
+}
+
+// --- Markdown --------------------------------------------------------------------------------
+
+/// One ATX heading: level, title, the byte its line starts at, its zero-based line, its anchor.
+struct Heading {
+    level: Int,
+    title: Str,
+    start: Int,
+    line: Int,
+    anchor: Str,
+}
+
+/// `split_inclusive('\n')`: each line with its newline, so offsets add up.
+fn raw_lines(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    let m = str_len(text);
+    let mut start = 0;
+    let mut i = 0;
+    while i < m {
+        if str_byte(text, i) == 10 {
+            strs_push(out, str_slice(text, start, i + 1));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < m {
+        strs_push(out, str_slice(text, start, m));
+    }
+    out
+}
+
+/// `trim_end_matches(['\n', '\r'])`.
+fn chomp(raw: Str) -> Str ! {} {
+    let mut end = str_len(raw);
+    while end > 0 && (str_byte(raw, end - 1) == 10 || str_byte(raw, end - 1) == 13) {
+        end = end - 1;
+    }
+    str_slice(raw, 0, end)
+}
+
+fn run_of(s: Str, from: Int, b: Int) -> Int ! {} {
+    let mut n = 0;
+    while from + n < str_len(s) && str_byte(s, from + n) == b {
+        n = n + 1;
+    }
+    n
+}
+
+/// `opens`: the fence character and its count, or `[]`.
+fn opens(trimmed: Str) -> Ints ! {} {
+    let out = ints_new();
+    if str_len(trimmed) == 0 {
+        return out;
+    }
+    let c = str_byte(trimmed, 0);
+    if c != 96 && c != 126 {
+        return out;
+    }
+    let n = run_of(trimmed, 0, c);
+    if n >= 3 {
+        ints_push(out, c);
+        ints_push(out, n);
+    }
+    out
+}
+
+/// `closes`: at least `n` `c`s, then only whitespace.
+fn closes(trimmed: Str, c: Int, n: Int) -> Bool ! {} {
+    let run = run_of(trimmed, 0, c);
+    run >= n && str_len(trim_start_ws(str_slice(trimmed, run, str_len(trimmed)))) == 0
+}
+
+/// `atx`: the level and title of an ATX heading line, or level `0`.
+fn atx(l: Str) -> Heading ! {} {
+    let none = Heading(level: 0, title: "", start: 0, line: 0, anchor: "");
+    let indent = run_of(l, 0, 32);
+    if indent > 3 {
+        return none;
+    }
+    let rest = str_slice(l, indent, str_len(l));
+    let hashes = run_of(rest, 0, 35);
+    if hashes < 1 || hashes > 6 {
+        return none;
+    }
+    let after = str_slice(rest, hashes, str_len(rest));
+    if !(str_len(after) == 0 || text_starts_with(after, " ") || text_starts_with(after, "\t")) {
+        return none;
+    }
+    let mut title = trim_ws(after);
+    let closing = trim_end_matches(title, "#");
+    if str_len(closing) < str_len(title) && (str_len(closing) == 0 || text_ends_with(closing, " ")) {
+        title = trim_end_ws(closing);
+    }
+    Heading(level: hashes, title: title, start: 0, line: 0, anchor: "")
+}
+
+fn anchor_name(trimmed: Str) -> Str ! {} {
+    let a = match strip_prefix(trim_end_ws(trimmed), "<!-- id:") {
+        Option.Some(value: x) => x,
+        Option.None() => { return ""; },
+    };
+    let inner = match strip_suffix(a, "-->") {
+        Option.Some(value: x) => x,
+        Option.None() => { return ""; },
+    };
+    let b = match strip_prefix(inner, " ") {
+        Option.Some(value: x) => x,
+        Option.None() => { return ""; },
+    };
+    let name = match strip_suffix(b, " ") {
+        Option.Some(value: x) => x,
+        Option.None() => { return ""; },
+    };
+    if str_len(name) == 0 {
+        return "";
+    }
+    let first = str_byte(name, 0);
+    if !(first >= 97 && first <= 122) || text_ends_with(name, "-") {
+        return "";
+    }
+    let mut i = 1;
+    while i < str_len(name) {
+        let c = str_byte(name, i);
+        if !((c >= 97 && c <= 122) || is_digit(c) || c == 45) {
+            return "";
+        }
+        i = i + 1;
+    }
+    name
+}
+
+fn html_heading(trimmed: Str) -> Bool ! {} {
+    if str_len(trimmed) < 4 {
+        return false;
+    }
+    let b1 = str_byte(trimmed, 1);
+    let b2 = str_byte(trimmed, 2);
+    let b3 = str_byte(trimmed, 3);
+    str_byte(trimmed, 0) == 60 && (b1 == 104 || b1 == 72) && b2 >= 49 && b2 <= 54 && (b3 == 62 || b3 == 32)
+}
+
+fn all_bytes(t: Str, b: Int) -> Bool ! {} {
+    run_of(t, 0, b) == str_len(t)
+}
+
+fn underline(l: Str) -> Bool ! {} {
+    let t = trim_ws(l);
+    (str_len(t) > 0 && all_bytes(t, 61)) || (str_len(t) >= 3 && all_bytes(t, 45))
+}
+
+fn could_be_paragraph(l: Str) -> Bool ! {} {
+    let t = trim_start_ws(l);
+    if str_len(t) == 0 || str_len(l) - str_len(t) > 3 {
+        return false;
+    }
+    let mut listed = text_starts_with(t, "- ") || text_starts_with(t, "* ") || text_starts_with(t, "+ ");
+    let mut i = 0;
+    while i < str_len(t) && str_byte(t, i) != 46 && str_byte(t, i) != 41 {
+        i = i + 1;
+    }
+    if i < str_len(t) && i > 0 && digits_from(t, 0) == i {
+        listed = true;
+    }
+    !(listed || text_starts_with(t, "|") || text_starts_with(t, ">") || text_starts_with(t, "<"))
+}
+
+/// `markdown::headings`: every heading, or the structural problems (left in `problems`).
+fn headings(document: Str, text: Str, problems: Vec[Problem]) -> Vec[Heading] ! {} {
+    let out = vec_new[Heading]();
+    let mut fence_c = 0;
+    let mut fence_n = 0;
+    let mut comment = false;
+    let mut start = 0;
+    let mut paragraph = false;
+    let mut previous_heading = false;
+    let mut line = 0 - 1;
+    for raw in raw_lines(text) {
+        line = line + 1;
+        let here = start;
+        start = start + str_len(raw);
+        let l = chomp(raw);
+        let trimmed = trim_start_ws(l);
+        let was_heading = previous_heading;
+        previous_heading = false;
+        let was_paragraph = paragraph;
+        paragraph = false;
+        if fence_n > 0 {
+            if closes(trimmed, fence_c, fence_n) {
+                fence_n = 0;
+            }
+            continue;
+        }
+        if comment {
+            if text_contains(l, "-->") {
+                comment = false;
+            }
+            continue;
+        }
+        let o = opens(trimmed);
+        if ints_len(o) == 2 {
+            fence_c = ints_get(o, 0);
+            fence_n = ints_get(o, 1);
+            continue;
+        }
+        if text_starts_with(trimmed, "<!-- id:") || text_starts_with(trimmed, "<!--id:") {
+            let name = anchor_name(trimmed);
+            if was_heading && str_len(name) > 0 {
+                let last = vec_len(out) - 1;
+                let h = vec_get(out, last);
+                vec_set(out, last, Heading(level: h.level, title: h.title, start: h.start, line: h.line, anchor: name));
+            } else if was_heading {
+                vec_push(problems, at("malformed_anchor", document, line, l));
+            } else {
+                vec_push(problems, at("misplaced_anchor", document, line, l));
+            }
+            continue;
+        }
+        let c = find(l, "<!--");
+        if c >= 0 && !text_contains(str_slice(l, c, str_len(l)), "-->") {
+            comment = true;
+            continue;
+        }
+        let h = atx(l);
+        if h.level > 0 {
+            vec_push(out, Heading(level: h.level, title: h.title, start: here, line: line, anchor: ""));
+            previous_heading = true;
+            continue;
+        }
+        if html_heading(trimmed) || (was_paragraph && underline(l)) {
+            vec_push(problems, at("unsupported_heading", document, line, l));
+            continue;
+        }
+        paragraph = could_be_paragraph(l);
+    }
+    if fence_n > 0 {
+        vec_push(problems, of("unclosed_fence", document));
+    }
+    if comment {
+        vec_push(problems, of("unclosed_comment", document));
+    }
+    out
+}
+
+/// `without_code`: `line` with every inline code span removed.
+fn without_code(line: Str) -> Str ! {} {
+    let out = strs_new();
+    let m = str_len(line);
+    let mut i = 0;
+    let mut kept = 0;
+    while i < m {
+        if str_byte(line, i) == 96 {
+            let n = run_of(line, i, 96);
+            let mut j = i + n;
+            let mut closed = 0 - 1;
+            while j < m && closed < 0 {
+                if str_byte(line, j) == 96 {
+                    let k = run_of(line, j, 96);
+                    if k == n {
+                        closed = j + k;
+                    } else {
+                        j = j + k;
+                    }
+                } else {
+                    j = j + 1;
+                }
+            }
+            if closed >= 0 {
+                strs_push(out, str_slice(line, kept, i));
+                i = closed;
+                kept = i;
+            } else {
+                i = i + n;
+            }
+            continue;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(line, kept, m));
+    str_join(out, "")
+}
+
+/// `markdown::links`: every inline link target, `[text](target)` outside code, in order.
+fn links(body: Str) -> Strs ! {} {
+    let out = strs_new();
+    let mut fence_c = 0;
+    let mut fence_n = 0;
+    for raw in lines(body) {
+        let trimmed = trim_start_ws(raw);
+        if fence_n > 0 {
+            if closes(trimmed, fence_c, fence_n) {
+                fence_n = 0;
+            }
+            continue;
+        }
+        let o = opens(trimmed);
+        if ints_len(o) == 2 {
+            fence_c = ints_get(o, 0);
+            fence_n = ints_get(o, 1);
+            continue;
+        }
+        let prose = without_code(raw);
+        let mut from = 0;
+        let mut i = find_from(prose, "](", from);
+        while i >= 0 {
+            let a = i + 2;
+            let mut e = a;
+            while e < str_len(prose) && str_byte(prose, e) != 41 && ws_at(prose, e) == 0 {
+                e = e + 1;
+            }
+            if e > a && e < str_len(prose) && str_byte(prose, e) == 41 {
+                strs_push(out, str_slice(prose, a, e));
+            }
+            from = a;
+            i = find_from(prose, "](", from);
+        }
+    }
+    out
+}
+
+/// One section, as far as resolving needs it.
+struct Section {
+    id: Str,
+    title: Str,
+    start: Int,
+    first_line: Int,
+    fragment: Str,
+    links: Strs,
+}
+
+/// `markdown_sections`, its problems in `problems`.
+fn markdown_sections(d: Doc, text: Str, problems: Vec[Problem]) -> Vec[Section] ! {} {
+    let sections = vec_new[Section]();
+    let found = vec_new[Problem]();
+    let hs = headings(d.id, text, found);
+    if vec_len(found) > 0 {
+        for p in found {
+            vec_push(problems, p);
+        }
+        return sections;
+    }
+    if vec_len(hs) == 0 || vec_get(hs, 0).level != 1 || vec_get(hs, 0).start != 0 {
+        vec_push(problems, of("no_title", d.id));
+        return sections;
+    }
+    let title = vec_get(hs, 0);
+    let mine = vec_new[Problem]();
+    if str_len(title.anchor) > 0 {
+        vec_push(mine, at("misplaced_anchor", d.id, title.line, ""));
+    }
+    let n = vec_len(hs);
+    let ends = ints_new();
+    let firsts = ints_new();
+    let mut i = 0;
+    while i < n {
+        ints_push(ends, if i + 1 < n { vec_get(hs, i + 1).start } else { str_len(text) });
+        ints_push(firsts, vec_get(hs, i).line + 1);
+        i = i + 1;
+    }
+    vec_push(sections, Section(id: d.id, title: title.title, start: 0, first_line: ints_get(firsts, 0), fragment: github_slug(title.title), links: links(str_slice(text, 0, ints_get(ends, 0)))));
+    let stack_level = ints_new();
+    let stack_local = strs_new();
+    let seen = map_new[Int]();
+    let mut k = 1;
+    while k < n {
+        let h = vec_get(hs, k);
+        let idx = k;
+        k = k + 1;
+        while ints_len(stack_level) > 0 && ints_get(stack_level, ints_len(stack_level) - 1) >= h.level {
+            ints_pop(stack_level);
+            strs_pop(stack_local);
+        }
+        let mut local = h.anchor;
+        if str_len(local) == 0 {
+            local = heading_label(h.title);
+        }
+        if str_len(local) == 0 {
+            let segment = slug(h.title);
+            if str_len(segment) == 0 {
+                vec_push(mine, at("empty_identity", d.id, h.line, h.title));
+                continue;
+            }
+            local = if ints_len(stack_level) > 0 { f"{strs_get(stack_local, strs_len(stack_local) - 1)}/{segment}" } else { segment };
+        }
+        let id = f"{d.id}:{local}";
+        if map_has(seen, id) {
+            vec_push(mine, at("duplicate_id", d.id, h.line, id));
+            continue;
+        }
+        map_set(seen, id, h.line);
+        let body = str_slice(text, h.start, ints_get(ends, idx));
+        vec_push(sections, Section(id: id, title: h.title, start: h.start, first_line: ints_get(firsts, idx), fragment: github_slug(h.title), links: links(body)));
+        ints_push(stack_level, h.level);
+        strs_push(stack_local, local);
+    }
+    if vec_len(mine) > 0 {
+        for p in mine {
+            vec_push(problems, p);
+        }
+        return vec_new[Section]();
+    }
+    // A fragment GitHub has already given in this document takes `-1`, `-2`, … after it.
+    let used = map_new[Int]();
+    let out = vec_new[Section]();
+    for s in sections {
+        let f = s.fragment;
+        let count = match map_get(used, f) {
+            Option.Some(value: c) => c,
+            Option.None() => 0,
+        };
+        map_set(used, f, count + 1);
+        let frag = if count == 0 { f } else { f"{f}-{count}" };
+        vec_push(out, Section(id: s.id, title: s.title, start: s.start, first_line: s.first_line, fragment: frag, links: s.links));
+    }
+    out
+}
+
+// --- the grammar -----------------------------------------------------------------------------
+
+fn is_nonterminal(name: Str) -> Bool ! {} {
+    if str_len(name) == 0 {
+        return false;
+    }
+    let first = str_byte(name, 0);
+    if !(first >= 97 && first <= 122) {
+        return false;
+    }
+    let mut i = 1;
+    while i < str_len(name) {
+        let c = str_byte(name, i);
+        if !((c >= 97 && c <= 122) || is_digit(c) || c == 95) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// `references`: the nonterminals `body` names outside quoted terminals, first mention first.
+fn references(name: Str, body: Str) -> Strs ! {} {
+    let out = strs_new();
+    let mut quoted = false;
+    let mut word_start = 0 - 1;
+    let m = str_len(body);
+    let mut i = 0;
+    while i <= m {
+        let c = if i < m { str_byte(body, i) } else { 0 };
+        let wordy = i < m && !quoted && ((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95);
+        if wordy {
+            if word_start < 0 {
+                word_start = i;
+            }
+        } else {
+            if word_start >= 0 {
+                let w = str_slice(body, word_start, i);
+                let mut known = false;
+                for o in out {
+                    if o == w {
+                        known = true;
+                    }
+                }
+                if is_nonterminal(w) && w != name && !known {
+                    strs_push(out, w);
+                }
+                word_start = 0 - 1;
+            }
+            if i < m && c == 34 {
+                quoted = !quoted;
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// `terminator`: where `;` ends the production in `text` outside a quoted terminal (`>= 0`),
+/// `-1` when it does not end here, `-2` when anything but whitespace follows it or a comment
+/// opens inside it. `quote` holds whether a quoted terminal is open, across lines.
+fn terminator(text: Str, quote: Ints) -> Int ! {} {
+    let mut previous = 0;
+    let mut i = 0;
+    let m = str_len(text);
+    while i < m {
+        let c = str_byte(text, i);
+        if c == 34 {
+            ints_set(quote, 0, 1 - ints_get(quote, 0));
+        } else if ints_get(quote, 0) == 0 {
+            if previous == 40 && c == 42 {
+                return 0 - 2;
+            }
+            if c == 59 {
+                let after = str_slice(text, i + 1, m);
+                return if str_len(trim_ws(after)) == 0 { i } else { 0 - 2 };
+            }
+        }
+        previous = c;
+        i = i + 1;
+    }
+    0 - 1
+}
+
+/// One production, as far as the gate needs it: its name, block start line and references.
+struct Rule {
+    name: Str,
+    line: Int,
+    refs: Strs,
+}
+
+/// `grammar::rules`: the productions, their problems in `problems`.
+fn grammar_rules(document: Str, text: Str, problems: Vec[Problem]) -> Vec[Rule] ! {} {
+    let rules = vec_new[Rule]();
+    let mut header_end = 0 - 1;
+    let mut attached = false;
+    let mut attached_line = 0;
+    let mut in_comment = false;
+    let mut open = false;
+    let mut open_name = "";
+    let mut open_line = 0;
+    let mut open_body = strs_new();
+    let quote = ints_new();
+    ints_push(quote, 0);
+    let mut offset = 0;
+    let mut line = 0 - 1;
+    for raw in raw_lines(text) {
+        line = line + 1;
+        offset = offset + str_len(raw);
+        let l = chomp(raw);
+        let trimmed = trim_ws(l);
+        if open {
+            open = false;
+            let t = terminator(l, quote);
+            if t >= 0 {
+                strs_push(open_body, str_slice(l, 0, t));
+                vec_push(rules, Rule(name: open_name, line: open_line, refs: references(open_name, str_join(open_body, ""))));
+            } else if t == 0 - 2 {
+                vec_push(problems, at("grammar_syntax", document, line, l));
+            } else {
+                strs_push(open_body, l);
+                strs_push(open_body, "\n");
+                open = true;
+            }
+            continue;
+        }
+        if in_comment {
+            if text_ends_with(trimmed, "*)") {
+                in_comment = false;
+            }
+            continue;
+        }
+        if text_starts_with(trimmed, "(*") {
+            if !attached {
+                attached = true;
+                attached_line = line;
+            }
+            if !text_ends_with(trimmed, "*)") {
+                in_comment = true;
+            }
+            continue;
+        }
+        if str_len(trimmed) == 0 {
+            if attached {
+                attached = false;
+                if vec_len(rules) == 0 && header_end < 0 {
+                    header_end = offset;
+                } else {
+                    vec_push(problems, at("detached_comment", document, attached_line, ""));
+                }
+            }
+            continue;
+        }
+        let eq = find(l, "=");
+        if eq < 0 {
+            vec_push(problems, at("grammar_syntax", document, line, l));
+            continue;
+        }
+        let name = trim_ws(str_slice(l, 0, eq));
+        if !is_nonterminal(name) || ws_at(l, 0) > 0 {
+            vec_push(problems, at("grammar_syntax", document, line, l));
+            continue;
+        }
+        let first_line = if attached { attached_line } else { line };
+        attached = false;
+        let rest = str_slice(l, eq + 1, str_len(l));
+        ints_set(quote, 0, 0);
+        let t = terminator(rest, quote);
+        if t >= 0 {
+            vec_push(rules, Rule(name: name, line: first_line, refs: references(name, str_slice(rest, 0, t))));
+        } else if t == 0 - 2 {
+            vec_push(problems, at("grammar_syntax", document, line, l));
+        } else {
+            open = true;
+            open_name = name;
+            open_line = first_line;
+            open_body = strs_new();
+            strs_push(open_body, rest);
+            strs_push(open_body, "\n");
+        }
+    }
+    if open || in_comment {
+        vec_push(problems, of("grammar_syntax", document));
+    }
+    if attached {
+        vec_push(problems, at("detached_comment", document, attached_line, ""));
+    }
+    let names = strs_new();
+    for r in rules {
+        strs_push(names, r.name);
+    }
+    let mut i = 0;
+    while i < vec_len(rules) {
+        let r = vec_get(rules, i);
+        let mut j = 0;
+        let mut earlier = false;
+        while j < i {
+            if strs_get(names, j) == r.name {
+                earlier = true;
+            }
+            j = j + 1;
+        }
+        if earlier {
+            vec_push(problems, at("duplicate_id", document, r.line, r.name));
+        }
+        for reference in r.refs {
+            let mut defined = false;
+            for n in names {
+                if n == reference {
+                    defined = true;
+                }
+            }
+            if !defined {
+                vec_push(problems, at("undefined_reference", document, r.line, reference));
+            }
+        }
+        i = i + 1;
+    }
+    rules
+}
+
+// --- loading and resolving -------------------------------------------------------------------
+
+/// `normal`: a relative path's components, `.` dropped and `..` folded; `""` when it climbs out
+/// or is absolute (`None` in Rust).
+fn normal(path: Str) -> Str ! {} {
+    if text_starts_with(path, "/") {
+        return "";
+    }
+    let parts = strs_new();
+    for c in split(path, "/") {
+        if str_len(c) == 0 || c == "." {
+            continue;
+        }
+        if c == ".." {
+            if strs_len(parts) == 0 {
+                return "";
+            }
+            strs_pop(parts);
+            continue;
+        }
+        strs_push(parts, c);
+    }
+    str_join(parts, "/")
+}
+
+fn parent_dir(path: Str) -> Str ! {} {
+    let mut i = str_len(path);
+    while i > 0 {
+        i = i - 1;
+        if str_byte(path, i) == 47 {
+            return str_slice(path, 0, i);
+        }
+    }
+    ""
+}
+
+/// `Corpus::load`'s refusals, in its order: missing or non-UTF-8 documents first; then each
+/// document's structural problems; then what does not resolve.
+pub fn corpus_problems(h: Caps, root: Str) -> Strs ! { io } {
+    let problems = vec_new[Problem]();
+    let docs = corpus();
+    let texts = strs_new();
+    for d in docs {
+        match read_raw(h, f"{root}/{d.path}") {
+            Result.Ok(value: t) => {
+                if utf8_valid(t) {
+                    strs_push(texts, t);
+                } else {
+                    vec_push(problems, of("unreadable_document", d.id));
+                }
+            },
+            Result.Err(error: e) => vec_push(problems, of("missing_document", d.id)),
+        };
+    }
+    if vec_len(problems) > 0 {
+        return show_all(problems);
+    }
+    let per_doc = vec_new[Vec[Section]]();
+    let grammar_ids = strs_new();
+    let mut i = 0;
+    while i < vec_len(docs) {
+        let d = vec_get(docs, i);
+        let text = strs_get(texts, i);
+        if d.ebnf {
+            let rs = grammar_rules(d.id, text, problems);
+            let secs = vec_new[Section]();
+            vec_push(secs, Section(id: d.id, title: "", start: 0, first_line: 1, fragment: "", links: strs_new()));
+            for r in rs {
+                vec_push(secs, Section(id: f"{d.id}:{r.name}", title: r.name, start: 0, first_line: 1, fragment: "", links: strs_new()));
+            }
+            vec_push(per_doc, secs);
+        } else {
+            vec_push(per_doc, markdown_sections(d, text, problems));
+        }
+        i = i + 1;
+    }
+    if vec_len(problems) > 0 {
+        return show_all(problems);
+    }
+    // Every section id, and each document's fragments.
+    let ids = map_new[Int]();
+    let fragments = map_new[Str]();
+    let mut grammar = "";
+    i = 0;
+    while i < vec_len(docs) {
+        let d = vec_get(docs, i);
+        if d.ebnf && str_len(grammar) == 0 {
+            grammar = d.id;
+        }
+        for s in vec_get(per_doc, i) {
+            map_set(ids, s.id, 0);
+            if str_len(s.fragment) > 0 {
+                map_set(fragments, f"{d.id}#{s.fragment}", s.id);
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < vec_len(docs) {
+        let d = vec_get(docs, i);
+        let text = strs_get(texts, i);
+        let mut gb = 0 - 1;
+        let mut ge = 0 - 1;
+        if d.guide {
+            let b = find(text, GUIDE_BEGIN);
+            let e = find(text, GUIDE_END);
+            if b >= 0 && e >= 0 && str_len(grammar) > 0 && b < e && count_matches(text, GUIDE_BEGIN) == 1 && count_matches(text, GUIDE_END) == 1 {
+                gb = b;
+                ge = e;
+            } else {
+                vec_push(problems, of("generated_region", d.id));
+            }
+        }
+        let base = parent_dir(d.path);
+        for s in vec_get(per_doc, i) {
+            for href in s.links {
+                if text_contains(href, "://") || text_starts_with(href, "mailto:") {
+                    continue;
+                }
+                let hash = find(href, "#");
+                let path = if hash >= 0 { str_slice(href, 0, hash) } else { href };
+                let fragment = if hash >= 0 { str_slice(href, hash + 1, str_len(href)) } else { "" };
+                let mut target_doc = "";
+                if str_len(path) == 0 {
+                    target_doc = d.id;
+                } else {
+                    let joined = if text_starts_with(path, "/") { path } else if str_len(base) > 0 { f"{base}/{path}" } else { path };
+                    let p = normal(joined);
+                    if str_len(p) > 0 {
+                        for o in docs {
+                            if o.path == p && str_len(target_doc) == 0 {
+                                target_doc = o.id;
+                            }
+                        }
+                    }
+                }
+                if str_len(target_doc) == 0 {
+                    continue;
+                }
+                let resolved = hash < 0 || map_has(fragments, f"{target_doc}#{fragment}");
+                if !resolved {
+                    vec_push(problems, at("broken_link", d.id, s.first_line - 1, href));
+                }
+            }
+            if gb >= 0 && str_len(s.title) > 0 && s.start > gb && s.start < ge {
+                if let Option.Some(value: a) = strip_prefix(s.title, "`") {
+                    if let Option.Some(value: name) = strip_suffix(a, "`") {
+                        let target = f"{grammar}:{name}";
+                        if !map_has(ids, target) {
+                            vec_push(problems, at("broken_generated_from", d.id, s.first_line - 1, target));
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    show_all(problems)
+}
+
+fn show_all(problems: Vec[Problem]) -> Strs ! {} {
+    let out = strs_new();
+    for p in problems {
+        strs_push(out, shown(p));
+    }
+    out
+}
+
+pub fn gate_docs_corpus(h: Caps, root: Str) -> Strs ! { io } {
+    corpus_problems(h, root)
+}
