@@ -1,0 +1,493 @@
+// The execution loop (`openspec/changes/r4-interpreter/design.md`, D3, D5): one loop over the
+// flat code, with the task's frames, slots and operands in its own stacks. What each instruction
+// does is what the Rust interpreter's statement or expression of the same Core IR form does
+// (`crates/nazm-core/src/eval/exec.rs`), and every failure is its diagnostic.
+
+use "types.nz"
+use "ops.nz"
+use "heap.nz"
+use "names.nz"
+use "builtins.nz"
+use "values.nz"
+
+pub fn vm_new(max_iterations: Int, max_depth: Int, args: Strs) -> Vm {
+    Vm(ops: vec_new[V](), slots: vec_new[V](), frames: ints_new(), heap: heap_new(),
+            st: [max_iterations, max_depth, 0, 0, 0], err: ["", "", ""], errat: [0 - 1, 0, 0], args: args)
+}
+
+/// Record a failure at instruction `pc`'s span.
+pub fn fail(p: Prog, vm: Vm, pc: Int, code: Str, message: Str, help: Str) -> V {
+    if ints_get(vm.st, ST_FAILED) == 0 {
+        ints_set(vm.st, ST_FAILED, 1)
+        strs_set(vm.err, 0, code)
+        strs_set(vm.err, 1, message)
+        strs_set(vm.err, 2, help)
+        ints_set(vm.errat, 0, ints_get(p.smod, pc))
+        ints_set(vm.errat, 1, ints_get(p.slo, pc))
+        ints_set(vm.errat, 2, ints_get(p.shi, pc))
+    }
+    V.Unset
+}
+
+pub fn failed(vm: Vm) -> Bool {
+    ints_get(vm.st, ST_FAILED) == 1
+}
+
+fn overflow(p: Prog, vm: Vm, pc: Int, what: Str) -> V {
+    fail(p, vm, pc, "N0400", f"this {what} overflows `Int`",
+            "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping")
+}
+
+fn by_zero(p: Prog, vm: Vm, pc: Int) -> V {
+    fail(p, vm, pc, "N0401", "division by zero",
+            "guard the divisor, for example `if d != 0 { n / d } else { 0 }`")
+}
+
+/// `Int` arithmetic, checked as `docs/spec.md` requires (`eval/arith.rs`, `arith`).
+fn int_arith(p: Prog, vm: Vm, pc: Int, op: Int, a: Int, b: Int) -> V {
+    if op == 0 {
+        match checked_add(a, b) {
+            Some(r) => V.Int(v: r),
+            None => overflow(p, vm, pc, "addition"),
+        }
+    } else if op == 1 {
+        match checked_sub(a, b) {
+            Some(r) => V.Int(v: r),
+            None => overflow(p, vm, pc, "subtraction"),
+        }
+    } else if op == 2 {
+        match checked_mul(a, b) {
+            Some(r) => V.Int(v: r),
+            None => overflow(p, vm, pc, "multiplication"),
+        }
+    } else if b == 0 {
+        by_zero(p, vm, pc)
+    } else if op == 3 {
+        if b == 0 - 1 && a == 0 - 9223372036854775807 - 1 {
+            overflow(p, vm, pc, "division")
+        } else {
+            V.Int(v: a / b)
+        }
+    } else if b == 0 - 1 {
+        // `i64::MIN % -1` is 0, and nothing overflows (`arith.rs`: `wrapping_rem`).
+        V.Int(v: 0)
+    } else {
+        V.Int(v: a % b)
+    }
+}
+
+fn int_compare(op: Int, a: Int, b: Int) -> Bool {
+    if op == 0 { a == b } else if op == 1 { a != b } else if op == 2 { a < b } else if op == 3 { a <= b } else if op == 4 { a > b } else { a >= b }
+}
+
+/// Push the value of slot `slot` of the frame at `base`, taking a reference.
+fn push_local(vm: Vm, base: Int, slot: Int) {
+    let v = vec_get(vm.slots, base + slot)
+    retain(vm.heap, v)
+    vec_push(vm.ops, v)
+}
+
+fn store(vm: Vm, at: Int, v: V) {
+    let old = vec_get(vm.slots, at)
+    vec_set(vm.slots, at, v)
+    release(vm.heap, old)
+}
+
+/// Run the program's `main`; its value, or `Unset` when the run failed (the failure is in `vm`).
+pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
+    let h = vm.heap
+    let ops = vm.ops
+    let slots = vm.slots
+    let frames = vm.frames
+    let entry = p.entry
+    // `main`'s frame: each capability parameter is handed one (`eval/mod.rs`, `run_main`).
+    let mut base = 0
+    for i in 0..ints_get(p.flocals, entry) {
+        vec_push(slots, if i < ints_get(p.fparams, entry) { V.Cap(kind: 0) } else { V.Unset })
+    }
+    ints_push(frames, entry)
+    ints_push(frames, 0 - 1)
+    ints_push(frames, 0)
+    ints_push(frames, 0)
+    let mut pc = ints_get(p.fentry, entry)
+    let mut result = V.Unset
+    let code = p.op
+    let pa = p.a
+    loop {
+        let op = ints_get(code, pc)
+        if op == OP_LOCAL {
+            push_local(vm, base, ints_get(pa, pc))
+            pc += 1
+        } else if op == OP_CONST {
+            vec_push(ops, vec_get(p.consts, ints_get(pa, pc)))
+            pc += 1
+        } else if op == OP_ARITH {
+            let r = vec_pop(ops)
+            let l = vec_pop(ops)
+            let v = match (l, r) {
+                (V.Int(v: a), V.Int(v: b)) => int_arith(p, vm, pc, ints_get(pa, pc), a, b),
+                _ => num_arith(p, vm, pc, ints_get(pa, pc), l, r),
+            }
+            if failed(vm) { break }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_CMP {
+            let r = vec_pop(ops)
+            let l = vec_pop(ops)
+            let v = match (l, r) {
+                (V.Int(v: a), V.Int(v: b)) => V.Bool(v: int_compare(ints_get(pa, pc), a, b)),
+                _ => compare(p, vm, pc, ints_get(pa, pc), l, r),
+            }
+            release(h, l)
+            release(h, r)
+            if failed(vm) { break }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_JF {
+            match vec_pop(ops) {
+                V.Bool(v: b) => {
+                    if b { pc += 1 } else { pc = ints_get(pa, pc) }
+                },
+                _ => {
+                    let x = fail(p, vm, pc, "N0300", "a condition must be `Bool`", "")
+                    break
+                },
+            }
+        } else if op == OP_JMP {
+            pc = ints_get(pa, pc)
+        } else if op == OP_CALL {
+            let f = ints_get(pa, pc)
+            let n = ints_get(p.b, pc)
+            let depth = ints_get(vm.st, ST_DEPTH) + 1
+            if depth > ints_get(vm.st, ST_MAXDEPTH) {
+                let name = strs_get(p.fname, f)
+                let max = ints_get(vm.st, ST_MAXDEPTH)
+                let x = fail(p, vm, pc, "N0403", f"`{name}` recursed deeper than {max}",
+                        "the interpreter bounds call depth so runaway recursion reports instead of exhausting the stack, which would crash without a diagnostic. Raise it with `--max-depth`, or check the recursion has a base case")
+                break
+            }
+            ints_set(vm.st, ST_DEPTH, depth)
+            ints_set(vm.st, ST_CALLS, ints_get(vm.st, ST_CALLS) + 1)
+            base = enter(p, vm, f, n, pc + 1, base, 0)
+            pc = ints_get(p.fentry, f)
+        } else if op == OP_RET {
+            let v = vec_pop(ops)
+            let fb = ints_len(frames) - 4
+            let opbase = ints_get(frames, fb + 3)
+            while vec_len(ops) > opbase {
+                release(h, vec_pop(ops))
+            }
+            while vec_len(slots) > base {
+                release(h, vec_pop(slots))
+            }
+            let ret = ints_get(frames, fb + 1)
+            let x1 = ints_pop(frames)
+            let x2 = ints_pop(frames)
+            let x3 = ints_pop(frames)
+            let x4 = ints_pop(frames)
+            if ret < 0 {
+                result = v
+                break
+            }
+            ints_set(vm.st, ST_DEPTH, ints_get(vm.st, ST_DEPTH) - 1)
+            base = ints_get(frames, ints_len(frames) - 2)
+            vec_push(ops, v)
+            pc = ret
+        } else if op == OP_STORE {
+            store(vm, base + ints_get(pa, pc), vec_pop(ops))
+            pc += 1
+        } else if op == OP_RELEASE {
+            store(vm, base + ints_get(pa, pc), V.Unset)
+            pc += 1
+        } else if op == OP_POP {
+            release(h, vec_pop(ops))
+            pc += 1
+        } else if op == OP_ITER {
+            let left = ints_get(vm.st, ST_ITER)
+            if left <= 0 {
+                let x = fail(p, vm, pc, "N0402", "this program exceeded the interpreter's iteration limit",
+                        "Nazm does not bound iteration; `nazm run` does, so a non-terminating program reports instead of hanging. Raise it with `--max-iterations`, or check the loop's condition ever becomes false")
+                break
+            }
+            ints_set(vm.st, ST_ITER, left - 1)
+            pc += 1
+        } else if op == OP_BUILTIN {
+            let n = ints_get(p.b, pc)
+            let v = builtin(p, vm, pc, ints_get(pa, pc), n, out, io)
+            if failed(vm) { break }
+            for i in 0..n {
+                release(h, vec_pop(ops))
+            }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_DROPN {
+            for i in 0..ints_get(pa, pc) {
+                release(h, vec_pop(ops))
+            }
+            pc += 1
+        } else if op == OP_NEG {
+            let x = vec_pop(ops)
+            let v = match x {
+                V.Int(v: a) => {
+                    if a == 0 - 9223372036854775807 - 1 {
+                        fail(p, vm, pc, "N0400", "this negation overflows `Int`", "")
+                    } else {
+                        V.Int(v: 0 - a)
+                    }
+                },
+                _ => num_neg(p, vm, pc, x),
+            }
+            if failed(vm) { break }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_MATCH {
+            let top = vec_get(ops, vec_len(ops) - 1)
+            let variant = match top {
+                V.Enm(def: d, variant: k, fields: fs) => k,
+                _ => 0 - 1,
+            }
+            let t = ints_get(pa, pc)
+            let mut target = 0 - 1
+            for i in 0..ints_get(p.aux, t) {
+                if ints_get(p.aux, t + 1 + 2 * i) == variant {
+                    target = ints_get(p.aux, t + 2 + 2 * i)
+                    break
+                }
+            }
+            if target < 0 {
+                let x = fail(p, vm, pc, "N0343", "no arm covers this value's variant",
+                        "this is a bug in the compiler: exhaustiveness is checked")
+                break
+            }
+            pc = target
+        } else if op == OP_BIND {
+            let top = vec_get(ops, vec_len(ops) - 1)
+            match top {
+                V.Enm(def: d, variant: k, fields: fs) => {
+                    let v = list_get(fs, ints_get(pa, pc))
+                    retain(h, v)
+                    store(vm, base + ints_get(p.b, pc), v);
+                },
+                _ => { },
+            }
+            pc += 1
+        } else if op == OP_SWAPDROP {
+            let top = vec_pop(ops)
+            release(h, vec_pop(ops))
+            vec_push(ops, top)
+            pc += 1
+        } else if op == OP_FIELD {
+            let r = vec_pop(ops)
+            match r {
+                V.Rec(def: d, fields: fs) => {
+                    let v = list_get(fs, ints_get(pa, pc))
+                    retain(h, v)
+                    release(h, r)
+                    vec_push(ops, v)
+                },
+                _ => {
+                    let x = fail(p, vm, pc, "N0312", "this is not a record", "")
+                    break
+                },
+            }
+            pc += 1
+        } else if op == OP_RECORD || op == OP_VARIANT {
+            let n = ints_get(p.b, pc)
+            let c = ints_get(p.c, pc)
+            let arity = if op == OP_RECORD { n } else { ints_get(p.aux, c + 1) }
+            let first = if op == OP_RECORD { c } else { c + 2 }
+            let built = vec_new[V]()
+            for i in 0..arity { vec_push(built, V.Unset) }
+            let at = vec_len(ops) - n
+            for i in 0..n {
+                vec_set(built, ints_get(p.aux, first + i), vec_get(ops, at + i))
+            }
+            for i in 0..n {
+                let x = vec_pop(ops)
+            }
+            if op == OP_RECORD {
+                vec_push(ops, V.Rec(def: ints_get(pa, pc), fields: list_from_vec(built)))
+            } else {
+                vec_push(ops, V.Enm(def: ints_get(pa, pc), variant: ints_get(p.aux, c), fields: list_from_vec(built)))
+            }
+            pc += 1
+        } else if op == OP_APPEND {
+            append(vm, base + ints_get(pa, pc))
+            pc += 1
+        } else if op == OP_ASSIGN {
+            assign_path(p, vm, pc, base + ints_get(pa, pc))
+            if failed(vm) { break }
+            pc += 1
+        } else if op == OP_ARRAY {
+            let n = ints_get(pa, pc)
+            let built = vec_new[V]()
+            let at = vec_len(ops) - n
+            for i in 0..n { vec_push(built, vec_get(ops, at + i)) }
+            for i in 0..n {
+                let x = vec_pop(ops)
+            }
+            vec_push(ops, V.Arr(items: list_from_vec(built)))
+            pc += 1
+        } else if op == OP_ARRAYREP {
+            let v = vec_pop(ops)
+            let n = ints_get(pa, pc)
+            let built = vec_new[V]()
+            for i in 0..n {
+                if i > 0 { retain(h, v) }
+                vec_push(built, v)
+            }
+            if n == 0 { release(h, v) }
+            vec_push(ops, V.Arr(items: list_from_vec(built)))
+            pc += 1
+        } else if op == OP_INDEX {
+            let i = vec_pop(ops)
+            let a = vec_pop(ops)
+            match (a, i) {
+                (V.Arr(items: xs), V.Int(v: k)) => {
+                    if k < 0 || k >= list_len(xs) {
+                        let n = list_len(xs)
+                        let x = fail(p, vm, pc, "N0405", "this index is outside the array",
+                                f"asked for element {k} of an array of {n}")
+                        release(h, a)
+                        break
+                    }
+                    let v = list_get(xs, k)
+                    retain(h, v)
+                    release(h, a)
+                    vec_push(ops, v)
+                },
+                _ => {
+                    let x = fail(p, vm, pc, "N0302", "an index into a non-array", "")
+                    break
+                },
+            }
+            pc += 1
+        } else if op == OP_DEFECT {
+            let x = fail(p, vm, pc, "N0900", "the interpreter met an expression it cannot evaluate", "")
+            break
+        } else {
+            let x = other_op(p, vm, pc, op)
+            if failed(vm) { break }
+            pc += 1
+        }
+    }
+    if failed(vm) {
+        unwind(vm)
+    }
+    result
+}
+
+/// Enter function `f`: a fresh frame whose first `n` slots are the top `n` operands, in order.
+/// `skip` leading slots are left for the caller to fill (a closure's own value). Returns the new
+/// frame's slot base.
+pub fn enter(p: Prog, vm: Vm, f: Int, n: Int, ret: Int, base: Int, skip: Int) -> Int {
+    let ops = vm.ops
+    let slots = vm.slots
+    let nb = vec_len(slots)
+    let total = ints_get(p.flocals, f)
+    let from = vec_len(ops) - n
+    for i in 0..skip { vec_push(slots, V.Unset) }
+    for i in 0..n { vec_push(slots, vec_get(ops, from + i)) }
+    for i in n + skip..total { vec_push(slots, V.Unset) }
+    for i in 0..n {
+        let x = vec_pop(ops)
+    }
+    let frames = vm.frames
+    ints_push(frames, f)
+    ints_push(frames, ret)
+    ints_push(frames, nb)
+    ints_push(frames, vec_len(ops))
+    nb
+}
+
+/// A failure ends the run: every frame's slots and operands are released, as Rust's `Drop`
+/// releases them while the error travels out.
+fn unwind(vm: Vm) {
+    let h = vm.heap
+    while vec_len(vm.ops) > 0 { release(h, vec_pop(vm.ops)) }
+    while vec_len(vm.slots) > 0 { release(h, vec_pop(vm.slots)) }
+}
+
+/// `local = str_append(local, tail)` (`exec.rs`, `append`): the tail, then the binding's string
+/// taken out of its slot, so the slot's reference is the one the append weighs.
+fn append(vm: Vm, at: Int) {
+    let h = vm.heap
+    let t = vec_pop(vm.ops)
+    let s = vec_get(vm.slots, at)
+    vec_set(vm.slots, at, V.Unset)
+    let tail = match t {
+        V.Str(s: x, obj: o, start: st) => x,
+        _ => "",
+    }
+    vec_set(vm.slots, at, str_append_value(h, s, tail))
+    release(h, t)
+}
+
+/// `local.path = value` (`exec.rs`, `assign`): the value and the indexes were evaluated first,
+/// outermost index first; the aggregate along the path is rebuilt with the new value in place
+/// and the old one released.
+fn assign_path(p: Prog, vm: Vm, pc: Int, at: Int) {
+    let h = vm.heap
+    let start = ints_get(p.b, pc)
+    let nidx = ints_get(p.c, pc)
+    let steps = ints_get(p.aux, start)
+    let indexes = ints_new()
+    let top = vec_len(vm.ops)
+    for i in 0..nidx {
+        match vec_get(vm.ops, top - nidx + i) {
+            V.Int(v: k) => ints_push(indexes, k),
+            _ => ints_push(indexes, 0 - 1),
+        }
+    }
+    for i in 0..nidx {
+        let x = vec_pop(vm.ops)
+    }
+    let v = vec_pop(vm.ops)
+    let old = vec_get(vm.slots, at)
+    vec_set(vm.slots, at, V.Unset)
+    let built = rebuild(p, vm, pc, old, start + 1, steps, indexes, 0, v)
+    vec_set(vm.slots, at, built)
+}
+
+/// `whole` with the value at `steps` path steps from `aux[step]` replaced by `v`; a failure
+/// leaves `whole` as it was and releases `v`.
+fn rebuild(p: Prog, vm: Vm, pc: Int, whole: V, step: Int, steps: Int, indexes: Ints, k: Int, v: V) -> V {
+    if steps == 0 {
+        release(vm.heap, whole)
+        return v
+    }
+    let kind = ints_get(p.aux, step)
+    let which = ints_get(p.aux, step + 1)
+    match whole {
+        V.Rec(def: d, fields: fs) => {
+            let xs = vec_new[V]()
+            for f in fs { vec_push(xs, f) }
+            let inner = rebuild(p, vm, pc, list_get(fs, which), step + 2, steps - 1, indexes, k, v)
+            vec_set(xs, which, inner)
+            V.Rec(def: d, fields: list_from_vec(xs))
+        },
+        V.Arr(items: fs) => {
+            let i = ints_get(indexes, k)
+            let n = list_len(fs)
+            if i < 0 || i >= n {
+                release(vm.heap, v)
+                return fail_keep(p, vm, pc, whole, i, n)
+            }
+            let xs = vec_new[V]()
+            for f in fs { vec_push(xs, f) }
+            let inner = rebuild(p, vm, pc, list_get(fs, i), step + 2, steps - 1, indexes, k + 1, v)
+            vec_set(xs, i, inner)
+            V.Arr(items: list_from_vec(xs))
+        },
+        _ => {
+            release(vm.heap, v)
+            let x = fail(p, vm, pc, "N0200", "this is not a place that can be written to", "")
+            whole
+        },
+    }
+}
+
+fn fail_keep(p: Prog, vm: Vm, pc: Int, whole: V, i: Int, n: Int) -> V {
+    let x = fail(p, vm, pc, "N0405", "this index is outside the array", f"asked for element {i} of an array of {n}")
+    whole
+}
