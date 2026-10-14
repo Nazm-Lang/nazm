@@ -231,6 +231,9 @@ impl UserTypes {
                     format!("{name}[{}]", shown(self))
                 }
             }
+            // One list type (R1, 5b.18): `Vec[Int]` and `Vec[Str]` by their shorter names.
+            Type::Vec(_) if args.as_slice() == [Type::Int] => "Ints".to_owned(),
+            Type::Vec(_) if args.as_slice() == [Type::Str] => "Strs".to_owned(),
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
             Type::Box(_) => format!("Box[{}]", shown(self)),
             Type::List(_) => format!("List[{}]", shown(self)),

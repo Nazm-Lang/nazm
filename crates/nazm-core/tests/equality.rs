@@ -198,7 +198,8 @@ fn a_refusal_names_the_component_that_has_no_equality() {
     let m = message(src);
     assert!(m.contains("`Outer`"), "{m}");
     assert!(m.contains("`inner.values`"), "{m}");
-    assert!(m.contains("`Vec[Int]`"), "{m}");
+    // `Vec[Int]` by its shorter name since R1, 5b.18.
+    assert!(m.contains("`Ints`"), "{m}");
     // Through a variant, the variant is named on the way.
     let src = "enum W { Empty, Held(items: Ints), }\nstruct Outer { work: W, }\n\
                fn f(a: Outer, b: Outer) -> Bool { a == b }\nfn main() -> Int { 0 }\n";

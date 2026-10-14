@@ -66,6 +66,7 @@ fn main() {
 $ nazm run taste.nz
 36
 $ nazm build taste.nz -o taste && ./taste
+authority: OutCap (given to main): prints to standard output and error
 taste
 36
 ```

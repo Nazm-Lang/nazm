@@ -741,12 +741,18 @@ fn environment(
     // shadowing it. They share the ordinary function namespace deliberately: a call is a
     // call, and `str_len(s)` should resolve by the same rule as any other. They belong to
     // no module, so every module has all of them.
+    // One list type (R1, 5b.18): `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]`, interned
+    // before anything names them, so a name resolves to them without interning.
+    let ints = res.types_mut().vec_of(Type::Int);
+    let strs = res.types_mut().vec_of(Type::Str);
     for i in Intrinsic::ALL {
         // The table's shapes become types here, once: `Vec[T]` is interned, so it cannot
         // be written in a `const`. `T` is the built-in's own parameter.
         let owner = ParamOwner::Builtin(i);
         let t = Type::Param(TypeParam { owner, index: 0 });
         let mut shape = |s: Shape| match s.monomorphic() {
+            Some(Type::Ints) => ints,
+            Some(Type::Strs) => strs,
             Some(m) => m,
             None if s == Shape::T => t,
             None if s == Shape::ChanT => res.types_mut().chan_of(t),

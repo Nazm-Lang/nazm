@@ -52,5 +52,6 @@ mod layout;
 mod line_breaks;
 mod lir;
 mod lir_oracle;
+mod lists;
 mod live;
 mod lsp;

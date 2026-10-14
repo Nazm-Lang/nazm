@@ -352,7 +352,10 @@ use crate::digest::{self, Framed};
 /// sequence is wanted, and `+` on two `Str`s (`N0304`), moved from refused to accepted; `m[k]`,
 /// `m[k] = v` and `m[k] += n` on a map (`N0624`) moved from refused to accepted; a `match` arm's
 /// guard, `P if G =>`, moved from refused (a syntax error) to accepted.
-pub const SEMANTIC_EPOCH: u32 = 73;
+/// `74` — R1, 2026-10-14. One list type (5b.18): `Ints` and `Strs` became `Vec[Int]` and
+/// `Vec[Str]`, so a value of either moved from refused (`N0300`) to accepted where the other is
+/// wanted, and the types diagnostics name changed.
+pub const SEMANTIC_EPOCH: u32 = 74;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

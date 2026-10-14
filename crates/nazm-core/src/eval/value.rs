@@ -47,35 +47,6 @@ pub enum Value {
     /// An `OsHandle` (Gate 2): `generation << 32 | descriptor`, or a failed open's status.
     /// The object it names is in the process's handle table (`eval::os`).
     OsHandle(i64),
-    /// A growable sequence of `Int`, **by reference**.
-    ///
-    /// `Rc<RefCell<…>>` is the reference semantics, stated rather than incidental: two
-    /// bindings of the same sequence are the same storage, and a push through one is
-    /// visible through the other. `docs/spec.md` says so, and the native representation
-    /// — a pointer to a header — behaves identically by construction.
-    ///
-    /// Aliasing is not prevented and is not meant to be: `docs/spec.md`'s memory
-    /// constitution calls this an **owned mutable handle**, two bindings on one are two
-    /// references to one storage, and a push through either is visible through both.
-    ///
-    /// What *is* claimed, since N7, is reclamation: the storage goes when the last
-    /// reference to it dies. That is [`Seq`]'s job here and a reference count on the
-    /// header's job in a compiled program, and the two are compared case by case in
-    /// `crates/nazm-cli/tests/memory.rs`. No ownership *safety* is claimed beyond it —
-    /// nothing tracks a lifetime, because in this language nothing needs to: a handle can
-    /// be stored only in a local binding, so there is nowhere for a dangling one to hide.
-    /// `Arc<Mutex<…>>` rather than `Rc<RefCell<…>>` because the whole pipeline runs on
-    /// a thread the interpreter owns (`on_interpreter_stack`), so a `Value` has to be
-    /// `Send`. The lock is never contended — evaluation is single-threaded — and it is
-    /// not a concurrency mechanism.
-    Ints(Arc<Seq<Vec<i64>>>),
-    /// The same, for `Str`.
-    ///
-    /// Each element is a `Str` **value**, which since N8 means each element holds its own
-    /// reference to whatever backs it. That is `docs/spec.md`'s rule 3 applied to a
-    /// container: what is stored survives the binding it came from, and what is read out
-    /// survives being overwritten.
-    Strs(Arc<Seq<Vec<Str>>>),
     /// A bounded channel of `Int`, by reference.
     ///
     /// The one value designed to be shared between tasks: its operations *are* the
@@ -106,7 +77,16 @@ pub enum Value {
     /// do. `docs/spec.md` says an inactive variant owns nothing, and a value that carried
     /// storage for one would have made that a promise rather than a fact.
     Enum(EnumVal),
-    /// A `Vec[T]`: a handle to shared, mutable, counted storage, by the sequence law. N11.
+    /// A `Vec[T]`: a handle to shared, mutable, counted storage, by the sequence law. N11. An
+    /// `Ints` and a `Strs` are this too, since R1 (5b.18) made them `Vec[Int]` and `Vec[Str]`.
+    ///
+    /// Two bindings of the same sequence are the same storage, and a push through one is
+    /// visible through the other — `docs/spec.md`'s **owned mutable handle**, which the native
+    /// representation, a pointer to a header, behaves as by construction. What is claimed is
+    /// reclamation: the storage goes when the last reference to it dies, [`Seq`]'s job here and
+    /// a reference count's in a compiled program, compared case by case in
+    /// `crates/nazm-cli/tests/memory.rs`. `Arc<Mutex<…>>` because the pipeline runs on a thread
+    /// the interpreter owns, so a `Value` has to be `Send`; the lock is never contended.
     ///
     /// One representation for every `T`, because the interpreter is **parametric**: what
     /// an element owns is what its own [`Value`] owns, so copying one in and out by
@@ -244,8 +224,6 @@ impl PartialEq for Value {
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Bool(a), Self::Bool(b)) => a == b,
             (Self::Str(a), Self::Str(b)) => a == b,
-            (Self::Ints(a), Self::Ints(b)) => Arc::ptr_eq(a, b),
-            (Self::Strs(a), Self::Strs(b)) => Arc::ptr_eq(a, b),
             (Self::Chan(a), Self::Chan(b)) => Arc::ptr_eq(a, b),
             (Self::Vec(a), Self::Vec(b)) => Arc::ptr_eq(a, b),
             (Self::Cap(a), Self::Cap(b)) => a == b,
@@ -609,14 +587,6 @@ impl std::fmt::Display for Value {
             Self::Str(v) => write!(f, "{}", String::from_utf8_lossy(v.bytes())),
             // A sequence is never a program's result — `main` returns `Int` — so this
             // is for diagnostics only, and says what it is rather than dumping it.
-            Self::Ints(v) => match v.lock() {
-                Ok(v) => write!(f, "Ints({} items)", v.len()),
-                Err(_) => f.write_str("Ints(unreadable)"),
-            },
-            Self::Strs(v) => match v.lock() {
-                Ok(v) => write!(f, "Strs({} items)", v.len()),
-                Err(_) => f.write_str("Strs(unreadable)"),
-            },
             Self::Chan(_) => f.write_str("Chan"),
             Self::Bytes(b) => write!(f, "Bytes({} bytes)", b.len),
             Self::OsHandle(_) => f.write_str("OsHandle"),

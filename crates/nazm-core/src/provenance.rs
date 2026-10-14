@@ -656,7 +656,7 @@ impl<'b> Walk<'_, 'b> {
             Some(Shape::Bytes) => Some("Bytes".to_owned()),
             // Every atomic cell (Gate 3).
             Some(Shape::Atomic) => Some("Atomic".to_owned()),
-            Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),
+            Some(Shape::VecT) => elem().map(|t| vec_cell(&t)),
             // Every cell of one element type (R1b).
             Some(Shape::CellT) => elem().map(|t| format!("Cell[{t}]")),
             // A select's channels: the cell is their elements', `Chan[T]`.
@@ -677,7 +677,7 @@ impl<'b> Walk<'_, 'b> {
                 .types()
                 .vec_element(v)
                 .filter(|t| self.res.types().is_concrete(*t))
-                .map(|t| format!("Vec[{}]", self.res.types().show(t))),
+                .map(|t| vec_cell(&self.res.types().show(t))),
             _ => None,
         };
         name.unwrap_or_else(|| WILD_CELL.to_owned())
@@ -2398,5 +2398,15 @@ fn cell_words(cell: &str) -> String {
         "a container in generic code, which may be any container".to_owned()
     } else {
         format!("a `{cell}`, which holds whatever is written into any `{cell}`")
+    }
+}
+
+/// The cell of a vector whose element is shown `elem`: `Vec[elem]`, and since R1 (5b.18) `Ints`
+/// and `Strs` for `Vec[Int]` and `Vec[Str]`, the one cell their built-ins read.
+fn vec_cell(elem: &str) -> String {
+    match elem {
+        "Int" => "Ints".to_owned(),
+        "Str" => "Strs".to_owned(),
+        e => format!("Vec[{e}]"),
     }
 }
