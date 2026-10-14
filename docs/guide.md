@@ -512,7 +512,8 @@ accepts.
 | `trait_item` | `[ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}"` |
 | `trait_method` | `"fn" , IDENT , "(" , [ parameters ] , ")" , result , [ effect_set ] , ( ";" \| block )` |
 | `impl_item` | `"impl" , [ type_parameters ] , type , IDENT , type , "{" , { function } , "}"` |
-| `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
+| `use_item` | `"use" , ( STRING \| standard_path ) , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
+| `standard_path` | `"std" , "." , IDENT , { "." , IDENT }` |
 | `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
 | `qualifier` | `IDENT , "::"` |
 | `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , ( block \| expression_body )` |
@@ -745,7 +746,7 @@ trait Size { fn size(self: Self) -> Int; } struct W[T] { v: T, } impl[T] Size fo
 ### `use_item`
 
 ```ebnf
-use_item = "use" , STRING , [ IDENT , IDENT ] , ";" | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
+use_item = "use" , ( STRING | standard_path ) , [ IDENT , IDENT ] , ";" | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
 ```
 
 `as NAME` imports the module under a name (N49): its exports are written `NAME::item`
@@ -770,6 +771,18 @@ pub use "shapes.nz"; fn main() -> Int { 0 }
 
 ```nazm
 pub use "shapes.nz" { double, Sq as Square }; fn main() -> Int { 0 }
+```
+
+### `standard_path`
+
+```ebnf
+standard_path = "std" , "." , IDENT , { "." , IDENT } ;
+```
+
+A standard module by its dotted path (R1.5, D7): `use std.json;` is `use "@std/json";`.
+
+```nazm
+use std.hash; use std.hashmap; fn main() -> Int { hashmap_len(hashmap_single("a", 1)) }
 ```
 
 ### `reexport_name`
