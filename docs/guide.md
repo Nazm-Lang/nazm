@@ -79,6 +79,7 @@ build's time went, and `nazm inspect` prints everything the compiler knows about
 | a `struct` you declare | A **record**: a value with named fields, each keeping its own type's rules |
 | an `enum` you declare | One of a fixed set of named **variants**, each with its own named fields |
 | `Vec[T]` | A growable sequence of **any** type — records, enums, strings, other `Vec`s — by reference |
+| `List[T]` | The same type as `Vec[T]`, under the name taught since R1.5 (D7): `List[Int]` is `Vec[Int]`, which is `Ints`. R1a's immutable sequence, which held the name before, is `Chain[T]` |
 | `IoCap`, `OutCap`, `SpawnCap` | **Capabilities**: authority to reach the outside world, only its standard streams, and to start a task. Only `main` receives them; nothing constructs one, and an `IoCap` is accepted where an `OutCap` is expected. Four more — `ForeignCap`, `VouchCap`, `TimeCap`, `MmioCap` — authorise calling C, vouching for a string, reading the clock and device registers (`docs/spec.md`, *The capabilities*) |
 
 `Ints`, `Strs`, `Vec[T]` and `Chan` are handles: two bindings of one sequence are the same storage,

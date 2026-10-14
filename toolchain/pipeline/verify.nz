@@ -105,7 +105,7 @@ fn law_of(op: Str, t: Str) -> Str {
     if ordering { return "" }
     if k == "array" { return "structural" }
     if t == "Text" { return "bytes" }
-    if k == "vec" && (spell(t).head == "Box" || spell(t).head == "List") { return "structural" }
+    if k == "vec" && (spell(t).head == "Box" || spell(t).head == "Chain") { return "structural" }
     ""
 }
 

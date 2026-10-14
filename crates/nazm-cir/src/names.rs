@@ -80,7 +80,7 @@ impl<'a> Names<'a> {
                 "{}[{}]",
                 match t {
                     Type::Box(_) => "Box",
-                    Type::List(_) => "List",
+                    Type::List(_) => "Chain",
                     Type::Cell(_) => "Cell",
                     _ => "Vec",
                 },

@@ -670,10 +670,11 @@ fn resolve_written_inner(
             return chan;
         }
     }
-    // `Box[T]` and `List[T]` (R1a) and `Cell[T]` (R1b), prelude names: a module's own type of
-    // the name keeps it.
+    // `Box[T]` and `Chain[T]` (R1a; `Chain` was `List` until R1.5, D7) and `Cell[T]` (R1b), and
+    // `List[T]` (R1.5, D7), which is `Vec[T]`: prelude names, so a module's own type of the name
+    // keeps it.
     if !qualified
-        && (written.name == "Box" || written.name == "List" || written.name == "Cell")
+        && matches!(written.name.as_str(), "Box" | "Chain" | "Cell" | "List")
         && !types.names.contains_key(written.name.as_str())
     {
         let Some(args) = args else {
@@ -688,6 +689,7 @@ fn resolve_written_inner(
                     match written.name.as_str() {
                         "Box" => "box",
                         "Cell" => "cell",
+                        "Chain" => "chain",
                         _ => "list",
                     },
                     written.name,
@@ -703,7 +705,8 @@ fn resolve_written_inner(
         let t = match written.name.as_str() {
             "Box" => res.types_mut().box_of(elem),
             "Cell" => res.types_mut().cell_of(elem),
-            _ => res.types_mut().list_of(elem),
+            "Chain" => res.types_mut().list_of(elem),
+            _ => res.types_mut().vec_of(elem),
         };
         res.record_written_type(written.name_span, WrittenType::Builtin(t));
         return t;
@@ -871,6 +874,28 @@ impl Checker<'_> {
     /// than what a name means. A resolver that consulted this would be the global
     /// namespace again, which is why it lives behind a name that says so.
     pub(super) fn why_invisible(&self, name: &str, at: Span) -> Option<Diagnostic> {
+        // R1a's sequence built-ins, renamed with their type by R1.5 (D7): `List[T]` is `Vec[T]`
+        // now, and the sequence is `Chain[T]`. Only after resolution failed, so a module's own
+        // function of one of these names keeps it, as a prelude name's would.
+        if let Some(new) = match name {
+            "list_from_vec" => Some("chain_from_vec"),
+            "list_empty" => Some("chain_empty"),
+            "list_len" => Some("chain_len"),
+            "list_get" => Some("chain_get"),
+            _ => None,
+        } {
+            return Some(
+                Diagnostic::error(
+                    codes::BUILTIN_RENAMED,
+                    at,
+                    format!("`{name}` is now `{new}`"),
+                )
+                .help(format!(
+                    "R1a's immutable sequence is `Chain[T]` and its built-ins `chain_`; write \
+                     `{new}`. `List[T]` now names the growable list, `Vec[T]`"
+                )),
+            );
+        }
         let mut elsewhere = None;
         for id in self.res.defined_anywhere(name) {
             let Some(def) = self.res.function(id) else {

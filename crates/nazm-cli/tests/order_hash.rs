@@ -1,5 +1,5 @@
 //! R1a: ordering and hashing are derived (`docs/spec.md`, *Ordering and hashing are derived*),
-//! and a `Box` or `List` compares by what it holds.
+//! and a `Box` or `Chain` compares by what it holds.
 //!
 //! Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift
 //! — is asked for what the section's rules work out by hand, with every allocation reclaimed:
@@ -118,16 +118,16 @@ fn main(out: OutCap) -> Int ! {io} {
     // A tuple by position.
     show(out, str_concat(b((1, \"b\") < (2, \"a\")), str_concat(b((1, \"b\") <= (1, \"b\")),
         b((2, P(y: 0, x: 0)) > (2, P(y: 0, x: 1))))));
-    // A `Box` and a `List` compare by what they hold, through a recursive type.
+    // A `Box` and a `Chain` compare by what they hold, through a recursive type.
     let e1 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));
     let e2 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));
     let e3 = Expr.Neg(e: box_new(Expr.Num(v: 3)));
     let xs = vec_new[Str]();
     vec_push(xs, \"a\");
-    let l1 = list_from_vec(xs);
-    let l2 = list_from_vec(xs);
+    let l1 = chain_from_vec(xs);
+    let l2 = chain_from_vec(xs);
     show(out, str_concat(b(e1 == e2), str_concat(b(e1 != e3), str_concat(b(l1 == l2),
-        b(l1 == list_empty[Str]())))));
+        b(l1 == chain_empty[Str]())))));
     0
 }
 ";

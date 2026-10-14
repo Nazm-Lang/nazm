@@ -10,7 +10,7 @@ use "@std/json"
 use "@std/hashmap"
 use "@std/text"
 
-/// A spelling taken apart: `kind` is `builtin`, `vec` (`Vec`, `Box`, `List`, `Cell`, `Chan`),
+/// A spelling taken apart: `kind` is `builtin`, `vec` (`Vec`, `Box`, `Chain`, `Cell`, `Chan`),
 /// `record`, `enum`, `param` or `unknown`; `head` is the builtin's or container's name, or the
 /// definition (`MODULE::record NAME`); `args` its arguments' spellings.
 pub struct Spelled {
@@ -82,7 +82,7 @@ pub fn spell(t: Str) -> Spelled ! {} {
         Some(i) => { return Spelled(kind: "enum", head: head, module: str_slice(head, 0, i), name: str_slice(head, i + 7, str_len(head)), args: args) },
         None => {},
     }
-    if head == "Vec" || head == "Box" || head == "List" || head == "Cell" || (head == "Chan" && strs_len(args) == 1) {
+    if head == "Vec" || head == "Box" || head == "Chain" || head == "Cell" || (head == "Chan" && strs_len(args) == 1) {
         return Spelled(kind: "vec", head: head, module: "", name: "", args: args)
     }
     Spelled(kind: "builtin", head: head, module: "", name: "", args: args)

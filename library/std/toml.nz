@@ -1,7 +1,7 @@
 // `@std/toml`: TOML 1.0 text, parsed into a tree of values and encoded back (R1c, S1).
 //
 // Imported with `use "@std/toml";`. A document is a `Toml.Table`: its keys in the order they were
-// first defined, and its values, each a `Toml` — a recursive enum, through `List` (*Immutable
+// first defined, and its values, each a `Toml` — a recursive enum, through `Chain` (*Immutable
 // indirection*). Every rule of TOML 1.0 is checked: a key or table defined twice, a table defined
 // by a header after dotted keys made it, an inline table extended, an integer past `Int`, a date
 // that is not one. Parsing never traps: malformed text is an `Err` naming the line and column
@@ -25,17 +25,17 @@ pub enum Toml {
     LocalDate(value: Str),
     /// `07:32:00.999`.
     LocalTime(value: Str),
-    Array(items: List[Toml]),
-    Table(keys: List[Str], values: List[Toml]),
+    Array(items: Chain[Toml]),
+    Table(keys: Chain[Str], values: Chain[Toml]),
 }
 
 /// The value of `key` in table `t`, or `None` when `t` is not a table or has no such key.
 pub fn toml_get(t: Toml, key: Str) -> Option[Toml] ! {} {
     let mut found = Option[Toml].None();
     if let Toml.Table(keys: keys, values: values) = t {
-        for i in 0..list_len(keys) {
-            if list_get(keys, i) == key {
-                found = Option[Toml].Some(value: list_get(values, i));
+        for i in 0..chain_len(keys) {
+            if chain_get(keys, i) == key {
+                found = Option[Toml].Some(value: chain_get(values, i));
                 break;
             }
         }
@@ -161,14 +161,14 @@ fn tree(p: P, id: Int) -> Toml ! {} {
         for i in 0..strs_len(n.keys) {
             vec_push(keys, strs_get(n.keys, i));
         }
-        Toml.Table(keys: list_from_vec(keys), values: list_from_vec(values))
+        Toml.Table(keys: chain_from_vec(keys), values: chain_from_vec(values))
     } else {
         if n.kind == k_array() {
             let items = vec_new[Toml]();
             for i in 0..ints_len(n.kids) {
                 vec_push(items, tree(p, ints_get(n.kids, i)));
             }
-            Toml.Array(items: list_from_vec(items))
+            Toml.Array(items: chain_from_vec(items))
         } else {
             if n.kind == k_str() { Toml.Str(value: n.text) } else {
             if n.kind == k_int() { Toml.Int(value: n.num) } else {
@@ -960,14 +960,14 @@ fn encode_inline(v: Toml) -> Str ! {} {
         Toml.LocalTime(value: s) => s,
         Toml.Array(items: items) => {
             let parts = strs_new();
-            for i in 0..list_len(items) { strs_push(parts, encode_inline(list_get(items, i))); }
+            for i in 0..chain_len(items) { strs_push(parts, encode_inline(chain_get(items, i))); }
             f"[{str_join(parts, ", ")}]"
         },
         Toml.Table(keys: keys, values: values) => {
-            if list_len(keys) == 0 { return "{}"; }
+            if chain_len(keys) == 0 { return "{}"; }
             let parts = strs_new();
-            for i in 0..list_len(keys) {
-                strs_push(parts, f"{encode_key(list_get(keys, i))} = {encode_inline(list_get(values, i))}");
+            for i in 0..chain_len(keys) {
+                strs_push(parts, f"{encode_key(chain_get(keys, i))} = {encode_inline(chain_get(values, i))}");
             }
             f"{{ {str_join(parts, ", ")} }}"
         }
@@ -982,24 +982,24 @@ fn is_table(v: Toml) -> Bool ! {} {
 fn is_aot(v: Toml) -> Bool ! {} {
     let mut all = false;
     if let Toml.Array(items: items) = v {
-        all = list_len(items) > 0;
-        for i in 0..list_len(items) { if !is_table(list_get(items, i)) { all = false; } }
+        all = chain_len(items) > 0;
+        for i in 0..chain_len(items) { if !is_table(chain_get(items, i)) { all = false; } }
     }
     all
 }
 
 /// A table's lines under the header path `path`: its plain values, then its sub-tables, then
 /// its arrays of tables.
-fn encode_table(out: Strs, path: Str, keys: List[Str], values: List[Toml]) -> Int ! {} {
-    for i in 0..list_len(keys) {
-        let v = list_get(values, i);
+fn encode_table(out: Strs, path: Str, keys: Chain[Str], values: Chain[Toml]) -> Int ! {} {
+    for i in 0..chain_len(keys) {
+        let v = chain_get(values, i);
         if !is_table(v) && !is_aot(v) {
-            strs_push(out, f"{encode_key(list_get(keys, i))} = {encode_inline(v)}\n");
+            strs_push(out, f"{encode_key(chain_get(keys, i))} = {encode_inline(v)}\n");
         }
     }
-    for i in 0..list_len(keys) {
-        let v = list_get(values, i);
-        let name = encode_key(list_get(keys, i));
+    for i in 0..chain_len(keys) {
+        let v = chain_get(values, i);
+        let name = encode_key(chain_get(keys, i));
         let full = if str_len(path) == 0 { name } else { f"{path}.{name}" };
         if let Toml.Table(keys: k, values: x) = v {
             strs_push(out, f"\n[{full}]\n");
@@ -1007,8 +1007,8 @@ fn encode_table(out: Strs, path: Str, keys: List[Str], values: List[Toml]) -> In
         }
         if let Toml.Array(items: items) = v {
             if is_aot(v) {
-                for j in 0..list_len(items) {
-                    if let Toml.Table(keys: k, values: x) = list_get(items, j) {
+                for j in 0..chain_len(items) {
+                    if let Toml.Table(keys: k, values: x) = chain_get(items, j) {
                         strs_push(out, f"\n[[{full}]]\n");
                         encode_table(out, full, k, x);
                     }

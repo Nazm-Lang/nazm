@@ -48,12 +48,12 @@ fn json(t: Toml) -> Str {
         Toml.LocalTime(value: s) => tagged("time-local", s),
         Toml.Array(items: items) => {
             let parts = strs_new();
-            for i in 0..list_len(items) { strs_push(parts, json(list_get(items, i))); }
+            for i in 0..chain_len(items) { strs_push(parts, json(chain_get(items, i))); }
             f"[{str_join(parts, ",")}]"
         },
         Toml.Table(keys: keys, values: values) => {
             let parts = strs_new();
-            for i in 0..list_len(keys) { strs_push(parts, f"{json_quote(list_get(keys, i))}:{json(list_get(values, i))}"); }
+            for i in 0..chain_len(keys) { strs_push(parts, f"{json_quote(chain_get(keys, i))}:{json(chain_get(values, i))}"); }
             f"{{{str_join(parts, ",")}}}"
         },
     }

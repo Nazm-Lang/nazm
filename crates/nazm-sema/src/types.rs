@@ -333,8 +333,9 @@ pub enum Type {
     /// `Box[T]` (R1a): one `T`, an immutable shared value, by the id of `Vec[T]` — its
     /// representation is a `Vec[T]` of one element, which nothing can change.
     Box(VecId),
-    /// `List[T]` (R1a): a sequence of `T`, an immutable shared value, by the id of `Vec[T]`,
-    /// its representation.
+    /// `Chain[T]` (R1a): a sequence of `T`, an immutable shared value, by the id of `Vec[T]`,
+    /// its representation. Written `List[T]` until R1.5 renamed it (D7), whose `List[T]` is
+    /// `Vec[T]`; the variant keeps its Rust name.
     List(VecId),
     /// `Cell[T]` (R1b): one `T` that can be replaced, a mutable handle — the kind `Vec[T]` is —
     /// by the id of `Vec[T]`, its representation: a `Vec[T]` that always holds one element.
@@ -522,14 +523,14 @@ impl Type {
         matches!(self, Self::Ints | Self::Strs | Self::Vec(_) | Self::Bytes)
     }
 
-    /// Whether this is `Box[T]` or `List[T]` (R1a): shared, immutable, and — for now — neither
+    /// Whether this is `Box[T]` or `Chain[T]` (R1a): shared, immutable, and — for now — neither
     /// comparable nor crossing into a task.
     #[must_use]
     pub const fn is_indirection(self) -> bool {
         matches!(self, Self::Box(_) | Self::List(_))
     }
 
-    /// The `Vec[T]` a `Box[T]`, `List[T]` or `Cell[T]` is represented as, and every other type as
+    /// The `Vec[T]` a `Box[T]`, `Chain[T]` or `Cell[T]` is represented as, and every other type as
     /// it is: what every layer below the checker sees (R1a, R1b).
     #[must_use]
     pub const fn represented(self) -> Self {

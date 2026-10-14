@@ -284,7 +284,7 @@ impl UserTypes {
         }
     }
 
-    /// `List[elem]`, interned with the `Vec[elem]` it is represented as (R1a).
+    /// `Chain[elem]` (`Type::List`), interned with the `Vec[elem]` it is represented as (R1a).
     pub fn list_of(&mut self, elem: Type) -> Type {
         match self.vec_of(elem) {
             Type::Vec(v) => Type::List(v),
@@ -292,7 +292,7 @@ impl UserTypes {
         }
     }
 
-    /// The element of a `Vec`, `Box` or `List`; `None` for anything else.
+    /// The element of a `Vec`, `Box` or `Chain`; `None` for anything else.
     #[must_use]
     pub fn element(&self, t: Type) -> Option<Type> {
         match t {

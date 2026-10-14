@@ -3338,7 +3338,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             Shape::ChansT => "vec_new[Chan[Int]]()",
             // Immutable indirection (R1a).
             Shape::BoxT => "box_new(0)",
-            Shape::ListT => "list_empty[Int]()",
+            Shape::ListT => "chain_empty[Int]()",
             // A mutable cell (R1b).
             Shape::CellT => "cell_new(0)",
             // Checked arithmetic's result (R1b); no built-in takes one.
@@ -3392,7 +3392,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::ChanT => format!("if chan_send_of({call}, 0) {{ 1 }} else {{ 0 }}"),
         Shape::ChansT => format!("vec_len({call})"),
         Shape::BoxT => format!("box_get({call})"),
-        Shape::ListT => format!("list_len({call})"),
+        Shape::ListT => format!("chain_len({call})"),
         Shape::CellT => format!("cell_get({call})"),
         Shape::OptionT => {
             format!("match {call} {{ Option.Some(value: v) => v, Option.None() => 0, }}")

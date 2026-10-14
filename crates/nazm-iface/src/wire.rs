@@ -208,7 +208,7 @@ pub enum PersistentType {
         #[serde(rename = "box")]
         boxed: Box<PersistentType>,
     },
-    /// `List[T]` (R1a), written `{"list":T}`, likewise.
+    /// `Chain[T]` (R1a), written `{"list":T}`, likewise.
     List {
         list: Box<PersistentType>,
     },

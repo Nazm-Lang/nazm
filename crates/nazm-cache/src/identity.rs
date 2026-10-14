@@ -376,7 +376,10 @@ use crate::digest::{self, Framed};
 /// (a syntax error) to accepted (D7).
 /// `82` — R1.5, 2026-10-15. Printing in a function of the program's own modules with no `OutCap`
 /// passed moved from refused (`N0369`) to accepted (D8); a package's function is unchanged.
-pub const SEMANTIC_EPOCH: u32 = 82;
+/// `83` — R1.5, 2026-10-15. `List[T]` became `Vec[T]`'s name and R1a's sequence `Chain[T]`, with
+/// built-ins `chain_*`, so `List[T]` where a `Vec[T]` is wanted moved from refused to accepted, and
+/// a call of a `list_` built-in from accepted to refused (`N0637`) (D7).
+pub const SEMANTIC_EPOCH: u32 = 83;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -396,6 +399,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "ASSIGN_TO_IMMUTABLE",
     "ATTRIBUTE",
     "BRANCH_TYPES_DIFFER",
+    "BUILTIN_RENAMED",
     "BUILTIN_TYPE_REDEFINED",
     "CALLBACK_NOT_EXPORT",
     "CANNOT_INFER_TYPE_ARGUMENT",

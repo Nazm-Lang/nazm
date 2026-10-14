@@ -1,4 +1,5 @@
-//! R1a: immutable indirection, `Box[T]` and `List[T]` (`docs/spec.md`, *Immutable indirection*).
+//! R1a: immutable indirection, `Box[T]` and `Chain[T]` (`docs/spec.md`, *Immutable indirection*);
+//! the sequence was `List[T]` until R1.5 renamed it (D7).
 //!
 //! A definition may refer to itself through one, so a syntax tree is a type. The tests ask every
 //! implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift — for
@@ -91,7 +92,7 @@ fn nothing_live(line: &str) -> bool {
 }
 
 const TREES: &str = "enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), Neg(e: Box[Expr]), }
-struct Node { name: Str, kids: List[Node], }
+struct Node { name: Str, kids: Chain[Node], }
 
 fn show(out: OutCap, s: Str) -> Int ! {io} {
     print(str_concat(s, \"\\n\"))
@@ -121,21 +122,21 @@ fn main(out: OutCap) -> Int ! {io} {
     show(out, str_concat(box_get(b), box_get(c)));
     // A list is a snapshot: what is pushed onto the vector afterwards does not reach it.
     let leaves = vec_new[Node]();
-    vec_push(leaves, Node(name: \"a\", kids: list_empty[Node]()));
-    vec_push(leaves, Node(name: \"b\", kids: list_empty[Node]()));
-    let root = Node(name: \"r\", kids: list_from_vec(leaves));
-    vec_push(leaves, Node(name: \"late\", kids: list_empty[Node]()));
+    vec_push(leaves, Node(name: \"a\", kids: chain_empty[Node]()));
+    vec_push(leaves, Node(name: \"b\", kids: chain_empty[Node]()));
+    let root = Node(name: \"r\", kids: chain_from_vec(leaves));
+    vec_push(leaves, Node(name: \"late\", kids: chain_empty[Node]()));
     show(out, num_to_str(count(root)));
-    show(out, num_to_str(list_len(root.kids)));
-    show(out, list_get(root.kids, 1).name);
+    show(out, num_to_str(chain_len(root.kids)));
+    show(out, chain_get(root.kids, 1).name);
     // Nested: a list of lists.
     let row = vec_new[Int]();
     vec_push(row, 7);
-    let rows = vec_new[List[Int]]();
-    vec_push(rows, list_from_vec(row));
-    vec_push(rows, list_empty[Int]());
-    let grid = list_from_vec(rows);
-    show(out, num_to_str(list_get(list_get(grid, 0), 0) + list_len(list_get(grid, 1))));
+    let rows = vec_new[Chain[Int]]();
+    vec_push(rows, chain_from_vec(row));
+    vec_push(rows, chain_empty[Int]());
+    let grid = chain_from_vec(rows);
+    show(out, num_to_str(chain_get(chain_get(grid, 0), 0) + chain_len(chain_get(grid, 1))));
     0
 }
 ";
@@ -258,17 +259,17 @@ fn the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones() {
             none.clone(),
         ),
         (
-            "struct T[X] { v: X, kids: List[T[X]], }\nfn main() -> Int { 0 }",
+            "struct T[X] { v: X, kids: Chain[T[X]], }\nfn main() -> Int { 0 }",
             none.clone(),
         ),
         (
-            "enum E { Leaf, Pair(a: Box[E], b: List[E]), }\nfn main() -> Int { 0 }",
+            "enum E { Leaf, Pair(a: Box[E], b: Chain[E]), }\nfn main() -> Int { 0 }",
             none.clone(),
         ),
-        // Through a generic definition's parameter: the parameter's own use decides — a `List`
+        // Through a generic definition's parameter: the parameter's own use decides — a `Chain`
         // of it is immutable, so a cycle through it is accepted.
         (
-            "struct W[T] { items: List[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }",
+            "struct W[T] { items: Chain[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }",
             none.clone(),
         ),
         // Through a mutable handle anywhere on the cycle: still an ownership cycle.
@@ -320,8 +321,8 @@ fn a_box_or_list_is_neither_ordered_nor_given_to_a_task_nor_written_bare() {
     );
     assert_eq!(
         codes(
-            "fn w(l: List[Int]) -> Int { 0 }\n\
-             fn main() -> Int ! {spawn} { let l = list_empty[Int](); scope { spawn w(l); } 0 }"
+            "fn w(l: Chain[Int]) -> Int { 0 }\n\
+             fn main() -> Int ! {spawn} { let l = chain_empty[Int](); scope { spawn w(l); } 0 }"
         )
         .first()
         .map(String::as_str),
@@ -331,12 +332,12 @@ fn a_box_or_list_is_neither_ordered_nor_given_to_a_task_nor_written_bare() {
         codes("fn f(b: Box) -> Int { 0 }\nfn main() -> Int { 0 }"),
         ["N0352"]
     );
-    // A closure may capture a `List` that holds function values: nothing can be added to it.
+    // A closure may capture a `Chain` that holds function values: nothing can be added to it.
     // A `Vec` that may hold one is still refused (`N0616`).
     assert_eq!(
         codes(
-            "fn main() -> Int { let fs = list_empty[fn() -> Int](); \
-             let f = fn() -> Int { list_len(fs) }; f() }"
+            "fn main() -> Int { let fs = chain_empty[fn() -> Int](); \
+             let f = fn() -> Int { chain_len(fs) }; f() }"
         ),
         Vec::<String>::new()
     );
@@ -372,6 +373,8 @@ fn the_new_names_are_prelude_names_a_1_0_program_keeps() {
     assert!(r.stdout.starts_with("42"), "{}", r.stdout);
     let r = run("struct List { n: Int, }\nfn main() -> Int { List(n: 9).n }\n");
     assert!(r.stdout.starts_with('9'), "{r:?}");
+    let r = run("struct Chain { n: Int, }\nfn main() -> Int { Chain(n: 8).n }\n");
+    assert!(r.stdout.starts_with('8'), "{r:?}");
     // The built-ins of 1.0 are still never shadowed.
     assert_eq!(
         codes("fn vec_new(x: Int) -> Int { x }\nfn main() -> Int { 0 }"),
@@ -400,7 +403,7 @@ fn what_an_indirection_holds_carries_its_provenance() {
     assert_eq!(
         codes(
             "fn main(io: IoCap) -> Int ! { io } { let v = vec_new[Str](); \
-             vec_push(v, read_file(\"cfg\")); let l = list_from_vec(v); \
+             vec_push(v, read_file(\"cfg\")); let l = chain_from_vec(v); \
              for p in l { write_file(p, \"x\"); } 0 }\n"
         ),
         ["N0372"]
@@ -408,8 +411,8 @@ fn what_an_indirection_holds_carries_its_provenance() {
     assert_eq!(
         codes(
             "fn main(io: IoCap) -> Int ! { io } { let v = vec_new[Str](); \
-             vec_push(v, \"out.txt\"); let l = list_from_vec(v); \
-             write_file(list_get(l, 0), \"x\") }\n"
+             vec_push(v, \"out.txt\"); let l = chain_from_vec(v); \
+             write_file(chain_get(l, 0), \"x\") }\n"
         ),
         Vec::<String>::new()
     );

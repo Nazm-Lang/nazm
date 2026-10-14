@@ -300,7 +300,7 @@ fn equal(fx: &mut Fx<'_, '_>, a: V, b: V, t: Ty, differ: B) {
             fx.jump(head);
             fx.b.switch(done);
         }
-        // A `Box` or `List` (L6), a `Vec` underneath: one storage is equal to itself; otherwise
+        // A `Box` or `Chain` (L6), a `Vec` underneath: one storage is equal to itself; otherwise
         // the lengths, then element by element. Checking refuses `==` on a `Vec` itself.
         Ty::Vec(v) => {
             let elem = fx

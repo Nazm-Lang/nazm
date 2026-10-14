@@ -55,9 +55,9 @@ found only by reading all of it.
   carries neither L11 part until R2.
 - Tuples (R1a, stable since 0.10.0): two to eight elements, no unit type `()`, no tuple
   structs; the compiler written in Nazm does not carry tuples until R2.
-- `Box[T]` and `List[T]` (R1a, stable since 0.10.0) compare by what they hold (L6) but
-  have no order or derived hash, and do not cross into a task (`N0321`); a `List` is built
-  only from a `Vec` (`list_from_vec`) or empty — there is no functional push, by design, since one
+- `Box[T]` and `Chain[T]` (R1a, stable since 0.10.0; the sequence was `List[T]` until R1.5)
+  compare by what they hold (L6) but have no order or derived hash, and do not cross into a task (`N0321`); a `Chain` is built
+  only from a `Vec` (`chain_from_vec`) or empty — there is no functional push, by design, since one
   would copy. The compiler written in Nazm does not carry either until R2.
 - `Cell[T]` (R1b, stable since 0.10.0) has no equality and does not cross into a task, as
   a `Vec` does not; there is no swap or update-in-place, only `cell_get` and `cell_set`. The
