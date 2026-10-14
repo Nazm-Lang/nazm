@@ -16,9 +16,12 @@ Nazm is pre-1.0: a change of meaning is allowed, and is listed in the next relea
 
 **D1 — `:` for result types (6.1).** `fn fib(n: Int): Int { … }`; function types `fn(Int): Int`;
 function expressions `fn(n: Int): Int { … }`. The effect clause follows the type as before:
-`fn read(io: IoCap): Str ! {io} { … }`. `->` is still read everywhere it was, `nazm fmt` writes `:`,
-and `->` is removed at 1.0. No ambiguity: after a parameter list's `)`, `:` can only begin a type.
-The Nazm-written compiler (`compiler/*.nz`) keeps `->` until R2 teaches it the new forms.
+`fn read(io: IoCap): Str ! {io} { … }`. `->` is still read everywhere it was and is removed at 1.0.
+No ambiguity: after a parameter list's `)`, `:` can only begin a type. Until R2, `nazm fmt` keeps
+whichever of the two is written: the tree's own sources (`compiler/`, `library/`, `examples/`) must
+stay in the forms the Nazm-written compiler reads, and the test that holds them formatted would
+otherwise fail on every one. From R2, when that compiler reads `:`, `nazm fmt` writes `:` and the
+tree is rewritten in one commit.
 
 **D2 — expression bodies (4.4).** `fn f(n: Int): Int = n * 2`, ended where a statement ends (a line
 break or `;`). A private function may leave the result type out — `fn add(a: Int, b: Int) = a + b` —

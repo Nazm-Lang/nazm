@@ -1849,6 +1849,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // for interpolation, and R1b for `Cell` and for closures in generic functions and shared
     // `let mut` captures, and for default trait methods and impls of generic types, and for
     // `defer`, and for checked arithmetic, and for warnings, and for 128-bit integers, and R1c for
-    // `@derive(json)`, for `@codec` and for `@derive(toml)`.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 75);
+    // `@derive(json)`, for `@codec` and for `@derive(toml)`, and R1.5 for a result type after `:`.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 76);
 }

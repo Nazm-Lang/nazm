@@ -26,6 +26,7 @@ mod sections;
 mod secure_service;
 mod select;
 mod short_variants;
+mod shorter_forms;
 mod simd;
 mod single_thread;
 mod source_identity;
