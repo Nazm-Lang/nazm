@@ -357,7 +357,7 @@ fn equal(a: &Value, b: &Value) -> Option<bool> {
             }
             all(&x.fields, &y.fields)
         }
-        // A `Box` or `List` (L6), which the interpreter holds as a `Vec`: by what it holds.
+        // A `Box` or `Chain` (L6), which the interpreter holds as a `Vec`: by what it holds.
         // Checking refuses `==` on a `Vec` itself, so only those two reach here. One storage
         // is equal to itself, and is not locked twice.
         (Value::Vec(x), Value::Vec(y)) => {

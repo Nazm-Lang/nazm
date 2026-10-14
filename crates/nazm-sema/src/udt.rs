@@ -236,7 +236,7 @@ impl UserTypes {
             Type::Vec(_) if args.as_slice() == [Type::Str] => "Strs".to_owned(),
             Type::Vec(_) => format!("Vec[{}]", shown(self)),
             Type::Box(_) => format!("Box[{}]", shown(self)),
-            Type::List(_) => format!("List[{}]", shown(self)),
+            Type::List(_) => format!("Chain[{}]", shown(self)),
             Type::Cell(_) => format!("Cell[{}]", shown(self)),
             Type::Array(a) => match self.array_info(a) {
                 Some((e, n)) => format!("[{}; {n}]", self.show(e)),
@@ -355,7 +355,7 @@ impl UserTypes {
                         work.push((e, holder.or(Some(ty))));
                     }
                 }
-                // Immutable (R1a): what a `Box` or `List` holds was made before it and cannot be
+                // Immutable (R1a): what a `Box` or `Chain` holds was made before it and cannot be
                 // replaced, so it is no holder — a mutable handle inside it still is.
                 Type::Box(v) | Type::List(v) => {
                     if let Some(e) = self.vec_element(v) {
@@ -601,7 +601,7 @@ impl UserTypes {
             Type::Param(p) => self.requires_equality(p),
             _ => false,
         };
-        // A `Box` or `List` compares by what it holds (L6), so a recursive type through one
+        // A `Box` or `Chain` compares by what it holds (L6), so a recursive type through one
         // compares, and the walk below meets each definition once.
         self.derived(t, leaf, true, |_| false)
     }
@@ -651,7 +651,7 @@ impl UserTypes {
 
     /// The walk every derived property shares: `Ok(())` when every component of `t` is a
     /// `leaf` or a record or enum whose components are, or the **field path** to the first one
-    /// that is not. `through` lets a `Box` or `List` stand for what it holds; `stop` refuses a
+    /// that is not. `through` lets a `Box` or `Chain` stand for what it holds; `stop` refuses a
     /// definition met inside `t` (a written impl, for hashing).
     ///
     /// Depth-first over declaration order, so the path reported is the first one a reader
@@ -912,7 +912,7 @@ pub struct OwnershipCycle {
 
 const INLINE: u8 = 1;
 const COUNTED: u8 = 2;
-/// Through a `Box` or a `List` (R1a): finite, and unable to close a cycle on its own, because
+/// Through a `Box` or a `Chain` (R1a): finite, and unable to close a cycle on its own, because
 /// what it holds is older than it and cannot be replaced.
 const IMMUTABLE: u8 = 4;
 

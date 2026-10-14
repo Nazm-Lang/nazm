@@ -36,8 +36,10 @@
 - [x] 6.5 Positional enum payloads `Circle(2)` and patterns `Circle(r)`; the enum prefix only where
       a variant name is ambiguous
       — 2026-10-15 (D4): records too (`Point(1, 2)`), bare unit variants (`Dot`), `N0636`, epoch 79
-- [ ] 6.6 `use std.json` without quotes or `@`; `List[Int]` taught for `Ints`/`Strs` (the old names
+- [x] 6.6 `use std.json` without quotes or `@`; `List[Int]` taught for `Ints`/`Strs` (the old names
       keep working)
+      — 2026-10-15 (D7): `use std.json`, epoch 81 (dc2e0974); `List[T]` is `Vec[T]`, R1a's sequence
+      `Chain[T]` with `chain_*`, `N0637` for a `list_` built-in, epoch 83
 - [x] 6.7 Printing in your own program: its functions may print without being passed `out: OutCap`;
       a library or package function still needs it passed, and files, the network and processes stay
       declared in `main`

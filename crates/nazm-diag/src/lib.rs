@@ -535,6 +535,9 @@ pub mod codes {
     /// A variant written without its enum where more than one enum in scope has a variant of
     /// that name (R1.5, D4; `docs/spec.md`, *Shorter forms*).
     pub const VARIANT_AMBIGUOUS: Code = Code::new("N0636");
+    /// A call of one of R1a's `list_` built-ins, renamed `chain_` with their type, `Chain[T]`,
+    /// when `List[T]` became `Vec[T]`'s name (R1.5, D7; `docs/spec.md`, *Immutable indirection*).
+    pub const BUILTIN_RENAMED: Code = Code::new("N0637");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

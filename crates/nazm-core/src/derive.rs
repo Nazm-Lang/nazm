@@ -63,7 +63,7 @@ pub fn refusal(t: &TypeName) -> Option<String> {
             return Some(format!("`{n}` has no JSON form"));
         }
     }
-    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Box") {
+    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Chain" | "Box") {
         return match args(t) {
             [inner] => refusal(inner),
             _ => Some(format!("`{n}` takes one type")),
@@ -109,7 +109,7 @@ pub fn refusal_for(format: &str, t: &TypeName) -> Option<String> {
 #[must_use]
 pub fn named(t: &TypeName) -> Vec<&TypeName> {
     let n = t.name.as_str();
-    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Box") {
+    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Chain" | "Box") {
         return args(t).iter().flat_map(named).collect();
     }
     let builtin = INTEGERS.contains(&n)
@@ -272,7 +272,7 @@ impl Gen<'_> {
                 return (format!("    {add}(doc, v)"), r);
             }
         }
-        if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Box") {
+        if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Chain" | "Box") {
             let inner = args(t).first().cloned().unwrap_or_else(|| t.clone());
             let it = text(&inner);
             let k = self.helper(&inner);
@@ -298,8 +298,8 @@ impl Gen<'_> {
                     ),
                 ),
                 _ => {
-                    let done = if n == "List" {
-                        ok("list_from_vec(out)")
+                    let done = if n == "Chain" {
+                        ok("chain_from_vec(out)")
                     } else {
                         ok("out")
                     };
@@ -530,8 +530,8 @@ pub fn empty_value(t: &TypeName) -> Option<String> {
         ("Bool", []) => Some("false".to_owned()),
         ("Str", []) => Some("\"\"".to_owned()),
         ("Option", [inner]) => Some(format!("Option[{}].None()", text(inner))),
-        ("Vec", [inner]) => Some(format!("vec_new[{}]()", text(inner))),
-        ("List", [inner]) => Some(format!("list_empty[{}]()", text(inner))),
+        ("Vec" | "List", [inner]) => Some(format!("vec_new[{}]()", text(inner))),
+        ("Chain", [inner]) => Some(format!("chain_empty[{}]()", text(inner))),
         _ => None,
     }
 }
@@ -589,7 +589,7 @@ fn schema_of(t: &TypeName) -> String {
             _ => {}
         }
     }
-    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Box") {
+    if plain(t) && matches!(n, "Option" | "Vec" | "List" | "Chain" | "Box") {
         let inner = args(t).first().map_or_else(String::new, schema_of);
         return match n {
             "Option" => format!("{{\"anyOf\":[{inner},{{\"type\":\"null\"}}]}}"),
@@ -928,7 +928,7 @@ impl TomlGen {
                 );
             }
         }
-        if plain(t) && matches!(n, "Vec" | "List" | "Box") {
+        if plain(t) && matches!(n, "Vec" | "List" | "Chain" | "Box") {
             let inner = args(t).first().cloned().unwrap_or_else(|| t.clone());
             let it = text(&inner);
             let k = self.helper(&inner);
@@ -943,21 +943,21 @@ impl TomlGen {
                     ),
                 );
             }
-            let done = if n == "List" {
-                ok("list_from_vec(out)")
+            let done = if n == "Chain" {
+                ok("chain_from_vec(out)")
             } else {
                 ok("out")
             };
             return (
                 format!(
                     "    let items = vec_new[Toml]();\n    for y in v {{ vec_push(items, {w}(y)); }}\n    \
-                     Toml.Array(items: list_from_vec(items))"
+                     Toml.Array(items: chain_from_vec(items))"
                 ),
                 format!(
                     "    if let Toml.Array(items: items) = x {{\n        \
                      let out = vec_new[{it}]();\n        \
-                     for i in 0..list_len(items) {{\n            \
-                     match {r}(list_get(items, i), f\"{{at}}[{{i}}]\") {{\n                \
+                     for i in 0..chain_len(items) {{\n            \
+                     match {r}(chain_get(items, i), f\"{{at}}[{{i}}]\") {{\n                \
                      Result.Ok(value: y) => {{ vec_push(out, y); }},\n                \
                      Result.Err(error: e) => {{ return Result[{ty}, Str].Err(error: e); }},\n            }};\n        }}\n        \
                      {done}\n    }} else {{ {} }}",
@@ -1014,7 +1014,7 @@ impl TomlGen {
                 );
             }
         }
-        s.push_str("    Toml.Table(keys: list_from_vec(keys), values: list_from_vec(values))");
+        s.push_str("    Toml.Table(keys: chain_from_vec(keys), values: chain_from_vec(values))");
         s
     }
 
@@ -1043,7 +1043,7 @@ impl TomlGen {
             let _ = writeln!(
                 s,
                 "    if let Toml.Table(keys: ks, values: vs) = {obj} {{\n        \
-                 for i in 0..list_len(ks) {{\n            let k = list_get(ks, i);\n            \
+                 for i in 0..chain_len(ks) {{\n            let k = chain_get(ks, i);\n            \
                  if !({test}) {{ return Result[{owner}, Str].Err(error: f\"{{{at}}}: unknown key `{{k}}`\"); }}\n        }}\n    }}"
             );
         }
@@ -1148,7 +1148,7 @@ fn generate_toml(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>)
                         format!(
                             "    let body = {{\n{w}\n    }};\n    let outer = vec_new[Str]();\n    vec_push(outer, {lit});\n    \
                              let inner = vec_new[Toml]();\n    vec_push(inner, body);\n    \
-                             Toml.Table(keys: list_from_vec(outer), values: list_from_vec(inner))"
+                             Toml.Table(keys: chain_from_vec(outer), values: chain_from_vec(inner))"
                         )
                     }
                 };
@@ -1211,7 +1211,7 @@ fn generate_toml(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>)
                 (None, false) => format!(
                     "{strings}    let mut tag = \"\";\n    let mut body = x;\n    let mut one = false;\n    \
                      if let Toml.Table(keys: ks, values: vs) = x {{\n        \
-                     if list_len(ks) == 1 {{ tag = list_get(ks, 0); body = list_get(vs, 0); one = true; }}\n    }}\n    \
+                     if chain_len(ks) == 1 {{ tag = chain_get(ks, 0); body = chain_get(vs, 0); one = true; }}\n    }}\n    \
                      if !one {{ return Result[{name}, Str].Err(error: f\"{{at}}: expected a variant's name, or a table of one key\"); }}\n\
                      {tries}    Result[{name}, Str].Err(error: f\"{{at}}: `{{tag}}` is not a variant of `{name}` with a payload\")"
                 ),

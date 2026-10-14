@@ -331,7 +331,7 @@ impl Interpreter {
         args: &[Value],
         span: nazm_span::Span,
     ) -> Result<Value, RuntimeError> {
-        // Immutable indirection (R1a): a `Box[T]` and a `List[T]` are a `Vec[T]` nothing writes
+        // Immutable indirection (R1a): a `Box[T]` and a `Chain[T]` are a `Vec[T]` nothing writes
         // once it is made, so each of their operations is the `Vec` one it means.
         let same = match i {
             Intrinsic::BoxFresh | Intrinsic::ListEmpty => Some(Intrinsic::VecNew),

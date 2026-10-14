@@ -293,7 +293,7 @@ pub enum Temp {
     ForIndex,
     /// A `for` range's end, evaluated once (R1a).
     ForEnd,
-    /// The `Box` or `List` `box_new` or `list_from_vec` is making, before anything else can see
+    /// The `Box` or `Chain` `box_new` or `chain_from_vec` is making, before anything else can see
     /// it (R1a).
     Made,
     /// A general `match`'s scrutinee, evaluated once (R1a).
@@ -796,7 +796,7 @@ impl Law {
             // An array compares element by element, by its element's law (Gate 2).
             (false, Type::Array(_)) => Some(Self::Structural),
             (false, Type::Text) => Some(Self::Bytes),
-            // A `Box` or `List` compares by what it holds (L6).
+            // A `Box` or `Chain` compares by what it holds (L6).
             (false, Type::Box(_) | Type::List(_)) => Some(Self::Structural),
             (false, Type::Param(_)) => Some(Self::Parametric),
             (

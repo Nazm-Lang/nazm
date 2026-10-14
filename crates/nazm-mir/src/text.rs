@@ -27,7 +27,7 @@ pub fn ty(program: &Program, t: Type) -> String {
         Type::Vec(v) | Type::Box(v) | Type::List(v) | Type::Cell(v) => {
             let kind = match t {
                 Type::Box(_) => "Box",
-                Type::List(_) => "List",
+                Type::List(_) => "Chain",
                 Type::Cell(_) => "Cell",
                 _ => "Vec",
             };

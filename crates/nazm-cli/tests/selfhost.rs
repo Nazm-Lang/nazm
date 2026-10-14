@@ -2900,10 +2900,10 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // R1a: immutable indirection, outside the Nazm-written compiler's type table until R2.
         ("box_new", "Box[T]"),
         ("box_get", "Box[T]"),
-        ("list_from_vec", "List[T]"),
-        ("list_empty", "List[T]"),
-        ("list_len", "List[T]"),
-        ("list_get", "List[T]"),
+        ("chain_from_vec", "Chain[T]"),
+        ("chain_empty", "Chain[T]"),
+        ("chain_len", "Chain[T]"),
+        ("chain_get", "Chain[T]"),
         // R1b: a mutable cell, likewise.
         ("cell_new", "Cell[T]"),
         ("cell_get", "Cell[T]"),

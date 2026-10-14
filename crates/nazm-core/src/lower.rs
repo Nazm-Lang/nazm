@@ -961,10 +961,10 @@ impl<'a> Lower<'a> {
                             vec![elem],
                         )
                     }
-                    // A `List` (R1a), read as `list_len` and `list_get` read it.
+                    // A `Chain` (R1a), read as `chain_len` and `chain_get` read it.
                     Type::List(v) => {
                         let Some(elem) = self.res.types().vec_element(v) else {
-                            return defect(e.span(), "a `List` with no element type");
+                            return defect(e.span(), "a `Chain` with no element type");
                         };
                         (
                             nazm_sema::Intrinsic::ListLen,
@@ -1857,7 +1857,7 @@ impl<'a> Lower<'a> {
             }
         };
         let kind = match checked.callee {
-            // Made out of the `Box` and `List` operations a program cannot name (R1a).
+            // Made out of the `Box` and `Chain` operations a program cannot name (R1a).
             Callee::Builtin(nazm_sema::Intrinsic::BoxNew) => {
                 let (fresh, fill) = (
                     nazm_sema::Intrinsic::BoxFresh,
@@ -1900,7 +1900,7 @@ impl<'a> Lower<'a> {
                 return self.checked(op, type_args(true)?, args, ty, callee_at, at);
             }
             Callee::Builtin(nazm_sema::Intrinsic::ListFromVec) => {
-                return self.list_from_vec(type_args(true)?, args, ty, callee_at, at);
+                return self.chain_from_vec(type_args(true)?, args, ty, callee_at, at);
             }
             Callee::Builtin(op) => ExprKind::Builtin {
                 op,
@@ -2193,10 +2193,10 @@ impl<'a> Lower<'a> {
         })
     }
 
-    /// `list_from_vec(xs)` (R1a), as `{ let seq = xs; let made = list_empty(); let mut i = 0;
-    /// while i < vec_len(seq) { list_push(made, vec_get(seq, i)); i = i + 1; } made }`: the
+    /// `chain_from_vec(xs)` (R1a), as `{ let seq = xs; let made = chain_empty(); let mut i = 0;
+    /// while i < vec_len(seq) { chain_push(made, vec_get(seq, i)); i = i + 1; } made }`: the
     /// elements as they are now, copied by their own law.
-    fn list_from_vec(
+    fn chain_from_vec(
         &mut self,
         type_args: Vec<Type>,
         mut args: Vec<Expr>,
@@ -2206,12 +2206,12 @@ impl<'a> Lower<'a> {
     ) -> Lowered<Expr> {
         use nazm_sema::Intrinsic as I;
         let Some(source) = args.pop() else {
-            return defect(callee_at, "a `list_from_vec` with no vector");
+            return defect(callee_at, "a `chain_from_vec` with no vector");
         };
         let Some(seq_ty) = source.ty else {
             return defect(
                 callee_at,
-                "a `list_from_vec` vector the checker gave no type",
+                "a `chain_from_vec` vector the checker gave no type",
             );
         };
         let elem = type_args.first().copied().unwrap_or(Type::Int);
