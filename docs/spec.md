@@ -2025,7 +2025,7 @@ included (its subset, *Bootstrap*).
 #### Multi-line and raw strings — R1
 <!-- id: string-forms -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L9).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L9).
 
 ```nazm
 fn template() -> Str {
@@ -2063,7 +2063,7 @@ a file.
 #### String interpolation — R1
 <!-- id: interpolation -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L4).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L4).
 
 ```nazm
 use "@std/show";
@@ -4683,7 +4683,7 @@ refuses `@section`, `@interrupt` and `@on_failure` by name (`N0392`). Every boar
 ### `for` loops — R1
 <!-- id: for -->
 
-Settled by R1a, 2026-10-11 (`openspec/changes/r1-language-for-the-rewrite`, D3).
+Settled by R1a, 2026-10-11 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D3).
 
 ```nazm
 fn total(xs: Vec[Int]) -> Int {
@@ -4731,7 +4731,7 @@ reclamation or control is new:
 ### Immutable indirection: `Box[T]` and `List[T]` — R1
 <!-- id: box-list -->
 
-Settled by R1a, 2026-10-11 (`openspec/changes/r1-language-for-the-rewrite`, D1 and L1).
+Settled by R1a, 2026-10-11 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D1 and L1).
 
 ```nazm
 enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), }
@@ -4806,7 +4806,7 @@ meaning. The built-in names of 1.0 (`Int`, `Vec`, `Result` and the rest) stay un
 ### A mutable cell: `Cell[T]` — R1
 <!-- id: cell -->
 
-Settled by R1b, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L7). EXPERIMENTAL until
+Settled by R1b, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L7). EXPERIMENTAL until
 R1 closes.
 
 ```nazm
@@ -4857,7 +4857,7 @@ that declares a type named `Cell`, or a function named like one of the three, ke
 ### Scope-exit cleanup: `defer` — R1
 <!-- id: defer -->
 
-Settled by R1b, 2026-10-13 (`openspec/changes/r1-language-for-the-rewrite`, L12). EXPERIMENTAL until
+Settled by R1b, 2026-10-13 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L12). EXPERIMENTAL until
 R1 closes.
 
 ```nazm
@@ -4892,7 +4892,7 @@ is a name a 1.0 program may use, and no program valid under 1.0 changes meaning.
 ### Patterns: wildcards, alternatives, nesting and literals — R1
 <!-- id: patterns -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L3).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L3).
 
 ```nazm
 fn describe(e: Expr) -> Str {
@@ -4963,7 +4963,7 @@ and no `@` bindings.
 ### Tuples — R1
 <!-- id: tuples -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L5).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L5).
 
 ```nazm
 fn div_mod(a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }
@@ -5014,7 +5014,7 @@ and with them a tuple as a map's key.
 ### Ordering and hashing are derived — R1
 <!-- id: order-hash -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L6).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L6).
 
 ```nazm
 use "@std/hash";
@@ -5083,7 +5083,7 @@ is. There is no ordering requirement on a type parameter yet (`T: Ordered` waits
 ### Constant tables and exported constants — R1
 <!-- id: const-tables -->
 
-Settled by R1a, 2026-10-12 (`openspec/changes/r1-language-for-the-rewrite`, L8).
+Settled by R1a, 2026-10-12 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L8).
 
 ```nazm
 struct Keyword { text: Str, code: Int, }
@@ -5126,7 +5126,7 @@ static` is still refused (`N0101`): a static is storage, and storage is its modu
 ### The platform, further: processes and the file system — R1d
 <!-- id: platform-r1d -->
 
-Settled by R1d, 2026-10-14 (`openspec/changes/r1-language-for-the-rewrite`, D4's built-ins, P1 and
+Settled by R1d, 2026-10-14 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D4's built-ins, P1 and
 P2). Stable since R1 closed (0.10.0). Seventeen built-ins beside *Files and handles* and *Process and
 environment*, whose rules — statuses, generations, `os_close`, the restricted sink — they keep.
 Every one is a **prelude name** (*Immutable indirection*, **Names**): a module that declares a
