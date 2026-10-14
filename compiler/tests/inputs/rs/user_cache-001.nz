@@ -1,0 +1,6 @@
+use "@std/text"
+
+fn main() {
+    println(text_repeat("ab", 3))
+    println(text_starts_with("nazm", "na"))
+}

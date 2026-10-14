@@ -1,0 +1,3 @@
+enum A { X(n: Int), }
+enum B { X(n: Int), }
+fn main() { let a = X(1) }

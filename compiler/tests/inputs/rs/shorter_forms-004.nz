@@ -1,0 +1,13 @@
+fn main(out: OutCap): Int ! {io} {
+    let f = quad
+    print(f"{double(21)} {add(2, 3)} {greet("nazm")} {f(5)} {even(4)} {first(7, 8)} {pick(Some(9))}\n")
+    0
+}
+
+fn quad(n: Int) = add(double(n), double(n))
+fn double(n: Int): Int = n * 2
+fn add(a: Int, b: Int) = a + b
+fn greet(name: Str) = f"hello {name}"
+fn even(n: Int) = n % 2 == 0
+fn first[T](a: T, b: T) = a
+fn pick(o: Option[Int]) = match o { Some(v) => v, None => 0 }
