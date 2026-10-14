@@ -190,6 +190,11 @@ fn a_deferred_body_leaves_nothing() {
         ),
         // Its last line's value is discarded, as a loop body's is (R1, 5b.19).
         ("fn main() -> Int { defer { 5 } 0 }\n", none.clone()),
+        // So its branches need not agree, as a statement `if`'s need not.
+        (
+            "fn main() -> Int { defer { if 1 < 2 { 5 } else { \"five\" } } 0 }\n",
+            none.clone(),
+        ),
         // A loop inside the body may leave itself; a closure inside it may return.
         (
             "fn main() -> Int { defer { let mut j = 0; while j < 2 { j = j + 1; \
