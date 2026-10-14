@@ -255,11 +255,25 @@ impl Checker<'_> {
         bracket: Span,
         expected: Option<Type>,
     ) -> Type {
+        let before = self.errors.len();
         let bt = self.value_type(base, None);
         let info = match bt {
             Type::Array(a) => self.res.types().array_info(a),
             _ => None,
         };
+        // `xs[i]` on a sequence (R1, 5b.15): `vec_get(xs, i)`, `ints_get`, `strs_get` or
+        // `bytes_get`, by name as a method is — unless the base was refused already.
+        if info.is_none() && self.errors.len() == before {
+            if let Some(t) = self.element_by_name(
+                bt,
+                "get",
+                bracket,
+                vec![base.clone(), index.clone()],
+                expected,
+            ) {
+                return t;
+            }
+        }
         self.check_index_value(index, info.map(|(_, n)| n));
         match info {
             Some((elem, _)) => elem,
@@ -627,5 +641,43 @@ impl Checker<'_> {
             },
         );
         result
+    }
+}
+
+impl Checker<'_> {
+    /// `xs[i]` and `xs[i] = v` on a `Vec`, `Ints`, `Strs` or `Bytes` (R1, 5b.15): the call
+    /// `<prefix>_<op>(args…)`, checked as that call is and keyed by the brackets' span, which
+    /// Core IR lowering reads as the call. `None` for any other type, or where no such function
+    /// is in scope.
+    pub(super) fn element_by_name(
+        &mut self,
+        of: Type,
+        op: &str,
+        bracket: Span,
+        args: Vec<Expr>,
+        expected: Option<Type>,
+    ) -> Option<Type> {
+        let prefix = match of {
+            Type::Ints => "ints",
+            Type::Strs => "strs",
+            Type::Bytes => "bytes",
+            t if matches!(t, Type::Vec(_)) => "vec",
+            _ => return None,
+        };
+        let name = format!("{prefix}_{op}");
+        self.env.get(&name)?;
+        let call = Expr::Call {
+            qualifier: None,
+            callee: name,
+            callee_span: bracket,
+            type_args: None,
+            args,
+            span: bracket,
+        };
+        self.res.record_named_method(bracket);
+        Some(match self.check_expr(&call, expected) {
+            Completion::Value(t) => t,
+            Completion::Unit | Completion::Diverges => expected.unwrap_or(Type::Int),
+        })
     }
 }

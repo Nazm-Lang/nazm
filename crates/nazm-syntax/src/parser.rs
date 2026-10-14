@@ -3723,11 +3723,13 @@ impl<'a> Parser<'a> {
                             name: f.name.clone(),
                             name_span: f.name_span,
                         },
+                        // The read keys its brackets apart from the write's: a span of no
+                        // width at them, so the checker's record of each is its own.
                         PlaceStep::Index { index, span } => Expr::Index {
                             span: lhs.span().join(*span),
                             base: Box::new(lhs),
                             index: index.clone(),
-                            bracket_span: *span,
+                            bracket_span: Span::new(self.file, span.start, span.start),
                         },
                     };
                 }

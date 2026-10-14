@@ -23,6 +23,7 @@ mod manifests;
 mod memory;
 mod mir;
 mod mobile;
+mod named_methods;
 mod native_cache;
 mod native_units;
 mod net;
