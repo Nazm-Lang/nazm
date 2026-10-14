@@ -61,9 +61,11 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       inferred*), found to need no change; pinned by `main_ends::a_private_function_declares_no_effects`
 - [x] 5b.6 `s + t` on strings
 - [x] 5b.7 `m[k]`, `m[k] = v` and `m[k] += 1` on maps
-- [ ] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of
+- [x] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of
       one thread, known from `main`'s authority, keeping its failure state and stack limit in plain
-      globals: 68.3 ms
+      globals: 68.3 ms; then 55.4 ms (2026-10-14: a Nazm function's failure returned in a register
+      beside its result, and the blocks only a failure reaches laid out cold; Cranelift 106.3 →
+      83.8 ms)
 - [x] 5b.9 Word frequency over 2,000,000 words ≤ 200 ms (453 before; Go 127, C 123): integer text
       without `snprintf`, fewer allocations, the hash map's probe, retains and releases — 392 ms,
       then 222 ms (integer text, the map's table of positions, one string per interpolated integer,

@@ -53,7 +53,7 @@ fn successors(t: &Term) -> Vec<B> {
             v.push(*default);
             v
         }
-        Term::Return(_) | Term::Unreachable => Vec::new(),
+        Term::Return(_) | Term::Fail | Term::Unreachable => Vec::new(),
     }
 }
 
@@ -226,8 +226,22 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                     Some(c) => define(&mut e, *dst, *c),
                     None => e.push(format!("no variable x{}", var.0)),
                 },
-                Inst::Call { dst, callee, .. } => {
+                Inst::Call {
+                    dst,
+                    failed,
+                    callee,
+                    ..
+                } => {
                     let ret = m.sig(*callee).and_then(|s| s.ret);
+                    if let Some(fv) = failed {
+                        if !m.sig(*callee).is_some_and(Sig::fails) {
+                            e.push(format!(
+                                "the failure bit of `{}`, which returns none",
+                                m.symbol(*callee).map_or("?", |s| s.name.as_str())
+                            ));
+                        }
+                        define(&mut e, *fv, Class::Bit);
+                    }
                     match (dst, ret) {
                         (Some(d), Some(c)) => define(&mut e, *d, c),
                         (None, _) => {}
@@ -237,13 +251,26 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                         )),
                     }
                 }
-                Inst::CallIndirect { dst, sig, .. } => match (dst, sig.ret) {
-                    (Some(d), Some(c)) => define(&mut e, *d, c),
-                    (None, _) => {}
-                    (Some(_), None) => {
-                        e.push("a result of an indirect call that returns nothing".to_owned());
+                Inst::CallIndirect {
+                    dst, failed, sig, ..
+                } => {
+                    if let Some(fv) = failed {
+                        if !sig.fails() {
+                            e.push(
+                                "the failure bit of an indirect callee that returns none"
+                                    .to_owned(),
+                            );
+                        }
+                        define(&mut e, *fv, Class::Bit);
                     }
-                },
+                    match (dst, sig.ret) {
+                        (Some(d), Some(c)) => define(&mut e, *d, c),
+                        (None, _) => {}
+                        (Some(_), None) => {
+                            e.push("a result of an indirect call that returns nothing".to_owned());
+                        }
+                    }
+                }
                 Inst::Store { .. }
                 | Inst::SetVar { .. }
                 | Inst::Copy { .. }
@@ -449,6 +476,13 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
                     "b{bi} returns nothing from a function that returns a value"
                 )),
             },
+            Term::Fail => {
+                if !own.fails() {
+                    e.push(format!(
+                        "b{bi} fails from a function that returns no failure bit"
+                    ));
+                }
+            }
             Term::Unreachable => {}
         }
     }
@@ -696,6 +730,7 @@ mod tests {
                         param(),
                         Inst::Call {
                             dst,
+                            failed: None,
                             callee: SymId(1),
                             args,
                         },
@@ -708,6 +743,45 @@ mod tests {
         refused(&call(vec![V(0)], None), "is given 1 arguments and takes 2");
         refused(&call(vec![V(0), V(0)], None), "where ptr is needed");
         refused(&call(Vec::new(), Some(V(5))), "which returns nothing");
+    }
+
+    #[test]
+    fn a_failure_bit_only_a_nazm_function_returns_is_refused_elsewhere() {
+        // A Nazm function fails; a plain one does not, and a call to one has no bit to take.
+        let failing = with(vec![block(vec![param()], Term::Fail)], Vec::new());
+        assert!(module(&failing).is_ok(), "{:?}", module(&failing));
+        let plain = |mut m: Module, which: usize| {
+            if let SymKind::Func { sig } = &mut m.symbols[which].kind {
+                sig.conv = Conv::Plain;
+            }
+            m
+        };
+        refused(
+            &plain(failing, 0),
+            "fails from a function that returns no failure bit",
+        );
+        let call = with(
+            vec![block(
+                vec![
+                    param(),
+                    Inst::Const {
+                        dst: V(1),
+                        class: Class::Ptr,
+                        value: 0,
+                    },
+                    Inst::Call {
+                        dst: None,
+                        failed: Some(V(2)),
+                        callee: SymId(1),
+                        args: vec![V(0), V(1)],
+                    },
+                ],
+                Term::Return(Some(V(0))),
+            )],
+            Vec::new(),
+        );
+        assert!(module(&call).is_ok(), "{:?}", module(&call));
+        refused(&plain(call, 1), "the failure bit of");
     }
 
     #[test]

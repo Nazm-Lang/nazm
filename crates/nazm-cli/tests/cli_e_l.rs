@@ -26,6 +26,7 @@ mod equality;
 mod evm;
 mod exit_contract;
 mod exit_status;
+mod failure_bit;
 mod features;
 mod ffi;
 mod ffi_v2;

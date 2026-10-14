@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use super::ir::{
     BinOp, Class, Cmp, Conv, ConvOp, Inst, Linkage, Module, OvfOp, Sig, Storage, SymId, SymKind,
-    Term, UnOp,
+    Term, UnOp, V,
 };
 
 fn sym(m: &Module, s: SymId) -> String {
@@ -23,6 +23,7 @@ fn sig(s: &Sig) -> String {
     let conv = match s.conv {
         Conv::Nazm => "",
         Conv::C => "c ",
+        Conv::Plain => "plain ",
     };
     match s.ret {
         Some(r) => format!("{conv}({p}) -> {}", r.name()),
@@ -186,30 +187,41 @@ pub fn inst(m: &Module, i: &Inst) -> String {
         Inst::SetVar { var, src } => format!("set x{}, v{}", var.0, src.0),
         Inst::Call {
             dst,
+            failed,
             callee,
             args: a,
-        } => match dst {
-            Some(d) => format!("v{} = call {}({})", d.0, sym(m, *callee), args(a)),
-            None => format!("call {}({})", sym(m, *callee), args(a)),
-        },
+        } => format!(
+            "{}call {}({})",
+            results(*dst, *failed),
+            sym(m, *callee),
+            args(a)
+        ),
         Inst::CallIndirect {
             dst,
+            failed,
             addr,
             sig: s,
             args: a,
-        } => match dst {
-            Some(d) => format!(
-                "v{} = call_indirect {} v{}({})",
-                d.0,
-                sig(s),
-                addr.0,
-                args(a)
-            ),
-            None => format!("call_indirect {} v{}({})", sig(s), addr.0, args(a)),
-        },
+        } => format!(
+            "{}call_indirect {} v{}({})",
+            results(*dst, *failed),
+            sig(s),
+            addr.0,
+            args(a)
+        ),
         Inst::Copy { dst, src, size } => format!("copy v{}, v{}, {size}", dst.0, src.0),
         Inst::Zero { dst, size } => format!("zero v{}, {size}", dst.0),
         Inst::Loc(p) => format!("loc {} {} {}", p.file, p.line, p.column),
+    }
+}
+
+/// What a call defines: its result, and — a Nazm callee's — its failure bit, after `failed`.
+fn results(dst: Option<V>, failed: Option<V>) -> String {
+    match (dst, failed) {
+        (Some(d), Some(f)) => format!("v{}, failed v{} = ", d.0, f.0),
+        (Some(d), None) => format!("v{} = ", d.0),
+        (None, Some(f)) => format!("failed v{} = ", f.0),
+        (None, None) => String::new(),
     }
 }
 
@@ -237,6 +249,7 @@ pub fn term(t: &Term) -> String {
         }
         Term::Return(Some(v)) => format!("return v{}", v.0),
         Term::Return(None) => "return".to_owned(),
+        Term::Fail => "fail".to_owned(),
         Term::Unreachable => "unreachable".to_owned(),
     }
 }

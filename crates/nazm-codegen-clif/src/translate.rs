@@ -77,7 +77,24 @@ impl Tr {
         if let Some(r) = s.ret {
             out.returns.push(param(r));
         }
+        // A Nazm function's failure bit, after its result (R1, 5b.8).
+        if s.fails() {
+            out.returns.push(AbiParam::new(types::I8));
+        }
         out
+    }
+
+    /// A zero of a class, the result a failure exit stands in (R1, 5b.8).
+    fn zero(&self, b: &mut FunctionBuilder<'_>, c: Class) -> Value {
+        match c {
+            Class::F32 => b.ins().f32const(Ieee32::with_bits(0)),
+            Class::F64 => b.ins().f64const(Ieee64::with_bits(0)),
+            Class::I128 => {
+                let z = b.ins().iconst(types::I64, 0);
+                b.ins().iconcat(z, z)
+            }
+            _ => b.ins().iconst(self.ty(c), 0),
+        }
     }
 }
 
@@ -302,6 +319,9 @@ fn function(
     f: &lir::Function,
 ) {
     let b = FunctionBuilder::new(&mut ctx.func, fctx);
+    let own = m.sig(f.sym).cloned();
+    let fails = own.as_ref().is_some_and(Sig::fails);
+    let ret = own.as_ref().and_then(|s| s.ret);
     let mut fx = Fn {
         t,
         b,
@@ -322,6 +342,12 @@ fn function(
         fx.t.errors.push(defect("a function with no blocks"));
         return;
     };
+    // Where only a failure goes, out of the way of the code that does not fail (R1, 5b.8).
+    for (cb, cold) in blocks.iter().zip(f.cold_blocks(m)).skip(1) {
+        if cold {
+            fx.b.set_cold_block(*cb);
+        }
+    }
     fx.b.append_block_params_for_function_params(entry);
     let params: Vec<Value> = fx.b.block_params(entry).to_vec();
     let slots: Vec<_> = f
@@ -386,7 +412,16 @@ fn function(
                 }
             }
             Term::Return(v) => {
-                let r: Vec<Value> = v.iter().map(|v| fx.v(*v)).collect();
+                let mut r: Vec<Value> = v.iter().map(|v| fx.v(*v)).collect();
+                if fails {
+                    r.push(fx.b.ins().iconst(types::I8, 0));
+                }
+                fx.b.ins().return_(&r);
+            }
+            // The failure exit: a zero for the result, and the bit set.
+            Term::Fail => {
+                let mut r: Vec<Value> = ret.map(|c| fx.t.zero(&mut fx.b, c)).into_iter().collect();
+                r.push(fx.b.ins().iconst(types::I8, 1));
                 fx.b.ins().return_(&r);
             }
             Term::Unreachable => {
@@ -701,7 +736,12 @@ fn inst(
                 fx.b.def_var(v, x);
             }
         }
-        Inst::Call { dst, callee, args } => {
+        Inst::Call {
+            dst,
+            failed,
+            callee,
+            args,
+        } => {
             let Some(Declared::Func(id)) = fx.t.declared.get(callee.index()).copied() else {
                 fx.t.errors
                     .push(defect("a call to a symbol that is not a function"));
@@ -710,7 +750,17 @@ fn inst(
             let a: Vec<Value> = args.iter().map(|v| fx.v(*v)).collect();
             let r = fx.func(id);
             let call = fx.b.ins().call(r, &a);
-            let result = fx.b.inst_results(call).first().copied();
+            let results = fx.b.inst_results(call).to_vec();
+            let has_ret = m.sig(*callee).and_then(|s| s.ret).is_some();
+            let result = if has_ret {
+                results.first().copied()
+            } else {
+                None
+            };
+            // A Nazm callee's failure bit, its last result, from code this backend built.
+            if let (Some(f), Some(x)) = (failed, results.last().copied()) {
+                fx.def(*f, x, Class::Bit);
+            }
             if let (Some(d), Some(x)) = (dst, result) {
                 let class = m.sig(*callee).and_then(|s| s.ret).unwrap_or(Class::I64);
                 // A bit returned by code another compiler built (the runtime's `i1`) promises
@@ -725,6 +775,7 @@ fn inst(
         }
         Inst::CallIndirect {
             dst,
+            failed,
             addr,
             sig,
             args,
@@ -734,7 +785,11 @@ fn inst(
             let s = fx.t.signature(sig);
             let sref = fx.b.import_signature(s);
             let call = fx.b.ins().call_indirect(sref, code, &a);
-            if let (Some(d), Some(x)) = (dst, fx.b.inst_results(call).first().copied()) {
+            let results = fx.b.inst_results(call).to_vec();
+            if let (Some(f), Some(x)) = (failed, results.last().copied()) {
+                fx.def(*f, x, Class::Bit);
+            }
+            if let (Some(d), Some(x), Some(_)) = (dst, results.first().copied(), sig.ret) {
                 fx.def(*d, x, sig.ret.unwrap_or(Class::I64));
             }
         }

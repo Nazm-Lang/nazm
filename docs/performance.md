@@ -3509,7 +3509,11 @@ Toolchains:
   check costs about 11 ms and the failure check about 5.5 ms; C's 35 ms also comes from clang
   turning one of the two recursive calls into a loop, which a checked `+` cannot allow. Ada's
   13.4 ms is below C's, most likely because GCC transforms this recursion further (not inspected).
-  The interpreter took 4.7 s, about four times CPython's 1.2 s.
+  The interpreter took 4.7 s, about four times CPython's 1.2 s. **After 5b.8 (2026-10-14, not
+  yet a re-run of this table):** a Nazm function returns its failure in a register beside its
+  result and the failure paths are laid out cold, and `fib(35)` under `-O2` measured 55.4 ms
+  against 66.8 ms for the build before it, the same machine and hyperfine (median of 20); under
+  Cranelift 83.8 against 106.3 ms (`docs/architecture.md` §7.106, *The failure bit*).
 - **`words`**: Nazm's `-O2` build took 192.9 ms (531 ms before 5b.9's work the same day: `text_split`
   and `text_lines` without a slice per byte, the map remembering the entry `m[k]` found, its
   vectors read once a probe, a field read as an operand borrowed): faster than Python (256 ms), C#

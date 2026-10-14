@@ -353,8 +353,10 @@ fn emit_artefacts(
                 .map(|s| format!("@{}(", s.symbol.as_str()));
             let unit = out.iter_mut().find(|a| {
                 matches!(&a.code, nazm_lir::backend::Code::Llvm(ir)
-                    if init.as_ref().is_some_and(|i| ir.contains(&format!("define hidden void {i}"))
-                        || ir.contains(&format!("define internal void {i}"))))
+                    // A Nazm function returns its failure bit, alone where it has no result in
+                    // a register (R1, 5b.8).
+                    if init.as_ref().is_some_and(|i| ir.contains(&format!("define hidden i1 {i}"))
+                        || ir.contains(&format!("define internal i1 {i}"))))
             });
             match unit.map(|a| &mut a.code) {
                 Some(nazm_lir::backend::Code::Llvm(ir)) => {

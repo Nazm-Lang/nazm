@@ -134,12 +134,23 @@ pub enum Linkage {
     Export,
 }
 
-/// A calling convention. The two differ only in how a narrow argument is extended: a
-/// foreign or C-visible function receives a `Bool` as C's `bool`, zero-extended (N42).
+/// A calling convention. A foreign or C-visible function receives a `Bool` as C's `bool`,
+/// zero-extended (N42); the other two extend nothing.
+///
+/// A Nazm function — MIR's, and a large frame's entry — returns one more thing than its
+/// signature says: whether it failed, a bit beside its result (R1, 5b.8). Every [`Term::Return`]
+/// says it did not and every [`Term::Fail`] that it did, so a caller learns of a failure from a
+/// register rather than by reading the thread's flag, which [`Conv::Plain`] callers still do: the
+/// flag stays the runtime's record of the failure, set by `nz.fail` as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Conv {
+    /// A Nazm function: the failure bit returned beside the result.
     Nazm,
     C,
+    /// The internal convention without the failure bit: the runtime's entries, the generated
+    /// helpers, and the entry the platform calls a Nazm function by — `main`, an interrupt
+    /// handler, a board's task or failure hook — whose callers read the flag.
+    Plain,
 }
 
 /// A function's signature in machine classes. An in-memory result is not a result here: the
@@ -149,6 +160,14 @@ pub struct Sig {
     pub params: Vec<Class>,
     pub ret: Option<Class>,
     pub conv: Conv,
+}
+
+impl Sig {
+    /// Whether a call returns the callee's failure bit beside its result (R1, 5b.8).
+    #[must_use]
+    pub fn fails(&self) -> bool {
+        self.conv == Conv::Nazm
+    }
 }
 
 /// What a symbol is.
@@ -417,13 +436,17 @@ pub enum Inst {
         var: Var,
         src: V,
     },
+    /// `failed`, when given, is the callee's failure bit, a [`Class::Bit`]: only of a
+    /// [`Conv::Nazm`] callee. Without it the bit is discarded and the caller reads the flag.
     Call {
         dst: Option<V>,
+        failed: Option<V>,
         callee: SymId,
         args: Vec<V>,
     },
     CallIndirect {
         dst: Option<V>,
+        failed: Option<V>,
         addr: V,
         sig: Sig,
         args: Vec<V>,
@@ -455,7 +478,11 @@ pub enum Term {
         cases: Vec<(i64, B)>,
         default: B,
     },
+    /// In a [`Conv::Nazm`] function, a return that did not fail.
     Return(Option<V>),
+    /// A [`Conv::Nazm`] function's failure exit (R1, 5b.8): its failure bit set, and its result —
+    /// which no caller reads — a zero. The failure is already recorded.
+    Fail,
     /// Control never reaches here: after `exit`, and after `nz.report`.
     Unreachable,
 }
@@ -507,6 +534,78 @@ pub struct Function {
     pub debug_vars: Vec<DebugVar>,
     /// The section `@section` places it in (Gate 3): a board's image only.
     pub section: Option<String>,
+}
+
+impl Function {
+    /// Which blocks only a failure reaches the end of (R1, 5b.8): one that records a failure
+    /// (`nz.fail`) or reports one (`nz.report`), one that leaves by [`Term::Fail`], and one every
+    /// successor of which is such a block. A backend lays them out of the way of the code that
+    /// does not fail — a layout hint, which changes nothing a program can observe.
+    #[must_use]
+    pub fn cold_blocks(&self, m: &Module) -> Vec<bool> {
+        let failing = |s: &SymId| {
+            m.symbol(*s)
+                .is_some_and(|x| x.name == "nz.fail" || x.name == "nz.report")
+        };
+        let mut cold: Vec<bool> = self
+            .blocks
+            .iter()
+            .map(|b| {
+                matches!(b.term, Term::Fail)
+                    || b.insts.iter().any(|i| match i {
+                        Inst::Call { callee, .. } => failing(callee),
+                        _ => false,
+                    })
+            })
+            .collect();
+        // A block is cold once all its successors are: from each cold block back to its
+        // predecessors, a worklist, so the time is in proportion to the edges.
+        let successors = |b: &Block| -> Vec<B> {
+            match &b.term {
+                Term::Jump(t) => vec![*t],
+                Term::Branch {
+                    then, otherwise, ..
+                } => vec![*then, *otherwise],
+                Term::Switch { cases, default, .. } => {
+                    let mut v: Vec<B> = cases.iter().map(|(_, t)| *t).collect();
+                    v.push(*default);
+                    v
+                }
+                Term::Return(_) | Term::Fail | Term::Unreachable => Vec::new(),
+            }
+        };
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); self.blocks.len()];
+        for (i, b) in self.blocks.iter().enumerate() {
+            for t in successors(b) {
+                if let Some(p) = preds.get_mut(t.index()) {
+                    p.push(i);
+                }
+            }
+        }
+        let mut work: Vec<usize> = (0..cold.len())
+            .filter(|i| cold.get(*i).copied().unwrap_or(false))
+            .collect();
+        while let Some(c) = work.pop() {
+            for &p in preds.get(c).map_or(&[][..], Vec::as_slice) {
+                if cold.get(p).copied().unwrap_or(true) {
+                    continue;
+                }
+                let all = self.blocks.get(p).is_some_and(|b| {
+                    let s = successors(b);
+                    !s.is_empty()
+                        && s.iter()
+                            .all(|t| cold.get(t.index()).copied().unwrap_or(false))
+                });
+                if all {
+                    if let Some(x) = cold.get_mut(p) {
+                        *x = true;
+                    }
+                    work.push(p);
+                }
+            }
+        }
+        cold
+    }
 }
 
 /// One unit, as LIR.

@@ -200,9 +200,16 @@ fn a_debugger_finds_a_cranelift_build_s_functions_and_lines() {
                 .and_then(|r| r.split(')').next())
                 .map(|h| u64::from_str_radix(h, 16).unwrap())
                 .unwrap_or_else(|| panic!("no subprogram {f}: {dwarf}"));
+            // `main` is under `main.body`, beside the plain entry the platform calls by `main`'s
+            // own symbol (R1, 5b.8).
+            let suffix = if f == "main" {
+                ".main.body".to_owned()
+            } else {
+                format!(".{f}")
+            };
             let symbol = symbols
                 .lines()
-                .find(|l| l.ends_with(&format!(".{f}")) && l.contains("nz.m."))
+                .find(|l| l.ends_with(&suffix) && l.contains("nz.m."))
                 .and_then(|l| u64::from_str_radix(l.split_whitespace().next()?, 16).ok())
                 .unwrap_or_else(|| panic!("no symbol for {f}: {symbols}"));
             assert_eq!(at, symbol, "{f}: DWARF {at:#x}, symbol {symbol:#x}");

@@ -71,6 +71,10 @@ pub struct Sig {
     /// The C symbol an exported function's C entry is defined under (N55), in the unit that
     /// defines the function.
     pub export: Option<NativeSymbol>,
+    /// Whether the platform calls it by its symbol (R1, 5b.8): `main`, an interrupt handler, a
+    /// board's task or failure hook. Its symbol is then a plain entry that reads no failure bit,
+    /// and the function itself — returning one, as every Nazm function does — is beside it.
+    pub entered: bool,
 }
 
 /// Everything one `nazm build` generates, before any of it is written down.
@@ -348,6 +352,10 @@ pub fn lower_as(
                 instance,
                 foreign: f.foreign.is_some(),
                 export: f.export.as_deref().map(NativeSymbol::foreign),
+                entered: Some(f.id) == entry_id
+                    || f.interrupt.is_some()
+                    || f.on_failure
+                    || f.task.is_some(),
             }
         })
         .collect();

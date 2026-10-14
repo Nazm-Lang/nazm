@@ -9924,11 +9924,12 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "closures::closures_
 [[mutation]]
 name = "n50-the-cranelift-indirect-call-ignores-a-failure"
 why = """under Cranelift a failure inside a function value's code is not noticed by its caller
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends. Repointed by R1 5b.8: the
+check is the callee's failure bit."""
 file = "crates/nazm-lir/src/op/func.rs"
 find = '''                    args: vals,
                 });
-                self.check_failed();'''
+                self.check_call(failed);'''
 replace = '''                    args: vals,
                 });'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "closures::a_failure_inside_a_closure_reclaims_its_captures_and_its_callers" }]
@@ -19084,6 +19085,67 @@ find = '''                self.discard_tail = true;
                 let _ = self.check_block(&d.body, None);'''
 replace = '''                let _ = self.check_block(&d.body, None);'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::a_deferred_body_leaves_nothing" }]
+# --- R1 5b.8: the failure bit -------------------------------------------------------------------
+
+[[mutation]]
+name = "r1-the-llvm-failure-exit-says-it-did-not-fail"
+why = "under LLVM a function's failure exit returns its failure bit clear: its caller carries on past the failure"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''                        "  ret {} {{ {} zeroinitializer, i1 true }}",'''
+replace = '''                        "  ret {} {{ {} zeroinitializer, i1 false }}",'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r1-the-cranelift-failure-exit-says-it-did-not-fail"
+why = "under Cranelift a function's failure exit returns its failure bit clear: its caller carries on past the failure"
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '''                r.push(fx.b.ins().iconst(types::I8, 1));'''
+replace = '''                r.push(fx.b.ins().iconst(types::I8, 0));'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r1-the-oracle-failure-exit-says-it-did-not-fail"
+why = "the LIR oracle's failure exit returns its failure bit clear, so the oracle no longer holds the backends to the bit"
+file = "crates/nazm-lir/src/op/interp.rs"
+find = '''                    return Ok((zero, true));'''
+replace = '''                    return Ok((zero, false));'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r1-a-direct-call-ignores-its-callee-s-failure"
+why = "a direct call of a Nazm function checks neither the bit nor the flag after it"
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''        if !foreign {
+            self.check_call(failed);
+        }'''
+replace = '''        if false {
+            self.check_call(failed);
+        }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r1-a-nazm-call-reads-the-flag-not-the-bit"
+why = "a call of a Nazm function reads the thread's failure flag again, as before 5b.8: right, and the load 5b.8 removed"
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''            Some(f) => self.leave_if(f),'''
+replace = '''            Some(_) => self.check_failed(),'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
+
+[[mutation]]
+name = "r1-the-platform-calls-main-with-the-bit"
+why = "no plain entry: the platform calls `main` and the other entered functions by a symbol whose signature returns the failure bit"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '''            if sig.entered && !sig.foreign {'''
+replace = '''            if false && sig.entered && !sig.foreign {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
+
+[[mutation]]
+name = "r1-a-plain-function-may-fail-by-the-bit"
+why = "the validator accepts a failure exit in a function whose callers take no failure bit"
+file = "crates/nazm-lir/src/op/validate.rs"
+find = '''                if !own.fails() {'''
+replace = '''                if false {'''
+killers = [{ package = "nazm-lir", lib = true, name = "op::validate::tests::a_failure_bit_only_a_nazm_function_returns_is_refused_elsewhere" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 

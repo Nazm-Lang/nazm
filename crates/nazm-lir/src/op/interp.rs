@@ -380,20 +380,40 @@ impl Machine<'_> {
 
     /// Call a function at a code address.
     fn call_address(&mut self, addr: u64, args: &[u128]) -> Result<Option<u128>, Stop> {
+        Ok(self.call_address_failing(addr, args)?.0)
+    }
+
+    /// Call a function at a code address: its result, and whether it left by its failure exit.
+    fn call_address_failing(
+        &mut self,
+        addr: u64,
+        args: &[u128],
+    ) -> Result<(Option<u128>, bool), Stop> {
         let i = addr
             .checked_sub(FN_BASE)
             .map(|d| (d / 16) as usize)
             .and_then(|i| self.codes.get(i).copied());
         match i {
-            Some((m, f)) => self.call(m, f, args),
+            Some((m, f)) => self.call_failing(m, f, args),
             None => Err(Stop::Defect(format!(
                 "a call to {addr:#x}, which is no code"
             ))),
         }
     }
 
-    #[allow(clippy::too_many_lines)]
     fn call(&mut self, mi: usize, fi: usize, args: &[u128]) -> Result<Option<u128>, Stop> {
+        Ok(self.call_failing(mi, fi, args)?.0)
+    }
+
+    /// Run a function: its result, and its failure bit (R1, 5b.8) — whether it left by
+    /// [`Term::Fail`], which only a function that has recorded a failure may.
+    #[allow(clippy::too_many_lines)]
+    fn call_failing(
+        &mut self,
+        mi: usize,
+        fi: usize,
+        args: &[u128],
+    ) -> Result<(Option<u128>, bool), Stop> {
         let modules = self.modules;
         let m = &modules[mi];
         let f = &m.functions[fi];
@@ -534,17 +554,22 @@ impl Machine<'_> {
                     }
                     Inst::GetVar { dst, var } => vals[dst.index()] = vars[var.0 as usize],
                     Inst::SetVar { var, src } => vars[var.0 as usize] = vals[src.index()],
-                    Inst::Call { dst, callee, args } => {
+                    Inst::Call {
+                        dst,
+                        failed,
+                        callee,
+                        args,
+                    } => {
                         let a: Vec<u128> = args.iter().map(|v| vals[v.index()]).collect();
                         let target = self.resolved[mi].get(callee.index()).copied().flatten();
-                        let r = match target {
+                        let (r, bit) = match target {
                             Some(Target::Code { module, function }) => {
-                                self.call(module, function, &a)?
+                                self.call_failing(module, function, &a)?
                             }
                             // The runtime takes words: a 128-bit value goes to it by address.
                             Some(Target::Runtime(name)) => {
                                 let words: Vec<u64> = a.iter().map(|v| *v as u64).collect();
-                                self.runtime(name, &words)?.map(u128::from)
+                                (self.runtime(name, &words)?.map(u128::from), false)
                             }
                             Some(Target::Data(_)) => {
                                 return Err(Stop::Defect("a call to data".to_owned()))
@@ -558,24 +583,34 @@ impl Machine<'_> {
                         };
                         if self.exited.is_some() {
                             self.depth -= 1;
-                            return Ok(None);
+                            return Ok((None, false));
                         }
                         if let (Some(d), Some(v)) = (dst, r) {
                             let c = m.sig(*callee).and_then(|s| s.ret).unwrap_or(Class::I64);
                             vals[d.index()] = norm(c, v);
                         }
+                        if let Some(f) = failed {
+                            vals[f.index()] = u128::from(bit);
+                        }
                     }
                     Inst::CallIndirect {
-                        dst, addr, args, ..
+                        dst,
+                        failed,
+                        addr,
+                        args,
+                        ..
                     } => {
                         let a: Vec<u128> = args.iter().map(|v| vals[v.index()]).collect();
-                        let r = self.call_address(vals[addr.index()] as u64, &a)?;
+                        let (r, bit) = self.call_address_failing(vals[addr.index()] as u64, &a)?;
                         if self.exited.is_some() {
                             self.depth -= 1;
-                            return Ok(None);
+                            return Ok((None, false));
                         }
                         if let (Some(d), Some(v)) = (dst, r) {
                             vals[d.index()] = v;
+                        }
+                        if let Some(f) = failed {
+                            vals[f.index()] = u128::from(bit);
                         }
                     }
                     Inst::Copy { dst, src, size } => {
@@ -619,12 +654,23 @@ impl Machine<'_> {
                 }
                 Term::Return(v) => {
                     self.depth -= 1;
-                    return Ok(v.map(|v| vals[v.index()]));
+                    return Ok((v.map(|v| vals[v.index()]), false));
+                }
+                // The failure exit: only after the failure is recorded, and a zero for a result.
+                Term::Fail => {
+                    self.depth -= 1;
+                    if self.failed.is_none() && self.exited.is_none() {
+                        return Err(Stop::Defect(
+                            "a failure exit with no failure recorded".to_owned(),
+                        ));
+                    }
+                    let zero = m.sig(f.sym).and_then(|s| s.ret).map(|_| 0u128);
+                    return Ok((zero, true));
                 }
                 Term::Unreachable => {
                     self.depth -= 1;
                     if self.exited.is_some() {
-                        return Ok(None);
+                        return Ok((None, false));
                     }
                     return Err(Stop::Defect("control reached `unreachable`".to_owned()));
                 }
@@ -1418,16 +1464,29 @@ fn value_classes(f: &super::ir::Function, m: &Module) -> Vec<Class> {
                         }
                     }
                     Inst::Call {
-                        dst: Some(d),
+                        dst,
+                        failed,
                         callee,
                         ..
                     } => {
-                        let k = m.sig(*callee).and_then(|s| s.ret).unwrap_or(Class::I64);
-                        set(*d, k);
+                        if let Some(d) = dst {
+                            let k = m.sig(*callee).and_then(|s| s.ret).unwrap_or(Class::I64);
+                            set(*d, k);
+                        }
+                        if let Some(f) = failed {
+                            set(*f, Class::Bit);
+                        }
                     }
                     Inst::CallIndirect {
-                        dst: Some(d), sig, ..
-                    } => set(*d, sig.ret.unwrap_or(Class::I64)),
+                        dst, failed, sig, ..
+                    } => {
+                        if let Some(d) = dst {
+                            set(*d, sig.ret.unwrap_or(Class::I64));
+                        }
+                        if let Some(f) = failed {
+                            set(*f, Class::Bit);
+                        }
+                    }
                     _ => {}
                 }
             }
