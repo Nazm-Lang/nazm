@@ -849,6 +849,20 @@ impl<'b> Walk<'_, 'b> {
                 let r = self.expr(rhs);
                 Shaped::whole(l.joined(&r))
             }
+            // A call the checker read as a construction (R1.5, D4): whole, as a positional one is.
+            Expr::Call {
+                callee_span, args, ..
+            } if self.res.callee(*callee_span).is_none()
+                && (self.res.construction(*callee_span).is_some()
+                    || self.res.variant(*callee_span).is_some()) =>
+            {
+                let mut flow = Flow::default();
+                for a in args {
+                    let v = self.expr(a);
+                    let _ = flow.join(&v);
+                }
+                Shaped::whole(flow)
+            }
             Expr::Call {
                 callee_span, args, ..
             } => Shaped::whole(self.call_expr(*callee_span, args)),
@@ -1009,6 +1023,12 @@ impl<'b> Walk<'_, 'b> {
 
     fn call_expr(&mut self, callee_span: Span, args: &'b [Expr]) -> Flow {
         let flows: Vec<Flow> = args.iter().map(|a| self.expr(a)).collect();
+        self.call_flows(callee_span, flows)
+    }
+
+    /// A call's flow from its arguments' (R1.5, D4: also a function called by a capitalised
+    /// name with arguments by position, which reads as a construction).
+    fn call_flows(&mut self, callee_span: Span, flows: Vec<Flow>) -> Flow {
         match self.res.callee(callee_span) {
             Some(Callee::Builtin(b)) => {
                 let all = joined(flows.iter().cloned());

@@ -5,6 +5,7 @@
 //! D2 — an expression body, `= e`, and a private function's result type taken from it.
 //! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
 //! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
+//! D5 — map literals, `{"a": 1}`, and `Map[K, V]`.
 
 #![allow(
     clippy::unwrap_used,
@@ -171,6 +172,10 @@ fn fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everyw
     differential::agrees(
         "enum Shape { Circle(r: Int), Rect(w: Int, h: Int), Dot, }
 struct Point { x: Int, y: Int, }
+struct Twice { n: Int, }
+
+// A function of a capitalised name is still called by it, a record of that name or not.
+fn Twice(n: Int) -> Int { n * 2 }
 
 fn area(s: Shape) -> Int {
     match s { Circle(r) => 3 * r * r, Rect(w, h) => w * h, Dot => 0, }
@@ -187,8 +192,10 @@ fn describe(s: Shape) -> Str {
 
 fn main(out: OutCap): Int ! {io} {
     let p = Point(1, 2)
-    let shapes: Vec[Shape] = [Circle(2), Shape.Rect(3, 4), Dot, Circle(9)]
-    let mut total = p.x * 100 + p.y * 10
+    // A built-in type's `Name(x)` is still a conversion, never a construction.
+    let b = Int(UInt8(3))
+    let shapes: Vec[Shape] = [Circle(2), Shape.Rect(3, 4), Dot, Circle(b)]
+    let mut total = p.x * 100 + p.y * 10 + Twice(1)
     for s in shapes {
         total += area(s)
         print(f\"{describe(s)} \")
@@ -197,7 +204,7 @@ fn main(out: OutCap): Int ! {io} {
     0
 }
 ",
-        "circle rect 3 dot big 387\n0",
+        "circle rect 3 dot circle 173\n0",
     );
 }
 
@@ -253,4 +260,39 @@ fn a_secret_bound_by_position_is_still_a_secret() {
         let r = nazm(d.path(), &["check", "p.nz"]);
         assert!(r.stderr.contains("N0372"), "{pattern}: {r:?}");
     }
+}
+
+#[test]
+fn a_map_literal_builds_the_map_everywhere() {
+    differential::agrees(
+        "use \"@std/hash\";
+use \"@std/hashmap\";
+
+fn total(m: Map[Str, Int]) -> Int { m[\"a\"] + m[\"b\"] }
+
+fn main(out: OutCap): Int ! {io} {
+    let k = \"c\"
+    let m = {\"a\": 1, \"b\": 2, k: 3}
+    let ages: Map[Str, Int] = {\"x\": 40}
+    m[\"d\"] = 4
+    let squares = {1: 1, 2: 4, 3: 9}
+    print(f\"{total(m)} {hashmap_len(m)} {ages[\"x\"]} {squares[3]} {hashmap_len(squares)}\\n\")
+    0
+}
+",
+        "3 4 40 9 3\n0",
+    );
+}
+
+#[test]
+fn map_without_the_hash_map_names_the_import() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn f(m: Map[Str, Int]) -> Int { 0 }\nfn main() { }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_ne!(r.code, Some(0), "{r:?}");
+    assert!(r.stderr.contains("@std/hashmap"), "{r:?}");
 }

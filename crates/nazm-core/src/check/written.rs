@@ -465,6 +465,21 @@ fn resolve_name(
     if let Some(t) = types.names.get(name) {
         return *t;
     }
+    // `Map[K, V]` (R1.5, D5): the standard hash map under a shorter name, where it is in scope.
+    if name == "Map" {
+        if let Some(t) = types.names.get("HashMap") {
+            return *t;
+        }
+        errors.push(
+            Diagnostic::error(
+                codes::UNKNOWN_TYPE,
+                span,
+                "`Map` is `@std/hashmap`'s `HashMap`",
+            )
+            .help("import it: `use \"@std/hashmap\";`"),
+        );
+        return Type::Int;
+    }
     if name.contains("::") {
         let aliases: Vec<&str> = types.aliases.iter().map(String::as_str).collect();
         errors.push(unknown_qualified(name, &aliases, span, "type"));
