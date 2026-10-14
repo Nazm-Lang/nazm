@@ -381,6 +381,7 @@ impl Item {
                         foreign: None,
                         export: None,
                         method_of: None,
+                        inferred_result: false,
                         span: m.span,
                     });
                 }
@@ -2251,6 +2252,7 @@ impl<'a> Parser<'a> {
                     foreign: Some(decl),
                     export: None,
                     method_of: None,
+                    inferred_result: false,
                     span: start.join(end),
                 });
             }
@@ -2270,10 +2272,24 @@ impl<'a> Parser<'a> {
         // language exists to avoid. Keep the signature; skip to the next item.
         let body_at = self.checkpoint();
         let body_start = self.pos;
-        let outer = std::mem::replace(&mut self.no_result, no_result);
-        let block = self.block();
+        // `= e` (R1.5, D2): the body is that expression. With no result type written, the
+        // result type is the expression's, which the checker infers.
+        let expression_body = self.at(&TokenKind::Eq) && export.is_none();
+        let inferred_result = expression_body && no_result;
+        let outer = std::mem::replace(&mut self.no_result, no_result && !expression_body);
+        let block = if expression_body {
+            self.expression_body()
+        } else {
+            self.block()
+        };
         self.no_result = outer;
-        let block = block.map(|b| if no_result { returning_nothing(b) } else { b });
+        let block = block.map(|b| {
+            if no_result && !expression_body {
+                returning_nothing(b)
+            } else {
+                b
+            }
+        });
         let body = match block {
             // A body that recovered from a statement is complete in the concrete tree and
             // absent from the abstract one: the checker sees no body rather than a body
@@ -2306,7 +2322,24 @@ impl<'a> Parser<'a> {
             foreign: None,
             export,
             method_of: None,
+            inferred_result,
             span: start.join(span),
+        })
+    }
+
+    /// `= e` after a function's signature (R1.5, D2): a body whose value is `e`, ended where a
+    /// statement ends — a line break, or a `;`, which is taken.
+    fn expression_body(&mut self) -> Option<Block> {
+        let at = self.checkpoint();
+        self.bump();
+        let e = self.expr()?;
+        let span = e.span();
+        self.eat(&TokenKind::Semi);
+        self.wrap(at, SyntaxKind::Block);
+        Some(Block {
+            statements: Vec::new(),
+            tail: Some(Box::new(e)),
+            span,
         })
     }
 

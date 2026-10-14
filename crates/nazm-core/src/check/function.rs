@@ -71,6 +71,11 @@ impl Checker<'_> {
             self.close_scope();
             return;
         };
+        if f.inferred_result {
+            self.infer_result(f, body);
+            self.close_scope();
+            return;
+        }
         let previous = self.return_type.replace(declared);
         let previous_span = self.return_span.replace(f.return_type.span);
         let completion = self.check_block(body, Some(declared));
@@ -116,6 +121,41 @@ impl Checker<'_> {
             }
         }
         self.close_scope();
+    }
+
+    /// An expression body with no result type written (R1.5, D2): its type is the function's
+    /// result type, settled in the resolution before any caller is checked. An expression with
+    /// no value is `N0634`.
+    fn infer_result(&mut self, f: &Function, body: &nazm_syntax::Block) {
+        let previous = self.return_type.take();
+        let previous_span = self.return_span.take();
+        let completion = self.check_block(body, None);
+        self.return_type = previous;
+        self.return_span = previous_span;
+        let Some(id) = self.current else {
+            return;
+        };
+        match completion {
+            Completion::Value(ty) => {
+                self.res.settle_result(id, ty, false);
+                // The module's names were taken before this body was checked: each that calls
+                // this function now sees its type.
+                for v in self.env.names.values_mut() {
+                    if v.callee == Callee::Function(id) {
+                        v.sig.ret = ty;
+                    }
+                }
+            }
+            // A body with no value has no type to give: written `= e`, it is meant to have one.
+            Completion::Unit | Completion::Diverges => self.errors.push(
+                Diagnostic::error(
+                    codes::RESULT_TYPE_NOT_INFERRED,
+                    body.span,
+                    format!("`{}`'s body has no value to take its result type from", f.name),
+                )
+                .help("write the body as a block, `fn f() { … }`, for a function that returns nothing"),
+            ),
+        }
     }
 
     /// A function's contract clauses (N87, §7.88): each a `Bool`; a `requires` over the

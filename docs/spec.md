@@ -1615,6 +1615,8 @@ Each is a spelling of something the language already had, and means exactly that
 | Written | Means |
 | --- | --- |
 | `fn fib(n: Int): Int { … }` (D1) | `fn fib(n: Int) -> Int { … }`: a result type is written after `:`, as a parameter's is — in a function, a trait method, a function type (`fn(Int): Int`) and a function expression (`fn(n: Int): Int { … }`). `->` is still read and is removed at 1.0; the effect set follows the type either way, `fn read(io: IoCap): Str ! {io}` |
+| `fn double(n: Int): Int = n * 2` (D2) | `fn double(n: Int): Int { n * 2 }`: a body that is one expression, ended where a statement ends |
+| `fn add(a: Int, b: Int) = a + b` (D2) | the same function with its result type the expression's (`Int`), settled before any caller is checked. A `pub` function writes its result type, since its signature is its interface; so does a method, and a function whose body reaches itself, directly or through others; and an expression with no value has none to give (each `N0634`) |
 
 ### Methods and indexes by name
 <!-- id: named-methods -->

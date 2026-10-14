@@ -2,6 +2,7 @@
 //!
 //! D1 — a result type written after `:`, in a function, a trait method, a function type and a
 //! function expression; `->` still read beside it.
+//! D2 — an expression body, `= e`, and a private function's result type taken from it.
 
 #![allow(
     clippy::unwrap_used,
@@ -77,4 +78,53 @@ fn a_colon_without_a_type_is_refused_where_the_type_was_expected() {
     let r = nazm(d.path(), &["check", "p.nz"]);
     assert_ne!(r.code, Some(0), "{r:?}");
     assert!(r.stderr.contains("type"), "{r:?}");
+}
+
+#[test]
+fn an_expression_body_and_its_inferred_result_type_mean_the_block_everywhere() {
+    differential::agrees(
+        // `main` first, and `quad` before what it calls: each inferred type is settled before
+        // any caller is checked, wherever the caller is written.
+        "fn main(out: OutCap): Int ! {io} {
+    let f = quad
+    print(f\"{double(21)} {add(2, 3)} {greet(\"nazm\")} {f(5)} {even(4)} {first(7, 8)} {pick(Some(9))}\\n\")
+    0
+}
+
+fn quad(n: Int) = add(double(n), double(n))
+fn double(n: Int): Int = n * 2
+fn add(a: Int, b: Int) = a + b
+fn greet(name: Str) = f\"hello {name}\"
+fn even(n: Int) = n % 2 == 0
+fn first[T](a: T, b: T) = a
+fn pick(o: Option[Int]) = match o { Some(v) => v, None => 0 }
+",
+        "42 5 hello nazm 20 true 7 9\n0",
+    );
+}
+
+#[test]
+fn a_result_type_that_must_be_written_is_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    for (src, why) in [
+        ("pub fn p(n: Int) = n\nfn main() { }\n", "`pub`"),
+        (
+            "fn r(n: Int) = if n < 1 { 0 } else { r(n - 1) }\nfn main() { }\n",
+            "reaches itself",
+        ),
+        (
+            "fn a(n: Int) = b(n)\nfn b(n: Int) = a(n)\nfn main() { }\n",
+            "reaches itself",
+        ),
+        (
+            "trait T { fn m(self: Self): Int; }\nimpl T for Int { fn m(self: Int) = self }\nfn main() { }\n",
+            "method",
+        ),
+    ] {
+        std::fs::write(d.path().join("p.nz"), src).unwrap();
+        let r = nazm(d.path(), &["check", "p.nz"]);
+        assert_ne!(r.code, Some(0), "{src}: {r:?}");
+        assert!(r.stderr.contains("N0634"), "{src}: {r:?}");
+        assert!(r.stderr.contains(why), "{src}: {r:?}");
+    }
 }
