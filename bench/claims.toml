@@ -409,3 +409,8 @@ why = "measured on the tree of its date with hyperfine, five runs after one warm
 heading = "R1.5 D14: dead-stripping, measured (2026-10-15)"
 status = "dated"
 why = "the byte sizes of bench/compare/nazm/*.nz built `--no-cache` with the release binary before and after the change, on one host and one clang; a record of that date and machine — sizes are deterministic there, but no command in the tree rebuilds the before column"
+
+[[claim]]
+heading = "R1.5 1.2: Nazm's build, uncached and from a warm user cache, measured (2026-10-15)"
+status = "dated"
+why = "hyperfine over four build configurations on one loaded host, recorded with that load; `bench/compare/compare.py` reproduces the uncached and warm-user-cache rows by its method, not these numbers"

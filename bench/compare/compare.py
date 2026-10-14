@@ -24,7 +24,8 @@ Measured for each program: run time (`hyperfine --warmup 2 --runs N --shell=none
 is on PATH, else a wall clock around the process, as bench/cross.py), peak resident memory of one
 run (`/usr/bin/time`), the size of the executable where there is one, build time (the median of
 BUILD_RUNS builds after one unmeasured build, so a toolchain's caches of its own standard library
-are warm), and lines of code (non-blank lines that are not wholly a comment). The host is not
+are warm; Nazm's twice, as two rows — uncached with `--no-cache`, and with its user cache warm
+and its project store empty, R1.5 1.2), and lines of code (non-blank lines that are not wholly a comment). The host is not
 controlled: thermal state, other processes and frequency scaling all reach these numbers, which
 is why each run time carries its spread.
 """
@@ -174,8 +175,22 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
     """Language label -> (directory, file extension, file naming, variants).
 
     A variant is (label, tool needed, build command or None, run command, environment, flags),
-    the commands as functions of the source path and the output path.
+    the commands as functions of the source path and the output path, and optionally a function
+    run before every build, outside its time.
     """
+    # R1.5, 1.2: Nazm's build measured twice. Uncached, `--no-cache`: every unit and the runtime
+    # compiled each build. Cached: a warm user cache (D12), which the unmeasured first build fills
+    # and every timed build keeps, beside a project store emptied before each build — so the
+    # program's own units are compiled every time and only the runtime's and `@std`'s are reused.
+    # Both caches are under OUT_DIR/work, never the user's own.
+    user_cache = work / "nazm-user-cache"
+    project_cache = work / "nazm-project-cache"
+    cached_env = dict(env, NAZM_USER_CACHE_DIR=str(user_cache),
+                      NAZM_CACHE_DIR=str(project_cache))
+
+    def cold_project():
+        shutil.rmtree(project_cache, ignore_errors=True)
+
     def exe(name, tag):
         return str(work / f"{name}.{tag}")
 
@@ -205,6 +220,12 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
              lambda s, n: [exe(n, "nazm")], env,
              "LLVM backend, clang -O2; checked arithmetic and bounds; --no-cache: every unit "
              "and the runtime compiled each build"),
+            ("nazm build --opt-level 2 (user cache warm)", nazm,
+             lambda s, n: [nazm, "build", "--opt-level", "2", s, "-o", exe(n, "nazmc")],
+             lambda s, n: [exe(n, "nazmc")], cached_env,
+             "as above, with the user cache (R1.5 D12) warm and the project store empty: the "
+             "runtime's and @std's objects reused, the program's own compiled each build",
+             cold_project),
             ("nazm run (interpreter)", nazm, None,
              lambda s, n: [nazm, "run", "--interpret", "--max-iterations", "1000000000000", s, "--"], env,
              "tree-walking interpreter"),
@@ -363,7 +384,9 @@ def main():
         extra = [str(words_txt)] if name == "words" else []
         for lang, d, pattern, variants in langs:
             src = HERE / d / pattern.format(n=name, N=name.capitalize())
-            for label, tool, build, run, venv, flags in variants:
+            for variant in variants:
+                label, tool, build, run, venv, flags = variant[:6]
+                prepare = variant[6] if len(variant) > 6 else None
                 row = {"language": lang, "variant": label, "flags": flags,
                        "source": str(src.relative_to(HERE.parent.parent))}
                 print(f"{name}: {lang}, {label}", file=sys.stderr, flush=True)
@@ -382,6 +405,8 @@ def main():
                     failed = None
                     times = []
                     for i in range(BUILD_RUNS + 1):
+                        if prepare is not None:
+                            prepare()
                         t, out = timed(cmd, env=venv, cwd=work)
                         if out.returncode != 0:
                             text = (out.stderr.strip() or out.stdout.strip()).splitlines()

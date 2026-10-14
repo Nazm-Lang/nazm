@@ -3407,7 +3407,12 @@ publication.
 resident set size of one run from `/usr/bin/time -l`; build time is the median of three builds after
 one unmeasured build, so each toolchain's caches of its own standard library are warm — Nazm builds
 with `--no-cache`, every unit and the runtime compiled each time, and Go's build cache may reuse the
-package itself; LOC counts non-blank lines that are not wholly a comment.
+package itself; LOC counts non-blank lines that are not wholly a comment. *Since R1.5 (1.2)* Nazm's
+build is two rows: `nazm build --opt-level 2` with `--no-cache` as above, and `(user cache warm)`,
+whose user cache (D12) the unmeasured build fills and whose project store is emptied before every
+build, so the program's own units are compiled each time and the runtime's and `@std`'s are reused —
+what a new project costs once Nazm has built anything on the machine. Both caches are under
+`OUT_DIR/work`; the tables below predate the second row, which *R1.5 1.2* measures.
 
 Measured 2026-10-15 on an Apple M1 Pro, 10 cores, 32 GiB, macOS 27.2, with `nazm` 0.10.0 — the
 release binary, built `--release` from `403aa68d` — and Apple clang 21.0.0, go 1.27.1, rustc 1.98.1,
@@ -3570,3 +3575,27 @@ every runtime part, lost 62 to 70%; `hello` and `fib` are now within 1 KiB of ea
 backends, the rest being the Mach-O headers and page alignment. Every program printed the expected
 output. Linux (`--gc-sections`) was not measured on this host: its arguments are covered by
 `backend::tests`, and its sizes are for the contained gate to record.
+
+## R1.5 1.2: Nazm's build, uncached and from a warm user cache, measured (2026-10-15)
+
+`fib.nz` and `words.nz` from `bench/compare/nazm/`, `--opt-level 2`, with the release binary of
+`efde17f9`, `hyperfine -N --runs 15 --warmup 2`, interleaved per program, the project store emptied
+before every run (`--prepare`). Four builds: `--no-cache` (the comparison's first row); a fresh
+project with the user cache off (`NAZM_USER_CACHE_DIR=`, what every new project paid before D12); a
+fresh project with the user cache warm (the comparison's second row, after D12); and, for
+reference, a rebuild with both stores warm. Medians, in ms:
+
+| program | `--no-cache` | fresh project, before D12 | fresh project, user cache warm | both stores warm |
+| --- | ---: | ---: | ---: | ---: |
+| fib | 237.5 | 292.3 | 209.3 | 109.3 |
+| words | 1562.6 | 1691.3 | 950.4 | 107.6 |
+
+A new project's `words` now builds in 56% of the time it took before D12 (39% less than
+`--no-cache`), since its four `@std` modules and the runtime are no longer compiled; `fib`, whose
+only shared unit is the runtime, saves 83 ms against the fresh build and 28 ms against
+`--no-cache`, the rest of its time being its own unit, the entry, the link and the `clang -###`
+probe a cached build makes. The host was loaded by other work throughout (load average 8 to 20 on
+10 cores), so the absolute numbers are above the 0.10.0 run's 207 and 1097 ms for `--no-cache`; the
+columns were measured interleaved, so their ratios are the result. `python3 bench/compare/compare.py`
+on the same host and hour gave the two Nazm rows as 297 and 219 ms (`fib`) and 1564 and 1289 ms
+(`words`), median of three each; its output was checked for both.
