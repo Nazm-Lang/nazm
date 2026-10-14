@@ -16959,14 +16959,13 @@ find = "            None => self.default_method(trait_id, method).map(|d| (d, ve
 replace = "            None => self.default_method(trait_id, method).map(|d| (d, Vec::new())),"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "default_methods::a_default_body_means_the_same_everywhere_and_is_reclaimed" }]
 
-[[mutation]]
-name = "r1b-no-default-instance-is-planned"
-why = "the default bodies an impl relies on are not planned at its type, so a call through a bound reaches no instance"
-file = "crates/nazm-mir/src/instance.rs"
-find = "            let Some((d, args)) = res.method_target(trait_id, ty, u32::try_from(m).unwrap_or(0))"
-replace = "            let Some((d, args)) = None::<(FnId, Vec<Type>)>"
-killers = [{ package = "nazm-cli", test = "cli_c_d", name = "default_methods::a_default_body_means_the_same_everywhere_and_is_reclaimed" }]
-
+# `r1b-no-default-instance-is-planned` is retired as **equivalent** (R1 close, 2026-10-14): it SURVIVED
+# its killer, and the whole workspace suite with it applied passed (2,894 tests; the 41 selfhost
+# refusals are the host's, and the Nazm-written subset has no default bodies). A default body is
+# planned where a call through a bound reaches it at a concrete type, so the per-impl loop it
+# disabled in `nazm-mir/src/instance.rs` plans nothing that path does not: a default reached only
+# through a bound (`fn tagged[T: Describe](x: T) -> Str { x.tag() }`) builds and runs without it.
+# `r1b-a-bound-call-to-a-default-takes-no-type` attacks the rule where it lives.
 [[mutation]]
 name = "r1b-the-interpreter-drops-a-defaulted-impl"
 why = "Core IR's impl table keeps an impl only if it writes every method, so the interpreter finds no impl for a type that uses a default"
