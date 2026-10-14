@@ -1,0 +1,198 @@
+// The performance-claims gate (R7, ported from `xtask/src/claims.rs`; N92): `bench/claims.toml`
+// files every measured section of `docs/performance.md` — every `##` or `###` heading that says
+// *measured* or *frozen* — as reproducible, dated or unreproduced, and every reproducible entry's
+// command is real. It does not run them.
+
+use "@std/toml"
+use "@std/text"
+use "@std/map"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+fn field(t: Toml, key: Str) -> Str ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: s) => s,
+            Toml.Int(value: i) => "",
+            Toml.Float(value: x) => "",
+            Toml.Bool(value: b) => "",
+            Toml.OffsetDatetime(value: d) => "",
+            Toml.LocalDatetime(value: d) => "",
+            Toml.LocalDate(value: d) => "",
+            Toml.LocalTime(value: d) => "",
+            Toml.Array(items: i) => "",
+            Toml.Table(keys: k, values: w) => "",
+        },
+        Option.None() => "",
+    }
+}
+
+/// The measured headings of `performance.md`, without their `#`s.
+fn measured(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in lines(text) {
+        if text_starts_with(l, "## ") || text_starts_with(l, "### ") {
+            let h = trim_ws(trim_start_matches(l, "#"));
+            if text_contains(h, "measured") || text_contains(h, "frozen") {
+                strs_push(out, h);
+            }
+        }
+    }
+    out
+}
+
+/// Every `.rs` file's text under `crates/` and `xtask/`, a directory named `target` left out —
+/// read once, for every command that names a test.
+fn rust_sources(h: Caps, root: Str) -> Strs ! { io } {
+    let io = h.io;
+    let out = strs_new();
+    for top in words("crates xtask") {
+        let all = match file_walk(io, f"{root}/{top}") {
+            Result.Ok(value: xs) => xs,
+            Result.Err(error: e) => strs_new(),
+        };
+        for p in all {
+            if !text_ends_with(p, ".rs") || text_contains(p, "/target/") {
+                continue;
+            }
+            match read_rust(h, p) {
+                Result.Ok(value: t) => strs_push(out, t),
+                Result.Err(error: e) => 0,
+            };
+        }
+    }
+    out
+}
+
+/// Whether a test function of this name is in the tree's Rust sources.
+fn test_exists(sources: Strs, name: Str) -> Bool ! {} {
+    let parts = split(name, "::");
+    let last = strs_get(parts, strs_len(parts) - 1);
+    let needle = f"fn {last}(";
+    for t in sources {
+        if text_contains(t, needle) {
+            return true;
+        }
+    }
+    false
+}
+
+/// What is wrong with a reproducible entry's command, if anything: `""` when nothing.
+fn command_problem(h: Caps, root: Str, sources: Strs, how: Str) -> Str ! { io } {
+    let ws = split_whitespace(how);
+    let mut at = 0 - 1;
+    let mut i = 0;
+    while i < strs_len(ws) && at < 0 {
+        if strs_get(ws, i) == "--ignored" {
+            at = i;
+        }
+        i = i + 1;
+    }
+    if at >= 0 {
+        let mut name = "";
+        let mut j = at + 1;
+        while j < strs_len(ws) {
+            if !text_starts_with(strs_get(ws, j), "-") {
+                name = strs_get(ws, j);
+            }
+            j = j + 1;
+        }
+        if str_len(name) == 0 {
+            return "";
+        }
+        return if test_exists(sources, name) { "" } else { f"no test `{name}` in the tree" };
+    }
+    if strs_len(ws) >= 3 && strs_get(ws, 0) == "cargo" && strs_get(ws, 1) == "xtask" {
+        let sub = strs_get(ws, 2);
+        let main = match read_rust(h, f"{root}/xtask/src/main.rs") {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => "",
+        };
+        return if text_contains(main, f"Some(\"{sub}\")") { "" } else { f"no `cargo xtask {sub}`" };
+    }
+    f"`{how}` is neither a measurement test run with `--ignored` nor a `cargo xtask` command"
+}
+
+pub fn gate_claims(h: Caps, root: Str) -> Strs ! { io } {
+    let problems = strs_new();
+    let doc = match read_rust(h, f"{root}/docs/performance.md") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { strs_push(problems, f"could not read docs/performance.md: {e}"); return problems; },
+    };
+    let register = match read_rust(h, f"{root}/bench/claims.toml") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { strs_push(problems, f"could not read bench/claims.toml: {e}"); return problems; },
+    };
+    let value = match toml_parse(register) {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => { strs_push(problems, f"bench/claims.toml is not TOML: {e}"); return problems; },
+    };
+    let claims = vec_new[Toml]();
+    match toml_get(value, "claim") {
+        Option.Some(value: a) => match a {
+            Toml.Array(items: items) => { for c in items { vec_push(claims, c); } 0 },
+            Toml.Str(value: s) => 0,
+            Toml.Int(value: i) => 0,
+            Toml.Float(value: x) => 0,
+            Toml.Bool(value: b) => 0,
+            Toml.OffsetDatetime(value: d) => 0,
+            Toml.LocalDatetime(value: d) => 0,
+            Toml.LocalDate(value: d) => 0,
+            Toml.LocalTime(value: d) => 0,
+            Toml.Table(keys: k, values: w) => 0,
+        },
+        Option.None() => 0,
+    };
+    let mut sources = strs_new();
+    let mut loaded = false;
+    let filed = map_new[Int]();
+    for c in claims {
+        let heading = field(c, "heading");
+        let n = match map_get(filed, heading) {
+            Option.Some(value: k) => k,
+            Option.None() => 0,
+        };
+        map_set(filed, heading, n + 1);
+        let status = field(c, "status");
+        if status != "reproducible" && status != "dated" && status != "unreproduced" {
+            strs_push(problems, f"`{heading}`: status `{status}` is not one of [\"reproducible\", \"dated\", \"unreproduced\"]");
+            continue;
+        }
+        if status == "reproducible" {
+            if str_len(field(c, "metric")) == 0 {
+                strs_push(problems, f"`{heading}`: reproducible, with no `metric`");
+            }
+            if !loaded {
+                sources = rust_sources(h, root);
+                loaded = true;
+            }
+            let p = command_problem(h, root, sources, field(c, "how"));
+            if str_len(p) > 0 {
+                strs_push(problems, f"`{heading}`: {p}");
+            }
+        } else if str_len(field(c, "why")) == 0 {
+            strs_push(problems, f"`{heading}`: {status}, with no `why`");
+        }
+    }
+    let headings = measured(doc);
+    for hd in headings {
+        match map_get(filed, hd) {
+            Option.None() => strs_push(problems, f"docs/performance.md measures `{hd}`, and bench/claims.toml does not file it"),
+            Option.Some(value: n) => if n > 1 { strs_push(problems, f"`{hd}` is filed {n} times") } else { 0 },
+        };
+    }
+    for k in map_keys(filed) {
+        let mut found = false;
+        for hd in headings {
+            if hd == k {
+                found = true;
+            }
+        }
+        if !found {
+            strs_push(problems, f"bench/claims.toml files `{k}`, which docs/performance.md does not measure");
+        }
+    }
+    problems
+}
