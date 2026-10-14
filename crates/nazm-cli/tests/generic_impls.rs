@@ -102,7 +102,7 @@ impl Show for Int { fn show(self: Int) -> Str { num_to_str(self) } }
 impl Show for Str { fn show(self: Str) -> Str { self } }
 
 impl[A: Show, B: Show] Show for Pair[A, B] {
-    fn show(self: Pair[A, B]) -> Str {
+    fn show(self: Self) -> Str {
         str_concat(\"(\", str_concat(self.a.show(), str_concat(\", \", str_concat(self.b.show(), \")\"))))
     }
 }
