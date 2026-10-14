@@ -1,0 +1,14 @@
+fn apply(f: fn(Int, Int) -> Bool, a: Int, b: Int) -> Bool { f(a, b) }
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+
+fn main(out: OutCap): Int ! {io} {
+    let inc = |n: Int| n + 1
+    let k = 10
+    let add_k = |n: Int| { n + k }
+    let zero = || 0
+    let shout = |s: Str| str_concat(s, "!")
+    let typed: fn(Int) -> Int = |x| x - 1
+    print(f"{apply(|a, b| a < b, 1, 2)} {apply(|a, b| a > b, 1, 2)} {twice(|x| x * 3, 2)} ")
+    print(f"{inc(41)} {add_k(5)} {zero()} {typed(1)} {shout("hi")}\n")
+    0
+}

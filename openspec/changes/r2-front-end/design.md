@@ -61,16 +61,13 @@ is a rendering of the same objects and is compared on a sample once the JSON agr
 **D5 — Core IR is compared byte for byte with `nazm core-ir`.** Digests included: they are BLAKE3
 over the reference's semantic encoding, and `library/std/blake3.nz` (R1, D4) supplies the hash.
 
-**D6 — Running the comparison on this host.** The runbook makes every generated compiler stage
-contained work, and `bootstrap.sh` refuses to start without containment. This track may not run
-contained workloads or set `NAZM_CONTAINED`/`NAZM_ALLOW_UNCONTAINED`. The comparison therefore
-builds each driver with the reference and **`--heap-limit 2G`** (R1, D5: an allocation past it
-ends the program with `N0406`), and runs it under a wall-clock deadline. The bootstrap's own chain
-(C2 and C3 are linked from IR the Nazm compiler emitted, which carries no heap limit) is not run
-here: the track's host check is the reference checking the compiler source, C1 — built with the
-heap limit — emitting C2's IR from it, and C1 compiling and running the conformance corpus. C2 ≡ C3
-stays the coordinator's contained `bootstrap`. Whether a heap-limited stage is enough to run
-compiler stages on a host is R6's decision, not this track's.
+**D6 — What runs on this host (revised 2026-10-15 by the coordinator).** Generated compiler
+stages — C1, C2, C3, and the old `nzlex`/`nzparse`/`nzcheck` drivers — run only contained (runbook,
+*Mandatory containment*; `compiler/AGENTS.md`); the coordinator runs every stage comparison, the
+bootstrap and selfhost there. On the host this track runs only the reference `nazm` and what the
+comparisons with it need: the R2 drivers (`tokens`, `tree`, `diagnose`), built by the reference
+with `--heap-limit 2G` and run under a deadline (`run.sh`), and `host-check.sh`, which is the
+reference checking the compiler and the drivers and `nazm fmt --check`.
 
 **D7 — The reference dumper lives in `compiler/tests/refdump/`**, a Rust binary with its own
 `[workspace]` and path dependencies on `nazm-syntax`, `nazm-diag` and `nazm-span` of the same
