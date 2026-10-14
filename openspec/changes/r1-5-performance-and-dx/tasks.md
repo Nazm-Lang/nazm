@@ -29,7 +29,8 @@
       `fn(Int): Int`; `->` still read, removed at 1.0; `nazm fmt` keeps the form written until R2
       (design D1) — 2026-10-15: parser, grammar, spec *Shorter forms*, epoch 76
 - [ ] 6.2 `[1, 2, 3]` is a list by default; a fixed array only where its type says `[Int; 3]`
-- [ ] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]`
+- [ ] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]` — 2026-10-15 (D5): `{"a": 1}` and
+      `Map[K, V]` done (epoch 80); the empty `{}` waits for the prelude (D9)
 - [x] 6.4 Short closures `|a, b| a < b`, parameter and result types inferred — 2026-10-15 (D3):
       parser `short_closure`, types from the expected function type, `N0635`, epoch 78
 - [x] 6.5 Positional enum payloads `Circle(2)` and patterns `Circle(r)`; the enum prefix only where

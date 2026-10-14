@@ -370,7 +370,9 @@ use crate::digest::{self, Framed};
 /// `79` — R1.5, 2026-10-15. Fields given by position — `Point(1, 2)`, `Shape.Rect(3, 4)`, `Rect(w, h)`
 /// in a pattern — and a variant written without its enum, `Circle(2)`, `Dot`, moved from refused to
 /// accepted (D4), with `N0636` for a variant name two enums in scope share.
-pub const SEMANTIC_EPOCH: u32 = 79;
+/// `80` — R1.5, 2026-10-15. A map literal, `{"a": 1}`, and `Map[K, V]` for the standard hash map
+/// moved from refused to accepted (D5).
+pub const SEMANTIC_EPOCH: u32 = 80;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

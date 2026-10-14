@@ -8336,10 +8336,11 @@ Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer
 Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused.
 Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int) = n` must not be reused.
 Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < b` must not be reused.
-Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` must not be reused."""
+Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` must not be reused.
+Repointed by R1.5 (D5), which moved it to 80: an entry that refused `{"a": 1}` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 79;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 78;"
+find = "pub const SEMANTIC_EPOCH: u32 = 80;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 79;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19490,3 +19491,28 @@ file = "crates/nazm-cli/src/backend.rs"
 find = '''        a.extend(["-ffunction-sections", "-fdata-sections"].map(str::to_owned));'''
 replace = '''        a.extend(Vec::<String>::new());'''
 killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_hosted_executable_is_dead_stripped_and_nothing_else_is" }]
+
+[[mutation]]
+name = "r1-5-a-map-literal-keeps-only-its-first-entry"
+why = "a map literal's entries after the first are not set, so `{\"a\": 1, \"b\": 2}` holds one"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "            statements.push(Stmt::Expr(Expr::Call {\n                qualifier: None,\n                callee: \"hashmap_set\".to_owned(),"
+replace = "            let _ = Stmt::Expr(Expr::Call {\n                qualifier: None,\n                callee: \"hashmap_set\".to_owned(),"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_map_literal_builds_the_map_everywhere" }]
+
+[[mutation]]
+name = "r1-5-map-names-no-type"
+why = "`Map` is not the standard hash map's name, so `Map[Str, Int]` is refused"
+file = "crates/nazm-core/src/check/written.rs"
+find = "        if let Some(t) = types.names.get(\"HashMap\") {"
+replace = "        if let Some(t) = types.names.get(\"HashMap#\") {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_map_literal_builds_the_map_everywhere" }]
+
+
+[[mutation]]
+name = "r1-5-a-capitalised-function-call-is-a-construction"
+why = "a call of a function whose name a record shares is read as that record's construction"
+file = "crates/nazm-core/src/check/expr.rs"
+find = "                    && !self.env.contains(callee)\n                    && (matches!(self.quiet_type(callee, *callee_span), Type::Record(_))"
+replace = "                    && true\n                    && (matches!(self.quiet_type(callee, *callee_span), Type::Record(_))"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everywhere" }]

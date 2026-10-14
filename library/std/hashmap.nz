@@ -37,6 +37,14 @@ pub fn hashmap_new[K: Hash, V]() -> HashMap[K, V] ! {} {
     hashmap_with_seed[K, V](UInt64(0))
 }
 
+/// A map holding one entry: where a map literal begins (R1.5, D5), since its first entry settles
+/// the key and value types — `{"a": 1, "b": 2}` is this, then `hashmap_set` for the rest.
+pub fn hashmap_single[K: Hash, V](key: K, value: V) -> HashMap[K, V] ! {} {
+    let m = hashmap_new[K, V]();
+    hashmap_set(m, key, value);
+    m
+}
+
 /// An empty map hashing under `seed`: a seed from a source of randomness makes its order, and
 /// which keys collide, unpredictable to whoever chooses the keys.
 pub fn hashmap_with_seed[K: Hash, V](seed: UInt64) -> HashMap[K, V] ! {} {
