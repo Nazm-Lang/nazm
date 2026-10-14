@@ -568,10 +568,12 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] \| INTEGER ) \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| array \| tuple \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| short_closure \| array \| tuple \| "(" , expression , ")"` |
 | `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , result , [ effect_set ] , block` |
+| `short_closure` | `( "\|\|" \| "\|" , [ short_parameter , { "," , short_parameter } ] , "\|" ) , ( block \| expression )` |
+| `short_parameter` | `IDENT , [ ":" , type ]` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
@@ -834,6 +836,10 @@ expression_body = "=" , expression , [ ";" ] ;
 An expression body (R1.5, D2): the function's value is the expression. Written with no result
 type, the result type is the expression's — not for a `pub` function, a method, or one whose
 body reaches itself (`N0634`).
+
+```nazm
+fn double(n: Int): Int = n * 2 fn main() -> Int { double(21) }
+```
 
 ### `result`
 
@@ -1654,7 +1660,7 @@ fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | FSTRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | array | tuple | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | FSTRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | short_closure | array | tuple | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1719,6 +1725,34 @@ it, and its type says what it does. One may be written in a generic function (R1
 
 ```nazm
 fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) }
+```
+
+### `short_closure`
+
+```ebnf
+short_closure = ( "||" | "|" , [ short_parameter , { "," , short_parameter } ] , "|" ) , ( block | expression ) ;
+```
+
+A short closure (R1.5, D3): its unwritten types are the function type's expected where it is
+written, its result type its body's; with nothing expected, a parameter writes its type
+(`N0635`). `||` at the start of an expression is a closure with no parameters.
+
+```nazm
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) } fn main() -> Int { twice(|x| x * 3, 2) }
+```
+
+```nazm
+fn main() -> Int { let inc = |n: Int| n + 1; let z = || 0; inc(z()) }
+```
+
+### `short_parameter`
+
+```ebnf
+short_parameter = IDENT , [ ":" , type ] ;
+```
+
+```nazm
+fn main() -> Int { let add = |a: Int, b: Int| a + b; add(1, 2) }
 ```
 
 ### `call`

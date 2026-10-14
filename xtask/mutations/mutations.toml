@@ -8334,10 +8334,11 @@ Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an ent
 Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused.
 Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused.
 Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused.
-Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int) = n` must not be reused."""
+Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int) = n` must not be reused.
+Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < b` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 77;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 76;"
+find = "pub const SEMANTIC_EPOCH: u32 = 78;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 77;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19384,3 +19385,19 @@ file = "crates/nazm-core/src/check/unit.rs"
 find = "        if f.inferred_result && (f.pub_span.is_some() || f.method_of.is_some()) {"
 replace = "        if f.inferred_result && f.method_of.is_some() {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_that_must_be_written_is_refused_by_name" }]
+
+[[mutation]]
+name = "r1-5-a-short-closure-ignores-the-expected-type"
+why = "a short closure's unwritten parameter types are not taken from the function type expected, so `twice(|x| x * 3, 2)` is refused"
+file = "crates/nazm-core/src/check/call.rs"
+find = "                if let Some(t) = expected_sig.as_ref().and_then(|s| s.params.get(i).copied()) {"
+replace = "                if let Some(t) = None::<Type> {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_short_closure_takes_its_types_from_what_is_expected_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-short-closure-s-result-is-not-its-body-s"
+why = "a short closure with nothing expected keeps a placeholder result type instead of its body's"
+file = "crates/nazm-core/src/check/call.rs"
+find = "                self.res.settle_closure(id, actual, ty);"
+replace = "                let _ = actual;"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_short_closure_takes_its_types_from_what_is_expected_everywhere" }]

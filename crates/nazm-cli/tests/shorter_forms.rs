@@ -3,6 +3,7 @@
 //! D1 — a result type written after `:`, in a function, a trait method, a function type and a
 //! function expression; `->` still read beside it.
 //! D2 — an expression body, `= e`, and a private function's result type taken from it.
+//! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
 
 #![allow(
     clippy::unwrap_used,
@@ -127,4 +128,39 @@ fn a_result_type_that_must_be_written_is_refused_by_name() {
         assert!(r.stderr.contains("N0634"), "{src}: {r:?}");
         assert!(r.stderr.contains(why), "{src}: {r:?}");
     }
+}
+
+#[test]
+fn a_short_closure_takes_its_types_from_what_is_expected_everywhere() {
+    differential::agrees(
+        "fn apply(f: fn(Int, Int) -> Bool, a: Int, b: Int) -> Bool { f(a, b) }
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+
+fn main(out: OutCap): Int ! {io} {
+    let inc = |n: Int| n + 1
+    let k = 10
+    let add_k = |n: Int| { n + k }
+    let zero = || 0
+    let shout = |s: Str| str_concat(s, \"!\")
+    let typed: fn(Int) -> Int = |x| x - 1
+    print(f\"{apply(|a, b| a < b, 1, 2)} {apply(|a, b| a > b, 1, 2)} {twice(|x| x * 3, 2)} \")
+    print(f\"{inc(41)} {add_k(5)} {zero()} {typed(1)} {shout(\"hi\")}\\n\")
+    0
+}
+",
+        "true false 18 42 15 0 0 hi!\n0",
+    );
+}
+
+#[test]
+fn a_short_closure_parameter_with_nothing_to_take_its_type_from_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() { let f = |a, b| a < b }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_ne!(r.code, Some(0), "{r:?}");
+    assert_eq!(r.stderr.matches("N0635").count(), 2, "{r:?}");
 }
