@@ -88,11 +88,17 @@ done <"$log/names"
 
 # A file a gate reads, gone: the failure is worded as the Rust gate words it.
 for gone in docs/research/evaluation.md docs/capability-matrix.md docs/guide.md Cargo.lock \
-    crates/nazm-cli/src/build/mod.rs; do
+    crates/nazm-cli/src/build/mod.rs docs/mcp.md; do
     mv "$tree/$gone" "$log/gone"
     compare "without $gone"
     mv "$log/gone" "$tree/$gone"
 done
+
+# A corpus document that is not UTF-8.
+cp "$tree/docs/roadmap.md" "$log/kept"
+printf '\377\n' >>"$tree/docs/roadmap.md"
+compare "docs/roadmap.md not UTF-8"
+cp "$log/kept" "$tree/docs/roadmap.md"
 
 compare "the copy restored"
 echo "$agree agree, $differ differ"

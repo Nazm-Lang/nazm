@@ -96,8 +96,19 @@ pub fn rust_io_error(e: IoError) -> Str ! {} {
 }
 
 /// The text of the file at `path`, or `Err` with `rust_io_error`'s text (no path): what a ported
-/// gate reads with, so a failure is worded as the Rust gate words it.
+/// gate reads with where the Rust gate calls `std::fs::read_to_string`, so a failure is worded as
+/// the Rust gate words it — a file that is not UTF-8 included.
 pub fn read_rust(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    let t = read_raw(h, path)?;
+    if utf8_valid(t) {
+        Result[Str, Str].Ok(value: t)
+    } else {
+        Result[Str, Str].Err(error: "stream did not contain valid UTF-8")
+    }
+}
+
+/// The bytes of the file at `path` as a `Str`, whatever they are: `std::fs::read`.
+pub fn read_raw(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
     let io = h.io;
     match file_read_all(io, path) {
         Result.Ok(value: b) => Result[Str, Str].Ok(value: bytes_to_str(b)),
