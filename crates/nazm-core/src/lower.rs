@@ -1522,6 +1522,28 @@ impl<'a> Lower<'a> {
                     }
                 }
             }
+            // `Point(1, 2)`, `Circle(2)` (R1.5, D4): a call the checker read as a construction.
+            AstExpr::Call {
+                callee,
+                callee_span,
+                type_args,
+                args,
+                span,
+                ..
+            } if self.res.callee(*callee_span).is_none()
+                && (self.res.construction(*callee_span).is_some()
+                    || self.res.variant(*callee_span).is_some()) =>
+            {
+                let construct = AstExpr::Construct {
+                    qualifier: None,
+                    ty: callee.clone(),
+                    ty_span: *callee_span,
+                    type_args: type_args.clone(),
+                    fields: crate::check::positional_fields(args),
+                    span: *span,
+                };
+                return self.expr(&construct);
+            }
             AstExpr::Call {
                 callee_span,
                 args,

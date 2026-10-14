@@ -52,6 +52,7 @@ mod usefulness;
 mod written;
 
 pub use declare::{declare_types, resolve_type_fields, EQUALITY};
+pub(crate) use expr::positional_fields;
 pub use foreign::{foreign_param, foreign_result, CrossIn, CrossOut, RESERVED_C_SYMBOLS};
 pub use layout::{validate_new_arrays, validate_type_layouts};
 pub(crate) use operators::zero_of;

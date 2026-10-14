@@ -2699,6 +2699,105 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Whether the `{` here begins a map literal (R1.5, D5): its first key — a literal or a name —
+    /// followed by `:`, which no block can begin with.
+    fn map_literal_ahead(&self) -> bool {
+        matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            Some(
+                TokenKind::Str(_)
+                    | TokenKind::Int(_)
+                    | TokenKind::IntTooLarge(_)
+                    | TokenKind::Float(_)
+                    | TokenKind::True
+                    | TokenKind::False
+                    | TokenKind::Ident(_)
+            )
+        ) && matches!(
+            self.tokens.get(self.pos + 2).map(|t| &t.kind),
+            Some(TokenKind::Colon)
+        )
+    }
+
+    /// `{k: v, …}` (R1.5, D5): a map literal, read as the block that builds it —
+    /// `{ let m = hashmap_single(k1, v1); hashmap_set(m, k2, v2); …; m }` — the first entry
+    /// settling the key and value types. The binding's name is one no program can write, and
+    /// each part sits at a span of no width where the entry it comes from begins.
+    #[inline(never)]
+    fn map_literal(&mut self, at: Checkpoint) -> Option<Expr> {
+        const NAME: &str = "map#literal";
+        let open = self.peek_span();
+        self.bump();
+        let mut entries: Vec<(Expr, Expr)> = Vec::new();
+        let mut deepest = 0;
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            let key = self.expr()?;
+            self.expect(
+                &TokenKind::Colon,
+                "between a map literal's key and its value",
+            )?;
+            let value = self.expr()?;
+            deepest = deepest.max(self.child());
+            entries.push((key, value));
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(&TokenKind::RBrace, "to close the map literal")?;
+        let depth = deepest + 1;
+        self.built(depth)?;
+        self.wrap(at, SyntaxKind::Block);
+        let span = open.join(close);
+        let point = |at: u32| Span::new(self.file, at, at);
+        let mut entries = entries.into_iter();
+        let (k1, v1) = entries.next()?;
+        let first = point(k1.span().start);
+        let mut statements = vec![Stmt::Let(Let {
+            name: NAME.to_owned(),
+            name_span: point(open.start),
+            mutable: false,
+            ty: None,
+            value: Expr::Call {
+                qualifier: None,
+                callee: "hashmap_single".to_owned(),
+                callee_span: first,
+                type_args: None,
+                span: k1.span().join(v1.span()),
+                args: vec![k1, v1],
+            },
+            span,
+        })];
+        for (k, v) in entries {
+            // The call at its key's start, the map named at its value's: two points no other
+            // part of the literal is at.
+            let here = point(k.span().start);
+            let named = point(v.span().start);
+            statements.push(Stmt::Expr(Expr::Call {
+                qualifier: None,
+                callee: "hashmap_set".to_owned(),
+                callee_span: here,
+                type_args: None,
+                span: k.span().join(v.span()),
+                args: vec![
+                    Expr::Var {
+                        name: NAME.to_owned(),
+                        span: named,
+                    },
+                    k,
+                    v,
+                ],
+            }));
+        }
+        Some(Expr::Block(Box::new(Block {
+            statements,
+            tail: Some(Box::new(Expr::Var {
+                name: NAME.to_owned(),
+                span: point(close.start),
+            })),
+            span,
+        })))
+    }
+
     /// `|a, b| e`, `|n: Int| { … }` and `|| e` in an expression (R1.5, D3): a closure whose
     /// unwritten types — `_` at a span of no width — the checker takes from the function type
     /// expected where it is written, and whose result type is its body's.
@@ -4989,19 +5088,6 @@ impl<'a> Parser<'a> {
                 self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 Some(TokenKind::Colon)
             );
-        // `Point(1, 2)`, `Circle(2)` (R1.5, D4): a capitalised name before a `(` with something
-        // in it is a construction with its fields by position — a record's, or, where the name
-        // is a variant's, the variant's — except the prelude's `Some`, `Ok` and `Err`.
-        let constructing = constructing
-            || (capitalised(&name)
-                && short_variant(&name).is_none()
-                && self.at(&TokenKind::LParen)
-                && !self.line_break_before()
-                && !matches!(
-                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                    Some(TokenKind::RParen)
-                )
-                && !(self.hole.is_some() && self.ends_at_hole(self.pos)));
         if constructing {
             return self
                 .construction(at, name, span, type_args)
@@ -5429,6 +5515,7 @@ impl<'a> Parser<'a> {
                 self.wrap(at, SyntaxKind::ParenExpr);
                 Some(inner)
             }
+            TokenKind::LBrace if self.map_literal_ahead() => self.map_literal(at),
             TokenKind::LBrace => {
                 // The block is its own concrete node; a block expression adds no other.
                 let b = self.block()?;

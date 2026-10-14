@@ -501,6 +501,7 @@ atom = INTEGER
      | match_expression
      | closure
      | short_closure
+     | map_literal
      | array
      | tuple
      | "(" , expression , ")" ;
@@ -531,6 +532,13 @@ short_closure = ( "||" | "|" , [ short_parameter , { "," , short_parameter } ] ,
                 ( block | expression ) ;
 (* @example fn main() -> Int { let add = |a: Int, b: Int| a + b; add(1, 2) } *)
 short_parameter = IDENT , [ ":" , type ] ;
+
+(* A map literal (R1.5, D5): its first key a literal or a name, so `{` and that key and `:` tell
+   it from a block. It builds `@std/hashmap`'s `HashMap`, which must be in scope. *)
+(* @example use "@std/hash"; use "@std/hashmap"; fn main() -> Int { let m = {"a": 1, "b": 2}; hashmap_len(m) } *)
+map_literal = "{" , map_entry , { "," , map_entry } , [ "," ] , "}" ;
+(* @example use "@std/hash"; use "@std/hashmap"; fn main() -> Int { let k = "b"; let m = {"a": 1, k: 2}; hashmap_len(m) } *)
+map_entry = expression , ":" , expression ;
 
 (* Type arguments are written where inference cannot find them from the arguments —
  * `vec_new[Int]()` — or where a reader wants them visible. The expected result type

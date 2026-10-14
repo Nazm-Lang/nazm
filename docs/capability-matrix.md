@@ -298,6 +298,14 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *Map literals and `Map[K, V]`* (`spec.md`, *Shorter forms*; R1.5 design D5).
+`{"a": 1, "b": 2}` is read by the parser as the block that builds it — `hashmap_single` for the
+first entry, which settles the types, then `hashmap_set` — and `Map[K, V]` is `HashMap[K, V]` where
+the hash map is in scope. The empty `{}` waits for the prelude (D9). Semantic epoch 80; EXPERIMENTAL
+until R1.5 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` under every implementation;
+three mutants, one holding D4's conversions (`UInt64(x)` stays a call, found when D5's first test
+ran).
+
 **R1.5 (2026-10-15)** · *Fields by position, variants without their enum* (`spec.md`, *Shorter
 forms*; R1.5 design D4). `Point(1, 2)`, `Shape.Rect(3, 4)`, `Circle(2)`, `Dot`, and in a pattern
 `Rect(w, h)` and `Circle(r)`: the checker names positional fields in declaration order and finds a

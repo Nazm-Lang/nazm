@@ -41,7 +41,10 @@ of an expression begins a closure with no parameters; elsewhere it is still `or`
 `Circle(r: Int)`, may be built and matched positionally in declaration order — `Circle(2)`,
 `Circle(r)` — or by name as before, not mixed in one use. A variant name is usable without its
 enum's prefix wherever exactly one enum in scope has a variant of that name; where two do, the
-prefix is required (`N0636`, naming both).
+prefix is required (`N0636`, naming both). (Implemented 2026-10-15:) the parser keeps an unlabelled
+`Name(args)` a call, so a function of a capitalised name — and the language service, which finds
+calls by their syntax — is unchanged; the checker reads it as the construction only where no
+function of the name is in scope, and Core IR and provenance follow what the checker recorded.
 
 **D5 — map literals and `Map[K, V]` (6.3).** `{"a": 1, "b": 2}` builds a `Map[K, V]`: a `{` whose
 first element is an expression followed by `:` is a map literal, since no block begins that way.

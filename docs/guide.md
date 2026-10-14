@@ -568,12 +568,14 @@ accepts.
 | `product` | `unary , { ( "*" \| "/" \| "%" ) , unary }` |
 | `unary` | `[ "-" \| "!" \| "~" ] , primary` |
 | `primary` | `atom , { "." , ( IDENT , [ "(" , [ arguments ] , ")" ] \| INTEGER ) \| "?" \| "[" , expression , "]" }` |
-| `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| short_closure \| array \| tuple \| "(" , expression , ")"` |
+| `atom` | `INTEGER \| FLOAT \| STRING \| FSTRING \| "true" \| "false" \| IDENT \| qualifier , IDENT \| call \| construction \| variant_construction \| if_expression \| if_let_expression \| match_expression \| closure \| short_closure \| map_literal \| array \| tuple \| "(" , expression , ")"` |
 | `tuple` | `"(" , expression , "," , expression , { "," , expression } , [ "," ] , ")"` |
 | `array` | `"[" , expression , ( { "," , expression } , [ "," ] \| ";" , expression ) , "]"` |
 | `closure` | `"fn" , "(" , [ parameters ] , ")" , result , [ effect_set ] , block` |
 | `short_closure` | `( "\|\|" \| "\|" , [ short_parameter , { "," , short_parameter } ] , "\|" ) , ( block \| expression )` |
 | `short_parameter` | `IDENT , [ ":" , type ]` |
+| `map_literal` | `"{" , map_entry , { "," , map_entry } , [ "," ] , "}"` |
+| `map_entry` | `expression , ":" , expression` |
 | `call` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , [ arguments ] , ")"` |
 | `construction` | `[ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers , ")"` |
 | `initialisers` | `initialiser , { "," , initialiser } , [ "," ]` |
@@ -1660,7 +1662,7 @@ fn main() -> Int { let t = ((1, 2), 3); t.0.1 + t.1 }
 ### `atom`
 
 ```ebnf
-atom = INTEGER | FLOAT | STRING | FSTRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | short_closure | array | tuple | "(" , expression , ")" ;
+atom = INTEGER | FLOAT | STRING | FSTRING | "true" | "false" | IDENT | qualifier , IDENT | call | construction | variant_construction | if_expression | if_let_expression | match_expression | closure | short_closure | map_literal | array | tuple | "(" , expression , ")" ;
 ```
 
 A `FLOAT` is digits, `.` and digits, and/or an exponent: `1.5`, `2e9` (Gate 2). An
@@ -1753,6 +1755,29 @@ short_parameter = IDENT , [ ":" , type ] ;
 
 ```nazm
 fn main() -> Int { let add = |a: Int, b: Int| a + b; add(1, 2) }
+```
+
+### `map_literal`
+
+```ebnf
+map_literal = "{" , map_entry , { "," , map_entry } , [ "," ] , "}" ;
+```
+
+A map literal (R1.5, D5): its first key a literal or a name, so `{` and that key and `:` tell
+it from a block. It builds `@std/hashmap`'s `HashMap`, which must be in scope.
+
+```nazm
+use "@std/hash"; use "@std/hashmap"; fn main() -> Int { let m = {"a": 1, "b": 2}; hashmap_len(m) }
+```
+
+### `map_entry`
+
+```ebnf
+map_entry = expression , ":" , expression ;
+```
+
+```nazm
+use "@std/hash"; use "@std/hashmap"; fn main() -> Int { let k = "b"; let m = {"a": 1, k: 2}; hashmap_len(m) }
 ```
 
 ### `call`

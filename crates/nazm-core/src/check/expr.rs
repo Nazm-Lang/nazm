@@ -184,6 +184,29 @@ impl Checker<'_> {
                         return Completion::Value(t);
                     }
                 }
+                // `Point(1, 2)`, `Circle(2)` (R1.5, D4): a capitalised name no function in scope
+                // has, but a record or a variant does, is that construction, its arguments its
+                // fields by position.
+                if qualifier.is_none()
+                    && !args.is_empty()
+                    && callee.starts_with(|c: char| c.is_ascii_uppercase())
+                    && !self.env.contains(callee)
+                    && (matches!(self.quiet_type(callee, *callee_span), Type::Record(_))
+                        || !self.variant_owners(callee).is_empty())
+                {
+                    let fields = positional_fields(args);
+                    return match self.check_construction(
+                        callee,
+                        *callee_span,
+                        type_args.as_deref(),
+                        &fields,
+                        *span,
+                        expected,
+                    ) {
+                        Some(t) => Completion::Value(t),
+                        None => Completion::Value(expected.unwrap_or(Type::Int)),
+                    };
+                }
                 // `m::f` is looked up as one key (N49); everything below names it as written.
                 let key = written_key(qualifier.as_ref(), callee);
                 let callee = &key;
@@ -605,4 +628,20 @@ impl Checker<'_> {
             ));
         }
     }
+}
+
+/// A call's arguments as fields given by position (R1.5, D4): each with no name, at a span of no
+/// width where its value begins — the spans the checker records them at and Core IR reads.
+pub(crate) fn positional_fields(args: &[Expr]) -> Vec<nazm_syntax::FieldInit> {
+    args.iter()
+        .map(|a| {
+            let s = a.span();
+            nazm_syntax::FieldInit {
+                name: String::new(),
+                name_span: Span::new(s.file, s.start, s.start),
+                span: s,
+                value: a.clone(),
+            }
+        })
+        .collect()
 }
