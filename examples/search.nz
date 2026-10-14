@@ -17,6 +17,7 @@ fn first_pair_with_product(target: Int, limit: Int) -> Int {
     0 - 1
 }
 
-fn main() -> Int {
-    first_pair_with_product(391, 40)
+fn main(out: OutCap) -> Int {
+    print(str_concat(int_to_str(first_pair_with_product(391, 40)), "\n"));
+    0
 }

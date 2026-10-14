@@ -421,7 +421,15 @@ fn one(nazm: &Path, dir: &Path, index: usize, case: &Planned, interpret_only: bo
         Expect::Fails => "fails".to_owned(),
     };
 
-    let (got, ran, status) = output_of(Command::new(nazm).arg("run").args(&harness).arg(file));
+    // A case's `.expected` is what it prints and then `main`'s result, as every one was written
+    // before R1 (5b.3): both legs run with the result report, whatever the caller's environment.
+    let (got, ran, status) = output_of(
+        Command::new(nazm)
+            .arg("run")
+            .args(&harness)
+            .arg(file)
+            .env(nazm_lir::RESULT_VARIABLE, "1"),
+    );
     let interpreted = Outcome {
         matched: met(&case.expect, &got, status),
         output: got,
@@ -443,7 +451,8 @@ fn one(nazm: &Path, dir: &Path, index: usize, case: &Planned, interpret_only: bo
             .output();
         match built {
             Ok(out) if out.status.success() => {
-                let (got, ran, status) = output_of(&mut Command::new(&exe));
+                let (got, ran, status) =
+                    output_of(Command::new(&exe).env(nazm_lir::RESULT_VARIABLE, "1"));
                 let matched = met(&case.expect, &got, status);
                 native_leg = leg(ran, matched);
                 Some(Outcome {

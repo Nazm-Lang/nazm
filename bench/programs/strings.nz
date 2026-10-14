@@ -4,12 +4,12 @@
 // assembly uses — `str_concat` in a loop is quadratic and exhausted memory before
 // `str_join` existed.
 
-fn main() -> Int {
+fn main() {
     let parts = strs_new();
     let mut i = 0;
     while i < 60000 {
         strs_push(parts, int_to_str(i));
         i = i + 1;
     }
-    str_len(str_join(parts, ", "))
+    println(str_len(str_join(parts, ", ")))
 }

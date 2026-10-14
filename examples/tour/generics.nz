@@ -28,7 +28,7 @@ fn count[T: Equality](xs: Vec[T], x: T) -> Int {
     n
 }
 
-fn main() -> Int {
+fn main() {
     let s = stack_new[Int]();
     push(s, 10);
     push(s, 20);
@@ -36,5 +36,5 @@ fn main() -> Int {
     vec_push(words, "a");
     vec_push(words, "b");
     vec_push(words, "a");
-    pop_or(s, 0) + pop_or(s, 0) + pop_or(s, 99) + count(words, "a")
+    println(pop_or(s, 0) + pop_or(s, 0) + pop_or(s, 99) + count(words, "a"))
 }

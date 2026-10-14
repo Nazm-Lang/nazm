@@ -19005,3 +19005,20 @@ find = '''        if span.start == span.end {
         self.written_types.insert(span, what);'''
 replace = '''        self.written_types.insert(span, what);'''
 killers = [{ package = "nazm-service", test = "semantic", name = "every_resolved_occurrence_of_the_repository_is_one_identifier" }]
+
+[[mutation]]
+name = "r1-println-is-offered-by-no-scope"
+why = "`println` and `eprintln` resolve to `print` and `eprint`, and no scope offers them under the names written"
+file = "crates/nazm-core/src/check/written.rs"
+find = '''    callables.extend(printed);'''
+replace = '''    let _ = printed;'''
+killers = [{ package = "nazm-service", test = "completion", name = "built_ins_come_from_the_compilers_own_inventories" }]
+
+[[mutation]]
+name = "r1-nazm-test-reads-no-result"
+why = "`nazm test` runs a case in its caller's environment, so a recorded result is compared only when the caller asked for the result report"
+file = "crates/nazm-cli/src/test.rs"
+find = '''            .arg(file)
+            .env(nazm_lir::RESULT_VARIABLE, "1"),'''
+replace = '''            .arg(file),'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_examples::the_getting_started_page_runs_as_written" }]

@@ -3,7 +3,7 @@
 // Growth doubles and reallocates, so the interesting part is that this measures
 // amortised growth rather than a preallocated array.
 
-fn main() -> Int {
+fn main() {
     let xs = ints_new();
     let mut i = 0;
     while i < 400000 {
@@ -17,5 +17,5 @@ fn main() -> Int {
         total = total + ints_get(xs, k);
         k = k + 1;
     }
-    total
+    println(total)
 }

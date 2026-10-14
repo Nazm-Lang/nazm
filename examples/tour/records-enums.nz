@@ -19,7 +19,7 @@ fn apply(a: Account, e: Event) -> Account {
     }
 }
 
-fn main() -> Int {
+fn main() {
     let events = vec_new[Event]();
     vec_push(events, Event.Deposit(amount: 100));
     vec_push(events, Event.Withdraw(amount: 30));
@@ -30,5 +30,5 @@ fn main() -> Int {
         account = apply(account, vec_get(events, i));
         i = i + 1;
     }
-    account.balance
+    println(account.balance)
 }

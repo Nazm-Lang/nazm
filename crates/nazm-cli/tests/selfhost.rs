@@ -4438,7 +4438,8 @@ fn the_nazm_written_compiler_compiles_concurrency() {
              }\n",
             "10",
         ),
-        ("the specification's worker pool", &pool, "90"),
+        // It prints 90 and returns 0 (R1, 5b.3), which the result report adds.
+        ("the specification's worker pool", &pool, "90\n0"),
     ];
 
     for (what, src, expected) in cases {

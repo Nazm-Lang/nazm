@@ -28,25 +28,22 @@ Create `hello.nz`:
 
 <!-- file: hello.nz -->
 ```nazm
-fn main(out: OutCap) -> Int {
-    print("Hello, Nazm!\n");
-    0
+fn main() {
+    println("Hello, Nazm!")
 }
 ```
 
-`main` is the entry point, and the `Int` it returns is the program's exit status. The commands
-on this page run with `NAZM_RESULT_REPORT` set, which also prints that result after the
-program's own output — the `0` below; without it, `nazm run hello.nz` prints only the greeting.
-`out: OutCap` is the authority to write to the standard streams. Nothing in Nazm reaches the
-outside world without such a value, and the only place one comes from is `main`'s parameters. A
-`main` that writes neither an `OutCap` nor an `IoCap` is given one named `out`, so `fn main()`
-may print too; every other authority — files, the network, processes, the clock — is written.
+`main` is the entry point. Printing needs the authority to write to the standard streams, an
+`OutCap`: nothing in Nazm reaches the outside world without such a value, and the only place one
+comes from is `main`'s parameters. A `main` that writes neither an `OutCap` nor an `IoCap` is
+given one named `out`, so this one may print; every other authority — files, the network,
+processes, the clock — is written as a parameter. A `main` written with a result, `-> Int`, ends
+the program with that `Int` as its exit status.
 
 <!-- run -->
 ```console
 $ nazm run hello.nz
 Hello, Nazm!
-0
 ```
 
 ## 3. Check it
@@ -90,7 +87,6 @@ $ nazm build hello.nz -o hello
 hello
 $ ./hello
 Hello, Nazm!
-0
 ```
 
 There are two code generators, held to the same results. LLVM is the default; Cranelift
@@ -103,13 +99,13 @@ $ nazm build hello.nz -o hello-fast --backend cranelift
 hello-fast
 $ ./hello-fast
 Hello, Nazm!
-0
 ```
 
 ## 5. Test it
 
 `nazm test DIR` runs every `NAME.nz` that has a `NAME.expected` beside it, interpreted **and**
-compiled, and requires both to print exactly what the `.expected` file says.
+compiled, and requires both to print exactly what the `.expected` file says — what the program
+prints, then `main`'s result, which a test reads as `NAZM_RESULT_REPORT` writes it:
 
 <!-- file: checks/double.nz -->
 ```nazm
@@ -179,8 +175,8 @@ pub fn area(r: Rect) -> Int {
 ```nazm
 use "geometry.nz";
 
-fn main() -> Int {
-    area(Rect(w: 6, h: 7))
+fn main() {
+    println(area(Rect(w: 6, h: 7)))
 }
 ```
 
@@ -202,7 +198,6 @@ $ nazm init demo --template cli
 nazm: created `demo` from the `cli` template (6 files); its README.md says what to run
 $ nazm run demo
 hello, world
-0
 $ nazm test demo/tests
 ok    greet
 nazm: 1 of 1 passed
@@ -212,7 +207,6 @@ $ nazm build demo -o demo/demo --locked
 demo/demo
 $ ./demo/demo
 hello, world
-0
 ```
 
 `nazm lock` pins every package the program uses, by version and BLAKE3 digest, and `--locked`

@@ -11,8 +11,9 @@ fn clamp(value: Int, lo: Int, hi: Int) -> Int {
     if lower > hi { hi } else { lower }
 }
 
-fn main() -> Int {
+fn main(out: OutCap) -> Int {
     let x = 17;
     let y = 25;
-    clamp(max(x, y), 0, 100)
+    print(str_concat(int_to_str(clamp(max(x, y), 0, 100)), "\n"));
+    0
 }
