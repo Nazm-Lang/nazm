@@ -8333,10 +8333,11 @@ Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an 
 Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused.
 Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused.
 Repointed by R1 a fifth time, which moved it to 75: an entry that refused `defer { println(x) }`, or read `p` then a line beginning with `(` as a call, must not be reused.
-Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused."""
+Repointed by R1.5 (D1), which moved it to 76: an entry that refused `fn f(n: Int): Int` must not be reused.
+Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int) = n` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 76;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 75;"
+find = "pub const SEMANTIC_EPOCH: u32 = 77;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 76;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19351,3 +19352,35 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = "        self.expect(&TokenKind::Colon, context)"
 replace = "        self.expect(&TokenKind::Arrow, context)"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_after_a_colon_means_the_arrow_everywhere" }]
+
+[[mutation]]
+name = "r1-5-inferred-bodies-are-checked-in-source-order"
+why = "a function whose result type comes from its body is checked where it is written, after a caller that needed its type"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "    let inferred = super::infer::order(unit, &mut c.errors);"
+replace = "    let inferred: Vec<usize> = Vec::new();"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_expression_body_and_its_inferred_result_type_mean_the_block_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-settled-result-is-not-seen-by-callers"
+why = "the module's names keep the placeholder result type after an inferred one is settled"
+file = "crates/nazm-core/src/check/function.rs"
+find = "                        v.sig.ret = ty;"
+replace = "                        let _ = ty;"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_expression_body_and_its_inferred_result_type_mean_the_block_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-self-reaching-inferred-body-is-not-reported"
+why = "a function whose inferred body reaches itself is checked against a placeholder, unreported"
+file = "crates/nazm-core/src/check/infer.rs"
+find = "                            if !reported.contains(m) {"
+replace = "                            if false && !reported.contains(m) {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_that_must_be_written_is_refused_by_name" }]
+
+[[mutation]]
+name = "r1-5-a-pub-function-may-infer-its-result"
+why = "a pub function's result type is left to its body, so its interface depends on its implementation"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "        if f.inferred_result && (f.pub_span.is_some() || f.method_of.is_some()) {"
+replace = "        if f.inferred_result && f.method_of.is_some() {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_result_type_that_must_be_written_is_refused_by_name" }]
