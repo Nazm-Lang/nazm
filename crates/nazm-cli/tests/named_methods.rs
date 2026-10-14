@@ -86,3 +86,54 @@ fn what_has_no_function_of_the_name_is_refused() {
         );
     }
 }
+
+#[test]
+fn map_entries_read_write_and_count_alike_everywhere() {
+    // R1, 5b.7: `m[k]` is `<map>_at`, `m[k] = v` its `_set`, and a compound update starts an
+    // absent entry from its value type's zero.
+    differential::agrees(
+        "use \"@std/hash\"
+use \"@std/hashmap\"
+use \"@std/ordmap\"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let counts = hashmap_new[Str, Int]()
+    let words = vec_new[Str]()
+    words.push(\"a\")
+    words.push(\"b\")
+    words.push(\"a\")
+    let mut i = 0
+    while i < words.len() {
+        let w = words[i]
+        counts[w] += 1
+        i += 1
+    }
+    counts[\"c\"] = 9
+    counts[\"c\"] -= 2
+    println(f\"{counts[\"a\"]} {counts[\"b\"]} {counts[\"c\"]} {counts.len()}\")
+    let names = hashmap_new[Int, Str]()
+    names[1] += \"x\"
+    names[1] += \"y\"
+    let scale = ordmap_new[Int, Float64]()
+    scale[3] += 1.5
+    scale[3] *= 2.0
+    println(f\"{names[1]} {scale[3]}\")
+    0
+}
+",
+        "2 1 7 3\nxy 3\n0",
+    );
+}
+
+#[test]
+fn an_absent_map_entry_read_by_index_fails() {
+    let runs = differential::everywhere(&[(
+        "prog.nz",
+        "use \"@std/hash\"\nuse \"@std/hashmap\"\n\nfn main(out: OutCap) -> Int ! {io} {\n    let m = hashmap_new[Str, Int]()\n    m[\"a\"] = 1\n    println(m[\"b\"])\n    0\n}\n",
+    )]);
+    for (label, r) in &runs {
+        assert_ne!(r.code, Some(0), "{label}: {r:?}");
+        assert!(r.stdout.is_empty(), "{label}: {r:?}");
+        assert!(r.stderr.contains("N0405"), "{label}: {r:?}");
+    }
+}

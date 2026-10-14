@@ -426,6 +426,9 @@ pub struct Resolution {
     /// The array literals written where a sequence is wanted (R1, 5b.16), by their span, with the
     /// sequence's type: each builds that sequence.
     sequence_literals: HashMap<Span, Type>,
+    /// The compound reads of a map's entry (R1, 5b.7), `m[k]` in `m[k] += n`, by their brackets'
+    /// span, with the map's value type: each reads `<map>_at_or(m, k, zero)`, that type's zero.
+    map_fallbacks: HashMap<Span, Type>,
     /// Keyed by the span of the variable mention, which is written once per use — and by
     /// the name a `let` or a pattern field introduces, which resolves to its own binding.
     vars: HashMap<Span, LocalRef>,
@@ -1209,6 +1212,17 @@ impl Resolution {
     /// Record that the literal at `span` builds a sequence of type `ty` (R1, 5b.16).
     pub fn record_sequence_literal(&mut self, span: Span, ty: Type) {
         self.sequence_literals.insert(span, ty);
+    }
+
+    /// Record that the compound read at `span` falls back to the zero of `ty` (R1, 5b.7).
+    pub fn record_map_fallback(&mut self, span: Span, ty: Type) {
+        self.map_fallbacks.insert(span, ty);
+    }
+
+    /// The type whose zero the compound read at `span` falls back to, if it is one (R1, 5b.7).
+    #[must_use]
+    pub fn map_fallback(&self, span: Span) -> Option<Type> {
+        self.map_fallbacks.get(&span).copied()
     }
 
     /// The sequence the literal at `span` builds, if it builds one (R1, 5b.16).

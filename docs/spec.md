@@ -1623,6 +1623,16 @@ an index outside the sequence fails with `N0405`, as the call does. A sequence i
 `xs[i] = xs[i] + 1`. Only a binding's own element is written so — `p.items[i] = v` is still
 written `vec_set(p.items, i, v)` — and an array's element keeps its rule (*Arrays*).
 
+**`m[k]`, `m[k] = v` and `m[k] += n` on a map** *(R1, 5b.7)*. On any other type the prefix is the
+type's name in lower case, as for a method, and a read is `<prefix>_at`: on a `HashMap` or an
+`OrdMap`, `m[k]` is `hashmap_at(m, k)` (`ordmap_at`), the value `m` holds for `k`, and where it
+holds none it fails with `N0405`, as an index outside a sequence does; `m.get(k)` still answers an
+`Option`. `m[k] = v` is `hashmap_set(m, k, v)`, its answer discarded, with no `mut`. A compound
+update reads the entry with `hashmap_at_or(m, k, zero)`, so an absent entry starts from its value
+type's zero — `0` for an integer, `0.0` for a float, `""` for a `Str` — and `counts[w] += 1`
+counts; a map whose value type has no zero reads it with `_at`, and the entry must be there. The
+key of a compound update is a name, a number or a string, so it is read once in effect.
+
 ### Short variants
 <!-- id: short-variants -->
 

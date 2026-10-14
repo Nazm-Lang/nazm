@@ -53,6 +53,7 @@ mod written;
 pub use declare::{declare_types, resolve_type_fields, EQUALITY};
 pub use foreign::{foreign_param, foreign_result, CrossIn, CrossOut, RESERVED_C_SYMBOLS};
 pub use layout::{validate_new_arrays, validate_type_layouts};
+pub(crate) use operators::zero_of;
 pub use traits::declare_trait_methods;
 pub(crate) use traits::defined;
 pub use unit::{check_unit, declare_unit, declared_interfaces};

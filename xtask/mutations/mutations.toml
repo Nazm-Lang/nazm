@@ -18260,10 +18260,10 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::ea
 name = "r1-a-computed-index-is-read-twice"
 why = "an index with a call in it is accepted, and computed once to read and once to write"
 file = "crates/nazm-syntax/src/parser.rs"
-find = '''        Expr::Var { .. } | Expr::Int { .. } => true,
+find = '''        Expr::Var { .. } | Expr::Int { .. } | Expr::Str { .. } => true,
         Expr::Field { base, .. } => simple_index(base),
         _ => false,'''
-replace = '''        Expr::Var { .. } | Expr::Int { .. } => true,
+replace = '''        Expr::Var { .. } | Expr::Int { .. } | Expr::Str { .. } => true,
         Expr::Field { base, .. } => simple_index(base),
         _ => true,'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "compound_assign::what_a_compound_assignment_cannot_mean_is_refused_by_name" }]
@@ -18824,8 +18824,8 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::meth
 name = "r1-a-sequence-index-is-refused"
 why = "`xs[i]` on a `Vec` is refused as an array's index"
 file = "crates/nazm-core/src/check/operators.rs"
-find = '''            Type::Vec(_) => "vec",'''
-replace = '''            Type::Vec(_) if false => "vec",'''
+find = '''            Type::Vec(_) => format!("vec_{op}"),'''
+replace = '''            Type::Vec(_) if false => format!("vec_{op}"),'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::methods_and_indexes_by_name_run_alike_everywhere" }]
 
 [[mutation]]
@@ -18851,6 +18851,46 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = '''                            bracket_span: Span::new(self.file, span.start, span.start),'''
 replace = '''                            bracket_span: *span,'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::methods_and_indexes_by_name_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-map-entry-read-is-get"
+why = "`m[k]` on a map reads `hashmap_get`, an `Option`, not the value"
+file = "crates/nazm-core/src/check/operators.rs"
+find = '''                    ("get", _) => format!("{prefix}_at"),'''
+replace = '''                    ("get", _) => format!("{prefix}_get"),'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-compound-map-update-has-no-zero"
+why = "`m[k] += 1` reads an absent entry with `_at`, so counting a new word fails"
+file = "crates/nazm-core/src/check/operators.rs"
+find = '''                        if compound && self.env.get(&format!("{prefix}_at_or")).is_some() =>'''
+replace = '''                        if false && compound && self.env.get(&format!("{prefix}_at_or")).is_some() =>'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-float-entry-starts-from-an-integer-zero"
+why = "a float entry's compound update starts from `0`, an integer, where a float is wanted"
+file = "crates/nazm-core/src/check/operators.rs"
+find = '''            nazm_sema::types::NumKind::F32 | nazm_sema::types::NumKind::F64 => Some(Expr::Float {'''
+replace = '''            nazm_sema::types::NumKind::F32 | nazm_sema::types::NumKind::F64 if false => Some(Expr::Float {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-map-fallback-is-not-lowered"
+why = "Core IR lowering drops the compound read's zero, so the call has one argument too few"
+file = "crates/nazm-core/src/lower.rs"
+find = '''        if let Some(v) = self.res.map_fallback(bracket) {'''
+replace = '''        if let Some(v) = self.res.map_fallback(bracket).filter(|_| false) {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-hashmap-at-or-ignores-its-fallback"
+why = "`hashmap_at_or` traps on an absent key instead of answering the fallback"
+file = "library/std/hashmap.nz"
+find = '''    if at < 0 { fallback } else { vec_get(m.values, vec_get(m.slots, at)) }'''
+replace = '''    vec_get(m.values, vec_get(m.slots, at))'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 
@@ -18946,14 +18986,14 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::an_ar
 name = "r1-a-sequence-literal-pushes-nothing"
 why = "a sequence literal is made empty and its elements are evaluated but never pushed"
 file = "crates/nazm-core/src/lower.rs"
-find = '''                            args: vec![read.clone(), value],
-                            callee_at: *span,
-                        },
-                        ty: Some(Type::Int),'''
-replace = '''                            args: vec![read.clone(), value],
-                            callee_at: *span,
-                        },
-                        ty: Some(Type::Bool),'''
+find = '''                    args: vec![read.clone(), value],
+                    callee_at: *span,
+                },
+                ty: Some(Type::Int),'''
+replace = '''                    args: vec![read.clone(), value],
+                    callee_at: *span,
+                },
+                ty: Some(Type::Bool),'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::an_array_literal_is_a_sequence_where_one_is_wanted" }]
 
 # --- R1 5b.6: `s + t` on strings --------------------------------------------------------------------
