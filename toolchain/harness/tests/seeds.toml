@@ -1,0 +1,128 @@
+# Seeded defects for the ported gates (R7): each breaks — or deliberately does not break — one rule a
+# gate enforces, applied to a scratch copy of the tree by `nazm-mutate apply`, so `tests/seeded.sh`
+# can run `cargo xtask check` and `nazm-check` on the same broken tree and compare their reports.
+# The format is the mutation catalogue's; `why` says what the gate must report.
+
+# --- doc claims ------------------------------------------------------------------------------
+
+[[mutation]]
+name = "readme-claims-no-backend"
+why = "doc claims: README.md says the workspace has no IR and no backend"
+file = "README.md"
+find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
+replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).\n\nIt is an interpreter: no IR and no backend."
+
+[[mutation]]
+name = "cargo-toml-claim-wraps-across-comments"
+why = "doc claims: the phrase wraps across two `#` comments and is still one claim"
+file = "Cargo.toml"
+find = "# Nazm — an AI-native programming language.\n"
+replace = "# Nazm — an AI-native programming language.\n#\n# an interpreter: lexer, parser, checker, no IR and no\n# backend. Alongside it, the harness.\n"
+
+[[mutation]]
+name = "a-quoted-claim-is-history"
+why = "doc claims: a claim inside double quotes is a quotation, and passes"
+file = "README.md"
+find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
+replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)).\n\nThis read \"Phase 2 is bench only — there is no\ncompiler yet, deliberately\", and that is no longer the case."
+
+[[mutation]]
+name = "readme-says-not-pre-registered"
+why = "doc claims, with the pre-registration created by the script: both draft claims are stale"
+file = "README.md"
+find = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md))."
+replace = "contributor licence agreement ([`docs/CLA.md`](docs/CLA.md)). The decision rule is not pre-registered."
+
+# --- capability matrix -----------------------------------------------------------------------
+
+[[mutation]]
+name = "matrix-cites-a-missing-file"
+why = "capability matrix: a cited path that does not exist"
+file = "docs/capability-matrix.md"
+find = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification."
+replace = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.\nSee `crates/nazm-gone/src/lib.rs:12` and `docs/spec.md:4-9`."
+
+[[mutation]]
+name = "matrix-verified-without-evidence"
+why = "capability matrix: a VERIFIED section that cites nothing"
+file = "docs/capability-matrix.md"
+find = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification."
+replace = "reported by name and failing the trace (`trace.rs`, `examples/requirements`). No certification.\n\n### 99. Seeded — VERIFIED\n\nIt works, trust me.\n\n### 100. Seeded — MISSING\n\nNothing exists."
+
+# --- guide from grammar ----------------------------------------------------------------------
+
+[[mutation]]
+name = "grammar-gains-a-rule"
+why = "guide from grammar: the grammar changed and the guide was not regenerated"
+file = "docs/grammar.ebnf"
+find = "program = { use_item }"
+replace = "(* A seeded rule, with prose. *)\nseeded = \"x\" | \"y\" ;\n\nprogram = { use_item }"
+
+[[mutation]]
+name = "guide-loses-a-marker"
+why = "guide from grammar: the guide's end marker is gone"
+file = "docs/guide.md"
+find = "<!-- generated from docs/grammar.ebnf: end -->"
+replace = "<!-- the end marker, removed -->"
+
+# --- dependency sources ----------------------------------------------------------------------
+
+[[mutation]]
+name = "a-git-dependency"
+why = "dependency sources: a crate from git"
+file = "Cargo.lock"
+find = "name = \"blake3\"\nversion = \"1.8.7\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\""
+replace = "name = \"blake3\"\nversion = \"1.8.7\"\nsource = \"git+https://example.com/blake3?rev=1#1\""
+
+[[mutation]]
+name = "a-crate-without-its-checksum"
+why = "dependency sources: a crates.io crate with no checksum"
+file = "Cargo.lock"
+find = "checksum = \"6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae\"\n"
+replace = ""
+
+# --- module boundaries -----------------------------------------------------------------------
+
+[[mutation]]
+name = "a-new-concern-in-an-entry"
+why = "module boundaries: a function the register does not name, in xtask/src/main.rs"
+file = "xtask/src/main.rs"
+find = "fn help() {"
+replace = "pub(crate) fn another_concern() {}\n\nconst fn also_this() {}\n\nfn help() {"
+
+[[mutation]]
+name = "an-impl-of-a-stranger"
+why = "module boundaries: an impl of a type the entry does not own"
+file = "xtask/src/checks/mod.rs"
+find = "pub(crate) fn source_files("
+replace = "impl<'a> std::fmt::Display for Stranger<'a> {}\n\nmacro_rules! take { () => {} }\n\npub(crate) fn source_files("
+
+[[mutation]]
+name = "a-file-without-its-responsibility-line"
+why = "module boundaries: a file of a split module that does not open with `//!`"
+file = "crates/nazm-cli/src/build/link.rs"
+find = "//! The link and what follows it"
+replace = "// The link and what follows it"
+
+# --- mutations apply (its exactly-once half) -------------------------------------------------
+
+[[mutation]]
+name = "catalogue-pattern-drifted"
+why = "mutations apply: an entry whose pattern is no longer in its file"
+file = "crates/nazm-bench/src/report.rs"
+find = "accepted as f64 / counted.len() as f64"
+replace = "accepted as f64 / (counted.len() as f64)"
+
+[[mutation]]
+name = "catalogue-pattern-not-unique"
+why = "mutations apply: an entry whose pattern occurs more than once"
+file = "xtask/mutations/mutations.toml"
+find = "find = \"accepted as f64 / counted.len() as f64\""
+replace = "find = \"as f64\""
+
+[[mutation]]
+name = "catalogue-file-gone"
+why = "mutations apply: an entry naming a file that does not exist"
+file = "xtask/mutations/mutations.toml"
+find = "file = \"crates/nazm-bench/src/report.rs\"\nfind = \"accepted as f64 / counted.len() as f64\""
+replace = "file = \"crates/nazm-bench/src/gone.rs\"\nfind = \"accepted as f64 / counted.len() as f64\""

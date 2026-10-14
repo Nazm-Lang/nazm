@@ -1,0 +1,97 @@
+// `nazm-check` (R7): `cargo xtask check`'s gates that read the tree, in Nazm.
+//
+//   nazm-check ROOT [GATE…]
+//
+// Runs every ported gate — or only those named — over the repository at ROOT, in the order
+// `xtask/src/checks/mod.rs` runs them, and prints its report byte for byte: `ok    NAME`, or
+// `FAIL  NAME` and each problem indented eight spaces. Exits 1 when a gate fails, 2 on a usage
+// error. The Rust gate bakes its root in at compile time; this one is given it, so one build checks
+// any copy of the tree.
+
+use "@std/process"
+use "../lib/run.nz"
+use "docs.nz"
+use "guide.nz"
+use "supply.nz"
+use "modules.nz"
+
+/// The ported gates, in `run_checks`'s order.
+fn gates() -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, "doc claims");
+    strs_push(out, "capability matrix");
+    strs_push(out, "guide from grammar");
+    strs_push(out, "dependency sources");
+    strs_push(out, "module boundaries");
+    out
+}
+
+fn run_gate(h: Caps, root: Str, name: Str) -> Strs ! { io } {
+    if name == "doc claims" {
+        return gate_doc_claims(h, root);
+    }
+    if name == "capability matrix" {
+        return gate_capability_matrix(h, root);
+    }
+    if name == "guide from grammar" {
+        return gate_guide(h, root);
+    }
+    if name == "dependency sources" {
+        return gate_supply(h, root);
+    }
+    gate_module_boundaries(h, root)
+}
+
+fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let args = process_args(io);
+    if strs_len(args) < 1 {
+        eprintln("usage: nazm-check ROOT [GATE…]");
+        return 2;
+    }
+    let root = strs_get(args, 0);
+    let wanted = strs_new();
+    let mut i = 1;
+    while i < strs_len(args) {
+        strs_push(wanted, strs_get(args, i));
+        i = i + 1;
+    }
+    let known = gates();
+    for w in wanted {
+        let mut found = false;
+        for g in known {
+            if g == w {
+                found = true;
+            }
+        }
+        if !found {
+            eprintln(f"unknown gate: {w}");
+            return 2;
+        }
+    }
+    let out = strs_new();
+    let mut failed = false;
+    for g in known {
+        let mut chosen = strs_len(wanted) == 0;
+        for w in wanted {
+            if w == g {
+                chosen = true;
+            }
+        }
+        if !chosen {
+            continue;
+        }
+        let problems = run_gate(h, root, g);
+        if strs_len(problems) == 0 {
+            strs_push(out, f"ok    {g}\n");
+        } else {
+            failed = true;
+            strs_push(out, f"FAIL  {g}\n");
+            for pr in problems {
+                strs_push(out, f"        {pr}\n");
+            }
+        }
+    }
+    print(str_join(out, ""));
+    if failed { 1 } else { 0 }
+}

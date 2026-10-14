@@ -10,14 +10,16 @@
 - [x] 2.4 `tests/lib_self.nz`: the library's own tests
 
 ## 3. `xtask check`'s file-reading gates
-- [ ] 3.1 `check/main.nz`: the runner and the report, byte for byte
+- [x] 3.1 `check/main.nz`: the runner and the report, byte for byte
 - [ ] 3.2 Docs corpus
-- [ ] 3.3 Guide from grammar
+- [x] 3.3 Guide from grammar
 - [ ] 3.4 Third-party notices
-- [ ] 3.5 Module boundaries
-- [ ] 3.6 Doc claims, capability matrix, dependency sources, mutations apply, performance claims,
-      agent governance
-- [ ] 3.7 Compared with the Rust gates on the tree and on seeded copies
+- [x] 3.5 Module boundaries
+- [ ] 3.6 Doc claims, capability matrix, dependency sources (done); mutations apply (its
+      exactly-once half done, `nazm-mutate check`; `plan::validate` open); performance claims,
+      agent governance (open)
+- [x] 3.7 Compared with the Rust gates on the tree and on seeded copies (`tests/seeded.sh`, every
+      gate ported so far; extended with each gate)
 
 ## 4. The black-box CLI tests
 - [x] 4.1 `release_examples`

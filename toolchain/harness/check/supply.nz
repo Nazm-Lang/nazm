@@ -1,0 +1,99 @@
+// The dependency-source gate (R7, ported from `xtask/src/supply.rs`; Q1,
+// `docs/security-qualification.md`, *Supply chain*): every crate the compiler is built from is this
+// workspace's own or comes from crates.io with the checksum Cargo verifies, read off `Cargo.lock`.
+
+use "@std/toml"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+
+const CRATES_IO: Str = "registry+https://github.com/rust-lang/crates.io-index";
+
+fn field(t: Toml, key: Str) -> Option[Str] ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: s) => Option[Str].Some(value: s),
+            Toml.Int(value: i) => Option[Str].None(),
+            Toml.Float(value: x) => Option[Str].None(),
+            Toml.Bool(value: b) => Option[Str].None(),
+            Toml.OffsetDatetime(value: d) => Option[Str].None(),
+            Toml.LocalDatetime(value: d) => Option[Str].None(),
+            Toml.LocalDate(value: d) => Option[Str].None(),
+            Toml.LocalTime(value: d) => Option[Str].None(),
+            Toml.Array(items: i) => Option[Str].None(),
+            Toml.Table(keys: k, values: v) => Option[Str].None(),
+        },
+        Option.None() => Option[Str].None(),
+    }
+}
+
+fn or_else(o: Option[Str], fallback: Str) -> Str ! {} {
+    match o {
+        Option.Some(value: s) => s,
+        Option.None() => fallback,
+    }
+}
+
+/// `check_lock`: every package with a source names crates.io and carries a checksum; one with no
+/// source is a workspace member.
+pub fn check_lock(lock: Str) -> Strs ! {} {
+    let problems = strs_new();
+    let parsed = match toml_parse(lock) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            strs_push(problems, f"Cargo.lock does not parse: {e}");
+            return problems;
+        },
+    };
+    let listed = match toml_get(parsed, "package") {
+        Option.Some(value: p) => match p {
+            Toml.Array(items: items) => { check_packages(items, problems); true },
+            Toml.Str(value: s) => false,
+            Toml.Int(value: i) => false,
+            Toml.Float(value: x) => false,
+            Toml.Bool(value: b) => false,
+            Toml.OffsetDatetime(value: d) => false,
+            Toml.LocalDatetime(value: d) => false,
+            Toml.LocalDate(value: d) => false,
+            Toml.LocalTime(value: d) => false,
+            Toml.Table(keys: k, values: v) => false,
+        },
+        Option.None() => false,
+    };
+    if !listed {
+        strs_push(problems, "Cargo.lock lists no packages");
+    }
+    problems
+}
+
+fn check_packages(packages: List[Toml], problems: Strs) -> Int ! {} {
+    for p in packages {
+        let n = or_else(field(p, "name"), "<unnamed>");
+        let ver = or_else(field(p, "version"), "<unversioned>");
+        let name = f"{n} {ver}";
+        match field(p, "source") {
+            Option.None() => 0,
+            Option.Some(value: src) => {
+                if src == CRATES_IO {
+                    if let Option.None() = field(p, "checksum") {
+                        strs_push(problems, f"Cargo.lock: {name} comes from crates.io with no checksum to verify");
+                    }
+                } else {
+                    strs_push(problems, f"Cargo.lock: {name} comes from `{src}`: only crates.io and this workspace are allowed sources (deny.toml, [sources])");
+                }
+                0
+            },
+        };
+    }
+    0
+}
+
+pub fn gate_supply(h: Caps, root: Str) -> Strs ! { io } {
+    match read_rust(h, f"{root}/Cargo.lock") {
+        Result.Ok(value: lock) => check_lock(lock),
+        Result.Err(error: e) => {
+            let p = strs_new();
+            strs_push(p, f"Cargo.lock: {e}");
+            p
+        },
+    }
+}

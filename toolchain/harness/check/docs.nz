@@ -1,0 +1,247 @@
+// The documentation gates that read prose (R7, ported from `xtask/src/checks/docs.rs`): the doc
+// claims about the benchmark harness and the repository's IR, and the capability matrix's
+// evidence.
+
+use "@std/file"
+use "@std/text"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+/// Directories a cited path may be rooted at: what keeps prose in backticks — a type, a command, a
+/// diagnostic code — from being mistaken for a path.
+fn doc_path_roots() -> Strs ! {} {
+    words("crates/ compiler/ docs/ schema/ xtask/ scripts/ bench/ examples/ docker/ corpus/ .github/ review/")
+}
+
+/// The repository paths one line cites in backticks; a trailing `:12` is a line reference.
+fn cited_paths(line: Str) -> Strs ! {} {
+    let out = strs_new();
+    let roots = doc_path_roots();
+    let pieces = split(line, "`");
+    let mut i = 1;
+    while i < strs_len(pieces) {
+        let piece = strs_get(pieces, i);
+        let mut rooted = false;
+        for r in roots {
+            if text_starts_with(piece, r) {
+                rooted = true;
+            }
+        }
+        if rooted {
+            let path = strs_get(split(piece, ":"), 0);
+            if str_len(path) > 0 {
+                strs_push(out, path);
+            }
+        }
+        i = i + 2;
+    }
+    out
+}
+
+/// Headings marked VERIFIED whose section — from its `###` heading to the next — cites no path.
+fn verified_without_evidence(text: Str) -> Strs ! {} {
+    let problems = strs_new();
+    let mut open = false;
+    let mut heading = "";
+    let mut has_path = false;
+    for line in lines(text) {
+        match strip_prefix(line, "### ") {
+            Option.Some(value: h) => {
+                if open && !has_path {
+                    strs_push(problems, heading);
+                }
+                open = true;
+                heading = trim_ws(h);
+                has_path = false;
+            },
+            Option.None() => {
+                if open && strs_len(cited_paths(line)) > 0 {
+                    has_path = true;
+                }
+            },
+        }
+    }
+    if open && !has_path {
+        strs_push(problems, heading);
+    }
+    let out = strs_new();
+    for h in problems {
+        if text_contains(h, "VERIFIED") {
+            strs_push(out, h);
+        }
+    }
+    out
+}
+
+pub fn gate_capability_matrix(h: Caps, root: Str) -> Strs ! { io } {
+    let io = h.io;
+    let problems = strs_new();
+    let text = match read_rust(h, f"{root}/docs/capability-matrix.md") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            strs_push(problems, f"could not read docs/capability-matrix.md: {e}");
+            return problems;
+        },
+    };
+    let mut n = 0;
+    for line in lines(text) {
+        n = n + 1;
+        for path in cited_paths(line) {
+            if !file_exists_at(io, f"{root}/{path}") {
+                strs_push(problems, f"docs/capability-matrix.md:{n} cites `{path}`, which does not exist");
+            }
+        }
+    }
+    for heading in verified_without_evidence(text) {
+        strs_push(problems, f"\"{heading}\" is VERIFIED but cites no repository path");
+    }
+    problems
+}
+
+/// One paragraph being gathered: its text outside quotations, lower-cased with whitespace collapsed
+/// to one space, and the line each byte of it came from.
+struct Para {
+    parts: Strs,
+    origin: Ints,
+    ends_space: Bool,
+}
+
+fn para_new() -> Para ! {} {
+    Para(parts: strs_new(), origin: ints_new(), ends_space: false)
+}
+
+
+/// Every occurrence of the three claims in `para`, by the line its first byte came from.
+fn flush(para: Para, found: Ints) -> Int ! {} {
+    let text = str_join(para.parts, "");
+    for needle in absence_needles() {
+        let mut from = 0;
+        let mut at = find_from(text, needle, from);
+        while at >= 0 {
+            if at < ints_len(para.origin) {
+                ints_push(found, ints_get(para.origin, at));
+            }
+            from = at + str_len(needle);
+            at = find_from(text, needle, from);
+        }
+    }
+    0
+}
+
+fn absence_needles() -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, "no ir and no backend");
+    strs_push(out, "no ir, no backend");
+    strs_push(out, "there is no compiler yet");
+    out
+}
+
+/// One-based line numbers **asserting** the workspace has no IR or no backend: matched over the
+/// paragraph (the phrase wraps), a phrase inside double quotes being a quotation, not an assertion.
+fn absence_claims(text: Str) -> Ints ! {} {
+    let found = ints_new();
+    let mut quoted = false;
+    let mut para = para_new();
+    let mut n = 0;
+    for raw in lines(text) {
+        n = n + 1;
+        if str_len(trim_ws(raw)) == 0 {
+            flush(para, found);
+            para = para_new();
+            quoted = false;
+            continue;
+        }
+        // A comment marker is punctuation, not content.
+        let line = trim_start_matches(trim_start_ws(raw), "#");
+        let runs = split(line, "\"");
+        let mut i = 0;
+        while i < strs_len(runs) {
+            let run = strs_get(runs, i);
+            let inside = quoted != (i % 2 == 1);
+            i = i + 1;
+            if inside {
+                continue;
+            }
+            let m = str_len(run);
+            let mut k = 0;
+            while k < m {
+                let w = ws_at(run, k);
+                if w > 0 {
+                    if !para.ends_space {
+                        ints_push(para.origin, n);
+                        strs_push(para.parts, " ");
+                        para.ends_space = true;
+                    }
+                    k = k + w;
+                    continue;
+                }
+                // A run of non-space bytes goes in at once, lower-cased (ASCII: every claim is).
+                let start = k;
+                while k < m && ws_at(run, k) == 0 {
+                    ints_push(para.origin, n);
+                    k = k + 1;
+                }
+                strs_push(para.parts, text_to_lower(str_slice(run, start, k)));
+                para.ends_space = false;
+            }
+        }
+        if !para.ends_space {
+            ints_push(para.origin, n);
+            strs_push(para.parts, " ");
+            para.ends_space = true;
+        }
+        quoted = quoted != (count_matches(line, "\"") % 2 == 1);
+    }
+    flush(para, found);
+    let sorted = ints_sort(found);
+    let out = ints_new();
+    for x in sorted {
+        if ints_len(out) == 0 || ints_get(out, ints_len(out) - 1) != x {
+            ints_push(out, x);
+        }
+    }
+    out
+}
+
+pub fn gate_doc_claims(h: Caps, root: Str) -> Strs ! { io } {
+    let io = h.io;
+    let problems = strs_new();
+    let prereg = file_exists_at(io, f"{root}/docs/research/evaluation-preregistration.md");
+    let readme = match read_rust(h, f"{root}/README.md") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            strs_push(problems, f"could not read README.md: {e}");
+            return problems;
+        },
+    };
+    let says_not_registered = text_contains(readme, "decision rule is not pre-registered") || text_contains(readme, "not binding before then");
+    if prereg && says_not_registered {
+        strs_push(problems, "docs/research/evaluation-preregistration.md exists, but README.md still says the decision rule is not pre-registered. One of them is wrong.");
+    }
+    match read_rust(h, f"{root}/docs/research/evaluation.md") {
+        Result.Ok(value: eval) => {
+            if prereg && text_contains(eval, "Not yet pre-registered") {
+                strs_push(problems, "docs/research/evaluation.md still carries its draft banner although a pre-registration exists.");
+            }
+            0
+        },
+        Result.Err(error: e) => strs_push(problems, f"could not read docs/research/evaluation.md: {e}"),
+    };
+    if file_exists_at(io, f"{root}/crates/nazm-lir") {
+        for doc in words("README.md Cargo.toml docs/architecture.md docs/roadmap.md docs/master-architecture.md docs/capability-matrix.md") {
+            let text = match read_rust(h, f"{root}/{doc}") {
+                Result.Ok(value: t) => t,
+                Result.Err(error: e) => {
+                    strs_push(problems, f"could not read {doc}");
+                    continue;
+                },
+            };
+            for n in absence_claims(text) {
+                strs_push(problems, f"{doc}:{n} says the workspace has no IR or no backend, but crates/nazm-lir exists and `nazm build` emits a native executable. One of them is wrong.");
+            }
+        }
+    }
+    problems
+}
