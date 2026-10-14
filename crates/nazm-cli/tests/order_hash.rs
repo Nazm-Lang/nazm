@@ -274,7 +274,7 @@ fn what_has_no_order_or_derived_hash_and_by_which_code() {
         (
             "struct R { v: Vec[Int], }\nfn main() -> Int { let a = R(v: vec_new[Int]()); if a < a { 1 } else { 0 } }",
             "N0304",
-            "its `v` is a `Vec[Int]`, which has no order",
+            "its `v` is a `Ints`, which has no order", // `Vec[Int]` (R1, 5b.18)
         ),
         // A float orders on its own, but makes no structure ordered.
         (
@@ -299,7 +299,7 @@ fn what_has_no_order_or_derived_hash_and_by_which_code() {
             "use \"@std/hash\";\nuse \"@std/hashmap\";\nstruct R { w: (Int, Vec[Int]), }\n\
              fn main() -> Int { let m = hashmap_new[R, Int](); 0 }",
             "N0364",
-            "does not derive one: its `w.1` is a `Vec[Int]`",
+            "does not derive one: its `w.1` is a `Ints`",
         ),
         // A component with a written impl: its `same` may mean more than `==`.
         (

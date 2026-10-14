@@ -68,8 +68,9 @@ fn what_has_no_function_of_the_name_is_refused() {
         ),
         (
             "fn main() -> Int { let v = vec_new[Int](); v.push(\"a\"); 0 }\n",
-            // What `vec_push(v, "a")` says, said of the method call.
-            "N0355",
+            // What `ints_push(v, "a")` says, said of the method call: a `Vec[Int]` is an `Ints`
+            // since R1 (5b.18), and its methods are the `ints_` functions first.
+            "N0300",
             "a by-name call's argument checked as the function's",
         ),
         (

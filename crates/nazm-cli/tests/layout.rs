@@ -263,7 +263,8 @@ fn an_ineligible_element_stays_whole_and_the_reason_is_reported() {
             .unwrap()
     };
     assert_eq!(of("Vec[P]"), "eligible");
-    assert_eq!(of("Vec[Int]"), "its element is not a record");
+    // `Vec[Int]` by its shorter name (R1, 5b.18).
+    assert_eq!(of("Ints"), "its element is not a record");
     assert!(of("Vec[N]")
         .as_str()
         .unwrap()
