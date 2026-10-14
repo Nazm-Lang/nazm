@@ -196,9 +196,13 @@ pub(crate) fn run(path: &Path, only: Option<&str>) -> ExitCode {
             json!({ "triple": t.triple, "output": if links { "executable" } else { "objects" } })
         })
         .collect();
+    // What the program may touch (R1, option C): `main`'s capabilities, given or written.
+    let authority = crate::authority::of_main(map.text(nazm_span::FileId::ROOT))
+        .map_or(Value::Null, |held| crate::authority::json(&held));
     let doc = json!({
         "schema": "nazm.inspect/2",
         "root": root_key,
+        "authority": authority,
         "toolchain": {
             "compiler": env!("CARGO_PKG_VERSION"),
             "semantic_epoch": nazm_cache::SEMANTIC_EPOCH,

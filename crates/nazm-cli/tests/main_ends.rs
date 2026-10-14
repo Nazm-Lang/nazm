@@ -196,3 +196,71 @@ fn what_main_holds_and_what_returns_nothing_is_checked() {
         );
     }
 }
+
+#[test]
+fn a_private_function_declares_no_effects() {
+    // R1, 5b.5 (`docs/spec.md`, *Declared and inferred*): a function that is not `pub` writes
+    // no `! { … }`; its own module's callers see what its body requires — a pure caller may
+    // call a pure one — while another module's undeclared function may still do anything.
+    for (label, r) in as_users_run(&[(
+        "prog.nz",
+        "fn double(x: Int) -> Int { x * 2 }
+fn pure_user(x: Int) -> Int ! {} { double(x) }
+fn report(out: OutCap, n: Int) { println(f\"n = {n}\") }
+fn main() {
+    report(out, pure_user(21))
+}
+",
+    )]) {
+        assert_eq!(
+            (r.code, r.stdout.as_str()),
+            (Some(0), "n = 42\n"),
+            "{label}: {r:?}"
+        );
+    }
+    let got = differential::check_codes(&[
+        (
+            "prog.nz",
+            "use \"helper.nz\";\nfn f(x: Int) -> Int ! {} { twice(x) }\nfn main() -> Int { f(2) }\n",
+        ),
+        ("helper.nz", "pub fn twice(x: Int) -> Int { x * 2 }\n"),
+    ]);
+    assert_eq!(got.first().map(String::as_str), Some("N0366"), "{got:?}");
+}
+
+#[test]
+fn build_and_inspect_say_what_the_program_may_touch() {
+    // R1, option C: `main`'s capabilities, given or written, after a build and in `inspect`.
+    for (src, line) in [
+        (
+            "fn main() {\n    println(\"hi\")\n}\n",
+            "authority: OutCap (given to main): prints to standard output and error",
+        ),
+        (
+            "fn main(io: IoCap, net: NetCap) -> Int { 0 }\n",
+            "authority: IoCap: files, arguments, the terminal and the process's exit; NetCap: the network",
+        ),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("prog.nz"), src).unwrap();
+        let exe = d.path().join("prog");
+        let b = build(d.path(), "llvm", "0", "prog.nz", &exe);
+        assert_eq!(b.code, Some(0), "{b:?}");
+        assert!(b.stderr.lines().any(|l| l == line), "{b:?}");
+        let r = run_bounded(
+            Command::new(NAZM)
+                .current_dir(d.path())
+                .args(["inspect", "prog.nz"]),
+            "nazm inspect",
+        );
+        let doc: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+        let first = &doc["authority"][0];
+        assert_eq!(
+            first["implicit"],
+            src.starts_with("fn main()"),
+            "{}",
+            r.stdout
+        );
+        assert!(first["capability"].as_str().unwrap().ends_with("Cap"));
+    }
+}

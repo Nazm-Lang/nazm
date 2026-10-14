@@ -50,11 +50,13 @@ each new construct by name until R2 carries it.
 Measured against Go, Python, C, C++ and Rust on the same programs; the targets are minimums. Option
 C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 
-- [x] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written
+- [x] 5b.1 Option C: `OutCap` implicit in `main`; every other authority still written; `nazm build` and
+      `nazm inspect` report the program's authority (2026-10-14)
 - [x] 5b.2 A function with no `-> T` returns nothing
 - [x] 5b.3 `main`'s `Int` result is the exit status, not printed
 - [x] 5b.4 `println`
-- [ ] 5b.5 Effects inferred for a function that is not `pub`
+- [x] 5b.5 Effects inferred for a function that is not `pub` — the rule since N36 (`spec.md`, *Declared and
+      inferred*), found to need no change; pinned by `main_ends::a_private_function_declares_no_effects`
 - [x] 5b.6 `s + t` on strings
 - [x] 5b.7 `m[k]`, `m[k] = v` and `m[k] += 1` on maps
 - [ ] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of

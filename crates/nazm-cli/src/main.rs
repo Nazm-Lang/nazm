@@ -35,6 +35,7 @@ use std::process::ExitCode;
 mod accel;
 mod apidoc;
 mod attest;
+mod authority;
 mod backend;
 mod bench;
 mod bindgen;

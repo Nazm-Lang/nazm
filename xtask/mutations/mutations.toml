@@ -18946,6 +18946,22 @@ find = '''        let guard = if !hole_arm && self.eat(&TokenKind::If) {'''
 replace = '''        let guard = if false && !hole_arm && self.eat(&TokenKind::If) {'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "match_guards::guards_choose_alike_everywhere" }]
 
+[[mutation]]
+name = "r1-the-given-out-is-reported-as-written"
+why = "the authority report calls option C's `OutCap` written, so a reader cannot tell it was given"
+file = "crates/nazm-cli/src/authority.rs"
+find = '''                    implicit: p.span.start == p.span.end,'''
+replace = '''                    implicit: false,'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "main_ends::build_and_inspect_say_what_the_program_may_touch" }]
+
+[[mutation]]
+name = "r1-a-build-says-nothing-of-authority"
+why = "`nazm build` reports no authority"
+file = "crates/nazm-cli/src/build/link.rs"
+find = '''        eprintln!("{}", crate::authority::line(&held));'''
+replace = '''        let _ = crate::authority::line(&held);'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "main_ends::build_and_inspect_say_what_the_program_may_touch" }]
+
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 
 [[mutation]]

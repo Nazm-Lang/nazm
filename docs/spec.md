@@ -2721,6 +2721,13 @@ fn main() {
 }
 ```
 
+**The program's authority is reported.** `nazm build` writes, on standard error after a build
+of a program with a `main`, one line naming every capability `main` holds and what it reaches —
+`authority: OutCap (given to main): prints to standard output and error`, or `authority: none` —
+and `nazm inspect` gives the same as its `authority` member, an array of `{ capability, implicit,
+reaches }` (`null` without a `main`). Every authority a program has enters through `main`, so
+this is what the program may touch, read without its body.
+
 **`main`'s result is the exit status.** It is written to no stream: a program ends with status
 `main`'s `Int`, which must be `0..=255` — one outside is `N0416`'s failure, *`main`'s result is an
 exit status, and this one is outside 0 to 255*, ending with status 2, as `exit_with` of one is. A
