@@ -1,6 +1,7 @@
-// Instruction selection for x86-64, stage A (design D3, D11), the same shape as `sel.nz`: every
-// value, variable and parameter in its own frame slot, each instruction loading its operands
-// into scratch registers (rax, rcx, rdx, r10, r11; xmm14, xmm15), computing and storing.
+// Instruction selection for x86-64 (design D3, D11), the same shape as `sel.nz`: every value,
+// variable and parameter has its own frame slot, and stage B's linear scan keeps as many as fit
+// in the callee-saved rbx and r12–r15 instead; each instruction loads its operands into scratch
+// registers (rax, rcx, rdx, r10, r11; xmm14, xmm15), computes and stores.
 //
 // Frame: `push rbp; mov rbp, rsp; sub rsp, N`, values at `[rsp + off]` above the outgoing
 // arguments. The convention is System V's: integers in rdi, rsi, rdx, rcx, r8, r9, floats in
@@ -34,6 +35,19 @@ struct G {
     blk_at: Ints,
     fix_at: Ints,
     fix_blk: Ints,
+    /// Stage B: each name's register (an index into `areg`), or -1; the values' count; the
+    /// callee-saved registers used, and where they are saved.
+    loc: Ints,
+    nvals: Int,
+    saved: Ints,
+    save_off: Int,
+}
+
+/// The callee-saved registers the allocator hands out: rbx, r12–r15.
+const NREGS: Int = 5
+
+fn areg(i: Int) -> Int {
+    if i == 0 { 3 } else { 11 + i }
 }
 
 fn buf(g: G) -> ByteBuf {
@@ -61,12 +75,31 @@ fn ld(g: G, reg: Int, v: Int) {
         refuse(g, "an operand that is missing")
         return
     }
-    load(buf(g), 8, reg, RSP, voff(g, v))
+    if g.loc[v] >= 0 {
+        if reg != areg(g.loc[v]) { mov(buf(g), reg, areg(g.loc[v])) }
+    } else {
+        load(buf(g), 8, reg, RSP, voff(g, v))
+    }
 }
 
 fn st(g: G, reg: Int, v: Int) {
     if v < 0 { return }
-    store(buf(g), 8, reg, RSP, voff(g, v))
+    if g.loc[v] >= 0 {
+        if reg != areg(g.loc[v]) { mov(buf(g), areg(g.loc[v]), reg) }
+    } else {
+        store(buf(g), 8, reg, RSP, voff(g, v))
+    }
+}
+
+/// Variable `k`, from its register or slot, and back.
+fn var_ld(g: G, reg: Int, k: Int) {
+    let l = g.loc[g.nvals + k]
+    if l >= 0 { mov(buf(g), reg, areg(l)) } else { load(buf(g), 8, reg, RSP, g.varoffs[k]) }
+}
+
+fn var_st(g: G, reg: Int, k: Int) {
+    let l = g.loc[g.nvals + k]
+    if l >= 0 { mov(buf(g), areg(l), reg) } else { store(buf(g), 8, reg, RSP, g.varoffs[k]) }
 }
 
 fn ld128(g: G, lo: Int, hi: Int, v: Int) {
@@ -235,10 +268,14 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
+    let loc = allocate(f, n, vcls, NREGS)
+    let saved = used_regs(loc, NREGS)
+    let save_off = align_up(off, 8)
+    off = save_off + 8 * ints_len(saved)
     let size = align_up(off, 16)
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
-            fix_blk: ints_new())
+            fix_blk: ints_new(), loc: loc, nvals: n, saved: saved, save_off: save_off)
     ints_set(c.sym_at, f.sym, here(g))
     prologue(g, size)
     let nb = ints_len(f.block_first)
@@ -314,6 +351,11 @@ fn prologue(g: G, size: Int) {
         rr(b, true, 0x81, 5, RSP)
         imm32(b, size)
     }
+    let mut q = 0
+    while q < ints_len(g.saved) {
+        store(b, 8, areg(g.saved[q]), RSP, g.save_off + 8 * q)
+        q += 1
+    }
     let own = g.u.syms[g.f.sym]
     let a = assign(own.params)
     let mut i = 0
@@ -346,6 +388,11 @@ fn prologue(g: G, size: Int) {
 
 fn epilogue(g: G) {
     let b = buf(g)
+    let mut q = 0
+    while q < ints_len(g.saved) {
+        load(b, 8, areg(g.saved[q]), RSP, g.save_off + 8 * q)
+        q += 1
+    }
     mov(b, RSP, RBP)
     pop_rbp(b)
     ret(b)
@@ -362,7 +409,12 @@ fn inst(g: G, x: Ins) {
             refuse(g, f"parameter {x.imm}, which does not exist")
             return
         }
-        copy_val(g, g.param_offs[x.imm], voff(g, x.dst), cls(g, x.dst))
+        if cls(g, x.dst) == C_I128 {
+            copy_val(g, g.param_offs[x.imm], voff(g, x.dst), C_I128)
+        } else {
+            load(b, 8, A, RSP, g.param_offs[x.imm])
+            st(g, A, x.dst)
+        }
     } else if op == OP_CONST {
         mov_imm(b, A, masked(x.imm, x.cls))
         if x.cls == C_I128 {
@@ -465,13 +517,23 @@ fn inst(g: G, x: Ins) {
             refuse(g, f"variable x{x.imm}, which does not exist")
             return
         }
-        copy_val(g, g.varoffs[x.imm], voff(g, x.dst), g.f.vars[x.imm])
+        if g.f.vars[x.imm] == C_I128 {
+            copy_val(g, g.varoffs[x.imm], voff(g, x.dst), C_I128)
+        } else {
+            var_ld(g, A, x.imm)
+            st(g, A, x.dst)
+        }
     } else if op == OP_SET {
         if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
             refuse(g, f"variable x{x.imm}, which does not exist")
             return
         }
-        copy_val(g, voff(g, x.a), g.varoffs[x.imm], g.f.vars[x.imm])
+        if g.f.vars[x.imm] == C_I128 {
+            copy_val(g, voff(g, x.a), g.varoffs[x.imm], C_I128)
+        } else {
+            ld(g, A, x.a)
+            var_st(g, A, x.imm)
+        }
     } else if op == OP_CALL || op == OP_CALLI {
         call(g, x)
     } else if op == OP_COPY {

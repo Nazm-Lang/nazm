@@ -1,7 +1,9 @@
-// Instruction selection for aarch64, stage A (design D3): every value, variable and parameter
-// in its own 8-byte frame slot, every LIR slot in its own aligned area. Each instruction loads
-// its operands into scratch registers (x9–x12, d16–d17), computes, and stores its result, so no
-// value lives in a register across an instruction and liveness cannot be got wrong.
+// Instruction selection for aarch64 (design D3). Every value, variable and parameter has its own
+// 8-byte frame slot and every LIR slot its own aligned area; stage B's linear scan (`allocate`
+// in `common.nz`) then keeps as many values and variables as fit in the callee-saved x19–x28
+// instead. Each instruction loads its operands into scratch registers (x9–x12, d16–d17) from
+// wherever they live, computes, and stores its result back, so the selection is the same with
+// or without the allocator.
 //
 // Frame, from `sp` up: outgoing stack arguments, saved parameters, values, variables, slots;
 // then the caller's `x29`/`x30` pair, which `x29` points at.
@@ -29,6 +31,19 @@ struct G {
     fix_at: Ints,
     fix_kind: Ints,
     fix_blk: Ints,
+    /// Stage B: each name's register (an index from x19), or -1; the values' count; the
+    /// callee-saved registers used, and where they are saved.
+    loc: Ints,
+    nvals: Int,
+    saved: Ints,
+    save_off: Int,
+}
+
+/// The callee-saved registers the allocator hands out: x19–x28.
+const NREGS: Int = 10
+
+fn areg(i: Int) -> Int {
+    19 + i
 }
 
 fn w(g: G, x: Int) {
@@ -138,19 +153,38 @@ fn voff(g: G, v: Int) -> Int {
     g.voffs[v]
 }
 
-/// `reg` = value `v`'s 8 bytes.
+/// `reg` = value `v`'s 8 bytes, from its register or its slot.
 fn ld(g: G, reg: Int, v: Int) {
     if v < 0 {
         refuse(g, "an operand that is missing")
         return
     }
-    mem(g, 8, true, false, reg, SP, voff(g, v))
+    if g.loc[v] >= 0 {
+        if reg != areg(g.loc[v]) { w(g, mov(reg, areg(g.loc[v]))) }
+    } else {
+        mem(g, 8, true, false, reg, SP, voff(g, v))
+    }
 }
 
-/// Value `v`'s slot = `reg`.
+/// Value `v` = `reg`.
 fn st(g: G, reg: Int, v: Int) {
     if v < 0 { return }
-    mem(g, 8, false, false, reg, SP, voff(g, v))
+    if g.loc[v] >= 0 {
+        if reg != areg(g.loc[v]) { w(g, mov(areg(g.loc[v]), reg)) }
+    } else {
+        mem(g, 8, false, false, reg, SP, voff(g, v))
+    }
+}
+
+/// Variable `k`, from its register or slot, and back.
+fn var_ld(g: G, reg: Int, k: Int) {
+    let l = g.loc[g.nvals + k]
+    if l >= 0 { w(g, mov(reg, areg(l))) } else { mem(g, 8, true, false, reg, SP, g.varoffs[k]) }
+}
+
+fn var_st(g: G, reg: Int, k: Int) {
+    let l = g.loc[g.nvals + k]
+    if l >= 0 { w(g, mov(areg(l), reg)) } else { mem(g, 8, false, false, reg, SP, g.varoffs[k]) }
 }
 
 /// An `i128` value's halves into two registers, and back.
@@ -178,7 +212,11 @@ fn copy_val(g: G, from: Int, to: Int, c: Int) {
 /// A float value into a floating-point register.
 fn ld_fp(g: G, reg: Int, v: Int) {
     let c = cls(g, v)
-    mem(g, if c == C_F32 { 4 } else { 8 }, true, true, reg, SP, voff(g, v))
+    if g.loc[v] >= 0 {
+        w(g, fmov_to_fp(c != C_F32, reg, areg(g.loc[v])))
+    } else {
+        mem(g, if c == C_F32 { 4 } else { 8 }, true, true, reg, SP, voff(g, v))
+    }
 }
 
 fn cls(g: G, v: Int) -> Int {
@@ -322,10 +360,15 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
+    let loc = allocate(f, n, vcls, NREGS)
+    let saved = used_regs(loc, NREGS)
+    let save_off = align_up(off, 8)
+    off = save_off + 8 * ints_len(saved)
     let size = align_up(off, 16)
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
-            fix_kind: ints_new(), fix_blk: ints_new())
+            fix_kind: ints_new(), fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
+            save_off: save_off)
     ints_set(c.sym_at, f.sym, here(g))
     prologue(g, size)
     let nb = ints_len(f.block_first)
@@ -402,6 +445,12 @@ fn prologue(g: G, size: Int) {
             if rest > 0 { w(g, sub_imm(SP, SP, rest)) }
         }
     }
+    // The callee-saved registers the allocation uses.
+    let mut q = 0
+    while q < ints_len(g.saved) {
+        mem(g, 8, false, false, areg(g.saved[q]), SP, g.save_off + 8 * q)
+        q += 1
+    }
     // Every parameter into its slot, normalised (D5).
     let own = g.u.syms[g.f.sym]
     let a = assign(own.params, g.c.apple)
@@ -435,6 +484,11 @@ fn prologue(g: G, size: Int) {
 }
 
 fn epilogue(g: G) {
+    let mut q = 0
+    while q < ints_len(g.saved) {
+        mem(g, 8, true, false, areg(g.saved[q]), SP, g.save_off + 8 * q)
+        q += 1
+    }
     w(g, mov_sp(SP, 29))
     w(g, pop_frame())
     w(g, ret())
@@ -450,7 +504,12 @@ fn inst(g: G, x: Ins) {
             refuse(g, f"parameter {x.imm}, which does not exist")
             return
         }
-        copy_val(g, g.param_offs[x.imm], voff(g, x.dst), cls(g, x.dst))
+        if cls(g, x.dst) == C_I128 {
+            copy_val(g, g.param_offs[x.imm], voff(g, x.dst), C_I128)
+        } else {
+            mem(g, 8, true, false, 9, SP, g.param_offs[x.imm])
+            st(g, 9, x.dst)
+        }
     } else if op == OP_CONST {
         mov_imm(g, 9, masked(x.imm, x.cls))
         if x.cls == C_I128 {
@@ -552,13 +611,23 @@ fn inst(g: G, x: Ins) {
             refuse(g, f"variable x{x.imm}, which does not exist")
             return
         }
-        copy_val(g, g.varoffs[x.imm], voff(g, x.dst), g.f.vars[x.imm])
+        if g.f.vars[x.imm] == C_I128 {
+            copy_val(g, g.varoffs[x.imm], voff(g, x.dst), C_I128)
+        } else {
+            var_ld(g, 9, x.imm)
+            st(g, 9, x.dst)
+        }
     } else if op == OP_SET {
         if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
             refuse(g, f"variable x{x.imm}, which does not exist")
             return
         }
-        copy_val(g, voff(g, x.a), g.varoffs[x.imm], g.f.vars[x.imm])
+        if g.f.vars[x.imm] == C_I128 {
+            copy_val(g, voff(g, x.a), g.varoffs[x.imm], C_I128)
+        } else {
+            ld(g, 9, x.a)
+            var_st(g, 9, x.imm)
+        }
     } else if op == OP_CALL || op == OP_CALLI {
         call(g, x)
     } else if op == OP_COPY {
@@ -974,7 +1043,7 @@ fn call(g: G, x: Ins) {
         } else if kind == 0 {
             ld(g, a[2 * i + 1], x.args[i])
         } else if kind == 1 {
-            mem(g, if c == C_F32 { 4 } else { 8 }, true, true, a[2 * i + 1], SP, voff(g, x.args[i]))
+            ld_fp(g, a[2 * i + 1], x.args[i])
         }
         i += 1
     }
