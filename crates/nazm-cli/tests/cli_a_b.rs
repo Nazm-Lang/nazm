@@ -28,6 +28,7 @@ mod attestation;
 mod attributes;
 mod authority;
 mod boards;
+mod borrowed_fields;
 mod box_list;
 mod build;
 mod build_provenance;

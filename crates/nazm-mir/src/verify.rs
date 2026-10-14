@@ -566,7 +566,7 @@ fn rvalue(cx: &Ctx<'_>, value: &Rvalue, want: Type, arm: Option<(LocalId, u32)>)
             }
             complete(cx, &v.fields, fields)
         }
-        Rvalue::Field { base, field } => {
+        Rvalue::Field { base, field } | Rvalue::FieldBorrow { base, field } => {
             if cx.operand(base) != Some(Type::Record(field.record)) {
                 return Some("a field read from something that is not its record".to_owned());
             }
@@ -792,11 +792,29 @@ impl St {
 /// The forward dataflow: which tracked locals are empty, owned, or either, at each point.
 fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
     // Tracked: every non-parameter local that owns something, and every task list, each by a
-    // dense index.
+    // dense index. A borrowed field's temporary (R1, 5b.9) owns nothing, as a parameter does not.
+    let mut borrowed = vec![false; f.locals.len()];
+    for b in &f.blocks {
+        for s in &b.stmts {
+            if let StatementKind::Assign {
+                dst,
+                value: Rvalue::FieldBorrow { .. },
+                ..
+            } = &s.kind
+            {
+                if let Some(slot) = borrowed.get_mut(dst.index()) {
+                    *slot = true;
+                }
+            }
+        }
+    }
     let mut index: Vec<Option<usize>> = vec![None; f.locals.len()];
     let mut of_index: Vec<usize> = Vec::new();
     for (i, l) in f.locals.iter().enumerate() {
-        if i >= f.params as usize && types.managed_local(l.ty) {
+        if i >= f.params as usize
+            && !borrowed.get(i).copied().unwrap_or(false)
+            && types.managed_local(l.ty)
+        {
             if let Some(slot) = index.get_mut(i) {
                 *slot = Some(of_index.len());
             }
@@ -890,6 +908,9 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
                             if param(*l) {
                                 report(format!("bb{bi}: moves parameter _{}", l.0));
                             }
+                            if borrowed.get(l.index()).copied().unwrap_or(false) {
+                                report(format!("bb{bi}: moves borrowed _{}", l.0));
+                            }
                             read(&st, *l, "moves", &mut report);
                             set(&mut st, *l, One::Empty);
                         }
@@ -924,7 +945,12 @@ fn ownership(types: &Types, f: &Function, out: &mut Vec<String>) {
                     read(&st, *value, "moves", &mut report);
                     set(&mut st, *value, One::Empty);
                 }
-                StatementKind::Drop(l) => set(&mut st, *l, One::Empty),
+                StatementKind::Drop(l) => {
+                    if borrowed.get(l.index()).copied().unwrap_or(false) {
+                        report(format!("bb{bi}: drops borrowed _{}", l.0));
+                    }
+                    set(&mut st, *l, One::Empty);
+                }
                 StatementKind::ScopeOpen { list, .. } => {
                     if let Some(Some(i)) = index.get(list.index()) {
                         if st.get(*i) != One::Empty {
@@ -1005,7 +1031,7 @@ fn rvalue_reads(v: &Rvalue) -> Vec<LocalId> {
         Rvalue::CallIndirect { callee, args } => std::iter::once(callee).chain(args).collect(),
         Rvalue::Closure { captures, .. } => captures.iter().collect(),
         Rvalue::Capture { env, .. } => return vec![*env],
-        Rvalue::Field { base, .. } => vec![base],
+        Rvalue::Field { base, .. } | Rvalue::FieldBorrow { base, .. } => vec![base],
         Rvalue::Payload { base, .. } => return vec![*base],
         Rvalue::Copy(_) | Rvalue::Move(_) | Rvalue::Record { .. } | Rvalue::Variant { .. } => {
             Vec::new()

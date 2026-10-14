@@ -122,7 +122,7 @@ pub(crate) fn adapter(
         94 + shape.entries.len()
     );
     // The failure state the runtime records: declared by the unit already where it can fail.
-    if !unit.contains("@nz.failed = external global") {
+    if !unit.contains("@nz.failed = external") {
         let _ = writeln!(out, "@nz.failed = external global i1");
     }
     let _ = writeln!(out, "@nz.errmsg = external global ptr");

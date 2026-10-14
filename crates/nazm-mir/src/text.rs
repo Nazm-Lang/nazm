@@ -223,6 +223,9 @@ pub fn rvalue(program: &Program, v: &Rvalue) -> String {
             )
         }
         Rvalue::Field { base, field: f } => format!("{} . {}", operand(base), field(program, *f)),
+        Rvalue::FieldBorrow { base, field: f } => {
+            format!("borrow {} . {}", operand(base), field(program, *f))
+        }
         Rvalue::Payload {
             base,
             enumeration,

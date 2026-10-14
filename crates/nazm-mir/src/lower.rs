@@ -388,6 +388,8 @@ struct Fx<'a> {
     /// The failure-cleanup block for each set of open scopes, innermost last.
     cleanups: BTreeMap<Vec<LocalId>, BlockId>,
     shared_unwind: Option<BlockId>,
+    /// The temporaries holding a borrowed field (R1, 5b.9), which own nothing to drop.
+    borrowed: std::collections::HashSet<LocalId>,
     ret: Type,
     error: Option<(Span, String)>,
 }
@@ -572,6 +574,7 @@ fn lower_function(
         loops: Vec::new(),
         cleanups: BTreeMap::new(),
         shared_unwind: None,
+        borrowed: std::collections::HashSet::new(),
         ret: Type::Int,
         error: None,
     };
@@ -819,6 +822,11 @@ impl Fx<'_> {
             .iter()
             .enumerate()
             .skip(self.f.params as usize)
+            .filter(|(i, _)| {
+                !self
+                    .borrowed
+                    .contains(&LocalId(u32::try_from(*i).unwrap_or(u32::MAX)))
+            })
             .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))
             .map(|(i, _)| Statement {
                 kind: StatementKind::Drop(LocalId(u32::try_from(i).unwrap_or(u32::MAX))),
@@ -1424,6 +1432,36 @@ impl Fx<'_> {
                 Some((Operand::Const(c), None))
             }
             cir::ExprKind::Local(l) if !snapshot => Some((Operand::Local(LocalId(l.0)), None)),
+            // A field of a local, read only to be an operand (R1, 5b.9): borrowed where it is, as
+            // the local itself would be, so no reference is taken and none given back.
+            cir::ExprKind::Field { base, field, .. }
+                if !snapshot && matches!(base.kind, cir::ExprKind::Local(_)) =>
+            {
+                let (Some(t), Some(bt), cir::ExprKind::Local(b)) = (e.ty, base.ty, &base.kind)
+                else {
+                    return None;
+                };
+                let t = self.ty(t, e.at);
+                let Type::Record(rid) = self.ty(bt, base.at) else {
+                    self.fail(e.at, "a field read from something that is not a record");
+                    return None;
+                };
+                let tmp = self.temp(t, e.at, "borrow");
+                self.borrowed.insert(tmp);
+                self.write(
+                    Some(tmp),
+                    Rvalue::FieldBorrow {
+                        base: Operand::Local(LocalId(b.0)),
+                        field: FieldRef {
+                            record: rid,
+                            field: *field,
+                        },
+                    },
+                    e.at,
+                );
+                self.cur?;
+                Some((Operand::Local(tmp), None))
+            }
             _ => {
                 let t = match e.ty {
                     Some(t) => self.ty(t, e.at),

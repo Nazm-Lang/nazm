@@ -26,8 +26,9 @@ pub fn hash_finish(x: UInt64) -> UInt64 ! {} {
 /// The hash of a string's bytes.
 pub fn hash_bytes(s: Str) -> UInt64 ! {} {
     let mut h = FNV_OFFSET;
+    let n = str_len(s);
     let mut i = 0;
-    while i < str_len(s) {
+    while i < n {
         h = wrapping_mul(h ^ UInt64(str_byte(s, i)), FNV_PRIME);
         i = i + 1;
     }

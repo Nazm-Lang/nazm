@@ -866,6 +866,18 @@ impl<'l, 'a> Fx<'l, 'a> {
     }
 
     /// Read a value of type `t` at `addr` into local `dst`, taking a reference of its own.
+    /// What [`Self::read_owned`] reads, without the reference it takes.
+    fn read_borrowed(&mut self, dst: mir::LocalId, addr: V, t: Ty) {
+        if in_memory(t) {
+            let d = self.addr(dst);
+            let n = self.size(t);
+            self.copy(d, addr, n);
+        } else {
+            let v = self.load(class(t), addr, 0);
+            self.set(dst, v);
+        }
+    }
+
     fn read_owned(&mut self, dst: mir::LocalId, addr: V, t: Ty) {
         if in_memory(t) {
             let d = self.addr(dst);
@@ -1395,6 +1407,13 @@ impl<'l, 'a> Fx<'l, 'a> {
                 let (off, t) = self.field_offset(*field);
                 let at = self.ptr_off(b, i64::from(off));
                 self.read_owned(dst, at, t);
+            }
+            // Borrowed (R1, 5b.9): the field's bits, and no reference taken.
+            mir::Rvalue::FieldBorrow { base, field } => {
+                let b = self.place(base);
+                let (off, t) = self.field_offset(*field);
+                let at = self.ptr_off(b, i64::from(off));
+                self.read_borrowed(dst, at, t);
             }
             mir::Rvalue::Payload {
                 base,

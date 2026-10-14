@@ -125,12 +125,15 @@ pub fn module(m: &Module) -> String {
     );
     let _ = writeln!(out, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
     if m.symbols.iter().any(|s| s.name == "nz.failed_now") {
-        let _ = writeln!(out, "@nz.failed = external thread_local global i1");
+        let _ = writeln!(out, "@nz.failed = external hidden thread_local global i1");
     }
     // The stack check, inlined (the speed milestone): the limit is read here and the runtime
     // called only when it is unset or crossed.
     if m.symbols.iter().any(|s| s.name == "nz.stack_check") {
-        let _ = writeln!(out, "@nz.stack_limit = external thread_local global i64");
+        let _ = writeln!(
+            out,
+            "@nz.stack_limit = external hidden thread_local global i64"
+        );
         let _ = writeln!(out, "declare ptr @llvm.frameaddress.p0(i32)");
     }
     for (i, s) in m.symbols.iter().enumerate() {
@@ -149,9 +152,17 @@ pub fn module(m: &Module) -> String {
                 let _ = writeln!(out, "declare {} {}({params})", ret_ty(sig), name(m, id));
             }
             SymKind::Data { class } => {
+                // The runtime's state is `hidden` in the image this unit is linked into, so it is
+                // addressed directly rather than through the global offset table (the speed
+                // milestone); a C library's data keeps default visibility.
+                let vis = if s.name.starts_with("nz.") {
+                    "hidden "
+                } else {
+                    ""
+                };
                 let _ = writeln!(
                     out,
-                    "{} = external global {}",
+                    "{} = external {vis}global {}",
                     name(m, id),
                     ty(class.unwrap_or(Class::I8))
                 );

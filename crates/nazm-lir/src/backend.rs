@@ -417,7 +417,7 @@ impl Backend for LlvmText {
             ir.lines()
                 .map(|l| {
                     if l.starts_with('@')
-                        && l.contains(" = external thread_local global ")
+                        && l.contains(" thread_local global ")
                         && (self.target.os == Os::None || one_thread(l))
                     {
                         l.replacen(" thread_local ", " ", 1)

@@ -318,6 +318,18 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *Word frequency at 195.5 ms* (5b.9; `docs/performance.md`). The idiomatic
+5b.10 program went from 531 to 195.5 ms (Apple M1 Pro, hyperfine median of 20): `@std/text`'s
+`text_split` compares a slice only where the first byte matches and `text_lines` is one pass;
+`@std/hashmap` remembers the entry `m[k]` found so `m[k] += n` writes without a second probe, and
+reads its vectors once a probe; MIR borrows a field of a local read only to be an operand
+(`Rvalue::FieldBorrow`: no reference taken or given back, left out of the unwind block's drops, and
+the validator refusing a drop or move of one); the LLVM backend declares the runtime's state
+`hidden`, so it is addressed without the global offset table. Evidence:
+`crates/nazm-cli/tests/borrowed_fields.rs` — a borrowed field live across a failure, every
+implementation reclaiming everything; `named_methods.rs` — a remembered entry never another key's,
+nor surviving a removal; lines and splits at their edges. Seven mutants.
+
 **R1 (2026-10-14)** · *One list type* (`spec.md`, *Sequences are shared, mutable, and never freed*;
 5b.18). `Ints` and `Strs` resolve to `Vec[Int]` and `Vec[Str]` — interned before any type is
 resolved, in the built-ins' signatures and when an interface is read — and are shown by those

@@ -62,10 +62,13 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [ ] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of
       one thread, known from `main`'s authority, keeping its failure state and stack limit in plain
       globals: 68.3 ms
-- [ ] 5b.9 Word frequency over 2,000,000 words ≤ 200 ms (453 before; Go 127, C 123): integer text
+- [x] 5b.9 Word frequency over 2,000,000 words ≤ 200 ms (453 before; Go 127, C 123): integer text
       without `snprintf`, fewer allocations, the hash map's probe, retains and releases — 392 ms,
       then 222 ms (integer text, the map's table of positions, one string per interpolated integer,
-      inlined reference counting)
+      inlined reference counting); for the idiomatic 5b.10 program (`lines()`, `split`, `m[w] += 1`):
+      531 ms, then 195.5 ms (2026-10-14: `text_split` and `text_lines` without a slice per byte,
+      the map remembering the entry `m[k]` found, its vectors read once a probe, a field read as an
+      operand borrowed in MIR, the runtime's state addressed directly)
 - [ ] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev
 - [x] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
       never accepted it; a grammar `@example` of it, so the two cannot drift again
