@@ -2607,7 +2607,7 @@ fn the_nazm_written_compiler_compiles_requirements_with_the_same_memory_semantic
 /// puts it or between the two project modules.
 fn build_layout_harness(dir: &Path) -> PathBuf {
     common::require_containment("analyse.nz");
-    for f in ["lex.nz", "parse.nz", "module.nz", "analyse.nz"] {
+    for f in ["diag.nz", "lex.nz", "parse.nz", "module.nz", "analyse.nz"] {
         std::fs::copy(repo_root().join("compiler").join(f), dir.join(f)).expect("copy");
     }
     std::fs::write(
