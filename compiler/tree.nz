@@ -9,14 +9,18 @@ use "syntax.nz";
 use "lex.nz";
 use "diag.nz";
 
+// A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
+// string's value on one line).
+fn nl() -> Str { str_from_byte(10) }
+
 fn main(io: IoCap) -> Int {
     if args_count() < 1 {
-        eprint("usage: tree FILE\n");
+        eprint(str_concat("usage: tree FILE", nl()));
         exit_with(2);
     }
     let path = arg(0);
     if file_exists(path) == false {
-        eprint(str_concat(str_concat("cannot read ", path), "\n"));
+        eprint(str_concat(str_concat("cannot read ", path), nl()));
         exit_with(2);
     }
     let src = read_file(path);
@@ -25,7 +29,7 @@ fn main(io: IoCap) -> Int {
     let program = sx_parse_source(src, t, d);
     let out = strs_new();
     sx_print(t, program, 0, out, strs_new());
-    strs_push(out, "\n");
+    strs_push(out, nl());
     let mut i = 0;
     while i < dg_len(d) {
         strs_push(out, "error ");
@@ -36,7 +40,7 @@ fn main(io: IoCap) -> Int {
         strs_push(out, int_to_str(ints_get(d.end, i)));
         strs_push(out, " ");
         strs_push(out, lex_esc(strs_get(d.message, i)));
-        strs_push(out, "\n");
+        strs_push(out, nl());
         i = i + 1;
     }
     print(str_join(out, ""));
