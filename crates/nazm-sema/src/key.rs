@@ -109,6 +109,13 @@ impl ModuleKey {
         self.0.starts_with("@std/")
     }
 
+    /// Whether this is a module of the program itself (R1.5, D8): neither a standard module, the
+    /// prelude, nor a package's — each of those keys carries an `@`, which no relative path does.
+    #[must_use]
+    pub fn is_program(&self) -> bool {
+        !self.0.contains('@')
+    }
+
     /// Whether this is the core prelude's key.
     #[must_use]
     pub fn is_prelude(&self) -> bool {
