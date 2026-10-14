@@ -63,9 +63,14 @@ compare_tests() {
         note_differ "the tree's nazm did not build: $(tail -1 "$log/build.err")"
         return
     fi
-    "$HARNESS_NAZM" test "$here/tests/lib_self.nz" >"$log/self.out" 2>&1
-    if [ $? -eq 0 ]; then note_agree "lib_self ($(tail -1 "$log/self.out"))"; else
-        note_differ "lib_self: $(grep FAIL "$log/self.out" | head -3)"; fi
+    # The harness's own tests: the library and the mutation core.
+    for t in "$here"/tests/*_self.nz; do
+        local own
+        own=$(basename "$t" .nz)
+        "$HARNESS_NAZM" test "$t" >"$log/$own.out" 2>&1
+        if [ $? -eq 0 ]; then note_agree "$own ($(tail -1 "$log/$own.out"))"; else
+            note_differ "$own: $(grep FAIL "$log/$own.out" | head -3)"; fi
+    done
     for f in "$here"/cli/*.nz; do
         local file bin
         file=$(basename "$f" .nz)
