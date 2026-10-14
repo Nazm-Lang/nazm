@@ -1,0 +1,110 @@
+// The interpreter's data: values, the program it loaded, and the machine that runs it
+// (`openspec/changes/r4-interpreter/design.md`, D2–D4).
+
+/// A run-time value. `Unset` is a slot not yet bound, or bound in a region since left.
+///
+/// A record, an enum value and an array are immutable aggregates, as the language makes them;
+/// a `Str` is a view (`s`) of a backing, `obj` the heap object that counts it (0 for an immortal
+/// one: a literal or an argument) and `start` where the view begins in it. Every handle is
+/// `Ref(obj)`, an index into the heap.
+pub enum V {
+    Unset,
+    Int(v: Int),
+    Bool(v: Bool),
+    Str(s: Str, obj: Int, start: Int),
+    Rec(def: Int, fields: List[V]),
+    Enm(def: Int, variant: Int, fields: List[V]),
+    Arr(items: List[V]),
+    Ref(obj: Int),
+    Cap(kind: Int),
+    Num(kind: Int, v: Int128),
+    Flt(kind: Int, v: Float64),
+}
+
+/// The loaded program: its code, as parallel arrays, and its tables.
+pub struct Prog {
+    // One instruction per index: an opcode and three operands, and the span it reports at.
+    op: Ints,
+    a: Ints,
+    b: Ints,
+    c: Ints,
+    smod: Ints,
+    slo: Ints,
+    shi: Ints,
+    // Operand lists the instructions point into: a record's field positions, a match's arms.
+    aux: Ints,
+    // Functions, by index: the name a diagnostic gives, the first instruction, the number of
+    // locals and of parameters, whether it is a closure's body, and its captures' slots (a run of
+    // `aux`: count, then slots).
+    fname: Strs,
+    fkey: Strs,
+    fentry: Ints,
+    flocals: Ints,
+    fparams: Ints,
+    fclosure: Ints,
+    fcapt: Ints,
+    // Constants, one table for the program.
+    consts: Vec[V],
+    // Interned strings: definition keys and types.
+    names: Strs,
+    // Module keys, by index; a span's module is one.
+    mods: Strs,
+    // The root's `main`, by function index.
+    entry: Int,
+}
+
+/// The heap: every object a handle names (D4). `kind` 0 is a free entry.
+pub struct Heap {
+    kind: Ints,
+    rc: Ints,
+    // A grown string's room; a function value's function.
+    room: Ints,
+    items: Vec[Vec[V]],
+    free: Ints,
+    // allocated and reclaimed, per class: sequences, strings, channels, closures.
+    counts: Ints,
+    // The release in progress: values whose references are being given up.
+    work: Vec[V],
+    busy: Ints,
+    // The storage of every object that has none: one empty sequence, never written.
+    none: Vec[V],
+}
+
+/// One task's stacks (D3) and the run's state.
+pub struct Vm {
+    ops: Vec[V],
+    slots: Vec[V],
+    // Per frame: the function, the return address, the slot base and the operand base.
+    frames: Ints,
+    heap: Heap,
+    // [iterations left, max depth, depth, calls, failed]
+    st: Ints,
+    // A failure: code, message, help; and its span: module, start, end.
+    err: Strs,
+    errat: Ints,
+    args: Strs,
+}
+
+// Object kinds.
+pub const K_FREE: Int = 0
+pub const K_STR: Int = 1
+pub const K_GROWN: Int = 2
+pub const K_SEQ: Int = 3
+pub const K_BYTES: Int = 4
+pub const K_CHAN: Int = 5
+pub const K_FUNC: Int = 6
+pub const K_ATOMIC: Int = 7
+pub const K_HANDLE: Int = 8
+
+// The counters of the memory report.
+pub const C_SEQ: Int = 0
+pub const C_STR: Int = 2
+pub const C_CHAN: Int = 4
+pub const C_CLO: Int = 6
+
+// `Vm.st`.
+pub const ST_ITER: Int = 0
+pub const ST_MAXDEPTH: Int = 1
+pub const ST_DEPTH: Int = 2
+pub const ST_CALLS: Int = 3
+pub const ST_FAILED: Int = 4

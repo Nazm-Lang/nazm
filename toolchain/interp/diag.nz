@@ -1,0 +1,57 @@
+// A run-time failure, rendered as `nazm_diag::Diagnostic::render` renders it
+// (`crates/nazm-diag/src/lib.rs`): message, location, source line, caret and help.
+
+/// Whether byte `b` begins a UTF-8 character (is not a continuation byte).
+fn starts_char(b: Int) -> Bool {
+    b < 128 || b >= 192
+}
+
+fn chars(s: Str, from: Int, to: Int) -> Int {
+    let mut n = 0
+    for i in from..to {
+        if starts_char(str_byte(s, i)) { n += 1 }
+    }
+    n
+}
+
+fn repeat(s: Str, n: Int) -> Str {
+    let mut out = ""
+    for i in 0..n { out = out + s }
+    out
+}
+
+/// The text of `error[CODE]: MESSAGE` and what follows it, for a span `lo..hi` of `text`, the file
+/// a reader knows as `file`.
+pub fn render(code: Str, message: Str, help: Str, file: Str, text: Str, lo: Int, hi: Int) -> Str {
+    let n = str_len(text)
+    let start = if lo > n { n } else { lo }
+    // The line the span starts on, from 1, and where it begins.
+    let mut line = 1
+    let mut line_start = 0
+    for i in 0..start {
+        if str_byte(text, i) == 10 {
+            line += 1
+            line_start = i + 1
+        }
+    }
+    let mut line_end = line_start
+    while line_end < n && str_byte(text, line_end) != 10 { line_end += 1 }
+    let column = chars(text, line_start, start) + 1
+    let source = str_slice(text, line_start, line_end)
+    let gutter = int_to_str(line)
+    let pad = repeat(" ", str_len(gutter))
+    let caret_col = column - 1
+    let width = if hi - lo > 1 { hi - lo } else { 1 }
+    let total = chars(source, 0, str_len(source))
+    let remaining = if total - caret_col > 1 { total - caret_col } else { 1 }
+    let carets = if width < remaining { width } else { remaining }
+    let mut out = f"error[{code}]: {message}\n"
+    out = out + f"  --> {file}:{line}:{column}\n"
+    out = out + f"{pad} |\n"
+    out = out + f"{gutter} | {source}\n"
+    out = out + f"{pad} | " + repeat(" ", caret_col) + repeat("^", carets) + f" {message}\n"
+    if help != "" {
+        out = out + f"{pad} = help: {help}\n"
+    }
+    out
+}

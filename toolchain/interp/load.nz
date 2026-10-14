@@ -1,0 +1,752 @@
+// Load: `nazm core-ir --json` text to the flat code (`openspec/changes/r4-interpreter/design.md`,
+// D2). The JSON tree is walked once; structured control flow becomes jumps, and every exit from a
+// region — falling through, `break`, `continue` — releases the slots the region owns, as the Rust
+// interpreter's `block` does on every exit. `return` releases the whole frame (`OP_RET`).
+
+use "@std/json"
+use "@std/hash"
+use "@std/hashmap"
+use "types.nz"
+use "ops.nz"
+use "names.nz"
+
+/// What the lowering keeps while it walks: the document, the program being built, and the static
+/// shape of the code — how deep the operand stack is, which regions are open, which loops.
+struct L {
+    doc: JsonDoc,
+    p: Prog,
+    fmap: HashMap[Str, Int],
+    imap: HashMap[Str, Int],
+    bmap: HashMap[Str, Int],
+    mmap: HashMap[Str, Int],
+    // This function's constants: its constant id to the program's.
+    cmap: Ints,
+    // [operand depth]
+    sp: Ints,
+    // Open regions: where each one's owned slots start in `rlocals`.
+    regs: Ints,
+    rlocals: Ints,
+    // By loop id: the region depth its body opens at, the operand depth, and its head.
+    lreg: Ints,
+    lsp: Ints,
+    lhead: Ints,
+    // `break` jumps to patch: the instruction and its loop.
+    brk: Ints,
+    brkloop: Ints,
+    errs: Strs,
+}
+
+// --- JSON access --------------------------------------------------------------------------------
+
+fn g(l: L, n: Int, key: Str) -> Int {
+    match json_get(l.doc, n, key) {
+        Some(v) => v,
+        None => 0 - 1,
+    }
+}
+
+fn gs(l: L, n: Int, key: Str) -> Str {
+    let k = g(l, n, key)
+    if k < 0 { return "" }
+    match json_str(l.doc, k) {
+        Some(s) => s,
+        None => "",
+    }
+}
+
+fn gi(l: L, n: Int, key: Str) -> Int {
+    let k = g(l, n, key)
+    if k < 0 { return 0 }
+    match json_int(l.doc, k) {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+fn len(l: L, n: Int) -> Int {
+    if n < 0 { 0 } else { json_len(l.doc, n) }
+}
+
+fn nth(l: L, n: Int, i: Int) -> Int {
+    match json_at(l.doc, n, i) {
+        Some(v) => v,
+        None => 0 - 1,
+    }
+}
+
+fn is_null(l: L, n: Int) -> Bool {
+    n < 0 || json_kind(l.doc, n) == "null"
+}
+
+fn defect(l: L, what: Str) {
+    strs_push(l.errs, what)
+}
+
+// --- interning ---------------------------------------------------------------------------------
+
+/// The index of `s` among the program's interned names.
+pub fn intern(p: Prog, m: HashMap[Str, Int], s: Str) -> Int {
+    match hashmap_get(m, s) {
+        Some(i) => i,
+        None => {
+            let i = strs_len(p.names)
+            strs_push(p.names, s)
+            hashmap_set(m, s, i)
+            i
+        },
+    }
+}
+
+fn name(l: L, s: Str) -> Int {
+    intern(l.p, l.imap, s)
+}
+
+// --- spans -------------------------------------------------------------------------------------
+
+/// A span's text, `MODULE:START..END`, as (module, start, end); the module is -1 for none.
+fn span_of(l: L, s: Str) -> (Int, Int, Int) {
+    let n = str_len(s)
+    let mut colon = 0 - 1
+    let mut i = n - 1
+    while i >= 0 {
+        if str_byte(s, i) == 58 {
+            colon = i
+            break
+        }
+        i -= 1
+    }
+    if colon < 0 { return (0 - 1, 0, 0) }
+    let module = str_slice(s, 0, colon)
+    let mut j = colon + 1
+    let mut lo = 0
+    while j < n && str_byte(s, j) != 46 {
+        lo = lo * 10 + (str_byte(s, j) - 48)
+        j += 1
+    }
+    j += 2
+    let mut hi = 0
+    while j < n {
+        hi = hi * 10 + (str_byte(s, j) - 48)
+        j += 1
+    }
+    let m = match hashmap_get(l.mmap, module) {
+        Some(i) => i,
+        None => {
+            let i = strs_len(l.p.mods)
+            strs_push(l.p.mods, module)
+            hashmap_set(l.mmap, module, i)
+            i
+        },
+    }
+    (m, lo, hi)
+}
+
+/// The span of node `n`, or `fallback` where it has none.
+fn here(l: L, n: Int, fallback: (Int, Int, Int)) -> (Int, Int, Int) {
+    let s = gs(l, n, "at")
+    if s == "" { fallback } else { span_of(l, s) }
+}
+
+// --- emitting ----------------------------------------------------------------------------------
+
+fn emit(l: L, op: Int, a: Int, b: Int, c: Int, at: (Int, Int, Int)) -> Int {
+    let p = l.p
+    let (m, lo, hi) = at
+    ints_push(p.op, op)
+    ints_push(p.a, a)
+    ints_push(p.b, b)
+    ints_push(p.c, c)
+    ints_push(p.smod, m)
+    ints_push(p.slo, lo)
+    ints_push(p.shi, hi)
+    ints_len(p.op) - 1
+}
+
+fn pc(l: L) -> Int {
+    ints_len(l.p.op)
+}
+
+fn patch(l: L, at: Int, target: Int) {
+    ints_set(l.p.a, at, target)
+}
+
+fn sp(l: L) -> Int {
+    ints_get(l.sp, 0)
+}
+
+fn set_sp(l: L, n: Int) {
+    ints_set(l.sp, 0, n)
+}
+
+fn aux(l: L, v: Int) {
+    ints_push(l.p.aux, v)
+}
+
+// --- regions -----------------------------------------------------------------------------------
+
+fn open(l: L, owns: Int) {
+    ints_push(l.regs, ints_len(l.rlocals))
+    for i in 0..len(l, owns) {
+        ints_push(l.rlocals, json_int_or(l, nth(l, owns, i)))
+    }
+}
+
+fn json_int_or(l: L, n: Int) -> Int {
+    match json_int(l.doc, n) {
+        Some(v) => v,
+        None => 0,
+    }
+}
+
+/// Close the innermost region, releasing what it owns.
+fn close(l: L, at: (Int, Int, Int)) {
+    let start = ints_pop(l.regs)
+    let n = ints_len(l.rlocals)
+    for i in start..n {
+        let o = emit(l, OP_RELEASE, ints_get(l.rlocals, i), 0, 0, at)
+    }
+    while ints_len(l.rlocals) > start {
+        let x = ints_pop(l.rlocals)
+    }
+}
+
+/// Release every region opened since region depth `depth`, innermost first, without closing them:
+/// what a transfer out of them does.
+fn leave(l: L, depth: Int, at: (Int, Int, Int)) {
+    let mut r = ints_len(l.regs) - 1
+    while r >= depth {
+        let start = ints_get(l.regs, r)
+        let end = if r + 1 < ints_len(l.regs) { ints_get(l.regs, r + 1) } else { ints_len(l.rlocals) }
+        for i in start..end {
+            let o = emit(l, OP_RELEASE, ints_get(l.rlocals, i), 0, 0, at)
+        }
+        r -= 1
+    }
+}
+
+// --- blocks and statements ---------------------------------------------------------------------
+
+/// A region: its statements and, when `value`, its tail, which is pushed.
+fn block(l: L, b: Int, value: Bool, outer: (Int, Int, Int)) {
+    let at = here(l, b, outer)
+    open(l, g(l, b, "owns"))
+    let stmts = g(l, b, "stmts")
+    for i in 0..len(l, stmts) {
+        stmt(l, nth(l, stmts, i), at)
+    }
+    if value {
+        let tail = g(l, b, "tail")
+        if !is_null(l, tail) {
+            expr(l, tail, at)
+        } else {
+            // Every path transferred: nothing arrives here, but the shape says a value did.
+            set_sp(l, sp(l) + 1)
+        }
+    }
+    close(l, at)
+}
+
+fn stmt(l: L, s: Int, outer: (Int, Int, Int)) {
+    let op = gs(l, s, "op")
+    let at = here(l, s, outer)
+    if op == "let" {
+        expr(l, g(l, s, "value"), at)
+        let o = emit(l, OP_STORE, gi(l, s, "local"), 0, 0, at)
+        set_sp(l, sp(l) - 1)
+    } else if op == "eval" {
+        expr(l, g(l, s, "value"), at)
+        let o = emit(l, OP_POP, 0, 0, 0, at)
+        set_sp(l, sp(l) - 1)
+    } else if op == "assign" {
+        assign(l, s, at)
+    } else if op == "if" {
+        expr(l, g(l, s, "cond"), at)
+        let jf = emit(l, OP_JF, 0, 0, 0, at)
+        set_sp(l, sp(l) - 1)
+        block(l, g(l, s, "then"), false, at)
+        let other = g(l, s, "else")
+        if is_null(l, other) {
+            patch(l, jf, pc(l))
+        } else {
+            let j = emit(l, OP_JMP, 0, 0, 0, at)
+            patch(l, jf, pc(l))
+            block(l, other, false, at)
+            patch(l, j, pc(l))
+        }
+    } else if op == "match" {
+        matching(l, s, false, at)
+    } else if op == "loop" {
+        looping(l, s, at)
+    } else if op == "block" {
+        block(l, g(l, s, "body"), false, at)
+    } else if op == "return" {
+        expr(l, g(l, s, "value"), at)
+        let o = emit(l, OP_RET, 0, 0, 0, at)
+        set_sp(l, sp(l) - 1)
+    } else if op == "break" || op == "continue" {
+        let id = gi(l, s, "loop")
+        leave(l, ints_get(l.lreg, id), at)
+        let extra = sp(l) - ints_get(l.lsp, id)
+        if extra > 0 {
+            let o = emit(l, OP_DROPN, extra, 0, 0, at)
+        }
+        if op == "break" {
+            ints_push(l.brk, emit(l, OP_JMP, 0, 0, 0, at))
+            ints_push(l.brkloop, id)
+        } else {
+            let o = emit(l, OP_JMP, ints_get(l.lhead, id), 0, 0, at)
+        }
+    } else if op == "scope" {
+        let o = emit(l, OP_SCOPE, 0, 0, 0, at)
+        block(l, g(l, s, "body"), false, at)
+        let j = emit(l, OP_JOIN, 0, 0, 0, at)
+    } else if op == "spawn" {
+        let args = g(l, s, "args")
+        for i in 0..len(l, args) {
+            expr(l, nth(l, args, i), at)
+        }
+        let o = emit(l, OP_SPAWN, callee(l, gs(l, s, "callee")), len(l, args), 0, at)
+        set_sp(l, sp(l) - len(l, args))
+    } else {
+        defect(l, f"a statement `{op}` this interpreter does not know")
+    }
+}
+
+fn looping(l: L, s: Int, at: (Int, Int, Int)) {
+    let id = gi(l, s, "loop")
+    while ints_len(l.lreg) <= id {
+        ints_push(l.lreg, 0)
+        ints_push(l.lsp, 0)
+        ints_push(l.lhead, 0)
+    }
+    let head = pc(l)
+    ints_set(l.lhead, id, head)
+    ints_set(l.lreg, id, ints_len(l.regs))
+    ints_set(l.lsp, id, sp(l))
+    let mark = ints_len(l.brk)
+    let cond = g(l, s, "cond")
+    expr(l, cond, at)
+    let jf = emit(l, OP_JF, 0, 0, 0, here(l, cond, at))
+    set_sp(l, sp(l) - 1)
+    let i = emit(l, OP_ITER, 0, 0, 0, at)
+    block(l, g(l, s, "body"), false, at)
+    let back = emit(l, OP_JMP, head, 0, 0, at)
+    let end = pc(l)
+    patch(l, jf, end)
+    // This loop's `break`s jump here; an enclosing loop's stay listed for it.
+    let keep_at = ints_new()
+    let keep_loop = ints_new()
+    for k in mark..ints_len(l.brk) {
+        if ints_get(l.brkloop, k) == id {
+            patch(l, ints_get(l.brk, k), end)
+        } else {
+            ints_push(keep_at, ints_get(l.brk, k))
+            ints_push(keep_loop, ints_get(l.brkloop, k))
+        }
+    }
+    while ints_len(l.brk) > mark {
+        let x = ints_pop(l.brk)
+        let y = ints_pop(l.brkloop)
+    }
+    for k in 0..ints_len(keep_at) {
+        ints_push(l.brk, ints_get(keep_at, k))
+        ints_push(l.brkloop, ints_get(keep_loop, k))
+    }
+}
+
+/// `local = value`, `local.path = value`, and `local = str_append(local, tail)` (D4).
+fn assign(l: L, s: Int, at: (Int, Int, Int)) {
+    let local = gi(l, s, "local")
+    let path = g(l, s, "path")
+    let value = g(l, s, "value")
+    if len(l, path) == 0 && gs(l, value, "op") == "builtin" && gs(l, value, "builtin") == "str_append" {
+        let args = g(l, value, "args")
+        let first = nth(l, args, 0)
+        if gs(l, first, "op") == "local" && gi(l, first, "local") == local {
+            expr(l, nth(l, args, 1), at)
+            let o = emit(l, OP_APPEND, local, 0, 0, here(l, value, at))
+            set_sp(l, sp(l) - 1)
+            return
+        }
+    }
+    expr(l, value, at)
+    if len(l, path) == 0 {
+        let o = emit(l, OP_STORE, local, 0, 0, at)
+        set_sp(l, sp(l) - 1)
+        return
+    }
+    // The path: a field (0, field) or an index (1, length) per step, outermost first.
+    let start = ints_len(l.p.aux)
+    aux(l, len(l, path))
+    let mut nidx = 0
+    for i in 0..len(l, path) {
+        let step = nth(l, path, i)
+        let index = g(l, step, "index")
+        if index >= 0 {
+            expr(l, index, at)
+            nidx += 1
+            aux(l, 1)
+            aux(l, gi(l, step, "len"))
+        } else {
+            aux(l, 0)
+            aux(l, gi(l, step, "field"))
+        }
+    }
+    let o = emit(l, OP_ASSIGN, local, start, nidx, at)
+    set_sp(l, sp(l) - 1 - nidx)
+}
+
+/// `match`: the scrutinee stays on the operand stack while its arm runs, as the Rust interpreter
+/// holds it until the arm's value is established.
+fn matching(l: L, m: Int, value: Bool, at: (Int, Int, Int)) {
+    expr(l, g(l, m, "scrutinee"), at)
+    let arms = g(l, m, "arms")
+    let n = len(l, arms)
+    let table = ints_len(l.p.aux)
+    aux(l, n)
+    for i in 0..n {
+        aux(l, gi(l, nth(l, arms, i), "variant"))
+        aux(l, 0)
+    }
+    let o = emit(l, OP_MATCH, table, 0, 0, at)
+    let base = sp(l)
+    let ends = ints_new()
+    for i in 0..n {
+        let arm = nth(l, arms, i)
+        ints_set(l.p.aux, table + 2 + 2 * i, pc(l))
+        set_sp(l, base)
+        let arm_at = here(l, arm, at)
+        let bindings = g(l, arm, "bindings")
+        for k in 0..len(l, bindings) {
+            let b = nth(l, bindings, k)
+            let x = emit(l, OP_BIND, gi(l, b, "field"), gi(l, b, "local"), 0, arm_at)
+        }
+        block(l, g(l, arm, "body"), value, arm_at)
+        if value {
+            let x = emit(l, OP_SWAPDROP, 0, 0, 0, arm_at)
+        } else {
+            let x = emit(l, OP_POP, 0, 0, 0, arm_at)
+        }
+        ints_push(ends, emit(l, OP_JMP, 0, 0, 0, arm_at))
+    }
+    for i in 0..ints_len(ends) {
+        patch(l, ints_get(ends, i), pc(l))
+    }
+    set_sp(l, if value { base } else { base - 1 })
+}
+
+// --- expressions -------------------------------------------------------------------------------
+
+fn callee(l: L, key: Str) -> Int {
+    match hashmap_get(l.fmap, key) {
+        Some(i) => i,
+        None => {
+            defect(l, f"a call of `{key}`, which is not in the program")
+            0
+        },
+    }
+}
+
+fn arith_op(op: Str) -> Int {
+    if op == "+" { 0 } else if op == "-" { 1 } else if op == "*" { 2 } else if op == "/" { 3 } else if op == "%" { 4 } else { 0 - 1 }
+}
+
+fn bits_op(op: Str) -> Int {
+    if op == "&" { 0 } else if op == "|" { 1 } else if op == "^" { 2 } else if op == "<<" { 3 } else if op == ">>" { 4 } else { 0 - 1 }
+}
+
+fn cmp_op(op: Str) -> Int {
+    if op == "==" { 0 } else if op == "!=" { 1 } else if op == "<" { 2 } else if op == "<=" { 3 } else if op == ">" { 4 } else if op == ">=" { 5 } else { 0 - 1 }
+}
+
+fn law(s: Str) -> Int {
+    if s == "int" { 0 } else if s == "bool" { 1 } else if s == "bytes" { 2 } else if s == "structural" { 3 } else if s == "parametric" { 4 } else { 5 }
+}
+
+/// Initialisers: each value pushed in the order written, its field recorded in `aux`.
+fn inits(l: L, fields: Int, at: (Int, Int, Int)) {
+    for i in 0..len(l, fields) {
+        let f = nth(l, fields, i)
+        expr(l, g(l, f, "value"), at)
+    }
+    for i in 0..len(l, fields) {
+        aux(l, gi(l, nth(l, fields, i), "field"))
+    }
+}
+
+/// One expression, leaving its value pushed.
+fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
+    let op = gs(l, e, "op")
+    let at = here(l, e, outer)
+    let s0 = sp(l)
+    if op == "const" {
+        let o = emit(l, OP_CONST, ints_get(l.cmap, gi(l, e, "const")), 0, 0, at)
+    } else if op == "local" {
+        let o = emit(l, OP_LOCAL, gi(l, e, "local"), 0, 0, at)
+    } else if op == "call" {
+        let args = g(l, e, "args")
+        for i in 0..len(l, args) {
+            expr(l, nth(l, args, i), at)
+        }
+        let o = emit(l, OP_CALL, callee(l, gs(l, e, "callee")), len(l, args), 0, at)
+    } else if op == "builtin" {
+        let args = g(l, e, "args")
+        for i in 0..len(l, args) {
+            expr(l, nth(l, args, i), at)
+        }
+        let bname = gs(l, e, "builtin")
+        let id = match hashmap_get(l.bmap, bname) {
+            Some(i) => i,
+            None => {
+                defect(l, f"the built-in `{bname}`, which this interpreter does not know")
+                0
+            },
+        }
+        let o = emit(l, OP_BUILTIN, id, len(l, args), name(l, gs(l, e, "type")), at)
+    } else if arith_op(op) >= 0 && g(l, e, "lhs") >= 0 {
+        expr(l, g(l, e, "lhs"), at)
+        expr(l, g(l, e, "rhs"), at)
+        let o = emit(l, OP_ARITH, arith_op(op), 0, 0, at)
+    } else if cmp_op(op) >= 0 {
+        expr(l, g(l, e, "lhs"), at)
+        expr(l, g(l, e, "rhs"), at)
+        let o = emit(l, OP_CMP, cmp_op(op), law(gs(l, e, "law")), name(l, gs(l, e, "operand")), at)
+    } else if bits_op(op) >= 0 {
+        expr(l, g(l, e, "lhs"), at)
+        expr(l, g(l, e, "rhs"), at)
+        let o = emit(l, OP_BITS, bits_op(op), 0, 0, at)
+    } else if op == "neg" {
+        expr(l, g(l, e, "operand"), at)
+        let o = emit(l, OP_NEG, 0, 0, 0, at)
+    } else if op == "~" {
+        expr(l, g(l, e, "operand"), at)
+        let o = emit(l, OP_COMPLEMENT, 0, 0, 0, at)
+    } else if op == "if" {
+        expr(l, g(l, e, "cond"), at)
+        let jf = emit(l, OP_JF, 0, 0, 0, at)
+        set_sp(l, s0)
+        block(l, g(l, e, "then"), true, at)
+        let j = emit(l, OP_JMP, 0, 0, 0, at)
+        patch(l, jf, pc(l))
+        set_sp(l, s0)
+        block(l, g(l, e, "else"), true, at)
+        patch(l, j, pc(l))
+    } else if op == "block" {
+        block(l, g(l, e, "body"), true, at)
+    } else if op == "match" {
+        matching(l, e, true, at)
+    } else if op == "record" {
+        let fields = g(l, e, "fields")
+        let start = ints_len(l.p.aux)
+        inits(l, fields, at)
+        let o = emit(l, OP_RECORD, name(l, gs(l, e, "type")), len(l, fields), start, at)
+    } else if op == "variant" {
+        let fields = g(l, e, "fields")
+        for i in 0..len(l, fields) {
+            expr(l, g(l, nth(l, fields, i), "value"), at)
+        }
+        let start = ints_len(l.p.aux)
+        aux(l, gi(l, e, "variant"))
+        aux(l, gi(l, e, "arity"))
+        for i in 0..len(l, fields) {
+            aux(l, gi(l, nth(l, fields, i), "field"))
+        }
+        let o = emit(l, OP_VARIANT, name(l, gs(l, e, "type")), len(l, fields), start, at)
+    } else if op == "field" {
+        expr(l, g(l, e, "base"), at)
+        let o = emit(l, OP_FIELD, gi(l, e, "field"), 0, 0, at)
+    } else if op == "array" {
+        let elems = g(l, e, "elems")
+        for i in 0..len(l, elems) {
+            expr(l, nth(l, elems, i), at)
+        }
+        let o = emit(l, OP_ARRAY, len(l, elems), 0, 0, at)
+    } else if op == "array-repeat" {
+        expr(l, g(l, e, "value"), at)
+        let o = emit(l, OP_ARRAYREP, gi(l, e, "count"), 0, 0, at)
+    } else if op == "index" {
+        expr(l, g(l, e, "base"), at)
+        expr(l, g(l, e, "index"), at)
+        let o = emit(l, OP_INDEX, 0, 0, 0, at)
+    } else if op == "convert" {
+        expr(l, g(l, e, "operand"), at)
+        let mode = gs(l, e, "mode")
+        let m = if mode == "wrapping" { 1 } else if mode == "saturating" { 2 } else { 0 }
+        let o = emit(l, OP_CONVERT, m, name(l, gs(l, e, "type")), 0, at)
+    } else if op == "fits" {
+        expr(l, g(l, e, "operand"), at)
+        let o = emit(l, OP_FITS, name(l, gs(l, e, "to")), 0, 0, at)
+    } else if op == "closure" {
+        let caps = g(l, e, "captures")
+        let start = ints_len(l.p.aux)
+        aux(l, len(l, caps))
+        for i in 0..len(l, caps) {
+            aux(l, json_int_or(l, nth(l, caps, i)))
+        }
+        let o = emit(l, OP_CLOSURE, callee(l, gs(l, e, "function")), 0, start, at)
+    } else if op == "fn_value" {
+        let o = emit(l, OP_FNVALUE, callee(l, gs(l, e, "function")), 0, 0, at)
+    } else if op == "call_indirect" {
+        expr(l, g(l, e, "callee"), at)
+        let args = g(l, e, "args")
+        for i in 0..len(l, args) {
+            expr(l, nth(l, args, i), at)
+        }
+        let o = emit(l, OP_CALLI, len(l, args), 0, 0, at)
+    } else if op == "call_trait" {
+        let args = g(l, e, "args")
+        for i in 0..len(l, args) {
+            expr(l, nth(l, args, i), at)
+        }
+        let o = emit(l, OP_CALLTRAIT, name(l, gs(l, e, "method")), name(l, gs(l, e, "self")), len(l, args), at)
+    } else {
+        defect(l, f"an expression `{op}` this interpreter does not know")
+        let o = emit(l, OP_DEFECT, 0, 0, 0, at)
+    }
+    set_sp(l, s0 + 1)
+}
+
+// --- constants ---------------------------------------------------------------------------------
+
+fn hex(b: Int) -> Int {
+    if b >= 97 { b - 87 } else if b >= 65 { b - 55 } else { b - 48 }
+}
+
+/// A `Str` constant's bytes: the printer writes `\xNN` for every byte of a string that is not
+/// UTF-8 or that contains `\x`, and the text itself otherwise.
+fn decode(s: Str) -> Str {
+    let n = str_len(s)
+    let mut escaped = false
+    for i in 0..n - 1 {
+        if str_byte(s, i) == 92 && str_byte(s, i + 1) == 120 {
+            escaped = true
+            break
+        }
+    }
+    if !escaped { return s }
+    let b = bytes_new(n / 4)
+    let mut i = 0
+    while i + 3 < n {
+        bytes_set(b, i / 4, UInt8(hex(str_byte(s, i + 2)) * 16 + hex(str_byte(s, i + 3))))
+        i += 4
+    }
+    bytes_to_str(b)
+}
+
+fn constant(l: L, c: Int) -> V {
+    let ty = gs(l, c, "type")
+    let v = g(l, c, "value")
+    if ty == "Int" {
+        V.Int(v: json_int_or(l, v))
+    } else if ty == "Bool" {
+        V.Bool(v: json_kind(l.doc, v) == "true" || json_bool_or(l, v))
+    } else if ty == "Str" {
+        V.Str(s: decode(gs(l, c, "value")), obj: 0, start: 0)
+    } else {
+        defect(l, f"a constant of type `{ty}`, which this interpreter does not load yet")
+        V.Int(v: 0)
+    }
+}
+
+fn json_bool_or(l: L, n: Int) -> Bool {
+    match json_bool(l.doc, n) {
+        Some(b) => b,
+        None => false,
+    }
+}
+
+// --- functions ---------------------------------------------------------------------------------
+
+fn function(l: L, f: Int, index: Int) {
+    let p = l.p
+    while ints_len(l.cmap) > 0 {
+        let x = ints_pop(l.cmap)
+    }
+    let consts = g(l, f, "consts")
+    for i in 0..len(l, consts) {
+        ints_push(l.cmap, vec_len(p.consts))
+        vec_push(p.consts, constant(l, nth(l, consts, i)))
+    }
+    ints_set(p.fentry, index, pc(l))
+    let at = here(l, f, (0 - 1, 0, 0))
+    let body = g(l, f, "body")
+    if body < 0 {
+        // A foreign function: the front end refuses a run that calls one (`N0385`).
+        let o = emit(l, OP_DEFECT, 0, 0, 0, at)
+        return
+    }
+    if ints_get(p.fclosure, index) == 1 {
+        // A closure's captures are the first slots its body owns, in capture order (N50): the
+        // lowering opens the body with them (`lower.rs`, `closure`). See `design.md`, *Requests*.
+        let owns = g(l, body, "owns")
+        ints_set(p.fcapt, index, ints_len(p.aux))
+        aux(l, len(l, owns))
+        for i in 0..len(l, owns) {
+            aux(l, json_int_or(l, nth(l, owns, i)))
+        }
+    }
+    set_sp(l, 0)
+    block(l, body, true, at)
+    let o = emit(l, OP_RET, 0, 0, 0, at)
+}
+
+/// The program `text` spells, or what kept it from loading.
+pub fn load(text: Str) -> Result[Prog, Str] {
+    let doc = match json_parse(text) {
+        Ok(d) => d,
+        Err(e) => { return Err(f"the Core IR is not JSON: {e}") },
+    }
+    let p = Prog(op: ints_new(), a: ints_new(), b: ints_new(), c: ints_new(),
+            smod: ints_new(), slo: ints_new(), shi: ints_new(), aux: ints_new(),
+            fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
+            fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
+            consts: vec_new[V](), names: strs_new(), mods: strs_new(), entry: 0 - 1)
+    let bmap = hashmap_new[Str, Int]()
+    let bnames = builtin_names()
+    for i in 0..strs_len(bnames) {
+        hashmap_set(bmap, strs_get(bnames, i), i)
+    }
+    let l = L(doc: doc, p: p, fmap: hashmap_new[Str, Int](), imap: hashmap_new[Str, Int](),
+            bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
+            regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
+            lhead: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new())
+    let root = json_root(doc)
+    if gs(l, root, "schema") != "nazm.core-ir/2" {
+        return Err(f"the Core IR is `{gs(l, root, "schema")}`, and this interpreter reads `nazm.core-ir/2`")
+    }
+    let fs = g(l, root, "functions")
+    // Every function first, so a call can name one defined later.
+    for i in 0..len(l, fs) {
+        let f = nth(l, fs, i)
+        let key = gs(l, f, "def")
+        hashmap_set(l.fmap, key, i)
+        strs_push(p.fkey, key)
+        strs_push(p.fname, gs(l, f, "name"))
+        ints_push(p.fentry, 0)
+        ints_push(p.flocals, len(l, g(l, f, "locals")))
+        ints_push(p.fparams, gi(l, f, "params"))
+        // A closure's body (N50) is named `outer#N`; its local 0 is the closure itself.
+        let closure = str_contains_byte(key, 35)
+        ints_push(p.fclosure, if closure { 1 } else { 0 })
+        ints_push(p.fcapt, 0)
+    }
+    for i in 0..len(l, fs) {
+        function(l, nth(l, fs, i), i)
+    }
+    if strs_len(l.errs) > 0 {
+        return Err(strs_get(l.errs, 0))
+    }
+    let entry = gs(l, root, "entry")
+    let e = if entry == "" { 0 - 1 } else { callee(l, entry) }
+    Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
+            fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
+            fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
+            entry: e))
+}
+
+fn str_contains_byte(s: Str, b: Int) -> Bool {
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == b { return true }
+    }
+    false
+}

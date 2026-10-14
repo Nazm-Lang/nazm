@@ -1,0 +1,158 @@
+// `interp`: the Nazm interpreter written in Nazm (R4, `openspec/changes/r4-interpreter/`).
+//
+//     interp [--max-iterations N] [--max-depth N] [--memory-report] [--result-report]
+//            CORE_IR.json ROOT.nz [-- ARGS...]
+//
+// Runs the checked program whose Core IR `nazm core-ir --json ROOT.nz` printed, as `nazm run ROOT.nz
+// -- ARGS...` does (`crates/nazm-cli/src/interpret.rs`): its output, its exit status, its run-time
+// failures rendered as `nazm` renders them, and the memory and result reports.
+//
+// The reports are asked for by flags, not by `NAZM_MEMORY_REPORT` and `NAZM_RESULT_REPORT`: this
+// interpreter is itself a compiled Nazm program, and its own runtime answers those two variables
+// about itself (`crates/nazm-runtime/src/core.rs`). Whoever runs it — the suite now, `nazm run` at
+// R5 — reads the variables and passes the flags (`design.md`, *Requests*).
+
+use "types.nz"
+use "load.nz"
+use "vm.nz"
+use "heap.nz"
+use "diag.nz"
+
+fn usage(out: OutCap) -> Int {
+    eprint("usage: interp [--max-iterations N] [--max-depth N] [--memory-report] [--result-report] CORE_IR.json ROOT.nz [-- ARGS...]\n")
+    64
+}
+
+fn parse_int(s: Str) -> Int {
+    let mut n = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b < 48 || b > 57 { return 0 - 1 }
+        n = n * 10 + (b - 48)
+    }
+    if str_len(s) == 0 { 0 - 1 } else { n }
+}
+
+/// The directory part of `path`, with its `/`, or `""`.
+fn dir_of(path: Str) -> Str {
+    let mut i = str_len(path) - 1
+    while i >= 0 {
+        if str_byte(path, i) == 47 { return str_slice(path, 0, i + 1) }
+        i -= 1
+    }
+    ""
+}
+
+/// The module a definition key names: what precedes its `::`.
+fn module_of(key: Str) -> Str {
+    for i in 0..str_len(key) - 1 {
+        if str_byte(key, i) == 58 && str_byte(key, i + 1) == 58 { return str_slice(key, 0, i) }
+    }
+    key
+}
+
+/// The failure, as `nazm run` writes it.
+fn report(out: OutCap, io: IoCap, p: Prog, vm: Vm, root: Str) {
+    let m = ints_get(vm.errat, 0)
+    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
+    let root_key = module_of(strs_get(p.fkey, p.entry))
+    let file = if key == root_key { root } else { dir_of(root) + key }
+    let text = if file_exists(file) { read_file(file) } else { "" }
+    eprint(render(strs_get(vm.err, 0), strs_get(vm.err, 1), strs_get(vm.err, 2), file, text,
+            ints_get(vm.errat, 1), ints_get(vm.errat, 2)))
+}
+
+/// The memory report's line (`interpret.rs`): allocated, reclaimed and live per class.
+fn memory_line(out: OutCap, h: Heap) {
+    let c = h.counts
+    let names = ["sequences", "strings", "channels", "closures"]
+    let mut line = "nazm-memory:"
+    for k in 0..4 {
+        let a = ints_get(c, 2 * k)
+        let r = ints_get(c, 2 * k + 1)
+        let live = a - r
+        line = line + f" {names[k]} allocated={a} reclaimed={r} live={live}"
+    }
+    eprint(line + "\n")
+}
+
+/// `main`'s value, as `nazm run` ends with it (`interpret.rs`, `end_with_result`).
+fn show(v: V) -> Str {
+    match v {
+        V.Int(v: x) => int_to_str(x),
+        V.Bool(v: b) => if b { "true" } else { "false" },
+        V.Str(s: s, obj: o, start: st) => s,
+        _ => "value",
+    }
+}
+
+fn main(out: OutCap, io: IoCap) -> Int {
+    let mut max_iterations = 10000000
+    let mut max_depth = 512
+    let positional = strs_new()
+    let program_args = strs_new()
+    let mut i = 0
+    let mut rest = false
+    let mut memory = false
+    let mut result_report = false
+    while i < args_count() {
+        let a = arg(i)
+        if rest {
+            strs_push(program_args, a)
+        } else if a == "--" {
+            rest = true
+        } else if a == "--memory-report" {
+            memory = true
+        } else if a == "--result-report" {
+            result_report = true
+        } else if a == "--max-iterations" && i + 1 < args_count() {
+            max_iterations = parse_int(arg(i + 1))
+            i += 1
+        } else if a == "--max-depth" && i + 1 < args_count() {
+            max_depth = parse_int(arg(i + 1))
+            i += 1
+        } else {
+            strs_push(positional, a)
+        }
+        i += 1
+    }
+    if strs_len(positional) != 2 || max_iterations < 0 || max_depth < 0 { return usage(out) }
+    let root = strs_get(positional, 1)
+    let p = match load(read_file(strs_get(positional, 0))) {
+        Ok(p) => p,
+        Err(e) => {
+            eprint(f"interp: {e}\n")
+            return 70
+        },
+    }
+    if p.entry < 0 {
+        eprint("error[N0201]: this program has no `main` function\n")
+        return 2
+    }
+    let vm = vm_new(max_iterations, max_depth, program_args)
+    let result = run(p, vm, out, io)
+    if memory {
+        memory_line(out, vm.heap)
+    }
+    if failed(vm) {
+        report(out, io, p, vm, root)
+        return 2
+    }
+    if result_report {
+        println(show(result))
+        return 0
+    }
+    match result {
+        V.Int(v: x) => {
+            if x < 0 || x > 255 {
+                eprint("error[N0416]: `main`'s result is an exit status, and this one is outside 0 to 255\n")
+                return 2
+            }
+            x
+        },
+        other => {
+            println(show(other))
+            0
+        },
+    }
+}
