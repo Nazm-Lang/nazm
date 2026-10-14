@@ -19,6 +19,10 @@ every comparison it can honestly win, as a milestone after the 0.10.0 publicatio
 - **Smaller binaries** — dead-stripping and unused standard functions left out.
 - **Fewer lines** — a prelude that imports the common standard modules, `top(n)`/`sort_by(key)` on
   maps, and expression-bodied functions (`fn f(n: Int) -> Int = …`).
+- **Syntax that is short and conventional** — result types with `:` (`fn fib(n: Int): Int`), inferred
+  for a private one-liner (`fn add(a: Int, b: Int) = a + b`); `[…]` a list by default; `{}` map
+  literals and `Map[K, V]`; `|a, b| a < b` closures; positional enum payloads and unprefixed variants;
+  `use std.json`; `List[Int]`; printing without passing `out` in your own program's functions.
 - **An honest table** — safety-equivalent rows (Rust with overflow checks, Zig ReleaseSafe, C with
   sanitizers), a safety column, and the comparison re-run.
 
