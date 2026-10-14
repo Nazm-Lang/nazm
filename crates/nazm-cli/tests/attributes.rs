@@ -86,7 +86,10 @@ fn the_profiles_held_decide_and_a_check_is_not_reused_across_them() {
     let held = nazm(d.path(), &["check", "--profile", "general", "prog.nz"]);
     assert_ne!(held.code, Some(0), "{}", held.stderr);
     assert!(held.stderr.contains("N0300"), "{}", held.stderr);
-    let run = nazm(d.path(), &["run", "--profile", "general", "prog.nz"]);
+    let run = nazm(
+        d.path(),
+        &["run", "--interpret", "--profile", "general", "prog.nz"],
+    );
     assert!(run.stderr.contains("N0300"), "{}", run.stderr);
     let again = nazm(d.path(), &["check", "prog.nz"]);
     assert_eq!(again.code, Some(0), "{}", again.stderr);

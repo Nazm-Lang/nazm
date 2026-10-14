@@ -23,7 +23,10 @@ use std::path::Path;
 /// The program at `dir/main` under the interpreter, then built and run by each backend at
 /// each optimisation level, with the memory report on.
 fn everywhere(dir: &Path, main: &str) -> Vec<(String, Ran)> {
-    let mut out = vec![("interpreter".to_owned(), nazm(dir, &["run", main]))];
+    let mut out = vec![(
+        "interpreter".to_owned(),
+        nazm(dir, &["run", "--interpret", main]),
+    )];
     for (label, backend, opt) in [
         ("llvm -O0", "llvm", "0"),
         ("llvm -O2", "llvm", "2"),
@@ -168,7 +171,7 @@ fn a_refused_escape_stops_the_program_before_anything_runs() {
         "fn main(out: OutCap) -> Int { print(\"ran\"); str_len(\"\\x80\") }\n",
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(1), "{}", r.stderr);
     assert!(!r.stdout.contains("ran"), "{}", r.stdout);
     assert!(r.stderr.contains("N0004"), "{}", r.stderr);
@@ -390,7 +393,7 @@ fn the_interpreter_keeps_its_own_limit() {
         "fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn main() -> Int { down(0) }\n",
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(r.stderr.contains("N0403"), "{}", r.stderr);
 }
 

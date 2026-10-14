@@ -374,7 +374,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
                 let (n, s) = (nazm.clone(), source.clone());
                 Box::new(move || {
                     let mut c = Command::new(&n);
-                    c.args(["run", &s]);
+                    c.args(["run", "--interpret", &s]);
                     c
                 })
             }),
@@ -468,7 +468,7 @@ pub(crate) fn run(mode: Mode, runs: usize) -> ExitCode {
         let exe = scratch.join(&name);
         let source = path.display().to_string();
         let mut interpret = Command::new(&nazm);
-        interpret.args(["run", &source]);
+        interpret.args(["run", "--interpret", &source]);
         memory.push(Memory {
             program: name.clone(),
             stage: "interpret",
@@ -707,7 +707,8 @@ fn verify(nazm: &Path, scratch: &Path, programs: &[PathBuf]) -> Result<(), Strin
             .trim()
             .to_owned();
 
-        let interpreted = output(Command::new(nazm).args(["run", &path.display().to_string()]));
+        let interpreted =
+            output(Command::new(nazm).args(["run", "--interpret", &path.display().to_string()]));
         if interpreted != expected {
             return Err(format!(
                 "{name}: `nazm run` produced {interpreted:?}, expected {expected:?}"

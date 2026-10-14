@@ -144,7 +144,7 @@ fn a_task_needs_a_boards_timer_to_itself() {
     // Nothing but a board has a scheduler.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), &periodic).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(r.stderr.contains("N0392"), "{}", r.stderr);
 }
 

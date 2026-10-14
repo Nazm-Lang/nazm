@@ -340,7 +340,7 @@ fn a_module_outside_the_source_root_declines_a_durable_identity() {
     let root = dir.path().join("app/main.nz");
 
     let ran = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .output()
         .expect("run");
     assert!(

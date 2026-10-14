@@ -81,7 +81,7 @@ fn every_tour_program_checks_formats_runs_and_builds_alike_under_both_backends()
         let out = nazm(&["fmt", "--check", src], &dir);
         assert_eq!(out.status.code(), Some(0), "fmt --check {file}: {out:?}");
 
-        let out = nazm(&["run", src], &dir);
+        let out = nazm(&["run", "--interpret", src], &dir);
         assert_eq!(out.status.code(), Some(0), "run {file}: {out:?}");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),

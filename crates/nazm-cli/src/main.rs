@@ -552,6 +552,7 @@ fn dispatch(command: Command) -> ExitCode {
             file,
             args,
             json,
+            interpret: _,
             max_iterations,
             max_depth,
             locked: _,

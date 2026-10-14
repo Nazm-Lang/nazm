@@ -56,10 +56,11 @@ fn write_program(body: &str) -> (tempfile::TempDir, PathBuf) {
 fn agrees(what: &str, src: &str, expected: &str) {
     let (dir, path) = write_program(src);
 
-    let interp = run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
-        .unwrap_or_else(|| {
-            panic!("{what}: `nazm run` deadlocked — it did not finish in {DEADLINE:?}")
-        });
+    let interp =
+        run_bounded(Command::new(NAZM).args(["run", "--interpret", path.to_str().unwrap()]))
+            .unwrap_or_else(|| {
+                panic!("{what}: `nazm run` deadlocked — it did not finish in {DEADLINE:?}")
+            });
     assert_eq!(
         interp.code,
         Some(0),
@@ -487,8 +488,9 @@ fn a_task_that_fails_ends_the_whole_program() {
         ran.stderr
     );
 
-    let interp = run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
-        .expect("`nazm run` did not finish");
+    let interp =
+        run_bounded(Command::new(NAZM).args(["run", "--interpret", path.to_str().unwrap()]))
+            .expect("`nazm run` did not finish");
     assert_eq!(
         interp.code, ran.code,
         "the interpreter and the executable must agree on the exit status"
@@ -604,7 +606,7 @@ fn failure_joins(what: &str, src: &str, code: &str, markers: &[&str]) {
     let mut runs: Vec<(String, Ran)> = Vec::new();
     runs.push((
         "interpreted".to_owned(),
-        run_bounded(Command::new(NAZM).args(["run", path.to_str().unwrap()]))
+        run_bounded(Command::new(NAZM).args(["run", "--interpret", path.to_str().unwrap()]))
             .unwrap_or_else(|| panic!("{what}: `nazm run` did not finish")),
     ));
     for opt in ["0", "2"] {

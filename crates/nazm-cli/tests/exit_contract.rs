@@ -73,7 +73,7 @@ fn expect(cases: &[(&[&str], i32)]) {
 fn status_0_is_success() {
     expect(&[
         (&["check", "ok.nz"], 0),
-        (&["run", "ok.nz"], 0),
+        (&["run", "--interpret", "ok.nz"], 0),
         (&["--help"], 0),
         (&["--version"], 0),
         (&["help", "check"], 0),
@@ -85,7 +85,7 @@ fn status_1_is_an_invalid_program_or_request() {
     expect(&[
         // A program that does not check.
         (&["check", "wrong.nz"], 1),
-        (&["run", "wrong.nz"], 1),
+        (&["run", "--interpret", "wrong.nz"], 1),
         // A request the command refuses: an executable over its own source.
         (&["build", "ok.nz", "-o", "ok.nz"], 1),
         // A package name that is not one.
@@ -95,7 +95,7 @@ fn status_1_is_an_invalid_program_or_request() {
 
 #[test]
 fn status_2_is_a_program_that_ran_and_failed() {
-    expect(&[(&["run", "traps.nz"], 2)]);
+    expect(&[(&["run", "--interpret", "traps.nz"], 2)]);
     // The same program built: the executable's own status, and the oracle's.
     let d = project();
     let (built, err) = status(d.path(), &["build", "traps.nz", "-o", "traps"]);
@@ -108,7 +108,7 @@ fn status_2_is_a_program_that_ran_and_failed() {
 fn status_3_is_a_file_that_could_not_be_found_or_read() {
     expect(&[
         (&["check", "absent.nz"], 3),
-        (&["run", "absent.nz"], 3),
+        (&["run", "--interpret", "absent.nz"], 3),
         // A module a `use` names.
         (&["check", "uses_missing.nz"], 3),
         // A foreign object `--link` names.
@@ -205,7 +205,7 @@ fn an_unreadable_root_is_reported_at_itself_not_at_the_prelude() {
     std::fs::write(d.path().join("bad.nz"), [0xff, 0xfe]).unwrap();
     for file in ["missing.nz", "bad.nz"] {
         for args in [
-            vec!["run", file],
+            vec!["run", "--interpret", file],
             vec!["check", file],
             vec!["inspect", file],
             vec!["build", file, "-o", "x"],

@@ -170,7 +170,7 @@ fn the_formatter_lays_out_a_program_without_semicolons_and_keeps_it() {
     );
     let again = nazm(d.path(), &["fmt", "--check", "p.nz"]);
     assert_eq!(again.code, Some(0), "{again:?}");
-    let r = nazm(d.path(), &["run", "p.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert_eq!(r.stdout, "x\n3\n", "{r:?}");
 }
 

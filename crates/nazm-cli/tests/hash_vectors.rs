@@ -388,7 +388,7 @@ fn the_short_vectors_agree_everywhere() {
     std::fs::write(d.path().join("prog.nz"), program).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         runs.push((

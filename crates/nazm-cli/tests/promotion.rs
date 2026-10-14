@@ -104,6 +104,6 @@ fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one() {
         let r = Command::new(&exe).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&r.stdout), "617\n", "-O{opt}");
     }
-    let run = nazm(d.path(), &["run", "prog.nz"]);
+    let run = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "617\n");
 }

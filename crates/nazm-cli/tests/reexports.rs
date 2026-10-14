@@ -90,7 +90,7 @@ fn a_reexport_offers_the_same_definition_under_its_names() {
     // Interpreted and native, by both backends: `Square` is `Sq`, `twice` is `double`, and
     // `Area`'s impl reaches the importer through the re-export.
     for (file, want) in [("main.nz", "17\n"), ("main2.nz", "7\n")] {
-        let r = nazm(d.path(), &["run", file]);
+        let r = nazm(d.path(), &["run", "--interpret", file]);
         assert_eq!(stdout(&r), want, "{}", String::from_utf8_lossy(&r.stderr));
         for backend in ["llvm", "cranelift"] {
             let b = nazm(d.path(), &["build", "--backend", backend, file, "-o", "p"]);
@@ -413,8 +413,14 @@ fn a_rename_follows_the_definition_and_keeps_every_alias() {
     assert_eq!(read("main.nz"), MAIN);
     // Written by its own name through a re-export of everything: renamed.
     assert_eq!(read("main2.nz"), MAIN2.replace("double(1)", "dbl(1)"));
-    assert_eq!(stdout(&nazm(d.path(), &["run", "main.nz"])), "17\n");
-    assert_eq!(stdout(&nazm(d.path(), &["run", "main2.nz"])), "7\n");
+    assert_eq!(
+        stdout(&nazm(d.path(), &["run", "--interpret", "main.nz"])),
+        "17\n"
+    );
+    assert_eq!(
+        stdout(&nazm(d.path(), &["run", "--interpret", "main2.nz"])),
+        "7\n"
+    );
 }
 
 #[test]
@@ -537,7 +543,7 @@ fn a_package_reexports_another_packages_definition_and_reuse_follows_it() {
         "app/src/main.nz",
         "use \"geo:lib.nz\";\nfn main() -> Int { count(7) }\n",
     );
-    let r = nazm(d.path(), &["run", "app"]);
+    let r = nazm(d.path(), &["run", "--interpret", "app"]);
     assert_eq!(stdout(&r), "7\n", "{}", String::from_utf8_lossy(&r.stderr));
     // The identity is the defining package's, not the re-exporting one's.
     let i = nazm(&d.path().join("geo/src"), &["interface", "lib.nz"]);
@@ -553,8 +559,13 @@ fn a_package_reexports_another_packages_definition_and_reuse_follows_it() {
         "shapes/src/poly.nz",
         "pub fn sides(n: Int) -> Int { n + 1 }\n",
     );
-    assert_eq!(stdout(&nazm(d.path(), &["run", "app"])), "8\n");
+    assert_eq!(
+        stdout(&nazm(d.path(), &["run", "--interpret", "app"])),
+        "8\n"
+    );
     // Its version moves past what `geo` requires: refused, never quietly the old one.
     w("shapes/nazm.toml", &manifest("shapes", "0.4.0", false, &[]));
-    assert!(!nazm(d.path(), &["run", "app"]).status.success());
+    assert!(!nazm(d.path(), &["run", "--interpret", "app"])
+        .status
+        .success());
 }

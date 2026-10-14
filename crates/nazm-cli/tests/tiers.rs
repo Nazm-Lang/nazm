@@ -107,7 +107,7 @@ fn interpreted(dir: &Path, expr: &str) -> Answer {
     std::fs::write(dir.join("p.nz"), program(expr)).unwrap();
     let o = Command::new(NAZM)
         .current_dir(dir)
-        .args(["run", "p.nz"])
+        .args(["run", "--interpret", "p.nz"])
         .output()
         .unwrap();
     if o.status.success() {

@@ -65,7 +65,10 @@ fn every_template_is_a_project_its_own_commands_hold() {
         ok(&p, &["doc", ".", "-o", "api"]);
     }
     let at = |t: &str| d.path().join(format!("my-{t}"));
-    assert_eq!(ok(&at("cli"), &["run", "."]), "hello, world\n0\n");
+    assert_eq!(
+        ok(&at("cli"), &["run", "--interpret", "."]),
+        "hello, world\n0\n"
+    );
     ok(&at("cli"), &["build", ".", "-o", "app"]);
     assert_eq!(
         String::from_utf8_lossy(&Command::new(at("cli").join("app")).output().unwrap().stdout),
@@ -74,10 +77,13 @@ fn every_template_is_a_project_its_own_commands_hold() {
     assert!(ok(&at("cli"), &["inspect", "."]).contains("\"nazm.inspect/2\""));
     assert_eq!(
         // Its total printed, then `main`'s 0 as the result report shows it (R1, 5b.3).
-        ok(&at("server"), &["run", ".", "--", "requests.txt"]),
+        ok(
+            &at("server"),
+            &["run", "--interpret", ".", "--", "requests.txt"]
+        ),
         "4 requests served\n30\n0\n"
     );
-    let usage = nazm(&at("server"), &["run", "."]);
+    let usage = nazm(&at("server"), &["run", "--interpret", "."]);
     assert_eq!(
         usage.status.code(),
         Some(2),
@@ -100,7 +106,7 @@ fn every_template_is_a_project_its_own_commands_hold() {
     let v: serde_json::Value = serde_json::from_str(&run).unwrap();
     assert_eq!(v["schema"], "nazm.contract-run/1");
     // A library has nothing to run, and says so.
-    let r = nazm(&at("library"), &["run", "."]);
+    let r = nazm(&at("library"), &["run", "--interpret", "."]);
     assert!(String::from_utf8_lossy(&r.stderr).contains("N0509"));
 }
 

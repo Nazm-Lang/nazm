@@ -24,7 +24,10 @@ fn nazm(dir: &Path, args: &[&str]) -> Ran {
 /// The program at `dir/main` under the interpreter, then built and run by each backend at
 /// each optimisation level, with the memory report on.
 fn everywhere(dir: &Path, main: &str) -> Vec<(String, Ran)> {
-    let mut out = vec![("interpreter".to_owned(), nazm(dir, &["run", main]))];
+    let mut out = vec![(
+        "interpreter".to_owned(),
+        nazm(dir, &["run", "--interpret", main]),
+    )];
     for (label, backend, opt) in [
         ("llvm -O0", "llvm", "0"),
         ("llvm -O2", "llvm", "2"),

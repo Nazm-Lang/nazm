@@ -277,14 +277,20 @@ fn a_locked_package_build_satisfies_the_build_rule_and_a_tampered_one_does_not()
     let o = nazm(d.path(), &["check", "--profile", "cyber", "app"]);
     assert!(err(&o).contains("`locked-build`"), "{}", err(&o));
     assert!(nazm(d.path(), &["lock", "app"]).status.success());
-    let o = nazm(d.path(), &["run", "--profile", "cyber", "app"]);
+    let o = nazm(
+        d.path(),
+        &["run", "--interpret", "--profile", "cyber", "app"],
+    );
     assert_eq!(out(&o), "422\n", "{}", err(&o));
     write(
         d.path(),
         "lib/src/lib.nz",
         "pub fn twice(n: Int) -> Int ! {} { n * 3 }\n",
     );
-    let o = nazm(d.path(), &["run", "--profile", "cyber", "app"]);
+    let o = nazm(
+        d.path(),
+        &["run", "--interpret", "--profile", "cyber", "app"],
+    );
     assert!(
         !o.status.success() && err(&o).contains("`locked-build`"),
         "{}",
@@ -325,8 +331,11 @@ fn a_dependency_s_required_profile_holds_the_whole_program() {
 fn a_profile_refuses_and_never_changes_what_runs() {
     let d = tempfile::tempdir().unwrap();
     write(d.path(), "prog.nz", PURE);
-    let general = nazm(d.path(), &["run", "prog.nz"]);
-    let embedded = nazm(d.path(), &["run", "--profile", "embedded", "prog.nz"]);
+    let general = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
+    let embedded = nazm(
+        d.path(),
+        &["run", "--interpret", "--profile", "embedded", "prog.nz"],
+    );
     assert_eq!(out(&general), out(&embedded));
     assert_eq!(out(&general), "49\n");
     // And a profile is evaluated every time: a check cached under `general` is no reason to

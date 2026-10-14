@@ -29,7 +29,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         out.push((
@@ -250,7 +250,7 @@ fn run(src: &str) -> Ran {
     run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())
-            .args(["run", "p.nz"]),
+            .args(["run", "--interpret", "p.nz"]),
         "nazm run",
     )
 }
@@ -335,7 +335,7 @@ fn a_cell_type_crosses_a_modules_interface() {
     let r = run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())
-            .args(["run", "main.nz"]),
+            .args(["run", "--interpret", "main.nz"]),
         "nazm run",
     );
     assert!(r.stdout.starts_with("42"), "{r:?}");

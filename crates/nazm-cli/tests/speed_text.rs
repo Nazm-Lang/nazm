@@ -166,7 +166,7 @@ fn the_hash_map_agrees_with_a_model_of_itself() {
     // Table order is the map's own: the interpreter's sum is the one every backend must print.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), MAP).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
     let sum = r.stdout.split_whitespace().nth(3).unwrap().to_owned();
     let n = keys.len();

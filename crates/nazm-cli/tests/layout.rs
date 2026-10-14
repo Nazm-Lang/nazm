@@ -49,7 +49,7 @@ fn main() -> Int {\n\
 fn everywhere(src: &str) -> Vec<(String, String, Option<i32>, String)> {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
-    let run = nazm(d.path(), &["run", "prog.nz"]);
+    let run = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     let mut out = vec![(
         "run".to_owned(),
         String::from_utf8_lossy(&run.stdout).into_owned(),
@@ -319,6 +319,6 @@ fn the_layout_is_asked_for_by_name_and_both_backends_take_it() {
         "{soa}"
     );
     let out = Command::new(d.path().join("p")).output().unwrap();
-    let interpreted = nazm(d.path(), &["run", "prog.nz"]);
+    let interpreted = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(out.stdout, interpreted.stdout);
 }

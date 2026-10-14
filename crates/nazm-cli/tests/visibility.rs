@@ -37,7 +37,7 @@ fn both_ways(files: &[(&str, &str)]) -> String {
     let root = dir.path().join(files[0].0);
 
     let interpreted = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .output()
         .expect("run");
     assert!(
@@ -346,7 +346,7 @@ fn a_module_cycle_may_also_be_a_call_cycle_when_it_is_interpreted() {
     );
     let root = dir.path().join("a.nz");
     let out = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .output()
         .expect("run");
     assert!(

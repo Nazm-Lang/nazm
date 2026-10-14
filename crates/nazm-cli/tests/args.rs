@@ -257,7 +257,7 @@ fn every_form_and_every_mistake_parse_alike_everywhere() {
     std::fs::write(d.path().join("prog.nz"), format!("{SPEC}{CASES}")).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         runs.push((
@@ -362,7 +362,16 @@ fn a_built_executable_parses_the_arguments_it_was_started_with() {
     // The interpreter hands a program the same arguments after `--`.
     let r = nazm(
         d.path(),
-        &["run", "prog.nz", "--", "pkg", "add", "--dev", "x"],
+        &[
+            "run",
+            "--interpret",
+            "prog.nz",
+            "--",
+            "pkg",
+            "add",
+            "--dev",
+            "x",
+        ],
     );
     assert_eq!(r.code, Some(0), "{r:?}");
     assert_eq!(

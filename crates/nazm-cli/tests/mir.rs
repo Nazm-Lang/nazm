@@ -114,7 +114,7 @@ fn both(src: &str) -> (Ran, Ran) {
         .output()
         .expect("run exe");
     let interp = Command::new(NAZM)
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--interpret", path.to_str().unwrap()])
         .output()
         .expect("run");
     (

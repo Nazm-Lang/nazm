@@ -181,7 +181,7 @@ fn every_form_decodes_alike_everywhere_and_encodes_to_a_fixed_point() {
     std::fs::write(d.path().join("doc.toml"), DOCUMENT).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         runs.push((
@@ -250,7 +250,7 @@ fn decode(text: &str) -> String {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), DECODER).unwrap();
     std::fs::write(d.path().join("doc.toml"), text).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
     r.stdout.lines().next().unwrap_or("").to_owned()
 }
@@ -357,7 +357,7 @@ fn every_manifest_and_a_lockfile_parse_and_round_trip() {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("prog.nz"), DECODER).unwrap();
         std::fs::write(d.path().join("doc.toml"), &text).unwrap();
-        let r = nazm(d.path(), &["run", "prog.nz"]);
+        let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
         assert!(
             r.stdout.contains("fixed point: true"),
             "{}: {r:?}",

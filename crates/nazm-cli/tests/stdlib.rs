@@ -57,6 +57,7 @@ fn four(files: &[(&str, &str)], args: &[&str]) -> Vec<(String, Ran)> {
         ran(&Command::new(NAZM)
             .current_dir(dir.path())
             .arg("run")
+            .arg("--interpret")
             .arg(&path)
             .arg("--")
             .args(args)

@@ -230,7 +230,11 @@ fn a_module_above_the_declared_root_compiles_and_declines_a_key() {
     );
 
     let ran = Command::new(NAZM)
-        .args(["run", dir.path().join("project/main.nz").to_str().unwrap()])
+        .args([
+            "run",
+            "--interpret",
+            dir.path().join("project/main.nz").to_str().unwrap(),
+        ])
         .output()
         .expect("run");
     assert!(
@@ -255,7 +259,11 @@ fn a_marker_changes_no_programs_meaning() {
 
     let run = |where_: &Path| {
         let out = Command::new(NAZM)
-            .args(["run", where_.join("app.nz").to_str().unwrap()])
+            .args([
+                "run",
+                "--interpret",
+                where_.join("app.nz").to_str().unwrap(),
+            ])
             .output()
             .expect("run");
         (

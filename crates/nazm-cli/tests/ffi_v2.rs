@@ -263,7 +263,7 @@ fn an_export_is_an_ordinary_function_to_nazm_and_to_the_interpreter() {
         "pub extern \"C\" fn triple(x: Int) -> Int ! {} = \"nz_triple\" { x * 3 }\n\
          fn main(io: IoCap) -> Int ! { io } { print(int_to_str(triple(14))); 0 }\n",
     )]);
-    let r = d.nazm(&["run", "prog.nz"]);
+    let r = d.nazm(&["run", "--interpret", "prog.nz"]);
     assert_eq!(
         String::from_utf8_lossy(&r.stdout),
         "420\n",

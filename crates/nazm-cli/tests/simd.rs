@@ -32,7 +32,7 @@ fn everywhere(src: &str) -> Vec<(String, String, Option<i32>)> {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
-    let run = nazm(d.path(), &["run", "prog.nz"]);
+    let run = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     out.push((
         "run".to_owned(),
         String::from_utf8_lossy(&run.stdout).into_owned(),
@@ -148,7 +148,7 @@ fn a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fit
         }
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("prog.nz"), &src).unwrap();
-        let interpreted = failure(d.path(), &["run", "prog.nz"]);
+        let interpreted = failure(d.path(), &["run", "--interpret", "prog.nz"]);
         assert!(
             interpreted.contains("error[N0400]: this addition overflows `Int`"),
             "{interpreted}"
@@ -208,10 +208,10 @@ fn main() -> Int {\n\
 fn a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), IDIOM).unwrap();
-    let interpreted = failure(d.path(), &["run", "prog.nz"]);
+    let interpreted = failure(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(interpreted.contains("error[N0400]"), "{interpreted}");
     // Where the interpreter's loop failed: the addition, line 5 column 7.
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(
         String::from_utf8_lossy(&r.stderr).contains("prog.nz:5:7"),
         "{}",
@@ -281,7 +281,10 @@ fn the_interpreter_keeps_the_loop() {
     // Its iteration budget still counts every turn of the loop a native build replaced.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), IDIOM).unwrap();
-    let e = failure(d.path(), &["run", "--max-iterations", "1500", "prog.nz"]);
+    let e = failure(
+        d.path(),
+        &["run", "--interpret", "--max-iterations", "1500", "prog.nz"],
+    );
     assert!(e.contains("N0402"), "{e}");
 }
 

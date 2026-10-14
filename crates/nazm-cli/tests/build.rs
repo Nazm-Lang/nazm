@@ -121,7 +121,7 @@ fn run_exe_within(b: &Built, limit: Duration) -> Option<Ran> {
 fn interpret(body: &str) -> Ran {
     let (dir, src) = write_program(body);
     let ran = run_bounded(
-        Command::new(NAZM).args(["run", src.to_str().unwrap()]),
+        Command::new(NAZM).args(["run", "--interpret", src.to_str().unwrap()]),
         DEADLINE,
     );
     let _ = dir;
@@ -433,7 +433,7 @@ fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted() {
         // And the same program still runs under the interpreter, which is the point of
         // calling it unsupported rather than invalid.
         let ran = Command::new(NAZM)
-            .args(["run", path.to_str().unwrap()])
+            .args(["run", "--interpret", path.to_str().unwrap()])
             .output()
             .expect("run");
         assert_eq!(
@@ -623,7 +623,7 @@ fn run_and_check_are_unchanged_by_the_new_subcommand() {
         let path = root.join(file);
         // As a user runs it (R1, 5b.3): each prints its answer and ends with status 0.
         let out = Command::new(NAZM)
-            .args(["run", path.to_str().unwrap()])
+            .args(["run", "--interpret", path.to_str().unwrap()])
             .env_remove(nazm_lir::RESULT_VARIABLE)
             .output()
             .expect("run");
@@ -3450,7 +3450,7 @@ fn every_front_end_builtin_is_evaluated_by_the_interpreter() {
         let src = builtin_program(i);
         let (dir, path) = write_program(&src);
         let ran = run_bounded(
-            Command::new(NAZM).args(["run", path.to_str().unwrap()]),
+            Command::new(NAZM).args(["run", "--interpret", path.to_str().unwrap()]),
             Duration::from_secs(20),
         );
         drop(dir);
@@ -3754,7 +3754,7 @@ fn expect_same_run(src: &str, args: &[&str], stdout: &str, stderr: &str, code: i
 
     let mut interp_cmd = Command::new(NAZM);
     interp_cmd
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--interpret", path.to_str().unwrap()])
         .arg("--")
         .args(args);
     let interp = run_bounded(&mut interp_cmd, DEADLINE).expect("the interpreter hung");
@@ -3823,7 +3823,7 @@ fn an_argument_past_the_end_fails_at_its_own_position() {
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).expect("write");
     let interp = run_bounded(
-        Command::new(NAZM).args(["run", path.to_str().unwrap()]),
+        Command::new(NAZM).args(["run", "--interpret", path.to_str().unwrap()]),
         DEADLINE,
     )
     .expect("hung");
@@ -3986,7 +3986,7 @@ fn write_tree(files: &[(&str, &str)]) -> (tempfile::TempDir, PathBuf) {
 
 fn run_root(root: &Path) -> Ran {
     run_bounded(
-        Command::new(NAZM).args(["run", root.to_str().unwrap()]),
+        Command::new(NAZM).args(["run", "--interpret", root.to_str().unwrap()]),
         DEADLINE,
     )
     .expect("the interpreter hung")
@@ -4128,7 +4128,7 @@ fn the_same_name_defined_privately_in_two_files_is_not_a_conflict() {
         ),
     ]);
     let out = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .output()
         .expect("run");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -4164,7 +4164,7 @@ fn imports_resolve_relative_to_the_importing_file_not_the_working_directory() {
         ("util.nz", "pub fn answer() -> Int { 0 - 1 }\n"),
     ]);
     let out = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .current_dir(dir.path())
         .output()
         .expect("run");

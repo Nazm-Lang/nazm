@@ -25,7 +25,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         out.push((
@@ -256,7 +256,7 @@ fn a_tuple_crosses_a_module_interface() {
     let r = run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())
-            .args(["run", "main.nz"]),
+            .args(["run", "--interpret", "main.nz"]),
         "nazm run",
     );
     assert_eq!(r.code, Some(0), "{r:?}");

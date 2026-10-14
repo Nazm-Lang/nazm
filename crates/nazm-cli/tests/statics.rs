@@ -38,7 +38,7 @@ fn everywhere_with(src: &str, others: &[(&str, &str)]) -> Vec<(String, Ran)> {
         run_bounded(
             Command::new(NAZM)
                 .current_dir(d.path())
-                .args(["run", "prog.nz"]),
+                .args(["run", "--interpret", "prog.nz"]),
             "nazm run",
         ),
     )];

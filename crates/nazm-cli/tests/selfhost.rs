@@ -1451,6 +1451,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
         let interpreted = Command::new(NAZM)
             .args([
                 "run",
+                "--interpret",
                 "compiler/check.nz",
                 "--",
                 file.to_str().unwrap(),
@@ -1497,7 +1498,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
             )
             .expect("the compiled control hung");
             let interp = Command::new(NAZM)
-                .args(["run", file.to_str().unwrap()])
+                .args(["run", "--interpret", file.to_str().unwrap()])
                 .env(nazm_lir::MEMORY_VARIABLE, "1")
                 .output()
                 .expect("run nazm run");
@@ -1556,6 +1557,7 @@ fn the_nazm_checker_agrees_with_the_reference_on_what_produces_a_value() {
         let interpreted = Command::new(NAZM)
             .args([
                 "run",
+                "--interpret",
                 "compiler/emit.nz",
                 "--",
                 main.to_str().unwrap(),
@@ -2782,7 +2784,7 @@ fn a_project_file_cannot_take_the_prelude_s_key() {
     );
     let (_, out, _) = run_bounded(&mut common::bounded_exe(&exe), STAGE_LIMIT).expect("hung");
     let reference = Command::new(NAZM)
-        .args(["run", "@core/prelude"])
+        .args(["run", "--interpret", "@core/prelude"])
         .current_dir(dir.path())
         .output()
         .expect("run nazm");
@@ -3411,7 +3413,7 @@ fn a_compiler_written_in_nazm_produces_native_executables_that_agree_with_the_in
 
         // And the interpreter agrees with the same expectation.
         let interp = Command::new(NAZM)
-            .args(["run", file.to_str().unwrap()])
+            .args(["run", "--interpret", file.to_str().unwrap()])
             .output()
             .expect("run");
         assert_eq!(
@@ -3470,7 +3472,7 @@ fn the_nazm_written_compiler_holds_exit_with_to_0_to_255() {
             "exit_with({status}): {stderr}"
         );
         let interp = Command::new(NAZM)
-            .args(["run", file.to_str().unwrap()])
+            .args(["run", "--interpret", file.to_str().unwrap()])
             .output()
             .expect("run");
         assert_eq!(
@@ -3848,7 +3850,7 @@ fn a_transfer_in_a_value_position_is_never_a_value() {
 
         // The interpreter: the semantic oracle this backend is compared against.
         let interp = Command::new(NAZM)
-            .args(["run", file.to_str().unwrap()])
+            .args(["run", "--interpret", file.to_str().unwrap()])
             .env(nazm_lir::MEMORY_VARIABLE, "1")
             .output()
             .expect("run nazm run");
@@ -3881,6 +3883,7 @@ fn a_transfer_in_a_value_position_is_never_a_value() {
         let interpreted = Command::new(NAZM)
             .args([
                 "run",
+                "--interpret",
                 "compiler/emit.nz",
                 "--",
                 file.to_str().unwrap(),
@@ -4047,7 +4050,7 @@ fn the_nazm_compiler_handles_several_functions_and_calls() {
         assert_eq!(stdout.trim(), *expected);
 
         let interp = Command::new(NAZM)
-            .args(["run", file.to_str().unwrap()])
+            .args(["run", "--interpret", file.to_str().unwrap()])
             .output()
             .expect("run");
         assert_eq!(
@@ -4357,7 +4360,7 @@ fn the_nazm_written_compiler_resolves_its_own_imports() {
     assert_eq!(rs_out.trim(), "45", "the reference compiler disagrees");
 
     let interp = Command::new(NAZM)
-        .args(["run", prog.to_str().unwrap()])
+        .args(["run", "--interpret", prog.to_str().unwrap()])
         .output()
         .expect("nazm run");
     assert_eq!(
@@ -4503,7 +4506,7 @@ fn the_nazm_written_compiler_compiles_concurrency() {
         assert_eq!(stdout.trim(), *expected, "{what}");
 
         let interp = Command::new(NAZM)
-            .args(["run", file.to_str().unwrap()])
+            .args(["run", "--interpret", file.to_str().unwrap()])
             .output()
             .expect("run");
         assert_eq!(
@@ -5096,7 +5099,7 @@ fn the_two_compilers_agree_on_every_module_and_visibility_rule() {
                     continue;
                 }
                 let interpreted = Command::new(NAZM)
-                    .args(["run", root.to_str().unwrap()])
+                    .args(["run", "--interpret", root.to_str().unwrap()])
                     .output()
                     .expect("run");
                 let got = String::from_utf8_lossy(&interpreted.stdout)

@@ -90,7 +90,10 @@ fn make_tree(root: &Path) {
 /// The walker's output under the interpreter and under LLVM.
 fn walk_everywhere(dir: &Path, program: &str) -> Vec<(String, Ran)> {
     std::fs::write(dir.join("prog.nz"), program).unwrap();
-    let mut runs = vec![("interpreter".to_owned(), nazm(dir, &["run", "prog.nz"]))];
+    let mut runs = vec![(
+        "interpreter".to_owned(),
+        nazm(dir, &["run", "--interpret", "prog.nz"]),
+    )];
     let exe = dir.join("walker");
     let b = nazm(
         dir,

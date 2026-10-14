@@ -158,7 +158,7 @@ fn a_main_that_takes_anything_but_authority_is_refused_before_it_is_built() {
 /// Interpret `root` in `dir`, then build and run it at `-O0` and `-O2`: all three agree.
 fn agree(dir: &Path, root: &str) -> String {
     let interpreted = Command::new(NAZM)
-        .args(["run", root])
+        .args(["run", "--interpret", root])
         .current_dir(dir)
         .output()
         .expect("run");

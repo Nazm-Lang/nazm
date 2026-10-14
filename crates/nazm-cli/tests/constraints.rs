@@ -71,7 +71,7 @@ fn agree(source: &str, expected: &str) -> Ran {
     std::fs::write(dir.path().join("m.nz"), source).expect("write");
 
     let interpreted = Command::new(NAZM)
-        .args(["run", "m.nz"])
+        .args(["run", "--interpret", "m.nz"])
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output()

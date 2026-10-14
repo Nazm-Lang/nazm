@@ -78,7 +78,7 @@ fn both(source: &str) -> Ran {
     std::fs::write(dir.path().join("m.nz"), source).expect("write");
 
     let interpreted = Command::new(NAZM)
-        .args(["run", "m.nz"])
+        .args(["run", "--interpret", "m.nz"])
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output()
@@ -125,7 +125,7 @@ fn both_with_args(source: &str, args: &[&str]) -> Ran {
     std::fs::write(dir.path().join("m.nz"), source).expect("write");
 
     let mut run = Command::new(NAZM);
-    run.args(["run", "m.nz", "--"]).args(args);
+    run.args(["run", "--interpret", "m.nz", "--"]).args(args);
     let interpreted = run
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
@@ -169,7 +169,7 @@ fn both_failing(source: &str) -> (Ran, String) {
     std::fs::write(dir.path().join("m.nz"), source).expect("write");
 
     let interpreted = Command::new(NAZM)
-        .args(["run", "m.nz"])
+        .args(["run", "--interpret", "m.nz"])
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output()
@@ -835,7 +835,10 @@ fn the_report_is_silent_unless_it_is_asked_for() {
         "fn main() -> Int {\n    let xs = ints_new();\n    ints_push(xs, 1)\n}\n",
     )
     .expect("write");
-    for command in [vec!["run", "m.nz"], vec!["build", "m.nz", "-o", "prog"]] {
+    for command in [
+        vec!["run", "--interpret", "m.nz"],
+        vec!["build", "m.nz", "-o", "prog"],
+    ] {
         let out = Command::new(NAZM)
             .args(&command)
             .current_dir(dir.path())

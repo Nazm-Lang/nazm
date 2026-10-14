@@ -48,7 +48,7 @@ fn both_exiting(source: &str, code: i32) -> (Ran, String) {
     std::fs::write(dir.path().join("m.nz"), source).expect("write");
 
     let interpreted = Command::new(NAZM)
-        .args(["run", "m.nz"])
+        .args(["run", "--interpret", "m.nz"])
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output()
@@ -544,7 +544,7 @@ fn an_importer_matches_a_dependency_s_enum_with_arm_blocks() {
          fn main() -> Int { score(0) + score(3) * 10 + score(4) * 1000 + score(15) * 100000 }\n",
     );
     let run = Command::new(NAZM)
-        .args(["run", "a.nz"])
+        .args(["run", "--interpret", "a.nz"])
         .current_dir(dir.path())
         .output()
         .expect("run");

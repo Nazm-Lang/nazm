@@ -40,7 +40,7 @@ fn in_one_process_a_lost_answer_times_out_and_a_retry_is_applied_once() {
     let src = manifest("tests/distributed/local.nz");
     let want =
         "1 -> 3\n2 -> 6\n3 -> 9\nagain 2 -> 6\na hello\na torn frame is refused\nframe bytes 28\n";
-    let r = nazm(d.path(), &["run", src.to_str().unwrap()]);
+    let r = nazm(d.path(), &["run", "--interpret", src.to_str().unwrap()]);
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     assert_eq!(r.stdout, format!("{want}0\n"));
     let exe = d.path().join("local");

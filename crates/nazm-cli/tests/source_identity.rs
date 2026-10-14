@@ -115,7 +115,7 @@ fn a_diamond_import_yields_one_file_not_two() {
         ),
         ("shared.nz", "pub fn s() -> Int { 21 }\n"),
     ]);
-    let (stdout, stderr, code) = nazm(&["run", "main.nz"], dir.path());
+    let (stdout, stderr, code) = nazm(&["run", "--interpret", "main.nz"], dir.path());
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(stdout.trim(), "42");
 }

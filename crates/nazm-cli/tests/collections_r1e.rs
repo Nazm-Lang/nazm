@@ -405,7 +405,7 @@ fn bytebuf_ordmap_bitset_and_in_place_sort_run_alike_everywhere_with_nothing_liv
     std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         runs.push((

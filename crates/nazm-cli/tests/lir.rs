@@ -232,7 +232,7 @@ fn every_shape_in_the_tables_runs_the_same_on_both_backends() {
     // aggregates out. The program builds every shape printed above and must agree with the
     // interpreter on both.
     let d = program();
-    let run = nazm(d.path(), &["run", "p.nz"]);
+    let run = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(
         run.status.success(),
         "{}",

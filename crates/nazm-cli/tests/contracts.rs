@@ -79,7 +79,7 @@ fn everywhere(src: &str) -> Ran {
             l.split(" at ").next().unwrap_or(l).to_owned()
         })
     };
-    let interpreted = nazm(d.path(), &["run", "prog.nz"]);
+    let interpreted = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     // The interpreter prints a program's output and `main`'s result as a native binary does.
     let mut runs = vec![Ran {
         code: interpreted.status.code(),
@@ -416,7 +416,7 @@ fn an_imported_function_s_preconditions_reach_its_callers_through_the_interface(
         assert_eq!(main_calls, 1, "{v}");
     }
     // And the call runs against them.
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(out(&r), "2\n");
 }
 

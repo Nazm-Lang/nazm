@@ -34,7 +34,7 @@ fn as_users_run(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
     };
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", vec!["run", main]),
+        ("interpreter", vec!["run", "--interpret", main]),
         ("lir oracle", vec!["lir", "--run", main]),
     ] {
         let mut c = Command::new(NAZM);
@@ -114,7 +114,7 @@ fn main_s_result_is_the_exit_status_everywhere() {
     let r = run_bounded(
         Command::new(NAZM)
             .current_dir(d.path())
-            .args(["run", "p.nz"])
+            .args(["run", "--interpret", "p.nz"])
             .env(nazm_lir::RESULT_VARIABLE, "1"),
         "nazm run",
     );

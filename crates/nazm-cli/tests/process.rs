@@ -33,7 +33,9 @@ fn everywhere_with(
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut runs: Vec<(String, Command)> = Vec::new();
     let mut interp = Command::new(differential::NAZM);
-    interp.current_dir(d.path()).args(["run", "prog.nz"]);
+    interp
+        .current_dir(d.path())
+        .args(["run", "--interpret", "prog.nz"]);
     runs.push(("interpreter".to_owned(), interp));
     for backend in ["llvm", "cranelift"] {
         let exe = d.path().join(backend);

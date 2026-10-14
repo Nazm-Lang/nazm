@@ -237,7 +237,7 @@ fn a_static_string_needs_no_runtime() {
 #[test]
 fn a_device_register_is_refused_where_there_is_none() {
     let d = program(PROGRAM);
-    let o = nazm(d.path(), &["run", "prog.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(!o.status.success());
     let e = err(&o);
     assert!(e.contains("N0392"), "{e}");
@@ -254,7 +254,7 @@ fn a_device_register_is_refused_where_there_is_none() {
     assert!(!d.path().join("prog").exists());
 
     let d = program("fn main(m: MmioCap) -> Int ! {} { mmio_read32(150994944) }\n");
-    let o = nazm(d.path(), &["run", "prog.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(
         err(&o).contains("the built-in `mmio_read32`"),
         "{}",

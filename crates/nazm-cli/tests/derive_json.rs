@@ -190,7 +190,7 @@ fn everywhere(program: &str, expected: &str) {
     std::fs::write(d.path().join("d.nz"), program).unwrap();
     let mut runs = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "d.nz"][..]),
+        ("interpreter", &["run", "--interpret", "d.nz"][..]),
         ("lir oracle", &["lir", "--run", "d.nz"][..]),
     ] {
         runs.push((
@@ -268,7 +268,7 @@ fn a_derived_type_of_another_module_is_carried_plain_and_qualified() {
          print(str_concat(line_json_schema(), \"\\n\"));\n    0\n}\n",
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
     assert_eq!(
         r.stdout,

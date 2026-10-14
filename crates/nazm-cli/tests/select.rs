@@ -41,7 +41,7 @@ fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
     let mut interpreted = Command::new(NAZM);
     interpreted
         .current_dir(d.path())
-        .args(["run", main])
+        .args(["run", "--interpret", main])
         .env(nazm_lir::MEMORY_VARIABLE, "1")
         .env(nazm_lir::runtime::SCHED_VARIABLE, "1");
     let mut out = vec![(

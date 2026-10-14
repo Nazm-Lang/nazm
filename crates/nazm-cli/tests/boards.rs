@@ -279,7 +279,7 @@ fn a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap() {
         ("mmio_write16(4096, 1)", "mmio_write16"),
     ] {
         let d = program(&format!("fn main(m: MmioCap) -> Int ! {{}} {{ {call} }}\n"));
-        let run = nazm(d.path(), &["run", "prog.nz"]);
+        let run = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
         assert!(!run.status.success());
         assert!(
             err(&run).contains("N0392") && err(&run).contains(width),

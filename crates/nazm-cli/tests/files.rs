@@ -204,7 +204,7 @@ fn a_buffer_too_short_for_a_stat_stops_the_program_everywhere() {
     let src = "fn main(io: IoCap) -> Int ! { io } { os_stat(\"prog.nz\", bytes_new(31)) }\n";
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(2), "{}", r.stderr);
     assert!(r.stderr.contains("N0405"), "{}", r.stderr);
     assert!(
@@ -264,7 +264,9 @@ fn standard_input_is_read_alike_everywhere() {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut runs: Vec<(String, Command)> = Vec::new();
     let mut interp = Command::new(differential::NAZM);
-    interp.current_dir(d.path()).args(["run", "prog.nz"]);
+    interp
+        .current_dir(d.path())
+        .args(["run", "--interpret", "prog.nz"]);
     runs.push(("interpreter".to_owned(), interp));
     for backend in ["llvm", "cranelift"] {
         let exe = d.path().join(backend);

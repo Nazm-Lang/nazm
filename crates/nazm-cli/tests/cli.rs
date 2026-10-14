@@ -26,7 +26,7 @@ fn nazm(args: &[&str]) -> (String, String, i32) {
 fn run_as_user(name: &str) -> (String, String, i32) {
     finish(
         Command::new(env!("CARGO_BIN_EXE_nazm"))
-            .args(["run", &example(name)])
+            .args(["run", "--interpret", &example(name)])
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .env_remove(nazm_lir::RESULT_VARIABLE),
     )
@@ -55,7 +55,8 @@ fn running_the_example_prints_its_value_and_exits_zero() {
 
 #[test]
 fn a_type_error_exits_one_and_names_the_code() {
-    let (stdout, stderr, code) = nazm(&["run", &example("bad/undefined_variable.nz")]);
+    let (stdout, stderr, code) =
+        nazm(&["run", "--interpret", &example("bad/undefined_variable.nz")]);
     assert_eq!(code, 1, "a check failure is exit 1");
     assert!(
         stdout.trim().is_empty(),
@@ -67,14 +68,14 @@ fn a_type_error_exits_one_and_names_the_code() {
 
 #[test]
 fn a_runtime_error_exits_two_so_it_is_distinguishable_from_a_type_error() {
-    let (_, stderr, code) = nazm(&["run", &example("bad/division_by_zero.nz")]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", &example("bad/division_by_zero.nz")]);
     assert_eq!(code, 2, "a runtime failure is exit 2, not 1");
     assert!(stderr.contains("N0401"), "{stderr}");
 }
 
 #[test]
 fn a_missing_file_exits_three() {
-    let (_, stderr, code) = nazm(&["run", "does-not-exist.nz"]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", "does-not-exist.nz"]);
     assert_eq!(code, 3);
     assert!(stderr.contains("cannot read"), "{stderr}");
 }
@@ -90,7 +91,12 @@ fn check_does_not_evaluate() {
 
 #[test]
 fn json_output_is_one_object_per_line() {
-    let (_, stderr, code) = nazm(&["run", &example("bad/wrong_argument_count.nz"), "--json"]);
+    let (_, stderr, code) = nazm(&[
+        "run",
+        "--interpret",
+        &example("bad/wrong_argument_count.nz"),
+        "--json",
+    ]);
     assert_eq!(code, 1);
     let line = stderr.lines().next().expect("a diagnostic line");
     let parsed: serde_json::Value = serde_json::from_str(line).expect("valid JSON");
@@ -122,7 +128,7 @@ fn every_bad_example_is_refused_with_its_own_code() {
         ("bad/runaway_recursion.nz", "N0403"),
     ];
     for (file, code) in cases {
-        let (_, stderr, status) = nazm(&["run", &example(file)]);
+        let (_, stderr, status) = nazm(&["run", "--interpret", &example(file)]);
         assert_ne!(status, 0, "{file} should fail");
         assert!(
             stderr.contains(code),
@@ -137,7 +143,7 @@ fn deep_trees_and_deep_recursion_report_rather_than_abort() {
     // parser's nesting limit, or sizing the stack from the depth budget — and the program
     // dies of stack exhaustion. An in-process test cannot survive its own subject to
     // report that; here the abort is just a child exit the parent reads.
-    let (_, stderr, code) = nazm(&["run", &example("bad/nesting_too_deep.nz")]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", &example("bad/nesting_too_deep.nz")]);
     assert!(stderr.contains("N0102"), "got:\n{stderr}");
     assert_eq!(code, 1, "a check failure, not a crash");
 
@@ -150,7 +156,7 @@ fn deep_trees_and_deep_recursion_report_rather_than_abort() {
 
     // A long arithmetic chain: the likeliest deep tree in a real program, and the one
     // shape the nesting bound originally missed because its parse does not recurse.
-    let (_, stderr, code) = nazm(&["run", &example("bad/long_chain.nz")]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", &example("bad/long_chain.nz")]);
     assert!(stderr.contains("N0102"), "got:\n{stderr}");
     assert_eq!(code, 1);
 
@@ -163,6 +169,7 @@ fn deep_trees_and_deep_recursion_report_rather_than_abort() {
     // 10,000 before the stack was sized from the budget.
     let (_, stderr, code) = nazm(&[
         "run",
+        "--interpret",
         &example("bad/deep_recursion.nz"),
         "--max-depth",
         "15000",
@@ -176,7 +183,13 @@ fn a_depth_budget_the_stack_could_not_back_is_refused() {
     // Not a safety boundary — the reservation grows with the budget — but a number no
     // machine would grant is a crash waiting for the right program, so it is refused with
     // the figure rather than accepted and discovered later.
-    let (_, stderr, code) = nazm(&["run", &example("max.nz"), "--max-depth", "99999999"]);
+    let (_, stderr, code) = nazm(&[
+        "run",
+        "--interpret",
+        &example("max.nz"),
+        "--max-depth",
+        "99999999",
+    ]);
     assert_ne!(code, 0);
     assert!(
         stderr.contains("GiB of stack"),
@@ -196,7 +209,7 @@ fn one_mistake_produces_one_diagnostic() {
         "bad/undefined_variable.nz",
         "bad/unsupported_construct.nz",
     ] {
-        let (_, stderr, _) = nazm(&["run", &example(file), "--json"]);
+        let (_, stderr, _) = nazm(&["run", "--interpret", &example(file), "--json"]);
         let diagnostics: Vec<&str> = stderr.lines().filter(|l| l.starts_with('{')).collect();
         assert_eq!(
             diagnostics.len(),
@@ -214,19 +227,20 @@ fn recursion_runs_and_runaway_recursion_reports() {
 
     // The iteration budget does not bound recursion: without its own guard this would
     // abort the process with no diagnostic at all.
-    let (_, stderr, code) = nazm(&["run", &example("bad/runaway_recursion.nz")]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", &example("bad/runaway_recursion.nz")]);
     assert!(stderr.contains("N0403"), "got:\n{stderr}");
     assert_eq!(code, 2, "a runtime failure, not a type error");
 
     // Mutual recursion counts against the same budget; per-function counting would let
     // this pair run until the stack ran out.
-    let (_, stderr, code) = nazm(&["run", &example("bad/mutual_recursion.nz")]);
+    let (_, stderr, code) = nazm(&["run", "--interpret", &example("bad/mutual_recursion.nz")]);
     assert!(stderr.contains("N0403"), "got:\n{stderr}");
     assert_eq!(code, 2);
 
     // And the bound is adjustable, so a deliberately deep recursion is not walled off.
     let (_, stderr, _) = nazm(&[
         "run",
+        "--interpret",
         &example("bad/runaway_recursion.nz"),
         "--max-depth",
         "16",
@@ -250,6 +264,7 @@ fn a_runaway_loop_reports_instead_of_hanging() {
     // that hangs is worse than one that says what happened.
     let (_, stderr, code) = nazm(&[
         "run",
+        "--interpret",
         &example("bad/runaway_loop.nz"),
         "--max-iterations",
         "1000",

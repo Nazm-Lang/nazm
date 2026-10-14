@@ -85,14 +85,23 @@ fn answer(o: &Output) -> String {
 fn each_package_sees_its_own_features_in_every_implementation() {
     let d = tempfile::tempdir().unwrap();
     packages(d.path());
-    let plain = nazm(d.path(), &["run", "app/src/main.nz"]);
+    let plain = nazm(d.path(), &["run", "--interpret", "app/src/main.nz"]);
     assert_eq!(answer(&plain), "32", "{}", text(&plain));
     let verbose = nazm(
         d.path(),
-        &["run", "--features", "verbose", "app/src/main.nz"],
+        &[
+            "run",
+            "--interpret",
+            "--features",
+            "verbose",
+            "app/src/main.nz",
+        ],
     );
     assert_eq!(answer(&verbose), "432", "{}", text(&verbose));
-    let all = nazm(d.path(), &["run", "--features", "all", "app/src/main.nz"]);
+    let all = nazm(
+        d.path(),
+        &["run", "--interpret", "--features", "all", "app/src/main.nz"],
+    );
     assert_eq!(answer(&all), "402", "{}", text(&all));
     let exe = d.path().join("app-all");
     let built = nazm(
@@ -120,7 +129,16 @@ fn each_package_sees_its_own_features_in_every_implementation() {
 fn a_feature_nobody_declares_is_refused_before_anything_is_checked() {
     let d = tempfile::tempdir().unwrap();
     packages(d.path());
-    let r = nazm(d.path(), &["run", "--features", "nope", "app/src/main.nz"]);
+    let r = nazm(
+        d.path(),
+        &[
+            "run",
+            "--interpret",
+            "--features",
+            "nope",
+            "app/src/main.nz",
+        ],
+    );
     assert_eq!(r.status.code(), Some(1), "{}", text(&r));
     assert!(
         text(&r).contains("N0500") && text(&r).contains("`nope`"),

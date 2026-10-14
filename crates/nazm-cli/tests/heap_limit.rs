@@ -135,7 +135,7 @@ fn with(src: &str) -> tempfile::TempDir {
 fn interpreted(dir: &Path) -> Ran {
     let mut c = Command::new(NAZM);
     c.current_dir(dir)
-        .args(["run", "prog.nz"])
+        .args(["run", "--interpret", "prog.nz"])
         .env(nazm_lir::MEMORY_VARIABLE, "1");
     run_bounded(&mut c, "nazm run")
 }

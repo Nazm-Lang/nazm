@@ -273,7 +273,7 @@ fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {\n\
 fn a_task_waiting_on_a_socket_does_not_hold_its_worker() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), POOL).unwrap();
-    let r = nazm(d.path(), &["run", "prog.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     assert_eq!(r.stdout.trim_end(), "299995 80");
     for backend in ["llvm", "cranelift"] {

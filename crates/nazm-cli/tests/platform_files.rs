@@ -64,6 +64,7 @@ pub(crate) fn runs_in(src: &str, setup: &dyn Fn(&Path)) -> Vec<(String, Ran)> {
         let mut c = Command::new(differential::NAZM);
         c.current_dir(d.path())
             .arg("run")
+            .arg("--interpret")
             .arg(&prog)
             .env(nazm_lir::MEMORY_VARIABLE, "1");
         out.push(("interpreter".to_owned(), run_bounded(&mut c, "nazm run")));

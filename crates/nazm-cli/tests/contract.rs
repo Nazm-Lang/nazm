@@ -240,8 +240,11 @@ fn a_pure_function_means_the_same_under_web3_as_under_no_profile() {
         "fn f(x: Int) -> Int ! {} { x * 3 - 7 }\nfn main() -> Int ! {} { f(14) + f(-2) }\n",
         "",
     );
-    let plain = nazm(d.path(), &["run", "c.nz"]);
-    let web3 = nazm(d.path(), &["run", "--profile", "web3", "c.nz"]);
+    let plain = nazm(d.path(), &["run", "--interpret", "c.nz"]);
+    let web3 = nazm(
+        d.path(),
+        &["run", "--interpret", "--profile", "web3", "c.nz"],
+    );
     assert!(plain.status.success() && web3.status.success());
     assert_eq!(plain.stdout, web3.stdout);
     assert_eq!(String::from_utf8_lossy(&plain.stdout), "22\n");

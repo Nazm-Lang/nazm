@@ -26,7 +26,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         out.push((
@@ -217,7 +217,9 @@ fn in_dir(files: &[(&str, &str)]) -> tempfile::TempDir {
 
 fn run_in(d: &tempfile::TempDir, file: &str) -> Ran {
     run_bounded(
-        Command::new(NAZM).current_dir(d.path()).args(["run", file]),
+        Command::new(NAZM)
+            .current_dir(d.path())
+            .args(["run", "--interpret", file]),
         "nazm run",
     )
 }

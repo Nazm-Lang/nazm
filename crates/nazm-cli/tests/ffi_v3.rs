@@ -495,7 +495,7 @@ fn a_program_reading_errno_runs_only_natively_and_only_where_there_is_one() {
     let src = "fn main(f: ForeignCap) -> Int ! { foreign } { c_errno() }\n";
     let d = Dir::new(&[("prog.nz", src)]);
     // `nazm run` cannot call C, and `errno` is C's (`N0385`).
-    let o = d.nazm(&["run", "prog.nz"]);
+    let o = d.nazm(&["run", "--interpret", "prog.nz"]);
     assert!(!o.status.success());
     assert!(stderr(&o).contains("N0385"), "{}", stderr(&o));
     // A freestanding target has no C library keeping one (`N0613`); an ordinary foreign call
