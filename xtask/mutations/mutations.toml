@@ -18931,3 +18931,27 @@ file = "crates/nazm-core/src/lower.rs"
 find = '''        let err_arm = arm(p.err, err, vec![leave], None);'''
 replace = '''        let err_arm = arm(p.err, err, Vec::new(), None);'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::a_question_mark_on_an_option_returns_none_everywhere" }]
+
+# --- R1 5b.16: an array literal as a sequence -----------------------------------------------------
+
+[[mutation]]
+name = "r1-a-literal-is-always-an-array"
+why = "`[1, 2, 3]` where a `Vec[Int]` is wanted is an array, so `let v: Vec[Int] = [1, 2, 3]` is a mismatch"
+file = "crates/nazm-core/src/check/operators.rs"
+find = '''        if let Some(seq) = expected.filter(|t| matches!(t, Type::Vec(_) | Type::Ints | Type::Strs))'''
+replace = '''        if let Some(seq) = expected.filter(|t| matches!(t, Type::Ints))'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::an_array_literal_is_a_sequence_where_one_is_wanted" }]
+
+[[mutation]]
+name = "r1-a-sequence-literal-pushes-nothing"
+why = "a sequence literal is made empty and its elements are evaluated but never pushed"
+file = "crates/nazm-core/src/lower.rs"
+find = '''                            args: vec![read.clone(), value],
+                            callee_at: *span,
+                        },
+                        ty: Some(Type::Int),'''
+replace = '''                            args: vec![read.clone(), value],
+                            callee_at: *span,
+                        },
+                        ty: Some(Type::Bool),'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::an_array_literal_is_a_sequence_where_one_is_wanted" }]

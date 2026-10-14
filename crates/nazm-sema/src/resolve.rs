@@ -423,6 +423,9 @@ pub struct Resolution {
     /// The method calls resolved by name (R1, 5b.15): `x.m(…)` as the function `<type>_m(x, …)`,
     /// by the method name's span, where its call is recorded as an ordinary call's.
     named_methods: std::collections::HashSet<Span>,
+    /// The array literals written where a sequence is wanted (R1, 5b.16), by their span, with the
+    /// sequence's type: each builds that sequence.
+    sequence_literals: HashMap<Span, Type>,
     /// Keyed by the span of the variable mention, which is written once per use — and by
     /// the name a `let` or a pattern field introduces, which resolves to its own binding.
     vars: HashMap<Span, LocalRef>,
@@ -1196,6 +1199,17 @@ impl Resolution {
     /// Record that the method call named at `span` is a function's, by name (R1, 5b.15).
     pub fn record_named_method(&mut self, span: Span) {
         self.named_methods.insert(span);
+    }
+
+    /// Record that the literal at `span` builds a sequence of type `ty` (R1, 5b.16).
+    pub fn record_sequence_literal(&mut self, span: Span, ty: Type) {
+        self.sequence_literals.insert(span, ty);
+    }
+
+    /// The sequence the literal at `span` builds, if it builds one (R1, 5b.16).
+    #[must_use]
+    pub fn sequence_literal(&self, span: Span) -> Option<Type> {
+        self.sequence_literals.get(&span).copied()
     }
 
     /// Whether the method call named at `span` is a function's, by name (R1, 5b.15).

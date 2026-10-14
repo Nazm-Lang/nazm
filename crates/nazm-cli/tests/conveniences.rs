@@ -90,12 +90,43 @@ fn main(out: OutCap) -> Int ! {io} {
 }
 
 #[test]
+fn an_array_literal_is_a_sequence_where_one_is_wanted() {
+    differential::agrees(
+        "fn total(xs: Vec[Int]) -> Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let v: Vec[Int] = [1, 2, 3]
+    v.push(4)
+    println(f\"{v.len()} {total(v)} {total([10, 20])}\")
+    let names: Vec[Str] = [\"a\", \"b\"]
+    println(names[1])
+    let none: Vec[Int] = []
+    println(none.len())
+    let fixed = [7, 8]
+    println(fixed[1])
+    0
+}
+",
+        "4 10 30\nb\n0\n8\n0",
+    );
+}
+
+#[test]
 fn what_the_conveniences_do_not_make_valid_is_refused() {
     for (src, code, why) in [
         (
             "fn main() -> Int { let s: Int = \"a\"; 0 }\n",
             "N0300",
             "a value that is not its written type",
+        ),
+        (
+            "fn main() -> Int { let v: Vec[Int] = [1, \"a\"]; 0 }\n",
+            "N0300",
+            "an element that is not the sequence's",
         ),
         (
             "fn main() -> Int { let v = vec_new(); 0 }\n",

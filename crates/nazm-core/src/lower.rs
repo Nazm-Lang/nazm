@@ -1239,6 +1239,77 @@ impl<'a> Lower<'a> {
             }
             // Arrays (Gate 2). The type is the checker's, read back from the elements' and the
             // count's: `[x; N]`'s `N` is a literal or a constant, both already computed.
+            // A sequence where one is wanted (R1, 5b.16): `{ let made = vec_new(); vec_push(made, a);
+            // …; made }`, as `ints_*` and `strs_*` for those.
+            AstExpr::Array { elems, span } if self.res.sequence_literal(*span).is_some() => {
+                let seq = self.res.sequence_literal(*span).unwrap_or(Type::Int);
+                let (new, push, type_args) = match seq {
+                    Type::Ints => (
+                        nazm_sema::Intrinsic::IntsNew,
+                        nazm_sema::Intrinsic::IntsPush,
+                        Vec::new(),
+                    ),
+                    Type::Strs => (
+                        nazm_sema::Intrinsic::StrsNew,
+                        nazm_sema::Intrinsic::StrsPush,
+                        Vec::new(),
+                    ),
+                    t => (
+                        nazm_sema::Intrinsic::VecNew,
+                        nazm_sema::Intrinsic::VecPush,
+                        self.res
+                            .types()
+                            .type_args(t)
+                            .first()
+                            .copied()
+                            .into_iter()
+                            .collect(),
+                    ),
+                };
+                let made = self.temp(Temp::Made, seq, *span);
+                let read = Expr {
+                    kind: ExprKind::Local(made),
+                    ty: Some(seq),
+                    at: *span,
+                };
+                let mut stmts = vec![Stmt::Let {
+                    local: made,
+                    value: Expr {
+                        kind: ExprKind::Builtin {
+                            op: new,
+                            type_args: type_args.clone(),
+                            args: Vec::new(),
+                            callee_at: *span,
+                        },
+                        ty: Some(seq),
+                        at: *span,
+                    },
+                }];
+                for x in elems {
+                    let value = self.expr(x)?;
+                    stmts.push(Stmt::Eval(Expr {
+                        kind: ExprKind::Builtin {
+                            op: push,
+                            type_args: type_args.clone(),
+                            args: vec![read.clone(), value],
+                            callee_at: *span,
+                        },
+                        ty: Some(Type::Int),
+                        at: *span,
+                    }));
+                }
+                node(
+                    ExprKind::Block(Block {
+                        stmts,
+                        tail: Some(Box::new(read)),
+                        ends: Ends::FallsThrough,
+                        owns: vec![made],
+                        at: *span,
+                    }),
+                    Some(seq),
+                    *span,
+                )
+            }
             AstExpr::Array { elems, span } => {
                 let mut lowered = Vec::with_capacity(elems.len());
                 for x in elems {
