@@ -279,7 +279,10 @@ impl ReferenceIndex {
     }
 
     fn declare(&mut self, target: ReferenceTarget, at: Span) {
-        if at == Span::synthetic() {
+        // A declaration of no width — the synthetic span, or the `out: OutCap` a `main` is
+        // given (R1, 5b.1) — is no declaration in source: nothing was written to go to,
+        // highlight or rename there.
+        if at == Span::synthetic() || at.start == at.end {
             return;
         }
         self.at.entry(at).or_insert(target);

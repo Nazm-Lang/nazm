@@ -553,7 +553,10 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
     for f in &program.functions {
         // A foreign declaration (N85) is a function item with parameters and no body.
         spans.push((SyntaxKind::FnItem, f.span));
-        for p in &f.params {
+        // The `out: OutCap` a `main` is given (R1, 5b.1) has no width: nothing wrote it, so
+        // the concrete tree has no node for it. (The `Int` and the `0` a function with no
+        // result type is given, 5b.2, are no construct here either.)
+        for p in f.params.iter().filter(|p| p.span.start != p.span.end) {
             spans.push((SyntaxKind::Param, p.span));
         }
         // A contract clause and its expression are constructs (N87).

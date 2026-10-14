@@ -397,9 +397,10 @@ fn main() -> Int {
         String::from_utf8_lossy(&built.stderr)
     );
     let ir = std::fs::read_to_string(dir.path().join("prog.m0.ll")).expect("unit IR");
-    // `main`'s body: past its signature and any function attributes (Q1's stack probes).
+    // `main`'s body: past its signature and any function attributes (Q1's stack probes). Its
+    // one parameter is the `out: OutCap` it is given (R1, 5b.1).
     let body: Vec<&str> = ir
-        .split("main() ")
+        .split("main(i64 %p0) ")
         .nth(1)
         .and_then(|after| after.split_once('{'))
         .and_then(|(_, rest)| rest.split_once('\n'))

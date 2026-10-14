@@ -632,7 +632,7 @@ pub fn build() -> Result<Suite, String> {
         (
             "spec:return",
             &ret,
-            "**`return;` with no value is not supported.**",
+            "**`return;` with no value is not supported** in a function with a result type",
         ),
     ];
     for (id, body, phrase) in evidence {
@@ -645,8 +645,8 @@ pub fn build() -> Result<Suite, String> {
         "Answer from the specification. Does the current executable language have a `return` \
          statement? Which version is the current executable language? What does \
          `return expression;` leave: the enclosing function, or the enclosing loop? Is \
-         `return;` with no value supported? Cite every specification section your answers \
-         rest on as `spec:<id>`, where `<id>` is the section's `<!-- id: ... -->` anchor.",
+         `return;` with no value supported in a function that has a result type? Cite every \
+         specification section your answers rest on as `spec:<id>`, where `<id>` is the section's `<!-- id: ... -->` anchor.",
         vec![
             Field {
                 name: "has_return_statement",
