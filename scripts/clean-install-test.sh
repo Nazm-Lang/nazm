@@ -44,7 +44,9 @@ fn main(out: OutCap) -> Int {
 }
 NZ
 nazm check hello.nz
-[ "$(nazm run hello.nz)" = "$(printf 'HELLO FROM A PREBUILT NAZM\n0')" ] || { echo 'clean-install: nazm run printed something else' >&2; exit 1; }
+# `main`'s result is the exit status (0.10.0), not printed.
+[ "$(nazm run hello.nz)" = "HELLO FROM A PREBUILT NAZM" ] || { echo 'clean-install: nazm run printed something else' >&2; exit 1; }
 nazm build hello.nz -o hello
-[ "$(./hello)" = "$(printf 'HELLO FROM A PREBUILT NAZM\n0')" ] || { echo 'clean-install: the built program printed something else' >&2; exit 1; }
+[ "$(./hello)" = "HELLO FROM A PREBUILT NAZM" ] || { echo 'clean-install: the built program printed something else' >&2; exit 1; }
+./hello >/dev/null || { echo 'clean-install: the built program did not exit 0' >&2; exit 1; }
 printf 'clean-install: ok %s\n' "$triple"
