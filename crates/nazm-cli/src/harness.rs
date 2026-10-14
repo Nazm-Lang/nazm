@@ -117,7 +117,7 @@ pub(crate) fn marked(path: &Path, text: &str) -> Vec<Marked> {
     out
 }
 
-/// What the entry file is read as: its text with its `main` renamed and the harness appended.
+/// What the entry file is read as: its text with its `main` blanked and the harness appended.
 ///
 /// # Errors
 ///
@@ -139,17 +139,29 @@ pub(crate) fn text(original: &str, h: &Harness) -> Result<String, String> {
         .collect();
 
     let mut text = original.to_owned();
+    // The file's own `main` is not part of what the harness builds: its text is read as blanks,
+    // its lines kept, so every offset after it is where it was. Moving it aside under another
+    // name would leave a function no longer `main`, without the `out` `main` is given (R1, 5b.1).
     if let Some(main) = program
         .functions
         .iter()
         .find(|f| f.method_of.is_none() && f.name == "main")
     {
-        let rename = ["mai_", "ma_n", "m_in", "_ain", "ma__", "m__n"]
-            .into_iter()
-            .find(|n| !original.contains(n))
-            .ok_or("no free name to move this file's `main` aside")?;
-        let (start, end) = (main.name_span.start as usize, main.name_span.end as usize);
-        text.replace_range(start..end, rename);
+        let start = main
+            .attrs
+            .iter()
+            .map(|a| a.span.start)
+            .chain([main.span.start])
+            .min()
+            .unwrap_or(main.span.start) as usize;
+        let end = main.span.end as usize;
+        let blank: String = original
+            .get(start..end)
+            .ok_or("this file's `main` is not where it was parsed")?
+            .chars()
+            .map(|c| if c == '\n' { '\n' } else { ' ' })
+            .collect();
+        text.replace_range(start..end, &blank);
     }
 
     let params: String = held
@@ -293,13 +305,17 @@ mod tests {
     }
 
     #[test]
-    fn main_moves_aside_without_moving_an_offset() {
-        let src = "fn helper() -> Int { 1 }\nfn main() -> Int { helper() }\n@test\nfn t() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\n";
+    fn main_is_blanked_without_moving_an_offset() {
+        // An option-C `main` (R1, 5b.1): blanked, not renamed, so its implicit `out` is not lost.
+        let src = "fn helper() -> Int { 1 }\nfn main() {\n    println(helper())\n}\n@test\nfn t() -> Result[Int, Str] { Ok(0) }\n";
         let h = Harness::parse("test:t").unwrap();
         let out = text(src, &h).unwrap();
-        assert_eq!(&out[..25], &src[..25]);
-        assert!(out[..src.len()].contains("fn mai_() -> Int"), "{out}");
-        assert_eq!(out[..src.len()].replace("mai_", "main"), src);
-        assert!(out[src.len()..].contains("match t()"), "{out}");
+        let (kept, appended) = out.split_at(src.len());
+        assert_eq!(&kept[..25], &src[..25]);
+        assert!(!kept.contains("main") && !kept.contains("println"), "{out}");
+        assert_eq!(kept.len(), src.len());
+        assert_eq!(kept.lines().count(), src.lines().count());
+        assert!(kept.contains("@test\nfn t()"), "{out}");
+        assert!(appended.contains("match t()"), "{out}");
     }
 }
