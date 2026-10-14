@@ -2,7 +2,7 @@
 
 One list, kept current, of what Nazm does **not** do or does only partly — the v1 foundation and
 everything N49–N74 added to it, as audited in N75, and kept current through the 1.0 draft (Gate 1,
-2026-10-07; the 0.9.0 preview, 2026-10-12). What 1.0 will promise about what is here is
+2026-10-07; the 0.9.0 preview, 2026-10-12; 0.10.0, 2026-10-15). What 1.0 will promise about what is here is
 `stability.md`. Each line names the
 capability-matrix area that owns it (`capability-matrix.md`), where the evidence and the status
 live; this file adds nothing a reader could not find there, and exists so nothing material is

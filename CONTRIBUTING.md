@@ -51,7 +51,7 @@ too.
 
 ## Compatibility within 1.x
 
-*The 0.9.0 preview is the 1.0 draft: external contributions are not accepted yet — the contributor
+*The 0.10.0 preview is the 1.0 draft: external contributions are not accepted yet — the contributor
 licence agreement awaits legal review (`docs/licensing.md`) — and what follows is the rule 1.0 will
 hold, held already inside the project.*
 

@@ -511,7 +511,7 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
     }
 }
 
-/// `nazm --version` and `nazm --help` name the release they are: toolchain 0.9.0, the language a
+/// `nazm --version` and `nazm --help` name the release they are: toolchain 0.10.0, the language a
 /// 1.0 draft (`docs/stability.md`). The crate version is the toolchain version; the help's
 /// sentence is written by hand and is held to it here.
 #[test]

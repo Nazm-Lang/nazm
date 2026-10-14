@@ -4,7 +4,7 @@
 
 | Release | Supported |
 | --- | --- |
-| the latest 0.9.x preview (macOS on Apple Silicon) | yes — a fix lands in the next preview release; a preview makes no compatibility promise |
+| the latest 0.x preview (macOS on Apple Silicon) | yes — a fix lands in the next preview release; a preview makes no compatibility promise |
 | from 1.0: the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
 | from 1.0: an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps compatible for programs on stable surfaces (`docs/stability.md`) |
 | the internal 0.3.x candidates, and anything older | no |
@@ -25,7 +25,7 @@ maintainer have agreed a disclosure date.
 - **Otherwise:** email the maintainer at the address in the workspace manifest's `authors`
   (`Cargo.toml`), with "Nazm security" in the subject.
 
-*Status, 0.9.0 (2026-10-12):* the repository is public at `Nazm-Lang/nazm` and private
+*Status, 0.10.0 (2026-10-15):* the repository is public at `Nazm-Lang/nazm` and private
 vulnerability reporting is enabled on it, so the preferred channel is open. That the fallback
 address receives mail has not been confirmed (`docs/vulnerability-process.md`, *Intake*).
 

@@ -14047,9 +14047,10 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugging::the_prol
 [[mutation]]
 name = "g1-the-help-names-the-pre-1-0-release"
 why = """`nazm --help` goes on calling the release language v0.3, toolchain 0.3.0, an experimental release
-Repointed by the 0.9.0 preview (release-0-9-preview): the help names the 1.0 draft and toolchain 0.9.0."""
+Repointed by the 0.9.0 preview (release-0-9-preview): the help names the 1.0 draft and toolchain 0.9.0,
+and by 0.10.0 to toolchain 0.10.0."""
 file = "crates/nazm-cli/src/cli.rs"
-find = "long_about = \"Nazm language 1.0 draft, toolchain 0.9.0 — a public preview for macOS on \\"
+find = "long_about = \"Nazm language 1.0 draft, toolchain 0.10.0 — a public preview for macOS on \\"
 replace = "long_about = \"Nazm language v0.3, toolchain 0.3.0 — an experimental release, for macOS on \\"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ecosystem::the_help_and_version_name_the_release" }]
 
