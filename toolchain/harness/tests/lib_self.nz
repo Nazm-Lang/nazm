@@ -1,0 +1,94 @@
+// The harness library's own tests (R7): what the ported tests stand on — a child's streams and
+// status, the environment it is given, the deadline, and scratch directories made and removed.
+
+use "@std/file"
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn argv(a: Str, b: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, a);
+    strs_push(out, b);
+    out
+}
+
+@test
+fn a_child_gives_both_streams_and_its_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = run(h, "sh", argv("-c", "printf out; printf err >&2; exit 3"), "", env_here(io));
+    if r.code != 3 || r.stdout != "out" || r.stderr != "err" {
+        return Result[Int, Str].Err(error: ran_show(r));
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_child_sees_exactly_the_environment_it_is_given(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let env = env_set(env_unset(env_here(io), "R7_PROBE"), "R7_SET", "yes");
+    let r = run(h, "sh", argv("-c", "printf '%s/%s' \"${R7_SET-unset}\" \"${NAZM_RESULT_REPORT-unset}\""), "", env_unset(env, "NAZM_RESULT_REPORT"));
+    if r.stdout != "yes/unset" {
+        return Result[Int, Str].Err(error: ran_show(r));
+    }
+    let s = run(h, "sh", argv("-c", "printf %s \"$NAZM_RESULT_REPORT\""), "", suite_env(h));
+    if s.stdout != "1" {
+        return Result[Int, Str].Err(error: f"the suite's environment sets the result report: {ran_show(s)}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_child_past_its_deadline_is_ended_with_its_group(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let start = time_ms(t);
+    // The grandchild holds the pipes: only ending the group lets the streams close.
+    let r = run_within(h, "sh", argv("-c", "sleep 30 & sleep 30; echo late"), "", env_here(io), 300);
+    let took = time_ms(t) - start;
+    if r.code != TIMED_OUT {
+        return Result[Int, Str].Err(error: ran_show(r));
+    }
+    if took > 10000 {
+        return Result[Int, Str].Err(error: f"the deadline took {took} ms to end the child");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_scratch_directory_is_made_filled_and_removed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    if str_len(d) == 0 {
+        return Result[Int, Str].Err(error: "no scratch directory");
+    }
+    scratch_write(h, d, "a/b/c.txt", "deep")?;
+    scratch_write(h, d, "top.txt", "top")?;
+    let text = read_text(h, f"{d}/a/b/c.txt")?;
+    if text != "deep" {
+        return Result[Int, Str].Err(error: f"read back {text}");
+    }
+    let left = scratch_remove(h, d);
+    if left != 0 || file_exists_at(io, d) {
+        return Result[Int, Str].Err(error: f"{left} entries left in {d}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_codes_of_a_refused_program_are_read_from_its_json(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("an undefined name", codes(h, "fn main() -> Int { y }\n"), words("N0200"))?;
+    same_strs("a program that checks", codes(h, "fn main() -> Int { 0 }\n"), strs_new())?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_differential_run_that_disagrees_is_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    match agrees(h, "fn main(out: OutCap) -> Int ! {io} { println(\"a\"); 0 }\n", "b\n0") {
+        Result.Ok(value: m) => Result[Int, Str].Err(error: "a wrong expectation passed"),
+        Result.Err(error: e) => if text_contains(e, "printed") { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: e) },
+    }
+}

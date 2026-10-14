@@ -1,0 +1,243 @@
+// The differential harness (R7), as `crates/nazm-cli/tests/differential/mod.rs` has it: one
+// program under the interpreter and built by each backend at each optimisation level, compared on
+// standard output, exit status and memory report; and the codes `nazm check --json` reports for a
+// program it refuses.
+
+use "@std/json";
+use "@std/text";
+use "run.nz";
+use "scratch.nz";
+
+/// Every run of one program, by label.
+pub struct Labeled {
+    label: Str,
+    ran: Ran,
+}
+
+/// The environment the Rust suite's children see: this process's, with the result report on,
+/// as `.cargo/config.toml` sets it for every test Cargo starts (R1, 5b.3).
+pub fn suite_env(h: Caps) -> Strs ! { io } {
+    let io = h.io;
+    env_set(env_here(io), "NAZM_RESULT_REPORT", "1")
+}
+
+/// `nazm ARGS` in `dir`, under the suite's environment.
+pub fn nazm(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), args, dir, suite_env(h))
+}
+
+/// An executable under the address-space ceiling `bounded_exe` sets: 512 MiB, by `ulimit -v`,
+/// which macOS treats as advice and Linux enforces.
+pub fn bounded_exe(h: Caps, exe: Str, dir: Str, env: Strs) -> Ran ! { io, spawn } {
+    let kb = 524288;
+    let script = f"if [ \"$(uname -s)\" = Linux ]; then\n    ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS\n' >&2; exit 97; }}\n    got=$(ulimit -v)\n    if [ \"$got\" != {kb} ]; then\n        printf 'bounded_exe: RLIMIT_AS reads %s, expected {kb}\n' \"$got\" >&2\n        exit 97\n    fi\nelse\n    ulimit -v {kb} 2>/dev/null || true\nfi\nexec \"$0\" \"$@\"";
+    let args = strs_new();
+    strs_push(args, "-c");
+    strs_push(args, script);
+    strs_push(args, exe);
+    run(h, "sh", args, dir, env)
+}
+
+/// The `nazm-memory:` line of a run's standard error, or `""`.
+pub fn memory_line(r: Ran) -> Str ! {} {
+    for l in text_lines(r.stderr) {
+        if text_starts_with(l, "nazm-memory:") {
+            return l;
+        }
+    }
+    ""
+}
+
+/// The program `names[0]` (the files `names` with the texts `texts`) under the interpreter and
+/// built and run by each backend at each optimisation level, every one with the memory report on.
+/// `Err` when a build fails.
+pub fn everywhere(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    if str_len(d) == 0 {
+        return Result[Vec[Labeled], Str].Err(error: "no scratch directory");
+    }
+    let mut i = 0;
+    while i < strs_len(names) {
+        scratch_write(h, d, strs_get(names, i), strs_get(texts, i))?;
+        i = i + 1;
+    }
+    let main = strs_get(names, 0);
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let out = vec_new[Labeled]();
+    let a = strs_new();
+    strs_push(a, "run");
+    strs_push(a, main);
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), a, d, env)));
+    let labels = words("llvm-O0 llvm-O2 cranelift");
+    let shown = strs_new();
+    strs_push(shown, "llvm -O0");
+    strs_push(shown, "llvm -O2");
+    strs_push(shown, "cranelift");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let exe = f"{d}/{text_replace(strs_get(labels, k), "-", "")}";
+        let b = strs_new();
+        for w in words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)}") {
+            strs_push(b, w);
+        }
+        strs_push(b, main);
+        strs_push(b, "-o");
+        strs_push(b, exe);
+        let built = nazm(h, d, b);
+        if built.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Labeled], Str].Err(error: f"{name}: {built.stderr}");
+        }
+        vec_push(out, Labeled(label: name, ran: bounded_exe(h, exe, d, env)));
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn live_part(line: Str, kind: Str) -> Str ! {} {
+    let parts = text_split(line, kind);
+    if strs_len(parts) < 2 {
+        return "";
+    }
+    let fields = strs_new();
+    for w in text_split(text_replace(strs_get(parts, 1), "\t", " "), " ") {
+        if str_len(w) > 0 {
+            strs_push(fields, w);
+        }
+    }
+    if strs_len(fields) > 2 { strs_get(fields, 2) } else { "" }
+}
+
+/// Every implementation prints `expected`, exits with `code`, writes the same memory report and
+/// reclaims all it allocated: the first memory line, or `Err` saying which did not.
+pub fn agrees_on(h: Caps, names: Strs, texts: Strs, expected: Str, code: Int) -> Result[Str, Str] ! { io, spawn } {
+    let runs = everywhere(h, names, texts)?;
+    let first = memory_line(vec_get(runs, 0).ran);
+    if str_len(first) == 0 {
+        return Result[Str, Str].Err(error: f"no memory report: {vec_get(runs, 0).ran.stderr}");
+    }
+    for r in runs {
+        if r.ran.code != code {
+            return Result[Str, Str].Err(error: f"{r.label}: exit {r.ran.code}, expected {code}: {r.ran.stderr}");
+        }
+        let got = text_trim_end(r.ran.stdout);
+        if got != expected {
+            return Result[Str, Str].Err(error: f"{r.label}: printed {got}, expected {expected}");
+        }
+        let line = memory_line(r.ran);
+        if str_len(line) == 0 {
+            return Result[Str, Str].Err(error: f"{r.label}: no memory report: {r.ran.stderr}");
+        }
+        if line != first {
+            return Result[Str, Str].Err(error: f"{r.label} and the interpreter disagree about storage: {line} vs {first}");
+        }
+        for kind in words("sequences strings channels closures") {
+            let live = live_part(line, kind);
+            if live != "live=0" {
+                return Result[Str, Str].Err(error: f"{r.label}: {kind} not all reclaimed: {line}");
+            }
+        }
+    }
+    Result[Str, Str].Ok(value: first)
+}
+
+/// `agrees_on` for one file, `prog.nz`, ending `0`.
+pub fn agrees(h: Caps, src: Str, expected: Str) -> Result[Str, Str] ! { io, spawn } {
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    let texts = strs_new();
+    strs_push(texts, src);
+    agrees_on(h, names, texts, expected, 0)
+}
+
+fn codes_of(doc: JsonDoc, node: Int, into: Strs) -> Int ! {} {
+    if json_kind(doc, node) != "object" {
+        return 0;
+    }
+    match json_get(doc, node, "code") {
+        Option.Some(value: c) => match json_str(doc, c) {
+            Option.Some(value: s) => strs_push(into, s),
+            Option.None() => 0,
+        },
+        Option.None() => 0,
+    };
+    match json_get(doc, node, "diagnostics") {
+        Option.Some(value: ds) => {
+            if json_kind(doc, ds) == "array" {
+                let mut i = 0;
+                while i < json_len(doc, ds) {
+                    match json_at(doc, ds, i) {
+                        Option.Some(value: d) => match json_get(doc, d, "code") {
+                            Option.Some(value: c) => match json_str(doc, c) {
+                                Option.Some(value: s) => strs_push(into, s),
+                                Option.None() => 0,
+                            },
+                            Option.None() => 0,
+                        },
+                        Option.None() => 0,
+                    };
+                    i = i + 1;
+                }
+            }
+            0
+        },
+        Option.None() => 0,
+    };
+    0
+}
+
+/// The codes `nazm check --json` reports for the program `names[0]`, standard output's lines
+/// then standard error's, each line that is JSON read for a `code` and a `diagnostics` array.
+pub fn check_codes(h: Caps, names: Strs, texts: Strs) -> Strs ! { io, spawn } {
+    let codes = strs_new();
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i < strs_len(names) {
+        match scratch_write(h, d, strs_get(names, i), strs_get(texts, i)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0,
+        };
+        i = i + 1;
+    }
+    let a = strs_new();
+    strs_push(a, "check");
+    strs_push(a, "--json");
+    strs_push(a, strs_get(names, 0));
+    let r = nazm(h, d, a);
+    scratch_remove(h, d);
+    let lines = text_lines(r.stdout);
+    for l in text_lines(r.stderr) {
+        strs_push(lines, l);
+    }
+    for l in lines {
+        match json_parse_floats(l) {
+            Result.Ok(value: doc) => codes_of(doc, json_root(doc), codes),
+            Result.Err(error: e) => 0,
+        };
+    }
+    codes
+}
+
+/// `check_codes` for one file, `prog.nz`.
+pub fn codes(h: Caps, src: Str) -> Strs ! { io, spawn } {
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    let texts = strs_new();
+    strs_push(texts, src);
+    check_codes(h, names, texts)
+}
+
+/// `Ok` when `got` is exactly `want`, else `Err` naming `what` and both lists.
+pub fn same_strs(what: Str, got: Strs, want: Strs) -> Result[Int, Str] ! {} {
+    let g = str_join(got, ", ");
+    let w = str_join(want, ", ");
+    if g == w && strs_len(got) == strs_len(want) {
+        Result[Int, Str].Ok(value: 0)
+    } else {
+        Result[Int, Str].Err(error: f"{what}: [{g}], expected [{w}]")
+    }
+}

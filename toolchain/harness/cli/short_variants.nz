@@ -1,0 +1,89 @@
+// R1, 5b.14 (`docs/spec.md`, *Short variants*): an enum's construction infers its type arguments;
+// `Some`, `None`, `Ok` and `Err` name the prelude's variants; a variant with no payload needs no
+// `()`. Ported from `crates/nazm-cli/tests/short_variants.rs` (R7).
+//
+// The same output and memory report in every implementation, nothing live; where nothing decides
+// a type argument it is still `N0352`.
+
+use "../lib/run.nz"
+use "../lib/differential.nz"
+
+@test
+fn short_variants_build_and_match_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, r#"enum Color { Red, Green, Blue }
+
+fn name(c: Color) -> Str {
+    match c {
+        Color.Red => "red",
+        Color.Green => "green",
+        Color.Blue => "blue",
+    }
+}
+
+fn half(n: Int) -> Option[Int] {
+    if n % 2 == 0 { Some(n / 2) } else { None }
+}
+
+fn parse(s: Str) -> Result[Int, Str] {
+    if s == "one" { Ok(1) } else { Err(f"not a number: {s}") }
+}
+
+fn first(o: Option[Str]) -> Str {
+    match o {
+        Some(t) => t,
+        None => "none",
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(name(Color.Green))
+    let c = Color.Blue
+    println(name(c))
+    match half(8) {
+        Some(h) => println(h),
+        None => println("odd"),
+    }
+    match half(7) {
+        Some(h) => println(h),
+        None => println("odd"),
+    }
+    match parse("two") {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+    // From the payload, with nothing around it; as an argument; written in full still.
+    let o = Some("x")
+    if let Some(t) = o { println(t) }
+    println(first(None))
+    println(first(Some("y")))
+    let w = Option[Int].Some(value: 5)
+    match w {
+        Option.Some(value: v) => println(v),
+        Option.None() => println(0),
+    }
+    0
+}
+"#, "green\nblue\n4\nodd\nnot a number: two\nx\nnone\ny\n5\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn first_code_is(h: Caps, src: Str, code: Str, why: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = codes(h, src);
+    let first = if strs_len(got) > 0 { strs_get(got, 0) } else { "(none)" };
+    if first == code {
+        Result[Int, Str].Ok(value: 0)
+    } else {
+        Result[Int, Str].Err(error: f"{why}: [{str_join(got, ", ")}], expected {code} first")
+    }
+}
+
+@test
+fn what_nothing_decides_is_still_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    first_code_is(h, "fn main() -> Int { let o = None; 0 }\n", "N0352", "`None` with nothing to say what it holds")?;
+    first_code_is(h, "fn main() -> Int { let r = Ok(2); 0 }\n", "N0352", "`Ok` with nothing to say what its error is")?;
+    first_code_is(h, "fn f() -> Option[Int] { Some(\"a\") }\nfn main() -> Int { 0 }\n", "N0300", "a payload of the wrong type for the type wanted")?;
+    first_code_is(h, "enum C { R(n: Int) }\nfn main() -> Int { match C.R(n: 1) { C.R => 0 } }\n", "N0334", "a variant pattern without `()` that has a payload")?;
+    Result[Int, Str].Ok(value: 0)
+}
