@@ -35,7 +35,9 @@ pub mod names;
 pub mod op;
 pub mod symbol;
 
-pub use nazm_runtime::{Needs, MEMORY_FORMAT, MEMORY_VARIABLE, TARGET_NOTE};
+pub use nazm_runtime::{
+    Needs, MEMORY_FORMAT, MEMORY_VARIABLE, RESULT_STATUS, RESULT_VARIABLE, TARGET_NOTE,
+};
 
 /// What a program sees when a native call stack is exhausted (N49): `N0408`'s message.
 pub const STACK_EXHAUSTED: &str = "the native call stack is exhausted";

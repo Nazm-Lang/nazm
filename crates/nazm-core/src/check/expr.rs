@@ -12,6 +12,7 @@ impl Checker<'_> {
     /// unknowable, it is returned so the caller does not then report a second, invented
     /// mismatch.
     pub(super) fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
+        let unwanted = std::mem::take(&mut self.unwanted);
         match e {
             Expr::Int { value, span } => {
                 Completion::Value(self.integer_literal((*value).into(), *span, expected))
@@ -176,7 +177,22 @@ impl Checker<'_> {
                 // `m::f` is looked up as one key (N49); everything below names it as written.
                 let key = written_key(qualifier.as_ref(), callee);
                 let callee = &key;
-                let Some(sig) = self.resolve_callee(callee, *callee_span) else {
+                let resolved = self.resolve_callee(callee, *callee_span);
+                // A function that returns nothing (R1, 5b.2) has no value to use.
+                if let Some(sig) = resolved.as_ref().filter(|s| s.no_result && !unwanted) {
+                    let _ = sig;
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::TYPE_MISMATCH,
+                            *span,
+                            format!("`{callee}` returns nothing, so this call has no value to use"),
+                        )
+                        .help(format!(
+                            "call it as a statement of its own, or give `{callee}` a result type"
+                        )),
+                    );
+                }
+                let Some(sig) = resolved else {
                     let qualified = qualifier.is_some().then(|| {
                         unknown_qualified(callee, &self.alias_names(), *callee_span, "function")
                     });
@@ -436,7 +452,6 @@ impl Checker<'_> {
                 else_block,
                 ..
             } => {
-                let unwanted = std::mem::take(&mut self.unwanted_if);
                 let ct = self.value_type(cond, Some(Type::Bool));
                 if ct != Type::Bool {
                     self.errors.push(

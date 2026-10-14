@@ -128,6 +128,9 @@ pub struct Parser<'a> {
     hole_open: bool,
     /// The file's text, for whether a line break separates two tokens (R1, 5b.19).
     text: &'a str,
+    /// Whether the body being read is a function's written with no result type (R1, 5b.2),
+    /// where a `return` needs no value.
+    no_result: bool,
 }
 
 /// The parser's view of the token list: every read goes through it, and it remembers the
@@ -420,6 +423,7 @@ pub(crate) fn parse_region(
         hole_site: None,
         hole_open: false,
         text,
+        no_result: false,
     };
     let mut chunks = Vec::new();
     let mut landings = region.landings.iter().peekable();
@@ -610,6 +614,20 @@ fn printed(name: String, mut args: Vec<Expr>, parens: Span) -> (String, Vec<Expr
         Expr::Interp { parts, span }
     };
     (target.to_owned(), vec![arg])
+}
+
+/// The body of a function written with no result type (R1, 5b.2): its last value, if it has
+/// one, becomes a statement, and the block's value is a `0` at a span of no width at its end.
+fn returning_nothing(mut b: Block) -> Block {
+    if let Some(tail) = b.tail.take() {
+        b.statements.push(Stmt::Expr(*tail));
+    }
+    let end = b.span.end;
+    b.tail = Some(Box::new(Expr::Int {
+        value: 0,
+        span: Span::new(b.span.file, end, end),
+    }));
+    b
 }
 
 /// Whether a name begins with a capital letter, as a type's and a variant's do (R1, 5b.14).
@@ -2075,14 +2093,41 @@ impl<'a> Parser<'a> {
 
         let (effect_params, type_params): (Vec<TypeParam>, Vec<TypeParam>) =
             self.type_params()?.into_iter().partition(|p| p.effect);
-        let params = self.param_list("after the function name")?;
+        let mut params = self.param_list("after the function name")?;
+        // Option C (R1, 5b.1): `main` may print without writing it — one that holds neither an
+        // `OutCap` nor an `IoCap` is given an `OutCap` named `out`, as if written, at a span of
+        // no width after its parameters. Every other authority is still written.
+        if name == "main"
+            && foreign_abi.is_none()
+            && !params
+                .iter()
+                .any(|p| matches!(p.ty.name.as_str(), "OutCap" | "IoCap") || p.name == "out")
+        {
+            let at = self.previous_end();
+            let none = Span::new(self.file, at, at);
+            params.push(Param {
+                name: "out".to_owned(),
+                name_span: none,
+                ty: TypeName::plain("OutCap", none),
+                span: none,
+            });
+        }
 
-        // Required, not optional. A missing return type would have to mean either "infer
-        // it" or "returns nothing", and v0.1 has neither.
-        let ret = self.checkpoint();
-        self.expect(&TokenKind::Arrow, "before the return type")?;
-        let return_type = self.type_name()?;
-        self.wrap(ret, SyntaxKind::RetType);
+        // A function written with no result type returns nothing (R1, 5b.2): it is given
+        // `Int` at a span of no width — which is how the checker knows none was written — its
+        // body's last value is discarded and it returns `0`, and its calls are statements. A
+        // foreign declaration still writes one, as C's signature has one.
+        let no_result = !self.at(&TokenKind::Arrow) && foreign_abi.is_none();
+        let return_type = if no_result {
+            let at = self.previous_end();
+            TypeName::plain("Int", Span::new(self.file, at, at))
+        } else {
+            let ret = self.checkpoint();
+            self.expect(&TokenKind::Arrow, "before the return type")?;
+            let return_type = self.type_name()?;
+            self.wrap(ret, SyntaxKind::RetType);
+            return_type
+        };
         let effects = self.effect_set()?;
 
         // A foreign declaration ends where a body would begin: `= "symbol";`. The symbol is
@@ -2153,7 +2198,11 @@ impl<'a> Parser<'a> {
         // language exists to avoid. Keep the signature; skip to the next item.
         let body_at = self.checkpoint();
         let body_start = self.pos;
-        let body = match self.block() {
+        let outer = std::mem::replace(&mut self.no_result, no_result);
+        let block = self.block();
+        self.no_result = outer;
+        let block = block.map(|b| if no_result { returning_nothing(b) } else { b });
+        let body = match block {
             // A body that recovered from a statement is complete in the concrete tree and
             // absent from the abstract one: the checker sees no body rather than a body
             // with a statement missing from the middle of it.
@@ -2527,7 +2576,11 @@ impl<'a> Parser<'a> {
         self.expect(&TokenKind::Arrow, "before a closure's result type")?;
         let return_type = self.type_name()?;
         let effects = self.effect_set()?;
-        let body = self.block()?;
+        // A closure's `return` is the closure's, which always has a result type.
+        let outer = std::mem::replace(&mut self.no_result, false);
+        let body = self.block();
+        self.no_result = outer;
+        let body = body?;
         self.built(self.child() + 1)?;
         self.wrap(at, SyntaxKind::ClosureExpr);
         let span = fn_span.join(body.span);
@@ -3249,6 +3302,25 @@ impl<'a> Parser<'a> {
         let at = self.checkpoint();
         let start = self.peek_span();
         self.advance();
+
+        // In a function with no result type (R1, 5b.2), `return` alone returns, and its value
+        // is the `0` such a function returns.
+        if self.no_result
+            && (self.at(&TokenKind::Semi)
+                || self.at(&TokenKind::RBrace)
+                || self.line_break_before())
+        {
+            let end = self.previous_end();
+            let semi = self.expect(&TokenKind::Semi, "after `return`")?;
+            self.wrap(at, SyntaxKind::ReturnStmt);
+            return Some(Return {
+                value: Expr::Int {
+                    value: 0,
+                    span: Span::new(self.file, end, end),
+                },
+                span: start.join(semi),
+            });
+        }
 
         // `return;` would need a unit type to mean anything, and this language has not
         // made that decision. Refused by name rather than parsed into something else.

@@ -18,6 +18,7 @@ mod common;
 mod differential;
 mod memory_report;
 
+mod main_ends;
 mod manifests;
 mod memory;
 mod mir;

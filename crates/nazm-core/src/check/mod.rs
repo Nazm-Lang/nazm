@@ -83,6 +83,8 @@ pub struct Signature {
     /// Whether a contract clause may call it (N87): a function declaring `! {}` that is not
     /// foreign, or a built-in that reads and neither allocates nor performs an effect.
     pub pure: bool,
+    /// Whether it returns nothing (R1, 5b.2): its call has no value to use.
+    pub no_result: bool,
 }
 
 /// What is known about a binding.
@@ -448,10 +450,12 @@ pub struct Checker<'a> {
     /// body, or a branch of an `if` whose own value nobody wants. Taken by the block it is
     /// for, so a block nested anywhere inside starts without it.
     discard_tail: bool,
-    /// Whether the next `if` checked is one whose value nobody wants: an expression
-    /// statement, or the last line of a block whose value nobody wants. Its branches may then
-    /// end differently — one in a value, one in another or none — and it produces nothing.
-    unwanted_if: bool,
+    /// Whether nobody wants the value of the next expression checked: an expression statement,
+    /// or the last line of a block whose value nobody wants. Taken by that expression, so one
+    /// nested in it starts without it. An `if` there may end its branches differently, and
+    /// produces nothing (R1, 5b.19); a call there may be of a function that returns nothing
+    /// (R1, 5b.2).
+    unwanted: bool,
     /// The loop depth where the `defer` body being checked begins (R1b, L12), or `None` outside
     /// one: a `break` or `continue` at that depth, a `return` or a `?` would leave it.
     defer_floor: Option<u32>,

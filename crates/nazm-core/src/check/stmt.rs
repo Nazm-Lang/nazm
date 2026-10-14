@@ -35,7 +35,9 @@ impl Checker<'_> {
 
         // A block whose statements diverge never reaches its tail.
         if diverged_at.is_some() {
-            if let Some(tail) = &b.tail {
+            // The `0` a function with no result type returns has no width (R1, 5b.2): nothing
+            // was written there to never run.
+            if let Some(tail) = b.tail.as_ref().filter(|t| t.span().start != t.span().end) {
                 self.errors.push(Diagnostic::error(
                     codes::UNREACHABLE_STATEMENT,
                     tail.span(),
@@ -47,7 +49,7 @@ impl Checker<'_> {
 
         match &b.tail {
             Some(tail) => {
-                self.unwanted_if = discard && matches!(**tail, Expr::If { .. });
+                self.unwanted = discard;
                 self.check_expr(tail, expected)
             }
             None => Completion::Unit,
@@ -158,8 +160,8 @@ impl Checker<'_> {
                 false
             }
             Stmt::Expr(e) => {
-                // An `if` as a statement: nobody wants its value (R1, 5b.19).
-                self.unwanted_if = matches!(e, Expr::If { .. });
+                // An expression statement: nobody wants its value (R1, 5b.19, 5b.2).
+                self.unwanted = true;
                 self.check_expr(e, None).diverges()
             }
         }

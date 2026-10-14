@@ -30,6 +30,17 @@ pub const MEMORY_FORMAT: &str = "nazm-memory: sequences allocated=%lld reclaimed
 /// program.
 pub const SCHED_VARIABLE: &str = "NAZM_SCHED_REPORT";
 
+/// Set to anything, it asks a program to print `main`'s result and exit `0`, as every program did
+/// before R1 (5b.3), rather than end with the result as its exit status. A report, like the
+/// memory report: the tests read results this way, and a program run without it behaves as the
+/// specification says.
+pub const RESULT_VARIABLE: &str = "NAZM_RESULT_REPORT";
+
+/// What a program that ends with a result outside `0..=255` writes (R1, 5b.3), as `exit_with`
+/// of one does (`N0416`), and then ends with status 2.
+pub const RESULT_STATUS: &str =
+    "error[N0416]: `main`'s result is an exit status, and this one is outside 0 to 255";
+
 /// What that report says: four counts of what happened, never samples.
 pub const SCHED_FORMAT: &str = "nazm-sched: spawned=%lld joined=%lld selects=%lld timeouts=%lld";
 use crate::{preamble, Needs};
