@@ -1,0 +1,161 @@
+// The mutation core's own tests (R7): what `xtask/src/mutate.rs`'s tests hold the Rust runner to —
+// an injection lands exactly once or is NOT INJECTED with the reason, the original is on disk before
+// the file changes, restoring puts back every byte, a file edited since is never overwritten, and a
+// killer's three results become the right verdict.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../mutate/catalogue.nz"
+use "../mutate/core.nz"
+
+const SOURCE: Str = "fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n";
+
+fn mutation(find: Str, replace: Str) -> Mutation ! {} {
+    Mutation(name: "plus-becomes-minus", file: "src/lib.rs", find: find, replace: replace, killers: vec_new[Killer](), problem: "")
+}
+
+fn tree(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "src/lib.rs", SOURCE)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+fn expect_err(what: Str, r: Result[Str, Str], says: Str) -> Result[Int, Str] ! {} {
+    match r {
+        Result.Ok(value: v) => Result[Int, Str].Err(error: f"{what}: applied ({v})"),
+        Result.Err(error: e) => if text_contains(e, says) { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: f"{what}: {e}") },
+    }
+}
+
+@test
+fn the_digest_is_the_rust_runners_fnv_1a(io: IoCap) -> Result[Int, Str] ! { io } {
+    // FNV-1a 64 of "" is the offset basis; of "a", 0xaf63dc4c8601ec8c.
+    if digest("") != "cbf29ce484222325" {
+        return Result[Int, Str].Err(error: digest(""));
+    }
+    if digest("a") != "af63dc4c8601ec8c" {
+        return Result[Int, Str].Err(error: digest("a"));
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_mutation_is_applied_once_and_restored_byte_for_byte(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = tree(h)?;
+    apply(h, d, mutation("a + b", "a - b"))?;
+    let mutated = read_text(h, f"{d}/src/lib.rs")?;
+    let record = read_text(h, f"{d}/target/.nazm-mutation-backup")?;
+    restore(h, d)?;
+    let back = read_text(h, f"{d}/src/lib.rs")?;
+    let left = file_exists_at(io, f"{d}/target/.nazm-mutation-backup");
+    scratch_remove(h, d);
+    if mutated != text_replace(SOURCE, "a + b", "a - b") {
+        return Result[Int, Str].Err(error: f"mutated: {mutated}");
+    }
+    let head = f"{RECORD_VERSION}\nsrc/lib.rs\n{digest(mutated)}\n{digest(SOURCE)}\n";
+    if record != f"{head}{SOURCE}" {
+        return Result[Int, Str].Err(error: f"the backup record: {record}");
+    }
+    if back != SOURCE || left {
+        return Result[Int, Str].Err(error: f"restored: {back}, backup left: {left}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_pattern_that_does_not_apply_exactly_once_is_not_injected(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = tree(h)?;
+    expect_err("absent", apply(h, d, mutation("a * b", "a - b")), "pattern not found in src/lib.rs")?;
+    expect_err("twice", apply(h, d, mutation("i64", "u64")), "pattern occurs 3 times in src/lib.rs; it must be unique")?;
+    expect_err("no-op", apply(h, d, mutation("a + b", "a + b")), "replacement produced an identical file")?;
+    let still = read_text(h, f"{d}/src/lib.rs")?;
+    let backup = file_exists_at(io, f"{d}/target/.nazm-mutation-backup");
+    scratch_remove(h, d);
+    if still != SOURCE || backup {
+        return Result[Int, Str].Err(error: "a refused mutation touched the tree");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_second_mutation_is_refused_while_one_is_applied(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = tree(h)?;
+    apply(h, d, mutation("a + b", "a - b"))?;
+    let second = apply(h, d, mutation("i64 {", "u64 {"));
+    restore(h, d)?;
+    scratch_remove(h, d);
+    expect_err("second", second, "a mutation is already applied")
+}
+
+@test
+fn a_file_edited_since_is_never_restored_over(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = tree(h)?;
+    apply(h, d, mutation("a + b", "a - b"))?;
+    scratch_write(h, d, "src/lib.rs", "// somebody's edit\n")?;
+    let refused = restore(h, d);
+    let kept = read_text(h, f"{d}/src/lib.rs")?;
+    let backup = file_exists_at(io, f"{d}/target/.nazm-mutation-backup");
+    scratch_remove(h, d);
+    expect_err("edited", refused, "matches neither")?;
+    if kept != "// somebody's edit\n" || !backup {
+        return Result[Int, Str].Err(error: "the edit or the backup was lost");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_tree_already_restored_only_loses_its_record(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = tree(h)?;
+    apply(h, d, mutation("a + b", "a - b"))?;
+    scratch_write(h, d, "src/lib.rs", SOURCE)?;
+    let said = restore(h, d)?;
+    let backup = file_exists_at(io, f"{d}/target/.nazm-mutation-backup");
+    scratch_remove(h, d);
+    if !text_contains(said, "already restored") || backup {
+        return Result[Int, Str].Err(error: f"{said}, backup left: {backup}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_verdict_is_the_rust_runners(io: IoCap) -> Result[Int, Str] ! { io } {
+    let cases = strs_new();
+    strs_push(cases, f"{verdict(0, 1, 0)}|caught      ");
+    strs_push(cases, f"{verdict(0, 0, 0)}|SURVIVED    ");
+    strs_push(cases, f"{verdict(1, 1, 0)}|UNUSABLE    ");
+    strs_push(cases, f"{verdict(0, TIMED_OUT, 0)}|TIMEOUT     ");
+    strs_push(cases, f"{verdict(0, 1, 1)}|RUNNER ERROR");
+    for c in cases {
+        let parts = text_split(c, "|");
+        if strs_get(parts, 0) != strs_get(parts, 1) {
+            return Result[Int, Str].Err(error: c);
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_catalogue_is_read_with_its_killers(io: IoCap) -> Result[Int, Str] ! { io } {
+    let text = "[[mutation]]\nname = \"m\"\nwhy = \"w\"\nfile = \"f.rs\"\nfind = \"\"\"a\nb\"\"\"\nreplace = \"c\"\nkillers = [{ package = \"p\", test = \"t\", name = \"x::y\" }, { package = \"q\", lib = true, name = \"z\" }]\n\n[[mutation]]\nname = \"broken\"\n";
+    let cat = catalogue_read(text, "cat.toml")?;
+    if vec_len(cat.mutations) != 2 || strs_len(cat.problems) != 1 || vec_get(cat.mutations, 1).problem != strs_get(cat.problems, 0) {
+        return Result[Int, Str].Err(error: f"{vec_len(cat.mutations)} read, {strs_len(cat.problems)} problems");
+    }
+    let m = vec_get(cat.mutations, 0);
+    let ks = strs_new();
+    for k in m.killers {
+        strs_push(ks, killer_show(k));
+    }
+    let shown = str_join(ks, " ");
+    if m.find != "a\nb" || shown != "p:test=t:x::y q:lib:z" {
+        return Result[Int, Str].Err(error: f"{m.find} / {shown}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}

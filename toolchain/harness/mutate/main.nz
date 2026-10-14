@@ -1,0 +1,140 @@
+// `nazm-mutate` (R7): the mutation runner's core, in Nazm — read the catalogue, apply one
+// mutation to a tree exactly once, restore it, and turn a killer's results into a verdict.
+// What `xtask/src/mutate.rs` does around one injection, without the campaign, the journal of
+// verdicts, or containment, which stay with the Rust runner.
+//
+//   nazm-mutate list CATALOGUE                  one line per entry: name, file, killers
+//   nazm-mutate check ROOT                      every entry of ROOT's catalogue applies exactly once
+//   nazm-mutate apply ROOT CATALOGUE NAME       inject NAME into ROOT, the original kept first
+//   nazm-mutate restore ROOT                    put back what `apply` changed
+//   nazm-mutate try ROOT CATALOGUE NAME CMD     CMD (a shell command, run in ROOT) on the tree
+//                                               pristine, mutated and restored: the verdict
+//
+// The backup is the Rust runner's own record, `ROOT/target/.nazm-mutation-backup` in its version
+// 2 layout — the format line, the file, the FNV-1a digests of the mutated and the original text,
+// then the original — so a tree either runner left mutated is recovered by either
+// (`cargo xtask mutate-recover`, or `restore` here).
+
+use "@std/file"
+use "@std/ioerror"
+use "@std/text"
+use "@std/process"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "catalogue.nz"
+use "core.nz"
+
+fn usage() -> Str ! {} {
+    "usage: nazm-mutate list CATALOGUE | check ROOT | apply ROOT CATALOGUE NAME | restore ROOT | try ROOT CATALOGUE NAME CMD [--deadline-secs N]"
+}
+
+fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let args = process_args(io);
+    let n = strs_len(args);
+    if n < 2 {
+        eprintln(usage());
+        return 2;
+    }
+    let cmd = strs_get(args, 0);
+    if cmd == "list" {
+        let path = strs_get(args, 1);
+        let text = match read_text(h, path) {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => { eprintln(e); return 1; },
+        };
+        let cat = match catalogue_read(text, path) {
+            Result.Ok(value: c) => c,
+            Result.Err(error: e) => { eprintln(e); return 1; },
+        };
+        let lines = strs_new();
+        for m in cat.mutations {
+            if str_len(m.problem) > 0 {
+                continue;
+            }
+            let ks = strs_new();
+            for k in m.killers {
+                strs_push(ks, killer_show(k));
+            }
+            strs_push(lines, f"{m.name}\t{m.file}\t{str_join(ks, " ")}");
+        }
+        for pr in cat.problems {
+            eprintln(pr);
+        }
+        if strs_len(lines) > 0 {
+            print(str_join(lines, "\n")); print("\n");
+        }
+        return if strs_len(cat.problems) > 0 { 1 } else { 0 };
+    }
+    if cmd == "check" {
+        // The exactly-once half of `cargo xtask check`'s mutations-apply gate, over ROOT's own
+        // catalogue, named as that gate names it.
+        let root = strs_get(args, 1);
+        let shown = "xtask/mutations/mutations.toml";
+        let text = match read_rust(h, f"{root}/{shown}") {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => { println(f"{shown}: {e}"); return 1; },
+        };
+        let cat = match catalogue_read(text, shown) {
+            Result.Ok(value: c) => c,
+            Result.Err(error: e) => { println(e); return 1; },
+        };
+        let bad = applies_once(h, root, cat);
+        for b in bad {
+            println(b);
+        }
+        return if strs_len(bad) > 0 { 1 } else { 0 };
+    }
+    if cmd == "restore" {
+        return match restore(h, strs_get(args, 1)) {
+            Result.Ok(value: what) => { println(what); 0 },
+            Result.Err(error: e) => { eprintln(e); 1 },
+        };
+    }
+    if n < 4 {
+        eprintln(usage());
+        return 2;
+    }
+    let root = strs_get(args, 1);
+    let m = match find_mutation(h, strs_get(args, 2), strs_get(args, 3)) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { eprintln(e); return 1; },
+    };
+    if cmd == "apply" {
+        return match apply(h, root, m) {
+            Result.Ok(value: file) => { println(f"injected     {m.name} ({file})"); 0 },
+            Result.Err(error: e) => { println(f"NOT INJECTED {m.name}: {e}"); 1 },
+        };
+    }
+    if cmd == "try" && n >= 5 {
+        let check = strs_get(args, 4);
+        let mut secs = 1800;
+        if n >= 7 && strs_get(args, 5) == "--deadline-secs" {
+            secs = match text_parse_int(strs_get(args, 6)) {
+                Result.Ok(value: s) => s,
+                Result.Err(error: e) => 1800,
+            };
+        }
+        let ms = secs * 1000;
+        let pristine = shell(h, root, check, ms);
+        if pristine.code != 0 {
+            println(f"{verdict(pristine.code, 0, 0)} {m.name}: the check fails on the pristine tree");
+            return 1;
+        }
+        let file = match apply(h, root, m) {
+            Result.Ok(value: f) => f,
+            Result.Err(error: e) => { println(f"NOT INJECTED {m.name}: {e}"); return 1; },
+        };
+        let mutated = shell(h, root, check, ms);
+        match restore(h, root) {
+            Result.Ok(value: what) => what,
+            Result.Err(error: e) => { eprintln(e); return 1; },
+        };
+        let restored = shell(h, root, check, ms);
+        let word = verdict(0, mutated.code, restored.code);
+        println(f"{word} {m.name} (mutated: exit {mutated.code}; restored: exit {restored.code})");
+        return if word == "caught      " { 0 } else { 1 };
+    }
+    eprintln(usage());
+    2
+}
