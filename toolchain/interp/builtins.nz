@@ -8,6 +8,9 @@ use "heap.nz"
 use "names.nz"
 use "vm.nz"
 use "values.nz"
+use "num.nz"
+use "numbuiltins.nz"
+use "bytestext.nz"
 
 fn arg_v(vm: Vm, n: Int, i: Int) -> V {
     vec_get(vm.ops, vec_len(vm.ops) - n + i)
@@ -64,6 +67,9 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap
     } else {
         id
     }
+    if is_bytes_text(op) {
+        return bytes_text(p, vm, pc, op, n, strs_get(p.names, ints_get(p.c, pc)))
+    }
     if op == B_PRINT || op == B_EPRINT {
         let s = str_of(arg_v(vm, n, 0))
         if op == B_PRINT { print(s) } else { eprint(s) }
@@ -71,17 +77,13 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap
     } else if op == B_INT_TO_STR {
         heap_str(h, int_to_str(int_of(arg_v(vm, n, 0))))
     } else if op == B_NUM_TO_STR {
-        match arg_v(vm, n, 0) {
-            V.Int(v: x) => heap_str(h, int_to_str(x)),
-            _ => bug(p, vm, pc, id, "a number this interpreter cannot write yet"),
-        }
+        heap_str(h, text(arg_v(vm, n, 0)))
     } else if op == B_STR_CONCAT {
         heap_str(h, str_of(arg_v(vm, n, 0)) + str_of(arg_v(vm, n, 1)))
     } else if op == B_STR_CONCAT_NUM {
-        match arg_v(vm, n, 1) {
-            V.Int(v: x) => heap_str(h, str_of(arg_v(vm, n, 0)) + int_to_str(x)),
-            _ => bug(p, vm, pc, id, "a number this interpreter cannot write yet"),
-        }
+        heap_str(h, str_of(arg_v(vm, n, 0)) + text(arg_v(vm, n, 1)))
+    } else if op >= B_WRAPPING_ADD && op <= B_FLOAT_PARSE_RAW {
+        numeric_builtin(p, vm, pc, op, n)
     } else if op == B_STR_APPEND {
         // Reached here, the string has a second reference — the argument — so this copies.
         let s = arg_v(vm, n, 0)
@@ -198,6 +200,23 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap
         }
         // The operating system's storage, not the program's: immortal.
         V.Str(s: strs_get(vm.args, i), obj: 0, start: 0)
+    } else if op == B_READ_FILE || op == B_WRITE_FILE {
+        // The path and the host's reason go in the help, as `std::io::Error` writes it.
+        let path = str_of(arg_v(vm, n, 0))
+        let status = if op == B_READ_FILE { open_status(io, path, false) } else { open_status(io, path, true) }
+        if status < 0 {
+            let reason = os_error_text(status)
+            let errno = 0 - status
+            let message = if op == B_READ_FILE { "this file could not be read" } else { "this file could not be written" }
+            return fail(p, vm, pc, "N0407", message, f"`{path}`: {reason} (os error {errno})")
+        }
+        if op == B_READ_FILE {
+            heap_str(h, read_file(path))
+        } else {
+            V.Int(v: write_file(path, str_of(arg_v(vm, n, 1))))
+        }
+    } else if op == B_FILE_EXISTS {
+        V.Bool(v: file_exists(str_of(arg_v(vm, n, 0))))
     } else if op == B_CONTRACT_CHECK {
         match arg_v(vm, n, 0) {
             V.Bool(v: holds) => {
@@ -214,4 +233,12 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap
         let name = strs_get(builtin_names(), id)
         fail(p, vm, pc, "N0900", f"the built-in `{name}` is not in this interpreter yet", "")
     }
+}
+
+/// Whether `path` opens, for reading or (creating it) for writing: 0, or the failure's status.
+fn open_status(io: IoCap, path: Str, write: Bool) -> Int {
+    let h = if write { os_open_write(path, 0) } else { os_open_read(path) }
+    let status = os_status(h)
+    if status == 0 { let c = os_close(h) }
+    status
 }

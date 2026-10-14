@@ -1,0 +1,50 @@
+// Recursive types through `Box` and `List`, records holding handles, closures holding strings: each
+// counted and reclaimed as the Rust interpreter counts it.
+enum Expr {
+    Num(v: Int),
+    Add(l: Box[Expr], r: Box[Expr]),
+    Many(xs: List[Expr]),
+}
+
+struct Bag {
+    name: Str,
+    items: Vec[Str],
+}
+
+fn eval(e: Expr) -> Int {
+    match e {
+        Expr.Num(v: v) => v,
+        Expr.Add(l: l, r: r) => eval(box_get(l)) + eval(box_get(r)),
+        Expr.Many(xs: xs) => {
+            let mut t = 0
+            for x in xs { t += eval(x) }
+            t
+        },
+    }
+}
+
+fn chain(n: Int) -> Expr {
+    let mut e = Expr.Num(v: 0)
+    for i in 1..n + 1 {
+        e = Expr.Add(l: box_new(e), r: box_new(Expr.Num(v: i)))
+    }
+    e
+}
+
+fn main() {
+    println(eval(chain(50)))
+    let parts = vec_new[Expr]()
+    for i in 0..5 { vec_push(parts, Expr.Num(v: i * i)) }
+    println(eval(Expr.Many(xs: list_from_vec(parts))))
+    let b = Bag(name: "bag" + "!", items: vec_new[Str]())
+    vec_push(b.items, b.name + "1")
+    let c = b
+    vec_push(c.items, "2")
+    println(f"{b.name} {vec_len(b.items)}")
+    let suffix = "-" + "s"
+    let f = fn(x: Str) -> Str { x + suffix }
+    let fs = vec_new[fn(Str) -> Str]()
+    vec_push(fs, f)
+    let g = vec_get(fs, 0)
+    println(g("w"))
+}

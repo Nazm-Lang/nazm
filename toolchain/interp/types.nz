@@ -1,6 +1,10 @@
 // The interpreter's data: values, the program it loaded, and the machine that runs it
 // (`openspec/changes/r4-interpreter/design.md`, D2–D4).
 
+use "@std/hash"
+use "@std/hashmap"
+use "shapes.nz"
+
 /// A run-time value. `Unset` is a slot not yet bound, or bound in a region since left.
 ///
 /// A record, an enum value and an array are immutable aggregates, as the language makes them;
@@ -19,6 +23,9 @@ pub enum V {
     Cap(kind: Int),
     Num(kind: Int, v: Int128),
     Flt(kind: Int, v: Float64),
+    // A `Bytes`: a view of a buffer, by reference (Gate 2), and the heap object that counts the
+    // buffer.
+    Byt(b: Bytes, obj: Int),
 }
 
 /// The loaded program: its code, as parallel arrays, and its tables.
@@ -51,6 +58,12 @@ pub struct Prog {
     mods: Strs,
     // The root's `main`, by function index.
     entry: Int,
+    // Function keys to indices: what a trait call's impl is found by (D8).
+    fmap: HashMap[Str, Int],
+    // What each record and enum's names are, for the canonical orders (D8).
+    shapes: Shapes,
+    // A trait call's impl, once found: by `method * 1000003 + receiver type`, both interned.
+    tcache: HashMap[Int, Int],
 }
 
 /// The heap: every object a handle names (D4). `kind` 0 is a free entry.

@@ -1,0 +1,41 @@
+// `s = s + t` grows in place exactly when the Rust interpreter's does: the memory report counts
+// every allocation, so a string shared with a sequence, a slice or a second binding forces the
+// copies Rust makes, and a string alone grows in its room.
+fn grow(n: Int) -> Str {
+    let mut s = ""
+    for i in 0..n {
+        s = s + "ab"
+    }
+    s
+}
+
+fn shared(n: Int) -> Int {
+    let keep = strs_new()
+    let mut s = "x"
+    for i in 0..n {
+        s = s + "y"
+        if i % 3 == 0 { strs_push(keep, s) }
+    }
+    strs_len(keep) + str_len(s)
+}
+
+fn sliced(n: Int) -> Int {
+    let mut s = "start"
+    let mut total = 0
+    for i in 0..n {
+        s = s + "z"
+        let t = str_slice(s, 1, 3)
+        total += str_len(t)
+    }
+    total
+}
+
+fn main() {
+    println(str_len(grow(100)))
+    println(shared(20))
+    println(sliced(10))
+    let mut a = "q"
+    let b = a
+    a = a + "r"
+    println(a + b)
+}

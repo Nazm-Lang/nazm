@@ -9,6 +9,9 @@ use "@std/hashmap"
 use "types.nz"
 use "ops.nz"
 use "names.nz"
+use "shapes.nz"
+use "num.nz"
+use "numkinds.nz"
 
 /// What the lowering keeps while it walks: the document, the program being built, and the static
 /// shape of the code — how deep the operand stack is, which regions are open, which loops.
@@ -390,6 +393,7 @@ fn assign(l: L, s: Int, at: (Int, Int, Int)) {
         } else {
             aux(l, 0)
             aux(l, gi(l, step, "field"))
+            note_field(l.p.shapes, gs(l, step, "record"), gi(l, step, "field"), gs(l, step, "name"))
         }
     }
     let o = emit(l, OP_ASSIGN, local, start, nidx, at)
@@ -411,8 +415,16 @@ fn matching(l: L, m: Int, value: Bool, at: (Int, Int, Int)) {
     let o = emit(l, OP_MATCH, table, 0, 0, at)
     let base = sp(l)
     let ends = ints_new()
+    let ty = gs(l, m, "enum")
     for i in 0..n {
         let arm = nth(l, arms, i)
+        let variant = gi(l, arm, "variant")
+        note_variant(l.p.shapes, ty, variant, gs(l, arm, "name"))
+        let bound = g(l, arm, "bindings")
+        for k in 0..len(l, bound) {
+            let b = nth(l, bound, k)
+            note_payload(l.p.shapes, ty, variant, gi(l, b, "field"), gs(l, b, "name"))
+        }
         ints_set(l.p.aux, table + 2 + 2 * i, pc(l))
         set_sp(l, base)
         let arm_at = here(l, arm, at)
@@ -537,13 +549,22 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
         matching(l, e, true, at)
     } else if op == "record" {
         let fields = g(l, e, "fields")
+        let ty = gs(l, e, "type")
+        for i in 0..len(l, fields) {
+            let f = nth(l, fields, i)
+            note_field(l.p.shapes, ty, gi(l, f, "field"), gs(l, f, "name"))
+        }
         let start = ints_len(l.p.aux)
         inits(l, fields, at)
-        let o = emit(l, OP_RECORD, name(l, gs(l, e, "type")), len(l, fields), start, at)
+        let o = emit(l, OP_RECORD, name(l, ty), len(l, fields), start, at)
     } else if op == "variant" {
         let fields = g(l, e, "fields")
+        let ty = gs(l, e, "type")
+        note_variant(l.p.shapes, ty, gi(l, e, "variant"), gs(l, e, "name"))
         for i in 0..len(l, fields) {
-            expr(l, g(l, nth(l, fields, i), "value"), at)
+            let f = nth(l, fields, i)
+            note_payload(l.p.shapes, ty, gi(l, e, "variant"), gi(l, f, "field"), gs(l, f, "name"))
+            expr(l, g(l, f, "value"), at)
         }
         let start = ints_len(l.p.aux)
         aux(l, gi(l, e, "variant"))
@@ -571,11 +592,11 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
     } else if op == "convert" {
         expr(l, g(l, e, "operand"), at)
         let mode = gs(l, e, "mode")
-        let m = if mode == "wrapping" { 1 } else if mode == "saturating" { 2 } else { 0 }
-        let o = emit(l, OP_CONVERT, m, name(l, gs(l, e, "type")), 0, at)
+        let m = if mode == "wrap" { 1 } else if mode == "saturate" { 2 } else { 0 }
+        let o = emit(l, OP_CONVERT, m, kind_of_type(gs(l, e, "type")), 0, at)
     } else if op == "fits" {
         expr(l, g(l, e, "operand"), at)
-        let o = emit(l, OP_FITS, name(l, gs(l, e, "to")), 0, 0, at)
+        let o = emit(l, OP_FITS, kind_of_type(gs(l, e, "to")), 0, 0, at)
     } else if op == "closure" {
         let caps = g(l, e, "captures")
         let start = ints_len(l.p.aux)
@@ -642,6 +663,8 @@ fn constant(l: L, c: Int) -> V {
         V.Bool(v: json_kind(l.doc, v) == "true" || json_bool_or(l, v))
     } else if ty == "Str" {
         V.Str(s: decode(gs(l, c, "value")), obj: 0, start: 0)
+    } else if kind_of_type(ty) > 0 {
+        parse_const(kind_of_type(ty), gs(l, c, "value"))
     } else {
         defect(l, f"a constant of type `{ty}`, which this interpreter does not load yet")
         V.Int(v: 0)
@@ -700,13 +723,14 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             smod: ints_new(), slo: ints_new(), shi: ints_new(), aux: ints_new(),
             fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
             fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
-            consts: vec_new[V](), names: strs_new(), mods: strs_new(), entry: 0 - 1)
+            consts: vec_new[V](), names: strs_new(), mods: strs_new(), entry: 0 - 1,
+            fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int]())
     let bmap = hashmap_new[Str, Int]()
     let bnames = builtin_names()
     for i in 0..strs_len(bnames) {
         hashmap_set(bmap, strs_get(bnames, i), i)
     }
-    let l = L(doc: doc, p: p, fmap: hashmap_new[Str, Int](), imap: hashmap_new[Str, Int](),
+    let l = L(doc: doc, p: p, fmap: p.fmap, imap: hashmap_new[Str, Int](),
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
             lhead: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new())
@@ -741,7 +765,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
             fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
             fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
-            entry: e))
+            entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache))
 }
 
 fn str_contains_byte(s: Str, b: Int) -> Bool {

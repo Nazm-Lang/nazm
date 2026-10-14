@@ -9,6 +9,12 @@ use "heap.nz"
 use "names.nz"
 use "builtins.nz"
 use "values.nz"
+use "num.nz"
+use "numkinds.nz"
+use "shapes.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "dispatch.nz"
 
 pub fn vm_new(max_iterations: Int, max_depth: Int, args: Strs) -> Vm {
     Vm(ops: vec_new[V](), slots: vec_new[V](), frames: ints_new(), heap: heap_new(),
@@ -136,7 +142,7 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
             let l = vec_pop(ops)
             let v = match (l, r) {
                 (V.Int(v: a), V.Int(v: b)) => V.Bool(v: int_compare(ints_get(pa, pc), a, b)),
-                _ => compare(p, vm, pc, ints_get(pa, pc), l, r),
+                _ => compare_values(p, vm, pc, ints_get(pa, pc), l, r),
             }
             release(h, l)
             release(h, r)
@@ -365,6 +371,118 @@ pub fn run(p: Prog, vm: Vm, out: OutCap, io: IoCap) -> V {
         } else if op == OP_DEFECT {
             let x = fail(p, vm, pc, "N0900", "the interpreter met an expression it cannot evaluate", "")
             break
+        } else if op == OP_BITS {
+            let r = vec_pop(ops)
+            let l = vec_pop(ops)
+            let k = ints_get(pa, pc)
+            let v = match (l, r) {
+                (V.Int(v: a), V.Int(v: b)) => {
+                    if k == 0 { V.Int(v: a & b) } else if k == 1 { V.Int(v: a | b) } else if k == 2 { V.Int(v: a ^ b) } else { num_bits(p, vm, pc, k, l, r) }
+                },
+                _ => num_bits(p, vm, pc, k, l, r),
+            }
+            if failed(vm) { break }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_COMPLEMENT {
+            vec_push(ops, complement(vec_pop(ops)))
+            pc += 1
+        } else if op == OP_CONVERT {
+            let v = num_convert(p, vm, pc, ints_get(p.b, pc), ints_get(pa, pc), vec_pop(ops))
+            if failed(vm) { break }
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_FITS {
+            let x = vec_pop(ops)
+            let (v, err) = convert(ints_get(pa, pc), 0, x)
+            vec_push(ops, V.Bool(v: err == 0))
+            pc += 1
+        } else if op == OP_CLOSURE || op == OP_FNVALUE {
+            // One function value, counted as the native closure object is (`value.rs`, `FuncVal`):
+            // the function, and copies of what it captures, in capture order.
+            let obj = alloc(h, K_FUNC, ints_get(pa, pc))
+            if op == OP_CLOSURE {
+                let c = ints_get(p.c, pc)
+                let carried = items(h, obj)
+                for i in 0..ints_get(p.aux, c) {
+                    let v = vec_get(slots, base + ints_get(p.aux, c + 1 + i))
+                    retain(h, v)
+                    vec_push(carried, v)
+                }
+            }
+            vec_push(ops, V.Ref(obj: obj))
+            pc += 1
+        } else if op == OP_CALLI || op == OP_CALLTRAIT {
+            let n = if op == OP_CALLI { ints_get(pa, pc) } else { ints_get(p.c, pc) }
+            let mut f = 0 - 1
+            if op == OP_CALLI {
+                f = match vec_get(ops, vec_len(ops) - n - 1) {
+                    V.Ref(obj: o) => ints_get(h.room, o),
+                    _ => 0 - 1,
+                }
+            } else {
+                let receiver = vec_get(ops, vec_len(ops) - n)
+                f = impl_for(p, ints_get(pa, pc), receiver)
+                if f < 0 {
+                    // A derived `Hash` (L6): no impl, so the type's own walk (`exec.rs`).
+                    let method = strs_get(p.names, ints_get(pa, pc))
+                    if method == "@std/hash::trait Hash.hash" || method == "@std/hash::trait Hash.same" {
+                        let v = if method == "@std/hash::trait Hash.hash" {
+                            let (x, ok) = derived_hash(p, receiver)
+                            V.Num(kind: NK_U64, v: Int128(x))
+                        } else {
+                            V.Bool(v: equal(h, receiver, vec_get(ops, vec_len(ops) - 1)) == 1)
+                        }
+                        for i in 0..n { release(h, vec_pop(ops)) }
+                        vec_push(ops, v)
+                        pc += 1
+                        continue
+                    }
+                    let x = fail(p, vm, pc, "N0900", "a trait call whose receiver's type has no impl in the program", "")
+                    break
+                }
+            }
+            if f < 0 {
+                let x = fail(p, vm, pc, "N0300", "a call through something that is not a function value", "")
+                break
+            }
+            let depth = ints_get(vm.st, ST_DEPTH) + 1
+            if depth > ints_get(vm.st, ST_MAXDEPTH) {
+                let name = strs_get(p.fname, f)
+                let max = ints_get(vm.st, ST_MAXDEPTH)
+                let x = fail(p, vm, pc, "N0403", f"`{name}` recursed deeper than {max}",
+                        "the interpreter bounds call depth so runaway recursion reports instead of exhausting the stack, which would crash without a diagnostic. Raise it with `--max-depth`, or check the recursion has a base case")
+                break
+            }
+            ints_set(vm.st, ST_DEPTH, depth)
+            ints_set(vm.st, ST_CALLS, ints_get(vm.st, ST_CALLS) + 1)
+            let closure = ints_get(p.fclosure, f) == 1
+            let nb = enter(p, vm, f, n, pc + 1, base, if closure { 1 } else { 0 })
+            if op == OP_CALLI {
+                // The function value under the arguments: a closure's body holds it as its first
+                // slot and its captures where its body reads them (N50); a named function's value
+                // is let go.
+                let fv = vec_pop(ops)
+                ints_set(frames, ints_len(frames) - 1, vec_len(ops))
+                if closure {
+                    vec_set(slots, nb, fv)
+                    let obj = match fv {
+                        V.Ref(obj: o) => o,
+                        _ => 0,
+                    }
+                    let carried = items(h, obj)
+                    let caps = ints_get(p.fcapt, f)
+                    for i in 0..vec_len(carried) {
+                        let v = vec_get(carried, i)
+                        retain(h, v)
+                        vec_set(slots, nb + ints_get(p.aux, caps + 1 + i), v)
+                    }
+                } else {
+                    release(h, fv)
+                }
+            }
+            base = nb
+            pc = ints_get(p.fentry, f)
         } else {
             let x = other_op(p, vm, pc, op)
             if failed(vm) { break }

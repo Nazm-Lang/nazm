@@ -1,0 +1,81 @@
+// A trait call's impl (`openspec/changes/r4-interpreter/design.md`, D8): chosen by the receiver's
+// type, as the Rust interpreter chooses it (`exec.rs`, `CallTrait`), and found by the impl
+// function's key, `MODULE::fn Trait/Type/method` — in the trait's module or the type's, the only
+// two an impl may be in — since the printed Core IR does not carry the impl table (*Requests*).
+
+use "@std/hash"
+use "@std/hashmap"
+use "types.nz"
+use "shapes.nz"
+use "numkinds.nz"
+
+/// The impl of trait method `method` (interned `M::trait T.m`) for `receiver`'s type; -1 when
+/// there is none.
+pub fn impl_for(p: Prog, method: Int, receiver: V) -> Int {
+    let (ty, tyid) = runtime_type(p, receiver)
+    let key = method * 1000003 + tyid
+    match hashmap_get(p.tcache, key) {
+        Some(f) => { return f },
+        None => { },
+    }
+    let m = strs_get(p.names, method)
+    let sep = find(m, "::trait ")
+    let tmod = str_slice(m, 0, sep)
+    let rest = str_slice(m, sep + 8, str_len(m))
+    let dot = find(rest, ".")
+    let tname = str_slice(rest, 0, dot)
+    let mname = str_slice(rest, dot + 1, str_len(rest))
+    // `M::record Name[…]` is module `M` and name `Name`; a built-in type is its own name, in no module.
+    let base_ty = def_key(ty)
+    let colon = find(base_ty, "::")
+    let ymod = if colon >= 0 { str_slice(base_ty, 0, colon) } else { tmod }
+    let yname = if colon >= 0 { str_slice(base_ty, last_space(base_ty) + 1, str_len(base_ty)) } else { base_ty }
+    let suffix = f"::fn {tname}/{yname}/{mname}"
+    let mut f = match hashmap_get(p.fmap, tmod + suffix) {
+        Some(i) => i,
+        None => 0 - 1,
+    }
+    if f < 0 {
+        f = match hashmap_get(p.fmap, ymod + suffix) {
+            Some(i) => i,
+            None => 0 - 1,
+        }
+    }
+    hashmap_set(p.tcache, key, f)
+    f
+}
+
+/// A value's type as an impl names it, and a number for it: its interned text for a record or an
+/// enum, a negative one for a built-in type.
+fn runtime_type(p: Prog, v: V) -> (Str, Int) {
+    match v {
+        V.Int(v: x) => ("Int", 0 - 2),
+        V.Bool(v: x) => ("Bool", 0 - 3),
+        V.Str(s: x, obj: o, start: st) => ("Str", 0 - 4),
+        V.Num(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
+        V.Flt(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
+        V.Rec(def: d, fields: fs) => (strs_get(p.names, d), d),
+        V.Enm(def: d, variant: x, fields: fs) => (strs_get(p.names, d), d),
+        _ => ("?", 0 - 1),
+    }
+}
+
+/// Where `needle` first occurs in `s`, or -1.
+pub fn find(s: Str, needle: Str) -> Int {
+    let n = str_len(needle)
+    let mut i = 0
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == needle { return i }
+        i += 1
+    }
+    0 - 1
+}
+
+fn last_space(s: Str) -> Int {
+    let mut i = str_len(s) - 1
+    while i >= 0 {
+        if str_byte(s, i) == 32 { return i }
+        i -= 1
+    }
+    0 - 1
+}

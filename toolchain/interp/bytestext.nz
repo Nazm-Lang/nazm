@@ -1,0 +1,273 @@
+// `Bytes` and `Text` (Gate 2), as the Rust interpreter's `bytes_text_intrinsic` has them
+// (`crates/nazm-core/src/eval/intrinsic.rs`): a `Bytes` is a view of a buffer, shared by every view
+// of it and counted with the strings; a `Text` is a `Str` known to be UTF-8. The help of a range
+// failure here is the detail alone — this family has no `Str`-index suffix.
+
+use "types.nz"
+use "heap.nz"
+use "names.nz"
+use "vm.nz"
+use "num.nz"
+use "numkinds.nz"
+
+fn argb(vm: Vm, n: Int, i: Int) -> V {
+    vec_get(vm.ops, vec_len(vm.ops) - n + i)
+}
+
+fn ival(v: V) -> Int {
+    match v {
+        V.Int(v: x) => x,
+        _ => 0,
+    }
+}
+
+fn sval(v: V) -> Str {
+    match v {
+        V.Str(s: x, obj: o, start: st) => x,
+        _ => "",
+    }
+}
+
+fn outside(p: Prog, vm: Vm, pc: Int, message: Str, detail: Str) -> V {
+    fail(p, vm, pc, "N0405", message, detail)
+}
+
+fn not_utf8(p: Prog, vm: Vm, pc: Int) -> V {
+    fail(p, vm, pc, "N0413", "this is not UTF-8", "")
+}
+
+/// A new buffer, counted as a string (`value.rs`, `Buffer::new`).
+fn whole(h: Heap, b: Bytes) -> V {
+    V.Byt(b: b, obj: alloc(h, K_BYTES, 0))
+}
+
+fn is_cont(b: Int) -> Bool {
+    b >= 128 && b < 192
+}
+
+/// Whether byte `i` of `s` is a boundary: the end, or not a continuation byte.
+fn boundary(s: Str, i: Int) -> Bool {
+    if i == str_len(s) { return true }
+    if i < 0 || i > str_len(s) { return false }
+    ! is_cont(str_byte(s, i))
+}
+
+/// The UTF-8 sequence at `i`: (scalar, length), or (-1, 0) where none starts.
+pub fn decode_at(s: Str, i: Int) -> (Int, Int) {
+    let n = str_len(s)
+    let b0 = str_byte(s, i)
+    if b0 < 128 { return (b0, 1) }
+    let len = if b0 >= 194 && b0 <= 223 { 2 } else if b0 >= 224 && b0 <= 239 { 3 } else if b0 >= 240 && b0 <= 244 { 4 } else { 0 }
+    if len == 0 || i + len > n { return (0 - 1, 0) }
+    let b1 = str_byte(s, i + 1)
+    let lo = if b0 == 224 { 160 } else if b0 == 240 { 144 } else { 128 }
+    let hi = if b0 == 237 { 159 } else if b0 == 244 { 143 } else { 191 }
+    if b1 < lo || b1 > hi { return (0 - 1, 0) }
+    let mut c = if len == 2 { b0 & 31 } else if len == 3 { b0 & 15 } else { b0 & 7 }
+    c = c * 64 + (b1 & 63)
+    for k in 2..len {
+        let b = str_byte(s, i + k)
+        if !is_cont(b) { return (0 - 1, 0) }
+        c = c * 64 + (b & 63)
+    }
+    (c, len)
+}
+
+fn scalar_ok(c: Int) -> Bool {
+    c >= 0 && c <= 1114111 && !(c >= 55296 && c <= 57343)
+}
+
+fn encode(c: Int) -> Str {
+    let b = if c < 128 {
+        bytes_new(1)
+    } else if c < 2048 {
+        bytes_new(2)
+    } else if c < 65536 {
+        bytes_new(3)
+    } else {
+        bytes_new(4)
+    }
+    let n = bytes_len(b)
+    if n == 1 {
+        bytes_set(b, 0, UInt8(c))
+    } else {
+        let lead = if n == 2 { 192 } else if n == 3 { 224 } else { 240 }
+        bytes_set(b, 0, UInt8(lead + c / pow64(n - 1)))
+        for k in 1..n {
+            bytes_set(b, k, UInt8(128 + (c / pow64(n - 1 - k)) % 64))
+        }
+    }
+    bytes_to_str(b)
+}
+
+fn pow64(n: Int) -> Int {
+    let mut x = 1
+    for i in 0..n { x = x * 64 }
+    x
+}
+
+/// A number's bytes, little-endian, `w` of them.
+fn bits_of(v: V, w: Int) -> UInt128 {
+    match v {
+        V.Flt(kind: k, v: x) => {
+            if k == NK_F32 { UInt128(float32_to_bits(Float32(x))) } else { UInt128(float64_to_bits(x)) }
+        },
+        _ => {
+            let all = wrap_convert[UInt128](wide(v))
+            if w >= 16 { all } else { all & ((UInt128(1) << (8 * w)) - UInt128(1)) }
+        },
+    }
+}
+
+/// The value of kind `k` whose bits are `r`.
+fn of_bits(k: Int, r: UInt128) -> V {
+    if k == NK_F64 { return V.Flt(kind: k, v: float64_from_bits(wrap_convert[UInt64](r))) }
+    if k == NK_F32 { return V.Flt(kind: k, v: Float64(float32_from_bits(wrap_convert[UInt32](r)))) }
+    mk(k, wrap(k, wrap_convert[Int128](r)))
+}
+
+/// A `Bytes` or `Text` built-in on the top `n` operands; `ty` is the result's type.
+pub fn bytes_text(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, ty: Str) -> V {
+    let h = vm.heap
+    let a = argb(vm, n, 0)
+    if op == B_BYTES_NEW {
+        let k = ival(a)
+        if k < 0 { return outside(p, vm, pc, "a buffer's length is never negative", f"asked for a buffer of {k} bytes") }
+        return whole(h, bytes_new(k))
+    }
+    if op == B_BYTES_FROM_STR { return whole(h, bytes_from_str(sval(a))) }
+    if op == B_TEXT_AS_STR {
+        retain(h, a)
+        return a
+    }
+    if op == B_UTF8_VALID { return V.Bool(v: utf8_valid(sval(a))) }
+    if op == B_TEXT_FROM_STR {
+        if !utf8_valid(sval(a)) { return not_utf8(p, vm, pc) }
+        retain(h, a)
+        return a
+    }
+    if op == B_TEXT_LEN { return V.Int(v: str_len(sval(a))) }
+    if op == B_TEXT_CONCAT { return heap_str(h, sval(a) + sval(argb(vm, n, 1))) }
+    if op == B_TEXT_IS_BOUNDARY { return V.Bool(v: boundary(sval(a), ival(argb(vm, n, 1)))) }
+    if op == B_TEXT_SLICE {
+        let s = sval(a)
+        let from = ival(argb(vm, n, 1))
+        let to = ival(argb(vm, n, 2))
+        let len = str_len(s)
+        if from < 0 || to < from || to > len {
+            return outside(p, vm, pc, "this slice is not inside the `Text`", f"asked for {from}..{to} of a `Text` {len} bytes long")
+        }
+        if !boundary(s, from) || !boundary(s, to) { return not_utf8(p, vm, pc) }
+        retain(h, a)
+        return match a {
+            V.Str(s: x, obj: o, start: st) => V.Str(s: str_slice(x, from, to), obj: o, start: st + from),
+            _ => a,
+        }
+    }
+    if op == B_TEXT_SCALAR_AT || op == B_TEXT_NEXT {
+        let s = sval(a)
+        let i = ival(argb(vm, n, 1))
+        let len = str_len(s)
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the `Text`", f"asked for byte {i} of a `Text` {len} bytes long")
+        }
+        if !boundary(s, i) { return not_utf8(p, vm, pc) }
+        let (c, w) = decode_at(s, i)
+        if c < 0 {
+            let name = strs_get(builtin_names(), op)
+            return fail(p, vm, pc, "N0300", f"`{name}` was called with the wrong values", "")
+        }
+        return V.Int(v: if op == B_TEXT_SCALAR_AT { c } else { i + w })
+    }
+    if op == B_TEXT_SCALAR_COUNT {
+        let s = sval(a)
+        let mut k = 0
+        for i in 0..str_len(s) {
+            if !is_cont(str_byte(s, i)) { k += 1 }
+        }
+        return V.Int(v: k)
+    }
+    if op == B_SCALAR_VALID { return V.Bool(v: scalar_ok(ival(a))) }
+    if op == B_SCALAR_TEXT {
+        let c = ival(a)
+        if !scalar_ok(c) { return fail(p, vm, pc, "N0413", "this is not a Unicode scalar value", "") }
+        return heap_str(h, encode(c))
+    }
+    // The rest take a `Bytes`.
+    let b = match a {
+        V.Byt(b: x, obj: o) => x,
+        _ => bytes_new(0),
+    }
+    let len = bytes_len(b)
+    if op == B_BYTES_LEN { return V.Int(v: len) }
+    if op == B_BYTES_TO_STR { return heap_str(h, bytes_to_str(b)) }
+    if op == B_BYTES_GET || op == B_BYTES_SET {
+        let i = ival(argb(vm, n, 1))
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the `Bytes`", f"asked for byte {i} of a `Bytes` {len} long")
+        }
+        if op == B_BYTES_GET { return V.Num(kind: NK_U8, v: Int128(bytes_get(b, i))) }
+        bytes_set(b, i, wrap_convert[UInt8](wide(argb(vm, n, 2))))
+        return V.Int(v: 0)
+    }
+    if op == B_BYTES_SLICE {
+        let from = ival(argb(vm, n, 1))
+        let to = ival(argb(vm, n, 2))
+        if from < 0 || to < from || to > len {
+            return outside(p, vm, pc, "this slice is not inside the `Bytes`", f"asked for {from}..{to} of a `Bytes` {len} long")
+        }
+        retain(h, a)
+        return match a {
+            V.Byt(b: x, obj: o) => V.Byt(b: bytes_slice(x, from, to), obj: o),
+            _ => a,
+        }
+    }
+    if op == B_BYTES_COPY {
+        let src = match argb(vm, n, 1) {
+            V.Byt(b: x, obj: o) => x,
+            _ => bytes_new(0),
+        }
+        let sl = bytes_len(src)
+        if sl > len {
+            return outside(p, vm, pc, "the source is longer than the destination", f"{sl} bytes into {len}")
+        }
+        return V.Int(v: bytes_copy(b, src))
+    }
+    if op == B_BYTES_READ_LE || op == B_BYTES_READ_BE {
+        let k0 = kind_of_type(ty)
+        let k = if k0 == 0 { NK_I64 } else { k0 }
+        let w = kind_bits(k) / 8
+        let i = ival(argb(vm, n, 1))
+        if i < 0 || i + w > len {
+            return outside(p, vm, pc, "this read is outside the `Bytes`", f"asked for {w} bytes at {i} of a `Bytes` {len} long")
+        }
+        let mut r = UInt128(0)
+        for j in 0..w {
+            let at = if op == B_BYTES_READ_LE { i + w - 1 - j } else { i + j }
+            r = (r << 8) | UInt128(bytes_get(b, at))
+        }
+        return of_bits(k, r)
+    }
+    if op == B_BYTES_WRITE_LE || op == B_BYTES_WRITE_BE {
+        let v = argb(vm, n, 2)
+        let k = kind_of(v)
+        let w = kind_bits(k) / 8
+        let i = ival(argb(vm, n, 1))
+        if i < 0 || i + w > len {
+            return outside(p, vm, pc, "this write is outside the `Bytes`", f"asked for {w} bytes at {i} of a `Bytes` {len} long")
+        }
+        let r = bits_of(v, w)
+        for j in 0..w {
+            let byte = wrap_convert[UInt8]((r >> (8 * j)) & UInt128(255))
+            let at = if op == B_BYTES_WRITE_LE { i + j } else { i + w - 1 - j }
+            bytes_set(b, at, byte)
+        }
+        return V.Int(v: 0)
+    }
+    fail(p, vm, pc, "N0900", "a `Bytes` built-in this interpreter does not know", "")
+}
+
+/// Whether built-in `op` is one of this family's.
+pub fn is_bytes_text(op: Int) -> Bool {
+    (op >= B_BYTES_NEW && op <= B_SCALAR_TEXT) || op == B_TEXT_FROM_STR
+}

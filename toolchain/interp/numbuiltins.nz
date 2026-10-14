@@ -1,0 +1,214 @@
+// The numeric built-ins (Gate 2, `crates/nazm-core/src/eval/intrinsic.rs`, `numeric_intrinsic`,
+// over `nazm_sema::numeric`): wrapping and saturating arithmetic, bit counts, rotations and byte
+// order, the float functions, bits, padding and fixed-point text, and parsing.
+
+use "types.nz"
+use "heap.nz"
+use "names.nz"
+use "vm.nz"
+use "num.nz"
+use "numkinds.nz"
+use "values.nz"
+
+fn argn(vm: Vm, n: Int, i: Int) -> V {
+    vec_get(vm.ops, vec_len(vm.ops) - n + i)
+}
+
+fn u128_of(x: Int128) -> UInt128 {
+    wrap_convert[UInt128](x)
+}
+
+fn of_u128(x: UInt128) -> Int128 {
+    wrap_convert[Int128](x)
+}
+
+/// A value's bits as an unsigned integer of its width (`numeric.rs`, `raw`).
+fn raw(k: Int, x: Int128) -> UInt128 {
+    let w = kind_bits(k)
+    let all = u128_of(x)
+    if w == 128 { all } else { all & ((UInt128(1) << w) - UInt128(1)) }
+}
+
+fn ones(r: UInt128) -> Int {
+    let mut n = 0
+    let mut x = r
+    while x != UInt128(0) {
+        if x & UInt128(1) == UInt128(1) { n += 1 }
+        x = x >> 1
+    }
+    n
+}
+
+fn bit_length(r: UInt128) -> Int {
+    let mut n = 0
+    let mut x = r
+    while x != UInt128(0) {
+        n += 1
+        x = x >> 1
+    }
+    n
+}
+
+fn trailing(r: UInt128, w: Int) -> Int {
+    if r == UInt128(0) { return w }
+    let mut n = 0
+    let mut x = r
+    while x & UInt128(1) == UInt128(0) {
+        n += 1
+        x = x >> 1
+    }
+    n
+}
+
+/// `raw` back to a value of kind `k`, sign-extended for a signed kind (`NumVal::wrapped`).
+fn from_raw(k: Int, r: UInt128) -> V {
+    mk(k, wrap(k, of_u128(r)))
+}
+
+fn swap(k: Int, x: Int128) -> V {
+    let w = kind_bits(k)
+    let r = raw(k, x)
+    let mut out = UInt128(0)
+    for i in 0..w / 8 {
+        out = (out << 8) | ((r >> (8 * i)) & UInt128(255))
+    }
+    from_raw(k, out)
+}
+
+fn wrapping(k: Int, op: Int, x: Int128, y: Int128) -> V {
+    if k == NK_U128 {
+        let a = u128_of(x)
+        let b = u128_of(y)
+        let r = if op == 0 { wrapping_add(a, b) } else if op == 1 { wrapping_sub(a, b) } else { wrapping_mul(a, b) }
+        return mk(k, of_u128(r))
+    }
+    let r = if op == 0 { wrapping_add(x, y) } else if op == 1 { wrapping_sub(x, y) } else { wrapping_mul(x, y) }
+    mk(k, wrap(k, r))
+}
+
+fn saturating(k: Int, op: Int, x: Int128, y: Int128) -> V {
+    if k == NK_U128 {
+        let a = u128_of(x)
+        let b = u128_of(y)
+        let r = if op == 0 { saturating_add(a, b) } else if op == 1 { saturating_sub(a, b) } else { saturating_mul(a, b) }
+        return mk(k, of_u128(r))
+    }
+    if k == NK_I128 {
+        let r = if op == 0 { saturating_add(x, y) } else if op == 1 { saturating_sub(x, y) } else { saturating_mul(x, y) }
+        return mk(k, r)
+    }
+    // Exact in `Int128` for every narrower kind, then clamped.
+    let r = if op == 0 { x + y } else if op == 1 { x - y } else { saturating_mul(x, y) }
+    mk(k, int_saturate(k, NK_I128, r))
+}
+
+/// A float function of one argument, in the value's own precision.
+fn unary(op: Int, v: V) -> V {
+    let k = kind_of(v)
+    let x = as_f64(v)
+    if k == NK_F32 {
+        let f = Float32(x)
+        let r = if op == B_FLOAT_SQRT { float_sqrt(f) } else if op == B_FLOAT_ABS { float_abs(f) } else if op == B_FLOAT_FLOOR { float_floor(f) } else if op == B_FLOAT_CEIL { float_ceil(f) } else if op == B_FLOAT_TRUNC { float_trunc(f) } else if op == B_FLOAT_ROUND { float_round(f) } else if op == B_FLOAT_SIN { float_sin(f) } else if op == B_FLOAT_COS { float_cos(f) } else if op == B_FLOAT_TAN { float_tan(f) } else if op == B_FLOAT_EXP { float_exp(f) } else if op == B_FLOAT_LN { float_ln(f) } else if op == B_FLOAT_LOG2 { float_log2(f) } else { float_log10(f) }
+        return V.Flt(kind: k, v: Float64(r))
+    }
+    let r = if op == B_FLOAT_SQRT { float_sqrt(x) } else if op == B_FLOAT_ABS { float_abs(x) } else if op == B_FLOAT_FLOOR { float_floor(x) } else if op == B_FLOAT_CEIL { float_ceil(x) } else if op == B_FLOAT_TRUNC { float_trunc(x) } else if op == B_FLOAT_ROUND { float_round(x) } else if op == B_FLOAT_SIN { float_sin(x) } else if op == B_FLOAT_COS { float_cos(x) } else if op == B_FLOAT_TAN { float_tan(x) } else if op == B_FLOAT_EXP { float_exp(x) } else if op == B_FLOAT_LN { float_ln(x) } else if op == B_FLOAT_LOG2 { float_log2(x) } else { float_log10(x) }
+    V.Flt(kind: NK_F64, v: r)
+}
+
+fn binary(op: Int, a: V, b: V) -> V {
+    let k = kind_of(a)
+    if k == NK_F32 {
+        let x = Float32(as_f64(a))
+        let y = Float32(as_f64(b))
+        let r = if op == B_FLOAT_POW { float_pow(x, y) } else if op == B_FLOAT_ATAN2 { float_atan2(x, y) } else if op == B_FLOAT_MIN { float_min(x, y) } else { float_max(x, y) }
+        return V.Flt(kind: k, v: Float64(r))
+    }
+    let x = as_f64(a)
+    let y = as_f64(b)
+    let r = if op == B_FLOAT_POW { float_pow(x, y) } else if op == B_FLOAT_ATAN2 { float_atan2(x, y) } else if op == B_FLOAT_MIN { float_min(x, y) } else { float_max(x, y) }
+    V.Flt(kind: NK_F64, v: r)
+}
+
+fn pad_help(detail: Str) -> Str {
+    f"{detail}. `Str` is indexed in bytes, from 0; `str_len` gives the length in bytes"
+}
+
+/// Numeric built-in `op` on the top `n` operands.
+pub fn numeric_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int) -> V {
+    let h = vm.heap
+    let a = argn(vm, n, 0)
+    let k = kind_of(a)
+    let x = wide(a)
+    if op >= B_WRAPPING_ADD && op <= B_WRAPPING_MUL {
+        return wrapping(k, op - B_WRAPPING_ADD, x, wide(argn(vm, n, 1)))
+    }
+    if op >= B_SATURATING_ADD && op <= B_SATURATING_MUL {
+        return saturating(k, op - B_SATURATING_ADD, x, wide(argn(vm, n, 1)))
+    }
+    if op == B_COUNT_ONES { return V.Int(v: ones(raw(k, x))) }
+    if op == B_LEADING_ZEROS { return V.Int(v: kind_bits(k) - bit_length(raw(k, x))) }
+    if op == B_TRAILING_ZEROS { return V.Int(v: trailing(raw(k, x), kind_bits(k))) }
+    if op == B_ROTATE_LEFT || op == B_ROTATE_RIGHT {
+        let by = wide(argn(vm, n, 1))
+        if by < Int128(0) { return num_failure(p, vm, pc, E_SHIFT, "rotation", k) }
+        let w = kind_bits(k)
+        let s = wrap_convert[Int](by % Int128(w))
+        let r = raw(k, x)
+        let mask = if w == 128 { ~UInt128(0) } else { (UInt128(1) << w) - UInt128(1) }
+        let out = if s == 0 {
+            r
+        } else if op == B_ROTATE_LEFT {
+            ((r << s) | (r >> (w - s))) & mask
+        } else {
+            ((r >> s) | (r << (w - s))) & mask
+        }
+        return from_raw(k, out)
+    }
+    if op == B_SWAP_BYTES || op == B_TO_BIG_ENDIAN || op == B_FROM_BIG_ENDIAN { return swap(k, x) }
+    if op == B_TO_LITTLE_ENDIAN || op == B_FROM_LITTLE_ENDIAN { return a }
+    if op >= B_FLOAT_SQRT && op <= B_FLOAT_LOG10 { return unary(op, a) }
+    if op >= B_FLOAT_POW && op <= B_FLOAT_MAX { return binary(op, a, argn(vm, n, 1)) }
+    if op == B_FLOAT_IS_NAN { return V.Bool(v: float_is_nan(as_f64(a))) }
+    if op == B_FLOAT_IS_INFINITE { return V.Bool(v: float_is_infinite(as_f64(a))) }
+    if op == B_FLOAT_IS_FINITE { return V.Bool(v: float_is_finite(as_f64(a))) }
+    if op == B_FLOAT_TO_STR_FIXED {
+        let d = wide(argn(vm, n, 1))
+        if d < Int128(0) || d > Int128(30) {
+            return fail(p, vm, pc, "N0405", "a float is written with 0 to 30 decimals", pad_help(f"asked for {d}"))
+        }
+        return heap_str(h, float_to_str_fixed(as_f64(a), wrap_convert[Int](d)))
+    }
+    if op == B_STR_PAD_START || op == B_STR_PAD_END {
+        let s = match a {
+            V.Str(s: t, obj: o, start: st) => t,
+            _ => "",
+        }
+        let fill = match argn(vm, n, 2) {
+            V.Str(s: t, obj: o, start: st) => t,
+            _ => "",
+        }
+        if str_len(fill) != 1 {
+            let len = str_len(fill)
+            return fail(p, vm, pc, "N0405", "a padding's fill is one byte", pad_help(f"the fill is {len} bytes long"))
+        }
+        let want = wrap_convert[Int](wide(argn(vm, n, 1)))
+        let mut pad = ""
+        for i in str_len(s)..want { pad = pad + fill }
+        return heap_str(h, if op == B_STR_PAD_START { pad + s } else { s + pad })
+    }
+    if op == B_FLOAT64_TO_BITS { return V.Num(kind: NK_U64, v: Int128(float64_to_bits(as_f64(a)))) }
+    if op == B_FLOAT64_FROM_BITS { return V.Flt(kind: NK_F64, v: float64_from_bits(wrap_convert[UInt64](x))) }
+    if op == B_FLOAT32_TO_BITS { return V.Num(kind: NK_U32, v: Int128(float32_to_bits(Float32(as_f64(a))))) }
+    if op == B_FLOAT32_FROM_BITS { return V.Flt(kind: NK_F32, v: Float64(float32_from_bits(wrap_convert[UInt32](x)))) }
+    if op == B_WIDENING_MUL {
+        // Exact: a 64-by-64-bit product always fits 128 bits (`intrinsic.rs`).
+        return V.Num(kind: NK_U128, v: of_u128(wrapping_mul(u128_of(x), u128_of(wide(argn(vm, n, 1))))))
+    }
+    let s = match a {
+        V.Str(s: t, obj: o, start: st) => t,
+        _ => "",
+    }
+    if op == B_FLOAT_PARSES { return V.Bool(v: float_parses(s)) }
+    if op == B_FLOAT_PARSE_RAW { return V.Flt(kind: NK_F64, v: float_parse_raw(s)) }
+    fail(p, vm, pc, "N0900", "a numeric built-in this interpreter does not know", "")
+}
