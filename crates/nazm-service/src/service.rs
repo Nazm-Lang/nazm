@@ -569,8 +569,8 @@ impl LanguageService {
         let at = name_at(&s.cst, offset)?;
         let entity = s.index.target(at)?;
         // The anchor: where the entity is declared, as a file any compilation may have.
-        // An entity with no declaration in source (none is, today) is anchored where it
-        // was asked about, which is at least in this compilation.
+        // An entity with no declaration in source (the `out` a `main` is given, R1 5b.1) is
+        // anchored where it was asked about, which is at least in this compilation.
         let anchor = s.index.declaration(entity).unwrap_or(at);
         let file = s.files.get(anchor.file.index())?;
         let text = s.texts.get(anchor.file.index())?;

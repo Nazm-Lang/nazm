@@ -125,17 +125,20 @@ fn a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_ro
         .find(|(n, _)| n.contains("entry"))
         .expect("the entry unit")
         .1;
+    // Two, not three: a `main` that writes an `IoCap` is given no `out` (R1, 5b.1).
     assert!(entry.contains("(i64 0, i64 0)"), "{entry}");
+    assert!(!entry.contains("(i64 0, i64 0, i64 0)"), "{entry}");
     assert!(
         definition(&with_cap, "main").contains("(i64 %"),
         "{}",
         definition(&with_cap, "main")
     );
-    // A `main` without capabilities is called exactly as before N37.
+    // A `main` that writes no capability is given `out: OutCap` (R1, 5b.1), and handed that
+    // one word and no other.
     let plain = ir_units("fn main() -> Int { 0 }\n");
     let entry = &plain.iter().find(|(n, _)| n.contains("entry")).unwrap().1;
-    assert!(entry.contains("() #") || entry.contains("()\n"), "{entry}");
-    assert!(!entry.contains("i64 0)"), "{entry}");
+    assert!(entry.contains(".main(i64 0)"), "{entry}");
+    assert!(!entry.contains("i64 0, i64 0)"), "{entry}");
 }
 
 #[test]

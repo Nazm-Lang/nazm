@@ -5023,8 +5023,10 @@ the program's `main` is called. There is no other initialisation and no lazy one
 global is statically initialised, and every helper set is stateless until called.
 
 **Shutdown.** Three ways to end, distinguished. *Normal return*: every scope `main` opened has
-been joined, the memory report is written to stderr if `NAZM_MEMORY_REPORT` is set, `main`'s
-result is printed to stdout in decimal with a newline, and the process exits 0. *Failure*: the
+been joined, the memory report is written to stderr if `NAZM_MEMORY_REPORT` is set, and the
+process exits with `main`'s result as its status — one outside `0..=255` writes `N0416`'s message
+and exits 2 — or, when `NAZM_RESULT_REPORT` is set, prints that result to stdout in decimal with
+a newline and exits 0, as every program did before R1 (5b.3). *Failure*: the
 memory report as above (the counts are final: nothing is still running), then `nz.report` writes
 the thread's first failure message to stderr and exits 2. *Explicit exit*: `exit_with(code)` ends
 the process at once with that status — no scope is joined, nothing is reclaimed, no report is

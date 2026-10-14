@@ -228,9 +228,12 @@ fn an_undeclared_function_holds_what_it_exercises() {
          fn f(io: IoCap) -> Int ! { io } { helper(io) }\n\
          fn main(io: IoCap) -> Int { f(io) }\n",
     );
-    // `main` holds nothing it is not given.
-    let src = "fn main() -> Int { print(\"x\") }\n";
-    refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
+    // `main` holds nothing it is not given, beyond the `out: OutCap` it is given when it
+    // writes neither an `OutCap` nor an `IoCap` (R1, 5b.1): it may print, and nothing more.
+    accepted("fn main() -> Int { print(\"x\") }\n");
+    let src = "fn main() -> Int { write_file(\"f\", \"d\") }\n";
+    let d = refused_at(src, codes::MISSING_AUTHORITY, at(src, "write_file"));
+    assert!(d.message.contains("`IoCap`"), "{}", d.message);
 }
 
 #[test]
@@ -294,10 +297,12 @@ fn main_is_the_root_of_authority_and_takes_nothing_else() {
     refused_at(src, codes::MAIN_PARAMETER, at(src, "n: Str"));
     // Any capabilities, in any order, and more than one of a kind.
     accepted("fn main(s: SpawnCap, io: IoCap, again: IoCap) -> Int { 0 }\n");
-    // A `main` with a contract has exactly the authority it is handed.
-    let src = "fn main() -> Int ! { io } { print(\"x\") }\n";
-    refused_at(src, codes::MISSING_AUTHORITY, at(src, "print"));
-    accepted("fn main(io: IoCap) -> Int ! { io } { print(\"x\") }\n");
+    // A `main` with a contract has exactly the authority it is handed: the `OutCap` option C
+    // gives it (R1, 5b.1) prints, and writes no file.
+    accepted("fn main() -> Int ! { io } { print(\"x\") }\n");
+    let src = "fn main() -> Int ! { io } { write_file(\"f\", \"d\") }\n";
+    refused_at(src, codes::MISSING_AUTHORITY, at(src, "write_file"));
+    accepted("fn main(io: IoCap) -> Int ! { io } { write_file(\"f\", \"d\") }\n");
     // The interpreter hands `main` one of each it declares, and the program runs.
     assert_eq!(
         value("fn main(io: IoCap, s: SpawnCap) -> Int ! { io } { print(\"\"); 5 }\n"),
