@@ -21,9 +21,11 @@ pub struct Code {
     rel_len: Ints,
     sym_at: Ints,
     errors: Strs,
+    /// Whether the target is Apple's (its AAPCS64 variant, Mach-O).
+    apple: Bool,
 }
 
-pub fn code_new(nsyms: Int) -> Code {
+pub fn code_new(nsyms: Int, apple: Bool) -> Code {
     let at = ints_new()
     let mut i = 0
     while i < nsyms {
@@ -32,7 +34,7 @@ pub fn code_new(nsyms: Int) -> Code {
     }
     Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
             rel_pcrel: ints_new(), rel_len: ints_new(),
-            sym_at: at, errors: strs_new())
+            sym_at: at, errors: strs_new(), apple: apple)
 }
 
 pub fn align_up(x: Int, a: Int) -> Int {
