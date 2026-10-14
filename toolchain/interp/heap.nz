@@ -70,6 +70,7 @@ pub fn retain(h: Heap, v: V) {
             if o > 0 { ints_set(h.rc, o, ints_get(h.rc, o) + 1) }
         },
         V.Ref(obj: o) => ints_set(h.rc, o, ints_get(h.rc, o) + 1),
+        V.Byt(b: b, obj: o) => ints_set(h.rc, o, ints_get(h.rc, o) + 1),
         V.Rec(def: d, fields: fs) => {
             for f in fs { retain(h, f) }
         },
@@ -87,6 +88,7 @@ fn holds(v: V) -> Bool {
     match v {
         V.Str(s: s, obj: o, start: st) => o > 0,
         V.Ref(obj: o) => true,
+        V.Byt(b: b, obj: o) => true,
         V.Rec(def: d, fields: fs) => true,
         V.Enm(def: d, variant: x, fields: fs) => list_len(fs) > 0,
         V.Arr(items: fs) => true,
@@ -107,6 +109,7 @@ pub fn release(h: Heap, v: V) {
         match x {
             V.Str(s: s, obj: o, start: st) => { drop_ref(h, o); },
             V.Ref(obj: o) => { drop_ref(h, o); },
+            V.Byt(b: b, obj: o) => { drop_ref(h, o); },
             V.Rec(def: d, fields: fs) => {
                 for f in fs {
                     if holds(f) { vec_push(h.work, f) }

@@ -1,0 +1,266 @@
+// Numbers other than `Int` (Gate 2), as `nazm_sema::numeric` defines them
+// (`crates/nazm-sema/src/numeric.rs`): integers of every width checked, wrapping and saturating;
+// floats by IEEE 754 in their own precision; conversions; their text. An integer of a kind other
+// than `Int` is `V.Num(kind, v)`, `v` its exact value — a `UInt128`'s bit pattern; a float is
+// `V.Flt(kind, v)`, a `Float32` held exactly in a `Float64`.
+//
+// An operation answers a value and an error: 0 none, `E_OVERFLOW`, `E_ZERO`, `E_SHIFT` — the three
+// `NumError`s, which the caller words with the operation and the kind (`arith.rs`, `num_failure`).
+
+use "types.nz"
+use "numkinds.nz"
+
+pub const E_OVERFLOW: Int = 1
+pub const E_ZERO: Int = 2
+pub const E_SHIFT: Int = 3
+
+/// The integer `x` of kind `k` as a value.
+pub fn mk(k: Int, x: Int128) -> V {
+    if k == NK_I64 { V.Int(v: wrap_convert[Int](x)) } else { V.Num(kind: k, v: x) }
+}
+
+/// A float of kind `k`, rounded to `Float32` when that is its kind.
+pub fn mkf(k: Int, x: Float64) -> V {
+    if k == NK_F32 { V.Flt(kind: k, v: Float64(Float32(x))) } else { V.Flt(kind: k, v: x) }
+}
+
+/// A value's numeric kind, or 0.
+pub fn kind_of(v: V) -> Int {
+    match v {
+        V.Int(v: x) => NK_I64,
+        V.Num(kind: k, v: x) => k,
+        V.Flt(kind: k, v: x) => k,
+        _ => 0,
+    }
+}
+
+/// An integer's exact value (a `UInt128`'s bits); 0 for anything else.
+pub fn wide(v: V) -> Int128 {
+    match v {
+        V.Int(v: x) => Int128(x),
+        V.Num(kind: k, v: x) => x,
+        _ => Int128(0),
+    }
+}
+
+/// A number's value as a `Float64`: a float's exactly, an integer's rounded.
+pub fn as_f64(v: V) -> Float64 {
+    match v {
+        V.Flt(kind: k, v: x) => x,
+        V.Num(kind: k, v: x) => int_to_float(NK_F64, k, x),
+        V.Int(v: x) => Float64(x),
+        _ => 0.0,
+    }
+}
+
+fn u128_of(x: Int128) -> UInt128 {
+    wrap_convert[UInt128](x)
+}
+
+fn of_u128(x: UInt128) -> Int128 {
+    wrap_convert[Int128](x)
+}
+
+fn checked(k: Int, x: Option[Int128]) -> (V, Int) {
+    match x {
+        Some(y) => {
+            if in_range(k, y) { (mk(k, y), 0) } else { (V.Unset, E_OVERFLOW) }
+        },
+        None => (V.Unset, E_OVERFLOW),
+    }
+}
+
+const I128_MIN: Int128 = Int128(1) << 127
+
+/// `a op b` for two numbers of one kind: 0 `+`, 1 `-`, 2 `*`, 3 `/`, 4 `%` (`numeric.rs`, `arith`).
+pub fn arith(op: Int, a: V, b: V) -> (V, Int) {
+    let k = kind_of(a)
+    if k == NK_F32 {
+        let x = Float32(as_f64(a))
+        let y = Float32(as_f64(b))
+        let r = if op == 0 { x + y } else if op == 1 { x - y } else if op == 2 { x * y } else if op == 3 { x / y } else { x % y }
+        return (V.Flt(kind: k, v: Float64(r)), 0)
+    }
+    if k == NK_F64 {
+        let x = as_f64(a)
+        let y = as_f64(b)
+        let r = if op == 0 { x + y } else if op == 1 { x - y } else if op == 2 { x * y } else if op == 3 { x / y } else { x % y }
+        return (V.Flt(kind: k, v: r), 0)
+    }
+    let x = wide(a)
+    let y = wide(b)
+    if k == NK_U128 {
+        let ux = u128_of(x)
+        let uy = u128_of(y)
+        if op == 0 {
+            return match checked_add(ux, uy) {
+                Some(r) => (mk(k, of_u128(r)), 0),
+                None => (V.Unset, E_OVERFLOW),
+            }
+        }
+        if op == 1 {
+            return if uy > ux { (V.Unset, E_OVERFLOW) } else { (mk(k, of_u128(ux - uy)), 0) }
+        }
+        if op == 2 {
+            return match checked_mul(ux, uy) {
+                Some(r) => (mk(k, of_u128(r)), 0),
+                None => (V.Unset, E_OVERFLOW),
+            }
+        }
+        if uy == UInt128(0) { return (V.Unset, E_ZERO) }
+        return if op == 3 { (mk(k, of_u128(ux / uy)), 0) } else { (mk(k, of_u128(ux % uy)), 0) }
+    }
+    if op == 0 { return checked(k, checked_add(x, y)) }
+    if op == 1 { return checked(k, checked_sub(x, y)) }
+    if op == 2 { return checked(k, checked_mul(x, y)) }
+    if y == Int128(0) { return (V.Unset, E_ZERO) }
+    if y == Int128(0) - Int128(1) {
+        // `MIN / -1` is past the range; `MIN % -1` is 0.
+        if op == 4 { return (mk(k, Int128(0)), 0) }
+        if x == I128_MIN { return (V.Unset, E_OVERFLOW) }
+        return checked(k, Some(Int128(0) - x))
+    }
+    if op == 3 { checked(k, Some(x / y)) } else { checked(k, Some(x % y)) }
+}
+
+/// `-a` (`numeric.rs`, `neg`): an unsigned value other than zero overflows.
+pub fn neg(a: V) -> (V, Int) {
+    let k = kind_of(a)
+    if is_float(k) {
+        return (mkf(k, 0.0 - as_f64(a)), 0)
+    }
+    let x = wide(a)
+    if k == NK_U128 {
+        return if x == Int128(0) { (a, 0) } else { (V.Unset, E_OVERFLOW) }
+    }
+    if x == I128_MIN { return (V.Unset, E_OVERFLOW) }
+    checked(k, Some(Int128(0) - x))
+}
+
+/// A bit operation: 0 `&`, 1 `|`, 2 `^`, 3 `<<`, 4 `>>`; for a shift, `b` is the amount, an `Int`.
+pub fn bits(op: Int, a: V, b: V) -> (V, Int) {
+    let k = kind_of(a)
+    let x = wide(a)
+    if op <= 2 {
+        let y = wide(b)
+        let r = if op == 0 { x & y } else if op == 1 { x | y } else { x ^ y }
+        return (mk(k, wrap(k, r)), 0)
+    }
+    let n = wide(b)
+    let w = kind_bits(k)
+    if n < Int128(0) || n >= Int128(w) { return (V.Unset, E_SHIFT) }
+    let s = wrap_convert[Int](n)
+    if op == 3 {
+        return (mk(k, wrap(k, x << s)), 0)
+    }
+    if k == NK_U128 {
+        return (mk(k, of_u128(u128_of(x) >> s)), 0)
+    }
+    // Signed values are sign-extended, unsigned ones zero-extended: either shift is exact.
+    (mk(k, wrap(k, x >> s)), 0)
+}
+
+/// `~a`.
+pub fn complement(a: V) -> V {
+    let k = kind_of(a)
+    mk(k, wrap(k, ~wide(a)))
+}
+
+/// `a op b`, 0 `==` … 5 `>=`: integers by value, floats by IEEE 754.
+pub fn compare(op: Int, a: V, b: V) -> Bool {
+    let k = kind_of(a)
+    if is_float(k) {
+        let x = as_f64(a)
+        let y = as_f64(b)
+        return if op == 0 { x == y } else if op == 1 { x != y } else if op == 2 { x < y } else if op == 3 { x <= y } else if op == 4 { x > y } else { x >= y }
+    }
+    if k == NK_U128 {
+        let x = u128_of(wide(a))
+        let y = u128_of(wide(b))
+        return if op == 0 { x == y } else if op == 1 { x != y } else if op == 2 { x < y } else if op == 3 { x <= y } else if op == 4 { x > y } else { x >= y }
+    }
+    let x = wide(a)
+    let y = wide(b)
+    if op == 0 { x == y } else if op == 1 { x != y } else if op == 2 { x < y } else if op == 3 { x <= y } else if op == 4 { x > y } else { x >= y }
+}
+
+/// `v` as a value of kind `to`, by `mode`: 0 exact, 1 wrapping, 2 saturating (`numeric.rs`,
+/// `convert`).
+pub fn convert(to: Int, mode: Int, v: V) -> (V, Int) {
+    let from = kind_of(v)
+    if is_float(to) {
+        if is_float(from) {
+            return (mkf(to, as_f64(v)), 0)
+        }
+        return (V.Flt(kind: to, v: int_to_float(to, from, wide(v))), 0)
+    }
+    if is_float(from) {
+        let x = as_f64(v)
+        if mode == 2 {
+            return (mk(to, float_saturate(to, x)), 0)
+        }
+        return match float_to(to, x) {
+            Some(t) => (mk(to, t), 0),
+            None => (V.Unset, E_OVERFLOW),
+        }
+    }
+    let x = wide(v)
+    if mode == 1 {
+        return (mk(to, wrap(to, x)), 0)
+    }
+    if mode == 2 {
+        return (mk(to, int_saturate(to, from, x)), 0)
+    }
+    // Exact: a `UInt128` past `Int128`'s range fits only a `UInt128`.
+    if from == NK_U128 && x < Int128(0) {
+        return if to == NK_U128 { (mk(to, x), 0) } else { (V.Unset, E_OVERFLOW) }
+    }
+    if to == NK_U128 {
+        return if x < Int128(0) { (V.Unset, E_OVERFLOW) } else { (mk(to, x), 0) }
+    }
+    checked(to, Some(x))
+}
+
+/// The decimal text of a number (`numeric.rs`, `to_str`): the language's own `num_to_str`, which
+/// follows the same rule.
+pub fn text(v: V) -> Str {
+    match v {
+        V.Int(v: x) => int_to_str(x),
+        V.Num(kind: k, v: x) => {
+            if k == NK_U128 { num_to_str(u128_of(x)) } else { num_to_str(x) }
+        },
+        V.Flt(kind: k, v: x) => {
+            if k == NK_F32 { num_to_str(Float32(x)) } else { num_to_str(x) }
+        },
+        _ => "",
+    }
+}
+
+fn digits_value(s: Str, from: Int) -> UInt128 {
+    let mut n = UInt128(0)
+    for i in from..str_len(s) {
+        n = n * UInt128(10) + UInt128(str_byte(s, i) - 48)
+    }
+    n
+}
+
+/// A constant of kind `k` from its printed text (`print.rs`: `numeric::to_str`).
+pub fn parse_const(k: Int, s: Str) -> V {
+    if is_float(k) {
+        let x = if s == "nan" {
+            0.0 / 0.0
+        } else if s == "inf" {
+            1.0 / 0.0
+        } else if s == "-inf" {
+            0.0 - 1.0 / 0.0
+        } else if s == "-0" {
+            0.0 - 0.0
+        } else {
+            float_parse_raw(s)
+        }
+        return mkf(k, x)
+    }
+    let negative = str_len(s) > 0 && str_byte(s, 0) == 45
+    let m = digits_value(s, if negative { 1 } else { 0 })
+    mk(k, if negative { of_u128(wrapping_sub(UInt128(0), m)) } else { of_u128(m) })
+}
