@@ -1,0 +1,327 @@
+// The Mach-O object writer (design D6): one `MH_OBJECT` for `aarch64-apple-darwin`, with
+// `__TEXT,__text`, `__TEXT,__const` (read-only data), `__DATA,__const` (data holding addresses)
+// and `__DATA,__data` (writable data), `LC_BUILD_VERSION`, `LC_SYMTAB` and `LC_DYSYMTAB`.
+// Deterministic (D7): no timestamps or paths; locals in definition order, the rest by name.
+
+use "@std/bytebuf"
+use "@std/text"
+use "lir.nz"
+use "sel.nz"
+
+const HEADER: Int = 32
+const SEGMENT: Int = 392
+const BUILD: Int = 24
+const SYMTAB: Int = 24
+const DYSYMTAB: Int = 80
+
+fn put32(b: ByteBuf, v: Int) {
+    bytebuf_put_u32_le(b, UInt32(v & 0xFFFFFFFF))
+}
+
+fn put64(b: ByteBuf, v: Int) {
+    put32(b, v & 0xFFFFFFFF)
+    put32(b, (v >> 32) & 0xFFFFFFFF)
+}
+
+fn put16(b: ByteBuf, v: Int) {
+    bytebuf_push(b, UInt8(v & 0xFF))
+    bytebuf_push(b, UInt8((v >> 8) & 0xFF))
+}
+
+/// A name in a 16-byte field, padded with zeros.
+fn put_name16(b: ByteBuf, s: Str) {
+    let mut i = 0
+    while i < 16 {
+        let ch = if i < str_len(s) { str_byte(s, i) } else { 0 }
+        bytebuf_push(b, UInt8(ch))
+        i += 1
+    }
+}
+
+fn pad_to(b: ByteBuf, at: Int) {
+    while bytebuf_len(b) < at { bytebuf_push(b, UInt8(0)) }
+}
+
+fn align_to(x: Int, a: Int) -> Int {
+    if a <= 1 { x } else { (x + a - 1) / a * a }
+}
+
+fn hexval(c: Int) -> Int {
+    if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 }
+}
+
+fn log2(x: Int) -> Int {
+    let mut n = 0
+    while (1 << n) < x { n += 1 }
+    n
+}
+
+/// Sort symbol indices by name (insertion sort: a unit has tens or hundreds of them).
+fn sort_by_name(u: Unit, xs: Ints) {
+    let n = ints_len(xs)
+    let mut i = 1
+    while i < n {
+        let x = xs[i]
+        let mut j = i - 1
+        while j >= 0 && text_compare(u.syms[xs[j]].name, u.syms[x].name) > 0 {
+            xs[j + 1] = xs[j]
+            j -= 1
+        }
+        xs[j + 1] = x
+        i += 1
+    }
+}
+
+/// A relocation entry: where, against which symbol, and how.
+fn put_reloc(b: ByteBuf, at: Int, sym: Int, pcrel: Int, len: Int, kind: Int) {
+    put32(b, at)
+    put32(b, sym | (pcrel << 24) | (len << 25) | (1 << 27) | (kind << 28))
+}
+
+/// The unit's object, or the reasons it cannot be written (in `errors`).
+pub fn write_object(u: Unit, c: Code, errors: Strs) -> Bytes {
+    let ns = u.syms.len()
+    // Data, placed in its section: 2 read-only, 3 holding addresses, 4 writable.
+    let secs = vec_new[ByteBuf]()
+    secs.push(c.buf)
+    secs.push(bytebuf_new())
+    secs.push(bytebuf_new())
+    secs.push(bytebuf_new())
+    let sec_align = ints_new()
+    ints_push(sec_align, 4)
+    ints_push(sec_align, 1)
+    ints_push(sec_align, 1)
+    ints_push(sec_align, 1)
+    let sym_sec = ints_new()
+    let sym_off = ints_new()
+    let mut i = 0
+    while i < ns {
+        ints_push(sym_sec, if c.sym_at[i] >= 0 { 1 } else { 0 })
+        ints_push(sym_off, c.sym_at[i])
+        i += 1
+    }
+    for d in u.data {
+        if str_len(d.section) > 0 {
+            strs_push(errors, f"data in section `{d.section}` (placement is for the ELF slice), in {u.source}")
+            continue
+        }
+        let s = if d.writable { 4 } else if ints_len(d.reloc_at) > 0 { 3 } else { 2 }
+        let buf = secs[s - 1]
+        let al = if d.align < 1 { 1 } else { d.align }
+        pad_to(buf, align_to(bytebuf_len(buf), al))
+        if al > sec_align[s - 1] { sec_align[s - 1] = al }
+        sym_sec[d.sym] = s
+        sym_off[d.sym] = bytebuf_len(buf)
+        let mut k = 0
+        while k + 1 < str_len(d.hex) {
+            let v = hexval(str_byte(d.hex, k)) * 16 + hexval(str_byte(d.hex, k + 1))
+            bytebuf_push(buf, UInt8(v))
+            k += 2
+        }
+    }
+    // Section addresses, in order, each at its alignment.
+    let sec_addr = ints_new()
+    let mut addr = 0
+    let mut maxal = 16
+    i = 0
+    while i < 4 {
+        addr = align_to(addr, sec_align[i])
+        ints_push(sec_addr, addr)
+        addr += bytebuf_len(secs[i])
+        if sec_align[i] > maxal { maxal = sec_align[i] }
+        i += 1
+    }
+    let vmsize = addr
+    // Symbols: locals, then definitions others see, then imports.
+    let locals = ints_new()
+    let extdefs = ints_new()
+    let undefs = ints_new()
+    i = 0
+    while i < ns {
+        let s = u.syms[i]
+        if s.link == L_IMPORT {
+            ints_push(undefs, i)
+        } else if sym_sec[i] == 0 {
+            strs_push(errors, f"`{s.name}` is declared here but not defined, in {u.source}")
+        } else if s.link == L_LOCAL {
+            ints_push(locals, i)
+        } else {
+            ints_push(extdefs, i)
+        }
+        i += 1
+    }
+    sort_by_name(u, extdefs)
+    sort_by_name(u, undefs)
+    let order = ints_new()
+    for x in locals { ints_push(order, x) }
+    for x in extdefs { ints_push(order, x) }
+    for x in undefs { ints_push(order, x) }
+    let nidx = ints_new()
+    i = 0
+    while i < ns {
+        ints_push(nidx, -1)
+        i += 1
+    }
+    i = 0
+    while i < ints_len(order) {
+        nidx[order[i]] = i
+        i += 1
+    }
+    // Relocations: the text's, then each data section's.
+    let rel = vec_new[ByteBuf]()
+    rel.push(bytebuf_new())
+    rel.push(bytebuf_new())
+    rel.push(bytebuf_new())
+    rel.push(bytebuf_new())
+    let nrel = ints_new()
+    ints_push(nrel, ints_len(c.rel_at))
+    ints_push(nrel, 0)
+    ints_push(nrel, 0)
+    ints_push(nrel, 0)
+    i = ints_len(c.rel_at) - 1
+    while i >= 0 {
+        let kind = c.rel_kind[i]
+        let pcrel = if kind == R_BRANCH26 || kind == R_PAGE21 || kind == R_GOT_PAGE21 { 1 } else { 0 }
+        put_reloc(rel[0], c.rel_at[i], nidx[c.rel_sym[i]], pcrel, 2, kind)
+        i -= 1
+    }
+    for d in u.data {
+        let s = sym_sec[d.sym]
+        if s < 2 { continue }
+        let mut k = 0
+        while k < ints_len(d.reloc_at) {
+            put_reloc(rel[s - 1], sym_off[d.sym] + d.reloc_at[k], nidx[d.reloc_sym[k]], 0, 3, 0)
+            nrel[s - 1] = nrel[s - 1] + 1
+            k += 1
+        }
+    }
+    if strs_len(errors) > 0 { return bytes_new(0) }
+    // The string table: an empty name first, then each symbol's, `_`-prefixed.
+    let strtab = bytebuf_new()
+    bytebuf_push(strtab, UInt8(32))
+    bytebuf_push(strtab, UInt8(0))
+    let strx = ints_new()
+    for x in order {
+        ints_push(strx, bytebuf_len(strtab))
+        bytebuf_push(strtab, UInt8(95))
+        bytebuf_push_str(strtab, u.syms[x].name)
+        bytebuf_push(strtab, UInt8(0))
+    }
+    pad_to(strtab, align_to(bytebuf_len(strtab), 8))
+    // File layout.
+    let cmds = SEGMENT + BUILD + SYMTAB + DYSYMTAB
+    let base = align_to(HEADER + cmds, maxal)
+    let mut at = align_to(base + vmsize, 8)
+    let rel_off = ints_new()
+    i = 0
+    while i < 4 {
+        ints_push(rel_off, if nrel[i] > 0 { at } else { 0 })
+        at += bytebuf_len(rel[i])
+        i += 1
+    }
+    let symoff = at
+    let nsyms = ints_len(order)
+    let stroff = symoff + 16 * nsyms
+    let out = bytebuf_with_capacity(stroff + bytebuf_len(strtab))
+    // mach_header_64
+    put32(out, 0xFEEDFACF)
+    put32(out, 0x0100000C)
+    put32(out, 0)
+    put32(out, 1)
+    put32(out, 4)
+    put32(out, cmds)
+    put32(out, 0)
+    put32(out, 0)
+    // LC_SEGMENT_64, unnamed, holding every section.
+    put32(out, 0x19)
+    put32(out, SEGMENT)
+    put_name16(out, "")
+    put64(out, 0)
+    put64(out, vmsize)
+    put64(out, base)
+    put64(out, vmsize)
+    put32(out, 7)
+    put32(out, 7)
+    put32(out, 4)
+    put32(out, 0)
+    let sect = ["__text", "__const", "__const", "__data"]
+    let seg = ["__TEXT", "__TEXT", "__DATA", "__DATA"]
+    i = 0
+    while i < 4 {
+        put_name16(out, sect[i])
+        put_name16(out, seg[i])
+        put64(out, sec_addr[i])
+        put64(out, bytebuf_len(secs[i]))
+        put32(out, base + sec_addr[i])
+        put32(out, log2(sec_align[i]))
+        put32(out, rel_off[i])
+        put32(out, nrel[i])
+        put32(out, if i == 0 { 0x80000400 } else { 0 })
+        put32(out, 0)
+        put32(out, 0)
+        put32(out, 0)
+        i += 1
+    }
+    // LC_BUILD_VERSION: macOS 11.0, no tools.
+    put32(out, 0x32)
+    put32(out, BUILD)
+    put32(out, 1)
+    put32(out, 0x000B0000)
+    put32(out, 0)
+    put32(out, 0)
+    // LC_SYMTAB
+    put32(out, 0x2)
+    put32(out, SYMTAB)
+    put32(out, symoff)
+    put32(out, nsyms)
+    put32(out, stroff)
+    put32(out, bytebuf_len(strtab))
+    // LC_DYSYMTAB
+    put32(out, 0xB)
+    put32(out, DYSYMTAB)
+    put32(out, 0)
+    put32(out, ints_len(locals))
+    put32(out, ints_len(locals))
+    put32(out, ints_len(extdefs))
+    put32(out, ints_len(locals) + ints_len(extdefs))
+    put32(out, ints_len(undefs))
+    i = 0
+    while i < 12 {
+        put32(out, 0)
+        i += 1
+    }
+    // Sections, relocations, symbols, strings.
+    i = 0
+    while i < 4 {
+        pad_to(out, base + sec_addr[i])
+        bytebuf_push_bytes(out, bytebuf_to_bytes(secs[i]))
+        i += 1
+    }
+    pad_to(out, align_to(base + vmsize, 8))
+    i = 0
+    while i < 4 {
+        bytebuf_push_bytes(out, bytebuf_to_bytes(rel[i]))
+        i += 1
+    }
+    i = 0
+    while i < nsyms {
+        let x = order[i]
+        let s = u.syms[x]
+        put32(out, strx[i])
+        if s.link == L_IMPORT {
+            bytebuf_push(out, UInt8(0x01))
+            bytebuf_push(out, UInt8(0))
+            put16(out, 0)
+            put64(out, 0)
+        } else {
+            let t = if s.link == L_LOCAL { 0x0E } else if s.link == L_HIDDEN { 0x1F } else { 0x0F }
+            bytebuf_push(out, UInt8(t))
+            bytebuf_push(out, UInt8(sym_sec[x]))
+            put16(out, 0)
+            put64(out, sec_addr[sym_sec[x] -1] + sym_off[x])
+        }
+        i += 1
+    }
+    bytebuf_push_bytes(out, bytebuf_to_bytes(strtab))
+    bytebuf_to_bytes(out)
+}
