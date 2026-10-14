@@ -19474,3 +19474,19 @@ file = "crates/nazm-cli/src/derived.rs"
 find = "        return (!dir.is_empty()).then(|| PathBuf::from(dir));"
 replace = "        return Some(PathBuf::from(dir));"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "user_cache::the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it" }]
+
+[[mutation]]
+name = "r1-5-a-mach-o-executable-is-not-dead-stripped"
+why = "a macOS or iOS executable is linked without `-dead_strip`, so every standard function and every runtime part it never calls is carried in it"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''        Some(Family::MachO) => vec!["-Wl,-dead_strip".to_owned()],'''
+replace = '''        Some(Family::MachO) => Vec::new(),'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "dead_strip::an_unused_standard_function_is_left_out_and_the_program_still_runs" }]
+
+[[mutation]]
+name = "r1-5-an-elf-object-has-one-text-section"
+why = "an ELF object is compiled without a section per function, so `--gc-sections` can leave out nothing a used function shares a section with"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''        a.extend(["-ffunction-sections", "-fdata-sections"].map(str::to_owned));'''
+replace = '''        a.extend(Vec::<String>::new());'''
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::a_hosted_executable_is_dead_stripped_and_nothing_else_is" }]

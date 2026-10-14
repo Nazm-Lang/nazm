@@ -15,7 +15,8 @@
 - [ ] 3.5 Streaming `file_lines`
 
 ## 4. Size and lines
-- [ ] 4.1 Dead-stripping; unused standard functions left out
+- [x] 4.1 Dead-stripping; unused standard functions left out (design D14) — 2026-10-15:
+      architecture §7.114, `tests/dead_strip.rs`, sizes in `performance.md`, two mutants
 - [ ] 4.2 Prelude imports of the common standard modules
 - [ ] 4.3 `top(n)` and `sort_by(key)` on maps
 - [x] 4.4 Expression-bodied functions: `fn f(n: Int): Int = …`, and a private one with no result type

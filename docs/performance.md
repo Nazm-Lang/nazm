@@ -3545,3 +3545,28 @@ link — about 88 ms; a warm `nazm build --backend cranelift` of the same file t
 `--opt-level 0` and at `2`, so the faster code costs nothing in the build here. The cold row compiles
 the runtime with `clang` each time; caching that per user (R1.5, D12) is what it waits for. Peak
 memory rises from 6.7 MiB to 38 MiB: the compiler's, not the program's.
+
+## R1.5 D14: dead-stripping, measured (2026-10-15)
+
+What changed (`docs/architecture.md` §7.114): a hosted executable is linked with `-dead_strip` on
+macOS and iOS, and with `--gc-sections` over `-ffunction-sections -fdata-sections` objects on Linux
+and Android, so what nothing reachable from the entry calls — an `@std` function the program never
+names, a runtime part only another service uses — is left out.
+
+The executables of `bench/compare/nazm/*.nz`, built `--no-cache` with the release binary before
+(`dd362e77`) and after the change, on an Apple M1 Pro, macOS 27.2, Apple clang 21.0.0; bytes:
+
+| program | backend | `-O0` before | `-O0` after | `-O2` before | `-O2` after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| hello | LLVM | 35,472 | 34,432 | 35,648 | 34,400 |
+| hello | Cranelift | 116,304 | 34,768 | 116,304 | 34,768 |
+| fib | LLVM | 36,296 | 34,920 | 36,328 | 34,904 |
+| fib | Cranelift | 116,432 | 35,344 | 116,416 | 35,312 |
+| words | LLVM | 125,056 | 70,720 | 105,728 | 61,184 |
+| words | Cranelift | 197,232 | 75,168 | 197,216 | 74,816 |
+
+`words`, which imports four standard modules, lost 42% at `-O2`; a Cranelift build, which links
+every runtime part, lost 62 to 70%; `hello` and `fib` are now within 1 KiB of each other under both
+backends, the rest being the Mach-O headers and page alignment. Every program printed the expected
+output. Linux (`--gc-sections`) was not measured on this host: its arguments are covered by
+`backend::tests`, and its sizes are for the contained gate to record.

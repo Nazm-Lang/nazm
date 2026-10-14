@@ -169,8 +169,12 @@ impl Backend {
     ///
     /// Not cached, and not keyed: a linker does not produce an object, and its version and
     /// options belong to a `LinkKey` that does not exist. It runs on every build.
+    ///
+    /// Dead-stripped (R1.5, D14): what nothing reachable from the entry calls is left out.
     pub(crate) fn link(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
-        run(&mut self.link_command(output, objects))
+        let mut c = self.link_command(output, objects);
+        c.args(dead_strip_args(self.cross.as_deref()));
+        run(&mut c)
     }
 
     /// Link the objects into a shared library (N85, §7.86): `-shared`, everything else as an
@@ -261,7 +265,47 @@ fn compile_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
         "-c".to_owned(),
     ];
     a.extend(target_args(cross));
+    // A section per function and per datum on ELF (R1.5, D14), so `--gc-sections` can leave out
+    // each one nothing reaches. Mach-O needs none: its linker strips by symbol.
+    if family(cross) == Some(Family::Elf) {
+        a.extend(["-ffunction-sections", "-fdata-sections"].map(str::to_owned));
+    }
     a
+}
+
+/// The object format of a hosted target whose linker strips what is unreachable (R1.5, D14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family {
+    /// macOS and iOS: `ld64`, `-dead_strip`.
+    MachO,
+    /// Linux and Android: `--gc-sections`, over the sections `-ffunction-sections` makes.
+    Elf,
+}
+
+/// The family of the target being built for, `None` where nothing is stripped: Windows,
+/// WebAssembly and the boards link as they did before D14.
+fn family(cross: Option<&str>) -> Option<Family> {
+    let (os, triple) = match cross {
+        None => (std::env::consts::OS, ""),
+        Some(t) => ("", t),
+    };
+    if os == "macos" || os == "ios" || triple.contains("-apple-") {
+        Some(Family::MachO)
+    } else if os == "linux" || os == "android" || triple.contains("-linux-") {
+        Some(Family::Elf)
+    } else {
+        None
+    }
+}
+
+/// The linker's arguments for dead-stripping an executable (R1.5, D14). Never a library's: a
+/// static or shared library keeps every function for its C callers.
+fn dead_strip_args(cross: Option<&str>) -> Vec<String> {
+    match family(cross) {
+        Some(Family::MachO) => vec!["-Wl,-dead_strip".to_owned()],
+        Some(Family::Elf) => vec!["-Wl,--gc-sections".to_owned()],
+        None => Vec::new(),
+    }
 }
 
 fn link_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
@@ -505,6 +549,42 @@ fn split(line: &str) -> Vec<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hosted_executable_is_dead_stripped_and_nothing_else_is() {
+        // R1.5, D14: ld64's `-dead_strip`; on ELF, `--gc-sections` over a section per function.
+        let apple = [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "aarch64-apple-ios",
+        ];
+        for t in apple {
+            assert_eq!(dead_strip_args(Some(t)), ["-Wl,-dead_strip"], "{t}");
+            assert!(!compile_args(0, Some(t)).contains(&"-ffunction-sections".to_owned()));
+        }
+        let elf = [
+            "aarch64-unknown-linux-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-linux-android",
+        ];
+        for t in elf {
+            assert_eq!(dead_strip_args(Some(t)), ["-Wl,--gc-sections"], "{t}");
+            let args = compile_args(2, Some(t));
+            assert!(args.contains(&"-ffunction-sections".to_owned()), "{t}");
+            assert!(args.contains(&"-fdata-sections".to_owned()), "{t}");
+        }
+        for t in [
+            "x86_64-pc-windows-gnu",
+            "aarch64-unknown-none",
+            "riscv64gc-unknown-none-elf",
+            "thumbv7m-none-eabi",
+            "wasm32-unknown-unknown",
+            "wasm32-wasip1",
+        ] {
+            assert!(dead_strip_args(Some(t)).is_empty(), "{t}");
+            assert!(!compile_args(0, Some(t)).contains(&"-ffunction-sections".to_owned()));
+        }
+    }
 
     #[test]
     fn a_linux_link_names_the_c_librarys_mathematics_and_no_other_does() {

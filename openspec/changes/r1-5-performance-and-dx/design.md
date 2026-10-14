@@ -114,7 +114,10 @@ iterator that yields slices without a list; the runtime's LLVM IR optimised toge
 program's (`-O2` builds); and `file_lines` reading in chunks rather than the whole file.
 
 **D14 — dead-stripping (4.1).** Native builds link with `-dead_strip` (macOS) or `--gc-sections` with
-function sections (ELF), so unused standard functions are left out.
+function sections (ELF), so unused standard functions are left out. *Taken while the copyright
+holder was away (2026-10-15):* executables only, on the hosted macOS, iOS, Linux and Android
+targets; a static or shared library keeps every function for its C callers, and Windows, WebAssembly
+and the boards link as before.
 
 ### Security and verification (sections 7, 8)
 

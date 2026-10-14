@@ -336,6 +336,16 @@ EXPERIMENTAL until R1.5 closes. Evidence: `crates/nazm-cli/tests/run_compiled.rs
 stdout, stderr, the memory report and the status; both refusals, the limits, the temporary
 directory removed; mutants in `xtask/mutations/mutations.toml`.
 
+**R1.5 (2026-10-15)** · *Dead-stripping* (`docs/architecture.md` §7.114; R1.5 design D14). A hosted
+executable is linked with `-dead_strip` (macOS, iOS) or with `--gc-sections` over objects compiled
+with `-ffunction-sections -fdata-sections` (Linux, Android), so a standard function or runtime part
+nothing calls is left out; libraries, Windows, WebAssembly and the boards link as before. `words`
+at `-O2` 105,728 → 61,184 bytes under LLVM, 197,216 → 74,816 under Cranelift (`performance.md`,
+*R1.5 D14*). EXPERIMENTAL until R1.5 closes; Linux's sizes are unmeasured on the host. Evidence:
+`crates/nazm-cli/tests/dead_strip.rs` — an unused `@std/text` function absent under both backends
+at `-O0` and `-O2`, the program's output unchanged, the same objects linked whole larger;
+`backend::tests` for each target's arguments; two mutants.
+
 **R1.5 (2026-10-15)** · *The user cache* (`docs/architecture.md` §7.113; R1.5 design D12). The
 runtime's units and each `@std` or prelude module's own unit are filed in a user cache —
 `~/Library/Caches/nazm` on macOS, `$XDG_CACHE_HOME/nazm` or `~/.cache/nazm` elsewhere,
