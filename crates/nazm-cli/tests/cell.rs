@@ -293,6 +293,15 @@ fn what_a_cell_holds_carries_its_provenance() {
         ),
         Vec::<String>::new()
     );
+    // The cell is the element type's: a file's length in a `Cell[Int]` does not reach a
+    // `Cell[Str]` holding a literal.
+    assert_eq!(
+        codes(
+            "fn main(io: IoCap) -> Int ! { io } { let n = cell_new(str_len(read_file(\"cfg\"))); \
+             let c = cell_new(\"out.txt\"); write_file(cell_get(c), \"x\") }\n"
+        ),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
