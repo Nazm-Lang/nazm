@@ -59,10 +59,13 @@ pub fn text_split(s: Str, sep: Str) -> Strs ! {} {
     if n == 0 {
         strs_push(out, s);
     } else {
+        // A position is compared as a slice only where its first byte is the separator's, so
+        // nothing is made for the rest (R1, 5b.9).
+        let first = str_byte(sep, 0);
         let mut start = 0;
         let mut i = 0;
         while i + n <= m {
-            if str_slice(s, i, i + n) == sep {
+            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) {
                 strs_push(out, str_slice(s, start, i));
                 i = i + n;
                 start = i;
@@ -226,23 +229,31 @@ pub fn text_pad_right(s: Str, width: Int, fill: Str) -> Str ! {} {
 /// The lines of `s`: split at each `\n`, a `\r` before it removed, and no empty last line for a
 /// final newline. `""` has no lines.
 pub fn text_lines(s: Str) -> Strs ! {} {
+    // One pass over the bytes (R1, 5b.9): each line a slice of `s`, its `\r` left off.
     let out = strs_new();
-    if str_len(s) > 0 {
-        let raw = text_split(s, str_from_byte(10));
-        let mut n = strs_len(raw);
-        if text_ends_with(s, str_from_byte(10)) { n = n - 1; }
-        let mut i = 0;
-        while i < n {
-            let line = strs_get(raw, i);
-            if text_ends_with(line, str_from_byte(13)) {
-                strs_push(out, str_slice(line, 0, str_len(line) - 1));
-            } else {
-                strs_push(out, line);
-            }
-            i = i + 1;
+    let m = str_len(s);
+    let mut start = 0;
+    let mut i = 0;
+    while i < m {
+        if str_byte(s, i) == 10 {
+            strs_push(out, line_of(s, start, i));
+            start = i + 1;
         }
+        i = i + 1;
+    }
+    if start < m {
+        strs_push(out, line_of(s, start, m));
     }
     out
+}
+
+/// `s` from `start` to `end`, without one `\r` before `end`.
+fn line_of(s: Str, start: Int, end: Int) -> Str ! {} {
+    if end > start && str_byte(s, end - 1) == 13 {
+        str_slice(s, start, end - 1)
+    } else {
+        str_slice(s, start, end)
+    }
 }
 
 /// `-1`, `0` or `1` as `a` sorts before, with or after `b`, byte by byte; a prefix sorts first.

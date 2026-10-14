@@ -1290,12 +1290,13 @@ caller is still holding. That exclusion is not an optimisation; it **is** rule 2
 without it every one of the compiler's 108 `Ints` parameters is a use-after-free waiting
 for the caller's next read
 Repointed by N40: parameters are borrowed: MIR's shared unwind block drops every managed local except them.
+Repointed by R1 (5b.9), whose borrowed fields the block also leaves alone.
 """
 file = "crates/nazm-mir/src/lower.rs"
 find = """            .skip(self.f.params as usize)
-            .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
+            .filter(|(i, _)| {"""
 replace = """            .skip(0)
-            .filter(|(_, l)| l.ty.value().is_some_and(|t| self.managed(t)))"""
+            .filter(|(i, _)| {"""
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "authority::a_function_value_with_fewer_effects_is_accepted_passed_or_returned" }]
 
 [[mutation]]
@@ -13088,8 +13089,8 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib_1_0::json_ro
 name = "n84-a-line-keeps-its-carriage-return"
 why = "`text_lines` keeps the `\\r` of a `\\r\\n` ending, so a line read from a Windows file is one byte longer"
 file = "library/std/text.nz"
-find = "            if text_ends_with(line, str_from_byte(13)) {"
-replace = "            if false {"
+find = "    if end > start && str_byte(s, end - 1) == 13 {"
+replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stdlib_1_0::text_1_0_behaves_as_documented_at_its_edges" }]
 
 [[mutation]]
@@ -18889,8 +18890,12 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_
 name = "r1-hashmap-at-or-ignores-its-fallback"
 why = "`hashmap_at_or` traps on an absent key instead of answering the fallback"
 file = "library/std/hashmap.nz"
-find = '''    if at < 0 { fallback } else { vec_get(m.values, vec_get(m.slots, at)) }'''
-replace = '''    vec_get(m.values, vec_get(m.slots, at))'''
+find = '''    if at < 0 {
+        fallback
+    } else {'''
+replace = '''    if false {
+        fallback
+    } else {'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::map_entries_read_write_and_count_alike_everywhere" }]
 
 [[mutation]]
@@ -18986,6 +18991,57 @@ file = "crates/nazm-core/src/eval/intrinsic.rs"
 find = '''            Intrinsic::IntsPush | Intrinsic::StrsPush => Some(Intrinsic::VecPush),'''
 replace = '''            Intrinsic::StrsPush => Some(Intrinsic::VecPush),'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lists::one_list_type_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-remembered-entry-is-any-key-s"
+why = "`hashmap_set` writes the remembered entry without asking whether it is this key's"
+file = "library/std/hashmap.nz"
+find = '''    if hit >= 0 && key.same(vec_get(m.keys, hit)) {'''
+replace = '''    if hit >= 0 {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::a_remembered_entry_is_only_ever_its_own_key_s" }]
+
+[[mutation]]
+name = "r1-a-removal-keeps-the-remembered-entry"
+why = "a removal moves entries but the map still remembers where one was"
+file = "library/std/hashmap.nz"
+find = '''        vec_set(m.meta, 2, 0 - 1);
+        vec_set(m.slots, at, 0 - 2);'''
+replace = '''        vec_set(m.slots, at, 0 - 2);'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::a_remembered_entry_is_only_ever_its_own_key_s" }]
+
+[[mutation]]
+name = "r1-a-split-compares-only-first-bytes"
+why = "`text_split` takes a matching first byte for the whole separator"
+file = "library/std/text.nz"
+find = '''            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) {'''
+replace = '''            if str_byte(s, i) == first {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::lines_and_splits_keep_their_edges" }]
+
+[[mutation]]
+name = "r1-no-field-is-borrowed"
+why = "a field read only to be an operand takes and gives back a reference, as before 5b.9"
+file = "crates/nazm-mir/src/lower.rs"
+find = '''                if !snapshot && matches!(base.kind, cir::ExprKind::Local(_)) =>'''
+replace = '''                if false && !snapshot && matches!(base.kind, cir::ExprKind::Local(_)) =>'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "borrowed_fields::the_mir_names_the_borrow" }]
+
+[[mutation]]
+name = "r1-the-unwind-releases-a-borrow"
+why = "the failure path releases a borrowed field's temporary, which owns nothing: released twice"
+file = "crates/nazm-mir/src/lower.rs"
+find = '''                !self
+                    .borrowed
+                    .contains(&LocalId(u32::try_from(*i).unwrap_or(u32::MAX)))'''
+replace = '''                true'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "borrowed_fields::a_borrowed_field_is_released_by_nobody_on_either_path" }]
+
+[[mutation]]
+name = "r1-a-borrow-takes-a-reference"
+why = "a borrowed field is read as an owned one, its reference never given back: a leak"
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''                self.read_borrowed(dst, at, t);'''
+replace = '''                self.read_owned(dst, at, t);'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "borrowed_fields::a_borrowed_field_is_released_by_nobody_on_either_path" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 

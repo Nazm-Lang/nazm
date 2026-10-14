@@ -138,3 +138,61 @@ fn an_absent_map_entry_read_by_index_fails() {
         assert!(r.stderr.contains("N0405"), "{label}: {r:?}");
     }
 }
+
+#[test]
+fn a_remembered_entry_is_only_ever_its_own_key_s() {
+    // R1, 5b.9: `m[k]` remembers the entry it found so `m[k] += n` writes without a second
+    // probe; a write of another key, or one after a removal moved the entries, is never it.
+    differential::agrees(
+        "use \"@std/hash\"
+use \"@std/hashmap\"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = hashmap_new[Str, Int]()
+    m[\"a\"] = 1
+    m[\"b\"] = 2
+    m[\"c\"] = 3
+    let x = m[\"a\"]
+    m[\"b\"] = 20
+    m[\"a\"] += 10
+    let y = m[\"c\"]
+    // `c`, the last entry, remembered; the removal moves it and shortens the entries, so what
+    // was remembered is past their end.
+    m[\"c\"] += 0
+    hashmap_remove(m, \"a\")
+    m[\"e\"] = 5
+    m[\"c\"] += 100
+    m[\"d\"] += 4
+    println(f\"{x} {y} {m[\"b\"]} {m[\"c\"]} {m[\"d\"]} {m[\"e\"]} {m.len()} {m.has(\"a\")}\")
+    0
+}
+",
+        "1 3 20 103 4 5 4 false\n0",
+    );
+}
+
+#[test]
+fn lines_and_splits_keep_their_edges() {
+    differential::agrees(
+        "use \"@std/text\"
+
+fn show(xs: Strs) -> Str {
+    let mut s = \"\"
+    for x in xs { s += f\"[{x}]\" }
+    s
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(show(\"a\\nb\\r\\n\\nc\\n\".lines()))
+    println(show(\"\\n\".lines()))
+    println(show(\"\".lines()))
+    println(show(\"x\".lines()))
+    println(show(\"a  b \".split(\" \")))
+    println(show(\"a--b---c\".split(\"--\")))
+    println(show(\"abc\".split(\"\")))
+    0
+}
+",
+        "[a][b][][c]\n[]\n\n[x]\n[a][][b][]\n[a][b][-c]\n[abc]\n0",
+    );
+}

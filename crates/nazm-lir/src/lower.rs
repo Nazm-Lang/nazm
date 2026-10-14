@@ -459,7 +459,8 @@ pub fn lower_as(
                             | mir::Rvalue::Payload { enumeration, .. } => {
                                 used.push(Type::Enum(*enumeration));
                             }
-                            mir::Rvalue::Field { field, .. } => {
+                            mir::Rvalue::Field { field, .. }
+                            | mir::Rvalue::FieldBorrow { field, .. } => {
                                 used.push(Type::Record(field.record));
                             }
                             mir::Rvalue::Primitive { elem: Some(e), .. } => {
