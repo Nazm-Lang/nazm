@@ -73,10 +73,9 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       without `()` (`C.R`)
 - [x] 5b.15 `v[i]` and `v[i] = x` on `Vec`; methods on built-in types (`v.len()`, `s.len()`,
       `s.split(" ")`, …) as names for the existing functions
-- [ ] 5b.16 `let x: T = …`; `[1, 2, 3]` as a `Vec` where one is wanted; `vec_new()`'s `T` inferred
+- [x] 5b.16 `let x: T = …`; `[1, 2, 3]` as a `Vec` where one is wanted; `vec_new()`'s `T` inferred
       from later use
-      — done: `let x: T` and a generic call's parameter settled by the wanted type (2026-10-14);
-      left: `[1, 2, 3]` as a `Vec`
+      — `vec_new()`'s `T` settled by the type its result is wanted as (2026-10-14)
 - [ ] 5b.17 Methods without a trait (`impl Point { … }`), `while let`, `loop`, match guards, `?` on
       `Option` in a function returning `Option`, `/* … */` comments
       — done: an impl without a trait, `while let`, `loop`, block comments (2026-10-14); `?` on `Option`; left: match

@@ -158,6 +158,39 @@ impl Checker<'_> {
         span: Span,
         expected: Option<Type>,
     ) -> Type {
+        // `[a, b, c]` where a `Vec[T]`, an `Ints` or a `Strs` is wanted (R1, 5b.16): that sequence,
+        // its elements in order — `[]` an empty one.
+        if let Some(seq) = expected.filter(|t| matches!(t, Type::Vec(_) | Type::Ints | Type::Strs))
+        {
+            let elem = match seq {
+                Type::Ints => Type::Int,
+                Type::Strs => Type::Str,
+                t => self
+                    .res
+                    .types()
+                    .type_args(t)
+                    .first()
+                    .copied()
+                    .unwrap_or(Type::Int),
+            };
+            for e in elems {
+                let t = self.value_type(e, Some(elem));
+                if !self.assignable(t, elem) {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        e.span(),
+                        format!(
+                            "this `{}`'s elements are `{}`, and this is `{}`",
+                            self.show(seq),
+                            self.show(elem),
+                            self.show(t)
+                        ),
+                    ));
+                }
+            }
+            self.res.record_sequence_literal(span, seq);
+            return seq;
+        }
         let want = self.expected_element(expected);
         let Some(first) = elems.first() else {
             self.errors.push(
