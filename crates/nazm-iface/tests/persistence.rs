@@ -182,7 +182,7 @@ fn the_schema_is_an_input_to_the_fingerprint() {
     let g = graph();
     let mut p = publish(&g, &[("f", &[], Type::Int)]);
     let before = InterfaceHash::of(&p).unwrap();
-    p.schema = "nazm.interface/13".to_owned();
+    p.schema = "nazm.interface/14".to_owned();
     assert_ne!(before, InterfaceHash::of(&p).unwrap());
 }
 
@@ -210,17 +210,17 @@ fn refuse(json: &str) -> ReadError {
 
 #[test]
 fn a_future_schema_is_refused_and_never_read_as_this_one() {
-    // `/13` is a version this build does not have. `/1` to `/6` would do as well and say
+    // `/14` is a version this build does not have. `/1` to `/6` would do as well and say
     // something different — the rule is that *unknown* means refused, in either
     // direction, and a newer file is the case that matters because it is the one whose
     // extra meaning this reader would otherwise drop.
     let e = refuse(
-        r#"{"schema":"nazm.interface/13","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
+        r#"{"schema":"nazm.interface/14","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[]}"#,
     );
-    assert_eq!(e, ReadError::UnknownSchema("nazm.interface/13".to_owned()));
+    assert_eq!(e, ReadError::UnknownSchema("nazm.interface/14".to_owned()));
     // The message names both, because a reader holding a newer file needs to know it is
     // newer rather than broken.
-    assert!(e.to_string().contains("nazm.interface/13"));
+    assert!(e.to_string().contains("nazm.interface/14"));
     assert!(e.to_string().contains(SCHEMA));
 
     // And both versions this build replaced. A `/1` file describes a language with no

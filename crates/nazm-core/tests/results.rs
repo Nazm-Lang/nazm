@@ -407,11 +407,12 @@ fn propagation_needs_a_result() {
 
 #[test]
 fn propagation_does_not_apply_to_option() {
-    // Deliberately: `Option` has no `?` in N12, and it is refused by the same rule as any
-    // other enum rather than being a second carrier.
+    // `Option` has had a `?` since R1, 5b.17 — in a function that returns an `Option`. In one
+    // that returns a `Result` there is no `None` to give back, and it is refused as a `?`
+    // outside its carrier, not converted.
     let src = "fn f(o: Option[Int]) -> Result[Int, Str] {\n    let n = o?;\n    Result[Int, Str].Ok(value: n)\n}\n\
                fn main() -> Int { 0 }\n";
-    refused(src, codes::PROPAGATE_NON_RESULT, "?", 0);
+    refused(src, codes::PROPAGATE_OUTSIDE_RESULT, "?", 0);
 }
 
 #[test]
