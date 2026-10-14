@@ -1,0 +1,148 @@
+// Arrays, which `nazm.core-ir/2` spells `?` as it spells a function type. Whether a `?` owns
+// anything decides drops, so the pipeline recovers each array type from how the array is made —
+// a literal `[…]`, `[v; n]`, an index of an array, a binding of one — and carries it across calls:
+// a parameter typed `?` takes the type its callers pass, a result typed `?` the type its body
+// returns, to a fixpoint. Spelled internally `?array[ELEM, LEN]`; MIR still prints `?`.
+// (`openspec/changes/r3-pipeline/design.md`, *Gaps*: Core IR /3 makes this unnecessary.)
+
+use "cir.nz"
+use "types.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/json"
+
+/// Each function's locals' types and result type, with arrays recovered.
+pub struct Refined {
+    locals: HashMap[Str, Strs],
+    rets: HashMap[Str, Str],
+}
+
+/// An expression's type in function `def`, with an array recovered where it can be.
+pub fn refined_ty(c: Cir, r: Refined, def: Str, e: Int) -> Str ! {} {
+    let t = ety(c, e)
+    if t != "?" { return t }
+    let o = op(c, e)
+    if o == "array" {
+        let es = kid(c, e, "elems")
+        if count(c, es) == 0 { return t }
+        return "?array[" + refined_ty(c, r, def, at(c, es, 0)) + ", " + int_to_str(count(c, es)) + "]"
+    }
+    if o == "array-repeat" {
+        return "?array[" + refined_ty(c, r, def, kid(c, e, "value")) + ", " + int_to_str(ival(c, e, "count")) + "]"
+    }
+    if o == "local" {
+        let l = ival(c, e, "local")
+        match hashmap_get(r.locals, def) {
+            Some(ls) => { if l >= 0 && l < strs_len(ls) { return strs_get(ls, l) } },
+            None => {},
+        }
+    }
+    if o == "index" {
+        let b = spell(refined_ty(c, r, def, kid(c, e, "base")))
+        if b.kind == "array" { return strs_get(b.args, 0) }
+    }
+    if o == "call" {
+        match hashmap_get(r.rets, sval(c, e, "callee")) {
+            Some(x) => { return x },
+            None => {},
+        }
+    }
+    if o == "block" || o == "if" {
+        let body = if o == "block" { kid(c, e, "body") } else { kid(c, e, "then") }
+        let tail = kid(c, body, "tail")
+        if tail >= 0 { return refined_ty(c, r, def, tail) }
+    }
+    t
+}
+
+fn is_array(t: Str) -> Bool { spell(t).kind == "array" }
+
+/// One pass over function `f`'s body; whether anything was learnt.
+fn learn(c: Cir, r: Refined, f: CirFn, n: Int) -> Bool {
+    let kind = json_kind(c.doc, n)
+    let mut changed = false
+    if kind == "array" {
+        for i in 0..count(c, n) {
+            if learn(c, r, f, at(c, n, i)) { changed = true }
+        }
+        return changed
+    }
+    if kind != "object" { return false }
+    let o = op(c, n)
+    if o == "let" {
+        let l = ival(c, n, "local")
+        let ls = match hashmap_get(r.locals, f.def) { Some(x) => x, None => strs_new() }
+        if l >= 0 && l < strs_len(ls) && strs_get(ls, l) == "?" {
+            let t = refined_ty(c, r, f.def, kid(c, n, "value"))
+            if is_array(t) {
+                strs_set(ls, l, t)
+                changed = true
+            }
+        }
+    } else if o == "call" {
+        let g = sval(c, n, "callee")
+        let i = fn_index(c, g)
+        if i >= 0 && vec_get(c.fns, i).type_params == 0 {
+            let gl = match hashmap_get(r.locals, g) { Some(x) => x, None => strs_new() }
+            let args = kid(c, n, "args")
+            for k in 0..count(c, args) {
+                if k < strs_len(gl) && strs_get(gl, k) == "?" {
+                    let t = refined_ty(c, r, f.def, at(c, args, k))
+                    if is_array(t) {
+                        strs_set(gl, k, t)
+                        changed = true
+                    }
+                }
+            }
+        }
+    } else if o == "return" && f.ret == "?" && !hashmap_has(r.rets, f.def) {
+        let t = refined_ty(c, r, f.def, kid(c, n, "value"))
+        if is_array(t) {
+            hashmap_set(r.rets, f.def, t)
+            changed = true
+        }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if (kk == "object" || kk == "array") && learn(c, r, f, k) { changed = true }
+            },
+            None => {},
+        }
+    }
+    changed
+}
+
+/// Recover every array type the program's uses show, to a fixpoint.
+pub fn refine(c: Cir) -> Refined ! {} {
+    let r = Refined(locals: hashmap_new(), rets: hashmap_new())
+    for f in c.fns {
+        let ls = strs_new()
+        for l in f.locals { strs_push(ls, l.ty) }
+        hashmap_set(r.locals, f.def, ls)
+    }
+    let mut changed = true
+    let mut rounds = 0
+    while changed && rounds < 16 {
+        changed = false
+        rounds += 1
+        for f in c.fns {
+            if f.body >= 0 {
+                if learn(c, r, f, f.body) { changed = true }
+                // A result typed `?`: the body's own value.
+                if f.ret == "?" && !hashmap_has(r.rets, f.def) {
+                    let tail = kid(c, f.body, "tail")
+                    if tail >= 0 {
+                        let t = refined_ty(c, r, f.def, tail)
+                        if is_array(t) {
+                            hashmap_set(r.rets, f.def, t)
+                            changed = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    r
+}

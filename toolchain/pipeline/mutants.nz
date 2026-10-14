@@ -19,7 +19,7 @@ fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
     for bi in 0..vec_len(f.blocks) {
         let b = vec_get(f.blocks, bi)
         // A drop in a failure block may release what no failing path owns: removing it is no fault.
-        if (kind == 0 && b.origin == origin_source() && !exits(b)) || kind == 1 || kind == 4 {
+        if (kind == 0 && b.origin == origin_source() && returns_from(f, bi)) || kind == 1 || kind == 4 {
             for si in 0..vec_len(b.stmts) {
                 let s = vec_get(b.stmts, si)
                 let replacement = mutate_stmt(f, s, kind)
@@ -42,7 +42,7 @@ fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
                 Term.Return(l: l) => {
                     if kind == 3 {
                         for x in 0..vec_len(f.locals) {
-                            if vec_len(nt) == 0 && vec_get(f.locals, x).ty != f.ret && vec_get(f.locals, x).ty != "Tasks" { vec_push(nt, Term.Return(l: x)) }
+                            if vec_len(nt) == 0 && vec_get(f.locals, x).ty != f.ret && vec_get(f.locals, x).ty != "Tasks" && str_byte(vec_get(f.locals, x).ty, 0) != 63 && str_byte(f.ret, 0) != 63 { vec_push(nt, Term.Return(l: x)) }
                         }
                     }
                 },
@@ -59,13 +59,27 @@ fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
     false
 }
 
-/// Whether a block ends the process: what it still owns is never released, by design.
-fn exits(b: Block) -> Bool {
-    if vec_len(b.term) == 0 { return false }
-    match vec_get(b.term, 0) {
-        Term.Exit(o: _) => true,
-        _ => false,
+/// Whether a `return` is reachable from block `from`. From a block that only reaches `exit`, what
+/// is still owned is never released, by design: removing a drop there is no fault.
+fn returns_from(f: MirFn, from: Int) -> Bool {
+    let seen = ints_new()
+    for i in 0..vec_len(f.blocks) { ints_push(seen, 0) }
+    let work = ints_new()
+    ints_push(work, from)
+    while ints_len(work) > 0 {
+        let b = ints_pop(work)
+        if b < 0 || b >= vec_len(f.blocks) || ints_get(seen, b) == 1 { continue }
+        ints_set(seen, b, 1)
+        let block = vec_get(f.blocks, b)
+        if vec_len(block.term) == 0 { continue }
+        let t = vec_get(block.term, 0)
+        match t {
+            Term.Return(l: _) => { return true },
+            _ => {},
+        }
+        for x in successors(t) { ints_push(work, x) }
     }
+    false
 }
 
 fn is_drop(s: Stmt) -> Bool {

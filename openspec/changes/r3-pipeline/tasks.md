@@ -23,8 +23,11 @@
       functions' names, derived `Hash`
 - [x] 4.4 Closures (captures recovered as the locals after the parameters) and function-value
       thunks (synthesised into the document, as Rust synthesises their Core IR)
-- [x] 4.5 Comparison: 102 of 105 inputs identical to `nazm mir`; the 3 that differ are Core IR /2
-      gaps (`@export` symbols in 2, array parameter types in 1)
+- [x] 4.5 Array types recovered across calls (`refine.nz`); the instance plan bounded (`N0358`)
+- [x] 4.6 Comparison: 103 of the brief's 105 inputs identical to `nazm mir`, and all 83 of
+      `compiler/` with MIR and this pipeline itself (its own ~500 functions, `@std` included): 187
+      agree, 2 differ. The 2 are the Core IR /2 `@export` gap (`desktop/counter`,
+      `check/export-numbers`): the digest's canonical text names the C symbol
 
 ## 5. The MIR validator
 
@@ -35,7 +38,7 @@
       union, source blocks first
 - [x] 5.3 `pipeline mutants`: five kinds of breakage (a drop removed from a source block, a
       failure edge removed, a jump past the last block, a return of another type, a parameter
-      moved), the first place each fits in every function: 6317 made over the inputs, all caught;
+      moved), the first place each fits in every function: 11941 made over the inputs, all caught;
       `pipeline mir` prints only what the validator accepted, as `nazm mir` does
 
 ## 6. LIR

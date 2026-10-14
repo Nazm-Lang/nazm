@@ -76,6 +76,15 @@ fn same_shape(a: Str, b: Str) -> Bool {
     false
 }
 
+/// Whether two types are one: equal, or both spelled `?` by Core IR /2 (an array the lowering
+/// recovered is one too), which only Core IR /3's types can tell apart.
+fn eq_ty(a: Str, b: Str) -> Bool {
+    if a == b { return true }
+    let x = spell(a).kind
+    let y = spell(b).kind
+    a != "" && b != "" && (x == "unknown" || x == "array") && (y == "unknown" || y == "array") && a != "never" && b != "never"
+}
+
 fn is_integer(t: Str) -> Bool {
     t == "Int" || (is_num(t) && t != "Float32" && t != "Float64")
 }
@@ -120,14 +129,14 @@ fn arguments(v: Vx, callee: Int, args: Vec[Operand]) -> Str {
 fn rvalue(v: Vx, value: Rvalue, want: Str, arm: Str) -> Str {
     match value {
         Rvalue.Use(o: o) => {
-            if operand_ty(v, o) != want { return "a use of a value of another type" }
+            if !eq_ty(operand_ty(v, o), want) { return "a use of a value of another type" }
             match o {
                 Operand.Local(l: l) => if managed(v.tt, want) { "reads managed _" + int_to_str(l) + " with neither `copy` nor `move`" } else { "" },
                 Operand.Const(c: _) => "",
             }
         },
-        Rvalue.Copy(l: l) => if value_ty(v, l) != want { "a copy or move of a value of another type" } else { "" },
-        Rvalue.Move(l: l) => if value_ty(v, l) != want { "a copy or move of a value of another type" } else { "" },
+        Rvalue.Copy(l: l) => if !eq_ty(value_ty(v, l), want) { "a copy or move of a value of another type" } else { "" },
+        Rvalue.Move(l: l) => if !eq_ty(value_ty(v, l), want) { "a copy or move of a value of another type" } else { "" },
         Rvalue.Neg(o: o) => if operand_ty(v, o) != want || !numeric(want) { "a negation that is not of a number of its own type" } else { "" },
         Rvalue.Arith(op: _, a: a, b: b) => if operand_ty(v, a) != want || operand_ty(v, b) != want || !numeric(want) { "arithmetic that is not on numbers of its own type" } else { "" },
         Rvalue.Bits(op: op, a: a, b: b) => {
@@ -171,7 +180,7 @@ fn rvalue(v: Vx, value: Rvalue, want: Str, arm: Str) -> Str {
                 return "a payload of variant " + int_to_str(vi) + " read outside the arm that matched it"
             }
             let ft = field_ty(v.tt, t, int_to_str(vi) + "." + int_to_str(fi))
-            if ft != "" && ft != want { "a payload read into a local of another type" } else { "" }
+            if ft != "" && !eq_ty(ft, want) { "a payload read into a local of another type" } else { "" }
         },
         _ => "",
     }
@@ -180,7 +189,7 @@ fn rvalue(v: Vx, value: Rvalue, want: Str, arm: Str) -> Str {
 fn field_read(v: Vx, b: Operand, f: FieldRef, want: Str) -> Str {
     if operand_ty(v, b) != f.rec { return "a field read from something that is not its record" }
     let ft = field_ty(v.tt, f.rec, int_to_str(f.field))
-    if ft != "" && ft != want { "a field read into a local of another type" } else { "" }
+    if ft != "" && !eq_ty(ft, want) { "a field read into a local of another type" } else { "" }
 }
 
 /// Whether an aggregate's initialisers name each field once, each of the declared type.
@@ -263,7 +272,7 @@ fn structure(v: Vx) {
                         }
                     }
                     if vec_len(path) == 0 { report(v, at + "a field write with no field"); }
-                    if !ok { report(v, at + "a field path that does not follow its types"); } else if value_ty(v, value) != t { report(v, at + "a field written with a value of another type"); }
+                    if !ok { report(v, at + "a field path that does not follow its types"); } else if !eq_ty(value_ty(v, value), t) { report(v, at + "a field written with a value of another type"); }
                 },
                 Stmt.SetElement(base: base, path: _, value: _, unwind: _) => {
                     if value_ty(v, base) == "" { report(v, at + "an element write on a local that does not exist"); }
@@ -300,7 +309,7 @@ fn structure(v: Vx) {
                 }
                 if bad { report(v, here + "a switch that does not name each variant exactly once"); }
             },
-            Term.Return(l: l) => { if value_ty(v, l) != f.ret { report(v, here + "returns a local that is not of the function's type"); } },
+            Term.Return(l: l) => { if !eq_ty(value_ty(v, l), f.ret) { report(v, here + "returns a local that is not of the function's type"); } },
             Term.Exit(o: o) => { if operand_ty(v, o) != "Int" { report(v, here + "exits with a status that is not an `Int`"); } },
             _ => {},
         }

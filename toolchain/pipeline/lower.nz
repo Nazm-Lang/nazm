@@ -11,6 +11,7 @@ use "cir.nz"
 use "types.nz"
 use "mir.nz"
 use "traits.nz"
+use "refine.nz"
 use "@std/hash"
 use "@std/hashmap"
 use "@std/json"
@@ -23,6 +24,8 @@ pub struct FuncMap {
     /// The thunk through which a module calls a named function used as a value, by
     /// `MODULE|DEF`.
     thunks: HashMap[Str, Int],
+    /// The array types Core IR /2 spells `?`, recovered.
+    refined: Refined,
 }
 
 /// The lowering state of one function. A record is a value, so everything that changes lives in
@@ -452,7 +455,7 @@ fn assign_stmt(fx: Fx, local: Int, path: Int, value: Int) {
         }
         let field = ival(c, step, "field")
         vec_push(refs, FieldRef(rec: current, field: field, name: sval(c, step, "name")))
-        let fallback = if i == n - 1 { ety(c, value) } else { "" }
+        let fallback = if i == n - 1 { ety_of(fx, value) } else { "" }
         current = record_field_ty(fx, current, field, fallback)
     }
     let tmp = temp(fx, current, "field")
@@ -471,7 +474,7 @@ fn element_assign(fx: Fx, local: Int, root: Str, path: Int, value: Int) {
     let shapes: Vec[PathRef] = vec_new()
     for i in 0..n {
         let step = at(c, path, i)
-        let fallback = if i == n - 1 { ety(c, value) } else { "" }
+        let fallback = if i == n - 1 { ety_of(fx, value) } else { "" }
         if kid(c, step, "index") >= 0 {
             vec_push(shapes, PathRef.Index(local: 0 - 1, len: ival(c, step, "len")))
             // Core IR /2 spells an array type `?`: its element is what the lowering recovered, or
@@ -633,62 +636,9 @@ fn callee_at(fx: Fx, def: Str, args: Strs) -> Int {
 
 // --- arrays, which Core IR /2 spells `?` ----------------------------------------------------------
 
-/// An expression's type, with an array type recovered from how the array is made or read.
+/// An expression's type, with an array type recovered where Core IR /2 says `?` (`refine.nz`).
 fn ety_of(fx: Fx, e: Int) -> Str {
-    let c = fx.c
-    let t = ety(c, e)
-    if t != "?" { return t }
-    let o = op(c, e)
-    if o == "array" {
-        let es = kid(c, e, "elems")
-        if count(c, es) == 0 { return t }
-        return "?array[" + ety_of(fx, at(c, es, 0)) + ", " + int_to_str(count(c, es)) + "]"
-    }
-    if o == "array-repeat" {
-        return "?array[" + ety_of(fx, kid(c, e, "value")) + ", " + int_to_str(ival(c, e, "count")) + "]"
-    }
-    if o == "local" {
-        let l = ival(c, e, "local")
-        if l >= 0 && l < vec_len(fx.locals) { return vec_get(fx.locals, l).ty }
-    }
-    if o == "index" {
-        let b = spell(ety_of(fx, kid(c, e, "base")))
-        if b.kind == "array" { return strs_get(b.args, 0) }
-    }
-    if o == "block" || o == "if" {
-        // A region's value is its tail's.
-        let body = if o == "block" { kid(c, e, "body") } else { kid(c, e, "then") }
-        let tail = kid(c, body, "tail")
-        if tail >= 0 { return ety_of(fx, tail) }
-    }
-    t
-}
-
-/// Give each binding Core IR /2 types `?` the array type its `let` makes, in source order.
-fn refine_lets(fx: Fx, n: Int) {
-    let c = fx.c
-    let kind = json_kind(c.doc, n)
-    if kind == "array" {
-        for i in 0..count(c, n) { refine_lets(fx, at(c, n, i)); }
-        return
-    }
-    if kind != "object" { return }
-    if op(c, n) == "let" {
-        let l = ival(c, n, "local")
-        if l >= 0 && l < vec_len(fx.locals) && vec_get(fx.locals, l).ty == "?" {
-            let d = vec_get(fx.locals, l)
-            vec_set(fx.locals, l, LocalDecl(ty: ety_of(fx, kid(c, n, "value")), name: d.name, origin: d.origin))
-        }
-    }
-    for i in 0..json_len(c.doc, n) {
-        match json_value_at(c.doc, n, i) {
-            Some(k) => {
-                let kk = json_kind(c.doc, k)
-                if kk == "object" || kk == "array" { refine_lets(fx, k); }
-            },
-            None => {},
-        }
-    }
+    refined_ty(fx.c, fx.fm.refined, fx.f.def, e)
 }
 
 // --- expressions ----------------------------------------------------------------------------------
@@ -1033,7 +983,7 @@ fn aggregate(fx: Fx, e: Int, dst: Int, is_variant: Bool) {
         let init = at(c, fs, i)
         let field = ival(c, init, "field")
         let value = kid(c, init, "value")
-        let fty = if is_variant { payload_ty(fx, t, v, field, ety(c, value)) } else { record_field_ty(fx, t, field, ety(c, value)) }
+        let fty = if is_variant { payload_ty(fx, t, v, field, ety_of(fx, value)) } else { record_field_ty(fx, t, field, ety_of(fx, value)) }
         let tmp = temp(fx, fty, "init")
         expr_into(fx, value, tmp)
         if !live(fx) {
@@ -1186,14 +1136,18 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
         sk: ints_new(), sl: ints_new(), scopes: ints_new(), lid: ints_new(), lhead: ints_new(), lexit: ints_new(), ldepth: ints_new(),
         cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new())
     // Core IR's locals keep their numbers: parameters, bindings, then its own temporaries.
-    for l in f.locals {
+    // With the array types `refine.nz` recovered where Core IR /2 says `?`.
+    let known = match hashmap_get(fm.refined.locals, f.def) { Some(x) => x, None => strs_new() }
+    for i in 0..vec_len(f.locals) {
+        let l = vec_get(f.locals, i)
         let origin = if l.origin == "param" { "param" } else if l.origin == "let" { "binding" } else if l.origin == "let mut" { "binding mut" } else { "temp" }
-        vec_push(locals, LocalDecl(ty: ty(fx0, l.ty), name: l.name, origin: origin))
+        let t = if i < strs_len(known) { strs_get(known, i) } else { l.ty }
+        vec_push(locals, LocalDecl(ty: ty(fx0, t), name: l.name, origin: origin))
     }
-    let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, f.ret), locals: locals, blocks: fx0.blocks, reg: reg,
+    let ret = match hashmap_get(fm.refined.rets, f.def) { Some(x) => x, None => f.ret }
+    let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, ret), locals: locals, blocks: fx0.blocks, reg: reg,
         sk: fx0.sk, sl: fx0.sl, scopes: fx0.scopes, lid: fx0.lid, lhead: fx0.lhead, lexit: fx0.lexit, ldepth: fx0.ldepth,
         cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err)
-    refine_lets(fx, f.body)
     let entry = new_block(fx, origin_source())
     set_cur(fx, entry)
     // A function in a call cycle, or whose locals are large, checks its stack first.
