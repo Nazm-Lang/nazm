@@ -167,3 +167,20 @@ fn a_benchmark_is_measured_natively_and_reported_per_iteration() {
     let human = nazm(d.path(), &["bench", "--iterations", "5", "b.nz"]);
     assert!(human.stdout.contains("b::fib_fifteen"), "{}", human.stdout);
 }
+
+#[test]
+fn a_file_whose_main_prints_with_nothing_written_still_runs_its_tests() {
+    // R1, 5b.1: such a `main` uses an `out` it is given, not one it wrote; the harness leaves it
+    // out of what it builds rather than keeping it under a name that is given none.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("hello.nz"),
+        "use \"@std/test\"\n\nfn main() {\n    println(\"hello\")\n}\n\n@test\nfn passes() -> Result[Int, Str] {\n    assert_true(\"yes\", true)\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["test", "--json", "hello.nz"]);
+    assert_eq!(r.code, Some(0), "{}\n{}", r.stdout, r.stderr);
+    let rows = json_rows(&r.stdout);
+    assert_eq!(rows.len(), 1, "{}", r.stdout);
+    assert_eq!(rows[0]["passed"], true, "{}", r.stdout);
+}

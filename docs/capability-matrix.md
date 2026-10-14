@@ -3620,8 +3620,8 @@ and native build agreeing, three refusals, and the lockfile's schema, contents a
 
 **Gate 2 (2026-10-09)** · *Tests and benchmarks* (`general-purpose.md` §18–§19; `spec.md`). `nazm
 test` runs every `@test` and `@fuzz` function by name under the interpreter and as an executable,
-each in its own process through a generated entry that moves the file's `main` aside without
-moving an offset; `--filter`, `--fuzz N`; `@test(fails)`; `nazm.test/1` gained `kind`. `nazm bench`
+each in its own process through a generated entry that blanks the file's `main` (R1: rather than
+renaming it) without moving an offset; `--filter`, `--fuzz N`; `@test(fails)`; `nazm.test/1` gained `kind`. `nazm bench`
 measures `@bench` functions natively at `-O2` (`nazm.bench/1`, EXPERIMENTAL). `@std/test` gained
 five assertions and `property`. Evidence: `crates/nazm-cli/tests/user_tests.rs` — pass, `Err` with
 its message from both legs, a trap under `@test(fails)`, a wrongly expected failure, a test holding

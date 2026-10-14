@@ -4535,8 +4535,9 @@ target can compile is not checked on another. An `impl` removed takes its method
 Settled by Gate 2, 2026-10-09 (`docs/general-purpose.md` §18–§19). A marked function is run by a
 generated entry: a `main` appended to the file's text as the compiler reads it — never to the file —
 that holds the authority the function's parameters ask for, as `main`'s do, calls it, and ends the
-process. The file's own `main`, if any, is moved aside under a name of the same length, so every
-diagnostic about the file lands where it is written; it is not run.
+process. The file's own `main`, if any, is not part of what the harness builds: its text is read as
+blanks, its lines kept, so every diagnostic about the rest of the file lands where it is written;
+`nazm check` and `nazm run` still check and run it.
 
 | | |
 | --- | --- |
