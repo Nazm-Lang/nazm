@@ -26,8 +26,9 @@ pub const CRANELIFT_VERSION: &str = "0.136.1";
 /// This translator's revision: bumped with any change to how an instruction becomes Cranelift
 /// IR, since an object is a function of the translator as well as of its LIR (N105).
 /// 2 in Q1: stack probes (Q1-A1-01). 3 in Gate 3: a float converted to an 8- or 16-bit integer is
-/// converted at 32 bits and clamped (3B-2).
-pub const TRANSLATOR_REVISION: u32 = 3;
+/// converted at 32 bits and clamped (3B-2). 4 in R1 (5b.8): a Nazm function's failure bit returned
+/// beside its result, and the blocks only a failure reaches laid out cold.
+pub const TRANSLATOR_REVISION: u32 = 4;
 
 /// The Cranelift backend.
 #[derive(Debug, Clone)]
@@ -90,6 +91,11 @@ impl Cranelift {
         b.set("enable_probestack", "true")
             .map_err(|e| e.to_string())?;
         b.set("probestack_strategy", "inline")
+            .map_err(|e| e.to_string())?;
+        // A Nazm function returns its failure bit beside its result (R1, 5b.8): where the two
+        // need more registers than the target returns in — an `Int128`'s pair and the bit on
+        // x86_64 — the rest come back through memory, as Cranelift arranges for both sides.
+        b.set("enable_multi_ret_implicit_sret", "true")
             .map_err(|e| e.to_string())?;
         b.set(
             "enable_verifier",

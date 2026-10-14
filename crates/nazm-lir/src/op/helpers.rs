@@ -790,3 +790,17 @@ pub(crate) fn export(
     fx.b.term(Term::Return(Some(result)));
     fx.b.finish(sym, "an export's C entry".to_owned(), None)
 }
+
+/// The plain entry of a function the platform calls by its symbol (R1, 5b.8): the same
+/// parameters and result, the function's failure bit left behind — the platform's caller reads
+/// the thread's flag, which the failure set.
+pub(crate) fn plain_entry(lw: &mut Lw<'_>, sym: SymId, body: SymId) -> Function {
+    let mut fx = Fx::helper(lw);
+    let n = fx.lw.sig_of(sym).map_or(0, |s| s.params.len());
+    let args: Vec<V> = (0..n)
+        .map(|i| fx.param(u32::try_from(i).unwrap_or(0)))
+        .collect();
+    let r = fx.call(body, args);
+    fx.b.term(Term::Return(r));
+    fx.b.finish(sym, "a plain entry".to_owned(), None)
+}

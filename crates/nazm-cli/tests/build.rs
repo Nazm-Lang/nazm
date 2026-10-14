@@ -1599,12 +1599,22 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
     // number, so the shape asked for is "a Nazm definition" rather than a prefix and an
     // index. `prog.nz::main` is `hidden` — the entry wrapper is a separate artefact and
     // has to be able to bind it — and `helper` is `internal`, because nothing outside its
-    // module can name it.
+    // module can name it. Since R1's 5b.8 `main`'s symbol is the plain entry the wrapper
+    // calls, beside `main` itself under `main.body`.
     let defs: Vec<&str> = ir
         .lines()
         .filter(|l| l.starts_with("define ") && l.contains(" @nz.m."))
         .collect();
-    assert_eq!(defs.len(), 2, "expected two Nazm functions:\n{ir}");
+    assert_eq!(
+        defs.len(),
+        3,
+        "expected two Nazm functions and main's entry:\n{ir}"
+    );
+    assert!(
+        defs.iter()
+            .any(|d| d.starts_with("define hidden i64 @nz.m.prog_2Enz.main(i64 %p0)")),
+        "main's plain entry:\n{ir}"
+    );
     assert!(
         defs.iter()
             .any(|d| d.contains("(i64 %p0, i1 %p1)") && d.ends_with("; helper")),
@@ -1618,7 +1628,7 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
         "nazm's main should take its one root, `out`:\n{ir}"
     );
     assert!(
-        ir.contains("call i64 @nz.m.") && ir.contains("(i64 %"),
+        ir.contains("call {i64, i1} @nz.m.") && ir.contains("(i64 %"),
         "no typed call emitted:\n{ir}"
     );
     // The runtime helper lives in the same reserved space, so nothing can collide.
@@ -2082,9 +2092,10 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
     );
 
     let ir = emitted_ir(dir.path());
-    // `main` is given `out: OutCap` (R1, 5b.1): its one parameter.
+    // `main` is given `out: OutCap` (R1, 5b.1): its one parameter. Its body is under
+    // `main.body`, returning its failure bit beside its result (R1, 5b.8).
     let body: &str = ir
-        .split("define hidden i64 @nz.m.prog_2Enz.main(i64 %p0)")
+        .split("define hidden {i64, i1} @nz.m.prog_2Enz.main.body(i64 %p0)")
         .nth(1)
         .expect("main's definition");
 
@@ -3019,8 +3030,8 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
     assert!(blocks > 10, "only {blocks} blocks");
 
     // One `ret` per return site, and no more: since N105 every return site is a LIR `return`
-    // — the three in `classify`, `main`'s, and each function's failure exit, a failure
-    // leaving by an ordinary return — and the LLVM text writes one `ret` for each.
+    // — the three in `classify`, `main`'s, and each function's failure exit, since R1's 5b.8
+    // a LIR `fail` — and the LLVM text writes one `ret` for each.
     let unit = unit_ir(dir.path());
     let rets = unit
         .lines()
@@ -3650,7 +3661,10 @@ fn lir_returns(path: &Path) -> usize {
     );
     String::from_utf8_lossy(&out.stdout)
         .lines()
-        .filter(|l| l.trim_start().starts_with("return"))
+        .filter(|l| {
+            let l = l.trim_start();
+            l.starts_with("return") || l == "fail"
+        })
         .count()
 }
 

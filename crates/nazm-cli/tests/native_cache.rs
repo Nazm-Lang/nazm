@@ -295,7 +295,7 @@ fn a_called_signature_change_reaches_the_caller_s_own_ir() {
     project(dir.path(), A_CALLS_B);
     let before = unit_of(&emitted(dir.path(), "a.nz", "one"), "a.nz");
     assert!(
-        before.contains("declare i64 @nz.m.b_2Enz.twice(i64)"),
+        before.contains("declare {i64, i1} @nz.m.b_2Enz.twice(i64)"),
         "{before}"
     );
 
@@ -311,7 +311,7 @@ fn a_called_signature_change_reaches_the_caller_s_own_ir() {
     );
     let after = unit_of(&emitted(dir.path(), "a.nz", "two"), "a.nz");
     assert!(
-        after.contains("declare i64 @nz.m.b_2Enz.twice(i64, i64)"),
+        after.contains("declare {i64, i1} @nz.m.b_2Enz.twice(i64, i64)"),
         "{after}"
     );
     assert_ne!(
@@ -1313,7 +1313,7 @@ fn one_instance_requested_by_two_modules_is_one_unit_and_one_object() {
     let units = emitted(dir.path(), "a.nz", "prog");
     let defining: Vec<&String> = units
         .iter()
-        .filter(|(_, ir)| ir.contains("define hidden i64 @nz.m.b_2Enz.identity.g.Int("))
+        .filter(|(_, ir)| ir.contains("define hidden {i64, i1} @nz.m.b_2Enz.identity.g.Int("))
         .map(|(name, _)| name)
         .collect();
     assert_eq!(defining.len(), 1, "{defining:?}");
@@ -1357,11 +1357,11 @@ fn a_callers_unit_never_carries_a_generic_body() {
     let units = emitted(dir.path(), "a.nz", "prog");
     let caller = unit_of(&units, "a.nz");
     assert!(
-        caller.contains("declare i64 @nz.m.b_2Enz.identity.g.Int(i64)"),
+        caller.contains("declare {i64, i1} @nz.m.b_2Enz.identity.g.Int(i64)"),
         "{caller}"
     );
     assert!(
-        !caller.contains("define hidden i64 @nz.m.b_2Enz.identity"),
+        !caller.contains("define hidden {i64, i1} @nz.m.b_2Enz.identity"),
         "{caller}"
     );
     // Nor does the defining module's own unit: a generic definition has no one body as

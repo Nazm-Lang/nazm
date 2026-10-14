@@ -152,10 +152,13 @@ fn tls_symbols(path: &Path) -> usize {
 
 #[test]
 fn a_unit_for_the_board_refers_to_no_thread_local_storage() {
-    // An addition that can overflow records a failure: in a hosted unit whose `main` may
-    // start a thread that state is thread-local; on the board, and in a hosted program of one
-    // thread, an ordinary global.
-    const ADD: &str = "fn add(a: Int, b: Int) -> Int { a + b }\n";
+    // An addition that can overflow records a failure, and a recursion checks the stack: in a
+    // hosted unit whose `main` may start a thread that state is thread-local; on the board, and
+    // in a hosted program of one thread, an ordinary global. The unit reads the stack's limit in
+    // place; since R1's 5b.8 it no longer reads the failure flag, which its callers learn of
+    // from the failure bit.
+    const ADD: &str =
+        "fn add(a: Int, b: Int) -> Int { if a == 0 { b } else { add(a - 1, b + 1) } }\n";
     for (main, target, tls) in [
         (
             "fn main(n: NetCap) -> Int { add(1, 2) }\n",

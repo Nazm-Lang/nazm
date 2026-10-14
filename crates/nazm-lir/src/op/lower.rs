@@ -126,6 +126,9 @@ pub(crate) struct Lw<'a> {
     symbols: Vec<Symbol>,
     by_name: BTreeMap<String, SymId>,
     pub funcs: BTreeMap<mir::FuncId, SymId>,
+    /// The plain entry under the symbol of each function this unit defines that the platform
+    /// calls (R1, 5b.8); `funcs` holds the function itself.
+    pub plain_entries: BTreeMap<mir::FuncId, SymId>,
     pub functions: Vec<Function>,
     datas: Vec<Data>,
     blobs: BTreeMap<Vec<u8>, SymId>,
@@ -177,6 +180,7 @@ pub fn lower_unit(
         symbols: Vec::new(),
         by_name: BTreeMap::new(),
         funcs: BTreeMap::new(),
+        plain_entries: BTreeMap::new(),
         functions: Vec::new(),
         datas: Vec::new(),
         blobs: BTreeMap::new(),
@@ -204,6 +208,11 @@ pub fn lower_unit(
         };
         let lowered = super::func::lower(&mut lw, f, sig, sym);
         lw.functions.extend(lowered);
+        // The plain entry the platform calls it by, beside it (R1, 5b.8).
+        if let Some(plain) = lw.plain_entries.get(&id).copied() {
+            let lowered = super::helpers::plain_entry(&mut lw, plain, sym);
+            lw.functions.push(lowered);
+        }
         // An export's C entry, beside the function it calls (N55).
         if let Some(symbol) = &sig.export {
             let c = lw.c_sig(&sig.params, sig.ret);
@@ -365,6 +374,24 @@ impl<'a> Lw<'a> {
             } else {
                 Self::nazm_sig(&sig.params, sig.ret)
             };
+            // A function the platform calls by its symbol (R1, 5b.8): the symbol is its plain
+            // entry, defined by the unit that defines the function, and every Nazm caller — in any
+            // unit — calls the function itself, under the name beside it.
+            if sig.entered && !sig.foreign {
+                if own {
+                    let plain = Sig {
+                        conv: Conv::Plain,
+                        ..s.clone()
+                    };
+                    let entry =
+                        self.symbol(sig.symbol.as_str(), linkage, SymKind::Func { sig: plain });
+                    self.plain_entries.insert(id, entry);
+                }
+                let body = format!("{}.body", sig.symbol.as_str());
+                let sym = self.symbol(&body, linkage, SymKind::Func { sig: s });
+                self.funcs.insert(id, sym);
+                continue;
+            }
             let sym = self.symbol(sig.symbol.as_str(), linkage, SymKind::Func { sig: s });
             self.funcs.insert(id, sym);
         }
@@ -403,7 +430,7 @@ impl<'a> Lw<'a> {
         let sig = Sig {
             params: entry.params.iter().map(|w| word(*w)).collect(),
             ret: entry.ret.map(word),
-            conv: Conv::Nazm,
+            conv: Conv::Plain,
         };
         self.symbol(name, Linkage::Import, SymKind::Func { sig })
     }
@@ -595,7 +622,7 @@ impl<'a> Lw<'a> {
         let sig = Sig {
             params: vec![Class::Ptr; params],
             ret,
-            conv: Conv::Nazm,
+            conv: Conv::Plain,
         };
         let sym = self.symbol(
             &format!("nz.h.{what}.{name}"),
