@@ -1,0 +1,205 @@
+// Core IR, read: `nazm core-ir --json` (`nazm.core-ir/2`) in the arena `@std/json` parses it into.
+//
+// An expression, statement or block is a node of the document, read through the accessors below;
+// a function's header is decoded once into a `CirFn`. `docs/architecture.md` §7.41 is what the
+// format means; `openspec/changes/r3-pipeline/design.md`, *The data model*, why it stays an arena.
+
+use "@std/json"
+use "@std/hash"
+use "@std/hashmap"
+
+/// One local of a function, as Core IR declares it.
+pub struct CirLocal {
+    name: Str,
+    ty: Str,
+    /// `param`, `let`, `let mut` or `temp WHAT`.
+    origin: Str,
+}
+
+/// One literal: its type (`Int`, `Bool`, `Str`, a numeric kind, `Atomic`) and its value's text.
+pub struct CirConst {
+    ty: Str,
+    int: Int,
+    flag: Bool,
+    text: Str,
+}
+
+/// One function's header; its body stays a node of the document.
+pub struct CirFn {
+    def: Str,
+    module: Str,
+    name: Str,
+    type_params: Int,
+    params: Int,
+    ret: Str,
+    published: Strs,
+    locals: Vec[CirLocal],
+    consts: Vec[CirConst],
+    /// The body block's node, or -1 for a foreign function.
+    body: Int,
+    /// The C symbol of a foreign function, or `""`.
+    foreign: Str,
+}
+
+/// A program's Core IR.
+pub struct Cir {
+    doc: JsonDoc,
+    entry: Str,
+    fns: Vec[CirFn],
+    /// A definition key's position in `fns`.
+    by_def: HashMap[Str, Int],
+}
+
+// --- the document, by node ----------------------------------------------------------------------
+
+/// The node `key` names in object `n`, or -1.
+pub fn kid(c: Cir, n: Int, key: Str) -> Int ! {} {
+    if n < 0 { return 0 - 1 }
+    match json_get(c.doc, n, key) {
+        Some(k) => if json_kind(c.doc, k) == "null" { 0 - 1 } else { k },
+        None => 0 - 1,
+    }
+}
+
+/// The string `key` names in object `n`, or `""`.
+pub fn sval(c: Cir, n: Int, key: Str) -> Str ! {} {
+    let k = kid(c, n, key)
+    if k < 0 { return "" }
+    match json_str(c.doc, k) { Some(s) => s, None => "" }
+}
+
+/// The integer `key` names in object `n`, or 0.
+pub fn ival(c: Cir, n: Int, key: Str) -> Int ! {} {
+    let k = kid(c, n, key)
+    if k < 0 { return 0 }
+    match json_int(c.doc, k) { Some(v) => v, None => 0 }
+}
+
+/// How many elements array node `n` has.
+pub fn count(c: Cir, n: Int) -> Int ! {} {
+    if n < 0 { 0 } else { json_len(c.doc, n) }
+}
+
+/// Element `i` of array node `n`.
+pub fn at(c: Cir, n: Int, i: Int) -> Int ! {} {
+    match json_at(c.doc, n, i) { Some(k) => k, None => 0 - 1 }
+}
+
+/// An integer node's value.
+pub fn int_of(c: Cir, n: Int) -> Int ! {} {
+    match json_int(c.doc, n) { Some(v) => v, None => 0 }
+}
+
+/// A string node's value.
+pub fn str_of(c: Cir, n: Int) -> Str ! {} {
+    match json_str(c.doc, n) { Some(s) => s, None => "" }
+}
+
+/// An expression's or statement's `op`.
+pub fn op(c: Cir, e: Int) -> Str ! {} {
+    sval(c, e, "op")
+}
+
+/// An expression's type, `never` for one that produces no value.
+pub fn ety(c: Cir, e: Int) -> Str ! {} {
+    sval(c, e, "type")
+}
+
+// --- reading ------------------------------------------------------------------------------------
+
+/// A string literal's bytes. Core IR writes valid UTF-8 as itself unless it contains `\x`, and
+/// anything else as `\xNN` for every byte.
+fn literal_bytes(s: Str) -> Str {
+    let mut has = false
+    let mut i = 0
+    while i + 1 < str_len(s) {
+        if str_byte(s, i) == 92 && str_byte(s, i + 1) == 120 { has = true }
+        i += 1
+    }
+    if !has { return s }
+    let out = bytes_new(str_len(s) / 4)
+    let mut j = 0
+    while j * 4 + 3 < str_len(s) {
+        let hi = hex(str_byte(s, j * 4 + 2))
+        let lo = hex(str_byte(s, j * 4 + 3))
+        bytes_set(out, j, UInt8(hi * 16 + lo))
+        j += 1
+    }
+    bytes_to_str(out)
+}
+
+fn hex(b: Int) -> Int {
+    if b >= 48 && b <= 57 { b - 48 } else if b >= 97 && b <= 102 { b - 87 } else { b - 55 }
+}
+
+fn read_fn(c: Cir, n: Int) -> CirFn {
+    let locals: Vec[CirLocal] = vec_new()
+    let ls = kid(c, n, "locals")
+    for i in 0..count(c, ls) {
+        let l = at(c, ls, i)
+        vec_push(locals, CirLocal(name: sval(c, l, "name"), ty: sval(c, l, "type"), origin: sval(c, l, "origin")))
+    }
+    let consts: Vec[CirConst] = vec_new()
+    let cs = kid(c, n, "consts")
+    for i in 0..count(c, cs) {
+        let k = at(c, cs, i)
+        let ty = sval(c, k, "type")
+        let v = kid(c, k, "value")
+        let kind = json_kind(c.doc, v)
+        let cst = if kind == "number" {
+            CirConst(ty: ty, int: int_of(c, v), flag: false, text: "")
+        } else if kind == "bool" {
+            CirConst(ty: ty, int: 0, flag: match json_bool(c.doc, v) { Some(b) => b, None => false }, text: "")
+        } else if ty == "Str" {
+            CirConst(ty: ty, int: 0, flag: false, text: literal_bytes(str_of(c, v)))
+        } else {
+            CirConst(ty: ty, int: 0, flag: false, text: str_of(c, v))
+        }
+        vec_push(consts, cst)
+    }
+    let published = strs_new()
+    let pub_ = kid(c, kid(c, n, "effects"), "published")
+    for i in 0..count(c, pub_) {
+        strs_push(published, str_of(c, at(c, pub_, i)))
+    }
+    CirFn(
+        def: sval(c, n, "def"),
+        module: sval(c, n, "module"),
+        name: sval(c, n, "name"),
+        type_params: ival(c, n, "type_params"),
+        params: ival(c, n, "params"),
+        ret: sval(c, n, "ret"),
+        published: published,
+        locals: locals,
+        consts: consts,
+        body: kid(c, n, "body"),
+        foreign: sval(c, n, "foreign"),
+    )
+}
+
+/// Read a Core IR document, or say why it is not one.
+pub fn cir_read(text: Str) -> Result[Cir, Str] ! {} {
+    let doc = match json_parse(text) {
+        Ok(d) => d,
+        Err(e) => { return Err("not JSON: " + e) },
+    }
+    let c0 = Cir(doc: doc, entry: "", fns: vec_new(), by_def: hashmap_new())
+    let root = json_root(doc)
+    let schema = sval(c0, root, "schema")
+    if schema != "nazm.core-ir/2" {
+        return Err("not nazm.core-ir/2 but `" + schema + "`")
+    }
+    let c = Cir(doc: doc, entry: sval(c0, root, "entry"), fns: vec_new(), by_def: hashmap_new())
+    let fs = kid(c, root, "functions")
+    for i in 0..count(c, fs) {
+        let f = read_fn(c, at(c, fs, i))
+        hashmap_set(c.by_def, f.def, vec_len(c.fns))
+        vec_push(c.fns, f)
+    }
+    Ok(c)
+}
+
+/// The function a definition key names, as a position in `c.fns`, or -1.
+pub fn fn_index(c: Cir, def: Str) -> Int ! {} {
+    match hashmap_get(c.by_def, def) { Some(i) => i, None => 0 - 1 }
+}

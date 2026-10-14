@@ -67,11 +67,13 @@ renumbered in creation order.
 | Needed by MIR | In Core IR /2? | Until `nazm.core-ir/3` |
 | --- | --- | --- |
 | Whether a record or enum is managed; its fields' types (temporaries, frame size) | No type table | Recovered from uses: every `record`/`variant` construction, `field` read and `match` binding gives a field's type; a generic definition's fields are kept as templates over its parameters when the construction's arguments are its function's parameters. Correct whenever every type the program uses is constructed somewhere in it, which holds for the inputs so far |
-| Function and array types | Printed `?` | Programs using closures, function values or arrays differ |
-| A closure's captures and `closure` flag; thunks' types | No | Differ |
-| `@export`, `@section`, `@interrupt`, `@task`, `@on_failure` | No | Not printed by `nazm mir` either; matter for LIR only |
-| Statics (`Atomic` cells) | No | Differ in LIR |
-| The impl a `call_trait` resolves to at a type, and derived `Hash` | No | Programs whose instances make trait calls differ |
+| Function and array types | Printed `?` | MIR prints both `?` too, so only ownership needs them. A `?` is taken as a function type (managed) unless the lowering recovers an array from how it is made (`[…]`, `[v; n]`, an index, a binding of one) — spelled internally `?array[ELEM, LEN]`. An array *parameter* or *result* stays `?`: 1 input differs (`run/arrays.nz`) |
+| A closure's captures and `closure` flag | No | Recovered: a closure's code is a function `NAME#K`, its captures the locals right after its parameters, as many as the `closure` expression lists |
+| Thunks for function values | Not in Core IR (Rust synthesises them) | Synthesised the same way, as Core IR nodes added to the document: `env`, the target's parameters, a body that is the call |
+| `@export` symbol | No | The canonical text names it (`export SYM`), so the digest differs: 2 inputs differ (`desktop/counter`, `check/export-numbers`). `@section`, `@interrupt`, `@task`, `@on_failure` are not in the MIR text; LIR needs them |
+| Statics (`Atomic` cells) | No | Matter for LIR only |
+| The impl a `call_trait` resolves to at a type, and derived `Hash` | No | Recovered from the impl functions' names (`Trait/Self/method`, first parameter unified with the concrete type); no impl and the trait `Hash` means derived. A trait's *default* body at a type (L11a) is not recoverable; no input uses one |
+| Which calls close a call cycle | Calls yes; a call through a bound is not marked | A `call_trait` counts as an indirect call, as the Rust facts treat it (every generic body making one checks its stack) |
 
 The request to the coordinator is a `types` table (each record and enum: definition key, type
 parameters, fields in declaration order with their types, canonical order; each variant likewise),

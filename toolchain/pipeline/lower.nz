@@ -1,0 +1,1225 @@
+// Core IR to MIR: the one lowering, ported from the rules of `docs/architecture.md` §7.42.
+//
+// One cleanup stack, in program order, of everything that must be undone when control leaves the
+// point it was created at: a managed local that owns a value, an open `scope`, and a marker where
+// each loop's body begins. Every exit is the same walk down it — `return` to the bottom, `break`
+// and `continue` to their loop's marker, a region's normal end to where it began. A failure edge
+// needs only the open scopes: the shared unwind block drops every managed local, which is safe
+// because a local that holds nothing holds the representation's zero.
+
+use "cir.nz"
+use "types.nz"
+use "mir.nz"
+use "traits.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/json"
+use "@std/text"
+
+/// Which MIR function each definition (non-generic) and each instance (by identity) is.
+pub struct FuncMap {
+    plain: HashMap[Str, Int],
+    inst: HashMap[Str, Int],
+    /// The thunk through which a module calls a named function used as a value, by
+    /// `MODULE|DEF`.
+    thunks: HashMap[Str, Int],
+}
+
+/// The lowering state of one function. A record is a value, so everything that changes lives in
+/// a handle: the current block and the shared unwind block in `reg`.
+struct Fx {
+    c: Cir,
+    tt: TypeTable,
+    fm: FuncMap,
+    f: CirFn,
+    /// The instance's type arguments, or empty.
+    args: Strs,
+    ret: Str,
+    locals: Vec[LocalDecl],
+    blocks: Vec[Block],
+    reg: Ints,
+    /// The cleanup stack: kind (0 owned, 1 scope, 2 loop) and local (or loop id).
+    sk: Ints,
+    sl: Ints,
+    scopes: Ints,
+    lid: Ints,
+    lhead: Ints,
+    lexit: Ints,
+    ldepth: Ints,
+    cleanups: HashMap[Str, Int],
+    borrowed: HashMap[Int, Bool],
+    err: Strs,
+}
+
+fn k_owned() -> Int { 0 }
+fn k_scope() -> Int { 1 }
+fn k_loop() -> Int { 2 }
+
+fn cur(fx: Fx) -> Int { ints_get(fx.reg, 0) }
+fn set_cur(fx: Fx, b: Int) { ints_set(fx.reg, 0, b) }
+fn live(fx: Fx) -> Bool { cur(fx) >= 0 }
+
+fn fail(fx: Fx, what: Str) {
+    if strs_len(fx.err) == 0 { strs_push(fx.err, "in `" + fx.f.name + "`: " + what) }
+}
+
+/// A Core IR type under this function's substitution.
+fn ty(fx: Fx, t: Str) -> Str {
+    let c = subst(t, fx.args)
+    if open(c) { fail(fx, "a type with no concrete instance, `" + t + "`") }
+    c
+}
+
+fn managed_ty(fx: Fx, t: Str) -> Bool { managed(fx.tt, t) }
+
+fn local_ty(fx: Fx, l: Int) -> Str {
+    if l < 0 || l >= vec_len(fx.locals) { return "Int" }
+    let t = vec_get(fx.locals, l).ty
+    if t == "Tasks" { "Int" } else { t }
+}
+
+fn temp(fx: Fx, t: Str, what: Str) -> Int {
+    let id = vec_len(fx.locals)
+    vec_push(fx.locals, LocalDecl(ty: t, name: what + "#" + int_to_str(id), origin: "temp"))
+    id
+}
+
+fn tasks_local(fx: Fx) -> Int {
+    let id = vec_len(fx.locals)
+    vec_push(fx.locals, LocalDecl(ty: "Tasks", name: "tasks#" + int_to_str(id), origin: "temp"))
+    id
+}
+
+fn new_block(fx: Fx, origin: Int) -> Int {
+    vec_push(fx.blocks, Block(stmts: vec_new(), term: vec_new(), origin: origin))
+    vec_len(fx.blocks) - 1
+}
+
+fn push(fx: Fx, s: Stmt) {
+    let b = cur(fx)
+    if b >= 0 { vec_push(vec_get(fx.blocks, b).stmts, s) }
+}
+
+fn set_term(fx: Fx, b: Int, t: Term) {
+    let block = vec_get(fx.blocks, b)
+    if vec_len(block.term) == 0 { vec_push(block.term, t) } else { vec_set(block.term, 0, t) }
+}
+
+/// End the current block with `t`. Control does not reach past it.
+fn seal(fx: Fx, t: Term) {
+    let b = cur(fx)
+    if b >= 0 {
+        set_term(fx, b, t)
+        set_cur(fx, 0 - 1)
+    }
+}
+
+fn goto(fx: Fx, target: Int) { seal(fx, Term.Goto(b: target)) }
+
+fn scopes_key(fx: Fx) -> Str {
+    let parts = strs_new()
+    for l in fx.scopes { strs_push(parts, int_to_str(l)) }
+    str_join(parts, ",")
+}
+
+/// The block a failure here goes to: through every open scope's join, innermost first, to the
+/// shared unwind block.
+fn unwind(fx: Fx) -> Int {
+    let mut shared = ints_get(fx.reg, 1)
+    if shared < 0 {
+        shared = new_block(fx, origin_unwind())
+        ints_set(fx.reg, 1, shared)
+    }
+    if ints_len(fx.scopes) == 0 { return shared }
+    let k = scopes_key(fx)
+    match hashmap_get(fx.cleanups, k) {
+        Some(b) => { return b },
+        None => {},
+    }
+    let b = new_block(fx, origin_cleanup())
+    let block = vec_get(fx.blocks, b)
+    let mut i = ints_len(fx.scopes) - 1
+    while i >= 0 {
+        vec_push(block.stmts, Stmt.ScopeJoin(list: ints_get(fx.scopes, i)))
+        i -= 1
+    }
+    set_term(fx, b, Term.Goto(b: shared))
+    hashmap_set(fx.cleanups, k, b)
+    b
+}
+
+/// Fill the shared unwind block once every local is known: drop each managed local.
+fn finish_unwind(fx: Fx) {
+    let b = ints_get(fx.reg, 1)
+    if b < 0 { return }
+    let block = vec_get(fx.blocks, b)
+    for i in fx.f.params..vec_len(fx.locals) {
+        let t = vec_get(fx.locals, i).ty
+        if !hashmap_has(fx.borrowed, i) && t != "Tasks" && managed_ty(fx, t) {
+            vec_push(block.stmts, Stmt.Drop(l: i))
+        }
+    }
+    set_term(fx, b, Term.Unwind)
+}
+
+/// The cleanup for leaving everything above `depth`, innermost first, without popping it.
+fn cleanup_to(fx: Fx, depth: Int) {
+    let mut i = ints_len(fx.sk) - 1
+    while i >= depth {
+        let k = ints_get(fx.sk, i)
+        if k == k_owned() { push(fx, Stmt.Drop(l: ints_get(fx.sl, i))) }
+        if k == k_scope() { push(fx, Stmt.ScopeJoin(list: ints_get(fx.sl, i))) }
+        i -= 1
+    }
+}
+
+fn stack_pop(fx: Fx) {
+    if ints_len(fx.sk) > 0 {
+        ints_pop(fx.sk)
+        ints_pop(fx.sl)
+    }
+}
+
+/// Pop the stack back to `depth`, dropping each owned local — a region's normal end.
+fn pop_to(fx: Fx, depth: Int) {
+    while ints_len(fx.sk) > depth {
+        let k = ints_pop(fx.sk)
+        let l = ints_pop(fx.sl)
+        if k == k_owned() { push(fx, Stmt.Drop(l: l)) }
+        if k == k_scope() {
+            ints_pop(fx.scopes)
+            push(fx, Stmt.ScopeJoin(list: l))
+        }
+    }
+}
+
+fn stack_remove(fx: Fx, pos: Int) {
+    let n = ints_len(fx.sk)
+    for i in pos..n - 1 {
+        ints_set(fx.sk, i, ints_get(fx.sk, i + 1))
+        ints_set(fx.sl, i, ints_get(fx.sl, i + 1))
+    }
+    stack_pop(fx)
+}
+
+fn owned_at(fx: Fx, l: Int) -> Int {
+    let mut i = ints_len(fx.sk) - 1
+    while i >= 0 {
+        if ints_get(fx.sk, i) == k_owned() && ints_get(fx.sl, i) == l { return i }
+        i -= 1
+    }
+    0 - 1
+}
+
+/// Forget a stack entry whose value was moved on, not dropped.
+fn forget(fx: Fx, l: Int) {
+    let pos = owned_at(fx, l)
+    if pos >= 0 { stack_remove(fx, pos) }
+}
+
+fn own(fx: Fx, l: Int) {
+    if live(fx) && managed_ty(fx, local_ty(fx, l)) {
+        ints_push(fx.sk, k_owned())
+        ints_push(fx.sl, l)
+    }
+}
+
+fn assign(fx: Fx, dst: Int, v: Rvalue) {
+    let u = if can_fail(v) && live(fx) { unwind(fx) } else { 0 - 1 }
+    push(fx, Stmt.Assign(dst: dst, value: v, unwind: u))
+}
+
+fn write(fx: Fx, dst: Int, v: Rvalue) {
+    if dst >= 0 { assign(fx, dst, v) } else { fail(fx, "a value produced where none is wanted") }
+}
+
+fn constant(fx: Fx, id: Int) -> MConst {
+    if id < 0 || id >= vec_len(fx.f.consts) {
+        fail(fx, "a constant missing from its function's table")
+        return MConst.Int(v: 0)
+    }
+    let k = vec_get(fx.f.consts, id)
+    if k.ty == "Int" { MConst.Int(v: k.int) }
+    else if k.ty == "Bool" { MConst.Bool(v: k.flag) }
+    else if k.ty == "Str" { MConst.Str(bytes: k.text) }
+    else if k.ty == "Atomic" { MConst.Cell(name: str_slice(k.text, 7, str_len(k.text))) }
+    else { MConst.Num(text: k.text, kind: k.ty) }
+}
+
+// --- the finished graph -----------------------------------------------------------------------------
+
+fn remap(m: Ints, b: Int) -> Int {
+    if b < 0 { b } else { ints_get(m, b) }
+}
+
+fn remap_stmt(s: Stmt, m: Ints) -> Stmt {
+    match s {
+        Stmt.Assign(dst: d, value: v, unwind: u) => Stmt.Assign(dst: d, value: v, unwind: remap(m, u)),
+        Stmt.SetElement(base: b, path: p, value: v, unwind: u) => Stmt.SetElement(base: b, path: p, value: v, unwind: remap(m, u)),
+        Stmt.ScopeOpen(list: l, unwind: u) => Stmt.ScopeOpen(list: l, unwind: remap(m, u)),
+        Stmt.Spawn(list: l, callee: c, args: a, unwind: u) => Stmt.Spawn(list: l, callee: c, args: a, unwind: remap(m, u)),
+        Stmt.CheckFailed(unwind: u) => Stmt.CheckFailed(unwind: remap(m, u)),
+        Stmt.StackCheck(unwind: u) => Stmt.StackCheck(unwind: remap(m, u)),
+        other => other,
+    }
+}
+
+fn remap_term(t: Term, m: Ints) -> Term {
+    match t {
+        Term.Goto(b: b) => Term.Goto(b: remap(m, b)),
+        Term.Branch(cond: c, then: a, other: b) => Term.Branch(cond: c, then: remap(m, a), other: remap(m, b)),
+        Term.Switch(scrutinee: s, ty: t, variants: vs, names: ns, blocks: bs) => {
+            let out = ints_new()
+            for b in bs { ints_push(out, remap(m, b)) }
+            Term.Switch(scrutinee: s, ty: t, variants: vs, names: ns, blocks: out)
+        },
+        other => other,
+    }
+}
+
+/// Only the blocks reachable from the entry, renumbered in creation order.
+fn finish_blocks(fx: Fx) -> Vec[Block] {
+    let n = vec_len(fx.blocks)
+    let reached = ints_new()
+    for i in 0..n { ints_push(reached, 0) }
+    let work = ints_new()
+    ints_push(work, 0)
+    while ints_len(work) > 0 {
+        let b = ints_pop(work)
+        if b < 0 || b >= n || ints_get(reached, b) == 1 { continue }
+        ints_set(reached, b, 1)
+        let block = vec_get(fx.blocks, b)
+        for s in block.stmts {
+            let u = stmt_unwind(s)
+            if u >= 0 { ints_push(work, u) }
+        }
+        if vec_len(block.term) > 0 {
+            for x in successors(vec_get(block.term, 0)) { ints_push(work, x) }
+        }
+    }
+    let m = ints_new()
+    let mut next = 0
+    for i in 0..n {
+        if ints_get(reached, i) == 1 {
+            ints_push(m, next)
+            next += 1
+        } else {
+            ints_push(m, 0 - 1)
+        }
+    }
+    let out: Vec[Block] = vec_new()
+    for i in 0..n {
+        if ints_get(reached, i) == 1 {
+            let b = vec_get(fx.blocks, i)
+            if vec_len(b.term) == 0 {
+                fail(fx, "a reachable block with no terminator")
+            } else {
+                let stmts: Vec[Stmt] = vec_new()
+                for s in b.stmts { vec_push(stmts, remap_stmt(s, m)) }
+                let term: Vec[Term] = vec_new()
+                vec_push(term, remap_term(vec_get(b.term, 0), m))
+                vec_push(out, Block(stmts: stmts, term: term, origin: b.origin))
+            }
+        }
+    }
+    out
+}
+
+// --- regions ------------------------------------------------------------------------------------
+
+/// A region: its statements, then its tail into `dst` (-1 for none), then the drop of what it bound.
+fn block_into(fx: Fx, b: Int, dst: Int) {
+    let depth = ints_len(fx.sk)
+    let ss = kid(fx.c, b, "stmts")
+    for i in 0..count(fx.c, ss) {
+        if !live(fx) { break }
+        stmt(fx, at(fx.c, ss, i))
+    }
+    let tail = kid(fx.c, b, "tail")
+    if tail >= 0 && live(fx) { expr_into(fx, tail, dst) }
+    pop_to(fx, depth)
+}
+
+fn stmt(fx: Fx, s: Int) {
+    let c = fx.c
+    let o = op(c, s)
+    if o == "let" {
+        let l = ival(c, s, "local")
+        expr_into(fx, kid(c, s, "value"), l)
+        own(fx, l)
+    } else if o == "assign" {
+        assign_stmt(fx, ival(c, s, "local"), kid(c, s, "path"), kid(c, s, "value"))
+    } else if o == "eval" {
+        let e = kid(c, s, "value")
+        let t = ety_of(fx, e)
+        if t == "never" {
+            expr_into(fx, e, 0 - 1)
+        } else {
+            let t2 = ty(fx, t)
+            let tmp = temp(fx, t2, "discard")
+            expr_into(fx, e, tmp)
+            if live(fx) && managed_ty(fx, t2) { push(fx, Stmt.Drop(l: tmp)) }
+        }
+    } else if o == "if" {
+        statement_if(fx, kid(c, s, "cond"), kid(c, s, "then"), kid(c, s, "else"))
+    } else if o == "match" {
+        lower_match(fx, s, 0 - 1)
+    } else if o == "loop" {
+        lower_loop(fx, ival(c, s, "loop"), kid(c, s, "cond"), kid(c, s, "body"))
+    } else if o == "block" {
+        block_into(fx, kid(c, s, "body"), 0 - 1)
+    } else if o == "scope" {
+        lower_scope(fx, kid(c, s, "body"))
+    } else if o == "spawn" {
+        lower_spawn(fx, sval(c, s, "callee"), kid(c, s, "args"))
+    } else if o == "return" {
+        let tmp = temp(fx, fx.ret, "return")
+        expr_into(fx, kid(c, s, "value"), tmp)
+        if live(fx) {
+            cleanup_to(fx, 0)
+            seal(fx, Term.Return(l: tmp))
+        }
+    } else if o == "break" {
+        transfer(fx, ival(c, s, "loop"), true)
+    } else if o == "continue" {
+        transfer(fx, ival(c, s, "loop"), false)
+    } else {
+        fail(fx, "a statement this pipeline does not know, `" + o + "`")
+    }
+}
+
+fn transfer(fx: Fx, target: Int, leave: Bool) {
+    let mut i = ints_len(fx.lid) - 1
+    while i >= 0 {
+        if ints_get(fx.lid, i) == target {
+            cleanup_to(fx, ints_get(fx.ldepth, i))
+            goto(fx, if leave { ints_get(fx.lexit, i) } else { ints_get(fx.lhead, i) })
+            return
+        }
+        i -= 1
+    }
+    fail(fx, "a transfer to a loop that does not enclose it")
+    set_cur(fx, 0 - 1)
+}
+
+fn record_field_ty(fx: Fx, rec: Str, field: Int, fallback: Str) -> Str {
+    let t = field_ty(fx.tt, rec, int_to_str(field))
+    if t != "" { return t }
+    if fallback != "" && fallback != "never" { return ty(fx, fallback) }
+    fail(fx, "a field of `" + rec + "` whose type Core IR /2 does not say")
+    "Int"
+}
+
+fn payload_ty(fx: Fx, en: Str, variant: Int, field: Int, fallback: Str) -> Str {
+    let t = field_ty(fx.tt, en, int_to_str(variant) + "." + int_to_str(field))
+    if t != "" { return t }
+    if fallback != "" && fallback != "never" { return ty(fx, fallback) }
+    fail(fx, "a payload of `" + en + "` whose type Core IR /2 does not say")
+    "Int"
+}
+
+fn assign_stmt(fx: Fx, local: Int, path: Int, value: Int) {
+    let c = fx.c
+    let root = local_ty(fx, local)
+    let n = count(c, path)
+    for i in 0..n {
+        if kid(c, at(c, path, i), "index") >= 0 {
+            element_assign(fx, local, root, path, value)
+            return
+        }
+    }
+    if n == 0 {
+        if managed_ty(fx, root) {
+            // The new value first, then the old one let go, then the move.
+            let tmp = temp(fx, root, "assign")
+            expr_into(fx, value, tmp)
+            own(fx, tmp)
+            push(fx, Stmt.Drop(l: local))
+            assign(fx, local, Rvalue.Move(l: tmp))
+            forget(fx, tmp)
+        } else {
+            expr_into(fx, value, local)
+        }
+        return
+    }
+    let refs: Vec[FieldRef] = vec_new()
+    let mut current = root
+    for i in 0..n {
+        let step = at(c, path, i)
+        if spell(current).kind != "record" {
+            fail(fx, "a field written on something that is not a record")
+            return
+        }
+        let field = ival(c, step, "field")
+        vec_push(refs, FieldRef(rec: current, field: field, name: sval(c, step, "name")))
+        let fallback = if i == n - 1 { ety(c, value) } else { "" }
+        current = record_field_ty(fx, current, field, fallback)
+    }
+    let tmp = temp(fx, current, "field")
+    expr_into(fx, value, tmp)
+    own(fx, tmp)
+    push(fx, Stmt.SetField(base: local, path: refs, value: tmp))
+    forget(fx, tmp)
+}
+
+/// An assignment through an array element: the value, then each index, outermost first, then one
+/// checked write.
+fn element_assign(fx: Fx, local: Int, root: Str, path: Int, value: Int) {
+    let c = fx.c
+    let n = count(c, path)
+    let mut current = root
+    let shapes: Vec[PathRef] = vec_new()
+    for i in 0..n {
+        let step = at(c, path, i)
+        let fallback = if i == n - 1 { ety(c, value) } else { "" }
+        if kid(c, step, "index") >= 0 {
+            vec_push(shapes, PathRef.Index(local: 0 - 1, len: ival(c, step, "len")))
+            // Core IR /2 spells an array type `?`: its element is what the lowering recovered, or
+            // what the value written is.
+            if spell(current).kind == "array" { current = strs_get(spell(current).args, 0) } else if fallback != "" { current = ty(fx, fallback) } else {
+                fail(fx, "an array element whose type Core IR /2 does not say")
+                return
+            }
+        } else {
+            let field = ival(c, step, "field")
+            vec_push(shapes, PathRef.Field(f: FieldRef(rec: current, field: field, name: sval(c, step, "name"))))
+            current = record_field_ty(fx, current, field, fallback)
+        }
+    }
+    let tmp = temp(fx, current, "element")
+    expr_into(fx, value, tmp)
+    own(fx, tmp)
+    let refs: Vec[PathRef] = vec_new()
+    for i in 0..n {
+        let step = at(c, path, i)
+        match vec_get(shapes, i) {
+            PathRef.Field(f: f) => vec_push(refs, PathRef.Field(f: f)),
+            PathRef.Index(local: _, len: len) => {
+                let ix = temp(fx, "Int", "index")
+                expr_into(fx, kid(c, step, "index"), ix)
+                vec_push(refs, PathRef.Index(local: ix, len: len))
+            },
+        }
+    }
+    if !live(fx) { return }
+    let u = unwind(fx)
+    push(fx, Stmt.SetElement(base: local, path: refs, value: tmp, unwind: u))
+    forget(fx, tmp)
+}
+
+fn statement_if(fx: Fx, cond: Int, then: Int, other: Int) {
+    let o = operand(fx, cond, false)
+    if !o.ok { return }
+    release(fx, o.held)
+    let then_b = new_block(fx, origin_source())
+    let join = new_block(fx, origin_source())
+    let else_b = if other >= 0 { new_block(fx, origin_source()) } else { join }
+    seal(fx, Term.Branch(cond: o.o, then: then_b, other: else_b))
+    let mut arrives = other < 0
+    set_cur(fx, then_b)
+    block_into(fx, then, 0 - 1)
+    if live(fx) {
+        arrives = true
+        goto(fx, join)
+    }
+    if other >= 0 {
+        set_cur(fx, else_b)
+        block_into(fx, other, 0 - 1)
+        if live(fx) {
+            arrives = true
+            goto(fx, join)
+        }
+    }
+    if arrives { set_cur(fx, join) } else {
+        set_cur(fx, 0 - 1)
+        seal_orphan(fx, join)
+    }
+}
+
+/// A join nothing reached: sealed so no block is left open; `finish_blocks` drops it.
+fn seal_orphan(fx: Fx, b: Int) {
+    if vec_len(vec_get(fx.blocks, b).term) == 0 { set_term(fx, b, Term.Unwind) }
+}
+
+fn lower_loop(fx: Fx, id: Int, cond: Int, body: Int) {
+    let head = new_block(fx, origin_source())
+    let body_b = new_block(fx, origin_source())
+    let exit = new_block(fx, origin_source())
+    goto(fx, head)
+    set_cur(fx, head)
+    let o = operand(fx, cond, false)
+    if !o.ok {
+        seal_orphan(fx, body_b)
+        seal_orphan(fx, exit)
+        return
+    }
+    release(fx, o.held)
+    seal(fx, Term.Branch(cond: o.o, then: body_b, other: exit))
+    set_cur(fx, body_b)
+    ints_push(fx.sk, k_loop())
+    ints_push(fx.sl, id)
+    ints_push(fx.lid, id)
+    ints_push(fx.lhead, head)
+    ints_push(fx.lexit, exit)
+    ints_push(fx.ldepth, ints_len(fx.sk))
+    block_into(fx, body, 0 - 1)
+    ints_pop(fx.lid)
+    ints_pop(fx.lhead)
+    ints_pop(fx.lexit)
+    ints_pop(fx.ldepth)
+    stack_pop(fx)
+    if live(fx) { goto(fx, head) }
+    set_cur(fx, exit)
+}
+
+fn lower_scope(fx: Fx, body: Int) {
+    let list = tasks_local(fx)
+    let u = unwind(fx)
+    push(fx, Stmt.ScopeOpen(list: list, unwind: u))
+    ints_push(fx.sk, k_scope())
+    ints_push(fx.sl, list)
+    ints_push(fx.scopes, list)
+    let depth = ints_len(fx.sk)
+    block_into(fx, body, 0 - 1)
+    pop_to(fx, depth)
+    stack_pop(fx)
+    ints_pop(fx.scopes)
+    if live(fx) {
+        push(fx, Stmt.ScopeJoin(list: list))
+        let u2 = unwind(fx)
+        push(fx, Stmt.CheckFailed(unwind: u2))
+    }
+}
+
+fn lower_spawn(fx: Fx, callee_def: Str, args: Int) {
+    let target = callee(fx, callee_def, 0 - 1)
+    if target < 0 { return }
+    let os = operands(fx, args)
+    if !os.ok { return }
+    if ints_len(fx.scopes) == 0 {
+        fail(fx, "a `spawn` outside any `scope`")
+        return
+    }
+    let list = ints_get(fx.scopes, ints_len(fx.scopes) - 1)
+    let u = unwind(fx)
+    push(fx, Stmt.Spawn(list: list, callee: target, args: os.ops, unwind: u))
+    release_all(fx, os.held)
+}
+
+/// The MIR function a call reaches: the definition's, or the instance of its type arguments
+/// (`type_args` an array node, or -1).
+fn callee(fx: Fx, def: Str, type_args: Int) -> Int {
+    let args = strs_new()
+    for j in 0..count(fx.c, type_args) {
+        strs_push(args, ty(fx, str_of(fx.c, at(fx.c, type_args, j))))
+    }
+    callee_at(fx, def, args)
+}
+
+/// The MIR function of `def` at these concrete type arguments.
+fn callee_at(fx: Fx, def: Str, args: Strs) -> Int {
+    let i = fn_index(fx.c, def)
+    let generic = i >= 0 && vec_get(fx.c.fns, i).type_params > 0
+    let found = if generic {
+        let keys = strs_new()
+        for a in args { strs_push(keys, key(a)) }
+        match hashmap_get(fx.fm.inst, def + "[" + str_join(keys, ",") + "]") { Some(x) => x, None => 0 - 1 }
+    } else {
+        match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 }
+    }
+    if found < 0 { fail(fx, "a call to a function with no MIR instance, `" + def + "`") }
+    found
+}
+
+// --- arrays, which Core IR /2 spells `?` ----------------------------------------------------------
+
+/// An expression's type, with an array type recovered from how the array is made or read.
+fn ety_of(fx: Fx, e: Int) -> Str {
+    let c = fx.c
+    let t = ety(c, e)
+    if t != "?" { return t }
+    let o = op(c, e)
+    if o == "array" {
+        let es = kid(c, e, "elems")
+        if count(c, es) == 0 { return t }
+        return "?array[" + ety_of(fx, at(c, es, 0)) + ", " + int_to_str(count(c, es)) + "]"
+    }
+    if o == "array-repeat" {
+        return "?array[" + ety_of(fx, kid(c, e, "value")) + ", " + int_to_str(ival(c, e, "count")) + "]"
+    }
+    if o == "local" {
+        let l = ival(c, e, "local")
+        if l >= 0 && l < vec_len(fx.locals) { return vec_get(fx.locals, l).ty }
+    }
+    if o == "index" {
+        let b = spell(ety_of(fx, kid(c, e, "base")))
+        if b.kind == "array" { return strs_get(b.args, 0) }
+    }
+    if o == "block" || o == "if" {
+        // A region's value is its tail's.
+        let body = if o == "block" { kid(c, e, "body") } else { kid(c, e, "then") }
+        let tail = kid(c, body, "tail")
+        if tail >= 0 { return ety_of(fx, tail) }
+    }
+    t
+}
+
+/// Give each binding Core IR /2 types `?` the array type its `let` makes, in source order.
+fn refine_lets(fx: Fx, n: Int) {
+    let c = fx.c
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { refine_lets(fx, at(c, n, i)); }
+        return
+    }
+    if kind != "object" { return }
+    if op(c, n) == "let" {
+        let l = ival(c, n, "local")
+        if l >= 0 && l < vec_len(fx.locals) && vec_get(fx.locals, l).ty == "?" {
+            let d = vec_get(fx.locals, l)
+            vec_set(fx.locals, l, LocalDecl(ty: ety_of(fx, kid(c, n, "value")), name: d.name, origin: d.origin))
+        }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { refine_lets(fx, k); }
+            },
+            None => {},
+        }
+    }
+}
+
+// --- expressions ----------------------------------------------------------------------------------
+
+fn is_arith(o: Str) -> Bool { o == "+" || o == "-" || o == "*" || o == "/" || o == "%" }
+fn is_bits(o: Str) -> Bool { o == "&" || o == "|" || o == "^" || o == "<<" || o == ">>" }
+fn is_compare(o: Str) -> Bool { o == "==" || o == "!=" || o == "<" || o == "<=" || o == ">" || o == ">=" }
+
+fn any_hazard(c: Cir, list: Int) -> Bool {
+    for i in 0..count(c, list) {
+        if hazardous(c, at(c, list, i)) { return true }
+    }
+    false
+}
+
+/// Whether evaluating `e` could change a local another operand has already read: only a region
+/// can hold a statement, so only an expression containing one can.
+fn hazardous(c: Cir, e: Int) -> Bool {
+    let o = op(c, e)
+    if o == "const" || o == "local" || o == "closure" || o == "fn_value" { return false }
+    if o == "call_indirect" { return hazardous(c, kid(c, e, "callee")) || any_hazard(c, kid(c, e, "args")) }
+    if o == "neg" || o == "~" || o == "convert" || o == "fits" { return hazardous(c, kid(c, e, "operand")) }
+    if o == "array-repeat" { return hazardous(c, kid(c, e, "value")) }
+    if o == "array" { return any_hazard(c, kid(c, e, "elems")) }
+    if o == "index" { return hazardous(c, kid(c, e, "base")) || hazardous(c, kid(c, e, "index")) }
+    if is_arith(o) || is_bits(o) || is_compare(o) { return hazardous(c, kid(c, e, "lhs")) || hazardous(c, kid(c, e, "rhs")) }
+    if o == "call" || o == "builtin" || o == "call_trait" { return any_hazard(c, kid(c, e, "args")) }
+    if o == "record" || o == "variant" {
+        let fs = kid(c, e, "fields")
+        for i in 0..count(c, fs) {
+            if hazardous(c, kid(c, at(c, fs, i), "value")) { return true }
+        }
+        return false
+    }
+    if o == "field" { return hazardous(c, kid(c, e, "base")) }
+    true
+}
+
+/// An operand: whether control still reaches here, the operand, and the temporary it holds (or -1).
+struct Opnd {
+    ok: Bool,
+    o: Operand,
+    held: Int,
+}
+
+struct Opnds {
+    ok: Bool,
+    ops: Vec[Operand],
+    held: Ints,
+}
+
+fn none_opnd() -> Opnd { Opnd(ok: false, o: Operand.Local(l: 0), held: 0 - 1) }
+
+/// Evaluate `e` to an operand. A local is borrowed where it is — unless `snapshot`, when a later
+/// sibling could reassign it first. Anything else goes through an owned temporary.
+fn operand(fx: Fx, e: Int, snapshot: Bool) -> Opnd {
+    let c = fx.c
+    let o = op(c, e)
+    if o == "const" {
+        return Opnd(ok: true, o: Operand.Const(c: constant(fx, ival(c, e, "const"))), held: 0 - 1)
+    }
+    if o == "local" && !snapshot {
+        return Opnd(ok: true, o: Operand.Local(l: ival(c, e, "local")), held: 0 - 1)
+    }
+    if o == "field" && !snapshot && op(c, kid(c, e, "base")) == "local" {
+        // A field of a local, read only to be an operand: borrowed where it is.
+        let base = kid(c, e, "base")
+        let t = ty(fx, ety(c, e))
+        let bt = ty(fx, ety(c, base))
+        if spell(bt).kind != "record" {
+            fail(fx, "a field read from something that is not a record")
+            return none_opnd()
+        }
+        let tmp = temp(fx, t, "borrow")
+        hashmap_set(fx.borrowed, tmp, true)
+        let f = FieldRef(rec: bt, field: ival(c, e, "field"), name: sval(c, e, "name"))
+        write(fx, tmp, Rvalue.FieldBorrow(base: Operand.Local(l: ival(c, base, "local")), f: f))
+        if !live(fx) { return none_opnd() }
+        return Opnd(ok: true, o: Operand.Local(l: tmp), held: 0 - 1)
+    }
+    let t = ety_of(fx, e)
+    if t == "never" {
+        expr_into(fx, e, 0 - 1)
+        return none_opnd()
+    }
+    let tmp = temp(fx, ty(fx, t), "arg")
+    expr_into(fx, e, tmp)
+    if !live(fx) { return none_opnd() }
+    own(fx, tmp)
+    Opnd(ok: true, o: Operand.Local(l: tmp), held: tmp)
+}
+
+/// Operands in written order, each snapshotted if a later one could reassign it. `es` is an array
+/// node of expressions.
+fn operands(fx: Fx, es: Int) -> Opnds {
+    let idx = ints_new()
+    for i in 0..count(fx.c, es) { ints_push(idx, at(fx.c, es, i)) }
+    operands_of(fx, idx)
+}
+
+fn operands_of(fx: Fx, es: Ints) -> Opnds {
+    let n = ints_len(es)
+    let later = ints_new()
+    for i in 0..n { ints_push(later, 0) }
+    let mut any = false
+    let mut i = n - 1
+    while i >= 0 {
+        ints_set(later, i, if any { 1 } else { 0 })
+        any = any || hazardous(fx.c, ints_get(es, i))
+        i -= 1
+    }
+    let ops: Vec[Operand] = vec_new()
+    let held = ints_new()
+    for j in 0..n {
+        let o = operand(fx, ints_get(es, j), ints_get(later, j) == 1)
+        if !o.ok {
+            // Control left part way through: what was held is on the stack, and the transfer
+            // that left dropped it.
+            let mut k = ints_len(held) - 1
+            while k >= 0 {
+                forget(fx, ints_get(held, k))
+                k -= 1
+            }
+            return Opnds(ok: false, ops: ops, held: held)
+        }
+        vec_push(ops, o.o)
+        if o.held >= 0 { ints_push(held, o.held) }
+    }
+    Opnds(ok: true, ops: ops, held: held)
+}
+
+/// Give back a temporary an operation only borrowed.
+fn release(fx: Fx, held: Int) {
+    if held >= 0 {
+        if live(fx) && managed_ty(fx, local_ty(fx, held)) { push(fx, Stmt.Drop(l: held)) }
+        forget(fx, held)
+    }
+}
+
+fn release_all(fx: Fx, held: Ints) {
+    let mut i = ints_len(held) - 1
+    while i >= 0 {
+        release(fx, ints_get(held, i))
+        i -= 1
+    }
+}
+
+fn two(c: Cir, e: Int, a: Str, b: Str) -> Ints {
+    let out = ints_new()
+    ints_push(out, kid(c, e, a))
+    ints_push(out, kid(c, e, b))
+    out
+}
+
+/// The law `==` and the orderings compare a type by, for a parametric comparison at an instance.
+fn law_of(o: Str, t: Str) -> Str {
+    let ordering = o != "==" && o != "!="
+    if t == "Int" { return "int" }
+    if is_num(t) { return "num" }
+    if t == "Bool" { return "bool" }
+    if t == "Str" { return "bytes" }
+    if !ordering && t == "Text" { return "bytes" }
+    "structural"
+}
+
+/// Evaluate `e` into `dst`, which is empty; -1 only for an expression that never produces a value.
+fn expr_into(fx: Fx, e: Int, dst: Int) {
+    if !live(fx) { return }
+    let c = fx.c
+    let o = op(c, e)
+    if o == "const" {
+        write(fx, dst, Rvalue.Use(o: Operand.Const(c: constant(fx, ival(c, e, "const")))))
+    } else if o == "local" {
+        let l = ival(c, e, "local")
+        let rv = if managed_ty(fx, local_ty(fx, l)) { Rvalue.Copy(l: l) } else { Rvalue.Use(o: Operand.Local(l: l)) }
+        write(fx, dst, rv)
+    } else if o == "neg" || o == "~" {
+        let a = operand(fx, kid(c, e, "operand"), false)
+        if !a.ok { return }
+        write(fx, dst, if o == "neg" { Rvalue.Neg(o: a.o) } else { Rvalue.Complement(o: a.o) })
+        release(fx, a.held)
+    } else if is_arith(o) || is_bits(o) {
+        let os = operands_of(fx, two(c, e, "lhs", "rhs"))
+        if !os.ok { return }
+        let a = vec_get(os.ops, 0)
+        let b = vec_get(os.ops, 1)
+        write(fx, dst, if is_arith(o) { Rvalue.Arith(op: o, a: a, b: b) } else { Rvalue.Bits(op: o, a: a, b: b) })
+        release_all(fx, os.held)
+    } else if o == "convert" {
+        let to = ty(fx, ety(c, e))
+        let a = operand(fx, kid(c, e, "operand"), false)
+        if !a.ok { return }
+        write(fx, dst, Rvalue.Convert(mode: sval(c, e, "mode"), to: to, o: a.o))
+        release(fx, a.held)
+    } else if o == "array" {
+        let os = operands(fx, kid(c, e, "elems"))
+        if !os.ok { return }
+        write(fx, dst, Rvalue.Array(elems: os.ops))
+        release_all(fx, os.held)
+    } else if o == "array-repeat" {
+        let a = operand(fx, kid(c, e, "value"), false)
+        if !a.ok { return }
+        write(fx, dst, Rvalue.ArrayRepeat(value: a.o, count: ival(c, e, "count")))
+        release(fx, a.held)
+    } else if o == "index" {
+        let os = operands_of(fx, two(c, e, "base", "index"))
+        if !os.ok { return }
+        write(fx, dst, Rvalue.Index(base: vec_get(os.ops, 0), index: vec_get(os.ops, 1)))
+        release_all(fx, os.held)
+    } else if o == "fits" {
+        let to = ty(fx, sval(c, e, "to"))
+        let a = operand(fx, kid(c, e, "operand"), false)
+        if !a.ok { return }
+        write(fx, dst, Rvalue.Fits(to: to, o: a.o))
+        release(fx, a.held)
+    } else if is_compare(o) {
+        let operand_ty = ty(fx, sval(c, e, "operand"))
+        let law0 = sval(c, e, "law")
+        let law = if law0 == "parametric" { law_of(o, operand_ty) } else { law0 }
+        let os = operands_of(fx, two(c, e, "lhs", "rhs"))
+        if !os.ok { return }
+        write(fx, dst, Rvalue.Compare(op: o, law: law, operand: operand_ty, a: vec_get(os.ops, 0), b: vec_get(os.ops, 1)))
+        release_all(fx, os.held)
+    } else if o == "call" {
+        let target = callee(fx, sval(c, e, "callee"), kid(c, e, "type_args"))
+        if target < 0 { return }
+        let os = operands(fx, kid(c, e, "args"))
+        if !os.ok { return }
+        write(fx, dst, Rvalue.Call(callee: target, args: os.ops))
+        release_all(fx, os.held)
+    } else if o == "builtin" {
+        builtin(fx, e, dst)
+    } else if o == "call_trait" {
+        // Resolved for this instance: `Self` substituted, the impl's function found, and an
+        // ordinary call lowered. MIR has no trait call.
+        let concrete = ty(fx, sval(c, e, "self"))
+        let method = sval(c, e, "method")
+        let t = method_target(c, method, concrete)
+        if t.index >= 0 {
+            let target = callee_at(fx, vec_get(c.fns, t.index).def, t.args)
+            if target < 0 { return }
+            let os = operands(fx, kid(c, e, "args"))
+            if !os.ok { return }
+            write(fx, dst, Rvalue.Call(callee: target, args: os.ops))
+            release_all(fx, os.held)
+        } else if strs_get(trait_parts(method), 0) == "Hash" {
+            // A derived `Hash`: the type's own walk, or its `==`.
+            let os = operands(fx, kid(c, e, "args"))
+            if !os.ok { return }
+            if strs_get(trait_parts(method), 1) == "hash" && vec_len(os.ops) == 1 {
+                write(fx, dst, Rvalue.Hash(operand: concrete, value: vec_get(os.ops, 0)))
+            } else if vec_len(os.ops) == 2 {
+                write(fx, dst, Rvalue.Compare(op: "==", law: law_of("==", concrete), operand: concrete, a: vec_get(os.ops, 0), b: vec_get(os.ops, 1)))
+            } else {
+                fail(fx, "a derived `Hash` method of the wrong arity")
+                return
+            }
+            release_all(fx, os.held)
+        } else {
+            fail(fx, "a trait call with no impl for this instance's type")
+        }
+    } else if o == "call_indirect" {
+        let all = ints_new()
+        ints_push(all, kid(c, e, "callee"))
+        let args = kid(c, e, "args")
+        for i in 0..count(c, args) { ints_push(all, at(c, args, i)) }
+        let os = operands_of(fx, all)
+        if !os.ok { return }
+        let rest: Vec[Operand] = vec_new()
+        for i in 1..vec_len(os.ops) { vec_push(rest, vec_get(os.ops, i)) }
+        write(fx, dst, Rvalue.CallIndirect(callee: vec_get(os.ops, 0), args: rest))
+        release_all(fx, os.held)
+    } else if o == "record" || o == "variant" {
+        aggregate(fx, e, dst, o == "variant")
+    } else if o == "field" {
+        let base = kid(c, e, "base")
+        let bt0 = ety(c, base)
+        if bt0 == "never" {
+            expr_into(fx, base, 0 - 1)
+            return
+        }
+        let bt = ty(fx, bt0)
+        if spell(bt).kind != "record" {
+            fail(fx, "a field read from something that is not a record")
+            return
+        }
+        let b = operand(fx, base, false)
+        if !b.ok { return }
+        write(fx, dst, Rvalue.Field(base: b.o, f: FieldRef(rec: bt, field: ival(c, e, "field"), name: sval(c, e, "name"))))
+        release(fx, b.held)
+    } else if o == "match" {
+        lower_match(fx, e, dst)
+    } else if o == "if" {
+        value_if(fx, kid(c, e, "cond"), kid(c, e, "then"), kid(c, e, "else"), dst)
+    } else if o == "block" {
+        block_into(fx, kid(c, e, "body"), dst)
+    } else if o == "closure" {
+        // A closure in a generic function is the instance of this one's arguments.
+        let def = sval(c, e, "function")
+        let target = if strs_len(fx.args) > 0 {
+            let keys = strs_new()
+            for a in fx.args { strs_push(keys, key(a)) }
+            match hashmap_get(fx.fm.inst, def + "[" + str_join(keys, ",") + "]") { Some(x) => x, None => match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 } }
+        } else {
+            match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 }
+        }
+        if target < 0 {
+            fail(fx, "a closure with no MIR function")
+            return
+        }
+        let caps: Vec[Operand] = vec_new()
+        let cs = kid(c, e, "captures")
+        for i in 0..count(c, cs) { vec_push(caps, Operand.Local(l: int_of(c, at(c, cs, i)))) }
+        write(fx, dst, Rvalue.Closure(func: target, captures: caps))
+    } else if o == "fn_value" {
+        let target = match hashmap_get(fx.fm.thunks, fx.f.module + "|" + sval(c, e, "function")) { Some(x) => x, None => 0 - 1 }
+        if target < 0 {
+            fail(fx, "a function value with no thunk")
+            return
+        }
+        write(fx, dst, Rvalue.Closure(func: target, captures: vec_new()))
+    } else {
+        fail(fx, "an expression this pipeline does not know, `" + o + "`")
+    }
+}
+
+fn aggregate(fx: Fx, e: Int, dst: Int, is_variant: Bool) {
+    let c = fx.c
+    let t0 = ety(c, e)
+    let t = ty(fx, t0)
+    let want = if is_variant { "enum" } else { "record" }
+    if spell(t).kind != want {
+        fail(fx, "a " + want + " construction whose type is not one")
+        return
+    }
+    let v = ival(c, e, "variant")
+    let fs = kid(c, e, "fields")
+    let idx = ints_new()
+    let names = strs_new()
+    let built = ints_new()
+    for i in 0..count(c, fs) {
+        let init = at(c, fs, i)
+        let field = ival(c, init, "field")
+        let value = kid(c, init, "value")
+        let fty = if is_variant { payload_ty(fx, t, v, field, ety(c, value)) } else { record_field_ty(fx, t, field, ety(c, value)) }
+        let tmp = temp(fx, fty, "init")
+        expr_into(fx, value, tmp)
+        if !live(fx) {
+            let mut k = ints_len(built) - 1
+            while k >= 0 {
+                forget(fx, ints_get(built, k))
+                k -= 1
+            }
+            return
+        }
+        own(fx, tmp)
+        ints_push(idx, field)
+        strs_push(names, sval(c, init, "name"))
+        ints_push(built, tmp)
+    }
+    for l in built { forget(fx, l) }
+    if is_variant {
+        write(fx, dst, Rvalue.Variant(ty: t, variant: v, vname: sval(c, e, "name"), fields: idx, names: names, locals: built))
+    } else {
+        write(fx, dst, Rvalue.Record(ty: t, fields: idx, names: names, locals: built))
+    }
+}
+
+fn builtin(fx: Fx, e: Int, dst: Int) {
+    let c = fx.c
+    let name = sval(c, e, "builtin")
+    let os = operands(fx, kid(c, e, "args"))
+    if !os.ok { return }
+    if name == "exit_with" {
+        let code = if vec_len(os.ops) > 0 { vec_get(os.ops, 0) } else { Operand.Const(c: MConst.Int(v: 0)) }
+        seal(fx, Term.Exit(o: code))
+        let mut k = ints_len(os.held) - 1
+        while k >= 0 {
+            forget(fx, ints_get(os.held, k))
+            k -= 1
+        }
+        return
+    }
+    let tas = kid(c, e, "type_args")
+    let elem = if count(c, tas) > 0 { ty(fx, str_of(c, at(c, tas, 0))) } else { "" }
+    write(fx, dst, Rvalue.Primitive(op: name, elem: elem, args: os.ops))
+    release_all(fx, os.held)
+}
+
+fn value_if(fx: Fx, cond: Int, then: Int, other: Int, dst: Int) {
+    let o = operand(fx, cond, false)
+    if !o.ok { return }
+    release(fx, o.held)
+    let then_b = new_block(fx, origin_source())
+    let else_b = new_block(fx, origin_source())
+    let join = new_block(fx, origin_source())
+    seal(fx, Term.Branch(cond: o.o, then: then_b, other: else_b))
+    let mut arrives = false
+    set_cur(fx, then_b)
+    block_into(fx, then, dst)
+    if live(fx) {
+        arrives = true
+        goto(fx, join)
+    }
+    set_cur(fx, else_b)
+    block_into(fx, other, dst)
+    if live(fx) {
+        arrives = true
+        goto(fx, join)
+    }
+    if arrives { set_cur(fx, join) } else { seal_orphan(fx, join) }
+}
+
+/// A `match`, in value position or as a statement. The scrutinee is evaluated into a temporary the
+/// `match` owns until the arms have produced their value.
+fn lower_match(fx: Fx, m: Int, dst: Int) {
+    let c = fx.c
+    let scrut = kid(c, m, "scrutinee")
+    let st0 = ety(c, scrut)
+    if st0 == "never" {
+        expr_into(fx, scrut, 0 - 1)
+        return
+    }
+    let st = ty(fx, st0)
+    if spell(st).kind != "enum" {
+        fail(fx, "a `match` on something that is not an enum")
+        return
+    }
+    let name = if sval(c, m, "origin") == "propagate" { "propagate" } else { "match" }
+    let s = temp(fx, st, name)
+    expr_into(fx, scrut, s)
+    if !live(fx) { return }
+    own(fx, s)
+    let arms = kid(c, m, "arms")
+    let variants = ints_new()
+    let names = strs_new()
+    let blocks = ints_new()
+    for i in 0..count(c, arms) {
+        let a = at(c, arms, i)
+        ints_push(variants, ival(c, a, "variant"))
+        strs_push(names, sval(c, a, "name"))
+        ints_push(blocks, new_block(fx, origin_source()))
+    }
+    let join = new_block(fx, origin_source())
+    seal(fx, Term.Switch(scrutinee: s, ty: st, variants: variants, names: names, blocks: blocks))
+    let mut arrives = false
+    for i in 0..count(c, arms) {
+        let a = at(c, arms, i)
+        set_cur(fx, ints_get(blocks, i))
+        let depth = ints_len(fx.sk)
+        let bs = kid(c, a, "bindings")
+        for j in 0..count(c, bs) {
+            let b = at(c, bs, j)
+            let l = ival(c, b, "local")
+            assign(fx, l, Rvalue.Payload(base: s, ty: st, variant: ints_get(variants, i), vname: strs_get(names, i), field: ival(c, b, "field"), fname: sval(c, b, "name")))
+            own(fx, l)
+        }
+        block_into(fx, kid(c, a, "body"), dst)
+        pop_to(fx, depth)
+        if live(fx) {
+            arrives = true
+            goto(fx, join)
+        }
+    }
+    if arrives {
+        set_cur(fx, join)
+        // After the arms have established their value: let go of what was matched.
+        let pos = owned_at(fx, s)
+        if pos >= 0 {
+            while ints_len(fx.sk) > pos { stack_pop(fx) }
+            push(fx, Stmt.Drop(l: s))
+        }
+    } else {
+        forget(fx, s)
+        seal_orphan(fx, join)
+    }
+}
+
+// --- functions --------------------------------------------------------------------------------------
+
+/// Lower one function — a definition, or an instance under `args` — whose identity is `identity`.
+pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, identity: Str, recursive: Bool, caps: Int) -> Result[MirFn, Str] ! {} {
+    let locals: Vec[LocalDecl] = vec_new()
+    if f.foreign != "" {
+        for i in 0..f.params {
+            let l = vec_get(f.locals, i)
+            vec_push(locals, LocalDecl(ty: l.ty, name: l.name, origin: "param"))
+        }
+        return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, locals: locals, blocks: vec_new()))
+    }
+    let reg = ints_new()
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
+    let fx0 = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: "Int", locals: locals, blocks: vec_new(), reg: reg,
+        sk: ints_new(), sl: ints_new(), scopes: ints_new(), lid: ints_new(), lhead: ints_new(), lexit: ints_new(), ldepth: ints_new(),
+        cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new())
+    // Core IR's locals keep their numbers: parameters, bindings, then its own temporaries.
+    for l in f.locals {
+        let origin = if l.origin == "param" { "param" } else if l.origin == "let" { "binding" } else if l.origin == "let mut" { "binding mut" } else { "temp" }
+        vec_push(locals, LocalDecl(ty: ty(fx0, l.ty), name: l.name, origin: origin))
+    }
+    let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, f.ret), locals: locals, blocks: fx0.blocks, reg: reg,
+        sk: fx0.sk, sl: fx0.sl, scopes: fx0.scopes, lid: fx0.lid, lhead: fx0.lhead, lexit: fx0.lexit, ldepth: fx0.ldepth,
+        cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err)
+    refine_lets(fx, f.body)
+    let entry = new_block(fx, origin_source())
+    set_cur(fx, entry)
+    // A function in a call cycle, or whose locals are large, checks its stack first.
+    let mut frame = 0
+    for l in locals { frame += data_bytes(tt, l.ty) }
+    if recursive || frame >= 4096 {
+        let u = unwind(fx)
+        push(fx, Stmt.StackCheck(unwind: u))
+    }
+    // A closure's code reads what its closure object carries into its own locals, which it
+    // then owns like bindings. Core IR /2 does not list them: they are the locals after the
+    // parameters, as many as the closure captures.
+    for k in 0..caps {
+        let l = f.params + k
+        assign(fx, l, Rvalue.Capture(env: 0, index: k))
+        own(fx, l)
+    }
+    let result = temp(fx, fx.ret, "result")
+    block_into(fx, f.body, result)
+    if live(fx) {
+        cleanup_to(fx, 0)
+        while ints_len(fx.sk) > 0 { stack_pop(fx) }
+        seal(fx, Term.Return(l: result))
+    }
+    finish_unwind(fx)
+    let blocks = finish_blocks(fx)
+    if strs_len(fx.err) > 0 { return Err(strs_get(fx.err, 0)) }
+    Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: fx.ret, type_args: args, foreign: "", locals: locals, blocks: blocks))
+}
