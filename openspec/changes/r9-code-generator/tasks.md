@@ -35,9 +35,11 @@
 
 ## 5. Line tables
 
-- [ ] 5.1 DWARF `.debug_line` from `loc`, a compile unit and subprograms; compared with LLVM's rows
-      (blocked: `nazm lir --ops` prints no `loc`; needs `nazm lir --debug`, see design, *As built*)
-- [ ] 5.2 Unwind information (compact unwind) for backtraces
+- [x] 5.1 DWARF `.debug_line` from `loc`, a compile unit and subprograms; compared with LLVM's rows
+      (`nazm lir --ops --debug`; `tests/lines.sh`: 38 agree on each Mach-O target; ELF verified
+      by `tests/elf.sh`)
+- [x] 5.2 Unwind information: compact unwind (Mach-O), `.eh_frame` (ELF); `tests/unwind.sh`
+      agrees with LLVM on both Mach-O targets
 
 ## 6. ELF and x86_64
 

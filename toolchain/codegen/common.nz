@@ -23,18 +23,28 @@ pub struct Code {
     errors: Strs,
     /// Whether the target is Apple's (its AAPCS64 variant, Mach-O).
     apple: Bool,
+    /// Each `loc`: where its code begins, and its file, line and column (D10).
+    loc_at: Ints,
+    loc_file: Ints,
+    loc_line: Ints,
+    loc_col: Ints,
+    /// Each function symbol's compact unwind encoding, or 0.
+    fn_enc: Ints,
 }
 
 pub fn code_new(nsyms: Int, apple: Bool) -> Code {
     let at = ints_new()
+    let enc = ints_new()
     let mut i = 0
     while i < nsyms {
         ints_push(at, -1)
+        ints_push(enc, 0)
         i += 1
     }
     Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
             rel_pcrel: ints_new(), rel_len: ints_new(),
-            sym_at: at, errors: strs_new(), apple: apple)
+            sym_at: at, errors: strs_new(), apple: apple, loc_at: ints_new(),
+            loc_file: ints_new(), loc_line: ints_new(), loc_col: ints_new(), fn_enc: enc)
 }
 
 pub fn align_up(x: Int, a: Int) -> Int {
@@ -170,6 +180,14 @@ pub const X_UNSIGNED: Int = 0
 pub const X_SIGNED: Int = 1
 pub const X_BRANCH: Int = 2
 pub const X_GOT_LOAD: Int = 3
+
+/// A `loc` at the current end of the code (D10).
+pub fn add_loc(c: Code, x: Ins) {
+    ints_push(c.loc_at, bytebuf_len(c.buf))
+    ints_push(c.loc_file, x.a)
+    ints_push(c.loc_line, x.b)
+    ints_push(c.loc_col, x.c)
+}
 
 /// A relocation of `kind` against `sym` at `at`, pc-relative or not, 2^`len` bytes wide.
 pub fn add_reloc(c: Code, at: Int, kind: Int, sym: Int, pcrel: Int, len: Int) {

@@ -186,6 +186,15 @@ pub fn str_post(size: Int, t: Int, n: Int, imm: Int) -> Int {
 // The frame.
 /// `stp x29, x30, [sp, #-16]!`
 pub fn push_frame() -> Int { 0xA9BF7BFD }
+/// `stp t1, t2, [n, #imm]!` and `ldp t1, t2, [n, #imm]`, 64-bit, `imm` a multiple of 8.
+pub fn stp_pre(t1: Int, t2: Int, n: Int, imm: Int) -> Int {
+    0xA9800000 | (((imm >> 3) & 0x7F) << 15) | (t2 << 10) | (n << 5) | t1
+}
+
+pub fn ldp_off(t1: Int, t2: Int, n: Int, imm: Int) -> Int {
+    0xA9400000 | (((imm >> 3) & 0x7F) << 15) | (t2 << 10) | (n << 5) | t1
+}
+
 /// `ldp x29, x30, [sp], #16`
 pub fn pop_frame() -> Int { 0xA8C17BFD }
 pub fn ret() -> Int { 0xD65F03C0 }

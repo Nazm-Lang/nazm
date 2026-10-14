@@ -17,6 +17,7 @@ use "sel_x64.nz"
 use "common.nz"
 use "macho.nz"
 use "elf.nz"
+use "dwarf.nz"
 
 fn main(io: IoCap) {
     let mut first = 0
@@ -54,7 +55,8 @@ fn main(io: IoCap) {
             }
             for e in c.errors { strs_push(errors, e) }
             if strs_len(errors) == 0 {
-                objects.push(if apple { write_object(u, c, x64, errors) } else { write_elf(u, c, x64, errors) })
+                let dbg = build_dwarf(u, c)
+                objects.push(if apple { write_object(u, c, x64, dbg, errors) } else { write_elf(u, c, x64, dbg, errors) })
             }
         }
     }

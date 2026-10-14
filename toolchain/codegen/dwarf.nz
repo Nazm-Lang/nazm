@@ -1,0 +1,299 @@
+// DWARF line tables (design D10), from `nazm lir --ops --debug`'s positions: one DWARF 4
+// compile unit per object, named for its first function's file, a subprogram per function with
+// a declared position (`at`), and a line program with one sequence per such function — its
+// declaration line at its first instruction, then a row wherever the code of a new `loc`
+// begins. Addresses are relocations against the functions' symbols; an offset into another
+// DWARF section is recorded for the ELF writer, which relocates it (a Mach-O object's DWARF
+// stays its own, read by `dsymutil` in place).
+
+use "@std/bytebuf"
+use "lir.nz"
+use "common.nz"
+
+/// The DWARF sections of one object, and what in them a writer must relocate.
+pub struct Dwarf {
+    present: Bool,
+    abbrev: ByteBuf,
+    info: ByteBuf,
+    line: ByteBuf,
+    /// Eight-byte addresses: where in `.debug_info` and `.debug_line`, and of which symbol.
+    info_rel_at: Ints,
+    info_rel_sym: Ints,
+    line_rel_at: Ints,
+    line_rel_sym: Ints,
+    /// Four-byte section offsets in `.debug_info`: where, and into which section (0 abbrev,
+    /// 1 line).
+    info_sec_at: Ints,
+    info_sec_to: Ints,
+}
+
+fn put8(b: ByteBuf, v: Int) {
+    bytebuf_push(b, UInt8(v & 0xFF))
+}
+
+fn put16(b: ByteBuf, v: Int) {
+    put8(b, v)
+    put8(b, v >> 8)
+}
+
+fn put32(b: ByteBuf, v: Int) {
+    bytebuf_put_u32_le(b, UInt32(v & 0xFFFFFFFF))
+}
+
+fn put64(b: ByteBuf, v: Int) {
+    put32(b, v & 0xFFFFFFFF)
+    put32(b, (v >> 32) & 0xFFFFFFFF)
+}
+
+fn uleb(b: ByteBuf, v: Int) {
+    let mut x = v
+    loop {
+        let byte = x & 0x7F
+        x = x >> 7
+        if x == 0 {
+            put8(b, byte)
+            break
+        }
+        put8(b, byte | 0x80)
+    }
+}
+
+fn sleb(b: ByteBuf, v: Int) {
+    let mut x = v
+    loop {
+        let byte = x & 0x7F
+        x = x >> 7
+        let done = (x == 0 && (byte & 0x40) == 0) || (x == -1 && (byte & 0x40) != 0)
+        if done {
+            put8(b, byte)
+            break
+        }
+        put8(b, byte | 0x80)
+    }
+}
+
+fn cstr(b: ByteBuf, s: Str) {
+    bytebuf_push_str(b, s)
+    put8(b, 0)
+}
+
+pub fn dwarf_none() -> Dwarf {
+    Dwarf(present: false, abbrev: bytebuf_new(), info: bytebuf_new(), line: bytebuf_new(),
+            info_rel_at: ints_new(), info_rel_sym: ints_new(), line_rel_at: ints_new(),
+            line_rel_sym: ints_new(), info_sec_at: ints_new(), info_sec_to: ints_new())
+}
+
+fn file_name(u: Unit, idx: Int) -> Str {
+    let mut k = 0
+    while k < ints_len(u.file_idx) {
+        if u.file_idx[k] == idx { return u.file_name[k] }
+        k += 1
+    }
+    "<unknown>"
+}
+
+/// Where each function's code ends: the next function's start, or the end of the code.
+pub fn func_end(c: Code, at: Int) -> Int {
+    let mut end = bytebuf_len(c.buf)
+    for s in c.sym_at {
+        if s > at && s < end { end = s }
+    }
+    end
+}
+
+/// The unit's DWARF, or none when no function declares a position.
+pub fn build_dwarf(u: Unit, c: Code) -> Dwarf {
+    let d = dwarf_none()
+    // The functions with a position, in code order (functions are generated in unit order).
+    let funcs = ints_new()
+    let mut i = 0
+    while i < u.funcs.len() {
+        let f = u.funcs[i]
+        if f.at_file >= 0 && c.sym_at[f.sym] >= 0 { ints_push(funcs, i) }
+        i += 1
+    }
+    if ints_len(funcs) == 0 { return d }
+    // The file table: every file a declaration or a position names, numbered from 1.
+    let files = ints_new()
+    for fi in funcs {
+        let f = u.funcs[fi]
+        if !has(files, f.at_file) { ints_push(files, f.at_file) }
+    }
+    for x in c.loc_file {
+        if !has(files, x) { ints_push(files, x) }
+    }
+    let first = u.funcs[funcs[0]]
+    let unit_name = file_name(u, first.at_file)
+    // .debug_abbrev: 1 the compile unit, 2 a subprogram.
+    let a = d.abbrev
+    uleb(a, 1)
+    uleb(a, 0x11)
+    put8(a, 1)
+    let cu_pairs: Ints = [0x25, 0x08, 0x13, 0x05, 0x03, 0x08, 0x10, 0x17, 0x1B, 0x08, 0x11, 0x01, 0x12, 0x06]
+    for pair in cu_pairs {
+        uleb(a, pair)
+    }
+    uleb(a, 0)
+    uleb(a, 0)
+    uleb(a, 2)
+    uleb(a, 0x2E)
+    put8(a, 0)
+    let sub_pairs: Ints = [0x03, 0x08, 0x3A, 0x0F, 0x3B, 0x0F, 0x11, 0x01, 0x12, 0x06]
+    for pair in sub_pairs {
+        uleb(a, pair)
+    }
+    uleb(a, 0)
+    uleb(a, 0)
+    uleb(a, 0)
+    // .debug_line: the header, then a sequence per function.
+    let l = d.line
+    put32(l, 0)
+    put16(l, 4)
+    let header_len_at = bytebuf_len(l)
+    put32(l, 0)
+    put8(l, 1)
+    put8(l, 1)
+    put8(l, 1)
+    put8(l, -5)
+    put8(l, 14)
+    put8(l, 13)
+    let op_lengths: Ints = [0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1]
+    for n in op_lengths {
+        put8(l, n)
+    }
+    put8(l, 0)
+    for x in files {
+        cstr(l, file_name(u, x))
+        uleb(l, 0)
+        uleb(l, 0)
+        uleb(l, 0)
+    }
+    put8(l, 0)
+    let ok = bytebuf_patch_u32_le(l, header_len_at, UInt32(bytebuf_len(l) - header_len_at - 4))
+    for fi in funcs {
+        let f = u.funcs[fi]
+        let start = c.sym_at[f.sym]
+        let end = func_end(c, start)
+        // DW_LNE_set_address
+        put8(l, 0)
+        uleb(l, 9)
+        put8(l, 2)
+        ints_push(d.line_rel_at, bytebuf_len(l))
+        ints_push(d.line_rel_sym, f.sym)
+        put64(l, start)
+        let mut file = 1
+        let mut line = 1
+        let mut col = 0
+        let mut addr = start
+        let decl = 1 + index_of(files, f.at_file)
+        row(l, addr, start, file, decl, line, f.at_line, col, 0)
+        file = decl
+        line = f.at_line
+        // Each position in this function, at the address where its code begins: one with no code
+        // of its own (a jump laid out as a fall-through) keeps its row, at the next one's address.
+        let mut k = 0
+        let nl = ints_len(c.loc_at)
+        while k < nl {
+            let at = c.loc_at[k]
+            if at >= start && at < end {
+                let fl = 1 + index_of(files, c.loc_file[k])
+                row(l, addr, at, file, fl, line, c.loc_line[k], col, c.loc_col[k])
+                addr = at
+                file = fl
+                line = c.loc_line[k]
+                col = c.loc_col[k]
+            }
+            k += 1
+        }
+        // DW_LNS_advance_pc to the end, DW_LNE_end_sequence.
+        put8(l, 2)
+        uleb(l, end - addr)
+        put8(l, 0)
+        uleb(l, 1)
+        put8(l, 1)
+    }
+    let ok2 = bytebuf_patch_u32_le(l, 0, UInt32(bytebuf_len(l) - 4))
+    // .debug_info
+    let n = d.info
+    put32(n, 0)
+    put16(n, 4)
+    ints_push(d.info_sec_at, bytebuf_len(n))
+    ints_push(d.info_sec_to, 0)
+    put32(n, 0)
+    put8(n, 8)
+    uleb(n, 1)
+    cstr(n, "nazm")
+    put16(n, 0x000C)
+    cstr(n, unit_name)
+    ints_push(d.info_sec_at, bytebuf_len(n))
+    ints_push(d.info_sec_to, 1)
+    put32(n, 0)
+    cstr(n, ".")
+    // The unit's code is one contiguous run: from its first function to its last's end.
+    let lo_sym = first_sym(c)
+    ints_push(d.info_rel_at, bytebuf_len(n))
+    ints_push(d.info_rel_sym, lo_sym)
+    put64(n, c.sym_at[lo_sym])
+    put32(n, bytebuf_len(c.buf))
+    for fi in funcs {
+        let f = u.funcs[fi]
+        let start = c.sym_at[f.sym]
+        uleb(n, 2)
+        cstr(n, if str_len(f.name) > 0 { f.name } else { u.syms[f.sym].name })
+        uleb(n, 1 + index_of(files, f.at_file))
+        uleb(n, f.at_line)
+        ints_push(d.info_rel_at, bytebuf_len(n))
+        ints_push(d.info_rel_sym, f.sym)
+        put64(n, start)
+        put32(n, func_end(c, start) - start)
+    }
+    put8(n, 0)
+    let ok3 = bytebuf_patch_u32_le(n, 0, UInt32(bytebuf_len(n) - 4))
+    Dwarf(present: true, abbrev: d.abbrev, info: d.info, line: d.line, info_rel_at: d.info_rel_at,
+            info_rel_sym: d.info_rel_sym, line_rel_at: d.line_rel_at, line_rel_sym: d.line_rel_sym,
+            info_sec_at: d.info_sec_at, info_sec_to: d.info_sec_to)
+}
+
+/// One row: advance the address, set the file, line and column where they change, copy.
+fn row(l: ByteBuf, from: Int, to: Int, file: Int, nfile: Int, line: Int, nline: Int, col: Int, ncol: Int) {
+    if to > from {
+        put8(l, 2)
+        uleb(l, to - from)
+    }
+    if nfile != file {
+        put8(l, 4)
+        uleb(l, nfile)
+    }
+    if nline != line {
+        put8(l, 3)
+        sleb(l, nline - line)
+    }
+    if ncol != col {
+        put8(l, 5)
+        uleb(l, ncol)
+    }
+    put8(l, 1)
+}
+
+fn has(xs: Ints, x: Int) -> Bool {
+    index_of(xs, x) >= 0
+}
+
+fn index_of(xs: Ints, x: Int) -> Int {
+    let mut k = 0
+    while k < ints_len(xs) {
+        if xs[k] == x { return k }
+        k += 1
+    }
+            - 1
+}
+
+/// The symbol of the function at the start of the code.
+fn first_sym(c: Code) -> Int {
+    let mut k = 0
+    while k < ints_len(c.sym_at) {
+        if c.sym_at[k] == 0 { return k }
+        k += 1
+    }
+    0
+}

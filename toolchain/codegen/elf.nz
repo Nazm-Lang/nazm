@@ -8,6 +8,7 @@ use "@std/bytebuf"
 use "@std/text"
 use "lir.nz"
 use "common.nz"
+use "dwarf.nz"
 
 fn put8(b: ByteBuf, v: Int) {
     bytebuf_push(b, UInt8(v & 0xFF))
@@ -106,7 +107,7 @@ fn put_shdr(b: ByteBuf, name: Int, typ: Int, flags: Int, off: Int, size: Int, li
 }
 
 /// The unit's object, or the reasons it cannot be written (in `errors`).
-pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
+pub fn write_elf(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> Bytes {
     let ns = u.syms.len()
     // Section numbers: 1 .text, 2 .rodata, 3 .data.rel.ro, 4 .data.
     let secs = vec_new[ByteBuf]()
@@ -162,7 +163,22 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
             k += 2
         }
     }
-    // Symbols: the null one, locals, then the rest (definitions, then imports).
+    // The other contents: `.eh_frame` (5.2), and the DWARF sections when there are positions.
+    let eh_at = ints_new()
+    let eh_sym = ints_new()
+    secs.push(eh_frame(u, c, x64, eh_at, eh_sym))
+    ints_push(sec_align, 8)
+    if dbg.present {
+        secs.push(dbg.abbrev)
+        secs.push(dbg.info)
+        secs.push(dbg.line)
+        ints_push(sec_align, 1)
+        ints_push(sec_align, 1)
+        ints_push(sec_align, 1)
+    }
+    let ncont = secs.len()
+    // Symbols: the null one, a section symbol for each DWARF section an offset points into,
+    // locals, then the rest (definitions, then imports).
     let locals = ints_new()
     let globals = ints_new()
     let undefs = ints_new()
@@ -187,6 +203,7 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     for x in locals { ints_push(order, x) }
     for x in globals { ints_push(order, x) }
     for x in undefs { ints_push(order, x) }
+    let nsect_syms = if dbg.present { 2 } else { 0 }
     let nidx = ints_new()
     i = 0
     while i < ns {
@@ -195,7 +212,7 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     }
     i = 0
     while i < ints_len(order) {
-        nidx[order[i]] = i + 1
+        nidx[order[i]] = i + 1 + nsect_syms
         i += 1
     }
     let strtab = bytebuf_new()
@@ -205,6 +222,19 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     while q < 24 {
         put8(symtab, 0)
         q += 1
+    }
+    if dbg.present {
+        // `.debug_abbrev` (section 6) and `.debug_line` (section 8), symbols 1 and 2.
+        let mut t = 0
+        while t < 2 {
+            put32(symtab, 0)
+            put8(symtab, 3)
+            put8(symtab, 0)
+            put16(symtab, if t == 0 { 6 } else { 8 })
+            put64(symtab, 0)
+            put64(symtab, 0)
+            t += 1
+        }
     }
     for x in order {
         let s = u.syms[x]
@@ -217,12 +247,13 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
         put64(symtab, if s.link == L_IMPORT { 0 } else { sym_off[x] })
         put64(symtab, sym_size[x])
     }
-    // Relocations: the text's, then each data section's.
+    // Relocations, one buffer per content section.
     let rela = vec_new[ByteBuf]()
-    rela.push(bytebuf_new())
-    rela.push(bytebuf_new())
-    rela.push(bytebuf_new())
-    rela.push(bytebuf_new())
+    i = 0
+    while i < ncont {
+        rela.push(bytebuf_new())
+        i += 1
+    }
     i = 0
     while i < ints_len(c.rel_at) {
         let kind = c.rel_kind[i]
@@ -238,38 +269,84 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
             k += 1
         }
     }
-    // Section names.
+    let prel32 = if x64 { 2 } else { 261 }
+    let abs64 = if x64 { 1 } else { 257 }
+    let abs32 = if x64 { 10 } else { 258 }
+    i = 0
+    while i < ints_len(eh_at) {
+        put_rela(rela[4], eh_at[i], nidx[eh_sym[i]], prel32, 0)
+        i += 1
+    }
+    if dbg.present {
+        i = 0
+        while i < ints_len(dbg.info_rel_at) {
+            put_rela(rela[6], dbg.info_rel_at[i], nidx[dbg.info_rel_sym[i]], abs64, 0)
+            i += 1
+        }
+        i = 0
+        while i < ints_len(dbg.info_sec_at) {
+            put_rela(rela[6], dbg.info_sec_at[i], 1 + dbg.info_sec_to[i], abs32, 0)
+            i += 1
+        }
+        i = 0
+        while i < ints_len(dbg.line_rel_at) {
+            put_rela(rela[7], dbg.line_rel_at[i], nidx[dbg.line_rel_sym[i]], abs64, 0)
+            i += 1
+        }
+    }
+    // Section headers, in order: null; the contents; a `.rela` for each that has relocations;
+    // `.note.GNU-stack`; `.symtab`; `.strtab`; `.shstrtab`.
+    let cont_names = strs_new()
+    let names_lit: Strs = [".text", ".rodata", ".data.rel.ro", ".data", ".eh_frame", ".debug_abbrev",
+            ".debug_info", ".debug_line"]
+    for x in names_lit { strs_push(cont_names, x) }
+    let types_lit: Ints = [1, 1, 1, 1, 1, 1, 1, 1]
+    let flags_lit: Ints = [6, 2, 3, 3, 2, 0, 0, 0]
+    if x64 { types_lit[4] = 0x70000001 }
+    let rela_of = ints_new()
+    let mut nsec = 1 + ncont
+    i = 0
+    while i < ncont {
+        if bytebuf_len(rela[i]) > 0 {
+            ints_push(rela_of, i)
+        }
+        i += 1
+    }
+    nsec += ints_len(rela_of)
+    let note_idx = nsec
+    let symtab_idx = nsec + 1
+    let strtab_idx = nsec + 2
+    let shstr_idx = nsec + 3
+    nsec += 4
     let shstr = bytebuf_new()
     put8(shstr, 0)
-    let n_text = str_add(shstr, ".text")
-    let n_rodata = str_add(shstr, ".rodata")
-    let n_relro = str_add(shstr, ".data.rel.ro")
-    let n_data = str_add(shstr, ".data")
-    let n_rtext = str_add(shstr, ".rela.text")
-    let n_rrelro = str_add(shstr, ".rela.data.rel.ro")
-    let n_rdata = str_add(shstr, ".rela.data")
+    let name_off = ints_new()
+    i = 0
+    while i < ncont {
+        ints_push(name_off, str_add(shstr, cont_names[i]))
+        i += 1
+    }
+    let rela_name = ints_new()
+    for r in rela_of { ints_push(rela_name, str_add(shstr, ".rela" + cont_names[r])) }
     let n_note = str_add(shstr, ".note.GNU-stack")
     let n_symtab = str_add(shstr, ".symtab")
     let n_strtab = str_add(shstr, ".strtab")
     let n_shstr = str_add(shstr, ".shstrtab")
     // File layout: the header, each section's bytes at its alignment, the section headers.
-    let out = bytebuf_new()
     let mut at = 64
     let offs = ints_new()
     i = 0
-    while i < 4 {
+    while i < ncont {
         at = align_up(at, sec_align[i])
         ints_push(offs, at)
         at += bytebuf_len(secs[i])
         i += 1
     }
     let rela_off = ints_new()
-    i = 0
-    while i < 4 {
+    for r in rela_of {
         at = align_up(at, 8)
         ints_push(rela_off, at)
-        at += bytebuf_len(rela[i])
-        i += 1
+        at += bytebuf_len(rela[r])
     }
     at = align_up(at, 8)
     let symoff = at
@@ -279,8 +356,7 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     let shstroff = at
     at += bytebuf_len(shstr)
     let shoff = align_up(at, 8)
-    let nsec = 12
-    // The ELF header.
+    let out = bytebuf_new()
     put8(out, 0x7F)
     put8(out, 0x45)
     put8(out, 0x4C)
@@ -305,17 +381,17 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     put16(out, 0)
     put16(out, 64)
     put16(out, nsec)
-    put16(out, 11)
+    put16(out, shstr_idx)
     i = 0
-    while i < 4 {
+    while i < ncont {
         pad_to(out, offs[i])
         bytebuf_push_bytes(out, bytebuf_to_bytes(secs[i]))
         i += 1
     }
     i = 0
-    while i < 4 {
+    while i < ints_len(rela_of) {
         pad_to(out, rela_off[i])
-        bytebuf_push_bytes(out, bytebuf_to_bytes(rela[i]))
+        bytebuf_push_bytes(out, bytebuf_to_bytes(rela[rela_of[i]]))
         i += 1
     }
     pad_to(out, symoff)
@@ -323,19 +399,124 @@ pub fn write_elf(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     bytebuf_push_bytes(out, bytebuf_to_bytes(strtab))
     bytebuf_push_bytes(out, bytebuf_to_bytes(shstr))
     pad_to(out, shoff)
-    // Section headers: 0 null; 1–4 the contents; 5–7 their relocations (of .text, .data.rel.ro,
-    // .data); 8 .note.GNU-stack; 9 .symtab; 10 .strtab; 11 .shstrtab.
     put_shdr(out, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    put_shdr(out, n_text, 1, 6, offs[0], bytebuf_len(secs[0]), 0, 0, sec_align[0], 0)
-    put_shdr(out, n_rodata, 1, 2, offs[1], bytebuf_len(secs[1]), 0, 0, sec_align[1], 0)
-    put_shdr(out, n_relro, 1, 3, offs[2], bytebuf_len(secs[2]), 0, 0, sec_align[2], 0)
-    put_shdr(out, n_data, 1, 3, offs[3], bytebuf_len(secs[3]), 0, 0, sec_align[3], 0)
-    put_shdr(out, n_rtext, 4, 0x40, rela_off[0], bytebuf_len(rela[0]), 9, 1, 8, 24)
-    put_shdr(out, n_rrelro, 4, 0x40, rela_off[2], bytebuf_len(rela[2]), 9, 3, 8, 24)
-    put_shdr(out, n_rdata, 4, 0x40, rela_off[3], bytebuf_len(rela[3]), 9, 4, 8, 24)
-    put_shdr(out, n_note, 1, 0, offs[3] + bytebuf_len(secs[3]), 0, 0, 0, 1, 0)
-    put_shdr(out, n_symtab, 2, 0, symoff, bytebuf_len(symtab), 10, ints_len(locals) + 1, 8, 24)
+    i = 0
+    while i < ncont {
+        put_shdr(out, name_off[i], types_lit[i], flags_lit[i], offs[i], bytebuf_len(secs[i]), 0, 0,
+                sec_align[i], 0)
+        i += 1
+    }
+    i = 0
+    while i < ints_len(rela_of) {
+        let r = rela_of[i]
+        put_shdr(out, rela_name[i], 4, 0x40, rela_off[i], bytebuf_len(rela[r]), symtab_idx, r + 1, 8, 24)
+        i += 1
+    }
+    put_shdr(out, n_note, 1, 0, symoff, 0, 0, 0, 1, 0)
+    put_shdr(out, n_symtab, 2, 0, symoff, bytebuf_len(symtab), strtab_idx,
+            ints_len(locals) + 1 + nsect_syms, 8, 24)
     put_shdr(out, n_strtab, 3, 0, stroff, bytebuf_len(strtab), 0, 0, 1, 0)
     put_shdr(out, n_shstr, 3, 0, shstroff, bytebuf_len(shstr), 0, 0, 1, 0)
     bytebuf_to_bytes(out)
+}
+
+/// `.eh_frame` (5.2): one CIE, and an FDE per function describing its prologue — the frame
+/// record, then the frame pointer as the CFA's base, then each callee-saved register as it is
+/// saved — so an unwinder can walk through it from any call it makes. The epilogue is not
+/// described: nothing unwinds from there. The pc-relative start of each FDE is returned in
+/// `rel_at`/`rel_sym` for its relocation.
+fn eh_frame(u: Unit, c: Code, x64: Bool, rel_at: Ints, rel_sym: Ints) -> ByteBuf {
+    let b = bytebuf_new()
+    // CIE
+    put32(b, 0)
+    put32(b, 0)
+    put8(b, 1)
+    put8(b, 0x7A)
+    put8(b, 0x52)
+    put8(b, 0)
+    put8(b, 1)
+    put8(b, 0x78)
+    put8(b, if x64 { 16 } else { 30 })
+    put8(b, 1)
+    put8(b, 0x1B)
+    if x64 {
+        // CFA = rsp + 8; the return address at CFA - 8.
+        put8(b, 0x0C)
+        put8(b, 7)
+        put8(b, 8)
+        put8(b, 0x90)
+        put8(b, 1)
+    } else {
+        put8(b, 0x0C)
+        put8(b, 31)
+        put8(b, 0)
+    }
+    pad_to(b, align_up(bytebuf_len(b), 8))
+    let ok = bytebuf_patch_u32_le(b, 0, UInt32(bytebuf_len(b) - 4))
+    let mut s = 0
+    while s < ints_len(c.sym_at) {
+        let start = c.sym_at[s]
+        if start >= 0 {
+            let fde = bytebuf_len(b)
+            put32(b, 0)
+            put32(b, fde + 4)
+            ints_push(rel_at, bytebuf_len(b))
+            ints_push(rel_sym, s)
+            put32(b, 0)
+            put32(b, func_end(c, start) - start)
+            put8(b, 0)
+            let enc = c.fn_enc[s]
+            if x64 {
+                // push rbp; mov rbp, rsp; push each saved register.
+                put8(b, 0x41)
+                put8(b, 0x0E)
+                put8(b, 16)
+                put8(b, 0x86)
+                put8(b, 2)
+                put8(b, 0x43)
+                put8(b, 0x0D)
+                put8(b, 6)
+                let k = (enc >> 16) & 0xFF
+                let mut j = 0
+                while j < k {
+                    // Pushed j-th: the (k - 1 - j)-th of the encoding's list, lowest first.
+                    let code = (enc >> (3 * (k - 1 - j))) & 7
+                    let reg = if code == 1 { 3 } else { 10 + code }
+                    put8(b, 0x40 | (if reg >= 8 { 2 } else { 1 }))
+                    put8(b, 0x80 | reg)
+                    put8(b, 3 + j)
+                    j += 1
+                }
+            } else {
+                // stp x29, x30, [sp, #-16]!; mov x29, sp; stp each saved pair.
+                put8(b, 0x44)
+                put8(b, 0x0E)
+                put8(b, 16)
+                put8(b, 0x9D)
+                put8(b, 2)
+                put8(b, 0x9E)
+                put8(b, 1)
+                put8(b, 0x44)
+                put8(b, 0x0D)
+                put8(b, 29)
+                let mut j = 0
+                let mut p = 0
+                while p < 5 {
+                    if ((enc >> p) & 1) == 1 {
+                        put8(b, 0x44)
+                        put8(b, 0x80 | (19 + 2 * p))
+                        put8(b, 3 + 2 * j)
+                        put8(b, 0x80 | (20 + 2 * p))
+                        put8(b, 4 + 2 * j)
+                        j += 1
+                    }
+                    p += 1
+                }
+            }
+            pad_to(b, align_up(bytebuf_len(b), 8))
+            let ok2 = bytebuf_patch_u32_le(b, fde, UInt32(bytebuf_len(b) - fde - 4))
+        }
+        s += 1
+    }
+    b
 }
