@@ -55,9 +55,15 @@ fn sig_ty(c: Class, conv: Conv, result: bool) -> String {
     }
 }
 
+/// A function's LLVM result: a Nazm function's failure bit beside its result, as a first-class
+/// pair a target returns in two registers (R1, 5b.8), or alone where there is no result.
 fn ret_ty(s: &Sig) -> String {
-    s.ret
-        .map_or_else(|| "void".to_owned(), |c| sig_ty(c, s.conv, true))
+    match (s.ret, s.fails()) {
+        (Some(c), true) => format!("{{{}, i1}}", ty(c)),
+        (None, true) => "i1".to_owned(),
+        (Some(c), false) => sig_ty(c, s.conv, true),
+        (None, false) => "void".to_owned(),
+    }
 }
 
 /// LLVM's constant-string escaping.
@@ -344,6 +350,7 @@ fn function(out: &mut String, m: &Module, f: &Function) {
         classes: vec![Class::I64; f.values as usize],
         temp: 0,
     };
+    let cold = f.cold_blocks(m);
     for (bi, b) in f.blocks.iter().enumerate() {
         let _ = writeln!(out, "{}:", label(bi));
         if bi == 0 {
@@ -399,9 +406,17 @@ fn function(out: &mut String, m: &Module, f: &Function) {
                 then,
                 otherwise,
             } => {
+                // A branch to where only a failure goes is weighted away from it, so the code that
+                // does not fail is laid out straight (R1, 5b.8).
+                let is = |b: &super::ir::B| cold.get(b.index()).copied().unwrap_or(false);
+                let weights = match (is(then), is(otherwise)) {
+                    (true, false) => ", !prof !{!\"branch_weights\", i32 1, i32 2000}",
+                    (false, true) => ", !prof !{!\"branch_weights\", i32 2000, i32 1}",
+                    _ => "",
+                };
                 let _ = writeln!(
                     out,
-                    "  br i1 {}, label %{}, label %{}",
+                    "  br i1 {}, label %{}, label %{}{weights}",
                     p.v(*cond),
                     label(then.index()),
                     label(otherwise.index())
@@ -424,11 +439,33 @@ fn function(out: &mut String, m: &Module, f: &Function) {
                 }
                 let _ = writeln!(out, "  ]");
             }
+            Term::Return(Some(v)) if sig.fails() => {
+                let r = ret_ty(sig);
+                let (a, b) = (p.temp(), p.temp());
+                let _ = writeln!(out, "  {a} = insertvalue {r} undef, {}, 0", p.tv(*v));
+                let _ = writeln!(out, "  {b} = insertvalue {r} {a}, i1 false, 1");
+                let _ = writeln!(out, "  ret {r} {b}");
+            }
+            Term::Return(None) if sig.fails() => {
+                let _ = writeln!(out, "  ret i1 false");
+            }
             Term::Return(Some(v)) => {
                 let _ = writeln!(out, "  ret {}", p.tv(*v));
             }
             Term::Return(None) => {
                 let _ = writeln!(out, "  ret void");
+            }
+            // The failure exit: the bit set, and a zero where the result would be.
+            Term::Fail => {
+                let _ = match sig.ret {
+                    Some(c) => writeln!(
+                        out,
+                        "  ret {} {{ {} zeroinitializer, i1 true }}",
+                        ret_ty(sig),
+                        ty(c)
+                    ),
+                    None => writeln!(out, "  ret i1 true"),
+                };
             }
             Term::Unreachable => {
                 let _ = writeln!(out, "  unreachable");
@@ -707,6 +744,7 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
             dst: Some(d),
             callee,
             args,
+            ..
         } if args.is_empty()
             && m.symbol(*callee)
                 .is_some_and(|s| s.name == "nz.stack_check") =>
@@ -738,51 +776,29 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
                 "  {d} = phi i32 [ {r}, %sc.slow.{n} ], [ 0, %sc.fast.{n} ]"
             );
         }
-        Inst::Call { dst, callee, args } => {
+        Inst::Call {
+            dst,
+            failed,
+            callee,
+            args,
+        } => {
             let s = m.sig(*callee).cloned().unwrap_or(Sig {
                 params: Vec::new(),
                 ret: None,
-                conv: Conv::Nazm,
+                conv: Conv::Plain,
             });
-            let a = args
-                .iter()
-                .zip(s.params.iter().chain(std::iter::repeat(&Class::I64)))
-                .map(|(v, c)| format!("{} {}", sig_ty(*c, s.conv, false), p.v(*v)))
-                .collect::<Vec<_>>()
-                .join(", ");
             let callee = name(m, *callee);
-            match (dst, s.ret) {
-                (Some(d), Some(c)) => {
-                    let d = p.named(*d, c);
-                    let _ = writeln!(out, "  {d} = call {} {callee}({a})", ret_ty(&s));
-                }
-                _ => {
-                    let _ = writeln!(out, "  call {} {callee}({a})", ret_ty(&s));
-                }
-            }
+            call(out, p, &s, &callee, args, *dst, *failed);
         }
         Inst::CallIndirect {
             dst,
+            failed,
             addr,
             sig,
             args,
         } => {
-            let a = args
-                .iter()
-                .zip(sig.params.iter().chain(std::iter::repeat(&Class::I64)))
-                .map(|(v, c)| format!("{} {}", sig_ty(*c, sig.conv, false), p.v(*v)))
-                .collect::<Vec<_>>()
-                .join(", ");
             let f = p.v(*addr);
-            match (dst, sig.ret) {
-                (Some(d), Some(c)) => {
-                    let d = p.named(*d, c);
-                    let _ = writeln!(out, "  {d} = call {} {f}({a})", ret_ty(sig));
-                }
-                _ => {
-                    let _ = writeln!(out, "  call {} {f}({a})", ret_ty(sig));
-                }
-            }
+            call(out, p, sig, &f, args, *dst, *failed);
         }
         Inst::Copy { dst, src, size } => {
             let _ = writeln!(
@@ -801,6 +817,58 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
         }
         Inst::Loc(pos) => {
             let _ = writeln!(out, "  ; nz.loc {} {} {}", pos.file, pos.line, pos.column);
+        }
+    }
+}
+
+/// A call, direct or not: its result, and a Nazm callee's failure bit, each taken out of the pair
+/// it returns (R1, 5b.8).
+fn call(
+    out: &mut String,
+    p: &mut Pr<'_>,
+    s: &Sig,
+    callee: &str,
+    args: &[V],
+    dst: Option<V>,
+    failed: Option<V>,
+) {
+    let a = args
+        .iter()
+        .zip(s.params.iter().chain(std::iter::repeat(&Class::I64)))
+        .map(|(v, c)| format!("{} {}", sig_ty(*c, s.conv, false), p.v(*v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let r = ret_ty(s);
+    match (s.ret, s.fails()) {
+        (Some(c), true) => {
+            let t = p.temp();
+            let _ = writeln!(out, "  {t} = call {r} {callee}({a})");
+            if let Some(d) = dst {
+                let d = p.named(d, c);
+                let _ = writeln!(out, "  {d} = extractvalue {r} {t}, 0");
+            }
+            if let Some(f) = failed {
+                let f = p.named(f, Class::Bit);
+                let _ = writeln!(out, "  {f} = extractvalue {r} {t}, 1");
+            }
+        }
+        (None, true) => match failed {
+            Some(f) => {
+                let f = p.named(f, Class::Bit);
+                let _ = writeln!(out, "  {f} = call {r} {callee}({a})");
+            }
+            None => {
+                let _ = writeln!(out, "  call {r} {callee}({a})");
+            }
+        },
+        (Some(c), false) if dst.is_some() => {
+            if let Some(d) = dst {
+                let d = p.named(d, c);
+                let _ = writeln!(out, "  {d} = call {r} {callee}({a})");
+            }
+        }
+        _ => {
+            let _ = writeln!(out, "  call {r} {callee}({a})");
         }
     }
 }

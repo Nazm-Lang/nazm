@@ -298,6 +298,25 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-14)** · *Speed: the failure bit, and the failure paths laid out cold*
+(`openspec/changes/r1-language-for-the-rewrite`, 5b.8; `docs/architecture.md` §7.106, *The failure
+bit*). A Nazm function returns whether it failed beside its result — `{ T, i1 }` under LLVM, a
+second result under Cranelift, a pair in the LIR oracle — false on every `return`, true on the new
+`fail` exit; a direct or indirect call of one branches on that bit rather than loading the
+thread's failure flag. `nz.fail` still sets the flag and the message, and what calls a Nazm
+function from outside still reads it: a task's trampoline, an export's C entry, the platform entry,
+which calls `main` (an interrupt handler, a board's task or failure hook) through a plain entry
+under its symbol with its old signature, the function itself being `<symbol>.body`. The runtime is
+unchanged (ABI as before); `TRANSLATOR_REVISION` 4. Blocks only a failure reaches are laid out cold
+in both backends (LLVM branch weights, Cranelift cold blocks), without which the bit was slower
+under clang. `fib(35)`, Apple M1 Pro, hyperfine median of 20: LLVM `-O2` 66.8 → 55.4 ms, Cranelift
+106.3 → 83.8 ms. Evidence: `crates/nazm-cli/tests/failure_bit.rs` — a failure 400 frames deep in a
+direct recursion, through a function value, through a trait method's generic instance, and in a
+task, each ending with status 2 and `N0401` at its line with nothing live on the interpreter, LLVM
+`-O0` and `-O2` and Cranelift (and the LIR oracle outside tasks); one inside a C export under both
+backends at both levels; the LIR naming the bit and the plain entry; the validator refusing a bit
+or a `fail` where the convention has none. Seven mutants.
+
 **R1 (2026-10-14)** · *Conveniences for the first program* (`spec.md`, *Conveniences for the
 first program*; 5b.16 and 5b.17, in part). `let x: T = e` checks `e` against `T`; a generic call's
 type parameter its arguments leave open is unified with the type its result is wanted as

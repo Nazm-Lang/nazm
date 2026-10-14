@@ -188,6 +188,17 @@ capability system already proves: its state is plain globals, decided before any
 (`Native::single_thread`), in the units, the entry and the runtime alike (`Needs::single`). A program
 linked against a prebuilt runtime keeps the thread-local state that runtime was built with.
 
+**The failure bit (5b.8, 2026-10-14).** The last cost per call was reading the failure flag after
+it. A Nazm function now returns whether it failed beside its result — a register on arm64 and
+x86_64 — and its Nazm callers branch on that; the flag is still set by `nz.fail` and still read by
+everything that calls a Nazm function from outside (the platform entry, a task's trampoline, an
+export's C entry), so the runtime does not change. A function the platform calls by its symbol keeps
+it as a plain entry with its old signature (`docs/architecture.md` §7.106, *The failure bit*). Alone,
+the bit cost time under clang, which merged the success and failure returns into one block the
+success path jumped to; branch weights that mark the failure paths cold put the return back in line
+(66.8 → 55.4 ms). The second option — a stack check on alternate levels of a self-recursive
+function — was not needed and not done.
+
 **Word frequency, where its time went (5b.9, 2026-10-13).** Profiled, the program spent a quarter of
 its time in the C library's `snprintf`, which parses its format and takes a lock on every call; a
 fifth probing the map, whose probe copied each slot out of the table — a key retained and released

@@ -163,7 +163,8 @@ pub(crate) fn adapter(
     let _ = writeln!(out, "define i64 @nazm_init() #93 {{");
     let _ = writeln!(out, "entry:");
     let _ = writeln!(out, "  %s = alloca [{size} x i8], align 8");
-    let _ = writeln!(out, "  call void @{init}(ptr %s)");
+    // A Nazm function returns its failure bit (R1, 5b.8); the adapter reads the flag instead.
+    let _ = writeln!(out, "  call i1 @{init}(ptr %s)");
     store(&mut out, "i", "%s");
     let _ = writeln!(out, "  ret i64 0");
     let _ = writeln!(out, "}}");
@@ -227,7 +228,7 @@ pub(crate) fn adapter(
         let args: Vec<String> = (0..*n).map(|k| format!("i64 %a{k}")).collect();
         let _ = writeln!(
             out,
-            "  call void @{symbol}(ptr %r, ptr %s, i64 %caller{}{})",
+            "  call i1 @{symbol}(ptr %r, ptr %s, i64 %caller{}{})",
             if args.is_empty() { "" } else { ", " },
             args.join(", ")
         );
@@ -259,8 +260,10 @@ pub(crate) fn adapter(
             payload(ok)
         );
         if let Some(c) = &conserved {
-            let _ = writeln!(out, "  %before = call i64 @{c}(ptr %s)");
-            let _ = writeln!(out, "  %after = call i64 @{c}(ptr %new)");
+            let _ = writeln!(out, "  %beforef = call {{i64, i1}} @{c}(ptr %s)");
+            let _ = writeln!(out, "  %before = extractvalue {{i64, i1}} %beforef, 0");
+            let _ = writeln!(out, "  %afterf = call {{i64, i1}} @{c}(ptr %new)");
+            let _ = writeln!(out, "  %after = extractvalue {{i64, i1}} %afterf, 0");
             let _ = writeln!(out, "  %same = icmp eq i64 %before, %after");
             let _ = writeln!(out, "  br i1 %same, label %write, label %rejected");
             let _ = writeln!(out, "rejected:");

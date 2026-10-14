@@ -8770,6 +8770,34 @@ object key: the unit's LIR digest, `TRANSLATOR_REVISION` 1, Cranelift's version 
 target and the runtime digest (was MIR without positions). LLVM object key: unchanged in form (its
 text and clang), every key moved because the text did. Package, lock and registry: unchanged.
 
+**The failure bit (R1, 5b.8, 2026-10-14).** A caller used to learn that a Nazm callee failed by
+reading the thread's failure flag after every call — a load, on the path of every recursive call.
+Now a Nazm function (`Conv::Nazm`: MIR's functions, and a large frame's entry) returns one more
+thing than its signature says, a bit beside its result: false on every `return`, true on its
+failure exit, the new terminator `fail` (MIR's `Unwind`). A call of one takes the bit
+(`v1, failed v2 = call @f(…)`) and branches on it to the statement's failure edge; a call through
+a function value does the same, since every function value's code is a Nazm function. The flag is
+untouched: `nz.fail` sets it and the message as before, it stays the runtime's record of the
+failure, and everything that is not a Nazm caller reads it — a runtime entry's caller
+(`nz.chan_recv`), a task's trampoline, an export's C entry, the platform entry. The runtime's
+entries and the generated helpers take the new `Conv::Plain`: the internal convention without the
+bit. A function the platform calls by its symbol — `main`, an interrupt handler, a board's task or
+failure hook (`Sig::entered`) — keeps that symbol as a plain entry with its old signature, which
+calls the function under `<symbol>.body` and leaves the bit; every Nazm caller, in any unit, calls
+the `.body`. The LLVM backend returns `{ T, i1 }` (`i1` alone for no result), which arm64 and x86_64
+return in two registers; Cranelift a second result (`enable_multi_ret_implicit_sret` for a pair that
+needs more registers than a target returns in); the oracle a pair. The WebAssembly contract adapter,
+which calls a contract's functions by symbol, takes the pair and reads the flag. Both backends also
+lay out the blocks only a failure reaches as cold (`Function::cold_blocks`: LLVM branch weights,
+Cranelift cold blocks) — a layout hint, nothing a program observes. Measured on `fib(35)` (Apple M1
+Pro, hyperfine median of 20): LLVM `-O2` 66.8 → 55.4 ms, Cranelift 106.3 → 83.8 ms. The bit alone
+was slower under LLVM (82 ms): clang merges the two returns, so the path that did not fail set the
+bit and jumped to the shared return; the weights put that return in line, and with them the bit
+measured 56.2 ms against the flag's 57.6 on this program (hand-built from the two IR texts) — most
+of the gain is the layout, not the register. Versions: semantic epoch, interface and
+runtime ABI unchanged — no runtime entry or signature changed; `TRANSLATOR_REVISION` 4; every
+object key moves because the LIR text does.
+
 ## 7.107 The pool by default, and two regressions attributed — N106, 2026-10-05
 
 Written before the code. Area 13 is PARTIAL with *one OS thread per task by default*: N83 built an

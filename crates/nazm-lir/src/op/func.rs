@@ -230,11 +230,18 @@ fn frame_entry(
     let p = fx.addr_of(d);
     let len = fx.iconst(i64::try_from(n).unwrap_or(0));
     fx.rt("nz.fail", &[p, len]);
-    // The failure exit's stand-in, which the caller never reads (`Terminator::Unwind`).
-    let z = sig.ret.map(|c| fx.iconst_c(c, 0));
-    fx.b.term(Term::Return(z));
+    fx.b.term(Term::Fail);
     fx.b.switch(enter);
-    let r = fx.call(body, args);
+    // The body's failure is the entry's (R1, 5b.8).
+    let (r, failed) = fx.call_failing(body, args);
+    if let Some(failed) = failed {
+        let fails = fx.b.block();
+        let done = fx.b.block();
+        fx.branch(failed, fails, done);
+        fx.b.switch(fails);
+        fx.b.term(Term::Fail);
+        fx.b.switch(done);
+    }
     fx.b.term(Term::Return(r));
     fx.b.finish(sym, "a large frame's entry".to_owned(), None)
 }
@@ -492,8 +499,28 @@ impl<'l, 'a> Fx<'l, 'a> {
     pub(crate) fn call(&mut self, callee: SymId, args: Vec<V>) -> Option<V> {
         let returns = self.lw_sig(callee).and_then(|s| s.ret).is_some();
         let dst = returns.then(|| self.b.value());
-        self.b.push(Inst::Call { dst, callee, args });
+        self.b.push(Inst::Call {
+            dst,
+            failed: None,
+            callee,
+            args,
+        });
         dst
+    }
+
+    /// A call that takes the callee's failure bit, when it is a Nazm function that returns one
+    /// (R1, 5b.8): its result, and the bit.
+    pub(crate) fn call_failing(&mut self, callee: SymId, args: Vec<V>) -> (Option<V>, Option<V>) {
+        let sig = self.lw_sig(callee);
+        let dst = sig.as_ref().and_then(|s| s.ret).map(|_| self.b.value());
+        let failed = sig.as_ref().is_some_and(Sig::fails).then(|| self.b.value());
+        self.b.push(Inst::Call {
+            dst,
+            failed,
+            callee,
+            args,
+        });
+        (dst, failed)
     }
 
     fn lw_sig(&self, s: SymId) -> Option<Sig> {
@@ -714,6 +741,20 @@ impl<'l, 'a> Fx<'l, 'a> {
     pub(crate) fn check_failed(&mut self) {
         let f = self.rt_v("nz.failed_now", &[], Class::I32);
         let failed = self.cmp_imm(Cmp::Ne, f, Class::I32, 0);
+        self.leave_if(failed);
+    }
+
+    /// After a call: leave along the failure edge if the callee's failure bit says it failed
+    /// (R1, 5b.8), or — a callee that returns none — if this thread has failed.
+    pub(crate) fn check_call(&mut self, failed: Option<V>) {
+        match failed {
+            Some(f) => self.leave_if(f),
+            None => self.check_failed(),
+        }
+    }
+
+    /// Leave along the failure edge when `failed` is true.
+    fn leave_if(&mut self, failed: V) {
         let cont = self.b.block();
         match self.unwind {
             Some(u) => self.branch(failed, u, cont),
@@ -1363,13 +1404,16 @@ impl<'l, 'a> Fx<'l, 'a> {
                     vals.push(v);
                 }
                 let result = sig.ret.map(|_| self.b.value());
+                // Every function value's code is a Nazm function's: its failure bit comes back.
+                let failed = sig.fails().then(|| self.b.value());
                 self.b.push(Inst::CallIndirect {
                     dst: result,
+                    failed,
                     addr: code,
                     sig,
                     args: vals,
                 });
-                self.check_failed();
+                self.check_call(failed);
                 if !in_memory(dt) {
                     if let Some(v) = result {
                         self.set(dst, v);
@@ -1499,7 +1543,7 @@ impl<'l, 'a> Fx<'l, 'a> {
             }
             vals.push(v);
         }
-        let result = self.call(fsym, vals);
+        let (result, failed) = self.call_failing(fsym, vals);
         // What C left in `errno`, before anything else can change it (N85).
         if foreign {
             self.rt("nz.errno_save", &[]);
@@ -1507,10 +1551,11 @@ impl<'l, 'a> Fx<'l, 'a> {
         for c in &copies {
             self.rt("free", &[*c]);
         }
-        // A callee that failed returned a stand-in; this is where that is noticed. A foreign
-        // callee cannot fail the Nazm way, so nothing is checked (N42).
+        // A callee that failed returned a stand-in; this is where that is noticed, from the
+        // failure bit it returned beside it (R1, 5b.8). A foreign callee cannot fail the Nazm way,
+        // so nothing is checked (N42).
         if !foreign {
-            self.check_failed();
+            self.check_call(failed);
         }
         if !in_memory(dt) {
             if let Some(v) = result {
@@ -1711,16 +1756,9 @@ impl<'l, 'a> Fx<'l, 'a> {
                     self.b.term(Term::Return(Some(v)));
                 }
             }
-            mir::Terminator::Unwind => {
-                // The failure exit: a stand-in the caller never reads, because its failure
-                // check leaves first.
-                if self.sret.is_some() {
-                    self.b.term(Term::Return(None));
-                } else {
-                    let z = self.iconst_c(class(ret), 0);
-                    self.b.term(Term::Return(Some(z)));
-                }
-            }
+            // The failure exit: the failure bit set, which the caller leaves by before it reads
+            // anything this function wrote (R1, 5b.8).
+            mir::Terminator::Unwind => self.b.term(Term::Fail),
             mir::Terminator::Exit(code) => {
                 let c = self.value(code);
                 // A status is `0..=255`, what every host reports unchanged (v1, Q1-B-05): one
