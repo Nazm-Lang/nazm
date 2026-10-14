@@ -756,6 +756,10 @@ checkout does not inherit it, and no compiler writes to a home directory. The lo
 not part of any identity — the same entry computed anywhere is the same bytes under the
 same name.
 
+*Since R1.5 (D12, §7.113)* one kind of entry does live in the user's home directory: the native
+objects of the runtime and of the standard library, which are the same for every project. A
+project's own check results and objects are still kept here, and nothing else changed.
+
 A module with no durable identity — outside the source root, or given two names by a
 symbolic link — is checked from source every time and publishes nothing. That is N3's
 principle applied rather than re-decided: decline where the two implementations could
@@ -9093,3 +9097,50 @@ architectural and are restated here so that they are found where the laws are:
   close no cycle; arrays are inline and own what their elements own.
 - **Conditions are the build's, never the environment's.** `@cfg` is decided from target, features
   and profiles, which are part of every key that could reuse a result.
+
+## 7.113 The user cache: the runtime and the standard library compiled once per user — R1.5 D12, 2026-10-15
+
+Written before the code (`openspec/changes/r1-5-performance-and-dx/design.md`, D12). Until now every
+project compiled its own runtime and its own copy of every `@std` module it imports, once per
+`.nazm/`: a new project, a second checkout or a scratch directory paid for clang on the runtime
+before it paid for anything of its own. The objects of those units do not depend on the project, so
+they are kept where every project finds them.
+
+**What is settled.**
+
+- **Where.** The user cache is `NAZM_USER_CACHE_DIR` when that is set (empty turns the user cache
+  off, and its units return to the project store); otherwise `NAZM_CACHE_DIR` when that is set, so
+  one variable still moves everything; otherwise `~/Library/Caches/nazm` on macOS and
+  `$XDG_CACHE_HOME/nazm` (an absolute `XDG_CACHE_HOME`), or `~/.cache/nazm`, elsewhere. With no home
+  directory there is no user cache. Its objects are a `native/` store of `nazm.object/1` entries,
+  exactly the project store's format.
+- **What.** The runtime's units — the runtime, the context switch, the platform's initialisation,
+  its stacks, `errno`, its files and the counted heap — and each `@std` or prelude module's own
+  unit. A generic instance is the program's (its type arguments are), and so are the entry and every
+  module of the project's own: those stay in `.nazm/native/`.
+- **The key.** The project store's, unchanged: a digest of the exact bytes handed to the object
+  compiler, the compiler's identity and the configuration it resolves (`-###`), for LLVM text; for a
+  Cranelift object, its backend's key over the unit's LIR, settings, target and runtime ABI. So
+  everything that changes an object's bytes is in its key by construction — the target and its
+  CPU, the optimisation level, the counted heap and its limit (the runtime's text is rewritten, and
+  the heap unit holds the limit), debug information, the services the program reached (the
+  runtime's text is specialised to them, N82), the runtime ABI and the toolchain — and nothing
+  enumerates them. One runtime object per distinct runtime text, target and profile, not one
+  archive: `nazm runtime build`'s archive holds every service, with thread-local failure state, and
+  a build linked to it is a different executable from a build without the cache.
+- **Publication.** As the project store: a uniquely named temporary file, then a rename, so two
+  builds at once both write and one rename lands second with identical bytes. An entry is checked
+  as every entry is before it is a hit; a damaged one is a miss.
+- **Linking.** Copied out of the entry into the build's own working directory, as a project hit
+  is, and linked from there: an entry is a header and then an object, never an object file.
+- **Off.** `--no-cache` uses neither store. A board build (N63) uses neither, as before. Deleting the
+  user cache changes no program: it is derived data, and the next build compiles what it lacks.
+
+**Evidence.** `crates/nazm-cli/tests/user_cache.rs`: a second project reuses the first one's runtime
+and `@std` objects and compiles only its own, its `.nazm/` holds no runtime object, and its
+executable is byte-identical to a `--no-cache` build's; another optimisation level, heap limit or
+target reuses nothing of the other's; deleting the user cache changes nothing; `NAZM_CACHE_DIR`
+alone still moves everything. Every test names a temporary user cache, and `.cargo/config.toml`
+turns the user cache off for every other test, so no test writes to a real one.
+
+**Not settled.** Eviction: like the project store, the user cache grows until it is deleted.

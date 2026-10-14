@@ -16,7 +16,14 @@
 //!
 //! Everything under it is derived data. Deleting the whole directory changes no program's
 //! meaning, and `crates/nazm-cli/tests/` proves it rather than asserting it.
+//!
+//! # The user cache (R1.5, D12)
+//!
+//! The runtime's and the standard library's objects are the same for every project, so they are
+//! kept once per user rather than once per `.nazm/` ([`user_objects`], `docs/architecture.md`
+//! §7.113). Same format, same keys, same rules: derived data, and deleting it changes nothing.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use nazm_cache::{ObjectStore, Store};
@@ -44,4 +51,93 @@ pub(crate) fn checks(source_root: &Path) -> Store {
 /// Where this project's objects live.
 pub(crate) fn objects(source_root: &Path) -> ObjectStore {
     ObjectStore::under(&root(source_root))
+}
+
+/// The environment variable that names the user cache on its own (R1.5, D12): empty turns it off,
+/// and its units go back to the project store.
+pub(crate) const USER_CACHE_DIR: &str = "NAZM_USER_CACHE_DIR";
+
+/// The user cache's root, or `None` when there is none.
+pub(crate) fn user_root() -> Option<PathBuf> {
+    user_root_from(&|name| std::env::var_os(name), std::env::consts::OS)
+}
+
+/// [`user_root`], from these variables on this operating system: `NAZM_USER_CACHE_DIR`, then
+/// `NAZM_CACHE_DIR` (one variable still moves everything), then the platform's own cache directory.
+fn user_root_from(var: &dyn Fn(&str) -> Option<OsString>, os: &str) -> Option<PathBuf> {
+    if let Some(dir) = var(USER_CACHE_DIR) {
+        return (!dir.is_empty()).then(|| PathBuf::from(dir));
+    }
+    if let Some(dir) = var(CACHE_DIR).filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    let home = var("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    if os == "macos" {
+        return home.map(|h| h.join("Library").join("Caches").join("nazm"));
+    }
+    if let Some(xdg) = var("XDG_CACHE_HOME").map(PathBuf::from) {
+        if xdg.is_absolute() {
+            return Some(xdg.join("nazm"));
+        }
+    }
+    home.map(|h| h.join(".cache").join("nazm"))
+}
+
+/// Where the runtime's and the standard library's objects live, every project's alike.
+pub(crate) fn user_objects() -> Option<ObjectStore> {
+    user_root().map(|root| ObjectStore::under(&root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    #[test]
+    fn the_user_cache_is_the_platform_s_unless_a_variable_names_another() {
+        let home = [("HOME", "/h")];
+        assert_eq!(
+            user_root_from(&with(&home), "macos"),
+            Some(PathBuf::from("/h/Library/Caches/nazm"))
+        );
+        assert_eq!(
+            user_root_from(&with(&home), "linux"),
+            Some(PathBuf::from("/h/.cache/nazm"))
+        );
+        let xdg = [("HOME", "/h"), ("XDG_CACHE_HOME", "/x")];
+        assert_eq!(
+            user_root_from(&with(&xdg), "linux"),
+            Some(PathBuf::from("/x/nazm"))
+        );
+        // A relative XDG_CACHE_HOME is invalid by its specification, and ignored.
+        let relative = [("HOME", "/h"), ("XDG_CACHE_HOME", "x")];
+        assert_eq!(
+            user_root_from(&with(&relative), "linux"),
+            Some(PathBuf::from("/h/.cache/nazm"))
+        );
+        let moved = [("HOME", "/h"), ("NAZM_CACHE_DIR", "/c")];
+        assert_eq!(
+            user_root_from(&with(&moved), "macos"),
+            Some(PathBuf::from("/c"))
+        );
+        let named = [
+            ("HOME", "/h"),
+            ("NAZM_CACHE_DIR", "/c"),
+            ("NAZM_USER_CACHE_DIR", "/u"),
+        ];
+        assert_eq!(
+            user_root_from(&with(&named), "macos"),
+            Some(PathBuf::from("/u"))
+        );
+        let off = [("HOME", "/h"), ("NAZM_USER_CACHE_DIR", "")];
+        assert_eq!(user_root_from(&with(&off), "macos"), None);
+        assert_eq!(user_root_from(&with(&[]), "linux"), None);
+    }
 }

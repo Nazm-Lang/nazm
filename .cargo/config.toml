@@ -10,3 +10,7 @@ lint = "clippy --workspace --all-targets --locked -- -D warnings"
 # status — removes the variable for its own run. `crates/nazm-runtime/src/core.rs`, `RESULT_VARIABLE`.
 [env]
 NAZM_RESULT_REPORT = "1"
+# The user cache (R1.5, D12) is off for every test and program cargo starts, so no test writes to the
+# real `~/Library/Caches/nazm` or `~/.cache/nazm`; a test of the user cache names a temporary one.
+# `crates/nazm-cli/src/derived.rs`, `USER_CACHE_DIR`.
+NAZM_USER_CACHE_DIR = ""

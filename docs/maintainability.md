@@ -332,7 +332,7 @@ substring, so a commented copy of the line would pass — WATCH.
 ## 16. Configuration
 
 - **No Cargo features** anywhere, and no `cfg(feature)`.
-- **Environment variables the binaries read:** `NAZM_CACHE_DIR`, `NAZM_TEST_DRIVER` (a test seam in
+- **Environment variables the binaries read:** `NAZM_CACHE_DIR`, `NAZM_USER_CACHE_DIR` (R1.5, D12), `NAZM_TEST_DRIVER` (a test seam in
   the shipped binary), `NAZM_MEMORY_REPORT`, `NAZM_SCHED_REPORT`, and in generated programs
   `NAZM_SCHEDULER`, `NAZM_WORKERS`, `NAZM_TASK_STACK`; clang receives only an allowlist
   (`nazm-cli/src/backend.rs`). The harness reads `NAZM_BENCH_DIR` (undocumented outside the code),

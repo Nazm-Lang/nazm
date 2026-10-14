@@ -1,5 +1,6 @@
 ## 1. Build time
-- [ ] 1.1 Precompiled runtime object per target, cached standard-library objects
+- [x] 1.1 Precompiled runtime object per target, cached standard-library objects (design D12)
+      — 2026-10-15: the user cache, architecture §7.113, `tests/user_cache.rs`, three mutants
 - [ ] 1.2 The comparison reports cached and uncached builds
 
 ## 2. Running
