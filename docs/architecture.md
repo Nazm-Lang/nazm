@@ -20,7 +20,7 @@ today, the matrix decides.*
 | Syntax | `nazm-syntax` | lexer, error-tolerant parser, the lossless CST and the AST |
 | Meaning | `nazm-sema`, `nazm-core` | one resolution, types, generics, traits, effects, capabilities, provenance, contracts — the checker, and the interpreter `nazm run` uses |
 | Modules and reuse | `nazm-iface`, `nazm-cache`, `nazm-package` | persisted interfaces (`nazm.interface/13`), keyed semantic and object caches, packages, locks and local registries |
-| Core IR | `nazm-cir` | what each position of a checked program means, decided once (`nazm.core-ir/2`) |
+| Core IR | `nazm-cir` | what each position of a checked program means, decided once (`nazm.core-ir/3`) |
 | MIR | `nazm-mir` | every copy, move and drop explicit and validated; monomorphisation for the native path |
 | LIR | `nazm-lir` | the instruction-level IR both native backends translate (`nazm.lir/2`) |
 | Code generation | `nazm-lir` (LLVM text, compiled by `clang`), `nazm-codegen-clif` (Cranelift, in process) | machine code; neither backend falls back to the other |
@@ -4653,6 +4653,22 @@ parameters first, then Core IR's own temporaries. A loop is a `LoopId`, a consta
 both per function. None is a `DefKey`: those are durable names for definitions, and an IR entity
 that lives for one compilation does not get one. The printed form names definitions and types by
 their durable keys, so it reads the same from any checkout.
+
+**The printed form, `nazm.core-ir/3` (R3, 2026-10-15).** `/3` prints what a lowering written
+outside this workspace (R3's `toolchain/pipeline/`) needs and could only recover from uses under
+`/2`. Every `/2` field stays where it was. A function type is spelled `fn(Int) -> Str ! { io }`,
+with an effect parameter written `$effects`, and an array type `[Int; 4]`. `/2` wrote `?` for
+both, and the digests still do, so no digest moved. Each function gains `pub`, `closure`,
+`captures` (the locals holding them) and `attributes`: `export`, `section`, `interrupt`, `task`
+(`priority`, `period`) and `on_failure`. At the root, beside `functions`, are `modules` in load
+order, each with its name, `root`, `prelude` and `imports`, and `types`. `types.records` and
+`types.enums` are the checker's tables in its id order, generic definitions and applied instances
+alike. Each entry has its `type` (the spelling used everywhere else), `display` (as a message
+shows it), `definition`, `module`, `pub`, `type_args`, its fields or variants with their names
+and types in declaration order, and `canonical` orders. Then come `statics`, each with its key,
+`type`, `cell`, starting `value` and `section`; `impls`, each impl's trait, `self` type and, per
+method, the function a call reaches, its `type_args` and whether it is the trait's `default`; and
+`derived_hash`. Every one of these is a fact the checker settled, printed rather than decided.
 
 **Why regions and not basic blocks.** Both consumers are structured: the interpreter walks a tree,
 and LIR is a structured tree the emitter turns into LLVM blocks, placing releases by region. A CFG

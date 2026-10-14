@@ -615,7 +615,7 @@ fn the_printed_form_is_the_same_every_time() {
     for _ in 0..5 {
         assert_eq!(printed(&src, true), a);
     }
-    assert!(a.starts_with("{\"schema\":\"nazm.core-ir/2\""), "{a}");
+    assert!(a.starts_with("{\"schema\":\"nazm.core-ir/3\""), "{a}");
 }
 
 #[test]

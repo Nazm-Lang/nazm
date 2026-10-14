@@ -119,10 +119,10 @@ fn plan_sites(c: Cir, n: Int, args: Strs, seen: HashMap[Str, Int], plan: Vec[Ins
         if g >= 0 && vec_get(c.fns, g).type_params > 0 {
             target = g
             let ta = kid(c, n, "type_args")
-            for i in 0..count(c, ta) { strs_push(targs, subst(str_of(c, at(c, ta, i)), args)) }
+            for i in 0..count(c, ta) { strs_push(targs, subst(tof(c, at(c, ta, i)), args)) }
         }
     } else if o == "call_trait" {
-        let concrete = subst(sval(c, n, "self"), args)
+        let concrete = subst(tval(c, n, "self"), args)
         if !open(concrete) {
             let t = method_target(c, sval(c, n, "method"), concrete)
             if t.index >= 0 && strs_len(t.args) > 0 {

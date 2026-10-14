@@ -2009,7 +2009,7 @@ exist.
 ### 8. Core IR — VERIFIED (v1)
 
 **Evidence** · N39 (2026-09-30). `crates/nazm-cir` is the representation, its invariants
-(`verify.rs`), its printed form `nazm.core-ir/2` since N78, `/1` before (`print.rs`, `nazm core-ir`) and each
+(`verify.rs`), its printed form `nazm.core-ir/3` since R3, `/2` since N78, `/1` before (`print.rs`, `nazm core-ir`) and each
 function's digests (`digest.rs`); `crates/nazm-core/src/lower.rs` is **the one lowering** from a
 checked program, private to `nazm-core` and reached only after checking succeeded;
 `crates/nazm-core/src/eval/` runs Core IR and nothing else; `crates/nazm-lir/src/lower.rs`

@@ -1,5 +1,9 @@
-//! The deterministic printed form, `nazm.core-ir/1`: JSON, for tests, tools and a compiler
-//! developer asking what a function became.
+//! The deterministic printed form, `nazm.core-ir/3`: JSON, for tests, tools and a compiler
+//! developer asking what a function became — and, since `/3`, for a lowering written outside
+//! this workspace (R3's `toolchain/pipeline/`), which needs every fact a later stage reads: the
+//! type table, the modules, the statics, the impl table, and each function's visibility,
+//! closure captures and attributes. Each is printed as the checker settled it; printing decides
+//! nothing.
 //!
 //! Not user-facing syntax and not a stable interchange format: the version names what this
 //! build writes, and no reader outside the workspace is promised a future one reads the same.
@@ -11,8 +15,9 @@
 //! values being printed are session-local, and a derive would print their numbers.
 
 use nazm_sema::module::ModuleGraph;
-use nazm_sema::resolve::Resolution;
-use nazm_sema::EffectSet;
+use nazm_sema::numeric::ConstValue;
+use nazm_sema::resolve::{Resolution, StaticValue};
+use nazm_sema::{EffectSet, EnumId, RecordId, Type};
 use nazm_span::Span;
 
 use crate::digest::digests;
@@ -42,12 +47,15 @@ impl Default for Options {
     }
 }
 
-/// `program` as `nazm.core-ir/1` text.
+/// `program` as `nazm.core-ir/3` text.
 #[must_use]
 pub fn print(program: &Program, res: &Resolution, graph: &ModuleGraph, options: Options) -> String {
-    let names = Names::new(res, graph);
+    // Spelled: a function or array type is written out, where the digests write `?`.
+    let names = Names::spelled(res, graph);
     let p = Printer {
         names,
+        res,
+        graph,
         spans: options.spans,
     };
     let sums = digests(program, res, graph);
@@ -64,6 +72,23 @@ pub fn print(program: &Program, res: &Resolution, graph: &ModuleGraph, options: 
             program.entry.map_or(J::Null, |e| J::Str(names.function(e))),
         ),
         ("functions", J::Arr(functions)),
+        ("modules", p.modules()),
+        (
+            "types",
+            J::Obj(vec![("records", p.records()), ("enums", p.enums())]),
+        ),
+        ("statics", p.statics(program)),
+        ("impls", p.impls(program)),
+        (
+            "derived_hash",
+            program.derived_hash.map_or(J::Null, |d| {
+                J::Obj(vec![
+                    ("trait", J::Str(names.trait_key(d.trait_id))),
+                    ("hash", J::Str(names.trait_method(d.trait_id, d.hash))),
+                    ("same", J::Str(names.trait_method(d.trait_id, d.same))),
+                ])
+            }),
+        ),
     ]);
     let mut out = String::new();
     root.write(&mut out, if options.compact { None } else { Some(0) });
@@ -164,7 +189,17 @@ fn quote(out: &mut String, s: &str) {
 
 struct Printer<'a> {
     names: Names<'a>,
+    res: &'a Resolution,
+    graph: &'a ModuleGraph,
     spans: bool,
+}
+
+fn index(i: usize) -> J {
+    J::uint(u64::try_from(i).unwrap_or(u64::MAX))
+}
+
+fn opt_str(s: Option<&String>) -> J {
+    s.map_or(J::Null, |s| J::Str(s.clone()))
 }
 
 fn effects(set: EffectSet) -> J {
@@ -279,6 +314,37 @@ impl Printer<'_> {
             ("locals", J::Arr(locals)),
             ("consts", J::Arr(consts)),
             ("loops", J::uint(f.loops)),
+            (
+                "pub",
+                J::Bool(
+                    self.res
+                        .function(f.def)
+                        .is_some_and(|d| d.visibility.is_exported()),
+                ),
+            ),
+            ("closure", J::Bool(f.closure)),
+            (
+                "captures",
+                J::Arr(f.captures.iter().map(|l| J::uint(l.0)).collect()),
+            ),
+            (
+                "attributes",
+                J::Obj(vec![
+                    ("export", opt_str(f.export.as_ref())),
+                    ("section", opt_str(f.section.as_ref())),
+                    ("interrupt", opt_str(f.interrupt.as_ref())),
+                    (
+                        "task",
+                        f.task.map_or(J::Null, |(priority, period)| {
+                            J::Obj(vec![
+                                ("priority", J::uint(priority)),
+                                ("period", J::uint(period)),
+                            ])
+                        }),
+                    ),
+                    ("on_failure", J::Bool(f.on_failure)),
+                ]),
+            ),
         ];
         self.at(&mut o, f.span);
         match &f.foreign {
@@ -287,6 +353,236 @@ impl Printer<'_> {
             None => o.push(("body", self.block(&f.body))),
         }
         J::Obj(o)
+    }
+
+    /// Every module, in load order: its name, whether it is the root or the prelude, and the
+    /// modules it imports.
+    fn modules(&self) -> J {
+        let root = self.graph.root();
+        let prelude = self.graph.prelude();
+        J::Arr(
+            self.graph
+                .ids()
+                .map(|m| {
+                    J::Obj(vec![
+                        ("name", J::Str(self.names.module(m))),
+                        ("root", J::Bool(m == root)),
+                        ("prelude", J::Bool(Some(m) == prelude)),
+                        (
+                            "imports",
+                            J::Arr(
+                                self.graph
+                                    .imports(m)
+                                    .iter()
+                                    .map(|d| J::Str(self.names.module(d.on)))
+                                    .collect(),
+                            ),
+                        ),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    fn fields(&self, fields: &[nazm_sema::FieldDef]) -> J {
+        J::Arr(
+            fields
+                .iter()
+                .map(|f| {
+                    J::Obj(vec![
+                        ("name", J::Str(f.name.clone())),
+                        ("type", J::Str(self.names.ty(f.ty))),
+                    ])
+                })
+                .collect(),
+        )
+    }
+
+    fn order(order: &[u32]) -> J {
+        J::Arr(order.iter().map(|i| J::uint(*i)).collect())
+    }
+
+    /// What a type is called: its spelling everywhere else in this document, the name a message
+    /// shows, the definition it applies and its arguments.
+    fn head(
+        &self,
+        t: Type,
+        definition: Type,
+        module: nazm_sema::ModuleId,
+        public: bool,
+    ) -> Vec<(&'static str, J)> {
+        vec![
+            ("type", J::Str(self.names.ty(t))),
+            ("display", J::Str(self.res.types().show(t))),
+            ("definition", J::Str(self.names.ty(definition))),
+            ("module", J::Str(self.names.module(module))),
+            ("pub", J::Bool(public)),
+            ("type_args", self.types(&self.res.types().type_args(t))),
+        ]
+    }
+
+    /// Every record the checker made, definitions and applied instances alike, in its id order.
+    fn records(&self) -> J {
+        J::Arr(
+            self.res
+                .records()
+                .all()
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let t = Type::Record(RecordId::from_index(i));
+                    let definition = d
+                        .instance
+                        .as_ref()
+                        .map_or(t, |inst| Type::Record(inst.template));
+                    let mut o = vec![("id", index(i))];
+                    o.extend(self.head(t, definition, d.module, d.visibility.is_exported()));
+                    o.push(("fields", self.fields(&d.fields)));
+                    o.push(("canonical", Self::order(&d.layout)));
+                    J::Obj(o)
+                })
+                .collect(),
+        )
+    }
+
+    /// Every enum the checker made, in its id order.
+    fn enums(&self) -> J {
+        J::Arr(
+            self.res
+                .enums()
+                .all()
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let t = Type::Enum(EnumId::from_index(i));
+                    let definition = d
+                        .instance
+                        .as_ref()
+                        .map_or(t, |inst| Type::Enum(inst.template));
+                    let mut o = vec![("id", index(i))];
+                    o.extend(self.head(t, definition, d.module, d.visibility.is_exported()));
+                    o.push((
+                        "variants",
+                        J::Arr(
+                            d.variants
+                                .iter()
+                                .map(|v| {
+                                    J::Obj(vec![
+                                        ("name", J::Str(v.name.clone())),
+                                        ("fields", self.fields(&v.fields)),
+                                        ("canonical", Self::order(&v.layout)),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                    ));
+                    o.push(("canonical", Self::order(&d.order)));
+                    J::Obj(o)
+                })
+                .collect(),
+        )
+    }
+
+    fn value(&self, v: &ConstValue) -> J {
+        match v {
+            ConstValue::Num(n) => J::Str(nazm_sema::numeric::to_str(*n)),
+            ConstValue::Bool(b) => J::Bool(*b),
+            ConstValue::Str(bytes) => J::Str(text(bytes)),
+            ConstValue::Record { ty, fields } => J::Obj(vec![
+                ("type", J::Str(self.names.ty(*ty))),
+                (
+                    "fields",
+                    J::Arr(fields.iter().map(|f| self.value(f)).collect()),
+                ),
+            ]),
+            ConstValue::Variant {
+                ty,
+                variant,
+                fields,
+            } => J::Obj(vec![
+                ("type", J::Str(self.names.ty(*ty))),
+                ("variant", J::uint(*variant)),
+                (
+                    "fields",
+                    J::Arr(fields.iter().map(|f| self.value(f)).collect()),
+                ),
+            ]),
+            ConstValue::Array { ty, elems } => J::Obj(vec![
+                ("type", J::Str(self.names.ty(*ty))),
+                (
+                    "elems",
+                    J::Arr(elems.iter().map(|e| self.value(e)).collect()),
+                ),
+            ]),
+        }
+    }
+
+    /// Every static, as the checker recorded it: a read-only value, or an `Atomic`'s cell and
+    /// what it starts as.
+    fn statics(&self, program: &Program) -> J {
+        J::Arr(
+            program
+                .statics
+                .iter()
+                .map(|s| {
+                    let (ty, cell, value) = match &s.value {
+                        StaticValue::Cell(n) => ("Atomic".to_owned(), true, J::Int(*n)),
+                        StaticValue::Value(v) => (self.names.ty(v.ty()), false, self.value(v)),
+                    };
+                    let mut o = vec![
+                        ("def", J::Str(self.names.static_key(s.module, &s.name))),
+                        ("module", J::Str(self.names.module(s.module))),
+                        ("name", J::Str(s.name.clone())),
+                        ("type", J::Str(ty)),
+                        ("cell", J::Bool(cell)),
+                        ("value", value),
+                        ("section", opt_str(s.section.as_ref())),
+                    ];
+                    self.at(&mut o, s.at);
+                    J::Obj(o)
+                })
+                .collect(),
+        )
+    }
+
+    /// The impl table: each impl Core IR resolves calls through a bound against, with each
+    /// method's function and the type arguments a call passes it — a default body's included.
+    fn impls(&self, program: &Program) -> J {
+        J::Arr(
+            program
+                .impls
+                .iter()
+                .map(|row| {
+                    let methods: Vec<J> = row
+                        .methods
+                        .iter()
+                        .enumerate()
+                        .map(|(m, f)| {
+                            let m = u32::try_from(m).unwrap_or(u32::MAX);
+                            let args = self
+                                .res
+                                .method_target(row.trait_id, row.self_ty, m)
+                                .map(|(_, a)| a)
+                                .unwrap_or_default();
+                            J::Obj(vec![
+                                ("method", J::Str(self.names.trait_method(row.trait_id, m))),
+                                ("function", J::Str(self.names.function(*f))),
+                                ("type_args", self.types(&args)),
+                                (
+                                    "default",
+                                    J::Bool(self.res.default_method(row.trait_id, m) == Some(*f)),
+                                ),
+                            ])
+                        })
+                        .collect();
+                    J::Obj(vec![
+                        ("trait", J::Str(self.names.trait_key(row.trait_id))),
+                        ("self", J::Str(self.names.ty(row.self_ty))),
+                        ("methods", J::Arr(methods)),
+                    ])
+                })
+                .collect(),
+        )
     }
 
     fn block(&self, b: &Block) -> J {
