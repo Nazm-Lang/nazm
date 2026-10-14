@@ -556,7 +556,10 @@ construction = [ qualifier ] , IDENT , [ type_arguments ] , "(" , initialisers ,
 initialisers = initialiser , { "," , initialiser } , [ "," ] ;
 
 (* @example struct P { x: Int, } fn main() -> Int { P(x: 1 + 1).x } *)
-initialiser = IDENT , ":" , expression ;
+(* A field may be given by position (R1.5, D4): every field of the record or variant, in the
+   order declared, none named — `Point(1, 2)`, `Shape.Rect(3, 4)`. *)
+(* @example struct P { x: Int, y: Int, } fn main() -> Int { P(1, 2).y } *)
+initialiser = IDENT , ":" , expression | expression ;
 
 (* Always qualified by the enum, and always parenthesised — including for a variant with
  * no payload, because `E.V` alone is exactly the shape of a field projection. Told apart
@@ -627,7 +630,11 @@ tuple_pattern = "(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")
    prelude's variants. *)
 (* @example enum C { R, G, } fn main() -> Int { match C.G { C.R => 1, C.G => 2, } } *)
 (* @example fn main() -> Int { match Some(3) { Some(n) => n, None => 0, } } *)
+(* A capitalised name alone (R1.5, D4) is a variant of the value's own enum, written without it:
+   `Circle(r)`, `Dot`. *)
+(* @example enum S { C(r: Int), D, } fn area(s: S) -> Int { match s { C(r) => r, D => 0, } } fn main() -> Int { area(S.C(r: 2)) } *)
 variant_pattern = [ qualifier ] , IDENT , "." , IDENT , [ "(" , [ pattern_fields ] , ")" ]
+                | IDENT , [ "(" , [ pattern_fields ] , ")" ]
                 | ( "Some" | "Ok" | "Err" ) , "(" , pattern , ")"
                 | "None" ;
 
@@ -638,4 +645,4 @@ pattern_fields = pattern_field , { "," , pattern_field } , [ "," ] ;
  * the value; it does not mean the field is absent and does not mean it is not released.
  *)
 (* @example enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: _) => 0, } } *)
-pattern_field = IDENT , ":" , pattern ;
+pattern_field = IDENT , ":" , pattern | pattern ;

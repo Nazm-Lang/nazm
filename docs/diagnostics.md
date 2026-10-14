@@ -227,6 +227,11 @@ program the checker accepts, with something its author should know: `nazm check`
 report it and succeed, and refuse under `--deny-warnings`; the language service publishes it at
 the warning severity. One code appeared, `N0632`, the first warning. No schema's major moved.
 
+**Applied to R1.5, D4 (positional fields, variants without their enum).** One code appeared,
+compatibly: `N0636`, a variant name two enums in scope share. `N0334` gained two cases — fields
+given both by position and by name, and a positional list that does not give every field. No
+schema moved.
+
 **Applied to R1.5, D3 (short closures).** One code appeared, compatibly: `N0635`, a short
 closure's parameter with nothing to take its type from. No schema moved.
 
@@ -617,6 +622,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0631` | `DEFER_LEAVES` | A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b, `docs/spec.md`, *`defer`*) |
 | `N0632` | `WILDCARD_COVERS_VARIANTS` | A **warning**: a `_` or a name in a `match` of an enum covers variants no arm names (R1b, `docs/spec.md`, *Patterns*) |
 | `N0635` | `CLOSURE_PARAMETER_UNTYPED` | A short closure's parameter without a type where no function type is expected to take it from (R1.5, `docs/spec.md`, *Shorter forms*) |
+| `N0636` | `VARIANT_AMBIGUOUS` | A variant written without its enum where two enums in scope have a variant of that name (R1.5, `docs/spec.md`, *Shorter forms*) |
 | `N0634` | `RESULT_TYPE_NOT_INFERRED` | A function written `= e` with no result type that must write one: a `pub` function, a method, or one whose body reaches itself (R1.5, `docs/spec.md`, *Shorter forms*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->

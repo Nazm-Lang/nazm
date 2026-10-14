@@ -519,6 +519,26 @@ impl Evaluator<'_, '_> {
         inits: &[nazm_syntax::FieldInit],
         at: nazm_span::Span,
     ) -> Result<Vec<ConstValue>, Refused> {
+        // Fields given by position (R1.5, D4): in declaration order, every one of them.
+        if !inits.is_empty() && inits.iter().all(|i| i.name.is_empty()) {
+            if inits.len() != want.len() {
+                self.errors.push(Diagnostic::error(
+                    codes::TYPE_MISMATCH,
+                    at,
+                    format!(
+                        "this constant's construction gives {} of its {} fields by position",
+                        inits.len(),
+                        want.len()
+                    ),
+                ));
+                return Err(Refused);
+            }
+            return inits
+                .iter()
+                .zip(want)
+                .map(|(i, (_, t))| self.agg(&i.value, *t))
+                .collect();
+        }
         if let Some(extra) = inits
             .iter()
             .find(|i| !want.iter().any(|(n, _)| *n == i.name))

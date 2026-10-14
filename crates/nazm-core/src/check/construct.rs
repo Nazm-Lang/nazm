@@ -5,6 +5,79 @@ use super::layout::opaque_refused;
 use super::*;
 
 impl Checker<'_> {
+    /// The enums in scope, by the name this module writes them under, with a variant named
+    /// `variant` (R1.5, D4) — each enum once, the prelude's included, in name order.
+    pub(super) fn variant_owners(&self, variant: &str) -> Vec<(String, EnumId)> {
+        let mut out: Vec<(String, EnumId)> = Vec::new();
+        for (name, t) in &self.types.names {
+            if let Type::Enum(id) = t {
+                let has = self
+                    .res
+                    .enums()
+                    .get(*id)
+                    .is_some_and(|d| d.variant(variant).is_some());
+                if has && !out.iter().any(|(_, e)| e == id) && !name.contains("::") {
+                    out.push((name.clone(), *id));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Positional fields (R1.5, D4) named in declaration order: `Circle(2)` is `Circle(r: 2)`.
+    /// `Ok(None)` where every field is named, which is checked as written; `Err` once reported. Positional and named
+    /// fields are not mixed, and a positional list gives every field (`N0334` otherwise).
+    fn positional_named(
+        &mut self,
+        fields: &[FieldInit],
+        declared: Option<&[String]>,
+        what: &str,
+        span: Span,
+    ) -> Result<Option<Vec<FieldInit>>, ()> {
+        if !fields.iter().any(|f| f.name.is_empty()) {
+            return Ok(None);
+        }
+        let Some(declared) = declared else {
+            return Ok(None);
+        };
+        if fields.iter().any(|f| !f.name.is_empty()) {
+            self.errors.push(
+                Diagnostic::error(
+                    codes::MISSING_FIELD,
+                    span,
+                    format!("`{what}`'s fields are given both by position and by name"),
+                )
+                .help("give every field by position, in the order declared, or every one by name"),
+            );
+            return Err(());
+        }
+        if fields.len() != declared.len() {
+            self.errors.push(Diagnostic::error(
+                codes::MISSING_FIELD,
+                span,
+                format!(
+                    "`{what}` has {} field{}, and {} {} given by position",
+                    declared.len(),
+                    if declared.len() == 1 { "" } else { "s" },
+                    fields.len(),
+                    if fields.len() == 1 { "is" } else { "are" }
+                ),
+            ));
+            return Err(());
+        }
+        Ok(Some(
+            fields
+                .iter()
+                .zip(declared)
+                .map(|(f, name)| FieldInit {
+                    name: name.clone(),
+                    ..f.clone()
+                })
+                .collect(),
+        ))
+    }
+
     /// Check a record construction and return the record it builds.
     ///
     /// Initialisers are evaluated **in the order written**, which `docs/spec.md` fixes
@@ -17,7 +90,50 @@ impl Checker<'_> {
         type_args: Option<&[TypeName]>,
         fields: &[FieldInit],
         span: Span,
+        expected: Option<Type>,
     ) -> Option<Type> {
+        // `Circle(2)` (R1.5, D4): a name that is no record here but is the variant of exactly
+        // one enum in scope is that variant, built as `Shape.Circle(2)` is.
+        if type_args.is_none() && !matches!(self.quiet_type(ty, ty_span), Type::Record(_)) {
+            match self.variant_owners(ty).as_slice() {
+                [(owner, _)] => {
+                    let owner = owner.clone();
+                    return self
+                        .check_variant(&owner, ty_span, None, ty, ty_span, fields, span, expected);
+                }
+                [(a, _), (b, _), ..] => {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::VARIANT_AMBIGUOUS,
+                            ty_span,
+                            format!("`{ty}` is a variant of both `{a}` and `{b}`"),
+                        )
+                        .help(format!("write which: `{a}.{ty}(…)` or `{b}.{ty}(…)`")),
+                    );
+                    for f in fields {
+                        self.check_expr(&f.value, None);
+                    }
+                    return None;
+                }
+                [] => {}
+            }
+        }
+        let declared = match self.quiet_type(ty, ty_span) {
+            Type::Record(id) => self
+                .res
+                .records()
+                .get(id)
+                .map(|d| d.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>()),
+            _ => None,
+        };
+        let Ok(named) = self.positional_named(fields, declared.as_deref(), ty, span) else {
+            // Reported: the values are still checked, and nothing more is said about them.
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return None;
+        };
+        let fields: &[FieldInit] = named.as_deref().unwrap_or(fields);
         let applied = self
             .resolve_record(ty, ty_span)
             .and_then(|def| self.applied(Type::Record(def), type_args, ty_span));
@@ -155,6 +271,21 @@ impl Checker<'_> {
         span: Span,
         expected: Option<Type>,
     ) -> Option<Type> {
+        let declared = match self.quiet_type(ty, ty_span) {
+            Type::Enum(id) => self.res.enums().get(id).and_then(|d| {
+                d.variant(variant)
+                    .map(|(_, v)| v.fields.iter().map(|f| f.name.clone()).collect::<Vec<_>>())
+            }),
+            _ => None,
+        };
+        let Ok(named) = self.positional_named(fields, declared.as_deref(), variant, span) else {
+            // Reported: the values are still checked, and nothing more is said about them.
+            for f in fields {
+                self.check_expr(&f.value, None);
+            }
+            return None;
+        };
+        let fields: &[FieldInit] = named.as_deref().unwrap_or(fields);
         // A payload value checked while inferring the enum's arguments, so it is checked once.
         let mut pre: Vec<Option<Type>> = vec![None; fields.len()];
         let applied = if self.refused(ty) {

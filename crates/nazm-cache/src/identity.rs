@@ -367,7 +367,10 @@ use crate::digest::{self, Framed};
 /// `78` — R1.5, 2026-10-15. A short closure, `|a, b| a < b` and `|| e`, moved from refused (a
 /// syntax error) to accepted, its types taken from the function type expected (D3), with `N0635`
 /// for a parameter with nothing to take its type from.
-pub const SEMANTIC_EPOCH: u32 = 78;
+/// `79` — R1.5, 2026-10-15. Fields given by position — `Point(1, 2)`, `Shape.Rect(3, 4)`, `Rect(w, h)`
+/// in a pattern — and a variant written without its enum, `Circle(2)`, `Dot`, moved from refused to
+/// accepted (D4), with `N0636` for a variant name two enums in scope share.
+pub const SEMANTIC_EPOCH: u32 = 79;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -394,6 +397,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "CAPTURE_CYCLE",
     "CAPTURE_REFUSED",
     "CHANNEL_ELEMENT",
+    "CLOSURE_PARAMETER_UNTYPED",
     "CONDITION_NOT_BOOL",
     "CONFLICTING_EFFECT_ARGUMENT",
     "CONFLICTING_TYPE_ARGUMENTS",
@@ -458,6 +462,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "REEXPORT_CYCLE",
     "REEXPORT_UNKNOWN",
     "RESTRICTED_FLOW",
+    "RESULT_TYPE_NOT_INFERRED",
     "SHIFT_AMOUNT_REFUSED",
     "SPAWN_OUTSIDE_SCOPE",
     "STATIC_ASSIGNED",
@@ -478,9 +483,8 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNREACHABLE_STATEMENT",
     "UNSATISFIED_REQUIREMENT",
     "UNSUPPORTED_CONSTRUCT",
+    "VARIANT_AMBIGUOUS",
     "WILDCARD_COVERS_VARIANTS",
-    "RESULT_TYPE_NOT_INFERRED",
-    "CLOSURE_PARAMETER_UNTYPED",
     "WRONG_ARGUMENT_COUNT",
     "WRONG_ENUM_IN_PATTERN",
     "WRONG_TYPE_ARGUMENT_COUNT",

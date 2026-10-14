@@ -554,9 +554,19 @@ impl Checker<'_> {
             ));
             return Pat::Wild;
         };
-        let Some(named) = self.resolve_enum(&written_key(v.qualifier.as_ref(), &v.ty), v.ty_span)
-        else {
-            return Pat::Wild;
+        // `Circle(r)` (R1.5, D4): a variant written without its enum is the value's own enum's.
+        let named = if v.ty.is_empty() {
+            match self.res.types().definition_of(ty) {
+                Some(TypeNode::Enum(e)) => e,
+                _ => return Pat::Wild,
+            }
+        } else {
+            let Some(named) =
+                self.resolve_enum(&written_key(v.qualifier.as_ref(), &v.ty), v.ty_span)
+            else {
+                return Pat::Wild;
+            };
+            named
         };
         // The enum a pattern names is a **definition**: `Maybe.Some(…)` against a
         // `Maybe[Int]` names the enum it is an instance of, and the value supplies the
@@ -591,7 +601,38 @@ impl Checker<'_> {
         let arity = self.variant_def(id, at).map_or(0, |d| d.fields.len());
         let mut args = vec![Pat::Wild; arity];
         let mut named: Vec<(String, Span)> = Vec::new();
-        for f in &v.fields {
+        // Payload patterns by position (R1.5, D4): `Rect(w, h)` names them in declaration order.
+        let positional: Option<Vec<nazm_syntax::PatternField>> =
+            if v.fields.iter().any(|f| f.name.is_empty()) {
+                let declared: Vec<String> = self
+                    .variant_def(id, at)
+                    .map(|d| d.fields.iter().map(|f| f.name.clone()).collect())
+                    .unwrap_or_default();
+                let path = self.variant_path(id, at);
+                if v.fields.iter().any(|f| !f.name.is_empty()) || v.fields.len() != declared.len() {
+                    self.errors.push(Diagnostic::error(
+                        codes::MISSING_FIELD,
+                        v.span,
+                        format!(
+                            "`{path}` has {} payload field{}: a pattern gives every one by \
+                             position, in the order declared, or every one by name",
+                            declared.len(),
+                            if declared.len() == 1 { "" } else { "s" }
+                        ),
+                    ));
+                    return Pat::Wild;
+                }
+                Some(
+                    v.fields
+                        .iter()
+                        .zip(declared)
+                        .map(|(f, name)| nazm_syntax::PatternField { name, ..f.clone() })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+        for f in positional.as_deref().unwrap_or(&v.fields) {
             let declared = self
                 .variant_def(id, at)
                 .and_then(|d| d.field(&f.name).map(|(i, fd)| (i, fd.ty)));

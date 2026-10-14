@@ -4,6 +4,7 @@
 //! function expression; `->` still read beside it.
 //! D2 — an expression body, `= e`, and a private function's result type taken from it.
 //! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
+//! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
 
 #![allow(
     clippy::unwrap_used,
@@ -163,4 +164,93 @@ fn a_short_closure_parameter_with_nothing_to_take_its_type_from_is_refused() {
     let r = nazm(d.path(), &["check", "p.nz"]);
     assert_ne!(r.code, Some(0), "{r:?}");
     assert_eq!(r.stderr.matches("N0635").count(), 2, "{r:?}");
+}
+
+#[test]
+fn fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everywhere() {
+    differential::agrees(
+        "enum Shape { Circle(r: Int), Rect(w: Int, h: Int), Dot, }
+struct Point { x: Int, y: Int, }
+
+fn area(s: Shape) -> Int {
+    match s { Circle(r) => 3 * r * r, Rect(w, h) => w * h, Dot => 0, }
+}
+
+fn describe(s: Shape) -> Str {
+    match s {
+        Shape.Circle(r) if r > 5 => \"big\",
+        Circle(_) => \"circle\",
+        Shape.Rect(w: w, h: _) => f\"rect {w}\",
+        Dot => \"dot\",
+    }
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let p = Point(1, 2)
+    let shapes: Vec[Shape] = [Circle(2), Shape.Rect(3, 4), Dot, Circle(9)]
+    let mut total = p.x * 100 + p.y * 10
+    for s in shapes {
+        total += area(s)
+        print(f\"{describe(s)} \")
+    }
+    print(f\"{total}\\n\")
+    0
+}
+",
+        "circle rect 3 dot big 387\n0",
+    );
+}
+
+#[test]
+fn a_shared_variant_name_and_a_mixed_or_short_field_list_are_refused_by_name() {
+    let d = tempfile::tempdir().unwrap();
+    for (src, code, why) in [
+        (
+            "enum A { X(n: Int), }\nenum B { X(n: Int), }\nfn main() { let a = X(1) }\n",
+            "N0636",
+            "both",
+        ),
+        (
+            "enum E { V(x: Int, y: Int), }\nfn main() { let a = E.V(1, y: 2) }\n",
+            "N0334",
+            "both by position and by name",
+        ),
+        (
+            "struct P { x: Int, y: Int, }\nfn main() { let p = P(1) }\n",
+            "N0334",
+            "given by position",
+        ),
+    ] {
+        std::fs::write(d.path().join("p.nz"), src).unwrap();
+        let r = nazm(d.path(), &["check", "p.nz"]);
+        assert_ne!(r.code, Some(0), "{src}: {r:?}");
+        assert_eq!(
+            r.stderr.matches("error[").count(),
+            1,
+            "one error: {src}: {r:?}"
+        );
+        assert!(
+            r.stderr.contains(code) && r.stderr.contains(why),
+            "{src}: {r:?}"
+        );
+    }
+}
+
+#[test]
+fn a_secret_bound_by_position_is_still_a_secret() {
+    // A file's contents, carried in a payload and bound by position, still reach the path of
+    // the write that uses it (`N0372`), as they do bound by name.
+    let d = tempfile::tempdir().unwrap();
+    for pattern in ["Wrap(p)", "Holder.Wrap(v: p)"] {
+        let src = format!(
+            "enum Holder {{ Wrap(v: Str), }}\n\
+             fn main(io: IoCap) -> Int ! {{ io }} {{\n\
+             let h = Holder.Wrap(v: read_file(\"cfg\"));\n\
+             match h {{ {pattern} => {{ write_file(p, \"x\"); }}, }}\n\
+             0\n}}\n"
+        );
+        std::fs::write(d.path().join("p.nz"), src).unwrap();
+        let r = nazm(d.path(), &["check", "p.nz"]);
+        assert!(r.stderr.contains("N0372"), "{pattern}: {r:?}");
+    }
 }

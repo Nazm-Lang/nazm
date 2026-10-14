@@ -54,6 +54,16 @@ impl Checker<'_> {
                 None if self.env.contains(name) => {
                     Completion::Value(self.function_value(name, *span, expected))
                 }
+                // `Dot` (R1.5, D4): a variant with no payload, written without its enum —
+                // the one enum in scope that has it.
+                None if name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && !self.variant_owners(name).is_empty() =>
+                {
+                    match self.check_construction(name, *span, None, &[], *span, expected) {
+                        Some(t) => Completion::Value(t),
+                        None => Completion::Value(expected.unwrap_or(Type::Int)),
+                    }
+                }
                 None => {
                     self.errors.push(Diagnostic::error(
                         codes::UNDEFINED_VARIABLE,
@@ -297,6 +307,7 @@ impl Checker<'_> {
                 type_args.as_deref(),
                 fields,
                 *span,
+                expected,
             ) {
                 Some(t) => Completion::Value(t),
                 // The type did not resolve, and that is already reported. `Int` is what
