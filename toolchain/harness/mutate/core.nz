@@ -1,0 +1,197 @@
+// The mutation runner's core (R7, ported from `xtask/src/mutate.rs`): one mutation applied to a
+// tree exactly once, the original kept first in the Rust runner's own backup record, restored only
+// over the exact text it wrote, and a killer's three results turned into a verdict.
+
+use "@std/file"
+use "@std/ioerror"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "@std/map"
+use "catalogue.nz"
+
+pub const RECORD_VERSION: Str = "nazm-mutation-backup 2";
+
+/// FNV-1a over the bytes, sixteen lower-case hexadecimal digits: `mutate.rs`'s `digest`.
+pub fn digest(s: Str) -> Str ! {} {
+    let mut h = UInt64(0xcbf29ce484222325);
+    let prime = UInt64(0x100000001b3);
+    let n = str_len(s);
+    let mut i = 0;
+    while i < n {
+        h = wrapping_mul(h ^ UInt64(str_byte(s, i)), prime);
+        i = i + 1;
+    }
+    let digits = "0123456789abcdef";
+    let parts = strs_new();
+    let mut shift = 60;
+    while shift >= 0 {
+        let d = Int((h >> shift) & UInt64(15));
+        strs_push(parts, str_slice(digits, d, d + 1));
+        shift = shift - 4;
+    }
+    str_join(parts, "")
+}
+
+pub fn backup_path(root: Str) -> Str ! {} {
+    f"{root}/target/.nazm-mutation-backup"
+}
+
+pub fn find_mutation(h: Caps, catalogue: Str, name: Str) -> Result[Mutation, Str] ! { io } {
+    let text = read_text(h, catalogue)?;
+    let cat = catalogue_read(text, catalogue)?;
+    for m in cat.mutations {
+        if str_len(m.problem) == 0 && m.name == name {
+            return Result[Mutation, Str].Ok(value: m);
+        }
+    }
+    Result[Mutation, Str].Err(error: f"no mutation named {name} in {catalogue}")
+}
+
+/// Inject `m` into the tree at `root`: `Ok` the file it changed, or `Err` saying why it is NOT
+/// INJECTED — as `mutate.rs` words each refusal.
+pub fn apply(h: Caps, root: Str, m: Mutation) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    if file_exists_at(io, backup_path(root)) {
+        return Result[Str, Str].Err(error: f"a mutation is already applied in {root} ({backup_path(root)}); restore it first");
+    }
+    let path = str_vouch(f"{root}/{m.file}");
+    let original = match read_text(h, path) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            return Result[Str, Str].Err(error: f"cannot read {m.file}");
+        },
+    };
+    let n = occurrences(original, m.find);
+    if n == 0 {
+        return Result[Str, Str].Err(error: f"pattern not found in {m.file}");
+    }
+    if n > 1 {
+        return Result[Str, Str].Err(error: f"pattern occurs {n} times in {m.file}; it must be unique");
+    }
+    let mutated = replace_first(original, m.find, m.replace);
+    if mutated == original {
+        return Result[Str, Str].Err(error: "replacement produced an identical file");
+    }
+    // Write-ahead: the original is on disk before the file is touched.
+    let record = f"{RECORD_VERSION}\n{m.file}\n{digest(mutated)}\n{digest(original)}\n{original}";
+    match scratch_write(h, root, "target/.nazm-mutation-backup", record) {
+        Result.Ok(value: w) => w,
+        Result.Err(error: e) => {
+            return Result[Str, Str].Err(error: f"cannot write the backup for {m.file}");
+        },
+    };
+    if write_file(path, mutated) < 0 {
+        match file_remove(io, str_vouch(backup_path(root))) {
+            Result.Ok(value: r) => r,
+            Result.Err(error: e) => 0,
+        };
+        return Result[Str, Str].Err(error: f"cannot write {m.file}");
+    }
+    Result[Str, Str].Ok(value: m.file)
+}
+
+/// Put back what `apply` changed in `root`: `Ok` what was done, or `Err` when the file matches
+/// neither the mutation nor the original — as `mutate.rs`'s `restore_stranded` refuses.
+pub fn restore(h: Caps, root: Str) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let backup = str_vouch(backup_path(root));
+    if !file_exists_at(io, backup) {
+        return Result[Str, Str].Ok(value: "nothing to restore");
+    }
+    let record = read_text(h, backup)?;
+    // `splitn(5, '\n')`: four lines, then the original whole.
+    let fields = strs_new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(record) && strs_len(fields) < 4 {
+        if str_byte(record, i) == 10 {
+            strs_push(fields, str_slice(record, start, i));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if strs_len(fields) < 4 {
+        return Result[Str, Str].Err(error: f"the backup at {backup} is malformed. Nothing has been restored; inspect it and the working tree by hand.");
+    }
+    if strs_get(fields, 0) != RECORD_VERSION {
+        return Result[Str, Str].Err(error: f"the backup at {backup} was written by an earlier version of the runner; restore it by hand");
+    }
+    let file = strs_get(fields, 1);
+    let original = str_slice(record, start, str_len(record));
+    let path = str_vouch(f"{root}/{file}");
+    let current = read_text(h, path)?;
+    let now = digest(current);
+    if now == strs_get(fields, 3) {
+        file_remove(io, backup);
+        return Result[Str, Str].Ok(value: f"{file} was already restored");
+    }
+    if now != strs_get(fields, 2) {
+        return Result[Str, Str].Err(error: f"{file} matches neither the mutation applied nor the original saved. Refusing to restore over it; the original is preserved at {backup}");
+    }
+    if write_file(path, original) < 0 {
+        return Result[Str, Str].Err(error: f"could not restore {file}");
+    }
+    file_remove(io, backup);
+    Result[Str, Str].Ok(value: f"{file} restored")
+}
+
+pub fn shell(h: Caps, root: Str, cmd: Str, ms: Int) -> Ran ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, cmd);
+    run_within(h, "sh", a, root, env_here(h.io), ms)
+}
+
+/// The verdict, `mutate.rs`'s words: a killer that passes on the pristine tree, fails mutated and
+/// passes restored has caught it; one that passes mutated let it survive.
+pub fn verdict(pristine: Int, mutated: Int, restored: Int) -> Str ! {} {
+    if pristine != 0 {
+        return "UNUSABLE    ";
+    }
+    if mutated == TIMED_OUT {
+        return "TIMEOUT     ";
+    }
+    if mutated == 0 {
+        return "SURVIVED    ";
+    }
+    if restored != 0 {
+        return "RUNNER ERROR";
+    }
+    "caught      "
+}
+
+
+/// The exactly-once half of the mutations-apply gate (`xtask/src/checks/mutations.rs`): each
+/// entry's pattern occurs in its file exactly once, in the catalogue's order, worded as that gate
+/// words it. `shown` is the catalogue's path as the gate names it. The other half — the typed
+/// schema, killers and profiles (`plan::validate`) — is not ported yet.
+pub fn applies_once(h: Caps, root: Str, cat: Catalogue) -> Strs ! { io } {
+    let bad = strs_new();
+    let read = map_new[Str]();
+    for m in cat.mutations {
+        if str_len(m.problem) > 0 {
+            strs_push(bad, m.problem);
+            continue;
+        }
+        let source = match map_get(read, m.file) {
+            Option.Some(value: s) => s,
+            Option.None() => match read_rust(h, f"{root}/{m.file}") {
+                Result.Ok(value: s) => { map_set(read, m.file, s); s },
+                Result.Err(error: e) => {
+                    strs_push(bad, f"{m.name}: cannot read {m.file}: {e}");
+                    continue;
+                },
+            },
+        };
+        let n = occurrences(source, m.find);
+        if n == 0 {
+            strs_push(bad, f"{m.name}: its pattern is not in {m.file} any more, so the run would report it NOT INJECTED after building the workspace to find out. Repoint it at the line that carries the rule now, or retire it");
+        } else if n > 1 {
+            strs_push(bad, f"{m.name}: its pattern appears {n} times in {m.file}, so the runner cannot say which one it means. Widen it with enough context to be unique");
+        }
+    }
+    bad
+}

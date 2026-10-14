@@ -1,0 +1,165 @@
+// The mutation catalogue, read (R7): `xtask/mutations/mutations.toml`'s `[[mutation]]` entries as
+// records — what `xtask/src/plan.rs`'s `load` reads, without its schema checks, which are the
+// mutations-apply gate's.
+
+use "@std/toml"
+use "@std/text"
+
+/// One catalogued test that kills a mutation: its package, its target (`lib`, `test=X` or
+/// `bin=X`), and its libtest path.
+pub struct Killer {
+    package: Str,
+    target: Str,
+    name: Str,
+}
+
+/// One catalogued defect. `problem` is not empty for an entry that could not be read, which
+/// keeps its place in the catalogue's order.
+pub struct Mutation {
+    name: Str,
+    file: Str,
+    find: Str,
+    replace: Str,
+    killers: Vec[Killer],
+    problem: Str,
+}
+
+/// What reading the catalogue found: its entries in order (one that could not be read carries its
+/// problem), and those problems again on their own.
+pub struct Catalogue {
+    mutations: Vec[Mutation],
+    problems: Strs,
+}
+
+fn str_field(t: Toml, key: Str) -> Option[Str] ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: s) => Option[Str].Some(value: s),
+            _ => Option[Str].None(),
+        },
+        Option.None() => Option[Str].None(),
+    }
+}
+
+fn bool_field(t: Toml, key: Str) -> Bool ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Bool(value: b) => b,
+            _ => false,
+        },
+        Option.None() => false,
+    }
+}
+
+fn or_empty(o: Option[Str]) -> Str ! {} {
+    match o {
+        Option.Some(value: s) => s,
+        Option.None() => "",
+    }
+}
+
+fn killer_of(t: Toml) -> Killer ! {} {
+    let target = if bool_field(t, "lib") {
+        "lib"
+    } else {
+        match str_field(t, "test") {
+            Option.Some(value: x) => f"test={x}",
+            Option.None() => match str_field(t, "bin") {
+                Option.Some(value: b) => f"bin={b}",
+                Option.None() => "",
+            },
+        }
+    };
+    Killer(package: or_empty(str_field(t, "package")), target: target, name: or_empty(str_field(t, "name")))
+}
+
+/// The killer as `xtask mutate --killer` spells one: `PACKAGE:TARGET:NAME`.
+pub fn killer_show(k: Killer) -> Str ! {} {
+    f"{k.package}:{k.target}:{k.name}"
+}
+
+/// The catalogue in `text`; `Err` when it is not TOML or has no `[[mutation]]` array.
+pub fn catalogue_read(text: Str, path: Str) -> Result[Catalogue, Str] ! {} {
+    let doc = match toml_parse(text) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => {
+            return Result[Catalogue, Str].Err(error: f"{path} is not valid TOML: {e}");
+        },
+    };
+    let entries = match toml_get(doc, "mutation") {
+        Option.Some(value: a) => match a {
+            Toml.Array(items: items) => items,
+            _ => {
+                return Result[Catalogue, Str].Err(error: f"{path} has no `[[mutation]]` entries");
+            },
+        },
+        Option.None() => {
+            return Result[Catalogue, Str].Err(error: f"{path} has no `[[mutation]]` entries");
+        },
+    };
+    let out = vec_new[Mutation]();
+    let problems = strs_new();
+    for e in entries {
+        let name = str_field(e, "name");
+        let file = str_field(e, "file");
+        let find = str_field(e, "find");
+        let ok = option_has(name) && option_has(file) && option_has(find);
+        if !ok {
+            let why = f"{path} has an entry missing `name`, `file` or `find`";
+            strs_push(problems, why);
+            vec_push(out, Mutation(name: "", file: "", find: "", replace: "", killers: vec_new[Killer](), problem: why));
+            continue;
+        }
+        let killers = vec_new[Killer]();
+        match toml_get(e, "killers") {
+            Option.Some(value: ks) => match ks {
+                Toml.Array(items: items) => {
+                    for k in items {
+                        vec_push(killers, killer_of(k));
+                    }
+                    0
+                },
+                _ => 0,
+            },
+            Option.None() => 0,
+        };
+        vec_push(out, Mutation(name: or_empty(name), file: or_empty(file), find: or_empty(find), replace: or_empty(str_field(e, "replace")), killers: killers, problem: ""));
+    }
+    Result[Catalogue, Str].Ok(value: Catalogue(mutations: out, problems: problems))
+}
+
+fn option_has(o: Option[Str]) -> Bool ! {} {
+    match o {
+        Option.Some(value: s) => true,
+        Option.None() => false,
+    }
+}
+
+/// How many times `needle` occurs in `hay`, without overlap — Rust's `str::matches(..).count()`.
+pub fn occurrences(hay: Str, needle: Str) -> Int ! {} {
+    let n = str_len(needle);
+    let m = str_len(hay);
+    if n == 0 {
+        return m + 1;
+    }
+    let first = str_byte(needle, 0);
+    let mut count = 0;
+    let mut i = 0;
+    while i + n <= m {
+        if str_byte(hay, i) == first && str_slice(hay, i, i + n) == needle {
+            count = count + 1;
+            i = i + n;
+        } else {
+            i = i + 1;
+        }
+    }
+    count
+}
+
+/// `hay` with its first occurrence of `needle` replaced by `with` — Rust's `replacen(.., 1)`.
+pub fn replace_first(hay: Str, needle: Str, with: Str) -> Str ! {} {
+    match text_find(hay, needle) {
+        Option.Some(value: at) => f"{str_slice(hay, 0, at)}{with}{str_slice(hay, at + str_len(needle), str_len(hay))}",
+        Option.None() => hay,
+    }
+}

@@ -23,12 +23,14 @@
 - [x] 4.1 `release_examples`
 - [x] 4.2 `line_breaks`
 - [x] 4.3 `short_variants` (the brief's `shorter_forms`)
-- [ ] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
+- [x] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
+      (`tests/mutants.sh`: 18 mutations, each caught by the Rust killer and the Nazm test)
 - [ ] 4.5 The remaining black-box files, `common`/`differential`-only first
 
 ## 5. The mutation runner's core
-- [ ] 5.1 Read the catalogue; apply exactly once; restore byte for byte; journal
-- [ ] 5.2 The verdict from the killers' results
+- [x] 5.1 Read the catalogue; apply exactly once; restore byte for byte, in the Rust runner's own
+      backup record (`cargo xtask mutate-recover` repairs a tree `nazm-mutate` left mutated)
+- [x] 5.2 The verdict from a killer's results, pristine, mutated and restored (`nazm-mutate try`)
 - [ ] 5.3 Compared with the Rust runner's `--plan` and apply gate
 
 ## 6. Later (not this track's first pass)

@@ -88,3 +88,19 @@ pub fn scratch_remove(h: Caps, dir: Str) -> Int ! { io } {
     };
     failed
 }
+
+/// An I/O error as Rust's `std::io::Error` displays one from the system: its message, then
+/// `(os error N)` — what a ported gate prints where the Rust gate prints `{e}`.
+pub fn rust_io_error(e: IoError) -> Str ! {} {
+    f"{e.message} (os error {e.code})"
+}
+
+/// The text of the file at `path`, or `Err` with `rust_io_error`'s text (no path): what a ported
+/// gate reads with, so a failure is worded as the Rust gate words it.
+pub fn read_rust(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    match file_read_all(io, path) {
+        Result.Ok(value: b) => Result[Str, Str].Ok(value: bytes_to_str(b)),
+        Result.Err(error: e) => Result[Str, Str].Err(error: rust_io_error(e)),
+    }
+}
