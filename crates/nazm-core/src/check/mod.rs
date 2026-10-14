@@ -599,6 +599,10 @@ pub fn check_reusing(
     unparsable: &[ModuleId],
 ) -> (Resolution, Vec<Diagnostic>) {
     let mut res = Resolution::default();
+    // One list type (R1, 5b.18): `Ints` and `Strs` name `Vec[Int]` and `Vec[Str]`, interned
+    // before any type is resolved, so resolving a name never needs to intern.
+    res.types_mut().vec_of(Type::Int);
+    res.types_mut().vec_of(Type::Str);
     // A completion probe (N26): never an ordinary program, whose `hole` is `None`.
     if let Some(hole) = program.hole {
         res.set_completion_probe(match hole {

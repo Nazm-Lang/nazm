@@ -580,7 +580,14 @@ fn signature_help_never_reinterprets_a_call() {
                         Callee::Builtin(i) => {
                             assert_eq!(call.params.len(), i.params().len());
                             for (t, shape) in call.params.iter().zip(i.params()) {
+                                // `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]` (R1, 5b.18).
                                 if let Some(m) = shape.monomorphic() {
+                                    let types = res.types();
+                                    let m = match m {
+                                        Type::Ints => types.find_vec(Type::Int).unwrap_or(m),
+                                        Type::Strs => types.find_vec(Type::Str).unwrap_or(m),
+                                        m => m,
+                                    };
                                     assert_eq!(*t, m);
                                 }
                             }

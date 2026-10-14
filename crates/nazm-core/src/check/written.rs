@@ -454,7 +454,13 @@ fn resolve_name(
     errors: &mut Vec<Diagnostic>,
 ) -> Type {
     if let Some(t) = Type::from_name(name) {
-        return t;
+        // One list type (R1, 5b.18): `Ints` is `Vec[Int]` and `Strs` is `Vec[Str]`, interned
+        // with the built-ins.
+        return match t {
+            Type::Ints => res.types().find_vec(Type::Int).unwrap_or(t),
+            Type::Strs => res.types().find_vec(Type::Str).unwrap_or(t),
+            t => t,
+        };
     }
     if let Some(t) = types.names.get(name) {
         return *t;

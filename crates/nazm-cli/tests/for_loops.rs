@@ -399,14 +399,24 @@ fn an_element_carries_its_sequences_provenance_and_a_range_its_starts() {
         ),
         Vec::<String>::new()
     );
-    // The cell is the sequence's own: a file's contents in a `Strs` do not reach the elements
-    // of a `Vec[Str]` holding a literal.
+    // The cell is the sequence's type's: since R1 (5b.18) a `Strs` is a `Vec[Str]`, one type
+    // and one cell, so a file's contents in one reach the elements of every other.
     assert_eq!(
         codes(
             "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); \
              strs_push(xs, read_file(\"cfg\")); \
              let ys = vec_new[Str](); vec_push(ys, \"out.txt\"); \
              for p in ys { write_file(p, \"x\"); } 0 }\n"
+        ),
+        ["N0372"]
+    );
+    // A `Vec[Int]` is another type, and another cell.
+    assert_eq!(
+        codes(
+            "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); \
+             strs_push(xs, read_file(\"cfg\")); \
+             let ys = vec_new[Int](); vec_push(ys, 1); \
+             for n in ys { write_file(num_to_str(n), \"x\"); } 0 }\n"
         ),
         Vec::<String>::new()
     );

@@ -46,7 +46,8 @@ fn ty_name(u: &Unit, t: Ty) -> String {
             .vecs
             .iter()
             .find(|v| v.id == id)
-            .map_or_else(|| "Vec".to_owned(), |v| format!("Vec[{}]", v.source)),
+            // `source` is the vector type as the checker shows it: `Vec[Point]`, `Ints`.
+            .map_or_else(|| "Vec".to_owned(), |v| v.source.clone()),
         Ty::Fn(_) => "fn".to_owned(),
         Ty::ChanOf(_) => "Chan[_]".to_owned(),
     }

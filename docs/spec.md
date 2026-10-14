@@ -1049,7 +1049,9 @@ evaluated once, what is copied, what happens on failure part way through — and
 N11 needs one. Updating a record element is written as what it is: get a copy, change it,
 set it back.
 
-`Ints` and `Strs` are unchanged and are not aliases of `Vec[Int]` and `Vec[Str]`.
+*Corrected by R1, 5b.18:* `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]` — two names for each of
+two types, not four types — so either is accepted wherever the other is wanted, and the `ints_*`,
+`strs_*` and `vec_*` functions apply alike (*Sequences are shared, mutable, and never freed*).
 
 #### What may not be expressed: an ownership cycle
 
@@ -2136,6 +2138,13 @@ than discovered.
 Named `Ints` and `Strs` rather than `[Int]` and `[Str]` on purpose: the lexer has no
 bracket tokens and the type grammar is a bare name, so concrete names commit to nothing
 about how a future generic `[T]` will look. A half-built `[T]` syntax would.
+
+**One list type** *(R1, 5b.18)*. Since `Vec[T]` arrived, `Ints` is another name for `Vec[Int]`
+and `Strs` for `Vec[Str]`: one type each, whichever name is written, so a `Strs` from
+`text_split` is passed where a `Vec[Str]` is wanted, `vec_push(xs, 1)` grows an `Ints`, and
+`ints_len(v)` measures a `Vec[Int]`. Diagnostics name the two by their shorter names, `Ints`
+and `Strs`. Nothing else in this section changes: what it says of `Ints` and `Strs` is what
+*`Vec[T]`* says of every vector.
 
 | | |
 | --- | --- |

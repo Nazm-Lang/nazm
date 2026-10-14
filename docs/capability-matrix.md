@@ -318,6 +318,15 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *One list type* (`spec.md`, *Sequences are shared, mutable, and never freed*;
+5b.18). `Ints` and `Strs` resolve to `Vec[Int]` and `Vec[Str]` — interned before any type is
+resolved, in the built-ins' signatures and when an interface is read — and are shown by those
+shorter names; the interpreter's `ints_*` and `strs_*` are its `vec_*` on one value, the separate
+`Value::Ints` and `Value::Strs` gone; native code already shared one layout. A `Strs` and a
+`Vec[Str]` share one provenance cell. Epoch 74. Evidence: `crates/nazm-cli/tests/lists.rs` — the
+two names passed for each other through every family of built-ins and through `@std/text`, alike
+everywhere with nothing live; `for_loops.rs` for the shared cell. Three mutants.
+
 **R1 (2026-10-14)** · *The program's authority reported* (`spec.md`, *What `main` holds, and how it
 ends*; 5b.1). `nazm build` writes `authority: …` on standard error after a build of a program with a
 `main` — each capability `main` holds, given by option C or written, and what it reaches — and

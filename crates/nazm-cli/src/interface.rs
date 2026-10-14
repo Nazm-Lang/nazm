@@ -54,6 +54,9 @@ pub(crate) fn run(path: &Path, with_hash: bool, declared: Option<&Path>) -> Exit
             .map(|m| nazm_core::Unit::of(program, &loaded.graph, m))
             .collect();
         let mut res = nazm_core::Resolution::default();
+        // As the checker begins (R1, 5b.18): `Ints` and `Strs` name these.
+        res.types_mut().vec_of(nazm_core::Type::Int);
+        res.types_mut().vec_of(nazm_core::Type::Str);
         let mut errors = Vec::new();
         // The same stages a compilation runs before any body, re-exports included (N103):
         // one path to an interface, not a shorter second one.

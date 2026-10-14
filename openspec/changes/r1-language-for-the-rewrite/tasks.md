@@ -81,7 +81,8 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [x] 5b.17 Methods without a trait (`impl Point { … }`), `while let`, `loop`, match guards, `?` on
       `Option` in a function returning `Option`, `/* … */` comments
       — done: an impl without a trait, `while let`, `loop`, block comments (2026-10-14); `?` on `Option`; match guards
-- [ ] 5b.18 One list type: `Strs` and `Ints` interchangeable with `Vec[Str]` and `Vec[Int]`
+- [x] 5b.18 One list type: `Strs` and `Ints` interchangeable with `Vec[Str]` and `Vec[Int]` — the
+      same types, shown by the shorter names (2026-10-14)
 - [x] 5b.19 Semicolon-free lines: a line break ends a statement where a `;` could, as in Go; `;`
       still accepted; `nazm fmt` writes the new form
 

@@ -1824,7 +1824,12 @@ fn read_type(
     owner: ParamOwner,
 ) -> Type {
     match t {
-        PersistentType::Builtin(name) => Type::from_name(name).unwrap_or(Type::Int),
+        // One list type (R1, 5b.18): `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]`.
+        PersistentType::Builtin(name) => match Type::from_name(name).unwrap_or(Type::Int) {
+            Type::Ints => types.vec_of(Type::Int),
+            Type::Strs => types.vec_of(Type::Str),
+            t => t,
+        },
         PersistentType::Param { param } => Type::Param(TypeParam {
             owner,
             index: *param,

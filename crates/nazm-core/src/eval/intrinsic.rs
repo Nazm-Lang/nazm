@@ -338,6 +338,14 @@ impl Interpreter {
             Intrinsic::BoxFill | Intrinsic::ListPush => Some(Intrinsic::VecPush),
             Intrinsic::ListLen => Some(Intrinsic::VecLen),
             Intrinsic::ListGet => Some(Intrinsic::VecGet),
+            // One list type (R1, 5b.18): an `Ints` is a `Vec[Int]` and a `Strs` a `Vec[Str]`, one
+            // value, so each of their operations is the `Vec` one.
+            Intrinsic::IntsNew | Intrinsic::StrsNew => Some(Intrinsic::VecNew),
+            Intrinsic::IntsLen | Intrinsic::StrsLen => Some(Intrinsic::VecLen),
+            Intrinsic::IntsGet | Intrinsic::StrsGet => Some(Intrinsic::VecGet),
+            Intrinsic::IntsSet | Intrinsic::StrsSet => Some(Intrinsic::VecSet),
+            Intrinsic::IntsPush | Intrinsic::StrsPush => Some(Intrinsic::VecPush),
+            Intrinsic::IntsPop | Intrinsic::StrsPop => Some(Intrinsic::VecPop),
             _ => None,
         };
         if let Some(vec_op) = same {
@@ -488,22 +496,17 @@ impl Interpreter {
             (Intrinsic::IntToStr, [Value::Int(n)]) => {
                 Ok(Value::Str(Str::heap(n.to_string().into_bytes())))
             }
-            (Intrinsic::IntsNew, []) => Ok(Value::Ints(Arc::new(Seq::new(Vec::new())))),
-            (Intrinsic::StrsNew, []) => Ok(Value::Strs(Arc::new(Seq::new(Vec::new())))),
-            (Intrinsic::IntsLen, [Value::Ints(a)]) => seq(a)
-                .and_then(|a| index_fits(a.len()))
-                .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
-            (Intrinsic::StrsLen, [Value::Strs(a)]) => seq(a)
-                .and_then(|a| index_fits(a.len()))
-                .map_or_else(|| Err(bug("a sequence that could not be read")), Ok),
             // The left-to-right checked sum (N66): the loop it stands for, as a function, failing
             // with that loop's addition's diagnostic at the first running sum that overflows.
-            (Intrinsic::IntsSum, [Value::Int(start), Value::Ints(a)]) => {
+            (Intrinsic::IntsSum, [Value::Int(start), Value::Vec(a)]) => {
                 let Some(a) = seq(a) else {
                     return Err(bug("a sequence that could not be read"));
                 };
                 let mut sum = *start;
                 for x in a.iter() {
+                    let Value::Int(x) = x else {
+                        return Err(bug("an `Ints` holding something else"));
+                    };
                     sum = sum.checked_add(*x).ok_or_else(|| RuntimeError {
                         diagnostic: Box::new(
                             Diagnostic::error(
@@ -518,95 +521,6 @@ impl Interpreter {
                     })?;
                 }
                 Ok(Value::Int(sum))
-            }
-            (Intrinsic::IntsGet, [Value::Ints(a), Value::Int(at)]) => {
-                let Some(a) = seq(a) else {
-                    return Err(bug("a sequence that could not be read"));
-                };
-                let Some(v) = usize::try_from(*at).ok().and_then(|i| a.get(i)) else {
-                    return Err(out_of_bounds(
-                        "this index is outside the sequence",
-                        format!("asked for item {at} of an `Ints` holding {}", a.len()),
-                    ));
-                };
-                Ok(Value::Int(*v))
-            }
-            (Intrinsic::StrsGet, [Value::Strs(a), Value::Int(at)]) => {
-                let Some(a) = seq(a) else {
-                    return Err(bug("a sequence that could not be read"));
-                };
-                let Some(v) = usize::try_from(*at).ok().and_then(|i| a.get(i)) else {
-                    return Err(out_of_bounds(
-                        "this index is outside the sequence",
-                        format!("asked for item {at} of a `Strs` holding {}", a.len()),
-                    ));
-                };
-                // The element's own reference, cloned. What comes back keeps the
-                // backing alive on its own, which is why overwriting the element
-                // afterwards cannot invalidate it (`docs/spec.md`, rule 4).
-                Ok(Value::Str(v.clone()))
-            }
-            (Intrinsic::IntsSet, [Value::Ints(a), Value::Int(at), Value::Int(v)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                let len = a.len();
-                let Some(slot) = usize::try_from(*at).ok().and_then(|i| a.get_mut(i)) else {
-                    return Err(out_of_bounds(
-                        "this index is outside the sequence",
-                        format!("asked to write item {at} of an `Ints` holding {len}"),
-                    ));
-                };
-                *slot = *v;
-                Ok(Value::Int(*at))
-            }
-            (Intrinsic::StrsSet, [Value::Strs(a), Value::Int(at), Value::Str(v)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                let len = a.len();
-                let Some(slot) = usize::try_from(*at).ok().and_then(|i| a.get_mut(i)) else {
-                    return Err(out_of_bounds(
-                        "this index is outside the sequence",
-                        format!("asked to write item {at} of a `Strs` holding {len}"),
-                    ));
-                };
-                // The new element takes its own reference **before** the old one is
-                // dropped, which the assignment does in that order. Replacing an element
-                // with a view of the same backing is therefore safe rather than a
-                // release followed by a use.
-                slot.clone_from(v);
-                Ok(Value::Int(*at))
-            }
-            (Intrinsic::IntsPush, [Value::Ints(a), Value::Int(v)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                a.push(*v);
-                index_fits(a.len())
-                    .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
-            }
-            (Intrinsic::StrsPush, [Value::Strs(a), Value::Str(v)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                a.push(v.clone());
-                index_fits(a.len())
-                    .map_or_else(|| Err(bug("a sequence longer than `Int` can measure")), Ok)
-            }
-            (Intrinsic::IntsPop, [Value::Ints(a)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                a.pop().map_or_else(
-                    || {
-                        Err(out_of_bounds(
-                            "this sequence is empty",
-                            "asked to remove the last item of an empty `Ints`".to_owned(),
-                        ))
-                    },
-                    |v| Ok(Value::Int(v)),
-                )
             }
             // Atomics (Gate 3): sequentially consistent, as `docs/spec.md` promises everywhere.
             (Intrinsic::AtomicNew, [Value::Int(v)]) => Ok(Value::Atomic(Arc::new(
@@ -672,7 +586,7 @@ impl Interpreter {
                     |sent| Ok(Value::Bool(sent)),
                 )
             }
-            (Intrinsic::ChanRecv, [Value::Chan(c), Value::Ints(out)]) => {
+            (Intrinsic::ChanRecv, [Value::Chan(c), Value::Vec(out)]) => {
                 let Some(taken) = c.recv() else {
                     return Err(bug("a channel that could not be locked"));
                 };
@@ -681,7 +595,7 @@ impl Interpreter {
                         let Some(mut out) = seq(out) else {
                             return Err(bug("a sequence that could not be written"));
                         };
-                        out.push(v);
+                        out.push(Value::Int(v));
                         Ok(Value::Bool(true))
                     }
                     Some(_) => Err(bug("an `Int` channel held something else")),
@@ -762,11 +676,21 @@ impl Interpreter {
                     |()| Ok(Value::Int(0)),
                 )
             }
-            (Intrinsic::StrJoin, [Value::Strs(parts), Value::Str(sep)]) => {
+            (Intrinsic::StrJoin, [Value::Vec(parts), Value::Str(sep)]) => {
                 let Some(parts) = seq(parts) else {
                     return Err(bug("a sequence that could not be read"));
                 };
-                let total: usize = parts.iter().map(Str::len).sum::<usize>()
+                let Some(parts) = parts
+                    .iter()
+                    .map(|p| match p {
+                        Value::Str(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<&Str>>>()
+                else {
+                    return Err(bug("a `Strs` holding something else"));
+                };
+                let total: usize = parts.iter().map(|p| p.len()).sum::<usize>()
                     + sep.len() * parts.len().saturating_sub(1);
                 let mut out = Vec::with_capacity(total);
                 for (i, part) in parts.iter().enumerate() {
@@ -777,21 +701,6 @@ impl Interpreter {
                 }
                 Ok(Value::Str(Str::heap(out)))
             }
-            (Intrinsic::StrsPop, [Value::Strs(a)]) => {
-                let Some(mut a) = seq(a) else {
-                    return Err(bug("a sequence that could not be written"));
-                };
-                a.pop().map_or_else(
-                    || {
-                        Err(out_of_bounds(
-                            "this sequence is empty",
-                            "asked to remove the last item of an empty `Strs`".to_owned(),
-                        ))
-                    },
-                    |v| Ok(Value::Str(v)),
-                )
-            }
-
             // --- `Vec[T]` ------------------------------------------------------------
             //
             // The sequence law, with the element's own law for what goes in and comes out:

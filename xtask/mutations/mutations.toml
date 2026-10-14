@@ -8329,10 +8329,11 @@ Repointed by R1c again, which moved it to 69 for `@codec`: an entry that refused
 Repointed by R1c a third time, which moved it to 70 for `@derive(toml)`: an entry that refused it must not be reused.
 Repointed by R1 (5b.11, 5b.19), which moved it to 71 for `else if` and lines without `;`: an entry that refused them must not be reused.
 Repointed by R1 again (5b.12), which moved it to 72 for compound assignment: an entry that refused `+=` must not be reused.
-Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused."""
+Repointed by R1 a third time (5b.1–5b.3 and R1d), which moved it to 73: an entry that refused a `main` printing with nothing written must not be reused.
+Repointed by R1 a fourth time (5b.18), which moved it to 74 for one list type: an entry that refused a `Vec[Int]` where an `Ints` was wanted must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 73;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 72;"
+find = "pub const SEMANTIC_EPOCH: u32 = 74;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 73;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12701,7 +12702,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "flow_v3::a_containe
 name = "n80-every-vec-is-one-cell"
 why = "a `Vec`'s cell forgets its element type, so a `Vec[Int]` written from a file taints every `Vec[Str]`"
 file = "crates/nazm-core/src/provenance.rs"
-find = '            Some(Shape::VecT) => elem().map(|t| format!("Vec[{t}]")),'
+find = '            Some(Shape::VecT) => elem().map(|t| vec_cell(&t)),'
 replace = '            Some(Shape::VecT) => elem().map(|_t| "Vec".to_owned()),'
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "flow_v3::a_container_carries_what_any_container_of_its_type_was_given" }]
 
@@ -18961,6 +18962,30 @@ file = "crates/nazm-cli/src/build/link.rs"
 find = '''        eprintln!("{}", crate::authority::line(&held));'''
 replace = '''        let _ = crate::authority::line(&held);'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "main_ends::build_and_inspect_say_what_the_program_may_touch" }]
+
+[[mutation]]
+name = "r1-ints-is-its-own-type-again"
+why = "`Ints` resolves to the old type, so a `Vec[Int]` is refused where an `Ints` is wanted"
+file = "crates/nazm-core/src/check/written.rs"
+find = '''            Type::Ints => res.types().find_vec(Type::Int).unwrap_or(t),'''
+replace = '''            Type::Ints => t,'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lists::one_list_type_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-strs-built-ins-keep-the-old-type"
+why = "the `strs_*` built-ins keep `Strs`, so a `Vec[Str]` is refused as their argument"
+file = "crates/nazm-core/src/check/unit.rs"
+find = '''            Some(Type::Strs) => strs,'''
+replace = '''            Some(Type::Strs) => Type::Strs,'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lists::one_list_type_runs_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-an-ints-op-is-not-a-vec-op"
+why = "the interpreter runs `ints_push` as its own operation on a value it no longer makes"
+file = "crates/nazm-core/src/eval/intrinsic.rs"
+find = '''            Intrinsic::IntsPush | Intrinsic::StrsPush => Some(Intrinsic::VecPush),'''
+replace = '''            Intrinsic::StrsPush => Some(Intrinsic::VecPush),'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lists::one_list_type_runs_alike_everywhere" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 
