@@ -1,0 +1,1145 @@
+// Instruction selection for aarch64, stage A (design D3): every value, variable and parameter
+// in its own 8-byte frame slot, every LIR slot in its own aligned area. Each instruction loads
+// its operands into scratch registers (x9–x12, d16–d17), computes, and stores its result, so no
+// value lives in a register across an instruction and liveness cannot be got wrong.
+//
+// Frame, from `sp` up: outgoing stack arguments, saved parameters, values, variables, slots;
+// then the caller's `x29`/`x30` pair, which `x29` points at.
+//
+// Narrow values are kept zero-extended (D5); the calling convention is AAPCS64 as Apple
+// specifies it, with a Nazm function's failure bit in the integer register after its result
+// (D4). `x16` and `x17` are address scratch; `x17` also holds an indirect call's target.
+
+use "@std/bytebuf"
+use "lir.nz"
+use "a64.nz"
+
+// Relocation kinds (Mach-O's `ARM64_RELOC_*` numbers; the ELF writer maps them).
+pub const R_BRANCH26: Int = 2
+pub const R_PAGE21: Int = 3
+pub const R_PAGEOFF12: Int = 4
+pub const R_GOT_PAGE21: Int = 5
+pub const R_GOT_PAGEOFF12: Int = 6
+
+/// A unit's code: the bytes, the relocations against its symbols, where each function starts.
+pub struct Code {
+    buf: ByteBuf,
+    rel_at: Ints,
+    rel_kind: Ints,
+    rel_sym: Ints,
+    sym_at: Ints,
+    errors: Strs,
+}
+
+pub fn code_new(nsyms: Int) -> Code {
+    let at = ints_new()
+    let mut i = 0
+    while i < nsyms {
+        ints_push(at, -1)
+        i += 1
+    }
+    Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
+            sym_at: at, errors: strs_new())
+}
+
+/// One function being generated.
+struct G {
+    c: Code,
+    u: Unit,
+    f: Func,
+    vcls: Ints,
+    param_off: Int,
+    val_off: Int,
+    var_off: Int,
+    slot_off: Ints,
+    blk_at: Ints,
+    fix_at: Ints,
+    fix_kind: Ints,
+    fix_blk: Ints,
+}
+
+fn w(g: G, x: Int) {
+    bytebuf_put_u32_le(g.c.buf, UInt32(x))
+}
+
+fn here(g: G) -> Int {
+    bytebuf_len(g.c.buf)
+}
+
+fn refuse(g: G, what: Str) {
+    strs_push(g.c.errors, f"{what}, in `{g.f.name}` of {g.u.source}")
+}
+
+fn reloc(g: G, kind: Int, sym: Int) {
+    ints_push(g.c.rel_at, here(g))
+    ints_push(g.c.rel_kind, kind)
+    ints_push(g.c.rel_sym, sym)
+}
+
+fn align_up(x: Int, a: Int) -> Int {
+    if a <= 1 { x } else { (x + a - 1) / a * a }
+}
+
+/// The width of a class in bytes, as it is stored in memory.
+pub fn class_size(c: Int) -> Int {
+    match c {
+        0 => 1,
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        5 => 4,
+        8 => 16,
+        _ => 8,
+    }
+}
+
+fn is_float(c: Int) -> Bool {
+    c == C_F32 || c == C_F64
+}
+
+// ---------------------------------------------------------------------------------------------
+// Immediates and frame addressing.
+
+/// `reg = v`, any 64-bit value, in the fewest `movz`/`movn`/`movk`.
+fn mov_imm(g: G, reg: Int, v: Int) {
+    let mut zeros = 0
+    let mut ones = 0
+    let mut k = 0
+    while k < 4 {
+        let h = (v >> (16 * k)) & 0xFFFF
+        if h == 0 { zeros += 1 }
+        if h == 0xFFFF { ones += 1 }
+        k += 1
+    }
+    if ones > zeros {
+        let mut first = true
+        k = 0
+        while k < 4 {
+            let h = (v >> (16 * k)) & 0xFFFF
+            if h != 0xFFFF {
+                if first {
+                    w(g, movn(reg, h ^ 0xFFFF, k))
+                    first = false
+                } else {
+                    w(g, movk(reg, h, k))
+                }
+            }
+            k += 1
+        }
+        if first { w(g, movn(reg, 0, 0)) }
+    } else {
+        let mut first = true
+        k = 0
+        while k < 4 {
+            let h = (v >> (16 * k)) & 0xFFFF
+            if h != 0 {
+                if first {
+                    w(g, movz(reg, h, k))
+                    first = false
+                } else {
+                    w(g, movk(reg, h, k))
+                }
+            }
+            k += 1
+        }
+        if first { w(g, movz(reg, 0, 0)) }
+    }
+}
+
+/// `reg = base + off`, for a non-negative `off` below 2^24.
+fn add_off(g: G, reg: Int, base: Int, off: Int) {
+    if off < 4096 {
+        w(g, add_imm(reg, base, off))
+    } else if off < 16777216 {
+        w(g, add_imm_lsl12(reg, base, off >> 12))
+        if (off & 0xFFF) != 0 { w(g, add_imm(reg, reg, off & 0xFFF)) }
+    } else {
+        mov_imm(g, 16, off)
+        w(g, add_ext(reg, base, 16))
+    }
+}
+
+/// A load (zero-extending) or store of `size` bytes between `t` and `[base + off]`, any `off`;
+/// `fp` for a floating-point register. Uses x16 and x17 when the offset needs them.
+fn mem(g: G, size: Int, load: Bool, fp: Bool, t: Int, base: Int, off: Int) {
+    if off >= 0 && off % size == 0 && off / size < 4096 {
+        if fp {
+            w(g, ldst_fp(size, load, t, base, off))
+        } else {
+            w(g, ldst_scaled(size, load, t, base, off))
+        }
+        return
+    }
+    if !fp && off >= -256 && off < 256 {
+        w(g, ldst_unscaled(size, load, t, base, off))
+        return
+    }
+    mov_imm(g, 17, off)
+    w(g, add_ext(16, base, 17))
+    if fp {
+        w(g, ldst_fp(size, load, t, 16, 0))
+    } else {
+        w(g, ldst_scaled(size, load, t, 16, 0))
+    }
+}
+
+fn voff(g: G, v: Int) -> Int {
+    g.val_off + 8 * v
+}
+
+/// `reg` = value `v`'s 8 bytes.
+fn ld(g: G, reg: Int, v: Int) {
+    if v < 0 {
+        refuse(g, "an operand that is missing")
+        return
+    }
+    mem(g, 8, true, false, reg, SP, voff(g, v))
+}
+
+/// Value `v`'s slot = `reg`.
+fn st(g: G, reg: Int, v: Int) {
+    if v < 0 { return }
+    mem(g, 8, false, false, reg, SP, voff(g, v))
+}
+
+/// A float value into a floating-point register.
+fn ld_fp(g: G, reg: Int, v: Int) {
+    let c = cls(g, v)
+    mem(g, if c == C_F32 { 4 } else { 8 }, true, true, reg, SP, voff(g, v))
+}
+
+fn cls(g: G, v: Int) -> Int {
+    if v < 0 || v >= ints_len(g.vcls) { C_I64 } else { g.vcls[v] }
+}
+
+/// Keep a narrow class zero-extended (D5).
+fn norm(g: G, reg: Int, c: Int) {
+    if c == C_BIT {
+        w(g, and1_w(reg, reg))
+    } else if c == C_I8 {
+        w(g, uxtb(reg, reg))
+    } else if c == C_I16 {
+        w(g, uxth(reg, reg))
+    } else if c == C_I32 || c == C_F32 {
+        w(g, mov_w(reg, reg))
+    }
+}
+
+/// Sign-extend a narrow class to 64 bits, for an operation that reads it as signed.
+fn sext(g: G, reg: Int, c: Int) {
+    if c == C_BIT {
+        w(g, sbfx1(reg, reg))
+    } else if c == C_I8 {
+        w(g, sxtb(reg, reg))
+    } else if c == C_I16 {
+        w(g, sxth(reg, reg))
+    } else if c == C_I32 {
+        w(g, sxtw(reg, reg))
+    }
+}
+
+fn width_bits(c: Int) -> Int {
+    match c {
+        0 => 1,
+        1 => 8,
+        2 => 16,
+        3 => 32,
+        5 => 32,
+        _ => 64,
+    }
+}
+
+/// A constant cut to its class's width, zero-extended (D5).
+fn masked(v: Int, c: Int) -> Int {
+    let bits = width_bits(c)
+    if bits >= 64 { v } else { v & ((1 << bits) - 1) }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Classes of values.
+
+fn sym_ret(u: Unit, s: Int) -> Int {
+    if s < 0 { C_NONE } else { u.syms[s].ret }
+}
+
+/// Every value's class, from what defines it; operations that take their operand's class are
+/// settled by iterating until nothing changes, since a block may be printed before the block
+/// that defines a value it uses.
+fn infer(u: Unit, f: Func, n: Int) -> Ints {
+    let vc = ints_new()
+    let mut i = 0
+    while i < n {
+        ints_push(vc, -1)
+        i += 1
+    }
+    let own = u.syms[f.sym]
+    let mut changed = true
+    let mut rounds = 0
+    while changed && rounds < 50 {
+        changed = false
+        rounds += 1
+        for x in f.insts {
+            let mut d = -1
+            let mut d2 = -1
+            let op = x.op
+            if op == OP_PARAM {
+                d = if x.imm < ints_len(own.params) { own.params[x.imm] } else { -1 }
+            } else if op == OP_CONST || op == OP_LOAD || op == OP_EXT || op == OP_TRUNC || op == OP_CONV {
+                d = x.cls
+            } else if op == OP_ADDR || op == OP_SLOT || op == OP_PTRADD || op == OP_INTTOPTR {
+                d = C_PTR
+            } else if op == OP_PTRTOINT {
+                d = C_I64
+            } else if op == OP_CMP {
+                d = C_BIT
+            } else if op == OP_BIN || op == OP_UN {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+            } else if op == OP_SELECT {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+            } else if op == OP_OVF {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+                d2 = C_BIT
+            } else if op == OP_GET {
+                d = if x.imm >= 0 && x.imm < ints_len(f.vars) { f.vars[x.imm] } else { -1 }
+            } else if op == OP_CALL {
+                d = sym_ret(u, x.sym)
+                d2 = C_BIT
+            } else if op == OP_CALLI {
+                d = x.sig_ret
+                d2 = C_BIT
+            }
+            if x.dst >= 0 && x.dst < n && d >= 0 && vc[x.dst] != d {
+                vc[x.dst] = d
+                changed = true
+            }
+            if x.dst2 >= 0 && x.dst2 < n && d2 >= 0 && vc[x.dst2] != d2 {
+                vc[x.dst2] = d2
+                changed = true
+            }
+        }
+    }
+    vc
+}
+
+// ---------------------------------------------------------------------------------------------
+// The calling convention (D4): where each argument goes.
+
+/// For each argument class: a kind (0 an integer register, 1 a floating-point register, 2 the
+/// stack) and its register number or stack offset, as pairs; then the stack bytes used, last.
+/// Apple's AAPCS64: eight of each register kind, and stack arguments at their natural
+/// alignment, packed.
+fn assign(classes: Ints) -> Ints {
+    let out = ints_new()
+    let mut ngr = 0
+    let mut nfr = 0
+    let mut stack = 0
+    for c in classes {
+        if is_float(c) {
+            if nfr < 8 {
+                ints_push(out, 1)
+                ints_push(out, nfr)
+                nfr += 1
+            } else {
+                let sz = class_size(c)
+                stack = align_up(stack, sz)
+                ints_push(out, 2)
+                ints_push(out, stack)
+                stack += sz
+            }
+        } else {
+            if ngr < 8 {
+                ints_push(out, 0)
+                ints_push(out, ngr)
+                ngr += 1
+            } else {
+                let sz = class_size(c)
+                stack = align_up(stack, sz)
+                ints_push(out, 2)
+                ints_push(out, stack)
+                stack += sz
+            }
+        }
+    }
+    ints_push(out, stack)
+    out
+}
+
+/// The classes a call passes, from its callee's signature.
+fn call_params(u: Unit, x: Ins) -> Ints {
+    if x.op == OP_CALLI { x.sig_params } else { u.syms[x.sym].params }
+}
+
+fn call_ret(u: Unit, x: Ins) -> Int {
+    if x.op == OP_CALLI { x.sig_ret } else { u.syms[x.sym].ret }
+}
+
+fn call_conv(u: Unit, x: Ins) -> Int {
+    if x.op == OP_CALLI { x.sig_conv } else { u.syms[x.sym].conv }
+}
+
+// ---------------------------------------------------------------------------------------------
+// One function.
+
+/// Generate `f` into `c`.
+pub fn gen_function(c: Code, u: Unit, f: Func) {
+    // How many values, and how much outgoing stack the calls need.
+    let mut n = 0
+    let mut out = 0
+    for x in f.insts {
+        if x.dst + 1 > n { n = x.dst + 1 }
+        if x.dst2 + 1 > n { n = x.dst2 + 1 }
+        if x.op == OP_CALL || x.op == OP_CALLI {
+            let a = assign(call_params(u, x))
+            let s = a[ints_len(a) - 1]
+            if s > out { out = s }
+        }
+    }
+    let own = u.syms[f.sym]
+    let np = ints_len(own.params)
+    let mut off = align_up(out, 16)
+    let param_off = off
+    off += 8 * np
+    let val_off = off
+    off += 8 * n
+    let var_off = off
+    off += 8 * ints_len(f.vars)
+    let slot_off = ints_new()
+    let mut k = 0
+    while k < ints_len(f.slot_size) {
+        let al = f.slot_align[k]
+        if al > 16 {
+            strs_push(c.errors, f"a slot aligned to {al} bytes, in `{f.name}` of {u.source}")
+        }
+        off = align_up(off, if al < 1 { 1 } else { al })
+        ints_push(slot_off, off)
+        off += f.slot_size[k]
+        k += 1
+    }
+    let size = align_up(off, 16)
+    let g = G(c: c, u: u, f: f, vcls: infer(u, f, n), param_off: param_off, val_off: val_off,
+            var_off: var_off, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
+            fix_kind: ints_new(), fix_blk: ints_new())
+    ints_set(c.sym_at, f.sym, here(g))
+    prologue(g, size)
+    let nb = ints_len(f.block_first)
+    let mut bi = 0
+    while bi < nb {
+        ints_push(g.blk_at, here(g))
+        let first = f.block_first[bi]
+        let end = f.block_end[bi]
+        let mut i = first
+        while i < end {
+            inst(g, f.insts[i])
+            i += 1
+        }
+        if bi < f.terms.len() {
+            term(g, f.terms[bi], bi)
+        } else {
+            refuse(g, f"block b{bi} has no terminator")
+        }
+        bi += 1
+    }
+    // Branches to blocks, now that every block's place is known.
+    let mut j = 0
+    while j < ints_len(g.fix_at) {
+        let at = g.fix_at[j]
+        let tb = g.fix_blk[j]
+        if tb < 0 || tb >= ints_len(g.blk_at) {
+            refuse(g, f"a branch to block b{tb}, which does not exist")
+        } else {
+            let delta = g.blk_at[tb] -at
+            let word = read_u32(c.buf, at)
+            let patched = if g.fix_kind[j] == 0 {
+                word | ((delta >> 2) & 0x3FFFFFF)
+            } else {
+                if delta >= 1048576 || delta < -1048576 {
+                    refuse(g, "a conditional branch further than 1 MiB")
+                }
+                word | (((delta >> 2) & 0x7FFFF) << 5)
+            }
+            bytebuf_patch_u32_le(c.buf, at, UInt32(patched))
+        }
+        j += 1
+    }
+}
+
+fn read_u32(b: ByteBuf, at: Int) -> Int {
+    let mut v = 0
+    let mut k = 3
+    while k >= 0 {
+        let x = match bytebuf_get(b, at + k) {
+            Some(y) => Int(y),
+            None => 0,
+        }
+        v = (v << 8) | x
+        k -= 1
+    }
+    v
+}
+
+/// A branch to block `b`, patched once blocks are placed: `kind` 0 a `b`, 1 a `cbz`/`cbnz`/
+/// `b.cond`.
+fn branch_to(g: G, kind: Int, word: Int, b: Int) {
+    ints_push(g.fix_at, here(g))
+    ints_push(g.fix_kind, kind)
+    ints_push(g.fix_blk, b)
+    w(g, word)
+}
+
+fn prologue(g: G, size: Int) {
+    w(g, push_frame())
+    w(g, mov_sp(29, SP))
+    if size > 0 {
+        if size <= 4096 {
+            if size < 4096 {
+                w(g, sub_imm(SP, SP, size))
+            } else {
+                w(g, sub_imm_lsl12(SP, SP, 1))
+            }
+        } else {
+            // Probe each page as the frame grows, as LLVM's frames do (Q1-A1-01): a frame
+            // larger than a guard page faults on the guard rather than stepping over it.
+            let pages = size / 4096
+            mov_imm(g, 16, pages)
+            w(g, sub_imm_lsl12(SP, SP, 1))
+            w(g, ldst_scaled(8, false, ZR, SP, 0))
+            w(g, subs_imm(16, 16, 1))
+            w(g, b_cond(NE, -12))
+            let rest = size - pages * 4096
+            if rest > 0 { w(g, sub_imm(SP, SP, rest)) }
+        }
+    }
+    // Every parameter into its slot, normalised (D5).
+    let own = g.u.syms[g.f.sym]
+    let a = assign(own.params)
+    let mut i = 0
+    while i < ints_len(own.params) {
+        let c = own.params[i]
+        let kind = a[2 * i]
+        let r = a[2 * i + 1]
+        if c == C_I128 {
+            refuse(g, "an `i128` parameter")
+        } else if kind == 0 {
+            norm(g, r, c)
+            mem(g, 8, false, false, r, SP, g.param_off + 8 * i)
+        } else if kind == 1 {
+            w(g, fmov_from_fp(c == C_F64, 9, r))
+            mem(g, 8, false, false, 9, SP, g.param_off + 8 * i)
+        } else {
+            mem(g, class_size(c), true, false, 9, 29, 16 + r)
+            norm(g, 9, c)
+            mem(g, 8, false, false, 9, SP, g.param_off + 8 * i)
+        }
+        i += 1
+    }
+}
+
+fn epilogue(g: G) {
+    w(g, mov_sp(SP, 29))
+    w(g, pop_frame())
+    w(g, ret())
+}
+
+// ---------------------------------------------------------------------------------------------
+// Instructions.
+
+fn inst(g: G, x: Ins) {
+    let op = x.op
+    if op == OP_PARAM {
+        mem(g, 8, true, false, 9, SP, g.param_off + 8 * x.imm)
+        st(g, 9, x.dst)
+    } else if op == OP_CONST {
+        if x.cls == C_I128 {
+            refuse(g, "an `i128` constant")
+            return
+        }
+        mov_imm(g, 9, masked(x.imm, x.cls))
+        st(g, 9, x.dst)
+    } else if op == OP_ADDR {
+        sym_addr(g, 9, x.sym)
+        st(g, 9, x.dst)
+    } else if op == OP_SLOT {
+        if x.imm < 0 || x.imm >= ints_len(g.slot_off) {
+            refuse(g, f"slot s{x.imm}, which does not exist")
+            return
+        }
+        add_off(g, 9, SP, g.slot_off[x.imm])
+        st(g, 9, x.dst)
+    } else if op == OP_LOAD {
+        if x.cls == C_I128 {
+            refuse(g, "an `i128` load")
+            return
+        }
+        ld(g, 10, x.a)
+        mem(g, class_size(x.cls), true, false, 9, 10, x.imm)
+        st(g, 9, x.dst)
+    } else if op == OP_STORE {
+        let c = cls(g, x.b)
+        if c == C_I128 {
+            refuse(g, "an `i128` store")
+            return
+        }
+        ld(g, 10, x.a)
+        ld(g, 9, x.b)
+        mem(g, class_size(c), false, false, 9, 10, x.imm)
+    } else if op == OP_BIN {
+        bin(g, x)
+    } else if op == OP_OVF {
+        ovf(g, x)
+    } else if op == OP_CMP {
+        compare(g, x)
+    } else if op == OP_SELECT {
+        ld(g, 11, x.c)
+        ld(g, 9, x.a)
+        ld(g, 10, x.b)
+        w(g, cmp_imm(11, 0))
+        w(g, csel(9, 9, 10, NE))
+        st(g, 9, x.dst)
+    } else if op == OP_UN {
+        unary(g, x)
+    } else if op == OP_CONV {
+        convert(g, x)
+    } else if op == OP_EXT {
+        let from = cls(g, x.a)
+        if x.cls == C_I128 || from == C_I128 {
+            refuse(g, "an `i128` extension")
+            return
+        }
+        ld(g, 9, x.a)
+        if x.sub == 1 { sext(g, 9, from) }
+        norm(g, 9, x.cls)
+        st(g, 9, x.dst)
+    } else if op == OP_TRUNC {
+        if x.cls == C_I128 || cls(g, x.a) == C_I128 {
+            refuse(g, "an `i128` truncation")
+            return
+        }
+        ld(g, 9, x.a)
+        norm(g, 9, x.cls)
+        st(g, 9, x.dst)
+    } else if op == OP_PTRADD {
+        ld(g, 9, x.a)
+        ld(g, 10, x.b)
+        w(g, add(9, 9, 10))
+        st(g, 9, x.dst)
+    } else if op == OP_PTRTOINT || op == OP_INTTOPTR {
+        ld(g, 9, x.a)
+        st(g, 9, x.dst)
+    } else if op == OP_GET {
+        mem(g, 8, true, false, 9, SP, g.var_off + 8 * x.imm)
+        st(g, 9, x.dst)
+    } else if op == OP_SET {
+        ld(g, 9, x.a)
+        mem(g, 8, false, false, 9, SP, g.var_off + 8 * x.imm)
+    } else if op == OP_CALL || op == OP_CALLI {
+        call(g, x)
+    } else if op == OP_COPY {
+        ld(g, 9, x.a)
+        ld(g, 10, x.b)
+        copy_bytes(g, x.imm, false)
+    } else if op == OP_ZERO {
+        ld(g, 9, x.a)
+        copy_bytes(g, x.imm, true)
+    } else if op == OP_LOC {
+        // Positions become line tables in slice 5 (D10).
+    } else {
+        refuse(g, f"instruction kind {op}")
+    }
+}
+
+/// `reg` = a symbol's address: a defined one by `adrp`/`add`, an imported one through the GOT.
+fn sym_addr(g: G, reg: Int, s: Int) {
+    if g.u.syms[s].link == L_IMPORT {
+        reloc(g, R_GOT_PAGE21, s)
+        w(g, adrp(reg))
+        reloc(g, R_GOT_PAGEOFF12, s)
+        w(g, ldr_x(reg, reg, 0))
+    } else {
+        reloc(g, R_PAGE21, s)
+        w(g, adrp(reg))
+        reloc(g, R_PAGEOFF12, s)
+        w(g, add_imm(reg, reg, 0))
+    }
+}
+
+/// Copy `size` bytes from `[x10]` to `[x9]`, or zero them; x11 and x12 scratch.
+fn copy_bytes(g: G, size: Int, zero: Bool) {
+    let mut left = size
+    if left >= 64 {
+        let n = left / 8
+        mov_imm(g, 12, n)
+        let top = here(g)
+        if zero {
+            w(g, str_post(8, ZR, 9, 8))
+        } else {
+            w(g, ldr_post(8, 11, 10, 8))
+            w(g, str_post(8, 11, 9, 8))
+        }
+        w(g, subs_imm(12, 12, 1))
+        w(g, b_cond(NE, top - here(g)))
+        left -= n * 8
+    }
+    for e in 0..4 {
+        let sz = 8 >> e
+        while left >= sz {
+            if zero {
+                w(g, str_post(sz, ZR, 9, sz))
+            } else {
+                w(g, ldr_post(sz, 11, 10, sz))
+                w(g, str_post(sz, 11, 9, sz))
+            }
+            left -= sz
+        }
+    }
+}
+
+fn bin(g: G, x: Ins) {
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        refuse(g, "`i128` arithmetic")
+        return
+    }
+    if s >= B_FADD {
+        let dbl = c == C_F64
+        ld_fp(g, 16, x.a)
+        ld_fp(g, 17, x.b)
+        if s == B_FADD {
+            w(g, fadd(dbl, 16, 16, 17))
+        } else if s == B_FSUB {
+            w(g, fsub(dbl, 16, 16, 17))
+        } else if s == B_FMUL {
+            w(g, fmul(dbl, 16, 16, 17))
+        } else {
+            w(g, fdiv(dbl, 16, 16, 17))
+        }
+        w(g, fmov_from_fp(dbl, 9, 16))
+        st(g, 9, x.dst)
+        return
+    }
+    ld(g, 9, x.a)
+    ld(g, 10, x.b)
+    if s == B_ADD {
+        w(g, add(9, 9, 10))
+    } else if s == B_SUB {
+        w(g, sub(9, 9, 10))
+    } else if s == B_MUL {
+        w(g, mul(9, 9, 10))
+    } else if s == B_SDIV || s == B_SREM {
+        sext(g, 9, c)
+        sext(g, 10, c)
+        w(g, sdiv(11, 9, 10))
+        if s == B_SDIV { w(g, mov(9, 11)) } else { w(g, msub(9, 11, 10, 9)) }
+    } else if s == B_UDIV || s == B_UREM {
+        w(g, udiv(11, 9, 10))
+        if s == B_UDIV { w(g, mov(9, 11)) } else { w(g, msub(9, 11, 10, 9)) }
+    } else if s == B_AND {
+        w(g, and(9, 9, 10))
+    } else if s == B_OR {
+        w(g, orr(9, 9, 10))
+    } else if s == B_XOR {
+        w(g, eor(9, 9, 10))
+    } else if s == B_SHL {
+        w(g, lslv(9, 9, 10))
+    } else if s == B_LSHR {
+        w(g, lsrv(9, 9, 10))
+    } else if s == B_ASHR {
+        sext(g, 9, c)
+        w(g, asrv(9, 9, 10))
+    } else if s == B_ROTL || s == B_ROTR {
+        let bits = width_bits(c)
+        if bits == 64 {
+            if s == B_ROTL { w(g, neg(10, 10)) }
+            w(g, rorv(9, 9, 10))
+        } else if bits == 32 {
+            if s == B_ROTL { w(g, neg_w(10, 10)) }
+            w(g, rorv_w(9, 9, 10))
+        } else {
+            // 8 and 16 bits: (x >> n) | (x << (w - n)), the amount modulo the width.
+            mov_imm(g, 12, bits - 1)
+            w(g, and(10, 10, 12))
+            if s == B_ROTL {
+                mov_imm(g, 12, bits)
+                w(g, sub(10, 12, 10))
+                mov_imm(g, 12, bits - 1)
+                w(g, and(10, 10, 12))
+            }
+            mov_imm(g, 12, bits)
+            w(g, sub(12, 12, 10))
+            w(g, lslv(12, 9, 12))
+            w(g, lsrv(9, 9, 10))
+            w(g, orr(9, 9, 12))
+        }
+    } else {
+        refuse(g, f"binary operation {s}")
+        return
+    }
+    norm(g, 9, c)
+    st(g, 9, x.dst)
+}
+
+fn ovf(g: G, x: Ins) {
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        refuse(g, "`i128` checked arithmetic")
+        return
+    }
+    ld(g, 9, x.a)
+    ld(g, 10, x.b)
+    let bits = width_bits(c)
+    let signed = s == O_ADD || s == O_SUB || s == O_MUL
+    if bits == 64 {
+        if s == O_ADD {
+            w(g, adds(9, 9, 10))
+            w(g, cset(11, VS))
+        } else if s == O_SUB {
+            w(g, subs(9, 9, 10))
+            w(g, cset(11, VS))
+        } else if s == O_UADD {
+            w(g, adds(9, 9, 10))
+            w(g, cset(11, HS))
+        } else if s == O_USUB {
+            w(g, subs(9, 9, 10))
+            w(g, cset(11, LO))
+        } else if s == O_MUL {
+            w(g, mul(11, 9, 10))
+            w(g, smulh(12, 9, 10))
+            w(g, cmp_asr(12, 11, 63))
+            w(g, mov(9, 11))
+            w(g, cset(11, NE))
+        } else {
+            w(g, mul(11, 9, 10))
+            w(g, umulh(12, 9, 10))
+            w(g, cmp_imm(12, 0))
+            w(g, mov(9, 11))
+            w(g, cset(11, NE))
+        }
+    } else {
+        // Narrow: exact at 64 bits, an overflow when the result does not survive the cut.
+        if signed {
+            sext(g, 9, c)
+            sext(g, 10, c)
+        }
+        if s == O_ADD || s == O_UADD {
+            w(g, add(9, 9, 10))
+        } else if s == O_SUB || s == O_USUB {
+            w(g, sub(9, 9, 10))
+        } else {
+            w(g, mul(9, 9, 10))
+        }
+        // x12 = the result cut to the class (and sign-extended, signed): it differs from x9
+        // exactly when the result does not fit.
+        w(g, mov(12, 9))
+        norm(g, 12, c)
+        if signed { sext(g, 12, c) }
+        w(g, cmp(12, 9))
+        w(g, cset(11, NE))
+        norm(g, 9, c)
+    }
+    st(g, 9, x.dst)
+    st(g, 11, x.dst2)
+}
+
+fn int_cond(k: Int) -> Int {
+    match k {
+        0 => EQ,
+        1 => NE,
+        2 => LT,
+        3 => LE,
+        4 => GT,
+        5 => GE,
+        6 => LO,
+        7 => LS,
+        8 => HI,
+        _ => HS,
+    }
+}
+
+fn float_cond(k: Int) -> Int {
+    match k {
+        10 => EQ,
+        11 => NE,
+        12 => MI,
+        13 => LS,
+        14 => GT,
+        _ => GE,
+    }
+}
+
+fn compare(g: G, x: Ins) {
+    let c = cls(g, x.a)
+    if c == C_I128 {
+        refuse(g, "an `i128` comparison")
+        return
+    }
+    if x.sub >= K_FEQ {
+        let dbl = c == C_F64
+        ld_fp(g, 16, x.a)
+        ld_fp(g, 17, x.b)
+        w(g, fcmp(dbl, 16, 17))
+        w(g, cset(9, float_cond(x.sub)))
+        st(g, 9, x.dst)
+        return
+    }
+    ld(g, 9, x.a)
+    ld(g, 10, x.b)
+    if x.sub >= K_LT && x.sub <= K_GE {
+        sext(g, 9, c)
+        sext(g, 10, c)
+    }
+    w(g, cmp(9, 10))
+    w(g, cset(9, int_cond(x.sub)))
+    st(g, 9, x.dst)
+}
+
+fn unary(g: G, x: Ins) {
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        refuse(g, "an `i128` operation")
+        return
+    }
+    if s <= U_FTRUNC {
+        let dbl = c == C_F64
+        ld_fp(g, 16, x.a)
+        if s == U_FNEG {
+            w(g, fneg(dbl, 16, 16))
+        } else if s == U_FSQRT {
+            w(g, fsqrt(dbl, 16, 16))
+        } else if s == U_FABS {
+            w(g, fabs(dbl, 16, 16))
+        } else if s == U_FFLOOR {
+            w(g, frintm(dbl, 16, 16))
+        } else if s == U_FCEIL {
+            w(g, frintp(dbl, 16, 16))
+        } else {
+            w(g, frintz(dbl, 16, 16))
+        }
+        w(g, fmov_from_fp(dbl, 9, 16))
+        st(g, 9, x.dst)
+        return
+    }
+    ld(g, 9, x.a)
+    let bits = width_bits(c)
+    if s == U_POPCNT {
+        w(g, fmov_to_fp(true, 16, 9))
+        w(g, cnt8b(16, 16))
+        w(g, addv8b(16, 16))
+        w(g, fmov_from_fp(false, 9, 16))
+    } else if s == U_CLZ {
+        w(g, clz(9, 9))
+        if bits < 64 {
+            mov_imm(g, 10, 64 - bits)
+            w(g, sub(9, 9, 10))
+        }
+    } else if s == U_CTZ {
+        if bits < 64 {
+            // A bit just above the width, so a zero counts to the width.
+            mov_imm(g, 10, 1 << bits)
+            w(g, orr(9, 9, 10))
+        }
+        w(g, rbit(9, 9))
+        w(g, clz(9, 9))
+    } else if s == U_BSWAP {
+        if bits == 64 {
+            w(g, rev(9, 9))
+        } else if bits == 32 {
+            w(g, rev_w(9, 9))
+        } else if bits == 16 {
+            w(g, rev16_w(9, 9))
+        }
+    } else {
+        refuse(g, f"unary operation {s}")
+        return
+    }
+    norm(g, 9, c)
+    st(g, 9, x.dst)
+}
+
+fn convert(g: G, x: Ins) {
+    let from = cls(g, x.a)
+    let to = x.cls
+    let s = x.sub
+    if from == C_I128 || to == C_I128 {
+        refuse(g, "an `i128` conversion")
+        return
+    }
+    if s == V_STOF || s == V_UTOF {
+        ld(g, 9, x.a)
+        if s == V_STOF {
+            sext(g, 9, from)
+            w(g, scvtf(to == C_F64, 16, 9))
+        } else {
+            w(g, ucvtf(to == C_F64, 16, 9))
+        }
+        w(g, fmov_from_fp(to == C_F64, 9, 16))
+    } else if s == V_FTOS || s == V_FTOU {
+        ld_fp(g, 16, x.a)
+        if s == V_FTOS {
+            w(g, fcvtzs(from == C_F64, 9, 16))
+        } else {
+            w(g, fcvtzu(from == C_F64, 9, 16))
+        }
+        if width_bits(to) < 64 {
+            // Saturate at the class's range, as Cranelift's and LLVM's saturating forms do.
+            let bits = width_bits(to)
+            if s == V_FTOS {
+                mov_imm(g, 10, (1 << (bits - 1)) - 1)
+                w(g, cmp(9, 10))
+                w(g, csel(9, 10, 9, GT))
+                mov_imm(g, 10, 0 - (1 << (bits - 1)))
+                w(g, cmp(9, 10))
+                w(g, csel(9, 10, 9, LT))
+            } else {
+                mov_imm(g, 10, (1 << bits) - 1)
+                w(g, cmp(9, 10))
+                w(g, csel(9, 10, 9, HI))
+            }
+        }
+        norm(g, 9, to)
+    } else if s == V_FEXT {
+        ld_fp(g, 16, x.a)
+        w(g, fcvt_s_to_d(16, 16))
+        w(g, fmov_from_fp(true, 9, 16))
+    } else if s == V_FTRUNC {
+        ld_fp(g, 16, x.a)
+        w(g, fcvt_d_to_s(16, 16))
+        w(g, fmov_from_fp(false, 9, 16))
+    } else {
+        // The same bits as another class of the same width.
+        ld(g, 9, x.a)
+        norm(g, 9, to)
+    }
+    st(g, 9, x.dst)
+}
+
+fn call(g: G, x: Ins) {
+    let params = call_params(g.u, x)
+    let ret = call_ret(g.u, x)
+    let conv = call_conv(g.u, x)
+    if ints_len(params) != ints_len(x.args) {
+        refuse(g, "a call whose arguments do not match its callee")
+        return
+    }
+    if ret == C_I128 {
+        refuse(g, "a call returning `i128`")
+        return
+    }
+    let a = assign(params)
+    // Stack arguments first, while x9 is free; then the registers.
+    let mut i = 0
+    while i < ints_len(params) {
+        let c = params[i]
+        if c == C_I128 {
+            refuse(g, "an `i128` argument")
+            return
+        }
+        if a[2 * i] == 2 {
+            ld(g, 9, x.args[i])
+            mem(g, class_size(c), false, false, 9, SP, a[2 * i + 1])
+        }
+        i += 1
+    }
+    i = 0
+    while i < ints_len(params) {
+        let c = params[i]
+        let kind = a[2 * i]
+        if kind == 0 {
+            ld(g, a[2 * i + 1], x.args[i])
+        } else if kind == 1 {
+            mem(g, if c == C_F32 { 4 } else { 8 }, true, true, a[2 * i + 1], SP, voff(g, x.args[i]))
+        }
+        i += 1
+    }
+    if x.op == OP_CALLI {
+        ld(g, 17, x.a)
+        w(g, blr(17))
+    } else {
+        reloc(g, R_BRANCH26, x.sym)
+        w(g, bl(0))
+    }
+    // The result, then a Nazm callee's failure bit in the next integer register (D4).
+    let mut bit_reg = 0
+    if ret >= 0 {
+        if is_float(ret) {
+            w(g, fmov_from_fp(ret == C_F64, 9, 0))
+            st(g, 9, x.dst)
+        } else {
+            norm(g, 0, ret)
+            st(g, 0, x.dst)
+            bit_reg = 1
+        }
+    }
+    if conv == CONV_NAZM && x.dst2 >= 0 {
+        w(g, and1_w(9, bit_reg))
+        st(g, 9, x.dst2)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Terminators.
+
+fn term(g: G, t: Ins, bi: Int) {
+    let op = t.op
+    if op == T_JUMP {
+        if t.imm != bi + 1 { branch_to(g, 0, b(0), t.imm) }
+    } else if op == T_BRANCH {
+        ld(g, 9, t.a)
+        if t.imm == bi + 1 {
+            branch_to(g, 1, cbz(9, 0), t.c)
+        } else if t.c == bi + 1 {
+            branch_to(g, 1, cbnz(9, 0), t.imm)
+        } else {
+            branch_to(g, 1, cbnz(9, 0), t.imm)
+            branch_to(g, 0, b(0), t.c)
+        }
+    } else if op == T_SWITCH {
+        let c = cls(g, t.a)
+        ld(g, 9, t.a)
+        let mut k = 0
+        while k + 1 < ints_len(t.args) {
+            mov_imm(g, 10, masked(t.args[k], c))
+            w(g, cmp(9, 10))
+            branch_to(g, 1, b_cond(EQ, 0), t.args[k + 1])
+            k += 2
+        }
+        if t.imm != bi + 1 { branch_to(g, 0, b(0), t.imm) }
+    } else if op == T_RETURN {
+        let own = g.u.syms[g.f.sym]
+        let mut bit_reg = 0
+        if t.a >= 0 {
+            let c = own.ret
+            if c == C_I128 {
+                refuse(g, "an `i128` result")
+                return
+            }
+            if is_float(c) {
+                ld_fp(g, 0, t.a)
+            } else {
+                ld(g, 0, t.a)
+                bit_reg = 1
+            }
+        }
+        if own.conv == CONV_NAZM { w(g, movz(bit_reg, 0, 0)) }
+        epilogue(g)
+    } else if op == T_FAIL {
+        // The failure exit: a zero where the result would be, and the bit set.
+        let own = g.u.syms[g.f.sym]
+        let mut bit_reg = 0
+        if own.ret >= 0 {
+            if is_float(own.ret) {
+                w(g, fmov_to_fp(own.ret == C_F64, 0, ZR))
+            } else {
+                w(g, movz(0, 0, 0))
+                bit_reg = 1
+            }
+        }
+        w(g, movz(bit_reg, 1, 0))
+        epilogue(g)
+    } else if op == T_UNREACHABLE {
+        w(g, brk(1))
+    } else {
+        refuse(g, f"terminator kind {op}")
+    }
+}

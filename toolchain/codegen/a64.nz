@@ -1,0 +1,223 @@
+// The aarch64 encoder: A64 instructions as their 32-bit words (Arm ARM, A64 base and FP/SIMD
+// encodings). Every function returns the word; nothing here knows about LIR. Registers are
+// numbers 0–30; 31 is `sp` or `xzr`/`wzr` as the instruction reads it.
+
+pub const SP: Int = 31
+pub const ZR: Int = 31
+
+// Condition codes.
+pub const EQ: Int = 0
+pub const NE: Int = 1
+pub const HS: Int = 2
+pub const LO: Int = 3
+pub const MI: Int = 4
+pub const PL: Int = 5
+pub const VS: Int = 6
+pub const VC: Int = 7
+pub const HI: Int = 8
+pub const LS: Int = 9
+pub const GE: Int = 10
+pub const LT: Int = 11
+pub const GT: Int = 12
+pub const LE: Int = 13
+
+fn rd(d: Int, n: Int) -> Int {
+    (n << 5) | d
+}
+
+fn rdm(d: Int, n: Int, m: Int) -> Int {
+    (m << 16) | (n << 5) | d
+}
+
+// Moves of immediates.
+pub fn movz(d: Int, imm16: Int, hw: Int) -> Int { 0xD2800000 | (hw << 21) | (imm16 << 5) | d }
+pub fn movn(d: Int, imm16: Int, hw: Int) -> Int { 0x92800000 | (hw << 21) | (imm16 << 5) | d }
+pub fn movk(d: Int, imm16: Int, hw: Int) -> Int { 0xF2800000 | (hw << 21) | (imm16 << 5) | d }
+
+// Register moves.
+pub fn mov(d: Int, m: Int) -> Int { 0xAA0003E0 | (m << 16) | d }
+pub fn mov_w(d: Int, m: Int) -> Int { 0x2A0003E0 | (m << 16) | d }
+/// `mov` to or from `sp` (`add d, n, #0`).
+pub fn mov_sp(d: Int, n: Int) -> Int { 0x91000000 | rd(d, n) }
+
+// Arithmetic, 64-bit.
+pub fn add_imm(d: Int, n: Int, imm12: Int) -> Int { 0x91000000 | (imm12 << 10) | rd(d, n) }
+pub fn sub_imm(d: Int, n: Int, imm12: Int) -> Int { 0xD1000000 | (imm12 << 10) | rd(d, n) }
+pub fn add_imm_lsl12(d: Int, n: Int, imm12: Int) -> Int { 0x91400000 | (imm12 << 10) | rd(d, n) }
+pub fn sub_imm_lsl12(d: Int, n: Int, imm12: Int) -> Int { 0xD1400000 | (imm12 << 10) | rd(d, n) }
+pub fn subs_imm(d: Int, n: Int, imm12: Int) -> Int { 0xF1000000 | (imm12 << 10) | rd(d, n) }
+pub fn cmp_imm(n: Int, imm12: Int) -> Int { subs_imm(ZR, n, imm12) }
+pub fn add(d: Int, n: Int, m: Int) -> Int { 0x8B000000 | rdm(d, n, m) }
+pub fn sub(d: Int, n: Int, m: Int) -> Int { 0xCB000000 | rdm(d, n, m) }
+pub fn adds(d: Int, n: Int, m: Int) -> Int { 0xAB000000 | rdm(d, n, m) }
+pub fn subs(d: Int, n: Int, m: Int) -> Int { 0xEB000000 | rdm(d, n, m) }
+pub fn cmp(n: Int, m: Int) -> Int { subs(ZR, n, m) }
+/// `cmp n, m, asr #amount`.
+pub fn cmp_asr(n: Int, m: Int, amount: Int) -> Int { 0xEB80001F | (m << 16) | (amount << 10) | (n << 5) }
+/// `add d, n, m, uxtx` — the form that reads `sp`.
+pub fn add_ext(d: Int, n: Int, m: Int) -> Int { 0x8B206000 | rdm(d, n, m) }
+pub fn sub_ext(d: Int, n: Int, m: Int) -> Int { 0xCB206000 | rdm(d, n, m) }
+pub fn neg(d: Int, m: Int) -> Int { sub(d, ZR, m) }
+pub fn mul(d: Int, n: Int, m: Int) -> Int { 0x9B007C00 | rdm(d, n, m) }
+pub fn smulh(d: Int, n: Int, m: Int) -> Int { 0x9B407C00 | rdm(d, n, m) }
+pub fn umulh(d: Int, n: Int, m: Int) -> Int { 0x9BC07C00 | rdm(d, n, m) }
+pub fn sdiv(d: Int, n: Int, m: Int) -> Int { 0x9AC00C00 | rdm(d, n, m) }
+pub fn udiv(d: Int, n: Int, m: Int) -> Int { 0x9AC00800 | rdm(d, n, m) }
+/// `msub d, n, m, a`: `a - n * m`.
+pub fn msub(d: Int, n: Int, m: Int, a: Int) -> Int { 0x9B008000 | (a << 10) | rdm(d, n, m) }
+pub fn and(d: Int, n: Int, m: Int) -> Int { 0x8A000000 | rdm(d, n, m) }
+pub fn orr(d: Int, n: Int, m: Int) -> Int { 0xAA000000 | rdm(d, n, m) }
+pub fn eor(d: Int, n: Int, m: Int) -> Int { 0xCA000000 | rdm(d, n, m) }
+pub fn tst(n: Int, m: Int) -> Int { 0xEA00001F | (m << 16) | (n << 5) }
+pub fn lslv(d: Int, n: Int, m: Int) -> Int { 0x9AC02000 | rdm(d, n, m) }
+pub fn lsrv(d: Int, n: Int, m: Int) -> Int { 0x9AC02400 | rdm(d, n, m) }
+pub fn asrv(d: Int, n: Int, m: Int) -> Int { 0x9AC02800 | rdm(d, n, m) }
+pub fn rorv(d: Int, n: Int, m: Int) -> Int { 0x9AC02C00 | rdm(d, n, m) }
+pub fn rorv_w(d: Int, n: Int, m: Int) -> Int { 0x1AC02C00 | rdm(d, n, m) }
+pub fn neg_w(d: Int, m: Int) -> Int { 0x4B000000 | rdm(d, ZR, m) }
+/// `lsr d, n, #shift` (64-bit, `ubfm`).
+pub fn lsr_imm(d: Int, n: Int, shift: Int) -> Int { 0xD340FC00 | (shift << 16) | rd(d, n) }
+/// `orr d, d, #1 << bit` is awkward to encode for any bit; `bit_set` uses `movz` and `orr`.
+
+// Conditional.
+pub fn cset(d: Int, cond: Int) -> Int { 0x9A9F07E0 | ((cond ^ 1) << 12) | d }
+pub fn csel(d: Int, n: Int, m: Int, cond: Int) -> Int { 0x9A800000 | (cond << 12) | rdm(d, n, m) }
+
+// Extensions (`sbfm`/`ubfm`).
+pub fn sxtb(d: Int, n: Int) -> Int { 0x93401C00 | rd(d, n) }
+pub fn sxth(d: Int, n: Int) -> Int { 0x93403C00 | rd(d, n) }
+pub fn sxtw(d: Int, n: Int) -> Int { 0x93407C00 | rd(d, n) }
+/// Bit 0 copied into every bit (`sbfx d, n, #0, #1`).
+pub fn sbfx1(d: Int, n: Int) -> Int { 0x93400000 | rd(d, n) }
+pub fn uxtb(d: Int, n: Int) -> Int { 0x53001C00 | rd(d, n) }
+pub fn uxth(d: Int, n: Int) -> Int { 0x53003C00 | rd(d, n) }
+/// `and wd, wn, #1`.
+pub fn and1_w(d: Int, n: Int) -> Int { 0x12000000 | rd(d, n) }
+
+// Bits.
+pub fn clz(d: Int, n: Int) -> Int { 0xDAC01000 | rd(d, n) }
+pub fn rbit(d: Int, n: Int) -> Int { 0xDAC00000 | rd(d, n) }
+pub fn rev(d: Int, n: Int) -> Int { 0xDAC00C00 | rd(d, n) }
+pub fn rev_w(d: Int, n: Int) -> Int { 0x5AC00800 | rd(d, n) }
+pub fn rev16_w(d: Int, n: Int) -> Int { 0x5AC00400 | rd(d, n) }
+/// `cnt vd.8b, vn.8b` and `addv bd, vn.8b`.
+pub fn cnt8b(d: Int, n: Int) -> Int { 0x0E205800 | rd(d, n) }
+pub fn addv8b(d: Int, n: Int) -> Int { 0x0E31B800 | rd(d, n) }
+
+// Loads and stores, unsigned offset scaled by the access size.
+pub fn ldr_x(t: Int, n: Int, imm: Int) -> Int { 0xF9400000 | ((imm >> 3) << 10) | rd(t, n) }
+pub fn str_x(t: Int, n: Int, imm: Int) -> Int { 0xF9000000 | ((imm >> 3) << 10) | rd(t, n) }
+pub fn ldr_w(t: Int, n: Int, imm: Int) -> Int { 0xB9400000 | ((imm >> 2) << 10) | rd(t, n) }
+pub fn str_w(t: Int, n: Int, imm: Int) -> Int { 0xB9000000 | ((imm >> 2) << 10) | rd(t, n) }
+pub fn ldrh(t: Int, n: Int, imm: Int) -> Int { 0x79400000 | ((imm >> 1) << 10) | rd(t, n) }
+pub fn strh(t: Int, n: Int, imm: Int) -> Int { 0x79000000 | ((imm >> 1) << 10) | rd(t, n) }
+pub fn ldrb(t: Int, n: Int, imm: Int) -> Int { 0x39400000 | (imm << 10) | rd(t, n) }
+pub fn strb(t: Int, n: Int, imm: Int) -> Int { 0x39000000 | (imm << 10) | rd(t, n) }
+pub fn ldr_d(t: Int, n: Int, imm: Int) -> Int { 0xFD400000 | ((imm >> 3) << 10) | rd(t, n) }
+pub fn str_d(t: Int, n: Int, imm: Int) -> Int { 0xFD000000 | ((imm >> 3) << 10) | rd(t, n) }
+pub fn ldr_s(t: Int, n: Int, imm: Int) -> Int { 0xBD400000 | ((imm >> 2) << 10) | rd(t, n) }
+pub fn str_s(t: Int, n: Int, imm: Int) -> Int { 0xBD000000 | ((imm >> 2) << 10) | rd(t, n) }
+
+/// An integer load (zero-extending) or store of `size` bytes, 1, 2, 4 or 8, at `n + imm`, `imm`
+/// a non-negative multiple of `size` below `4096 * size`.
+pub fn ldst_scaled(size: Int, load: Bool, t: Int, n: Int, imm: Int) -> Int {
+    let base = match size {
+        1 => 0x39000000,
+        2 => 0x79000000,
+        4 => 0xB9000000,
+        _ => 0xF9000000,
+    }
+    let l = if load { 0x00400000 } else { 0 }
+    base | l | ((imm / size) << 10) | rd(t, n)
+}
+
+/// The same at an unscaled offset, `-256 <= imm < 256` (`ldur`/`stur`).
+pub fn ldst_unscaled(size: Int, load: Bool, t: Int, n: Int, imm: Int) -> Int {
+    let base = match size {
+        1 => 0x38000000,
+        2 => 0x78000000,
+        4 => 0xB8000000,
+        _ => 0xF8000000,
+    }
+    let l = if load { 0x00400000 } else { 0 }
+    base | l | ((imm & 0x1FF) << 12) | rd(t, n)
+}
+
+/// A floating-point load or store of `size` bytes, 4 or 8, at a scaled offset.
+pub fn ldst_fp(size: Int, load: Bool, t: Int, n: Int, imm: Int) -> Int {
+    let base = if size == 8 { 0xFD000000 } else { 0xBD000000 }
+    let l = if load { 0x00400000 } else { 0 }
+    base | l | ((imm / size) << 10) | rd(t, n)
+}
+
+/// Loads and stores with a post-incremented base (`[n], #imm`), for copies: `size` 1, 2, 4, 8.
+pub fn ldr_post(size: Int, t: Int, n: Int, imm: Int) -> Int {
+    let base = match size {
+        1 => 0x38400400,
+        2 => 0x78400400,
+        4 => 0xB8400400,
+        _ => 0xF8400400,
+    }
+    base | ((imm & 0x1FF) << 12) | rd(t, n)
+}
+
+pub fn str_post(size: Int, t: Int, n: Int, imm: Int) -> Int {
+    let base = match size {
+        1 => 0x38000400,
+        2 => 0x78000400,
+        4 => 0xB8000400,
+        _ => 0xF8000400,
+    }
+    base | ((imm & 0x1FF) << 12) | rd(t, n)
+}
+
+// The frame.
+/// `stp x29, x30, [sp, #-16]!`
+pub fn push_frame() -> Int { 0xA9BF7BFD }
+/// `ldp x29, x30, [sp], #16`
+pub fn pop_frame() -> Int { 0xA8C17BFD }
+pub fn ret() -> Int { 0xD65F03C0 }
+pub fn brk(imm: Int) -> Int { 0xD4200000 | (imm << 5) }
+
+// Branches. Offsets are in bytes from the branch.
+pub fn b(off: Int) -> Int { 0x14000000 | ((off >> 2) & 0x3FFFFFF) }
+pub fn bl(off: Int) -> Int { 0x94000000 | ((off >> 2) & 0x3FFFFFF) }
+pub fn b_cond(cond: Int, off: Int) -> Int { 0x54000000 | (((off >> 2) & 0x7FFFF) << 5) | cond }
+pub fn cbz(t: Int, off: Int) -> Int { 0xB4000000 | (((off >> 2) & 0x7FFFF) << 5) | t }
+pub fn cbnz(t: Int, off: Int) -> Int { 0xB5000000 | (((off >> 2) & 0x7FFFF) << 5) | t }
+pub fn blr(n: Int) -> Int { 0xD63F0000 | (n << 5) }
+pub fn adrp(d: Int) -> Int { 0x90000000 | d }
+
+// Floating point: `dbl` chooses double (`d`) over single (`s`) registers.
+fn ftype(dbl: Bool) -> Int {
+    if dbl { 0x00400000 } else { 0 }
+}
+
+pub fn fmov_to_fp(dbl: Bool, d: Int, n: Int) -> Int {
+    if dbl { 0x9E670000 | rd(d, n) } else { 0x1E270000 | rd(d, n) }
+}
+
+pub fn fmov_from_fp(dbl: Bool, d: Int, n: Int) -> Int {
+    if dbl { 0x9E660000 | rd(d, n) } else { 0x1E260000 | rd(d, n) }
+}
+
+pub fn fadd(dbl: Bool, d: Int, n: Int, m: Int) -> Int { 0x1E202800 | ftype(dbl) | rdm(d, n, m) }
+pub fn fsub(dbl: Bool, d: Int, n: Int, m: Int) -> Int { 0x1E203800 | ftype(dbl) | rdm(d, n, m) }
+pub fn fmul(dbl: Bool, d: Int, n: Int, m: Int) -> Int { 0x1E200800 | ftype(dbl) | rdm(d, n, m) }
+pub fn fdiv(dbl: Bool, d: Int, n: Int, m: Int) -> Int { 0x1E201800 | ftype(dbl) | rdm(d, n, m) }
+pub fn fneg(dbl: Bool, d: Int, n: Int) -> Int { 0x1E214000 | ftype(dbl) | rd(d, n) }
+pub fn fabs(dbl: Bool, d: Int, n: Int) -> Int { 0x1E20C000 | ftype(dbl) | rd(d, n) }
+pub fn fsqrt(dbl: Bool, d: Int, n: Int) -> Int { 0x1E21C000 | ftype(dbl) | rd(d, n) }
+pub fn frintm(dbl: Bool, d: Int, n: Int) -> Int { 0x1E254000 | ftype(dbl) | rd(d, n) }
+pub fn frintp(dbl: Bool, d: Int, n: Int) -> Int { 0x1E24C000 | ftype(dbl) | rd(d, n) }
+pub fn frintz(dbl: Bool, d: Int, n: Int) -> Int { 0x1E25C000 | ftype(dbl) | rd(d, n) }
+pub fn fcmp(dbl: Bool, n: Int, m: Int) -> Int { 0x1E202000 | ftype(dbl) | (m << 16) | (n << 5) }
+/// A signed or unsigned 64-bit integer to a float.
+pub fn scvtf(dbl: Bool, d: Int, n: Int) -> Int { 0x9E220000 | ftype(dbl) | rd(d, n) }
+pub fn ucvtf(dbl: Bool, d: Int, n: Int) -> Int { 0x9E230000 | ftype(dbl) | rd(d, n) }
+/// A float to a 64-bit integer, toward zero, saturating.
+pub fn fcvtzs(dbl: Bool, d: Int, n: Int) -> Int { 0x9E380000 | ftype(dbl) | rd(d, n) }
+pub fn fcvtzu(dbl: Bool, d: Int, n: Int) -> Int { 0x9E390000 | ftype(dbl) | rd(d, n) }
+/// Single to double, and double to single.
+pub fn fcvt_s_to_d(d: Int, n: Int) -> Int { 0x1E22C000 | rd(d, n) }
+pub fn fcvt_d_to_s(d: Int, n: Int) -> Int { 0x1E624000 | rd(d, n) }

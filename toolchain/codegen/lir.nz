@@ -1,0 +1,986 @@
+// The LIR reader: one program's units, as `nazm lir --ops` prints them (`nazm.lir/2`'s
+// `lir.text`; the grammar is `crates/nazm-lir/src/op/print.rs`'s), into the module the rest of
+// the generator reads. A line it does not recognise is refused, never skipped (design D1, D9).
+
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
+
+// Machine classes (`Class` in `crates/nazm-lir/src/op/ir.rs`).
+pub const C_BIT: Int = 0
+pub const C_I8: Int = 1
+pub const C_I16: Int = 2
+pub const C_I32: Int = 3
+pub const C_I64: Int = 4
+pub const C_F32: Int = 5
+pub const C_F64: Int = 6
+pub const C_PTR: Int = 7
+pub const C_I128: Int = 8
+pub const C_NONE: Int = -1
+
+// Linkage.
+pub const L_IMPORT: Int = 0
+pub const L_LOCAL: Int = 1
+pub const L_HIDDEN: Int = 2
+pub const L_EXPORT: Int = 3
+
+// Calling conventions.
+pub const CONV_NAZM: Int = 0
+pub const CONV_C: Int = 1
+pub const CONV_PLAIN: Int = 2
+
+// Instructions.
+pub const OP_PARAM: Int = 1
+pub const OP_CONST: Int = 2
+pub const OP_ADDR: Int = 3
+pub const OP_SLOT: Int = 4
+pub const OP_LOAD: Int = 5
+pub const OP_STORE: Int = 6
+pub const OP_BIN: Int = 7
+pub const OP_OVF: Int = 8
+pub const OP_CMP: Int = 9
+pub const OP_SELECT: Int = 10
+pub const OP_UN: Int = 11
+pub const OP_CONV: Int = 12
+pub const OP_EXT: Int = 13
+pub const OP_TRUNC: Int = 14
+pub const OP_PTRADD: Int = 15
+pub const OP_PTRTOINT: Int = 16
+pub const OP_INTTOPTR: Int = 17
+pub const OP_GET: Int = 18
+pub const OP_SET: Int = 19
+pub const OP_CALL: Int = 20
+pub const OP_CALLI: Int = 21
+pub const OP_COPY: Int = 22
+pub const OP_ZERO: Int = 23
+pub const OP_LOC: Int = 24
+
+// Terminators.
+pub const T_JUMP: Int = 40
+pub const T_BRANCH: Int = 41
+pub const T_SWITCH: Int = 42
+pub const T_RETURN: Int = 43
+pub const T_FAIL: Int = 44
+pub const T_UNREACHABLE: Int = 45
+
+// Binary operations (`sub` of OP_BIN).
+pub const B_ADD: Int = 0
+pub const B_SUB: Int = 1
+pub const B_MUL: Int = 2
+pub const B_SDIV: Int = 3
+pub const B_SREM: Int = 4
+pub const B_AND: Int = 5
+pub const B_OR: Int = 6
+pub const B_XOR: Int = 7
+pub const B_UDIV: Int = 8
+pub const B_UREM: Int = 9
+pub const B_SHL: Int = 10
+pub const B_LSHR: Int = 11
+pub const B_ASHR: Int = 12
+pub const B_ROTL: Int = 13
+pub const B_ROTR: Int = 14
+pub const B_FADD: Int = 15
+pub const B_FSUB: Int = 16
+pub const B_FMUL: Int = 17
+pub const B_FDIV: Int = 18
+
+// Overflow-checked operations.
+pub const O_ADD: Int = 0
+pub const O_SUB: Int = 1
+pub const O_MUL: Int = 2
+pub const O_UADD: Int = 3
+pub const O_USUB: Int = 4
+pub const O_UMUL: Int = 5
+
+// Comparisons.
+pub const K_EQ: Int = 0
+pub const K_NE: Int = 1
+pub const K_LT: Int = 2
+pub const K_LE: Int = 3
+pub const K_GT: Int = 4
+pub const K_GE: Int = 5
+pub const K_ULT: Int = 6
+pub const K_ULE: Int = 7
+pub const K_UGT: Int = 8
+pub const K_UGE: Int = 9
+pub const K_FEQ: Int = 10
+pub const K_FNE: Int = 11
+pub const K_FLT: Int = 12
+pub const K_FLE: Int = 13
+pub const K_FGT: Int = 14
+pub const K_FGE: Int = 15
+
+// One-operand operations.
+pub const U_FNEG: Int = 0
+pub const U_FSQRT: Int = 1
+pub const U_FABS: Int = 2
+pub const U_FFLOOR: Int = 3
+pub const U_FCEIL: Int = 4
+pub const U_FTRUNC: Int = 5
+pub const U_POPCNT: Int = 6
+pub const U_CLZ: Int = 7
+pub const U_CTZ: Int = 8
+pub const U_BSWAP: Int = 9
+
+// Conversions.
+pub const V_STOF: Int = 0
+pub const V_UTOF: Int = 1
+pub const V_FTOS: Int = 2
+pub const V_FTOU: Int = 3
+pub const V_FEXT: Int = 4
+pub const V_FTRUNC: Int = 5
+pub const V_BITS: Int = 6
+
+/// A symbol: a function (`kind` 0) with its signature, or data (`kind` 1).
+pub struct Sym {
+    name: Str,
+    kind: Int,
+    link: Int,
+    params: Ints,
+    ret: Int,
+    conv: Int,
+}
+
+/// Bytes a unit defines, at an alignment, with symbols' addresses written at offsets.
+pub struct DataDef {
+    sym: Int,
+    align: Int,
+    writable: Bool,
+    section: Str,
+    hex: Str,
+    reloc_at: Ints,
+    reloc_sym: Ints,
+}
+
+/// One instruction or terminator. Operands are value numbers, `-1` where absent.
+///
+/// - `dst`, `dst2`: what it defines (`dst2` an overflow bit or a callee's failure bit)
+/// - `a`, `b`, `c`: operands (`c` a select's third, a branch's other block)
+/// - `cls`: a class it names; `sub`: which operation of its kind
+/// - `imm`: a constant, an offset, a size, a parameter's index, a variable's or slot's number,
+///   a block
+/// - `sym`: a symbol's index; `args`: a call's arguments, or a switch's `key, block` pairs;
+///   `sig_params`, `sig_ret`, `sig_conv`: an indirect call's signature
+pub struct Ins {
+    op: Int,
+    dst: Int,
+    dst2: Int,
+    a: Int,
+    b: Int,
+    c: Int,
+    cls: Int,
+    sub: Int,
+    imm: Int,
+    imm_hi: Int,
+    sym: Int,
+    args: Ints,
+    sig_params: Ints,
+    sig_ret: Int,
+    sig_conv: Int,
+}
+
+/// A function: its variables' classes, its slots, its instructions in block order and where
+/// each block's start and end fall among them, and one terminator per block.
+pub struct Func {
+    sym: Int,
+    name: Str,
+    section: Str,
+    vars: Ints,
+    slot_size: Ints,
+    slot_align: Ints,
+    insts: Vec[Ins],
+    block_first: Ints,
+    block_end: Ints,
+    terms: Vec[Ins],
+    at_file: Int,
+    at_line: Int,
+}
+
+/// One unit.
+pub struct Unit {
+    source: Str,
+    syms: Vec[Sym],
+    index: HashMap[Str, Int],
+    data: Vec[DataDef],
+    funcs: Vec[Func],
+}
+
+/// What reading found: the units, and every line it refused.
+pub struct Program {
+    units: Vec[Unit],
+    errors: Strs,
+}
+
+pub fn ins_new(op: Int) -> Ins {
+    Ins(op: op, dst: -1, dst2: -1, a: -1, b: -1, c: -1, cls: -1, sub: -1, imm: 0, imm_hi: 0,
+            sym: -1, args: ints_new(), sig_params: ints_new(), sig_ret: -1, sig_conv: 0)
+}
+
+fn unit_new(source: Str) -> Unit {
+    Unit(source: source, syms: vec_new[Sym](), index: hashmap_new[Str, Int](),
+            data: vec_new[DataDef](), funcs: vec_new[Func]())
+}
+
+pub fn class_of(s: Str) -> Int {
+    match s {
+        "bit" => C_BIT,
+        "i8" => C_I8,
+        "i16" => C_I16,
+        "i32" => C_I32,
+        "i64" => C_I64,
+        "f32" => C_F32,
+        "f64" => C_F64,
+        "ptr" => C_PTR,
+        "i128" => C_I128,
+        _ => -2,
+    }
+}
+
+pub fn class_name(c: Int) -> Str {
+    match c {
+        0 => "bit",
+        1 => "i8",
+        2 => "i16",
+        3 => "i32",
+        4 => "i64",
+        5 => "f32",
+        6 => "f64",
+        7 => "ptr",
+        8 => "i128",
+        _ => "none",
+    }
+}
+
+fn bin_of(s: Str) -> Int {
+    match s {
+        "add" => B_ADD,
+        "sub" => B_SUB,
+        "mul" => B_MUL,
+        "sdiv" => B_SDIV,
+        "srem" => B_SREM,
+        "and" => B_AND,
+        "or" => B_OR,
+        "xor" => B_XOR,
+        "udiv" => B_UDIV,
+        "urem" => B_UREM,
+        "shl" => B_SHL,
+        "lshr" => B_LSHR,
+        "ashr" => B_ASHR,
+        "rotl" => B_ROTL,
+        "rotr" => B_ROTR,
+        "fadd" => B_FADD,
+        "fsub" => B_FSUB,
+        "fmul" => B_FMUL,
+        "fdiv" => B_FDIV,
+        _ => -1,
+    }
+}
+
+fn ovf_of(s: Str) -> Int {
+    match s {
+        "add.ovf" => O_ADD,
+        "sub.ovf" => O_SUB,
+        "mul.ovf" => O_MUL,
+        "uadd.ovf" => O_UADD,
+        "usub.ovf" => O_USUB,
+        "umul.ovf" => O_UMUL,
+        _ => -1,
+    }
+}
+
+fn cmp_of(s: Str) -> Int {
+    match s {
+        "eq" => K_EQ,
+        "ne" => K_NE,
+        "lt" => K_LT,
+        "le" => K_LE,
+        "gt" => K_GT,
+        "ge" => K_GE,
+        "ult" => K_ULT,
+        "ule" => K_ULE,
+        "ugt" => K_UGT,
+        "uge" => K_UGE,
+        "feq" => K_FEQ,
+        "fne" => K_FNE,
+        "flt" => K_FLT,
+        "fle" => K_FLE,
+        "fgt" => K_FGT,
+        "fge" => K_FGE,
+        _ => -1,
+    }
+}
+
+fn un_of(s: Str) -> Int {
+    match s {
+        "fneg" => U_FNEG,
+        "fsqrt" => U_FSQRT,
+        "fabs" => U_FABS,
+        "ffloor" => U_FFLOOR,
+        "fceil" => U_FCEIL,
+        "ftrunc" => U_FTRUNC,
+        "popcnt" => U_POPCNT,
+        "clz" => U_CLZ,
+        "ctz" => U_CTZ,
+        "bswap" => U_BSWAP,
+        _ => -1,
+    }
+}
+
+fn conv_of(s: Str) -> Int {
+    match s {
+        "stof" => V_STOF,
+        "utof" => V_UTOF,
+        "ftos" => V_FTOS,
+        "ftou" => V_FTOU,
+        "fext" => V_FEXT,
+        "ftrunc" => V_FTRUNC,
+        "bits" => V_BITS,
+        _ => -1,
+    }
+}
+
+/// A decimal integer, signed, that fits 64 bits; `ok` false otherwise.
+pub struct Num {
+    ok: Bool,
+    value: Int,
+    hi: Int,
+}
+
+/// A decimal, read exactly: the low 64 bits in `value`, and `hi` the high 64 bits of a 128-bit
+/// value (the sign extension of `value` for anything that fits 64 bits).
+pub fn parse_num(s: Str) -> Num {
+    let n = str_len(s)
+    if n == 0 { return Num(ok: false, value: 0, hi: 0) }
+    let neg = str_byte(s, 0) == 45
+    let mut i = if neg { 1 } else { 0 }
+    if i >= n { return Num(ok: false, value: 0, hi: 0) }
+    // 128 bits as four 32-bit limbs, little end first, of the magnitude.
+    let limbs = ints_new()
+    ints_push(limbs, 0)
+    ints_push(limbs, 0)
+    ints_push(limbs, 0)
+    ints_push(limbs, 0)
+    while i < n {
+        let d = str_byte(s, i) - 48
+        if d < 0 || d > 9 { return Num(ok: false, value: 0, hi: 0) }
+        let mut carry = d
+        let mut k = 0
+        while k < 4 {
+            let t = limbs[k] * 10 + carry
+            limbs[k] = t & 0xFFFFFFFF
+            carry = t >> 32
+            k += 1
+        }
+        i += 1
+    }
+    let mut lo = limbs[0] | (limbs[1] << 32)
+    let mut hi = limbs[2] | (limbs[3] << 32)
+    if neg {
+        // Two's complement of the 128-bit magnitude.
+        lo = ~lo
+        hi = ~hi
+        if lo == -1 {
+            lo = 0
+            hi = wrapping_add(hi, 1)
+        } else {
+            lo = wrapping_add(lo, 1)
+        }
+    }
+    Num(ok: true, value: lo, hi: hi)
+}
+
+/// Tokens of an instruction: split at spaces, with the commas that follow operands dropped.
+fn tokens(line: Str) -> Strs {
+    let out = strs_new()
+    let n = str_len(line)
+    let mut i = 0
+    let mut start = -1
+    while i <= n {
+        let c = if i < n { str_byte(line, i) } else { 32 }
+        if c == 32 || c == 44 {
+            if start >= 0 {
+                strs_push(out, str_slice(line, start, i))
+                start = -1
+            }
+        } else {
+            if start < 0 { start = i }
+        }
+        i += 1
+    }
+    out
+}
+
+/// `vN` (or `xN`, `sN`, `bN`): `N`; -1 when it is not one.
+fn num_after(tok: Str, prefix: Int) -> Int {
+    let n = str_len(tok)
+    if n < 2 || str_byte(tok, 0) != prefix { return -1 }
+    let x = parse_num(str_slice(tok, 1, n))
+    if x.ok { x.value } else { -1 }
+}
+
+fn val(tok: Str) -> Int {
+    num_after(tok, 118)
+}
+
+fn blk(tok: Str) -> Int {
+    num_after(tok, 98)
+}
+
+fn int_of(tok: Str) -> Int {
+    let x = parse_num(tok)
+    if x.ok { x.value } else { -9999999 }
+}
+
+/// A symbol's index in `u`, from `@name`; -1 if unknown.
+fn sym_of(u: Unit, tok: Str) -> Int {
+    let n = str_len(tok)
+    if n < 2 { return -1 }
+    match hashmap_get(u.index, str_slice(tok, 1, n)) {
+        Some(i) => i,
+        None => -1,
+    }
+}
+
+/// `(i64, ptr) -> i64` and its conv prefix (`plain `, `c `) into a signature.
+pub struct SigText {
+    params: Ints,
+    ret: Int,
+    conv: Int,
+    ok: Bool,
+}
+
+fn parse_sig(text: Str) -> SigText {
+    let mut s = text_trim(text)
+    let mut conv = CONV_NAZM
+    if text_starts_with(s, "plain ") {
+        conv = CONV_PLAIN
+        s = str_slice(s, 6, str_len(s))
+    } else if text_starts_with(s, "c ") {
+        conv = CONV_C
+        s = str_slice(s, 2, str_len(s))
+    }
+    let params = ints_new()
+    let close = match text_find(s, ")") {
+        Some(i) => i,
+        None => -1,
+    }
+    if str_len(s) == 0 || str_byte(s, 0) != 40 || close < 0 {
+        return SigText(params: params, ret: C_NONE, conv: conv, ok: false)
+    }
+    let inner = str_slice(s, 1, close)
+    let mut ok = true
+    if str_len(text_trim(inner)) > 0 {
+        for p in text_split(inner, ",") {
+            let c = class_of(text_trim(p))
+            if c < 0 { ok = false }
+            ints_push(params, c)
+        }
+    }
+    let rest = text_trim(str_slice(s, close + 1, str_len(s)))
+    let mut ret = C_NONE
+    if str_len(rest) > 0 {
+        if text_starts_with(rest, "-> ") {
+            ret = class_of(text_trim(str_slice(rest, 3, str_len(rest))))
+            if ret < 0 { ok = false }
+        } else {
+            ok = false
+        }
+    }
+    SigText(params: params, ret: ret, conv: conv, ok: ok)
+}
+
+/// The arguments of a call, `(v1, v2)` at the end of `text`.
+fn call_args(text: Str, out: Ints) -> Bool {
+    let n = str_len(text)
+    if n < 2 || str_byte(text, n - 1) != 41 { return false }
+    let mut open = n - 1
+    while open >= 0 && str_byte(text, open) != 40 { open -= 1 }
+    if open < 0 { return false }
+    let inner = str_slice(text, open + 1, n - 1)
+    let mut ok = true
+    if str_len(text_trim(inner)) > 0 {
+        for a in text_split(inner, ",") {
+            let v = val(text_trim(a))
+            if v < 0 { ok = false }
+            ints_push(out, v)
+        }
+    }
+    ok
+}
+
+/// `vA+OFF`: the value and the offset.
+fn addr_off(tok: Str, i: Ins) -> Ins {
+    let mut r = i
+    match text_find(tok, "+") {
+        Some(p) => {
+            r.a = val(str_slice(tok, 0, p))
+            r.imm = int_of(str_slice(tok, p + 1, str_len(tok)))
+        },
+        None => { r.a = -1 },
+    }
+    r
+}
+
+/// One instruction line (without its indentation); `op` 0 when it is not recognised.
+fn parse_inst(u: Unit, line: Str) -> Ins {
+    let t = tokens(line)
+    let n = strs_len(t)
+    let bad = ins_new(0)
+    if n == 0 { return bad }
+    let first = t[0]
+    // Instructions without a result.
+    if first == "store" && n == 3 {
+        let mut i = addr_off(t[1], ins_new(OP_STORE))
+        i.b = val(t[2])
+        return i
+    }
+    if first == "set" && n == 3 {
+        let mut i = ins_new(OP_SET)
+        i.imm = num_after(t[1], 120)
+        i.a = val(t[2])
+        return i
+    }
+    if first == "copy" && n == 4 {
+        let mut i = ins_new(OP_COPY)
+        i.a = val(t[1])
+        i.b = val(t[2])
+        i.imm = int_of(t[3])
+        return i
+    }
+    if first == "zero" && n == 3 {
+        let mut i = ins_new(OP_ZERO)
+        i.a = val(t[1])
+        i.imm = int_of(t[2])
+        return i
+    }
+    if first == "loc" && n == 4 {
+        let mut i = ins_new(OP_LOC)
+        i.a = int_of(t[1])
+        i.b = int_of(t[2])
+        i.c = int_of(t[3])
+        return i
+    }
+    // Calls, with or without results: `[vD = |vD, failed vF = |failed vF = ]call…`.
+    let call_at = match text_find(line, "call") {
+        Some(p) => p,
+        None => -1,
+    }
+    let eq_at = match text_find(line, "= ") {
+        Some(p) => p,
+        None => -1,
+    }
+    let head_end = if eq_at >= 0 { eq_at + 2 } else { 0 }
+    if call_at == head_end {
+        let indirect = text_starts_with(str_slice(line, call_at, str_len(line)), "call_indirect ")
+        let mut i = ins_new(if indirect { OP_CALLI } else { OP_CALL })
+        if eq_at >= 0 {
+            for d in text_split(str_slice(line, 0, eq_at), ",") {
+                let dt = text_trim(d)
+                if text_starts_with(dt, "failed ") {
+                    i.dst2 = val(str_slice(dt, 7, str_len(dt)))
+                } else {
+                    i.dst = val(dt)
+                }
+            }
+        }
+        let rest = str_slice(line, call_at, str_len(line))
+        if !call_args(rest, i.args) { return bad }
+        let mut open = str_len(rest) - 1
+        while open >= 0 && str_byte(rest, open) != 40 { open -= 1 }
+        if indirect {
+            // `call_indirect SIG vA(args)`
+            let head = str_slice(rest, 14, open)
+            let mut sp = str_len(head) - 1
+            while sp >= 0 && str_byte(head, sp) != 32 { sp -= 1 }
+            if sp < 0 { return bad }
+            i.a = val(str_slice(head, sp + 1, str_len(head)))
+            let sg = parse_sig(str_slice(head, 0, sp))
+            if !sg.ok { return bad }
+            i.sig_params = sg.params
+            i.sig_ret = sg.ret
+            i.sig_conv = sg.conv
+        } else {
+            i.sym = sym_of(u, str_slice(rest, 5, open))
+            if i.sym < 0 { return bad }
+        }
+        return i
+    }
+    // Everything else defines one value, or two: `vD = …`, `vD, vO = …`.
+    if n < 3 { return bad }
+    if n >= 4 && t[2] == "=" {
+        // `vD, vO = OVF vA, vB`
+        let o = ovf_of(t[3])
+        if o < 0 || n != 6 { return bad }
+        let mut i = ins_new(OP_OVF)
+        i.dst = val(t[0])
+        i.dst2 = val(t[1])
+        i.sub = o
+        i.a = val(t[4])
+        i.b = val(t[5])
+        return i
+    }
+    if t[1] != "=" { return bad }
+    let dst = val(t[0])
+    let w = t[2]
+    let mut i = bad
+    if w == "param" && n == 4 {
+        i = ins_new(OP_PARAM)
+        i.imm = int_of(t[3])
+    } else if w == "const" && n == 5 {
+        i = ins_new(OP_CONST)
+        i.cls = class_of(t[3])
+        let x = parse_num(t[4])
+        if !x.ok { return bad }
+        i.imm = x.value
+        i.imm_hi = x.hi
+    } else if w == "addr" && n >= 4 {
+        // A name may hold spaces: everything after the `@`.
+        i = ins_new(OP_ADDR)
+        let at = match text_find(line, "@") {
+            Some(p) => p,
+            None => 0,
+        }
+        i.sym = sym_of(u, str_slice(line, at, str_len(line)))
+        if i.sym < 0 { return bad }
+    } else if w == "slot" && n == 4 {
+        i = ins_new(OP_SLOT)
+        i.imm = num_after(t[3], 115)
+    } else if w == "load" && n == 5 {
+        i = addr_off(t[4], ins_new(OP_LOAD))
+        i.cls = class_of(t[3])
+    } else if w == "cmp" && n == 6 {
+        i = ins_new(OP_CMP)
+        i.sub = cmp_of(t[3])
+        i.a = val(t[4])
+        i.b = val(t[5])
+    } else if w == "select" && n == 6 {
+        i = ins_new(OP_SELECT)
+        i.c = val(t[3])
+        i.a = val(t[4])
+        i.b = val(t[5])
+    } else if (w == "sext" || w == "zext") && n == 5 {
+        i = ins_new(OP_EXT)
+        i.sub = if w == "sext" { 1 } else { 0 }
+        i.cls = class_of(t[3])
+        i.a = val(t[4])
+    } else if w == "trunc" && n == 5 {
+        i = ins_new(OP_TRUNC)
+        i.cls = class_of(t[3])
+        i.a = val(t[4])
+    } else if w == "ptradd" && n == 5 {
+        i = ins_new(OP_PTRADD)
+        i.a = val(t[3])
+        i.b = val(t[4])
+    } else if w == "ptrtoint" && n == 4 {
+        i = ins_new(OP_PTRTOINT)
+        i.a = val(t[3])
+    } else if w == "inttoptr" && n == 4 {
+        i = ins_new(OP_INTTOPTR)
+        i.a = val(t[3])
+    } else if w == "get" && n == 4 {
+        i = ins_new(OP_GET)
+        i.imm = num_after(t[3], 120)
+    } else if bin_of(w) >= 0 && n == 5 {
+        i = ins_new(OP_BIN)
+        i.sub = bin_of(w)
+        i.a = val(t[3])
+        i.b = val(t[4])
+    } else if conv_of(w) >= 0 && n == 5 {
+        i = ins_new(OP_CONV)
+        i.sub = conv_of(w)
+        i.cls = class_of(t[3])
+        i.a = val(t[4])
+    } else if un_of(w) >= 0 && n == 4 {
+        i = ins_new(OP_UN)
+        i.sub = un_of(w)
+        i.a = val(t[3])
+    } else {
+        return bad
+    }
+    i.dst = dst
+    i
+}
+
+fn parse_term(line: Str) -> Ins {
+    let t = tokens(line)
+    let n = strs_len(t)
+    let bad = ins_new(0)
+    if n == 0 { return bad }
+    let w = t[0]
+    if w == "jump" && n == 2 {
+        let mut i = ins_new(T_JUMP)
+        i.imm = blk(t[1])
+        return i
+    }
+    if w == "branch" && n == 4 {
+        let mut i = ins_new(T_BRANCH)
+        i.a = val(t[1])
+        i.imm = blk(t[2])
+        i.c = blk(t[3])
+        return i
+    }
+    if w == "return" {
+        let mut i = ins_new(T_RETURN)
+        if n == 2 { i.a = val(t[1]) }
+        return i
+    }
+    if w == "fail" && n == 1 { return ins_new(T_FAIL) }
+    if w == "unreachable" && n == 1 { return ins_new(T_UNREACHABLE) }
+    if w == "switch" {
+        // `switch vV [k: bK, …] else bD`
+        let mut i = ins_new(T_SWITCH)
+        i.a = val(t[1])
+        let open = match text_find(line, "[") {
+            Some(p) => p,
+            None => -1,
+        }
+        let close = match text_find(line, "]") {
+            Some(p) => p,
+            None => -1,
+        }
+        if open < 0 || close < open { return bad }
+        let inner = str_slice(line, open + 1, close)
+        if str_len(text_trim(inner)) > 0 {
+            for c in text_split(inner, ",") {
+                let kv = text_split(text_trim(c), ":")
+                if strs_len(kv) != 2 { return bad }
+                ints_push(i.args, int_of(text_trim(kv[0])))
+                ints_push(i.args, blk(text_trim(kv[1])))
+            }
+        }
+        i.imm = blk(t[n - 1])
+        return i
+    }
+    bad
+}
+
+/// Whether a line inside a block is a terminator.
+fn is_term(line: Str) -> Bool {
+    text_starts_with(line, "jump ") || text_starts_with(line, "branch ") ||
+            text_starts_with(line, "switch ") || line == "return" ||
+            text_starts_with(line, "return ") || line == "fail" || line == "unreachable"
+}
+
+fn func_new(sym: Int, name: Str, section: Str) -> Func {
+    Func(sym: sym, name: name, section: section, vars: ints_new(), slot_size: ints_new(),
+            slot_align: ints_new(), insts: vec_new[Ins](), block_first: ints_new(),
+            block_end: ints_new(), terms: vec_new[Ins](), at_file: -1, at_line: 0)
+}
+
+/// Read every unit of `text`.
+pub fn read_program(text: Str) -> Program {
+    let units = vec_new[Unit]()
+    let errors = strs_new()
+    let lines = text_split(text, "\n")
+    let mut ui = -1
+    let mut fi = -1
+    let mut lineno = 0
+    for raw in lines {
+        lineno += 1
+        let line = text_trim_end(raw)
+        if str_len(line) == 0 { continue }
+        if text_starts_with(line, "; unit ") {
+            units.push(unit_new(str_slice(line, 7, str_len(line))))
+            ui = units.len() - 1
+            fi = -1
+            continue
+        }
+        if ui < 0 {
+            strs_push(errors, f"line {lineno}: outside a unit: {line}")
+            continue
+        }
+        let u = units[ui]
+        if str_byte(line, 0) != 32 && !text_starts_with(line, "function ") && fi >= 0 &&
+                !text_ends_with(line, ":") {
+            strs_push(errors, f"line {lineno}: not understood: {line}")
+            continue
+        }
+        if text_starts_with(line, "function ") {
+            // `function @NAME[ section S] ; comment`
+            let semi = match text_find(line, " ; ") {
+                Some(p) => p,
+                None => str_len(line),
+            }
+            let head = str_slice(line, 9, semi)
+            let sec_at = match text_find(head, " section ") {
+                Some(p) => p,
+                None => -1,
+            }
+            let s = sym_of(u, if sec_at >= 0 { str_slice(head, 0, sec_at) } else { head })
+            let section = if sec_at >= 0 { str_slice(head, sec_at + 9, str_len(head)) } else { "" }
+            let name = if semi < str_len(line) { str_slice(line, semi + 3, str_len(line)) } else { "" }
+            if s < 0 {
+                strs_push(errors, f"line {lineno}: a function of no symbol: {line}")
+                continue
+            }
+            u.funcs.push(func_new(s, name, section))
+            fi = u.funcs.len() - 1
+            continue
+        }
+        if fi < 0 {
+            // The unit's header: symbols and data.
+            let t = tokens(line)
+            if strs_len(t) >= 3 && (t[1] == "func" || t[1] == "data") {
+                let w = t[0]
+                let link = match w {
+                    "import" => L_IMPORT,
+                    "local" => L_LOCAL,
+                    "hidden" => L_HIDDEN,
+                    "export" => L_EXPORT,
+                    _ => -1,
+                }
+                let at_name = match text_find(line, "@") {
+                    Some(p) => p + 1,
+                    None => 0,
+                }
+                // The name runs to the signature (`(`, `plain (`, `c (`) or to the data's
+                // class, and may hold spaces.
+                let mut name_end = str_len(line)
+                if t[1] == "func" {
+                    let mut k = str_len(line) - 1
+                    while k > at_name && !(str_byte(line, k) == 40 && str_byte(line, k - 1) == 32) {
+                        k -= 1
+                    }
+                    name_end = k - 1
+                    if text_ends_with(str_slice(line, 0, name_end), " plain") {
+                        name_end -= 6
+                    } else if text_ends_with(str_slice(line, 0, name_end), " c") {
+                        name_end -= 2
+                    }
+                } else {
+                    let mut k = str_len(line) - 1
+                    while k > at_name && str_byte(line, k) != 32 { k -= 1 }
+                    name_end = k
+                }
+                let name = str_slice(line, at_name, name_end)
+                if link < 0 {
+                    strs_push(errors, f"line {lineno}: not understood: {line}")
+                    continue
+                }
+                if t[1] == "func" {
+                    let sg = parse_sig(str_slice(line, name_end, str_len(line)))
+                    if !sg.ok {
+                        strs_push(errors, f"line {lineno}: a signature not understood: {line}")
+                        continue
+                    }
+                    hashmap_set(u.index, name, u.syms.len())
+                    u.syms.push(Sym(name: name, kind: 0, link: link, params: sg.params,
+                            ret: sg.ret, conv: sg.conv))
+                } else {
+                    hashmap_set(u.index, name, u.syms.len())
+                    u.syms.push(Sym(name: name, kind: 1, link: link, params: ints_new(),
+                            ret: class_of(str_slice(line, name_end + 1, str_len(line))), conv: 0))
+                }
+                continue
+            }
+            let align_at = match text_find(line, " align ") {
+                Some(p) => p,
+                None => -1,
+            }
+            if text_starts_with(line, "data @") && align_at > 0 {
+                // `data @NAME align A[ writable][ section S] [HEX][ OFF:@SYM…]`; a name may
+                // hold spaces, so a relocation's symbol runs to the next ` OFF:@`.
+                let s = sym_of(u, str_slice(line, 5, align_at))
+                let raw_t = tokens(str_slice(line, align_at + 1, str_len(line)))
+                let t2 = strs_new()
+                for x in raw_t {
+                    let c = text_find(x, ":@")
+                    let starts = match c {
+                        Some(p) => p > 0 && str_byte(x, 0) >= 48 && str_byte(x, 0) <= 57,
+                        None => false,
+                    }
+                    let nt = strs_len(t2)
+                    if !starts && nt > 0 && text_contains(t2[nt - 1], ":@") {
+                        strs_set(t2, nt - 1, t2[nt - 1] + " " + x)
+                    } else {
+                        strs_push(t2, x)
+                    }
+                }
+                let mut d = DataDef(sym: s, align: int_of(t2[1]), writable: false, section: "",
+                        hex: "", reloc_at: ints_new(), reloc_sym: ints_new())
+                let mut k = 2
+                let mut ok = s >= 0
+                let t = t2
+                while k < strs_len(t) {
+                    let x = t[k]
+                    if x == "writable" {
+                        d.writable = true
+                    } else if x == "section" && k + 1 < strs_len(t) {
+                        d.section = t[k + 1]
+                        k += 1
+                    } else if str_byte(x, 0) == 91 && str_byte(x, str_len(x) - 1) == 93 {
+                        d.hex = str_slice(x, 1, str_len(x) - 1)
+                    } else {
+                        let colon = match text_find(x, ":@") {
+                            Some(p) => p,
+                            None => -1,
+                        }
+                        if colon > 0 {
+                            ints_push(d.reloc_at, int_of(str_slice(x, 0, colon)))
+                            let rs = sym_of(u, str_slice(x, colon + 1, str_len(x)))
+                            if rs < 0 { ok = false }
+                            ints_push(d.reloc_sym, rs)
+                        } else {
+                            ok = false
+                        }
+                    }
+                    k += 1
+                }
+                if !ok {
+                    strs_push(errors, f"line {lineno}: data not understood: {line}")
+                    continue
+                }
+                u.data.push(d)
+                continue
+            }
+            strs_push(errors, f"line {lineno}: not understood: {line}")
+            continue
+        }
+        let f = u.funcs[fi]
+        if str_byte(line, 0) == 98 && text_ends_with(line, ":") {
+            // `bK:` — a block starts.
+            ints_push(f.block_first, f.insts.len())
+            ints_push(f.block_end, -1)
+            continue
+        }
+        let body = text_trim(line)
+        let nb = ints_len(f.block_first)
+        if nb == 0 {
+            // Declarations before the first block.
+            let t = tokens(body)
+            if t[0] == "var" && strs_len(t) == 3 {
+                ints_push(f.vars, class_of(t[2]))
+            } else if t[0] == "slot" && strs_len(t) == 5 {
+                ints_push(f.slot_size, int_of(t[2]))
+                ints_push(f.slot_align, int_of(t[4]))
+            } else if t[0] == "at" && strs_len(t) == 3 {
+                let mut g = f
+                g.at_file = int_of(t[1])
+                g.at_line = int_of(t[2])
+                vec_set(u.funcs, fi, g)
+            } else if t[0] == "debug" {
+                // Debug locals (N58) are for slice 5's DWARF.
+            } else {
+                strs_push(errors, f"line {lineno}: not understood: {line}")
+            }
+            continue
+        }
+        if is_term(body) {
+            let term = parse_term(body)
+            if term.op == 0 {
+                strs_push(errors, f"line {lineno}: a terminator not understood: {body}")
+                continue
+            }
+            ints_set(f.block_end, nb - 1, f.insts.len())
+            f.terms.push(term)
+            continue
+        }
+        let i = parse_inst(u, body)
+        if i.op == 0 {
+            strs_push(errors, f"line {lineno}: an instruction not understood: {body}")
+            continue
+        }
+        f.insts.push(i)
+    }
+    Program(units: units, errors: errors)
+}
