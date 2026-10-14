@@ -203,9 +203,9 @@ fn the_active_parameter_is_the_argument_lists_own_structure() {
         let mut s = LanguageService::new();
         s.open(&m, 1, NESTED.into());
         let three = "fn three(a: Int, b: Int, c: Int) -> Int";
-        let pair = "fn pair[P, Vec[Int]](t: P, u: Vec[Int]) -> Int";
+        let pair = "fn pair[P, Ints](t: P, u: Ints) -> Int";
         let str_len = "fn str_len(Str) -> Int";
-        let vec_new = "fn vec_new[Int]() -> Vec[Int]";
+        let vec_new = "fn vec_new[Int]() -> Ints";
         let open = at(NESTED, "three(\n", 0, 0);
         let close = at(NESTED, ") + three", 0, 0);
         let cases: [(&str, u32, Option<Shown<'_>>); 22] = [

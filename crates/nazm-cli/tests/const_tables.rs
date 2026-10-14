@@ -327,7 +327,7 @@ fn what_a_constant_table_refuses_and_by_which_code() {
         (
             "struct R { v: Vec[Int], }\nconst A: R = R(v: vec_new[Int]());\nfn main() -> Int { 0 }",
             "N0622",
-            "holds a `Vec[Int]`",
+            "holds a `Ints`", // `Vec[Int]` by its shorter name (R1, 5b.18)
         ),
         (
             "struct P { x: Int, }\nconst A: P = P(x: 1);\nconst B: Int = A;\nfn main() -> Int { 0 }",
