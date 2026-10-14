@@ -211,7 +211,9 @@ for case in "$corpus"/*.nz; do
     [ "$got" = "$expected" ] || fail "$stage: $name gave '$got', expected '$expected'"
   done
   # And the interpreter agrees, so the expectation is not merely what the compiler does.
-  interp=$("$nazm" run "$case" 2>&1 || true)
+  # `main`'s result is printed as the stage compilers' programs print it: since R1 (5b.3) the
+  # reference ends with it as the exit status unless asked to report it.
+  interp=$(NAZM_RESULT_REPORT=1 "$nazm" run "$case" 2>&1 || true)
   [ "$interp" = "$expected" ] || fail "the interpreter disagrees about $name: '$interp'"
   checked=$((checked + 1))
 done
@@ -237,7 +239,7 @@ for case in "$corpus"/modules/*/; do
   done
   # And the reference front end, which is what makes this a parity claim rather than a
   # self-consistency one.
-  interp=$("$nazm" run "$case/main.nz" 2>&1 || true)
+  interp=$(NAZM_RESULT_REPORT=1 "$nazm" run "$case/main.nz" 2>&1 || true)
   [ "$interp" = "$expected" ] || fail "the reference disagrees about $name: '$interp'"
   checked=$((checked + 1))
   modules=$((modules + 1))
