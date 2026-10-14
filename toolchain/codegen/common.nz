@@ -1,0 +1,179 @@
+// What both targets' selection share: a unit's code and its relocations, the classes of a
+// function's values, the frame's layout of them, and the narrow-value rules' arithmetic (D5).
+
+use "@std/bytebuf"
+use "lir.nz"
+
+// aarch64 relocation kinds (Mach-O's `ARM64_RELOC_*` numbers; the ELF writer maps them).
+pub const R_BRANCH26: Int = 2
+pub const R_PAGE21: Int = 3
+pub const R_PAGEOFF12: Int = 4
+pub const R_GOT_PAGE21: Int = 5
+pub const R_GOT_PAGEOFF12: Int = 6
+
+/// A unit's code: the bytes, the relocations against its symbols, where each function starts.
+pub struct Code {
+    buf: ByteBuf,
+    rel_at: Ints,
+    rel_kind: Ints,
+    rel_sym: Ints,
+    rel_pcrel: Ints,
+    rel_len: Ints,
+    sym_at: Ints,
+    errors: Strs,
+}
+
+pub fn code_new(nsyms: Int) -> Code {
+    let at = ints_new()
+    let mut i = 0
+    while i < nsyms {
+        ints_push(at, -1)
+        i += 1
+    }
+    Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
+            rel_pcrel: ints_new(), rel_len: ints_new(),
+            sym_at: at, errors: strs_new())
+}
+
+pub fn align_up(x: Int, a: Int) -> Int {
+    if a <= 1 { x } else { (x + a - 1) / a * a }
+}
+
+/// The width of a class in bytes, as it is stored in memory.
+pub fn class_size(c: Int) -> Int {
+    match c {
+        0 => 1,
+        1 => 1,
+        2 => 2,
+        3 => 4,
+        5 => 4,
+        8 => 16,
+        _ => 8,
+    }
+}
+
+pub fn is_float(c: Int) -> Bool {
+    c == C_F32 || c == C_F64
+}
+
+pub fn width_bits(c: Int) -> Int {
+    match c {
+        0 => 1,
+        1 => 8,
+        2 => 16,
+        3 => 32,
+        5 => 32,
+        _ => 64,
+    }
+}
+
+/// A constant cut to its class's width, zero-extended (D5).
+pub fn masked(v: Int, c: Int) -> Int {
+    let bits = width_bits(c)
+    if bits >= 64 { v } else { v & ((1 << bits) - 1) }
+}
+
+pub fn sym_ret(u: Unit, s: Int) -> Int {
+    if s < 0 { C_NONE } else { u.syms[s].ret }
+}
+
+/// Every value's class, from what defines it; operations that take their operand's class are
+/// settled by iterating until nothing changes, since a block may be printed before the block
+/// that defines a value it uses.
+pub fn infer(u: Unit, f: Func, n: Int) -> Ints {
+    let vc = ints_new()
+    let mut i = 0
+    while i < n {
+        ints_push(vc, -1)
+        i += 1
+    }
+    let own = u.syms[f.sym]
+    let mut changed = true
+    let mut rounds = 0
+    while changed && rounds < 50 {
+        changed = false
+        rounds += 1
+        for x in f.insts {
+            let mut d = -1
+            let mut d2 = -1
+            let op = x.op
+            if op == OP_PARAM {
+                d = if x.imm < ints_len(own.params) { own.params[x.imm] } else { -1 }
+            } else if op == OP_CONST || op == OP_LOAD || op == OP_EXT || op == OP_TRUNC || op == OP_CONV {
+                d = x.cls
+            } else if op == OP_ADDR || op == OP_SLOT || op == OP_PTRADD || op == OP_INTTOPTR {
+                d = C_PTR
+            } else if op == OP_PTRTOINT {
+                d = C_I64
+            } else if op == OP_CMP {
+                d = C_BIT
+            } else if op == OP_BIN || op == OP_UN {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+            } else if op == OP_SELECT {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+            } else if op == OP_OVF {
+                d = if x.a >= 0 && x.a < n { vc[x.a] } else { -1 }
+                d2 = C_BIT
+            } else if op == OP_GET {
+                d = if x.imm >= 0 && x.imm < ints_len(f.vars) { f.vars[x.imm] } else { -1 }
+            } else if op == OP_CALL {
+                d = sym_ret(u, x.sym)
+                d2 = C_BIT
+            } else if op == OP_CALLI {
+                d = x.sig_ret
+                d2 = C_BIT
+            }
+            if x.dst >= 0 && x.dst < n && d >= 0 && vc[x.dst] != d {
+                vc[x.dst] = d
+                changed = true
+            }
+            if x.dst2 >= 0 && x.dst2 < n && d2 >= 0 && vc[x.dst2] != d2 {
+                vc[x.dst2] = d2
+                changed = true
+            }
+        }
+    }
+    vc
+}
+
+/// Offsets for things of these classes laid end to end from `start`, 8 bytes each and 16 for an
+/// `i128`; the end, last.
+pub fn lay_out(classes: Ints, start: Int) -> Ints {
+    let out = ints_new()
+    let mut off = start
+    for c in classes {
+        ints_push(out, off)
+        off += if c == C_I128 { 16 } else { 8 }
+    }
+    ints_push(out, off)
+    out
+}
+
+pub fn read_u32(b: ByteBuf, at: Int) -> Int {
+    let mut v = 0
+    let mut k = 3
+    while k >= 0 {
+        let x = match bytebuf_get(b, at + k) {
+            Some(y) => Int(y),
+            None => 0,
+        }
+        v = (v << 8) | x
+        k -= 1
+    }
+    v
+}
+
+// x86_64 relocation kinds (Mach-O's `X86_64_RELOC_*` numbers).
+pub const X_UNSIGNED: Int = 0
+pub const X_SIGNED: Int = 1
+pub const X_BRANCH: Int = 2
+pub const X_GOT_LOAD: Int = 3
+
+/// A relocation of `kind` against `sym` at `at`, pc-relative or not, 2^`len` bytes wide.
+pub fn add_reloc(c: Code, at: Int, kind: Int, sym: Int, pcrel: Int, len: Int) {
+    ints_push(c.rel_at, at)
+    ints_push(c.rel_kind, kind)
+    ints_push(c.rel_sym, sym)
+    ints_push(c.rel_pcrel, pcrel)
+    ints_push(c.rel_len, len)
+}

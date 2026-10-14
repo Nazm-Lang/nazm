@@ -1,9 +1,10 @@
 // nzcg: Nazm's own code generator (R9, `openspec/changes/r9-code-generator/`).
 //
-//     nzcg LIR OUTDIR
+//     nzcg [--target TRIPLE] LIR OUTDIR
 //
 // Reads a program's units as `nazm lir --ops` prints them from the file LIR, and writes one
-// relocatable object per unit, `OUTDIR/unit-K.o` for the K-th unit, for `aarch64-apple-darwin`.
+// relocatable object per unit, `OUTDIR/unit-K.o` for the K-th unit, for the target:
+// `aarch64-apple-darwin` (the default) or `x86_64-apple-darwin`.
 // What it does not carry it refuses by name, on standard error, with exit status 3, and then
 // writes nothing (design D9).
 
@@ -11,15 +12,28 @@ use "@std/file"
 use "@std/ioerror"
 use "lir.nz"
 use "sel.nz"
+use "sel_x64.nz"
+use "common.nz"
 use "macho.nz"
 
 fn main(io: IoCap) {
-    if args_count() != 2 {
-        eprintln("usage: nzcg LIR OUTDIR")
+    let mut first = 0
+    let mut target = "aarch64-apple-darwin"
+    if args_count() == 4 && arg(0) == "--target" {
+        target = arg(1)
+        first = 2
+    }
+    if args_count() != first + 2 {
+        eprintln("usage: nzcg [--target TRIPLE] LIR OUTDIR")
         exit_with(2)
     }
-    let text = read_file(arg(0))
-    let dir = arg(1)
+    let x64 = target == "x86_64-apple-darwin"
+    if !x64 && target != "aarch64-apple-darwin" {
+        eprintln(f"nzcg: refused: the target `{target}` (aarch64-apple-darwin and x86_64-apple-darwin are carried)")
+        exit_with(3)
+    }
+    let text = read_file(arg(first))
+    let dir = arg(first + 1)
     let p = read_program(text)
     let errors = p.errors
     let objects = vec_new[Bytes]()
@@ -29,13 +43,15 @@ fn main(io: IoCap) {
             for f in u.funcs {
                 if str_len(f.section) > 0 {
                     strs_push(errors, f"`{f.name}` in section `{f.section}` (placement is for the ELF slice)")
+                } else if x64 {
+                    gen_function_x64(c, u, f)
                 } else {
                     gen_function(c, u, f)
                 }
             }
             for e in c.errors { strs_push(errors, e) }
             if strs_len(errors) == 0 {
-                objects.push(write_object(u, c, errors))
+                objects.push(write_object(u, c, x64, errors))
             }
         }
     }

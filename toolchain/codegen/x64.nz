@@ -1,0 +1,402 @@
+// The x86-64 encoder: each function appends one instruction's bytes to a buffer (Intel SDM,
+// volume 2). Registers are numbers: rax 0, rcx 1, rdx 2, rbx 3, rsp 4, rbp 5, rsi 6, rdi 7,
+// r8–r15 8–15; xmm registers by their numbers. A memory operand is always `[base + disp32]`.
+
+use "@std/bytebuf"
+
+pub const RAX: Int = 0
+pub const RCX: Int = 1
+pub const RDX: Int = 2
+pub const RSP: Int = 4
+pub const RBP: Int = 5
+pub const RSI: Int = 6
+pub const RDI: Int = 7
+
+// Condition codes (the low nibble of `jcc`, `setcc`, `cmovcc`).
+pub const CC_O: Int = 0
+pub const CC_NO: Int = 1
+pub const CC_B: Int = 2
+pub const CC_AE: Int = 3
+pub const CC_E: Int = 4
+pub const CC_NE: Int = 5
+pub const CC_BE: Int = 6
+pub const CC_A: Int = 7
+pub const CC_S: Int = 8
+pub const CC_P: Int = 10
+pub const CC_NP: Int = 11
+pub const CC_L: Int = 12
+pub const CC_GE: Int = 13
+pub const CC_LE: Int = 14
+pub const CC_G: Int = 15
+
+// ALU opcodes, `op r/m, r`.
+pub const ALU_ADD: Int = 0x01
+pub const ALU_OR: Int = 0x09
+pub const ALU_ADC: Int = 0x11
+pub const ALU_SBB: Int = 0x19
+pub const ALU_AND: Int = 0x21
+pub const ALU_SUB: Int = 0x29
+pub const ALU_XOR: Int = 0x31
+pub const ALU_CMP: Int = 0x39
+pub const ALU_TEST: Int = 0x85
+
+pub fn b1(b: ByteBuf, x: Int) {
+    bytebuf_push(b, UInt8(x & 255))
+}
+
+pub fn imm32(b: ByteBuf, v: Int) {
+    b1(b, v)
+    b1(b, v >> 8)
+    b1(b, v >> 16)
+    b1(b, v >> 24)
+}
+
+/// A REX prefix when one is needed: 64-bit operand size, a high register in `reg`, `index` or
+/// `rm`, or (`force`) a byte register numbered 4–7.
+fn rex(b: ByteBuf, w: Bool, reg: Int, index: Int, rm: Int, force: Bool) {
+    let v = 0x40 | (if w { 8 } else { 0 }) | (((reg >> 3) & 1) << 2) | (((index >> 3) & 1) << 1) |
+            ((rm >> 3) & 1)
+    if v != 0x40 || force { b1(b, v) }
+}
+
+fn modrm(b: ByteBuf, md: Int, reg: Int, rm: Int) {
+    b1(b, (md << 6) | ((reg & 7) << 3) | (rm & 7))
+}
+
+/// `[base + disp32]`, with a SIB byte where the base is `rsp` or `r12`.
+fn mem(b: ByteBuf, reg: Int, base: Int, disp: Int) {
+    modrm(b, 2, reg, base)
+    if (base & 7) == 4 { b1(b, 0x24) }
+    imm32(b, disp)
+}
+
+fn byte_force(r: Int) -> Bool {
+    r >= 4 && r <= 7
+}
+
+/// `op r/m, reg` between registers; `opc` one byte, or two (`0x0F` first) when above 255.
+pub fn rr(b: ByteBuf, w: Bool, opc: Int, reg: Int, rm: Int) {
+    rex(b, w, reg, 0, rm, false)
+    if opc > 255 { b1(b, opc >> 8) }
+    b1(b, opc)
+    modrm(b, 3, reg, rm)
+}
+
+/// The same with a memory operand.
+pub fn rm(b: ByteBuf, w: Bool, opc: Int, reg: Int, base: Int, disp: Int) {
+    rex(b, w, reg, 0, base, false)
+    if opc > 255 { b1(b, opc >> 8) }
+    b1(b, opc)
+    mem(b, reg, base, disp)
+}
+
+/// `alu dst, src` at 64 bits.
+pub fn alu(b: ByteBuf, opc: Int, dst: Int, src: Int) {
+    rr(b, true, opc, src, dst)
+}
+
+/// `mov dst, src`, 64 bits; `mov32` 32 bits, zero-extending.
+pub fn mov(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x89, src, dst)
+}
+
+pub fn mov32(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, false, 0x89, src, dst)
+}
+
+/// A zero-extending load of 1, 2, 4 or 8 bytes.
+pub fn load(b: ByteBuf, size: Int, dst: Int, base: Int, disp: Int) {
+    if size == 1 {
+        rm(b, false, 0x0FB6, dst, base, disp)
+    } else if size == 2 {
+        rm(b, false, 0x0FB7, dst, base, disp)
+    } else if size == 4 {
+        rm(b, false, 0x8B, dst, base, disp)
+    } else {
+        rm(b, true, 0x8B, dst, base, disp)
+    }
+}
+
+pub fn store(b: ByteBuf, size: Int, src: Int, base: Int, disp: Int) {
+    if size == 1 {
+        rex(b, false, src, 0, base, byte_force(src))
+        b1(b, 0x88)
+        mem(b, src, base, disp)
+    } else if size == 2 {
+        b1(b, 0x66)
+        rm(b, false, 0x89, src, base, disp)
+    } else if size == 4 {
+        rm(b, false, 0x89, src, base, disp)
+    } else {
+        rm(b, true, 0x89, src, base, disp)
+    }
+}
+
+/// `reg = v`, any 64-bit value, in the shortest of the three forms.
+pub fn mov_imm(b: ByteBuf, reg: Int, v: Int) {
+    if v >= 0 && v <= 0xFFFFFFFF {
+        rex(b, false, 0, 0, reg, false)
+        b1(b, 0xB8 + (reg & 7))
+        imm32(b, v)
+    } else if v >= -2147483648 && v < 0 {
+        rex(b, true, 0, 0, reg, false)
+        b1(b, 0xC7)
+        modrm(b, 3, 0, reg)
+        imm32(b, v)
+    } else {
+        rex(b, true, 0, 0, reg, false)
+        b1(b, 0xB8 + (reg & 7))
+        imm32(b, v)
+        imm32(b, v >> 32)
+    }
+}
+
+/// `imul dst, src`, 64 bits.
+pub fn imul(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x0FAF, dst, src)
+}
+
+/// The `F7` group at 64 bits on a register: 2 `not`, 3 `neg`, 4 `mul`, 5 `imul`, 6 `div`,
+/// 7 `idiv`.
+pub fn f7(b: ByteBuf, ext: Int, r: Int) {
+    rr(b, true, 0xF7, ext, r)
+}
+
+/// A shift or rotation of `r` by `cl` at `bits` wide: 0 `rol`, 1 `ror`, 4 `shl`, 5 `shr`,
+/// 7 `sar`.
+pub fn shift_cl(b: ByteBuf, bits: Int, ext: Int, r: Int) {
+    if bits == 8 {
+        rex(b, false, 0, 0, r, byte_force(r))
+        b1(b, 0xD2)
+        modrm(b, 3, ext, r)
+    } else if bits == 16 {
+        b1(b, 0x66)
+        rr(b, false, 0xD3, ext, r)
+    } else {
+        rr(b, bits == 64, 0xD3, ext, r)
+    }
+}
+
+/// The same by an immediate, 64 bits.
+pub fn shift_imm(b: ByteBuf, ext: Int, r: Int, n: Int) {
+    rr(b, true, 0xC1, ext, r)
+    b1(b, n)
+}
+
+/// `rol r16, 8`: a 16-bit byte swap.
+pub fn rol16_8(b: ByteBuf, r: Int) {
+    b1(b, 0x66)
+    rr(b, false, 0xC1, 0, r)
+    b1(b, 8)
+}
+
+pub fn cqo(b: ByteBuf) {
+    b1(b, 0x48)
+    b1(b, 0x99)
+}
+
+/// `setcc r8`, then the byte zero-extended: `movzx r32, r8`.
+pub fn setcc(b: ByteBuf, cc: Int, r: Int) {
+    rex(b, false, 0, 0, r, byte_force(r))
+    b1(b, 0x0F)
+    b1(b, 0x90 + cc)
+    modrm(b, 3, 0, r)
+    movzx8(b, r, r)
+}
+
+pub fn movzx8(b: ByteBuf, dst: Int, src: Int) {
+    rex(b, false, dst, 0, src, byte_force(src))
+    b1(b, 0x0F)
+    b1(b, 0xB6)
+    modrm(b, 3, dst, src)
+}
+
+pub fn movzx16(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, false, 0x0FB7, dst, src)
+}
+
+pub fn movsx8(b: ByteBuf, dst: Int, src: Int) {
+    rex(b, true, dst, 0, src, false)
+    b1(b, 0x0F)
+    b1(b, 0xBE)
+    modrm(b, 3, dst, src)
+}
+
+pub fn movsx16(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x0FBF, dst, src)
+}
+
+pub fn movsxd(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x63, dst, src)
+}
+
+/// `and r32, 1`.
+pub fn and1(b: ByteBuf, r: Int) {
+    rr(b, false, 0x83, 4, r)
+    b1(b, 1)
+}
+
+pub fn cmov(b: ByteBuf, cc: Int, dst: Int, src: Int) {
+    rr(b, true, 0x0F40 + cc, dst, src)
+}
+
+pub fn lea(b: ByteBuf, dst: Int, base: Int, disp: Int) {
+    rm(b, true, 0x8D, dst, base, disp)
+}
+
+/// `lea dst, [rip + disp32]`; where the displacement is, for its relocation.
+pub fn lea_rip(b: ByteBuf, dst: Int) -> Int {
+    rex(b, true, dst, 0, 0, false)
+    b1(b, 0x8D)
+    modrm(b, 0, dst, 5)
+    let at = bytebuf_len(b)
+    imm32(b, 0)
+    at
+}
+
+/// `mov dst, [rip + disp32]`, a GOT load; where the displacement is.
+pub fn mov_rip(b: ByteBuf, dst: Int) -> Int {
+    rex(b, true, dst, 0, 0, false)
+    b1(b, 0x8B)
+    modrm(b, 0, dst, 5)
+    let at = bytebuf_len(b)
+    imm32(b, 0)
+    at
+}
+
+/// `call rel32`; where the displacement is.
+pub fn call_rel(b: ByteBuf) -> Int {
+    b1(b, 0xE8)
+    let at = bytebuf_len(b)
+    imm32(b, 0)
+    at
+}
+
+pub fn call_r(b: ByteBuf, r: Int) {
+    rr(b, false, 0xFF, 2, r)
+}
+
+/// `jmp rel32` and `jcc rel32`; where the displacement is.
+pub fn jmp32(b: ByteBuf) -> Int {
+    b1(b, 0xE9)
+    let at = bytebuf_len(b)
+    imm32(b, 0)
+    at
+}
+
+pub fn jcc32(b: ByteBuf, cc: Int) -> Int {
+    b1(b, 0x0F)
+    b1(b, 0x80 + cc)
+    let at = bytebuf_len(b)
+    imm32(b, 0)
+    at
+}
+
+/// `jcc rel8`, for a jump over a few instructions; where the displacement is.
+pub fn jcc8(b: ByteBuf, cc: Int) -> Int {
+    b1(b, 0x70 + cc)
+    let at = bytebuf_len(b)
+    b1(b, 0)
+    at
+}
+
+pub fn jmp8(b: ByteBuf) -> Int {
+    b1(b, 0xEB)
+    let at = bytebuf_len(b)
+    b1(b, 0)
+    at
+}
+
+/// Point a `rel8` displacement at the current end.
+pub fn land8(b: ByteBuf, at: Int) {
+    let d = bytebuf_len(b) - (at + 1)
+    let ok = bytebuf_set(b, at, UInt8(d & 255))
+}
+
+pub fn ret(b: ByteBuf) {
+    b1(b, 0xC3)
+}
+
+pub fn ud2(b: ByteBuf) {
+    b1(b, 0x0F)
+    b1(b, 0x0B)
+}
+
+pub fn push_rbp(b: ByteBuf) {
+    b1(b, 0x55)
+}
+
+pub fn pop_rbp(b: ByteBuf) {
+    b1(b, 0x5D)
+}
+
+/// `bsr`/`bsf dst, src`, 64 bits.
+pub fn bsr(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x0FBD, dst, src)
+}
+
+pub fn bsf(b: ByteBuf, dst: Int, src: Int) {
+    rr(b, true, 0x0FBC, dst, src)
+}
+
+pub fn bswap(b: ByteBuf, w: Bool, r: Int) {
+    rex(b, w, 0, 0, r, false)
+    b1(b, 0x0F)
+    b1(b, 0xC8 + (r & 7))
+}
+
+// SSE2 (and SSE4.1's `roundsd`, which the targets' baseline CPU has).
+
+/// `prefix [rex] 0F op modrm(reg, rm)`: `prefix` 0 for none.
+fn sse(b: ByteBuf, prefix: Int, w: Bool, op: Int, reg: Int, r: Int) {
+    if prefix != 0 { b1(b, prefix) }
+    rex(b, w, reg, 0, r, false)
+    b1(b, 0x0F)
+    if op > 255 { b1(b, op >> 8) }
+    b1(b, op)
+    modrm(b, 3, reg, r)
+}
+
+/// A general register's bits into an xmm register, and back: 64 bits (`movq`) or 32 (`movd`).
+pub fn movq_to_x(b: ByteBuf, dbl: Bool, x: Int, r: Int) {
+    sse(b, 0x66, dbl, 0x6E, x, r)
+}
+
+pub fn movq_from_x(b: ByteBuf, dbl: Bool, r: Int, x: Int) {
+    sse(b, 0x66, dbl, 0x7E, x, r)
+}
+
+fn fp_prefix(dbl: Bool) -> Int {
+    if dbl { 0xF2 } else { 0xF3 }
+}
+
+/// `addsd`/`addss` and kin: `op` 0x58 add, 0x5C sub, 0x59 mul, 0x5E div, 0x51 sqrt.
+pub fn farith(b: ByteBuf, dbl: Bool, op: Int, x: Int, y: Int) {
+    sse(b, fp_prefix(dbl), false, op, x, y)
+}
+
+/// `ucomisd`/`ucomiss x, y`.
+pub fn ucomis(b: ByteBuf, dbl: Bool, x: Int, y: Int) {
+    sse(b, if dbl { 0x66 } else { 0 }, false, 0x2E, x, y)
+}
+
+/// A signed 64-bit integer to a float.
+pub fn cvtsi2f(b: ByteBuf, dbl: Bool, x: Int, r: Int) {
+    sse(b, fp_prefix(dbl), true, 0x2A, x, r)
+}
+
+/// A float to a signed 64-bit integer, toward zero.
+pub fn cvttf2si(b: ByteBuf, dbl: Bool, r: Int, x: Int) {
+    sse(b, fp_prefix(dbl), true, 0x2C, r, x)
+}
+
+/// Single to double (`cvtss2sd`) and double to single (`cvtsd2ss`).
+pub fn cvtf2f(b: ByteBuf, to_dbl: Bool, x: Int, y: Int) {
+    sse(b, if to_dbl { 0xF3 } else { 0xF2 }, false, 0x5A, x, y)
+}
+
+/// `roundsd`/`roundss x, y, mode`: 9 down, 10 up, 11 toward zero.
+pub fn round(b: ByteBuf, dbl: Bool, x: Int, y: Int, mode: Int) {
+    sse(b, 0x66, false, if dbl { 0x3A0B } else { 0x3A0A }, x, y)
+    b1(b, mode)
+}

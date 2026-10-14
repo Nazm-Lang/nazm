@@ -2,6 +2,10 @@
 # The differential suite of Nazm's own code generator (R9, design D8).
 #
 #     toolchain/codegen/tests/run.sh [FILE.nz ...]
+#     NZCG_TARGET=x86_64-apple-darwin toolchain/codegen/tests/run.sh [FILE.nz ...]
+#
+# The target is aarch64-apple-darwin unless NZCG_TARGET says otherwise; x86_64-apple-darwin runs
+# under Rosetta on an arm64 Mac.
 #
 # Builds the generator with the prebuilt `nazm` ($NAZM), then for each input (by default
 # bench/compare/nazm/fib.nz, every program of tests/compat/v1/run/ and every corpus program):
@@ -19,8 +23,12 @@ NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
+WORK=$OUT/work-${NZCG_TARGET:-aarch64-apple-darwin}
 NZCG=$OUT/nzcg
 TIMEOUT=${NZCG_TIMEOUT:-60}
+TARGET=${NZCG_TARGET:-aarch64-apple-darwin}
+ARCH=${TARGET%%-*}
+[ "$ARCH" = aarch64 ] && ARCH=arm64
 mkdir -p "$OUT"
 if ! "$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1; then
   echo "nzcg did not build:"; cat "$OUT/build.log"; exit 2
@@ -50,16 +58,16 @@ agree=0; differ=0; refused=0; skipped=0
 for src in "${inputs[@]}"; do
   rel=${src#"$ROOT"/}
   name=$(echo "$rel" | tr '/.' '__')
-  W=$OUT/work/$name
+  W=$WORK/$name
   rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-  if ! "$NAZM" build "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
+  if ! "$NAZM" build --target "$TARGET" "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
     echo "skipped  $rel (the reference does not build)"; skipped=$((skipped+1)); continue
   fi
-  if ! "$NAZM" build --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
-     ! "$NAZM" lir --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
+  if ! "$NAZM" build --target "$TARGET" --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
+     ! "$NAZM" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi
-  "$NZCG" "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
+  "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
   st=$?
   if [ $st -eq 3 ]; then
     echo "refused  $rel: $(head -1 "$W/gen.err")"; refused=$((refused+1)); continue
@@ -68,7 +76,7 @@ for src in "${inputs[@]}"; do
   fi
   # Deterministic (D7): a second run writes the same bytes.
   mkdir -p "$W/gen2"
-  "$NZCG" "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
+  "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen2" >/dev/null 2>&1
   if ! diff -r "$W/gen" "$W/gen2" >/dev/null; then
     echo "differ   $rel: two runs of the generator wrote different objects"; differ=$((differ+1)); continue
   fi
@@ -82,7 +90,7 @@ for src in "${inputs[@]}"; do
     fi
     list+=("$W/obj/$o")
   done
-  if ! cc -o "$W/gen.exe" "${list[@]}" $libs >"$W/link.log" 2>&1; then
+  if ! cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" $libs >"$W/link.log" 2>&1; then
     echo "differ   $rel: the link failed: $(head -3 "$W/link.log")"; differ=$((differ+1)); continue
   fi
   (cd "$W" && limited ./ref >ref.stdout 2>ref.stderr; echo $? >ref.status)
