@@ -63,6 +63,33 @@ fn main(out: OutCap) -> Int ! {io} {
 }
 
 #[test]
+fn a_question_mark_on_an_option_returns_none_everywhere() {
+    differential::agrees(
+        "fn half(n: Int) -> Option[Int] { if n % 2 == 0 { Some(n / 2) } else { None } }
+
+fn quarter(n: Int) -> Option[Int] {
+    let h = half(n)?
+    half(h)
+}
+
+fn name(n: Int) -> Option[Str] {
+    let q = quarter(n)?
+    Some(f\"q{q}\")
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(match quarter(8) { Some(x) => x, None => 0 - 1 })
+    println(match quarter(6) { Some(x) => x, None => 0 - 1 })
+    println(match name(12) { Some(s) => s, None => \"none\" })
+    println(match name(2) { Some(s) => s, None => \"none\" })
+    0
+}
+",
+        "2\n-1\nq3\nnone\n0",
+    );
+}
+
+#[test]
 fn what_the_conveniences_do_not_make_valid_is_refused() {
     for (src, code, why) in [
         (
@@ -74,6 +101,11 @@ fn what_the_conveniences_do_not_make_valid_is_refused() {
             "fn main() -> Int { let v = vec_new(); 0 }\n",
             "N0354",
             "a parameter nothing settles",
+        ),
+        (
+            "fn f(o: Option[Int]) -> Int { let x = o?; x }\nfn main() -> Int { f(None) }\n",
+            "N0361",
+            "`?` on an `Option` in a function that does not return one",
         ),
         (
             "fn main() -> Int { /* never closed\n0 }\n",

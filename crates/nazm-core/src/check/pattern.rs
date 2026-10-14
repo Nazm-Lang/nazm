@@ -693,6 +693,11 @@ impl Checker<'_> {
             }
         };
 
+        // `?` on an `Option` (R1, 5b.17), in a function returning an `Option`: `Some`'s value
+        // where it is written, and `None` returned.
+        if let Some(t) = self.option_propagation(ot, at) {
+            return Completion::Value(t);
+        }
         let Some((operand_id, ok, err)) = self.result_parts(ot) else {
             let shown = self.show(ot);
             self.errors.push(
@@ -703,9 +708,9 @@ impl Checker<'_> {
                 )
                 .secondary(operand.span(), format!("this is `{shown}`"))
                 .help(
-                    "`?` propagates the core prelude's `Result` and nothing else — not an \
-                     `Option`, and not an enum with the same variants. Take the value \
-                     apart with `match` instead",
+                    "`?` propagates the core prelude's `Result` and `Option` and nothing \
+                     else — not an enum with the same variants. Take the value apart with \
+                     `match` instead",
                 ),
             );
             return Completion::Value(expected.unwrap_or(Type::Int));
@@ -776,6 +781,64 @@ impl Checker<'_> {
             );
         }
         Completion::Value(ok)
+    }
+
+    /// `operand?` where the operand is an `Option[T]` (R1, 5b.17): `T`, and `None` leaving a
+    /// function that returns an `Option[U]`. `None` where the operand is no `Option`; a function
+    /// not returning one is `N0362`'s, as a `Result`'s would be.
+    fn option_propagation(&mut self, ot: Type, at: Span) -> Option<Type> {
+        let def = self.option?;
+        if self.res.types().definition_of(ot) != Some(TypeNode::Enum(def)) {
+            return None;
+        }
+        let Type::Enum(operand) = ot else { return None };
+        let inner = *self.res.types().type_args(ot).first()?;
+        let into = self
+            .return_type
+            .filter(|t| self.res.types().definition_of(*t) == Some(TypeNode::Enum(def)));
+        let Some(Type::Enum(into)) = into else {
+            let shown = self
+                .return_type
+                .map_or_else(|| "nothing".to_owned(), |t| self.show(t));
+            let mut d = Diagnostic::error(
+                codes::PROPAGATE_OUTSIDE_RESULT,
+                at,
+                format!(
+                    "`?` on an `Option` can only be used in a function that returns an `Option`, \
+                     and this one returns `{shown}`"
+                ),
+            )
+            .help("`?` leaves the function with `None`. Here, `match` on the value instead");
+            if let Some(span) = self.return_span {
+                d = d.secondary(span, format!("declared `{shown}` here"));
+            }
+            self.errors.push(d);
+            return Some(inner);
+        };
+        let variant = |c: &Self, id: EnumId, name: &str| {
+            c.res
+                .enums()
+                .get(id)
+                .and_then(|d| d.variant(name))
+                .map(|(i, _)| i)
+        };
+        if let (Some(some), Some(none), Some(into_none)) = (
+            variant(self, operand, "Some"),
+            variant(self, operand, "None"),
+            variant(self, into, "None"),
+        ) {
+            self.res.record_propagation(
+                at,
+                Propagation {
+                    operand,
+                    ok: some,
+                    err: none,
+                    into,
+                    into_err: into_none,
+                },
+            );
+        }
+        Some(inner)
     }
 
     /// One arm: its payload bindings, then its body, in a scope of their own.
