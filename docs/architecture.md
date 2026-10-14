@@ -9144,3 +9144,29 @@ alone still moves everything. Every test names a temporary user cache, and `.car
 turns the user cache off for every other test, so no test writes to a real one.
 
 **Not settled.** Eviction: like the project store, the user cache grows until it is deleted.
+
+## 7.114 Dead-stripping: what nothing calls is not linked — R1.5 D14, 2026-10-15
+
+Written before the code (`openspec/changes/r1-5-performance-and-dx/design.md`, D14). An executable
+carried every function of every unit it linked: each `@std` module's whole unit, and under
+Cranelift every part of the runtime, whether the program called it or not.
+
+**What is settled.**
+
+- **Mach-O** (macOS, iOS): the link passes `-dead_strip`. `ld64` strips by symbol, since clang's
+  objects (and Cranelift's) are divided at each symbol already; no compile argument changes, so no
+  Mach-O object key changes.
+- **ELF** (Linux, Android): each object is compiled with `-ffunction-sections -fdata-sections` and
+  the link passes `--gc-sections`. The compile arguments are in every object's resolved
+  configuration (`-###`), so every ELF key changes once, by construction.
+- **Executables only.** A static or shared library keeps every function, for its C callers, and
+  Windows, WebAssembly and the boards link as before. `crates/nazm-cli/src/backend.rs` decides, from
+  the target, in one function the link and the probe share.
+- **What a program does is unchanged.** The linker leaves out only what nothing reachable from the
+  entry refers to; a function a task, an export, an interrupt table or a pointer reaches is
+  referred to, and kept.
+
+**Evidence.** `crates/nazm-cli/tests/dead_strip.rs`: a program calling one `@std/text` function
+carries none of its others under either backend at `-O0` and `-O2` and prints what it did before; the
+same objects linked whole from `--objects` are larger and hold the unused function. Measured in
+`docs/performance.md`, *R1.5 D14*. Two mutants.

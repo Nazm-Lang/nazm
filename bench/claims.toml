@@ -404,3 +404,8 @@ why = "measured on the tree of its date with `python3 bench/cross.py`, 21 runs a
 heading = "R1.5, D11: `nazm run` compiles — measured 2026-10-15"
 status = "dated"
 why = "measured on the tree of its date with hyperfine, five runs after one warm-up, on one uncontrolled host; a record of that date and machine, and the method, not these numbers, is what a re-run reproduces"
+
+[[claim]]
+heading = "R1.5 D14: dead-stripping, measured (2026-10-15)"
+status = "dated"
+why = "the byte sizes of bench/compare/nazm/*.nz built `--no-cache` with the release binary before and after the change, on one host and one clang; a record of that date and machine — sizes are deterministic there, but no command in the tree rebuilds the before column"
