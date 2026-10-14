@@ -3,11 +3,11 @@
       of porting (`design.md`)
 
 ## 2. The harness library
-- [ ] 2.1 `lib/run.nz`: a child with a stated environment, both streams drained, a deadline that ends
+- [x] 2.1 `lib/run.nz`: a child with a stated environment, both streams drained, a deadline that ends
       its process group
-- [ ] 2.2 `lib/scratch.nz`: scratch directories made, filled and removed
-- [ ] 2.3 `lib/differential.nz`: `everywhere`, `agrees`, `codes`, `bounded_exe`
-- [ ] 2.4 `tests/lib_self.nz`: the library's own tests
+- [x] 2.2 `lib/scratch.nz`: scratch directories made, filled and removed
+- [x] 2.3 `lib/differential.nz`: `everywhere`, `agrees`, `codes`, `bounded_exe`
+- [x] 2.4 `tests/lib_self.nz`: the library's own tests
 
 ## 3. `xtask check`'s file-reading gates
 - [ ] 3.1 `check/main.nz`: the runner and the report, byte for byte
@@ -20,9 +20,9 @@
 - [ ] 3.7 Compared with the Rust gates on the tree and on seeded copies
 
 ## 4. The black-box CLI tests
-- [ ] 4.1 `release_examples`
-- [ ] 4.2 `line_breaks`
-- [ ] 4.3 `short_variants` (the brief's `shorter_forms`)
+- [x] 4.1 `release_examples`
+- [x] 4.2 `line_breaks`
+- [x] 4.3 `short_variants` (the brief's `shorter_forms`)
 - [ ] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
 - [ ] 4.5 The remaining black-box files, `common`/`differential`-only first
 

@@ -1,0 +1,15 @@
+// The repository a harness program reads (R7): `NAZM_HARNESS_ROOT`, which `tests/run.sh` sets to
+// the checkout it runs in, else the working directory — what `CARGO_MANIFEST_DIR` is to the Rust
+// tests, given at run time so one built harness can be pointed at a scratch copy of the tree.
+
+use "@std/env"
+use "run.nz"
+
+/// The repository root, without a trailing `/`.
+pub fn repo_root(h: Caps) -> Str ! { io } {
+    let io = h.io
+    match env_get(io, "NAZM_HARNESS_ROOT") {
+        Option.Some(value: r) => if str_len(r) > 0 { r } else { "." },
+        Option.None() => ".",
+    }
+}
