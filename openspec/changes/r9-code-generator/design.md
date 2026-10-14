@@ -143,6 +143,25 @@ through `@std/bytebuf`.
   SSE4.1's `roundsd` is not in x86-64 v1's baseline; one sequence for both x86-64 targets, so
   the Rosetta suite runs the code the Linux target gets. Likewise `popcnt` is the bit-parallel
   count and `clz`/`ctz` are `bsr`/`bsf` with the zero case selected.
-- **D10 (line tables) is blocked on its input**: `nazm lir --ops` lowers without debug
-  information, so no `loc` or `at` line reaches the generator. Asked of the coordinator: a
-  `--debug` option on `nazm lir` that lowers as `nazm build --debug` does.
+- **D10's input** is `nazm lir --ops --debug` (added by this track, at the coordinator's
+  request, in `crates/nazm-cli`): it lowers as `nazm build --debug` does, so each function's `at`
+  and every `loc` are printed, and after each unit one `; file INDEX NAME` line per file the
+  positions name, since the module holds files only as indices. Plain `--ops` is unchanged.
+- **D10 as built** (`dwarf.nz`): DWARF 4, one compile unit per object (C99, producer `nazm`,
+  as the other two backends write), a subprogram per function with an `at`, and a sequence per
+  such function: its declaration line at its first instruction, then a row at the address where
+  each `loc`'s code begins. A position with no code of its own — a jump laid out as a
+  fall-through — keeps its row at the next position's address, so every position LIR names is
+  in the table. In Mach-O the addresses are written as section offsets with section-relative
+  relocations, as LLVM's are (`dsymutil` and `llvm-dwarfdump` read the object in place); in
+  ELF they are relocations against the functions and the DWARF sections' own symbols.
+  `tests/lines.sh` holds them to LLVM's: `llvm-dwarfdump --verify` passes, every (file, line,
+  column) row of LLVM's with a nonzero column is one of ours — LLVM's column-0 rows are its
+  merged locations — and the program linked with them runs as LLVM's debug build does.
+- **5.2 as built.** The frame keeps compact unwind's layouts: aarch64 pushes each used pair of
+  x19–x28 with `stp` right below the frame record (`UNWIND_ARM64_MODE_FRAME` and a bit per
+  pair), x86-64 pushes rbx/r12–r15 right below rbp (`UNWIND_X86_64_MODE_RBP_FRAME`, their count
+  and list). Mach-O objects carry `__LD,__compact_unwind`; ELF objects an `.eh_frame` (a CIE
+  and an FDE per function describing the prologue — nothing unwinds from an epilogue).
+  `tests/unwind.sh` walks the stack with `_Unwind_Backtrace` from C through Nazm frames that
+  keep values in callee-saved registers, built by LLVM and by the generator: the same frames.

@@ -329,6 +329,12 @@ pub fn push_rbp(b: ByteBuf) {
     b1(b, 0x55)
 }
 
+/// `push r`, 64 bits.
+pub fn push(b: ByteBuf, r: Int) {
+    rex(b, false, 0, 0, r, false)
+    b1(b, 0x50 + (r & 7))
+}
+
 pub fn pop_rbp(b: ByteBuf) {
     b1(b, 0x5D)
 }

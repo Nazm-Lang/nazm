@@ -32,11 +32,10 @@ struct G {
     fix_kind: Ints,
     fix_blk: Ints,
     /// Stage B: each name's register (an index from x19), or -1; the values' count; the
-    /// callee-saved registers used, and where they are saved.
+    /// callee-saved pairs saved (0 for x19/x20 … 4 for x27/x28), pushed below the frame record.
     loc: Ints,
     nvals: Int,
     saved: Ints,
-    save_off: Int,
 }
 
 /// The callee-saved registers the allocator hands out: x19–x28.
@@ -361,15 +360,26 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
         k += 1
     }
     let loc = allocate(f, n, vcls, NREGS)
-    let saved = used_regs(loc, NREGS)
-    let save_off = align_up(off, 8)
-    off = save_off + 8 * ints_len(saved)
+    let used = used_regs(loc, NREGS)
+    let saved = ints_new()
+    let mut p = 0
+    while p < NREGS / 2 {
+        let mut any = false
+        for r in used {
+            if r / 2 == p { any = true }
+        }
+        if any { ints_push(saved, p) }
+        p += 1
+    }
     let size = align_up(off, 16)
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
-            fix_kind: ints_new(), fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
-            save_off: save_off)
+            fix_kind: ints_new(), fix_blk: ints_new(), loc: loc, nvals: n, saved: saved)
     ints_set(c.sym_at, f.sym, here(g))
+    // Compact unwind's frame mode: the frame record, and a bit per saved pair (D10, 5.2).
+    let mut enc = 0x04000000
+    for q in saved { enc = enc | (1 << q) }
+    ints_set(c.fn_enc, f.sym, enc)
     prologue(g, size)
     let nb = ints_len(f.block_first)
     let mut bi = 0
@@ -425,6 +435,11 @@ fn branch_to(g: G, kind: Int, word: Int, b: Int) {
 fn prologue(g: G, size: Int) {
     w(g, push_frame())
     w(g, mov_sp(29, SP))
+    // The callee-saved pairs the allocation uses, x19 at x29-8 and x20 at x29-16, the next pair
+    // below: the layout compact unwind's frame mode describes.
+    for q in g.saved {
+        w(g, stp_pre(areg(2 * q + 1), areg(2 * q), SP, -16))
+    }
     if size > 0 {
         if size <= 4096 {
             if size < 4096 {
@@ -444,12 +459,6 @@ fn prologue(g: G, size: Int) {
             let rest = size - pages * 4096
             if rest > 0 { w(g, sub_imm(SP, SP, rest)) }
         }
-    }
-    // The callee-saved registers the allocation uses.
-    let mut q = 0
-    while q < ints_len(g.saved) {
-        mem(g, 8, false, false, areg(g.saved[q]), SP, g.save_off + 8 * q)
-        q += 1
     }
     // Every parameter into its slot, normalised (D5).
     let own = g.u.syms[g.f.sym]
@@ -484,10 +493,11 @@ fn prologue(g: G, size: Int) {
 }
 
 fn epilogue(g: G) {
-    let mut q = 0
-    while q < ints_len(g.saved) {
-        mem(g, 8, true, false, areg(g.saved[q]), SP, g.save_off + 8 * q)
-        q += 1
+    let mut j = 0
+    while j < ints_len(g.saved) {
+        let q = g.saved[j]
+        w(g, ldp_off(areg(2 * q + 1), areg(2 * q), 29, -16 * (j + 1)))
+        j += 1
     }
     w(g, mov_sp(SP, 29))
     w(g, pop_frame())
@@ -638,7 +648,7 @@ fn inst(g: G, x: Ins) {
         ld(g, 9, x.a)
         copy_bytes(g, x.imm, true)
     } else if op == OP_LOC {
-        // Positions become line tables in slice 5 (D10).
+        add_loc(g.c, x)
     } else {
         refuse(g, f"instruction kind {op}")
     }
