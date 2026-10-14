@@ -1,4 +1,5 @@
-// Core IR, read: `nazm core-ir --json` (`nazm.core-ir/2`) in the arena `@std/json` parses it into.
+// Core IR, read: `nazm core-ir --json` (`nazm.core-ir/3`, or `/2`) in the arena `@std/json` parses it
+// into.
 //
 // An expression, statement or block is a node of the document, read through the accessors below;
 // a function's header is decoded once into a `CirFn`. `docs/architecture.md` §7.41 is what the
@@ -102,7 +103,61 @@ pub fn op(c: Cir, e: Int) -> Str ! {} {
 
 /// An expression's type, `never` for one that produces no value.
 pub fn ety(c: Cir, e: Int) -> Str ! {} {
-    sval(c, e, "type")
+    tval(c, e, "type")
+}
+
+/// The type `key` names in object `n`, as [`read_ty`] reads it.
+pub fn tval(c: Cir, n: Int, key: Str) -> Str ! {} {
+    read_ty(sval(c, n, key))
+}
+
+/// A string node that is a type, as [`read_ty`] reads it.
+pub fn tof(c: Cir, n: Int) -> Str ! {} {
+    read_ty(str_of(c, n))
+}
+
+/// Where the first byte `want` at bracket depth 0 is in `t` between `from` and `to`, or -1.
+fn top_level(t: Str, from: Int, to: Int, want: Int) -> Int {
+    let mut depth = 0
+    let mut i = from
+    while i < to {
+        let b = str_byte(t, i)
+        if depth == 0 && b == want { return i }
+        if b == 91 || b == 40 || b == 123 { depth += 1 }
+        if b == 93 || b == 41 || b == 125 { depth -= 1 }
+        i += 1
+    }
+    0 - 1
+}
+
+/// A type as `nazm.core-ir/3` spells it, read the way this stage has read types since `/2`: a
+/// function type (`fn(Int) -> Str`) as `?`, which `/2` printed and MIR still prints, and an array
+/// (`[Int; 4]`) as `?array[Int, 4]`, the spelling `refine.nz` recovers one under from `/2`. Every
+/// other spelling is itself, its arguments read the same way; a `/2` spelling reads as itself.
+pub fn read_ty(t: Str) -> Str ! {} {
+    let n = str_len(t)
+    if n < 3 || str_byte(t, 0) == 63 { return t }
+    if str_slice(t, 0, 3) == "fn(" { return "?" }
+    if str_byte(t, n - 1) != 93 { return t }
+    if str_byte(t, 0) == 91 {
+        let semi = top_level(t, 1, n - 1, 59)
+        if semi < 0 { return t }
+        return "?array[" + read_ty(str_slice(t, 1, semi)) + ", " + str_slice(t, semi + 2, n - 1) + "]"
+    }
+    let b = top_level(t, 0, n, 91)
+    if b < 0 { return t }
+    let mut out = str_slice(t, 0, b + 1)
+    let mut start = b + 1
+    let mut first = true
+    while start < n - 1 {
+        let comma = top_level(t, start, n - 1, 44)
+        let end = if comma < 0 { n - 1 } else { comma }
+        if !first { out = out + ", " }
+        out = out + read_ty(str_slice(t, start, end))
+        first = false
+        start = if comma < 0 { n - 1 } else { comma + 2 }
+    }
+    out + "]"
 }
 
 // --- reading ------------------------------------------------------------------------------------
@@ -137,7 +192,7 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
     let ls = kid(c, n, "locals")
     for i in 0..count(c, ls) {
         let l = at(c, ls, i)
-        vec_push(locals, CirLocal(name: sval(c, l, "name"), ty: sval(c, l, "type"), origin: sval(c, l, "origin")))
+        vec_push(locals, CirLocal(name: sval(c, l, "name"), ty: tval(c, l, "type"), origin: sval(c, l, "origin")))
     }
     let consts: Vec[CirConst] = vec_new()
     let cs = kid(c, n, "consts")
@@ -168,7 +223,7 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
         name: sval(c, n, "name"),
         type_params: ival(c, n, "type_params"),
         params: ival(c, n, "params"),
-        ret: sval(c, n, "ret"),
+        ret: tval(c, n, "ret"),
         published: published,
         locals: locals,
         consts: consts,
@@ -186,8 +241,8 @@ pub fn cir_read(text: Str) -> Result[Cir, Str] ! {} {
     let c0 = Cir(doc: doc, entry: "", fns: vec_new(), by_def: hashmap_new())
     let root = json_root(doc)
     let schema = sval(c0, root, "schema")
-    if schema != "nazm.core-ir/2" {
-        return Err("not nazm.core-ir/2 but `" + schema + "`")
+    if schema != "nazm.core-ir/3" && schema != "nazm.core-ir/2" {
+        return Err("not nazm.core-ir/3 but `" + schema + "`")
     }
     let c = Cir(doc: doc, entry: sval(c0, root, "entry"), fns: vec_new(), by_def: hashmap_new())
     let fs = kid(c, root, "functions")

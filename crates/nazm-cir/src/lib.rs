@@ -9,7 +9,7 @@
 //! # What is here, and what is not
 //!
 //! The representation ([`ir`]), its invariants checked ([`verify`]), a deterministic printed
-//! form ([`print`], `nazm.core-ir/1`), each function's digests ([`digest`]), and the durable
+//! form ([`print`], `nazm.core-ir/3`), each function's digests ([`digest`]), and the durable
 //! names the last two use ([`names`]). **Not** the lowering: that reads the syntax tree, and
 //! nothing about how a program was written may reach this crate — it depends on spans and on
 //! `nazm-sema`, the vocabulary of meaning, and on nothing else of the compiler's.
@@ -41,5 +41,8 @@ pub use verify::verify;
 /// The printed form's version. Internal: it names what this build writes, and promises no
 /// reader outside the workspace that a later build writes the same.
 /// `/2` since N78: a call through a type parameter's bound, `call_trait`, which a `/1`
-/// reader would misread as a call it does not know.
-pub const SCHEMA: &str = "nazm.core-ir/2";
+/// reader would misread as a call it does not know. `/3` since R3 (2026-10-15): function and
+/// array types spelled where `/2` wrote `?`, and the facts a lowering outside the workspace
+/// needs — the type table, modules, statics, the impl table, and each function's visibility,
+/// captures and attributes.
+pub const SCHEMA: &str = "nazm.core-ir/3";

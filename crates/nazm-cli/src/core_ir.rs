@@ -1,4 +1,5 @@
-//! `nazm core-ir` — print what a checked program became, `nazm.core-ir/2` (N39; `/2` since N78).
+//! `nazm core-ir` — print what a checked program became, `nazm.core-ir/3` (N39; `/2` since
+//! N78, `/3` since R3).
 //!
 //! A compiler developer's question — *what did this source become, which definition does
 //! this call reach, which loop does this `break` leave* — answered from the representation

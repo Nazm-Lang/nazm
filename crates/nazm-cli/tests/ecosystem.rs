@@ -506,7 +506,7 @@ fn every_command_has_its_own_help_naming_the_schema_it_prints() {
         ("profile", "nazm.profile/2", "nazm.cost/"),
         ("explain-flow", "nazm.flow/2", "nazm.flow/1"),
         ("accel", "nazm.accel/3", "nazm.accel/2"),
-        ("core-ir", "nazm.core-ir/2", "nazm.core-ir/1"),
+        ("core-ir", "nazm.core-ir/3", "nazm.core-ir/2"),
     ] {
         let help = ok(d.path(), &["help", c]);
         assert!(help.contains(schema), "`nazm {c}` names {schema}: {help}");

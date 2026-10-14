@@ -614,7 +614,7 @@ fn lower_spawn(fx: Fx, callee_def: Str, args: Int) {
 fn callee(fx: Fx, def: Str, type_args: Int) -> Int {
     let args = strs_new()
     for j in 0..count(fx.c, type_args) {
-        strs_push(args, ty(fx, str_of(fx.c, at(fx.c, type_args, j))))
+        strs_push(args, ty(fx, tof(fx.c, at(fx.c, type_args, j))))
     }
     callee_at(fx, def, args)
 }
@@ -849,13 +849,13 @@ fn expr_into(fx: Fx, e: Int, dst: Int) {
         write(fx, dst, Rvalue.Index(base: vec_get(os.ops, 0), index: vec_get(os.ops, 1)))
         release_all(fx, os.held)
     } else if o == "fits" {
-        let to = ty(fx, sval(c, e, "to"))
+        let to = ty(fx, tval(c, e, "to"))
         let a = operand(fx, kid(c, e, "operand"), false)
         if !a.ok { return }
         write(fx, dst, Rvalue.Fits(to: to, o: a.o))
         release(fx, a.held)
     } else if is_compare(o) {
-        let operand_ty = ty(fx, sval(c, e, "operand"))
+        let operand_ty = ty(fx, tval(c, e, "operand"))
         let law0 = sval(c, e, "law")
         let law = if law0 == "parametric" { law_of(o, operand_ty) } else { law0 }
         let os = operands_of(fx, two(c, e, "lhs", "rhs"))
@@ -874,7 +874,7 @@ fn expr_into(fx: Fx, e: Int, dst: Int) {
     } else if o == "call_trait" {
         // Resolved for this instance: `Self` substituted, the impl's function found, and an
         // ordinary call lowered. MIR has no trait call.
-        let concrete = ty(fx, sval(c, e, "self"))
+        let concrete = ty(fx, tval(c, e, "self"))
         let method = sval(c, e, "method")
         let t = method_target(c, method, concrete)
         if t.index >= 0 {
@@ -1023,7 +1023,7 @@ fn builtin(fx: Fx, e: Int, dst: Int) {
         return
     }
     let tas = kid(c, e, "type_args")
-    let elem = if count(c, tas) > 0 { ty(fx, str_of(c, at(c, tas, 0))) } else { "" }
+    let elem = if count(c, tas) > 0 { ty(fx, tof(c, at(c, tas, 0))) } else { "" }
     write(fx, dst, Rvalue.Primitive(op: name, elem: elem, args: os.ops))
     release_all(fx, os.held)
 }

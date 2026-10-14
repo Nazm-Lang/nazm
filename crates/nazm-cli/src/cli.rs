@@ -659,7 +659,7 @@ pub(crate) enum Command {
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
     },
-    /// Print a checked program's Core IR, `nazm.core-ir/2`: what each function became,
+    /// Print a checked program's Core IR, `nazm.core-ir/3`: what each function became,
     /// typed, with every name resolved and every transfer explicit.
     ///
     /// A debugging view of the one representation `nazm run` and `nazm build` both start

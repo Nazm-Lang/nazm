@@ -470,7 +470,7 @@ keys (`main.nz::fn helper`), so the output is the same from any checkout; `--no-
 out source positions, and `--json` gives one line. A program that does not check prints
 nothing but its diagnostics. It is a view for a person asking *what did this source become*,
 not a syntax to write or a format to depend on: `docs/architecture.md` §7.41 says what its
-version, `nazm.core-ir/2`, promises and what it does not.
+version, `nazm.core-ir/3`, promises and what it does not.
 
 ```
 nazm mir prog.nz

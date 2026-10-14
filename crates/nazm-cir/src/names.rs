@@ -19,12 +19,30 @@ use nazm_span::Span;
 pub struct Names<'a> {
     res: &'a Resolution,
     graph: &'a ModuleGraph,
+    /// Whether a function or array type is spelled out — `fn(Int) -> Str`, `[Int; 4]` — as the
+    /// printed form `/3` does, or written `?`, as the digests always have: a digest names what
+    /// a function computes, and was settled before either spelling existed.
+    spelled: bool,
 }
 
 impl<'a> Names<'a> {
     #[must_use]
     pub fn new(res: &'a Resolution, graph: &'a ModuleGraph) -> Self {
-        Self { res, graph }
+        Self {
+            res,
+            graph,
+            spelled: false,
+        }
+    }
+
+    /// As [`Self::new`], with function and array types spelled out (`nazm.core-ir/3`).
+    #[must_use]
+    pub fn spelled(res: &'a Resolution, graph: &'a ModuleGraph) -> Self {
+        Self {
+            res,
+            graph,
+            spelled: true,
+        }
     }
 
     /// A module: its key, or `#` and its load position where it has none.
@@ -99,6 +117,33 @@ impl<'a> Names<'a> {
                 // what it was written against (N78).
                 ParamOwner::Trait(_) => "$Self".to_owned(),
             },
+            Type::Fn(f) if self.spelled => match types.fn_signature(f) {
+                Some(sig) => {
+                    let params: Vec<String> = sig.params.iter().map(|p| self.ty(*p)).collect();
+                    let mut effects: Vec<String> = sig
+                        .effects
+                        .named()
+                        .names()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                    // An effect parameter (N51) by position, never by its declared name.
+                    if sig.effects.has_param() {
+                        effects.push("$effects".to_owned());
+                    }
+                    let effects = if effects.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ! {{ {} }}", effects.join(", "))
+                    };
+                    format!("fn({}) -> {}{effects}", params.join(", "), self.ty(sig.ret))
+                }
+                None => "?".to_owned(),
+            },
+            Type::Array(a) if self.spelled => match types.array_info(a) {
+                Some((elem, len)) => format!("[{}; {len}]", self.ty(elem)),
+                None => "?".to_owned(),
+            },
             other => other.builtin_name().unwrap_or("?").to_owned(),
         }
     }
@@ -115,6 +160,21 @@ impl<'a> Names<'a> {
             || "?".to_owned(),
             |d| self.definition(d.module, DefKind::Enum, &d.name),
         )
+    }
+
+    /// A trait, by its durable key (`nazm.core-ir/3`'s impl table).
+    #[must_use]
+    pub fn trait_key(&self, id: nazm_sema::traits::TraitId) -> String {
+        self.res.traits().get(id).map_or_else(
+            || "?".to_owned(),
+            |d| self.definition(d.module, DefKind::Trait, &d.name),
+        )
+    }
+
+    /// A static, by its durable key (`nazm.core-ir/3`).
+    #[must_use]
+    pub fn static_key(&self, module: ModuleId, name: &str) -> String {
+        self.definition(module, DefKind::Static, name)
     }
 
     /// A record's field, by name: declaration order is not part of what a record means.
