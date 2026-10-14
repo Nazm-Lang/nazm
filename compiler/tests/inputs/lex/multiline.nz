@@ -1,0 +1,22 @@
+fn main() -> Int {
+    let a = """
+        first
+          second
+
+        third
+        """;
+    let b = """
+      bad indent
+    ok
+        """;
+    let c = """ text on the opening line
+        x
+        """;
+    let d = """
+        escape \n and \q and join \
+        next
+        """;
+    0
+}
+fn e() -> Str { """
+   never closed
