@@ -376,6 +376,10 @@ pub struct Function {
     pub export: Option<ForeignDecl>,
     /// The impl this function is a method of, for one declared inside `impl … { }` (N78).
     pub method_of: Option<Box<MethodOf>>,
+    /// Written `= e` with no result type (R1.5, D2): the result type is the expression's,
+    /// which the checker settles before any caller is checked. `return_type` is then the
+    /// zero-width placeholder a function with no result type has.
+    pub inferred_result: bool,
     pub span: Span,
 }
 
@@ -520,29 +524,7 @@ impl Block {
         let mut blocks: Vec<&Self> = vec![self];
         loop {
             if let Some(b) = blocks.pop() {
-                for st in &b.statements {
-                    match st {
-                        Stmt::Let(l) => exprs.push(&l.value),
-                        Stmt::Assign(a) => exprs.push(&a.value),
-                        Stmt::While(w) => {
-                            exprs.push(&w.cond);
-                            blocks.push(&w.body);
-                        }
-                        Stmt::For(f) => {
-                            exprs.extend(f.iter.exprs());
-                            blocks.push(&f.body);
-                        }
-                        Stmt::Return(r) => exprs.push(&r.value),
-                        Stmt::Expr(e) => exprs.push(e),
-                        Stmt::Scope(sc) => blocks.push(&sc.body),
-                        Stmt::Defer(df) => blocks.push(&df.body),
-                        Stmt::Spawn(sp) => exprs.extend(sp.args.iter()),
-                        Stmt::Break { .. } | Stmt::Continue { .. } => {}
-                    }
-                }
-                if let Some(t) = &b.tail {
-                    exprs.push(t);
-                }
+                b.push_parts(&mut exprs, &mut blocks);
                 continue;
             }
             let e = exprs.pop()?;
@@ -550,76 +532,135 @@ impl Block {
             if span.file != at.file || span.start > at.start || span.end < at.end {
                 continue;
             }
-            match e {
-                Expr::Closure { span, body, .. } => {
-                    if *span == at {
-                        return Some(e);
-                    }
-                    blocks.push(body);
-                }
-                Expr::Int { .. }
-                | Expr::WideInt { .. }
-                | Expr::Float { .. }
-                | Expr::Bool { .. }
-                | Expr::Str { .. }
-                | Expr::Var { .. } => {}
-                Expr::Neg { operand, .. }
-                | Expr::Not { operand, .. }
-                | Expr::BitNot { operand, .. }
-                | Expr::Propagate { operand, .. } => exprs.push(operand),
-                Expr::Array { elems, .. } | Expr::Tuple { elems, .. } => exprs.extend(elems.iter()),
-                Expr::ArrayRepeat { value, count, .. } => {
-                    exprs.push(value);
-                    exprs.push(count);
-                }
-                Expr::Index { base, index, .. } => {
-                    exprs.push(base);
-                    exprs.push(index);
-                }
-                Expr::Field { base, .. } => exprs.push(base),
-                // An interpolation's holes (L4).
-                Expr::Interp { parts, .. } => {
-                    for p in parts {
-                        if let InterpPart::Hole { expr, .. } = p {
-                            exprs.push(expr);
-                        }
-                    }
-                }
-                Expr::Binary { lhs, rhs, .. } => {
-                    exprs.push(lhs);
-                    exprs.push(rhs);
-                }
-                Expr::Call { args, .. } => exprs.extend(args.iter()),
-                Expr::MethodCall { receiver, args, .. } => {
-                    exprs.push(receiver);
-                    exprs.extend(args.iter());
-                }
-                Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
-                    exprs.extend(fields.iter().map(|f| &f.value));
-                }
-                Expr::Match {
-                    scrutinee, arms, ..
-                } => {
-                    exprs.push(scrutinee);
-                    for a in arms {
-                        exprs.extend(a.guard.as_ref());
-                        exprs.push(&a.body);
-                    }
-                }
-                Expr::If {
-                    cond,
-                    then_block,
-                    else_block,
-                    ..
-                } => {
-                    exprs.push(cond);
-                    blocks.push(then_block);
-                    if let Some(b) = else_block {
-                        blocks.push(b);
-                    }
-                }
-                Expr::Block(b) => blocks.push(b),
+            if matches!(e, Expr::Closure { span, .. } if *span == at) {
+                return Some(e);
             }
+            e.push_children(&mut exprs, &mut blocks);
+        }
+    }
+
+    /// The functions this block calls by a plain name, at any depth (R1.5, D2): what an
+    /// expression body's inferred result type waits for. Iterative.
+    #[must_use]
+    pub fn called_names(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        let mut exprs: Vec<&Expr> = Vec::new();
+        let mut blocks: Vec<&Self> = vec![self];
+        loop {
+            if let Some(b) = blocks.pop() {
+                b.push_parts(&mut exprs, &mut blocks);
+                continue;
+            }
+            let Some(e) = exprs.pop() else {
+                return out;
+            };
+            if let Expr::Call {
+                qualifier: None,
+                callee,
+                ..
+            } = e
+            {
+                out.push(callee.as_str());
+            }
+            e.push_children(&mut exprs, &mut blocks);
+        }
+    }
+
+    /// This block's statements' expressions and blocks, and its tail.
+    fn push_parts<'a>(&'a self, exprs: &mut Vec<&'a Expr>, blocks: &mut Vec<&'a Self>) {
+        for st in &self.statements {
+            match st {
+                Stmt::Let(l) => exprs.push(&l.value),
+                Stmt::Assign(a) => exprs.push(&a.value),
+                Stmt::While(w) => {
+                    exprs.push(&w.cond);
+                    blocks.push(&w.body);
+                }
+                Stmt::For(f) => {
+                    exprs.extend(f.iter.exprs());
+                    blocks.push(&f.body);
+                }
+                Stmt::Return(r) => exprs.push(&r.value),
+                Stmt::Expr(e) => exprs.push(e),
+                Stmt::Scope(sc) => blocks.push(&sc.body),
+                Stmt::Defer(df) => blocks.push(&df.body),
+                Stmt::Spawn(sp) => exprs.extend(sp.args.iter()),
+                Stmt::Break { .. } | Stmt::Continue { .. } => {}
+            }
+        }
+        if let Some(t) = &self.tail {
+            exprs.push(t);
+        }
+    }
+}
+
+impl Expr {
+    /// This expression's immediate sub-expressions and blocks.
+    fn push_children<'a>(&'a self, exprs: &mut Vec<&'a Self>, blocks: &mut Vec<&'a Block>) {
+        match self {
+            Expr::Closure { body, .. } => blocks.push(body),
+            Expr::Int { .. }
+            | Expr::WideInt { .. }
+            | Expr::Float { .. }
+            | Expr::Bool { .. }
+            | Expr::Str { .. }
+            | Expr::Var { .. } => {}
+            Expr::Neg { operand, .. }
+            | Expr::Not { operand, .. }
+            | Expr::BitNot { operand, .. }
+            | Expr::Propagate { operand, .. } => exprs.push(operand),
+            Expr::Array { elems, .. } | Expr::Tuple { elems, .. } => exprs.extend(elems.iter()),
+            Expr::ArrayRepeat { value, count, .. } => {
+                exprs.push(value);
+                exprs.push(count);
+            }
+            Expr::Index { base, index, .. } => {
+                exprs.push(base);
+                exprs.push(index);
+            }
+            Expr::Field { base, .. } => exprs.push(base),
+            // An interpolation's holes (L4).
+            Expr::Interp { parts, .. } => {
+                for p in parts {
+                    if let InterpPart::Hole { expr, .. } = p {
+                        exprs.push(expr);
+                    }
+                }
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                exprs.push(lhs);
+                exprs.push(rhs);
+            }
+            Expr::Call { args, .. } => exprs.extend(args.iter()),
+            Expr::MethodCall { receiver, args, .. } => {
+                exprs.push(receiver);
+                exprs.extend(args.iter());
+            }
+            Expr::Construct { fields, .. } | Expr::Variant { fields, .. } => {
+                exprs.extend(fields.iter().map(|f| &f.value));
+            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
+                exprs.push(scrutinee);
+                for a in arms {
+                    exprs.extend(a.guard.as_ref());
+                    exprs.push(&a.body);
+                }
+            }
+            Expr::If {
+                cond,
+                then_block,
+                else_block,
+                ..
+            } => {
+                exprs.push(cond);
+                blocks.push(then_block);
+                if let Some(b) = else_block {
+                    blocks.push(b);
+                }
+            }
+            Expr::Block(b) => blocks.push(b),
         }
     }
 }

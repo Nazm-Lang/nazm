@@ -227,6 +227,9 @@ program the checker accepts, with something its author should know: `nazm check`
 report it and succeed, and refuse under `--deny-warnings`; the language service publishes it at
 the warning severity. One code appeared, `N0632`, the first warning. No schema's major moved.
 
+**Applied to R1.5, D2 (expression bodies).** One code appeared, compatibly: `N0634`, a function
+written `= e` that must still write its result type. No schema moved.
+
 **Applied to R1b, L12 (`defer`).** One code appeared, compatibly: `N0631`, a `defer` body that
 would leave it. No schema moved.
 
@@ -610,6 +613,7 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0630` | `LET_ELSE_COMPLETES` | A `let … else` whose `else` can finish (R1a, `docs/spec.md`, *Patterns*) |
 | `N0631` | `DEFER_LEAVES` | A `defer` body that would leave it: `return`, `?`, or `break`/`continue` out of it (R1b, `docs/spec.md`, *`defer`*) |
 | `N0632` | `WILDCARD_COVERS_VARIANTS` | A **warning**: a `_` or a name in a `match` of an enum covers variants no arm names (R1b, `docs/spec.md`, *Patterns*) |
+| `N0634` | `RESULT_TYPE_NOT_INFERRED` | A function written `= e` with no result type that must write one: a `pub` function, a method, or one whose body reaches itself (R1.5, `docs/spec.md`, *Shorter forms*) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 

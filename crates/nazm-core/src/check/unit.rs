@@ -294,6 +294,22 @@ pub fn declare_unit(
             declared_effects
         };
 
+        // A result type left to an expression body (R1.5, D2) is the module's own business: a
+        // `pub` function's is its interface, and a method's is its trait's or its impl's.
+        if f.inferred_result && (f.pub_span.is_some() || f.method_of.is_some()) {
+            errors.push(
+                Diagnostic::error(
+                    codes::RESULT_TYPE_NOT_INFERRED,
+                    f.name_span,
+                    format!(
+                        "`{}` must write its result type: a {} function's signature is its interface",
+                        f.name,
+                        if f.method_of.is_some() { "method's" } else { "`pub`" }
+                    ),
+                )
+                .help("write it after `:`, as `fn f(n: Int): Int = …`"),
+            );
+        }
         // A method is never in the function namespace: it is reached through its trait.
         let visibility = if method.is_some() {
             Visibility::Private
@@ -320,7 +336,7 @@ pub fn declare_unit(
             foreign: foreign.clone(),
             export,
             preconditions: preconditions_of(f),
-            no_result: f.return_type.span.start == f.return_type.span.end,
+            no_result: f.return_type.span.start == f.return_type.span.end && !f.inferred_result,
             closure: None,
         });
         debug_assert_eq!(declared, id);
@@ -673,8 +689,18 @@ pub fn check_unit(
         }
     }
     c.trait_names = trait_scope(unit, c.res);
-    for (_, f) in &unit.functions {
-        c.check_function(f);
+    // A result type left to an expression body (R1.5, D2) is settled before any caller is
+    // checked: those bodies first, each after the inferred functions it calls.
+    let inferred = super::infer::order(unit, &mut c.errors);
+    for &n in &inferred {
+        if let Some((_, f)) = unit.functions.get(n) {
+            c.check_function(f);
+        }
+    }
+    for (n, (_, f)) in unit.functions.iter().enumerate() {
+        if !inferred.contains(&n) {
+            c.check_function(f);
+        }
     }
     // Effects are a fact about the module's resolved calls, so they are settled once every
     // body has been checked and every call resolved (N36).

@@ -298,6 +298,15 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *Expression bodies* (`spec.md`, *Shorter forms*; R1.5 design D2).
+`fn double(n: Int): Int = n * 2`; a private function may leave its result type to the expression,
+`fn add(a: Int, b: Int) = a + b`. Those bodies are checked first, each after the inferred functions
+it calls (`crates/nazm-core/src/check/infer.rs`), and the type settled in the resolution and the
+module's names before any caller is checked; a `pub` function, a method, a body that reaches itself
+or one with no value is `N0634`. Semantic epoch 77; EXPERIMENTAL until R1.5 closes. Evidence:
+`crates/nazm-cli/tests/shorter_forms.rs` — `main` written first and a caller before its callees,
+the interpreter and both backends agreeing; the refusals by name; four mutants.
+
 **R1.5 (2026-10-15)** · *A result type after `:`* (`spec.md`, *Shorter forms*; R1.5 design D1).
 `fn fib(n: Int): Int`, `fn(Int): Int`, a trait method's and a function expression's: the parser
 takes `:` or `->` before a result type, so every implementation reads them alike; `nazm fmt` keeps

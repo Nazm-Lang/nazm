@@ -39,6 +39,7 @@ mod expr;
 mod foreign;
 mod function;
 mod generic;
+mod infer;
 mod layout;
 mod operators;
 mod pattern;

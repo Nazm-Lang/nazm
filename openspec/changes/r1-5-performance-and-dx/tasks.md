@@ -16,8 +16,9 @@
 - [ ] 4.1 Dead-stripping; unused standard functions left out
 - [ ] 4.2 Prelude imports of the common standard modules
 - [ ] 4.3 `top(n)` and `sort_by(key)` on maps
-- [ ] 4.4 Expression-bodied functions: `fn f(n: Int): Int = …`, and a private one with no result type
+- [x] 4.4 Expression-bodied functions: `fn f(n: Int): Int = …`, and a private one with no result type
       written, `fn add(a: Int, b: Int) = a + b` (inferred; a `pub` function still writes its type)
+      — 2026-10-15 (D2): parser, checker (`check/infer.rs`), `N0634`, spec *Shorter forms*, epoch 77
 
 ## 6. Syntax: short and conventional (the copyright holder's choices, 2026-10-14)
 - [x] 6.1 Result types written with `:` like parameters — `fn fib(n: Int): Int`, function types

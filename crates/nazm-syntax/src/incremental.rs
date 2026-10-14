@@ -998,6 +998,7 @@ impl Shift for Function {
             foreign,
             export,
             method_of,
+            inferred_result: _,
             span,
         } = self;
         attrs.shift(file, by);

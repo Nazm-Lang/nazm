@@ -113,8 +113,14 @@ qualifier = IDENT , "::" ;
 (* @example pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
 (* @example fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") } *)
 (* @example fn add(a: Int, b: Int): Int { a + b } fn main(): Int { add(1, 2) } *)
+(* @example fn double(n: Int): Int = n * 2 fn add(a: Int, b: Int) = a + b fn main() -> Int { add(double(1), 2) } *)
 function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
-           [ result ] , [ effect_set ] , { contract } , block ;
+           [ result ] , [ effect_set ] , { contract } , ( block | expression_body ) ;
+
+(* An expression body (R1.5, D2): the function's value is the expression. Written with no result
+   type, the result type is the expression's — not for a `pub` function, a method, or one whose
+   body reaches itself (`N0634`). *)
+expression_body = "=" , expression , [ ";" ] ;
 
 (* A result type is written after `:` (R1.5, D1), as a parameter's is; `->` is still read until
    1.0. A function that writes none returns nothing (R1, 5b.2). *)

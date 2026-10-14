@@ -526,6 +526,9 @@ pub mod codes {
     /// A warning (R1b, L15): a `match` on an enum whose `_` — or a bare name — covers variants
     /// no arm names, so a variant added later is covered too, unseen (`docs/spec.md`, *Patterns*).
     pub const WILDCARD_COVERS_VARIANTS: Code = Code::new("N0632");
+    /// A function whose result type cannot be left to its expression body (R1.5, D2): a `pub`
+    /// one, a method, or one whose body reaches itself (`docs/spec.md`, *Shorter forms*).
+    pub const RESULT_TYPE_NOT_INFERRED: Code = Code::new("N0634");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

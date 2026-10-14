@@ -515,7 +515,8 @@ accepts.
 | `use_item` | `"use" , STRING , [ IDENT , IDENT ] , ";" \| visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";"` |
 | `reexport_name` | `IDENT , [ IDENT , IDENT ]` |
 | `qualifier` | `IDENT , "::"` |
-| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , block` |
+| `function` | `[ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , ( block \| expression_body )` |
+| `expression_body` | `"=" , expression , [ ";" ]` |
 | `result` | `( ":" \| "->" ) , type` |
 | `contract` | `( "requires" \| "ensures" ) , expression` |
 | `foreign_function` | `[ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" , result , "=" , STRING , ";"` |
@@ -797,7 +798,7 @@ use "shapes.nz" as s; fn f(x: s::Shape) -> Int { match x { s::Shape.Dot() => 0, 
 ### `function`
 
 ```ebnf
-function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , block ;
+function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" , [ result ] , [ effect_set ] , { contract } , ( block | expression_body ) ;
 ```
 
 ```nazm
@@ -819,6 +820,20 @@ fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") }
 ```nazm
 fn add(a: Int, b: Int): Int { a + b } fn main(): Int { add(1, 2) }
 ```
+
+```nazm
+fn double(n: Int): Int = n * 2 fn add(a: Int, b: Int) = a + b fn main() -> Int { add(double(1), 2) }
+```
+
+### `expression_body`
+
+```ebnf
+expression_body = "=" , expression , [ ";" ] ;
+```
+
+An expression body (R1.5, D2): the function's value is the expression. Written with no result
+type, the result type is the expression's — not for a `pub` function, a method, or one whose
+body reaches itself (`N0634`).
 
 ### `result`
 

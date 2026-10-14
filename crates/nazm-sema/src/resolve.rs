@@ -631,6 +631,15 @@ impl Resolution {
         self.functions.get(id.index())
     }
 
+    /// A function's result type, settled from its expression body (R1.5, D2): its type, or —
+    /// where the expression has no value — a function that returns nothing.
+    pub fn settle_result(&mut self, id: FnId, ret: Type, no_result: bool) {
+        if let Some(d) = self.functions.get_mut(id.index()) {
+            d.ret = ret;
+            d.no_result = no_result;
+        }
+    }
+
     /// A trait method's default body (R1b, L11): the function `Trait/default/m`, generic over
     /// `Self`, in the trait's module.
     #[must_use]
