@@ -6,6 +6,7 @@
 //! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
 //! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
 //! D5 — map literals, `{"a": 1}`, and `Map[K, V]`.
+//! D7 — `use std.json`.
 
 #![allow(
     clippy::unwrap_used,
@@ -295,4 +296,21 @@ fn map_without_the_hash_map_names_the_import() {
     let r = nazm(d.path(), &["check", "p.nz"]);
     assert_ne!(r.code, Some(0), "{r:?}");
     assert!(r.stderr.contains("@std/hashmap"), "{r:?}");
+}
+
+#[test]
+fn a_standard_module_by_its_dotted_path_is_the_quoted_import_everywhere() {
+    differential::agrees(
+        "use std.hash
+use std.hashmap
+use std.text as t
+
+fn main(out: OutCap): Int ! {io} {
+    let m = {\"a\": 1}
+    print(f\"{m[\"a\"] + str_len(t::text_to_upper(\"abc\"))}\\n\")
+    0
+}
+",
+        "4\n0",
+    );
 }
