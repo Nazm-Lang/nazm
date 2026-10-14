@@ -8,9 +8,9 @@ structured concurrency, compiler-checked effects, authority and data provenance,
 machine-readable tooling for people and coding agents alike. A second compiler, written in Nazm
 for a declared subset of the language, compiles itself.**
 
-## 0.9.0 — a public preview of the 1.0 draft
+## 0.10.0 — a public preview of the 1.0 draft
 
-Nazm **0.9.0** is a preview: the toolchain, written in Rust, for **macOS on Apple Silicon**
+Nazm **0.10.0** is a preview: the toolchain, written in Rust, for **macOS on Apple Silicon**
 (`aarch64-apple-darwin`) only, and the language as a **1.0 draft**. There is **no compatibility
 promise until 1.0**: [`docs/stability.md`](docs/stability.md) states the contract 1.0 will make —
 what will be stable, what experimental or internal, and what a patch, minor or major release may
@@ -20,7 +20,7 @@ a preview may still change what they say. The toolchain is being rewritten in Na
 
 The preview is backed by contained bootstrap, mutation, fuzzing and artifact-verification evidence,
 and by the gates and release notes in [`docs/releases/`](docs/releases) — what was not run for it
-is named there ([`docs/releases/0.9.0.md`](docs/releases/0.9.0.md)). Optional subsystems — GPU
+is named there ([`docs/releases/0.10.0.md`](docs/releases/0.10.0.md)). Optional subsystems — GPU
 kernels, smart contracts, the freestanding and WebAssembly targets, the agent and editor tooling —
 remain experimental or partial where documented, and nothing in Nazm is certified, proved correct
 or claimed free of defects. External contributions are not accepted yet: the contributor licence
@@ -29,7 +29,7 @@ agreement awaits legal review ([`docs/licensing.md`](docs/licensing.md)).
 | | |
 | --- | --- |
 | Language | **1.0 draft** — [`docs/spec.md`](docs/spec.md) |
-| Toolchain | **0.9.0** — `nazm --version` |
+| Toolchain | **0.10.0** — `nazm --version` |
 | Target | macOS on Apple Silicon (`aarch64-apple-darwin`); others are unverified rather than unsupported, and not released |
 | Standard library | **1.0 draft** |
 | Licence | Apache-2.0 WITH LLVM-exception — what Nazm compiles into a program carries no obligation; the toolchain binary's third-party notices are in `THIRD-PARTY-NOTICES.md` ([`docs/licensing.md`](docs/licensing.md)) |
@@ -76,14 +76,14 @@ which gives the same answer.
 
 ## Install
 
-On macOS on Apple Silicon, the 0.9.0 preview installs prebuilt:
+On macOS on Apple Silicon, the 0.10.0 preview installs prebuilt:
 
 ```sh
 brew install nazm-lang/tap/nazm
 ```
 
-or from the archive on the [release page](https://github.com/Nazm-Lang/nazm/releases/tag/v0.9.0)
-([`docs/releases/0.9.0.md`](docs/releases/0.9.0.md), *Installing*). `nazm build` also needs the
+or from the archive on the [release page](https://github.com/Nazm-Lang/nazm/releases/tag/v0.10.0)
+([`docs/releases/0.10.0.md`](docs/releases/0.10.0.md), *Installing*). `nazm build` also needs the
 Xcode command-line tools.
 
 To build from source, you need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use) and
@@ -95,7 +95,7 @@ git clone https://github.com/Nazm-Lang/nazm
 cd nazm
 cargo build --release -p nazm-cli            # target/release/nazm
 # or: cargo install --path crates/nazm-cli --locked
-nazm --version                                # nazm 0.9.0
+nazm --version                                # nazm 0.10.0
 ```
 
 The binary carries the standard library inside it and needs no installation directory. Nothing

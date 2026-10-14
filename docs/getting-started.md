@@ -1,7 +1,7 @@
 # Getting started
 
 From nothing to a checked, tested, formatted, natively compiled program and a small package,
-in about ten minutes. Every program on this page is real Nazm (the 1.0 draft, toolchain 0.9.0), and every command shown
+in about ten minutes. Every program on this page is real Nazm (the 1.0 draft, toolchain 0.10.0), and every command shown
 with its output is run by `crates/nazm-cli/tests/release_examples.rs`, which fails if this page
 stops being true.
 

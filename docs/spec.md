@@ -1,6 +1,6 @@
 # Nazm language specification
 
-**Status: the 1.0 draft of the Nazm language, the executable language of the toolchain 0.9.0
+**Status: the 1.0 draft of the Nazm language, the executable language of the toolchain 0.10.0
 public preview, and the draft of the 1.x line's stable contract** — in force from 1.0, and until
 then a target a 0.x release may still change, saying so in its release notes. It is normative for
 what it settles:
