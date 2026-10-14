@@ -3386,3 +3386,118 @@ guess presented as a forecast.
    enforces this rather than trusting it: a reference program has to reproduce the case's
    `.expected` output before a single measurement is taken. *(Absorbed 2026-09-21 from the
    Era-1 contract §12, which is otherwise retired.)*
+
+## R1, 5b.10: the cross-language comparison
+
+What it measures: three small programs, each written once per language in `bench/compare/<lang>/`,
+idiomatically and as short as is natural there, not statement for statement. `hello` prints one
+line and measures what a process costs to start; `fib` is recursive `fib(35)`, call overhead and
+integer arithmetic; `words` reads a 13 MB file of 2,000,000 words (`bench/compare/gen_words.py`, a
+fixed-seed xorshift generator, so the file is the same on every Python), counts them with the
+language's standard hash map and prints the number of distinct words and the ten most frequent.
+Every program must print the expected output (`bench/compare/words.expected` for `words`) before
+it is timed; one that does not is recorded as not measured, and an absent toolchain as absent.
+Each language is built with its usual release flags, recorded in the output. C has no standard
+hash map, so its `words` carries a short open-addressing table of its own. It is re-run for each
+publication.
+
+`python3 bench/compare/compare.py NAZM OUT_DIR` writes `OUT_DIR/compare.json` and
+`OUT_DIR/compare.md` and nothing outside `OUT_DIR`. Run time is `hyperfine --warmup 2 --runs 10
+--shell=none` (3 runs for a program whose checking run took over 2 s); peak memory is the maximum
+resident set size of one run from `/usr/bin/time -l`; build time is the median of three builds after
+one unmeasured build, so each toolchain's caches of its own standard library are warm — Nazm builds
+with `--no-cache`, every unit and the runtime compiled each time, and Go's build cache may reuse the
+package itself; LOC counts non-blank lines that are not wholly a comment.
+
+Measured 2026-10-14 on an Apple M1 Pro, 10 cores, 32 GiB, macOS 27.2, with `nazm` 0.9.0 built
+`--release` from `4b800aa`; Apple clang 21.0.0, go 1.27.1, rustc 1.98.1, Zig 0.17.0, OpenJDK 27,
+Python 3.14.8, Ruby 4.0.7, Node 24.13.0, Bun 1.3.10, Swift 6.4, Free Pascal 3.2.2, GNAT 16.1.0,
+hyperfine 2.0.0. **C# is unmeasured: `dotnet` is not installed here.** The host is not controlled:
+another workload may have been running, and thermal state and frequency scaling reach every number.
+
+**hello**
+
+| language | variant | LOC | run, median (ms) | min–max (ms) | peak RSS (KiB) | binary (KiB) | build, median (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Nazm | `nazm build --opt-level 2` | 1 | 1.9 | 1.8–2.0 | 1728 | 35 | 171 |
+| Nazm | `nazm run (interpreter)` | 1 | 4.7 | 4.1–5.0 | 6656 | — | — |
+| C | `clang -O2` | 5 | 1.8 | 1.8–1.9 | 1744 | 33 | 65 |
+| C++ | `clang++ -O2` | 4 | 1.9 | 1.8–2.1 | 1728 | 35 | 541 |
+| Go | `go build` | 5 | 3.0 | 2.9–3.6 | 4432 | 2373 | 60 |
+| Rust | `rustc -C opt-level=3` | 3 | 2.5 | 2.3–2.7 | 1872 | 458 | 137 |
+| Zig | `zig build-exe -O ReleaseFast` | 4 | 2.5 | 2.4–2.7 | 1872 | 387 | 7591 |
+| Java | `javac + java` | 5 | 32.5 | 31.0–35.9 | 39040 | — | 307 |
+| Python | `python3` | 1 | 26.7 | 25.7–28.6 | 14384 | — | — |
+| Ruby | `ruby` | 1 | 45.9 | 44.4–47.3 | 17904 | — | — |
+| JavaScript | `node` | 1 | 31.7 | 30.5–32.4 | 44960 | — | — |
+| TypeScript | `bun` | 1 | 12.4 | 11.9–13.0 | 20912 | — | — |
+| Swift | `swiftc -O` | 1 | 2.0 | 1.9–2.2 | 1968 | 49 | 252 |
+| Pascal | `fpc -O3` | 4 | 2.1 | 2.0–2.2 | 1984 | 424 | 103 |
+| Ada | `gnatmake -O2` | 5 | 2.7 | 2.6–3.1 | 1920 | 424 | 982 |
+
+**fib**
+
+| language | variant | LOC | run, median (ms) | min–max (ms) | peak RSS (KiB) | binary (KiB) | build, median (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Nazm | `nazm build --opt-level 2` | 6 | 67.2 | 66.9–67.6 | 1744 | 35 | 206 |
+| Nazm | `nazm run (interpreter)` | 6 | 4714.3 | 4709.9–4809.1 | 7040 | — | — |
+| C | `clang -O2` | 6 | 35.6 | 35.4–35.8 | 1728 | 33 | 68 |
+| C++ | `clang++ -O2` | 5 | 35.6 | 35.4–35.8 | 1728 | 35 | 529 |
+| Go | `go build` | 11 | 40.0 | 39.8–40.2 | 4496 | 2373 | 61 |
+| Rust | `rustc -C opt-level=3` | 6 | 35.9 | 35.5–36.4 | 1888 | 459 | 141 |
+| Zig | `zig build-exe -O ReleaseFast` | 10 | 36.8 | 36.7–37.0 | 1920 | 388 | 7880 |
+| Java | `javac + java` | 8 | 63.1 | 61.7–63.9 | 39200 | — | 321 |
+| Python | `python3` | 3 | 1218.0 | 1214.1–1224.7 | 14272 | — | — |
+| Ruby | `ruby` | 4 | 1129.4 | 1051.6–1259.2 | 17936 | — | — |
+| JavaScript | `node` | 4 | 138.2 | 137.6–138.9 | 48944 | — | — |
+| TypeScript | `bun` | 4 | 68.7 | 67.9–69.5 | 26864 | — | — |
+| Swift | `swiftc -O` | 4 | 46.0 | 45.9–46.2 | 2080 | 49 | 271 |
+| Pascal | `fpc -O3` | 8 | 75.3 | 75.0–75.5 | 2000 | 424 | 108 |
+| Ada | `gnatmake -O2` | 9 | 14.0 | 13.6–14.2 | 1936 | 473 | 1086 |
+
+**words**
+
+| language | variant | LOC | run, median (ms) | min–max (ms) | peak RSS (KiB) | binary (KiB) | build, median (ms) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Nazm | `nazm build --opt-level 2` | 19 | 531.4 | 526.0–535.2 | 22688 | 89 | 1108 |
+| Nazm | `nazm run (interpreter)` | 19 | 39440.6 | 39191.5–41663.0 | 31328 | — | — |
+| C | `clang -O2` | 41 | 74.3 | 73.7–75.6 | 15648 | 33 | 78 |
+| C++ | `clang++ -O2` | 18 | 158.5 | 157.8–161.5 | 2368 | 57 | 807 |
+| Go | `go build` | 26 | 88.6 | 88.0–89.7 | 62720 | 2408 | 63 |
+| Rust | `rustc -C opt-level=3` | 15 | 65.2 | 64.7–66.1 | 15232 | 483 | 314 |
+| Zig | `zig build-exe -O ReleaseFast` | 24 | 47.4 | 47.1–47.7 | 15280 | 404 | 8343 |
+| Java | `javac + java` | 18 | 429.8 | 397.4–477.4 | 262240 | — | 363 |
+| Python | `python3` | 6 | 262.6 | 254.9–270.1 | 157472 | — | — |
+| Ruby | `ruby` | 3 | 358.5 | 357.1–363.2 | 139648 | — | — |
+| JavaScript | `node` | 8 | 394.7 | 375.5–407.2 | 304576 | — | — |
+| TypeScript | `bun` | 8 | 307.8 | 303.6–313.2 | 244000 | — | — |
+| Swift | `swiftc -O` | 11 | 484.1 | 482.0–485.6 | 183056 | 58 | 871 |
+| Pascal | `fpc -O3` | 31 | 594.7 | 593.1–618.6 | 38576 | 2558 | 962 |
+| Ada | `gnatmake -O2` | 56 | 263.4 | 254.8–284.5 | 3136 | 696 | 4011 |
+
+**What it shows.**
+
+- **`hello`**: every natively compiled program, Nazm's included, starts and exits in 1.8 to 3.0 ms;
+  the runtimes with a virtual machine or interpreter take 12 to 46 ms. Nazm's native binary is
+  35 KiB, beside C's 33 KiB and Go's 2.3 MiB.
+- **`fib`**: Nazm's `-O2` build took 67.2 ms against 35.6 to 36.8 ms for C, C++, Rust and Zig and
+  40.0 ms for Go — about 1.9 times C's time on this program. Nazm's arithmetic is checked; C's,
+  C++'s, Zig's (`ReleaseFast`) and Go's are not, and the cause of the gap is not profiled. Ada's
+  14.0 ms is below C's, most likely because GCC transforms this recursion further than clang
+  does (not inspected); it says nothing about Ada generally. The interpreter took 4.7 s, about four times CPython's 1.2 s.
+- **`words`**: Nazm's `-O2` build took 531 ms, about 7 times C's 74 ms and 8 times Rust's 65 ms,
+  slower than Python (263 ms), Ruby, TypeScript, Java and JavaScript, and close to Swift (484 ms) and Free
+  Pascal (595 ms); it held 22 MiB at peak. Nazm's program reads the file, splits it into lines and
+  each line into words (`text_split`, a byte-by-byte loop in `@std/text`) and counts with
+  `@std/hashmap`; which of those costs the most is not profiled. This is the standard-library
+  weakness this file predicts (*What will make Nazm slower than C for a long time*), now measured on
+  one program. The interpreter took 39 s and needs `--max-iterations` raised: under the default
+  limit it stops with `N0402`.
+- **Lines of code**: Nazm's three programs are 1, 6 and 19 lines — the same order as Rust's (3, 6,
+  15) and C++'s (4, 5, 18), longer than Python's and Ruby's (`words` in 6 and 3), shorter than C's
+  41 and Ada's 56 for `words`.
+
+**What it does not show.** Nothing about a language as a whole, another machine or a larger input;
+three programs are not a suite, and no aggregate score is derived. Idiomatic programs differ in
+algorithm and library: the `words` column compares each language's ordinary way of writing the
+task, not one algorithm.
