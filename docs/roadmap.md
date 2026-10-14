@@ -29,6 +29,30 @@ The invariants that constrain any ordering are [`master-architecture.md`](master
 Ask `nazm capabilities --json` for construct-level truth; it is read from the compiler's own
 tables. Ask `capability-matrix.md` for architectural truth, area by area.
 
+## The road to 1.0, since the 0.9.0 preview
+
+Decided by the copyright holder on 2026-10-11 (`openspec/changes/rewrite-in-nazm`): before 1.0,
+the whole toolchain — compiler, interpreter, every command, the test harness and the tests — is
+rewritten in Nazm, and Nazm's own code generator replaces Cranelift. The Rust implementation is
+then frozen as the bootstrap seed. The language is made ready for that first. Releases come at
+large boundaries only, not one per stage (`releases/0.9.0.md`).
+
+| Stage | What | Status |
+| --- | --- | --- |
+| **R1** | The language the rewrite is written in: patterns, tuples, `for`, closures in generics, `defer`, 128-bit integers, serialisation, `@std/regex` and the other libraries, the platform built-ins, and the conveniences for a first program (`openspec/changes/r1-language-for-the-rewrite`) | closing, 2026-10-14; published as **0.10.0** |
+| **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | next |
+| **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | planned |
+| **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | planned |
+| **R4** | The interpreter in Nazm | planned |
+| **R5** | Every command in Nazm: `fmt`, `check`, `fix`, `test`, `doc`, `init`, `lsp`, the MCP server and the rest | planned |
+| **R6** | Host qualification: the Nazm toolchain builds itself under a bounded heap | planned |
+| **R7** | The harness and the tests in Nazm | planned |
+| **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | planned |
+| **R8** | Cut-over: the released `nazm` built by Nazm, then the 1.0 release gate | last |
+
+The milestone tables below are the history that led here; the "R1" among them (2026-10-07) is the
+earlier release-readiness milestone, not this programme's first stage.
+
 ## What Era 1 delivered
 
 | Milestone | Outcome | Evidence |
