@@ -2,7 +2,7 @@
 # R2's comparisons (`openspec/changes/r2-front-end/design.md`): the front end written in Nazm
 # against the Rust toolchain, on every input.
 #
-#   compiler/tests/run.sh [MODE...]      MODE: tokens, tree (default: every mode)
+#   compiler/tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check (default: the first three)
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
 # under a deadline; the reference side is `compiler/tests/refdump`, built from this checkout's
@@ -25,7 +25,7 @@ deadline=${R2_DEADLINE:-20}
 jobs=${R2_JOBS:-6}
 
 [ -x "$nazm" ] || { echo "run.sh: no reference nazm at $nazm (set NAZM)" >&2; exit 2; }
-modes=${*:-tokens tree}
+modes=${*:-tokens tree syntax}
 
 mkdir -p "$out/bin"
 
@@ -47,6 +47,9 @@ for mode in $modes; do
   case $mode in
     tokens) driver=tokens ;;
     tree) driver=tree ;;
+    # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
+    # parser's alone, `check` every one — which needs the checker, slice by slice.
+    syntax|check) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -56,14 +59,23 @@ for mode in $modes; do
   rm -rf "$out/$mode"
   mkdir -p "$out/$mode"
   # One worker per input: compare, and leave a `.diff` behind when the two disagree.
-  export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline"
+  export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline" R2_NAZM="$nazm"
   # shellcheck disable=SC2016
   tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
     f=$1
     name=$(printf "%s" "$f" | tr "/" "_")
     want="$R2_DIR/$name.want"; got="$R2_DIR/$name.got"
-    "$R2_REF" "$R2_MODE" "$R2_ROOT/$f" > "$want" 2>&1 || true
-    timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true
+    case $R2_MODE in
+      tokens|tree)
+        "$R2_REF" "$R2_MODE" "$R2_ROOT/$f" > "$want" 2>&1 || true
+        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+      check)
+        { "$R2_NAZM" check --json --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep "^{" > "$want" || true
+        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+      syntax)
+        "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
+    esac
     if cmp -s "$want" "$got"; then
       [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got"
       : > "$R2_DIR/$name.ok"

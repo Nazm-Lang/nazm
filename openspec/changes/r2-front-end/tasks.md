@@ -20,8 +20,9 @@
 - [x] 2.5 Statements (group D) parsed
 - [x] 2.6 Expressions and patterns (group E) parsed
 - [x] 2.7 Syntax diagnostics and recovery as the reference's — every input's tree agrees (`tree`):
-      code, span and message, with the reference's recovery, cascade muting and nesting limit; the
-      labels, help and fixes are compared with the checker's in 4.1
+      code, span and message, with the reference's recovery, cascade muting and nesting limit — and
+      as whole `nazm.diagnostic/1` objects, labels, help and fixes included (`syntax`;
+      `compiler/diag.nz`, `compiler/diagnose.nz`)
 - [ ] 2.8 The checker and emitter read `syntax.nz`'s tree; `parse.nz` retired
 
 ## 3. Names and types

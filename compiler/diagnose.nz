@@ -1,0 +1,42 @@
+// The front end's diagnostics driver (R2, `openspec/changes/r2-front-end/design.md`, D4).
+//
+// Usage: diagnose [--syntax] FILE
+// Output: every diagnostic of FILE as one `nazm.diagnostic/1` line, as `nazm check --json` writes
+// them; with `--syntax`, the lexer's and the parser's alone. Today those are all it has: the
+// checker's join them group by group (`tasks.md`, 3 and 4). Exits 1 when there was an error.
+
+use "syntax.nz";
+use "diag.nz";
+
+fn main(io: IoCap) -> Int {
+    let mut at = 0;
+    if args_count() > 1 {
+        if arg(0) == "--syntax" { at = 1; }
+    }
+    if args_count() < at + 1 {
+        eprint("usage: diagnose [--syntax] FILE\n");
+        exit_with(2);
+    }
+    let path = arg(at);
+    if file_exists(path) == false {
+        eprint(str_concat(str_concat("cannot read ", path), "\n"));
+        exit_with(2);
+    }
+    // A file is held with a trailing newline when it lacks one, as a compilation's source map
+    // holds it: published offsets count it.
+    let mut src = read_file(path);
+    if str_len(src) == 0 || str_byte(src, str_len(src) - 1) != 10 { src = str_concat(src, "\n"); }
+    let t = sx_tree();
+    let d = dg_new();
+    sx_parse_source(src, t, d);
+    let out = strs_new();
+    let mut i = 0;
+    while i < dg_len(d) {
+        strs_push(out, dg_json(d, i));
+        strs_push(out, "\n");
+        i = i + 1;
+    }
+    print(str_join(out, ""));
+    if dg_len(d) > 0 { exit_with(1); }
+    0
+}

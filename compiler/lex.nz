@@ -23,6 +23,8 @@
 // string's decoded bytes, an interpolation's pieces in the comparison's form, an identifier's
 // name. Whether an integer fits `Int` is `lex_int_too_large` of its text, as the parser asks.
 
+use "diag.nz";
+
 // --- token kinds -------------------------------------------------------------------
 //
 // Integers, numbered as `crates/nazm-cli/tests/selfhost.rs` maps the reference's kinds, so the
@@ -404,13 +406,8 @@ fn push_token(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, kind: Int, fro
 }
 
 // One diagnostic, recorded; `help` is "" when there is none.
-fn report(ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs, code: Str, from: Int, to: Int, message: Str, help: Str) -> Int {
-    strs_push(ecode, code);
-    ints_push(estart, from);
-    ints_push(eend, to);
-    strs_push(emsg, message);
-    strs_push(ehelp, help);
-    strs_len(ecode)
+fn report(d: Diags, code: Str, from: Int, to: Int, message: Str, help: Str) -> Int {
+    dg_error(d, code, from, to, message, "", help)
 }
 
 // Report and stop. The old drivers' form, `error CODE at OFFSET: detail`.
@@ -425,14 +422,10 @@ pub fn fail(code: Str, at_offset: Int, detail: Str, io: IoCap) -> Int {
 
 // Tokenise, stopping at the first error — what the parser and the checker call (design D9).
 pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoCap) -> Int {
-    let ecode = strs_new();
-    let estart = ints_new();
-    let eend = ints_new();
-    let emsg = strs_new();
-    let ehelp = strs_new();
-    lex_all(src, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
-    if strs_len(ecode) > 0 {
-        fail(strs_get(ecode, 0), ints_get(estart, 0), strs_get(emsg, 0), io);
+    let d = dg_new();
+    lex_all(src, kinds, starts, ends, texts, d);
+    if dg_len(d) > 0 {
+        fail(strs_get(d.code, 0), ints_get(d.start, 0), strs_get(d.message, 0), io);
     }
     ints_len(kinds)
 }
@@ -441,7 +434,7 @@ pub fn lex(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs, io: IoC
 // span is `base + k` for the bytes written, or `fixed_from..fixed_to` when `fixed_from` is not
 // -1 (a multi-line string reports every escape at its opening delimiter, as the reference does).
 fn decode_escapes(raw: Str, base: Int, fixed_from: Int, fixed_to: Int,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Str {
+        d: Diags) -> Str {
     let n = str_len(raw);
     let mut has = false;
     let mut j = 0;
@@ -498,7 +491,7 @@ fn decode_escapes(raw: Str, base: Int, fixed_from: Int, fixed_to: Int,
             let msg = str_concat(str_concat(tick(), written), str_concat(tick(), " is not a Unicode escape this language has"));
             let help = str_concat(str_concat("a Unicode escape is ", tick()), str_concat(str_concat(bs(), "u{"), str_concat(tick(),
                     " and one to six hexadecimal digits naming a scalar value — not a surrogate, at most 10FFFF — and `}`")));
-            report(ecode, estart, eend, emsg, ehelp, "N0004", ef, et, msg, help);
+            report(d, "N0004", ef, et, msg, help);
             k = k + bad;
             from = k;
             continue;
@@ -522,7 +515,7 @@ fn decode_escapes(raw: Str, base: Int, fixed_from: Int, fixed_to: Int,
                 str_concat(bs(), "0 "), str_concat(b2, " "), str_concat(str_concat(bs(), dq()), " "),
                 str_concat(bs(), "xHH up to "), str_join_all9(bs(), "x7F and ", bs(), "u{H…}; write ", tick(), b2, tick(),
                 " for a backslash, and use ", "`str_from_byte` for a byte above 127"));
-        report(ecode, estart, eend, emsg, ehelp, "N0004", ef, et, msg, help);
+        report(d, "N0004", ef, et, msg, help);
         k = k + bad;
         from = k;
     }
@@ -620,7 +613,7 @@ fn starts_with(s: Str, prefix: Str) -> Bool {
 // closing `"""`, or minus one minus the offset to resume at when there is no literal to read —
 // in which case the invalid region is `start..resume`.
 fn multi_line_layout(src: Str, start: Int, open: Int, loffs: Ints, ltexts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let n = str_len(src);
     let after = start + open;
     let mut line_end = 0 - 1;
@@ -635,7 +628,7 @@ fn multi_line_layout(src: Str, start: Int, open: Int, loffs: Ints, ltexts: Strs,
     if line_end < 0 || blank(tail) == false {
         let msg = str_concat(str_concat("a multi-line string's text begins on the line after its ", tick()), str_concat(triple(), tick()));
         let help = str_join_all9("write ", tick(), triple(), tick(), ", a line break, the lines, and ", tick(), triple(), tick(), " on a line of its own");
-        report(ecode, estart, eend, emsg, ehelp, "N0005", after, tail_end, msg, help);
+        report(d, "N0005", after, tail_end, msg, help);
         if line_end < 0 { return 0 - 1 - tail_end; }
     }
     let first = line_end + 1;
@@ -668,7 +661,7 @@ fn multi_line_layout(src: Str, start: Int, open: Int, loffs: Ints, ltexts: Strs,
     }
     if close_at < 0 {
         let msg = str_concat(str_concat("this multi-line string has no closing ", tick()), str_concat(triple(), tick()));
-        report(ecode, estart, eend, emsg, ehelp, "N0002", start, n, msg, "");
+        report(d, "N0002", start, n, msg, "");
         return 0 - 1 - n;
     }
     let end = close_at + str_len(indent) + 3;
@@ -687,7 +680,7 @@ fn multi_line_layout(src: Str, start: Int, open: Int, loffs: Ints, ltexts: Strs,
                 let msg = str_join_all9("this line of a multi-line string does not begin with its closing ", tick(), triple(), tick(), "'s indentation", "", "", "", "");
                 let help = str_join_all9("every line is indented at least as far as the closing ", tick(), triple(), tick(),
                         ", which is taken off each; indent this line, or the delimiter less", "", "", "", "");
-                report(ecode, estart, eend, emsg, ehelp, "N0005", offset, offset + str_len(line), msg, help);
+                report(d, "N0005", offset, offset + str_len(line), msg, help);
                 let il = indent_len(line);
                 ints_push(loffs, offset + il);
                 strs_push(ltexts, str_slice(line, il, str_len(line)));
@@ -797,11 +790,11 @@ fn hole_colon(s: Str) -> Int {
 // The text gathered so far (`raw`, starting at source offset `raw_at`), its escapes decoded,
 // as one piece.
 fn flush_text(raw: Strs, raw_at: Int, pieces: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let text = str_join(raw, "");
     while strs_len(raw) > 0 { strs_pop(raw); }
     if str_len(text) == 0 { return 0; }
-    let value = decode_escapes(text, raw_at, 0 - 1, 0 - 1, ecode, estart, eend, emsg, ehelp);
+    let value = decode_escapes(text, raw_at, 0 - 1, 0 - 1, d);
     strs_push(pieces, str_concat("T:", lex_esc(value)));
     0
 }
@@ -809,7 +802,7 @@ fn flush_text(raw: Strs, raw_at: Int, pieces: Strs,
 // One line of an interpolation's text (`line`, starting at source offset `offset`). `raw_at`
 // is a one-element array: where the text being gathered began.
 fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let n = str_len(line);
     let mut i = 0;
     while i < n {
@@ -834,7 +827,7 @@ fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
         if b == 125 {
             let msg = str_concat(str_concat("a ", tick()), str_concat("}", str_concat(tick(), " in an interpolation's text closes nothing")));
             let help = str_concat(str_concat("write ", tick()), str_concat("}}", str_concat(tick(), " for a brace in the text")));
-            report(ecode, estart, eend, emsg, ehelp, "N0006", offset + i, offset + i + 1, msg, help);
+            report(d, "N0006", offset + i, offset + i + 1, msg, help);
             i = i + 1;
             continue;
         }
@@ -843,10 +836,10 @@ fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
             if close < 0 {
                 let msg = str_concat(str_concat("this hole has no closing ", tick()), str_concat("}", str_concat(tick(), " on its line")));
                 let help = str_join_all9("a hole is ", tick(), "{expr}", tick(), " on one line; write ", tick(), "{{", tick(), " for a brace in the text");
-                report(ecode, estart, eend, emsg, ehelp, "N0006", offset + i, offset + n, msg, help);
+                report(d, "N0006", offset + i, offset + n, msg, help);
                 return 0;
             }
-            flush_text(raw, ints_get(raw_at, 0), pieces, ecode, estart, eend, emsg, ehelp);
+            flush_text(raw, ints_get(raw_at, 0), pieces, d);
             let inside = str_slice(line, i + 1, close);
             let hs = offset + i;
             let he = offset + close + 1;
@@ -861,7 +854,7 @@ fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
             }
             if ok {
                 if blank(expr) {
-                    report(ecode, estart, eend, emsg, ehelp, "N0006", hs, he, "this hole holds no expression", "");
+                    report(d, "N0006", hs, he, "this hole holds no expression", "");
                 } else {
                     let parts = strs_new();
                     strs_push(parts, "H:");
@@ -879,7 +872,7 @@ fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
             } else {
                 let help = str_join_all9("a format is ", tick(), "[<|>][width][.precision]", tick(), ": ", tick(), "{x:>8}", tick(),
                         str_concat(", ", str_concat(tick(), str_concat("{ratio:.2}", tick()))));
-                report(ecode, estart, eend, emsg, ehelp, "N0006", hs, he, "this hole's format is not one interpolation has", help);
+                report(d, "N0006", hs, he, "this hole's format is not one interpolation has", help);
             }
             i = close + 1;
             ints_set(raw_at, 0, offset + i);
@@ -900,13 +893,13 @@ fn split_pieces(line: Str, offset: Int, raw: Strs, raw_at: Ints, pieces: Strs,
 // it, pushing a token if it made one and a diagnostic for every error.
 
 fn scan_interpolated(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let loffs = ints_new();
     let ltexts = strs_new();
     let mut end = 0;
     let multi = at(src, start + 1) == 34 && at(src, start + 2) == 34 && at(src, start + 3) == 34;
     if multi {
-        let r = multi_line_layout(src, start, 4, loffs, ltexts, ecode, estart, eend, emsg, ehelp);
+        let r = multi_line_layout(src, start, 4, loffs, ltexts, d);
         if r < 0 { return 0 - 1 - r; }
         end = r;
     } else {
@@ -915,7 +908,7 @@ fn scan_interpolated(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints
         while true {
             let b = at(src, i);
             if b < 0 || b == 10 {
-                report(ecode, estart, eend, emsg, ehelp, "N0002", start, i, "this string has no closing quote", "");
+                report(d, "N0002", start, i, "this string has no closing quote", "");
                 return i;
             }
             if b == 92 { i = i + 2; continue; }
@@ -939,16 +932,16 @@ fn scan_interpolated(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints
     let mut l = 0;
     while l < ints_len(loffs) {
         if l > 0 { strs_push(raw, str_from_byte(10)); }
-        split_pieces(strs_get(ltexts, l), ints_get(loffs, l), raw, raw_at, pieces, ecode, estart, eend, emsg, ehelp);
+        split_pieces(strs_get(ltexts, l), ints_get(loffs, l), raw, raw_at, pieces, d);
         l = l + 1;
     }
-    flush_text(raw, ints_get(raw_at, 0), pieces, ecode, estart, eend, emsg, ehelp);
+    flush_text(raw, ints_get(raw_at, 0), pieces, d);
     push_token(kinds, starts, ends, texts, k_fstr(), start, end, str_join(pieces, "|"));
     end
 }
 
 fn scan_raw_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let n = str_len(src);
     let mut hashes = 0;
     while at(src, start + 1 + hashes) == 35 { hashes = hashes + 1; }
@@ -957,7 +950,7 @@ fn scan_raw_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, 
         let msg = str_concat(str_concat("a raw string's ", tick()), str_concat("#", str_concat(tick(), "s are followed by its opening quote")));
         let help = str_join_all9("a raw string is ", tick(), "r", dq(), "…", dq(), tick(), " or ",
                 str_join_all9(tick(), "r#", dq(), "…", dq(), "#", tick(), ", with as many ", str_concat(tick(), str_concat("#", str_concat(tick(), "s at each end")))));
-        report(ecode, estart, eend, emsg, ehelp, "N0002", start, open, msg, help);
+        report(d, "N0002", start, open, msg, help);
         return open;
     }
     let body = open + 1;
@@ -975,7 +968,7 @@ fn scan_raw_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, 
         p = p + 1;
     }
     if found < 0 {
-        report(ecode, estart, eend, emsg, ehelp, "N0002", start, n, "this raw string has no closing quote", "");
+        report(d, "N0002", start, n, "this raw string has no closing quote", "");
         return n;
     }
     // A line break written as CR LF is one LF.
@@ -997,27 +990,27 @@ fn scan_raw_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, 
 }
 
 fn scan_multi_line(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let loffs = ints_new();
     let ltexts = strs_new();
-    let r = multi_line_layout(src, start, 3, loffs, ltexts, ecode, estart, eend, emsg, ehelp);
+    let r = multi_line_layout(src, start, 3, loffs, ltexts, d);
     if r < 0 { return 0 - 1 - r; }
     let body = str_join(ltexts, str_from_byte(10));
-    let value = decode_escapes(body, 0, start, start + 3, ecode, estart, eend, emsg, ehelp);
+    let value = decode_escapes(body, 0, start, start + 3, d);
     push_token(kinds, starts, ends, texts, k_str(), start, r, value);
     r
 }
 
 fn scan_number(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let mut i = start;
     let c = at(src, i);
-    let d = at(src, i + 1);
+    let second = at(src, i + 1);
     let mut radix = 10;
     if c == 48 {
-        if d == 120 || d == 88 { radix = 16; }
-        if d == 111 || d == 79 { radix = 8; }
-        if d == 98 || d == 66 { radix = 2; }
+        if second == 120 || second == 88 { radix = 16; }
+        if second == 111 || second == 79 { radix = 8; }
+        if second == 98 || second == 66 { radix = 2; }
     }
     if radix != 10 {
         i = i + 2;
@@ -1029,7 +1022,7 @@ fn scan_number(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, text
             let mut name = "binary";
             if radix == 16 { name = "hexadecimal"; }
             if radix == 8 { name = "octal"; }
-            report(ecode, estart, eend, emsg, ehelp, "N0001", start, i, str_concat(str_concat("this is not a ", name), " integer"), "");
+            report(d, "N0001", start, i, str_concat(str_concat("this is not a ", name), " integer"), "");
             return i;
         }
         push_token(kinds, starts, ends, texts, k_int(), start, i, value);
@@ -1068,7 +1061,7 @@ fn scan_number(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, text
 }
 
 fn scan_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let mut i = start + 1;
     let content = i;
     while true {
@@ -1082,10 +1075,12 @@ fn scan_string(src: Str, start: Int, kinds: Ints, starts: Ints, ends: Ints, text
     }
     let b = at(src, i);
     if b < 0 || b == 10 {
-        report(ecode, estart, eend, emsg, ehelp, "N0002", start, i, "this string has no closing quote", "");
+        report(d, "N0002", start, i, "this string has no closing quote", "");
+        dg_fix(d, i, i, "\"", "close the string", "needs_review",
+                "the string was meant to end at the end of this line, rather than a quote being missing from somewhere earlier");
         return i;
     }
-    let value = decode_escapes(str_slice(src, content, i), content, 0 - 1, 0 - 1, ecode, estart, eend, emsg, ehelp);
+    let value = decode_escapes(str_slice(src, content, i), content, 0 - 1, 0 - 1, d);
     push_token(kinds, starts, ends, texts, k_str(), start, i + 1, value);
     i + 1
 }
@@ -1150,7 +1145,7 @@ fn operator_at(src: Str, i: Int) -> Int {
 // Tokenise all of `src`, recording every diagnostic — code, span, message, help ("" for none) —
 // and continuing exactly as the reference lexer does.
 pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
-        ecode: Strs, estart: Ints, eend: Ints, emsg: Strs, ehelp: Strs) -> Int {
+        d: Diags) -> Int {
     let n = str_len(src);
     let mut i = 0;
     while i < n {
@@ -1184,7 +1179,7 @@ pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
             }
             if depth > 0 {
                 let msg = str_concat(str_concat("this comment has no closing ", tick()), str_concat("*/", tick()));
-                report(ecode, estart, eend, emsg, ehelp, "N0007", from, from + 2, msg, "");
+                report(d, "N0007", from, from + 2, msg, "");
             }
             continue;
         }
@@ -1199,17 +1194,17 @@ pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         }
 
         if is_digit(b) {
-            i = scan_number(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            i = scan_number(src, i, kinds, starts, ends, texts, d);
             continue;
         }
 
         if b == 102 && next == 34 {
-            i = scan_interpolated(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            i = scan_interpolated(src, i, kinds, starts, ends, texts, d);
             continue;
         }
 
         if b == 114 && (next == 34 || next == 35) {
-            i = scan_raw_string(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            i = scan_raw_string(src, i, kinds, starts, ends, texts, d);
             continue;
         }
 
@@ -1222,12 +1217,12 @@ pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         }
 
         if b == 34 && next == 34 && at(src, i + 2) == 34 {
-            i = scan_multi_line(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            i = scan_multi_line(src, i, kinds, starts, ends, texts, d);
             continue;
         }
 
         if b == 34 {
-            i = scan_string(src, i, kinds, starts, ends, texts, ecode, estart, eend, emsg, ehelp);
+            i = scan_string(src, i, kinds, starts, ends, texts, d);
             continue;
         }
 
@@ -1244,7 +1239,7 @@ pub fn lex_all(src: Str, kinds: Ints, starts: Ints, ends: Ints, texts: Strs,
         let mut to = i + len;
         if to > n { to = n; }
         let msg = str_concat(str_concat(tick(), str_slice(src, i, to)), str_concat(tick(), " is not valid here"));
-        report(ecode, estart, eend, emsg, ehelp, "N0001", i, to, msg, "");
+        report(d, "N0001", i, to, msg, "");
         i = to;
     }
     ints_len(kinds)

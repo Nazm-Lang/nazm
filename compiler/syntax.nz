@@ -18,6 +18,7 @@
 // Every parse function returns the node it built, or -1 where the reference returns `None`.
 
 use "lex.nz";
+use "diag.nz";
 
 // --- the tree ------------------------------------------------------------------------------
 
@@ -341,13 +342,7 @@ pub struct Px {
     // and the slots a function returns its second and later results in.
     st: Ints,
     t: Tree,
-    // Diagnostics: code, span, message, primary label and help ("" for none).
-    dc: Strs,
-    ds: Ints,
-    de: Ints,
-    dm: Strs,
-    dl: Strs,
-    dh: Strs,
+    d: Diags,
 }
 
 fn s_pos() -> Int { 0 }
@@ -370,12 +365,11 @@ fn sv(p: Px, slot: Int, v: Int) -> Int { ints_set(p.st, slot, v); 0 }
 fn flag(p: Px, slot: Int) -> Bool { ints_get(p.st, slot) != 0 }
 fn setf(p: Px, slot: Int, b: Bool) -> Int { if b { ints_set(p.st, slot, 1); } else { ints_set(p.st, slot, 0); } 0 }
 
-pub fn sx_parser(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, src: Str, t: Tree) -> Px {
+pub fn sx_parser(kinds: Ints, starts: Ints, ends: Ints, texts: Strs, src: Str, t: Tree, d: Diags) -> Px {
     let st = ints_new();
     let mut i = 0;
     while i < 16 { ints_push(st, 0); i = i + 1; }
-    Px(kinds: kinds, starts: starts, ends: ends, texts: texts, src: src, st: st, t: t,
-            dc: strs_new(), ds: ints_new(), de: ints_new(), dm: strs_new(), dl: strs_new(), dh: strs_new())
+    Px(kinds: kinds, starts: starts, ends: ends, texts: texts, src: src, st: st, t: t, d: d)
 }
 
 // The parser's own kinds beyond the lexer's: the end of the file, past it, and an integer too
@@ -533,15 +527,10 @@ fn kind_written(k: Int) -> Str {
 }
 
 // Record a syntax diagnostic, unless it would be a cascade (the reference's `report`).
-fn report(p: Px, code: Str, span: Int, message: Str, primary: Str, help: Str) -> Int {
-    if flag(p, s_muted()) { return 0; }
-    strs_push(p.dc, code);
-    ints_push(p.ds, sx_s(p.t, span));
-    ints_push(p.de, sx_e(p.t, span));
-    strs_push(p.dm, message);
-    strs_push(p.dl, primary);
-    strs_push(p.dh, help);
-    0
+fn report(p: Px, code: Str, span: Int, message: Str, primary: Str, help: Str) -> Bool {
+    if flag(p, s_muted()) { return false; }
+    dg_error(p.d, code, sx_s(p.t, span), sx_e(p.t, span), message, primary, help);
+    true
 }
 
 fn found_msg(p: Px, before: Str, i: Int) -> Str { str_concat(str_concat(before, ", found "), describe(p, i)) }
@@ -1708,8 +1697,11 @@ fn param(p: Px) -> Int {
     let p_span = peek_span(p);
     if at(p, k_mut()) {
         advance(p);
-        report(p, "N0311", p_span, "parameters cannot be `mut`", "",
-                "a mutable parameter is a local copy, which reads as an out-parameter. Bind one in the body instead: `let mut n = n;`");
+        if report(p, "N0311", p_span, "parameters cannot be `mut`", "",
+                "a mutable parameter is a local copy, which reads as an out-parameter. Bind one in the body instead: `let mut n = n;`") {
+            dg_fix(p.d, sx_s(t, p_span), sx_e(t, p_span), "", "remove `mut`", "automatic",
+                    "a parameter is immutable either way, so removing the word changes nothing but whether the program is legal");
+        }
         return 0 - 1;
     }
     let ni = advance(p);
@@ -2353,8 +2345,12 @@ fn statement(p: Px, deepest: Ints) -> Int {
         return e;
     }
     if block_like || line_break_before(p) { return stmt(p, "Expr", e); }
-    report(p, "N0100", peek_span(p), found_msg(p, "expected `;` or `}` after this expression", pos(p)), "",
-            "an expression with no `;` after it is the block's value, so it must be last");
+    if report(p, "N0100", peek_span(p), found_msg(p, "expected `;` or `}` after this expression", pos(p)), "",
+            "an expression with no `;` after it is the block's value, so it must be last") {
+        let at_end = sx_e(t, expr_span(t, e));
+        dg_fix(p.d, at_end, at_end, ";", "discard the value", "needs_review",
+                "the value was meant to be discarded rather than returned — if it was meant to be the block's value, the statements after it are what should move");
+    }
     0 - 1
 }
 
@@ -3953,18 +3949,14 @@ fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    let ec = strs_new();
-    let es = ints_new();
-    let ee = ints_new();
-    let em = strs_new();
-    let eh = strs_new();
-    lex_all(wrapped, kinds, starts, ends, texts, ec, es, ee, em, eh);
+    let errors = dg_new();
+    lex_all(wrapped, kinds, starts, ends, texts, errors);
     let mark = ints_len(t.kind);
-    let sub = sx_parser(kinds, starts, ends, texts, wrapped, t);
+    let sub = sx_parser(kinds, starts, ends, texts, wrapped, t, errors);
     let pr = new_prog();
     sx_parse_items(sub, pr);
     let mut tail = 0 - 1;
-    if strs_len(ec) == 0 && strs_len(sub.dc) == 0 && ints_len(pr.functions) == 1 {
+    if dg_len(errors) == 0 && ints_len(pr.functions) == 1 {
         let body = sx_field(t, ints_get(pr.functions, 0), "body");
         if sx_is_some(t, body) {
             let b = sx_unwrap(t, body);
@@ -4006,24 +3998,15 @@ fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
 // --- the whole file ----------------------------------------------------------------------------
 
 // Lex and parse `src`: the `Program` node, with every diagnostic — the lexer's first, then the
-// parser's — in the given arrays (code, start, end, message).
-pub fn sx_parse_source(src: Str, t: Tree, dc: Strs, ds: Ints, de: Ints, dm: Strs) -> Int {
+// parser's — in `d`.
+pub fn sx_parse_source(src: Str, t: Tree, d: Diags) -> Int {
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();
     let texts = strs_new();
-    let eh = strs_new();
-    lex_all(src, kinds, starts, ends, texts, dc, ds, de, dm, eh);
-    let p = sx_parser(kinds, starts, ends, texts, src, t);
+    lex_all(src, kinds, starts, ends, texts, d);
+    let p = sx_parser(kinds, starts, ends, texts, src, t, d);
     let pr = new_prog();
     sx_parse_items(p, pr);
-    let mut i = 0;
-    while i < strs_len(p.dc) {
-        strs_push(dc, strs_get(p.dc, i));
-        ints_push(ds, ints_get(p.ds, i));
-        ints_push(de, ints_get(p.de, i));
-        strs_push(dm, strs_get(p.dm, i));
-        i = i + 1;
-    }
     sx_program(t, pr)
 }
