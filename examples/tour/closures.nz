@@ -10,7 +10,7 @@ fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int {
     f(f(x))
 }
 
-fn main() -> Int {
+fn main() {
     let offset = 3;
     let add = fn(x: Int) -> Int { x + offset };
     let xs = vec_new[Int]();
@@ -22,5 +22,5 @@ fn main() -> Int {
     let squares = vec_map(xs, fn(x: Int) -> Int { x * x });
     let evens = vec_filter(squares, fn(x: Int) -> Bool { x % 2 == 0 });
     let sum = vec_fold(evens, 0, fn(acc: Int, x: Int) -> Int { acc + x });
-    apply_twice(double, 5) + apply_twice(add, 1) + sum
+    println(apply_twice(double, 5) + apply_twice(add, 1) + sum)
 }

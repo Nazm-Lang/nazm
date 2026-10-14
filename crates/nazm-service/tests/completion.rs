@@ -387,11 +387,29 @@ fn built_ins_come_from_the_compilers_own_inventories() {
         s.open(&m, 1, T.into());
         // Every built-in function, from `Intrinsic::ALL`, in a call head.
         let calls = complete(&s, &m, 1, at(T, "str_len", 0, 0));
+        // And `print` and `eprint` once more each, as `println` and `eprintln` (R1, 5b.4).
         let mut expected: Vec<Candidate> = Intrinsic::ALL
             .iter()
             .map(|i| Candidate::Intrinsic(*i))
+            .chain([
+                Candidate::Intrinsic(Intrinsic::Print),
+                Candidate::Intrinsic(Intrinsic::EPrint),
+            ])
             .collect();
         expected.sort();
+        let printed: Vec<(&str, Candidate)> = calls
+            .items
+            .iter()
+            .filter(|i| i.name.ends_with("println"))
+            .map(|i| (i.name.as_str(), i.candidate))
+            .collect();
+        assert_eq!(
+            printed,
+            [
+                ("eprintln", Candidate::Intrinsic(Intrinsic::EPrint)),
+                ("println", Candidate::Intrinsic(Intrinsic::Print)),
+            ]
+        );
         let mut got: Vec<Candidate> = calls
             .items
             .iter()

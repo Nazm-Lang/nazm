@@ -7,12 +7,12 @@ fn step(n: Int) -> Int { n * 2 - n }
 
 fn twice(n: Int) -> Int { step(step(n)) }
 
-fn main() -> Int {
+fn main() {
     let mut i = 0;
     let mut acc = 0;
     while i < 1000000 {
         acc = acc + twice(i) % 13;
         i = i + 1;
     }
-    acc
+    println(acc)
 }

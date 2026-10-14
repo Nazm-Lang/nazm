@@ -29,7 +29,7 @@ fn total(squares: Chan, results: Chan) -> Int {
     0
 }
 
-fn main(tasks: SpawnCap) -> Int {
+fn main(out: OutCap, tasks: SpawnCap) -> Int {
     // Small capacities on purpose: the producer runs ahead by at most four jobs, so this
     // is back-pressure rather than an unbounded queue that happens to drain.
     let jobs = chan_new(4);
@@ -71,5 +71,6 @@ fn main(tasks: SpawnCap) -> Int {
     while chan_recv(results, buf) {
         sum = sum + ints_pop(buf);
     }
-    sum
+    print(str_concat(int_to_str(sum), "\n"));
+    0
 }

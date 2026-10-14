@@ -73,8 +73,9 @@ fn every_template_is_a_project_its_own_commands_hold() {
     );
     assert!(ok(&at("cli"), &["inspect", "."]).contains("\"nazm.inspect/2\""));
     assert_eq!(
+        // Its total printed, then `main`'s 0 as the result report shows it (R1, 5b.3).
         ok(&at("server"), &["run", ".", "--", "requests.txt"]),
-        "4 requests served\n30\n"
+        "4 requests served\n30\n0\n"
     );
     let usage = nazm(&at("server"), &["run", "."]);
     assert_eq!(

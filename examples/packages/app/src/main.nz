@@ -2,4 +2,6 @@
 // `nazm build --locked examples/packages/app`.
 use "geometry:area.nz";
 
-fn main() -> Int ! {} { rectangle(6, 7) }
+fn main() ! { io } {
+    println(rectangle(6, 7))
+}

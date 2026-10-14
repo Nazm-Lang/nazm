@@ -347,7 +347,29 @@ pub(super) fn record_module_names(
                 Callee::Indirect(_) => Candidate::Intrinsic(nazm_sema::Intrinsic::StrLen),
             },
         })
+        .collect::<Vec<Named>>();
+    // `println` and `eprintln` are names of `print` and `eprint` (R1, 5b.4, 5b.13): a call of
+    // one resolves to that built-in, so a scope offers it under the name that was written.
+    let printed: Vec<Named> = callables
+        .iter()
+        .filter_map(|n| {
+            match n.candidate {
+                Candidate::Intrinsic(nazm_sema::Intrinsic::Print) if n.name == "print" => {
+                    Some("println")
+                }
+                Candidate::Intrinsic(nazm_sema::Intrinsic::EPrint) if n.name == "eprint" => {
+                    Some("eprintln")
+                }
+                _ => None,
+            }
+            .map(|name| Named {
+                name: name.to_owned(),
+                candidate: n.candidate,
+            })
+        })
         .collect();
+    let mut callables = callables;
+    callables.extend(printed);
     let mut named: Vec<Named> = types
         .names
         .iter()

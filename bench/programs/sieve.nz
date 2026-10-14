@@ -3,7 +3,7 @@
 // The closest thing here to ordinary code, and the one whose number is worth comparing
 // against another language's.
 
-fn main() -> Int {
+fn main() {
     let limit = 400000;
     let sieve = ints_new();
     let mut i = 0;
@@ -28,5 +28,5 @@ fn main() -> Int {
         count = count + ints_get(sieve, n);
         n = n + 1;
     }
-    count
+    println(count)
 }

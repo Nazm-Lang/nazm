@@ -55,9 +55,9 @@ fn doubled[T: Area](shape: T) -> Int {
     shape.area() * 2
 }
 
-fn main() -> Int {
+fn main() {
     let r = Rect(w: 3, h: 4);
-    r.area() + doubled(r)
+    println(r.area() + doubled(r))
 }
 ```
 
