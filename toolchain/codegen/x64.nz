@@ -403,3 +403,13 @@ pub fn round(b: ByteBuf, dbl: Bool, x: Int, y: Int, mode: Int) {
     sse(b, 0x66, false, if dbl { 0x3A0B } else { 0x3A0A }, x, y)
     b1(b, mode)
 }
+
+/// Point a `rel32` displacement at the current end.
+pub fn land32(b: ByteBuf, at: Int) {
+    let d = bytebuf_len(b) - (at + 4)
+    let mut q = 0
+    while q < 4 {
+        let ok = bytebuf_set(b, at + q, UInt8((d >> (8 * q)) & 255))
+        q += 1
+    }
+}
