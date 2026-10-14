@@ -27,7 +27,11 @@
 
 ## 3. Names and types
 
-- [ ] 3.1 Modules: `as`, `::`, re-exports, packages and manifests
+- [ ] 3.1 Modules: `as`, `::`, re-exports, packages and manifests — the loader is done (`load.nz`: the
+      root, its imports depth-first, `@std/`, the core prelude, global offsets, every loader
+      diagnostic but a package's); packages, derives and the module graph's semantics are not
+- [x] 3.1a The `check` comparison (`run.sh check`): loader, every file's syntax diagnostics at their
+      global offsets, and the missing `main` — every difference left is a checker diagnostic
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
