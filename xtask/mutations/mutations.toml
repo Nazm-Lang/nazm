@@ -16601,7 +16601,7 @@ why = "MIR treats an array of strings as owning nothing, so its strings are neve
 file = "crates/nazm-mir/src/ir.rs"
 find = "                .is_some_and(|(e, _)| self.managed_within(e, depth + 1)),"
 replace = "                .is_some_and(|_| false),"
-killers = [{ package = "nazm-cli", test = "cli_c_d", name = "const_tables::arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mir::the_validator_refuses_a_leaked_array_of_strings" }, { package = "nazm-cli", test = "cli_c_d", name = "const_tables::arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed" }]
 
 [[mutation]]
 name = "r1a-a-written-element-is-not-released"

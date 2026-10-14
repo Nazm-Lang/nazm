@@ -113,12 +113,23 @@ fn main(out: OutCap) -> Int ! {io} {
     vec_push(v, copy);
     show(out, vec_get(v, 1)[0]);
     if names == [\"alpha\", \"beta\", \"gamma\"] && names != copy { show(out, \"eq\"); }
+    // Overwriting a string the array alone holds releases it: written twice, the first value is
+    // a run-time string nothing else holds, which only the second write can give back.
+    let mut owned = [str_concat(\"on\", \"e\"), str_concat(\"tw\", \"o\")];
+    owned[0] = str_concat(\"thr\", \"ee\");
+    owned[0] = str_concat(\"fo\", \"ur\");
+    // What an array holds stays its own after the temporaries that made it are gone, and
+    // after other strings of the same size are made: read back, it is what was written.
+    let made = [str_concat(\"ka\", \"pa\"), str_concat(\"ra\", \"ma\")];
+    let other = [str_concat(\"zz\", \"zz\"), str_concat(\"yy\", \"yy\")];
+    show(out, str_concat(str_concat(owned[0], owned[1]), str_concat(made[0], made[1])));
+    show(out, other[1]);
     0
 }
 ";
 
 /// By hand: `while` is 5 letters, `if` 2, so 2·1 + 5·2.
-const ARRAYS_EXPECTED: &str = "alphadelta\ngamma\n12\nxyqr\na\ndelta\neq\n";
+const ARRAYS_EXPECTED: &str = "alphadelta\ngamma\n12\nxyqr\na\ndelta\neq\nfourtwokaparama\nyyyy\n";
 
 #[test]
 fn arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed() {

@@ -1263,3 +1263,35 @@ fn the_validator_refuses_broken_arrays_indexes_and_conversions() {
     }
     refused(&p, "a conversion that is not between numbers");
 }
+
+#[test]
+fn the_validator_refuses_a_leaked_array_of_strings() {
+    // An array owns what its elements do (R1a, L8): an array of strings is tracked, so one whose
+    // drop is gone is a leak at the return, as any owning local is.
+    let mut p = valid(
+        "fn main() -> Int {\n    let a = [str_concat(\"a\", \"b\"), \"c\"];\n    str_len(a[0])\n}\n",
+    );
+    let f = function_mut(&mut p, "main");
+    let arrays: Vec<u32> = f
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| matches!(l.ty.value(), Some(nazm_core::Type::Array(_))))
+        .map(|(i, _)| u32::try_from(i).unwrap())
+        .collect();
+    assert!(!arrays.is_empty(), "the program has an array local");
+    let mut removed = false;
+    for b in &mut f.blocks {
+        if let Some(pos) = b
+            .stmts
+            .iter()
+            .position(|s| matches!(s.kind, StatementKind::Drop(l) if arrays.contains(&l.0)))
+        {
+            b.stmts.remove(pos);
+            removed = true;
+            break;
+        }
+    }
+    assert!(removed, "the array local is dropped somewhere");
+    refused(&p, "a leak");
+}
