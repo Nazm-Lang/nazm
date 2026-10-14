@@ -5,6 +5,7 @@ use "cir.nz"
 use "types.nz"
 use "mir.nz"
 use "traits.nz"
+use "refine.nz"
 use "lower.nz"
 use "@std/hash"
 use "@std/json"
@@ -189,6 +190,13 @@ fn plan_instances(c: Cir) -> Vec[Inst] {
     while next < ints_len(work) {
         let inst = vec_get(plan, ints_get(work, next))
         next += 1
+        // The stated bounds (`N0358`): a program needing more instances than this, or an
+        // instance whose arguments nest past any written type, is refused, never planned forever.
+        if vec_len(plan) > 10000 || str_len(str_join(inst.keys, ",")) > 4096 {
+            let refused: Vec[Inst] = vec_new()
+            vec_push(refused, Inst(fi: 0 - 1, args: strs_new(), keys: strs_new()))
+            return refused
+        }
         let f = vec_get(c.fns, inst.fi)
         if f.body >= 0 { plan_sites(c, f.body, inst.args, seen, plan, work) }
     }
@@ -289,7 +297,7 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
 pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
     let tt = table_build(c)
     let recursive = in_call_cycles(c)
-    let fm = FuncMap(plain: hashmap_new(), inst: hashmap_new(), thunks: hashmap_new())
+    let fm = FuncMap(plain: hashmap_new(), inst: hashmap_new(), thunks: hashmap_new(), refined: refine(c))
     let caps: HashMap[Str, Int] = hashmap_new()
     let uses = strs_new()
     for f in c.fns {
@@ -303,6 +311,9 @@ pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
         }
     }
     let plan = plan_instances(c)
+    if vec_len(plan) == 1 && vec_get(plan, 0).fi < 0 {
+        return Err("error[N0358]: this program needs more generic function instances than `nazm build` generates, or one nested past its bound")
+    }
     for inst in plan {
         hashmap_set(fm.inst, inst_id(vec_get(c.fns, inst.fi).def, inst.keys), next)
         next += 1

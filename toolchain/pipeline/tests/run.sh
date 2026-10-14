@@ -1,6 +1,7 @@
 #!/bin/bash
 # The R3 pipeline against the Rust toolchain: build it with $NAZM, run it over every input that
-# has Core IR, and compare its MIR with `nazm mir`, byte for byte. Prints each difference's file and
+# has Core IR (the brief's inputs, the Nazm compiler under compiler/, and this pipeline itself),
+# and compare its MIR with `nazm mir`, byte for byte; and hold the validator to its mutants. Prints each difference's file and
 # first differing line (or the pipeline's refusal), then one summary line: `N agree, M differ`.
 #
 #     NAZM=$HOME/.local/nazm-0.10.0/bin/nazm toolchain/pipeline/tests/run.sh [-v] [FILE.nz ...]
@@ -20,7 +21,7 @@ if [ $# -gt 0 ]; then
     FILES=("$@")
 else
     FILES=()
-    while IFS= read -r f; do FILES+=("$f"); done < <(find tests/compat/v1 corpus examples bench/compare/nazm -name '*.nz' | sort)
+    while IFS= read -r f; do FILES+=("$f"); done < <(find tests/compat/v1 corpus examples bench/compare/nazm compiler -name '*.nz' | sort; echo toolchain/pipeline/main.nz)
 fi
 agree=0; differ=0; skipped=0; made=0; caught=0; missed=0
 for f in "${FILES[@]}"; do
@@ -29,13 +30,13 @@ for f in "${FILES[@]}"; do
     if ! "$NAZM" core-ir --json "$f" > "$o.cir" 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
     if ! "$NAZM" mir "$f" > "$o.want" 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
     # The validator against its mutants: every one must be caught.
-    if "$OUT/pipeline" mutants "$o.cir" > "$o.mut" 2>&1 || grep -q "^missed" "$o.mut"; then :; fi
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" mutants "$o.cir" > "$o.mut" 2>&1 || grep -q "^missed" "$o.mut"; then :; fi
     grep "^missed" "$o.mut" | sed "s|^|validator: $f: |"
     if s=$(grep -E "^[0-9]+ mutants, [0-9]+ caught$" "$o.mut"); then
         m=${s%% mutants*}; k=${s##*, }; k=${k%% caught}
         made=$((made + m)); caught=$((caught + k)); missed=$((missed + m - k))
     fi
-    if "$OUT/pipeline" mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
         agree=$((agree + 1))
     else
         differ=$((differ + 1))
