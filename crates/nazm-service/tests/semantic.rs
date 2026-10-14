@@ -246,6 +246,50 @@ fn a_declaration_and_its_uses_are_one_identity_and_same_spellings_are_not() {
 }
 
 #[test]
+fn the_out_main_is_given_is_used_and_never_declared_in_source() {
+    // R1, 5b.1: a `main` that writes no `OutCap` or `IoCap` holds `out: OutCap` at a span of
+    // no width. A use of it is a parameter's use; nothing was written where it is declared, so
+    // nothing there is an identifier, a definition to go to, or a name to rename — and the
+    // `Int` a function written with no result type is given (5b.2) is no written type either.
+    const T: &str = "fn say(out: OutCap) {\n    println(\"x\")\n}\nfn main() {\n    say(out)\n}\n";
+    let p = Project::new(&[("main.nz", T)]);
+    let main = p.path("main.nz");
+    on_the_service_stack(move || {
+        let mut s = LanguageService::new();
+        let published = s.open(&main, 1, T.to_owned());
+        assert_eq!(published[0].diagnostics, [], "the fixture checks");
+        let ids = s.semantic_identifiers(&main, 1).unwrap().identifiers;
+        assert!(ids.iter().all(|i| i.end > i.start), "{ids:?}");
+        assert_eq!(
+            shown(T, &ids),
+            [
+                ("say", Function, D),
+                ("out", Parameter, D),
+                ("OutCap", BuiltinType, R),
+                ("println", Intrinsic, R),
+                ("main", Function, D),
+                ("say", Function, R),
+                ("out", Parameter, R),
+            ]
+        );
+        let used = at(T, &ids, "out", 1);
+        assert_ne!(used.target, at(T, &ids, "out", 0).target, "two parameters");
+        let offset = used.start;
+        assert_eq!(s.definition(&main, 1, offset), None);
+        let r = s.references(&main, 1, offset).expect("an entity");
+        assert_eq!((r.kind, r.declaration.as_ref()), ("local", None));
+        assert_eq!(
+            r.uses.iter().map(|l| (l.start, l.end)).collect::<Vec<_>>(),
+            [(offset, offset + 3)]
+        );
+        assert_eq!(
+            s.prepare_rename(&main, 1, offset).unwrap_err(),
+            nazm_service::Refusal::ToolchainOwned
+        );
+    });
+}
+
+#[test]
 fn same_spellings_in_two_records_and_two_enums_are_two_identities() {
     const TEXT: &str = "struct A {\n    value: Int,\n}\nstruct B {\n    value: Str,\n}\n\
                         enum EA {\n    Ready,\n}\nenum EB {\n    Ready,\n}\n\

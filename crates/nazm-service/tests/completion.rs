@@ -319,11 +319,16 @@ fn a_later_top_level_function_is_callable_and_a_later_local_is_not_visible() {
             ],
             "top-level order does not matter: declarations are collected before bodies"
         );
-        assert!(
+        // `main`'s `out: OutCap`, given it though nothing wrote it (R1, 5b.1), is in scope
+        // from its start; `a` is not.
+        assert_eq!(
             s.scope_at(&m, 1, at(T, "later()", 0, 0))
                 .unwrap()
                 .values
-                .is_empty(),
+                .into_iter()
+                .map(|n| n.name)
+                .collect::<Vec<_>>(),
+            ["out"],
             "`a` is not visible in its own initializer"
         );
     });
@@ -543,11 +548,12 @@ fn completion_is_of_the_current_unsaved_program() {
                 .map(|i| i.name.clone())
                 .collect()
         };
-        assert_eq!(values(&s, 1, v1, "x }"), ["x"]);
+        // `out` is the `OutCap` `main` is given (R1, 5b.1): a local nothing wrote.
+        assert_eq!(values(&s, 1, v1, "x }"), ["out", "x"]);
         // An unsaved local appears.
         let v2 = "fn main() -> Int { let x = 1; let y = 2; x + y }\n";
         s.change(&pm, 2, v2.into());
-        assert_eq!(values(&s, 2, v2, "x + y"), ["x", "y"]);
+        assert_eq!(values(&s, 2, v2, "x + y"), ["out", "x", "y"]);
         assert_eq!(
             s.completion(&pm, 1, 0).unwrap_err(),
             NoCompletion::NotCurrent
@@ -591,7 +597,12 @@ fn a_body_that_does_not_parse_has_no_completion_and_never_the_last_clean_one() {
     on_the_service_stack(move || {
         let mut s = LanguageService::new();
         s.open(&m, 1, clean.into());
-        assert_eq!(complete(&s, &m, 1, at(clean, "x }", 0, 0)).items.len(), 1);
+        // `x`, and the `out: OutCap` `main` is given (R1, 5b.1).
+        let names = |c: Completion| c.items.into_iter().map(|i| i.name).collect::<Vec<_>>();
+        assert_eq!(
+            names(complete(&s, &m, 1, at(clean, "x }", 0, 0))),
+            ["out", "x"]
+        );
         s.change(&m, 2, broken.into());
         assert_eq!(
             s.completion(&m, 2, at(broken, "x }", 0, 0)).unwrap_err(),
@@ -624,10 +635,13 @@ fn other() -> Int { other() }
         let c = complete(&s, &m, 3, at(typed, "x }", 0, 0));
         assert_eq!(
             c.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
-            ["x", "y"]
+            ["out", "x", "y"]
         );
         s.change(&m, 4, clean.into());
-        assert_eq!(complete(&s, &m, 4, at(clean, "x }", 0, 0)).items.len(), 1);
+        assert_eq!(
+            names(complete(&s, &m, 4, at(clean, "x }", 0, 0))),
+            ["out", "x"]
+        );
     });
 }
 
@@ -694,10 +708,11 @@ fn a_thousand_edits_leave_one_current_scope() {
                 .into_iter()
                 .map(|n| n.name)
                 .collect();
+            // With the `out: OutCap` `main` is given (R1, 5b.1).
             let expected: &[&str] = if version % 2 == 0 {
-                &["z"]
+                &["out", "z"]
             } else {
-                &["x", "y"]
+                &["out", "x", "y"]
             };
             assert_eq!(names, expected, "version {version}");
             if version == 10 {

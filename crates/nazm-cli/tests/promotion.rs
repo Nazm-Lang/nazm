@@ -72,13 +72,16 @@ fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one() {
             // A binding assigned once and read in its block keeps its slot: a debugger reads it.
             "x : Int",
             "y : Int",
+            // `main`'s parameter, the `out: OutCap` it is given (R1, 5b.1); a capability is a
+            // word, and every local numbered after it moves up by one.
+            "out : Int",
             "i : Int",
             "s : Int",
             "ok : Bool",
-            "result#4 : Int",
+            "result#5 : Int",
             // Then the values held in memory (N105: LIR's slots follow its variables).
             "text : Str",
-            "arg#9 : Str",
+            "arg#10 : Str",
         ],
         "{ir}"
     );

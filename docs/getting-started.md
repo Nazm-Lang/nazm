@@ -34,9 +34,13 @@ fn main(out: OutCap) -> Int {
 }
 ```
 
-`main` is the entry point and returns an `Int`, which `nazm run` prints after the program's own
-output. `out: OutCap` is the authority to write to the standard streams. Nothing in Nazm reaches
-the outside world without such a value, and the only place one comes from is `main`'s parameters.
+`main` is the entry point, and the `Int` it returns is the program's exit status. The commands
+on this page run with `NAZM_RESULT_REPORT` set, which also prints that result after the
+program's own output — the `0` below; without it, `nazm run hello.nz` prints only the greeting.
+`out: OutCap` is the authority to write to the standard streams. Nothing in Nazm reaches the
+outside world without such a value, and the only place one comes from is `main`'s parameters. A
+`main` that writes neither an `OutCap` nor an `IoCap` is given one named `out`, so `fn main()`
+may print too; every other authority — files, the network, processes, the clock — is written.
 
 <!-- run -->
 ```console
@@ -47,13 +51,13 @@ Hello, Nazm!
 
 ## 3. Check it
 
-`nazm check` type-checks without running anything. Remove the capability to see what it
-catches:
+`nazm check` type-checks without running anything. Write a file without the capability to
+see what it catches — printing comes with `main`, and files do not:
 
 <!-- file: nocap.nz -->
 ```nazm
 fn main() -> Int {
-    print("Hello, Nazm!\n");
+    write_file("hello.txt", "Hello, Nazm!\n");
     0
 }
 ```
@@ -63,12 +67,12 @@ fn main() -> Int {
 $ nazm check hello.nz
 ok
 $ nazm check nocap.nz  # fails
-error[N0369]: the built-in `print` requires `OutCap` authority, and `main` holds no `OutCap` here
+error[N0369]: the built-in `write_file` requires `IoCap` authority, and `main` holds no `IoCap` here
   --> nocap.nz:2:5
   |
-2 |     print("Hello, Nazm!\n");
-  |     ^^^^^ `print` is authorised by an `OutCap`
-  = help: authority is a value: give `main` an `OutCap` parameter and have each caller pass one. The only source of one is `main`'s parameters
+2 |     write_file("hello.txt", "Hello, Nazm!\n");
+  |     ^^^^^^^^^^ `write_file` is authorised by an `IoCap`
+  = help: authority is a value: give `main` an `IoCap` parameter and have each caller pass one. The only source of one is `main`'s parameters
 nazm: 1 error
 ```
 

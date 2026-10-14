@@ -831,8 +831,13 @@ impl Resolution {
 
     /// Record what the type name written at `span` is. The same span may be resolved more
     /// than once — a signature at declaration and again with its body — and always to the
-    /// same answer.
+    /// same answer. A type name of no width — the `OutCap` of the `out` a `main` is given (R1,
+    /// 5b.1), the `Int` of a function written with no result type (5b.2) — was not written, and
+    /// is not recorded.
     pub fn record_written_type(&mut self, span: Span, what: WrittenType) {
+        if span.start == span.end {
+            return;
+        }
         self.written_types.insert(span, what);
     }
 

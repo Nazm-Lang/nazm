@@ -1234,7 +1234,9 @@ fn symbols_cross_the_protocol_nested_and_in_utf16() {
     assert_eq!(symbols.as_array().unwrap().len(), 2, "{r}");
     assert_eq!(symbols[0]["name"], "main");
     assert_eq!(symbols[0]["kind"], FUNCTION);
-    assert_eq!(symbols[0]["detail"], "fn main() -> Int");
+    // The signature `main` has: the `out: OutCap` it is given when it writes no `OutCap` or
+    // `IoCap` (R1, 5b.1) is a parameter of it, though nothing wrote it.
+    assert_eq!(symbols[0]["detail"], "fn main(out: OutCap) -> Int");
     assert!(symbols[0].get("children").is_none(), "no locals: {r}");
     let state = &symbols[1];
     assert_eq!(state["name"], "State");

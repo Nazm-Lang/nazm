@@ -116,7 +116,7 @@ formatted, natively built program and a package in about ten minutes, and the te
 every command on it. In short:
 
 ```sh
-nazm run FILE.nz        # check, then interpret; prints main's value
+nazm run FILE.nz        # check, then interpret; main's result is the exit status
 nazm check FILE.nz      # type-check only; --json for nazm.diagnostic/1
 nazm build FILE.nz -o OUT [--backend llvm|cranelift] [--debug]
 nazm test DIR           # every NAME.nz with a NAME.expected, interpreted and compiled

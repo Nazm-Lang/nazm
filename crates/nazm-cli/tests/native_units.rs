@@ -429,7 +429,11 @@ fn an_imported_modules_main_is_not_the_process_entry() {
         .find(|(_, ir)| ir.contains("<nazm entry>"))
         .expect("an entry unit")
         .1;
-    assert!(entry.contains("call i64 @nz.m.app_2Enz.main()"), "{entry}");
+    // Handed the one root it is given, `out: OutCap` (R1, 5b.1).
+    assert!(
+        entry.contains("call i64 @nz.m.app_2Enz.main(i64 0)"),
+        "{entry}"
+    );
     assert!(!entry.contains("@nz.m.lib_2Enz.main"), "{entry}");
     // And the imported one is still generated, because it is one of that module's
     // definitions and nothing more.

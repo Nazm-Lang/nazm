@@ -76,10 +76,19 @@ fn what_has_no_text_or_takes_the_name_is_refused() {
             "N0203",
             "a function named `println`",
         ),
+        // `main` holds an `OutCap` it was not written (R1, 5b.1); a function of its that
+        // holds none still may not print.
         (
-            "fn main() -> Int { println(\"x\"); 0 }\n",
+            "fn say() -> Int { println(\"x\"); 0 }\nfn main() -> Int { say() }\n",
             "N0369",
             "printing without the authority to",
+        ),
+        // Nor may a `main` that writes an `IoCap` and so is given no `OutCap`, once it has
+        // lost the `IoCap`'s binding.
+        (
+            "fn main(io: IoCap) -> Int { let io = 0; println(\"x\"); io }\n",
+            "N0369",
+            "a main that wrote its authority and shadowed it",
         ),
     ] {
         assert_eq!(differential::codes(src), [code], "{why}");

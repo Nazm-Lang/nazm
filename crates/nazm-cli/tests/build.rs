@@ -1608,10 +1608,12 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
             .any(|d| d.contains("(i64 %p0, i1 %p1)") && d.ends_with("; helper")),
         "the two-parameter signature is wrong:\n{ir}"
     );
+    // `main` writes no capability, so it is given `out: OutCap` (R1, 5b.1), which lowers as
+    // the one word every capability is.
     assert!(
         defs.iter()
-            .any(|d| d.contains("()") && d.ends_with("; main")),
-        "nazm's main should take no parameters:\n{ir}"
+            .any(|d| d.contains("(i64 %p0)") && d.ends_with("; main")),
+        "nazm's main should take its one root, `out`:\n{ir}"
     );
     assert!(
         ir.contains("call i64 @nz.m.") && ir.contains("(i64 %"),
@@ -2078,8 +2080,9 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
     );
 
     let ir = emitted_ir(dir.path());
+    // `main` is given `out: OutCap` (R1, 5b.1): its one parameter.
     let body: &str = ir
-        .split("define hidden i64 @nz.m.prog_2Enz.main()")
+        .split("define hidden i64 @nz.m.prog_2Enz.main(i64 %p0)")
         .nth(1)
         .expect("main's definition");
 

@@ -92,13 +92,15 @@ const REGISTER: &[Entry] = &[
     Entry {
         file: "crates/nazm-cli/src/main.rs",
         directory: false,
-        // Parse, prepare, dispatch; and the diagnostic rendering every command shares.
+        // Parse, prepare, dispatch; the diagnostic rendering every command shares; and how a
+        // command that ran a program ends with `main`'s result (R1, 5b.3), beside `report_ok`.
         may_define: &[
             "main",
             "parse_cli",
             "command",
             "dispatch",
             "report_ok",
+            "end_with_result",
             "emit",
         ],
     },

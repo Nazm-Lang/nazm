@@ -61,6 +61,9 @@ fn parameters_and_bindings_are_described_and_temporaries_are_not() {
         "!DILocalVariable(name: \"line\", scope:",
         "!DILocalVariable(name: \"n\", scope:",
         "!DILocalVariable(name: \"who\", scope:",
+        // `main`'s `out: OutCap`, given it though nothing wrote it (R1, 5b.1), is a parameter
+        // a debugger can read like any other.
+        "!DILocalVariable(name: \"out\", arg: 1,",
         "!DIBasicType(name: \"Int\", size: 64, encoding: DW_ATE_signed)",
         "!DIBasicType(name: \"Bool\", size: 8, encoding: DW_ATE_boolean)",
         "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 192,",
@@ -73,17 +76,18 @@ fn parameters_and_bindings_are_described_and_temporaries_are_not() {
     ] {
         assert!(ir.contains(want), "{want}\n{ir}");
     }
-    // Every described variable is one the source wrote: no compiler-made temporary.
+    // Every described variable is one the source wrote, or `main`'s `out`: no compiler-made
+    // temporary.
     for line in ir.lines().filter(|l| l.contains("DILocalVariable")) {
         assert!(!line.contains('#'), "a temporary described: {line}");
     }
-    assert_eq!(ir.matches("DILocalVariable(").count(), 6, "{ir}");
+    assert_eq!(ir.matches("DILocalVariable(").count(), 7, "{ir}");
     // Each declared on its storage — a LIR variable's or slot's `alloca` (N105) — where the
     // debugger reads it.
     assert_eq!(
         ir.matches("call void @llvm.dbg.declare(metadata ptr %")
             .count(),
-        6,
+        7,
         "{ir}"
     );
     // Without `--debug`, none of it.

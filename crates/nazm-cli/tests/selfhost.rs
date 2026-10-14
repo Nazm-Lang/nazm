@@ -476,7 +476,14 @@ fn push_node(out: &mut String, kind: &str, arity: usize, start: u32, end: u32, t
 }
 
 fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
-    for p in &f.params {
+    // What was written: the `out: OutCap` a `main` is given (R1, 5b.1) has no width, and the
+    // compiler written in Nazm, which does not give it yet, reads no such parameter.
+    let params: Vec<_> = f
+        .params
+        .iter()
+        .filter(|p| p.span.start != p.span.end)
+        .collect();
+    for p in &params {
         push_node(
             out,
             "param",
@@ -489,9 +496,9 @@ fn dump_function(f: &nazm_core::__syntax::Function, out: &mut String) {
     let arity = match &f.body {
         Some(b) => {
             dump_block(b, out);
-            f.params.len() + 1
+            params.len() + 1
         }
-        None => f.params.len(),
+        None => params.len(),
     };
     push_node(
         out,
