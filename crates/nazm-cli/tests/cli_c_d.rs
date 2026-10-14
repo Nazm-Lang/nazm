@@ -41,6 +41,7 @@ mod cost_and_flow;
 mod counts;
 mod cranelift;
 mod cross;
+mod dead_strip;
 mod debugger;
 mod debugger_v3;
 mod debugging;
