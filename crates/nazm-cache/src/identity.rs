@@ -343,7 +343,9 @@ use crate::digest::{self, Framed};
 /// function with no result type, and a call of one used as a value refused (`N0300`); R1d's
 /// built-ins — `os_read_line`, standard output and errors as handles, `os_spawn_in` and
 /// `os_spawn_with`, process ids, groups, waits and peak memory, `os_lstat`, `os_chmod`,
-/// `os_realpath`, `os_mkdtemp` and file locks — moved from refused to accepted.
+/// `os_realpath`, `os_mkdtemp` and file locks — moved from refused to accepted; a method no trait
+/// gives, read as a function by name, and `xs[i]`/`xs[i] = v` on a sequence, moved from refused
+/// (`N0605`, `N0624`) to accepted.
 pub const SEMANTIC_EPOCH: u32 = 73;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker

@@ -104,10 +104,13 @@ impl Checker<'_> {
             }
             None => (receiver, args),
         };
+        let before = self.errors.len();
         let recv_ty = match known {
             Some(t) => t,
             None => self.value_type(recv, None),
         };
+        // Whether the receiver itself was refused: then nothing is read by name from it.
+        let receiver_failed = self.errors.len() > before;
 
         // Which trait's method this is.
         let chosen: Result<(TraitId, u32), Diagnostic> = if let Some((t, _)) = ufcs {
@@ -129,6 +132,15 @@ impl Checker<'_> {
         let (trait_id, index) = match chosen {
             Ok(c) => c,
             Err(d) => {
+                // By name (R1, 5b.15): `x.m(…)` with no trait's `m` is the function
+                // `<type>_m(x, …)` where one is in scope — `v.len()` is `vec_len(v)`.
+                if ufcs.is_none() && known.is_none() && !receiver_failed {
+                    if let Some(t) =
+                        self.named_method(receiver, recv_ty, method, at, rest, span, expected)
+                    {
+                        return t;
+                    }
+                }
                 self.errors.push(d);
                 for a in rest {
                     self.check_expr(a, None);
@@ -736,5 +748,55 @@ impl Checker<'_> {
                 held: self.held(),
             },
         );
+    }
+}
+
+impl Checker<'_> {
+    /// `x.m(args)` as the function `<prefix>_m(x, args)` (R1, 5b.15), where no trait gives the
+    /// receiver's type an `m`: the prefix is the type's name in lower case — `vec`, `ints`,
+    /// `strs`, `bytes`, `hashmap`, a record's own — and for a `Str` also `text`, the first whose
+    /// function is in scope. Checked as that call is, keyed by the method's name; `None` where no
+    /// such function is in scope, or where the receiver already failed — so nothing is said
+    /// twice.
+    #[allow(clippy::too_many_arguments)]
+    fn named_method(
+        &mut self,
+        receiver: &Expr,
+        recv_ty: Type,
+        method: &str,
+        at: Span,
+        rest: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Option<Type> {
+        let shown = self.show(recv_ty);
+        let base = shown.split('[').next().unwrap_or("").to_ascii_lowercase();
+        if base.is_empty() || !base.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let mut prefixes = vec![base];
+        if recv_ty == Type::Str {
+            prefixes.push("text".to_owned());
+        }
+        let name = prefixes
+            .into_iter()
+            .map(|p| format!("{p}_{method}"))
+            .find(|n| self.env.get(n).is_some())?;
+        let mut args = Vec::with_capacity(rest.len() + 1);
+        args.push(receiver.clone());
+        args.extend(rest.iter().cloned());
+        let call = Expr::Call {
+            qualifier: None,
+            callee: name,
+            callee_span: at,
+            type_args: None,
+            args,
+            span,
+        };
+        self.res.record_named_method(at);
+        Some(match self.check_expr(&call, expected) {
+            Completion::Value(t) => t,
+            Completion::Unit | Completion::Diverges => expected.unwrap_or(Type::Int),
+        })
     }
 }

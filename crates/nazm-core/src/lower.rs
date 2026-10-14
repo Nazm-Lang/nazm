@@ -718,6 +718,23 @@ impl<'a> Lower<'a> {
                 let elem = self.shared(local).unwrap_or(Type::Int);
                 Stmt::Eval(self.through_cell(local, elem, Some(value), a.span))
             }
+            // `xs[i] = v` on a sequence (R1, 5b.15): the call the checker read it as.
+            AstStmt::Assign(a) if matches!(a.place.path.as_slice(), [nazm_syntax::PlaceStep::Index { span, .. }] if self.res.named_method(*span)) =>
+            {
+                let Some(nazm_syntax::PlaceStep::Index { index, span }) = a.place.path.first()
+                else {
+                    return defect(a.span, "an element write that is no longer one");
+                };
+                let args = [
+                    AstExpr::Var {
+                        name: a.place.name.clone(),
+                        span: a.place.name_span,
+                    },
+                    (**index).clone(),
+                    a.value.clone(),
+                ];
+                Stmt::Eval(self.call(*span, &args, *span)?)
+            }
             AstStmt::Assign(a) => {
                 let mut value = self.expr(&a.value)?;
                 let mut local = self.local_at(a.place.name_span)?;
@@ -1258,6 +1275,17 @@ impl<'a> Lower<'a> {
                     *span,
                 )
             }
+            // On a sequence (R1, 5b.15), the call the checker read it as.
+            AstExpr::Index {
+                base,
+                index,
+                bracket_span,
+                ..
+            } if self.res.named_method(*bracket_span) => self.call(
+                *bracket_span,
+                &[(**base).clone(), (**index).clone()],
+                *bracket_span,
+            )?,
             AstExpr::Index {
                 base,
                 index,
@@ -2626,6 +2654,12 @@ impl<'a> Lower<'a> {
         args: &[AstExpr],
         span: Span,
     ) -> Lowered<Expr> {
+        // A method call by name (R1, 5b.15) is the ordinary call the checker read it as.
+        if self.res.named_method(at) {
+            let mut all: Vec<AstExpr> = receiver.into_iter().cloned().collect();
+            all.extend(args.iter().cloned());
+            return self.call(at, &all, span);
+        }
         let mut lowered = Vec::with_capacity(args.len() + 1);
         if let Some(r) = receiver {
             lowered.push(self.expr(r)?);

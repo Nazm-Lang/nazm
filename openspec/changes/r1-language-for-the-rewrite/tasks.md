@@ -71,7 +71,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [x] 5b.13 `print` and `println` of any value with a text (a number, a `Bool`, a `Show`)
 - [x] 5b.14 `Some(x)`, `None`, `Ok(x)`, `Err(e)` where the type is known; a variant with no payload
       without `()` (`C.R`)
-- [ ] 5b.15 `v[i]` and `v[i] = x` on `Vec`; methods on built-in types (`v.len()`, `s.len()`,
+- [x] 5b.15 `v[i]` and `v[i] = x` on `Vec`; methods on built-in types (`v.len()`, `s.len()`,
       `s.split(" ")`, …) as names for the existing functions
 - [ ] 5b.16 `let x: T = …`; `[1, 2, 3]` as a `Vec` where one is wanted; `vec_new()`'s `T` inferred
       from later use

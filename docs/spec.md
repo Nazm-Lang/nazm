@@ -70,6 +70,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `blocks` | STABLE 1.0 | |
 | `line-breaks` | EXPERIMENTAL | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; EXPERIMENTAL until R1 closes |
 | `short-variants` | EXPERIMENTAL | R1, 5b.14: an enum construction infers its type arguments; `Some`, `None`, `Ok`, `Err`; a variant without `()`; EXPERIMENTAL until R1 closes |
+| `named-methods` | EXPERIMENTAL | R1, 5b.15: a method no trait gives is a function by name; `xs[i]` and `xs[i] = v` on a sequence; EXPERIMENTAL until R1 closes |
 | `no-result` | EXPERIMENTAL | R1, 5b.2: a function with no result type; EXPERIMENTAL until R1 closes |
 | `main-ends` | EXPERIMENTAL | R1, 5b.1 and 5b.3: `main` holds an `OutCap` unwritten; its result is the exit status; EXPERIMENTAL until R1 closes |
 | `break-continue` | STABLE 1.0 | |
@@ -1577,6 +1578,27 @@ refused as a missing `;`, which with lines ending statements is no longer a mist
 which `else if` makes of every link of a chain — may have branches that end differently, in
 values of different types or one in none: it produces nothing, as an `if` without `else` does.
 Where a value is wanted the rule above is unchanged, and so is its error.
+
+### Methods and indexes by name
+<!-- id: named-methods -->
+
+*R1, 5b.15; EXPERIMENTAL until R1 closes.*
+
+**A method no trait gives is a function by name.** `x.m(args)`, where no trait in scope gives
+`x`'s type a method `m`, is the call `<prefix>_m(x, args)` — the prefix the type's name in lower
+case (`vec`, `ints`, `strs`, `bytes`, `str`, `int`, `hashmap`, a record's own), and for a `Str`
+`text` after `str` — the first whose function is in scope. So `v.len()` is `vec_len(v)`,
+`v.push(3)` is `vec_push(v, 3)`, `s.split(" ")` is `text_split(s, " ")` where `@std/text` is
+imported, and `m.get(k)` is `hashmap_get(m, k)`. It is that call in every respect — its checks, its
+effects, its authority, its errors, named as the function — and a trait's method of the name
+wins. Where neither exists it is `N0605`, as before.
+
+**`xs[i]` and `xs[i] = v` on a sequence.** On a `Vec`, an `Ints`, a `Strs` or a `Bytes`, `xs[i]`
+is `vec_get(xs, i)` (`ints_get`, `strs_get`, `bytes_get`) and `xs[i] = v` is `vec_set(xs, i, v)`:
+an index outside the sequence fails with `N0405`, as the call does. A sequence is a handle
+(*Sequences are shared*), so the write needs no `mut`, as `vec_set` does not; `xs[i] += 1` is
+`xs[i] = xs[i] + 1`. Only a binding's own element is written so — `p.items[i] = v` is still
+written `vec_set(p.items, i, v)` — and an array's element keeps its rule (*Arrays*).
 
 ### Short variants
 <!-- id: short-variants -->

@@ -298,6 +298,16 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-14)** · *Methods and indexes by name* (`spec.md`, *Methods and indexes by name*;
+5b.15). Where no trait gives the receiver's type the method, `x.m(args)` is checked as the call
+`<prefix>_m(x, args)` keyed by the method's name, its prefix the type's name in lower case (and
+`text` after `str` for a `Str`), and Core IR lowering reads the call the checker recorded
+(`Resolution::named_method`); `xs[i]` and a binding's `xs[i] = v` on a `Vec`, `Ints`, `Strs` or
+`Bytes` are its `_get` and `_set` the same way. A compound assignment's read of an element is keyed
+apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — methods on a `Vec`, a
+`Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
+alike everywhere with nothing live; what has no function of the name refused. Six mutants.
+
 **R1 (2026-10-14)** · *Short variants and inferred enum arguments* (`spec.md`, *Short variants*;
 `openspec/changes/r1-language-for-the-rewrite`, 5b.14). An enum's construction written without type
 arguments takes them from the type it is wanted as, or from payload fields declared as its
