@@ -217,6 +217,7 @@
 @std/hashmap pub enum Slot[K, V]
 @std/hashmap pub struct HashMap[K, V]
 @std/hashmap pub fn hashmap_new[K: Hash, V]() -> HashMap[K, V] ! {}
+@std/hashmap pub fn hashmap_single[K: Hash, V](key: K, value: V) -> HashMap[K, V] ! {}
 @std/hashmap pub fn hashmap_with_seed[K: Hash, V](seed: UInt64) -> HashMap[K, V] ! {}
 @std/hashmap pub fn hashmap_len[K: Hash, V](m: HashMap[K, V]) -> Int ! {}
 @std/hashmap pub fn hashmap_set[K: Hash, V](m: HashMap[K, V], key: K, value: V) -> Bool ! {}
