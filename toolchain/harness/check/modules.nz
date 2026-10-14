@@ -1,0 +1,200 @@
+// The module-boundaries gate (R7, ported from `xtask/src/checks/modules.rs`): a module split by
+// responsibility (M2) keeps its entry thin and says, in each file, what that file is for.
+//
+// - An entry module defines only what the register names for it; a new top-level item there fails,
+//   naming the item.
+// - Every file of a split module opens with a `//!` line.
+// - A registered entry that is not in the tree fails, rather than leaving the rule checking nothing.
+
+use "@std/file"
+use "@std/text"
+use "@std/sort"
+use "@std/path"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+/// One module M2 split, and what its entry may define itself.
+struct Entry {
+    file: Str,
+    directory: Bool,
+    may_define: Strs,
+}
+
+fn entry(file: Str, directory: Bool, names: Str) -> Entry ! {} {
+    Entry(file: file, directory: directory, may_define: split_whitespace(names))
+}
+
+/// The register: `REGISTER` in `modules.rs`, the same entries in the same order.
+fn register() -> Vec[Entry] ! {} {
+    let r = vec_new[Entry]();
+    // The checker's context, and the driver.
+    vec_push(r, entry("crates/nazm-core/src/check/mod.rs", true, "Signature Binding forged Scopes BinaryCheck Completion Visible Types Env Unit Checker ClosureFrame Reuse CheckEverything check check_reusing"));
+    // The interpreter's context, its limits and stack budget, its control flow, and `Cells`.
+    vec_push(r, entry("crates/nazm-core/src/eval/mod.rs", true, "RuntimeError Cells Frame Flow take fail no_value DEFAULT_MAX_ITERATIONS STACK_BYTES_PER_CALL STACK_BASE_BYTES MAX_SUPPORTED_DEPTH stack_for on_interpreter_stack DEFAULT_MAX_DEPTH Limits Interpreter unreachable_flow frame"));
+    // `run`, the sequence of phases, and what it is asked and reports.
+    vec_push(r, entry("crates/nazm-cli/src/build/mod.rs", true, "Native run Summarize Choice"));
+    // Parse, prepare, dispatch; diagnostic rendering; how a command ends with `main`'s result.
+    vec_push(r, entry("crates/nazm-cli/src/main.rs", false, "main parse_cli command dispatch report_ok end_with_result emit"));
+    vec_push(r, entry("xtask/src/main.rs", false, "main help"));
+    // Running and reporting the gates, and the path helpers they share.
+    vec_push(r, entry("xtask/src/checks/mod.rs", true, "run_checks report collect_rs workspace_root module_files source_files"));
+    vec_push(r, entry("xtask/src/commands/mod.rs", true, ""));
+    r
+}
+
+/// One top-level item: its line, its kind and its name.
+struct Item {
+    line: Int,
+    kind: Str,
+    name: Str,
+}
+
+/// `strip_visibility`: `pub`, `pub(crate)`, `pub(in …)` taken off the front.
+fn strip_visibility(line: Str) -> Str ! {} {
+    let rest = match strip_prefix(line, "pub") {
+        Option.Some(value: r) => r,
+        Option.None() => { return line; },
+    };
+    let after = match strip_prefix(rest, "(") {
+        Option.Some(value: r) => {
+            let close = find(r, ")");
+            if close >= 0 { str_slice(r, close + 1, str_len(r)) } else { r }
+        },
+        Option.None() => rest,
+    };
+    text_trim_start(after)
+}
+
+/// The type an `impl` header is for: `impl<'a> Unit<'a> {` is `Unit`, `impl Drop for X {` is `X`.
+fn impl_self_type(after_impl: Str) -> Str ! {} {
+    let mut s = text_trim_start(after_impl);
+    if text_starts_with(s, "<") {
+        let mut depth = 0;
+        let mut i = 0;
+        let mut done = false;
+        while i < str_len(s) && !done {
+            let c = str_byte(s, i);
+            if c == 60 {
+                depth = depth + 1;
+            } else if c == 62 {
+                depth = depth - 1;
+                if depth == 0 {
+                    s = text_trim_start(str_slice(s, i + 1, str_len(s)));
+                    done = true;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    let brace = find(s, "{");
+    let header = if brace >= 0 { str_slice(s, 0, brace) } else { s };
+    let pieces = split(header, " for ");
+    let self_type = text_trim_start(if strs_len(pieces) > 1 { strs_get(pieces, 1) } else { header });
+    let parts = split(self_type, "::");
+    ident(strs_get(parts, strs_len(parts) - 1))
+}
+
+/// `(line, kind, name)` for each item defined at the top level of `text`: functions, types,
+/// traits, constants, statics, macros, and `impl` blocks by their self type. `mod` and `use` are
+/// declarations, not definitions, and are not listed.
+fn top_level_items(text: Str) -> Vec[Item] ! {} {
+    let out = vec_new[Item]();
+    let mut n = 0;
+    for line in lines(text) {
+        n = n + 1;
+        let mut rest = strip_visibility(line);
+        // `const fn`, `async fn`, `unsafe fn` are functions.
+        for q in words("const async unsafe") {
+            match strip_prefix(rest, f"{q} ") {
+                Option.Some(value: f) => if text_starts_with(f, "fn ") { rest = f; },
+                Option.None() => {},
+            }
+        }
+        for kind in words("fn struct enum trait type const static impl") {
+            let after = match strip_prefix(rest, kind) {
+                Option.Some(value: a) => a,
+                Option.None() => { continue; },
+            };
+            if !(text_starts_with(after, " ") || text_starts_with(after, "<")) {
+                continue;
+            }
+            let name = if kind == "impl" { impl_self_type(after) } else { ident(text_trim_start(after)) };
+            vec_push(out, Item(line: n, kind: kind, name: name));
+        }
+        match strip_prefix(rest, "macro_rules!") {
+            Option.Some(value: after) => vec_push(out, Item(line: n, kind: "macro_rules!", name: ident(text_trim_start(after)))),
+            Option.None() => 0,
+        };
+    }
+    out
+}
+
+/// Every `.rs` file under `dir`, repository-relative, sorted; `None` when `dir` cannot be read.
+fn rs_files_under(h: Caps, root: Str, dir: Str) -> Option[Strs] ! { io } {
+    let io = h.io;
+    let all = match file_walk(io, f"{root}/{dir}") {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => { return Option[Strs].None(); },
+    };
+    let out = strs_new();
+    let cut = str_len(root) + 1;
+    for p in all {
+        if text_ends_with(p, ".rs") {
+            match file_metadata(io, p) {
+                Result.Ok(value: m) => match m.kind {
+                    FileKind.Directory() => 0,
+                    FileKind.Regular() => strs_push(out, str_slice(p, cut, str_len(p))),
+                    FileKind.Other() => strs_push(out, str_slice(p, cut, str_len(p))),
+                },
+                Result.Err(error: e) => 0,
+            };
+        }
+    }
+    Option[Strs].Some(value: strs_sort(out))
+}
+
+fn named(names: Strs, name: Str) -> Bool ! {} {
+    for n in names {
+        if n == name {
+            return true;
+        }
+    }
+    false
+}
+
+/// The problems `boundary_problems` reports for the tree at `root`.
+pub fn gate_module_boundaries(h: Caps, root: Str) -> Strs ! { io } {
+    let problems = strs_new();
+    for e in register() {
+        let text = match read_rust(h, f"{root}/{e.file}") {
+            Result.Ok(value: t) => t,
+            Result.Err(error: err) => {
+                strs_push(problems, f"{e.file}: registered as a split module's entry, but not in the tree; update the module-boundaries register");
+                continue;
+            },
+        };
+        for it in top_level_items(text) {
+            if !named(e.may_define, it.name) {
+                strs_push(problems, f"{e.file}:{it.line}: `{it.kind} {it.name}` is a new concern in an entry module; put it in a module of its own, or — if it is the façade, shared context or orchestration — name it in the module-boundaries register (xtask/src/checks/modules.rs)");
+            }
+        }
+        if e.directory {
+            let dir = path_dir(e.file);
+            let files = match rs_files_under(h, root, dir) {
+                Option.Some(value: fs) => fs,
+                Option.None() => { continue; },
+            };
+            for file in files {
+                let opens = match read_rust(h, f"{root}/{file}") {
+                    Result.Ok(value: t) => text_starts_with(text_trim_start(t), "//!"),
+                    Result.Err(error: err) => false,
+                };
+                if !opens {
+                    strs_push(problems, f"{file}: no `//!` line saying what this module is responsible for");
+                }
+            }
+        }
+    }
+    problems
+}

@@ -1,0 +1,168 @@
+// The guide-from-grammar gate (R7, ported from `xtask/src/guide.rs`): `docs/guide.md`'s syntax
+// reference is what `docs/grammar.ebnf` produces. Only the section between the markers is
+// generated; everything around it is prose somebody wrote.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+const BEGIN: Str = "<!-- generated from docs/grammar.ebnf: begin -->";
+const END: Str = "<!-- generated from docs/grammar.ebnf: end -->";
+
+/// One rule, with the comment written above it and its examples.
+struct Rule {
+    name: Str,
+    body: Strs,
+    prose: Strs,
+    examples: Strs,
+}
+
+/// The closer comes off first: taking the leading `*` first turns ` *)` into `)`.
+fn comment_line(t: Str) -> Str ! {} {
+    text_trim(trim_start_matches(trim_start_matches(trim_end_matches(t, "*)"), "(*"), "*"))
+}
+
+fn body_of(r: Rule) -> Str ! {} {
+    str_join(r.body, " ")
+}
+
+/// The grammar's rules in source order.
+fn rules(text: Str) -> Vec[Rule] ! {} {
+    let out = vec_new[Rule]();
+    let mut prose = strs_new();
+    let mut examples = strs_new();
+    let mut open = 0 - 1;
+    let mut in_comment = false;
+    for line in lines(text) {
+        let trimmed = text_trim(line);
+        if in_comment {
+            match strip_prefix(trimmed, "* @example ") {
+                Option.Some(value: rest) => strs_push(examples, text_trim(trim_end_matches(rest, "*)"))),
+                Option.None() => {
+                    let p = comment_line(trimmed);
+                    if str_len(p) > 0 { strs_push(prose, p) } else { 0 }
+                },
+            };
+            if text_ends_with(trimmed, "*)") {
+                in_comment = false;
+            }
+            continue;
+        }
+        if text_starts_with(trimmed, "(*") {
+            match strip_prefix(trimmed, "(* @example ") {
+                Option.Some(value: rest) => strs_push(examples, text_trim(trim_end_matches(rest, "*)"))),
+                Option.None() => {
+                    let p = comment_line(trimmed);
+                    if str_len(p) > 0 { strs_push(prose, p) } else { 0 }
+                },
+            };
+            if !text_ends_with(trimmed, "*)") {
+                in_comment = true;
+            }
+            continue;
+        }
+        // A blank line ends the attachment: a comment separated from a rule by one is not its prose.
+        if str_len(trimmed) == 0 {
+            if open < 0 {
+                prose = strs_new();
+                examples = strs_new();
+            }
+            continue;
+        }
+        if open < 0 {
+            let eq = find(trimmed, "=");
+            if eq >= 0 {
+                let body = strs_new();
+                strs_push(body, text_trim(str_slice(trimmed, eq + 1, str_len(trimmed))));
+                vec_push(out, Rule(name: text_trim(str_slice(trimmed, 0, eq)), body: body, prose: prose, examples: examples));
+                prose = strs_new();
+                examples = strs_new();
+                open = vec_len(out) - 1;
+            }
+        } else {
+            strs_push(vec_get(out, open).body, trimmed);
+        }
+        if text_ends_with(trimmed, ";") {
+            open = 0 - 1;
+        }
+    }
+    out
+}
+
+/// The generated section, without the markers.
+fn section(text: Str) -> Str ! {} {
+    let rs = rules(text);
+    let out = strs_new();
+    strs_push(out, "Every rule below is checked against the parser by\n");
+    strs_push(out, "`crates/nazm-syntax/tests/grammar.rs`, and every example is a program that parser\n");
+    strs_push(out, "accepts.\n\n");
+    strs_push(out, "| Rule | Definition |\n");
+    strs_push(out, "| --- | --- |\n");
+    for r in rs {
+        let body = text_replace(text_trim(trim_end_matches(body_of(r), ";")), "|", "\\|");
+        strs_push(out, f"| `{r.name}` | `{body}` |\n");
+    }
+    strs_push(out, "\n");
+    for r in rs {
+        strs_push(out, f"### `{r.name}`\n\n");
+        strs_push(out, "```ebnf\n");
+        strs_push(out, f"{r.name} = {text_trim(body_of(r))}\n");
+        strs_push(out, "```\n\n");
+        for p in r.prose {
+            strs_push(out, f"{p}\n");
+        }
+        if strs_len(r.prose) > 0 {
+            strs_push(out, "\n");
+        }
+        for e in r.examples {
+            strs_push(out, "```nazm\n");
+            strs_push(out, f"{e}\n");
+            strs_push(out, "```\n\n");
+        }
+    }
+    str_join(out, "")
+}
+
+/// The whole guide with the generated section spliced in, or `Err` as `render` words it.
+fn render(h: Caps, root: Str) -> Result[Str, Str] ! { io } {
+    let grammar = f"{root}/docs/grammar.ebnf";
+    let guide = f"{root}/docs/guide.md";
+    let text = match read_rust(h, grammar) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{grammar}: {e}"); },
+    };
+    let existing = match read_rust(h, guide) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{guide}: {e}"); },
+    };
+    let b = find(existing, BEGIN);
+    let e = find(existing, END);
+    if b < 0 || e < 0 {
+        return Result[Str, Str].Err(error: f"{guide}: the markers {BEGIN} and {END} must both be present");
+    }
+    if e < b {
+        return Result[Str, Str].Err(error: f"{guide}: the markers are the wrong way round");
+    }
+    let head = str_slice(existing, 0, b + str_len(BEGIN));
+    let tail = str_slice(existing, e, str_len(existing));
+    Result[Str, Str].Ok(value: f"{head}\n\n{section(text)}\n{tail}")
+}
+
+/// Whether the guide on disk is what the grammar produces.
+pub fn gate_guide(h: Caps, root: Str) -> Strs ! { io } {
+    let problems = strs_new();
+    let want = match render(h, root) {
+        Result.Ok(value: w) => w,
+        Result.Err(error: e) => { strs_push(problems, e); return problems; },
+    };
+    let guide = f"{root}/docs/guide.md";
+    let have = match read_rust(h, guide) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { strs_push(problems, f"{guide}: {e}"); return problems; },
+    };
+    if have != want {
+        strs_push(problems, f"{guide} is not what docs/grammar.ebnf produces. Run `cargo xtask guide` to rewrite it.");
+    }
+    problems
+}

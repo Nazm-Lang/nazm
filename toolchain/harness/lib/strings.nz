@@ -1,0 +1,210 @@
+// Rust's `str` methods the ported gates lean on, with Rust's meaning (R7): a port that splits or
+// trims differently from the gate it ports reports different problems, so each of these says which
+// Rust method it is and does what that method does, on bytes (every pattern here is ASCII).
+
+use "@std/text"
+
+/// `s.strip_prefix(p)`.
+pub fn strip_prefix(s: Str, p: Str) -> Option[Str] ! {} {
+    if text_starts_with(s, p) { Option[Str].Some(value: str_slice(s, str_len(p), str_len(s))) } else { Option[Str].None() }
+}
+
+/// `s.strip_suffix(p)`.
+pub fn strip_suffix(s: Str, p: Str) -> Option[Str] ! {} {
+    if text_ends_with(s, p) { Option[Str].Some(value: str_slice(s, 0, str_len(s) - str_len(p))) } else { Option[Str].None() }
+}
+
+/// `s.trim_end_matches(p)`: every trailing copy of `p` removed.
+pub fn trim_end_matches(s: Str, p: Str) -> Str ! {} {
+    let n = str_len(p);
+    if n == 0 {
+        return s;
+    }
+    let mut end = str_len(s);
+    while end >= n && str_slice(s, end - n, end) == p {
+        end = end - n;
+    }
+    str_slice(s, 0, end)
+}
+
+/// `s.trim_start_matches(p)`: every leading copy of `p` removed.
+pub fn trim_start_matches(s: Str, p: Str) -> Str ! {} {
+    let n = str_len(p);
+    if n == 0 {
+        return s;
+    }
+    let m = str_len(s);
+    let mut start = 0;
+    while start + n <= m && str_slice(s, start, start + n) == p {
+        start = start + n;
+    }
+    str_slice(s, start, m)
+}
+
+/// `s.find(p)`, from byte `from` on: the byte offset of the first occurrence, or `-1`.
+pub fn find_from(s: Str, p: Str, from: Int) -> Int ! {} {
+    let n = str_len(p);
+    let m = str_len(s);
+    if n == 0 {
+        return if from <= m { from } else { 0 - 1 };
+    }
+    let first = str_byte(p, 0);
+    let mut i = from;
+    while i + n <= m {
+        if str_byte(s, i) == first && str_slice(s, i, i + n) == p {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+/// `s.find(p)`, or `-1`.
+pub fn find(s: Str, p: Str) -> Int ! {} {
+    find_from(s, p, 0)
+}
+
+/// `s.split(sep)`, every piece, empty ones included (`text_split`'s meaning, said here once).
+pub fn split(s: Str, sep: Str) -> Strs ! {} {
+    let out = strs_new();
+    let n = str_len(sep);
+    let mut start = 0;
+    let mut at = find_from(s, sep, 0);
+    while at >= 0 {
+        strs_push(out, str_slice(s, start, at));
+        start = at + n;
+        at = find_from(s, sep, start);
+    }
+    strs_push(out, str_slice(s, start, str_len(s)));
+    out
+}
+
+/// `char::is_whitespace` for an ASCII byte.
+pub fn is_space(b: Int) -> Bool ! {} {
+    b == 32 || b == 9 || b == 10 || b == 13 || b == 11 || b == 12
+}
+
+/// `s.split_whitespace()`.
+pub fn split_whitespace(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    let m = str_len(s);
+    let mut i = 0;
+    while i < m {
+        while i < m && is_space(str_byte(s, i)) {
+            i = i + 1;
+        }
+        let start = i;
+        while i < m && !is_space(str_byte(s, i)) {
+            i = i + 1;
+        }
+        if i > start {
+            strs_push(out, str_slice(s, start, i));
+        }
+    }
+    out
+}
+
+/// `char::is_alphanumeric() || c == '_'` for an ASCII byte; a byte of a multi-byte character
+/// counts, as the character would.
+pub fn is_ident_byte(b: Int) -> Bool ! {} {
+    (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 || b >= 128
+}
+
+/// The leading identifier of `s`: `s.chars().take_while(|c| c.is_alphanumeric() || *c == '_')`.
+pub fn ident(s: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < str_len(s) && is_ident_byte(str_byte(s, i)) {
+        i = i + 1;
+    }
+    str_slice(s, 0, i)
+}
+
+/// `s.matches(p).count()`, without overlap.
+pub fn count_matches(s: Str, p: Str) -> Int ! {} {
+    let n = str_len(p);
+    if n == 0 {
+        return str_len(s) + 1;
+    }
+    let mut count = 0;
+    let mut at = find_from(s, p, 0);
+    while at >= 0 {
+        count = count + 1;
+        at = find_from(s, p, at + n);
+    }
+    count
+}
+
+/// Each line of `s` with its one-based number: `s.lines()` (a `\r` before a `\n` removed).
+pub fn lines(s: Str) -> Strs ! {} {
+    text_lines(s)
+}
+
+/// The length in bytes of the whitespace character (`char::is_whitespace`, Unicode's
+/// `White_Space`) that starts at byte `i` of `s`, or `0` when none does.
+pub fn ws_at(s: Str, i: Int) -> Int ! {} {
+    let m = str_len(s);
+    let b = str_byte(s, i);
+    if b < 128 {
+        return if is_space(b) { 1 } else { 0 };
+    }
+    if b == 194 && i + 1 < m {
+        let c = str_byte(s, i + 1);
+        return if c == 133 || c == 160 { 2 } else { 0 };
+    }
+    if b == 225 && i + 2 < m {
+        return if str_byte(s, i + 1) == 154 && str_byte(s, i + 2) == 128 { 3 } else { 0 };
+    }
+    if b == 226 && i + 2 < m {
+        let c = str_byte(s, i + 1);
+        let d = str_byte(s, i + 2);
+        if c == 128 && ((d >= 128 && d <= 138) || d == 168 || d == 169 || d == 175) {
+            return 3;
+        }
+        if c == 129 && d == 159 {
+            return 3;
+        }
+        return 0;
+    }
+    if b == 227 && i + 2 < m {
+        return if str_byte(s, i + 1) == 128 && str_byte(s, i + 2) == 128 { 3 } else { 0 };
+    }
+    0
+}
+
+/// The length of the whitespace character that ends at byte `end` (exclusive), or `0`.
+fn ws_before(s: Str, end: Int) -> Int ! {} {
+    if end >= 1 && ws_at(s, end - 1) == 1 {
+        return 1;
+    }
+    if end >= 2 && ws_at(s, end - 2) == 2 {
+        return 2;
+    }
+    if end >= 3 && ws_at(s, end - 3) == 3 {
+        return 3;
+    }
+    0
+}
+
+/// `s.trim_start()`, Unicode whitespace.
+pub fn trim_start_ws(s: Str) -> Str ! {} {
+    let m = str_len(s);
+    let mut i = 0;
+    while i < m && ws_at(s, i) > 0 {
+        i = i + ws_at(s, i);
+    }
+    str_slice(s, i, m)
+}
+
+/// `s.trim_end()`, Unicode whitespace.
+pub fn trim_end_ws(s: Str) -> Str ! {} {
+    let mut end = str_len(s);
+    while end > 0 && ws_before(s, end) > 0 {
+        end = end - ws_before(s, end);
+    }
+    str_slice(s, 0, end)
+}
+
+/// `s.trim()`, Unicode whitespace.
+pub fn trim_ws(s: Str) -> Str ! {} {
+    trim_end_ws(trim_start_ws(s))
+}
