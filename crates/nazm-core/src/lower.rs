@@ -3536,9 +3536,10 @@ impl<'a> Lower<'a> {
                 .and_then(|v| v.fields.first())
                 .map(|f| f.ty)
         };
-        let (Some(ok_ty), Some(err_ty)) = (payload(p.operand, p.ok), payload(p.operand, p.err))
-        else {
-            return defect(at, "a `?` on a `Result` whose variants carry no payload");
+        // An `Option`'s `None` (R1, 5b.17) carries nothing: nothing is bound, and `None` rebuilt.
+        let err_ty = payload(p.operand, p.err);
+        let Some(ok_ty) = payload(p.operand, p.ok) else {
+            return defect(at, "a `?` whose success carries no payload");
         };
         let into_arity = self
             .res
@@ -3547,7 +3548,10 @@ impl<'a> Lower<'a> {
             .and_then(|d| d.variants.get(p.into_err as usize))
             .map_or(0, |v| v.fields.len());
         let ok = self.temp(Temp::Ok, ok_ty, at);
-        let err = self.temp(Temp::Err, err_ty, at);
+        let err = match err_ty {
+            Some(t) => Some(self.temp(Temp::Err, t, at)),
+            None => None,
+        };
         let local = |l: LocalId, ty: Type| Expr {
             kind: ExprKind::Local(l),
             ty: Some(ty),
@@ -3560,40 +3564,47 @@ impl<'a> Lower<'a> {
                 enumeration: p.into,
                 variant: p.into_err,
                 arity: u32::try_from(into_arity).unwrap_or(u32::MAX),
-                fields: vec![Init {
-                    field: 0,
-                    value: local(err, err_ty),
-                    at,
-                }],
+                fields: match (err, err_ty) {
+                    (Some(err), Some(err_ty)) => vec![Init {
+                        field: 0,
+                        value: local(err, err_ty),
+                        at,
+                    }],
+                    _ => Vec::new(),
+                },
             },
             ty: Some(Type::Enum(p.into)),
             at,
         };
         let leave = self.leave(rebuilt, at)?;
-        let arm = |variant: u32, local: LocalId, stmts: Vec<Stmt>, tail: Option<Box<Expr>>| {
-            let ends = if stmts.iter().any(|s| s.ends() == Ends::Transfers) {
-                Ends::Transfers
-            } else {
-                Ends::FallsThrough
+        let arm =
+            |variant: u32, local: Option<LocalId>, stmts: Vec<Stmt>, tail: Option<Box<Expr>>| {
+                let ends = if stmts.iter().any(|s| s.ends() == Ends::Transfers) {
+                    Ends::Transfers
+                } else {
+                    Ends::FallsThrough
+                };
+                Arm {
+                    variant,
+                    bindings: local
+                        .map(|local| Binding {
+                            field: 0,
+                            local,
+                            at,
+                        })
+                        .into_iter()
+                        .collect(),
+                    body: Block {
+                        stmts,
+                        tail,
+                        ends,
+                        owns: local.into_iter().collect(),
+                        at,
+                    },
+                    at,
+                }
             };
-            Arm {
-                variant,
-                bindings: vec![Binding {
-                    field: 0,
-                    local,
-                    at,
-                }],
-                body: Block {
-                    stmts,
-                    tail,
-                    ends,
-                    owns: vec![local],
-                    at,
-                },
-                at,
-            }
-        };
-        let ok_arm = arm(p.ok, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
+        let ok_arm = arm(p.ok, Some(ok), Vec::new(), Some(Box::new(local(ok, ok_ty))));
         let err_arm = arm(p.err, err, vec![leave], None);
         Ok(Expr {
             kind: ExprKind::Match(Box::new(Match {
