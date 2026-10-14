@@ -17109,11 +17109,18 @@ find = "        if self.defer_floor == Some(self.loop_depth) {"
 replace = "        if self.defer_floor.is_some() {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::a_deferred_body_leaves_nothing" }]
 
+# `r1b-provenance-reads-a-defer-where-it-is-written` is retired as **equivalent** (R1 close,
+# 2026-10-14): it SURVIVED its killer, and the whole workspace suite with it applied passed (2,894
+# tests; the 41 selfhost refusals are the host's). Provenance is flow-insensitive to a fixed point:
+# a binding carries the join of everything ever assigned to it, and a walk that read a binding
+# before it grew walks again, so the deferred body walked where it is written already sees what is
+# assigned after it. The second walk, at the block's end, is redundant. The mutant below removes
+# both walks, which is the rule.
 [[mutation]]
-name = "r1b-provenance-reads-a-defer-where-it-is-written"
-why = "provenance walks a deferred body only where it is written, missing what is assigned before it runs"
+name = "r1b-provenance-never-reads-a-defer"
+why = "provenance never walks a deferred body, so what it writes is unchecked against the flow policy"
 file = "crates/nazm-core/src/provenance.rs"
-find = "                self.defers.push(&df.body);"
+find = "                self.block(&df.body);\n                self.defers.push(&df.body);"
 replace = "                let _ = &df.body;"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::a_deferred_body_sees_what_is_assigned_after_it" }]
 
