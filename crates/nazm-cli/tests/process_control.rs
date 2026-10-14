@@ -34,7 +34,11 @@ fn scripted(d: &Path) {
     let script = d.join("sub/run.sh");
     std::fs::write(
         &script,
-        "#!/bin/sh\necho \"ran in $(basename \"$(pwd -P)\")\"\n",
+        // `$0` is the path the program was started by: made absolute beside the directory, so
+        // where it was looked for was not the system's choice.
+        // One write, so the parent reads it in one piece everywhere.
+        "#!/bin/sh\ncase \"$0\" in /*/sub/./run.sh) how=absolutely;; *) how=\"$0\";; esac\n\
+         printf 'ran in %s\\nnamed %s\\n' \"$(basename \"$(pwd -P)\")\" \"$how\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -140,7 +144,7 @@ fn a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere()
     let runs = runs_in(SPAWNING, &scripted);
     alike(&runs, 0, &|_| {
         "A=first\nAB=second\nMID=x=y\nPATH=/usr/bin:/bin\nZED=last\nexit 0\n\
-         ran in sub\nexit 0\n\
+         ran in sub\nnamed absolutely\nexit 0\n\
          sub\nexit 0\n\
          no = InvalidInput\nempty name InvalidInput\ntwice InvalidInput\nflag InvalidInput\n\
          no dir NotFound\ndir a file NotADirectory\nno program NotFound\n\
