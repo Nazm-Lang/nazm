@@ -171,6 +171,7 @@ impl Checker<'_> {
         args: &[Expr],
         span: Span,
         sig: &Signature,
+        expected: Option<Type>,
     ) -> Type {
         let Some(owner) = sig.owner else {
             return sig.ret;
@@ -335,6 +336,22 @@ impl Checker<'_> {
             }
         }
 
+        // A parameter the arguments leave unsettled is settled by the type the result is wanted
+        // as, where one is (R1, 5b.16): `let v: Vec[Str] = vec_new()`. The arguments decide first.
+        if let Some(want) = expected {
+            if solved.iter().any(Option::is_none) {
+                let _ = self.unify(
+                    sig.ret,
+                    want,
+                    owner,
+                    &mut solved,
+                    &mut bound,
+                    caller,
+                    args.len(),
+                );
+            }
+        }
+
         let missing: Vec<String> = solved
             .iter()
             .enumerate()
@@ -359,8 +376,9 @@ impl Checker<'_> {
                 )
                 .secondary(sig.name_span, "declared here")
                 .help(format!(
-                    "a type argument is inferred from the arguments and never from what the \
-                     result is used for. Write it: `{name}[…](…)`"
+                    "a type argument is inferred from the arguments, then from the type the \
+                     result is wanted as. Write it — `{name}[…](…)` — or give the result a type: \
+                     `let x: T = …`"
                 )),
             );
         }

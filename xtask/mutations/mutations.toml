@@ -18851,3 +18851,65 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = '''                            bracket_span: Span::new(self.file, span.start, span.start),'''
 replace = '''                            bracket_span: *span,'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::methods_and_indexes_by_name_run_alike_everywhere" }]
+
+# --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
+
+[[mutation]]
+name = "r1-a-let-s-written-type-is-ignored"
+why = "`let x: T = e` binds `e`'s own type, so `let o: Option[Int] = None` is `N0352`"
+file = "crates/nazm-core/src/check/stmt.rs"
+find = '''                        let got = self.value_type(&l.value, Some(want));'''
+replace = '''                        let got = self.value_type(&l.value, None);'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-the-wanted-type-settles-nothing"
+why = "a generic call's open parameter is not settled by the type its result is wanted as"
+file = "crates/nazm-core/src/check/generic.rs"
+find = '''            if solved.iter().any(Option::is_none) {
+                let _ = self.unify('''
+replace = '''            if solved.iter().any(Option::is_none) && false {
+                let _ = self.unify('''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-a-block-comment-is-a-slash"
+why = "`/*` is lexed as `/` then `*`, so a block comment is a syntax error"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''    if c == b'/' && byte(i + 1) == Some(b'*') {'''
+replace = '''    if c == b'/' && byte(i + 1) == Some(b'!') {'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-block-comments-do-not-nest"
+why = "a block comment ends at its first `*/`, so a nested one leaves text outside it"
+file = "crates/nazm-syntax/src/lexer.rs"
+find = '''            if b == b'/' && byte(i + 1) == Some(b'*') {
+                depth += 1;'''
+replace = '''            if b == b'/' && byte(i + 1) == Some(b'*') && depth == 0 {
+                depth += 1;'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-loop-is-reserved"
+why = "`loop { … }` is not read as `while true`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''        if matches!(self.peek(), TokenKind::Ident(w) if w == "loop")'''
+replace = '''        if matches!(self.peek(), TokenKind::Ident(w) if w == "loop_")'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-while-let-never-leaves"
+why = "`while let`'s other arm continues rather than breaks, so the loop never ends"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''                        statements: vec![Stmt::Break { span: none }],'''
+replace = '''                        statements: vec![Stmt::Continue { span: none }],'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+[[mutation]]
+name = "r1-an-impl-s-methods-keep-their-names"
+why = "an impl without a trait's methods keep their own names, so `p.sum()` finds no `point_sum`"
+file = "crates/nazm-syntax/src/parser.rs"
+find = '''            f.name = format!("{prefix}_{}", f.name);'''
+replace = '''            f.name = f.name.clone();'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]

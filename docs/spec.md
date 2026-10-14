@@ -71,6 +71,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `line-breaks` | EXPERIMENTAL | R1, 5b.11 and 5b.19: `else if`, and a line break or a block's `}` for a statement's `;`; EXPERIMENTAL until R1 closes |
 | `short-variants` | EXPERIMENTAL | R1, 5b.14: an enum construction infers its type arguments; `Some`, `None`, `Ok`, `Err`; a variant without `()`; EXPERIMENTAL until R1 closes |
 | `named-methods` | EXPERIMENTAL | R1, 5b.15: a method no trait gives is a function by name; `xs[i]` and `xs[i] = v` on a sequence; EXPERIMENTAL until R1 closes |
+| `conveniences` | EXPERIMENTAL | R1, 5b.16 and 5b.17: `let x: T`, inference from the wanted type, block comments, `loop`, `while let`, an impl without a trait; EXPERIMENTAL until R1 closes |
 | `no-result` | EXPERIMENTAL | R1, 5b.2: a function with no result type; EXPERIMENTAL until R1 closes |
 | `main-ends` | EXPERIMENTAL | R1, 5b.1 and 5b.3: `main` holds an `OutCap` unwritten; its result is the exit status; EXPERIMENTAL until R1 closes |
 | `break-continue` | STABLE 1.0 | |
@@ -983,7 +984,9 @@ required, so the rest of this list is unchanged.
 #### Calling a generic function
 
 The type arguments are either **written** or **inferred from the arguments**, and nothing
-else:
+else — *(R1, 5b.16:)* except that a parameter the arguments leave open is then settled by the
+type the call's result is wanted as, where it is wanted as one (*Conveniences for the first
+program*):
 
 - Inference unifies each parameter's declared type with the argument's type, recursing
   through applications and `Vec`: passing a `Vec[Point]` for `Vec[T]` gives `T = Point`.
@@ -1578,6 +1581,21 @@ refused as a missing `;`, which with lines ending statements is no longer a mist
 which `else if` makes of every link of a chain — may have branches that end differently, in
 values of different types or one in none: it produces nothing, as an `if` without `else` does.
 Where a value is wanted the rule above is unchanged, and so is its error.
+
+### Conveniences for the first program
+<!-- id: conveniences -->
+
+*R1, 5b.16 and 5b.17; EXPERIMENTAL until R1 closes.* Each is a spelling of something the language
+already had, and means exactly that.
+
+| Written | Means |
+| --- | --- |
+| `let x: T = e` | `e` checked against `T` (`N0300` otherwise), and the binding is a `T`: `let o: Option[Int] = None` |
+| a generic call whose arguments leave a type parameter open, where its result is wanted as a type | the parameter settled from that type: `let v: Vec[Str] = vec_new()`, `vec_new()` as a function's `Vec[Int]` result. The arguments decide first; where neither does, `N0354` |
+| `/* … */` | a comment, which may span lines and nests; one the file ends inside is `N0007` |
+| `loop { … }` | `while true { … }` |
+| `while let P = e { … }` | `while true { match e { P => { … }, _ => { break } } }`: `e` evaluated afresh each time |
+| `impl Point { fn area(self: Point) -> Int { … } }` | the function `point_area(self: Point) -> Int` — the type's name in lower case, then the method's — which `p.area()` reads by name (*Methods and indexes by name*); an impl without a trait has no other effect |
 
 ### Methods and indexes by name
 <!-- id: named-methods -->
