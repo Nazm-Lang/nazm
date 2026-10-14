@@ -1,0 +1,20 @@
+fn f(o: Option[Int]) -> Int {
+    let Some(x) = o else { return 0; };
+    let y: Int = x + 1;
+    let mut z: Vec[Int] = vec_new[Int]();
+    if let Some(w) = o { w } else if let None = o { 1 } else { 2 }
+}
+fn g(o: Option[Int]) -> Int {
+    while let Some(v) = o { break; }
+    loop { break; }
+    for i in 0..10 { continue; }
+    for x in xs { }
+    for (a, b) in pairs { print(a); }
+    defer { print("bye"); }
+    let v = if let Ok(q) = r { q } else { 0 };
+    0
+}
+fn h() -> Int {
+    let Some(x) = o
+    x
+}

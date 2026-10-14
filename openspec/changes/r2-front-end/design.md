@@ -40,7 +40,19 @@ diagnostic as in D2. `Debug` is exhaustive by construction — every field of ev
 included, in declaration order — so the comparison cannot drift from the tree the way a hand-written
 dump does (the `selfhost.rs` dump collapses closures, method calls and every R1 node to a
 placeholder). The Nazm parser's driver prints the same text from its arena. The diagnostics' spans
-are what the checker will point at, so they are compared from the start.
+are what the checker will point at, so they are compared from the start. Both sides write a span
+`start..end` rather than `Debug`'s seven lines (`Span { file: FileId(0), … }`): the dumper rewrites
+exactly that shape and nothing else, and a span of another file would stay whole and show.
+
+**D11 — The parser is a port, and its tree is shaped as `Debug` shows it.** `compiler/syntax.nz`
+ports `nazm-syntax/src/parser.rs` function by function (recursive descent, Pratt binary operators,
+the reference's recovery, cascade muting, nesting bound and every desugaring — `else if`,
+`while let`, `loop`, `let … else`, `for` over a pattern, `print(e)`, `Some(x)`, method names of
+inherent impls, trait default methods). Its arena's nodes are structs with named fields, tuples,
+lists, atoms, strings and spans — the shapes `{:#?}` prints — so the printer is one function and the
+field names are written once, where each node is built. It does not replace `parse.nz` yet: the
+checker and emitter still read the post-order arena (task 2.8). The concrete syntax tree the
+reference builds beside the abstract one is not ported; nothing downstream of the parser reads it.
 
 **D4 — Diagnostics are compared as `nazm check --json` objects, whole.** Code, severity, message,
 primary span and label, secondary labels, help and fixes, in the reference's order. The text form

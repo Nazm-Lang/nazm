@@ -68,6 +68,37 @@ fn diag_line(d: &nazm_diag::Diagnostic) -> String {
     )
 }
 
+/// `{:#?}` with every `Span { file: FileId(0), start: S, end: E }` written `S..E` (design D3):
+/// seven lines a span become one, and nothing else changes. A span of another file is left
+/// whole, so it would show as a difference.
+fn compact_spans(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if line.ends_with("Span {") && i + 6 < lines.len() {
+            let t = |k: usize| lines[i + k].trim();
+            let (s, e) = (t(4), t(5));
+            if t(1) == "file: FileId(" && t(2) == "0," && t(3) == ")," && t(6).starts_with('}') {
+                if let (Some(s), Some(e)) = (
+                    s.strip_prefix("start: ").and_then(|v| v.strip_suffix(',')),
+                    e.strip_prefix("end: ").and_then(|v| v.strip_suffix(',')),
+                ) {
+                    out.push_str(&line[..line.len() - "Span {".len()]);
+                    out.push_str(&format!("{s}..{e}{}\n", &t(6)[1..]));
+                    i += 7;
+                    continue;
+                }
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+        i += 1;
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (Some(mode), Some(path)) = (args.get(1), args.get(2)) else {
@@ -99,7 +130,7 @@ fn main() {
             .stack_size(nazm_syntax::PARSE_STACK_BYTES + (64 << 20))
             .spawn(move || {
                 let (program, errors) = nazm_syntax::parse_source(&text);
-                let mut s = format!("{program:#?}\n");
+                let mut s = compact_spans(&format!("{program:#?}\n"));
                 for e in &errors {
                     s.push_str(&diag_line(e));
                     s.push('\n');

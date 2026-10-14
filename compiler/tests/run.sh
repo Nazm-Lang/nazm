@@ -2,7 +2,7 @@
 # R2's comparisons (`openspec/changes/r2-front-end/design.md`): the front end written in Nazm
 # against the Rust toolchain, on every input.
 #
-#   compiler/tests/run.sh [MODE...]      MODE: tokens (default: every mode built so far)
+#   compiler/tests/run.sh [MODE...]      MODE: tokens, tree (default: every mode)
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
 # under a deadline; the reference side is `compiler/tests/refdump`, built from this checkout's
@@ -25,7 +25,7 @@ deadline=${R2_DEADLINE:-20}
 jobs=${R2_JOBS:-6}
 
 [ -x "$nazm" ] || { echo "run.sh: no reference nazm at $nazm (set NAZM)" >&2; exit 2; }
-modes=${*:-tokens}
+modes=${*:-tokens tree}
 
 mkdir -p "$out/bin"
 
@@ -46,10 +46,12 @@ list="$out/inputs.txt"
 for mode in $modes; do
   case $mode in
     tokens) driver=tokens ;;
+    tree) driver=tree ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
-  "$nazm" build --heap-limit "$heap" "$root/compiler/$driver.nz" -o "$exe" >/dev/null \
+  # The parser recurses with the program's nesting, as the reference's does on its 24 MiB stack.
+  "$nazm" build --heap-limit "$heap" --stack-size 256M "$root/compiler/$driver.nz" -o "$exe" >/dev/null \
     || { echo "run.sh: compiler/$driver.nz did not build" >&2; exit 2; }
   rm -rf "$out/$mode"
   mkdir -p "$out/$mode"

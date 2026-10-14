@@ -1,0 +1,11 @@
+fn f() -> Int {
+    let a = 1
+    let b = 2
+    g(a)
+    (b)
+    [1, 2]
+    x
+        .y
+    a
+}
+fn g(x: Int) -> Int { if x > 0 { 1 } else { 0 } }

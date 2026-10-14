@@ -1,0 +1,28 @@
+fn f(x: Int, v: Vec[Int], t: (Int, (Int, Int))) -> Int {
+    let a = !true && false || !(x == 1);
+    let b = ~x & 0xFF | x ^ 3 << 2 >> 1;
+    let c = [1, 2, 3];
+    let d = [0; 16];
+    let e = c[0] + d[x + 1] + v[v[0]];
+    let f = t.0 + t.1.0 + t.1.1;
+    let g = x.show().len();
+    let h = Show.show(x);
+    let i = identity[Int](7);
+    let j = Maybe[Int].None();
+    let k = Pair[Int, Str](a: 1, b: "x");
+    let l = m::f(1) + m::CONST + m::Point(x: 1).x;
+    let m = fn(a: Int) -> Int { a + x };
+    let n = fn(a: Int, b: Int) -> Bool ! {io} { a < b };
+    let o = -9223372036854775808;
+    let p = 18446744073709551615;
+    let q = -18446744073709551615;
+    let r = 1.5e3 + 2.0;
+    let s = (1, 2, 3);
+    let u = r?.field?;
+    let w = { let z = 1; z };
+    let y = State.Ready;
+    let z = Some(1);
+    let aa = Err(2);
+    let bb = None;
+    x - -x * -(-x)
+}
