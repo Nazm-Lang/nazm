@@ -1,0 +1,3 @@
+use "lib.nz";
+fn helper() -> Int { 2 }
+fn main() -> Int { helper() }

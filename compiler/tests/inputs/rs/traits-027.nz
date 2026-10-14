@@ -1,0 +1,2 @@
+impl Nowhere for Int { fn a(self: Int) -> Int { 1 } }
+fn main() -> Int { 0 }

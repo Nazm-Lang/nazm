@@ -1,0 +1,2 @@
+pub fn tag() -> Str { "é→😀" } pub fn helper(n: Int) -> Int { n }
+pub fn again() -> Int { let s = "😀→"; helper(2) }

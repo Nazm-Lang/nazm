@@ -1,0 +1,6 @@
+fn bad(io: IoCap, c: Chan, z: Int) -> Int ! { io } { let r = chan_recv(c, ints_new()); 10 / z }
+fn good(io: IoCap, c: Chan, done: Chan) -> Int ! { io } { chan_send(c, 1); chan_send(done, 7); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let c = chan_new(1); let done = chan_new(1); let got = ints_new();
+scope { spawn bad(io, c, str_len("")); spawn good(io, c, done); let r = chan_recv(done, got); }
+print(int_to_str(ints_get(got, 0))); 0 }

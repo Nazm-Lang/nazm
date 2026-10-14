@@ -1,0 +1,9 @@
+struct Two {
+    a: Str,
+    b: Int,
+}
+fn main() -> Int {
+    let n = 0;
+    let t = Two(a: str_concat("ab", "cd"), b: 1 / n);
+    t.b
+}

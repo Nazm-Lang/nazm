@@ -1,0 +1,18 @@
+fn feed(c: Chan) -> Int {
+    let mut i = 0;
+    while i < 50 {
+        if chan_send(c, i) == false { return i; }
+        i = i + 1;
+    }
+    i
+}
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(1);
+    let buf = ints_new();
+    scope {
+        spawn feed(c);
+        chan_recv(c, buf);
+        chan_close(c);
+    }
+    ints_len(buf)
+}

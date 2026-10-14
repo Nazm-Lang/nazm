@@ -1,0 +1,2 @@
+fn late(c: Chan, n: Int) -> Int { let mut i = 0; let mut x = 0; while i < n { x = (x + i) % 97; i = i + 1; } chan_send(c, x + 1000); 0 }
+fn main(t: SpawnCap) -> Int { let c = chan_new(1); let buf = ints_new(); scope { spawn late(c, 3000000); chan_recv(c, buf); } ints_get(buf, 0) }

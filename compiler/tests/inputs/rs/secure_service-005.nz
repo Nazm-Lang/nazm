@@ -1,0 +1,1 @@
+fn main(net: NetCap, out: OutCap) -> Int ! { io } {

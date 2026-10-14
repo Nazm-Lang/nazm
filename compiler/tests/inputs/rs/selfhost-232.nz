@@ -1,0 +1,2 @@
+fn g() -> Result[Str, Oops] { Result[Str, Oops].Ok(value: int_to_str(leaf(true)? + 1)) }
+fn m() -> Int { 0 }

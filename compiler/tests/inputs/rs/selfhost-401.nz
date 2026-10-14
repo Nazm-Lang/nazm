@@ -1,0 +1,5 @@
+fn f(n: Int) -> Int ! {}
+    requires n >= 0
+{ n }
+fn neg() -> Int { 0 - 1 }
+fn main() -> Int { f(neg()) }

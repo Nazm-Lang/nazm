@@ -1,0 +1,8 @@
+fn producer(io: IoCap, c: Chan[Int], n: Int) -> Int ! { io } { chan_send_of(c, n); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let x = chan_new_of[Int](1); let y = chan_new_of[Int](1);
+let cs = vec_new[Chan[Int]](); vec_push(cs, x); vec_push(cs, y);
+let out = vec_new[Int](); let mut sum = 0; let mut n = 0;
+scope { spawn producer(io, x, 3); spawn producer(io, y, 4);
+while n < 2 { let i = chan_select_of(cs, out); sum = sum + vec_pop(out); n = n + 1; } }
+print(int_to_str(sum)); 0 }

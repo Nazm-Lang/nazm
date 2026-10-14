@@ -1,0 +1,5 @@
+pub struct State { a: Int, b: Int }
+fn init() -> State ! {} { State(a: 0, b: 0) }
+pub fn rebuilt(s: State, caller: Int) -> Result[State, Int] ! {} { let t = State(a: s.a, b: caller); Result[State, Int].Ok(value: t) }
+pub fn direct(s: State, caller: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(a: s.a, b: caller)) }
+fn main() -> Int ! {} { 0 }

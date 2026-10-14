@@ -1,0 +1,63 @@
+@derive(json, toml)
+pub enum Mode { Fast, Safe, Custom(level: Int), }
+
+@derive(toml)
+@codec(tag = "type")
+pub enum Store { Memory, Disk(path: Str, size_mb: Int), }
+
+@derive(toml)
+pub struct Server { host: Str, port: UInt16, }
+
+@derive(json, toml)
+@codec(rename_all = "kebab-case")
+pub struct Config {
+    app_name: Str,
+    version: Float64,
+    debug: Bool,
+    owner: Option[Str],
+    tags: Vec[Str],
+    mode: Mode,
+    retry_after: Mode,
+}
+
+@derive(toml)
+pub struct Deploy {
+    config: Config,
+    servers: Vec[Server],
+    store: Store,
+    @codec(default)
+    replicas: Int,
+}
+
+fn show(out: OutCap, s: Str) -> Int ! { io } { print(str_concat(s, "\n")) }
+
+fn main(out: OutCap) -> Int ! { io } {
+    let tags = vec_new[Str]();
+    vec_push(tags, "web");
+    let servers = vec_new[Server]();
+    vec_push(servers, Server(host: "a.example", port: UInt16(8080)));
+    vec_push(servers, Server(host: "b.example", port: UInt16(8081)));
+    let c = Config(app_name: "demo", version: 1.5, debug: false, owner: Option[Str].None(), tags: tags, mode: Mode.Fast(), retry_after: Mode.Custom(level: 3));
+    let d = Deploy(config: c, servers: servers, store: Store.Disk(path: "/var/data", size_mb: 512), replicas: 2);
+    let text = deploy_to_toml(d);
+    print(text);
+    show(out, "---");
+    match deploy_from_toml(text) {
+        Result.Ok(value: e) => show(out, if deploy_to_toml(e) == text { "round trip: same text" } else { "round trip: DIFFERENT" }),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    show(out, config_to_json(c));
+    match deploy_from_toml("[config]\napp-name = \"x\"\nversion = 2\ndebug = true\ntags = []\nmode = \"Safe\"\nretry-after = { Custom = { level = 9 } }\nowner = \"me\"\n\n[[servers]]\nhost = \"h\"\nport = 1\n\n[store]\ntype = \"Memory\"\n") {
+        Result.Ok(value: e) => show(out, deploy_to_toml(e)),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    match deploy_from_toml("[config]\napp-name = \"x\"\nversion = 1.0\ndebug = true\ntags = [1]\nmode = \"Safe\"\nretry-after = \"Fast\"\n[store]\ntype = \"Memory\"\nservers = []\n") {
+        Result.Ok(value: e) => show(out, "WRONG"),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    match deploy_from_toml("servers = [{ host = \"h\", port = 70000 }]\n[config]\napp-name = \"x\"\nversion = 1.0\ndebug = true\ntags = []\nmode = \"Safe\"\nretry-after = \"Fast\"\n[store]\ntype = \"Memory\"\n") {
+        Result.Ok(value: e) => show(out, "WRONG"),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    0
+}

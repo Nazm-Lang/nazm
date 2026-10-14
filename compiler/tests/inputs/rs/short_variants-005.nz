@@ -1,0 +1,2 @@
+enum C { R(n: Int) }
+fn main() -> Int { match C.R(n: 1) { C.R => 0 } }

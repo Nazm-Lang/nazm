@@ -1,0 +1,1 @@
+fn f(p: (Int, Str)) -> (Str, Int) { let (a, b) = p; for (x, y) in vec_new[(Int, Int)]() {

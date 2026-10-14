@@ -1,0 +1,18 @@
+struct Holder[T] {
+    value: T,
+    tag: Int,
+}
+struct Named {
+    name: Str,
+}
+fn main() -> Int {
+    let a = Holder[Int](value: 1, tag: 1);
+    let b = Holder[Str](value: str_concat("x", "yz"), tag: 2);
+    let c = Holder[Vec[Int]](value: vec_new[Int](), tag: 3);
+    vec_push(c.value, 5);
+    let d = Holder[Named](value: Named(name: int_to_str(4444)), tag: 4);
+    let d2 = d;
+    let b2 = b;
+    a.value + str_len(b2.value) * 10 + vec_get(c.value, 0) * 100 + str_len(d2.value.name) * 1000
+        + a.tag + b.tag + c.tag + d.tag
+}

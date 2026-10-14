@@ -1,0 +1,14 @@
+fn pick(a: Str, b: Int) -> Int {
+    str_len(a) + b
+}
+fn go() -> Int {
+    let mut i = 0;
+    while i < 3 {
+        i = i + 1;
+        let v = pick(int_to_str(i), if i == 1 { return 7; } else { i });
+    }
+    0
+}
+fn main() -> Int {
+    go()
+}

@@ -1,0 +1,3 @@
+fn save(io: IoCap, path: Str) -> Int ! { io } { write_file(path, "x") }
+fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { let p = read_file("config"); scope { spawn save(io, p); } 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }

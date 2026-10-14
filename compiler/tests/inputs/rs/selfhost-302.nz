@@ -1,0 +1,5 @@
+struct Leaf { xs: Vec[Int], }
+enum Mid { N, Has(leaf: Leaf), }
+struct Top { mid: Mid, }
+fn f(a: Top, b: Top) -> Bool { a == b }
+fn main() -> Int { 0 }

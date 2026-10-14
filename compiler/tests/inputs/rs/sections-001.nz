@@ -1,0 +1,13 @@
+@section(".data.ticks")
+static TICKS: Atomic = atomic_new(40);
+
+@section(".rodata.table")
+static BASE: Int = 2;
+
+@section(".boot")
+fn bump() -> Int { atomic_add(TICKS, BASE) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    bump();
+    atomic_load(TICKS)
+}

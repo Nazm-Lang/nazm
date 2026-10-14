@@ -1,0 +1,2 @@
+pub fn twice() -> Int { dup() * 2 }
+fn dup() -> Int { 20 }

@@ -1,0 +1,1 @@
+fn valid(b: Bytes) -> Bool ! {} {

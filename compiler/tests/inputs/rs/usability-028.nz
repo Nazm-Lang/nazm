@@ -1,0 +1,2 @@
+use "geometry.nz" as g;
+fn main() -> Int { let a = g::area; 0 }

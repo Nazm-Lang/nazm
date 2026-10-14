@@ -1,0 +1,2 @@
+fn shout(o: OutCap) -> Int ! {io} { print("loud\n"); eprint("err\n"); 1 }
+fn main(io: IoCap) -> Int ! {io} { shout(io) }

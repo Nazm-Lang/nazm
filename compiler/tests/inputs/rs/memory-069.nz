@@ -1,0 +1,14 @@
+enum Holder {
+    Nothing,
+    Text(value: Str),
+}
+fn size(h: Holder) -> Int { match h { Holder.Nothing() => 0, Holder.Text(value: s) => str_len(s), } }
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 100 {
+        n = n + size(Holder.Nothing());
+        i = i + 1;
+    }
+    n
+}

@@ -1,0 +1,1 @@
+fn main()->Int{str_len("a\n\x41\\")}

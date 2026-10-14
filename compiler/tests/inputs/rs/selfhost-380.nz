@@ -1,0 +1,1 @@
+fn main() -> Int { if 1 < 2 && 2 < 3 || false && !true { 7 } else { 8 } }

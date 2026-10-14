@@ -1,0 +1,6 @@
+fn use_seq(xs: Ints) -> Int { ints_push(xs, 1) }
+fn main(tasks: SpawnCap) -> Int {
+    let xs = ints_new();
+    scope { spawn use_seq(xs); }
+    ints_len(xs)
+}

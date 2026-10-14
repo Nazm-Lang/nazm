@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { os_chmod(read_file("cfg"), 420) }

@@ -1,0 +1,2 @@
+fn f(c: Cell) -> Int { 0 }
+fn main() -> Int { 0 }

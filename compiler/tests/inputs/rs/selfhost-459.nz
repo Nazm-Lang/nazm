@@ -1,0 +1,4 @@
+use "cycle-a.nz";
+pub fn pong(n: Int) -> Int {
+    if n == 0 { 9 } else { ping(n - 1) }
+}

@@ -1,0 +1,2 @@
+fn heading(x: Float64, y: Float64) -> Float64 ! {} { float_atan2(y, x) }
+fn main() -> Int ! {} { if heading(1.0, 1.0) > 0.0 { 0 } else { 1 } }

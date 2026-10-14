@@ -1,0 +1,3 @@
+struct A { bs: Vec[B], }
+enum B { V(a: A), N, }
+fn m() -> Int { 0 }

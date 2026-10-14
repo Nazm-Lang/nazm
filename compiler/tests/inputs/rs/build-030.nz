@@ -1,0 +1,2 @@
+fn positive(n: Int) -> Bool { n > 0 }
+fn main() -> Int { if positive(3) { 1 } else { 0 } }

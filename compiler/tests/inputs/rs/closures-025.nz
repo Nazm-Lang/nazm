@@ -1,0 +1,2 @@
+fn run(f: fn(Int) -> Int ! { io }, x: Int) -> Int ! {} { f(x) }
+fn main() -> Int { 0 }

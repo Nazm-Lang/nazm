@@ -1,0 +1,5 @@
+fn main(io: IoCap) -> Int {
+    let xs = ints_new();
+    ints_push(xs, 1);
+    exit_with(0)
+}

@@ -1,0 +1,15 @@
+fn pick(n: Int) -> Str {
+    let s = {
+        let a = str_concat("a-", int_to_str(n));
+        if n > 5 { return a; }
+        let b = str_concat(a, "-b");
+        b
+    };
+    str_concat(s, "!")
+}
+fn main() -> Int {
+    let x = pick(3);
+    let y = pick(9);
+    churn();
+    str_len(x) * 100 + str_len(y)
+}

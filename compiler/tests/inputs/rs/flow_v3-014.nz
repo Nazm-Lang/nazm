@@ -1,0 +1,7 @@
+trait Src { fn get(self: Self) -> Str; }
+struct A { n: Int }
+struct B { n: Int }
+impl Src for A { fn get(self: A) -> Str ! {} { "a" } }
+fn fill(io: IoCap) -> Int ! { io } { let ys = strs_new(); strs_push(ys, read_file("c")); 0 }
+fn path[T: Src](x: T) -> Str ! {} { x.get() }
+fn main(io: IoCap) -> Int ! { io } { fill(io); write_file(path(A(n: 1)), "x") }

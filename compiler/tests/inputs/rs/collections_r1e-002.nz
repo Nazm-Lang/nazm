@@ -1,0 +1,13 @@
+use "@std/ordmap";
+
+fn main(out: OutCap) -> Int ! {io} {
+    let m = ordmap_new[Int, Int]();
+    for i in 0..300000 { ordmap_set(m, i, i * 2); }
+    for i in 0..150000 { ordmap_remove(m, i * 2); }
+    for i in 0..1000 { ordmap_set(m, 0 - i, i); }
+    let mut sum = 0;
+    let vs = ordmap_values(m);
+    for i in 0..vec_len(vs) { sum = sum + vec_get(vs, i); }
+    print(f"{ordmap_len(m)} {sum}\n");
+    0
+}

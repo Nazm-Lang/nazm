@@ -1,0 +1,2 @@
+fn f(c: Chan[fn(Int) -> Int]) -> Int { 0 }
+fn main() -> Int { 0 }

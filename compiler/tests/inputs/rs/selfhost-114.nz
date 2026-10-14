@@ -1,0 +1,2 @@
+fn w() -> Int { 0 }
+fn m() -> Int { spawn w(); 0 }

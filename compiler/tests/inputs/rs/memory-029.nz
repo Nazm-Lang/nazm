@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let s = str_concat("ab", "cd");
+    let xs = ints_new();
+    ints_get(xs, 0)
+}

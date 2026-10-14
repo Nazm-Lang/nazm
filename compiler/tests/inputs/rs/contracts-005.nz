@@ -1,0 +1,2 @@
+fn g(x: Int) -> Int { x }
+fn f(x: Int) -> Int ! {} requires g(x) > 0 { x }

@@ -1,0 +1,8 @@
+use "lib.nz";
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Item](1);
+    put(c, str_concat("x", "y"));
+    let v = vec_new[Item]();
+    if chan_recv_of(c, v) { print(vec_pop(v).tag); }
+    0
+}

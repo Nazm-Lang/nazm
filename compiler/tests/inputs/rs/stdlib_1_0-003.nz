@@ -1,0 +1,13 @@
+use "@std/fmt";
+use "@std/num";
+fn o(x: Option[Int]) -> Str { match x { Option.Some(value: v) => int_to_str(v), Option.None() => "none" } }
+fn main(io: IoCap) -> Int ! { io } {
+print(fmt_int_zero(0 - 42, 5)); print("|"); print(fmt_int_zero(123456, 3)); print("|"); print(fmt_int_width(7, 3)); print("|");
+print(fmt_hex(255)); print("|"); print(fmt_hex(0 - 1)); print("|"); print(fmt_hex(0)); print("|"); print(fmt_bool(true)); print("|");
+let xs = ints_new(); ints_push(xs, 1); ints_push(xs, 2); print(fmt_ints(xs, "+")); print("|");
+let ss = strs_new(); print(fmt_list(ss, ",", "[", "]")); print("|");
+print(int_to_str(num_gcd(0 - 12, 18))); print(int_to_str(num_gcd(0, 0))); print("|");
+print(int_to_str(num_clamp(15, 0, 10))); print(int_to_str(num_clamp(5, 10, 0))); print("|");
+print(o(num_pow(2, 62))); print("|"); print(o(num_pow(2, 63))); print("|"); print(o(num_pow(0 - 3, 3))); print("|"); print(o(num_pow(2, 0 - 1))); print("|");
+print(int_to_str(num_abs(0 - 9) + num_sign(0 - 4) + num_min(3, 1) + num_max(3, 1)));
+0 }

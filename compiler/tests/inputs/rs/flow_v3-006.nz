@@ -1,0 +1,2 @@
+fn reader(io: IoCap) -> Str ! { io } { read_file("c") }
+fn main(io: IoCap) -> Int ! { io } { let f = reader; write_file(f(io), "x") }

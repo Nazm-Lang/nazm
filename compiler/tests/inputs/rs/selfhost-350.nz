@@ -1,0 +1,4 @@
+fn f(n: Int) -> Int ! {}
+    requires if n > 0 { true } else { false }
+{ n }
+fn main() -> Int { 0 }

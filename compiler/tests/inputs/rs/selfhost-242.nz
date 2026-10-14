@@ -1,0 +1,2 @@
+fn g(r: Result[Int, Str]) -> Int { r? }
+fn m() -> Int { 0 }

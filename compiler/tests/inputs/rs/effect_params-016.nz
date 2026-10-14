@@ -1,0 +1,2 @@
+fn apply[effects E](f: fn() -> Int ! { E }) -> Int ! { E } { f() }
+fn main() -> Int { let g = apply; 0 }

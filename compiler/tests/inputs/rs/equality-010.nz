@@ -1,0 +1,2 @@
+enum Shape { Plain, Named(label: Str), Pair(left: Str, right: Int), }
+fn main() -> Int { if Shape.Named(label: "a") == Shape.Plain() { 1 } else { 0 } }

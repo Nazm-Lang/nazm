@@ -1,0 +1,4 @@
+struct Q { flag: Bool, name: Str, n: Int, xs: Ints }
+enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }
+fn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => q.n + k, S.Empty() => 0, } }
+fn main() -> Int { let v = vec_new[Str](); vec_push(v, "a"); val(S.Pair(q: Q(flag: true, name: "x", n: 1, xs: ints_new()), k: 2)) + vec_len(v) }

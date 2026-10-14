@@ -1,0 +1,16 @@
+enum E {
+    Count(n: Int),
+    Text(value: Str),
+}
+fn size(e: E) -> Int { match e { E.Count(n: n) => n, E.Text(value: s) => str_len(s), } }
+fn main() -> Int {
+    let mut e = E.Text(value: str_concat("abc", "de"));
+    let a = size(e);
+    e = e;
+    e = E.Count(n: 7);
+    let b = size(e);
+    e = E.Text(value: str_concat("x", "y"));
+    let c = size(e);
+    e = E.Text(value: str_concat("p", "qr"));
+    a * 100 + b * 10 + c + size(e)
+}

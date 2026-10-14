@@ -1,0 +1,2 @@
+fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+fn main() -> Int { if same(1, 2) { 1 } else { 0 } }

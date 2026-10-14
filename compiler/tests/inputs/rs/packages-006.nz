@@ -1,0 +1,2 @@
+use "../../shapes/src/poly.nz";
+fn main() -> Int { sides(1) }

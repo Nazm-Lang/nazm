@@ -1,0 +1,15 @@
+
+fn worker(c: Chan, n: Int) -> Int { chan_send(c, n * 2); 0 }
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(8);
+    let mut total = 0;
+    scope {
+        spawn worker(c, 1);
+        spawn worker(c, 2);
+    }
+    let got = ints_new();
+    while chan_recv(c, got) { if ints_len(got) == 2 { chan_close(c); } }
+    let mut i = 0;
+    while i < ints_len(got) { total = total + ints_get(got, i); i = i + 1; }
+    total
+}

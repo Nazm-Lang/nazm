@@ -1,0 +1,9 @@
+fn main(io: IoCap, p: ProcessCap) -> Int ! { io } {
+let out = bytes_new(48);
+let h = os_spawn_with("x", strs_new(), "d", strs_new(), 3);
+let a = os_lstat("x", out) + os_chmod("x", 420) + os_realpath("x", out) + str_len(os_mkdtemp("."));
+let b = os_lock(os_stdout(), true) + os_try_lock(os_stderr(), false) + os_unlock(h) + os_pid();
+let c = os_child_pid(h) + os_try_wait(h) + os_wait_until(h, 0) + os_child_rusage(h);
+let e = os_kill_group(2, 0) + os_status(os_spawn_in("x", strs_new(), "", strs_new()));
+a + b + c + e
+}

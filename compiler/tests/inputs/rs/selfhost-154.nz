@@ -1,0 +1,1 @@
+enum I { A(n: Int), B, } struct E { s: I, } fn m() -> Int { let e = E(s: I.A(n: 4)); match e.s { I.B() => 0, I.A(n: n) => n, } }

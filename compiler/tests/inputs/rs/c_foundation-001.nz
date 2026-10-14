@@ -1,0 +1,6 @@
+pub extern "C" fn nz_scale(x: Float64, k: Int32) -> Float64 ! {} = "nz_scale" { x * Float64(k) }
+pub extern "C" fn nz_mask(x: UInt8, y: UInt16) -> UInt32 ! {} = "nz_mask" { UInt32(x) | (UInt32(y) << 8) }
+pub extern "C" fn nz_half(x: Float32) -> Float32 ! {} = "nz_half" { x / Float32(2.0) }
+pub extern "C" fn nz_neg(n: Int8, m: Int16) -> Int32 ! {} = "nz_neg" { Int32(n) * Int32(m) }
+pub extern "C" fn nz_top(x: UInt64) -> UInt64 ! {} = "nz_top" { x ^ UInt64(1) }
+pub extern "C" fn nz_both(a: Int, b: Bool) -> Int ! {} = "nz_both" { if b { a } else { 0 - a } }

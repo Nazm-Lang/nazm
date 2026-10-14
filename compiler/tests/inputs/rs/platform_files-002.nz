@@ -1,0 +1,86 @@
+use "@std/ioerror";
+
+fn word(out: Bytes, i: Int) -> Int ! {} { bytes_read_le[Int](out, i * 8) }
+
+fn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }
+
+fn show(io: IoCap, path: Str) -> Int ! { io } { shown(io, path, path) }
+
+fn shown(io: IoCap, path: Str, name: Str) -> Int ! { io } {
+    let out = bytes_new(48);
+    let s = os_lstat(path, out);
+    if s < 0 {
+        print(f"{name}: {kind(s)}\n");
+        return 0;
+    }
+    let k = word(out, 1);
+    // A directory's size, and a link's permissions, are the file system's own.
+    if k == 1 { print(f"{name}: dir perms {word(out, 3)}\n"); }
+    if k == 0 { print(f"{name}: file size {word(out, 0)} perms {word(out, 3)} dated {word(out, 2) > 0}\n"); }
+    if k == 3 { print(f"{name}: link size {word(out, 0)}\n"); }
+    0
+}
+
+fn same(io: IoCap, a: Str, b: Str) -> Bool ! { io } {
+    let x = bytes_new(48);
+    let y = bytes_new(48);
+    os_lstat(a, x);
+    os_lstat(b, y);
+    word(x, 4) == word(y, 4) && word(x, 5) == word(y, 5)
+}
+
+fn letters(s: Str, from: Int) -> Bool ! {} {
+    let mut ok = true;
+    for i in from..str_len(s) {
+        let c = str_byte(s, i);
+        if !((c >= 48 && c <= 57) || (c >= 97 && c <= 122)) { ok = false; }
+    }
+    ok
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    show(io, "file.txt");
+    show(io, "dir");
+    show(io, "link");
+    show(io, "dangling");
+    show(io, "missing");
+    let hard = same(io, "file.txt", "hard");
+    let other = same(io, "file.txt", "dir");
+    let itself = same(io, "file.txt", "link");
+    print(f"same {hard} {other} {itself}\n");
+    let c1 = os_chmod("file.txt", 384);
+    let c2 = kind(os_chmod("file.txt", 4096));
+    let c3 = kind(os_chmod("missing", 420));
+    print(f"chmod {c1} {c2} {c3}\n");
+    show(io, "file.txt");
+    let through = os_chmod("link", 416);
+    print(f"through the link {through}\n");
+    show(io, "file.txt");
+    show(io, "link");
+    let here = bytes_new(4096);
+    let n = os_realpath(".", here);
+    let base = bytes_to_str(bytes_slice(here, 0, n));
+    let full = bytes_new(4096);
+    let m = os_realpath("dir/../link", full);
+    let wanted = str_concat(base, "/file.txt");
+    let resolved = bytes_to_str(bytes_slice(full, 0, m));
+    print(f"real {str_byte(base, 0) == 47} {resolved == wanted}\n");
+    let short = kind(os_realpath(".", bytes_new(1)));
+    let gone = kind(os_realpath("missing", full));
+    let dangling = kind(os_realpath("dangling", full));
+    print(f"real short {short} missing {gone} dangling {dangling}\n");
+    let t = os_mkdtemp(".");
+    let u = os_mkdtemp("./");
+    print(f"temp {str_len(t)} {str_slice(t, 0, 7)} {str_len(u)} {str_slice(u, 0, 7)} {t == u} {letters(t, 7)}\n");
+    shown(io, t, "temp");
+    let n1 = os_mkdtemp("");
+    let n2 = os_mkdtemp("missing");
+    let n3 = os_mkdtemp("file.txt");
+    print(f"temp none [{n1}] [{n2}] [{n3}]\n");
+    let inside = f"{t}/x";
+    let h = os_open_write(inside, 2);
+    let wrote = os_write(h, bytes_from_str("x"));
+    print(f"written under it {wrote} {os_close(h)} {os_unlink(inside)}\n");
+    print(f"removed {os_rmdir(t)} {os_rmdir(u)}\n");
+    0
+}

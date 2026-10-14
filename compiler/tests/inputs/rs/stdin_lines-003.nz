@@ -1,0 +1,2 @@
+fn lines(h: OsHandle, buf: Bytes) -> Int ! { io } { os_read_line(h, buf) }
+fn main(io: IoCap) -> Int ! { io } { lines(os_stdin(), bytes_new(8)) }

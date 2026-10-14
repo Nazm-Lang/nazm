@@ -1,0 +1,47 @@
+enum Shape { Circle(r: Int), Label(text: Str), Empty }
+
+fn sign(n: Int) -> Str {
+    match n {
+        x if x < 0 => "negative",
+        0 => "zero",
+        x if x % 2 == 0 => "even",
+        _ => "odd",
+    }
+}
+
+fn describe(s: Shape) -> Str {
+    match s {
+        Shape.Circle(r: r) if r > 10 => "big circle",
+        Shape.Circle(r: r) => f"circle {r}",
+        Shape.Label(text: t) if t.len() > 3 => f"long {t}",
+        Shape.Label(text: t) => f"short {t}",
+        Shape.Empty => "empty",
+    }
+}
+
+fn first_even(o: Option[Int]) -> Int {
+    match o {
+        Some(n) if n % 2 == 0 => n,
+        Some(n) => n + 1,
+        None => 0,
+    }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(f"{sign(0 - 3)} {sign(0)} {sign(4)} {sign(7)}")
+    println(describe(Shape.Circle(r: 12)))
+    println(describe(Shape.Circle(r: 2)))
+    println(describe(Shape.Label(text: "hello")))
+    println(describe(Shape.Label(text: "hi")))
+    println(describe(Shape.Empty))
+    println(f"{first_even(Some(4))} {first_even(Some(5))} {first_even(None)}")
+    let mut total = 0
+    for i in 0..10 {
+        match i {
+            n if n % 3 == 0 => { total += n },
+            _ => {},
+        }
+    }
+    println(total)
+    0
+}

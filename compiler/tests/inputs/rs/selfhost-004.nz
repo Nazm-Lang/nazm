@@ -1,0 +1,2 @@
+enum E { A, B(x: Int), }
+fn main() -> Int { match E.A() { E.A() => 1, E.B(x: n) => n, } }

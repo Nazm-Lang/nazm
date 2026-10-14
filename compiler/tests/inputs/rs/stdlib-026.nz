@@ -1,0 +1,3 @@
+use "@std/text";
+use "@std/option";
+fn main() -> Int { let s = str_concat(text_repeat("a", 100000), "b"); let mut n = 0; let mut r = 0; while r < 20 { n = n + option_unwrap_or(text_find(s, "ab"), 0); r = r + 1; } n }

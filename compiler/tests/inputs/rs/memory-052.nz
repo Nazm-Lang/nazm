@@ -1,0 +1,9 @@
+struct Holder {
+    name: Str,
+}
+fn main() -> Int {
+    let mut h = Holder(name: str_concat("abcdef", ""));
+    h.name = h.name;
+    h.name = str_slice(h.name, 1, 4);
+    str_len(h.name) * 100 + str_byte(h.name, 0)
+}

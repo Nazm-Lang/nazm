@@ -1,0 +1,1 @@
+fn m() -> Int { let xs = vec_new[Pair[Int, Vec[Str]]](); vec_len(xs) }

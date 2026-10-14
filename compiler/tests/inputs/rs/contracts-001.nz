@@ -1,0 +1,9 @@
+fn isqrt(n: Int) -> Int ! {}
+    requires n >= 0
+    ensures result >= 0
+    ensures result * result <= n && n - result * result <= 2 * result
+{
+    let mut r = 0;
+    while (r + 1) * (r + 1) <= n { r = r + 1; }
+    r
+}

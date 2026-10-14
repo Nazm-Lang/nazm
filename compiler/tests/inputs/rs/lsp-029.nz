@@ -1,0 +1,4 @@
+use "lib.nz";
+fn double(n: Int) -> Int { n * 2 }
+fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+fn main() -> Int { let s = "é→😀"; apply_twice(double, str_len(s)) + double(1) + apply_twice(triple, 2) }

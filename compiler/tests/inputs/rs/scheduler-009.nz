@@ -1,0 +1,3 @@
+fn child(n: Int) -> Int ! { io } { print(int_to_str(n)) }
+fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(7); } 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }

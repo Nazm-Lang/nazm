@@ -1,0 +1,1 @@
+fn main() -> Int { let f = str_len; 0 }

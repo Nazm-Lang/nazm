@@ -1,0 +1,2 @@
+pub enum MyResult[T, E] { Ok(value: T), Err(error: E), }
+pub fn mk() -> MyResult[Int, Str] { MyResult[Int, Str].Ok(value: 1) }

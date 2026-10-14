@@ -1,0 +1,1 @@
+fn f(x: Int) -> Int ! {} requires print("x") == 0 { x }

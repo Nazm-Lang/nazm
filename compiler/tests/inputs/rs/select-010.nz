@@ -1,0 +1,1 @@
+fn main() -> Int { let cs = vec_new[Chan[Int]](); chan_select_of(cs, vec_new[Int]()) }

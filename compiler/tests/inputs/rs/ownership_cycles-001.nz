@@ -1,0 +1,2 @@
+struct Node { next: Node, }
+fn main() -> Int { 0 }

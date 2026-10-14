@@ -1,0 +1,56 @@
+enum Bag {
+    Full(items: Vec[Str]),
+    Empty,
+}
+fn text(o: Option[Str]) -> Str {
+    match o {
+        Option.None() => {
+            let d = str_concat("no", "ne");
+            d
+        },
+        Option.Some(value: s) => {
+            let x = s;
+            x
+        },
+    }
+}
+fn thing(r: Result[Item, Str]) -> Item {
+    match r {
+        Result.Ok(value: i) => {
+            let kept = i;
+            kept
+        },
+        Result.Err(error: e) => {
+            let fallback = item(str_len(e));
+            fallback
+        },
+    }
+}
+fn bag(b: Bag) -> Vec[Str] {
+    match b {
+        Bag.Full(items: xs) => {
+            let ys = xs;
+            ys
+        },
+        Bag.Empty() => {
+            let fresh = vec_new[Str]();
+            vec_push(fresh, int_to_str(0));
+            fresh
+        },
+    }
+}
+fn main() -> Int {
+    let a = text(Option[Str].Some(value: str_concat("some-", int_to_str(42))));
+    let b = text(Option[Str].None());
+    churn();
+    let i = thing(Result[Item, Str].Ok(value: item(3)));
+    let j = thing(Result[Item, Str].Err(error: int_to_str(12345)));
+    churn();
+    let full = vec_new[Str]();
+    vec_push(full, int_to_str(777));
+    vec_push(full, int_to_str(8));
+    let c = bag(Bag.Full(items: full));
+    let d = bag(Bag.Empty());
+    churn();
+    str_len(a) * 1000000 + str_len(b) * 100000 + ints_get(i.tags, 0) * 10000 + ints_get(j.tags, 0) * 1000 + vec_len(c) * 100 + str_len(vec_get(c, 0)) * 10 + vec_len(d)
+}

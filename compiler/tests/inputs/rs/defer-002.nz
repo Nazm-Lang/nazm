@@ -1,0 +1,1 @@
+fn main() -> Int { defer { return 1; } 0 }

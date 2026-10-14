@@ -1,0 +1,3 @@
+use "lib.nz";
+fn s() -> Str { "é😀" } fn helper(n: Int) -> Int { n }
+fn caller() -> Int { let t = "é😀"; helper(1) + helper(far()) }

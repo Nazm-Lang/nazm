@@ -1,0 +1,5 @@
+struct P { name: Str, n: Int, }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} {
+    print(str_concat(s, "\n"))
+}

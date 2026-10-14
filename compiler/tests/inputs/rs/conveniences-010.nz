@@ -1,0 +1,2 @@
+fn main() -> Int { /* never closed
+0 }

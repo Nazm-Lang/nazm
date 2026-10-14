@@ -1,0 +1,2 @@
+fn boom(n: Int) -> Int { n / 0 }
+fn main() -> Int { if false { boom(1) } else { 5 } }

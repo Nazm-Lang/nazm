@@ -1,0 +1,10 @@
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn twice(x: Int) -> Int { let y = x * 2; y + 1 }
+fn main() -> Int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < 2000 { s = s + i % 7 * 3; i = i + 1; }
+    let ok = s > 0 && i == 2000;
+    let text = str_concat("s=", int_to_str(s));
+    if ok { str_len(text) + fib(15) + twice(0) - 1 } else { 0 }
+}

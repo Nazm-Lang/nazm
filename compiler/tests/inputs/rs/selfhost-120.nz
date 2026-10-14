@@ -1,0 +1,1 @@
+fn m(x: Int, s: Str) -> Int { if x > 0 { str_len(s) } else { 0 } }

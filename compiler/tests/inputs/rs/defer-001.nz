@@ -1,0 +1,47 @@
+fn say(out: OutCap, s: Str) -> Int ! {io} { print(s) }
+
+fn order(out: OutCap) -> Int ! {io} {
+    defer { say(out, "a"); }
+    defer { say(out, "b"); }
+    { defer { say(out, "inner"); } say(out, "[block]"); }
+    say(out, "[body]");
+    0
+}
+
+fn early(out: OutCap, n: Int) -> Int ! {io} {
+    defer { say(out, "E"); }
+    if n > 1 { return n * 10; }
+    defer { say(out, "F"); }
+    n
+}
+
+fn loops(out: OutCap) -> Int ! {io} {
+    let mut i = 0;
+    while i < 4 {
+        defer { say(out, num_to_str(i)); }
+        i = i + 1;
+        if i == 2 { continue; }
+        if i == 3 { break; }
+        say(out, ".");
+    }
+    i
+}
+
+fn parse(s: Str) -> Result[Int, Str] { if str_len(s) > 0 { Result[Int, Str].Ok(value: str_len(s)) } else { Result[Int, Str].Err(error: "empty") } }
+
+fn tries(out: OutCap, s: Str) -> Result[Int, Str] ! {io} {
+    defer { say(out, "T"); }
+    let n = parse(s)?;
+    Result[Int, Str].Ok(value: n + 1)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    order(out); say(out, "\n");
+    say(out, num_to_str(early(out, 5))); say(out, "|");
+    say(out, num_to_str(early(out, 1))); say(out, "\n");
+    say(out, num_to_str(loops(out))); say(out, "\n");
+    let a = match tries(out, "abc") { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };
+    let b = match tries(out, "") { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };
+    say(out, str_concat(num_to_str(a), num_to_str(b))); say(out, "\n");
+    0
+}

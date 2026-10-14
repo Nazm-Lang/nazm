@@ -1,0 +1,13 @@
+struct Item {
+    name: Str,
+    tags: Ints,
+}
+enum Shape {
+    Named(label: Str),
+    Plain,
+}
+fn item(n: Int) -> Item {
+    let tags = ints_new();
+    ints_push(tags, n);
+    Item(name: str_concat("item-", int_to_str(n)), tags: tags)
+}

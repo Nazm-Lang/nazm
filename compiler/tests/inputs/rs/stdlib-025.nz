@@ -1,0 +1,2 @@
+use "@std/text";
+fn main() -> Int { let s = text_repeat("word,", 20000); let mut n = 0; let mut r = 0; while r < 50 { n = n + strs_len(text_split(s, ",")); r = r + 1; } n }

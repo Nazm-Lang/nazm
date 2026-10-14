@@ -1,0 +1,15 @@
+
+struct P { name: Str, n: Int, }
+fn main() -> Int {
+    let mut p = P(name: int_to_str(1), n: 0);
+    let mut s = int_to_str(7);
+    let mut i = 0;
+    while i < 5 {
+        let t = int_to_str(i);
+        s = str_concat(s, t);
+        p.name = str_concat(p.name, "x");
+        i = i + 1;
+    }
+    let z = i - 5;
+    str_len(s) / z
+}

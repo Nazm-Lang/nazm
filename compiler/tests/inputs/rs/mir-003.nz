@@ -1,0 +1,16 @@
+
+struct Person { name: Str, age: Int, }
+struct Pair { left: Person, right: Person, }
+fn main() -> Int {
+    let mut p = Person(name: int_to_str(1), age: 3);
+    let mut q = Pair(left: Person(name: "a", age: 1), right: Person(name: int_to_str(2), age: 2));
+    let mut i = 0;
+    while i < 30 {
+        p.name = str_concat(p.name, "x");
+        p.name = p.name;
+        q.left.name = int_to_str(i);
+        q.right = Person(name: str_concat(q.left.name, p.name), age: i);
+        i = i + 1;
+    }
+    str_len(p.name) + str_len(q.right.name) + q.right.age
+}

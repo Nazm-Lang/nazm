@@ -1,0 +1,4 @@
+@test
+@test
+fn f() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }
+fn main() -> Int { 0 }

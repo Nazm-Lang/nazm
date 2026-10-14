@@ -1,0 +1,2 @@
+fn f(a: Result[Int, Str], b: Result[Int, Str]) -> Bool { a == b }
+fn main() -> Int { 0 }

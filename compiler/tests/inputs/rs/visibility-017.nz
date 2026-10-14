@@ -1,0 +1,7 @@
+pub struct Point {
+    x: Int,
+    label: Str,
+}
+pub fn at(n: Int) -> Point {
+    Point(x: n, label: str_concat("p", int_to_str(n)))
+}

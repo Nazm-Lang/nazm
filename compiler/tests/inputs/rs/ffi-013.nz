@@ -1,0 +1,4 @@
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+fn save(io: IoCap, f: ForeignCap) -> Int ! { io, foreign }
+{ c_add(1, 2); write_file("out", "x") }
+fn main(io: IoCap, f: ForeignCap) -> Int { save(io, f) }

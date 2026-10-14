@@ -1,0 +1,2 @@
+use "shapes:poly.nz";
+pub fn perimeter(n: Int, len: Int) -> Int { sides(n) * len }

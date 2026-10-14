@@ -1,0 +1,2 @@
+fn helper() -> Int { 3 }
+pub fn ec() -> Int { helper() }

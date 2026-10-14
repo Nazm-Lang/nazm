@@ -1,0 +1,5 @@
+trait Area { fn area(self: Self) -> Int; }
+struct Sq { s: Int }
+impl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }
+fn twice[T: Area](x: T) -> Int { x.area() + Area.area(x) }
+fn main() -> Int { let q = Sq(s: 2); Sq(s: 6).area() + twice(q) + q.area() }

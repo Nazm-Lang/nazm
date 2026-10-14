@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(tasks: SpawnCap) -> Int { work(tasks) + str_len(int_to_str(7)) }

@@ -1,0 +1,1 @@
+pub fn load(io: IoCap) -> Str { read_file("f") }

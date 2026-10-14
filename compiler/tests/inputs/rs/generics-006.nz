@@ -1,0 +1,7 @@
+fn pick[T](xs: Vec[T], i: Int) -> T {
+    vec_get(xs, i)
+}
+fn main() -> Int {
+    let xs = vec_new[Str]();
+    str_len(pick(xs, 3))
+}

@@ -1,0 +1,20 @@
+enum Inner {
+    None,
+    Text(value: Str),
+}
+struct Event {
+    state: Inner,
+    values: Ints,
+}
+fn size(e: Inner) -> Int { match e { Inner.None() => 0, Inner.Text(value: s) => str_len(s), } }
+fn main() -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < 30 {
+        let e = Event(state: Inner.Text(value: int_to_str(i)), values: ints_new());
+        let copy = e;
+        total = total + size(copy.state) + ints_len(e.values);
+        i = i + 1;
+    }
+    total
+}

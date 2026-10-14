@@ -1,0 +1,3 @@
+trait Area { fn area(self: Self) -> Int; }
+fn f[T: Area](x: T) -> Int { x.area() }
+fn main() -> Int { f(3) }

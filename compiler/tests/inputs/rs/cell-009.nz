@@ -1,0 +1,2 @@
+fn w(c: Cell[Int]) -> Int { 0 }
+fn main() -> Int ! {spawn} { let c = cell_new(1); scope { spawn w(c); } 0 }

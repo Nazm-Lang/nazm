@@ -1,0 +1,3 @@
+use "b.nz";
+fn size(p: Point) -> Int { p.x }
+fn main() -> Int { size(at(21)) + Point(x: 21).x }

@@ -1,0 +1,2 @@
+fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }
+fn main() -> Int { f(3) }

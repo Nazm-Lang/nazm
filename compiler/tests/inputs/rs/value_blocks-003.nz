@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let it = {
+        let a = item(7);
+        let b = item(8);
+        a
+    };
+    churn();
+    str_len(it.name) * 100 + ints_get(it.tags, 0)
+}

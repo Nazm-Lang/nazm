@@ -1,0 +1,5 @@
+fn name_of(n: Int) -> Str {
+    if n < 0 { return "negative"; }
+    return "other";
+}
+fn main() -> Int { str_len(name_of(0 - 1)) * 10 + str_len(name_of(1)) }

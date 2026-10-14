@@ -1,0 +1,3 @@
+use "all.nz";
+fn tw[T: Area](x: T) -> Int { x.area() }
+fn main() -> Int { Sq(s: 2).area() + double(1) + tw(Sq(s: 1)) }

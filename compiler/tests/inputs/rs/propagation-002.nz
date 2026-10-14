@@ -1,0 +1,39 @@
+fn ok_int() -> Result[Int, Str] { Result[Int, Str].Ok(value: 1) }
+fn ok_str() -> Result[Str, Str] { Result[Str, Str].Ok(value: int_to_str(22)) }
+fn ok_rec() -> Result[Item, Str] { Result[Item, Str].Ok(value: item(3)) }
+fn ok_enum() -> Result[Shape, Str] { Result[Shape, Str].Ok(value: Shape.Named(label: int_to_str(444))) }
+fn ok_vec() -> Result[Vec[Item], Str] {
+    let xs = vec_new[Item]();
+    vec_push(xs, item(5));
+    Result[Vec[Item], Str].Ok(value: xs)
+}
+fn err_str() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(66)) }
+fn err_rec() -> Result[Int, Item] { Result[Int, Item].Err(error: item(7)) }
+fn err_enum() -> Result[Int, Shape] { Result[Int, Shape].Err(error: Shape.Named(label: int_to_str(8888))) }
+fn err_vec() -> Result[Int, Vec[Diag]] { Result[Int, Vec[Diag]].Err(error: diags(9)) }
+fn err_chan() -> Result[Int, Chan] { Result[Int, Chan].Err(error: chan_new(2)) }
+fn main() -> Int {
+    let a = ok_int();
+    let a2 = a;
+    let s = ok_str();
+    let s2 = s;
+    let r = ok_rec();
+    let r2 = r;
+    let e = ok_enum();
+    let e2 = e;
+    let v = ok_vec();
+    let v2 = v;
+    let t = 0
+        + match a2 { Result.Ok(value: n) => n, Result.Err(error: x) => 0, }
+        + match s2 { Result.Ok(value: x) => str_len(x), Result.Err(error: x) => 0, }
+        + match r2 { Result.Ok(value: i) => ints_get(i.tags, 0), Result.Err(error: x) => 0, }
+        + match e2 { Result.Ok(value: sh) => match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }, Result.Err(error: x) => 0, }
+        + match v2 { Result.Ok(value: xs) => vec_len(xs) * 5, Result.Err(error: x) => 0, };
+    let u = 0
+        + match err_str() { Result.Ok(value: n) => 0, Result.Err(error: x) => str_len(x), }
+        + match err_rec() { Result.Ok(value: n) => 0, Result.Err(error: i) => ints_get(i.tags, 0), }
+        + match err_enum() { Result.Ok(value: n) => 0, Result.Err(error: sh) => match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }, }
+        + match err_vec() { Result.Ok(value: n) => 0, Result.Err(error: ds) => vec_len(ds), }
+        + match err_chan() { Result.Ok(value: n) => 0, Result.Err(error: c) => chan_close(c) + 1, };
+    t * 100 + u
+}

@@ -1,0 +1,2 @@
+fn neg(n: Int) -> Int { 0 - n }
+fn main() -> Int { neg(-9223372036854775807) }

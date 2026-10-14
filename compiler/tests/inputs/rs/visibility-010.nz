@@ -1,0 +1,3 @@
+use "b.nz";
+pub fn a_value() -> Int { 4 }
+fn main() -> Int { b_value() }

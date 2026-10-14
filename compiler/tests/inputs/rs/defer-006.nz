@@ -1,0 +1,1 @@
+fn main() -> Int { defer { if 1 < 2 { 5 } else { "five" } } 0 }

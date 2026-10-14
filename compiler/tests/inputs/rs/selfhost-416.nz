@@ -1,0 +1,2 @@
+use "dep.nz";
+fn main() -> Int { let n = 4; let m = n?; m }

@@ -1,0 +1,4 @@
+pub struct Counter { n: Cell[Int], }
+pub fn counter() -> Counter { Counter(n: cell_new(0)) }
+pub fn bump(c: Counter, by: Int) -> Int { cell_set(c.n, cell_get(c.n) + by) }
+pub fn count(c: Counter) -> Int { cell_get(c.n) }

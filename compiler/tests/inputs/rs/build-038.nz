@@ -1,0 +1,7 @@
+fn bad(n: Int) -> Int {
+    let z = 0;
+    n / z
+}
+fn main() -> Int {
+    bad(7)
+}

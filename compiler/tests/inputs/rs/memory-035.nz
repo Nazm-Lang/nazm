@@ -1,0 +1,13 @@
+fn feed(c: Chan, n: Int) -> Int { chan_send(c, n); 0 }
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(4);
+    scope {
+        spawn feed(c, 1);
+        spawn feed(c, 2);
+    }
+    chan_close(c);
+    let buf = ints_new();
+    while chan_recv(c, buf) {
+    }
+    ints_get(buf, 0) + ints_get(buf, 1)
+}

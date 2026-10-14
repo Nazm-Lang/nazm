@@ -1,0 +1,5 @@
+pub enum State {
+    Done(code: Int, why: Str),
+    Ready,
+}
+pub fn start() -> State { State.Ready() }

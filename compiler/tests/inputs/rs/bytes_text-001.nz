@@ -1,0 +1,20 @@
+
+fn scalars(t: Text) -> Str {
+    let mut i = 0;
+    let mut acc = "";
+    while i < text_len(t) {
+        acc = str_concat(acc, str_concat(int_to_str(text_scalar_at(t, i)), " "));
+        i = text_next(t, i);
+    }
+    acc
+}
+
+fn boundaries(t: Text) -> Str {
+    let mut i = 0;
+    let mut acc = "";
+    while i <= text_len(t) {
+        acc = str_concat(acc, if text_is_boundary(t, i) { "|" } else { "." });
+        i = i + 1;
+    }
+    acc
+}

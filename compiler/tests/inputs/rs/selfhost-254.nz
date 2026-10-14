@@ -1,0 +1,4 @@
+fn worker(out: Chan, tag: Str) -> Int { let mut i = 0; let mut s = 0; while i < 200000 { s = s + i % 3; i = i + 1; } chan_send(out, str_len(tag)); s }
+fn fails() -> Result[Int, Str] { Result[Int, Str].Err(error: int_to_str(9)) }
+fn run(out: Chan, tasks: SpawnCap) -> Result[Int, Str] { let tag = str_concat("task-", int_to_str(1)); scope { spawn worker(out, tag); let held = int_to_str(555); let x = fails()?; chan_send(out, x + str_len(held)); } Result[Int, Str].Ok(value: 0) }
+fn main(tasks: SpawnCap) -> Int { let out = chan_new(4); let r = run(out, tasks); chan_close(out); let buf = ints_new(); let got = chan_recv(out, buf); match r { Result.Ok(value: n) => 0, Result.Err(error: e) => str_len(e) * 1000, } + ints_len(buf) * 100 + ints_get(buf, 0) }

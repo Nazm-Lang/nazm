@@ -1,0 +1,2 @@
+use "state.nz";
+fn main() -> Int { match make() { State.V(i: i) => i.n, } }

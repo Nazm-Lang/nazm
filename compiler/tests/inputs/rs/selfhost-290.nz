@@ -1,0 +1,6 @@
+struct Name { t: Str, }
+enum Shape { Dot, Circle(c: Name, r: Int), }
+struct D { s: Shape, }
+enum L { H, S(top: D), }
+fn f(a: L, b: L) -> Bool { a == b }
+fn main() -> Int { 0 }

@@ -1,0 +1,7 @@
+extern "C" fn labs(a: Int) -> Int = "labs";
+fn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n); 0 }
+fn main(io: IoCap, t: SpawnCap, f: ForeignCap) -> Int {
+let c = chan_new(4); let got = ints_new();
+scope { let mut i = 0; while i < 4 { spawn worker(io, c, i); i = i + 1; }
+let mut k = 0; while k < 4 { let r = chan_recv(c, got); k = k + 1; } }
+print(int_to_str(labs(0 - 6) + ints_len(got))); 0 }

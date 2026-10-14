@@ -1,0 +1,2 @@
+pub fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(f(x)) }
+pub fn scaler(k: Int) -> fn(Int) -> Int ! {} { fn(x: Int) -> Int { x * k } }

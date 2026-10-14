@@ -1,0 +1,2 @@
+fn f[T](a: T) -> Int { a.x }
+fn m() -> Int { 0 }

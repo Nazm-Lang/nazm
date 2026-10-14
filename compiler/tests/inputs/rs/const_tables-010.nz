@@ -1,0 +1,3 @@
+struct R { v: Vec[Int], }
+const A: R = R(v: vec_new[Int]());
+fn main() -> Int { 0 }

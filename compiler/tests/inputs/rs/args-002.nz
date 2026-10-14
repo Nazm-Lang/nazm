@@ -1,0 +1,67 @@
+
+fn split(s: Str) -> Strs {
+    let out = strs_new();
+    if s == "" { return out; }
+    let mut from = 0;
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 124 { strs_push(out, str_slice(s, from, i)); from = i + 1; }
+    }
+    strs_push(out, str_slice(s, from, str_len(s)));
+    out
+}
+
+fn help_of(cli: ArgCommand, c: Str) -> Str {
+    match args_parse(cli, split(f"{c}|--help")) {
+        Result.Ok(value: a) => args_help_text(a),
+        Result.Err(error: e) => f"error: {e}\n",
+    }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let cases = strs_new();
+    strs_push(cases, "");
+    strs_push(cases, "-v|-v|--color=never");
+    strs_push(cases, "build|-t|x86|in.nz");
+    strs_push(cases, "build|--target=x86|-O2|--output|a.out|-DA|-D|B|--define=C|in.nz|fast|x|y");
+    strs_push(cases, "--verbose|build|-vjt|arm|-vO3|in.nz");
+    strs_push(cases, "build|-t|x|--opt-level=|in.nz");
+    strs_push(cases, "build|-t|x|--|-in.nz|--json|-");
+    strs_push(cases, "build|-o|-|-t|-v|in.nz");
+    strs_push(cases, "pkg|add|--dev|--color|always|json");
+    strs_push(cases, "pkg");
+    strs_push(cases, "--help");
+    strs_push(cases, "build|--frob|-h");
+    strs_push(cases, "pkg|add|-h|--unknown");
+    strs_push(cases, "--frob");
+    strs_push(cases, "build|-t|x|-z|in.nz");
+    strs_push(cases, "build|-t|x|-vzq|in.nz");
+    strs_push(cases, "build|-t");
+    strs_push(cases, "build|in.nz|--output");
+    strs_push(cases, "build|-t|x|--json=yes|in.nz");
+    strs_push(cases, "build|-t|x|-j|-q|in.nz");
+    strs_push(cases, "build|in.nz");
+    strs_push(cases, "build|-t|x");
+    strs_push(cases, "biuld");
+    strs_push(cases, "pkg|add");
+    strs_push(cases, "pkg|add|a|b");
+    strs_push(cases, "pkg|add|-é");
+    for i in 0..strs_len(cases) {
+        let c = strs_get(cases, i);
+        print(f"{c} => {describe(args_parse(spec(), split(c)))}\n");
+    }
+    let cli = spec();
+    print(args_help(cli));
+    print(help_of(cli, "build"));
+    print(help_of(cli, "pkg|add"));
+    let wrong = args_program("bad", "");
+    args_flag(wrong, "x", "x", "");
+    args_option(wrong, "y", "x", "Y", "");
+    print(f"{describe(args_parse(wrong, split("")))}\n");
+    let late = args_program("late", "");
+    args_positional(late, "a", false, "");
+    args_positional(late, "b", true, "");
+    print(f"{describe(args_parse(late, split("")))}\n");
+    print(args_usage(late));
+    print("\n");
+    0
+}

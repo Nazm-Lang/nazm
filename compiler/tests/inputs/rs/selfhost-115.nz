@@ -1,0 +1,2 @@
+fn w(xs: Ints) -> Int { ints_len(xs) }
+fn m() -> Int { let xs = ints_new(); scope { spawn w(xs); } 0 }

@@ -1,0 +1,5 @@
+fn main(io: IoCap) -> Int {
+    let a = arg(0);
+    let b = str_slice(a, 0, 1);
+    str_len(a) * 1000 + str_byte(b, 0)
+}

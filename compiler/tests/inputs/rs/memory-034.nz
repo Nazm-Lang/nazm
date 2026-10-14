@@ -1,0 +1,13 @@
+fn make() -> Chan { let c = chan_new(1); c }
+fn made() -> Chan { let c = chan_new(1); return c; }
+fn same(c: Chan) -> Chan { c }
+fn main() -> Int {
+    let a = same(make());
+    let b = made();
+    chan_send(a, 4);
+    chan_send(b, 5);
+    let buf = ints_new();
+    chan_recv(a, buf);
+    chan_recv(b, buf);
+    ints_get(buf, 0) + ints_get(buf, 1)
+}

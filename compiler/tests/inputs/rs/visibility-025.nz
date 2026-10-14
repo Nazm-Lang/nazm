@@ -1,0 +1,4 @@
+struct Thing {
+    m: Str,
+}
+pub fn from_b() -> Int { str_len(Thing(m: "abc").m) }

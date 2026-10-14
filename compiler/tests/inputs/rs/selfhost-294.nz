@@ -1,0 +1,2 @@
+struct Box[T] { value: T, }
+fn main() -> Int { if Box[Int](value: 1) == Box[Str](value: "1") { 1 } else { 0 } }

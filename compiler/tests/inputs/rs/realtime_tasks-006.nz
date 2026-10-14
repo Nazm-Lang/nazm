@@ -1,0 +1,2 @@
+@task(priority = "1", period = "0")
+fn t() -> Int ! {} { 0 }

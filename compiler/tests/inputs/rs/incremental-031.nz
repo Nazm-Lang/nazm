@@ -1,0 +1,1 @@
+pub fn old(n: Int) -> Int { print(int_to_str(n)) }

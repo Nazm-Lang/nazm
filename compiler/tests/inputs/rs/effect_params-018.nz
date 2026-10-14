@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { print("c"); x }; f(0) }

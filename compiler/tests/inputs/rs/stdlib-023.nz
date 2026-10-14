@@ -1,0 +1,3 @@
+use "@std/text";
+fn save(io: IoCap) -> Int ! { io } { let p = text_trim("  out.txt "); write_file(p, "x") }
+fn main(io: IoCap) -> Int { save(io) }

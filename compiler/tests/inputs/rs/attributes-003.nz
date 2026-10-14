@@ -1,0 +1,3 @@
+@bogus
+fn f() -> Int { 0 }
+fn main() -> Int { 0 }

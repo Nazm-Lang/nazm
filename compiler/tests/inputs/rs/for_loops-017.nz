@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, "out.txt"); for p in xs { write_file(p, "x"); } 0 }

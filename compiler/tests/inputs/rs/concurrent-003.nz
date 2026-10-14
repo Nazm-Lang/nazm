@@ -1,0 +1,18 @@
+
+        fn waiter(jobs: Chan) -> Int {
+            let buf = ints_new();
+            while chan_recv(jobs, buf) { ints_pop(buf); }
+            0
+        }
+        fn main(tasks: SpawnCap) -> Int {
+            let jobs = chan_new(4);
+            scope {
+                spawn waiter(jobs);
+                spawn waiter(jobs);
+                spawn waiter(jobs);
+                spawn waiter(jobs);
+                chan_close(jobs);
+            }
+            7
+        }
+        

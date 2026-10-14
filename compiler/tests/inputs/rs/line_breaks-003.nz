@@ -1,0 +1,17 @@
+fn name(i: Int) -> Str { f"n{i}" }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let mut i = 0
+    while i < 3 {
+        i = i + 1
+        name(i)
+    }
+    for k in 0..3 {
+        print(f"{k}")
+        name(k)
+    }
+    print("\n")
+    if i > 5 { name(1) } else if i > 1 { print("two\n") } else { name(2) }
+    if i > 1 { name(3) } else if i > 0 { name(4) }
+    i
+}

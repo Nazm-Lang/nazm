@@ -1,0 +1,39 @@
+use "@std/ioerror";
+use "@std/file";
+
+fn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }
+
+fn held(r: Result[Bool, IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: b) => if b { "taken" } else { "held elsewhere" },
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let a = os_open_read("lockme");
+    let b = os_open_read("lockme");
+    let c = os_open_write("lockme", 3);
+    print(f"a exclusive {kind(os_lock(a, true))}; b {kind(os_try_lock(b, true))} {kind(os_try_lock(b, false))}\n");
+    print(f"a shared {kind(os_lock(a, false))}; b shared {kind(os_try_lock(b, false))}; c {kind(os_try_lock(c, true))}\n");
+    print(f"unlocked {kind(os_unlock(a))} {kind(os_unlock(b))}; c {kind(os_try_lock(c, true))}; a {kind(os_try_lock(a, false))}\n");
+    print(f"closing c lets go {kind(os_close(c))}; a {kind(os_try_lock(a, false))}\n");
+    print(f"unlock unheld {kind(os_unlock(b))}\n");
+    let d = os_dir_open(".");
+    print(f"directory {kind(os_lock(d, true))} stdin {kind(os_lock(os_stdin(), true))}\n");
+    os_close(b);
+    print(f"closed {kind(os_lock(b, true))} {kind(os_unlock(b))}\n");
+    os_unlock(a);
+    match file_open(io, "lockme") {
+        Result.Ok(value: f) => match file_open(io, "lockme") {
+            Result.Ok(value: g) => {
+                print(f"library {held(file_try_lock(f, true))} {held(file_try_lock(g, false))}\n");
+                file_unlock(f);
+                print(f"library after {held(file_try_lock(g, false))}\n");
+            },
+            Result.Err(error: e) => { print("open failed\n"); },
+        },
+        Result.Err(error: e) => { print("open failed\n"); },
+    };
+    0
+}

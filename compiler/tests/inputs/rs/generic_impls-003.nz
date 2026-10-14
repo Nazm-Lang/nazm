@@ -1,0 +1,4 @@
+use "show.nz";
+pub struct W[T] { v: T, }
+pub fn wrap(n: Int) -> W[Int] ! {} { W[Int](v: n) }
+impl[T: Show] Show for W[T] { fn show(self: W[T]) -> Str { str_concat("w", self.v.show()) } }

@@ -1,0 +1,5 @@
+
+fn run(c: IoCap, f: fn(IoCap, Int) -> Int ! { io }, x: Int) -> Int ! { io } { f(c, x) }
+fn main(io: IoCap) -> Int ! { io } {
+    run(io, fn(c: IoCap, x: Int) -> Int ! { io } { print("hi"); x - 4 }, 4)
+}

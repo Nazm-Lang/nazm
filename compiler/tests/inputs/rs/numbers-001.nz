@@ -1,0 +1,23 @@
+
+struct Point { x: Float64, y: Float64, tag: UInt8, }
+
+fn norm(p: Point) -> Float64 { float_sqrt(p.x * p.x + p.y * p.y) }
+
+fn worker(c: Chan[Float64], x: Float64) -> Int ! {spawn} { chan_send_of(c, x * 2.0); 0 }
+
+fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {
+    let p = Point(x: 3.0, y: 4.0, tag: UInt8(7));
+    let q = Point(x: 3.0, y: 4.0, tag: UInt8(7));
+    print(str_concat(num_to_str(norm(p)), "\n"));
+    if p == q { print("equal\n"); } else { print("differ\n"); };
+    let xs = vec_new[Int16]();
+    vec_push(xs, Int16(-3));
+    vec_push(xs, 1000);
+    print(str_concat(num_to_str(vec_get(xs, 0) * vec_get(xs, 1)), "\n"));
+    let c = chan_new_of[Float64](1);
+    scope { spawn worker(c, 1.25); }
+    let got = vec_new[Float64]();
+    chan_recv_of(c, got);
+    print(str_concat(num_to_str(vec_get(got, 0)), "\n"));
+    0
+}

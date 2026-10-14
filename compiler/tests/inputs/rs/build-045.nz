@@ -1,0 +1,2 @@
+fn f(a: Int) -> Int { a }
+fn main() -> Int { f(true) }

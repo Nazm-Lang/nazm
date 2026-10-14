@@ -1,0 +1,4 @@
+@ test @cfg( all( os = "linux" , not( arch="x86_64" ) ) ) fn f() -> Int { 0 }
+@deprecated( "use f" )
+fn g() -> Int { 0 }
+fn main() -> Int { 0 }

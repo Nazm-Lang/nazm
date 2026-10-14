@@ -1,0 +1,2 @@
+fn w(n: Int) -> Int { n }
+fn main() -> Int { scope { spawn w(1); } 0 }

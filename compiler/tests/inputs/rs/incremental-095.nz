@@ -1,0 +1,2 @@
+pub fn same_int(a: Int, b: Int) -> Bool { eq(a, b) }
+fn eq[T](a: T, b: T) -> Bool { true }

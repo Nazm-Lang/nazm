@@ -1,0 +1,9 @@
+struct Box[T] { value: T, }
+struct Unused { n: Int, }
+fn main() -> Int {
+    let mut n = 0;
+    if Box[Int](value: 1) == Box[Int](value: 1) { n = n + 1; }
+    if Box[Int](value: 2) == Box[Int](value: 2) { n = n + 1; }
+    if Box[Str](value: "a") == Box[Str](value: "a") { n = n + 1; }
+    n
+}

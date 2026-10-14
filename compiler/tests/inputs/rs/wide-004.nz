@@ -1,0 +1,2 @@
+pub extern "C" fn twice(x: Int128) -> Int128 ! {} = "twice" { x * Int128(2) }
+fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn m() -> Int { let a = ints_new(); let b = ints_new(); if a == b { 1 } else { 0 } }

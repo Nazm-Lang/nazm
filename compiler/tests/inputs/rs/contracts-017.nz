@@ -1,0 +1,6 @@
+fn f(x: Int) -> Int ! {}
+requires x > 0
+        ensures result > x
+    {
+    x + 1
+}

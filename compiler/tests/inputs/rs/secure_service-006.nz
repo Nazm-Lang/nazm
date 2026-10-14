@@ -1,0 +1,2 @@
+fn main(net: NetCap, out: OutCap, f: ForeignCap) -> Int ! { io, foreign } {
+    checked(f);

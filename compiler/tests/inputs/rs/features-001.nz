@@ -1,0 +1,11 @@
+@cfg(feature = "fast")
+pub fn speed() -> Int { 2 }
+
+@cfg(not(feature = "fast"))
+pub fn speed() -> Int { 1 }
+
+@cfg(all(feature = "round", not(feature = "unused")))
+pub fn round() -> Int { 30 }
+
+@cfg(not(all(feature = "round", not(feature = "unused"))))
+pub fn round() -> Int { 0 }

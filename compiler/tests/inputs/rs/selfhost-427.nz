@@ -1,0 +1,19 @@
+enum Holder {
+    Nothing,
+    Many(items: Strs),
+    Text(value: Str),
+}
+fn take(h: Holder) -> Str { match h { Holder.Nothing() => "", Holder.Many(items: _) => "", Holder.Text(value: s) => s, } }
+fn main() -> Int {
+    let mut h = Holder.Text(value: str_concat("ab", "cd"));
+    let copy = h;
+    h = Holder.Nothing();
+    h = Holder.Text(value: str_concat("x", "y"));
+    let mut i = 0;
+    let mut total = 0;
+    while i < 30 {
+        total = total + str_len(take(Holder.Text(value: int_to_str(i))));
+        i = i + 1;
+    }
+    total + str_len(take(copy)) + str_len(take(h))
+}

@@ -1,0 +1,2 @@
+use "shared.nz";
+fn only_a() -> Int { target() }

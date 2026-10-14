@@ -1,0 +1,2 @@
+fn quiet() -> Int ! {} { 1 }
+fn main() -> Int ! {} { quiet() }

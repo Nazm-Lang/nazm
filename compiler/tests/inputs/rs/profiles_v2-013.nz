@@ -1,0 +1,6 @@
+fn main() -> Int ! {} {
+    let c = chan_new_of[Int](1);
+    chan_send_of(c, 1);
+    let got = vec_new[Int]();
+    if chan_recv_of(c, got) { vec_pop(got) } else { 0 }
+}

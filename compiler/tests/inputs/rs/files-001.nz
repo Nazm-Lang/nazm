@@ -1,0 +1,100 @@
+use "@std/ioerror";
+use "@std/file";
+
+fn line(io: IoCap, s: Str) -> Int ! { io } { print(str_concat(s, "\n")) }
+
+fn kind(r: Result[Int, IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: n) => str_concat("ok ", int_to_str(n)),
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn opened(r: Result[File, IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: f) => "opened",
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn text(r: Result[Bytes, IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    line(io, kind(dir_create_all(io, "w/a/b")));
+    line(io, kind(dir_create_all(io, "w/a/b")));
+    match file_create(io, "w/one.txt") {
+        Result.Ok(value: f) => {
+            line(io, kind(file_write_str(f, "alpha\nbeta\n")));
+            line(io, kind(file_position(f)));
+            line(io, kind(file_sync(f)));
+            line(io, kind(file_close(f)));
+            line(io, kind(file_close(f)));
+            line(io, kind(file_write_str(f, "late")));
+        },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    match file_append(io, "w/one.txt") {
+        Result.Ok(value: f) => { file_write_str(f, "gamma\n"); file_close(f); },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    line(io, text(file_read_all(io, "w/one.txt")));
+    match file_open(io, "w/one.txt") {
+        Result.Ok(value: f) => {
+            line(io, kind(file_seek(f, 6)));
+            let buf = bytes_new(4);
+            line(io, kind(file_read(f, buf)));
+            line(io, bytes_to_str(buf));
+            line(io, kind(file_seek_end(f, 0 - 6)));
+            line(io, text(file_read_rest(f)));
+            line(io, kind(file_write_str(f, "x")));
+            file_close(f);
+        },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    match file_metadata(io, "w/one.txt") {
+        Result.Ok(value: m) => {
+            line(io, int_to_str(m.size));
+            line(io, if m.kind == FileKind.Regular() { "regular" } else { "not regular" });
+            line(io, if m.modified_ns > 0 { "has a time" } else { "no time" });
+        },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    match file_metadata(io, "w/a") {
+        Result.Ok(value: m) => { line(io, if m.kind == FileKind.Directory() { "directory" } else { "not a directory" }); },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    line(io, kind(file_replace_atomic(io, "w/one.txt", bytes_from_str("replaced"))));
+    line(io, text(file_read_all(io, "w/one.txt")));
+    line(io, kind(file_replace_atomic(io, "w/fresh.txt", bytes_from_str("new"))));
+    file_create(io, "w/c.txt");
+    file_create(io, "w/B.txt");
+    match dir_list(io, "w") {
+        Result.Ok(value: names) => { line(io, str_join(names, ",")); },
+        Result.Err(error: e) => { line(io, io_error_show(e)); },
+    };
+    line(io, kind(file_rename(io, "w/c.txt", "w/a/c.txt")));
+    line(io, opened(file_open(io, "w/c.txt")));
+    line(io, opened(file_open(io, "w/a/c.txt")));
+    line(io, opened(file_create_new(io, "w/a/c.txt")));
+    line(io, kind(dir_remove(io, "w/a")));
+    line(io, kind(dir_create(io, "w/a")));
+    line(io, text(file_read_all(io, "w/a")));
+    line(io, kind(file_remove(io, "w/a/c.txt")));
+    line(io, kind(dir_remove(io, "w/a/b")));
+    line(io, kind(dir_remove(io, "w/a")));
+    match dir_list(io, "w/one.txt") {
+        Result.Ok(value: names) => { line(io, "listed a file"); },
+        Result.Err(error: e) => { line(io, io_kind_name(e.kind)); },
+    };
+    file_remove(io, "w/one.txt");
+    file_remove(io, "w/fresh.txt");
+    file_remove(io, "w/B.txt");
+    line(io, kind(dir_remove(io, "w")));
+    line(io, opened(file_open(io, "w/one.txt")));
+    0
+}

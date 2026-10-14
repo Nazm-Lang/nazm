@@ -1,0 +1,3 @@
+struct Point { x: Int, label: Str, }
+enum State { Done(code: Int), Idle, }
+fn main() -> Int { let s = "é😀"; let p = Point(x: 1, label: s); let d = State.Done(code: 2); let e = State.Idle(); p.label; match d { State.Done(code: c) => c, State.Idle() => p.x, } }

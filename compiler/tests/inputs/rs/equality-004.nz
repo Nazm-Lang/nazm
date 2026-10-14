@@ -1,0 +1,13 @@
+struct Box[T] { value: T, }
+struct Point { x: Int, y: Int, }
+fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }
+fn main() -> Int {
+    bit(Option[Int].None() == Option[Int].None(), 1) + bit(Option[Int].Some(value: 1) == Option[Int].Some(value: 1), 2)
+    + bit(Option[Int].Some(value: 1) == Option[Int].Some(value: 2), 4)
+    + bit(Option[Str].Some(value: str_concat("a", "b")) == Option[Str].Some(value: "ab"), 8)
+    + bit(Result[Int, Str].Ok(value: 1) == Result[Int, Str].Ok(value: 1), 16)
+    + bit(Result[Int, Str].Ok(value: 1) == Result[Int, Str].Err(error: "1"), 32)
+    + bit(Box[Int](value: 1) == Box[Int](value: 1), 64) + bit(Box[Str](value: "a") == Box[Str](value: "b"), 128)
+    + bit(Box[Point](value: Point(x: 1, y: 2)) == Box[Point](value: Point(x: 1, y: 2)), 256)
+    + bit(Box[Box[Int]](value: Box[Int](value: 4)) != Box[Box[Int]](value: Box[Int](value: 5)), 512)
+}

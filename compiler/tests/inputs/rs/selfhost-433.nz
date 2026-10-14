@@ -1,0 +1,14 @@
+struct Pair[A, B] { first: A, second: B, }
+enum Maybe[T] { None, Some(value: T), }
+fn swap[A, B](p: Pair[A, B]) -> Pair[B, A] { Pair[B, A](first: p.second, second: p.first) }
+fn get_or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }
+fn wrap[T](x: T) -> Maybe[T] { Maybe[T].Some(value: x) }
+fn tag[T](x: T, s: Str) -> Str { str_concat(s, "!") }
+fn main() -> Int {
+    let p = swap(Pair[Int, Str](first: 1, second: "abc"));
+    let q = swap(p);
+    let m = wrap(str_concat("x", "yz"));
+    let s = get_or(m, "none");
+    let n = get_or(wrap(5), 0) + get_or(Maybe[Int].None(), 7);
+    str_len(p.first) + q.first + str_len(s) + n + str_len(tag(3, "hi")) + str_len(tag("a", "hey"))
+}

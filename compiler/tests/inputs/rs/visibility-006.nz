@@ -1,0 +1,3 @@
+use "main.nz";
+pub fn v() -> Int { 3 }
+fn main() -> Int { v() }

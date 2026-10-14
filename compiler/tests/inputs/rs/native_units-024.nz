@@ -1,0 +1,2 @@
+use "lib/b.nz";
+fn main() -> Int { twice(4) }

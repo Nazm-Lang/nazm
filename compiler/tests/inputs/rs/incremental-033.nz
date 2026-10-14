@@ -1,0 +1,2 @@
+use "b.nz";
+fn main(io: IoCap) -> Int ! { io } { write_file(target(io), "x"); 0 }

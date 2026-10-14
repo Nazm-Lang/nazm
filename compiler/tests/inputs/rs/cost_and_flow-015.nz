@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { f0(read_file("prog.nz"), io) }

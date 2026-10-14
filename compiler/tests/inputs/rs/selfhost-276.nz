@@ -1,0 +1,1 @@
+fn main() -> Int { let x = { return 1; 2 }; x }

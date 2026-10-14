@@ -1,0 +1,2 @@
+use "util.nz";
+fn main() -> Int { answer() }

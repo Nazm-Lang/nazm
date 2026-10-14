@@ -1,0 +1,19 @@
+fn fill(a: Ints, n: Int) -> Int {
+    let mut i = 0;
+    while i < n { ints_push(a, i * i); i = i + 1; }
+    ints_len(a)
+}
+fn total(a: Ints) -> Int {
+    let mut i = 0;
+    let mut s = 0;
+    while i < ints_len(a) { s = s + ints_get(a, i); i = i + 1; }
+    s
+}
+fn main() -> Int {
+    let a = ints_new();
+    let b = a;
+    fill(a, 5);
+    ints_push(b, 100);
+    ints_set(a, 0, 7);
+    total(b) * 100 + ints_len(a)
+}

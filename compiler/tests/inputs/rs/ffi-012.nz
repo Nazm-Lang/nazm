@@ -1,0 +1,3 @@
+use "lib.nz";
+fn main(io: IoCap, f: ForeignCap) -> Int
+{ print(int_to_str(c_add(20, 22))); 0 }

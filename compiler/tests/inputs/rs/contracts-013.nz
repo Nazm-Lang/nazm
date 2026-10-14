@@ -1,0 +1,3 @@
+fn twice(x: Int) -> Int ! {} { x * 2 }
+fn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }
+fn main() -> Int ! {} { ap(twice, 4) }

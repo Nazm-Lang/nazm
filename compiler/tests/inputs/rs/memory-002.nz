@@ -1,0 +1,7 @@
+fn main() -> Int {
+    let mut xs = ints_new();
+    ints_push(xs, 1);
+    xs = ints_new();
+    ints_push(xs, 2);
+    ints_get(xs, 0)
+}

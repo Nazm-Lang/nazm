@@ -1,0 +1,4 @@
+trait Show { fn show(self: Self) -> Str; }
+struct P[A, B] { a: A, b: B, }
+struct W[T] { v: T, }
+impl Show for Int { fn show(self: Int) -> Str { "i" } }

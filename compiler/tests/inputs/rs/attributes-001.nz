@@ -1,0 +1,12 @@
+trait Show { fn show(self: Self) -> Int; }
+
+@cfg(os = "nowhere")
+impl Show for Int { fn show(self: Int) -> Int { "never checked" } }
+
+@cfg(not(os = "nowhere"))
+impl Show for Int { fn show(self: Int) -> Int { self + 2 } }
+
+fn main(out: OutCap) -> Int {
+    print(str_concat(int_to_str(5.show()), "\n"));
+    0
+}

@@ -1,0 +1,26 @@
+use "@std/io";
+use "@std/fs";
+use "@std/time";
+fn work(n: Int, out: Chan[Int]) -> Int ! {} {
+let mut s = 0;
+    let mut i = 0;
+    while i < n { s = s + i; i = i + 1; }
+chan_send_of(out, s);
+    0
+}
+fn main(io: IoCap, t: SpawnCap, time: TimeCap) -> Int ! { io, spawn } {
+let out = chan_new_of[Int](8);
+scope {
+        let mut k = 1;
+        while k <= 4 { spawn work(k * 1000, out); k = k + 1; }
+    }
+let got = vec_new[Int]();
+    let mut total = 0;
+    let mut j = 0;
+while j < 4 { if chan_recv_of(out, got) { total = total + vec_pop(got); } j = j + 1; }
+io_println(io, str_concat("total ", int_to_str(total)));
+match fs_write(io, "/tmp/nz.txt", "android\n") { Result.Ok(value: n) => {}, Result.Err(error: e) => { io_println(io, e); }, };
+match fs_read(io, "/tmp/nz.txt") { Result.Ok(value: s) => { io_println(io, str_concat("read ", str_slice(s, 0, 7))); }, Result.Err(error: e) => { io_println(io, e); }, };
+io_println(io, if time_ms(time) > 0 { "clock ok" } else { "clock wrong" });
+args_count()
+}

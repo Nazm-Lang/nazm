@@ -1,0 +1,36 @@
+use "@std/args";
+
+fn spec() -> ArgCommand ! {} {
+    let cli = args_program("tool", "A toolchain");
+    args_flag(cli, "verbose", "v", "Say more");
+    args_option(cli, "color", "", "WHEN", "When to colour output");
+    let build = args_command(cli, "build", "Build a program");
+    args_option_default(build, "opt-level", "O", "N", "0", "Optimisation level");
+    args_option(build, "output", "o", "FILE", "Where to write");
+    args_option_required(build, "target", "t", "TRIPLE", "The target");
+    args_option(build, "define", "D", "NAME", "A feature to enable");
+    args_flag(build, "json", "j", "Write JSON");
+    args_flag(build, "quiet", "q", "Write nothing");
+    args_conflict(build, "json", "quiet");
+    args_positional(build, "input", true, "The program");
+    args_positional(build, "mode", false, "How to build it");
+    args_rest(build, "extra", "More files");
+    let pkg = args_command(cli, "pkg", "Work with packages");
+    let add = args_command(pkg, "add", "Add a dependency");
+    args_flag(add, "dev", "", "Only for development");
+    args_positional(add, "name", true, "The package");
+    cli
+}
+
+fn shown(o: Option[Str]) -> Str { match o { Option.Some(value: v) => f"[{v}]", Option.None() => "none" } }
+
+fn describe(r: Result[Args, Str]) -> Str {
+    match r {
+        Result.Ok(value: a) => {
+            if args_help_wanted(a) { f"help for `{args_subcommand(a)}`" } else {
+                f"cmd=`{args_subcommand(a)}` v={args_times(a, "verbose")} color={shown(args_get(a, "color"))} O={shown(args_get(a, "opt-level"))} O-given={args_has(a, "opt-level")} out={shown(args_get(a, "output"))} target={shown(args_get(a, "target"))} D={str_join(args_get_all(a, "define"), ",")} json={args_has(a, "json")} input={shown(args_get(a, "input"))} mode={shown(args_get(a, "mode"))} extra={str_join(args_get_all(a, "extra"), ",")} dev={args_has(a, "dev")} name={shown(args_get(a, "name"))}"
+            }
+        },
+        Result.Err(error: e) => f"error: {e}",
+    }
+}

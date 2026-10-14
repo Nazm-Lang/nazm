@@ -1,0 +1,63 @@
+use "@std/ioerror";
+use "@std/file";
+use "@std/process";
+use "@std/time";
+
+fn status(r: Result[Option[Int], IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: Option.Some(value: s)) => int_to_str(s),
+        Result.Ok(value: Option.None()) => "running",
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn main(p: ProcessCap, io: IoCap, t: TimeCap) -> Int ! { io } {
+    let args = strs_new();
+    strs_push(args, "-c");
+    strs_push(args, "echo $GREETING from $(basename $(pwd -P)); exit 4");
+    let env = strs_new();
+    strs_push(env, "GREETING=hello");
+    strs_push(env, "PATH=/usr/bin:/bin");
+    match process_spawn_in(p, "sh", args, "sub", env) {
+        Result.Ok(value: c) => {
+            match file_read_rest(process_stdout(c)) {
+                Result.Ok(value: b) => { print(bytes_to_str(b)); },
+                Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+            };
+            let deadline = time_deadline(t, 30000);
+            print(f"waited {status(process_wait_until(c, deadline))} {status(process_try_wait(c))}\n");
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    let sleeper = strs_new();
+    strs_push(sleeper, "30");
+    match process_spawn_with(p, "sleep", sleeper, "", env, true, true) {
+        Result.Ok(value: c) => {
+            let g = process_child_id(c);
+            eprint(str_concat(str_concat("group ", int_to_str(g)), "\n"));
+            let soon = time_deadline(t, 50);
+            print(f"sleeping {status(process_try_wait(c))} {status(process_wait_until(c, soon))}\n");
+            match process_kill_group(p, g, 9) {
+                Result.Ok(value: z) => { print(f"killed {z}\n"); },
+                Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+            };
+            match process_wait(c) {
+                Result.Ok(value: s) => { print(f"ended {s}\n"); },
+                Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+            };
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    match process_spawn_in(p, "env", strs_new(), "", strs_new()) {
+        Result.Ok(value: c) => {
+            match file_read_rest(process_stdout(c)) {
+                Result.Ok(value: b) => { print(f"empty environment [{bytes_to_str(b)}]\n"); },
+                Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+            };
+            process_wait(c);
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    print(f"id {process_id(io) > 1}\n");
+    0
+}

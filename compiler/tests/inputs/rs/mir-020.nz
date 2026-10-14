@@ -1,0 +1,2 @@
+fn f(sp: SpawnCap, x: Int) -> Int { x }
+fn main(io: IoCap, sp: SpawnCap) -> Int { f(sp, 1) }

@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let xs = ints_new();
+    let mut i = 0;
+    while i < 20000 {
+        ints_push(xs, i);
+        i = i + 1;
+    }
+    ints_get(xs, 19999)
+}

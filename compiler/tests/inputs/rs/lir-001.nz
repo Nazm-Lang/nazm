@@ -1,0 +1,16 @@
+struct Q { flag: Bool, name: Str, n: Int }
+struct H { a: Ints, b: Strs }
+struct Plain { x: Int, y: Bool }
+enum S { Num(n: Int), Pair(q: Q, k: Int), Empty }
+enum T { One(x: Int), Two }
+fn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }
+fn tee(t: T) -> Int { match t { T.One(x: x) => x, T.Two() => 7, } }
+fn main(out: OutCap) -> Int {
+let h = H(a: ints_new(), b: strs_new());
+ints_push(h.a, 5);
+strs_push(h.b, "hello");
+let p = Plain(x: 3, y: false);
+print(int_to_str(val(S.Pair(q: Q(flag: true, name: "abc", n: 10), k: 4))));
+print(int_to_str(tee(T.One(x: 2)) + tee(T.Two()) + p.x + ints_get(h.a, 0) + str_len(strs_get(h.b, 0))));
+0
+}

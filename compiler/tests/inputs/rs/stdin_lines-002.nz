@@ -1,0 +1,16 @@
+use "@std/ioerror";
+
+fn main(io: IoCap) -> Int ! { io } {
+    write_file("lines.txt", "one\ntwo\n");
+    let buf = bytes_new(8);
+    let f = os_open_read("lines.txt");
+    print(f"{io_kind_name(io_kind_of(os_read_line(f, buf)))}\n");
+    print(f"{os_read(f, buf)}\n");
+    os_close(f);
+    print(f"{io_kind_name(io_kind_of(os_read_line(f, buf)))}\n");
+    let d = os_dir_open(".");
+    print(f"{io_kind_name(io_kind_of(os_read_line(d, buf)))}\n");
+    os_close(d);
+    os_unlink("lines.txt");
+    0
+}

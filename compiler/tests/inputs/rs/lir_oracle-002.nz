@@ -1,0 +1,2 @@
+fn r(a: Int, b: Int) -> Int { a % b }
+fn main() -> Int { r(10, 7) * 100 + r(0 - 9, 7) * 10 + r(7, 0 - 2) }

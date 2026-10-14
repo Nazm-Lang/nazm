@@ -1,0 +1,2 @@
+fn w(r: Result[Int, Str]) -> Int { 0 }
+fn m() -> Int { scope { spawn w(Result[Int, Str].Ok(value: 1)); } 0 }

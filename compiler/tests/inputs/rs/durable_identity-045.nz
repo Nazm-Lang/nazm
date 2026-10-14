@@ -1,0 +1,3 @@
+use "b.nz";
+fn size(p: Point) -> Int { p.x + str_len(p.label) }
+fn main() -> Int { size(at(3)) + Point(x: 1, label: "").x }

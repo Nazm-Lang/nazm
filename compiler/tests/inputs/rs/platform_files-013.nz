@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { str_len(os_mkdtemp(read_file("cfg"))) }

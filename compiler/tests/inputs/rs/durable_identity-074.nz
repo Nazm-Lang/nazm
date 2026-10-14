@@ -1,0 +1,2 @@
+pub fn same[T: Equality](a: T, b: T) -> Bool { a == b }
+pub fn keep[T](x: T) -> T { x }

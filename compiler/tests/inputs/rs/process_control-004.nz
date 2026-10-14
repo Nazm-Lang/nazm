@@ -1,0 +1,19 @@
+use "@std/ioerror";
+use "@std/process";
+
+fn main(p: ProcessCap, io: IoCap) -> Int ! { io } {
+    let args = strs_new();
+    strs_push(args, "-c");
+    strs_push(args, "exit 0");
+    match process_spawn_with(p, "sh", args, "", strs_new(), false, true) {
+        Result.Ok(value: c) => {
+            process_wait(c);
+            match process_peak_memory(c) {
+                Result.Ok(value: m) => { print(f"peak {m > 0}\n"); },
+                Result.Err(error: e) => { print(f"peak {io_kind_name(e.kind)}\n"); },
+            };
+        },
+        Result.Err(error: e) => { print(io_kind_name(e.kind)); },
+    };
+    0
+}

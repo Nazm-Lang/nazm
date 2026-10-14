@@ -1,0 +1,6 @@
+pub trait Show { fn show(self: Self) -> Str ! {}; }
+pub trait Say { fn say(self: Self, out: OutCap) -> Int ! {io}; }
+pub struct P { x: Int, }
+impl Show for P { fn show(self: P) -> Str ! {} { int_to_str(self.x) } }
+impl Show for Int { fn show(self: Int) -> Str ! {} { int_to_str(self) } }
+impl Say for P { fn say(self: P, out: OutCap) -> Int ! {io} { print("P\n") } }

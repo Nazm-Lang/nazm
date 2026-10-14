@@ -1,0 +1,1 @@
+pub trait E { fn A(self: Self) -> Int; }

@@ -1,0 +1,1 @@
+fn main() -> Int { let c = chan_new(1); if same(c, c) { 1 } else { 0 } }

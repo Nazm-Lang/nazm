@@ -1,0 +1,1 @@
+fn main() -> Int { let mut n = 1; let f = fn(x: Int) -> Int { x + n }; f(1) }

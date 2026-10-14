@@ -1,0 +1,2 @@
+fn choose[T](x: Option[T], fallback: T) -> T { match x { Option.None() => { fallback }, Option.Some(value: v) => { v }, } }
+fn main() -> Int { choose(Option[Int].None(), 3) }

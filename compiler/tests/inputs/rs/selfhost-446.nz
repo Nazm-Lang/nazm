@@ -1,0 +1,3 @@
+use "lib/util.nz";
+use "./lib/math.nz";
+fn main() -> Int { twice_tripled(7) + triple(1) }

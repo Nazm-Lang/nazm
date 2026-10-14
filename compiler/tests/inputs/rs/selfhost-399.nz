@@ -1,0 +1,2 @@
+fn f(x: Int) -> Bool { x > 3 && x < 9 || x == 0 }
+fn main() -> Int { let mut n = 0; let mut i = 0; while i < 12 { if f(i) { n = n + 1; } if !f(i) { n = n + 100; } i = i + 1; } n }

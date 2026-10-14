@@ -1,0 +1,2 @@
+use "shapes:poly.nz";
+fn main() -> Int { 0 }

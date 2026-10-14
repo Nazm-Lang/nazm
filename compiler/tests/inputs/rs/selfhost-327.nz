@@ -1,0 +1,1 @@
+fn main() -> Int { let o = Option[Vec[Int]].None(); if same(o, o) { 1 } else { 0 } }

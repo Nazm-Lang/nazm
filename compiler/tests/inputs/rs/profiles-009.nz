@@ -1,0 +1,2 @@
+use "lib:lib.nz";
+fn main(io: IoCap) -> Int ! { io } { print(int_to_str(twice(21))) }

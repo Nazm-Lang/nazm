@@ -1,0 +1,2 @@
+pub trait Show { fn show(self: Self) -> Str; }
+impl Show for Int { fn show(self: Int) -> Str { num_to_str(self) } }

@@ -1,0 +1,11 @@
+fn main(io: IoCap) -> Int {
+    let mut i = 0;
+    let mut total = 0;
+    while i < args_count() {
+        print(arg(i));
+        print(str_from_byte(10));
+        total = total + str_len(arg(i));
+        i = i + 1;
+    }
+    total
+}

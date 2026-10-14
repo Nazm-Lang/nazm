@@ -1,0 +1,21 @@
+
+fn bad(dead: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(dead, buf);
+    1 / ints_pop(buf)
+}
+fn main(io: IoCap, tasks: SpawnCap) -> Int {
+    let started = chan_new(1);
+    let go = chan_new(1);
+    let dead = chan_new(1);
+    let buf = ints_new();
+    scope {
+        spawn worker(started, go, io);
+        spawn bad(dead);
+        chan_recv(started, buf);
+        ints_pop(buf);
+        chan_send(go, 1);
+        chan_send(dead, 0);
+    }
+    0
+}

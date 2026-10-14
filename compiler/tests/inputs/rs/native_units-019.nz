@@ -1,0 +1,2 @@
+pub fn helper() -> Int { 11 }
+fn main() -> Int { 99 }

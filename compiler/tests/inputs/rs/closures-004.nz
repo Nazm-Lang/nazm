@@ -1,0 +1,11 @@
+
+struct Pair { a: Str, b: Int, }
+fn main(out: OutCap) -> Int {
+    let sep = str_concat(", ", "");
+    let join = fn(p: Pair, more: Str) -> Pair { Pair(a: str_concat(str_concat(p.a, sep), more), b: p.b + 1) };
+    let mut p = Pair(a: "x", b: 0);
+    let mut i = 0;
+    while i < 3 { p = join(p, int_to_str(i)); i = i + 1; }
+    print(p.a);
+    p.b - 3
+}

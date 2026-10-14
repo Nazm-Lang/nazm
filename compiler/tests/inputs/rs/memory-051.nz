@@ -1,0 +1,10 @@
+struct Holder {
+    name: Str,
+    n: Int,
+}
+fn main() -> Int {
+    let mut h = Holder(name: int_to_str(1), n: 0);
+    h.name = int_to_str(22);
+    h.name = str_concat(h.name, "x");
+    str_len(h.name)
+}

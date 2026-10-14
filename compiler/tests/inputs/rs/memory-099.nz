@@ -1,0 +1,25 @@
+struct Row {
+    name: Str,
+    n: Int,
+}
+fn by_tail(n: Int) -> Vec[Row] {
+    let xs = vec_new[Row]();
+    let mut i = 0;
+    while i < n { vec_push(xs, Row(name: int_to_str(i), n: i)); i = i + 1; }
+    xs
+}
+fn by_return(n: Int) -> Vec[Row] {
+    let xs = vec_new[Row]();
+    let mut i = 0;
+    while true {
+        if i == n { return xs; }
+        vec_push(xs, Row(name: int_to_str(i), n: i));
+        i = i + 1;
+    }
+    xs
+}
+fn main() -> Int {
+    let a = by_tail(5);
+    let b = by_return(7);
+    vec_len(a) * 10 + vec_len(b) + vec_get(b, 6).n * 100
+}

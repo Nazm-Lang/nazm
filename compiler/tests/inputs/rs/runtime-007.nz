@@ -1,0 +1,2 @@
+fn show(io: IoCap) -> Int ! { io } { print("ok") }
+fn main(t: SpawnCap, f: ForeignCap, io: IoCap) -> Int { show(io); 0 }

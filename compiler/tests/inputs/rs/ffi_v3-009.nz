@@ -1,0 +1,2 @@
+extern "C" fn tick(x: Int) -> Int = "tick";
+fn main(f: ForeignCap) -> Int ! { foreign } { tick(1) }

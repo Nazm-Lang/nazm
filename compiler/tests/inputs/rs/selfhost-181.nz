@@ -1,0 +1,1 @@
+struct S { x: Int, } pub enum P { H(v: S), } fn m() -> Int { 0 }

@@ -1,0 +1,3 @@
+use "lib.nz";
+fn quiet(p: P, out: OutCap) -> Int ! {} { p.say(out) }
+fn main() -> Int { 0 }

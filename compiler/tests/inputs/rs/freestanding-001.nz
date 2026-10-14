@@ -1,0 +1,11 @@
+fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write32(150994944, c) }
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+fn main(m: MmioCap) -> Int ! {} {
+    put(m, 72);
+    put(m, 105);
+    put(m, 10);
+    let mut i = 0;
+    let mut s = 0;
+    while i < 10 { s = s + i; i = i + 1; }
+    s + fib(10)
+}

@@ -1,0 +1,1 @@
+enum E { A, T(v: Str), } fn m() -> Int { let mut i = 0; let mut t = 0; while i < 3 { i = i + 1; t = t + match (if i == 1 { continue; } else { E.T(v: "ab") }) { E.A() => 0, E.T(v: s) => str_len(s), }; } t }

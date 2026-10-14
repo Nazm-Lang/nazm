@@ -1,0 +1,25 @@
+use "@std/show"
+
+struct P { x: Int }
+
+impl Show for P { fn show(self: P) -> Str { f"P({self.x})" } }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let s = "str"
+    println("hello")
+    println(42)
+    println(0 - 7)
+    println(3.5)
+    println(true)
+    println(s)
+    println(P(x: 7))
+    println(UInt8(200))
+    print(5)
+    print(" ")
+    print(s)
+    println()
+    eprintln("to stderr")
+    eprint(9)
+    eprint("\n")
+    0
+}

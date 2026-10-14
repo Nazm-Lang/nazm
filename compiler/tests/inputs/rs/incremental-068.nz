@@ -1,0 +1,2 @@
+pub fn shared(n: Int) -> Int { helper() + n }
+fn helper() -> Int { 3 }

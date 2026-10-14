@@ -1,0 +1,5 @@
+use "a.nz";
+pub struct Bee {
+    m: Int,
+}
+pub fn via_b() -> Int { Bee(m: 21).m }

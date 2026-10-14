@@ -1,0 +1,2 @@
+struct Oops { code: Int, }
+fn leaf(f: Bool) -> Result[Int, Oops] { if f { return Result[Int, Oops].Err(error: Oops(code: 1)); } Result[Int, Oops].Ok(value: 2) }

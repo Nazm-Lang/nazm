@@ -1,0 +1,5 @@
+struct P { x: Int }
+fn f(n: Int) -> Int ! {}
+    requires P(x: n).x > 0
+{ n }
+fn main() -> Int { 0 }

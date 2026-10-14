@@ -1,0 +1,21 @@
+use "@std/hash";
+use "@std/hashmap";
+fn keys(m: HashMap[Int, Int]) -> Str {
+let ks = hashmap_keys(m);
+let mut s = "";
+let mut i = 0;
+while i < vec_len(ks) { s = str_concat(s, int_to_str(vec_get(ks, i))); i = i + 1; }
+s
+}
+fn fill(m: HashMap[Int, Int]) -> Int { let mut i = 0; while i < 6 { hashmap_set(m, i, i); i = i + 1; } 0 }
+fn main(out: OutCap) -> Int {
+let a = hashmap_new[Int, Int]();
+let b = hashmap_with_seed[Int, Int](UInt64(99));
+fill(a); fill(b);
+let c = hashmap_with_seed[Int, Int](UInt64(0));
+fill(c);
+print(if keys(a) == keys(b) { "same order\n" } else { "other order\n" });
+print(if hashmap_len(a) == hashmap_len(b) { "same length\n" } else { "other length\n" });
+print(if keys(a) == keys(c) { "reproducible\n" } else { "not reproducible\n" });
+0
+}

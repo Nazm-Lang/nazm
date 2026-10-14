@@ -1,0 +1,10 @@
+fn build() -> Int {
+    let xs = strs_new();
+    let mut i = 0;
+    while i < 20 {
+        strs_push(xs, int_to_str(i));
+        i = i + 1;
+    }
+    strs_len(xs)
+}
+fn main() -> Int { build() }

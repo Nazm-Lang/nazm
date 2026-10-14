@@ -1,0 +1,1 @@
+fn m() -> Int { let s = "a"; 1 + s }

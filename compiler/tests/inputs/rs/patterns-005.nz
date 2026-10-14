@@ -1,0 +1,1 @@
+fn f(s: S) -> Int { match s { S.A() => 1, } }

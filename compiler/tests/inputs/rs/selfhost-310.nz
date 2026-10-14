@@ -1,0 +1,2 @@
+fn same[T](a: Option[T], b: Option[T]) -> Bool { a != b }
+fn main() -> Int { 0 }

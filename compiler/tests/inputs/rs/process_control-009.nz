@@ -1,0 +1,1 @@
+fn main(p: ProcessCap, io: IoCap) -> Int ! { io } { os_status(os_spawn_in("ls", strs_new(), read_file("cfg"), strs_new())) }

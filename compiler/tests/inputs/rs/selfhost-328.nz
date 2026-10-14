@@ -1,0 +1,2 @@
+struct Box[T] { value: T, }
+fn main() -> Int { let a = Box[Vec[Int]](value: vec_new[Int]()); if same[Box[Vec[Int]]](a, a) { 1 } else { 0 } }

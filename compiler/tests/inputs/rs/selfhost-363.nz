@@ -1,0 +1,3 @@
+struct Sq { s: Int }
+impl Nope for Sq { fn area(self: Sq) -> Int { 0 } }
+fn main() -> Int { 0 }

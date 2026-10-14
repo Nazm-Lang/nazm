@@ -1,0 +1,2 @@
+struct R[effects E] { x: Int, }
+fn main() -> Int { 0 }

@@ -1,0 +1,2 @@
+fn look(h: OsHandle) -> Int ! { io } { os_child_pid(h) + os_try_wait(h) + os_wait_until(h, 0) + os_child_rusage(h) }
+fn main(p: ProcessCap) -> Int ! { io } { look(os_spawn_in("ls", strs_new(), "", strs_new())) }

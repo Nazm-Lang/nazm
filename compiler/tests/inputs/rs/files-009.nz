@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { if os_stdin() == os_stdin() { 1 } else { 0 } }

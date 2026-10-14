@@ -1,0 +1,2 @@
+struct P[A, B] { a: A, b: B }
+fn g0[T](x: T) -> Int { 1 }

@@ -1,0 +1,2 @@
+fn main(io: IoCap, f: ForeignCap) -> Int
+{ print("started"); print(int_to_str(c_add(1, 2))); 0 }

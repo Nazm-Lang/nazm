@@ -1,0 +1,2 @@
+use "noise.nz";
+fn main() -> Int { noise(out) + 1 }

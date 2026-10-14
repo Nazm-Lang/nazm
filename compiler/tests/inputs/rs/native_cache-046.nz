@@ -1,0 +1,4 @@
+enum Thing {
+    M(m: Str),
+}
+pub fn from_b() -> Int { let t = Thing.M(m: int_to_str(22)); let u = t; match u { Thing.M(m: m) => str_len(m), } }

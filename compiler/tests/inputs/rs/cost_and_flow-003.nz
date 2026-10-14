@@ -1,0 +1,2 @@
+extern "C" fn labs(x: Int) -> Int = "labs";
+fn main(f: ForeignCap) -> Int ! { foreign } { labs(0 - 3) }

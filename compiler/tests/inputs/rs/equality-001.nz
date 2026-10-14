@@ -1,0 +1,23 @@
+struct Item {
+    name: Str,
+    n: Int,
+}
+enum Shape {
+    Plain,
+    Named(label: Str),
+    Pair(left: Str, right: Str),
+}
+struct Outer {
+    item: Item,
+    shape: Shape,
+    note: Option[Str],
+}
+fn text(n: Int) -> Str { str_concat("t-", int_to_str(n)) }
+fn item(n: Int) -> Item { Item(name: text(n), n: n) }
+fn shape(k: Int) -> Shape {
+    if k % 3 == 0 { return Shape.Plain(); }
+    if k % 3 == 1 { return Shape.Named(label: text(k)); }
+    Shape.Pair(left: text(k), right: text(k + 1))
+}
+fn outer(n: Int) -> Outer { Outer(item: item(n), shape: shape(n), note: Option[Str].Some(value: text(n))) }
+fn some_text(n: Int) -> Option[Str] { Option[Str].Some(value: text(n)) }

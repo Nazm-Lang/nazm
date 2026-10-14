@@ -1,0 +1,2 @@
+static S: Atomic = atomic_new(0);
+fn main(m: MmioCap) -> Int ! {} { atomic_add(S, 1) }

@@ -1,0 +1,2 @@
+use "model.nz";
+fn main() -> Int { let p = Hidden(n: 1); p.n }

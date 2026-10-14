@@ -1,0 +1,22 @@
+use "@std/ioerror";
+use "@std/error";
+use "@std/file";
+fn load(io: IoCap, path: Str) -> Result[Int, Error] ! { io } {
+    let b = error_io_result(file_read_all(io, path))?;
+    Result[Int, Error].Ok(value: bytes_len(b))
+}
+fn config(io: IoCap) -> Result[Int, Error] ! { io } {
+    match load(io, "missing.cfg") {
+        Result.Ok(value: n) => Result[Int, Error].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Error].Err(error: error_context(e, "loading the configuration")),
+    }
+}
+fn main(io: IoCap) -> Int {
+    match config(io) {
+        Result.Ok(value: n) => print("loaded\n"),
+        Result.Err(error: e) => print(str_concat(error_show(e), "\n")),
+    };
+    print(str_concat(error_show(error_context(error_context(error_new("bad digit"), "line 3"), "reading the table")), "\n"));
+    print(str_concat(io_kind_name(io_error_from_errno(2).kind), "\n"));
+    0
+}

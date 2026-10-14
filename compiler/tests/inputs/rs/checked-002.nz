@@ -1,0 +1,1 @@
+fn main() -> Int { match checked_add(1.5, 2.0) { Option.Some(value: v) => 1, Option.None() => 0, } }

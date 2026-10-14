@@ -1,0 +1,2 @@
+fn f(o: Option[Int]) -> Int { let x = match o { Option.None() => { return 7; }, Option.Some(value: v) => { return v; }, }; x }
+fn main() -> Int { 0 }

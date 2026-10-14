@@ -1,0 +1,12 @@
+pub enum Token {
+    Word(text: Str),
+    End,
+}
+pub fn token(n: Int) -> Token {
+    if n == 0 { return Token.End(); }
+    Token.Word(text: int_to_str(n))
+}
+pub fn find(n: Int) -> Option[Str] {
+    if n > 3 { return Option[Str].Some(value: int_to_str(n)); }
+    Option[Str].None()
+}

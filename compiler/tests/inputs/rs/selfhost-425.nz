@@ -1,0 +1,14 @@
+struct Holder {
+    name: Str,
+}
+fn make() -> Holder { Holder(name: str_concat("ab", "cd")) }
+fn main() -> Int {
+    let s = make().name;
+    let mut noise = "";
+    let mut i = 0;
+    while i < 20 {
+        noise = str_concat("zz", noise);
+        i = i + 1;
+    }
+    str_byte(s, 3)
+}

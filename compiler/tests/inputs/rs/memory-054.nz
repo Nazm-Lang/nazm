@@ -1,0 +1,9 @@
+struct Holder {
+    name: Str,
+}
+fn tail() -> Holder { Holder(name: int_to_str(1)) }
+fn explicit() -> Holder {
+    let h = Holder(name: int_to_str(22));
+    return h;
+}
+fn main() -> Int { str_len(tail().name) + str_len(explicit().name) }

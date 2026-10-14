@@ -1,0 +1,10 @@
+fn bad(n: Int) -> Int {
+    let z = 0;
+    n % z
+}
+fn two(a: Int, b: Int) -> Int { a + b }
+fn main() -> Int {
+    let z = 0;
+    let m = 9223372036854775807;
+    two(m + 1, 7 / z)
+}

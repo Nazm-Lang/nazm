@@ -1,0 +1,3 @@
+use "b.nz";
+fn pure() -> Int ! {} { twice(21) }
+fn main() -> Int { pure() }

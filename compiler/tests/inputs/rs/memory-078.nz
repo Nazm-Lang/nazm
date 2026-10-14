@@ -1,0 +1,14 @@
+enum E {
+    Empty,
+    Pair(a: Str, b: Str),
+}
+fn size(e: E) -> Int { match e { E.Empty() => 0, E.Pair(a: x, b: y) => str_len(x) + str_len(y), } }
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 500 {
+        n = n + size(E.Pair(a: int_to_str(i), b: int_to_str(i + 1)));
+        i = i + 1;
+    }
+    n
+}

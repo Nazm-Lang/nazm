@@ -1,0 +1,2 @@
+fn f[effects E](xs: Vec[fn() -> Int ! { E }]) -> Int ! { E } { 0 }
+fn main() -> Int { 0 }

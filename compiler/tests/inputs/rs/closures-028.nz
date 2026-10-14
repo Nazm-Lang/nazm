@@ -1,0 +1,2 @@
+fn w(f: fn(Int) -> Int) -> Int { f(1) }
+fn main(sp: SpawnCap) -> Int ! { spawn } { let f = fn(x: Int) -> Int { x }; scope { spawn w(f); } 0 }

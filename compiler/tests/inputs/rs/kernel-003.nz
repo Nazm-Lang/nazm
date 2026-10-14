@@ -1,0 +1,2 @@
+@on_failure
+fn h(code: Bool) -> Int ! {} { 0 }

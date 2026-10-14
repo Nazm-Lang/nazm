@@ -1,0 +1,9 @@
+fn h() -> Int {
+    let mut i = 0;
+    while i < 5 {
+        i = i + 1;
+        return if i == 3 { break; } else { i * 100 };
+    }
+    i
+}
+fn main() -> Int { h() }

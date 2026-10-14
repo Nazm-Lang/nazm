@@ -1,0 +1,1 @@
+fn main(io: IoCap) -> Int ! { io } { let path = "out.txt"; let w = fn(c: IoCap) -> Int ! { io } { write_file(path, "x") }; w(io) }

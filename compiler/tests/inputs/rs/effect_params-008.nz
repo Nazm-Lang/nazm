@@ -1,0 +1,2 @@
+fn both[effects E](f: fn() -> Int ! { E }, g: fn() -> Int ! { E }) -> Int ! { E } { f() + g() }
+fn main(io: IoCap) -> Int ! { io } { both(fn() -> Int ! { io } { print("a"); 1 }, fn() -> Int { 2 }) }

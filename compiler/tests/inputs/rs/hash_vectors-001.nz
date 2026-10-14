@@ -1,0 +1,54 @@
+use "@std/sha256";
+use "@std/blake3";
+
+fn ramp(n: Int) -> Bytes {
+    let b = bytes_new(n);
+    for i in 0..n { bytes_set(b, i, UInt8(i % 251)); }
+    b
+}
+
+fn hex(d: Bytes) -> Str {
+    let digits = "0123456789abcdef";
+    let out = bytes_new(2 * bytes_len(d));
+    for i in 0..bytes_len(d) {
+        let b = Int(bytes_get(d, i));
+        bytes_set(out, 2 * i, UInt8(str_byte(digits, b >> 4)));
+        bytes_set(out, 2 * i + 1, UInt8(str_byte(digits, b & 15)));
+    }
+    bytes_to_str(out)
+}
+
+// Pieces of 1, 63, 64, 65, 1000 and 7 bytes, over and over.
+fn piece(k: Int) -> Int {
+    let sizes = [1, 63, 64, 65, 1000, 7];
+    sizes[k % 6]
+}
+
+fn sha256_pieces(data: Bytes) -> Str {
+    let h = sha256_new();
+    let mut at = 0;
+    let mut k = 0;
+    while at < bytes_len(data) {
+        let end = if at + piece(k) < bytes_len(data) { at + piece(k) } else { bytes_len(data) };
+        sha256_update(h, bytes_slice(data, at, end));
+        // Finishing leaves the hasher as it was.
+        sha256_finish(h);
+        at = end;
+        k = k + 1;
+    }
+    hex(sha256_finish(h))
+}
+
+fn blake3_pieces(data: Bytes) -> Str {
+    let h = blake3_new();
+    let mut at = 0;
+    let mut k = 0;
+    while at < bytes_len(data) {
+        let end = if at + piece(k) < bytes_len(data) { at + piece(k) } else { bytes_len(data) };
+        blake3_update(h, bytes_slice(data, at, end));
+        blake3_finish(h);
+        at = end;
+        k = k + 1;
+    }
+    hex(blake3_finish(h))
+}

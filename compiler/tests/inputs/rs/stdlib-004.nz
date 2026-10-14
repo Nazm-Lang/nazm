@@ -1,0 +1,2 @@
+use "@std/text";
+pub fn shout(s: Str) -> Str ! {} { str_concat(text_trim(s), "!") }

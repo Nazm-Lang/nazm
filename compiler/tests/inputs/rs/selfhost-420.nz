@@ -1,0 +1,12 @@
+fn build() -> Int {
+    let xs = strs_new();
+    let mut i = 0;
+    while i < 12 {
+        strs_push(xs, int_to_str(i));
+        i = i + 1;
+    }
+    let got = strs_get(xs, 3);
+    strs_set(xs, 3, "");
+    str_byte(got, 0)
+}
+fn main() -> Int { build() }

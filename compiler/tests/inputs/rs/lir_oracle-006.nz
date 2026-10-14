@@ -1,0 +1,13 @@
+fn main(out: OutCap) -> Int {
+let xs = ints_new();
+let ss = strs_new();
+let mut i = 0;
+while i < 50 { ints_push(xs, i * i); strs_push(ss, str_concat("n", int_to_str(i))); i = i + 1; }
+ints_set(xs, 3, 1000);
+strs_set(ss, 4, "four");
+let joined = str_concat(strs_get(ss, 4), strs_get(ss, 49));
+print(joined);
+print(int_to_str(ints_get(xs, 3) + ints_get(xs, 49) + ints_len(xs) + strs_len(ss)));
+print(str_slice("abcdef", 1, 4));
+if joined == "fourn49" { 0 } else { 1 }
+}

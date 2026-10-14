@@ -1,0 +1,2 @@
+fn put[T](v: Vec[T], x: T) -> Int ! {} { vec_push(v, x); 0 }
+fn main(io: IoCap) -> Int ! { io } { let ps = vec_new[Str](); put(ps, arg(1)); write_file(vec_get(ps, 0), "x") }

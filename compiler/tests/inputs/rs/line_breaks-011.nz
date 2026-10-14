@@ -1,0 +1,13 @@
+fn swap(p: (Int, Str)) -> (Str, Int) {
+    let (a, b) = p
+    (b, a)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let t = swap((1, "one"))
+    println(f"{t.0} {t.1}")
+    let xs: Ints = [1, 2]
+    [3, 4]
+    println(xs.len())
+    0
+}

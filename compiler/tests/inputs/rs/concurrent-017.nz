@@ -1,0 +1,23 @@
+
+fn bad(dead: Chan, done: Chan) -> Int {
+    let buf = ints_new();
+    chan_recv(dead, buf);
+    let z = ints_pop(buf);
+    chan_send(done, 1);
+    1 / z
+}
+fn main(tasks: SpawnCap) -> Int {
+    let dead = chan_new(1);
+    let done = chan_new(1);
+    let buf = ints_new();
+    let mut top = 1;
+    scope {
+        spawn bad(dead, done);
+        chan_send(dead, 0);
+        chan_recv(done, buf);
+        ints_pop(buf);
+        let mut n = 0;
+        while n < 64 { top = top + top; n = n + 1; }
+    }
+    top
+}

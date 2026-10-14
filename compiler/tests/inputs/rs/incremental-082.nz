@@ -1,0 +1,3 @@
+use "b.nz";
+fn weight(s: State) -> Int { match s { State.Ready() => 21, State.Done(code: c) => c, } }
+fn main() -> Int { weight(start()) + weight(State.Done(code: 21)) }

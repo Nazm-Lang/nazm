@@ -1,0 +1,4 @@
+enum Maybe[T] { Some(value: T), None, }
+fn some[T](x: T) -> Maybe[T] { Maybe[T].Some(value: x) }
+fn or_else[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }
+fn main() -> Int { str_len(or_else(some("abc"), "none")) }

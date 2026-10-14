@@ -1,0 +1,1 @@
+fn m() -> Int { let x = Maybe[Int].Some(value: 42); let y = Maybe[Int].None(); 0 }

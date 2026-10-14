@@ -1,0 +1,2 @@
+```nazm
+fn worker(jobs: Chan, results: Chan) -> Int {

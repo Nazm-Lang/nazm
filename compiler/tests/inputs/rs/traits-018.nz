@@ -1,0 +1,5 @@
+use "shape.nz";
+use "poly.nz";
+pub struct Tri { a: Int, }
+impl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }
+impl Poly for Tri { fn sides(self: Tri) -> Int { 4 } }

@@ -1,0 +1,4 @@
+use "@std/io";
+use "@std/result";
+fn save(io: IoCap) -> Int ! { io } { let p = result_unwrap_or(io_read(io, "cfg"), "out"); write_file(p, "x") }
+fn main(io: IoCap) -> Int { save(io) }

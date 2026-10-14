@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let c = chan_new(2);
+    chan_send(c, 3);
+    chan_close(c);
+    let buf = ints_new();
+    let first = chan_recv(c, buf);
+    let second = chan_recv(c, buf);
+    ints_get(buf, 0) + ints_len(buf)
+}

@@ -1,0 +1,17 @@
+enum Slot {
+    Empty,
+    Full(hs: Vec[fn() -> Int]),
+}
+
+fn main() -> Int {
+    let hs = vec_new[fn() -> Int]();
+    let s = Slot.Full(hs: hs);
+    let f = fn() -> Int {
+        match s {
+            Slot.Empty() => 0,
+            Slot.Full(hs: v) => vec_len(v),
+        }
+    };
+    vec_push(hs, f);
+    0
+}

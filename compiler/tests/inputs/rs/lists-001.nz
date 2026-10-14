@@ -1,0 +1,27 @@
+use "@std/text"
+
+fn total(xs: Vec[Int]) -> Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn names() -> Strs { "a b c".split(" ") }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let xs = ints_new()
+    ints_push(xs, 3)
+    vec_push(xs, 4)
+    xs.push(5)
+    let v: Vec[Int] = xs
+    println(f"{total(xs)} {vec_len(v)} {ints_get(v, 2)} {v[0]}")
+    let s: Vec[Str] = names()
+    strs_push(s, "d")
+    vec_push(s, "e")
+    println(f"{str_join(s, "-")} {strs_len(s)} {vec_get(s, 0)}")
+    let w = vec_new[Str]()
+    w.push("x")
+    let back: Strs = w
+    println(f"{strs_len(back)} {strs_pop(back)} {vec_len(w)}")
+    0
+}

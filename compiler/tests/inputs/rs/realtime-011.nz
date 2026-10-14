@@ -1,0 +1,1 @@
+fn main() -> Int ! {} { let c = chan_new(1); if chan_send(c, 4) { 1 } else { 0 } }

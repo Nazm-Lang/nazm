@@ -1,0 +1,2 @@
+pub struct Option { x: Int, }
+pub fn helper() -> Int { 1 }

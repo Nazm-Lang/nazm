@@ -1,0 +1,2 @@
+pub use "shapes.nz" { Area as Shape };
+fn main() -> Int { 0 }

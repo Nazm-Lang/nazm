@@ -1,0 +1,4 @@
+use "t.nz";
+use "w.nz";
+impl[T] Show for W[T] { fn show(self: W[T]) -> Str { "w" } }
+fn main() -> Int { 0 }

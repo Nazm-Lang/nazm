@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let z = 0;
+    7 / z
+}

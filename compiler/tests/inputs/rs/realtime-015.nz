@@ -1,0 +1,5 @@
+fn a(x: Int) -> Int { x + 1 }
+fn b(x: Int) -> Int { a(x) * 2 }
+fn c(x: Int) -> Int { b(x) + b(x + 1) }
+fn d(x: Int) -> Int { c(x) - a(x) }
+fn main() -> Int ! {} { let mut i = 0; let mut s = 0; while i < 1000 { s = s + d(i); i = i + 1; } s }

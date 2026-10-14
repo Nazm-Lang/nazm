@@ -1,0 +1,14 @@
+struct Point { x: Int, label: Str, }
+enum Shape { Dot, At(p: Point), }
+struct Event { shape: Shape, note: Str, }
+fn area(s: Shape) -> Int { match s { Shape.Dot() => 0, Shape.At(p: p) => p.x + str_len(p.label), } }
+fn main() -> Int {
+    let mut i = 0;
+    let mut n = 0;
+    while i < 100 {
+        let e = Event(shape: Shape.At(p: Point(x: 1, label: int_to_str(i))), note: int_to_str(i));
+        n = n + area(e.shape) + str_len(e.note);
+        i = i + 1;
+    }
+    n
+}

@@ -1,0 +1,33 @@
+use "@std/random";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, "\n")) }
+fn main(out: OutCap, rc: RandomCap) -> Int {
+    let r = random_new(UInt64(42));
+    line(out, num_to_str(random_u64(r)));
+    line(out, num_to_str(random_u64(r)));
+    line(out, num_to_str(random_u64(r)));
+    let mut counts = ints_new();
+    let mut k = 0;
+    while k < 6 { ints_push(counts, 0); k = k + 1; }
+    let mut i = 0;
+    while i < 6000 { let d = random_int(r, 0, 6); ints_set(counts, d, ints_get(counts, d) + 1); i = i + 1; }
+    let mut fair = true;
+    let mut j = 0;
+    while j < 6 { if ints_get(counts, j) < 850 || ints_get(counts, j) > 1150 { fair = false; } j = j + 1; }
+    line(out, if fair { "fair" } else { "unfair" });
+    let f = random_float(r);
+    line(out, if f >= 0.0 && f < 1.0 { "in [0, 1)" } else { "out of range" });
+    let v = vec_new[Int]();
+    let mut n = 0;
+    while n < 10 { vec_push(v, n); n = n + 1; }
+    random_shuffle(random_new(UInt64(7)), v);
+    let mut s = "";
+    let mut m = 0;
+    while m < 10 { s = str_concat(s, int_to_str(vec_get(v, m))); m = m + 1; }
+    line(out, s);
+    let a = random_seed(rc);
+    let b = random_seed(rc);
+    line(out, if a != b { "two seeds differ" } else { "the same seed twice" });
+    let buf = bytes_new(1000);
+    line(out, match random_bytes(rc, buf) { Result.Ok(value: k2) => int_to_str(k2), Result.Err(error: e) => e });
+    0
+}

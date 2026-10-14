@@ -1,0 +1,2 @@
+struct Node { kids: Vec[Node], }
+fn main() -> Int { 0 }

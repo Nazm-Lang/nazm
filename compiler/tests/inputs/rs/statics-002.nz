@@ -1,0 +1,2 @@
+static A: Int = 1;
+fn main() -> Int { A = 2; 0 }

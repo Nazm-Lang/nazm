@@ -1,0 +1,2 @@
+use "tool.nz";
+pub fn v() -> Int { 1 }

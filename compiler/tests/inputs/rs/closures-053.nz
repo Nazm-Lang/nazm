@@ -1,0 +1,5 @@
+use "lib.nz";
+
+fn main() -> Int {
+    0
+}

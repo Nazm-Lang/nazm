@@ -1,0 +1,4 @@
+trait T { fn n(self: Self) -> Int; fn m(self: Self) -> Int { 0 } }
+struct A { x: Int, }
+impl T for A { fn m(self: A) -> Int { 1 } }
+fn main() -> Int { 0 }

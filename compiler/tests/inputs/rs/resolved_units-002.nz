@@ -1,0 +1,5 @@
+use "lib.nz";
+fn main() -> Int {
+let p = P(a: helper(1));
+match E.B(v: p.a) { E.A() => 0, E.B(v: x) => x + helper(2) }
+}

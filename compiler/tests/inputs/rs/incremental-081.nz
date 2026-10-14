@@ -1,0 +1,2 @@
+enum State { Ready, }
+fn main() -> Int { match State.Ready() { State.Ready() => 0, } }

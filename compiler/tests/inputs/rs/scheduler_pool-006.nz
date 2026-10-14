@@ -1,0 +1,10 @@
+fn worker(c: Chan[Int]) -> Int ! {spawn} {
+let mut a = [0; 8192]; let mut b = [0; 8192]; let mut x = [0; 8192];
+let mut y = [0; 8192]; let mut z = [0; 8192];
+a[1] = 1; b[2] = 2; x[3] = 3; y[4] = 4; z[5] = 5;
+chan_send_of(c, a[1] + b[2] + x[3] + y[4] + z[5]); 0 }
+fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {
+let c = chan_new_of[Int](1);
+scope { spawn worker(c); }
+let got = vec_new[Int](); chan_recv_of(c, got);
+print(int_to_str(vec_get(got, 0))); 0 }

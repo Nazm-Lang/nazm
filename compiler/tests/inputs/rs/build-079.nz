@@ -1,0 +1,5 @@
+fn even(n: Int) -> Bool {
+    if n % 2 == 0 { return true; }
+    return false;
+}
+fn main() -> Int { if even(4) { if even(7) { 0 } else { 42 } } else { 0 } }

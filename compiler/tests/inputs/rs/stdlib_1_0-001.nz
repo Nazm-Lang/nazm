@@ -1,0 +1,11 @@
+use "@std/text";
+fn main(io: IoCap) -> Int ! { io } {
+print(text_to_upper("ab-Cz")); print("|"); print(text_to_lower("AB-cZ")); print("|");
+print(text_replace("a,b,,c", ",", ";")); print("|"); print(text_replace("abc", "", "x")); print("|");
+print(int_to_str(text_count("aaaa", "aa"))); print(int_to_str(text_count("a", ""))); print("|");
+print(text_pad_left("7", 3, "0")); print(text_pad_left("1234", 3, "0")); print(text_pad_right("ab", 4, ".")); print(text_pad_right("ab", 4, "")); print("|");
+let ls = text_lines("x\r\ny\n\nz\n"); print(int_to_str(strs_len(ls))); print(int_to_str(str_len(strs_get(ls, 0)))); print(strs_get(ls, 1)); print(int_to_str(strs_len(text_lines("")))); print("|");
+print(int_to_str(text_compare("ab", "abc") + 10 * text_compare("b", "a") + 100 * text_compare("q", "q"))); print("|");
+print(text_trim_start(" \t a ")); print("|"); print(text_trim_end(" a \n")); print("|");
+print(if text_is_digit(48) && !text_is_digit(58) && text_is_alpha(90) && !text_is_alpha(91) { "T" } else { "F" });
+0 }

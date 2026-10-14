@@ -1,0 +1,17 @@
+fn text(n: Int) -> Result[Str, Str] { Result[Str, Str].Ok(value: str_concat("value-", int_to_str(n))) }
+fn thing(n: Int) -> Result[Item, Str] { Result[Item, Str].Ok(value: item(n)) }
+fn many(n: Int) -> Result[Vec[Str], Str] {
+    let xs = vec_new[Str]();
+    vec_push(xs, int_to_str(n));
+    Result[Vec[Str], Str].Ok(value: xs)
+}
+fn f() -> Result[Int, Str] {
+    let s = text(12345)?;
+    let i = thing(7)?;
+    let xs = many(99)?;
+    churn();
+    Result[Int, Str].Ok(value: str_len(s) * 10000 + str_len(i.name) * 100 + ints_get(i.tags, 0) + str_len(vec_get(xs, 0)) * 1000000)
+}
+fn main() -> Int {
+    match f() { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, }
+}

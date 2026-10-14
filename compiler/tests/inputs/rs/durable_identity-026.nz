@@ -1,0 +1,2 @@
+pub fn v() -> Int { 1 }
+fn main() -> Int { v() }

@@ -1,0 +1,5 @@
+fn main() -> Int {
+    let a = "hello";
+    let b = a;
+    str_len(str_slice(b, 1, 4))
+}

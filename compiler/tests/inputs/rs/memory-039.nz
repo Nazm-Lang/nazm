@@ -1,0 +1,15 @@
+fn use_it(c: Chan, s: Str) -> Int { chan_send(c, str_byte(s, 0)); 0 }
+fn main(tasks: SpawnCap) -> Int {
+    let c = chan_new(4);
+    let mut s = str_concat("ab", "cd");
+    scope {
+        spawn use_it(c, s);
+        spawn use_it(c, str_slice(s, 1, 3));
+        s = "";
+    }
+    chan_close(c);
+    let buf = ints_new();
+    while chan_recv(c, buf) {
+    }
+    ints_len(buf)
+}

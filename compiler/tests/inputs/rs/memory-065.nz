@@ -1,0 +1,12 @@
+fn main() -> Int {
+    let mut xs = ints_new();
+    xs = ints_new();
+    ints_push(xs, 1);
+    let mut i = 0;
+    while i < 3 {
+        xs = ints_new();
+        ints_push(xs, i);
+        i = i + 1;
+    }
+    ints_get(xs, 5)
+}

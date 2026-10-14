@@ -1,0 +1,10 @@
+use "@std/io";
+use "@std/process";
+use "@std/result";
+fn main(io: IoCap) -> Int {
+    io_println(io, result_unwrap_or(io_read(io, "data.txt"), "missing"));
+    match io_read(io, "absent.txt") { Result.Ok(value: v) => io_println(io, v), Result.Err(error: e) => io_eprintln(io, e) };
+    let args = process_args(io);
+    io_println(io, str_join(args, "+"));
+    strs_len(args)
+}

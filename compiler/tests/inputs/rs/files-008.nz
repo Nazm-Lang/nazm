@@ -1,0 +1,2 @@
+fn f() -> Int ! { io } { os_status(os_open_read("a")) }
+fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn first(go: Chan, seen: Ints) -> Int { chan_recv(go, seen); 9223372036854775807 + ints_len(seen) }

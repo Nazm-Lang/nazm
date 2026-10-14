@@ -1,0 +1,10 @@
+use "lib.nz";
+
+fn main(out: OutCap) -> Int {
+    let fs = vec_new[fn() -> Int]();
+    vec_push(fs, adder(4));
+    vec_push(fs, adder(5));
+    let a = vec_get(fs, 0);
+    let b = vec_get(fs, 1);
+    a() + b()
+}

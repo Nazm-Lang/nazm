@@ -1,0 +1,4 @@
+use "shape.nz";
+use "poly.nz";
+use "make.nz";
+fn main() -> Int { make().sides() }

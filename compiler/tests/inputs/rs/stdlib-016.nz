@@ -1,0 +1,22 @@
+use "@std/text";
+use "@std/option";
+use "@std/result";
+fn b(x: Bool) -> Str { if x { "T" } else { "F" } }
+fn o(x: Option[Int]) -> Str { match x { Option.Some(value: v) => int_to_str(v), Option.None() => "none" } }
+fn p(s: Str) -> Str { match text_parse_int(s) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => str_concat("err:", e) } }
+fn line(io: IoCap, s: Str) -> Int { print(s); print("|") }
+fn main(io: IoCap) -> Int {
+    line(io, b(text_starts_with("abc", ""))); line(io, b(text_starts_with("abc", "ab"))); line(io, b(text_starts_with("ab", "abc")));
+    line(io, b(text_ends_with("abc", "bc"))); line(io, b(text_ends_with("abc", "abcd"))); line(io, b(text_ends_with("", "")));
+    line(io, o(text_find("aaa", "aa"))); line(io, o(text_find("abc", ""))); line(io, o(text_find("", "a"))); line(io, o(text_find("abcabc", "ca")));
+    line(io, b(text_contains("hello", "ll"))); line(io, b(text_contains("hello", "lo!")));
+    line(io, text_repeat("ab", 3)); line(io, text_repeat("x", 0)); line(io, text_repeat("x", 0 - 3));
+    let s = text_split("a,,b,", ","); line(io, int_to_str(strs_len(s))); line(io, str_join(s, "/"));
+    line(io, int_to_str(strs_len(text_split("", ",")))); line(io, str_join(text_split("a,b", ""), "/"));
+    line(io, str_join(text_split("a--b--c", "--"), "+"));
+    let ws = str_concat(str_concat(str_from_byte(9), " x y "), str_concat(str_from_byte(10), str_from_byte(13)));
+    line(io, text_trim(ws)); line(io, text_trim("   ")); line(io, text_trim("")); line(io, b(text_is_space(11))); line(io, b(text_is_space(14)));
+    line(io, p("0")); line(io, p("-0")); line(io, p("+7")); line(io, p("007")); line(io, p("")); line(io, p("-")); line(io, p("12a"));
+    line(io, p("9223372036854775807")); line(io, p("-9223372036854775808")); line(io, p("9223372036854775808")); line(io, p("-9223372036854775809")); line(io, p("99999999999999999999"));
+    0
+}

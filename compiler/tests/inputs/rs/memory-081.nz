@@ -1,0 +1,17 @@
+enum Message { Reply(chan: Chan), Text(value: Str), }
+fn worker(m: Message, out: Chan) -> Int {
+    let n = match m { Message.Reply(chan: c) => 0, Message.Text(value: s) => str_len(s), };
+    if chan_send(out, n) { 1 } else { 0 }
+}
+fn main(tasks: SpawnCap) -> Int {
+    let shared = str_concat("he", "llo");
+    let out = chan_new(4);
+    let got = ints_new();
+    scope {
+        spawn worker(Message.Text(value: shared), out);
+        spawn worker(Message.Text(value: shared), out);
+    }
+    if chan_recv(out, got) { 0 } else { 0 };
+    if chan_recv(out, got) { 0 } else { 0 };
+    ints_get(got, 0) + ints_get(got, 1)
+}

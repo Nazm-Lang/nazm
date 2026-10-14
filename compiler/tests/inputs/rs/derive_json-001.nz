@@ -1,0 +1,46 @@
+@derive(json)
+pub enum Shape {
+    Empty,
+    Circle(r: Float64),
+    Rect(w: Int, h: Int),
+}
+
+@derive(json)
+pub struct Point {
+    x: Int,
+    small: UInt8,
+    label: Option[Str],
+    tags: Vec[Str],
+    shape: Shape,
+    kids: List[Point],
+    ok: Bool,
+}
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let tags = vec_new[Str]();
+    vec_push(tags, "a");
+    vec_push(tags, "b\"q");
+    let leaf = Point(x: 2, small: UInt8(7), label: Option[Str].Some(value: "leaf"), tags: vec_new[Str](), shape: Shape.Empty(), kids: list_empty[Point](), ok: false);
+    let kids = vec_new[Point]();
+    vec_push(kids, leaf);
+    let p = Point(x: -1, small: UInt8(255), label: Option[Str].None(), tags: tags, shape: Shape.Rect(w: 3, h: 4), kids: list_from_vec(kids), ok: true);
+    let text = point_to_json(p);
+    show(out, text);
+    match point_from_json(text) {
+        Result.Ok(value: q) => show(out, if point_to_json(q) == text { "decoded: same text" } else { "decoded: DIFFERENT" }),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    match point_from_json("{\"x\": 1, \"small\": 300, \"tags\": [], \"shape\": \"Empty\", \"kids\": [], \"ok\": true}") {
+        Result.Ok(value: q) => show(out, "WRONG: accepted"),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    match point_from_json("{\"x\": 1, \"small\": 3, \"tags\": [1], \"shape\": {\"Circle\": {\"r\": 2}}, \"kids\": [], \"ok\": true}") {
+        Result.Ok(value: q) => show(out, "WRONG: accepted"),
+        Result.Err(error: e) => show(out, f"error: {e}"),
+    };
+    show(out, shape_to_json(Shape.Circle(r: 1.5)));
+    show(out, point_json_schema());
+    0
+}

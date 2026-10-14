@@ -1,0 +1,28 @@
+use "@std/hash"
+use "@std/hashmap"
+use "@std/ordmap"
+
+fn main(out: OutCap) -> Int ! {io} {
+    let counts = hashmap_new[Str, Int]()
+    let words = vec_new[Str]()
+    words.push("a")
+    words.push("b")
+    words.push("a")
+    let mut i = 0
+    while i < words.len() {
+        let w = words[i]
+        counts[w] += 1
+        i += 1
+    }
+    counts["c"] = 9
+    counts["c"] -= 2
+    println(f"{counts["a"]} {counts["b"]} {counts["c"]} {counts.len()}")
+    let names = hashmap_new[Int, Str]()
+    names[1] += "x"
+    names[1] += "y"
+    let scale = ordmap_new[Int, Float64]()
+    scale[3] += 1.5
+    scale[3] *= 2.0
+    println(f"{names[1]} {scale[3]}")
+    0
+}

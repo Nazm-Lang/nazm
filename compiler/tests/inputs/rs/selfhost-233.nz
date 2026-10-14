@@ -1,0 +1,2 @@
+fn g() -> Result[Int, Oops] { let mut t = 0; while t < 3 { t = t + leaf(false)?; } Result[Int, Oops].Ok(value: t) }
+fn m() -> Int { 0 }
