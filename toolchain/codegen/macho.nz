@@ -6,7 +6,7 @@
 use "@std/bytebuf"
 use "@std/text"
 use "lir.nz"
-use "sel.nz"
+use "common.nz"
 
 const HEADER: Int = 32
 const SEGMENT: Int = 392
@@ -79,7 +79,7 @@ fn put_reloc(b: ByteBuf, at: Int, sym: Int, pcrel: Int, len: Int, kind: Int) {
 }
 
 /// The unit's object, or the reasons it cannot be written (in `errors`).
-pub fn write_object(u: Unit, c: Code, errors: Strs) -> Bytes {
+pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     let ns = u.syms.len()
     // Data, placed in its section: 2 read-only, 3 holding addresses, 4 writable.
     let secs = vec_new[ByteBuf]()
@@ -180,9 +180,7 @@ pub fn write_object(u: Unit, c: Code, errors: Strs) -> Bytes {
     ints_push(nrel, 0)
     i = ints_len(c.rel_at) - 1
     while i >= 0 {
-        let kind = c.rel_kind[i]
-        let pcrel = if kind == R_BRANCH26 || kind == R_PAGE21 || kind == R_GOT_PAGE21 { 1 } else { 0 }
-        put_reloc(rel[0], c.rel_at[i], nidx[c.rel_sym[i]], pcrel, 2, kind)
+        put_reloc(rel[0], c.rel_at[i], nidx[c.rel_sym[i]], c.rel_pcrel[i], c.rel_len[i], c.rel_kind[i])
         i -= 1
     }
     for d in u.data {
@@ -225,8 +223,8 @@ pub fn write_object(u: Unit, c: Code, errors: Strs) -> Bytes {
     let out = bytebuf_with_capacity(stroff + bytebuf_len(strtab))
     // mach_header_64
     put32(out, 0xFEEDFACF)
-    put32(out, 0x0100000C)
-    put32(out, 0)
+    put32(out, if x64 { 0x01000007 } else { 0x0100000C })
+    put32(out, if x64 { 3 } else { 0 })
     put32(out, 1)
     put32(out, 4)
     put32(out, cmds)
