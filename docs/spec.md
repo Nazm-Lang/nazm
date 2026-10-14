@@ -140,7 +140,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `statics` | STABLE 1.0 | Gate 3: a number, a `Bool` or an atomic; read-only, or an atomic; module-private. A record, enum or array would be an extension |
 | `boards` | EXPERIMENTAL | Gate 3: manifests, sections, interrupts, the arena and the failure hook, emulator-verified |
 | `for` | STABLE 1.0 | R1a: a 1.x addition, stable since R1 closed (0.10.0); each form means its `while` loop |
-| `box-list` | STABLE 1.0 | R1a: a 1.x addition, stable since R1 closed (0.10.0); recursive types through immutable indirection |
+| `box-list` | STABLE 1.0 | R1a: a 1.x addition, stable since R1 closed (0.10.0); recursive types through immutable indirection. R1.5 (D7) renames its sequence `Chain[T]`, with built-ins `chain_*`: a breaking change, listed for the next release (`N0637` names the new built-in) |
 | `heap-limit` | STABLE 1.0 | R1d, D5: a 1.x addition, stable since R1 closed (0.10.0); `nazm build --heap-limit` and the manifest's `heap-limit` |
 | `cell` | STABLE 1.0 | R1b: a 1.x addition, stable since R1 closed (0.10.0); a mutable handle of one value, the kind `Vec` is |
 | `defer` | STABLE 1.0 | R1b: a 1.x addition, stable since R1 closed (0.10.0); `defer` is a word only at a statement's start before `{` |
@@ -1073,7 +1073,7 @@ corresponding parameter. Then:
 - a cycle whose every edge is inline is an **impossible layout** — `N0336`, as before;
 - any other cycle is an **ownership cycle** — `N0359`, with the path that closes it.
 
-*R1a* labels an edge through `Box` or `List` **immutable** and accepts a cycle of inline and immutable
+*R1a* labels an edge through `Box` or `Chain` **immutable** and accepts a cycle of inline and immutable
 edges (*Immutable indirection*, below); a cycle through a `Vec` is refused as here.
 
 So `Node { children: Vec[Node] }`, `A → Vec[B] → B → Vec[A]`, `enum Tree { Leaf, Node(kids: Vec[Tree]) }`
@@ -1313,7 +1313,7 @@ that exists but cannot be read is `N0407`.
 | `@std/fs` | (N84) `fs_exists(io, path) -> Bool`, `fs_read(io, path) -> Result[Str, Str]`, `fs_read_lines(io, path) -> Result[Strs, Str]`, `fs_write(io, path, text) -> Result[Int, Str]`, `fs_write_lines(io, path, lines) -> Result[Int, Str]` — each `! { io }`; and (R1d, P2; stable since R1 closed (0.10.0)) `fs_temp_dir(io) -> Result[Str, Str]`, a new directory of `os_mkdtemp`'s under `TMPDIR`, or `/tmp` where that is unset or empty |
 | `@std/time` | (N84) `time_ms(t)`, `time_since(t, start)`, `time_deadline(t, ms)`, `time_passed(t, deadline) -> Bool` — each taking the `TimeCap` that allows it, and no effect; and (Gate 2) `Duration { nanos }`, `Instant { nanos }`, `WallTime { unix_nanos }`, `time_duration_ms(ms)`, `time_duration_ns(ns)`, `time_duration_to_ms(d)`, `time_duration_add(a, b)`, `time_now(t)`, `time_elapsed(t, since)`, `time_after(t, d)`, `time_reached(t, at)`, `time_between(a, b)`, `time_wall(t)`, `time_sleep(t, d)` |
 | `@std/json` | (N84) `JsonDoc` and `JsonNode`, an arena document: `json_parse(text) -> Result[JsonDoc, Str]` (an `Err` names the byte offset; integers only), `json_encode(doc)`, `json_encode_node(doc, node)`, `json_quote(s)`, `json_root`, `json_kind`, `json_len`, `json_at`, `json_get`, `json_key_at`, `json_value_at`, `json_int`, `json_str`, `json_bool`, and the builders `json_new`, `json_with_root`, `json_add_null`, `json_add_bool`, `json_add_int`, `json_add_str`, `json_add_array`, `json_add_object`; and (Gate 2) `json_parse_floats(text)` — a number with a fraction or an exponent, or an integer `Int` cannot hold, is a `Float64` node, which `json_kind` calls a `number` and `json_int` does not answer; `json_parse` still refuses them — `json_add_float(doc, x)`, `json_float(doc, node) -> Option[Float64]` (an integer node converted), and `json_encode_pretty(doc)` (two spaces a level); a float is written as the shortest text that reads back to it, with `.0` where it would read as an integer, and an infinity or NaN as `null` |
-| `@std/toml` | (R1c, S1; stable since R1 closed (0.10.0)) TOML 1.0 as a tree: `pub enum Toml` — `Str`, `Int`, `Float`, `Bool`, `OffsetDatetime`, `LocalDatetime`, `LocalDate`, `LocalTime` (each date-time its RFC 3339 text, `T` and `Z` upper-case), `Array(items: List[Toml])`, `Table(keys: List[Str], values: List[Toml])`, a table's keys in the order they were first defined. `toml_parse(text) -> Result[Toml, Str]` checks every TOML 1.0 rule — a key or table defined twice, a header after dotted keys made the table, an inline table extended, an integer past `Int`, a date that is not one — and never traps: an `Err` is `line:column: what`. `toml_encode(t)` writes a table's plain values, then each sub-table under its header and each array of tables as `[[...]]`: the text parses back to the same values, each table's keys in that order, and encoding again gives the same text. `toml_get(t, key) -> Option[Toml]`; (L2c) `toml_is_table(t) -> Bool`, what a derived record is read from |
+| `@std/toml` | (R1c, S1; stable since R1 closed (0.10.0)) TOML 1.0 as a tree: `pub enum Toml` — `Str`, `Int`, `Float`, `Bool`, `OffsetDatetime`, `LocalDatetime`, `LocalDate`, `LocalTime` (each date-time its RFC 3339 text, `T` and `Z` upper-case), `Array(items: Chain[Toml])`, `Table(keys: Chain[Str], values: Chain[Toml])`, a table's keys in the order they were first defined. `toml_parse(text) -> Result[Toml, Str]` checks every TOML 1.0 rule — a key or table defined twice, a header after dotted keys made the table, an inline table extended, an integer past `Int`, a date that is not one — and never traps: an `Err` is `line:column: what`. `toml_encode(t)` writes a table's plain values, then each sub-table under its header and each array of tables as `[[...]]`: the text parses back to the same values, each table's keys in that order, and encoding again gives the same text. `toml_get(t, key) -> Option[Toml]`; (L2c) `toml_is_table(t) -> Bool`, what a derived record is read from |
 | `@std/sha256` | (R1e, S1; stable since R1 closed, 0.10.0) SHA-256 as FIPS 180-4 defines it: `sha256(data: Bytes) -> Bytes`, the 32-byte digest; `sha256_hex(data) -> Str`, its 64 lower-case hexadecimal digits; and an incremental `Sha256`, a handle shared like a `Vec` — `sha256_new()`, `sha256_update(h, data) -> Int` (`0`), `sha256_finish(h) -> Bytes`, which pads a copy and leaves the hasher as it was, so more may be given and finished again. The same digest for the same bytes in every implementation, however they are split. A digest for identity and integrity — content addresses, lockfiles — written in Nazm, not the cryptography 1.0 leaves out (below): no constant-time claim and no audit |
 | `@std/blake3` | (R1e, S1; stable since R1 closed, 0.10.0) BLAKE3's default 32-byte output, as its reference implementation computes it — 1024-byte chunks, seven-round compression, the tree of chaining values with `CHUNK_START`, `CHUNK_END`, `PARENT` and `ROOT`: `blake3(data: Bytes) -> Bytes`, `blake3_hex(data) -> Str`, and an incremental `Blake3` — `blake3_new()`, `blake3_update(h, data) -> Int` (`0`), `blake3_finish(h) -> Bytes`, leaving the hasher as it was. Unkeyed hashing only: no keyed mode, key derivation or longer output. A digest, as `@std/sha256`'s is |
 | `@std/regex` | (R1e, S5; stable since R1 closed (0.10.0)) Regular expressions matched in time linear in the text: a pattern is compiled into a Thompson NFA and run as a Pike VM, every state advancing together a scalar value at a time and each held by one thread, so a search is O(m·n) for m instructions and n bytes and nothing backtracks. `pub struct Match { start, end }` (byte offsets, `end` exclusive), `pub struct Regex`; `regex_compile(pattern) -> Result[Regex, Str]` — an `Err` is `what at byte N`; `regex_is_match(r, text) -> Bool`; `regex_find(r, text, from) -> Option[Match]`, leftmost-first as in Rust's `regex` and Perl (the earliest start, then the pattern's preference: an earlier branch, a greedy repetition's longer run, a lazy one's shorter), `None` too for `from` outside `0..=str_len(text)`; `regex_find_all(r, text) -> Vec[Match]`, non-overlapping, an empty match right where the previous one ended skipped, as Rust's `find_iter` does (worst case O(m·n²), as there); `regex_captures(r, text, from) -> Option[Vec[Option[Match]]]` — item 0 the match, item `k` group `k`, `None` for a group that took no part; `regex_groups(r)`. Rust's syntax: literals and escapes (`\n \t \r \f \v`, `\xHH`, `\x{…}`, `\uHHHH`, `\u{…}`, `\UHHHHHHHH`, `\` before ASCII punctuation), `.`, classes `[…]` and `[^…]` with ranges, `\d \w \s` and their negations (Unicode: `\d` is `\p{Nd}`, `\s` `White_Space`, `\w` letters, marks, `Nd`, `Nl`, `Pc`, the joiners and the circled letters), `\p{…}`, `\P{…}` and `\pX` for the general categories `L` `Lu` `Ll` `Lt` `Lm` `Lo` `M` `Mn` `Mc` `Me` `N` `Nd` `Nl` `No` `Pc` of Unicode 16.0, `^ $ \A \z \b \B`, `\|`, groups `(…)`, `(?:…)`, `(?<name>…)`, `(?P<name>…)` (numbered; names not kept), flags `(?ims-ims)` and `(?ims:…)` (`i` folds ASCII letters only), `* + ? {n} {n,} {n,m}` greedy or lazy, and a one-scalar lookahead `(?=C)` / `(?!C)` — enough for the GPT-2 and `cl100k_base` pre-tokenisers' `\s+(?!\S)`. `.` and a class match one whole UTF-8 scalar value; a byte that begins no valid sequence is read as U+FFFD. Refused by name: backreferences, lookbehind, longer lookaheads, nested classes and `&&`, POSIX classes, other properties and scripts, other flags, and a pattern past 100,000 instructions once its counts are written out |
@@ -1404,7 +1404,7 @@ compared is not observable, and an implementation may stop at the first unequal 
 customisable: a type cannot define its own `==`. Not identity: no value's address, owner or
 handle is compared. Not ordering: `< <= > >=` remain `Int`-only. Not hashing. *(Corrected
 2026-10-12, R1a: ordering and hashing are derived too — see* Ordering and hashing are derived*;
-`Box` and `List` compare by what they hold.)* And not
+`Box` and `Chain` compare by what they hold.)* And not
 defined on sequences, vectors or channels, deliberately, by the rule that stops a record
 containing one from comparing.
 
@@ -1474,7 +1474,7 @@ fn twice[T: Show](x: T) -> Str { str_concat(x.show(), Show.show(x)) }
 | Rule | |
 | --- | --- |
 | **Declaring** | A trait is a list of signatures, each ended by `;`, whose first parameter is `self: Self` (`N0609`). Since R1b a signature may instead end in a default body (below); until R1b a body in a trait was a syntax error. A trait shares the type namespace with records and enums, and `pub` exports it |
-| **Impls of generic types** (R1b, L11) | `impl[T: Show, U] Show for Pair[T, U] { … }`: an impl for every instance of a generic record or enum, written for the type applied to **exactly** its parameters, in order (`N0604` for anything else — `Pair[T, Int]`, a type that is not generic). Each parameter may require `Equality` or a trait. The impl applies to an instance — `Pair[Int, Str]` — whose arguments meet those requirements; a method call, UFCS, and a bound (`[T: Show]` given `Pair[Int, Str]`) all use it, each method run at the instance's arguments. Inside, `Self` is the type applied to the impl's parameters. Coherence and the orphan rule are the definition's: one impl of a trait per generic definition (`N0600`), in the trait's module or the definition's (`N0601`). A built-in generic type (`Vec[T]`, `Box[T]`, `List[T]`, `Cell[T]`) has none |
+| **Impls of generic types** (R1b, L11) | `impl[T: Show, U] Show for Pair[T, U] { … }`: an impl for every instance of a generic record or enum, written for the type applied to **exactly** its parameters, in order (`N0604` for anything else — `Pair[T, Int]`, a type that is not generic). Each parameter may require `Equality` or a trait. The impl applies to an instance — `Pair[Int, Str]` — whose arguments meet those requirements; a method call, UFCS, and a bound (`[T: Show]` given `Pair[Int, Str]`) all use it, each method run at the instance's arguments. Inside, `Self` is the type applied to the impl's parameters. Coherence and the orphan rule are the definition's: one impl of a trait per generic definition (`N0600`), in the trait's module or the definition's (`N0601`). A built-in generic type (`Vec[T]`, `Box[T]`, `Chain[T]`, `Cell[T]`) has none |
 | **Default bodies** (R1b, L11) | `fn m(self: Self, …) -> R ! {e} { … }` in a trait: what an impl that defines no `m` gets. The body is checked **once**, as a function generic over `Self` that requires the trait — so it may call the trait's other methods on `self`, and nothing else about `Self` — against the signature's declared effects (none written is none). An impl may still define `m`, which then replaces it for that type. A call on a type whose impl leaves `m` to the default, directly, by UFCS or through a bound, runs the default at that type |
 | **Implementing** | `impl Trait for Type { fn … }`, or `impl[T…] Trait for Type[T…] { fn … }` since R1b (below), defines every method of the trait that has no default body exactly once, and any that has one at most once (`N0602`), each with the trait's signature with `Self` replaced by `Type`, effects included, and its first parameter named `self` (`N0603`). `Self` may be written for the type inside the impl. A method that writes no effect set has its trait's. `Type` is a non-generic record or enum, a numeric type, `Bool` or `Str` (`N0604`) |
 | **Coherence** | A compilation has at most one impl of a trait for a type (`N0600`). An impl is in the module declaring the trait or the one declaring the type, and for `Int`, `Bool` and `Str` only the trait's (`N0601`) |
@@ -1623,6 +1623,7 @@ Each is a spelling of something the language already had, and means exactly that
 | `{"a": 1, "b": 2}`, `Map[Str, Int]` (D5) | `{ let m = hashmap_single("a", 1); hashmap_set(m, "b", 2); m }`: a map literal — a `{` whose first key, a literal or a name, is followed by `:` — builds a `HashMap` whose key and value types its first entry settles; each key and value is evaluated in the order written. `Map[K, V]` is `@std/hashmap`'s `HashMap[K, V]`, so `m[k]`, `m[k] = v` and `m[k] += 1` work on it; both need the hash map in scope (`use "@std/hashmap"`, until the prelude imports it, D9). An empty map is `hashmap_new()` until then |
 | `use std.json` (D7) | `use "@std/json"`: a standard module named by its dotted path; a quoted path is still a file, and `as name` works on either |
 | `fn greet(name: Str) { println(f"hello {name}") }` (D8) | the same function taking `out: OutCap` and its callers passing it: in a module of the program itself — not a standard module, the prelude, or a package's — every function holds the output authority `main` holds (option C), so printing needs nothing passed. A package's function still takes `out`, so what a dependency can touch stays in its signature; files, the network, processes, spawning, randomness and time are passed as before (`N0369`) |
+| `List[Int]` (D7) | `Vec[Int]`: `List[T]` names the growable list, `Vec[T]`, and is the name taught; `Vec[T]`, `Ints` and `Strs` keep working and are the same type, which a message shows as before — `Ints`, `Strs`, `Vec[T]` — and never as `List`. A prelude name, as `Box` is: a module's own type named `List` keeps its meaning there. R1a's immutable sequence, which held the name until R1.5, is `Chain[T]` (*Immutable indirection*) |
 | `fn add(a: Int, b: Int) = a + b` (D2) | the same function with its result type the expression's (`Int`), settled before any caller is checked. A `pub` function writes its result type, since its signature is its interface; so does a method, and a function whose body reaches itself, directly or through others; and an expression with no value has none to give (each `N0634`) |
 
 ### Methods and indexes by name
@@ -2270,7 +2271,7 @@ language whose specification already promised aliasing.
 | Kind | Types | Assignment produces | Storage |
 | --- | --- | --- | --- |
 | **Immediate** | `Int`, `Bool`; the other numbers and arrays of plain data (Gate 2) | an independent copy | none |
-| **Shared immutable value** | `Str`; `Text` (Gate 2); `Box[T]`, `List[T]` (R1a) | a value with the same bytes; for `Box` and `List`, another reference to the same immutable value | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
+| **Shared immutable value** | `Str`; `Text` (Gate 2); `Box[T]`, `Chain[T]` (R1a) | a value with the same bytes; for `Box` and `Chain`, another reference to the same immutable value | reclaimed when the last value naming it dies; shared or copied **unobservably** until then |
 | **Owned mutable handle** | `Ints`, `Strs`; `Vec[T]`; `Bytes` (Gate 2) | another reference to the same storage — for `Bytes`, to the same view of the same buffer | reclaimed when the last reference dies; a `Bytes` buffer when its last view dies |
 | **Runtime-managed handle** | `Chan`; `Chan[T]` | another reference to the same channel | the runtime's, reclaimed when the last reference dies |
 
@@ -2382,8 +2383,8 @@ Nazm does not call something automatic and leave the reader to find out what it 
 | `p.name = s;` | no | no | **yes**, one taken and one released | no | no |
 | `let b = box_new(v);` (R1a) | **yes** | no | **yes**, if `v` owns something | no | no |
 | `box_get(b)` | no | no | **yes**, if the value owns something | no | no |
-| `let l = list_from_vec(xs);` | **yes** | **yes**, the elements | **yes**, one per element that owns something | no | no |
-| `list_get(l, i)` | no | no | **yes**, if the element owns something | no | no |
+| `let l = chain_from_vec(xs);` | **yes** | **yes**, the elements | **yes**, one per element that owns something | no | no |
+| `chain_get(l, i)` | no | no | **yes**, if the element owns something | no | no |
 
 Two entries in that table deserve their emphasis. **Passing a value to a function costs
 nothing**, which is rule 2 turned into a number: the caller keeps its reference across the
@@ -2477,11 +2478,11 @@ which none can. A cycle that runs through no environment is a cycle of definitio
 counting**, environments included.
 
 **R1a admitted recursive types, 2026-10-11, by the second option's discipline without its cost.**
-`Box[T]` and `List[T]` are a value kind that can form a definition cycle — and arrive with the
+`Box[T]` and `Chain[T]` (R1a's `List[T]`, renamed by R1.5) are a value kind that can form a definition cycle — and arrive with the
 policy: they are immutable, so a value can refer through one only to values older than itself, and
 the ownership rule refuses every definition cycle that runs through a mutable handle. The argument,
 and the release that takes no stack per level, are in *Immutable indirection: `Box[T]` and
-`List[T]`*, below.
+`Chain[T]`*, below.
 
 The rule is decided by the captured binding's **type**, where the closure is written: not by
 names, aliases or what the program later does with either value. `let alias = fs;` captured
@@ -4536,7 +4537,7 @@ payload as a record's fields are. A field's type decides its value:
 | `Float64`, `Float32` | A number; decoding takes an integer too |
 | `Bool`, `Str` | `true`/`false`, a string |
 | `Option[T]` | `T`'s value, or `null`; on decoding, a missing member is `None` too |
-| `Vec[T]`, `List[T]` | An array |
+| `Vec[T]` (so `List[T]`), `Chain[T]` | An array |
 | `Box[T]` | `T`'s value |
 | A record or enum — of this module or, qualified, another's | Its own encoding: it must derive `json` too — `N0619` at the field where the program declares the type and it does not; for one the checker cannot see from here, the generated call names a function that does not exist (`N0201`) |
 
@@ -4573,7 +4574,7 @@ pub enum Event { Started, Moved(x: Int, y: Int), }   // {"kind":"Moved","x":1,"y
 | An enum | `tag = "…"` | Internally tagged: a value is one object, the tag member naming its variant beside the payload's fields; a variant with no payload is the tag alone. A payload field of the tag's name is refused |
 | An enum | `untagged` | A payload's fields alone, and a variant with no payload its name as a string; decoding tries the variants in the order written and takes the first that decodes |
 | A field | `rename = "…"` | The member's name |
-| A field | `default` | A missing member decodes as the type's empty value: `0`, `0.0`, `false`, `""`, `None`, an empty `Vec` or `List`; on a field of any other type, `N0619` |
+| A field | `default` | A missing member decodes as the type's empty value: `0`, `0.0`, `false`, `""`, `None`, an empty `Vec` or `Chain`; on a field of any other type, `N0619` |
 | A field | `omit_none` | An `Option` field that is `None` is left out rather than written `null`; on another type, `N0619` |
 | A variant | `rename = "…"` | The variant's name |
 
@@ -4591,9 +4592,9 @@ before a type that derives nothing, and any other argument are `N0619`.
 
 A record is a table, an enum value a string or a table as the JSON encoding has it — `@codec` shapes
 both alike — an integer a TOML integer, a float a TOML float (an integer reads as one too), `Vec`
-and `List` arrays. TOML has no `null`: an `Option` that is `None` is always left out, and a missing
+and `Chain` arrays. TOML has no `null`: an `Option` that is `None` is always left out, and a missing
 key decodes as `None`; so an `Option` may only be a field's whole type, and one inside a `Vec`, a
-`List`, a `Box` or another `Option` is refused, `N0619`. There is no TOML schema: the JSON Schema of
+`Chain`, a `Box` or another `Option` is refused, `N0619`. There is no TOML schema: the JSON Schema of
 `@derive(json)` describes the JSON form.
 
 ### Conditional compilation — Gate 2
@@ -4756,9 +4757,9 @@ reclamation or control is new:
 | `for x in e { body }` | `{ let seq = e; let mut i = 0; while i < len(seq) { let x = get(seq, i); i = i + 1; body } }` |
 | `for x in a..b { body }` | `{ let mut i = a; let end = b; while i < end { let x = i; i = i + 1; body } }` |
 
-- **What may be iterated.** `e` is an `Ints`, a `Strs`, a `Vec[T]`, a `List[T]` or a `Bytes`; `len`
+- **What may be iterated.** `e` is an `Ints`, a `Strs`, a `Vec[T]`, a `Chain[T]` or a `Bytes`; `len`
   and `get` are then `ints_len`/`ints_get`, `strs_len`/`strs_get`, `vec_len`/`vec_get`,
-  `list_len`/`list_get` and `bytes_len`/`bytes_get`, so `x` is an `Int`, a `Str`, a `T` or a `UInt8`. Anything else is
+  `chain_len`/`chain_get` and `bytes_len`/`bytes_get`, so `x` is an `Int`, a `Str`, a `T` or a `UInt8`. Anything else is
   refused (`N0628`). In the range form `a` and `b` are `Int`s; `a..b` is written only there — it is
   not an expression.
 - **Evaluated once, read every step.** `e`, or `a` and `b`, is evaluated once, before the first
@@ -4777,10 +4778,14 @@ reclamation or control is new:
   is recognised only between a `for` loop's name and what it iterates, and stays an ordinary name
   everywhere else. A `for` that is not of either form is still refused by name (`N0101`).
 
-### Immutable indirection: `Box[T]` and `List[T]` — R1
+### Immutable indirection: `Box[T]` and `Chain[T]` — R1
 <!-- id: box-list -->
 
 Settled by R1a, 2026-10-11 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D1 and L1).
+Renamed by R1.5 (D7), 2026-10-15: R1a called the sequence `List[T]`, with built-ins `list_*`; that
+name is now the growable list's, `Vec[T]` (*Shorter forms*), and the sequence is `Chain[T]`, with
+built-ins `chain_*`. A call of a `list_*` built-in that the module does not define itself is
+refused, `N0637`, naming the `chain_` built-in that replaced it.
 
 ```nazm
 enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), }
@@ -4792,17 +4797,17 @@ fn eval(e: Expr) -> Int {
     }
 }
 
-struct Node { name: Str, kids: List[Node], }
+struct Node { name: Str, kids: Chain[Node], }
 ```
 
 Two built-in generic types through which a definition may refer to itself. Neither can be changed
 after it is made, and that is what makes them safe.
 
-| | `Box[T]` | `List[T]` |
+| | `Box[T]` | `Chain[T]` |
 | --- | --- | --- |
 | Holds | one `T` | a sequence of `T` |
-| Made by | `box_new(v: T) -> Box[T]` | `list_from_vec(xs: Vec[T]) -> List[T]`, a copy of `xs`'s elements as they are then — a later change to `xs` does not reach it; `list_empty[T]() -> List[T]` |
-| Read by | `box_get(b) -> T`, a copy by `T`'s own law | `list_len(l) -> Int`; `list_get(l, i) -> T`, `N0405` outside `0..list_len(l)`; `for x in l` (*`for` loops*) |
+| Made by | `box_new(v: T) -> Box[T]` | `chain_from_vec(xs: Vec[T]) -> Chain[T]`, a copy of `xs`'s elements as they are then — a later change to `xs` does not reach it; `chain_empty[T]() -> Chain[T]` |
+| Read by | `box_get(b) -> T`, a copy by `T`'s own law | `chain_len(l) -> Int`; `chain_get(l, i) -> T`, `N0405` outside `0..chain_len(l)`; `for x in l` (*`for` loops*) |
 | Changed by | nothing | nothing |
 | Assignment | shares: another reference to the same immutable value | shares |
 | Equality | what it holds, by that type's equality (L6) | element by element, the lengths first (L6) |
@@ -4814,7 +4819,7 @@ value naming it dies. A `Box[Vec[Int]]` shares the `Vec` it holds, and the `Vec`
 through whatever reaches it — immutability is of the `Box`, not of what a handle inside it names.
 
 **The ownership rule.** An edge of the ownership graph of definitions (*Generics*, *What may not be
-expressed: an ownership cycle*) through a `Box` or a `List` is labelled **immutable**, and one
+expressed: an ownership cycle*) through a `Box` or a `Chain` is labelled **immutable**, and one
 through a mutable handle — `Vec`, `Ints`, `Strs`, `Bytes`, `Chan[T]`, and since R1b `Cell[T]` — **counted**, as before. A path's
 label is the strongest along it: counted over immutable over inline. Then:
 
@@ -4822,8 +4827,8 @@ label is the strongest along it: counted over immutable over inline. Then:
 - a cycle with a counted edge anywhere on it is an ownership cycle — `N0359`, unchanged;
 - a cycle of inline and immutable edges, at least one immutable, is **accepted**.
 
-So `enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]) }`, `struct Node { kids: List[Node] }`
-and `struct Tree[T] { kids: List[Tree[T]] }` are legal; `struct Node { kids: Vec[Node] }`,
+So `enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]) }`, `struct Node { kids: Chain[Node] }`
+and `struct Tree[T] { kids: Chain[Tree[T]] }` are legal; `struct Node { kids: Vec[Node] }`,
 `struct Node { kids: Box[Vec[Node]] }` and `struct A { kids: Vec[B] } struct B { up: Box[A] }` are
 still refused — each closes its cycle through a `Vec`.
 
@@ -4832,7 +4837,7 @@ is admitted). A cycle among values follows edges of the definitions' graph, so i
 there, and a closed walk through an edge contains a simple cycle through that edge. A value cycle
 through a mutable handle would need a definition cycle through a counted edge, which is refused. A
 value cycle through inline and immutable edges only cannot exist: inline containment is finite, and
-an immutable edge points at a value that existed before the `Box` or `List` holding it was made and
+an immutable edge points at a value that existed before the `Box` or `Chain` holding it was made and
 can never be made to point elsewhere — the fact that already makes closure environments safe
 (*Cycles*, Gate 1-C1, fact 1). So every value of every type a program can write is still reclaimed
 by counting.
@@ -4844,11 +4849,11 @@ reference dies is queued and emptied in a loop, so releasing any value takes sta
 types, not by the value.
 
 **Closures.** `N0616` (*Cycles*) is about **mutable** handles: a closure may capture a `Box` or
-`List` that can hold a function value, because what either holds was made before it and cannot be
+`Chain` that can hold a function value, because what either holds was made before it and cannot be
 replaced, so the closure that captures one cannot be inside it.
 
-**Names.** `Box`, `List` and their built-ins arrive after 1.0, so they are **prelude names**: a
-module that declares a type named `Box` or `List`, or a function named like one of the built-ins,
+**Names.** `Box`, `Chain` and their built-ins arrive after 1.0, so they are **prelude names**: a
+module that declares a type named `Box` or `Chain`, or a function named like one of the built-ins,
 keeps its own, and the built-in is hidden in that module. No program valid under 1.0 changes
 meaning. The built-in names of 1.0 (`Int`, `Vec`, `Result` and the rest) stay unshadowable (`N0331`).
 
@@ -5096,7 +5101,7 @@ from what a type contains, and a type has them exactly when every component does
 
 A float compares numerically, as before, but a record, enum or tuple holding one has no order: an
 IEEE 754 comparison is not a total order, and a derived order must be. A sequence, `Vec`, `Box`,
-`List`, channel or function value has none, nor does an unconstrained type parameter; `N0304`
+`Chain`, channel or function value has none, nor does an unconstrained type parameter; `N0304`
 names the component responsible, as for equality.
 
 **Why names, not declaration order.** *Equality is derived* holds that the order in which fields

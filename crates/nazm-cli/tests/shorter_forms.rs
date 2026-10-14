@@ -6,7 +6,7 @@
 //! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
 //! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
 //! D5 — map literals, `{"a": 1}`, and `Map[K, V]`.
-//! D7 — `use std.json`.
+//! D7 — `use std.json`, and `List[T]` the growable list, R1a's sequence `Chain[T]`.
 //! D8 — printing in your own program's functions without passing `out`.
 
 #![allow(
@@ -385,4 +385,103 @@ fn a_packages_function_still_needs_out_and_files_still_need_io() {
         r.stderr.contains("N0369") && r.stderr.contains("IoCap"),
         "{r:?}"
     );
+}
+
+#[test]
+fn list_is_the_growable_list_everywhere() {
+    // `List[T]` is `Vec[T]` (D7): pushed to, indexed, passed where a `Vec[Int]` or an `Ints` is
+    // expected, a field's type and a generic parameter's.
+    differential::agrees(
+        "struct Bag { items: List[Int], }
+
+fn total(v: Vec[Int]): Int {
+    let mut s = 0
+    for x in v { s += x }
+    s
+}
+
+fn first[T](xs: List[T]): T { xs[0] }
+
+fn names(): List[Str] {
+    let n: List[Str] = vec_new[Str]()
+    n.push(\"a\")
+    n
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let v: List[Int] = vec_new[Int]()
+    v.push(1)
+    v.push(2)
+    let w: Ints = v
+    let b = Bag(items: v)
+    ints_push(b.items, 3)
+    print(f\"{total(v)} {ints_len(w)} {first(names())} {b.items[2]} {first(v)}\\n\")
+    0
+}
+",
+        "6 3 a 3 1\n0",
+    );
+}
+
+#[test]
+fn a_chain_is_what_r1a_called_a_list_everywhere() {
+    // `Chain[T]` and `chain_*` (D7) are R1a's immutable sequence: a copy of the vector as it was,
+    // a recursive type through it, `for`, and equality by what it holds.
+    differential::agrees(
+        "struct Node { name: Str, kids: Chain[Node], }
+
+fn count(n: Node): Int {
+    let mut c = 1
+    for k in n.kids { c += count(k) }
+    c
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let leaves = vec_new[Node]()
+    leaves.push(Node(name: \"a\", kids: chain_empty[Node]()))
+    leaves.push(Node(name: \"b\", kids: chain_empty[Node]()))
+    let root = Node(name: \"r\", kids: chain_from_vec(leaves))
+    leaves.push(Node(name: \"late\", kids: chain_empty[Node]()))
+    let xs: List[Int] = [1, 2]
+    let c = chain_from_vec(xs)
+    let same = c == chain_from_vec(xs)
+    print(f\"{count(root)} {chain_len(root.kids)} {chain_get(root.kids, 1).name} {chain_len(c)} {same}\\n\")
+    0
+}
+",
+        "3 2 b 2 true\n0",
+    );
+}
+
+#[test]
+fn an_old_list_built_in_is_refused_naming_its_chain_one() {
+    let d = tempfile::tempdir().unwrap();
+    for (src, new) in [
+        ("fn main() { let l = list_empty[Int]() }\n", "chain_empty"),
+        (
+            "fn main() { let l = chain_empty[Int](); let n = list_len(l) }\n",
+            "chain_len",
+        ),
+        (
+            "fn main() { let v = vec_new[Int](); list_from_vec(v) }\n",
+            "chain_from_vec",
+        ),
+    ] {
+        std::fs::write(d.path().join("p.nz"), src).unwrap();
+        let r = nazm(d.path(), &["check", "p.nz"]);
+        assert_ne!(r.code, Some(0), "{src}: {r:?}");
+        assert_eq!(r.stderr.matches("error[").count(), 1, "{src}: {r:?}");
+        assert!(
+            r.stderr.contains("N0637") && r.stderr.contains(new),
+            "{src}: {r:?}"
+        );
+    }
+    // A module's own function of the name keeps it, as a prelude name's would.
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn list_len(n: Int) -> Int { n }\nfn main() -> Int { list_len(0) }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
 }

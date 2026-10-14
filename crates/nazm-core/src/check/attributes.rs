@@ -598,7 +598,7 @@ fn codec_members(
                 errors.push(refuse(
                     f.ty.span,
                     format!("`default` gives a missing `{}` its type's empty value, and this type has none", f.name),
-                    "a number, `Bool`, `Str`, `Option`, `Vec` or `List` has one",
+                    "a number, `Bool`, `Str`, `Option`, `Vec` (`List`) or `Chain` has one",
                 ));
             }
             let key = c.rename.unwrap_or_else(|| {
@@ -836,7 +836,7 @@ pub fn configure(
                             f.name
                         ),
                         "give the field a type the format has: an integer `Int` holds, a float, \
-                         `Bool`, `Str`, `Option`, `Vec`, `List` or `Box` of one, or a type that \
+                         `Bool`, `Str`, `Option`, `Vec` (`List`), `Chain` or `Box` of one, or a type that \
                          derives it too",
                     ));
                 }

@@ -324,7 +324,7 @@ pub fn type_key(t: Type, types: &UserTypes, graph: &ModuleGraph) -> String {
             "{}({})",
             match t {
                 Type::Box(_) => "Box",
-                Type::List(_) => "List",
+                Type::List(_) => "Chain",
                 Type::Cell(_) => "Cell",
                 _ => "Vec",
             },

@@ -39,7 +39,7 @@ impl Fx<'_, '_> {
         elem: Option<Ty>,
         args: &[mir::Operand],
     ) {
-        // Immutable indirection (R1a): a `Box[T]` and a `List[T]` are their `Vec[T]`, so each of
+        // Immutable indirection (R1a): a `Box[T]` and a `Chain[T]` are their `Vec[T]`, so each of
         // their operations is the `Vec` one it means, taking the same path — a field-by-field
         // layout's included — as the `Vec` would.
         let same = match op {
@@ -193,7 +193,7 @@ impl Fx<'_, '_> {
                 self.lw
                     .defect(at, "a numeric built-in its lowering did not take");
             }
-            // Immutable indirection (R1a): `box_new` and `list_from_vec` are written by Core IR
+            // Immutable indirection (R1a): `box_new` and `chain_from_vec` are written by Core IR
             // lowering in the built-ins above; the rest were taken above. Reaching here is a defect.
             Intrinsic::BoxNew
             | Intrinsic::BoxGet
@@ -216,7 +216,7 @@ impl Fx<'_, '_> {
                 let at = self.at;
                 self.lw.defect(
                     at,
-                    "a `Box` or `List` built-in Core IR lowering did not rewrite",
+                    "a `Box` or `Chain` built-in Core IR lowering did not rewrite",
                 );
             }
             // Gate 3's atomics, lowered above (`op/atomics.rs`); reaching here is a defect.

@@ -307,6 +307,20 @@ authority is passed as before. Semantic epoch 82; EXPERIMENTAL until R1.5 closes
 implementation; a dependency's printing function refused with `N0369`; a file still needing an
 `IoCap`; two mutants.
 
+**R1.5 (2026-10-15)** · *`List[T]` is the list; `Chain[T]`* (`spec.md`, *Shorter forms* and
+*Immutable indirection*; R1.5 design D7). `List[T]` in a type position is `Vec[T]` — one type with
+`Vec[T]`, `Ints` and `Strs`, shown as before — a prelude name a module's own `List` hides. R1a's
+immutable sequence, which held the name, is `Chain[T]` with built-ins `chain_from_vec`,
+`chain_empty`, `chain_len` and `chain_get`, in every layer's spelling of it (Core IR, MIR keys,
+symbols, messages, the Nazm-written pipeline's type spellings), `@derive(json)`/`(toml)`'s
+generated code and `@std/toml`'s `Toml`; a call of a `list_` built-in a module does not define is
+refused, `N0637`, naming the `chain_` one. A breaking change of a 0.10.0-stable surface, listed for
+the next release; the compatibility corpus held no case using it. The checker's Rust identifiers
+(`Type::List`, `Intrinsic::List*`) keep their names. Semantic epoch 82; EXPERIMENTAL until R1.5
+closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` — `List[T]` as a `Vec[T]` and `Chain[T]`
+as R1a's list under every implementation, the refusal by name; `box_list.rs`, `order_hash.rs`,
+`derive_json.rs`, `toml.rs` and `build.rs`' coverage of every built-in, renamed; two mutants.
+
 **R1.5 (2026-10-15)** · *Map literals and `Map[K, V]`* (`spec.md`, *Shorter forms*; R1.5 design D5).
 `{"a": 1, "b": 2}` is read by the parser as the block that builds it — `hashmap_single` for the
 first entry, which settles the types, then `hashmap_set` — and `Map[K, V]` is `HashMap[K, V]` where

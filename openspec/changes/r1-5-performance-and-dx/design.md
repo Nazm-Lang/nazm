@@ -64,7 +64,15 @@ name taught; `Vec`, `Ints` and `Strs` keep working. R1a's immutable linked list,
 until now, becomes `Chain[T]` (`chain_*` built-ins); a use of the old name for it is refused with
 help naming `Chain` (`N0637`), and `@std/toml` moves with it. A breaking change, listed. `use
 std.json` means `use "@std/json"`: a dotted path of identifiers names a standard module, and a quoted
-path is still a file.
+path is still a file. (Implemented 2026-10-15:) `List[T]` is a prelude name, as `Box` is — a
+module's own type `List` keeps it — resolved to the `Vec[T]` it names, so messages keep showing
+`Ints`, `Strs` and `Vec[T]` as before and never `List`: showing `List[Int]` consistently would
+touch every message and test that names a vector, for no change of meaning. `Chain` replaces
+`List` in every spelling a layer writes (messages, Core IR, MIR keys, symbols, the Nazm-written
+pipeline's type spellings, derived code); the checker's Rust identifiers (`Type::List`,
+`Intrinsic::List*`, `Shape::ListT`) keep their names, to keep the change out of the checker files
+other work is editing. `N0637` is raised where resolution has already failed, so a module's own
+`list_len` keeps its meaning. The interface schema's `{"list": T}` spelling is unchanged.
 
 **D8 — printing in your own program (6.7).** Inside the program's own package — every module of the
 root package being built or run, never a dependency or `@std` — a function may print without being
@@ -146,3 +154,12 @@ text, its tests, its mutants and its epoch where the checker changes; a full gat
   the default changes.
 - **The Nazm-written compiler lags** until R2, so `compiler/`, `library/` and the top-level examples
   keep the 0.10.0 forms for now.
+
+## Breaking changes for the next release
+
+- **D7 (2026-10-15): R1a's `List[T]` is `Chain[T]`.** `List[T]` now names the growable list,
+  `Vec[T]`, and R1a's immutable sequence — stable since 0.10.0 — is `Chain[T]`, with built-ins
+  `chain_from_vec`, `chain_empty`, `chain_len` and `chain_get` for `list_*`. A program using the
+  old type gets `Vec[T]` where it wrote `List[T]` (a mismatch against a `chain_` value, `N0300`); a
+  call of an old built-in is refused, `N0637`, naming its replacement. `@std/toml`'s `Toml` holds
+  `Chain`s. Semantic epoch 82.

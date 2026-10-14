@@ -93,7 +93,7 @@ impl Ctx<'_> {
             Shape::ChansT => elem
                 .and_then(|e| self.program.types.chan_of(e))
                 .and_then(|c| self.program.types.vec_of(c)),
-            // `Box[T]` and `List[T]` (R1a): the `Vec[T]`'s id, as their own kind.
+            // `Box[T]` and `Chain[T]` (R1a): the `Vec[T]`'s id, as their own kind.
             Shape::BoxT => match elem.and_then(|e| self.program.types.vec_of(e)) {
                 Some(Type::Vec(v)) => Some(Type::Box(v)),
                 _ => None,

@@ -1228,7 +1228,7 @@ impl<'l, 'a> Fx<'l, 'a> {
                         };
                         self.cmp_imm(cc, o, Class::I64, 0)
                     }
-                    // A `Box` or `List` compares by what it holds (L6), through the helper.
+                    // A `Box` or `Chain` compares by what it holds (L6), through the helper.
                     // A handle is a scalar: each is spilled, so the helper reads it through a
                     // pointer as it reads every value it compares.
                     Ty::Vec(_) => {

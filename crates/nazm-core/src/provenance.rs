@@ -509,8 +509,8 @@ impl<'b> Walk<'_, 'b> {
             // contributing none.
             Stmt::For(f) => {
                 let v = match &f.iter {
-                    // A `List` (R1a) has no cell: what it holds rides on the value, as
-                    // `list_get` reads it.
+                    // A `Chain` (R1a) has no cell: what it holds rides on the value, as
+                    // `chain_get` reads it.
                     nazm_syntax::ForIter::Each(e)
                         if matches!(
                             self.res.for_seq(f.name_span),

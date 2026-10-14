@@ -46,7 +46,7 @@ pub enum Shape {
     ChanT,
     /// `Box[T]` (R1a).
     BoxT,
-    /// `List[T]` (R1a).
+    /// `Chain[T]` (R1a; `List[T]` until R1.5, D7).
     ListT,
     /// `Cell[T]` (R1b).
     CellT,
@@ -153,7 +153,7 @@ impl Shape {
             Self::ChanT => "Chan[T]",
             Self::ChansT => "Vec[Chan[T]]",
             Self::BoxT => "Box[T]",
-            Self::ListT => "List[T]",
+            Self::ListT => "Chain[T]",
             Self::CellT => "Cell[T]",
             Self::OptionT => "Option[T]",
             Self::F64 => "Float64",
@@ -607,18 +607,19 @@ pub enum Intrinsic {
     //
     // Prelude built-ins ([`Intrinsic::is_prelude`]): a module's own definition of one of these
     // names hides it. Core IR lowering writes each as the `Vec[T]` operations it means, so no
-    // layer below the checker sees one.
+    // layer below the checker sees one. R1.5 (D7) renamed R1a's `List[T]` and `list_*` to
+    // `Chain[T]` and `chain_*`; the `List…` variants keep their Rust names.
     /// `box_new[T](v: T) -> Box[T]` — one `T`, which nothing can replace.
     BoxNew,
     /// `box_get[T](b: Box[T]) -> T` — a copy of it, by `T`'s law.
     BoxGet,
-    /// `list_from_vec[T](xs: Vec[T]) -> List[T]` — `xs`'s elements as they are now, copied.
+    /// `chain_from_vec[T](xs: Vec[T]) -> Chain[T]` — `xs`'s elements as they are now, copied.
     ListFromVec,
-    /// `list_empty[T]() -> List[T]` — no elements. `T` is written.
+    /// `chain_empty[T]() -> Chain[T]` — no elements. `T` is written.
     ListEmpty,
-    /// `list_len[T](l: List[T]) -> Int`
+    /// `chain_len[T](l: Chain[T]) -> Int`
     ListLen,
-    /// `list_get[T](l: List[T], i: Int) -> T` — fails with `N0405` unless `0 <= i < len`.
+    /// `chain_get[T](l: Chain[T], i: Int) -> T` — fails with `N0405` unless `0 <= i < len`.
     ListGet,
     /// Internal (R1a): a `Box[T]` with nothing in it yet, which [`Self::BoxFill`] fills before
     /// anything else sees it. Made by Core IR lowering for `box_new`; no program can name it.
@@ -626,8 +627,8 @@ pub enum Intrinsic {
     /// Internal (R1a): `box`'s one element, `v`, written while the box is still the lowering's
     /// alone. Made by Core IR lowering for `box_new`; no program can name it.
     BoxFill,
-    /// Internal (R1a): `v` appended to a `List[T]` that is still the lowering's alone. Made by
-    /// Core IR lowering for `list_from_vec`; no program can name it.
+    /// Internal (R1a): `v` appended to a `Chain[T]` that is still the lowering's alone. Made by
+    /// Core IR lowering for `chain_from_vec`; no program can name it.
     ListPush,
 
     // --- a mutable cell, R1b (`docs/spec.md`, *A mutable cell*) ------------------------------
@@ -1071,13 +1072,13 @@ impl Intrinsic {
             Self::AtomicCompareSwap => "atomic_compare_swap",
             Self::BoxNew => "box_new",
             Self::BoxGet => "box_get",
-            Self::ListFromVec => "list_from_vec",
-            Self::ListEmpty => "list_empty",
-            Self::ListLen => "list_len",
-            Self::ListGet => "list_get",
+            Self::ListFromVec => "chain_from_vec",
+            Self::ListEmpty => "chain_empty",
+            Self::ListLen => "chain_len",
+            Self::ListGet => "chain_get",
             Self::BoxFresh => "box_fresh",
             Self::BoxFill => "box_fill",
-            Self::ListPush => "list_push",
+            Self::ListPush => "chain_push",
             Self::CellNew => "cell_new",
             Self::CellGet => "cell_get",
             Self::CellSet => "cell_set",

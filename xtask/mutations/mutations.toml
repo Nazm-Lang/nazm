@@ -8339,10 +8339,11 @@ Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < 
 Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` must not be reused.
 Repointed by R1.5 (D5), which moved it to 80: an entry that refused `{"a": 1}` must not be reused.
 Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.json` must not be reused.
-Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused."""
+Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused.
+Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 82;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 81;"
+find = "pub const SEMANTIC_EPOCH: u32 = 83;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 82;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -16859,8 +16860,8 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cell::a_cell_means_
 name = "r1b-cell-is-no-type-name"
 why = "`Cell[T]` written in a program is an unknown type"
 file = "crates/nazm-core/src/check/written.rs"
-find = '''        && (written.name == "Box" || written.name == "List" || written.name == "Cell")'''
-replace = '''        && (written.name == "Box" || written.name == "List")'''
+find = '''        && matches!(written.name.as_str(), "Box" | "Chain" | "Cell" | "List")'''
+replace = '''        && matches!(written.name.as_str(), "Box" | "Chain" | "List")'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cell::a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed" }]
 
 [[mutation]]
@@ -19558,3 +19559,19 @@ file = "crates/nazm-cir/src/names.rs"
 find = "            Type::Array(a) if self.spelled => match types.array_info(a) {"
 replace = "            Type::Array(a) if false && self.spelled => match types.array_info(a) {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::core_ir_3_prints_the_tables_a_lowering_needs" }]
+
+[[mutation]]
+name = "r1-5-list-is-still-the-chain"
+why = "`List[T]` still resolves to R1a's immutable sequence, so a `List[Int]` cannot be pushed to or passed where a `Vec[Int]` is expected"
+file = "crates/nazm-core/src/check/written.rs"
+find = "            _ => res.types_mut().vec_of(elem),"
+replace = "            _ => res.types_mut().list_of(elem),"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::list_is_the_growable_list_everywhere" }]
+
+[[mutation]]
+name = "r1-5-an-old-list-built-in-is-merely-unknown"
+why = "`list_empty` is reported as an unknown function, so the help naming `chain_empty` is lost"
+file = "crates/nazm-core/src/check/written.rs"
+find = "            \"list_empty\" => Some(\"chain_empty\"),"
+replace = "            \"list_empty#\" => Some(\"chain_empty\"),"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_old_list_built_in_is_refused_naming_its_chain_one" }]
