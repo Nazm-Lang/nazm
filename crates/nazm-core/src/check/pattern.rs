@@ -47,6 +47,8 @@ impl Checker<'_> {
         // the one mistake already reported. `docs/spec.md`, *One mistake, one error*.
         let mut unresolved = false;
         let mut rows: Vec<Vec<usefulness::Pat>> = Vec::new();
+        // Which arm each row is: a guarded arm adds none (R1, 5b.17).
+        let mut row_arms: Vec<usize> = Vec::new();
         let mut result: Option<Completion> = None;
         let mut first_value: Option<(Type, Span)> = None;
 
@@ -91,14 +93,37 @@ impl Checker<'_> {
                 }
             }
 
+            // A guard (R1, 5b.17): a `Bool`, with the pattern's names bound.
+            if let Some(g) = &arm.guard {
+                let gt = self.value_type(g, Some(Type::Bool));
+                if gt != Type::Bool {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::CONDITION_NOT_BOOL,
+                            g.span(),
+                            format!(
+                                "a `match` arm's guard must be `Bool`, but this is `{}`",
+                                self.show(gt)
+                            ),
+                        )
+                        .help("Nazm has no truthiness: use a comparison such as `x != 0`"),
+                    );
+                }
+            }
+
             // Reachable: something the arms above do not match.
             if !unresolved {
                 let sig = Sigs(self);
                 if !usefulness::useful(&rows, std::slice::from_ref(&pat), &[sty], &sig) {
-                    self.unreachable_arm(arms, index, &rows, &pat);
+                    self.unreachable_arm(arms, index, &rows, &row_arms, &pat);
                 }
             }
-            rows.push(vec![pat]);
+            // A guarded arm covers nothing for exhaustiveness or the arms below it: its guard
+            // may be false for any value its pattern matches.
+            if arm.guard.is_none() {
+                rows.push(vec![pat]);
+                row_arms.push(index);
+            }
 
             let completion = self.check_expr(&arm.body, expected.or(first_value.map(|(t, _)| t)));
             self.close_scope();
@@ -190,10 +215,11 @@ impl Checker<'_> {
             named(&a.pattern, &mut seen);
         }
         let Some(catch_all) = arms.iter().find(|a| {
-            matches!(
-                a.pattern,
-                nazm_syntax::Pattern::Wildcard { .. } | nazm_syntax::Pattern::Bind { .. }
-            )
+            a.guard.is_none()
+                && matches!(
+                    a.pattern,
+                    nazm_syntax::Pattern::Wildcard { .. } | nazm_syntax::Pattern::Bind { .. }
+                )
         }) else {
             return;
         };
@@ -234,6 +260,7 @@ impl Checker<'_> {
         arms: &[MatchArm],
         index: usize,
         rows: &[Vec<usefulness::Pat>],
+        row_arms: &[usize],
         pat: &usefulness::Pat,
     ) {
         let Some(arm) = arms.get(index) else { return };
@@ -248,7 +275,7 @@ impl Checker<'_> {
         if let (Some((id, at)), nazm_syntax::Pattern::Variant(v)) = (plain(pat), &arm.pattern) {
             let first = rows
                 .iter()
-                .zip(arms)
+                .zip(row_arms.iter().filter_map(|i| arms.get(*i)))
                 .find(|(r, _)| r.first().and_then(plain) == Some((id, at)))
                 .and_then(|(_, a)| match &a.pattern {
                     nazm_syntax::Pattern::Variant(w) => Some(w.variant_span),

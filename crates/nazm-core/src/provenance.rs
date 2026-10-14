@@ -909,6 +909,11 @@ impl<'b> Walk<'_, 'b> {
                 let mut out = Shaped::default();
                 for arm in arms {
                     self.bind_pattern(&arm.pattern, &s);
+                    // A guard (R1, 5b.17) is walked as an `if`'s condition is: implicit flow is not
+                    // tracked.
+                    if let Some(g) = &arm.guard {
+                        self.expr(g);
+                    }
                     let v = self.shaped(&arm.body);
                     out.join(&v);
                 }
