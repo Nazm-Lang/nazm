@@ -420,6 +420,9 @@ pub struct Resolution {
     by_module: Vec<HashMap<String, FnId>>,
     /// Keyed by the span of the **callee name**, which is written once per call site.
     calls: HashMap<Span, Callee>,
+    /// The method calls resolved by name (R1, 5b.15): `x.m(…)` as the function `<type>_m(x, …)`,
+    /// by the method name's span, where its call is recorded as an ordinary call's.
+    named_methods: std::collections::HashSet<Span>,
     /// Keyed by the span of the variable mention, which is written once per use — and by
     /// the name a `let` or a pattern field introduces, which resolves to its own binding.
     vars: HashMap<Span, LocalRef>,
@@ -1188,6 +1191,17 @@ impl Resolution {
 
     pub fn record_call(&mut self, span: Span, callee: Callee) {
         self.calls.insert(span, callee);
+    }
+
+    /// Record that the method call named at `span` is a function's, by name (R1, 5b.15).
+    pub fn record_named_method(&mut self, span: Span) {
+        self.named_methods.insert(span);
+    }
+
+    /// Whether the method call named at `span` is a function's, by name (R1, 5b.15).
+    #[must_use]
+    pub fn named_method(&self, span: Span) -> bool {
+        self.named_methods.contains(&span)
     }
 
     pub fn record_var(&mut self, span: Span, to: LocalRef) {

@@ -361,6 +361,27 @@ impl Checker<'_> {
 
         self.record_var(place.name_span, binding.slot);
 
+        // `xs[i] = v` on a sequence binding (R1, 5b.15): `vec_set(xs, i, v)` and its kin. A
+        // sequence is a handle, so this needs no `mut`, as the call does not.
+        if let [nazm_syntax::PlaceStep::Index { index, span }] = place.path.as_slice() {
+            let args = vec![
+                Expr::Var {
+                    name: place.name.clone(),
+                    span: place.name_span,
+                },
+                (**index).clone(),
+                a.value.clone(),
+            ];
+            self.unwanted = true;
+            if self
+                .element_by_name(binding.ty, "set", *span, args, None)
+                .is_some()
+            {
+                return;
+            }
+            self.unwanted = false;
+        }
+
         // Mutability is checked at the **root binding**, whatever the path. `p.x = 2`
         // replaces part of what `p` holds, so it needs `let mut p` for the same reason
         // `p = q` does — a record is a value, not a handle to one. `docs/spec.md`,
