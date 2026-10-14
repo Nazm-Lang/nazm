@@ -175,10 +175,12 @@ pub struct TypeTable {
     slots: HashMap[Str, Strs],
     /// Each enum definition's variant names, by index, as `match` arms list every one.
     variants: HashMap[Str, Strs],
+    /// `managed`'s answers, once the table is complete.
+    memo: HashMap[Str, Bool],
 }
 
 pub fn table_new() -> TypeTable ! {} {
-    TypeTable(templ: hashmap_new(), slots: hashmap_new(), variants: hashmap_new())
+    TypeTable(templ: hashmap_new(), slots: hashmap_new(), variants: hashmap_new(), memo: hashmap_new())
 }
 
 /// `v` written over `#J` for each argument `$I` of `args` at position `J`, or `""` when it mentions
@@ -290,7 +292,14 @@ pub fn field_ty(tt: TypeTable, t: Str, slot: Str) -> Str ! {} {
 
 /// Whether a value of `t` owns anything a drop must give back.
 pub fn managed(tt: TypeTable, t: Str) -> Bool ! {} {
-    managed_within(tt, t, 0)
+    match hashmap_get(tt.memo, t) {
+        Some(b) => b,
+        None => {
+            let b = managed_within(tt, t, 0)
+            hashmap_set(tt.memo, t, b)
+            b
+        },
+    }
 }
 
 fn managed_within(tt: TypeTable, t: Str, depth: Int) -> Bool {

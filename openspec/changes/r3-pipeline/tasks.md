@@ -38,10 +38,10 @@
       union, source blocks first
 - [x] 5.3 `pipeline mutants`: five kinds of breakage (a drop removed from a source block, a
       failure edge removed, a jump past the last block, a return of another type, a parameter
-      moved), the first place each fits in every function: 11941 made over the inputs, all caught;
+      moved), the first place each fits in every function: 11967 made over the inputs (this pipeline among them, so the count moves with it), all caught;
       `pipeline mir` prints only what the validator accepted, as `nazm mir` does
 
-## 6. LIR
+## 6. LIR — blocked on `nazm.core-ir/3` for the tables (design, *Gaps*); not started
 
 - [ ] 6.1 Data layout, units, symbols, linkage
 - [ ] 6.2 Record and enum layouts
