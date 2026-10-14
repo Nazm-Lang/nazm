@@ -8,7 +8,8 @@
 
 ## 2. R1 — language and library prerequisites
 
-- [ ] 2.1 Carry out `r1-language-for-the-rewrite`, in the Rust reference and the Nazm library
+- [x] 2.1 Carry out `r1-language-for-the-rewrite`, in the Rust reference and the Nazm library
+      (closed 2026-10-15; published as 0.10.0)
 
 ## 3. R2 — the Nazm compiler carries the whole language
 

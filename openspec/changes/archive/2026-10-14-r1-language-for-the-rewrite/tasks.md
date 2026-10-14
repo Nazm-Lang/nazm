@@ -114,10 +114,18 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       classification rows and every inline marker to STABLE 1.0; seven pinned `run/r1-*` cases. Writing
       them found three defects, fixed under epoch 75: a `defer`'s last value refused, a pattern `let`
       needing `;`, and a line beginning with `(` or `[` read as a call or index of the line before
-- [ ] 8.2 Contained tests, selfhost and bootstrap on the resulting tree; every new mutant caught.
+- [x] 8.2 Contained tests, selfhost and bootstrap on the resulting tree; every new mutant caught.
       R1a's run was stopped after batch I on 2026-10-12 to go faster, by the copyright holder's
       choice: every mutant run so far was caught (batches A–I), and the rest — the tuple-place,
       ordering and hashing remainder, the arrays of `Str`, the constant tables, the string
       literals and the interpolation (batches J–O of `r1a-*` with `n13-*`, `n36-*`, `n38-*`,
       `n78-*` and `g2-*` repoints) — run here, with R1b–R1e's
-- [ ] 8.3 Authorities updated; `openspec validate --strict`; archive with `--skip-specs`
+      — 2026-10-15, at `403aa68d`: contained tests passed (2,922 passed, 94 ignored), selfhost 44 of 44,
+      bootstrap C2 ≡ C3 with 34 conformance programs and 31 refusals. All 320 R1 mutants resolved at
+      p4t4: 309 caught by their named tests; 7 caught after their tests were sharpened (two arrays,
+      the cell, `Self` in a generic impl, a 128-bit constant's interface, a relative child program,
+      a defer's discarded `if`); 3 proved equivalent by the whole suite applied and retired with the
+      evidence in the catalogue; 1 caught on macOS and without effect on Linux, noted there. The
+      fixed and repointed mutants were run again on the final tree: 9 of 9 caught
+- [x] 8.3 Authorities updated; `openspec validate --strict`; archive with `--skip-specs` — 2026-10-15:
+      the roadmap's road to 1.0, the 0.10.0 status lines and release notes

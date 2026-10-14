@@ -39,7 +39,7 @@ large boundaries only, not one per stage (`releases/0.9.0.md`).
 
 | Stage | What | Status |
 | --- | --- | --- |
-| **R1** | The language the rewrite is written in: patterns, tuples, `for`, closures in generics, `defer`, 128-bit integers, serialisation, `@std/regex` and the other libraries, the platform built-ins, and the conveniences for a first program (`openspec/changes/r1-language-for-the-rewrite`) | closing, 2026-10-14; published as **0.10.0** |
+| **R1** | The language the rewrite is written in: patterns, tuples, `for`, closures in generics, `defer`, 128-bit integers, serialisation, `@std/regex` and the other libraries, the platform built-ins, and the conveniences for a first program (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`) | **complete**, 2026-10-15; published as **0.10.0** |
 | **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | next |
 | **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | planned |
 | **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | planned |
