@@ -1,0 +1,43 @@
+// The native pipeline in Nazm (R3): Core IR to MIR, and MIR to LIR.
+//
+//     pipeline mir CORE.json    print `nazm.mir/1`, as `nazm mir` does
+//
+// CORE.json is `nazm core-ir --json FILE`. `openspec/changes/r3-pipeline/` is the design.
+
+use "cir.nz"
+use "program.nz"
+use "text.nz"
+use "@std/fs"
+use "@std/process"
+
+fn main(io: IoCap) -> Int ! { io } {
+    let args = process_args(io)
+    if strs_len(args) != 2 || strs_get(args, 0) != "mir" {
+        eprint("usage: pipeline mir CORE.json\n")
+        return 2
+    }
+    let text = match fs_read(io, strs_get(args, 1)) {
+        Ok(t) => t,
+        Err(e) => {
+            eprint("pipeline: " + e + "\n")
+            return 1
+        },
+    }
+    let c = match cir_read(text) {
+        Ok(c) => c,
+        Err(e) => {
+            eprint("pipeline: " + e + "\n")
+            return 1
+        },
+    }
+    match lower_program(c) {
+        Ok(p) => {
+            print(print_mir(p))
+            0
+        },
+        Err(e) => {
+            eprint("pipeline: " + e + "\n")
+            1
+        },
+    }
+}

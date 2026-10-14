@@ -1,0 +1,171 @@
+// MIR: each concrete function as basic blocks whose copies, moves, drops, scope joins and failure
+// edges are written out. `docs/architecture.md` §7.42 is the law; this is the representation the
+// lowering (`lower.nz`) builds and the text (`text.nz`), the validator and LIR read.
+
+/// A literal. A string's bytes are its `Str`; any other numeric type's value is its canonical
+/// text and its kind.
+pub enum MConst {
+    Int(v: Int),
+    Bool(v: Bool),
+    Str(bytes: Str),
+    Num(text: Str, kind: Str),
+    Cell(name: Str),
+}
+
+/// A value an operation reads without taking ownership of it.
+pub enum Operand {
+    Local(l: Int),
+    Const(c: MConst),
+}
+
+/// One step of a field path: the record (its spelling), the field's declaration index and name.
+pub struct FieldRef {
+    rec: Str,
+    field: Int,
+    name: Str,
+}
+
+/// One step of an element write's path: a field, or an element by an index local.
+pub enum PathRef {
+    Field(f: FieldRef),
+    Index(local: Int, len: Int),
+}
+
+pub enum Rvalue {
+    Use(o: Operand),
+    Copy(l: Int),
+    Move(l: Int),
+    Neg(o: Operand),
+    Arith(op: Str, a: Operand, b: Operand),
+    Bits(op: Str, a: Operand, b: Operand),
+    Complement(o: Operand),
+    Convert(mode: Str, to: Str, o: Operand),
+    Fits(to: Str, o: Operand),
+    Array(elems: Vec[Operand]),
+    ArrayRepeat(value: Operand, count: Int),
+    Index(base: Operand, index: Operand),
+    Compare(op: Str, law: Str, operand: Str, a: Operand, b: Operand),
+    Hash(operand: Str, value: Operand),
+    Call(callee: Int, args: Vec[Operand]),
+    CallIndirect(callee: Operand, args: Vec[Operand]),
+    Closure(func: Int, captures: Vec[Operand]),
+    Capture(env: Int, index: Int),
+    /// A runtime or compiler primitive; `elem` is the element type of a `Vec[T]` operation, or `""`.
+    Primitive(op: Str, elem: Str, args: Vec[Operand]),
+    /// A complete record from moved temporaries: field indices, names and locals, in evaluation order.
+    Record(ty: Str, fields: Ints, names: Strs, locals: Ints),
+    Variant(ty: Str, variant: Int, vname: Str, fields: Ints, names: Strs, locals: Ints),
+    Field(base: Operand, f: FieldRef),
+    FieldBorrow(base: Operand, f: FieldRef),
+    Payload(base: Int, ty: Str, variant: Int, vname: Str, field: Int, fname: Str),
+}
+
+/// A statement. An `unwind` of -1 is none: the operation cannot fail.
+pub enum Stmt {
+    Assign(dst: Int, value: Rvalue, unwind: Int),
+    SetField(base: Int, path: Vec[FieldRef], value: Int),
+    SetElement(base: Int, path: Vec[PathRef], value: Int, unwind: Int),
+    Drop(l: Int),
+    ScopeOpen(list: Int, unwind: Int),
+    Spawn(list: Int, callee: Int, args: Vec[Operand], unwind: Int),
+    ScopeJoin(list: Int),
+    CheckFailed(unwind: Int),
+    StackCheck(unwind: Int),
+}
+
+pub enum Term {
+    Goto(b: Int),
+    Branch(cond: Operand, then: Int, other: Int),
+    /// On the variant `scrutinee` holds: one arm per variant, by index and name, to a block.
+    Switch(scrutinee: Int, ty: Str, variants: Ints, names: Strs, blocks: Ints),
+    Return(l: Int),
+    Unwind,
+    Exit(o: Operand),
+}
+
+/// Why a block exists.
+pub fn origin_source() -> Int ! {} { 0 }
+pub fn origin_cleanup() -> Int ! {} { 1 }
+pub fn origin_unwind() -> Int ! {} { 2 }
+
+/// A block: its statements, its terminator (a `Vec` of none or one, so it can be set in place),
+/// and its origin.
+pub struct Block {
+    stmts: Vec[Stmt],
+    term: Vec[Term],
+    origin: Int,
+}
+
+/// A local's type is a spelling, or `Tasks` for a scope's task list.
+pub struct LocalDecl {
+    ty: Str,
+    name: Str,
+    /// `param`, `binding`, `binding mut` or `temp`.
+    origin: Str,
+}
+
+pub struct MirFn {
+    identity: Str,
+    name: Str,
+    effects: Strs,
+    params: Int,
+    ret: Str,
+    /// The instance's type arguments, empty for a non-generic definition.
+    type_args: Strs,
+    /// The C symbol of a foreign function, or `""`.
+    foreign: Str,
+    locals: Vec[LocalDecl],
+    blocks: Vec[Block],
+}
+
+pub struct MirProgram {
+    fns: Vec[MirFn],
+    /// The entry function's position, or -1.
+    entry: Int,
+}
+
+/// Whether an rvalue can fail, and so whether its statement carries a failure edge.
+pub fn can_fail(v: Rvalue) -> Bool ! {} {
+    match v {
+        Rvalue.Neg(o: _) => true,
+        Rvalue.Arith(op: _, a: _, b: _) => true,
+        Rvalue.Bits(op: _, a: _, b: _) => true,
+        Rvalue.Convert(mode: _, to: _, o: _) => true,
+        Rvalue.Index(base: _, index: _) => true,
+        Rvalue.Call(callee: _, args: _) => true,
+        Rvalue.CallIndirect(callee: _, args: _) => true,
+        Rvalue.Closure(func: _, captures: _) => true,
+        Rvalue.Primitive(op: _, elem: _, args: _) => true,
+        _ => false,
+    }
+}
+
+/// The failure edge a statement carries, or -1.
+pub fn stmt_unwind(s: Stmt) -> Int ! {} {
+    match s {
+        Stmt.Assign(dst: _, value: _, unwind: u) => u,
+        Stmt.SetElement(base: _, path: _, value: _, unwind: u) => u,
+        Stmt.ScopeOpen(list: _, unwind: u) => u,
+        Stmt.Spawn(list: _, callee: _, args: _, unwind: u) => u,
+        Stmt.CheckFailed(unwind: u) => u,
+        Stmt.StackCheck(unwind: u) => u,
+        _ => 0 - 1,
+    }
+}
+
+/// The blocks a terminator may transfer to, in a fixed order.
+pub fn successors(t: Term) -> Ints ! {} {
+    let out = ints_new()
+    match t {
+        Term.Goto(b: b) => { ints_push(out, b) },
+        Term.Branch(cond: _, then: then, other: other) => {
+            ints_push(out, then)
+            ints_push(out, other)
+        },
+        Term.Switch(scrutinee: _, ty: _, variants: _, names: _, blocks: blocks) => {
+            for b in blocks { ints_push(out, b) }
+        },
+        _ => {},
+    }
+    out
+}

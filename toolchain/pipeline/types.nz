@@ -1,0 +1,438 @@
+// Types, as Core IR spells them: `Int`, `Vec[Str]`, `enums.nz::enum Shape`,
+// `@core/prelude::enum Option[Int]`, `$0`. What MIR needs of a type — its canonical key, its
+// substitution under an instance's arguments, whether it owns anything — is a function of the
+// spelling and of the type table, which `nazm.core-ir/2` does not carry and is recovered here from
+// the program's uses (`openspec/changes/r3-pipeline/design.md`, *Gaps*).
+
+use "cir.nz"
+use "@std/hash"
+use "@std/json"
+use "@std/hashmap"
+use "@std/text"
+
+/// A spelling taken apart: `kind` is `builtin`, `vec` (`Vec`, `Box`, `List`, `Cell`, `Chan`),
+/// `record`, `enum`, `param` or `unknown`; `head` is the builtin's or container's name, or the
+/// definition (`MODULE::record NAME`); `args` its arguments' spellings.
+pub struct Spelled {
+    kind: Str,
+    head: Str,
+    module: Str,
+    name: Str,
+    args: Strs,
+}
+
+/// Where the last top-level `[` of a spelling ending in `]` is, or -1.
+fn open_bracket(t: Str) -> Int {
+    let n = str_len(t)
+    if n == 0 || str_byte(t, n - 1) != 93 { return 0 - 1 }
+    let mut depth = 0
+    let mut i = n - 1
+    while i >= 0 {
+        let b = str_byte(t, i)
+        if b == 93 { depth += 1 }
+        if b == 91 {
+            depth -= 1
+            if depth == 0 { return i }
+        }
+        i -= 1
+    }
+    0 - 1
+}
+
+/// The comma-and-space separated arguments between `from` and `to`, at depth 0.
+fn split_args(t: Str, from: Int, to: Int) -> Strs {
+    let out = strs_new()
+    let mut depth = 0
+    let mut start = from
+    let mut i = from
+    while i < to {
+        let b = str_byte(t, i)
+        if b == 91 || b == 40 { depth += 1 }
+        if b == 93 || b == 41 { depth -= 1 }
+        if b == 44 && depth == 0 {
+            strs_push(out, str_slice(t, start, i))
+            start = i + 1
+            if start < to && str_byte(t, start) == 32 { start += 1 }
+        }
+        i += 1
+    }
+    if to > from { strs_push(out, str_slice(t, start, to)) }
+    out
+}
+
+pub fn spell(t: Str) -> Spelled ! {} {
+    let b = open_bracket(t)
+    let head = if b < 0 { t } else { str_slice(t, 0, b) }
+    let args = if b < 0 { strs_new() } else { split_args(t, b + 1, str_len(t) - 1) }
+    if str_len(head) > 0 && str_byte(head, 0) == 36 {
+        return Spelled(kind: "param", head: head, module: "", name: "", args: args)
+    }
+    // An array whose type Core IR /2 spells `?`, as the lowering recovers it: `?array[ELEM, LEN]`.
+    if head == "?array" {
+        return Spelled(kind: "array", head: head, module: "", name: "", args: args)
+    }
+    if head == "?" || head == "never" {
+        return Spelled(kind: "unknown", head: head, module: "", name: "", args: args)
+    }
+    match text_find(head, "::record ") {
+        Some(i) => { return Spelled(kind: "record", head: head, module: str_slice(head, 0, i), name: str_slice(head, i + 9, str_len(head)), args: args) },
+        None => {},
+    }
+    match text_find(head, "::enum ") {
+        Some(i) => { return Spelled(kind: "enum", head: head, module: str_slice(head, 0, i), name: str_slice(head, i + 7, str_len(head)), args: args) },
+        None => {},
+    }
+    if head == "Vec" || head == "Box" || head == "List" || head == "Cell" || (head == "Chan" && strs_len(args) == 1) {
+        return Spelled(kind: "vec", head: head, module: "", name: "", args: args)
+    }
+    Spelled(kind: "builtin", head: head, module: "", name: "", args: args)
+}
+
+/// A spelling put back together.
+pub fn unspell(s: Spelled) -> Str ! {} {
+    if strs_len(s.args) == 0 { return s.head }
+    s.head + "[" + str_join(s.args, ", ") + "]"
+}
+
+/// `text` with every byte that is not an ASCII letter or digit written as `_XX`.
+pub fn encode(text: Str) -> Str ! {} {
+    let digits = "0123456789ABCDEF"
+    let parts = strs_new()
+    for i in 0..str_len(text) {
+        let b = str_byte(text, i)
+        if (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) {
+            strs_push(parts, str_from_byte(b))
+        } else {
+            strs_push(parts, "_" + str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1))
+        }
+    }
+    str_join(parts, "")
+}
+
+/// A type's canonical key, as MIR names it.
+pub fn key(t: Str) -> Str ! {} {
+    let s = spell(t)
+    if s.kind == "vec" {
+        return s.head + "(" + key(strs_get(s.args, 0)) + ")"
+    }
+    if s.kind == "record" || s.kind == "enum" {
+        let k = if s.kind == "record" { "R" } else { "E" }
+        let head = if str_len(s.module) > 0 && str_byte(s.module, 0) == 35 {
+            k + ".u." + str_slice(s.module, 1, str_len(s.module)) + "." + encode(s.name)
+        } else {
+            k + ".m." + encode(s.module) + "." + encode(s.name)
+        }
+        if strs_len(s.args) == 0 { return head }
+        let inner = strs_new()
+        for a in s.args { strs_push(inner, key(a)) }
+        return head + "(" + str_join(inner, ",") + ")"
+    }
+    if s.kind == "param" { return "?param" }
+    // MIR names an array type `?` (`crates/nazm-mir/src/text.rs` has no case for it).
+    if s.kind == "unknown" || s.kind == "array" { return "?" }
+    t
+}
+
+/// `t` with each `$N` replaced by `args[N]`.
+pub fn subst(t: Str, args: Strs) -> Str ! {} {
+    if strs_len(args) == 0 { return t }
+    let s = spell(t)
+    if s.kind == "param" {
+        let n = match text_parse_int(str_slice(s.head, 1, str_len(s.head))) { Ok(v) => v, Err(e) => 0 - 1 }
+        if n >= 0 && n < strs_len(args) { return strs_get(args, n) }
+        return t
+    }
+    if strs_len(s.args) == 0 { return t }
+    let out = strs_new()
+    for a in s.args { strs_push(out, subst(a, args)) }
+    unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
+}
+
+/// Whether a spelling mentions a type parameter.
+pub fn open(t: Str) -> Bool ! {} {
+    text_contains(t, "$")
+}
+
+/// Whether `t` is a numeric type other than `Int`.
+pub fn is_num(t: Str) -> Bool ! {} {
+    t == "Int8" || t == "Int16" || t == "Int32" || t == "Int64" || t == "Int128" || t == "UInt8" || t == "UInt16" || t == "UInt32" || t == "UInt64" || t == "UInt128" || t == "Float32" || t == "Float64"
+}
+
+fn num_bytes(t: Str) -> Int {
+    if t == "Int8" || t == "UInt8" { 1 } else if t == "Int16" || t == "UInt16" { 2 } else if t == "Int32" || t == "UInt32" || t == "Float32" { 4 } else if t == "Int128" || t == "UInt128" { 16 } else { 8 }
+}
+
+// --- the type table, recovered from uses ----------------------------------------------------------
+
+/// What the program says about each record's and enum's fields. A field is filed under its
+/// definition (`MODULE::record NAME`) and an index — `v.f` for variant `v`'s field `f`, `f` for a
+/// record's — as a template whose `#J` is the definition's `J`th type argument, or under a
+/// concrete type's whole spelling when its arguments are not the parameters of the function that
+/// used it.
+pub struct TypeTable {
+    templ: HashMap[Str, Str],
+    /// The field slots each definition (or concrete spelling) has been seen with.
+    slots: HashMap[Str, Strs],
+    /// Each enum definition's variant names, by index, as `match` arms list every one.
+    variants: HashMap[Str, Strs],
+}
+
+pub fn table_new() -> TypeTable ! {} {
+    TypeTable(templ: hashmap_new(), slots: hashmap_new(), variants: hashmap_new())
+}
+
+/// `v` written over `#J` for each argument `$I` of `args` at position `J`, or `""` when it mentions
+/// a parameter that is not one of them.
+fn template(v: Str, args: Strs) -> Str {
+    if !open(v) { return v }
+    let s = spell(v)
+    if s.kind == "param" {
+        for j in 0..strs_len(args) {
+            if strs_get(args, j) == v { return "#" + int_to_str(j) }
+        }
+        return ""
+    }
+    let out = strs_new()
+    for a in s.args {
+        let x = template(a, args)
+        if x == "" { return "" }
+        strs_push(out, x)
+    }
+    unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
+}
+
+fn instantiate(t: Str, args: Strs) -> Str {
+    if !text_contains(t, "#") { return t }
+    let s = spell(t)
+    if strs_len(s.args) == 0 && str_len(t) > 1 && str_byte(t, 0) == 35 {
+        let n = match text_parse_int(str_slice(t, 1, str_len(t))) { Ok(v) => v, Err(e) => 0 - 1 }
+        if n >= 0 && n < strs_len(args) { return strs_get(args, n) }
+        return "?"
+    }
+    let out = strs_new()
+    for a in s.args { strs_push(out, instantiate(a, args)) }
+    unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
+}
+
+fn note_slot(tt: TypeTable, owner: Str, slot: Str) {
+    let have = match hashmap_get(tt.slots, owner) { Some(s) => s, None => {
+        let s = strs_new()
+        hashmap_set(tt.slots, owner, s)
+        s
+    } }
+    for x in have { if x == slot { return } }
+    strs_push(have, slot)
+}
+
+/// Whether every argument is a distinct type parameter.
+fn bare(args: Strs) -> Bool {
+    for i in 0..strs_len(args) {
+        let a = strs_get(args, i)
+        if spell(a).kind != "param" { return false }
+        for j in 0..i { if strs_get(args, j) == a { return false } }
+    }
+    true
+}
+
+/// Record that a value of type `v` sits in field `slot` of a value of type `owner`.
+pub fn observe(tt: TypeTable, owner: Str, slot: Str, v: Str) ! {} {
+    if v == "never" || v == "" || v == "?" { return }
+    let s = spell(owner)
+    if s.kind != "record" && s.kind != "enum" { return }
+    if bare(s.args) {
+        let t = template(v, s.args)
+        if t != "" {
+            hashmap_set(tt.templ, s.head + "|" + slot, t)
+            note_slot(tt, s.head, slot)
+        }
+    } else if !open(owner) && !open(v) {
+        hashmap_set(tt.templ, owner + "|" + slot, v)
+        note_slot(tt, owner, slot)
+    }
+}
+
+/// The field types the table knows for `t`, concrete: its definition's, then any slot only a
+/// concrete use of this very type showed.
+pub fn fields_of(tt: TypeTable, t: Str) -> Strs ! {} {
+    let s = spell(t)
+    let out = strs_new()
+    let head = match hashmap_get(tt.slots, s.head) { Some(x) => x, None => strs_new() }
+    for slot in head {
+        match hashmap_get(tt.templ, s.head + "|" + slot) {
+            Some(x) => strs_push(out, instantiate(x, s.args)),
+            None => {},
+        }
+    }
+    if t != s.head {
+        let own = match hashmap_get(tt.slots, t) { Some(x) => x, None => strs_new() }
+        for slot in own {
+            let mut known = false
+            for h in head { if h == slot { known = true } }
+            if !known {
+                match hashmap_get(tt.templ, t + "|" + slot) {
+                    Some(x) => strs_push(out, x),
+                    None => {},
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The type of field `slot` of `t`, or `""`.
+pub fn field_ty(tt: TypeTable, t: Str, slot: Str) -> Str ! {} {
+    let s = spell(t)
+    match hashmap_get(tt.templ, s.head + "|" + slot) {
+        Some(x) => instantiate(x, s.args),
+        None => match hashmap_get(tt.templ, t + "|" + slot) { Some(x) => x, None => "" },
+    }
+}
+
+/// Whether a value of `t` owns anything a drop must give back.
+pub fn managed(tt: TypeTable, t: Str) -> Bool ! {} {
+    managed_within(tt, t, 0)
+}
+
+fn managed_within(tt: TypeTable, t: Str, depth: Int) -> Bool {
+    if depth > 64 { return true }
+    let s = spell(t)
+    if s.kind == "array" { return managed_within(tt, strs_get(s.args, 0), depth + 1) }
+    if s.kind == "vec" { return true }
+    if s.kind == "param" { return false }
+    // A function type: Core IR /2 prints it `?`.
+    if s.kind == "unknown" { return true }
+    if s.kind == "record" || s.kind == "enum" {
+        for f in fields_of(tt, t) {
+            if managed_within(tt, f, depth + 1) { return true }
+        }
+        return false
+    }
+    t == "Str" || t == "Ints" || t == "Strs" || t == "Chan" || t == "Bytes" || t == "Text" || t == "Atomic"
+}
+
+/// The bytes a value of `t` occupies in a frame, as the checker counts them.
+pub fn data_bytes(tt: TypeTable, t: Str) -> Int ! {} {
+    data_within(tt, t, 0)
+}
+
+fn data_within(tt: TypeTable, t: Str, depth: Int) -> Int {
+    if depth > 64 { return 0 }
+    let s = spell(t)
+    if s.kind == "array" {
+        let n = match text_parse_int(strs_get(s.args, 1)) { Ok(v) => v, Err(e) => 0 }
+        return data_within(tt, strs_get(s.args, 0), depth + 1) * n
+    }
+    if t == "Int" { return 8 }
+    if t == "Bool" { return 1 }
+    if is_num(t) { return num_bytes(t) }
+    if t == "Str" || t == "Text" { return 24 }
+    if s.kind == "record" {
+        let mut n = 0
+        for f in fields_of(tt, t) { n += data_within(tt, f, depth + 1) }
+        return n
+    }
+    if s.kind == "enum" {
+        let mut most = 0
+        let vs = match hashmap_get(tt.variants, s.head) { Some(v) => v, None => strs_new() }
+        for v in 0..strs_len(vs) {
+            let mut n = 0
+            for f in variant_fields(tt, t, v) { n += data_within(tt, f, depth + 1) }
+            if n > most { most = n }
+        }
+        return 8 + most
+    }
+    8
+}
+
+/// The field types of variant `v` of enum `t`.
+fn variant_fields(tt: TypeTable, t: Str, v: Int) -> Strs {
+    let s = spell(t)
+    let out = strs_new()
+    let prefix = int_to_str(v) + "."
+    let slots = match hashmap_get(tt.slots, s.head) { Some(x) => x, None => strs_new() }
+    for slot in slots {
+        if text_starts_with(slot, prefix) {
+            match hashmap_get(tt.templ, s.head + "|" + slot) {
+                Some(x) => strs_push(out, instantiate(x, s.args)),
+                None => {},
+            }
+        }
+    }
+    out
+}
+
+/// Record an enum's variant names from a `match`, which lists every variant once.
+pub fn observe_variant(tt: TypeTable, enum_ty: Str, index: Int, name: Str) ! {} {
+    let head = spell(enum_ty).head
+    let have = match hashmap_get(tt.variants, head) { Some(s) => s, None => {
+        let s = strs_new()
+        hashmap_set(tt.variants, head, s)
+        s
+    } }
+    while strs_len(have) <= index { strs_push(have, "") }
+    strs_set(have, index, name)
+}
+
+/// Walk every function of `c` and fill the table from what it constructs, reads and matches.
+pub fn table_build(c: Cir) -> TypeTable ! {} {
+    let tt = table_new()
+    for f in c.fns {
+        if f.body >= 0 { walk(c, tt, f, f.body) }
+    }
+    tt
+}
+
+fn walk(c: Cir, tt: TypeTable, f: CirFn, n: Int) {
+    if n < 0 { return }
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { walk(c, tt, f, at(c, n, i)) }
+        return
+    }
+    if kind != "object" { return }
+    let o = op(c, n)
+    if o == "record" {
+        let t = ety(c, n)
+        let fs = kid(c, n, "fields")
+        for i in 0..count(c, fs) {
+            let x = at(c, fs, i)
+            observe(tt, t, int_to_str(ival(c, x, "field")), ety(c, kid(c, x, "value")))
+        }
+    } else if o == "variant" {
+        let t = ety(c, n)
+        let v = ival(c, n, "variant")
+        let fs = kid(c, n, "fields")
+        for i in 0..count(c, fs) {
+            let x = at(c, fs, i)
+            observe(tt, t, int_to_str(v) + "." + int_to_str(ival(c, x, "field")), ety(c, kid(c, x, "value")))
+        }
+    } else if o == "field" {
+        let b = kid(c, n, "base")
+        observe(tt, ety(c, b), int_to_str(ival(c, n, "field")), ety(c, n))
+    } else if o == "match" {
+        let t = sval(c, n, "enum")
+        let arms = kid(c, n, "arms")
+        for i in 0..count(c, arms) {
+            let a = at(c, arms, i)
+            let v = ival(c, a, "variant")
+            observe_variant(tt, t, v, sval(c, a, "name"))
+            let bs = kid(c, a, "bindings")
+            for j in 0..count(c, bs) {
+                let b = at(c, bs, j)
+                let l = ival(c, b, "local")
+                if l < vec_len(f.locals) {
+                    observe(tt, t, int_to_str(v) + "." + int_to_str(ival(c, b, "field")), vec_get(f.locals, l).ty)
+                }
+            }
+        }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { walk(c, tt, f, k); }
+            },
+            None => {},
+        }
+    }
+}

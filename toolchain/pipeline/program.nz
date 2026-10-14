@@ -1,0 +1,353 @@
+// The whole program to MIR: which concrete functions exist and in what order, which are in a call
+// cycle, and each one lowered.
+
+use "cir.nz"
+use "types.nz"
+use "mir.nz"
+use "traits.nz"
+use "lower.nz"
+use "@std/hash"
+use "@std/json"
+use "@std/hashmap"
+use "@std/text"
+
+/// Every direct, unspawned call `n` makes, by callee definition, into `out`; whether it makes an
+/// indirect call.
+fn calls(c: Cir, n: Int, out: Strs) -> Bool {
+    let kind = json_kind(c.doc, n)
+    let mut indirect = false
+    if kind == "array" {
+        for i in 0..count(c, n) {
+            if calls(c, at(c, n, i), out) { indirect = true }
+        }
+        return indirect
+    }
+    if kind != "object" { return false }
+    let o = op(c, n)
+    if o == "call" { strs_push(out, sval(c, n, "callee")) }
+    if o == "call_indirect" || o == "call_trait" { indirect = true }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if (kk == "object" || kk == "array") && calls(c, k, out) { indirect = true }
+            },
+            None => {},
+        }
+    }
+    indirect
+}
+
+/// Which definitions are in a call cycle, by position in `c.fns`: one that reaches itself through
+/// direct calls, or that makes an indirect call (which may reach anything).
+fn in_call_cycles(c: Cir) -> Ints {
+    let n = vec_len(c.fns)
+    let edges: Vec[Ints] = vec_new()
+    let out = ints_new()
+    for f in c.fns {
+        let callees = strs_new()
+        let indirect = if f.body >= 0 { calls(c, f.body, callees) } else { false }
+        let e = ints_new()
+        for d in callees {
+            let i = fn_index(c, d)
+            if i >= 0 { ints_push(e, i) }
+        }
+        vec_push(edges, e)
+        ints_push(out, if indirect { 1 } else { 0 })
+    }
+    for root in 0..n {
+        if ints_get(out, root) == 1 { continue }
+        // Does `root` reach itself?
+        let seen = ints_new()
+        for i in 0..n { ints_push(seen, 0) }
+        let work = ints_new()
+        for x in vec_get(edges, root) { ints_push(work, x) }
+        while ints_len(work) > 0 {
+            let v = ints_pop(work)
+            if v == root {
+                ints_set(out, root, 1)
+                break
+            }
+            if ints_get(seen, v) == 1 { continue }
+            ints_set(seen, v, 1)
+            for x in vec_get(edges, v) { ints_push(work, x) }
+        }
+    }
+    out
+}
+
+// --- the instance plan ------------------------------------------------------------------------------
+
+/// One concrete instance of a generic definition: the definition (a position in `c.fns`), its
+/// concrete type arguments, and their keys.
+struct Inst {
+    fi: Int,
+    args: Strs,
+    keys: Strs,
+}
+
+/// Whether a definition is a closure of a generic function, which is instantiated with it.
+fn in_generic(c: Cir, f: CirFn) -> Bool {
+    if f.type_params > 0 { return true }
+    match text_find(f.def, "#") {
+        Some(k) => {
+            let owner = fn_index(c, str_slice(f.def, 0, k))
+            owner >= 0 && vec_get(c.fns, owner).type_params > 0
+        },
+        None => false,
+    }
+}
+
+fn inst_id(def: Str, keys: Strs) -> Str {
+    def + "[" + str_join(keys, ",") + "]"
+}
+
+/// Every instance the calls in `n` need under the substitution `args`, appended to the plan.
+fn plan_sites(c: Cir, n: Int, args: Strs, seen: HashMap[Str, Int], plan: Vec[Inst], work: Ints) {
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { plan_sites(c, at(c, n, i), args, seen, plan, work) }
+        return
+    }
+    if kind != "object" { return }
+    let o = op(c, n)
+    let mut target = 0 - 1
+    let targs = strs_new()
+    if o == "call" {
+        let g = fn_index(c, sval(c, n, "callee"))
+        if g >= 0 && vec_get(c.fns, g).type_params > 0 {
+            target = g
+            let ta = kid(c, n, "type_args")
+            for i in 0..count(c, ta) { strs_push(targs, subst(str_of(c, at(c, ta, i)), args)) }
+        }
+    } else if o == "call_trait" {
+        let concrete = subst(sval(c, n, "self"), args)
+        if !open(concrete) {
+            let t = method_target(c, sval(c, n, "method"), concrete)
+            if t.index >= 0 && strs_len(t.args) > 0 {
+                target = t.index
+                for a in t.args { strs_push(targs, a) }
+            }
+        }
+    }
+    if target >= 0 {
+        let mut concrete = true
+        for a in targs { if open(a) { concrete = false } }
+        if concrete {
+            let keys = strs_new()
+            for a in targs { strs_push(keys, key(a)) }
+            let id = inst_id(vec_get(c.fns, target).def, keys)
+            if !hashmap_has(seen, id) {
+                hashmap_set(seen, id, vec_len(plan))
+                ints_push(work, vec_len(plan))
+                vec_push(plan, Inst(fi: target, args: targs, keys: keys))
+            }
+        }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { plan_sites(c, k, args, seen, plan, work); }
+            },
+            None => {},
+        }
+    }
+}
+
+/// Whether instance `a` sorts before `b`: by definition (module, then name), then by the keys.
+fn inst_before(c: Cir, a: Inst, b: Inst) -> Bool {
+    let da = vec_get(c.fns, a.fi)
+    let db = vec_get(c.fns, b.fi)
+    if da.module != db.module { return da.module < db.module }
+    let na = def_name(da.def)
+    let nb = def_name(db.def)
+    if na != nb { return na < nb }
+    let n = if strs_len(a.keys) < strs_len(b.keys) { strs_len(a.keys) } else { strs_len(b.keys) }
+    for i in 0..n {
+        let x = strs_get(a.keys, i)
+        let y = strs_get(b.keys, i)
+        if x != y { return x < y }
+    }
+    strs_len(a.keys) < strs_len(b.keys)
+}
+
+fn def_name(def: Str) -> Str {
+    match text_find(def, "::fn ") { Some(k) => str_slice(def, k + 5, str_len(def)), None => def }
+}
+
+/// Every instance the program needs, from the calls of its non-generic functions through the calls
+/// of every instance, sorted by identity.
+fn plan_instances(c: Cir) -> Vec[Inst] {
+    let seen: HashMap[Str, Int] = hashmap_new()
+    let plan: Vec[Inst] = vec_new()
+    let work = ints_new()
+    for f in c.fns {
+        if !in_generic(c, f) && f.body >= 0 { plan_sites(c, f.body, strs_new(), seen, plan, work) }
+    }
+    let mut next = 0
+    while next < ints_len(work) {
+        let inst = vec_get(plan, ints_get(work, next))
+        next += 1
+        let f = vec_get(c.fns, inst.fi)
+        if f.body >= 0 { plan_sites(c, f.body, inst.args, seen, plan, work) }
+    }
+    // Insertion sort: the plan is small, and the order must be the identity's alone.
+    let sorted: Vec[Inst] = vec_new()
+    for x in plan {
+        vec_push(sorted, x)
+        let mut i = vec_len(sorted) - 1
+        while i > 0 && inst_before(c, vec_get(sorted, i), vec_get(sorted, i - 1)) {
+            let t = vec_get(sorted, i - 1)
+            vec_set(sorted, i - 1, vec_get(sorted, i))
+            vec_set(sorted, i, t)
+            i -= 1
+        }
+    }
+    sorted
+}
+
+// --- closures and function values -------------------------------------------------------------------
+
+/// How many captures each closure's code reads (by its definition), and each `MODULE|DEF` a named
+/// function is used as a value in, in the order they are met.
+fn closures_and_values(c: Cir, n: Int, module: Str, caps: HashMap[Str, Int], uses: Strs) {
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { closures_and_values(c, at(c, n, i), module, caps, uses) }
+        return
+    }
+    if kind != "object" { return }
+    let o = op(c, n)
+    if o == "closure" {
+        hashmap_set(caps, sval(c, n, "function"), count(c, kid(c, n, "captures")))
+    } else if o == "fn_value" {
+        let u = module + "|" + sval(c, n, "function")
+        let mut seen = false
+        for x in uses { if x == u { seen = true } }
+        if !seen { strs_push(uses, u) }
+    }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { closures_and_values(c, k, module, caps, uses); }
+            },
+            None => {},
+        }
+    }
+}
+
+/// The Core IR of the thunk through which `module` calls `target` as a value: the closure object,
+/// then `target`'s parameters, and a body that is the call — written into the document, as the Rust
+/// lowering writes it into its Core IR.
+fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
+    let d = c.doc
+    let home = match text_find(target.def, "::fn ") { Some(k) => str_slice(target.def, 0, k), None => target.module }
+    let name = target.name + "#value@" + home
+    let locals: Vec[CirLocal] = vec_new()
+    vec_push(locals, CirLocal(name: "env", ty: "?", origin: "param"))
+    let args = ints_new()
+    for i in 0..target.params {
+        let l = vec_get(target.locals, i)
+        vec_push(locals, CirLocal(name: l.name, ty: l.ty, origin: "param"))
+        let ak = strs_new()
+        let av = ints_new()
+        strs_push(ak, "op")
+        ints_push(av, json_add_str(d, "local"))
+        strs_push(ak, "local")
+        ints_push(av, json_add_int(d, i + 1))
+        strs_push(ak, "type")
+        ints_push(av, json_add_str(d, l.ty))
+        ints_push(args, json_add_object(d, ak, av))
+    }
+    let ck = strs_new()
+    let cv = ints_new()
+    strs_push(ck, "op")
+    ints_push(cv, json_add_str(d, "call"))
+    strs_push(ck, "callee")
+    ints_push(cv, json_add_str(d, target.def))
+    strs_push(ck, "type_args")
+    ints_push(cv, json_add_array(d, ints_new()))
+    strs_push(ck, "args")
+    ints_push(cv, json_add_array(d, args))
+    strs_push(ck, "type")
+    ints_push(cv, json_add_str(d, target.ret))
+    let call = json_add_object(d, ck, cv)
+    let bk = strs_new()
+    let bv = ints_new()
+    strs_push(bk, "stmts")
+    ints_push(bv, json_add_array(d, ints_new()))
+    strs_push(bk, "tail")
+    ints_push(bv, call)
+    let body = json_add_object(d, bk, bv)
+    CirFn(def: module + "::fn " + name, module: module, name: name, type_params: 0, params: target.params + 1,
+        ret: target.ret, published: target.published, locals: locals, consts: vec_new(), body: body, foreign: "")
+}
+
+/// Lower a program's Core IR to MIR, or say why not.
+pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
+    let tt = table_build(c)
+    let recursive = in_call_cycles(c)
+    let fm = FuncMap(plain: hashmap_new(), inst: hashmap_new(), thunks: hashmap_new())
+    let caps: HashMap[Str, Int] = hashmap_new()
+    let uses = strs_new()
+    for f in c.fns {
+        if f.body >= 0 { closures_and_values(c, f.body, f.module, caps, uses) }
+    }
+    let mut next = 0
+    for f in c.fns {
+        if f.type_params == 0 {
+            hashmap_set(fm.plain, f.def, next)
+            next += 1
+        }
+    }
+    let plan = plan_instances(c)
+    for inst in plan {
+        hashmap_set(fm.inst, inst_id(vec_get(c.fns, inst.fi).def, inst.keys), next)
+        next += 1
+    }
+    // A named function used as a value is called through a thunk, one per (module, function), in
+    // the order the uses are met, after every instance.
+    for u in uses {
+        hashmap_set(fm.thunks, u, next)
+        next += 1
+    }
+    let fns: Vec[MirFn] = vec_new()
+    let errors = strs_new()
+    for i in 0..vec_len(c.fns) {
+        let f = vec_get(c.fns, i)
+        if f.type_params == 0 {
+            let n = match hashmap_get(caps, f.def) { Some(x) => x, None => 0 }
+            match lower_function(c, tt, fm, f, strs_new(), f.def, ints_get(recursive, i) == 1, n) {
+                Ok(m) => vec_push(fns, m),
+                Err(e) => strs_push(errors, e),
+            }
+        }
+    }
+    for inst in plan {
+        let f = vec_get(c.fns, inst.fi)
+        let n = match hashmap_get(caps, f.def) { Some(x) => x, None => 0 }
+        match lower_function(c, tt, fm, f, inst.args, inst_id(f.def, inst.keys), ints_get(recursive, inst.fi) == 1, n) {
+            Ok(m) => vec_push(fns, m),
+            Err(e) => strs_push(errors, e),
+        }
+    }
+    for u in uses {
+        let bar = match text_find(u, "|") { Some(k) => k, None => 0 }
+        let module = str_slice(u, 0, bar)
+        let ti = fn_index(c, str_slice(u, bar + 1, str_len(u)))
+        if ti < 0 {
+            strs_push(errors, "a function value names a function with no Core IR")
+        } else {
+            let thunk = thunk_of(c, vec_get(c.fns, ti), module)
+            match lower_function(c, tt, fm, thunk, strs_new(), thunk.def, ints_get(recursive, ti) == 1, 0) {
+                Ok(m) => vec_push(fns, m),
+                Err(e) => strs_push(errors, e),
+            }
+        }
+    }
+    if strs_len(errors) > 0 { return Err(str_join(errors, "\n")) }
+    let entry = match hashmap_get(fm.plain, c.entry) { Some(x) => x, None => 0 - 1 }
+    Ok(MirProgram(fns: fns, entry: entry))
+}

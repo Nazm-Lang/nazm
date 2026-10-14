@@ -1,0 +1,66 @@
+// A call through a trait bound, resolved at a concrete type. `nazm.core-ir/2` carries no impl
+// table, so the impl is found the way the checker names its functions: an impl's method is the
+// function `Trait/Self/method` of the impl's module, whose first parameter is `Self` — matched
+// against the concrete type, so a generic impl's type arguments come out of the match
+// (`openspec/changes/r3-pipeline/design.md`, *Gaps*).
+
+use "cir.nz"
+use "types.nz"
+use "@std/text"
+
+/// Where a trait method lands: a function of `c.fns` (or -1) and its type arguments.
+pub struct Target {
+    index: Int,
+    args: Strs,
+}
+
+/// Match a spelling with parameters against a concrete one, binding `$N` in `binds`.
+fn unify(pattern: Str, concrete: Str, binds: Strs) -> Bool {
+    let p = spell(pattern)
+    if p.kind == "param" {
+        let n = match text_parse_int(str_slice(p.head, 1, str_len(p.head))) { Ok(v) => v, Err(e) => 0 - 1 }
+        if n < 0 { return false }
+        while strs_len(binds) <= n { strs_push(binds, "") }
+        let have = strs_get(binds, n)
+        if have == "" {
+            strs_set(binds, n, concrete)
+            return true
+        }
+        return have == concrete
+    }
+    let q = spell(concrete)
+    if p.head != q.head || strs_len(p.args) != strs_len(q.args) { return false }
+    for i in 0..strs_len(p.args) {
+        if !unify(strs_get(p.args, i), strs_get(q.args, i), binds) { return false }
+    }
+    true
+}
+
+/// The trait's name and the method's, from `MODULE::trait NAME.method`.
+pub fn trait_parts(method: Str) -> Strs ! {} {
+    let out = strs_new()
+    let start = match text_find(method, "::trait ") { Some(i) => i + 8, None => 0 }
+    let rest = str_slice(method, start, str_len(method))
+    let dot = match text_find(rest, ".") { Some(i) => i, None => str_len(rest) }
+    strs_push(out, str_slice(rest, 0, dot))
+    strs_push(out, if dot < str_len(rest) { str_slice(rest, dot + 1, str_len(rest)) } else { "" })
+    out
+}
+
+/// The function a call of `method` (`MODULE::trait NAME.method`) reaches at `concrete`.
+pub fn method_target(c: Cir, method: Str, concrete: Str) -> Target ! {} {
+    let parts = trait_parts(method)
+    let prefix = strs_get(parts, 0) + "/"
+    let suffix = "/" + strs_get(parts, 1)
+    for i in 0..vec_len(c.fns) {
+        let f = vec_get(c.fns, i)
+        let name = match text_find(f.def, "::fn ") { Some(k) => str_slice(f.def, k + 5, str_len(f.def)), None => f.def }
+        if text_starts_with(name, prefix) && text_ends_with(name, suffix) && f.params > 0 {
+            let binds = strs_new()
+            if unify(vec_get(f.locals, 0).ty, concrete, binds) && strs_len(binds) == f.type_params {
+                return Target(index: i, args: binds)
+            }
+        }
+    }
+    Target(index: 0 - 1, args: strs_new())
+}
