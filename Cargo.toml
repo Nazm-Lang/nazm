@@ -59,7 +59,7 @@ edition = "2021"
 #
 # xtask overrides it with 1.89: it needs std's file locking, and a development
 # tool's requirement has no business raising the floor for the crates that ship.
-rust-version = "1.85"
+rust-version = "1.89"
 license = "Apache-2.0 WITH LLVM-exception"
 repository = "https://github.com/Nazm-Lang/nazm"
 homepage = "https://nazm.dev"
