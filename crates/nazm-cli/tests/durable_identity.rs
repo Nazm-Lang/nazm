@@ -1436,3 +1436,38 @@ fn a_requirement_is_part_of_the_interface_and_a_parameter_s_name_is_not() {
         "a requirement did not move the fingerprint"
     );
 }
+
+#[test]
+fn a_128_bit_constant_reads_back_from_its_interface_whole() {
+    // L13b: a 128-bit constant is persisted with all its bits, not its low word, so a module
+    // checked against the interface alone sees the value its source wrote.
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        "b.nz",
+        "pub const BIG: UInt128 = 340282366920938463463374607431768211455;\n\
+         pub const LOW: Int128 = -170141183460469231731687303715884105728;\n\
+         pub const SMALL: Int8 = -5;\n",
+    );
+    let published = interface_of(&dir.path().join("b.nz"));
+    std::fs::remove_file(dir.path().join("b.nz")).expect("remove B");
+    let interface = PersistentUnitInterface::from_json(&published).expect("valid");
+    let mut graph = ModuleGraph::default();
+    let b = graph.add(FileId::from_index(1), interface.module_key());
+    let mut res = Resolution::default();
+    let rehydrated = interface.rehydrate(b, FnId::from_index(4096), res.types_mut());
+    let bits = |name: &str| -> u128 {
+        let c = rehydrated
+            .consts()
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap_or_else(|| panic!("{name} is not offered: {published}"));
+        match &c.value {
+            nazm_core::sema::numeric::ConstValue::Num(n) => n.bits,
+            other => panic!("{name} read back as {other:?}"),
+        }
+    };
+    assert_eq!(bits("BIG"), u128::MAX, "{published}");
+    assert_eq!(bits("LOW").cast_signed(), i128::MIN, "{published}");
+    assert_eq!(bits("SMALL").cast_signed(), -5, "{published}");
+}
