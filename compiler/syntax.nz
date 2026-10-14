@@ -20,6 +20,10 @@
 use "lex.nz";
 use "diag.nz";
 
+// A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
+// string's value on one line).
+fn nl() -> Str { str_from_byte(10) }
+
 // --- the tree ------------------------------------------------------------------------------
 
 pub struct Tree {
@@ -300,16 +304,16 @@ pub fn sx_print(t: Tree, n: Int, indent: Int, out: Strs, pads: Strs) -> Int {
     let inner = pad(pads, indent + 4);
     if k == tk_list() {
         if c == 0 { strs_push(out, "[]"); return 0; }
-        strs_push(out, "[\n");
+        strs_push(out, str_concat("[", nl()));
     }
     if k == tk_tuple() {
         strs_push(out, sx_text(t, n));
-        strs_push(out, "(\n");
+        strs_push(out, str_concat("(", nl()));
     }
     if k == tk_struct() {
         strs_push(out, sx_text(t, n));
         if c == 0 { return 0; }
-        strs_push(out, " {\n");
+        strs_push(out, str_concat(" {", nl()));
     }
     let f = ints_get(t.first, n);
     let mut i = 0;
@@ -320,7 +324,7 @@ pub fn sx_print(t: Tree, n: Int, indent: Int, out: Strs, pads: Strs) -> Int {
             strs_push(out, ": ");
         }
         sx_print(t, ints_get(t.kids, f + i), indent + 4, out, pads);
-        strs_push(out, ",\n");
+        strs_push(out, str_concat(",", nl()));
         i = i + 1;
     }
     strs_push(out, pad(pads, indent));
@@ -3542,7 +3546,7 @@ fn printed(t: Tree, name: Str, args: Ints, parens: Int) -> Ints {
     if name != "print" && name != "eprint" && newline == false { return args; }
     if newline && ints_len(args) == 0 {
         let f = fs();
-        fa(f, "value", sx_str(t, "\n"));
+        fa(f, "value", sx_str(t, nl()));
         fa(f, "span", parens);
         return one(mk_struct(t, "Str", f));
     }
@@ -3551,7 +3555,7 @@ fn printed(t: Tree, name: Str, args: Ints, parens: Int) -> Ints {
     if newline == false && sx_kind(t, value) == tk_struct() && sx_text(t, value) == "Str" { return args; }
     let span = expr_span(t, value);
     let parts = one(hole_part(t, value, default_spec(t), parens));
-    if newline { ints_push(parts, mk_tuple(t, "Text", one(sx_str(t, "\n")))); }
+    if newline { ints_push(parts, mk_tuple(t, "Text", one(sx_str(t, nl())))); }
     let f = fs();
     fa(f, "parts", mk_list(t, parts));
     fa(f, "span", span);
@@ -3944,7 +3948,7 @@ fn interpolation(p: Px, span: Int) -> Int {
 fn hole(p: Px, text: Str, from: Int, braces: Int) -> Int {
     let t = p.t;
     let prefix = "fn hole() -> Int { ";
-    let wrapped = str_concat(str_concat(prefix, text), "\n}\n");
+    let wrapped = str_concat(str_concat(str_concat(prefix, text), nl()), str_concat("}", nl()));
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();

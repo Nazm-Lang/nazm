@@ -17,6 +17,10 @@
 use "syntax.nz";
 use "diag.nz";
 
+// A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
+// string's value on one line).
+fn nl() -> Str { str_from_byte(10) }
+
 pub struct Loaded {
     // Per file, in load order: the name it is published under and its text, newline included.
     names: Strs,
@@ -97,8 +101,8 @@ fn index_of(list: Strs, s: Str) -> Int {
 
 // The text with the trailing newline a source map gives a file that lacks one.
 pub fn ld_with_newline(text: Str) -> Str {
-    if str_len(text) == 0 { return "\n"; }
-    if str_byte(text, str_len(text) - 1) != 10 { return str_concat(text, "\n"); }
+    if str_len(text) == 0 { return nl(); }
+    if str_byte(text, str_len(text) - 1) != 10 { return str_concat(text, nl()); }
     text
 }
 
@@ -205,7 +209,7 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
         if file_exists(file) == false {
             strs_push(identities, identity);
             strs_push(names, name);
-            strs_push(texts, "\n");
+            strs_push(texts, nl());
             ints_push(standard, 0);
             pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), "No such file or directory (os error 2)");
             continue;

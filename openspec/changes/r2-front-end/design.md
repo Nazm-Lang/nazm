@@ -81,7 +81,11 @@ dump.
 **D8 — Inputs.** `tests/compat/v1/`, `corpus/`, `examples/`, the compiler's own sources, and the
 programs written inside `crates/nazm-cli/tests/*.rs`, extracted by
 `compiler/tests/extract-inputs.py` into `compiler/tests/inputs/rs/` (2,286 distinct programs at
-`c73dab2`). Many of the extracted programs are meant to be refused; they are the diagnostic corpus.
+`c73dab2`), and the `.nz` corpora that live under `crates/nazm-cli/tests` (refusals, transfers,
+domains, …) and `crates/nazm-cli/templates` — 2,710 inputs in all. Many of the extracted programs
+are meant to be refused; they are the diagnostic corpus. No string literal in `compiler/*.nz` holds
+a line break (`selfhost.rs` dumps a string's value on one line of its tree dump), so the sources
+write `nl()`.
 
 **D9 — Every lexing error is collected.** The Rust lexer is lossless and keeps going after an error,
 so the Nazm lexer records every diagnostic (`lex_all`) and continues exactly as it does. `lex`, which

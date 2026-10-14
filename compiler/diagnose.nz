@@ -12,6 +12,10 @@ use "syntax.nz";
 use "diag.nz";
 use "load.nz";
 
+// A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
+// string's value on one line).
+fn nl() -> Str { str_from_byte(10) }
+
 fn main(io: IoCap) -> Int {
     let mut at = 0;
     let mut syntax_only = false;
@@ -19,14 +23,14 @@ fn main(io: IoCap) -> Int {
         if arg(0) == "--syntax" { at = 1; syntax_only = true; }
     }
     if args_count() < at + 1 {
-        eprint("usage: diagnose [--syntax] FILE [LIBRARY]\n");
+        eprint(str_concat("usage: diagnose [--syntax] FILE [LIBRARY]", nl()));
         exit_with(2);
     }
     let path = arg(at);
     let mut library = "library";
     if args_count() > at + 1 { library = arg(at + 1); }
     if file_exists(path) == false {
-        eprint(str_concat(str_concat("cannot read ", path), "\n"));
+        eprint(str_concat(str_concat("cannot read ", path), nl()));
         exit_with(2);
     }
     let d = dg_new();
@@ -40,7 +44,7 @@ fn main(io: IoCap) -> Int {
     let mut i = 0;
     while i < dg_len(d) {
         strs_push(out, dg_json(d, i));
-        strs_push(out, "\n");
+        strs_push(out, nl());
         i = i + 1;
     }
     print(str_join(out, ""));
