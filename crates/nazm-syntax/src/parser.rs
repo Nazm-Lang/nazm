@@ -3455,8 +3455,12 @@ impl<'a> Parser<'a> {
         let pattern = self.pattern()?;
         self.expect(&TokenKind::Eq, "between a `let` pattern and its value")?;
         let value = self.expr()?;
-        // `let P = e;` (L5): no `else`, so `P` must match every value.
-        if self.at(&TokenKind::Semi) {
+        // `let P = e;` (L5): no `else`, so `P` must match every value. A line break or the
+        // block's `}` stands for the `;` (R1, 5b.19).
+        if self.at(&TokenKind::Semi)
+            || (!self.at(&TokenKind::Else)
+                && (self.line_break_before() || self.at(&TokenKind::RBrace)))
+        {
             let semi = self.expect(&TokenKind::Semi, "after a `let`")?;
             self.wrap(at, SyntaxKind::LetElseStmt);
             return Some(Parsed::LetElse {
@@ -4535,8 +4539,9 @@ impl<'a> Parser<'a> {
                 };
                 continue;
             }
-            // `base[index]` (Gate 2): an element of an array.
-            if self.at(&TokenKind::LBracket) {
+            // `base[index]` (Gate 2): an element of an array — its `[` on the base's line (R1,
+            // 5b.19), so a line beginning with `[` is a new statement.
+            if self.at(&TokenKind::LBracket) && !self.line_break_before() {
                 (out, depth) = self.index(at, out, depth)?;
                 continue;
             }
@@ -4614,7 +4619,7 @@ impl<'a> Parser<'a> {
                     return None;
                 }
             };
-            if self.at(&TokenKind::LParen) {
+            if self.at(&TokenKind::LParen) && !self.line_break_before() {
                 // `receiver.m(args)` (N78): a method call on any receiver.
                 out = self.method_call(at, None, out, name, name_span)?;
                 depth = self.built;
@@ -4817,7 +4822,9 @@ impl<'a> Parser<'a> {
                 .call_hole(at, name, span, type_args)
                 .map(|e| qualified(e, qualifier));
         }
-        if self.at(&TokenKind::LParen) {
+        // A call's `(` is on its name's line (R1, 5b.19): a line that begins with `(` begins a
+        // new statement, as a line beginning with `.` cannot (*Line breaks*).
+        if self.at(&TokenKind::LParen) && !self.line_break_before() {
             // Taken only once the `(` is there: a checkpoint emits the trivia before
             // the next token, and for a plain name that trivia is not the name's.
             let args_at = self.checkpoint();

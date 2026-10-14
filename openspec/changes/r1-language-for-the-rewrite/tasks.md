@@ -107,8 +107,11 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 
 ## 8. Close
 
-- [ ] 8.1 Promote each R1 section from EXPERIMENTAL to stable, and add its pinned compat case to
-      `tests/compat/v1/` then (the corpus holds stable surfaces only)
+- [x] 8.1 Promote each R1 section from EXPERIMENTAL to stable, and add its pinned compat case to
+      `tests/compat/v1/` then (the corpus holds stable surfaces only) — 2026-10-14: nineteen
+      classification rows and every inline marker to STABLE 1.0; seven pinned `run/r1-*` cases. Writing
+      them found three defects, fixed under epoch 75: a `defer`'s last value refused, a pattern `let`
+      needing `;`, and a line beginning with `(` or `[` read as a call or index of the line before
 - [ ] 8.2 Contained tests, selfhost and bootstrap on the resulting tree; every new mutant caught.
       R1a's run was stopped after batch I on 2026-10-12 to go faster, by the copyright holder's
       choice: every mutant run so far was caught (batches A–I), and the rest — the tuple-place,

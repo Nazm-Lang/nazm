@@ -1,0 +1,14 @@
+// Multi-line and raw strings, interpolation with fixed-point floats and padding
+// (spec: string-forms, interpolation).
+fn main() {
+    let raw = r"a\nb"
+    let multi = """
+        one
+          two
+        """
+    println(str_len(raw))
+    println(multi)
+    let pi = 3.14159
+    let ab = "ab"
+    println(f"[{pi:.2}] [{42:>5}] [{ab:<4}]")
+}

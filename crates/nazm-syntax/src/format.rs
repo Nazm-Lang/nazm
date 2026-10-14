@@ -332,10 +332,9 @@ impl<'a> Printer<'a> {
                     )
             })
             && !continues_the_line(Some(next))
-            && !matches!(
-                next,
-                TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket | TokenKind::Eq
-            )
+            // A `(` or `[` beginning a line begins a statement (R1 close): a call's and an
+            // index's are on the line of what they apply to.
+            && !matches!(next, TokenKind::LBrace | TokenKind::Eq)
             // A function's contract clauses continue its header (N87).
             && !matches!(next, TokenKind::Ident(w) if w == "requires" || w == "ensures")
     }

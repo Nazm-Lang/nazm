@@ -1,0 +1,23 @@
+// Ordering and hashing derived, constant tables, and `@derive(json)`
+// (spec: order-hash, const-tables, derived-serialisation).
+use "@std/hash"
+use "@std/hashset"
+
+@derive(json)
+struct Point { x: Int, y: Int }
+
+const NAMES: [Str; 3] = ["zero", "one", "two"]
+
+fn main() {
+    let a = Point(x: 1, y: 9)
+    let b = Point(x: 2, y: 0)
+    println(a < b)
+    println("apple" < "banana")
+    println((1, "b") < (1, "c"))
+    println(NAMES[2])
+    let seen = hashset_new[Point]()
+    hashset_add(seen, a)
+    hashset_add(seen, Point(x: 1, y: 9))
+    println(hashset_len(seen))
+    println(point_to_json(b))
+}
