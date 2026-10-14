@@ -18824,8 +18824,8 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::meth
 name = "r1-a-sequence-index-is-refused"
 why = "`xs[i]` on a `Vec` is refused as an array's index"
 file = "crates/nazm-core/src/check/operators.rs"
-find = '''            t if matches!(t, Type::Vec(_)) => "vec",'''
-replace = '''            t if matches!(t, Type::Vec(_)) && false => "vec",'''
+find = '''            Type::Vec(_) => "vec",'''
+replace = '''            Type::Vec(_) if false => "vec",'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::methods_and_indexes_by_name_run_alike_everywhere" }]
 
 [[mutation]]

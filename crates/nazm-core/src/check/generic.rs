@@ -157,12 +157,13 @@ impl Checker<'_> {
     /// A call to a generic function: settle its type arguments, check its arguments
     /// against them, and return what it produces.
     ///
-    /// The arguments are **written** or **inferred from the arguments**, and nothing
-    /// else — the expected result type never takes part, which is what keeps a call's
-    /// meaning visible in the call (`docs/spec.md`, *Calling a generic function*). Left to
+    /// The arguments are **written** or **inferred from the arguments**; only a parameter the
+    /// arguments leave unsettled is settled by the type the result is wanted as (R1, 5b.16),
+    /// so the arguments still decide first (`docs/spec.md`, *Calling a generic function*). Left to
     /// right: an argument whose declared type is already fully known is checked against
     /// it, exactly as a monomorphic call's is, and one whose declared type still mentions
     /// an unsettled parameter is unified with it.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn check_generic_call(
         &mut self,
         name: &str,
