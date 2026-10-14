@@ -261,10 +261,13 @@ fn bit_set(s: Ints, base: Int, i: Int) {
     s[w] = s[w] | (1 << (i & 31))
 }
 
-/// Each name's register, as an index into `nregs` callee-saved registers, or -1 for its frame
-/// slot. A `bit` to `i64`, `ptr` or float value or variable may be allocated (all are held in
-/// a general register as bits); an `i128` never is.
-pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
+/// Each name's register, or -1 for its frame slot: an index below `nregs` is one of the target's
+/// callee-saved registers, one from `nregs` up to `nregs + ncaller` a caller-saved register no
+/// template uses as scratch (4.5), given only to a name no call falls inside the life of — not
+/// even as its last use, since a call's arguments are loaded in sequence into registers such a
+/// name might hold. A `bit` to `i64`, `ptr` or float value or variable may be allocated (all
+/// are held in a general register as bits); an `i128` never is.
+pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int) -> Ints {
     let nv = ints_len(f.vars)
     let names = n + nv
     let loc = ints_new()
@@ -352,6 +355,7 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
         i += 1
     }
     let mut pos = 0
+    let calls = ints_new()
     b = 0
     while b < nb {
         let base = b * words
@@ -360,6 +364,7 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
         let mut p = pos + 1
         while k < f.block_end[b] {
             let x = f.insts[k]
+            if x.op == OP_CALL || x.op == OP_CALLI { ints_push(calls, p) }
             clear(tmp)
             uses_of(x, n, tmp)
             defs_of(x, n, tmp)
@@ -434,22 +439,42 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
         }
         i += 1
     }
+    // How many calls fall at or before each position.
+    let before = ints_new()
+    i = 0
+    while i <= pos {
+        ints_push(before, 0)
+        i += 1
+    }
+    for p in calls { before[p] = before[p] + 1 }
+    i = 1
+    while i <= pos {
+        before[i] = before[i] + before[i - 1]
+        i += 1
+    }
     // The scan: free registers, and the active names holding them.
+    let total = nregs + ncaller
     let holder = ints_new()
     i = 0
-    while i < nregs {
+    while i < total {
         ints_push(holder, -1)
         i += 1
     }
     for v in sorted {
         // Expire every active name that ended before this one starts.
         let mut r = 0
-        while r < nregs {
+        while r < total {
             let h = holder[r]
             if h >= 0 && end[h] < start[v] { holder[r] = -1 }
             r += 1
         }
+        let crosses = before[end[v]] -before[start[v]] > 0
         let mut free = -1
+        r = nregs
+        while r < total && !crosses {
+            if holder[r] < 0 && free < 0 { free = r }
+            r += 1
+        }
         let mut furthest = -1
         r = 0
         while r < nregs {
@@ -460,7 +485,7 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int) -> Ints {
         if free >= 0 {
             holder[free] = v
             loc[v] = free
-        } else if end[holder[furthest]] > end[v] {
+        } else if furthest >= 0 && end[holder[furthest]] > end[v] {
             // The name that lives longest gives up its register, for its whole life.
             loc[holder[furthest]] = -1
             holder[furthest] = v

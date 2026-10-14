@@ -41,8 +41,11 @@ struct G {
 /// The callee-saved registers the allocator hands out: x19–x28.
 const NREGS: Int = 10
 
+/// The caller-saved registers no template uses as scratch: x8, x13–x15 (4.5).
+const NCALLER: Int = 4
+
 fn areg(i: Int) -> Int {
-    19 + i
+    if i < NREGS { 19 + i } else if i == NREGS { 8 } else { 13 + i - NREGS - 1 }
 }
 
 fn w(g: G, x: Int) {
@@ -175,15 +178,41 @@ fn st(g: G, reg: Int, v: Int) {
     }
 }
 
+/// The register holding value `v` for reading: its own when it has one, else `scratch`, loaded
+/// (4.5: an allocated operand is read in place).
+fn use_reg(g: G, v: Int, scratch: Int) -> Int {
+    if v >= 0 && g.loc[v] >= 0 { return areg(g.loc[v]) }
+    ld(g, scratch, v)
+    scratch
+}
+
+/// Where to compute value `v`: its own register when it has one, else `scratch`; `def_done`
+/// then stores a scratch result to the slot.
+fn def_reg(g: G, v: Int, scratch: Int) -> Int {
+    if v >= 0 && g.loc[v] >= 0 { areg(g.loc[v]) } else { scratch }
+}
+
+fn def_done(g: G, r: Int, v: Int) {
+    if v >= 0 && g.loc[v] < 0 { st(g, r, v) }
+}
+
 /// Variable `k`, from its register or slot, and back.
 fn var_ld(g: G, reg: Int, k: Int) {
     let l = g.loc[g.nvals + k]
-    if l >= 0 { w(g, mov(reg, areg(l))) } else { mem(g, 8, true, false, reg, SP, g.varoffs[k]) }
+    if l >= 0 {
+        if reg != areg(l) { w(g, mov(reg, areg(l))) }
+    } else {
+        mem(g, 8, true, false, reg, SP, g.varoffs[k])
+    }
 }
 
 fn var_st(g: G, reg: Int, k: Int) {
     let l = g.loc[g.nvals + k]
-    if l >= 0 { w(g, mov(areg(l), reg)) } else { mem(g, 8, false, false, reg, SP, g.varoffs[k]) }
+    if l >= 0 {
+        if reg != areg(l) { w(g, mov(areg(l), reg)) }
+    } else {
+        mem(g, 8, false, false, reg, SP, g.varoffs[k])
+    }
 }
 
 /// An `i128` value's halves into two registers, and back.
@@ -359,7 +388,7 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
-    let loc = allocate(f, n, vcls, NREGS)
+    let loc = allocate(f, n, vcls, NREGS, NCALLER)
     let used = used_regs(loc, NREGS)
     let saved = ints_new()
     let mut p = 0
@@ -517,47 +546,53 @@ fn inst(g: G, x: Ins) {
         if cls(g, x.dst) == C_I128 {
             copy_val(g, g.param_offs[x.imm], voff(g, x.dst), C_I128)
         } else {
-            mem(g, 8, true, false, 9, SP, g.param_offs[x.imm])
-            st(g, 9, x.dst)
+            let rd = def_reg(g, x.dst, 9)
+            mem(g, 8, true, false, rd, SP, g.param_offs[x.imm])
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_CONST {
-        mov_imm(g, 9, masked(x.imm, x.cls))
         if x.cls == C_I128 {
+            mov_imm(g, 9, masked(x.imm, x.cls))
             mov_imm(g, 10, x.imm_hi)
             st128(g, 9, 10, x.dst)
         } else {
-            st(g, 9, x.dst)
+            let rd = def_reg(g, x.dst, 9)
+            mov_imm(g, rd, masked(x.imm, x.cls))
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_ADDR {
-        sym_addr(g, 9, x.sym)
-        st(g, 9, x.dst)
+        let rd = def_reg(g, x.dst, 9)
+        sym_addr(g, rd, x.sym)
+        def_done(g, rd, x.dst)
     } else if op == OP_SLOT {
         if x.imm < 0 || x.imm >= ints_len(g.slot_off) {
             refuse(g, f"slot s{x.imm}, which does not exist")
             return
         }
-        add_off(g, 9, SP, g.slot_off[x.imm])
-        st(g, 9, x.dst)
+        let rd = def_reg(g, x.dst, 9)
+        add_off(g, rd, SP, g.slot_off[x.imm])
+        def_done(g, rd, x.dst)
     } else if op == OP_LOAD {
-        ld(g, 10, x.a)
+        let base = use_reg(g, x.a, 10)
         if x.cls == C_I128 {
-            mem(g, 8, true, false, 9, 10, x.imm)
-            mem(g, 8, true, false, 11, 10, x.imm + 8)
+            mem(g, 8, true, false, 9, base, x.imm)
+            mem(g, 8, true, false, 11, base, x.imm + 8)
             st128(g, 9, 11, x.dst)
         } else {
-            mem(g, class_size(x.cls), true, false, 9, 10, x.imm)
-            st(g, 9, x.dst)
+            let rd = def_reg(g, x.dst, 9)
+            mem(g, class_size(x.cls), true, false, rd, base, x.imm)
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_STORE {
         let c = cls(g, x.b)
-        ld(g, 10, x.a)
+        let base = use_reg(g, x.a, 10)
         if c == C_I128 {
             ld128(g, 9, 11, x.b)
-            mem(g, 8, false, false, 9, 10, x.imm)
-            mem(g, 8, false, false, 11, 10, x.imm + 8)
+            mem(g, 8, false, false, 9, base, x.imm)
+            mem(g, 8, false, false, 11, base, x.imm + 8)
         } else {
-            ld(g, 9, x.b)
-            mem(g, class_size(c), false, false, 9, 10, x.imm)
+            let rv = use_reg(g, x.b, 9)
+            mem(g, class_size(c), false, false, rv, base, x.imm)
         }
     } else if op == OP_BIN {
         bin(g, x)
@@ -570,9 +605,9 @@ fn inst(g: G, x: Ins) {
         w(g, cmp_imm(11, 0))
         if cls(g, x.a) == C_I128 {
             ld128(g, 9, 10, x.a)
-            ld128(g, 12, 13, x.b)
+            ld128(g, 12, 3, x.b)
             w(g, csel(9, 9, 12, NE))
-            w(g, csel(10, 10, 13, NE))
+            w(g, csel(10, 10, 3, NE))
             st128(g, 9, 10, x.dst)
         } else {
             ld(g, 9, x.a)
@@ -609,10 +644,11 @@ fn inst(g: G, x: Ins) {
         norm(g, 9, x.cls)
         st(g, 9, x.dst)
     } else if op == OP_PTRADD {
-        ld(g, 9, x.a)
-        ld(g, 10, x.b)
-        w(g, add(9, 9, 10))
-        st(g, 9, x.dst)
+        let ra = use_reg(g, x.a, 9)
+        let rb = use_reg(g, x.b, 10)
+        let rd = def_reg(g, x.dst, 9)
+        w(g, add(rd, ra, rb))
+        def_done(g, rd, x.dst)
     } else if op == OP_PTRTOINT || op == OP_INTTOPTR {
         ld(g, 9, x.a)
         st(g, 9, x.dst)
@@ -624,8 +660,9 @@ fn inst(g: G, x: Ins) {
         if g.f.vars[x.imm] == C_I128 {
             copy_val(g, g.varoffs[x.imm], voff(g, x.dst), C_I128)
         } else {
-            var_ld(g, 9, x.imm)
-            st(g, 9, x.dst)
+            let rd = def_reg(g, x.dst, 9)
+            var_ld(g, rd, x.imm)
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_SET {
         if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
@@ -635,8 +672,7 @@ fn inst(g: G, x: Ins) {
         if g.f.vars[x.imm] == C_I128 {
             copy_val(g, voff(g, x.a), g.varoffs[x.imm], C_I128)
         } else {
-            ld(g, 9, x.a)
-            var_st(g, 9, x.imm)
+            var_st(g, use_reg(g, x.a, 9), x.imm)
         }
     } else if op == OP_CALL || op == OP_CALLI {
         call(g, x)
@@ -724,6 +760,34 @@ fn bin(g: G, x: Ins) {
         st(g, 9, x.dst)
         return
     }
+    if (c == C_I64 || c == C_PTR) && (s == B_ADD || s == B_SUB || s == B_MUL || s == B_AND ||
+            s == B_OR || s == B_XOR || s == B_SHL || s == B_LSHR || s == B_ASHR) {
+        let ra = use_reg(g, x.a, 9)
+        let rb = use_reg(g, x.b, 10)
+        let rd = def_reg(g, x.dst, 9)
+        let word = if s == B_ADD {
+            add(rd, ra, rb)
+        } else if s == B_SUB {
+            sub(rd, ra, rb)
+        } else if s == B_MUL {
+            mul(rd, ra, rb)
+        } else if s == B_AND {
+            and(rd, ra, rb)
+        } else if s == B_OR {
+            orr(rd, ra, rb)
+        } else if s == B_XOR {
+            eor(rd, ra, rb)
+        } else if s == B_SHL {
+            lslv(rd, ra, rb)
+        } else if s == B_LSHR {
+            lsrv(rd, ra, rb)
+        } else {
+            asrv(rd, ra, rb)
+        }
+        w(g, word)
+        def_done(g, rd, x.dst)
+        return
+    }
     ld(g, 9, x.a)
     ld(g, 10, x.b)
     if s == B_ADD {
@@ -790,6 +854,17 @@ fn ovf(g: G, x: Ins) {
     let s = x.sub
     if c == C_I128 {
         ovf128(g, x)
+        return
+    }
+    if width_bits(c) == 64 && s != O_MUL && s != O_UMUL {
+        let ra = use_reg(g, x.a, 9)
+        let rb = use_reg(g, x.b, 10)
+        let rd = def_reg(g, x.dst, 9)
+        let ro = def_reg(g, x.dst2, 11)
+        w(g, if s == O_ADD || s == O_UADD { adds(rd, ra, rb) } else { subs(rd, ra, rb) })
+        w(g, cset(ro, if s == O_ADD || s == O_SUB { VS } else if s == O_UADD { HS } else { LO }))
+        def_done(g, rd, x.dst)
+        def_done(g, ro, x.dst2)
         return
     }
     ld(g, 9, x.a)
@@ -887,6 +962,15 @@ fn compare(g: G, x: Ins) {
         w(g, fcmp(dbl, 16, 17))
         w(g, cset(9, float_cond(x.sub)))
         st(g, 9, x.dst)
+        return
+    }
+    if width_bits(c) == 64 || x.sub < K_LT || x.sub > K_GE {
+        let ra = use_reg(g, x.a, 9)
+        let rb = use_reg(g, x.b, 10)
+        let rd = def_reg(g, x.dst, 9)
+        w(g, cmp(ra, rb))
+        w(g, cset(rd, int_cond(x.sub)))
+        def_done(g, rd, x.dst)
         return
     }
     ld(g, 9, x.a)
@@ -1093,13 +1177,13 @@ fn term(g: G, t: Ins, bi: Int) {
     if op == T_JUMP {
         if t.imm != bi + 1 { branch_to(g, 0, b(0), t.imm) }
     } else if op == T_BRANCH {
-        ld(g, 9, t.a)
+        let r = use_reg(g, t.a, 9)
         if t.imm == bi + 1 {
-            branch_to(g, 1, cbz(9, 0), t.c)
+            branch_to(g, 1, cbz(r, 0), t.c)
         } else if t.c == bi + 1 {
-            branch_to(g, 1, cbnz(9, 0), t.imm)
+            branch_to(g, 1, cbnz(r, 0), t.imm)
         } else {
-            branch_to(g, 1, cbnz(9, 0), t.imm)
+            branch_to(g, 1, cbnz(r, 0), t.imm)
             branch_to(g, 0, b(0), t.c)
         }
     } else if op == T_SWITCH {
@@ -1180,44 +1264,44 @@ fn bin128(g: G, x: Ins) {
         w(g, eor(10, 10, 12))
     } else if s == B_MUL {
         // hi = umulh(a0, b0) + a0 * b1 + a1 * b0; lo = a0 * b0.
-        w(g, umulh(13, 9, 11))
-        w(g, madd(13, 9, 12, 13))
-        w(g, madd(13, 10, 11, 13))
+        w(g, umulh(3, 9, 11))
+        w(g, madd(3, 9, 12, 3))
+        w(g, madd(3, 10, 11, 3))
         w(g, mul(9, 9, 11))
-        w(g, mov(10, 13))
+        w(g, mov(10, 3))
     } else if s == B_SHL || s == B_LSHR || s == B_ASHR {
         // The amount is below 128 (the lowering checked it): n = b0. Both the n < 64 and the
         // n >= 64 results are formed and the right one chosen.
-        w(g, lsr_imm(14, 11, 6))
-        mov_imm(g, 15, 63)
-        w(g, sub(15, 15, 11))
+        w(g, lsr_imm(4, 11, 6))
+        mov_imm(g, 5, 63)
+        w(g, sub(5, 5, 11))
         if s == B_SHL {
             // small: lo << n, (hi << n) | ((lo >> 1) >> (63 - n)); big: 0, lo << (n - 64)
-            w(g, lsr_imm(13, 9, 1))
-            w(g, lsrv(13, 13, 15))
+            w(g, lsr_imm(3, 9, 1))
+            w(g, lsrv(3, 3, 5))
             w(g, lslv(12, 10, 11))
-            w(g, orr(12, 12, 13))
-            w(g, lslv(13, 9, 11))
-            w(g, cmp_imm(14, 0))
-            w(g, csel(10, 13, 12, NE))
-            w(g, csel(9, ZR, 13, NE))
+            w(g, orr(12, 12, 3))
+            w(g, lslv(3, 9, 11))
+            w(g, cmp_imm(4, 0))
+            w(g, csel(10, 3, 12, NE))
+            w(g, csel(9, ZR, 3, NE))
         } else {
             // small: (lo >> n) | ((hi << 1) << (63 - n)), hi >> n; big: hi >> (n - 64), sign or 0
-            w(g, lsl1(13, 10))
-            w(g, lslv(13, 13, 15))
+            w(g, lsl1(3, 10))
+            w(g, lslv(3, 3, 5))
             w(g, lsrv(12, 9, 11))
-            w(g, orr(12, 12, 13))
+            w(g, orr(12, 12, 3))
             if s == B_LSHR {
-                w(g, lsrv(13, 10, 11))
-                w(g, cmp_imm(14, 0))
-                w(g, csel(9, 13, 12, NE))
-                w(g, csel(10, ZR, 13, NE))
+                w(g, lsrv(3, 10, 11))
+                w(g, cmp_imm(4, 0))
+                w(g, csel(9, 3, 12, NE))
+                w(g, csel(10, ZR, 3, NE))
             } else {
-                w(g, asrv(13, 10, 11))
-                w(g, asr63(15, 10))
-                w(g, cmp_imm(14, 0))
-                w(g, csel(9, 13, 12, NE))
-                w(g, csel(10, 15, 13, NE))
+                w(g, asrv(3, 10, 11))
+                w(g, asr63(5, 10))
+                w(g, cmp_imm(4, 0))
+                w(g, csel(9, 3, 12, NE))
+                w(g, csel(10, 5, 3, NE))
             }
         }
     } else {
@@ -1234,17 +1318,17 @@ fn ovf128(g: G, x: Ins) {
     if s == O_ADD || s == O_UADD {
         w(g, adds(9, 9, 11))
         w(g, adcs(10, 10, 12))
-        w(g, cset(13, if s == O_ADD { VS } else { HS }))
+        w(g, cset(3, if s == O_ADD { VS } else { HS }))
     } else if s == O_SUB || s == O_USUB {
         w(g, subs(9, 9, 11))
         w(g, sbcs(10, 10, 12))
-        w(g, cset(13, if s == O_SUB { VS } else { LO }))
+        w(g, cset(3, if s == O_SUB { VS } else { LO }))
     } else {
         refuse(g, f"`i128` checked operation {s}")
         return
     }
     st128(g, 9, 10, x.dst)
-    st(g, 13, x.dst2)
+    st(g, 3, x.dst2)
 }
 
 fn compare128(g: G, x: Ins) {
