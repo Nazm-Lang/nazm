@@ -1,10 +1,10 @@
 # Support matrix
 
-What the Nazm toolchain (0.9.0 preview; the tree said 1.0.0 before it) has shown on each target and for each optional feature, in words that mean one
+What the Nazm toolchain (0.10.0 preview) has shown on each target and for each optional feature, in words that mean one
 thing each. The target table is the compiler's own — `nazm_lir::backend::SUPPORT`, printed by
 `nazm inspect` as `toolchain.support` — and `crates/nazm-cli/tests/docs.rs` fails if this page and
 that table disagree. The evidence behind every cell is in `capability-matrix.md`, area 33. **The
-0.9.0 preview is released for `aarch64-apple-darwin` only**; the other rows say what this tree has
+0.10.0 preview is released for `aarch64-apple-darwin` only**; the other rows say what this tree has
 shown, not what is released.
 
 ## The words
@@ -91,7 +91,7 @@ Nothing is uploaded or published: the archives are local, under `target/archives
 
 ## Optional features
 
-| Feature | Status in 0.9.0 | What exists, and what stops more |
+| Feature | Status in 0.10.0 | What exists, and what stops more |
 | --- | --- | --- |
 | WebAssembly | verified, scoped | the freestanding subset, run on Node.js's engine and held to the interpreter; and `wasm32-wasip1` (Gate 3J), with a heap that is never freed, standard streams, arguments, clocks and files beneath a preopened directory, run under Node.js's `node:wasi`; no tasks, channels, network or directory listing |
 | GPU (`nazm accel`) | verified, scoped; experimental | maps, zips and reductions of `Int`, `Float32` and `Float64` kernels behind a provider boundary (Gate 3H): OpenCL on Apple's GPU (macOS) and a CPU provider, each the other's oracle; `Float64` refused on Apple's GPU; Metal, CUDA, ROCm and SPIR-V providers **blocked** — no toolchain for them here |

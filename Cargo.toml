@@ -49,7 +49,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 # Pinned toolchain is 1.98.1 (see rust-toolchain.toml). This floor is lower on
 # purpose: it is the oldest compiler the *shipped* crates actually need, and CI
