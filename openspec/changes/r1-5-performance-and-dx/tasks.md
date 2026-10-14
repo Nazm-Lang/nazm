@@ -3,7 +3,8 @@
 - [ ] 1.2 The comparison reports cached and uncached builds
 
 ## 2. Running
-- [ ] 2.1 `nazm run` compiles with Cranelift and executes; `--interpret` keeps the interpreter
+- [x] 2.1 `nazm run` compiles with Cranelift and executes; `--interpret` keeps the interpreter
+      (2026-10-15: `crates/nazm-cli/src/compiled_run.rs`, tests `run_compiled.rs`; fib 5.24 s → 0.17 s)
 
 ## 3. Word frequency: speed and memory
 - [ ] 3.1 Size-class allocator in the runtime

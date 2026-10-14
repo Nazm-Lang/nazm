@@ -399,3 +399,8 @@ why = "measured on the tree of its date by the method its prose describes — `n
 heading = "Gate 4 light: a small cross-language set, measured (2026-10-11)"
 status = "dated"
 why = "measured on the tree of its date with `python3 bench/cross.py`, 21 runs a variant on one uncontrolled host (results kept in target/gates/v1/bench/); a record of that date and machine — it supports no language-wide claim, and the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "R1.5, D11: `nazm run` compiles — measured 2026-10-15"
+status = "dated"
+why = "measured on the tree of its date with hyperfine, five runs after one warm-up, on one uncontrolled host; a record of that date and machine, and the method, not these numbers, is what a re-run reproduces"

@@ -524,6 +524,7 @@ fn wasm_build(
             harness: None,
             features: &[],
             board: None,
+            run: false,
         },
     );
     if built != ExitCode::SUCCESS {

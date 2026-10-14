@@ -19401,3 +19401,27 @@ file = "crates/nazm-core/src/check/call.rs"
 find = "                self.res.settle_closure(id, actual, ty);"
 replace = "                let _ = actual;"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_short_closure_takes_its_types_from_what_is_expected_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-compiled-run-prints-its-build"
+why = "`nazm run` prints the executable's path and the authority line, as `nazm build` does, before the program's own output"
+file = "crates/nazm-cli/src/build/link.rs"
+find = "    if choice.run {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "run_compiled::a_compiled_run_and_the_interpreter_agree_on_every_stream_and_the_status" }]
+
+[[mutation]]
+name = "r1-5-a-refused-run-names-no-interpreter"
+why = "a program only a native build refuses is refused by `nazm run` with the build's help, which does not name `nazm run --interpret`"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "    if native_only(&d.code) {"
+replace = "    if false {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "run_compiled::a_program_only_a_native_build_refuses_is_refused_with_help_naming_interpret" }]
+
+[[mutation]]
+name = "r1-5-a-compiled-run-leaves-its-executable"
+why = "`nazm run` leaves the directory it built the executable in behind in the temporary directory"
+file = "crates/nazm-cli/src/compiled_run.rs"
+find = "    let _ = std::fs::remove_dir_all(&work);"
+replace = "    let _ = &work;"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "run_compiled::a_compiled_run_and_the_interpreter_agree_on_every_stream_and_the_status" }]
