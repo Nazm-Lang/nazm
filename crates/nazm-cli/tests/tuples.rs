@@ -299,7 +299,8 @@ fn a_tuple_is_written_and_formatted_as_the_specification_spells_it() {
 fn a_plain_let_is_read_as_one_and_reported_as_one() {
     // `let x = e;` is the binding it always was, not a pattern `let`: a malformed one says what
     // a `let` binding expects, as before R1a, rather than what a pattern's does.
-    let (codes, first) = refused("fn main() -> Int { let x: Int = 1; x }\n");
+    // (`let x: Int = 1` is a typed binding since R1, 5b.16.)
+    let (codes, first) = refused("fn main() -> Int { let x 1; x }\n");
     assert_eq!(codes, ["N0100"], "{first}");
     assert!(first.contains("in a `let` binding"), "{first}");
 }

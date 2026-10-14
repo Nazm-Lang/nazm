@@ -182,7 +182,7 @@ fn arithmetic_on_non_numbers_is_refused() {
         codes::INVALID_OPERANDS
     );
     assert_eq!(
-        sole_error(r#"fn main() -> Str { "a" + "b" }"#),
+        sole_error(r#"fn main() -> Str { "a" - "b" }"#),
         codes::INVALID_OPERANDS
     );
 }
@@ -267,7 +267,6 @@ fn absent_features_are_refused_by_name() {
     );
 
     for (src, word) in [
-        ("fn main() -> Int { loop { 1 } }", "loop"),
         // `for x in y` is a loop since R1a; a `for` of neither form is still refused by name.
         ("fn main() -> Int { for x { 1 } }", "for"),
         // `print` was on this list until B3, `struct` until N9, `enum` and `match` until
@@ -371,10 +370,11 @@ fn negation_applies_only_to_numbers() {
 
 #[test]
 fn one_bad_operand_produces_one_error_not_a_cascade() {
-    // `"a" + "b"` is invalid, and the expression then has no honest type. Reporting `Int`
-    // for it would add a second error about a `Str` mismatch the author never wrote.
+    // `"a" - "b"` is invalid (`+` on two `Str`s joins them since R1, 5b.6), and the expression
+    // then has no honest type. Reporting `Int` for it would add a second error about a `Str`
+    // mismatch the author never wrote.
     assert_eq!(
-        sole_error(r#"fn main() -> Str { "a" + "b" }"#),
+        sole_error(r#"fn main() -> Str { "a" - "b" }"#),
         codes::INVALID_OPERANDS
     );
 }
