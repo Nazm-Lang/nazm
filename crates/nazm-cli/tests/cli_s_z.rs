@@ -31,6 +31,7 @@ mod single_thread;
 mod source_identity;
 mod source_root;
 mod speed_text;
+mod stack_floor;
 mod stack_size;
 mod statics;
 mod stdin_lines;

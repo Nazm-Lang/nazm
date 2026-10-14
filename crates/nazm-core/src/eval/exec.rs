@@ -693,16 +693,22 @@ impl Interpreter {
 
                 self.depth += 1;
                 self.calls += 1;
-                if self.depth > self.max_depth {
+                // The depth limit, or before it the stack this thread has (R1, 4.9).
+                let exhausted = self.depth <= self.max_depth && super::stack::stack_exhausted();
+                if self.depth > self.max_depth || exhausted {
                     self.depth -= 1;
+                    let said = if exhausted {
+                        format!(
+                            "`{}` recursed deeper than the interpreter's stack holds, at {} calls",
+                            g.name,
+                            self.depth + 1
+                        )
+                    } else {
+                        format!("`{}` recursed deeper than {}", g.name, self.max_depth)
+                    };
                     return Err(RuntimeError {
                         diagnostic: Box::new(
-                            Diagnostic::error(
-                                codes::CALL_DEPTH_LIMIT,
-                                e.at,
-                                format!("`{}` recursed deeper than {}", g.name, self.max_depth),
-                            )
-                            .help(
+                            Diagnostic::error(codes::CALL_DEPTH_LIMIT, e.at, said).help(
                                 "the interpreter bounds call depth so runaway recursion \
                              reports instead of exhausting the stack, which would crash \
                              without a diagnostic. Raise it with `--max-depth`, or check \

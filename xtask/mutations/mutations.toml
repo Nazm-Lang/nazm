@@ -244,8 +244,8 @@ removes the recursion guard, so runaway recursion exhausts the host stack and ki
 process with no diagnostic — the one failure a tool cannot explain to anyone
 """
 file = "crates/nazm-core/src/eval/exec.rs"
-find = "                if self.depth > self.max_depth {"
-replace = "                if false {"
+find = "                if self.depth > self.max_depth || exhausted {"
+replace = "                if exhausted {"
 killers = [{ package = "nazm-core", test = "language", name = "a_smaller_depth_budget_is_honoured" }]
 
 [[mutation]]
@@ -19042,6 +19042,14 @@ file = "crates/nazm-lir/src/op/func.rs"
 find = '''                self.read_borrowed(dst, at, t);'''
 replace = '''                self.read_owned(dst, at, t);'''
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "borrowed_fields::a_borrowed_field_is_released_by_nobody_on_either_path" }]
+
+[[mutation]]
+name = "r1-the-stack-floor-is-not-asked"
+why = "the interpreter trusts its per-call estimate, and heavy recursion on a debug build crashes the host stack"
+file = "crates/nazm-core/src/eval/exec.rs"
+find = '''                let exhausted = self.depth <= self.max_depth && super::stack::stack_exhausted();'''
+replace = '''                let exhausted = false && self.depth <= self.max_depth && super::stack::stack_exhausted();'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "stack_floor::heavy_recursion_reports_n0403_and_never_crashes" }]
 
 # --- R1 5b.16 and 5b.17: conveniences ---------------------------------------------------------
 
