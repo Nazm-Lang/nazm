@@ -1,15 +1,17 @@
-// The Mach-O object writer (design D6): one `MH_OBJECT` for `aarch64-apple-darwin`, with
-// `__TEXT,__text`, `__TEXT,__const` (read-only data), `__DATA,__const` (data holding addresses)
-// and `__DATA,__data` (writable data), `LC_BUILD_VERSION`, `LC_SYMTAB` and `LC_DYSYMTAB`.
+// The Mach-O object writer (design D6): one `MH_OBJECT` for `aarch64-apple-darwin` or
+// `x86_64-apple-darwin`, with `__TEXT,__text`, `__TEXT,__const` (read-only data),
+// `__DATA,__const` (data holding addresses), `__DATA,__data` (writable data),
+// `__LD,__compact_unwind` (5.2) and, with positions, `__DWARF`'s `__debug_abbrev`,
+// `__debug_info` and `__debug_line` (D10); `LC_BUILD_VERSION`, `LC_SYMTAB` and `LC_DYSYMTAB`.
 // Deterministic (D7): no timestamps or paths; locals in definition order, the rest by name.
 
 use "@std/bytebuf"
 use "@std/text"
 use "lir.nz"
 use "common.nz"
+use "dwarf.nz"
 
 const HEADER: Int = 32
-const SEGMENT: Int = 392
 const BUILD: Int = 24
 const SYMTAB: Int = 24
 const DYSYMTAB: Int = 80
@@ -78,8 +80,15 @@ fn put_reloc(b: ByteBuf, at: Int, sym: Int, pcrel: Int, len: Int, kind: Int) {
     put32(b, sym | (pcrel << 24) | (len << 25) | (1 << 27) | (kind << 28))
 }
 
+/// An address relative to a section (`r_extern` 0), the address itself written in the field:
+/// how DWARF in Mach-O names code, so a reader of the object sees the right addresses.
+fn put_sect_reloc(b: ByteBuf, at: Int, sect: Int, len: Int) {
+    put32(b, at)
+    put32(b, sect | (len << 25))
+}
+
 /// The unit's object, or the reasons it cannot be written (in `errors`).
-pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
+pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> Bytes {
     let ns = u.syms.len()
     // Data, placed in its section: 2 read-only, 3 holding addresses, 4 writable.
     let secs = vec_new[ByteBuf]()
@@ -92,6 +101,15 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     ints_push(sec_align, 1)
     ints_push(sec_align, 1)
     ints_push(sec_align, 1)
+    let sect = strs_new()
+    let seg = strs_new()
+    let flags = ints_new()
+    let sec_names: Strs = ["__text", "__const", "__const", "__data"]
+    for x in sec_names { strs_push(sect, x) }
+    let seg_names: Strs = ["__TEXT", "__TEXT", "__DATA", "__DATA"]
+    for x in seg_names { strs_push(seg, x) }
+    let sec_flags: Ints = [0x80000400, 0, 0, 0]
+    for x in sec_flags { ints_push(flags, x) }
     let sym_sec = ints_new()
     let sym_off = ints_new()
     let mut i = 0
@@ -119,12 +137,48 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
             k += 2
         }
     }
+    // Compact unwind (5.2): one 32-byte entry per function — its address, length, encoding, no
+    // personality or LSDA — which the linker turns into the image's unwind table.
+    let unwind = bytebuf_new()
+    let unwind_at = ints_new()
+    let unwind_sym = ints_new()
+    i = 0
+    while i < ns {
+        if c.sym_at[i] >= 0 {
+            ints_push(unwind_at, bytebuf_len(unwind))
+            ints_push(unwind_sym, i)
+            put64(unwind, 0)
+            put32(unwind, func_end(c, c.sym_at[i]) - c.sym_at[i])
+            put32(unwind, c.fn_enc[i])
+            put64(unwind, 0)
+            put64(unwind, 0)
+        }
+        i += 1
+    }
+    secs.push(unwind)
+    ints_push(sec_align, 8)
+    strs_push(sect, "__compact_unwind")
+    strs_push(seg, "__LD")
+    ints_push(flags, 0x02000000)
+    if dbg.present {
+        secs.push(dbg.abbrev)
+        secs.push(dbg.info)
+        secs.push(dbg.line)
+        let dwarf_names: Strs = ["__debug_abbrev", "__debug_info", "__debug_line"]
+        for x in dwarf_names {
+            strs_push(sect, x)
+            strs_push(seg, "__DWARF")
+            ints_push(sec_align, 1)
+            ints_push(flags, 0x02000000)
+        }
+    }
+    let nsec = secs.len()
     // Section addresses, in order, each at its alignment.
     let sec_addr = ints_new()
     let mut addr = 0
     let mut maxal = 16
     i = 0
-    while i < 4 {
+    while i < nsec {
         addr = align_to(addr, sec_align[i])
         ints_push(sec_addr, addr)
         addr += bytebuf_len(secs[i])
@@ -169,15 +223,14 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     }
     // Relocations: the text's, then each data section's.
     let rel = vec_new[ByteBuf]()
-    rel.push(bytebuf_new())
-    rel.push(bytebuf_new())
-    rel.push(bytebuf_new())
-    rel.push(bytebuf_new())
     let nrel = ints_new()
-    ints_push(nrel, ints_len(c.rel_at))
-    ints_push(nrel, 0)
-    ints_push(nrel, 0)
-    ints_push(nrel, 0)
+    i = 0
+    while i < nsec {
+        rel.push(bytebuf_new())
+        ints_push(nrel, 0)
+        i += 1
+    }
+    nrel[0] = ints_len(c.rel_at)
     i = ints_len(c.rel_at) - 1
     while i >= 0 {
         put_reloc(rel[0], c.rel_at[i], nidx[c.rel_sym[i]], c.rel_pcrel[i], c.rel_len[i], c.rel_kind[i])
@@ -193,6 +246,27 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
             k += 1
         }
     }
+    // The unwind entries' and the DWARF's addresses: eight bytes, against the function.
+    i = 0
+    while i < ints_len(unwind_at) {
+        put_reloc(rel[4], unwind_at[i], nidx[unwind_sym[i]], 0, 3, 0)
+        i += 1
+    }
+    nrel[4] = ints_len(unwind_at)
+    if dbg.present {
+        i = 0
+        while i < ints_len(dbg.info_rel_at) {
+            put_sect_reloc(rel[6], dbg.info_rel_at[i], 1, 3)
+            i += 1
+        }
+        nrel[6] = ints_len(dbg.info_rel_at)
+        i = 0
+        while i < ints_len(dbg.line_rel_at) {
+            put_sect_reloc(rel[7], dbg.line_rel_at[i], 1, 3)
+            i += 1
+        }
+        nrel[7] = ints_len(dbg.line_rel_at)
+    }
     if strs_len(errors) > 0 { return bytes_new(0) }
     // The string table: an empty name first, then each symbol's, `_`-prefixed.
     let strtab = bytebuf_new()
@@ -207,12 +281,13 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     }
     pad_to(strtab, align_to(bytebuf_len(strtab), 8))
     // File layout.
-    let cmds = SEGMENT + BUILD + SYMTAB + DYSYMTAB
+    let segment = 72 + 80 * nsec
+    let cmds = segment + BUILD + SYMTAB + DYSYMTAB
     let base = align_to(HEADER + cmds, maxal)
     let mut at = align_to(base + vmsize, 8)
     let rel_off = ints_new()
     i = 0
-    while i < 4 {
+    while i < nsec {
         ints_push(rel_off, if nrel[i] > 0 { at } else { 0 })
         at += bytebuf_len(rel[i])
         i += 1
@@ -232,7 +307,7 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     put32(out, 0)
     // LC_SEGMENT_64, unnamed, holding every section.
     put32(out, 0x19)
-    put32(out, SEGMENT)
+    put32(out, segment)
     put_name16(out, "")
     put64(out, 0)
     put64(out, vmsize)
@@ -240,12 +315,10 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     put64(out, vmsize)
     put32(out, 7)
     put32(out, 7)
-    put32(out, 4)
+    put32(out, nsec)
     put32(out, 0)
-    let sect = ["__text", "__const", "__const", "__data"]
-    let seg = ["__TEXT", "__TEXT", "__DATA", "__DATA"]
     i = 0
-    while i < 4 {
+    while i < nsec {
         put_name16(out, sect[i])
         put_name16(out, seg[i])
         put64(out, sec_addr[i])
@@ -254,7 +327,7 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
         put32(out, log2(sec_align[i]))
         put32(out, rel_off[i])
         put32(out, nrel[i])
-        put32(out, if i == 0 { 0x80000400 } else { 0 })
+        put32(out, flags[i])
         put32(out, 0)
         put32(out, 0)
         put32(out, 0)
@@ -290,14 +363,14 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     }
     // Sections, relocations, symbols, strings.
     i = 0
-    while i < 4 {
+    while i < nsec {
         pad_to(out, base + sec_addr[i])
         bytebuf_push_bytes(out, bytebuf_to_bytes(secs[i]))
         i += 1
     }
     pad_to(out, align_to(base + vmsize, 8))
     i = 0
-    while i < 4 {
+    while i < nsec {
         bytebuf_push_bytes(out, bytebuf_to_bytes(rel[i]))
         i += 1
     }

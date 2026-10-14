@@ -36,11 +36,10 @@ struct G {
     fix_at: Ints,
     fix_blk: Ints,
     /// Stage B: each name's register (an index into `areg`), or -1; the values' count; the
-    /// callee-saved registers used, and where they are saved.
+    /// callee-saved registers used, pushed below rbp in this order.
     loc: Ints,
     nvals: Int,
     saved: Ints,
-    save_off: Int,
 }
 
 /// The callee-saved registers the allocator hands out: rbx, r12–r15.
@@ -270,13 +269,23 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
     }
     let loc = allocate(f, n, vcls, NREGS)
     let saved = used_regs(loc, NREGS)
-    let save_off = align_up(off, 8)
-    off = save_off + 8 * ints_len(saved)
-    let size = align_up(off, 16)
+    // After the pushes, the frame keeps rsp 16-aligned.
+    let pushed = 8 * ints_len(saved)
+    let size = align_up(off + pushed, 16) - pushed
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
-            fix_blk: ints_new(), loc: loc, nvals: n, saved: saved, save_off: save_off)
+            fix_blk: ints_new(), loc: loc, nvals: n, saved: saved)
     ints_set(c.sym_at, f.sym, here(g))
+    // Compact unwind's RBP-frame mode: how many registers are saved below rbp, and which, the
+    // lowest address first (D10, 5.2).
+    let nsaved = ints_len(saved)
+    let mut enc = 0x01000000 | (nsaved << 16)
+    let mut e = 0
+    while e < nsaved {
+        enc = enc | ((saved[nsaved - 1 - e] + 1) << (3 * e))
+        e += 1
+    }
+    ints_set(c.fn_enc, f.sym, enc)
     prologue(g, size)
     let nb = ints_len(f.block_first)
     let mut bi = 0
@@ -321,6 +330,7 @@ fn prologue(g: G, size: Int) {
     let b = buf(g)
     push_rbp(b)
     mov(b, RBP, RSP)
+    for r in g.saved { push(b, areg(r)) }
     if size > 4096 {
         // Probe each page as the frame grows (Q1-A1-01).
         let pages = size / 4096
@@ -350,11 +360,6 @@ fn prologue(g: G, size: Int) {
     } else if size > 0 {
         rr(b, true, 0x81, 5, RSP)
         imm32(b, size)
-    }
-    let mut q = 0
-    while q < ints_len(g.saved) {
-        store(b, 8, areg(g.saved[q]), RSP, g.save_off + 8 * q)
-        q += 1
     }
     let own = g.u.syms[g.f.sym]
     let a = assign(own.params)
@@ -390,7 +395,7 @@ fn epilogue(g: G) {
     let b = buf(g)
     let mut q = 0
     while q < ints_len(g.saved) {
-        load(b, 8, areg(g.saved[q]), RSP, g.save_off + 8 * q)
+        load(b, 8, areg(g.saved[q]), RBP, -8 * (q + 1))
         q += 1
     }
     mov(b, RSP, RBP)
@@ -544,7 +549,7 @@ fn inst(g: G, x: Ins) {
         ld(g, R10, x.a)
         copy_bytes(g, x.imm, true)
     } else if op == OP_LOC {
-        // Line tables are slice 5's (D10).
+        add_loc(g.c, x)
     } else {
         refuse(g, f"instruction kind {op}")
     }

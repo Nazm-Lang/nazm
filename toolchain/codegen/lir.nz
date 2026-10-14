@@ -203,6 +203,9 @@ pub struct Unit {
     index: HashMap[Str, Int],
     data: Vec[DataDef],
     funcs: Vec[Func],
+    /// What each position's file index names (`; file INDEX NAME`, printed by `--debug`).
+    file_idx: Ints,
+    file_name: Strs,
 }
 
 /// What reading found: the units, and every line it refused.
@@ -218,7 +221,8 @@ pub fn ins_new(op: Int) -> Ins {
 
 fn unit_new(source: Str) -> Unit {
     Unit(source: source, syms: vec_new[Sym](), index: hashmap_new[Str, Int](),
-            data: vec_new[DataDef](), funcs: vec_new[Func]())
+            data: vec_new[DataDef](), funcs: vec_new[Func](), file_idx: ints_new(),
+            file_name: strs_new())
 }
 
 pub fn class_of(s: Str) -> Int {
@@ -790,6 +794,21 @@ pub fn read_program(text: Str) -> Program {
             continue
         }
         let u = units[ui]
+        if text_starts_with(line, "; file ") {
+            // `; file INDEX NAME`: a name may hold spaces.
+            let rest = str_slice(line, 7, str_len(line))
+            let sp = match text_find(rest, " ") {
+                Some(p) => p,
+                None => -1,
+            }
+            if sp < 0 {
+                strs_push(errors, f"line {lineno}: not understood: {line}")
+                continue
+            }
+            ints_push(u.file_idx, int_of(str_slice(rest, 0, sp)))
+            strs_push(u.file_name, str_slice(rest, sp + 1, str_len(rest)))
+            continue
+        }
         if str_byte(line, 0) != 32 && !text_starts_with(line, "function ") && fi >= 0 &&
                 !text_ends_with(line, ":") {
             strs_push(errors, f"line {lineno}: not understood: {line}")
