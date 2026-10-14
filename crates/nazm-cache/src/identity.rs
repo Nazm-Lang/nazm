@@ -364,7 +364,10 @@ use crate::digest::{self, Framed};
 /// `77` — R1.5, 2026-10-15. An expression body, `fn f(n: Int): Int = e`, and a private function's
 /// result type taken from it, `fn add(a: Int, b: Int) = a + b`, moved from refused (a syntax error)
 /// to accepted (D2), with `N0634` where the type must be written.
-pub const SEMANTIC_EPOCH: u32 = 77;
+/// `78` — R1.5, 2026-10-15. A short closure, `|a, b| a < b` and `|| e`, moved from refused (a
+/// syntax error) to accepted, its types taken from the function type expected (D3), with `N0635`
+/// for a parameter with nothing to take its type from.
+pub const SEMANTIC_EPOCH: u32 = 78;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
@@ -477,6 +480,7 @@ pub const CHECKER_CODES: &[&str] = &[
     "UNSUPPORTED_CONSTRUCT",
     "WILDCARD_COVERS_VARIANTS",
     "RESULT_TYPE_NOT_INFERRED",
+    "CLOSURE_PARAMETER_UNTYPED",
     "WRONG_ARGUMENT_COUNT",
     "WRONG_ENUM_IN_PATTERN",
     "WRONG_TYPE_ARGUMENT_COUNT",

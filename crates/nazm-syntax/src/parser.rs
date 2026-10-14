@@ -2699,6 +2699,82 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `|a, b| e`, `|n: Int| { … }` and `|| e` in an expression (R1.5, D3): a closure whose
+    /// unwritten types — `_` at a span of no width — the checker takes from the function type
+    /// expected where it is written, and whose result type is its body's.
+    #[inline(never)]
+    fn short_closure(&mut self, at: Checkpoint) -> Option<Expr> {
+        let fn_span = self.peek_span();
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::PipePipe) {
+            // `||`: no parameters.
+        } else {
+            self.bump();
+            while !self.at(&TokenKind::Pipe) && !self.at(&TokenKind::Eof) {
+                let name_span = self.peek_span();
+                let name = match self.advance() {
+                    TokenKind::Ident(n) => n,
+                    other => {
+                        self.report(Diagnostic::error(
+                            codes::UNEXPECTED_TOKEN,
+                            name_span,
+                            format!(
+                                "expected a closure parameter's name, found {}",
+                                other.describe()
+                            ),
+                        ));
+                        return None;
+                    }
+                };
+                let ty = if self.eat(&TokenKind::Colon) {
+                    self.type_name()?
+                } else {
+                    let end = name_span.end;
+                    TypeName::plain("_", Span::new(self.file, end, end))
+                };
+                let span = name_span.join(ty.span);
+                params.push(Param {
+                    name,
+                    name_span,
+                    ty,
+                    span,
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.expect(&TokenKind::Pipe, "to close a closure's parameters")?;
+        }
+        let end = self.previous_end();
+        let return_type = TypeName::plain("_", Span::new(self.file, end, end));
+        let outer = std::mem::replace(&mut self.no_result, false);
+        let body = if self.at(&TokenKind::LBrace) {
+            self.block()
+        } else {
+            self.expr().map(|e| {
+                let span = e.span();
+                Block {
+                    statements: Vec::new(),
+                    tail: Some(Box::new(e)),
+                    span,
+                }
+            })
+        };
+        self.no_result = outer;
+        let body = body?;
+        self.built(self.child() + 1)?;
+        self.wrap(at, SyntaxKind::ClosureExpr);
+        let span = fn_span.join(body.span);
+        Some(Expr::Closure {
+            params,
+            return_type,
+            effects: None,
+            body: Box::new(body),
+            fn_span,
+            span,
+        })
+    }
+
     fn type_name(&mut self) -> Option<TypeName> {
         if !self.enter() {
             return None;
@@ -5291,6 +5367,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Ident(name) => self.ident_primary(at, name, span),
             TokenKind::Fn => self.closure(at),
+            TokenKind::Pipe | TokenKind::PipePipe => self.short_closure(at),
             TokenKind::Match => {
                 self.advance();
                 self.match_expr(at, span)

@@ -473,6 +473,7 @@ impl Checker<'_> {
     /// A closure expression (N50): a definition of its own, checked as a function is, with
     /// what its body names from around it captured.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     pub(super) fn check_closure(
         &mut self,
         params: &[nazm_syntax::Param],
@@ -486,16 +487,49 @@ impl Checker<'_> {
         let Some(enclosing) = self.current else {
             return expected.unwrap_or(Type::Int);
         };
+        // A short closure (R1.5, D3) leaves its types unwritten: each is the function type's
+        // expected where it is written, and its result, where none is expected, its body's.
+        let expected_sig = match expected {
+            Some(Type::Fn(f)) => self.res.types().fn_signature(f).cloned(),
+            _ => None,
+        };
         let param_types: Vec<Type> = params
             .iter()
-            .map(|p| self.resolve_written_type(&p.ty))
+            .enumerate()
+            .map(|(i, p)| {
+                if !unwritten(&p.ty) {
+                    return self.resolve_written_type(&p.ty);
+                }
+                if let Some(t) = expected_sig.as_ref().and_then(|s| s.params.get(i).copied()) {
+                    return t;
+                }
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::CLOSURE_PARAMETER_UNTYPED,
+                        p.name_span,
+                        format!(
+                            "write `{}`'s type: no function type is expected here to take it from",
+                            p.name
+                        ),
+                    )
+                    .help(format!("`|{}: Int| …`", p.name)),
+                );
+                Type::Int
+            })
             .collect();
-        let ret = self.resolve_written_type(return_type);
+        let short = unwritten(return_type);
+        let infer_ret = short && expected_sig.is_none();
+        let ret = if short {
+            expected_sig.as_ref().map_or(Type::Int, |s| s.ret)
+        } else {
+            self.resolve_written_type(return_type)
+        };
         let effect = self.effect_param.clone();
         let declared = match effects {
             Some(d) => {
                 crate::effects::declared(d, effect.as_ref().map(|e| e.0.as_str()), &mut self.errors)
             }
+            None if short => expected_sig.as_ref().map(|s| s.effects),
             None => Some(nazm_sema::EffectSet::EMPTY),
         }
         .unwrap_or(nazm_sema::EffectSet::EMPTY);
@@ -569,9 +603,19 @@ impl Checker<'_> {
             let slot = self.allocate(&p.name, p.name_span, *ty, false);
             self.define(&p.name, *ty, false, None, slot, p.name_span.end);
         }
-        let completion = self.check_block(body, Some(ret));
+        let completion = self.check_block(body, if infer_ret { None } else { Some(ret) });
+        let mut ty = ty;
         match completion {
             Completion::Diverges => {}
+            Completion::Value(actual) if infer_ret => {
+                ty = self.res.types_mut().fn_of(nazm_sema::FnSignature {
+                    params: param_types.clone(),
+                    ret: actual,
+                    effects: declared,
+                    row: self.effect_param.clone().map(|e| e.1),
+                });
+                self.res.settle_closure(id, actual, ty);
+            }
             Completion::Value(actual) if actual == ret => {}
             Completion::Value(actual) => {
                 let (actual, declared) = (self.show(actual), self.show(ret));
@@ -799,4 +843,9 @@ impl Checker<'_> {
             Completion::Unit | Completion::Diverges => expected.unwrap_or(Type::Int),
         })
     }
+}
+
+/// A type a short closure left unwritten (R1.5, D3): `_` at a span of no width.
+fn unwritten(t: &TypeName) -> bool {
+    t.name == "_" && t.span.start == t.span.end && t.args.is_none()
 }

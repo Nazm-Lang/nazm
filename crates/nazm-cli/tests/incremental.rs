@@ -1446,11 +1446,11 @@ fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit() {
     // for. The epoch is asserted directly.
     assert_eq!(
         nazm_cache::SEMANTIC_EPOCH,
-        77,
+        78,
         "N9, N10, N11, N12, N13, N14, N36, N37, N38, N42, N49, N50, N51, N52, N53, N54, N55, \
          N62, N66, N76, N78, N79, N80, N85, N86, N87, N103, N104, Gate 1-C1, Gate 2 (three \
          times), M1, Gate 2 eight times more, G2-C1, Gate 3 (eight times), R1a (eight times), R1b (eight \
-         times), R1c (three times), R1 (5b.19; 5b.12–5b.14; 5b.1–5b.3 and R1d; 5b.18; R1 close) and R1.5 (D1, D2) each changed what the checker accepts, so the epoch moved seventy-six times"
+         times), R1c (three times), R1 (5b.19; 5b.12–5b.14; 5b.1–5b.3 and R1d; 5b.18; R1 close) and R1.5 (D1, D2, D3) each changed what the checker accepts, so the epoch moved seventy-seven times"
     );
     assert_eq!(nazm_iface::SCHEMA, "nazm.interface/13");
 }
@@ -1849,6 +1849,6 @@ fn an_entry_from_the_checker_before_requirements_is_never_read() {
     // for interpolation, and R1b for `Cell` and for closures in generic functions and shared
     // `let mut` captures, and for default trait methods and impls of generic types, and for
     // `defer`, and for checked arithmetic, and for warnings, and for 128-bit integers, and R1c for
-    // `@derive(json)`, for `@codec` and for `@derive(toml)`, and R1.5 for a result type after `:` and for expression bodies.
-    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 77);
+    // `@derive(json)`, for `@codec` and for `@derive(toml)`, and R1.5 for a result type after `:`, for expression bodies and for short closures.
+    assert_eq!(nazm_cache::SEMANTIC_EPOCH, 78);
 }
