@@ -221,6 +221,8 @@
 @std/hashmap pub fn hashmap_len[K: Hash, V](m: HashMap[K, V]) -> Int ! {}
 @std/hashmap pub fn hashmap_set[K: Hash, V](m: HashMap[K, V], key: K, value: V) -> Bool ! {}
 @std/hashmap pub fn hashmap_get[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {}
+@std/hashmap pub fn hashmap_at[K: Hash, V](m: HashMap[K, V], key: K) -> V ! {}
+@std/hashmap pub fn hashmap_at_or[K: Hash, V](m: HashMap[K, V], key: K, fallback: V) -> V ! {}
 @std/hashmap pub fn hashmap_has[K: Hash, V](m: HashMap[K, V], key: K) -> Bool ! {}
 @std/hashmap pub fn hashmap_remove[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {}
 @std/hashmap pub fn hashmap_keys[K: Hash, V](m: HashMap[K, V]) -> Vec[K] ! {}
@@ -363,6 +365,8 @@
 @std/ordmap pub fn ordmap_new[K: Ord, V]() -> OrdMap[K, V] ! {}
 @std/ordmap pub fn ordmap_len[K: Ord, V](m: OrdMap[K, V]) -> Int ! {}
 @std/ordmap pub fn ordmap_get[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {}
+@std/ordmap pub fn ordmap_at[K: Ord, V](m: OrdMap[K, V], key: K) -> V ! {}
+@std/ordmap pub fn ordmap_at_or[K: Ord, V](m: OrdMap[K, V], key: K, fallback: V) -> V ! {}
 @std/ordmap pub fn ordmap_has[K: Ord, V](m: OrdMap[K, V], key: K) -> Bool ! {}
 @std/ordmap pub fn ordmap_set[K: Ord, V](m: OrdMap[K, V], key: K, value: V) -> Bool ! {}
 @std/ordmap pub fn ordmap_remove[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {}

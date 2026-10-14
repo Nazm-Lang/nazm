@@ -674,7 +674,8 @@ fn compound(k: &TokenKind) -> Option<BinOp> {
 /// Whether reading an index twice reads the same element: a name, a field of one, a number.
 fn simple_index(e: &Expr) -> bool {
     match e {
-        Expr::Var { .. } | Expr::Int { .. } => true,
+        // A string, so `m["k"] += 1` reads the entry it writes (R1, 5b.7).
+        Expr::Var { .. } | Expr::Int { .. } | Expr::Str { .. } => true,
         Expr::Field { base, .. } => simple_index(base),
         _ => false,
     }
@@ -3841,7 +3842,7 @@ impl<'a> Parser<'a> {
                         Diagnostic::error(
                             codes::UNEXPECTED_TOKEN,
                             bad,
-                            "a compound assignment's index is a name or a number",
+                            "a compound assignment's index is a name, a number or a string",
                         )
                         .primary_label("computed here, and it would be computed twice")
                         .help("bind the index first: `let i = …;`, then `v[i] += …`"),
