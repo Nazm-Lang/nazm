@@ -140,6 +140,25 @@ fn main() {
             .expect("spawn")
             .join()
             .expect("the parse"),
+        // The lexer's and the parser's diagnostics as `nazm check --json` publishes them: the text
+        // as a compilation holds it — with the newline a file that lacks one is given — and each
+        // diagnostic `nazm.diagnostic/1`, whole (design D4).
+        "syntax" => std::thread::Builder::new()
+            .stack_size(nazm_syntax::PARSE_STACK_BYTES + (64 << 20))
+            .spawn(move || {
+                let map = nazm_span::SourceMap::single("input.nz", text);
+                let file = map.ids().next().expect("one file");
+                let (_, errors) = nazm_syntax::parse_file(file, map.text(file));
+                let mut s = String::new();
+                for e in &errors {
+                    s.push_str(&e.to_json(&map).expect("a diagnostic serialises"));
+                    s.push('\n');
+                }
+                s
+            })
+            .expect("spawn")
+            .join()
+            .expect("the parse"),
         _ => {
             eprintln!("unknown mode {mode}");
             std::process::exit(2);

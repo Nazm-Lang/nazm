@@ -1,0 +1,206 @@
+// Diagnostics as the reference publishes them (R2, `openspec/changes/r2-front-end/design.md`, D4).
+//
+// One record of parallel columns holds every diagnostic a stage reports: its code, severity,
+// span, message, primary label, help, secondary labels and fixes. `dg_json` writes one as
+// `nazm.diagnostic/1`, byte for byte as `nazm check --json` does (serde_json's field order and
+// string escaping), so the comparison is of whole objects.
+
+pub struct Diags {
+    code: Strs,
+    // "error" or "warning".
+    severity: Strs,
+    start: Ints,
+    end: Ints,
+    message: Strs,
+    // The primary label's message; "" for the message itself.
+    label: Strs,
+    // "" for none.
+    help: Strs,
+    // Secondary labels and fixes: each diagnostic's run of them, from `sec_first`/`fix_first`.
+    sec_first: Ints,
+    sec_count: Ints,
+    sec_start: Ints,
+    sec_end: Ints,
+    sec_message: Strs,
+    fix_first: Ints,
+    fix_count: Ints,
+    fix_start: Ints,
+    fix_end: Ints,
+    fix_replacement: Strs,
+    fix_description: Strs,
+    fix_applicability: Strs,
+    fix_precondition: Strs,
+}
+
+pub fn dg_new() -> Diags {
+    Diags(code: strs_new(), severity: strs_new(), start: ints_new(), end: ints_new(), message: strs_new(), label: strs_new(),
+            help: strs_new(), sec_first: ints_new(), sec_count: ints_new(), sec_start: ints_new(), sec_end: ints_new(),
+            sec_message: strs_new(), fix_first: ints_new(), fix_count: ints_new(), fix_start: ints_new(), fix_end: ints_new(),
+            fix_replacement: strs_new(), fix_description: strs_new(), fix_applicability: strs_new(), fix_precondition: strs_new())
+}
+
+pub fn dg_len(d: Diags) -> Int { strs_len(d.code) }
+
+// Report one error; its index, for labels and fixes added after it.
+pub fn dg_error(d: Diags, code: Str, start: Int, end: Int, message: Str, primary: Str, help: Str) -> Int {
+    dg_push(d, code, "error", start, end, message, primary, help)
+}
+
+pub fn dg_push(d: Diags, code: Str, severity: Str, start: Int, end: Int, message: Str, primary: Str, help: Str) -> Int {
+    strs_push(d.code, code);
+    strs_push(d.severity, severity);
+    ints_push(d.start, start);
+    ints_push(d.end, end);
+    strs_push(d.message, message);
+    strs_push(d.label, primary);
+    strs_push(d.help, help);
+    ints_push(d.sec_first, ints_len(d.sec_start));
+    ints_push(d.sec_count, 0);
+    ints_push(d.fix_first, ints_len(d.fix_start));
+    ints_push(d.fix_count, 0);
+    strs_len(d.code) - 1
+}
+
+// A secondary label on the last diagnostic reported.
+pub fn dg_secondary(d: Diags, start: Int, end: Int, message: Str) -> Int {
+    let i = strs_len(d.code) - 1;
+    ints_push(d.sec_start, start);
+    ints_push(d.sec_end, end);
+    strs_push(d.sec_message, message);
+    ints_set(d.sec_count, i, ints_get(d.sec_count, i) + 1);
+    0
+}
+
+// A fix on the last diagnostic reported: `applicability` is "automatic" or "needs_review".
+pub fn dg_fix(d: Diags, start: Int, end: Int, replacement: Str, description: Str, applicability: Str, precondition: Str) -> Int {
+    let i = strs_len(d.code) - 1;
+    ints_push(d.fix_start, start);
+    ints_push(d.fix_end, end);
+    strs_push(d.fix_replacement, replacement);
+    strs_push(d.fix_description, description);
+    strs_push(d.fix_applicability, applicability);
+    strs_push(d.fix_precondition, precondition);
+    ints_set(d.fix_count, i, ints_get(d.fix_count, i) + 1);
+    0
+}
+
+// Every diagnostic of `from`, appended to `to` — shifted by `by` bytes, as a span of an
+// imported module is published at its offset in the whole compilation.
+pub fn dg_append(to: Diags, from: Diags, by: Int) -> Int {
+    let mut i = 0;
+    while i < dg_len(from) {
+        dg_push(to, strs_get(from.code, i), strs_get(from.severity, i), ints_get(from.start, i) + by, ints_get(from.end, i) + by,
+                strs_get(from.message, i), strs_get(from.label, i), strs_get(from.help, i));
+        let sf = ints_get(from.sec_first, i);
+        let mut k = 0;
+        while k < ints_get(from.sec_count, i) {
+            dg_secondary(to, ints_get(from.sec_start, sf + k) + by, ints_get(from.sec_end, sf + k) + by, strs_get(from.sec_message, sf + k));
+            k = k + 1;
+        }
+        let ff = ints_get(from.fix_first, i);
+        k = 0;
+        while k < ints_get(from.fix_count, i) {
+            dg_fix(to, ints_get(from.fix_start, ff + k) + by, ints_get(from.fix_end, ff + k) + by, strs_get(from.fix_replacement, ff + k),
+                    strs_get(from.fix_description, ff + k), strs_get(from.fix_applicability, ff + k), strs_get(from.fix_precondition, ff + k));
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// A JSON string as serde_json writes one: quoted, `"` and `\` escaped, `\b \f \n \r \t`, any other
+// byte below 0x20 as `\u00xx`; everything else as it is.
+pub fn json_str(s: Str) -> Str {
+    let out = strs_new();
+    strs_push(out, "\"");
+    let n = str_len(s);
+    let mut from = 0;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        let mut rep = "";
+        if b == 34 { rep = "\\\""; }
+        if b == 92 { rep = "\\\\"; }
+        if b == 8 { rep = "\\b"; }
+        if b == 12 { rep = "\\f"; }
+        if b == 10 { rep = "\\n"; }
+        if b == 13 { rep = "\\r"; }
+        if b == 9 { rep = "\\t"; }
+        if rep == "" {
+            if b < 32 {
+                let digits = "0123456789abcdef";
+                rep = str_concat("\\u00", str_concat(str_slice(digits, b / 16, b / 16 + 1), str_slice(digits, b % 16, b % 16 + 1)));
+            }
+        }
+        if rep != "" {
+            strs_push(out, str_slice(s, from, i));
+            strs_push(out, rep);
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, n));
+    strs_push(out, "\"");
+    str_join(out, "")
+}
+
+fn json_span(out: Strs, start: Int, end: Int) -> Int {
+    strs_push(out, "{\"start\":");
+    strs_push(out, int_to_str(start));
+    strs_push(out, ",\"end\":");
+    strs_push(out, int_to_str(end));
+    strs_push(out, "}");
+    0
+}
+
+// Diagnostic `i` as one `nazm.diagnostic/1` line.
+pub fn dg_json(d: Diags, i: Int) -> Str {
+    let out = strs_new();
+    strs_push(out, "{\"schema\":\"nazm.diagnostic/1\",\"code\":");
+    strs_push(out, json_str(strs_get(d.code, i)));
+    strs_push(out, ",\"severity\":");
+    strs_push(out, json_str(strs_get(d.severity, i)));
+    strs_push(out, ",\"message\":");
+    strs_push(out, json_str(strs_get(d.message, i)));
+    strs_push(out, ",\"primary\":{\"span\":");
+    json_span(out, ints_get(d.start, i), ints_get(d.end, i));
+    strs_push(out, ",\"message\":");
+    let mut shown = strs_get(d.label, i);
+    if shown == "" { shown = strs_get(d.message, i); }
+    strs_push(out, json_str(shown));
+    strs_push(out, "},\"secondary\":[");
+    let sf = ints_get(d.sec_first, i);
+    let mut k = 0;
+    while k < ints_get(d.sec_count, i) {
+        if k > 0 { strs_push(out, ","); }
+        strs_push(out, "{\"span\":");
+        json_span(out, ints_get(d.sec_start, sf + k), ints_get(d.sec_end, sf + k));
+        strs_push(out, ",\"message\":");
+        strs_push(out, json_str(strs_get(d.sec_message, sf + k)));
+        strs_push(out, "}");
+        k = k + 1;
+    }
+    strs_push(out, "],\"help\":");
+    if strs_get(d.help, i) == "" { strs_push(out, "null"); } else { strs_push(out, json_str(strs_get(d.help, i))); }
+    strs_push(out, ",\"fixes\":[");
+    let ff = ints_get(d.fix_first, i);
+    k = 0;
+    while k < ints_get(d.fix_count, i) {
+        if k > 0 { strs_push(out, ","); }
+        strs_push(out, "{\"span\":");
+        json_span(out, ints_get(d.fix_start, ff + k), ints_get(d.fix_end, ff + k));
+        strs_push(out, ",\"replacement\":");
+        strs_push(out, json_str(strs_get(d.fix_replacement, ff + k)));
+        strs_push(out, ",\"description\":");
+        strs_push(out, json_str(strs_get(d.fix_description, ff + k)));
+        strs_push(out, ",\"applicability\":");
+        strs_push(out, json_str(strs_get(d.fix_applicability, ff + k)));
+        strs_push(out, ",\"precondition\":");
+        strs_push(out, json_str(strs_get(d.fix_precondition, ff + k)));
+        strs_push(out, "}");
+        k = k + 1;
+    }
+    strs_push(out, "]}");
+    str_join(out, "")
+}

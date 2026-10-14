@@ -38,12 +38,12 @@ echo "3. C1 compiles compiler/emit.nz ($(wc -l < "$out/c2.ll" | tr -d ' ') lines
 
 # The R2 front end's drivers are not in the compiler's import graph yet; that C1 compiles them is
 # what keeps them in the subset the compiler carries, so they can replace its stages.
-for driver in tokens tree; do
+for driver in tokens tree diagnose; do
   timeout "$deadline" "$out/c1" "$root/compiler/$driver.nz" "$core" > "$out/$driver.ll" \
     || fail "C1 could not compile compiler/$driver.nz"
   clang -Wno-override-module -c -o "$out/$driver.o" "$out/$driver.ll" || fail "clang rejected C1's IR for $driver"
 done
-echo "3b. C1 compiles the R2 drivers (tokens, tree) and clang assembles them"
+echo "3b. C1 compiles the R2 drivers (tokens, tree, diagnose) and clang assembles them"
 
 corpus="$root/compiler/conformance"
 checked=0
