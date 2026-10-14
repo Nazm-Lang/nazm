@@ -36,3 +36,5 @@
 
 - [ ] 6.1 The ELF64 relocatable writer, aarch64
 - [ ] 6.2 The x86-64 encoder and System V convention; Mach-O and ELF
+      (Mach-O done: `NZCG_TARGET=x86_64-apple-darwin tests/run.sh` runs under Rosetta, 106 agree,
+      0 differ, 0 refused; ELF with 6.1)

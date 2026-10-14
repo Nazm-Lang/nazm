@@ -1,0 +1,1130 @@
+// Instruction selection for x86-64, stage A (design D3, D11), the same shape as `sel.nz`: every
+// value, variable and parameter in its own frame slot, each instruction loading its operands
+// into scratch registers (rax, rcx, rdx, r10, r11; xmm14, xmm15), computing and storing.
+//
+// Frame: `push rbp; mov rbp, rsp; sub rsp, N`, values at `[rsp + off]` above the outgoing
+// arguments. The convention is System V's: integers in rdi, rsi, rdx, rcx, r8, r9, floats in
+// xmm0–7, the rest on the stack eight bytes each; a result in rax (rax:rdx for an `i128`) or
+// xmm0, and a Nazm function's failure bit in the next integer return register — rdx, or rax
+// where there is no integer result, or rcx after an `i128` — as LLVM returns `{T, i1}` (D4).
+
+use "@std/bytebuf"
+use "lir.nz"
+use "common.nz"
+use "x64.nz"
+
+const A: Int = 0
+const B: Int = 1
+const D: Int = 2
+const R10: Int = 10
+const R11: Int = 11
+const X0: Int = 14
+const X1: Int = 15
+
+/// One function being generated.
+struct G {
+    c: Code,
+    u: Unit,
+    f: Func,
+    vcls: Ints,
+    param_offs: Ints,
+    voffs: Ints,
+    varoffs: Ints,
+    slot_off: Ints,
+    blk_at: Ints,
+    fix_at: Ints,
+    fix_blk: Ints,
+}
+
+fn buf(g: G) -> ByteBuf {
+    g.c.buf
+}
+
+fn here(g: G) -> Int {
+    bytebuf_len(g.c.buf)
+}
+
+fn refuse(g: G, what: Str) {
+    strs_push(g.c.errors, f"{what}, in `{g.f.name}` of {g.u.source}")
+}
+
+fn voff(g: G, v: Int) -> Int {
+    g.voffs[v]
+}
+
+fn cls(g: G, v: Int) -> Int {
+    if v < 0 || v >= ints_len(g.vcls) { C_I64 } else { g.vcls[v] }
+}
+
+fn ld(g: G, reg: Int, v: Int) {
+    if v < 0 {
+        refuse(g, "an operand that is missing")
+        return
+    }
+    load(buf(g), 8, reg, RSP, voff(g, v))
+}
+
+fn st(g: G, reg: Int, v: Int) {
+    if v < 0 { return }
+    store(buf(g), 8, reg, RSP, voff(g, v))
+}
+
+fn ld128(g: G, lo: Int, hi: Int, v: Int) {
+    ld(g, lo, v)
+    load(buf(g), 8, hi, RSP, voff(g, v) + 8)
+}
+
+fn st128(g: G, lo: Int, hi: Int, v: Int) {
+    if v < 0 { return }
+    st(g, lo, v)
+    store(buf(g), 8, hi, RSP, voff(g, v) + 8)
+}
+
+fn copy_val(g: G, from: Int, to: Int, c: Int) {
+    load(buf(g), 8, A, RSP, from)
+    store(buf(g), 8, A, RSP, to)
+    if c == C_I128 {
+        load(buf(g), 8, A, RSP, from + 8)
+        store(buf(g), 8, A, RSP, to + 8)
+    }
+}
+
+/// A float value into an xmm register, and an xmm register's float into a value.
+fn ld_x(g: G, x: Int, v: Int) {
+    ld(g, A, v)
+    movq_to_x(buf(g), true, x, A)
+}
+
+fn st_x(g: G, x: Int, c: Int, v: Int) {
+    movq_from_x(buf(g), c == C_F64, A, x)
+    st(g, A, v)
+}
+
+/// Keep a narrow class zero-extended (D5).
+fn norm(g: G, r: Int, c: Int) {
+    if c == C_BIT {
+        and1(buf(g), r)
+    } else if c == C_I8 {
+        movzx8(buf(g), r, r)
+    } else if c == C_I16 {
+        movzx16(buf(g), r, r)
+    } else if c == C_I32 || c == C_F32 {
+        mov32(buf(g), r, r)
+    }
+}
+
+fn sext(g: G, r: Int, c: Int) {
+    if c == C_BIT {
+        f7(buf(g), 3, r)
+    } else if c == C_I8 {
+        movsx8(buf(g), r, r)
+    } else if c == C_I16 {
+        movsx16(buf(g), r, r)
+    } else if c == C_I32 {
+        movsxd(buf(g), r, r)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The calling convention.
+
+const NGR: Int = 6
+
+fn int_arg(k: Int) -> Int {
+    match k {
+        0 => RDI,
+        1 => RSI,
+        2 => RDX,
+        3 => RCX,
+        4 => 8,
+        _ => 9,
+    }
+}
+
+/// For each argument: a kind (0 an integer register, 1 an xmm register, 2 the stack) and its
+/// register or stack offset, as pairs; the stack bytes used, last. System V: six integer
+/// registers, eight xmm, the stack in eight-byte slots; an `i128` in two integer registers or
+/// sixteen aligned bytes.
+fn assign(classes: Ints) -> Ints {
+    let out = ints_new()
+    let mut ngr = 0
+    let mut nfr = 0
+    let mut stack = 0
+    for c in classes {
+        if is_float(c) && nfr < 8 {
+            ints_push(out, 1)
+            ints_push(out, nfr)
+            nfr += 1
+        } else if c == C_I128 && ngr + 2 <= NGR {
+            ints_push(out, 0)
+            ints_push(out, int_arg(ngr))
+            ngr += 2
+        } else if !is_float(c) && c != C_I128 && ngr < NGR {
+            ints_push(out, 0)
+            ints_push(out, int_arg(ngr))
+            ngr += 1
+        } else {
+            if c == C_I128 { stack = align_up(stack, 16) }
+            ints_push(out, 2)
+            ints_push(out, stack)
+            stack += if c == C_I128 { 16 } else { 8 }
+        }
+    }
+    ints_push(out, stack)
+    out
+}
+
+/// The register after `r` in an `i128`'s pair.
+fn pair_hi(r: Int) -> Int {
+    match r {
+        7 => RSI,
+        6 => RDX,
+        2 => RCX,
+        1 => 8,
+        _ => 9,
+    }
+}
+
+fn call_params(u: Unit, x: Ins) -> Ints {
+    if x.op == OP_CALLI { x.sig_params } else { u.syms[x.sym].params }
+}
+
+fn call_ret(u: Unit, x: Ins) -> Int {
+    if x.op == OP_CALLI { x.sig_ret } else { u.syms[x.sym].ret }
+}
+
+fn call_conv(u: Unit, x: Ins) -> Int {
+    if x.op == OP_CALLI { x.sig_conv } else { u.syms[x.sym].conv }
+}
+
+/// Where a Nazm function's failure bit is returned, after a result of class `ret`.
+fn bit_reg(ret: Int) -> Int {
+    if ret == C_I128 { RCX } else if ret >= 0 && !is_float(ret) { RDX } else { RAX }
+}
+
+// ---------------------------------------------------------------------------------------------
+// One function.
+
+pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
+    let mut n = 0
+    let mut out = 0
+    for x in f.insts {
+        if x.dst + 1 > n { n = x.dst + 1 }
+        if x.dst2 + 1 > n { n = x.dst2 + 1 }
+        if x.op == OP_CALL || x.op == OP_CALLI {
+            let a = assign(call_params(u, x))
+            let s = a[ints_len(a) - 1]
+            if s > out { out = s }
+        }
+    }
+    let own = u.syms[f.sym]
+    let vcls = infer(u, f, n)
+    let param_offs = lay_out(own.params, align_up(out, 16))
+    let voffs = lay_out(vcls, param_offs[ints_len(param_offs) - 1])
+    let varoffs = lay_out(f.vars, voffs[ints_len(voffs) - 1])
+    let mut off = varoffs[ints_len(varoffs) - 1]
+    let slot_off = ints_new()
+    let mut k = 0
+    while k < ints_len(f.slot_size) {
+        let al = f.slot_align[k]
+        if al > 16 {
+            strs_push(c.errors, f"a slot aligned to {al} bytes, in `{f.name}` of {u.source}")
+        }
+        off = align_up(off, if al < 1 { 1 } else { al })
+        ints_push(slot_off, off)
+        off += f.slot_size[k]
+        k += 1
+    }
+    let size = align_up(off, 16)
+    let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
+            varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
+            fix_blk: ints_new())
+    ints_set(c.sym_at, f.sym, here(g))
+    prologue(g, size)
+    let nb = ints_len(f.block_first)
+    let mut bi = 0
+    while bi < nb {
+        ints_push(g.blk_at, here(g))
+        let mut i = f.block_first[bi]
+        while i < f.block_end[bi] {
+            inst(g, f.insts[i])
+            i += 1
+        }
+        if bi < f.terms.len() {
+            term(g, f.terms[bi], bi)
+        } else {
+            refuse(g, f"block b{bi} has no terminator")
+        }
+        bi += 1
+    }
+    let mut j = 0
+    while j < ints_len(g.fix_at) {
+        let at = g.fix_at[j]
+        let tb = g.fix_blk[j]
+        if tb < 0 || tb >= ints_len(g.blk_at) {
+            refuse(g, f"a branch to block b{tb}, which does not exist")
+        } else {
+            let d = g.blk_at[tb] -(at + 4)
+            let mut q = 0
+            while q < 4 {
+                let ok = bytebuf_set(c.buf, at + q, UInt8((d >> (8 * q)) & 255))
+                q += 1
+            }
+        }
+        j += 1
+    }
+}
+
+fn jump_to(g: G, at: Int, b: Int) {
+    ints_push(g.fix_at, at)
+    ints_push(g.fix_blk, b)
+}
+
+fn prologue(g: G, size: Int) {
+    let b = buf(g)
+    push_rbp(b)
+    mov(b, RBP, RSP)
+    if size > 4096 {
+        // Probe each page as the frame grows (Q1-A1-01).
+        let pages = size / 4096
+        mov_imm(b, R11, pages)
+        let top = here(g)
+        rr(b, true, 0x81, 5, RSP)
+        imm32(b, 4096)
+        // or qword [rsp], 0
+        b1(b, 0x48)
+        b1(b, 0x83)
+        b1(b, 0x0C)
+        b1(b, 0x24)
+        b1(b, 0)
+        rr(b, true, 0xFF, 1, R11)
+        let at = jcc32(b, CC_NE)
+        let d = top - (at + 4)
+        let mut q = 0
+        while q < 4 {
+            let ok = bytebuf_set(b, at + q, UInt8((d >> (8 * q)) & 255))
+            q += 1
+        }
+        let rest = size - pages * 4096
+        if rest > 0 {
+            rr(b, true, 0x81, 5, RSP)
+            imm32(b, rest)
+        }
+    } else if size > 0 {
+        rr(b, true, 0x81, 5, RSP)
+        imm32(b, size)
+    }
+    let own = g.u.syms[g.f.sym]
+    let a = assign(own.params)
+    let mut i = 0
+    while i < ints_len(own.params) {
+        let c = own.params[i]
+        let kind = a[2 * i]
+        let r = a[2 * i + 1]
+        let to = g.param_offs[i]
+        if kind == 0 && c == C_I128 {
+            store(b, 8, r, RSP, to)
+            store(b, 8, pair_hi(r), RSP, to + 8)
+        } else if kind == 0 {
+            norm(g, r, c)
+            store(b, 8, r, RSP, to)
+        } else if kind == 1 {
+            movq_from_x(b, c == C_F64, A, r)
+            store(b, 8, A, RSP, to)
+        } else {
+            load(b, 8, A, RBP, 16 + r)
+            if c != C_I128 { norm(g, A, c) }
+            store(b, 8, A, RSP, to)
+            if c == C_I128 {
+                load(b, 8, A, RBP, 24 + r)
+                store(b, 8, A, RSP, to + 8)
+            }
+        }
+        i += 1
+    }
+}
+
+fn epilogue(g: G) {
+    let b = buf(g)
+    mov(b, RSP, RBP)
+    pop_rbp(b)
+    ret(b)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Instructions.
+
+fn inst(g: G, x: Ins) {
+    let b = buf(g)
+    let op = x.op
+    if op == OP_PARAM {
+        if x.imm < 0 || x.imm + 1 >= ints_len(g.param_offs) {
+            refuse(g, f"parameter {x.imm}, which does not exist")
+            return
+        }
+        copy_val(g, g.param_offs[x.imm], voff(g, x.dst), cls(g, x.dst))
+    } else if op == OP_CONST {
+        mov_imm(b, A, masked(x.imm, x.cls))
+        if x.cls == C_I128 {
+            mov_imm(b, D, x.imm_hi)
+            st128(g, A, D, x.dst)
+        } else {
+            st(g, A, x.dst)
+        }
+    } else if op == OP_ADDR {
+        sym_addr(g, A, x.sym)
+        st(g, A, x.dst)
+    } else if op == OP_SLOT {
+        if x.imm < 0 || x.imm >= ints_len(g.slot_off) {
+            refuse(g, f"slot s{x.imm}, which does not exist")
+            return
+        }
+        lea(b, A, RSP, g.slot_off[x.imm])
+        st(g, A, x.dst)
+    } else if op == OP_LOAD {
+        ld(g, R11, x.a)
+        if x.cls == C_I128 {
+            load(b, 8, A, R11, x.imm)
+            load(b, 8, D, R11, x.imm + 8)
+            st128(g, A, D, x.dst)
+        } else {
+            load(b, class_size(x.cls), A, R11, x.imm)
+            st(g, A, x.dst)
+        }
+    } else if op == OP_STORE {
+        let c = cls(g, x.b)
+        ld(g, R11, x.a)
+        if c == C_I128 {
+            ld128(g, A, D, x.b)
+            store(b, 8, A, R11, x.imm)
+            store(b, 8, D, R11, x.imm + 8)
+        } else {
+            ld(g, A, x.b)
+            store(b, class_size(c), A, R11, x.imm)
+        }
+    } else if op == OP_BIN {
+        bin(g, x)
+    } else if op == OP_OVF {
+        ovf(g, x)
+    } else if op == OP_CMP {
+        compare(g, x)
+    } else if op == OP_SELECT {
+        ld(g, R10, x.c)
+        if cls(g, x.a) == C_I128 {
+            ld128(g, A, D, x.b)
+            ld128(g, B, R11, x.a)
+            alu(b, ALU_TEST, R10, R10)
+            cmov(b, CC_NE, A, B)
+            cmov(b, CC_NE, D, R11)
+            st128(g, A, D, x.dst)
+        } else {
+            ld(g, A, x.b)
+            ld(g, B, x.a)
+            alu(b, ALU_TEST, R10, R10)
+            cmov(b, CC_NE, A, B)
+            st(g, A, x.dst)
+        }
+    } else if op == OP_UN {
+        unary(g, x)
+    } else if op == OP_CONV {
+        convert(g, x)
+    } else if op == OP_EXT {
+        let from = cls(g, x.a)
+        if from == C_I128 {
+            copy_val(g, voff(g, x.a), voff(g, x.dst), C_I128)
+            return
+        }
+        ld(g, A, x.a)
+        if x.sub == 1 { sext(g, A, from) }
+        if x.cls == C_I128 {
+            mov(b, D, A)
+            if x.sub == 1 { shift_imm(b, 7, D, 63) } else { mov_imm(b, D, 0) }
+            st128(g, A, D, x.dst)
+        } else {
+            norm(g, A, x.cls)
+            st(g, A, x.dst)
+        }
+    } else if op == OP_TRUNC {
+        if x.cls == C_I128 {
+            copy_val(g, voff(g, x.a), voff(g, x.dst), C_I128)
+            return
+        }
+        ld(g, A, x.a)
+        norm(g, A, x.cls)
+        st(g, A, x.dst)
+    } else if op == OP_PTRADD {
+        ld(g, A, x.a)
+        ld(g, B, x.b)
+        alu(b, ALU_ADD, A, B)
+        st(g, A, x.dst)
+    } else if op == OP_PTRTOINT || op == OP_INTTOPTR {
+        ld(g, A, x.a)
+        st(g, A, x.dst)
+    } else if op == OP_GET {
+        if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
+            refuse(g, f"variable x{x.imm}, which does not exist")
+            return
+        }
+        copy_val(g, g.varoffs[x.imm], voff(g, x.dst), g.f.vars[x.imm])
+    } else if op == OP_SET {
+        if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
+            refuse(g, f"variable x{x.imm}, which does not exist")
+            return
+        }
+        copy_val(g, voff(g, x.a), g.varoffs[x.imm], g.f.vars[x.imm])
+    } else if op == OP_CALL || op == OP_CALLI {
+        call(g, x)
+    } else if op == OP_COPY {
+        ld(g, R10, x.a)
+        ld(g, R11, x.b)
+        copy_bytes(g, x.imm, false)
+    } else if op == OP_ZERO {
+        ld(g, R10, x.a)
+        copy_bytes(g, x.imm, true)
+    } else if op == OP_LOC {
+        // Line tables are slice 5's (D10).
+    } else {
+        refuse(g, f"instruction kind {op}")
+    }
+}
+
+/// A symbol's address: a defined one `rip`-relative, an imported one from the GOT.
+fn sym_addr(g: G, reg: Int, s: Int) {
+    if g.u.syms[s].link == L_IMPORT {
+        let at = mov_rip(buf(g), reg)
+        add_reloc(g.c, at, X_GOT_LOAD, s, 1, 2)
+    } else {
+        let at = lea_rip(buf(g), reg)
+        add_reloc(g.c, at, X_SIGNED, s, 1, 2)
+    }
+}
+
+/// Copy `size` bytes from `[r11]` to `[r10]`, or zero them; rax and rcx scratch.
+fn copy_bytes(g: G, size: Int, zero: Bool) {
+    let b = buf(g)
+    let mut done = 0
+    if zero { mov_imm(b, A, 0) }
+    if size >= 64 {
+        let n = size / 8
+        mov_imm(b, B, n)
+        let top = here(g)
+        if !zero { load(b, 8, A, R11, 0) }
+        store(b, 8, A, R10, 0)
+        if !zero {
+            rr(b, true, 0x83, 0, R11)
+            b1(b, 8)
+        }
+        rr(b, true, 0x83, 0, R10)
+        b1(b, 8)
+        rr(b, true, 0xFF, 1, B)
+        let at = jcc32(b, CC_NE)
+        let d = top - (at + 4)
+        let mut q = 0
+        while q < 4 {
+            let ok = bytebuf_set(b, at + q, UInt8((d >> (8 * q)) & 255))
+            q += 1
+        }
+        done = n * 8
+        // What is left, from the advanced pointers.
+        let mut off = 0
+        for e in 0..4 {
+            let sz = 8 >> e
+            while size - done >= sz {
+                if !zero { load(b, sz, A, R11, off) }
+                store(b, sz, A, R10, off)
+                off += sz
+                done += sz
+            }
+        }
+        return
+    }
+    for e in 0..4 {
+        let sz = 8 >> e
+        while size - done >= sz {
+            if !zero { load(b, sz, A, R11, done) }
+            store(b, sz, A, R10, done)
+            done += sz
+        }
+    }
+}
+
+fn bin(g: G, x: Ins) {
+    let b = buf(g)
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        bin128(g, x)
+        return
+    }
+    if s >= B_FADD {
+        let dbl = c == C_F64
+        ld(g, A, x.a)
+        movq_to_x(b, true, X0, A)
+        ld(g, A, x.b)
+        movq_to_x(b, true, X1, A)
+        let opc = if s == B_FADD { 0x58 } else if s == B_FSUB { 0x5C } else if s == B_FMUL { 0x59 } else { 0x5E }
+        farith(b, dbl, opc, X0, X1)
+        st_x(g, X0, c, x.dst)
+        return
+    }
+    ld(g, A, x.a)
+    ld(g, B, x.b)
+    if s == B_ADD {
+        alu(b, ALU_ADD, A, B)
+    } else if s == B_SUB {
+        alu(b, ALU_SUB, A, B)
+    } else if s == B_MUL {
+        imul(b, A, B)
+    } else if s == B_SDIV || s == B_SREM {
+        sext(g, A, c)
+        sext(g, B, c)
+        cqo(b)
+        f7(b, 7, B)
+        if s == B_SREM { mov(b, A, D) }
+    } else if s == B_UDIV || s == B_UREM {
+        mov_imm(b, D, 0)
+        f7(b, 6, B)
+        if s == B_UREM { mov(b, A, D) }
+    } else if s == B_AND {
+        alu(b, ALU_AND, A, B)
+    } else if s == B_OR {
+        alu(b, ALU_OR, A, B)
+    } else if s == B_XOR {
+        alu(b, ALU_XOR, A, B)
+    } else if s == B_SHL {
+        shift_cl(b, 64, 4, A)
+    } else if s == B_LSHR {
+        shift_cl(b, 64, 5, A)
+    } else if s == B_ASHR {
+        sext(g, A, c)
+        shift_cl(b, 64, 7, A)
+    } else if s == B_ROTL || s == B_ROTR {
+        shift_cl(b, width_bits(c), if s == B_ROTL { 0 } else { 1 }, A)
+    } else {
+        refuse(g, f"binary operation {s}")
+        return
+    }
+    norm(g, A, c)
+    st(g, A, x.dst)
+}
+
+fn ovf(g: G, x: Ins) {
+    let b = buf(g)
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        ovf128(g, x)
+        return
+    }
+    ld(g, A, x.a)
+    ld(g, B, x.b)
+    let bits = width_bits(c)
+    let signed = s == O_ADD || s == O_SUB || s == O_MUL
+    if bits == 64 {
+        if s == O_ADD || s == O_UADD {
+            alu(b, ALU_ADD, A, B)
+            setcc(b, if s == O_ADD { CC_O } else { CC_B }, D)
+        } else if s == O_SUB || s == O_USUB {
+            alu(b, ALU_SUB, A, B)
+            setcc(b, if s == O_SUB { CC_O } else { CC_B }, D)
+        } else if s == O_MUL {
+            imul(b, A, B)
+            setcc(b, CC_O, D)
+        } else {
+            f7(b, 4, B)
+            setcc(b, CC_O, D)
+        }
+    } else {
+        if signed {
+            sext(g, A, c)
+            sext(g, B, c)
+        }
+        if s == O_ADD || s == O_UADD {
+            alu(b, ALU_ADD, A, B)
+        } else if s == O_SUB || s == O_USUB {
+            alu(b, ALU_SUB, A, B)
+        } else {
+            imul(b, A, B)
+        }
+        mov(b, R10, A)
+        norm(g, R10, c)
+        if signed { sext(g, R10, c) }
+        alu(b, ALU_CMP, R10, A)
+        setcc(b, CC_NE, D)
+        norm(g, A, c)
+    }
+    st(g, A, x.dst)
+    st(g, D, x.dst2)
+}
+
+fn int_cc(k: Int) -> Int {
+    match k {
+        0 => CC_E,
+        1 => CC_NE,
+        2 => CC_L,
+        3 => CC_LE,
+        4 => CC_G,
+        5 => CC_GE,
+        6 => CC_B,
+        7 => CC_BE,
+        8 => CC_A,
+        _ => CC_AE,
+    }
+}
+
+fn compare(g: G, x: Ins) {
+    let b = buf(g)
+    let c = cls(g, x.a)
+    let k = x.sub
+    if c == C_I128 {
+        compare128(g, x)
+        return
+    }
+    if k >= K_FEQ {
+        let dbl = c == C_F64
+        ld(g, A, x.a)
+        movq_to_x(b, true, X0, A)
+        ld(g, A, x.b)
+        movq_to_x(b, true, X1, A)
+        if k == K_FEQ || k == K_FNE {
+            ucomis(b, dbl, X0, X1)
+            if k == K_FEQ {
+                setcc(b, CC_E, A)
+                setcc(b, CC_NP, B)
+                alu(b, ALU_AND, A, B)
+            } else {
+                setcc(b, CC_NE, A)
+                setcc(b, CC_P, B)
+                alu(b, ALU_OR, A, B)
+            }
+        } else if k == K_FLT || k == K_FLE {
+            // a < b is b > a: unordered sets CF, so `above` is false with a NaN.
+            ucomis(b, dbl, X1, X0)
+            setcc(b, if k == K_FLT { CC_A } else { CC_AE }, A)
+        } else {
+            ucomis(b, dbl, X0, X1)
+            setcc(b, if k == K_FGT { CC_A } else { CC_AE }, A)
+        }
+        st(g, A, x.dst)
+        return
+    }
+    ld(g, A, x.a)
+    ld(g, B, x.b)
+    if k >= K_LT && k <= K_GE {
+        sext(g, A, c)
+        sext(g, B, c)
+    }
+    alu(b, ALU_CMP, A, B)
+    setcc(b, int_cc(k), A)
+    st(g, A, x.dst)
+}
+
+fn unary(g: G, x: Ins) {
+    let b = buf(g)
+    let c = cls(g, x.a)
+    let s = x.sub
+    if c == C_I128 {
+        refuse(g, "an `i128` one-operand operation")
+        return
+    }
+    let dbl = c == C_F64
+    ld(g, A, x.a)
+    let bits = width_bits(c)
+    if s == U_FNEG || s == U_FABS {
+        // The sign bit flipped or cleared, on the float's bits.
+        let sign = if dbl { 1 << 63 } else { 0x80000000 }
+        if s == U_FNEG {
+            mov_imm(b, B, sign)
+            alu(b, ALU_XOR, A, B)
+        } else {
+            mov_imm(b, B, if dbl { ~sign } else { 0x7FFFFFFF })
+            alu(b, ALU_AND, A, B)
+        }
+    } else if s == U_FSQRT || s == U_FFLOOR || s == U_FCEIL || s == U_FTRUNC {
+        movq_to_x(b, true, X0, A)
+        if s == U_FSQRT {
+            farith(b, dbl, 0x51, X0, X0)
+        } else {
+            round(b, dbl, X0, X0, if s == U_FFLOOR { 9 } else if s == U_FCEIL { 10 } else { 11 })
+        }
+        movq_from_x(b, dbl, A, X0)
+    } else if s == U_POPCNT {
+        // The baseline CPU has no `popcnt`: the bit-parallel count.
+        mov(b, B, A)
+        shift_imm(b, 5, B, 1)
+        mov_imm(b, D, 0x5555555555555555)
+        alu(b, ALU_AND, B, D)
+        alu(b, ALU_SUB, A, B)
+        mov(b, B, A)
+        shift_imm(b, 5, B, 2)
+        mov_imm(b, D, 0x3333333333333333)
+        alu(b, ALU_AND, A, D)
+        alu(b, ALU_AND, B, D)
+        alu(b, ALU_ADD, A, B)
+        mov(b, B, A)
+        shift_imm(b, 5, B, 4)
+        alu(b, ALU_ADD, A, B)
+        mov_imm(b, D, 0x0F0F0F0F0F0F0F0F)
+        alu(b, ALU_AND, A, D)
+        mov_imm(b, D, 0x0101010101010101)
+        imul(b, A, D)
+        shift_imm(b, 5, A, 56)
+    } else if s == U_CLZ {
+        // 63 - bsr(x), and 64 for a zero; then the width's share of it.
+        mov_imm(b, B, -1)
+        bsr(b, A, A)
+        cmov(b, CC_E, A, B)
+        mov_imm(b, B, 63)
+        alu(b, ALU_SUB, B, A)
+        mov(b, A, B)
+        if bits < 64 {
+            mov_imm(b, B, 64 - bits)
+            alu(b, ALU_SUB, A, B)
+        }
+    } else if s == U_CTZ {
+        if bits < 64 {
+            // A bit just above the width, so a zero counts to the width.
+            mov_imm(b, B, 1 << bits)
+            alu(b, ALU_OR, A, B)
+        } else {
+            mov_imm(b, B, 64)
+        }
+        bsf(b, A, A)
+        cmov(b, CC_E, A, B)
+    } else if s == U_BSWAP {
+        if bits == 64 {
+            bswap(b, true, A)
+        } else if bits == 32 {
+            bswap(b, false, A)
+        } else if bits == 16 {
+            rol16_8(b, A)
+        }
+    } else {
+        refuse(g, f"one-operand operation {s}")
+        return
+    }
+    norm(g, A, c)
+    st(g, A, x.dst)
+}
+
+fn convert(g: G, x: Ins) {
+    let b = buf(g)
+    let from = cls(g, x.a)
+    let to = x.cls
+    let s = x.sub
+    if from == C_I128 || to == C_I128 {
+        refuse(g, "an `i128` conversion")
+        return
+    }
+    ld(g, A, x.a)
+    if s == V_STOF {
+        sext(g, A, from)
+        cvtsi2f(b, to == C_F64, X0, A)
+        movq_from_x(b, to == C_F64, A, X0)
+    } else if s == V_UTOF {
+        // Below 2^63 the signed conversion is exact enough; above, halve with the low bit kept
+        // (round to odd), convert and double.
+        alu(b, ALU_TEST, A, A)
+        let big = jcc8(b, CC_S)
+        cvtsi2f(b, to == C_F64, X0, A)
+        let done = jmp8(b)
+        land8(b, big)
+        mov(b, B, A)
+        shift_imm(b, 5, B, 1)
+        and1(b, A)
+        alu(b, ALU_OR, B, A)
+        cvtsi2f(b, to == C_F64, X0, B)
+        farith(b, to == C_F64, 0x58, X0, X0)
+        land8(b, done)
+        movq_from_x(b, to == C_F64, A, X0)
+    } else if s == V_FTOS {
+        movq_to_x(b, true, X0, A)
+        cvttf2si(b, from == C_F64, A, X0)
+        norm(g, A, to)
+    } else if s == V_FTOU {
+        // Below 2^63 the signed conversion; at or above, subtract 2^63 first and set the top bit.
+        let dbl = from == C_F64
+        movq_to_x(b, true, X0, A)
+        mov_imm(b, B, if dbl { 0x43E0000000000000 } else { 0x5F000000 })
+        movq_to_x(b, true, X1, B)
+        ucomis(b, dbl, X0, X1)
+        let big = jcc8(b, CC_AE)
+        cvttf2si(b, dbl, A, X0)
+        let done = jmp8(b)
+        land8(b, big)
+        farith(b, dbl, 0x5C, X0, X1)
+        cvttf2si(b, dbl, A, X0)
+        mov_imm(b, B, 1 << 63)
+        alu(b, ALU_XOR, A, B)
+        land8(b, done)
+        norm(g, A, to)
+    } else if s == V_FEXT {
+        movq_to_x(b, true, X0, A)
+        cvtf2f(b, true, X0, X0)
+        movq_from_x(b, true, A, X0)
+    } else if s == V_FTRUNC {
+        movq_to_x(b, true, X0, A)
+        cvtf2f(b, false, X0, X0)
+        movq_from_x(b, false, A, X0)
+    } else {
+        norm(g, A, to)
+    }
+    st(g, A, x.dst)
+}
+
+fn call(g: G, x: Ins) {
+    let b = buf(g)
+    let params = call_params(g.u, x)
+    let ret = call_ret(g.u, x)
+    let conv = call_conv(g.u, x)
+    if ints_len(params) != ints_len(x.args) {
+        refuse(g, "a call whose arguments do not match its callee")
+        return
+    }
+    let a = assign(params)
+    let mut i = 0
+    while i < ints_len(params) {
+        let c = params[i]
+        if a[2 * i] == 2 {
+            if c == C_I128 {
+                ld128(g, A, D, x.args[i])
+                store(b, 8, A, RSP, a[2 * i + 1])
+                store(b, 8, D, RSP, a[2 * i + 1] + 8)
+            } else {
+                ld(g, A, x.args[i])
+                store(b, 8, A, RSP, a[2 * i + 1])
+            }
+        } else if a[2 * i] == 1 {
+            ld(g, A, x.args[i])
+            movq_to_x(b, true, a[2 * i + 1], A)
+        }
+        i += 1
+    }
+    // Integer registers last: rdx and rcx are scratch until here.
+    i = 0
+    while i < ints_len(params) {
+        let c = params[i]
+        if a[2 * i] == 0 {
+            if c == C_I128 {
+                ld128(g, a[2 * i + 1], pair_hi(a[2 * i + 1]), x.args[i])
+            } else {
+                ld(g, a[2 * i + 1], x.args[i])
+            }
+        }
+        i += 1
+    }
+    if x.op == OP_CALLI {
+        ld(g, R11, x.a)
+        call_r(b, R11)
+    } else {
+        let at = call_rel(b)
+        add_reloc(g.c, at, X_BRANCH, x.sym, 1, 2)
+    }
+    if ret >= 0 {
+        if is_float(ret) {
+            movq_from_x(b, ret == C_F64, A, 0)
+            st(g, A, x.dst)
+        } else if ret == C_I128 {
+            st128(g, A, D, x.dst)
+        } else {
+            norm(g, A, ret)
+            st(g, A, x.dst)
+        }
+    }
+    if conv == CONV_NAZM && x.dst2 >= 0 {
+        let r = bit_reg(ret)
+        and1(b, r)
+        st(g, r, x.dst2)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Terminators.
+
+fn term(g: G, t: Ins, bi: Int) {
+    let b = buf(g)
+    let op = t.op
+    if op == T_JUMP {
+        if t.imm != bi + 1 { jump_to(g, jmp32(b), t.imm) }
+    } else if op == T_BRANCH {
+        ld(g, A, t.a)
+        alu(b, ALU_TEST, A, A)
+        if t.imm == bi + 1 {
+            jump_to(g, jcc32(b, CC_E), t.c)
+        } else {
+            jump_to(g, jcc32(b, CC_NE), t.imm)
+            if t.c != bi + 1 { jump_to(g, jmp32(b), t.c) }
+        }
+    } else if op == T_SWITCH {
+        let c = cls(g, t.a)
+        ld(g, A, t.a)
+        let mut k = 0
+        while k + 1 < ints_len(t.args) {
+            mov_imm(b, B, masked(t.args[k], c))
+            alu(b, ALU_CMP, A, B)
+            jump_to(g, jcc32(b, CC_E), t.args[k + 1])
+            k += 2
+        }
+        if t.imm != bi + 1 { jump_to(g, jmp32(b), t.imm) }
+    } else if op == T_RETURN {
+        let own = g.u.syms[g.f.sym]
+        if t.a >= 0 {
+            if own.ret == C_I128 {
+                ld128(g, A, D, t.a)
+            } else if is_float(own.ret) {
+                ld(g, A, t.a)
+                movq_to_x(b, true, 0, A)
+            } else {
+                ld(g, A, t.a)
+            }
+        }
+        if own.conv == CONV_NAZM { mov_imm(b, bit_reg(if t.a >= 0 { own.ret } else { -1 }), 0) }
+        epilogue(g)
+    } else if op == T_FAIL {
+        let own = g.u.syms[g.f.sym]
+        if own.ret >= 0 {
+            if is_float(own.ret) {
+                mov_imm(b, A, 0)
+                movq_to_x(b, true, 0, A)
+            } else {
+                mov_imm(b, A, 0)
+                mov_imm(b, D, 0)
+            }
+        }
+        mov_imm(b, bit_reg(own.ret), 1)
+        epilogue(g)
+    } else if op == T_UNREACHABLE {
+        ud2(b)
+    } else {
+        refuse(g, f"terminator kind {op}")
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// `i128` in rax:rdx and rcx:r11.
+
+fn bin128(g: G, x: Ins) {
+    let b = buf(g)
+    let s = x.sub
+    ld128(g, A, D, x.a)
+    ld128(g, B, R11, x.b)
+    if s == B_ADD {
+        alu(b, ALU_ADD, A, B)
+        alu(b, ALU_ADC, D, R11)
+    } else if s == B_SUB {
+        alu(b, ALU_SUB, A, B)
+        alu(b, ALU_SBB, D, R11)
+    } else if s == B_AND {
+        alu(b, ALU_AND, A, B)
+        alu(b, ALU_AND, D, R11)
+    } else if s == B_OR {
+        alu(b, ALU_OR, A, B)
+        alu(b, ALU_OR, D, R11)
+    } else if s == B_XOR {
+        alu(b, ALU_XOR, A, B)
+        alu(b, ALU_XOR, D, R11)
+    } else if s == B_MUL {
+        // hi = a0 * b1 + a1 * b0 + high(a0 * b0); lo = low(a0 * b0).
+        imul(b, D, B)
+        mov(b, R10, A)
+        imul(b, R10, R11)
+        alu(b, ALU_ADD, D, R10)
+        mov(b, R10, D)
+        f7(b, 4, B)
+        alu(b, ALU_ADD, D, R10)
+    } else if s == B_SHL || s == B_LSHR || s == B_ASHR {
+        // The amount (below 128) in cl; `shld`/`shrd` for the pair, then the halves moved
+        // when it is 64 or more.
+        if s == B_SHL {
+            rr(b, true, 0x0FA5, A, D)
+            shift_cl(b, 64, 4, A)
+            test_cl64(g)
+            cmov(b, CC_NE, D, A)
+            mov_imm(b, R10, 0)
+            cmov(b, CC_NE, A, R10)
+        } else {
+            rr(b, true, 0x0FAD, D, A)
+            if s == B_LSHR {
+                shift_cl(b, 64, 5, D)
+                test_cl64(g)
+                cmov(b, CC_NE, A, D)
+                mov_imm(b, R10, 0)
+                cmov(b, CC_NE, D, R10)
+            } else {
+                mov(b, R10, D)
+                shift_cl(b, 64, 7, D)
+                shift_imm(b, 7, R10, 63)
+                test_cl64(g)
+                cmov(b, CC_NE, A, D)
+                cmov(b, CC_NE, D, R10)
+            }
+        }
+    } else {
+        refuse(g, f"`i128` binary operation {s}")
+        return
+    }
+    st128(g, A, D, x.dst)
+}
+
+/// `test cl, 64`.
+fn test_cl64(g: G) {
+    let b = buf(g)
+    b1(b, 0xF6)
+    b1(b, 0xC1)
+    b1(b, 64)
+}
+
+fn ovf128(g: G, x: Ins) {
+    let b = buf(g)
+    let s = x.sub
+    ld128(g, A, D, x.a)
+    ld128(g, B, R11, x.b)
+    if s == O_ADD || s == O_UADD {
+        alu(b, ALU_ADD, A, B)
+        alu(b, ALU_ADC, D, R11)
+        setcc(b, if s == O_ADD { CC_O } else { CC_B }, B)
+    } else if s == O_SUB || s == O_USUB {
+        alu(b, ALU_SUB, A, B)
+        alu(b, ALU_SBB, D, R11)
+        setcc(b, if s == O_SUB { CC_O } else { CC_B }, B)
+    } else {
+        refuse(g, f"`i128` checked operation {s}")
+        return
+    }
+    st128(g, A, D, x.dst)
+    st(g, B, x.dst2)
+}
+
+fn compare128(g: G, x: Ins) {
+    let b = buf(g)
+    let k = x.sub
+    ld128(g, A, D, x.a)
+    ld128(g, B, R11, x.b)
+    if k == K_EQ || k == K_NE {
+        alu(b, ALU_XOR, A, B)
+        alu(b, ALU_XOR, D, R11)
+        alu(b, ALU_OR, A, D)
+        setcc(b, if k == K_EQ { CC_E } else { CC_NE }, A)
+    } else {
+        let swap = k == K_GT || k == K_LE || k == K_UGT || k == K_ULE
+        if swap {
+            alu(b, ALU_CMP, B, A)
+            alu(b, ALU_SBB, R11, D)
+        } else {
+            alu(b, ALU_CMP, A, B)
+            alu(b, ALU_SBB, D, R11)
+        }
+        let cc = match k {
+            2 => CC_L,
+            3 => CC_GE,
+            4 => CC_L,
+            5 => CC_GE,
+            6 => CC_B,
+            7 => CC_AE,
+            8 => CC_B,
+            _ => CC_AE,
+        }
+        setcc(b, cc, A)
+    }
+    st(g, A, x.dst)
+}
