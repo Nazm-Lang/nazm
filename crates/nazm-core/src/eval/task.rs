@@ -41,6 +41,7 @@ impl Interpreter {
             // inside a task crashes the process with no diagnostic at all.
             .stack_size(stack_for(max_depth))
             .spawn(move || {
+                super::stack::mark_stack(stack_for(max_depth));
                 let mut task = Self {
                     core: Arc::clone(&core),
                     cells: Arc::clone(&cells),

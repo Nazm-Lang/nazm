@@ -196,10 +196,14 @@ pub fn on_interpreter_stack<T: Send>(
     f: impl FnOnce() -> T + Send,
 ) -> std::io::Result<T> {
     std::thread::scope(|scope| {
+        let size = stack_for(max_depth);
         Ok(std::thread::Builder::new()
             .name("nazm-eval".to_string())
-            .stack_size(stack_for(max_depth))
-            .spawn_scoped(scope, f)?
+            .stack_size(size)
+            .spawn_scoped(scope, move || {
+                stack::mark_stack(size);
+                f()
+            })?
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
     })
@@ -547,6 +551,7 @@ mod intrinsic;
 mod net;
 mod os;
 mod process;
+mod stack;
 mod task;
 mod value;
 
