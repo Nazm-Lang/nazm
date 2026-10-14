@@ -56,7 +56,6 @@ const RESERVED: &[(&str, &str)] = &[
         "label",
         "there are no loop labels; `break` leaves the innermost loop",
     ),
-    ("loop", "there is no `loop`; write `while true`"),
     // `struct` left this list in N9, and `enum` and `match` in N10, each when it became
     // the keyword it was reserving. The entries existed to refuse words people would
     // reach for before they worked.
@@ -205,6 +204,8 @@ pub(crate) enum Item {
     Trait(Trait),
     /// An impl: its header and its methods, each a function marked as the impl's.
     Impl(ImplDecl, Vec<Function>),
+    /// An impl without a trait (R1, 5b.17): its methods, as functions named by their type.
+    Methods(Vec<Function>),
     /// A constant (Gate 2).
     Const(crate::ast::Const),
 }
@@ -231,6 +232,13 @@ fn with_attributes(item: Item, attrs: Vec<crate::ast::Attribute>) -> Item {
         Item::Impl(mut d, methods) => {
             d.attrs = attrs;
             Item::Impl(d, methods)
+        }
+        // An impl without a trait has no header of its own: its attributes are its methods'.
+        Item::Methods(mut methods) => {
+            for m in &mut methods {
+                m.attrs.clone_from(&attrs);
+            }
+            Item::Methods(methods)
         }
         Item::Const(mut c) => {
             c.attrs = attrs;
@@ -383,6 +391,7 @@ impl Item {
                 program.impls.push(decl);
                 program.functions.extend(methods);
             }
+            Self::Methods(methods) => program.functions.extend(methods),
         }
     }
 }
@@ -493,7 +502,7 @@ pub(crate) fn parse_region(
         } else if p.at(&TokenKind::Use) || pub_use {
             p.import().map(Item::Import)
         } else if p.at(&TokenKind::Impl) {
-            p.impl_decl().map(|(d, m)| Item::Impl(d, m))
+            p.impl_decl()
         } else {
             // `struct`/`enum`, each optionally behind a `pub`. Looking one token past a
             // `pub` is what keeps the kinds of item apart without any grammar knowing
@@ -1770,12 +1779,18 @@ impl<'a> Parser<'a> {
 
     /// `impl Trait for Type { fn … }` (N78): the header, and each method as a function
     /// marked as this impl's.
-    fn impl_decl(&mut self) -> Option<(ImplDecl, Vec<Function>)> {
+    fn impl_decl(&mut self) -> Option<Item> {
         let at = self.checkpoint();
         let impl_span = self.expect(&TokenKind::Impl, "to start an impl")?;
         // An impl for a generic type (R1b, L11b): `impl[T: Show] Show for Option[T]`.
         let type_params = self.only_type_params()?;
         let trait_name = self.type_name()?;
+        // `impl Point { fn area(self: Point) -> Int { … } }` (R1, 5b.17): methods no trait
+        // declares, each a function named by its type — `point_area` — which `p.area()` reads
+        // by name (5b.15).
+        if self.at(&TokenKind::LBrace) {
+            return self.inherent_methods(at, &trait_name, &type_params);
+        }
         // `for` is a word here and nowhere else: a reserved name everywhere a name may be
         // declared, so no program can mean anything else by it.
         if matches!(self.peek(), TokenKind::Ident(w) if w == "for") {
@@ -1829,7 +1844,7 @@ impl<'a> Parser<'a> {
         let close = self.expect(&TokenKind::RBrace, "to close the impl")?;
         self.wrap(at, SyntaxKind::ImplItem);
         self.drop_item = recovered;
-        Some((
+        Some(Item::Impl(
             ImplDecl {
                 attrs: Vec::new(),
                 type_params,
@@ -1840,6 +1855,48 @@ impl<'a> Parser<'a> {
             },
             methods,
         ))
+    }
+
+    /// `impl Type { fn m(…) … }` (R1, 5b.17): each method a function named `<type>_m`, the type's
+    /// name in lower case — the name `x.m()` reads by (5b.15) — generic over the impl's
+    /// parameters before its own.
+    fn inherent_methods(
+        &mut self,
+        at: Checkpoint,
+        of: &TypeName,
+        type_params: &[TypeParam],
+    ) -> Option<Item> {
+        let prefix = of.name.to_ascii_lowercase();
+        self.expect(&TokenKind::LBrace, "to start the methods")?;
+        let mut methods = Vec::new();
+        let mut recovered = false;
+        while !self.at(&TokenKind::RBrace) && !self.at(&TokenKind::Eof) {
+            if !self.at_item_fn() {
+                let found = self.peek().describe();
+                self.report(
+                    Diagnostic::error(
+                        codes::UNEXPECTED_TOKEN,
+                        self.peek_span(),
+                        format!("expected a method, `fn NAME(…)`, found {found}"),
+                    )
+                    .help("an impl holds methods and nothing else"),
+                );
+                return None;
+            }
+            self.poisoned = false;
+            self.drop_item = false;
+            let mut f = self.function()?;
+            recovered |= self.drop_item;
+            if !type_params.is_empty() {
+                f.type_params.splice(0..0, type_params.iter().cloned());
+            }
+            f.name = format!("{prefix}_{}", f.name);
+            methods.push(f);
+        }
+        self.expect(&TokenKind::RBrace, "to close the impl")?;
+        self.wrap(at, SyntaxKind::ImplItem);
+        self.drop_item = recovered;
+        Some(Item::Methods(methods))
     }
 
     /// One variant of an enum declaration: `Name` or `Name(field: Type, …)`.
@@ -3114,6 +3171,30 @@ impl<'a> Parser<'a> {
             *deepest = (*deepest).max(self.child());
             return Some(Parsed::Stmt(s));
         }
+        // `loop { … }` (R1, 5b.17): `while true { … }`.
+        if matches!(self.peek(), TokenKind::Ident(w) if w == "loop")
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::LBrace)
+            )
+        {
+            let at = self.checkpoint();
+            let start = self.peek_span();
+            self.advance();
+            let body = self.block()?;
+            self.built = self.child();
+            self.wrap(at, SyntaxKind::WhileStmt);
+            let s = Stmt::While(While {
+                cond: Expr::Bool {
+                    value: true,
+                    span: start,
+                },
+                span: start.join(body.span),
+                body,
+            });
+            *deepest = (*deepest).max(self.child());
+            return Some(Parsed::Stmt(s));
+        }
         if self.at(&TokenKind::While) {
             let s = Stmt::While(self.while_stmt()?);
             *deepest = (*deepest).max(self.child());
@@ -3420,6 +3501,11 @@ impl<'a> Parser<'a> {
                 return None;
             }
         };
+        let ty = if self.eat(&TokenKind::Colon) {
+            Some(self.type_name()?)
+        } else {
+            None
+        };
         self.expect(&TokenKind::Eq, "in a `let` binding")?;
         let value = self.expr()?;
         let semi = self.expect(&TokenKind::Semi, "after a `let` binding")?;
@@ -3428,6 +3514,7 @@ impl<'a> Parser<'a> {
             name,
             name_span,
             mutable,
+            ty,
             value,
             span: let_span.join(semi),
         })
@@ -3555,6 +3642,56 @@ impl<'a> Parser<'a> {
         let at = self.checkpoint();
         let start = self.peek_span();
         self.advance();
+        // `while let P = e { … }` (R1, 5b.17): `while true { match e { P => { … }, _ => { break } } }`
+        // — the value matched afresh each time, and the loop left when it does not match.
+        if self.at(&TokenKind::Let) {
+            self.advance();
+            let pattern = self.pattern()?;
+            self.expect(
+                &TokenKind::Eq,
+                "between a `while let` pattern and its value",
+            )?;
+            let scrutinee = self.expr()?;
+            let body = self.block()?;
+            self.built = self.child();
+            self.wrap(at, SyntaxKind::WhileStmt);
+            let end = body.span.end;
+            let none = Span::new(self.file, end, end);
+            let arms = vec![
+                MatchArm {
+                    span: pattern.span().join(body.span),
+                    pattern,
+                    body: Expr::Block(Box::new(body)),
+                },
+                MatchArm {
+                    span: none,
+                    pattern: Pattern::Wildcard { span: none },
+                    body: Expr::Block(Box::new(Block {
+                        statements: vec![Stmt::Break { span: none }],
+                        tail: None,
+                        span: none,
+                    })),
+                },
+            ];
+            let span = start.join(none);
+            return Some(While {
+                cond: Expr::Bool {
+                    value: true,
+                    span: start,
+                },
+                body: Block {
+                    statements: Vec::new(),
+                    tail: Some(Box::new(Expr::Match {
+                        scrutinee: Box::new(scrutinee),
+                        arms,
+                        source: MatchSource::IfLet,
+                        span,
+                    })),
+                    span,
+                },
+                span,
+            });
+        }
         let cond = self.expr()?;
         let cond_depth = self.child();
         let body = self.block()?;

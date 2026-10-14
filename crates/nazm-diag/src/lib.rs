@@ -60,6 +60,8 @@ pub mod codes {
     /// An interpolated string's hole that is not one (R1a, L4): empty, unclosed, a lone `}`,
     /// or a format interpolation does not have.
     pub const INTERPOLATION: Code = Code::new("N0006");
+    /// A block comment, `/* … */`, that the file ends inside (R1, 5b.17).
+    pub const UNTERMINATED_COMMENT: Code = Code::new("N0007");
 
     // Parsing
     /// An expression or block nested past the parser's limit. A parse-time bound, so

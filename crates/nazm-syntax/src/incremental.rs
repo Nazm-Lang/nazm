@@ -731,6 +731,7 @@ impl Item {
                 decl.shift(file, by);
                 methods.shift(file, by);
             }
+            Self::Methods(methods) => methods.shift(file, by),
         }
     }
 }
@@ -1129,10 +1130,14 @@ impl Shift for Stmt {
                     name: _,
                     name_span,
                     mutable: _,
+                    ty,
                     value,
                     span,
                 } = l;
                 name_span.shift(file, by);
+                if let Some(t) = ty {
+                    t.shift(file, by);
+                }
                 value.shift(file, by);
                 span.shift(file, by);
             }

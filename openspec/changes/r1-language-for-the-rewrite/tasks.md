@@ -75,8 +75,12 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       `s.split(" ")`, …) as names for the existing functions
 - [ ] 5b.16 `let x: T = …`; `[1, 2, 3]` as a `Vec` where one is wanted; `vec_new()`'s `T` inferred
       from later use
+      — done: `let x: T` and a generic call's parameter settled by the wanted type (2026-10-14);
+      left: `[1, 2, 3]` as a `Vec`
 - [ ] 5b.17 Methods without a trait (`impl Point { … }`), `while let`, `loop`, match guards, `?` on
       `Option` in a function returning `Option`, `/* … */` comments
+      — done: an impl without a trait, `while let`, `loop`, block comments (2026-10-14); left: match
+      guards, `?` on `Option`
 - [ ] 5b.18 One list type: `Strs` and `Ints` interchangeable with `Vec[Str]` and `Vec[Int]`
 - [x] 5b.19 Semicolon-free lines: a line break ends a statement where a `;` could, as in Go; `;`
       still accepted; `nazm fmt` writes the new form

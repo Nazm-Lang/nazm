@@ -1254,6 +1254,34 @@ pub(crate) fn scan_one(
         emit!(Lexeme::Whitespace(Span::new(file, at(start), at(i))));
     }
 
+    // Block comments (R1, 5b.17): `/*` to its matching `*/`, nesting, newlines included. A file
+    // that ends inside one is `N0007`, the comment running to the end of the file.
+    if c == b'/' && byte(i + 1) == Some(b'*') {
+        let mut depth = 0usize;
+        while let Some(b) = byte(i) {
+            if b == b'/' && byte(i + 1) == Some(b'*') {
+                depth += 1;
+                i += 2;
+            } else if b == b'*' && byte(i + 1) == Some(b'/') {
+                depth -= 1;
+                i += 2;
+                if depth == 0 {
+                    break;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        if depth > 0 {
+            errors.push(Diagnostic::error(
+                codes::UNTERMINATED_COMMENT,
+                Span::new(file, at(start), at(start + 2)),
+                "this comment has no closing `*/`",
+            ));
+        }
+        emit!(Lexeme::Comment(Span::new(file, at(start), at(i))));
+    }
+
     // Line comments
     if c == b'/' && byte(i + 1) == Some(b'/') {
         while byte(i).is_some_and(|b| b != b'\n') {

@@ -364,8 +364,21 @@ impl<'a> Printer<'a> {
             }
         }
         self.out.push_str(piece.text);
-        self.out.push('\n');
-        self.fresh_line = true;
+        // A block comment (R1, 5b.17) ends where it does, and what follows it on its line
+        // stays there; a line comment runs to its line's end.
+        let block = piece.text.starts_with("/*");
+        let followed = self
+            .text
+            .get(piece.end as usize..)
+            .and_then(|rest| rest.split('\n').next())
+            .is_some_and(|line| !line.trim().is_empty());
+        if block && followed {
+            self.out.push(' ');
+            self.fresh_line = false;
+        } else {
+            self.out.push('\n');
+            self.fresh_line = true;
+        }
         self.previous_end = piece.end;
     }
 

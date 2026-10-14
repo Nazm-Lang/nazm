@@ -60,7 +60,27 @@ impl Checker<'_> {
     fn check_stmt(&mut self, stmt: &Stmt) -> bool {
         match stmt {
             Stmt::Let(l) => {
-                let ty = self.value_type(&l.value, None);
+                // `let x: T = …` (R1, 5b.16): the value checked against `T`, the binding `T`.
+                let ty = match &l.ty {
+                    None => self.value_type(&l.value, None),
+                    Some(written) => {
+                        let want = self.resolve_written_type(written);
+                        let got = self.value_type(&l.value, Some(want));
+                        if !self.assignable(got, want) {
+                            self.errors.push(Diagnostic::error(
+                                codes::TYPE_MISMATCH,
+                                l.value.span(),
+                                format!(
+                                    "`{}` is written `{}`, but this is `{}`",
+                                    l.name,
+                                    self.show(want),
+                                    self.show(got)
+                                ),
+                            ));
+                        }
+                        want
+                    }
+                };
                 if self.scopes.defined_here(&l.name) {
                     self.errors.push(
                         Diagnostic::error(
