@@ -320,7 +320,7 @@ impl ByteLayouts {
                     s.fields.len()
                 ));
             }
-            if s.lay.align == 0 || s.lay.size % s.lay.align != 0 {
+            if s.lay.align == 0 || !s.lay.size.is_multiple_of(s.lay.align) {
                 return Err(format!(
                     "{what}: size {} is not a multiple of its alignment {}",
                     s.lay.size, s.lay.align
@@ -375,7 +375,7 @@ impl ByteLayouts {
             }
             for (tag, v) in e.variants.iter().enumerate() {
                 check(&format!("enum {id} variant {tag}"), v)?;
-                if PAYLOAD % v.lay.align != 0 || PAYLOAD + v.lay.size > e.lay.size {
+                if !PAYLOAD.is_multiple_of(v.lay.align) || PAYLOAD + v.lay.size > e.lay.size {
                     return Err(format!(
                         "enum {id}: variant {tag} does not fit its payload area"
                     ));

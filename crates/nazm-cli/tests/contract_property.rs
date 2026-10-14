@@ -135,7 +135,7 @@ fn sequence(facts: &Value, seed: u64) -> String {
         let caller = rng.pick(&[1, 1, 2, 3]);
         out.push_str(&format!("{caller} {name}"));
         for _ in 0..arity {
-            let v = if rng.next() % 4 == 0 {
+            let v = if rng.next().is_multiple_of(4) {
                 (rng.next() % 200) as i64 - 50
             } else {
                 rng.pick(&edges)

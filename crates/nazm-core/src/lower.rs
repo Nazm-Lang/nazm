@@ -3633,10 +3633,7 @@ impl<'a> Lower<'a> {
             .and_then(|d| d.variants.get(p.into_err as usize))
             .map_or(0, |v| v.fields.len());
         let ok = self.temp(Temp::Ok, ok_ty, at);
-        let err = match err_ty {
-            Some(t) => Some(self.temp(Temp::Err, t, at)),
-            None => None,
-        };
+        let err = err_ty.map(|t| self.temp(Temp::Err, t, at));
         let local = |l: LocalId, ty: Type| Expr {
             kind: ExprKind::Local(l),
             ty: Some(ty),

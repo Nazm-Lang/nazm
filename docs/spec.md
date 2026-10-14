@@ -990,9 +990,11 @@ program*):
 
 - Inference unifies each parameter's declared type with the argument's type, recursing
   through applications and `Vec`: passing a `Vec[Point]` for `Vec[T]` gives `T = Point`.
-- **The expected result type never participates.** `fn make[T]() -> T` cannot be called as
-  `make()`; it must be `make[Int]()` (`N0354`). Local, left-to-right, from the arguments —
-  so a call's meaning is visible in the call.
+- **The arguments decide first.** The expected result type only settles what they leave
+  open: `fn make[T]() -> T` called as `make()` with nothing wanting a type is still refused
+  (`N0354`) and is written `make[Int]()`, while `let x: Int = make()` settles `T = Int`.
+  Local, left-to-right, from the arguments — so a call's meaning is visible in the call or
+  the line it is on.
 - Two arguments that give one parameter different types are **refused** (`N0355`) —
   `same(1, "x")` for `fn same[T](a: T, b: T)` does not choose the first.
 - Explicit arguments fix every parameter, and an argument that then disagrees with the
