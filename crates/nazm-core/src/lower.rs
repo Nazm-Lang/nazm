@@ -460,16 +460,20 @@ impl<'a> Lower<'a> {
     /// Whether `value` is `str_concat(x, t)` with `x` the binding `local` (R1b, D2): an assignment
     /// of it to `local` appends to `local`'s own string.
     fn appends_to(&self, local: LocalId, value: &AstExpr) -> bool {
-        let AstExpr::Call {
-            callee_span, args, ..
-        } = value
-        else {
-            return false;
+        // `s = s + t` and `s += t` (R1, 5b.6) are `s = str_concat(s, t)`.
+        let (callee_span, first) = match value {
+            AstExpr::Call {
+                callee_span, args, ..
+            } => (*callee_span, args.first()),
+            AstExpr::Binary { op_span, lhs, .. } if self.res.named_method(*op_span) => {
+                (*op_span, Some(&**lhs))
+            }
+            _ => return false,
         };
-        if self.res.callee(*callee_span) != Some(Callee::Builtin(nazm_sema::Intrinsic::StrConcat)) {
+        if self.res.callee(callee_span) != Some(Callee::Builtin(nazm_sema::Intrinsic::StrConcat)) {
             return false;
         }
-        matches!(args.first(), Some(AstExpr::Var { span, .. })
+        matches!(first, Some(AstExpr::Var { span, .. })
             if self.res.var(*span).is_some() && self.local_at(*span).ok() == Some(local))
     }
 
@@ -1409,6 +1413,16 @@ impl<'a> Lower<'a> {
                     let t = self.boolean(true, *op_span);
                     self.conditional(lhs, t, rhs, *op_span)
                 }
+            }
+            // `s + t` on strings (R1, 5b.6): the `str_concat` the checker read it as.
+            AstExpr::Binary {
+                lhs,
+                rhs,
+                op_span,
+                span,
+                ..
+            } if self.res.named_method(*op_span) => {
+                self.call(*op_span, &[(**lhs).clone(), (**rhs).clone()], *span)?
             }
             AstExpr::Binary {
                 op,

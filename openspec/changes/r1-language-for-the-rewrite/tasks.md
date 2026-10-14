@@ -55,7 +55,7 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
 - [x] 5b.3 `main`'s `Int` result is the exit status, not printed
 - [x] 5b.4 `println`
 - [ ] 5b.5 Effects inferred for a function that is not `pub`
-- [ ] 5b.6 `s + t` on strings
+- [x] 5b.6 `s + t` on strings
 - [ ] 5b.7 `m[k]`, `m[k] = v` and `m[k] += 1` on maps
 - [ ] 5b.8 `fib(35)` ≤ 60 ms (141.6 before; C 37, Go 41) — the stack check inlined, and a program of
       one thread, known from `main`'s authority, keeping its failure state and stack limit in plain

@@ -18955,3 +18955,21 @@ replace = '''                            args: vec![read.clone(), value],
                         },
                         ty: Some(Type::Bool),'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::an_array_literal_is_a_sequence_where_one_is_wanted" }]
+
+# --- R1 5b.6: `s + t` on strings --------------------------------------------------------------------
+
+[[mutation]]
+name = "r1-strings-do-not-add"
+why = "`+` on two `Str`s is refused, as before R1"
+file = "crates/nazm-core/src/check/operators.rs"
+find = '''        if op == BinOp::Add && lt == Type::Str && rt == Type::Str && self.errors.len() == before {'''
+replace = '''        if op == BinOp::Add && lt == Type::Str && rt == Type::Bool && self.errors.len() == before {'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::strings_add_and_a_loop_of_adds_stays_linear" }]
+
+[[mutation]]
+name = "r1-a-loop-of-string-adds-copies-every-time"
+why = "`s = s + t` is not read as an append, so a loop of them copies the whole string each time"
+file = "crates/nazm-core/src/lower.rs"
+find = '''            AstExpr::Binary { op_span, lhs, .. } if self.res.named_method(*op_span) => {'''
+replace = '''            AstExpr::Binary { op_span, lhs, .. } if self.res.named_method(*op_span) && false => {'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::strings_add_and_a_loop_of_adds_stays_linear" }]
