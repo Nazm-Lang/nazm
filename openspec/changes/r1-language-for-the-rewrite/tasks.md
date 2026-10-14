@@ -69,7 +69,9 @@ C for `main`'s authority. Published with the rest of R1 as 0.10.0.
       531 ms, then 195.5 ms (2026-10-14: `text_split` and `text_lines` without a slice per byte,
       the map remembering the entry `m[k]` found, its vectors read once a probe, a field read as an
       operand borrowed in MIR, the runtime's state addressed directly)
-- [ ] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev
+- [x] 5b.10 The benchmark in the repository, re-run for each publication, and its results on nazm.dev —
+      `bench/compare/` (15 languages × hello, fib, words; `compare.py`), results in `docs/performance.md`
+      (2026-10-14), which nazm.dev publishes at each release
 - [x] 5b.11 `else if` — the grammar and the guide have promised it since 2026-09-21 and the parser
       never accepted it; a grammar `@example` of it, so the two cannot drift again
 - [x] 5b.12 Compound assignment: `+=`, `-=`, `*=`, `/=`, `%=` and the bit operators'
