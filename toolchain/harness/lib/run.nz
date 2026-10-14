@@ -110,6 +110,22 @@ pub fn run(h: Caps, program: Str, args: Strs, dir: Str, env: Strs) -> Ran ! { io
 
 /// `run`, the child ended with its process group once `ms` milliseconds have passed.
 pub fn run_within(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int) -> Ran ! { io, spawn } {
+    run_full(h, program, args, dir, env, ms, false, "")
+}
+
+/// `run`, `input` written to the child's standard input (in a task of its own, so a child that
+/// writes before it reads never waits on a pipe nobody empties), then closed.
+pub fn run_input(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, input: Str) -> Ran ! { io, spawn } {
+    run_full(h, program, args, dir, env, DEADLINE_MS, true, input)
+}
+
+fn feed(to: OsHandle, text: Str) -> Int ! { io } {
+    file_write(File(handle: to), bytes_from_str(text));
+    os_close(to);
+    0
+}
+
+fn run_full(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int, fed: Bool, input: Str) -> Ran ! { io, spawn } {
     let p = h.p;
     let sp = h.sp;
     let v = h.v;
@@ -117,7 +133,7 @@ pub fn run_within(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: In
     // given. A path read from a listing would otherwise count as a file's contents (`N0372`).
     let program = str_vouch(program);
     let dir = str_vouch(dir);
-    let c = match process_spawn_with(p, program, args, dir, env, true, true) {
+    let c = match process_spawn_with(p, program, args, dir, env, true, !fed) {
         Result.Ok(value: c) => c,
         Result.Err(error: e) => {
             return Ran(code: 0 - 1, stdout: "", stderr: f"{program}: {io_error_show(e)}");
@@ -132,9 +148,13 @@ pub fn run_within(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: In
     let mut status = 0;
     let got_out = vec_new[Str]();
     let got_err = vec_new[Str]();
+    let inp = os_child_pipe(c.handle, 0);
     scope {
         spawn collect(out, outs);
         spawn collect(err, errs);
+        if fed {
+            spawn feed(inp, input);
+        }
         // Both streams drain in tasks of their own while this waits, so a child that fills a pipe
         // never blocks; one past the deadline is ended with its whole process group, which closes
         // the pipes the tasks read.
@@ -184,4 +204,15 @@ pub fn words(s: Str) -> Strs ! {} {
         }
     }
     out
+}
+
+/// Whether `r` ended by exiting, with a status (`Output::status.code()` is `Some`): not killed by a
+/// signal, not ended at its deadline, and started at all.
+pub fn ended_normally(r: Ran) -> Bool ! {} {
+    r.code >= 0 && r.code < 256
+}
+
+/// `Ok` when `cond` holds, else `Err(what)`: an `assert!` with its message.
+pub fn check_that(cond: Bool, what: Str) -> Result[Int, Str] ! {} {
+    if cond { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: what) }
 }

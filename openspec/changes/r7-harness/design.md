@@ -95,6 +95,21 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
   tree's, not the port's.
 - [Strings built in loops] → output gathered in a `Strs` and joined once; no `str_concat` in a loop.
 
+## Findings for the coordinator
+
+Things the comparisons turned up that belong outside `toolchain/harness/` — reported, not changed:
+
+- **A stale catalogued killer.** `r1-ints-is-its-own-type-again` (`crates/nazm-core/src/check/written.rs`)
+  names `lists::one_list_type_runs_alike_everywhere` as its killer, and on this tree that Rust test
+  passes with the mutation applied (`tests/mutants.sh`; the Nazm port passes too, so the two agree).
+  The catalogue's killer should be re-verified (`cargo xtask contained mutate --verify-killer`).
+- **The governance gate's order is the file system's.** `xtask/src/governance.rs` lists
+  `openspec/changes` with `read_dir`, unsorted — an order no file system promises to be by name — so
+  two problems there would be reported in an order a reader cannot predict. The port sorts.
+- **Provenance and tree-walking tools** (decision 2): every path built from a `Strs` that ever held a
+  file's contents is refused as a write's path, so a harness declassifies at its sinks.
+- **`label` is a reserved word** (`N0101`) that a natural parameter or binding name runs into.
+
 ## Open Questions
 
 - `NAZM` or `NAZM_BIN` (decision 3).

@@ -1,0 +1,161 @@
+// The other shapes of "every implementation" the Rust tests use (R7): the interpreter beside the
+// LIR oracle and both backends (`exit_status.rs`, `checked.rs`), and a program interpreted and then
+// built and run at `-O0` and `-O2` in a directory that holds its modules (`effects.rs`,
+// `provenance.rs`).
+
+use "@std/text"
+use "run.nz"
+use "scratch.nz"
+use "differential.nz"
+use "jsonq.nz"
+
+/// `prog.nz` holding `src` under the interpreter, the LIR oracle (`nazm lir --run`), and built by
+/// LLVM at `-O0` and `-O2` and by Cranelift and run under `bounded_exe` — with the memory report
+/// asked of each when `memory` is set. `Err` when a build fails.
+pub fn everywhere_with_oracle(h: Caps, src: Str, memory: Bool) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let env = if memory { env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1") } else { suite_env(h) };
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run prog.nz"), d, env)));
+    vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
+    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let flat = text_replace(text_replace(name, " ", ""), "-", "");
+        let exe = f"{d}/{flat}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Labeled], Str].Err(error: f"{name}: {b.stderr}");
+        }
+        vec_push(out, Labeled(label: name, ran: bounded_exe(h, exe, d, env)));
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// Interpret `root` in `dir`, then build it to `dir/prog` at `-O0` and `-O2` and run that there:
+/// all three print the same. The program's own output, without `main`'s value on its last line —
+/// `Err` saying which disagreed.
+pub fn agree_native(h: Caps, dir: Str, root: Str) -> Result[Str, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "run");
+    strs_push(a, root);
+    let interpreted = nazm(h, dir, a);
+    if interpreted.code != 0 {
+        return Result[Str, Str].Err(error: f"interpreting {root}: {interpreted.stderr}");
+    }
+    let stdout = interpreted.stdout;
+    for level in words("0 2") {
+        let b = strs_new();
+        strs_push(b, "build");
+        strs_push(b, root);
+        for w in words(f"-o prog --no-cache --opt-level {level}") {
+            strs_push(b, w);
+        }
+        let built = nazm(h, dir, b);
+        if built.code != 0 {
+            return Result[Str, Str].Err(error: f"building {root} at -O{level}: {built.stderr}");
+        }
+        let native = run(h, f"{dir}/prog", strs_new(), dir, suite_env(h));
+        if native.code == TIMED_OUT {
+            return Result[Str, Str].Err(error: "the compiled program did not finish within 60 s");
+        }
+        if native.code != 0 {
+            return Result[Str, Str].Err(error: f"{root} at -O{level}: {ran_show(native)}");
+        }
+        if native.stdout != stdout {
+            return Result[Str, Str].Err(error: f"{root} at -O{level}: {native.stdout} vs {stdout}");
+        }
+    }
+    if !text_ends_with(stdout, "0\n") {
+        return Result[Str, Str].Err(error: f"{root}: {stdout}");
+    }
+    Result[Str, Str].Ok(value: str_slice(stdout, 0, str_len(stdout) - 2))
+}
+
+/// `prog.nz` holding `src` under the interpreter and built by LLVM at `-O0` and `-O2` and by
+/// Cranelift, run under `bounded_exe`, with the suite's environment and no memory report: the
+/// `everywhere` of `atomics.rs` and its kin. `Err` when a build fails.
+pub fn everywhere_plain(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let env = suite_env(h);
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run prog.nz"), d, env)));
+    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let flat = text_replace(text_replace(name, " ", ""), "-", "");
+        let exe = f"{d}/{flat}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Labeled], Str].Err(error: f"{name}: {b.stderr}");
+        }
+        vec_push(out, Labeled(label: name, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// Every implementation of `everywhere_plain` prints exactly `expected` — then `main`'s result,
+/// `0` — and exits 0.
+pub fn agrees_plain(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let want = f"{expected}0\n";
+    for r in everywhere_plain(h, src)? {
+        if r.ran.code != 0 {
+            return Result[Int, Str].Err(error: f"{r.label}: {r.ran.stderr}\n{src}");
+        }
+        if r.ran.stdout != want {
+            return Result[Int, Str].Err(error: f"{r.label}: printed {r.ran.stdout}, expected {want}\n{src}");
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The codes of the `error`-severity diagnostics `nazm check --json` refuses `src` with, which
+/// must be refused (status 1): `Err` otherwise.
+pub fn refused(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    if r.code != 1 {
+        return Result[Strs, Str].Err(error: f"expected a refusal: {ran_show(r)}\n{src}");
+    }
+    let out = strs_new();
+    for l in text_lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if jstr(doc, "severity") == "error" && str_len(jstr(doc, "code")) > 0 {
+                    strs_push(out, jstr(doc, "code"));
+                }
+                0
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// `refused(src)` is exactly `[code]`.
+pub fn refused_with(h: Caps, src: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = refused(h, src)?;
+    let shown = str_join(got, ", ");
+    if strs_len(got) == 1 && strs_get(got, 0) == code {
+        Result[Int, Str].Ok(value: 0)
+    } else {
+        Result[Int, Str].Err(error: f"[{shown}], expected [{code}]\n{src}")
+    }
+}

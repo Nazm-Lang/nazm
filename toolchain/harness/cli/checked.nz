@@ -1,0 +1,61 @@
+// R1b, L13a: checked arithmetic (`docs/spec.md`, *Numbers*, **Functions**). `checked_add`,
+// `checked_sub` and `checked_mul` give `Some` of the exact result, or `None` where it does not fit
+// its type: every implementation is asked for the edges at `Int`, `Int8` and `UInt8`, with nothing
+// live; and the class and the prelude name hold. Ported from `crates/nazm-cli/tests/checked.rs`
+// (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn checked() -> Str ! {} {
+    r#"fn show(o: Option[Int]) -> Str { match o { Option.Some(value: v) => num_to_str(v), Option.None() => "-", } }
+fn show8(o: Option[Int8]) -> Str { match o { Option.Some(value: v) => num_to_str(Int(v)), Option.None() => "-", } }
+fn showu(o: Option[UInt8]) -> Str { match o { Option.Some(value: v) => num_to_str(Int(v)), Option.None() => "-", } }
+fn line(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn main(out: OutCap) -> Int ! {io} {
+    let big = 9223372036854775807;
+    let small = 0 - 9223372036854775807 - 1;
+    line(out, str_concat(show(checked_add(1, 2)), str_concat(show(checked_add(big, 1)), show(checked_sub(small, 1)))));
+    line(out, str_concat(show(checked_mul(3, 4)), str_concat(show(checked_mul(big, 2)), str_concat(show(checked_mul(0 - 1, small)), show(checked_mul(0, big))))));
+    line(out, str_concat(show8(checked_add(Int8(100), Int8(27))), str_concat(show8(checked_add(Int8(100), Int8(28))), show8(checked_mul(Int8(-1), Int8(-128))))));
+    line(out, str_concat(showu(checked_sub(UInt8(3), UInt8(4))), str_concat(showu(checked_mul(UInt8(16), UInt8(15))), showu(checked_mul(UInt8(16), UInt8(16))))));
+    line(out, str_concat(show(checked_mul(0 - 1, big)), show(checked_mul(4611686018427387904, 2))));
+    0
+}
+"#
+}
+
+@test
+fn checked_arithmetic_finds_every_edge_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, checked(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, "3--\n12--0\n127--\n-240-\n-9223372036854775807-\n"), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn run_once(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("run p.nz"));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn checked_arithmetic_is_for_integers_and_its_names_are_prelude_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = run_once(h, "fn main() -> Int { match checked_add(1.5, 2.0) { Option.Some(value: v) => 1, Option.None() => 0, } }\n")?;
+    check_that(text_contains(r.stderr, "error[N0300]"), ran_show(r))?;
+    // A 1.0 program's own `checked_add` means what it meant.
+    let s = run_once(h, "fn checked_add(a: Int, b: Int) -> Int { a - b }\nfn main() -> Int { checked_add(9, 2) }\n")?;
+    check_that(text_starts_with(s.stdout, "7"), ran_show(s))
+}

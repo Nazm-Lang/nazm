@@ -1,0 +1,101 @@
+// Gate 3: `nazm trace` — each requirement of a `requirements.toml` to the definitions it constrains,
+// by durable identity and digest, with their obligations, and to the `@test` functions it names,
+// run; a definition renamed away, a test missing or failing is reported by name and fails the
+// command. Ported from `crates/nazm-cli/tests/trace.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn example(h: Caps, name: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{repo_root(h)}/examples/requirements/{name}")
+}
+
+/// One trace: the run, and its first line read as JSON (`null` when it is not).
+struct Traced {
+    ran: Ran,
+    doc: JsonDoc,
+}
+
+/// `src` traced against `reqs` in a fresh directory.
+fn trace(h: Caps, src: Str, reqs: Str) -> Result[Traced, Str] ! { io, spawn } {
+    let d = prog_dir(h, "heater.nz", src)?;
+    scratch_write(h, d, "requirements.toml", reqs)?;
+    let r = nazm(h, d, words("trace heater.nz --requirements requirements.toml"));
+    scratch_remove(h, d);
+    let lines = text_lines(r.stdout);
+    let first = if strs_len(lines) > 0 { strs_get(lines, 0) } else { "null" };
+    let doc = match jparse(first) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => { return Result[Traced, Str].Err(error: f"not JSON: {first}"); },
+    };
+    Result[Traced, Str].Ok(value: Traced(ran: r, doc: doc))
+}
+
+@test
+fn each_requirement_reaches_its_definition_obligations_and_test(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let tr = trace(h, example(h, "heater.nz")?, example(h, "requirements.toml")?)?;
+    let doc = tr.doc;
+    check_that(tr.ran.code == 0, tr.ran.stderr)?;
+    check_that(jstr(doc, "schema") == "nazm.trace/1", jtext(doc, "schema"))?;
+    check_that(jstr(doc, "status") == "traced", jtext(doc, "status"))?;
+    check_that(jtext(doc, "broken") == "[]", jtext(doc, "broken"))?;
+    check_that(jstr(doc, "requirements/0/id") == "HTR-1", jtext(doc, "requirements/0/id"))?;
+    check_that(jstr(doc, "requirements/0/definitions/0/key") == "heater.nz::fn power", jtext(doc, "requirements/0/definitions/0/key"))?;
+    check_that(str_len(jstr(doc, "requirements/0/definitions/0/digest")) == 64, jtext(doc, "requirements/0/definitions/0/digest"))?;
+    // Its contract is an obligation, keyed by the definition: the postcondition, checked.
+    check_that(jint(doc, "requirements/0/definitions/0/obligations/checked") == 1, jtext(doc, "requirements/0/definitions/0/obligations"))?;
+    check_that(jstr(doc, "requirements/0/definitions/0/obligations/each/0/kind") == "postcondition", jtext(doc, "requirements/0/definitions/0/obligations"))?;
+    check_that(jstr(doc, "requirements/0/tests/0/outcome") == "passed", jtext(doc, "requirements/0/tests"))?;
+    check_that(jstr(doc, "requirements/1/definitions/0/key") == "heater.nz::fn over", jtext(doc, "requirements/1/definitions/0/key"))
+}
+
+@test
+fn a_broken_link_is_reported_by_name_and_fails_the_trace(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = example(h, "heater.nz")?;
+    let reqs = example(h, "requirements.toml")?;
+    // The definition renamed away — its callers with it, the requirement left behind.
+    let renamed = text_replace(text_replace(text_replace(src, "fn over(", "fn tripped("), "over(801)", "tripped(801)"), "!over(800)", "!tripped(800)");
+    let a = trace(h, renamed, reqs)?;
+    check_that(a.ran.code == 1, ran_show(a.ran))?;
+    check_that(jstr(a.doc, "status") == "broken", jtext(a.doc, "status"))?;
+    check_that(text_contains(a.ran.stderr, "HTR-2: the definition `over` is not in heater.nz"), a.ran.stderr)?;
+    // A test that fails.
+    let b = trace(h, text_replace(src, "t > 800", "t > 801"), reqs)?;
+    check_that(b.ran.code == 1, ran_show(b.ran))?;
+    check_that(text_contains(b.ran.stderr, "HTR-2: the test `trips_above_eighty` fails"), b.ran.stderr)?;
+    // A test that is not there.
+    let c = trace(h, src, text_replace(reqs, "power_is_bounded", "power_is_fine"))?;
+    check_that(c.ran.code == 1, ran_show(c.ran))?;
+    check_that(jstr(c.doc, "requirements/0/tests/0/outcome") == "missing", jtext(c.doc, "requirements/0/tests"))?;
+    // A requirement that names nothing to verify it.
+    let d = trace(h, src, "schema = \"nazm.requirements/1\"\n[[requirement]]\nid = \"HTR-9\"\ndefinitions = [\"power\"]\n")?;
+    check_that(d.ran.code == 1, ran_show(d.ran))?;
+    check_that(text_contains(d.ran.stderr, "HTR-9: a requirement needs"), d.ran.stderr)?;
+    // A file that is not a requirements file.
+    let e = trace(h, src, "[[requirement]]\nid = \"X\"\n")?;
+    check_that(e.ran.code == 1, ran_show(e.ran))?;
+    check_that(text_contains(e.ran.stderr, "nazm.requirements/1"), e.ran.stderr)
+}
+
+@test
+fn a_definitions_identity_outlives_an_edit_and_its_digest_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let reqs = example(h, "requirements.toml")?;
+    let before = trace(h, example(h, "heater.nz")?, reqs)?;
+    let edited = text_replace(example(h, "heater.nz")?, "demand > 100 { 100 }", "demand >= 100 { 100 }");
+    let after = trace(h, edited, reqs)?;
+    check_that(after.ran.code == 0, after.ran.stderr)?;
+    let def = "requirements/0/definitions/0";
+    check_that(jtext(before.doc, f"{def}/key") == jtext(after.doc, f"{def}/key"), "the key moved")?;
+    check_that(jtext(before.doc, f"{def}/digest") != jtext(after.doc, f"{def}/digest"), "the digest did not change")?;
+    // The other requirement's definition, untouched, keeps its digest.
+    let other = "requirements/1/definitions/0/digest";
+    check_that(jtext(before.doc, other) == jtext(after.doc, other), "the other definition's digest changed")
+}

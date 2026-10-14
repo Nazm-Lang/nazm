@@ -1,0 +1,136 @@
+// R1a: multi-line and raw string literals (`docs/spec.md`, *Multi-line and raw strings*). Every
+// implementation is asked for the bytes the rules give, worked out by hand; the formatter keeps a
+// literal as written; and what the lexer refuses, by which code. Ported from
+// `crates/nazm-cli/tests/string_literals.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// Each literal printed between `[` and `]`, so every byte the rules keep or drop is visible.
+fn strings() -> Str ! {} {
+    r###"fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat("[", str_concat(s, "]\n"))) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    // The closing delimiter's indentation comes off every line; the first and last breaks are
+    // not the value's; escapes are an ordinary string's; a backslash ending a line joins it.
+    let ir = """
+        define i64 @f() {
+          ret i64 "\x41"
+        }
+          two\
+        joined
+        """;
+    show(out, ir);
+    // A blank line inside is a line, whatever indentation it has.
+    show(out, """
+      a
+
+      b
+      """);
+    // Raw: no escapes, quotes with `#`s, line breaks as written.
+    show(out, r"C:\path\n");
+    show(out, r#"say "hi" \n"#);
+    show(out, r##"a "# b"##);
+    show(out, r"two
+lines");
+    show(out, """
+    """);
+    0
+}
+"###
+}
+
+const EXPECTED: Str = "[define i64 @f() {\n  ret i64 \"A\"\n}\n  twojoined]\n[a\n\nb]\n[C:\\path\\n]\n[say \"hi\" \\n]\n[a \"# b]\n[two\nlines]\n[]\n";
+
+fn nothing_live(r: Ran) -> Bool ! {} {
+    let line = memory_line(r);
+    str_len(line) > 0 && all_reclaimed(line)
+}
+
+@test
+fn multi_line_and_raw_strings_are_the_same_bytes_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, strings(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, EXPECTED), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            check_that(nothing_live(r.ran), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_formatter_keeps_a_literal_as_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "f.nz", strings())?;
+    let a = strs_new();
+    strs_push(a, "fmt");
+    strs_push(a, f"{d}/f.nz");
+    let r = run(h, nazm_bin(h.io), a, "", suite_env(h));
+    let got = read_text(h, f"{d}/f.nz");
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let text = got?;
+    let literals = strs_new();
+    strs_push(literals, "\"\"\"\n        define i64 @f() {\n          ret i64 \"\\x41\"\n        }\n          two\\\n        joined\n        \"\"\"");
+    strs_push(literals, "r#\"say \"hi\" \\n\"#");
+    strs_push(literals, "r\"two\nlines\"");
+    for literal in literals {
+        check_that(text_contains(text, literal), f"{literal} in {text}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `nazm check` on `src`: every error code, in order, and the first error line.
+fn refused_codes(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("check p.nz"));
+    scratch_remove(h, d);
+    let out = strs_new();
+    let parts = text_split(r.stderr, "error[");
+    let mut i = 1;
+    while i < strs_len(parts) {
+        let s = strs_get(parts, i);
+        strs_push(out, if str_len(s) >= 5 { str_slice(s, 0, 5) } else { s });
+        i = i + 1;
+    }
+    let mut first = "";
+    for l in text_lines(r.stderr) {
+        if str_len(first) == 0 && text_starts_with(l, "error[") {
+            first = l;
+        }
+    }
+    strs_push(out, first);
+    Result[Strs, Str].Ok(value: out)
+}
+
+@test
+fn what_a_literal_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    strs_push(srcs, "fn main() -> Int { let s = \"\"\"x\n  \"\"\"; 0 }\n");
+    strs_push(srcs, "fn main() -> Int { let s = \"\"\"\n  a\n b\n  \"\"\"; 0 }\n");
+    strs_push(srcs, "fn main() -> Int { let s = \"\"\"\n  \\q\n  \"\"\"; 0 }\n");
+    strs_push(srcs, "fn main() -> Int { let s = r#\"a\"; 0 }\nfn f() -> Int { 1 }\n");
+    let want = words("N0005 N0005 N0004 N0002");
+    let says = text_split("begins on the line after|does not begin with its closing||no closing quote", "|");
+    let mut i = 0;
+    while i < 4 {
+        let src = strs_get(srcs, i);
+        let got = refused_codes(h, src)?;
+        // The last item is the first error line; the codes come before it.
+        let first_line = strs_get(got, strs_len(got) - 1);
+        let first_code = if strs_len(got) > 1 { strs_get(got, 0) } else { "(none)" };
+        let shown = str_join(got, " | ");
+        check_that(first_code == strs_get(want, i), f"{src}: {shown}")?;
+        check_that(text_contains(first_line, strs_get(says, i)), f"{src}: {first_line}")?;
+        i = i + 1;
+    }
+    // A name `r` is still a name.
+    let plain = refused_codes(h, "fn main() -> Int { let r = 1; r }\n")?;
+    check_that(strs_len(plain) == 1, str_join(plain, " | "))
+}

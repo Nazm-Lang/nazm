@@ -1,0 +1,226 @@
+// Gate 2: user tests, fuzz targets and benchmarks (`docs/general-purpose.md` §18–§19, `docs/spec.md`
+// *Tests and benchmarks*): `nazm test` runs every `@test` function of a file under the interpreter
+// and natively, by name; `Ok` passes, `Err` fails with its message, a trap fails, `@test(fails)`
+// inverts; `--filter` narrows; a `@fuzz` target gets deterministic inputs; the file's own `main` is
+// not run; `nazm bench` measures natively. What the harness in Nazm itself stands on. Ported from
+// `crates/nazm-cli/tests/user_tests.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn tests_src() -> Str ! {} {
+    r#"use "@std/test";
+use "@std/random";
+
+fn double(n: Int) -> Int { n * 2 }
+
+fn main() -> Int { double(21) }
+
+@test
+fn doubles() -> Result[Int, Str] {
+    assert_eq_int("double(2)", double(2), 4)?;
+    assert_true("positive", double(1) > 0)
+}
+
+@test
+fn reports_its_failure() -> Result[Int, Str] {
+    assert_eq_int("double(3)", double(3), 7)
+}
+
+@test(fails)
+fn expects_to_trap() -> Result[Int, Str] {
+    let zero = 0;
+    Result[Int, Str].Ok(value: 5 / zero)
+}
+
+@test(fails)
+fn wrongly_expects_to_fail() -> Result[Int, Str] {
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn holds_authority(out: OutCap) -> Result[Int, Str] {
+    print("from a test\n");
+    assert_some("a value", Option[Int].Some(value: 1))?;
+    assert_ok("ok", Result[Int, Str].Ok(value: 2))
+}
+
+@test
+fn a_property() -> Result[Int, Str] {
+    property(UInt64(7), 50, fn(r: Rng) -> Result[Int, Str] {
+        let n = random_int(r, 0, 1000);
+        assert_eq_int("halved", double(n) / 2, n)
+    })
+}
+
+@cfg(os = "nowhere")
+@test
+fn never_built() -> Result[Int, Str] {
+    Result[Int, Str].Err(error: "ran")
+}
+"#
+}
+
+/// Every line of `stdout` that is JSON, parsed.
+fn json_rows(stdout: Str) -> Vec[JsonDoc] ! {} {
+    let out = vec_new[JsonDoc]();
+    for l in text_lines(stdout) {
+        match jparse(l) {
+            Result.Ok(value: d) => vec_push(out, d),
+            Result.Err(error: e) => 0,
+        };
+    }
+    out
+}
+
+/// The row named `name`, as its index in `rows`, or `-1`.
+fn row_named(rows: Vec[JsonDoc], name: Str) -> Int ! {} {
+    let mut i = 0;
+    while i < vec_len(rows) {
+        if jstr(vec_get(rows, i), "name") == name {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn verdict(rows: Vec[JsonDoc], name: Str, stdout: Str) -> Result[Bool, Str] ! {} {
+    let i = row_named(rows, name);
+    if i < 0 {
+        return Result[Bool, Str].Err(error: f"no row for {name}: {stdout}");
+    }
+    let row = vec_get(rows, i);
+    if jstr(row, "kind") != "test" {
+        return Result[Bool, Str].Err(error: jtext(row, ""));
+    }
+    if json_kind(row, jq(row, "native")) != "object" {
+        return Result[Bool, Str].Err(error: jtext(row, ""));
+    }
+    Result[Bool, Str].Ok(value: jtext(row, "passed") == "true")
+}
+
+@test
+fn every_test_function_runs_by_name_in_both_implementations(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "calc.nz", tests_src())?;
+    let r = nazm(h, d, words("test --json calc.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"{r.stdout}\n{r.stderr}")?;
+    let rows = json_rows(r.stdout);
+    check_that(verdict(rows, "calc::doubles", r.stdout)?, "calc::doubles")?;
+    check_that(!verdict(rows, "calc::reports_its_failure", r.stdout)?, "calc::reports_its_failure")?;
+    check_that(verdict(rows, "calc::expects_to_trap", r.stdout)?, "calc::expects_to_trap")?;
+    check_that(!verdict(rows, "calc::wrongly_expects_to_fail", r.stdout)?, "calc::wrongly_expects_to_fail")?;
+    check_that(verdict(rows, "calc::holds_authority", r.stdout)?, "calc::holds_authority")?;
+    check_that(verdict(rows, "calc::a_property", r.stdout)?, "calc::a_property")?;
+    check_that(row_named(rows, "calc::never_built") < 0, "calc::never_built was run")?;
+    check_that(vec_len(rows) == 6, r.stdout)?;
+    let failure = vec_get(rows, row_named(rows, "calc::reports_its_failure"));
+    for leg in words("interpreted native") {
+        let out = jstr(failure, f"{leg}/output");
+        check_that(text_contains(out, "double(3): expected 7, found 6"), f"{leg}: {out}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_filter_narrows_and_the_human_report_names_each_test(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "calc.nz", tests_src())?;
+    let r = nazm(h, d, words("test --interpret-only --filter doubles calc.nz"));
+    let none = nazm(h, d, words("test --filter nothing-matches calc.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, f"{r.stdout}\n{r.stderr}")?;
+    check_that(text_contains(r.stdout, "ok    calc::doubles"), r.stdout)?;
+    check_that(!text_contains(r.stdout, "reports_its_failure"), r.stdout)?;
+    check_that(text_contains(r.stderr, "1 of 1 passed"), r.stderr)?;
+    check_that(none.code != 0, none.stderr)
+}
+
+@test
+fn a_fuzz_target_gets_the_same_inputs_every_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "@fuzz\nfn short_inputs(input: Bytes) -> Result[Int, Str] {\n    if bytes_len(input) < 40 { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: int_to_str(bytes_len(input))) }\n}\n\n@fuzz\nfn any_input(input: Bytes) -> Result[Int, Str] {\n    Result[Int, Str].Ok(value: bytes_len(input))\n}\n";
+    let d = prog_dir(h, "f.nz", src)?;
+    let r = nazm(h, d, words("test --json --fuzz 200 f.nz"));
+    let again_run = nazm(h, d, words("test --json --fuzz 200 f.nz"));
+    scratch_remove(h, d);
+    let rows = json_rows(r.stdout);
+    check_that(vec_len(rows) == 2, f"{r.stdout}\n{r.stderr}")?;
+    let si = row_named(rows, "f::short_inputs");
+    check_that(si >= 0, r.stdout)?;
+    let short = vec_get(rows, si);
+    check_that(jstr(short, "kind") == "fuzz", jtext(short, ""))?;
+    check_that(jtext(short, "passed") == "false", jtext(short, ""))?;
+    let first = jstr(short, "interpreted/output");
+    check_that(text_starts_with(first, "case "), first)?;
+    check_that(jstr(short, "native/output") == first, jtext(short, ""))?;
+    let ai = row_named(rows, "f::any_input");
+    check_that(ai >= 0 && jtext(vec_get(rows, ai), "passed") == "true", r.stdout)?;
+    let again = json_rows(again_run.stdout);
+    let gi = row_named(again, "f::short_inputs");
+    check_that(gi >= 0 && jstr(vec_get(again, gi), "interpreted/output") == first, again_run.stdout)
+}
+
+@test
+fn a_test_or_benchmark_of_the_wrong_shape_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("a test answers Int", codes(h, "@test\nfn t() -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0619"))?;
+    same_strs("a test takes an Int", codes(h, "@test\nfn t(n: Int) -> Result[Int, Str] { Result[Int, Str].Ok(value: n) }\nfn main() -> Int { 0 }\n"), words("N0619"))?;
+    same_strs("a generic test", codes(h, "@test\nfn t[T]() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\nfn main() -> Int { 0 }\n"), words("N0619"))?;
+    same_strs("a fuzz target without Bytes", codes(h, "@fuzz\nfn f(n: Int) -> Result[Int, Str] { Result[Int, Str].Ok(value: n) }\nfn main() -> Int { 0 }\n"), words("N0619"))?;
+    same_strs("a benchmark answers Str", codes(h, "@bench\nfn b() -> Str { \"\" }\nfn main() -> Int { 0 }\n"), words("N0619"))?;
+    same_strs("main as a test", codes(h, "@test\nfn main() -> Int { 0 }\n"), words("N0619"))
+}
+
+@test
+fn a_test_files_diagnostic_lands_where_it_is_written_and_is_no_expected_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `@test(fails)` too: a program that does not check is not a test that failed.
+    let d = prog_dir(h, "t.nz", "fn main() -> Int { 0 }\n\n@test(fails)\nfn t() -> Result[Int, Str] {\n    Result[Int, Str].Ok(value: \"no\")\n}\n")?;
+    // The interpreter's leg alone: a native build that fails would fail the case by itself.
+    let r = nazm(h, d, words("test --json --interpret-only t.nz"));
+    scratch_remove(h, d);
+    let rows = json_rows(r.stdout);
+    check_that(vec_len(rows) > 0, r.stdout)?;
+    let out = jstr(vec_get(rows, 0), "interpreted/output");
+    check_that(text_contains(out, "t.nz:5:"), out)?;
+    check_that(jtext(vec_get(rows, 0), "passed") == "false", jtext(vec_get(rows, 0), ""))
+}
+
+@test
+fn a_benchmark_is_measured_natively_and_reported_per_iteration(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "b.nz", "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\n\n@bench\nfn fib_fifteen() -> Int { fib(15) }\n\nfn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("bench --json --iterations 50 b.nz"));
+    let human = nazm(h, d, words("bench --iterations 5 b.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, f"{r.stdout}\n{r.stderr}")?;
+    let rows = json_rows(r.stdout);
+    check_that(vec_len(rows) == 1, r.stdout)?;
+    let row = vec_get(rows, 0);
+    check_that(jstr(row, "schema") == "nazm.bench/1", jtext(row, ""))?;
+    check_that(jstr(row, "name") == "b::fib_fifteen", jtext(row, ""))?;
+    check_that(jint(row, "iterations") == 50, jtext(row, ""))?;
+    check_that(jint(row, "ns_per_iteration") > 0, jtext(row, ""))?;
+    check_that(text_contains(human.stdout, "b::fib_fifteen"), human.stdout)
+}
+
+@test
+fn a_file_whose_main_prints_with_nothing_written_still_runs_its_tests(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // R1, 5b.1: such a `main` uses an `out` it is given, not one it wrote; the harness leaves it
+    // out of what it builds rather than keeping it under a name that is given none.
+    let d = prog_dir(h, "hello.nz", "use \"@std/test\"\n\nfn main() {\n    println(\"hello\")\n}\n\n@test\nfn passes() -> Result[Int, Str] {\n    assert_true(\"yes\", true)\n}\n")?;
+    let r = nazm(h, d, words("test --json hello.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, f"{r.stdout}\n{r.stderr}")?;
+    let rows = json_rows(r.stdout);
+    check_that(vec_len(rows) == 1, r.stdout)?;
+    check_that(jtext(vec_get(rows, 0), "passed") == "true", r.stdout)
+}
