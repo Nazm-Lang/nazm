@@ -46,6 +46,10 @@ $ nazm run hello.nz
 Hello, Nazm!
 ```
 
+`nazm run` compiles the program and runs it, ending with its exit status; `nazm run --interpret`
+runs it in the interpreter instead, which is slower and is what the tests compare every compiled
+program against.
+
 ## 3. Check it
 
 `nazm check` type-checks without running anything. Write a file without the capability to
@@ -78,7 +82,8 @@ Every diagnostic has a stable code; `nazm check --json` prints the same thing as
 
 ## 4. Build a native executable
 
-`nazm build` compiles the same program to a native executable — no interpreter and no `nazm`
+`nazm build` compiles the same program to a native executable you keep — with LLVM by default,
+where `nazm run` uses Cranelift and throws its executable away — no interpreter and no `nazm`
 process at run time. It produces the same output:
 
 <!-- run -->

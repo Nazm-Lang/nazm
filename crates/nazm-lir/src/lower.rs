@@ -17,8 +17,8 @@
 //! below are about this backend's coverage and not about the program being wrong: a construct
 //! outside the subset is a perfectly good Nazm construct this backend cannot compile, and saying
 //! so is different from saying it is invalid. (Recursion was the first of them; since N49 it
-//! compiles, with a stack check MIR places.) Every refusal points at `nazm run`, which still executes all of
-//! it. Every unsupported construct produces a diagnostic and **no output**.
+//! compiles, with a stack check MIR places.) Every refusal points at `nazm run --interpret`, which
+//! still executes all of it. Every unsupported construct produces a diagnostic and **no output**.
 
 use std::collections::BTreeSet;
 
@@ -44,7 +44,7 @@ const SUBSET: &str = "`nazm build` currently compiles functions over `Int`, `Boo
                       `int_to_str`, direct calls, recursive ones included, and structured \
                       concurrency (`scope`, `spawn` and `Chan`) — with \
                       `fn main() -> Int` as the entry point. Everything else still runs \
-                      under `nazm run`";
+                      under `nazm run --interpret`";
 
 /// Constructs outside the native subset, with the spans that named them.
 #[derive(Debug)]

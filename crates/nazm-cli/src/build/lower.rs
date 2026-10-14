@@ -57,7 +57,8 @@ pub(super) fn lowered(
             // The checker's warnings (R1b, L15): reported, or the build refused under
             // `--deny-warnings`.
             let warnings = nazm_core::warnings(resolution);
-            if !warnings.is_empty() {
+            // `nazm run` reports none, as the interpreter reports none (R1.5, D11).
+            if !warnings.is_empty() && !choice.run {
                 if choice.deny_warnings {
                     let w = warnings.len();
                     eprintln!(
@@ -211,12 +212,25 @@ pub(super) fn lowered(
             let unsupported = diagnostics
                 .iter()
                 .any(|d| d.code == nazm_diag::codes::UNSUPPORTED_CONSTRUCT);
+            // `nazm run` falls back to nothing (R1.5, D11): a refusal only a native build makes
+            // says what runs the program instead.
+            let diagnostics: Vec<_> = if choice.run {
+                diagnostics.into_iter().map(for_run).collect()
+            } else {
+                diagnostics
+            };
             emit(&diagnostics, map, json);
             let n = diagnostics.len();
-            if unsupported {
+            if choice.run && diagnostics.iter().any(|d| native_only(&d.code)) {
+                eprintln!(
+                    "nazm: {n} error{} in compiling this program. Nothing ran; \
+                     `nazm run --interpret` runs it in the interpreter.",
+                    if n == 1 { "" } else { "s" }
+                );
+            } else if unsupported {
                 eprintln!(
                     "nazm: {n} construct{} outside `nazm build`'s subset. Nothing was \
-                     written; `nazm run` still executes this program.",
+                     written; `nazm run --interpret` still executes this program.",
                     if n == 1 { "" } else { "s" }
                 );
             } else {
@@ -275,6 +289,33 @@ pub(super) struct Artefact {
     pub(super) key: Option<String>,
     /// Whether the object came from the store under that key rather than being generated.
     pub(super) reused: bool,
+}
+
+/// Whether `code` is a refusal only a native build makes, of a program the interpreter runs: the
+/// backend's subset (`N0101`) and the instances a generic function would need (`N0357`, `N0358`).
+fn native_only(code: &nazm_diag::Code) -> bool {
+    use nazm_diag::codes::{
+        GENERIC_INSTANCE_LIMIT, UNBOUNDED_SPECIALISATION, UNSUPPORTED_CONSTRUCT,
+    };
+    [
+        UNSUPPORTED_CONSTRUCT,
+        UNBOUNDED_SPECIALISATION,
+        GENERIC_INSTANCE_LIMIT,
+    ]
+    .contains(code)
+}
+
+/// A refusal as `nazm run` reports it (R1.5, D11): one only a native build makes says that
+/// `nazm run --interpret` runs the program, since `nazm run` itself will not.
+fn for_run(d: nazm_diag::Diagnostic) -> nazm_diag::Diagnostic {
+    if native_only(&d.code) {
+        d.help(
+            "`nazm run` compiles, with Cranelift, and falls back to nothing; \
+             `nazm run --interpret` runs this program in the interpreter",
+        )
+    } else {
+        d
+    }
 }
 
 /// Lower a checked compilation into one artefact per module, plus the program's support.

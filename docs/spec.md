@@ -79,6 +79,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `break-continue` | STABLE 1.0 | |
 | `return` | STABLE 1.0 | |
 | `unreachable-code` | STABLE 1.0 | |
+| `run-compiles` | EXPERIMENTAL | R1.5, D11: `nazm run` compiles with Cranelift, `--interpret` interprets; stable when R1.5 closes |
 | `limits` | STABLE 1.0 | the rule is stable; the limits' values are the implementation's and may be raised, not lowered, in 1.x |
 | `nesting` | STABLE 1.0 | the bound may be raised, not lowered, in 1.x |
 | `native-recursion` | STABLE 1.0 | stack sizes are the implementation's |
@@ -1850,11 +1851,40 @@ silence is the wrong default for a statement that provably cannot execute. Relax
 error to a warning later is a compatible change; tightening a warning to an error is not,
 so the strict choice is the reversible one.
 
+### `nazm run` compiles; `nazm run --interpret` interprets (R1.5)
+<!-- id: run-compiles -->
+
+*R1.5 (`openspec/changes/r1-5-performance-and-dx`, *design.md* D11); EXPERIMENTAL until R1.5 closes.*
+
+`nazm run FILE` builds the program with the Cranelift backend, in process, into a private
+temporary directory, runs the executable with the arguments after `--`, and ends with its exit
+status. The program's standard input, output and error are its own — nothing `nazm` would print
+about the build (the executable's path, the authority line, the checker's warnings) is printed,
+and nothing the program writes is buffered, reordered or rewritten. A program killed by a signal
+ends `nazm run` with `128 +` that signal's number, as a shell reports it. The temporary directory
+is removed whatever the program did; the project's object store (`.nazm/`, or `NAZM_CACHE_DIR`'s)
+is used and filled exactly as `nazm build` uses and fills it.
+
+`nazm run --interpret FILE` is the interpreter. It is the oracle every equivalence test compares
+the backends against, and it is what this document means wherever it contrasts `nazm run` with a
+native build — its iteration and depth limits (below), its threads, its refusal to call C.
+
+**Neither falls back to the other.** A program only a native build refuses — outside the backend's
+subset (`N0101`), or a generic function whose instances would never end or are too many (`N0357`,
+`N0358`) — is refused by `nazm run` with that diagnostic, help naming `nazm run --interpret`,
+status 1 and nothing run. A program that does not check is refused as the interpreter refuses it,
+and its diagnostics name no `--interpret`, which would refuse it too.
+A program both accept means the same under both, and what the program writes, the status it ends
+with and the variables it reads (`NAZM_RESULT_REPORT`, the memory and scheduler reports) are the
+same. `--max-iterations` and `--max-depth` bound the interpreter only, and are a usage error
+(status 5) without `--interpret`; `--json`, `--profile`, `--features` and `--locked` mean what
+they mean to `nazm build`.
+
 ### The iteration and depth limits are the interpreter's, not the language's
 <!-- id: limits -->
 
 With no `break` and no I/O, a non-terminating program produces nothing at all. A tool that
-hangs is worse than one that reports, so `nazm run` stops and says so — after a
+hangs is worse than one that reports, so `nazm run --interpret` stops and says so — after a
 configurable number of loop iterations (`--max-iterations`, default 10,000,000) or nested
 calls (`--max-depth`, default 512).
 
@@ -1933,7 +1963,7 @@ both native backends.
 | --- | --- |
 | **What is checked** | The stack itself, not a count. On entry to every function that is in a call cycle (a cycle of calls; `spawn` starts a task on its own stack and closes none), the frame's address is compared with the thread's limit. A function whose own frame is a page or more — large arrays, records of them — is checked whether or not it is in a cycle, and **before** its frame exists: it is entered through a check that the whole frame fits above the limit, since a prologue lays out and probes the frame before any statement runs (v1, Q1-A1-01) |
 | **The limit** | Computed once per thread, at its first check: that frame's address minus three quarters of the smaller of the stack the thread has left below it and 8 MiB. The stack is asked of the thread itself — its own bounds, `RLIMIT_STACK` only where a system will not give them — so a thread C started, calling an export, is budgeted from the stack it has (v1, Q1-A1-04). Task threads are created with 8 MiB, so no thread's budget exceeds its stack. A task on the pool — the default since N106 — has its own `NAZM_TASK_STACK` (256 KiB unless set) and a limit a quarter of the way up it, saved and restored at every switch, so deep recursion in a task meets `N0408` sooner there and is reported the same way |
-| **The stack asked for** (R1b, L14) | `nazm build --stack-size N` (bytes, or `K`, `M`, `G`; 64 KiB to 4 GiB; hosted targets only) runs `main` on a thread of `N` bytes — the process's own stack where that thread cannot start — and makes `N` the stack of every task thread, the default of every pool task's (`NAZM_TASK_STACK` still overrides it), and the size the limit above is computed from in place of 8 MiB. A program that recurses deeply asks for the stack it needs rather than meeting `N0408`. Stable since R1 closed (0.10.0). `nazm run` sizes its threads from `--max-depth` |
+| **The stack asked for** (R1b, L14) | `nazm build --stack-size N` (bytes, or `K`, `M`, `G`; 64 KiB to 4 GiB; hosted targets only) runs `main` on a thread of `N` bytes — the process's own stack where that thread cannot start — and makes `N` the stack of every task thread, the default of every pool task's (`NAZM_TASK_STACK` still overrides it), and the size the limit above is computed from in place of 8 MiB. A program that recurses deeply asks for the stack it needs rather than meeting `N0408`. Stable since R1 closed (0.10.0). `nazm run --interpret` sizes its threads from `--max-depth` |
 | **What a program sees** | `N0408`, *the native call stack is exhausted*, at the function entered, and then the failure unwinds like any other: what the frames own is released, an enclosing `scope` joins its tasks, and the process exits 2 with the diagnostic |
 | **What is guaranteed** | Unbounded recursion meets a check, and so does a frame larger than the stack left. A chain of non-recursive calls between two checks, each frame smaller than a page, is bounded by the program's call graph but its stack is not measured: the guarantee holds while such a chain fits in the quarter kept as headroom (2 MiB at 8 MiB, 64 KiB on a pool task's 256 KiB), and a program whose chain is deeper can still be killed by the operating system |
 | **What is not** | Tail calls are ordinary calls: no tail-call optimisation is performed or promised. Recursion depth is not bounded by the language, and the depth at which `N0408` arrives depends on frame sizes, the backend and the optimisation level |
@@ -1967,7 +1997,7 @@ of exhausting the machine — the mechanism a toolchain built from Nazm runs its
 | **What is counted** | Every byte the program's own code and its runtime ask the allocator for and have not given back — strings, sequences, `Bytes`, closures, channels, tasks' records, a handle table, standard input's buffer — as the bytes asked for, with no allocator's rounding or bookkeeping, so the count is the same on every host. Not counted: a task's stack (its own mapping, sized by *Native recursion*), the program's image and static data, and what C allocates for itself |
 | **Passing it** | An allocation that would take the live count past `N` does not happen: the program writes `nazm: error[N0406]: out of memory: the heap limit of N bytes is reached` (with `N` in bytes) and a newline to standard error and exits with status 2 at once — from whichever task asked, without unwinding, joining or running a `defer`, and without the memory report. If several tasks pass it together, one writes the message. An allocation the host itself refuses below the limit is `N0406` at its call site, as without a limit |
 | **Without one** | Nothing changes: a program built without `--heap-limit` and without the key allocates as before, through the C library directly, and its runtime is the one it always was |
-| **Where** | A hosted native program's. A board's heap is its manifest's arena (*Boards*) and a WebAssembly module's its host's; a library's (`--lib`, `--shared`) is its C host's; and a runtime artifact (`--runtime`) was built without the count — each is refused as a usage error (status 5) when a limit is asked for. `nazm run` has no heap limit: the interpreter's memory is its host's |
+| **Where** | A hosted native program's. A board's heap is its manifest's arena (*Boards*) and a WebAssembly module's its host's; a library's (`--lib`, `--shared`) is its C host's; and a runtime artifact (`--runtime`) was built without the count — each is refused as a usage error (status 5) when a limit is asked for. `nazm run --interpret` has no heap limit: the interpreter's memory is its host's |
 | **What is not promised** | The count includes what the runtime allocates for the program — a growing sequence's spare room, a task's record — so the limit a program needs is measured, not read off its source, and a later runtime may need more or less of it. That a given allocation passes a limit is the same under both native backends at every optimisation level only because they lower the same LIR; a program near its limit is not promised to end at the same point after a change to the runtime |
 
 ### Strings are bytes, and what that commits to
@@ -2170,7 +2200,7 @@ and `Strs`. Nothing else in this section changes: what it says of `Ints` and `St
 | **Identity** | A sequence value is a **handle**. Binding, passing and returning one share the storage; nothing is copied. `let b = a;` makes `b` and `a` the same sequence, and a push through either is visible through both |
 | **Mutation** | `ints_push`, `ints_set` and their `Strs` counterparts change shared storage. There is no immutable sequence and no copy operation |
 | **Length** | `ints_len` / `strs_len`, in elements |
-| **Sum** (N66) | `ints_sum_from(start, v)` (`@std/seq`'s `ints_sum(xs)` is its loop, and is vectorised the same way): `start` plus every element of `v`, left to right, failing with `N0400` exactly where one of those running sums would overflow — even if the total would fit. A native build replaces the loop `while i < ints_len(v) { s = s + ints_get(v, i); i = i + 1; }` (counter from `0`) with `s = ints_sum_from(s, v); i = ints_len(v);`, the failure at the loop's addition; `nazm run` keeps the loop |
+| **Sum** (N66) | `ints_sum_from(start, v)` (`@std/seq`'s `ints_sum(xs)` is its loop, and is vectorised the same way): `start` plus every element of `v`, left to right, failing with `N0400` exactly where one of those running sums would overflow — even if the total would fit. A native build replaces the loop `while i < ints_len(v) { s = s + ints_get(v, i); i = i + 1; }` (counter from `0`) with `s = ints_sum_from(s, v); i = ints_len(v);`, the failure at the loop's addition; `nazm run --interpret` keeps the loop |
 | **Indexing** | `ints_get(a, i)` / `strs_get(a, i)`, failing with `N0405` unless `0 <= i < len`. `ints_set(a, i, v)` has the same bound and returns **the index written** — the language has no unit type, and the index is the answer that is always meaningful |
 | **Appending** | `ints_push(a, v)` returns the **new length** |
 | **Growth failure** | Reported as `N0406` where the implementation can detect it. A failed growth leaves the sequence exactly as it was, never half-resized |
@@ -3171,7 +3201,7 @@ program can write runs at reclamation.
 
 #### What this model does not promise
 
-**The runtime was one operating-system thread per task until N106.** `nazm run` still is: a
+**The runtime was one operating-system thread per task until N106.** `nazm run --interpret` still is: a
 thread per task and a mutex and condition variable per channel. `nazm build`'s programs run their
 tasks on a pool of worker threads by default (§7.107), parking a task that waits instead of its
 worker, with the same mutex-and-condition-variable ring; `NAZM_SCHEDULER=threads` gives the thread
@@ -3580,7 +3610,7 @@ in a function that declares its effects, a `write_file` path computed from a C r
 (`N0372`), exactly as one read from a file is. What C does with an argument is not a Nazm sink —
 it is authorised by the `ForeignCap` the call needed, and outside what a restriction can see.
 
-**Where it runs.** Only in a native build. `nazm run` refuses a program that calls a foreign
+**Where it runs.** Only in a native build. `nazm run --interpret` refuses a program that calls a foreign
 function before running any of it (`N0385`); one that only declares one runs. `nazm build`
 declares each foreign function in every unit that calls it and defines it in none; a missing
 definition is the linker's refusal, reported as a missing `--link` naming the symbols. Both
@@ -3989,7 +4019,7 @@ fn go(f: ForeignCap) -> Int ! { foreign } { each(twice, 3) + c_errno() }
 | **C-layout struct** | `extern "C" struct Name { … }` — fields `Int` (`int64_t`), `Bool` (`bool`), a handle (a pointer) or another C struct, **in declaration order** with C's alignment; any other field `N0381`, type parameters `N0384`, another ABI `N0380`. Passed to C as a `const struct Name *` to a copy made for the call and freed after it. A struct by value, a struct result, unions, arrays and bit-fields do not cross |
 | **Nullability** | A result `-> Db` or `-> Str` promises non-null: a null fails the call with `N0409`, checked before Nazm sees it. `-> Option[Db]` and `-> Option[Str]` make null `None`. An argument is never null; `Option[Db]` as an argument is `N0381` |
 | **`Str` result** | A `const char *` C still owns, copied to its NUL into a `Str` Nazm owns, the moment the call returns. A string the caller must free is bound as a handle and its free function |
-| **`errno`** | `c_errno() -> Int` is what the latest foreign call on this thread left, captured as it returned. It performs `foreign` (a `ForeignCap`); hosted targets only (`N0613` on a freestanding or WebAssembly build); `nazm run` refuses it as it refuses calling C (`N0385`) |
+| **`errno`** | `c_errno() -> Int` is what the latest foreign call on this thread left, captured as it returned. It performs `foreign` (a `ForeignCap`); hosted targets only (`N0613` on a freestanding or WebAssembly build); `nazm run --interpret` refuses it as it refuses calling C (`N0385`) |
 | **Callback** | A foreign parameter of type `fn(…) -> …` over `Int` and `Bool` is a C function pointer. Its argument is an export's name — never a closure or another function (`N0612`); C may call it during the call, after it, and from any thread. A failure in it ends the process (status 2) |
 | **Shared library** | `nazm build --lib --shared FILE -o libNAME.dylib` (or `.so`): exports are its only visible symbols; it names itself `@rpath/NAME` (the soname `NAME` elsewhere); the same header as `--lib` |
 | **Not crossing** | Floating point, integers other than `int64_t`, variadics, by-value structs, closures as callbacks, `dlopen`, ABIs other than `"C"` — each refused by name |

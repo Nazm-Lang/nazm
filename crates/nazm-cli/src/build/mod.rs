@@ -379,4 +379,8 @@ pub(crate) struct Choice<'a> {
     pub(crate) features: &'a [String],
     /// The board `--board` read (Gate 3); the target's built-in one when `None`.
     pub(crate) board: Option<&'a nazm_lir::runtime::board::Board>,
+    /// Built for `nazm run` to execute (R1.5, D11): nothing is said about the build — no path,
+    /// no authority line, no warnings — and a refusal only a native build makes names
+    /// `nazm run --interpret`.
+    pub(crate) run: bool,
 }

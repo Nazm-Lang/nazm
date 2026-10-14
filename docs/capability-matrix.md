@@ -315,6 +315,17 @@ or one with no value is `N0634`. Semantic epoch 77; EXPERIMENTAL until R1.5 clos
 `crates/nazm-cli/tests/shorter_forms.rs` — `main` written first and a caller before its callees,
 the interpreter and both backends agreeing; the refusals by name; four mutants.
 
+**R1.5 (2026-10-15)** · *`nazm run` compiles* (`spec.md`, *`nazm run` compiles*; R1.5 design D11).
+`nazm run` builds the program with Cranelift in process into a private temporary directory, runs it
+with the caller's standard streams and environment, and ends with its status (`128 +` a signal's);
+nothing about the build is printed. `nazm run --interpret` is the interpreter, still the oracle;
+`--max-iterations` and `--max-depth` require it. A refusal only a native build makes (`N0101`,
+`N0357`, `N0358`) is `nazm run`'s, with help naming `--interpret`: neither falls back. Every test that
+meant the interpreter says `--interpret`. `fib(35)`: 5.24 s → 0.17 s warm (`performance.md`).
+EXPERIMENTAL until R1.5 closes. Evidence: `crates/nazm-cli/tests/run_compiled.rs` — the two agree on
+stdout, stderr, the memory report and the status; both refusals, the limits, the temporary
+directory removed; mutants in `xtask/mutations/mutations.toml`.
+
 **R1.5 (2026-10-15)** · *A result type after `:`* (`spec.md`, *Shorter forms*; R1.5 design D1).
 `fn fib(n: Int): Int`, `fn(Int): Int`, a trait method's and a function expression's: the parser
 takes `:` or `->` before a result type, so every implementation reads them alike; `nazm fmt` keeps

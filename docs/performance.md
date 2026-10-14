@@ -3526,3 +3526,22 @@ Toolchains:
 three programs are not a suite, and no aggregate score is derived. Idiomatic programs differ in
 algorithm and library: the `words` column compares each language's ordinary way of writing the
 task, not one algorithm.
+
+## R1.5, D11: `nazm run` compiles — measured 2026-10-15
+
+`nazm run` builds with Cranelift (`--opt-level 2`'s `speed`) and runs the executable; `nazm run
+--interpret` is the interpreter that `nazm run` was until this change, unchanged. Measured on
+`bench/compare/nazm/fib.nz` (`fib(35)`) with a release build of the change, on the Apple M1 Pro
+above, `hyperfine 2.0.0 -N`, five runs after one warm-up:
+
+| command | mean | min–max |
+| --- | ---: | ---: |
+| `nazm run --interpret fib.nz` (before: what `nazm run` did) | 5.239 s | 5.232–5.243 s |
+| `nazm run fib.nz`, the project's object store warm | 0.173 s | 0.169–0.184 s |
+| `nazm run fib.nz`, `.nazm/` removed before each run | 0.741 s | 0.729–0.755 s |
+
+Of the warm 173 ms, the executable itself takes 85 ms and the build — load, check, lower, Cranelift,
+link — about 88 ms; a warm `nazm build --backend cranelift` of the same file takes 85 ms at
+`--opt-level 0` and at `2`, so the faster code costs nothing in the build here. The cold row compiles
+the runtime with `clang` each time; caching that per user (R1.5, D12) is what it waits for. Peak
+memory rises from 6.7 MiB to 38 MiB: the compiler's, not the program's.

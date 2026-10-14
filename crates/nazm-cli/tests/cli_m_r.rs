@@ -54,5 +54,6 @@ mod repository;
 mod resolution;
 mod resolved_units;
 mod resource_regression;
+mod run_compiled;
 mod runtime;
 mod runtime_artifact;
