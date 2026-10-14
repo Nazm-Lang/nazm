@@ -63,11 +63,14 @@ fn modrm(b: ByteBuf, md: Int, reg: Int, rm: Int) {
     b1(b, (md << 6) | ((reg & 7) << 3) | (rm & 7))
 }
 
-/// `[base + disp32]`, with a SIB byte where the base is `rsp` or `r12`.
+/// `[base + disp]` in the shortest form, as an assembler writes it: no displacement where it is
+/// zero (except from `rbp`/`r13`, which need one), eight bits where it fits, else thirty-two;
+/// with a SIB byte where the base is `rsp` or `r12`.
 fn mem(b: ByteBuf, reg: Int, base: Int, disp: Int) {
-    modrm(b, 2, reg, base)
+    let md = if disp == 0 && (base & 7) != 5 { 0 } else if disp >= -128 && disp < 128 { 1 } else { 2 }
+    modrm(b, md, reg, base)
     if (base & 7) == 4 { b1(b, 0x24) }
-    imm32(b, disp)
+    if md == 1 { b1(b, disp) } else if md == 2 { imm32(b, disp) }
 }
 
 fn byte_force(r: Int) -> Bool {
