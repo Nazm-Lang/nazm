@@ -173,3 +173,27 @@ fn the_formatter_lays_out_a_program_without_semicolons_and_keeps_it() {
     let r = nazm(d.path(), &["run", "p.nz"]);
     assert_eq!(r.stdout, "x\n3\n", "{r:?}");
 }
+
+#[test]
+fn a_line_beginning_with_a_paren_or_bracket_is_a_new_statement() {
+    // R1 close (epoch 75): a call's `(` and an index's `[` are on the line of what they apply
+    // to, so the line after `let (a, b) = p` is not `p(b, a)`; and a pattern `let` ends at its
+    // line as any `let` does.
+    differential::agrees(
+        "fn swap(p: (Int, Str)) -> (Str, Int) {
+    let (a, b) = p
+    (b, a)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    let t = swap((1, \"one\"))
+    println(f\"{t.0} {t.1}\")
+    let xs: Ints = [1, 2]
+    [3, 4]
+    println(xs.len())
+    0
+}
+",
+        "one 1\n2\n0",
+    );
+}

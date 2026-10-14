@@ -316,6 +316,17 @@ fn a_comment_stays_on_the_line_it_was_written_on() {
 
 #[test]
 fn formatted_text_parses_to_the_same_program() {
+    // Parsing recurses with the program's shape, so it runs on the stack the parser asks its
+    // callers for (`PARSE_STACK_BYTES`), not a test thread's default.
+    std::thread::Builder::new()
+        .stack_size(nazm_syntax::PARSE_STACK_BYTES)
+        .spawn(formatted_text_parses_to_the_same_program_on_a_parse_stack)
+        .expect("a thread for the parser")
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
+}
+
+fn formatted_text_parses_to_the_same_program_on_a_parse_stack() {
     // The strongest statement available without an AST comparison that ignores spans:
     // the tree has the same shape, the same names and the same literals. Spans differ by
     // construction — moving text is what a formatter does.

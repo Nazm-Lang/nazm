@@ -1,0 +1,49 @@
+// R1's syntax: lines without `;`, `else if`, compound assignment, `let x: T`, block comments,
+// `loop`, `while let`, match guards, short variants and a function with no result
+// (spec: line-breaks, conveniences, short-variants, patterns, no-result, main-ends).
+
+/* A block comment /* nested */ is one comment. */
+enum Shape { Dot, Square(side: Int) }
+
+fn area(s: Shape) -> Int {
+    match s {
+        Shape.Dot => 0,
+        Shape.Square(side: n) if n > 10 => 100,
+        Shape.Square(side: n) => n * n,
+    }
+}
+
+fn grade(n: Int) -> Str {
+    if n >= 90 { "A" } else if n >= 80 { "B" } else { "C" }
+}
+
+fn half(n: Int) -> Option[Int] {
+    if n % 2 == 0 { Some(n / 2) } else { None }
+}
+
+fn report(out: OutCap, what: Str, n: Int) {
+    println(f"{what} {n}")
+}
+
+fn main() {
+    let mut total: Int = 0
+    total += 5
+    total *= 3
+    total -= 1
+    report(out, "total", total)
+    report(out, "dot", area(Shape.Dot))
+    report(out, "small", area(Shape.Square(side: 4)))
+    report(out, "big", area(Shape.Square(side: 11)))
+    println(f"{grade(95)}{grade(85)}{grade(10)}")
+    let mut n = 0
+    loop {
+        n += 1
+        if n == 4 { break }
+    }
+    report(out, "loop", n)
+    let mut x = 40
+    while let Some(h) = half(x) {
+        x = h
+    }
+    report(out, "odd", x)
+}

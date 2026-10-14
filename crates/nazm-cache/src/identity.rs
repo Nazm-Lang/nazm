@@ -355,7 +355,11 @@ use crate::digest::{self, Framed};
 /// `74` — R1, 2026-10-14. One list type (5b.18): `Ints` and `Strs` became `Vec[Int]` and
 /// `Vec[Str]`, so a value of either moved from refused (`N0300`) to accepted where the other is
 /// wanted, and the types diagnostics name changed.
-pub const SEMANTIC_EPOCH: u32 = 74;
+/// `75` — R1, 2026-10-14. A `defer`'s last value moved from refused (`N0300`) to discarded, and a
+/// pattern `let` ended by a line break or `}` from refused to accepted, and a line beginning with `(`
+/// or `[` stopped continuing the previous line's call or index (found writing R1's compatibility
+/// cases).
+pub const SEMANTIC_EPOCH: u32 = 75;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
