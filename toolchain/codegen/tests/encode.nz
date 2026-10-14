@@ -1,0 +1,140 @@
+// The aarch64 encoder held to the system assembler (design D8): prints each encoding the
+// selection uses, as `arm64<TAB>WORD<TAB>ASSEMBLY`, for `tests/encode.sh` to assemble with the
+// platform's `cc` and compare. Registers are chosen to reach every field: x16–x30, `sp`, `zr`.
+
+use "../a64.nz"
+
+/// A word as `llvm-objdump` shows an arm64 instruction: eight hex digits, most significant first.
+fn hex32(w: Int) -> Str {
+    let digits = "0123456789abcdef"
+    let mut s = ""
+    let mut k = 7
+    while k >= 0 {
+        let d = (w >> (4 * k)) & 15
+        s = s + str_slice(digits, d, d + 1)
+        k -= 1
+    }
+    s
+}
+
+fn a(out: Strs, w: Int, asm: Str) {
+    strs_push(out, f"arm64\t{hex32(w)}\t{asm}")
+}
+
+fn arm64(out: Strs) {
+    a(out, movz(9, 0x1234, 1), "movz x9, #0x1234, lsl #16")
+    a(out, movn(10, 0xFFFE, 0), "movn x10, #0xfffe")
+    a(out, movk(11, 0xBEEF, 3), "movk x11, #0xbeef, lsl #48")
+    a(out, mov(9, 28), "mov x9, x28")
+    a(out, mov_w(9, 9), "mov w9, w9")
+    a(out, mov_sp(29, SP), "mov x29, sp")
+    a(out, mov_sp(SP, 29), "mov sp, x29")
+    a(out, add_imm(9, SP, 4095), "add x9, sp, #4095")
+    a(out, sub_imm(SP, SP, 288), "sub sp, sp, #288")
+    a(out, add_imm_lsl12(16, SP, 5), "add x16, sp, #5, lsl #12")
+    a(out, sub_imm_lsl12(SP, SP, 1), "sub sp, sp, #1, lsl #12")
+    a(out, subs_imm(16, 16, 1), "subs x16, x16, #1")
+    a(out, cmp_imm(11, 0), "cmp x11, #0")
+    a(out, add(9, 9, 10), "add x9, x9, x10")
+    a(out, sub(9, 9, 10), "sub x9, x9, x10")
+    a(out, adds(9, 9, 10), "adds x9, x9, x10")
+    a(out, subs(9, 9, 10), "subs x9, x9, x10")
+    a(out, cmp(12, 9), "cmp x12, x9")
+    a(out, cmp_asr(12, 11, 63), "cmp x12, x11, asr #63")
+    a(out, add_ext(16, SP, 17), "add x16, sp, x17")
+    a(out, add_ext(9, SP, 16), "add x9, sp, x16")
+    a(out, neg(10, 10), "neg x10, x10")
+    a(out, mul(9, 9, 10), "mul x9, x9, x10")
+    a(out, smulh(12, 9, 10), "smulh x12, x9, x10")
+    a(out, umulh(12, 9, 10), "umulh x12, x9, x10")
+    a(out, sdiv(11, 9, 10), "sdiv x11, x9, x10")
+    a(out, udiv(11, 9, 10), "udiv x11, x9, x10")
+    a(out, msub(9, 11, 10, 9), "msub x9, x11, x10, x9")
+    a(out, madd(13, 9, 12, 13), "madd x13, x9, x12, x13")
+    a(out, and(9, 9, 10), "and x9, x9, x10")
+    a(out, orr(9, 9, 10), "orr x9, x9, x10")
+    a(out, eor(9, 9, 10), "eor x9, x9, x10")
+    a(out, lslv(9, 9, 10), "lsl x9, x9, x10")
+    a(out, lsrv(9, 9, 10), "lsr x9, x9, x10")
+    a(out, asrv(9, 9, 10), "asr x9, x9, x10")
+    a(out, rorv(9, 9, 10), "ror x9, x9, x10")
+    a(out, rorv_w(9, 9, 10), "ror w9, w9, w10")
+    a(out, neg_w(10, 10), "neg w10, w10")
+    a(out, lsr_imm(14, 11, 6), "lsr x14, x11, #6")
+    a(out, lsl1(13, 10), "lsl x13, x10, #1")
+    a(out, asr63(10, 9), "asr x10, x9, #63")
+    a(out, adc(10, 10, 12), "adc x10, x10, x12")
+    a(out, adcs(10, 10, 12), "adcs x10, x10, x12")
+    a(out, sbc(10, 10, 12), "sbc x10, x10, x12")
+    a(out, sbcs(ZR, 10, 12), "sbcs xzr, x10, x12")
+    a(out, cset(9, NE), "cset x9, ne")
+    a(out, cset(11, VS), "cset x11, vs")
+    a(out, cset(9, LO), "cset x9, lo")
+    a(out, csel(9, 9, 10, NE), "csel x9, x9, x10, ne")
+    a(out, sxtb(9, 9), "sxtb x9, w9")
+    a(out, sxth(9, 9), "sxth x9, w9")
+    a(out, sxtw(9, 9), "sxtw x9, w9")
+    a(out, sbfx1(9, 9), "sbfx x9, x9, #0, #1")
+    a(out, uxtb(9, 9), "uxtb w9, w9")
+    a(out, uxth(9, 9), "uxth w9, w9")
+    a(out, and1_w(9, 1), "and w9, w1, #1")
+    a(out, clz(9, 9), "clz x9, x9")
+    a(out, rbit(9, 9), "rbit x9, x9")
+    a(out, rev(9, 9), "rev x9, x9")
+    a(out, rev_w(9, 9), "rev w9, w9")
+    a(out, rev16_w(9, 9), "rev16 w9, w9")
+    a(out, cnt8b(16, 16), "cnt v16.8b, v16.8b")
+    a(out, addv8b(16, 16), "addv b16, v16.8b")
+    a(out, ldst_scaled(8, true, 9, SP, 32760), "ldr x9, [sp, #32760]")
+    a(out, ldst_scaled(8, false, 9, SP, 8), "str x9, [sp, #8]")
+    a(out, ldst_scaled(4, true, 9, 10, 4), "ldr w9, [x10, #4]")
+    a(out, ldst_scaled(2, false, 9, 10, 6), "strh w9, [x10, #6]")
+    a(out, ldst_scaled(1, true, 9, 10, 4095), "ldrb w9, [x10, #4095]")
+    a(out, ldst_scaled(8, false, ZR, SP, 0), "str xzr, [sp]")
+    a(out, ldst_unscaled(8, true, 9, 10, -8), "ldur x9, [x10, #-8]")
+    a(out, ldst_unscaled(4, false, 9, 10, 3), "stur w9, [x10, #3]")
+    a(out, ldst_unscaled(1, true, 9, 10, -256), "ldurb w9, [x10, #-256]")
+    a(out, ldst_fp(8, true, 16, SP, 16), "ldr d16, [sp, #16]")
+    a(out, ldst_fp(4, true, 0, SP, 8), "ldr s0, [sp, #8]")
+    a(out, ldst_fp(8, true, 3, 16, 0), "ldr d3, [x16]")
+    a(out, ldr_x(9, 9, 0), "ldr x9, [x9]")
+    a(out, ldr_post(8, 11, 10, 8), "ldr x11, [x10], #8")
+    a(out, str_post(8, 11, 9, 8), "str x11, [x9], #8")
+    a(out, ldr_post(1, 11, 10, 1), "ldrb w11, [x10], #1")
+    a(out, str_post(2, ZR, 9, 2), "strh wzr, [x9], #2")
+    a(out, str_post(4, 11, 9, 4), "str w11, [x9], #4")
+    a(out, push_frame(), "stp x29, x30, [sp, #-16]!")
+    a(out, pop_frame(), "ldp x29, x30, [sp], #16")
+    a(out, ret(), "ret")
+    a(out, brk(1), "brk #1")
+    a(out, blr(17), "blr x17")
+    a(out, fmov_to_fp(true, 16, 9), "fmov d16, x9")
+    a(out, fmov_to_fp(false, 16, 9), "fmov s16, w9")
+    a(out, fmov_from_fp(true, 9, 16), "fmov x9, d16")
+    a(out, fmov_from_fp(false, 9, 16), "fmov w9, s16")
+    a(out, fmov_to_fp(true, 0, ZR), "fmov d0, xzr")
+    a(out, fadd(true, 16, 16, 17), "fadd d16, d16, d17")
+    a(out, fsub(false, 16, 16, 17), "fsub s16, s16, s17")
+    a(out, fmul(true, 16, 16, 17), "fmul d16, d16, d17")
+    a(out, fdiv(false, 16, 16, 17), "fdiv s16, s16, s17")
+    a(out, fneg(true, 16, 16), "fneg d16, d16")
+    a(out, fabs(false, 16, 16), "fabs s16, s16")
+    a(out, fsqrt(true, 16, 16), "fsqrt d16, d16")
+    a(out, frintm(true, 16, 16), "frintm d16, d16")
+    a(out, frintp(false, 16, 16), "frintp s16, s16")
+    a(out, frintz(true, 16, 16), "frintz d16, d16")
+    a(out, fcmp(true, 16, 17), "fcmp d16, d17")
+    a(out, fcmp(false, 16, 17), "fcmp s16, s17")
+    a(out, scvtf(true, 16, 9), "scvtf d16, x9")
+    a(out, ucvtf(false, 16, 9), "ucvtf s16, x9")
+    a(out, fcvtzs(true, 9, 16), "fcvtzs x9, d16")
+    a(out, fcvtzu(false, 9, 16), "fcvtzu x9, s16")
+    a(out, fcvt_s_to_d(16, 16), "fcvt d16, s16")
+    a(out, fcvt_d_to_s(16, 16), "fcvt s16, d16")
+}
+
+fn main(o: OutCap) {
+    let lines = strs_new()
+    arm64(lines)
+    for l in lines { println(l) }
+}
