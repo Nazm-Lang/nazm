@@ -20,6 +20,11 @@ fn builtins(x: Float64) -> Str {
     f"{float_sqrt(x)} {float_abs(-x)} {float_floor(x)} {float_ceil(x)} {float_trunc(-x)} {float_round(x)} {float_min(x, 2.0)} {float_max(x, 2.0)}"
 }
 
+fn rounding(x: Float64) -> Str {
+    let y = Float32(x)
+    f"{float_floor(x)} {float_ceil(x)} {float_trunc(x)} {float_floor(y)} {float_ceil(y)} {float_trunc(y)}"
+}
+
 fn bits(x: Float64, y: Float32) -> Str {
     let b = float64_to_bits(x)
     let c = float32_to_bits(y)
@@ -42,6 +47,9 @@ fn main() {
     println(conv(-0.5))
     println(builtins(6.25))
     println(bits(3.14159, Float32(2.5)))
+    let cases = [-0.5, 0.5, -1.5, 1.5, -0.0, 2.0, -3.0, 123456.75, -98765.25, 4503599627370497.0, 1.0e300,
+            -1.0e300, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0, 8388609.5, -0.999999]
+    for i in 0..17 { println(rounding(cases[i])) }
     println(mixed(2, 0.5, 3, Float32(1.5), 4, 0.25))
     let xs = [1.0, 2.5, -3.75]
     let mut t = 0.0

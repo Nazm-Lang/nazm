@@ -138,10 +138,11 @@ through `@std/bytebuf`.
   track uses no Docker. Imported symbols are reached through the GOT on every target. On Linux
   aarch64 a stack argument takes at least eight bytes (AAPCS64); Apple's packing applies only
   to the Apple targets.
-- **x86-64 floor, ceil and truncate** use SSE4.1's `roundsd`/`roundss`: in the baseline of
-  `x86_64-apple-darwin` (Penryn) but not of `x86_64-unknown-linux-gnu` (x86-64 v1), where LLVM
-  calls `floor`/`ceil`/`trunc`. Open: a call to the C library there, which needs an import the
-  unit's LIR does not declare.
+- **x86-64 floor, ceil and truncate** use SSE2 alone (convert to an integer and back, adjust by
+  one, keep the sign; a magnitude of 2^52 or more, an infinity or a NaN passes through), since
+  SSE4.1's `roundsd` is not in x86-64 v1's baseline; one sequence for both x86-64 targets, so
+  the Rosetta suite runs the code the Linux target gets. Likewise `popcnt` is the bit-parallel
+  count and `clz`/`ctz` are `bsr`/`bsf` with the zero case selected.
 - **D10 (line tables) is blocked on its input**: `nazm lir --ops` lowers without debug
   information, so no `loc` or `at` line reaches the generator. Asked of the coordinator: a
   `--debug` option on `nazm lir` that lowers as `nazm build --debug` does.
