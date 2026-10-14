@@ -116,6 +116,36 @@ fn main(out: OutCap) -> Int ! {io} {
 }
 
 #[test]
+fn strings_add_and_a_loop_of_adds_stays_linear() {
+    let line = differential::agrees(
+        "fn main(out: OutCap) -> Int ! {io} {
+    let name = \"world\"
+    println(\"Hello, \" + name + \"!\")
+    let mut s = \"\"
+    let mut i = 0
+    while i < 20000 {
+        s += \"x\"
+        i += 1
+    }
+    let mut t = \"\"
+    t = t + \"ab\"
+    println(f\"{str_len(s)} {t}\")
+    0
+}
+",
+        "Hello, world!\n20000 ab\n0",
+    );
+    let allocated: u64 = line
+        .split("strings allocated=")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(u64::MAX);
+    // Doubling: about log2(20000) strings, not one per append.
+    assert!(allocated < 64, "{line}");
+}
+
+#[test]
 fn what_the_conveniences_do_not_make_valid_is_refused() {
     for (src, code, why) in [
         (
@@ -127,6 +157,11 @@ fn what_the_conveniences_do_not_make_valid_is_refused() {
             "fn main() -> Int { let v: Vec[Int] = [1, \"a\"]; 0 }\n",
             "N0300",
             "an element that is not the sequence's",
+        ),
+        (
+            "fn main() -> Int { let s = \"a\" + 1; 0 }\n",
+            "N0304",
+            "`+` on a `Str` and a number",
         ),
         (
             "fn main() -> Int { let v = vec_new(); 0 }\n",
