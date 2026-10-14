@@ -1592,6 +1592,7 @@ already had, and means exactly that.
 | --- | --- |
 | `let x: T = e` | `e` checked against `T` (`N0300` otherwise), and the binding is a `T`: `let o: Option[Int] = None` |
 | a generic call whose arguments leave a type parameter open, where its result is wanted as a type | the parameter settled from that type: `let v: Vec[Str] = vec_new()`, `vec_new()` as a function's `Vec[Int]` result. The arguments decide first; where neither does, `N0354` |
+| `[a, b, c]` where a `Vec[T]`, an `Ints` or a `Strs` is wanted | that sequence, made and pushed in order — `[]` an empty one — each element checked against its element type; anywhere else it is an array, as before |
 | `/* … */` | a comment, which may span lines and nests; one the file ends inside is `N0007` |
 | `loop { … }` | `while true { … }` |
 | `while let P = e { … }` | `while true { match e { P => { … }, _ => { break } } }`: `e` evaluated afresh each time |
