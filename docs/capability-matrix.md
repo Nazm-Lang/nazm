@@ -336,6 +336,20 @@ EXPERIMENTAL until R1.5 closes. Evidence: `crates/nazm-cli/tests/run_compiled.rs
 stdout, stderr, the memory report and the status; both refusals, the limits, the temporary
 directory removed; mutants in `xtask/mutations/mutations.toml`.
 
+**R1.5 (2026-10-15)** · *The user cache* (`docs/architecture.md` §7.113; R1.5 design D12). The
+runtime's units and each `@std` or prelude module's own unit are filed in a user cache —
+`~/Library/Caches/nazm` on macOS, `$XDG_CACHE_HOME/nazm` or `~/.cache/nazm` elsewhere,
+`NAZM_CACHE_DIR` when that is set, `NAZM_USER_CACHE_DIR` above both (empty: off) — under the project
+store's `nazm.object/1` keys, so a new project compiles only its own units; the project's own
+objects stay in its `.nazm/`. No new key: everything that changes an object's bytes was already in
+it. `--no-cache` and board builds use neither store; cargo-started tests turn it off
+(`.cargo/config.toml`). EXPERIMENTAL until R1.5 closes. Evidence:
+`crates/nazm-cli/tests/user_cache.rs` — a second project reuses the runtime and `@std/text` under
+both backends and files only its own two units; its executable is byte-identical to a `--no-cache`
+build's; `-O2`, a heap limit and another target reuse nothing, and a 64K limit is never taken from a
+1G build's objects or the reverse; deleting the user cache changes nothing; the platform default,
+`NAZM_CACHE_DIR` alone and the empty variable; three mutants.
+
 **R1.5 (2026-10-15)** · *A result type after `:`* (`spec.md`, *Shorter forms*; R1.5 design D1).
 `fn fib(n: Int): Int`, `fn(Int): Int`, a trait method's and a function expression's: the parser
 takes `:` or `->` before a result type, so every implementation reads them alike; `nazm fmt` keeps

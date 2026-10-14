@@ -39,7 +39,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use nazm_cache::{LlvmInput, ObjectArtifact, ObjectFound, ObjectKey, ObjectStore};
+use nazm_cache::{LlvmInput, ObjectArtifact, ObjectFound, ObjectKey};
 
 use crate::backend::{Backend, Outcome, DRIVER};
 use crate::{emit, exit};
@@ -48,7 +48,10 @@ mod link;
 mod lower;
 mod objects;
 mod preflight;
+mod stores;
 mod timing;
+
+use stores::Stores;
 
 use self::preflight::{preflight, Settled};
 pub(crate) use preflight::{board_for, board_of, read_board, switch_target};
@@ -140,8 +143,10 @@ pub(crate) fn run(
     // Objects a backend can key before generating them are looked up by that key, so a
     // reused unit is not generated at all. Keyed apart from clang's: a Cranelift object is a
     // function of its MIR and Cranelift's settings, not of any C compiler.
-    let clif_store: Option<ObjectStore> =
-        cache.then(|| crate::derived::objects(source_root.path()));
+    let clif_store = Stores {
+        project: cache.then(|| crate::derived::objects(source_root.path())),
+        user: cache.then(crate::derived::user_objects).flatten(),
+    };
     let clif_key = |k: &str| {
         ObjectKey::of(
             LlvmInput::of(k.as_bytes()),

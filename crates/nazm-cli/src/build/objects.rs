@@ -18,7 +18,7 @@ pub(super) fn compiled(
     freestanding: bool,
     source_root: &nazm_service::root::SourceRoot,
     chosen: &(dyn nazm_lir::backend::Backend + Sync),
-    clif_store: &Option<ObjectStore>,
+    clif_store: &Stores,
     clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
     cleanup: &dyn Fn(bool),
     map: &nazm_span::SourceMap,
@@ -38,10 +38,14 @@ pub(super) fn compiled(
     //
     // Nor does a board build (N63): its stack bound reads the frame sizes clang reports while
     // compiling, which a reused object would not report.
-    let store: Option<ObjectStore> = backend
-        .settled()
-        .filter(|_| !freestanding)
-        .map(|_| crate::derived::objects(source_root.path()));
+    //
+    // The runtime's and the standard library's units are filed in the user cache (R1.5, D12),
+    // under the same keys; the project's own in its `.nazm/`.
+    let usable = backend.settled().filter(|_| !freestanding).is_some();
+    let stores = Stores {
+        project: usable.then(|| crate::derived::objects(source_root.path())),
+        user: usable.then(crate::derived::user_objects).flatten(),
+    };
     let mut frames = std::collections::BTreeMap::new();
 
     let mut tally = Native {
@@ -83,7 +87,10 @@ pub(super) fn compiled(
                     if artefact.instance {
                         tally.instances_compiled += 1;
                     }
-                    if let (Some(store), Some(k)) = (clif_store.as_ref(), artefact.key.as_deref()) {
+                    if let (Some(store), Some(k)) = (
+                        clif_store.for_unit(artefact.shared),
+                        artefact.key.as_deref(),
+                    ) {
                         let entry = ObjectArtifact::of(
                             LlvmInput::of(k.as_bytes()),
                             nazm_cache::BackendIdentity::of(chosen.id().name(), &chosen.version()),
@@ -105,7 +112,7 @@ pub(super) fn compiled(
         let key = backend
             .settled()
             .map(|s| ObjectKey::of(LlvmInput::of(ir.as_bytes()), s.identity, s.config));
-        if let (Some(store), Some(key)) = (store.as_ref(), key) {
+        if let (Some(store), Some(key)) = (stores.for_unit(artefact.shared), key) {
             match store.get(&key) {
                 ObjectFound::Hit(bytes) => {
                     // Materialised into this build's own directory. A cached entry is an
@@ -171,9 +178,12 @@ pub(super) fn compiled(
         // stored is what was linked. A store that will not take an entry is not a reason
         // to fail a build: the disk is full, or the tree is read-only, and the program is
         // fine either way.
-        if let (Some(store), Some(key), Some(settled), Ok(bytes)) =
-            (store.as_ref(), key, backend.settled(), std::fs::read(&obj))
-        {
+        if let (Some(store), Some(key), Some(settled), Ok(bytes)) = (
+            stores.for_unit(artefact.shared),
+            key,
+            backend.settled(),
+            std::fs::read(&obj),
+        ) {
             let entry = ObjectArtifact::of(
                 LlvmInput::of(ir.as_bytes()),
                 settled.identity,
