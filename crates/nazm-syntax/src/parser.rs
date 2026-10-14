@@ -890,6 +890,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Whether a result type follows: `:` (R1.5, D1) or `->`, which is still read until 1.0.
+    fn at_result(&self) -> bool {
+        self.at(&TokenKind::Colon) || self.at(&TokenKind::Arrow)
+    }
+
+    /// The `:` or `->` before a result type (R1.5, D1): either is taken, and `nazm fmt` writes
+    /// `:`. Reported as a missing `:` when neither is there.
+    fn expect_result(&mut self, context: &str) -> Option<Span> {
+        if self.at(&TokenKind::Arrow) {
+            return self.expect(&TokenKind::Arrow, context);
+        }
+        self.expect(&TokenKind::Colon, context)
+    }
+
     fn expect(&mut self, kind: &TokenKind, context: &str) -> Option<Span> {
         if self.at(kind) {
             let s = self.peek_span();
@@ -1728,7 +1742,7 @@ impl<'a> Parser<'a> {
         };
         let params = self.param_list("after the method name")?;
         let ret = self.checkpoint();
-        self.expect(&TokenKind::Arrow, "before the return type")?;
+        self.expect_result("before the return type")?;
         let return_type = self.type_name()?;
         self.wrap(ret, SyntaxKind::RetType);
         let effects = self.effect_set()?;
@@ -2175,13 +2189,13 @@ impl<'a> Parser<'a> {
         // `Int` at a span of no width — which is how the checker knows none was written — its
         // body's last value is discarded and it returns `0`, and its calls are statements. A
         // foreign declaration still writes one, as C's signature has one.
-        let no_result = !self.at(&TokenKind::Arrow) && foreign_abi.is_none();
+        let no_result = !self.at_result() && foreign_abi.is_none();
         let return_type = if no_result {
             let at = self.previous_end();
             TypeName::plain("Int", Span::new(self.file, at, at))
         } else {
             let ret = self.checkpoint();
-            self.expect(&TokenKind::Arrow, "before the return type")?;
+            self.expect_result("before the return type")?;
             let return_type = self.type_name()?;
             self.wrap(ret, SyntaxKind::RetType);
             return_type
@@ -2604,7 +2618,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.expect(&TokenKind::RParen, "to close a function type's parameters")?;
-        self.expect(&TokenKind::Arrow, "before a function type's result")?;
+        self.expect_result("before a function type's result")?;
         let ret = self.type_name()?;
         let effects = self.effect_set()?;
         let end = effects.as_ref().map_or(ret.span, |e| e.span);
@@ -2631,7 +2645,7 @@ impl<'a> Parser<'a> {
         let fn_span = self.peek_span();
         self.bump();
         let params = self.param_list("after `fn` in a closure")?;
-        self.expect(&TokenKind::Arrow, "before a closure's result type")?;
+        self.expect_result("before a closure's result type")?;
         let return_type = self.type_name()?;
         let effects = self.effect_set()?;
         // A closure's `return` is the closure's, which always has a result type.

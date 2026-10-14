@@ -72,7 +72,7 @@ trait_item = [ visibility ] , "trait" , IDENT , "{" , { trait_method } , "}" ;
 
 (* @example trait Size { fn size(self: Self) -> Int; } fn main() -> Int { 0 } *)
 (* @example trait Size { fn size(self: Self) -> Int; fn big(self: Self) -> Bool { self.size() > 9 } } fn main() -> Int { 0 } *)
-trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , ( ";" | block ) ;
+trait_method = "fn" , IDENT , "(" , [ parameters ] , ")" , result , [ effect_set ] , ( ";" | block ) ;
 
 (* `impl Trait for Type`: every method of the trait without a default body, once, with
  * `Self` written as the type. `for` is a word here and nowhere else. At most one impl of a
@@ -112,8 +112,14 @@ qualifier = IDENT , "::" ;
 (* @example fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
 (* @example pub fn add(a: Int, b: Int) -> Int { a + b } fn main() -> Int { add(1, 2) } *)
 (* @example fn first[A, B](a: A, b: B) -> A { a } fn main() -> Int { first(1, "x") } *)
+(* @example fn add(a: Int, b: Int): Int { a + b } fn main(): Int { add(1, 2) } *)
 function = [ visibility ] , "fn" , IDENT , [ type_parameters ] , "(" , [ parameters ] , ")" ,
-           "->" , type , [ effect_set ] , { contract } , block ;
+           [ result ] , [ effect_set ] , { contract } , block ;
+
+(* A result type is written after `:` (R1.5, D1), as a parameter's is; `->` is still read until
+   1.0. A function that writes none returns nothing (R1, 5b.2). *)
+(* @example fn add(a: Int, b: Int): Int { a + b } fn main() -> Int { add(1, 2) } *)
+result = ( ":" | "->" ) , type ;
 
 (* A contract clause (N87): `requires` is checked as the function is entered, `ensures` as it
  * returns, on every path, with `result` the value returned. Both are IDENTs recognised only
@@ -135,7 +141,7 @@ contract = ( "requires" | "ensures" ) , expression ;
 (* @example extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add"; fn main() -> Int { 0 } *)
 (* @example pub extern "C" fn is_even(n: Int) -> Bool = "c_is_even"; fn main() -> Int { 0 } *)
 foreign_function = [ visibility ] , IDENT , STRING , "fn" , IDENT , "(" , [ parameters ] , ")" ,
-                   "->" , type , "=" , STRING , ";" ;
+                   result , "=" , STRING , ";" ;
 
 (* The effects a function declares it may exercise: after the return type, a `!` and a
  * set in braces. `! {}` is the empty set — the function is pure, and its body may call
@@ -283,7 +289,7 @@ array_type = "[" , type , ";" , ( INTEGER | IDENT ) , "]" ;
  *)
 (* @example fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) } fn main() -> Int { 0 } *)
 (* @example fn run(c: IoCap, f: fn(IoCap) -> Int ! { io }) -> Int ! { io } { f(c) } fn main() -> Int { 0 } *)
-function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , "->" , type , [ effect_set ] ;
+function_type = "fn" , "(" , [ type , { "," , type } ] , ")" , result , [ effect_set ] ;
 
 (* Square brackets, and one spelling: there are no angle brackets and no indexing, so
  * `name[` can only begin type arguments. Empty brackets parse — `Vec[]` is a type written
@@ -506,7 +512,7 @@ array = "[" , expression , ( { "," , expression } , [ "," ] | ";" , expression )
  * it, and its type says what it does. One may be written in a generic function (R1b).
  *)
 (* @example fn main() -> Int { let k = 2; let f = fn(x: Int) -> Int { x * k }; f(3) } *)
-closure = "fn" , "(" , [ parameters ] , ")" , "->" , type , [ effect_set ] , block ;
+closure = "fn" , "(" , [ parameters ] , ")" , result , [ effect_set ] , block ;
 
 (* Type arguments are written where inference cannot find them from the arguments —
  * `vec_new[Int]()` — or where a reader wants them visible. The expected result type

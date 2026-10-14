@@ -298,6 +298,13 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *A result type after `:`* (`spec.md`, *Shorter forms*; R1.5 design D1).
+`fn fib(n: Int): Int`, `fn(Int): Int`, a trait method's and a function expression's: the parser
+takes `:` or `->` before a result type, so every implementation reads them alike; `nazm fmt` keeps
+the form written until R2. Semantic epoch 76; EXPERIMENTAL until R1.5 closes. Evidence:
+`crates/nazm-cli/tests/shorter_forms.rs` — the interpreter and both backends agree, `->` beside `:`;
+two mutants.
+
 **R1 (2026-10-14)** · *Speed: the failure bit, and the failure paths laid out cold*
 (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.8; `docs/architecture.md` §7.106, *The failure
 bit*). A Nazm function returns whether it failed beside its result — `{ T, i1 }` under LLVM, a
