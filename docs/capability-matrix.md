@@ -318,6 +318,15 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *The program's authority reported* (`spec.md`, *What `main` holds, and how it
+ends*; 5b.1). `nazm build` writes `authority: …` on standard error after a build of a program with a
+`main` — each capability `main` holds, given by option C or written, and what it reaches — and
+`nazm inspect` gives the same as `authority` (`crates/nazm-cli/src/authority.rs`, read from `main`'s
+signature as parsed). 5b.5, effects inferred for a function that is not `pub`, was found to be the
+rule since N36 and is pinned. Evidence: `crates/nazm-cli/tests/main_ends.rs` — a given `OutCap` and a
+written `IoCap` and `NetCap`, from `build` and `inspect`; a private function with no effect set
+called by a pure one, and another module's undeclared one refused (`N0366`). Two mutants.
+
 **R1 (2026-10-14)** · *Match guards* (`spec.md`, *Patterns*, Guards; 5b.17). `P if G => E`: the
 parser reads the guard into `MatchArm::guard`; the checker types it as a `Bool` (`N0301`) with the
 pattern's names bound and leaves a guarded arm out of exhaustiveness and reachability; Core IR

@@ -157,6 +157,10 @@ pub(super) fn published(
     if choice.timings {
         eprintln!("{}", clock.report());
     }
+    // What the program may touch (R1, option C), on standard error with the build's other words.
+    if let Some(held) = crate::authority::of_main(map.text(nazm_span::FileId::ROOT)) {
+        eprintln!("{}", crate::authority::line(&held));
+    }
     println!("{}", output.display());
     ExitCode::from(exit::OK)
 }
