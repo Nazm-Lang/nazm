@@ -37,6 +37,12 @@ else
   for d in "$ROOT"/tests/compat/v1/run/*/; do
     [ -f "$d/main.nz" ] && inputs+=("$d/main.nz")
   done
+  for f in "$ROOT"/tests/compat/v1/trap/*.nz "$HERE"/tests/programs/*.nz \
+           "$ROOT"/bench/compare/nazm/*.nz "$ROOT"/bench/programs/*.nz \
+           "$ROOT"/examples/*.nz "$ROOT"/examples/tour/*.nz "$ROOT"/examples/std/*.nz \
+           "$ROOT"/crates/nazm-cli/tests/transfers/*.nz; do
+    [ -f "$f" ] && [ "$f" != "$ROOT/bench/compare/nazm/fib.nz" ] && inputs+=("$f")
+  done
   while IFS= read -r f; do inputs+=("$f"); done < <(find "$ROOT/corpus" -name '*.nz' | sort)
 fi
 
