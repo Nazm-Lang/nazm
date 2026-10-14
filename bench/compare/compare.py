@@ -158,6 +158,12 @@ def find_tools():
             break
     tools["java"] = os.path.join(java, "java") if java else None
     tools["javac"] = os.path.join(java, "javac") if java else None
+    # The .NET SDK as `dotnet-install.sh` puts it, where nothing adds it to PATH.
+    if tools["dotnet"] is None and os.path.exists(os.path.expanduser("~/.dotnet/dotnet")):
+        tools["dotnet"] = os.path.expanduser("~/.dotnet/dotnet")
+        # An app built there looks for its runtime here, and the SDK sends nothing home.
+        os.environ["DOTNET_ROOT"] = os.path.expanduser("~/.dotnet")
+        os.environ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
     gnat = shutil.which("gnatmake") or first_glob(
         "~/.local/share/alire/toolchains/gnat_native_*/bin/gnatmake")
     tools["gnatmake"] = gnat
@@ -325,7 +331,7 @@ def main():
             "rustc": tool_version("rustc", ["rustc", "--version"]),
             "zig": tool_version("zig", ["zig", "version"]),
             "java": tool_version("java", [tools["java"] or "java", "-version"]),
-            "dotnet": tool_version("dotnet", ["dotnet", "--version"]),
+            "dotnet": tool_version("dotnet", [tools["dotnet"] or "dotnet", "--version"]),
             "python3": tool_version("python3", ["python3", "--version"]),
             "ruby": tool_version("ruby", ["ruby", "--version"]),
             "node": tool_version("node", ["node", "--version"]),
