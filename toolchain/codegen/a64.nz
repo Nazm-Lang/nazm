@@ -79,6 +79,18 @@ pub fn neg_w(d: Int, m: Int) -> Int { 0x4B000000 | rdm(d, ZR, m) }
 pub fn lsr_imm(d: Int, n: Int, shift: Int) -> Int { 0xD340FC00 | (shift << 16) | rd(d, n) }
 /// `orr d, d, #1 << bit` is awkward to encode for any bit; `bit_set` uses `movz` and `orr`.
 
+// Carries, for 128-bit arithmetic.
+pub fn adc(d: Int, n: Int, m: Int) -> Int { 0x9A000000 | rdm(d, n, m) }
+pub fn adcs(d: Int, n: Int, m: Int) -> Int { 0xBA000000 | rdm(d, n, m) }
+pub fn sbc(d: Int, n: Int, m: Int) -> Int { 0xDA000000 | rdm(d, n, m) }
+pub fn sbcs(d: Int, n: Int, m: Int) -> Int { 0xFA000000 | rdm(d, n, m) }
+/// `madd d, n, m, a`: `a + n * m`.
+pub fn madd(d: Int, n: Int, m: Int, a: Int) -> Int { 0x9B000000 | (a << 10) | rdm(d, n, m) }
+/// `asr d, n, #63`: the sign in every bit.
+pub fn asr63(d: Int, n: Int) -> Int { 0x937FFC00 | rd(d, n) }
+/// `lsl d, n, #1`.
+pub fn lsl1(d: Int, n: Int) -> Int { 0xD37FF800 | rd(d, n) }
+
 // Conditional.
 pub fn cset(d: Int, cond: Int) -> Int { 0x9A9F07E0 | ((cond ^ 1) << 12) | d }
 pub fn csel(d: Int, n: Int, m: Int, cond: Int) -> Int { 0x9A800000 | (cond << 12) | rdm(d, n, m) }

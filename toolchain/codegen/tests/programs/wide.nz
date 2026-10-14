@@ -1,0 +1,65 @@
+// `Int128` and `UInt128` (R1b, L13b): a register pair through arithmetic, shifts, comparisons,
+// calls, records and the stack; and a `match` on negative integers and a large frame.
+
+struct W {
+    a: Int128,
+    tag: Int,
+}
+
+fn ops(a: Int128, b: Int128) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a % b} {a < b} {a <= b} {a > b} {a >= b} {a == b} {a & b} {a | b} {a ^ b}"
+}
+
+fn uops(a: UInt128, b: UInt128) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a < b} {a > b} {a >> 70} {a << 3} {a >> 1}"
+}
+
+fn shifts(a: Int128) -> Str {
+    f"{a << 1} {a << 63} {a << 64} {a << 100} {a >> 1} {a >> 63} {a >> 64} {a >> 127}"
+}
+
+fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, x: Int128, y: Int128) -> Int128 {
+    Int128(a + b + c + d + e + f + g) + x * y
+}
+
+fn pick(n: Int) -> Str {
+    match n {
+        -5 => "minus five",
+        -1 => "minus one",
+        0 => "zero",
+        7 => "seven",
+        1000000 => "a million",
+        _ => "other",
+    }
+}
+
+fn big_frame(n: Int) -> Int {
+    let a: [Int; 2000] = [0; 2000]
+    let mut b = a
+    let mut i = 0
+    while i < 2000 {
+        b[i] = i * n
+        i += 1
+    }
+    b[1999] + b[3] + a[5]
+}
+
+fn main() {
+    let big = Int128(9223372036854775807) * Int128(1000)
+    println(ops(big, Int128(-77)))
+    println(ops(Int128(-5), Int128(3)))
+    println(uops(UInt128(18446744073709551615) * UInt128(4096), UInt128(12345)))
+    println(shifts(Int128(-123456789)))
+    println(shifts(big))
+    println(many(1, 2, 3, 4, 5, 6, 7, big, Int128(3)))
+    let w = W(a: big, tag: 4)
+    println(f"{w.a} {w.tag}")
+    let v = vec_new[W]()
+    v.push(w)
+    v.push(W(a: Int128(-1), tag: 9))
+    println(f"{v[1].a + v[0].a} {v.len()}")
+    let ns: Ints = [-5, -1, 0, 7, 1000000, 3]
+    for n in ns { println(pick(n)) }
+    println(big_frame(3))
+    println(f"{Int(big / Int128(1000))} {UInt64(UInt128(7) << 64 >> 64)}")
+}

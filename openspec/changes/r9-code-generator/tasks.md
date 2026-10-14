@@ -4,24 +4,27 @@
 
 ## 2. Integers, control flow, calls — `aarch64-apple-darwin`, Mach-O
 
-- [ ] 2.1 The LIR text reader: symbols, data, functions, declarations, instructions, terminators
-- [ ] 2.2 The aarch64 encoder: moves, integer arithmetic and comparisons, loads and stores, branches,
+- [x] 2.1 The LIR text reader: symbols, data, functions, declarations, instructions, terminators
+- [x] 2.2 The aarch64 encoder: moves, integer arithmetic and comparisons, loads and stores, branches,
       calls and returns
-- [ ] 2.3 Frame-slot selection with an AAPCS64 frame (D3 stage A, D4, D5)
-- [ ] 2.4 The Mach-O object writer: sections, symbols, relocations (D6)
-- [ ] 2.5 `tests/run.sh`: `bench/compare/nazm/fib.nz` agrees with LLVM, `fib(35)` included
+- [x] 2.3 Frame-slot selection with an AAPCS64 frame (D3 stage A, D4, D5)
+- [x] 2.4 The Mach-O object writer: sections, symbols, relocations (D6)
+- [x] 2.5 `tests/run.sh`: `bench/compare/nazm/fib.nz` agrees with LLVM, `fib(35)` included
 
 ## 3. The failure bit and the runtime
 
-- [ ] 3.1 Nazm functions return their failure bit beside the result; `fail`; `failed` results
-- [ ] 3.2 Calls into the runtime and C: narrow arguments, `Bit` results, more than eight arguments
-- [ ] 3.3 Data with addresses in it; imported data through the GOT; `unreachable`
+- [x] 3.1 Nazm functions return their failure bit beside the result; `fail`; `failed` results
+- [x] 3.2 Calls into the runtime and C: narrow arguments, `Bit` results, more than eight arguments
+- [x] 3.3 Data with addresses in it; imported data through the GOT; `unreachable`
 
 ## 4. Strings and sequences
 
-- [ ] 4.1 Slots, `copy`, `zero`, `switch`, `select`, indirect calls, every integer width
-- [ ] 4.2 Floats and conversions; `I128`
-- [ ] 4.3 `tests/compat/v1/run/` and `corpus/` in the suite, every difference fixed or reported
+- [x] 4.1 Slots, `copy`, `zero`, `switch`, `select`, indirect calls, every integer width
+- [x] 4.2 Floats and conversions; `I128`
+- [x] 4.3 `tests/compat/v1/run/` and `corpus/` in the suite, every difference fixed or reported
+      (`corpus/` holds no program yet; the suite also runs `tests/compat/v1/trap/`, `bench/`,
+      `examples/`, `crates/nazm-cli/tests/transfers/` and the generator's own
+      `tests/programs/`: 106 agree, 0 differ, 0 refused)
 - [ ] 4.4 Stage B: the linear-scan allocator; the performance report against LLVM
 
 ## 5. Line tables
