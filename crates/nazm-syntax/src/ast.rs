@@ -715,6 +715,9 @@ pub struct Let {
     /// Immutable by default: mutable-by-default with an opt-out would put the annotation
     /// on the rarer case and make the common one silent.
     pub mutable: bool,
+    /// `let x: T = …` (R1, 5b.16): the type written, which the value is checked against and the
+    /// binding has; `None` where none is written.
+    pub ty: Option<TypeName>,
     pub value: Expr,
     pub span: Span,
 }

@@ -345,7 +345,9 @@ use crate::digest::{self, Framed};
 /// `os_spawn_with`, process ids, groups, waits and peak memory, `os_lstat`, `os_chmod`,
 /// `os_realpath`, `os_mkdtemp` and file locks — moved from refused to accepted; a method no trait
 /// gives, read as a function by name, and `xs[i]`/`xs[i] = v` on a sequence, moved from refused
-/// (`N0605`, `N0624`) to accepted.
+/// (`N0605`, `N0624`) to accepted; `let x: T`, a generic call settled by the type its result is
+/// wanted as, block comments, `loop`, `while let` and an impl without a trait moved from refused
+/// to accepted, and an unclosed block comment to refused (`N0007`).
 pub const SEMANTIC_EPOCH: u32 = 73;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker

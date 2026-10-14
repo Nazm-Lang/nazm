@@ -298,6 +298,16 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1 (2026-10-14)** · *Conveniences for the first program* (`spec.md`, *Conveniences for the
+first program*; 5b.16 and 5b.17, in part). `let x: T = e` checks `e` against `T`; a generic call's
+type parameter its arguments leave open is unified with the type its result is wanted as
+(`check_generic_call`'s `expected`); `/* … */` nests, `N0007` when unclosed, and the formatter keeps
+what follows one on its line; the parser reads `loop` as `while true`, `while let` as a `match` with
+a `break` arm, and an impl without a trait as functions named `<type>_<method>`. Evidence:
+`crates/nazm-cli/tests/conveniences.rs` — all of them in one program, alike everywhere, nothing
+live; the refusals that stand. Seven mutants. Left of 5b.16–5b.17: `[1, 2, 3]` as a `Vec`, match
+guards, `?` on `Option`.
+
 **R1 (2026-10-14)** · *Methods and indexes by name* (`spec.md`, *Methods and indexes by name*;
 5b.15). Where no trait gives the receiver's type the method, `x.m(args)` is checked as the call
 `<prefix>_m(x, args)` keyed by the method's name, its prefix the type's name in lower case (and

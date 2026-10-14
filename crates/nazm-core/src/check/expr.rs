@@ -249,6 +249,7 @@ impl Checker<'_> {
                         args,
                         *span,
                         &sig,
+                        expected,
                     );
                     return Completion::Value(ret);
                 }
