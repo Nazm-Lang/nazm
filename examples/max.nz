@@ -14,6 +14,6 @@ fn clamp(value: Int, lo: Int, hi: Int) -> Int {
 fn main(out: OutCap) -> Int {
     let x = 17;
     let y = 25;
-    print(str_concat(int_to_str(clamp(max(x, y), 0, 100)), "\n"));
+    print(str_concat(int_to_str(clamp(max(x, y), 0, 100)), str_from_byte(10)));
     0
 }

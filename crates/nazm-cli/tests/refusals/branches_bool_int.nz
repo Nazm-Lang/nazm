@@ -15,6 +15,6 @@ enum F {
 fn f(n: Int) -> Int { n }
 fn main() -> Int {
     let c = true;
-    if c { true } else { 1 };
+    let v = if c { true } else { 1 };
     0
 }

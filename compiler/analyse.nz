@@ -3274,6 +3274,9 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
     // name — a definition in a module identified by its key, never a name alone and never
     // a position. `None` when the compilation has no prelude, and then nothing is one.
     let core_result = record_owned(rnames, rowner, core, "Result");
+    // The prelude's `Option`, whose `?` (R1, 5b.17) belongs to a function returning one: in
+    // any other it is `N0361`, as the reference says. This subset gives it no `?` of its own.
+    let core_option = record_owned(rnames, rowner, core, "Option");
     let rfirst = tb.first;
     let rcount = tb.count;
     let rfname = tb.fname;
@@ -3559,10 +3562,15 @@ pub fn check_all(nk: Ints, nar: Ints, nst: Ints, nen: Ints, ntx: Strs, naux: Int
                 let q = to - 1;
                 let is_result = applies_core_result(tb, core_result, ot);
                 if is_result == false {
-                    if ot != t_unknown() {
-                        report(diags, "N0360", q, q + 1,
-                                str_concat(str_concat("`?` needs a `Result`, but this is `",
-                                show_type(ot, rnames)), "`"));
+                    if applies_core_result(tb, core_option, ot) {
+                        report(diags, "N0361", q, q + 1,
+                                "`?` on an `Option` can only be used in a function that returns an `Option`");
+                    } else {
+                        if ot != t_unknown() {
+                            report(diags, "N0360", q, q + 1,
+                                    str_concat(str_concat("`?` needs a `Result`, but this is `",
+                                    show_type(ot, rnames)), "`"));
+                        }
                     }
                     ints_push(ts, t_unknown());
                     ints_set(ntype, k, t_unknown());
