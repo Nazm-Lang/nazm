@@ -103,6 +103,17 @@ the reference's time there is almost all Rust's `{:#?}` and the span compaction,
 row compares like with like. The budgets `rewrite-in-nazm` 1.4 asks for are set from these when
 the checker exists to measure (3.3).
 
+**D13 — The checker is written against `syntax.nz`'s tree and knows where it stops.** Agreed
+with the coordinator (2026-10-15): the new checker reads `syntax.nz`'s tree, and `parse.nz` and
+`analyse.nz` retire together once it carries what they do. It is a port of `nazm-core/src/check`
+and `nazm-sema`, stage for stage as `check_reusing` runs them (type names, field types, layouts,
+trait methods, declarations, re-exports, constants, bodies, provenance, the `main` rules). While
+it is partial it must never report a diagnostic the reference would not: a compilation that uses
+anything the Nazm checker does not carry yet gets none of its diagnostics, and `diagnose` says on
+standard error what it stopped at. `run.sh check` then counts the inputs the checker carries, and
+among them every difference is a defect, not a gap; coverage grows group by group (`tasks.md` 3,
+4), most frequent codes first — on 2026-10-15 N0304, N0201, N0300, N0619, N0369, N0372 by inputs.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
