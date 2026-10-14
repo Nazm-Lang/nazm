@@ -1,0 +1,33 @@
+enum Shape { Circle(r: Int), Rect(w: Int, h: Int), Dot, }
+struct Point { x: Int, y: Int, }
+struct Twice { n: Int, }
+
+// A function of a capitalised name is still called by it, a record of that name or not.
+fn Twice(n: Int) -> Int { n * 2 }
+
+fn area(s: Shape) -> Int {
+    match s { Circle(r) => 3 * r * r, Rect(w, h) => w * h, Dot => 0, }
+}
+
+fn describe(s: Shape) -> Str {
+    match s {
+        Shape.Circle(r) if r > 5 => "big",
+        Circle(_) => "circle",
+        Shape.Rect(w: w, h: _) => f"rect {w}",
+        Dot => "dot",
+    }
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let p = Point(1, 2)
+    // A built-in type's `Name(x)` is still a conversion, never a construction.
+    let b = Int(UInt8(3))
+    let shapes: Vec[Shape] = [Circle(2), Shape.Rect(3, 4), Dot, Circle(b)]
+    let mut total = p.x * 100 + p.y * 10 + Twice(1)
+    for s in shapes {
+        total += area(s)
+        print(f"{describe(s)} ")
+    }
+    print(f"{total}\n")
+    0
+}

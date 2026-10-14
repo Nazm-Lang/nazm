@@ -1,0 +1,14 @@
+use "@std/hash";
+use "@std/hashmap";
+
+fn total(m: Map[Str, Int]) -> Int { m["a"] + m["b"] }
+
+fn main(out: OutCap): Int ! {io} {
+    let k = "c"
+    let m = {"a": 1, "b": 2, k: 3}
+    let ages: Map[Str, Int] = {"x": 40}
+    m["d"] = 4
+    let squares = {1: 1, 2: 4, 3: 9}
+    print(f"{total(m)} {hashmap_len(m)} {ages["x"]} {squares[3]} {hashmap_len(squares)}\n")
+    0
+}

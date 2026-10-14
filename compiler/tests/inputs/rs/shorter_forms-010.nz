@@ -1,0 +1,1 @@
+fn main() { let f = |a, b| a < b }

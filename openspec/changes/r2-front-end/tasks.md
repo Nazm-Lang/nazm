@@ -5,8 +5,8 @@
 - [x] 1.3 The reference dumper `compiler/tests/refdump/` (tokens, tree)
 - [x] 1.4 `compiler/tests/run.sh`: builds the drivers with the reference under the heap limit, compares
       every input, prints `N agree, M differ` per comparison
-- [x] 1.5 `compiler/tests/host-check.sh`: the reference checks the compiler; C1 emits C2's IR; C1
-      compiles and runs the conformance corpus (D6)
+- [x] 1.5 `compiler/tests/host-check.sh`: the reference checks the compiler and the drivers (D6; no
+      stage runs on the host)
 
 ## 2. Lexer and parser complete
 
@@ -48,4 +48,7 @@
 
 ## 6. R1.5's forms (after the coordinator declares them final)
 
-- [ ] 6.1 `:` result types, `= e` bodies, `|a, b|` closures, map literals, positional payloads
+- [x] 6.0 Parsed as main's reference parses them (D1–D5): `:` result types, `= e` bodies and
+      `inferred_result`, `|a, b|` closures, map literals, fields and payloads by position, variants
+      without their enum, `use std.json`
+- [ ] 6.1 Checked: R1.5's forms in the checker; D6–D8 once final

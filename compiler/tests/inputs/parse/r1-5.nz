@@ -1,0 +1,29 @@
+use std.json;
+use std.;
+enum Shape { Circle(r: Int), Square(side: Int), Dot, }
+struct Point { x: Int, y: Int, }
+fn add(a: Int, b: Int): Int = a + b
+fn twice(x: Int) = x * 2;
+fn area(s: Shape): Int {
+    match s {
+        Circle(r) => r * r,
+        Square(side: q) => q,
+        Dot => 0,
+        Shape.Circle(5) => 1,
+    }
+}
+fn main(): Int {
+    let m = {"a": 1, "b": 2, "c": add(1, 2)};
+    let n = {1: true};
+    let f = |a, b| a < b;
+    let g = |n: Int| { n + 1 };
+    let h = || 7;
+    let k = fn(x: Int): Int { x };
+    let p = Point(1, 2);
+    let q = Point(x: 1, 2);
+    let s = Shape.Circle(3);
+    let t: fn(Int): Int = k;
+    let u = { x: 1 };
+    let bad = |1| 2;
+    0
+}

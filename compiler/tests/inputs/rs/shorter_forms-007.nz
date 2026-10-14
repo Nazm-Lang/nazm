@@ -1,0 +1,3 @@
+fn a(n: Int) = b(n)
+fn b(n: Int) = a(n)
+fn main() { }

@@ -1,0 +1,3 @@
+fn a(n: Int): Int { n }
+fn b(n: Int) -> Int { n }
+fn main() { println(a(1) + b(2)) }

@@ -1,0 +1,2 @@
+fn r(n: Int) = if n < 1 { 0 } else { r(n - 1) }
+fn main() { }

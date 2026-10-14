@@ -574,6 +574,15 @@ fn expect(p: Px, k: Int, context: Str) -> Int {
     0 - 1
 }
 
+// Whether a result type follows: `:` (R1.5, D1) or `->`, still read until 1.0.
+fn at_result(p: Px) -> Bool { at(p, k_colon()) || at(p, k_arrow()) }
+
+// The `:` or `->` before a result type (R1.5, D1), reported as a missing `:` when neither is there.
+fn expect_result(p: Px, context: Str) -> Int {
+    if at(p, k_arrow()) { return expect(p, k_arrow(), context); }
+    expect(p, k_colon(), context)
+}
+
 fn max_nesting() -> Int { 512 }
 
 fn too_deep(p: Px) -> Int {
@@ -767,6 +776,7 @@ fn push_item(p: Px, pr: Prog, kind: Int, item: Int, extra: Int) -> Int {
                 fa(f, "foreign", sx_none(t));
                 fa(f, "export", sx_none(t));
                 fa(f, "method_of", sx_none(t));
+                fa(f, "inferred_result", sx_bool(t, false));
                 fa(f, "span", sx_field(t, m, "span"));
                 ints_push(pr.functions, mk_struct(t, "Function", f));
             }
@@ -1013,13 +1023,30 @@ fn import_inner(p: Px) -> Int {
     let mut start = expect(p, k_use(), "to start an import");
     if start < 0 { return 0 - 1; }
     if pub_span >= 0 { start = join(t, pub_span, start); }
-    let path_span = peek_span(p);
+    let mut path_span = peek_span(p);
     let pi = advance(p);
-    if kat(p, pi) != k_str() {
-        report(p, "N0100", path_span, found_msg(p, "expected a quoted path", pi), "", "an import is written `use \"other.nz\";`");
-        return 0 - 1;
+    let mut path = tat(p, pi);
+    if kat(p, pi) == k_ident() && path == "std" && at(p, k_dot()) {
+        // `use std.json` (R1.5, D7): a standard module by its dotted path, `use "@std/json"`.
+        let segments = strs_new();
+        while eat(p, k_dot()) {
+            let seg_span = peek_span(p);
+            let si = advance(p);
+            if kat(p, si) != k_ident() {
+                report(p, "N0100", seg_span, found_msg(p, "expected a standard module's name after `.`", si), "", "");
+                return 0 - 1;
+            }
+            strs_push(segments, tat(p, si));
+            path_span = join(t, path_span, seg_span);
+        }
+        path = str_concat("@std/", str_join(segments, "/"));
+    } else {
+        if kat(p, pi) != k_str() {
+            report(p, "N0100", path_span, found_msg(p, "expected a quoted path", pi), "",
+                    "an import is written `use \"other.nz\";`, or `use std.json;` for a standard module");
+            return 0 - 1;
+        }
     }
-    let path = tat(p, pi);
     let mut alias = sx_none(t);
     let mut has_alias = false;
     let mut alias_span = 0 - 1;
@@ -1252,7 +1279,7 @@ fn trait_method(p: Px) -> Int {
     }
     let params = param_list(p, "after the method name");
     if params < 0 { return 0 - 1; }
-    if expect(p, k_arrow(), "before the return type") < 0 { return 0 - 1; }
+    if expect_result(p, "before the return type") < 0 { return 0 - 1; }
     let return_type = type_name(p);
     if return_type < 0 { return 0 - 1; }
     let effects = effect_set(p);
@@ -1553,12 +1580,12 @@ fn function(p: Px) -> Int {
             ints_push(params, mk_struct(t, "Param", f));
         }
     }
-    let no_result = at(p, k_arrow()) == false && foreign == false;
+    let no_result = at_result(p) == false && foreign == false;
     let mut return_type = 0 - 1;
     if no_result {
         return_type = type_plain(t, "Int", point(t, previous_end(p)));
     } else {
-        if expect(p, k_arrow(), "before the return type") < 0 { return 0 - 1; }
+        if expect_result(p, "before the return type") < 0 { return 0 - 1; }
         return_type = type_name(p);
         if return_type < 0 { return 0 - 1; }
     }
@@ -1592,11 +1619,16 @@ fn function(p: Px) -> Int {
     let contracts = contracts(p);
     if contracts < 0 { return 0 - 1; }
     let header_recovered = flag(p, s_poisoned());
+    // `= e` (R1.5, D2): the body is that expression; with no result type written, the result
+    // type is the expression's, which the checker infers.
+    let expression_body = at(p, k_eq()) && sx_is_some(t, export) == false;
+    let inferred_result = expression_body && no_result;
     let outer = g(p, s_no_result());
-    setf(p, s_no_result(), no_result);
-    let mut b = block(p);
+    setf(p, s_no_result(), no_result && expression_body == false);
+    let mut b = 0 - 1;
+    if expression_body { b = expression_body_block(p); } else { b = block(p); }
     sv(p, s_no_result(), outer);
-    if b >= 0 && no_result { b = returning_nothing(t, b); }
+    if b >= 0 && no_result && expression_body == false { b = returning_nothing(t, b); }
     let mut body = sx_none(t);
     if b >= 0 {
         if flag(p, s_poisoned()) == false { body = mk_some(t, b); }
@@ -1606,8 +1638,21 @@ fn function(p: Px) -> Int {
     let mut span_end = sx_field(t, return_type, "span");
     if sx_is_some(t, body) { span_end = sx_field(t, sx_unwrap(t, body), "span"); }
     setf(p, s_drop(), header_recovered);
-    function_node(t, name, name_span, pub_span, type_params, effect_params, params, return_type, effects,
-            contracts, body, sx_none(t), export, join(t, start, span_end))
+    let f = function_node(t, name, name_span, pub_span, type_params, effect_params, params, return_type, effects,
+            contracts, body, sx_none(t), export, join(t, start, span_end));
+    if inferred_result { sx_set(t, f, "inferred_result", sx_bool(t, true)); }
+    f
+}
+
+// `= e` after a signature (R1.5, D2): a block whose value is `e`, ended where a statement ends —
+// a line break, or a `;`, which is taken.
+fn expression_body_block(p: Px) -> Int {
+    let t = p.t;
+    bump(p);
+    let e = expr(p);
+    if e < 0 { return 0 - 1; }
+    eat(p, k_semi());
+    block_node(t, empty_list(t), mk_some(t, e), expr_span(t, e))
 }
 
 fn function_node(t: Tree, name: Str, name_span: Int, pub_span: Int, type_params: Ints, effect_params: Ints, params: Ints,
@@ -1627,6 +1672,7 @@ fn function_node(t: Tree, name: Str, name_span: Int, pub_span: Int, type_params:
     fa(f, "foreign", foreign);
     fa(f, "export", export);
     fa(f, "method_of", sx_none(t));
+    fa(f, "inferred_result", sx_bool(t, false));
     fa(f, "span", span);
     mk_struct(t, "Function", f)
 }
@@ -1855,7 +1901,7 @@ fn fn_type(p: Px) -> Int {
         if eat(p, k_comma()) == false { break; }
     }
     if expect(p, k_rparen(), "to close a function type's parameters") < 0 { return 0 - 1; }
-    if expect(p, k_arrow(), "before a function type's result") < 0 { return 0 - 1; }
+    if expect_result(p, "before a function type's result") < 0 { return 0 - 1; }
     let ret = type_name(p);
     if ret < 0 { return 0 - 1; }
     let effects = effect_set(p);
@@ -1883,7 +1929,7 @@ fn closure(p: Px) -> Int {
     bump(p);
     let params = param_list(p, "after `fn` in a closure");
     if params < 0 { return 0 - 1; }
-    if expect(p, k_arrow(), "before a closure's result type") < 0 { return 0 - 1; }
+    if expect_result(p, "before a closure's result type") < 0 { return 0 - 1; }
     let return_type = type_name(p);
     if return_type < 0 { return 0 - 1; }
     let effects = effect_set(p);
@@ -1898,6 +1944,126 @@ fn closure(p: Px) -> Int {
     fa(f, "params", params);
     fa(f, "return_type", return_type);
     fa(f, "effects", opt_effects(t, effects));
+    fa(f, "body", body);
+    fa(f, "fn_span", fn_span);
+    fa(f, "span", join(t, fn_span, sx_field(t, body, "span")));
+    mk_struct(t, "Closure", f)
+}
+
+// Whether the `{` here begins a map literal (R1.5, D5): a first key — a literal or a name —
+// followed by `:`, which no block can begin with.
+fn map_literal_ahead(p: Px) -> Bool {
+    let k = kat(p, pos(p) + 1);
+    let key = k == k_str() || k == k_int() || k == k_wide() || k == k_float() || k == k_true() || k == k_false() || k == k_ident();
+    key && kat(p, pos(p) + 2) == k_colon()
+}
+
+fn call_expr(t: Tree, callee: Str, callee_span: Int, args: Ints, span: Int) -> Int {
+    call_node(t, 0 - 1, callee, callee_span, 0 - 1, args, span)
+}
+
+// `{k: v, …}` (R1.5, D5), read as the block that builds it:
+// `{ let map#literal = hashmap_single(k1, v1); hashmap_set(map#literal, k2, v2); …; map#literal }`.
+fn map_literal(p: Px) -> Int {
+    let t = p.t;
+    let name = "map#literal";
+    let open = peek_span(p);
+    bump(p);
+    let keys = ints_new();
+    let values = ints_new();
+    let mut deepest = 0;
+    while at(p, k_rbrace()) == false && at(p, k_eof()) == false {
+        let key = expr(p);
+        if key < 0 { return 0 - 1; }
+        if expect(p, k_colon(), "between a map literal's key and its value") < 0 { return 0 - 1; }
+        let value = expr(p);
+        if value < 0 { return 0 - 1; }
+        deepest = imax(deepest, child(p));
+        ints_push(keys, key);
+        ints_push(values, value);
+        if eat(p, k_comma()) == false { break; }
+    }
+    let close = expect(p, k_rbrace(), "to close the map literal");
+    if close < 0 { return 0 - 1; }
+    if built(p, deepest + 1) == false { return 0 - 1; }
+    if ints_len(keys) == 0 { return 0 - 1; }
+    let span = join(t, open, close);
+    let k1 = ints_get(keys, 0);
+    let v1 = ints_get(values, 0);
+    let ks1 = expr_span(t, k1);
+    let single = call_expr(t, "hashmap_single", point(t, sx_s(t, ks1)), two(k1, v1), join(t, ks1, expr_span(t, v1)));
+    let l = fs();
+    fa(l, "name", sx_str(t, name));
+    fa(l, "name_span", point(t, sx_s(t, open)));
+    fa(l, "mutable", sx_bool(t, false));
+    fa(l, "ty", sx_none(t));
+    fa(l, "value", single);
+    fa(l, "span", span);
+    let stmts = one(mk_tuple(t, "Let", one(mk_struct(t, "Let", l))));
+    let mut i = 1;
+    while i < ints_len(keys) {
+        let k = ints_get(keys, i);
+        let v = ints_get(values, i);
+        let ks = expr_span(t, k);
+        let vs = expr_span(t, v);
+        let args = one(var_expr(t, name, point(t, sx_s(t, vs))));
+        ints_push(args, k);
+        ints_push(args, v);
+        ints_push(stmts, mk_tuple(t, "Expr", one(call_expr(t, "hashmap_set", point(t, sx_s(t, ks)), args, join(t, ks, vs)))));
+        i = i + 1;
+    }
+    block_expr(t, block_node(t, mk_list(t, stmts), mk_some(t, var_expr(t, name, point(t, sx_s(t, close)))), span))
+}
+
+// `|a, b| e`, `|n: Int| { … }` and `|| e` (R1.5, D3): unwritten types are `_` at a span of no
+// width, the checker's to take from the function type expected.
+fn short_closure(p: Px) -> Int {
+    let t = p.t;
+    let fn_span = peek_span(p);
+    let params = ints_new();
+    if eat(p, k_pipepipe()) == false {
+        bump(p);
+        while at(p, k_pipe()) == false && at(p, k_eof()) == false {
+            let name_span = peek_span(p);
+            let ni = advance(p);
+            if kat(p, ni) != k_ident() {
+                report(p, "N0100", name_span, found_msg(p, "expected a closure parameter's name", ni), "", "");
+                return 0 - 1;
+            }
+            let mut ty = 0 - 1;
+            if eat(p, k_colon()) {
+                ty = type_name(p);
+                if ty < 0 { return 0 - 1; }
+            } else {
+                ty = type_plain(t, "_", point(t, sx_e(t, name_span)));
+            }
+            let f = fs();
+            fa(f, "name", sx_str(t, tat(p, ni)));
+            fa(f, "name_span", name_span);
+            fa(f, "ty", ty);
+            fa(f, "span", join(t, name_span, sx_field(t, ty, "span")));
+            ints_push(params, mk_struct(t, "Param", f));
+            if eat(p, k_comma()) == false { break; }
+        }
+        if expect(p, k_pipe(), "to close a closure's parameters") < 0 { return 0 - 1; }
+    }
+    let return_type = type_plain(t, "_", point(t, previous_end(p)));
+    let outer = g(p, s_no_result());
+    sv(p, s_no_result(), 0);
+    let mut body = 0 - 1;
+    if at(p, k_lbrace()) {
+        body = block(p);
+    } else {
+        let e = expr(p);
+        if e >= 0 { body = block_node(t, empty_list(t), mk_some(t, e), expr_span(t, e)); }
+    }
+    sv(p, s_no_result(), outer);
+    if body < 0 { return 0 - 1; }
+    if built(p, child(p) + 1) == false { return 0 - 1; }
+    let f = fs();
+    fa(f, "params", mk_list(t, params));
+    fa(f, "return_type", return_type);
+    fa(f, "effects", sx_none(t));
     fa(f, "body", body);
     fa(f, "fn_span", fn_span);
     fa(f, "span", join(t, fn_span, sx_field(t, body, "span")));
@@ -2976,6 +3142,13 @@ fn method_call(p: Px, qualifier: Int, receiver: Int, method: Str, method_span: I
 fn field_init(p: Px) -> Int {
     let t = p.t;
     let name_span = peek_span(p);
+    // A value alone (R1.5, D4): a positional field, named by the checker in declaration order.
+    if label_at(p, pos(p)) == false {
+        let value = expr(p);
+        if value < 0 { return 0 - 1; }
+        let vs = expr_span(t, value);
+        return field_init_node(t, "", point(t, sx_s(t, vs)), value, vs);
+    }
     let ni = advance(p);
     if kat(p, ni) != k_ident() {
         report(p, "N0100", name_span, found_msg(p, "expected a field name", ni), "",
@@ -3156,6 +3329,19 @@ fn pattern_one(p: Px) -> Int {
             let fields = mk_list(t, one(pattern_field(t, short_variant_label(name), open, inner)));
             return variant_pattern_node(t, 0 - 1, ty, span, name, span, fields, join(t, span, close));
         }
+        // `Circle(r)` and `Dot` (R1.5, D4): a capitalised name is a variant of the value's own
+        // enum, written without it.
+        if capitalised(name) && name != "None" && short_variant_ty(name) == "" {
+            advance(p);
+            let mut vfields = empty_list(t);
+            let mut vclose = span;
+            if at(p, k_lparen()) {
+                vfields = pattern_fields(p);
+                if vfields < 0 { return 0 - 1; }
+                vclose = g(p, s_r1());
+            }
+            return variant_pattern_node(t, 0 - 1, "", span, name, span, vfields, join(t, span, vclose));
+        }
         if name == "None" {
             advance(p);
             return variant_pattern_node(t, 0 - 1, "Option", span, name, span, empty_list(t), span);
@@ -3232,6 +3418,14 @@ fn pattern_fields(p: Px) -> Int {
     let fields = ints_new();
     while at(p, k_rparen()) == false && at(p, k_eof()) == false {
         let name_span = peek_span(p);
+        // A payload pattern by position (R1.5, D4).
+        if label_at(p, pos(p)) == false {
+            let pp = pattern(p);
+            if pp < 0 { return 0 - 1; }
+            ints_push(fields, pattern_field(t, "", point(t, sx_s(t, pattern_span(t, pp))), pp));
+            if eat(p, k_comma()) == false { break; }
+            continue;
+        }
         let ni = advance(p);
         if kat(p, ni) != k_ident() {
             report(p, "N0100", name_span, found_msg(p, "expected a payload field name", ni), "",
@@ -3461,7 +3655,10 @@ fn ident_primary(p: Px, name0: Str, span0: Int) -> Int {
     }
     let i = pos(p);
     let variant = at(p, k_dot()) && kat(p, i + 1) == k_ident() && kat(p, i + 2) == k_lparen();
-    let unlabelled = variant && kat(p, i + 3) != k_rparen() && label_at(p, i + 3) == false;
+    // `Shape.Circle(2)` (R1.5, D4): a capitalised name and a capitalised variant are a variant with
+    // its payload by position, not a method call.
+    let unlabelled = variant && kat(p, i + 3) != k_rparen() && label_at(p, i + 3) == false
+            && (capitalised(name) && capitalised(tat(p, i + 1))) == false;
     if unlabelled {
         if targs >= 0 {
             report(p, "N0100", span, str_concat(str_concat("type arguments cannot be written on `", name), "` before a method call"), "",
@@ -3778,6 +3975,7 @@ fn primary_inner(p: Px) -> Int {
         if expect(p, k_rparen(), "to close the group") < 0 { return 0 - 1; }
         return inner;
     }
+    if k == k_lbrace() && map_literal_ahead(p) { return map_literal(p); }
     if k == k_lbrace() {
         let b = block(p);
         if b < 0 { return 0 - 1; }
@@ -3786,6 +3984,7 @@ fn primary_inner(p: Px) -> Int {
     }
     if k == k_ident() { return ident_primary(p, peek_text(p), span); }
     if k == k_fn() { return closure(p); }
+    if k == k_pipe() || k == k_pipepipe() { return short_closure(p); }
     if k == k_match() {
         advance(p);
         return match_expr(p, span);

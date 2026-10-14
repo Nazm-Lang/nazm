@@ -1,0 +1,16 @@
+use "@std/io";
+
+fn main(io: IoCap) -> Int ! { io } {
+    let v = vec_new[Str]();
+    vec_push(v, arg(0));
+    println(str_concat("arg: ", vec_get(v, 0)));
+    match io_stdin_read_line(io) {
+        Result.Ok(value: o) => match o {
+            Option.Some(value: s) => print(f"read {s}\n"),
+            Option.None() => print("end\n"),
+        },
+        Result.Err(error: e) => print("error\n"),
+    }
+    eprintln("to stderr");
+    7
+}

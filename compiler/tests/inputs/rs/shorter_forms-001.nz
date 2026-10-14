@@ -1,0 +1,22 @@
+trait Shape { fn area(self: Self): Int; fn name(self: Self): Str { "shape" } }
+struct Sq { side: Int, }
+impl Shape for Sq { fn area(self: Sq): Int { self.side * self.side } }
+
+fn fib(n: Int): Int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn apply(f: fn(Int): Int, x: Int): Int { f(x) }
+
+fn old(n: Int) -> Int { n + 1 }
+
+fn parse(s: Str): Result[Int, Str] {
+    if s == "" { Err("empty") } else { Ok(str_len(s)) }
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let twice = fn(n: Int): Int { n * 2 }
+    let k = match parse("abc") { Ok(n) => n, Err(e) => 0 }
+    print(f"{fib(15)} {apply(twice, 21)} {Sq(side: 3).area()} {Sq(side: 1).name()} {old(1)} {k}\n")
+    0
+}

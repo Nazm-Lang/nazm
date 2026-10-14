@@ -1,0 +1,2 @@
+pub fn p(n: Int) = n
+fn main() { }

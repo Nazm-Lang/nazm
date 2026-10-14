@@ -1,0 +1,3 @@
+trait T { fn m(self: Self): Int; }
+impl T for Int { fn m(self: Int) = self }
+fn main() { }
