@@ -118,3 +118,30 @@ through `@std/bytebuf`.
 - Whether the generator becomes `nazm build --backend nazm` before R8, beside LLVM and Cranelift,
   or only at cut-over (the coordinator's call at integration).
 - Stage B's performance target relative to LLVM `-O0`, set when stage A's numbers are measured.
+
+## As built (2026-10-15)
+
+- **Files.** `toolchain/codegen/`: `lir.nz` (the reader), `common.nz` (the code buffer and
+  relocations, value classes, frame layout, the stage-B allocator), `a64.nz` and `x64.nz` (the
+  encoders), `sel.nz` and `sel_x64.nz` (selection), `macho.nz` and `elf.nz` (the writers),
+  `main.nz` (`nzcg [--target TRIPLE] LIR OUTDIR`). Tests in `tests/`: `run.sh` (D8's
+  differential suite), `encode.sh` (D8's encoder check), `elf.sh` (D11's structural check),
+  `perf.sh` (D3's report) and `programs/`.
+- **D3 stage B** allocates into callee-saved registers only (x19–x28 on aarch64; rbx, r12–r15
+  on x86-64), saved and restored by the frame. No call can clobber an allocated value, so the
+  scratch and argument registers stay the selection's and its templates did not change: a name
+  with a register is moved to and from it where stage A loaded and stored its slot. `i128`
+  values stay in slots.
+- **D4 on x86-64**: the failure bit is in rdx after an integer result, rax after a float or no
+  result, rcx after an `i128` — LLVM's `RetCC_X86Common` order for `{T, i1}`.
+- **D11 ELF** objects are checked, not run: this host has no Linux linker or kernel and the
+  track uses no Docker. Imported symbols are reached through the GOT on every target. On Linux
+  aarch64 a stack argument takes at least eight bytes (AAPCS64); Apple's packing applies only
+  to the Apple targets.
+- **x86-64 floor, ceil and truncate** use SSE4.1's `roundsd`/`roundss`: in the baseline of
+  `x86_64-apple-darwin` (Penryn) but not of `x86_64-unknown-linux-gnu` (x86-64 v1), where LLVM
+  calls `floor`/`ceil`/`trunc`. Open: a call to the C library there, which needs an import the
+  unit's LIR does not declare.
+- **D10 (line tables) is blocked on its input**: `nazm lir --ops` lowers without debug
+  information, so no `loc` or `at` line reaches the generator. Asked of the coordinator: a
+  `--debug` option on `nazm lir` that lowers as `nazm build --debug` does.
