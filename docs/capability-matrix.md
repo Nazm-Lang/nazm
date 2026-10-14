@@ -201,7 +201,7 @@ current account.
 ### 1. Syntax, parser, CST — VERIFIED (the reference parser, N76)
 
 **R1d (2026-10-14)** · *A bounded heap: `--heap-limit`* (`spec.md`, *A bounded heap*;
-`openspec/changes/r1-language-for-the-rewrite`, D5). `nazm build --heap-limit N` (bytes or
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D5). `nazm build --heap-limit N` (bytes or
 `K`/`M`/`G`, 64 KiB to 1024 GiB), or `heap-limit = "N"` in the root package's manifest, which the
 flag overrides, builds a program whose every allocation — its units', the runtime's and the
 platform unit's — goes through the counted heap: `nz.heap_malloc`, `nz.heap_realloc` and
@@ -219,7 +219,7 @@ through 64 KiB; the manifest's limit and the flag over it; the refusals; and wit
 names the counted heap, while with one no unit but the heap's and the stack's reaches C's allocator.
 
 **R1d (2026-10-14)** · *Streaming standard input* (`spec.md`, *Files and handles*, **Lines of
-standard input**, and *The standard library*; `openspec/changes/r1-language-for-the-rewrite`, P3).
+standard input**, and *The standard library*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, P3).
 `os_read_line(h, buf) -> Int`: standard input to and including its next newline, at most the buffer,
 never past the line; `os_read` of standard input now reads the same 16 KiB buffer first, so lines
 and frames mix — LSP's headers then the body they announce, MCP's lines. Any other handle is a
@@ -252,7 +252,7 @@ from an offset and an error alike under the interpreter, the LIR oracle, LLVM `-
 Cranelift with nothing live.
 
 **R1b (2026-10-13)** · *Linear-time string building* (`spec.md`, *Strings*, **Building**, and
-*What this costs*; `openspec/changes/r1-language-for-the-rewrite`, D2). Core IR lowering writes `s =
+*What this costs*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D2). Core IR lowering writes `s =
 str_concat(s, t)` on a `let mut` binding — not one a closure shares — as the internal `str_append`.
 LIR appends `t` in place when `s`'s storage has one reference (the binding's), was made by an
 append — its capacity carries a mark no other allocation's can — and has room after `s`'s bytes,
@@ -270,7 +270,7 @@ spare byte left alone, counted the same by both implementations. The memory test
 allocator churn or a count of concatenations now prepend, which still allocates each time.
 
 **R1b (2026-10-13)** · *Warnings* (`spec.md`, *Patterns*; `diagnostics.md`;
-`openspec/changes/r1-language-for-the-rewrite`, L15). A warning severity: `nazm.diagnostic/1`'s
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L15). A warning severity: `nazm.diagnostic/1`'s
 `severity` takes `"warning"`, and the first warning is `N0632` — a `_` or a name in a written
 `match` of an enum that covers variants no arm names, listing them (the voice L3 kept when it
 admitted `_`). The checker records warnings on the resolution, apart from the errors a stage stops
@@ -283,7 +283,7 @@ lists, none for a match naming every variant or an `if let`, again from the cach
 `--deny-warnings` refusing a check and a build; a build that warns and runs.
 
 **R1b (2026-10-13)** · *The stack asked for: `--stack-size`* (`spec.md`, *Native recursion, and
-the stack it runs on*; `openspec/changes/r1-language-for-the-rewrite`, L14). `nazm build
+the stack it runs on*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L14). `nazm build
 --stack-size N` (bytes or `K`/`M`/`G`, 64 KiB to 4 GiB; refused for a board or WebAssembly) runs
 `main` on a thread of `N` bytes — the platform entry starts it and joins it, and runs `main` in place
 if it cannot start — and stores `N` in the runtime's `nz.stack_bytes`, which a task's thread, the
@@ -299,7 +299,7 @@ report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's a
 ceiling.
 
 **R1 (2026-10-14)** · *Speed: the failure bit, and the failure paths laid out cold*
-(`openspec/changes/r1-language-for-the-rewrite`, 5b.8; `docs/architecture.md` §7.106, *The failure
+(`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.8; `docs/architecture.md` §7.106, *The failure
 bit*). A Nazm function returns whether it failed beside its result — `{ T, i1 }` under LLVM, a
 second result under Cranelift, a pair in the LIR oracle — false on every `return`, true on the new
 `fail` exit; a direct or indirect call of one branches on that bit rather than loading the
@@ -407,7 +407,7 @@ built by `+=` and `*=`, written and read, alike everywhere with nothing live; an
 index failing `N0405` in every implementation. Five mutants.
 
 **R1 (2026-10-14)** · *Short variants and inferred enum arguments* (`spec.md`, *Short variants*;
-`openspec/changes/r1-language-for-the-rewrite`, 5b.14). An enum's construction written without type
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.14). An enum's construction written without type
 arguments takes them from the type it is wanted as, or from payload fields declared as its
 parameters (`check/construct.rs`, `inferred_enum`), each payload value checked once; where neither
 decides, `N0352` as before. The parser reads `Some(x)`, `Ok(x)`, `Err(e)` and `None` as the
@@ -425,7 +425,7 @@ everywhere, nothing live; what has no text, a function named `println`, and prin
 `OutCap` refused. Three mutants.
 
 **R1 (2026-10-13)** · *Compound assignment* (`spec.md`, *Mutation is opt-in and visible at the
-binding*; `openspec/changes/r1-language-for-the-rewrite`, 5b.12). `+=`, `-=`, `*=`, `/=`, `%=`,
+binding*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.12). `+=`, `-=`, `*=`, `/=`, `%=`,
 `&=`, `|=`, `^=`, `<<=` and `>>=`, each one token, parse as `place = place op e`, so nothing below
 the parser changed; an index in the place is a name, a field of one or a number, and one with a
 call is refused by name rather than computed twice. Epoch 72. Evidence:
@@ -435,7 +435,7 @@ mean refused; the formatter keeping each token. Six mutants.
 
 **R1 (2026-10-13)** · *`else if`, a line break for `;`, and a value nobody wants*
 (`spec.md`, *`else if`, and a line break for `;`* and *One block*;
-`openspec/changes/r1-language-for-the-rewrite`, 5b.11 and 5b.19). `else if` (and `else if let`)
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.11 and 5b.19). `else if` (and `else if let`)
 parses as `else { if … }`, so nothing below the parser changed; `docs/grammar.ebnf` and the guide
 had written it since 2026-09-21 while the parser refused it, which no example caught — two
 examples now do. A missing statement `;` is taken as written where a line break or the block's
@@ -452,7 +452,7 @@ under the interpreter and each backend; what still needs a `;` refused by name; 
 layout of such a program, kept. Eight mutants.
 
 **R1 (2026-10-13)** · *Speed: integer text, the map's table, one string per interpolated
-integer, inlined reference counting* (`openspec/changes/r1-language-for-the-rewrite`, 5b.9). An
+integer, inlined reference counting* (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.9). An
 integer's text is the runtime's own digit loop (`nz.format_int`, `nz.format_u64`), not `snprintf`.
 `@std/hashmap`'s table holds positions into dense arrays of hashes, keys and values, a power of two
 long: a probe compares hashes, a replaced value allocates nothing, a removal moves the last entry
@@ -468,7 +468,7 @@ everywhere; the map against a model of itself over 3,000 operations; a hosted un
 mutants.
 
 **R1 (2026-10-13)** · *Speed: a program of one thread, and the inlined stack check*
-(`openspec/changes/r1-language-for-the-rewrite`, 5b.8). The stack check (N49) is three instructions
+(`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, 5b.8). The stack check (N49) is three instructions
 in the function — this frame against the thread's limit — calling the runtime only on a thread's
 first check or past the limit (LLVM; Cranelift still calls it). A program whose `main` holds no
 `SpawnCap`, `NetCap` or `ForeignCap` and is not a library has one thread, and its failure state and
@@ -481,7 +481,7 @@ the state plain for a `main` of output alone, thread-local for one with `SpawnCa
 by a program of one thread under LLVM and Cranelift. Five mutants.
 
 **R1e (2026-10-13)** · *`@std/sha256`, `@std/blake3` and `file_walk`* (`spec.md`, *The standard
-library*; `openspec/changes/r1-language-for-the-rewrite`, D4 and S1). Two digests in Nazm, over
+library*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D4 and S1). Two digests in Nazm, over
 32-bit wrapping arithmetic and rotations: SHA-256 (FIPS 180-4) and BLAKE3's unkeyed 32-byte output
 (the reference algorithm: 1024-byte chunks, seven-round compression, a stack of subtree chaining
 values, `ROOT` on the last compression). Each is a one-shot function, a hex form and an incremental
@@ -514,7 +514,7 @@ message) and the help of three commands, alike under the interpreter, the LIR or
 arguments they were started with (spaces and non-ASCII in values, `--`, help on standard output,
 an error on standard error with status 2).
 **R1e (2026-10-13)** · *`@std/bytebuf`, `@std/ordmap`, `@std/bitset` and the in-place sorts*
-(`spec.md`, *The standard library*; `openspec/changes/r1-language-for-the-rewrite`, S2 and S3). In
+(`spec.md`, *The standard library*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, S2 and S3). In
 Nazm, each a handle like the other collections. `ByteBuf`: one buffer doubling as it fills, numbers
 in either byte order, ULEB128 and SLEB128, padding to an alignment, patching a field written
 earlier, and indexed reads and writes that answer `None` or `false` outside the bytes written.
@@ -538,7 +538,7 @@ thousand ascending keys, half removed, finish natively within twenty seconds; a 
 `Ord` is refused. Not measured: speed against the Rust containers the rewrite replaces.
 
 **R1c (2026-10-13)** · *`@derive(toml)`* (`spec.md`, *Derived serialisation*, **TOML**;
-`openspec/changes/r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L2c). The same shape over `@std/toml`'s `Toml` tree,
 alone or beside `json`: `t_toml_value` and `t_toml_read` for a record or an enum, and for a record —
 a document is a table — `t_to_toml` and `t_from_toml`. `@codec` shapes it as it shapes JSON. TOML
 has no `null`: a `None` is left out and a missing key read as `None`, so an `Option` inside another
@@ -551,7 +551,7 @@ live; the repository's own package manifest read through a derived record; what 
 carry. Five mutants.
 
 **R1c (2026-10-13)** · *`@codec(…)`* (`spec.md`, *Derived serialisation*, **Shaping it**;
-`openspec/changes/r1-language-for-the-rewrite`, L2b). The closed attribute set: on a derived type
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L2b). The closed attribute set: on a derived type
 `rename_all` (five cases), `deny_unknown`, and for an enum `tag` (internally tagged) or `untagged`
 (the first variant that decodes, so its schema is `anyOf`); on a field `rename`, `default` (a
 number's zero, `false`, `""`, `None`, an empty `Vec` or `List`), `omit_none`; on a variant
@@ -564,7 +564,7 @@ misuses refused alone; the formatting, and its stability. The three schemas pass
 2020-12 validator, valid documents accepted and each malformed one refused. Seven mutants.
 
 **R1c (2026-10-13)** · *`@derive(json)`* (`spec.md`, *Derived serialisation*;
-`openspec/changes/r1-language-for-the-rewrite`, L2a). Before a `struct` or `enum` that is not
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L2a). Before a `struct` or `enum` that is not
 generic, it gives the type `t_to_json`, `t_from_json`, `t_json_schema` and the helpers a derived
 type of another module calls — ordinary Nazm the loader appends to the file
 (`crates/nazm-core/src/derive.rs`), with the `use` of `@std/json` it needs, so every implementation
@@ -598,7 +598,7 @@ re-encoded, re-parsed to the same values and found a fixed point — under LLVM 
 suite is a third party's and is not vendored.
 
 **R1b (2026-10-13)** · *128-bit integers and the widening multiply* (`spec.md`, *Numbers*;
-`openspec/changes/r1-language-for-the-rewrite`, L13b). `Int128` and `UInt128` under every rule of
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L13b). `Int128` and `UInt128` under every rule of
 *Numbers* at their width; literals up to `UInt128`'s maximum, and a negated one past `Int`'s
 magnitude judged whole where an `Int128` is expected; `widening_mul(a: UInt64, b: UInt64) ->
 UInt128`, exact. A value's exact integer is `nazm_sema::numeric::Wide` (`[-2^127, 2^128 - 1]`) and
@@ -615,7 +615,7 @@ keyed by one and derived hashes; a constant across modules and the cache; the re
 mutants; six earlier ones repointed.
 
 **R1b (2026-10-13)** · *Checked arithmetic* (`spec.md`, *Numbers*, **Functions**;
-`openspec/changes/r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L13a). `checked_add`, `checked_sub` and
 `checked_mul`, over every integer type, return `Option[T]` — `Some` of the exact result, `None`
 where it does not fit — as prelude names; a built-in signature may now name the prelude's `Option`
 (`Shape::OptionT`). Core IR lowering writes each from operations every implementation has: a sum or
@@ -643,7 +643,7 @@ under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothi
 refusals and what stays accepted; provenance reaching a body from after it.
 
 **R1b (2026-10-13)** · *Impls of generic types* (`spec.md`, *Traits and methods*, **Impls of generic
-types**; `openspec/changes/r1-language-for-the-rewrite`, L11b). `impl[A: Show, B] Show for Pair[A,
+types**; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L11b). `impl[A: Show, B] Show for Pair[A,
 B]` implements a trait for every instance whose arguments meet the impl's requirements. The parser
 writes the impl's parameters first into each method, so each is a generic function; the checker
 files the impl under the generic definition (`generic_impl_type`; `N0604` unless the header is the
@@ -662,7 +662,7 @@ both backends; the header's form, unmet requirements by a call and by a bound, c
 orphan rule.
 
 **R1b (2026-10-13)** · *Default trait methods* (`spec.md`, *Traits and methods*, **Default bodies**;
-`openspec/changes/r1-language-for-the-rewrite`, L11a). A trait method may end in a body, which an
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L11a). A trait method may end in a body, which an
 impl that writes none gets; an impl may still write its own. The parser writes each body as a
 function `Trait/default/m` generic over `Self: Trait`, so the checker checks it once, through the
 bound, against the signature's declared effects (none written is none); `N0602` spares a method
@@ -679,7 +679,7 @@ impl in different modules built by both backends; a body checked once, generic o
 to its effects; a method with no body still required.
 
 **R1b (2026-10-13)** · *Closures in generic functions; a shared `let mut`* (`spec.md`, *Function
-values and closures*; `openspec/changes/r1-language-for-the-rewrite`, L10). A closure, and a named
+values and closures*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L10). A closure, and a named
 function's value, may be written in a generic function, the closure's types naming the function's
 type parameters (`N0387` narrowed): `nazm run` is parametric, and the instance planner instantiates
 each closure with the generic function it is written in — through every closure between —
@@ -736,7 +736,7 @@ string_literals.rs` — the bytes by hand on the interpreter, the LIR oracle, LL
 Cranelift; the formatter keeping each as written; refusals by code.
 
 **R1a (2026-10-12)** · *Constant tables and exported constants* (`spec.md`;
-`openspec/changes/r1-language-for-the-rewrite`, L8). An array may hold `Str`, `Text` and records,
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L8). An array may hold `Str`, `Text` and records,
 enums and arrays of them (`N0621` names a handle): MIR counts an array managed by its element,
 writing an element moves the value in and releases the old one, and LIR retains on every copy in
 and out and releases element by element (`each_owned`'s array loop). A constant may be a record,
@@ -766,7 +766,7 @@ library's own functions, in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` an
 nothing live; reordering a declaration changes no order and no hash; refusals by code, naming the
 component; a written impl keeps its meaning.
 
-**R1a (2026-10-12)** · *Tuples* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L5).
+**R1a (2026-10-12)** · *Tuples* (`spec.md`; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L5).
 `(A, B, …)` types, `(a, b, …)` values, `t.0` (and `t.0.1`, which the lexer reads as a float and the
 parser splits), `t.0 = e` on a `let mut`, tuple patterns, `let P = e;` (a `let` whose pattern must
 match every value, `N0343` otherwise) and `for (a, b) in e`. A tuple is an anonymous generic record
@@ -778,7 +778,7 @@ interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; r
 one error each; a tuple across a module's interface under `run` and `build`; the formatter's
 spelling.
 
-**R1a (2026-10-12)** · *Patterns* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`, L3).
+**R1a (2026-10-12)** · *Patterns* (`spec.md`; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, L3).
 `_`, a name, a literal (an integer, perhaps negated, a string, `true`, `false`), a variant pattern
 whose fields are patterns, and `|` alternatives — in a `match` of any type a pattern fits, in
 `if let`, and in `let … else`, which the parser writes as the `match` each means (a
@@ -795,7 +795,7 @@ live; exhaustiveness witnesses; ten refusals by code; one error, not a cascade, 
 pattern; the syntax, core and service suites unchanged but for three tests whose examples the
 language now accepts.
 
-**R1a (2026-10-11)** · *`for` loops* (`spec.md`; `openspec/changes/r1-language-for-the-rewrite`,
+**R1a (2026-10-11)** · *`for` loops* (`spec.md`; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`,
 D3). `for x in e` over an `Ints`, `Strs`, `Vec[T]` or `Bytes`, and `for x in a..b`; `..` a token, `in`
 a word only after a `for` loop's name, and a `for` of any other shape still refused by name
 (`N0101`); a non-sequence is `N0628`. Checked once and lowered to Core IR as the `while` loop the
@@ -1335,7 +1335,7 @@ blocks as values in the native backends.*
 ### 4. Memory model and reclamation — VERIFIED for the current type universe, closure environments included (Gate 1-C1)
 
 **R1a (2026-10-12)** · *Immutable indirection: `Box[T]` and `List[T]`* (`spec.md`;
-`openspec/changes/r1-language-for-the-rewrite`, D1/L1). A definition may reach itself through a
+`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D1/L1). A definition may reach itself through a
 `Box` or `List`: the ownership graph labels those edges immutable and refuses only a cycle with a
 counted edge on it (`N0359`), with the reclamation argument in the specification. Both are a
 `Vec[T]` underneath, nothing writes after they are made, and they are distinct types to the
@@ -2474,7 +2474,7 @@ implementation.
 ### 16. Standard library — VERIFIED as scoped (1.0, N84)
 
 **R1d (2026-10-14)** · *The platform, further: processes and the file system* (`spec.md`, *The
-platform, further*; `openspec/changes/r1-language-for-the-rewrite`, D4's built-ins, P1 and P2).
+platform, further*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D4's built-ins, P1 and P2).
 Seventeen prelude built-ins over Gate 2's handle table and statuses. Standard output and errors as
 handles (`os_stdout`, `os_stderr`), written in order with `print`, a close leaving the stream open.
 A child in a directory with exactly a given environment, handed over ordered by name so every
