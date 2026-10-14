@@ -1,0 +1,50 @@
+// Floats of both widths: arithmetic, comparisons with a NaN, conversions both ways, and the
+// built-ins that become single instructions (design D3's floating-point registers).
+
+fn f64s(a: Float64, b: Float64) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a < b} {a <= b} {a > b} {a >= b} {a == b} {a != b} {-a}"
+}
+
+fn f32s(a: Float32, b: Float32) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a < b} {a == b} {-a}"
+}
+
+fn conv(x: Float64) -> Str {
+    let i = Int(float_trunc(x))
+    let y = Float32(x)
+    let z = Float64(y)
+    f"{i} {y} {z} {Float64(i)} {Float32(-7)} {Float64(UInt64(12345))}"
+}
+
+fn builtins(x: Float64) -> Str {
+    f"{float_sqrt(x)} {float_abs(-x)} {float_floor(x)} {float_ceil(x)} {float_trunc(-x)} {float_round(x)} {float_min(x, 2.0)} {float_max(x, 2.0)}"
+}
+
+fn bits(x: Float64, y: Float32) -> Str {
+    let b = float64_to_bits(x)
+    let c = float32_to_bits(y)
+    f"{b} {float64_from_bits(b)} {c} {float32_from_bits(c)}"
+}
+
+fn mixed(a: Int, x: Float64, b: Int, y: Float32, c: Int, z: Float64) -> Float64 {
+    Float64(a) * x + Float64(b) * Float64(y) + Float64(c) * z
+}
+
+fn main() {
+    println(f64s(1.5, 2.25))
+    println(f64s(-0.0, 0.0))
+    let nan = 0.0 / 0.0
+    println(f64s(nan, 1.0))
+    println(f"{float_is_nan(nan)} {float_is_infinite(1.0 / 0.0)} {float_is_finite(nan)}")
+    println(f32s(Float32(1.25), Float32(3.5)))
+    println(f32s(Float32(nan), Float32(1.0)))
+    println(conv(12345.678))
+    println(conv(-0.5))
+    println(builtins(6.25))
+    println(bits(3.14159, Float32(2.5)))
+    println(mixed(2, 0.5, 3, Float32(1.5), 4, 0.25))
+    let xs = [1.0, 2.5, -3.75]
+    let mut t = 0.0
+    for i in 0..3 { t += xs[i] }
+    println(f"{t:.3} {t}")
+}

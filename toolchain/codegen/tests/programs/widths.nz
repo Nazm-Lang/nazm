@@ -1,0 +1,77 @@
+// Every integer width through arithmetic, comparisons, shifts, rotations and bit counts, signed
+// and unsigned, so the generator's narrow-value rules (design D5) meet each operation.
+
+fn i8s(a: Int8, b: Int8) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a % b} {a < b} {a >= b} {a >> 1} {a & b} {a | b} {a ^ b}"
+}
+
+fn u8s(a: UInt8, b: UInt8) -> Str {
+    f"{a + b} {a - b} {a / b} {a % b} {a < b} {a > b} {a >> 1} {a << 1} {rotate_left(a, 3)} {rotate_right(a, 3)}"
+}
+
+fn i16s(a: Int16, b: Int16) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a % b} {a <= b} {a >> 2} {swap_bytes(a)}"
+}
+
+fn u16s(a: UInt16, b: UInt16) -> Str {
+    f"{a + b} {a * b} {a / b} {rotate_left(a, 5)} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)}"
+}
+
+fn i32s(a: Int32, b: Int32) -> Str {
+    f"{a + b} {a - b} {a * b} {a / b} {a % b} {a > b} {a >> 3} {rotate_right(a, 7)} {swap_bytes(a)}"
+}
+
+fn u32s(a: UInt32, b: UInt32) -> Str {
+    f"{a + b} {a * b} {a / b} {a % b} {a > b} {a >> 3} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)}"
+}
+
+fn u64s(a: UInt64, b: UInt64) -> Str {
+    f"{a + b} {a * b} {a / b} {a % b} {a > b} {a >> 3} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)} {rotate_left(a, 9)}"
+}
+
+fn ints(a: Int, b: Int) -> Str {
+    f"{a + b} {a * b} {a / b} {a % b} {a >> 3} {a << 2} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)} {rotate_left(a, 9)} {swap_bytes(a)}"
+}
+
+fn wraps() -> Str {
+    let a: Int8 = 120
+    let b: UInt8 = 250
+    let c: Int32 = 2147483000
+    f"{wrapping_add(a, Int8(10))} {wrapping_add(b, UInt8(10))} {wrapping_mul(c, Int32(3))} {saturating_add(a, Int8(10))} {saturating_sub(b, UInt8(255))}"
+}
+
+fn checked() -> Str {
+    let a: Int16 = 32000
+    let b: UInt32 = 4000000000
+    let x = match checked_add(a, Int16(1000)) {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+    let y = match checked_mul(b, UInt32(2)) {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+    let z = match checked_sub(Int8(-100), Int8(28)) {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+    f"{x} {y} {z}"
+}
+
+fn main() {
+    println(i8s(Int8(-10), Int8(7)))
+    println(i8s(Int8(5), Int8(-3)))
+    println(u8s(UInt8(200), UInt8(7)))
+    println(i16s(Int16(-30), Int16(123)))
+    println(u16s(UInt16(600), UInt16(3)))
+    println(i32s(Int32(-20000000), Int32(77)))
+    println(u32s(UInt32(300000000), UInt32(13)))
+    println(u64s(UInt64(1000000000000000000), UInt64(17)))
+    println(ints(-700000000000000000, 13))
+    println(wraps())
+    println(checked())
+    let narrow: Int8 = -1
+    let wide = Int(narrow)
+    let back = Int16(wide)
+    println(f"{wide} {back} {UInt8(255)} {Int32(UInt16(65535))}")
+}

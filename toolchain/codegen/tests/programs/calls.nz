@@ -1,0 +1,54 @@
+// The calling convention (design D4): more than eight integer and float arguments, narrow
+// arguments on the stack, records and strings by reference, closures called indirectly, a
+// failure crossing several frames, and deep recursion through the stack check.
+
+struct P {
+    x: Int,
+    y: Int,
+    name: Str,
+}
+
+fn many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int) -> Int {
+    a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i + 10 * j + 11 * k
+}
+
+fn narrow(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int8, j: UInt16, k: Int32, l: Bool, m: UInt8) -> Int {
+    a + b + c + d + e + f + g + h + Int(i) * 1000 + Int(j) * 10 + Int(k) + (if l { 7 } else { 0 }) + Int(m)
+}
+
+fn floats(a: Float64, b: Float64, c: Float64, d: Float64, e: Float64, f: Float64, g: Float64, h: Float64, i: Float64, j: Float32, k: Int, l: Float64) -> Float64 {
+    a + b + c + d + e + f + g + h + i * 10.0 + Float64(j) * 100.0 + Float64(k) + l
+}
+
+fn rec(p: P, q: P) -> P {
+    P(x: p.x + q.x, y: p.y * q.y, name: p.name + "+" + q.name)
+}
+
+fn apply(f: fn(Int) -> Int, n: Int) -> Int {
+    f(f(n))
+}
+
+fn depth(n: Int) -> Int {
+    if n == 0 { 0 } else { 1 + depth(n - 1) }
+}
+
+fn fails_at(n: Int) -> Int {
+    if n == 0 {
+        let xs: Ints = [1, 2, 3]
+        xs[n + 5]
+    } else {
+        fails_at(n - 1) + 1
+    }
+}
+
+fn main() {
+    println(many(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
+    println(narrow(1, 2, 3, 4, 5, 6, 7, 8, Int8(-3), UInt16(65000), Int32(-70000), true, UInt8(200)))
+    println(floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, Float32(0.25), 3, 0.125))
+    let r = rec(P(x: 1, y: 2, name: "a"), P(x: 3, y: 4, name: "b"))
+    println(f"{r.x} {r.y} {r.name}")
+    let k = 5
+    println(apply(fn(x: Int) -> Int { x * k + 1 }, 3))
+    println(depth(10000))
+    println(fails_at(4))
+}
