@@ -374,7 +374,9 @@ use crate::digest::{self, Framed};
 /// moved from refused to accepted (D5).
 /// `81` — R1.5, 2026-10-15. `use std.json`, a standard module by its dotted path, moved from refused
 /// (a syntax error) to accepted (D7).
-pub const SEMANTIC_EPOCH: u32 = 81;
+/// `82` — R1.5, 2026-10-15. Printing in a function of the program's own modules with no `OutCap`
+/// passed moved from refused (`N0369`) to accepted (D8); a package's function is unchanged.
+pub const SEMANTIC_EPOCH: u32 = 82;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

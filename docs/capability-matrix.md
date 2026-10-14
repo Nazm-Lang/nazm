@@ -298,6 +298,15 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *Printing in your own program* (`spec.md`, *Shorter forms*; R1.5 design
+D8). In a module of the program itself — a key with no `@`, so not `@std`, the prelude or a package —
+the authority check (`effects::authority`) counts the output authority `main` holds as held, so a
+function prints with no `out` passed; a package's function still needs it, and every other
+authority is passed as before. Semantic epoch 82; EXPERIMENTAL until R1.5 closes. Evidence:
+`crates/nazm-cli/tests/shorter_forms.rs` — a helper calling a helper that prints, under every
+implementation; a dependency's printing function refused with `N0369`; a file still needing an
+`IoCap`; two mutants.
+
 **R1.5 (2026-10-15)** · *Map literals and `Map[K, V]`* (`spec.md`, *Shorter forms*; R1.5 design D5).
 `{"a": 1, "b": 2}` is read by the parser as the block that builds it — `hashmap_single` for the
 first entry, which settles the types, then `hashmap_set` — and `Map[K, V]` is `HashMap[K, V]` where

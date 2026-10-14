@@ -38,9 +38,11 @@
       — 2026-10-15 (D4): records too (`Point(1, 2)`), bare unit variants (`Dot`), `N0636`, epoch 79
 - [ ] 6.6 `use std.json` without quotes or `@`; `List[Int]` taught for `Ints`/`Strs` (the old names
       keep working)
-- [ ] 6.7 Printing in your own program: its functions may print without being passed `out: OutCap`;
+- [x] 6.7 Printing in your own program: its functions may print without being passed `out: OutCap`;
       a library or package function still needs it passed, and files, the network and processes stay
       declared in `main`
+      — 2026-10-15 (D8): the authority check holds `OutCap` in the program's own modules (not `@std`,
+      the prelude, or a package); epoch 82
 
 ## 5. The comparison
 - [ ] 5.1 Safety-equivalent rows and a safety column; re-run and publish
