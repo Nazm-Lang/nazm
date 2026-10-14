@@ -127,6 +127,7 @@ struct Node {
 pub(crate) fn analyse(
     functions: &[(u32, &Function)],
     module: nazm_sema::module::ModuleId,
+    program: bool,
     deps: &[&UnitInterface],
     res: &mut Resolution,
     errors: &mut Vec<Diagnostic>,
@@ -411,7 +412,7 @@ pub(crate) fn analyse(
         }
         // Authority first, then effects: one deterministic order for a body wrong in both.
         // Every body holds what it exercises, declared or not (N104): nothing is inherited.
-        for (kind, at, why) in authority(node, res) {
+        for (kind, at, why) in authority(node, res, program) {
             errors.push(missing_authority(node, kind, at, why, res));
         }
         let Some(declared) = node.declared else {
@@ -680,7 +681,11 @@ enum Needs {
 /// Returns every kind `node`'s body exercises without holding it, once each, with the first
 /// site that needs it and why: each an `N0369`. Held kinds count with what they imply: an
 /// `IoCap` gives an `OutCap`.
-fn authority(node: &Node, res: &Resolution) -> Vec<(CapabilityKind, Span, Needs)> {
+///
+/// In a module of the program itself (R1.5, D8), the output authority `main` holds is held by
+/// every function: printing there needs no `OutCap` passed. A standard module, the prelude and a
+/// package still hold only what they are given, and every other authority is passed everywhere.
+fn authority(node: &Node, res: &Resolution, program: bool) -> Vec<(CapabilityKind, Span, Needs)> {
     let mut out = Vec::new();
     let sites = res
         .function(node.id)
@@ -688,6 +693,11 @@ fn authority(node: &Node, res: &Resolution) -> Vec<(CapabilityKind, Span, Needs)
         .unwrap_or_default();
     let mut reported = CapabilitySet::EMPTY;
     for site in sites {
+        let held = if program {
+            site.held.with(CapabilityKind::Out)
+        } else {
+            site.held
+        };
         let mut needs: Vec<(CapabilitySet, Needs)> = Vec::new();
         if site.spawned {
             needs.push((CapabilityKind::to_start_a_task(), Needs::Spawn));
@@ -696,11 +706,7 @@ fn authority(node: &Node, res: &Resolution) -> Vec<(CapabilityKind, Span, Needs)
             needs.push((CapabilityKind::of_intrinsic(b), Needs::Builtin(b)));
         }
         for (required, why) in needs {
-            for kind in required
-                .without(site.held.implied())
-                .without(reported)
-                .iter()
-            {
+            for kind in required.without(held.implied()).without(reported).iter() {
                 reported = reported.with(kind);
                 out.push((kind, site.span, why));
             }

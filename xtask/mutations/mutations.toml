@@ -7936,8 +7936,8 @@ name = "n37-an-effect-set-grants-authority"
 why = """a declared effect counts as the capability for it, so `! { io }` alone authorises `print`.
 Repointed by N79, which made held kinds count with what they imply."""
 file = "crates/nazm-core/src/effects.rs"
-find = "                .without(site.held.implied())"
-replace = "                .without(site.held.implied().union(CapabilitySet::for_effects(node.declared.unwrap_or_default())))"
+find = "            for kind in required.without(held.implied()).without(reported).iter() {"
+replace = "            for kind in required.without(held.implied().union(CapabilitySet::for_effects(node.declared.unwrap_or_default()))).without(reported).iter() {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "an_effect_declared_without_authority_is_an_authority_error_and_not_an_effect_one" }]
 
 [[mutation]]
@@ -7946,8 +7946,8 @@ why = """authority is checked only for a function declaring some effect, so one 
 Repointed by N79, which made the check return what is missing rather than push it.
 Repointed by N104, which checks every body for authority from one loop."""
 file = "crates/nazm-core/src/effects.rs"
-find = "        for (kind, at, why) in authority(node, res) {"
-replace = "        for (kind, at, why) in authority(node, res).into_iter().filter(|_| node.declared.is_some_and(|d| !d.is_empty())) {"
+find = "        for (kind, at, why) in authority(node, res, program) {"
+replace = "        for (kind, at, why) in authority(node, res, program).into_iter().filter(|_| node.declared.is_some_and(|d| !d.is_empty())) {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "authority_without_the_effect_is_an_effect_error_and_both_missing_is_both_in_order" }]
 
 [[mutation]]
@@ -8338,10 +8338,11 @@ Repointed by R1.5 (D2), which moved it to 77: an entry that refused `fn f(n: Int
 Repointed by R1.5 (D3), which moved it to 78: an entry that refused `|a, b| a < b` must not be reused.
 Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` must not be reused.
 Repointed by R1.5 (D5), which moved it to 80: an entry that refused `{"a": 1}` must not be reused.
-Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.json` must not be reused."""
+Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.json` must not be reused.
+Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 81;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 80;"
+find = "pub const SEMANTIC_EPOCH: u32 = 82;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 81;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -12653,9 +12654,9 @@ killers = [{ package = "nazm-cli", test = "cli_a_b", name = "authority::a_functi
 name = "n79-a-held-io-cap-is-read-alone"
 why = "the authority check reads held kinds without what they imply, so a function holding an `IoCap` cannot print"
 file = "crates/nazm-core/src/effects.rs"
-find = "                .without(site.held.implied())"
-replace = "                .without(site.held)"
-killers = [{ package = "nazm-cli", test = "cli_a_b", name = "authority::a_held_io_cap_authorises_its_own_print" }]
+find = "            for kind in required.without(held.implied()).without(reported).iter() {"
+replace = "            for kind in required.without(held).without(reported).iter() {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_packages_function_still_needs_out_and_files_still_need_io" }]
 
 # `n79-inheritance-is-not-recorded` is retired by N104: nothing is inherited, so nothing is recorded.
 
@@ -13851,8 +13852,8 @@ killers = [{ package = "nazm-cli", test = "selfhost", name = "the_nazm_written_c
 name = "n104-an-undeclared-body-inherits-again"
 why = "a function with no declared effect set is not checked for authority, so it exercises whatever it calls with authority it never holds — the bridge, back"
 file = "crates/nazm-core/src/effects.rs"
-find = "        for (kind, at, why) in authority(node, res) {"
-replace = "        for (kind, at, why) in authority(node, res).into_iter().filter(|_| node.declared.is_some()) {"
+find = "        for (kind, at, why) in authority(node, res, program) {"
+replace = "        for (kind, at, why) in authority(node, res, program).into_iter().filter(|_| node.declared.is_some()) {"
 killers = [{ package = "nazm-core", test = "capabilities", name = "an_undeclared_function_holds_what_it_exercises" }]
 
 [[mutation]]
@@ -19525,3 +19526,19 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = "            TokenKind::Ident(w) if w == \"std\" && self.at(&TokenKind::Dot) => {"
 replace = "            TokenKind::Ident(w) if w == \"std#\" && self.at(&TokenKind::Dot) => {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_standard_module_by_its_dotted_path_is_the_quoted_import_everywhere" }]
+
+[[mutation]]
+name = "r1-5-the-programs-functions-hold-no-output"
+why = "a function of the program's own modules that prints without `out` passed is refused"
+file = "crates/nazm-core/src/effects.rs"
+find = "            site.held.with(CapabilityKind::Out)\n        } else {"
+replace = "            site.held\n        } else {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::the_programs_own_functions_print_without_being_passed_out_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-package-is-the-program"
+why = "a package's module is taken for the program's own, so its functions print with nothing passed and a dependency's authority leaves its signature"
+file = "crates/nazm-sema/src/key.rs"
+find = "        !self.0.contains('@')"
+replace = "        true"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_packages_function_still_needs_out_and_files_still_need_io" }]

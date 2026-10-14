@@ -339,6 +339,9 @@ pub struct Unit<'a> {
     /// for a compilation assembled without one, which then has no `Result` for `?` to
     /// recognise — the answer, not an error.
     prelude: Option<ModuleId>,
+    /// Whether this module is the program's own (R1.5, D8), where printing needs no `OutCap`
+    /// passed: not a standard module, the prelude or a package's.
+    program: bool,
 }
 
 impl<'a> Unit<'a> {
@@ -390,6 +393,9 @@ impl<'a> Unit<'a> {
                 .filter(|c| graph.module_of(c.name_span.file) == Some(module))
                 .collect(),
             prelude: graph.prelude(),
+            program: graph
+                .key(module)
+                .is_some_and(nazm_sema::key::ModuleKey::is_program),
         }
     }
 

@@ -704,7 +704,14 @@ pub fn check_unit(
     }
     // Effects are a fact about the module's resolved calls, so they are settled once every
     // body has been checked and every call resolved (N36).
-    crate::effects::analyse(&unit.functions, unit.module, deps, c.res, &mut c.errors);
+    crate::effects::analyse(
+        &unit.functions,
+        unit.module,
+        unit.program,
+        deps,
+        c.res,
+        &mut c.errors,
+    );
     errors.append(&mut c.errors);
 }
 

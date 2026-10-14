@@ -7,6 +7,7 @@
 //! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
 //! D5 — map literals, `{"a": 1}`, and `Map[K, V]`.
 //! D7 — `use std.json`.
+//! D8 — printing in your own program's functions without passing `out`.
 
 #![allow(
     clippy::unwrap_used,
@@ -312,5 +313,76 @@ fn main(out: OutCap): Int ! {io} {
 }
 ",
         "4\n0",
+    );
+}
+
+#[test]
+fn the_programs_own_functions_print_without_being_passed_out_everywhere() {
+    differential::agrees(
+        "fn greet(name: Str) {
+    println(f\"hello {name}\")
+}
+
+fn twice(name: Str) {
+    greet(name)
+    greet(name)
+}
+
+fn main(out: OutCap): Int ! {io} {
+    twice(\"nazm\")
+    0
+}
+",
+        "hello nazm\nhello nazm\n0",
+    );
+}
+
+#[test]
+fn a_packages_function_still_needs_out_and_files_still_need_io() {
+    let d = tempfile::tempdir().unwrap();
+    let write = |rel: &str, text: &str| {
+        let p = d.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write(
+        "lib/nazm.toml",
+        "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n",
+    );
+    // `say` holds nothing and is refused; `shout` holds an `IoCap`, which gives an `OutCap`.
+    write(
+        "lib/src/say.nz",
+        "pub fn say(s: Str) { println(s) }\npub fn shout(io: IoCap, s: Str) { println(s) }\n",
+    );
+    write(
+        "app/nazm.toml",
+        "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n\
+         [dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n",
+    );
+    write(
+        "app/src/main.nz",
+        "use \"lib:say.nz\";\nfn main() { say(\"hi\") }\n",
+    );
+    // The dependency's function prints with nothing passed: refused there, in its own module.
+    let r = nazm(d.path(), &["check", "app"]);
+    assert_ne!(r.code, Some(0), "{r:?}");
+    assert!(
+        r.stderr.contains("N0369") && r.stderr.contains("`say`"),
+        "{r:?}"
+    );
+    assert!(
+        !r.stderr.contains("`shout`"),
+        "an `IoCap` gives an `OutCap`: {r:?}"
+    );
+    // In the program itself, a file is still written only with an `IoCap` passed.
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn save(p: Str) { write_file(p, \"x\") }\nfn main() { }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert!(
+        r.stderr.contains("N0369") && r.stderr.contains("IoCap"),
+        "{r:?}"
     );
 }
