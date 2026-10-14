@@ -17407,7 +17407,7 @@ why = "a 128-bit constant is written to the interface as its low word, so a modu
 file = "crates/nazm-iface/src/wire.rs"
 find = "            bits: if n.kind.bits() == 128 {"
 replace = "            bits: if false {"
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "wide::a_128_bit_constant_crosses_modules_and_the_cache" }]
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "durable_identity::a_128_bit_constant_reads_back_from_its_interface_whole" }]
 
 [[mutation]]
 name = "r1b-widening-mul-sign-extends"
