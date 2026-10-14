@@ -3093,6 +3093,7 @@ impl<'a> Parser<'a> {
                         span: Span::new(self.file, rest_start, rest_end),
                     };
                     let first = MatchArm {
+                        guard: None,
                         span: pattern.span().join(rest.span),
                         pattern,
                         body: Expr::Block(Box::new(rest)),
@@ -3107,6 +3108,7 @@ impl<'a> Parser<'a> {
                                 ),
                             };
                             let second = MatchArm {
+                                guard: None,
                                 span: otherwise.span,
                                 pattern: wild,
                                 body: Expr::Block(Box::new(otherwise)),
@@ -3621,6 +3623,7 @@ impl<'a> Parser<'a> {
             tail: Some(Box::new(Expr::Match {
                 scrutinee: Box::new(item),
                 arms: vec![MatchArm {
+                    guard: None,
                     span: pattern.span().join(body_span),
                     pattern,
                     body: Expr::Block(Box::new(written)),
@@ -3660,11 +3663,13 @@ impl<'a> Parser<'a> {
             let none = Span::new(self.file, end, end);
             let arms = vec![
                 MatchArm {
+                    guard: None,
                     span: pattern.span().join(body.span),
                     pattern,
                     body: Expr::Block(Box::new(body)),
                 },
                 MatchArm {
+                    guard: None,
                     span: none,
                     pattern: Pattern::Wildcard { span: none },
                     body: Expr::Block(Box::new(Block {
@@ -4084,7 +4089,13 @@ impl<'a> Parser<'a> {
         // A probe's hole in this pattern, with no `=>` written yet: the arm has no body
         // to read, and is given a zero-width `0` so the pattern can be checked (N26).
         let hole_arm = holed && self.hole.is_none() && !self.at(&TokenKind::FatArrow);
-        let end = pattern.span().end;
+        // `if E` (R1, 5b.17): a guard, read before the `=>`.
+        let guard = if !hole_arm && self.eat(&TokenKind::If) {
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        let end = guard.as_ref().map_or(pattern.span().end, |g| g.span().end);
         let body = if hole_arm {
             Expr::Int {
                 value: 0,
@@ -4097,6 +4108,7 @@ impl<'a> Parser<'a> {
         self.wrap(arm, SyntaxKind::MatchArm);
         Some((
             MatchArm {
+                guard,
                 span: pattern.span().join(body.span()),
                 pattern,
                 body,
@@ -5146,11 +5158,13 @@ impl<'a> Parser<'a> {
                     scrutinee: Box::new(scrutinee),
                     arms: vec![
                         MatchArm {
+                            guard: None,
                             span: pattern.span().join(then_block.span),
                             pattern,
                             body: Expr::Block(Box::new(then_block)),
                         },
                         MatchArm {
+                            guard: None,
                             span: otherwise.span,
                             pattern: wild,
                             body: Expr::Block(Box::new(otherwise)),
@@ -5581,6 +5595,9 @@ mod ast_depth_tests {
                     } => {
                         stack.push((Node::Expr(scrutinee), d + 1));
                         for a in arms {
+                            if let Some(g) = &a.guard {
+                                stack.push((Node::Expr(g), d + 1));
+                            }
                             stack.push((Node::Expr(&a.body), d + 1));
                         }
                     }

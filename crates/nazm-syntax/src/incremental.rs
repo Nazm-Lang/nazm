@@ -1235,10 +1235,14 @@ impl Shift for MatchArm {
     fn shift(&mut self, file: FileId, by: i64) {
         let Self {
             pattern,
+            guard,
             body,
             span,
         } = self;
         pattern.shift(file, by);
+        if let Some(g) = guard {
+            g.shift(file, by);
+        }
         body.shift(file, by);
         span.shift(file, by);
     }

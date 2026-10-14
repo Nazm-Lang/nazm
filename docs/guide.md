@@ -580,7 +580,7 @@ accepts.
 | `if_let_expression` | `"if" , "let" , pattern , "=" , expression , block , [ "else" , ( block \| if_expression \| if_let_expression ) ]` |
 | `match_expression` | `"match" , expression , "{" , [ match_arms ] , "}"` |
 | `match_arms` | `match_arm , { "," , match_arm } , [ "," ]` |
-| `match_arm` | `pattern , "=>" , expression` |
+| `match_arm` | `pattern , [ "if" , expression ] , "=>" , expression` |
 | `pattern` | `pattern_one , { "\|" , pattern_one }` |
 | `pattern_one` | `"_" \| IDENT \| [ "-" ] , INT \| STRING \| "true" \| "false" \| variant_pattern \| tuple_pattern` |
 | `tuple_pattern` | `"(" , pattern , "," , pattern , { "," , pattern } , [ "," ] , ")"` |
@@ -1852,15 +1852,20 @@ enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
 ### `match_arm`
 
 ```ebnf
-match_arm = pattern , "=>" , expression ;
+match_arm = pattern , [ "if" , expression ] , "=>" , expression ;
 ```
 
 A pattern names the enum and never its type arguments: the value being matched already
 has one concrete type, and `Maybe.Some(value: v)` matches a `Maybe[Int]` and a
 `Maybe[Str]` alike.
+R1, 5b.17: a guard after the pattern; the arm is chosen only where it is true.
 
 ```nazm
 enum E { V(x: Int), } fn main() -> Int { match E.V(x: 1) { E.V(x: n) => n, } }
+```
+
+```nazm
+fn main() -> Int { match 7 { n if n < 0 => 0, n if n % 2 == 1 => 1, _ => 2, } }
 ```
 
 ### `pattern`
