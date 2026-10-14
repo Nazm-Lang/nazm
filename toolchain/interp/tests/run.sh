@@ -50,8 +50,8 @@ for path in $cases; do
         # The interpreter takes the reports as flags: as a compiled Nazm program, its own runtime
         # would answer the variables about itself (main.nz).
         if [ "$mode" = reports ]; then
-            set -- env NAZM_MEMORY_REPORT=1 NAZM_RESULT_REPORT=1
-            flags="--memory-report --result-report"
+            set -- env NAZM_MEMORY_REPORT=1 NAZM_SCHED_REPORT=1 NAZM_RESULT_REPORT=1
+            flags="--memory-report --sched-report --result-report"
         else
             set -- env
             flags=""
