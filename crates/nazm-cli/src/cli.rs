@@ -151,7 +151,8 @@ pub(crate) enum PatchOperation {
 // Parsed once per process and matched at once: boxing a command's arguments would buy nothing.
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
-    /// Type-check and evaluate a program, printing the value of `main`.
+    /// Build a program with Cranelift and run it, ending with its exit status; `--interpret`
+    /// evaluates it in the interpreter instead (R1.5, D11).
     Run {
         file: PathBuf,
         /// Arguments for the program itself, after `--`.
@@ -167,17 +168,23 @@ pub(crate) enum Command {
         #[arg(long)]
         json: bool,
         /// Run the program in the interpreter, the oracle every equivalence test compares the
-        /// backends against (R1.5, D11).
+        /// backends against (R1.5, D11). Without it the program is compiled and run, and a
+        /// program the compiler refuses is refused: neither falls back to the other.
         #[arg(long)]
         interpret: bool,
-        /// Stop after this many loop iterations.
+        /// Stop after this many loop iterations. With `--interpret` only.
         ///
         /// An interpreter guard, not a language rule: with no `break` and no I/O a
         /// non-terminating program produces nothing, and a tool that hangs is worse than
-        /// one that reports.
-        #[arg(long, default_value_t = nazm_core::eval::DEFAULT_MAX_ITERATIONS)]
+        /// one that reports. A compiled program has no such guard, so asking for one without
+        /// `--interpret` is refused rather than ignored.
+        #[arg(
+            long,
+            default_value_t = nazm_core::eval::DEFAULT_MAX_ITERATIONS,
+            requires = "interpret"
+        )]
         max_iterations: u64,
-        /// Stop after this many nested calls.
+        /// Stop after this many nested calls. With `--interpret` only.
         ///
         /// The iteration budget does not bound recursion: `fn f(n: Int) -> Int { f(n) }`
         /// never loops. Without this the host stack runs out and the process dies with no
@@ -190,6 +197,7 @@ pub(crate) enum Command {
             long,
             default_value_t = nazm_core::eval::DEFAULT_MAX_DEPTH,
             value_parser = max_depth,
+            requires = "interpret",
         )]
         max_depth: usize,
         /// Refuse to build unless the package's `nazm.lock` records exactly the packages this

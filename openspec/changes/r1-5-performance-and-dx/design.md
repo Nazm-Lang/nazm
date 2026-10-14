@@ -87,7 +87,11 @@ the entries ordered by `f(key, value)`. Both return a `List[(K, V)]`.
 the executable and passes its exit status through; `nazm run --interpret` is the interpreter, which
 stays the oracle every equivalence test compares against. A program Cranelift refuses is refused by
 `run` with that diagnostic and help naming `--interpret`: neither path falls back silently. Tests
-that mean the interpreter say `--interpret`.
+that mean the interpreter say `--interpret`. Settled in the code: the build is `--opt-level 2` and
+uses the project's object store as `nazm build` does, prints nothing of its own (no path, authority
+line or warnings), and the help names `--interpret` only for refusals a native build alone makes
+(`N0101`, `N0357`, `N0358`); `--max-iterations` and `--max-depth` require `--interpret` rather
+than being silently ignored, and a signal ends `run` with `128 +` its number.
 
 **D12 — build caches (1.1).** The runtime is compiled once per target and profile into the user's
 cache directory (`~/Library/Caches/nazm` on macOS, `$XDG_CACHE_HOME/nazm` elsewhere, or

@@ -44,6 +44,7 @@ mod build;
 mod capabilities;
 mod checking;
 mod cli;
+mod compiled_run;
 mod context;
 mod contract;
 mod contract_wasm;
@@ -247,6 +248,7 @@ fn dispatch(command: Command) -> ExitCode {
                     harness: harness.as_ref(),
                     features: &features,
                     board: board.as_ref(),
+                    run: false,
                 },
             );
             if (provenance.is_none() && sbom.is_none()) || built != ExitCode::from(exit::OK) {
@@ -552,7 +554,7 @@ fn dispatch(command: Command) -> ExitCode {
             file,
             args,
             json,
-            interpret: _,
+            interpret,
             max_iterations,
             max_depth,
             locked: _,
@@ -564,6 +566,17 @@ fn dispatch(command: Command) -> ExitCode {
                 Ok(h) => h,
                 Err(code) => return code,
             };
+            // Compiled unless the interpreter is asked for (R1.5, D11); neither falls back.
+            if !interpret {
+                return compiled_run::run(
+                    &file,
+                    json,
+                    &args,
+                    profile.as_deref(),
+                    harness.as_ref(),
+                    &features,
+                );
+            }
             run(
                 &file,
                 json,

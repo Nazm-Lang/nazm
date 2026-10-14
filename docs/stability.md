@@ -51,8 +51,8 @@ meaning inside one major line; until then, an incompatible change waits for 2.0.
 3. **Experimental and internal surfaces.** These may change or be removed in a minor release,
    with the change listed in its release record. The schema law below still holds for them: a
    versioned output never changes shape without a new major of its schema.
-4. **Limits that are the implementation's.** Iteration and depth limits of `nazm run`, nesting
-   bounds, stack sizes and resource ceilings may be raised in any release and lowered only in
+4. **Limits that are the implementation's.** Iteration and depth limits of `nazm run
+   --interpret`, nesting bounds, stack sizes and resource ceilings may be raised in any release and lowered only in
    2.0 (`docs/spec.md`, *The iteration and depth limits*).
 
 `tests/compat/v1/` is the part of this promise a machine checks: every 1.x toolchain runs it, it
@@ -195,7 +195,7 @@ value (spec *Foreign functions*), `Str` in and out and `pub extern "C"` exports 
 v2*), opaque handles (`extern "C" struct Name;`), C-layout structs (`extern "C" struct Name { … }`),
 `Option` of a handle for a null result, `errno` through `c_errno()` and callbacks that are an
 export's name (*Foreign functions v3*). Every call has the `foreign` effect and needs a
-`ForeignCap`; linking is `nazm build --link FILE`; `nazm run` refuses a program that calls C
+`ForeignCap`; linking is `nazm build --link FILE`; `nazm run --interpret` refuses a program that calls C
 (`N0385`). C's own failures are outside every Nazm guarantee. `nazm bindgen`, which writes these
 declarations from a header, is experimental.
 
@@ -286,8 +286,8 @@ output may change in any release.
 
 A stable command's options are stable except these, which are experimental: `build --layout`,
 `--runtime`, `--stack-watermark`, `--emit-ir`, `--timings`, `--attest-with`, `--sbom`, and
-`--target` for any target other than the host; `--profile` and `--profile-report` on any
-command, because the restriction profiles' rule sets may grow (the rule that a profile only
+`--target` for any target other than the host; `run --interpret`, and that `run` compiles with
+Cranelift (R1.5, D11), until R1.5 closes; `--profile` and `--profile-report` on any command, because the restriction profiles' rule sets may grow (the rule that a profile only
 refuses and never changes what an accepted program does is stable). `nazm-mcp` is experimental.
 
 ### Targets
