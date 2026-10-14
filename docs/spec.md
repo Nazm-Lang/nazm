@@ -3029,7 +3029,7 @@ fn main(out: OutCap, tasks: SpawnCap) -> Int {
         }
     }
     chan_close(results);
-    print(str_concat(int_to_str(total), "\n"));
+    print(str_concat(int_to_str(total), str_from_byte(10)));
     0
 }
 ```
