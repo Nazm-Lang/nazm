@@ -1,0 +1,148 @@
+// N73: build provenance — `nazm build --provenance FILE` and `--attest-with CMD`
+// (`docs/architecture.md` §7.75). The record names every source module and the output with digests
+// anyone can recompute (plain BLAKE3 over the bytes — recomputed here with `@std/blake3`), the
+// toolchain and the options that reach the output; two builds of one program in two clean
+// directories write the same record; a change is seen; an attestation is the local command's
+// output, and a failing one leaves none. Ported from `crates/nazm-cli/tests/build_provenance.rs`
+// (R7).
+
+use "@std/json"
+use "@std/file"
+use "@std/text"
+use "@std/blake3"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const PROGRAM: Str = "fn twice(x: Int) -> Int { x * 2 }\nfn main() -> Int { twice(21) }\n";
+
+/// `src` built in `dir` with a provenance record and `extra` options: the record, or `Err`.
+fn build(h: Caps, dir: Str, src: Str, extra: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    scratch_write(h, dir, "p.nz", src)?;
+    let args = words(f"build p.nz -o p --provenance p.json {extra}");
+    let o = nazm(h, dir, args);
+    if o.code != 0 {
+        return Result[JsonDoc, Str].Err(error: o.stderr);
+    }
+    jparse(read_text(h, f"{dir}/p.json")?)
+}
+
+fn b3(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    match file_read_all(io, path) {
+        Result.Ok(value: b) => Result[Str, Str].Ok(value: f"blake3:{blake3_hex(b)}"),
+        Result.Err(error: e) => Result[Str, Str].Err(error: path),
+    }
+}
+
+/// The path of the `sources` entry whose `module` is `module`, or `""`.
+fn source(doc: JsonDoc, module: Str) -> Str ! {} {
+    let mut i = 0;
+    while jq(doc, f"sources/{i}") >= 0 {
+        if jstr(doc, f"sources/{i}/module") == module {
+            return f"sources/{i}";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+@test
+fn the_record_names_what_reached_the_output_with_digests_anyone_can_recompute(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let built = build(h, d, PROGRAM, "--opt-level 2 --profile general");
+    let src_digest = b3(h, f"{d}/p.nz");
+    let out_digest = b3(h, f"{d}/p");
+    let text = read_text(h, f"{d}/p.json");
+    scratch_remove(h, d);
+    let doc = built?;
+    check_that(jstr(doc, "schema") == "nazm.provenance/1", jtext(doc, "schema"))?;
+    let ps = source(doc, "p.nz");
+    check_that(jstr(doc, f"{ps}/digest") == src_digest?, "p.nz's digest")?;
+    // The prelude every module sees is a source of the build like any other.
+    let prelude = source(doc, "@core/prelude");
+    check_that(text_starts_with(jstr(doc, f"{prelude}/digest"), "blake3:"), "the prelude's digest")?;
+    check_that(jstr(doc, "output/kind") == "executable", jtext(doc, "output"))?;
+    check_that(jstr(doc, "output/files/0/digest") == out_digest?, "the output's digest")?;
+    check_that(jstr(doc, "backend/name") == "llvm", jtext(doc, "backend"))?;
+    check_that(jint(doc, "backend/opt_level") == 2, jtext(doc, "backend"))?;
+    check_that(jtext(doc, "profiles") == "[\"general\"]", jtext(doc, "profiles"))?;
+    check_that(jint(doc, "runtime/abi_revision") > 0, jtext(doc, "runtime"))?;
+    check_that(text_starts_with(jstr(doc, "runtime/digest"), "blake3:"), jtext(doc, "runtime"))?;
+    check_that(text_contains(jstr(doc, "c_compiler/version"), "clang"), jtext(doc, "c_compiler"))?;
+    // Nothing of this machine: no absolute path anywhere in the record.
+    let record = text?;
+    check_that(!text_contains(record, d), record)
+}
+
+@test
+fn two_clean_builds_write_the_same_record_and_a_change_is_seen(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = scratch_new(h);
+    let b = scratch_new(h);
+    let c = scratch_new(h);
+    let x = build(h, a, PROGRAM, "");
+    let y = build(h, b, PROGRAM, "");
+    let z = build(h, c, text_replace(PROGRAM, "21", "20"), "");
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    scratch_remove(h, c);
+    let xd = x?;
+    let yd = y?;
+    let zd = z?;
+    check_that(jtext(xd, "") == jtext(yd, ""), "one program, one toolchain, two directories: one record")?;
+    let zs = source(zd, "p.nz");
+    let xs = source(xd, "p.nz");
+    check_that(jtext(zd, f"{zs}/digest") != jtext(xd, f"{xs}/digest"), "p.nz's digest did not change")?;
+    check_that(jtext(zd, "output/files/0/digest") != jtext(xd, "output/files/0/digest"), "the output's digest did not change")?;
+    check_that(jtext(zd, source(zd, "@core/prelude")) == jtext(xd, source(xd, "@core/prelude")), "the prelude's entry changed")
+}
+
+@test
+fn the_backend_that_built_it_is_the_one_recorded(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let built = build(h, d, PROGRAM, "--backend cranelift");
+    let out_digest = b3(h, f"{d}/p");
+    scratch_remove(h, d);
+    let doc = built?;
+    check_that(jstr(doc, "backend/name") == "cranelift", jtext(doc, "backend"))?;
+    check_that(jstr(doc, "output/files/0/digest") == out_digest?, "the output's digest")
+}
+
+@test
+fn an_attestation_is_the_local_commands_output_and_a_failing_one_leaves_none(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    // `cat` stands in for a signer: its output is the record itself.
+    let built = build(h, d, PROGRAM, "--attest-with cat");
+    let sig = read_text(h, f"{d}/p.json.sig");
+    let record = read_text(h, f"{d}/p.json");
+    scratch_remove(h, d);
+    built?;
+    check_that(sig? == record?, "the signature is not the attesting command's output")?;
+    let e = prog_dir(h, "p.nz", PROGRAM)?;
+    let o = nazm(h, e, words("build p.nz -o p --provenance p.json --attest-with false"));
+    let has_record = file_exists_at(io, f"{e}/p.json");
+    let has_sig = file_exists_at(io, f"{e}/p.json.sig");
+    // An attestation needs a record to attest.
+    let o2 = nazm(h, e, words("build p.nz -o p --attest-with cat"));
+    scratch_remove(h, e);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "the attesting command `false` failed"), o.stderr)?;
+    check_that(has_record && !has_sig, "a failing attestation left a signature, or no record")?;
+    check_that(o2.code != 0, ran_show(o2))
+}
+
+@test
+fn a_failed_build_writes_no_record(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", "fn main() -> Int { true }\n")?;
+    let o = nazm(h, d, words("build p.nz -o p --provenance p.json"));
+    let exists = file_exists_at(io, f"{d}/p.json");
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(!exists, "a failed build wrote a record")
+}

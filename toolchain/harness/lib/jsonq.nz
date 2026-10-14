@@ -1,0 +1,75 @@
+// Reading a JSON document by path (R7): what a Rust test writes as `v["requirements"][0]["id"]`
+// is `jq(doc, "requirements/0/id")` here — each segment a key, or an index where it is a number.
+
+use "@std/json"
+use "@std/text"
+
+/// The document `text` is, or `Err` (JSON with fractions and exponents read too).
+pub fn jparse(text: Str) -> Result[JsonDoc, Str] ! {} {
+    json_parse_floats(text)
+}
+
+fn index_of(seg: Str) -> Int ! {} {
+    if str_len(seg) == 0 {
+        return 0 - 1;
+    }
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(seg) {
+        let c = str_byte(seg, i);
+        if c < 48 || c > 57 {
+            return 0 - 1;
+        }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    n
+}
+
+/// The node at `path` under the root, `-1` where there is none (`Value::Null` in Rust).
+pub fn jq(doc: JsonDoc, path: Str) -> Int ! {} {
+    let mut node = json_root(doc);
+    if str_len(path) == 0 {
+        return node;
+    }
+    for seg in text_split(path, "/") {
+        let i = index_of(seg);
+        let next = if i >= 0 && json_kind(doc, node) == "array" { json_at(doc, node, i) } else if json_kind(doc, node) == "object" { json_get(doc, node, seg) } else { Option[Int].None() };
+        node = match next {
+            Option.Some(value: n) => n,
+            Option.None() => { return 0 - 1; },
+        };
+    }
+    node
+}
+
+/// The string at `path`, or `""`.
+pub fn jstr(doc: JsonDoc, path: Str) -> Str ! {} {
+    let n = jq(doc, path);
+    if n < 0 {
+        return "";
+    }
+    match json_str(doc, n) {
+        Option.Some(value: s) => s,
+        Option.None() => "",
+    }
+}
+
+/// The integer at `path`, or `-1`.
+pub fn jint(doc: JsonDoc, path: Str) -> Int ! {} {
+    let n = jq(doc, path);
+    if n < 0 {
+        return 0 - 1;
+    }
+    match json_int(doc, n) {
+        Option.Some(value: i) => i,
+        Option.None() => 0 - 1,
+    }
+}
+
+/// The node at `path` written as JSON, or `null` where there is none: for comparing two values
+/// whole, as `assert_eq!` on `serde_json::Value`s does.
+pub fn jtext(doc: JsonDoc, path: Str) -> Str ! {} {
+    let n = jq(doc, path);
+    if n < 0 { "null" } else { json_encode_node(doc, n) }
+}

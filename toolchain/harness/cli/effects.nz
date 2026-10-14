@@ -1,0 +1,118 @@
+// N36: effects are a fact for the checker, and leave no trace in what runs. A program with its
+// effects declared compiles to exactly the IR of the same program without them, at `-O0`; and every
+// program in `examples/effects/` gives the same output interpreted and compiled at `-O0` and `-O2`.
+// Ported from `crates/nazm-cli/tests/effects.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// Every IR unit `nazm build --emit-ir` writes for the files (the first the root), in name order.
+fn ir_of(h: Caps, names: Strs, texts: Strs) -> Result[Str, Str] ! { io, spawn } {
+    let io = h.io;
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i < strs_len(names) {
+        scratch_write(h, d, strs_get(names, i), strs_get(texts, i))?;
+        i = i + 1;
+    }
+    let a = strs_new();
+    strs_push(a, "build");
+    strs_push(a, strs_get(names, 0));
+    for w in words("-o prog --emit-ir --no-cache --opt-level 0") {
+        strs_push(a, w);
+    }
+    let built = nazm(h, d, a);
+    if built.code != 0 {
+        scratch_remove(h, d);
+        return Result[Str, Str].Err(error: f"building failed: {built.stderr}");
+    }
+    let parts = strs_new();
+    match dir_list(io, d) {
+        Result.Ok(value: ns) => {
+            for n in ns {
+                if text_ends_with(n, ".ll") {
+                    strs_push(parts, read_text(h, f"{d}/{n}")?);
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    };
+    scratch_remove(h, d);
+    if strs_len(parts) == 0 {
+        return Result[Str, Str].Err(error: "no IR was emitted");
+    }
+    Result[Str, Str].Ok(value: str_join(parts, ""))
+}
+
+fn list1(a: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, a);
+    out
+}
+
+fn list2(a: Str, b: Str) -> Strs ! {} {
+    let out = list1(a);
+    strs_push(out, b);
+    out
+}
+
+// Each signature on a line of its own, so every body is at the same line and column in both: a
+// runtime error message carries its position. Both hold the same capabilities (N37), so the effect
+// sets are the only difference.
+fn plain() -> Str ! {} {
+    "fn worker(c: Chan) -> Int\n{ chan_send(c, 7); 0 }\nfn say(io: IoCap, n: Int) -> Int\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run(io: IoCap, tasks: SpawnCap) -> Int\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(io, ints_pop(buf) + sum(3)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ run(io, tasks); 0 }\n"
+}
+
+fn typed() -> Str ! {} {
+    "fn worker(c: Chan) -> Int ! {}\n{ chan_send(c, 7); 0 }\nfn say(io: IoCap, n: Int) -> Int ! { io }\n{ print(int_to_str(n)) }\nfn sum(n: Int) -> Int ! {}\n{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }\nfn run(io: IoCap, tasks: SpawnCap) -> Int ! { spawn, io }\n{ let c = chan_new(1); let buf = ints_new(); scope { spawn worker(c); chan_recv(c, buf); } say(io, ints_pop(buf) + sum(3)) }\nfn main(io: IoCap, tasks: SpawnCap) -> Int ! { io, spawn }\n{ run(io, tasks); 0 }\n"
+}
+
+@test
+fn a_declared_effect_set_leaves_no_trace_in_the_native_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = ir_of(h, list1("m.nz"), list1(plain()))?;
+    let b = ir_of(h, list1("m.nz"), list1(typed()))?;
+    check_that(a == b, "the IR of the typed program differs from the plain one's")?;
+    // Across modules too: a contract in an interface is not in the object either.
+    let body = "{ let mut t = 0; let mut i = 1; while i <= n { t = t + i; i = i + 1; } t }";
+    let lib_plain = f"pub fn total(n: Int) -> Int\n{body}\n";
+    let lib_typed = f"pub fn total(n: Int) -> Int ! {{}}\n{body}\n";
+    let main_plain = "use \"lib.nz\";\nfn main() -> Int\n{ total(4) }\n";
+    let main_typed = "use \"lib.nz\";\nfn main() -> Int ! {}\n{ total(4) }\n";
+    let c = ir_of(h, list2("main.nz", "lib.nz"), list2(main_plain, lib_plain))?;
+    let d = ir_of(h, list2("main.nz", "lib.nz"), list2(main_typed, lib_typed))?;
+    check_that(c == d, "across modules, the IR of the typed program differs from the plain one's")
+}
+
+@test
+fn every_effects_example_runs_the_same_interpreted_and_compiled(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{repo_root(h)}/examples/effects";
+    let d = scratch_new(h);
+    let names = match dir_list(io, src) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { scratch_remove(h, d); return Result[Int, Str].Err(error: "examples/effects"); },
+    };
+    for n in names {
+        if text_ends_with(n, ".nz") {
+            scratch_write(h, d, n, read_text(h, f"{src}/{n}")?)?;
+        }
+    }
+    scratch_write(h, d, "typed.nz", typed())?;
+    let pure = agree_native(h, d, "pure.nz");
+    let tasks = agree_native(h, d, "tasks.nz");
+    let report = agree_native(h, d, "report.nz");
+    // And the typed program above, which spawns through a declared helper.
+    let typed_out = agree_native(h, d, "typed.nz");
+    scratch_remove(h, d);
+    check_that(pure? == "1275\n", "pure.nz")?;
+    check_that(tasks? == "30\n", "tasks.nz")?;
+    check_that(report? == "10\n", "report.nz")?;
+    check_that(typed_out? == "13", "typed.nz")
+}

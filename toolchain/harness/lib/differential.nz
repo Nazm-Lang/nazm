@@ -7,6 +7,7 @@ use "@std/json";
 use "@std/text";
 use "run.nz";
 use "scratch.nz";
+use "strings.nz";
 
 /// Every run of one program, by label.
 pub struct Labeled {
@@ -240,4 +241,54 @@ pub fn same_strs(what: Str, got: Strs, want: Strs) -> Result[Int, Str] ! {} {
     } else {
         Result[Int, Str].Err(error: f"{what}: [{g}], expected [{w}]")
     }
+}
+
+/// A scratch directory holding `name` with `src`: what the Rust tests' `tempdir` and `write` make
+/// before they run the binary on it. The caller removes it with `scratch_remove`.
+pub fn prog_dir(h: Caps, name: Str, src: Str) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    if str_len(d) == 0 {
+        return Result[Str, Str].Err(error: "no scratch directory");
+    }
+    scratch_write(h, d, name, src)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// Every `live=` word of a memory line is `live=0`: nothing the program allocated is left.
+pub fn all_reclaimed(line: Str) -> Bool ! {} {
+    for w in split_whitespace(line) {
+        if text_starts_with(w, "live=") && w != "live=0" {
+            return false;
+        }
+    }
+    true
+}
+
+/// `everywhere` for one file, `prog.nz`.
+pub fn everywhere_one(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    let texts = strs_new();
+    strs_push(texts, src);
+    everywhere(h, names, texts)
+}
+
+/// The usize `s` is, as Rust's `str::parse::<usize>` reads one (an optional `+`, then digits), or
+/// `-1`.
+pub fn parse_usize(s: Str) -> Int ! {} {
+    let body = if text_starts_with(s, "+") { str_slice(s, 1, str_len(s)) } else { s };
+    if str_len(body) == 0 {
+        return 0 - 1;
+    }
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(body) {
+        let c = str_byte(body, i);
+        if c < 48 || c > 57 {
+            return 0 - 1;
+        }
+        n = n * 10 + (c - 48);
+        i = i + 1;
+    }
+    n
 }

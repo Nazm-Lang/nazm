@@ -1,0 +1,70 @@
+// N59: scalar temporaries as SSA values in the LLVM emitter (`docs/architecture.md` §7.61). A
+// temporary of type `Int` or `Bool` that MIR assigns once and reads only later in its block has no
+// stack slot, every other local keeps one, and the program means what it meant — at `-O0` and at
+// `-O2`. Ported from `crates/nazm-cli/tests/promotion.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn program() -> Str ! {} {
+    "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn twice(x: Int) -> Int { let y = x * 2; y + 1 }\nfn main() -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < 2000 { s = s + i % 7 * 3; i = i + 1; }\n    let ok = s > 0 && i == 2000;\n    let text = str_concat(\"s=\", int_to_str(s));\n    if ok { str_len(text) + fib(15) + twice(0) - 1 } else { 0 }\n}\n"
+}
+
+/// The slots each function's text declares, by the comment the emitter writes beside each.
+fn slots(ir: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in text_lines(ir) {
+        if text_contains(l, " = alloca ") {
+            let parts = text_split(l, "; ");
+            if strs_len(parts) > 1 {
+                strs_push(out, text_trim(strs_get(parts, 1)));
+            }
+        }
+    }
+    out
+}
+
+@test
+fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", program())?;
+    let b = nazm(h, d, words("build --no-cache --emit-ir --opt-level 0 prog.nz -o prog"));
+    if b.code != 0 {
+        scratch_remove(h, d);
+        return Result[Int, Str].Err(error: b.stderr);
+    }
+    let ir = match read_text(h, f"{d}/prog.m0.ll") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { scratch_remove(h, d); return Result[Int, Str].Err(error: e); },
+    };
+    // Parameters, bindings, managed values and a temporary assigned in two blocks (an `if`'s
+    // result) keep their slots; every scalar temporary assigned once and read in its block —
+    // eleven `arg#` here — has none. `main`'s `out: OutCap` is a word; then the values held in
+    // memory (N105: LIR's slots follow its variables).
+    let want = text_split("n : Int|result#1 : Int|x : Int|y : Int|out : Int|i : Int|s : Int|ok : Bool|result#5 : Int|text : Str|arg#10 : Str", "|");
+    let have = slots(ir);
+    let mut failure = "";
+    let shown = str_join(have, "|");
+    if shown != str_join(want, "|") {
+        failure = f"slots [{shown}]\n{ir}";
+    }
+    // The program means what it meant, at both optimisation levels.
+    for opt in words("0 2") {
+        let exe = f"{d}/o{opt}";
+        let a = words(f"build --no-cache --opt-level {opt} prog.nz -o");
+        strs_push(a, exe);
+        let built = nazm(h, d, a);
+        let r = run(h, exe, strs_new(), d, suite_env(h));
+        if str_len(failure) == 0 && built.code != 0 {
+            failure = ran_show(built);
+        } else if str_len(failure) == 0 && r.stdout != "617\n" {
+            failure = f"-O{opt}: {ran_show(r)}";
+        }
+    }
+    let ran = nazm(h, d, words("run prog.nz"));
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)?;
+    check_that(ran.stdout == "617\n", ran_show(ran))
+}

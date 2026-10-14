@@ -1,0 +1,137 @@
+// N99: the execution tiers agree — the REPL, `nazm run`, and native builds by LLVM and Cranelift
+// (`docs/architecture.md` §7.100). A REPL session defines functions and evaluates expressions; each
+// expression, with the session's definitions, is then a program run by the interpreter and built
+// natively by both backends. Every tier gives the same value, or fails with the same code. Ported
+// from `crates/nazm-cli/tests/tiers.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn definitions() -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, "fn sq(n: Int) -> Int { n * n }");
+    strs_push(out, "fn fact(n: Int) -> Int { if n < 2 { 1 } else { n * fact(n - 1) } }");
+    strs_push(out, "fn gcd(a: Int, b: Int) -> Int { if b == 0 { a } else { gcd(b, a % b) } }");
+    strs_push(out, "fn sum_to(n: Int) -> Int { let mut i = 0; let mut s = 0; while i <= n { s = s + i; i = i + 1; } s }");
+    strs_push(out, "fn pick(c: Bool, a: Int, b: Int) -> Int { if c { a } else { b } }");
+    out
+}
+
+fn expressions() -> Strs ! {} {
+    text_split("sq(7)|sq(3037000500)|fact(20)|fact(21)|gcd(1071, 462)|gcd(5, 0)|sum_to(1000)|1 / 0|-9223372036854775808 / -1|-9223372036854775808 % -1|-7 / 2 + -7 % 2|pick(3 < 4, 10, 20) * pick(false, 1, 2)|sum_to(4) - fact(4) + sq(-3)", "|")
+}
+
+/// A tier's answer: `= VALUE` for a value, `! CODE` for the code it failed with.
+fn code_in(text: Str) -> Str ! {} {
+    let parts = text_split(text, "error[");
+    if strs_len(parts) < 2 {
+        return "";
+    }
+    strs_get(text_split(strs_get(parts, 1), "]"), 0)
+}
+
+/// Every evaluation's answer from one REPL session, in order.
+fn repl(h: Caps, d: Str) -> Strs ! { io, spawn } {
+    let input = strs_new();
+    for x in definitions() {
+        strs_push(input, f"{x}\n");
+    }
+    for e in expressions() {
+        strs_push(input, f"{e}\n");
+    }
+    let a = strs_new();
+    strs_push(a, "repl");
+    // The Rust test's child inherits the test's environment, which Cargo gives the result report.
+    let r = run_input(h, nazm_bin(h.io), a, d, suite_env(h), str_join(input, ""));
+    let answers = strs_new();
+    for line in text_lines(r.stdout) {
+        if text_starts_with(line, "= ") {
+            strs_push(answers, f"= {str_slice(line, 2, str_len(line))}");
+        } else if text_starts_with(line, "error[") {
+            let code = strs_get(text_split(str_slice(line, 6, str_len(line)), "]"), 0);
+            strs_push(answers, f"! {code}");
+        }
+    }
+    answers
+}
+
+fn program(expr: Str) -> Str ! {} {
+    let defs = str_join(definitions(), "\n");
+    f"{defs}\nfn main() -> Int {{ {expr} }}\n"
+}
+
+fn last_line(s: Str) -> Str ! {} {
+    let ls = text_lines(s);
+    if strs_len(ls) == 0 { "" } else { strs_get(ls, strs_len(ls) - 1) }
+}
+
+fn interpreted(h: Caps, d: Str, expr: Str) -> Result[Str, Str] ! { io, spawn } {
+    scratch_write(h, d, "p.nz", program(expr))?;
+    let o = nazm(h, d, words("run p.nz"));
+    if o.code == 0 {
+        Result[Str, Str].Ok(value: f"= {last_line(o.stdout)}")
+    } else {
+        Result[Str, Str].Ok(value: f"! {code_in(o.stderr)}")
+    }
+}
+
+fn native(h: Caps, d: Str, expr: Str, backend: Str) -> Result[Str, Str] ! { io, spawn } {
+    scratch_write(h, d, "p.nz", program(expr))?;
+    let b = nazm(h, d, words(f"build --backend {backend} p.nz -o p"));
+    if b.code != 0 {
+        return Result[Str, Str].Err(error: b.stderr);
+    }
+    let o = bounded_exe(h, f"{d}/p", "", suite_env(h));
+    if o.code == 0 {
+        return Result[Str, Str].Ok(value: f"= {text_trim(o.stdout)}");
+    }
+    if o.code != 2 {
+        return Result[Str, Str].Err(error: f"{expr} under {backend}: {ran_show(o)}");
+    }
+    Result[Str, Str].Ok(value: f"! {code_in(o.stderr)}")
+}
+
+@test
+fn every_tier_gives_one_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let session = repl(h, d);
+    let exprs = expressions();
+    let mut failure = "";
+    if strs_len(session) != strs_len(exprs) {
+        let shown = str_join(session, ", ");
+        failure = f"[{shown}]";
+    }
+    let mut failures = 0;
+    let mut i = 0;
+    while str_len(failure) == 0 && i < strs_len(exprs) {
+        let expr = strs_get(exprs, i);
+        let from_repl = strs_get(session, i);
+        i = i + 1;
+        let tiers = strs_new();
+        strs_push(tiers, "run");
+        strs_push(tiers, "llvm");
+        strs_push(tiers, "cranelift");
+        let answers = strs_new();
+        strs_push(answers, interpreted(h, d, expr)?);
+        strs_push(answers, native(h, d, expr, "llvm")?);
+        strs_push(answers, native(h, d, expr, "cranelift")?);
+        let mut k = 0;
+        while k < 3 {
+            if strs_get(answers, k) != from_repl && str_len(failure) == 0 {
+                failure = f"`{expr}`: the REPL and `{strs_get(tiers, k)}` disagree: {strs_get(answers, k)} vs {from_repl}";
+            }
+            k = k + 1;
+        }
+        if text_starts_with(from_repl, "! ") {
+            failures = failures + 1;
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)?;
+    // Both kinds of answer are compared, not only values.
+    let all = str_join(session, ", ");
+    check_that(failures == 4, f"[{all}]")
+}

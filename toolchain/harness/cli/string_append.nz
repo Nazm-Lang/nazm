@@ -1,0 +1,102 @@
+// R1 (linear string building): `s = str_concat(s, x)` appends in place where `s` owns its storage,
+// so a loop of appends allocates a logarithmic number of strings — and means what a concatenation
+// means everywhere, nothing live. Ported from `crates/nazm-cli/tests/string_append.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn appends() -> Str ! {} {
+    r#"fn main(out: OutCap) -> Int ! {io} {
+    let mut s = "";
+    let mut i = 0;
+    while i < 2000 { s = str_concat(s, "x"); i = i + 1; }
+    let mut d = "ab";
+    d = str_concat(d, d);
+    d = str_concat(d, d);
+    let mut k = "hello";
+    let kept = str_slice(k, 0, 5);
+    k = str_concat(k, "!!");
+    // Two names for one string's storage: each append is its own.
+    let mut a = str_concat("base", "");
+    a = str_concat(a, "-");
+    let mut b = a;
+    a = str_concat(a, "1");
+    b = str_concat(b, "2");
+    print(str_concat(a, str_concat(" ", str_concat(b, "\n"))));
+    let lit = "lit";
+    let mut m = lit;
+    m = str_concat(m, "-x");
+    print(str_concat(d, str_concat(" ", str_concat(kept, str_concat(" ", str_concat(k, str_concat(" ", str_concat(lit, str_concat(" ", str_concat(m, "\n"))))))))));
+    str_len(s)
+}
+"#
+}
+
+@test
+fn an_append_is_a_concat_everywhere_and_nothing_is_live(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, appends(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, "base-1 base-2\nabababab hello hello!! lit lit-x\n2000"), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The number after `strings allocated=` in a memory line, or a number too large to pass.
+fn strings_allocated(line: Str) -> Int ! {} {
+    let parts = split(line, "strings allocated=");
+    if strs_len(parts) < 2 {
+        return 9223372036854775807;
+    }
+    let ws = split_whitespace(strs_get(parts, 1));
+    if strs_len(ws) == 0 {
+        return 9223372036854775807;
+    }
+    let n = parse_usize(strs_get(ws, 0));
+    if n < 0 { 9223372036854775807 } else { n }
+}
+
+@test
+fn a_loop_of_appends_allocates_a_logarithmic_number_of_strings(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", "fn main() -> Int { let mut s = \"\"; let mut i = 0; while i < 100000 { s = str_concat(s, \"x\"); i = i + 1; } str_len(s) }\n")?;
+    let mut failure = "";
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --no-cache --backend {backend} p.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        if b.code != 0 {
+            if str_len(failure) == 0 {
+                failure = f"{backend}: {b.stderr}";
+            }
+            continue;
+        }
+        let r = bounded_exe(h, exe, "", env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"));
+        let line = memory_line(r);
+        if str_len(failure) > 0 {
+            continue;
+        }
+        if !text_starts_with(r.stdout, "100000") {
+            failure = f"{backend}: {ran_show(r)}";
+        } else if str_len(line) == 0 {
+            failure = f"no memory report: {ran_show(r)}";
+        } else if strings_allocated(line) >= 64 {
+            // Doubling: about log2(100000) strings, not one per append.
+            failure = f"{backend}: {line}";
+        } else if !all_reclaimed(line) {
+            failure = f"{backend}: {line}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}

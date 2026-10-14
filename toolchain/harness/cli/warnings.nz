@@ -1,0 +1,53 @@
+// `N0632`: a wildcard or a name covering variants no arm names is a warning, and the program still
+// checks; `--deny-warnings` refuses it. Ported from `crates/nazm-cli/tests/warnings.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn covering() -> Str ! {} {
+    "enum E { A, B(n: Int), C, }\nfn f(e: E) -> Int { match e { E.A() => 1, _ => 0, } }\nfn g(e: E) -> Int { match e { E.A() | E.C() => 1, E.B(n: x) => x, } }\nfn h(e: E) -> Int { match e { E.B(n: 0) => 1, other => 2, } }\nfn i(e: E) -> Int { if let E.A() = e { 1 } else { 0 } }\nfn main() -> Int { f(E.C()) + g(E.A()) + h(E.A()) + i(E.B(n: 1)) }\n"
+}
+
+@test
+fn a_wildcard_covering_variants_is_a_warning_and_the_program_checks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "w.nz", covering())?;
+    let r = nazm(h, d, words("check w.nz"));
+    let again = nazm(h, d, words("check w.nz"));
+    let j = nazm(h, d, words("check --json w.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_starts_with(r.stdout, "ok"), ran_show(r))?;
+    // `f`'s `_` and `h`'s name, each listing exactly what no arm names; not `g`, which names every
+    // variant, and not the `if let`.
+    check_that(text_count(r.stderr, "warning[N0632]") == 2, r.stderr)?;
+    check_that(text_contains(r.stderr, "`_` covers `E.B`, `E.C`, which no arm names"), r.stderr)?;
+    check_that(text_contains(r.stderr, "this name covers `E.A`, `E.C`, which no arm names"), r.stderr)?;
+    // Reused from the cache, it is still said.
+    check_that(text_count(again.stderr, "warning[N0632]") == 2, ran_show(again))?;
+    // JSON gives the severity.
+    check_that(text_contains(f"{j.stdout}{j.stderr}", "\"severity\":\"warning\""), ran_show(j))
+}
+
+@test
+fn deny_warnings_refuses_what_the_checker_warns_of(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "w.nz", covering())?;
+    let r = nazm(h, d, words("check --deny-warnings w.nz"));
+    let denied = nazm(h, d, words("build --deny-warnings w.nz -o denied"));
+    let denied_exists = file_exists_at(io, f"{d}/denied");
+    // Without it, a build reports the warnings and builds.
+    let b = nazm(h, d, words("build w.nz -o built"));
+    let ran = bounded_exe(h, f"{d}/built", d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "refused by --deny-warnings"), ran_show(r))?;
+    check_that(denied.code != 0, ran_show(denied))?;
+    check_that(!denied_exists, "a build --deny-warnings refused still wrote its output")?;
+    check_that(b.code == 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "warning[N0632]"), ran_show(b))?;
+    check_that(text_starts_with(ran.stdout, "3"), ran_show(ran))
+}

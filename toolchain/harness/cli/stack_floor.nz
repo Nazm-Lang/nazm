@@ -1,0 +1,35 @@
+// R1, 4.9: the interpreter's call depth is bounded by the stack its thread has, not only by an
+// estimate of a call's cost. A call nested in an expression in the recursive position costs several
+// evaluator frames on a debug build; however deep the recursion and whatever the `--max-depth`,
+// `nazm run` ends with `N0403`, never a signal. Ported from `crates/nazm-cli/tests/stack_floor.rs`
+// (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+@test
+fn heavy_recursion_reports_n0403_and_never_crashes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn g(n: Int) -> Int { n }\nfn f(n: Int) -> Int { n }\nfn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + f(g(down(n - 1))) } }\nfn main() -> Int { down(1000000) }\n")?;
+    let mut failure = "";
+    for depth in text_split("|15000", "|") {
+        let args = words("run prog.nz");
+        if str_len(depth) > 0 {
+            strs_push(args, "--max-depth");
+            strs_push(args, depth);
+        }
+        let r = nazm(h, d, args);
+        let shown = if str_len(depth) > 0 { f"Some(\"{depth}\")" } else { "None" };
+        if str_len(failure) == 0 && !ended_normally(r) {
+            failure = f"{shown}: killed by a signal: {ran_show(r)}";
+        } else if str_len(failure) == 0 && r.code != 2 {
+            failure = f"{shown}: {ran_show(r)}";
+        } else if str_len(failure) == 0 && !text_contains(r.stderr, "error[N0403]") {
+            failure = f"{shown}: {ran_show(r)}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}
