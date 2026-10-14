@@ -18444,13 +18444,12 @@ find = "            nazm_lir::op::count_heap(&mut m);"
 replace = "            let _ = &mut m;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::what_is_freed_is_counted_back_in_every_task" }]
 
-[[mutation]]
-name = "r1d-llvm-units-allocate-past-the-count"
-why = "an LLVM unit keeps C's allocator under a heap limit"
-file = "crates/nazm-lir/src/backend.rs"
-find = "            nazm_runtime::heap::count_heap(&ir)"
-replace = "            ir"
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "heap_limit::what_is_freed_is_counted_back_in_every_task" }]
+# `r1d-llvm-units-allocate-past-the-count` is retired as **equivalent** (R1 close, 2026-10-14): it
+# SURVIVED its killer, and the whole workspace suite with it applied passed (2,895 tests; the 41
+# selfhost refusals are the host's). `nazm build` renames C's allocator in every LLVM artefact but
+# the stack unit, the program's units included (`crates/nazm-cli/src/build/lower.rs`, the heap
+# limit), so the backend's own renaming of a unit is done again there; a build by the mutant calls
+# `nz.heap_free` throughout. `r1d-the-runtime-allocates-past-the-count`, on that loop, is the rule.
 
 [[mutation]]
 name = "r1d-the-manifest-gives-no-limit"
@@ -18560,6 +18559,9 @@ find = '''  %unknown = icmp ne i64 %extra, 0'''
 replace = '''  %unknown = icmp ne i64 %extra, %extra'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere" }]
 
+# Caught where Nazm is released (macOS: `posix_spawnp` would answer otherwise), and without a
+# visible effect inside the Linux container, whose `posix_spawn` refuses a file as the child's
+# directory with `ENOTDIR` itself — the runtime's own answer (R1 close, 2026-10-14).
 [[mutation]]
 name = "r1d-a-file-is-taken-for-a-child-s-directory"
 why = "a file named as a child's directory is not refused as one, so the system's own folding answers"
