@@ -318,6 +318,15 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *Map entries by index* (`spec.md`, *Methods and indexes by name*; 5b.7). On any
+type but a sequence, `m[k]` is `<prefix>_at(m, k)` and a binding's `m[k] = v` its `_set`, the prefix
+as a method's; a compound update's read is `<prefix>_at_or(m, k, zero)` with the value type's zero
+(`check::zero_of`; `Resolution::map_fallback`, which Core IR lowering reads to pass the same zero).
+`@std/hashmap` and `@std/ordmap` gained `_at` and `_at_or`. A compound update's key may be a string.
+Evidence: `crates/nazm-cli/tests/named_methods.rs` — counting words, a `Str` and a `Float64` entry
+built by `+=` and `*=`, written and read, alike everywhere with nothing live; an absent entry read by
+index failing `N0405` in every implementation. Five mutants.
+
 **R1 (2026-10-14)** · *Short variants and inferred enum arguments* (`spec.md`, *Short variants*;
 `openspec/changes/r1-language-for-the-rewrite`, 5b.14). An enum's construction written without type
 arguments takes them from the type it is wanted as, or from payload fields declared as its

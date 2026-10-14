@@ -349,7 +349,8 @@ use crate::digest::{self, Framed};
 /// wanted as, block comments, `loop`, `while let` and an impl without a trait moved from refused
 /// to accepted, and an unclosed block comment to refused (`N0007`); `?` on an `Option` in a
 /// function returning one moved from refused (`N0360`) to accepted; an array literal where a
-/// sequence is wanted, and `+` on two `Str`s (`N0304`), moved from refused to accepted.
+/// sequence is wanted, and `+` on two `Str`s (`N0304`), moved from refused to accepted; `m[k]`,
+/// `m[k] = v` and `m[k] += n` on a map (`N0624`) moved from refused to accepted.
 pub const SEMANTIC_EPOCH: u32 = 73;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker

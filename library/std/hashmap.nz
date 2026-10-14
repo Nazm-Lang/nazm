@@ -164,6 +164,19 @@ pub fn hashmap_get[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {} {
     }
 }
 
+/// The value `m` holds for `key`, which it must hold: `m[key]` (R1, 5b.7). Where it holds none
+/// this traps, as an index out of range does.
+pub fn hashmap_at[K: Hash, V](m: HashMap[K, V], key: K) -> V ! {} {
+    let at = hashmap_find(m, key, key_hash(m.seed, key));
+    vec_get(m.values, vec_get(m.slots, at))
+}
+
+/// The value `m` holds for `key`, or `fallback`: what `m[key] += n` reads (R1, 5b.7).
+pub fn hashmap_at_or[K: Hash, V](m: HashMap[K, V], key: K, fallback: V) -> V ! {} {
+    let at = hashmap_find(m, key, key_hash(m.seed, key));
+    if at < 0 { fallback } else { vec_get(m.values, vec_get(m.slots, at)) }
+}
+
 /// Whether `m` holds `key`.
 pub fn hashmap_has[K: Hash, V](m: HashMap[K, V], key: K) -> Bool ! {} {
     hashmap_find(m, key, key_hash(m.seed, key)) >= 0

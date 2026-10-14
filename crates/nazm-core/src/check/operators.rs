@@ -697,27 +697,66 @@ impl Checker<'_> {
     }
 }
 
+/// The zero a compound update of a map's absent entry starts from (R1, 5b.7): `0` for an
+/// integer, `0.0` for a float, `""` for a `Str`, written at `span`; `None` for any other type,
+/// whose entry must be there.
+pub(crate) fn zero_of(ty: Type, span: Span) -> Option<Expr> {
+    match ty {
+        Type::Str => Some(Expr::Str {
+            value: String::new(),
+            span,
+        }),
+        _ => match ty.num()? {
+            nazm_sema::types::NumKind::F32 | nazm_sema::types::NumKind::F64 => Some(Expr::Float {
+                text: "0.0".to_owned(),
+                span,
+            }),
+            _ => Some(Expr::Int { value: 0, span }),
+        },
+    }
+}
+
 impl Checker<'_> {
     /// `xs[i]` and `xs[i] = v` on a `Vec`, `Ints`, `Strs` or `Bytes` (R1, 5b.15): the call
     /// `<prefix>_<op>(args…)`, checked as that call is and keyed by the brackets' span, which
-    /// Core IR lowering reads as the call. `None` for any other type, or where no such function
-    /// is in scope.
+    /// Core IR lowering reads as the call. On any other type — a `HashMap`, an `OrdMap` — the
+    /// prefix is the type's name in lower case and a read is `<prefix>_at` (R1, 5b.7), or, as
+    /// `m[k] += n` reads it, `<prefix>_at_or` with the value type's zero. `None` where no such
+    /// function is in scope.
     pub(super) fn element_by_name(
         &mut self,
         of: Type,
         op: &str,
         bracket: Span,
-        args: Vec<Expr>,
+        mut args: Vec<Expr>,
         expected: Option<Type>,
     ) -> Option<Type> {
-        let prefix = match of {
-            Type::Ints => "ints",
-            Type::Strs => "strs",
-            Type::Bytes => "bytes",
-            Type::Vec(_) => "vec",
-            _ => return None,
+        let name = match of {
+            Type::Ints => format!("ints_{op}"),
+            Type::Strs => format!("strs_{op}"),
+            Type::Bytes => format!("bytes_{op}"),
+            Type::Vec(_) => format!("vec_{op}"),
+            _ => {
+                let shown = self.show(of);
+                let prefix = shown.split('[').next().unwrap_or("").to_ascii_lowercase();
+                if prefix.is_empty() || !prefix.bytes().all(|b| b.is_ascii_alphanumeric()) {
+                    return None;
+                }
+                let value = self.res.types().type_args(of).last().copied();
+                let compound = bracket.start == bracket.end;
+                match (op, value.and_then(|v| zero_of(v, bracket).map(|z| (v, z)))) {
+                    ("get", Some((v, zero)))
+                        if compound && self.env.get(&format!("{prefix}_at_or")).is_some() =>
+                    {
+                        args.push(zero);
+                        self.res.record_map_fallback(bracket, v);
+                        format!("{prefix}_at_or")
+                    }
+                    ("get", _) => format!("{prefix}_at"),
+                    _ => format!("{prefix}_{op}"),
+                }
+            }
         };
-        let name = format!("{prefix}_{op}");
         self.env.get(&name)?;
         let call = Expr::Call {
             qualifier: None,

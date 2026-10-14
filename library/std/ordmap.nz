@@ -219,6 +219,18 @@ pub fn ordmap_get[K: Ord, V](m: OrdMap[K, V], key: K) -> Option[V] ! {} {
     if at < 0 { Option[V].None() } else { Option[V].Some(value: vec_get(m.values, at)) }
 }
 
+/// The value `m` holds for `key`, which it must hold: `m[key]` (R1, 5b.7). Where it holds none
+/// this traps, as an index out of range does.
+pub fn ordmap_at[K: Ord, V](m: OrdMap[K, V], key: K) -> V ! {} {
+    vec_get(m.values, find(m, key))
+}
+
+/// The value `m` holds for `key`, or `fallback`: what `m[key] += n` reads (R1, 5b.7).
+pub fn ordmap_at_or[K: Ord, V](m: OrdMap[K, V], key: K, fallback: V) -> V ! {} {
+    let at = find(m, key);
+    if at < 0 { fallback } else { vec_get(m.values, at) }
+}
+
 /// Whether `m` holds `key`.
 pub fn ordmap_has[K: Ord, V](m: OrdMap[K, V], key: K) -> Bool ! {} {
     find(m, key) >= 0

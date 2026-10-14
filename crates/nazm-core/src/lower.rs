@@ -1119,6 +1119,103 @@ impl<'a> Lower<'a> {
         es.iter().map(|e| self.expr(e)).collect()
     }
 
+    /// A sequence where one is wanted (R1, 5b.16): `{ let made = vec_new(); vec_push(made, a);
+    /// …; made }`, as `ints_*` and `strs_*` for those. Out of [`Self::expr`], whose frame every
+    /// level of a deep expression pays for.
+    #[inline(never)]
+    fn sequence_literal(&mut self, elems: &[AstExpr], span: &Span) -> Lowered<Expr> {
+        let node = |kind: ExprKind, ty: Option<Type>, at: Span| Expr { kind, ty, at };
+        let seq = self.res.sequence_literal(*span).unwrap_or(Type::Int);
+        let (new, push, type_args) = match seq {
+            Type::Ints => (
+                nazm_sema::Intrinsic::IntsNew,
+                nazm_sema::Intrinsic::IntsPush,
+                Vec::new(),
+            ),
+            Type::Strs => (
+                nazm_sema::Intrinsic::StrsNew,
+                nazm_sema::Intrinsic::StrsPush,
+                Vec::new(),
+            ),
+            t => (
+                nazm_sema::Intrinsic::VecNew,
+                nazm_sema::Intrinsic::VecPush,
+                self.res
+                    .types()
+                    .type_args(t)
+                    .first()
+                    .copied()
+                    .into_iter()
+                    .collect(),
+            ),
+        };
+        let made = self.temp(Temp::Made, seq, *span);
+        let read = Expr {
+            kind: ExprKind::Local(made),
+            ty: Some(seq),
+            at: *span,
+        };
+        let mut stmts = vec![Stmt::Let {
+            local: made,
+            value: Expr {
+                kind: ExprKind::Builtin {
+                    op: new,
+                    type_args: type_args.clone(),
+                    args: Vec::new(),
+                    callee_at: *span,
+                },
+                ty: Some(seq),
+                at: *span,
+            },
+        }];
+        for x in elems {
+            let value = self.expr(x)?;
+            stmts.push(Stmt::Eval(Expr {
+                kind: ExprKind::Builtin {
+                    op: push,
+                    type_args: type_args.clone(),
+                    args: vec![read.clone(), value],
+                    callee_at: *span,
+                },
+                ty: Some(Type::Int),
+                at: *span,
+            }));
+        }
+        Ok(node(
+            ExprKind::Block(Block {
+                stmts,
+                tail: Some(Box::new(read)),
+                ends: Ends::FallsThrough,
+                owns: vec![made],
+                at: *span,
+            }),
+            Some(seq),
+            *span,
+        ))
+    }
+
+    /// `xs[i]` on a sequence (R1, 5b.15) or `m[k]` on a map (5b.7): the call the checker read it
+    /// as — with the value type's zero where it read a compound update's entry. Out of
+    /// [`Self::expr`], whose frame every level of a deep expression pays for.
+    #[inline(never)]
+    fn element_call(&mut self, base: &AstExpr, index: &AstExpr, bracket: Span) -> Lowered<Expr> {
+        let mut args = vec![base.clone(), index.clone()];
+        if let Some(v) = self.res.map_fallback(bracket) {
+            let Some(zero) = crate::check::zero_of(v, bracket) else {
+                return defect(bracket, "a map's fallback with no zero");
+            };
+            args.push(zero);
+        }
+        self.call(bracket, &args, bracket)
+    }
+
+    /// `s + t` on strings (R1, 5b.6): the `str_concat` the checker read it as. Out of
+    /// [`Self::expr`], as [`Self::element_call`] is.
+    #[inline(never)]
+    fn joined(&mut self, lhs: &AstExpr, rhs: &AstExpr, op_span: Span, span: Span) -> Lowered<Expr> {
+        self.call(op_span, &[lhs.clone(), rhs.clone()], span)
+    }
+
     fn expr(&mut self, e: &AstExpr) -> Lowered<Expr> {
         let node = |kind: ExprKind, ty: Option<Type>, at: Span| Expr { kind, ty, at };
         Ok(match e {
@@ -1246,73 +1343,7 @@ impl<'a> Lower<'a> {
             // A sequence where one is wanted (R1, 5b.16): `{ let made = vec_new(); vec_push(made, a);
             // …; made }`, as `ints_*` and `strs_*` for those.
             AstExpr::Array { elems, span } if self.res.sequence_literal(*span).is_some() => {
-                let seq = self.res.sequence_literal(*span).unwrap_or(Type::Int);
-                let (new, push, type_args) = match seq {
-                    Type::Ints => (
-                        nazm_sema::Intrinsic::IntsNew,
-                        nazm_sema::Intrinsic::IntsPush,
-                        Vec::new(),
-                    ),
-                    Type::Strs => (
-                        nazm_sema::Intrinsic::StrsNew,
-                        nazm_sema::Intrinsic::StrsPush,
-                        Vec::new(),
-                    ),
-                    t => (
-                        nazm_sema::Intrinsic::VecNew,
-                        nazm_sema::Intrinsic::VecPush,
-                        self.res
-                            .types()
-                            .type_args(t)
-                            .first()
-                            .copied()
-                            .into_iter()
-                            .collect(),
-                    ),
-                };
-                let made = self.temp(Temp::Made, seq, *span);
-                let read = Expr {
-                    kind: ExprKind::Local(made),
-                    ty: Some(seq),
-                    at: *span,
-                };
-                let mut stmts = vec![Stmt::Let {
-                    local: made,
-                    value: Expr {
-                        kind: ExprKind::Builtin {
-                            op: new,
-                            type_args: type_args.clone(),
-                            args: Vec::new(),
-                            callee_at: *span,
-                        },
-                        ty: Some(seq),
-                        at: *span,
-                    },
-                }];
-                for x in elems {
-                    let value = self.expr(x)?;
-                    stmts.push(Stmt::Eval(Expr {
-                        kind: ExprKind::Builtin {
-                            op: push,
-                            type_args: type_args.clone(),
-                            args: vec![read.clone(), value],
-                            callee_at: *span,
-                        },
-                        ty: Some(Type::Int),
-                        at: *span,
-                    }));
-                }
-                node(
-                    ExprKind::Block(Block {
-                        stmts,
-                        tail: Some(Box::new(read)),
-                        ends: Ends::FallsThrough,
-                        owns: vec![made],
-                        at: *span,
-                    }),
-                    Some(seq),
-                    *span,
-                )
+                self.sequence_literal(elems, span)?
             }
             AstExpr::Array { elems, span } => {
                 let mut lowered = Vec::with_capacity(elems.len());
@@ -1350,17 +1381,16 @@ impl<'a> Lower<'a> {
                     *span,
                 )
             }
-            // On a sequence (R1, 5b.15), the call the checker read it as.
+            // On a sequence (R1, 5b.15) or a map (5b.7), the call the checker read it as — with
+            // the value type's zero where it read a compound update's entry.
             AstExpr::Index {
                 base,
                 index,
                 bracket_span,
                 ..
-            } if self.res.named_method(*bracket_span) => self.call(
-                *bracket_span,
-                &[(**base).clone(), (**index).clone()],
-                *bracket_span,
-            )?,
+            } if self.res.named_method(*bracket_span) => {
+                self.element_call(base, index, *bracket_span)?
+            }
             AstExpr::Index {
                 base,
                 index,
@@ -1421,9 +1451,7 @@ impl<'a> Lower<'a> {
                 op_span,
                 span,
                 ..
-            } if self.res.named_method(*op_span) => {
-                self.call(*op_span, &[(**lhs).clone(), (**rhs).clone()], *span)?
-            }
+            } if self.res.named_method(*op_span) => self.joined(lhs, rhs, *op_span, *span)?,
             AstExpr::Binary {
                 op,
                 lhs,
