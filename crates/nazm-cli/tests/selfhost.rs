@@ -3522,7 +3522,7 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              str_slice(s, 1, 3)\n}\n\
              fn main() -> Int {\n    let x = make();\n    let mut i = 0;\n    \
              let mut noise = \"\";\n    while i < 20 {\n        \
-             noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+             noise = str_concat(\"zz\", noise);\n        i = i + 1;\n    }\n    \
              str_byte(x, 0)\n}\n",
             "98",
         ),
@@ -3589,7 +3589,7 @@ fn the_nazm_written_compiler_emits_the_same_memory_semantics() {
              fn make() -> Holder { Holder(name: str_concat(\"ab\", \"cd\")) }\n\
              fn main() -> Int {\n    let s = make().name;\n    \
              let mut noise = \"\";\n    let mut i = 0;\n    \
-             while i < 20 {\n        noise = str_concat(noise, \"zz\");\n        i = i + 1;\n    }\n    \
+             while i < 20 {\n        noise = str_concat(\"zz\", noise);\n        i = i + 1;\n    }\n    \
              str_byte(s, 3)\n}\n",
             "100",
         ),
