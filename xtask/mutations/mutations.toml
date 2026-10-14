@@ -2927,9 +2927,9 @@ the lowered `match` treats the error variant as the success, so every `Ok` propa
 Repointed by N39: `?` has one meaning, stated once in the lowering to Core IR, which both backends run; the success arm is keyed on the error variant and the error arm on the success one.
 """
 file = "crates/nazm-core/src/lower.rs"
-find = """        let ok_arm = arm(p.ok, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
+find = """        let ok_arm = arm(p.ok, Some(ok), Vec::new(), Some(Box::new(local(ok, ok_ty))));
         let err_arm = arm(p.err, err, vec![leave], None);"""
-replace = """        let ok_arm = arm(p.err, ok, Vec::new(), Some(Box::new(local(ok, ok_ty))));
+replace = """        let ok_arm = arm(p.err, Some(ok), Vec::new(), Some(Box::new(local(ok, ok_ty))));
         let err_arm = arm(p.ok, err, vec![leave], None);"""
 killers = [{ package = "nazm-core", test = "core_ir", name = "a_question_mark_is_a_match_whose_error_arm_returns" }]
 
@@ -18913,3 +18913,21 @@ file = "crates/nazm-syntax/src/parser.rs"
 find = '''            f.name = format!("{prefix}_{}", f.name);'''
 replace = '''            f.name = f.name.clone();'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::the_conveniences_run_alike_everywhere" }]
+
+# --- R1 5b.17: `?` on an `Option` -------------------------------------------------------------
+
+[[mutation]]
+name = "r1-a-question-mark-refuses-an-option"
+why = "`?` on an `Option` is refused as one on anything but a `Result`"
+file = "crates/nazm-core/src/check/pattern.rs"
+find = '''        if let Some(t) = self.option_propagation(ot, at) {'''
+replace = '''        if let Some(t) = self.option_propagation(ot, at).filter(|_| false) {'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::a_question_mark_on_an_option_returns_none_everywhere" }]
+
+[[mutation]]
+name = "r1-an-option-s-none-is-not-left-with"
+why = "`?` on an `Option`'s `None` falls through rather than returning `None`"
+file = "crates/nazm-core/src/lower.rs"
+find = '''        let err_arm = arm(p.err, err, vec![leave], None);'''
+replace = '''        let err_arm = arm(p.err, err, Vec::new(), None);'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "conveniences::a_question_mark_on_an_option_returns_none_everywhere" }]

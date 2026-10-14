@@ -1595,6 +1595,7 @@ already had, and means exactly that.
 | `/* … */` | a comment, which may span lines and nests; one the file ends inside is `N0007` |
 | `loop { … }` | `while true { … }` |
 | `while let P = e { … }` | `while true { match e { P => { … }, _ => { break } } }`: `e` evaluated afresh each time |
+| `o?` on an `Option[T]`, in a function returning an `Option[U]` | `match o { Some(v) => v, None => return None }`: `T`, or `None` leaving the function; in a function returning anything else, `N0361` as a `Result`'s `?` there is |
 | `impl Point { fn area(self: Point) -> Int { … } }` | the function `point_area(self: Point) -> Int` — the type's name in lower case, then the method's — which `p.area()` reads by name (*Methods and indexes by name*); an impl without a trait has no other effect |
 
 ### Methods and indexes by name
