@@ -45,8 +45,18 @@ struct G {
 /// The callee-saved registers the allocator hands out: rbx, r12–r15.
 const NREGS: Int = 5
 
+/// The caller-saved registers no template uses as scratch: rsi, rdi, r8, r9 (4.5).
+const NCALLER: Int = 4
+
 fn areg(i: Int) -> Int {
-    if i == 0 { 3 } else { 11 + i }
+    if i == 0 { 3 } else if i < NREGS { 11 + i } else {
+        match i - NREGS {
+            0 => 6,
+            1 => 7,
+            2 => 8,
+            _ => 9,
+        }
+    }
 }
 
 fn buf(g: G) -> ByteBuf {
@@ -93,12 +103,38 @@ fn st(g: G, reg: Int, v: Int) {
 /// Variable `k`, from its register or slot, and back.
 fn var_ld(g: G, reg: Int, k: Int) {
     let l = g.loc[g.nvals + k]
-    if l >= 0 { mov(buf(g), reg, areg(l)) } else { load(buf(g), 8, reg, RSP, g.varoffs[k]) }
+    if l >= 0 {
+        if reg != areg(l) { mov(buf(g), reg, areg(l)) }
+    } else {
+        load(buf(g), 8, reg, RSP, g.varoffs[k])
+    }
 }
 
 fn var_st(g: G, reg: Int, k: Int) {
     let l = g.loc[g.nvals + k]
-    if l >= 0 { mov(buf(g), areg(l), reg) } else { store(buf(g), 8, reg, RSP, g.varoffs[k]) }
+    if l >= 0 {
+        if reg != areg(l) { mov(buf(g), areg(l), reg) }
+    } else {
+        store(buf(g), 8, reg, RSP, g.varoffs[k])
+    }
+}
+
+/// The register holding value `v` for reading: its own when it has one, else `scratch`, loaded
+/// (4.5: an allocated operand is read in place).
+fn use_reg(g: G, v: Int, scratch: Int) -> Int {
+    if v >= 0 && g.loc[v] >= 0 { return areg(g.loc[v]) }
+    ld(g, scratch, v)
+    scratch
+}
+
+/// Where to compute value `v`: its own register when it has one, else `scratch`; `def_done`
+/// then stores a scratch result to the slot.
+fn def_reg(g: G, v: Int, scratch: Int) -> Int {
+    if v >= 0 && g.loc[v] >= 0 { areg(g.loc[v]) } else { scratch }
+}
+
+fn def_done(g: G, r: Int, v: Int) {
+    if v >= 0 && g.loc[v] < 0 { st(g, r, v) }
 }
 
 fn ld128(g: G, lo: Int, hi: Int, v: Int) {
@@ -267,7 +303,7 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
-    let loc = allocate(f, n, vcls, NREGS)
+    let loc = allocate(f, n, vcls, NREGS, NCALLER)
     let saved = used_regs(loc, NREGS)
     // After the pushes, the frame keeps rsp 16-aligned.
     let pushed = 8 * ints_len(saved)
@@ -417,47 +453,53 @@ fn inst(g: G, x: Ins) {
         if cls(g, x.dst) == C_I128 {
             copy_val(g, g.param_offs[x.imm], voff(g, x.dst), C_I128)
         } else {
-            load(b, 8, A, RSP, g.param_offs[x.imm])
-            st(g, A, x.dst)
+            let rd = def_reg(g, x.dst, A)
+            load(b, 8, rd, RSP, g.param_offs[x.imm])
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_CONST {
-        mov_imm(b, A, masked(x.imm, x.cls))
         if x.cls == C_I128 {
+            mov_imm(b, A, masked(x.imm, x.cls))
             mov_imm(b, D, x.imm_hi)
             st128(g, A, D, x.dst)
         } else {
-            st(g, A, x.dst)
+            let rd = def_reg(g, x.dst, A)
+            mov_imm(b, rd, masked(x.imm, x.cls))
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_ADDR {
-        sym_addr(g, A, x.sym)
-        st(g, A, x.dst)
+        let rd = def_reg(g, x.dst, A)
+        sym_addr(g, rd, x.sym)
+        def_done(g, rd, x.dst)
     } else if op == OP_SLOT {
         if x.imm < 0 || x.imm >= ints_len(g.slot_off) {
             refuse(g, f"slot s{x.imm}, which does not exist")
             return
         }
-        lea(b, A, RSP, g.slot_off[x.imm])
-        st(g, A, x.dst)
+        let rd = def_reg(g, x.dst, A)
+        lea(b, rd, RSP, g.slot_off[x.imm])
+        def_done(g, rd, x.dst)
     } else if op == OP_LOAD {
-        ld(g, R11, x.a)
+        let base = use_reg(g, x.a, R11)
         if x.cls == C_I128 {
-            load(b, 8, A, R11, x.imm)
-            load(b, 8, D, R11, x.imm + 8)
+            load(b, 8, A, base, x.imm)
+            load(b, 8, D, base, x.imm + 8)
             st128(g, A, D, x.dst)
         } else {
-            load(b, class_size(x.cls), A, R11, x.imm)
-            st(g, A, x.dst)
+            let rd = def_reg(g, x.dst, A)
+            load(b, class_size(x.cls), rd, base, x.imm)
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_STORE {
         let c = cls(g, x.b)
-        ld(g, R11, x.a)
+        let base = use_reg(g, x.a, R11)
         if c == C_I128 {
             ld128(g, A, D, x.b)
-            store(b, 8, A, R11, x.imm)
-            store(b, 8, D, R11, x.imm + 8)
+            store(b, 8, A, base, x.imm)
+            store(b, 8, D, base, x.imm + 8)
         } else {
-            ld(g, A, x.b)
-            store(b, class_size(c), A, R11, x.imm)
+            let rv = use_reg(g, x.b, A)
+            store(b, class_size(c), rv, base, x.imm)
         }
     } else if op == OP_BIN {
         bin(g, x)
@@ -510,10 +552,12 @@ fn inst(g: G, x: Ins) {
         norm(g, A, x.cls)
         st(g, A, x.dst)
     } else if op == OP_PTRADD {
-        ld(g, A, x.a)
-        ld(g, B, x.b)
-        alu(b, ALU_ADD, A, B)
-        st(g, A, x.dst)
+        let ra = use_reg(g, x.a, A)
+        let rb = use_reg(g, x.b, B)
+        let rd = def_reg(g, x.dst, A)
+        if rd != ra { mov(b, rd, ra) }
+        alu(b, ALU_ADD, rd, rb)
+        def_done(g, rd, x.dst)
     } else if op == OP_PTRTOINT || op == OP_INTTOPTR {
         ld(g, A, x.a)
         st(g, A, x.dst)
@@ -525,8 +569,9 @@ fn inst(g: G, x: Ins) {
         if g.f.vars[x.imm] == C_I128 {
             copy_val(g, g.varoffs[x.imm], voff(g, x.dst), C_I128)
         } else {
-            var_ld(g, A, x.imm)
-            st(g, A, x.dst)
+            let rd = def_reg(g, x.dst, A)
+            var_ld(g, rd, x.imm)
+            def_done(g, rd, x.dst)
         }
     } else if op == OP_SET {
         if x.imm < 0 || x.imm >= ints_len(g.f.vars) {
@@ -536,8 +581,7 @@ fn inst(g: G, x: Ins) {
         if g.f.vars[x.imm] == C_I128 {
             copy_val(g, voff(g, x.a), g.varoffs[x.imm], C_I128)
         } else {
-            ld(g, A, x.a)
-            var_st(g, A, x.imm)
+            var_st(g, use_reg(g, x.a, A), x.imm)
         }
     } else if op == OP_CALL || op == OP_CALLI {
         call(g, x)
@@ -634,6 +678,21 @@ fn bin(g: G, x: Ins) {
         st_x(g, X0, c, x.dst)
         return
     }
+    if (c == C_I64 || c == C_PTR) && (s == B_ADD || s == B_SUB || s == B_MUL || s == B_AND ||
+            s == B_OR || s == B_XOR) {
+        let ra = use_reg(g, x.a, A)
+        let rb = use_reg(g, x.b, B)
+        let rd = def_reg(g, x.dst, A)
+        if rd != ra { mov(b, rd, ra) }
+        if s == B_MUL {
+            imul(b, rd, rb)
+        } else {
+            let opc = if s == B_ADD { ALU_ADD } else if s == B_SUB { ALU_SUB } else if s == B_AND { ALU_AND } else if s == B_OR { ALU_OR } else { ALU_XOR }
+            alu(b, opc, rd, rb)
+        }
+        def_done(g, rd, x.dst)
+        return
+    }
     ld(g, A, x.a)
     ld(g, B, x.b)
     if s == B_ADD {
@@ -681,6 +740,18 @@ fn ovf(g: G, x: Ins) {
     let s = x.sub
     if c == C_I128 {
         ovf128(g, x)
+        return
+    }
+    if width_bits(c) == 64 && s != O_MUL && s != O_UMUL {
+        let ra = use_reg(g, x.a, A)
+        let rb = use_reg(g, x.b, B)
+        let rd = def_reg(g, x.dst, A)
+        let ro = def_reg(g, x.dst2, D)
+        if rd != ra { mov(b, rd, ra) }
+        alu(b, if s == O_ADD || s == O_UADD { ALU_ADD } else { ALU_SUB }, rd, rb)
+        setcc(b, if s == O_ADD || s == O_SUB { CC_O } else { CC_B }, ro)
+        def_done(g, rd, x.dst)
+        def_done(g, ro, x.dst2)
         return
     }
     ld(g, A, x.a)
@@ -773,6 +844,15 @@ fn compare(g: G, x: Ins) {
             setcc(b, if k == K_FGT { CC_A } else { CC_AE }, A)
         }
         st(g, A, x.dst)
+        return
+    }
+    if width_bits(c) == 64 || k < K_LT || k > K_GE {
+        let ra = use_reg(g, x.a, A)
+        let rb = use_reg(g, x.b, B)
+        let rd = def_reg(g, x.dst, A)
+        alu(b, ALU_CMP, ra, rb)
+        setcc(b, int_cc(k), rd)
+        def_done(g, rd, x.dst)
         return
     }
     ld(g, A, x.a)
@@ -1012,8 +1092,8 @@ fn term(g: G, t: Ins, bi: Int) {
     if op == T_JUMP {
         if t.imm != bi + 1 { jump_to(g, jmp32(b), t.imm) }
     } else if op == T_BRANCH {
-        ld(g, A, t.a)
-        alu(b, ALU_TEST, A, A)
+        let r = use_reg(g, t.a, A)
+        alu(b, ALU_TEST, r, r)
         if t.imm == bi + 1 {
             jump_to(g, jcc32(b, CC_E), t.c)
         } else {

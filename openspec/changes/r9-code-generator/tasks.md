@@ -30,8 +30,15 @@
       x19–x28, rbx/r12–r15 — so no call clobbers an allocated value. `tests/perf.sh`, aarch64,
       best of five: fib 163 ms against LLVM -O0 164 and -O2 72; words over 2,000,000 words
       816 against 725 and 201; bench/programs within 0.9–1.7× of -O0; every output agrees)
-- [ ] 4.5 Selection that reads and writes allocated registers in place of the scratch copies,
-      and caller-saved registers for values that cross no call
+- [x] 4.5 Selection that reads and writes allocated registers in place of the scratch copies,
+      and caller-saved registers for values that cross no call (`use_reg`/`def_reg` in the
+      templates that read their operands unchanged — 64-bit arithmetic, comparisons, checked
+      add/subtract, loads, stores, constants, addresses, variables, branches; a caller-saved pool
+      no template touches — x8/x13–x15 with the `i128` temporaries moved to x3–x5, and
+      rsi/rdi/r8/r9 — for names no call falls inside or ends at. `tests/perf.sh`, aarch64, on a
+      loaded machine: fib 191 ms against LLVM -O0 235 and -O2 91; words 1210 against 1558 and
+      385. x86_64 under Rosetta: fib 454 against 247, words 2023 against 2124. All 106 inputs
+      still agree on both targets)
 
 ## 5. Line tables
 
