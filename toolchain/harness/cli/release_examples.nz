@@ -1,0 +1,335 @@
+// The release examples and the getting-started page, held to what they say (R1). Ported from
+// `crates/nazm-cli/tests/release_examples.rs` (R7).
+//
+// `examples/tour/` is what a new reader runs first and `docs/getting-started.md` is what they read
+// first, so a tour program that no longer checks, a command whose output changed, or two backends
+// that disagree is a broken first impression — and nothing else in the suite would notice. Every
+// tour program is checked, formatted, interpreted, and built and run under both backends. Every
+// `console` block of the page is run, command by command, in a scratch directory holding the
+// files the page itself defines.
+//
+// Everything runs as a reader runs it: without the result report the rest of the suite sets
+// (R1, 5b.3), so a program shows what it prints and `main`'s result is its exit status.
+
+use "@std/file"
+use "@std/text"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+
+/// Every tour program, and exactly what it prints.
+fn tour_files() -> Strs ! {} {
+    words("hello.nz result-option.nz records-enums.nz generics.nz closures.nz traits.nz tasks.nz")
+}
+
+fn tour_prints() -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, "Hello, Nazm!\n");
+    strs_push(out, "49\n");
+    strs_push(out, "75\n");
+    strs_push(out, "131\n");
+    strs_push(out, "47\n");
+    strs_push(out, "62\n");
+    strs_push(out, "385\n");
+    out
+}
+
+/// The environment a reader's shell has: this process's, without the result report.
+fn reader_env(h: Caps) -> Strs ! { io } {
+    let io = h.io;
+    env_unset(env_here(io), "NAZM_RESULT_REPORT")
+}
+
+fn nazm_as_reader(h: Caps, args: Strs, dir: Str) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), args, dir, reader_env(h))
+}
+
+fn exited(what: Str, r: Ran, code: Int) -> Result[Int, Str] ! {} {
+    if r.code == code { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: f"{what}: {ran_show(r)}") }
+}
+
+fn printed(what: Str, got: Str, want: Str) -> Result[Int, Str] ! {} {
+    if got == want { Result[Int, Str].Ok(value: 0) } else { Result[Int, Str].Err(error: f"{what}: printed {got}, expected {want}") }
+}
+
+@test
+fn every_tour_program_is_listed_here(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = f"{repo_root(h)}/examples/tour";
+    let present = strs_new();
+    match dir_list(io, dir) {
+        Result.Ok(value: names) => {
+            for n in names {
+                if text_ends_with(n, ".nz") {
+                    strs_push(present, n);
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: f"{dir}: cannot be listed");
+        },
+    };
+    let listed = strs_sort(tour_files());
+    let have = str_join(present, " ");
+    let want = str_join(listed, " ");
+    if have != want {
+        return Result[Int, Str].Err(error: f"examples/tour and TOUR disagree: a program here is run by nothing, or a listed one is gone: [{have}] vs [{want}]");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn every_tour_program_checks_formats_runs_and_builds_alike_under_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = f"{repo_root(h)}/examples/tour";
+    let scratch = scratch_new(h);
+    let files = tour_files();
+    let prints = tour_prints();
+    let mut i = 0;
+    let mut failure = "";
+    while i < strs_len(files) && str_len(failure) == 0 {
+        let file = strs_get(files, i);
+        let expected = strs_get(prints, i);
+        let src = f"{dir}/{file}";
+        failure = tour_one(h, dir, scratch, file, src, expected);
+        i = i + 1;
+    }
+    scratch_remove(h, scratch);
+    if str_len(failure) > 0 { Result[Int, Str].Err(error: failure) } else { Result[Int, Str].Ok(value: 0) }
+}
+
+fn tour_one(h: Caps, dir: Str, scratch: Str, file: Str, src: Str, expected: Str) -> Str ! { io, spawn } {
+    let a1 = strs_new();
+    strs_push(a1, "check");
+    strs_push(a1, src);
+    match exited(f"check {file}", nazm_as_reader(h, a1, dir), 0) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return e; },
+    };
+    let a2 = strs_new();
+    strs_push(a2, "fmt");
+    strs_push(a2, "--check");
+    strs_push(a2, src);
+    match exited(f"fmt --check {file}", nazm_as_reader(h, a2, dir), 0) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return e; },
+    };
+    let a3 = strs_new();
+    strs_push(a3, "run");
+    strs_push(a3, src);
+    let out = nazm_as_reader(h, a3, dir);
+    match exited(f"run {file}", out, 0) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return e; },
+    };
+    match printed(f"run {file}", out.stdout, expected) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return e; },
+    };
+    for backend in words("llvm cranelift") {
+        let exe = f"{scratch}/{file}.{backend}";
+        let a = strs_new();
+        strs_push(a, "build");
+        strs_push(a, src);
+        strs_push(a, "-o");
+        strs_push(a, exe);
+        strs_push(a, "--backend");
+        strs_push(a, backend);
+        match exited(f"build {file} ({backend})", nazm_as_reader(h, a, dir), 0) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { return e; },
+        };
+        let ran = run(h, exe, strs_new(), "", reader_env(h));
+        match exited(f"{file} ({backend})", ran, 0) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { return e; },
+        };
+        match printed(f"{file} built by {backend}", ran.stdout, expected) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { return e; },
+        };
+    }
+    ""
+}
+
+/// One command of a `console` block: what is typed, whether it is meant to fail, and what the
+/// terminal shows — standard output, then standard error.
+struct Step {
+    command: Str,
+    fails: Bool,
+    shows: Str,
+}
+
+/// The page, read as instructions: `<!-- file: PATH -->` before a block writes that block to
+/// `PATH`; `<!-- run -->` before a `console` block runs it.
+struct Page {
+    paths: Strs,
+    texts: Strs,
+    steps: Vec[Step],
+    runs: Int,
+    consoles: Int,
+    problem: Str,
+}
+
+fn strip_prefix(s: Str, prefix: Str) -> Option[Str] ! {} {
+    if text_starts_with(s, prefix) { Option[Str].Some(value: str_slice(s, str_len(prefix), str_len(s))) } else { Option[Str].None() }
+}
+
+fn strip_suffix(s: Str, suffix: Str) -> Option[Str] ! {} {
+    if text_ends_with(s, suffix) { Option[Str].Some(value: str_slice(s, 0, str_len(s) - str_len(suffix))) } else { Option[Str].None() }
+}
+
+fn read_page(text: Str) -> Page ! {} {
+    let page = Page(paths: strs_new(), texts: strs_new(), steps: vec_new[Step](), runs: 0, consoles: 0, problem: "");
+    let mut runs = 0;
+    let mut consoles = 0;
+    let mut problem = "";
+    let mut pending_file = "";
+    let mut has_file = false;
+    let mut pending_run = false;
+    let lines = text_lines(text);
+    let n = strs_len(lines);
+    let mut i = 0;
+    while i < n {
+        let line = strs_get(lines, i);
+        i = i + 1;
+        let t = text_trim(line);
+        if let Option.Some(value: r) = strip_prefix(t, "<!-- file:") {
+            if let Option.Some(value: path) = strip_suffix(r, "-->") {
+                pending_file = text_trim(path);
+                has_file = true;
+                continue;
+            }
+        }
+        if t == "<!-- run -->" {
+            pending_run = true;
+            continue;
+        }
+        let lang = match strip_prefix(t, "```") {
+            Option.Some(value: l) => l,
+            Option.None() => { continue; },
+        };
+        let body = strs_new();
+        while i < n {
+            let l = strs_get(lines, i);
+            i = i + 1;
+            if text_trim(l) == "```" {
+                break;
+            }
+            strs_push(body, l);
+        }
+        if lang == "console" {
+            consoles = consoles + 1;
+        }
+        if has_file {
+            let parts = strs_new();
+            for l in body {
+                strs_push(parts, l);
+                strs_push(parts, "\n");
+            }
+            strs_push(page.paths, pending_file);
+            strs_push(page.texts, str_join(parts, ""));
+            has_file = false;
+        }
+        if pending_run {
+            pending_run = false;
+            if lang != "console" {
+                problem = f"`<!-- run -->` before a ```{lang} block";
+            }
+            runs = runs + 1;
+            let mut have = false;
+            let mut command = "";
+            let mut fails = false;
+            let mut shown = strs_new();
+            for l in body {
+                if let Option.Some(value: cmd) = strip_prefix(l, "$ ") {
+                    if have {
+                        vec_push(page.steps, Step(command: command, fails: fails, shows: str_join(shown, "")));
+                    }
+                    have = true;
+                    shown = strs_new();
+                    match strip_suffix(cmd, "# fails") {
+                        Option.Some(value: c) => { command = text_trim_end(c); fails = true; },
+                        Option.None() => { command = cmd; fails = false; },
+                    }
+                } else {
+                    if !have {
+                        problem = "output before any command";
+                    }
+                    strs_push(shown, l);
+                    strs_push(shown, "\n");
+                }
+            }
+            if have {
+                vec_push(page.steps, Step(command: command, fails: fails, shows: str_join(shown, "")));
+            }
+        }
+    }
+    Page(paths: page.paths, texts: page.texts, steps: page.steps, runs: runs, consoles: consoles, problem: problem)
+}
+
+/// Every file the page defines, written into a scratch directory, and every command of its
+/// `<!-- run -->` blocks run there in order: the exit status and what it printed must be what the
+/// page shows.
+fn run_page(h: Caps, page: Str, min_runs: Int, min_commands: Int) -> Result[Int, Str] ! { io, spawn } {
+    let text = read_text(h, f"{repo_root(h)}/{page}")?;
+    let read = read_page(text);
+    if str_len(read.problem) > 0 {
+        return Result[Int, Str].Err(error: f"{page}: {read.problem}");
+    }
+    if read.runs != read.consoles {
+        return Result[Int, Str].Err(error: f"{page}: every console block must be marked `<!-- run -->`, so none goes unchecked");
+    }
+    if read.runs < min_runs {
+        return Result[Int, Str].Err(error: f"{page} lost its runnable steps");
+    }
+    let scratch = scratch_new(h);
+    let mut i = 0;
+    while i < strs_len(read.paths) {
+        scratch_write(h, scratch, strs_get(read.paths, i), strs_get(read.texts, i))?;
+        i = i + 1;
+    }
+    let nazm = nazm_bin(h.io);
+    let mut ran = 0;
+    let mut failure = "";
+    for step in read.steps {
+        if str_len(failure) > 0 {
+            break;
+        }
+        // `nazm` is the binary under test, wherever it appears in the command line.
+        let command = text_replace(step.command, "nazm ", f"'{nazm}' ");
+        let a = strs_new();
+        strs_push(a, "-c");
+        strs_push(a, f"exec 2>&1; {command}");
+        let out = run(h, "sh", a, scratch, reader_env(h));
+        let shows = f"{out.stdout}{out.stderr}";
+        let ok = out.code == 0;
+        if ok == step.fails {
+            let why = if step.fails { "was meant to fail and succeeded" } else { "failed" };
+            failure = f"{page}: `{step.command}` {why} — it printed:\n{shows}";
+        } else if shows != step.shows {
+            failure = f"{page}: `{step.command}` printed something else:\n{shows}\nexpected:\n{step.shows}";
+        }
+        ran = ran + 1;
+    }
+    scratch_remove(h, scratch);
+    if str_len(failure) > 0 {
+        return Result[Int, Str].Err(error: failure);
+    }
+    if ran < min_commands {
+        return Result[Int, Str].Err(error: f"{page}: only {ran} commands ran");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_getting_started_page_runs_as_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    run_page(caps(io, p, sp, v, t), "docs/getting-started.md", 6, 15)
+}
+
+@test
+fn the_readme_example_runs_as_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    run_page(caps(io, p, sp, v, t), "README.md", 1, 2)
+}

@@ -1,0 +1,187 @@
+// The harness's one way to run another program (R7): a child in a directory, with an environment
+// stated in full, a null standard input, and both of its streams drained as it runs — what
+// `crates/nazm-cli/tests/common/mod.rs`'s `run_bounded` does for the Rust tests.
+//
+// Nothing here inherits by accident: the environment a child sees is the list it is given, built
+// from this process's own with `env_set` and `env_unset`, so a test says which variables matter.
+
+use "@std/process";
+use "@std/file";
+use "@std/ioerror";
+use "@std/env";
+use "@std/text";
+use "@std/time";
+
+/// The authority every harness program holds, handed down from `main` (or a `@test` function) as
+/// one value: files, other programs, threads, and declassifying the paths the harness computes —
+/// a path made from a directory listing is a file's contents to the checker (`N0372`), and the
+/// harness writes and removes only paths under directories it made or was given.
+pub struct Caps {
+    io: IoCap,
+    p: ProcessCap,
+    sp: SpawnCap,
+    v: VouchCap,
+    t: TimeCap,
+}
+
+/// `Caps` from `main`'s parameters.
+pub fn caps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Caps ! {} {
+    Caps(io: io, p: p, sp: sp, v: v, t: t)
+}
+
+/// How long one child may run, as `common::DEADLINE` allows a Rust test's: 60 seconds.
+pub const DEADLINE_MS: Int = 60000;
+
+/// The status of a run ended at the deadline.
+pub const TIMED_OUT: Int = 0 - 2;
+
+/// What one run produced: the exit status (or 256 and the signal, as `process_wait` answers;
+/// `-1` when the program could not be started, `TIMED_OUT` when it was ended at the deadline), and everything it wrote to each stream.
+pub struct Ran {
+    code: Int,
+    stdout: Str,
+    stderr: Str,
+}
+
+/// `r` in the shape the Rust tests print a failed `Output` in, for an assertion's message.
+pub fn ran_show(r: Ran) -> Str ! {} {
+    f"Ran {{ code: {r.code}, stdout: {json_text(r.stdout)}, stderr: {json_text(r.stderr)} }}"
+}
+
+fn json_text(s: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, "\"");
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let esc = if b == 10 { "\\n" } else if b == 34 { "\\\"" } else if b == 92 { "\\\\" } else if b == 9 { "\\t" } else { "" };
+        if str_len(esc) > 0 {
+            strs_push(parts, str_slice(s, start, i));
+            strs_push(parts, esc);
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(parts, str_slice(s, start, str_len(s)));
+    strs_push(parts, "\"");
+    str_join(parts, "")
+}
+
+/// This process's environment, `NAME=value` each.
+pub fn env_here(io: IoCap) -> Strs ! { io } {
+    env_vars(io)
+}
+
+/// `env` with `name` set to `value`, replacing any entry it had.
+pub fn env_set(env: Strs, name: Str, value: Str) -> Strs ! {} {
+    let out = env_unset(env, name);
+    strs_push(out, f"{name}={value}");
+    out
+}
+
+/// `env` without the variable `name`.
+pub fn env_unset(env: Strs, name: Str) -> Strs ! {} {
+    let out = strs_new();
+    let key = f"{name}=";
+    for e in env {
+        if !text_starts_with(e, key) {
+            strs_push(out, e);
+        }
+    }
+    out
+}
+
+fn collect(from: OsHandle, into: Chan[Str]) -> Int ! { io } {
+    let all = match file_read_rest(File(handle: from)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    };
+    chan_send_of(into, all);
+    0
+}
+
+/// Run `program` with `args` in `dir` (`""`: this process's), its environment exactly `env`, its
+/// standard input empty, to its end. A program named with a `/` is taken as it is; another is
+/// found on this process's `PATH`.
+pub fn run(h: Caps, program: Str, args: Strs, dir: Str, env: Strs) -> Ran ! { io, spawn } {
+    run_within(h, program, args, dir, env, DEADLINE_MS)
+}
+
+/// `run`, the child ended with its process group once `ms` milliseconds have passed.
+pub fn run_within(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int) -> Ran ! { io, spawn } {
+    let p = h.p;
+    let sp = h.sp;
+    let v = h.v;
+    // The program and directory are the harness's own: `$NAZM`, a path it built, or one it was
+    // given. A path read from a listing would otherwise count as a file's contents (`N0372`).
+    let program = str_vouch(program);
+    let dir = str_vouch(dir);
+    let c = match process_spawn_with(p, program, args, dir, env, true, true) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => {
+            return Ran(code: 0 - 1, stdout: "", stderr: f"{program}: {io_error_show(e)}");
+        },
+    };
+    let t = h.t;
+    let deadline = time_deadline(t, ms);
+    let outs = chan_new_of[Str](1);
+    let errs = chan_new_of[Str](1);
+    let out = os_child_pipe(c.handle, 1);
+    let err = os_child_pipe(c.handle, 2);
+    let mut status = 0;
+    let got_out = vec_new[Str]();
+    let got_err = vec_new[Str]();
+    scope {
+        spawn collect(out, outs);
+        spawn collect(err, errs);
+        // Both streams drain in tasks of their own while this waits, so a child that fills a pipe
+        // never blocks; one past the deadline is ended with its whole process group, which closes
+        // the pipes the tasks read.
+        status = match process_wait_until(c, deadline) {
+            Result.Ok(value: o) => match o {
+                Option.Some(value: s) => s,
+                Option.None() => {
+                    process_kill_group(p, process_child_id(c), 9);
+                    match process_wait(c) {
+                        Result.Ok(value: s) => s,
+                        Result.Err(error: e) => 0,
+                    };
+                    TIMED_OUT
+                },
+            },
+            Result.Err(error: e) => 0 - 1,
+        };
+        chan_recv_of(outs, got_out);
+        chan_recv_of(errs, got_err);
+    }
+    os_close(out);
+    os_close(err);
+    os_close(c.handle);
+    let stdout = if vec_len(got_out) > 0 { vec_get(got_out, 0) } else { "" };
+    let stderr = if vec_len(got_err) > 0 { vec_get(got_err, 0) } else { "" };
+    if status == TIMED_OUT {
+        return Ran(code: TIMED_OUT, stdout: stdout, stderr: f"{stderr}\n{program} did not terminate within {ms} ms");
+    }
+    Ran(code: status, stdout: stdout, stderr: stderr)
+}
+
+/// The `nazm` under test: `$NAZM`, which every harness program is given.
+pub fn nazm_bin(io: IoCap) -> Str ! { io } {
+    match env_get(io, "NAZM") {
+        Option.Some(value: v) => v,
+        Option.None() => "nazm",
+    }
+}
+
+/// A list of arguments from one string, split at single spaces — for the common case of a command
+/// line with no argument containing a space.
+pub fn words(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    for w in text_split(s, " ") {
+        if str_len(w) > 0 {
+            strs_push(out, w);
+        }
+    }
+    out
+}

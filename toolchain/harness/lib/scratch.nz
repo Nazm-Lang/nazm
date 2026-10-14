@@ -1,0 +1,90 @@
+// Scratch directories for the harness (R7): what `tempfile::tempdir()` gives a Rust test — a new
+// directory only this run made, filled with the files a test names, and removed afterwards.
+
+use "@std/file";
+use "@std/ioerror";
+use "@std/env";
+use "@std/path";
+use "@std/text";
+use "run.nz";
+
+/// A new directory under `TMPDIR` (or `/tmp`), or `""` when none could be made.
+pub fn scratch_new(h: Caps) -> Str ! { io } {
+    let io = h.io;
+    let parent = match env_get(io, "TMPDIR") {
+        Option.Some(value: t) => if str_len(t) > 0 { t } else { "/tmp" },
+        Option.None() => "/tmp",
+    };
+    let trimmed = if text_ends_with(parent, "/") { str_slice(parent, 0, str_len(parent) - 1) } else { parent };
+    match dir_create_temp(io, trimmed) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => "",
+    }
+}
+
+/// Write `text` to `dir/rel`, making the directories it needs: `Err` names the path that could
+/// not be written.
+pub fn scratch_write(h: Caps, dir: Str, rel: Str, text: Str) -> Result[Int, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let path = str_vouch(f"{dir}/{rel}");
+    let parent = path_dir(path);
+    if str_len(parent) > 0 {
+        match dir_create_all(io, parent) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => {
+                return Result[Int, Str].Err(error: f"mkdir {parent}: {io_error_show(e)}");
+            },
+        };
+    }
+    let n = write_file(path, text);
+    if n < 0 { Result[Int, Str].Err(error: f"write {path}") } else { Result[Int, Str].Ok(value: n) }
+}
+
+/// The text of the file at `path`, or `Err` naming it.
+pub fn read_text(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    let io = h.io;
+    match file_read_all(io, path) {
+        Result.Ok(value: b) => Result[Str, Str].Ok(value: bytes_to_str(b)),
+        Result.Err(error: e) => Result[Str, Str].Err(error: f"{path}: {io_error_show(e)}"),
+    }
+}
+
+/// Remove `dir` and everything under it; a link is removed, never followed. The number of
+/// entries that could not be removed.
+pub fn scratch_remove(h: Caps, dir: Str) -> Int ! { io } {
+    let io = h.io;
+    let v = h.v;
+    if str_len(dir) == 0 {
+        return 0;
+    }
+    let all = match file_walk(io, dir) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => strs_new(),
+    };
+    let mut failed = 0;
+    // A directory sorts before everything under it, so the reverse order empties each first.
+    let mut i = strs_len(all);
+    while i > 0 {
+        i = i - 1;
+        let p = str_vouch(strs_get(all, i));
+        let gone = match file_symlink_metadata(io, p) {
+            Result.Ok(value: m) => match m.kind {
+                EntryKind.Directory() => dir_remove(io, p),
+                EntryKind.Regular() => file_remove(io, p),
+                EntryKind.Symlink() => file_remove(io, p),
+                EntryKind.Other() => file_remove(io, p),
+            },
+            Result.Err(error: e) => Result[Int, IoError].Err(error: e),
+        };
+        match gone {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { failed = failed + 1; 0 },
+        };
+    }
+    match dir_remove(io, str_vouch(dir)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { failed = failed + 1; 0 },
+    };
+    failed
+}
