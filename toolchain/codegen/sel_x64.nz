@@ -802,14 +802,12 @@ fn unary(g: G, x: Ins) {
             mov_imm(b, B, if dbl { ~sign } else { 0x7FFFFFFF })
             alu(b, ALU_AND, A, B)
         }
-    } else if s == U_FSQRT || s == U_FFLOOR || s == U_FCEIL || s == U_FTRUNC {
+    } else if s == U_FSQRT {
         movq_to_x(b, true, X0, A)
-        if s == U_FSQRT {
-            farith(b, dbl, 0x51, X0, X0)
-        } else {
-            round(b, dbl, X0, X0, if s == U_FFLOOR { 9 } else if s == U_FCEIL { 10 } else { 11 })
-        }
+        farith(b, dbl, 0x51, X0, X0)
         movq_from_x(b, dbl, A, X0)
+    } else if s == U_FFLOOR || s == U_FCEIL || s == U_FTRUNC {
+        round_sse2(g, s, dbl)
     } else if s == U_POPCNT {
         // The baseline CPU has no `popcnt`: the bit-parallel count.
         mov(b, B, A)
@@ -1189,4 +1187,39 @@ fn compare128(g: G, x: Ins) {
         setcc(b, cc, A)
     }
     st(g, A, x.dst)
+}
+
+/// Floor, ceiling or truncation of the float whose bits are in rax, with SSE2 alone — the
+/// baseline of every x86-64 target (SSE4.1's `roundsd` is not in x86-64 v1's): a value whose
+/// magnitude is 2^52 (2^23 for single) or more, an infinity or a NaN is already integral and
+/// stays as it is; any other converts to an integer and back, is moved down (floor) or up
+/// (ceiling) by one where that passed the value, and keeps its sign, so -0.5 gives -0.0.
+fn round_sse2(g: G, s: Int, dbl: Bool) {
+    let b = buf(g)
+    let abs_mask = if dbl { 0x7FFFFFFFFFFFFFFF } else { 0x7FFFFFFF }
+    let limit = if dbl { 0x4330000000000000 } else { 0x4B000000 }
+    let one = if dbl { 0x3FF0000000000000 } else { 0x3F800000 }
+    let sign = if dbl { 1 << 63 } else { 0x80000000 }
+    mov(b, B, A)
+    mov_imm(b, D, abs_mask)
+    alu(b, ALU_AND, B, D)
+    mov_imm(b, D, limit)
+    alu(b, ALU_CMP, B, D)
+    let done = jcc32(b, CC_AE)
+    movq_to_x(b, true, X0, A)
+    cvttf2si(b, dbl, R10, X0)
+    cvtsi2f(b, dbl, X1, R10)
+    if s != U_FTRUNC {
+        if s == U_FFLOOR { ucomis(b, dbl, X1, X0) } else { ucomis(b, dbl, X0, X1) }
+        let exact = jcc32(b, CC_BE)
+        mov_imm(b, R10, one)
+        movq_to_x(b, true, 13, R10)
+        farith(b, dbl, if s == U_FFLOOR { 0x5C } else { 0x58 }, X1, 13)
+        land32(b, exact)
+    }
+    movq_from_x(b, dbl, R10, X1)
+    mov_imm(b, R11, sign)
+    alu(b, ALU_AND, A, R11)
+    alu(b, ALU_OR, A, R10)
+    land32(b, done)
 }
