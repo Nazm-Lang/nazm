@@ -1,19 +1,26 @@
 // The native pipeline in Nazm (R3): Core IR to MIR, and MIR to LIR.
 //
-//     pipeline mir CORE.json    print `nazm.mir/1`, as `nazm mir` does
+//     pipeline mir CORE.json       print `nazm.mir/1`, as `nazm mir` does, once the validator
+//                                  accepted it
+//     pipeline verify CORE.json    lower and validate, and say so
+//     pipeline mutants CORE.json   break one invariant at a time and check the validator says so
 //
 // CORE.json is `nazm core-ir --json FILE`. `openspec/changes/r3-pipeline/` is the design.
 
 use "cir.nz"
+use "types.nz"
 use "program.nz"
 use "text.nz"
+use "verify.nz"
+use "mutants.nz"
 use "@std/fs"
 use "@std/process"
 
 fn main(io: IoCap) -> Int ! { io } {
     let args = process_args(io)
-    if strs_len(args) != 2 || strs_get(args, 0) != "mir" {
-        eprint("usage: pipeline mir CORE.json\n")
+    let mode = if strs_len(args) == 2 { strs_get(args, 0) } else { "" }
+    if mode != "mir" && mode != "verify" && mode != "mutants" {
+        eprint("usage: pipeline mir|verify|mutants CORE.json\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -30,14 +37,28 @@ fn main(io: IoCap) -> Int ! { io } {
             return 1
         },
     }
-    match lower_program(c) {
-        Ok(p) => {
-            print(print_mir(p))
-            0
-        },
+    let p = match lower_program(c) {
+        Ok(p) => p,
         Err(e) => {
             eprint("pipeline: " + e + "\n")
-            1
+            return 1
         },
     }
+    let tt = table_build(c)
+    if mode == "mutants" {
+        let lines = mutants(p, tt)
+        for l in lines { print(l + "\n") }
+        return if strs_len(lines) == 1 { 0 } else { 1 }
+    }
+    let errors = verify(p, tt)
+    if strs_len(errors) > 0 {
+        for e in errors { eprint("pipeline: MIR invalid: " + e + "\n") }
+        return 1
+    }
+    if mode == "verify" {
+        print(int_to_str(vec_len(p.fns)) + " functions, valid\n")
+    } else {
+        print(print_mir(p))
+    }
+    0
 }

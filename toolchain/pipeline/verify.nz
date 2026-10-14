@@ -1,0 +1,617 @@
+// MIR's invariants, checked (`docs/architecture.md` §7.42; `crates/nazm-mir/src/verify.rs`).
+//
+// Two passes per function: structure and typing over every statement and terminator, then a
+// forward dataflow over the locals that own something — no read of an empty local, no overwrite
+// of an owned one, nothing still owned at a `return` or an `unwind`. It reads MIR and the type
+// table and nothing else, and never changes either.
+//
+// Not yet checked, for want of facts `nazm.core-ir/2` does not carry: a primitive's argument and
+// result types (the built-ins' signature table is the checker's), and the signatures of function
+// values and arrays, which Core IR spells `?` (`openspec/changes/r3-pipeline/design.md`).
+
+use "mir.nz"
+use "types.nz"
+use "text.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
+
+struct Vx {
+    p: MirProgram,
+    tt: TypeTable,
+    f: MirFn,
+    out: Strs,
+}
+
+fn report(v: Vx, what: Str) {
+    for x in v.out { if x == what { return } }
+    strs_push(v.out, what)
+}
+
+fn local_ty(v: Vx, l: Int) -> Str {
+    if l < 0 || l >= vec_len(v.f.locals) { return "" }
+    vec_get(v.f.locals, l).ty
+}
+
+/// A value local's type, or `""` for a task list or a local that does not exist.
+fn value_ty(v: Vx, l: Int) -> Str {
+    let t = local_ty(v, l)
+    if t == "Tasks" { "" } else { t }
+}
+
+fn const_ty(c: MConst) -> Str {
+    match c {
+        MConst.Int(v: _) => "Int",
+        MConst.Bool(v: _) => "Bool",
+        MConst.Str(bytes: _) => "Str",
+        MConst.Num(text: _, kind: k) => k,
+        MConst.Cell(name: _) => "Atomic",
+    }
+}
+
+fn operand_ty(v: Vx, o: Operand) -> Str {
+    match o {
+        Operand.Local(l: l) => value_ty(v, l),
+        Operand.Const(c: c) => const_ty(c),
+    }
+}
+
+fn is_cap(t: Str) -> Bool {
+    spell(t).kind == "builtin" && text_ends_with(t, "Cap")
+}
+
+/// Whether two types are one up to what MIR ignores: capability kinds, a `Cell[T]` as its `Vec[T]`,
+/// and function types (both spelled `?`).
+fn same_shape(a: Str, b: Str) -> Bool {
+    if a == b { return true }
+    if is_cap(a) && is_cap(b) { return true }
+    let x = spell(a)
+    let y = spell(b)
+    // Core IR /2 spells function and array types `?`; an array the lowering recovered is one too.
+    let vague = (x.kind == "unknown" || x.kind == "array") && (y.kind == "unknown" || y.kind == "array")
+    if vague && a != "never" && b != "never" { return true }
+    if (x.head == "Cell" && y.head == "Vec") || (x.head == "Vec" && y.head == "Cell") {
+        return strs_get(x.args, 0) == strs_get(y.args, 0)
+    }
+    false
+}
+
+fn is_integer(t: Str) -> Bool {
+    t == "Int" || (is_num(t) && t != "Float32" && t != "Float64")
+}
+
+fn numeric(t: Str) -> Bool {
+    t == "Int" || is_num(t)
+}
+
+/// The law `op` compares `t` by, or `""` where it has none.
+fn law_of(op: Str, t: Str) -> Str {
+    let ordering = op != "==" && op != "!="
+    let k = spell(t).kind
+    if t == "Int" { return "int" }
+    if is_num(t) { return "num" }
+    if t == "Bool" { return "bool" }
+    if t == "Str" { return "bytes" }
+    if k == "record" || k == "enum" { return "structural" }
+    if ordering { return "" }
+    if k == "array" { return "structural" }
+    if t == "Text" { return "bytes" }
+    if k == "vec" && (spell(t).head == "Box" || spell(t).head == "List") { return "structural" }
+    ""
+}
+
+fn arguments(v: Vx, callee: Int, args: Vec[Operand]) -> Str {
+    if callee < 0 || callee >= vec_len(v.p.fns) { return "a call to a function that does not exist" }
+    let g = vec_get(v.p.fns, callee)
+    if g.params != vec_len(args) {
+        return "calls `" + g.name + "` with " + int_to_str(vec_len(args)) + " arguments where it takes " + int_to_str(g.params)
+    }
+    for i in 0..g.params {
+        let p = vec_get(g.locals, i).ty
+        if !same_shape(operand_ty(v, vec_get(args, i)), p) {
+            return "passes `" + g.name + "` an argument " + int_to_str(i) + " of the wrong type"
+        }
+    }
+    ""
+}
+
+/// What is wrong with `value` written into a local of type `want`; `""` when nothing is. `arm`
+/// is `SCRUTINEE.VARIANT` of the switch arm this block is, or `""`.
+fn rvalue(v: Vx, value: Rvalue, want: Str, arm: Str) -> Str {
+    match value {
+        Rvalue.Use(o: o) => {
+            if operand_ty(v, o) != want { return "a use of a value of another type" }
+            match o {
+                Operand.Local(l: l) => if managed(v.tt, want) { "reads managed _" + int_to_str(l) + " with neither `copy` nor `move`" } else { "" },
+                Operand.Const(c: _) => "",
+            }
+        },
+        Rvalue.Copy(l: l) => if value_ty(v, l) != want { "a copy or move of a value of another type" } else { "" },
+        Rvalue.Move(l: l) => if value_ty(v, l) != want { "a copy or move of a value of another type" } else { "" },
+        Rvalue.Neg(o: o) => if operand_ty(v, o) != want || !numeric(want) { "a negation that is not of a number of its own type" } else { "" },
+        Rvalue.Arith(op: _, a: a, b: b) => if operand_ty(v, a) != want || operand_ty(v, b) != want || !numeric(want) { "arithmetic that is not on numbers of its own type" } else { "" },
+        Rvalue.Bits(op: op, a: a, b: b) => {
+            let rhs = if op == "<<" || op == ">>" { "Int" } else { want }
+            if operand_ty(v, a) != want || operand_ty(v, b) != rhs || !is_integer(want) { "a bit operation that is not on integers of its own type" } else { "" }
+        },
+        Rvalue.Complement(o: o) => if operand_ty(v, o) != want || !is_integer(want) { "a complement that is not of an integer of its own type" } else { "" },
+        Rvalue.Convert(mode: _, to: to, o: o) => if to != want || !numeric(to) || !numeric(operand_ty(v, o)) { "a conversion that is not between numbers" } else { "" },
+        Rvalue.Fits(to: to, o: o) => if want != "Bool" || !numeric(to) || !numeric(operand_ty(v, o)) { "a conversion test that is not between numbers" } else { "" },
+        Rvalue.Compare(op: op, law: law, operand: t, a: a, b: b) => {
+            if want != "Bool" { return "a comparison written into something that is not a `Bool`" }
+            if !same_shape(operand_ty(v, a), t) || !same_shape(operand_ty(v, b), t) { return "a comparison of operands not of its operand type" }
+            if spell(t).kind == "unknown" || spell(t).kind == "array" { return "" }
+            if law_of(op, t) != law { "a comparison under the wrong law for its type" } else { "" }
+        },
+        Rvalue.Hash(operand: t, value: x) => {
+            if want != "UInt64" { return "a hash written into something that is not a `UInt64`" }
+            if operand_ty(v, x) != t { "a hash of an operand not of its operand type" } else { "" }
+        },
+        Rvalue.Call(callee: c, args: args) => {
+            let e = arguments(v, c, args)
+            if e != "" { return e }
+            let g = vec_get(v.p.fns, c)
+            if !same_shape(g.ret, want) { "a call to `" + g.name + "` of the wrong result type" } else { "" }
+        },
+        Rvalue.Primitive(op: op, elem: _, args: _) => if op == "exit_with" { "`exit_with` as a value; it is a terminator" } else { "" },
+        Rvalue.Capture(env: env, index: _) => if env != 0 || v.f.params == 0 { "a capture read from something other than the closure" } else { "" },
+        Rvalue.Record(ty: t, fields: fs, names: _, locals: ls) => {
+            if want != t { return "a record written into a local of another type" }
+            complete(v, t, "", fs, ls)
+        },
+        Rvalue.Variant(ty: t, variant: vi, vname: _, fields: fs, names: _, locals: ls) => {
+            if want != t { return "a variant written into a local of another type" }
+            complete(v, t, int_to_str(vi) + ".", fs, ls)
+        },
+        Rvalue.Field(base: b, f: f) => field_read(v, b, f, want),
+        Rvalue.FieldBorrow(base: b, f: f) => field_read(v, b, f, want),
+        Rvalue.Payload(base: b, ty: t, variant: vi, vname: _, field: fi, fname: _) => {
+            if value_ty(v, b) != t { return "a payload read from something that is not its enum" }
+            if arm != int_to_str(b) + "." + int_to_str(vi) {
+                return "a payload of variant " + int_to_str(vi) + " read outside the arm that matched it"
+            }
+            let ft = field_ty(v.tt, t, int_to_str(vi) + "." + int_to_str(fi))
+            if ft != "" && ft != want { "a payload read into a local of another type" } else { "" }
+        },
+        _ => "",
+    }
+}
+
+fn field_read(v: Vx, b: Operand, f: FieldRef, want: Str) -> Str {
+    if operand_ty(v, b) != f.rec { return "a field read from something that is not its record" }
+    let ft = field_ty(v.tt, f.rec, int_to_str(f.field))
+    if ft != "" && ft != want { "a field read into a local of another type" } else { "" }
+}
+
+/// Whether an aggregate's initialisers name each field once, each of the declared type.
+fn complete(v: Vx, t: Str, prefix: Str, fields: Ints, locals: Ints) -> Str {
+    for i in 0..ints_len(fields) {
+        let f = ints_get(fields, i)
+        for j in 0..i {
+            if ints_get(fields, j) == f { return "an aggregate that names field " + int_to_str(f) + " twice" }
+        }
+        let ft = field_ty(v.tt, t, prefix + int_to_str(f))
+        if ft != "" && value_ty(v, ints_get(locals, i)) != ft {
+            return "an aggregate field " + int_to_str(f) + " of the wrong type"
+        }
+    }
+    ""
+}
+
+fn block_exists(v: Vx, b: Int) -> Bool { b >= 0 && b < vec_len(v.f.blocks) }
+
+fn term_of(b: Block) -> Term {
+    if vec_len(b.term) == 0 { Term.Unwind } else { vec_get(b.term, 0) }
+}
+
+fn structure(v: Vx) {
+    let f = v.f
+    if vec_len(f.blocks) == 0 {
+        report(v, "it has no blocks");
+        return
+    }
+    if f.params > vec_len(f.locals) { report(v, "it declares more parameters than locals"); }
+    for i in 0..vec_len(f.locals) {
+        let l = vec_get(f.locals, i)
+        if (i < f.params) != (l.origin == "param") { report(v, "local _" + int_to_str(i) + " is misplaced as a parameter"); }
+        if i < f.params && l.ty == "Tasks" { report(v, "parameter _" + int_to_str(i) + " is a task list"); }
+    }
+    // Which `SCRUTINEE.VARIANT` each switch arm block is the arm of.
+    let arm_of = strs_new()
+    for i in 0..vec_len(f.blocks) { strs_push(arm_of, "") }
+    for b in f.blocks {
+        match term_of(b) {
+            Term.Switch(scrutinee: s, ty: _, variants: vs, names: _, blocks: bs) => {
+                for k in 0..ints_len(bs) {
+                    let t = ints_get(bs, k)
+                    if t >= 0 && t < strs_len(arm_of) { strs_set(arm_of, t, int_to_str(s) + "." + int_to_str(ints_get(vs, k))) }
+                }
+            },
+            _ => {},
+        }
+    }
+    for bi in 0..vec_len(f.blocks) {
+        let b = vec_get(f.blocks, bi)
+        let mut si = 0
+        for s in b.stmts {
+            let at = "bb" + int_to_str(bi) + "[" + int_to_str(si) + "]: "
+            si += 1
+            let u = stmt_unwind(s)
+            if u >= 0 && !block_exists(v, u) { report(v, at + "a failure edge to bb" + int_to_str(u) + " that does not exist"); }
+            match s {
+                Stmt.Assign(dst: d, value: value, unwind: uw) => {
+                    if can_fail(value) != (uw >= 0) {
+                        report(v, at + if can_fail(value) { "an operation that can fail has no failure edge" } else { "an operation that cannot fail has a failure edge" });
+                    }
+                    let want = value_ty(v, d)
+                    if want == "" {
+                        report(v, at + "assigns _" + int_to_str(d) + " which is not a value local");
+                    } else {
+                        let e = rvalue(v, value, want, strs_get(arm_of, bi))
+                        if e != "" { report(v, at + e); }
+                    }
+                },
+                Stmt.SetField(base: base, path: path, value: value) => {
+                    let mut t = value_ty(v, base)
+                    let mut ok = t != ""
+                    for step in path {
+                        if ok {
+                            if t != step.rec { ok = false } else {
+                                let ft = field_ty(v.tt, step.rec, int_to_str(step.field))
+                                if ft == "" { ok = false } else { t = ft }
+                            }
+                        }
+                    }
+                    if vec_len(path) == 0 { report(v, at + "a field write with no field"); }
+                    if !ok { report(v, at + "a field path that does not follow its types"); } else if value_ty(v, value) != t { report(v, at + "a field written with a value of another type"); }
+                },
+                Stmt.SetElement(base: base, path: _, value: _, unwind: _) => {
+                    if value_ty(v, base) == "" { report(v, at + "an element write on a local that does not exist"); }
+                },
+                Stmt.Drop(l: l) => {
+                    if l < 0 || l >= vec_len(f.locals) { report(v, at + "drops _" + int_to_str(l) + " which does not exist"); }
+                    else if l < f.params { report(v, at + "drops parameter _" + int_to_str(l) + ", which it only borrows"); }
+                    else if local_ty(v, l) == "Tasks" { report(v, at + "drops task list _" + int_to_str(l) + " instead of joining it"); }
+                },
+                Stmt.ScopeOpen(list: l, unwind: _) => { if local_ty(v, l) != "Tasks" { report(v, at + "_" + int_to_str(l) + " is not a task list"); } },
+                Stmt.ScopeJoin(list: l) => { if local_ty(v, l) != "Tasks" { report(v, at + "_" + int_to_str(l) + " is not a task list"); } },
+                Stmt.Spawn(list: l, callee: c, args: args, unwind: _) => {
+                    if local_ty(v, l) != "Tasks" { report(v, at + "_" + int_to_str(l) + " is not a task list"); }
+                    let e = arguments(v, c, args)
+                    if e != "" { report(v, at + e); }
+                },
+                _ => {},
+            }
+        }
+        let here = "bb" + int_to_str(bi) + ": "
+        let t = term_of(b)
+        for x in successors(t) {
+            if !block_exists(v, x) { report(v, here + "jumps to bb" + int_to_str(x) + " which does not exist"); }
+        }
+        match t {
+            Term.Branch(cond: c, then: _, other: _) => { if operand_ty(v, c) != "Bool" { report(v, here + "a branch on something that is not a `Bool`"); } },
+            Term.Switch(scrutinee: s, ty: ty, variants: vs, names: _, blocks: _) => {
+                if value_ty(v, s) != ty { report(v, here + "a switch whose scrutinee is not of its enum"); }
+                let n = variant_count(v.tt, ty)
+                let mut bad = n >= 0 && ints_len(vs) != n
+                for k in 0..ints_len(vs) {
+                    for j in 0..k { if ints_get(vs, j) == ints_get(vs, k) { bad = true } }
+                    if n >= 0 && ints_get(vs, k) >= n { bad = true }
+                }
+                if bad { report(v, here + "a switch that does not name each variant exactly once"); }
+            },
+            Term.Return(l: l) => { if value_ty(v, l) != f.ret { report(v, here + "returns a local that is not of the function's type"); } },
+            Term.Exit(o: o) => { if operand_ty(v, o) != "Int" { report(v, here + "exits with a status that is not an `Int`"); } },
+            _ => {},
+        }
+    }
+}
+
+// --- ownership -----------------------------------------------------------------------------------
+
+/// The state of one tracked local: 0 empty, 1 owned, 2 either (two paths disagreed). A block's
+/// entry state is a `Bytes` of them, or none yet.
+fn st_join(into: Bytes, from: Bytes) -> Bool {
+    let mut changed = false
+    for i in 0..bytes_len(into) {
+        let a = Int(bytes_get(into, i))
+        let b = Int(bytes_get(from, i))
+        let j = if a == b { a } else { 2 }
+        if j != a {
+            bytes_set(into, i, UInt8(j))
+            changed = true
+        }
+    }
+    changed
+}
+
+fn st_copy(s: Bytes) -> Bytes {
+    let out = bytes_new(bytes_len(s))
+    bytes_copy(out, s)
+    out
+}
+
+struct Ox {
+    v: Vx,
+    /// A local's tracked index, or -1.
+    index: Ints,
+    borrowed: Ints,
+    bi: Int,
+}
+
+fn tracked(o: Ox, l: Int) -> Int {
+    if l < 0 || l >= ints_len(o.index) { 0 - 1 } else { ints_get(o.index, l) }
+}
+
+fn read(o: Ox, st: Bytes, l: Int, what: Str) {
+    let i = tracked(o, l)
+    if i < 0 { return }
+    let s = Int(bytes_get(st, i))
+    if s == 0 { report(o.v, "bb" + int_to_str(o.bi) + ": " + what + " _" + int_to_str(l) + " when it is empty"); }
+    if s == 2 { report(o.v, "bb" + int_to_str(o.bi) + ": " + what + " _" + int_to_str(l) + " when it may be empty"); }
+}
+
+fn set(o: Ox, st: Bytes, l: Int, s: Int) {
+    let i = tracked(o, l)
+    if i >= 0 { bytes_set(st, i, UInt8(s)) }
+}
+
+fn operand_reads(os: Vec[Operand], out: Ints) {
+    for x in os {
+        match x {
+            Operand.Local(l: l) => ints_push(out, l),
+            Operand.Const(c: _) => {},
+        }
+    }
+}
+
+fn one(o: Operand, out: Ints) {
+    match o {
+        Operand.Local(l: l) => ints_push(out, l),
+        Operand.Const(c: _) => {},
+    }
+}
+
+/// The locals an rvalue reads through operands (borrowed), not those it moves or copies.
+fn rvalue_reads(value: Rvalue) -> Ints {
+    let out = ints_new()
+    match value {
+        Rvalue.Use(o: x) => { one(x, out); },
+        Rvalue.Neg(o: x) => { one(x, out); },
+        Rvalue.Complement(o: x) => { one(x, out); },
+        Rvalue.Convert(mode: _, to: _, o: x) => { one(x, out); },
+        Rvalue.Fits(to: _, o: x) => { one(x, out); },
+        Rvalue.Hash(operand: _, value: x) => { one(x, out); },
+        Rvalue.Arith(op: _, a: a, b: b) => {
+            one(a, out);
+            one(b, out);
+        },
+        Rvalue.Bits(op: _, a: a, b: b) => {
+            one(a, out);
+            one(b, out);
+        },
+        Rvalue.Index(base: a, index: b) => {
+            one(a, out);
+            one(b, out);
+        },
+        Rvalue.Compare(op: _, law: _, operand: _, a: a, b: b) => {
+            one(a, out);
+            one(b, out);
+        },
+        Rvalue.Array(elems: es) => { operand_reads(es, out); },
+        Rvalue.ArrayRepeat(value: x, count: _) => { one(x, out); },
+        Rvalue.Call(callee: _, args: args) => { operand_reads(args, out); },
+        Rvalue.Primitive(op: _, elem: _, args: args) => { operand_reads(args, out); },
+        Rvalue.CallIndirect(callee: c, args: args) => {
+            one(c, out);
+            operand_reads(args, out);
+        },
+        Rvalue.Closure(func: _, captures: cs) => { operand_reads(cs, out); },
+        Rvalue.Capture(env: e, index: _) => ints_push(out, e),
+        Rvalue.Field(base: b, f: _) => { one(b, out); },
+        Rvalue.FieldBorrow(base: b, f: _) => { one(b, out); },
+        Rvalue.Payload(base: b, ty: _, variant: _, vname: _, field: _, fname: _) => ints_push(out, b),
+        _ => {},
+    }
+    out
+}
+
+fn is_borrowed(o: Ox, l: Int) -> Bool {
+    l >= 0 && l < ints_len(o.borrowed) && ints_get(o.borrowed, l) == 1
+}
+
+/// Flow `st` into block `to`'s entry, queueing it if its entry changed.
+fn flow(entry: Vec[Bytes], have: Ints, work: Ints, to: Int, st: Bytes) {
+    if to < 0 || to >= ints_len(have) { return }
+    if ints_get(have, to) == 0 {
+        vec_set(entry, to, st_copy(st))
+        ints_set(have, to, 1)
+        ints_push(work, to)
+    } else if st_join(vec_get(entry, to), st) {
+        ints_push(work, to)
+    }
+}
+
+/// Take the next block: source blocks by number first, then the failure blocks.
+fn next_block(f: MirFn, work: Ints) -> Int {
+    let mut best = 0 - 1
+    let mut at = 0 - 1
+    for k in 0..ints_len(work) {
+        let b = ints_get(work, k)
+        let late = if vec_get(f.blocks, b).origin != origin_source() { 1 } else { 0 }
+        let rank = late * 1000000000 + b
+        if best < 0 || rank < best {
+            best = rank
+            at = k
+        }
+    }
+    let b = ints_get(work, at)
+    // Remove every queued copy of it.
+    let keep = ints_new()
+    for x in work { if x != b { ints_push(keep, x) } }
+    while ints_len(work) > 0 { ints_pop(work) }
+    for x in keep { ints_push(work, x) }
+    b
+}
+
+fn ownership(v: Vx) {
+    let f = v.f
+    let borrowed = ints_new()
+    for i in 0..vec_len(f.locals) { ints_push(borrowed, 0) }
+    for b in f.blocks {
+        for s in b.stmts {
+            match s {
+                Stmt.Assign(dst: d, value: Rvalue.FieldBorrow(base: _, f: _), unwind: _) => ints_set(borrowed, d, 1),
+                _ => {},
+            }
+        }
+    }
+    let index = ints_new()
+    let of_index = ints_new()
+    for i in 0..vec_len(f.locals) {
+        let t = vec_get(f.locals, i).ty
+        if i >= f.params && ints_get(borrowed, i) == 0 && (t == "Tasks" || managed(v.tt, t)) {
+            ints_push(index, ints_len(of_index))
+            ints_push(of_index, i)
+        } else {
+            ints_push(index, 0 - 1)
+        }
+    }
+    let n = vec_len(f.blocks)
+    let entry: Vec[Bytes] = vec_new()
+    let have = ints_new()
+    for i in 0..n {
+        vec_push(entry, bytes_new(0))
+        ints_push(have, 0)
+    }
+    vec_set(entry, 0, bytes_new(ints_len(of_index)))
+    ints_set(have, 0, 1)
+    let work = ints_new()
+    ints_push(work, 0)
+    let mut steps = 0
+    while ints_len(work) > 0 {
+        steps += 1
+        if steps > (n + 1) * (2 * ints_len(of_index) + 2) {
+            report(v, "the ownership dataflow did not settle");
+            return
+        }
+        let bi = next_block(f, work)
+        let b = vec_get(f.blocks, bi)
+        let st = st_copy(vec_get(entry, bi))
+        let o = Ox(v: v, index: index, borrowed: borrowed, bi: bi)
+        for s in b.stmts {
+            let u = stmt_unwind(s)
+            if u >= 0 { flow(entry, have, work, u, st) }
+            match s {
+                Stmt.Assign(dst: d, value: value, unwind: _) => {
+                    for l in rvalue_reads(value) { read(o, st, l, "reads") }
+                    match value {
+                        Rvalue.Move(l: l) => {
+                            if l < f.params { report(v, "bb" + int_to_str(bi) + ": moves parameter _" + int_to_str(l)); }
+                            if is_borrowed(o, l) { report(v, "bb" + int_to_str(bi) + ": moves borrowed _" + int_to_str(l)); }
+                            read(o, st, l, "moves");
+                            set(o, st, l, 0);
+                        },
+                        Rvalue.Copy(l: l) => { read(o, st, l, "copies"); },
+                        Rvalue.Record(ty: _, fields: _, names: _, locals: ls) => {
+                            for l in ls {
+                                read(o, st, l, "moves");
+                                set(o, st, l, 0);
+                            }
+                        },
+                        Rvalue.Variant(ty: _, variant: _, vname: _, fields: _, names: _, locals: ls) => {
+                            for l in ls {
+                                read(o, st, l, "moves");
+                                set(o, st, l, 0);
+                            }
+                        },
+                        _ => {},
+                    }
+                    let i = tracked(o, d)
+                    if i >= 0 {
+                        if Int(bytes_get(st, i)) != 0 { report(v, "bb" + int_to_str(bi) + ": overwrites _" + int_to_str(d) + " while it may still own a value"); }
+                        bytes_set(st, i, UInt8(1))
+                    }
+                },
+                Stmt.SetField(base: base, path: _, value: value) => {
+                    read(o, st, base, "writes a field of");
+                    read(o, st, value, "moves");
+                    set(o, st, value, 0);
+                },
+                Stmt.SetElement(base: base, path: _, value: value, unwind: _) => {
+                    read(o, st, base, "writes an element of");
+                    read(o, st, value, "moves");
+                    set(o, st, value, 0);
+                },
+                Stmt.Drop(l: l) => {
+                    if is_borrowed(o, l) { report(v, "bb" + int_to_str(bi) + ": drops borrowed _" + int_to_str(l)); }
+                    set(o, st, l, 0);
+                },
+                Stmt.ScopeOpen(list: l, unwind: _) => {
+                    let i = tracked(o, l)
+                    if i >= 0 && Int(bytes_get(st, i)) != 0 { report(v, "bb" + int_to_str(bi) + ": opens task list _" + int_to_str(l) + " twice"); }
+                    set(o, st, l, 1);
+                },
+                Stmt.Spawn(list: l, callee: _, args: args, unwind: _) => {
+                    read(o, st, l, "spawns into");
+                    let ls = ints_new()
+                    operand_reads(args, ls);
+                    for x in ls { read(o, st, x, "passes") }
+                },
+                Stmt.ScopeJoin(list: l) => {
+                    read(o, st, l, "joins");
+                    set(o, st, l, 0);
+                },
+                _ => {},
+            }
+        }
+        let t = term_of(b)
+        match t {
+            Term.Branch(cond: Operand.Local(l: l), then: _, other: _) => { read(o, st, l, "branches on"); },
+            Term.Switch(scrutinee: s, ty: _, variants: _, names: _, blocks: _) => { read(o, st, s, "switches on"); },
+            Term.Return(l: l) => {
+                read(o, st, l, "returns");
+                let returned = tracked(o, l)
+                for i in 0..bytes_len(st) {
+                    if i != returned && Int(bytes_get(st, i)) != 0 {
+                        report(v, "bb" + int_to_str(bi) + ": returns while _" + int_to_str(ints_get(of_index, i)) + " may still own a value (a leak)");
+                    }
+                }
+            },
+            Term.Unwind => {
+                for i in 0..bytes_len(st) {
+                    if Int(bytes_get(st, i)) != 0 {
+                        report(v, "bb" + int_to_str(bi) + ": unwinds while _" + int_to_str(ints_get(of_index, i)) + " may still own a value (a leak)");
+                    }
+                }
+            },
+            _ => {},
+        }
+        for x in successors(t) { flow(entry, have, work, x, st) }
+    }
+}
+
+/// Every broken invariant of `p`, each a sentence naming the function and the place. Empty when
+/// MIR is well formed.
+pub fn verify(p: MirProgram, tt: TypeTable) -> Strs ! {} {
+    let errors = strs_new()
+    for f in p.fns {
+        for e in verify_fn(p, tt, f) { strs_push(errors, e) }
+    }
+    if p.entry >= vec_len(p.fns) { strs_push(errors, "the entry names no function") }
+    errors
+}
+
+/// Every broken invariant of one function of `p`.
+pub fn verify_fn(p: MirProgram, tt: TypeTable, f: MirFn) -> Strs ! {} {
+    let v = Vx(p: p, tt: tt, f: f, out: strs_new())
+    if f.foreign != "" {
+        if vec_len(f.blocks) > 0 || vec_len(f.locals) != f.params { report(v, "a foreign function with a body"); }
+    } else {
+        structure(v)
+        if strs_len(v.out) == 0 { ownership(v) }
+    }
+    let errors = strs_new()
+    for e in v.out { strs_push(errors, "`" + f.name + "`: " + e) }
+    errors
+}
