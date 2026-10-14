@@ -14,6 +14,7 @@ use "docs.nz"
 use "guide.nz"
 use "supply.nz"
 use "modules.nz"
+use "corpus.nz"
 
 /// The ported gates, in `run_checks`'s order.
 fn gates() -> Strs ! {} {
@@ -21,6 +22,7 @@ fn gates() -> Strs ! {} {
     strs_push(out, "doc claims");
     strs_push(out, "capability matrix");
     strs_push(out, "guide from grammar");
+    strs_push(out, "docs corpus");
     strs_push(out, "dependency sources");
     strs_push(out, "module boundaries");
     out
@@ -35,6 +37,9 @@ fn run_gate(h: Caps, root: Str, name: Str) -> Strs ! { io } {
     }
     if name == "guide from grammar" {
         return gate_guide(h, root);
+    }
+    if name == "docs corpus" {
+        return gate_docs_corpus(h, root);
     }
     if name == "dependency sources" {
         return gate_supply(h, root);

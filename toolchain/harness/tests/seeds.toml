@@ -126,3 +126,68 @@ why = "mutations apply: an entry naming a file that does not exist"
 file = "xtask/mutations/mutations.toml"
 find = "file = \"crates/nazm-bench/src/report.rs\"\nfind = \"accepted as f64 / counted.len() as f64\""
 replace = "file = \"crates/nazm-bench/src/gone.rs\"\nfind = \"accepted as f64 / counted.len() as f64\""
+
+# --- docs corpus -----------------------------------------------------------------------------
+
+[[mutation]]
+name = "corpus-duplicate-anchor"
+why = "docs corpus: an anchor used twice in one document"
+file = "docs/mcp.md"
+find = "## The root\n"
+replace = "## The root\n<!-- id: std -->\n\n## Another root\n<!-- id: std -->\n"
+
+[[mutation]]
+name = "corpus-broken-links"
+why = "docs corpus: a link to a heading that is not there, one to a document outside the corpus, one outside the repository, one that climbs out"
+file = "docs/runbook.md"
+find = "  providers' whole responses. It refuses to grow past 256 MiB. Commit the report, not the raw\n  replies.\n"
+replace = "  providers' whole responses. It refuses to grow past 256 MiB. Commit the report, not the raw\n  replies.\n\nSee [the spec](spec.md#no-such-heading), [`code`](spec.md#also-not-there) in code, [the matrix](./capability-matrix.md#nothing-here), [a release](releases/x.md#y), [outside](https://example.com/a#b), [up](../../x.md#z) and [ok](spec.md).\n"
+
+[[mutation]]
+name = "corpus-guide-names-a-rule-the-grammar-lacks"
+why = "docs corpus: a generated guide heading naming no production (the guide gate fails too)"
+file = "docs/guide.md"
+find = "### `program`\n"
+replace = "### `programme`\n"
+
+[[mutation]]
+name = "corpus-grammar-undefined-reference"
+why = "docs corpus: a production naming an undefined nonterminal (the guide gate fails too)"
+file = "docs/grammar.ebnf"
+find = "program = { use_item }"
+replace = "program = { use_itemz }"
+
+[[mutation]]
+name = "corpus-grammar-detached-comment"
+why = "docs corpus: a comment a blank line separates from every rule"
+file = "docs/grammar.ebnf"
+find = "program = { use_item }"
+replace = "(* a stray comment *)\n\nprogram = { use_item }"
+
+[[mutation]]
+name = "corpus-unclosed-fence"
+why = "docs corpus: a code fence that never closes"
+file = "docs/roadmap.md"
+find = "which is the argument for doing the small thing first.\n"
+replace = "which is the argument for doing the small thing first.\n\n```text\nnever closed\n"
+
+[[mutation]]
+name = "corpus-headings-the-reader-refuses"
+why = "docs corpus: a misplaced anchor, a heading with no identity, a setext heading, an HTML heading"
+file = "docs/roadmap.md"
+find = "which is the argument for doing the small thing first.\n"
+replace = "which is the argument for doing the small thing first.\n\n<!-- id: stray -->\n\n## — · —\n\nA paragraph\n===\n\n<h2>Old style</h2>\n"
+
+[[mutation]]
+name = "corpus-no-title"
+why = "docs corpus: a document that does not open with its title"
+file = "docs/bootstrap.md"
+find = "# The bootstrap: how it was designed, what it does, and what it establishes\n"
+replace = "The bootstrap\n\n# The bootstrap: how it was designed, what it does, and what it establishes\n"
+
+[[mutation]]
+name = "corpus-numbered-and-lettered-headings"
+why = "docs corpus: numbered and lettered headings take their numbers as identities, so two `7.2`s collide"
+file = "docs/mcp.md"
+find = "## The root\n"
+replace = "## The root\n\n### 7.2. First — one\n\n### 7.2 Second\n\n### A3.1 — lettered\n\n### A3.1 — again\n"

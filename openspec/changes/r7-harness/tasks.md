@@ -11,7 +11,7 @@
 
 ## 3. `xtask check`'s file-reading gates
 - [x] 3.1 `check/main.nz`: the runner and the report, byte for byte
-- [ ] 3.2 Docs corpus
+- [x] 3.2 Docs corpus (what `Corpus::load` refuses; the digests and indexes it serves are R5's `nazm docs`)
 - [x] 3.3 Guide from grammar
 - [ ] 3.4 Third-party notices
 - [x] 3.5 Module boundaries
