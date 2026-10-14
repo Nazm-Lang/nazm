@@ -4,7 +4,8 @@
 //
 // Reads a program's units as `nazm lir --ops` prints them from the file LIR, and writes one
 // relocatable object per unit, `OUTDIR/unit-K.o` for the K-th unit, for the target:
-// `aarch64-apple-darwin` (the default) or `x86_64-apple-darwin`.
+// `aarch64-apple-darwin` (the default) and `x86_64-apple-darwin` as Mach-O,
+// `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` as ELF.
 // What it does not carry it refuses by name, on standard error, with exit status 3, and then
 // writes nothing (design D9).
 
@@ -15,6 +16,7 @@ use "sel.nz"
 use "sel_x64.nz"
 use "common.nz"
 use "macho.nz"
+use "elf.nz"
 
 fn main(io: IoCap) {
     let mut first = 0
@@ -27,9 +29,10 @@ fn main(io: IoCap) {
         eprintln("usage: nzcg [--target TRIPLE] LIR OUTDIR")
         exit_with(2)
     }
-    let x64 = target == "x86_64-apple-darwin"
-    if !x64 && target != "aarch64-apple-darwin" {
-        eprintln(f"nzcg: refused: the target `{target}` (aarch64-apple-darwin and x86_64-apple-darwin are carried)")
+    let x64 = target == "x86_64-apple-darwin" || target == "x86_64-unknown-linux-gnu"
+    let apple = target == "x86_64-apple-darwin" || target == "aarch64-apple-darwin"
+    if !x64 && !apple && target != "aarch64-unknown-linux-gnu" {
+        eprintln(f"nzcg: refused: the target `{target}` (aarch64 and x86_64, apple-darwin and unknown-linux-gnu, are carried)")
         exit_with(3)
     }
     let text = read_file(arg(first))
@@ -39,10 +42,10 @@ fn main(io: IoCap) {
     let objects = vec_new[Bytes]()
     if strs_len(errors) == 0 {
         for u in p.units {
-            let c = code_new(u.syms.len())
+            let c = code_new(u.syms.len(), apple)
             for f in u.funcs {
                 if str_len(f.section) > 0 {
-                    strs_push(errors, f"`{f.name}` in section `{f.section}` (placement is for the ELF slice)")
+                    strs_push(errors, f"`{f.name}` in section `{f.section}` (section placement, a board's, is not carried)")
                 } else if x64 {
                     gen_function_x64(c, u, f)
                 } else {
@@ -51,7 +54,7 @@ fn main(io: IoCap) {
             }
             for e in c.errors { strs_push(errors, e) }
             if strs_len(errors) == 0 {
-                objects.push(write_object(u, c, x64, errors))
+                objects.push(if apple { write_object(u, c, x64, errors) } else { write_elf(u, c, x64, errors) })
             }
         }
     }

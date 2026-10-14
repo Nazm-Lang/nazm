@@ -102,7 +102,7 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, errors: Strs) -> Bytes {
     }
     for d in u.data {
         if str_len(d.section) > 0 {
-            strs_push(errors, f"data in section `{d.section}` (placement is for the ELF slice), in {u.source}")
+            strs_push(errors, f"data in section `{d.section}` (section placement, a board's, is not carried), in {u.source}")
             continue
         }
         let s = if d.writable { 4 } else if ints_len(d.reloc_at) > 0 { 3 } else { 2 }

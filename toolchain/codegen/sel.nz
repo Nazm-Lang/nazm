@@ -219,9 +219,9 @@ fn sext(g: G, reg: Int, c: Int) {
 
 /// For each argument class: a kind (0 an integer register, 1 a floating-point register, 2 the
 /// stack) and its register number or stack offset, as pairs; then the stack bytes used, last.
-/// Apple's AAPCS64: eight of each register kind, and stack arguments at their natural
-/// alignment, packed.
-fn assign(classes: Ints) -> Ints {
+/// AAPCS64: eight of each register kind; stack arguments at their natural alignment, packed on
+/// Apple's platforms and in eight-byte slots elsewhere.
+fn assign(classes: Ints, apple: Bool) -> Ints {
     let out = ints_new()
     let mut ngr = 0
     let mut nfr = 0
@@ -233,7 +233,9 @@ fn assign(classes: Ints) -> Ints {
                 ints_push(out, nfr)
                 nfr += 1
             } else {
-                let sz = class_size(c)
+                // Apple packs stack arguments at their natural size; AAPCS64 gives each at
+                // least eight bytes.
+                let sz = if apple || class_size(c) >= 8 { class_size(c) } else { 8 }
                 stack = align_up(stack, sz)
                 ints_push(out, 2)
                 ints_push(out, stack)
@@ -258,7 +260,9 @@ fn assign(classes: Ints) -> Ints {
                 ints_push(out, ngr)
                 ngr += 1
             } else {
-                let sz = class_size(c)
+                // Apple packs stack arguments at their natural size; AAPCS64 gives each at
+                // least eight bytes.
+                let sz = if apple || class_size(c) >= 8 { class_size(c) } else { 8 }
                 stack = align_up(stack, sz)
                 ints_push(out, 2)
                 ints_push(out, stack)
@@ -295,7 +299,7 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
         if x.dst + 1 > n { n = x.dst + 1 }
         if x.dst2 + 1 > n { n = x.dst2 + 1 }
         if x.op == OP_CALL || x.op == OP_CALLI {
-            let a = assign(call_params(u, x))
+            let a = assign(call_params(u, x), c.apple)
             let s = a[ints_len(a) - 1]
             if s > out { out = s }
         }
@@ -400,7 +404,7 @@ fn prologue(g: G, size: Int) {
     }
     // Every parameter into its slot, normalised (D5).
     let own = g.u.syms[g.f.sym]
-    let a = assign(own.params)
+    let a = assign(own.params, g.c.apple)
     let mut i = 0
     while i < ints_len(own.params) {
         let c = own.params[i]
@@ -946,7 +950,7 @@ fn call(g: G, x: Ins) {
         refuse(g, "a call whose arguments do not match its callee")
         return
     }
-    let a = assign(params)
+    let a = assign(params, g.c.apple)
     // Stack arguments first, while x9 is free; then the registers.
     let mut i = 0
     while i < ints_len(params) {

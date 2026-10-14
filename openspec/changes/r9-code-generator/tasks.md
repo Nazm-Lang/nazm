@@ -34,7 +34,10 @@
 
 ## 6. ELF and x86_64
 
-- [ ] 6.1 The ELF64 relocatable writer, aarch64
-- [ ] 6.2 The x86-64 encoder and System V convention; Mach-O and ELF
-      (Mach-O done: `NZCG_TARGET=x86_64-apple-darwin tests/run.sh` runs under Rosetta, 106 agree,
-      0 differ, 0 refused; ELF with 6.1)
+- [x] 6.1 The ELF64 relocatable writer, aarch64 and x86_64 (`tests/elf.sh`: 38 of 38 inputs
+      structurally sound on each Linux target against LLVM's objects — *unexecuted*: this host has
+      no Linux linker or kernel, and Docker is not used by this track)
+- [x] 6.2 The x86-64 encoder and System V convention; Mach-O and ELF
+      (`NZCG_TARGET=x86_64-apple-darwin tests/run.sh` runs under Rosetta: 106 agree, 0 differ,
+      0 refused)
+- [ ] 6.3 The ELF objects linked and run on a Linux host (the coordinator's, or CI's)
