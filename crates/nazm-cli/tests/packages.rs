@@ -111,7 +111,7 @@ fn out(o: &Output) -> String {
 fn a_package_builds_from_its_directory_everywhere_and_a_diamond_is_one_package() {
     let d = tempfile::tempdir().unwrap();
     diamond(d.path());
-    let r = nazm(d.path(), &["run", "app"]);
+    let r = nazm(d.path(), &["run", "--interpret", "app"]);
     assert_eq!(
         (r.status.code(), out(&r).as_str()),
         (Some(0), "42\n"),
@@ -173,7 +173,7 @@ fn every_resolution_refusal_has_its_own_code() {
             );
             write(r, "app/src/main.nz", "fn main() -> Int { 0 }\n");
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0500",
     );
     refused(
@@ -181,7 +181,7 @@ fn every_resolution_refusal_has_its_own_code() {
             write(r, "app/nazm.toml", &manifest("app", "0.1", true, &[]));
             write(r, "app/src/main.nz", "fn main() -> Int { 0 }\n");
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0500",
     );
     // A dependency that is not there.
@@ -194,7 +194,7 @@ fn every_resolution_refusal_has_its_own_code() {
             );
             write(r, "app/src/main.nz", "fn main() -> Int { 0 }\n");
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0501",
     );
     // A declared version its manifest does not state.
@@ -207,7 +207,7 @@ fn every_resolution_refusal_has_its_own_code() {
                 &manifest("geo", "1.2.0", false, &[("shapes", "../shapes", "0.3.2")]),
             );
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0502",
     );
     // Two packages of one name: `shapes` at two paths.
@@ -230,7 +230,7 @@ fn every_resolution_refusal_has_its_own_code() {
                 &manifest("geo", "1.2.0", false, &[("shapes", "../shapes2", "0.3.1")]),
             );
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0503",
     );
     // A declared name the package at that path does not have.
@@ -243,7 +243,7 @@ fn every_resolution_refusal_has_its_own_code() {
                 &manifest("app", "0.1.0", true, &[("geometry", "../geo", "1.2.0")]),
             );
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0503",
     );
     // A cycle, named in full.
@@ -262,7 +262,7 @@ fn every_resolution_refusal_has_its_own_code() {
             );
             write(r, "b/src/lib.nz", "pub fn f() -> Int { 0 }\n");
         },
-        &["run", "a"],
+        &["run", "--interpret", "a"],
         "N0504",
     );
     assert!(e.contains("a → b → a"), "{e}");
@@ -289,7 +289,7 @@ fn every_resolution_refusal_has_its_own_code() {
             );
             write(r, "b/src/lib.nz", "pub fn g() -> Int { 0 }\n");
         },
-        &["run", "app"],
+        &["run", "--interpret", "app"],
         "N0504",
     );
     assert!(e.contains("a dependency cycle: a → b → a"), "{e}");
@@ -300,12 +300,12 @@ fn every_resolution_refusal_has_its_own_code() {
             write(r, "lib/nazm.toml", &manifest("lib", "1.0.0", false, &[]));
             write(r, "lib/src/lib.nz", "pub fn f() -> Int { 0 }\n");
         },
-        &["run", "lib"],
+        &["run", "--interpret", "lib"],
         "N0509",
     );
     let d = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(d.path().join("plain")).unwrap();
-    let o = nazm(d.path(), &["run", "plain"]);
+    let o = nazm(d.path(), &["run", "--interpret", "plain"]);
     assert_eq!(o.status.code(), Some(3), "{}", err(&o));
 }
 
@@ -353,7 +353,7 @@ fn a_package_sees_its_own_dependencies_and_nothing_else() {
 fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it() {
     let d = tempfile::tempdir().unwrap();
     diamond(d.path());
-    let o = nazm(d.path(), &["run", "--locked", "app"]);
+    let o = nazm(d.path(), &["run", "--interpret", "--locked", "app"]);
     assert!(err(&o).contains("[N0505]"), "{}", err(&o));
     assert!(nazm(d.path(), &["lock", "app"]).status.success());
     let lock = std::fs::read_to_string(d.path().join("app/nazm.lock")).unwrap();
@@ -368,7 +368,7 @@ fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it()
         std::fs::read_to_string(e.path().join("app/nazm.lock")).unwrap(),
         lock
     );
-    let ok = nazm(d.path(), &["run", "--locked", "app"]);
+    let ok = nazm(d.path(), &["run", "--interpret", "--locked", "app"]);
     assert_eq!(out(&ok), "42\n", "{}", err(&ok));
     // A file inside the package under `--locked` is held to it too.
     let ok = nazm(d.path(), &["check", "--locked", "app/src/main.nz"]);
@@ -392,9 +392,11 @@ fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it()
         "shapes/src/poly.nz",
         "pub fn sides(n: Int) -> Int { n }\n",
     );
-    assert!(nazm(d.path(), &["run", "--locked", "app"]).status.success());
+    assert!(nazm(d.path(), &["run", "--interpret", "--locked", "app"])
+        .status
+        .success());
     write(d.path(), "shapes/src/new.nz", "pub fn g() -> Int { 0 }\n");
-    assert!(err(&nazm(d.path(), &["run", "--locked", "app"])).contains("[N0507]"));
+    assert!(err(&nazm(d.path(), &["run", "--interpret", "--locked", "app"])).contains("[N0507]"));
     std::fs::remove_file(d.path().join("shapes/src/new.nz")).unwrap();
 
     // A changed dependency set or version is a different resolution.
@@ -409,7 +411,7 @@ fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it()
         )
         .replace("0.1.0", "0.2.0"),
     );
-    assert!(err(&nazm(d.path(), &["run", "--locked", "app"])).contains("[N0506]"));
+    assert!(err(&nazm(d.path(), &["run", "--interpret", "--locked", "app"])).contains("[N0506]"));
 }
 
 #[test]
@@ -471,7 +473,7 @@ fn an_unchanged_dependency_is_reused_and_a_changed_one_is_not() {
     );
     let third = nazm(d.path(), &["check", "app", "--cache-report"]);
     assert_eq!(report(&third).0, 1, "{}", out(&third));
-    let r = nazm(d.path(), &["run", "app"]);
+    let r = nazm(d.path(), &["run", "--interpret", "app"]);
     assert_eq!(out(&r), "42\n");
 }
 

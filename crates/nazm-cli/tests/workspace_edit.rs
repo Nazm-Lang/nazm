@@ -122,7 +122,7 @@ fn an_exported_function_is_renamed_in_every_module_of_the_workspace() {
     );
     assert!(read(d.path(), "app/unrelated.nz").contains("fn double"));
     // The renamed workspace checks and runs as before.
-    let r = nazm(d.path(), &["run", "app/main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "app/main.nz"]);
     assert_eq!(String::from_utf8_lossy(&r.stdout), "42\n");
 }
 
@@ -315,6 +315,6 @@ fn an_exported_record_and_its_field_are_renamed_across_modules() {
         .status
         .success());
     assert!(read(d.path(), "main.nz").contains("Point(east: 3, y: 4); p.east"));
-    let r = nazm(d.path(), &["run", "main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(String::from_utf8_lossy(&r.stdout), "3\n");
 }

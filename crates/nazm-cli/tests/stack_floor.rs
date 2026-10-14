@@ -23,7 +23,7 @@ fn heavy_recursion_reports_n0403_and_never_crashes() {
     )
     .unwrap();
     for depth in [None, Some("15000")] {
-        let mut args = vec!["run", "prog.nz"];
+        let mut args = vec!["run", "--interpret", "prog.nz"];
         if let Some(n) = depth {
             args.extend(["--max-depth", n]);
         }

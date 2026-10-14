@@ -205,7 +205,7 @@ fn tiers(dir: &Path, src: &str) -> Tiers {
     let mut out = Vec::new();
     let run = Command::new(NAZM)
         .current_dir(dir)
-        .args(["run", "prog.nz"])
+        .args(["run", "--interpret", "prog.nz"])
         .output()
         .unwrap();
     // The interpreter names the place on the next line; the native tiers on the same one.

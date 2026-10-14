@@ -251,7 +251,7 @@ fn a_handler_is_a_boards_alone() {
         "{}",
         built.stderr
     );
-    let ran = nazm(d.path(), &["run", "prog.nz"]);
+    let ran = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert!(ran.stderr.contains("N0392"), "{}", ran.stderr);
 }
 

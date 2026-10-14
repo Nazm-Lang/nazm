@@ -38,7 +38,7 @@ fn everywhere(header: &str, body: &str) -> Vec<(String, Ran)> {
     std::fs::write(d.path().join("prog.nz"), src).unwrap();
     let mut out = Vec::new();
     for (label, args) in [
-        ("interpreter", &["run", "prog.nz"][..]),
+        ("interpreter", &["run", "--interpret", "prog.nz"][..]),
         ("lir oracle", &["lir", "--run", "prog.nz"][..]),
     ] {
         out.push((
@@ -332,7 +332,7 @@ fn a_128_bit_constant_crosses_modules_and_the_cache() {
     // Twice, then built. `nazm run` keeps no check cache; the interface's copy of each value is
     // read back by `durable_identity::a_128_bit_constant_reads_back_from_its_interface_whole`.
     for _ in 0..2 {
-        let r = nazm(d.path(), &["run", "main.nz"]);
+        let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
         assert_eq!(r.stdout, want, "{r:?}");
     }
     let b = nazm(d.path(), &["build", "main.nz", "-o", "m"]);

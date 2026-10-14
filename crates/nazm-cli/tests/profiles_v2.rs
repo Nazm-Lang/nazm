@@ -175,7 +175,7 @@ fn a_root_marker_inside_a_package_does_not_drop_its_profile() {
     write(d.path(), "pkg/src/nazm.root", "");
     for args in [
         vec!["check", "pkg"],
-        vec!["run", "pkg"],
+        vec!["run", "--interpret", "pkg"],
         vec!["build", "pkg", "-o", "out"],
         vec!["check", "pkg/src/main.nz"],
     ] {

@@ -103,7 +103,10 @@ fn three(path: &Path) -> (Ran, Ran, Ran) {
         );
         out.push(run_exe(&exe));
     }
-    let interp = run_bounded(Command::new(NAZM).arg("run").arg(path), "the interpreter");
+    let interp = run_bounded(
+        Command::new(NAZM).arg("run").arg("--interpret").arg(path),
+        "the interpreter",
+    );
     let c = out.pop().unwrap();
     let l = out.pop().unwrap();
     (l, c, interp)

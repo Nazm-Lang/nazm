@@ -45,7 +45,7 @@ fn polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name() {
          let v = vec_new[T]();\n        vec_push(v, x);\n        grow(v, n - 1) + 1\n    }\n}\n\
          fn main() -> Int { grow(1, 3) }\n",
     );
-    let (ok, stdout, _) = nazm(dir.path(), &["run", "m.nz"]);
+    let (ok, stdout, _) = nazm(dir.path(), &["run", "--interpret", "m.nz"]);
     assert!(ok);
     assert_eq!(stdout, "3");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
@@ -73,7 +73,7 @@ fn ordinary_recursion_through_a_generic_function_compiles() {
         "fn count[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { count(x, n - 1) + 1 } }\n\
          fn main() -> Int { count(\"a\", 3) }\n",
     );
-    let (ok, stdout, _) = nazm(dir.path(), &["run", "m.nz"]);
+    let (ok, stdout, _) = nazm(dir.path(), &["run", "--interpret", "m.nz"]);
     assert!(ok);
     assert_eq!(stdout, "3");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
@@ -96,7 +96,7 @@ fn an_instance_nested_past_the_stated_bound_is_refused_rather_than_generated() {
     }
     src.push_str("fn f70[T](x: T) -> Int { 0 }\nfn main() -> Int { f0(1) }\n");
     write(dir.path(), "m.nz", &src);
-    let (ok, stdout, _) = nazm(dir.path(), &["run", "m.nz"]);
+    let (ok, stdout, _) = nazm(dir.path(), &["run", "--interpret", "m.nz"]);
     assert!(ok, "the interpreter has no such bound");
     assert_eq!(stdout, "0");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
@@ -119,7 +119,7 @@ fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol() {
     }
     src.push_str("fn main() -> Int { g16(1) }\n");
     write(dir.path(), "m.nz", &src);
-    let (ok, stdout, stderr) = nazm(dir.path(), &["run", "m.nz"]);
+    let (ok, stdout, stderr) = nazm(dir.path(), &["run", "--interpret", "m.nz"]);
     assert!(ok, "{stderr}");
     assert_eq!(stdout, "65536");
     for backend in ["llvm", "cranelift"] {
@@ -177,7 +177,7 @@ fn a_failure_inside_an_instance_names_the_generic_definitions_line() {
         "fn pick[T](xs: Vec[T], i: Int) -> T {\n    vec_get(xs, i)\n}\n\
          fn main() -> Int {\n    let xs = vec_new[Str]();\n    str_len(pick(xs, 3))\n}\n",
     );
-    let (ok, _, interpreted) = nazm(dir.path(), &["run", "m.nz"]);
+    let (ok, _, interpreted) = nazm(dir.path(), &["run", "--interpret", "m.nz"]);
     assert!(!ok);
     assert!(interpreted.contains("N0405"), "{interpreted}");
     assert!(interpreted.contains("m.nz:2:5"), "{interpreted}");

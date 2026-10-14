@@ -206,7 +206,7 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
              "LLVM backend, clang -O2; checked arithmetic and bounds; --no-cache: every unit "
              "and the runtime compiled each build"),
             ("nazm run (interpreter)", nazm, None,
-             lambda s, n: [nazm, "run", "--max-iterations", "1000000000000", s, "--"], env,
+             lambda s, n: [nazm, "run", "--interpret", "--max-iterations", "1000000000000", s, "--"], env,
              "tree-walking interpreter"),
         ]),
         ("C", "c", "{n}.c", [

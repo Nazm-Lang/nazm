@@ -66,7 +66,10 @@ fn four(src: &str) -> Vec<(String, Ran)> {
     std::fs::write(&path, src).unwrap();
     let mut out = vec![(
         "interpreter".to_owned(),
-        bounded(Command::new(NAZM).arg("run").arg(&path), "nazm run"),
+        bounded(
+            Command::new(NAZM).arg("run").arg("--interpret").arg(&path),
+            "nazm run",
+        ),
     )];
     for (label, backend, opt) in [
         ("llvm -O0", "llvm", "0"),

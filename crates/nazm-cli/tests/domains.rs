@@ -289,7 +289,7 @@ fn the_watchdog_is_a_boards_fed_from_a_task() {
         "fn main(m: MmioCap) -> Int ! {} { watchdog_feed() }\n",
     )
     .unwrap();
-    let r = nazm(h.path(), &["run", "a.nz"]);
+    let r = nazm(h.path(), &["run", "--interpret", "a.nz"]);
     assert!(r.stderr.contains("N0392"), "{}", r.stderr);
     // A feed is a device's authority.
     std::fs::write(

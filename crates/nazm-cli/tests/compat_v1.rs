@@ -191,7 +191,7 @@ fn every_run_case_prints_what_it_says_interpreted_and_compiled_by_both_backends(
             text(&out.stderr)
         );
 
-        let out = nazm(&["run", arg], &cwd);
+        let out = nazm(&["run", "--interpret", arg], &cwd);
         assert_eq!(
             out.status.code(),
             Some(0),
@@ -248,7 +248,7 @@ fn every_trap_case_traps_with_its_code_interpreted_and_compiled_by_both_backends
             text(&out.stderr)
         );
 
-        let out = nazm(&["run", arg], cwd);
+        let out = nazm(&["run", "--interpret", arg], cwd);
         assert_eq!(out.status.code(), Some(2), "run {name}: {out:?}");
         assert!(
             text(&out.stderr).contains(&format!("error[{code}]")),

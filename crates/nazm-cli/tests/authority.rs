@@ -47,7 +47,7 @@ fn an_out_cap_prints_and_authorises_nothing_else() {
         "fn shout(o: OutCap) -> Int ! {io} { print(\"loud\\n\"); eprint(\"err\\n\"); 1 }\n\
          fn main(io: IoCap) -> Int ! {io} { shout(io) }\n",
     );
-    let o = nazm(d.path(), &["run", "p.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout), "loud\n1\n");
 
@@ -98,7 +98,7 @@ fn main_may_hold_only_an_out_cap_on_every_engine() {
         "fn inc(n: Int) -> Int ! {} { n + 1 }\n\
          fn main(o: OutCap) -> Int ! {io} { print(\"hi\\n\"); inc(41) }\n",
     );
-    let o = nazm(d.path(), &["run", "p.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout), "hi\n42\n");
     let o = nazm(
@@ -123,7 +123,7 @@ fn an_io_cap_given_for_an_out_cap_compiles_on_both_backends() {
          fn twice[T](x: T, out: OutCap) -> Int { print(\"!\"); 0 }\n\
          fn main(io: IoCap) -> Int { say(io, 7) - 7 + twice(true, io) }\n",
     );
-    let o = nazm(d.path(), &["run", "p.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));
     // `print` adds no newline; `nazm run` then prints `main`'s result.
     assert_eq!(String::from_utf8_lossy(&o.stdout), "7!0\n");
@@ -155,7 +155,7 @@ fn a_function_value_with_fewer_effects_is_accepted_passed_or_returned() {
          fn pick() -> fn(Int) -> Int ! {io} { inc }\n\
          fn main(io: IoCap) -> Int ! {io} { let f = pick(); apply(inc, 40) + f(0) }\n",
     );
-    let o = nazm(d.path(), &["run", "p.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout), "42\n");
     // Below the checker nothing moved: the verifiers compare up to effects, so it builds.
@@ -301,7 +301,7 @@ fn a_held_io_cap_authorises_its_own_print() {
         "fn say(io: IoCap) -> Int ! {io} { print(\"hi\\n\"); eprint(\"e\\n\"); 2 }\n\
          fn main(io: IoCap) -> Int ! {io} { say(io) }\n",
     );
-    let o = nazm(d.path(), &["run", "p.nz"]);
+    let o = nazm(d.path(), &["run", "--interpret", "p.nz"]);
     assert!(o.status.success(), "{}", text(&o));
     assert_eq!(String::from_utf8_lossy(&o.stdout), "hi\n2\n");
     // The implication is one way: an `OutCap` gives no `IoCap`.

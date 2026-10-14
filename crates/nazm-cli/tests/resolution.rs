@@ -39,7 +39,7 @@ fn both_ways(files: &[(&str, &str)]) -> String {
     let root = dir.path().join(files[0].0);
 
     let interpreted = Command::new(NAZM)
-        .args(["run", root.to_str().unwrap()])
+        .args(["run", "--interpret", root.to_str().unwrap()])
         .output()
         .expect("run");
     assert!(

@@ -87,7 +87,7 @@ fn a_registry_dependency_is_published_resolved_locked_built_and_run() {
     publish(root, "2.0.0", 30);
     let app = app(root, "^1.0.0");
     // `^1.0.0` takes 1.1.0, the highest it admits.
-    let r = nazm(root, &["run", "app"]);
+    let r = nazm(root, &["run", "--interpret", "app"]);
     assert_eq!(out(&r), "21\n", "{}", err(&r));
     // Locked, then a newer 1.x published: the lockfile's choice stands, and `--locked` holds.
     let l = nazm(root, &["lock", "app"]);
@@ -98,7 +98,7 @@ fn a_registry_dependency_is_published_resolved_locked_built_and_run() {
         "{lock}"
     );
     publish(root, "1.2.0", 40);
-    let r = nazm(root, &["run", "--locked", "app"]);
+    let r = nazm(root, &["run", "--interpret", "--locked", "app"]);
     assert_eq!(out(&r), "21\n", "{}", err(&r));
     let b = nazm(root, &["build", "--locked", "app", "-o", "app.exe"]);
     assert!(b.status.success(), "{}", err(&b));
@@ -107,9 +107,9 @@ fn a_registry_dependency_is_published_resolved_locked_built_and_run() {
     // Yanking the locked version keeps it for the lockfile; without one, it is never chosen.
     let y = nazm(root, &["yank", "shapes@1.1.0", "--registry", "registry"]);
     assert!(y.status.success(), "{}", err(&y));
-    assert_eq!(out(&nazm(root, &["run", "app"])), "21\n");
+    assert_eq!(out(&nazm(root, &["run", "--interpret", "app"])), "21\n");
     std::fs::remove_file(app.join("nazm.lock")).unwrap();
-    assert_eq!(out(&nazm(root, &["run", "app"])), "41\n");
+    assert_eq!(out(&nazm(root, &["run", "--interpret", "app"])), "41\n");
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn a_tampered_registry_is_refused_before_anything_is_compiled() {
     let root = d.path();
     publish(root, "1.0.0", 10);
     app(root, "^1.0.0");
-    assert_eq!(out(&nazm(root, &["run", "app"])), "11\n");
+    assert_eq!(out(&nazm(root, &["run", "--interpret", "app"])), "11\n");
     write(
         &root.join("registry/packages/shapes/1.0.0/src/poly.nz"),
         "pub fn sides(n: Int) -> Int { n + 999 }\n",
@@ -186,14 +186,14 @@ fn update_rewrites_the_lockfile_and_prints_each_change() {
     assert!(nazm(root, &["lock", "app"]).status.success());
     publish(root, "1.1.0", 20);
     // The lockfile still holds 1.0.0.
-    assert_eq!(out(&nazm(root, &["run", "app"])), "11\n");
+    assert_eq!(out(&nazm(root, &["run", "--interpret", "app"])), "11\n");
     let u = nazm(root, &["update", "app", "shapes"]);
     assert!(u.status.success(), "{}", err(&u));
     assert_eq!(out(&u), "shapes 1.0.0 → 1.1.0\n");
     assert!(std::fs::read_to_string(app.join("nazm.lock"))
         .unwrap()
         .contains("registry+shapes@1.1.0"));
-    assert_eq!(out(&nazm(root, &["run", "app"])), "21\n");
+    assert_eq!(out(&nazm(root, &["run", "--interpret", "app"])), "21\n");
     let again = nazm(root, &["update", "app"]);
     assert_eq!(out(&again), "no changes\n");
     let unknown = nazm(root, &["update", "app", "circles"]);

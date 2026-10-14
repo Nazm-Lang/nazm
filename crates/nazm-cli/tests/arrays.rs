@@ -35,7 +35,7 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
         run_bounded(
             Command::new(NAZM)
                 .current_dir(d.path())
-                .args(["run", "prog.nz"]),
+                .args(["run", "--interpret", "prog.nz"]),
             "nazm run",
         ),
     )];
@@ -340,11 +340,11 @@ fn an_array_in_a_public_signature_crosses_modules() {
         "use \"lib.nz\";\nfn main() -> Int { sum3([1, 2, 3]) + Int(make()[1]) }\n",
     )
     .unwrap();
-    let r = nazm(d.path(), &["run", "main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.code, Some(0), "{}", r.stderr);
     assert_eq!(r.stdout.trim(), "14");
     // And again, against the interface the first check persisted.
-    let r = nazm(d.path(), &["run", "main.nz"]);
+    let r = nazm(d.path(), &["run", "--interpret", "main.nz"]);
     assert_eq!(r.stdout.trim(), "14", "{}", r.stderr);
     let exe = d.path().join("prog");
     let b = nazm(d.path(), &["build", "main.nz", "-o", exe.to_str().unwrap()]);

@@ -45,7 +45,7 @@ fn repair(path: &Path) -> (Option<i32>, String, String) {
 
 fn run(path: &Path) -> (Option<i32>, String) {
     let out = Command::new(NAZM)
-        .args(["run", path.to_str().unwrap()])
+        .args(["run", "--interpret", path.to_str().unwrap()])
         .output()
         .expect("run");
     (

@@ -426,6 +426,7 @@ fn one(nazm: &Path, dir: &Path, index: usize, case: &Planned, interpret_only: bo
     let (got, ran, status) = output_of(
         Command::new(nazm)
             .arg("run")
+            .arg("--interpret")
             .args(&harness)
             .arg(file)
             .env(nazm_lir::RESULT_VARIABLE, "1"),
