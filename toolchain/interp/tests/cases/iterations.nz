@@ -1,0 +1,9 @@
+// The iteration budget: N0402 at the loop, after ten million turns.
+fn main() {
+    let mut i = 0
+    let mut n = 0
+    while i >= 0 {
+        n += 1
+        if n == 10000000 { println("ten million") }
+    }
+}

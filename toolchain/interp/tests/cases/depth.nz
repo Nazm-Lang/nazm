@@ -1,0 +1,9 @@
+// The depth budget: 512 nested calls, then N0403 at the call that passed it.
+fn down(n: Int) -> Int {
+    if n == 0 { 0 } else { 1 + down(n - 1) }
+}
+
+fn main() {
+    println(down(511))
+    println(down(512))
+}

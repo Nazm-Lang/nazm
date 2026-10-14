@@ -1,0 +1,81 @@
+// The flat code's opcodes (`openspec/changes/r4-interpreter/design.md`, D2). Operands are `a`,
+// `b` and `c` of the instruction; "push" and "pop" are the task's operand stack.
+
+/// Push constant `a`.
+pub const OP_CONST: Int = 1
+/// Push a copy of slot `a`.
+pub const OP_LOCAL: Int = 2
+/// Pop into slot `a`, releasing what it held.
+pub const OP_STORE: Int = 3
+/// Release slot `a` and leave it unset: a region's exit.
+pub const OP_RELEASE: Int = 4
+/// Pop and release.
+pub const OP_POP: Int = 5
+/// Pop and release `a` values: the operands a transfer leaves behind.
+pub const OP_DROPN: Int = 6
+/// Jump to `a`.
+pub const OP_JMP: Int = 7
+/// Pop a `Bool`; jump to `a` when it is false.
+pub const OP_JF: Int = 8
+/// Pop two operands, push `lhs OP rhs`: `a` is 0 `+`, 1 `-`, 2 `*`, 3 `/`, 4 `%`.
+pub const OP_ARITH: Int = 9
+/// Pop two operands, push the comparison: `a` is 0 `==`, 1 `!=`, 2 `<`, 3 `<=`, 4 `>`, 5 `>=`.
+pub const OP_CMP: Int = 10
+/// Negate the top.
+pub const OP_NEG: Int = 11
+/// Call function `a` with the top `b` operands as its first slots.
+pub const OP_CALL: Int = 12
+/// Return the top from the current frame.
+pub const OP_RET: Int = 13
+/// Built-in `a` on the top `b` operands; `c` is the result's type, interned.
+pub const OP_BUILTIN: Int = 14
+/// Charge one loop turn to the iteration budget.
+pub const OP_ITER: Int = 15
+/// Pop `b` initialisers, written in the order `aux[c..c+b]` names their fields; push the record
+/// whose definition is `a`.
+pub const OP_RECORD: Int = 16
+/// As `OP_RECORD` for an enum value: `a` the enum, `aux[c]` the variant, `aux[c+1]` the arity,
+/// then the field of each of the `b` initialisers.
+pub const OP_VARIANT: Int = 17
+/// Replace the top record with a copy of its field `a`.
+pub const OP_FIELD: Int = 18
+/// Jump on the top enum value's variant: `aux[a]` arms, then a (variant, target) pair each.
+pub const OP_MATCH: Int = 19
+/// Copy payload field `a` of the top enum value into slot `b`.
+pub const OP_BIND: Int = 20
+/// Release the operand under the top: a `match`'s scrutinee after a value arm.
+pub const OP_SWAPDROP: Int = 21
+/// Pop a value and `c` indexes; write it at path `aux[b..]` inside slot `a`.
+pub const OP_ASSIGN: Int = 22
+/// Pop a string; append it to slot `a`'s, in place when that is the Rust interpreter's choice.
+pub const OP_APPEND: Int = 23
+/// A shape the lowering never produces: fail as a compiler defect.
+pub const OP_DEFECT: Int = 24
+/// Replace the top with `a` copies of it, as an array of `a`.
+pub const OP_ARRAYREP: Int = 25
+/// Pop `a` elements; push the array of them.
+pub const OP_ARRAY: Int = 26
+/// Pop an index and an array; push the element.
+pub const OP_INDEX: Int = 27
+/// A bit operation: `a` is 0 `&`, 1 `|`, 2 `^`, 3 `<<`, 4 `>>`.
+pub const OP_BITS: Int = 28
+/// `~` the top.
+pub const OP_COMPLEMENT: Int = 29
+/// Convert the top to type `b` by mode `a` (0 exact, 1 wrapping, 2 saturating).
+pub const OP_CONVERT: Int = 30
+/// Whether the top converts exactly to type `a`.
+pub const OP_FITS: Int = 31
+/// Push a closure of function `a` capturing slots `aux[c+1..]`, `aux[c]` of them.
+pub const OP_CLOSURE: Int = 32
+/// Push function `a` as a value.
+pub const OP_FNVALUE: Int = 33
+/// Call the function value under the top `a` arguments.
+pub const OP_CALLI: Int = 34
+/// Call method `b` of trait name `a` on the top `c` operands, by the receiver's type.
+pub const OP_CALLTRAIT: Int = 35
+/// Open a `scope`.
+pub const OP_SCOPE: Int = 36
+/// Close a `scope`: join its tasks.
+pub const OP_JOIN: Int = 37
+/// Start function `a` as a task with the top `b` operands.
+pub const OP_SPAWN: Int = 38

@@ -1,0 +1,31 @@
+// break, continue and return out of nested loops and blocks, with values held on the way.
+fn find(limit: Int) -> Int {
+    let mut i = 0
+    while i < limit {
+        let mut j = 0
+        while true {
+            j += 1
+            if j > 5 { break }
+            if (i + j) % 7 == 0 { continue }
+            if i * j == 42 { return i * 100 + j }
+        }
+        i += 1
+    }
+    0 - 1
+}
+
+fn pick(n: Int) -> Int {
+    let x = if n > 3 { return n * 2 } else { n + 1 }
+    x * 10
+}
+
+fn main() {
+    println(find(20))
+    println(pick(2) + pick(5))
+    let mut total = 0
+    for k in 0..10 {
+        if k % 2 == 0 { continue }
+        total += k
+    }
+    println(total)
+}

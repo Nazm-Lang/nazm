@@ -1,0 +1,217 @@
+// The built-ins (`openspec/changes/r4-interpreter/design.md`, D6), each the Rust interpreter's
+// (`crates/nazm-core/src/eval/intrinsic.rs`) with its sentences. A built-in reads its arguments
+// where they lie on the operand stack and never takes their references: what it keeps, it
+// retains; the loop releases the arguments after it.
+
+use "types.nz"
+use "heap.nz"
+use "names.nz"
+use "vm.nz"
+use "values.nz"
+
+fn arg_v(vm: Vm, n: Int, i: Int) -> V {
+    vec_get(vm.ops, vec_len(vm.ops) - n + i)
+}
+
+fn int_of(v: V) -> Int {
+    match v {
+        V.Int(v: x) => x,
+        _ => 0,
+    }
+}
+
+fn str_of(v: V) -> Str {
+    match v {
+        V.Str(s: x, obj: o, start: st) => x,
+        _ => "",
+    }
+}
+
+fn obj_of(v: V) -> Int {
+    match v {
+        V.Ref(obj: o) => o,
+        _ => 0,
+    }
+}
+
+/// `intrinsic.rs`'s `out_of_bounds`: its help always ends with what a `Str` index means.
+fn outside(p: Prog, vm: Vm, pc: Int, message: Str, detail: Str) -> V {
+    fail(p, vm, pc, "N0405", message, f"{detail}. `Str` is indexed in bytes, from 0; `str_len` gives the length in bytes")
+}
+
+fn bug(p: Prog, vm: Vm, pc: Int, id: Int, what: Str) -> V {
+    let name = strs_get(builtin_names(), id)
+    fail(p, vm, pc, "N0300", f"`{name}` was called with {what}",
+            "this is a bug in the interpreter; the checker should have caught it")
+}
+
+/// Built-in `id` on the top `n` operands.
+pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, out: OutCap, io: IoCap) -> V {
+    let h = vm.heap
+    // `Ints`, `Strs`, `Box` and `List` operations are the `Vec` ones (`intrinsic.rs`, `same`).
+    let op = if id == B_INTS_NEW || id == B_STRS_NEW || id == B_BOX_FRESH || id == B_LIST_EMPTY {
+        B_VEC_NEW
+    } else if id == B_INTS_LEN || id == B_STRS_LEN || id == B_LIST_LEN {
+        B_VEC_LEN
+    } else if id == B_INTS_GET || id == B_STRS_GET || id == B_LIST_GET {
+        B_VEC_GET
+    } else if id == B_INTS_SET || id == B_STRS_SET {
+        B_VEC_SET
+    } else if id == B_INTS_PUSH || id == B_STRS_PUSH || id == B_BOX_FILL || id == B_LIST_PUSH {
+        B_VEC_PUSH
+    } else if id == B_INTS_POP || id == B_STRS_POP {
+        B_VEC_POP
+    } else {
+        id
+    }
+    if op == B_PRINT || op == B_EPRINT {
+        let s = str_of(arg_v(vm, n, 0))
+        if op == B_PRINT { print(s) } else { eprint(s) }
+        V.Int(v: str_len(s))
+    } else if op == B_INT_TO_STR {
+        heap_str(h, int_to_str(int_of(arg_v(vm, n, 0))))
+    } else if op == B_NUM_TO_STR {
+        match arg_v(vm, n, 0) {
+            V.Int(v: x) => heap_str(h, int_to_str(x)),
+            _ => bug(p, vm, pc, id, "a number this interpreter cannot write yet"),
+        }
+    } else if op == B_STR_CONCAT {
+        heap_str(h, str_of(arg_v(vm, n, 0)) + str_of(arg_v(vm, n, 1)))
+    } else if op == B_STR_CONCAT_NUM {
+        match arg_v(vm, n, 1) {
+            V.Int(v: x) => heap_str(h, str_of(arg_v(vm, n, 0)) + int_to_str(x)),
+            _ => bug(p, vm, pc, id, "a number this interpreter cannot write yet"),
+        }
+    } else if op == B_STR_APPEND {
+        // Reached here, the string has a second reference — the argument — so this copies.
+        let s = arg_v(vm, n, 0)
+        retain(h, s)
+        str_append_value(h, s, str_of(arg_v(vm, n, 1)))
+    } else if op == B_STR_LEN {
+        V.Int(v: str_len(str_of(arg_v(vm, n, 0))))
+    } else if op == B_STR_BYTE {
+        let s = str_of(arg_v(vm, n, 0))
+        let i = int_of(arg_v(vm, n, 1))
+        let len = str_len(s)
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this byte index is outside the `Str`", f"asked for byte {i} of a `Str` {len} bytes long")
+        }
+        V.Int(v: str_byte(s, i))
+    } else if op == B_STR_SLICE {
+        let v = arg_v(vm, n, 0)
+        let from = int_of(arg_v(vm, n, 1))
+        let to = int_of(arg_v(vm, n, 2))
+        match v {
+            V.Str(s: x, obj: o, start: st) => {
+                let len = str_len(x)
+                if from < 0 || to < from || to > len {
+                    return outside(p, vm, pc, "this slice is not inside the `Str`", f"asked for {from}..{to} of a `Str` {len} bytes long")
+                }
+                // A view of the same backing, which it keeps alive (`value.rs`, `Str::slice`).
+                retain(h, v)
+                V.Str(s: str_slice(x, from, to), obj: o, start: st + from)
+            },
+            _ => bug(p, vm, pc, id, "arguments of the wrong shape"),
+        }
+    } else if op == B_STR_FROM_BYTE {
+        let b = int_of(arg_v(vm, n, 0))
+        if b < 0 || b > 255 {
+            return outside(p, vm, pc, "this is not a byte value", f"asked for byte {b}, which is outside 0..=255")
+        }
+        heap_str(h, str_from_byte(b))
+    } else if op == B_STR_JOIN {
+        let parts = items(h, obj_of(arg_v(vm, n, 0)))
+        let sep = str_of(arg_v(vm, n, 1))
+        let all = strs_new()
+        for x in parts { strs_push(all, str_of(x)) }
+        heap_str(h, str_join(all, sep))
+    } else if op == B_STR_VOUCH || op == B_TEXT_ASSUME || op == B_TEXT_AS_STR {
+        let v = arg_v(vm, n, 0)
+        retain(h, v)
+        v
+    } else if op == B_VEC_NEW {
+        V.Ref(obj: alloc(h, K_SEQ, 0))
+    } else if op == B_VEC_LEN {
+        V.Int(v: vec_len(items(h, obj_of(arg_v(vm, n, 0)))))
+    } else if op == B_VEC_GET || op == B_BOX_GET {
+        let xs = items(h, obj_of(arg_v(vm, n, 0)))
+        let i = if op == B_BOX_GET { 0 } else { int_of(arg_v(vm, n, 1)) }
+        let len = vec_len(xs)
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the sequence", f"asked for item {i} of a `Vec` holding {len}")
+        }
+        let v = vec_get(xs, i)
+        retain(h, v)
+        v
+    } else if op == B_VEC_SET {
+        let xs = items(h, obj_of(arg_v(vm, n, 0)))
+        let i = int_of(arg_v(vm, n, 1))
+        let len = vec_len(xs)
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the sequence", f"asked to write item {i} of a `Vec` holding {len}")
+        }
+        let v = arg_v(vm, n, 2)
+        retain(h, v)
+        let old = vec_get(xs, i)
+        vec_set(xs, i, v)
+        release(h, old)
+        V.Int(v: i)
+    } else if op == B_VEC_PUSH {
+        let xs = items(h, obj_of(arg_v(vm, n, 0)))
+        let v = arg_v(vm, n, 1)
+        retain(h, v)
+        vec_push(xs, v)
+        V.Int(v: vec_len(xs))
+    } else if op == B_VEC_POP {
+        let xs = items(h, obj_of(arg_v(vm, n, 0)))
+        if vec_len(xs) == 0 {
+            return outside(p, vm, pc, "this sequence is empty", "asked to remove the last item of an empty `Vec`")
+        }
+        vec_pop(xs)
+    } else if op == B_INTS_SUM_FROM {
+        let xs = items(h, obj_of(arg_v(vm, n, 1)))
+        let mut sum = int_of(arg_v(vm, n, 0))
+        for x in xs {
+            match checked_add(sum, int_of(x)) {
+                Some(s) => { sum = s },
+                None => {
+                    return fail(p, vm, pc, "N0400", "this addition overflows `Int`",
+                            "`Int` is a 64-bit signed integer; overflow stops the program rather than wrapping")
+                },
+            }
+        }
+        V.Int(v: sum)
+    } else if op == B_EXIT_WITH {
+        let code = int_of(arg_v(vm, n, 0))
+        if code < 0 || code > 255 {
+            return fail(p, vm, pc, "N0416", "this exit status is outside 0 to 255", f"`exit_with({code})`: a status is 0 to 255")
+        }
+        exit_with(code)
+        V.Int(v: 0)
+    } else if op == B_ARGS_COUNT {
+        V.Int(v: strs_len(vm.args))
+    } else if op == B_ARG {
+        let i = int_of(arg_v(vm, n, 0))
+        let count = strs_len(vm.args)
+        if i < 0 || i >= count {
+            return outside(p, vm, pc, "this index is outside the arguments", f"asked for argument {i} of {count} given")
+        }
+        // The operating system's storage, not the program's: immortal.
+        V.Str(s: strs_get(vm.args, i), obj: 0, start: 0)
+    } else if op == B_CONTRACT_CHECK {
+        match arg_v(vm, n, 0) {
+            V.Bool(v: holds) => {
+                if holds { return V.Int(v: 0) }
+                if int_of(arg_v(vm, n, 1)) == 0 {
+                    fail(p, vm, pc, "N0410", "this precondition does not hold", "")
+                } else {
+                    fail(p, vm, pc, "N0411", "this postcondition does not hold", "")
+                }
+            },
+            _ => bug(p, vm, pc, id, "arguments of the wrong shape"),
+        }
+    } else {
+        let name = strs_get(builtin_names(), id)
+        fail(p, vm, pc, "N0900", f"the built-in `{name}` is not in this interpreter yet", "")
+    }
+}

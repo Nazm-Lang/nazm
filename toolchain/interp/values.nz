@@ -1,0 +1,113 @@
+// Operations on values beyond `Int`: comparison and equality by the language's law
+// (`crates/nazm-core/src/eval/arith.rs`), strings' append, and the forms later slices fill in.
+
+use "types.nz"
+use "heap.nz"
+use "vm.nz"
+
+/// Built-in equality (`arith.rs`, `equal`): `None` — here -1 — for what has none.
+fn equal(h: Heap, a: V, b: V) -> Int {
+    match (a, b) {
+        (V.Int(v: x), V.Int(v: y)) => if x == y { 1 } else { 0 },
+        (V.Bool(v: x), V.Bool(v: y)) => if x == y { 1 } else { 0 },
+        (V.Str(s: x, obj: o, start: s1), V.Str(s: y, obj: q, start: s2)) => if x == y { 1 } else { 0 },
+        (V.Rec(def: d, fields: xs), V.Rec(def: e, fields: ys)) => all_equal(h, xs, ys),
+        (V.Enm(def: d, variant: i, fields: xs), V.Enm(def: e, variant: j, fields: ys)) => {
+            if i != j { 0 } else { all_equal(h, xs, ys) }
+        },
+        (V.Arr(items: xs), V.Arr(items: ys)) => all_equal(h, xs, ys),
+        // A `Box` or `List`, which the interpreter holds as a sequence: by what it holds.
+        (V.Ref(obj: x), V.Ref(obj: y)) => {
+            if x == y { return 1 }
+            let xs = items(h, x)
+            let ys = items(h, y)
+            if vec_len(xs) != vec_len(ys) { return 0 }
+            for i in 0..vec_len(xs) {
+                let e = equal(h, vec_get(xs, i), vec_get(ys, i))
+                if e != 1 { return e }
+            }
+            1
+        },
+        _ => 0 - 1,
+    }
+}
+
+fn all_equal(h: Heap, xs: List[V], ys: List[V]) -> Int {
+    if list_len(xs) != list_len(ys) { return 0 - 1 }
+    for i in 0..list_len(xs) {
+        let e = equal(h, list_get(xs, i), list_get(ys, i))
+        if e != 1 { return e }
+    }
+    1
+}
+
+/// Byte order of two strings: -1, 0 or 1.
+fn str_order(a: Str, b: Str) -> Int {
+    let n = if str_len(a) < str_len(b) { str_len(a) } else { str_len(b) }
+    for i in 0..n {
+        let x = str_byte(a, i)
+        let y = str_byte(b, i)
+        if x < y { return 0 - 1 }
+        if x > y { return 1 }
+    }
+    if str_len(a) < str_len(b) { 0 - 1 } else if str_len(a) > str_len(b) { 1 } else { 0 }
+}
+
+/// The derived order (`arith.rs`, `order`), or -2 for what has none here.
+fn order(a: V, b: V) -> Int {
+    match (a, b) {
+        (V.Int(v: x), V.Int(v: y)) => if x < y { 0 - 1 } else if x > y { 1 } else { 0 },
+        (V.Bool(v: x), V.Bool(v: y)) => if x == y { 0 } else if y { 0 - 1 } else { 1 },
+        (V.Str(s: x, obj: o, start: s1), V.Str(s: y, obj: q, start: s2)) => str_order(x, y),
+        _ => 0 - 2,
+    }
+}
+
+/// A comparison of anything but two `Int`s.
+pub fn compare(p: Prog, vm: Vm, pc: Int, op: Int, l: V, r: V) -> V {
+    if op <= 1 {
+        let e = equal(vm.heap, l, r)
+        if e >= 0 {
+            return V.Bool(v: if op == 0 { e == 1 } else { e == 0 })
+        }
+    } else {
+        let o = order(l, r)
+        if o > 0 - 2 {
+            return V.Bool(v: if op == 2 { o < 0 } else if op == 3 { o <= 0 } else if op == 4 { o > 0 } else { o >= 0 })
+        }
+    }
+    fail(p, vm, pc, "N0302", "a comparison this interpreter cannot make yet", "")
+}
+
+/// Arithmetic on numbers other than `Int` (slice 4).
+pub fn num_arith(p: Prog, vm: Vm, pc: Int, op: Int, l: V, r: V) -> V {
+    fail(p, vm, pc, "N0302", "arithmetic this interpreter cannot do yet", "")
+}
+
+pub fn num_neg(p: Prog, vm: Vm, pc: Int, x: V) -> V {
+    fail(p, vm, pc, "N0302", "a negation this interpreter cannot do yet", "")
+}
+
+/// The forms later slices fill in.
+pub fn other_op(p: Prog, vm: Vm, pc: Int, op: Int) -> V {
+    fail(p, vm, pc, "N0900", f"the interpreter met an instruction it cannot run yet ({op})", "")
+}
+
+/// `str_append` (`value.rs`, `Str::append`): `s` followed by `tail`, in place when `s` is the only
+/// reference to storage an append made and the result fits its room; otherwise a copy into a new
+/// allocation of `max(2n, 16)` bytes. Takes `s`'s reference.
+pub fn str_append_value(h: Heap, s: V, tail: Str) -> V {
+    match s {
+        V.Str(s: x, obj: o, start: st) => {
+            let n = str_len(x) + str_len(tail)
+            if o > 0 && ints_get(h.kind, o) == K_GROWN && unique(h, o) && st + n <= ints_get(h.room, o) {
+                return V.Str(s: x + tail, obj: o, start: st)
+            }
+            let room = if 2 * n > 16 { 2 * n } else { 16 }
+            let made = alloc(h, K_GROWN, room)
+            release(h, s)
+            V.Str(s: x + tail, obj: made, start: 0)
+        },
+        _ => s,
+    }
+}

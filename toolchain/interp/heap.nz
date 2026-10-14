@@ -1,0 +1,153 @@
+// The heap and its counting (`openspec/changes/r4-interpreter/design.md`, D4): every handle is an
+// object here, reference-counted explicitly at the points the Rust interpreter's `Clone` and `Drop`
+// act, so the memory report's four classes agree with `crates/nazm-core/src/eval/value.rs`.
+
+use "types.nz"
+
+pub fn heap_new() -> Heap {
+    let h = Heap(kind: ints_new(), rc: ints_new(), room: ints_new(), items: vec_new[Vec[V]](),
+            free: ints_new(), counts: [0, 0, 0, 0, 0, 0, 0, 0], work: vec_new[V](), busy: [0], none: vec_new[V]())
+            // Object 0 is never allocated: a `Str` whose `obj` is 0 is immortal.
+            ints_push(h.kind, K_FREE)
+    ints_push(h.rc, 0)
+    ints_push(h.room, 0)
+    vec_push(h.items, h.none)
+    h
+}
+
+/// The memory report's class of an object kind, or -1 for one it does not count.
+fn class(kind: Int) -> Int {
+    if kind == K_STR || kind == K_GROWN || kind == K_BYTES {
+        C_STR
+    } else if kind == K_SEQ {
+        C_SEQ
+    } else if kind == K_CHAN {
+        C_CHAN
+    } else if kind == K_FUNC {
+        C_CLO
+    } else {
+        0 - 1
+    }
+}
+
+/// A new object of `kind` with one reference, counted in its class.
+pub fn alloc(h: Heap, kind: Int, room: Int) -> Int {
+    let c = class(kind)
+    if c >= 0 {
+        ints_set(h.counts, c, ints_get(h.counts, c) + 1)
+    }
+    let items = if kind == K_SEQ || kind == K_FUNC || kind == K_CHAN { vec_new[V]() } else { h.none }
+    if ints_len(h.free) > 0 {
+        let id = ints_pop(h.free)
+        ints_set(h.kind, id, kind)
+        ints_set(h.rc, id, 1)
+        ints_set(h.room, id, room)
+        vec_set(h.items, id, items)
+        id
+    } else {
+        ints_push(h.kind, kind)
+        ints_push(h.rc, 1)
+        ints_push(h.room, room)
+        vec_push(h.items, items)
+        ints_len(h.kind) - 1
+    }
+}
+
+/// A sequence's storage.
+pub fn items(h: Heap, obj: Int) -> Vec[V] {
+    vec_get(h.items, obj)
+}
+
+/// A new string the program allocated: one counted backing.
+pub fn heap_str(h: Heap, s: Str) -> V {
+    V.Str(s: s, obj: alloc(h, K_STR, 0), start: 0)
+}
+
+/// Take another reference to whatever `v` holds.
+pub fn retain(h: Heap, v: V) {
+    match v {
+        V.Str(s: s, obj: o, start: st) => {
+            if o > 0 { ints_set(h.rc, o, ints_get(h.rc, o) + 1) }
+        },
+        V.Ref(obj: o) => ints_set(h.rc, o, ints_get(h.rc, o) + 1),
+        V.Rec(def: d, fields: fs) => {
+            for f in fs { retain(h, f) }
+        },
+        V.Enm(def: d, variant: x, fields: fs) => {
+            for f in fs { retain(h, f) }
+        },
+        V.Arr(items: fs) => {
+            for f in fs { retain(h, f) }
+        },
+        _ => { },
+    }
+}
+
+fn holds(v: V) -> Bool {
+    match v {
+        V.Str(s: s, obj: o, start: st) => o > 0,
+        V.Ref(obj: o) => true,
+        V.Rec(def: d, fields: fs) => true,
+        V.Enm(def: d, variant: x, fields: fs) => list_len(fs) > 0,
+        V.Arr(items: fs) => true,
+        _ => false,
+    }
+}
+
+/// Give up the references `v` holds. An object whose last reference goes is reclaimed, counted,
+/// and gives up what it holds in turn — through a worklist, never by recursion, so a long chain
+/// of boxes is released in constant stack, as Rust's `release` does.
+pub fn release(h: Heap, v: V) {
+    if !holds(v) { return }
+    vec_push(h.work, v)
+    if ints_get(h.busy, 0) == 1 { return }
+    ints_set(h.busy, 0, 1)
+    while vec_len(h.work) > 0 {
+        let x = vec_pop(h.work)
+        match x {
+            V.Str(s: s, obj: o, start: st) => { drop_ref(h, o); },
+            V.Ref(obj: o) => { drop_ref(h, o); },
+            V.Rec(def: d, fields: fs) => {
+                for f in fs {
+                    if holds(f) { vec_push(h.work, f) }
+                }
+            },
+            V.Enm(def: d, variant: n, fields: fs) => {
+                for f in fs {
+                    if holds(f) { vec_push(h.work, f) }
+                }
+            },
+            V.Arr(items: fs) => {
+                for f in fs {
+                    if holds(f) { vec_push(h.work, f) }
+                }
+            },
+            _ => { },
+        }
+    }
+    ints_set(h.busy, 0, 0)
+}
+
+fn drop_ref(h: Heap, o: Int) {
+    if o <= 0 { return }
+    let n = ints_get(h.rc, o) - 1
+    ints_set(h.rc, o, n)
+    if n > 0 { return }
+    let kind = ints_get(h.kind, o)
+    let c = class(kind)
+    if c >= 0 {
+        ints_set(h.counts, c + 1, ints_get(h.counts, c + 1) + 1)
+    }
+    let held = vec_get(h.items, o)
+    for x in held {
+        if holds(x) { vec_push(h.work, x) }
+    }
+    vec_set(h.items, o, h.none)
+    ints_set(h.kind, o, K_FREE)
+    ints_push(h.free, o)
+}
+
+/// Whether `obj` has exactly one reference.
+pub fn unique(h: Heap, obj: Int) -> Bool {
+    ints_get(h.rc, obj) == 1
+}

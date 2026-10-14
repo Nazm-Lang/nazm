@@ -5,14 +5,14 @@
 
 ## 2. Slice 2 — integers, booleans, control flow, calls
 
-- [ ] 2.1 Load: `@std/json` to the function, constant and code tables
-- [ ] 2.2 The execution loop: frames, slots, operands, jumps, releases
-- [ ] 2.3 `Int` arithmetic and comparison with Rust's failures; `Bool`; `if`, `while`, `break`,
+- [x] 2.1 Load: `@std/json` to the function, constant and code tables
+- [x] 2.2 The execution loop: frames, slots, operands, jumps, releases
+- [x] 2.3 `Int` arithmetic and comparison with Rust's failures; `Bool`; `if`, `while`, `break`,
       `continue`, `return`, blocks, calls; the iteration and depth budgets
-- [ ] 2.4 `print`/`eprint`/`exit_with`, `int_to_str`, `str_concat`, `num_to_str` of `Int` — enough to
+- [x] 2.4 `print`/`eprint`/`exit_with`, `int_to_str`, `str_concat`, `num_to_str` of `Int` — enough to
       print; `main`'s result and `NAZM_RESULT_REPORT`
-- [ ] 2.5 The diagnostic renderer (text)
-- [ ] 2.6 `tests/run.sh` and the first comparison: `fib`, the integer and control-flow cases
+- [x] 2.5 The diagnostic renderer (text)
+- [x] 2.6 `tests/run.sh` and the first comparison: `fib`, the integer and control-flow cases
 
 ## 3. Slice 3 — strings and sequences, the memory report
 
