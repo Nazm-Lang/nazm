@@ -2945,7 +2945,10 @@ impl<'a> Lower<'a> {
         let n = arms.len();
         let mut choose = self.int_const(i64::try_from(n.saturating_sub(1)).unwrap_or(0), at);
         for (i, arm) in arms.iter().enumerate().rev().skip(1) {
-            let test = self.pattern_test(&arm.pattern, &read)?;
+            let mut test = self.pattern_test(&arm.pattern, &read)?;
+            if let Some(g) = &arm.guard {
+                test = self.guarded(test, arm, g, &read, at)?;
+            }
             let here = self.int_const(i64::try_from(i).unwrap_or(0), at);
             choose = self.value_if(test, here, choose, Type::Int, at);
         }
@@ -3603,7 +3606,40 @@ impl<'a> Lower<'a> {
 
     /// One arm of a general `match`: its bindings, each extracted from the scrutinee, then its
     /// body — a value region or a statement region.
-    fn arm_region(&mut self, arm: &AstArm, read: &Expr, value: bool) -> Lowered<Block> {
+    /// A guarded arm's test (R1, 5b.17): `if <its pattern matches> { <its names bound>; guard }
+    /// else { false }` — the names bound in a region of their own, as the arm's body binds them
+    /// again in its own.
+    fn guarded(
+        &mut self,
+        test: Expr,
+        arm: &AstArm,
+        guard: &AstExpr,
+        read: &Expr,
+        at: Span,
+    ) -> Lowered<Expr> {
+        let (lets, seed) = self.arm_bindings(arm, read)?;
+        let mut then = self.expr_region(guard, seed, true)?;
+        then.stmts.splice(0..0, lets);
+        let no = self.bool_const(false, at);
+        Ok(Expr {
+            kind: ExprKind::If {
+                cond: Box::new(test),
+                then,
+                otherwise: Block {
+                    stmts: Vec::new(),
+                    ends: Ends::FallsThrough,
+                    tail: Some(Box::new(no)),
+                    owns: Vec::new(),
+                    at,
+                },
+            },
+            ty: Some(Type::Bool),
+            at,
+        })
+    }
+
+    /// An arm's names, each bound out of the scrutinee `read`: the `let`s, and the locals.
+    fn arm_bindings(&mut self, arm: &AstArm, read: &Expr) -> Lowered<(Vec<Stmt>, Vec<LocalId>)> {
         let mut lets = Vec::new();
         let mut seed = Vec::new();
         for (name, bound) in arm.pattern.bindings() {
@@ -3614,6 +3650,11 @@ impl<'a> Lower<'a> {
             lets.push(Stmt::Let { local, value: x });
             seed.push(local);
         }
+        Ok((lets, seed))
+    }
+
+    fn arm_region(&mut self, arm: &AstArm, read: &Expr, value: bool) -> Lowered<Block> {
+        let (lets, seed) = self.arm_bindings(arm, read)?;
         let mut body = match (&arm.body, value) {
             (AstExpr::Block(b), true) => self.value_block(b, seed)?,
             (AstExpr::Block(b), false) => self.statement_block(b, seed)?,
@@ -3821,11 +3862,13 @@ fn comparison(op: BinOp) -> cir::CmpOp {
 /// Whether an arm is a plain variant pattern — each payload field a name or `_` — which the
 /// `match` before R1a took, and which lowers to one Core IR `match` arm.
 fn plain_arm(arm: &AstArm) -> bool {
-    matches!(&arm.pattern, nazm_syntax::Pattern::Variant(v)
-    if v.fields.iter().all(|f| matches!(
-        f.pattern,
-        nazm_syntax::Pattern::Bind { .. } | nazm_syntax::Pattern::Wildcard { .. }
-    )))
+    // A guarded arm (R1, 5b.17) may decline what its pattern matches: the general lowering.
+    arm.guard.is_none()
+        && matches!(&arm.pattern, nazm_syntax::Pattern::Variant(v)
+        if v.fields.iter().all(|f| matches!(
+            f.pattern,
+            nazm_syntax::Pattern::Bind { .. } | nazm_syntax::Pattern::Wildcard { .. }
+        )))
 }
 
 #[cfg(test)]

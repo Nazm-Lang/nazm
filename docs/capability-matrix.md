@@ -318,6 +318,16 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 `Str`, an `Int` and a `HashMap`, indexes read, written and compounded, a trait's method winning,
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
+**R1 (2026-10-14)** · *Match guards* (`spec.md`, *Patterns*, Guards; 5b.17). `P if G => E`: the
+parser reads the guard into `MatchArm::guard`; the checker types it as a `Bool` (`N0301`) with the
+pattern's names bound and leaves a guarded arm out of exhaustiveness and reachability; Core IR
+lowering sends any `match` with a guard to the general lowering, whose arm test becomes `if <pattern
+matches> { <names bound>; G } else { false }`, the names bound in a region of their own before the
+arm's body binds them again. Evidence: `crates/nazm-cli/tests/match_guards.rs` — guards on
+integers, on variants with an `Int` and a `Str` payload, on `Option`, and in a loop, alike
+everywhere with nothing live; a guard that is not a `Bool`, a guarded arm relied on for coverage, a
+guarded arm below a catch-all, and a name a guard cannot see, refused. Five mutants.
+
 **R1 (2026-10-14)** · *Map entries by index* (`spec.md`, *Methods and indexes by name*; 5b.7). On any
 type but a sequence, `m[k]` is `<prefix>_at(m, k)` and a binding's `m[k] = v` its `_set`, the prefix
 as a method's; a compound update's read is `<prefix>_at_or(m, k, zero)` with the value type's zero

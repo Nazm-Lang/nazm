@@ -601,7 +601,10 @@ impl Block {
                     scrutinee, arms, ..
                 } => {
                     exprs.push(scrutinee);
-                    exprs.extend(arms.iter().map(|a| &a.body));
+                    for a in arms {
+                        exprs.extend(a.guard.as_ref());
+                        exprs.push(&a.body);
+                    }
                 }
                 Expr::If {
                     cond,
@@ -771,6 +774,9 @@ pub struct PlaceField {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    /// `if E` after the pattern (R1, 5b.17): the arm is chosen only where its pattern matches
+    /// and `E`, with the pattern's names bound, is true. `None` where none is written.
+    pub guard: Option<Expr>,
     pub body: Expr,
     pub span: Span,
 }

@@ -4928,9 +4928,17 @@ bindings are in scope for the rest of the block; otherwise `D` runs, and `D` mus
 can fail, such as a name, is refused as pointless only by being ordinary: write `let` instead.
 *(L5 added `let P = e;`, a `let` whose pattern must match every value — see* Tuples*.)*
 
-**What is unchanged.** Matching evaluates nothing but the scrutinee and compares by equality laws
-already specified; releasing the scrutinee and the payloads follows *Enums* exactly. There are still
-no guards, no range patterns, no record patterns, no `..` in a payload and no `@` bindings.
+**Guards** *(R1, 5b.17)*. `P if G => E`: the arm is chosen where `P` matches and then `G`, a `Bool`
+evaluated with `P`'s names bound, is true (`N0301` when it is not a `Bool`); where `G` is false the
+arms below are tried, in order, as if this one did not match. A guarded arm covers nothing: it is
+left out of exhaustiveness and of whether a later arm is reachable, so `n if n < 0 => …` still needs
+an arm for the rest. Arms are tried top to bottom, and a guard runs only when its pattern matched
+and no arm above was chosen; it may call, and may have effects, as a condition may.
+
+**What is unchanged.** Matching evaluates nothing but the scrutinee and the guards of the arms it
+tries, and compares by equality laws already specified; releasing the scrutinee and the payloads
+follows *Enums* exactly. There are still no range patterns, no record patterns, no `..` in a payload
+and no `@` bindings.
 
 ### Tuples — R1
 <!-- id: tuples -->
