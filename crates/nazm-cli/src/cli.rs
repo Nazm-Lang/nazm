@@ -743,6 +743,12 @@ pub(crate) enum Command {
         /// With `--ops`: lay out every eligible `Vec[R]` field by field (N68).
         #[arg(long)]
         soa: bool,
+        /// With `--ops`: lower as `nazm build --debug` does, so each function's `at` line and
+        /// every `loc` position (N48, N91) are printed — what a code generator makes line
+        /// tables from (R9) — and after each unit a `; file INDEX NAME` line for every file
+        /// they name.
+        #[arg(long)]
+        debug: bool,
         /// Run the program on LIR's interpreter, the oracle the native backends are held to
         /// (N105): its output, and the status a native build would end with.
         #[arg(long)]
