@@ -88,7 +88,7 @@ done <"$log/names"
 
 # A file a gate reads, gone: the failure is worded as the Rust gate words it.
 for gone in docs/research/evaluation.md docs/capability-matrix.md docs/guide.md Cargo.lock \
-    crates/nazm-cli/src/build/mod.rs docs/mcp.md; do
+    crates/nazm-cli/src/build/mod.rs docs/mcp.md THIRD-PARTY-NOTICES.md; do
     mv "$tree/$gone" "$log/gone"
     compare "without $gone"
     mv "$log/gone" "$tree/$gone"

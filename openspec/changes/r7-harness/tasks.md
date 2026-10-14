@@ -13,7 +13,7 @@
 - [x] 3.1 `check/main.nz`: the runner and the report, byte for byte
 - [x] 3.2 Docs corpus (what `Corpus::load` refuses; the digests and indexes it serves are R5's `nazm docs`)
 - [x] 3.3 Guide from grammar
-- [ ] 3.4 Third-party notices
+- [x] 3.4 Third-party notices (`cargo metadata` as a child, `@std/json`; a text met before is found by itself, which is what the Rust gate's BLAKE3 of it stands for)
 - [x] 3.5 Module boundaries
 - [ ] 3.6 Doc claims, capability matrix, dependency sources (done); mutations apply (its
       exactly-once half done, `nazm-mutate check`; `plan::validate` open); performance claims,

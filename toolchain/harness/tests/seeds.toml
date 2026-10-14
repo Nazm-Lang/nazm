@@ -191,3 +191,26 @@ why = "docs corpus: numbered and lettered headings take their numbers as identit
 file = "docs/mcp.md"
 find = "## The root\n"
 replace = "## The root\n\n### 7.2. First — one\n\n### 7.2 Second\n\n### A3.1 — lettered\n\n### A3.1 — again\n"
+
+# --- third-party notices ---------------------------------------------------------------------
+
+[[mutation]]
+name = "notices-edited-by-hand"
+why = "third-party notices: the committed file is not what the lockfile generates"
+file = "THIRD-PARTY-NOTICES.md"
+find = "## blake3 1.8.7\n\n- Licence: `CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception`"
+replace = "## blake3 1.8.7\n\n- Licence: `CC0-1.0`"
+
+[[mutation]]
+name = "notices-count-wrong"
+why = "third-party notices: one crate too many claimed"
+file = "THIRD-PARTY-NOTICES.md"
+find = "\n123 crates.\n"
+replace = "\n124 crates.\n"
+
+[[mutation]]
+name = "lockfile-out-of-date"
+why = "third-party notices: `cargo metadata --locked` refuses a lockfile that needs updating (dependency sources stays ok)"
+file = "Cargo.lock"
+find = "name = \"blake3\"\nversion = \"1.8.7\""
+replace = "name = \"blake3\"\nversion = \"1.8.6\""

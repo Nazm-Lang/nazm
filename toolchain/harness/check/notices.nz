@@ -1,0 +1,302 @@
+// The third-party-notices gate (R7, ported from `xtask/src/notices.rs`): the committed
+// `THIRD-PARTY-NOTICES.md` is what the lockfile generates — the crates `bin/nazm` and
+// `bin/nazm-mcp` link (the normal dependencies of `nazm-cli` and `nazm-mcp`, transitively, for
+// `aarch64-apple-darwin`), each with its licence expression, authors, source and every licence or
+// notice file it ships, verbatim, a text two crates ship identically printed once.
+
+use "@std/json"
+use "@std/text"
+use "@std/map"
+use "@std/sort"
+use "@std/file"
+use "@std/env"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+const TARGET: Str = "aarch64-apple-darwin";
+
+/// One linked crate, as `describe` reads it.
+struct Crate {
+    name: Str,
+    version: Str,
+    license: Str,
+    authors: Strs,
+    repository: Str,
+    files: Strs,
+    texts: Strs,
+}
+
+fn str_of(doc: JsonDoc, node: Int, key: Str) -> Option[Str] ! {} {
+    match json_get(doc, node, key) {
+        Option.Some(value: v) => json_str(doc, v),
+        Option.None() => Option[Str].None(),
+    }
+}
+
+fn or_empty(o: Option[Str]) -> Str ! {} {
+    match o {
+        Option.Some(value: s) => s,
+        Option.None() => "",
+    }
+}
+
+fn is_null(doc: JsonDoc, node: Int, key: Str) -> Bool ! {} {
+    match json_get(doc, node, key) {
+        Option.Some(value: v) => json_kind(doc, v) == "null",
+        Option.None() => true,
+    }
+}
+
+fn items(doc: JsonDoc, node: Int, key: Str) -> Ints ! {} {
+    let out = ints_new();
+    match json_get(doc, node, key) {
+        Option.Some(value: a) => {
+            if json_kind(doc, a) == "array" {
+                let mut i = 0;
+                while i < json_len(doc, a) {
+                    match json_at(doc, a, i) {
+                        Option.Some(value: x) => ints_push(out, x),
+                        Option.None() => 0,
+                    };
+                    i = i + 1;
+                }
+            }
+            0
+        },
+        Option.None() => 0,
+    };
+    out
+}
+
+/// `metadata`: `cargo metadata` for the target, from the root, as JSON.
+fn metadata(h: Caps, root: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let io = h.io;
+    let cargo = match env_get(io, "CARGO") {
+        Option.Some(value: c) => c,
+        Option.None() => "cargo",
+    };
+    let args = words(f"metadata --format-version 1 --locked --filter-platform {TARGET}");
+    let r = run(h, cargo, args, root, env_here(io));
+    if r.code != 0 {
+        return Result[JsonDoc, Str].Err(error: f"cargo metadata: {r.stderr}");
+    }
+    match json_parse_floats(r.stdout) {
+        Result.Ok(value: d) => Result[JsonDoc, Str].Ok(value: d),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"cargo metadata: {e}"),
+    }
+}
+
+/// `linked`: the third-party packages the shipped binaries link — their JSON nodes.
+fn linked(doc: JsonDoc) -> Result[Ints, Str] ! {} {
+    let root = json_root(doc);
+    let packages = map_new[Int]();
+    for p in items(doc, root, "packages") {
+        match str_of(doc, p, "id") {
+            Option.Some(value: id) => map_set(packages, id, p),
+            Option.None() => false,
+        };
+    }
+    let nodes = map_new[Int]();
+    let resolve = match json_get(doc, root, "resolve") {
+        Option.Some(value: r) => r,
+        Option.None() => { return Result[Ints, Str].Err(error: "no resolve graph"); },
+    };
+    for n in items(doc, resolve, "nodes") {
+        match str_of(doc, n, "id") {
+            Option.Some(value: id) => map_set(nodes, id, n),
+            Option.None() => false,
+        };
+    }
+    let work = strs_new();
+    for id in map_keys(packages) {
+        let p = match map_get(packages, id) {
+            Option.Some(value: x) => x,
+            Option.None() => 0,
+        };
+        let name = or_empty(str_of(doc, p, "name"));
+        if name == "nazm-cli" || name == "nazm-mcp" {
+            strs_push(work, id);
+        }
+    }
+    if strs_len(work) != 2 {
+        return Result[Ints, Str].Err(error: "expected the packages [\"nazm-cli\", \"nazm-mcp\"]");
+    }
+    let reached = map_new[Int]();
+    while strs_len(work) > 0 {
+        let id = strs_pop(work);
+        if map_has(reached, id) {
+            continue;
+        }
+        map_set(reached, id, 0);
+        let node = match map_get(nodes, id) {
+            Option.Some(value: n) => n,
+            Option.None() => { continue; },
+        };
+        for dep in items(doc, node, "deps") {
+            let mut normal = false;
+            for k in items(doc, dep, "dep_kinds") {
+                if is_null(doc, k, "kind") {
+                    normal = true;
+                }
+            }
+            if normal {
+                match str_of(doc, dep, "pkg") {
+                    Option.Some(value: d) => strs_push(work, d),
+                    Option.None() => 0,
+                };
+            }
+        }
+    }
+    let out = ints_new();
+    for id in map_keys(reached) {
+        match map_get(packages, id) {
+            Option.Some(value: p) => {
+                // The workspace's own crates are Nazm's, under its own licence.
+                if !is_null(doc, p, "source") {
+                    ints_push(out, p);
+                }
+                0
+            },
+            Option.None() => 0,
+        };
+    }
+    Result[Ints, Str].Ok(value: out)
+}
+
+fn is_notice_name(name: Str) -> Bool ! {} {
+    let n = text_to_upper(name);
+    for w in words("LICENSE LICENCE COPYING NOTICE UNLICENSE COPYRIGHT") {
+        if text_starts_with(n, w) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `describe`: a package's licence, authors, source and its licence or notice files.
+fn describe(h: Caps, doc: JsonDoc, p: Int) -> Crate ! { io } {
+    let io = h.io;
+    let files = strs_new();
+    let texts = strs_new();
+    let manifest = or_empty(str_of(doc, p, "manifest_path"));
+    if str_len(manifest) > 0 {
+        let dir = str_slice(manifest, 0, find_last_slash(manifest));
+        let names = match dir_list(io, dir) {
+            Result.Ok(value: ns) => ns,
+            Result.Err(error: e) => strs_new(),
+        };
+        // `dir_list` is sorted by bytes, as the Rust gate sorts the paths it found.
+        for n in names {
+            let path = f"{dir}/{n}";
+            let regular = match file_metadata(io, path) {
+                Result.Ok(value: m) => match m.kind {
+                    FileKind.Regular() => true,
+                    FileKind.Directory() => false,
+                    FileKind.Other() => false,
+                },
+                Result.Err(error: e) => false,
+            };
+            if regular && is_notice_name(n) {
+                match read_rust(h, path) {
+                    Result.Ok(value: t) => { strs_push(files, n); strs_push(texts, t); 0 },
+                    Result.Err(error: e) => 0,
+                };
+            }
+        }
+    }
+    let authors = strs_new();
+    for a in items(doc, p, "authors") {
+        match json_str(doc, a) {
+            Option.Some(value: s) => strs_push(authors, s),
+            Option.None() => 0,
+        };
+    }
+    let license = match str_of(doc, p, "license") {
+        Option.Some(value: l) => l,
+        Option.None() => "(none stated)",
+    };
+    Crate(name: or_empty(str_of(doc, p, "name")), version: or_empty(str_of(doc, p, "version")), license: license, authors: authors, repository: or_empty(str_of(doc, p, "repository")), files: files, texts: texts)
+}
+
+fn find_last_slash(s: Str) -> Int ! {} {
+    let mut i = str_len(s);
+    while i > 0 {
+        i = i - 1;
+        if str_byte(s, i) == 47 {
+            return i;
+        }
+    }
+    0
+}
+
+/// Ordered by `(name, version)`, as strings.
+fn crate_before(a: Crate, b: Crate) -> Bool ! {} {
+    let c = text_compare(a.name, b.name);
+    if c != 0 { c < 0 } else { text_compare(a.version, b.version) < 0 }
+}
+
+/// `generate`: the whole document.
+pub fn generate(h: Caps, root: Str) -> Result[Str, Str] ! { io, spawn } {
+    let doc = metadata(h, root)?;
+    let ids = linked(doc)?;
+    let crates = vec_new[Crate]();
+    for p in ids {
+        vec_push(crates, describe(h, doc, p));
+    }
+    let sorted = vec_sort_by(crates, crate_before);
+    let out = strs_new();
+    strs_push(out, "# Third-party notices\n\n`bin/nazm` and `bin/nazm-mcp`, as built for `aarch64-apple-darwin` from this repository's `Cargo.lock`, link the crates below. Each is listed with its licence expression and authors as its manifest states them, followed by every licence or notice file it ships, verbatim; a text another crate ships identically is referred to rather than repeated. Nazm itself is licensed under `Apache-2.0 WITH LLVM-exception` (`LICENSE`, `NOTICE`).\n\nGenerated by `cargo xtask notices`; do not edit by hand.\n\n");
+    strs_push(out, f"{vec_len(sorted)} crates.\n\n");
+    // The first place each text appeared, by the text itself: equal texts, equal keys — what the
+    // Rust gate's BLAKE3 of the text stands for.
+    let seen = map_new[Str]();
+    for c in sorted {
+        strs_push(out, f"## {c.name} {c.version}\n\n");
+        strs_push(out, f"- Licence: `{c.license}`\n");
+        if strs_len(c.authors) > 0 {
+            let authors = str_join(c.authors, ", ");
+            strs_push(out, f"- Authors: {authors}\n");
+        }
+        if str_len(c.repository) > 0 {
+            strs_push(out, f"- Source: {c.repository}\n");
+        }
+        if strs_len(c.files) == 0 {
+            strs_push(out, "- The crate ships no licence file; its terms are the licence expression above.\n");
+        }
+        strs_push(out, "\n");
+        let mut i = 0;
+        while i < strs_len(c.files) {
+            let file = strs_get(c.files, i);
+            let text = strs_get(c.texts, i);
+            let key = trim_ws(text);
+            match map_get(seen, key) {
+                Option.Some(value: first) => strs_push(out, f"`{file}`: the same text as {first}.\n\n"),
+                Option.None() => {
+                    map_set(seen, key, f"`{file}` of {c.name} {c.version}");
+                    strs_push(out, f"### `{file}`\n\n````text\n{trim_end_ws(text)}\n````\n\n");
+                },
+            };
+            i = i + 1;
+        }
+    }
+    Result[Str, Str].Ok(value: str_join(out, ""))
+}
+
+pub fn gate_notices(h: Caps, root: Str) -> Strs ! { io, spawn } {
+    let problems = strs_new();
+    let want = match generate(h, root) {
+        Result.Ok(value: w) => w,
+        Result.Err(error: e) => { strs_push(problems, e); return problems; },
+    };
+    match read_rust(h, f"{root}/THIRD-PARTY-NOTICES.md") {
+        Result.Ok(value: have) => {
+            if have != want {
+                strs_push(problems, "THIRD-PARTY-NOTICES.md is not what Cargo.lock generates: run `cargo xtask notices`");
+            }
+            0
+        },
+        Result.Err(error: e) => strs_push(problems, f"THIRD-PARTY-NOTICES.md: {e}"),
+    };
+    problems
+}
