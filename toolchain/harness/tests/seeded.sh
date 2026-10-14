@@ -88,11 +88,18 @@ done <"$log/names"
 
 # A file a gate reads, gone: the failure is worded as the Rust gate words it.
 for gone in docs/research/evaluation.md docs/capability-matrix.md docs/guide.md Cargo.lock \
-    crates/nazm-cli/src/build/mod.rs docs/mcp.md THIRD-PARTY-NOTICES.md; do
+    crates/nazm-cli/src/build/mod.rs docs/mcp.md THIRD-PARTY-NOTICES.md bench/claims.toml \
+    docs/performance.md AGENTS.md CLAUDE.md compiler/AGENTS.md .agent/templates/state.md \
+    docs/agent-evals.md; do
     mv "$tree/$gone" "$log/gone"
     compare "without $gone"
     mv "$log/gone" "$tree/$gone"
 done
+
+# OpenSpec holds changes, each with its proposal, and only process capabilities.
+mkdir -p "$tree/openspec/changes/seeded-change" "$tree/openspec/specs/seeded-language-capability"
+compare "an OpenSpec change without a proposal, and a language capability in openspec/specs"
+rmdir "$tree/openspec/changes/seeded-change" "$tree/openspec/specs/seeded-language-capability"
 
 # A corpus document that is not UTF-8.
 cp "$tree/docs/roadmap.md" "$log/kept"

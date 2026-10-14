@@ -1,0 +1,186 @@
+// The agent-governance gate (R7, ported from `xtask/src/governance.rs`; M1): the repository's
+// agent-instruction and change-governance files stay structurally consistent with
+// `docs/agent-governance.md` — existence, links resolving, required fields present, forbidden
+// allowances absent.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+
+const ROOT: Str = "AGENTS.md";
+const SHIM: Str = "CLAUDE.md";
+const LOCAL_STATE: Str = ".agent/state.md";
+
+fn relaxations() -> Strs ! {} {
+    let out = strs_new();
+    for r in split("may push|may tag|may publish|may prune|may stash|may reset|may set nazm_contained|nazm_allow_uncontained=1 is allowed|without containment is allowed|may skip containment", "|") {
+        strs_push(out, r);
+    }
+    out
+}
+
+/// One template and the fields its convention requires.
+struct Template {
+    path: Str,
+    fields: Strs,
+}
+
+fn template(path: Str, fields: Str) -> Template ! {} {
+    Template(path: path, fields: split(fields, "|"))
+}
+
+fn templates() -> Vec[Template] ! {} {
+    let out = vec_new[Template]();
+    vec_push(out, template(".agent/templates/exec-plan.md", "Starting HEAD|## Non-goals|## Invariants affected|## Design|## Alternatives considered|## Compatibility impact|## Security impact|## Tests|## Mutation strategy|## Rollback / recovery|## Acceptance criteria|## Stop conditions|## Evidence outputs|## Handoff state"));
+    vec_push(out, template(".agent/templates/handoff.md", "Starting HEAD|Current / final HEAD|Commits|Working tree|## Tests|## Mutations|## Known limitations|## Exact blockers|## Owned resources still active|## Next exact action|## Prohibited actions not taken"));
+    vec_push(out, template(".agent/templates/decision.md", "**Problem:**|**Options:**|**Chosen:**|**Rejected alternatives|**Compatibility impact:**|**Security impact:**|**Evidence, and what would falsify|**Rollback / revisit trigger:**"));
+    vec_push(out, template(".agent/templates/task-contract.md", "**Goal:**|**Starting HEAD:**|**Scope:**|**Non-goals:**|**Authorities:**|**Invariants|**Allowed actions:**|**Prohibited actions:**|**Acceptance criteria:**|**Evidence|**Stop conditions:**"));
+    vec_push(out, template(".agent/templates/state.md", "**HEAD:**|**Active change / task ID:**|**Uncommitted task-owned files:**|**User-owned files not to touch:**|**Owned temporary resources:**|**Next exact action / command:**|**Heavy workload owns the tree:**"));
+    out
+}
+
+fn is_file(h: Caps, path: Str) -> Bool ! { io } {
+    let io = h.io;
+    match file_metadata(io, path) {
+        Result.Ok(value: m) => match m.kind {
+            FileKind.Regular() => true,
+            FileKind.Directory() => false,
+            FileKind.Other() => false,
+        },
+        Result.Err(error: e) => false,
+    }
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    let io = h.io;
+    match file_metadata(io, path) {
+        Result.Ok(value: m) => match m.kind {
+            FileKind.Regular() => false,
+            FileKind.Directory() => true,
+            FileKind.Other() => false,
+        },
+        Result.Err(error: e) => false,
+    }
+}
+
+/// `link_targets`: a Markdown file's inline link paths, then its backticked `docs/` and `.agent/`
+/// paths.
+fn link_targets(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    let m = str_len(text);
+    let mut at = find(text, "](");
+    while at >= 0 {
+        let rest_start = at + 2;
+        let close = find_from(text, ")", rest_start);
+        let end = if close >= 0 { close } else { m };
+        let target = str_slice(text, rest_start, end);
+        let path = strs_get(split(target, "#"), 0);
+        if str_len(path) > 0 && !text_contains(path, "://") && !text_starts_with(path, "mailto:") {
+            strs_push(out, path);
+        }
+        at = find_from(text, "](", rest_start);
+    }
+    let pieces = split(text, "`");
+    let mut i = 1;
+    while i < strs_len(pieces) {
+        let piece = strs_get(pieces, i);
+        let looks = (text_starts_with(piece, "docs/") || text_starts_with(piece, ".agent/")) && text_ends_with(piece, ".md") && !text_contains(piece, " ") && !text_contains(piece, "<");
+        if looks {
+            strs_push(out, piece);
+        }
+        i = i + 2;
+    }
+    out
+}
+
+fn dirs(h: Caps, path: Str) -> Strs ! { io } {
+    let io = h.io;
+    let out = strs_new();
+    let names = match dir_list(io, path) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => strs_new(),
+    };
+    for n in names {
+        if is_dir(h, f"{path}/{n}") {
+            strs_push(out, n);
+        }
+    }
+    out
+}
+
+pub fn gate_governance(h: Caps, root: Str) -> Strs ! { io } {
+    let io = h.io;
+    let bad = strs_new();
+    for doc in words("docs/agent-governance.md docs/change-governance.md docs/agent-evals.md .agent/PLANS.md openspec/config.yaml") {
+        if !is_file(h, f"{root}/{doc}") {
+            strs_push(bad, f"{doc} is missing (docs/agent-governance.md names it)");
+        }
+    }
+    match read_rust(h, f"{root}/{ROOT}") {
+        Result.Err(error: e) => strs_push(bad, f"{ROOT} is missing: it is the agents' entry point"),
+        Result.Ok(value: text) => {
+            for target in link_targets(text) {
+                if target == LOCAL_STATE {
+                    continue;
+                }
+                if !file_exists_at(io, f"{root}/{target}") {
+                    strs_push(bad, f"{ROOT} links to `{target}`, which does not exist");
+                }
+            }
+            0
+        },
+    };
+    match read_rust(h, f"{root}/{SHIM}") {
+        Result.Err(error: e) => strs_push(bad, f"{SHIM} is missing: the Claude shim that defers to {ROOT}"),
+        Result.Ok(value: text) => if !text_contains(text, ROOT) { strs_push(bad, f"{SHIM} does not defer to {ROOT}") } else { 0 },
+    };
+    for nested in words("compiler/AGENTS.md crates/nazm-runtime/AGENTS.md xtask/AGENTS.md") {
+        match read_rust(h, f"{root}/{nested}") {
+            Result.Err(error: e) => strs_push(bad, f"{nested} is missing"),
+            Result.Ok(value: text) => {
+                if !text_contains(text, "root `AGENTS.md`") {
+                    strs_push(bad, f"{nested} does not say it specialises the root `AGENTS.md`");
+                }
+                let lower = text_to_lower(text);
+                for r in relaxations() {
+                    if text_contains(lower, r) {
+                        strs_push(bad, f"{nested} grants what the root forbids: \"{r}\"");
+                    }
+                }
+                0
+            },
+        };
+    }
+    for t in templates() {
+        match read_rust(h, f"{root}/{t.path}") {
+            Result.Err(error: e) => strs_push(bad, f"{t.path} is missing"),
+            Result.Ok(value: text) => {
+                for f in t.fields {
+                    if !text_contains(text, f) {
+                        strs_push(bad, f"{t.path} lacks the required field `{f}`");
+                    }
+                }
+                0
+            },
+        };
+    }
+    // OpenSpec holds changes, not a second specification. (The Rust gate lists the directories in
+    // the order the file system gives them; this lists them sorted — the same problems, in an order
+    // that can differ only when two changes lack a proposal.)
+    for change in dirs(h, f"{root}/openspec/changes") {
+        if change == "archive" {
+            continue;
+        }
+        if !is_file(h, f"{root}/openspec/changes/{change}/proposal.md") {
+            strs_push(bad, f"the OpenSpec change `{change}` has no proposal.md");
+        }
+    }
+    for cap in dirs(h, f"{root}/openspec/specs") {
+        if cap != "repository-governance" {
+            strs_push(bad, f"openspec/specs/{cap} is not a repository-process capability: a change to the language or toolchain archives with --skip-specs, and its text belongs in docs/spec.md and the other Nazm authorities");
+        }
+    }
+    bad
+}

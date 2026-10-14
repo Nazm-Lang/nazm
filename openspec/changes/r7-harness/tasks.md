@@ -15,9 +15,9 @@
 - [x] 3.3 Guide from grammar
 - [x] 3.4 Third-party notices (`cargo metadata` as a child, `@std/json`; a text met before is found by itself, which is what the Rust gate's BLAKE3 of it stands for)
 - [x] 3.5 Module boundaries
-- [ ] 3.6 Doc claims, capability matrix, dependency sources (done); mutations apply (its
-      exactly-once half done, `nazm-mutate check`; `plan::validate` open); performance claims,
-      agent governance (open)
+- [ ] 3.6 Doc claims, capability matrix, dependency sources, performance claims, agent governance
+      (done); mutations apply (its exactly-once half done, `nazm-mutate check`; `plan::validate`
+      open)
 - [x] 3.7 Compared with the Rust gates on the tree and on seeded copies (`tests/seeded.sh`, every
       gate ported so far; extended with each gate)
 

@@ -16,6 +16,8 @@ use "supply.nz"
 use "modules.nz"
 use "corpus.nz"
 use "notices.nz"
+use "claims.nz"
+use "governance.nz"
 
 /// The ported gates, in `run_checks`'s order.
 fn gates() -> Strs ! {} {
@@ -24,6 +26,8 @@ fn gates() -> Strs ! {} {
     strs_push(out, "capability matrix");
     strs_push(out, "guide from grammar");
     strs_push(out, "docs corpus");
+    strs_push(out, "performance claims");
+    strs_push(out, "agent governance");
     strs_push(out, "dependency sources");
     strs_push(out, "third-party notices");
     strs_push(out, "module boundaries");
@@ -42,6 +46,12 @@ fn run_gate(h: Caps, root: Str, name: Str) -> Strs ! { io, spawn } {
     }
     if name == "docs corpus" {
         return gate_docs_corpus(h, root);
+    }
+    if name == "performance claims" {
+        return gate_claims(h, root);
+    }
+    if name == "agent governance" {
+        return gate_governance(h, root);
     }
     if name == "dependency sources" {
         return gate_supply(h, root);
