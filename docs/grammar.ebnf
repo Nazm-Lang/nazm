@@ -95,8 +95,12 @@ impl_item = "impl" , [ type_parameters ] , type , IDENT , type , "{" , { functio
  *)
 (* @example pub use "shapes.nz"; fn main() -> Int { 0 } *)
 (* @example pub use "shapes.nz" { double, Sq as Square }; fn main() -> Int { 0 } *)
-use_item = "use" , STRING , [ IDENT , IDENT ] , ";"
+use_item = "use" , ( STRING | standard_path ) , [ IDENT , IDENT ] , ";"
          | visibility , "use" , STRING , [ "{" , [ reexport_name , { "," , reexport_name } , [ "," ] ] , "}" ] , ";" ;
+
+(* A standard module by its dotted path (R1.5, D7): `use std.json;` is `use "@std/json";`. *)
+(* @example use std.hash; use std.hashmap; fn main() -> Int { hashmap_len(hashmap_single("a", 1)) } *)
+standard_path = "std" , "." , IDENT , { "." , IDENT } ;
 
 (* @example pub use "shapes.nz" { Sq as Square }; fn main() -> Int { 0 } *)
 reexport_name = IDENT , [ IDENT , IDENT ] ;

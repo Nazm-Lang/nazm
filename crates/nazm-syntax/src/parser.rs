@@ -1317,9 +1317,35 @@ impl<'a> Parser<'a> {
         }
         let start = self.expect(&TokenKind::Use, "to start an import")?;
         let start = pub_span.map_or(start, |p| p.join(start));
-        let path_span = self.peek_span();
+        let mut path_span = self.peek_span();
         let path = match self.advance() {
             TokenKind::Str(p) => p,
+            // `use std.json` (R1.5, D7): a standard module named by its dotted path, which is
+            // `use "@std/json"`; a quoted path is still a file.
+            TokenKind::Ident(w) if w == "std" && self.at(&TokenKind::Dot) => {
+                let mut segments = Vec::new();
+                while self.eat(&TokenKind::Dot) {
+                    let seg_span = self.peek_span();
+                    match self.advance() {
+                        TokenKind::Ident(seg) => {
+                            segments.push(seg);
+                            path_span = path_span.join(seg_span);
+                        }
+                        other => {
+                            self.report(Diagnostic::error(
+                                codes::UNEXPECTED_TOKEN,
+                                seg_span,
+                                format!(
+                                    "expected a standard module's name after `.`, found {}",
+                                    other.describe()
+                                ),
+                            ));
+                            return None;
+                        }
+                    }
+                }
+                format!("@std/{}", segments.join("/"))
+            }
             other => {
                 self.report(
                     Diagnostic::error(
@@ -1327,7 +1353,7 @@ impl<'a> Parser<'a> {
                         path_span,
                         format!("expected a quoted path, found {}", other.describe()),
                     )
-                    .help("an import is written `use \"other.nz\";`"),
+                    .help("an import is written `use \"other.nz\";`, or `use std.json;` for a standard module"),
                 );
                 return None;
             }

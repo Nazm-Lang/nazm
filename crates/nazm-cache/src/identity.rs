@@ -372,7 +372,9 @@ use crate::digest::{self, Framed};
 /// accepted (D4), with `N0636` for a variant name two enums in scope share.
 /// `80` — R1.5, 2026-10-15. A map literal, `{"a": 1}`, and `Map[K, V]` for the standard hash map
 /// moved from refused to accepted (D5).
-pub const SEMANTIC_EPOCH: u32 = 80;
+/// `81` — R1.5, 2026-10-15. `use std.json`, a standard module by its dotted path, moved from refused
+/// (a syntax error) to accepted (D7).
+pub const SEMANTIC_EPOCH: u32 = 81;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
