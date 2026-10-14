@@ -49,7 +49,7 @@ fn the_printed_core_ir_is_the_same_bytes_in_every_process() {
         assert!(first.status.success(), "{example}: {first:?}");
         let text = String::from_utf8(first.stdout.clone()).expect("UTF-8");
         assert!(
-            text.starts_with("{\"schema\":\"nazm.core-ir/2\""),
+            text.starts_with("{\"schema\":\"nazm.core-ir/3\""),
             "{example}"
         );
         assert_eq!(text.lines().count(), 1, "--json is one line");
@@ -113,6 +113,119 @@ fn two_modules_same_named_helpers_are_two_identities() {
     );
     // No span was asked for, and none is printed.
     assert!(!String::from_utf8_lossy(&out.stdout).contains("\"at\""));
+}
+
+/// `nazm.core-ir/3` (R3): what a lowering outside the workspace needs, printed as the checker
+/// settled it — function and array types spelled, each function's visibility, captures and
+/// attributes, and the modules, type table, statics and impl table, a default method included.
+#[test]
+fn core_ir_3_prints_the_tables_a_lowering_needs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    std::fs::write(
+        dir.path().join("prog.nz"),
+        "pub extern \"C\" fn nz_triple(x: Int) -> Int ! {} = \"nz_triple\" { x * 3 }\n\
+         static COUNT: Atomic = atomic_new(7);\n\
+         trait Size {\n    fn size(self: Self) -> Int;\n    \
+         fn twice(self: Self) -> Int { self.size() * 2 }\n}\n\
+         struct Holder[T] { item: T, n: Int, }\n\
+         impl[T] Size for Holder[T] { fn size(self: Holder[T]) -> Int { self.n } }\n\
+         pub fn sum(a: [Int; 3]) -> Int { a[0] + a[1] + a[2] }\n\
+         fn main() -> Int {\n    let k = 10;\n    let add = fn(x: Int) -> Int { x + k };\n    \
+         let h = Holder[Str](item: \"s\", n: 4);\n    \
+         add(sum([1, 2, 3])) + h.twice() + nz_triple(1) + atomic_load(COUNT)\n}\n",
+    )
+    .unwrap();
+    let out = core_ir(&dir.path().join("prog.nz"), &["--json", "--no-spans"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["schema"], "nazm.core-ir/3");
+    let function = |def: &str| -> &serde_json::Value {
+        v["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["def"] == def)
+            .unwrap_or_else(|| panic!("no {def}"))
+    };
+    // Visibility, and an array type spelled where `/2` wrote `?`.
+    let sum = function("prog.nz::fn sum");
+    assert_eq!(sum["pub"], true);
+    assert_eq!(sum["locals"][0]["type"], "[Int; 3]");
+    let main = function("prog.nz::fn main");
+    assert_eq!(main["pub"], false);
+    assert!(
+        main["locals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["name"] == "add" && l["type"] == "fn(Int) -> Int"),
+        "{main}"
+    );
+    // The closure's body, and the local holding its one capture.
+    let closure = function("prog.nz::fn main#0");
+    assert_eq!(closure["closure"], true);
+    assert_eq!(closure["captures"], serde_json::json!([2]));
+    assert_eq!(closure["locals"][2]["name"], "k");
+    assert_eq!(main["closure"], false);
+    // The export symbol.
+    let export = function("prog.nz::fn nz_triple");
+    assert_eq!(export["attributes"]["export"], "nz_triple");
+    assert_eq!(export["attributes"]["on_failure"], false);
+    assert_eq!(sum["attributes"]["export"], serde_json::Value::Null);
+    // Modules in load order.
+    assert_eq!(v["modules"][0]["name"], "prog.nz");
+    assert_eq!(v["modules"][0]["root"], true);
+    assert!(v["modules"][0]["imports"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("@core/prelude")));
+    // The type table, in the checker's id order: the definition, then its instances.
+    let records = v["types"]["records"].as_array().unwrap();
+    let holder = records
+        .iter()
+        .find(|r| r["display"] == "Holder[Str]")
+        .expect("Holder[Str] in the type table");
+    assert_eq!(holder["type"], "prog.nz::record Holder[Str]");
+    assert_eq!(holder["definition"], "prog.nz::record Holder");
+    assert_eq!(holder["type_args"], serde_json::json!(["Str"]));
+    assert_eq!(
+        holder["fields"],
+        serde_json::json!([{"name": "item", "type": "Str"}, {"name": "n", "type": "Int"}])
+    );
+    assert_eq!(holder["canonical"], serde_json::json!([0, 1]));
+    for (i, r) in records.iter().enumerate() {
+        assert_eq!(r["id"], i, "records in id order");
+    }
+    // The static.
+    assert_eq!(
+        v["statics"],
+        serde_json::json!([{"def": "prog.nz::static COUNT", "module": "prog.nz", "name": "COUNT",
+            "type": "Atomic", "cell": true, "value": 7, "section": null}])
+    );
+    // The impl table: the impl's own method, and the trait's default body at the impl's type.
+    let size = v["impls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["trait"] == "prog.nz::trait Size")
+        .expect("the impl of Size");
+    assert_eq!(size["self"], "prog.nz::record Holder");
+    assert_eq!(
+        size["methods"][0]["function"],
+        "prog.nz::fn Size/Holder/size"
+    );
+    assert_eq!(size["methods"][0]["default"], false);
+    assert_eq!(size["methods"][1]["method"], "prog.nz::trait Size.twice");
+    assert_eq!(
+        size["methods"][1]["function"],
+        "prog.nz::fn Size/default/twice"
+    );
+    assert_eq!(size["methods"][1]["default"], true);
+    assert_eq!(
+        size["methods"][1]["type_args"],
+        serde_json::json!(["prog.nz::record Holder"])
+    );
 }
 
 #[test]

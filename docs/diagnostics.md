@@ -88,7 +88,7 @@ interface stays `nazm.interface/6`, and the cache's own entry format moved to `n
 contradicted itself — a program that checked with no diagnostic could not be lowered to Core IR,
 or its Core IR broke an invariant (`architecture.md` §7.41). It describes the compiler, not the
 program, carries no fix, and nothing is run or built after it. The printed Core IR,
-`nazm.core-ir/2`, is a debugging form with its own version and is not one of these schemas.
+`nazm.core-ir/3`, is a debugging form with its own version and is not one of these schemas.
 
 **Applied to N40, MIR.** No schema moved and no code appeared. `N0900` gained one more way to be
 raised: a program that checked whose MIR the validator rejects (`architecture.md` §7.42) — `nazm
@@ -783,3 +783,10 @@ given a status outside `0..=255` (Q1-B-05). Until then such a status reached the
 truncated differently by each implementation; no program that ran with a status in range changes.
 `N0381` gained a use, also compatible: on a 32-bit target, a foreign declaration whose crossing is a
 C pointer (Q1-A1-05).
+
+**Applied to R3, Core IR for a lowering in Nazm (2026-10-15).** No code appeared. One debugging
+schema moved: `nazm.core-ir/2` → `nazm.core-ir/3`, a new major because a field's values changed —
+a function or array type is spelled (`fn(Int) -> Str`, `[Int; 4]`) where `/2` wrote `?`. It also
+gains each function's `pub`, `closure`, `captures` and `attributes`, and the root's `modules`,
+`types` (records and enums in the checker's id order), `statics`, `impls` and `derived_hash`
+(`architecture.md` §7.41). Every `/2` field stays where it was; the digests are unchanged.

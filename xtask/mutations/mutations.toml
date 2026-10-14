@@ -12555,10 +12555,10 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "traits::the_interfa
 
 [[mutation]]
 name = "n78-the-core-ir-schema-stays"
-why = "Core IR's printed form keeps `/1` for a shape with `call_trait`, which a `/1` reader misreads"
+why = "Core IR's printed form keeps an earlier version for a shape a reader of that version misreads (`call_trait` for `/1`, spelled types for `/2`)"
 file = "crates/nazm-cir/src/lib.rs"
-find = 'pub const SCHEMA: &str = "nazm.core-ir/2";'
-replace = 'pub const SCHEMA: &str = "nazm.core-ir/1";'
+find = 'pub const SCHEMA: &str = "nazm.core-ir/3";'
+replace = 'pub const SCHEMA: &str = "nazm.core-ir/2";'
 killers = [{ package = "nazm-core", test = "core_ir", name = "the_printed_form_is_the_same_every_time" }]
 
 [[mutation]]
@@ -19542,3 +19542,19 @@ file = "crates/nazm-sema/src/key.rs"
 find = "        !self.0.contains('@')"
 replace = "        true"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_packages_function_still_needs_out_and_files_still_need_io" }]
+
+[[mutation]]
+name = "r3-core-ir-3-prints-no-captures"
+why = "`nazm.core-ir/3` prints a closure's body with no captures, so a lowering outside the workspace cannot tell which locals its environment fills"
+file = "crates/nazm-cir/src/print.rs"
+find = "                J::Arr(f.captures.iter().map(|l| J::uint(l.0)).collect()),"
+replace = "                J::Arr(Vec::new()),"
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::core_ir_3_prints_the_tables_a_lowering_needs" }]
+
+[[mutation]]
+name = "r3-core-ir-3-writes-an-array-type-as-unknown"
+why = "`nazm.core-ir/3` writes an array type `?`, as `/2` did, so a reader must recover it from how it is made"
+file = "crates/nazm-cir/src/names.rs"
+find = "            Type::Array(a) if self.spelled => match types.array_info(a) {"
+replace = "            Type::Array(a) if false && self.spelled => match types.array_info(a) {"
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::core_ir_3_prints_the_tables_a_lowering_needs" }]
