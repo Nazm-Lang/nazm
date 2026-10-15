@@ -1,0 +1,116 @@
+// Gate 3: `@section` and the 64-bit device registers (`docs/spec.md`, *Boards*;
+// `docs/systems-domains.md` Part B). Ported from `crates/nazm-cli/tests/sections.rs` (R7): the
+// tests a board build shows on any host. The `#[ignore]`d QEMU boot starts Docker and stays Rust.
+//
+// A function and a static `@section` names reach the object in that section, and the generated
+// `link.ld` keeps each beside the board's own sections of its kind; everything else — a hosted
+// build, `nazm run`, an attribute on what has no address — is refused by name.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// A function, a writable static and a read-only static, each in a section of its own.
+fn placed() -> Str ! {} {
+    "@section(\".data.ticks\")\nstatic TICKS: Atomic = atomic_new(40);\n\n@section(\".rodata.table\")\nstatic BASE: Int = 2;\n\n@section(\".boot\")\nfn bump() -> Int { atomic_add(TICKS, BASE) }\n\nfn main(m: MmioCap) -> Int ! {} {\n    bump();\n    atomic_load(TICKS)\n}\n"
+}
+
+/// Whether `name` followed by a NUL byte is somewhere in `object`.
+fn has_section_name(object: Str, name: Str) -> Bool ! {} {
+    let mut at = find(object, name);
+    while at >= 0 {
+        let end = at + str_len(name);
+        if end < str_len(object) && str_byte(object, end) == 0 {
+            return true;
+        }
+        at = find_from(object, name, at + 1);
+    }
+    false
+}
+
+fn placed_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", placed())?;
+    let r = nazm(h, d, words("build --target aarch64-unknown-none --objects o prog.nz"));
+    check_that(r.code == 0, r.stderr)?;
+    let script = read_text(h, f"{d}/o/link.ld")?;
+    check_that(text_contains(script, ".text : { *(.text.start) *(.text*) KEEP(*(.boot)) }"), script)?;
+    check_that(text_contains(script, ".rodata : { *(.rodata*) *(.srodata*) KEEP(*(.rodata.table)) }"), script)?;
+    check_that(text_contains(script, ".data : { *(.data*) *(.sdata*) KEEP(*(.data.ticks)) }"), script)?;
+    // The section names are in the module's object at both levels: at -O2 `bump` is inlined into
+    // `main`, and its section is still there.
+    for o in words("0 2") {
+        let b = nazm(h, d, words(f"build --opt-level {o} --target aarch64-unknown-none --objects o{o} prog.nz"));
+        check_that(b.code == 0, b.stderr)?;
+        let object = read_raw(h, f"{d}/o{o}/00-m0.o")?;
+        for name in words(".boot .data.ticks .rodata.table") {
+            check_that(has_section_name(object, name), f"-O{o}: {name} is not a section of the object")?;
+        }
+    }
+    // A program without a section gets the board's script exactly as before.
+    scratch_write(h, d, "plain.nz", "fn main(m: MmioCap) -> Int ! {} { 0 }\n")?;
+    let p = nazm(h, d, words("build --target aarch64-unknown-none --objects p plain.nz"));
+    check_that(p.code == 0, p.stderr)?;
+    let plain = read_text(h, f"{d}/p/link.ld")?;
+    check_that(!text_contains(plain, "KEEP"), plain)
+}
+
+@test
+fn a_placed_definition_reaches_its_section_and_the_linker_script_keeps_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = placed_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn boards_alone(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", placed())?;
+    let built = nazm(h, d, words("build prog.nz -o x"));
+    check_that(built.code == 1, ran_show(built))?;
+    check_that(text_contains(built.stderr, "N0392"), built.stderr)?;
+    check_that(text_contains(built.stderr, "`@section` on `bump`"), built.stderr)?;
+    let ran = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(ran.code == 1, ran_show(ran))?;
+    check_that(text_contains(ran.stderr, "N0392"), ran.stderr)?;
+    let wasm = nazm(h, d, words("build --target wasm32-unknown-unknown --objects w prog.nz"));
+    check_that(text_contains(wasm.stderr, "N0392"), wasm.stderr)?;
+    scratch_write(h, d, "reg.nz", "fn main(m: MmioCap) -> Int ! {} { mmio_write64(150994944, 1); mmio_read64(150994944) }\n")?;
+    let hosted = nazm(h, d, words("run --interpret reg.nz"));
+    check_that(text_contains(hosted.stderr, "N0392"), hosted.stderr)?;
+    check_that(text_contains(hosted.stderr, "mmio_write64"), hosted.stderr)?;
+    let board = nazm(h, d, words("build --target aarch64-unknown-none --objects r reg.nz"));
+    check_that(board.code == 0, board.stderr)
+}
+
+@test
+fn a_section_and_a_64_bit_register_are_a_boards_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = boards_alone(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+@test
+fn a_section_marks_a_function_or_a_static_by_one_plain_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    // A constant has no address; a type is not placed.
+    strs_push(srcs, "@section(\".x\")\nconst A: Int = 1;\n");
+    strs_push(srcs, "@section(\".x\")\nstruct P { x: Int, }\n");
+    // One string, of letters, digits, `.` and `_`.
+    strs_push(srcs, "@section\nfn f() -> Int { 0 }\n");
+    strs_push(srcs, "@section(\"\")\nfn f() -> Int { 0 }\n");
+    strs_push(srcs, "@section(\"a b\")\nfn f() -> Int { 0 }\n");
+    strs_push(srcs, "@section(\".a\", \".b\")\nfn f() -> Int { 0 }\n");
+    strs_push(srcs, "@section(x)\nfn f() -> Int { 0 }\n");
+    // Once.
+    strs_push(srcs, "@section(\".a\")\n@section(\".b\")\nfn f() -> Int { 0 }\n");
+    for src in srcs {
+        same_strs(src, refused(h, f"{src}fn main() -> Int {{ 0 }}\n")?, words("N0619"))?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

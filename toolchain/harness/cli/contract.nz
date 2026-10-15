@@ -1,0 +1,206 @@
+// N69: contracts — the `web3` profile, a contract's facts, and its simulator
+// (`docs/architecture.md` §7.71). Ported from `crates/nazm-cli/tests/contract.rs` (R7).
+//
+// A contract's state, entrypoints and read and write sets as `nazm.contract/1`, conservative where
+// the analysis cannot see; transactions run deterministically, a revert leaving the state as it
+// was, a runtime failure reverting with its code, and a transaction that changes the conserved
+// quantity rejected (`N0396`); the `web3` profile refusing nondeterminism and outside authority
+// before anything runs; and a pure function meaning the same under it as under no profile.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn token() -> Str ! {} {
+    "pub struct State { owner: Int, alice: Int, bob: Int, supply: Int, paused: Bool }\nfn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, supply: 100, paused: false) }\nfn conserved(s: State) -> Int ! {} { s.alice + s.bob }\npub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nif s.paused { return Result[State, Int].Err(error: 3); }\nif amount <= 0 { return Result[State, Int].Err(error: 1); }\nif caller == 1 {\nif s.alice < amount { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n} else {\nif s.bob < amount { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + amount, bob: s.bob - amount, supply: s.supply, paused: s.paused))\n}\n}\npub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {\nif caller != s.owner { return Result[State, Int].Err(error: 4); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, supply: s.supply, paused: on == 1))\n}\npub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n}\nfn fee(amount: Int) -> Int ! {} { let mut f = 0; let mut i = 0; while i < amount { f = f + 1; i = i + 10; } f }\npub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nlet f = fee(amount);\nif caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))\n}\nfn audit(s: State) -> Int ! {} { s.alice }\npub fn opaque(s: State, caller: Int) -> Result[State, Int] ! {} {\nif audit(s) > 1000 { return Result[State, Int].Err(error: 9); }\nResult[State, Int].Ok(value: s)\n}\nfn main() -> Int ! {} { 0 }\n"
+}
+
+fn txs() -> Str ! {} {
+    "1 transfer 30\n2 transfer 50\n2 transfer 10\n2 pause 1\n1 pause 1\n1 transfer 5\n1 pause 0\n# a comment\n\n1 transfer 9223372036854775807\n1 charged 25\n2 airdrop 7\n1 transfer -1\n1 nothing 3\n1 transfer\n"
+}
+
+/// A directory holding `c.nz` and `txs.txt`; `body` run on it, then removed.
+fn with_contract(h: Caps, src: Str, txs_text: Str, body: fn(Caps, Str) -> Result[Int, Str] ! { io, spawn }) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "c.nz", src)?;
+    let r = match scratch_write(h, d, "txs.txt", txs_text) {
+        Result.Ok(value: n) => body(h, d),
+        Result.Err(error: e) => Result[Int, Str].Err(error: e),
+    };
+    scratch_remove(h, d);
+    r
+}
+
+fn json_of(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    match jparse(o.stdout) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {o.stderr}"),
+    }
+}
+
+/// The path of the entrypoint named `name`, or `""`.
+fn entry(v: JsonDoc, name: Str) -> Str ! {} {
+    let mut i = 0;
+    while jq(v, f"entrypoints/{i}") >= 0 {
+        if jstr(v, f"entrypoints/{i}/name") == name {
+            return f"entrypoints/{i}";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn facts(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = nazm(h, d, words("contract c.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let v = json_of(o)?;
+    check_that(jstr(v, "schema") == "nazm.contract/1", o.stdout)?;
+    check_that(jstr(v, "profile") == "web3", o.stdout)?;
+    check_that(jtext(v, "conserved") == "true", o.stdout)?;
+    let fields = strs_new();
+    let mut i = 0;
+    while jq(v, f"state/fields/{i}") >= 0 {
+        strs_push(fields, jstr(v, f"state/fields/{i}/name"));
+        i = i + 1;
+    }
+    same_strs("fields", fields, words("owner alice bob supply paused"))?;
+    let t = entry(v, "transfer");
+    check_that(jtext(v, f"{t}/reads") == "[\"alice\",\"bob\",\"paused\"]", jtext(v, t))?;
+    check_that(jtext(v, f"{t}/writes") == "[\"alice\",\"bob\"]", jtext(v, t))?;
+    check_that(jtext(v, f"{t}/args") == "[\"amount\"]", jtext(v, t))?;
+    let p = entry(v, "pause");
+    check_that(jtext(v, f"{p}/reads") == "[\"owner\"]", jtext(v, p))?;
+    check_that(jtext(v, f"{p}/writes") == "[\"paused\"]", jtext(v, p))?;
+    let a = entry(v, "airdrop");
+    check_that(jtext(v, f"{a}/writes") == "[\"bob\"]", jtext(v, a))?;
+    // Handed to a helper, the state is opaque: every field may be read; returned whole, nothing is
+    // written.
+    let q = entry(v, "opaque");
+    check_that(jtext(v, f"{q}/reads") == "\"all\"", jtext(v, q))?;
+    check_that(jtext(v, f"{q}/writes") == "[]", jtext(v, q))?;
+    // Not entrypoints: private, or not of the shape.
+    check_that(str_len(entry(v, "fee")) == 0 && str_len(entry(v, "audit")) == 0, o.stdout)
+}
+
+@test
+fn a_contracts_facts_name_each_entrypoints_reads_and_writes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    with_contract(h, token(), "", facts)
+}
+
+fn simulated(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = nazm(h, d, words("contract c.nz --txs txs.txt"));
+    // `airdrop` broke conservation: the run reports it and fails.
+    check_that(o.code == 1, ran_show(o))?;
+    check_that(text_contains(o.stderr, "error[N0396]: transaction 12 (`airdrop`) changed the conserved quantity from 100 to 107"), o.stderr)?;
+    let v = json_of(o)?;
+    check_that(jstr(v, "schema") == "nazm.contract-run/1", o.stdout)?;
+    let outcomes = strs_new();
+    let mut i = 0;
+    while jq(v, f"transactions/{i}") >= 0 {
+        strs_push(outcomes, f"{jtext(v, f"transactions/{i}/line")}:{jstr(v, f"transactions/{i}/outcome")}:{jstr(v, f"transactions/{i}/code")}");
+        i = i + 1;
+    }
+    same_strs("outcomes", outcomes, words("1:ok: 2:revert:2 3:ok: 4:revert:4 5:ok: 6:revert:3 7:ok: 10:revert:2 11:ok: 12:rejected:N0396 13:revert:1 14:no-such-entrypoint: 15:wrong-arity:"))?;
+    check_that(jtext(v, "transactions/0/changed") == "[\"alice\",\"bob\"]", o.stdout)?;
+    check_that(jtext(v, "transactions/4/changed") == "[\"paused\"]", o.stdout)?;
+    // The fee's helper call and its three loop turns are metered; a plain transfer has none.
+    check_that(meter_is(v, 8, "1", "3"), jtext(v, "transactions/8/meter"))?;
+    check_that(meter_is(v, 0, "0", "0"), jtext(v, "transactions/0/meter"))?;
+    // 100 → 70/30 → 80/20 → charged 25 + fee 3: 52/48; the rejected airdrop left it there.
+    let state = strs_new();
+    for k in words("owner alice bob supply paused") {
+        strs_push(state, f"{k}={jtext(v, f"state/{k}")}");
+    }
+    check_that(json_len(v, jq(v, "state")) == 5, jtext(v, "state"))?;
+    same_strs("state", state, words("owner=\"1\" alice=\"52\" bob=\"48\" supply=\"100\" paused=\"false\""))?;
+    // Two runs, the same bytes.
+    let again = nazm(h, d, words("contract c.nz --txs txs.txt"));
+    check_that(again.stdout == o.stdout, "two runs, two outputs")
+}
+
+fn meter_is(v: JsonDoc, i: Int, calls: Str, turns: Str) -> Bool ! {} {
+    let m = jq(v, f"transactions/{i}/meter");
+    m >= 0 && json_len(v, m) == 2 && jtext(v, f"transactions/{i}/meter/calls") == calls && jtext(v, f"transactions/{i}/meter/loop_turns") == turns
+}
+
+@test
+fn transactions_run_deterministically_and_a_revert_changes_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    with_contract(h, token(), txs(), simulated)
+}
+
+fn boom_case(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = nazm(h, d, words("contract c.nz --txs txs.txt"));
+    check_that(o.code == 0, o.stderr)?;
+    let v = json_of(o)?;
+    check_that(jstr(v, "transactions/0/outcome") == "fail", o.stdout)?;
+    check_that(jstr(v, "transactions/0/code") == "N0400", o.stdout)?;
+    check_that(jstr(v, "state/alice") == "99", o.stdout)
+}
+
+@test
+fn a_runtime_failure_reverts_with_its_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = text_replace(token(), "fn main() -> Int ! {} { 0 }", "pub fn boom(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice * n, bob: s.bob, supply: s.supply, paused: s.paused)) }\nfn main() -> Int ! {} { 0 }");
+    with_contract(h, src, "1 boom 9223372036854775807\n1 transfer 1\n", boom_case)
+}
+
+fn refused_by(h: Caps, src: Str, want: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "c.nz", src)?;
+    let o = nazm(h, d, words("contract c.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, f"{want} admitted")?;
+    check_that(str_len(code) == 0 || text_contains(o.stderr, code), o.stderr)?;
+    check_that(text_contains(o.stderr, want), f"{want}: {o.stderr}")?;
+    check_that(str_len(code) > 0 || str_len(o.stdout) == 0, o.stdout)
+}
+
+@test
+fn the_web3_profile_refuses_nondeterminism_and_outside_authority(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_by(h, str_concat("fn clock(t: TimeCap) -> Int ! {} { time_now_ms() }\nfn main(t: TimeCap) -> Int ! {} { clock(t) }", "\n"), "rule `no-ambient-time`", "")?;
+    refused_by(h, str_concat("fn main(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }", "\n"), "rule `no-io`", "")?;
+    refused_by(h, str_concat("fn down(n: Int) -> Int ! {} { if n == 0 { 0 } else { down(n - 1) } }\nfn main() -> Int ! {} { down(3) }", "\n"), "rule `no-recursion`", "")?;
+    refused_by(h, str_concat("fn main() -> Int { 0 }", "\n"), "rule `declared-effects`", "")?;
+    refused_by(h, str_concat("fn main() -> Int ! {} { let c = chan_new(1); if chan_send(c, 1) { 1 } else { 0 } }", "\n"), "rule `no-blocking`", "")
+}
+
+@test
+fn a_module_that_is_not_a_contract_is_refused_by_what_it_lacks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_by(h, str_concat("fn main() -> Int ! {} { 0 }", "\n"), "a contract declares a record `State`", "error[N0395]")?;
+    refused_by(h, str_concat("pub struct State { name: Str }\nfn main() -> Int ! {} { 0 }", "\n"), "`Int` and `Bool` fields", "error[N0395]")?;
+    refused_by(h, str_concat("pub struct State { n: Int }\nfn main() -> Int ! {} { 0 }", "\n"), "`fn init() -> State`", "error[N0395]")?;
+    refused_by(h, str_concat("pub struct State { n: Int }\nfn init() -> State ! {} { State(n: 0) }\nfn main() -> Int ! {} { 0 }", "\n"), "a contract has an entrypoint", "error[N0395]")
+}
+
+fn pure_case(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let plain = nazm(h, d, words("run --interpret c.nz"));
+    let web3 = nazm(h, d, words("run --interpret --profile web3 c.nz"));
+    check_that(plain.code == 0 && web3.code == 0, f"{ran_show(plain)} {ran_show(web3)}")?;
+    check_that(plain.stdout == web3.stdout, f"{plain.stdout} vs {web3.stdout}")?;
+    check_that(plain.stdout == "22\n", plain.stdout)
+}
+
+@test
+fn a_pure_function_means_the_same_under_web3_as_under_no_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    with_contract(h, "fn f(x: Int) -> Int ! {} { x * 3 - 7 }\nfn main() -> Int ! {} { f(14) + f(-2) }\n", "", pure_case)
+}
+
+fn unfollowed(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = nazm(h, d, words("contract c.nz"));
+    let v = json_of(o)?;
+    check_that(jtext(v, f"{entry(v, "rebuilt")}/writes") == "\"all\"", o.stdout)?;
+    check_that(jtext(v, f"{entry(v, "direct")}/writes") == "[\"b\"]", o.stdout)?;
+    check_that(jtext(v, f"{entry(v, "direct")}/reads") == "[]", o.stdout)
+}
+
+@test
+fn a_state_the_analysis_does_not_follow_may_write_every_field(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    with_contract(h, "pub struct State { a: Int, b: Int }\nfn init() -> State ! {} { State(a: 0, b: 0) }\npub fn rebuilt(s: State, caller: Int) -> Result[State, Int] ! {} { let t = State(a: s.a, b: caller); Result[State, Int].Ok(value: t) }\npub fn direct(s: State, caller: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(a: s.a, b: caller)) }\nfn main() -> Int ! {} { 0 }\n", "", unfollowed)
+}

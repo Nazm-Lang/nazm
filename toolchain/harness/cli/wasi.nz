@@ -1,0 +1,68 @@
+// Gate 3: WebAssembly with WASI preview 1, `wasm32-wasip1` (`docs/spec.md`, *WASI*;
+// `docs/systems-domains.md` Part O). Ported from `crates/nazm-cli/tests/wasi.rs` (R7): the two
+// tests that need no container. The `#[ignore]`d ones start Docker, which stays Rust (`design.md`).
+//
+// On any host the target builds its objects, the `wasm-ld` line that links them and Node's WASI
+// host, and refuses by name what WASI preview 1 has not got — tasks, channels, the network.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn tour(h: Caps) -> Str ! { io } {
+    f"{repo_root(h)}/crates/nazm-cli/tests/wasi/tour.nz"
+}
+
+/// `src`'s objects for WASI at `opt`, in `dir/out`.
+fn objects(h: Caps, dir: Str, src: Str, opt: Str) -> Ran ! { io, spawn } {
+    let a = words(f"build --target wasm32-wasip1 --opt-level {opt} --objects out");
+    strs_push(a, src);
+    nazm(h, dir, a)
+}
+
+fn target_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = objects(h, d, tour(h), "0");
+    check_that(o.code == 0, o.stderr)?;
+    let link = read_text(h, f"{d}/out/link.txt")?;
+    check_that(text_contains(link, "target wasm32-wasip1"), link)?;
+    check_that(text_contains(link, "wasm-ld --stack-first -z stack-size=1048576 --export=_start"), link)?;
+    let host = read_text(h, f"{d}/out/wasi.mjs")?;
+    check_that(text_contains(host, "node:wasi") && text_contains(host, "preopens"), host)?;
+    // Linked by its host's toolchain, never here.
+    let a = words("build --target wasm32-wasip1");
+    strs_push(a, tour(h));
+    let b = nazm(h, d, a);
+    check_that(b.code != 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "--objects DIR"), b.stderr)
+}
+
+@test
+fn the_wasi_target_writes_its_objects_link_line_and_host(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = target_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn refused_part(h: Caps, src: Str, part: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let o = objects(h, d, f"{d}/prog.nz", "0");
+    let wrote = file_exists_at(h.io, f"{d}/out");
+    scratch_remove(h, d);
+    check_that(o.code == 1, f"{part}: {o.stderr}")?;
+    check_that(text_contains(o.stderr, "is WASI preview 1, one thread and no sockets"), o.stderr)?;
+    check_that(text_contains(o.stderr, part), f"{part}: {o.stderr}")?;
+    check_that(!wrote, f"{part}: objects written")
+}
+
+@test
+fn what_wasi_preview_1_has_not_got_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_part(h, "fn work(n: Int) -> Int ! {} { n }\nfn main(t: SpawnCap) -> Int ! { spawn } { scope { spawn work(1); } 0 }\n", "tasks")?;
+    refused_part(h, "fn main() -> Int ! {} { let c = chan_new_of[Int](1); chan_send_of(c, 1); 0 }\n", "channels")?;
+    refused_part(h, "use \"@std/net\";\nuse \"@std/ioerror\";\nfn main(net: NetCap) -> Int ! { io } { match tcp_listen(net, \"127.0.0.1:0\") { Result.Ok(value: l) => 1, Result.Err(error: e) => 0, } }\n", "networking")
+}
