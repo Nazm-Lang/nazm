@@ -1,0 +1,362 @@
+// Resolved units (N77, `docs/architecture.md` §7.78): a module's resolution, persisted with its
+// check, read back instead of checking a reused module's bodies again. Ported from
+// `crates/nazm-cli/tests/resolved_units.rs` (R7);
+// `references_agree_with_the_language_service_over_the_same_saved_compilation` holds the units to
+// `nazm_service::LanguageService`, a library entry, and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const LIB: Str = "pub fn helper(x: Int) -> Int { x + 1 }\npub struct P { a: Int, }\npub enum E { A, B(v: Int), }\nfn private_detail() -> Int { 7 }\n";
+
+const MAIN: Str = "use \"lib.nz\";\nfn main() -> Int {\n    let p = P(a: helper(1));\n    match E.B(v: p.a) { E.A() => 0, E.B(v: x) => x + helper(2) }\n}\n";
+
+/// A project of `lib.nz` and `main.nz` (or `main.nz` alone where `lib` is empty).
+fn project(h: Caps, lib: Str, main: Str) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "nazm.root", "")?;
+    if lib != "" {
+        scratch_write(h, d, "lib.nz", lib)?;
+    }
+    scratch_write(h, d, "main.nz", main)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// `nazm resolve main.nz`'s units, one document each.
+fn resolve(h: Caps, dir: Str) -> Result[Vec[JsonDoc], Str] ! { io, spawn } {
+    let r = nazm(h, dir, words("resolve main.nz"));
+    check_that(r.code == 0, r.stderr)?;
+    let out = vec_new[JsonDoc]();
+    for l in text_lines(r.stdout) {
+        vec_push(out, jparse(l)?);
+    }
+    Result[Vec[JsonDoc], Str].Ok(value: out)
+}
+
+fn references(h: Caps, dir: Str, def: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "references");
+    strs_push(a, def);
+    strs_push(a, "main.nz");
+    let r = nazm(h, dir, a);
+    check_that(r.code == 0, r.stderr)?;
+    jparse(text_trim(r.stdout))
+}
+
+fn unit(units: Vec[JsonDoc], module: Str) -> Result[JsonDoc, Str] ! {} {
+    let mut i = 0;
+    while i < vec_len(units) {
+        if jstr(vec_get(units, i), "module") == module {
+            return Result[JsonDoc, Str].Ok(value: vec_get(units, i));
+        }
+        i = i + 1;
+    }
+    Result[JsonDoc, Str].Err(error: f"no unit for {module}")
+}
+
+@test
+fn a_unit_is_the_same_bytes_in_two_processes_and_two_checkouts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = project(h, LIB, MAIN)?;
+    let b = project(h, LIB, MAIN)?;
+    let first = nazm(h, a, words("resolve main.nz")).stdout;
+    let again = nazm(h, a, words("resolve main.nz")).stdout;
+    let elsewhere = nazm(h, b, words("resolve main.nz")).stdout;
+    check_that(first != "", "no units")?;
+    check_that(first == again, "computed, then read back from the store")?;
+    check_that(first == elsewhere, "another directory, another process")?;
+    // Nothing a process chose: no path of either checkout appears.
+    check_that(!text_contains(first, a) && !text_contains(first, b), first)?;
+    // One order, the source's: each unit's occurrences by position, as the index holds them.
+    let mut ordered = 0;
+    let units = resolve(h, a)?;
+    let mut k = 0;
+    while k < vec_len(units) {
+        let u = vec_get(units, k);
+        let n = jlen(u, "occurrences");
+        let mut i = 1;
+        while i < n {
+            let s0 = jint(u, f"occurrences/{i - 1}/start");
+            let e0 = jint(u, f"occurrences/{i - 1}/end");
+            let s1 = jint(u, f"occurrences/{i}/start");
+            let e1 = jint(u, f"occurrences/{i}/end");
+            check_that(s0 < s1 || (s0 == s1 && e0 <= e1), f"{jstr(u, "module")}: {jv(u, "occurrences")}")?;
+            i = i + 1;
+        }
+        if n > 1 {
+            ordered = ordered + 1;
+        }
+        k = k + 1;
+    }
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    check_that(ordered > 0, "no unit has two occurrences to order")
+}
+
+@test
+fn a_unit_names_every_target_durably_and_no_local(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    let units = resolve(h, d)?;
+    scratch_remove(h, d);
+    let main = unit(units, "main.nz")?;
+    check_that(jstr(main, "schema") == "nazm.resolved/1", jv(main, "schema"))?;
+    check_that(jstr(main, "imports/0/written") == "lib.nz", jv(main, "imports"))?;
+    check_that(jstr(main, "imports/0/module") == "lib.nz", jv(main, "imports"))?;
+    check_that(json_kind(main, jq(main, "imports/0/interface")) == "string", jv(main, "imports"))?;
+    let kinds = strs_new();
+    let n = jlen(main, "occurrences");
+    let mut i = 0;
+    while i < n {
+        let member = jstr(main, f"occurrences/{i}/target/member");
+        let dotted = if member == "" { "" } else { f".{member}" };
+        strs_push(kinds, f"{jstr(main, f"occurrences/{i}/target/kind")}|{jstr(main, f"occurrences/{i}/target/item")}{dotted}");
+        i = i + 1;
+    }
+    for want in text_split("function|lib.nz::fn helper;record|lib.nz::record P;field|lib.nz::record P.a;enum|lib.nz::enum E;variant|lib.nz::enum E.B;payload field|lib.nz::enum E.B.v", ";") {
+        check_that(strs_has(kinds, want), f"{want} in {str_join(kinds, ", ")}")?;
+    }
+    // `p` and `x` are locals: not durable, not here.
+    check_that(!text_contains(jv(main, ""), "\"local\""), jv(main, ""))?;
+    // Each range is exactly the name it records.
+    let mut k = 0;
+    while k < n {
+        let s = jint(main, f"occurrences/{k}/start");
+        let e = jint(main, f"occurrences/{k}/end");
+        let name = str_slice(MAIN, s, e);
+        let item = jstr(main, f"occurrences/{k}/target/item");
+        let member = jstr(main, f"occurrences/{k}/target/member");
+        let expected = if member != "" { str_slice(member, rfind(member, ".") + 1, str_len(member)) } else { str_slice(item, rfind(item, " ") + 1, str_len(item)) };
+        check_that(name == expected, jv(main, f"occurrences/{k}"))?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn references_read_a_reused_modules_unit_instead_of_checking_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    let cold = references(h, d, "lib.nz::fn helper")?;
+    check_that(jv(cold, "reused") == "0", jv(cold, ""))?;
+    let warm = references(h, d, "lib.nz::fn helper")?;
+    scratch_remove(h, d);
+    check_that(jv(warm, "checked") == "0", jv(warm, ""))?;
+    check_that(jsame(warm, "uses", cold, "uses"), jv(warm, ""))?;
+    check_that(jsame(warm, "declaration", cold, "declaration"), jv(warm, ""))?;
+    check_that(jlen(warm, "uses") == 2, jv(warm, ""))
+}
+
+@test
+fn a_private_body_change_rechecks_its_module_and_keeps_its_importers_unit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    let before = resolve(h, d)?;
+    scratch_write(h, d, "lib.nz", text_replace(LIB, "{ 7 }", "{ 8 }"))?;
+    let r = references(h, d, "lib.nz::fn helper")?;
+    check_that(jv(r, "checked") == "1", f"lib alone: {jv(r, "")}")?;
+    let after = resolve(h, d)?;
+    scratch_remove(h, d);
+    check_that(jsame(unit(before, "main.nz")?, "", unit(after, "main.nz")?, ""), "main's unit moved")?;
+    check_that(!jsame(unit(before, "lib.nz")?, "source", unit(after, "lib.nz")?, "source"), "lib's source did not move")
+}
+
+@test
+fn an_exported_signature_change_rechecks_every_direct_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    let before = resolve(h, d)?;
+    // A new exported function moves the interface; `main` is checked against the new one.
+    scratch_write(h, d, "lib.nz", f"{LIB}pub fn more() -> Int {{ 1 }}\n")?;
+    let r = references(h, d, "lib.nz::fn helper")?;
+    check_that(jv(r, "checked") == "2", f"lib and main: {jv(r, "")}")?;
+    let after = resolve(h, d)?;
+    scratch_remove(h, d);
+    check_that(!jsame(unit(before, "main.nz")?, "imports/0/interface", unit(after, "main.nz")?, "imports/0/interface"), "the interface did not move")
+}
+
+@test
+fn an_alias_is_part_of_the_importers_source_and_its_unit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    resolve(h, d)?;
+    let aliased = text_replace(text_replace(text_replace(text_replace(MAIN, "use \"lib.nz\";", "use \"lib.nz\" as l;"), "helper(", "l::helper("), "P(a:", "l::P(a:"), "E.", "l::E.");
+    scratch_write(h, d, "main.nz", aliased)?;
+    let units = resolve(h, d)?;
+    let main = unit(units, "main.nz")?;
+    check_that(jstr(main, "imports/0/alias") == "l", jv(main, "imports"))?;
+    let r = references(h, d, "lib.nz::fn helper")?;
+    scratch_remove(h, d);
+    // The same entity, reached through the alias, at the item's own bytes.
+    let mut i = 0;
+    while i < jlen(r, "uses") {
+        check_that(str_slice(aliased, jint(r, f"uses/{i}/start"), jint(r, f"uses/{i}/end")) == "helper", jv(r, f"uses/{i}"))?;
+        i = i + 1;
+    }
+    check_that(jlen(r, "uses") == 2, jv(r, ""))
+}
+
+@test
+fn a_compilation_that_does_not_check_has_no_units(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, "", "fn main() -> Int { missing() }\n")?;
+    let r = nazm(h, d, words("resolve main.nz"));
+    check_that(r.code == 1, r.stderr)?;
+    check_that(r.stdout == "", r.stdout)?;
+    check_that(text_contains(r.stderr, "N0"), r.stderr)?;
+    let a = strs_new();
+    strs_push(a, "references");
+    strs_push(a, "main.nz::fn main");
+    strs_push(a, "main.nz");
+    let q = nazm(h, d, a);
+    scratch_remove(h, d);
+    check_that(q.code == 1, q.stderr)
+}
+
+@test
+fn an_entity_nothing_declares_or_uses_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, LIB, MAIN)?;
+    let a = strs_new();
+    strs_push(a, "references");
+    strs_push(a, "lib.nz::fn nowhere");
+    strs_push(a, "main.nz");
+    let r = nazm(h, d, a);
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(r.stdout == "", r.stdout)?;
+    check_that(text_contains(r.stderr, "names nothing"), r.stderr)
+}
+
+/// `text` with the `source` of its `resolved` object replaced by sixty-four zeros: the store's
+/// entry forged as the Rust test forges it through `serde_json::Value`, said as an edit of its
+/// bytes — and checked to have changed that field and nothing else it can see.
+fn forged(text: Str) -> Result[Str, Str] ! {} {
+    let before = jparse(text)?;
+    let digest = jstr(before, "resolved/source");
+    check_that(digest != "", "no resolved source")?;
+    let at = find(text, "\"resolved\":");
+    check_that(at >= 0, "no resolved object")?;
+    let key = f"\"source\":\"{digest}\"";
+    let s = find_from(text, key, at);
+    check_that(s >= 0, "no resolved source after `resolved`")?;
+    let zeros = text_repeat("0", 64);
+    let out = f"{str_slice(text, 0, s)}\"source\":\"{zeros}\"{str_slice(text, s + str_len(key), str_len(text))}";
+    let after = jparse(out)?;
+    check_that(jstr(after, "resolved/source") == zeros, "the forged field")?;
+    check_that(jsame(before, "source", after, "source"), "the entry's own source moved")?;
+    Result[Str, Str].Ok(value: out)
+}
+
+@test
+fn a_stored_unit_of_other_text_is_never_read(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Forge the store: replace every entry's unit with one claiming other source text. The next
+    // run must not read it, and must say so by checking every module again.
+    let d = project(h, LIB, MAIN)?;
+    references(h, d, "lib.nz::fn helper")?;
+    let mut count = 0;
+    let all = match file_walk(h.io, f"{d}/.nazm") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for e in all {
+        if text_ends_with(e, ".json") {
+            let text = read_text(h, e)?;
+            let v = jparse(text)?;
+            if jstr(v, "schema") == "nazm.check/5" {
+                write_at(h, e, forged(text)?)?;
+                count = count + 1;
+            }
+        }
+    }
+    check_that(count >= 2, f"{count}")?;
+    let r = references(h, d, "lib.nz::fn helper")?;
+    scratch_remove(h, d);
+    check_that(jv(r, "reused") == "0", jv(r, ""))
+}
+
+/// The occurrences of `name` in `r`'s uses, as `start end` each.
+fn ranges(r: JsonDoc) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(r, "uses") {
+        strs_push(out, f"{jstr(r, f"uses/{i}/module")} {jint(r, f"uses/{i}/start")} {jint(r, f"uses/{i}/end")}");
+        i = i + 1;
+    }
+    out
+}
+
+@test
+fn a_member_is_its_own_entity_apart_from_its_item(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A variant's occurrences are not its enum's, and a payload field's are not its variant's.
+    let d = project(h, LIB, MAIN)?;
+    let variant = references(h, d, "lib.nz::enum E.B")?;
+    let payload = references(h, d, "lib.nz::enum E.B.v")?;
+    let item = references(h, d, "lib.nz::enum E")?;
+    scratch_remove(h, d);
+    check_that(jstr(variant, "kind") == "variant", jv(variant, ""))?;
+    check_that(jstr(payload, "kind") == "payload field", jv(payload, ""))?;
+    check_that(jstr(item, "kind") == "enum", jv(item, ""))?;
+    let rs = vec_new[JsonDoc]();
+    vec_push(rs, variant);
+    vec_push(rs, payload);
+    vec_push(rs, item);
+    let names = words("B v E");
+    let mut k = 0;
+    while k < 3 {
+        let r = vec_get(rs, k);
+        let mut i = 0;
+        while i < jlen(r, "uses") {
+            check_that(str_slice(MAIN, jint(r, f"uses/{i}/start"), jint(r, f"uses/{i}/end")) == strs_get(names, k), jv(r, ""))?;
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    check_that(jlen(variant, "uses") == 2, jv(variant, ""))
+}
+
+/// Every occurrence of `name` in `text` but its declaration (`fn name`), as `main.nz start end`.
+fn in_main(text: Str, name: Str) -> Strs ! {} {
+    let out = strs_new();
+    let mut at = find(text, name);
+    while at >= 0 {
+        let before = str_slice(text, 0, at);
+        if !text_ends_with(before, "fn ") {
+            strs_push(out, f"main.nz {at} {at + str_len(name)}");
+        }
+        at = find_from(text, name, at + str_len(name));
+    }
+    out
+}
+
+/// R1-C1: a named function written as a value is a use of it, as a call is — in this module and in
+/// an importer — and a reused module's unit holds it as the checked one did.
+@test
+fn a_function_written_as_a_value_is_a_use_of_it_cold_and_warm(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let lib = "pub fn triple(x: Int) -> Int ! {} { x * 3 }\n";
+    let main = "use \"lib.nz\";\nfn double(x: Int) -> Int { x * 2 }\nfn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn main() -> Int { let d = double; apply_twice(double, 5) + double(1) + d(2) + apply_twice(triple, 1) + triple(0) }\n";
+    let d = project(h, lib, main)?;
+    for pass in words("cold warm") {
+        let r = references(h, d, "main.nz::fn double")?;
+        check_that(jstr(r, "kind") == "function", f"{pass}: {jv(r, "")}")?;
+        // `let d = double`, `apply_twice(double, 5)` and `double(1)`: three, each once.
+        check_that(str_join(ranges(r), ",") == str_join(in_main(main, "double"), ","), f"{pass}: {jv(r, "")}")?;
+        check_that(strs_len(ranges(r)) == 3, f"{pass}: {jv(r, "")}")?;
+        let q = references(h, d, "lib.nz::fn triple")?;
+        check_that(str_join(ranges(q), ",") == str_join(in_main(main, "triple"), ","), f"{pass}: {jv(q, "")}")?;
+        check_that(strs_len(ranges(q)) == 2, f"{pass}: {jv(q, "")}")?;
+        if pass == "warm" {
+            check_that(jv(q, "checked") == "0", jv(q, ""))?;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}

@@ -1,0 +1,671 @@
+// `--summary-json` for `nazm check`, `nazm build` and `nazm test`, against the real binary. N31.
+// A summary is compared with what the same command says without it: the same exit status, the
+// same diagnostics by code and place, and — for tests — the same verdicts. Every summary is one
+// line on stdout and nothing on stderr. Ported from `crates/nazm-cli/tests/summary.rs` (R7);
+// `the_check_summary_the_mcp_server_gives_is_nazm_check_s_with_or_without_its_cache` compares
+// with `nazm_service::summary::check`, a library entry the CLI does not offer, and stays Rust
+// (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The summary of a run: one line on stdout, nothing on stderr, and its exit status.
+struct Summary {
+    s: JsonDoc,
+    code: Int,
+}
+
+/// The summary, checked to be exactly one line on stdout and nothing on stderr.
+fn summary(h: Caps, dir: Str, args: Str) -> Result[Summary, Str] ! { io, spawn } {
+    let r = nazm(h, dir, words(args));
+    check_that(strs_len(text_lines(r.stdout)) == 1, f"one line: {r.stdout}")?;
+    check_that(r.stderr == "", f"nothing on stderr: {args}: {r.stderr}")?;
+    Result[Summary, Str].Ok(value: Summary(s: jparse(r.stdout)?, code: r.code))
+}
+
+/// A directory holding `files` (name, text, name, text, …).
+fn project(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let dir = scratch_new(h);
+    check_that(str_len(dir) > 0, "no scratch directory")?;
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, dir, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: dir)
+}
+
+fn one(name: Str, text: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, name);
+    strs_push(f, text);
+    f
+}
+
+/// Every `nazm.diagnostic/1` the command prints with `--json`, by code.
+fn codes_of(r: Ran) -> Strs ! {} {
+    let out = strs_new();
+    for l in text_lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v) => { strs_push(out, jstr(v, "code")); },
+            Result.Err(error: e) => {},
+        };
+    }
+    out
+}
+
+fn ref_codes(s: JsonDoc) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(s, "diagnostics") {
+        strs_push(out, jstr(s, f"diagnostics/{i}/code"));
+        i = i + 1;
+    }
+    out
+}
+
+fn sorted(v: Strs) -> Str ! {} {
+    str_join(strs_sort(v), ",")
+}
+
+const OK: Str = "fn main() -> Int { 1 }\n";
+const TYPED: Str = "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x + true\n}\n";
+const SYNTAX: Str = "fn main() -> Int { 1 +  }\n";
+const NO_MAIN: Str = "fn helper() -> Int { 1 }\n";
+
+@test
+fn a_check_summary_is_the_checks_outcome_and_its_diagnostics_by_reference(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("clean|type errors|a syntax error|no main", "|");
+    let texts = strs_new();
+    strs_push(texts, OK);
+    strs_push(texts, TYPED);
+    strs_push(texts, SYNTAX);
+    strs_push(texts, NO_MAIN);
+    let statuses = words("success rejected rejected rejected");
+    let mut k = 0;
+    while k < 4 {
+        let what = strs_get(whats, k);
+        let dir = project(h, one("main.nz", strs_get(texts, k)))?;
+        let plain = nazm(h, dir, words("check --json main.nz"));
+        let r = summary(h, dir, "check --summary-json main.nz")?;
+        scratch_remove(h, dir);
+        let s = r.s;
+        check_that(jstr(s, "schema") == "nazm.command-summary/1", what)?;
+        check_that(jstr(s, "command") == "check", what)?;
+        check_that(jstr(s, "status") == strs_get(statuses, k), f"{what}: {jv(s, "")}")?;
+        // The exit status is the check's, with or without a summary.
+        check_that(r.code == plain.code, what)?;
+        check_that(jint(s, "exit_code") == r.code, what)?;
+        // Every diagnostic the check reported, and no other.
+        check_that(sorted(ref_codes(s)) == sorted(codes_of(plain)), what)?;
+        check_that(jint(s, "counts/diagnostics") == strs_len(ref_codes(s)), what)?;
+        // No prose: none of the check's messages or help reaches the summary.
+        let whole = jv(s, "");
+        for line in text_lines(plain.stderr) {
+            match jparse(line) {
+                Result.Ok(value: d) => {
+                    for field in words("message help") {
+                        let prose = jstr(d, field);
+                        if prose != "" {
+                            check_that(!text_contains(whole, prose), f"{what}: {prose}")?;
+                        }
+                    }
+                },
+                Result.Err(error: e) => {},
+            };
+        }
+        check_that(jv(s, "artifact") == "null", what)?;
+        k = k + 1;
+    }
+    // Clean is no diagnostics, and the summary still says what the check concluded.
+    let dir = project(h, one("main.nz", OK))?;
+    let c = summary(h, dir, "check --summary-json main.nz")?;
+    scratch_remove(h, dir);
+    check_that(jis(c.s, "diagnostics", "[]"), jv(c.s, "diagnostics"))
+}
+
+@test
+fn a_diagnostic_n30_indexes_carries_its_id_and_one_only_the_command_reports_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = project(h, one("main.nz", "fn helper() -> Int { 1 + true }\n"))?;
+    let s = summary(h, dir, "check --summary-json main.nz")?.s;
+    // In N30's canonical order: a diagnostic with no place first, then by place.
+    check_that(str_join(ref_codes(s), ",") == "N0204,N0304", jv(s, "diagnostics"))?;
+    let n = jlen(s, "diagnostics");
+    let mut no_main = 0 - 1;
+    let mut typed = 0 - 1;
+    let mut i = 0;
+    while i < n {
+        let c = jstr(s, f"diagnostics/{i}/code");
+        if c == "N0204" && no_main < 0 {
+            no_main = i;
+        }
+        if c == "N0304" && typed < 0 {
+            typed = i;
+        }
+        i = i + 1;
+    }
+    // `N0204`, the program's missing `main`, is the command's alone: no N30 id is given.
+    check_that(no_main >= 0, "N0204 kept")?;
+    check_that(jstr(s, f"diagnostics/{no_main}/scope") == "command", jv(s, f"diagnostics/{no_main}"))?;
+    check_that(jv(s, f"diagnostics/{no_main}/id") == "null", jv(s, f"diagnostics/{no_main}"))?;
+    // The type error is N30's, with N30's id in N30's state: detail answers it.
+    check_that(typed >= 0, "N0304 kept")?;
+    check_that(jstr(s, f"diagnostics/{typed}/scope") == "index", jv(s, f"diagnostics/{typed}"))?;
+    let id = jstr(s, f"diagnostics/{typed}/id");
+    let state = jstr(s, "state");
+    let index = jparse(nazm(h, dir, words("diagnostics --json --root main.nz")).stdout)?;
+    check_that(jstr(index, "state/source") == state, jv(index, "state"))?;
+    let mut entry = 0 - 1;
+    let mut j = 0;
+    while j < jlen(index, "diagnostics") {
+        if jstr(index, f"diagnostics/{j}/id") == id && entry < 0 {
+            entry = j;
+        }
+        j = j + 1;
+    }
+    check_that(entry >= 0, f"no entry {id}")?;
+    check_that(jsame(index, f"diagnostics/{entry}/primary", s, f"diagnostics/{typed}/primary"), "the primary place")?;
+    let detail = jparse(nazm(h, dir, words(f"diagnostics --json --root main.nz --detail {id} --state {state}")).stdout)?;
+    scratch_remove(h, dir);
+    check_that(jstr(detail, "status") == "available", jv(detail, ""))?;
+    check_that(jstr(detail, "diagnostic/code") == "N0304", jv(detail, ""))?;
+    // No reference in the index universe lacks an id, and none outside it has one.
+    let mut k = 0;
+    while k < n {
+        let null_id = jv(s, f"diagnostics/{k}/id") == "null";
+        check_that(null_id == (jstr(s, f"diagnostics/{k}/scope") == "command"), jv(s, f"diagnostics/{k}"))?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn an_unreadable_root_is_its_own_status_and_keeps_its_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = project(h, strs_new())?;
+    let plain = nazm(h, dir, words("check --json missing.nz"));
+    let r = summary(h, dir, "check --summary-json missing.nz")?;
+    scratch_remove(h, dir);
+    check_that(r.code == plain.code, ran_show(plain))?;
+    check_that(jstr(r.s, "status") == "unreadable", jv(r.s, ""))?;
+    check_that(sorted(ref_codes(r.s)) == sorted(codes_of(plain)), jv(r.s, ""))?;
+    check_that(jv(r.s, "state") == "null", jv(r.s, ""))?;
+    check_that(jv(r.s, "root") == "null", jv(r.s, ""))?;
+    let broken = project(h, one("main.nz", "use \"gone.nz\";\nfn main() -> Int { 1 }\n"))?;
+    let b = summary(h, broken, "check --summary-json main.nz")?;
+    scratch_remove(h, broken);
+    check_that(b.code == 3, jv(b.s, ""))?;
+    check_that(jstr(b.s, "status") == "unreadable", jv(b.s, ""))?;
+    check_that(jlen(b.s, "diagnostics") > 0, jv(b.s, ""))
+}
+
+@test
+fn a_build_summary_is_the_builds_outcome_and_absence_of_diagnostics_is_not_success(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Success: the executable written, and named as the build names it.
+    let dir = project(h, one("main.nz", OK))?;
+    let plain = nazm(h, dir, words("build main.nz -o plain"));
+    check_that(plain.code == 0, plain.stderr)?;
+    let r = summary(h, dir, "build --summary-json main.nz -o prog")?;
+    check_that(r.code == 0, jv(r.s, ""))?;
+    check_that(jstr(r.s, "command") == "build", jv(r.s, ""))?;
+    check_that(jstr(r.s, "status") == "success", jv(r.s, ""))?;
+    check_that(jis(r.s, "artifact", "{\"path\": \"prog\"}"), jv(r.s, "artifact"))?;
+    check_that(file_exists(f"{dir}/prog"), "prog was not written")?;
+    check_that(text_trim(plain.stdout) == "plain", plain.stdout)?;
+    scratch_remove(h, dir);
+    // Rejected by the checker, and by the backend: diagnostics, and nothing written.
+    let texts = strs_new();
+    strs_push(texts, TYPED);
+    strs_push(texts, NO_MAIN);
+    // A `main` that does not return `Int`: the backend's refusal.
+    strs_push(texts, "fn main() -> Bool {\n    true\n}\n");
+    let wanted = words("N0304 N0204 N0101");
+    let mut k = 0;
+    while k < 3 {
+        let d = project(h, one("main.nz", strs_get(texts, k)))?;
+        let pl = nazm(h, d, words("build --json main.nz -o p"));
+        let s = summary(h, d, "build --summary-json main.nz -o q")?;
+        let wrote = file_exists(f"{d}/q");
+        scratch_remove(h, d);
+        check_that(s.code == pl.code, jv(s.s, ""))?;
+        check_that(jstr(s.s, "status") == "rejected", jv(s.s, ""))?;
+        check_that(strs_has(ref_codes(s.s), strs_get(wanted, k)), jv(s.s, ""))?;
+        check_that(sorted(ref_codes(s.s)) == sorted(codes_of(pl)), jv(s.s, ""))?;
+        check_that(jv(s.s, "artifact") == "null", jv(s.s, ""))?;
+        check_that(!wrote, "q was written")?;
+        k = k + 1;
+    }
+    // The backend's refusal of a construct is the command's: no N30 id.
+    let rec = project(h, one("main.nz", "fn main() -> Bool {\n    true\n}\n"))?;
+    let u = summary(h, rec, "build --summary-json main.nz")?;
+    scratch_remove(h, rec);
+    let mut found = false;
+    let mut i = 0;
+    while i < jlen(u.s, "diagnostics") {
+        if !found && jstr(u.s, f"diagnostics/{i}/code") == "N0101" {
+            found = true;
+            check_that(jstr(u.s, f"diagnostics/{i}/scope") == "command", jv(u.s, ""))?;
+        }
+        i = i + 1;
+    }
+    check_that(found, jv(u.s, ""))?;
+    // Refused with no diagnostic at all: not success.
+    let d2 = project(h, one("main.nz", OK))?;
+    let pl2 = nazm(h, d2, words("build main.nz -o main.nz"));
+    let s2 = summary(h, d2, "build --summary-json main.nz -o main.nz")?;
+    let text = read_text(h, f"{d2}/main.nz")?;
+    scratch_remove(h, d2);
+    check_that(s2.code == pl2.code, ran_show(pl2))?;
+    check_that(s2.code == 1, jv(s2.s, ""))?;
+    check_that(jstr(s2.s, "status") == "refused", jv(s2.s, ""))?;
+    check_that(jis(s2.s, "diagnostics", "[]"), jv(s2.s, ""))?;
+    check_that(text == OK, text)
+}
+
+@test
+fn ambiguous_flags_are_refused_and_the_existing_outputs_are_unchanged(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = project(h, one("main.nz", TYPED))?;
+    for args in text_split("check --summary-json --json main.nz|check --summary-json --cache-report main.nz|build --summary-json --json main.nz|build --summary-json --build-report main.nz|test --summary-json --json main.nz", "|") {
+        let r = nazm(h, dir, words(args));
+        check_that(r.code == 5, f"{args}: {r.stderr}")?;
+        check_that(r.stdout == "", args)?;
+    }
+    // `--json` is what it was: nazm.diagnostic/1 on stderr, one per line, nothing on stdout.
+    let r = nazm(h, dir, words("check --json main.nz"));
+    check_that(r.stdout == "", r.stdout)?;
+    for l in text_lines(r.stderr) {
+        if text_starts_with(l, "{") {
+            check_that(jstr(jparse(l)?, "schema") == "nazm.diagnostic/1", l)?;
+        }
+    }
+    // The human rendering is what it was.
+    let human = nazm(h, dir, words("check main.nz"));
+    scratch_remove(h, dir);
+    check_that(text_contains(human.stderr, "error[N0304]"), human.stderr)?;
+    check_that(human.code == 1, ran_show(human))
+}
+
+@test
+fn the_same_sources_give_the_same_summary_from_any_directory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = project(h, one("main.nz", TYPED))?;
+    let b = project(h, one("main.nz", TYPED))?;
+    let first = summary(h, a, "check --summary-json main.nz")?.s;
+    let again = summary(h, a, "check --summary-json main.nz")?.s;
+    let moved = summary(h, b, "check --summary-json main.nz")?.s;
+    check_that(jsame(first, "", again, ""), "again")?;
+    check_that(jsame(first, "", moved, ""), "moved")?;
+    let text = jv(first, "");
+    check_that(!text_contains(text, a) && !text_contains(text, b), text)?;
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    ok()
+}
+
+/// A test corpus under `t/`: `NAME.nz` for each name, and `NAME.expected` where it is not `-`.
+fn corpus(h: Caps, names: Strs, programs: Strs, expected: Strs) -> Result[Str, Str] ! { io } {
+    let dir = scratch_new(h);
+    scratch_mkdir(h, dir, "t")?;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let name = strs_get(names, i);
+        scratch_write(h, dir, f"t/{name}.nz", strs_get(programs, i))?;
+        if strs_get(expected, i) != "-" {
+            scratch_write(h, dir, f"t/{name}.expected", strs_get(expected, i))?;
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: dir)
+}
+
+/// The two legs of the failure `name` in `s`: `interpreted native`.
+fn legs(s: JsonDoc, name: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < jlen(s, "failures") {
+        if jstr(s, f"failures/{i}/name") == name {
+            return f"{jstr(s, f"failures/{i}/interpreted")} {jstr(s, f"failures/{i}/native")}";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+@test
+fn a_test_summary_counts_every_verdict_and_names_only_the_cases_that_did_not_pass(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let programs = strs_new();
+    strs_push(programs, "fn main() -> Int { 1 }\n");
+    strs_push(programs, "fn main() -> Int { 2 }\n");
+    strs_push(programs, "fn main() -> Int { 1 / 0 }\n");
+    strs_push(programs, "fn main() -> Int { 1 + true }\n");
+    strs_push(programs, "fn main() -> Bool {\n    true\n}\n");
+    strs_push(programs, "fn helper() -> Int { 1 }\n");
+    let expected = text_split("1\n|1\n|1\n|1\n|true\n|-", "|");
+    let dir = corpus(h, words("a_pass b_wrong c_runtime d_type e_native f_helper"), programs, expected)?;
+    let plain = nazm(h, dir, words("test --json t"));
+    let r = summary(h, dir, "test --summary-json t")?;
+    let s = r.s;
+    check_that(r.code == plain.code, ran_show(plain))?;
+    check_that(jstr(s, "schema") == "nazm.test-summary/1", jv(s, ""))?;
+    check_that(jstr(s, "status") == "failed", jv(s, ""))?;
+    check_that(jv(s, "native") == "true", jv(s, ""))?;
+    // Counts from each case's verdict, as nazm.test/1 gives them.
+    let mut cases = 0;
+    let mut passed = 0;
+    for l in text_lines(plain.stdout) {
+        let c = jparse(l)?;
+        cases = cases + 1;
+        if jv(c, "passed") == "true" {
+            passed = passed + 1;
+        }
+    }
+    check_that(jint(s, "counts/cases") == cases, jv(s, "counts"))?;
+    check_that(jint(s, "counts/passed") == passed, jv(s, "counts"))?;
+    check_that(jint(s, "counts/failed") == cases - passed, jv(s, "counts"))?;
+    check_that(jint(s, "counts/without_expectation") == 1, jv(s, "counts"))?;
+    // Only the cases that did not pass, in the order they ran, each with how its legs ended.
+    let names = strs_new();
+    let mut i = 0;
+    while i < jlen(s, "failures") {
+        strs_push(names, jstr(s, f"failures/{i}/name"));
+        i = i + 1;
+    }
+    check_that(str_join(names, ",") == "b_wrong,c_runtime,d_type,e_native", str_join(names, ","))?;
+    check_that(legs(s, "b_wrong") == "mismatched mismatched", legs(s, "b_wrong"))?;
+    // A runtime error and a type error are outputs that did not match: no diagnostic is made of them.
+    check_that(text_starts_with(legs(s, "c_runtime"), "mismatched "), legs(s, "c_runtime"))?;
+    check_that(legs(s, "d_type") == "mismatched build_failed", legs(s, "d_type"))?;
+    // The interpreter agrees; the compiler refuses a `main` that does not return `Int`.
+    check_that(legs(s, "e_native") == "matched build_failed", legs(s, "e_native"))?;
+    // No passed name and no output.
+    let text = jv(s, "");
+    check_that(!text_contains(text, "a_pass") && !text_contains(text, "division") && !text_contains(text, "expected"), text)?;
+    // Interpreted only: the native leg was not run, and says so.
+    let ir = summary(h, dir, "test --summary-json --interpret-only t")?;
+    scratch_remove(h, dir);
+    check_that(jv(ir.s, "native") == "false", jv(ir.s, ""))?;
+    let mut k = 0;
+    while k < jlen(ir.s, "failures") {
+        check_that(jstr(ir.s, f"failures/{k}/native") == "not_run", jv(ir.s, ""))?;
+        k = k + 1;
+    }
+    check_that(jint(ir.s, "counts/failed") == 3, jv(ir.s, "counts"))
+}
+
+@test
+fn a_run_with_no_cases_is_refused_as_the_command_refuses_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = corpus(h, words("helper"), one("fn helper() -> Int { 1 }\n", "")  , text_split("-", "|"))?;
+    let plain = nazm(h, dir, words("test t"));
+    let r = summary(h, dir, "test --summary-json t")?;
+    check_that(r.code == plain.code, ran_show(plain))?;
+    check_that(r.code == 3, jv(r.s, ""))?;
+    check_that(jstr(r.s, "status") == "no_cases", jv(r.s, ""))?;
+    check_that(jint(r.s, "counts/cases") == 0, jv(r.s, ""))?;
+    check_that(jint(r.s, "counts/without_expectation") == 1, jv(r.s, ""))?;
+    let u = summary(h, dir, "test --summary-json nowhere")?;
+    scratch_remove(h, dir);
+    check_that(u.code == 3, jv(u.s, ""))?;
+    check_that(jstr(u.s, "status") == "unreadable", jv(u.s, ""))
+}
+
+@test
+fn a_large_passing_run_is_counts_and_no_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let names = strs_new();
+    let programs = strs_new();
+    let expected = strs_new();
+    let mut i = 0;
+    while i < 200 {
+        let n = if i < 10 { f"00{i}" } else if i < 100 { f"0{i}" } else { f"{i}" };
+        strs_push(names, f"pass_{n}");
+        strs_push(programs, f"fn main() -> Int {{ {i} }}\n");
+        strs_push(expected, f"{i}\n");
+        i = i + 1;
+    }
+    strs_push(names, "zz_fail");
+    strs_push(programs, "fn main() -> Int { 0 }\n");
+    strs_push(expected, "1\n");
+    let dir = corpus(h, names, programs, expected)?;
+    let full = nazm(h, dir, words("test --json --interpret-only t"));
+    let r = summary(h, dir, "test --summary-json --interpret-only t")?;
+    scratch_remove(h, dir);
+    let s = r.s;
+    check_that(jint(s, "counts/cases") == 201, jv(s, "counts"))?;
+    check_that(jint(s, "counts/passed") == 200, jv(s, "counts"))?;
+    check_that(jlen(s, "failures") == 1, jv(s, "failures"))?;
+    let text = jv(s, "");
+    check_that(!text_contains(text, "pass_"), text)?;
+    let summary_bytes = str_len(text);
+    check_that(summary_bytes * 20 < str_len(full.stdout), f"{summary_bytes} vs {str_len(full.stdout)}")
+}
+
+@test
+fn a_test_summary_is_the_same_every_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let programs = strs_new();
+    strs_push(programs, "fn main() -> Int { 1 }\n");
+    strs_push(programs, "fn main() -> Int { 2 }\n");
+    let dir = corpus(h, words("a b"), programs, text_split("1\n|1\n", "|"))?;
+    let first = summary(h, dir, "test --summary-json --interpret-only t")?.s;
+    let again = summary(h, dir, "test --summary-json --interpret-only t")?.s;
+    scratch_remove(h, dir);
+    check_that(jsame(first, "", again, ""), "two runs, two summaries")
+}
+
+// --- The outcomes a broken process produces (N31 closure). Each reaches the production branch
+// through the real binary: the test runner through its driver seam, `nazm build` through a
+// `clang` on a PATH of the test's own, set for that one process only.
+
+/// `nazm ARGS` in `dir`, with `vars` (`NAME=value` each) set for that process alone.
+fn nazm_with(h: Caps, dir: Str, args: Str, vars: Strs) -> Ran ! { io, spawn } {
+    let mut env = suite_env(h);
+    for kv in vars {
+        let at = find(kv, "=");
+        env = env_set(env, str_slice(kv, 0, at), str_slice(kv, at + 1, str_len(kv)));
+    }
+    run(h, nazm_bin(h.io), words(args), dir, env)
+}
+
+/// The one summary line on stdout. Stderr is not asserted: a toolchain's own complaint still goes
+/// there.
+fn summary_line(r: Ran) -> Result[JsonDoc, Str] ! {} {
+    check_that(strs_len(text_lines(r.stdout)) == 1, f"one line: {r.stdout}")?;
+    jparse(r.stdout)
+}
+
+/// An executable shell script at `path`.
+fn script(h: Caps, path: Str, body: Str) -> Result[Int, Str] ! { io, spawn } {
+    write_at(h, path, f"#!/bin/sh\n{body}\n")?;
+    let a = words("755");
+    strs_push(a, path);
+    let r = run(h, "chmod", a, "", env_here(h.io));
+    check_that(r.code == 0, ran_show(r))
+}
+
+/// The one `nazm.test/1` object of a single-case run.
+fn only_case(r: Ran) -> Result[JsonDoc, Str] ! {} {
+    let ls = text_lines(r.stdout);
+    check_that(strs_len(ls) == 1, r.stdout)?;
+    jparse(strs_get(ls, 0))
+}
+
+/// A summary of one failing case, `t/x.nz`, with these legs.
+fn one_failure(native: Bool, interpreted: Str, native_leg: Str) -> Str ! {} {
+    f"{{\"schema\": \"nazm.test-summary/1\", \"status\": \"failed\", \"exit_code\": 1, \"native\": {native}, \"counts\": {{\"cases\": 1, \"passed\": 0, \"failed\": 1, \"without_expectation\": 0}}, \"failures\": [{{\"name\": \"x\", \"file\": \"t/x.nz\", \"interpreted\": \"{interpreted}\", \"native\": \"{native_leg}\"}}]}}"
+}
+
+fn passes(h: Caps) -> Result[Str, Str] ! { io } {
+    corpus(h, words("x"), one("fn main() -> Int { 1 }\n", ""), text_split("1\n", "|"))
+}
+
+fn one_var(name: Str, value: Str) -> Strs ! {} {
+    let v = strs_new();
+    strs_push(v, f"{name}={value}");
+    v
+}
+
+@test
+fn a_driver_that_cannot_be_started_is_could_not_run_and_could_not_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = passes(h)?;
+    // The case passes with this nazm: whatever fails below is the driver alone.
+    let fine = summary(h, dir, "test --summary-json t")?;
+    check_that(fine.code == 0, jv(fine.s, ""))?;
+    check_that(jint(fine.s, "counts/passed") == 1, jv(fine.s, ""))?;
+    let vars = one_var("NAZM_TEST_DRIVER", f"{dir}/absent");
+    let plain = nazm_with(h, dir, "test --json t", vars);
+    let s = nazm_with(h, dir, "test --summary-json t", vars);
+    check_that(s.code == 1, ran_show(s))?;
+    check_that(s.code == plain.code, ran_show(plain))?;
+    check_that(s.stderr == "", s.stderr)?;
+    check_that(jis(summary_line(s)?, "", one_failure(true, "could_not_run", "could_not_build")), s.stdout)?;
+    // The detailed record of the same run: neither leg matched, and the case failed.
+    let case = only_case(plain)?;
+    check_that(jv(case, "passed") == "false", jv(case, ""))?;
+    check_that(jv(case, "interpreted/matched") == "false", jv(case, ""))?;
+    check_that(text_starts_with(jstr(case, "interpreted/output"), "could not run: "), jv(case, ""))?;
+    check_that(jv(case, "native/matched") == "false", jv(case, ""))?;
+    check_that(text_starts_with(jstr(case, "native/output"), "could not build: "), jv(case, ""))?;
+    // Interpreted only: the program could not be started, and the native leg never ran.
+    let plain2 = nazm_with(h, dir, "test --interpret-only t", vars);
+    let s2 = nazm_with(h, dir, "test --summary-json --interpret-only t", vars);
+    scratch_remove(h, dir);
+    check_that(s2.code == 1, ran_show(s2))?;
+    check_that(s2.code == plain2.code, ran_show(plain2))?;
+    check_that(jis(summary_line(s2)?, "", one_failure(false, "could_not_run", "not_run")), s2.stdout)
+}
+
+@test
+fn a_build_that_cannot_be_started_is_could_not_build_not_build_failed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = passes(h)?;
+    let driver = f"{dir}/driver";
+    // Runs the case under the real nazm, then removes itself: the build that follows cannot be
+    // started.
+    let body = f"'{nazm_bin(h.io)}' \"$@\"; s=$?; rm -f \"$0\"; exit $s";
+    let vars = one_var("NAZM_TEST_DRIVER", driver);
+    script(h, driver, body)?;
+    let plain = nazm_with(h, dir, "test --json t", vars);
+    check_that(!file_exists(driver), "the driver is still there")?;
+    script(h, driver, body)?;
+    let s = nazm_with(h, dir, "test --summary-json t", vars);
+    check_that(!file_exists(driver), "the driver is still there")?;
+    scratch_remove(h, dir);
+    check_that(s.code == 1, ran_show(s))?;
+    check_that(s.code == plain.code, ran_show(plain))?;
+    check_that(s.stderr == "", s.stderr)?;
+    check_that(jis(summary_line(s)?, "", one_failure(true, "matched", "could_not_build")), s.stdout)?;
+    let case = only_case(plain)?;
+    check_that(jv(case, "passed") == "false", jv(case, ""))?;
+    check_that(jv(case, "interpreted/matched") == "true", jv(case, ""))?;
+    check_that(jv(case, "native/matched") == "false", jv(case, ""))?;
+    check_that(text_starts_with(jstr(case, "native/output"), "could not build: "), jv(case, ""))
+}
+
+@test
+fn a_built_program_that_cannot_be_started_is_could_not_run_not_mismatched(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = passes(h)?;
+    let driver = f"{dir}/driver";
+    // A build that says it succeeded and wrote nothing: there is no program to start.
+    script(h, driver, f"if [ \"$1\" = build ]; then exit 0; fi\nexec '{nazm_bin(h.io)}' \"$@\"")?;
+    let vars = one_var("NAZM_TEST_DRIVER", driver);
+    let plain = nazm_with(h, dir, "test --json t", vars);
+    let s = nazm_with(h, dir, "test --summary-json t", vars);
+    scratch_remove(h, dir);
+    check_that(s.code == 1, ran_show(s))?;
+    check_that(s.code == plain.code, ran_show(plain))?;
+    check_that(s.stderr == "", s.stderr)?;
+    check_that(jis(summary_line(s)?, "", one_failure(true, "matched", "could_not_run")), s.stdout)?;
+    let case = only_case(plain)?;
+    check_that(jv(case, "passed") == "false", jv(case, ""))?;
+    check_that(jv(case, "interpreted/matched") == "true", jv(case, ""))?;
+    check_that(jv(case, "native/matched") == "false", jv(case, ""))?;
+    check_that(text_starts_with(jstr(case, "native/output"), "could not run: "), jv(case, ""))
+}
+
+@test
+fn a_test_run_with_nowhere_to_build_is_toolchain_failed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = passes(h)?;
+    // Scratch space under a regular file cannot be created.
+    scratch_write(h, dir, "file", "")?;
+    let vars = one_var("TMPDIR", f"{dir}/file/tmp");
+    let plain = nazm_with(h, dir, "test t", vars);
+    let s = nazm_with(h, dir, "test --summary-json t", vars);
+    scratch_remove(h, dir);
+    check_that(s.code == 4, ran_show(s))?;
+    check_that(s.code == plain.code, ran_show(plain))?;
+    check_that(s.stderr == "", s.stderr)?;
+    check_that(jis(summary_line(s)?, "", "{\"schema\": \"nazm.test-summary/1\", \"status\": \"toolchain_failed\", \"exit_code\": 4, \"native\": true, \"counts\": {\"cases\": 0, \"passed\": 0, \"failed\": 0, \"without_expectation\": 0}, \"failures\": []}"), s.stdout)
+}
+
+/// A build summary that is `toolchain_failed` with no diagnostic, beside the same build without one.
+fn assert_toolchain_failed(h: Caps, dir: Str, args: Str, vars: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let plain = nazm_with(h, dir, text_replace(args, "--summary-json ", ""), vars);
+    let r = nazm_with(h, dir, args, vars);
+    check_that(r.code == 4, r.stderr)?;
+    check_that(r.code == plain.code, ran_show(plain))?;
+    check_that(plain.stdout == "", "a failed build names no executable")?;
+    let s = summary_line(r)?;
+    check_that(jstr(s, "schema") == "nazm.command-summary/1", jv(s, ""))?;
+    check_that(jstr(s, "command") == "build", jv(s, ""))?;
+    check_that(jstr(s, "status") == "toolchain_failed", jv(s, ""))?;
+    check_that(jint(s, "exit_code") == 4, jv(s, ""))?;
+    // Zero diagnostics, and not a success.
+    check_that(jis(s, "diagnostics", "[]"), jv(s, ""))?;
+    check_that(jint(s, "counts/diagnostics") == 0, jv(s, ""))?;
+    check_that(jint(s, "counts/error") == 0, jv(s, ""))?;
+    check_that(jv(s, "artifact") == "null", jv(s, ""))
+}
+
+@test
+fn a_build_whose_toolchain_fails_is_toolchain_failed_with_no_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = project(h, one("main.nz", OK))?;
+    let cache = f"{dir}/cache";
+    // A `clang` that refuses everything.
+    script(h, f"{dir}/refusing/clang", "echo 'clang: refused' >&2\nexit 1")?;
+    let v1 = one_var("PATH", f"{dir}/refusing");
+    strs_push(v1, f"NAZM_CACHE_DIR={cache}");
+    assert_toolchain_failed(h, dir, "build --summary-json main.nz -o prog", v1)?;
+    check_that(!file_exists(f"{dir}/prog"), "prog was written")?;
+    // A `clang` that compiles and will not link.
+    script(h, f"{dir}/linkless/clang", "case \" $* \" in *' -c '*) exit 0;; esac\necho 'ld: refused' >&2\nexit 1")?;
+    let v2 = one_var("PATH", f"{dir}/linkless");
+    strs_push(v2, f"NAZM_CACHE_DIR={cache}");
+    assert_toolchain_failed(h, dir, "build --summary-json main.nz -o prog", v2)?;
+    check_that(!file_exists(f"{dir}/prog"), "prog was written")?;
+    // No `clang` at all.
+    scratch_mkdir(h, dir, "empty")?;
+    let v3 = one_var("PATH", f"{dir}/empty");
+    strs_push(v3, f"NAZM_CACHE_DIR={cache}");
+    assert_toolchain_failed(h, dir, "build --summary-json main.nz -o prog", v3)?;
+    let wrote = file_exists(f"{dir}/prog");
+    scratch_remove(h, dir);
+    check_that(!wrote, "prog was written")
+}
+
+@test
+fn a_build_with_nowhere_to_write_is_toolchain_failed_with_no_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = one("main.nz", OK);
+    strs_push(files, "file");
+    strs_push(files, "");
+    let dir = project(h, files)?;
+    let r = assert_toolchain_failed(h, dir, "build --summary-json main.nz -o file/prog", strs_new());
+    scratch_remove(h, dir);
+    r
+}
