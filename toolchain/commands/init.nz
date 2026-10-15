@@ -1,6 +1,6 @@
 // `nazm init`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D9).
 //
-// Usage: init [--template NAME] DIR
+// `nazm init [--template NAME] DIR`, run by the dispatcher (`nazm.nz`).
 //
 // A port of `crates/nazm-cli/src/init.rs`: the template's files written into DIR, `{{name}}` in each
 // replaced by the package's name — the directory's — after the same refusals in the same order (an
@@ -26,7 +26,7 @@ fn template_names() -> Strs {
 }
 
 // The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm init`.
-fn init_cli() -> Cli {
+pub fn init_cli() -> Cli {
     let c = cli_command("init", "Create a project from a template (N74): `cli`, `library`, `server`, `embedded`, `wasm` or "
             + "`contract`. The directory is the package's name; it must not exist or must be empty. Its README.md names "
             + "the commands that check, test, build and document it", "")
@@ -153,8 +153,8 @@ fn write_all(io: IoCap, p: Str, text: Str) -> Int {
     0
 }
 
-fn main(io: IoCap) -> Int {
-    let c = init_cli()
+// `nazm init`, its arguments read into `c` (`init_cli`) from where `cli_from` says.
+pub fn init_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
     let dir = cli_value(c, 0)
     let template = cli_value(c, 1)

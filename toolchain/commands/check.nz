@@ -1,6 +1,6 @@
 // `nazm check`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D11).
 //
-// Usage: check [OPTIONS] FILE, as after `nazm check`.
+// `nazm check [OPTIONS] FILE`, run by the dispatcher (`nazm.nz`).
 //
 // A port of `crates/nazm-cli/src/checking.rs` (`run`) and of what `prepare.rs` settles before it,
 // over R2's front end: the loader (`compiler/load.nz`), the parser (`compiler/syntax.nz`), the
@@ -385,7 +385,9 @@ fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
 
 // --- the command ----------------------------------------------------------------------------------
 
+// `nazm check`, its arguments read into `c` (`check_cli`) from where `cli_from` says.
 pub fn check_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
     let file = cli_value(c, 0)
     let json = cli_present(c, 1)
     let locked = cli_present(c, 6)
@@ -470,10 +472,4 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     eprint("nazm: " + int_to_str(n) + " error" + plural(n) + nl())
     exit_with(1)
     0
-}
-
-fn main(io: IoCap) -> Int {
-    let c = check_cli()
-    cli_parse(io, c)
-    check_command(io, c)
 }
