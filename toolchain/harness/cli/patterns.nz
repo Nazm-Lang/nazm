@@ -1,0 +1,79 @@
+// R1a: patterns — wildcards, alternatives, nesting and literals, `if let` and `let … else`
+// (`docs/spec.md`, *Patterns*). Ported from `crates/nazm-cli/tests/patterns.rs` (R7).
+//
+// Every implementation — the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift
+// — is asked for what the section's rules work out by hand, with every allocation reclaimed; then
+// what exhaustiveness and reachability refuse, by which code; and that a `match` written variant
+// by variant still says what it said before R1a.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+const PATTERNS: Str = "enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), Neg(e: Box[Expr]), }\nenum Shape { Circle(r: Int), Rect(w: Int, h: Int), Dot, }\nenum Wrap { Item(label: Str, tags: Strs), Empty, }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\n// Literal and binding patterns nested in a variant; or-patterns without bindings.\nfn describe(e: Expr) -> Str {\n    match e {\n        Expr.Num(v: 0) => \"zero\",\n        Expr.Num(v: n) => num_to_str(n),\n        Expr.Add(l: _, r: _) | Expr.Neg(e: _) => \"compound\",\n    }\n}\n\n// Or-patterns that bind, arms in order, and `_` at the end.\nfn area(s: Shape) -> Int {\n    match s {\n        Shape.Rect(w: 0, h: _) | Shape.Rect(w: _, h: 0) => 0,\n        Shape.Rect(w: w, h: h) => w * h,\n        Shape.Circle(r: r) | Shape.Rect(w: r, h: 1) => r,\n        _ => 1,\n    }\n}\n\n// Integers, negative ones, alternatives, and a name over the rest.\nfn word(n: Int) -> Str {\n    match n { 0 => \"none\", 1 | 2 => \"few\", -1 => \"minus one\", other => num_to_str(other), }\n}\n\nfn code(s: Str) -> Int { match s { \"a\" => 1, \"bc\" => 2, _ => 0, } }\nfn flag(b: Bool) -> Int { match b { true => 1, false => 0, } }\n\n// `let … else`: the bindings are in scope for the rest of the block.\nfn or_zero(o: Option[Int]) -> Int {\n    let Option.Some(value: x) = o else { return 0; };\n    x + 100\n}\n\n// A string literal and a name binding an owning payload, nested; the scrutinee and the\n// payloads released whichever arm runs.\nfn tag_count(w: Wrap) -> Int {\n    match w {\n        Wrap.Item(label: \"skip\", tags: _) => 0,\n        Wrap.Item(label: _, tags: tags) => strs_len(tags),\n        Wrap.Empty() => -1,\n    }\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    show(out, describe(Expr.Num(v: 0)));\n    show(out, describe(Expr.Num(v: 7)));\n    show(out, describe(Expr.Neg(e: box_new(Expr.Num(v: 1)))));\n    show(out, num_to_str(area(Shape.Rect(w: 0, h: 9)) + area(Shape.Rect(w: 3, h: 4)) * 10\n        + area(Shape.Circle(r: 5)) * 1000 + area(Shape.Dot()) * 100000\n        + area(Shape.Rect(w: 6, h: 1)) * 1000000));\n    show(out, str_concat(word(0), str_concat(word(2), str_concat(word(-1), word(9)))));\n    show(out, num_to_str(code(\"a\") + code(\"bc\") * 10 + code(\"zz\") * 100 + flag(true) * 1000));\n    show(out, num_to_str(or_zero(Option[Int].Some(value: 5)) + or_zero(Option[Int].None())));\n    if let Expr.Num(v: k) = Expr.Num(v: 42) { show(out, num_to_str(k)); } else { show(out, \"no\"); }\n    if let Shape.Dot() = Shape.Circle(r: 1) { show(out, \"dot\"); }\n    let ts = strs_new();\n    strs_push(ts, \"x\");\n    strs_push(ts, \"y\");\n    let total = tag_count(Wrap.Item(label: \"keep\", tags: ts))\n        + tag_count(Wrap.Item(label: \"skip\", tags: ts)) * 10\n        + tag_count(Wrap.Empty()) * 100;\n    show(out, num_to_str(total));\n    0\n}\n";
+
+/// What the section's rules give, worked out by hand.
+const EXPECTED: Str = "zero\n7\ncompound\n6105120\nnonefewminus one9\n1021\n105\n42\n-98\n";
+
+@test
+fn every_kind_of_pattern_means_the_same_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, PATTERNS, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, EXPECTED), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0 && all_reclaimed(line), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+const HEADER: Str = "enum S { A, B(x: Int), C(y: Bool), }\n";
+
+fn first_code_is(h: Caps, body: Str, code: Str, says: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, f"{HEADER}{body}\nfn main() -> Int {{ 0 }}\n")?;
+    let first_code = if strs_len(r.codes) > 0 { strs_get(r.codes, 0) } else { "" };
+    check_that(first_code == code, f"{body}: [{str_join(r.codes, ", ")}]")?;
+    check_that(text_contains(r.first, says), f"{body}: {r.first}")
+}
+
+@test
+fn exhaustiveness_names_a_value_no_arm_matches(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.A() => 1, S.B(x: 0) => 2, S.C(y: _) => 3, } }", "N0343", "S.B(x: _)")?;
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.A() => 1, S.B(x: _) => 2, S.C(y: true) => 3, } }", "N0343", "S.C(y: false)")?;
+    first_code_is(h, "fn f(n: Int) -> Int { match n { 0 => 1, 1 => 2, } }", "N0343", "`_`")?;
+    // Written variant by variant, the message is what it was before R1a.
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.A() => 1, } }", "N0343", "`B`, `C`")
+}
+
+@test
+fn what_a_pattern_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Unreachable: every value an earlier arm matches.
+    first_code_is(h, "fn f(n: Int) -> Int { match n { _ => 1, 0 => 2, } }", "N0344", "")?;
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.A() => 1, S.A() => 2, _ => 3, } }", "N0344", "")?;
+    // An `if let` that cannot fail leaves its `else` unreachable.
+    first_code_is(h, "fn f(n: Int) -> Int { if let k = n { k } else { 0 } }", "N0344", "")?;
+    // An or-pattern's alternatives bind the same names, of the same types.
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.B(x: v) | S.A() => 1, _ => 2, } }", "N0629", "")?;
+    first_code_is(h, "fn f(s: S) -> Int { match s { S.B(x: v) | S.C(y: v) => 1, _ => 2, } }", "N0629", "")?;
+    // A `let … else`'s `else` must leave.
+    first_code_is(h, "fn f(o: Option[Int]) -> Int { let Option.Some(value: x) = o else { 0; }; x }", "N0630", "")?;
+    // No float literal; a literal of the value's type; a variant only against an enum.
+    first_code_is(h, "fn f(x: Float64) -> Int { match x { 1.5 => 1, _ => 2, } }", "N0300", "")?;
+    first_code_is(h, "fn f(n: Int) -> Int { match n { \"a\" => 1, _ => 2, } }", "N0300", "")?;
+    first_code_is(h, "fn f(n: Int) -> Int { match n { S.A() => 1, _ => 2, } }", "N0342", "")?;
+    // An empty `match` of something not an enum, as before R1a.
+    first_code_is(h, "fn f(n: Int) -> Int { match n { } }", "N0342", "")
+}
+
+@test
+fn a_wrong_pattern_is_one_error_not_a_cascade(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The arm whose pattern is the mistake is not checked further.
+    let r = check_errors(h, "enum A { X(v: Int), }\nenum B { X(v: Int), }\nfn main() -> Int { match A.X(v: 1) { B.X(v: n) => n, } }\n")?;
+    same_strs("codes", r.codes, words("N0345"))
+}

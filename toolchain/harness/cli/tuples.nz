@@ -1,0 +1,116 @@
+// R1a: tuples (`docs/spec.md`, *Tuples*). Ported from `crates/nazm-cli/tests/tuples.rs` (R7).
+//
+// Every implementation answers what the section's rules work out by hand, with every allocation
+// reclaimed; what a tuple refuses, by which code, one mistake one error; a parenthesised type,
+// value or pattern is not a tuple; a tuple crosses a module interface; and the formatter spells a
+// tuple as the specification does.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+const TUPLES: Str = "struct Entry { key: Str, at: (Int, Int), }\nenum Cell { Empty, Full(v: (Str, Int)), }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\n// A generic function over a tuple, and a tuple returned.\nfn swap[A, B](p: (A, B)) -> (B, A) { let (a, b) = p; (b, a) }\nfn div_mod(a: Int, b: Int) -> (Int, Int) { (a / b, a % b) }\n\n// Tuple patterns in a `match`: literals, names and `_` inside, nested.\nfn classify(p: ((Int, Int), Str)) -> Str {\n    match p {\n        ((0, 0), _) => \"origin\",\n        ((0, _), name) | ((_, 0), name) => str_concat(\"axis \", name),\n        ((x, y), _) => num_to_str(x * y),\n    }\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let (q, r) = div_mod(17, 5);\n    show(out, num_to_str(q * 10 + r));\n    let s = swap((\"left\", 2));\n    show(out, str_concat(num_to_str(s.0), s.1));\n    let nested = ((1, (2, 3)), \"n\");\n    show(out, num_to_str(nested.0.1.1 * 100 + nested.0.0));\n    show(out, str_concat(classify(((0, 0), \"a\")), str_concat(classify(((0, 4), \"b\")),\n        str_concat(classify(((5, 0), \"c\")), classify(((2, 3), \"d\"))))));\n    // Assignment through a mutable binding, element by element.\n    let mut m = ((0, 0), \"was\");\n    m.0.1 = 7;\n    m.1 = \"is\";\n    show(out, str_concat(m.1, num_to_str(m.0.1)));\n    // A `for` loop that takes each element apart; owning elements released.\n    let xs = vec_new[(Str, Int)]();\n    vec_push(xs, (\"a\", 1));\n    vec_push(xs, (\"bb\", 2));\n    let mut total = 0;\n    for (k, v) in xs { total = total + str_len(k) * v; }\n    show(out, num_to_str(total));\n    // In a record's field and an enum's payload; equality is element by element.\n    let e = Entry(key: \"k\", at: (3, 4));\n    let c = Cell.Full(v: (\"x\", 9));\n    if let Cell.Full(v: (_, n)) = c { show(out, num_to_str(n + e.at.1)); }\n    if (1, \"a\") == (1, \"a\") && (1, \"a\") != (1, \"b\") { show(out, \"equal\"); }\n    0\n}\n";
+
+/// What the section's rules give, worked out by hand.
+const EXPECTED: Str = "32\n2left\n301\noriginaxis baxis c6\nis7\n5\n13\nequal\n";
+
+@test
+fn tuples_mean_the_same_everywhere_and_are_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, TUPLES, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, EXPECTED), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0 && all_reclaimed(line), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn one_error(h: Caps, src: Str, code: Str, says: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, f"fn main() -> Int {{ {src} }}\n")?;
+    let first_code = if strs_len(r.codes) > 0 { strs_get(r.codes, 0) } else { "" };
+    check_that(first_code == code, f"{src}: [{str_join(r.codes, ", ")}]")?;
+    check_that(strs_len(r.codes) == 1, f"{src}: one mistake, one error: [{str_join(r.codes, ", ")}]")?;
+    check_that(text_contains(r.first, says), f"{src}: {r.first}")
+}
+
+@test
+fn what_a_tuple_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A tuple of one: `(x)` is `x`, and `(x,)` is refused by name.
+    one_error(h, "let s = (3,); 0", "N0101", "two or more")?;
+    // A position the tuple does not have.
+    one_error(h, "let t = (1, 2); t.2", "N0333", "no field `2`")?;
+    // A pattern of another arity, or a tuple pattern against something else.
+    one_error(h, "let (a, b, c) = (1, 2); a", "N0300", "a tuple of 3")?;
+    one_error(h, "let (a, b) = 5; a", "N0300", "a tuple of 2")?;
+    // A tuple of other element types.
+    one_error(h, "let t = (1, \"a\"); if t == (1, 2) { 1 } else { 0 }", "N0304", "")?;
+    // Equality element by element, where every element has it.
+    one_error(h, "let a = (1, vec_new[Int]()); if a == a { 1 } else { 0 }", "N0304", "no equality")?;
+    // A `let` without `else` must match every value.
+    one_error(h, "let (0, b) = (1, 2); b", "N0343", "this `let` pattern does not match")?;
+    // Covering: every combination of the elements' values.
+    one_error(h, "match (1, true) { (_, true) => 1, (0, false) => 2, }", "N0343", "(_, false)")?;
+    // An element of an immutable binding is not replaced.
+    one_error(h, "let t = (1, 2); t.0 = 5; 0", "N0310", "not mutable")?;
+    // `for` over a pattern needs elements the pattern matches.
+    one_error(h, "let mut s = 0; for (a, b) in 0..3 { s = s + a; } s", "N0300", "a tuple of 2")
+}
+
+@test
+fn a_parenthesised_type_value_or_pattern_is_not_a_tuple(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = check_errors(h, "fn f(x: (Int)) -> (Int) { let (y) = (x); match (y) { (0) => 1, (n) => n, } }\nfn main() -> Int { f(1) }\n")?;
+    same_strs("codes", r.codes, strs_new())
+}
+
+fn interface(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "lib.nz", "pub fn split(s: Str) -> (Int, Str) ! {} { (str_len(s), s) }\npub fn swap[A, B](p: (A, B)) -> (B, A) ! {} { let (a, b) = p; (b, a) }\n")?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\";\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\nfn main(out: OutCap) -> Int ! {io} {\nlet (n, s) = split(\"abc\");\nlet q = swap((n, s));\nshow(out, str_concat(q.0, num_to_str(q.1)));\n0\n}\n")?;
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_starts_with(r.stdout, "abc3\n"), ran_show(r))?;
+    let a = words("build main.nz -o");
+    strs_push(a, f"{d}/m");
+    let b = nazm(h, d, a);
+    check_that(b.code == 0, b.stderr)?;
+    let n = bounded_exe(h, f"{d}/m", "", suite_env(h));
+    check_that(text_starts_with(n.stdout, "abc3\n"), ran_show(n))
+}
+
+@test
+fn a_tuple_crosses_a_module_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = interface(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+@test
+fn a_tuple_is_written_and_formatted_as_the_specification_spells_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "f.nz", "fn f(p: (Int,   Str)) -> (Str,Int) { let (a,b) = p; for(x, y) in vec_new[(Int, Int)]() { } (b,a) }\n")?;
+    let a = words("fmt");
+    strs_push(a, f"{d}/f.nz");
+    let r = nazm(h, "", a);
+    let got = read_text(h, f"{d}/f.nz");
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let text = got?;
+    check_that(text_contains(text, "fn f(p: (Int, Str)) -> (Str, Int) { let (a, b) = p; for (x, y) in vec_new[(Int, Int)]() {") && text_contains(text, "(b, a) }"), text)
+}
+
+@test
+fn a_plain_let_is_read_as_one_and_reported_as_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `let x = e;` is the binding it always was, not a pattern `let`.
+    let r = check_errors(h, "fn main() -> Int { let x 1; x }\n")?;
+    same_strs(r.first, r.codes, words("N0100"))?;
+    check_that(text_contains(r.first, "in a `let` binding"), r.first)
+}
