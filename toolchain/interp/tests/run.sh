@@ -39,7 +39,8 @@ if ! "$NAZM_BUILD" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$wor
     exit 1
 fi
 
-# Every input: the compatibility corpus's run and trap cases, the examples and this track's own.
+# Every input: the compatibility corpus's run and trap cases, the examples and this track's own
+# (a case of several modules is a folder, run from its `main.nz`).
 # `--rust-tests` instead takes the programs the Rust CLI tests embed: each string literal of
 # `crates/nazm-cli/tests/*.rs` with a `fn main` in it — raw, or plain with Rust's escapes and line
 # continuations undone — written out as a file of its own. A format string (one with `{{`) is left
@@ -78,7 +79,8 @@ elif [ $# -gt 0 ]; then
     cases="$*"
 else
     cases=$( (ls "$repo"/tests/compat/v1/run/*.nz "$repo"/tests/compat/v1/run/*/main.nz \
-        "$repo"/tests/compat/v1/trap/*.nz "$repo"/toolchain/interp/tests/cases/*.nz;
+        "$repo"/tests/compat/v1/trap/*.nz "$repo"/toolchain/interp/tests/cases/*.nz \
+        "$repo"/toolchain/interp/tests/cases/*/main.nz;
         find "$repo/examples" -name '*.nz' | sort) 2>/dev/null)
 fi
 

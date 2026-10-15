@@ -42,9 +42,9 @@ struct L {
     brk: Ints,
     brkloop: Ints,
     errs: Strs,
-    // A static `Atomic`'s name to its constant's index.
+    // A static `Atomic`'s durable key (`MODULE::static NAME`) to its constant's index.
     cells: HashMap[Str, Int],
-    // A static `Atomic`'s name (`static NAME`) to its initial value, from `/3`'s `statics`.
+    // A static `Atomic`'s durable key (its `statics` entry's `def`) to its initial value.
     inits: HashMap[Str, Int],
     // A foreign function's key to its name: a call to one is refused (`N0385`).
     foreign: HashMap[Str, Str],
@@ -834,9 +834,11 @@ fn constant(l: L, c: Int) -> V {
     } else if kind_of_type(ty) > 0 {
         parse_const(kind_of_type(ty), gs(l, c, "value"))
     } else if ty == "Atomic" {
-        // A static `Atomic`'s one cell (Gate 3), by its name: the constant names the static but
-        // not its module; its initial value is `/3`'s `statics` table's (0 for a `/2` input).
-        let key = gs(l, c, "value")
+        // A static `Atomic`'s one cell (Gate 3), by its durable key: the constant's `static`, the
+        // `def` of its `statics` entry, so two modules' same-named statics are two cells. A `/2`
+        // input has neither: its `value` (`static NAME`) is the key, and the cell starts at 0.
+        let durable = gs(l, c, "static")
+        let key = if durable == "" { gs(l, c, "value") } else { durable }
         match hashmap_get(l.cells, key) {
             Some(i) => vec_get(l.p.consts, i),
             None => {
@@ -947,7 +949,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             let z = board_only(l, 6, f"`@section` on `{gs(l, st, "name")}`", "", here(l, st, (0 - 1, 0, 0)))
         }
         if gs(l, st, "type") == "Atomic" {
-            hashmap_set(l.inits, "static " + gs(l, st, "name"), gi(l, st, "value"))
+            hashmap_set(l.inits, gs(l, st, "def"), gi(l, st, "value"))
         }
     }
     let fs = g(l, root, "functions")
