@@ -1,8 +1,8 @@
 // What the printed Core IR says about each record and enum: the names of its fields, variants and
 // payload fields, gathered from the nodes that carry them (`openspec/changes/r4-interpreter/
 // design.md`, D8). From the names come the canonical orders (L6) a derived order and a derived hash
-// walk — fields and variants sorted by name — which `cir::Program::orders` holds and the printed
-// form leaves out (*Requests*).
+// walk — fields and variants sorted by name — which `cir::Program::orders` holds. A `/3` Core IR
+// prints them (`types`), and those answer first; the names are the fallback for a `/2` input.
 
 use "@std/hash"
 use "@std/hashmap"
@@ -14,11 +14,30 @@ pub struct Shapes {
     variants: HashMap[Str, Strs],
     // `ENUM#VARIANT` to that variant's payload names, by declaration index.
     payloads: HashMap[Str, Strs],
+    // `/3`'s canonical orders, which answer first: a record's fields by its key, an enum's
+    // variants by `ENUM!`, a variant's payload by `ENUM#VARIANT`.
+    canon: HashMap[Str, Ints],
 }
 
 pub fn shapes_new() -> Shapes {
     Shapes(fields: hashmap_new[Str, Strs](), variants: hashmap_new[Str, Strs](),
-            payloads: hashmap_new[Str, Strs]())
+            payloads: hashmap_new[Str, Strs](), canon: hashmap_new[Str, Ints]())
+}
+
+/// A canonical order the Core IR printed (`/3`'s `types`): `key` as `record_order`,
+/// `payload_order` and `variant_rank` look it up.
+pub fn note_canon(s: Shapes, key: Str, order: Ints) {
+    hashmap_set(s.canon, key, order)
+}
+
+fn canon_or_sorted(s: Shapes, key: Str, names: Strs, n: Int) -> Ints {
+    match hashmap_get(s.canon, key) {
+        Some(o) => {
+            if ints_len(o) == n { return o }
+        },
+        None => { },
+    }
+    sorted(names, n)
 }
 
 /// A type's definition key: its text without type arguments, `M::record Pair` of
@@ -92,12 +111,13 @@ fn before(a: Str, b: Str) -> Bool {
 
 /// A record's `n` fields in canonical order.
 pub fn record_order(s: Shapes, ty: Str, n: Int) -> Ints {
-    sorted(names_of(s.fields, def_key(ty)), n)
+    canon_or_sorted(s, def_key(ty), names_of(s.fields, def_key(ty)), n)
 }
 
 /// An enum's variant `v`'s `n` payload fields in canonical order.
 pub fn payload_order(s: Shapes, ty: Str, v: Int, n: Int) -> Ints {
-    sorted(names_of(s.payloads, f"{def_key(ty)}#{v}"), n)
+    let key = f"{def_key(ty)}#{v}"
+    canon_or_sorted(s, key, names_of(s.payloads, key), n)
 }
 
 /// Variant `v`'s name.
@@ -107,8 +127,24 @@ pub fn variant_name(s: Shapes, ty: Str, v: Int) -> Str {
 
 /// Where variant `a` stands against variant `b` in the canonical order: by name.
 pub fn variant_rank(s: Shapes, ty: Str, a: Int, b: Int) -> Int {
+    match hashmap_get(s.canon, def_key(ty) + "!") {
+        Some(o) => {
+            let ra = rank(o, a)
+            let rb = rank(o, b)
+            if ra >= 0 && rb >= 0 { return if ra < rb { 0 - 1 } else if ra > rb { 1 } else { 0 } }
+        },
+        None => { },
+    }
     let names = names_of(s.variants, def_key(ty))
     let x = name_at(names, a)
     let y = name_at(names, b)
     if x < y { 0 - 1 } else if x > y { 1 } else { 0 }
+}
+
+/// Where `v` stands in `order`, or -1.
+fn rank(order: Ints, v: Int) -> Int {
+    for i in 0..ints_len(order) {
+        if ints_get(order, i) == v { return i }
+    }
+    0 - 1
 }

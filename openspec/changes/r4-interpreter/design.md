@@ -158,6 +158,13 @@ canonical orders: they are rebuilt from the names the printed `record`, `variant
 can make, because only constructed variants can be compared, but it is a reconstruction; see
 *Requests*.
 
+With `nazm.core-ir/3` (main, 2026-10-15) the printed tables answer first and the reconstruction is
+only the fallback for a `/2` input: `impls` maps each `trait method | self type` to its function,
+a trait's default method included (which no `Trait/Type/method` key names, so a default reached
+through a generic call failed before); `types` gives each record's, enum's and variant's canonical
+order; `statics` gives each static `Atomic` its initial value (it started at 0 before). A static is
+still found by its name alone, as the constant names it without its module.
+
 ### D9. Concurrency (slice 5)
 
 Tasks are the interpreter's own: each a task of D3 (its stacks), scheduled cooperatively on one

@@ -1,0 +1,36 @@
+// R1.5's shorter forms as main has them (D7–D10, 3.3): a list literal is a `List[T]`, printing
+// needs no `out`, the prelude imports the standard modules a program names, and a `for` over a
+// split is lowered through `text_split_end` and `text_split_next`.
+fn count(text: Str): Map[Str, Int] {
+    let counts = hashmap_new[Str, Int]()
+    for w in text.split(" ") {
+        if w.len() > 0 { counts[w] += 1 }
+    }
+    counts
+}
+
+fn total(xs: List[Int]): Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main() {
+    let xs = [1, 2, 3]
+    xs.push(4)
+    println(f"{total(xs)} {xs.len()} {xs[3]}")
+    let counts = count("b a c a b a d e e e")
+    for (w, n) in counts.top(3) { println(f"{w} {n}") }
+    let mut keys = ""
+    for (k, _) in counts.sort_by(|a, b| a.0 < b.0) { keys = keys + k }
+    println(keys)
+    let mut seen = 0
+    for w in "x,,y,z".split(",") {
+        if w == "z" { break }
+        if w.len() == 0 { continue }
+        seen += 1
+    }
+    println(f"{seen}")
+    for w in "a--b".split("--") { print(f"[{w}]") }
+    println("")
+}

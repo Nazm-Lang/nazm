@@ -44,6 +44,8 @@ struct L {
     errs: Strs,
     // A static `Atomic`'s name to its constant's index.
     cells: HashMap[Str, Int],
+    // A static `Atomic`'s name (`static NAME`) to its initial value, from `/3`'s `statics`.
+    inits: HashMap[Str, Int],
 }
 
 // --- JSON access --------------------------------------------------------------------------------
@@ -759,15 +761,18 @@ fn constant(l: L, c: Int) -> V {
     } else if kind_of_type(ty) > 0 {
         parse_const(kind_of_type(ty), gs(l, c, "value"))
     } else if ty == "Atomic" {
-        // A static `Atomic`'s one cell (Gate 3), by its name: the printed Core IR names the static
-        // but not its module or its initial value, so every cell starts at 0 (`design.md`,
-        // *Requests*).
+        // A static `Atomic`'s one cell (Gate 3), by its name: the constant names the static but
+        // not its module; its initial value is `/3`'s `statics` table's (0 for a `/2` input).
         let key = gs(l, c, "value")
         match hashmap_get(l.cells, key) {
             Some(i) => vec_get(l.p.consts, i),
             None => {
                 hashmap_set(l.cells, key, vec_len(l.p.consts))
-                V.Atm(a: atomic_new(0))
+                let init = match hashmap_get(l.inits, key) {
+                    Some(v) => v,
+                    None => 0,
+                }
+                V.Atm(a: atomic_new(init))
             },
         }
     } else {
@@ -829,7 +834,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
             fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
             consts: vec_new[V](), names: strs_new(), mods: strs_new(), morder: strs_new(), entry: 0 - 1,
-            fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int]())
+            fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int](), impls: hashmap_new[Str, Int]())
     let bmap = hashmap_new[Str, Int]()
     let bnames = builtin_names()
     for i in 0..strs_len(bnames) {
@@ -853,12 +858,19 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
             lhead: ints_new(), nscope: [0], lscope: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
-            cells: hashmap_new[Str, Int]())
+            cells: hashmap_new[Str, Int](), inits: hashmap_new[Str, Int]())
     let root = json_root(doc)
     // `/3` keeps every `/2` field where it was and adds tables this interpreter does not yet read.
     let schema = gs(l, root, "schema")
     if schema != "nazm.core-ir/2" && schema != "nazm.core-ir/3" {
         return Err(f"the Core IR is `{schema}`, and this interpreter reads `nazm.core-ir/2` and `/3`")
+    }
+    let statics = g(l, root, "statics")
+    for i in 0..len(l, statics) {
+        let st = nth(l, statics, i)
+        if gs(l, st, "type") == "Atomic" {
+            hashmap_set(l.inits, "static " + gs(l, st, "name"), gi(l, st, "value"))
+        }
     }
     let fs = g(l, root, "functions")
     // Every function first, so a call can name one defined later.
@@ -884,6 +896,38 @@ pub fn load(text: Str) -> Result[Prog, Str] {
         ints_push(p.fclosure, if closure { 1 } else { 0 })
         ints_push(p.fcapt, 0)
     }
+    // The canonical orders (`/3`'s `types`), which a derived order and hash walk; a `/2` input
+    // has none, and they are rebuilt from the names (D8).
+    let types = g(l, root, "types")
+    let recs = g(l, types, "records")
+    for i in 0..len(l, recs) {
+        let r = nth(l, recs, i)
+        note_canon(p.shapes, gs(l, r, "definition"), ints_of(l, g(l, r, "canonical")))
+    }
+    let enums = g(l, types, "enums")
+    for i in 0..len(l, enums) {
+        let e = nth(l, enums, i)
+        let key = gs(l, e, "definition")
+        note_canon(p.shapes, key + "!", ints_of(l, g(l, e, "canonical")))
+        let vs = g(l, e, "variants")
+        for v in 0..len(l, vs) {
+            note_canon(p.shapes, f"{key}#{v}", ints_of(l, g(l, nth(l, vs, v), "canonical")))
+        }
+    }
+    // The impl table (`/3`): which function answers each trait method for each type. A `/2` input
+    // has none, and dispatch falls back on the impl function's key (D8).
+    let impls = g(l, root, "impls")
+    for i in 0..len(l, impls) {
+        let row = nth(l, impls, i)
+        let ms = g(l, row, "methods")
+        for j in 0..len(l, ms) {
+            let m = nth(l, ms, j)
+            match hashmap_get(l.fmap, gs(l, m, "function")) {
+                Some(f) => hashmap_set(p.impls, gs(l, m, "method") + "|" + gs(l, row, "self"), f),
+                None => { },
+            }
+        }
+    }
     for i in 0..len(l, fs) {
         function(l, nth(l, fs, i), i)
     }
@@ -895,7 +939,16 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, d: p.d, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
             fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
             fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
-            morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache))
+            morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache, impls: p.impls))
+}
+
+/// A JSON array of integers.
+fn ints_of(l: L, a: Int) -> Ints {
+    let out = ints_new()
+    for i in 0..len(l, a) {
+        ints_push(out, json_int_or(l, nth(l, a, i)))
+    }
+    out
 }
 
 fn str_contains_byte(s: Str, b: Int) -> Bool {
