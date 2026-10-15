@@ -910,6 +910,13 @@ pub(crate) enum Command {
         /// lines. LLVM backend only; the same program, with more metadata.
         #[arg(long)]
         debug: bool,
+        /// Harden the executable (R1.5, D15): every function guarded by a stack canary where it
+        /// holds a local array or a local whose address is taken, linked position-independent,
+        /// stripped of its symbols and debug information, and signed ad hoc with the hardened
+        /// runtime. A macOS executable built by the LLVM backend; refused with `--debug`, `--lib`,
+        /// `--objects` and `--runtime`. The default build is unchanged.
+        #[arg(long, conflicts_with_all = ["debug", "lib", "objects", "runtime"])]
+        release: bool,
         /// Link the runtime artifact in DIR, built by `nazm runtime build`, instead of generating
         /// the runtime (N82): refused, by name and before linking, when it does not fit this
         /// compiler, the target or what the program reaches.

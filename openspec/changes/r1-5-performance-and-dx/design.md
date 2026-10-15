@@ -150,7 +150,11 @@ and the boards link as before.
 ### Security and verification (sections 7, 8)
 
 **D15 — release builds (7.1).** `nazm build --release` strips symbols and debug information, links
-position-independent with stack protection, and on macOS signs ad hoc with the hardened runtime.
+position-independent with stack protection, and on macOS signs ad hoc with the hardened runtime. *Settled in the code (2026-10-15):* the canary is
+`sspstrong` written into every defined function of the LLVM text (clang's `-fstack-protector` does
+nothing to IR), so the LLVM backend only — Cranelift and `nzcg` write none and `--release` with them
+is refused, as is any target but this host's macOS, `--debug`, `--lib`, `--objects` and `--runtime`;
+`strip`, then `codesign --sign - --options runtime`, last; the provenance record says `release`.
 **D16 — signed, reproducible releases (7.2):** minisign, whose key is the copyright holder's to make
 and hold; until then the release checklist builds twice and compares, and the signing step is named
 as waiting for the key. **D17 — 8.2's eight-CPU profile** is calibrated like P4T4 and adopted only for

@@ -48,10 +48,13 @@ mod link;
 mod lower;
 mod objects;
 mod preflight;
+mod release;
 mod stores;
 mod timing;
 
 use stores::Stores;
+
+pub(crate) use release::link_args as release_link_args;
 
 use self::preflight::{preflight, Settled};
 pub(crate) use preflight::{board_for, board_of, read_board, switch_target};
@@ -380,6 +383,9 @@ pub(crate) struct Choice<'a> {
     pub(crate) timings: bool,
     /// Carry debug information, for a debugger (N48).
     pub(crate) debug: bool,
+    /// `--release` (R1.5, D15): stripped, position-independent, stack-protected and signed with
+    /// the hardened runtime.
+    pub(crate) release: bool,
     /// A runtime artifact to link instead of generating one (N82, §7.83).
     pub(crate) runtime: Option<&'a Path>,
     /// The profile `--profile` names, which `@cfg(profile = …)` sees (Gate 2, §17).

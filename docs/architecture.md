@@ -9346,3 +9346,38 @@ an exhausted stack included. The tests build the generator from `toolchain/codeg
 `nazm` under test, once per test process. Mutants in `xtask/mutations/mutations.toml` (`r9-…`).
 In process, without a subprocess, comes at R8, when the compiler driving it is itself Nazm.
 
+## 7.117 Release builds: a hardened macOS executable — R1.5 D15, 2026-10-15
+
+Written before the code (`openspec/changes/r1-5-performance-and-dx/design.md`, D15).
+`nazm build --release` makes the same program as `nazm build`, harder to attack. The default build
+is unchanged: nothing below happens without the flag.
+
+**What each step does.** (`crates/nazm-cli/src/build/release.rs`)
+
+- **Stack protection.** Every function the generated LLVM text defines — the program's units, the
+  runtime's and the entry's — carries `sspstrong`: one with a local array or a local whose address
+  is taken stores a canary from `__stack_chk_guard` in its frame and checks it before returning,
+  calling `__stack_chk_fail` (the process ends) when an overrun has written over it. It is written
+  into the text because `-fstack-protector-strong` is a C front end's option and does nothing to
+  LLVM IR handed to clang (measured 2026-10-15). The text is what every object key covers, so a
+  protected object never answers for an unprotected one in either cache.
+- **Position independence.** The link passes `-pie`: the executable loads at a randomised
+  address. `ld64` already links macOS executables so; the flag states it rather than relying on it.
+- **Stripped.** `strip` removes the symbol table but for what the dynamic loader needs, and the
+  debug map with it: no function name of the program or the runtime is left.
+- **Signed ad hoc with the hardened runtime.** `codesign --force --sign - --options runtime`: the
+  kernel refuses the process code injection, unsigned executable memory and `DYLD_*` variables.
+  Ad hoc — no identity is needed and none is claimed. Stripping invalidates the linker's own ad hoc
+  signature, so signing is last. Both tools run with the driver's controlled environment, and two
+  release builds of one program are the same bytes.
+
+**Where it is refused** (`USAGE`, by name, before anything is compiled): another backend (Cranelift
+and Nazm's generator write no canary), another target than this host's macOS, and — by the command
+line — with `--debug`, `--lib`, `--objects` or `--runtime` (a prebuilt runtime was compiled
+without the canary). A provenance record names a release build (`backend.release`), and only one.
+
+**Evidence.** `crates/nazm-cli/tests/release_build.rs`, a test per property read with the system's
+tools: `nm -U` and `nm -a` (no symbol, no debug map), `otool -hv` (`PIE`), `nm -u`
+(`___stack_chk_fail`, `___stack_chk_guard`, which the default build does not import), `codesign -dv`
+and `--verify --strict` (`adhoc,runtime`); the same bytes twice; the refusals; the provenance
+record. Four mutants.

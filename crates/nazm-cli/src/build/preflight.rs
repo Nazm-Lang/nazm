@@ -191,6 +191,29 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // A release build (R1.5, D15) is a hardened macOS executable from the LLVM backend: Cranelift
+    // and Nazm's own generator write no stack canary, and another target is not this host's
+    // macOS, whose `strip` and `codesign` finish it.
+    if choice.release {
+        let why = if choice.backend != nazm_lir::backend::BackendId::Llvm {
+            Some(
+                "`--backend llvm`'s: Cranelift and Nazm's own code generator write no stack canary",
+            )
+        } else if target.os != nazm_lir::backend::Os::Macos
+            || nazm_lir::backend::Target::host().ok().as_ref() != Some(&target)
+        {
+            Some("this host's macOS executable's: another target is not hardened yet")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            if summary {
+                return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+            }
+            eprintln!("nazm: `--release` hardens {why}");
+            return Err(ExitCode::from(exit::USAGE));
+        }
+    }
     // The watermark is the board's (N63): a hosted program has an operating system's stack.
     if choice.stack_watermark && !target.is_board() {
         if summary {

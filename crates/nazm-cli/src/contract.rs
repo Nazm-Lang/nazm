@@ -519,6 +519,7 @@ fn wasm_build(
             adapter: Some(shape),
             timings: false,
             debug: false,
+            release: false,
             runtime: None,
             profile: Some("web3"),
             harness: None,

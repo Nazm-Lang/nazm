@@ -71,6 +71,7 @@ fn built_and_ran(
             adapter: None,
             timings: false,
             debug: false,
+            release: false,
             runtime: None,
             profile,
             harness,
