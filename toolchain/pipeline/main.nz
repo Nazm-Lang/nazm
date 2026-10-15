@@ -4,6 +4,8 @@
 //                                  accepted it
 //     pipeline verify CORE.json    lower and validate, and say so
 //     pipeline mutants CORE.json   break one invariant at a time and check the validator says so
+//     pipeline ops-debug CORE.json print `nazm lir --ops --debug`: positions, the variables a
+//                                  debugger shows, the files the positions name
 //     pipeline runtime CORE.json [STACK HEAP]
 //                                  print the runtime's units the program links (`runtime`,
 //                                  `entry`, the target's), each after a line `;;; unit NAME`:
@@ -61,8 +63,8 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     }
     let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
     let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) { first } else { "" }
-    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" {
-        eprint("usage: pipeline mir|lir|tables|ops|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP]\n")
+    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" {
+        eprint("usage: pipeline mir|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP]\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -110,6 +112,17 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
         let names = vec_get(units, 0)
         let texts = vec_get(units, 1)
         for i in 0..strs_len(names) { print(";;; unit " + strs_get(names, i) + "\n" + strs_get(texts, i)) }
+        return 0
+    }
+    if mode == "ops-debug" {
+        let names: HashMap[Str, Bool] = hashmap_new()
+        match lir_texts_with(c, tt, p, names, true) {
+            Ok(ts) => { for t in ts { print(t + "\n") } },
+            Err(e) => {
+                eprint("pipeline: " + e + "\n")
+                return 1
+            },
+        }
         return 0
     }
     if mode == "lir" || mode == "ops" || mode == "tables" {

@@ -84,6 +84,14 @@ one() {
         else
             echo "doc differ" >> "$r"
         fi
+        # Debug information (task 4.1): the text with its positions, the variables a debugger
+        # shows and the files the positions name, against `nazm lir --ops --debug`.
+        "$NAZM" lir --ops --debug "$f" > "$o.dwant" 2>/dev/null
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" ops-debug "$o.cir" > "$o.dgot" 2> "$o.derr" && cmp -s "$o.dgot" "$o.dwant"; then
+            echo "dbg agree" >> "$r"
+        else
+            echo "dbg differ $(head -1 "$o.derr") $(cmp "$o.dwant" "$o.dgot" 2>&1 | head -1 | sed "s/.* differ: //")" >> "$r"
+        fi
     elif [ -s "$o.oerr" ]; then
         echo "ops stop $(head -1 "$o.oerr")" >> "$r"
     else
@@ -156,6 +164,7 @@ summary() {
             else { ostop++; if (verbose && details) print "ops stop: " $1 ": " rest }
         }
         k == "doc" { if (v == "agree") fagree++; else { fdiffer++; if (details) print "lir document differ: " $1 } }
+        k == "dbg" { if (v == "agree") dagree++; else { ddiffer++; if (details) print "lir ops --debug differ: " $1 ": " rest } }
         k == "obj" { if (v == "agree") { oba++; obu += w[3] } else { obd++; if (details) print "object cache differ: " $1 ": " rest } }
         k == "rt" {
             if (v == "agree") ragree++
@@ -167,6 +176,7 @@ summary() {
             printf "[%s] mir: %d agree, %d differ (%d inputs without Core IR or MIR)\n", label, magree, mdiffer, skipped
             printf "[%s] lir tables: %d agree, %d differ (%d inputs with MIR but no LIR)\n", label, lagree, ldiffer, lskipped
             printf "[%s] lir ops: %d agree, %d differ (%d stops naming an unported construct, %d different text; the whole document: %d agree, %d differ)\n", label, oagree, ostop + owrong, ostop, owrong, fagree, fdiffer
+            printf "[%s] lir ops --debug: %d agree, %d differ\n", label, dagree, ddiffer
             printf "[%s] runtime units: %d agree, %d differ (%d inputs with LIR that nazm build refuses)\n", label, ragree, rdiffer, rnobuild
             printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
         }' "$OUT/results.$label"

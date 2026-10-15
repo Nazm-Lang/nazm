@@ -60,6 +60,11 @@ struct Lo {
     /// (`Needs`, by name), shared by every unit of the program.
     parts: HashMap[Str, Str],
     needs: HashMap[Str, Bool],
+    /// `--debug`: positions and the variables a debugger shows (N48, N58, N91); each module's
+    /// file index, and each index's name as the loader gave it.
+    debug: Bool,
+    files: HashMap[Str, Int],
+    paths: HashMap[Int, Str],
     /// Each module's source text and line starts, by module name.
     sources: HashMap[Str, Str],
     errors: Strs,
@@ -249,9 +254,36 @@ fn str_value(lo: Lo, bytes: Str) -> Int {
 /// Where span `at` (`FILE:START..END`) starts, as `FILE:LINE:COLUMN` (a column counts
 /// characters, as `SourceMap::line_col` does).
 fn position(lo: Lo, at: Str) -> Str {
+    let lc = line_col(lo, at)
+    if ints_len(lc) == 0 { return at }
+    span_file(at) + ":" + int_to_str(ints_get(lc, 0)) + ":" + int_to_str(ints_get(lc, 1))
+}
+
+/// A span's file: its text before the last `:`.
+fn span_file(at: Str) -> Str {
     let mut colon = 0 - 1
     for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
-    if colon < 0 { return at }
+    if colon < 0 { "" } else { str_slice(at, 0, colon) }
+}
+
+/// Where a debugger says `at` is (`SourceNames::position`): `FILE LINE COLUMN`, the file by its
+/// index; `""` for no position.
+fn loc_of(lo: Lo, at: Str) -> Str {
+    let lc = line_col(lo, at)
+    if ints_len(lc) == 0 { return "" }
+    match hashmap_get(lo.files, span_file(at)) {
+        Some(f) => int_to_str(f) + " " + int_to_str(ints_get(lc, 0)) + " " + int_to_str(ints_get(lc, 1)),
+        None => "",
+    }
+}
+
+/// A span's start as its line and column, counted from 1 (columns by character); empty for a
+/// span that names no place.
+fn line_col(lo: Lo, at: Str) -> Ints {
+    let out = ints_new()
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
+    if colon < 0 { return out }
     let file = str_slice(at, 0, colon)
     let rest = str_slice(at, colon + 1, str_len(at))
     let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
@@ -270,7 +302,9 @@ fn position(lo: Lo, at: Str) -> Str {
         }
         i += 1
     }
-    file + ":" + int_to_str(line) + ":" + int_to_str(col)
+    ints_push(out, line)
+    ints_push(out, col)
+    out
 }
 
 /// A failure's message datum and its length.
@@ -421,13 +455,21 @@ struct Fb {
     slots: Strs,
     slot_sizes: Ints,
     slot_aligns: Ints,
+    /// The last position emitted (`Fb::here`, a `loc` line, `""` for none), the function's own
+    /// (`  at FILE LINE`, or none) and the variables a debugger shows.
+    here: Strs,
+    at_line: Strs,
+    debug_lines: Strs,
 }
 
 fn fb_new() -> Fb {
     let reg = ints_new()
     ints_push(reg, 0 - 1)
     ints_push(reg, 0)
-    let fb = Fb(insts: vec_new(), terms: strs_new(), reg: reg, vars: strs_new(), slots: strs_new(), slot_sizes: ints_new(), slot_aligns: ints_new())
+    let here = strs_new()
+    strs_push(here, "")
+    let fb = Fb(insts: vec_new(), terms: strs_new(), reg: reg, vars: strs_new(), slots: strs_new(), slot_sizes: ints_new(), slot_aligns: ints_new(),
+        here: here, at_line: strs_new(), debug_lines: strs_new())
     let entry = new_lblock(fb)
     ints_set(fb.reg, 0, entry)
     fb
@@ -440,7 +482,13 @@ fn new_lblock(fb: Fb) -> Int {
     b
 }
 
-fn switch_to(fb: Fb, b: Int) { ints_set(fb.reg, 0, b) }
+/// Switch to block `b`; a block switched to before anything is in it restates the last position,
+/// so it keeps its statement's position (N108).
+fn switch_to(fb: Fb, b: Int) {
+    ints_set(fb.reg, 0, b)
+    let h = strs_get(fb.here, 0)
+    if h != "" && strs_len(vec_get(fb.insts, b)) == 0 { strs_push(vec_get(fb.insts, b), h) }
+}
 
 fn value(fb: Fb) -> Int {
     let v = ints_get(fb.reg, 1)
@@ -449,6 +497,7 @@ fn value(fb: Fb) -> Int {
 }
 
 fn emit(fb: Fb, line: Str) {
+    if text_starts_with(line, "loc ") { strs_set(fb.here, 0, line) }
     let b = ints_get(fb.reg, 0)
     if b >= 0 { strs_push(vec_get(fb.insts, b), line) }
 }
@@ -482,8 +531,10 @@ fn finish_in(lo: Lo, fb: Fb, sym: Int, name: Str, section: Str) -> Str {
     let lines = strs_new()
     let placed = if section == "" { "" } else { " section " + section }
     strs_push(lines, "\nfunction @" + strs_get(lo.sym_name, sym) + placed + " ; " + name)
+    for a in fb.at_line { strs_push(lines, a) }
     for i in 0..strs_len(fb.vars) { strs_push(lines, "  var x" + int_to_str(i) + " " + strs_get(fb.vars, i)) }
     for i in 0..strs_len(fb.slots) { strs_push(lines, "  slot s" + int_to_str(i) + " " + strs_get(fb.slots, i)) }
+    for d in fb.debug_lines { strs_push(lines, d) }
     for b in 0..vec_len(fb.insts) {
         strs_push(lines, "b" + int_to_str(b) + ":")
         for x in vec_get(fb.insts, b) { strs_push(lines, "  " + x) }
@@ -790,6 +841,66 @@ fn name_at(fx: Fx) -> Str {
     let tail = str_slice(text, start, str_len(text))
     let at = match text_find(tail, "fn " + name) { Some(i) => start + i + 3, None => start }
     file + ":" + int_to_str(at) + ".." + int_to_str(at + str_len(name))
+}
+
+/// The function's own span (a thunk's is its target's).
+fn fn_span(fx: Fx) -> Str {
+    let f = fx.f
+    let mut node = f.node
+    let hash = match text_find(f.name, "#value@") { Some(i) => i, None => 0 - 1 }
+    if node < 0 && hash >= 0 {
+        let target = str_slice(f.name, hash + 7, str_len(f.name)) + "::fn " + str_slice(f.name, 0, hash)
+        match hashmap_get(fx.lo.c.by_def, target) {
+            Some(i) => { node = vec_get(fx.lo.c.fns, i).node },
+            None => {},
+        }
+    }
+    if node < 0 { "" } else { sval(fx.lo.c, node, "at") }
+}
+
+/// Where the statement being lowered comes from, for a debugger (`Fx::locate`).
+fn locate(fx: Fx) {
+    if !fx.lo.debug { return }
+    let p = loc_of(fx.lo, here(fx))
+    if p != "" { emit(fx.fb, "loc " + p) }
+}
+
+/// A variable a debugger can read (N58, `Fx::debug_var`): a parameter or a source binding of
+/// an integer word, `Bool` or a string with a plain name, where it is kept, its line and scope.
+fn debug_var(fx: Fx, i: Int, l: LocalDecl, borrowed_at: HashMap[Int, Int]) {
+    // Its kind as LIR has it (`Ty::of`): a capability or handle is an `Int`, a `Bytes` a `Str`.
+    let kind = class(l.ty)
+    if kind != "int" && kind != "bool" && kind != "str" { return }
+    let arg = if l.origin == "param" { i + 1 } else if l.origin == "temp" { 0 - 1 } else { 0 }
+    if arg < 0 { return }
+    let lat = if l.at == "@name" { name_at(fx) } else { l.at }
+    let lc = line_col(fx.lo, lat)
+    if ints_len(lc) == 0 { return }
+    if str_len(l.name) == 0 { return }
+    for k in 0..str_len(l.name) {
+        let b = str_byte(l.name, k)
+        if !((b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95) { return }
+    }
+    let kd = strs_get(fx.kinds, i)
+    let storage = if kd == "var" { "x" + int_to_str(ints_get(fx.idx, i)) } else if kd == "slot" { "s" + int_to_str(ints_get(fx.idx, i)) } else if kd == "borrowed" {
+        match hashmap_get(borrowed_at, i) { Some(v) => "x" + int_to_str(v) + "*", None => "" }
+    } else { "" }
+    if storage == "" { return }
+    let mut lexical = "(0, 0, 0, 0)"
+    if l.region != "" {
+        let first = line_col(fx.lo, l.region)
+        let file = span_file(l.region)
+        let rest = str_slice(l.region, str_len(file) + 1, str_len(l.region))
+        let end = match text_find(rest, "..") {
+            Some(d) => match text_parse_int(str_slice(rest, d + 2, str_len(rest))) { Ok(v) => v, Err(_) => 0 },
+            None => 0,
+        }
+        let last = line_col(fx.lo, file + ":" + int_to_str(if end > 0 { end - 1 } else { 0 }) + ".." + int_to_str(end))
+        if ints_len(first) == 2 && ints_len(last) == 2 {
+            lexical = "(" + int_to_str(ints_get(first, 0)) + ", " + int_to_str(ints_get(first, 1)) + ", " + int_to_str(ints_get(last, 0)) + ", " + int_to_str(ints_get(last, 1)) + ")"
+        }
+    }
+    strs_push(fx.fb.debug_lines, "  debug " + storage + " " + int_to_str(arg) + " " + int_to_str(ints_get(lc, 0)) + " " + kind + " " + lexical + " " + l.name)
 }
 
 fn here(fx: Fx) -> Str {
@@ -4547,6 +4658,7 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
     let fx = Fx(lo: lo, fb: fb_new(), f: f, kinds: strs_new(), idx: ints_new(), tys: strs_new(), promoted: ints_new(),
         blocks: ints_new(), reg: reg, at: at)
     let prom = promotable(f)
+    let borrowed_at: HashMap[Int, Int] = hashmap_new()
     let mut next_param = 0
     if in_memory(f.ret) {
         ints_set(fx.reg, 0, param(fx, 0))
@@ -4567,6 +4679,12 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
             if is_param {
                 let p = param(fx, next_param)
                 next_param += 1
+                // Where a debugger finds it: its address, in a variable of its own.
+                if lo.debug {
+                    let v = new_var(fx.fb, "ptr")
+                    set_var(fx, v, p);
+                    hashmap_set(borrowed_at, i, v)
+                }
                 strs_push(fx.kinds, "borrowed")
                 ints_push(fx.idx, p)
             } else {
@@ -4595,6 +4713,7 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
             strs_push(fx.kinds, "var")
             ints_push(fx.idx, v)
         }
+        if lo.debug { debug_var(fx, i, l, borrowed_at); }
     }
     for b in f.blocks { ints_push(fx.blocks, new_lblock(fx.fb)) }
     if ints_len(fx.blocks) > 0 { jump(fx, ints_get(fx.blocks, 0)) }
@@ -4604,12 +4723,21 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
         for k in 0..vec_len(blk.stmts) {
             let s = vec_get(blk.stmts, k)
             strs_set(fx.at, 0, strs_get(blk.ats, k))
+            locate(fx)
             let u = stmt_unwind(s)
             ints_set(fx.reg, 1, if u >= 0 { ints_get(fx.blocks, u) } else { 0 - 1 })
             statement(fx, s);
         }
         strs_set(fx.at, 0, if strs_len(blk.term_at) > 0 { strs_get(blk.term_at, 0) } else { "" })
+        locate(fx)
         if vec_len(blk.term) > 0 { terminator(fx, vec_get(blk.term, 0)) }
+    }
+    if lo.debug {
+        let p = loc_of(lo, fn_span(fx))
+        if p != "" {
+            let parts = text_split(p, " ")
+            strs_push(fx.fb.at_line, "  at " + strs_get(parts, 0) + " " + strs_get(parts, 1))
+        }
     }
     let frame_at = strs_get(fx.at, 1)
     let section = if f.node >= 0 { sval(lo.c, kid(lo.c, f.node, "attributes"), "section") } else { "" }
@@ -4732,13 +4860,13 @@ fn print_module(lo: Lo) -> Str {
     str_join(lines, "\n") + "\n" + str_join(lo.functions, "")
 }
 
-fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], parts: HashMap[Str, Str], needs: HashMap[Str, Bool], sources: HashMap[Str, Str]) -> Result[Str, Str] {
+fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], parts: HashMap[Str, Str], needs: HashMap[Str, Bool], sources: HashMap[Str, Str], debug: Bool, files: HashMap[Str, Int], paths: HashMap[Int, Str]) -> Result[Str, Str] {
     let anon = ints_new()
     ints_push(anon, 0)
     let lo = Lo(lx: lx, c: c, p: p, unit: u, sym_name: strs_new(), sym_link: strs_new(), sym_kind: strs_new(), sym_sig: strs_new(),
         sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
         messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
-        runtime: runtime, parts: parts, needs: needs, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
+        runtime: runtime, parts: parts, needs: needs, debug: debug, files: files, paths: paths, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
         tramps: ints_new(), tramp_tys: vec_new(), tramp_offs: vec_new(), cellvals: hashmap_new())
     declare_functions(lo)
     define_statics(lo)
@@ -4781,8 +4909,15 @@ pub fn lir_texts(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Strs, Str] ! {}
     lir_texts_needs(c, tt, p, hashmap_new())
 }
 
-/// `lir_texts`, noting in `needs` what of the runtime the units reach (`Needs`, by name).
+/// `lir_texts`, noting what of the runtime the units reach.
 pub fn lir_texts_needs(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, Bool]) -> Result[Strs, Str] ! {} {
+    lir_texts_with(c, tt, p, needs, false)
+}
+
+/// `lir_texts`, noting in `needs` what of the runtime the units reach (`Needs`, by name); with
+/// `debug`, as `nazm lir --ops --debug`, each unit followed by the names of the files its
+/// positions name (`; file INDEX PATH`).
+pub fn lir_texts_with(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, Bool], debug: Bool) -> Result[Strs, Str] ! {} {
     if p.entry < 0 { return Err("this program has no `main` to compile") }
     let lx = lx_new(c, tt, p)
     let runtime: HashMap[Str, Str] = hashmap_new()
@@ -4800,19 +4935,62 @@ pub fn lir_texts_needs(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str,
         }
     }
     let sources: HashMap[Str, Str] = hashmap_new()
+    let files: HashMap[Str, Int] = hashmap_new()
+    let paths: HashMap[Int, Str] = hashmap_new()
     let mods = kid(c, json_root(c.doc), "modules")
     for i in 0..count(c, mods) {
         let m = at(c, mods, i)
         hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
+        let fi = ival(c, m, "file")
+        hashmap_set(files, sval(c, m, "name"), fi)
+        hashmap_set(paths, fi, sval(c, m, "path"))
     }
     let out = strs_new()
     for u in unit_plans(c, p) {
-        match lower_unit(c, lx, p, u, runtime, parts, needs, sources) {
-            Ok(t) => { strs_push(out, t); },
+        match lower_unit(c, lx, p, u, runtime, parts, needs, sources, debug, files, paths) {
+            Ok(t) => { strs_push(out, if debug { t + file_names(t, paths) } else { t }); },
             Err(e) => { return Err(e) },
         }
     }
     Ok(out)
+}
+
+/// The files a unit's positions name, by index, as the backends' debug information names them.
+fn file_names(t: Str, paths: HashMap[Int, Str]) -> Str {
+    let seen: HashMap[Int, Bool] = hashmap_new()
+    let ids = ints_new()
+    for line in text_lines(t) {
+        let at = text_starts_with(line, "  at ")
+        if at || text_starts_with(line, "  loc ") {
+            let rest = str_slice(line, if at { 5 } else { 6 }, str_len(line))
+            let sp = match text_find(rest, " ") { Some(k) => k, None => str_len(rest) }
+            match text_parse_int(str_slice(rest, 0, sp)) {
+                Ok(n) => {
+                    if !hashmap_has(seen, n) {
+                        hashmap_set(seen, n, true)
+                        ints_push(ids, n)
+                    }
+                },
+                Err(_) => {},
+            }
+        }
+    }
+    // In order of index (few: one per file a unit's functions come from).
+    for i in 0..ints_len(ids) {
+        for j in i + 1..ints_len(ids) {
+            if ints_get(ids, j) < ints_get(ids, i) {
+                let x = ints_get(ids, i)
+                ints_set(ids, i, ints_get(ids, j))
+                ints_set(ids, j, x)
+            }
+        }
+    }
+    let out = strs_new()
+    for i in 0..ints_len(ids) {
+        let n = ints_get(ids, i)
+        strs_push(out, "; file " + int_to_str(n) + " " + (match hashmap_get(paths, n) { Some(p) => p, None => "" }) + "\n")
+    }
+    str_join(out, "")
 }
 
 /// `nazm lir --ops`: every unit's instruction text, each followed by an empty line.

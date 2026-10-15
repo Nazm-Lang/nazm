@@ -256,6 +256,14 @@ impl Printer<'_> {
         }
     }
 
+    /// A span the document gives only beside the sources (`--with-sources`): the positions a
+    /// debugger is told that no other reader needs (R3, debug information).
+    fn source_at(&self, fields: &mut Vec<(&'static str, J)>, name: &'static str, s: Span) {
+        if self.spans && self.sources.is_some() {
+            fields.push((name, J::Str(self.names.span(s))));
+        }
+    }
+
     fn ty(&self, t: Option<nazm_sema::Type>) -> J {
         t.map_or_else(|| J::Str("never".to_owned()), |t| J::Str(self.names.ty(t)))
     }
@@ -409,6 +417,13 @@ impl Printer<'_> {
                     ];
                     if let (Some(map), Some(file)) = (self.sources, self.graph.file(m)) {
                         o.push(("source", J::Str(map.text(file).to_owned())));
+                        // Where a debugger finds it (R3, debug information): the file's index,
+                        // which a position names, and the loader's name for it.
+                        o.push((
+                            "file",
+                            J::uint(u32::try_from(file.index()).unwrap_or(u32::MAX)),
+                        ));
+                        o.push(("path", J::Str(map.name(file).to_owned())));
                     }
                     J::Obj(o)
                 })
@@ -784,14 +799,16 @@ impl Printer<'_> {
                     a.bindings
                         .iter()
                         .map(|b| {
-                            J::Obj(vec![
+                            let mut fields = vec![
                                 ("field", J::uint(b.field)),
                                 (
                                     "name",
                                     J::Str(self.names.payload(m.enumeration, a.variant, b.field)),
                                 ),
                                 ("local", J::uint(b.local.0)),
-                            ])
+                            ];
+                            self.source_at(&mut fields, "at", b.at);
+                            J::Obj(fields)
                         })
                         .collect(),
                 ),
@@ -878,12 +895,13 @@ impl Printer<'_> {
                 callee,
                 type_args,
                 args,
-                ..
+                callee_at,
             } => {
                 o.push(Self::op("call"));
                 o.push(("callee", J::Str(self.names.function(*callee))));
                 o.push(("type_args", self.types(type_args)));
                 o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
+                self.source_at(&mut o, "callee_at", *callee_at);
             }
             ExprKind::Builtin {
                 op,
@@ -988,17 +1006,22 @@ impl Printer<'_> {
                 o.push(Self::op("fn_value"));
                 o.push(("function", J::Str(self.names.function(*func))));
             }
-            ExprKind::CallIndirect { callee, args, .. } => {
+            ExprKind::CallIndirect {
+                callee,
+                args,
+                callee_at,
+            } => {
                 o.push(Self::op("call_indirect"));
                 o.push(("callee", self.expr(callee)));
                 o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
+                self.source_at(&mut o, "callee_at", *callee_at);
             }
             ExprKind::CallTrait {
                 trait_id,
                 method,
                 self_ty,
                 args,
-                ..
+                callee_at,
             } => {
                 o.push(Self::op("call_trait"));
                 o.push((
@@ -1007,6 +1030,7 @@ impl Printer<'_> {
                 ));
                 o.push(("self", J::Str(self.names.ty(*self_ty))));
                 o.push(("args", J::Arr(args.iter().map(|a| self.expr(a)).collect())));
+                self.source_at(&mut o, "callee_at", *callee_at);
             }
         }
         o.push(("type", self.ty(e.ty)));
