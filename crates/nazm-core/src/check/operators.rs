@@ -192,6 +192,40 @@ impl Checker<'_> {
             return seq;
         }
         let want = self.expected_element(expected);
+        // `[a, b, c]` anywhere a fixed array is not expected (R1.5, D6) is a list — a `Vec` of
+        // its first element's type — as it is where one is wanted, above; a fixed array is
+        // written where its type says `[T; n]`.
+        if want.is_none() {
+            let Some(first) = elems.first() else {
+                self.errors.push(
+                    Diagnostic::error(
+                        codes::ARRAY_TOO_LARGE,
+                        span,
+                        "an empty list needs its element type written",
+                    )
+                    .help("write the type where it is bound: `let v: List[Int] = []`"),
+                );
+                return expected.unwrap_or(Type::Int);
+            };
+            let elem = self.value_type(first, None);
+            for e in elems.iter().skip(1) {
+                let t = self.value_type(e, Some(elem));
+                if !self.assignable(t, elem) {
+                    self.errors.push(Diagnostic::error(
+                        codes::TYPE_MISMATCH,
+                        e.span(),
+                        format!(
+                            "this list's elements are `{}`, and this is `{}`",
+                            self.show(elem),
+                            self.show(t)
+                        ),
+                    ));
+                }
+            }
+            let seq = self.res.types_mut().vec_of(elem);
+            self.res.record_sequence_literal(span, seq);
+            return seq;
+        }
         let Some(first) = elems.first() else {
             self.errors.push(
                 Diagnostic::error(

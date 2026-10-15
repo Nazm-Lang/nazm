@@ -146,6 +146,18 @@ D7, D8; then `run` (D11), the caches (D12), word frequency (D13), D14 and D10; t
 verification (D15–D17); the comparison re-run (5.1) last. One commit per decision, each with its spec
 text, its tests, its mutants and its epoch where the checker changes; a full gate every 4–6 changes.
 
+## Breaking changes for the next release
+
+- **D6 — `[…]` is a list** (2026-10-15, semantic epoch 84). `[1, 2, 3]` where no `[T; n]` is
+  expected is a `Vec[Int]`, shared by every name for it; before, it was a fixed array, a value
+  copied on assignment. A program that copies such a value and writes either copy now sees the
+  write through both names, and one that compares two such literals with `==` or passes one where
+  a `[T; n]` parameter is declared through an untyped binding is refused. The fix is to write the
+  array type where the literal is bound, `let a: [Int; 3] = [1, 2, 3]`. An empty `[]` with no type
+  to take is refused (`N0618`); `let v: Vec[Int] = []` is the form. The compatibility corpus's
+  `run/arrays.nz`, `refuse/constant-index-out-of-range.nz` and `refuse/array-of-strings.nz` were
+  edited this way and re-pinned, their expectations unchanged.
+
 ## Risks
 
 - **D6 and D7 change meaning.** Mitigated by the diagnostics and `nazm fix`, and listed in the next

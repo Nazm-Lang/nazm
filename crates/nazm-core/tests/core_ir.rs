@@ -940,7 +940,7 @@ fn a_program_of_thousands_of_functions_lowers_in_time_proportional_to_its_size()
 #[test]
 fn the_verifier_refuses_broken_arrays_and_indexes() {
     let src = "fn main() -> Int {\n\
-                 let xs = [1, 2, 3];\n\
+                 let xs: [Int; 3] = [1, 2, 3];\n\
                  let ys = [0; 4];\n\
                  xs[1] + ys[2]\n\
                }";

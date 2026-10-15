@@ -91,13 +91,13 @@ fn pick(xs: [Str; 3], i: Int) -> Str { xs[i] }
 
 fn main(out: OutCap) -> Int ! {io} {
     // Built from literals and from strings made at run time; copied, then written.
-    let names = [\"alpha\", \"beta\", str_concat(\"gam\", \"ma\")];
+    let names: [Str; 3] = [\"alpha\", \"beta\", str_concat(\"gam\", \"ma\")];
     let mut copy = names;
     copy[0] = str_concat(\"del\", \"ta\");
     show(out, str_concat(names[0], copy[0]));
     show(out, pick(names, 2));
     // Records holding strings, in an array; an array in a record; arrays of arrays.
-    let kws = [Kw(name: \"if\", code: 1), Kw(name: str_concat(\"wh\", \"ile\"), code: 2)];
+    let kws: [Kw; 2] = [Kw(name: \"if\", code: 1), Kw(name: str_concat(\"wh\", \"ile\"), code: 2)];
     let mut t = 0;
     let mut i = 0;
     while i < 2 { t = t + str_len(kws[i].name) * kws[i].code; i = i + 1; }
@@ -112,16 +112,17 @@ fn main(out: OutCap) -> Int ! {io} {
     vec_push(v, names);
     vec_push(v, copy);
     show(out, vec_get(v, 1)[0]);
-    if names == [\"alpha\", \"beta\", \"gamma\"] && names != copy { show(out, \"eq\"); }
+    let spelled: [Str; 3] = [\"alpha\", \"beta\", \"gamma\"];
+    if names == spelled && names != copy { show(out, \"eq\"); }
     // Overwriting a string the array alone holds releases it: written twice, the first value is
     // a run-time string nothing else holds, which only the second write can give back.
-    let mut owned = [str_concat(\"on\", \"e\"), str_concat(\"tw\", \"o\")];
+    let mut owned: [Str; 2] = [str_concat(\"on\", \"e\"), str_concat(\"tw\", \"o\")];
     owned[0] = str_concat(\"thr\", \"ee\");
     owned[0] = str_concat(\"fo\", \"ur\");
     // What an array holds stays its own after the temporaries that made it are gone, and
     // after other strings of the same size are made: read back, it is what was written.
-    let made = [str_concat(\"ka\", \"pa\"), str_concat(\"ra\", \"ma\")];
-    let other = [str_concat(\"zz\", \"zz\"), str_concat(\"yy\", \"yy\")];
+    let made: [Str; 2] = [str_concat(\"ka\", \"pa\"), str_concat(\"ra\", \"ma\")];
+    let other: [Str; 2] = [str_concat(\"zz\", \"zz\"), str_concat(\"yy\", \"yy\")];
     show(out, str_concat(str_concat(owned[0], owned[1]), str_concat(made[0], made[1])));
     show(out, other[1]);
     0
@@ -354,7 +355,7 @@ fn what_a_constant_table_refuses_and_by_which_code() {
         ),
         // A handle is no array's element; a static is not exported.
         (
-            "fn main() -> Int { let a = [vec_new[Int]()]; 0 }",
+            "fn main() -> Int { let a: [Vec[Int]; 1] = [vec_new[Int]()]; 0 }",
             "N0621",
             "is a handle",
         ),
