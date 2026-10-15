@@ -589,8 +589,9 @@ fn opvalue(fx: Fx, o: Operand) -> Int {
         Operand.Const(c: c) => match c {
             MConst.Int(v: v) => iconst(fx, v),
             MConst.Bool(v: b) => iconst_c(fx, "bit", if b { 1 } else { 0 }),
+            MConst.Num(text: t, kind: k) => num_const(fx, k, t),
             _ => {
-                defect(fx.lo, "a constant this stage cannot read into a scalar yet");
+                defect(fx.lo, "a string literal or a static atomic read into a scalar");
                 iconst(fx, 0)
             },
         },
@@ -821,10 +822,10 @@ fn arg_value(fx: Fx, args: Vec[Operand], i: Int) -> Int {
 fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
     // Immutable indirection (R1a): a `Box[T]` and a `Chain[T]` are their `Vec[T]`, so each of
     // their operations is the `Vec` one it means.
-    if op == "box_fresh" || op == "list_empty" { primitive(fx, dst, "vec_new", elem, args); return }
-    if op == "box_fill" || op == "list_push" { primitive(fx, dst, "vec_push", elem, args); return }
-    if op == "list_len" { primitive(fx, dst, "vec_len", elem, args); return }
-    if op == "list_get" { primitive(fx, dst, "vec_get", elem, args); return }
+    if op == "box_fresh" || op == "chain_empty" { primitive(fx, dst, "vec_new", elem, args); return }
+    if op == "box_fill" || op == "chain_push" { primitive(fx, dst, "vec_push", elem, args); return }
+    if op == "chain_len" { primitive(fx, dst, "vec_len", elem, args); return }
+    if op == "chain_get" { primitive(fx, dst, "vec_get", elem, args); return }
     if op == "box_get" {
         let first: Vec[Operand] = vec_new()
         vec_push(first, if vec_len(args) > 0 { vec_get(args, 0) } else { Operand.Const(c: MConst.Int(v: 0)) })
@@ -832,7 +833,10 @@ fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
         primitive(fx, dst, "vec_get", elem, first);
         return
     }
+    if num_primitive(fx, dst, op, elem, args) { return }
     if seq_primitive(fx, dst, op, elem, args) { return }
+    if chan_primitive(fx, dst, op, elem, args) { return }
+    if bytes_text(fx, dst, op, elem, args) { return }
     if text_primitive(fx, dst, op, elem, args) { return }
     if misc_primitive(fx, dst, op, elem, args) { return }
     primitive_base(fx, dst, op, elem, args);
@@ -1113,6 +1117,575 @@ fn seq_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bo
         let bad = cmp_imm(fx, "ne", raised, "i32", 0)
         guard(fx, bad, "N0400", "this addition overflows `Int`");
         set(fx, dst, t);
+        return true
+    }
+    false
+}
+
+// --- numbers other than `Int` (`numeric.rs`) -----------------------------------------------------
+
+/// A numeric type's kind, `Int` for anything else (`kind_of(…).unwrap_or(I64)`).
+fn num_kind(t: Str) -> Str { if kind_of(t) == "" { "Int" } else { kind_of(t) } }
+
+fn kconst(fx: Fx, c: Str, text: Str) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = const " + c + " " + text);
+    v
+}
+
+/// `a - b` of two non-negative decimal texts, `a >= b`.
+fn dec_sub(a: Str, b: Str) -> Str {
+    let out = strs_new()
+    let mut borrow = 0
+    let la = str_len(a)
+    let lb = str_len(b)
+    let digits = ints_new()
+    for i in 0..la {
+        let da = str_byte(a, la - 1 - i) - 48
+        let db = if i < lb { str_byte(b, lb - 1 - i) - 48 } else { 0 }
+        let mut d = da - db - borrow
+        if d < 0 {
+            d += 10
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        ints_push(digits, d)
+    }
+    let mut top = ints_len(digits) - 1
+    while top > 0 && ints_get(digits, top) == 0 { top -= 1 }
+    let mut i = top
+    while i >= 0 {
+        strs_push(out, int_to_str(ints_get(digits, i)))
+        i -= 1
+    }
+    str_join(out, "")
+}
+
+/// Whether non-negative decimal `a` is at least `b`.
+fn dec_ge(a: Str, b: Str) -> Bool {
+    if str_len(a) != str_len(b) { return str_len(a) > str_len(b) }
+    for i in 0..str_len(a) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) > str_byte(b, i) }
+    }
+    true
+}
+
+fn parse_int(t: Str) -> Int { match text_parse_int(t) { Ok(v) => v, Err(e) => 0 } }
+
+/// An integer of `bits` bits' value `text` (decimal), as its class's constant: two's complement
+/// at the class's width, sign-extended (`num_const`).
+fn int_const_text(k: Str, text: Str) -> Str {
+    let c = mclass(k)
+    let neg = str_len(text) > 0 && str_byte(text, 0) == 45
+    if c == "i128" {
+        if !neg && dec_ge(text, "170141183460469231731687303715884105728") {
+            return "-" + dec_sub("340282366920938463463374607431768211456", text)
+        }
+        return text
+    }
+    if !neg && dec_ge(text, "9223372036854775808") {
+        return "-" + dec_sub("18446744073709551616", text)
+    }
+    let v = parse_int(text)
+    let w = if c == "i8" { 256 } else if c == "i16" { 65536 } else if c == "i32" { 4294967296 } else { 0 }
+    if w == 0 { return int_to_str(v) }
+    let mut low = v % w
+    if low < 0 { low += w }
+    int_to_str(if low >= w / 2 { low - w } else { low })
+}
+
+/// The IEEE 754 double bits of an exact integer `n` (|n| < 2^53), as an `Int`.
+fn f64_bits_int(n: Int) -> Int {
+    if n == 0 { return 0 }
+    let neg = n < 0
+    let m = if neg { 0 - n } else { n }
+    let mut e = 0
+    while e < 62 && m >= 2 * pow2i(e) { e += 1 }
+    let frac = (m - pow2i(e)) * pow2i(52 - e)
+    let pos = (1023 + e) * pow2i(52) + frac
+    if neg { pos - 9223372036854775807 - 1 } else { pos }
+}
+
+fn pow2i(e: Int) -> Int {
+    let mut r = 1
+    for i in 0..e { r = r * 2 }
+    r
+}
+
+/// The double bits of `2^e` (or `-2^e`).
+fn f64_bits_pow2(e: Int, neg: Bool) -> Int {
+    let pos = (1023 + e) * pow2i(52)
+    if neg { pos - 9223372036854775807 - 1 } else { pos }
+}
+
+/// A float constant of `class` from its canonical decimal text.
+fn float_text_bits(k: Str, text: Str) -> Int {
+    let d = float_parse_raw(text)
+    if k == "Float32" {
+        let f = Float32(d)
+        let b = wrap_convert[Int32](float32_to_bits(f))
+        return Int(b)
+    }
+    wrap_convert[Int](float64_to_bits(d))
+}
+
+/// A constant of numeric kind `k`, from its canonical text (`num_const`).
+fn num_const(fx: Fx, k: Str, text: Str) -> Int {
+    if is_float(k) { return iconst_c(fx, mclass(k), float_text_bits(k, text)) }
+    kconst(fx, mclass(k), int_const_text(k, text))
+}
+
+/// Kind `k`'s smallest and largest values, as decimal text.
+fn kind_lo(k: Str) -> Str {
+    if k == "Int8" { return "-128" }
+    if k == "Int16" { return "-32768" }
+    if k == "Int32" { return "-2147483648" }
+    if k == "Int128" { return "-170141183460469231731687303715884105728" }
+    if k == "Int" || k == "Int64" { return "-9223372036854775808" }
+    "0"
+}
+
+fn kind_hi(k: Str) -> Str {
+    if k == "Int8" { return "127" }
+    if k == "Int16" { return "32767" }
+    if k == "Int32" { return "2147483647" }
+    if k == "Int128" { return "170141183460469231731687303715884105727" }
+    if k == "UInt8" { return "255" }
+    if k == "UInt16" { return "65535" }
+    if k == "UInt32" { return "4294967295" }
+    if k == "UInt64" { return "18446744073709551615" }
+    if k == "UInt128" { return "340282366920938463463374607431768211455" }
+    "9223372036854775807"
+}
+
+/// A bound as a constant of `class`: its value's low 128 bits read as an `i128` (`bound`).
+fn bound(fx: Fx, c: Str, text: Str) -> Int {
+    if text == "340282366920938463463374607431768211455" { return kconst(fx, c, "-1") }
+    kconst(fx, c, text)
+}
+
+/// A bound as the `i64` the narrow paths compare with (`to_i128() as i64`).
+fn bound64(text: Str) -> Int {
+    if text == "18446744073709551615" { return 0 - 1 }
+    parse_int(text)
+}
+
+fn un(fx: Fx, op: Str, a: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = " + op + " " + vn(a));
+    v
+}
+
+fn overflows(k: Str, what: Str) -> Str { "this " + what + " overflows `" + k + "`" }
+
+/// `x` and `y` stored to fresh slots, and a slot for the result: `[out, px, py]`.
+fn wide_operands(fx: Fx, x: Int, y: Int) -> Ints {
+    let out = scratch(fx, 16)
+    let px = scratch(fx, 16)
+    store(fx, px, 0, x);
+    let mut py = px
+    if y >= 0 {
+        py = scratch(fx, 16)
+        store(fx, py, 0, y);
+    }
+    ints_of3(out, px, py)
+}
+
+fn wide_divrem(fx: Fx, op: Str, x: Int, y: Int) -> Int {
+    let w = wide_operands(fx, x, y)
+    let code = iconst(fx, if op == "sdiv" { 0 } else if op == "srem" { 1 } else if op == "udiv" { 2 } else { 3 })
+    rt(fx, "nz.i128_divrem", ints_of4(ints_get(w, 0), ints_get(w, 1), ints_get(w, 2), code))
+    load(fx, "i128", ints_get(w, 0), 0)
+}
+
+/// `x * y` at 128 bits, wrapped, and whether the exact product overflowed: `[product, over]`.
+fn wide_mul(fx: Fx, k: Str, x: Int, y: Int) -> Ints {
+    let w = wide_operands(fx, x, y)
+    let signed = iconst(fx, if is_signed(k) { 1 } else { 0 })
+    let flag = rt_v(fx, "nz.i128_mul", ints_of4(ints_get(w, 0), ints_get(w, 1), ints_get(w, 2), signed), "i32")
+    let over = cmp_imm(fx, "ne", flag, "i32", 0)
+    let p = load(fx, "i128", ints_get(w, 0), 0)
+    ints_of2(p, over)
+}
+
+fn num_neg(fx: Fx, k: Str, x: Int) -> Int {
+    if is_float(k) { return un(fx, "fneg", x) }
+    let z = iconst_c(fx, mclass(k), 0)
+    checked(fx, if is_signed(k) { "sub.ovf" } else { "usub.ovf" }, z, x, overflows(k, "negation"))
+}
+
+fn num_arith(fx: Fx, op: Str, k: Str, x: Int, y: Int) -> Int {
+    let c = mclass(k)
+    if is_float(k) {
+        if op == "+" { return bin(fx, "fadd", x, y) }
+        if op == "-" { return bin(fx, "fsub", x, y) }
+        if op == "*" { return bin(fx, "fmul", x, y) }
+        if op == "/" { return bin(fx, "fdiv", x, y) }
+        return rt_v(fx, if c == "f32" { "fmodf" } else { "fmod" }, ints_of2(x, y), c)
+    }
+    let signed = is_signed(k)
+    if op == "+" { return checked(fx, if signed { "add.ovf" } else { "uadd.ovf" }, x, y, overflows(k, "addition")) }
+    if op == "-" { return checked(fx, if signed { "sub.ovf" } else { "usub.ovf" }, x, y, overflows(k, "subtraction")) }
+    if op == "*" {
+        if c == "i128" {
+            let pm = wide_mul(fx, k, x, y)
+            guard(fx, ints_get(pm, 1), "N0400", overflows(k, "multiplication"));
+            return ints_get(pm, 0)
+        }
+        return checked(fx, if signed { "mul.ovf" } else { "umul.ovf" }, x, y, overflows(k, "multiplication"))
+    }
+    let zero = cmp_imm(fx, "eq", y, c, 0)
+    guard(fx, zero, "N0401", "division by zero");
+    if !signed {
+        let o = if op == "/" { "udiv" } else { "urem" }
+        return if c == "i128" { wide_divrem(fx, o, x, y) } else { bin(fx, o, x, y) }
+    }
+    let min = bound(fx, c, kind_lo(k))
+    let is_min = cmp(fx, "eq", x, min)
+    let is_m1 = cmp_imm(fx, "eq", y, c, 0 - 1)
+    let special = bin(fx, "and", is_min, is_m1)
+    if op == "/" {
+        guard(fx, special, "N0400", overflows(k, "division"));
+        return if c == "i128" { wide_divrem(fx, "sdiv", x, y) } else { bin(fx, "sdiv", x, y) }
+    }
+    // `MIN % -1` is 0: divided by 1 instead, which the machine does not fault on.
+    let one = iconst_c(fx, c, 1)
+    let divisor = select(fx, special, one, y)
+    if c == "i128" { wide_divrem(fx, "srem", x, divisor) } else { bin(fx, "srem", x, divisor) }
+}
+
+/// A shift or rotation amount checked against `0..bits` (a rotation only `>= 0`), in the
+/// operand's class.
+fn amount(fx: Fx, k: Str, n: Int, rotation: Bool) -> Int {
+    let c = mclass(k)
+    let w = kind_bits(k)
+    let bad = if rotation { cmp_imm(fx, "lt", n, "i64", 0) } else { cmp_imm(fx, "uge", n, "i64", w) }
+    guard(fx, bad, "N0412", "this shift amount is outside `0.." + int_to_str(w) + "`");
+    let mut m = n
+    if rotation {
+        let mask = iconst(fx, w - 1)
+        m = bin(fx, "and", n, mask)
+    }
+    if c == "i64" { return m }
+    if c == "i128" { return ext(fx, c, m, false) }
+    trunc(fx, c, m)
+}
+
+fn num_bits(fx: Fx, op: Str, k: Str, x: Int, y: Int) -> Int {
+    if op == "&" { return bin(fx, "and", x, y) }
+    if op == "|" { return bin(fx, "or", x, y) }
+    if op == "^" { return bin(fx, "xor", x, y) }
+    let n = amount(fx, k, y, false)
+    if op == "<<" { return bin(fx, "shl", x, n) }
+    bin(fx, if is_signed(k) { "ashr" } else { "lshr" }, x, n)
+}
+
+fn num_compare(fx: Fx, op: Str, k: Str, x: Int, y: Int) -> Int {
+    let base = if op == "==" { "eq" } else if op == "!=" { "ne" } else if op == "<" { "lt" } else if op == "<=" { "le" } else if op == ">" { "gt" } else { "ge" }
+    if is_float(k) { return cmp(fx, "f" + base, x, y) }
+    if is_signed(k) || base == "eq" || base == "ne" { return cmp(fx, base, x, y) }
+    cmp(fx, "u" + base, x, y)
+}
+
+fn widen(fx: Fx, from: Str, x: Int) -> Int {
+    if mclass(from) == "i64" { x } else { ext(fx, "i64", x, is_signed(from)) }
+}
+
+fn resize(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    let fc = mclass(from)
+    let tc = mclass(to)
+    if fc == tc { return x }
+    if kind_bits(from) > kind_bits(to) { return trunc(fx, tc, x) }
+    ext(fx, tc, x, is_signed(from))
+}
+
+fn widen_wide(fx: Fx, from: Str, x: Int) -> Int {
+    if mclass(from) == "i128" { x } else { ext(fx, "i128", x, is_signed(from)) }
+}
+
+fn wide_fits(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    if from == "UInt128" {
+        if to == "UInt128" { return bit(fx, true) }
+        let max = bound(fx, "i128", kind_hi(to))
+        return cmp(fx, "ule", x, max)
+    }
+    let w = widen_wide(fx, from, x)
+    let zero = iconst_c(fx, "i128", 0)
+    if to == "UInt128" { return cmp(fx, "ge", w, zero) }
+    let min = bound(fx, "i128", kind_lo(to))
+    let max = bound(fx, "i128", kind_hi(to))
+    let above = cmp(fx, "ge", w, min)
+    let below = cmp(fx, "le", w, max)
+    bin(fx, "and", above, below)
+}
+
+fn wide_saturate(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    let tc = mclass(to)
+    if from == "UInt128" {
+        if to == "UInt128" { return x }
+        let max = bound(fx, "i128", kind_hi(to))
+        let over = cmp(fx, "ugt", x, max)
+        let clamped = select(fx, over, max, x)
+        return resize(fx, "UInt128", to, clamped)
+    }
+    let w = widen_wide(fx, from, x)
+    let zero = iconst_c(fx, "i128", 0)
+    if to == "UInt128" {
+        let neg = cmp(fx, "lt", w, zero)
+        return select(fx, neg, zero, w)
+    }
+    let min = bound(fx, "i128", kind_lo(to))
+    let max = bound(fx, "i128", kind_hi(to))
+    let under = cmp(fx, "lt", w, min)
+    let over = cmp(fx, "gt", w, max)
+    let a = select(fx, under, min, w)
+    let b = select(fx, over, max, a)
+    if tc == "i128" { b } else { trunc(fx, tc, b) }
+}
+
+fn int_fits(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    if kind_bits(from) == 128 || kind_bits(to) == 128 { return wide_fits(fx, from, to, x) }
+    let lo64 = bound64(kind_lo(to))
+    let hi64 = bound64(kind_hi(to))
+    if from == "UInt64" {
+        if to == "UInt64" { return bit(fx, true) }
+        return cmp_imm(fx, "ule", x, "i64", hi64)
+    }
+    let w = widen(fx, from, x)
+    if to == "UInt64" { return cmp_imm(fx, "ge", w, "i64", 0) }
+    let above = cmp_imm(fx, "ge", w, "i64", lo64)
+    let below = cmp_imm(fx, "le", w, "i64", hi64)
+    bin(fx, "and", above, below)
+}
+
+fn as_f64(fx: Fx, from: Str, x: Int) -> Int { if from == "Float32" { conv(fx, "fext", "f64", x) } else { x } }
+
+/// Whether float `x` truncates to a value of integer kind `to`: finite, and inside the bounds,
+/// which are powers of two and so compared exactly in `f64`.
+fn float_fits(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    let d = as_f64(fx, from, x)
+    let w = kind_bits(to)
+    let signed = is_signed(to)
+    // A signed lower bound is inclusive at 64 bits and wider, and exclusive of `MIN - 1` below.
+    let lo = if signed && w < 64 {
+        iconst_c(fx, "f64", f64_bits_int(0 - pow2i(w - 1) - 1))
+    } else if signed {
+        iconst_c(fx, "f64", f64_bits_pow2(w - 1, true))
+    } else {
+        iconst_c(fx, "f64", f64_bits_int(0 - 1))
+    }
+    let hi = iconst_c(fx, "f64", f64_bits_pow2(if signed { w - 1 } else { w }, false))
+    let above = if signed && w >= 64 { cmp(fx, "fge", d, lo) } else { cmp(fx, "fgt", d, lo) }
+    let below = cmp(fx, "flt", d, hi)
+    bin(fx, "and", above, below)
+}
+
+fn num_fits(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    if is_float(to) { return bit(fx, true) }
+    if is_float(from) { return float_fits(fx, from, to, x) }
+    int_fits(fx, from, to, x)
+}
+
+fn float_to_int(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    if mclass(to) == "i128" {
+        let d = as_f64(fx, from, x)
+        let out = scratch(fx, 16)
+        let signed = iconst(fx, if is_signed(to) { 1 } else { 0 })
+        rt(fx, "nz.f64_to_i128", ints_of3(out, d, signed))
+        return load(fx, "i128", out, 0)
+    }
+    conv(fx, if is_signed(to) { "ftos" } else { "ftou" }, mclass(to), x)
+}
+
+fn not_bit(fx: Fx, b: Int) -> Int {
+    let t = bit(fx, true)
+    bin(fx, "xor", b, t)
+}
+
+fn trunc_or_same(fx: Fx, c: Str, x: Int) -> Int { if c == "i64" { x } else { trunc(fx, c, x) } }
+
+fn int_saturate(fx: Fx, from: Str, to: Str, x: Int) -> Int {
+    if kind_bits(from) == 128 || kind_bits(to) == 128 { return wide_saturate(fx, from, to, x) }
+    let lo64 = bound64(kind_lo(to))
+    let hi64 = bound64(kind_hi(to))
+    let tc = mclass(to)
+    if from == "UInt64" {
+        if to == "UInt64" { return x }
+        let over = cmp_imm(fx, "ugt", x, "i64", hi64)
+        let max = iconst_c(fx, tc, hi64)
+        let low = trunc_or_same(fx, tc, x)
+        return select(fx, over, max, low)
+    }
+    let w = widen(fx, from, x)
+    if to == "UInt64" {
+        let neg = cmp_imm(fx, "lt", w, "i64", 0)
+        let zero = iconst(fx, 0)
+        return select(fx, neg, zero, w)
+    }
+    let under = cmp_imm(fx, "lt", w, "i64", lo64)
+    let over = cmp_imm(fx, "gt", w, "i64", hi64)
+    let min = iconst(fx, lo64)
+    let max = iconst(fx, hi64)
+    let a = select(fx, under, min, w)
+    let b = select(fx, over, max, a)
+    trunc_or_same(fx, tc, b)
+}
+
+fn num_convert(fx: Fx, mode: Str, from: Str, to: Str, x: Int) -> Int {
+    let tc = mclass(to)
+    let ff = is_float(from)
+    let tf = is_float(to)
+    if !ff && tf {
+        if mclass(from) == "i128" {
+            // Rounded once, from the exact value, by the runtime (R1b, L13b).
+            let w = wide_operands(fx, x, 0 - 1)
+            let signed = iconst(fx, if is_signed(from) { 1 } else { 0 })
+            return rt_v(fx, if tc == "f32" { "nz.i128_to_f32" } else { "nz.i128_to_f64" }, ints_of2(ints_get(w, 1), signed), tc)
+        }
+        return conv(fx, if is_signed(from) { "stof" } else { "utof" }, tc, x)
+    }
+    if ff && tf {
+        if from == "Float32" && to == "Float64" { return conv(fx, "fext", tc, x) }
+        if from == "Float64" && to == "Float32" { return conv(fx, "ftrunc", tc, x) }
+        return x
+    }
+    if ff {
+        if mode != "saturate" {
+            let fits = float_fits(fx, from, to, x)
+            let bad = not_bit(fx, fits)
+            guard(fx, bad, "N0400", overflows(to, "conversion"));
+        }
+        return float_to_int(fx, from, to, x)
+    }
+    if mode == "wrap" { return resize(fx, from, to, x) }
+    if mode == "saturate" { return int_saturate(fx, from, to, x) }
+    let fits = int_fits(fx, from, to, x)
+    let bad = not_bit(fx, fits)
+    guard(fx, bad, "N0400", overflows(to, "conversion"));
+    resize(fx, from, to, x)
+}
+
+fn saturating(fx: Fx, op: Str, k: Str, x: Int, y: Int) -> Int {
+    let c = mclass(k)
+    let min = bound(fx, c, kind_lo(k))
+    let max = bound(fx, c, kind_hi(k))
+    let signed = is_signed(k)
+    let o = if op == "saturating_add" { "add" } else if op == "saturating_sub" { "sub" } else { "mul" }
+    let ovf_op = (if signed { "" } else { "u" }) + o + ".ovf"
+    let mut dst = 0
+    let mut ovf = 0
+    if c == "i128" && o == "mul" {
+        let pm = wide_mul(fx, k, x, y)
+        dst = ints_get(pm, 0)
+        ovf = ints_get(pm, 1)
+    } else {
+        dst = value(fx.fb)
+        ovf = value(fx.fb)
+        emit(fx.fb, vn(dst) + ", " + vn(ovf) + " = " + ovf_op + " " + vn(x) + ", " + vn(y));
+    }
+    let mut which = 0
+    if signed {
+        let zero = iconst_c(fx, c, 0)
+        let positive = if o == "add" { cmp(fx, "gt", y, zero) } else if o == "sub" { cmp(fx, "lt", y, zero) } else {
+            let xn = cmp(fx, "lt", x, zero)
+            let yn = cmp(fx, "lt", y, zero)
+            let differ = bin(fx, "xor", xn, yn)
+            not_bit(fx, differ)
+        }
+        which = select(fx, positive, max, min)
+    } else {
+        which = if o == "sub" { min } else { max }
+    }
+    select(fx, ovf, which, dst)
+}
+
+/// The libm entry for a float operation, `f`'s single-precision twin for a `Float32`.
+fn libm(single: Bool, d: Str) -> Str { if single { d + "f" } else { d } }
+
+/// A numeric built-in (Gate 2): `true` when `op` is one.
+fn num_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bool {
+    let mut k = kind_of(elem)
+    if k == "" && vec_len(args) > 0 { k = kind_of(operand_ty(fx, vec_get(args, 0))) }
+    if k == "" { k = "Int" }
+    let c = mclass(k)
+    let single = c == "f32"
+    if op == "wrapping_add" || op == "wrapping_sub" || op == "wrapping_mul" {
+        let x = arg_value(fx, args, 0)
+        let y = arg_value(fx, args, 1)
+        set(fx, dst, bin(fx, if op == "wrapping_add" { "add" } else if op == "wrapping_sub" { "sub" } else { "mul" }, x, y));
+        return true
+    }
+    if op == "saturating_add" || op == "saturating_sub" || op == "saturating_mul" {
+        let x = arg_value(fx, args, 0)
+        let y = arg_value(fx, args, 1)
+        set(fx, dst, saturating(fx, op, k, x, y));
+        return true
+    }
+    if op == "count_ones" || op == "leading_zeros" || op == "trailing_zeros" {
+        let x = arg_value(fx, args, 0)
+        let r = un(fx, if op == "count_ones" { "popcnt" } else if op == "leading_zeros" { "clz" } else { "ctz" }, x)
+        set(fx, dst, if c == "i64" { r } else if c == "i128" { trunc(fx, "i64", r) } else { ext(fx, "i64", r, false) });
+        return true
+    }
+    if op == "rotate_left" || op == "rotate_right" {
+        let x = arg_value(fx, args, 0)
+        let n0 = arg_value(fx, args, 1)
+        let n = amount(fx, k, n0, true)
+        set(fx, dst, bin(fx, if op == "rotate_left" { "rotl" } else { "rotr" }, x, n));
+        return true
+    }
+    if op == "swap_bytes" || op == "to_big_endian" || op == "from_big_endian" {
+        let x = arg_value(fx, args, 0)
+        set(fx, dst, un(fx, "bswap", x));
+        return true
+    }
+    if op == "to_little_endian" || op == "from_little_endian" {
+        set(fx, dst, arg_value(fx, args, 0));
+        return true
+    }
+    if op == "float_sqrt" || op == "float_abs" || op == "float_floor" || op == "float_ceil" || op == "float_trunc" {
+        let x = arg_value(fx, args, 0)
+        set(fx, dst, un(fx, "f" + str_slice(op, 6, str_len(op)), x));
+        return true
+    }
+    if op == "float_round" || op == "float_sin" || op == "float_cos" || op == "float_tan" || op == "float_exp" || op == "float_ln" || op == "float_log2" || op == "float_log10" {
+        let x = arg_value(fx, args, 0)
+        let base = if op == "float_ln" { "log" } else { str_slice(op, 6, str_len(op)) }
+        set(fx, dst, rt_v(fx, libm(single, base), ints_of(x), c));
+        return true
+    }
+    if op == "float_pow" || op == "float_atan2" || op == "float_min" || op == "float_max" {
+        let x = arg_value(fx, args, 0)
+        let y = arg_value(fx, args, 1)
+        let base = if op == "float_min" { "fmin" } else if op == "float_max" { "fmax" } else { str_slice(op, 6, str_len(op)) }
+        set(fx, dst, rt_v(fx, libm(single, base), ints_of2(x, y), c));
+        return true
+    }
+    if op == "float_is_nan" {
+        let x = arg_value(fx, args, 0)
+        set(fx, dst, cmp(fx, "fne", x, x));
+        return true
+    }
+    if op == "float_is_infinite" || op == "float_is_finite" {
+        let x = arg_value(fx, args, 0)
+        let a = un(fx, "fabs", x)
+        let inf = iconst_c(fx, c, if single { 2139095040 } else { 9218868437227405312 })
+        set(fx, dst, cmp(fx, if op == "float_is_infinite" { "feq" } else { "flt" }, a, inf));
+        return true
+    }
+    if op == "widening_mul" {
+        let x0 = arg_value(fx, args, 0)
+        let y0 = arg_value(fx, args, 1)
+        let x = ext(fx, "i128", x0, false)
+        let y = ext(fx, "i128", y0, false)
+        set(fx, dst, bin(fx, "mul", x, y));
+        return true
+    }
+    if op == "float64_to_bits" || op == "float32_to_bits" || op == "float64_from_bits" || op == "float32_from_bits" {
+        let x = arg_value(fx, args, 0)
+        let to = if op == "float64_to_bits" { "i64" } else if op == "float32_to_bits" { "i32" } else if op == "float64_from_bits" { "f64" } else { "f32" }
+        set(fx, dst, conv(fx, "bits", to, x));
         return true
     }
     false
@@ -1449,6 +2022,430 @@ fn misc_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> B
         let a = arg_value(fx, args, 0)
         let v = arg_value(fx, args, 1)
         set(fx, dst, rt_v(fx, "nz." + op, ints_of2(a, v), "i64"));
+        return true
+    }
+    false
+}
+
+// --- bytes and text (`bytes.rs`) ----------------------------------------------------------------
+
+/// Stop with `N0405` unless `0 <= i` and `i + width <= len`.
+fn within(fx: Fx, i: Int, width: Int, len: Int, what: Str) {
+    let neg = cmp_imm(fx, "lt", i, "i64", 0)
+    let last = add_imm(fx, len, 0 - width)
+    let past = cmp(fx, "gt", i, last)
+    let bad = bin(fx, "or", neg, past)
+    guard(fx, bad, "N0405", what);
+}
+
+/// Stop with `N0405` unless `0 <= from <= to <= len`.
+fn in_range(fx: Fx, from: Int, to: Int, len: Int, what: Str) {
+    let neg = cmp_imm(fx, "lt", from, "i64", 0)
+    let inverted = cmp(fx, "lt", to, from)
+    let past = cmp(fx, "gt", to, len)
+    let a = bin(fx, "or", neg, inverted)
+    let bad = bin(fx, "or", a, past)
+    guard(fx, bad, "N0405", what);
+}
+
+fn both(fx: Fx, a: Int, b: Int) -> Int {
+    let no = bit(fx, false)
+    select(fx, a, b, no)
+}
+
+/// Whether byte index `i` of `p[..len]` begins a scalar value or ends the text.
+fn boundary(fx: Fx, p: Int, len: Int, i: Int) -> Int {
+    let r = new_var(fx.fb, "bit")
+    let end = cmp(fx, "eq", i, len)
+    set_var(fx, r, end);
+    let nonneg = cmp_imm(fx, "ge", i, "i64", 0)
+    let below = cmp(fx, "lt", i, len)
+    let inside = both(fx, nonneg, below)
+    let look = new_lblock(fx.fb)
+    let done = new_lblock(fx.fb)
+    branch(fx, inside, look, done);
+    switch_to(fx.fb, look);
+    let at_ = ptr_add(fx, p, i)
+    let byte = load(fx, "i8", at_, 0)
+    let b = ext(fx, "i64", byte, false)
+    let mask = iconst(fx, 192)
+    let top = bin(fx, "and", b, mask)
+    let lead = cmp_imm(fx, "ne", top, "i64", 128)
+    set_var(fx, r, lead);
+    jump(fx, done);
+    switch_to(fx.fb, done);
+    get_var(fx, r)
+}
+
+/// Whether `c` is a Unicode scalar value.
+fn scalar_ok(fx: Fx, c: Int) -> Int {
+    let nonneg = cmp_imm(fx, "ge", c, "i64", 0)
+    let max = cmp_imm(fx, "le", c, "i64", 1114111)
+    let inr = both(fx, nonneg, max)
+    let lo = cmp_imm(fx, "ge", c, "i64", 55296)
+    let hi = cmp_imm(fx, "le", c, "i64", 57343)
+    let surrogate = both(fx, lo, hi)
+    let yes = bit(fx, true)
+    let no = bit(fx, false)
+    let not_surrogate = select(fx, surrogate, no, yes)
+    both(fx, inr, not_surrogate)
+}
+
+/// `dst` = the string at `s`, as one more reference to its bytes.
+fn share(fx: Fx, dst: Int, s: Int) {
+    let d = addr(fx, dst)
+    copy(fx, d, s, 24);
+    retain_at(fx, d, "Str");
+}
+
+/// `dst` = a new buffer holding a copy of `p[..len]`.
+fn fresh_copy(fx: Fx, dst: Int, p: Int, len: Int) {
+    let room = add_imm(fx, len, 1)
+    let ob = string_backing(fx, room)
+    rt(fx, "memcpy", ints_of3(ints_get(ob, 1), p, len))
+    write_str(fx, dst, ints_get(ob, 1), len, ints_get(ob, 0));
+}
+
+fn bytes_text(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bool {
+    if op == "bytes_new" {
+        let n = arg_value(fx, args, 0)
+        let neg = cmp_imm(fx, "lt", n, "i64", 0)
+        guard(fx, neg, "N0405", "a buffer's length is never negative");
+        let room = add_imm(fx, n, 1)
+        let ob = string_backing(fx, room)
+        rt(fx, "nz.mem_zero", ints_of2(ints_get(ob, 1), n))
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+        return true
+    }
+    if op == "bytes_from_str" || op == "bytes_to_str" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        fresh_copy(fx, dst, ints_get(pn, 0), ints_get(pn, 1));
+        return true
+    }
+    if op == "bytes_len" || op == "text_len" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        set(fx, dst, ints_get(pn, 1));
+        return true
+    }
+    if op == "bytes_get" {
+        let b = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let pn = str_parts(fx, b)
+        within(fx, i, 1, ints_get(pn, 1), "this index is outside the `Bytes`");
+        let at_ = ptr_add(fx, ints_get(pn, 0), i)
+        set(fx, dst, load(fx, "i8", at_, 0));
+        return true
+    }
+    if op == "bytes_set" {
+        let b = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let v = arg_value(fx, args, 2)
+        let pn = str_parts(fx, b)
+        within(fx, i, 1, ints_get(pn, 1), "this index is outside the `Bytes`");
+        let at_ = ptr_add(fx, ints_get(pn, 0), i)
+        store(fx, at_, 0, v);
+        set(fx, dst, iconst(fx, 0));
+        return true
+    }
+    if op == "bytes_slice" {
+        let b = arg_place(fx, args, 0)
+        let from = arg_value(fx, args, 1)
+        let to = arg_value(fx, args, 2)
+        let pn = str_parts(fx, b)
+        in_range(fx, from, to, ints_get(pn, 1), "this slice is not inside the `Bytes`");
+        let start = ptr_add(fx, ints_get(pn, 0), from)
+        let n = bin(fx, "sub", to, from)
+        // The view keeps the buffer it was cut from alive: the same owner, retained.
+        let owner = str_owner(fx, b)
+        rt(fx, "nz.str_retain", ints_of(owner))
+        write_str(fx, dst, start, n, owner);
+        return true
+    }
+    if op == "bytes_copy" {
+        let d = arg_place(fx, args, 0)
+        let s = arg_place(fx, args, 1)
+        let pd = str_parts(fx, d)
+        let ps = str_parts(fx, s)
+        let longer = cmp(fx, "gt", ints_get(ps, 1), ints_get(pd, 1))
+        guard(fx, longer, "N0405", "the source is longer than the destination");
+        // Two views of one buffer may overlap: a move, not a copy.
+        rt(fx, "nz.mem_move", ints_of3(ints_get(pd, 0), ints_get(ps, 0), ints_get(ps, 1)))
+        set(fx, dst, ints_get(ps, 1));
+        return true
+    }
+    if op == "bytes_read_le" || op == "bytes_read_be" {
+        let k = num_kind(elem)
+        let w = kind_bits(k) / 8
+        let b = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let pn = str_parts(fx, b)
+        within(fx, i, w, ints_get(pn, 1), "this read is outside the `Bytes`");
+        let base = ptr_add(fx, ints_get(pn, 0), i)
+        // Assembled in a word, or in 128 bits for a 128-bit integer (R1b, L13b).
+        let ac = if mclass(k) == "i128" { "i128" } else { "i64" }
+        let mut acc = iconst_c(fx, ac, 0)
+        for j in 0..w {
+            let byte = load(fx, "i8", base, j)
+            let mut wide = ext(fx, ac, byte, false)
+            let shift = (if op == "bytes_read_le" { j } else { w - 1 - j }) * 8
+            if shift > 0 {
+                let s = iconst_c(fx, ac, shift)
+                wide = bin(fx, "shl", wide, s)
+            }
+            acc = bin(fx, "or", acc, wide)
+        }
+        let v = if k == "Float64" { conv(fx, "bits", "f64", acc) } else if k == "Float32" {
+            let narrow = trunc(fx, "i32", acc)
+            conv(fx, "bits", "f32", narrow)
+        } else if mclass(k) == ac { acc } else { trunc(fx, mclass(k), acc) }
+        set(fx, dst, v);
+        return true
+    }
+    if op == "bytes_write_le" || op == "bytes_write_be" {
+        let k = num_kind(elem)
+        let w = kind_bits(k) / 8
+        let b = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let v = arg_value(fx, args, 2)
+        let pn = str_parts(fx, b)
+        within(fx, i, w, ints_get(pn, 1), "this write is outside the `Bytes`");
+        let bits = if k == "Float64" { conv(fx, "bits", "i64", v) } else if k == "Float32" {
+            let narrow = conv(fx, "bits", "i32", v)
+            ext(fx, "i64", narrow, false)
+        } else if mclass(k) == "i64" || mclass(k) == "i128" { v } else { ext(fx, "i64", v, false) }
+        let ac = if mclass(k) == "i128" { "i128" } else { "i64" }
+        let base = ptr_add(fx, ints_get(pn, 0), i)
+        for j in 0..w {
+            let shift = (if op == "bytes_write_le" { j } else { w - 1 - j }) * 8
+            let part = if shift > 0 {
+                let s = iconst_c(fx, ac, shift)
+                bin(fx, "lshr", bits, s)
+            } else { bits }
+            let byte = trunc(fx, "i8", part)
+            store(fx, base, j, byte);
+        }
+        set(fx, dst, iconst(fx, 0));
+        return true
+    }
+    if op == "utf8_valid" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        set(fx, dst, rt_v(fx, "nz.utf8_valid", ints_of2(ints_get(pn, 0), ints_get(pn, 1)), "bit"));
+        return true
+    }
+    if op == "text_from_str" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        let ok = rt_v(fx, "nz.utf8_valid", ints_of2(ints_get(pn, 0), ints_get(pn, 1)), "bit")
+        let bad = cmp_imm(fx, "eq", ok, "bit", 0)
+        guard(fx, bad, "N0413", "this is not UTF-8");
+        share(fx, dst, s);
+        return true
+    }
+    if op == "text_assume" || op == "text_as_str" {
+        let s = arg_place(fx, args, 0)
+        share(fx, dst, s);
+        return true
+    }
+    if op == "text_concat" {
+        primitive(fx, dst, "str_concat", elem, args);
+        return true
+    }
+    if op == "text_is_boundary" {
+        let t = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let pn = str_parts(fx, t)
+        set(fx, dst, boundary(fx, ints_get(pn, 0), ints_get(pn, 1), i));
+        return true
+    }
+    if op == "text_slice" {
+        let t = arg_place(fx, args, 0)
+        let from = arg_value(fx, args, 1)
+        let to = arg_value(fx, args, 2)
+        let pn = str_parts(fx, t)
+        in_range(fx, from, to, ints_get(pn, 1), "this slice is not inside the `Text`");
+        let a = boundary(fx, ints_get(pn, 0), ints_get(pn, 1), from)
+        let z = boundary(fx, ints_get(pn, 0), ints_get(pn, 1), to)
+        let both_ = both(fx, a, z)
+        let bad = cmp_imm(fx, "eq", both_, "bit", 0)
+        guard(fx, bad, "N0413", "this is not UTF-8");
+        primitive(fx, dst, "str_slice", elem, args);
+        return true
+    }
+    if op == "text_scalar_at" || op == "text_next" {
+        let t = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let pn = str_parts(fx, t)
+        let p = ints_get(pn, 0)
+        let len = ints_get(pn, 1)
+        within(fx, i, 1, len, "this index is outside the `Text`");
+        let at_ = boundary(fx, p, len, i)
+        let bad = cmp_imm(fx, "eq", at_, "bit", 0)
+        guard(fx, bad, "N0413", "this is not UTF-8");
+        if op == "text_scalar_at" {
+            set(fx, dst, rt_v(fx, "nz.utf8_decode", ints_of3(p, len, i), "i64"));
+        } else {
+            let lead = ptr_add(fx, p, i)
+            let byte = load(fx, "i8", lead, 0)
+            let b = ext(fx, "i64", byte, false)
+            let one = iconst(fx, 1)
+            let two = iconst(fx, 2)
+            let three = iconst(fx, 3)
+            let four = iconst(fx, 4)
+            let below_f0 = cmp_imm(fx, "lt", b, "i64", 240)
+            let w3 = select(fx, below_f0, three, four)
+            let below_e0 = cmp_imm(fx, "lt", b, "i64", 224)
+            let w2 = select(fx, below_e0, two, w3)
+            let ascii = cmp_imm(fx, "lt", b, "i64", 128)
+            let w = select(fx, ascii, one, w2)
+            set(fx, dst, bin(fx, "add", i, w));
+        }
+        return true
+    }
+    if op == "text_scalar_count" {
+        let t = arg_place(fx, args, 0)
+        let pn = str_parts(fx, t)
+        set(fx, dst, rt_v(fx, "nz.utf8_count", ints_of2(ints_get(pn, 0), ints_get(pn, 1)), "i64"));
+        return true
+    }
+    if op == "scalar_valid" {
+        let c = arg_value(fx, args, 0)
+        set(fx, dst, scalar_ok(fx, c));
+        return true
+    }
+    if op == "scalar_text" {
+        let c = arg_value(fx, args, 0)
+        let ok = scalar_ok(fx, c)
+        let bad = cmp_imm(fx, "eq", ok, "bit", 0)
+        guard(fx, bad, "N0413", "this is not a Unicode scalar value");
+        let room = iconst(fx, 5)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.utf8_encode", ints_of2(ints_get(ob, 1), c), "i64")
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+        return true
+    }
+    false
+}
+
+// --- channels -----------------------------------------------------------------------------------
+
+fn chan_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bool {
+    if op == "chan_new" {
+        let cap = arg_value(fx, args, 0)
+        let bad = cmp_imm(fx, "lt", cap, "i64", 1)
+        guard(fx, bad, "N0405", "a channel needs a capacity of at least 1");
+        let c = rt_v(fx, "nz.chan_new", ints_of(cap), "ptr")
+        let none = is_null(fx, c)
+        guard(fx, none, "N0406", "out of memory");
+        set(fx, dst, c);
+        return true
+    }
+    if op == "chan_send" {
+        let c = arg_value(fx, args, 0)
+        let v = arg_value(fx, args, 1)
+        set(fx, dst, rt_v(fx, "nz.chan_send", ints_of2(c, v), "bit"));
+        return true
+    }
+    if op == "chan_recv" {
+        let c = arg_value(fx, args, 0)
+        let buf = arg_value(fx, args, 1)
+        // The entry is shared and the position is not: this site's failure text.
+        let m = message(fx.lo, "N0406", "out of memory", here(fx))
+        let p = addr_of(fx, ints_get(m, 0))
+        let len = iconst(fx, ints_get(m, 1))
+        let ok = rt_v(fx, "nz.chan_recv", ints_of4(c, buf, p, len), "bit")
+        check_failed(fx);
+        set(fx, dst, ok);
+        return true
+    }
+    if op == "chan_close" || op == "chan_close_of" {
+        let c = arg_value(fx, args, 0)
+        // The generic close also wakes a select (N54).
+        rt(fx, if op == "chan_close" { "nz.chan_close" } else { "nz.chanv_close" }, ints_of(c))
+        set(fx, dst, iconst(fx, 0));
+        return true
+    }
+    if op == "chan_new_of" {
+        let t = element(op, elem)
+        let cap = arg_value(fx, args, 0)
+        let bad = cmp_imm(fx, "lt", cap, "i64", 1)
+        guard(fx, bad, "N0405", "a channel needs a capacity of at least 1");
+        let stride = iconst(fx, size_of(fx, t))
+        let release = if owns_ty(fx, t) { addr_of(fx, helper(fx.lo, "vel", t)) } else { null(fx) }
+        let c = rt_v(fx, "nz.chanv_new", ints_of3(cap, stride, release), "ptr")
+        let none = is_null(fx, c)
+        guard(fx, none, "N0406", "out of memory");
+        set(fx, dst, c);
+        return true
+    }
+    if op == "chan_send_of" {
+        let t = element(op, elem)
+        let c = arg_value(fx, args, 0)
+        let slot = scratch(fx, size_of(fx, t))
+        // The channel's own reference, taken as the value goes into the slot.
+        store_element(fx, slot, args, 1, t, false);
+        let ok = rt_v(fx, "nz.chanv_send", ints_of2(c, slot), "bit")
+        if owns_ty(fx, t) {
+            let refused = new_lblock(fx.fb)
+            let cont = new_lblock(fx.fb)
+            branch(fx, ok, cont, refused);
+            switch_to(fx.fb, refused);
+            release_at(fx, slot, t);
+            jump(fx, cont);
+            switch_to(fx.fb, cont);
+        }
+        set(fx, dst, ok);
+        return true
+    }
+    if op == "chan_recv_of" {
+        let t = element(op, elem)
+        let c = arg_value(fx, args, 0)
+        let h = arg_value(fx, args, 1)
+        let slot = scratch(fx, size_of(fx, t))
+        let got = rt_v(fx, "nz.chanv_recv", ints_of2(c, slot), "bit")
+        let take = new_lblock(fx.fb)
+        let cont = new_lblock(fx.fb)
+        branch(fx, got, take, cont);
+        switch_to(fx.fb, take);
+        push_moved(fx, h, slot, t);
+        jump(fx, cont);
+        switch_to(fx.fb, cont);
+        set(fx, dst, got);
+        return true
+    }
+    if op == "chan_select_of" || op == "chan_select_until" {
+        // N54: at most one slot copied out, its reference moved onto the vector; `-3 - i` is
+        // channel `i` closed and drained.
+        let t = element(op, elem)
+        let cs = arg_value(fx, args, 0)
+        let h = arg_value(fx, args, 1)
+        let mut ms = 0
+        let mut timed = 0
+        if op == "chan_select_until" {
+            ms = arg_value(fx, args, 2)
+            timed = iconst(fx, 1)
+        } else {
+            ms = iconst(fx, 0)
+            timed = iconst(fx, 0)
+        }
+        let slot = scratch(fx, size_of(fx, t))
+        let r = rt_v(fx, "nz.chanv_select", ints_of4(cs, slot, ms, timed), "i64")
+        let oom = cmp_imm(fx, "eq", r, "i64", 0 - 9223372036854775807 - 1)
+        guard(fx, oom, "N0406", "out of memory");
+        let took = cmp_imm(fx, "ge", r, "i64", 0)
+        let take = new_lblock(fx.fb)
+        let cont = new_lblock(fx.fb)
+        branch(fx, took, take, cont);
+        switch_to(fx.fb, take);
+        push_moved(fx, h, slot, t);
+        jump(fx, cont);
+        switch_to(fx.fb, cont);
+        let shut = cmp_imm(fx, "le", r, "i64", 0 - 3)
+        let minus3 = iconst(fx, 0 - 3)
+        let index = bin(fx, "sub", minus3, r)
+        set(fx, dst, select(fx, shut, index, r));
         return true
     }
     false
@@ -1934,6 +2931,11 @@ fn compare(fx: Fx, op: Str, t: Str, a: Operand, b: Operand) -> Int {
         let eq = string_equal(fx, x, y)
         return if op == "!=" { negate(fx, eq) } else { eq }
     }
+    if k == "num" {
+        let x = opvalue(fx, a)
+        let y = opvalue(fx, b)
+        return num_compare(fx, op, num_kind(t), x, y)
+    }
     if k == "int" || k == "bool" {
         let x = opvalue(fx, a)
         let y = opvalue(fx, b)
@@ -2008,7 +3010,8 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
         },
         Rvalue.Neg(o: o) => {
             if dt != "Int" {
-                defect(fx.lo, "a negation of `" + dt + "` (not ported yet)");
+                let x = opvalue(fx, o)
+                set(fx, dst, num_neg(fx, num_kind(dt), x));
                 return
             }
             let x = opvalue(fx, o)
@@ -2017,13 +3020,37 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
             set(fx, dst, r);
         },
         Rvalue.Arith(op: op, a: a, b: b) => {
-            if dt != "Int" {
-                defect(fx.lo, "arithmetic on `" + dt + "` (not ported yet)");
-                return
-            }
             let x = opvalue(fx, a)
             let y = opvalue(fx, b)
-            let r = arith(fx, op, x, y)
+            let r = if dt != "Int" { num_arith(fx, op, num_kind(dt), x, y) } else { arith(fx, op, x, y) }
+            set(fx, dst, r);
+        },
+        Rvalue.Bits(op: op, a: a, b: b) => {
+            let x = opvalue(fx, a)
+            let y = opvalue(fx, b)
+            set(fx, dst, num_bits(fx, op, num_kind(dt), x, y));
+        },
+        Rvalue.Complement(o: o) => {
+            let x = opvalue(fx, o)
+            let ones = iconst_c(fx, mclass(num_kind(dt)), 0 - 1)
+            set(fx, dst, bin(fx, "xor", x, ones));
+        },
+        Rvalue.Convert(mode: m, to: to, o: o) => {
+            let from = kind_of(operand_ty(fx, o))
+            let tk = kind_of(to)
+            let x = opvalue(fx, o)
+            if from == "" || tk == "" {
+                defect(fx.lo, "a conversion between non-numbers");
+                set(fx, dst, x);
+                return
+            }
+            set(fx, dst, num_convert(fx, m, from, tk, x));
+        },
+        Rvalue.Fits(to: to, o: o) => {
+            let from = kind_of(operand_ty(fx, o))
+            let tk = kind_of(to)
+            let x = opvalue(fx, o)
+            let r = if from == "" || tk == "" { bit(fx, false) } else { num_fits(fx, from, tk, x) }
             set(fx, dst, r);
         },
         Rvalue.Compare(op: op, law: _, operand: t, a: a, b: b) => {
