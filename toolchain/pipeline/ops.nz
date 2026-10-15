@@ -42,6 +42,8 @@ struct Lo {
     messages: HashMap[Str, Int],
     /// The type helpers asked for (`what|type`) and their symbols, in the order asked.
     helpers: HashMap[Str, Int],
+    /// A static atomic's value datum, by `module.name`.
+    cellvals: HashMap[Str, Int],
     pending: Strs,
     /// Each spawn site's trampoline: its symbol and callee, and the block's argument types
     /// and offsets; defined after the functions, between helpers.
@@ -100,6 +102,112 @@ fn le_hex(n: Int, width: Int) -> Str {
         x = x / 256
     }
     str_join(parts, "")
+}
+
+/// Little-endian two's complement bytes of `n` in `width` bytes, as hex.
+fn le_hex_signed(n: Int, width: Int) -> Str {
+    let parts = strs_new()
+    let mut x = n
+    for i in 0..width {
+        let b = (x % 256 + 256) % 256
+        strs_push(parts, hex_byte(b))
+        x = (x - b) / 256
+    }
+    str_join(parts, "")
+}
+
+/// A JSON scalar's text: a string as itself, a number as its digits, a boolean as its word.
+fn json_text_of(c: Cir, n: Int) -> Str {
+    let k = json_kind(c.doc, n)
+    if k == "string" { return str_of(c, n) }
+    if k == "bool" || k == "boolean" { return match json_bool(c.doc, n) { Some(b) => if b { "true" } else { "false" }, None => "false" } }
+    int_to_str(int_of(c, n))
+}
+
+/// A static's symbol (`NativeSymbol::of_static`).
+fn static_symbol(module: Str, name: Str) -> Str {
+    if str_len(module) > 0 && str_byte(module, 0) == 35 {
+        return "nz.su." + str_slice(module, 1, str_len(module)) + "." + encode(name)
+    }
+    "nz.s." + encode(module) + "." + encode(name)
+}
+
+/// Every static the unit's module declares, as data (`define_statics`): an atomic's cell
+/// writable, a constant's bytes read-only, each in its `@section`.
+fn define_statics(lo: Lo) {
+    if !lo.unit.owns { return }
+    let c = lo.c
+    let ss = kid(c, json_root(c.doc), "statics")
+    for i in 0..count(c, ss) {
+        let s = at(c, ss, i)
+        if sval(c, s, "module") == lo.unit.module {
+            let name = static_symbol(sval(c, s, "module"), sval(c, s, "name"))
+            let t = sval(c, s, "type")
+            let v = json_text_of(c, kid(c, s, "value"))
+            let mut hex = ""
+            let mut align = 8
+            let cell = bval(c, s, "cell")
+            if cell {
+                hex = le_hex_signed(parse_int(v), 8)
+            } else if t == "Bool" {
+                hex = if v == "true" { "01" } else { "00" }
+                align = 1
+            } else if is_float(t) {
+                let w = kind_bits(t) / 8
+                hex = le_hex_signed(float_text_bits(t, v), w)
+                align = w
+            } else {
+                let k = num_kind(t)
+                let w = kind_bits(k) / 8
+                let text = int_const_text(k, v)
+                if w > 8 && (str_len(text) > 18) {
+                    defect(lo, "a 128-bit static past 64 bits (not ported yet)");
+                }
+                hex = le_hex_signed(parse_int(text), w)
+                align = w
+            }
+            symbol(lo, name, "hidden", "data", "bytes", "", false);
+            let w = if cell { " writable" } else { "" }
+            let sec = sval(c, s, "section")
+            let placed = if sec == "" { "" } else { " section " + sec }
+            strs_push(lo.datas, "data @" + name + " align " + int_to_str(align) + w + placed + " [" + hex + "]")
+        }
+    }
+}
+
+/// A static atomic's whole value — its cell's address, 8, a null owner — as read-only data
+/// (`cell_value`): the cell this unit defines, or an import of its module's.
+fn cell_value(fx: Fx, name: Str) -> Int {
+    let lo = fx.lo
+    let c = lo.c
+    let ss = kid(c, json_root(c.doc), "statics")
+    let mut found = 0 - 1
+    let mut any = 0 - 1
+    let mut many = false
+    for i in 0..count(c, ss) {
+        let s = at(c, ss, i)
+        if sval(c, s, "name") == name {
+            if sval(c, s, "module") == fx.f.module { found = s }
+            if any >= 0 { many = true }
+            any = s
+        }
+    }
+    if found < 0 && !many { found = any }
+    if found < 0 {
+        defect(lo, "a static the program does not declare");
+        return 0 - 1
+    }
+    let module = sval(c, found, "module")
+    let key = module + "." + name
+    match hashmap_get(lo.cellvals, key) {
+        Some(d) => { return d },
+        None => {},
+    }
+    let cell = symbol(lo, static_symbol(module, name), "import", "data", "bytes", "", false)
+    let id = anonymous(lo, "c")
+    let d = define_data(lo, id, le_hex(0, 8) + le_hex(8, 8) + le_hex(0, 8), 8, " 0:@" + strs_get(lo.sym_name, cell))
+    hashmap_set(lo.cellvals, key, d)
+    d
 }
 
 fn define_data(lo: Lo, name: Str, hex: Str, align: Int, relocs: Str) -> Int {
@@ -350,9 +458,13 @@ fn new_slot(fb: Fb, size: Int, align: Int) -> Int {
     strs_len(fb.slots) - 1
 }
 
-fn finish(lo: Lo, fb: Fb, sym: Int, name: Str) -> Str {
+fn finish(lo: Lo, fb: Fb, sym: Int, name: Str) -> Str { finish_in(lo, fb, sym, name, "") }
+
+/// A function's text, placed in `section` (`@section`) unless that is `""`.
+fn finish_in(lo: Lo, fb: Fb, sym: Int, name: Str, section: Str) -> Str {
     let lines = strs_new()
-    strs_push(lines, "\nfunction @" + strs_get(lo.sym_name, sym) + " ; " + name)
+    let placed = if section == "" { "" } else { " section " + section }
+    strs_push(lines, "\nfunction @" + strs_get(lo.sym_name, sym) + placed + " ; " + name)
     for i in 0..strs_len(fb.vars) { strs_push(lines, "  var x" + int_to_str(i) + " " + strs_get(fb.vars, i)) }
     for i in 0..strs_len(fb.slots) { strs_push(lines, "  slot s" + int_to_str(i) + " " + strs_get(fb.slots, i)) }
     for b in 0..vec_len(fb.insts) {
@@ -603,6 +715,11 @@ fn place(fx: Fx, o: Operand) -> Int {
         Operand.Local(l: l) => addr(fx, l),
         Operand.Const(c: c) => match c {
             MConst.Str(bytes: b) => addr_of(fx, str_value(fx.lo, b)),
+            // A static atomic (Gate 3): its cell's triple, as a literal's is.
+            MConst.Cell(name: n) => {
+                let d = cell_value(fx, n)
+                if d >= 0 { addr_of(fx, d) } else { null(fx) }
+            },
             _ => {
                 defect(fx.lo, "the address of a constant this stage cannot place yet");
                 null(fx)
@@ -1984,6 +2101,35 @@ fn misc_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> B
         set(fx, dst, iconst(fx, 0));
         return true
     }
+    if op == "callback_address" {
+        // An export's C entry as a function pointer (N85), named by the constant symbol.
+        let mut name = ""
+        if vec_len(args) > 0 {
+            match vec_get(args, 0) {
+                Operand.Const(c: c) => match c {
+                    MConst.Str(bytes: b) => { name = b },
+                    _ => {},
+                },
+                _ => {},
+            }
+        }
+        if name == "" {
+            defect(fx.lo, "a callback address with no symbol");
+            return true
+        }
+        let mut target = 0 - 1
+        for i in 0..vec_len(fx.lo.p.fns) { if target < 0 && vec_get(fx.lo.p.fns, i).export == name { target = i } }
+        if target < 0 {
+            defect(fx.lo, "`" + name + "` is not an export");
+            return true
+        }
+        let g = vec_get(fx.lo.p.fns, target)
+        let csig = c_sig(params_of(g), g.ret)
+        let s = symbol(fx.lo, name, "import", "func", csig, sig_ret(csig), false)
+        let a = addr_of(fx, s)
+        set(fx, dst, ptr_to_int(fx, a));
+        return true
+    }
     if op == "c_errno" {
         set(fx, dst, rt_v(fx, "nz.errno_last", ints_new(), "i64"));
         return true
@@ -2828,17 +2974,56 @@ fn direct_call(fx: Fx, dst: Int, callee: Int, args: Vec[Operand]) {
     let foreign = g.foreign != ""
     let vals = ints_new()
     if in_memory(dt) && !foreign { ints_push(vals, addr(fx, dst)) }
+    // A `Str` argument to C is a NUL-terminated copy C borrows, freed after the call (N55); a
+    // C-layout record a copy of its bytes C borrows for the call.
+    let copies = ints_new()
     for a in args {
-        if foreign && in_memory(operand_ty(fx, a)) {
-            defect(fx.lo, "a string or record passed to C (not ported yet)");
-            return
+        let v = argument(fx, a)
+        let at_ = operand_ty(fx, a)
+        if foreign && class(at_) == "record" {
+            let size = iconst(fx, size_of(fx, at_))
+            let m = rt_v(fx, "malloc", ints_of(size), "ptr")
+            let oom = is_null(fx, m)
+            foreign_guard(fx, oom, "N0406", "out of memory", copies);
+            rt(fx, "memcpy", ints_of3(m, v, size))
+            ints_push(copies, m)
+            ints_push(vals, m)
+        } else if foreign && at_ == "Str" {
+            let p = load(fx, "ptr", v, 0)
+            let n = load(fx, "i64", v, 8)
+            let nul = rt_v(fx, "nz.cstr_has_nul", ints_of2(p, n), "bit")
+            foreign_guard(fx, nul, "N0405", "a string holding a NUL byte cannot be passed to C", copies);
+            let cs = rt_v(fx, "nz.cstr_borrow", ints_of2(p, n), "ptr")
+            let oom = is_null(fx, cs)
+            foreign_guard(fx, oom, "N0406", "out of memory", copies);
+            ints_push(copies, cs)
+            ints_push(vals, cs)
+        } else {
+            ints_push(vals, v)
         }
-        ints_push(vals, argument(fx, a))
     }
     let rf = call_failing(fx, fsym, vals)
+    // What C left in `errno`, before anything else can change it (N85).
     if foreign { rt(fx, "nz.errno_save", ints_new()) }
+    for i in 0..ints_len(copies) { rt(fx, "free", ints_of(ints_get(copies, i))) }
     if !foreign { check_call(fx, ints_get(rf, 1)) }
-    if !in_memory(dt) && ints_get(rf, 0) >= 0 { set(fx, dst, ints_get(rf, 0)) }
+    if !in_memory(dt) {
+        if ints_get(rf, 0) >= 0 { set(fx, dst, ints_get(rf, 0)) }
+    } else if foreign {
+        defect(fx.lo, "a foreign function returning a value held in memory");
+    }
+}
+
+/// A guard before a foreign call (N55): the copies already made for it freed on the failing
+/// path.
+fn foreign_guard(fx: Fx, bad: Int, code: Str, what: Str, copies: Ints) {
+    let failing = new_lblock(fx.fb)
+    let cont = new_lblock(fx.fb)
+    branch(fx, bad, failing, cont);
+    switch_to(fx.fb, failing);
+    for i in 0..ints_len(copies) { rt(fx, "free", ints_of(ints_get(copies, i))) }
+    fail_with(fx, code, what);
+    switch_to(fx.fb, cont);
 }
 
 // --- arrays -------------------------------------------------------------------------------------
@@ -4447,14 +4632,15 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
         if vec_len(blk.term) > 0 { terminator(fx, vec_get(blk.term, 0)) }
     }
     let frame_at = strs_get(fx.at, 1)
-    if frame_at == "" { return finish(lo, fx.fb, sym, f.name) }
+    let section = if f.node >= 0 { sval(lo.c, kid(lo.c, f.node, "attributes"), "section") } else { "" }
+    if frame_at == "" { return finish_in(lo, fx.fb, sym, f.name, section) }
     // A large frame is checked before it exists (Q1-A1-01): the body moves to a symbol of its
     // own, and the function's symbol becomes an entry that asks for room for the body's frame.
     let frame = frame_size(fx.fb)
     let sig = strs_get(lo.sym_sig, sym)
     let body = symbol(lo, anonymous(lo, "frame"), "local", "func", sig, sig_ret(sig), true)
-    let entry = frame_entry(lo, sym, body, frame, frame_at)
-    entry + finish(lo, fx.fb, body, f.name)
+    let entry = frame_entry(lo, sym, body, frame, frame_at, section)
+    entry + finish_in(lo, fx.fb, body, f.name, section)
 }
 
 /// The bytes a function's slots take, each rounded up to its alignment.
@@ -4470,7 +4656,7 @@ fn frame_size(fb: Fb) -> Int {
 
 /// A large frame's entry: its parameters passed on to its body once the thread's stack has room
 /// for the body's frame, and `N0408` at the function's name when it has not.
-fn frame_entry(lo: Lo, sym: Int, body: Int, frame: Int, at: Str) -> Str {
+fn frame_entry(lo: Lo, sym: Int, body: Int, frame: Int, at: Str, section: Str) -> Str {
     let fx = helper_fx(lo)
     strs_set(fx.at, 0, at)
     let sig = strs_get(lo.sym_sig, sym)
@@ -4506,7 +4692,32 @@ fn frame_entry(lo: Lo, sym: Int, body: Int, frame: Int, at: Str) -> Str {
     }
     let r = ints_get(rf, 0)
     term(fx.fb, if r >= 0 { "return " + vn(r) } else { "return" });
-    finish(lo, fx.fb, sym, "a large frame's entry")
+    finish_in(lo, fx.fb, sym, "a large frame's entry", section)
+}
+
+/// An export's C entry (N55, §7.57): the C convention outside, the Nazm function inside, and a
+/// failure reported and the process ended rather than a stand-in returned into C.
+fn export_entry(lo: Lo, fi: Int, fsym: Int) -> Str {
+    let g = vec_get(lo.p.fns, fi)
+    let ps = params_of(g)
+    let csig = c_sig(ps, g.ret)
+    let sym = symbol(lo, g.export, "export", "func", csig, sig_ret(csig), false)
+    let fx = helper_fx(lo)
+    let args = ints_new()
+    for i in 0..strs_len(ps) { ints_push(args, param(fx, i)) }
+    let r = call(fx, fsym, args)
+    let result = if r >= 0 { r } else { iconst_c(fx, c_class(g.ret), 0) }
+    let f = rt_v(fx, "nz.failed_now", ints_new(), "i32")
+    let bad = cmp_imm(fx, "ne", f, "i32", 0)
+    let failing = new_lblock(fx.fb)
+    let done = new_lblock(fx.fb)
+    branch(fx, bad, failing, done);
+    switch_to(fx.fb, failing);
+    rt(fx, "nz.report", ints_new())
+    term(fx.fb, "unreachable");
+    switch_to(fx.fb, done);
+    term(fx.fb, "return " + vn(result));
+    finish(lo, fx.fb, sym, "an export's C entry")
 }
 
 fn plain_entry(lo: Lo, sym: Int, body: Int) -> Str {
@@ -4548,8 +4759,9 @@ fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, 
         sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
         messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
         runtime: runtime, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
-        tramps: ints_new(), tramp_tys: vec_new(), tramp_offs: vec_new())
+        tramps: ints_new(), tramp_tys: vec_new(), tramp_offs: vec_new(), cellvals: hashmap_new())
     declare_functions(lo)
+    define_statics(lo)
     for i in 0..ints_len(u.fns) {
         let fi = ints_get(u.fns, i)
         match hashmap_get(lo.funcs, fi) {
@@ -4559,7 +4771,9 @@ fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, 
                     Some(ps) => { strs_push(lo.functions, plain_entry(lo, ps, sym)); },
                     None => {},
                 }
-                if vec_get(p.fns, fi).export != "" { defect(lo, "an export's C entry (not ported yet)"); }
+                // An export's C entry, beside the function it calls (N55).
+                let g = vec_get(p.fns, fi)
+                if g.export != "" { strs_push(lo.functions, export_entry(lo, fi, sym)); }
             },
             None => {},
         }
