@@ -1,0 +1,227 @@
+// `Box[T]` and lists built of boxes: what the section's rules give, alike under the interpreter, the
+// LIR oracle and every native tier, with everything reclaimed; what a box refuses. Ported from
+// `crates/nazm-cli/tests/box_list.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/tiers.nz"
+use "../lib/differential.nz"
+
+/// The program under the interpreter and the LIR oracle, and built and run by each backend, each
+/// with the memory report asked for.
+fn everywhere_f(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    tiers_of(h, "prog.nz", src, Tiers(oracle: true, interp_memory: true, native_memory: true, native_in_dir: false))
+}
+
+/// The memory report's line, which every implementation but the LIR oracle writes when asked.
+fn report(r: Ran) -> Result[Str, Str] ! {} {
+    let line = memory_line(r);
+    if str_len(line) == 0 {
+        return Result[Str, Str].Err(error: f"no memory report: {ran_show(r)}");
+    }
+    Result[Str, Str].Ok(value: line)
+}
+
+/// `nazm check` on `src`: every error code its report names, in order.
+fn codes_b(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("check p.nz"));
+    scratch_remove(h, d);
+    let out = strs_new();
+    let parts = text_split(r.stderr, "error[");
+    let mut i = 1;
+    while i < strs_len(parts) {
+        strs_push(out, str_slice(strs_get(parts, i), 0, 5));
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// `deep.nz` in `d` interpreted and built by both backends, each with the memory report.
+fn deep_runs(h: Caps, d: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret deep.nz"), d, env)));
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {backend} deep.nz -o {exe}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        vec_push(runs, Labeled(label: backend, ran: bounded_exe(h, exe, "", env)));
+    }
+    Result[Vec[Labeled], Str].Ok(value: runs)
+}
+
+/// `src` as `p.nz`, interpreted.
+fn run_p(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("run --interpret p.nz"));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: r)
+}
+
+const TREES: Str = "enum Expr { Num(v: Int), Add(l: Box[Expr], r: Box[Expr]), Neg(e: Box[Expr]), }\nstruct Node { name: Str, kids: Chain[Node], }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} {\n    print(str_concat(s, \"\\n\"))\n}\n\nfn eval(e: Expr) -> Int {\n    match e {\n        Expr.Num(v: v) => v,\n        Expr.Add(l: l, r: r) => eval(box_get(l)) + eval(box_get(r)),\n        Expr.Neg(e: x) => 0 - eval(box_get(x)),\n    }\n}\n\nfn count(n: Node) -> Int {\n    let mut c = 1;\n    for k in n.kids { c = c + count(k); }\n    c\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    // A tree of boxes: 1 + -(5).\n    let e = Expr.Add(l: box_new(Expr.Num(v: 1)), r: box_new(Expr.Neg(e: box_new(Expr.Num(v: 5)))));\n    show(out, num_to_str(eval(e)));\n    // A box is shared: two references, one value.\n    let b = box_new(\"shared\");\n    let c = b;\n    show(out, str_concat(box_get(b), box_get(c)));\n    // A list is a snapshot: what is pushed onto the vector afterwards does not reach it.\n    let leaves = vec_new[Node]();\n    vec_push(leaves, Node(name: \"a\", kids: chain_empty[Node]()));\n    vec_push(leaves, Node(name: \"b\", kids: chain_empty[Node]()));\n    let root = Node(name: \"r\", kids: chain_from_vec(leaves));\n    vec_push(leaves, Node(name: \"late\", kids: chain_empty[Node]()));\n    show(out, num_to_str(count(root)));\n    show(out, num_to_str(chain_len(root.kids)));\n    show(out, chain_get(root.kids, 1).name);\n    // Nested: a list of lists.\n    let row = vec_new[Int]();\n    vec_push(row, 7);\n    let rows = vec_new[Chain[Int]]();\n    vec_push(rows, chain_from_vec(row));\n    vec_push(rows, chain_empty[Int]());\n    let grid = chain_from_vec(rows);\n    show(out, num_to_str(chain_get(chain_get(grid, 0), 0) + chain_len(chain_get(grid, 1))));\n    0\n}\n";
+
+/// What the section's rules give, worked out by hand.
+const EXPECTED: Str = "-4\nsharedshared\n3\n2\nb\n7\n";
+
+@test
+fn trees_of_boxes_and_lists_mean_the_same_everywhere_and_are_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for run1 in everywhere_f(h, TREES)? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_starts_with(r.stdout, EXPECTED), who)?;
+        if who != "lir oracle" {
+            let line = report(r)?;
+            check_that(nothing_live(line), who)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+const DEEP: Str = "enum Chain { End, Link(v: Int, next: Box[Chain]), }\nfn length(c: Chain) -> Int {\n    let mut n = 0;\n    let mut at = c;\n    let mut going = true;\n    while going {\n        match at {\n            Chain.End() => { going = false; },\n            Chain.Link(v: v, next: next) => { n = n + 1; at = box_get(next); },\n        }\n    }\n    n\n}\nfn main(out: OutCap) -> Int ! {io} {\n    let mut c = Chain.End();\n    let mut i = 0;\n    while i < 1000000 {\n        c = Chain.Link(v: i, next: box_new(c));\n        i = i + 1;\n    }\n    print(str_concat(num_to_str(length(c)), \"\\n\"));\n    0\n}\n";
+
+@test
+fn a_million_deep_value_is_released_without_a_million_frames(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Release is a worklist, not recursion (`docs/spec.md`, *Release is not recursion*): before
+    // R1a's queue, the interpreter overflowed its stack and a compiled program died releasing
+    // this, its memory report never written.
+    let d = scratch_new(h);
+    scratch_write(h, d, "deep.nz", DEEP)?;
+    let runs = deep_runs(h, d)?;
+    for run4 in runs {
+        let who = run4.label;
+        let r = run4.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_starts_with(r.stdout, "1000000\n"), who)?;
+        let line = report(r)?;
+        check_that(text_contains(line, "sequences allocated=1000000 reclaimed=1000000 live=0"), who)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_ownership_rule_accepts_immutable_cycles_and_refuses_counted_ones(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let wants = strs_new();
+    strs_push(srcs, "struct Node { next: Option[Box[Node]], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "");
+    strs_push(srcs, "struct T[X] { v: X, kids: Chain[T[X]], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "");
+    strs_push(srcs, "enum E { Leaf, Pair(a: Box[E], b: Chain[E]), }\nfn main() -> Int { 0 }");
+    strs_push(wants, "");
+    strs_push(srcs, "struct W[T] { items: Chain[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "");
+    strs_push(srcs, "struct W[T] { items: Vec[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct H[T] { b: Box[Vec[T]], }\nstruct Node { h: H[Node], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct H[T] { b: Vec[Box[T]], }\nstruct Node { h: H[Node], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct Node { kids: Vec[Node], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct Node { kids: Box[Vec[Node]], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct A { kids: Vec[B], }\nstruct B { up: Box[A], }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0359");
+    strs_push(srcs, "struct A { b: B, }\nstruct B { a: A, }\nfn main() -> Int { 0 }");
+    strs_push(wants, "N0336");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        same_strs(strs_get(srcs, i), codes_b(h, strs_get(srcs, i))?, words(strs_get(wants, i)))?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn a_box_or_list_is_neither_ordered_nor_given_to_a_task_nor_written_bare(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Equal by what it holds since L6, but not ordered.
+    let w5 = strs_new();
+    same_strs("codes", codes(h, "fn main() -> Int { let a = box_new(1); if a == a { 1 } else { 0 } }"), w5)?;
+    let w6 = strs_new();
+    strs_push(w6, "N0304");
+    same_strs("codes", codes_b(h, "fn main() -> Int { let a = box_new(1); if a < a { 1 } else { 0 } }")?, w6)?;
+    let firsts = codes_b(h, "fn w(l: Chain[Int]) -> Int { 0 }\nfn main() -> Int ! {spawn} { let l = chain_empty[Int](); scope { spawn w(l); } 0 }")?;
+    check_that(strs_len(firsts) > 0 && strs_get(firsts, 0) == "N0321", str_join(firsts, ", "))?;
+    let w7 = strs_new();
+    strs_push(w7, "N0352");
+    same_strs("codes", codes_b(h, "fn f(b: Box) -> Int { 0 }\nfn main() -> Int { 0 }")?, w7)?;
+    // A closure may capture a `Chain` that holds function values: nothing can be added to it.
+    // A `Vec` that may hold one is still refused (`N0616`).
+    let w8 = strs_new();
+    same_strs("codes", codes(h, "fn main() -> Int { let fs = chain_empty[fn() -> Int](); let f = fn() -> Int { chain_len(fs) }; f() }"), w8)?;
+    let w9 = strs_new();
+    strs_push(w9, "N0616");
+    same_strs("codes", codes_b(h, "fn main() -> Int { let fs = vec_new[fn() -> Int](); let f = fn() -> Int { vec_len(fs) }; f() }")?, w9)?;
+    ok()
+}
+
+@test
+fn the_new_names_are_prelude_names_a_1_0_program_keeps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A 1.0 program's own `Box` type and `box_new` function mean what they meant.
+    let r = run_p(h, "struct Box { v: Int, }\nfn box_new(x: Int) -> Box { Box(v: x + 1) }\nfn main() -> Int { box_new(41).v }\n")?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_starts_with(r.stdout, "42"), r.stdout)?;
+    let r_2 = run_p(h, "struct List { n: Int, }\nfn main() -> Int { List(n: 9).n }\n")?;
+    check_that(text_starts_with(r_2.stdout, "9"), r_2.stdout)?;
+    let r_3 = run_p(h, "struct Chain { n: Int, }\nfn main() -> Int { Chain(n: 8).n }\n")?;
+    check_that(text_starts_with(r_3.stdout, "8"), r_3.stdout)?;
+    // The built-ins of 1.0 are still never shadowed.
+    let w10 = strs_new();
+    strs_push(w10, "N0203");
+    same_strs("codes", codes_b(h, "fn vec_new(x: Int) -> Int { x }\nfn main() -> Int { 0 }")?, w10)?;
+    ok()
+}
+
+@test
+fn what_an_indirection_holds_carries_its_provenance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file's contents in a box, or in a list made from a vector, may not name a written file
+    // (`N0372`); a literal through the same may.
+    let w11 = strs_new();
+    strs_push(w11, "N0372");
+    same_strs("codes", codes_b(h, "fn main(io: IoCap) -> Int ! { io } { let b = box_new(read_file(\"cfg\")); write_file(box_get(b), \"x\") }\n")?, w11)?;
+    let w12 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let b = box_new(\"out.txt\"); write_file(box_get(b), \"x\") }\n"), w12)?;
+    let w13 = strs_new();
+    strs_push(w13, "N0372");
+    same_strs("codes", codes_b(h, "fn main(io: IoCap) -> Int ! { io } { let v = vec_new[Str](); vec_push(v, read_file(\"cfg\")); let l = chain_from_vec(v); for p in l { write_file(p, \"x\"); } 0 }\n")?, w13)?;
+    let w14 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let v = vec_new[Str](); vec_push(v, \"out.txt\"); let l = chain_from_vec(v); write_file(chain_get(l, 0), \"x\") }\n"), w14)?;
+    ok()
+}
+
+@test
+fn a_box_type_crosses_a_modules_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A module publishes a recursive type and a function over it; its importer builds, checks
+    // twice — the second time from the persisted interface — and runs.
+    let d = scratch_new(h);
+    scratch_write(h, d, "tree.nz", "pub enum T { Leaf(v: Int), Node(l: Box[T], r: Box[T]), }\npub fn sum(t: T) -> Int { match t { T.Leaf(v: v) => v, T.Node(l: l, r: r) => sum(box_get(l)) + sum(box_get(r)), } }\npub fn pair(a: Int, b: Int) -> T { T.Node(l: box_new(T.Leaf(v: a)), r: box_new(T.Leaf(v: b))) }\n")?;
+    scratch_write(h, d, "main.nz", "use \"tree.nz\";\nfn main() -> Int { sum(pair(20, 22)) }\n")?;
+    let mut i15 = 0;
+    while i15 < 2 {
+        let c = run(h, nazm_bin(h.io), words("check main.nz"), d, suite_env(h));
+        check_that(c.code == 0, ran_show(c))?;
+    
+        i15 = i15 + 1;
+    }
+    let r = run(h, nazm_bin(h.io), words("run --interpret main.nz"), d, suite_env(h));
+    check_that(text_starts_with(r.stdout, "42"), r.stdout)?;
+    scratch_remove(h, d);
+    ok()
+}
+

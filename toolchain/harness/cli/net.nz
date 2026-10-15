@@ -1,0 +1,149 @@
+// `@std/net`: TCP and UDP through the library, alike under the interpreter and both backends; a
+// failed write a program goes on from; a socket wait on the pool releases the only worker; what
+// a socket needs. Ported from `crates/nazm-cli/tests/net.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `body` after the imports and `LINE`.
+fn prog(body: Str) -> Str ! {} {
+    f"use \"@std/ioerror\";\nuse \"@std/net\";\n{LINE}{body}"
+}
+
+/// `exe` under `bounded_exe` in `dir`, with one worker and the scheduler report, ended at 30 s.
+fn pool_run(h: Caps, exe: Str, dir: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, exe);
+    let env = env_set(env_set(suite_env(h), "NAZM_WORKERS", "1"), "NAZM_SCHEDULER_REPORT", "1");
+    let r = run_within(h, "sh", a, dir, env, 30000);
+    check_that(r.code != TIMED_OUT, f"{exe}: a socket wait held the only worker")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+const LINE: Str = "fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\n";
+
+@test
+fn an_echo_server_answers_clients_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn serve(l: TcpListener, n: Int) -> Int ! { io } {\nlet mut k = 0;\nwhile k < n {\nmatch tcp_accept(l) {\nResult.Ok(value: c) => {\nlet buf = bytes_new(5);\ntcp_read_exact(c, buf);\ntcp_write(c, buf);\ntcp_close(c);\n},\nResult.Err(error: e) => {},\n};\nk = k + 1;\n}\n0\n}\nfn ask(net: NetCap, addr: Str, word: Str) -> Str ! { io } {\nmatch tcp_connect(net, addr, 2000) {\nResult.Ok(value: c) => {\ntcp_write_str(c, word);\nlet buf = bytes_new(5);\nlet got = match tcp_read_exact(c, buf) { Result.Ok(value: n) => bytes_to_str(buf), Result.Err(error: e) => io_kind_name(e.kind), };\nlet peer = tcp_peer_addr(c);\ntcp_close(c);\nif peer == addr { got } else { \"wrong peer\" }\n},\nResult.Err(error: e) => io_kind_name(e.kind),\n}\n}\nfn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {\nmatch tcp_listen(net, \"127.0.0.1:0\") {\nResult.Ok(value: l) => {\nlet addr = tcp_listener_addr(l);\nline(out, if str_len(addr) > 10 && str_slice(addr, 0, 10) == \"127.0.0.1:\" { \"listening\" } else { addr });\nscope {\nspawn serve(l, 3);\nline(out, ask(net, addr, \"alpha\"));\nline(out, ask(net, addr, \"bravo\"));\nline(out, ask(net, addr, \"delta\"));\n}\ntcp_listener_close(l);\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n0\n}\n");
+    agrees(h, src, "listening\nalpha\nbravo\ndelta\n0")?;
+    ok()
+}
+
+@test
+fn a_datagram_goes_and_comes_back_with_its_sender(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn main(net: NetCap, out: OutCap) -> Int {\nmatch udp_bind(net, \"127.0.0.1:0\") {\nResult.Ok(value: u) => {\nlet me = udp_local_addr(u);\nline(out, match udp_send_to(net, u, bytes_from_str(\"ping!\"), me) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });\nlet buf = bytes_new(4);\nmatch udp_recv_from(u, buf) {\nResult.Ok(value: d) => {\nline(out, int_to_str(d.size));\nline(out, bytes_to_str(buf));\nline(out, if d.from == me { \"from itself\" } else { d.from });\n},\nResult.Err(error: e) => { line(out, io_kind_name(e.kind)); },\n};\nudp_set_timeout(u, 50);\nline(out, match udp_recv_from(u, buf) { Result.Ok(value: d) => \"got one\", Result.Err(error: e) => io_kind_name(e.kind), });\nudp_close(u);\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n0\n}\n");
+    // A datagram longer than the buffer is cut to it.
+    agrees(h, src, "5\n4\nping\nfrom itself\nTimedOut\n0")?;
+    ok()
+}
+
+/// A deadline is honoured to the time it has left, on a thread and on a pool task alike. Twenty
+/// reads with a 1 ms deadline take tens of milliseconds. The deadline was once measured on the wall
+/// clock while the timed wait it was handed measures the monotonic one (Q1-M-12), so a thread
+/// waited out the wait's 100 ms cap on every read — two seconds — and a pool task, whose wait
+/// never reached a wall-clock time on the monotonic clock, never timed out at all.
+@test
+fn a_short_deadline_ends_the_wait_when_it_passes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn twenty(u: UdpSocket, tm: TimeCap) -> Str ! { io } {\nlet buf = bytes_new(4);\nlet t0 = time_now_ms();\nlet mut timed_out = 0;\nlet mut i = 0;\nwhile i < 20 {\nmatch udp_recv_from(u, buf) { Result.Ok(value: d) => {}, Result.Err(error: e) => { if io_kind_name(e.kind) == \"TimedOut\" { timed_out = timed_out + 1; } }, };\ni = i + 1;\n}\nlet took = time_now_ms() - t0;\nstr_concat(int_to_str(timed_out), if took < 1000 { \" in time\" } else { str_concat(\" late: \", int_to_str(took)) })\n}\nfn on_a_task(u: UdpSocket, tm: TimeCap, answer: Chan[Str]) -> Int ! { io } {\nchan_send_of(answer, twenty(u, tm));\n0\n}\nfn main(net: NetCap, t: SpawnCap, tm: TimeCap, out: OutCap) -> Int {\nmatch udp_bind(net, \"127.0.0.1:0\") {\nResult.Ok(value: u) => {\nudp_set_timeout(u, 1);\nline(out, twenty(u, tm));\nlet answer = chan_new_of[Str](1);\nlet v = vec_new[Str]();\nscope {\nspawn on_a_task(u, tm, answer);\nif chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, \"no answer\"); };\n}\nudp_close(u);\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n0\n}\n");
+    agrees(h, src, "20 in time\n20 in time\n0")?;
+    ok()
+}
+
+@test
+fn failures_are_values_of_their_kind(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn kind_of_listen(net: NetCap, a: Str) -> Str ! { io } {\nmatch tcp_listen(net, a) { Result.Ok(value: l) => \"listening\", Result.Err(error: e) => io_kind_name(e.kind), }\n}\nfn main(net: NetCap, out: OutCap) -> Int {\nmatch tcp_listen(net, \"127.0.0.1:0\") {\nResult.Ok(value: l) => {\nlet addr = tcp_listener_addr(l);\nline(out, kind_of_listen(net, addr));\ntcp_listener_set_timeout(l, 50);\nline(out, match tcp_accept(l) { Result.Ok(value: c) => \"accepted\", Result.Err(error: e) => io_kind_name(e.kind), });\ntcp_listener_close(l);\nline(out, match tcp_connect(net, addr, 2000) { Result.Ok(value: c) => \"connected\", Result.Err(error: e) => io_kind_name(e.kind), });\nline(out, match tcp_accept(l) { Result.Ok(value: c) => \"accepted\", Result.Err(error: e) => io_kind_name(e.kind), });\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\nline(out, kind_of_listen(net, \"localhost:80\"));\nline(out, kind_of_listen(net, \"127.0.0.1:65536\"));\nline(out, kind_of_listen(net, \"[127.0.0.1]:80\"));\nline(out, kind_of_listen(net, \"127.0.0.1\"));\nline(out, match net_resolve(net, \"127.0.0.1\", 8080) { Result.Ok(value: all) => str_join(all, \",\"), Result.Err(error: e) => io_kind_name(e.kind), });\nline(out, match net_resolve(net, \"localhost\", 7) { Result.Ok(value: all) => if strs_contains_any(all, \"127.0.0.1:7\") { \"localhost\" } else { str_join(all, \",\") }, Result.Err(error: e) => io_kind_name(e.kind), });\n0\n}\nfn strs_contains_any(xs: Strs, x: Str) -> Bool {\nlet mut i = 0;\nwhile i < strs_len(xs) { if strs_get(xs, i) == x { return true; } i = i + 1; }\nfalse\n}\n");
+    agrees(h, src, "AddressInUse\nTimedOut\nConnectionRefused\nClosed\nInvalidInput\nInvalidInput\nInvalidInput\nInvalidInput\n127.0.0.1:8080\nlocalhost\n0")?;
+    ok()
+}
+
+@test
+fn a_close_wakes_a_task_waiting_on_the_socket(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn wait_for_data(c: TcpStream, ready: Chan, answer: Chan[Str]) -> Int ! { io } {\nchan_send(ready, 1);\nlet buf = bytes_new(8);\nchan_send_of(answer, match tcp_read(c, buf) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });\n0\n}\nfn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {\nmatch tcp_listen(net, \"127.0.0.1:0\") {\nResult.Ok(value: l) => {\nmatch tcp_connect(net, tcp_listener_addr(l), 2000) {\nResult.Ok(value: c) => {\nlet ready = chan_new(1);\nlet answer = chan_new_of[Str](1);\nlet r = ints_new();\nlet v = vec_new[Str]();\nscope {\nspawn wait_for_data(c, ready, answer);\nchan_recv(ready, r);\ntcp_close(c);\nif chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, \"no answer\"); };\n}\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n0\n}\n");
+    // Whether the close lands before the read parks or while it waits, the read answers `Closed`.
+    agrees(h, src, "Closed\n0")?;
+    ok()
+}
+
+@test
+fn writing_to_a_peer_that_has_gone_is_an_error_and_never_a_signal(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = prog("fn hang_up(l: TcpListener) -> Int ! { io } {\nmatch tcp_accept(l) { Result.Ok(value: c) => { tcp_close(c); }, Result.Err(error: e) => {}, };\n0\n}\nfn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {\nmatch tcp_listen(net, \"127.0.0.1:0\") {\nResult.Ok(value: l) => {\nmatch tcp_connect(net, tcp_listener_addr(l), 2000) {\nResult.Ok(value: c) => {\nscope { spawn hang_up(l); }\nlet data = bytes_from_str(\"0123456789abcdef\");\nlet buf = bytes_new(1);\ntcp_set_timeout(c, 5);\nlet mut tries = 0;\nlet mut failed = false;\nwhile tries < 400 && !failed {\nmatch tcp_write(c, data) { Result.Ok(value: n) => {}, Result.Err(error: e) => { failed = true; }, };\ntcp_read(c, buf);\ntries = tries + 1;\n}\nline(out, if failed { \"the write failed, and the program goes on\" } else { \"every write went\" });\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n},\nResult.Err(error: e) => { line(out, io_error_show(e)); },\n};\n0\n}\n");
+    // How many writes go before the peer's reset arrives is the system's timing, so only what the
+    // program says and how it ends are compared — a `SIGPIPE` would end it with no output at all.
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    let texts = strs_new();
+    strs_push(texts, src);
+    for run_ in everywhere(h, names, texts)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == "the write failed, and the program goes on\n0", f"{who}: {r.stdout}")?;
+    }
+    ok()
+}
+
+/// The property §10 exists for: on the task pool, a task waiting on a socket releases its worker.
+/// With one worker, eight tasks wait to accept and read while a ninth computes; if any wait held
+/// the worker, the computation could never run and the program would not end.
+const POOL: Str = "fn reader(l: OsHandle, done: Chan) -> Int {\nlet c = os_tcp_accept(l);\nlet buf = bytes_new(8);\nlet n = os_read(c, buf);\nos_close(c);\nchan_send(done, n);\n0\n}\nfn busy(result: Chan) -> Int {\nlet mut i = 0;\nlet mut s = 0;\nwhile i < 100000 { s = s + i % 7; i = i + 1; }\nchan_send(result, s);\n0\n}\nfn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {\nlet l = os_tcp_listen(\"127.0.0.1:0\");\nlet addr = os_local_addr(l);\nlet done = chan_new(16);\nlet result = chan_new(1);\nlet got = ints_new();\nlet one = ints_new();\nscope {\nlet mut k = 0;\nwhile k < 8 { spawn reader(l, done); k = k + 1; }\nspawn busy(result);\nchan_recv(result, got);\nlet mut j = 0;\nwhile j < 8 { let c = os_tcp_connect(addr, 2000); os_write(c, bytes_from_str(\"x\")); j = j + 1; }\nlet mut m = 0;\nwhile m < 8 { chan_recv(done, one); m = m + 1; }\n}\nprint(str_concat(int_to_str(ints_get(got, 0)), str_concat(\" \", int_to_str(ints_len(one)))));\n0\n}\n";
+
+@test
+fn a_task_waiting_on_a_socket_does_not_hold_its_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", POOL)?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_trim_end(r.stdout) == "299995 80", "assert_eq!(text_trim_end(r.stdout), \"299995 80\");")?;
+    let backends1 = strs_new();
+    strs_push(backends1, "llvm");
+    strs_push(backends1, "cranelift");
+    for backend in backends1 {
+        let exe = f"{d}/{backend}";
+        let l2 = strs_new();
+        strs_push(l2, "build");
+        strs_push(l2, "--no-cache");
+        strs_push(l2, "--backend");
+        strs_push(l2, backend);
+        strs_push(l2, "prog.nz");
+        strs_push(l2, "-o");
+        strs_push(l2, exe);
+        let b = nazm(h, d, l2);
+        check_that(b.code == 0, ran_show(b))?;
+        let ran = pool_run(h, exe, d)?;
+        check_that(ran.code == 0, ran_show(ran))?;
+        check_that(text_trim_end(ran.stdout) == "299995 80", backend)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_network_is_its_own_authority(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Naming an address needs a `NetCap`; an `IoCap` is files, not the network.
+    let no_net = "fn main(io: IoCap) -> Int ! { io } { os_status(os_tcp_listen(\"127.0.0.1:0\")) }\n";
+    check_that(strs_has(codes(h, no_net), "N0369"), "assert!(strs_has(codes(h, no_net), \"N0369\"), \"{:?}\", codes(h, no_net));")?;
+    let resolve = "fn main(io: IoCap) -> Int ! { io } { os_resolve(\"localhost\", 1, bytes_new(64)) }\n";
+    check_that(strs_has(codes(h, resolve), "N0369"), "assert!(strs_has(codes(h, resolve), \"N0369\"), \"{:?}\", codes(h, resolve));")?;
+    // A socket already open is its own authority: a function handed one needs nothing else.
+    let handed = "use \"@std/ioerror\";\nuse \"@std/net\";\nfn reply(s: TcpStream) -> Int ! { io } { match tcp_write_str(s, \"hi\") { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, } }\nfn main() -> Int { 0 }\n";
+    check_that((strs_len(codes(h, handed)) == 0), "assert!((strs_len(codes(h, handed)) == 0), \"{:?}\", codes(h, handed));")?;
+    // What a socket says is outside data, as a file's is: it may not name where a file is written.
+    let sink = "fn main(net: NetCap, io: IoCap) -> Int ! { io } {\nlet u = os_udp_bind(\"127.0.0.1:0\");\nlet b = bytes_new(64);\nlet f = bytes_new(64);\nos_udp_recv_from(u, b, f);\nwrite_file(bytes_to_str(b), \"x\")\n}\n";
+    check_that(strs_has(codes(h, sink), "N0372"), "assert!(strs_has(codes(h, sink), \"N0372\"), \"{:?}\", codes(h, sink));")?;
+    ok()
+}
+
