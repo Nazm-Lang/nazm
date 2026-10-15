@@ -14,6 +14,9 @@
 # Prints `N agree, M differ, K refused, S skipped`.
 set -u
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
+# the runtime change); the 0.10.0 release above only builds the generator.
+REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
@@ -22,7 +25,7 @@ ARCH=${TARGET%%-*}
 [ "$ARCH" = aarch64 ] && ARCH=arm64
 NZCG=$OUT/nzcg
 DWARFDUMP=${DWARFDUMP:-$(xcrun -f llvm-dwarfdump 2>/dev/null || echo /Library/Developer/CommandLineTools/usr/bin/llvm-dwarfdump)}
-if ! "$NAZM" lir --help 2>/dev/null | grep -q -- '--debug'; then
+if ! "$REF" lir --help 2>/dev/null | grep -q -- '--debug'; then
   echo "skipped: $NAZM has no \`lir --debug\`"; exit 0
 fi
 mkdir -p "$OUT"
@@ -51,9 +54,9 @@ for src in "${inputs[@]}"; do
   rel=${src#"$ROOT"/}
   W=$OUT/lines-$TARGET/$(echo "$rel" | tr '/.' '__')
   rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-  if ! "$NAZM" build --target "$TARGET" --debug "$src" -o "$W/ref" >/dev/null 2>&1 ||
-     ! "$NAZM" build --target "$TARGET" --debug --objects "$W/obj" "$src" >/dev/null 2>&1 ||
-     ! "$NAZM" lir --target "$TARGET" --ops --debug "$src" >"$W/lir.txt" 2>/dev/null; then
+  if ! "$REF" build --target "$TARGET" --debug "$src" -o "$W/ref" >/dev/null 2>&1 ||
+     ! "$REF" build --target "$TARGET" --debug --objects "$W/obj" "$src" >/dev/null 2>&1 ||
+     ! "$REF" lir --target "$TARGET" --ops --debug "$src" >"$W/lir.txt" 2>/dev/null; then
     skipped=$((skipped+1)); echo "skipped  $rel"; continue
   fi
   "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
@@ -63,7 +66,7 @@ for src in "${inputs[@]}"; do
   why=""
   k=0; list=()
   for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
-    if [[ $o =~ -m[0-9]+\.o$ ]]; then
+    if [[ $o =~ -[mg][0-9]+\.o$ ]]; then
       ours=$W/gen/unit-$k.o; theirs=$W/obj/$o
       "$DWARFDUMP" --verify "$ours" >"$W/verify-$k.txt" 2>&1 || why="$why verify($o)"
       rows "$ours" >"$W/ours-$k.rows"

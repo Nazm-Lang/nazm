@@ -15,6 +15,9 @@
 # `N structurally sound, M not, K refused` per target.
 set -u
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
+# the runtime change); the 0.10.0 release above only builds the generator.
+REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
@@ -22,7 +25,7 @@ NZCG=$OUT/nzcg
 OBJDUMP=${OBJDUMP:-$(xcrun -f llvm-objdump 2>/dev/null || echo /Library/Developer/CommandLineTools/usr/bin/llvm-objdump)}
 DWARFDUMP=${DWARFDUMP:-$(xcrun -f llvm-dwarfdump 2>/dev/null || echo /Library/Developer/CommandLineTools/usr/bin/llvm-dwarfdump)}
 DEBUG=()
-"$NAZM" lir --help 2>/dev/null | grep -q -- '--debug' && DEBUG=(--debug)
+"$REF" lir --help 2>/dev/null | grep -q -- '--debug' && DEBUG=(--debug)
 mkdir -p "$OUT"
 "$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log"; exit 2; }
 if [ $# -gt 0 ]; then
@@ -56,8 +59,8 @@ for target in aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
     rel=${src#"$ROOT"/}
     W=$OUT/elf-$target/$(echo "$rel" | tr '/.' '__')
     rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-    if ! "$NAZM" build --target "$target" ${DEBUG[@]+"${DEBUG[@]}"} --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
-       ! "$NAZM" lir --target "$target" --ops ${DEBUG[@]+"${DEBUG[@]}"} "$src" >"$W/lir.txt" 2>/dev/null; then
+    if ! "$REF" build --target "$target" ${DEBUG[@]+"${DEBUG[@]}"} --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
+       ! "$REF" lir --target "$target" --ops ${DEBUG[@]+"${DEBUG[@]}"} "$src" >"$W/lir.txt" 2>/dev/null; then
       continue
     fi
     "$NZCG" --target "$target" "$W/lir.txt" "$W/gen" >/dev/null 2>"$W/gen.err"
@@ -67,7 +70,7 @@ for target in aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
     why=""
     k=0
     for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
-      [[ $o =~ -m[0-9]+\.o$ ]] || continue
+      [[ $o =~ -[mg][0-9]+\.o$ ]] || continue
       ours=$W/gen/unit-$k.o; theirs=$W/obj/$o; k=$((k+1))
       if "$OBJDUMP" -d -r -t "$ours" >"$W/dump-$k.txt" 2>"$W/dump-$k.err"; then :; else why="$why objdump-failed"; fi
       [ -s "$W/dump-$k.err" ] && why="$why objdump-warned"

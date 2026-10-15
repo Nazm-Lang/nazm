@@ -7,12 +7,13 @@
 # The target is aarch64-apple-darwin unless NZCG_TARGET says otherwise; x86_64-apple-darwin runs
 # under Rosetta on an arm64 Mac.
 #
-# Builds the generator with the prebuilt `nazm` ($NAZM), then for each input (by default
+# Builds the generator with the 0.10.0 release ($NAZM); the reference is the Rust `nazm` built from
+# this checkout ($NAZM_REF, by default CARGO_TARGET_DIR=~/.cache/nazm-target-track9). For each input (by default
 # bench/compare/nazm/fib.nz, every program of tests/compat/v1/run/ and every corpus program):
 #
 #   reference  `nazm build FILE` (LLVM), run;
-#   generated  `nazm build --objects DIR FILE`, its unit objects replaced by the generator's for
-#              `nazm lir --ops FILE`, linked with `cc` in link.txt's order, run;
+#   generated  `nazm build --objects DIR FILE`, every unit object (a module's and a generic
+#              instantiation's) replaced by the generator's for `nazm lir --ops FILE`, linked with `cc` in link.txt's order, run;
 #
 # and compares standard output, standard error and exit status byte for byte. An input the
 # generator refuses is `refused`; one the reference cannot build is `skipped`; neither is ever
@@ -20,6 +21,9 @@
 # `N agree, M differ, K refused, S skipped`. Exit status 0 only when nothing differs.
 set -u
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
+# the runtime change); the 0.10.0 release above only builds the generator.
+REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
@@ -60,11 +64,11 @@ for src in "${inputs[@]}"; do
   name=$(echo "$rel" | tr '/.' '__')
   W=$WORK/$name
   rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-  if ! "$NAZM" build --target "$TARGET" "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
+  if ! "$REF" build --target "$TARGET" "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
     echo "skipped  $rel (the reference does not build)"; skipped=$((skipped+1)); continue
   fi
-  if ! "$NAZM" build --target "$TARGET" --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
-     ! "$NAZM" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
+  if ! "$REF" build --target "$TARGET" --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
+     ! "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi
   "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
@@ -85,11 +89,17 @@ for src in "${inputs[@]}"; do
   libs=$(sed -n 's/^libraries //p' "$W/obj/link.txt")
   k=0; list=()
   for o in $objs; do
-    if [[ $o =~ -m[0-9]+\.o$ ]]; then
+    if [[ $o =~ -[mg][0-9]+\.o$ ]]; then
       cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1))
     fi
     list+=("$W/obj/$o")
   done
+  # Every unit object — a module's (-mK) and a generic instantiation's (-gK) — is the
+  # generator's: on hosted targets LLVM's objects unwind on a failure and the generator's keep
+  # the bit (performance-leadership 4.2), so the two are never mixed in one program.
+  if [ "$k" -ne "$(ls "$W/gen" | wc -l)" ]; then
+    echo "differ   $rel: $k unit objects in link.txt, $(ls "$W/gen" | wc -l | tr -d ' ') written"; differ=$((differ+1)); continue
+  fi
   if ! cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" $libs >"$W/link.log" 2>&1; then
     echo "differ   $rel: the link failed: $(head -3 "$W/link.log")"; differ=$((differ+1)); continue
   fi

@@ -11,6 +11,9 @@
 # Nazm reads every `.nz` file there and does not know foreign declarations (examples/ffi).
 set -u
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
+# the runtime change); the 0.10.0 release above only builds the generator.
+REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
 TARGET=${NZCG_TARGET:-aarch64-apple-darwin}
@@ -64,13 +67,13 @@ fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
 }
 EOF
 cc -arch "$ARCH" -c "$W/walk.c" -o "$W/walk.o" || exit 2
-"$NAZM" build --target "$TARGET" "$W/uw.nz" --link "$W/walk.o" -o "$W/ref" >"$W/ref.build" 2>&1 || { cat "$W/ref.build"; exit 2; }
-"$NAZM" build --target "$TARGET" --objects "$W/obj" "$W/uw.nz" >"$W/obj.build" 2>&1 || { cat "$W/obj.build"; exit 2; }
-"$NAZM" lir --target "$TARGET" --ops "$W/uw.nz" >"$W/lir.txt" || exit 2
+"$REF" build --target "$TARGET" "$W/uw.nz" --link "$W/walk.o" -o "$W/ref" >"$W/ref.build" 2>&1 || { cat "$W/ref.build"; exit 2; }
+"$REF" build --target "$TARGET" --objects "$W/obj" "$W/uw.nz" >"$W/obj.build" 2>&1 || { cat "$W/obj.build"; exit 2; }
+"$REF" lir --target "$TARGET" --ops "$W/uw.nz" >"$W/lir.txt" || exit 2
 "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" || exit 2
 k=0; list=()
 for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
-  if [[ $o =~ -m[0-9]+\.o$ ]]; then cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1)); fi
+  if [[ $o =~ -[mg][0-9]+\.o$ ]]; then cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1)); fi
   list+=("$W/obj/$o")
 done
 cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" "$W/walk.o" $(sed -n 's/^libraries //p' "$W/obj/link.txt") || exit 2
