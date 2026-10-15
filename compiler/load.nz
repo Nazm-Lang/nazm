@@ -294,7 +294,24 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
                         str_concat(str_concat("looked for `", target), "`, relative to the importing file"));
             }
         }
-        // Pushed in reverse, so they are read in source order.
+        // The prelude's standard modules a program module names (R1.5, D9).
+        let mut given = strs_new();
+        if is_std == false {
+            let written = strs_new();
+            let mut w = 0;
+            while w < strs_len(children) {
+                if ints_get(children_std, w) == 1 { strs_push(written, strs_get(children, w)); }
+                w = w + 1;
+            }
+            given = prelude_named(table, text, written);
+        }
+        // Pushed in reverse, so they are read in source order; the prelude's after the written.
+        let mut g = strs_len(given) - 1;
+        while g >= 0 {
+            strs_push(stack, strs_get(given, g));
+            ints_push(stack_std, 1);
+            g = g - 1;
+        }
         let mut c = strs_len(children) - 1;
         while c >= 0 {
             strs_push(stack, strs_get(children, c));
@@ -306,17 +323,7 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
         strs_push(texts, ld_with_newline(text));
         ints_push(tfirst, strs_len(targets));
         ints_push(tcount, strs_len(named));
-        if is_std {
-            strs_push(implicit, "");
-        } else {
-            let written = strs_new();
-            let mut w = 0;
-            while w < strs_len(children) {
-                if ints_get(children_std, w) == 1 { strs_push(written, strs_get(children, w)); }
-                w = w + 1;
-            }
-            strs_push(implicit, str_join(prelude_named(table, text, written), ","));
-        }
+        strs_push(implicit, str_join(given, ","));
         let mut k = 0;
         while k < strs_len(named) {
             strs_push(targets, strs_get(named, k));
