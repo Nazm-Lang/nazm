@@ -181,8 +181,10 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
     let mut any = false;
     while i < lines.len() {
         let line = lines.get(i).copied().unwrap_or("");
-        let Some(open) = line
-            .starts_with("define ")
+        // A definition the unit carries for the runtime, once per image (`linkonce_odr`: where
+        // failures unwind, `nz.raise` and its stop function, 4.2), is no Nazm function's code:
+        // no subprogram, no lines.
+        let Some(open) = (line.starts_with("define ") && !line.starts_with("define linkonce_odr "))
             .then(|| line.rfind(" {"))
             .flatten()
         else {
@@ -277,6 +279,14 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                 _ => None,
             })
             .unwrap_or((fline, 0));
+        // A function with no statement of its own — a plain entry, whose call of its body is an
+        // `invoke` with a landing pad where failures unwind (4.2) — ends its prologue at its
+        // entry block's branch: everything after it is at the function's line.
+        let statements = lines
+            .get(i + 1..end)
+            .unwrap_or(&[])
+            .iter()
+            .any(|l| l.trim().starts_with("; nz.loc "));
         for l in lines.get(i + 1..end).unwrap_or(&[]) {
             if let Some(rest) = l.trim().strip_prefix("; nz.loc ") {
                 if let [_, ln, col, ..] = numbers(rest)[..] {
@@ -289,16 +299,19 @@ pub(crate) fn attach(text: &str, file: &dyn Fn(u32) -> String) -> String {
                 let loc = meta.location(scope_of(&blocks, sp, first), first.0, first.1);
                 out.push_str(&with_location(l, loc));
                 out.push('\n');
+                prologue = statements;
                 continue;
             }
             // An intrinsic call carries no location either: LLVM needs one only on a call it could
             // inline, and since N105 a slot is zeroed by `llvm.memset`, which a line here would
             // make the row a debugger stops on — before the zeroing (N108).
+            // An `invoke` is a call (4.2): a plain entry's call of its body is one.
             let intrinsic = l.contains(" @llvm.");
-            if prologue
-                && instruction(l)
-                && (intrinsic || (!l.contains(" call ") && !l.trim_start().starts_with("call ")))
-            {
+            let call = [" call ", " invoke "].iter().any(|c| l.contains(c))
+                || ["call ", "invoke "]
+                    .iter()
+                    .any(|c| l.trim_start().starts_with(c));
+            if prologue && instruction(l) && (intrinsic || !call) {
                 out.push_str(l);
                 out.push('\n');
                 continue;

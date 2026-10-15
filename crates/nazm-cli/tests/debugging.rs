@@ -107,7 +107,11 @@ fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_in
             && !line.trim_start().starts_with(';')
             && !line.trim_end().ends_with('[');
         if inside && is_instruction {
-            let call = line.contains(" call ") || line.trim_start().starts_with("call ");
+            // An `invoke` is a call (4.2).
+            let call = line.contains(" call ")
+                || line.trim_start().starts_with("call ")
+                || line.contains(" invoke ")
+                || line.trim_start().starts_with("invoke ");
             if prologue && line.trim_start().starts_with("br ") {
                 assert!(
                     line.contains("!dbg"),

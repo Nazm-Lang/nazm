@@ -992,8 +992,13 @@ fn the_emitted_ir_for_a_conditional_is_well_formed() {
     assert!(ir.contains("icmp sgt i64"), "{ir}");
     assert!(ir.contains("br i1 %"), "{ir}");
     // Since N40 a value crosses MIR blocks in a slot, never a `phi`: each branch stores the
-    // `if`'s value into the one temporary MIR gave it, and the join reads it back.
-    assert!(!ir.contains(" = phi "), "{ir}");
+    // `if`'s value into the one temporary MIR gave it, and the join reads it back. The one `phi`
+    // is where an invoke's landing pad rejoins its normal path (4.2).
+    assert!(
+        !ir.lines()
+            .any(|l| l.contains(" = phi ") && !l.contains(", %lp.")),
+        "{ir}"
+    );
     let stored = ir
         .lines()
         .filter(|l| l.trim().starts_with("store i64 %"))
@@ -1627,8 +1632,10 @@ fn the_emitted_ir_for_a_multi_function_program_is_well_formed() {
             .any(|d| d.contains("(i64 %p0)") && d.ends_with("; main")),
         "nazm's main should take its one root, `out`:\n{ir}"
     );
+    // A Nazm function returns its result alone where failures unwind (4.2).
     assert!(
-        ir.contains("call {i64, i1} @nz.m.") && ir.contains("(i64 %"),
+        (ir.contains("call i64 @nz.m.") || ir.contains("invoke i64 @nz.m."))
+            && ir.contains("(i64 %"),
         "no typed call emitted:\n{ir}"
     );
     // The runtime helper lives in the same reserved space, so nothing can collide.
@@ -2093,9 +2100,9 @@ fn many_iterations_with_body_locals_allocate_once_in_the_entry_block() {
 
     let ir = emitted_ir(dir.path());
     // `main` is given `out: OutCap` (R1, 5b.1): its one parameter. Its body is under
-    // `main.body`, returning its failure bit beside its result (R1, 5b.8).
+    // `main.body`, returning its result alone: a failure unwinds (4.2).
     let body: &str = ir
-        .split("define hidden {i64, i1} @nz.m.prog_2Enz.main.body(i64 %p0)")
+        .split("define hidden i64 @nz.m.prog_2Enz.main.body(i64 %p0)")
         .nth(1)
         .expect("main's definition");
 
@@ -2592,11 +2599,14 @@ fn misplaced_transfers_and_unreachable_code_belong_to_the_checker() {
 ///
 /// Returns the number of blocks inspected, so a test cannot pass by finding nothing.
 fn assert_control_flow_is_well_formed(ir: &str) -> usize {
+    // An `invoke` ends its block too (4.2).
     let terminator = |l: &str| {
         l.starts_with("br ")
             || l.starts_with("ret ")
             || l == "unreachable"
             || l.starts_with("switch ")
+            || l.starts_with("invoke ")
+            || l.contains(" = invoke ")
     };
 
     let mut blocks = 0usize;
@@ -2726,9 +2736,12 @@ fn the_emitted_ir_for_nested_control_flow_is_well_formed() {
     // The value-position `if` whose `then` continues: since N40 its value reaches the join
     // through a slot, stored only by the branch that arrives — so no `phi` names a branch that
     // transferred. Since N105 there is no `phi` at all: a LIR value that crosses a join lives
-    // in a variable, and `Int::MIN % -1` divides by 1 instead of branching around `srem`.
+    // in a variable, and `Int::MIN % -1` divides by 1 instead of branching around `srem`. The one
+    // `phi` is where an invoke's landing pad rejoins its normal path (4.2).
     assert_eq!(
-        ir.lines().filter(|l| l.contains(" = phi ")).count(),
+        ir.lines()
+            .filter(|l| l.contains(" = phi ") && !l.contains(", %lp."))
+            .count(),
         0,
         "no phi in the program's code:\n{ir}"
     );
@@ -3031,11 +3044,15 @@ fn the_emitted_ir_for_a_return_heavy_function_is_well_formed() {
 
     // One `ret` per return site, and no more: since N105 every return site is a LIR `return`
     // — the three in `classify`, `main`'s, and each function's failure exit, since R1's 5b.8
-    // a LIR `fail` — and the LLVM text writes one `ret` for each.
+    // a LIR `fail` — and the LLVM text writes one `ret` for each, or, where failures unwind
+    // (4.2), one call of `nz.raise` for each `fail`. The unit's copy of `nz.raise` and its stop
+    // function are not its own functions.
     let unit = unit_ir(dir.path());
     let rets = unit
-        .lines()
-        .filter(|l| l.trim().starts_with("ret "))
+        .split("\ndefine ")
+        .filter(|f| !f.starts_with("linkonce_odr "))
+        .flat_map(str::lines)
+        .filter(|l| l.trim().starts_with("ret ") || l.trim() == "call void @nz.raise()")
         .count();
     assert_eq!(
         rets,
