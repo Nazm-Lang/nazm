@@ -198,6 +198,17 @@
       `requires` clauses as `clauses::literal` does — checked `Int` arithmetic, bit operators and
       shifts — and a false one refuted (N0615). `inputs/check/contracts.nz`. `run.sh check`:
       2,740 agree, 56 differ; the checker carries 2,667, all agree
+- [ ] 3.1z The C boundary (N42, N55, N85; `check/foreign.rs`, the C-struct rules of
+      `check/layout.rs`): `extern "C" struct`s — opaque handles (one unnamed pointer field) and
+      C layouts (N0380, N0384, N0381), never built or taken apart (N0611), with no equality, order
+      or crossing into a task; foreign functions — ABI, symbol and the runtime's reserved ones
+      (N0380, N0382, N0383), one signature per symbol (N0383), not generic, no effects written,
+      no effect parameter (N0384, N0388), what crosses each way (N0381), never a value (N0387), a
+      callback an export's name (N0612), the effect `foreign` and a `ForeignCap` at every call
+      (N0369); exports (N0391); provenance's summary of a foreign function (`Unknown`, from every
+      argument) and its step in the chain. `inputs/check/foreign.nz`,
+      `inputs/check/foreign-flows.nz`. `run.sh check`: 2,759 agree, 37 differ; the checker
+      carries 2,717, all agree (2,761 and 2,719 with the new cases)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

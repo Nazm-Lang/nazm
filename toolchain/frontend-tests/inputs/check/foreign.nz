@@ -1,0 +1,69 @@
+// Foreign functions, exports and C structs (N42, N55, N85): each rule refused once.
+extern "C" struct Handle;
+extern "C" struct Point {
+    x: Int,
+    ok: Bool,
+    h: Handle,
+}
+extern "C" struct Bad {
+    name: Str,
+    n: Int8,
+}
+extern "Rust" struct Odd {
+    x: Int,
+}
+extern "C" struct Pair[T] {
+    x: Int,
+}
+struct Plain {
+    x: Int,
+}
+
+extern "C" fn open_it(path: Str) -> Option[Handle] = "nz_open_it";
+extern "C" fn close_it(h: Handle) -> Int = "nz_close_it";
+extern "C" fn name_of(h: Handle) -> Option[Str] = "nz_name_of";
+extern "C" fn plot(p: Point) -> Bool = "nz_plot";
+extern "C" fn takes_plain(p: Plain) -> Plain = "nz_takes_plain";
+extern "C" fn takes_list(xs: Ints) -> Option[Int] = "nz_takes_list";
+extern "Rust" fn odd(x: Int) -> Int = "nz_odd";
+extern "C" fn bad_symbol(x: Int) -> Int = "9lives";
+extern "C" fn spaced(x: Int) -> Int = "has space";
+extern "C" fn reserved(n: Int) -> Int = "malloc";
+extern "C" fn first(x: Int) -> Int = "nz_twice";
+extern "C" fn second(x: Bool) -> Int = "nz_twice";
+extern "C" fn third(x: Int) -> Int = "nz_twice";
+extern "C" fn generic[T](x: Int) -> Int = "nz_generic";
+extern "C" fn effects(x: Int) -> Int ! { io } = "nz_effects";
+extern "C" fn row[effects E](x: Int) -> Int = "nz_row";
+extern "C" fn apply(f: fn(Int) -> Int, x: Int) -> Int = "nz_apply";
+extern "C" fn apply_str(f: fn(Str) -> Int) -> Int = "nz_apply_str";
+
+pub extern "C" fn doubled(x: Int) -> Int ! {} = "nz_doubled" { x * 2 }
+pub extern "C" fn narrow(x: Int32, y: UInt64, z: Float64) -> Int16 ! {} = "nz_narrow" { 0 }
+extern "C" fn private_export(x: Int) -> Int ! {} = "nz_private" { x }
+pub extern "C" fn loud(x: Int) -> Int ! { io } = "nz_loud" { x }
+pub extern "C" fn quiet(x: Int) -> Int = "nz_quiet" { x }
+pub extern "C" fn wide(x: Int128, s: Str) -> Str ! {} = "nz_wide" { s }
+pub extern "Rust" fn rusty(x: Int) -> Int ! {} = "nz_rusty" { x }
+
+fn local(x: Int) -> Int ! {} { x }
+
+fn no_authority(x: Int) -> Int { close_it_twice(x) + odd(x) }
+fn close_it_twice(x: Int) -> Int { x }
+
+fn handles(c: ForeignCap) -> Int ! { foreign } {
+    let h = Handle(x: 1);
+    let maybe = open_it("/tmp");
+    let n = match maybe {
+        Some(h) => h.pointer,
+        None => 0,
+    };
+    let g = close_it;
+    let same = maybe == maybe;
+    apply(doubled, 1) + apply(local, 2) + apply(fn(x: Int) -> Int ! {} { x }, 3) + n
+}
+
+fn main(io: IoCap, c: ForeignCap) -> Int {
+    let k = odd(1);
+    handles(c)
+}
