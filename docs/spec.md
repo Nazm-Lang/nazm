@@ -79,6 +79,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `break-continue` | STABLE 1.0 | |
 | `return` | STABLE 1.0 | |
 | `unreachable-code` | STABLE 1.0 | |
+| `http` | EXPERIMENTAL | track C of the 1.0 domains (`openspec/changes/v1-every-domain`): `@std/http`, HTTP/1.1 over TCP; stable at track C's gate |
 | `run-compiles` | EXPERIMENTAL | R1.5, D11: `nazm run` compiles with Cranelift, `--interpret` interprets; stable when R1.5 closes |
 | `limits` | STABLE 1.0 | the rule is stable; the limits' values are the implementation's and may be raised, not lowered, in 1.x |
 | `nesting` | STABLE 1.0 | the bound may be raised, not lowered, in 1.x |
