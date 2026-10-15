@@ -1,0 +1,390 @@
+// The front end's facts about a compilation, for the tools (R2, `openspec/changes/r2-front-end/`
+// design D24; what R5's `nazm doc` reads, `openspec/changes/r5-commands/design.md` D10).
+//
+// `fx_check` runs the whole front end over the compilation rooted at a file — the source root and
+// its package found, every module loaded, parsed, configured and checked — exactly as
+// `nazm check FILE` does, and keeps what each stage knew. A tool then asks:
+//
+// - whether the front end carried the compilation (`fx_carried`): only then are its answers the
+//   reference's. Where it stopped, `fx_why` says at what, and a tool refuses as the reference
+//   never would differently (R5 D5);
+// - whether it failed (`fx_failed`), its diagnostics (`fx_diags`) and their text rendering over
+//   every file (`fx_render`, `Diagnostic::render` as `nazm check` writes it to standard error);
+// - each module's name, text, durable key (`fx_module_key`, `ModuleKey`) and identity as Core IR
+//   names it (`fx_module_identity`, `Names::module`), and whether it is the program's own;
+// - the checker's numbering of functions, records, enums and traits (`sema.nz`'s `ck_fn_*`,
+//   `ck_record_*`, `ck_enum_*`, `ck_trait_*` through `fx_checker`), each one's durable identity
+//   (`fx_fn_identity`, `fx_record_identity`, `fx_enum_identity`, `fx_trait_identity`, as
+//   `cir::Names` writes them), its declaration's node in `fx_tree` with its spans
+//   (`fx_start`, `fx_end`, local to its module's text) and attributes (`fx_deprecated`);
+// - what each name a `pub use` chooses resolves to (`fx_reexport_of`).
+//
+// Types are written as `Types::show` writes them, and effect sets by name (`ck_effect_names`).
+
+use "syntax.nz";
+use "diag.nz";
+use "load.nz";
+use "sema.nz";
+use "configure.nz";
+use "package.nz";
+
+pub struct Facts {
+    // Why the front end did not carry the compilation, as the driver says it ("the checker stops
+    // at …", "the loader stops at …"); empty where it carried it.
+    why: Strs,
+    // Whether the reference refuses the compilation without a diagnostic of a module (a manifest
+    // that is not one): it fails, publishes nothing, and says why (`refusal`).
+    refused: Ints,
+    refusal: Strs,
+    d: Diags,
+    t: Tree,
+    c: Ck,
+    // Per module, in load order: its name, text (newline included), offset among them, durable
+    // key ("" for none) and program node.
+    names: Strs,
+    texts: Strs,
+    bases: Ints,
+    keys: Strs,
+    programs: Ints,
+    // The root file's directory, normalised, which a source's path is shown relative to.
+    dir: Strs,
+}
+
+// A line break, written so that no string literal in this file holds one.
+fn nl() -> Str { str_from_byte(10) }
+
+fn facts_new() -> Facts {
+    let t = sx_tree();
+    let f = Facts(why: strs_new(), refused: ints_new(), refusal: strs_new(), d: dg_new(), t: t, c: ck_none(t), names: strs_new(), texts: strs_new(), bases: ints_new(),
+            keys: strs_new(), programs: ints_new(), dir: strs_new());
+    strs_push(f.why, "");
+    ints_push(f.refused, 0);
+    strs_push(f.refusal, "");
+    strs_push(f.dir, "");
+    f
+}
+
+fn give_up(f: Facts, why: Str) -> Facts {
+    strs_set(f.why, 0, why);
+    f
+}
+
+// The compilation rooted at `path` (absolute) as a program (`Entry::Required`: the root must have
+// `main`), the standard modules and the core prelude read from `library`, `@cfg` asked of `os`
+// and `arch` as Rust's `std::env::consts` names them ("" for unknown: a condition on either then
+// stops the checker).
+pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, library, os, arch, true, io) }
+
+// The same compilation as a module (`Entry::Absent`), as `nazm doc` checks one: whether anything
+// can run is not asked, so a root without `main` is no error.
+pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, library, os, arch, false, io) }
+
+fn check_as(path: Str, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
+    let f = facts_new();
+    let d = f.d;
+    // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
+    // the file, or the first `nazm.root` marker, or the file's own directory.
+    if str_len(path) == 0 || str_byte(path, 0) != 47 { return give_up(f, "the loader stops at a relative path"); }
+    strs_set(f.dir, 0, pk_parent(pk_normalise(path)));
+    let root = pk_decide(path, io);
+    let how = pk_root_how(root);
+    if how == 0 - 2 { return give_up(f, str_concat("the loader stops at ", pk_root_why(root))); }
+    // A manifest that is not one, or a marker that is not empty: the reference refuses the
+    // compilation with no diagnostic of a module, so nothing is published.
+    if how == 0 - 1 {
+        ints_set(f.refused, 0, 1);
+        strs_set(f.refusal, 0, pk_root_why(root));
+        return f;
+    }
+    if how == 2 { return give_up(f, "the loader stops at a `nazm.root` marker"); }
+    let source_root = pk_root_path(root);
+    // A package's compilation (N46): the package and its dependencies, resolved.
+    let mut packages = pk_none();
+    if how == 1 {
+        packages = pk_context(source_root, io);
+        if pk_packages_state(packages) != 1 {
+            let mut why = pk_packages_why(packages);
+            if pk_packages_state(packages) == 0 { why = "a package whose source root is not its manifest's directory's child"; }
+            return give_up(f, str_concat("the loader stops at ", why));
+        }
+    }
+    let loaded = ld_load(path, library, source_root, packages, d, io);
+    let mut i = 0;
+    while i < ld_count(loaded) {
+        strs_push(f.names, ld_name(loaded, i));
+        strs_push(f.texts, ld_text(loaded, i));
+        ints_push(f.bases, ld_base(loaded, i));
+        strs_push(f.keys, module_key(loaded, i, source_root, packages));
+        i = i + 1;
+    }
+    // A compilation that could not be loaded reports the loader's diagnostics and nothing else.
+    if dg_len(d) > 0 { return f; }
+    let t = f.t;
+    let mut root_program = 0 - 1;
+    // The module graph as the loader resolved it: each module's imports, in source order, by
+    // the index of the module each names; and whether each module is a standard one.
+    let graph = ck_graph();
+    i = 0;
+    while i < ld_count(loaded) {
+        let own = dg_new();
+        let program = sx_parse_source(ld_text(loaded, i), t, own);
+        if i == 0 { root_program = program; }
+        // A module that is not the program's own — a standard one, the prelude or a package's —
+        // holds only the authority it is given (R1.5, D8).
+        ck_graph_module(graph, ld_program(loaded, i) == false);
+        let count = ints_len(sx_items(t, sx_field(t, program, "imports")));
+        let mut k = 0;
+        while k < count {
+            ck_graph_import(graph, ld_import_target(loaded, i, k));
+            k = k + 1;
+        }
+        // The prelude's standard modules it names (R1.5, D9), by the module each is.
+        if ld_implicit(loaded, i) != "" {
+            let given = split_commas(ld_implicit(loaded, i));
+            k = 0;
+            while k < strs_len(given) {
+                ck_graph_implicit(graph, module_named(loaded, str_concat(str_concat("@std/", strs_get(given, k)), ".nz")));
+                k = k + 1;
+            }
+        }
+        ints_push(f.programs, program);
+        dg_append_in(d, own, ld_base(loaded, i), i);
+        i = i + 1;
+    }
+    let syntax_failed = dg_len(d) > 0;
+    // Every attribute held to the vocabulary and every declaration whose `@cfg` does not hold for
+    // the host dropped (`attributes::configure`, design D19), before anything resolves a name; its
+    // refusals count as the parser's do.
+    let unsure = cf_configure(t, f.programs, f.bases, d, cf_host(os, arch));
+    let parse_failed = dg_len(d) > 0;
+    // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
+    // stops, nothing of it is published. After a syntax error it checks what did parse, as the
+    // reference does.
+    if syntax_failed { ck_graph_syntax_error(graph); }
+    if syntax_failed == false && parse_failed { ck_graph_attribute_error(graph); }
+    let c = ck_check(t, f.programs, f.bases, f.names, graph);
+    let mut stopped = ck_stopped(c);
+    if unsure { stopped = "a condition on the host, which was not given"; }
+    let done = Facts(why: f.why, refused: f.refused, refusal: f.refusal, d: d, t: t, c: c, names: f.names, texts: f.texts, bases: f.bases, keys: f.keys, programs: f.programs,
+            dir: f.dir);
+    if stopped == "" {
+        if program {
+            dg_append(d, ck_diags(c), 0);
+        } else {
+            dg_append_without(d, ck_diags(c), "N0204");
+        }
+        return done;
+    }
+    strs_set(done.why, 0, str_concat("the checker stops at ", stopped));
+    // The root owns `main` (`nazm-core/src/check/mod.rs`); a function that failed to parse was
+    // never registered, so the missing `main` is not reported after a syntax error.
+    if parse_failed == false && program {
+        let functions = sx_items(t, sx_field(t, root_program, "functions"));
+        let mut has_main = false;
+        let mut k = 0;
+        while k < ints_len(functions) {
+            if sx_name(t, ints_get(functions, k), "name") == "main" { has_main = true; }
+            k = k + 1;
+        }
+        if has_main == false {
+            dg_error(d, "N0204", 0, 0, "this program has no `main` function", "",
+                    "`nazm run` evaluates `fn main() -> Int` in the file you named");
+        }
+    }
+    done
+}
+
+// Whether the front end carried the whole compilation: every answer below is then the reference's
+// — whether it fails (`fx_failed`), with which diagnostics, and what it defines. A compilation the
+// reference refuses without a diagnostic of a module is carried, and fails.
+pub fn fx_carried(f: Facts) -> Bool { strs_get(f.why, 0) == "" }
+
+// Why it did not; "" where it did.
+pub fn fx_why(f: Facts) -> Str { strs_get(f.why, 0) }
+
+// Whether the compilation fails: an error reported, or the reference's refusal without one.
+pub fn fx_failed(f: Facts) -> Bool {
+    if ints_get(f.refused, 0) == 1 { return true; }
+    let mut i = 0;
+    while i < dg_len(f.d) {
+        if dg_severity(f.d, i) == "error" { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+pub fn fx_diags(f: Facts) -> Diags { f.d }
+
+// Why the reference refuses the compilation without a diagnostic of a module, as `nazm check`
+// says it after `nazm: `; "" where it does not.
+pub fn fx_refusal(f: Facts) -> Str { strs_get(f.refusal, 0) }
+
+// Every diagnostic as `nazm check` writes them to standard error, in order — without the summary
+// line the command adds.
+pub fn fx_render(f: Facts) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < dg_len(f.d) {
+        strs_push(out, dg_render(f.d, i, f.names, f.texts, f.bases));
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+pub fn fx_checker(f: Facts) -> Ck { f.c }
+pub fn fx_tree(f: Facts) -> Tree { f.t }
+
+pub fn fx_modules(f: Facts) -> Int { strs_len(f.names) }
+// The name it is loaded under: the root's path as given, an import's joined to its importer's
+// directory, `@std/NAME.nz`, `@core/prelude.nz`.
+pub fn fx_module_name(f: Facts, m: Int) -> Str { strs_get(f.names, m) }
+pub fn fx_module_text(f: Facts, m: Int) -> Str { strs_get(f.texts, m) }
+pub fn fx_module_program(f: Facts, m: Int) -> Int { ints_get(f.programs, m) }
+// Where its text begins among the compilation's: an absolute span minus this is local to it.
+pub fn fx_module_base(f: Facts, m: Int) -> Int { ints_get(f.bases, m) }
+// Its durable key (`ModuleKey`), or "" where it has none (outside the source root).
+pub fn fx_module_key(f: Facts, m: Int) -> Str { strs_get(f.keys, m) }
+// Whether it is the program's own rather than compiled into the toolchain (a name without `@`).
+pub fn fx_module_own(f: Facts, m: Int) -> Bool { str_len(strs_get(f.names, m)) == 0 || str_byte(strs_get(f.names, m), 0) != 64 }
+
+// The module as Core IR names it (`Names::module`): its key, or `#` and its place in load order.
+pub fn fx_module_identity(f: Facts, m: Int) -> Str {
+    if strs_get(f.keys, m) == "" { return str_concat("#", int_to_str(m)); }
+    strs_get(f.keys, m)
+}
+
+// A source's path as `nazm doc` shows it: relative to the root file's directory where it is in
+// it, else its name.
+pub fn fx_module_path(f: Facts, m: Int) -> Str {
+    let name = pk_normalise(strs_get(f.names, m));
+    let dir = strs_get(f.dir, 0);
+    if dir != "" && pk_under(name, dir) && name != dir {
+        if dir == "/" { return str_slice(name, 1, str_len(name)); }
+        return str_slice(name, str_len(dir) + 1, str_len(name));
+    }
+    strs_get(f.names, m)
+}
+
+// A definition's durable identity (`DefKey`), `MODULE::KIND NAME` — the module by
+// `fx_module_identity`.
+fn definition(f: Facts, m: Int, kind: Str, name: Str) -> Str {
+    str_concat(str_concat(str_concat(fx_module_identity(f, m), "::"), str_concat(kind, " ")), name)
+}
+
+pub fn fx_fn_identity(f: Facts, i: Int) -> Str { definition(f, ck_fn_module(f.c, i), "fn", ck_fn_name(f.c, i)) }
+pub fn fx_record_identity(f: Facts, r: Int) -> Str { definition(f, ck_record_module(f.c, r), "record", ck_record_name(f.c, r)) }
+pub fn fx_enum_identity(f: Facts, e: Int) -> Str { definition(f, ck_enum_module(f.c, e), "enum", ck_enum_name(f.c, e)) }
+pub fn fx_trait_identity(f: Facts, t: Int) -> Str { definition(f, ck_trait_module(f.c, t), "trait", ck_trait_name(f.c, t)) }
+
+// A tree span's ends, local to its module's text.
+pub fn fx_start(f: Facts, span: Int) -> Int { sx_s(f.t, span) }
+pub fn fx_end(f: Facts, span: Int) -> Int { sx_e(f.t, span) }
+
+// What `@deprecated` says of a declaration (`apidoc::deprecated`): its reason, "" when it gives
+// none — and whether it says anything, `fx_is_deprecated`.
+pub fn fx_is_deprecated(f: Facts, decl: Int) -> Bool { deprecation(f, decl) >= 0 }
+pub fn fx_deprecated(f: Facts, decl: Int) -> Str {
+    let a = deprecation(f, decl);
+    if a < 0 { return ""; }
+    let args = sx_field(f.t, a, "args");
+    if sx_is_some(f.t, args) == false { return ""; }
+    let list = sx_items(f.t, sx_unwrap(f.t, args));
+    if ints_len(list) != 1 { return ""; }
+    let only = ints_get(list, 0);
+    if sx_text(f.t, only) != "Str" { return ""; }
+    sx_name(f.t, only, "value")
+}
+
+fn deprecation(f: Facts, decl: Int) -> Int {
+    let attrs = sx_items(f.t, sx_field(f.t, decl, "attrs"));
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        if sx_name(f.t, ints_get(attrs, i), "name") == "deprecated" { return ints_get(attrs, i); }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// What the name a `pub use` of module `m` chooses at `start..end` (local) resolves to, as
+// `nazm doc` names it: a function's or a type's identity, `MODULE::trait NAME` for a trait; ""
+// where it resolves to nothing.
+pub fn fx_reexport_of(f: Facts, m: Int, start: Int, end: Int) -> Str {
+    let c = f.c;
+    let s = start + ints_get(f.bases, m);
+    let e = end + ints_get(f.bases, m);
+    let mut out = "";
+    let mut i = 0;
+    while i < ck_reexport_count(c) {
+        if ck_reexport_module(c, i) == m && ck_reexport_start(c, i) == s && ck_reexport_end(c, i) == e && out == "" {
+            let k = ck_reexport_kind(c, i);
+            let x = ck_reexport_target(c, i);
+            if k == 1 { out = fx_fn_identity(f, x); }
+            if k == 2 {
+                if ck_type_record(c, x) >= 0 { out = fx_record_identity(f, ck_type_record(c, x)); }
+                if ck_type_enum(c, x) >= 0 { out = fx_enum_identity(f, ck_type_enum(c, x)); }
+            }
+            if k == 3 { out = fx_trait_identity(f, x); }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The durable key of loaded module `i` (`ModuleKey`, `load.rs`'s `module_key`): `@core/prelude`,
+// `@std/NAME`, a dependency package's `NAME@VERSION/PATH`, or its path relative to the source
+// root — none outside it, or where its first component holds an `@`.
+fn module_key(loaded: Loaded, i: Int, source_root: Str, packages: Packages) -> Str {
+    let id = ld_identity(loaded, i);
+    if id == "@core/prelude.nz" { return "@core/prelude"; }
+    if str_len(id) > 5 && str_slice(id, 0, 5) == "@std/" { return str_slice(id, 0, str_len(id) - 3); }
+    if pk_packages_state(packages) == 1 {
+        let p = pk_package_of(packages, id);
+        if p >= 0 && p != pk_root_package(packages) {
+            let rel = below(pk_normalise(id), pk_normalise(pk_source_root(packages, p)));
+            if rel == "" { return ""; }
+            return str_concat(str_concat(str_concat(pk_name(packages, p), "@"), str_concat(pk_package_version(packages, p), "/")), rel);
+        }
+    }
+    let rel = below(pk_normalise(id), pk_normalise(source_root));
+    if rel == "" { return ""; }
+    let mut first = 0;
+    while first < str_len(rel) && str_byte(rel, first) != 47 {
+        if str_byte(rel, first) == 64 { return ""; }
+        first = first + 1;
+    }
+    rel
+}
+
+// `path` relative to `root`, both normalised; "" where it is not below it.
+fn below(path: Str, root: Str) -> Str {
+    if path == root || pk_under(path, root) == false { return ""; }
+    if root == "/" { return str_slice(path, 1, str_len(path)); }
+    str_slice(path, str_len(root) + 1, str_len(path))
+}
+
+// The module of this name in load order, or -1.
+fn module_named(loaded: Loaded, name: Str) -> Int {
+    let mut i = 0;
+    while i < ld_count(loaded) {
+        if ld_name(loaded, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn split_commas(s: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(s) {
+        let end = i == str_len(s);
+        let mut cut = end;
+        if end == false { cut = str_byte(s, i) == 44; }
+        if cut {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
