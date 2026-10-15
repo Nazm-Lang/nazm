@@ -299,7 +299,7 @@ into `nazm`), then in the library.
 | `text_split_end` testing eight bytes per step, the first match chosen by selects | +7.2% | +5.9% | no: every byte keeps its bounds check |
 | `text_lines` with an inner scan per line | +1.6% | −3.4% | no |
 | a runtime byte search: `text_split_end` calling `memchr` (linked by hand) | +7.3% | −2.2% | no: words are 3–8 bytes, `memchr`'s set-up costs more than the loop. **No byte-search built-in is needed for this workload** |
-| non-atomic `Str` reference counts in a one-thread program (the IR edited by hand) | **−7.4%** | +1.1% | not made: see below |
+| non-atomic `Str` reference counts in a one-thread program (the IR edited by hand) | **−7.4%** | +1.1% | made afterwards in the runtime: see *Plain reference counts* below |
 
 The three kept, in the library: 132.1 → 127.8 ms median (−3.3%), cycles −3.4%, instructions −8.5%;
 the output is `words.expected`'s. The hash's values, and so every map's order, are unchanged.
@@ -317,7 +317,7 @@ What remains is not the library's to remove:
    stores: −7.4% measured. It is a runtime change, but its single-thread variant is chosen where
    `nazm-lir`'s backend calls `inline_reference_counting` and in the runtime unit, and R3's
    `toolchain/pipeline` (`rtgen.nz`, `rtext.nz`) must port it so its text stays the reference's —
-   left for the coordinator to schedule. Stage P's borrowed reads of vector elements would remove
+   **Done afterwards (next section).** Stage P's borrowed reads of vector elements would remove
    the pair altogether.
 2. `hashmap_set` must compare the key with the remembered entry again (a different key may be
    passed; mutant `r1-a-remembered-entry-is-any-key-s`): only the compiler knows `m[k] += n` passes
@@ -326,3 +326,52 @@ What remains is not the library's to remove:
    loop and the string's pointer reloaded; its exit mispredicts once a word. Range proofs (stage P)
    remove the check; the misprediction is the workload's (C's `strtok` pays it too).
 4. FNV-1a is a serial chain of multiplies, four cycles a byte; it stays while map order is promised.
+
+### Plain reference counts in a program of one thread (2026-10-15)
+
+A program of one thread (`Native::single_thread` → `Needs::single`: `main` holds no `SpawnCap`,
+`NetCap` or `ForeignCap`, it is not a library and links no prebuilt runtime) cannot hand a value to a
+task, so the counts made atomic for tasks need not be. `nazm_runtime::plain_reference_counts`
+rewrites, inside the functions of `PLAIN_IN_ONE_THREAD` only (`nz.str_retain`, `nz.str_release`,
+`nz.closure_retain`, `nz.closure_release`, `nz.chan_retain`, `nz.chan_release`,
+`nz.chanv_release`), each `%r = atomicrmw add|sub ptr %p, i64 1 monotonic|release` into
+`%r = load i64, ptr %p` / `%r.plain = add|sub i64 %r, 1` / `store i64 %r.plain, ptr %p` — `%r` is
+still the old count, so the test for the last reference and the free are unchanged and the
+arithmetic wraps as the atomic one did — and drops their `fence acquire`. It is applied to the whole
+runtime unit by `emit_runtime` when `needs.single`, and to the copies a hosted LLVM unit inlines
+(`inline_reference_counting(unit, single)`, called from `nazm-lir`'s backend with
+`native.single_thread`), so a copy stays the definition the program links. The report's counters
+(`nz.*_allocated`, `nz.*_reclaimed`) stay atomic: they are not reference counts and are off the hot
+path. Cranelift and R9's `nazm` backend call the runtime's functions and emit no count of their own,
+so they get the plain counts through the runtime unit; `nzcg --one-thread` needs nothing more. A
+sequence's count was plain already. Boards define their own (empty) string counting.
+
+Release `nazm` with and without the change (otherwise the same tree, `2cc1b14e` + this change),
+`--opt-level 2`, the comparison's input, `hyperfine -N --warmup 3 --runs 21`, three alternating
+rounds (the host loaded by other work, so relative numbers only):
+
+| | before | after | change |
+| --- | ---: | ---: | ---: |
+| word frequency, round 1 | 137.7 ms ± 3.7 | 128.0 ms ± 2.5 | −7.0% |
+| word frequency, round 2 | 137.0 ms ± 2.2 | 125.5 ms ± 11.9 | −8.4% |
+| word frequency, round 3 | 135.3 ms ± 4.1 | 124.7 ms ± 5.4 | −7.9% |
+| `fib(35)`, three rounds | 47.3–48.3 ms | 47.8–48.2 ms | −1.2%, +1.0%, +1.9%: noise (no count on its path) |
+
+The output is `words.expected`'s; peak memory 19.3 MiB either way; `ldadd`/`stadd` in the word
+frequency executable 105 → 23 (the counters and the pool's). No runtime entry's signature, no
+multi-thread runtime text and no runtime digest (taken over `EVERYTHING`, which is not `single`)
+changes, so `RUNTIME_ABI_REVISION` stays 34, as it did when the failure state became plain globals
+(R1, 5b.8): a prebuilt runtime artifact is never `single`, and a program linked to one keeps atomic
+counts in its units too.
+
+**What R3 must follow in `toolchain/pipeline`.** Its `rtgen.nz` emits the runtime unit from
+`rtext.nz`: when `single` is among the needs (`Needs::by_names`), apply the same rewrite to the
+emitted runtime after everything is pushed — only inside the seven functions above (by their
+`define` line, up to the closing `}`), the two atomic forms on `i64 1` with `monotonic` or `release`
+into the three plain lines named `%r`, `%r.plain`, and the `  fence acquire` lines there removed;
+every other line byte for byte. Regenerating `rtext.nz` brings no new constant (the runtime
+constants are unchanged; `PLAIN_IN_ONE_THREAD` can be carried as a list beside
+`rt_single_thread_state` if the generator prefers data to a literal). The pipeline prints no hosted
+LLVM of its own, so there is no inlined copy to follow; if it ever ports
+`inline_reference_counting`, the copies take the same rewrite under `single`. R9's code generator
+calls the runtime and needs no change.

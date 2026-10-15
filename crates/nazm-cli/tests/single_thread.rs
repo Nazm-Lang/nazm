@@ -129,3 +129,48 @@ fn a_program_of_one_thread_still_reports_its_failures() {
         }
     }
 }
+
+/// Whether `name`'s definition in `ir` — the runtime's, or a unit's copy to inline — adjusts a
+/// reference count atomically, for every definition of it there is.
+fn atomic_counts(ir: &str, name: &str) -> Vec<bool> {
+    let mut out = Vec::new();
+    let mut rest = ir;
+    while let Some(at) = rest.find(&format!(" @{name}(")) {
+        let line_start = rest[..at].rfind('\n').map_or(0, |i| i + 1);
+        let tail = &rest[at..];
+        let end = tail.find("\n}\n").map_or(tail.len(), |e| e + 3);
+        if rest[line_start..].starts_with("define ") {
+            let body = &rest[line_start..at + end];
+            out.push(body.contains("atomicrmw add ptr %") || body.contains("atomicrmw sub ptr %"));
+        }
+        rest = &rest[at + name.len() + 2..];
+    }
+    out
+}
+
+#[test]
+fn a_program_of_one_thread_counts_its_strings_without_atomics() {
+    // A string retained and released on every step: the runtime's counts, and the unit's copies
+    // of them, are plain loads and stores where nothing can start a thread.
+    let strings = "fn main(out: OutCap) -> Int ! {io} {\n    let s = \"a\" + \"b\"\n    \
+                   let t = s\n    print(t + \"\\n\")\n    down(3)\n}\n";
+    let one = ir(strings, false);
+    for name in ["nz.str_retain", "nz.str_release"] {
+        let atomic = atomic_counts(&one, name);
+        assert!(!atomic.is_empty(), "{name} is defined: {one}");
+        assert!(atomic.iter().all(|a| !a), "{name} counts plainly: {one}");
+    }
+    // A program that may start a task keeps every count atomic.
+    let tasks = "fn main(t: SpawnCap, out: OutCap) -> Int ! {spawn, io} {\n    \
+                 let s = \"a\" + \"b\"\n    let t2 = s\n    print(t2 + \"\\n\")\n    \
+                 scope { spawn down(3); }\n    0\n}\n";
+    let many = ir(tasks, false);
+    for name in ["nz.str_retain", "nz.str_release"] {
+        let atomic = atomic_counts(&many, name);
+        assert!(!atomic.is_empty(), "{name} is defined: {many}");
+        assert!(
+            atomic.iter().all(|a| *a),
+            "{name} counts atomically: {many}"
+        );
+    }
+}

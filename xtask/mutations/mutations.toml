@@ -18200,7 +18200,7 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::the_has
 name = "r1-no-unit-inlines-reference-counting"
 why = "no unit inlines the runtime's reference counting, so every retain and release is two calls"
 file = "crates/nazm-lir/src/backend.rs"
-find = '''            nazm_runtime::inline_reference_counting(&ir)'''
+find = '''            nazm_runtime::inline_reference_counting(&ir, native.single_thread)'''
 replace = '''            ir'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::a_hosted_unit_inlines_the_runtime_s_reference_counting" }]
 
@@ -19980,3 +19980,58 @@ file = "toolchain/codegen/sel.nz"
 find = '''                y.b = f.insts[i + 6].b'''
 replace = '''                y.b = r.b'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]
+
+# --- performance leadership: plain reference counts in a program of one thread ------------------
+
+[[mutation]]
+name = "pl-one-thread-counts-stay-atomic"
+why = "a program of one thread still adjusts its strings', closures' and channels' counts with atomic read-modify-writes, which word frequency pays twice per counted word"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''    let mut out = String::with_capacity(text.len() + 512);'''
+replace = '''    if !text.is_empty() {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(text.len() + 512);'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }, { package = "nazm-cli", test = "cli_s_z", name = "single_thread::a_program_of_one_thread_counts_its_strings_without_atomics" }]
+
+[[mutation]]
+name = "pl-a-program-with-tasks-gets-plain-counts"
+why = "the runtime of a program that may start a task counts plainly, so two tasks holding one string race on its count and free it early or never"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''    if needs.single {
+        out = plain_reference_counts(&out);'''
+replace = '''    if true {
+        out = plain_reference_counts(&out);'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }, { package = "nazm-cli", test = "cli_s_z", name = "single_thread::a_program_of_one_thread_counts_its_strings_without_atomics" }]
+
+[[mutation]]
+name = "pl-the-inlined-copies-ignore-one-thread"
+why = "a unit of a program of one thread inlines atomic copies of the counts, so its copies are not the definition the program links"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''inline_reference_counting(&ir, native.single_thread)'''
+replace = '''inline_reference_counting(&ir, false)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "single_thread::a_program_of_one_thread_counts_its_strings_without_atomics" }]
+
+[[mutation]]
+name = "pl-the-inlined-copies-are-always-plain"
+why = "a unit of a program with tasks inlines plain copies of the counts, so a task's retain races the main thread's release"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''inline_reference_counting(&ir, native.single_thread)'''
+replace = '''inline_reference_counting(&ir, true)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "single_thread::a_program_of_one_thread_counts_its_strings_without_atomics" }]
+
+[[mutation]]
+name = "pl-a-plain-release-adds"
+why = "a plain release increments the count, so no string, closure or channel of a program of one thread is ever reclaimed"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %{result}.plain = {op} i64 %{result}, 1'''
+replace = '''  %{result}.plain = add i64 %{result}, 1'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }, { package = "nazm-cli", test = "cli_m_r", name = "memory::a_slice_keeps_its_backing_alive_after_the_original_is_gone" }]
+
+[[mutation]]
+name = "pl-the-fence-stays"
+why = "a plain release keeps the acquire fence before the free, a barrier with no other thread to order against"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''            if bare == "  fence acquire" {'''
+replace = '''            if bare == "  fence acquire " {'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }]
