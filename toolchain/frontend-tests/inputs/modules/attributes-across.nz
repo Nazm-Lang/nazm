@@ -1,0 +1,17 @@
+// Attributes across modules (design D19): each kind of item's refusals together, the root's
+// first; a declaration dropped by its `@cfg` is not there to name.
+use "lib/marked.nz";
+
+@zork
+struct Root { a: Int }
+
+@bogus
+fn f() -> Int { 1 }
+
+@on_failure
+fn hook(code: Int) -> Int ! {} { 0 }
+
+@interrupt("timer")
+fn tick() -> Int ! {} { 0 }
+
+fn main() -> Int { gone() + lib_f() }

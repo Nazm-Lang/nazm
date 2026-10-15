@@ -1,19 +1,21 @@
 // The front end's diagnostics driver (R2, `openspec/changes/r2-front-end/design.md`, D4).
 //
-// Usage: diagnose [--syntax] FILE [LIBRARY]
+// Usage: diagnose [--syntax] FILE [LIBRARY [OS ARCH]]
 // Output: every diagnostic of the compilation rooted at FILE as one `nazm.diagnostic/1` line, as
 // `nazm check --json` writes them. With `--syntax`, the lexer's and the parser's of FILE alone.
 // Otherwise the loader's (`load.nz`, the standard modules and the core prelude from LIBRARY,
 // `library` by default), then every file's lexer and parser diagnostics at their offsets in the
 // whole compilation, then the checker's (`sema.nz`) — over what the parser recovered, after a
 // syntax error — where it carries the compilation; where it does not, it says on standard error
-// what it stopped at and reports only the missing `main` (design D13). Exits 1 when there was an
-// error.
+// what it stopped at and reports only the missing `main` (design D13). OS and ARCH are the host's
+// as Rust's `std::env::consts` names them, which `@cfg` asks of (design D19); without them a
+// condition on either stops the checker. Exits 1 when there was an error.
 
 use "syntax.nz";
 use "diag.nz";
 use "load.nz";
 use "sema.nz";
+use "configure.nz";
 
 // A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
 // string's value on one line).
@@ -26,12 +28,18 @@ fn main(io: IoCap) -> Int {
         if arg(0) == "--syntax" { at = 1; syntax_only = true; }
     }
     if args_count() < at + 1 {
-        eprint(str_concat("usage: diagnose [--syntax] FILE [LIBRARY]", nl()));
+        eprint(str_concat("usage: diagnose [--syntax] FILE [LIBRARY [OS ARCH]]", nl()));
         exit_with(2);
     }
     let path = arg(at);
     let mut library = "library";
     if args_count() > at + 1 { library = arg(at + 1); }
+    let mut os = "";
+    let mut arch = "";
+    if args_count() > at + 3 {
+        os = arg(at + 2);
+        arch = arg(at + 3);
+    }
     if file_exists(path) == false {
         eprint(str_concat(str_concat("cannot read ", path), nl()));
         exit_with(2);
@@ -41,7 +49,7 @@ fn main(io: IoCap) -> Int {
         let t = sx_tree();
         sx_parse_source(ld_with_newline(read_file(path)), t, d);
     } else {
-        check_compilation(path, library, d, io);
+        check_compilation(path, library, os, arch, d, io);
     }
     let out = strs_new();
     let mut i = 0;
@@ -56,7 +64,7 @@ fn main(io: IoCap) -> Int {
 }
 
 // The compilation rooted at `path`, loaded, parsed and checked, every diagnostic into `d`.
-fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
+fn check_compilation(path: Str, library: Str, os: Str, arch: Str, d: Diags, io: IoCap) -> Int {
     // A module of a package (a `nazm.toml` beside it or above it) is a package's compilation,
     // which the loader does not carry yet.
     if in_package(path, io) { eprint(str_concat("diagnose: the loader stops at a package", nl())); }
@@ -106,17 +114,25 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
         dg_append(d, own, ld_base(loaded, i));
         i = i + 1;
     }
+    let syntax_failed = dg_len(d) > 0;
+    // Every attribute held to the vocabulary and every declaration whose `@cfg` does not hold for
+    // the host dropped (`attributes::configure`, design D19), before anything resolves a name; its
+    // refusals count as the parser's do.
+    let unsure = cf_configure(t, programs, bases, d, cf_host(os, arch));
     let parse_failed = dg_len(d) > 0;
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, it says why on standard error and reports nothing. After a syntax error it checks
     // what did parse, as the reference does.
-    if parse_failed { ck_graph_syntax_error(graph); }
+    if syntax_failed { ck_graph_syntax_error(graph); }
+    if syntax_failed == false && parse_failed { ck_graph_attribute_error(graph); }
     let c = ck_check(t, programs, bases, names, graph);
-    if ck_stopped(c) == "" {
+    let mut stopped = ck_stopped(c);
+    if unsure { stopped = "a condition on the host, which was not given"; }
+    if stopped == "" {
         dg_append(d, ck_diags(c), 0);
         return 0;
     }
-    eprint(str_concat(str_concat("diagnose: the checker stops at ", ck_stopped(c)), nl()));
+    eprint(str_concat(str_concat("diagnose: the checker stops at ", stopped), nl()));
     // The root owns `main` (`nazm-core/src/check/mod.rs`); a function that failed to parse was
     // never registered, so the missing `main` is not reported after a syntax error.
     if parse_failed == false {

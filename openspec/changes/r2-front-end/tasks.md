@@ -141,6 +141,11 @@
       built-in's flow and container use. `run.sh check`: 2,549 agree, 235 differ; the checker
       carries 2,314, all agree. The flows themselves (`provenance::facts` and `solve`, with their
       traces) are left: 67 inputs stop there, 26 of them refused with `N0372`
+- [ ] 3.1s Attributes (D19, `attributes::configure`): the vocabulary, the board's shapes, one hook
+      and one handler for each interrupt, `@codec` without a derive, and `@cfg` over the host —
+      what it drops gone before the checker; a `@derive` stops the checker.
+      `inputs/check/attributes-board.nz`, `inputs/modules/attributes-across.nz`. `run.sh check`:
+      2,612 agree, 176 differ; the checker carries 2,386, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
