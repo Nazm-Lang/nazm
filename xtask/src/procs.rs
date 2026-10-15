@@ -38,6 +38,13 @@
 //! Nothing here signals pid 0, pid 1, a negative number it did not construct, this
 //! process, or a group other than one this process created. There is no `pkill`, no
 //! match on a command line, and no `kill(0, …)`.
+//!
+//! # On Windows (W1)
+//!
+//! There are no process groups, no stopped processes and no `sh` watchdog: at a deadline the
+//! child's tree is ended by `taskkill /T /F` (parentage, as the walk above), and nothing is
+//! swept after a leader that has exited. Mutation campaigns run contained, on Linux; on
+//! Windows this is what the host-safe suite's deadlines need.
 
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -116,18 +123,34 @@ impl Finished {
     }
 }
 
+/// The signal that ended a process, if one did; never on Windows, which has none.
+pub(crate) fn signal_of(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt as _;
+        status.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
 /// Run one invocation to completion, deadline, or cleanup.
 pub(crate) fn run(inv: &Invocation) -> Finished {
-    use std::os::unix::process::CommandExt as _;
-
     let mut cmd = Command::new(&inv.program);
     cmd.args(&inv.args)
         .current_dir(&inv.cwd)
         .envs(inv.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
 
     let started = Instant::now();
     let mut child = match cmd.spawn() {
@@ -238,6 +261,15 @@ struct Watchdog {
 }
 
 impl Watchdog {
+    #[cfg(not(unix))]
+    fn arm(_leader: u32) -> Self {
+        Self {
+            child: None,
+            _pipe: None,
+        }
+    }
+
+    #[cfg(unix)]
     fn arm(leader: u32) -> Self {
         use std::os::unix::process::CommandExt as _;
         if !valid_leader(leader) {
@@ -380,6 +412,15 @@ pub(crate) fn kill_tree(leader: u32) -> usize {
     if !valid_leader(leader) {
         return 0;
     }
+    if cfg!(windows) {
+        let ended = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &leader.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        return usize::from(ended.is_ok_and(|s| s.success()));
+    }
     let mut seen: BTreeSet<u32> = BTreeSet::new();
     for _ in 0..32 {
         let now = owned(leader, &process_table());
@@ -397,7 +438,7 @@ pub(crate) fn kill_tree(leader: u32) -> usize {
 
 /// Kill whatever is still in the group once its leader has exited.
 fn sweep_group(leader: u32) -> usize {
-    if !valid_leader(leader) {
+    if !valid_leader(leader) || cfg!(windows) {
         return 0;
     }
     let members: BTreeSet<u32> = process_table()
@@ -421,7 +462,7 @@ fn sweep_group(leader: u32) -> usize {
 }
 
 /// Is this pid alive? For tests and diagnostics; never used to decide ownership.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn alive(pid: u32) -> bool {
     Command::new("ps")
         .args(["-p", &pid.to_string(), "-o", "stat="])
@@ -435,7 +476,7 @@ pub(crate) fn alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))] // `sh`, `ps`, process groups and signals
 #[allow(
     clippy::expect_used,
     clippy::unwrap_used,

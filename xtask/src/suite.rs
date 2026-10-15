@@ -226,11 +226,23 @@ pub(crate) fn write_history(path: &Path, shape: &str, now: &BTreeMap<String, f64
     }
 }
 
+/// The status of a process that exited with `code`, for tests on every host.
+#[cfg(test)]
+pub(crate) fn exited_with(code: u8) -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        std::os::unix::process::ExitStatusExt::from_raw(i32::from(code) << 8)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::process::ExitStatusExt::from_raw(u32::from(code))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use std::os::unix::process::ExitStatusExt as _;
 
     fn bin(package: &str, target: &str) -> Binary {
         Binary {
@@ -322,7 +334,7 @@ mod tests {
 
     fn fake(ok: bool, secs: f64) -> Ran {
         Ran {
-            ended: Ended::Exited(std::process::ExitStatus::from_raw(if ok { 0 } else { 256 })),
+            ended: Ended::Exited(exited_with(if ok { 0 } else { 1 })),
             stdout: String::new(),
             stderr: String::new(),
             secs,

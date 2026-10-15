@@ -225,19 +225,21 @@ fn fix_writes_nothing_without_apply() {
 /// The run gets its own process group, and the whole group is killed on a timeout, so a
 /// looping case is not left running beneath a `nazm` that has already been stopped.
 fn nazm_test_with_deadline(dir: &std::path::Path) -> std::process::Output {
-    use std::os::unix::process::CommandExt;
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
     let scratch = tempfile::tempdir().expect("tempdir");
     let out_path = scratch.path().join("test.out");
     let err_path = scratch.path().join("test.err");
-    let mut child = Command::new(NAZM)
-        .arg("test")
+    let mut cmd = Command::new(NAZM);
+    cmd.arg("test")
         .arg(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
-        .stderr(std::fs::File::create(&err_path).expect("stderr file"))
-        .process_group(0)
-        .spawn()
-        .expect("run");
+        .stderr(std::fs::File::create(&err_path).expect("stderr file"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().expect("run");
     let started = std::time::Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().expect("wait") {
