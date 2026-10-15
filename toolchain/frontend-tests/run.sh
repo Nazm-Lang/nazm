@@ -2,11 +2,13 @@
 # R2's comparisons (`openspec/changes/r2-front-end/design.md`): the front end written in Nazm
 # against the Rust toolchain, on every input.
 #
-#   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts
-#                                                  (default: the first three)
+#   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
+#                                                  core (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
-# `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24).
+# `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
+# and `core` each function's Core IR with `nazm core-ir`'s, digests aside (D25): an input agrees
+# when every function the Nazm lowering carries agrees, and the summary counts functions too.
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
 # under a deadline; the reference side is `toolchain/frontend-tests/refdump`, built from this checkout's
@@ -59,7 +61,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts) driver=diagnose ;;
+    syntax|check|render|facts|core) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -103,6 +105,21 @@ for mode in $modes; do
         rm -f "$want.json"
         timeout "$R2_DEADLINE" "$R2_EXE" --facts "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      core)
+        status=0
+        "$R2_NAZM" core-ir "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
+        python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" want "$status" < "$want.json" > "$want"
+        rm -f "$want.json"
+        timeout "$R2_DEADLINE" "$R2_EXE" --core "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop"
+        # Function by function: an input agrees when every function carried does.
+        if python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" compare "$want" "$got" > "$R2_DIR/$name.count"; then
+          [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got"
+          : > "$R2_DIR/$name.ok"
+        else
+          diff "$want" "$got" > "$R2_DIR/$name.diff" 2>&1 || true
+        fi
+        exit 0 ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
@@ -116,7 +133,12 @@ for mode in $modes; do
   ' sh
   agree=$(find "$out/$mode" -name '*.ok' | wc -l | tr -d ' ')
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
-  if [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ]; then
+  if [ "$mode" = core ]; then
+    # Functions: the reference's, those the lowering carried, those of them that agree.
+    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3 } END { printf "%d %d %d", t, c, a }')
+    set -- $counts
+    echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree"
+  elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
     carried=0; carried_ok=0
