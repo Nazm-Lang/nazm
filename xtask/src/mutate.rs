@@ -2056,6 +2056,7 @@ mod tests {
     };
     use std::fs;
     use std::path::Path;
+    #[cfg(unix)]
     use std::process::Command;
 
     fn selector(name: &str) -> crate::plan::TestSelector {
@@ -2466,6 +2467,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // reads a file another handle holds locked: Windows enforces the lock
     fn the_pid_inside_the_lock_is_diagnostic_only() {
         // It is written *after* the lock is held, and nothing consults it to decide
         // ownership. Corrupting it must therefore change nothing about who may run —
@@ -2486,6 +2488,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // `ps`; campaigns run contained, on Linux
     fn a_first_protocol_lock_naming_a_live_process_is_refused() {
         // The migration case. The two protocols cannot coordinate — one locks a file,
         // the other treats existence as the lock — so the only safe reading of a v1
@@ -2532,6 +2535,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // `ps`; campaigns run contained, on Linux
     fn a_first_protocol_lock_from_a_dead_process_does_not_block() {
         // The other half: a marker left by a killed v1 run must not need a human before
         // anything can run again.
@@ -2559,6 +2563,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // `ps`; campaigns run contained, on Linux
     fn a_dead_holder_is_distinguished_from_an_unprobeable_one() {
         use super::{holder_state, Holder};
 
@@ -2579,6 +2584,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // `ps`; campaigns run contained, on Linux
     fn a_live_holder_is_still_recognised() {
         // The other half: the fix must not make every marker reclaimable, which would
         // remove the protection entirely.

@@ -598,6 +598,22 @@ fn a_measured_window_allows_one_allocator_step_and_only_with_a_plateau_after_it(
     assert_eq!(growth(&[94_000, 53_000, 53_000, 53_000, 53_000]), Flat);
 }
 
+/// The working set on Windows, from `tasklist`'s memory column (`"12,345 K"`).
+#[cfg(windows)]
+fn rss_kb(pid: u32) -> u64 {
+    let out = Command::new("tasklist")
+        .args(["/NH", "/FO", "CSV", "/FI", &format!("PID eq {pid}")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .rsplit("\",\"")
+        .next()
+        .map(|m| m.chars().filter(char::is_ascii_digit).collect::<String>())
+        .and_then(|d| d.parse().ok())
+        .unwrap_or(0)
+}
+
+#[cfg(not(windows))]
 fn rss_kb(pid: u32) -> u64 {
     let out = Command::new("ps")
         .args(["-o", "rss=", "-p", &pid.to_string()])
