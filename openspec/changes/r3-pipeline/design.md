@@ -267,6 +267,18 @@ belongs with the LIR validator when one is ported. What does move is the runtime
 ordinary global in a one-thread program (`SINGLE_THREAD_STATE`). `rtext.nz` is regenerated from
 the runtime crate (`tests/runtime_text.py`); the runtime digest every object key carries follows.
 
+## The pool's workers and the runtime's own buffers (8.5)
+
+Two runtime changes on main move no LIR: the pool starts one worker per processor (runtime ABI
+35, performance-leadership "What R3 must follow") and `nz_os_realpath` writes into a 4096-byte
+buffer on its frame instead of letting `realpath` allocate (`crates/nazm-runtime/src/heap.rs`'s
+`C_ALLOCATING` lists state the rule). Both are runtime text: `rtext.nz` is regenerated. The one
+part built by rule is the stack unit's `nz.os_cpus`, which the runtime crate formats from
+`sysconf`'s name for `_SC_NPROCESSORS_ONLN` — 58 on Darwin, 84 in glibc and musl, 0x61 in
+Bionic — and `rtgen.nz`'s `posix_cpus` writes it the same way for every POSIX target (Windows'
+is a constant text). The runtime digest covers every target's stack unit, so its agreement is the
+check on the targets this pipeline does not yet build for.
+
 ## Every target, narrowed to macOS (8.2)
 
 `rewrite-in-nazm` task 4.2 asks for every target in `docs/support.md`. The copyright holder

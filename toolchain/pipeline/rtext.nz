@@ -1670,6 +1670,7 @@ pub fn rt_core_POOL_RUNTIME() -> Str ! {} {
 
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
+declare i64 @nz.os_cpus()
 
 ; The scheduler this process runs (N83, §7.84; the default N106's, §7.107): 1 one OS thread per
 ; task, 2 the pool, 4 a pool that could not start or a NAZM_SCHEDULER that names neither — no
@@ -1767,7 +1768,12 @@ entry:
   %attr = alloca [128 x i8], align 16
   %pg = call i64 @nz_os_page_size()
   store i64 %pg, ptr @nz.pool_page
-  %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 4)
+  ; One worker per processor online unless NAZM_WORKERS says otherwise; four where the system will
+  ; not say (performance leadership, 2026-10-15: four on ten processors left six idle).
+  %cpus = call i64 @nz.os_cpus()
+  %known = icmp sgt i64 %cpus, 0
+  %dflt = select i1 %known, i64 %cpus, i64 4
+  %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 %dflt)
   %big = icmp sgt i64 %wanted, 64
   %count = select i1 %big, i64 64, i64 %wanted
   %sbp = load i64, ptr @nz.stack_bytes
@@ -6611,7 +6617,6 @@ declare i32 @{LSTAT}(ptr, ptr)
 declare i32 @chmod(ptr, {MODE_TY})
 declare ptr @realpath(ptr, ptr)
 declare i32 @flock(i32, i32)
-declare void @free(ptr)
 
 define hidden i32 @nz_os_lstat(ptr %path, ptr %out) {
 entry:
@@ -6667,20 +6672,20 @@ entry:
 
 define hidden i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap) {
 entry:
-  %r = call ptr @realpath(ptr %path, ptr null)
+  %buf = alloca [4096 x i8], align 16
+  %r = call ptr @realpath(ptr %path, ptr %buf)
   %none = icmp eq ptr %r, null
   br i1 %none, label %fail, label %got
 fail:
   ret i64 -1
 got:
-  %n = call i64 @strlen(ptr %r)
+  %n = call i64 @strlen(ptr %buf)
   %fits = icmp sle i64 %n, %cap
   br i1 %fits, label %copy, label %done
 copy:
-  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %r, i64 %n, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %buf, i64 %n, i1 false)
   br label %done
 done:
-  call void @free(ptr %r)
   ret i64 %n
 }
 
@@ -9746,6 +9751,18 @@ entry:
   ret i64 %w
 }
 
+; The processors the system has, for the pool's default worker count; dwNumberOfProcessors is the
+; 32-bit word at offset 32 of SYSTEM_INFO.
+define hidden i64 @nz.os_cpus() {
+entry:
+  %si = alloca [48 x i8], align 8
+  call void @GetSystemInfo(ptr %si)
+  %np = getelementptr i8, ptr %si, i64 32
+  %n = load i32, ptr %np
+  %w = zext i32 %n to i64
+  ret i64 %w
+}
+
 define hidden ptr @nz_os_stack_alloc(i64 %total, i64 %page) {
 entry:
   %old = alloca i32, align 4
@@ -10988,7 +11005,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 34 }
+pub fn rt_abi_revision() -> Int ! {} { 35 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#
