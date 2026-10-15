@@ -232,6 +232,12 @@
       refused (N0634); a `return` or `?` in such a body stops the checker.
       `inputs/check/inferred-results.nz`. `run.sh check`: 2,785 agree, 17 differ; the checker
       carries 2,754, all agree (2,786 and 2,755 with the new case)
+- [ ] 3.1zd The prelude's names and authority (`type_environment`, `forged`): a module's own
+      `Result` or `Option` refused where it is declared (N0363) and still the type its name
+      finds, while `?` keeps the prelude's; a capability built or called as a function refused
+      (N0370), its arguments still checked. `inputs/check/prelude-names.nz`. `run.sh check`:
+      2,793 agree, 10 differ; the checker carries 2,762, all agree (2,794 and 2,763 with the
+      new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
