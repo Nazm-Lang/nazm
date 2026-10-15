@@ -5,7 +5,12 @@
 # hold the validator to its mutants. Prints each difference's file and first differing line (or the
 # pipeline's refusal), then the summary lines, over the base set and over the full set.
 #
-#     NAZM=PATH/TO/main/nazm toolchain/pipeline/tests/run.sh [-v] [-j N] [FILE.nz ...]
+#     NAZM=PATH/TO/main/nazm [TARGET=TRIPLE] toolchain/pipeline/tests/run.sh [-v] [-j N] [FILE.nz ...]
+#
+# TARGET (rewrite-in-nazm 4.2, narrowed to macOS) is `x86_64-apple-darwin` or
+# `aarch64-apple-darwin`, passed as `--target` to `nazm lir`, `nazm build` and the pipeline alike;
+# unset, neither is given one and both use their default, the Apple silicon host's. With a
+# TARGET the object cache is not compared (the probe is the host's).
 #
 # The inputs: the base set — the brief's (tests/compat/v1, corpus, examples, bench/compare/nazm),
 # the Nazm compiler under compiler/ and this pipeline itself — and the front end's test programs
@@ -26,6 +31,8 @@ while [ $# -gt 0 ]; do
         *) break ;;
     esac
 done
+TARGET=${TARGET:-}
+TFLAG=${TARGET:+--target $TARGET}
 ROOT=$(pwd)
 OUT="$ROOT/toolchain/pipeline/target"
 mkdir -p "$OUT/cmp"
@@ -58,13 +65,13 @@ one() {
     if ! "$NAZM" core-ir --json --with-sources "$f" > "$o.cir" 2>/dev/null; then echo "skip" >> "$r"; return; fi
     if ! "$NAZM" mir "$f" > "$o.want" 2>/dev/null; then echo "skip" >> "$r"; return; fi
     # The validator against its mutants: every one must be caught.
-    perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" mutants "$o.cir" > "$o.mut" 2>&1
+    perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG mutants "$o.cir" > "$o.mut" 2>&1
     grep "^missed" "$o.mut" | sed "s|^|validator: $f: |" | head -5 | sed 's/^/note /' >> "$r"
     if s=$(grep -E "^[0-9]+ mutants, [0-9]+ caught$" "$o.mut"); then
         m=${s%% mutants*}; k=${s##*, }; k=${k%% caught}
         echo "mut $m $k" >> "$r"
     fi
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG mir "$o.cir" > "$o.got" 2> "$o.err" && cmp -s "$o.got" "$o.want"; then
         echo "mir agree" >> "$r"
     elif [ -s "$o.err" ]; then
         echo "mir differ $(head -1 "$o.err")" >> "$r"
@@ -74,20 +81,20 @@ one() {
     # LIR's tables (task 6.1, 6.2): `nazm lir` with each unit's instruction text taken out
     # (`tables.py`, which re-serialises byte for byte); then the instruction text (6.3) against
     # `nazm lir --ops`; then the whole document, text and digests included.
-    if ! "$NAZM" lir "$f" > "$o.lwant0" 2>/dev/null; then echo "noir" >> "$r"; return; fi
+    if ! "$NAZM" lir $TFLAG "$f" > "$o.lwant0" 2>/dev/null; then echo "noir" >> "$r"; return; fi
     python3 toolchain/pipeline/tests/tables.py < "$o.lwant0" > "$o.lwant"
-    "$NAZM" lir --ops "$f" > "$o.owant" 2>/dev/null
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" ops "$o.cir" > "$o.ogot" 2> "$o.oerr" && cmp -s "$o.ogot" "$o.owant"; then
+    "$NAZM" lir $TFLAG --ops "$f" > "$o.owant" 2>/dev/null
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG ops "$o.cir" > "$o.ogot" 2> "$o.oerr" && cmp -s "$o.ogot" "$o.owant"; then
         echo "ops agree" >> "$r"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" lir "$o.cir" > "$o.fgot" 2>/dev/null && cmp -s "$o.fgot" "$o.lwant0"; then
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG lir "$o.cir" > "$o.fgot" 2>/dev/null && cmp -s "$o.fgot" "$o.lwant0"; then
             echo "doc agree" >> "$r"
         else
             echo "doc differ" >> "$r"
         fi
         # Debug information (task 4.1): the text with its positions, the variables a debugger
         # shows and the files the positions name, against `nazm lir --ops --debug`.
-        "$NAZM" lir --ops --debug "$f" > "$o.dwant" 2>/dev/null
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" ops-debug "$o.cir" > "$o.dgot" 2> "$o.derr" && cmp -s "$o.dgot" "$o.dwant"; then
+        "$NAZM" lir $TFLAG --ops --debug "$f" > "$o.dwant" 2>/dev/null
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG ops-debug "$o.cir" > "$o.dgot" 2> "$o.derr" && cmp -s "$o.dgot" "$o.dwant"; then
             echo "dbg agree" >> "$r"
         else
             echo "dbg differ $(head -1 "$o.derr") $(cmp "$o.dwant" "$o.dgot" 2>&1 | head -1 | sed "s/.* differ: //")" >> "$r"
@@ -102,25 +109,26 @@ one() {
     # `nazm build --emit-ir` wrote beside the program's, by default and with a stack size and a
     # heap limit (`units.py`); an input `nazm build` refuses is counted apart.
     rm -f "$o".bin*
-    if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
+    if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
         # Every unit the build compiled, keyed here from its bytes, must be in the store under
         # that key, and the entry written again must be the one found, byte for byte.
         rm -rf "$o.scratch"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
+        if [ -n "$TARGET" ]; then :
+        elif perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
             echo "obj agree $(wc -l < "$o.objs" | tr -d ' ')" >> "$r"
         else
             echo "obj differ $(grep -v ' hit [0-9a-f]*$' "$o.objs" | head -1 | sed "s|$OUT/cmp/||")" >> "$r"
         fi
         rm -rf "$o.scratch"
-        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
             v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
         else
             v="differ $(head -1 "$o.rerr")"
         fi
         if [ "$v" = agree ]; then
             rm -f "$o".bin*
-            if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
-                && perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
+            if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
+                && perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
                 v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
                 [ "$v" = agree ] || v="$v (with a stack size and a heap limit)"
             fi
@@ -130,7 +138,7 @@ one() {
     else
         echo "rt nobuild" >> "$r"
     fi
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
         echo "tables agree" >> "$r"
     elif [ -s "$o.lerr" ]; then
         echo "tables differ $(head -1 "$o.lerr")" >> "$r"
@@ -139,7 +147,7 @@ one() {
     fi
 }
 export -f one
-export NAZM OUT TC
+export NAZM OUT TC TARGET TFLAG
 tr '\n' '\0' < "$OUT/inputs" | xargs -0 -n 1 -P "$JOBS" bash -c 'one "$0"'
 
 # The summary over a set of inputs (`base` leaves out the front end's test programs).
@@ -178,7 +186,8 @@ summary() {
             printf "[%s] lir ops: %d agree, %d differ (%d stops naming an unported construct, %d different text; the whole document: %d agree, %d differ)\n", label, oagree, ostop + owrong, ostop, owrong, fagree, fdiffer
             printf "[%s] lir ops --debug: %d agree, %d differ\n", label, dagree, ddiffer
             printf "[%s] runtime units: %d agree, %d differ (%d inputs with LIR that nazm build refuses)\n", label, ragree, rdiffer, rnobuild
-            printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
+            if (ENVIRON["TARGET"] != "") printf "[%s] object cache: not compared for --target %s (the probe is the host'"'"'s)\n", label, ENVIRON["TARGET"]
+            else printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
         }' "$OUT/results.$label"
 }
 # The details once: with the full set's summary when there is one, else with the base set's.
@@ -196,7 +205,7 @@ NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build "$OUT/digest.nz" -o "$OUT/digest" --pr
 want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["digest"])' "$OUT/digest.json")
 got="blake3:$("$OUT/pipeline" runtime-digest)"
 if [ "$want" = "$got" ]; then echo "runtime digest: agree"; else echo "runtime digest: differ ($got, nazm build records $want)"; fi
-entry=$(ls "$OUT"/cache/native/*/*.nzo | head -1)
+entry=$(find "$OUT/cache/native" -name '*.nzo' | head -1)
 "$OUT/pipeline" entry-check "$OUT/cache" "$(basename "$entry" .nzo)" > "$OUT/entry-check"
 if cmp -s "$OUT/entry-check" - <<'EOF'
 whole: accepted

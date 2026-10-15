@@ -619,8 +619,8 @@ pub fn unit_plans(c: Cir, p: MirProgram) -> Vec[UnitPlan] ! {} {
 
 /// `nazm lir`'s document: the tables, and with `texts` (one per unit, in `unit_plans` order) each
 /// unit's `lir` member, its instruction text and that text's BLAKE3 digest; with none, the tables
-/// alone.
-pub fn lir_document(c: Cir, tt: TypeTable, p: MirProgram, texts: Strs) -> Result[Str, Str] ! {} {
+/// alone. Both macOS targets share the data layout; only `target` names which.
+pub fn lir_document(c: Cir, tt: TypeTable, p: MirProgram, target: Str, texts: Strs) -> Result[Str, Str] ! {} {
     let lx = lx_new(c, tt, p)
     if p.entry < 0 { return Err("this program has no `main` to compile") }
     let units = strs_new()
@@ -634,5 +634,5 @@ pub fn lir_document(c: Cir, tt: TypeTable, p: MirProgram, texts: Strs) -> Result
         i += 1
     }
     let layout = "{\"bool\":1,\"int\":8,\"pointer\":8,\"str\":{\"align\":8,\"length\":8,\"owner\":16,\"pointer\":0,\"size\":24}}"
-    Ok("{\"data_layout\":" + layout + ",\"entry\":" + js(symbol_of(vec_get(p.fns, p.entry))) + ",\"schema\":\"nazm.lir/2\",\"target\":\"aarch64-apple-darwin\",\"units\":[" + str_join(units, ",") + "]}")
+    Ok("{\"data_layout\":" + layout + ",\"entry\":" + js(symbol_of(vec_get(p.fns, p.entry))) + ",\"schema\":\"nazm.lir/2\",\"target\":" + js(target) + ",\"units\":[" + str_join(units, ",") + "]}")
 }
