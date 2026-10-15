@@ -68,3 +68,34 @@ jobs:
 
       - name: accounting selftest
         run: cargo run -p nazm-bench -- selftest
+
+  # The other hosts GitHub gives a public repository (2026-10-15): real Windows x86_64, Linux
+  # aarch64 and macOS on Apple Silicon, where until now the evidence was Wine in a container, a
+  # container on a Mac, and the developer's own Mac. The same host-safe subset, nothing more.
+  #
+  # **Evidence-gathering, not a gate.** Each job may fail without failing the run
+  # (`continue-on-error`) until it is green once; then the flag comes off and it gates like
+  # `host-safe`. A green job here is a recorded host-safe run on that host, not a target made
+  # run-verified: `docs/support.md` names what that takes, and the release gate is unchanged.
+  platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+
+      - name: build
+        run: cargo build --workspace --locked
+
+      - name: project checks
+        run: cargo xtask check
+
+      - name: test (host-safe subset)
+        run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
