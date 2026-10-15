@@ -134,6 +134,13 @@
       `--debug` 1009 of 1009, runtime units 984 of 984 (25 refused by `nazm build`; 485 compared
       files carry the plain counts), object cache 984 of 984 inputs (4559 units), the runtime
       digest equal, 56362 of 56362 mutants caught
+- [x] 8.5 One pool worker per processor (`09289a54`, runtime ABI 35) and `realpath` into the
+      runtime's own buffer (`12fbaf75`): `rtext.nz` regenerated; `rtgen.nz`'s `posix_cpus`
+      writes each POSIX stack unit's `nz.os_cpus` by `sysconf`'s name (58 Darwin, 84 glibc and
+      musl, 0x61 Bionic). LIR's text unchanged. `run.sh` against the reference built at
+      `c02d12e5`: MIR 1475 of 1475, LIR tables, ops (document and digests) and `--debug` 1014 of
+      1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache 989 of 989 inputs
+      (4599 units), the runtime digest equal, 58739 of 58739 mutants caught
 - [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
       now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
