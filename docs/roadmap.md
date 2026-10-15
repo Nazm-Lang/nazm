@@ -50,6 +50,8 @@ large boundaries only, not one per stage (`releases/0.9.0.md`).
 | **R7** | The harness and the tests in Nazm | in progress |
 | **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | in progress: every program of its suite agrees with LLVM on aarch64 and x86_64 Mach-O |
 | **R8** | Cut-over: the released `nazm` built by Nazm, then the 1.0 release gate | last |
+| **P** | Performance in Nazm, between the cut-over and the 1.0 gate: the optimisation passes and the compiler's own speed, written once in Nazm rather than in the Rust compiler and ported (2026-10-15) | after R8's cut-over |
+| **After 1.0** | Zero dependence on LLVM: Nazm's own optimiser and code generator for optimised builds too, measured against the LLVM build before replacing it; then the ecosystem, Linux and Windows | after 1.0 |
 
 The milestone tables below are the history that led here; the "R1" among them (2026-10-07) is the
 earlier release-readiness milestone, not this programme's first stage.
