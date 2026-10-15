@@ -17,9 +17,9 @@ expression typed by its spelled type (`Int`, `Vec[Str]`, `enums.nz::enum Shape`,
 difference either fixed or shown meaningless; the port reads as the rules of §7.42, not as Rust
 transliterated.
 
-**Non-goals:** a faster pipeline than Rust's (budgets are R2/R3 work at integration); the runtime
-generator, the object cache and debug information (task 4.1's later items); targets beyond the
-host's (task 4.2).
+**Non-goals:** a faster pipeline than Rust's (budgets are R2/R3 work at integration); targets
+beyond the host's (task 4.2). The runtime generator, the object cache and debug information —
+task 4.1's later items — were non-goals of the proposal and follow LIR (7).
 
 ## The data model
 
@@ -156,6 +156,38 @@ What 6.3.5 found, and decided:
   unchanged; no mutant's `find` text named the old line. Held by `lir::a_generic_channels_helper_is_named_by_its_element`
   (`crates/nazm-cli/tests/lir.rs`) and its mutant `r3-a-generic-channel-s-helper-named-by-the-checker-s-id`, caught.
 
+## The runtime generator (7.1)
+
+`nazm build` links beside the program's own units the runtime's: the runtime itself (the parts
+the program reaches), the platform entry, and per target the task switch, the task stacks and
+stack budget, `errno`'s location, the files part's C facts, Windows' start-up, and under
+`--heap-limit` the counted heap (`crates/nazm-cli/src/build/lower.rs`). They are LLVM text, the
+runtime crate's (`crates/nazm-runtime`): some 10,000 lines of text constants and the rules that
+choose and join them.
+
+Decided: **the texts are data, the rules are ported.** `tests/runtime_text.py` writes `rtext.nz`
+from the crate — every `const NAME: &str` of the hosted runtime as `rt_FILE_NAME()` (a raw
+string, the 0.10.0 form), the declarations every unit carries (`os::declarations`, `GLOBALS`, the
+declared `INVENTORY`), `SINGLE_THREAD_STATE`, the ABI revision, the `os` unit's format string,
+and each inventory entry as Rust's `Debug` writes it (what the runtime digest covers, 7.2) — and
+`run.sh` checks it is current, as `runtime.nz` is checked against `IMPORTS`. `rtgen.nz` is the
+rules: `Needs` and `settled`, `emit_runtime` with the pool's hooks into the thread model's texts,
+the entry, `emit_switch`, `emit_errno`, `emit_os` (the C facts per target, the network part),
+`emit_stack`, `emit_init`, `count_heap` and `emit_heap`, and the units' order. While Rust is the
+reference the texts cannot drift; once it is frozen (R8) `rtext.nz` is the source.
+
+What the program reaches is noted where LIR imports a runtime entry, as `Lw::runtime` does: its
+part (`runtime.nz` now carries each entry's part), the shims, the stack check, the string part
+for `nz.strs_release`, I/O for `nz.argc`/`nz.argv`; `single` when `main` holds no `SpawnCap`,
+`NetCap` or `ForeignCap`; the entry's `foreign` when any function calls C; a word per capability
+`main` takes.
+
+`pipeline runtime CORE.json [STACK HEAP]` prints the units, each after `;;; unit NAME`; `run.sh`
+builds every input with LIR with `nazm build --emit-ir`, by default and with `--stack-size` and
+`--heap-limit`, and compares every runtime unit byte for byte and that the build wrote exactly
+those (`tests/units.py`). Only the host's units can be compared so: the other targets' are held
+by the runtime digest (7.2), which covers every target's.
+
 ## Order of work
 
 1. This proposal.
@@ -166,6 +198,7 @@ What 6.3.5 found, and decided:
    spawn; generic instances.
 5. The MIR validator (`verify.nz`): structure and typing, then the ownership dataflow.
 6. LIR: data layout, units, symbols and linkage, record and enum layouts, instructions.
+7. Task 4.1's later items: the runtime generator, the object cache, debug information.
 
 ## Risks / Trade-offs
 

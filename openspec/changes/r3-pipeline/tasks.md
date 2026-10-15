@@ -89,3 +89,15 @@
         as `vec.KEY`) instead of the checker's channel id, the coordinator's decision, in
         `crates/nazm-lir` (`Lw::type_name`); `ops.nz` derives it. `run.sh`: lir ops 161 of 161
         (base) and 1002 of 1002 (full) identical, document and digests included
+
+## 7. Task 4.1's later items
+
+- [x] 7.1 The runtime generator (`rtgen.nz`; `rtext.nz` from the runtime crate by
+      `tests/runtime_text.py`): the hosted runtime, the entry, the per-target units and the
+      counted heap, for what the program's LIR reaches (`pipeline runtime`). `run.sh`: runtime
+      units 160 of 160 (base) and 977 of 977 (full) identical to `nazm build --emit-ir`'s, by
+      default and with `--stack-size` and `--heap-limit` (25 inputs with LIR `nazm build`
+      refuses on the host: board, WebAssembly and C-library programs)
+- [ ] 7.2 The object cache: the object keys of both backends (the runtime digest among their
+      parts) and the store
+- [ ] 7.3 Debug information

@@ -56,6 +56,10 @@ struct Lo {
     funcs: HashMap[Int, Int],
     plain: HashMap[Int, Int],
     runtime: HashMap[Str, Str],
+    /// The runtime part of each registry entry, and the parts and services the units reach
+    /// (`Needs`, by name), shared by every unit of the program.
+    parts: HashMap[Str, Str],
+    needs: HashMap[Str, Bool],
     /// Each module's source text and line starts, by module name.
     sources: HashMap[Str, Str],
     errors: Strs,
@@ -288,12 +292,25 @@ fn message(lo: Lo, code: Str, what: Str, at: Str) -> Ints {
 }
 
 fn runtime_data(lo: Lo, name: Str, c: Str) -> Int {
+    if name == "nz.argc" || name == "nz.argv" { hashmap_set(lo.needs, "io", true); }
     symbol(lo, name, "import", "data", c, "", false)
+}
+
+/// What calling the runtime's `name` makes the program reach (`Lw::runtime`): its part, the
+/// second compiler's shims, the stack check, and the string part for `nz.strs_release`.
+fn note_needs(lo: Lo, name: Str) {
+    let part = match hashmap_get(lo.parts, name) { Some(p) => p, None => "" }
+    let need = text_to_lower(part)
+    if need != "" && need != "base" && need != "libc" && need != "heap" { hashmap_set(lo.needs, need, true); }
+    hashmap_set(lo.needs, "shims", true)
+    if name == "nz.stack_check" || name == "nz.stack_check_frame" { hashmap_set(lo.needs, "stack", true); }
+    if name == "nz.strs_release" { hashmap_set(lo.needs, "strings", true); }
 }
 
 fn runtime_sym(lo: Lo, name: Str) -> Int {
     match hashmap_get(lo.runtime, name) {
         Some(sig) => {
+            note_needs(lo, name)
             let arrow = match text_find(sig, " -> ") { Some(i) => str_slice(sig, i + 4, str_len(sig)), None => "" }
             symbol(lo, name, "import", "func", sig, arrow, false)
         },
@@ -4715,13 +4732,13 @@ fn print_module(lo: Lo) -> Str {
     str_join(lines, "\n") + "\n" + str_join(lo.functions, "")
 }
 
-fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], sources: HashMap[Str, Str]) -> Result[Str, Str] {
+fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], parts: HashMap[Str, Str], needs: HashMap[Str, Bool], sources: HashMap[Str, Str]) -> Result[Str, Str] {
     let anon = ints_new()
     ints_push(anon, 0)
     let lo = Lo(lx: lx, c: c, p: p, unit: u, sym_name: strs_new(), sym_link: strs_new(), sym_kind: strs_new(), sym_sig: strs_new(),
         sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
         messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
-        runtime: runtime, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
+        runtime: runtime, parts: parts, needs: needs, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
         tramps: ints_new(), tramp_tys: vec_new(), tramp_offs: vec_new(), cellvals: hashmap_new())
     declare_functions(lo)
     define_statics(lo)
@@ -4761,12 +4778,24 @@ fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, 
 
 /// Every unit's instruction text, in `unit_plans` order.
 pub fn lir_texts(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Strs, Str] ! {} {
+    lir_texts_needs(c, tt, p, hashmap_new())
+}
+
+/// `lir_texts`, noting in `needs` what of the runtime the units reach (`Needs`, by name).
+pub fn lir_texts_needs(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, Bool]) -> Result[Strs, Str] ! {} {
     if p.entry < 0 { return Err("this program has no `main` to compile") }
     let lx = lx_new(c, tt, p)
     let runtime: HashMap[Str, Str] = hashmap_new()
     for row in text_split(runtime_table(), "\n") {
         match text_find(row, "|") {
             Some(i) => { hashmap_set(runtime, str_slice(row, 0, i), str_slice(row, i + 1, str_len(row))); },
+            None => {},
+        }
+    }
+    let parts: HashMap[Str, Str] = hashmap_new()
+    for row in text_split(runtime_parts(), "\n") {
+        match text_find(row, "|") {
+            Some(i) => { hashmap_set(parts, str_slice(row, 0, i), str_slice(row, i + 1, str_len(row))); },
             None => {},
         }
     }
@@ -4778,7 +4807,7 @@ pub fn lir_texts(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Strs, Str] ! {}
     }
     let out = strs_new()
     for u in unit_plans(c, p) {
-        match lower_unit(c, lx, p, u, runtime, sources) {
+        match lower_unit(c, lx, p, u, runtime, parts, needs, sources) {
             Ok(t) => { strs_push(out, t); },
             Err(e) => { return Err(e) },
         }
