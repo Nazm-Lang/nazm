@@ -243,3 +243,40 @@ A correction to the table above: the bit's measured +57% in C included LLVM no l
 call into a loop. The prototype shows the bit and the taken stack-check branch together cost Nazm's
 gap: without both, `fib` is 44.3 ms — C with the same overflow and stack checks to the tenth.
 
+
+### 4.2 in the reference (2026-10-15)
+
+Implemented as designed in the Rust toolchain (`docs/architecture.md` §7.115), with these choices:
+`nz.raise`, its stop function and the exception object are defined `linkonce_odr hidden` by each unit
+that has a failure exit rather than in the runtime, so the runtime artifact stays target-agnostic
+(Windows and Cranelift link the same one) — runtime ABI 34 all the same, since an image now links the
+system's unwinder; the convention is chosen by `Target::failures` (macOS, Linux, Android, iOS
+unwind); and the stack check's weight is on every target. LIR's validator holds a call's `failed`
+value to the branch ending its block; no schema or epoch moves. The prototype's 19 failures were the
+debug pass (an `invoke` in a plain entry had no location, so LLVM dropped the unit's debug
+information — the sampler's attribution followed from that) and the boards; the boards keep the bit,
+the debug pass learned `invoke` and the `linkonce_odr` definitions, and a one-thread program makes
+`nz.exc` an ordinary global.
+
+Release `nazm`, `--opt-level 2`, `hyperfine -N --warmup 3 --runs 15`, same host and session, before
+(`50933cbd`) and after:
+
+| | before | after |
+| --- | ---: | ---: |
+| `fib(35)` | 55.7 ms ± 0.3 | **44.3 ms ± 0.3** (−20%) |
+| word frequency | 132.4 ms ± 1.0 | 129.4 ms ± 0.8 (−2%) |
+| a stack exhausted 196,098 frames deep, each owning a string and a `defer` (failure path) | 8.9 ms | 2.26 s |
+
+The failure path costs one new forced unwind per frame that owns something, and on macOS each is
+dominated by the system unwinder's lookup of the frame's unwind information: slower than the
+prototype's estimate, accepted by answer 4 and recorded in `docs/limitations.md`.
+
+**What R3 must change in `toolchain/pipeline`** (not done here). Its LIR text is unchanged, so no
+digest moves, and it prints no LLVM of its own. It must: regenerate `rtext.nz` from the runtime crate
+(`toolchain/pipeline/tests/runtime_text.py`: `rt_abi_revision` 33 → 34, and `nz.exc` among the
+one-thread globals if the generator carries `SINGLE_THREAD_STATE`); give its LIR (`ops.nz`) the
+validator's rule when it validates LIR — a call's `failed` value only the condition of the branch
+ending the call's block, the call that block's last instruction (its lowering already obeys it);
+and keep `failure_convention.rs`'s expectations in mind wherever its harness ports
+`failure_bit.rs` (renamed) or reads `{i64, i1}` from hosted LLVM text. R9's code generator keeps the
+bit (`sel.nz`, `sel_x64.nz`) until it writes unwind tables.
