@@ -686,3 +686,15 @@ provider adapter is a replaceable executable behind a versioned schema.
 - Order: H1 and Q1 are language changes that touch both checkers and should land before the rewrite
   cuts over, or after it in the Nazm compiler alone — whichever comes first; the backends (H3–H7,
   Q3–Q6) are independent of the cut-over.
+
+## The copyright holder's answers on H and Q (2026-10-15)
+
+1. **Chip design at 1.0 is FPGA only**; an ASIC flow (OpenLane on SkyWater 130 nm, possibly a Tiny
+   Tapeout submission) is an experimental track after 1.0.
+2. **All three language changes are approved:** value parameters `[const W: Int]` (experimental at
+   1.0), a fifth, **linear** kind of value (limited to `Qubit` at 1.0), and an eleventh capability,
+   **`QuantumCap`** (its name reserved before 1.0).
+3. **Boards:** an iCEBreaker (iCE40UP5K) for H, and microcontroller boards for M (one Cortex-M, one
+   RISC-V) — to be bought when the board runs come; designs and simulation do not wait for them.
+4. **Quantum provider:** IBM Quantum's free plan, on the copyright holder's account; 1.0 claims
+   correctness on the simulator and that real hardware accepts and executes the programs.
