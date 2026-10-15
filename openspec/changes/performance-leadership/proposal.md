@@ -28,6 +28,14 @@ on 2026-10-15 Nazm took 55 ms for `fib` (C 35 ms) and 188 ms for word frequency 
 - **Phase 5 — independent verification.** Reproducible scripts, published raw data, an outside
   review before any claim.
 
+## Focus (the copyright holder, 2026-10-15)
+
+macOS only for now — Apple Silicon, and x86_64 under Rosetta where it costs nothing — and three
+parameters first: **run speed with safety on**, **compile time** (clean and cached, against Go and
+C) and **multicore** scaling (a parallel workload against Go, Rust and C). The ecosystem —
+libraries, community, other platforms — comes later; GitHub's other hosts stay as free evidence,
+with no porting effort spent on them.
+
 ## Non-negotiable
 
 Correctness, memory safety and the defined semantics are never traded for a benchmark; no workload
