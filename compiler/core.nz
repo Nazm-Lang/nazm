@@ -1061,8 +1061,10 @@ fn co_loop(lo: Lo, id: Int, cond: Str, n: Int, name: Int, step: Strs) -> Str {
 // reads a split through (`split_each`).
 fn co_split_call(lo: Lo, e: Int) -> Bool {
     let t = lo.t;
-    if sx_kind(t, e) == tk_tuple() || sx_text(t, e) != "Call" { return false; }
-    let cs = sx_field(t, e, "callee_span");
+    if sx_kind(t, e) == tk_tuple() || (sx_text(t, e) != "Call" && sx_text(t, e) != "MethodCall") { return false; }
+    // `s.split(sep)` by name (R1, 5b.15) is the call the checker read it as, at the method.
+    let mut cs = 0;
+    if sx_text(t, e) == "MethodCall" { cs = sx_field(t, e, "method_span"); } else { cs = sx_field(t, e, "callee_span"); }
     let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
     if site < 0 { return false; }
     let callee = ck_site_fn(lo.c, site);
@@ -1091,7 +1093,17 @@ fn co_split_loop(lo: Lo, n: Int, id: Int, index: Int, e: Int, stmts: Strs) -> St
     let at = sx_field(t, n, "name_span");
     let tint = ck_t_int();
     let tstr = ck_t_str();
-    let list = sx_items(t, sx_field(t, e, "args"));
+    let mut list = sx_items(t, sx_field(t, e, "args"));
+    if sx_text(t, e) == "MethodCall" {
+        let both = ints_new();
+        ints_push(both, sx_field(t, e, "receiver"));
+        let mut k = 0;
+        while k < ints_len(list) {
+            ints_push(both, ints_get(list, k));
+            k = k + 1;
+        }
+        list = both;
+    }
     if ints_len(list) != 2 {
         co_halt(lo, "a `text_split` call without two arguments");
         return stmts;
@@ -1363,6 +1375,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     }
     if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
     if k == "Closure" { return co_closure(lo, e); }
+    if k == "Array" || k == "ArrayRepeat" { return co_array(lo, e, k == "ArrayRepeat"); }
     if k == "Neg" {
         // A literal negated, of a type the checker gave it (`integer`): the negative constant,
         // at the literal.
@@ -2683,6 +2696,55 @@ fn co_made_cell(lo: Lo, l: Int, value: Str, span: Int) -> Str {
     let tail = co_read(lo, made, span);
     let body = co_block_json(lo, false, co_list_one(int_to_str(made)), stmts, tail, span);
     co_node(lo, "block", co_field_first("body", body), cell, span)
+}
+
+// `[a, b, …]` as an array (`ExprKind::Array`), or as the list the checker read it as
+// (`sequence_literal`: `{ let made = vec_new(); vec_push(made, a); …; made }`); `[v; n]`
+// (`ExprKind::ArrayRepeat`).
+fn co_array(lo: Lo, e: Int, repeat: Bool) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let span = sx_field(t, e, "span");
+    let ty = ck_array_literal_at(c, co_abs_s(lo, span), co_abs_e(lo, span));
+    if ty < 0 { return co_stopped(lo, "a list or array the checker did not record"); }
+    if repeat {
+        let value = co_expr(lo, sx_field(t, e, "value"));
+        let fields = strs_new();
+        strs_push(fields, co_field_first("value", value));
+        strs_push(fields, co_field("count", int_to_str(ck_array_len(c, ty))));
+        return co_node(lo, "array-repeat", str_join(fields, ""), ty, span);
+    }
+    let elems = sx_items(t, sx_field(t, e, "elems"));
+    if ck_type_class(c, ty) == "array" {
+        let items = strs_new();
+        let mut i = 0;
+        while i < ints_len(elems) {
+            strs_push(items, co_expr(lo, ints_get(elems, i)));
+            i = i + 1;
+        }
+        return co_node(lo, "array", co_field_first("elems", co_list(items)), ty, span);
+    }
+    if ck_seq_kind(c, ty) != "vec" { return co_stopped(lo, "a list literal of a type other than a `Vec`"); }
+    let made = co_temp(lo, "made", ty, span);
+    let targs = co_list_one(json_str(co_durable(lo, ck_type_arg(c, ty, 0))));
+    let stmts = strs_new();
+    strs_push(stmts, co_let(made, co_builtin(lo, "vec_new", targs, "", ty, span)));
+    let mut i = 0;
+    while i < ints_len(elems) {
+        let value = co_expr(lo, ints_get(elems, i));
+        let fill = strs_new();
+        strs_push(fill, co_read(lo, made, span));
+        strs_push(fill, value);
+        let o = strs_new();
+        strs_push(o, co_op_first("eval"));
+        strs_push(o, co_field("value", co_builtin(lo, "vec_push", targs, str_join(fill, ","), ck_t_int(), span)));
+        strs_push(o, co_field("ends", co_ends(false)));
+        strs_push(stmts, co_object(o));
+        i = i + 1;
+    }
+    let tail = co_read(lo, made, span);
+    let body = co_block_json(lo, false, co_list_one(int_to_str(made)), stmts, tail, span);
+    co_node(lo, "block", co_field_first("body", body), ty, span)
 }
 
 // A closure made (N50): its function, and the locals it captures, in the order it captured them.

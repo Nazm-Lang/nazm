@@ -312,6 +312,8 @@ pub struct Ck {
     // record's (`construction`), and the call site a call is (`callee`).
     mvar: Smap,
     mclo: Smap,
+    // The type a list or array literal, or a `[v; n]`, was made as, by its span.
+    marr: Smap,
     mfor: Smap,
     mcons: Smap,
     msite: Smap,
@@ -1436,7 +1438,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -6490,6 +6492,12 @@ fn expected_element(c: Ck, expected: Int) -> Int {
 // where no fixed array is expected, a list — a `Vec` of its first element's type (R1.5, D6); and
 // where one is, an array of the element expected.
 fn check_array_literal(c: Ck, e: Int, expected: Int) -> Int {
+    let t = array_literal(c, e, expected);
+    sm_put(c.marr, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), t);
+    t
+}
+
+fn array_literal(c: Ck, e: Int, expected: Int) -> Int {
     let elems = kids(c, e, "elems");
     let span = fld(c, e, "span");
     if expected >= 0 && tag(c, expected) == tag_vec() {
@@ -6548,6 +6556,7 @@ fn check_array_repeat(c: Ck, e: Int, expected: Int) -> Int {
     if n < 0 { return array_of(c, elem, 1); }
     let t = array_of(c, elem, n);
     array_refusal(c, t, sps(c, span), spe(c, span), c.d);
+    sm_put(c.marr, sps(c, span), spe(c, span), t);
     t
 }
 
@@ -14329,6 +14338,10 @@ pub fn ck_is_tuple(c: Ck, t: Int) -> Bool { is_tuple(c, t) }
 // type's element.
 pub fn ck_tuple_of(c: Ck, elems: Ints) -> Int { tuple_ty(c, elems) }
 pub fn ck_array_elem(c: Ck, t: Int) -> Int { array_elem(c, t) }
+// An array type's length.
+pub fn ck_array_len(c: Ck, t: Int) -> Int { ints_get(c.tya, t) }
+// The type the list or array literal, or `[v; n]`, written at `s..e` (absolute) was made as, or -1.
+pub fn ck_array_literal_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.marr, s, e) }
 pub fn ck_payload_ty(c: Ck, t: Int, v: Int, i: Int) -> Int { field_ty_in(c, t, ints_get(c.vff, ints_get(c.evf, ta(c, t)) + v) + i) }
 // What a type is to the lowering's operators: `int` (`Int`), `integer` (another integer type),
 // `float`, `bool`, `str`, `text`, `record`, `enum`, `array`, `box`, `chain`, `param`, or "".
