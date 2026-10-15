@@ -1,0 +1,9 @@
+use "lib/shapes.nz";
+struct Mine { v: Int }
+impl Shape for Mine { fn sides(self: Mine) -> Int { 0 } }
+impl Shape for Int { fn sides(self: Int) -> Int { self } }
+fn count[T: Shape](x: T) -> Int { x.sides() }
+fn main() -> Int {
+    let t = Tri(a: 1);
+    count(t) + t.sides() + count(Mine(v: 1)) + count(true)
+}

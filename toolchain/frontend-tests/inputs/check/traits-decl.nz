@@ -1,0 +1,17 @@
+trait Show {
+    fn show(self: Self) -> Str;
+    fn show(self: Self) -> Str;
+}
+trait Bad { fn first(x: Int) -> Int; fn second(self: Int) -> Int; }
+struct P { x: Int }
+enum E { A, B }
+trait P { fn p(self: Self) -> Int; }
+impl Show for P { fn show(self: P) -> Str { "p" } fn extra(self: P) -> Int { 1 } }
+impl Show for P { fn show(self: P) -> Str { "again" } }
+impl P for E { fn p(self: E) -> Int { 0 } }
+impl Missing for E { fn m(self: E) -> Int { 0 } }
+impl Show for Vec[Int] { fn show(self: Vec[Int]) -> Str { "v" } }
+impl Show for Int { fn show(self: Int) -> Int { self } }
+impl Show for Bool { fn show(self: Bool) -> Str ! { io } { "b" } }
+fn takes(s: Show) -> Int { 0 }
+fn main() -> Int { 0 }
