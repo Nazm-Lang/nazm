@@ -1,0 +1,56 @@
+// `Box`, `Chain` and `Cell` (R1a, R1b) and the layouts they make, as the checker refuses them.
+enum Tree { Leaf, Node(left: Box[Tree], right: Box[Tree]), }
+struct Loop { next: Cell[Option[Loop]], }
+struct Pair[T] { a: T, b: Box[T], }
+struct Owns { p: Pair[Owns], }
+struct D0 { x: D1, }
+struct D1 { x: D2, }
+struct D2 { x: D3, }
+struct D3 { x: D4, }
+struct D4 { x: D5, }
+struct D5 { x: D6, }
+struct D6 { x: D7, }
+struct D7 { x: D8, }
+struct D8 { x: D9, }
+struct D9 { x: D10, }
+struct D10 { x: D11, }
+struct D11 { x: D12, }
+struct D12 { x: D13, }
+struct D13 { x: D14, }
+struct D14 { x: D15, }
+struct D15 { x: D16, }
+struct D16 { x: D17, }
+struct D17 { x: D18, }
+struct D18 { x: D19, }
+struct D19 { x: D20, }
+struct D20 { x: D21, }
+struct D21 { x: D22, }
+struct D22 { x: D23, }
+struct D23 { x: D24, }
+struct D24 { x: D25, }
+struct D25 { x: D26, }
+struct D26 { x: D27, }
+struct D27 { x: D28, }
+struct D28 { x: D29, }
+struct D29 { x: D30, }
+struct D30 { x: D31, }
+struct D31 { x: D32, }
+struct D32 { x: Int, }
+
+fn work(b: Box[Int]) -> Int { box_get(b) }
+fn bare(b: Box) -> Int { 0 }
+
+fn main(s: SpawnCap) -> Int ! {spawn} {
+    let a = box_new(1);
+    let b = box_new(1);
+    let same = a == b;
+    let less = a < b;
+    let c = cell_new("x");
+    cell_set(c, 2);
+    let k = chain_from_vec(vec_new[Int]());
+    let n = k.len() + a.get();
+    let mut f = cell_new(fn(x: Int) -> Int { x });
+    let g = fn() -> Int { 0 };
+    scope { spawn work(a); }
+    0
+}

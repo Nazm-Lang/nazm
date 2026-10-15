@@ -181,6 +181,16 @@
       `xs[i] = v` on a sequence or a map by name (`element_by_name`), and `x.m(…)` as
       `<type>_m(x, …)` (`named_method`, R1 5b.15). `inputs/check/arrays.nz`. `run.sh check`:
       2,677 agree, 116 differ; the checker carries 2,571, all agree (2,678 and 2,572 with the new case)
+- [ ] 3.1x `Box`, `Chain` and `Cell` (R1a, R1b) and layouts (`UserTypes::ownership_cycles`):
+      the three written (N0352), shown, unified and inferred as a `Vec` is, each with its own kind;
+      their generic built-ins; equality through a `Box` or `Chain`, neither ordered nor crossing
+      into a task; a `Cell` a mutable holder of a function value, the others not; `for` over a
+      `Chain`; the renamed `list_*` built-ins (N0637). The ownership graph ported in place of the
+      stop at any cycle: each parameter's uses to a fixed point, edges inline, counted or
+      immutable, the impossible layouts (N0336) and then the counted cycles (N0359) with the field
+      that closes each, and the nesting bound of declarations (N0338).
+      `inputs/check/box-cell.nz`. `run.sh check`: 2,727 agree, 67 differ; the checker carries
+      2,633, all agree (2,728 and 2,634 with the new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
