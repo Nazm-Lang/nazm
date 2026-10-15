@@ -1,0 +1,488 @@
+// Native compilation across module boundaries: whose symbol is this, whose file is that position
+// in, and what does the linker see. Where a program produces a value or a failure, the interpreter
+// is asked the same question and the two must agree. Ported from
+// `crates/nazm-cli/tests/native_units.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// `files` (name, text, …) written into `dir`.
+fn put(h: Caps, dir: Str, files: Strs) -> Result[Int, Str] ! { io } {
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, dir, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    ok()
+}
+
+/// What running something produced, each stream trimmed.
+fn trimmed(r: Ran) -> Ran ! {} {
+    Ran(code: r.code, stdout: text_trim(r.stdout), stderr: text_trim(r.stderr))
+}
+
+/// Build the first file of `files` and run the executable, from inside the project directory.
+fn build_and_run(h: Caps, dir: Str, files: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    put(h, dir, files)?;
+    let b = nazm(h, dir, words(f"build {strs_get(files, 0)} -o prog"));
+    check_that(b.code == 0, f"build failed: {b.stderr}")?;
+    Result[Ran, Str].Ok(value: trimmed(run(h, f"{dir}/prog", strs_new(), dir, suite_env(h))))
+}
+
+fn interpret(h: Caps, dir: Str, files: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    put(h, dir, files)?;
+    Result[Ran, Str].Ok(value: trimmed(nazm(h, dir, words(f"run --interpret {strs_get(files, 0)}"))))
+}
+
+/// Files from `name|text` pairs joined by `~`.
+fn files_of(spec: Str) -> Strs ! {} {
+    let out = strs_new();
+    for pair in text_split(spec, "~") {
+        let at = find(pair, "|");
+        strs_push(out, str_slice(pair, 0, at));
+        strs_push(out, str_slice(pair, at + 1, str_len(pair)));
+    }
+    out
+}
+
+@test
+fn a_runtime_failure_names_the_module_it_happened_in(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("main.nz|use \"lib.nz\";\nfn main() -> Int { boom(1) }\n~lib.nz|fn zero() -> Int { 0 }\npub fn boom(n: Int) -> Int { n / zero() }\n");
+    let native = build_and_run(h, d, files)?;
+    check_that(native.code == 2, ran_show(native))?;
+    check_that(native.stderr == "nazm: error[N0401]: division by zero at lib.nz:2:32", native.stderr)?;
+    // And the interpreter agrees about which file and where in it.
+    let interpreted = interpret(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(interpreted.code == 2, ran_show(interpreted))?;
+    check_that(text_contains(interpreted.stderr, "--> lib.nz:2:32"), interpreted.stderr)
+}
+
+@test
+fn the_root_module_still_names_itself(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let native = build_and_run(h, d, files_of("one.nz|fn main() -> Int { 9 / 0 }\n"))?;
+    scratch_remove(h, d);
+    check_that(native.code == 2, ran_show(native))?;
+    check_that(native.stderr == "nazm: error[N0401]: division by zero at one.nz:1:22", native.stderr)
+}
+
+/// Build with `--emit-ir` and return every `.ll` artefact as `name`, `text` pairs, by name.
+fn artefacts(h: Caps, dir: Str, files: Strs) -> Result[Strs, Str] ! { io, spawn } {
+    put(h, dir, files)?;
+    let b = nazm(h, dir, words(f"build {strs_get(files, 0)} -o prog --emit-ir"));
+    check_that(b.code == 0, f"build failed: {b.stderr}")?;
+    ll_files(h, dir, "")
+}
+
+/// Every `.ll` file directly in `dir`, its name with `rename` (`from>to`) applied, sorted by name.
+fn ll_files(h: Caps, dir: Str, rename: Str) -> Result[Strs, Str] ! { io } {
+    let names = match dir_list(h.io, dir) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: e.message); },
+    };
+    let found = strs_new();
+    for n in strs_sort(names) {
+        if text_ends_with(n, ".ll") {
+            strs_push(found, n);
+        }
+    }
+    let shown = strs_new();
+    for n in found {
+        let m = if rename == "" { n } else { replace_first(n, strs_get(text_split(rename, ">"), 0), strs_get(text_split(rename, ">"), 1)) };
+        strs_push(shown, m);
+    }
+    // Sorted by the name shown, each followed by its text.
+    let order = strs_sort(strs_copy(shown));
+    let out = strs_new();
+    for m in order {
+        let mut k = 0;
+        while k < strs_len(shown) {
+            if strs_get(shown, k) == m {
+                strs_push(out, m);
+                strs_push(out, read_text(h, f"{dir}/{strs_get(found, k)}")?);
+            }
+            k = k + 1;
+        }
+    }
+    check_that(strs_len(out) > 0, "no artefacts were written")?;
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn strs_copy(xs: Strs) -> Strs ! {} {
+    let out = strs_new();
+    for x in xs {
+        strs_push(out, x);
+    }
+    out
+}
+
+/// Every symbol any artefact defines, as `linkage symbol`, sorted.
+fn defined(art: Strs) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 1;
+    while i < strs_len(art) {
+        for l in text_lines(strs_get(art, i)) {
+            if text_starts_with(l, "define ") {
+                let head = strs_get(text_split(l, "("), 0);
+                let parts = split_whitespace(head);
+                let symbol = strs_get(parts, strs_len(parts) - 1);
+                let linkage = if text_contains(head, " internal ") { "internal" } else { if text_contains(head, " hidden ") { "hidden" } else { "external" } };
+                strs_push(out, f"{linkage} {symbol}");
+            }
+        }
+        i = i + 2;
+    }
+    strs_sort(out)
+}
+
+/// Every Nazm definition symbol, with no linkage and no runtime, sorted.
+fn nazm_symbols(art: Strs) -> Strs ! {} {
+    let out = strs_new();
+    for s in defined(art) {
+        let sym = strs_get(split_whitespace(s), 1);
+        if text_starts_with(sym, "@nz.m.") || text_starts_with(sym, "@nz.u.") {
+            strs_push(out, sym);
+        }
+    }
+    strs_sort(out)
+}
+
+/// The text of the first artefact whose text holds `needle`, or `""`.
+fn unit_with(art: Strs, needle: Str) -> Str ! {} {
+    let mut i = 1;
+    while i < strs_len(art) {
+        if text_contains(strs_get(art, i), needle) {
+            return strs_get(art, i);
+        }
+        i = i + 2;
+    }
+    ""
+}
+
+@test
+fn a_call_into_an_imported_module_is_a_reference_the_linker_resolves(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nfn main() -> Int { twice(4) }\n~b.nz|pub fn twice(n: Int) -> Int { n + n }\n");
+    let art = artefacts(h, d, files)?;
+    let caller = unit_with(art, "a.nz\"");
+    check_that(text_contains(caller, "declare i64 @nz.m.b_2Enz.twice(i64)"), f"the caller should declare the callee, not define it:\n{caller}")?;
+    check_that(!text_contains(caller, "define hidden i64 @nz.m.b_2Enz.twice"), caller)?;
+    let callee = unit_with(art, "b.nz\"");
+    check_that(text_contains(callee, "define hidden i64 @nz.m.b_2Enz.twice(i64 %p0)"), callee)?;
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "8", ran_show(r))
+}
+
+@test
+fn one_imported_module_may_call_another(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nfn main() -> Int { mid(3) }\n~b.nz|use \"c.nz\";\npub fn mid(n: Int) -> Int { deep(n) + 1 }\n~c.nz|pub fn deep(n: Int) -> Int { n * 10 }\n");
+    let a = build_and_run(h, d, files)?;
+    let b = interpret(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(a.stdout == "31", ran_show(a))?;
+    check_that(b.stdout == "31", ran_show(b))
+}
+
+@test
+fn three_modules_may_each_define_a_private_helper_of_the_same_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nuse \"c.nz\";\nfn helper() -> Int { 1 }\nfn main() -> Int { helper() + from_b() + from_c() }\n~b.nz|fn helper() -> Int { 20 }\npub fn from_b() -> Int { helper() }\n~c.nz|fn helper() -> Int { 300 }\npub fn from_c() -> Int { helper() }\n");
+    let symbols = defined(artefacts(h, d, files)?);
+    for m in words("a_2Enz b_2Enz c_2Enz") {
+        check_that(strs_has(symbols, f"internal @nz.m.{m}.helper"), f"{m}'s helper should be its own internal definition: {str_join(symbols, ", ")}")?;
+    }
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "321", ran_show(r))
+}
+
+@test
+fn a_diamond_generates_the_shared_module_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { from_b() + from_c() }\n~b.nz|use \"d.nz\";\npub fn from_b() -> Int { shared() }\n~c.nz|use \"d.nz\";\npub fn from_c() -> Int { shared() * 2 }\n~d.nz|pub fn shared() -> Int { 7 }\n");
+    let art = artefacts(h, d, files)?;
+    let mut n = 0;
+    for s in defined(art) {
+        if text_ends_with(s, "@nz.m.d_2Enz.shared") {
+            n = n + 1;
+        }
+    }
+    check_that(n == 1, "the shared module was generated more than once")?;
+    // Four modules, plus the runtime and the entry.
+    check_that(strs_len(art) == 12, f"{strs_len(art) / 2} artefacts")?;
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "21", ran_show(r))
+}
+
+@test
+fn a_legal_module_cycle_compiles_and_links(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\npub fn shared() -> Int { 5 }\nfn main() -> Int { g() }\n~b.nz|use \"a.nz\";\npub fn g() -> Int { 37 }\npub fn unused() -> Int { shared() }\n");
+    let a = build_and_run(h, d, files)?;
+    let b = interpret(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(a.stdout == "37", ran_show(a))?;
+    check_that(b.stdout == "37", ran_show(b))
+}
+
+@test
+fn a_call_cycle_across_modules_compiles_and_its_runaway_is_n0408(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\npub fn f(n: Int) -> Int { if n == 0 { 0 } else { g(n - 1) + 1 } }\npub fn h(n: Int) -> Int { k(n + 1) }\nfn main() -> Int { f(5) }\n")?;
+    scratch_write(h, d, "b.nz", "use \"a.nz\";\npub fn g(n: Int) -> Int { f(n) }\npub fn k(n: Int) -> Int { h(n + 1) }\n")?;
+    let b = nazm(h, d, words("build a.nz -o prog"));
+    check_that(b.code == 0, b.stderr)?;
+    let r = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    check_that(text_trim(r.stdout) == "5", ran_show(r))?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\npub fn f(n: Int) -> Int { if n == 0 { 0 } else { g(n - 1) + 1 } }\npub fn h(n: Int) -> Int { k(n + 1) }\nfn main() -> Int { h(0) }\n")?;
+    let b2 = nazm(h, d, words("build a.nz -o runaway"));
+    check_that(b2.code == 0, b2.stderr)?;
+    let x = bounded_exe(h, f"{d}/runaway", "", suite_env(h));
+    scratch_remove(h, d);
+    check_that(x.code == 2, x.stderr)?;
+    check_that(text_contains(x.stderr, "error[N0408]") && (text_contains(x.stderr, " at a.nz:") || text_contains(x.stderr, " at b.nz:")), x.stderr)
+}
+
+@test
+fn an_imported_modules_main_is_not_the_process_entry(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("app.nz|use \"lib.nz\";\nfn main() -> Int { helper() }\n~lib.nz|pub fn helper() -> Int { 11 }\nfn main() -> Int { 99 }\n");
+    let art = artefacts(h, d, files)?;
+    let entry = unit_with(art, "<nazm entry>");
+    check_that(entry != "", "an entry unit")?;
+    // Handed the one root it is given, `out: OutCap` (R1, 5b.1).
+    check_that(text_contains(entry, "call i64 @nz.m.app_2Enz.main(i64 0)"), entry)?;
+    check_that(!text_contains(entry, "@nz.m.lib_2Enz.main"), entry)?;
+    // And the imported one is still generated.
+    check_that(strs_has(defined(art), "internal @nz.m.lib_2Enz.main"), "lib's main is generated")?;
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "11", ran_show(r))
+}
+
+@test
+fn string_constants_from_two_modules_do_not_collide(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nfn main() -> Int { str_len(\"aaaa\") + from_b() }\n~b.nz|pub fn from_b() -> Int { str_len(\"bbbbbbb\") }\n");
+    let art = artefacts(h, d, files)?;
+    let mut n = 0;
+    let mut i = 1;
+    while i < strs_len(art) {
+        if text_contains(strs_get(art, i), "@nz.l.s.0 = private") {
+            n = n + 1;
+        }
+        i = i + 2;
+    }
+    check_that(n >= 2, "both units should have numbered a constant from zero")?;
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "11", ran_show(r))
+}
+
+@test
+fn the_runtime_is_defined_exactly_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let files = files_of("a.nz|use \"b.nz\";\nfn main(tasks: SpawnCap) -> Int { work(tasks) + str_len(int_to_str(7)) }\n~b.nz|pub fn work(tasks: SpawnCap) -> Int {\n    let got = ints_new();\n    let c = chan_new(1);\n    scope { spawn feed(c); }\n    let more = chan_recv(c, got);\n    ints_get(got, 0) + 4\n}\npub fn feed(c: Chan) -> Int { chan_send(c, 30); chan_close(c); 0 }\n");
+    let symbols = defined(artefacts(h, d, files)?);
+    for helper in words("@nz.fail @nz.report @nz.arr_new @nz.arr_grow @nz.spawn @nz.scope_join @nz.chan_new @nz.chan_send @nz.chan_recv @nz.chan_close @main") {
+        let mut n = 0;
+        for s in symbols {
+            if text_ends_with(s, helper) {
+                n = n + 1;
+            }
+        }
+        check_that(n == 1, f"{helper} should be defined once: {str_join(symbols, ", ")}")?;
+    }
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "35", ran_show(r))
+}
+
+@test
+fn two_checkouts_generate_the_same_symbols(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = files_of("a.nz|use \"lib/b.nz\";\nfn main() -> Int { twice(4) }\n~lib/b.nz|pub fn twice(n: Int) -> Int { n + n }\n");
+    let one = scratch_new(h);
+    let two = scratch_new(h);
+    check_that(one != two, "one directory")?;
+    let a = nazm_symbols(artefacts(h, one, files)?);
+    let b = nazm_symbols(artefacts(h, two, files)?);
+    scratch_remove(h, one);
+    scratch_remove(h, two);
+    same_strs("symbols", a, b)
+}
+
+fn of_common(art: Strs) -> Strs ! {} {
+    let out = strs_new();
+    for s in nazm_symbols(art) {
+        if text_contains(s, "lib_2Fcommon") {
+            strs_push(out, s);
+        }
+    }
+    strs_sort(out)
+}
+
+@test
+fn a_shared_module_gets_the_same_symbols_from_either_entry_point(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "nazm.root", "")?;
+    let common = "lib/common.nz|fn hidden_helper() -> Int { 2 }\npub fn shared(n: Int) -> Int { n * hidden_helper() }\n";
+    let from_app = artefacts(h, d, files_of(f"app.nz|use \"lib/common.nz\";\nfn main() -> Int {{ shared(3) }}\n~{common}"))?;
+    let from_tool = artefacts(h, d, files_of(f"tool.nz|use \"lib/common.nz\";\nfn main() -> Int {{ shared(5) }}\n~{common}"))?;
+    scratch_remove(h, d);
+    same_strs("from either entry", of_common(from_app), of_common(from_tool))?;
+    same_strs("the shared module's symbols", of_common(from_app), text_split("@nz.m.lib_2Fcommon_2Enz.hidden_5Fhelper|@nz.m.lib_2Fcommon_2Enz.shared", "|"))
+}
+
+@test
+fn pub_chooses_linkage_and_never_spelling(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let private = artefacts(h, d, files_of("a.nz|fn spare() -> Int { 4 }\nfn main() -> Int { spare() }\n"))?;
+    let exported = artefacts(h, d, files_of("a.nz|pub fn spare() -> Int { 4 }\nfn main() -> Int { spare() }\n"))?;
+    scratch_remove(h, d);
+    same_strs("symbols", nazm_symbols(private), nazm_symbols(exported))?;
+    check_that(strs_has(defined(private), "internal @nz.m.a_2Enz.spare"), str_join(defined(private), ", "))?;
+    check_that(strs_has(defined(exported), "hidden @nz.m.a_2Enz.spare"), str_join(defined(exported), ", "))
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => m.kind == FileKind.Directory(),
+        Result.Err(error: e) => false,
+    }
+}
+
+@test
+fn a_native_build_is_unaffected_by_the_semantic_cache(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "nazm.root", "")?;
+    let files = files_of("a.nz|use \"b.nz\";\nfn main() -> Int { twice(6) }\n~b.nz|pub fn twice(n: Int) -> Int { n + n }\n");
+    let cold = artefacts(h, d, files)?;
+    check_that(!is_dir(h, f"{d}/.nazm/check"), "a build wrote a semantic entry")?;
+    // Warm the semantic cache, then build again.
+    let c = nazm(h, d, words("check a.nz"));
+    check_that(c.code == 0, c.stderr)?;
+    check_that(is_dir(h, f"{d}/.nazm/check"), "check should have cached")?;
+    let warm = artefacts(h, d, files)?;
+    same_strs("symbols", nazm_symbols(cold), nazm_symbols(warm))?;
+    check_that(strs_len(cold) == strs_len(warm), "the artefacts differ in number")?;
+    let mut i = 0;
+    while i + 1 < strs_len(cold) {
+        check_that(strs_get(cold, i + 1) == strs_get(warm, i + 1), f"{strs_get(cold, i)} changed when the semantic store was warm")?;
+        i = i + 2;
+    }
+    let r = build_and_run(h, d, files)?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "12", ran_show(r))
+}
+
+@test
+fn a_backend_refusal_inside_an_imported_module_names_that_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The refusal here is polymorphic recursion (`N0357`).
+    let app = "use \"lib.nz\";\nfn main() -> Int { grow(1, 2) }\n";
+    let d = prog_dir(h, "app.nz", app)?;
+    scratch_write(h, d, "lib.nz", "pub fn grow[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { let v = vec_new[T](); vec_push(v, x); grow(v, n - 1) + 1 } }\n")?;
+    // The rendered form names the file outright.
+    let rendered = nazm(h, d, words("build app.nz -o prog"));
+    check_that(rendered.code != 0, ran_show(rendered))?;
+    check_that(text_contains(rendered.stderr, "--> lib.nz:1:100"), rendered.stderr)?;
+    check_that(text_contains(rendered.stderr, "N0357"), rendered.stderr)?;
+    check_that(!file_exists_at(h.io, f"{d}/prog"), "nothing should be written")?;
+    // The machine form identifies it by an offset into the concatenation of every file in load
+    // order: the offset lands in `lib.nz`.
+    let json = nazm(h, d, words("build app.nz -o prog --json"));
+    scratch_remove(h, d);
+    let mut at = 0 - 1;
+    for l in text_lines(json.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v2) => {
+                if at < 0 && jstr(v2, "code") == "N0357" {
+                    at = jint(v2, "primary/span/start");
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    check_that(at >= 0, f"a refusal: {json.stderr}")?;
+    check_that(at >= str_len(app), f"the offset should be inside `lib.nz`, past the {str_len(app)} bytes of `app.nz`: {at}")
+}
+
+const TWO: Str = "app.nz|use \"lib/util.nz\";\nfn main() -> Int { parse(7) }\n~lib/util.nz|pub fn parse(n: Int) -> Int { n / 0 }\n";
+
+/// Build the same project from another directory by its absolute path, and return the IR of every
+/// artefact, named as a build from inside names them.
+fn artefacts_from_elsewhere(h: Caps, dir: Str, files: Strs) -> Result[Strs, Str] ! { io, spawn } {
+    put(h, dir, files)?;
+    // The root marker, so that the compilation begun from outside still measures identities from
+    // the project.
+    scratch_write(h, dir, "nazm.root", "")?;
+    let elsewhere = scratch_new(h);
+    let b = nazm(h, elsewhere, words(f"build {dir}/{strs_get(files, 0)} -o {dir}/out --emit-ir"));
+    scratch_remove(h, elsewhere);
+    check_that(b.code == 0, f"build failed: {b.stderr}")?;
+    ll_files(h, dir, "out.>prog.")
+}
+
+@test
+fn a_generated_artefact_names_a_module_by_its_durable_identity(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let here = scratch_new(h);
+    let there = scratch_new(h);
+    let near = artefacts(h, here, files_of(TWO))?;
+    let far = artefacts_from_elsewhere(h, there, files_of(TWO))?;
+    scratch_remove(h, there);
+    check_that(strs_len(near) == strs_len(far), "the artefacts differ in number")?;
+    let mut i = 0;
+    while i + 1 < strs_len(near) {
+        check_that(strs_get(near, i) == strs_get(far, i), f"{strs_get(near, i)} / {strs_get(far, i)}")?;
+        check_that(strs_get(near, i + 1) == strs_get(far, i + 1), f"{strs_get(near, i)} differs between checkouts")?;
+        i = i + 2;
+    }
+    // And the name it carries is the logical one, not either directory's.
+    let all = str_join(near, "");
+    scratch_remove(h, here);
+    check_that(text_contains(all, "source_filename = \"lib/util.nz\""), "source_filename")?;
+    check_that(!text_contains(all, here), "the directory reached the artefacts")
+}
+
+@test
+fn a_runtime_failure_from_an_absolute_build_names_the_logical_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    put(h, d, files_of(TWO))?;
+    scratch_write(h, d, "nazm.root", "")?;
+    let elsewhere = scratch_new(h);
+    let b = nazm(h, elsewhere, words(f"build {d}/app.nz -o {d}/prog"));
+    check_that(b.code == 0, ran_show(b))?;
+    let r = trimmed(run(h, f"{d}/prog", strs_new(), elsewhere, suite_env(h)));
+    scratch_remove(h, elsewhere);
+    scratch_remove(h, d);
+    check_that(r.code == 2, ran_show(r))?;
+    check_that(r.stderr == "nazm: error[N0401]: division by zero at lib/util.nz:1:33", r.stderr)
+}
