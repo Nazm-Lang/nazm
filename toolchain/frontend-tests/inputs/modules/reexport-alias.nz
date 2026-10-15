@@ -1,0 +1,8 @@
+use "lib/rx/mid.nz" as m;
+use "lib/rx/top.nz" as t;
+fn main() -> Int {
+    let p: m::Point = m::make(1, 1);
+    let q: t::Spot = t::build(2, 2);
+    let f: m::Form = m::Dot;
+    m::own() + t::own() + p.x + q.y + m::twice(1)
+}

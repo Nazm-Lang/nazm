@@ -1,0 +1,2 @@
+use "lib/rx/errs.nz";
+fn main() -> Int { twice(1) }

@@ -1,0 +1,2 @@
+pub struct Point { a: Int }
+pub fn make() -> Int { 0 }
