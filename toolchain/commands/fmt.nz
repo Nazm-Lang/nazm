@@ -1,0 +1,725 @@
+// `nazm fmt`, written in Nazm (R5, `openspec/changes/r5-commands/`).
+//
+// Usage: fmt [--check] FILE...
+//
+// A port of `crates/nazm-syntax/src/format.rs` and `crates/nazm-cli/src/fmt.rs`, function by
+// function, so that every file is laid out byte for byte as the reference lays it out, and the
+// command prints, writes and exits as `nazm fmt` does. The reference works on tokens, not on the
+// tree: it re-emits exactly the tokens it was given, with the comments merged back in by position,
+// and decides spacing from the tokens on either side. The tokens are `compiler/lex.nz`'s, which
+// agree with the reference lexer's on every input (R2, design D2). That lexer does not report
+// where the comments were; between two tokens of a file that lexes there is only whitespace and
+// comments, so each gap is scanned for them here, exactly as the reference's lossless lexer
+// scans it (design D2).
+//
+// A lexing diagnostic is rendered as `Diagnostic::render` renders it, for one file. Anything the
+// port does not carry stops with exit status 6 and a line on standard error that says so, never
+// with an output the reference would not give.
+
+use "../../compiler/lex.nz"
+use "../../compiler/diag.nz"
+
+fn newline() -> Str { str_from_byte(10) }
+
+fn indent_unit() -> Str { "    " }
+
+// --- the file's pieces: tokens and comments in source order ------------------------------------
+
+struct Fm {
+    src: Str,
+    // Newlines before each offset: `nlc[i]` counts the `\n` bytes of `src[0..i]`.
+    nlc: Ints,
+    // Per piece: its token kind (-1 for a comment), its span and its source text.
+    pk: Ints,
+    ps: Ints,
+    pe: Ints,
+    pt: Strs,
+    // Per piece: whether its `{` stays on one line, and whether its brace is an effect set's.
+    inline: Ints,
+    set: Ints,
+    // The printer: its output as chunks (a line break is always a chunk of its own, and no other
+    // chunk is empty or ends with one), its scalar state and its three stacks.
+    out: Strs,
+    st: Ints,
+    s_inline: Ints,
+    s_brackets: Ints,
+    s_squares: Ints,
+}
+
+fn newline_counts(src: Str) -> Ints {
+    let n = str_len(src)
+    let counts = ints_new()
+    let mut c = 0
+    ints_push(counts, 0)
+    for i in 0..n {
+        if str_byte(src, i) == 10 { c += 1 }
+        ints_push(counts, c)
+    }
+    counts
+}
+
+// How many line breaks separate two offsets: the only thing the original layout is consulted for.
+fn breaks(f: Fm, from: Int, to: Int) -> Int {
+    if from > to || to > str_len(f.src) { return 0 }
+    ints_get(f.nlc, to) - ints_get(f.nlc, from)
+}
+
+fn push_piece(f: Fm, kind: Int, s: Int, e: Int, text: Str) -> Int {
+    ints_push(f.pk, kind)
+    ints_push(f.ps, s)
+    ints_push(f.pe, e)
+    strs_push(f.pt, text)
+    ints_push(f.inline, 0)
+    ints_push(f.set, 0)
+    0
+}
+
+// The comments between `from` and `to`, where a file that lexes has only whitespace and comments:
+// a block comment nests and may run past `to` only in a file that does not lex; a line comment
+// runs to its line's end, the newline not included.
+fn gap_comments(f: Fm, from: Int, to: Int) -> Int {
+    let n = str_len(f.src)
+    let mut i = from
+    while i < to {
+        let b = str_byte(f.src, i)
+        let next = if i + 1 < n { str_byte(f.src, i + 1) } else { 0 - 1 }
+        if b == 47 && next == 42 {
+            let start = i
+            let mut depth = 0
+            while i < n {
+                let c = str_byte(f.src, i)
+                let c2 = if i + 1 < n { str_byte(f.src, i + 1) } else { 0 - 1 }
+                if c == 47 && c2 == 42 {
+                    depth += 1
+                    i += 2
+                } else if c == 42 && c2 == 47 {
+                    depth -= 1
+                    i += 2
+                    if depth == 0 { break }
+                } else {
+                    i += 1
+                }
+            }
+            push_piece(f, 0 - 1, start, i, trim_end(str_slice(f.src, start, i)))
+        } else if b == 47 && next == 47 {
+            let start = i
+            while i < n && str_byte(f.src, i) != 10 { i += 1 }
+            push_piece(f, 0 - 1, start, i, trim_end(str_slice(f.src, start, i)))
+        } else {
+            i += 1
+        }
+    }
+    0
+}
+
+// --- Unicode whitespace, as Rust's `char::is_whitespace` -----------------------------------------
+
+// The width of the whitespace character ending at `end` in `s`, or 0.
+fn space_before_end(s: Str, end: Int) -> Int {
+    if end < 1 { return 0 }
+    let b = str_byte(s, end - 1)
+    if b == 32 || (b >= 9 && b <= 13) { return 1 }
+    if end >= 2 && str_byte(s, end - 2) == 194 && (b == 133 || b == 160) { return 2 }
+    if end < 3 { return 0 }
+    let a = str_byte(s, end - 3)
+    let m = str_byte(s, end - 2)
+    if a == 225 && m == 154 && b == 128 { return 3 }
+    if a == 226 && m == 128 && ((b >= 128 && b <= 138) || b == 168 || b == 169 || b == 175) { return 3 }
+    if a == 226 && m == 129 && b == 159 { return 3 }
+    if a == 227 && m == 128 && b == 128 { return 3 }
+    0
+}
+
+// The width of the whitespace character starting at `i` in `s`, or 0.
+fn space_at(s: Str, i: Int) -> Int {
+    let n = str_len(s)
+    let b = str_byte(s, i)
+    if b == 32 || (b >= 9 && b <= 13) { return 1 }
+    if b == 194 && i + 1 < n {
+        let c = str_byte(s, i + 1)
+        if c == 133 || c == 160 { return 2 }
+        return 0
+    }
+    if i + 2 >= n { return 0 }
+    let m = str_byte(s, i + 1)
+    let c = str_byte(s, i + 2)
+    if b == 225 && m == 154 && c == 128 { return 3 }
+    if b == 226 && m == 128 && ((c >= 128 && c <= 138) || c == 168 || c == 169 || c == 175) { return 3 }
+    if b == 226 && m == 129 && c == 159 { return 3 }
+    if b == 227 && m == 128 && c == 128 { return 3 }
+    0
+}
+
+fn trim_end(s: Str) -> Str {
+    let mut end = str_len(s)
+    let mut w = space_before_end(s, end)
+    while w > 0 {
+        end -= w
+        w = space_before_end(s, end)
+    }
+    str_slice(s, 0, end)
+}
+
+// Whether `s[from..to]` is empty once trimmed: whitespace and nothing else.
+fn only_space(s: Str, from: Int, to: Int) -> Bool {
+    let mut i = from
+    while i < to {
+        let w = space_at(s, i)
+        if w == 0 { return false }
+        i += w
+    }
+    true
+}
+
+// --- the layout the formatter keeps: which blocks stay on one line ----------------------------
+
+fn layout(f: Fm) -> Int {
+    let mut previous = 0 - 1
+    let open_at = ints_new()
+    let open_seen = ints_new()
+    let mut comments = 0
+    for i in 0..ints_len(f.pk) {
+        let kind = ints_get(f.pk, i)
+        if kind < 0 {
+            comments += 1
+            continue
+        }
+        if kind == k_lbrace() {
+            if previous == k_bang() { ints_set(f.set, i, 1) }
+            ints_push(open_at, i)
+            ints_push(open_seen, comments)
+        } else if kind == k_rbrace() {
+            if ints_len(open_at) > 0 {
+                let j = ints_pop(open_at)
+                let seen = ints_pop(open_seen)
+                let is_set = ints_get(f.set, j) == 1
+                let same_line = breaks(f, ints_get(f.pe, j), ints_get(f.ps, i)) == 0
+                // A comment inside still forces lines: `//` would swallow the rest.
+                if (same_line || is_set) && seen == comments { ints_set(f.inline, j, 1) } else { ints_set(f.inline, j, 0) }
+                if is_set { ints_set(f.set, i, 1) } else { ints_set(f.set, i, 0) }
+            }
+        }
+        previous = kind
+    }
+    0
+}
+
+// Whether a token can end a value, which decides whether a following `-` is subtraction.
+fn ends_a_value(k: Int) -> Bool {
+    k == k_int() || k == k_float() || k == k_str() || k == k_fstr() || k == k_ident() || k == k_true()
+            || k == k_false() || k == k_rparen() || k == k_rbrace() || k == k_question()
+}
+
+// Whether this token continues whatever the `}` before it was part of (-1: no token).
+fn continues_the_line(k: Int) -> Bool {
+    k == k_else() || k == k_semi() || k == k_comma() || k == k_rparen() || k == k_dot() || k == k_question()
+            || k == k_plus() || k == k_minus() || k == k_star() || k == k_slash() || k == k_percent()
+            || k == k_eqeq() || k == k_noteq() || k == k_lt() || k == k_lteq() || k == k_gt() || k == k_gteq()
+            || k == k_ampamp() || k == k_pipepipe() || k == k_amp() || k == k_pipe() || k == k_caret()
+            || k == k_shl() || k == k_shr()
+}
+
+// --- the printer's state -----------------------------------------------------------------------
+
+fn s_indent() -> Int { 0 }
+fn s_fresh() -> Int { 1 }
+fn s_continuing() -> Int { 2 }
+fn s_contract() -> Int { 3 }
+// The pieces of the last two tokens printed, -1 for none.
+fn s_previous() -> Int { 4 }
+fn s_before() -> Int { 5 }
+fn s_previous_end() -> Int { 6 }
+// Inside an attribute: -1 outside one, 0 before its name, 1 after it; its parentheses' depth;
+// whether it ends its own line.
+fn s_attr() -> Int { 7 }
+fn s_attr_depth() -> Int { 8 }
+fn s_attr_own() -> Int { 9 }
+
+fn gs(f: Fm, slot: Int) -> Int { ints_get(f.st, slot) }
+fn ss(f: Fm, slot: Int, v: Int) -> Int { ints_set(f.st, slot, v) }
+fn flag(f: Fm, slot: Int) -> Bool { ints_get(f.st, slot) != 0 }
+fn setf(f: Fm, slot: Int, b: Bool) -> Int { if b { ints_set(f.st, slot, 1) } else { ints_set(f.st, slot, 0) } }
+
+fn kind_of(f: Fm, piece: Int) -> Int { if piece < 0 { 0 - 1 } else { ints_get(f.pk, piece) } }
+fn prev_kind(f: Fm) -> Int { kind_of(f, gs(f, s_previous())) }
+
+fn is_word(f: Fm, piece: Int, w: Str) -> Bool {
+    piece >= 0 && ints_get(f.pk, piece) == k_ident() && strs_get(f.pt, piece) == w
+}
+
+fn top(stack: Ints, absent: Bool) -> Bool {
+    if ints_len(stack) == 0 { return absent }
+    ints_get(stack, ints_len(stack) - 1) != 0
+}
+
+fn pop(stack: Ints) -> Bool {
+    if ints_len(stack) == 0 { return false }
+    ints_pop(stack) != 0
+}
+
+fn push_bool(stack: Ints, b: Bool) -> Int { if b { ints_push(stack, 1) } else { ints_push(stack, 0) } }
+
+fn in_inline(f: Fm) -> Bool { top(f.s_inline, false) }
+
+fn is_set(f: Fm, piece: Int) -> Bool { ints_get(f.set, piece) == 1 }
+
+// --- the output ---------------------------------------------------------------------------------
+
+fn out_empty(f: Fm) -> Bool { strs_len(f.out) == 0 }
+
+fn ends_with_nl(f: Fm) -> Bool {
+    let n = strs_len(f.out)
+    n > 0 && strs_get(f.out, n - 1) == newline()
+}
+
+fn ends_with_blank(f: Fm) -> Bool {
+    let n = strs_len(f.out)
+    n > 1 && strs_get(f.out, n - 1) == newline() && strs_get(f.out, n - 2) == newline()
+}
+
+fn emit(f: Fm, s: Str) -> Int { strs_push(f.out, s) }
+
+fn break_line(f: Fm) -> Int {
+    if !flag(f, s_fresh()) {
+        emit(f, newline())
+        setf(f, s_fresh(), true)
+    }
+    0
+}
+
+fn pad(f: Fm) -> Int {
+    let mut levels = gs(f, s_indent())
+    if flag(f, s_continuing()) { levels += 2 }
+    for _ in 0..levels { emit(f, indent_unit()) }
+    0
+}
+
+fn blank(f: Fm) -> Int {
+    if !out_empty(f) && !ends_with_blank(f) { emit(f, newline()) }
+    0
+}
+
+// One blank line, if the source had at least one there.
+fn blank_if_there_was_one(f: Fm, start: Int) -> Int {
+    if out_empty(f) || prev_kind(f) == k_lbrace() { return 0 }
+    if breaks(f, gs(f, s_previous_end()), start) >= 2 { blank(f) }
+    0
+}
+
+// --- the printer --------------------------------------------------------------------------------
+
+// Whether the line break before piece `next` ends a statement, as the parser reads it.
+fn line_ends_a_statement(f: Fm, next: Int) -> Bool {
+    let pk = prev_kind(f)
+    let k = kind_of(f, next)
+    top(f.s_brackets, true)
+            && pk >= 0 && (ends_a_value(pk) || pk == k_rbracket() || pk == k_break() || pk == k_continue())
+            && !continues_the_line(k)
+            && !(k == k_lbrace() || k == k_eq())
+            && !(is_word(f, next, "requires") || is_word(f, next, "ensures"))
+}
+
+// A comment stays where it was written: after the code it sits beside, or on a line of its own.
+fn comment(f: Fm, i: Int) -> Int {
+    let start = ints_get(f.ps, i)
+    let end = ints_get(f.pe, i)
+    let text = strs_get(f.pt, i)
+    let trailing = !out_empty(f) && breaks(f, gs(f, s_previous_end()), start) == 0
+    if trailing {
+        while ends_with_nl(f) { strs_pop(f.out) }
+        emit(f, " ")
+    } else {
+        break_line(f)
+        blank_if_there_was_one(f, start)
+        if flag(f, s_contract()) { emit(f, indent_unit()) } else { pad(f) }
+    }
+    emit(f, text)
+    let block = str_len(text) >= 2 && str_byte(text, 0) == 47 && str_byte(text, 1) == 42
+    let n = str_len(f.src)
+    let mut line_end = end
+    while line_end < n && str_byte(f.src, line_end) != 10 { line_end += 1 }
+    let followed = !only_space(f.src, end, line_end)
+    if block && followed {
+        emit(f, " ")
+        setf(f, s_fresh(), false)
+    } else {
+        emit(f, newline())
+        setf(f, s_fresh(), true)
+    }
+    ss(f, s_previous_end(), end)
+}
+
+// Whether a space goes between the previous token and piece `at` (of kind `next`).
+fn space_before(f: Fm, at: Int) -> Bool {
+    let previous = gs(f, s_previous())
+    if previous < 0 { return false }
+    let pk = kind_of(f, previous)
+    let next = kind_of(f, at)
+    let bk = kind_of(f, gs(f, s_before()))
+    if (pk == k_minus() || pk == k_bang() || pk == k_tilde()) && !(bk >= 0 && ends_a_value(bk)) { return false }
+    if next == k_rparen() || next == k_rbracket() || next == k_comma() || next == k_colon() || next == k_semi()
+            || next == k_dot() || next == k_question() {
+        return false
+    }
+    if pk == k_at() { return false }
+    if pk == k_dotdot() || next == k_dotdot() { return false }
+    if pk == k_lparen() || pk == k_lbracket() || pk == k_dot() || pk == k_coloncolon() || next == k_coloncolon() {
+        return false
+    }
+    if next == k_lbracket() { return !(pk == k_ident() || pk == k_rbracket() || pk == k_rparen()) }
+    if next == k_lparen() {
+        return is_word(f, previous, "for") || !(pk == k_ident() || pk == k_rbracket() || pk == k_fn())
+    }
+    true
+}
+
+fn end_attribute_line(f: Fm) -> Int {
+    if gs(f, s_attr_own()) == 1 {
+        setf(f, s_continuing(), false)
+        break_line(f)
+    }
+    0
+}
+
+fn token(f: Fm, at: Int, next: Int) -> Int {
+    let kind = ints_get(f.pk, at)
+    let start = ints_get(f.ps, at)
+    let rbrace = kind == k_rbrace()
+    // A closing brace is printed at the enclosing level, so the level drops before it, unless its
+    // block is on one line.
+    let closing_inline = rbrace && pop(f.s_inline)
+    if rbrace {
+        pop(f.s_brackets)
+        pop(f.s_squares)
+    }
+    if rbrace && !closing_inline {
+        let level = gs(f, s_indent())
+        if level > 0 { ss(f, s_indent(), level - 1) }
+        setf(f, s_continuing(), false)
+        break_line(f)
+    }
+
+    // A line break the author wrote mid-statement is kept.
+    if !flag(f, s_fresh()) && !in_inline(f) && !is_set(f, at) && breaks(f, gs(f, s_previous_end()), start) >= 1 {
+        break_line(f)
+        setf(f, s_continuing(), !line_ends_a_statement(f, at))
+    }
+
+    let contract_word = is_word(f, at, "requires") || is_word(f, at, "ensures")
+    if flag(f, s_fresh()) {
+        if !rbrace && !flag(f, s_continuing()) { blank_if_there_was_one(f, start) }
+        // A contract clause starts its line at the top level of a declaration (N87).
+        if gs(f, s_indent()) == 0 && flag(f, s_continuing()) && contract_word { setf(f, s_contract(), true) }
+        if flag(f, s_contract()) && kind == k_lbrace() { setf(f, s_continuing(), false) }
+        if flag(f, s_contract()) && kind != k_lbrace() { emit(f, indent_unit()) } else { pad(f) }
+    } else if space_before(f, at) && !(rbrace && prev_kind(f) == k_lbrace() && is_set(f, at)) {
+        emit(f, " ")
+    }
+
+    emit(f, strs_get(f.pt, at))
+    setf(f, s_fresh(), false)
+
+    if kind == k_lbrace() { setf(f, s_contract(), false) }
+    let next_kind = kind_of(f, next)
+    if kind == k_lbrace() {
+        let inline = ints_get(f.inline, at) == 1
+        push_bool(f.s_inline, inline)
+        push_bool(f.s_brackets, true)
+        push_bool(f.s_squares, false)
+        if !inline {
+            ss(f, s_indent(), gs(f, s_indent()) + 1)
+            setf(f, s_continuing(), false)
+            break_line(f)
+        }
+    } else if kind == k_lparen() || kind == k_lbracket() {
+        push_bool(f.s_brackets, false)
+        push_bool(f.s_squares, kind == k_lbracket())
+    } else if kind == k_rparen() || kind == k_rbracket() {
+        pop(f.s_brackets)
+        pop(f.s_squares)
+    } else if kind == k_semi() {
+        if !in_inline(f) && !top(f.s_squares, false) {
+            setf(f, s_continuing(), false)
+            break_line(f)
+        }
+    } else if kind == k_comma() {
+        if top(f.s_brackets, false) && !in_inline(f) {
+            setf(f, s_continuing(), false)
+            break_line(f)
+        }
+    } else if rbrace {
+        if !continues_the_line(next_kind) && !in_inline(f) && !is_set(f, at) {
+            setf(f, s_continuing(), false)
+            break_line(f)
+        }
+    }
+
+    // An attribute ends at its name, or at the `)` that closes its arguments (Gate 2).
+    let attr = gs(f, s_attr())
+    let depth = gs(f, s_attr_depth())
+    if attr < 0 && kind == k_at() {
+        let own_line = ints_len(f.s_brackets) == 0 || (top(f.s_brackets, false) && !in_inline(f))
+        ss(f, s_attr(), 0)
+        ss(f, s_attr_depth(), 0)
+        setf(f, s_attr_own(), own_line)
+    } else if attr == 0 && kind == k_ident() {
+        if next_kind == k_lparen() {
+            ss(f, s_attr(), 1)
+            ss(f, s_attr_depth(), 0)
+        } else {
+            ss(f, s_attr(), 0 - 1)
+            end_attribute_line(f)
+        }
+    } else if attr == 1 && kind == k_lparen() {
+        ss(f, s_attr_depth(), depth + 1)
+    } else if attr == 1 && kind == k_rparen() && depth == 1 {
+        ss(f, s_attr(), 0 - 1)
+        end_attribute_line(f)
+    } else if attr == 1 && kind == k_rparen() {
+        if depth > 0 { ss(f, s_attr_depth(), depth - 1) }
+    }
+    ss(f, s_before(), gs(f, s_previous()))
+    ss(f, s_previous(), at)
+    ss(f, s_previous_end(), ints_get(f.pe, at))
+}
+
+fn finish(f: Fm) -> Str {
+    break_line(f)
+    while ends_with_blank(f) { strs_pop(f.out) }
+    if out_empty(f) { emit(f, newline()) }
+    str_join(f.out, "")
+}
+
+// Lay out `src` canonically; `d` receives the lexer's diagnostics, and then nothing is laid out.
+fn format(src: Str, d: Diags) -> Str {
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    lex_all(src, kinds, starts, ends, texts, d)
+    if dg_len(d) > 0 { return "" }
+    let st = ints_new()
+    for _ in 0..10 { ints_push(st, 0) }
+    let f = Fm(src: src, nlc: newline_counts(src), pk: ints_new(), ps: ints_new(), pe: ints_new(), pt: strs_new(),
+            inline: ints_new(), set: ints_new(), out: strs_new(), st: st, s_inline: ints_new(), s_brackets: ints_new(),
+            s_squares: ints_new())
+    let mut gap = 0
+    for i in 0..ints_len(kinds) {
+        let s = ints_get(starts, i)
+        let e = ints_get(ends, i)
+        gap_comments(f, gap, s)
+        push_piece(f, ints_get(kinds, i), s, e, str_slice(src, s, e))
+        gap = e
+    }
+    gap_comments(f, gap, str_len(src))
+    layout(f)
+    ss(f, s_previous(), 0 - 1)
+    ss(f, s_before(), 0 - 1)
+    ss(f, s_attr(), 0 - 1)
+    setf(f, s_fresh(), true)
+    let count = ints_len(f.pk)
+    for i in 0..count {
+        if ints_get(f.pk, i) < 0 {
+            comment(f, i)
+        } else {
+            // The next piece's token, or none when the next piece is a comment or there is none.
+            let next = if i + 1 < count && ints_get(f.pk, i + 1) >= 0 { i + 1 } else { 0 - 1 }
+            token(f, i, next)
+        }
+    }
+    finish(f)
+}
+
+// --- a lexing diagnostic, rendered as `Diagnostic::render` renders it -------------------------
+
+// Characters in `s[from..to]`: the bytes that do not continue a UTF-8 sequence.
+fn chars_in(s: Str, from: Int, to: Int) -> Int {
+    let mut c = 0
+    for i in from..to {
+        let b = str_byte(s, i)
+        if b < 128 || b >= 192 { c += 1 }
+    }
+    c
+}
+
+fn repeat(s: Str, n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, s) }
+    str_join(parts, "")
+}
+
+fn render(path: Str, src: Str, nlc: Ints, d: Diags, i: Int) -> Str {
+    let n = str_len(src)
+    let start = ints_get(d.start, i)
+    let end = ints_get(d.end, i)
+    let line_idx = ints_get(nlc, start)
+    let mut line_start = start
+    while line_start > 0 && str_byte(src, line_start - 1) != 10 { line_start -= 1 }
+    let mut line_end = start
+    while line_end < n && str_byte(src, line_end) != 10 { line_end += 1 }
+    let line = str_slice(src, line_start, line_end)
+    let column = chars_in(src, line_start, start) + 1
+    let gutter = int_to_str(line_idx + 1)
+    let margin = repeat(" ", str_len(gutter))
+    let mut primary = strs_get(d.label, i)
+    if primary == "" { primary = strs_get(d.message, i) }
+    let caret_col = column - 1
+    let mut width = end - start
+    if width < 1 { width = 1 }
+    let mut remaining = chars_in(src, line_start, line_end) - caret_col
+    if remaining < 1 { remaining = 1 }
+    if width > remaining { width = remaining }
+    let nl = newline()
+    let out = strs_new()
+    strs_push(out, strs_get(d.severity, i) + "[" + strs_get(d.code, i) + "]: " + strs_get(d.message, i) + nl)
+    strs_push(out, "  --> " + path + ":" + int_to_str(line_idx + 1) + ":" + int_to_str(column) + nl)
+    strs_push(out, margin + " |" + nl)
+    strs_push(out, gutter + " | " + line + nl)
+    strs_push(out, margin + " | " + repeat(" ", caret_col) + repeat("^", width) + " " + primary + nl)
+    // Secondary labels: one file, so each is `line:column`.
+    let sf = ints_get(d.sec_first, i)
+    for k in 0..ints_get(d.sec_count, i) {
+        let at = ints_get(d.sec_start, sf + k)
+        strs_push(out, margin + " = at " + int_to_str(ints_get(nlc, at) + 1) + ":" + int_to_str(column_of(src, at)) + ": "
+                + strs_get(d.sec_message, sf + k) + nl)
+    }
+    let help = strs_get(d.help, i)
+    if help != "" { strs_push(out, margin + " = help: " + help + nl) }
+    let ff = ints_get(d.fix_first, i)
+    for k in 0..ints_get(d.fix_count, i) {
+        let what = strs_get(d.fix_description, ff + k) + " -> `" + strs_get(d.fix_replacement, ff + k) + "`"
+        if strs_get(d.fix_applicability, ff + k) == "automatic" {
+            strs_push(out, margin + " = fix: " + what + nl)
+        } else {
+            strs_push(out, margin + " = suggestion: " + what + nl)
+            strs_push(out, margin + "   right when: " + strs_get(d.fix_precondition, ff + k) + nl)
+        }
+    }
+    str_join(out, "")
+}
+
+// The 1-based column of `at`: the characters before it on its line, plus one.
+fn column_of(src: Str, at: Int) -> Int {
+    let mut line_start = at
+    while line_start > 0 && str_byte(src, line_start - 1) != 10 { line_start -= 1 }
+    chars_in(src, line_start, at) + 1
+}
+
+// --- the command, as `crates/nazm-cli/src/fmt.rs` ---------------------------------------------
+
+// Whether `s` is well-formed UTF-8, as Rust's `read_to_string` requires.
+fn utf8_ok(s: Str) -> Bool {
+    let n = str_len(s)
+    let mut i = 0
+    while i < n {
+        let b = str_byte(s, i)
+        if b < 128 {
+            i += 1
+            continue
+        }
+        let mut need = 0
+        let mut lo = 128
+        let mut hi = 191
+        if b >= 194 && b <= 223 {
+            need = 1
+        } else if b == 224 {
+            need = 2
+            lo = 160
+        } else if b >= 225 && b <= 236 {
+            need = 2
+        } else if b == 237 {
+            need = 2
+            hi = 159
+        } else if b >= 238 && b <= 239 {
+            need = 2
+        } else if b == 240 {
+            need = 3
+            lo = 144
+        } else if b >= 241 && b <= 243 {
+            need = 3
+        } else if b == 244 {
+            need = 3
+            hi = 143
+        } else {
+            return false
+        }
+        if i + need >= n { return false }
+        let c1 = str_byte(s, i + 1)
+        if c1 < lo || c1 > hi { return false }
+        for k in 2..need + 1 {
+            let c = str_byte(s, i + k)
+            if c < 128 || c > 191 { return false }
+        }
+        i += need + 1
+    }
+    true
+}
+
+fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
+
+fn refuse(why: Str, io: IoCap) -> Int {
+    eprint("fmt: not carried: " + why + newline())
+    exit_with(6)
+    0
+}
+
+fn main(io: IoCap) -> Int {
+    let nl = newline()
+    let files = strs_new()
+    let mut check = false
+    for a in 0..args_count() {
+        let s = arg(a)
+        if s == "--check" {
+            check = true
+        } else if str_len(s) > 0 && str_byte(s, 0) == 45 {
+            refuse("the option " + s, io)
+        } else {
+            strs_push(files, s)
+        }
+    }
+    if strs_len(files) == 0 { refuse("no file named (the reference's usage error)", io) }
+
+    let changed = strs_new()
+    let mut failed = false
+    for i in 0..strs_len(files) {
+        let path = strs_get(files, i)
+        if !file_exists(path) {
+            eprint("nazm: cannot read " + path + nl)
+            exit_with(3)
+        }
+        let original = read_file(path)
+        if !utf8_ok(original) {
+            eprint("nazm: cannot read " + path + nl)
+            exit_with(3)
+        }
+        let d = dg_new()
+        let formatted = format(original, d)
+        if dg_len(d) > 0 {
+            let nlc = newline_counts(original)
+            for e in 0..dg_len(d) { eprint(render(path, original, nlc, d, e)) }
+            failed = true
+            continue
+        }
+        if formatted == original { continue }
+        strs_push(changed, path)
+        if !check { write_file(path, formatted) }
+    }
+
+    if failed {
+        eprint("nazm: some files could not be formatted because they do not lex" + nl)
+        exit_with(1)
+    }
+    let total = strs_len(files)
+    for i in 0..strs_len(changed) { print(strs_get(changed, i) + nl) }
+    if check {
+        if strs_len(changed) == 0 {
+            print("nazm: " + int_to_str(total) + " file" + plural(total) + " already formatted" + nl)
+            return 0
+        }
+        eprint("nazm: " + int_to_str(strs_len(changed)) + " file" + plural(strs_len(changed))
+                + " would change; run `nazm fmt` without --check" + nl)
+        exit_with(1)
+    }
+    print("nazm: " + int_to_str(strs_len(changed)) + " of " + int_to_str(total) + " file" + plural(total) + " rewritten" + nl)
+    0
+}
