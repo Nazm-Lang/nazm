@@ -21,7 +21,9 @@
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
-// `Int`, `Bool` and `Str`, imported ones included; effects and authority; the rules about `main`.
+// `Int`, `Bool` and `Str`, imported ones included; function types, named functions as values,
+// calls through values and closures with their captures (N50); effects and authority; the rules
+// about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -196,6 +198,22 @@ pub struct Ck {
     xkind: Ints,
     xint: Ints,
     xstr: Strs,
+    // Per function, the function a closure is written in, or -1 for a declared function (N50).
+    fnclos: Ints,
+    // The closures being checked, innermost last: each one's id and how many bindings were in
+    // scope where it is written (its boundary); and the bindings each has captured, by frame.
+    cfid: Ints,
+    cfbound: Ints,
+    capf: Ints,
+    capb: Ints,
+    // Per call site, the function type a call through a value reached, or -1.
+    sind: Ints,
+    // Each named function used as a value (N50): the function, where, the effects its type was
+    // given, and the module.
+    vfn: Ints,
+    vstart: Ints,
+    vend: Ints,
+    vassumed: Ints,
 }
 
 // The module graph as the loader resolved it, handed to `ck_check`: per module, whether it is a
@@ -251,7 +269,12 @@ fn s_fn() -> Int { 7 }
 fn s_prelude() -> Int { 8 }
 // Whether the compilation had a syntax error.
 fn s_syntax() -> Int { 9 }
-fn s_slots() -> Int { 10 }
+// How many closures the function being checked has written so far (`closure_count`).
+fn s_closures() -> Int { 10 }
+// Whether the binding the last `lookup_var` reached is seen through a closure as one that is
+// neither mutable nor declared anywhere it could be made so (a captured copy).
+fn s_captured() -> Int { 11 }
+fn s_slots() -> Int { 12 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -347,6 +370,9 @@ fn tag_vec() -> Int { 2 }
 fn tag_record() -> Int { 3 }
 fn tag_enum() -> Int { 4 }
 fn tag_param() -> Int { 5 }
+// A function type (N50): its effects as the first word, its parameters and then its result as
+// its arguments.
+fn tag_fn() -> Int { 6 }
 
 fn t_int() -> Int { 0 }
 fn t_bool() -> Int { 1 }
@@ -400,6 +426,28 @@ fn vec_of(c: Ck, elem: Int) -> Int {
 fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
 fn enum_ty(c: Ck, e: Int, args: Ints) -> Int { intern(c, tag_enum(), e, 0, 0, "", args) }
 fn param_ty(c: Ck, owner: Int, id: Int, index: Int, name: Str) -> Int { intern(c, tag_param(), owner, id, index, name, ints_new()) }
+fn fn_ty(c: Ck, params: Ints, ret: Int, effects: Int) -> Int {
+    let args = ints_new();
+    let mut i = 0;
+    while i < ints_len(params) {
+        ints_push(args, ints_get(params, i));
+        i = i + 1;
+    }
+    ints_push(args, ret);
+    intern(c, tag_fn(), effects, 0, 0, "", args)
+}
+fn is_fn(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_fn() }
+fn fn_arity(c: Ck, t: Int) -> Int { targc(c, t) - 1 }
+fn fn_ret(c: Ck, t: Int) -> Int { targ(c, t, targc(c, t) - 1) }
+fn fn_params(c: Ck, t: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < fn_arity(c, t) {
+        ints_push(out, targ(c, t, i));
+        i = i + 1;
+    }
+    out
+}
 
 fn tag(c: Ck, t: Int) -> Int { ints_get(c.tytag, t) }
 fn ta(c: Ck, t: Int) -> Int { ints_get(c.tya, t) }
@@ -492,6 +540,17 @@ fn is_integer(c: Ck, t: Int) -> Bool { is_num(c, t) && is_float_name(bname_of(c,
 fn show(c: Ck, t: Int) -> Str {
     let g = tag(c, t);
     if g == tag_builtin() { return strs_get(c.tyname, t); }
+    if g == tag_fn() {
+        let parts = strs_new();
+        let mut i = 0;
+        while i < fn_arity(c, t) {
+            strs_push(parts, show(c, targ(c, t, i)));
+            i = i + 1;
+        }
+        let mut effects = "";
+        if ta(c, t) != 0 { effects = cat3(" ! ", set_text(ta(c, t)), ""); }
+        return cat5("fn(", str_join(parts, ", "), ") -> ", show(c, fn_ret(c, t)), effects);
+    }
     if g == tag_param() { return strs_get(c.tyname, t); }
     if g == tag_vec() {
         let e = targ(c, t, 0);
@@ -740,7 +799,8 @@ fn new_ck(t: Tree) -> Ck {
             dats: ints_new(), date: ints_new(), dplain: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
             taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
-            xkind: ints_new(), xint: ints_new(), xstr: strs_new());
+            xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
+            capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1425,7 +1485,25 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
             i = i + 1;
         }
     }
-    if some(c, w, "function") || some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
+    // `fn(T…) -> R ! {e}` (N50): its parts resolved as any type is, interned.
+    if some(c, w, "function") {
+        let ft = unwrap(c, w, "function");
+        let written = kids(c, ft, "params");
+        let params = ints_new();
+        let mut i = 0;
+        while i < ints_len(written) {
+            ints_push(params, resolve_written_inner(c, ints_get(written, i), pnames, ptys, d));
+            i = i + 1;
+        }
+        let ret = resolve_written_inner(c, fld(c, ft, "ret"), pnames, ptys, d);
+        let mut effects = 0;
+        if some(c, ft, "effects") {
+            let e = declared_effects_to(c, unwrap(c, ft, "effects"), d);
+            if e >= 0 { effects = e; }
+        }
+        return fn_ty(c, params, ret, effects);
+    }
+    if some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
         stop(c, cat3("the type `", name, "`"));
         return t_int();
     }
@@ -1819,6 +1897,7 @@ fn declare_functions(c: Ck, m: Int) -> Int {
             } else {
                 strs_push(c.fnname, name);
                 ints_push(c.fnmod, m);
+                ints_push(c.fnclos, 0 - 1);
                 if some(c, f, "pub_span") { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
                 ints_push(c.fnns, sps(c, ns));
                 ints_push(c.fnne, spe(c, ns));
@@ -2095,6 +2174,7 @@ fn check_function(c: Ck, f: Int) -> Int {
     let name = fname_of(c, f, "name");
     let id = defined_fn(c, gs(c, s_module()), name);
     ss(c, s_fn(), id);
+    ss(c, s_closures(), 0);
     // The function's own type parameters are in scope for every type written inside it.
     while strs_len(c.tsn) > 0 {
         strs_pop(c.tsn);
@@ -2154,8 +2234,21 @@ fn check_function(c: Ck, f: Int) -> Int {
     0
 }
 
+// Whether a value of `got` may be passed or returned where `want` is expected (`assignable`): the
+// same type, an `IoCap` where an `OutCap` is, or a function type with the same parameters and
+// result whose effects are within the expected one's.
 fn assignable(c: Ck, got: Int, want: Int) -> Bool {
     if got == want { return true; }
+    if got < 0 || want < 0 { return false; }
+    if is_fn(c, got) && is_fn(c, want) {
+        if targc(c, got) != targc(c, want) { return false; }
+        let mut i = 0;
+        while i < targc(c, got) {
+            if targ(c, got, i) != targ(c, want, i) { return false; }
+            i = i + 1;
+        }
+        return without(ta(c, got), ta(c, want)) == 0;
+    }
     bname_of(c, got) == "IoCap" && bname_of(c, want) == "OutCap"
 }
 
@@ -2193,6 +2286,122 @@ fn lookup(c: Ck, name: Str) -> Int {
     while i >= 0 {
         if strs_get(c.sname, i) == name { return i; }
         i = i - 1;
+    }
+    0 - 1
+}
+
+// The binding `name` reaches here, captured into every closure between it and here (N50,
+// `lookup_var`): a capability may be; a `let mut` binding is shared with the closure (R1b, L10)
+// unless its type can hold a function value (N0386); and the first capture of a binding whose
+// type can hold function values is refused (N0616). A captured copy that is not shared is
+// neither mutable nor declared anywhere (`s_captured`).
+fn lookup_var(c: Ck, name: Str, at: Int) -> Int {
+    ss(c, s_captured(), 0);
+    let b = lookup(c, name);
+    if b < 0 { return b; }
+    let mut first = 0 - 1;
+    let mut k = 0;
+    while k < ints_len(c.cfbound) {
+        if first < 0 && b < ints_get(c.cfbound, k) { first = k; }
+        k = k + 1;
+    }
+    if first < 0 { return b; }
+    let ty = ints_get(c.sty, b);
+    if ints_get(c.smut, b) == 1 && holds_fn(c, ty, 0) {
+        err(c, "N0386", at, cat5("a closure cannot capture `", name, "`, a `let mut` binding of `", show(c, ty), "`, which can hold a function value"),
+                "a captured `let mut` binding is shared with the closure, so the closure could be stored into it and own itself, which reference counting never reclaims; bind a copy with `let`, or pass the value as an argument");
+        ss(c, s_captured(), 1);
+        return b;
+    }
+    if captured_by(c, first, b) == false {
+        let holder = function_holder(c, ty);
+        if holder >= 0 {
+            let shown = show(c, ty);
+            let mut through = "";
+            if show(c, holder) != shown { through = cat3(" through `", show(c, holder), "`"); }
+            dg_error(c.d, "N0616", sps(c, at), spe(c, at), cat5(cat3("a closure cannot capture `", name, "`: a `"), shown, "` can hold function values", through, ""),
+                    "captured here",
+                    "a closure owns what it captures, so storing it into this value — or into any value sharing its storage — would make a value that owns itself, which reference counting never reclaims. Nazm refuses the capture rather than leak it, by the captured type alone. Pass the value to the function as an argument instead of capturing it");
+        }
+    }
+    k = first;
+    while k < ints_len(c.cfbound) {
+        if b < ints_get(c.cfbound, k) && captured_by(c, k, b) == false {
+            ints_push(c.capf, k);
+            ints_push(c.capb, b);
+        }
+        k = k + 1;
+    }
+    if ints_get(c.smut, b) == 0 { ss(c, s_captured(), 1); }
+    b
+}
+
+fn captured_by(c: Ck, frame: Int, b: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(c.capf) {
+        if ints_get(c.capf, i) == frame && ints_get(c.capb, i) == b { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Whether a value of `t` can reach a function value (`function_holder` of a `Cell` of it).
+fn holds_fn(c: Ck, t: Int, depth: Int) -> Bool {
+    if depth > max_depth() * 4 { return true; }
+    if is_fn(c, t) { return true; }
+    if tag(c, t) == tag_vec() { return holds_fn(c, targ(c, t, 0), depth + 1); }
+    if is_record(c, t) || is_enum(c, t) {
+        let edges = contained(c, t);
+        let mut i = 0;
+        while i < ints_len(edges) {
+            if holds_fn(c, field_ty_in(c, t, ints_get(edges, i)), depth + 1) { return true; }
+            i = i + 1;
+        }
+    }
+    false
+}
+
+// The mutable container through which a value of `t` can hold a function value
+// (`function_holder`), or -1: a function type met inside a `Vec`; records and enums are walked
+// through, last field first, as the reference's stack walks them.
+fn function_holder(c: Ck, t: Int) -> Int {
+    let st = ints_new();
+    let sh = ints_new();
+    let seen_t = ints_new();
+    let seen_h = ints_new();
+    ints_push(st, t);
+    ints_push(sh, 0 - 1);
+    while ints_len(st) > 0 {
+        let ty = ints_pop(st);
+        let holder = ints_pop(sh);
+        let mut held = 0;
+        if holder >= 0 { held = 1; }
+        let mut seen = false;
+        let mut i = 0;
+        while i < ints_len(seen_t) {
+            if ints_get(seen_t, i) == ty && ints_get(seen_h, i) == held { seen = true; }
+            i = i + 1;
+        }
+        if seen == false {
+            ints_push(seen_t, ty);
+            ints_push(seen_h, held);
+            if is_fn(c, ty) {
+                if holder >= 0 { return holder; }
+            }
+            if tag(c, ty) == tag_vec() {
+                ints_push(st, targ(c, ty, 0));
+                if holder >= 0 { ints_push(sh, holder); } else { ints_push(sh, ty); }
+            }
+            if is_record(c, ty) || is_enum(c, ty) {
+                let edges = contained(c, ty);
+                let mut k = 0;
+                while k < ints_len(edges) {
+                    ints_push(st, field_ty_in(c, ty, ints_get(edges, k)));
+                    ints_push(sh, holder);
+                    k = k + 1;
+                }
+            }
+        }
     }
     0 - 1
 }
@@ -2310,7 +2519,9 @@ fn check_assign(c: Ck, a: Int) -> Int {
     let name = fname_of(c, place, "name");
     let ns = fld(c, place, "name_span");
     let value = fld(c, a, "value");
-    let b = lookup(c, name);
+    let b = lookup_var(c, name, fld(c, place, "span"));
+    // Seen through a closure as a copy: neither mutable nor declared where it could be made so.
+    let copy = gs(c, s_captured()) == 1;
     if b < 0 {
         err(c, "N0200", ns, cat3("`", name, "` is not defined"), "assignment changes an existing binding; `let` introduces one");
         check_expr(c, value, none());
@@ -2328,10 +2539,10 @@ fn check_assign(c: Ck, a: Int) -> Int {
         strs_push(shown, fname_of(c, sx_kid(c.t, step, 0), "name"));
         i = i + 1;
     }
-    if ints_get(c.smut, b) == 0 {
+    if ints_get(c.smut, b) == 0 || copy {
         let mut written = cat3("`", name, "` is not mutable");
         if ints_len(path) > 0 { written = cat5("`", name, "` is not mutable, so its `", str_join(shown, "."), "` cannot be replaced"); }
-        if ints_get(c.sds, b) >= 0 {
+        if ints_get(c.sds, b) >= 0 && copy == false {
             err(c, "N0310", ns, written, "bindings are immutable unless written `let mut`");
             sec_at(c, ints_get(c.sds, b), ints_get(c.sde, b), "declared here");
             dg_fix(c.d, ints_get(c.sds, b), ints_get(c.sde, b), str_concat("mut ", name), "make the binding mutable", "automatic",
@@ -2344,6 +2555,7 @@ fn check_assign(c: Ck, a: Int) -> Int {
     let mut target = ints_get(c.sty, b);
     let mut ds = ints_get(c.sds, b);
     let mut de = ints_get(c.sde, b);
+    if copy { ds = 0 - 1; }
     i = 0;
     while i < ints_len(path) {
         let step = sx_kid(c.t, ints_get(path, i), 0);
@@ -2472,6 +2684,7 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "If" { return check_if(c, e, expected, unwanted); }
     if k == "Match" { return check_match(c, e, expected); }
     if k == "Propagate" { return check_propagate(c, e, expected); }
+    if k == "Closure" { return check_closure(c, e, expected); }
     if k == "Interp" {
         // `f"…"` (L4), and what `print(x)` is written as: a `Str`, each hole a value
         // interpolation writes.
@@ -2515,15 +2728,13 @@ fn check_hole(c: Ck, expr: Int, spec: Int, at: Int) -> Int {
 fn check_var(c: Ck, e: Int, expected: Int) -> Int {
     let name = fname_of(c, e, "name");
     let span = fld(c, e, "span");
-    let b = lookup(c, name);
+    let b = lookup_var(c, name, span);
     if b >= 0 { return ints_get(c.sty, b); }
     // A constant (Gate 2): its type.
     let k = strs_find(c.kname, name);
     if k >= 0 { return kind_type(ints_get(c.kkind, k)); }
-    if env_has(c, name) {
-        stop(c, "a function as a value");
-        return or_int(expected);
-    }
+    let callee = callee_of(c, name);
+    if callee != 0 - 1 { return function_value(c, name, callee, span, expected); }
     if starts_upper(name) && ints_len(variant_owners(c, name)) > 0 {
         let t = check_construction(c, name, span, 0 - 1, no_inits(), span, expected);
         if t < 0 { return or_int(expected); }
@@ -2531,6 +2742,221 @@ fn check_var(c: Ck, e: Int, expected: Int) -> Int {
     }
     err(c, "N0200", span, cat3("`", name, "` is not defined"), "");
     or_int(expected)
+}
+
+// A named function written as a value (N50, `function_value`): non-generic and not a built-in.
+// Its type is its signature's with its declared effects — or, undeclared, another module's
+// assumed ones and this module's none, which effects analysis then holds it to.
+fn function_value(c: Ck, name: Str, callee: Int, at: Int, expected: Int) -> Int {
+    let mut why = "";
+    if callee < 0 { why = "a built-in"; } else {
+        if ints_get(c.fntpc, callee) > 0 { why = "generic"; }
+    }
+    if why != "" {
+        err(c, "N0387", at, cat5("`", name, "` is ", why, ", and cannot be used as a value"),
+                cat5(cat3("call it as `", name, "(...)`, or write a closure that calls it: `fn(x: Int) -> Int { "), name, "(x) }`", "", ""));
+        return or_int(expected);
+    }
+    let mut assumed = ints_get(c.fneff, callee);
+    if assumed < 0 {
+        assumed = 0;
+        if ints_get(c.fnmod, callee) != gs(c, s_module()) {
+            assumed = 3;
+            if receives_foreign(c, callee) { assumed = 7; }
+        }
+    }
+    let params = ints_new();
+    let mut i = 0;
+    while i < ints_get(c.fnpc, callee) {
+        ints_push(params, ints_get(c.ptys, ints_get(c.fnpf, callee) + i));
+        i = i + 1;
+    }
+    ints_push(c.vfn, callee);
+    ints_push(c.vstart, sps(c, at));
+    ints_push(c.vend, spe(c, at));
+    ints_push(c.vassumed, assumed);
+    fn_ty(c, params, ints_get(c.fnret, callee), assumed)
+}
+
+// A call through a binding of a function type (`check_indirect_call`).
+fn check_indirect_call(c: Ck, name: Str, at: Int, args: Ints, span: Int) -> Int {
+    let b = lookup_var(c, name, at);
+    let t = ints_get(c.sty, b);
+    let n = fn_arity(c, t);
+    if ints_len(args) != n {
+        let mut verb = " were given";
+        if ints_len(args) == 1 { verb = " was given"; }
+        err(c, "N0303", span, cat5(cat3("`", name, "` takes "), int_to_str(n), str_concat(" argument", plural(n)), ", but ",
+                str_concat(int_to_str(ints_len(args)), verb)), "");
+    }
+    record_indirect_site(c, at, t);
+    let mut i = 0;
+    while i < ints_len(args) {
+        let a = ints_get(args, i);
+        let mut want = none();
+        if i < n { want = targ(c, t, i); }
+        let got = value_type(c, a, want);
+        if want >= 0 && assignable(c, got, want) == false {
+            err(c, "N0300", espan(c, a),
+                    cat5(cat3("argument ", int_to_str(i + 1), " of `"), name, "` is `", show(c, want), cat3("`, but this is `", show(c, got), "`")), "");
+        }
+        i = i + 1;
+    }
+    fn_ret(c, t)
+}
+
+// Whether a type as written was left out, as a short closure's are (R1.5, D3).
+fn unwritten(c: Ck, w: Int) -> Bool {
+    let span = fld(c, w, "span");
+    fname_of(c, w, "name") == "_" && sx_s(c.t, span) == sx_e(c.t, span) && some(c, w, "args") == false
+}
+
+// A closure expression (N50, `check_closure`): a definition of its own, checked as a function
+// is, with what its body names from around it captured.
+fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
+    let enclosing = gs(c, s_fn());
+    if enclosing < 0 { return or_int(expected); }
+    let mut exp = 0 - 1;
+    if is_fn(c, expected) { exp = expected; }
+    let params = kids(c, e, "params");
+    let ptys = ints_new();
+    let mut i = 0;
+    while i < ints_len(params) {
+        let p = ints_get(params, i);
+        let w = fld(c, p, "ty");
+        let mut ty = t_int();
+        if unwritten(c, w) {
+            if exp >= 0 && i < fn_arity(c, exp) {
+                ty = targ(c, exp, i);
+            } else {
+                let pn = fname_of(c, p, "name");
+                err(c, "N0635", fld(c, p, "name_span"), cat3("write `", pn, "`'s type: no function type is expected here to take it from"),
+                        cat3("`|", pn, ": Int| …`"));
+            }
+        } else {
+            ty = resolve_written(c, w, c.tsn, c.tst, c.d);
+        }
+        ints_push(ptys, ty);
+        i = i + 1;
+    }
+    let rt = fld(c, e, "return_type");
+    let short = unwritten(c, rt);
+    let infer_ret = short && exp < 0;
+    let mut ret = t_int();
+    if short {
+        if exp >= 0 { ret = fn_ret(c, exp); }
+    } else {
+        ret = resolve_written(c, rt, c.tsn, c.tst, c.d);
+    }
+    let mut effects = 0;
+    let mut ws = 0 - 1;
+    let mut we = 0 - 1;
+    if some(c, e, "effects") {
+        let decl = unwrap(c, e, "effects");
+        effects = declared_effects(c, decl);
+        if effects < 0 { effects = 0; }
+        ws = sps(c, fld(c, decl, "span"));
+        we = spe(c, fld(c, decl, "span"));
+    } else {
+        if short && exp >= 0 { effects = ta(c, exp); }
+    }
+    let mut base = strs_get(c.fnname, enclosing);
+    let hash = index_of_text(base, "#");
+    if hash >= 0 { base = str_slice(base, 0, hash); }
+    let count = gs(c, s_closures());
+    ss(c, s_closures(), count + 1);
+    let mut ty = fn_ty(c, ptys, ret, effects);
+    let id = strs_len(c.fnname);
+    let fs = fld(c, e, "fn_span");
+    strs_push(c.fnname, cat3(base, "#", int_to_str(count)));
+    ints_push(c.fnmod, gs(c, s_module()));
+    ints_push(c.fnclos, enclosing);
+    ints_push(c.fnpub, 0);
+    ints_push(c.fnns, sps(c, fs));
+    ints_push(c.fnne, spe(c, fs));
+    ints_push(c.fnnode, e);
+    ints_push(c.fnpf, ints_len(c.ptys));
+    ints_push(c.fnpc, ints_len(ptys));
+    i = 0;
+    while i < ints_len(ptys) {
+        ints_push(c.ptys, ints_get(ptys, i));
+        i = i + 1;
+    }
+    ints_push(c.fnret, ret);
+    ints_push(c.fnnores, 0);
+    ints_push(c.fneff, effects);
+    ints_push(c.fnws, ws);
+    ints_push(c.fnwe, we);
+    ints_push(c.fntpf, strs_len(c.tpname));
+    ints_push(c.fntpc, 0);
+    // The closure's body is a function of its own: its own returns, loops and scopes.
+    let saved_fn = gs(c, s_fn());
+    let saved_ret = gs(c, s_ret());
+    let saved_rs = gs(c, s_rs());
+    let saved_loop = gs(c, s_loop());
+    ss(c, s_fn(), id);
+    ss(c, s_ret(), ret);
+    ss(c, s_rs(), fld(c, rt, "span"));
+    ss(c, s_loop(), 0);
+    let frame = ints_len(c.cfid);
+    ints_push(c.cfid, id);
+    ints_push(c.cfbound, strs_len(c.sname));
+    open_scope(c);
+    i = 0;
+    while i < ints_len(params) {
+        let p = ints_get(params, i);
+        let pn = fname_of(c, p, "name");
+        if defined_here(c, pn) {
+            err(c, "N0202", fld(c, p, "span"), cat3("`", pn, "` is listed twice in this parameter list"), "");
+        }
+        define(c, pn, ints_get(ptys, i), false, 0 - 1, 0 - 1);
+        i = i + 1;
+    }
+    let body = fld(c, e, "body");
+    ss(c, s_discard(), 0);
+    let mut want = ret;
+    if infer_ret { want = none(); }
+    let completion = check_block(c, body, want);
+    let rts = fld(c, rt, "span");
+    if completion >= 0 {
+        if infer_ret {
+            ty = fn_ty(c, ptys, completion, effects);
+            ints_set(c.fnret, id, completion);
+        } else {
+            if completion != ret {
+                let mut at = fld(c, body, "span");
+                if some(c, body, "tail") { at = espan(c, unwrap(c, body, "tail")); }
+                err(c, "N0300", at, cat5("this closure returns `", show(c, completion), "`, but its type says `", show(c, ret), "`"), "");
+                sec(c, rts, cat3("declared `", show(c, ret), "` here"));
+            }
+        }
+    }
+    if completion == unit() {
+        err(c, "N0300", fld(c, body, "span"), cat3("this closure must produce a `", show(c, ret), "`, but its body does not"), "");
+        sec(c, rts, cat3("declared `", show(c, ret), "` here"));
+    }
+    close_scope(c);
+    ints_pop(c.cfid);
+    ints_pop(c.cfbound);
+    while ints_len(c.capf) > 0 && ints_get(c.capf, ints_len(c.capf) - 1) == frame {
+        ints_pop(c.capf);
+        ints_pop(c.capb);
+    }
+    ss(c, s_fn(), saved_fn);
+    ss(c, s_ret(), saved_ret);
+    ss(c, s_rs(), saved_rs);
+    ss(c, s_loop(), saved_loop);
+    ty
+}
+
+fn index_of_text(s: Str, part: Str) -> Int {
+    let n = str_len(part);
+    let mut i = 0;
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return i; }
+        i = i + 1;
+    }
+    0 - 1
 }
 
 fn check_negation(c: Ck, e: Int, expected: Int) -> Int {
@@ -2801,6 +3227,14 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
     // `m::f` is looked up as one key (N49); everything below names it as written.
     let qualified = some(c, e, "qualifier");
     let mut callee = fname_of(c, e, "callee");
+    // A binding of function type of that name hides a function of it (N50): the call is through
+    // the value.
+    if qualified == false && some(c, e, "type_args") == false {
+        let b = lookup(c, callee);
+        if b >= 0 && is_fn(c, ints_get(c.sty, b)) {
+            return check_indirect_call(c, callee, fld(c, e, "callee_span"), kids(c, e, "args"), fld(c, e, "span"));
+        }
+    }
     let mut target = 0 - 1;
     if qualified {
         let alias = fname_of(c, unwrap(c, e, "qualifier"), "name");
@@ -3029,7 +3463,7 @@ fn inferred_from(c: Ck, call: Call, formal: Int, actual: Int, index: Int) -> Int
         if ta(c, formal) == call.owner && ints_get(c.tyb, formal) == call.oid && ints_get(c.tyc, formal) == index { return actual; }
         return 0 - 1;
     }
-    if g == tag_vec() || g == tag_record() || g == tag_enum() {
+    if g == tag_vec() || g == tag_record() || g == tag_enum() || g == tag_fn() {
         let mut k = 0;
         while k < targc(c, formal) && k < targc(c, actual) {
             let r = inferred_from(c, call, targ(c, formal, k), targ(c, actual, k), index);
@@ -3068,7 +3502,8 @@ fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> In
         if tag(c, actual) != tag_vec() { return 2; }
         return unify(c, call, targ(c, formal, 0), targ(c, actual, 0), g, arg);
     }
-    if tg == tag_record() || tg == tag_enum() {
+    // Structural through a function type's parameters and result (N50), its effects the same set.
+    if tg == tag_record() || tg == tag_enum() || tg == tag_fn() {
         if tag(c, actual) != tg || ta(c, actual) != ta(c, formal) { return 2; }
         if targc(c, formal) != targc(c, actual) { return 2; }
         let mut k = 0;
@@ -5226,7 +5661,10 @@ fn cap_article(bit: Int) -> Str {
 
 // The set a declaration writes (`effects::declared`), every unknown and duplicate name reported;
 // -1 when a name is no effect.
-fn declared_effects(c: Ck, decl: Int) -> Int {
+fn declared_effects(c: Ck, decl: Int) -> Int { declared_effects_to(c, decl, c.d) }
+
+// The same, its refusals into `d`.
+fn declared_effects_to(c: Ck, decl: Int, d: Diags) -> Int {
     let names = kids(c, decl, "names");
     let mut set = 0;
     let mut known = true;
@@ -5238,14 +5676,14 @@ fn declared_effects(c: Ck, decl: Int) -> Int {
         let e = strs_find(effect_names(), name);
         if e < 0 {
             known = false;
-            err(c, "N0367", span, cat3("`", name, "` is not an effect"),
+            dg_error(d, "N0367", sps(c, span), spe(c, span), cat3("`", name, "` is not an effect"), "",
                     "the effects are `io` and `spawn` and `foreign`. There are no user-defined effects");
         } else {
             if has_bit(set, e) {
-                err(c, "N0368", span, cat3("`", name, "` is written twice in this effect set"), "");
+                dg_error(d, "N0368", sps(c, span), spe(c, span), cat3("`", name, "` is written twice in this effect set"), "", "");
                 if i > 0 {
                     let before = sx_kid(c.t, ints_get(names, i - 1), 1);
-                    dg_fix(c.d, spe(c, before), spe(c, span), "", cat3("remove the second `", name, "`"), "automatic",
+                    dg_fix(d, spe(c, before), spe(c, span), "", cat3("remove the second `", name, "`"), "automatic",
                             "a set holds an effect once, so the second one means nothing");
                 }
             } else {
@@ -5292,8 +5730,32 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
         ints_push(c.sbuiltin, 0 - 2 - target);
         ints_push(c.suser, 0 - 1);
     }
+    ints_push(c.sind, 0 - 1);
     ints_push(c.sheld, held_caps(c));
     0
+}
+
+// A call through a function value (`Callee::Indirect`): what it may do is its type's.
+fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
+    let f = gs(c, s_fn());
+    if f < 0 { return 0; }
+    ints_push(c.sfn, f);
+    ints_push(c.sstart, sps(c, at));
+    ints_push(c.send, spe(c, at));
+    ints_push(c.sbuiltin, 0 - 1);
+    ints_push(c.suser, 0 - 1);
+    ints_push(c.sind, t);
+    ints_push(c.sheld, held_caps(c));
+    0
+}
+
+// How a function is named in a message about it: `` `f` ``, or `this closure in `f`` (N50).
+fn fn_label(c: Ck, f: Int) -> Str {
+    let mut name = strs_get(c.fnname, f);
+    if ints_get(c.fnclos, f) < 0 { return tick(name); }
+    let hash = index_of_text(name, "#");
+    if hash >= 0 { name = str_slice(name, 0, hash); }
+    cat3("this closure in `", name, "`")
 }
 
 fn builtin_effect(c: Ck, b: Int) -> Int { strs_find(effect_names(), strs_get(c.beff, b)) }
@@ -5336,6 +5798,7 @@ fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
     if src == 1 { return cat4("the built-in `", strs_get(c.bname, w), "` requires ", e); }
     if src == 2 { return cat4("calls `", strs_get(c.fnname, w), "`, whose declared set includes ", e); }
     if src == 4 { return cat3("calls `", strs_get(c.fnname, w), "`, which is in another module and declares no effect set, so every effect is assumed of it"); }
+    if src == 5 { return cat4("calls a function value of type `", show(c, w), "`, whose type includes ", e); }
     cat4("calls `", strs_get(c.fnname, w), "`, which requires ", e)
 }
 
@@ -5372,11 +5835,23 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
             if ints_get(c.sfn, s) == me {
                 let b = ints_get(c.sbuiltin, s);
                 let g = ints_get(c.suser, s);
+                let ind = ints_get(c.sind, s);
                 if b >= 0 {
                     let e = builtin_effect(c, b);
                     if e >= 0 && has_bit(set, e) == false {
                         set = with_bit(set, e);
                         add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 1, b);
+                    }
+                }
+                // What a function value may do is its type's (N50): a contract.
+                if ind >= 0 {
+                    let mut e = 0;
+                    while e < 3 {
+                        if has_bit(ta(c, ind), e) && has_bit(set, e) == false {
+                            set = with_bit(set, e);
+                            add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 5, ind);
+                        }
+                        e = e + 1;
                     }
                 }
                 // A callee's declared set is its contract; another module's undeclared one is
@@ -5441,6 +5916,35 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
             }
             n = n + 1;
         }
+    }
+    // A named function used as a value promised its type's effects (N50): an undeclared one of
+    // this module was taken to require none, and is held to it here.
+    let mut v = 0;
+    while v < ints_len(c.vfn) {
+        let f = ints_get(c.vfn, v);
+        let at = index_of(nodes, f);
+        if at >= 0 && ints_get(c.fneff, f) < 0 {
+            let missing = without(ints_get(sets, at), ints_get(c.vassumed, v));
+            if missing != 0 {
+                let listed = strs_new();
+                let mut first = 0 - 1;
+                let mut e = 0;
+                while e < 3 {
+                    if has_bit(missing, e) {
+                        strs_push(listed, tick(strs_get(effect_names(), e)));
+                        if first < 0 { first = e; }
+                    }
+                    e = e + 1;
+                }
+                dg_error(c.d, "N0366", ints_get(c.vstart, v), ints_get(c.vend, v),
+                        cat4(fn_label(c, f), " is used as a value whose type requires no effect, but it requires ", str_join(listed, " and "), ""), "",
+                        cat4("a function value's type carries its effects, and an undeclared function's are taken to be none: declare `! ",
+                        set_text(missing), "` on ", fn_label(c, f)));
+                let r = reason_of(rs, f, first);
+                if r >= 0 { sec_at(c, ints_get(rs.start, r), ints_get(rs.end, r), describe(c, rs, r)); }
+            }
+        }
+        v = v + 1;
     }
     // Authority first, then effects, function by function.
     n = 0;
@@ -5515,7 +6019,7 @@ fn without(a: Int, b: Int) -> Int {
 // Every kind the body exercises without holding it, once each, at the first call that needs it
 // (`authority` and `missing_authority`).
 fn check_authority(c: Ck, me: Int, program: Bool) -> Int {
-    let who = tick(strs_get(c.fnname, me));
+    let who = fn_label(c, me);
     let mut reported = 0;
     let mut s = 0;
     while s < ints_len(c.sfn) {
@@ -5551,7 +6055,7 @@ fn check_authority(c: Ck, me: Int, program: Bool) -> Int {
 
 // `N0366`: a declared set the body exceeds, with the chain of reasons to where it ends.
 fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
-    let who = tick(strs_get(c.fnname, me));
+    let who = fn_label(c, me);
     let listed = strs_new();
     let mut first = 0 - 1;
     let mut e = 0;
@@ -5580,6 +6084,11 @@ fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
         }
     }
     let wider = set_text(declared + missing);
+    // A closure that writes no effect set declares `! {}` (N50).
+    if ints_get(c.fnws, me) < 0 {
+        sec_at(c, ints_get(c.fnns, me), ints_get(c.fnne, me), "a closure that writes no effect set declares `! {}`");
+        return 0;
+    }
     sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), cat3("declared `! ", shown, "` here"));
     dg_fix(c.d, ints_get(c.fnws, me), ints_get(c.fnwe, me), str_concat("! ", wider), cat3("declare `! ", wider, "`"), "needs_review",
             cat5(who, " is meant to exercise ", list, ". Widening a contract can break a caller whose own declared set lacks ", list));

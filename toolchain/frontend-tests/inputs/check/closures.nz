@@ -1,0 +1,55 @@
+struct Holder { fs: Vec[fn(Int) -> Int] }
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+fn apply[T](f: fn(T) -> T, x: T) -> T { f(x) }
+fn loud(x: Int) -> Int {
+    print("x");
+    x
+}
+fn quiet(x: Int) -> Int ! {} { x + 1 }
+fn pick[T](x: T) -> T { x }
+fn make(n: Int) -> fn(Int) -> Int {
+    fn(x: Int) -> Int { x + n }
+}
+fn main(io: IoCap) -> Int {
+    let add = fn(a: Int, b: Int) -> Int { a + b };
+    let short: fn(Int) -> Int = | x | x * 2;
+    let untyped = | y | y;
+    let inferred = | z: Int | z + 1;
+    let wrong = fn(x: Int) -> Bool { x };
+    let none = fn(x: Int) -> Int { let y = x; };
+    let n = add(1, 2) + add(1) + short("s") + twice(short, 3) + apply(short, 4);
+    let mut count = 0;
+    let bump = fn() -> Int {
+        count = count + 1;
+        count
+    };
+    let fixed = 5;
+    let set = fn() -> Int {
+        fixed = 6;
+        fixed
+    };
+    let mut fs = vec_new[fn(Int) -> Int]();
+    let grab = fn() -> Int { vec_len(fs) };
+    let h = Holder(fs: fs);
+    let grab2 = fn() -> Int { vec_len(h.fs) };
+    let v1 = loud;
+    let v2 = quiet;
+    let v3 = str_len;
+    let v4 = pick;
+    let printer = fn(x: Int) -> Int {
+        print("p");
+        x
+    };
+    let opened = fn() -> Bool { file_exists("x") };
+    let declared = fn() -> Int ! { io } { 1 };
+    let same = add == add;
+    let nested = fn() -> Int {
+        let inner = fn() -> Int {
+            print("i");
+            1
+        };
+        inner()
+    };
+    let mk = make(1);
+    twice(loud, 1) + mk(2) + n
+}
