@@ -394,6 +394,11 @@
         through a trait's bound (`CallTrait`) still stops. `run.sh core`: 3,048 agree, 0 differ;
         of 56,937 functions the lowering carries 53,959, all agree; the other parts 10,374, all
         agree; 1,195 whole documents, all the reference's bytes
+  - [x] String constants of any text (`text`, then `quote`): UTF-8 printed as it is, its
+        control characters `\u00XX`; text that is not UTF-8 or holds `\x`, `\xNN` per byte.
+        `run.sh core`: 3,048 agree, 0 differ; of 56,942 functions the lowering carries 54,341,
+        all agree; the other parts 10,374, all agree; 1,223 whole documents, all the
+        reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
