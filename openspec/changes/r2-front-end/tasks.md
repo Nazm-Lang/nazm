@@ -53,6 +53,9 @@
       (N0344) and exhaustiveness with the reference's witness (N0343), and N0632's warning,
       published only where there is no error. `run.sh check`: 2,307 agree, 429 differ; the
       checker carries 1,598, all agree
+- [ ] 3.1f `?` (`check_propagate`): the prelude's `Result` and `Option` by definition (N0360,
+      N0361, N0362, N0300). `run.sh check`: 2,342 agree, 394 differ; the checker carries 1,648,
+      all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

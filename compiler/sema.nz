@@ -15,8 +15,8 @@
 // inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
-// pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; effects and
-// authority; the rules about `main`.
+// pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
+// prelude's `Result` and `Option`; effects and authority; the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -1669,6 +1669,7 @@ fn check_function(c: Ck, f: Int) -> Int {
     let rts = fld(c, rt, "span");
     let body = unwrap(c, f, "body");
     ss(c, s_ret(), declared);
+    ss(c, s_rs(), rts);
     ss(c, s_loop(), 0);
     let completion = check_block(c, body, declared);
     if completion >= 0 && assignable(c, completion, declared) == false {
@@ -2012,6 +2013,7 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     }
     if k == "If" { return check_if(c, e, expected, unwanted); }
     if k == "Match" { return check_match(c, e, expected); }
+    if k == "Propagate" { return check_propagate(c, e, expected); }
     stop(c, cat3("the expression `", k, "`"));
     or_int(expected)
 }
@@ -4136,6 +4138,62 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
                 "a pattern names every payload field, matching it or discarding it with `_`. There is no rest pattern, so adding a payload field breaks the patterns that did not know about it rather than ignoring it");
     }
     pat_new(c, pk_ctor(), at, "", ty, args)
+}
+
+// --- `?` (`check_propagate`) ---------------------------------------------------------------------
+
+// Whether a type is an application of the core prelude's enum of this name — by definition, so a
+// module's own enum of the same shape is not one.
+fn prelude_enum(c: Ck, t: Int, name: Str) -> Bool { is_enum(c, t) && ta(c, t) == declared_enum(c, 1, name) && targc(c, t) > 0 }
+
+// `operand?`: a `Result[T, E]`'s `T` in a function returning a `Result[U, E]`, or an
+// `Option[T]`'s `T` in one returning an `Option` (R1, 5b.17); its completion is the operand's.
+fn check_propagate(c: Ck, e: Int, expected: Int) -> Int {
+    let operand = fld(c, e, "operand");
+    let at = fld(c, e, "op_span");
+    let ot = check_expr(c, operand, none());
+    if ot == diverges() { return diverges(); }
+    if ot == unit() {
+        err(c, "N0300", espan(c, operand), "this produces no value", "`?` takes apart a `Result`, and this is not a value at all");
+        return or_int(expected);
+    }
+    let declared = gs(c, s_ret());
+    let shown_ret = show(c, declared);
+    let rspan = gs(c, s_rs());
+    if prelude_enum(c, ot, "Option") {
+        if prelude_enum(c, declared, "Option") == false {
+            err(c, "N0361", at,
+                    cat3("`?` on an `Option` can only be used in a function that returns an `Option`, and this one returns `", shown_ret, "`"),
+                    "`?` leaves the function with `None`. Here, `match` on the value instead");
+            sec(c, rspan, cat3("declared `", shown_ret, "` here"));
+        }
+        return targ(c, ot, 0);
+    }
+    let shown = show(c, ot);
+    if prelude_enum(c, ot, "Result") == false || targc(c, ot) != 2 {
+        err(c, "N0360", at, cat3("`?` needs a `Result`, but this is `", shown, "`"),
+                "`?` propagates the core prelude's `Result` and `Option` and nothing else — not an enum with the same variants. Take the value apart with `match` instead");
+        sec(c, espan(c, operand), cat3("this is `", shown, "`"));
+        return or_int(expected);
+    }
+    let ok = targ(c, ot, 0);
+    let error = targ(c, ot, 1);
+    if prelude_enum(c, declared, "Result") == false || targc(c, declared) != 2 {
+        err(c, "N0361", at, cat3("`?` can only be used in a function that returns a `Result`, and this one returns `", shown_ret, "`"),
+                "`?` leaves the function with the error, so the function has to return a `Result` with the same error type. Here, `match` on the value and decide what the error means instead");
+        sec(c, rspan, cat3("declared `", shown_ret, "` here"));
+        return ok;
+    }
+    let into_err = targ(c, declared, 1);
+    if error != into_err {
+        let have = show(c, error);
+        let want = show(c, into_err);
+        err(c, "N0362", at, cat5("this `?` propagates a `", have, "`, but the function's error type is `", want, "`"),
+                "there is no conversion between error types: `?` returns the error value as it is. Match on the value and build the error this function returns");
+        sec(c, espan(c, operand), cat3("its error type is `", have, "`"));
+        sec(c, rspan, cat3("the function returns `", want, "` errors"));
+    }
+    ok
 }
 
 // Why a name before a variant's `.` is no enum (`resolve_enum`), its unknown name already reported.
