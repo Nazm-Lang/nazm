@@ -1,0 +1,233 @@
+// N68: layout specialisation — a `Vec` of records, one array per field (`docs/architecture.md`
+// §7.70). Ported from `crates/nazm-cli/tests/layout.rs` (R7).
+//
+// `--layout soa` changes no answer and no failure under both optimisation levels and on
+// Cranelift, against the interpreter and the element-by-element layout; a record whose fields are
+// reordered is the same program and the same code; the layout is in every object's identity; an
+// ineligible element stays element by element; and `nazm explain-cost` says which and why.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+const PARTICLES: Str = "struct Particle { x: Int, y: Int, z: Int, vx: Int, vy: Int, vz: Int, mass: Int, alive: Bool }\nfn main() -> Int {\nlet ps = vec_new[Particle]();\nlet mut i = 0;\nwhile i < 1000 { vec_push(ps, Particle(x: i, y: i * 2, z: 3, vx: 1, vy: -1, vz: 0, mass: i % 7, alive: i % 3 == 0)); i = i + 1; }\nvec_set(ps, 5, Particle(x: 100, y: 0, z: 0, vx: 0, vy: 0, vz: 0, mass: 9, alive: true));\nlet last = vec_pop(ps);\nlet mut s = 0;\nlet mut k = 0;\nwhile k < vec_len(ps) { let p = vec_get(ps, k); if p.alive { s = s + p.x + p.mass; } else { s = s - p.vy; } k = k + 1; }\ns + last.y + vec_len(ps)\n}\n";
+
+/// One tier's answer: its label, what it printed, its status, and its failure's first line up to
+/// ` at `.
+struct Tier {
+    label: Str,
+    stdout: Str,
+    code: Int,
+    failure: Str,
+}
+
+/// The first `error[` line of `stderr` up to ` at `; a native program's without its `nazm: `.
+fn failure_of(stderr: Str, native: Bool) -> Str ! {} {
+    for l in lines(stderr) {
+        if text_contains(l, "error[") {
+            let x = if native { trim_start_matches(l, "nazm: ") } else { l };
+            return strs_get(split(x, " at "), 0);
+        }
+    }
+    ""
+}
+
+/// What `src` prints and how it ends, under the interpreter and under each native build.
+fn everywhere_layouts(h: Caps, src: Str) -> Result[Vec[Tier], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = layouts_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn layouts_in(h: Caps, d: Str) -> Result[Vec[Tier], Str] ! { io, spawn } {
+    let out = vec_new[Tier]();
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    vec_push(out, Tier(label: "run", stdout: r.stdout, code: r.code, failure: failure_of(r.stderr, false)));
+    // Both backends since N105: the layout is LIR's, and each translates it.
+    for layout in words("aos soa") {
+        for bo in words("llvm:0 llvm:2 cranelift:2") {
+            let parts = split(bo, ":");
+            let backend = strs_get(parts, 0);
+            let opt = strs_get(parts, 1);
+            let exe = f"{d}/p-{layout}-{backend}-{opt}";
+            let a = words(f"build --layout {layout} --backend {backend} --opt-level {opt} prog.nz -o");
+            strs_push(a, exe);
+            let b = nazm(h, d, a);
+            check_that(b.code == 0, f"{layout} {backend} -O{opt}: {b.stderr}")?;
+            let o = run(h, exe, strs_new(), "", suite_env(h));
+            vec_push(out, Tier(label: f"{layout} {backend} -O{opt}", stdout: o.stdout, code: o.code, failure: failure_of(o.stderr, true)));
+        }
+    }
+    Result[Vec[Tier], Str].Ok(value: out)
+}
+
+@test
+fn the_field_by_field_layout_changes_no_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let all = everywhere_layouts(h, PARTICLES)?;
+    let want = vec_get(all, 0);
+    check_that(want.code == 0, f"{want.code}")?;
+    for tier in all {
+        check_that(tier.stdout == want.stdout && tier.code == 0, f"{tier.label}: {tier.stdout} ({tier.code})")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_field_by_field_layout_changes_no_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let bodies = strs_new();
+    // Past the end, after growth through several capacities.
+    strs_push(bodies, "let ps = vec_new[P](); let mut i = 0; while i < 37 { vec_push(ps, P(a: i, b: true)); i = i + 1; } vec_get(ps, 37).a");
+    // Before the start.
+    strs_push(bodies, "let ps = vec_new[P](); vec_push(ps, P(a: 1, b: false)); vec_set(ps, -1, P(a: 2, b: true))");
+    // Popped empty.
+    strs_push(bodies, "let ps = vec_new[P](); vec_push(ps, P(a: 1, b: false)); let x = vec_pop(ps); let y = vec_pop(ps); x.a + y.a");
+    for body in bodies {
+        let all = everywhere_layouts(h, f"struct P {{ a: Int, b: Bool }}\nfn main() -> Int {{ {body} }}\n")?;
+        let want = vec_get(all, 0).failure;
+        check_that(text_starts_with(want, "error[N0405]"), want)?;
+        for tier in all {
+            check_that(tier.code == 2, f"{tier.label}: {body}")?;
+            check_that(tier.failure == want, f"{tier.label}: {body}: {tier.failure}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn reordered(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let a = "struct P { a: Int, b: Bool, c: Int }\nfn main() -> Int { let ps = vec_new[P](); vec_push(ps, P(a: 1, b: true, c: 3)); vec_push(ps, P(c: 30, a: 10, b: false)); let p = vec_get(ps, 1); p.a + p.c + if vec_get(ps, 0).b { 100 } else { 0 } }\n";
+    let b = text_replace(a, "struct P { a: Int, b: Bool, c: Int }", "struct P { c: Int, a: Int, b: Bool }");
+    let srcs = strs_new();
+    strs_push(srcs, a);
+    strs_push(srcs, b);
+    let irs = strs_new();
+    let names = words("a b");
+    let mut i = 0;
+    while i < 2 {
+        let name = strs_get(names, i);
+        scratch_write(h, d, f"{name}/prog.nz", strs_get(srcs, i))?;
+        let o = nazm(h, f"{d}/{name}", words("build --layout soa prog.nz -o p --emit-ir"));
+        check_that(o.code == 0, o.stderr)?;
+        let out = run(h, f"{d}/{name}/p", strs_new(), "", suite_env(h));
+        check_that(out.stdout == "140\n", out.stdout)?;
+        strs_push(irs, read_text(h, f"{d}/{name}/p.m0.ll")?);
+        i = i + 1;
+    }
+    check_that(strs_get(irs, 0) == strs_get(irs, 1), "a declaration order changed the emitted code")
+}
+
+@test
+fn reordering_a_records_fields_changes_neither_meaning_nor_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = reordered(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// The `nazm.build-report/1` line of a build with `args`, read (an empty document where there is
+/// none, as the Rust test's `Value::Null`).
+fn report(h: Caps, d: Str, args: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let o = nazm(h, d, words(args));
+    check_that(o.code == 0, o.stderr)?;
+    for l in lines(o.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            return jparse(l);
+        }
+    }
+    jparse("null")
+}
+
+fn identity(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", PARTICLES)?;
+    let first = report(h, d, "build --layout aos --build-report prog.nz -o p")?;
+    let soa = report(h, d, "build --layout soa --build-report prog.nz -o p")?;
+    let again = report(h, d, "build --layout aos --build-report prog.nz -o p")?;
+    // The unit whose code the layout changes is compiled afresh for the other layout, and every
+    // unit is reused when the first layout is asked for again.
+    check_that(jq(first, "native") >= 0 && jq(soa, "native") >= 0, f"{jtext(first, "")} {jtext(soa, "")}")?;
+    check_that(jtext(soa, "native/compiled") == "1", jtext(soa, "native"))?;
+    check_that(jtext(again, "native/reused") == "3", jtext(again, "native"))?;
+    // The emitted code differs, so so does every key derived from it.
+    let ia = nazm(h, d, words("build --layout aos prog.nz -o q --emit-ir"));
+    check_that(ia.code == 0, ia.stderr)?;
+    let a = read_text(h, f"{d}/q.m0.ll")?;
+    let is = nazm(h, d, words("build --layout soa prog.nz -o q --emit-ir"));
+    check_that(is.code == 0, is.stderr)?;
+    let s = read_text(h, f"{d}/q.m0.ll")?;
+    check_that(!text_contains(a, "call ptr @nz.soa_grow("), "aos used the field-by-field layout")?;
+    check_that(text_contains(s, "call ptr @nz.soa_grow("), "soa did not")
+}
+
+@test
+fn the_layout_is_in_every_objects_identity(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = identity(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn layout_of(doc: JsonDoc, ty: Str) -> Str ! {} {
+    let mut i = 0;
+    while jq(doc, f"layouts/{i}") >= 0 {
+        if jstr(doc, f"layouts/{i}/type") == ty {
+            return jstr(doc, f"layouts/{i}/soa");
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn ineligible(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", "struct P { x: Int, ok: Bool }\nstruct N { s: Str, n: Int }\nfn main() -> Int { let a = vec_new[P](); vec_push(a, P(x: 2, ok: true)); let b = vec_new[N](); vec_push(b, N(s: \"hi\", n: 5)); vec_push(b, N(s: \"abc\", n: 6)); vec_push(b, N(s: \"defg\", n: 7)); vec_push(b, N(s: \"hijkl\", n: 8)); let mut k = 0; let mut t = 0; while k < vec_len(b) { t = t + str_len(vec_get(b, k).s) * 10 + vec_get(b, k).n; k = k + 1; } let c = vec_new[Int](); vec_push(c, 7); vec_get(a, 0).x + t + vec_get(c, 0) }\n")?;
+    let o = nazm(h, d, words("build --layout soa prog.nz -o p"));
+    check_that(o.code == 0, o.stderr)?;
+    let r = run(h, f"{d}/p", strs_new(), "", suite_env(h));
+    check_that(r.stdout == "175\n", r.stdout)?;
+    let e = nazm(h, d, words("explain-cost --json prog.nz"));
+    let doc = jparse(e.stdout)?;
+    check_that(layout_of(doc, "Vec[P]") == "eligible", e.stdout)?;
+    // `Vec[Int]` by its shorter name (R1, 5b.18).
+    check_that(layout_of(doc, "Ints") == "its element is not a record", e.stdout)?;
+    check_that(text_starts_with(layout_of(doc, "Vec[N]"), "a field is not an `Int` or a `Bool`"), e.stdout)
+}
+
+@test
+fn an_ineligible_element_stays_whole_and_the_reason_is_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = ineligible(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn by_name(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", PARTICLES)?;
+    let o = nazm(h, d, words("build --layout columns prog.nz -o p"));
+    check_that(o.code == 5, ran_show(o))?;
+    check_that(text_contains(o.stderr, "`--layout columns` is not a layout"), o.stderr)?;
+    // Since N105 Cranelift's build takes the layout, and its object for the other layout is not
+    // reused, because the LIR differs.
+    report(h, d, "build --layout aos --backend cranelift --build-report prog.nz -o p")?;
+    let soa = report(h, d, "build --layout soa --backend cranelift --build-report prog.nz -o p")?;
+    check_that(jtext(soa, "native/compiled") == "1", jtext(soa, "native"))?;
+    let out = run(h, f"{d}/p", strs_new(), "", suite_env(h));
+    let interpreted = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(out.stdout == interpreted.stdout, f"{out.stdout} vs {interpreted.stdout}")
+}
+
+@test
+fn the_layout_is_asked_for_by_name_and_both_backends_take_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = by_name(h, d);
+    scratch_remove(h, d);
+    r
+}

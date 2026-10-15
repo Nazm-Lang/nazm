@@ -189,3 +189,43 @@ pub fn check_errors(h: Caps, src: Str) -> Result[Refusal, Str] ! { io, spawn } {
     }
     Result[Refusal, Str].Ok(value: Refusal(codes: codes, first: first))
 }
+
+/// Every implementation of `everywhere_with_oracle` (memory report asked of each) exits 0 and
+/// prints `expected` first, and every one but the LIR oracle reclaims all it allocated: the
+/// `holds`/`run_everywhere` of `generic_closures.rs`, `order_hash.rs` and their kin.
+pub fn holds_everywhere(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for r in everywhere_with_oracle(h, src, true)? {
+        if r.ran.code != 0 {
+            return Result[Int, Str].Err(error: f"{r.label}: {ran_show(r.ran)}");
+        }
+        if !text_starts_with(r.ran.stdout, expected) {
+            return Result[Int, Str].Err(error: f"{r.label}: {r.ran.stdout}");
+        }
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            if str_len(line) == 0 || !all_reclaimed(line) {
+                return Result[Int, Str].Err(error: f"{r.label}: {r.ran.stderr}");
+            }
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// Every error code `nazm check` (human output) reports for `src` as `p.nz`, in order.
+pub fn error_codes(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    Result[Strs, Str].Ok(value: r.codes)
+}
+
+/// `src` is refused with exactly one error, `code`, whose first line holds `says`.
+pub fn one_error_of(h: Caps, src: Str, code: Str, says: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    let shown = str_join(r.codes, ", ");
+    if strs_len(r.codes) != 1 || strs_get(r.codes, 0) != code {
+        return Result[Int, Str].Err(error: f"{src}: [{shown}], expected [{code}]");
+    }
+    if !text_contains(r.first, says) {
+        return Result[Int, Str].Err(error: f"{src}: {r.first}");
+    }
+    Result[Int, Str].Ok(value: 0)
+}
