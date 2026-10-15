@@ -50,6 +50,33 @@ pub fn text_repeat(s: Str, n: Int) -> Str ! {} {
     str_join(parts, "")
 }
 
+/// Where the piece of `s` that starts at `from` ends: at the next `sep` at or after `from`, or at
+/// the end of `s` — as `text_split` finds it. With `text_split_next`, what `for w in s.split(sep)`
+/// reads its pieces through, so the loop builds no list (R1.5, 3.3).
+pub fn text_split_end(s: Str, sep: Str, from: Int) -> Int ! {} {
+    let n = str_len(sep);
+    let m = str_len(s);
+    if n == 0 {
+        m
+    } else {
+        let first = str_byte(sep, 0);
+        let mut i = from;
+        let mut found = m;
+        while i + n <= m && found == m {
+            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) { found = i; } else { i = i + 1; }
+        }
+        found
+    }
+}
+
+/// Where the piece after one ending at `end` begins: past the separator there, or one past the
+/// end of `s` when that piece was the last (R1.5, 3.3).
+pub fn text_split_next(s: Str, sep: Str, end: Int) -> Int ! {} {
+    let n = str_len(sep);
+    let m = str_len(s);
+    if n > 0 && end < m { end + n } else { m + 1 }
+}
+
 /// The pieces of `s` between occurrences of `sep`, in order. `sep` must not be `""`; if it is,
 /// the whole of `s` is the one piece. `text_split("a,,b", ",")` is `a`, ``, `b`.
 pub fn text_split(s: Str, sep: Str) -> Strs ! {} {

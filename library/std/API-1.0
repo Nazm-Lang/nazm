@@ -470,6 +470,8 @@
 @std/text pub fn text_find(s: Str, needle: Str) -> Option[Int] ! {}
 @std/text pub fn text_contains(s: Str, needle: Str) -> Bool ! {}
 @std/text pub fn text_repeat(s: Str, n: Int) -> Str ! {}
+@std/text pub fn text_split_end(s: Str, sep: Str, from: Int) -> Int ! {}
+@std/text pub fn text_split_next(s: Str, sep: Str, end: Int) -> Int ! {}
 @std/text pub fn text_split(s: Str, sep: Str) -> Strs ! {}
 @std/text pub fn text_is_space(b: Int) -> Bool ! {}
 @std/text pub fn text_trim(s: Str) -> Str ! {}

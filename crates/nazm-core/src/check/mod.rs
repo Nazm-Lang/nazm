@@ -856,5 +856,25 @@ pub fn check_reusing(
         );
     }
 
+    // `@std/text`'s split and the two functions a `for` over one reads it through (R1.5, 3.3), once every
+    // function is declared.
+    let text_key = nazm_sema::stdlib::key("text");
+    let in_text = |name: &str| {
+        graph
+            .ids()
+            .find(|m| graph.key(*m) == Some(&text_key))
+            .and_then(|m| res.definition(m, name))
+    };
+    let split_each = match (
+        in_text("text_split"),
+        in_text("text_split_end"),
+        in_text("text_split_next"),
+    ) {
+        (Some(split), Some(end), Some(next)) => {
+            Some(nazm_sema::resolve::SplitEach { split, end, next })
+        }
+        _ => None,
+    };
+    res.set_split_each(split_each);
     (res, errors)
 }

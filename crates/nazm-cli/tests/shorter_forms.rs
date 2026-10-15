@@ -667,3 +667,61 @@ fn a_package_s_module_imports_only_what_it_writes() {
         "and the program's `split` is not: {r:?}"
     );
 }
+
+#[test]
+fn a_for_over_a_split_reads_its_pieces_without_a_list_everywhere() {
+    // R1.5, 3.3: `for w in s.split(sep)` is lowered through `text_split_end` and
+    // `text_split_next`, building no list; the pieces, the empty ones, `break` and `continue`
+    // are the list's.
+    let src = "fn show(s: Str, sep: Str) {
+    let mut out = \"\"
+    let mut n = 0
+    for w in s.split(sep) {
+        out = out + \"[\" + w + \"]\"
+        n += 1
+        if w == \"stop\" { break }
+        if w == \"skip\" { continue }
+    }
+    println(f\"{n} {out}\")
+}
+
+fn main() {
+    show(\"a b  c\", \" \")
+    show(\"\", \" \")
+    show(\" \", \" \")
+    show(\"abc\", \"\")
+    show(\"a--b--\", \"--\")
+    show(\"x skip y stop z\", \" \")
+    for w in text_split(\"p,q\", \",\") { print(w) }
+    println(\"\")
+}
+";
+    differential::agrees(
+        src,
+        "4 [a][b][][c]\n1 []\n2 [][]\n1 [abc]\n3 [a][b][]\n4 [x][skip][y][stop]\npq\n0",
+    );
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("p.nz"), src).unwrap();
+    let r = nazm(d.path(), &["core-ir", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let calls = |name: &str| {
+        r.stdout
+            .matches(&format!("\"callee\": \"@std/text::fn {name}\""))
+            .count()
+    };
+    assert_eq!(calls("text_split_end"), 2, "each loop reads its pieces one at a time");
+    // `text_split` is called as often as in a program with no loop over one: only inside
+    // `@std/text` itself, never by the program's loops.
+    let in_loops = calls("text_split");
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() {\n    println(text_split(\"a b\", \" \").len())\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["core-ir", "p.nz"]);
+    let once = r
+        .stdout
+        .matches("\"callee\": \"@std/text::fn text_split\"")
+        .count();
+    assert_eq!(in_loops + 1, once, "no list is built");
+}

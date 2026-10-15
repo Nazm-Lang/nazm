@@ -402,6 +402,15 @@ pub enum StaticValue {
 }
 
 /// Everything resolution decided about one compilation.
+/// `@std/text`'s `text_split`, and where each piece of a split ends and the next begins (R1.5,
+/// 3.3): what `for w in s.split(sep)` is lowered through, so that it builds no list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SplitEach {
+    pub split: FnId,
+    pub end: FnId,
+    pub next: FnId,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
     functions: Vec<FnDef>,
@@ -473,6 +482,9 @@ pub struct Resolution {
     /// lookup failed, so a program that checks holds none — the names that did resolve are
     /// already in `fields` and `variants`, whose identities say which record or enum.
     unresolved_members: HashMap<Span, Type>,
+    /// `@std/text`'s `text_split` and the two functions a `for` over one reads its pieces
+    /// through (R1.5, 3.3), when the compilation has them: such a loop builds no list.
+    split_each: Option<SplitEach>,
     /// Each closure expression's definition, by the expression's span (N50).
     closures: HashMap<Span, FnId>,
     /// The `let mut` bindings a closure captures (R1b, L10), by function and slot, with the
@@ -562,6 +574,17 @@ impl Resolution {
     #[must_use]
     pub fn traits(&self) -> &crate::traits::Traits {
         &self.traits
+    }
+
+    /// Name `@std/text`'s split functions (R1.5, 3.3).
+    pub fn set_split_each(&mut self, s: Option<SplitEach>) {
+        self.split_each = s;
+    }
+
+    /// `@std/text`'s split functions, when the compilation has them (R1.5, 3.3).
+    #[must_use]
+    pub const fn split_each(&self) -> Option<SplitEach> {
+        self.split_each
     }
 
     /// The trait tables, for the checker that is building them.

@@ -11,7 +11,9 @@
 ## 3. Word frequency: speed and memory
 - [ ] 3.1 Size-class allocator in the runtime
 - [ ] 3.2 Native string-hash built-in with the same values
-- [ ] 3.3 Allocation-free `split`/`words` iterator
+- [x] 3.3 Allocation-free `split`/`words` iterator — 2026-10-15: `for w in s.split(sep)` lowered
+      through `text_split_end`/`text_split_next` (Core IR, `split_loop`), no list; word frequency
+      189 → 151 ms (−20%), one test, two mutants; `words` stays a list
 - [ ] 3.4 Whole-program optimisation of runtime and program
 - [ ] 3.5 Streaming `file_lines`
 
