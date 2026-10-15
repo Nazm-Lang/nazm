@@ -275,7 +275,10 @@ fn constant(fx: Fx, id: Int) -> MConst {
     if k.ty == "Int" { MConst.Int(v: k.int) }
     else if k.ty == "Bool" { MConst.Bool(v: k.flag) }
     else if k.ty == "Str" { MConst.Str(bytes: k.text) }
-    else if k.ty == "Atomic" { MConst.Cell(name: str_slice(k.text, 7, str_len(k.text))) }
+    else if k.ty == "Atomic" {
+        if k.key == "" { fail(fx, "a static atomic without its durable key (Core IR before `static`)") }
+        MConst.Cell(name: str_slice(k.text, 7, str_len(k.text)), key: k.key)
+    }
     else { MConst.Num(text: k.text, kind: k.ty) }
 }
 

@@ -20,12 +20,14 @@ pub struct CirLocal {
     at: Str,
 }
 
-/// One literal: its type (`Int`, `Bool`, `Str`, a numeric kind, `Atomic`) and its value's text.
+/// One literal: its type (`Int`, `Bool`, `Str`, a numeric kind, `Atomic`) and its value's text;
+/// an `Atomic`'s `key` is its static's durable key (the `def` of its `statics` entry), else "".
 pub struct CirConst {
     ty: Str,
     int: Int,
     flag: Bool,
     text: Str,
+    key: Str,
 }
 
 /// One function's header; its body stays a node of the document.
@@ -254,13 +256,13 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
         let v = kid(c, k, "value")
         let kind = json_kind(c.doc, v)
         let cst = if kind == "number" {
-            CirConst(ty: ty, int: int_of(c, v), flag: false, text: "")
+            CirConst(ty: ty, int: int_of(c, v), flag: false, text: "", key: "")
         } else if kind == "bool" {
-            CirConst(ty: ty, int: 0, flag: match json_bool(c.doc, v) { Some(b) => b, None => false }, text: "")
+            CirConst(ty: ty, int: 0, flag: match json_bool(c.doc, v) { Some(b) => b, None => false }, text: "", key: "")
         } else if ty == "Str" {
-            CirConst(ty: ty, int: 0, flag: false, text: literal_bytes(str_of(c, v)))
+            CirConst(ty: ty, int: 0, flag: false, text: literal_bytes(str_of(c, v)), key: "")
         } else {
-            CirConst(ty: ty, int: 0, flag: false, text: str_of(c, v))
+            CirConst(ty: ty, int: 0, flag: false, text: str_of(c, v), key: sval(c, k, "static"))
         }
         vec_push(consts, cst)
     }

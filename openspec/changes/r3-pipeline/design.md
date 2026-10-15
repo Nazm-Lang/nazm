@@ -138,9 +138,11 @@ What 6.3.5 found, and decided:
   symbol; the stage keys helpers by symbol, as Rust's keying by `Ty` comes to.
 - **A thunk's spans are its target's** (Rust's `thunk_of`): its stack check names the target
   function, found from the thunk's name `NAME#value@HOME`.
-- **A static atomic constant** is spelled by its name alone in Core IR (`static NAME`): the stage
-  takes the static of that name in the function's module, else the only one of that name, and
-  stops if there are several.
+- **A static atomic constant** carries its static's durable key in Core IR (`static`, added within
+  `/3` on main at `ef1bf70a`), the `def` of its `statics` entry: `MConst.Cell` keeps the name its
+  module spells (the MIR text prints `static NAME`, as Rust's) and that key, and LIR places the
+  `statics` entry whose `def` is the key. A constant without the key is refused; the earlier
+  rule (the function's module's static of that name, else the only one) is gone.
 - **Compile-time constants** are computed here: a float literal's IEEE bits (`float_parse_raw`,
   then its bits), an integer of any kind as its class's two's complement (decimal arithmetic
   past 64 bits), FNV-1a of a variant's name for an enum's hash (`UInt64` wrapping), and the

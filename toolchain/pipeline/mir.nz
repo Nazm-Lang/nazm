@@ -9,7 +9,9 @@ pub enum MConst {
     Bool(v: Bool),
     Str(bytes: Str),
     Num(text: Str, kind: Str),
-    Cell(name: Str),
+    /// A static atomic: `name` as its module spells it (the text prints it), `key` its durable
+    /// key, the `def` of its `statics` entry (what LIR places).
+    Cell(name: Str, key: Str),
 }
 
 /// A value an operation reads without taking ownership of it.
