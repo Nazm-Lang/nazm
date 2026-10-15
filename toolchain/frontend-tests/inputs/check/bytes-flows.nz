@@ -1,0 +1,16 @@
+// A `for` over `Bytes` reads the `Bytes` cell (provenance, N38): what a file's bytes held reaches
+// a path through it.
+fn save(io: IoCap, b: Bytes) -> Int ! { io } {
+    let mut name = ""
+    for x in b {
+        name = str_concat(name, int_to_str(Int(x)))
+    }
+    write_file(name, "x")
+    0
+}
+
+fn main(io: IoCap) -> Int {
+    let b = bytes_new(4)
+    bytes_set(b, 0, UInt8(int_to_str(str_len(read_file("in.txt"))) == "1"))
+    save(io, b)
+}
