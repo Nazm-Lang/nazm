@@ -399,6 +399,11 @@
         `run.sh core`: 3,048 agree, 0 differ; of 56,942 functions the lowering carries 54,341,
         all agree; the other parts 10,374, all agree; 1,223 whole documents, all the
         reference's bytes
+  - [x] Indexing, tuples and wide literals: `s[i]` on a sequence as the call the checker read it
+        as (`element_call`), on an array as `index`; `(a, b, …)` as its tuple record; an integer
+        literal past `Int`'s digits (`WideInt`) as any other. `run.sh core`: 3,048 agree, 0
+        differ; of 56,956 functions the lowering carries 54,798, all agree; the other parts
+        10,374, all agree; 1,228 whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

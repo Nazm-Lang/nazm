@@ -1233,6 +1233,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         }
         return co_variant(lo, sx_field(t, e, "ty_span"), vs, fields, false);
     }
+    if k == "Tuple" && sx_kind(t, e) != tk_tuple() { return co_tuple(lo, e); }
     if sx_kind(t, e) == tk_tuple() {
         if k == "Block" {
             let b = sx_kid(t, e, 0);
@@ -1243,7 +1244,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_stopped(lo, str_concat("the expression ", k));
     }
     let span = sx_field(t, e, "span");
-    if k == "Int" { return co_integer(lo, sx_text(t, sx_field(t, e, "value")), span); }
+    if k == "Int" || k == "WideInt" { return co_integer(lo, sx_text(t, sx_field(t, e, "value")), span); }
     if k == "Bool" {
         let id = co_constant(lo, "Bool", sx_text(t, sx_field(t, e, "value")));
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_bool(), span);
@@ -1260,7 +1261,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         // A literal negated, of a type the checker gave it (`integer`): the negative constant,
         // at the literal.
         let x = sx_field(t, e, "operand");
-        if sx_kind(t, x) != tk_tuple() && sx_text(t, x) == "Int" {
+        if sx_kind(t, x) != tk_tuple() && (sx_text(t, x) == "Int" || sx_text(t, x) == "WideInt") {
             let xs = sx_field(t, x, "span");
             if ck_type_class(lo.c, ck_literal_ty(lo.c, co_abs_s(lo, xs), co_abs_e(lo, xs))) == "integer" {
                 return co_integer(lo, co_negated(sx_text(t, sx_field(t, x, "value"))), xs);
@@ -1292,6 +1293,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "field", str_join(fields, ""), ck_field_ty(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)), ns);
     }
     if k == "Call" { return co_call(lo, e); }
+    if k == "Index" { return co_index(lo, e); }
     if k == "MethodCall" {
         return co_method(lo, sx_field(t, e, "method_span"), sx_field(t, e, "span"), sx_field(t, e, "receiver"), "", 0 - 1, sx_items(t, sx_field(t, e, "args")));
     }
@@ -2591,6 +2593,61 @@ fn co_contains(s: Str, part: Str) -> Bool {
         i = i + 1;
     }
     false
+}
+
+// `base[index]`: on a sequence (R1, 5b.15), the call the checker read it as, at the brackets
+// (`element_call`); on an array (Gate 2), `index`, of the array's element type.
+fn co_index(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let bs = sx_field(t, e, "bracket_span");
+    if ck_site_at(c, co_abs_s(lo, bs), co_abs_e(lo, bs)) >= 0 {
+        let list = ints_new();
+        ints_push(list, sx_field(t, e, "base"));
+        ints_push(list, sx_field(t, e, "index"));
+        return co_call_parts(lo, bs, strs_new(), list, bs);
+    }
+    let base = co_expr(lo, sx_field(t, e, "base"));
+    let bt = co_last_ty(lo);
+    let index = co_expr(lo, sx_field(t, e, "index"));
+    if co_halted(lo) { return ""; }
+    let mut elem = 0 - 1;
+    if ck_type_class(c, bt) == "array" { elem = ck_array_elem(c, bt); }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("base", base));
+    strs_push(fields, co_field("index", index));
+    co_node(lo, "index", str_join(fields, ""), elem, bs)
+}
+
+// `(a, b, …)` (L5): the tuple record of its elements' types, built in order.
+fn co_tuple(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let items = sx_items(t, sx_field(t, e, "elems"));
+    let values = strs_new();
+    let tys = ints_new();
+    let mut i = 0;
+    while i < ints_len(items) {
+        strs_push(values, co_expr(lo, ints_get(items, i)));
+        ints_push(tys, co_last_ty(lo));
+        if co_last_ty(lo) < 0 { co_halt(lo, "a tuple of an element that never completes"); }
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    let rt = ck_tuple_of(lo.c, tys);
+    let fields = strs_new();
+    i = 0;
+    while i < strs_len(values) {
+        let o = strs_new();
+        strs_push(o, co_field_first("field", int_to_str(i)));
+        strs_push(o, co_field("name", json_str(int_to_str(i))));
+        strs_push(o, co_field("value", strs_get(values, i)));
+        strs_push(fields, co_object(o));
+        i = i + 1;
+    }
+    let members = strs_new();
+    strs_push(members, co_field_first("arity", int_to_str(strs_len(values))));
+    strs_push(members, co_field("fields", co_list(fields)));
+    co_node(lo, "record", str_join(members, ""), rt, sx_field(t, e, "span"))
 }
 
 // A generic call's settled type arguments, by their durable names.
