@@ -171,6 +171,16 @@
       function types bound, and the call performing the callee's set bound; never assignable by
       inclusion, never a value (N0387); N0366 naming the parameter. `@std/seq`'s programs are
       carried. `run.sh check`: 2,665 agree, 128 differ; the checker carries 2,533, all agree
+- [ ] 3.1w Arrays and indexing (Gate 2, `check/operators.rs`, `check/layout.rs`): `[T; N]` written,
+      its length a literal or an `Int` constant (N0622, N0618), held to the element and size rules
+      after the field types and after the constants (N0621, N0618 by `data_bytes`); an array a
+      leaf to every walk over type arguments, as the reference's `type_args` makes it, and stripped
+      for what a type contains (equality, crossing into a task, holding a function); `[a, b]` as
+      the sequence wanted, a list (R1.5, D6) or an array of the element expected; `[v; n]`;
+      `a[i]` and `a[i] = v` with constant indices checked (N0624, N0300); `xs[i]` and
+      `xs[i] = v` on a sequence or a map by name (`element_by_name`), and `x.m(…)` as
+      `<type>_m(x, …)` (`named_method`, R1 5b.15). `inputs/check/arrays.nz`. `run.sh check`:
+      2,677 agree, 116 differ; the checker carries 2,571, all agree (2,678 and 2,572 with the new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
