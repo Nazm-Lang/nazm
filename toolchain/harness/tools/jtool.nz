@@ -6,11 +6,18 @@
 //                      order, as `serde_json::Value`'s `==`), 1 when they do not, 2 when either is
 //                      not JSON
 //   jtool lines A      the number of lines of A, as `str::lines().count()` counts them
+//   jtool validate S O N
+//                      each line of O that is a JSON object validated against the schema in S
+//                      (`lib/schema.nz`), its problems named `N#i` printed a line each: exit 0
+//                      when there are none, 1 when there are, 2 when S is not JSON
+//   jtool get A P...   for each path P (`lib/jsonq.nz`'s, `a/0/b`) the value there as compact
+//                      JSON, a line each; a path ending in `/#` gives the length of the array there
 
 use "@std/json"
 use "@std/text"
 use "@std/process"
 use "../lib/jsonq.nz"
+use "../lib/schema.nz"
 
 fn lines_of(s: Str) -> Int ! {} {
     let n = str_len(s);
@@ -46,6 +53,40 @@ fn main(io: IoCap) -> Int ! { io } {
         };
         return if jsame(a, "", b, "") { 0 } else { 1 };
     }
-    eprint("usage: jtool same A B | jtool lines A\n");
+    if strs_len(args) >= 4 && strs_get(args, 0) == "validate" {
+        let schema = match jparse(read_file(strs_get(args, 1))) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { eprint(f"{strs_get(args, 1)}: {e}\n"); return 2; },
+        };
+        let objects = strs_new();
+        for l in text_lines(read_file(strs_get(args, 2))) {
+            if text_starts_with(l, "{") {
+                strs_push(objects, l);
+            }
+        }
+        let problems = schema_problems(schema, objects, strs_get(args, 3));
+        for p in problems {
+            print(f"{p}\n");
+        }
+        return if strs_len(problems) == 0 { 0 } else { 1 };
+    }
+    if strs_len(args) >= 2 && strs_get(args, 0) == "get" {
+        let doc = match jparse(read_file(strs_get(args, 1))) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { eprint(f"{strs_get(args, 1)}: {e}\n"); return 2; },
+        };
+        let mut i = 2;
+        while i < strs_len(args) {
+            let p = strs_get(args, i);
+            if text_ends_with(p, "/#") {
+                print(f"{jlen(doc, str_slice(p, 0, str_len(p) - 2))}\n");
+            } else {
+                print(f"{jv(doc, p)}\n");
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    eprint("usage: jtool same A B | jtool lines A | jtool validate S O N | jtool get A P...\n");
     2
 }

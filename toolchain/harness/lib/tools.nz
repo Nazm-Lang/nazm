@@ -53,6 +53,48 @@ pub fn json_same(h: Caps, a: Str, b: Str) -> Result[Bool, Str] ! { io, spawn } {
     Result[Bool, Str].Ok(value: r.code == 0)
 }
 
+/// Each of `objects` (a JSON object's text each) validated against `schema/NAME` by `jtool
+/// validate` (`lib/schema.nz`): `Err` listing every problem, or when nothing was validated —
+/// `schemas.rs`' `check_against`.
+pub fn check_against(h: Caps, name: Str, objects: Strs) -> Result[Int, Str] ! { io, spawn } {
+    check_that(strs_len(objects) > 0, f"{name}: nothing was validated")?;
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let tool = jtool(h, d)?;
+    let lines = strs_new();
+    for o in objects {
+        strs_push(lines, text_replace(o, "\n", " "));
+    }
+    scratch_write(h, d, "objects.jsonl", f"{str_join(lines, "\n")}\n")?;
+    let args = words("validate");
+    strs_push(args, f"{repo_root(h)}/schema/{name}");
+    strs_push(args, f"{d}/objects.jsonl");
+    strs_push(args, name);
+    let r = run(h, tool, args, d, env_unset(env_here(h.io), "NAZM_RESULT_REPORT"));
+    scratch_remove(h, d);
+    check_that(r.code == 0 || r.code == 1, f"{name}: {ran_show(r)}")?;
+    check_that(r.code == 0, f"output does not match {name}:\n  {text_replace(text_trim_end(r.stdout), "\n", "\n  ")}")
+}
+
+/// The values at `paths` of the JSON document `text`, each as compact JSON (a path ending in `/#`:
+/// the length of the array there), read by `jtool get`: for a document too large to parse in the
+/// interpreted leg.
+pub fn json_paths(h: Caps, text: Str, paths: Strs) -> Result[Strs, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let tool = jtool(h, d)?;
+    scratch_write(h, d, "doc.json", text)?;
+    let args = words("get");
+    strs_push(args, f"{d}/doc.json");
+    for p in paths {
+        strs_push(args, p);
+    }
+    let r = run(h, tool, args, d, env_unset(env_here(h.io), "NAZM_RESULT_REPORT"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    Result[Strs, Str].Ok(value: text_lines(r.stdout))
+}
+
 /// The number of lines of `s`: `str::lines().count()`.
 pub fn line_count(h: Caps, s: Str) -> Result[Int, Str] ! { io, spawn } {
     let d = scratch_new(h);
