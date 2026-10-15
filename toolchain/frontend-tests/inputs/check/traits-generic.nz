@@ -1,0 +1,22 @@
+trait Show {
+    fn show(self: Self) -> Str;
+    fn twice(self: Self) -> Str { str_concat(self.show(), self.show()) }
+}
+struct Box2[T] { v: T }
+struct Eq2[T] { v: T }
+enum Opt[T] { No, Yes(v: T) }
+impl Show for Int { fn show(self: Int) -> Str { "i" } }
+impl [T: Show] Show for Box2[T] { fn show(self: Box2[T]) -> Str { self.v.show() } }
+impl [T: Equality] Show for Eq2[T] { fn show(self: Self) -> Str { "e" } }
+impl [T] Show for Opt[T] { fn show(self: Opt[T]) -> Int { 0 } }
+impl [T: Nothing] Show for Opt[T] { fn show(self: Opt[T]) -> Str { "o" } }
+fn all[T: Show](x: T) -> Str { x.twice() }
+fn main() -> Int {
+    let a = Box2[Int](v: 1);
+    let b = Box2[Bool](v: true);
+    let c = Eq2[Vec[Int]](v: vec_new());
+    let d = Eq2[Int](v: 1);
+    let s = all(a) + all(b) + all(c) + all(d);
+    let t = b.show() + f"{a} {b} {d}";
+    0
+}
