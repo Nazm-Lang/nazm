@@ -177,3 +177,21 @@
       `build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest`). Mutants
       `r9-7-9-the-record-does-not-name-the-generator` and
       `r9-7-9-profile-refuses-the-nazm-backend`, applied by hand, killed, restored
+- [x] 7.10 Coverage re-measured (`tests/cover.sh`, after `run.sh` on main `dcdde864` plus 7.6):
+      393 of 485 forms on each target, as at 7.2. Which of the 92 the lowering emits was
+      established by printing the LIR of every one of the repository's 2,110 `.nz` files with a
+      `main` and taking their forms, and by probes per construct: two — `addr import func` (a
+      closure written in a generic function: its body is the module's unit, its instances
+      reach it as an import) and `umul.ovf i8` (a checked `UInt8` multiplication). New program
+      `tests/programs/emitted.nz` uses both, the overflow failing the program at the end:
+      395 of 485 on each target; `run.sh` 119 agree, 0 differ on each. The other 90 are forms
+      the validator admits and no program or probe produced, with the reason where it is known:
+      C calls with a float, narrow or no
+      result or argument, and every indirect C or runtime call (the language refuses them —
+      N0381, N0387 — and the runtime declares none); `select` on floats or pointers (the
+      lowering selects only integers); `i128` division, remainder, checked multiplication and
+      float conversions (runtime calls); `switch` on narrow or `i128` values (matches are
+      compare chains); extensions from and truncations to `bit` (`Bool` converts to no number,
+      N0300); `cmp ne ptr`; writable data holding addresses (a static's cell holds none);
+      runtime calls returning `i8`, `i16` or `i128` or with stack arguments; and `loc`, which
+      only `--debug` prints (`tests/lines.sh` covers it)
