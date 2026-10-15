@@ -146,6 +146,19 @@ impl Target {
         }
     }
 
+    /// How the LLVM backend's code probes a large frame on this target (Q1-A1-01): inline, but on
+    /// Windows by the platform's `__chkstk`, which LLVM calls there unasked and which MinGW-w64
+    /// provides. Cranelift's inline probe needs no symbol on any target.
+    #[must_use]
+    pub fn probes(&self) -> crate::op::llvm::Probes {
+        match self.os {
+            Os::Windows => crate::op::llvm::Probes::Platform,
+            Os::Macos | Os::Linux | Os::Android | Os::Ios | Os::None | Os::Wasi => {
+                crate::op::llvm::Probes::Inline
+            }
+        }
+    }
+
     /// Whether this is WebAssembly (N64): freestanding, its outside reached only by imports.
     #[must_use]
     pub fn is_wasm(&self) -> bool {
@@ -413,7 +426,7 @@ impl Backend for LlvmText {
                 format!("LIR does not validate: {}", e.join("; ")),
             )]);
         }
-        let text = crate::op::llvm::module(&m, self.target.failures());
+        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes());
         let ir = if self.debug {
             crate::debug::attach(&text, &|i| names.debug_file(i))
         } else {

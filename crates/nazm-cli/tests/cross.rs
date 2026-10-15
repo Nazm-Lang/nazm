@@ -142,7 +142,7 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             let libs = if triple.contains("linux") {
                 "-lpthread -lm"
             } else if windows {
-                "-static -pthread -lws2_32 -lbcrypt"
+                "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608"
             } else {
                 ""
             };

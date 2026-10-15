@@ -71,6 +71,28 @@ pub enum Failures {
     Unwind,
 }
 
+/// How a generated function probes a frame larger than a page on a target (Q1-A1-01).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Probes {
+    /// LLVM's own probe loop, inline (`"probe-stack"="inline-asm"`): every target but Windows.
+    Inline,
+    /// The platform's probe, which LLVM calls before every large frame unasked: Windows's
+    /// `__chkstk`, MinGW-w64's `___chkstk_ms`, which also touches a thread's stack page by page
+    /// as Windows grows it. LLVM never probes inline there: given the attribute, it calls a
+    /// function named `inline-asm`, which no linker finds.
+    Platform,
+}
+
+impl Probes {
+    /// What a function's definition says about its probes, with its leading space, or nothing.
+    const fn attribute(self) -> &'static str {
+        match self {
+            Self::Inline => " \"probe-stack\"=\"inline-asm\"",
+            Self::Platform => "",
+        }
+    }
+}
+
 /// A function's LLVM result: a Nazm function's failure bit beside its result, as a first-class
 /// pair a target returns in two registers (R1, 5b.8), or alone where there is no result. Where
 /// failures unwind, the result alone.
@@ -135,7 +157,7 @@ fn name(m: &Module, s: SymId) -> String {
 
 /// The text of one module.
 #[must_use]
-pub fn module(m: &Module, failures: Failures) -> String {
+pub fn module(m: &Module, failures: Failures, probes: Probes) -> String {
     let mut out = String::new();
     crate::runtime::preamble(&mut out, &m.source);
     // Every width's overflow-checked operations, bit counts and rotations, and the float
@@ -284,7 +306,7 @@ pub fn module(m: &Module, failures: Failures) -> String {
     }
     out.push('\n');
     for f in &m.functions {
-        function(&mut out, m, f, failures);
+        function(&mut out, m, f, failures, probes);
     }
     out
 }
@@ -412,7 +434,7 @@ fn nazm_call(m: &Module, i: &Inst) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
-fn function(out: &mut String, m: &Module, f: &Function, failures: Failures) {
+fn function(out: &mut String, m: &Module, f: &Function, failures: Failures, probes: Probes) {
     let Some(sym) = m.symbol(f.sym) else { return };
     let Some(sig) = m.sig(f.sym) else { return };
     let params = sig
@@ -424,8 +446,8 @@ fn function(out: &mut String, m: &Module, f: &Function, failures: Failures) {
         .join(", ");
     // Stack probes on every generated function (Q1-A1-01): a frame larger than the one guard
     // page below a task's stack touches each page on its way down, so an overrun faults on the
-    // guard instead of landing in another task's stack or the heap. A backend that has no probe
-    // for its target ignores the attribute.
+    // guard instead of landing in another task's stack or the heap. On Windows the platform's
+    // probe does it, unasked ([`Probes::Platform`]).
     // A function `@section` places (Gate 3) names its section; a linker script keeps it.
     let section = f
         .section
@@ -449,9 +471,10 @@ fn function(out: &mut String, m: &Module, f: &Function, failures: Failures) {
     } else {
         ""
     };
+    let probe = probes.attribute();
     let _ = writeln!(
         out,
-        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section}{personality} {{   ; {}",
+        "define {}{} {}({params}){probe}{section}{personality} {{   ; {}",
         linkage(sym.linkage),
         ret_ty(sig, failures),
         name(m, f.sym),
@@ -1069,7 +1092,7 @@ fn unwinding_call(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 
-    use super::{module, Failures};
+    use super::{module, Failures, Probes};
     use crate::op::ir::{
         Block, Class, Conv, Function, Inst, Linkage, Module, Sig, SymId, SymKind, Symbol, Term, B,
         V,
@@ -1191,7 +1214,7 @@ mod tests {
             crate::op::validate::module(&m)
         );
         // The bit (WebAssembly, WASI, the boards, Windows): the pair, and the exit that sets it.
-        let bit = module(&m, Failures::Bit);
+        let bit = module(&m, Failures::Bit, Probes::Inline);
         assert!(
             bit.contains("define internal {i64, i1} @f(i64 %p0)"),
             "{bit}"
@@ -1208,7 +1231,7 @@ mod tests {
         // Unwinding (the hosted targets, 4.2): the result alone; a call into a bare failure exit
         // is a plain call, one whose edge does something an invoke with a landing pad, the plain
         // entry's an invoke whose pad continues with a zero, and a failure exit raises.
-        let unwind = module(&m, Failures::Unwind);
+        let unwind = module(&m, Failures::Unwind, Probes::Inline);
         assert!(unwind.contains("declare i64 @g(i64)"), "{unwind}");
         assert!(
             unwind.contains(
@@ -1244,5 +1267,26 @@ mod tests {
             !unwind.contains(", i1} @f") && !unwind.contains(", i1} @g"),
             "{unwind}"
         );
+    }
+
+    /// Q1-A1-01 on Windows: every definition probes inline, except where the platform's probe
+    /// is the one LLVM calls — there no definition names the inline probe.
+    #[test]
+    fn a_definition_probes_inline_or_leaves_it_to_the_platform() {
+        let m = calls();
+        let inline = module(&m, Failures::Bit, Probes::Inline);
+        let platform = module(&m, Failures::Bit, Probes::Platform);
+        for (text, attribute) in [(&inline, true), (&platform, false)] {
+            let defines: Vec<&str> = text.lines().filter(|l| l.starts_with("define ")).collect();
+            assert!(!defines.is_empty(), "{text}");
+            for d in defines {
+                assert_eq!(
+                    d.contains("\"probe-stack\"=\"inline-asm\""),
+                    attribute,
+                    "{d}"
+                );
+            }
+        }
+        assert!(!platform.contains("inline-asm"), "{platform}");
     }
 }
