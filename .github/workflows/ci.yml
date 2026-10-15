@@ -91,6 +91,14 @@ jobs:
           toolchain: "1.98.1"
           components: clippy, rustfmt
 
+      # Apple's clang has no WebAssembly target, which the wasm tests build for; Homebrew's
+      # LLVM, as on the developer's Mac, does.
+      - name: clang with every target (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
       - name: build
         run: cargo build --workspace --locked
 
