@@ -46,9 +46,9 @@ pub const STACK_EXHAUSTED: &str = "the native call stack is exhausted";
 /// `N0416`'s message, the interpreter's too.
 pub const EXIT_STATUS: &str = "this exit status is outside 0 to 255";
 
-/// One unit as the LLVM text the default backend compiles, on a 64-bit target: its LIR,
-/// lowered, validated and printed (N105). For a caller that measures or inspects the text; a
-/// build goes through [`backend::LlvmText`].
+/// One unit as the LLVM text the default backend compiles, on a 64-bit hosted target, where
+/// failures unwind (4.2): its LIR, lowered, validated and printed (N105). For a caller that
+/// measures or inspects the text; a build goes through [`backend::LlvmText`].
 ///
 /// # Panics
 ///
@@ -56,7 +56,7 @@ pub const EXIT_STATUS: &str = "this exit status is outside 0 to 255";
 #[must_use]
 pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     match op::lower_unit(native, unit, names, abi::DataLayout::LP64, false, false) {
-        Ok(m) => (op::llvm::module(&m), m.needs),
+        Ok(m) => (op::llvm::module(&m, op::llvm::Failures::Unwind), m.needs),
         Err(_) => (String::new(), Needs::default()),
     }
 }
