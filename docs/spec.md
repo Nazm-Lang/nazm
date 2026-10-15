@@ -3222,7 +3222,9 @@ each other as well, at both optimisation levels.
 Every one of the following is *not* claimed, because none of it is implemented:
 
 - No work stealing and no preemption. A native program's tasks run on `NAZM_WORKERS` threads by
-  default (N83's pool, the default since N106, `architecture.md` §7.107): a task that waits is parked
+  default — one per processor online unless the variable says otherwise, at most 64 (four before
+  2026-10-15) — (N83's pool, the default since N106, `architecture.md` §7.107), each task pinned
+  to the worker `spawn` gave it, round robin: a task that waits is parked
   and its worker freed; a task that computes without waiting holds its worker. `NAZM_SCHEDULER` is
   `pool` or `threads`; any other value starts no task (`N0404`). A program that calls C runs a thread
   per task unless the pool is asked for, because a task blocked in C would hold its worker and every

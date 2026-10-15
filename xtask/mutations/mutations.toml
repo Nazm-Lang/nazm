@@ -10548,11 +10548,12 @@ Repointed by R1a's fixed-point floats, which moved it to 30.
 Repointed by R1b's stack size, which moved it to 31.
 Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part.
 Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part.
-Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets."""
+Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets.
+Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 34;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 33;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_four_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 35;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 34;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_five_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20035,3 +20036,21 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''            if bare == "  fence acquire" {'''
 replace = '''            if bare == "  fence acquire " {'''
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }]
+
+# --- Performance leadership, multicore: one pool worker per processor (2026-10-15) ---------------
+
+[[mutation]]
+name = "pl-the-pool-keeps-four-workers"
+why = "with NAZM_WORKERS unset the pool starts four workers whatever the machine, so a parallel program uses four of its processors (killed on any host whose processor count is not four)"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %dflt = select i1 %known, i64 %cpus, i64 4'''
+replace = '''  %dflt = select i1 %known, i64 4, i64 4'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_default::ten_thousand_tasks_run_on_one_worker_per_processor_by_default" }]
+
+[[mutation]]
+name = "pl-darwin-asks-for-the-wrong-processor-count"
+why = "Darwin's stack unit asks sysconf for _SC_PAGESIZE (29) rather than _SC_NPROCESSORS_ONLN (58), so the pool starts as many workers as a page has bytes, capped at 64"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(58))'''
+replace = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(29))'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_default::ten_thousand_tasks_run_on_one_worker_per_processor_by_default" }]

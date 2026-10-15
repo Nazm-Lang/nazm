@@ -3728,3 +3728,62 @@ Toolchains:
 - fpc: 3.2.2
 - gnat: GNATMAKE 16.1.0
 - hyperfine: hyperfine 2.0.0
+
+## Multicore: the parallel workload and the pool's default, measured (2026-10-15)
+
+The comparison's first parallel program (`bench/compare/{nazm,c,go,rust}/primes.*`, performance
+leadership's multicore focus): the primes below 3,000,000 counted by trial division, printing
+216816, on W workers — Nazm tasks in a `scope` sending their counts on a channel, C pthreads, Go
+goroutines on a buffered channel, Rust `std::thread::scope`. The numbers are dealt in blocks of
+1,000, block b to worker b mod W. The first draft dealt single numbers (n ≡ w mod W); with W even
+that gives every odd number, so every prime but 2, to the odd workers, and half the workers have
+nothing to do in every language — so it measured the workload, not the languages.
+
+**What was wrong in Nazm.** A first quick run of that draft showed Nazm at W = 8 using about two
+processors (197% CPU). Two causes, one the draft's and one the runtime's: the draft left four of
+eight tasks idle; and the pool started **four workers on every machine** (`NAZM_WORKERS`'s default
+in `nz.pool_start`), where `architecture.md` §7.84 wrote the processors online. Tasks are placed
+round robin and pinned (§7.84: no stealing, no preemption), so the four busy tasks of W = 8 fell
+on two of the four workers. `spawn` itself never blocks: it queues the task on its worker and
+returns, `main` is not a task, and a channel or join wait parks the task and frees its worker —
+none of these was a cause. The fix (runtime ABI 35): the default is the processors online
+(`nz.os_cpus`, from each target's `stack` unit), at most 64, four only where the system will not
+say; `NAZM_WORKERS` still overrides it. Placement, pinning, and every output, ending and memory
+report are unchanged (the scheduler, select, memory, runtime and FFI tests pass).
+
+**Measured.** Apple M1 Pro (8 performance and 2 efficiency cores), 32 GiB, macOS 27.2; Apple clang
+21.0.0 `-O2`, Go 1.27.2, rustc 1.98.1 `-C opt-level=3`, Nazm release from `8870ec9c` and this change,
+`--opt-level 2`. The host was shared with other agents' builds and tests throughout — load averages
+between 17 and 81 on ten processors — so only **relative** scaling is reported, each language
+against its own W = 1, and the languages were run interleaved.
+
+Three interleaved rounds (each W, each language, `hyperfine -N --warmup 3 --runs 15`; the median of
+the three rounds' medians, and in brackets the median CPU use over wall time — at W = 1 the load
+left each process 81–86% of a processor):
+
+| language | W=1 | W=2 | W=4 | W=8 | W=10 | W=16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| C (pthreads) | 1.00× | 1.74× | 3.45× | 4.09× | 5.51× (489%) | 5.35× |
+| Rust (std threads) | 1.00× | 1.63× | 3.24× | 4.38× | 5.04× (493%) | 5.67× |
+| Go (goroutines) | 1.00× | 1.93× | 3.10× | 3.67× | 4.73× (430%) | 4.52× |
+| Nazm (the pool, default workers) | 1.00× | 1.94× | 3.19× | 4.37× | 4.89× (461%) | 4.91× |
+| Nazm, `NAZM_WORKERS=4` (the old default) | 1.00× | 1.84× | 2.90× | 3.47× | 3.27× (280%) | 3.68× |
+| Nazm, n ≡ w mod W and four workers (the first quick run) | 1.00× | 0.92× | 1.89× | 2.15× | 2.09× (167%) | 2.13× |
+
+Then `python3 bench/compare/compare.py NAZM OUT --runs 10 --only primes`, at a lower load (17–23):
+
+| language | lines | W=1 | W=2 | W=4 | W=8 | W=10 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Nazm `--opt-level 2` | 43 | 173.1 ms | 1.91× | 3.81× | 5.15× | 4.90× |
+| C `clang -O2` | 33 | 176.7 ms | 1.96× | 3.83× | 4.93× | 5.33× |
+| Go | 46 | 144.6 ms | 1.94× | 3.70× | 4.69× | 4.70× |
+| Rust `-C opt-level=3` | 31 | 194.6 ms | 2.00× | 3.89× | 4.98× | 5.25× |
+
+Read with the load in mind: no language reached the eight performance cores' 8×, since other work
+held the processors; within that, Nazm's tasks now scale with C's, Rust's and Go's threads (all four
+within the rounds' spread of each other at every W), where the old default capped it near 3.5×
+whatever W. Nazm's one-worker time is C's (173 against 177 ms): the checked arithmetic costs little
+in a loop of divisions. Not claimed: any lead — the spread between rounds is larger than the
+differences between languages — nor anything at W above the processors, where a pinned task cannot
+move to an idle worker (no stealing, §7.84's non-goal) and the blocks dealt round robin are what
+keeps the workers even.

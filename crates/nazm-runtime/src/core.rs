@@ -2229,6 +2229,7 @@ const POOL_RUNTIME: &str = r#"
 
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
+declare i64 @nz.os_cpus()
 
 ; The scheduler this process runs (N83, §7.84; the default N106's, §7.107): 1 one OS thread per
 ; task, 2 the pool, 4 a pool that could not start or a NAZM_SCHEDULER that names neither — no
@@ -2326,7 +2327,12 @@ entry:
   %attr = alloca [128 x i8], align 16
   %pg = call i64 @nz_os_page_size()
   store i64 %pg, ptr @nz.pool_page
-  %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 4)
+  ; One worker per processor online unless NAZM_WORKERS says otherwise; four where the system will
+  ; not say (performance leadership, 2026-10-15: four on ten processors left six idle).
+  %cpus = call i64 @nz.os_cpus()
+  %known = icmp sgt i64 %cpus, 0
+  %dflt = select i1 %known, i64 %cpus, i64 4
+  %wanted = call i64 @nz.pool_env(ptr @.pool.env.workers, i64 %dflt)
   %big = icmp sgt i64 %wanted, 64
   %count = select i1 %big, i64 64, i64 %wanted
   %sbp = load i64, ptr @nz.stack_bytes

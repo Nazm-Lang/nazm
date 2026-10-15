@@ -375,3 +375,54 @@ constants are unchanged; `PLAIN_IN_ONE_THREAD` can be carried as a list beside
 LLVM of its own, so there is no inlined copy to follow; if it ever ports
 `inline_reference_counting`, the copies take the same rewrite under `single`. R9's code generator
 calls the runtime and needs no change.
+
+### Multicore: the parallel workload and the scheduler (2026-10-15)
+
+`bench/compare/` gained its first parallel program, `primes` (Nazm, C with pthreads, Go, Rust with
+`std::thread::scope`): primes below 3,000,000 by trial division, printing 216816, in blocks of
+1,000 dealt round robin to W workers, run by `compare.py` at W = 1, 2, 4, 8 and the host's processor
+count with each build's speed-up over its own W = 1 and the load average recorded. Blocks, not
+n ≡ w mod W: with W even that deals every odd number to the odd workers and idles half of them in
+every language.
+
+**Why a first run used two processors at W = 8.** The draft's interleaving idled four of eight
+tasks, and the pool started four workers on every machine (`nz.pool_start`'s default; §7.84 had
+written the processors online, the capability matrix four). Placement is round robin and pinned, so
+the four busy tasks shared two workers. Not causes: `spawn` queues and returns (it never runs or
+waits for the task), `main` is not a task, and a channel or join wait parks its task and frees the
+worker.
+
+**The change** (runtime ABI 34 → 35; `docs/architecture.md` §7.107, *Amended*): the default worker
+count is `nz.os_cpus()` — a function of each target's `stack` unit, `sysconf(_SC_NPROCESSORS_ONLN)`
+(58 Darwin, 84 glibc/musl, 0x61 Bionic) or `GetSystemInfo` on Windows — at most 64, four where the
+system will not say; `NAZM_WORKERS` overrides it as before and `NAZM_WORKERS=1` stays the
+deterministic mode. The dotted name is no C identifier, so nothing is reserved and no epoch moves.
+Tests: `scheduler_default` asks for one worker per processor (`available_parallelism`); mutants
+`pl-the-pool-keeps-four-workers` and `pl-darwin-asks-for-the-wrong-processor-count` (killed by
+`ten_thousand_tasks_run_on_one_worker_per_processor_by_default`), `n83-the-worker-count-is-ignored`
+and the revision pin re-run, all killed.
+
+**Measured** (`docs/performance.md`, *Multicore: …*; a shared host, load 17–81 on ten processors,
+relative scaling only):
+
+| W | C | Rust | Go | Nazm | Nazm, the old four workers |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 1.74× | 1.63× | 1.93× | 1.94× | 1.84× |
+| 4 | 3.45× | 3.24× | 3.10× | 3.19× | 2.90× |
+| 8 | 4.09× | 4.38× | 3.67× | 4.37× | 3.47× |
+| 10 | 5.51× | 5.04× | 4.73× | 4.89× | 3.27× |
+
+Nazm now scales with the three; one worker is C's speed (173 against 177 ms in `compare.py`'s run).
+What remains is the pool's design, not a defect: with more tasks than workers a pinned task cannot
+move to an idle worker (no stealing), and placement ignores how busy a worker is. Both are §7.84's
+stated non-goals; a workload of uneven tasks would show them, and a measured case for stealing is
+the next multicore question, not this change's.
+
+**What R3 must follow in `toolchain/pipeline`.** Regenerate `rtext.nz` from the runtime crate
+(`toolchain/pipeline/tests/runtime_text.py`): `rt_abi_revision` 34 → 35; the pool text's
+`declare i64 @nz.os_cpus()` and, at the top of `nz.pool_start`, a two-line comment and `%cpus`, `%known`,
+`%dflt`, with `nz.pool_env` given `%dflt` for 4; and each target's stack unit's new
+`nz.os_cpus` — for Darwin, Linux and Android a `declare i64 @sysconf(i32)` and the function after
+`nz_os_stack_size` with the target's constant, for Windows the function after `nz_os_page_size`.
+No other runtime text, signature or schema moves; R9's code generator calls the runtime and needs
+nothing.

@@ -298,7 +298,10 @@ pub fn escape(s: &str) -> String {
 /// `nz.unwind_stop` and the exception object `nz.exc`, which each unit defines once per image —
 /// under the C personality `__gcc_personality_v0`, so an image links the system's unwinder; a plain
 /// entry lands the unwind and reads the flag as before. No runtime entry's signature moves.
-pub const RUNTIME_ABI_REVISION: u32 = 34;
+/// 35 is performance leadership's multicore (2026-10-15): the `stack` unit defines `nz.os_cpus`,
+/// the processors online, and the pool starts that many workers unless `NAZM_WORKERS` says
+/// otherwise — four where the system will not say, as before on every system.
+pub const RUNTIME_ABI_REVISION: u32 = 35;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -1381,10 +1384,18 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_four_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_thirty_five_and_reaches_the_system_only_through_its_platform_layer()
     {
-        // 4.2's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 34);
+        // Multicore's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 35);
+        // The pool's default worker count is the processors online, from each target's stack unit.
+        assert!(crate::emit_runtime(crate::EVERYTHING).contains("call i64 @nz.os_cpus()"));
+        for t in crate::switch::SwitchTarget::ALL {
+            assert!(
+                crate::platform::emit_stack(t).contains("define hidden i64 @nz.os_cpus()"),
+                "{t:?}"
+            );
+        }
         // 128-bit integers (R1b, L13b), in the wide part only.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.i128_divrem("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.i128_divrem("));

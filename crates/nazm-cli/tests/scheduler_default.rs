@@ -1,7 +1,8 @@
 //! N106: the pool is the default runtime — M:N tasks on bounded workers unless asked otherwise.
 //!
 //! `docs/architecture.md` §7.107. What the programs show: with no `NAZM_SCHEDULER` a native
-//! program's tasks run on the pool, on both backends, ten thousand of them on four workers;
+//! program's tasks run on the pool, on both backends, ten thousand of them on one worker per
+//! processor;
 //! `threads` asks for a thread per task and gives the same output, ending and report; a value
 //! that names neither starts no task, with `N0404`, rather than being read as either; a program
 //! that calls C runs a thread per task unless the pool is asked for, and `nazm explain-cost` says
@@ -87,6 +88,13 @@ fn run(
     )
 }
 
+/// The pool's workers when `NAZM_WORKERS` is unset: one per processor online, at most 64
+/// (performance leadership, 2026-10-15; four before, whatever the machine).
+fn default_workers() -> String {
+    let n = std::thread::available_parallelism().map_or(4, |n| n.get().min(64));
+    format!("nazm-pool: workers={n} ")
+}
+
 /// The report lines both models share: everything but the pool's own line.
 fn shared(stderr: &str) -> String {
     stderr
@@ -117,7 +125,7 @@ fn with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends() {
         assert_eq!(default.0, "404250\n", "{backend}: {}", default.1);
         assert_eq!(default.2, Some(0), "{backend}: {}", default.1);
         assert!(
-            default.1.contains("nazm-pool: workers=4"),
+            default.1.contains(&default_workers()),
             "{backend}: the default is not the pool: {}",
             default.1
         );
@@ -134,7 +142,7 @@ fn with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends() {
 }
 
 #[test]
-fn ten_thousand_tasks_run_on_four_workers_by_default() {
+fn ten_thousand_tasks_run_on_one_worker_per_processor_by_default() {
     let src = "fn worker(io: IoCap, jobs: Chan, results: Chan) -> Int ! { io } {\n\
         let got = ints_new();\n\
         if chan_recv(jobs, got) { chan_send(results, ints_get(got, 0) + 1); }\n\
@@ -157,9 +165,12 @@ fn ten_thousand_tasks_run_on_four_workers_by_default() {
     assert_eq!(code, Some(0), "{err}");
     // 1 + 2 + … + 10,000 = 50005000, then `main`'s 0.
     assert_eq!(out, "500050000\n");
-    // Ten thousand logical tasks alive at once on four OS threads, where the thread model
-    // would have made ten thousand.
-    assert!(err.contains("nazm-pool: workers=4 peak=10000"), "{err}");
+    // Ten thousand logical tasks alive at once on one OS thread per processor, where the thread
+    // model would have made ten thousand.
+    assert!(
+        err.contains(&format!("{}peak=10000", default_workers())),
+        "{err}"
+    );
     assert!(err.contains("spawned=10000 joined=10000"), "{err}");
 }
 
@@ -202,11 +213,7 @@ fn a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for() 
         );
         let pool = run(d.path(), "withc", &[], &[("NAZM_SCHEDULER", "pool")]);
         assert_eq!((&pool.0, pool.2), (&default.0, default.2));
-        assert!(
-            pool.1.contains("nazm-pool: workers=4"),
-            "{backend}: {}",
-            pool.1
-        );
+        assert!(pool.1.contains(&default_workers()), "{backend}: {}", pool.1);
     }
     // And the cost report says which scheduler, and why.
     let cost = |file: &str| -> serde_json::Value {
@@ -227,7 +234,7 @@ fn a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for() 
 #[test]
 fn one_worker_runs_a_programs_tasks_in_the_same_order_every_time() {
     // Each task appends its number to a shared channel the moment it runs; on one worker,
-    // first in, first out, they run in the order they were spawned, every time — where four
+    // first in, first out, they run in the order they were spawned, every time — where several
     // workers may interleave them differently from run to run.
     let src = "fn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n); 0 }\n\
         fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
