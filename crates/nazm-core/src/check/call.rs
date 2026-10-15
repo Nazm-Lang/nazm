@@ -838,10 +838,9 @@ impl Checker<'_> {
             span,
         };
         self.res.record_named_method(at);
-        Some(match self.check_expr(&call, expected) {
-            Completion::Value(t) => t,
-            Completion::Unit | Completion::Diverges => expected.unwrap_or(Type::Int),
-        })
+        // The receiver is checked already (`check_method_call_on`): the call reads its type.
+        let t = self.check_again(&[(receiver.span(), recv_ty)], &call, expected);
+        Some(t.unwrap_or(expected.unwrap_or(Type::Int)))
     }
 }
 

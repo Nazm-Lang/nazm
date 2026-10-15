@@ -18875,8 +18875,8 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::meth
 name = "r1-an-element-write-needs-mut"
 why = "`xs[i] = v` on a sequence is checked as an array's element write, which needs `mut`"
 file = "crates/nazm-core/src/check/stmt.rs"
-find = '''                .element_by_name(binding.ty, "set", *span, args, None)'''
-replace = '''                .element_by_name(binding.ty, "set_", *span, args, None)'''
+find = '''                .element_by_name(binding.ty, "set", *span, args, Vec::new(), None)'''
+replace = '''                .element_by_name(binding.ty, "set_", *span, args, Vec::new(), None)'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::methods_and_indexes_by_name_run_alike_everywhere" }]
 
 [[mutation]]
