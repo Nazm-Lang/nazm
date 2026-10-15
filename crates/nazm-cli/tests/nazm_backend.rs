@@ -473,3 +473,92 @@ fn a_missing_generator_or_a_target_it_does_not_carry_is_refused_before_compiling
     );
     assert!(!d.path().join("o").exists());
 }
+
+/// The packaged layout (task 7.8): `scripts/host-archive.sh` builds `nzcg` with the `nazm` it
+/// packages and installs it as `libexec/nazm/nzcg`, where the unpacked `bin/nazm` finds it with
+/// `NAZM_NZCG` unset — and nowhere else: moved away, the build is refused naming that path. The
+/// archive passes `scripts/clean-install-test.sh`, which builds with `--backend nazm` too.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable() {
+    let triple = if cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else {
+        "x86_64-apple-darwin"
+    };
+    let d = tempfile::tempdir().unwrap();
+    let out = d.path().join("archives");
+    let r = run_bounded(
+        Command::new("sh")
+            .arg(repo().join("scripts/host-archive.sh"))
+            .args([triple, NAZM])
+            .arg(&out),
+        "host-archive.sh",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let archive = out.join(format!("nazm-{triple}.tar.gz"));
+
+    let r = run_bounded(
+        Command::new("sh")
+            .arg(repo().join("scripts/clean-install-test.sh"))
+            .arg(&archive)
+            .env_remove(nazm_codegen_nazm::VARIABLE)
+            .env_remove(nazm_lir::RESULT_VARIABLE),
+        "clean-install-test.sh",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert!(r.stdout.contains("clean-install: ok"), "{}", r.stdout);
+
+    let unpacked = d.path().join("unpacked");
+    std::fs::create_dir_all(&unpacked).unwrap();
+    let r = run_bounded(
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&unpacked),
+        "tar",
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let top = unpacked.join(format!("nazm-{triple}"));
+    let nzcg = top.join("libexec/nazm/nzcg");
+    assert!(nzcg.is_file(), "the archive carries no {}", nzcg.display());
+    let install = std::fs::read_to_string(top.join("INSTALL.txt")).unwrap();
+    assert!(install.contains("libexec/nazm/nzcg"), "{install}");
+
+    let work = d.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        work.join("prog.nz"),
+        "fn main() {\n    println(\"from nzcg\")\n}\n",
+    )
+    .unwrap();
+    let build = |exe: &Path| {
+        run_bounded(
+            Command::new(top.join("bin/nazm"))
+                .current_dir(&work)
+                .env_remove(nazm_codegen_nazm::VARIABLE)
+                .args(["build", "--no-cache", "--backend", "nazm", "prog.nz", "-o"])
+                .arg(exe),
+            "nazm build --backend nazm",
+        )
+    };
+    let r = build(&work.join("p"));
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let r = run_bounded(
+        Command::new(work.join("p")).env_remove(nazm_lir::RESULT_VARIABLE),
+        "the program",
+    );
+    assert_eq!(
+        (r.code, r.stdout.as_str()),
+        (Some(0), "from nzcg\n"),
+        "{r:?}"
+    );
+
+    // Moved away, it is not found anywhere else: the refusal names the installed path.
+    std::fs::rename(&nzcg, top.join("nzcg-moved")).unwrap();
+    let r = build(&work.join("q"));
+    assert_eq!(r.code, Some(4), "{r:?}");
+    assert!(r.stderr.contains("libexec/nazm/nzcg"), "{}", r.stderr);
+    assert!(!work.join("q").exists());
+}
