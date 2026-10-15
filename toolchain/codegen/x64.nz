@@ -159,6 +159,12 @@ pub fn imul(b: ByteBuf, dst: Int, src: Int) {
     rr(b, true, 0x0FAF, dst, src)
 }
 
+/// `cmp r, imm8` at 64 bits, the immediate (-128 to 127) sign-extended.
+pub fn cmp_imm8(b: ByteBuf, r: Int, v: Int) {
+    rr(b, true, 0x83, 7, r)
+    b1(b, v)
+}
+
 /// The `F7` group at 64 bits on a register: 2 `not`, 3 `neg`, 4 `mul`, 5 `imul`, 6 `div`,
 /// 7 `idiv`.
 pub fn f7(b: ByteBuf, ext: Int, r: Int) {

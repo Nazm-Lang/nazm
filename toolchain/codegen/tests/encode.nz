@@ -70,6 +70,11 @@ fn arm64(out: Strs) {
     a(out, cset(9, NE), "cset x9, ne")
     a(out, cset(11, VS), "cset x11, vs")
     a(out, cset(9, LO), "cset x9, lo")
+    // The branches a fused comparison ends its block with (7.6), each to itself.
+    a(out, b_cond(VC, 0), "b.vc .")
+    a(out, b_cond(HS, 0), "b.hs .")
+    a(out, b_cond(LE, 0), "b.le .")
+    a(out, b_cond(MI, 0), "b.mi .")
     a(out, csel(9, 9, 10, NE), "csel x9, x9, x10, ne")
     a(out, sxtb(9, 9), "sxtb x9, w9")
     a(out, sxth(9, 9), "sxth x9, w9")

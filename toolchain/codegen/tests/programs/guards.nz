@@ -1,0 +1,104 @@
+// The signed remainder selected without its divisor guard (7.6) — each width's minimum by -1, by
+// 1 and by itself, and operands of each sign — and comparisons of every kind ending a block, a
+// NaN among the floats, which aarch64 fuses with the block's branch; checked arithmetic whose
+// overflow bit is the branch's.
+
+fn rem64(a: Int, b: Int) -> Int { a % b }
+
+fn rem32(a: Int32, b: Int32) -> Int32 { a % b }
+
+fn rem16(a: Int16, b: Int16) -> Int16 { a % b }
+
+fn rem8(a: Int8, b: Int8) -> Int8 { a % b }
+
+fn branches(a: Int, b: Int) -> Int {
+    let mut n = 0
+    if a == b { n += 1 }
+    if a != b { n += 2 }
+    if a < b { n += 4 }
+    if a <= b { n += 8 }
+    if a > b { n += 16 }
+    if a >= b { n += 32 }
+    n
+}
+
+fn ubranches(a: UInt64, b: UInt64) -> Int {
+    let mut n = 0
+    if a == b { n += 1 }
+    if a != b { n += 2 }
+    if a < b { n += 4 }
+    if a <= b { n += 8 }
+    if a > b { n += 16 }
+    if a >= b { n += 32 }
+    n
+}
+
+fn i8branches(a: Int8, b: Int8) -> Int {
+    let mut n = 0
+    if a == b { n += 1 }
+    if a != b { n += 2 }
+    if a < b { n += 4 }
+    if a <= b { n += 8 }
+    if a > b { n += 16 }
+    if a >= b { n += 32 }
+    n
+}
+
+fn fbranches(a: Float64, b: Float64) -> Int {
+    let mut n = 0
+    if a == b { n += 1 }
+    if a != b { n += 2 }
+    if a < b { n += 4 }
+    if a <= b { n += 8 }
+    if a > b { n += 16 }
+    if a >= b { n += 32 }
+    n
+}
+
+fn f32branches(a: Float32, b: Float32) -> Int {
+    let mut n = 0
+    if a == b { n += 1 }
+    if a != b { n += 2 }
+    if a < b { n += 4 }
+    if a <= b { n += 8 }
+    if a > b { n += 16 }
+    if a >= b { n += 32 }
+    n
+}
+
+/// Checked additions, subtractions and multiplications of each width in a loop.
+fn arith(n: Int) -> Str {
+    let mut i = 0
+    let mut s = 0
+    let mut t = Int32(0)
+    let mut u = UInt64(0)
+    let mut v = Int8(0)
+    while i < n {
+        s = s + i * 3 - 1
+        t = t + Int32(i % 5) * Int32(2) - Int32(1)
+        u = u + UInt64(i) * UInt64(2)
+        v = Int8(i % 9) * Int8(3) - Int8(4)
+        i += 1
+    }
+    f"{s} {t} {u} {v}"
+}
+
+fn main() {
+    let min64 = -9223372036854775807 - 1
+    println(f"{rem64(min64, -1)} {rem64(min64, 1)} {rem64(min64, min64)} {rem64(min64, 7)}")
+    println(f"{rem64(-17, 5)} {rem64(17, -5)} {rem64(-17, -5)} {rem64(17, -1)} {rem64(0, -1)}")
+    let min32 = Int32(-2147483648)
+    println(f"{rem32(min32, Int32(-1))} {rem32(min32, Int32(1))} {rem32(min32, min32)} {rem32(Int32(-17), Int32(5))}")
+    let min16 = Int16(-32768)
+    println(f"{rem16(min16, Int16(-1))} {rem16(min16, Int16(3))} {rem16(Int16(17), Int16(-5))}")
+    let min8 = Int8(-128)
+    println(f"{rem8(min8, Int8(-1))} {rem8(min8, Int8(1))} {rem8(min8, Int8(7))} {rem8(Int8(-17), Int8(5))}")
+    println(f"{branches(1, 2)} {branches(2, 2)} {branches(3, 2)} {branches(min64, 0)}")
+    println(f"{ubranches(UInt64(18000000000000000000), UInt64(5))} {ubranches(UInt64(5), UInt64(5))}")
+    println(f"{i8branches(Int8(-3), Int8(4))} {i8branches(Int8(4), Int8(-3))} {i8branches(Int8(9), Int8(9))}")
+    let nan = 0.0 / 0.0
+    println(f"{fbranches(1.5, 2.5)} {fbranches(2.5, 2.5)} {fbranches(nan, 1.0)} {fbranches(1.0, nan)} {fbranches(nan, nan)}")
+    let nan32 = Float32(0.0) / Float32(0.0)
+    println(f"{f32branches(Float32(-1.0), Float32(1.0))} {f32branches(nan32, Float32(1.0))}")
+    println(arith(1000))
+}

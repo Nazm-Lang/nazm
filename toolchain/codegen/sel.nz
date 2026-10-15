@@ -36,6 +36,10 @@ struct G {
     loc: Ints,
     nvals: Int,
     saved: Ints,
+    /// A comparison fused with its block's branch (7.6, as x86-64's 7.3): the value the next
+    /// instruction may leave in the flags, the value it left there, and their condition.
+    fuse: Ints,
+    uses: Ints,
     /// Where failures unwind (7.5): each call site with a landing pad — its start and length,
     /// and its pad, a block (`cs_blk`) or else an offset in the code (`cs_pad`) — and the start
     /// and end of the last call that may unwind.
@@ -414,6 +418,7 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
             fix_kind: ints_new(), fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
+            fuse: fuse_new(), uses: use_counts(f, n),
             cs_start: ints_new(), cs_len: ints_new(), cs_blk: ints_new(), cs_pad: ints_new(),
             last_call: ints_new())
     ints_push(g.last_call, 0)
@@ -430,10 +435,25 @@ pub fn gen_function(c: Code, u: Unit, f: Func) {
         ints_push(g.blk_at, here(g))
         let first = f.block_first[bi]
         let end = f.block_end[bi]
+        ints_set(g.fuse, 1, -1)
         let mut i = first
         while i < end {
-            inst(g, f.insts[i])
-            i += 1
+            if guarded_rem(f, g.uses, bi, i) {
+                // The guard is for x86-64's `idiv`: `sdiv` and `msub` give the minimum's
+                // remainder by -1 as 0 themselves (7.6).
+                let r = f.insts[i + 7]
+                let mut y = ins_new(OP_BIN)
+                y.sub = B_SREM
+                y.dst = r.dst
+                y.a = r.a
+                y.b = f.insts[i + 6].b
+                bin(g, y)
+                i += 8
+            } else {
+                ints_set(g.fuse, 0, fusable(f, g.uses, bi, i))
+                inst(g, f.insts[i])
+                i += 1
+            }
         }
         if bi < f.terms.len() {
             term(g, f.terms[bi], bi)
@@ -898,9 +918,15 @@ fn ovf(g: G, x: Ins) {
         let ra = use_reg(g, x.a, 9)
         let rb = use_reg(g, x.b, 10)
         let rd = def_reg(g, x.dst, 9)
-        let ro = def_reg(g, x.dst2, 11)
         w(g, if s == O_ADD || s == O_UADD { adds(rd, ra, rb) } else { subs(rd, ra, rb) })
-        w(g, cset(ro, if s == O_ADD || s == O_SUB { VS } else if s == O_UADD { HS } else { LO }))
+        let cond = if s == O_ADD || s == O_SUB { VS } else if s == O_UADD { HS } else { LO }
+        // `def_done` only moves, so the flags survive it to the branch.
+        if fused(g, x.dst2, cond) {
+            def_done(g, rd, x.dst)
+            return
+        }
+        let ro = def_reg(g, x.dst2, 11)
+        w(g, cset(ro, cond))
         def_done(g, rd, x.dst)
         def_done(g, ro, x.dst2)
         return
@@ -927,12 +953,21 @@ fn ovf(g: G, x: Ins) {
             w(g, smulh(12, 9, 10))
             w(g, cmp_asr(12, 11, 63))
             w(g, mov(9, 11))
+            // A move and a store leave the flags to the branch.
+            if fused(g, x.dst2, NE) {
+                st(g, 9, x.dst)
+                return
+            }
             w(g, cset(11, NE))
         } else {
             w(g, mul(11, 9, 10))
             w(g, umulh(12, 9, 10))
             w(g, cmp_imm(12, 0))
             w(g, mov(9, 11))
+            if fused(g, x.dst2, NE) {
+                st(g, 9, x.dst)
+                return
+            }
             w(g, cset(11, NE))
         }
     } else {
@@ -954,6 +989,12 @@ fn ovf(g: G, x: Ins) {
         norm(g, 12, c)
         if signed { sext(g, 12, c) }
         w(g, cmp(12, 9))
+        // Neither the cut nor the store touches the flags.
+        if fused(g, x.dst2, NE) {
+            norm(g, 9, c)
+            st(g, 9, x.dst)
+            return
+        }
         w(g, cset(11, NE))
         norm(g, 9, c)
     }
@@ -998,6 +1039,8 @@ fn compare(g: G, x: Ins) {
         ld_fp(g, 16, x.a)
         ld_fp(g, 17, x.b)
         w(g, fcmp(dbl, 16, 17))
+        // Each condition's inverse is exact, an unordered result included: it is the flags'.
+        if fused(g, x.dst, float_cond(x.sub)) { return }
         w(g, cset(9, float_cond(x.sub)))
         st(g, 9, x.dst)
         return
@@ -1005,8 +1048,9 @@ fn compare(g: G, x: Ins) {
     if width_bits(c) == 64 || x.sub < K_LT || x.sub > K_GE {
         let ra = use_reg(g, x.a, 9)
         let rb = use_reg(g, x.b, 10)
-        let rd = def_reg(g, x.dst, 9)
         w(g, cmp(ra, rb))
+        if fused(g, x.dst, int_cond(x.sub)) { return }
+        let rd = def_reg(g, x.dst, 9)
         w(g, cset(rd, int_cond(x.sub)))
         def_done(g, rd, x.dst)
         return
@@ -1018,8 +1062,17 @@ fn compare(g: G, x: Ins) {
         sext(g, 10, c)
     }
     w(g, cmp(9, 10))
+    if fused(g, x.dst, int_cond(x.sub)) { return }
     w(g, cset(9, int_cond(x.sub)))
     st(g, 9, x.dst)
+}
+
+/// Leave `v` in the flags for the block's branch, when it may be (7.6): true if it was.
+fn fused(g: G, v: Int, cond: Int) -> Bool {
+    if v < 0 || g.fuse[0] != v { return false }
+    ints_set(g.fuse, 1, v)
+    ints_set(g.fuse, 2, cond)
+    true
 }
 
 fn unary(g: G, x: Ins) {
@@ -1310,6 +1363,15 @@ fn term(g: G, t: Ins, bi: Int) {
         // the unwind may pass straight through; the normal return goes on to `else`.
         if !bare_fail(g.f, t.imm) { call_site(g, t.imm, 0) }
         if t.c != bi + 1 { branch_to(g, 0, b(0), t.c) }
+    } else if op == T_BRANCH && t.a >= 0 && g.fuse[1] == t.a {
+        // The condition in the flags, where its comparison left it (7.6): `b.cond`.
+        let cond = g.fuse[2]
+        if t.imm == bi + 1 {
+            branch_to(g, 1, b_cond(cond ^ 1, 0), t.c)
+        } else {
+            branch_to(g, 1, b_cond(cond, 0), t.imm)
+            if t.c != bi + 1 { branch_to(g, 0, b(0), t.c) }
+        }
     } else if op == T_BRANCH {
         let r = use_reg(g, t.a, 9)
         if t.imm == bi + 1 {

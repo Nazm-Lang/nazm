@@ -198,6 +198,48 @@ pub fn fusable(f: Func, uses: Ints, bi: Int, i: Int) -> Int {
     if (x.op == OP_CMP && x.dst == t.a) || (x.op == OP_OVF && x.dst2 == t.a) { t.a } else { -1 }
 }
 
+/// The guard the lowering puts before a signed remainder (7.6). The remainder of the class's
+/// minimum by -1 is 0, but x86-64's `idiv` traps on it, so LIR divides by 1 there instead:
+///
+///     m = const MIN; e1 = cmp eq a, m; n = const -1; e2 = cmp eq b, n; c = and e1, e2
+///     o = const 1; s = select c, o, b; r = srem a, s
+///
+/// True when instructions `i` to `i + 7` of block `bi` are exactly that, on an integer class of
+/// at most 64 bits, and no value of the guard is read anywhere else: the selection may then
+/// compute `srem a, b` itself, with the remainder by -1 as 0, in a few instructions.
+pub fn guarded_rem(f: Func, uses: Ints, bi: Int, i: Int) -> Bool {
+    if i + 8 > f.block_end[bi] { return false }
+    let m = f.insts[i]
+    let e1 = f.insts[i + 1]
+    let n = f.insts[i + 2]
+    let e2 = f.insts[i + 3]
+    let c = f.insts[i + 4]
+    let o = f.insts[i + 5]
+    let s = f.insts[i + 6]
+    let r = f.insts[i + 7]
+    let k = m.cls
+    if k != C_I8 && k != C_I16 && k != C_I32 && k != C_I64 { return false }
+    let bits = width_bits(k)
+    // The class's minimum and -1, compared as the class's bits (shifts never trap).
+    if m.op != OP_CONST || masked(m.imm, k) != masked(1 << (bits - 1), k) { return false }
+    if n.op != OP_CONST || n.cls != k || masked(n.imm, k) != masked(-1, k) { return false }
+    if o.op != OP_CONST || o.cls != k || masked(o.imm, k) != 1 { return false }
+    if r.op != OP_BIN || r.sub != B_SREM { return false }
+    let a = r.a
+    let b = s.b
+    if e1.op != OP_CMP || e1.sub != K_EQ || e1.a != a || e1.b != m.dst { return false }
+    if e2.op != OP_CMP || e2.sub != K_EQ || e2.a != b || e2.b != n.dst { return false }
+    if c.op != OP_BIN || c.sub != B_AND || c.a != e1.dst || c.b != e2.dst { return false }
+    if s.op != OP_SELECT || s.c != c.dst || s.a != o.dst || r.b != s.dst { return false }
+    once(uses, m.dst) && once(uses, e1.dst) && once(uses, n.dst) && once(uses, e2.dst) &&
+        once(uses, c.dst) && once(uses, o.dst) && once(uses, s.dst)
+}
+
+/// Whether value `v` is read exactly once.
+fn once(uses: Ints, v: Int) -> Bool {
+    v >= 0 && v < ints_len(uses) && uses[v] == 1
+}
+
 pub fn align_up(x: Int, a: Int) -> Int {
     if a <= 1 { x } else { (x + a - 1) / a * a }
 }
