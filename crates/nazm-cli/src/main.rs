@@ -375,8 +375,9 @@ fn dispatch(command: Command) -> ExitCode {
             file,
             json,
             no_spans,
+            with_sources,
             source_root,
-        } => core_ir::run(&file, json, !no_spans, source_root.as_deref()),
+        } => core_ir::run(&file, json, !no_spans, with_sources, source_root.as_deref()),
         Command::Mir {
             file,
             json,

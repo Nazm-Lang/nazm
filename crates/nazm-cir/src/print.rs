@@ -18,7 +18,7 @@ use nazm_sema::module::ModuleGraph;
 use nazm_sema::numeric::ConstValue;
 use nazm_sema::resolve::{Resolution, StaticValue};
 use nazm_sema::{EffectSet, EnumId, RecordId, Type};
-use nazm_span::Span;
+use nazm_span::{SourceMap, Span};
 
 use crate::digest::digests;
 use crate::ir::{
@@ -50,6 +50,31 @@ impl Default for Options {
 /// `program` as `nazm.core-ir/3` text.
 #[must_use]
 pub fn print(program: &Program, res: &Resolution, graph: &ModuleGraph, options: Options) -> String {
+    printed(program, res, graph, options, None)
+}
+
+/// [`print`], with each module's source text as its `source` member: what a reader of the
+/// document needs to turn a span into a line and a column (the R3 pipeline's LIR, whose failure
+/// messages name `file:line:column`). Read-only, and only on request, so the default document
+/// stays independent of the checkout and small.
+#[must_use]
+pub fn print_with_sources(
+    program: &Program,
+    res: &Resolution,
+    graph: &ModuleGraph,
+    options: Options,
+    sources: &SourceMap,
+) -> String {
+    printed(program, res, graph, options, Some(sources))
+}
+
+fn printed(
+    program: &Program,
+    res: &Resolution,
+    graph: &ModuleGraph,
+    options: Options,
+    sources: Option<&SourceMap>,
+) -> String {
     // Spelled: a function or array type is written out, where the digests write `?`.
     let names = Names::spelled(res, graph);
     let p = Printer {
@@ -57,6 +82,7 @@ pub fn print(program: &Program, res: &Resolution, graph: &ModuleGraph, options: 
         res,
         graph,
         spans: options.spans,
+        sources,
     };
     let sums = digests(program, res, graph);
     let functions: Vec<J> = program
@@ -192,6 +218,8 @@ struct Printer<'a> {
     res: &'a Resolution,
     graph: &'a ModuleGraph,
     spans: bool,
+    /// Each module's text, printed as its `source`, when asked for.
+    sources: Option<&'a SourceMap>,
 }
 
 fn index(i: usize) -> J {
@@ -364,7 +392,7 @@ impl Printer<'_> {
             self.graph
                 .ids()
                 .map(|m| {
-                    J::Obj(vec![
+                    let mut o = vec![
                         ("name", J::Str(self.names.module(m))),
                         ("root", J::Bool(m == root)),
                         ("prelude", J::Bool(Some(m) == prelude)),
@@ -378,7 +406,11 @@ impl Printer<'_> {
                                     .collect(),
                             ),
                         ),
-                    ])
+                    ];
+                    if let (Some(map), Some(file)) = (self.sources, self.graph.file(m)) {
+                        o.push(("source", J::Str(map.text(file).to_owned())));
+                    }
+                    J::Obj(o)
                 })
                 .collect(),
         )

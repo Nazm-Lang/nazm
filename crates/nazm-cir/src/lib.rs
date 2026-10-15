@@ -35,7 +35,7 @@ pub use ir::{
     Match, MatchOrigin, Orders, PathStep, Program, Step, Stmt, Temp,
 };
 pub use names::Names;
-pub use print::{print, Options};
+pub use print::{print, print_with_sources, Options};
 pub use verify::verify;
 
 /// The printed form's version. Internal: it names what this build writes, and promises no
