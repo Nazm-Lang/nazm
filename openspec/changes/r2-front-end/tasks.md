@@ -467,6 +467,15 @@
         `text_split(s, sep)` is — newly reached, and found, here. `run.sh core`: 3,095 agree,
         0 differ; of 76,272 functions the lowering carries 75,581, all agree; the other parts
         10,644, all agree; 1,524 whole documents, all the reference's bytes
+  - [x] Assignment to a field or an element, and `~`: the value first, then each step — a
+        field by the checker's record of it (its record the type reached so far), an element of
+        an array with its length; `xs[i] = v` on a sequence or a map the call the checker read
+        it as; on a binding a closure shares, its value copied out of the cell, changed and set
+        back. A compound update's read of a map's absent entry passes the value type's zero
+        (`map_fallback`; sema.nz records the literal made for it). `~x` as `complement`.
+        `run.sh core`: 3,095 agree, 0 differ; of 76,284 functions the lowering carries 75,769,
+        all agree; the other parts 10,644, all agree; 1,562 whole documents, all the
+        reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
