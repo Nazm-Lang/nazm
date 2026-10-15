@@ -13,7 +13,7 @@
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s, tuples (the generic record of their arity) and applications of any type; functions
-// with type parameters (and `Equality` requirements) but no effect parameters or contracts;
+// with type parameters (and `Equality` requirements) and effect parameters (N51), but no contracts;
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
 // assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
 // names, `-`, `!`, the binary operators but shifts, calls of the module's functions and of the built-ins (generic ones by
@@ -300,6 +300,12 @@ pub struct Ck {
     pan: Strs,
     pas: Ints,
     pae: Ints,
+    // Each function's effect parameter's name, by the function that declares it (N51), for
+    // messages: the last one recorded for an id is its name (`name_effect_param`).
+    epown: Ints,
+    epnm: Strs,
+    // Per call site, the set a call of an effect-polymorphic callee bound its parameter to (N51).
+    sbind: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -446,7 +452,9 @@ fn s_source() -> Int { 14 }
 fn s_sink() -> Int { 15 }
 // Where the run of fields `resolve_fields` wrote last begins.
 fn s_fields() -> Int { 16 }
-fn s_slots() -> Int { 17 }
+// The effect parameter in scope for the types written (N51): its function's id plus one, or 0.
+fn s_eparam() -> Int { 17 }
+fn s_slots() -> Int { 18 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -542,8 +550,9 @@ fn tag_vec() -> Int { 2 }
 fn tag_record() -> Int { 3 }
 fn tag_enum() -> Int { 4 }
 fn tag_param() -> Int { 5 }
-// A function type (N50): its effects as the first word, its parameters and then its result as
-// its arguments.
+// A function type (N50): its effects as the first word — the effect parameter bit 3 (N51) — whose
+// effect parameter they name as the second (its function's id plus one, 0 for none), its
+// parameters and then its result as its arguments.
 fn tag_fn() -> Int { 6 }
 // `Chan[T]` (N53): a generic channel, its element as its one argument.
 fn tag_chan() -> Int { 7 }
@@ -644,7 +653,9 @@ fn tuple_ty(c: Ck, elems: Ints) -> Int {
 fn is_tuple(c: Ck, t: Int) -> Bool { t >= 0 && is_record(c, t) && strs_get(c.rname, ta(c, t)) == "(,)" }
 fn enum_ty(c: Ck, e: Int, args: Ints) -> Int { intern(c, tag_enum(), e, 0, 0, "", args) }
 fn param_ty(c: Ck, owner: Int, id: Int, index: Int, name: Str) -> Int { intern(c, tag_param(), owner, id, index, name, ints_new()) }
-fn fn_ty(c: Ck, params: Ints, ret: Int, effects: Int) -> Int {
+// A signature whose effects name no effect parameter has no `row`, whatever it was given (N51,
+// `fn_of`), so one type is one id.
+fn fn_ty(c: Ck, params: Ints, ret: Int, effects: Int, row: Int) -> Int {
     let args = ints_new();
     let mut i = 0;
     while i < ints_len(params) {
@@ -652,7 +663,44 @@ fn fn_ty(c: Ck, params: Ints, ret: Int, effects: Int) -> Int {
         i = i + 1;
     }
     ints_push(args, ret);
-    intern(c, tag_fn(), effects, 0, 0, "", args)
+    let mut r = 0;
+    if has_bit(effects, 3) && row >= 0 { r = row + 1; }
+    intern(c, tag_fn(), effects, r, 0, "", args)
+}
+// Whose effect parameter a function type's effects name, or -1.
+fn fn_row(c: Ck, t: Int) -> Int { ints_get(c.tyb, t) - 1 }
+
+// Whether a function type in `t` names `owner`'s effect parameter (`names_effect_param`, N51):
+// `t` itself, or one in its parameters and result, function types only.
+fn names_effect_param(c: Ck, t: Int, owner: Int) -> Bool {
+    if t < 0 || is_fn(c, t) == false { return false; }
+    if fn_row(c, t) == owner { return true; }
+    let mut i = 0;
+    while i < targc(c, t) {
+        if names_effect_param(c, targ(c, t, i), owner) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// `t` with `owner`'s effect parameter, wherever a function type in it names it, bound to
+// `binding` (`bind_effects`, N51); a binding that itself names an effect parameter names
+// `caller`'s.
+fn bind_effects(c: Ck, t: Int, owner: Int, binding: Int, caller: Int) -> Int {
+    if t < 0 || is_fn(c, t) == false { return t; }
+    let params = ints_new();
+    let mut i = 0;
+    while i < fn_arity(c, t) {
+        ints_push(params, bind_effects(c, targ(c, t, i), owner, binding, caller));
+        i = i + 1;
+    }
+    let ret = bind_effects(c, fn_ret(c, t), owner, binding, caller);
+    if fn_row(c, t) == owner {
+        let mut row = 0 - 1;
+        if has_bit(binding, 3) { row = caller; }
+        return fn_ty(c, params, ret, bound_effects(ta(c, t), binding), row);
+    }
+    fn_ty(c, params, ret, ta(c, t), fn_row(c, t))
 }
 fn is_fn(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_fn() }
 fn fn_arity(c: Ck, t: Int) -> Int { targc(c, t) - 1 }
@@ -766,7 +814,7 @@ fn show(c: Ck, t: Int) -> Str {
             i = i + 1;
         }
         let mut effects = "";
-        if ta(c, t) != 0 { effects = cat3(" ! ", set_text(ta(c, t)), ""); }
+        if ta(c, t) != 0 { effects = cat3(" ! ", set_text_p(ta(c, t), effect_param_name(c, fn_row(c, t))), ""); }
         return cat5("fn(", str_join(parts, ", "), ") -> ", show(c, fn_ret(c, t)), effects);
     }
     if g == tag_param() { return strs_get(c.tyname, t); }
@@ -1077,7 +1125,8 @@ fn new_ck(t: Tree) -> Ck {
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
-            stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new());
+            stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
+            sbind: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1433,7 +1482,7 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     i = 0;
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
-        if ints_len(kids(c, f, "effect_params")) > 0 { stop(c, "an effect parameter"); }
+        if ints_len(kids(c, f, "effect_params")) > 0 && some(c, f, "method_of") { stop(c, "an effect parameter of a method"); }
         if ints_len(kids(c, f, "contracts")) > 0 { stop(c, "a contract"); }
         if some(c, f, "foreign") { stop(c, "a foreign function"); }
         if some(c, f, "export") { stop(c, "an export"); }
@@ -1838,6 +1887,21 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
             ints_push(args, resolve_written_inner(c, ints_get(written, i), pnames, ptys, d));
             i = i + 1;
         }
+        // An effect parameter is named only in function types (N51): inside a type's arguments
+        // it would make two instances of one type that differ only in effects.
+        if eparam(c) >= 0 {
+            let mut named = false;
+            i = 0;
+            while i < ints_len(args) {
+                if names_effect_param(c, ints_get(args, i), eparam(c)) { named = true; }
+                i = i + 1;
+            }
+            if named {
+                dg_error(d, "N0388", sps(c, span), spe(c, span),
+                        cat3("the effect parameter `", effect_param_name(c, eparam(c)), "` is named inside this type's arguments"), "",
+                        "an effect parameter may be named in a function type that is a parameter's or the result's, or one nested in those: write the function type there");
+            }
+        }
     }
     // `fn(T…) -> R ! {e}` (N50): its parts resolved as any type is, interned.
     if some(c, w, "function") {
@@ -1855,7 +1919,7 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
             let e = declared_effects_to(c, unwrap(c, ft, "effects"), d);
             if e >= 0 { effects = e; }
         }
-        return fn_ty(c, params, ret, effects);
+        return fn_ty(c, params, ret, effects, eparam(c));
     }
     // `(A, B, …)` (L5): a tuple of the elements written.
     if name == "()" && some(c, w, "qualifier") == false && some(c, w, "length") == false { return tuple_ty(c, args); }
@@ -2857,6 +2921,27 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
         strs_push(pn, "Self");
         ints_push(pt, me);
     }
+    // The effect parameter it declares (N51, `declared_effect_param`): the first, every further
+    // one refused, and one on a function that declares no effect set too.
+    let eps = kids(c, f, "effect_params");
+    if ints_len(eps) > 0 {
+        let first = ints_get(eps, 0);
+        let fnm = fname_of(c, f, "name");
+        k = 1;
+        while k < ints_len(eps) {
+            err(c, "N0388", fld(c, ints_get(eps, k), "span"), cat3("`", fnm, "` declares a second effect parameter"),
+                    "a function declares at most one: every set it writes may name that one");
+            sec(c, fld(c, first, "span"), "the first");
+            k = k + 1;
+        }
+        if some(c, f, "effects") == false {
+            err(c, "N0388", fld(c, first, "span"), cat3("`", fnm, "` has an effect parameter, so it declares its effect set"),
+                    cat3("write `! { ", fname_of(c, first, "name"), " }` after the result type: a function with an effect parameter states what it does in terms of it"));
+        }
+        ints_push(c.epown, id);
+        strs_push(c.epnm, fname_of(c, first, "name"));
+        ss(c, s_eparam(), id + 1);
+    }
     let pf = ints_len(c.ptys);
     k = 0;
     while k < ints_len(params) {
@@ -2879,6 +2964,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
         let tm = trait_method(c, ints_get(c.htr, hdr), fname_of(c, f, "name"));
         if tm >= 0 { eff = ints_get(c.tmeff, tm); }
     }
+    ss(c, s_eparam(), 0);
     let b = builtin_index(c, name);
     let mut refused = false;
     if b >= 0 && method == false {
@@ -3031,6 +3117,11 @@ fn main_rules(c: Ck) -> Int {
             dg_error(c.d, "N0356", ints_get(c.fnns, id), ints_get(c.fnne, id), "`main` cannot be generic", "",
                     "the process entry is called by nothing that could choose its type arguments. Make `main` concrete and call a generic function from it");
         }
+        // Nor polymorphic in its effects (N51): nothing calls it to bind the parameter.
+        if polymorphic(c, id) {
+            dg_error(c.d, "N0388", ints_get(c.fnns, id), ints_get(c.fnne, id), "`main` cannot have an effect parameter", "",
+                    "the process entry is called by nothing that could bind it: declare what `main` does, and call an effect-polymorphic function from it");
+        }
         let params = kids(c, f, "params");
         let mut i = 0;
         while i < ints_get(c.fnpc, id) {
@@ -3065,7 +3156,9 @@ fn check_unit(c: Ck, m: Int) -> Int {
     let functions = kids(c, p, "functions");
     let mut i = 0;
     while i < ints_len(functions) {
-        check_function(c, ints_get(functions, i));
+        let f = ints_get(functions, i);
+        check_function(c, f);
+        ss(c, s_eparam(), 0);
         i = i + 1;
     }
     0
@@ -3184,6 +3277,9 @@ fn check_function(c: Ck, f: Int) -> Int {
     if some(c, f, "method_of") { id = fn_of_node(c, f); }
     ss(c, s_fn(), id);
     ss(c, s_closures(), 0);
+    // Its effect parameter, by name, for every type written inside it (N51).
+    ss(c, s_eparam(), 0);
+    if id >= 0 && ints_len(kids(c, f, "effect_params")) > 0 { ss(c, s_eparam(), id + 1); }
     // The function's own type parameters are in scope for every type written inside it.
     while strs_len(c.tsn) > 0 {
         strs_pop(c.tsn);
@@ -3267,6 +3363,8 @@ fn assignable(c: Ck, got: Int, want: Int) -> Bool {
             if targ(c, got, i) != targ(c, want, i) { return false; }
             i = i + 1;
         }
+        // An effect parameter is matched by binding, never by inclusion (N51).
+        if has_bit(ta(c, got), 3) || has_bit(ta(c, want), 3) { return false; }
         return without(ta(c, got), ta(c, want)) == 0;
     }
     bname_of(c, got) == "IoCap" && bname_of(c, want) == "OutCap"
@@ -3901,6 +3999,8 @@ fn function_value(c: Ck, name: Str, callee: Int, at: Int, expected: Int) -> Int 
     let mut why = "";
     if callee < 0 { why = "a built-in"; } else {
         if ints_get(c.fntpc, callee) > 0 { why = "generic"; }
+        // Its effect parameter is bound at each call, and a value has no call (N51).
+        if why == "" && polymorphic(c, callee) { why = "polymorphic in its effects"; }
     }
     if why != "" {
         err(c, "N0387", at, cat5("`", name, "` is ", why, ", and cannot be used as a value"),
@@ -3925,7 +4025,7 @@ fn function_value(c: Ck, name: Str, callee: Int, at: Int, expected: Int) -> Int 
     ints_push(c.vstart, sps(c, at));
     ints_push(c.vend, spe(c, at));
     ints_push(c.vassumed, assumed);
-    fn_ty(c, params, ints_get(c.fnret, callee), assumed)
+    fn_ty(c, params, ints_get(c.fnret, callee), assumed, 0 - 1)
 }
 
 // A call through a binding of a function type (`check_indirect_call`).
@@ -4016,7 +4116,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     if hash >= 0 { base = str_slice(base, 0, hash); }
     let count = gs(c, s_closures());
     ss(c, s_closures(), count + 1);
-    let mut ty = fn_ty(c, ptys, ret, effects);
+    let mut ty = fn_ty(c, ptys, ret, effects, eparam(c));
     let id = strs_len(c.fnname);
     let fs = fld(c, e, "fn_span");
     strs_push(c.fnname, cat3(base, "#", int_to_str(count)));
@@ -4077,7 +4177,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     let rts = fld(c, rt, "span");
     if completion >= 0 {
         if infer_ret {
-            ty = fn_ty(c, ptys, completion, effects);
+            ty = fn_ty(c, ptys, completion, effects, eparam(c));
             ints_set(c.fnret, id, completion);
         } else {
             if completion != ret {
@@ -4620,9 +4720,12 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
                 str_concat(int_to_str(ints_len(args)), verb)), "");
         sec_at(c, ds, de, "defined here");
     }
-    if generics > 0 {
+    // A callee polymorphic in its effects is called as a generic one is: each call binds it (N51).
+    let mut poly = false;
+    if target >= 0 { poly = polymorphic(c, target); }
+    if generics > 0 || poly {
         let call = Call(name: callee, at: cs, span: span, args: args, formals: formals, ret: ret, owner: owner, oid: oid, n: generics,
-                ds: ds, de: de, target: target);
+                ds: ds, de: de, target: target, poly: poly);
         return check_generic_call(c, call, targs, expected);
     }
     if has_targs { not_generic(c, c.d, callee, "not generic", cs); }
@@ -4840,7 +4943,7 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
             k = k + 1;
         }
         let sites = ints_len(c.sfn);
-        record_indirect_site(c, at, fn_ty(c, all, ret, ints_get(c.tmeff, tm)));
+        record_indirect_site(c, at, fn_ty(c, all, ret, ints_get(c.tmeff, tm), 0 - 1));
         if ints_len(c.sfn) > sites { ints_set(c.stm, sites, tm); }
     } else {
         let mut target = 0 - 1;
@@ -4992,6 +5095,8 @@ pub struct Call {
     ds: Int,
     de: Int,
     target: Int,
+    // Whether the callee declares an effect parameter, which each call binds (N51).
+    poly: Bool,
 }
 
 // The type arguments settled so far (-1 for none yet) and where each came from: an argument's
@@ -5001,7 +5106,13 @@ pub struct Solved {
     ty: Ints,
     from: Ints,
     conflict: Ints,
+    // The callee's effect parameter, once an argument binds it (N51): the set, or -1, and the
+    // argument that bound it.
+    eff: Ints,
 }
+
+// Whether a function type in `t` names the callee's effect parameter (N51).
+fn call_names_effect(c: Ck, call: Call, t: Int) -> Bool { call.owner == own_fn() && names_effect_param(c, t, call.oid) }
 
 fn written_from() -> Int { 0 - 2 }
 
@@ -5065,7 +5176,7 @@ fn inferred_from(c: Ck, call: Call, formal: Int, actual: Int, index: Int) -> Int
         if ta(c, formal) == call.owner && ints_get(c.tyb, formal) == call.oid && ints_get(c.tyc, formal) == index { return actual; }
         return 0 - 1;
     }
-    if g == tag_vec() || g == tag_chan() || g == tag_record() || g == tag_enum() || g == tag_fn() {
+    if g == tag_vec() || g == tag_chan() || g == tag_record() || g == tag_enum() {
         let mut k = 0;
         while k < targc(c, formal) && k < targc(c, actual) {
             let r = inferred_from(c, call, targ(c, formal, k), targ(c, actual, k), index);
@@ -5080,7 +5191,7 @@ fn inferred_from(c: Ck, call: Call, formal: Int, actual: Int, index: Int) -> Int
 // it mentions (`unify`): 0 when it matches, 1 for a parameter already settled to another type
 // (the conflict is left in `g.conflict`), 2 when the shapes differ.
 fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> Int {
-    if mentions(c, formal, call.owner, call.oid) == false {
+    if mentions(c, formal, call.owner, call.oid) == false && call_names_effect(c, call, formal) == false {
         if formal == actual { return 0; }
         return 2;
     }
@@ -5105,8 +5216,38 @@ fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> In
         if tag(c, actual) != tg { return 2; }
         return unify(c, call, targ(c, formal, 0), targ(c, actual, 0), g, arg);
     }
-    // Structural through a function type's parameters and result (N50), its effects the same set.
-    if tg == tag_record() || tg == tag_enum() || tg == tag_fn() {
+    // Structural through a function type's parameters and result (N50). Its effects are the same
+    // set — or, where it names the callee's effect parameter, bind it to what the argument has
+    // beyond the named ones (N51): 3 when it was bound to another set already.
+    if tg == tag_fn() {
+        if tag(c, actual) != tg || targc(c, formal) != targc(c, actual) { return 2; }
+        let fe = ta(c, formal);
+        let ae = ta(c, actual);
+        if call.owner == own_fn() && fn_row(c, formal) == call.oid {
+            let named = without(fe, 8);
+            // A parameter in the argument's effects can only be the caller's own.
+            if without(named, ae) != 0 { return 2; }
+            if has_bit(ae, 3) && fn_row(c, actual) != eparam(c) { return 2; }
+            let binding = without(ae, named);
+            let b = ints_get(g.eff, 0);
+            if b < 0 {
+                ints_set(g.eff, 0, binding);
+                ints_set(g.eff, 1, arg);
+            } else {
+                if b != binding { return 3; }
+            }
+        } else {
+            if fe != ae || fn_row(c, formal) != fn_row(c, actual) { return 2; }
+        }
+        let mut k = 0;
+        while k < targc(c, formal) {
+            let r = unify(c, call, targ(c, formal, k), targ(c, actual, k), g, arg);
+            if r != 0 { return r; }
+            k = k + 1;
+        }
+        return 0;
+    }
+    if tg == tag_record() || tg == tag_enum() {
         if tag(c, actual) != tg || ta(c, actual) != ta(c, formal) { return 2; }
         if targc(c, formal) != targc(c, actual) { return 2; }
         let mut k = 0;
@@ -5125,7 +5266,7 @@ fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> In
 // arguments against them, and return what it produces.
 fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
     let name = call.name;
-    let g = Solved(ty: ints_new(), from: ints_new(), conflict: ints_new());
+    let g = Solved(ty: ints_new(), from: ints_new(), conflict: ints_new(), eff: ints_new());
     let excused = ints_new();
     let mut i = 0;
     while i < call.n {
@@ -5137,6 +5278,8 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
     ints_push(g.conflict, 0);
     ints_push(g.conflict, 0);
     ints_push(g.conflict, 0);
+    ints_push(g.eff, 0 - 1);
+    ints_push(g.eff, 0);
     let mut explicit = false;
     if targs >= 0 {
         let written = sx_items(c.t, targs);
@@ -5165,7 +5308,8 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
             check_expr(c, a, none());
         } else {
             let formal = ints_get(call.formals, i);
-            if explicit || mentions(c, formal, call.owner, call.oid) == false {
+            let open = mentions(c, formal, call.owner, call.oid) || (call.poly && call_names_effect(c, call, formal));
+            if (explicit && call.poly == false) || open == false {
                 // Fully known: checked as a monomorphic call's argument is.
                 let want = subst(c, formal, call.owner, call.oid, partial_args(c, call, g));
                 let got = value_type(c, a, want);
@@ -5189,6 +5333,17 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
                                 cat5(cat5("`", pname, "` is `", show(c, ints_get(g.conflict, 1)), "` from "), source, ", but argument ",
                                 int_to_str(i + 1), cat3(" makes it `", show(c, implied), "`")),
                                 cat5("every use of `", pname, "` in `", name, "`'s signature is one type. Inference does not choose the first and convert the rest"));
+                    }
+                    if r == 3 {
+                        let pname = effect_param_name(c, call.oid);
+                        let earlier = ints_get(g.eff, 0);
+                        let mut shown = "none";
+                        if earlier != 0 { shown = tick(set_text_p(earlier, effect_param_name(c, eparam(c)))); }
+                        err(c, "N0389", espan(c, a),
+                                cat5(cat5("`", pname, "` is ", shown, " from argument "), int_to_str(ints_get(g.eff, 1) + 1), ", and argument ",
+                                int_to_str(i + 1), " binds it to something else"),
+                                cat5("every use of `", pname, "` in `", name, "`'s signature is one set of effects; give the function values the same effects"));
+                        sec_at(c, call.ds, call.de, "declared here");
                     }
                     if r == 2 {
                         excuse(c, call, formal, excused);
@@ -5266,7 +5421,15 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
     let sites = ints_len(c.sfn);
     record_site(c, call.at, call.target);
     if ints_len(c.sfn) > sites && call.n > 0 { ints_set(c.starg, sites, ints_get(settled, 0)); }
-    let ret = subst(c, call.ret, call.owner, call.oid, settled);
+    let mut ret = subst(c, call.ret, call.owner, call.oid, settled);
+    // The effect parameter, as this call bound it (N51): what the call performs, and what a
+    // function type in its result says — which is the result the call has.
+    if call.poly {
+        let mut binding = ints_get(g.eff, 0);
+        if binding < 0 { binding = 0; }
+        if ints_len(c.sfn) > sites { ints_set(c.sbind, sites, binding); }
+        ret = bind_effects(c, ret, call.oid, binding, eparam(c));
+    }
     if nesting(c, ret) > max_depth() {
         err(c, "N0338", call.span, "this call produces a type nested more than 32 deep",
                 "types may nest 32 deep, and the result of a generic call is a type too");
@@ -7824,17 +7987,22 @@ fn declared_effects_to(c: Ck, decl: Int, d: Diags) -> Int {
         let pair = ints_get(names, i);
         let name = sx_text(c.t, sx_kid(c.t, pair, 0));
         let span = sx_kid(c.t, pair, 1);
-        let e = strs_find(effect_names(), name);
+        let mut e = strs_find(effect_names(), name);
+        // The effect parameter in scope, by the name it declared (N51), shadows nothing.
+        if e < 0 && eparam(c) >= 0 {
+            if name == effect_param_name(c, eparam(c)) { e = 3; }
+        }
         if e < 0 {
             known = false;
             dg_error(d, "N0367", sps(c, span), spe(c, span), cat3("`", name, "` is not an effect"), "",
                     "the effects are `io` and `spawn` and `foreign`. There are no user-defined effects");
         } else {
             if has_bit(set, e) {
-                dg_error(d, "N0368", sps(c, span), spe(c, span), cat3("`", name, "` is written twice in this effect set"), "", "");
+                let word = effect_text(e, "*");
+                dg_error(d, "N0368", sps(c, span), spe(c, span), cat3("`", word, "` is written twice in this effect set"), "", "");
                 if i > 0 {
                     let before = sx_kid(c.t, ints_get(names, i - 1), 1);
-                    dg_fix(d, spe(c, before), spe(c, span), "", cat3("remove the second `", name, "`"), "automatic",
+                    dg_fix(d, spe(c, before), spe(c, span), "", cat3("remove the second `", word, "`"), "automatic",
                             "a set holds an effect once, so the second one means nothing");
                 }
             } else {
@@ -7886,6 +8054,7 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
     }
     ints_push(c.sind, 0 - 1);
     ints_push(c.sspawn, 0);
+    ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
     0
 }
@@ -7904,6 +8073,7 @@ fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     ints_push(c.suser, 0 - 1);
     ints_push(c.sind, t);
     ints_push(c.sspawn, 0);
+    ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
     0
 }
@@ -7953,7 +8123,7 @@ fn reason_of(rs: Reasons, f: Int, effect: Int) -> Int {
 }
 
 fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
-    let e = tick(strs_get(effect_names(), ints_get(rs.effect, r)));
+    let e = tick(effect_text(ints_get(rs.effect, r), "*"));
     let src = ints_get(rs.source, r);
     let w = ints_get(rs.which, r);
     if src == 1 { return cat4("the built-in `", strs_get(c.bname, w), "` requires ", e); }
@@ -7964,16 +8134,50 @@ fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
     cat4("calls `", strs_get(c.fnname, w), "`, which requires ", e)
 }
 
-fn set_text(set: Int) -> Str {
+fn set_text(set: Int) -> Str { set_text_p(set, "*") }
+
+// A set as source writes it, `{}` or `{ io, E }`: the effect parameter by `pname` (N51).
+fn set_text_p(set: Int, pname: Str) -> Str {
     if set == 0 { return "{}"; }
     let names = strs_new();
     let mut e = 0;
-    while e < 3 {
-        if has_bit(set, e) { strs_push(names, strs_get(effect_names(), e)); }
+    while e < 4 {
+        if has_bit(set, e) { strs_push(names, effect_text(e, pname)); }
         e = e + 1;
     }
     cat3("{ ", str_join(names, ", "), " }")
 }
+
+// An effect as source writes it: the effect parameter (bit 3) by its declared name (N51).
+fn effect_text(e: Int, pname: Str) -> Str {
+    if e == 3 { return pname; }
+    strs_get(effect_names(), e)
+}
+
+// The effect parameter in scope for the types written (N51), or -1.
+fn eparam(c: Ck) -> Int { gs(c, s_eparam()) - 1 }
+
+// An effect parameter's name as written, or `*` where none was recorded (`effect_param_name`).
+fn effect_param_name(c: Ck, owner: Int) -> Str {
+    if owner < 0 { return "*"; }
+    let mut i = ints_len(c.epown) - 1;
+    while i >= 0 {
+        if ints_get(c.epown, i) == owner { return strs_get(c.epnm, i); }
+        i = i - 1;
+    }
+    "*"
+}
+
+// Whether a function's declared set names its effect parameter (`polymorphic`, N51).
+fn polymorphic(c: Ck, f: Int) -> Bool { ints_get(c.fneff, f) >= 0 && has_bit(ints_get(c.fneff, f), 3) }
+
+// `set` with the effect parameter replaced by `binding` (`EffectSet::bound`); `set` when it has none.
+fn bound_effects(set: Int, binding: Int) -> Int {
+    if has_bit(set, 3) == false { return set; }
+    eff_union(without(set, 8), binding)
+}
+
+fn eff_union(a: Int, b: Int) -> Int { a + without(b, a) }
 
 // Settle the effects of the module's functions and check each declared set and each body's
 // authority (`effects::analyse`), for a module of the program itself (R1.5, D8: its functions
@@ -8013,7 +8217,7 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                 // What a function value may do is its type's (N50): a contract.
                 if ind >= 0 {
                     let mut e = 0;
-                    while e < 3 {
+                    while e < 4 {
                         if has_bit(ta(c, ind), e) && has_bit(set, e) == false {
                             set = with_bit(set, e);
                             add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 5, ind);
@@ -8034,9 +8238,12 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                         source = 4;
                     }
                 }
+                // A callee's effect parameter, as this call bound it (N51): the empty set where
+                // it has none to bind.
+                if contract >= 0 && source == 2 { contract = bound_effects(contract, ints_get(c.sbind, s)); }
                 if contract >= 0 {
                     let mut e = 0;
-                    while e < 3 {
+                    while e < 4 {
                         if has_bit(contract, e) && has_bit(set, e) == false {
                             set = with_bit(set, e);
                             add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), source, g);
@@ -8069,7 +8276,7 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                     if ints_get(c.fneff, g) < 0 && ints_get(c.fnmod, g) == m {
                         let theirs = ints_get(before, index_of(nodes, g));
                         let mut e = 0;
-                        while e < 3 {
+                        while e < 4 {
                             if has_bit(theirs, e) && has_bit(ints_get(sets, n), e) == false {
                                 ints_set(sets, n, with_bit(ints_get(sets, n), e));
                                 add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 3, g);
@@ -8096,9 +8303,9 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                 let listed = strs_new();
                 let mut first = 0 - 1;
                 let mut e = 0;
-                while e < 3 {
+                while e < 4 {
                     if has_bit(missing, e) {
-                        strs_push(listed, tick(strs_get(effect_names(), e)));
+                        strs_push(listed, tick(effect_text(e, "*")));
                         if first < 0 { first = e; }
                     }
                     e = e + 1;
@@ -8237,20 +8444,31 @@ fn missing_authority(c: Ck, me: Int, who: Str, s: Int, need: Int, reported: Int,
 }
 
 // `N0366`: a declared set the body exceeds, with the chain of reasons to where it ends.
+// A function's effect parameter's name, for a message about it (N51): its own; a closure's is
+// the one its type names — the enclosing declaration's, where its set names one — or `*`.
+fn node_param(c: Ck, f: Int) -> Str {
+    if ints_get(c.fnclos, f) < 0 { return effect_param_name(c, f); }
+    if has_bit(ints_get(c.fneff, f), 3) == false { return "*"; }
+    let mut top = f;
+    while ints_get(c.fnclos, top) >= 0 { top = ints_get(c.fnclos, top); }
+    effect_param_name(c, top)
+}
+
 fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
     let who = fn_label(c, me);
+    let pname = node_param(c, me);
     let listed = strs_new();
     let mut first = 0 - 1;
     let mut e = 0;
-    while e < 3 {
+    while e < 4 {
         if has_bit(missing, e) {
-            strs_push(listed, tick(strs_get(effect_names(), e)));
+            strs_push(listed, tick(effect_text(e, pname)));
             if first < 0 { first = e; }
         }
         e = e + 1;
     }
     let list = str_join(listed, " and ");
-    let shown = set_text(declared);
+    let shown = set_text_p(declared, pname);
     let r = reason_of(rs, me, first);
     dg_error(c.d, "N0366", ints_get(rs.start, r), ints_get(rs.end, r), cat5(who, " declares `! ", shown, "`, but its body requires ", list),
             describe(c, rs, r),
@@ -8266,7 +8484,7 @@ fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
             hop = next;
         }
     }
-    let wider = set_text(declared + missing);
+    let wider = set_text_p(declared + missing, pname);
     // A closure that writes no effect set declares `! {}` (N50).
     if ints_get(c.fnws, me) < 0 {
         sec_at(c, ints_get(c.fnns, me), ints_get(c.fnne, me), "a closure that writes no effect set declares `! {}`");
