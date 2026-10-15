@@ -1,0 +1,417 @@
+// How a failure crosses a call (`docs/architecture.md` §7.106, *The failure bit*, and §7.115): a
+// failure deep in a recursion — direct, through a function value, through a trait method, in a
+// task, inside a C export, through a callback C calls, ten thousand frames deep through `defer`s,
+// and with the stack exhausted — ends the program with status 2 and the diagnostic at the failing
+// line, every frame releasing what it owns, on every implementation; and the LIR and LLVM IR say
+// how the bit and the unwind are carried, target by target. Ported from
+// `crates/nazm-cli/tests/failure_convention.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// Every `live=` word of a memory line is `live=0`.
+fn all_live_zero(line: Str) -> Bool ! {} {
+    for w in split_whitespace(line) {
+        if text_starts_with(w, "live=") && w != "live=0" {
+            return false;
+        }
+    }
+    true
+}
+
+/// Every implementation: the first call's answer, then status 2 with the code `at` begins with —
+/// at `at` where the implementation names a place — and everything reclaimed, the same counts
+/// everywhere; and, with `oracle`, the LIR oracle the same.
+fn fails_everywhere(h: Caps, src: Str, first: Str, at: Str, oracle: Bool) -> Result[Int, Str] ! { io, spawn } {
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    let texts = strs_new();
+    strs_push(texts, src);
+    let runs = everywhere(h, names, texts)?;
+    let counts = memory_line(vec_get(runs, 0).ran);
+    let code = str_slice(at, 0, 5);
+    for r in runs {
+        let who = r.label;
+        check_that(r.ran.code == 2, f"{who}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == f"{first}\n", f"{who}: {ran_show(r.ran)}")?;
+        check_that(text_contains(r.ran.stderr, code), f"{who}: {ran_show(r.ran)}")?;
+        if who != "interpreter" {
+            check_that(text_contains(r.ran.stderr, at), f"{who}: {ran_show(r.ran)}")?;
+        }
+        let line = memory_line(r.ran);
+        check_that(line == counts, f"{who}: {line} vs {counts}")?;
+        check_that(all_live_zero(line), f"{who}: {line}")?;
+    }
+    if oracle {
+        let d = prog_dir(h, "prog.nz", src)?;
+        let o = nazm(h, d, words("lir --run prog.nz"));
+        scratch_remove(h, d);
+        check_that(o.code == 2, f"the LIR oracle: {o.stderr}")?;
+        check_that(o.stdout == f"{first}\n", f"the LIR oracle: {ran_show(o)}")?;
+        check_that(text_contains(o.stderr, at), f"the LIR oracle: {o.stderr}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_failure_deep_in_a_direct_recursion_unwinds_every_frame(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Four hundred frames, each owning a string, between `main` and the division that fails.
+    let src = r#"fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, held) + str_len(held) }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(down(3, 5, "a"))
+    println(down(400, 0, "x"))
+    println(7)
+    0
+}
+"#;
+    fails_everywhere(caps(io, p, sp, v, t), src, "11", "N0401]: division by zero at prog.nz:3:20", true)
+}
+
+@test
+fn a_failure_through_a_function_value_unwinds_every_frame(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Every level calls the next through a function value: an indirect call's bit.
+    let src = r#"fn step(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { let g = step; g(n - 1, k, held) + str_len(held) }
+}
+
+fn via(f: fn(Int, Int, Str) -> Int, n: Int, k: Int) -> Int { f(n, k, "v") }
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(via(step, 3, 5))
+    println(via(step, 400, 0))
+    println(7)
+    0
+}
+"#;
+    fails_everywhere(caps(io, p, sp, v, t), src, "11", "N0401]: division by zero at prog.nz:3:20", true)
+}
+
+@test
+fn a_failure_through_a_trait_method_unwinds_every_frame(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The method recurses on a record it builds, and is reached through a generic instance.
+    let src = r#"trait Walk { fn walk(self: Self, n: Int, k: Int) -> Int; }
+
+struct W { name: Str, }
+
+impl Walk for W {
+    fn walk(self: W, n: Int, k: Int) -> Int {
+        let held = str_concat(self.name, "!")
+        if n == 0 { 10 / k } else { W(name: held).walk(n - 1, k) + str_len(self.name) }
+    }
+}
+
+fn go[T: Walk](x: T, n: Int, k: Int) -> Int { x.walk(n, k) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(go(W(name: "w"), 3, 5))
+    println(go(W(name: "w"), 400, 0))
+    println(7)
+    0
+}
+"#;
+    fails_everywhere(caps(io, p, sp, v, t), src, "8", "N0401]: division by zero at prog.nz:8:24", true)
+}
+
+@test
+fn a_failure_deep_in_a_task_unwinds_the_task_and_fails_its_scope(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The failure ends the task, and the scope's join fails `main` with it. Outside the oracle's
+    // subset.
+    let src = r#"fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, held) + str_len(held) }
+}
+
+fn worker(results: Chan, n: Int, k: Int) -> Int {
+    chan_send(results, down(n, k, "t"))
+    0
+}
+
+fn main(tasks: SpawnCap, out: OutCap) -> Int {
+    let results = chan_new(4)
+    scope { spawn worker(results, 3, 5); }
+    let buf = ints_new()
+    chan_recv(results, buf)
+    println(ints_pop(buf))
+    scope { spawn worker(results, 400, 0); }
+    println(7)
+    0
+}
+"#;
+    fails_everywhere(caps(io, p, sp, v, t), src, "11", "N0401]: division by zero at prog.nz:3:20", false)
+}
+
+/// `nazm ARGS` in `dir` for `backend`: Nazm's own code generator, where it is the backend, is the
+/// one `nzcg` built (`NAZM_NZCG`).
+fn nazm_by(h: Caps, backend: Str, dir: Str, args: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    let mut env = suite_env(h);
+    if backend == "nazm" {
+        env = env_set(env, "NAZM_NZCG", nzcg(h, dir)?);
+    }
+    Result[Ran, Str].Ok(value: run(h, nazm_bin(h.io), args, dir, env))
+}
+
+/// The backends and levels a native test builds with: `extra_o2_cranelift` adds Cranelift at
+/// `-O2`, as the C-export test does; Nazm's own code generator on macOS.
+fn backends_of(h: Caps, extra_o2_cranelift: Bool) -> Strs ! { io, spawn } {
+    let out = words("llvm:0 llvm:2 cranelift:0");
+    if extra_o2_cranelift {
+        strs_push(out, "cranelift:2");
+    }
+    if on_macos(h) {
+        strs_push(out, "nazm:0");
+    }
+    out
+}
+
+@test
+fn a_failure_deep_inside_a_c_export_ends_the_process_with_its_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let lib = r#"fn down(n: Int, k: Int) -> Int {
+    if n == 0 { 10 / k } else { down(n - 1, k) + 1 }
+}
+
+pub extern "C" fn deep(n: Int, k: Int) -> Int ! {} = "nazm_deep" { down(n, k) }
+"#;
+    let host = r#"#include <stdio.h>
+#include "libnz.h"
+int main(void) {
+    printf("%lld\n", (long long)nazm_deep(3, 5));
+    fflush(stdout);
+    printf("%lld\n", (long long)nazm_deep(400, 0));
+    printf("not reached\n");
+    return 0;
+}
+"#;
+    let d = prog_dir(h, "lib.nz", lib)?;
+    scratch_write(h, d, "host.c", host)?;
+    let got = c_export_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn c_export_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    for bo in backends_of(h, true) {
+        let parts = text_split(bo, ":");
+        let backend = strs_get(parts, 0);
+        let opt = strs_get(parts, 1);
+        let b = nazm_by(h, backend, d, words(f"build --lib --no-cache --backend {backend} --opt-level {opt} lib.nz -o libnz.a"))?;
+        check_that(b.code == 0, f"{backend} -O{opt}: {b.stderr}")?;
+        let c = run(h, "clang", words("host.c libnz.a -o host"), d, env_here(h.io));
+        check_that(c.code == 0, c.stderr)?;
+        let r = bounded_exe(h, f"{d}/host", d, suite_env(h));
+        check_that(r.code == 2, f"{backend} -O{opt}: {ran_show(r)}")?;
+        check_that(r.stdout == "5\n", f"{backend} -O{opt}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "N0401]: division by zero at lib.nz:2:20"), f"{backend} -O{opt}: {ran_show(r)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main() -> Int { fib(10) }\n")?;
+    let r = nazm(h, d, words("lir --ops prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    let text = r.stdout;
+    check_that(text_contains(text, ", failed v"), text)?;
+    check_that(text_contains(text, "  fail\n"), text)?;
+    check_that(text_contains(text, "plain (i64) -> i64"), text)?;
+    check_that(text_contains(text, "main.body"), text)?;
+    check_that(!text_contains(text, "nz.failed_now"), text)
+}
+
+/// Each native build of `prog.nz` in `d` (with `extra` arguments), run with the memory report on.
+fn natively(h: Caps, d: Str, extra: Strs) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let out = vec_new[Labeled]();
+    for bo in backends_of(h, false) {
+        let parts = text_split(bo, ":");
+        let backend = strs_get(parts, 0);
+        let opt = strs_get(parts, 1);
+        let who = f"{backend} -O{opt}";
+        let exe = f"{d}/p-{backend}-{opt}";
+        let args = words(f"build --no-cache --backend {backend} --opt-level {opt}");
+        for a in extra {
+            strs_push(args, a);
+        }
+        strs_push(args, "prog.nz");
+        strs_push(args, "-o");
+        strs_push(args, exe);
+        let b = nazm_by(h, backend, d, args)?;
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        let r = bounded_exe(h, exe, d, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"));
+        vec_push(out, Labeled(label: who, ran: r));
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn ten_thousand_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let runs = natively(h, d, strs_new())?;
+    let counts = memory_line(vec_get(runs, 0).ran);
+    check_that(text_contains(counts, "strings allocated=10006 reclaimed=10006 live=0"), counts)?;
+    for r in runs {
+        check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == "ddd5\n", f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_contains(r.ran.stderr, "error[N0400]: this addition overflows `Int` at prog.nz:4:19"), f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(memory_line(r.ran) == counts, f"{r.label}: {memory_line(r.ran)} vs {counts}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_failure_ten_thousand_frames_deep_through_defers_runs_none_and_releases_every_frame(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Every frame owns a string and has a `defer`; the unwind releases each string and runs no
+    // `defer`. Native only: the interpreter's recursion limit is lower.
+    let h = caps(io, p, sp, v, t);
+    let src = r#"fn down(out: OutCap, n: Int, k: Int, tag: Str) -> Int ! {io} {
+    let held = str_concat(tag, "!")
+    defer { print("d") }
+    if n == 0 { k + str_len(held) } else { down(out, n - 1, k, tag) + 1 }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(down(out, 2, 1, "a"))
+    println(down(out, 10000, 9223372036854775807, "x"))
+    println(7)
+    0
+}
+"#;
+    let d = prog_dir(h, "prog.nz", src)?;
+    let got = ten_thousand_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn exhausted_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    for r in natively(h, d, strs_new())? {
+        check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == "1\n", f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_contains(r.ran.stderr, "error[N0408]: the native call stack is exhausted at prog.nz:1"), f"{r.label}: {ran_show(r.ran)}")?;
+        let line = memory_line(r.ran);
+        check_that(all_live_zero(line), f"{r.label}: {line}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_failure_with_the_stack_exhausted_unwinds_in_its_headroom(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = r#"fn deep(out: OutCap, n: Int, tag: Str) -> Int ! {io} {
+    let held = str_concat(tag, "!")
+    defer { print("d") }
+    deep(out, n + 1, tag) + str_len(held)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(1)
+    println(deep(out, 0, "x"))
+    0
+}
+"#;
+    let d = prog_dir(h, "prog.nz", src)?;
+    let got = exhausted_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn callback_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let c = run(h, "clang", words("-c -O1 fixture.c -o fixture.o"), d, env_here(h.io));
+    check_that(c.code == 0, c.stderr)?;
+    for r in natively(h, d, words("--link fixture.o"))? {
+        check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == "7\n", f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_contains(r.ran.stderr, "error[N0401]: division by zero at prog.nz:5:20"), f"{r.label}: {ran_show(r.ran)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_failure_deep_in_a_callback_c_calls_ends_the_process_with_its_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Nazm calls C, which calls an export; the failure is landed by the export's C entry, never
+    // unwinding into C.
+    let h = caps(io, p, sp, v, t);
+    let src = r#"extern "C" fn apply(f: fn(Int) -> Int, x: Int) -> Int = "apply";
+
+fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, tag) + str_len(held) }
+}
+
+pub extern "C" fn cb(n: Int) -> Int ! {} = "nz_cb" { down(n, 400 - n, "x") }
+
+fn main(out: OutCap, f: ForeignCap) -> Int ! {io, foreign} {
+    println(apply(cb, 3))
+    println(apply(cb, 400))
+    println(7)
+    0
+}
+"#;
+    let d = prog_dir(h, "prog.nz", src)?;
+    scratch_write(h, d, "fixture.c", "#include <stdint.h>\nint64_t apply(int64_t (*f)(int64_t), int64_t x) { return f(x) + 1; }\n")?;
+    let got = callback_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+/// The `define` line of the function `name` in an LLVM unit.
+fn define(unit: Str, name: Str) -> Result[Str, Str] ! {} {
+    let want = f"_2Enz.{name}(";
+    for l in text_lines(unit) {
+        if text_starts_with(l, "define ") && text_contains(l, want) {
+            return Result[Str, Str].Ok(value: l);
+        }
+    }
+    Result[Str, Str].Err(error: f"no {name}:\n{unit}")
+}
+
+fn by_target_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = nazm(h, d, words("build --no-cache --emit-ir prog.nz -o p"));
+    check_that(b.code == 0, b.stderr)?;
+    let unit = read_text(h, f"{d}/p.m0.ll")?;
+    check_that(!text_contains(unit, ", i1} @nz.m."), unit)?;
+    let fib = define(unit, "fib")?;
+    check_that(text_starts_with(fib, "define internal i64 "), unit)?;
+    check_that(!text_contains(fib, "personality"), unit)?;
+    check_that(text_contains(unit, "call i64 @nz.m.prog_2Enz.fib("), unit)?;
+    check_that(text_contains(define(unit, "tagged")?, "personality ptr @__gcc_personality_v0"), unit)?;
+    check_that(text_contains(unit, "invoke i64 @nz.m.prog_2Enz.fib("), unit)?;
+    check_that(text_contains(define(unit, "main")?, "personality"), unit)?;
+    check_that(text_contains(unit, "invoke i64 @nz.m.prog_2Enz.main.body("), unit)?;
+    check_that(text_contains(unit, "  call void @nz.raise()\n  unreachable"), unit)?;
+    let r = bounded_exe(h, f"{d}/p", d, suite_env(h));
+    // `main`'s result, fib(10) + 2: the exit status, or printed where the run asks for it.
+    check_that(r.code == 57 || (r.code == 0 && r.stdout == "57\n"), ran_show(r))?;
+    scratch_write(h, d, "add.nz", "fn add(a: Int, b: Int) -> Int { if a == 0 { b } else { add(a - 1, b + 1) } }\nfn main() -> Int { add(1, 2) }\n")?;
+    let targets = words("x86_64-unknown-linux-gnu aarch64-unknown-none wasm32-unknown-unknown wasm32-wasip1 x86_64-pc-windows-gnu");
+    for target in targets {
+        let unwinds = target == "x86_64-unknown-linux-gnu";
+        let ob = nazm(h, d, words(f"build --no-cache --target {target} --objects {target} add.nz"));
+        check_that(ob.code == 0, f"{target}: {ob.stderr}")?;
+        let object = read_raw(h, f"{d}/{target}/00-m0.o")?;
+        check_that(text_contains(object, "_Unwind_ForcedUnwind") == unwinds, target)?;
+        check_that(text_contains(object, "__gcc_personality_v0") == unwinds, target)?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn hosted_code_unwinds_and_the_boards_and_webassembly_keep_the_bit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Hosted: no Nazm function returns a `{T, i1}` pair; a call into a bare failure exit is a
+    // plain call, a call whose failure edge releases something is an `invoke`, a failure exit
+    // calls `nz.raise`, and a plain entry invokes its body. WebAssembly, WASI, the boards and
+    // Windows: no unwinder.
+    let h = caps(io, p, sp, v, t);
+    let src = "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn tagged(n: Int) -> Int { let s = str_concat(\"a\", \"b\"); fib(n) + str_len(s) }\nfn main() -> Int { tagged(10) }\n";
+    let d = prog_dir(h, "prog.nz", src)?;
+    let got = by_target_in(h, d);
+    scratch_remove(h, d);
+    got
+}

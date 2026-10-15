@@ -1,0 +1,220 @@
+// `nazm build --release` (R1.5, D15; `docs/architecture.md` §7.117): a macOS executable stripped,
+// position-independent, stack-protected and signed ad hoc with the hardened runtime — a test per
+// property, read from the file with the system's own tools — and the default build unchanged.
+// Ported from `crates/nazm-cli/tests/release_build.rs` (R7). The Rust file compiles its macOS
+// tests only on macOS; here each asks `uname` and passes elsewhere (design decision 10).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// A function with a local array, which a stack canary guards.
+fn program() -> Str ! {} {
+    r#"fn sum(n: Int): Int {
+    let a: [Int; 8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    let mut t = 0
+    let mut i = 0
+    while i < 8 {
+        t += a[i] * n
+        i += 1
+    }
+    t
+}
+
+fn main() {
+    println(sum(2))
+}
+"#
+}
+
+/// The program built into `dir` as `name`, with `extra` arguments; it runs and prints `72`.
+fn built(h: Caps, dir: Str, name: Str, extra: Str) -> Result[Str, Str] ! { io, spawn } {
+    scratch_write(h, dir, "main.nz", program())?;
+    let args = words(f"build main.nz -o {name} {extra}");
+    let out = nazm(h, dir, args);
+    check_that(out.code == 0, f"nazm {str_join(args, " ")}: {out.stderr}")?;
+    let exe = f"{dir}/{name}";
+    let ran = run(h, exe, strs_new(), dir, suite_env(h));
+    check_that(text_starts_with(ran.stdout, "72\n"), ran_show(ran))?;
+    check_that(ran.code == 0, ran_show(ran))?;
+    Result[Str, Str].Ok(value: exe)
+}
+
+/// What a tool prints about `exe`, standard output and error together (`codesign` writes its
+/// description to standard error).
+fn tool(h: Caps, name: Str, args: Str, exe: Str) -> Str ! { io, spawn } {
+    let a = words(args);
+    strs_push(a, exe);
+    let out = run(h, name, a, "", env_here(h.io));
+    f"{out.stdout}{out.stderr}"
+}
+
+/// The release build and the default one, side by side in `d`: `[release, default]`.
+fn both(h: Caps, d: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let out = strs_new();
+    strs_push(out, built(h, d, "hardened", "--release")?);
+    strs_push(out, built(h, d, "plain", "")?);
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn no_symbols_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = both(h, d)?;
+    let release = strs_get(b, 0);
+    let default = strs_get(b, 1);
+    // `nm -U`: the symbols the file defines. The default build names its functions.
+    let plain = tool(h, "nm", "-U", default);
+    check_that(text_contains(plain, "_main"), plain)?;
+    let hardened = tool(h, "nm", "-U", release);
+    check_that(!text_contains(hardened, "_main") && !text_contains(hardened, "nz"), f"a release build names none of its functions: {hardened}")?;
+    // `nm -a` lists debug-map entries too: none is left.
+    let all = tool(h, "nm", "-a", release);
+    check_that(!text_contains(all, " OSO ") && !text_contains(all, " SO "), f"no debug map: {all}")
+}
+
+@test
+fn a_release_executable_has_no_symbols_or_debug_information_left(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = no_symbols_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn pie_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = both(h, d)?;
+    let header = tool(h, "otool", "-hv", strs_get(b, 0));
+    check_that(text_contains(header, " PIE"), header)
+}
+
+@test
+fn a_release_executable_is_position_independent(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = pie_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn canary_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = both(h, d)?;
+    // `__stack_chk_fail` is what a protected function calls when its canary was overwritten.
+    let hardened = tool(h, "nm", "-u", strs_get(b, 0));
+    check_that(text_contains(hardened, "___stack_chk_fail"), hardened)?;
+    check_that(text_contains(hardened, "___stack_chk_guard"), hardened)?;
+    let plain = tool(h, "nm", "-u", strs_get(b, 1));
+    check_that(!text_contains(plain, "___stack_chk"), plain)
+}
+
+@test
+fn a_release_executable_checks_a_stack_canary_and_the_default_one_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = canary_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn signed_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = both(h, d)?;
+    let release = strs_get(b, 0);
+    let signed = tool(h, "codesign", "-dv", release);
+    check_that(text_contains(signed, "adhoc") && text_contains(signed, "runtime"), signed)?;
+    let a = words("--verify --strict");
+    strs_push(a, release);
+    let verify = run(h, "codesign", a, "", env_here(h.io));
+    check_that(verify.code == 0, verify.stderr)?;
+    let plain = tool(h, "codesign", "-dv", strs_get(b, 1));
+    check_that(!text_contains(plain, "runtime"), plain)
+}
+
+@test
+fn a_release_executable_is_signed_ad_hoc_with_the_hardened_runtime_and_the_default_one_is_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = signed_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn same_bytes_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let a = built(h, d, "hardened", "--release --no-cache")?;
+    let first = read_raw(h, a)?;
+    let b = built(h, d, "hardened", "--release --no-cache")?;
+    let second = read_raw(h, b)?;
+    check_that(first == second, "two release builds differ")
+}
+
+@test
+fn two_release_builds_are_the_same_bytes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // N46: the strip and the signature add nothing a second build would not.
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = same_bytes_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn refused_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // Cranelift has no stack protector; a debug build keeps what a release one strips; a library
+    // and objects are not executables; another target is not this host's macOS (the other macOS
+    // architecture links here, so only `--release` refuses it).
+    let extras = text_split("--backend cranelift|--target x86_64-apple-darwin|--objects o|--debug|--lib", "|");
+    let whys = text_split("--backend llvm|another target|--objects|--debug|--lib", "|");
+    let mut i = 0;
+    while i < strs_len(extras) {
+        let args = words(f"build main.nz --release {strs_get(extras, i)}");
+        let shown = str_join(args, " ");
+        let out = nazm(h, d, args);
+        check_that(out.code != 0, f"{shown} was built")?;
+        check_that(text_contains(out.stderr, strs_get(whys, i)), f"{shown}: {out.stderr}")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn release_is_refused_where_it_cannot_hold(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "main.nz", program())?;
+    let got = refused_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+fn provenance_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    built(h, d, "hardened", "--release --provenance r.json")?;
+    built(h, d, "plain", "--provenance p.json")?;
+    let r = jparse(read_text(h, f"{d}/r.json")?)?;
+    let pj = jparse(read_text(h, f"{d}/p.json")?)?;
+    check_that(jtext(r, "backend/release") == "true", jtext(r, "backend"))?;
+    check_that(jq(pj, "backend/release") < 0, jtext(pj, "backend"))
+}
+
+@test
+fn the_provenance_record_names_a_release_build_and_only_a_release_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let got = provenance_in(h, d);
+    scratch_remove(h, d);
+    got
+}

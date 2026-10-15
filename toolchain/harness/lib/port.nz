@@ -1,0 +1,47 @@
+// Small things the ported test files share (R7): a passing test's value, and the list
+// questions a Rust test asks of a `Vec<String>`.
+
+use "@std/text"
+use "strings.nz"
+
+/// What a passing test returns.
+pub fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// Whether `xs` holds `s`: `Vec::contains`.
+pub fn strs_has(xs: Strs, s: Str) -> Bool ! {} {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+/// The entries of `files` (name, text, name, text, …) from `at` on, every second one: its names
+/// from 0, its texts from 1.
+pub fn every_second(files: Strs, at: Int) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = at;
+    while i < strs_len(files) {
+        strs_push(out, strs_get(files, i));
+        i = i + 2;
+    }
+    out
+}
+
+/// The first line of `s`, without its line break: `s.lines().next().unwrap()`.
+pub fn first_line(s: Str) -> Str ! {} {
+    let ls = text_lines(s);
+    if strs_len(ls) > 0 { strs_get(ls, 0) } else { "" }
+}
+
+/// Where `p` first occurs in `s`, or `Err` when it does not: `s.find(p).unwrap()`.
+pub fn found(s: Str, p: Str) -> Result[Int, Str] ! {} {
+    let at = find(s, p);
+    if at < 0 {
+        return Result[Int, Str].Err(error: f"`{p}` not found in: {s}");
+    }
+    Result[Int, Str].Ok(value: at)
+}

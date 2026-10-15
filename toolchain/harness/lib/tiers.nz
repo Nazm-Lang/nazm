@@ -1,0 +1,73 @@
+// "The program under every implementation" in the shapes the Rust test files write it for
+// themselves (R7): the interpreter, optionally the LIR oracle, then LLVM at `-O0` and `-O2` and
+// Cranelift, each native build run under `bounded_exe`. What differs between the files — whether
+// the oracle runs, which runs ask for the memory report, whether an executable runs in the
+// program's directory — is said in a `Tiers`, so each file states its own shape and no more.
+
+use "@std/text"
+use "run.nz"
+use "scratch.nz"
+use "strings.nz"
+use "differential.nz"
+
+/// The shape of one file's "everywhere".
+pub struct Tiers {
+    oracle: Bool,
+    interp_memory: Bool,
+    native_memory: Bool,
+    native_in_dir: Bool,
+}
+
+/// `main` (a file in `dir`) on every tier the shape names: labelled `interpreter`, `lir oracle`,
+/// `llvm -O0`, `llvm -O2`, `cranelift`; executables named after their label in `dir`.
+pub fn tiers_at(h: Caps, dir: Str, main: Str, shape: Tiers) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let plain = suite_env(h);
+    let memory = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let ienv = if shape.interp_memory { memory } else { plain };
+    let nenv = if shape.native_memory { memory } else { plain };
+    let out = vec_new[Labeled]();
+    let ia = words("run --interpret");
+    strs_push(ia, main);
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), ia, dir, ienv)));
+    if shape.oracle {
+        let oa = words("lir --run");
+        strs_push(oa, main);
+        vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), oa, dir, ienv)));
+    }
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)}");
+        strs_push(a, main);
+        strs_push(a, "-o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        let cwd = if shape.native_in_dir { dir } else { "" };
+        vec_push(out, Labeled(label: who, ran: bounded_exe(h, exe, cwd, nenv)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// `tiers_at` for `src` written as `name` in a fresh directory, removed after.
+pub fn tiers_of(h: Caps, name: Str, src: Str, shape: Tiers) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, name, src)?;
+    let r = tiers_at(h, d, name, shape);
+    scratch_remove(h, d);
+    r
+}
+
+/// Every `live=` word of a memory line is `live=0`.
+pub fn nothing_live(line: Str) -> Bool ! {} {
+    for w in split_whitespace(line) {
+        if text_starts_with(w, "live=") && w != "live=0" {
+            return false;
+        }
+    }
+    true
+}
