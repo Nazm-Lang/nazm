@@ -19820,3 +19820,11 @@ file = "toolchain/codegen/macho.nz"
 find = '''put32(unwind, c.fn_enc[i] | (if has { 0x40000000 } else { 0 }))'''
 replace = '''put32(unwind, c.fn_enc[i])'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r9-7-8-the-archive-carries-no-generator"
+why = "the macOS archive is packaged without libexec/nazm/nzcg, so the installed nazm refuses every --backend nazm build"
+file = "scripts/host-archive.sh"
+find = '''    aarch64-apple-darwin|x86_64-apple-darwin)'''
+replace = '''    none)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable" }]

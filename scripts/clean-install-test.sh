@@ -4,7 +4,8 @@
 #   scripts/clean-install-test.sh ARCHIVE
 #
 # Unpacks ARCHIVE into a fresh directory, refuses to proceed if cargo or rustc is reachable on the
-# PATH it runs with, then checks, interprets, builds and runs a program with the unpacked nazm.
+# PATH it runs with, then checks, interprets, builds and runs a program with the unpacked nazm —
+# and, where the archive carries libexec/nazm/nzcg (macOS), builds and runs it with --backend nazm.
 # Prints `clean-install: ok TRIPLE` and exits 0 only if every step did what it should.
 set -eu
 [ $# -eq 1 ] || { printf 'usage: %s ARCHIVE\n' "$0" >&2; exit 2; }
@@ -49,4 +50,11 @@ nazm check hello.nz
 nazm build hello.nz -o hello
 [ "$(./hello)" = "HELLO FROM A PREBUILT NAZM" ] || { echo 'clean-install: the built program printed something else' >&2; exit 1; }
 ./hello >/dev/null || { echo 'clean-install: the built program did not exit 0' >&2; exit 1; }
+# Nazm's own code generator, where the archive carries it (the macOS targets): found beside `nazm`,
+# where the backend looks, never through NAZM_NZCG.
+if [ -e "$work/$dir/libexec/nazm/nzcg" ]; then
+    unset NAZM_NZCG
+    nazm build --backend nazm hello.nz -o hello-nzcg
+    [ "$(./hello-nzcg)" = "HELLO FROM A PREBUILT NAZM" ] || { echo 'clean-install: the program nzcg built printed something else' >&2; exit 1; }
+fi
 printf 'clean-install: ok %s\n' "$triple"

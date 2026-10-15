@@ -9306,7 +9306,11 @@ process per unit keeps the per-unit object cache.
 **Where it is.** `NAZM_NZCG` names it; otherwise it is installed beside `nazm` as
 `../libexec/nazm/nzcg`, built from `toolchain/codegen/` by the build that ships `nazm` (until R8
 cuts over, with the LLVM backend). It is read once, when first needed; a build with another backend
-never reads it.
+never reads it. Both places a toolchain is assembled install it on the macOS targets, built by the
+`nazm` being packaged, without a cache, outside the checkout: `scripts/host-archive.sh` (the
+archive's `INSTALL.txt` says so) and `scripts/release-candidate.sh` (its `MANIFEST.txt` and
+`PROVENANCE.txt` give its SHA-256). `scripts/clean-install-test.sh` builds with `--backend nazm`
+when the archive carries it.
 
 **Cache identity.** The backend's version is `nzcg-` and the generator's BLAKE3 digest, the
 runtime ABI revision and `debug`: a changed generator is a new key, as Cranelift's
