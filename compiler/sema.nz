@@ -322,6 +322,9 @@ pub struct Ck {
     fnexp: Ints,
     // What each module offers beyond its own `pub` definitions: its re-exports (N103).
     rx: Rx,
+    // Per function, what its body requires once its module's effects are settled
+    // (`inferred_effects`), as a mask like `fneff`'s; -1 for none recorded.
+    fnreq: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -1204,7 +1207,7 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new());
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -10767,6 +10770,19 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
             n = n + 1;
         }
     }
+    // Every function's requirement (`record_effects`): a foreign one's is its contract, `foreign`;
+    // one with a body, what the rounds found.
+    while ints_len(c.fnreq) < strs_len(c.fnname) { ints_push(c.fnreq, 0 - 1); }
+    n = 0;
+    while n < ints_len(nodes) {
+        let me = ints_get(nodes, n);
+        if ints_get(c.fnfor, me) == 1 {
+            ints_set(c.fnreq, me, 4);
+        } else {
+            if some(c, ints_get(c.fnnode, me), "body") { ints_set(c.fnreq, me, ints_get(sets, n)); }
+        }
+        n = n + 1;
+    }
     // A named function used as a value promised its type's effects (N50): an undeclared one of
     // this module was taken to require none, and is held to it here.
     let mut v = 0;
@@ -13634,4 +13650,140 @@ fn refuse_flows(c: Ck, ps: Ps, pf: Pf, k: Int) -> Int {
         i = i + 1;
     }
     0
+}
+
+// --- the checker's facts, for tools (`nazm doc`; R5 design D10) ------------------------------
+//
+// What a tool reads of a checked compilation, as the reference's `Resolution` holds it. Every
+// answer is meaningful only where the checker carried the whole compilation (`ck_stopped` is
+// ""); `compiler/facts.nz` is the interface a tool uses, and adds what the loader knows.
+// Functions, records, enums and traits are numbered as the checker numbers them, in declaration
+// order, module by module in load order; a span is a tree node's, local to its module's text.
+
+pub fn ck_tree(c: Ck) -> Tree { c.t }
+
+pub fn ck_fn_count(c: Ck) -> Int { strs_len(c.fnname) }
+// Its name — an impl's method is `Trait/Type/m`, a closure its maker's own.
+pub fn ck_fn_name(c: Ck, i: Int) -> Str { strs_get(c.fnname, i) }
+pub fn ck_fn_module(c: Ck, i: Int) -> Int { ints_get(c.fnmod, i) }
+// Its declaration's node (`Function`; a closure's, the closure expression).
+pub fn ck_fn_node(c: Ck, i: Int) -> Int { ints_get(c.fnnode, i) }
+pub fn ck_fn_closure(c: Ck, i: Int) -> Bool { ints_get(c.fnclos, i) >= 0 }
+pub fn ck_fn_method(c: Ck, i: Int) -> Bool { ints_get(c.fnmeth, i) == 1 }
+// Whether it is exported (`Visibility::Exported`): `pub`, and no impl's method.
+pub fn ck_fn_public(c: Ck, i: Int) -> Bool { ints_get(c.fnpub, i) == 1 }
+pub fn ck_fn_generic(c: Ck, i: Int) -> Bool { ints_get(c.fntpc, i) > 0 }
+
+// Its parameters' types and its result's, each as `Types::show` writes it.
+pub fn ck_fn_params(c: Ck, i: Int) -> Strs {
+    let out = strs_new();
+    let mut k = 0;
+    while k < ints_get(c.fnpc, i) {
+        strs_push(out, show(c, ints_get(c.ptys, ints_get(c.fnpf, i) + k)));
+        k = k + 1;
+    }
+    out
+}
+pub fn ck_fn_ret(c: Ck, i: Int) -> Str { show(c, ints_get(c.fnret, i)) }
+
+// The capabilities it takes: each parameter of a capability type, shown, in order.
+pub fn ck_fn_capabilities(c: Ck, i: Int) -> Strs {
+    let out = strs_new();
+    let mut k = 0;
+    while k < ints_get(c.fnpc, i) {
+        let t = ints_get(c.ptys, ints_get(c.fnpf, i) + k);
+        if is_cap(c, t) { strs_push(out, show(c, t)); }
+        k = k + 1;
+    }
+    out
+}
+
+// Its declared effect set and what its body requires (`declared_effects`, `inferred_effects`), as
+// masks — `io` 1, `spawn` 2, `foreign` 4, the effect parameter 8 — or -1 for none: none written,
+// or no body checked. A foreign function declares and requires `foreign`.
+pub fn ck_fn_declared(c: Ck, i: Int) -> Int {
+    if ints_get(c.fnfor, i) == 1 { return 4; }
+    ints_get(c.fneff, i)
+}
+pub fn ck_fn_required(c: Ck, i: Int) -> Int {
+    if i >= ints_len(c.fnreq) { return 0 - 1; }
+    ints_get(c.fnreq, i)
+}
+
+// A mask's effects by name, in id order, as `EffectSet::names` lists them: `io`, `spawn`,
+// `foreign`, and the effect parameter as `*`.
+pub fn ck_effect_names(mask: Int) -> Strs {
+    let out = strs_new();
+    let mut e = 0;
+    while e < 4 {
+        if has_bit(mask, e) { strs_push(out, effect_text(e, "*")); }
+        e = e + 1;
+    }
+    out
+}
+
+// The C symbol a foreign declaration names (N42), and the one an export is callable as (N55); ""
+// for none.
+pub fn ck_fn_foreign(c: Ck, i: Int) -> Str {
+    if ints_get(c.fnfor, i) == 0 { return ""; }
+    fname_of(c, unwrap(c, ints_get(c.fnnode, i), "foreign"), "symbol")
+}
+pub fn ck_fn_export(c: Ck, i: Int) -> Str {
+    if ints_get(c.fnexp, i) == 0 { return ""; }
+    fname_of(c, unwrap(c, ints_get(c.fnnode, i), "export"), "symbol")
+}
+
+pub fn ck_record_count(c: Ck) -> Int { strs_len(c.rname) }
+pub fn ck_record_name(c: Ck, r: Int) -> Str { strs_get(c.rname, r) }
+pub fn ck_record_module(c: Ck, r: Int) -> Int { ints_get(c.rmod, r) }
+pub fn ck_record_public(c: Ck, r: Int) -> Bool { ints_get(c.rpub, r) == 1 }
+pub fn ck_enum_count(c: Ck) -> Int { strs_len(c.ename) }
+pub fn ck_enum_name(c: Ck, e: Int) -> Str { strs_get(c.ename, e) }
+pub fn ck_enum_module(c: Ck, e: Int) -> Int { ints_get(c.emod, e) }
+pub fn ck_enum_public(c: Ck, e: Int) -> Bool { ints_get(c.epub, e) == 1 }
+pub fn ck_trait_count(c: Ck) -> Int { strs_len(c.trname) }
+pub fn ck_trait_name(c: Ck, t: Int) -> Str { strs_get(c.trname, t) }
+pub fn ck_trait_module(c: Ck, t: Int) -> Int { ints_get(c.trmod, t) }
+
+// A record's and an enum's declaration (`Record`, `Enum`): the one in module `m` named `name`
+// that the checker declared, or -1 — a duplicate it refused is not one.
+pub fn ck_record_node(c: Ck, r: Int) -> Int { type_node(c, ints_get(c.rmod, r), "records", ints_get(c.rns, r)) }
+pub fn ck_enum_node(c: Ck, e: Int) -> Int { type_node(c, ints_get(c.emod, e), "enums", ints_get(c.ens, e)) }
+
+fn type_node(c: Ck, m: Int, list: Str, at: Int) -> Int {
+    let decls = kids(c, ints_get(c.mprog, m), list);
+    let mut k = 0;
+    while k < ints_len(decls) {
+        let d = ints_get(decls, k);
+        if sx_s(c.t, fld(c, d, "name_span")) + ints_get(c.mbase, m) == at { return d; }
+        k = k + 1;
+    }
+    0 - 1
+}
+
+// What the chosen names of every `pub use` resolve to (N103), in the order they were applied:
+// the module re-exporting, the name's span (absolute), the kind — 1 a function, 2 a record or an
+// enum, 3 a trait — and which: a function, a type (`ck_type_record`, `ck_type_enum`) or a trait.
+pub fn ck_reexport_count(c: Ck) -> Int { ints_len(c.rx.xm) }
+pub fn ck_reexport_module(c: Ck, i: Int) -> Int { ints_get(c.rx.xm, i) }
+pub fn ck_reexport_start(c: Ck, i: Int) -> Int { ints_get(c.rx.xs, i) }
+pub fn ck_reexport_end(c: Ck, i: Int) -> Int { ints_get(c.rx.xe, i) }
+pub fn ck_reexport_kind(c: Ck, i: Int) -> Int { ints_get(c.rx.xk, i) }
+pub fn ck_reexport_target(c: Ck, i: Int) -> Int { ints_get(c.rx.xid, i) }
+
+// A record or enum type's definition: its record, or -1; its enum, or -1.
+pub fn ck_type_record(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ta(c, t); }
+    0 - 1
+}
+pub fn ck_type_enum(c: Ck, t: Int) -> Int {
+    if is_enum(c, t) { return ta(c, t); }
+    0 - 1
+}
+
+// A checker that has checked nothing: what a tool holds where the loader stopped first.
+pub fn ck_none(t: Tree) -> Ck {
+    let c = new_ck(t);
+    stop(c, "nothing, as nothing was loaded");
+    c
 }
