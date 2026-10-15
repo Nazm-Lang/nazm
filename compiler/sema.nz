@@ -13,7 +13,7 @@
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s, tuples (the generic record of their arity), arrays and applications of any type; functions
-// with type parameters (and `Equality` requirements) and effect parameters (N51), but no contracts;
+// with type parameters (and `Equality` requirements), effect parameters (N51) and contracts (N87);
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
 // assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
 // names, `-`, `!`, the binary operators but shifts, calls of the module's functions and of the built-ins (generic ones by
@@ -1549,7 +1549,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
         if ints_len(kids(c, f, "effect_params")) > 0 && some(c, f, "method_of") { stop(c, "an effect parameter of a method"); }
-        if ints_len(kids(c, f, "contracts")) > 0 { stop(c, "a contract"); }
         if some(c, f, "foreign") { stop(c, "a foreign function"); }
         if some(c, f, "export") { stop(c, "an export"); }
         if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
@@ -3981,6 +3980,8 @@ fn check_function(c: Ck, f: Int) -> Int {
     let rt = fld(c, f, "return_type");
     let declared = signature_type(c, rt);
     let rts = fld(c, rt, "span");
+    // Contracts (N87, §7.88): `Bool`, over the parameters and, after `ensures`, `result`.
+    check_contracts(c, f, declared);
     // A body that failed to parse: anything said about statements never built would be about
     // the parser's guess, not the program.
     if some(c, f, "body") == false {
@@ -4903,6 +4904,227 @@ fn index_of_text(s: Str, part: Str) -> Int {
     0 - 1
 }
 
+// --- contracts (N87, §7.88; `check/function.rs`, `check/clauses.rs`) ---------------------------
+
+// A function's contract clauses (`check_contracts`): each a `Bool`; a `requires` over the
+// parameters, an `ensures` over them and `result`; each made only of what cannot fail for want of
+// authority or memory (N0614).
+fn check_contracts(c: Ck, f: Int, declared: Int) -> Int {
+    let cs = kids(c, f, "contracts");
+    let mut i = 0;
+    while i < ints_len(cs) {
+        let ct = ints_get(cs, i);
+        let ensures = sx_text(c.t, fld(c, ct, "kind")) == "Ensures";
+        if ensures {
+            open_scope(c);
+            define(c, "result", declared, false, 0 - 1, 0 - 1);
+        }
+        let e = fld(c, ct, "expr");
+        let got = value_type(c, e, t_bool());
+        if got != t_bool() {
+            err(c, "N0300", espan(c, e), cat3("a contract clause is a `Bool`, but this is `", show(c, got), "`"),
+                    "a clause states a condition: compare, or combine with `&&`, `||`, `!`");
+        }
+        let what = strs_new();
+        let at = impure_clause(c, e, what);
+        if at >= 0 {
+            dg_error(c.d, "N0614", sps(c, at), spe(c, at), str_concat("a contract clause cannot ", strs_get(what, 0)), "not a contract's",
+                    "a clause is evaluated every time the function is entered or returns, and must not fail for want of authority or memory: it is literals, names, operators, field reads and calls of functions declaring `! {}`");
+        }
+        if ensures { close_scope(c); }
+        i = i + 1;
+    }
+    0
+}
+
+fn impure(what: Strs, why: Str, span: Int) -> Int {
+    strs_push(what, why);
+    span
+}
+
+// The first part of a clause a contract may not contain (`impure_clause`): its span, with what it
+// is pushed to `what`; -1 for none.
+fn impure_clause(c: Ck, e: Int, what: Strs) -> Int {
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() {
+        if k == "Block" { return impure(what, "contain a block", fld(c, sx_kid(c.t, e, 0), "span")); }
+        stop(c, cat3("the expression `", k, "` in a contract"));
+        return 0 - 1;
+    }
+    if k == "Int" || k == "WideInt" || k == "Float" || k == "Bool" || k == "Str" || k == "Var" { return 0 - 1; }
+    if k == "Neg" || k == "Not" || k == "BitNot" { return impure_clause(c, fld(c, e, "operand"), what); }
+    if k == "Array" || k == "ArrayRepeat" || k == "Tuple" || k == "Interp" || k == "Construct" || k == "Variant" {
+        return impure(what, "build a value", fld(c, e, "span"));
+    }
+    if k == "Index" {
+        let b = impure_clause(c, fld(c, e, "base"), what);
+        if b >= 0 { return b; }
+        return impure_clause(c, fld(c, e, "index"), what);
+    }
+    if k == "Binary" {
+        let l = impure_clause(c, fld(c, e, "lhs"), what);
+        if l >= 0 { return l; }
+        return impure_clause(c, fld(c, e, "rhs"), what);
+    }
+    if k == "Field" { return impure_clause(c, fld(c, e, "base"), what); }
+    if k == "Call" {
+        let name = fname_of(c, e, "callee");
+        let mut target = 0 - 1;
+        if some(c, e, "qualifier") { target = qualified_callee(c, fname_of(c, unwrap(c, e, "qualifier"), "name"), name); } else { target = callee_of(c, name); }
+        let mut pure = false;
+        if target >= 0 { pure = ints_get(c.fneff, target) == 0; }
+        if target <= 0 - 2 {
+            let b = strs_get(c.bname, 0 - 2 - target);
+            pure = b == "str_len" || b == "str_byte" || b == "ints_len" || b == "ints_get" || b == "strs_len" || b == "vec_len" || b == "vec_get";
+        }
+        if pure == false { return impure(what, "call a function that is not pure", fld(c, e, "callee_span")); }
+        let args = kids(c, e, "args");
+        let mut i = 0;
+        while i < ints_len(args) {
+            let a = impure_clause(c, ints_get(args, i), what);
+            if a >= 0 { return a; }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    if k == "Closure" { return impure(what, "make a closure", fld(c, e, "span")); }
+    if k == "Match" || k == "If" { return impure(what, "branch; write the condition with `&&` and `||`", fld(c, e, "span")); }
+    if k == "Propagate" { return impure(what, "propagate a failure", fld(c, e, "op_span")); }
+    if k == "MethodCall" { return impure(what, "call a method", fld(c, e, "span")); }
+    stop(c, cat3("the expression `", k, "` in a contract"));
+    0 - 1
+}
+
+// A clause's value over literal arguments (`literal`): kind 1 an `Int`, 2 a `Bool`, 0 none, at
+// slot 0, the value at slot 1. `names`/`vals`/`kinds` are the parameters' literals.
+fn lit(kind: Int, v: Int) -> Ints {
+    let out = ints_new();
+    ints_push(out, kind);
+    ints_push(out, v);
+    out
+}
+
+fn lit_int(c: Ck, w: Ints) -> Ints {
+    if kind_fits(k_int(), w) == false { return lit(0, 0); }
+    lit(1, w_to_int(w))
+}
+
+fn literal(c: Ck, e: Int, names: Strs, kinds: Ints, vals: Ints) -> Ints {
+    if sx_kind(c.t, e) == tk_tuple() { return lit(0, 0); }
+    let k = kind_of(c, e);
+    if k == "Int" { return lit_int(c, w_parse(sx_text(c.t, fld(c, e, "value")))); }
+    if k == "Bool" {
+        if sx_text(c.t, fld(c, e, "value")) == "true" { return lit(2, 1); }
+        return lit(2, 0);
+    }
+    if k == "Var" {
+        let at = strs_find(names, fname_of(c, e, "name"));
+        if at < 0 { return lit(0, 0); }
+        return lit(ints_get(kinds, at), ints_get(vals, at));
+    }
+    if k == "Neg" {
+        let o = literal(c, fld(c, e, "operand"), names, kinds, vals);
+        if ints_get(o, 0) != 1 { return lit(0, 0); }
+        return lit_int(c, w_negate(w_from_int(ints_get(o, 1))));
+    }
+    if k == "Not" {
+        let o = literal(c, fld(c, e, "operand"), names, kinds, vals);
+        if ints_get(o, 0) != 2 { return lit(0, 0); }
+        return lit(2, 1 - ints_get(o, 1));
+    }
+    if k != "Binary" { return lit(0, 0); }
+    let op = sx_text(c.t, fld(c, e, "op"));
+    let l = literal(c, fld(c, e, "lhs"), names, kinds, vals);
+    if ints_get(l, 0) == 0 { return lit(0, 0); }
+    if op == "And" && ints_get(l, 0) == 2 && ints_get(l, 1) == 0 { return lit(2, 0); }
+    if op == "Or" && ints_get(l, 0) == 2 && ints_get(l, 1) == 1 { return lit(2, 1); }
+    let r = literal(c, fld(c, e, "rhs"), names, kinds, vals);
+    if ints_get(r, 0) == 0 || ints_get(r, 0) != ints_get(l, 0) { return lit(0, 0); }
+    let a = ints_get(l, 1);
+    let b = ints_get(r, 1);
+    if ints_get(l, 0) == 2 {
+        if op == "And" { return lit(2, a * b); }
+        if op == "Or" { return lit(2, eff_union(a, b)); }
+        if op == "Eq" { if a == b { return lit(2, 1); } return lit(2, 0); }
+        if op == "NotEq" { if a != b { return lit(2, 1); } return lit(2, 0); }
+        return lit(0, 0);
+    }
+    let wa = w_from_int(a);
+    let wb = w_from_int(b);
+    if op == "Add" { return lit_int(c, w_add(wa, wb)); }
+    if op == "Sub" { return lit_int(c, w_sub(wa, wb)); }
+    if op == "Mul" { return lit_int(c, w_mul(wa, wb)); }
+    if op == "Div" || op == "Rem" {
+        if b == 0 { return lit(0, 0); }
+        if op == "Div" { return lit_int(c, w_quot(wa, wb)); }
+        // `checked_rem` refuses `Int`'s least value by -1, whose quotient overflows.
+        if kind_fits(k_int(), w_quot(wa, wb)) == false { return lit(0, 0); }
+        return lit_int(c, w_rem(wa, wb));
+    }
+    let mut t = 0 - 1;
+    if op == "Eq" { if a == b { t = 1; } else { t = 0; } }
+    if op == "NotEq" { if a != b { t = 1; } else { t = 0; } }
+    if op == "Lt" { if a < b { t = 1; } else { t = 0; } }
+    if op == "LtEq" { if a <= b { t = 1; } else { t = 0; } }
+    if op == "Gt" { if a > b { t = 1; } else { t = 0; } }
+    if op == "GtEq" { if a >= b { t = 1; } else { t = 0; } }
+    if t >= 0 { return lit(2, t); }
+    if op == "BitAnd" { return lit(1, w_to_int(w_wrapped(m_bitwise(w_bits(wa, 64), w_bits(wb, 64), 0), 64, true))); }
+    if op == "BitOr" { return lit(1, w_to_int(w_wrapped(m_bitwise(w_bits(wa, 64), w_bits(wb, 64), 1), 64, true))); }
+    if op == "BitXor" { return lit(1, w_to_int(w_wrapped(m_bitwise(w_bits(wa, 64), w_bits(wb, 64), 2), 64, true))); }
+    if op == "Shl" || op == "Shr" {
+        if b < 0 || b >= 64 { return lit(0, 0); }
+        let p = w_pow2(b);
+        if op == "Shl" { return lit(1, w_to_int(w_wrapped(w_mul(w_bits(wa, 64), p), 64, true))); }
+        let q = w_quot(wa, p);
+        if a < 0 && m_is_zero(w_rem(wa, p)) == false { return lit(1, w_to_int(w_sub(q, w_parse("1")))); }
+        return lit(1, w_to_int(q));
+    }
+    lit(0, 0)
+}
+
+// A call whose arguments are all literals, of a function of this module stating a precondition
+// (`prove_preconditions`): each clause evaluated with them; a false one is `N0615`.
+fn prove_preconditions(c: Ck, at: Int, target: Int, args: Ints) -> Int {
+    if target < 0 || ints_get(c.fnmod, target) != gs(c, s_module()) || ints_get(c.fnclos, target) >= 0 { return 0; }
+    let f = ints_get(c.fnnode, target);
+    let clauses = ints_new();
+    let cs = kids(c, f, "contracts");
+    let mut i = 0;
+    while i < ints_len(cs) {
+        if sx_text(c.t, fld(c, ints_get(cs, i), "kind")) == "Requires" { ints_push(clauses, fld(c, ints_get(cs, i), "expr")); }
+        i = i + 1;
+    }
+    if ints_len(clauses) == 0 { return 0; }
+    let params = kids(c, f, "params");
+    if ints_len(args) != ints_len(params) { return 0; }
+    let names = strs_new();
+    let kinds = ints_new();
+    let vals = ints_new();
+    i = 0;
+    while i < ints_len(args) {
+        let v = literal(c, ints_get(args, i), strs_new(), ints_new(), ints_new());
+        if ints_get(v, 0) == 0 { return 0; }
+        strs_push(names, fname_of(c, ints_get(params, i), "name"));
+        ints_push(kinds, ints_get(v, 0));
+        ints_push(vals, ints_get(v, 1));
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(clauses) {
+        let cl = ints_get(clauses, i);
+        let v = literal(c, cl, names, kinds, vals);
+        if ints_get(v, 0) != 2 { return 0; }
+        if ints_get(v, 1) == 0 {
+            err(c, "N0615", at, "this call breaks its callee's precondition", "with these literal arguments the call fails every time it runs (`N0410`)");
+            sec(c, espan(c, cl), "false for these arguments");
+            return 0;
+        }
+        i = i + 1;
+    }
+    0
+}
+
 // --- arrays and indexing (Gate 2; `check/operators.rs`) -----------------------------------------
 
 // The element type an expected array type gives, or -1.
@@ -5646,6 +5868,7 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
         }
         i = i + 1;
     }
+    prove_preconditions(c, cs, target, args);
     ret
 }
 
