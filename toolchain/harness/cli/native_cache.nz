@@ -1,0 +1,864 @@
+// Native object reuse: what is reused, what is not, and what may never be. An object is keyed on
+// the bytes handed to the object compiler; a warm store may not change what a program means, and
+// may not survive a change of backend, target or optimisation level. Ported from
+// `crates/nazm-cli/tests/native_cache.rs` (R7);
+// `every_unit_declares_the_runtime_it_calls_as_the_registry_states_it` holds the emitted
+// declarations to the runtime registry (`nazm_lir::runtime::import`), a table the CLI does not
+// print, and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// A project in a fresh directory, with a marker: `files` is name, text, name, text, ….
+fn project(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "nazm.root", "")?;
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn pairs(a: Str, at: Str, b: Str, bt: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, a);
+    strs_push(f, at);
+    if b != "" {
+        strs_push(f, b);
+        strs_push(f, bt);
+    }
+    f
+}
+
+fn add(f: Strs, name: Str, text: Str) -> Strs ! {} {
+    strs_push(f, name);
+    strs_push(f, text);
+    f
+}
+
+/// What one build did with the native cache.
+struct Did {
+    units: Int,
+    compiled: Int,
+    reused: Int,
+    rejected: Int,
+    stored: Int,
+}
+
+fn did_show(d: Did) -> Str ! {} {
+    f"Did {{ units: {d.units}, compiled: {d.compiled}, reused: {d.reused}, rejected: {d.rejected}, stored: {d.stored} }}"
+}
+
+/// What one build produced, and did.
+struct Built {
+    ok: Bool,
+    stdout: Str,
+    stderr: Str,
+    did: Did,
+    reported: Bool,
+}
+
+fn build_env(h: Caps, env: Strs, dir: Str, root: Str, out: Str, extra: Str) -> Result[Built, Str] ! { io, spawn } {
+    let a = words("build");
+    strs_push(a, root);
+    strs_push(a, "-o");
+    strs_push(a, out);
+    strs_push(a, "--build-report");
+    for x in words(extra) {
+        strs_push(a, x);
+    }
+    let r = run(h, nazm_bin(h.io), a, dir, env);
+    let rest = strs_new();
+    let mut did = Did(units: 0 - 1, compiled: 0 - 1, reused: 0 - 1, rejected: 0 - 1, stored: 0 - 1);
+    let mut reported = false;
+    for l in text_lines(r.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            match jparse(l) {
+                Result.Ok(value: v) => {
+                    did = Did(units: jint(v, "native/units"), compiled: jint(v, "native/compiled"), reused: jint(v, "native/reused"), rejected: jint(v, "native/rejected"), stored: jint(v, "native/stored"));
+                    reported = true;
+                },
+                Result.Err(error: e) => {},
+            };
+        } else {
+            strs_push(rest, l);
+        }
+    }
+    Result[Built, Str].Ok(value: Built(ok: r.code == 0, stdout: str_join(rest, "\n"), stderr: r.stderr, did: did, reported: reported))
+}
+
+fn build_in(h: Caps, dir: Str, root: Str, out: Str, extra: Str) -> Result[Built, Str] ! { io, spawn } {
+    build_env(h, suite_env(h), dir, root, out, extra)
+}
+
+/// Build, insisting that it succeeded, and report what it did.
+fn build(h: Caps, dir: Str, root: Str) -> Result[Did, Str] ! { io, spawn } {
+    let b = build_in(h, dir, root, "prog", "")?;
+    check_that(b.ok, f"build failed: {b.stderr}")?;
+    check_that(b.reported, "a report")?;
+    Result[Did, Str].Ok(value: b.did)
+}
+
+/// Run a built program: whether it succeeded, and both streams trimmed, as one string.
+fn run_exe(h: Caps, dir: Str, exe: Str) -> Ran ! { io, spawn } {
+    let r = run(h, f"{dir}/{exe}", strs_new(), dir, suite_env(h));
+    Ran(code: if r.code == 0 { 0 } else { 1 }, stdout: text_trim(r.stdout), stderr: text_trim(r.stderr))
+}
+
+fn same_ran(a: Ran, b: Ran) -> Bool ! {} {
+    a.code == b.code && a.stdout == b.stdout && a.stderr == b.stderr
+}
+
+/// Every emitted unit's IR, `name` then text, sorted by name, from a `--emit-ir` build.
+fn emitted(h: Caps, dir: Str, root: Str, out: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let b = build_in(h, dir, root, out, "--emit-ir")?;
+    check_that(b.ok, f"build failed: {b.stderr}")?;
+    let names = strs_new();
+    for n in match dir_list(h.io, dir) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), } {
+        if text_ends_with(n, ".ll") && text_starts_with(n, f"{out}.") {
+            strs_push(names, n);
+        }
+    }
+    let out_ = strs_new();
+    for n in strs_sort(names) {
+        strs_push(out_, n);
+        strs_push(out_, read_text(h, f"{dir}/{n}")?);
+    }
+    Result[Strs, Str].Ok(value: out_)
+}
+
+/// The one emitted unit that defines something from `module`.
+fn unit_of(units: Strs, module: Str) -> Result[Str, Str] ! {} {
+    let want = f"source_filename = \"{module}\"";
+    let mut i = 1;
+    while i < strs_len(units) {
+        if text_contains(strs_get(units, i), want) {
+            return Result[Str, Str].Ok(value: strs_get(units, i));
+        }
+        i = i + 2;
+    }
+    Result[Str, Str].Err(error: f"no unit for {module}")
+}
+
+const A_SRC: Str = "use \"b.nz\";\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21))); 0 }\n";
+const B_SRC: Str = "pub fn twice(n: Int) -> Int { n * 2 }\nfn helper() -> Int { 1 }\n";
+
+fn a_calls_b() -> Strs ! {} {
+    pairs("a.nz", A_SRC, "b.nz", B_SRC)
+}
+
+@test
+fn an_unchanged_rebuild_compiles_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(cold.compiled == cold.units && cold.reused == 0 && cold.stored == cold.units, did_show(cold))?;
+    let warm = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(warm.compiled == 0, "a warm build still ran the object compiler")?;
+    check_that(warm.reused == warm.units && warm.stored == 0 && warm.rejected == 0, did_show(warm))
+}
+
+@test
+fn a_dependency_body_change_leaves_the_caller_s_object_reusable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n + n }\nfn helper() -> Int { 1 }\n")?;
+    let after = build(h, d, "a.nz")?;
+    check_that(after.compiled == 1, f"only b.nz's unit should have been compiled: {did_show(after)}")?;
+    check_that(after.reused == after.units - 1, did_show(after))?;
+    // `42` from the `print`, then `0`: the entry wrapper prints what `main` returned.
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "420", ran_show(r))
+}
+
+/// A change that moves **only** the ownership traffic still misses.
+@test
+fn a_change_that_moves_only_ownership_still_misses(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n * 2 }\nfn helper() -> Int {\n    let a = ints_new();\n    ints_push(a, 1)\n}\n")?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n * 2 }\nfn helper() -> Int {\n    let a = ints_new();\n    let b = a;\n    ints_push(b, 1)\n}\n")?;
+    let after = build(h, d, "a.nz")?;
+    check_that(after.compiled == 1, "the unit whose ownership traffic changed was reused")?;
+    check_that(after.reused == after.units - 1, did_show(after))?;
+    check_that(after.rejected == 0, "a rejection is not the same as a miss")?;
+    // And the IR really does differ in the way the name claims.
+    let b = unit_of(emitted(h, d, "a.nz", "prog")?, "b.nz")?;
+    scratch_remove(h, d);
+    check_that(text_contains(b, "@nz.arr_retain"), f"the edit did not add ownership traffic:\n{b}")
+}
+
+@test
+fn an_export_the_caller_never_calls_does_not_invalidate_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n * 2 }\npub fn unused(n: Int) -> Int { n }\nfn helper() -> Int { 1 }\n")?;
+    let after = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.compiled == 1, "an unused export invalidated a caller")?;
+    check_that(after.reused == after.units - 1, did_show(after))
+}
+
+@test
+fn a_called_signature_change_reaches_the_caller_s_own_ir(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let before = unit_of(emitted(h, d, "a.nz", "one")?, "a.nz")?;
+    check_that(text_contains(before, "declare i64 @nz.m.b_2Enz.twice(i64)"), before)?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int, m: Int) -> Int { n * m }\nfn helper() -> Int { 1 }\n")?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21, 2))); 0 }\n")?;
+    let after = unit_of(emitted(h, d, "a.nz", "two")?, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(text_contains(after, "declare i64 @nz.m.b_2Enz.twice(i64, i64)"), after)?;
+    check_that(before != after, "a called ABI change left the caller's IR alone")
+}
+
+@test
+fn a_comment_reuses_the_object_when_it_moves_nothing_the_ir_carries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("a.nz", "use \"b.nz\";\nfn main() -> Int { id(0) }\n", "b.nz", "pub fn id(n: Int) -> Int { n }\n"))?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "// a comment, and nothing else\npub fn id(n: Int) -> Int { n }\n")?;
+    let after = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.compiled == 0, "an inert comment recompiled something")?;
+    check_that(after.reused == after.units, did_show(after))
+}
+
+@test
+fn a_comment_recompiles_when_it_moves_a_position_the_ir_carries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\n// a comment above the call\nfn main(out: OutCap) -> Int { print(int_to_str(twice(21))); 0 }\n")?;
+    let after = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.compiled == 1 && after.reused == after.units - 1, did_show(after))
+}
+
+@test
+fn two_optimisation_levels_do_not_share_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let zero = build(h, d, "a.nz")?;
+    check_that(zero.compiled == zero.units, did_show(zero))?;
+    let two = build_in(h, d, "a.nz", "prog2", "--opt-level 2")?;
+    check_that(two.ok, two.stderr)?;
+    check_that(two.did.reused == 0, "an -O2 build reused an -O0 object, so two configurations share a key")?;
+    check_that(two.did.compiled == two.did.units, did_show(two.did))?;
+    // And each level keeps its own entries: both are warm afterwards.
+    check_that(build(h, d, "a.nz")?.compiled == 0, "-O0 is not warm")?;
+    let again = build_in(h, d, "a.nz", "prog2", "--opt-level 2")?;
+    scratch_remove(h, d);
+    check_that(again.reported && again.did.compiled == 0, "-O2 is not warm")
+}
+
+/// The environment of a `nazm` whose `clang` on `PATH` forwards to the real one but calls itself
+/// `version`.
+fn shimmed(h: Caps, dir: Str, version: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let real = text_trim(run(h, "sh", text_split("-c|command -v clang", "|"), "", env_here(h.io)).stdout);
+    let script = f"#!/bin/sh\nREAL='{real}'\nfor a in \"$@\"; do\n  if [ \"$a\" = '-###' ]; then\n    err=$(\"$REAL\" \"$@\" 2>&1); code=$?\n    printf '%s\\n' \"$err\" | sed '1s|.*|{version}|' >&2\n    exit $code\n  fi\ndone\nexec \"$REAL\" \"$@\"\n";
+    scratch_write(h, dir, "shim/clang", script)?;
+    let a = words("755");
+    strs_push(a, f"{dir}/shim/clang");
+    let c = run(h, "chmod", a, "", env_here(h.io));
+    check_that(c.code == 0, ran_show(c))?;
+    let path = match env_get(h.io, "PATH") { Option.Some(value: x) => x, Option.None() => "", };
+    Result[Strs, Str].Ok(value: env_set(suite_env(h), "PATH", f"{dir}/shim:{path}"))
+}
+
+@test
+fn a_backend_that_calls_itself_something_else_reuses_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(cold.stored == cold.units, did_show(cold))?;
+    let shim = scratch_new(h);
+    let env = shimmed(h, shim, "Pretend clang version 0.0.0")?;
+    let b = build_env(h, env, d, "a.nz", "prog", "")?;
+    scratch_remove(h, shim);
+    check_that(b.ok, b.stderr)?;
+    check_that(b.did.reused == 0, "another backend's objects were reused, so the identity is not in the key")?;
+    check_that(b.did.compiled == b.did.units, did_show(b.did))?;
+    // The first backend's entries are untouched, so its next build is still warm.
+    let again = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(again.compiled == 0, did_show(again))
+}
+
+@test
+fn two_checkouts_of_one_project_share_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let shared = scratch_new(h);
+    let a = project(h, a_calls_b())?;
+    let b = project(h, a_calls_b())?;
+    let env = env_set(suite_env(h), "NAZM_CACHE_DIR", shared);
+    let first = build_env(h, env, a, "a.nz", "prog", "")?;
+    check_that(first.ok, first.stderr)?;
+    check_that(first.did.compiled == first.did.units, did_show(first.did))?;
+    let second = build_env(h, env, b, "a.nz", "prog", "")?;
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    scratch_remove(h, shared);
+    check_that(second.ok, second.stderr)?;
+    check_that(second.did.compiled == 0, "a different directory should not be a different program")?;
+    check_that(second.did.reused == second.did.units, did_show(second.did))
+}
+
+fn two_roots() -> Strs ! {} {
+    let f = pairs("app.nz", "use \"lib/common.nz\";\nfn main() -> Int { shared(1) }\n", "tool/run.nz", "use \"../lib/common.nz\";\nfn main() -> Int { shared(2) }\n");
+    add(f, "lib/common.nz", "pub fn shared(n: Int) -> Int { n }\n")
+}
+
+@test
+fn a_module_two_entry_points_import_is_compiled_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, two_roots())?;
+    let first = build(h, d, "app.nz")?;
+    check_that(first.compiled == first.units, did_show(first))?;
+    let second = build_in(h, d, "tool/run.nz", "tool-prog", "")?;
+    check_that(second.ok, second.stderr)?;
+    check_that(second.did.reused >= 1, f"the shared module was compiled again: {did_show(second.did)}")?;
+    // And the decisive evidence, independent of any counter: the unit is the same bytes.
+    let from_app = unit_of(emitted(h, d, "app.nz", "x")?, "lib/common.nz")?;
+    let from_tool = unit_of(emitted(h, d, "tool/run.nz", "y")?, "lib/common.nz")?;
+    scratch_remove(h, d);
+    check_that(from_app == from_tool, "two units for one module")
+}
+
+fn entry_unit(units: Strs) -> Result[Str, Str] ! {} {
+    let mut i = 1;
+    while i < strs_len(units) {
+        if text_contains(strs_get(units, i), "define i32 @main(") {
+            return Result[Str, Str].Ok(value: strs_get(units, i));
+        }
+        i = i + 2;
+    }
+    Result[Str, Str].Err(error: "an entry unit")
+}
+
+@test
+fn a_different_root_gets_a_different_entry_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, two_roots())?;
+    let app = emitted(h, d, "app.nz", "x")?;
+    let tool = emitted(h, d, "tool/run.nz", "y")?;
+    scratch_remove(h, d);
+    check_that(entry_unit(app)? != entry_unit(tool)?, "two roots, one entry")
+}
+
+@test
+fn three_modules_with_one_private_name_keep_three_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = pairs("main.nz", "use \"a.nz\";\nuse \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { ea() + eb() + ec() }\n", "a.nz", "fn helper() -> Int { 1 }\npub fn ea() -> Int { helper() }\n");
+    add(f, "b.nz", "fn helper() -> Int { 2 }\npub fn eb() -> Int { helper() }\n");
+    add(f, "c.nz", "fn helper() -> Int { 3 }\npub fn ec() -> Int { helper() }\n");
+    let d = project(h, f)?;
+    let cold = build(h, d, "main.nz")?;
+    check_that(cold.units == 6, "four modules, a runtime and an entry")?;
+    check_that(cold.stored == 6, "two units shared an object")?;
+    let warm = build(h, d, "main.nz")?;
+    check_that(warm.reused == 6, did_show(warm))?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "6", ran_show(r))
+}
+
+@test
+fn a_diamond_compiles_its_base_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = pairs("a.nz", "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { fb() + fc() }\n", "b.nz", "use \"d.nz\";\npub fn fb() -> Int { fd() }\n");
+    add(f, "c.nz", "use \"d.nz\";\npub fn fc() -> Int { fd() }\n");
+    add(f, "d.nz", "pub fn fd() -> Int { 2 }\n");
+    let d = project(h, f)?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(cold.units == 6, "d.nz was counted once per import edge")?;
+    check_that(cold.compiled == 6, did_show(cold))?;
+    let warm = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(warm.reused == 6, did_show(warm))
+}
+
+@test
+fn a_legal_import_cycle_caches_and_relinks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("a.nz", "use \"b.nz\";\npub fn ping() -> Int { 1 }\nfn main() -> Int { pong() }\n", "b.nz", "use \"a.nz\";\npub fn pong() -> Int { ping() }\n"))?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(cold.compiled == cold.units, did_show(cold))?;
+    let warm = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(warm.reused == cold.units, did_show(warm))
+}
+
+@test
+fn a_module_an_edit_puts_into_a_call_cycle_is_compiled_again_with_its_stack_check(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("a.nz", "use \"b.nz\";\npub fn ping(n: Int) -> Int { n }\nfn main() -> Int { pong(3) }\n", "b.nz", "use \"a.nz\";\npub fn pong(n: Int) -> Int { ping(n) }\n"))?;
+    build(h, d, "a.nz")?;
+    check_that(build(h, d, "a.nz")?.compiled == 0, "not warm")?;
+    // Now `a::ping → b::pong → a::ping`, introduced by editing `a.nz` alone.
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\npub fn ping(n: Int) -> Int { if n == 0 { 0 } else { pong(n - 1) + 1 } }\nfn main() -> Int { pong(3) }\n")?;
+    let b = build_in(h, d, "a.nz", "prog", "")?;
+    check_that(b.ok, b.stderr)?;
+    check_that(b.reported, "a summary")?;
+    check_that(b.did.compiled >= 2, f"b.nz's object would be reused without the stack check its function now needs: {did_show(b.did)}")?;
+    let r = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(text_trim(r.stdout) == "3", ran_show(r))
+}
+
+fn failing() -> Strs ! {} {
+    let f = pairs("app.nz", "use \"lib/util.nz\";\nfn main() -> Int { boom(1) }\n", "tool/run.nz", "use \"../lib/util.nz\";\nfn main() -> Int { boom(2) }\n");
+    add(f, "lib/util.nz", "fn zero() -> Int { 0 }\npub fn boom(n: Int) -> Int { n / zero() }\n")
+}
+
+@test
+fn a_runtime_failure_from_a_reused_object_still_names_its_own_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, failing())?;
+    let a = build_in(h, d, "app.nz", "app", "")?;
+    check_that(a.ok, a.stderr)?;
+    let first = run_exe(h, d, "app");
+    let b = build_in(h, d, "tool/run.nz", "tool-run", "")?;
+    check_that(b.ok, b.stderr)?;
+    check_that(b.did.reused >= 1, "the failing module was not reused, so this proves nothing")?;
+    let second = run_exe(h, d, "tool-run");
+    scratch_remove(h, d);
+    check_that(first.stderr == "nazm: error[N0401]: division by zero at lib/util.nz:2:32", first.stderr)?;
+    check_that(second.stderr == first.stderr, second.stderr)
+}
+
+@test
+fn cold_warm_and_disabled_builds_produce_the_same_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let c = build_in(h, d, "a.nz", "cold", "--no-cache")?;
+    check_that(c.ok, c.stderr)?;
+    let disabled = run_exe(h, d, "cold");
+    build(h, d, "a.nz")?;
+    let first = run_exe(h, d, "prog");
+    let warm = build(h, d, "a.nz")?;
+    check_that(warm.compiled == 0, did_show(warm))?;
+    let second = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(same_ran(disabled, first), f"{ran_show(disabled)} {ran_show(first)}")?;
+    check_that(same_ran(first, second), f"{ran_show(first)} {ran_show(second)}")
+}
+
+@test
+fn deleting_the_whole_store_changes_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    build(h, d, "a.nz")?;
+    let before = run_exe(h, d, "prog");
+    check_that(scratch_remove(h, f"{d}/.nazm") == 0, "delete the store")?;
+    let again = build(h, d, "a.nz")?;
+    check_that(again.compiled == again.units, "something survived the deletion")?;
+    let after = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(same_ran(after, before), ran_show(after))
+}
+
+@test
+fn a_damaged_object_is_recompiled_rather_than_linked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    let cold = build(h, d, "a.nz")?;
+    let before = run_exe(h, d, "prog");
+    let mut damaged = 0;
+    for path in match file_walk(h.io, f"{d}/.nazm/native") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), } {
+        let is_file = match file_symlink_metadata(h.io, path) {
+            Result.Ok(value: m) => match m.kind { EntryKind.Regular() => true, EntryKind.Directory() => false, EntryKind.Symlink() => false, EntryKind.Other() => false, },
+            Result.Err(error: e) => false,
+        };
+        if is_file {
+            let raw = read_raw(h, path)?;
+            let last = str_len(raw) - 1;
+            // `raw[last] ^= 0xff`: for a byte, 255 less it.
+            write_at(h, path, f"{str_slice(raw, 0, last)}{str_from_byte(255 - str_byte(raw, last))}")?;
+            damaged = damaged + 1;
+        }
+    }
+    check_that(damaged == cold.units, f"nothing was damaged: {damaged} of {cold.units}")?;
+    let after = build(h, d, "a.nz")?;
+    check_that(after.rejected == after.units, f"a damaged object was believed: {did_show(after)}")?;
+    check_that(after.compiled == after.units, did_show(after))?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(same_ran(r, before), ran_show(r))
+}
+
+@test
+fn two_programs_needing_the_same_support_share_one_runtime_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("one.nz", "fn main() -> Int { 1 }\n", "two.nz", "fn main() -> Int { 2 }\n"))?;
+    let first = build(h, d, "one.nz")?;
+    check_that(first.compiled == first.units, did_show(first))?;
+    let second = build_in(h, d, "two.nz", "prog2", "")?;
+    scratch_remove(h, d);
+    check_that(second.ok, second.stderr)?;
+    check_that(second.did.reused == 1, f"exactly the runtime should be shared: {did_show(second.did)}")
+}
+
+fn semantic_reused(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let out = nazm(h, d, words("check a.nz --cache-report"));
+    check_that(out.code == 0, out.stderr)?;
+    for l in text_lines(out.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            return Result[Int, Str].Ok(value: jint(jparse(l)?, "reused"));
+        }
+    }
+    Result[Int, Str].Err(error: "a report")
+}
+
+@test
+fn a_semantic_hit_does_not_imply_a_native_hit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_calls_b())?;
+    check_that(semantic_reused(h, d)? == 0, "cold")?;
+    // Two project modules and the core prelude.
+    check_that(semantic_reused(h, d)? == 3, "the semantic store is warm")?;
+    // Warm semantically, and entirely cold natively.
+    let b = build_in(h, d, "a.nz", "prog2", "--opt-level 2")?;
+    check_that(b.ok, b.stderr)?;
+    check_that(b.did.reused == 0 && b.did.compiled == b.did.units, did_show(b.did))?;
+    // And the reverse: the semantic store is still warm after a build that reused every object.
+    check_that(build(h, d, "a.nz")?.compiled == b.did.units, "-O0 cold")?;
+    check_that(build(h, d, "a.nz")?.compiled == 0, "-O0 warm")?;
+    let s = semantic_reused(h, d)?;
+    scratch_remove(h, d);
+    check_that(s == 3, int_to_str(s))
+}
+
+fn a_uses_b_record() -> Strs ! {} {
+    pairs("a.nz", "use \"b.nz\";\nfn main(out: OutCap) -> Int { let p = at(21); print(int_to_str(p.x + p.x)); 0 }\n", "b.nz", "pub struct Point {\n    x: Int,\n}\nstruct Hidden {\n    n: Int,\n}\nfn secret() -> Int { Hidden(n: 0).n }\npub fn at(n: Int) -> Point { Point(x: n + secret()) }\n")
+}
+
+@test
+fn a_record_program_is_compiled_cold_and_reused_warm(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_uses_b_record())?;
+    let first = build(h, d, "a.nz")?;
+    check_that(first.reused == 0, did_show(first))?;
+    check_that(run_exe(h, d, "prog").stdout == "420", "420")?;
+    let second = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(second.compiled == 0, "nothing changed, so nothing to compile")?;
+    check_that(second.reused == second.units, did_show(second))
+}
+
+@test
+fn a_private_record_added_to_a_dependency_leaves_the_caller_s_object_reusable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_uses_b_record())?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub struct Point {\n    x: Int,\n}\nstruct Hidden {\n    n: Int,\n    extra: Str,\n}\nstruct Another {\n    m: Int,\n}\nfn secret() -> Int { str_len(Hidden(n: 0, extra: \"\").extra) + Another(m: 0).m }\npub fn at(n: Int) -> Point { Point(x: n + secret()) }\n")?;
+    let after = build(h, d, "a.nz")?;
+    check_that(after.compiled == 1, "only b.nz's unit should have been compiled")?;
+    check_that(after.reused == after.units - 1, did_show(after))?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "420", ran_show(r))
+}
+
+fn unused_record(field: Str) -> Str ! {} {
+    let y = if field == "" { "" } else { ", y: 2" };
+    f"pub struct Unused {{\n    x: Int,{field}\n}}\npub fn plain() -> Int {{ Unused(x: 1{y}).x }}\n"
+}
+
+@test
+fn a_record_a_unit_never_mentions_is_not_in_its_text(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n", "b.nz", unused_record("")))?;
+    let before = emitted(h, d, "a.nz", "prog")?;
+    scratch_write(h, d, "b.nz", unused_record("\n    y: Int,"))?;
+    let after = emitted(h, d, "a.nz", "prog")?;
+    scratch_remove(h, d);
+    check_that(unit_of(before, "a.nz")? == unit_of(after, "a.nz")?, "a.nz never uses `Unused`, and its text moved when `Unused` did")?;
+    check_that(unit_of(before, "b.nz")? != unit_of(after, "b.nz")?, "b.nz's text did not move")
+}
+
+/// The helpers a unit defines: `define internal void @nz.h.…(`, by name.
+fn helper_names(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in text_lines(text) {
+        if text_starts_with(l, "define internal void @nz.h.") {
+            let after = strs_get(split(l, "@"), 1);
+            strs_push(out, strs_get(split(after, "("), 0));
+        }
+    }
+    out
+}
+
+fn helpers_apart(a: Str, b: Str) -> Result[Int, Str] ! {} {
+    let an = helper_names(a);
+    let bn = helper_names(b);
+    check_that(strs_len(an) > 0 && strs_len(bn) > 0, f"{str_join(an, ",")} {str_join(bn, ",")}")?;
+    for x in an {
+        check_that(!strs_has(bn, x), f"two modules' `Thing` share a helper: {x}")?;
+        check_that(text_contains(x, "a_2Enz"), str_join(an, ","))?;
+    }
+    for y in bn {
+        check_that(text_contains(y, "b_2Enz"), str_join(bn, ","))?;
+    }
+    ok()
+}
+
+@test
+fn a_record_type_is_named_from_its_durable_identity_and_not_its_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = pairs("main.nz", "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { from_a() + from_b() }\n", "a.nz", "struct Thing {\n    n: Str,\n}\npub fn from_a() -> Int { let t = Thing(n: int_to_str(1)); let u = t; str_len(u.n) }\n");
+    add(f, "b.nz", "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { let t = Thing(m: int_to_str(22)); let u = t; str_len(u.m) }\n");
+    let d = project(h, f)?;
+    let units = emitted(h, d, "main.nz", "prog")?;
+    scratch_remove(h, d);
+    helpers_apart(unit_of(units, "a.nz")?, unit_of(units, "b.nz")?)
+}
+
+@test
+fn reordering_a_records_fields_changes_no_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("m.nz", "struct Point {\n    x: Int,\n    label: Str,\n}\nfn main() -> Int { let p = Point(x: 1, label: \"ab\"); p.x + str_len(p.label) }\n", "", ""))?;
+    let before = emitted(h, d, "m.nz", "prog")?;
+    scratch_write(h, d, "m.nz", "struct Point {\n    label: Str,\n    x: Int,\n}\nfn main() -> Int { let p = Point(x: 1, label: \"ab\"); p.x + str_len(p.label) }\n")?;
+    let after = emitted(h, d, "m.nz", "prog")?;
+    scratch_remove(h, d);
+    check_that(unit_of(before, "m.nz")? == unit_of(after, "m.nz")?, "reordering two field declarations changed the emitted IR")
+}
+
+fn a_uses_b_enum() -> Strs ! {} {
+    pairs("a.nz", "use \"b.nz\";\nfn main(out: OutCap) -> Int { let s = start(21); print(int_to_str(match s { State.Ready() => 0, State.Done(code: c) => c * 20, })); 0 }\n", "b.nz", "pub enum State {\n    Ready,\n    Done(code: Int),\n}\nenum Hidden {\n    A,\n}\nfn secret() -> Int { match Hidden.A() { Hidden.A() => 0, } }\npub fn start(n: Int) -> State { State.Done(code: n + secret()) }\n")
+}
+
+@test
+fn an_enum_program_is_compiled_cold_and_reused_warm(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_uses_b_enum())?;
+    let first = build(h, d, "a.nz")?;
+    check_that(first.reused == 0, did_show(first))?;
+    check_that(run_exe(h, d, "prog").stdout == "4200", "4200")?;
+    let second = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(second.compiled == 0, "nothing changed, so nothing to compile")?;
+    check_that(second.reused == second.units, did_show(second))
+}
+
+@test
+fn a_private_enum_added_to_a_dependency_leaves_the_caller_s_object_reusable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, a_uses_b_enum())?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub enum State {\n    Ready,\n    Done(code: Int),\n}\nenum Hidden {\n    A(n: Str),\n    B,\n}\nenum Another {\n    Only,\n}\nfn secret() -> Int { match Hidden.B() { Hidden.A(n: s) => str_len(s), Hidden.B() => 0, } + match Another.Only() { Another.Only() => 0, } }\npub fn start(n: Int) -> State { State.Done(code: n + secret()) }\n")?;
+    let after = build(h, d, "a.nz")?;
+    check_that(after.compiled == 1, "only b.nz's unit should have been compiled")?;
+    check_that(after.reused == after.units - 1, did_show(after))?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "4200", ran_show(r))
+}
+
+fn unused_enum(extra: Str) -> Str ! {} {
+    let arm = if extra == "" { "" } else { " Unused.B(s: s) => str_len(s)," };
+    f"pub enum Unused {{\n    A(x: Int),{extra}\n}}\npub fn plain() -> Int {{ match Unused.A(x: 1) {{ Unused.A(x: n) => n,{arm} }} }}\n"
+}
+
+@test
+fn an_enum_a_unit_never_mentions_is_not_in_its_text(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("a.nz", "use \"b.nz\";\nfn main() -> Int { plain() }\n", "b.nz", unused_enum("")))?;
+    let before = emitted(h, d, "a.nz", "prog")?;
+    scratch_write(h, d, "b.nz", unused_enum("\n    B(s: Str),"))?;
+    let after = emitted(h, d, "a.nz", "prog")?;
+    scratch_remove(h, d);
+    check_that(unit_of(before, "a.nz")? == unit_of(after, "a.nz")?, "a.nz's text moved")?;
+    check_that(unit_of(before, "b.nz")? != unit_of(after, "b.nz")?, "b.nz's text did not move")
+}
+
+@test
+fn reordering_an_enums_variants_changes_no_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let body = "fn main() -> Int { match E.Done(code: 1, why: \"ab\") { E.Ready() => 0, E.Done(code: c, why: w) => c + str_len(w), } }\n";
+    let whats = words("variants payload-fields");
+    let befores = strs_new();
+    strs_push(befores, "enum E {\n    Ready,\n    Done(code: Int, why: Str),\n}\n");
+    strs_push(befores, "enum E {\n    Ready,\n    Done(code: Int, why: Str),\n}\n");
+    let afters = strs_new();
+    strs_push(afters, "enum E {\n    Done(code: Int, why: Str),\n    Ready,\n}\n");
+    strs_push(afters, "enum E {\n    Ready,\n    Done(why: Str, code: Int),\n}\n");
+    let mut k = 0;
+    while k < 2 {
+        let d = project(h, pairs("m.nz", f"{strs_get(befores, k)}{body}", "", ""))?;
+        let first = emitted(h, d, "m.nz", "prog")?;
+        scratch_write(h, d, "m.nz", f"{strs_get(afters, k)}{body}")?;
+        let second = emitted(h, d, "m.nz", "prog")?;
+        scratch_remove(h, d);
+        check_that(unit_of(first, "m.nz")? == unit_of(second, "m.nz")?, f"reordering {strs_get(whats, k)} changed the emitted text")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn an_enum_type_is_named_from_its_durable_identity_and_not_its_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = pairs("main.nz", "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { from_a() + from_b() }\n", "a.nz", "enum Thing {\n    N(n: Str),\n}\npub fn from_a() -> Int { let t = Thing.N(n: int_to_str(1)); let u = t; match u { Thing.N(n: n) => str_len(n), } }\n");
+    add(f, "b.nz", "enum Thing {\n    M(m: Str),\n}\npub fn from_b() -> Int { let t = Thing.M(m: int_to_str(22)); let u = t; match u { Thing.M(m: m) => str_len(m), } }\n");
+    let d = project(h, f)?;
+    let units = emitted(h, d, "main.nz", "prog")?;
+    scratch_remove(h, d);
+    helpers_apart(unit_of(units, "a.nz")?, unit_of(units, "b.nz")?)
+}
+
+/// What one build did with its generic instances: `units compiled reused`.
+fn instances(h: Caps, dir: Str, root: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = nazm(h, dir, words(f"build {root} -o prog --build-report"));
+    check_that(out.code == 0, out.stderr)?;
+    for l in text_lines(out.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            let v = jparse(l)?;
+            return Result[Str, Str].Ok(value: f"{jint(v, "native/instances/units")} {jint(v, "native/instances/compiled")} {jint(v, "native/instances/reused")}");
+        }
+    }
+    Result[Str, Str].Err(error: "a report")
+}
+
+const GENERIC_B: Str = "pub fn identity[T](x: T) -> T { x }\npub fn count[T](xs: Vec[T]) -> Int { vec_len(xs) }\n";
+
+fn generic_three() -> Strs ! {} {
+    let f = pairs("b.nz", GENERIC_B, "c.nz", "use \"b.nz\";\npub fn from_c() -> Int { identity(2) }\n");
+    add(f, "a.nz", "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() }\n")
+}
+
+@test
+fn one_instance_requested_by_two_modules_is_one_unit_and_one_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, generic_three())?;
+    // `identity[Int]` from `a` and from `c`: one instance.
+    let i1 = instances(h, d, "a.nz")?;
+    check_that(i1 == "1 1 0", i1)?;
+    check_that(run_exe(h, d, "prog").stdout == "42", "42")?;
+    // Warm, it is reused like any unit, and nothing is compiled at all.
+    let warm = build(h, d, "a.nz")?;
+    check_that(warm.compiled == 0, did_show(warm))?;
+    let i2 = instances(h, d, "a.nz")?;
+    check_that(i2 == "1 0 1", i2)?;
+    // And it is defined once: exactly one unit carries its body.
+    let units = emitted(h, d, "a.nz", "prog")?;
+    scratch_remove(h, d);
+    let mut defining = 0;
+    let mut i = 1;
+    while i < strs_len(units) {
+        if text_contains(strs_get(units, i), "define hidden i64 @nz.m.b_2Enz.identity.g.Int(") {
+            defining = defining + 1;
+        }
+        i = i + 2;
+    }
+    check_that(defining == 1, int_to_str(defining))
+}
+
+@test
+fn two_instances_of_one_definition_are_two_symbols_even_where_their_code_coincides(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("b.nz", GENERIC_B, "a.nz", "use \"b.nz\";\nfn main() -> Int { if identity(true) { identity(3) } else { 0 } }\n"))?;
+    let i = instances(h, d, "a.nz")?;
+    check_that(text_starts_with(i, "2 "), i)?;
+    let units = emitted(h, d, "a.nz", "prog")?;
+    scratch_remove(h, d);
+    let all = str_join(every_second(units, 1), "");
+    check_that(text_contains(all, "@nz.m.b_2Enz.identity.g.Int("), "Int")?;
+    check_that(text_contains(all, "@nz.m.b_2Enz.identity.g.Bool("), "Bool")
+}
+
+@test
+fn a_callers_unit_never_carries_a_generic_body(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("b.nz", GENERIC_B, "a.nz", "use \"b.nz\";\nfn main() -> Int { identity(1) }\n"))?;
+    let units = emitted(h, d, "a.nz", "prog")?;
+    scratch_remove(h, d);
+    let caller = unit_of(units, "a.nz")?;
+    check_that(text_contains(caller, "declare i64 @nz.m.b_2Enz.identity.g.Int(i64)"), caller)?;
+    check_that(!text_contains(caller, "define hidden i64 @nz.m.b_2Enz.identity"), caller)?;
+    // Nor does the defining module's own unit (the `m` artefact).
+    let modules = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(units) {
+        if text_starts_with(strs_get(units, i), "prog.m") {
+            strs_push(modules, strs_get(units, i));
+            strs_push(modules, strs_get(units, i + 1));
+        }
+        i = i + 2;
+    }
+    let definer = unit_of(modules, "b.nz")?;
+    check_that(!text_contains(definer, "identity"), definer)
+}
+
+@test
+fn one_new_instantiation_compiles_the_caller_and_the_new_instance_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, generic_three())?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(cold.reused == 0, did_show(cold))?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() + str_len(identity(\"\")) }\n")?;
+    let after = build(h, d, "a.nz")?;
+    let i = instances(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(text_starts_with(i, "2 "), i)?;
+    // Compiled: `a`, `identity[Str]`, and the runtime.
+    check_that(after.compiled == 3, did_show(after))?;
+    check_that(after.units == cold.units + 1, did_show(after))
+}
+
+@test
+fn a_generic_body_edit_recompiles_its_instances_and_no_caller(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = pairs("b.nz", "pub fn identity[T](x: T) -> T { x }\npub fn other() -> Int { 1 }\n", "c.nz", "use \"b.nz\";\npub fn from_c() -> Int { str_len(identity(\"cc\")) }\n");
+    add(f, "a.nz", "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { identity(40) + from_c() + other() }\n");
+    let d = project(h, f)?;
+    let cold = build(h, d, "a.nz")?;
+    check_that(run_exe(h, d, "prog").stdout == "43", "43")?;
+    scratch_write(h, d, "b.nz", "pub fn identity[T](x: T) -> T { let y = x; y }\npub fn other() -> Int { 1 }\n")?;
+    let after = build(h, d, "a.nz")?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "43", ran_show(r))?;
+    // Two instances recompile — `identity[Int]` and `identity[Str]` — and nothing else.
+    check_that(after.compiled == 2, did_show(after))?;
+    check_that(after.reused == cold.units - 2, did_show(after))
+}
+
+@test
+fn renaming_a_type_parameter_changes_no_object(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("b.nz", "pub fn pick[A, B](x: A, y: B) -> A { x }\n", "a.nz", "use \"b.nz\";\nfn main() -> Int { pick(1, \"s\") }\n"))?;
+    build(h, d, "a.nz")?;
+    scratch_write(h, d, "b.nz", "pub fn pick[Left, Right](x: Left, y: Right) -> Left { x }\n")?;
+    let after = build(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.compiled == 0, f"a rename is not a change: {did_show(after)}")
+}
+
+@test
+fn a_private_function_a_generic_body_calls_is_bindable_from_the_instance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h, pairs("b.nz", "fn secret(n: Int) -> Int { n * 2 }\npub fn twice[T](x: T, n: Int) -> Int { secret(n) }\n", "a.nz", "use \"b.nz\";\nfn main() -> Int { twice(\"x\", 21) }\n"))?;
+    build(h, d, "a.nz")?;
+    let r = run_exe(h, d, "prog");
+    scratch_remove(h, d);
+    check_that(r.stdout == "42", ran_show(r))
+}

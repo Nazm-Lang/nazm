@@ -70,3 +70,4 @@ runtime::root_capabilities_come_from_the_entry_alone  table not printed
 runtime::every_targets_os_unit_is_llvm_its_toolchain_compiles  LLVM text not written
 incremental::an_entry_from_the_checker_before_derived_equality_is_never_read  library entry
 incremental::an_entry_from_the_checker_before_requirements_is_never_read  library entry
+native_cache::every_unit_declares_the_runtime_it_calls_as_the_registry_states_it  table not printed
