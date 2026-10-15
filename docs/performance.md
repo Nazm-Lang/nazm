@@ -5,7 +5,7 @@ since R1 (5b.10, below), against fifteen languages on three programs — `hello`
 and word frequency — re-run for 0.10.0. The standing target, set by the copyright holder on
 2026-10-15, is to lead every compared language on every measured parameter
 (`openspec/changes/performance-leadership`); it is a research target, and **no section here claims
-it**: on 2026-10-15 Nazm's word frequency took 143 ms against C's 74 and Rust's 65, and `fib` 55 ms
+it**: on 2026-10-15 Nazm's word frequency took 132 ms against C's 74, Rust's 66 and Zig's 48, and `fib` 55 ms
 against C's 35. The paragraph below is the history of how the first comparison arrived.
 
 *Before R1 (kept as written):* the first measurements covered this implementation against
@@ -3632,3 +3632,99 @@ unit with LTO (`clang -flto`) was tried and gave 3.4% more, so the remaining cos
 operations — the byte scan, the map's probe and update, the string comparison — not in the calls
 between modules. C (73.9 ms) and Rust (65.0 ms) from the 0.10.0 run are 1.9× and 2.2× ahead.
 
+## R1.5: the comparison re-run, measured (2026-10-15)
+
+`python3 bench/compare/compare.py` with the release binary of `71858468` (R1.5 D1–D12, D14 and 3.3),
+on a quiet host — no other build, test or agent running — with `DOTNET_ROOT` set so C# is measured.
+`bench/compare/nazm/words.nz` is now ten lines: no `use` (D9) and `counts.top(10)` (D10) in place of
+sorting every key, which is also faster (140 → 132 ms). Where Nazm stands: first or tied on
+`hello`'s run time, lines and (with C) size; `fib` behind C, C++, Rust, Zig, Go, Swift and Ada
+(Ada's GCC build takes 13 ms, an outlier worth studying); word frequency behind Zig, Rust, C and
+Go, ahead of C++, C#, Java, Swift, Python, Ruby, JavaScript, TypeScript, Pascal and Ada, and the
+shortest compiled program. The target (`openspec/changes/performance-leadership`) is not met.
+
+Host: Apple M1 Pro, 10 CPUs, 32 GiB, macOS 27.2 (Darwin 27.2.0, arm64); 2026-10-15. Not controlled.
+
+#### hello
+
+| language | variant | LOC | run median (ms) | run min–max (ms) | peak RSS (KiB) | binary (KiB) | build median (ms) | status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Nazm | nazm build --opt-level 2 | 1 | 2.0 | 1.9–2.2 | 1744 | 34 | 177 | measured; output checked |
+| Nazm | nazm build --opt-level 2 (user cache warm) | 1 | 1.9 | 1.8–1.9 | 1744 | 34 | 158 | measured; output checked |
+| Nazm | nazm run (interpreter) | 1 | 7.1 | 6.9–7.5 | 8768 | — | — | measured; output checked |
+| C | clang -O2 | 5 | 1.9 | 1.8–1.9 | 1760 | 33 | 67 | measured; output checked |
+| C++ | clang++ -O2 | 4 | 2.2 | 2.0–2.3 | 1744 | 35 | 526 | measured; output checked |
+| Go | go build | 5 | 2.9 | 2.9–3.1 | 4336 | 2373 | 62 | measured; output checked |
+| Rust | rustc -C opt-level=3 | 3 | 2.2 | 2.1–2.3 | 1936 | 432 | 111 | measured; output checked |
+| Zig | zig build-exe -O ReleaseFast | 4 | 2.4 | 2.4–2.6 | 1904 | 388 | 7318 | measured; output checked |
+| Java | javac + java | 5 | 30.3 | 29.9–34.4 | 39072 | — | 285 | measured; output checked |
+| C# | dotnet build -c Release | 1 | 32.6 | 32.3–32.7 | 41808 | 122 | 735 | measured; output checked |
+| Python | python3 | 1 | 25.1 | 24.6–25.7 | 14304 | — | — | measured; output checked |
+| Ruby | ruby | 1 | 42.2 | 41.9–42.3 | 17936 | — | — | measured; output checked |
+| JavaScript | node | 1 | 30.4 | 30.3–31.6 | 44960 | — | — | measured; output checked |
+| TypeScript | bun | 1 | 11.1 | 10.9–11.5 | 20912 | — | — | measured; output checked |
+| Swift | swiftc -O | 1 | 1.9 | 1.9–2.0 | 1968 | 49 | 240 | measured; output checked |
+| Pascal | fpc -O3 | 4 | 2.1 | 2.1–2.1 | 2032 | 424 | 102 | measured; output checked |
+| Ada | gnatmake -O2 | 5 | 2.9 | 2.7–3.2 | 1936 | 424 | 979 | measured; output checked |
+
+#### fib
+
+| language | variant | LOC | run median (ms) | run min–max (ms) | peak RSS (KiB) | binary (KiB) | build median (ms) | status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Nazm | nazm build --opt-level 2 | 6 | 55.4 | 55.2–55.9 | 1760 | 34 | 208 | measured; output checked |
+| Nazm | nazm build --opt-level 2 (user cache warm) | 6 | 55.5 | 55.3–56.1 | 1776 | 34 | 161 | measured; output checked |
+| Nazm | nazm run (interpreter) | 6 | 5247.1 | 5246.8–5266.8 | 8992 | — | — | measured; output checked |
+| C | clang -O2 | 6 | 35.2 | 35.1–35.3 | 1744 | 33 | 68 | measured; output checked |
+| C++ | clang++ -O2 | 5 | 35.4 | 35.2–35.8 | 1744 | 35 | 524 | measured; output checked |
+| Go | go build | 11 | 39.7 | 39.5–40.2 | 4368 | 2373 | 62 | measured; output checked |
+| Rust | rustc -C opt-level=3 | 6 | 35.6 | 35.5–35.7 | 1936 | 433 | 115 | measured; output checked |
+| Zig | zig build-exe -O ReleaseFast | 10 | 36.2 | 35.9–37.0 | 1952 | 388 | 7310 | measured; output checked |
+| Java | javac + java | 8 | 60.7 | 60.0–64.4 | 39136 | — | 294 | measured; output checked |
+| C# | dotnet build -c Release | 2 | 80.0 | 79.8–81.2 | 41904 | 122 | 743 | measured; output checked |
+| Python | python3 | 3 | 1219.1 | 1214.7–1231.1 | 14336 | — | — | measured; output checked |
+| Ruby | ruby | 4 | 979.7 | 976.8–994.2 | 17904 | — | — | measured; output checked |
+| JavaScript | node | 4 | 136.0 | 135.7–137.5 | 48800 | — | — | measured; output checked |
+| TypeScript | bun | 4 | 67.0 | 66.6–67.2 | 26880 | — | — | measured; output checked |
+| Swift | swiftc -O | 4 | 44.7 | 44.6–45.4 | 2080 | 49 | 254 | measured; output checked |
+| Pascal | fpc -O3 | 8 | 74.6 | 74.3–74.8 | 2048 | 424 | 103 | measured; output checked |
+| Ada | gnatmake -O2 | 9 | 13.2 | 13.2–13.3 | 1968 | 473 | 1022 | measured; output checked |
+
+#### words
+
+| language | variant | LOC | run median (ms) | run min–max (ms) | peak RSS (KiB) | binary (KiB) | build median (ms) | status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| Nazm | nazm build --opt-level 2 | 10 | 132.5 | 132.2–134.7 | 19520 | 60 | 883 | measured; output checked |
+| Nazm | nazm build --opt-level 2 (user cache warm) | 10 | 132.4 | 132.1–134.0 | 19520 | 60 | 644 | measured; output checked |
+| Nazm | nazm run (interpreter) | 10 | 25110.1 | 24918.8–25373.7 | 36448 | — | — | measured; output checked |
+| C | clang -O2 | 41 | 74.0 | 73.8–75.4 | 15664 | 33 | 78 | measured; output checked |
+| C++ | clang++ -O2 | 18 | 159.5 | 158.4–160.9 | 2352 | 57 | 796 | measured; output checked |
+| Go | go build | 26 | 89.0 | 88.4–90.9 | 62288 | 2408 | 64 | measured; output checked |
+| Rust | rustc -C opt-level=3 | 15 | 66.2 | 65.7–66.8 | 15232 | 455 | 236 | measured; output checked |
+| Zig | zig build-exe -O ReleaseFast | 24 | 47.8 | 47.6–48.3 | 15280 | 404 | 8173 | measured; output checked |
+| Java | javac + java | 18 | 388.4 | 387.2–397.1 | 222048 | — | 353 | measured; output checked |
+| C# | dotnet build -c Release | 10 | 273.8 | 272.2–277.3 | 197408 | 122 | 741 | measured; output checked |
+| Python | python3 | 6 | 252.2 | 251.3–255.7 | 156992 | — | — | measured; output checked |
+| Ruby | ruby | 3 | 351.3 | 350.4–354.8 | 139760 | — | — | measured; output checked |
+| JavaScript | node | 8 | 380.7 | 373.9–383.8 | 304656 | — | — | measured; output checked |
+| TypeScript | bun | 8 | 293.3 | 290.4–298.3 | 243792 | — | — | measured; output checked |
+| Swift | swiftc -O | 11 | 486.7 | 483.1–490.3 | 183056 | 58 | 805 | measured; output checked |
+| Pascal | fpc -O3 | 31 | 592.2 | 588.9–601.6 | 38624 | 2558 | 940 | measured; output checked |
+| Ada | gnatmake -O2 | 56 | 248.3 | 245.6–250.2 | 3056 | 696 | 3021 | measured; output checked |
+
+Toolchains:
+
+- nazm: nazm 0.10.0
+- clang: Apple clang version 21.0.0 (clang-2100.3.34.2)
+- go: go version go1.27.1 darwin/arm64
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- zig: 0.17.0
+- java: openjdk version "27" 2026-09-15
+- dotnet: 10.0.402
+- python3: Python 3.14.8
+- ruby: ruby 4.0.7 (2026-09-15 revision 229531a6cf) +PRISM [arm64-darwin27]
+- node: v24.13.0
+- bun: 1.3.10
+- swiftc: Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)
+- fpc: 3.2.2
+- gnat: GNATMAKE 16.1.0
+- hyperfine: hyperfine 2.0.0
