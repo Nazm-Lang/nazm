@@ -601,7 +601,7 @@ fn document(io: IoCap, path: Str, shown: Str, prefix: Str, base: Str, library: S
     if !fx_carried(f) { refuse(io, fx_why(f)) }
     if fx_refusal(f) != "" { fail(io, fx_refusal(f), 1) }
     let dg = fx_diags(f)
-    fe_unprefix_diags(dg, prefix)
+    fe_unprefix_diags(io, dg, prefix, path)
     let names = fe_names(f, prefix)
     if fe_load_failed(f) {
         let why = strs_new()

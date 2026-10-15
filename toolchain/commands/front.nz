@@ -9,6 +9,7 @@
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
 use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 
 fn nl() -> Str { str_from_byte(10) }
@@ -48,8 +49,10 @@ pub fn fe_prefix(io: IoCap, path: Str) -> Str {
     cwd + "/"
 }
 
-// `s` with every `prefix` that follows a backquote, or begins it, taken off.
-pub fn fe_unprefix(s: Str, prefix: Str) -> Str {
+// `s` with every `prefix` that follows a backquote, or begins it, taken off — but not off a path
+// under one of `kept` (normalised absolute directories: dependency packages' source roots, which the
+// reference names canonically).
+pub fn fe_unprefix_except(s: Str, prefix: Str, kept: Strs) -> Str {
     if prefix == "" { return s }
     let out = strs_new()
     let n = str_len(s)
@@ -58,7 +61,7 @@ pub fn fe_unprefix(s: Str, prefix: Str) -> Str {
     let mut i = 0
     while i < n {
         let begins = i == 0 || str_byte(s, i - 1) == 96
-        if begins && i + p <= n && str_slice(s, i, i + p) == prefix {
+        if begins && i + p <= n && str_slice(s, i, i + p) == prefix && !under_kept(s, i, kept) {
             strs_push(out, str_slice(s, from, i))
             i += p
             from = i
@@ -68,6 +71,33 @@ pub fn fe_unprefix(s: Str, prefix: Str) -> Str {
     }
     strs_push(out, str_slice(s, from, n))
     str_join(out, "")
+}
+
+pub fn fe_unprefix(s: Str, prefix: Str) -> Str { fe_unprefix_except(s, prefix, strs_new()) }
+
+// Whether the path at `i` of `s`, up to a backquote or the end, is under one of `kept`.
+fn under_kept(s: Str, i: Int, kept: Strs) -> Bool {
+    if strs_len(kept) == 0 { return false }
+    let mut e = i
+    while e < str_len(s) && str_byte(s, e) != 96 { e += 1 }
+    let path = pk_normalise(str_slice(s, i, e))
+    for k in 0..strs_len(kept) {
+        if pk_under(path, strs_get(kept, k)) { return true }
+    }
+    false
+}
+
+// The source roots of the dependency packages of the compilation rooted at `abs`.
+pub fn fe_dependency_roots(io: IoCap, abs: Str) -> Strs {
+    let out = strs_new()
+    let root = pk_decide(abs, io)
+    if pk_root_how(root) != 1 { return out }
+    let p = pk_context(pk_root_path(root), io)
+    if pk_packages_state(p) != 1 { return out }
+    for i in 0..pk_count(p) {
+        if i != pk_root_package(p) { strs_push(out, pk_normalise(pk_source_root(p, i))) }
+    }
+    out
 }
 
 // Each module's name as the reference names it. A dependency package's module is named under that
@@ -108,12 +138,15 @@ pub fn fe_bases(f: Facts) -> Ints {
     out
 }
 
-// The diagnostics' words with the prefix taken off the paths they name.
-pub fn fe_unprefix_diags(d: Diags, prefix: Str) -> Int {
+// The diagnostics' words with the prefix taken off the paths they name, but those in a dependency
+// package of the compilation rooted at `abs`.
+pub fn fe_unprefix_diags(io: IoCap, d: Diags, prefix: Str, abs: Str) -> Int {
+    if prefix == "" { return 0 }
+    let kept = fe_dependency_roots(io, abs)
     for i in 0..dg_len(d) {
-        strs_set(d.message, i, fe_unprefix(strs_get(d.message, i), prefix))
-        strs_set(d.help, i, fe_unprefix(strs_get(d.help, i), prefix))
-        strs_set(d.label, i, fe_unprefix(strs_get(d.label, i), prefix))
+        strs_set(d.message, i, fe_unprefix_except(strs_get(d.message, i), prefix, kept))
+        strs_set(d.help, i, fe_unprefix_except(strs_get(d.help, i), prefix, kept))
+        strs_set(d.label, i, fe_unprefix_except(strs_get(d.label, i), prefix, kept))
     }
     0
 }

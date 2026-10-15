@@ -45,7 +45,11 @@
 - [ ] 6.1 The corpus runner, interpreted and compiled (after R3, R4 and R9 are integrated)
 
 ## 7. `fix`
-- [ ] 7.1 `check`'s fixes applied, `--apply` and the plan
+- [x] 7.1 `nazm fix`: `check`'s fixes reported and, with `--apply`, applied (design D14):
+      `toolchain/commands/fix.nz`. 2026-10-15, 3,098 inputs: 3,091 agree, 0 differ, 7 refused (6
+      the checker's stops, 1 not UTF-8), 17 of them applied on a copy; `tests/args/fix.txt` 22 of 23
+      agree, 1 refused (a directory as the root, which `compiler/load.nz` traps on)
+- [ ] 7.2 The plan form, `nazm patch fix` (`--root`, `--file`, `--byte`, `--fix`), with `patch`
 
 ## 8. `lsp`
 - [ ] 8.1 The Language Server over stdin/stdout, compared by scripted sessions

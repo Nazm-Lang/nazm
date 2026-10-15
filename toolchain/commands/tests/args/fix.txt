@@ -1,0 +1,28 @@
+# `nazm fix` command lines (design D8, D14), run in the fixture run.sh writes: ok.nz checks,
+# mut.nz and two.nz assign to bindings that are not `mut` (automatic fixes), lex.nz has an
+# unterminated string and semi.nz a value not discarded (fixes that need review), imp.nz imports
+# helper.nz whose error has the fix, m.nz imports a file that is not there, sub/ is a directory.
+--help
+-h
+
+ok.nz
+--json ok.nz
+mut.nz
+--json mut.nz
+--apply mut.nz
+mut.nz --apply --json
+two.nz --apply
+lex.nz
+lex.nz --apply
+semi.nz
+--apply semi.nz
+imp.nz
+--apply imp.nz
+--json --apply imp.nz
+m.nz
+--json m.nz
+absent.nz
+sub
+mut.nz ok.nz
+--apply=yes mut.nz
+--aply mut.nz
