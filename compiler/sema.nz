@@ -14185,6 +14185,12 @@ pub fn ck_seq_kind(c: Ck, t: Int) -> Str {
     ""
 }
 pub fn ck_type_arg(c: Ck, t: Int, i: Int) -> Int { targ(c, t, i) }
+pub fn ck_type_arg_count(c: Ck, t: Int) -> Int { targc(c, t) }
+// A call site through a trait's method (`stm`, an index into the pool of methods), or -1; the
+// trait a method of the pool belongs to, and where that trait's methods start in the pool.
+pub fn ck_site_trait_method(c: Ck, site: Int) -> Int { ints_get(c.stm, site) }
+pub fn ck_method_trait(c: Ck, tm: Int) -> Int { method_trait(c, tm) }
+pub fn ck_trait_method_first(c: Ck, tr: Int) -> Int { ints_get(c.trmf, tr) }
 // The constant a name written at `s..e` (absolute) is, or -1: its kind's type, and its value —
 // `ck_const_int` for an `Int` or a `Bool` (1 for `true`), `ck_const_text` for any other number
 // or a `Str` ("" for a float); an `Atomic`'s is a cell.
