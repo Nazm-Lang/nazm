@@ -116,6 +116,38 @@ fn shadowing_is_refused_in_the_same_scope_and_allowed_in_a_nested_one() {
 }
 
 #[test]
+fn a_pattern_let_binds_in_the_scope_it_is_written_in() {
+    // `let (a, b) = e; rest` is read as a `match` whose arm holds `rest`, but to a reader it
+    // binds in the block it is written in: a name bound there already, by either kind of
+    // `let`, is the same-scope shadowing refused above — once per name rebound.
+    for src in [
+        "fn main() -> Int { let (a, b) = (1, 2); let (a, c) = (3, 4); a + b + c }",
+        "fn main() -> Int { let x = 1; let (x, y) = (3, 4); x + y }",
+        "fn main() -> Int { let (a, b) = (1, 2); let a = 3; a + b }",
+        "fn main() -> Int { let (a, b) = (1, 2); let z = 0; let (a, c) = (3, 4); a + c + z }",
+        "fn main() -> Int { let x = 1; let Some(x) = Some(2) else { return 0 }; x }",
+    ] {
+        assert_eq!(sole_error(src), codes::ALREADY_DEFINED_IN_SCOPE, "{src}");
+    }
+    assert_eq!(
+        errors("fn main() -> Int { let (a, b) = (1, 2); let (a, b) = (3, 4); a + b }"),
+        vec![
+            codes::ALREADY_DEFINED_IN_SCOPE,
+            codes::ALREADY_DEFINED_IN_SCOPE
+        ]
+    );
+    // A nested block, a `match` arm and an `if let` are scopes of their own, as before.
+    assert_eq!(
+        value(
+            "fn main() -> Int { let (a, b) = (1, 2); let c = { let (a, b) = (10, 20); a + b }; \
+             let d = match (a, b) { (a, b) => a * b }; \
+             let e = if let (a, 2) = (a, b) { a } else { 0 }; a + b + c + d + e }"
+        ),
+        Value::Int(1 + 2 + 30 + 2 + 1)
+    );
+}
+
+#[test]
 fn a_function_body_is_its_final_expression() {
     assert_eq!(
         value("fn main() -> Int { let a = 1; let b = 2; a + b }"),

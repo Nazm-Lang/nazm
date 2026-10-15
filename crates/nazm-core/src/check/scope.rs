@@ -30,7 +30,14 @@ impl Checker<'_> {
 
     /// Push a lexical scope over `span`, and record it (N19).
     pub(super) fn open_scope(&mut self, span: Span) {
-        self.scopes.push();
+        self.scopes.push(false);
+        self.res.scopes_mut().open(span, self.current);
+    }
+
+    /// Push a lexical scope over `span` that continues the one outside it as far as shadowing
+    /// goes — a pattern `let`'s arm and the rest of its block ([`Scopes::joined`]).
+    pub(super) fn open_joined_scope(&mut self, span: Span) {
+        self.scopes.push(true);
         self.res.scopes_mut().open(span, self.current);
     }
 

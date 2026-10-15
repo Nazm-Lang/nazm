@@ -53,7 +53,18 @@ impl Checker<'_> {
         let mut first_value: Option<(Type, Span)> = None;
 
         for (index, arm) in arms.iter().enumerate() {
-            self.open_scope(arm.span);
+            // A pattern `let`'s arm, and the rest of the block it holds, are the scope the `let`
+            // is written in: a name bound there already is refused as `let x` twice is.
+            let joined = index == 0
+                && matches!(
+                    source,
+                    nazm_syntax::MatchSource::Let | nazm_syntax::MatchSource::LetElse
+                );
+            if joined {
+                self.open_joined_scope(arm.span);
+            } else {
+                self.open_scope(arm.span);
+            }
             let mut binds: Vec<(String, Span, Type)> = Vec::new();
             let mut aliases: Vec<(String, Span)> = Vec::new();
             let before = self.errors.len();
@@ -70,7 +81,7 @@ impl Checker<'_> {
             // shared mutable storage, which `docs/spec.md` says in as many words.
             let mut slots: Vec<(String, u32)> = Vec::new();
             for (name, at, ty) in &binds {
-                if self.scopes.defined_here(name) {
+                if self.scopes.bound_in_frame(name) {
                     self.errors.push(
                         Diagnostic::error(
                             codes::ALREADY_DEFINED_IN_SCOPE,
@@ -78,6 +89,20 @@ impl Checker<'_> {
                             format!("`{name}` is bound twice by this pattern"),
                         )
                         .help("each part of a pattern binds a name of its own, or is `_`"),
+                    );
+                    continue;
+                }
+                if self.scopes.defined_here(name) {
+                    self.errors.push(
+                        Diagnostic::error(
+                            codes::ALREADY_DEFINED_IN_SCOPE,
+                            *at,
+                            format!("`{name}` is already defined in this scope"),
+                        )
+                        .help(
+                            "Nazm allows shadowing in a nested scope but not in the same \
+                             one, so a later mention of a name is never ambiguous",
+                        ),
                     );
                     continue;
                 }
@@ -125,7 +150,9 @@ impl Checker<'_> {
                 row_arms.push(index);
             }
 
+            self.join_block = joined && matches!(arm.body, Expr::Block(_));
             let completion = self.check_expr(&arm.body, expected.or(first_value.map(|(t, _)| t)));
+            self.join_block = false;
             self.close_scope();
             // `let … else`: the second arm is the `else`, which must leave (R1a).
             if source == nazm_syntax::MatchSource::LetElse
