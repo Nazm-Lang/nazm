@@ -4664,7 +4664,7 @@ target can compile is not checked on another. An `impl` removed takes its method
 
 | | |
 | --- | --- |
-| **Conditions** | `os = "…"` (`macos`, `linux`, `wasm`, or `none` for a board), `arch = "…"` (`aarch64`, `x86_64`, `wasm32`, `riscv64gc`, …: the triple's first part), `target = "…"` (the whole triple), `feature = "…"` (a package feature enabled, §22), `profile = "…"` (a restriction profile the build is held to); combined with `all(…)`, `any(…)` and `not(…)`. Anything else is `N0619` |
+| **Conditions** | `os = "…"` (`macos`, `linux`, `windows` — since W1, for `x86_64-pc-windows-gnu` and on a Windows host alike —, `wasm`, or `none` for a board), `arch = "…"` (`aarch64`, `x86_64`, `wasm32`, `riscv64gc`, …: the triple's first part), `target = "…"` (the whole triple), `feature = "…"` (a package feature enabled, §22), `profile = "…"` (a restriction profile the build is held to); combined with `all(…)`, `any(…)` and `not(…)`. Anything else is `N0619` |
 | **What decides them** | The build's configuration and nothing else: `nazm build --target T` decides for `T`, and with no target, and for `check` and `run`, the host. The profiles are `--profile`'s and every package manifest's. The same source under the same configuration keeps the same declarations |
 | **Reuse** | A module that writes `@cfg` is checked as its configuration builds it; its check is filed under that configuration and never reused under another |
 

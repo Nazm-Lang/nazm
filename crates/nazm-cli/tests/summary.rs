@@ -672,7 +672,12 @@ fn a_test_run_with_nowhere_to_build_is_toolchain_failed() {
     // Scratch space under a regular file cannot be created.
     std::fs::write(dir.path().join("file"), "").unwrap();
     let tmp = dir.path().join("file").join("tmp");
-    let vars = [("TMPDIR", tmp.as_os_str())];
+    // `TMPDIR` on POSIX, `TMP` and `TEMP` on Windows: the system's temporary directory.
+    let vars = [
+        ("TMPDIR", tmp.as_os_str()),
+        ("TMP", tmp.as_os_str()),
+        ("TEMP", tmp.as_os_str()),
+    ];
     let plain = nazm_with(dir.path(), &["test", "t"], &vars);
     let s = nazm_with(dir.path(), &["test", "--summary-json", "t"], &vars);
     assert_eq!(s.code, Some(4));

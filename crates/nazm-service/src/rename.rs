@@ -505,7 +505,10 @@ impl LanguageService {
         let FileKey::Path(declaring) = &key else {
             return Err(Refusal::ToolchainOwned);
         };
-        if !declaring.starts_with(root) {
+        // The declaring file's key is its identity, canonical; the root may be spelled
+        // lexically. On Windows the two differ by more than links: `canonicalize` answers
+        // the verbatim `\\?\C:\…` form (W1).
+        if !declaring.starts_with(root) && !declaring.starts_with(identity(root)) {
             return Err(Refusal::Exported);
         }
         let before = self.workspace_compilations(root, &[]);

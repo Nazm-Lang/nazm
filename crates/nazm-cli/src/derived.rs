@@ -71,6 +71,12 @@ fn user_root_from(var: &dyn Fn(&str) -> Option<OsString>, os: &str) -> Option<Pa
     if let Some(dir) = var(CACHE_DIR).filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
+    // Windows (W1): the account's local application data, as Windows' own caches are.
+    if os == "windows" {
+        return var("LOCALAPPDATA")
+            .filter(|d| !d.is_empty())
+            .map(|d| PathBuf::from(d).join("nazm"));
+    }
     let home = var("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
     if os == "macos" {
         return home.map(|h| h.join("Library").join("Caches").join("nazm"));
@@ -111,11 +117,19 @@ mod tests {
             user_root_from(&with(&home), "linux"),
             Some(PathBuf::from("/h/.cache/nazm"))
         );
-        let xdg = [("HOME", "/h"), ("XDG_CACHE_HOME", "/x")];
+        // Absolute on the host the test runs on: a drive's on Windows.
+        let x = if cfg!(windows) { r"C:\x" } else { "/x" };
+        let xdg = [("HOME", "/h"), ("XDG_CACHE_HOME", x)];
         assert_eq!(
             user_root_from(&with(&xdg), "linux"),
-            Some(PathBuf::from("/x/nazm"))
+            Some(PathBuf::from(x).join("nazm"))
         );
+        let windows = [("HOME", "/h"), ("LOCALAPPDATA", r"C:\a")];
+        assert_eq!(
+            user_root_from(&with(&windows), "windows"),
+            Some(PathBuf::from(r"C:\a").join("nazm"))
+        );
+        assert_eq!(user_root_from(&with(&home), "windows"), None);
         // A relative XDG_CACHE_HOME is invalid by its specification, and ignored.
         let relative = [("HOME", "/h"), ("XDG_CACHE_HOME", "x")];
         assert_eq!(
