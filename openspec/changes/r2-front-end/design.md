@@ -161,8 +161,8 @@ carried. R1.5 D9 (on `main` since `511f77d6`) gives a program module `@std/hash`
 `prelude_named` to find where it does and loads those modules after the written imports, and the
 checker adds each as `import_implicit` does — plain, after the written edges and before the core
 prelude, only where no `use` names the module — whose names yield, silently, to the module's own
-and to a written import's (types, functions, traits). A map literal, whose calls the parser
-writes, still stops the checker.
+and to a written import's (types, functions, traits). A map literal names `@std/hashmap` by the
+calls the parser writes for it, found as the reference finds them (`called_names`).
 
 **D17 — Numbers are computed exactly, floats not at all.** The checker is written in `Int`, so a
 constant's integer value of any type is a `numeric::Wide` of its own: a sign and sixteen 16-bit

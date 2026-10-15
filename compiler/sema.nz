@@ -4248,129 +4248,12 @@ fn infer_order(c: Ck, functions: Ints) -> Ints {
 fn infer_calls(c: Ck, functions: Ints, names: Strs, at: Ints, n: Int, pool: Ints) -> Int {
     let f = ints_get(functions, n);
     if some(c, f, "body") == false { return 0; }
-    let called = called_names(c, unwrap(c, f, "body"));
+    let called = sx_called_names(c.t, unwrap(c, f, "body"));
     let mut i = 0;
     while i < strs_len(called) {
         let k = strs_find(names, strs_get(called, i));
         if k >= 0 { ints_push(pool, ints_get(at, k)); }
         i = i + 1;
-    }
-    0
-}
-
-// Every name a block calls without a qualifier, in the order the reference's walk meets them
-// (`Block::called_names`).
-fn called_names(c: Ck, body: Int) -> Strs {
-    let out = strs_new();
-    let exprs = ints_new();
-    let blocks = ints_new();
-    ints_push(blocks, body);
-    while ints_len(blocks) > 0 || ints_len(exprs) > 0 {
-        if ints_len(blocks) > 0 {
-            let b = ints_pop(blocks);
-            let statements = kids(c, b, "statements");
-            let mut i = 0;
-            while i < ints_len(statements) {
-                let st = ints_get(statements, i);
-                if sx_kind(c.t, st) == tk_tuple() {
-                    let k = kind_of(c, st);
-                    let n = sx_kid(c.t, st, 0);
-                    if k == "Let" || k == "Assign" || k == "Return" { ints_push(exprs, fld(c, n, "value")); }
-                    if k == "While" {
-                        ints_push(exprs, fld(c, n, "cond"));
-                        ints_push(blocks, fld(c, n, "body"));
-                    }
-                    if k == "For" {
-                        let iter = fld(c, n, "iter");
-                        if sx_kind(c.t, iter) == tk_tuple() { ints_push(exprs, sx_kid(c.t, iter, 0)); } else {
-                            ints_push(exprs, fld(c, iter, "start"));
-                            ints_push(exprs, fld(c, iter, "end"));
-                        }
-                        ints_push(blocks, fld(c, n, "body"));
-                    }
-                    if k == "Expr" { ints_push(exprs, n); }
-                    if k == "Scope" || k == "Defer" { ints_push(blocks, fld(c, n, "body")); }
-                    if k == "Spawn" {
-                        let args = kids(c, n, "args");
-                        let mut a = 0;
-                        while a < ints_len(args) {
-                            ints_push(exprs, ints_get(args, a));
-                            a = a + 1;
-                        }
-                    }
-                }
-                i = i + 1;
-            }
-            if some(c, b, "tail") { ints_push(exprs, unwrap(c, b, "tail")); }
-        } else {
-            let e = ints_pop(exprs);
-            push_children(c, e, exprs, blocks, out);
-        }
-    }
-    out
-}
-
-// An expression's call, if it is one by name, and its immediate sub-expressions and blocks
-// (`Expr::push_children`).
-fn push_children(c: Ck, e: Int, exprs: Ints, blocks: Ints, out: Strs) -> Int {
-    let k = kind_of(c, e);
-    if sx_kind(c.t, e) == tk_tuple() {
-        if k == "Block" { ints_push(blocks, sx_kid(c.t, e, 0)); }
-        return 0;
-    }
-    if k == "Call" && some(c, e, "qualifier") == false { strs_push(out, fname_of(c, e, "callee")); }
-    if k == "Closure" { ints_push(blocks, fld(c, e, "body")); }
-    if k == "Neg" || k == "Not" || k == "BitNot" || k == "Propagate" { ints_push(exprs, fld(c, e, "operand")); }
-    if k == "Array" || k == "Tuple" { push_all(exprs, kids(c, e, "elems")); }
-    if k == "ArrayRepeat" {
-        ints_push(exprs, fld(c, e, "value"));
-        ints_push(exprs, fld(c, e, "count"));
-    }
-    if k == "Index" {
-        ints_push(exprs, fld(c, e, "base"));
-        ints_push(exprs, fld(c, e, "index"));
-    }
-    if k == "Field" { ints_push(exprs, fld(c, e, "base")); }
-    if k == "Interp" {
-        let parts = kids(c, e, "parts");
-        let mut i = 0;
-        while i < ints_len(parts) {
-            if sx_kind(c.t, ints_get(parts, i)) != tk_tuple() { ints_push(exprs, fld(c, ints_get(parts, i), "expr")); }
-            i = i + 1;
-        }
-    }
-    if k == "Binary" {
-        ints_push(exprs, fld(c, e, "lhs"));
-        ints_push(exprs, fld(c, e, "rhs"));
-    }
-    if k == "Call" { push_all(exprs, kids(c, e, "args")); }
-    if k == "MethodCall" {
-        ints_push(exprs, fld(c, e, "receiver"));
-        push_all(exprs, kids(c, e, "args"));
-    }
-    if k == "Construct" || k == "Variant" {
-        let fields = kids(c, e, "fields");
-        let mut i = 0;
-        while i < ints_len(fields) {
-            ints_push(exprs, fld(c, ints_get(fields, i), "value"));
-            i = i + 1;
-        }
-    }
-    if k == "Match" {
-        ints_push(exprs, fld(c, e, "scrutinee"));
-        let arms = kids(c, e, "arms");
-        let mut i = 0;
-        while i < ints_len(arms) {
-            let arm = ints_get(arms, i);
-            if some(c, arm, "guard") { ints_push(exprs, unwrap(c, arm, "guard")); }
-            ints_push(exprs, fld(c, arm, "body"));
-            i = i + 1;
-        }
-    }
-    if k == "If" {
-        ints_push(exprs, fld(c, e, "cond"));
-        ints_push(blocks, fld(c, e, "then_block"));
-        if some(c, e, "else_block") { ints_push(blocks, unwrap(c, e, "else_block")); }
     }
     0
 }
@@ -4384,15 +4267,6 @@ fn insert_sorted(xs: Ints, v: Int) -> Int {
         i = i - 1;
     }
     insert_int(xs, at, v)
-}
-
-fn push_all(to: Ints, xs: Ints) -> Int {
-    let mut i = 0;
-    while i < ints_len(xs) {
-        ints_push(to, ints_get(xs, i));
-        i = i + 1;
-    }
-    0
 }
 
 // The names module `m` may call beyond its own functions and the built-ins (`environment`):
@@ -4903,8 +4777,6 @@ fn check_stmt(c: Ck, s: Int) -> Bool {
 
 fn check_let(c: Ck, l: Int) -> Int {
     let name = fname_of(c, l, "name");
-    // A map literal's calls give a program `@std/hashmap` (R1.5, D9), which is not carried yet.
-    if name == "map#literal" { stop(c, "a map literal"); }
     let value = fld(c, l, "value");
     let mut ty = 0;
     if some(c, l, "ty") {
@@ -5053,12 +4925,10 @@ fn check_for(c: Ck, f: Int) -> Int {
     } else {
         let e = sx_kid(c.t, iter, 0);
         let t = value_type(c, e, none());
-        if bname_of(c, t) == "Bytes" {
-            stop(c, "a `for` over `Bytes`");
-            return 0;
-        }
-        if tag(c, t) == tag_vec() || tag(c, t) == tag_chain() {
-            element = targ(c, t, 0);
+        // A `Bytes` gives its bytes, each a `UInt8`.
+        let bytes = bname_of(c, t) == "Bytes";
+        if bytes || tag(c, t) == tag_vec() || tag(c, t) == tag_chain() {
+            if bytes { element = builtin_ty(c, "UInt8"); } else { element = targ(c, t, 0); }
             let fsp = fld(c, f, "name_span");
             sm_put(c.mfor, sps(c, fsp), spe(c, fsp), t);
         } else {
@@ -11461,6 +11331,7 @@ fn w_stmt(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int) -> Int {
             let mut cell = "*";
             if t >= 0 {
                 if tag(c, t) == tag_vec() && concrete(c, targ(c, t, 0)) { cell = vec_cell(show(c, targ(c, t, 0))); }
+                if bname_of(c, t) == "Bytes" { cell = "Bytes"; }
             }
             if t >= 0 && tag(c, t) == tag_chain() { v = sh_whole(w, handle); } else { v = sh_whole(w, fl_joined(fl_cell(cell, s0, e0), handle)); }
         }

@@ -4213,3 +4213,125 @@ pub fn sx_parse_source(src: Str, t: Tree, d: Diags) -> Int {
     sx_parse_items(p, pr);
     sx_program(t, pr)
 }
+
+// Every name a block calls without a qualifier, in the order the reference's walk meets them
+// (`Block::called_names`): what the checker orders inferred result types by, and what a loader
+// finds the calls a form was written as in (a map literal's `hashmap_single`).
+pub fn sx_called_names(t: Tree, body: Int) -> Strs {
+    let out = strs_new();
+    let exprs = ints_new();
+    let blocks = ints_new();
+    ints_push(blocks, body);
+    while ints_len(blocks) > 0 || ints_len(exprs) > 0 {
+        if ints_len(blocks) > 0 {
+            let b = ints_pop(blocks);
+            let statements = sx_items(t, sx_field(t, b, "statements"));
+            let mut i = 0;
+            while i < ints_len(statements) {
+                let st = ints_get(statements, i);
+                if sx_kind(t, st) == tk_tuple() {
+                    let k = sx_text(t, st);
+                    let n = sx_kid(t, st, 0);
+                    if k == "Let" || k == "Assign" || k == "Return" { ints_push(exprs, sx_field(t, n, "value")); }
+                    if k == "While" {
+                        ints_push(exprs, sx_field(t, n, "cond"));
+                        ints_push(blocks, sx_field(t, n, "body"));
+                    }
+                    if k == "For" {
+                        let iter = sx_field(t, n, "iter");
+                        if sx_kind(t, iter) == tk_tuple() { ints_push(exprs, sx_kid(t, iter, 0)); } else {
+                            ints_push(exprs, sx_field(t, iter, "start"));
+                            ints_push(exprs, sx_field(t, iter, "end"));
+                        }
+                        ints_push(blocks, sx_field(t, n, "body"));
+                    }
+                    if k == "Expr" { ints_push(exprs, n); }
+                    if k == "Scope" || k == "Defer" { ints_push(blocks, sx_field(t, n, "body")); }
+                    if k == "Spawn" { sx_push_all(exprs, sx_items(t, sx_field(t, n, "args"))); }
+                }
+                i = i + 1;
+            }
+            let tail = sx_field(t, b, "tail");
+            if sx_is_some(t, tail) { ints_push(exprs, sx_unwrap(t, tail)); }
+        } else {
+            sx_push_children(t, ints_pop(exprs), exprs, blocks, out);
+        }
+    }
+    out
+}
+
+// An expression's call, if it is one by name, and its immediate sub-expressions and blocks
+// (`Expr::push_children`).
+fn sx_push_children(t: Tree, e: Int, exprs: Ints, blocks: Ints, out: Strs) -> Int {
+    let k = sx_text(t, e);
+    if sx_kind(t, e) == tk_tuple() {
+        if k == "Block" { ints_push(blocks, sx_kid(t, e, 0)); }
+        return 0;
+    }
+    if k == "Call" && sx_is_some(t, sx_field(t, e, "qualifier")) == false { strs_push(out, sx_name(t, e, "callee")); }
+    if k == "Closure" { ints_push(blocks, sx_field(t, e, "body")); }
+    if k == "Neg" || k == "Not" || k == "BitNot" || k == "Propagate" { ints_push(exprs, sx_field(t, e, "operand")); }
+    if k == "Array" || k == "Tuple" { sx_push_all(exprs, sx_items(t, sx_field(t, e, "elems"))); }
+    if k == "ArrayRepeat" {
+        ints_push(exprs, sx_field(t, e, "value"));
+        ints_push(exprs, sx_field(t, e, "count"));
+    }
+    if k == "Index" {
+        ints_push(exprs, sx_field(t, e, "base"));
+        ints_push(exprs, sx_field(t, e, "index"));
+    }
+    if k == "Field" { ints_push(exprs, sx_field(t, e, "base")); }
+    if k == "Interp" {
+        let parts = sx_items(t, sx_field(t, e, "parts"));
+        let mut i = 0;
+        while i < ints_len(parts) {
+            if sx_kind(t, ints_get(parts, i)) != tk_tuple() { ints_push(exprs, sx_field(t, ints_get(parts, i), "expr")); }
+            i = i + 1;
+        }
+    }
+    if k == "Binary" {
+        ints_push(exprs, sx_field(t, e, "lhs"));
+        ints_push(exprs, sx_field(t, e, "rhs"));
+    }
+    if k == "Call" { sx_push_all(exprs, sx_items(t, sx_field(t, e, "args"))); }
+    if k == "MethodCall" {
+        ints_push(exprs, sx_field(t, e, "receiver"));
+        sx_push_all(exprs, sx_items(t, sx_field(t, e, "args")));
+    }
+    if k == "Construct" || k == "Variant" {
+        let fields = sx_items(t, sx_field(t, e, "fields"));
+        let mut i = 0;
+        while i < ints_len(fields) {
+            ints_push(exprs, sx_field(t, ints_get(fields, i), "value"));
+            i = i + 1;
+        }
+    }
+    if k == "Match" {
+        ints_push(exprs, sx_field(t, e, "scrutinee"));
+        let arms = sx_items(t, sx_field(t, e, "arms"));
+        let mut i = 0;
+        while i < ints_len(arms) {
+            let arm = ints_get(arms, i);
+            let guard = sx_field(t, arm, "guard");
+            if sx_is_some(t, guard) { ints_push(exprs, sx_unwrap(t, guard)); }
+            ints_push(exprs, sx_field(t, arm, "body"));
+            i = i + 1;
+        }
+    }
+    if k == "If" {
+        ints_push(exprs, sx_field(t, e, "cond"));
+        ints_push(blocks, sx_field(t, e, "then_block"));
+        let other = sx_field(t, e, "else_block");
+        if sx_is_some(t, other) { ints_push(blocks, sx_unwrap(t, other)); }
+    }
+    0
+}
+
+fn sx_push_all(to: Ints, xs: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        ints_push(to, ints_get(xs, i));
+        i = i + 1;
+    }
+    0
+}

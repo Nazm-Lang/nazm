@@ -1,0 +1,16 @@
+// Map literals (R1.5, D5) with no `use`: the calls the parser writes for one give the module
+// `@std/hashmap` (D9); and a `for` over `Bytes` (each a `UInt8`).
+fn main(out: OutCap): Int ! {io} {
+    let m = {"a": 1, "b": 2}
+    let wrong = {"x": 1, "y": "two"}
+    let keys = {1: true, 2: false}
+    let n: Str = m["a"]
+    let b = bytes_new(3)
+    let mut sum = 0
+    for x in b {
+        sum = sum + Int(x)
+        let y: Int = x
+    }
+    print(f"{hashmap_len(m)} {keys[1]} {sum}\n")
+    0
+}
