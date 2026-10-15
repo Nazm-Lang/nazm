@@ -1,0 +1,5 @@
+schema = "nazm.package/2"
+
+[package]
+name = "badschema"
+version = "1.0.0"

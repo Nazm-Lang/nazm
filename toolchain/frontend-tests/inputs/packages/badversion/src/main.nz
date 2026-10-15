@@ -1,0 +1,3 @@
+// A package whose manifest is refused: the reference checks nothing, and says so without a
+// diagnostic of a module.
+fn main() -> Int { undefined_name }

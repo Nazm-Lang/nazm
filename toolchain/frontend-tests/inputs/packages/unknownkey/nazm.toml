@@ -1,0 +1,6 @@
+schema = "nazm.package/1"
+
+[package]
+name = "unknownkey"
+version = "1.0.0"
+author = "someone"

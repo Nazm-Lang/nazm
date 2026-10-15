@@ -1,0 +1,5 @@
+// The root package's own module: the program's, so printing needs no authority passed.
+pub fn local_name() -> Str {
+    print("named");
+    "local"
+}

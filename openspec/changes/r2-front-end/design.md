@@ -230,6 +230,22 @@ the reference's rules and refusals, in its order, and records only the type: its
 for the type `t`, shown as `this type` where a scalar's message names a kind. Core IR (slice 5)
 will need the values; they are computed then.
 
+**D22 — The source root and the packages are found as `nazm check FILE` finds them.**
+`compiler/package.nz` ports `root::decide` (upward from the root module, the first manifest whose
+source root holds it, else the first `nazm.root` marker, else the module's directory),
+`package_context` and the path-dependency part of `nazm-package`'s `resolve`; `load.nz` resolves
+`NAME:path` against the importing package's declared dependencies and keeps a relative import
+inside its package's source root, and marks each module the program's or not as
+`ModuleKey::is_program` does — a dependency's module, a standard one, the prelude and any module
+outside the source root are not, so none holds `main`'s output authority or is given the prelude's
+standard modules. A manifest is read as the TOML subset the reference's manifests are written in;
+anything outside it, and every part of the package system not carried yet (registry dependencies,
+`[registry]`, features, profiles, `heap-limit`, a marker), stops the driver. A manifest the
+reference refuses (`N0500`) makes `nazm check` fail with no diagnostic of a module, so the driver
+publishes nothing for it. Paths are compared as normalised text where the reference compares
+canonical ones (as `load.nz` already does for modules): a package reached through a symbolic link
+may be seen differently. The driver takes the root module's absolute path (`run.sh` gives one).
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

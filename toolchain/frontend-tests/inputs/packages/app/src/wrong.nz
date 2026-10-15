@@ -1,0 +1,7 @@
+// Imports a package refuses: a package it does not depend on, and a path that leaves its source
+// root.
+use "geometry:area.nz";
+use "../outside.nz";
+use "util:missing.nz";
+
+fn main() -> Int { 0 }

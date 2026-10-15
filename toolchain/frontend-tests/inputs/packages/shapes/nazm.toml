@@ -1,0 +1,8 @@
+schema = "nazm.package/1"
+
+[package]
+name = "shapes"
+version = "1.0.0"
+
+[dependencies]
+util = { path = "../util", version = "0.2.0" }

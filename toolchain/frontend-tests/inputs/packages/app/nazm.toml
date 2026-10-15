@@ -1,0 +1,12 @@
+schema = "nazm.package/1"
+
+# The package the front end's package cases are built from (R2): two path dependencies, one of
+# which depends on the other.
+[package]
+name = "app"
+version = "0.1.0"
+main = "main.nz"
+
+[dependencies]
+util = { path = "../util", version = "0.2.0" }
+shapes = { path = "../shapes", version = "1.0.0" }
