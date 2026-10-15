@@ -1,9 +1,9 @@
-// Recursive types through `Box` and `List`, records holding handles, closures holding strings: each
+// Recursive types through `Box` and `Chain`, records holding handles, closures holding strings: each
 // counted and reclaimed as the Rust interpreter counts it.
 enum Expr {
     Num(v: Int),
     Add(l: Box[Expr], r: Box[Expr]),
-    Many(xs: List[Expr]),
+    Many(xs: Chain[Expr]),
 }
 
 struct Bag {
@@ -35,7 +35,7 @@ fn main() {
     println(eval(chain(50)))
     let parts = vec_new[Expr]()
     for i in 0..5 { vec_push(parts, Expr.Num(v: i * i)) }
-    println(eval(Expr.Many(xs: list_from_vec(parts))))
+    println(eval(Expr.Many(xs: chain_from_vec(parts))))
     let b = Bag(name: "bag" + "!", items: vec_new[Str]())
     vec_push(b.items, b.name + "1")
     let c = b

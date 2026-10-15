@@ -30,5 +30,14 @@
 ## 5. Slice 5 — concurrency, files, processes, time
 
 - [x] 5.1 The task scheduler; `scope`, `spawn`, channels, select; `NAZM_SCHED_REPORT`
-- [ ] 5.2 Files, directories, processes, environment, time, network, atomics
-- [ ] 5.3 `--json` diagnostics; the whole suite agrees, every difference reported
+- [x] 5.2 Files, directories, processes, environment, time, network, atomics
+- [x] 5.3 `--json` diagnostics; the whole suite agrees, every difference reported
+
+## 6. After the rebase onto R1.5 D6–D8 and Core IR /3
+
+- [x] 6.1 Read `nazm.core-ir/3` (and `/2`); `chain_*` built-ins (D7), `list_*` kept for a /2 input
+- [x] 6.2 `tests/run.sh`: the reference's `run --interpret` when it has one; `NAZM_BUILD` apart from
+      `NAZM`; files the programs write removed after the run
+- [x] 6.3 Sockets on one thread (D10): kvd agrees
+- [ ] 6.4 The `/3` tables (`impls`, `orders`, `derived_hash`, `statics`) replace D8's reconstruction
+- [ ] 6.5 `--rust-tests`: the programs the Rust CLI tests embed, every difference reported

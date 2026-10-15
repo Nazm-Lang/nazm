@@ -38,7 +38,7 @@ fn b_of(v: V) -> Bytes {
 
 fn h_of(io: IoCap, v: V) -> OsHandle {
     match v {
-        V.Osh(h: x) => x,
+        V.Osh(h: x, sock: _) => x,
         _ => os_stdin(),
     }
 }
@@ -62,17 +62,79 @@ fn strs_of(h: Heap, v: V) -> Strs {
     out
 }
 
+// --- sockets on one thread ----------------------------------------------------------------------
+// The Rust interpreter runs each task on a thread of its own, so a socket operation that waits
+// holds only its task. Here every task shares this one thread (D9): an operation that could wait
+// is tried with a deadline of a millisecond, and when that runs out the task waits and tries again
+// when it resumes, until the deadline the program gave the socket, if it gave one, has passed.
+
+/// A new socket handle, with its place in the table of deadlines.
+fn socket(h: Heap, x: OsHandle) -> V {
+    if os_status(x) < 0 { return V.Osh(h: x, sock: 0) }
+    ints_push(h.socktime, 0)
+    V.Osh(h: x, sock: ints_len(h.socktime) - 1)
+}
+
+fn sock_of(v: V) -> Int {
+    match v {
+        V.Osh(h: _, sock: k) => k,
+        _ => 0,
+    }
+}
+
+/// Before a socket operation that could wait: a deadline of a millisecond.
+fn brief(x: OsHandle, k: Int) {
+    if k > 0 { let z = os_set_timeout(x, 1) }
+}
+
+/// After it: the program's own deadline back.
+fn relax(h: Heap, x: OsHandle, k: Int) {
+    if k > 0 { let z = os_set_timeout(x, ints_get(h.socktime, k)) }
+}
+
+/// Whether status `r` of a brief try means the task waits and tries again: it ran out, and the
+/// program's deadline, if any, has not. The last try's own answer is the program's otherwise.
+fn waits(vm: Vm, k: Int, r: Int, time: TimeCap) -> Bool {
+    let mac = os_family() == 0
+    let timed_out = r == 0 - (if mac { 60 } else { 110 })
+    let again = r == 0 - (if mac { 35 } else { 11 })
+    let now = time_now_ms()
+    if timed_out || again {
+        if ints_get(vm.st, ST_IOWAIT) == 0 {
+            let ms = ints_get(vm.heap.socktime, k)
+            ints_set(vm.st, ST_IOWAIT, if ms > 0 { now + ms } else { 0 - 1 })
+        }
+        let end = ints_get(vm.st, ST_IOWAIT)
+        if end < 0 || now < end {
+            ints_set(vm.st, ST_DEADLINE, now + 2)
+            ints_set(vm.st, ST_BLOCKED, 1)
+            return true
+        }
+    }
+    ints_set(vm.st, ST_IOWAIT, 0)
+    ints_set(vm.st, ST_DEADLINE, 0)
+    false
+}
+
 /// An OS built-in on the top `n` operands.
-pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: NetCap, proc: ProcessCap, rnd: RandomCap) -> V {
+pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, time: TimeCap) -> V {
     let h = vm.heap
-    if op == B_OS_OPEN_READ { return V.Osh(h: os_open_read(s_of(argo(vm, n, 0)))) }
-    if op == B_OS_OPEN_WRITE { return V.Osh(h: os_open_write(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
-    if op == B_OS_DIR_OPEN { return V.Osh(h: os_dir_open(s_of(argo(vm, n, 0)))) }
-    if op == B_OS_STDIN { return V.Osh(h: os_stdin()) }
-    if op == B_OS_STDOUT { return V.Osh(h: os_stdout()) }
-    if op == B_OS_STDERR { return V.Osh(h: os_stderr()) }
+    if op == B_OS_OPEN_READ { return V.Osh(h: os_open_read(s_of(argo(vm, n, 0))), sock: 0) }
+    if op == B_OS_OPEN_WRITE { return V.Osh(h: os_open_write(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1))), sock: 0) }
+    if op == B_OS_DIR_OPEN { return V.Osh(h: os_dir_open(s_of(argo(vm, n, 0))), sock: 0) }
+    if op == B_OS_STDIN { return V.Osh(h: os_stdin(), sock: 0) }
+    if op == B_OS_STDOUT { return V.Osh(h: os_stdout(), sock: 0) }
+    if op == B_OS_STDERR { return V.Osh(h: os_stderr(), sock: 0) }
     if op == B_OS_STATUS { return V.Int(v: os_status(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_READ { return V.Int(v: os_read(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_READ {
+        let f = argo(vm, n, 0)
+        let x = h_of(io, f)
+        brief(x, sock_of(f))
+        let r = os_read(x, b_of(argo(vm, n, 1)))
+        relax(h, x, sock_of(f))
+        if sock_of(f) > 0 && waits(vm, sock_of(f), r, time) { return V.Unset }
+        return V.Int(v: r)
+    }
     if op == B_OS_READ_LINE { return V.Int(v: os_read_line(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
     if op == B_OS_WRITE { return V.Int(v: os_write(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
     if op == B_OS_SEEK { return V.Int(v: os_seek(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)), i_of(argo(vm, n, 2)))) }
@@ -112,14 +174,14 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         return heap_str(h, os_env_at(i))
     }
     if op == B_OS_PID { return V.Int(v: os_pid()) }
-    if op == B_OS_SPAWN { return V.Osh(h: os_spawn(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)))) }
+    if op == B_OS_SPAWN { return V.Osh(h: os_spawn(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1))), sock: 0) }
     if op == B_OS_SPAWN_IN {
-        return V.Osh(h: os_spawn_in(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3))))
+        return V.Osh(h: os_spawn_in(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3))), sock: 0)
     }
     if op == B_OS_SPAWN_WITH {
-        return V.Osh(h: os_spawn_with(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3)), i_of(argo(vm, n, 4))))
+        return V.Osh(h: os_spawn_with(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3)), i_of(argo(vm, n, 4))), sock: 0)
     }
-    if op == B_OS_CHILD_PIPE { return V.Osh(h: os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_CHILD_PIPE { return V.Osh(h: os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1))), sock: 0) }
     if op == B_OS_WAIT || op == B_OS_TRY_WAIT || op == B_OS_WAIT_UNTIL {
         let child = h_of(io, argo(vm, n, 0))
         let r = if op == B_OS_WAIT {
@@ -150,13 +212,34 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_TRY_LOCK { return V.Int(v: os_try_lock(h_of(io, argo(vm, n, 0)), bool_of(argo(vm, n, 1)))) }
     if op == B_OS_UNLOCK { return V.Int(v: os_unlock(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_RANDOM_BYTES { return V.Int(v: os_random_bytes(b_of(argo(vm, n, 0)))) }
-    if op == B_OS_TCP_LISTEN { return V.Osh(h: os_tcp_listen(s_of(argo(vm, n, 0)))) }
-    if op == B_OS_TCP_ACCEPT { return V.Osh(h: os_tcp_accept(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_TCP_CONNECT { return V.Osh(h: os_tcp_connect(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
-    if op == B_OS_UDP_BIND { return V.Osh(h: os_udp_bind(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_TCP_LISTEN { return socket(h, os_tcp_listen(s_of(argo(vm, n, 0)))) }
+    if op == B_OS_TCP_ACCEPT {
+        let l = argo(vm, n, 0)
+        let x = h_of(io, l)
+        brief(x, sock_of(l))
+        let c = os_tcp_accept(x)
+        relax(h, x, sock_of(l))
+        if sock_of(l) > 0 && waits(vm, sock_of(l), os_status(c), time) { return V.Unset }
+        return socket(h, c)
+    }
+    if op == B_OS_TCP_CONNECT { return socket(h, os_tcp_connect(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_UDP_BIND { return socket(h, os_udp_bind(s_of(argo(vm, n, 0)))) }
     if op == B_OS_UDP_SEND_TO { return V.Int(v: os_udp_send_to(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), s_of(argo(vm, n, 2)))) }
-    if op == B_OS_UDP_RECV_FROM { return V.Int(v: os_udp_recv_from(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))) }
-    if op == B_OS_SET_TIMEOUT { return V.Int(v: os_set_timeout(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_UDP_RECV_FROM {
+        let u = argo(vm, n, 0)
+        let x = h_of(io, u)
+        brief(x, sock_of(u))
+        let r = os_udp_recv_from(x, b_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))
+        relax(h, x, sock_of(u))
+        if sock_of(u) > 0 && waits(vm, sock_of(u), r, time) { return V.Unset }
+        return V.Int(v: r)
+    }
+    if op == B_OS_SET_TIMEOUT {
+        let r = os_set_timeout(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))
+        let k = sock_of(argo(vm, n, 0))
+        if r == 0 && k > 0 { ints_set(h.socktime, k, i_of(argo(vm, n, 1))) }
+        return V.Int(v: r)
+    }
     if op == B_OS_SHUTDOWN { return V.Int(v: os_shutdown(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
     if op == B_OS_LOCAL_ADDR { return heap_str(h, os_local_addr(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_PEER_ADDR { return heap_str(h, os_peer_addr(h_of(io, argo(vm, n, 0)))) }

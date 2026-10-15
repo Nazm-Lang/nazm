@@ -181,6 +181,15 @@ which run with the interpreter's own capabilities (`IoCap`, `ProcessCap`, `TimeC
 Handles are interpreter heap objects wrapping the host's `OsHandle`, so the generation check of
 the Rust `os` module is kept.
 
+**Sockets on one thread.** The Rust interpreter gives each task a thread, so a socket operation
+that waits holds only its own task; here every task shares one thread (D9). So `os_tcp_accept`,
+`os_read` and `os_udp_recv_from` on a socket are tried with a deadline of one millisecond; when it
+runs out, the task waits (polled every 2 ms by the scheduler) and tries again when it resumes,
+until the deadline the program gave the socket with `os_set_timeout`, if any, has passed — then
+the last try's own answer (`ETIMEDOUT`) is the program's. Each socket value carries its place in
+the heap's table of the deadlines the program set. Writes and `connect` are not polled: they do
+not wait on another task of the same program in any input.
+
 ## Requests
 
 To the coordinator — none blocks slices 2 and 3:
@@ -188,9 +197,11 @@ To the coordinator — none blocks slices 2 and 3:
 1. **The printed Core IR should carry `impls`, `templates`, `orders`, `derived_hash` and `statics`**
    (additive fields of `nazm.core-ir/2`, or `/3`). The in-memory `cir::Program` has all five; the
    printer (`crates/nazm-cir/src/print.rs`) writes only `schema`, `entry` and `functions`. Without
-   them D8 is a reconstruction and static `Atomic` cells have no initial value.
+   them D8 is a reconstruction and static `Atomic` cells have no initial value. *Answered by
+   `nazm.core-ir/3` (main, 2026-10-15); reading it is task 6.4.*
 2. **`nazm run --interpret`** is not on `main`; the suite compares with plain `nazm run`, which is the
-   interpreter in 0.10.0.
+   interpreter in 0.10.0. *Answered (R1.5 D11): the suite uses `--interpret` where the reference
+   has it.*
 
 ## Risks / Trade-offs
 
