@@ -14203,6 +14203,10 @@ pub fn ck_conv_result(c: Ck, k: Int) -> Int { ints_get(c.cvres, k) }
 // Whether a type is a tuple, and the type of payload field `i` of variant `v` of an enum type,
 // its arguments substituted.
 pub fn ck_is_tuple(c: Ck, t: Int) -> Bool { is_tuple(c, t) }
+// The tuple of these element types (which the checker made when it checked it), and an array
+// type's element.
+pub fn ck_tuple_of(c: Ck, elems: Ints) -> Int { tuple_ty(c, elems) }
+pub fn ck_array_elem(c: Ck, t: Int) -> Int { array_elem(c, t) }
 pub fn ck_payload_ty(c: Ck, t: Int, v: Int, i: Int) -> Int { field_ty_in(c, t, ints_get(c.vff, ints_get(c.evf, ta(c, t)) + v) + i) }
 // What a type is to the lowering's operators: `int` (`Int`), `integer` (another integer type),
 // `float`, `bool`, `str`, `text`, `record`, `enum`, `array`, `box`, `chain`, `param`, or "".
