@@ -424,3 +424,8 @@ why = "hyperfine over release builds of three trees on one loaded host; a record
 heading = "R1.5: the comparison re-run, measured (2026-10-15)"
 status = "dated"
 why = "bench/compare/compare.py over fifteen languages on one quiet but uncontrolled host; the method is reproducible by that command, these numbers are a record of that date and machine"
+
+[[claim]]
+heading = "Multicore: the parallel workload and the pool's default, measured (2026-10-15)"
+status = "dated"
+why = "interleaved hyperfine rounds and `bench/compare/compare.py --only primes` on one host shared with other agents (load 17–81 on ten processors); a record of that date and machine, relative scaling only — the script reproduces the method, not these numbers"
