@@ -186,28 +186,21 @@ fn define_statics(lo: Lo) {
 
 /// A static atomic's whole value — its cell's address, 8, a null owner — as read-only data
 /// (`cell_value`): the cell this unit defines, or an import of its module's.
-fn cell_value(fx: Fx, name: Str) -> Int {
+fn cell_value(fx: Fx, key: Str) -> Int {
     let lo = fx.lo
     let c = lo.c
     let ss = kid(c, json_root(c.doc), "statics")
     let mut found = 0 - 1
-    let mut any = 0 - 1
-    let mut many = false
     for i in 0..count(c, ss) {
         let s = at(c, ss, i)
-        if sval(c, s, "name") == name {
-            if sval(c, s, "module") == fx.f.module { found = s }
-            if any >= 0 { many = true }
-            any = s
-        }
+        if found < 0 && sval(c, s, "def") == key { found = s }
     }
-    if found < 0 && !many { found = any }
     if found < 0 {
         defect(lo, "a static the program does not declare");
         return 0 - 1
     }
     let module = sval(c, found, "module")
-    let key = module + "." + name
+    let name = sval(c, found, "name")
     match hashmap_get(lo.cellvals, key) {
         Some(d) => { return d },
         None => {},
@@ -752,7 +745,7 @@ fn const_ty(c: MConst) -> Str {
         MConst.Bool(v: _) => "Bool",
         MConst.Str(bytes: _) => "Str",
         MConst.Num(text: _, kind: k) => k,
-        MConst.Cell(name: _) => "Atomic",
+        MConst.Cell(name: _, key: _) => "Atomic",
     }
 }
 
@@ -784,8 +777,8 @@ fn place(fx: Fx, o: Operand) -> Int {
         Operand.Const(c: c) => match c {
             MConst.Str(bytes: b) => addr_of(fx, str_value(fx.lo, b)),
             // A static atomic (Gate 3): its cell's triple, as a literal's is.
-            MConst.Cell(name: n) => {
-                let d = cell_value(fx, n)
+            MConst.Cell(name: _, key: k) => {
+                let d = cell_value(fx, k)
                 if d >= 0 { addr_of(fx, d) } else { null(fx) }
             },
             _ => {

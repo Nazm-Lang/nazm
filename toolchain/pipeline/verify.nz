@@ -45,7 +45,7 @@ fn const_ty(c: MConst) -> Str {
         MConst.Bool(v: _) => "Bool",
         MConst.Str(bytes: _) => "Str",
         MConst.Num(text: _, kind: k) => k,
-        MConst.Cell(name: _) => "Atomic",
+        MConst.Cell(name: _, key: _) => "Atomic",
     }
 }
 
