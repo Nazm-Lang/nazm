@@ -1338,6 +1338,18 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     }
     let span = sx_field(t, e, "span");
     if k == "Int" || k == "WideInt" { return co_integer(lo, sx_text(t, sx_field(t, e, "value")), span); }
+    // A float literal (`Const::Num`): of the type the checker gave it, its value the nearest of
+    // that type's, printed as its shortest digits (`numeric::to_str`).
+    if k == "Float" {
+        let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if lt < 0 { return co_stopped(lo, "a float literal the checker did not record"); }
+        let name = co_durable(lo, lt);
+        let single = name == "Float32";
+        let bits = cdg_float_bits(sx_text(t, sx_field(t, e, "text")), single);
+        if bits < 0 { return co_stopped(lo, "a float literal that does not read as a number"); }
+        let id = co_constant(lo, name, json_str(cdg_float_text(false, bits, single)));
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), lt, span);
+    }
     if k == "Bool" {
         let id = co_constant(lo, "Bool", sx_text(t, sx_field(t, e, "value")));
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_bool(), span);

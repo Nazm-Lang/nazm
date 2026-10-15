@@ -709,6 +709,33 @@ fn cn_const(c: Canon, id: Int) -> Int {
         cn_tag(c, ty);
         return cdg_wide_bytes(c, value);
     }
+    // A float's bits, read back from its shortest digits, as a `u128`, little-endian.
+    if ty == "Float64" || ty == "Float32" {
+        let single = ty == "Float32";
+        let mut bits = 0;
+        if value == "inf" || value == "-inf" {
+            bits = 2139095040;
+            if single == false { bits = 9218868437227405312; }
+        } else {
+            bits = cdg_float_bits(value, single);
+        }
+        if bits < 0 { return cn_halt(c, str_concat("a float constant ", value)); }
+        cn_tag(c, ty);
+        let mut v = bits;
+        let mut i = 0;
+        while i < 16 {
+            let mut b = v % 256;
+            v = v / 256;
+            // The sign, the top bit of its own width.
+            if cdg_float_negative(value) {
+                if single && i == 3 { b = b + 128; }
+                if single == false && i == 7 { b = b + 128; }
+            }
+            strs_push(c.out, str_from_byte(b));
+            i = i + 1;
+        }
+        return 0;
+    }
     cn_halt(c, str_concat("a constant of type ", ty))
 }
 
@@ -900,4 +927,412 @@ pub fn cdg_digest(object: Str) -> Str {
     let s = cn_hash(sem);
     if s == "" { return ""; }
     str_concat(str_concat(str_concat(str_concat("{", "\"semantic\":\""), s), str_concat("\",\"body\":\"", b)), "\"}")
+}
+
+// --- floating-point constants (`nazm_sema::numeric`) ---------------------------------------------
+//
+// A `Float64` or `Float32` constant is printed as its shortest digits that read back to it
+// (`numeric::to_str`) and encoded by its bits. Both are computed here exactly, without a float
+// type: decimal digits held one to an element of an `Ints`, most significant first.
+
+// A float's text (`[-]D[.D][e[+-]D]`) read as the nearest value of its type, ties to even, as
+// Rust's `parse` reads it: its bits without the sign, or -1 for text that is not a number.
+pub fn cdg_float_bits(text: Str, single: Bool) -> Int {
+    let d = ints_new();
+    let mut e = 0;
+    let mut i = 0;
+    if i < str_len(text) && (str_byte(text, i) == 45 || str_byte(text, i) == 43) { i = i + 1; }
+    let mut seen = false;
+    let mut frac = false;
+    while i < str_len(text) && str_byte(text, i) != 101 && str_byte(text, i) != 69 {
+        let b = str_byte(text, i);
+        if b == 46 {
+            frac = true;
+        } else {
+            if b == 95 {
+                // A digit separator.
+            } else {
+                if b < 48 || b > 57 { return 0 - 1; }
+                seen = true;
+                ints_push(d, b - 48);
+                if frac { e = e - 1; }
+            }
+        }
+        i = i + 1;
+    }
+    if seen == false { return 0 - 1; }
+    if i < str_len(text) {
+        i = i + 1;
+        let mut neg = false;
+        if i < str_len(text) && (str_byte(text, i) == 45 || str_byte(text, i) == 43) {
+            neg = str_byte(text, i) == 45;
+            i = i + 1;
+        }
+        let mut x = 0;
+        while i < str_len(text) {
+            let b = str_byte(text, i);
+            if b < 48 || b > 57 { return 0 - 1; }
+            if x < 100000 { x = x * 10 + b - 48; }
+            i = i + 1;
+        }
+        if neg { e = e - x; } else { e = e + x; }
+    }
+    fl_bits(fl_strip(d), e, single)
+}
+
+// Whether a float's text is negative.
+pub fn cdg_float_negative(text: Str) -> Bool { str_len(text) > 0 && str_byte(text, 0) == 45 }
+
+// The value `d × 10^e` (`d` without leading zeros) as the nearest of its type's values, ties to
+// even: its bits without the sign. Past the largest finite value, infinity.
+fn fl_bits(d: Ints, e: Int, single: Bool) -> Int {
+    let mut p = 53;
+    let mut bias = 1023;
+    let mut emax = 2047;
+    if single {
+        p = 24;
+        bias = 127;
+        emax = 255;
+    }
+    if ints_len(d) == 0 { return 0; }
+    let smax = p - 2 + bias;
+    let top = fl_pow2(p);
+    let half = fl_pow2(p - 1);
+    // Scaled by 2^s so the integer part has `p` bits (`log2(10)` is 3.321928…); the estimate is
+    // corrected below.
+    let n10 = ints_len(d) + e;
+    if n10 > 400 { return emax * half; }
+    if n10 < 0 - 400 { return 0; }
+    let mut s = p - 1 - ((n10 - 1) * 3321928) / 1000000;
+    if s > smax { s = smax; }
+    let mut q = 0;
+    let mut cls = 0;
+    let mut going = true;
+    while going {
+        let r = fl_scaled(d, e, s);
+        q = ints_get(r, 0);
+        cls = ints_get(r, 1);
+        if q < 0 || q >= top {
+            s = s - 1;
+        } else {
+            if q < half && s < smax { s = s + 1; } else { going = false; }
+        }
+    }
+    if cls == 3 || (cls == 2 && q % 2 == 1) { q = q + 1; }
+    if q == top {
+        q = half;
+        s = s - 1;
+    }
+    if s == smax { return q; }
+    let biased = p - 1 - s + bias;
+    if biased >= emax { return emax * half; }
+    biased * half + (q - half)
+}
+
+fn fl_pow2(n: Int) -> Int {
+    let mut v = 1;
+    let mut i = 0;
+    while i < n {
+        v = v * 2;
+        i = i + 1;
+    }
+    v
+}
+
+// `floor(d × 10^e × 2^s)` and how the rest compares with a half — 0 none, 1 below, 2 a half
+// exactly, 3 above — as two `Ints`; the first is -1 where it has more than 18 digits.
+fn fl_scaled(d: Ints, e: Int, s: Int) -> Ints {
+    let a = ints_new();
+    let mut i = 0;
+    while i < ints_len(d) {
+        ints_push(a, ints_get(d, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < e {
+        ints_push(a, 0);
+        i = i + 1;
+    }
+    let mut m = 0;
+    if e < 0 { m = 0 - e; }
+    let out = ints_new();
+    if s >= 0 {
+        let mut x = a;
+        let mut k = s;
+        while k >= 30 {
+            x = fl_mul_small(x, 1073741824);
+            k = k - 30;
+        }
+        x = fl_mul_small(x, fl_pow2(k));
+        // Split off the last `m` digits: the rest, compared with a half.
+        let n = ints_len(x);
+        let rest = ints_new();
+        let head = ints_new();
+        let mut j = 0;
+        while j < m - n {
+            ints_push(rest, 0);
+            j = j + 1;
+        }
+        j = 0;
+        while j < n {
+            if j < n - m { ints_push(head, ints_get(x, j)); } else { ints_push(rest, ints_get(x, j)); }
+            j = j + 1;
+        }
+        ints_push(out, fl_small(head));
+        ints_push(out, fl_class(rest));
+        return out;
+    }
+    // Divided by 2^-s: the digits dropped first, then each halving's remainder.
+    let n = ints_len(a);
+    let mut sticky = false;
+    let mut x = ints_new();
+    let mut j = 0;
+    while j < n {
+        if j < n - m { ints_push(x, ints_get(a, j)); } else { if ints_get(a, j) != 0 { sticky = true; } }
+        j = j + 1;
+    }
+    let mut msb = 0;
+    let mut k = 0;
+    while k < 0 - s {
+        if msb == 1 { sticky = true; }
+        let rem = ints_new();
+        x = fl_halve(x, rem);
+        msb = ints_get(rem, 0);
+        k = k + 1;
+    }
+    ints_push(out, fl_small(x));
+    if msb == 1 {
+        if sticky { ints_push(out, 3); } else { ints_push(out, 2); }
+    } else {
+        if sticky { ints_push(out, 1); } else { ints_push(out, 0); }
+    }
+    out
+}
+
+// How `r` (its digits, the first worth a half's 5) compares with a half.
+fn fl_class(r: Ints) -> Int {
+    if ints_len(r) == 0 { return 0; }
+    let first = ints_get(r, 0);
+    let mut rest = false;
+    let mut i = 1;
+    while i < ints_len(r) {
+        if ints_get(r, i) != 0 { rest = true; }
+        i = i + 1;
+    }
+    if first > 5 { return 3; }
+    if first == 5 {
+        if rest { return 3; }
+        return 2;
+    }
+    if first > 0 || rest { return 1; }
+    0
+}
+
+// The value of `a`, or -1 past 18 digits.
+fn fl_small(a: Ints) -> Int {
+    let mut v = 0;
+    let mut n = 0;
+    let mut i = 0;
+    while i < ints_len(a) {
+        if n > 0 || ints_get(a, i) != 0 { n = n + 1; }
+        if n > 18 { return 0 - 1; }
+        v = v * 10 + ints_get(a, i);
+        i = i + 1;
+    }
+    v
+}
+
+fn fl_strip(a: Ints) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_len(a) && ints_get(a, i) == 0 { i = i + 1; }
+    while i < ints_len(a) {
+        ints_push(out, ints_get(a, i));
+        i = i + 1;
+    }
+    out
+}
+
+// `a × m`, for `m` below 2^31.
+fn fl_mul_small(a: Ints, m: Int) -> Ints {
+    let rev = ints_new();
+    let mut carry = 0;
+    let mut i = ints_len(a) - 1;
+    while i >= 0 {
+        let x = ints_get(a, i) * m + carry;
+        ints_push(rev, x % 10);
+        carry = x / 10;
+        i = i - 1;
+    }
+    while carry > 0 {
+        ints_push(rev, carry % 10);
+        carry = carry / 10;
+    }
+    let out = ints_new();
+    i = ints_len(rev) - 1;
+    while i >= 0 && ints_get(rev, i) == 0 { i = i - 1; }
+    while i >= 0 {
+        ints_push(out, ints_get(rev, i));
+        i = i - 1;
+    }
+    out
+}
+
+// `a / 2`, its remainder pushed to `rem`.
+fn fl_halve(a: Ints, rem: Ints) -> Ints {
+    let out = ints_new();
+    let mut r = 0;
+    let mut i = 0;
+    while i < ints_len(a) {
+        let x = r * 10 + ints_get(a, i);
+        if ints_len(out) > 0 || x / 2 != 0 { ints_push(out, x / 2); }
+        r = x % 2;
+        i = i + 1;
+    }
+    ints_push(rem, r);
+    out
+}
+
+// A float's shortest text (`numeric::to_str`): the fewest digits, correctly rounded ties to even,
+// that read back to the same value of its type, laid out as ECMAScript lays a number out.
+// `bits` is its bits without the sign.
+pub fn cdg_float_text(negative: Bool, bits: Int, single: Bool) -> Str {
+    let mut p = 53;
+    let mut bias = 1023;
+    let mut emax = 2047;
+    if single {
+        p = 24;
+        bias = 127;
+        emax = 255;
+    }
+    let half = fl_pow2(p - 1);
+    let mut sign = "";
+    if negative { sign = "-"; }
+    let mant = bits % half;
+    let be = bits / half;
+    if be == emax {
+        if mant == 0 { return str_concat(sign, "inf"); }
+        return "nan";
+    }
+    if bits == 0 { return str_concat(sign, "0"); }
+    let mut m = mant;
+    let mut e2 = 1 - bias - (p - 1);
+    if be > 0 {
+        m = mant + half;
+        e2 = be - bias - (p - 1);
+    }
+    // Its exact value, `g × 10^f`.
+    let mut g = fl_mul_small(fl_digits_of(m), 1);
+    let mut f = 0;
+    if e2 >= 0 {
+        let mut k = e2;
+        while k >= 30 {
+            g = fl_mul_small(g, 1073741824);
+            k = k - 30;
+        }
+        g = fl_mul_small(g, fl_pow2(k));
+    } else {
+        let mut k = 0 - e2;
+        while k >= 13 {
+            g = fl_mul_small(g, 1220703125);
+            k = k - 13;
+        }
+        let mut five = 1;
+        while k > 0 {
+            five = five * 5;
+            k = k - 1;
+        }
+        g = fl_mul_small(g, five);
+        f = e2;
+    }
+    let e10 = ints_len(g) - 1 + f;
+    let mut n = 1;
+    while n <= 17 {
+        let head = ints_new();
+        let mut x = e10;
+        let mut i = 0;
+        while i < n {
+            if i < ints_len(g) { ints_push(head, ints_get(g, i)); } else { ints_push(head, 0); }
+            i = i + 1;
+        }
+        if ints_len(g) > n {
+            let rest = ints_new();
+            i = n;
+            while i < ints_len(g) {
+                ints_push(rest, ints_get(g, i));
+                i = i + 1;
+            }
+            let cls = fl_class(rest);
+            if cls == 3 || (cls == 2 && ints_get(head, n - 1) % 2 == 1) {
+                // Up by one in the last place; past all nines, one more digit before the point.
+                let mut j = n - 1;
+                let mut carry = true;
+                while carry && j >= 0 {
+                    if ints_get(head, j) == 9 {
+                        ints_set(head, j, 0);
+                        j = j - 1;
+                    } else {
+                        ints_set(head, j, ints_get(head, j) + 1);
+                        carry = false;
+                    }
+                }
+                if carry {
+                    ints_set(head, 0, 1);
+                    x = x + 1;
+                }
+            }
+        }
+        if fl_bits(fl_strip(head), x - (n - 1), single) == bits || n == 17 {
+            let digits = strs_new();
+            i = 0;
+            while i < n {
+                strs_push(digits, int_to_str(ints_get(head, i)));
+                i = i + 1;
+            }
+            return str_concat(sign, fl_layout(str_join(digits, ""), x + 1));
+        }
+        n = n + 1;
+    }
+    ""
+}
+
+fn fl_digits_of(v: Int) -> Ints {
+    let rev = ints_new();
+    let mut x = v;
+    while x > 0 {
+        ints_push(rev, x % 10);
+        x = x / 10;
+    }
+    let out = ints_new();
+    let mut i = ints_len(rev) - 1;
+    while i >= 0 {
+        ints_push(out, ints_get(rev, i));
+        i = i - 1;
+    }
+    out
+}
+
+fn fl_zeros(n: Int) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < n {
+        strs_push(out, "0");
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+// ECMAScript's layout of `digits` × 10^(n − k), where `k` is the digit count (`numeric::layout`).
+fn fl_layout(digits: Str, n: Int) -> Str {
+    let k = str_len(digits);
+    if k <= n && n <= 21 { return str_concat(digits, fl_zeros(n - k)); }
+    if 0 < n && n <= 21 { return str_concat(str_concat(str_slice(digits, 0, n), "."), str_slice(digits, n, k)); }
+    if 0 - 6 < n && n <= 0 { return str_concat(str_concat("0.", fl_zeros(0 - n)), digits); }
+    let mut sign = "+";
+    if n - 1 < 0 { sign = "-"; }
+    let mut exp = n - 1;
+    if exp < 0 { exp = 0 - exp; }
+    let tail = str_concat(str_concat("e", sign), int_to_str(exp));
+    if k == 1 { return str_concat(digits, tail); }
+    str_concat(str_concat(str_concat(str_slice(digits, 0, 1), "."), str_slice(digits, 1, k)), tail)
 }
