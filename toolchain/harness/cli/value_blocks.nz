@@ -1,0 +1,245 @@
+// N12.1: a block used as a value — a `match` arm, a `let` initialiser, an argument, a field —
+// compiled by `nazm build` exactly as `nazm run` evaluates it. Ported from
+// `crates/nazm-cli/tests/value_blocks.rs` (R7).
+//
+// The compiled program agrees with the interpreted one about the value and about every memory
+// counter: a block's result is established before anything that backs it could be let go; a path
+// that transfers contributes no value; a transfer out of a block in an argument or a field
+// initialiser stops everything after it and reclaims what was made before it.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/memory_report.nz"
+
+/// What `both_exiting` saw: the counts both agreed on, and the native standard error.
+struct Both {
+    r: Counted,
+    stderr: Str,
+}
+
+/// Interpret it, compile and run it, and require the two to agree about everything. `code` is the
+/// exit status both must have: `0`, or `2` for a runtime failure.
+fn both_exiting(h: Caps, source: Str, code: Int) -> Result[Both, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", source)?;
+    let r = both_in(h, d, code);
+    scratch_remove(h, d);
+    r
+}
+
+fn both_in(h: Caps, d: Str, code: Int) -> Result[Both, Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let interpreted = run(h, nazm_bin(h.io), words("run --interpret m.nz"), d, env);
+    check_that(interpreted.code == code, f"interpreting: {interpreted.stderr}")?;
+    let a = counts(interpreted.stderr, text_trim(interpreted.stdout))?;
+    let built = nazm(h, d, words("build m.nz -o prog"));
+    check_that(built.code == 0, f"building failed: {built.stderr}")?;
+    let native = run(h, f"{d}/prog", strs_new(), d, env);
+    check_that(native.code == code, f"the program: {native.stderr}")?;
+    let b = counts(native.stderr, text_trim(native.stdout))?;
+    check_that(same_counted(a, b), f"the two implementations disagree: {counted_show(a)} vs {counted_show(b)}")?;
+    Result[Both, Str].Ok(value: Both(r: a, stderr: native.stderr))
+}
+
+fn both(h: Caps, source: Str) -> Result[Counted, Str] ! { io, spawn } {
+    let b = both_exiting(h, source, 0)?;
+    check_that(strs_len(lines(b.stderr)) == 1, f"unexpected stderr: {b.stderr}")?;
+    Result[Counted, Str].Ok(value: b.r)
+}
+
+/// Everything allocated was reclaimed.
+fn clean(r: Counted) -> Result[Int, Str] ! {} {
+    check_that(r.sequences.live == 0 && r.sequences.allocated == r.sequences.reclaimed, f"sequences: {counted_show(r)}")?;
+    check_that(r.strings.live == 0 && r.strings.allocated == r.strings.reclaimed, f"strings: {counted_show(r)}")?;
+    check_that(r.channels.live == 0 && r.channels.allocated == r.channels.reclaimed, f"channels: {counted_show(r)}")
+}
+
+/// The codes `nazm check` refuses `source` with, which it must refuse.
+fn refused_codes(h: Caps, source: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", source)?;
+    let out = nazm(h, d, words("check --no-cache m.nz --json"));
+    scratch_remove(h, d);
+    check_that(out.code != 0, f"accepted: {source}")?;
+    let codes_ = strs_new();
+    for l in lines(out.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if str_len(jstr(doc, "code")) > 0 {
+                    strs_push(codes_, jstr(doc, "code"));
+                }
+                0
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: codes_)
+}
+
+fn holds(xs: Strs, x: Str) -> Bool ! {} {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+/// Small strings made and thrown away, so that a block released too early is reused.
+const CHURN: Str = "fn churn() -> Int {\n    let mut noise = vec_new[Str]();\n    let mut k = 0;\n    while k < 64 {\n        vec_push(noise, str_concat(\"noise-\", int_to_str(k)));\n        k = k + 1;\n    }\n    noise = vec_new[Str]();\n    vec_len(noise)\n}\n";
+
+/// An owning record and an owning enum.
+const TYPES: Str = "struct Item {\n    name: Str,\n    tags: Ints,\n}\nenum Shape {\n    Named(label: Str),\n    Plain,\n}\nfn item(n: Int) -> Item {\n    let tags = ints_new();\n    ints_push(tags, n);\n    Item(name: str_concat(\"item-\", int_to_str(n)), tags: tags)\n}\n";
+
+fn with(body: Str) -> Str ! {} {
+    f"{TYPES}{CHURN}{body}"
+}
+
+fn valued(h: Caps, body: Str, want: Str) -> Result[Counted, Str] ! { io, spawn } {
+    let r = both(h, with(body))?;
+    check_that(r.value == want, f"{r.value}, expected {want}")?;
+    clean(r)?;
+    Result[Counted, Str].Ok(value: r)
+}
+
+fn ok(r: Result[Counted, Str]) -> Result[Int, Str] ! {} {
+    r?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_str_tail_survives_its_local(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // "text-0", then four of "text-NNN".
+    ok(valued(caps(io, p, sp, v, t), "fn make(n: Int) -> Str { str_concat(\"text-\", int_to_str(n)) }\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 5 {\n        let s = {\n            let t = make(i * 111);\n            t\n        };\n        churn();\n        total = total + str_len(s);\n        i = i + 1;\n    }\n    total\n}\n", "38"))
+}
+
+@test
+fn a_record_tail_keeps_its_owning_fields(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn main() -> Int {\n    let it = {\n        let a = item(7);\n        let b = item(8);\n        a\n    };\n    churn();\n    str_len(it.name) * 100 + ints_get(it.tags, 0)\n}\n", "607"))
+}
+
+@test
+fn an_enum_tail_keeps_its_active_payload(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn main() -> Int {\n    let sh = {\n        let txt = str_concat(\"lab\", int_to_str(1234));\n        let made = Shape.Named(label: txt);\n        made\n    };\n    churn();\n    match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }\n}\n", "7"))
+}
+
+@test
+fn a_vec_tail_is_the_same_handle_and_not_a_copy(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // One vector — `churn` accounts for the other two.
+    let r = valued(caps(io, p, sp, v, t), "fn main() -> Int {\n    let existing = vec_new[Str]();\n    vec_push(existing, int_to_str(5));\n    let xs = {\n        let ys = existing;\n        ys\n    };\n    vec_push(xs, int_to_str(66));\n    churn();\n    vec_len(existing) * 10 + str_len(vec_get(existing, 1))\n}\n", "22")?;
+    check_that(r.sequences.allocated == 3, counted_show(r))
+}
+
+@test
+fn a_pattern_binding_returned_through_an_arm_block_outlives_the_scrutinee(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "enum Bag {\n    Full(items: Vec[Str]),\n    Empty,\n}\nfn text(o: Option[Str]) -> Str {\n    match o {\n        Option.None() => {\n            let d = str_concat(\"no\", \"ne\");\n            d\n        },\n        Option.Some(value: s) => {\n            let x = s;\n            x\n        },\n    }\n}\nfn thing(r: Result[Item, Str]) -> Item {\n    match r {\n        Result.Ok(value: i) => {\n            let kept = i;\n            kept\n        },\n        Result.Err(error: e) => {\n            let fallback = item(str_len(e));\n            fallback\n        },\n    }\n}\nfn bag(b: Bag) -> Vec[Str] {\n    match b {\n        Bag.Full(items: xs) => {\n            let ys = xs;\n            ys\n        },\n        Bag.Empty() => {\n            let fresh = vec_new[Str]();\n            vec_push(fresh, int_to_str(0));\n            fresh\n        },\n    }\n}\nfn main() -> Int {\n    let a = text(Option[Str].Some(value: str_concat(\"some-\", int_to_str(42))));\n    let b = text(Option[Str].None());\n    churn();\n    let i = thing(Result[Item, Str].Ok(value: item(3)));\n    let j = thing(Result[Item, Str].Err(error: int_to_str(12345)));\n    churn();\n    let full = vec_new[Str]();\n    vec_push(full, int_to_str(777));\n    vec_push(full, int_to_str(8));\n    let c = bag(Bag.Full(items: full));\n    let d = bag(Bag.Empty());\n    churn();\n    str_len(a) * 1000000 + str_len(b) * 100000 + ints_get(i.tags, 0) * 10000 + ints_get(j.tags, 0) * 1000 + vec_len(c) * 100 + str_len(vec_get(c, 0)) * 10 + vec_len(d)\n}\n", "7435231"))
+}
+
+@test
+fn a_generic_arm_block_moves_a_t_and_nothing_more(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn choose[T](x: Option[T], fallback: T) -> T {\n    match x {\n        Option.None() => {\n            let f = fallback;\n            f\n        },\n        Option.Some(value: v) => {\n            let w = v;\n            w\n        },\n    }\n}\nfn main() -> Int {\n    let a = choose(Option[Str].None(), int_to_str(1234));\n    let b = choose(Option[Str].Some(value: str_concat(\"x\", \"yz\")), int_to_str(5));\n    let i = choose(Option[Item].Some(value: item(6)), item(9));\n    let v = choose(Option[Vec[Str]].None(), vec_new[Str]());\n    churn();\n    str_len(a) * 1000 + str_len(b) * 100 + ints_get(i.tags, 0) * 10 + vec_len(v)\n}\n", "4360"))
+}
+
+@test
+fn a_question_mark_inside_an_arm_block_cleans_the_arm_and_joins_its_scope(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // a = 41 + len "99" + len "held-1" = 49; b's error "404"; c = 0; both tasks sent 6.
+    ok(valued(caps(io, p, sp, v, t), "fn worker(out: Chan, tag: Str) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < 200000 { s = s + i % 3; i = i + 1; }\n    chan_send(out, str_len(tag));\n    s\n}\nfn g(ok: Bool) -> Result[Int, Str] {\n    if ok { return Result[Int, Str].Ok(value: 41); }\n    Result[Int, Str].Err(error: int_to_str(404))\n}\nenum State {\n    A,\n    B,\n}\nfn f(s: State, ok: Bool, out: Chan, tasks: SpawnCap) -> Result[Int, Str] {\n    let x = match s {\n        State.A() => {\n            let held = str_concat(\"held-\", int_to_str(1));\n            let mut n = 0;\n            scope {\n                spawn worker(out, held);\n                let inner = int_to_str(99);\n                n = g(ok)? + str_len(inner);\n            }\n            n + str_len(held)\n        },\n        State.B() => {\n            0\n        },\n    };\n    Result[Int, Str].Ok(value: x)\n}\nfn main(tasks: SpawnCap) -> Int {\n    let out = chan_new(8);\n    let a = f(State.A(), true, out, tasks);\n    let b = f(State.A(), false, out, tasks);\n    let c = f(State.B(), false, out, tasks);\n    chan_close(out);\n    let buf = ints_new();\n    let got = chan_recv(out, buf);\n    let more = chan_recv(out, buf);\n    let rest = chan_recv(out, buf);\n    churn();\n    let va = match a { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };\n    let vb = match b { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e), };\n    let vc = match c { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };\n    va * 10000 + vb * 1000 + vc * 100 + ints_len(buf) * 10 + ints_get(buf, 0)\n}\n", "493026"))
+}
+
+@test
+fn a_three_arm_match_joins_only_the_arm_that_arrives(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // 100, 3, 5 + 2 = 7, and "xy" propagated: -2.
+    ok(valued(caps(io, p, sp, v, t), "enum E {\n    A,\n    B,\n    C,\n}\nfn g(ok: Bool) -> Result[Int, Str] {\n    if ok { return Result[Int, Str].Ok(value: 5); }\n    Result[Int, Str].Err(error: str_concat(\"x\", \"y\"))\n}\nfn f(e: E, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {\n    let v = match e {\n        E.A() => {\n            let gone = int_to_str(1);\n            return Result[Int, Str].Ok(value: 100);\n        },\n        E.B() => {\n            let s = str_concat(\"ab\", \"c\");\n            str_len(s)\n        },\n        E.C() => {\n            let held = int_to_str(22);\n            g(ok)? + str_len(held)\n        },\n    };\n    Result[Int, Str].Ok(value: v)\n}\nfn show(r: Result[Int, Str]) -> Int {\n    match r { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - str_len(e), }\n}\nfn main(tasks: SpawnCap) -> Int {\n    let a = show(f(E.A(), true, tasks));\n    let b = show(f(E.B(), true, tasks));\n    let c = show(f(E.C(), true, tasks));\n    let d = show(f(E.C(), false, tasks));\n    churn();\n    a * 10000 + b * 1000 + c * 10 + d\n}\n", "1003068"))
+}
+
+@test
+fn a_match_whose_arms_all_leave_produces_no_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn f(o: Option[Str], tasks: SpawnCap) -> Int {\n    let n = match o {\n        Option.None() => {\n            let s = int_to_str(11);\n            return str_len(s);\n        },\n        Option.Some(value: v) => {\n            let w = v;\n            return str_len(w) * 10;\n        },\n    };\n    n\n}\nfn main(tasks: SpawnCap) -> Int {\n    let a = f(Option[Str].None(), tasks);\n    let b = f(Option[Str].Some(value: str_concat(\"ab\", \"c\")), tasks);\n    churn();\n    a + b\n}\n", "32"))
+}
+
+@test
+fn break_and_continue_leave_an_arm_block_with_no_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // "200", "400", "600", then the break at 8.
+    ok(valued(caps(io, p, sp, v, t), "fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    while i < 10 {\n        i = i + 1;\n        let o = if i % 2 == 0 { Option[Str].Some(value: int_to_str(i * 100)) } else { Option[Str].None() };\n        let v = match o {\n            Option.None() => {\n                let wasted = str_concat(\"skip-\", int_to_str(i));\n                continue;\n            },\n            Option.Some(value: s) => {\n                let kept = s;\n                if i == 8 { break; }\n                kept\n            },\n        };\n        churn();\n        total = total + str_len(v);\n    }\n    total\n}\n", "9"))
+}
+
+@test
+fn a_return_inside_a_bare_block_leaves_the_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn pick(n: Int) -> Str {\n    let s = {\n        let a = str_concat(\"a-\", int_to_str(n));\n        if n > 5 { return a; }\n        let b = str_concat(a, \"-b\");\n        b\n    };\n    str_concat(s, \"!\")\n}\nfn main() -> Int {\n    let x = pick(3);\n    let y = pick(9);\n    churn();\n    str_len(x) * 100 + str_len(y)\n}\n", "603"))
+}
+
+@test
+fn a_block_argument_that_leaves_stops_the_call_and_reclaims_the_argument_before_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn later(log: Ints) -> Str {\n    ints_push(log, 1);\n    str_concat(\"late\", \"r\")\n}\nfn consume(a: Str, b: Str, c: Str) -> Int { str_len(a) + str_len(b) + str_len(c) }\nfn go(fail: Bool, log: Ints) -> Int {\n    consume(int_to_str(12345), {\n        let t = str_concat(\"mid-\", int_to_str(1));\n        if fail { return 0 - 1; }\n        t\n    }, later(log))\n}\nfn main() -> Int {\n    let log = ints_new();\n    let a = go(false, log);\n    let b = go(true, log);\n    churn();\n    a * 1000 + (b + 1) * 100 + ints_len(log)\n}\n", "15001"))
+}
+
+@test
+fn a_block_initialiser_that_leaves_releases_the_half_built_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn record(fail: Bool) -> Int {\n    let it = Item(name: str_concat(\"nm-\", int_to_str(7)), tags: {\n        let ts = ints_new();\n        ints_push(ts, 3);\n        if fail { return 0 - 1; }\n        ts\n    });\n    str_len(it.name) * 10 + ints_get(it.tags, 0)\n}\nfn variant(fail: Bool) -> Int {\n    let sh = Shape.Named(label: {\n        let l = int_to_str(4444);\n        if fail { return 0 - 1; }\n        l\n    });\n    match sh { Shape.Named(label: l) => str_len(l), Shape.Plain() => 0, }\n}\nfn main() -> Int {\n    let a = record(false);\n    let b = record(true);\n    let c = variant(false);\n    let d = variant(true);\n    churn();\n    a * 1000 + (b + 1) * 100 + c * 10 + (d + 1)\n}\n", "43040"))
+}
+
+@test
+fn a_block_producing_a_result_is_propagated_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn mk(log: Ints, ok: Bool) -> Result[Str, Str] {\n    ints_push(log, 1);\n    if ok { return Result[Str, Str].Ok(value: int_to_str(4321)); }\n    Result[Str, Str].Err(error: int_to_str(9))\n}\nfn f(log: Ints, c: Bool, ok: Bool, tasks: SpawnCap) -> Result[Int, Str] {\n    let a = (if c { mk(log, ok) } else { mk(log, true) })?;\n    let b = ({\n        let r = mk(log, ok);\n        r\n    })?;\n    let m = (match Option[Int].Some(value: 1) {\n        Option.None() => {\n            mk(log, true)\n        },\n        Option.Some(value: q) => {\n            let r2 = mk(log, ok);\n            r2\n        },\n    })?;\n    Result[Int, Str].Ok(value: str_len(a) + str_len(b) + str_len(m))\n}\nfn main(tasks: SpawnCap) -> Int {\n    let log = ints_new();\n    let x = f(log, true, true, tasks);\n    let y = f(log, true, false, tasks);\n    churn();\n    let vx = match x { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, };\n    let vy = match y { Result.Ok(value: n) => 0 - 1, Result.Err(error: e) => str_len(e), };\n    vx * 1000 + vy * 100 + ints_len(log)\n}\n", "12104"))
+}
+
+@test
+fn a_statement_match_whose_arms_produce_nothing_assigns_in_place(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn main() -> Int {\n    let mut name = str_concat(\"start\", \"\");\n    let mut i = 0;\n    while i < 6 {\n        let o = if i % 3 == 0 { Option[Str].None() } else { Option[Str].Some(value: int_to_str(i * 1000)) };\n        match o {\n            Option.None() => {\n                name = str_concat(name, \".\");\n            },\n            Option.Some(value: s) => {\n                let t = s;\n                name = t;\n            },\n        };\n        i = i + 1;\n    }\n    {\n        let tail = str_concat(name, \"\");\n        name = tail;\n    }\n    churn();\n    str_len(name)\n}\n", "4"))
+}
+
+@test
+fn a_failure_inside_an_arm_block_releases_the_arm_and_the_match(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The division fails with the arm's string and sequence live, and the scrutinee held by the
+    // `match`. Each is released exactly once on the way out.
+    let b = both_exiting(h, "fn main() -> Int {\n    let o = Option[Ints].Some(value: ints_new());\n    let v = match o {\n        Option.None() => {\n            0\n        },\n        Option.Some(value: zs) => {\n            let held = str_concat(\"held\", int_to_str(1));\n            let xs = ints_new();\n            ints_push(xs, 5);\n            ints_get(xs, 0) / ints_len(zs)\n        },\n    };\n    v\n}\n", 2)?;
+    check_that(text_contains(b.stderr, "N0401"), b.stderr)?;
+    clean(b.r)?;
+    check_that(b.r.sequences.allocated == 2, counted_show(b.r))?;
+    check_that(b.r.strings.allocated == 2, counted_show(b.r))
+}
+
+@test
+fn if_blocks_keep_every_completion_pairing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(valued(caps(io, p, sp, v, t), "fn vv(c: Bool) -> Str {\n    if c {\n        let a = int_to_str(1);\n        a\n    } else {\n        let b = int_to_str(22);\n        b\n    }\n}\nfn vd(c: Bool) -> Str {\n    let s = if c {\n        let a = int_to_str(333);\n        a\n    } else {\n        let b = int_to_str(0);\n        return b;\n    };\n    s\n}\nfn dv(c: Bool) -> Str {\n    let s = if c {\n        let a = int_to_str(0);\n        return a;\n    } else {\n        let b = int_to_str(4444);\n        b\n    };\n    s\n}\nfn dd(c: Bool) -> Str {\n    if c {\n        return int_to_str(55555);\n    } else {\n        return int_to_str(666666);\n    }\n}\nfn main() -> Int {\n    let t = str_len(vv(true)) + str_len(vv(false)) * 10 + str_len(vd(true)) * 100 + str_len(vd(false)) * 1000 + str_len(dv(false)) * 10000 + str_len(dv(true)) * 100000;\n    churn();\n    t + str_len(dd(true)) * 1000000 + str_len(dd(false)) * 10000000\n}\n", "65141321"))
+}
+
+@test
+fn completions_that_do_not_join_are_still_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Value/Unit in an `if`, a Unit arm beside a Value arm used as a value, arm blocks of two
+    // types, and a Unit block where a value is needed.
+    check_that(holds(refused_codes(h, "fn f(c: Bool, tasks: SpawnCap) -> Int {\n    let mut z = 0;\n    if c { 1 } else { z = 2; }\n}\nfn main(tasks: SpawnCap) -> Int { f(true, tasks) }\n")?, "N0302"), "Value/Unit in an `if`")?;
+    check_that(holds(refused_codes(h, "fn f(o: Option[Int], tasks: SpawnCap) -> Int {\n    let mut z = 0;\n    let x = match o {\n        Option.None() => {\n            z = 1;\n        },\n        Option.Some(value: v) => {\n            v\n        },\n    };\n    x\n}\nfn main(tasks: SpawnCap) -> Int { f(Option[Int].None(), tasks) }\n")?, "N0300"), "a Unit arm beside a Value arm")?;
+    check_that(holds(refused_codes(h, "fn f(o: Option[Int], tasks: SpawnCap) -> Int {\n    match o {\n        Option.None() => {\n            1\n        },\n        Option.Some(value: v) => {\n            let s = int_to_str(v);\n            s\n        },\n    }\n}\nfn main(tasks: SpawnCap) -> Int { f(Option[Int].None(), tasks) }\n")?, "N0302"), "arm blocks of two types")?;
+    check_that(holds(refused_codes(h, "fn main() -> Int {\n    let mut z = 0;\n    let x = {\n        z = 1;\n    };\n    0\n}\n")?, "N0300"), "a Unit block where a value is needed")
+}
+
+fn across(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "nazm.root", "")?;
+    scratch_write(h, d, "b.nz", "pub enum Token {\n    Word(text: Str),\n    Number(value: Int),\n    End,\n}\npub fn token(n: Int) -> Token {\n    if n == 0 { return Token.End(); }\n    if n % 2 == 0 { return Token.Number(value: n); }\n    Token.Word(text: str_concat(\"w\", int_to_str(n)))\n}\npub fn find(n: Int) -> Option[Str] {\n    if n > 3 { return Option[Str].Some(value: int_to_str(n * 11)); }\n    Option[Str].None()\n}\n")?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\nfn score(n: Int) -> Int {\n    let t = token(n);\n    let base = match t {\n        Token.Word(text: s) => {\n            let w = s;\n            str_len(w) * 100\n        },\n        Token.Number(value: v) => {\n            let doubled = v * 2;\n            doubled\n        },\n        Token.End() => {\n            0\n        },\n    };\n    let extra = match find(n) {\n        Option.None() => {\n            0\n        },\n        Option.Some(value: f) => {\n            let g = f;\n            str_len(g)\n        },\n    };\n    base + extra\n}\nfn main() -> Int { score(0) + score(3) * 10 + score(4) * 1000 + score(15) * 100000 }\n")?;
+    let ran = nazm(h, d, words("run --interpret a.nz"));
+    let built = nazm(h, d, words("build a.nz -o prog"));
+    check_that(built.code == 0, built.stderr)?;
+    let native = run(h, f"{d}/prog", strs_new(), "", suite_env(h));
+    // score(0) = 0; score(3) = 200; score(4) = 10; score(15) = 303.
+    let expected = int_to_str(200 * 10 + 10 * 1000 + 303 * 100000);
+    check_that(text_trim(ran.stdout) == expected, ran.stdout)?;
+    check_that(text_trim(native.stdout) == expected, native.stdout)
+}
+
+@test
+fn an_importer_matches_a_dependency_s_enum_with_arm_blocks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // B exports an enum and an `Option`-producing API; A matches both with arm blocks, built as
+    // two units.
+    let d = scratch_new(h);
+    let r = across(h, d);
+    scratch_remove(h, d);
+    r
+}
