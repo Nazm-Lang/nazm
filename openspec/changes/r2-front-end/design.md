@@ -123,7 +123,8 @@ does not resolve yet.
 **D14 — The built-in table is generated, never transcribed.** `compiler/builtins.nz` is printed by
 the reference dumper's `builtins` mode from `nazm_sema::Intrinsic::ALL` — each built-in's name,
 parameter and result shapes, type parameters, numeric class, whether it is a prelude name, effect
-and the authority it needs (`CapabilityKind::of_intrinsic`) — and `toolchain/frontend-tests/builtins.sh`
+and the authority it needs (`CapabilityKind::of_intrinsic`), and which arguments are sinks
+(`SinkClass::of_intrinsic`) — and `toolchain/frontend-tests/builtins.sh`
 regenerates it (`--check` says whether the tree's copy is current). One table, as `intrinsic.rs` says
 of its own two readers: the Nazm checker cannot drift from the Rust one by a hand-copied row.
 

@@ -56,6 +56,9 @@ fn main(io: IoCap) -> Int {
 
 // The compilation rooted at `path`, loaded, parsed and checked, every diagnostic into `d`.
 fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
+    // A module of a package (a `nazm.toml` beside it or above it) is a package's compilation,
+    // which the loader does not carry yet.
+    if in_package(path, io) { eprint(str_concat("diagnose: the loader stops at a package", nl())); }
     let loaded = ld_load(path, library, d, io);
     // A compilation that could not be loaded reports the loader's diagnostics and nothing else.
     if dg_len(d) > 0 {
@@ -113,4 +116,25 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
         }
     }
     0
+}
+
+// Whether a package manifest is in the directory holding `path`, or in one of the two above it.
+fn in_package(path: Str, io: IoCap) -> Bool {
+    let mut dir = parent_dir(path);
+    let mut up = 0;
+    while up < 3 {
+        if file_exists(str_concat(dir, "/nazm.toml")) { return true; }
+        dir = parent_dir(dir);
+        up = up + 1;
+    }
+    false
+}
+
+fn parent_dir(path: Str) -> Str {
+    let mut i = str_len(path) - 1;
+    while i > 0 {
+        if str_byte(path, i) == 47 { return str_slice(path, 0, i); }
+        i = i - 1;
+    }
+    "."
 }
