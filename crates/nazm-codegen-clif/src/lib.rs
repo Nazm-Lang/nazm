@@ -28,8 +28,9 @@ pub const CRANELIFT_VERSION: &str = "0.136.1";
 /// 2 in Q1: stack probes (Q1-A1-01). 3 in Gate 3: a float converted to an 8- or 16-bit integer is
 /// converted at 32 bits and clamped (3B-2). 4 in R1 (5b.8): a Nazm function's failure bit returned
 /// beside its result, and the blocks only a failure reaches laid out cold. 5 after 0.10.0: x86_64
-/// passes a 128-bit integer as LLVM does (`enable_llvm_abi_extensions`).
-pub const TRANSLATOR_REVISION: u32 = 5;
+/// passes a 128-bit integer as LLVM does (`enable_llvm_abi_extensions`). 6 in R1.5 (D14): an ELF
+/// object has a section per function and per datum, so `--gc-sections` strips what is unused.
+pub const TRANSLATOR_REVISION: u32 = 6;
 
 /// The Cranelift backend.
 #[derive(Debug, Clone)]
