@@ -30,9 +30,12 @@ pub struct Code {
     loc_col: Ints,
     /// Each function symbol's compact unwind encoding, or 0.
     fn_enc: Ints,
+    /// The symbol of `nz.stack_limit` when the program has one thread, so `nz.stack_check` is
+    /// inlined against it as LLVM inlines it (7.3); -1 to call the runtime.
+    limit_sym: Int,
 }
 
-pub fn code_new(nsyms: Int, apple: Bool) -> Code {
+pub fn code_new(nsyms: Int, apple: Bool, limit_sym: Int) -> Code {
     let at = ints_new()
     let enc = ints_new()
     let mut i = 0
@@ -44,7 +47,62 @@ pub fn code_new(nsyms: Int, apple: Bool) -> Code {
     Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
             rel_pcrel: ints_new(), rel_len: ints_new(),
             sym_at: at, errors: strs_new(), apple: apple, loc_at: ints_new(),
-            loc_file: ints_new(), loc_line: ints_new(), loc_col: ints_new(), fn_enc: enc)
+            loc_file: ints_new(), loc_line: ints_new(), loc_col: ints_new(), fn_enc: enc,
+            limit_sym: limit_sym)
+}
+
+/// Whether `x` is a call of `nz.stack_check` to inline against `nz.stack_limit` (7.3).
+pub fn inline_check(u: Unit, c: Code, x: Ins) -> Bool {
+    c.limit_sym >= 0 && x.op == OP_CALL && ints_len(x.args) == 0 && x.sym >= 0 &&
+        u.syms[x.sym].name == "nz.stack_check"
+}
+
+/// How many times each value is read. A `loc`'s operands are positions, a terminator's blocks
+/// are blocks; anything else counted that is not a value only counts too many, which forbids a
+/// fusion, never permits a wrong one.
+pub fn use_counts(f: Func, n: Int) -> Ints {
+    let uses = ints_new()
+    let mut i = 0
+    while i < n {
+        ints_push(uses, 0)
+        i += 1
+    }
+    for x in f.insts {
+        if x.op != OP_LOC {
+            count_use(uses, x.a)
+            count_use(uses, x.b)
+            count_use(uses, x.c)
+            if x.op == OP_CALL || x.op == OP_CALLI {
+                for v in x.args { count_use(uses, v) }
+            }
+        }
+    }
+    for t in f.terms { count_use(uses, t.a) }
+    uses
+}
+
+/// A selector's fusion state: [the value that may be fused, the value fused, its condition].
+pub fn fuse_new() -> Ints {
+    let r = ints_new()
+    ints_push(r, -1)
+    ints_push(r, -1)
+    ints_push(r, 0)
+    r
+}
+
+fn count_use(uses: Ints, v: Int) {
+    if v >= 0 && v < ints_len(uses) { ints_set(uses, v, uses[v] + 1) }
+}
+
+/// The condition the `i`-th instruction may hand to its block's branch in the flags rather than
+/// a register (7.3): a comparison's result, or a checked operation's overflow bit, when it is the
+/// block's last instruction, the branch's condition, and read nowhere else. -1 otherwise.
+pub fn fusable(f: Func, uses: Ints, bi: Int, i: Int) -> Int {
+    if i != f.block_end[bi] - 1 || bi >= f.terms.len() { return -1 }
+    let t = f.terms[bi]
+    if t.op != T_BRANCH || t.a < 0 || t.a >= ints_len(uses) || uses[t.a] != 1 { return -1 }
+    let x = f.insts[i]
+    if (x.op == OP_CMP && x.dst == t.a) || (x.op == OP_OVF && x.dst2 == t.a) { t.a } else { -1 }
 }
 
 pub fn align_up(x: Int, a: Int) -> Int {

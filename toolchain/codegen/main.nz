@@ -1,7 +1,9 @@
 // nzcg: Nazm's own code generator (R9, `openspec/changes/r9-code-generator/`).
 //
-//     nzcg [--target TRIPLE] LIR OUTDIR
-//     nzcg --forms LIR          the LIR forms the program uses, one per line (design D12)
+//     nzcg [--target TRIPLE] [--one-thread] LIR OUTDIR
+//                               (--one-thread: the program has one thread, so its stack limit is
+//                               a plain global and the stack check is inlined, as LLVM's is)
+//     nzcg --forms LIR         the LIR forms the program uses, one per line (design D12)
 //     nzcg --universe           every form LIR admits, one per line
 //
 // Reads a program's units as `nazm lir --ops` prints them from the file LIR, and writes one
@@ -13,6 +15,8 @@
 
 use "@std/file"
 use "@std/ioerror"
+use "@std/hash"
+use "@std/hashmap"
 use "lir.nz"
 use "sel.nz"
 use "sel_x64.nz"
@@ -40,12 +44,21 @@ fn main(io: IoCap) {
     }
     let mut first = 0
     let mut target = "aarch64-apple-darwin"
-    if args_count() == 4 && arg(0) == "--target" {
-        target = arg(1)
-        first = 2
+    let mut one_thread = false
+    let mut flags = true
+    while flags && first < args_count() {
+        if arg(first) == "--target" && first + 1 < args_count() {
+            target = arg(first + 1)
+            first += 2
+        } else if arg(first) == "--one-thread" {
+            one_thread = true
+            first += 1
+        } else {
+            flags = false
+        }
     }
     if args_count() != first + 2 {
-        eprintln("usage: nzcg [--target TRIPLE] LIR OUTDIR")
+        eprintln("usage: nzcg [--target TRIPLE] [--one-thread] LIR OUTDIR")
         exit_with(2)
     }
     let x64 = target == "x86_64-apple-darwin" || target == "x86_64-unknown-linux-gnu"
@@ -61,7 +74,21 @@ fn main(io: IoCap) {
     let objects = vec_new[Bytes]()
     if strs_len(errors) == 0 {
         for u in p.units {
-            let c = code_new(u.syms.len(), apple)
+            // A program of one thread keeps its stack limit in a plain global the runtime
+            // defines; a unit that checks the stack reads it directly (7.3).
+            let mut limit = -1
+            if one_thread {
+                match hashmap_get(u.index, "nz.stack_check") {
+                    Some(k) => {
+                        limit = u.syms.len()
+                        u.syms.push(Sym(name: "nz.stack_limit", kind: 1, link: L_IMPORT,
+                                params: ints_new(), ret: C_NONE, conv: CONV_C))
+                        hashmap_set(u.index, "nz.stack_limit", limit)
+                    },
+                    None => { },
+                }
+            }
+            let c = code_new(u.syms.len(), apple, limit)
             for f in u.funcs {
                 if str_len(f.section) > 0 {
                     strs_push(errors, f"`{f.name}` in section `{f.section}` (section placement, a board's, is not carried)")

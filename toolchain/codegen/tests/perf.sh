@@ -10,6 +10,9 @@ NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
 # The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
 # the runtime change); the 0.10.0 release above only builds the generator.
 REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
+# `--one-thread` when the reference made the program one thread: its runtime then defines the
+# stack limit as a plain global, not a thread-local one (the generator inlines the check, 7.3).
+one_thread() { nm -m "$1"/*.o 2>/dev/null | grep -qE "\(__DATA,__(common|bss|data)\) .*_nz\.stack_limit\$" && echo --one-thread; }
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
@@ -45,7 +48,7 @@ for src in "$ROOT/bench/compare/nazm/fib.nz" "$ROOT/bench/compare/nazm/words.nz"
   "$REF" build --target "$TARGET" --opt-level 2 "$src" -o "$W/o2" >/dev/null 2>&1
   "$REF" build --target "$TARGET" --objects "$W/obj" "$src" >/dev/null 2>&1
   "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>/dev/null
-  if ! "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" 2>"$W/gen.err"; then
+  if ! "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" 2>"$W/gen.err"; then
     echo "$name: refused: $(head -1 "$W/gen.err")"; continue
   fi
   k=0; list=()
