@@ -10977,6 +10977,17 @@ nz.exc
 "#
 }
 
+pub fn rt_plain_in_one_thread() -> Str ! {} {
+    r#"nz.str_retain
+nz.str_release
+nz.closure_retain
+nz.closure_release
+nz.chan_retain
+nz.chan_release
+nz.chanv_release
+"#
+}
+
 pub fn rt_abi_revision() -> Int ! {} { 34 }
 
 pub fn rt_target_note() -> Str ! {} {

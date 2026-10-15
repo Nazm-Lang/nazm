@@ -1,7 +1,8 @@
 """Write `toolchain/pipeline/rtext.nz` from the runtime crate (`crates/nazm-runtime/src`): every
 text constant of the hosted runtime (`const NAME: &str = ...;`, as `rt_FILE_NAME()`), the
 declarations every unit carries (`os::declarations`, `GLOBALS`, the declared `INVENTORY`), the
-state a program of one thread keeps in plain globals (`SINGLE_THREAD_STATE`), and each inventory
+state a program of one thread keeps in plain globals (`SINGLE_THREAD_STATE`), the functions whose
+reference counts it makes plain (`PLAIN_IN_ONE_THREAD`), and each inventory
 entry as Rust's `Debug` prints it (what the runtime's digest covers). The texts are the runtime's
 data; the rules that assemble them are ported by hand in `rtgen.nz`. Run from the repository root
 whenever the runtime changes; `run.sh` checks the file is current."""
@@ -169,6 +170,9 @@ add("rt_inventory_debug", "\n".join(dbg) + "\n")
 
 m = re.search(r"pub const SINGLE_THREAD_STATE: &\[&str\] = &\[([^\]]*)\];", lib)
 add("rt_single_thread_state", "\n".join(re.findall(r'"([^"]+)"', m.group(1))) + "\n")
+core = open(SRC + "core.rs").read()
+m = re.search(r"pub const PLAIN_IN_ONE_THREAD: \[&str; \d+\] = \[([^\]]*)\];", core)
+add("rt_plain_in_one_thread", "\n".join(re.findall(r'"([^"]+)"', m.group(1))) + "\n")
 m = re.search(r"pub const RUNTIME_ABI_REVISION: u32 = (\d+);", lib)
 fns.append("pub fn rt_abi_revision() -> Int ! {} { " + m.group(1) + " }\n")
 m = re.search(r'pub const TARGET_NOTE: &str = "', lib)
