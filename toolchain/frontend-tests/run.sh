@@ -11,8 +11,9 @@
 # when anything differs.
 #
 # Inputs (design D8): tests/compat/v1, corpus, examples, the compiler's own sources, the
-# conformance and parity corpora, the hand-written cases in toolchain/frontend-tests/inputs/, and the
-# programs extracted from crates/nazm-cli/tests (toolchain/frontend-tests/inputs/rs).
+# conformance and parity corpora, the hand-written cases in toolchain/frontend-tests/inputs/,
+# the programs extracted from crates/nazm-cli/tests (toolchain/frontend-tests/inputs/rs), and
+# every other track's Nazm sources under toolchain/.
 
 set -eu
 
@@ -42,7 +43,7 @@ ref="$ref_target/release/nazm-r2-refdump"
 list="$out/inputs.txt"
 (
   cd "$root"
-  find tests/compat/v1 corpus examples compiler/conformance compiler/parity toolchain/frontend-tests/inputs \
+  find tests/compat/v1 corpus examples compiler/conformance compiler/parity toolchain \
     crates/nazm-cli/tests crates/nazm-cli/templates \
     -name '*.nz' -type f 2>/dev/null
   ls compiler/*.nz
@@ -71,6 +72,12 @@ for mode in $modes; do
     f=$1
     name=$(printf "%s" "$f" | tr "/" "_")
     want="$R2_DIR/$name.want"; got="$R2_DIR/$name.got"
+    # The reference lexes text (`&str`): a file that is not UTF-8 has no tokens or tree to compare,
+    # only its refusal by the loader, which `check` compares.
+    case $R2_MODE in
+      tokens|tree|syntax)
+        if ! iconv -f UTF-8 -t UTF-8 "$R2_ROOT/$f" >/dev/null 2>&1; then : > "$R2_DIR/$name.skip"; exit 0; fi ;;
+    esac
     case $R2_MODE in
       tokens|tree)
         "$R2_REF" "$R2_MODE" "$R2_ROOT/$f" > "$want" 2>&1 || true
@@ -106,7 +113,12 @@ for mode in $modes; do
     done
     echo "$mode: $agree agree, $differ differ; the checker carries $carried, of which $carried_ok agree"
   else
-    echo "$mode: $agree agree, $differ differ"
+    skipped=$(find "$out/$mode" -name '*.skip' | wc -l | tr -d ' ')
+    if [ "$skipped" -gt 0 ]; then
+      echo "$mode: $agree agree, $differ differ ($skipped not UTF-8, skipped)"
+    else
+      echo "$mode: $agree agree, $differ differ"
+    fi
   fi
   [ "$differ" -eq 0 ] || status=1
 done

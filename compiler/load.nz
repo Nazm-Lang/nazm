@@ -183,6 +183,55 @@ struct Pending {
     code: Strs,
 }
 
+// Whether `s` is UTF-8 as Rust's `str::from_utf8` holds it: no overlong form, no surrogate,
+// nothing above U+10FFFF.
+fn valid_utf8(s: Str) -> Bool {
+    let n = str_len(s);
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        let mut more = 0;
+        let mut lo = 128;
+        let mut hi = 191;
+        if b < 128 {
+            more = 0;
+        } else {
+            if b >= 194 && b <= 223 {
+                more = 1;
+            } else {
+                if b >= 224 && b <= 239 {
+                    more = 2;
+                    if b == 224 { lo = 160; }
+                    if b == 237 { hi = 159; }
+                } else {
+                    if b >= 240 && b <= 244 {
+                        more = 3;
+                        if b == 240 { lo = 144; }
+                        if b == 244 { hi = 143; }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        let mut k = 1;
+        while k <= more {
+            if i + k >= n { return false; }
+            let x = str_byte(s, i + k);
+            let mut low = 128;
+            let mut high = 191;
+            if k == 1 {
+                low = lo;
+                high = hi;
+            }
+            if x < low || x > high { return false; }
+            k = k + 1;
+        }
+        i = i + 1 + more;
+    }
+    true
+}
+
 fn pend(p: Pending, code: Str, file: Int, start: Int, end: Int, message: Str, help: Str) -> Int {
     strs_push(p.code, code);
     ints_push(p.file, file);
@@ -227,7 +276,15 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
         let id = strs_len(names);
         let mut file = path;
         if is_std { file = str_concat(str_concat(str_concat(library, "/std/"), path), ".nz"); }
+        // A file that cannot be read as text is a module that cannot be read: `read_to_string`
+        // fails on one that is not UTF-8, and the loader says why.
+        let mut unreadable = "";
         if file_exists(file) == false {
+            unreadable = "No such file or directory (os error 2)";
+        } else {
+            if valid_utf8(read_file(file)) == false { unreadable = "stream did not contain valid UTF-8"; }
+        }
+        if unreadable != "" {
             strs_push(identities, identity);
             strs_push(names, name);
             strs_push(texts, nl());
@@ -236,7 +293,7 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
             ints_push(tfirst, strs_len(targets));
             ints_push(tcount, 0);
             strs_push(implicit, "");
-            pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), "No such file or directory (os error 2)");
+            pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), unreadable);
             continue;
         }
         let text = read_file(file);
