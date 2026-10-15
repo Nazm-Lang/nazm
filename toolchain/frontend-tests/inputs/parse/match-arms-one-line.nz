@@ -1,0 +1,11 @@
+fn main(): Int {
+    match 1 { 0 => 1 _ => 2 }
+}
+
+fn f(n: Int): Int {
+    match n {
+        0 => 1,
+        1 => 2
+        _ => 3
+    }
+}

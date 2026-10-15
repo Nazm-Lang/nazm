@@ -156,8 +156,9 @@ module's environment (N0209, N0208, N0207 for functions) and bodies against its 
 A standard module is checked as the reference checks it (`--no-cache` reuses nothing), and holds
 no output authority it is not given (R1.5, D8); an imported function with no declared effect set
 is assumed to do every bridged effect. What a module offers includes what it re-exports (D23). R1.5 D9 (on `main` since `511f77d6`) gives a program module `@std/hash`, `@std/hashmap`,
-`@std/ordmap`, `@std/sort` or `@std/text` where it names one of their items: the loader ports
-`prelude_named` to find where it does and loads those modules after the written imports, and the
+`@std/option`, `@std/ordmap`, `@std/result`, `@std/sort` or `@std/text` (R1.5 4.5 added the two, in
+that order) where it names one of their items: the loader ports `prelude_named` to find where it
+does — an interpolation's holes scanned too, as `named_in` scans them — and loads those modules after the written imports, and the
 checker adds each as `import_implicit` does — plain, after the written edges and before the core
 prelude, only where no `use` names the module — whose names yield, silently, to the module's own
 and to a written import's (types, functions, traits). A map literal names `@std/hashmap` by the
