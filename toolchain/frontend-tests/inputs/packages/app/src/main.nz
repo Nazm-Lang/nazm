@@ -1,0 +1,10 @@
+// A package's program: its dependencies' modules by `NAME:path`, its own by a relative path.
+use "shapes:poly.nz";
+use "util:text.nz";
+use "local.nz";
+
+fn main(out: OutCap) -> Int {
+    print(describe(Poly(sides: 3)));
+    print(greeting(local_name()));
+    shout(1)
+}

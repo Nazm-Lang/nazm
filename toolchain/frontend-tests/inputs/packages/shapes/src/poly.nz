@@ -1,0 +1,8 @@
+// A dependency that depends on another: `util` is reached as `util:text.nz`, and a module of its
+// own by a relative path.
+use "util:text.nz";
+use "corner.nz";
+
+pub struct Poly { sides: Int, }
+
+pub fn describe(p: Poly) -> Str { str_concat(greeting("polygon"), int_to_str(p.sides + corners())) }

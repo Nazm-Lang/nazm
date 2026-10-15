@@ -1,0 +1,891 @@
+// Packages for the front end (R2, slice 3.1; `openspec/changes/r2-front-end/design.md`, D22): a
+// port of what `nazm check FILE` asks of `nazm-service/src/root.rs` (`decide`), of
+// `nazm-service/src/load.rs` (`package_context`) and of `nazm-package` (`Manifest::parse`,
+// `resolve`) — where a compilation's source root is, whether it is a package's, and the packages
+// it is made of.
+//
+// A manifest is read as the subset of TOML the reference's manifests are written in: comments,
+// `[package]` and `[dependencies]` tables, `key = "string"`, one-line inline tables and arrays of
+// strings. Whatever lies outside that subset, and every part of the package system the front end
+// does not carry yet — registry dependencies, `[registry]`, features, a `heap-limit`, a profile —
+// is not guessed at: the answer is "unsupported", and the driver stops. A path is compared as text,
+// normalised, where the reference compares canonical paths: a package reached through a symbolic
+// link is one this front end may see differently (as `load.nz` says of modules).
+
+// A manifest: whether it is one (1), is not (0), or is one this front end does not read (-1), and
+// what it says.
+pub struct Manifest {
+    state: Ints,
+    why: Strs,
+    name: Strs,
+    version: Strs,
+    root: Strs,
+    main: Strs,
+    has_main: Ints,
+    profile: Strs,
+    // Its dependencies, in name order: each one's name, path and version.
+    dnames: Strs,
+    dpaths: Strs,
+    dversions: Strs,
+}
+
+fn pk_cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
+
+fn pk_starts(s: Str, p: Str) -> Bool {
+    if str_len(p) > str_len(s) { return false; }
+    str_slice(s, 0, str_len(p)) == p
+}
+
+fn pk_ends(s: Str, p: Str) -> Bool {
+    if str_len(p) > str_len(s) { return false; }
+    str_slice(s, str_len(s) - str_len(p), str_len(s)) == p
+}
+
+fn pk_find(xs: Strs, s: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        if strs_get(xs, i) == s { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn new_manifest() -> Manifest {
+    let m = Manifest(state: ints_new(), why: strs_new(), name: strs_new(), version: strs_new(), root: strs_new(), main: strs_new(), has_main: ints_new(),
+            profile: strs_new(), dnames: strs_new(), dpaths: strs_new(), dversions: strs_new());
+    ints_push(m.state, 1);
+    strs_push(m.why, "");
+    m
+}
+
+pub fn pk_state(m: Manifest) -> Int { ints_get(m.state, 0) }
+pub fn pk_why(m: Manifest) -> Str { strs_get(m.why, 0) }
+
+// Not a manifest (`N0500`): the reference says why; only that it is not one is compared.
+fn invalid(m: Manifest, why: Str) -> Int {
+    if ints_get(m.state, 0) == 1 {
+        ints_set(m.state, 0, 0);
+        strs_set(m.why, 0, why);
+    }
+    0
+}
+
+// Outside what this front end reads: it stops rather than guess.
+fn unsupported(m: Manifest, why: Str) -> Int {
+    ints_set(m.state, 0, 0 - 1);
+    strs_set(m.why, 0, why);
+    0
+}
+
+// --- the TOML subset ---------------------------------------------------------------------------
+
+// A value as written: a string (kind 1), an array of strings (2) or an inline table (3), each
+// held as its parts — a string's text, an array's items, a table's keys and values (strings only).
+struct Value {
+    kind: Ints,
+    text: Strs,
+    keys: Strs,
+    kinds: Ints,
+    vals: Strs,
+}
+
+fn is_space(b: Int) -> Bool { b == 32 || b == 9 }
+
+fn skip_space(s: Str, at: Int) -> Int {
+    let mut i = at;
+    while i < str_len(s) && is_space(str_byte(s, i)) { i = i + 1; }
+    i
+}
+
+fn bare(b: Int) -> Bool { (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 95 || b == 45 }
+
+// Whether the rest of a line from `at` is only space and a comment.
+fn rest_empty(s: Str, at: Int) -> Bool {
+    let i = skip_space(s, at);
+    i >= str_len(s) || str_byte(s, i) == 35
+}
+
+// A basic string starting at `at` (its opening quote): its value into `out`, and where it ends,
+// or -1 for one this subset does not read.
+fn read_string(s: Str, at: Int, out: Strs) -> Int {
+    let parts = strs_new();
+    let mut i = at + 1;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 34 {
+            strs_push(out, str_join(parts, ""));
+            return i + 1;
+        }
+        if b < 32 || b == 127 { return 0 - 1; }
+        if b == 92 {
+            if i + 1 >= str_len(s) { return 0 - 1; }
+            let e = str_byte(s, i + 1);
+            if e == 34 || e == 92 {
+                strs_push(parts, str_slice(s, i + 1, i + 2));
+                i = i + 2;
+            } else {
+                return 0 - 1;
+            }
+        } else {
+            strs_push(parts, str_slice(s, i, i + 1));
+            i = i + 1;
+        }
+    }
+    0 - 1
+}
+
+// A bare key starting at `at`, into `out`; where it ends, or -1.
+fn read_key(s: Str, at: Int, out: Strs) -> Int {
+    let mut i = at;
+    while i < str_len(s) && bare(str_byte(s, i)) { i = i + 1; }
+    if i == at { return 0 - 1; }
+    strs_push(out, str_slice(s, at, i));
+    i
+}
+
+// An array of strings starting at `at` (its `[`), its items into `items`; where it ends, or -1.
+fn read_array(s: Str, at: Int, items: Strs) -> Int {
+    let mut i = skip_space(s, at + 1);
+    if i < str_len(s) && str_byte(s, i) == 93 { return i + 1; }
+    while i < str_len(s) {
+        if str_byte(s, i) != 34 { return 0 - 1; }
+        i = read_string(s, i, items);
+        if i < 0 { return 0 - 1; }
+        i = skip_space(s, i);
+        if i >= str_len(s) { return 0 - 1; }
+        if str_byte(s, i) == 93 { return i + 1; }
+        if str_byte(s, i) != 44 { return 0 - 1; }
+        i = skip_space(s, i + 1);
+        if i < str_len(s) && str_byte(s, i) == 93 { return i + 1; }
+    }
+    0 - 1
+}
+
+// A value starting at `at`; where it ends, or -1 for one outside the subset.
+fn read_value(s: Str, at: Int, v: Value) -> Int {
+    if at >= str_len(s) { return 0 - 1; }
+    let b = str_byte(s, at);
+    if b == 34 {
+        ints_push(v.kind, 1);
+        return read_string(s, at, v.text);
+    }
+    if b == 91 {
+        ints_push(v.kind, 2);
+        return read_array(s, at, v.text);
+    }
+    if b == 123 {
+        ints_push(v.kind, 3);
+        let mut i = skip_space(s, at + 1);
+        if i < str_len(s) && str_byte(s, i) == 125 { return i + 1; }
+        while i < str_len(s) {
+            let at_key = strs_len(v.keys);
+            i = read_key(s, i, v.keys);
+            if i < 0 { return 0 - 1; }
+            // A key given twice is not TOML.
+            let mut k = 0;
+            while k < at_key {
+                if strs_get(v.keys, k) == strs_get(v.keys, at_key) { ints_push(v.kinds, 0 - 2); }
+                k = k + 1;
+            }
+            i = skip_space(s, i);
+            if i >= str_len(s) || str_byte(s, i) != 61 { return 0 - 1; }
+            i = skip_space(s, i + 1);
+            if i >= str_len(s) { return 0 - 1; }
+            if str_byte(s, i) == 34 {
+                ints_push(v.kinds, 1);
+                i = read_string(s, i, v.vals);
+            } else {
+                if str_byte(s, i) != 91 { return 0 - 1; }
+                ints_push(v.kinds, 2);
+                let items = strs_new();
+                i = read_array(s, i, items);
+                strs_push(v.vals, str_join(items, ","));
+            }
+            if i < 0 { return 0 - 1; }
+            i = skip_space(s, i);
+            if i >= str_len(s) { return 0 - 1; }
+            if str_byte(s, i) == 125 { return i + 1; }
+            if str_byte(s, i) != 44 { return 0 - 1; }
+            i = skip_space(s, i + 1);
+        }
+        return 0 - 1;
+    }
+    0 - 1
+}
+
+fn new_value() -> Value { Value(kind: ints_new(), text: strs_new(), keys: strs_new(), kinds: ints_new(), vals: strs_new()) }
+
+// The lines of a text, split at line feeds.
+fn lines_of(text: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(text) {
+        if str_byte(text, i) == 10 {
+            strs_push(out, str_slice(text, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(text, from, str_len(text)));
+    out
+}
+
+// --- `Manifest::parse` -------------------------------------------------------------------------
+
+// A manifest's text, read and held to `Manifest::parse`'s rules.
+pub fn pk_parse(text: Str) -> Manifest {
+    let m = new_manifest();
+    let lines = lines_of(text);
+    let tables = strs_new();
+    let mut table = "";
+    // Every key set, as `table.key`, for the ones given twice.
+    let seen = strs_new();
+    let mut schema = "";
+    let mut has_schema = false;
+    let mut has_package = false;
+    let mut has_name = false;
+    let mut has_version = false;
+    let mut root = "src";
+    // The dependencies as written, before they are put in name order.
+    let dn = strs_new();
+    let dp = strs_new();
+    let dv = strs_new();
+    let mut i = 0;
+    while i < strs_len(lines) {
+        let line = strs_get(lines, i);
+        i = i + 1;
+        let mut k = 0;
+        while k < str_len(line) {
+            let b = str_byte(line, k);
+            if b == 13 || (b < 32 && b != 9) || b == 127 { return unsupported_m(m, "a manifest with a control character"); }
+            k = k + 1;
+        }
+        let at = skip_space(line, 0);
+        if rest_empty(line, at) == false {
+            if str_byte(line, at) == 91 {
+                if at + 1 < str_len(line) && str_byte(line, at + 1) == 91 { return unsupported_m(m, "an array of tables in a manifest"); }
+                let names = strs_new();
+                let mut j = read_key(line, skip_space(line, at + 1), names);
+                if j < 0 { return unsupported_m(m, "a table header this front end does not read"); }
+                j = skip_space(line, j);
+                if j >= str_len(line) || str_byte(line, j) != 93 { return unsupported_m(m, "a table header this front end does not read"); }
+                if rest_empty(line, j + 1) == false { return unsupported_m(m, "a table header this front end does not read"); }
+                table = strs_get(names, 0);
+                if pk_find(tables, table) >= 0 { invalid(m, pk_cat3("the table `", table, "` is defined twice")); }
+                strs_push(tables, table);
+                if table == "registry" { return unsupported_m(m, "a manifest's `[registry]`"); }
+                if table == "features" { return unsupported_m(m, "a manifest's `[features]`"); }
+                if table == "package" { has_package = true; }
+                if table != "package" && table != "dependencies" { invalid(m, pk_cat3("unknown field `", table, "`")); }
+            } else {
+                let keys = strs_new();
+                let mut j = read_key(line, at, keys);
+                if j < 0 { return unsupported_m(m, "a key this front end does not read"); }
+                let key = strs_get(keys, 0);
+                j = skip_space(line, j);
+                if j >= str_len(line) || str_byte(line, j) != 61 { return unsupported_m(m, "a key this front end does not read"); }
+                let v = new_value();
+                j = read_value(line, skip_space(line, j + 1), v);
+                if j < 0 { return unsupported_m(m, "a value this front end does not read"); }
+                if rest_empty(line, j) == false { return unsupported_m(m, "a value this front end does not read"); }
+                let full = pk_cat3(table, ".", key);
+                if pk_find(seen, full) >= 0 { invalid(m, pk_cat3("the key `", key, "` is given twice")); }
+                strs_push(seen, full);
+                let kind = ints_get(v.kind, 0);
+                if table == "" {
+                    if key == "schema" {
+                        if kind == 1 {
+                            schema = strs_get(v.text, 0);
+                            has_schema = true;
+                        } else {
+                            invalid(m, "`schema` is not a string");
+                        }
+                    } else {
+                        // A top-level table written inline is TOML; this front end does not read it.
+                        if kind == 3 && (key == "package" || key == "dependencies" || key == "registry" || key == "features") {
+                            return unsupported_m(m, "a table written inline at the top of a manifest");
+                        }
+                        invalid(m, pk_cat3("unknown field `", key, "`"));
+                    }
+                }
+                if table == "package" {
+                    if key == "heap-limit" { return unsupported_m(m, "a manifest's `heap-limit`"); }
+                    let known = key == "name" || key == "version" || key == "root" || key == "main" || key == "profile";
+                    if known == false {
+                        invalid(m, pk_cat3("unknown field `", key, "`"));
+                    } else {
+                        if kind != 1 {
+                            invalid(m, pk_cat3("`", key, "` is not a string"));
+                        } else {
+                            let text_of = strs_get(v.text, 0);
+                            if key == "name" {
+                                strs_push(m.name, text_of);
+                                has_name = true;
+                            }
+                            if key == "version" {
+                                strs_push(m.version, text_of);
+                                has_version = true;
+                            }
+                            if key == "root" { root = text_of; }
+                            if key == "main" { strs_push(m.main, text_of); }
+                            if key == "profile" { strs_push(m.profile, text_of); }
+                        }
+                    }
+                }
+                if table == "dependencies" {
+                    if kind != 3 {
+                        invalid(m, pk_cat3("the dependency `", key, "` is not a table"));
+                    } else {
+                        let mut path = "";
+                        let mut has_path = false;
+                        let mut version = "";
+                        let mut has_version_d = false;
+                        let mut q = 0;
+                        while q < ints_len(v.kinds) {
+                            if ints_get(v.kinds, q) == 0 - 2 { invalid(m, "a key given twice in an inline table"); }
+                            q = q + 1;
+                        }
+                        q = 0;
+                        while q < strs_len(v.keys) {
+                            let dk = strs_get(v.keys, q);
+                            // Duplicates were marked by an extra entry: this key's own kind.
+                            let dkind = kind_of_key(v, q);
+                            if dk == "path" {
+                                if dkind == 1 {
+                                    path = strs_get(v.vals, q);
+                                    has_path = true;
+                                } else {
+                                    invalid(m, "`path` is not a string");
+                                }
+                            } else {
+                                if dk == "version" {
+                                    if dkind == 1 {
+                                        version = strs_get(v.vals, q);
+                                        has_version_d = true;
+                                    } else {
+                                        invalid(m, "`version` is not a string");
+                                    }
+                                } else {
+                                    if dk == "features" {
+                                        if dkind != 2 { invalid(m, "`features` is not an array"); }
+                                        if strs_get(v.vals, q) != "" { return unsupported_m(m, "a dependency's features"); }
+                                    } else {
+                                        invalid(m, pk_cat3("unknown field `", dk, "`"));
+                                    }
+                                }
+                            }
+                            q = q + 1;
+                        }
+                        if has_version_d == false { invalid(m, "missing field `version`"); }
+                        if has_path == false { return unsupported_m(m, "a registry dependency"); }
+                        strs_push(dn, key);
+                        strs_push(dp, path);
+                        strs_push(dv, version);
+                    }
+                }
+            }
+        }
+    }
+    if pk_state(m) != 1 { return m; }
+    if has_schema == false { return invalid_m(m, "missing field `schema`"); }
+    if has_package == false { return invalid_m(m, "missing field `package`"); }
+    if has_name == false { return invalid_m(m, "missing field `name`"); }
+    if has_version == false { return invalid_m(m, "missing field `version`"); }
+    if schema != "nazm.package/1" { return invalid_m(m, pk_cat3("the schema is `", schema, "`; this compiler reads `nazm.package/1`")); }
+    let name = strs_get(m.name, 0);
+    if pk_valid_name(name) == false {
+        return invalid_m(m, pk_cat3("`", name, "` is not a package name: lowercase ASCII letters, digits and `-`, starting with a letter, at most 64 bytes"));
+    }
+    let vs = pk_version(strs_get(m.version, 0));
+    if vs == 0 { return invalid_m(m, pk_cat3("`", strs_get(m.version, 0), "` is not a version: MAJOR.MINOR.PATCH")); }
+    if vs < 0 { return unsupported_m(m, "a version this front end does not read"); }
+    if contained(root) == false { return invalid_m(m, pk_cat3("the root `", root, "` leaves the package")); }
+    strs_push(m.root, root);
+    ints_push(m.has_main, 0);
+    if strs_len(m.main) > 0 {
+        ints_set(m.has_main, 0, 1);
+        let main = strs_get(m.main, 0);
+        if contained(main) == false || pk_ends(main, ".nz") == false {
+            return invalid_m(m, pk_cat3("the entry `", main, "` is not a `.nz` file inside the root"));
+        }
+    }
+    // The dependencies in name order, as a sorted map holds them.
+    let order = strs_new();
+    let mut d = 0;
+    while d < strs_len(dn) {
+        let mut at = strs_len(order);
+        let mut k = 0;
+        while k < strs_len(order) {
+            if at == strs_len(order) && str_less(strs_get(dn, d), strs_get(order, k)) { at = k; }
+            k = k + 1;
+        }
+        strs_push(order, "");
+        k = strs_len(order) - 1;
+        while k > at {
+            strs_set(order, k, strs_get(order, k - 1));
+            k = k - 1;
+        }
+        strs_set(order, at, strs_get(dn, d));
+        d = d + 1;
+    }
+    d = 0;
+    while d < strs_len(order) {
+        let dname = strs_get(order, d);
+        let w = pk_find(dn, dname);
+        if pk_valid_name(dname) == false { return invalid_m(m, pk_cat3("`", dname, "` is not a package name")); }
+        if dname == name { return invalid_m(m, pk_cat3("`", dname, "` depends on itself")); }
+        let dvs = pk_version(strs_get(dv, w));
+        if dvs == 0 { return invalid_m(m, pk_cat3("the dependency `", dname, "`'s version is not MAJOR.MINOR.PATCH")); }
+        if dvs < 0 { return unsupported_m(m, "a version this front end does not read"); }
+        strs_push(m.dnames, dname);
+        strs_push(m.dpaths, strs_get(dp, w));
+        strs_push(m.dversions, strs_get(dv, w));
+        d = d + 1;
+    }
+    m
+}
+
+// The kind of an inline table's `q`th key's value, past the marks of keys given twice.
+fn kind_of_key(v: Value, q: Int) -> Int {
+    let mut seen = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(v.kinds) {
+        if ints_get(v.kinds, i) != 0 - 2 {
+            seen = seen + 1;
+            if seen == q { return ints_get(v.kinds, i); }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn invalid_m(m: Manifest, why: Str) -> Manifest {
+    invalid(m, why);
+    m
+}
+
+fn unsupported_m(m: Manifest, why: Str) -> Manifest {
+    unsupported(m, why);
+    m
+}
+
+// Byte order, as a sorted map's keys compare.
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+// `[a-z][a-z0-9-]*`, at most 64 bytes, not ending in `-` (`valid_name`).
+pub fn pk_valid_name(name: Str) -> Bool {
+    if str_len(name) == 0 || str_len(name) > 64 { return false; }
+    let first = str_byte(name, 0);
+    if first < 97 || first > 122 { return false; }
+    let mut i = 0;
+    while i < str_len(name) {
+        let b = str_byte(name, i);
+        let ok = (b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 45;
+        if ok == false { return false; }
+        i = i + 1;
+    }
+    str_byte(name, str_len(name) - 1) != 45
+}
+
+// `MAJOR.MINOR.PATCH` (`Version::parse`): 1 when it is one, 0 when it is not, -1 for a number too
+// long for this front end to be sure of.
+fn pk_version(text: Str) -> Int {
+    let parts = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(text) {
+        if i == str_len(text) || str_byte(text, i) == 46 {
+            strs_push(parts, str_slice(text, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    if strs_len(parts) != 3 { return 0; }
+    let mut long = false;
+    i = 0;
+    while i < 3 {
+        let p = strs_get(parts, i);
+        if str_len(p) == 0 { return 0; }
+        let mut k = 0;
+        while k < str_len(p) {
+            if str_byte(p, k) < 48 || str_byte(p, k) > 57 { return 0; }
+            k = k + 1;
+        }
+        if p != "0" && str_byte(p, 0) == 48 { return 0; }
+        if str_len(p) > 18 { long = true; }
+        i = i + 1;
+    }
+    if long { return 0 - 1; }
+    1
+}
+
+// A relative path that stays where it starts (`contained`): not empty, no root, no `..`.
+fn contained(rel: Str) -> Bool {
+    if str_len(rel) == 0 || pk_starts(rel, "/") { return false; }
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(rel) {
+        if i == str_len(rel) || str_byte(rel, i) == 47 {
+            if str_slice(rel, from, i) == ".." { return false; }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// --- paths, as text ----------------------------------------------------------------------------
+
+// `path`'s directory: "" for none, "/" for the root's own.
+pub fn pk_parent(path: Str) -> Str {
+    if path == "/" { return ""; }
+    let mut i = str_len(path);
+    while i > 0 {
+        if str_byte(path, i - 1) == 47 {
+            if i - 1 == 0 { return "/"; }
+            return str_slice(path, 0, i - 1);
+        }
+        i = i - 1;
+    }
+    ""
+}
+
+pub fn pk_join(dir: Str, rel: Str) -> Str {
+    if pk_starts(rel, "/") { return rel; }
+    if dir == "" { return rel; }
+    if str_byte(dir, str_len(dir) - 1) == 47 { return str_concat(dir, rel); }
+    pk_cat3(dir, "/", rel)
+}
+
+// `.` and `..` folded away, as `root::absolute` folds an absolute path.
+pub fn pk_normalise(path: Str) -> Str {
+    let parts = strs_new();
+    let absolute = pk_starts(path, "/");
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(path) {
+        if i == str_len(path) || str_byte(path, i) == 47 {
+            let seg = str_slice(path, from, i);
+            if seg == ".." {
+                let k = strs_len(parts);
+                if k > 0 && strs_get(parts, k - 1) != ".." {
+                    strs_pop(parts);
+                } else {
+                    if absolute == false { strs_push(parts, ".."); }
+                }
+            } else {
+                if seg != "" && seg != "." { strs_push(parts, seg); }
+            }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    let body = str_join(parts, "/");
+    if absolute { return str_concat("/", body); }
+    body
+}
+
+// Whether `path` is `root` or inside it, component by component (`Path::starts_with`); both
+// normalised.
+pub fn pk_under(path: Str, root: Str) -> Bool {
+    if path == root { return true; }
+    if root == "/" { return pk_starts(path, "/"); }
+    pk_starts(path, str_concat(root, "/"))
+}
+
+// How many components a normalised absolute path has.
+fn depth_of(path: Str) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(path) {
+        if str_byte(path, i) == 47 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// --- `root::decide` ----------------------------------------------------------------------------
+
+// Where a compilation's source root is and how it was chosen: `how` 0 derived, 1 a package's, 2 a
+// marker's; -1 a refusal the reference states without a diagnostic (an invalid manifest, a marker
+// that is not empty), with `why`; -2 a manifest this front end does not read.
+pub struct Root {
+    how: Ints,
+    path: Strs,
+    why: Strs,
+}
+
+pub fn pk_root_how(r: Root) -> Int { ints_get(r.how, 0) }
+pub fn pk_root_path(r: Root) -> Str { strs_get(r.path, 0) }
+pub fn pk_root_why(r: Root) -> Str { strs_get(r.why, 0) }
+
+fn root_of(how: Int, path: Str, why: Str) -> Root {
+    let r = Root(how: ints_new(), path: strs_new(), why: strs_new());
+    ints_push(r.how, how);
+    strs_push(r.path, path);
+    strs_push(r.why, why);
+    r
+}
+
+// `decide` for the root module at the absolute path `module`: upwards from its directory, the first
+// manifest whose source root holds it, or the first `nazm.root` marker, or its own directory.
+pub fn pk_decide(module: Str, io: IoCap) -> Root {
+    let abs = pk_normalise(module);
+    let here = pk_parent(abs);
+    let mut dir = here;
+    while dir != "" {
+        let manifest = pk_join(dir, "nazm.toml");
+        if file_exists(manifest) {
+            let m = pk_parse(read_file(manifest));
+            if pk_state(m) < 0 { return root_of(0 - 2, "", pk_why(m)); }
+            if pk_state(m) == 0 { return root_of(0 - 1, "", pk_cat3(pk_cat3("N0500: `", manifest, "`: "), pk_why(m), "")); }
+            let root = pk_normalise(pk_join(dir, strs_get(m.root, 0)));
+            if pk_under(abs, root) { return root_of(1, root, ""); }
+        }
+        let marker = pk_join(dir, "nazm.root");
+        if file_exists(marker) {
+            let text = read_file(marker);
+            let mut empty = true;
+            let mut i = 0;
+            while i < str_len(text) {
+                let b = str_byte(text, i);
+                if b != 32 && b != 9 && b != 10 && b != 13 && b != 11 && b != 12 { empty = false; }
+                i = i + 1;
+            }
+            if empty == false { return root_of(0 - 1, "", pk_cat3("`", marker, "` must be empty")); }
+            return root_of(2, dir, "");
+        }
+        dir = pk_parent(dir);
+    }
+    root_of(0, here, "")
+}
+
+// --- `resolve` ---------------------------------------------------------------------------------
+
+// A resolved build (`Graph`): every package, sorted by name — its name, version, source root and
+// its dependencies by name (a run of `dname`/`dto`) — and which is the root. `state` 1 when there
+// is one, 0 when the compilation is not a package's, -1 when resolving it was refused or met what
+// this front end does not carry (`why`).
+pub struct Packages {
+    state: Ints,
+    why: Strs,
+    names: Strs,
+    versions: Strs,
+    roots: Strs,
+    dirs: Strs,
+    profiles: Strs,
+    dfirst: Ints,
+    dcount: Ints,
+    dname: Strs,
+    dto: Ints,
+    root: Ints,
+}
+
+pub fn pk_none() -> Packages {
+    let p = Packages(state: ints_new(), why: strs_new(), names: strs_new(), versions: strs_new(), roots: strs_new(), dirs: strs_new(), profiles: strs_new(),
+            dfirst: ints_new(), dcount: ints_new(), dname: strs_new(), dto: ints_new(), root: ints_new());
+    ints_push(p.state, 0);
+    strs_push(p.why, "");
+    ints_push(p.root, 0 - 1);
+    p
+}
+
+pub fn pk_packages_state(p: Packages) -> Int { ints_get(p.state, 0) }
+pub fn pk_packages_why(p: Packages) -> Str { strs_get(p.why, 0) }
+pub fn pk_count(p: Packages) -> Int { strs_len(p.names) }
+pub fn pk_name(p: Packages, i: Int) -> Str { strs_get(p.names, i) }
+pub fn pk_source_root(p: Packages, i: Int) -> Str { strs_get(p.roots, i) }
+pub fn pk_profile(p: Packages, i: Int) -> Str { strs_get(p.profiles, i) }
+pub fn pk_root_package(p: Packages) -> Int { ints_get(p.root, 0) }
+
+fn refuse(p: Packages, why: Str) -> Packages {
+    ints_set(p.state, 0, 0 - 1);
+    strs_set(p.why, 0, why);
+    p
+}
+
+// The packages found while resolving, in discovery order: each one's manifest and directory.
+struct Found {
+    dirs: Strs,
+    names: Strs,
+    ms: Vec[Manifest],
+    edges: Strs,
+    eto: Ints,
+    efrom: Ints,
+    path: Strs,
+    why: Strs,
+}
+
+// `package_context`: the package whose declared source root `source_root` is, resolved with its
+// dependencies, or none for a compilation that is not a package's.
+pub fn pk_context(source_root: Str, io: IoCap) -> Packages {
+    let p = pk_none();
+    let dir = pk_parent(source_root);
+    if dir == "" { return p; }
+    if file_exists(pk_join(dir, "nazm.toml")) == false { return p; }
+    let f = Found(dirs: strs_new(), names: strs_new(), ms: vec_new[Manifest](), edges: strs_new(), eto: ints_new(), efrom: ints_new(), path: strs_new(),
+            why: strs_new());
+    let root = visit(f, dir, "", "", "", io);
+    if root < 0 { return refuse(p, strs_get(f.why, 0)); }
+    // Sorted by name: the order a lockfile lists them in, and the only order anything sees.
+    let order = ints_new();
+    let mut i = 0;
+    while i < strs_len(f.names) {
+        let mut at = ints_len(order);
+        let mut k = 0;
+        while k < ints_len(order) {
+            if at == ints_len(order) && str_less(strs_get(f.names, i), strs_get(f.names, ints_get(order, k))) { at = k; }
+            k = k + 1;
+        }
+        ints_push(order, 0);
+        k = ints_len(order) - 1;
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1));
+            k = k - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(order) {
+        let old = ints_get(order, i);
+        let m = vec_get(f.ms, old);
+        let sr = pk_normalise(pk_join(strs_get(f.dirs, old), strs_get(m.root, 0)));
+        if file_exists(sr) == false { return refuse(p, pk_cat3("`", strs_get(f.names, old), "`: no source root")); }
+        if strs_len(m.profile) > 0 { return refuse(p, "a package that names a profile"); }
+        strs_push(p.names, strs_get(f.names, old));
+        strs_push(p.versions, strs_get(m.version, 0));
+        strs_push(p.roots, sr);
+        strs_push(p.dirs, strs_get(f.dirs, old));
+        strs_push(p.profiles, "");
+        if old == root { ints_set(p.root, 0, i); }
+        i = i + 1;
+    }
+    // Each package's dependencies, by name, to their places in the sorted list.
+    i = 0;
+    while i < ints_len(order) {
+        let old = ints_get(order, i);
+        ints_push(p.dfirst, strs_len(p.dname));
+        let m = vec_get(f.ms, old);
+        let mut k = 0;
+        while k < strs_len(m.dnames) {
+            let dn = strs_get(m.dnames, k);
+            let mut e = 0;
+            while e < strs_len(f.edges) {
+                if ints_get(f.efrom, e) == old && strs_get(f.edges, e) == dn {
+                    strs_push(p.dname, dn);
+                    ints_push(p.dto, index_in(order, ints_get(f.eto, e)));
+                }
+                e = e + 1;
+            }
+            k = k + 1;
+        }
+        ints_push(p.dcount, strs_len(p.dname) - ints_get(p.dfirst, i));
+        i = i + 1;
+    }
+    ints_set(p.state, 0, 1);
+    // The compilation is this package's only where its source root is the root package's.
+    if pk_root_package(p) < 0 || pk_source_root(p, pk_root_package(p)) != pk_normalise(source_root) { return pk_none(); }
+    p
+}
+
+fn index_in(xs: Ints, v: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == v { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn fail(f: Found, why: Str) -> Int {
+    if strs_len(f.why) == 0 { strs_push(f.why, why); }
+    0 - 1
+}
+
+// One package, by its directory, and the path packages it depends on (`Resolver::visit`); its
+// index among the found, or -1 once refused. `wanted` names the dependency as its dependent
+// declares it, "" for the root.
+fn visit(f: Found, dir_in: Str, wanted: Str, version: Str, by: Str, io: IoCap) -> Int {
+    if strs_len(f.path) > 256 { return fail(f, "the chain of dependencies is too deep"); }
+    let dir = pk_normalise(dir_in);
+    let manifest = pk_join(dir, "nazm.toml");
+    if pk_find(f.path, dir) >= 0 { return fail(f, "a dependency cycle"); }
+    let known = pk_find(f.dirs, dir);
+    if known >= 0 {
+        // A diamond: the same package, reached again, at the version it states.
+        if wanted != "" && strs_get(vec_get(f.ms, known).version, 0) != version { return fail(f, "a dependency at another version"); }
+        return known;
+    }
+    if file_exists(manifest) == false { return fail(f, pk_cat3("no manifest `", manifest, "`")); }
+    let m = pk_parse(read_file(manifest));
+    if pk_state(m) != 1 { return fail(f, pk_why(m)); }
+    let name = strs_get(m.name, 0);
+    if wanted != "" {
+        if name != wanted { return fail(f, "a dependency whose manifest names another package"); }
+        if strs_get(m.version, 0) != version { return fail(f, "a dependency at another version"); }
+    }
+    if pk_find(f.names, name) >= 0 { return fail(f, "two packages of one name"); }
+    let index = strs_len(f.names);
+    strs_push(f.dirs, dir);
+    strs_push(f.names, name);
+    vec_push(f.ms, m);
+    strs_push(f.path, dir);
+    let mut k = 0;
+    while k < strs_len(m.dnames) {
+        let child = visit(f, pk_join(dir, strs_get(m.dpaths, k)), strs_get(m.dnames, k), strs_get(m.dversions, k), name, io);
+        if child < 0 { return 0 - 1; }
+        strs_push(f.edges, strs_get(m.dnames, k));
+        ints_push(f.efrom, index);
+        ints_push(f.eto, child);
+        k = k + 1;
+    }
+    strs_pop(f.path);
+    index
+}
+
+// The package whose source root holds `path` (`Graph::package_of`): the deepest; -1 for none.
+pub fn pk_package_of(p: Packages, path: Str) -> Int {
+    let at = pk_normalise(path);
+    let mut best = 0 - 1;
+    let mut i = 0;
+    while i < strs_len(p.roots) {
+        if pk_under(at, strs_get(p.roots, i)) {
+            if best < 0 || depth_of(strs_get(p.roots, i)) > depth_of(strs_get(p.roots, best)) { best = i; }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+// The package `name` as package `from` declares it, or -1.
+pub fn pk_dependency(p: Packages, from: Int, name: Str) -> Int {
+    if from < 0 { return 0 - 1; }
+    let mut k = 0;
+    while k < ints_get(p.dcount, from) {
+        if strs_get(p.dname, ints_get(p.dfirst, from) + k) == name { return ints_get(p.dto, ints_get(p.dfirst, from) + k); }
+        k = k + 1;
+    }
+    0 - 1
+}
+
+// The dependencies package `from` declares, as the reference lists them in a refusal: "`a`, `b`".
+pub fn pk_declared(p: Packages, from: Int) -> Str {
+    let out = strs_new();
+    if from >= 0 {
+        let mut k = 0;
+        while k < ints_get(p.dcount, from) {
+            strs_push(out, pk_cat3("`", strs_get(p.dname, ints_get(p.dfirst, from) + k), "`"));
+            k = k + 1;
+        }
+    }
+    str_join(out, ", ")
+}

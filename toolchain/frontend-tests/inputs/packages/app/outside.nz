@@ -1,0 +1,4 @@
+// Beside the package's source root, not in it: no package's module, and a compilation of its own.
+pub fn outside() -> Int { 1 }
+
+fn main() -> Int { outside() }

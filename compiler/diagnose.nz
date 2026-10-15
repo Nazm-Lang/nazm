@@ -9,13 +9,17 @@
 // syntax error — where it carries the compilation; where it does not, it says on standard error
 // what it stopped at and reports only the missing `main` (design D13). OS and ARCH are the host's
 // as Rust's `std::env::consts` names them, which `@cfg` asks of (design D19); without them a
-// condition on either stops the checker. Exits 1 when there was an error.
+// condition on either stops the checker. FILE is an absolute path: its source root and its
+// package, if it is in one, are found upward from it as `root::decide` finds them (design D22); a
+// manifest the reference refuses publishes nothing, as the reference publishes no diagnostic of a
+// module then. Exits 1 when there was an error.
 
 use "syntax.nz";
 use "diag.nz";
 use "load.nz";
 use "sema.nz";
 use "configure.nz";
+use "package.nz";
 
 // A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
 // string's value on one line).
@@ -65,20 +69,40 @@ fn main(io: IoCap) -> Int {
 
 // The compilation rooted at `path`, loaded, parsed and checked, every diagnostic into `d`.
 fn check_compilation(path: Str, library: Str, os: Str, arch: Str, d: Diags, io: IoCap) -> Int {
-    // A module of a package (a `nazm.toml` beside it or above it) is a package's compilation,
-    // which the loader does not carry yet.
-    if in_package(path, io) { eprint(str_concat("diagnose: the loader stops at a package", nl())); }
-    let loaded = ld_load(path, library, d, io);
-    // A compilation that could not be loaded reports the loader's diagnostics and nothing else.
-    if dg_len(d) > 0 {
-        // Packages are not carried by the loader yet: its refusal of one is a guess.
-        let mut i = 0;
-        while i < dg_len(d) {
-            if strs_get(d.code, i) == "N0508" { eprint(str_concat("diagnose: the loader stops at a package", nl())); }
-            i = i + 1;
-        }
+    // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
+    // the file, or the first `nazm.root` marker, or the file's own directory.
+    if str_len(path) == 0 || str_byte(path, 0) != 47 {
+        eprint(str_concat("diagnose: the loader stops at a relative path", nl()));
         return 0;
     }
+    let root = pk_decide(path, io);
+    let how = pk_root_how(root);
+    if how == 0 - 2 {
+        eprint(str_concat(str_concat("diagnose: the loader stops at ", pk_root_why(root)), nl()));
+        return 0;
+    }
+    // A manifest that is not one, or a marker that is not empty: the reference refuses the
+    // compilation with no diagnostic of a module, so nothing is published.
+    if how == 0 - 1 { return 0; }
+    if how == 2 {
+        eprint(str_concat("diagnose: the loader stops at a `nazm.root` marker", nl()));
+        return 0;
+    }
+    let source_root = pk_root_path(root);
+    // A package's compilation (N46): the package and its dependencies, resolved.
+    let mut packages = pk_none();
+    if how == 1 {
+        packages = pk_context(source_root, io);
+        if pk_packages_state(packages) != 1 {
+            let mut why = pk_packages_why(packages);
+            if pk_packages_state(packages) == 0 { why = "a package whose source root is not its manifest's directory's child"; }
+            eprint(str_concat(str_concat("diagnose: the loader stops at ", why), nl()));
+            return 0;
+        }
+    }
+    let loaded = ld_load(path, library, source_root, packages, d, io);
+    // A compilation that could not be loaded reports the loader's diagnostics and nothing else.
+    if dg_len(d) > 0 { return 0; }
     let t = sx_tree();
     let mut root_program = 0 - 1;
     let programs = ints_new();
@@ -92,7 +116,9 @@ fn check_compilation(path: Str, library: Str, os: Str, arch: Str, d: Diags, io: 
         let own = dg_new();
         let program = sx_parse_source(ld_text(loaded, i), t, own);
         if i == 0 { root_program = program; }
-        ck_graph_module(graph, ld_standard(loaded, i));
+        // A module that is not the program's own — a standard one, the prelude or a package's —
+        // holds only the authority it is given (R1.5, D8).
+        ck_graph_module(graph, ld_program(loaded, i) == false);
         let count = ints_len(sx_items(t, sx_field(t, program, "imports")));
         let mut k = 0;
         while k < count {
@@ -176,25 +202,4 @@ fn split_commas(s: Str) -> Strs {
         i = i + 1;
     }
     out
-}
-
-// Whether a package manifest is in the directory holding `path`, or in one of the two above it.
-fn in_package(path: Str, io: IoCap) -> Bool {
-    let mut dir = parent_dir(path);
-    let mut up = 0;
-    while up < 3 {
-        if file_exists(str_concat(dir, "/nazm.toml")) { return true; }
-        dir = parent_dir(dir);
-        up = up + 1;
-    }
-    false
-}
-
-fn parent_dir(path: Str) -> Str {
-    let mut i = str_len(path) - 1;
-    while i > 0 {
-        if str_byte(path, i) == 47 { return str_slice(path, 0, i); }
-        i = i - 1;
-    }
-    "."
 }
