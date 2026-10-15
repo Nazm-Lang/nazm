@@ -48,3 +48,20 @@ overflow-checked each step), `hashmap_find` 25%, `hashmap_set` + `at_or` 15%, `m
 Next, ranked: a `memchr`-backed byte search as a built-in for `text_split_end`, `text_find` and
 `text_lines` (a new built-in name, so an epoch); the probe's checks proved away (phase 2); a
 string equality that compares lengths and the first word inline before `memcmp`.
+
+### `fib`: what a call costs (2026-10-15)
+
+`fib` at `-O2` (55 ms; C 35 ms). Each call, beside C's work: a load of `nz.stack_limit` and a compare
+with the frame pointer (the stack check), the failure bit returned beside the result and tested
+after each of the two calls (`tbnz w1`), and the addition's overflow branch. The subtraction's
+check is proved away already. C's `fib` is also turned by LLVM into one call and a loop, which the
+failure test between the two calls prevents here.
+
+Candidates, each a design change to weigh against what the language promises:
+1. **Stack overflow by a guard page** instead of a check per call: the runtime's `SIGSEGV`/`SIGBUS`
+   handler on an alternate stack reports the same failure when the fault is in a guard page — every
+   task stack needs one. Removes the load and compare from every call.
+2. **Failures by unwinding** instead of a returned bit: no cost where nothing fails, as C++ and Rust
+   pay; the bit was chosen in R1 (5b.8) for the interpreter's and both backends' simplicity.
+3. The overflow check stays — it is what the language means — but a range proof removes it where
+   the operands are bounded.
