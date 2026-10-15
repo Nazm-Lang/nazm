@@ -4,6 +4,9 @@
 # the linker made from each object's compact unwind) and prints every frame's symbol. The
 # program is built by LLVM and again from the generator's objects; the frames printed — through
 # Nazm functions that keep values in callee-saved registers across the call — must be the same.
+# Then (7.5) a failure below fifty frames that each own a string unwinds them: the frames walked
+# on the way down, the diagnostic, the status and the memory report must be LLVM's, and the
+# generated image's unwind table must name the C personality and the LSDAs of its landing pads.
 #
 #     toolchain/codegen/tests/unwind.sh            (NZCG_TARGET as tests/run.sh)
 #
@@ -64,8 +67,14 @@ fn outer(f: ForeignCap, n: Int) -> Int ! { foreign } {
     middle(f, n + 1) + 3
 }
 
+fn fails(f: ForeignCap, n: Int, tag: Str) -> Int ! { foreign } {
+    let held = str_concat(tag, "!")
+    if n == 0 { walk(n) + 9223372036854775807 + str_len(held) } else { fails(f, n - 1, tag) + 1 }
+}
+
 fn main(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
     print(int_to_str(outer(f, 4)));
+    print(int_to_str(fails(f, 50, "x")));
     0
 }
 EOF
@@ -80,11 +89,17 @@ for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
   list+=("$W/obj/$o")
 done
 cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" "$W/walk.o" $(sed -n 's/^libraries //p' "$W/obj/link.txt") || exit 2
-"$W/ref" >"$W/ref.out" 2>&1; echo "status $?" >>"$W/ref.out"
-"$W/gen.exe" >"$W/gen.out" 2>&1; echo "status $?" >>"$W/gen.out"
+NAZM_MEMORY_REPORT=1 "$W/ref" >"$W/ref.out" 2>&1; echo "status $?" >>"$W/ref.out"
+NAZM_MEMORY_REPORT=1 "$W/gen.exe" >"$W/gen.out" 2>&1; echo "status $?" >>"$W/gen.out"
+OBJDUMP=${OBJDUMP:-$(xcrun -f llvm-objdump 2>/dev/null || echo objdump)}
+info=$("$OBJDUMP" --unwind-info "$W/gen.exe")
+if ! echo "$info" | grep -q 'Personality functions: (count = 1)' ||
+   ! echo "$info" | grep -q 'LSDA descriptors'; then
+  echo "unwind $TARGET: the generated image's unwind table names no personality or LSDA"; exit 1
+fi
 frames=$(grep -c '^frame' "$W/gen.out")
 if cmp -s "$W/ref.out" "$W/gen.out"; then
-  echo "unwind $TARGET: agree ($frames frames walked)"
+  echo "unwind $TARGET: agree ($frames frames walked, then a failure: $(tail -1 "$W/gen.out"))"
 else
   echo "unwind $TARGET: differ"; diff "$W/ref.out" "$W/gen.out"; exit 1
 fi

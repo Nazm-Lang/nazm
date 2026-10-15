@@ -1,0 +1,23 @@
+// A failure deep in a task: its trampoline, a plain entry, lands the unwind and reads the flag,
+// and the scope's join fails `main` (7.5).
+
+fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, held) + str_len(held) }
+}
+
+fn worker(results: Chan, n: Int, k: Int) -> Int {
+    chan_send(results, down(n, k, "t"))
+    0
+}
+
+fn main(tasks: SpawnCap, out: OutCap) -> Int {
+    let results = chan_new(4)
+    scope { spawn worker(results, 3, 5); }
+    let buf = ints_new()
+    chan_recv(results, buf)
+    println(ints_pop(buf))
+    scope { spawn worker(results, 400, 0); }
+    println(7)
+    0
+}

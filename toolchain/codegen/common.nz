@@ -33,22 +33,115 @@ pub struct Code {
     /// The symbol of `nz.stack_limit` when the program has one thread, so `nz.stack_check` is
     /// inlined against it as LLVM inlines it (7.3); -1 to call the runtime.
     limit_sym: Int,
+    /// Where a Nazm function's failure unwinds (7.5, the Apple targets): the symbols it needs,
+    /// indexed by `UW_*` — `nz.raise` and its stop function, defined in this unit, and the C
+    /// personality, `_Unwind_ForcedUnwind` and `abort`, imported. Empty where the failure bit
+    /// is returned beside the result (D4, D14).
+    uw: Ints,
+    /// Each function symbol's LSDA, an offset in `lsda`, or -1 where it has no landing pad.
+    fn_lsda: Ints,
+    lsda: ByteBuf,
 }
 
-pub fn code_new(nsyms: Int, apple: Bool, limit_sym: Int) -> Code {
+// The symbols an unwinding unit uses (`Code.uw`).
+pub const UW_RAISE: Int = 0
+pub const UW_STOP: Int = 1
+pub const UW_PERSONALITY: Int = 2
+pub const UW_FORCED: Int = 3
+pub const UW_ABORT: Int = 4
+
+pub fn code_new(nsyms: Int, apple: Bool, limit_sym: Int, uw: Ints) -> Code {
     let at = ints_new()
     let enc = ints_new()
+    let lsda = ints_new()
     let mut i = 0
     while i < nsyms {
         ints_push(at, -1)
         ints_push(enc, 0)
+        ints_push(lsda, -1)
         i += 1
     }
     Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
             rel_pcrel: ints_new(), rel_len: ints_new(),
             sym_at: at, errors: strs_new(), apple: apple, loc_at: ints_new(),
             loc_file: ints_new(), loc_line: ints_new(), loc_col: ints_new(), fn_enc: enc,
-            limit_sym: limit_sym)
+            limit_sym: limit_sym, uw: uw, fn_lsda: lsda, lsda: bytebuf_new())
+}
+
+/// Whether a Nazm function's failure unwinds in this unit's code (7.5).
+pub fn unwinds(c: Code) -> Bool {
+    ints_len(c.uw) > 0
+}
+
+/// Whether `x` is a call that may unwind: a Nazm function's, where failures unwind (7.5).
+pub fn unwinding_call(c: Code, conv: Int) -> Bool {
+    unwinds(c) && conv == CONV_NAZM
+}
+
+/// Whether the branch ending block `bi` is on the failure edge of the call that ends it (7.5):
+/// the call's `failed` value is only ever the condition of that branch (LIR's validator), so
+/// where failures unwind the branch needs no condition — the normal return takes its `else`,
+/// the landing pad its `then`.
+pub fn failure_branch(u: Unit, f: Func, t: Ins, bi: Int) -> Bool {
+    if t.op != T_BRANCH || t.a < 0 || bi >= ints_len(f.block_end) { return false }
+    let mut k = f.block_end[bi] - 1
+    while k >= f.block_first[bi] && f.insts[k].op == OP_LOC { k -= 1 }
+    if k < f.block_first[bi] { return false }
+    let x = f.insts[k]
+    if x.op != OP_CALL && x.op != OP_CALLI { return false }
+    let conv = if x.op == OP_CALLI { x.sig_conv } else { u.syms[x.sym].conv }
+    conv == CONV_NAZM && x.dst2 == t.a
+}
+
+/// Whether block `b` is a bare failure exit — nothing but positions, then `fail` — so a call
+/// whose failure edge it is needs no landing pad: the unwind passes through the frame (7.5).
+pub fn bare_fail(f: Func, b: Int) -> Bool {
+    if b < 0 || b >= f.terms.len() || f.terms[b].op != T_FAIL { return false }
+    let mut k = f.block_first[b]
+    while k < f.block_end[b] {
+        if f.insts[k].op != OP_LOC { return false }
+        k += 1
+    }
+    true
+}
+
+fn put_uleb(b: ByteBuf, v: Int) {
+    let mut x = v
+    let mut more = true
+    while more {
+        let byte = x & 0x7F
+        x = x >> 7
+        if x == 0 {
+            bytebuf_push(b, UInt8(byte))
+            more = false
+        } else {
+            bytebuf_push(b, UInt8(byte | 0x80))
+        }
+    }
+}
+
+/// Function `sym`'s LSDA (7.5), as the C personality `__gcc_personality_v0` reads it: no
+/// landing-pad base, no type table, then the call sites — each call that has a landing pad,
+/// its start, its length and its pad as offsets from the function's start (ULEB128), and no
+/// action. A call not listed has no pad: the unwind passes through its frame.
+pub fn add_lsda(c: Code, sym: Int, start: Ints, len: Ints, pad: Ints) {
+    if ints_len(start) == 0 { return }
+    let table = bytebuf_new()
+    let mut i = 0
+    while i < ints_len(start) {
+        put_uleb(table, start[i])
+        put_uleb(table, len[i])
+        put_uleb(table, pad[i])
+        put_uleb(table, 0)
+        i += 1
+    }
+    while bytebuf_len(c.lsda) % 4 != 0 { bytebuf_push(c.lsda, UInt8(0)) }
+    ints_set(c.fn_lsda, sym, bytebuf_len(c.lsda))
+    bytebuf_push(c.lsda, UInt8(0xFF))
+    bytebuf_push(c.lsda, UInt8(0xFF))
+    bytebuf_push(c.lsda, UInt8(0x01))
+    put_uleb(c.lsda, bytebuf_len(table))
+    bytebuf_push_bytes(c.lsda, bytebuf_to_bytes(table))
 }
 
 /// Whether `x` is a call of `nz.stack_check` to inline against `nz.stack_limit` (7.3).
@@ -325,7 +418,12 @@ fn bit_set(s: Ints, base: Int, i: Int) {
 /// even as its last use, since a call's arguments are loaded in sequence into registers such a
 /// name might hold. A `bit` to `i64`, `ptr` or float value or variable may be allocated (all
 /// are held in a general register as bits); an `i128` never is.
-pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int) -> Ints {
+///
+/// `colors` receives each name's shared frame slot (7.5): a name left without a register shares
+/// an 8-byte slot with the others whose lives do not overlap its own — the same intervals the
+/// registers are shared by — and -1 is a name that needs its own (an `i128`, a name of no class
+/// or one never used) or none (a register). Left empty when nothing is allocated.
+pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int, colors: Ints) -> Ints {
     let nv = ints_len(f.vars)
     let names = n + nv
     let loc = ints_new()
@@ -550,7 +648,87 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int) -> Ints {
             loc[v] = furthest
         }
     }
+    // The frame slots of the names left in memory, in order of their start: the first slot whose
+    // holder's life has ended, or a new one.
+    i = 0
+    while i < names {
+        ints_push(colors, -1)
+        i += 1
+    }
+    let last_end = ints_new()
+    for v in sorted {
+        if loc[v] < 0 {
+            let mut k = 0
+            let mut got = -1
+            while k < ints_len(last_end) && got < 0 {
+                if last_end[k] < start[v] { got = k }
+                k += 1
+            }
+            if got < 0 {
+                got = ints_len(last_end)
+                ints_push(last_end, end[v])
+            } else {
+                last_end[got] = end[v]
+            }
+            colors[v] = got
+        }
+    }
     loc
+}
+
+/// The frame offsets of a function's values (the first `n` names) and variables (the rest),
+/// from `start`: a name with a shared slot (`colors`, from `allocate`) at its slot, a name in a
+/// register at none, and the rest each in its own, 16 bytes for an `i128`. Returns the values'
+/// offsets and their end, then the variables' and their end, as `lay_out` does for each.
+pub fn frame_offsets(classes: Ints, vars: Ints, loc: Ints, colors: Ints, start: Int) -> Ints {
+    let n = ints_len(classes)
+    let names = n + ints_len(vars)
+    let mut shared = 0
+    for c in colors {
+        if c + 1 > shared { shared = c + 1 }
+    }
+    let mut next = start + 8 * shared
+    let out = ints_new()
+    let mut v = 0
+    while v < names {
+        let c = if v < n { classes[v] } else { vars[v - n] }
+        let col = if v < ints_len(colors) { colors[v] } else { -1 }
+        let reg = v < ints_len(loc) && loc[v] >= 0
+        if col >= 0 {
+            ints_push(out, start + 8 * col)
+        } else if reg && c != C_I128 {
+            ints_push(out, start)
+        } else {
+            ints_push(out, next)
+            next += if c == C_I128 { 16 } else { 8 }
+        }
+        v += 1
+    }
+    // Values, their end, variables, their end.
+    let res = ints_new()
+    v = 0
+    while v < n {
+        ints_push(res, out[v])
+        v += 1
+    }
+    ints_push(res, next)
+    while v < names {
+        ints_push(res, out[v])
+        v += 1
+    }
+    ints_push(res, next)
+    res
+}
+
+/// `xs[from..to]`.
+pub fn ints_part(xs: Ints, from: Int, to: Int) -> Ints {
+    let out = ints_new()
+    let mut i = from
+    while i < to {
+        ints_push(out, xs[i])
+        i += 1
+    }
+    out
 }
 
 /// Which registers of `nregs` an allocation uses.

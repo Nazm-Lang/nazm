@@ -1,0 +1,15 @@
+// A failure through a function value: every level calls the next indirectly (7.5).
+
+fn step(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { let g = step; g(n - 1, k, held) + str_len(held) }
+}
+
+fn via(f: fn(Int, Int, Str) -> Int, n: Int, k: Int) -> Int { f(n, k, "v") }
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(via(step, 3, 5))
+    println(via(step, 400, 0))
+    println(7)
+    0
+}

@@ -34,3 +34,19 @@ The generator SHALL write the same bytes for the same LIR and target.
 #### Scenario: two runs
 - **WHEN** the generator runs twice over the same input
 - **THEN** the objects are byte-identical
+
+### Requirement: A failure crosses calls as the LLVM build's does
+On `aarch64-apple-darwin` and `x86_64-apple-darwin` a failure SHALL unwind as the LLVM backend's
+does (forced unwind, the C personality, a landing pad only where the failure edge has work, every
+plain entry landing it), so that objects of the two backends link into one program, and every
+frame on the way out SHALL release what it owns.
+
+#### Scenario: a failure deep in a recursion, every frame owning a string
+- **WHEN** a program fails four hundred frames deep, each frame holding a string
+- **THEN** the generated build prints the same output and diagnostic, exits with status 2 and
+  reports every string reclaimed, as the LLVM build does
+
+#### Scenario: a program linked from both backends' units
+- **WHEN** a program of several units is linked with some units' objects from the generator and
+  the others from LLVM
+- **THEN** it behaves as the LLVM build does, failures included

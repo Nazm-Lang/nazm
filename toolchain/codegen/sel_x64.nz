@@ -44,6 +44,14 @@ struct G {
     /// leave in the flags, the value it left there, and their condition code.
     fuse: Ints,
     uses: Ints,
+    /// Where failures unwind (7.5): each call site with a landing pad — its start and length,
+    /// and its pad, a block (`cs_blk`) or else an offset in the code (`cs_pad`) — and the start
+    /// and end of the last call that may unwind.
+    cs_start: Ints,
+    cs_len: Ints,
+    cs_blk: Ints,
+    cs_pad: Ints,
+    last_call: Ints,
 }
 
 /// The callee-saved registers the allocator hands out: rbx, r12–r15.
@@ -292,8 +300,11 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
     let own = u.syms[f.sym]
     let vcls = infer(u, f, n)
     let param_offs = lay_out(own.params, align_up(out, 16))
-    let voffs = lay_out(vcls, param_offs[ints_len(param_offs) - 1])
-    let varoffs = lay_out(f.vars, voffs[ints_len(voffs) - 1])
+    let colors = ints_new()
+    let loc = allocate(f, n, vcls, NREGS, NCALLER, colors)
+    let fo = frame_offsets(vcls, f.vars, loc, colors, param_offs[ints_len(param_offs) - 1])
+    let voffs = ints_part(fo, 0, n + 1)
+    let varoffs = ints_part(fo, n + 1, ints_len(fo))
     let mut off = varoffs[ints_len(varoffs) - 1]
     let slot_off = ints_new()
     let mut k = 0
@@ -307,7 +318,6 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
-    let loc = allocate(f, n, vcls, NREGS, NCALLER)
     let saved = used_regs(loc, NREGS)
     // After the pushes, the frame keeps rsp 16-aligned.
     let pushed = 8 * ints_len(saved)
@@ -315,7 +325,11 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
             fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
-            fuse: fuse_new(), uses: use_counts(f, n))
+            fuse: fuse_new(), uses: use_counts(f, n),
+            cs_start: ints_new(), cs_len: ints_new(), cs_blk: ints_new(), cs_pad: ints_new(),
+            last_call: ints_new())
+    ints_push(g.last_call, 0)
+    ints_push(g.last_call, 0)
     ints_set(c.sym_at, f.sym, here(g))
     // Compact unwind's RBP-frame mode: how many registers are saved below rbp, and which, the
     // lowest address first (D10, 5.2).
@@ -362,6 +376,30 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         }
         j += 1
     }
+    landing_pads(g)
+}
+
+/// A call site whose landing pad is block `blk`, or else the code at `pad` (7.5).
+fn call_site(g: G, blk: Int, pad: Int) {
+    ints_push(g.cs_start, g.last_call[0])
+    ints_push(g.cs_len, g.last_call[1] - g.last_call[0])
+    ints_push(g.cs_blk, blk)
+    ints_push(g.cs_pad, pad)
+}
+
+/// The function's LSDA, once its blocks are placed (7.5).
+fn landing_pads(g: G) {
+    let base = g.c.sym_at[g.f.sym]
+    let start = ints_new()
+    let pads = ints_new()
+    let mut k = 0
+    while k < ints_len(g.cs_start) {
+        ints_push(start, g.cs_start[k] - base)
+        let bl = g.cs_blk[k]
+        ints_push(pads, (if bl >= 0 { g.blk_at[bl] } else { g.cs_pad[k] }) - base)
+        k += 1
+    }
+    add_lsda(g.c, g.f.sym, start, g.cs_len, pads)
 }
 
 fn jump_to(g: G, at: Int, b: Int) {
@@ -1195,12 +1233,32 @@ fn call(g: G, x: Ins) {
         }
         i += 1
     }
+    if x.op == OP_CALLI { ld(g, R11, x.a) }
+    let start = here(g)
     if x.op == OP_CALLI {
-        ld(g, R11, x.a)
         call_r(b, R11)
     } else {
         let at = call_rel(b)
         add_reloc(g.c, at, X_BRANCH, x.sym, 1, 2)
+    }
+    let unwinding = unwinding_call(g.c, conv)
+    if unwinding {
+        ints_set(g.last_call, 0, start)
+        ints_set(g.last_call, 1, here(g))
+        // A call with no failure edge — a plain entry's call of its body — lands an unwind and
+        // goes on as if the call had returned a zero (7.5): the caller reads the flag.
+        if x.dst2 < 0 {
+            if ret >= 0 {
+                let skip = jmp8(b)
+                call_site(g, -1, here(g))
+                mov_imm(b, A, 0)
+                if is_float(ret) { movq_to_x(b, true, 0, A) }
+                if ret == C_I128 { mov_imm(b, D, 0) }
+                land8(b, skip)
+            } else {
+                call_site(g, -1, here(g))
+            }
+        }
     }
     if ret >= 0 {
         if is_float(ret) {
@@ -1213,7 +1271,7 @@ fn call(g: G, x: Ins) {
             st(g, A, x.dst)
         }
     }
-    if conv == CONV_NAZM && x.dst2 >= 0 {
+    if conv == CONV_NAZM && x.dst2 >= 0 && !unwinding {
         let r = bit_reg(ret)
         and1(b, r)
         st(g, r, x.dst2)
@@ -1228,6 +1286,11 @@ fn term(g: G, t: Ins, bi: Int) {
     let op = t.op
     if op == T_JUMP {
         if t.imm != bi + 1 { jump_to(g, jmp32(b), t.imm) }
+    } else if op == T_BRANCH && unwinds(g.c) && failure_branch(g.u, g.f, t, bi) {
+        // The call's failure edge (7.5): its landing pad, unless the edge is a bare failure exit
+        // the unwind may pass straight through; the normal return goes on to `else`.
+        if !bare_fail(g.f, t.imm) { call_site(g, t.imm, 0) }
+        if t.c != bi + 1 { jump_to(g, jmp32(b), t.c) }
     } else if op == T_BRANCH {
         // The condition in the flags when its comparison left it there (7.3), else tested.
         let mut cc = CC_NE
@@ -1266,8 +1329,15 @@ fn term(g: G, t: Ins, bi: Int) {
                 ld(g, A, t.a)
             }
         }
-        if own.conv == CONV_NAZM { mov_imm(b, bit_reg(if t.a >= 0 { own.ret } else { -1 }), 0) }
+        if own.conv == CONV_NAZM && !unwinds(g.c) {
+            mov_imm(b, bit_reg(if t.a >= 0 { own.ret } else { -1 }), 0)
+        }
         epilogue(g)
+    } else if op == T_FAIL && unwinds(g.c) {
+        // The failure exit, where failures unwind: to the nearest frame with a landing pad.
+        let at = call_rel(b)
+        add_reloc(g.c, at, X_BRANCH, g.c.uw[UW_RAISE], 1, 2)
+        ud2(b)
     } else if op == T_FAIL {
         let own = g.u.syms[g.f.sym]
         if own.ret >= 0 {
@@ -1462,4 +1532,50 @@ fn round_sse2(g: G, s: Int, dbl: Bool) {
     alu(b, ALU_AND, A, R11)
     alu(b, ALU_OR, A, R10)
     land32(b, done)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Where failures unwind (7.5): `nz.raise` and its stop function, as `gen_raise` in `sel.nz`.
+
+/// `nz.raise` and `nz.unwind_stop`, after the unit's functions.
+pub fn gen_raise_x64(c: Code) {
+    let o = c.buf
+    // nz.unwind_stop: actions in esi; go on unless `_UA_END_OF_STACK` (16).
+    ints_set(c.sym_at, c.uw[UW_STOP], bytebuf_len(o))
+    ints_set(c.fn_enc, c.uw[UW_STOP], 0x01000000)
+    push_rbp(o)
+    mov(o, RBP, RSP)
+    shift_imm(o, 5, RSI, 4)
+    and1(o, RSI)
+    alu(o, ALU_TEST, RSI, RSI)
+    let end = jcc8(o, CC_NE)
+    mov_imm(o, RAX, 0)
+    pop_rbp(o)
+    ret(o)
+    land8(o, end)
+    let at = call_rel(o)
+    add_reloc(c, at, X_BRANCH, c.uw[UW_ABORT], 1, 2)
+    ud2(o)
+    // nz.raise: the exception object below the frame record, 16-aligned.
+    ints_set(c.sym_at, c.uw[UW_RAISE], bytebuf_len(o))
+    ints_set(c.fn_enc, c.uw[UW_RAISE], 0x01000000)
+    push_rbp(o)
+    mov(o, RBP, RSP)
+    rr(o, true, 0x81, 5, RSP)
+    imm32(o, 32)
+    mov_imm(o, RAX, 0x4E414583F74FCD4D)
+    store(o, 8, RAX, RSP, 0)
+    mov_imm(o, RAX, 0)
+    store(o, 8, RAX, RSP, 8)
+    store(o, 8, RAX, RSP, 16)
+    store(o, 8, RAX, RSP, 24)
+    mov(o, RDI, RSP)
+    let stop = lea_rip(o, RSI)
+    add_reloc(c, stop, X_SIGNED, c.uw[UW_STOP], 1, 2)
+    mov_imm(o, RDX, 0)
+    let fu = call_rel(o)
+    add_reloc(c, fu, X_BRANCH, c.uw[UW_FORCED], 1, 2)
+    let ab = call_rel(o)
+    add_reloc(c, ab, X_BRANCH, c.uw[UW_ABORT], 1, 2)
+    ud2(o)
 }

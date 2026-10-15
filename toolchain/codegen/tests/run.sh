@@ -3,6 +3,7 @@
 #
 #     toolchain/codegen/tests/run.sh [FILE.nz ...]
 #     NZCG_TARGET=x86_64-apple-darwin toolchain/codegen/tests/run.sh [FILE.nz ...]
+#     NZCG_MIX=even|odd toolchain/codegen/tests/run.sh [FILE.nz ...]
 #
 # The target is aarch64-apple-darwin unless NZCG_TARGET says otherwise; x86_64-apple-darwin runs
 # under Rosetta on an arm64 Mac.
@@ -15,7 +16,10 @@
 #   generated  `nazm build --objects DIR FILE`, every unit object (a module's and a generic
 #              instantiation's) replaced by the generator's for `nazm lir --ops FILE`, linked with `cc` in link.txt's order, run;
 #
-# and compares standard output, standard error and exit status byte for byte. An input the
+# and compares standard output, standard error and exit status byte for byte. With NZCG_MIX the
+# generated program is linked from both backends' unit objects (7.5): only the even-numbered
+# (`even`) or odd-numbered (`odd`) units are the generator's, the rest LLVM's, and the summary
+# says how many programs had units of both. An input the
 # generator refuses is `refused`; one the reference cannot build is `skipped`; neither is ever
 # counted as agreeing. Prints one line per input that does not agree, then the summary
 # `N agree, M differ, K refused, S skipped`. Exit status 0 only when nothing differs.
@@ -41,8 +45,10 @@ if ! "$NAZM" build "$HERE/main.nz" -o "$NZCG" >"$OUT/build.log" 2>&1; then
   echo "nzcg did not build:"; cat "$OUT/build.log"; exit 2
 fi
 
-# Run with a time limit; stdin empty.
-limited() { perl -e 'alarm shift; exec @ARGV or exit 127' "$TIMEOUT" "$@" </dev/null; }
+# Run with a time limit; stdin empty; the runtime's memory report on, so what each program
+# allocated, reclaimed and left live is compared too (a landing pad that failed to release would
+# show here, 7.5).
+limited() { NAZM_MEMORY_REPORT=1 perl -e 'alarm shift; exec @ARGV or exit 127' "$TIMEOUT" "$@" </dev/null; }
 
 if [ $# -gt 0 ]; then
   inputs=("$@")
@@ -61,7 +67,8 @@ else
   while IFS= read -r f; do inputs+=("$f"); done < <(find "$ROOT/corpus" -name '*.nz' | sort)
 fi
 
-agree=0; differ=0; refused=0; skipped=0
+MIX=${NZCG_MIX:-}
+agree=0; differ=0; refused=0; skipped=0; mixed=0
 for src in "${inputs[@]}"; do
   rel=${src#"$ROOT"/}
   name=$(echo "$rel" | tr '/.' '__')
@@ -98,16 +105,23 @@ for src in "${inputs[@]}"; do
   # The unit objects, in link order, replaced by the generator's.
   objs=$(sed -n 's/^objects //p' "$W/obj/link.txt")
   libs=$(sed -n 's/^libraries //p' "$W/obj/link.txt")
-  k=0; list=()
+  k=0; list=(); ours=0; theirs=0
   for o in $objs; do
     if [[ $o =~ -[mg][0-9]+\.o$ ]]; then
-      cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1))
+      if [ -z "$MIX" ] || { [ "$MIX" = even ] && [ $((k % 2)) -eq 0 ]; } ||
+         { [ "$MIX" = odd ] && [ $((k % 2)) -eq 1 ]; }; then
+        cp "$W/gen/unit-$k.o" "$W/obj/$o"; ours=$((ours+1))
+      else
+        theirs=$((theirs+1))
+      fi
+      k=$((k+1))
     fi
     list+=("$W/obj/$o")
   done
+  [ $ours -gt 0 ] && [ $theirs -gt 0 ] && mixed=$((mixed+1))
   # Every unit object — a module's (-mK) and a generic instantiation's (-gK) — is the
-  # generator's: on hosted targets LLVM's objects unwind on a failure and the generator's keep
-  # the bit (performance-leadership 4.2), so the two are never mixed in one program.
+  # generator's unless NZCG_MIX says otherwise: on the Apple targets both backends unwind on a
+  # failure (7.5, performance-leadership 4.2), so their objects link together.
   if [ "$k" -ne "$(ls "$W/gen" | wc -l)" ]; then
     echo "differ   $rel: $k unit objects in link.txt, $(ls "$W/gen" | wc -l | tr -d ' ') written"; differ=$((differ+1)); continue
   fi
@@ -116,6 +130,15 @@ for src in "${inputs[@]}"; do
   fi
   (cd "$W" && limited ./ref >ref.stdout 2>ref.stderr; echo $? >ref.status)
   (cd "$W" && limited ./gen.exe >gen.stdout 2>gen.stderr; echo $? >gen.status)
+  # A program that runs until the stack is exhausted (it says `nzcg: stack depth` in a comment)
+  # allocates as many times as its frames fit, and the two backends' frames differ in size: its
+  # memory report is compared with each count of things allocated and reclaimed only required
+  # to match the other (`allocated=N reclaimed=N`), every `live` count still exactly.
+  if grep -q 'nzcg: stack depth' "$src"; then
+    for x in ref gen; do
+      perl -pi -e 's/allocated=(\d+) reclaimed=\1 /allocated=N reclaimed=N /g' "$W/$x.stderr"
+    done
+  fi
   if cmp -s "$W/ref.stdout" "$W/gen.stdout" && cmp -s "$W/ref.stderr" "$W/gen.stderr" &&
      cmp -s "$W/ref.status" "$W/gen.status"; then
     agree=$((agree+1))
@@ -127,5 +150,7 @@ for src in "${inputs[@]}"; do
     echo "differ   $rel:$what"; differ=$((differ+1))
   fi
 done
-echo "$agree agree, $differ differ, $refused refused, $skipped skipped"
+note=""
+[ -n "$MIX" ] && note=" ($mixed linked from units of both backends)"
+echo "$agree agree, $differ differ, $refused refused, $skipped skipped$note"
 [ $differ -eq 0 ]

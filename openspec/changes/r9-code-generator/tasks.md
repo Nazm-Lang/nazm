@@ -104,6 +104,21 @@
       `Backend` that runs the shipped `nzcg` per unit on the printed LIR, keeping the bit and
       passing `--one-thread`; refusals as `N0101`, no fallback. The Rust change is the
       coordinator's; not made here
-- [ ] 7.5 Unwind tables and LSDAs, so the generator unwinds on a failure as hosted LLVM does
-      (D14; before 1.0)
+- [x] 7.5 Unwind tables and LSDAs, so the generator unwinds on a failure as hosted LLVM does
+      (D14, as built there): on both Mach-O targets `fail` calls the unit's own local `nz.raise`
+      (a forced unwind under a stop function), a call with work on its failure edge lands on that
+      edge's block, a call into a bare `fail` has no pad, and a plain entry's call lands on a pad
+      that zeroes its result; each function with a pad has its compact unwind entry name
+      `__gcc_personality_v0` and its LSDA in `__gcc_except_tab`; ELF keeps the bit (D13). Frames
+      now share slots between names whose lives do not overlap (720 → 176 bytes for a recursive
+      `down` holding a string; LLVM -O0: 224), so a failure as deep as LLVM's fits. `tests/run.sh`
+      now runs every program with the memory report on, gains seven failure-convention programs
+      (`fail_*`: recursion, a function value, a trait method through a generic instance, a task,
+      ten thousand frames of `defer`s, an exhausted stack — its allocation counts depth-masked,
+      `live` exact — and a callback C calls) and `NZCG_MIX=even|odd` (a program linked from both
+      backends' unit objects): 117 agree, 0 differ on aarch64 and on x86_64; mixed, 117 agree on
+      each target and parity (19 programs with units of both backends). `tests/unwind.sh` gains a
+      failure under fifty frames that own strings, walked and unwound as LLVM's: agree on both,
+      61 frames, the image's table naming one personality and its LSDAs. `lines.sh` 47 agree,
+      2 skipped (the programs with C); `encode.sh` 113 + 89
 - [ ] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions

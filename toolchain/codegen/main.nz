@@ -88,7 +88,29 @@ fn main(io: IoCap) {
                     None => { },
                 }
             }
-            let c = code_new(u.syms.len(), apple, limit)
+            // On the Apple targets a Nazm function's failure unwinds, as hosted LLVM's does (7.5):
+            // the unit defines `nz.raise` and its stop function where it has a failure exit, and
+            // imports the C personality where a call may land an unwind.
+            let uw = ints_new()
+            if apple {
+                let mut fails = false
+                let mut calls = false
+                for f in u.funcs {
+                    for t in f.terms {
+                        if t.op == T_FAIL { fails = true }
+                    }
+                    for x in f.insts {
+                        if x.op == OP_CALLI && x.sig_conv == CONV_NAZM { calls = true }
+                        if x.op == OP_CALL && x.sym >= 0 && u.syms[x.sym].conv == CONV_NAZM { calls = true }
+                    }
+                }
+                ints_push(uw, if fails { unit_sym(u, "nz.raise", L_LOCAL) } else { -1 })
+                ints_push(uw, if fails { unit_sym(u, "nz.unwind_stop", L_LOCAL) } else { -1 })
+                ints_push(uw, if calls { unit_sym(u, "__gcc_personality_v0", L_IMPORT) } else { -1 })
+                ints_push(uw, if fails { unit_sym(u, "_Unwind_ForcedUnwind", L_IMPORT) } else { -1 })
+                ints_push(uw, if fails { unit_sym(u, "abort", L_IMPORT) } else { -1 })
+            }
+            let c = code_new(u.syms.len(), apple, limit, uw)
             for f in u.funcs {
                 if str_len(f.section) > 0 {
                     strs_push(errors, f"`{f.name}` in section `{f.section}` (section placement, a board's, is not carried)")
@@ -97,6 +119,9 @@ fn main(io: IoCap) {
                 } else {
                     gen_function(c, u, f)
                 }
+            }
+            if unwinds(c) && c.uw[UW_RAISE] >= 0 {
+                if x64 { gen_raise_x64(c) } else { gen_raise(c) }
             }
             for e in c.errors { strs_push(errors, e) }
             if strs_len(errors) == 0 {
@@ -135,5 +160,19 @@ fn main(io: IoCap) {
             },
         }
         k += 1
+    }
+}
+
+/// The unit's symbol `name`, added as a function of linkage `link` when the unit has none.
+fn unit_sym(u: Unit, name: Str, link: Int) -> Int {
+    match hashmap_get(u.index, name) {
+        Some(k) => k,
+        None => {
+            let k = u.syms.len()
+            u.syms.push(Sym(name: name, kind: 0, link: link, params: ints_new(), ret: C_NONE,
+                    conv: CONV_C))
+            hashmap_set(u.index, name, k)
+            k
+        },
     }
 }
