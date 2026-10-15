@@ -188,6 +188,37 @@ builds every input with LIR with `nazm build --emit-ir`, by default and with `--
 those (`tests/units.py`). Only the host's units can be compared so: the other targets' are held
 by the runtime digest (7.2), which covers every target's.
 
+## The object cache (7.2)
+
+`crates/nazm-cache`'s second store, as `objcache.nz`: an object's key is the backend's actual
+input, never a summary of the front end's — `nazm.object-key/1` over the unit's bytes
+(`nazm.llvm-input/1`), the backend's identity (`nazm.backend-tool/1`: the driver and its banner,
+`InstalledDir` left out) and the configuration it resolved (`nazm.codegen-config/1`: the `-###`
+job lines' arguments, this invocation's own paths and names, `-o`, `-main-file-name` and the
+compilation directories left out, then `nazm-runtime-abi=REVISION+DIGEST`). Every digest is
+BLAKE3 over length-framed fields, as `digest::Framed`. The runtime digest is BLAKE3 over the ABI
+revision's four little-endian bytes, the whole runtime, the entry, the counted heap, every
+target's per-target units and each inventory entry as Rust's `Debug` prints it — the generator
+of 7.1 at every target, which the host's builds alone could not show. An entry is the header as
+one JSON line (`nazm.object/1`, its fields in Rust's order) and the object; it is read whole, and
+refused, every refusal a miss, by the first of Rust's checks it fails: no header line, not JSON,
+another schema, a field not 64 lower-case hexadecimal digits, a key its recorded inputs do not
+make, a key not the one asked for, a length, an object digest. It is published as Rust publishes
+it, beside its final name and renamed over it. A key is a digest, so the paths made from it are
+vouched for (`str_vouch`): the checker sees them as made from a unit's contents.
+
+The probe the build makes (`clang -###` for an empty `probe.ll` at `-O0`, with only the
+variables it passes) is `tests/probe.sh`; `pipeline backend` derives the identity and the
+configuration from its report. `run.sh` keys every unit `nazm build --emit-ir` compiled from the
+unit's bytes and that identity and configuration, and requires the store `nazm build` filled to
+hold it under that key, the entry written again here byte for byte the one found; it compares the
+runtime digest with the one `nazm build --provenance` records; and it breaks an entry eight ways
+and reads it as asked for another key, each refused as expected.
+
+Not ported: the Cranelift backend's key (its input is the unit's LIR digest with Cranelift's
+version and printed settings), which R9's code generator replaces with its own; and the check
+store (`nazm.check/5`), which is R2's.
+
 ## Order of work
 
 1. This proposal.
