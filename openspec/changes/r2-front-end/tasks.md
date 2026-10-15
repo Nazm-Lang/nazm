@@ -459,6 +459,14 @@
         functions the lowering carries 75,530, all agree; the other parts 10,644, all agree;
         1,514 whole documents, all the reference's bytes. check 3,093 agree, 2 differ (carried
         3,089, all agree)
+  - [x] `[v; n]` and list and array literals: `[a, b, …]` as an array (`ExprKind::Array`) where
+        the checker made one, else as the list it read it as (`sequence_literal`: `{ let made
+        = vec_new(); vec_push(made, a); …; made }`); `[v; n]` as `array-repeat` of the type's
+        length. sema.nz records the type each literal was made as. And a `for` over
+        `s.split(sep)` written as a method (by name) is the split loop, as one over
+        `text_split(s, sep)` is — newly reached, and found, here. `run.sh core`: 3,095 agree,
+        0 differ; of 76,272 functions the lowering carries 75,581, all agree; the other parts
+        10,644, all agree; 1,524 whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
