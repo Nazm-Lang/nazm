@@ -399,6 +399,7 @@ fn a_select_s_operations_are_resource_sites() {
 /// A C shim the native programs below run with: 150 ms after its first call, the wall clock
 /// (`CLOCK_REALTIME`) it reports steps back an hour, as an operator's or NTP's correction might;
 /// the monotonic clock is untouched. Interposed with `DYLD_INSERT_LIBRARIES` or `LD_PRELOAD`.
+#[cfg(unix)]
 const CLOCK_STEP: &str = r#"
 #define _GNU_SOURCE
 #include <stdatomic.h>

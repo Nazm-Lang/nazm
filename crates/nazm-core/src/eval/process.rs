@@ -13,8 +13,6 @@
 //! needs `wait4`, which a safe Rust program cannot call: the interpreter answers `-ENOSYS`.
 
 use std::io::Read as _;
-use std::os::fd::AsRawFd as _;
-use std::os::unix::process::ExitStatusExt as _;
 use std::sync::Mutex;
 
 use nazm_sema::Intrinsic;
@@ -25,11 +23,12 @@ use super::value::{Str, Value};
 const EINVAL: i64 = 22;
 const ENOENT: i64 = 2;
 const ENOTDIR: i64 = 20;
+#[cfg(unix)]
 const EACCES: i64 = 13;
 const EPERM: i64 = 1;
 const ESRCH: i64 = 3;
-const ENOSYS: i64 = if cfg!(target_os = "linux") { 38 } else { 78 };
-const ETIMEDOUT: i64 = if cfg!(target_os = "linux") { 110 } else { 60 };
+const ENOSYS: i64 = super::host::ENOSYS;
+const ETIMEDOUT: i64 = super::host::ETIMEDOUT;
 
 /// A child: the descriptor its handle is keyed by, the process, its three pipes' handles, and
 /// its status once it has been waited for.
@@ -51,7 +50,7 @@ pub(super) enum Output {
 }
 
 fn status(e: &std::io::Error) -> i64 {
-    -i64::from(e.raw_os_error().unwrap_or(22))
+    -super::host::errno(e)
 }
 
 fn text(s: &Str) -> String {
@@ -67,14 +66,18 @@ fn texts(v: &Value) -> Option<String> {
 }
 
 /// The environment's entries, `NAME=value`, in the order the process holds them; an entry with
-/// no `=` after its first byte is not one, as natively.
+/// no `=` after its first byte is not one, as natively. On Windows, as natively, an entry that is
+/// not valid UTF-16 is skipped, and so is each hidden per-drive one, which begins with `=`.
 fn entries() -> Vec<Vec<u8>> {
     std::env::vars_os()
-        .map(|(k, v)| {
-            let mut e = std::os::unix::ffi::OsStrExt::as_bytes(k.as_os_str()).to_vec();
+        .filter_map(|(k, v)| {
+            let mut e = super::host::bytes_of(&k)?;
+            if cfg!(windows) && e.first() == Some(&b'=') {
+                return None;
+            }
             e.push(b'=');
-            e.extend_from_slice(std::os::unix::ffi::OsStrExt::as_bytes(v.as_os_str()));
-            e
+            e.extend_from_slice(&super::host::bytes_of(&v)?);
+            Some(e)
         })
         .collect()
 }
@@ -124,7 +127,7 @@ pub(super) fn process_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
     match (op, args) {
         (Intrinsic::OsEnvGet, [Value::Str(name)]) => string(
             std::env::var_os(text(name))
-                .map(|v| std::os::unix::ffi::OsStrExt::as_bytes(v.as_os_str()).to_vec())
+                .and_then(|v| super::host::bytes_of(&v))
                 .unwrap_or_default(),
         ),
         (Intrinsic::OsEnvHas, [Value::Str(name)]) => {
@@ -140,8 +143,7 @@ pub(super) fn process_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
         // Entropy (Gate 2, §21): the system's, from its random device.
         (Intrinsic::OsRandomBytes, [Value::Bytes(buf)]) => {
             let mut got = vec![0; buf.len];
-            let ok = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut got));
-            if ok.is_err() {
+            if super::host::entropy(&mut got).is_err() {
                 return int(-EINVAL);
             }
             buf.write(0, &got);
@@ -268,19 +270,19 @@ fn spawn(program: &str, argv: &[String]) -> i64 {
     else {
         return -EINVAL;
     };
-    let Ok(key) = std::fs::File::open("/dev/null") else {
+    let Ok(key) = super::host::null_device() else {
         return -EINVAL;
     };
-    let pin = register(i64::from(input.as_raw_fd()), Object::PipeIn(input));
+    let pin = register(super::host::key(&input), Object::PipeIn(input));
     let pout = register(
-        i64::from(output.as_raw_fd()),
+        super::host::key(&output),
         Object::PipeOut(Mutex::new(Output::Out(output))),
     );
     let perr = register(
-        i64::from(errors.as_raw_fd()),
+        super::host::key(&errors),
         Object::PipeOut(Mutex::new(Output::Err(errors))),
     );
-    let fd = i64::from(key.as_raw_fd());
+    let fd = super::host::key(&key);
     let id = i64::from(child.id());
     register(
         fd,
@@ -315,26 +317,44 @@ fn environment(mut entries: Vec<Vec<u8>>) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
 
 /// Where `program` is, as `posix_spawnp` finds it (R1d): a relative name with a `/` beside the
 /// canonical `dir`, as the native runtime makes it, any other the first executable file of that name
-/// on this process's `PATH`.
+/// on this process's `PATH`. On Windows, where `CreateProcessW` finds it: `\` and a drive's `:`
+/// separate too, and a bare name is looked for in the current directory and then on `PATH`
+/// (`;`-separated), `.exe` added to a name with no extension.
 fn located(program: &[u8], dir: &[u8]) -> Result<std::path::PathBuf, i64> {
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::fs::PermissionsExt as _;
-    let as_path = |b: &[u8]| std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b));
+    let as_path = |b: &[u8]| {
+        super::host::os_string(b)
+            .map(std::path::PathBuf::from)
+            .ok_or(-super::host::EILSEQ)
+    };
     if program.is_empty() {
         return Err(-ENOENT);
     }
-    if program.contains(&b'/') {
-        let p = as_path(program);
+    let separated = program.contains(&b'/')
+        || (cfg!(windows) && (program.contains(&b'\\') || program.contains(&b':')));
+    if separated {
+        let p = as_path(program)?;
         if p.is_relative() && !dir.is_empty() {
-            let base = std::fs::canonicalize(as_path(dir))
-                .map_err(|e| -i64::from(e.raw_os_error().unwrap_or(22)))?;
-            let mut joined = std::os::unix::ffi::OsStrExt::as_bytes(base.as_os_str()).to_vec();
-            joined.push(b'/');
-            joined.extend_from_slice(program);
-            return Ok(as_path(&joined));
+            let base = std::fs::canonicalize(as_path(dir)?).map_err(|e| status(&e))?;
+            // A canonical Windows path is verbatim (`\\?\`), in which `/` does not separate.
+            let rest: Vec<u8> = if cfg!(windows) {
+                program
+                    .iter()
+                    .map(|b| if *b == b'/' { b'\\' } else { *b })
+                    .collect()
+            } else {
+                program.to_vec()
+            };
+            return Ok(base.join(as_path(&rest)?));
         }
         return Ok(p);
     }
+    on_path(&as_path(program)?)
+}
+
+#[cfg(unix)]
+fn on_path(program: &std::path::Path) -> Result<std::path::PathBuf, i64> {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::fs::PermissionsExt as _;
     let path = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
     let mut denied = false;
     for entry in path.as_bytes().split(|b| *b == b':') {
@@ -343,7 +363,7 @@ fn located(program: &[u8], dir: &[u8]) -> Result<std::path::PathBuf, i64> {
         } else {
             entry
         };
-        let candidate = as_path(base).join(as_path(program));
+        let candidate = std::path::Path::new(std::ffi::OsStr::from_bytes(base)).join(program);
         if let Ok(m) = std::fs::metadata(&candidate) {
             if m.is_file() && m.permissions().mode() & 0o111 != 0 {
                 return Ok(candidate);
@@ -354,20 +374,40 @@ fn located(program: &[u8], dir: &[u8]) -> Result<std::path::PathBuf, i64> {
     Err(if denied { -EACCES } else { -ENOENT })
 }
 
+#[cfg(not(unix))]
+fn on_path(program: &std::path::Path) -> Result<std::path::PathBuf, i64> {
+    let name = if program.extension().is_some() {
+        program.to_path_buf()
+    } else {
+        program.with_extension("exe")
+    };
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::iter::once(std::path::PathBuf::from("."))
+        .chain(std::env::split_paths(&path))
+        .map(|base| base.join(&name))
+        .find(|c| std::fs::metadata(c).is_ok_and(|m| m.is_file()))
+        .ok_or(-ENOENT)
+}
+
 /// `os_spawn_in` and `os_spawn_with` (R1d): the child's handle, or a status.
 fn spawn_in(program: &[u8], argv: &[String], dir: &[u8], env: Vec<Vec<u8>>, flags: i64) -> i64 {
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::os::unix::process::CommandExt as _;
     if flags & !3 != 0 || dir.contains(&0) {
         return -EINVAL;
     }
     let Some(pairs) = environment(env) else {
         return -EINVAL;
     };
+    let names: Option<Vec<_>> = pairs
+        .iter()
+        .map(|(k, v)| Some((super::host::os_string(k)?, super::host::os_string(v)?)))
+        .collect();
+    let (Some(names), Some(directory)) = (names, super::host::os_string(dir)) else {
+        return -super::host::EILSEQ;
+    };
     // The directory is asked about first, as natively: a missing one is `NotFound` and a file
     // `NotADirectory` on every system.
     if !dir.is_empty() {
-        match std::fs::metadata(std::ffi::OsStr::from_bytes(dir)) {
+        match std::fs::metadata(&directory) {
             Err(e) => return status(&e),
             Ok(m) if !m.is_dir() => return -ENOTDIR,
             Ok(_) => {}
@@ -381,12 +421,7 @@ fn spawn_in(program: &[u8], argv: &[String], dir: &[u8], env: Vec<Vec<u8>>, flag
     let mut c = std::process::Command::new(resolved);
     c.args(argv)
         .env_clear()
-        .envs(pairs.iter().map(|(k, v)| {
-            (
-                std::ffi::OsStr::from_bytes(k),
-                std::ffi::OsStr::from_bytes(v),
-            )
-        }))
+        .envs(names)
         .stdin(if null_input {
             std::process::Stdio::null()
         } else {
@@ -395,10 +430,10 @@ fn spawn_in(program: &[u8], argv: &[String], dir: &[u8], env: Vec<Vec<u8>>, flag
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     if !dir.is_empty() {
-        c.current_dir(std::ffi::OsStr::from_bytes(dir));
+        c.current_dir(directory);
     }
     if flags & 1 != 0 {
-        c.process_group(0);
+        new_group(&mut c);
     }
     let mut child = match c.spawn() {
         Ok(c) => c,
@@ -408,21 +443,21 @@ fn spawn_in(program: &[u8], argv: &[String], dir: &[u8], env: Vec<Vec<u8>>, flag
         return -EINVAL;
     };
     let pin = match child.stdin.take() {
-        Some(input) => register(i64::from(input.as_raw_fd()), Object::PipeIn(input)),
+        Some(input) => register(super::host::key(&input), Object::PipeIn(input)),
         None => super::os::CLOSED,
     };
-    let Ok(key) = std::fs::File::open("/dev/null") else {
+    let Ok(key) = super::host::null_device() else {
         return -EINVAL;
     };
     let pout = register(
-        i64::from(output.as_raw_fd()),
+        super::host::key(&output),
         Object::PipeOut(Mutex::new(Output::Out(output))),
     );
     let perr = register(
-        i64::from(errors.as_raw_fd()),
+        super::host::key(&errors),
         Object::PipeOut(Mutex::new(Output::Err(errors))),
     );
-    let fd = i64::from(key.as_raw_fd());
+    let fd = super::host::key(&key);
     let id = i64::from(child.id());
     register(
         fd,
@@ -437,11 +472,36 @@ fn spawn_in(program: &[u8], argv: &[String], dir: &[u8], env: Vec<Vec<u8>>, flag
 }
 
 /// An exit status as `os_wait` answers it: the code, or 256 and the signal that ended it.
+#[cfg(unix)]
 fn decoded(st: std::process::ExitStatus) -> i64 {
+    use std::os::unix::process::ExitStatusExt as _;
     st.code()
         .map(i64::from)
         .or_else(|| st.signal().map(|g| 256 + i64::from(g)))
         .unwrap_or(-EINVAL)
+}
+
+/// On Windows (`docs/spec.md`, *Windows x86_64*): the exit code, a `DWORD` read unsigned as
+/// natively; there are no signals.
+#[cfg(not(unix))]
+fn decoded(st: std::process::ExitStatus) -> i64 {
+    st.code()
+        .map(|c| i64::from(u32::from_ne_bytes(c.to_ne_bytes())))
+        .unwrap_or(-EINVAL)
+}
+
+/// The child started as the leader of a new process group (R1d, flag `1`); on Windows
+/// `CREATE_NEW_PROCESS_GROUP`, as natively.
+#[cfg(unix)]
+fn new_group(c: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt as _;
+    c.process_group(0);
+}
+
+#[cfg(windows)]
+fn new_group(c: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt as _;
+    c.creation_flags(0x0000_0200);
 }
 
 /// `os_try_wait` (R1d): the child's end if it has come, `-EWOULDBLOCK` at once if it has not.
@@ -484,6 +544,7 @@ fn wait_until(c: &Child, deadline: i64) -> i64 {
 
 /// `os_kill_group` (R1d): by the system's `kill`, the interpreter having no C to call `kill(2)`
 /// with; a refusal is `EPERM` when `kill` says so, `ESRCH` otherwise.
+#[cfg(unix)]
 fn kill_group(group: i64, sig: i64) -> i64 {
     if group < 2 || group > i64::from(i32::MAX) || !(0..32).contains(&sig) {
         return -EINVAL;
@@ -507,6 +568,44 @@ fn kill_group(group: i64, sig: i64) -> i64 {
                 -ESRCH
             }
         }
+        Err(e) => status(&e),
+    }
+}
+
+/// `os_kill_group` on Windows (`docs/spec.md`, *The platform, further*, **Where**): there are no
+/// process groups, so the process `group` itself — asked whether it exists for `sig` 0
+/// (`tasklist`), ended with exit code 1 otherwise (`taskkill /F`, which is `TerminateProcess`);
+/// `ESRCH` for one there is not, `EPERM` for one this account may not end.
+#[cfg(windows)]
+fn kill_group(group: i64, sig: i64) -> i64 {
+    if !(2..=i64::from(i32::MAX)).contains(&group) || !(0..32).contains(&sig) {
+        return -EINVAL;
+    }
+    let quiet = |c: &mut std::process::Command| {
+        c.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    };
+    if sig == 0 {
+        return match quiet(
+            std::process::Command::new("tasklist")
+                .args(["/NH", "/FO", "CSV", "/FI"])
+                .arg(format!("PID eq {group}")),
+        ) {
+            Ok(o) if String::from_utf8_lossy(&o.stdout).contains(&format!("\"{group}\"")) => 0,
+            Ok(_) => -ESRCH,
+            Err(e) => status(&e),
+        };
+    }
+    match quiet(
+        std::process::Command::new("taskkill")
+            .args(["/F", "/PID"])
+            .arg(group.to_string()),
+    ) {
+        Ok(o) if o.status.success() => 0,
+        Ok(o) if String::from_utf8_lossy(&o.stderr).contains("denied") => -EPERM,
+        Ok(_) => -ESRCH,
         Err(e) => status(&e),
     }
 }

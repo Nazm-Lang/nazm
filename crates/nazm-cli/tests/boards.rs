@@ -215,6 +215,7 @@ fn a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot() 
 
 /// A driver on `PATH` whose `-print-targets` lists RISC-V only when `riscv` is true, and which
 /// refuses every other request — so the question N86 asks has the same answer on every host.
+#[cfg(unix)]
 fn fake_clang(riscv: bool) -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
     let d = tempfile::tempdir().unwrap();
@@ -242,6 +243,7 @@ fn fake_clang(riscv: bool) -> tempfile::TempDir {
 /// driver without a RISC-V code generator is refused by name before anything is compiled; one that
 /// has it is not refused for it (here it then fails to compile, being a fake — a different failure).
 #[test]
+#[cfg(unix)] // the driver is an `sh` script
 fn a_riscv_board_is_refused_by_name_exactly_when_the_driver_has_no_riscv_generator() {
     let d = program(
         "fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write8(268435456, c) }\n\

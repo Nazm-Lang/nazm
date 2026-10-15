@@ -513,6 +513,7 @@ fn a_missing_clang_is_reported_as_a_toolchain_problem_not_a_program_problem() {
 }
 
 #[test]
+#[cfg(unix)] // the stub is an `sh` script
 fn a_failing_clang_is_reported_with_its_own_output() {
     // A stub earlier on PATH than the real one. This exercises the path where the
     // toolchain runs and refuses, which is different from it being absent.
@@ -642,6 +643,7 @@ fn run_and_check_are_unchanged_by_the_new_subcommand() {
     }
 }
 
+#[cfg(unix)]
 fn set_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     let mut p = std::fs::metadata(path).expect("metadata").permissions();

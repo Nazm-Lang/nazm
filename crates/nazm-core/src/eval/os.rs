@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, ReadDir};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::os::fd::AsRawFd as _;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -35,7 +35,7 @@ const ENOTDIR: i64 = 20;
 const ESPIPE: i64 = 29;
 const EEXIST: i64 = 17;
 /// `EWOULDBLOCK`, the family's own number (R1d).
-pub(super) const EAGAIN: i64 = if cfg!(target_os = "linux") { 11 } else { 35 };
+pub(super) const EAGAIN: i64 = super::host::EAGAIN;
 /// The status of a name the resolver did not answer: no system's error number either, so
 /// `@std/ioerror` gives it the kind `NotFound` on every platform.
 pub(super) const NAME_NOT_FOUND: i64 = -65_537;
@@ -47,7 +47,7 @@ pub(super) enum Object {
     /// The directory's own descriptor, which the table is keyed by, and its listing.
     Dir {
         _descriptor: File,
-        list: Mutex<ReadDir>,
+        list: Box<Mutex<ReadDir>>,
     },
     Stdin,
     /// Standard output and errors (R1d): written in order with `print` and `eprint`, never closed.
@@ -84,18 +84,14 @@ fn table() -> &'static Mutex<Table> {
     TABLE.get_or_init(Mutex::default)
 }
 
-/// The host's family of error numbers: `0` for macOS, `1` for Linux.
+/// The host's family of error numbers: `0` for macOS, `1` for Linux, `2` for Windows.
 const fn family() -> i64 {
-    if cfg!(target_os = "linux") {
-        1
-    } else {
-        0
-    }
+    super::host::family()
 }
 
 /// `-errno` for a failure the system reported, and `EINVAL` for one it did not number.
 fn status(e: &std::io::Error) -> i64 {
-    -i64::from(e.raw_os_error().unwrap_or(22))
+    -super::host::errno(e)
 }
 
 /// A new handle for `object` on descriptor `fd`: the descriptor's next generation, with no
@@ -163,10 +159,7 @@ fn path(v: &Str) -> String {
 
 fn opened(r: std::io::Result<File>) -> i64 {
     match r {
-        Ok(f) => {
-            let fd = i64::from(f.as_raw_fd());
-            register(fd, Object::File(f))
-        }
+        Ok(f) => register(super::host::key(&f), Object::File(f)),
         Err(e) => status(&e),
     }
 }
@@ -231,20 +224,32 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 3 => o.read(true).write(true),
                 _ => return handle(-EINVAL),
             };
-            handle(opened(o.mode(0o666).open(path(p))))
+            #[cfg(unix)]
+            o.mode(0o666);
+            handle(opened(o.open(path(p))))
         }
         (Intrinsic::OsDirOpen, [Value::Str(p)]) => {
             // The directory is opened as a descriptor too, so its handle names one as a native
-            // `DIR *`'s does, and holding it keeps another open from taking its number.
+            // `DIR *`'s does, and holding it keeps another open from taking its number. On
+            // Windows, as natively, the key is a descriptor of `NUL` held beside the listing.
             let name = path(p);
-            match (File::open(&name), std::fs::read_dir(&name)) {
-                (Ok(d), Ok(list)) if d.metadata().is_ok_and(|m| m.is_dir()) => {
-                    let fd = i64::from(d.as_raw_fd());
+            let descriptor = if cfg!(windows) {
+                match std::fs::metadata(&name) {
+                    Ok(m) if !m.is_dir() => return handle(-ENOTDIR),
+                    Ok(_) => super::host::null_device(),
+                    Err(e) => Err(e),
+                }
+            } else {
+                File::open(&name)
+            };
+            match (descriptor, std::fs::read_dir(&name)) {
+                (Ok(d), Ok(list)) if cfg!(windows) || d.metadata().is_ok_and(|m| m.is_dir()) => {
+                    let fd = super::host::key(&d);
                     handle(register(
                         fd,
                         Object::Dir {
                             _descriptor: d,
-                            list: Mutex::new(list),
+                            list: Box::new(Mutex::new(list)),
                         },
                     ))
                 }
@@ -425,12 +430,13 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                         None => 0,
                         Some(Err(e)) => status(&e),
                         Some(Ok(entry)) => {
-                            let n = entry.file_name();
-                            let bytes = std::os::unix::ffi::OsStrExt::as_bytes(n.as_os_str());
+                            let Some(bytes) = super::host::bytes_of(&entry.file_name()) else {
+                                return int(-super::host::EILSEQ);
+                            };
                             if bytes.len() > name.len {
                                 -EINVAL
                             } else {
-                                write(name, bytes);
+                                write(name, &bytes);
                                 i64::try_from(bytes.len()).unwrap_or(-EINVAL)
                             }
                         }
@@ -459,13 +465,13 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                     } else {
                         2
                     };
-                    let modified = m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec();
+                    let (modified, permissions) = stat_facts(&m, &path(p));
                     let mut b = Vec::with_capacity(32);
                     for w in [
-                        i64::try_from(m.size()).unwrap_or(i64::MAX),
+                        i64::try_from(m.len()).unwrap_or(i64::MAX),
                         kind,
                         modified,
-                        i64::from(m.mode() & 0o7777),
+                        permissions,
                     ] {
                         b.extend_from_slice(&w.to_le_bytes());
                     }
@@ -480,7 +486,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 Err(e) => status(&e),
                 Ok(m) => {
                     let ft = m.file_type();
-                    let kind = if ft.is_symlink() {
+                    let kind = if ft.is_symlink() || reparse_point(&m) {
                         3
                     } else if ft.is_file() {
                         0
@@ -489,21 +495,15 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                     } else {
                         2
                     };
-                    let modified = m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec();
-                    // macOS's `dev_t` is 32 bits, read unsigned as natively.
-                    let dev = if cfg!(target_os = "linux") {
-                        m.dev()
-                    } else {
-                        m.dev() & 0xFFFF_FFFF
-                    };
+                    let (modified, permissions, dev, ino) = lstat_facts(&m);
                     let mut b = Vec::with_capacity(48);
                     for w in [
-                        i64::try_from(m.size()).unwrap_or(i64::MAX),
+                        i64::try_from(m.len()).unwrap_or(i64::MAX),
                         kind,
                         modified,
-                        i64::from(m.mode() & 0o7777),
-                        i64::from_ne_bytes(dev.to_ne_bytes()),
-                        i64::from_ne_bytes(m.ino().to_ne_bytes()),
+                        permissions,
+                        dev,
+                        ino,
                     ] {
                         b.extend_from_slice(&w.to_le_bytes());
                     }
@@ -519,20 +519,23 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             if bits > 0o7777 {
                 return int(-EINVAL);
             }
-            int(done(std::fs::set_permissions(
-                path(p),
-                std::fs::Permissions::from_mode(bits),
-            )))
+            int(done(set_mode(path(p), bits)))
         }
         (Intrinsic::OsRealpath, [Value::Str(p), Value::Bytes(out)]) => {
             int(match std::fs::canonicalize(path(p)) {
                 Err(e) => status(&e),
                 Ok(full) => {
-                    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(full.as_os_str());
+                    let Some(mut bytes) = super::host::bytes_of(full.as_os_str()) else {
+                        return int(-super::host::EILSEQ);
+                    };
+                    // Windows' `\\?\` before a drive is dropped, as natively.
+                    if cfg!(windows) && bytes.starts_with(br"\\?\") && bytes.get(5) == Some(&b':') {
+                        bytes.drain(..4);
+                    }
                     if bytes.len() > out.len {
                         -EINVAL
                     } else {
-                        write(out, bytes);
+                        write(out, &bytes);
                         i64::try_from(bytes.len()).unwrap_or(-EINVAL)
                     }
                 }
@@ -571,11 +574,7 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             let text = match s.checked_neg().and_then(|e| i32::try_from(e).ok()) {
                 _ if *s == CLOSED => "the handle is closed".to_owned(),
                 _ if *s == NAME_NOT_FOUND => "the name was not found".to_owned(),
-                Some(e) if e > 0 => {
-                    let full = std::io::Error::from_raw_os_error(e).to_string();
-                    let suffix = format!(" (os error {e})");
-                    full.strip_suffix(&suffix).unwrap_or(&full).to_owned()
-                }
+                Some(e) if e > 0 => super::host::error_text(e),
                 _ => String::new(),
             };
             Some(Value::Str(Str::heap(text.into_bytes())))
@@ -663,9 +662,7 @@ fn make_temp(parent: &Str) -> Option<Vec<u8>> {
     head.extend_from_slice(b"nazm-");
     for _ in 0..64 {
         let mut random = [0_u8; 12];
-        File::open("/dev/urandom")
-            .and_then(|mut f| f.read_exact(&mut random))
-            .ok()?;
+        super::host::entropy(&mut random).ok()?;
         let mut name = head.clone();
         name.extend(random.iter().map(|b| {
             let c = b % 36;
@@ -675,12 +672,10 @@ fn make_temp(parent: &Str) -> Option<Vec<u8>> {
                 b'a' + (c - 10)
             }
         }));
-        let at = std::path::PathBuf::from(
-            <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(name.clone()),
-        );
+        let at = std::path::PathBuf::from(super::host::os_string(&name)?);
         match std::fs::create_dir(&at) {
             Ok(()) => {
-                if std::fs::set_permissions(&at, std::fs::Permissions::from_mode(0o700)).is_err() {
+                if set_mode(&at, 0o700).is_err() {
                     let _ = std::fs::remove_dir(&at);
                     return None;
                 }
@@ -691,4 +686,103 @@ fn make_temp(parent: &Str) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// `stat`'s modification time in nanoseconds since the Unix epoch and permission bits for `m`,
+/// the metadata of `path`. On Windows, as the C runtime's `_wstat64` answers natively: whole
+/// seconds, and `0o444` read-only or `0o666`, with `0o111` more for a directory or a program
+/// (`.exe`, `.com`, `.bat`, `.cmd`).
+#[cfg(unix)]
+fn stat_facts(m: &std::fs::Metadata, _path: &str) -> (i64, i64) {
+    (
+        m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec(),
+        i64::from(m.mode() & 0o7777),
+    )
+}
+
+#[cfg(not(unix))]
+fn stat_facts(m: &std::fs::Metadata, path: &str) -> (i64, i64) {
+    let seconds = since_epoch(m).div_euclid(1_000_000_000);
+    let program = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| ["exe", "com", "bat", "cmd"].contains(&e.to_ascii_lowercase().as_str()));
+    let base = if m.permissions().readonly() {
+        0o444
+    } else {
+        0o666
+    };
+    let run = if m.is_dir() || program { 0o111 } else { 0 };
+    (seconds.saturating_mul(1_000_000_000), base | run)
+}
+
+/// `lstat`'s modification time, permission bits, device and inode for `m`. On Windows, as
+/// natively, the time to its 100 ns and the bits `0o444` or `0o666`, `0o111` more for a directory;
+/// the volume's serial number and the file index need `GetFileInformationByHandle`, which a crate
+/// that forbids `unsafe` cannot call on stable Rust, so the interpreter answers `0` for both.
+#[cfg(unix)]
+fn lstat_facts(m: &std::fs::Metadata) -> (i64, i64, i64, i64) {
+    // macOS's `dev_t` is 32 bits, read unsigned as natively.
+    let dev = if cfg!(target_os = "linux") {
+        m.dev()
+    } else {
+        m.dev() & 0xFFFF_FFFF
+    };
+    (
+        m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec(),
+        i64::from(m.mode() & 0o7777),
+        i64::from_ne_bytes(dev.to_ne_bytes()),
+        i64::from_ne_bytes(m.ino().to_ne_bytes()),
+    )
+}
+
+#[cfg(not(unix))]
+fn lstat_facts(m: &std::fs::Metadata) -> (i64, i64, i64, i64) {
+    let base = if m.permissions().readonly() {
+        0o444
+    } else {
+        0o666
+    };
+    let run = if m.is_dir() { 0o111 } else { 0 };
+    (since_epoch(m), base | run, 0, 0)
+}
+
+/// Nanoseconds from the Unix epoch to `m`'s last modification, negative before it.
+#[cfg(not(unix))]
+fn since_epoch(m: &std::fs::Metadata) -> i64 {
+    let Ok(t) = m.modified() else {
+        return 0;
+    };
+    match t.duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => i64::try_from(d.as_nanos()).unwrap_or(i64::MAX),
+        Err(e) => -i64::try_from(e.duration().as_nanos()).unwrap_or(i64::MAX),
+    }
+}
+
+/// Whether `m` is a Windows reparse point, which natively is reported as a link (kind 3) whatever
+/// its tag; never on POSIX.
+#[cfg(windows)]
+fn reparse_point(m: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    m.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+const fn reparse_point(_: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// `path`'s permission bits made `bits`. On Windows, as `_wchmod`: only the owner's write bit is
+/// kept, as the read-only attribute's absence.
+fn set_mode(path: impl AsRef<std::path::Path>, bits: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits))
+    }
+    #[cfg(not(unix))]
+    {
+        let mut p = std::fs::metadata(path.as_ref())?.permissions();
+        p.set_readonly(bits & 0o200 == 0);
+        std::fs::set_permissions(path, p)
+    }
 }
