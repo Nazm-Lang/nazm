@@ -1,0 +1,30 @@
+trait Show { fn show(self: Self) -> Str; }
+trait Area { fn area(self: Self, scale: Int) -> Int; }
+trait Name { fn show(self: Self) -> Str; }
+struct Sq { s: Int }
+struct Pt { x: Int }
+impl Show for Sq { fn show(self: Sq) -> Str { "sq" } }
+impl Name for Sq { fn show(self: Sq) -> Str { "name" } }
+impl Area for Sq { fn area(self: Sq, scale: Int) -> Int { self.s * self.s * scale } }
+impl Show for Pt { fn show(self: Self) -> Str { f"pt {self.x}" } }
+impl Show for Int { fn show(self: Int) -> Str { "int" } }
+fn twice[T: Area](a: T) -> Int { a.area(2) + a.area(1, 2) }
+fn named[T: Show](a: T) -> Str { a.show() }
+fn wrong[T: Show](a: T) -> Int { a.area(1) }
+fn main() -> Int {
+    let q = Sq(s: 3);
+    let p = Pt(x: 1);
+    let a = q.area(true);
+    let b = Area.area(q, 2);
+    let c = Show.show(p);
+    let d = q.show();
+    let e = p.missing();
+    let f = p.show;
+    let g = twice(q) + twice(p);
+    let h = named(p);
+    let i = f"{p} and {q} and {3}";
+    let j = Show.show();
+    let k = Area.nothing(q);
+    print(p);
+    a + b
+}

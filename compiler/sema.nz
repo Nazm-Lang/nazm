@@ -22,8 +22,9 @@
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
 // `Int`, `Bool` and `Str`, imported ones included; function types, named functions as values,
-// calls through values and closures with their captures (N50); effects and authority; the rules
-// about `main`.
+// calls through values and closures with their captures (N50); traits, impls of non-generic
+// types, bounds, method calls and `Show` in interpolation (N78), default methods aside; effects
+// and authority; the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -214,6 +215,45 @@ pub struct Ck {
     vstart: Ints,
     vend: Ints,
     vassumed: Ints,
+    // Traits (N78): name, module, name span (absolute), whether `pub`, and their methods (a run
+    // of the method pool): name, name span, parameters after `self` (a run of `ptys`), result,
+    // effect mask.
+    trname: Strs,
+    trmod: Ints,
+    trns: Ints,
+    trne: Ints,
+    trpub: Ints,
+    trmf: Ints,
+    trmc: Ints,
+    tmname: Strs,
+    tmns: Ints,
+    tmne: Ints,
+    tmpf: Ints,
+    tmpc: Ints,
+    tmret: Ints,
+    tmeff: Ints,
+    // Impls filed: trait, type, module, the `impl` keyword's span, and each trait method's
+    // function (a run of `imfn`, -1 where none); and the table's answer for a trait and type.
+    imtrait: Ints,
+    imty: Ints,
+    immod: Ints,
+    imis: Ints,
+    imie: Ints,
+    imff: Ints,
+    imfn: Ints,
+    // The impl headers of the module being declared: the `impl` keyword's span, the trait and the
+    // type, -1 where either did not resolve.
+    hds: Ints,
+    hde: Ints,
+    htr: Ints,
+    hty: Ints,
+    // Per function, whether it is an impl's method.
+    fnmeth: Ints,
+    // Per type parameter (beside `tpname`), the trait it is bound by, or -1.
+    tpbound: Ints,
+    // The traits the module being checked may name (`trait_scope`), -1 for an ambiguous name.
+    tsname: Strs,
+    tsid: Ints,
 }
 
 // The module graph as the loader resolved it, handed to `ck_check`: per module, whether it is a
@@ -385,6 +425,8 @@ fn own_record() -> Int { 1 }
 fn own_enum() -> Int { 2 }
 fn own_fn() -> Int { 3 }
 fn own_builtin() -> Int { 4 }
+// A trait's `Self` (N78), its parameter 0.
+fn own_trait() -> Int { 5 }
 
 fn intern(c: Ck, tag: Int, a: Int, b: Int, x: Int, name: Str, args: Ints) -> Int {
     let parts = strs_new();
@@ -800,7 +842,12 @@ fn new_ck(t: Tree) -> Ck {
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
             taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
             xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
-            capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new());
+            capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
+            trname: strs_new(), trmod: ints_new(), trns: ints_new(), trne: ints_new(), trpub: ints_new(), trmf: ints_new(), trmc: ints_new(),
+            tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(),
+            imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(),
+            hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
+            tsname: strs_new(), tsid: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -957,6 +1004,12 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         i = i + 1;
     }
     validate_layouts(c);
+    // Every trait's method signatures, before any module declares an impl of one.
+    i = 0;
+    while i < count {
+        declare_trait_methods(c, i);
+        i = i + 1;
+    }
     // Stage 1: each module's definitions; stage 1b, each module's constants in dependency order.
     i = 0;
     while i < count {
@@ -1065,8 +1118,29 @@ fn imports_module(c: Ck, m: Int, x: Int) -> Bool {
 // What a module may hold that the checker does not carry yet.
 fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
-    if ints_len(kids(c, p, "traits")) > 0 { stop(c, "a trait"); }
-    if ints_len(kids(c, p, "impls")) > 0 { stop(c, "an impl"); }
+    let traits = kids(c, p, "traits");
+    let mut t = 0;
+    while t < ints_len(traits) {
+        let tr = ints_get(traits, t);
+        if ints_len(kids(c, tr, "attrs")) > 0 { stop(c, "an attribute"); }
+        // `@std/hash`'s `Hash` is derived where no impl is written (L6).
+        if fname_of(c, tr, "name") == "Hash" && ints_get(c.mstd, m) == 1 { stop(c, "a derived `Hash`"); }
+        let ms = kids(c, tr, "methods");
+        let mut k = 0;
+        while k < ints_len(ms) {
+            if some(c, ints_get(ms, k), "body") { stop(c, "a default method"); }
+            k = k + 1;
+        }
+        t = t + 1;
+    }
+    let impls = kids(c, p, "impls");
+    t = 0;
+    while t < ints_len(impls) {
+        let im = ints_get(impls, t);
+        if ints_len(kids(c, im, "attrs")) > 0 { stop(c, "an attribute"); }
+        if ints_len(kids(c, im, "type_params")) > 0 { stop(c, "an impl of a generic type"); }
+        t = t + 1;
+    }
     let consts = kids(c, p, "consts");
     let mut k = 0;
     while k < ints_len(consts) {
@@ -1124,7 +1198,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
 
         if some(c, f, "foreign") { stop(c, "a foreign function"); }
         if some(c, f, "export") { stop(c, "an export"); }
-        if some(c, f, "method_of") { stop(c, "a method"); }
         if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
         // A function without a body is a foreign one, or one whose body did not parse.
         if some(c, f, "body") == false && gs(c, s_syntax()) == 0 { stop(c, "a function without a body"); }
@@ -1178,7 +1251,34 @@ fn declare_types(c: Ck, m: Int) -> Int {
         }
         i = i + 1;
     }
+    // Traits share the type namespace (N78); their methods are resolved once every type is.
+    let traits = kids(c, p, "traits");
+    i = 0;
+    while i < ints_len(traits) {
+        let t = ints_get(traits, i);
+        let name = fname_of(c, t, "name");
+        let ns = fld(c, t, "name_span");
+        if refuse_type_name(c, m, name, ns) == false {
+            strs_push(c.trname, name);
+            ints_push(c.trmod, m);
+            ints_push(c.trns, sps(c, ns));
+            ints_push(c.trne, spe(c, ns));
+            if some(c, t, "pub_span") { ints_push(c.trpub, 1); } else { ints_push(c.trpub, 0); }
+            ints_push(c.trmf, 0);
+            ints_push(c.trmc, 0);
+        }
+        i = i + 1;
+    }
     0
+}
+
+fn declared_trait(c: Ck, m: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.trname) {
+        if ints_get(c.trmod, i) == m && strs_get(c.trname, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
 }
 
 // A declaration's type parameters, checked once (`declared_type_params`): never a built-in
@@ -1226,11 +1326,19 @@ fn requirements(c: Ck, decl: Int, function: Bool, id: Int) -> Int {
                 err(c, "N0101", rs, "a requirement on a record's or an enum's type parameter is not supported yet",
                         "require the capability where it is used: a function can say `fn same[T: Equality](a: Box[T], b: Box[T]) -> Bool`");
             } else {
-                if fname_of(c, req, "name") != "Equality" {
-                    err(c, "N0365", rs, cat3("`", fname_of(c, req, "name"), "` is not a capability a type parameter can require"),
-                            "a type parameter requires `Equality` or a trait in scope: `fn same[T: Equality](a: T, b: T) -> Bool`, `fn f[T: Show](x: T) -> Str`");
+                let at = strs_find(c.tsname, fname_of(c, req, "name"));
+                let mut bound = 0 - 1;
+                if at >= 0 && fname_of(c, req, "name") != "Equality" { bound = ints_get(c.tsid, at); }
+                if bound >= 0 {
+                    // A trait (N78): the parameter's methods are the trait's.
+                    ints_set(c.tpbound, ints_get(c.fntpf, id) + i, bound);
                 } else {
-                    ints_set(c.tpeq, ints_get(c.fntpf, id) + i, 1);
+                    if fname_of(c, req, "name") != "Equality" {
+                        err(c, "N0365", rs, cat3("`", fname_of(c, req, "name"), "` is not a capability a type parameter can require"),
+                                "a type parameter requires `Equality` or a trait in scope: `fn same[T: Equality](a: T, b: T) -> Bool`, `fn f[T: Show](x: T) -> Str`");
+                    } else {
+                        ints_set(c.tpeq, ints_get(c.fntpf, id) + i, 1);
+                    }
                 }
             }
         }
@@ -1280,11 +1388,14 @@ fn refuse_type_name(c: Ck, m: Int, name: Str, at: Int) -> Bool {
     }
     let r = declared_record(c, m, name);
     let e = declared_enum(c, m, name);
-    if r >= 0 || e >= 0 {
+    let t = declared_trait(c, m, name);
+    if r >= 0 || e >= 0 || t >= 0 {
         err(c, "N0330", at, cat3("`", name, "` is declared more than once in this module"),
                 "records and enums share one type namespace, so a `struct` and an `enum` of the same name collide exactly as two of either would");
         if r >= 0 { sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "first declared here"); } else {
-            sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "first declared here");
+            if e >= 0 { sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "first declared here"); } else {
+                sec_at(c, ints_get(c.trns, t), ints_get(c.trne, t), "first declared here");
+            }
         }
         return true;
     }
@@ -1623,6 +1734,14 @@ fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
         unknown_qualified(c, d, name, c.taliases, sps(c, span), spe(c, span), "type");
         return t_int();
     }
+    // A trait where a type is expected (N78): there are no trait objects.
+    let tr = strs_find(c.trname, name);
+    if tr >= 0 {
+        dg_error(d, "N0607", sps(c, span), spe(c, span), cat3("`", name, "` is a trait, not a type"), "",
+                cat5("a value has one concrete type; to accept any type with `", name, "`, take a type parameter that requires it: `fn f[T: ", name, "](x: T)`"));
+        dg_secondary(d, ints_get(c.trns, tr), ints_get(c.trne, tr), "the trait");
+        return t_int();
+    }
     dg_error(d, "N0305", sps(c, span), spe(c, span), cat3("`", name, "` is not a type"), "",
             cat3("the built-in types are ", all_names(), ", and `struct` and `enum` declare others"));
     // A type that exists somewhere is more usefully reported as unreachable.
@@ -1836,104 +1955,565 @@ fn mentioned_defs(c: Ck, t: Int, out: Ints) -> Int {
     0
 }
 
+// --- traits and impls (N78, `check/traits.rs`) -------------------------------------------------
+
+// Every trait's method signatures, `Self` the trait's own parameter (`declare_trait_methods`).
+fn declare_trait_methods(c: Ck, m: Int) -> Int {
+    let p = ints_get(c.mprog, m);
+    let traits = kids(c, p, "traits");
+    if ints_len(traits) == 0 { return 0; }
+    ss(c, s_module(), m);
+    type_environment(c, m, false);
+    let mut i = 0;
+    while i < ints_len(traits) {
+        let t = ints_get(traits, i);
+        let id = trait_at(c, m, sps(c, fld(c, t, "name_span")));
+        if id >= 0 { trait_methods(c, t, id); }
+        i = i + 1;
+    }
+    0
+}
+
+fn trait_at(c: Ck, m: Int, at: Int) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.trname) {
+        if ints_get(c.trmod, i) == m && ints_get(c.trns, i) == at { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn trait_methods(c: Ck, t: Int, id: Int) -> Int {
+    let me = param_ty(c, own_trait(), id, 0, "Self");
+    let pn = strs_new();
+    strs_push(pn, "Self");
+    let pt = ints_new();
+    ints_push(pt, me);
+    let tname = strs_get(c.trname, id);
+    let first = strs_len(c.tmname);
+    ints_set(c.trmf, id, first);
+    let ms = kids(c, t, "methods");
+    let mut i = 0;
+    while i < ints_len(ms) {
+        let f = ints_get(ms, i);
+        let name = fname_of(c, f, "name");
+        let ns = fld(c, f, "name_span");
+        let mut dup = 0 - 1;
+        let mut k = first;
+        while k < strs_len(c.tmname) {
+            if strs_get(c.tmname, k) == name && dup < 0 { dup = k; }
+            k = k + 1;
+        }
+        if dup >= 0 {
+            err(c, "N0203", ns, cat5("`", name, "` is declared more than once in trait `", tname, "`"), "");
+            sec_at(c, ints_get(c.tmns, dup), ints_get(c.tmne, dup), "first declared here");
+        } else {
+            let params = kids(c, f, "params");
+            let resolved = ints_new();
+            k = 0;
+            while k < ints_len(params) {
+                ints_push(resolved, resolve_written(c, fld(c, ints_get(params, k), "ty"), pn, pt, c.d));
+                k = k + 1;
+            }
+            let mut self_ok = false;
+            if ints_len(params) > 0 {
+                if fname_of(c, ints_get(params, 0), "name") == "self" && ints_get(resolved, 0) == me { self_ok = true; }
+            }
+            if self_ok == false {
+                let mut at = ns;
+                if ints_len(params) > 0 { at = fld(c, ints_get(params, 0), "span"); }
+                err(c, "N0609", at, cat3("`", name, "`'s first parameter must be `self: Self`"),
+                        "a trait method is called on a value of the implementing type, which it receives first: `fn show(self: Self) -> Str;`");
+            } else {
+                let ret = resolve_written(c, fld(c, f, "return_type"), pn, pt, c.d);
+                let mut eff = 0;
+                if some(c, f, "effects") {
+                    eff = declared_effects(c, unwrap(c, f, "effects"));
+                    if eff < 0 { eff = 0; }
+                }
+                strs_push(c.tmname, name);
+                ints_push(c.tmns, sps(c, ns));
+                ints_push(c.tmne, spe(c, ns));
+                ints_push(c.tmpf, ints_len(c.ptys));
+                ints_push(c.tmpc, ints_len(params) - 1);
+                k = 1;
+                while k < ints_len(params) {
+                    ints_push(c.ptys, ints_get(resolved, k));
+                    k = k + 1;
+                }
+                ints_push(c.tmret, ret);
+                ints_push(c.tmeff, eff);
+            }
+        }
+        i = i + 1;
+    }
+    ints_set(c.trmc, id, strs_len(c.tmname) - first);
+    0
+}
+
+// A trait's method by name, as an index into the method pool; -1 when it has none.
+fn trait_method(c: Ck, tr: Int, name: Str) -> Int {
+    let mut k = 0;
+    while k < ints_get(c.trmc, tr) {
+        if strs_get(c.tmname, ints_get(c.trmf, tr) + k) == name { return ints_get(c.trmf, tr) + k; }
+        k = k + 1;
+    }
+    0 - 1
+}
+
+// The traits module `m` may name (`trait_scope`): each direct import's exported ones, plainly
+// where a plain `use` named it (-1 where two give two) and as `alias::Name`; its own win.
+fn trait_scope(c: Ck, m: Int) -> Int {
+    while strs_len(c.tsname) > 0 {
+        strs_pop(c.tsname);
+        ints_pop(c.tsid);
+    }
+    let mut k = 0;
+    while k < deps(c, m) {
+        let d = dep(c, m, k);
+        let on = ints_get(c.don, d);
+        let mut t = 0;
+        while t < strs_len(c.trname) {
+            if ints_get(c.trmod, t) == on && ints_get(c.trpub, t) == 1 {
+                let name = strs_get(c.trname, t);
+                if ints_get(c.dplain, d) == 1 {
+                    let at = strs_find(c.tsname, name);
+                    if at < 0 {
+                        strs_push(c.tsname, name);
+                        ints_push(c.tsid, t);
+                    } else {
+                        if ints_get(c.tsid, at) != t { ints_set(c.tsid, at, 0 - 1); }
+                    }
+                }
+                let mut a = 0;
+                while a < ints_get(c.dac, d) {
+                    scope_trait(c, cat3(strs_get(c.aname, ints_get(c.daf, d) + a), "::", name), t);
+                    a = a + 1;
+                }
+            }
+            t = t + 1;
+        }
+        k = k + 1;
+    }
+    let mut t = 0;
+    while t < strs_len(c.trname) {
+        if ints_get(c.trmod, t) == m { scope_trait(c, strs_get(c.trname, t), t); }
+        t = t + 1;
+    }
+    0
+}
+
+fn scope_trait(c: Ck, key: Str, t: Int) -> Int {
+    let at = strs_find(c.tsname, key);
+    if at < 0 {
+        strs_push(c.tsname, key);
+        ints_push(c.tsid, t);
+    } else {
+        ints_set(c.tsid, at, t);
+    }
+    0
+}
+
+// Whether the trait `t` is in the module's scope under any name.
+fn trait_in_scope(c: Ck, t: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(c.tsid) {
+        if ints_get(c.tsid, i) == t { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The trait a written name refers to (`named_trait`), or -1 having said why none.
+fn named_trait(c: Ck, w: Int) -> Int {
+    let name = fname_of(c, w, "name");
+    let key = written_key(c, w, "name");
+    let ns = fld(c, w, "name_span");
+    let at = strs_find(c.tsname, key);
+    if at >= 0 {
+        let t = ints_get(c.tsid, at);
+        if t >= 0 { return t; }
+        err(c, "N0207", ns, cat3("`", name, "` is a trait in more than one imported module"), "import one of them under a name and write `alias::Trait`");
+        return 0 - 1;
+    }
+    let m = gs(c, s_module());
+    if declared_record(c, m, name) >= 0 || declared_enum(c, m, name) >= 0 || is_builtin_name(name) {
+        err(c, "N0610", ns, cat3("`", name, "` is a type, not a trait"), "a bound or an impl names a trait: `impl Show for Point`");
+        return 0 - 1;
+    }
+    err(c, "N0305", ns, cat3("no trait named `", name, "` is in scope"), "declare it, or import the module that exports it");
+    0 - 1
+}
+
+// Why a type may not have an impl (`implementable`), or "" when it may.
+fn not_implementable(c: Ck, t: Int) -> Str {
+    if t == t_int() || t == t_bool() || t == t_str() || is_num(c, t) { return ""; }
+    if is_record(c, t) {
+        if ints_get(c.rnp, ta(c, t)) > 0 || targc(c, t) > 0 { return "a generic record"; }
+        return "";
+    }
+    if is_enum(c, t) {
+        if ints_get(c.enp, ta(c, t)) > 0 || targc(c, t) > 0 { return "a generic enum"; }
+        return "";
+    }
+    if tag(c, t) == tag_param() { return "a type parameter"; }
+    "a built-in type other than a number, `Bool` or `Str`"
+}
+
+fn type_module(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ints_get(c.rmod, ta(c, t)); }
+    if is_enum(c, t) { return ints_get(c.emod, ta(c, t)); }
+    0 - 1
+}
+
+// Each impl's header (`declare_unit`): its trait and its type, before the functions.
+fn impl_headers(c: Ck, m: Int) -> Int {
+    while ints_len(c.hds) > 0 {
+        ints_pop(c.hds);
+        ints_pop(c.hde);
+        ints_pop(c.htr);
+        ints_pop(c.hty);
+    }
+    let impls = kids(c, ints_get(c.mprog, m), "impls");
+    let mut i = 0;
+    while i < ints_len(impls) {
+        let im = ints_get(impls, i);
+        let tr = named_trait(c, fld(c, im, "trait_name"));
+        let w = fld(c, im, "self_ty");
+        let before = dg_len(c.d);
+        let mut ty = resolve_written(c, w, strs_new(), ints_new(), c.d);
+        if dg_len(c.d) != before { ty = 0 - 1; }
+        if ty >= 0 {
+            let why = not_implementable(c, ty);
+            if why != "" {
+                err(c, "N0604", fld(c, w, "span"), cat4("`", fname_of(c, w, "name"), "` cannot have an impl: it is ", why),
+                        "an impl is for a non-generic record or enum, or for `Int`, `Bool` or `Str`");
+                ty = 0 - 1;
+            }
+        }
+        let is = fld(c, im, "impl_span");
+        ints_push(c.hds, sps(c, is));
+        ints_push(c.hde, spe(c, is));
+        if tr >= 0 && ty >= 0 {
+            ints_push(c.htr, tr);
+            ints_push(c.hty, ty);
+        } else {
+            ints_push(c.htr, 0 - 1);
+            ints_push(c.hty, 0 - 1);
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// The header of the impl whose `impl` keyword is at `at`, or -1.
+fn header_at(c: Ck, at: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(c.hds) {
+        if ints_get(c.hds, i) == at { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// The function declared for a tree node, or -1.
+fn fn_of_node(c: Ck, f: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(c.fnnode) {
+        if ints_get(c.fnnode, i) == f && ints_get(c.fnclos, i) < 0 { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// File each impl whose header resolved (`register_impl`).
+fn register_impls(c: Ck, m: Int) -> Int {
+    let impls = kids(c, ints_get(c.mprog, m), "impls");
+    let functions = kids(c, ints_get(c.mprog, m), "functions");
+    let mut i = 0;
+    while i < ints_len(impls) {
+        let tr = ints_get(c.htr, i);
+        if tr >= 0 { register_impl(c, m, ints_get(impls, i), tr, ints_get(c.hty, i), functions); }
+        i = i + 1;
+    }
+    0
+}
+
+// One impl: the orphan rule, its methods against its trait's, and the coherence table.
+fn register_impl(c: Ck, m: Int, im: Int, tr: Int, ty: Int, functions: Ints) -> Int {
+    let tname = strs_get(c.trname, tr);
+    let shown = show(c, ty);
+    let is = fld(c, im, "impl_span");
+    if ints_get(c.trmod, tr) != m && type_module(c, ty) != m {
+        err(c, "N0601", is, cat5(cat5("an impl of `", tname, "` for `", shown, "` must be in the module declaring `"), tname, "` or the one declaring `", shown, "`"),
+                "one impl per trait and type, where everyone who can name both can find it: move it to the trait's module or the type's");
+        sec_at(c, ints_get(c.trns, tr), ints_get(c.trne, tr), "the trait is declared here");
+        return 0;
+    }
+    let mf = ints_get(c.trmf, tr);
+    let mc = ints_get(c.trmc, tr);
+    let methods = ints_new();
+    let mut k = 0;
+    while k < mc {
+        ints_push(methods, 0 - 1);
+        k = k + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(functions) {
+        let f = ints_get(functions, i);
+        if some(c, f, "method_of") {
+            if sps(c, fld(c, unwrap(c, f, "method_of"), "impl_span")) == sps(c, is) {
+                // By the name it is declared under, as `register_impl` finds it.
+                let id = defined_fn(c, m, cat5(tname, "/", shown, "/", fname_of(c, f, "name")));
+                let tm = impl_method(c, f, id, tr, ty);
+                if tm >= 0 { ints_set(methods, tm - mf, id); }
+            }
+        }
+        i = i + 1;
+    }
+    let missing = strs_new();
+    k = 0;
+    while k < mc {
+        if ints_get(methods, k) < 0 { strs_push(missing, strs_get(c.tmname, mf + k)); }
+        k = k + 1;
+    }
+    if strs_len(missing) > 0 {
+        err(c, "N0602", is, cat5("this impl of `", tname, "` for `", shown, cat3("` does not define ", quoted(missing), "")),
+                "an impl defines every method of its trait that has no default body");
+        sec_at(c, ints_get(c.trns, tr), ints_get(c.trne, tr), "the trait is declared here");
+    }
+    let first = impl_of(c, tr, ty);
+    ints_push(c.imtrait, tr);
+    ints_push(c.imty, ty);
+    ints_push(c.immod, m);
+    ints_push(c.imis, sps(c, is));
+    ints_push(c.imie, spe(c, is));
+    ints_push(c.imff, ints_len(c.imfn));
+    k = 0;
+    while k < mc {
+        ints_push(c.imfn, ints_get(methods, k));
+        k = k + 1;
+    }
+    if first >= 0 {
+        err(c, "N0600", is, cat5("`", shown, "` already implements `", tname, "`"),
+                "a type implements a trait at most once in a program, so every call means one function");
+        sec_at(c, ints_get(c.imis, first), ints_get(c.imie, first), "the first impl");
+    }
+    0
+}
+
+// One method of an impl against its trait's: the trait's method it defines, or -1 having said
+// why it defines none.
+fn impl_method(c: Ck, f: Int, id: Int, tr: Int, ty: Int) -> Int {
+    if id < 0 { return 0 - 1; }
+    let tname = strs_get(c.trname, tr);
+    let name = fname_of(c, f, "name");
+    let ns = fld(c, f, "name_span");
+    let tm = trait_method(c, tr, name);
+    if tm < 0 {
+        err(c, "N0603", ns, cat5("`", name, "` is not a method of `", tname, "`"), "an impl defines its trait's methods and nothing else");
+        sec_at(c, ints_get(c.trns, tr), ints_get(c.trne, tr), "the trait is declared here");
+        return 0 - 1;
+    }
+    let params = ints_new();
+    ints_push(params, ty);
+    let mut k = 0;
+    while k < ints_get(c.tmpc, tm) {
+        ints_push(params, subst(c, ints_get(c.ptys, ints_get(c.tmpf, tm) + k), own_trait(), tr, one(ty)));
+        k = k + 1;
+    }
+    let ret = subst(c, ints_get(c.tmret, tm), own_trait(), tr, one(ty));
+    let mut same = ints_get(c.fnpc, id) == ints_len(params) && ints_get(c.fnret, id) == ret;
+    if same {
+        k = 0;
+        while k < ints_len(params) {
+            if ints_get(c.ptys, ints_get(c.fnpf, id) + k) != ints_get(params, k) { same = false; }
+            k = k + 1;
+        }
+    }
+    let fps = kids(c, f, "params");
+    if ints_len(fps) == 0 { same = false; } else {
+        if fname_of(c, ints_get(fps, 0), "name") != "self" { same = false; }
+    }
+    let mut eff = ints_get(c.fneff, id);
+    if eff < 0 { eff = 0; }
+    if eff != ints_get(c.tmeff, tm) { same = false; }
+    if ints_get(c.fntpc, id) != 0 { same = false; }
+    if same { return tm; }
+    let wanted = strs_new();
+    k = 0;
+    while k < ints_len(params) {
+        strs_push(wanted, show(c, ints_get(params, k)));
+        k = k + 1;
+    }
+    let message = cat5(cat5("`", name, "` must be `fn ", name, "(self: "), str_join(wanted, ", "), ") -> ", show(c, ret),
+            cat5("` with the trait's effects, as `", tname, "` declares it with `Self` = `", show(c, ty), "`"));
+    err(c, "N0603", ns, message, "");
+    sec_at(c, ints_get(c.tmns, tm), ints_get(c.tmne, tm), "the trait's method");
+    0 - 1
+}
+
+// The impl of `tr` for exactly `ty` (the table's answer: the first filed), or -1.
+fn impl_of(c: Ck, tr: Int, ty: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(c.imtrait) {
+        if ints_get(c.imtrait, i) == tr && ints_get(c.imty, i) == ty { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Whether `ty` satisfies `T: tr` in the module being checked (`satisfies`): a type parameter
+// bound by it, or an impl in this module or one it imports directly.
+fn satisfies(c: Ck, tr: Int, ty: Int) -> Bool {
+    if tag(c, ty) == tag_param() { return param_bound(c, ty) == tr; }
+    let im = impl_of(c, tr, ty);
+    if im < 0 { return false; }
+    let m = gs(c, s_module());
+    let at = ints_get(c.immod, im);
+    at == m || imports_module(c, m, at)
+}
+
+// The trait a type parameter is bound by, or -1.
+fn param_bound(c: Ck, t: Int) -> Int {
+    if ta(c, t) != own_fn() { return 0 - 1; }
+    let id = ints_get(c.tyb, t);
+    let index = ints_get(c.tyc, t);
+    if index >= ints_get(c.fntpc, id) { return 0 - 1; }
+    ints_get(c.tpbound, ints_get(c.fntpf, id) + index)
+}
+
 // --- stage 1: functions (`declare_unit`) --------------------------------------------------------
 
 fn declare_functions(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
     type_environment(c, m, false);
+    trait_scope(c, m);
+    impl_headers(c, m);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
     let mut i = 0;
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
-        let name = fname_of(c, f, "name");
-        let ns = fld(c, f, "name_span");
-        let params = kids(c, f, "params");
-        // A generic function's parameter types mention its own parameters, which name it: the
-        // id it would be declared under comes first.
-        let id = strs_len(c.fnname);
-        declared_type_params(c, f);
-        let tps = kids(c, f, "type_params");
-        let pn = strs_new();
-        let pt = ints_new();
-        let mut k = 0;
-        while k < ints_len(tps) {
-            let n = fname_of(c, ints_get(tps, k), "name");
-            strs_push(pn, n);
-            ints_push(pt, param_ty(c, own_fn(), id, k, n));
-            k = k + 1;
-        }
-        let pf = ints_len(c.ptys);
-        k = 0;
-        while k < ints_len(params) {
-            ints_push(c.ptys, resolve_written(c, fld(c, ints_get(params, k), "ty"), pn, pt, c.d));
-            k = k + 1;
-        }
-        let rt = fld(c, f, "return_type");
-        let ret = resolve_written(c, rt, pn, pt, c.d);
-        let mut eff = 0 - 1;
-        let mut ws = 0 - 1;
-        let mut we = 0 - 1;
-        if some(c, f, "effects") {
-            let decl = unwrap(c, f, "effects");
-            eff = declared_effects(c, decl);
-            ws = sps(c, fld(c, decl, "span"));
-            we = spe(c, fld(c, decl, "span"));
-        }
-        let b = builtin_index(c, name);
-        let mut refused = false;
-        if b >= 0 {
-            if ints_get(c.bprelude, b) == 0 { refused = true; }
-        }
-        if name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "println" || name == "eprintln" { refused = true; }
-        if refused {
-            err(c, "N0203", ns, cat3("`", name, "` is a built-in and cannot be redefined"),
-                    "built-ins share the ordinary function namespace so that a call always means the same thing; choose another name");
-        } else {
-            let existing = defined_fn(c, m, name);
-            if existing >= 0 {
-                err(c, "N0203", ns, cat3("`", name, "` is defined more than once in this module"), "");
-                sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
-            } else {
-                strs_push(c.fnname, name);
-                ints_push(c.fnmod, m);
-                ints_push(c.fnclos, 0 - 1);
-                if some(c, f, "pub_span") { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
-                ints_push(c.fnns, sps(c, ns));
-                ints_push(c.fnne, spe(c, ns));
-                ints_push(c.fnnode, f);
-                ints_push(c.fnpf, pf);
-                ints_push(c.fnpc, ints_len(params));
-                ints_push(c.fnret, ret);
-                ints_push(c.fneff, eff);
-                ints_push(c.fnws, ws);
-                ints_push(c.fnwe, we);
-                let rts = fld(c, rt, "span");
-                if sx_s(c.t, rts) == sx_e(c.t, rts) { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
-                ints_push(c.fntpf, strs_len(c.tpname));
-                ints_push(c.fntpc, strs_len(pn));
-                k = 0;
-                while k < strs_len(pn) {
-                    strs_push(c.tpname, strs_get(pn, k));
-                    ints_push(c.tpeq, 0);
-                    k = k + 1;
-                }
-                requirements(c, f, true, id);
-                if some(c, f, "pub_span") {
-                    // A public signature naming a private type (`report_private_type`).
-                    k = 0;
-                    while k < ints_len(params) {
-                        let pt = fld(c, fld(c, ints_get(params, k), "ty"), "span");
-                        report_private_type(c, ints_get(c.ptys, pf + k), sps(c, pt), spe(c, pt), sps(c, ns), spe(c, ns), "function", name);
-                        k = k + 1;
-                    }
-                    report_private_type(c, ret, sps(c, rts), spe(c, rts), sps(c, ns), spe(c, ns), "function", name);
-                }
+        // An impl's method is declared under `Trait/Type/m` (N78), where its header resolved.
+        let mut hdr = 0 - 1;
+        if some(c, f, "method_of") {
+            hdr = header_at(c, sps(c, fld(c, unwrap(c, f, "method_of"), "impl_span")));
+            if hdr >= 0 {
+                if ints_get(c.htr, hdr) >= 0 { declare_function(c, m, f, hdr); }
             }
+        } else {
+            declare_function(c, m, f, 0 - 1);
         }
         i = i + 1;
     }
+    register_impls(c, m);
     report_exported_types(c, m);
+    0
+}
+
+fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
+    let method = hdr >= 0;
+    let mut name = fname_of(c, f, "name");
+    if method { name = cat5(strs_get(c.trname, ints_get(c.htr, hdr)), "/", show(c, ints_get(c.hty, hdr)), "/", name); }
+    let ns = fld(c, f, "name_span");
+    let params = kids(c, f, "params");
+    // A generic function's parameter types mention its own parameters, which name it: the
+    // id it would be declared under comes first.
+    let id = strs_len(c.fnname);
+    declared_type_params(c, f);
+    let tps = kids(c, f, "type_params");
+    let pn = strs_new();
+    let pt = ints_new();
+    let mut k = 0;
+    while k < ints_len(tps) {
+        let n = fname_of(c, ints_get(tps, k), "name");
+        strs_push(pn, n);
+        ints_push(pt, param_ty(c, own_fn(), id, k, n));
+        k = k + 1;
+    }
+    if method {
+        strs_push(pn, "Self");
+        ints_push(pt, ints_get(c.hty, hdr));
+    }
+    let pf = ints_len(c.ptys);
+    k = 0;
+    while k < ints_len(params) {
+        ints_push(c.ptys, resolve_written(c, fld(c, ints_get(params, k), "ty"), pn, pt, c.d));
+        k = k + 1;
+    }
+    let rt = fld(c, f, "return_type");
+    let ret = resolve_written(c, rt, pn, pt, c.d);
+    let mut eff = 0 - 1;
+    let mut ws = 0 - 1;
+    let mut we = 0 - 1;
+    if some(c, f, "effects") {
+        let decl = unwrap(c, f, "effects");
+        eff = declared_effects(c, decl);
+        ws = sps(c, fld(c, decl, "span"));
+        we = spe(c, fld(c, decl, "span"));
+    }
+    // An impl's method that writes no effect set has its trait method's.
+    if method && eff < 0 {
+        let tm = trait_method(c, ints_get(c.htr, hdr), fname_of(c, f, "name"));
+        if tm >= 0 { eff = ints_get(c.tmeff, tm); }
+    }
+    let b = builtin_index(c, name);
+    let mut refused = false;
+    if b >= 0 && method == false {
+        if ints_get(c.bprelude, b) == 0 { refused = true; }
+    }
+    if name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "println" || name == "eprintln" { refused = true; }
+    if refused && method == false {
+        err(c, "N0203", ns, cat3("`", name, "` is a built-in and cannot be redefined"),
+                "built-ins share the ordinary function namespace so that a call always means the same thing; choose another name");
+    } else {
+        let existing = defined_fn(c, m, name);
+        if existing >= 0 {
+            let mut place = "module";
+            if method { place = "impl"; }
+            err(c, "N0203", ns, cat5("`", fname_of(c, f, "name"), "` is defined more than once in this ", place, ""), "");
+            sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
+        } else {
+            strs_push(c.fnname, name);
+            ints_push(c.fnmod, m);
+            ints_push(c.fnclos, 0 - 1);
+            if method { ints_push(c.fnmeth, 1); } else { ints_push(c.fnmeth, 0); }
+            let public = some(c, f, "pub_span") && method == false;
+            if public { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
+            ints_push(c.fnns, sps(c, ns));
+            ints_push(c.fnne, spe(c, ns));
+            ints_push(c.fnnode, f);
+            ints_push(c.fnpf, pf);
+            ints_push(c.fnpc, ints_len(params));
+            ints_push(c.fnret, ret);
+            ints_push(c.fneff, eff);
+            ints_push(c.fnws, ws);
+            ints_push(c.fnwe, we);
+            let rts = fld(c, rt, "span");
+            if sx_s(c.t, rts) == sx_e(c.t, rts) { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
+            ints_push(c.fntpf, strs_len(c.tpname));
+            ints_push(c.fntpc, ints_len(tps));
+            k = 0;
+            while k < ints_len(tps) {
+                strs_push(c.tpname, strs_get(pn, k));
+                ints_push(c.tpeq, 0);
+                ints_push(c.tpbound, 0 - 1);
+                k = k + 1;
+            }
+            requirements(c, f, true, id);
+            if public {
+                // A public signature naming a private type (`report_private_type`).
+                k = 0;
+                while k < ints_len(params) {
+                    let pt = fld(c, fld(c, ints_get(params, k), "ty"), "span");
+                    report_private_type(c, ints_get(c.ptys, pf + k), sps(c, pt), spe(c, pt), sps(c, ns), spe(c, ns), "function", name);
+                    k = k + 1;
+                }
+                report_private_type(c, ret, sps(c, rts), spe(c, rts), sps(c, ns), spe(c, ns), "function", name);
+            }
+        }
+    }
     0
 }
 
@@ -2058,6 +2638,7 @@ fn check_unit(c: Ck, m: Int) -> Int {
     environment(c, m);
     type_environment(c, m, false);
     const_environment(c, m);
+    trait_scope(c, m);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
     let mut i = 0;
@@ -2172,7 +2753,9 @@ fn signature_type(c: Ck, w: Int) -> Int { resolve_written(c, w, c.tsn, c.tst, dg
 
 fn check_function(c: Ck, f: Int) -> Int {
     let name = fname_of(c, f, "name");
-    let id = defined_fn(c, gs(c, s_module()), name);
+    let mut id = defined_fn(c, gs(c, s_module()), name);
+    // An impl's method is found by where it is (N78): its name is `Trait/Type/m`.
+    if some(c, f, "method_of") { id = fn_of_node(c, f); }
     ss(c, s_fn(), id);
     ss(c, s_closures(), 0);
     // The function's own type parameters are in scope for every type written inside it.
@@ -2188,6 +2771,13 @@ fn check_function(c: Ck, f: Int) -> Int {
             ints_push(c.tst, fn_param_ty(c, id, k));
         }
         k = k + 1;
+    }
+    // An impl's method may write its impl's type as `Self`: its first parameter's.
+    if some(c, f, "method_of") && id >= 0 {
+        if ints_get(c.fnpc, id) > 0 {
+            strs_push(c.tsn, "Self");
+            ints_push(c.tst, ints_get(c.ptys, ints_get(c.fnpf, id)));
+        }
     }
     open_scope(c);
     let params = kids(c, f, "params");
@@ -2666,9 +3256,9 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     }
     if k == "Variant" {
         let inits = written_inits(c, kids(c, e, "fields"));
-        if some(c, e, "qualifier") == false && ints_len(inits.vals) == 0 && some(c, e, "type_args") == false && lookup(c, fname_of(c, e, "ty")) >= 0 {
-            stop(c, "a method call");
-            return or_int(expected);
+        // `x.m()` and `Show.m()` (N78): a call when the name before the `.` is a value or a trait.
+        if ints_len(inits.vals) == 0 && some(c, e, "type_args") == false && names_a_receiver(c, e) {
+            return check_method_call(c, e, 0 - 1, none(), fname_of(c, e, "variant"), fld(c, e, "variant_span"), ints_new(), fld(c, e, "span"), expected);
         }
         let t = check_variant(c, written_key(c, e, "ty"), fld(c, e, "ty_span"), type_args_of(c, e), fname_of(c, e, "variant"), fld(c, e, "variant_span"),
                 inits, fld(c, e, "span"), expected);
@@ -2680,6 +3270,10 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         let t = check_projection(c, bt, fname_of(c, e, "name"), fld(c, e, "name_span"));
         if t < 0 { return t_int(); }
         return t;
+    }
+    if k == "MethodCall" {
+        return check_method_call(c, e, fld(c, e, "receiver"), none(), fname_of(c, e, "method"), fld(c, e, "method_span"), kids(c, e, "args"),
+                fld(c, e, "span"), expected);
     }
     if k == "If" { return check_if(c, e, expected, unwanted); }
     if k == "Match" { return check_match(c, e, expected); }
@@ -2720,14 +3314,21 @@ fn check_hole(c: Ck, expr: Int, spec: Int, at: Int) -> Int {
                 "write the hole without `.precision`, or convert the value to a float");
     }
     if ty == t_str() || ty == t_int() || ty == t_bool() || is_num(c, ty) { return 0; }
-    let shown = show(c, ty);
-    err(c, "N0300", espan(c, expr), cat3("a value printed or interpolated is a `Str`, a number, a `Bool` or a `Show`, and this is `", shown, "`"),
-            cat3("implement `Show` (`@std/show`) for `", shown, "`, or write the value's text yourself"))
+    // Anything else is written by its `Show`, if it has one in scope.
+    if lookup_method(c, ty, "show", at, false) < 0 {
+        let shown = show(c, ty);
+        err(c, "N0300", espan(c, expr), cat3("a value printed or interpolated is a `Str`, a number, a `Bool` or a `Show`, and this is `", shown, "`"),
+                cat3("implement `Show` (`@std/show`) for `", shown, "`, or write the value's text yourself"));
+        return 0;
+    }
+    let ret = check_method_call(c, expr, expr, ty, "show", at, ints_new(), at, none());
+    if ret != t_str() { err(c, "N0300", at, cat3("this value's `show` gives `", show(c, ret), "`, not a `Str`"), ""); }
+    0
 }
 
-fn check_var(c: Ck, e: Int, expected: Int) -> Int {
-    let name = fname_of(c, e, "name");
-    let span = fld(c, e, "span");
+fn check_var(c: Ck, e: Int, expected: Int) -> Int { check_var_named(c, fname_of(c, e, "name"), fld(c, e, "span"), expected) }
+
+fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
     let b = lookup_var(c, name, span);
     if b >= 0 { return ints_get(c.sty, b); }
     // A constant (Gate 2): its type.
@@ -2871,6 +3472,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     strs_push(c.fnname, cat3(base, "#", int_to_str(count)));
     ints_push(c.fnmod, gs(c, s_module()));
     ints_push(c.fnclos, enclosing);
+    ints_push(c.fnmeth, 0);
     ints_push(c.fnpub, 0);
     ints_push(c.fnns, sps(c, fs));
     ints_push(c.fnne, spe(c, fs));
@@ -3372,6 +3974,232 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
     ret
 }
 
+// --- method calls (N78, `check_method_call`) -----------------------------------------------------
+
+// Whether `name.m()` written as a variant names a receiver (`names_a_receiver`): a value in scope,
+// or — when no enum of that name is visible — a trait.
+fn names_a_receiver(c: Ck, e: Int) -> Bool {
+    let key = written_key(c, e, "ty");
+    if some(c, e, "qualifier") == false && lookup(c, key) >= 0 { return true; }
+    let t = type_named(c, key);
+    if t >= 0 {
+        if is_enum(c, t) { return false; }
+    }
+    let at = strs_find(c.tsname, key);
+    if at < 0 { return false; }
+    ints_get(c.tsid, at) >= 0
+}
+
+// `recv.m(args)`, or `Trait.m(recv, args)` where the receiver as written is a trait's name. `e`
+// holds the qualifier; `recv` is the receiver, or -1 for the name `e` writes as a variant's type;
+// `known` is the receiver's type where it was already checked (an interpolation's hole).
+fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int, args: Ints, span: Int, expected: Int) -> Int {
+    let fallback = or_int(expected);
+    // The receiver as a name: `Show.show(x)` when it names a trait and no value.
+    let mut rname = "";
+    let mut rspan = 0 - 1;
+    if recv < 0 {
+        rname = fname_of(c, e, "ty");
+        rspan = fld(c, e, "ty_span");
+    } else {
+        if known < 0 && kind_of(c, recv) == "Var" {
+            rname = fname_of(c, recv, "name");
+            rspan = fld(c, recv, "span");
+        }
+    }
+    let mut ufcs = 0 - 1;
+    if rname != "" && (some(c, e, "qualifier") || lookup(c, rname) < 0) {
+        let mut key = rname;
+        if some(c, e, "qualifier") { key = cat3(fname_of(c, unwrap(c, e, "qualifier"), "name"), "::", rname); }
+        let ts = strs_find(c.tsname, key);
+        if ts >= 0 { ufcs = ints_get(c.tsid, ts); }
+        if ufcs < 0 && some(c, e, "qualifier") {
+            err(c, "N0610", rspan, cat3("`", key, "` is not a trait in scope"), "");
+            check_all(c, args);
+            return fallback;
+        }
+    }
+    let mut first = 0;
+    let mut recv_ty = known;
+    let before = dg_len(c.d);
+    if ufcs >= 0 {
+        if ints_len(args) == 0 {
+            err(c, "N0303", span, cat5("`", strs_get(c.trname, ufcs), ".", method, "` needs its receiver as its first argument"), "");
+            sec(c, rspan, "the trait");
+            return fallback;
+        }
+        first = 1;
+        recv_ty = value_type(c, ints_get(args, 0), none());
+    } else {
+        if recv_ty < 0 {
+            if recv < 0 { recv_ty = check_var_named(c, rname, rspan, none()); } else { recv_ty = value_type(c, recv, none()); }
+        }
+    }
+    let receiver_failed = dg_len(c.d) > before;
+    let mut tm = 0 - 1;
+    if ufcs >= 0 {
+        tm = trait_method(c, ufcs, method);
+        if tm < 0 {
+            err(c, "N0605", at, cat5("`", strs_get(c.trname, ufcs), "` has no method `", method, "`"), "");
+            check_args_from(c, args, first);
+            return fallback;
+        }
+    } else {
+        tm = lookup_method(c, recv_ty, method, at, false);
+        if tm < 0 {
+            // By name (R1, 5b.15): `x.m(…)` is `<type>_m(x, …)` where one is in scope.
+            if known < 0 && receiver_failed == false && by_name(c, recv_ty, method) {
+                stop(c, "a method called by name");
+                return fallback;
+            }
+            lookup_method(c, recv_ty, method, at, true);
+            check_args_from(c, args, first);
+            return fallback;
+        }
+    }
+    let tr = method_trait(c, tm);
+    let tname = strs_get(c.trname, tr);
+    let called = cat3(tname, ".", method);
+    let params = ints_new();
+    let mut k = 0;
+    while k < ints_get(c.tmpc, tm) {
+        ints_push(params, subst(c, ints_get(c.ptys, ints_get(c.tmpf, tm) + k), own_trait(), tr, one(recv_ty)));
+        k = k + 1;
+    }
+    let ret = subst(c, ints_get(c.tmret, tm), own_trait(), tr, one(recv_ty));
+    if tag(c, recv_ty) == tag_param() {
+        // Through a bound: the method's signature, called as a value of its type is.
+        let all = ints_new();
+        ints_push(all, recv_ty);
+        k = 0;
+        while k < ints_len(params) {
+            ints_push(all, ints_get(params, k));
+            k = k + 1;
+        }
+        record_indirect_site(c, at, fn_ty(c, all, ret, ints_get(c.tmeff, tm)));
+    } else {
+        let mut target = 0 - 1;
+        if satisfies(c, tr, recv_ty) {
+            let im = impl_of(c, tr, recv_ty);
+            target = ints_get(c.imfn, ints_get(c.imff, im) + tm - ints_get(c.trmf, tr));
+        }
+        if target < 0 {
+            err(c, "N0605", at, cat5("`", show(c, recv_ty), "` does not implement `", tname, "` in this module's scope"),
+                    "an impl is used where its module is this one or one this module imports");
+            check_args_from(c, args, first);
+            return ret;
+        }
+        record_site(c, at, target);
+    }
+    let given = ints_len(args) - first;
+    let n = ints_len(params);
+    if given != n {
+        let mut verb = " were given";
+        if given == 1 { verb = " was given"; }
+        err(c, "N0303", span, cat5(cat3("`", called, "` takes "), int_to_str(n), str_concat(" argument", plural(n)), " after its receiver, but ",
+                str_concat(int_to_str(given), verb)), "");
+    }
+    k = first;
+    while k < ints_len(args) {
+        let a = ints_get(args, k);
+        let mut want = none();
+        if k - first < n { want = ints_get(params, k - first); }
+        let got = value_type(c, a, want);
+        if want >= 0 && assignable(c, got, want) == false { argument_mismatch(c, called, k - first, want, got, a); }
+        k = k + 1;
+    }
+    ret
+}
+
+fn check_all(c: Ck, args: Ints) -> Int { check_args_from(c, args, 0) }
+
+fn check_args_from(c: Ck, args: Ints, first: Int) -> Int {
+    let mut k = first;
+    while k < ints_len(args) {
+        check_expr(c, ints_get(args, k), none());
+        k = k + 1;
+    }
+    0
+}
+
+// The trait a method of the pool belongs to.
+fn method_trait(c: Ck, tm: Int) -> Int {
+    let mut t = 0;
+    while t < strs_len(c.trname) {
+        if tm >= ints_get(c.trmf, t) && tm < ints_get(c.trmf, t) + ints_get(c.trmc, t) { return t; }
+        t = t + 1;
+    }
+    0 - 1
+}
+
+// Whether `x.m(…)` would be the function `<type>_m` by name (`named_method`).
+fn by_name(c: Ck, t: Int, method: Str) -> Bool {
+    let shown = show(c, t);
+    let cut = index_of_text(shown, "[");
+    let mut base = shown;
+    if cut >= 0 { base = str_slice(shown, 0, cut); }
+    if str_len(base) == 0 { return false; }
+    let lower = str_lower(base);
+    if callee_of(c, cat3(lower, "_", method)) != 0 - 1 { return true; }
+    t == t_str() && callee_of(c, cat3("text", "_", method)) != 0 - 1
+}
+
+fn str_lower(s: Str) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b >= 65 && b <= 90 { strs_push(parts, str_from_byte(b + 32)); } else { strs_push(parts, str_slice(s, i, i + 1)); }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+// The one trait method `method` on a value of `t` (`lookup_method`): through a type parameter's
+// bound, or among the traits in scope with an impl for `t` this module may use. -1 where there
+// is none, said only with `report`.
+fn lookup_method(c: Ck, t: Int, method: Str, at: Int, report: Bool) -> Int {
+    let shown = show(c, t);
+    if tag(c, t) == tag_param() {
+        let b = param_bound(c, t);
+        if b >= 0 {
+            let tm = trait_method(c, b, method);
+            if tm >= 0 { return tm; }
+        }
+        if report {
+            err(c, "N0605", at, cat5("`", shown, "` has no method `", method, "`"),
+                    "a type parameter has the methods of the trait it requires: `fn f[T: Show](x: T) -> Str { x.show() }`");
+        }
+        return 0 - 1;
+    }
+    let found = ints_new();
+    let elsewhere = strs_new();
+    let mut tr = 0;
+    while tr < strs_len(c.trname) {
+        let tm = trait_method(c, tr, method);
+        if tm >= 0 && impl_of(c, tr, t) >= 0 {
+            if trait_in_scope(c, tr) && satisfies(c, tr, t) { ints_push(found, tm); } else { strs_push(elsewhere, tick(strs_get(c.trname, tr))); }
+        }
+        tr = tr + 1;
+    }
+    if ints_len(found) == 1 { return ints_get(found, 0); }
+    if report == false { return 0 - 1; }
+    if ints_len(found) == 0 {
+        let mut help = "";
+        if strs_len(elsewhere) > 0 { help = cat3(str_join(elsewhere, ", "), " would: import the module that declares it", ""); }
+        err(c, "N0605", at, cat5("no trait in scope gives `", shown, "` a method `", method, "`"), help);
+        return 0 - 1;
+    }
+    let names = strs_new();
+    let mut i = 0;
+    while i < ints_len(found) {
+        strs_push(names, tick(strs_get(c.trname, method_trait(c, ints_get(found, i)))));
+        i = i + 1;
+    }
+    err(c, "N0606", at, cat5("`", method, "` on `", shown, cat3("` is a method of ", str_join(names, " and "), "")), "name the trait: `Show.show(x)`");
+    0 - 1
+}
+
 // --- generic calls (`check_generic_call`) -------------------------------------------------------
 
 // A call of a generic callee: its name, the callee's span, the call's, its arguments, the
@@ -3623,7 +4451,12 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
     while i < call.n {
         let t = ints_get(g.ty, i);
         if t >= 0 && call.owner == own_fn() {
-            if requires_equality(c, owner_param(c, call, i)) { require_equality(c, call, i, t, ints_get(g.from, i)); }
+            let b = param_bound(c, owner_param(c, call, i));
+            if b >= 0 {
+                if satisfies(c, b, t) == false { require_trait(c, call, i, t, ints_get(g.from, i), b); }
+            } else {
+                if requires_equality(c, owner_param(c, call, i)) { require_equality(c, call, i, t, ints_get(g.from, i)); }
+            }
         }
         i = i + 1;
     }
@@ -3665,6 +4498,27 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
 
 fn argument_mismatch(c: Ck, name: Str, i: Int, want: Int, got: Int, a: Int) -> Int {
     err(c, "N0300", espan(c, a), cat5(cat3("argument ", int_to_str(i + 1), " of `"), name, "` is `", show(c, want), cat3("`, but this is `", show(c, got), "`")), "")
+}
+
+// `N0364`: a parameter bound by a trait given a type without a usable impl of it.
+fn require_trait(c: Ck, call: Call, i: Int, t: Int, from: Int, tr: Int) -> Int {
+    let p = show(c, owner_param(c, call, i));
+    let shown = show(c, t);
+    let tname = strs_get(c.trname, tr);
+    let mut place_s = sps(c, call.at);
+    let mut place_e = spe(c, call.at);
+    if from >= 0 && from < ints_len(call.args) {
+        let a = espan(c, ints_get(call.args, from));
+        place_s = sps(c, a);
+        place_e = spe(c, a);
+    }
+    let message = cat5(cat5("`", call.name, "` requires `", p, ": "), tname, cat3("`, and `", p, "` is `"), shown,
+            cat5("` here, which has no impl of `", tname, "` in this module's scope", "", ""));
+    let mut help = cat5(cat5("implement it, `impl ", tname, " for ", shown, "`, in the module of `"), tname, "` or of `", shown, "`, and import that module here");
+    if tag(c, t) == tag_param() { help = cat5("declare `", shown, ": ", tname, "` on this definition"); }
+    dg_error(c.d, "N0364", place_s, place_e, message, "", help);
+    sec_at(c, call.ds, call.de, "declared here");
+    0
 }
 
 // `N0364`: a parameter that requires `Equality` given a type without it.
@@ -4192,6 +5046,23 @@ fn check_variant(c: Ck, ty: Str, ty_span: Int, targs: Int, variant: Str, variant
 
 // `base.name`: the field's type, or -1 when it has none.
 fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
+    // `x.show` with no call and no field of that name, where a trait in scope has the method
+    // (N78): methods are not values.
+    let mut is_field = false;
+    if is_record(c, base) { is_field = record_field(c, base, name) >= 0; }
+    let mut a_method = false;
+    let mut i = 0;
+    while i < ints_len(c.tsid) {
+        if ints_get(c.tsid, i) >= 0 {
+            if trait_method(c, ints_get(c.tsid, i), name) >= 0 { a_method = true; }
+        }
+        i = i + 1;
+    }
+    if is_field == false && a_method {
+        err(c, "N0608", name_span, cat3("`.", name, "` is a method, and a method is called, not taken as a value"),
+                cat5("call it, `x.", name, "()`, or make a value of the call with a closure: `fn() -> … { x.", name, "() }`"));
+        return 0 - 1;
+    }
     if is_record(c, base) == false {
         let mut help = "`.` reads a declared field out of a record value";
         if is_enum(c, base) {
@@ -5752,6 +6623,8 @@ fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
 // How a function is named in a message about it: `` `f` ``, or `this closure in `f`` (N50).
 fn fn_label(c: Ck, f: Int) -> Str {
     let mut name = strs_get(c.fnname, f);
+    // An impl's method is named as it is written, not as `Trait/Type/m`.
+    if ints_get(c.fnmeth, f) == 1 { return tick(fname_of(c, ints_get(c.fnnode, f), "name")); }
     if ints_get(c.fnclos, f) < 0 { return tick(name); }
     let hash = index_of_text(name, "#");
     if hash >= 0 { name = str_slice(name, 0, hash); }

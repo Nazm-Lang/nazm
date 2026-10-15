@@ -90,6 +90,17 @@
       capture of what can hold one refused (N0616) — and each closure a function of its own in
       effects and authority ("this closure in `f`"). An effect parameter still stops the checker.
       `run.sh check`: 2,443 agree, 329 differ; the checker carries 1,983, all agree
+- [ ] 3.1m Traits and impls (N78, `check/traits.rs`): traits in the type namespace (N0330), their
+      methods with `Self` (N0203, N0609), a trait where a type is written (N0607); each module's
+      trait scope, plain and `alias::Trait` (N0207); impl headers (N0610, N0305, N0604) and their
+      methods declared as `Trait/Type/m` with `Self` and the trait's effects; `register_impl` —
+      the orphan rule (N0601), each method against the trait's (N0603), what is missing (N0602),
+      coherence (N0600); bounds `[T: Trait]` and their calls (N0364); method calls on a concrete
+      type, through a bound and as `Trait.m(x)` (N0605, N0606, N0303, N0300), a method taken as a
+      value (N0608); `Show` in interpolation. A default method, an impl of a generic type, a
+      derived `Hash` and a method called by name (5b.15) stop the checker. Hand-written cases in
+      `inputs/check/traits-*.nz` and `inputs/modules/traits-*.nz`. `run.sh check`: 2,469 agree,
+      309 differ; the checker carries 2,036, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
