@@ -319,10 +319,20 @@ infers: the encoding names a function or array type `?` where `/3` spells it (`N
 `Names::spelled`), wherever it appears; and a record construction's record is the expression's
 type, a field read's the base's. A constant of a numeric type other than `Int`, whose bits `/3`
 prints as a value, stops the function until that type is carried. Then the
-document's other parts — the module list, the type table (every record and enum instance in the
-reference's interning order, which the checker's interning must then follow), statics, the impl
-table and `derived_hash` — after which the comparison becomes the whole document, byte for byte
-(task 5.1). Construct by construct, the order of the remaining stops: field and variant
+document's other parts, each one line of `run.sh core` compared whole (`%entry`, `%modules`,
+`%types`, `%statics`, `%impls`, `%derived_hash`): the entry (the root's `main`), the module list
+(the graph's edges, the core prelude last), the type table, the impl table (each impl the
+coherence table answers with, a method left to its default being the default body at the impl's
+type) and `derived_hash`. The type table is every record and enum the reference makes,
+definitions and instances, in its id order, and the checker's interning follows it: an instance
+is completed when it is made, as `apply_record` completes one — its definition's fields
+substituted (`substitute`: an array is left alone, a type that does not mention the parameters is
+not rebuilt), which interns what they name — or, while field types are resolved, at `settle`, the
+last made first; each module checked first makes the built-ins' `Option[T]` (`environment`); a
+tuple's record is declared when first asked for and is the root module's. `sema.nz` keeps the
+table's order as it goes (`rlog`, `elog`) and prints it (`ck_types_json`). Statics are printed
+where there are none; a compilation with one says so and is counted apart. After the constructs
+below the comparison becomes the whole document, byte for byte (task 5.1). Construct by construct, the order of the remaining stops: field and variant
 construction (with their positional forms), `match` and its desugarings, generic functions and
 calls with their type arguments, impl methods and trait calls, `for`, `?`, interpolation, bit
 operators and every number type, closures, then the rest by count. `@derive` stays last (D19).

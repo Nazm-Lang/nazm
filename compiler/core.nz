@@ -94,6 +94,130 @@ pub fn cr_functions(f: Facts) -> Str {
     str_join(out, "")
 }
 
+// The document's other parts (task 5.1c), one line each — `%NAME`, a tab, and its value as
+// `print.rs` writes it compactly, or `- ` and why it is not carried: the entry, the modules, the
+// type table, the statics, the impl table and `derived_hash`.
+pub fn cr_parts(f: Facts) -> Str {
+    let c = fx_checker(f);
+    let idents = strs_new();
+    let mut m = 0;
+    while m < fx_modules(f) {
+        strs_push(idents, fx_module_identity(f, m));
+        m = m + 1;
+    }
+    let out = strs_new();
+    // The entry: the root module's `main` (`Resolution::entry`).
+    let mut entry = "null";
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        if ck_fn_module(c, i) == 0 && ck_fn_name(c, i) == "main" && ck_fn_closure(c, i) == false && ck_fn_method(c, i) == false { entry = json_str(fx_fn_identity(f, i)); }
+        i = i + 1;
+    }
+    co_part(out, "entry", entry);
+    // Every module in load order: its name, whether it is the root or the prelude, its imports.
+    let modules = strs_new();
+    m = 0;
+    while m < fx_modules(f) {
+        let o = strs_new();
+        strs_push(o, co_field_first("name", json_str(strs_get(idents, m))));
+        strs_push(o, co_field("root", co_json_bool(m == 0)));
+        strs_push(o, co_field("prelude", co_json_bool(m == fx_modules(f) - 1)));
+        let imports = strs_new();
+        let mut k = 0;
+        while k < ck_module_deps(c, m) {
+            strs_push(imports, json_str(strs_get(idents, ck_module_dep(c, m, k))));
+            k = k + 1;
+        }
+        strs_push(o, co_field("imports", co_list(imports)));
+        strs_push(modules, co_object(o));
+        m = m + 1;
+    }
+    co_part(out, "modules", co_list(modules));
+    co_part(out, "types", ck_types_json(c, idents));
+    // Statics and impls: carried only where there are none, so far.
+    let mut statics = 0;
+    m = 0;
+    while m < fx_modules(f) {
+        let t = fx_tree(f);
+        let consts = sx_items(t, sx_field(t, fx_module_program(f, m), "consts"));
+        let mut k = 0;
+        while k < ints_len(consts) {
+            if sx_text(t, sx_field(t, ints_get(consts, k), "is_static")) == "true" { statics = statics + 1; }
+            k = k + 1;
+        }
+        m = m + 1;
+    }
+    if statics == 0 { co_part(out, "statics", "[]"); } else { co_part(out, "statics", "- statics"); }
+    co_part(out, "impls", co_impls(f, idents));
+    // The trait a record, enum or tuple derives, with its two methods.
+    let h = ck_derived_hash(c);
+    let mut derived = "null";
+    if h >= 0 && ck_trait_has_method(c, h, "hash") && ck_trait_has_method(c, h, "same") {
+        let key = fx_trait_identity(f, h);
+        let o = strs_new();
+        strs_push(o, co_field_first("trait", json_str(key)));
+        strs_push(o, co_field("hash", json_str(str_concat(key, ".hash"))));
+        strs_push(o, co_field("same", json_str(str_concat(key, ".same"))));
+        derived = co_object(o);
+    }
+    co_part(out, "derived_hash", derived);
+    str_join(out, "")
+}
+
+// The impl table (`ImplRow`): each impl the coherence table answers with, every method of its
+// trait by the function a call runs — the impl's own, with no type argument, or the default
+// body, with the impl's type — in the order the impls were filed.
+fn co_impls(f: Facts, idents: Strs) -> Str {
+    let c = fx_checker(f);
+    let rows = strs_new();
+    let mut i = 0;
+    while i < ck_impl_count(c) {
+        let tr = ck_impl_trait(c, i);
+        if ck_impl_answers(c, i) {
+            let key = fx_trait_identity(f, tr);
+            let self_ty = json_str(ck_durable(c, ck_impl_type(c, i), idents));
+            let methods = strs_new();
+            let mut whole = true;
+            let mut k = 0;
+            while k < ck_trait_method_count(c, tr) {
+                let mut fun = ck_impl_fn(c, i, k);
+                let mut args = "[]";
+                let mut default = false;
+                if fun < 0 {
+                    fun = ck_trait_method_default(c, tr, k);
+                    args = str_concat(str_concat("[", self_ty), "]");
+                    default = true;
+                }
+                if fun < 0 { whole = false; }
+                if fun >= 0 {
+                    let o = strs_new();
+                    strs_push(o, co_field_first("method", json_str(str_concat(str_concat(key, "."), ck_trait_method_name(c, tr, k)))));
+                    strs_push(o, co_field("function", json_str(fx_fn_identity(f, fun))));
+                    strs_push(o, co_field("type_args", args));
+                    strs_push(o, co_field("default", co_json_bool(default)));
+                    strs_push(methods, co_object(o));
+                }
+                k = k + 1;
+            }
+            if whole {
+                let o = strs_new();
+                strs_push(o, co_field_first("trait", json_str(key)));
+                strs_push(o, co_field("self", self_ty));
+                strs_push(o, co_field("methods", co_list(methods)));
+                strs_push(rows, co_object(o));
+            }
+        }
+        i = i + 1;
+    }
+    co_list(rows)
+}
+
+fn co_part(out: Strs, name: Str, value: Str) -> Int {
+    strs_push(out, str_concat(str_concat(str_concat("%", name), str_from_byte(9)), value));
+    strs_push(out, co_nl());
+    0
+}
+
 // Function `i`'s object, or `-` and why it is not carried.
 pub fn cr_function(f: Facts, i: Int) -> Str {
     let c = fx_checker(f);

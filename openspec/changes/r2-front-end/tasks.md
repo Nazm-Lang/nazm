@@ -317,7 +317,13 @@
       function with its `digest`. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,435
       functions the lowering carries 29,774, all agree, digests included
 - [ ] 5.1c The document's other parts: modules, the type table in the reference's order, statics,
-      the impl table, `derived_hash`; then the whole document compared
+      the impl table, `derived_hash`; then the whole document compared. Done but statics (23
+      inputs) and the byte-for-byte comparison: the entry, the modules, the type table (instances
+      completed as made, the reference's interning order — every carried input agrees on it), the
+      impl table and `derived_hash`, each a line of `run.sh core` (D25). `run.sh core`: 3,047
+      inputs agree, 0 differ; of 56,611 functions the lowering carries 29,948, all agree; of the
+      document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ (carried
+      3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
