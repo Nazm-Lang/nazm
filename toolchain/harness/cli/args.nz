@@ -1,0 +1,96 @@
+// R1e, S4: `@std/args` (`docs/spec.md`, *The standard library*). Ported from
+// `crates/nazm-cli/tests/args.rs` (R7).
+//
+// One specification shaped like a toolchain's, read against every form a command line takes and
+// against every mistake, with the generated help; the same under the interpreter, the LIR oracle,
+// LLVM `-O0`/`-O2` and Cranelift, with nothing live. And a built executable reading the arguments
+// it was started with.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// The specification, shared by both programs.
+const SPEC: Str = "use \"@std/args\";\n\nfn spec() -> ArgCommand ! {} {\n    let cli = args_program(\"tool\", \"A toolchain\");\n    args_flag(cli, \"verbose\", \"v\", \"Say more\");\n    args_option(cli, \"color\", \"\", \"WHEN\", \"When to colour output\");\n    let build = args_command(cli, \"build\", \"Build a program\");\n    args_option_default(build, \"opt-level\", \"O\", \"N\", \"0\", \"Optimisation level\");\n    args_option(build, \"output\", \"o\", \"FILE\", \"Where to write\");\n    args_option_required(build, \"target\", \"t\", \"TRIPLE\", \"The target\");\n    args_option(build, \"define\", \"D\", \"NAME\", \"A feature to enable\");\n    args_flag(build, \"json\", \"j\", \"Write JSON\");\n    args_flag(build, \"quiet\", \"q\", \"Write nothing\");\n    args_conflict(build, \"json\", \"quiet\");\n    args_positional(build, \"input\", true, \"The program\");\n    args_positional(build, \"mode\", false, \"How to build it\");\n    args_rest(build, \"extra\", \"More files\");\n    let pkg = args_command(cli, \"pkg\", \"Work with packages\");\n    let add = args_command(pkg, \"add\", \"Add a dependency\");\n    args_flag(add, \"dev\", \"\", \"Only for development\");\n    args_positional(add, \"name\", true, \"The package\");\n    cli\n}\n\nfn shown(o: Option[Str]) -> Str { match o { Option.Some(value: v) => f\"[{v}]\", Option.None() => \"none\" } }\n\nfn describe(r: Result[Args, Str]) -> Str {\n    match r {\n        Result.Ok(value: a) => {\n            if args_help_wanted(a) { f\"help for `{args_subcommand(a)}`\" } else {\n                f\"cmd=`{args_subcommand(a)}` v={args_times(a, \"verbose\")} color={shown(args_get(a, \"color\"))} O={shown(args_get(a, \"opt-level\"))} O-given={args_has(a, \"opt-level\")} out={shown(args_get(a, \"output\"))} target={shown(args_get(a, \"target\"))} D={str_join(args_get_all(a, \"define\"), \",\")} json={args_has(a, \"json\")} input={shown(args_get(a, \"input\"))} mode={shown(args_get(a, \"mode\"))} extra={str_join(args_get_all(a, \"extra\"), \",\")} dev={args_has(a, \"dev\")} name={shown(args_get(a, \"name\"))}\"\n            }\n        },\n        Result.Err(error: e) => f\"error: {e}\",\n    }\n}\n";
+
+/// Every case, an argument list split at `|`, and the help of every command.
+const CASES: Str = "\nfn split(s: Str) -> Strs {\n    let out = strs_new();\n    if s == \"\" { return out; }\n    let mut from = 0;\n    for i in 0..str_len(s) {\n        if str_byte(s, i) == 124 { strs_push(out, str_slice(s, from, i)); from = i + 1; }\n    }\n    strs_push(out, str_slice(s, from, str_len(s)));\n    out\n}\n\nfn help_of(cli: ArgCommand, c: Str) -> Str {\n    match args_parse(cli, split(f\"{c}|--help\")) {\n        Result.Ok(value: a) => args_help_text(a),\n        Result.Err(error: e) => f\"error: {e}\\n\",\n    }\n}\n\nfn main(io: IoCap) -> Int ! { io } {\n    let cases = strs_new();\n    strs_push(cases, \"\");\n    strs_push(cases, \"-v|-v|--color=never\");\n    strs_push(cases, \"build|-t|x86|in.nz\");\n    strs_push(cases, \"build|--target=x86|-O2|--output|a.out|-DA|-D|B|--define=C|in.nz|fast|x|y\");\n    strs_push(cases, \"--verbose|build|-vjt|arm|-vO3|in.nz\");\n    strs_push(cases, \"build|-t|x|--opt-level=|in.nz\");\n    strs_push(cases, \"build|-t|x|--|-in.nz|--json|-\");\n    strs_push(cases, \"build|-o|-|-t|-v|in.nz\");\n    strs_push(cases, \"pkg|add|--dev|--color|always|json\");\n    strs_push(cases, \"pkg\");\n    strs_push(cases, \"--help\");\n    strs_push(cases, \"build|--frob|-h\");\n    strs_push(cases, \"pkg|add|-h|--unknown\");\n    strs_push(cases, \"--frob\");\n    strs_push(cases, \"build|-t|x|-z|in.nz\");\n    strs_push(cases, \"build|-t|x|-vzq|in.nz\");\n    strs_push(cases, \"build|-t\");\n    strs_push(cases, \"build|in.nz|--output\");\n    strs_push(cases, \"build|-t|x|--json=yes|in.nz\");\n    strs_push(cases, \"build|-t|x|-j|-q|in.nz\");\n    strs_push(cases, \"build|in.nz\");\n    strs_push(cases, \"build|-t|x\");\n    strs_push(cases, \"biuld\");\n    strs_push(cases, \"pkg|add\");\n    strs_push(cases, \"pkg|add|a|b\");\n    strs_push(cases, \"pkg|add|-é\");\n    for i in 0..strs_len(cases) {\n        let c = strs_get(cases, i);\n        print(f\"{c} => {describe(args_parse(spec(), split(c)))}\\n\");\n    }\n    let cli = spec();\n    print(args_help(cli));\n    print(help_of(cli, \"build\"));\n    print(help_of(cli, \"pkg|add\"));\n    let wrong = args_program(\"bad\", \"\");\n    args_flag(wrong, \"x\", \"x\", \"\");\n    args_option(wrong, \"y\", \"x\", \"Y\", \"\");\n    print(f\"{describe(args_parse(wrong, split(\"\")))}\\n\");\n    let late = args_program(\"late\", \"\");\n    args_positional(late, \"a\", false, \"\");\n    args_positional(late, \"b\", true, \"\");\n    print(f\"{describe(args_parse(late, split(\"\")))}\\n\");\n    print(args_usage(late));\n    print(\"\\n\");\n    0\n}\n";
+
+const EXPECTED: Str = " => cmd=`` v=0 color=none O=none O-given=false out=none target=none D= json=false input=none mode=none extra= dev=false name=none\n-v|-v|--color=never => cmd=`` v=2 color=[never] O=none O-given=false out=none target=none D= json=false input=none mode=none extra= dev=false name=none\nbuild|-t|x86|in.nz => cmd=`build` v=0 color=none O=[0] O-given=false out=none target=[x86] D= json=false input=[in.nz] mode=none extra= dev=false name=none\nbuild|--target=x86|-O2|--output|a.out|-DA|-D|B|--define=C|in.nz|fast|x|y => cmd=`build` v=0 color=none O=[2] O-given=true out=[a.out] target=[x86] D=A,B,C json=false input=[in.nz] mode=[fast] extra=x,y dev=false name=none\n--verbose|build|-vjt|arm|-vO3|in.nz => cmd=`build` v=3 color=none O=[3] O-given=true out=none target=[arm] D= json=true input=[in.nz] mode=none extra= dev=false name=none\nbuild|-t|x|--opt-level=|in.nz => cmd=`build` v=0 color=none O=[] O-given=true out=none target=[x] D= json=false input=[in.nz] mode=none extra= dev=false name=none\nbuild|-t|x|--|-in.nz|--json|- => cmd=`build` v=0 color=none O=[0] O-given=false out=none target=[x] D= json=false input=[-in.nz] mode=[--json] extra=- dev=false name=none\nbuild|-o|-|-t|-v|in.nz => cmd=`build` v=0 color=none O=[0] O-given=false out=[-] target=[-v] D= json=false input=[in.nz] mode=none extra= dev=false name=none\npkg|add|--dev|--color|always|json => cmd=`pkg add` v=0 color=[always] O=none O-given=false out=none target=none D= json=false input=none mode=none extra= dev=true name=[json]\npkg => cmd=`pkg` v=0 color=none O=none O-given=false out=none target=none D= json=false input=none mode=none extra= dev=false name=none\n--help => help for ``\nbuild|--frob|-h => error: tool build: unknown option `--frob`\npkg|add|-h|--unknown => help for `pkg add`\n--frob => error: tool: unknown option `--frob`\nbuild|-t|x|-z|in.nz => error: tool build: unknown option `-z`\nbuild|-t|x|-vzq|in.nz => error: tool build: unknown option `-z` in `-vzq`\nbuild|-t => error: tool build: `-t` needs a value `<TRIPLE>`\nbuild|in.nz|--output => error: tool build: `--output` needs a value `<FILE>`\nbuild|-t|x|--json=yes|in.nz => error: tool build: `--json` takes no value, and was given `--json=yes`\nbuild|-t|x|-j|-q|in.nz => error: tool build: `--json` and `--quiet` cannot be used together\nbuild|in.nz => error: tool build: missing the option `--target <TRIPLE>`\nbuild|-t|x => error: tool build: missing the argument `<input>`\nbiuld => error: tool: unknown command `biuld`\npkg|add => error: tool pkg add: missing the argument `<name>`\npkg|add|a|b => error: tool pkg add: unexpected argument `b`\npkg|add|-é => error: tool pkg add: unknown option `-é`\ntool: A toolchain\n\nUsage: tool [options] <command>\n\nOptions:\n  -v, --verbose       Say more\n      --color <WHEN>  When to colour output\n  -h, --help          Print this help\n\nCommands:\n  build  Build a program\n  pkg    Work with packages\ntool build: Build a program\n\nUsage: tool build [options] --target <TRIPLE> <input> [<mode>] [<extra>...]\n\nArguments:\n  <input>     The program\n  <mode>      How to build it\n  <extra>...  More files\n\nOptions:\n  -O, --opt-level <N>    Optimisation level [default: 0]\n  -o, --output <FILE>    Where to write\n  -t, --target <TRIPLE>  The target (required)\n  -D, --define <NAME>    A feature to enable\n  -j, --json             Write JSON\n  -q, --quiet            Write nothing\n  -v, --verbose          Say more\n      --color <WHEN>     When to colour output\n  -h, --help             Print this help\ntool pkg add: Add a dependency\n\nUsage: tool pkg add [options] <name>\n\nArguments:\n  <name>  The package\n\nOptions:\n      --dev           Only for development\n  -v, --verbose       Say more\n      --color <WHEN>  When to colour output\n  -h, --help          Print this help\nerror: bad: the specification is wrong: `-x` is declared twice\nerror: late: the specification is wrong: the required `<b>` follows an optional one\nUsage: late [options] [<a>] <b>\n0\n";
+
+fn has_nothing_live(tag: Str, r: Ran) -> Result[Int, Str] ! {} {
+    let line = memory_line(r);
+    check_that(str_len(line) > 0, f"{tag}: no memory report: {ran_show(r)}")?;
+    check_that(all_reclaimed(line), f"{tag}: {line}")
+}
+
+@test
+fn every_form_and_every_mistake_parse_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, f"{SPEC}{CASES}", true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == EXPECTED, f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            has_nothing_live(r.label, r.ran)?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The program a tool would be: its own command line, help on standard output, an error on
+/// standard error with exit status 2.
+const MAIN: Str = "use \"@std/process\";\n\nfn main(io: IoCap) -> Int ! { io } {\n    match args_parse(spec(), process_args(io)) {\n        Result.Ok(value: a) => {\n            if args_help_wanted(a) { print(args_help_text(a)); } else { print(f\"{describe(Result[Args, Str].Ok(value: a))}\\n\"); }\n            0\n        },\n        Result.Err(error: e) => { eprint(f\"{e}\\n\"); exit_with(2) },\n    }\n}\n";
+
+/// `exe` with `args`, under `bounded_exe`'s ceiling, in `dir`, the memory report on.
+fn bounded_with(h: Caps, exe: Str, dir: Str, args: Strs) -> Ran ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, exe);
+    for x in args {
+        strs_push(a, x);
+    }
+    run(h, "sh", a, dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))
+}
+
+fn started_with(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", f"{SPEC}{MAIN}")?;
+    let labels = text_split("llvm -O2|cranelift", "|");
+    let backends = words("llvm cranelift");
+    let opts = words("2 0");
+    let mut k = 0;
+    while k < 2 {
+        let tag = strs_get(labels, k);
+        let exe = f"{d}/{text_replace(text_replace(tag, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{tag}: {b.stderr}")?;
+        let a = text_split("build|--target|wasm32 wasi|-vvO2|-D|é|in put.nz|--|--x", "|");
+        let r = bounded_with(h, exe, d, a);
+        check_that(r.code == 0, f"{tag}: {ran_show(r)}")?;
+        check_that(r.stdout == "cmd=`build` v=2 color=none O=[2] O-given=true out=none target=[wasm32 wasi] D=é json=false input=[in put.nz] mode=[--x] extra= dev=false name=none\n0\n", f"{tag}: {r.stdout}")?;
+        has_nothing_live(tag, r)?;
+        let help = bounded_with(h, exe, d, words("pkg add --help"));
+        check_that(help.code == 0, f"{tag}: {ran_show(help)}")?;
+        check_that(text_starts_with(help.stdout, "tool pkg add: Add a dependency\n\nUsage: tool pkg add [options] <name>\n"), f"{tag}: {help.stdout}")?;
+        let e = bounded_with(h, exe, d, words("build --target"));
+        check_that(e.code == 2, f"{tag}: {ran_show(e)}")?;
+        check_that(str_len(e.stdout) == 0, f"{tag}: {ran_show(e)}")?;
+        check_that(text_starts_with(e.stderr, "tool build: `--target` needs a value `<TRIPLE>`\n"), f"{tag}: {e.stderr}")?;
+        k = k + 1;
+    }
+    // The interpreter hands a program the same arguments after `--`.
+    let r = nazm(h, d, words("run --interpret prog.nz -- pkg add --dev x"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(r.stdout == "cmd=`pkg add` v=0 color=none O=none O-given=false out=none target=none D= json=false input=none mode=none extra= dev=true name=[x]\n0\n", r.stdout)
+}
+
+@test
+fn a_built_executable_parses_the_arguments_it_was_started_with(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = started_with(h, d);
+    scratch_remove(h, d);
+    r
+}

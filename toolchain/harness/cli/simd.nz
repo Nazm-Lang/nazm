@@ -1,0 +1,229 @@
+// N66: vectorisation under checked arithmetic (`docs/architecture.md` §7.68). Ported from
+// `crates/nazm-cli/tests/simd.rs` (R7).
+//
+// `ints_sum_from` gives the ordered checked sum — the same value as a scalar loop for every length
+// across the 64-element block boundaries and every magnitude either side of the fast path's bound,
+// and the same failure, at the same place, wherever a running sum overflows — under the
+// interpreter, both backends and two optimisation levels; a native build replaces the counted
+// summation loop with it and the interpreter does not; `nazm explain-cost` says what became of
+// every loop.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// One tier: its label, what it printed and its status.
+struct Tier {
+    label: Str,
+    stdout: Str,
+    code: Int,
+}
+
+/// What `src` prints and how it ends, under the interpreter and under each native build.
+fn everywhere_tiers(h: Caps, src: Str) -> Result[Vec[Tier], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = tiers_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn tiers_in(h: Caps, d: Str) -> Result[Vec[Tier], Str] ! { io, spawn } {
+    let out = vec_new[Tier]();
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    vec_push(out, Tier(label: "run", stdout: r.stdout, code: r.code));
+    for bo in words("llvm:0 llvm:2 cranelift:0 cranelift:2") {
+        let parts = split(bo, ":");
+        let backend = strs_get(parts, 0);
+        let opt = strs_get(parts, 1);
+        let exe = f"{d}/p-{backend}-{opt}";
+        let a = words(f"build --backend {backend} --opt-level {opt} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, f"{backend} -O{opt}: {b.stderr}")?;
+        let o = run(h, exe, strs_new(), "", suite_env(h));
+        vec_push(out, Tier(label: f"{backend} -O{opt}", stdout: o.stdout, code: o.code));
+    }
+    Result[Vec[Tier], Str].Ok(value: out)
+}
+
+/// A failure's `error[...] ... at FILE:L:C` line from standard error, wherever it was printed.
+fn failure_line(stderr: Str) -> Str ! {} {
+    for l in lines(stderr) {
+        if text_contains(l, "error[") {
+            return l;
+        }
+    }
+    ""
+}
+
+/// Every length from 0 to 200 and three magnitudes around the fast path's 2^56 bound.
+const PROPERTY: Str = "fn scalar(start: Int, v: Ints) -> Int {\nlet mut s = start;\nlet mut i = 0;\nwhile i < ints_len(v) { s = ints_get(v, i) + s; i = i + 1; }\ns\n}\nfn main() -> Int {\nlet mut bad = 0;\nlet mut n = 0;\nwhile n <= 200 {\nlet mut m = 0;\nwhile m < 3 {\nlet v = ints_new();\nlet mut k = 0;\nwhile k < n {\nlet big = if m == 0 { 1000 } else { if m == 1 { 72057594037927936 } else { 72057594037927937 } };\nlet x = if k % 2 == 0 { big - k } else { k - big };\nints_push(v, x);\nk = k + 1;\n}\nlet start = if n % 3 == 0 { 0 } else { 4611686018427387000 - n * 1000 };\nif ints_sum_from(start, v) != scalar(start, v) { bad = bad + 1; }\nm = m + 1;\n}\nn = n + 1;\n}\nbad\n}\n";
+
+@test
+fn the_sum_is_the_ordered_sum_for_every_length_and_magnitude(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for tier in everywhere_tiers(h, PROPERTY)? {
+        check_that(tier.stdout == "0\n" && tier.code == 0, f"{tier.label}: {tier.stdout} ({tier.code})")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `count` ones, then `big`, then `after` — all summed from `start`.
+fn overflow_program(count: Int, big: Str, after: Str) -> Str ! {} {
+    f"fn main() -> Int {{\n    let v = ints_new();\n    let mut i = 0;\n    while i < {count} {{ ints_push(v, 1); i = i + 1; }}\n    ints_push(v, {big});\n    ints_push(v, {after});\n    ints_sum_from(0, v)\n}}\n"
+}
+
+fn overflows_at(h: Caps, count: Int) -> Result[Int, Str] ! { io, spawn } {
+    let big = f"9223372036854775807 - {count - 1}";
+    let src = overflow_program(count, big, "-300");
+    for tier in everywhere_tiers(h, src)? {
+        check_that(tier.code == 2, f"{count} {tier.label}: {tier.stdout}")?;
+    }
+    let d = prog_dir(h, "prog.nz", src)?;
+    let interpreted = failure_line(nazm(h, d, words("run --interpret prog.nz")).stderr);
+    let b = nazm(h, d, words("build --opt-level 2 prog.nz -o p"));
+    let native = run(h, f"{d}/p", strs_new(), "", suite_env(h)).stderr;
+    scratch_remove(h, d);
+    check_that(text_contains(interpreted, "error[N0400]: this addition overflows `Int`"), interpreted)?;
+    check_that(b.code == 0, b.stderr)?;
+    check_that(text_contains(native, "error[N0400]: this addition overflows `Int` at prog.nz:7:5"), f"{count}: {native}")
+}
+
+@test
+fn a_running_sum_that_overflows_fails_where_the_loop_would_even_if_the_total_fits(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Positions either side of the block boundaries.
+    for c in words("1 62 63 64 65 127 128 200") {
+        overflows_at(h, parse_usize(c))?;
+    }
+    // A whole block that would wrap if it were added unchecked, and small elements onto a start
+    // too close to `MAX` for the fast path's room.
+    let srcs = strs_new();
+    strs_push(srcs, "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 576460752303423488); i = i + 1; } ints_sum_from(0, v) }\n");
+    strs_push(srcs, "fn main() -> Int { let v = ints_new(); let mut i = 0; while i < 64 { ints_push(v, 1); i = i + 1; } ints_sum_from(9223372036854775797, v) }\n");
+    for src in srcs {
+        for tier in everywhere_tiers(h, src)? {
+            check_that(tier.code == 2, f"{tier.label}: {tier.stdout}")?;
+        }
+    }
+    // One less and nothing overflows: the same programs give the total.
+    for tier in everywhere_tiers(h, overflow_program(64, "9223372036854775807 - 64", "-300"))? {
+        check_that(tier.stdout == "9223372036854775507\n" && tier.code == 0, f"{tier.label}: {tier.stdout} ({tier.code})")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+const IDIOM: Str = "fn total(v: Ints) -> Int {\nlet mut s = 0;\nlet mut i = 0;\nwhile i < ints_len(v) {\ns = s + ints_get(v, i);\ni = i + 1;\n}\ns\n}\nfn main() -> Int {\nlet v = ints_new();\nlet mut k = 0;\nwhile k < 1000 { ints_push(v, k * 7 - 300); k = k + 1; }\nints_push(v, 9223372036854775807);\ntotal(v)\n}\n";
+
+fn replaced(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(text_contains(failure_line(r.stderr), "error[N0400]"), r.stderr)?;
+    // Where the interpreter's loop failed: the addition, line 5 column 7.
+    check_that(text_contains(r.stderr, "prog.nz:5:7"), r.stderr)?;
+    for backend in words("llvm cranelift") {
+        let b = nazm(h, d, words(f"build --backend {backend} --opt-level 2 prog.nz -o p --emit-ir"));
+        check_that(b.code == 0, b.stderr)?;
+        let o = run(h, f"{d}/p", strs_new(), "", suite_env(h));
+        // The loop's own addition: the same place the interpreter names.
+        check_that(text_contains(o.stderr, "error[N0400]: this addition overflows `Int` at prog.nz:5:7"), f"{backend}: {o.stderr}")?;
+        if backend == "llvm" {
+            // The LLVM unit calls the runtime's sum in place of the loop.
+            let unit = read_text(h, f"{d}/p.m0.ll")?;
+            check_that(text_contains(unit, "call i64 @nz.ints_sum("), unit)?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_native_build_replaces_the_summation_loop_and_reports_its_failure_at_the_addition(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", IDIOM)?;
+    let r = replaced(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// Q1-B-01: a write of the counter after its zero — in an `if`, a loop, a block — keeps the loop,
+/// and every implementation sums from where the program left the counter.
+@test
+fn a_counter_written_after_its_zero_is_not_summed_from_zero(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("an if|a loop|a block", "|");
+    let betweens = text_split("if ints_len(v) > 10 { i = 95; }|while i < 50 { i = i + 1; }|{ i = 90; }", "|");
+    let sums = words("490 3775 955");
+    let mut k = 0;
+    while k < 3 {
+        let what = strs_get(whats, k);
+        let between = strs_get(betweens, k);
+        let sum = strs_get(sums, k);
+        for tier in everywhere_tiers(h, f"fn main() -> Int {{\nlet v = ints_new();\nlet mut k = 0;\nwhile k < 100 {{ ints_push(v, k + 1); k = k + 1; }}\nlet mut i = 0;\nlet mut s = 0;\n{between}\nwhile i < ints_len(v) {{ s = s + ints_get(v, i); i = i + 1; }}\ns\n}}\n")? {
+            check_that(text_trim(tier.stdout) == sum && tier.code == 0, f"{what}, {tier.label}: {tier.stdout}")?;
+        }
+        k = k + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_interpreter_keeps_the_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Its iteration budget still counts every turn of the loop a native build replaced.
+    let d = prog_dir(h, "prog.nz", IDIOM)?;
+    let r = nazm(h, d, words("run --interpret --max-iterations 1500 prog.nz"));
+    scratch_remove(h, d);
+    let e = failure_line(r.stderr);
+    check_that(text_contains(e, "N0402"), e)
+}
+
+/// The paths of the loops `explain-cost` reports for `f`.
+fn by_function(doc: JsonDoc, f: Str) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while jq(doc, f"loops/{i}") >= 0 {
+        if jstr(doc, f"loops/{i}/function") == f {
+            strs_push(out, f"loops/{i}");
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn explained(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let near = "fn from_one(v: Ints) -> Int { let mut s = 0; let mut i = 1; while i < ints_len(v) { s = s + ints_get(v, i); i = i + 1; } s }\nfn by_two(v: Ints) -> Int { let mut s = 0; let mut i = 0; while i < ints_len(v) { s = s + ints_get(v, i); i = i + 2; } s }\n";
+    scratch_write(h, d, "prog.nz", f"{PROPERTY}{text_replace(IDIOM, "fn main", "fn unused_main")}{near}")?;
+    let o = nazm(h, d, words("explain-cost --json prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let doc = jparse(o.stdout)?;
+    let total = by_function(doc, "total");
+    check_that(strs_len(total) == 1, o.stdout)?;
+    check_that(jstr(doc, f"{strs_get(total, 0)}/vectorised") == "summation", o.stdout)?;
+    check_that(jtext(doc, f"{strs_get(total, 0)}/reason") == "null", o.stdout)?;
+    // Its operands swapped: the same work, not the idiom, and said so.
+    let scalar = by_function(doc, "scalar");
+    check_that(strs_len(scalar) > 0 && jtext(doc, f"{strs_get(scalar, 0)}/vectorised") == "null", o.stdout)?;
+    check_that(jstr(doc, f"{strs_get(scalar, 0)}/reason") == "its body does not add an element to an accumulator", o.stdout)?;
+    for l in by_function(doc, "main") {
+        check_that(jtext(doc, f"{l}/vectorised") == "null", jtext(doc, l))?;
+        check_that(str_len(jstr(doc, f"{l}/reason")) > 0, jtext(doc, l))?;
+    }
+    // One counted loop away from the idiom is not it.
+    check_that(jstr(doc, f"{strs_get(by_function(doc, "from_one"), 0)}/reason") == "its counter does not start at 0 in the loop's block", o.stdout)?;
+    check_that(jstr(doc, f"{strs_get(by_function(doc, "by_two"), 0)}/reason") == "its counter does not step by 1", o.stdout)?;
+    let text = nazm(h, d, words("explain-cost prog.nz")).stdout;
+    check_that(text_contains(text, "vectorised (summation)"), text)?;
+    check_that(text_contains(text, "not vectorised: its body does not add an element to an accumulator"), text)
+}
+
+@test
+fn explain_cost_says_what_became_of_every_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = explained(h, d);
+    scratch_remove(h, d);
+    r
+}
