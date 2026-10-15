@@ -8,6 +8,7 @@
 use "@std/json"
 use "@std/hash"
 use "@std/hashmap"
+use "@std/text"
 
 /// One local of a function, as Core IR declares it.
 pub struct CirLocal {
@@ -137,14 +138,56 @@ fn top_level(t: Str, from: Int, to: Int, want: Int) -> Int {
     0 - 1
 }
 
-/// A type as `nazm.core-ir/3` spells it, read the way this stage has read types since `/2`: a
-/// function type (`fn(Int) -> Str`) as `?`, which `/2` printed and MIR still prints, and an array
-/// (`[Int; 4]`) as `?array[Int, 4]`, the spelling `refine.nz` recovers one under from `/2`. Every
-/// other spelling is itself, its arguments read the same way; a `/2` spelling reads as itself.
+/// A function type's parts, from its spelling starting at `from` (`fn(A, B) -> R ! { e }`): the
+/// result, the effects text (` ! { e }` or `""`), then each parameter.
+pub fn fn_parts(t: Str, from: Int) -> Strs ! {} {
+    let n = str_len(t)
+    let open_at = from + 3
+    let close = top_level(t, open_at, n, 41)
+    let out = strs_new()
+    if close < 0 {
+        strs_push(out, "?")
+        strs_push(out, "")
+        return out
+    }
+    let bang = top_level(t, close + 5, n, 33)
+    let ret_end = if bang < 0 { n } else { bang - 1 }
+    strs_push(out, str_slice(t, close + 5, ret_end))
+    strs_push(out, if bang < 0 { "" } else { str_slice(t, bang - 1, n) })
+    let mut start = open_at
+    while start < close {
+        let comma = top_level(t, start, close, 44)
+        let end = if comma < 0 { close } else { comma }
+        strs_push(out, str_slice(t, start, end))
+        start = if comma < 0 { close } else { comma + 2 }
+    }
+    out
+}
+
+/// A function type put together from `fn_parts`' order, spelled `?fn(…)` inside this stage.
+pub fn fn_spelling(parts: Strs) -> Str ! {} {
+    let ps = strs_new()
+    for i in 2..strs_len(parts) { strs_push(ps, strs_get(parts, i)) }
+    "?fn(" + str_join(ps, ", ") + ") -> " + strs_get(parts, 0) + strs_get(parts, 1)
+}
+
+/// A type as `nazm.core-ir/3` spells it, read as this stage spells types: a function type
+/// (`fn(Int) -> Str`) as `?fn(Int) -> Str`, which MIR's text names `?`, and an array (`[Int; 4]`)
+/// as `?array[Int, 4]`, each part read the same way (an effect parameter `$effects` as
+/// `%effects`, which is no type parameter). Every other spelling is itself, its arguments read
+/// the same way.
 pub fn read_ty(t: Str) -> Str ! {} {
     let n = str_len(t)
     if n < 3 || str_byte(t, 0) == 63 { return t }
-    if str_slice(t, 0, 3) == "fn(" { return "?" }
+    if str_slice(t, 0, 3) == "fn(" {
+        let parts = fn_parts(t, 0)
+        let out = strs_new()
+        strs_push(out, read_ty(strs_get(parts, 0)))
+        let eff = strs_get(parts, 1)
+        strs_push(out, match text_find(eff, "$effects") { Some(i) => str_slice(eff, 0, i) + "%" + str_slice(eff, i + 1, str_len(eff)), None => eff })
+        for i in 2..strs_len(parts) { strs_push(out, read_ty(strs_get(parts, i))) }
+        return fn_spelling(out)
+    }
     if str_byte(t, n - 1) != 93 { return t }
     if str_byte(t, 0) == 91 {
         let semi = top_level(t, 1, n - 1, 59)

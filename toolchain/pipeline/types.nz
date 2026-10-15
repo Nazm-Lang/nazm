@@ -61,6 +61,10 @@ fn split_args(t: Str, from: Int, to: Int) -> Strs {
 }
 
 pub fn spell(t: Str) -> Spelled ! {} {
+    // A function type (`read_ty`): opaque to everything but `subst`.
+    if str_len(t) > 4 && str_slice(t, 0, 4) == "?fn(" {
+        return Spelled(kind: "unknown", head: t, module: "", name: "", args: strs_new())
+    }
     let b = open_bracket(t)
     let head = if b < 0 { t } else { str_slice(t, 0, b) }
     let args = if b < 0 { strs_new() } else { split_args(t, b + 1, str_len(t) - 1) }
@@ -148,6 +152,15 @@ pub fn tkey(t: Str) -> Str ! {} {
 /// `t` with each `$N` replaced by `args[N]`.
 pub fn subst(t: Str, args: Strs) -> Str ! {} {
     if strs_len(args) == 0 { return t }
+    if str_len(t) > 4 && str_slice(t, 0, 4) == "?fn(" {
+        if !open(t) { return t }
+        let parts = fn_parts(t, 1)
+        let out = strs_new()
+        strs_push(out, subst(strs_get(parts, 0), args))
+        strs_push(out, strs_get(parts, 1))
+        for i in 2..strs_len(parts) { strs_push(out, subst(strs_get(parts, i), args)) }
+        return fn_spelling(out)
+    }
     let s = spell(t)
     if s.kind == "param" {
         let n = match text_parse_int(str_slice(s.head, 1, str_len(s.head))) { Ok(v) => v, Err(e) => 0 - 1 }
@@ -197,6 +210,14 @@ pub fn table_new() -> TypeTable ! {} {
 /// A definition's field type `t` at the type arguments `args`: each `$?J` replaced by `args[J]`.
 fn instantiate(t: Str, args: Strs) -> Str {
     if !text_contains(t, "$?") { return t }
+    if str_len(t) > 4 && str_slice(t, 0, 4) == "?fn(" {
+        let parts = fn_parts(t, 1)
+        let out = strs_new()
+        strs_push(out, instantiate(strs_get(parts, 0), args))
+        strs_push(out, strs_get(parts, 1))
+        for i in 2..strs_len(parts) { strs_push(out, instantiate(strs_get(parts, i), args)) }
+        return fn_spelling(out)
+    }
     let s = spell(t)
     if s.kind == "param" && strs_len(s.args) == 0 {
         let n = match text_parse_int(str_slice(t, 2, str_len(t))) { Ok(v) => v, Err(e) => 0 - 1 }

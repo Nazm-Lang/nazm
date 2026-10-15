@@ -116,6 +116,13 @@ pub struct MirFn {
     foreign: Str,
     /// The C symbol `@export` also names it by, or `""`.
     export: Str,
+    /// Its module, the definition it is (or instantiates), and that definition's Core IR object
+    /// (-1 for a thunk), which LIR reads its visibility and attributes from.
+    module: Str,
+    def: Str,
+    node: Int,
+    /// A closure's code: the locals its captures arrive in.
+    captures: Ints,
     locals: Vec[LocalDecl],
     blocks: Vec[Block],
 }

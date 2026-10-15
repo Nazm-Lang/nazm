@@ -51,6 +51,14 @@
 
 ## 6. LIR
 
-- [ ] 6.1 Data layout, units, symbols, linkage
-- [ ] 6.2 Record and enum layouts
-- [ ] 6.3 Instructions (`--ops`)
+- [x] 6.1 Data layout, units, symbols, linkage (`lir.nz`, `pipeline lir`): a unit per module that
+      defines a function, then per instance; symbols from identities (`nz.m.MODULE.NAME.g.ARGS`,
+      a digest past 512 bytes); `hidden` for `pub`, reached from a generic body or an impl, an
+      instance, `main` or a function with a placing attribute; externals sorted
+- [x] 6.2 Record and enum layouts: the types each unit mentions closed over their contents, by the
+      checker's ids; canonical field and variant order, offsets, sizes, alignments, ownership;
+      names as `Types::show` writes them (`Box`/`List`/`Cell` as their `Vec`, `Chan[_]`, `fn`).
+      `run.sh` compares `pipeline lir` with `nazm lir` minus each unit's `lir` member
+      (`tests/tables.py` re-serialises byte for byte): 1009 of 1009 inputs with LIR identical
+- [ ] 6.3 Instructions (`--ops`) — needs MIR statement spans and module sources (design, *What
+      LIR needs beyond /3*)

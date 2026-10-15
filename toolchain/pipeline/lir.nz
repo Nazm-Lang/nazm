@@ -1,0 +1,612 @@
+// LIR's tables (`nazm lir`, `nazm.lir/2`): the target's data layout, and for every unit — one per
+// module that defines a function, then one per generic instance — its functions' symbols, linkage
+// and signatures, what it declares from elsewhere, and the byte layouts of the records and enums its
+// functions mention, closed over what those contain. `crates/nazm-lir/src/lower.rs`, `abi.rs`,
+// `symbol.rs` and the printer `crates/nazm-cli/src/lir.rs` are the reference; the rules are §7.82's.
+// Each unit's instruction text (`lir`) is task 6.3 and not printed yet.
+
+use "cir.nz"
+use "types.nz"
+use "mir.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/json"
+use "@std/text"
+use "@std/sort"
+use "@std/blake3"
+
+/// What the tables are computed from.
+struct Lx {
+    c: Cir,
+    tt: TypeTable,
+    p: MirProgram,
+    /// The checker's id of each record and enum spelling (`/3`'s `types`), and the next id for a
+    /// spelling it does not list (design, *What LIR needs beyond /3*).
+    rec_id: HashMap[Str, Int],
+    enum_id: HashMap[Str, Int],
+    next: Ints,
+    /// Each spelling's display name, as `/3` prints it.
+    display: HashMap[Str, Str],
+    /// Each record or enum definition's `/3` object.
+    defs: HashMap[Str, Int],
+    /// The definitions a generic body calls, and every impl method: bindable across objects.
+    from_generic: HashMap[Str, Bool],
+    /// The `MODULE|DEF` function values a generic body makes, whose thunks are too.
+    values_from_generic: HashMap[Str, Bool],
+}
+
+// --- reading /3 ---------------------------------------------------------------------------------
+
+fn read_types(lx: Lx, kind: Str, ids: HashMap[Str, Int]) {
+    let es = kid(lx.c, kid(lx.c, json_root(lx.c.doc), "types"), kind)
+    for i in 0..count(lx.c, es) {
+        let e = at(lx.c, es, i)
+        let t = tval(lx.c, e, "type")
+        if !hashmap_has(ids, t) {
+            hashmap_set(ids, t, ival(lx.c, e, "id"))
+            hashmap_set(lx.display, t, sval(lx.c, e, "display"))
+        }
+        if t == sval(lx.c, e, "definition") { hashmap_set(lx.defs, t, e) }
+        let n = ival(lx.c, e, "id") + 1
+        if kind == "records" && n > ints_get(lx.next, 0) { ints_set(lx.next, 0, n) }
+        if kind == "enums" && n > ints_get(lx.next, 1) { ints_set(lx.next, 1, n) }
+    }
+}
+
+/// What generic bodies call and make values of, walked once.
+fn generic_uses(lx: Lx, f: CirFn, n: Int) {
+    let c = lx.c
+    let kind = json_kind(c.doc, n)
+    if kind == "array" {
+        for i in 0..count(c, n) { generic_uses(lx, f, at(c, n, i)) }
+        return
+    }
+    if kind != "object" { return }
+    let o = op(c, n)
+    if o == "call" || o == "spawn" { hashmap_set(lx.from_generic, sval(c, n, "callee"), true) }
+    if o == "fn_value" { hashmap_set(lx.values_from_generic, f.module + "|" + sval(c, n, "function"), true) }
+    for i in 0..json_len(c.doc, n) {
+        match json_value_at(c.doc, n, i) {
+            Some(k) => {
+                let kk = json_kind(c.doc, k)
+                if kk == "object" || kk == "array" { generic_uses(lx, f, k); }
+            },
+            None => {},
+        }
+    }
+}
+
+fn lx_new(c: Cir, tt: TypeTable, p: MirProgram) -> Lx {
+    let next = ints_new()
+    ints_push(next, 0)
+    ints_push(next, 0)
+    let lx = Lx(c: c, tt: tt, p: p, rec_id: hashmap_new(), enum_id: hashmap_new(), next: next,
+        display: hashmap_new(), defs: hashmap_new(), from_generic: hashmap_new(), values_from_generic: hashmap_new())
+    read_types(lx, "records", lx.rec_id)
+    read_types(lx, "enums", lx.enum_id)
+    for f in c.fns {
+        if f.type_params > 0 && f.body >= 0 { generic_uses(lx, f, f.body) }
+    }
+    let rows = kid(c, json_root(c.doc), "impls")
+    for i in 0..count(c, rows) {
+        let ms = kid(c, at(c, rows, i), "methods")
+        for j in 0..count(c, ms) { hashmap_set(lx.from_generic, sval(c, at(c, ms, j), "function"), true) }
+    }
+    lx
+}
+
+/// The checker's id of a record (`rec`) or enum spelling, one past its last for a new one.
+fn type_id(lx: Lx, t: Str, rec: Bool) -> Int {
+    let ids = if rec { lx.rec_id } else { lx.enum_id }
+    match hashmap_get(ids, t) {
+        Some(i) => i,
+        None => {
+            let slot = if rec { 0 } else { 1 }
+            let i = ints_get(lx.next, slot)
+            ints_set(lx.next, slot, i + 1)
+            hashmap_set(ids, t, i)
+            i
+        },
+    }
+}
+
+// --- names --------------------------------------------------------------------------------------
+
+/// A type as the checker shows it (`Types::show`).
+fn show(lx: Lx, t: Str) -> Str {
+    match hashmap_get(lx.display, t) {
+        Some(d) => { return d },
+        None => {},
+    }
+    if str_len(t) > 4 && str_slice(t, 0, 4) == "?fn(" {
+        let parts = fn_parts(t, 1)
+        let ps = strs_new()
+        for i in 2..strs_len(parts) { strs_push(ps, show(lx, strs_get(parts, i))) }
+        return "fn(" + str_join(ps, ", ") + ") -> " + show(lx, strs_get(parts, 0)) + strs_get(parts, 1)
+    }
+    let s = spell(t)
+    if s.head == "Chan" && strs_len(s.args) > 0 { return "Chan[" + show(lx, strs_get(s.args, 0)) + "]" }
+    if s.kind == "vec" {
+        let a = strs_get(s.args, 0)
+        if s.head == "Vec" && a == "Int" { return "Ints" }
+        if s.head == "Vec" && a == "Str" { return "Strs" }
+        return s.head + "[" + show(lx, a) + "]"
+    }
+    if s.kind == "array" { return "[" + show(lx, strs_get(s.args, 0)) + "; " + strs_get(s.args, 1) + "]" }
+    if s.kind == "record" || s.kind == "enum" {
+        let base = match hashmap_get(lx.display, s.head) { Some(d) => d, None => s.name }
+        if strs_len(s.args) == 0 { return base }
+        let shown = strs_new()
+        for a in s.args { strs_push(shown, show(lx, a)) }
+        return base + "[" + str_join(shown, ", ") + "]"
+    }
+    if s.kind == "builtin" && strs_len(s.args) > 0 {
+        let shown = strs_new()
+        for a in s.args { strs_push(shown, show(lx, a)) }
+        return s.head + "[" + str_join(shown, ", ") + "]"
+    }
+    t
+}
+
+fn is_cap(t: Str) -> Bool {
+    str_len(t) > 3 && text_ends_with(t, "Cap") && !text_contains(t, "[")
+}
+
+/// LIR's machine type of a spelling, as a class: `int`, `num`, `bool`, `str`, `word` (a
+/// pointer: a sequence, a channel, a function), `record`, `enum`, `array`.
+fn class(t: Str) -> Str {
+    let s = spell(t)
+    if s.kind == "record" || s.kind == "enum" || s.kind == "array" { return s.kind }
+    if s.kind == "vec" || s.kind == "unknown" { return "word" }
+    if s.kind == "param" { return "int" }
+    if t == "Int" || t == "OsHandle" || is_cap(t) { return "int" }
+    if t == "Bool" { return "bool" }
+    if t == "Str" || t == "Bytes" || t == "Text" || t == "Atomic" { return "str" }
+    if is_num(t) { return "num" }
+    "word"
+}
+
+/// A type as `nazm lir` names it (`ty_name`).
+fn ty_name(lx: Lx, t: Str) -> Str {
+    let k = class(t)
+    let s = spell(t)
+    if k == "int" { return "Int" }
+    if k == "str" { return "Str" }
+    if k == "bool" || k == "num" { return t }
+    if s.head == "Chan" && strs_len(s.args) > 0 { return "Chan[_]" }
+    // A `Box`, `List` or `Cell` is the `Vec` of the same element, and named as it.
+    if s.kind == "vec" { return show(lx, "Vec[" + strs_get(s.args, 0) + "]") }
+    if k == "record" || k == "enum" { return show(lx, t) }
+    if k == "array" { return "[" + ty_name(lx, strs_get(s.args, 0)) + "; " + strs_get(s.args, 1) + "]" }
+    if s.kind == "unknown" { return "fn" }
+    t
+}
+
+/// What the linker calls a function: its definition's module and name, an instance's arguments.
+fn symbol_of(f: MirFn) -> Str {
+    if f.foreign != "" { return f.foreign }
+    let at = match text_find(f.def, "::fn ") { Some(i) => i, None => 0 }
+    let module = str_slice(f.def, 0, at)
+    let name = str_slice(f.def, at + 5, str_len(f.def))
+    let base = if str_len(module) > 0 && str_byte(module, 0) == 35 {
+        "nz.u." + str_slice(module, 1, str_len(module)) + "." + encode(name)
+    } else {
+        "nz.m." + encode(module) + "." + encode(name)
+    }
+    if vec_len(f.type_args) == 0 { return base }
+    let keys = strs_new()
+    for a in f.type_args { strs_push(keys, tkey(a)) }
+    let joined = str_join(keys, ",")
+    let spelled = encode(joined)
+    if str_len(spelled) <= 512 { base + ".g." + spelled } else { base + ".d." + blake3_hex(bytes_from_str(joined)) }
+}
+
+fn attribute_set(lx: Lx, f: MirFn) -> Bool {
+    if f.node < 0 { return false }
+    let a = kid(lx.c, f.node, "attributes")
+    sval(lx.c, a, "section") != "" || sval(lx.c, a, "interrupt") != "" || kid(lx.c, a, "task") >= 0 || bval(lx.c, a, "on_failure")
+}
+
+/// The definition a thunk calls: its body's one call.
+fn thunk_target(lx: Lx, f: MirFn) -> Str {
+    for b in f.blocks {
+        for s in b.stmts {
+            match s {
+                Stmt.Assign(dst: _, value: v, unwind: _) => match v {
+                    Rvalue.Call(callee: g, args: _) => { return vec_get(lx.p.fns, g).def },
+                    _ => {},
+                },
+                _ => {},
+            }
+        }
+    }
+    ""
+}
+
+fn linkage(lx: Lx, i: Int) -> Str {
+    let f = vec_get(lx.p.fns, i)
+    let exported = f.node >= 0 && bval(lx.c, f.node, "pub")
+    let from_generic = if f.node >= 0 {
+        hashmap_at_or(lx.from_generic, f.def, false)
+    } else {
+        hashmap_at_or(lx.values_from_generic, f.module + "|" + thunk_target(lx, f), false)
+    }
+    if exported || from_generic || vec_len(f.type_args) > 0 || i == lx.p.entry || attribute_set(lx, f) { "hidden" } else { "internal" }
+}
+
+// --- layout -------------------------------------------------------------------------------------
+
+/// A size and an alignment.
+struct Lay {
+    size: Int,
+    align: Int,
+}
+
+fn round(n: Int, align: Int) -> Int {
+    if align <= 1 { n } else { (n + align - 1) / align * align }
+}
+
+fn num_bits(t: Str) -> Int {
+    if t == "Int8" || t == "UInt8" { 8 } else if t == "Int16" || t == "UInt16" { 16 } else if t == "Int32" || t == "UInt32" || t == "Float32" { 32 } else if t == "Int128" || t == "UInt128" { 128 } else { 64 }
+}
+
+/// A canonical order (`/3`'s `canonical` under `n`), as declaration indices.
+fn canonical(lx: Lx, n: Int) -> Ints {
+    let out = ints_new()
+    let xs = kid(lx.c, n, "canonical")
+    for i in 0..count(lx.c, xs) { ints_push(out, int_of(lx.c, at(lx.c, xs, i))) }
+    out
+}
+
+fn def_node(lx: Lx, t: Str) -> Int {
+    match hashmap_get(lx.defs, spell(t).head) { Some(n) => n, None => 0 - 1 }
+}
+
+/// A record's field types, in canonical order.
+fn record_fields(lx: Lx, t: Str) -> Strs {
+    let out = strs_new()
+    for d in ints_iter_of(canonical(lx, def_node(lx, t))) { strs_push(out, field_ty(lx.tt, t, int_to_str(d))) }
+    out
+}
+
+fn ints_iter_of(xs: Ints) -> Vec[Int] {
+    let out: Vec[Int] = vec_new()
+    for i in 0..ints_len(xs) { vec_push(out, ints_get(xs, i)) }
+    out
+}
+
+/// An enum's variants in canonical order: each its declaration index.
+fn enum_variants(lx: Lx, t: Str) -> Ints {
+    canonical(lx, def_node(lx, t))
+}
+
+/// Variant `v`'s field types, in its canonical order.
+fn variant_fields(lx: Lx, t: Str, v: Int) -> Strs {
+    let out = strs_new()
+    let vn = at(lx.c, kid(lx.c, def_node(lx, t), "variants"), v)
+    for d in ints_iter_of(canonical(lx, vn)) { strs_push(out, field_ty(lx.tt, t, int_to_str(v) + "." + int_to_str(d))) }
+    out
+}
+
+fn variant_name(lx: Lx, t: Str, v: Int) -> Str {
+    sval(lx.c, at(lx.c, kid(lx.c, def_node(lx, t), "variants"), v), "name")
+}
+
+/// Offsets of `fields` laid out in order, then the whole's size and alignment.
+fn structure(lx: Lx, fields: Strs) -> Ints {
+    let out = ints_new()
+    let mut off = 0
+    let mut align = 1
+    for f in fields {
+        let l = lay(lx, f)
+        off = round(off, l.align)
+        ints_push(out, off)
+        off += l.size
+        if l.align > align { align = l.align }
+    }
+    ints_push(out, round(off, align))
+    ints_push(out, align)
+    out
+}
+
+fn lay(lx: Lx, t: Str) -> Lay {
+    let k = class(t)
+    if k == "int" || k == "word" { return Lay(size: 8, align: 8) }
+    if k == "bool" { return Lay(size: 1, align: 1) }
+    if k == "str" { return Lay(size: 24, align: 8) }
+    if k == "num" {
+        let b = num_bits(t) / 8
+        return Lay(size: b, align: if b < 8 { b } else { 8 })
+    }
+    if k == "array" {
+        let s = spell(t)
+        let e = lay(lx, strs_get(s.args, 0))
+        let n = match text_parse_int(strs_get(s.args, 1)) { Ok(v) => v, Err(e) => 0 }
+        return Lay(size: e.size * n, align: e.align)
+    }
+    if k == "record" {
+        let st = structure(lx, record_fields(lx, t))
+        let n = ints_len(st)
+        return Lay(size: ints_get(st, n - 2), align: ints_get(st, n - 1))
+    }
+    let mut area = 0
+    let mut align = 8
+    for v in ints_iter_of(enum_variants(lx, t)) {
+        let st = structure(lx, variant_fields(lx, t, v))
+        let n = ints_len(st)
+        if ints_get(st, n - 2) > area { area = ints_get(st, n - 2) }
+        if ints_get(st, n - 1) > align { align = ints_get(st, n - 1) }
+    }
+    Lay(size: round(8 + area, align), align: align)
+}
+
+/// Whether a value of `t` owns anything a drop gives back.
+fn owns(lx: Lx, t: Str, depth: Int) -> Bool {
+    if depth > 64 { return true }
+    let k = class(t)
+    if k == "int" || k == "bool" || k == "num" { return false }
+    if k == "array" { return owns(lx, strs_get(spell(t).args, 0), depth + 1) }
+    if k == "record" {
+        for f in fields_of(lx.tt, t) { if owns(lx, f, depth + 1) { return true } }
+        return false
+    }
+    if k == "enum" {
+        let nv = count(lx.c, kid(lx.c, def_node(lx, t), "variants"))
+        for v in 0..nv {
+            for f in variant_fields(lx, t, v) { if owns(lx, f, depth + 1) { return true } }
+        }
+        return false
+    }
+    true
+}
+
+// --- JSON ---------------------------------------------------------------------------------------
+
+/// `s` as a JSON string, as `serde_json` writes it.
+fn js(s: Str) -> Str {
+    let parts = strs_new()
+    strs_push(parts, "\"")
+    let mut start = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        let esc = if b == 34 { "\\\"" } else if b == 92 { "\\\\" } else if b == 10 { "\\n" } else if b == 13 { "\\r" } else if b == 9 { "\\t" } else if b == 8 { "\\b" } else if b == 12 { "\\f" } else if b < 32 { "\\u00" + hex_byte(b) } else { "" }
+        if esc != "" {
+            strs_push(parts, str_slice(s, start, i))
+            strs_push(parts, esc)
+            start = i + 1
+        }
+    }
+    strs_push(parts, str_slice(s, start, str_len(s)))
+    strs_push(parts, "\"")
+    str_join(parts, "")
+}
+
+fn hex_byte(b: Int) -> Str {
+    let digits = "0123456789abcdef"
+    str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1)
+}
+
+fn fields_json(lx: Lx, fields: Strs) -> Str {
+    let st = structure(lx, fields)
+    let out = strs_new()
+    for i in 0..strs_len(fields) {
+        strs_push(out, "{\"offset\":" + int_to_str(ints_get(st, i)) + ",\"type\":" + js(ty_name(lx, strs_get(fields, i))) + "}")
+    }
+    "[" + str_join(out, ",") + "]"
+}
+
+fn record_json(lx: Lx, t: Str) -> Str {
+    let fs = record_fields(lx, t)
+    let st = structure(lx, fs)
+    let n = ints_len(st)
+    "{\"align\":" + int_to_str(ints_get(st, n - 1)) + ",\"fields\":" + fields_json(lx, fs) + ",\"name\":" + js(show(lx, t))
+        + ",\"owns\":" + (if owns(lx, t, 0) { "true" } else { "false" }) + ",\"size\":" + int_to_str(ints_get(st, n - 2)) + "}"
+}
+
+fn enum_json(lx: Lx, t: Str) -> Str {
+    let l = lay(lx, t)
+    let vs = strs_new()
+    for v in ints_iter_of(enum_variants(lx, t)) {
+        let fs = variant_fields(lx, t, v)
+        let st = structure(lx, fs)
+        let n = ints_len(st)
+        strs_push(vs, "{\"align\":" + int_to_str(ints_get(st, n - 1)) + ",\"fields\":" + fields_json(lx, fs) + ",\"name\":" + js(variant_name(lx, t, v)) + ",\"size\":" + int_to_str(ints_get(st, n - 2)) + "}")
+    }
+    "{\"align\":" + int_to_str(l.align) + ",\"name\":" + js(show(lx, t)) + ",\"owns\":" + (if owns(lx, t, 0) { "true" } else { "false" })
+        + ",\"payload\":8,\"size\":" + int_to_str(l.size) + ",\"tag\":0,\"variants\":[" + str_join(vs, ",") + "]}"
+}
+
+// --- units --------------------------------------------------------------------------------------
+
+fn params_of(f: MirFn) -> Strs {
+    let out = strs_new()
+    for i in 0..f.params { strs_push(out, vec_get(f.locals, i).ty) }
+    out
+}
+
+/// The types a closure's code carries in its closure object.
+fn closure_types(f: MirFn) -> Strs {
+    let out = strs_new()
+    for i in 0..ints_len(f.captures) { strs_push(out, vec_get(f.locals, ints_get(f.captures, i)).ty) }
+    out
+}
+
+fn note_rvalue(v: Rvalue, used: Strs, lx: Lx) {
+    match v {
+        Rvalue.Record(ty: t, fields: _, names: _, locals: _) => strs_push(used, t),
+        Rvalue.Variant(ty: t, variant: _, vname: _, fields: _, names: _, locals: _) => strs_push(used, t),
+        Rvalue.Payload(base: _, ty: t, variant: _, vname: _, field: _, fname: _) => strs_push(used, t),
+        Rvalue.Field(base: _, f: r) => strs_push(used, r.rec),
+        Rvalue.FieldBorrow(base: _, f: r) => strs_push(used, r.rec),
+        Rvalue.Primitive(op: _, elem: e, args: _) => { if e != "" { strs_push(used, e) } },
+        Rvalue.Compare(op: _, law: _, operand: t, a: _, b: _) => strs_push(used, t),
+        Rvalue.Hash(operand: t, value: _) => strs_push(used, t),
+        Rvalue.Closure(func: g, captures: _) => { for t in closure_types(vec_get(lx.p.fns, g)) { strs_push(used, t) } },
+        _ => {},
+    }
+}
+
+fn callees_of(f: MirFn) -> Ints {
+    let out = ints_new()
+    for b in f.blocks {
+        for s in b.stmts {
+            match s {
+                Stmt.Assign(dst: _, value: v, unwind: _) => match v {
+                    Rvalue.Call(callee: g, args: _) => ints_push(out, g),
+                    Rvalue.Closure(func: g, captures: _) => ints_push(out, g),
+                    _ => {},
+                },
+                Stmt.Spawn(list: _, callee: g, args: _, unwind: _) => ints_push(out, g),
+                _ => {},
+            }
+        }
+    }
+    out
+}
+
+fn has(xs: Ints, x: Int) -> Bool {
+    for i in 0..ints_len(xs) { if ints_get(xs, i) == x { return true } }
+    false
+}
+
+/// One unit: `fns` (MIR positions), the module whose source names it, whether it owns that
+/// module's definitions.
+fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool) -> Str {
+    let used = strs_new()
+    let externals = strs_new()
+    for i in 0..ints_len(fns) {
+        let f = vec_get(lx.p.fns, ints_get(fns, i))
+        strs_push(used, f.ret)
+        for l in f.locals { if l.ty != "Tasks" { strs_push(used, l.ty) } }
+        for b in f.blocks {
+            for s in b.stmts {
+                match s {
+                    Stmt.Assign(dst: _, value: v, unwind: _) => { note_rvalue(v, used, lx); },
+                    _ => {},
+                }
+            }
+            if vec_len(b.term) > 0 {
+                match vec_get(b.term, 0) {
+                    Term.Switch(scrutinee: _, ty: t, variants: _, names: _, blocks: _) => strs_push(used, t),
+                    _ => {},
+                }
+            }
+        }
+        let cs = callees_of(f)
+        for j in 0..ints_len(cs) {
+            let gi = ints_get(cs, j)
+            let g = vec_get(lx.p.fns, gi)
+            let instance = vec_len(g.type_args) > 0
+            let foreign = g.foreign != ""
+            let mine = owns_module && g.module == module && !instance && !foreign
+            if !mine && (foreign || !has(fns, gi)) {
+                strs_push(used, g.ret)
+                for t in params_of(g) { strs_push(used, t) }
+                let x = "{\"foreign\":" + (if foreign { "true" } else { "false" }) + ",\"symbol\":" + js(symbol_of(g)) + "}"
+                let mut seen = false
+                for e in externals { if e == x { seen = true } }
+                if !seen { strs_push(externals, x) }
+            }
+        }
+    }
+    // The types the unit mentions, closed over what they contain.
+    let recs: HashMap[Str, Bool] = hashmap_new()
+    let enums: HashMap[Str, Bool] = hashmap_new()
+    let seen: HashMap[Str, Bool] = hashmap_new()
+    while strs_len(used) > 0 {
+        let t = strs_pop(used)
+        if !hashmap_has(seen, t) {
+            hashmap_set(seen, t, true)
+            let s = spell(t)
+            if s.kind == "record" {
+                hashmap_set(recs, t, true)
+                for x in fields_of(lx.tt, t) { strs_push(used, x) }
+            } else if s.kind == "enum" {
+                hashmap_set(enums, t, true)
+                for x in fields_of(lx.tt, t) { strs_push(used, x) }
+            } else if s.kind == "vec" || s.kind == "array" || (s.head == "Chan" && strs_len(s.args) > 0) {
+                strs_push(used, strs_get(s.args, 0))
+            }
+        }
+    }
+    let functions = strs_new()
+    for i in 0..ints_len(fns) {
+        let fi = ints_get(fns, i)
+        let f = vec_get(lx.p.fns, fi)
+        let ps = strs_new()
+        for t in params_of(f) { strs_push(ps, js(ty_name(lx, t))) }
+        strs_push(functions, "{\"linkage\":\"" + linkage(lx, fi) + "\",\"params\":[" + str_join(ps, ",") + "],\"ret\":" + js(ty_name(lx, f.ret)) + ",\"symbol\":" + js(symbol_of(f)) + "}")
+    }
+    "{\"artefact\":\"" + artefact + "\",\"enums\":[" + by_id(lx, enums, false) + "],\"externals\":[" + str_join(sorted_externals(externals), ",")
+        + "],\"functions\":[" + str_join(functions, ",") + "],\"instance\":" + (if owns_module { "false" } else { "true" })
+        + ",\"records\":[" + by_id(lx, recs, true) + "],\"source\":" + js(module) + "}"
+}
+
+/// Externals sorted by symbol (each is `{"foreign":…,"symbol":"…"}`, so by the text after it).
+fn sorted_externals(xs: Strs) -> Strs {
+    let keyed = strs_new()
+    for x in xs {
+        let at = match text_find(x, "\"symbol\":") { Some(i) => i, None => 0 }
+        strs_push(keyed, str_slice(x, at, str_len(x)) + "\t" + x)
+    }
+    let out = strs_new()
+    for k in strs_sort(keyed) {
+        let at = match text_find(k, "\t") { Some(i) => i + 1, None => 0 }
+        strs_push(out, str_slice(k, at, str_len(k)))
+    }
+    out
+}
+
+/// The records (or enums) of `set`, by the checker's id, as JSON.
+fn by_id(lx: Lx, set: HashMap[Str, Bool], rec: Bool) -> Str {
+    let ts: Vec[Str] = hashmap_keys(set)
+    let ids = ints_new()
+    for t in ts { ints_push(ids, type_id(lx, t, rec)) }
+    let out = strs_new()
+    let done = ints_new()
+    for k in 0..vec_len(ts) {
+        let mut best = 0 - 1
+        for i in 0..vec_len(ts) {
+            if !has(done, i) && (best < 0 || ints_get(ids, i) < ints_get(ids, best)) { best = i }
+        }
+        ints_push(done, best)
+        let t = vec_get(ts, best)
+        strs_push(out, if rec { record_json(lx, t) } else { enum_json(lx, t) })
+    }
+    str_join(out, ",")
+}
+
+/// `nazm lir`'s tables for the program, every unit's instruction text left out.
+pub fn lir_tables(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Str, Str] ! {} {
+    let lx = lx_new(c, tt, p)
+    if p.entry < 0 { return Err("this program has no `main` to compile") }
+    let units = strs_new()
+    let mut m = 0
+    let mods = kid(c, json_root(c.doc), "modules")
+    for i in 0..count(c, mods) {
+        let name = sval(c, at(c, mods, i), "name")
+        let mut defines = false
+        for f in c.fns { if f.module == name { defines = true } }
+        if defines {
+            let fns = ints_new()
+            for j in 0..vec_len(p.fns) {
+                let f = vec_get(p.fns, j)
+                if f.module == name && vec_len(f.type_args) == 0 && f.foreign == "" { ints_push(fns, j) }
+            }
+            strs_push(units, unit_json(lx, "m" + int_to_str(m), fns, name, true))
+            m += 1
+        }
+    }
+    let mut g = 0
+    for j in 0..vec_len(p.fns) {
+        let f = vec_get(p.fns, j)
+        if vec_len(f.type_args) > 0 {
+            let fns = ints_new()
+            ints_push(fns, j)
+            strs_push(units, unit_json(lx, "g" + int_to_str(g), fns, f.module, false))
+            g += 1
+        }
+    }
+    let layout = "{\"bool\":1,\"int\":8,\"pointer\":8,\"str\":{\"align\":8,\"length\":8,\"owner\":16,\"pointer\":0,\"size\":24}}"
+    Ok("{\"data_layout\":" + layout + ",\"entry\":" + js(symbol_of(vec_get(p.fns, p.entry))) + ",\"schema\":\"nazm.lir/2\",\"target\":\"aarch64-apple-darwin\",\"units\":[" + str_join(units, ",") + "]}")
+}
