@@ -5071,6 +5071,19 @@ returns null or a status, and the call site records `N0406`. Each release decrem
 zero; a count never underflows because MIR's validator proves every owned value is released
 exactly once (§7.42).
 
+**The counted heap renames by name** (R1d, `nazm build --heap-limit`; `crates/nazm-runtime/src/heap.rs`).
+Every unit but the stack unit has its `malloc`, `realloc` and `free` made `nz.heap_malloc`,
+`nz.heap_realloc` and `nz.heap_free`, each block behind a 16-byte header. That holds only while
+every buffer the runtime frees is one the runtime allocated, so **the runtime never asks the C
+library to allocate for it**: no `strdup`, `getline`, `scandir` or the like (`heap::C_ALLOCATING`),
+and `realpath`, `getcwd` and their Windows forms always get a buffer of the runtime's
+(`heap::C_ALLOCATING_ON_NULL`) — `nz_os_realpath` passes a 4096-byte buffer on its frame. What C
+allocates and releases itself (`getaddrinfo` and `freeaddrinfo`, `opendir` and `closedir`) stays C's
+on both sides. Before 2026-10-15 `nz_os_realpath` let `realpath` allocate and freed the answer, so a
+program built with a limit that called `file_canonical` handed `nz.heap_free` a block with no header
+and ended with SIGTRAP (status 133); `heap.rs`'s
+`the_runtime_never_frees_what_the_c_library_allocated` holds every target's text to the rule.
+
 **Thread safety, before N44.** String backings' and channels' counts are atomic (`monotonic` up,
 `release` down with an `acquire` fence before freeing), because both may be shared between
 tasks. Sequence counts are not atomic and need not be: a sequence may not cross into a task

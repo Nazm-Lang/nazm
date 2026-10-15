@@ -413,7 +413,10 @@ entry:
 ///   i64s at `out`, a final link not followed; 0, or -1 with errno set.
 /// - `nz_os_chmod(path, mode) -> i32`: 0, or -1 with errno set.
 /// - `nz_os_realpath(path, out, cap) -> i64`: the canonical path's length, copied to `out` when
-///   it fits in `cap` bytes; or -1 with errno set.
+///   it fits in `cap` bytes; or -1 with errno set. `realpath` writes into a `PATH_MAX` buffer on
+///   this frame (4096 bytes, Linux's `PATH_MAX`; Darwin's is 1024) and never allocates: a buffer
+///   C allocated and the runtime freed would meet the counted heap's `free` under `--heap-limit`
+///   ([`crate::heap::C_ALLOCATING`]).
 /// - `nz_os_flock(fd, op) -> i32`: `flock`'s operation — 1 shared, 2 exclusive, 8 unlocked, 4 not
 ///   waiting — the same numbers on every POSIX target; 0, or -1 with errno set.
 const POSIX_FS_CALLS: &str = r"
@@ -421,7 +424,6 @@ declare i32 @{LSTAT}(ptr, ptr)
 declare i32 @chmod(ptr, {MODE_TY})
 declare ptr @realpath(ptr, ptr)
 declare i32 @flock(i32, i32)
-declare void @free(ptr)
 
 define hidden i32 @nz_os_lstat(ptr %path, ptr %out) {
 entry:
@@ -477,20 +479,20 @@ entry:
 
 define hidden i64 @nz_os_realpath(ptr %path, ptr %out, i64 %cap) {
 entry:
-  %r = call ptr @realpath(ptr %path, ptr null)
+  %buf = alloca [4096 x i8], align 16
+  %r = call ptr @realpath(ptr %path, ptr %buf)
   %none = icmp eq ptr %r, null
   br i1 %none, label %fail, label %got
 fail:
   ret i64 -1
 got:
-  %n = call i64 @strlen(ptr %r)
+  %n = call i64 @strlen(ptr %buf)
   %fits = icmp sle i64 %n, %cap
   br i1 %fits, label %copy, label %done
 copy:
-  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %r, i64 %n, i1 false)
+  call void @llvm.memcpy.p0.p0.i64(ptr %out, ptr %buf, i64 %n, i1 false)
   br label %done
 done:
-  call void @free(ptr %r)
   ret i64 %n
 }
 
