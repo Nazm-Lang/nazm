@@ -343,6 +343,11 @@
         made as the reference makes them. `run.sh core`: 3,048 inputs agree, 0 differ; of 56,772
         functions the lowering carries 44,910, all agree; the other parts 10,374, all agree; 949
         whole documents, all the reference's bytes
+  - [x] `?` (`propagate`): a `match` of origin `propagate` on a `Result` or an `Option`, its
+        success's payload held in `temp ok`, its failure's in `temp err` and returned rebuilt in
+        the function's own type. `run.sh core`: 3,048 agree, 0 differ; of 56,791 functions the
+        lowering carries 45,712, all agree; the other parts 10,374, all agree; 964 whole
+        documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
