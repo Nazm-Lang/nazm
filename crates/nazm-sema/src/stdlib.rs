@@ -65,8 +65,11 @@ pub const MODULES: &[(&str, &str)] = &[
 ];
 
 /// The standard modules the prelude imports into each module of a program (R1.5, D9), by name:
-/// a module that names one of their items sees them without a `use`.
-pub const PRELUDE: &[&str] = &["hash", "hashmap", "ordmap", "sort", "text"];
+/// a module that names one of their items sees them without a `use`. `option` and `result`
+/// joined them in 4.5, so `r.unwrap_or(1)` needs no `use`.
+pub const PRELUDE: &[&str] = &[
+    "hash", "hashmap", "option", "ordmap", "result", "sort", "text",
+];
 
 /// The standard module an import path names, if it names one: its name and its source.
 #[must_use]

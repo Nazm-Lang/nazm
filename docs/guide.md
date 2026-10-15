@@ -46,9 +46,9 @@ caller's: `fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file
 A function that declares `! {}` is pure, and a profile such as `critical` or `cyber` refuses any
 function that declares nothing. Reach for the standard library before writing helpers —
 `@std/text` gives `text_split`, `text_trim` and `text_parse_int`, which returns a `Result`
-rather than failing; in your own program `@std/text`, `@std/hashmap`, `@std/hash`, `@std/ordmap`
-and `@std/sort` need no `use` — naming one of their functions, or calling `s.split(" ")` or
-`counts.top(10)`, is enough (R1.5, D9) — while a package's modules write theirs. A program that grows past one directory becomes a package: a `nazm.toml`
+rather than failing; in your own program `@std/text`, `@std/hashmap`, `@std/hash`, `@std/ordmap`,
+`@std/sort`, `@std/option` and `@std/result` need no `use` — naming one of their functions, or calling `s.split(" ")`,
+`counts.top(10)` or `r.unwrap_or(0)`, is enough (R1.5, D9, 4.5) — while a package's modules write theirs. A program that grows past one directory becomes a package: a `nazm.toml`
 beside `src/`, dependencies as `use "NAME:path.nz";`, and `nazm lock` before a `--locked` build.
 `nazm build --debug` makes a program a debugger can stop in, `nazm build --timings` says where a
 build's time went, and `nazm inspect` prints everything the compiler knows about a program.
@@ -356,9 +356,9 @@ fn first_or(xs: Vec[Int], fallback: Int) -> Int {
 }
 ```
 
-Neither has methods: the prelude gives them no impls, and an impl for a generic type is
-refused. `@std/option` and `@std/result` offer functions instead — `option_unwrap_or`,
-`result_ok` and the like — and there is no `map` on either. Runtime failures such as an index
+The prelude gives neither an impl. `@std/option` and `@std/result` offer functions —
+`option_unwrap_or`, `result_ok` and the like — which read as methods by name, `o.unwrap_or(0)`,
+`r.ok()`, and in your own program need no `use` (R1.5, 4.5); there is no `map` on either. Runtime failures such as an index
 out of bounds are still runtime failures, not `Err` values.
 
 ## Effects and capabilities

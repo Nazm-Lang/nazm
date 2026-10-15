@@ -592,25 +592,9 @@ fn prelude_named(
     written: &[&str],
 ) -> Vec<&'static str> {
     let table = prelude_table();
-    let (tokens, _) = nazm_core::__syntax::lex(text);
-    let mut idents: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let mut methods: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for (n, t) in tokens.iter().enumerate() {
-        if let nazm_core::__syntax::TokenKind::Ident(name) = &t.kind {
-            idents.insert(name.as_str());
-            // `x.m(`: a field read, `p.first`, names no method.
-            let after_dot = n > 0
-                && tokens
-                    .get(n - 1)
-                    .is_some_and(|p| p.kind == nazm_core::__syntax::TokenKind::Dot);
-            let called = tokens
-                .get(n + 1)
-                .is_some_and(|p| p.kind == nazm_core::__syntax::TokenKind::LParen);
-            if after_dot && called {
-                methods.insert(name.as_str());
-            }
-        }
-    }
+    let mut idents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut methods: std::collections::HashSet<String> = std::collections::HashSet::new();
+    named_in(text, &mut idents, &mut methods);
     // Calls the parser wrote for a form (a map literal's `hashmap_single`).
     let called: Vec<&str> = program
         .functions
@@ -624,8 +608,8 @@ fn prelude_named(
             || entry
                 .names
                 .iter()
-                .any(|n| idents.contains(n.as_str()) || called.contains(&n.as_str()))
-            || entry.methods.iter().any(|m| methods.contains(m.as_str()));
+                .any(|n| idents.contains(n) || called.contains(&n.as_str()))
+            || entry.methods.iter().any(|m| methods.contains(m));
         if named {
             wanted.push(entry.name);
         }
@@ -647,6 +631,42 @@ fn prelude_named(
         .copied()
         .filter(|n| wanted.contains(n) && !written.contains(n))
         .collect()
+}
+
+/// The identifiers `text` names, and the methods it calls (`x.m(`), into `idents` and
+/// `methods` — the holes of an interpolated string's too, which the lexer keeps as text: a
+/// program whose only `split` is in `f"{s.split(" ").len()}"` names `@std/text` (4.5).
+fn named_in(
+    text: &str,
+    idents: &mut std::collections::HashSet<String>,
+    methods: &mut std::collections::HashSet<String>,
+) {
+    use nazm_core::__syntax::{FPiece, TokenKind};
+    let (tokens, _) = nazm_core::__syntax::lex(text);
+    for (n, t) in tokens.iter().enumerate() {
+        match &t.kind {
+            TokenKind::Ident(name) => {
+                idents.insert(name.clone());
+                // `x.m(`: a field read, `p.first`, names no method.
+                let after_dot =
+                    n > 0 && tokens.get(n - 1).is_some_and(|p| p.kind == TokenKind::Dot);
+                let called = tokens
+                    .get(n + 1)
+                    .is_some_and(|p| p.kind == TokenKind::LParen);
+                if after_dot && called {
+                    methods.insert(name.clone());
+                }
+            }
+            TokenKind::FStr(pieces) => {
+                for piece in pieces {
+                    if let FPiece::Hole { text, .. } = piece {
+                        named_in(text, idents, methods);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// One prelude module, as [`prelude_named`] looks for it.

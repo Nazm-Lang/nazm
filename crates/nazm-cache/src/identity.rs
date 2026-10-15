@@ -385,7 +385,10 @@ use crate::digest::{self, Framed};
 /// `85` — R1.5, 2026-10-15. The prelude imports `@std/hash`, `@std/hashmap`, `@std/ordmap`,
 /// `@std/sort` and `@std/text` into a program module that names one of their items (D9): a call of
 /// `text_split` or `s.split(…)` with no `use` moved from refused (`N0201`, `N0605`) to accepted.
-pub const SEMANTIC_EPOCH: u32 = 85;
+/// `86` — R1.5, 2026-10-15. `@std/option` and `@std/result` joined the prelude's standard
+/// modules (4.5): `r.unwrap_or(1)` or `o.is_some()` with no `use` moved from refused (`N0605`) to
+/// accepted.
+pub const SEMANTIC_EPOCH: u32 = 86;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

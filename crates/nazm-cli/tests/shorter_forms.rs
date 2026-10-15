@@ -11,6 +11,7 @@
 //! D8 — printing in your own program's functions without passing `out`.
 //! D9 — the prelude's standard modules, imported where a program's module names them.
 //! D10 — `m.top(n)` and `m.sort_by(less)` on maps.
+//! 4.5 — `@std/option` and `@std/result` among D9's prelude modules: `r.unwrap_or(1)` with no `use`.
 
 #![allow(
     clippy::unwrap_used,
@@ -665,6 +666,70 @@ fn a_package_s_module_imports_only_what_it_writes() {
     assert!(
         !r.stderr.contains("main.nz"),
         "and the program's `split` is not: {r:?}"
+    );
+}
+
+#[test]
+fn option_and_result_methods_need_no_use_everywhere() {
+    // 4.5: `@std/option` and `@std/result` are prelude modules, attached where a method of
+    // theirs is called; `unwrap_or` names both, and the receiver's type picks the function.
+    differential::agrees(
+        "fn parse(s: Str): Result[Int, Str] {
+    if s == \"x\" { Err(\"bad\") } else { Ok(5) }
+}
+
+fn main() {
+    let r = parse(\"x\")
+    let o: Option[Int] = None
+    println(f\"{r.unwrap_or(1)} {o.unwrap_or(0)} {parse(\"y\").unwrap_or(1)}\")
+    println(f\"{r.is_err()} {r.is_ok()} {o.is_none()} {parse(\"y\").ok().is_some()}\")
+    println(option_unwrap_or(r.err(), \"none\"))
+}
+",
+        "1 0 5\ntrue false true true\nbad\n0",
+    );
+}
+
+#[test]
+fn a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named() {
+    // 4.5: a module's own `option_unwrap_or` is what `o.unwrap_or` calls, and a method called
+    // only in an interpolation's hole still names its module; the two modules are pure, so
+    // `--profile embedded` accepts a program that names them.
+    differential::agrees(
+        "fn option_unwrap_or(o: Option[Int], fallback: Int): Int = 42
+
+fn main() {
+    let o: Option[Int] = None
+    let r: Result[Int, Int] = Err(2)
+    println(f\"{o.unwrap_or(0)} {r.unwrap_or(3)}\")
+}
+",
+        "42 3\n0",
+    );
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main(): Int {\n    let o: Option[Int] = None\n    o.unwrap_or(3)\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "--profile", "embedded", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    // `unwrap_or` names both modules; `is_none` only `@std/option`.
+    let r = nazm(d.path(), &["inspect", "p.nz"]);
+    assert!(
+        r.stdout.contains("@std/result::fn result_unwrap_or"),
+        "{r:?}"
+    );
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main(): Int {\n    let o: Option[Int] = None\n    if o.is_none() { 3 } else { 4 }\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["inspect", "p.nz"]);
+    assert!(r.stdout.contains("@std/option::fn option_is_none"), "{r:?}");
+    assert!(
+        !r.stdout.contains("@std/result"),
+        "only what is named: {r:?}"
     );
 }
 
