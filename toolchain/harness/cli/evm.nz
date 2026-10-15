@@ -1,0 +1,151 @@
+// N70: the EVM backend — the contract model as bytecode. On any host: selectors from the compiler's
+// keccak of each `int64` signature, storage slots from each field's name, a static gas bound for
+// every loop-free entrypoint and none for one with a loop, the same bytes twice; a construct the
+// backend does not emit refused before emission (`N0399`); the upgrade check. The py-evm run is
+// `#[ignore]`d in Rust and stays there (design decision 10). Ported from
+// `crates/nazm-cli/tests/evm.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const TOKEN: Str = "pub struct State { owner: Int, alice: Int, bob: Int, supply: Int, paused: Bool }\nfn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, supply: 100, paused: false) }\nfn conserved(s: State) -> Int ! {} { s.alice + s.bob }\npub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    if s.paused { return Result[State, Int].Err(error: 3); }\n    if amount <= 0 { return Result[State, Int].Err(error: 1); }\n    if caller == 1 {\n        if s.alice < amount { return Result[State, Int].Err(error: 2); }\n        Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n    } else {\n        if s.bob < amount { return Result[State, Int].Err(error: 2); }\n        Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + amount, bob: s.bob - amount, supply: s.supply, paused: s.paused))\n    }\n}\npub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {\n    if caller != s.owner { return Result[State, Int].Err(error: 4); }\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, supply: s.supply, paused: on == 1))\n}\npub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n}\nfn fee(amount: Int) -> Int ! {} { let mut f = 0; let mut i = 0; while i < amount { f = f + 1; i = i + 10; } f }\npub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    let f = fee(amount);\n    if caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))\n}\nfn bonus() -> Int ! {} { let mut b = 0; let mut i = 0; while i < 8 { b = b + i; i = i + 1; } b }\npub fn rebate(s: State, caller: Int) -> Result[State, Int] ! {} {\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + bonus(), supply: s.supply, paused: s.paused))\n}\npub fn arith(s: State, caller: Int, a: Int, b: Int) -> Result[State, Int] ! {} {\n    let q = a / b;\n    let r = a % b;\n    let n = -a;\n    Result[State, Int].Err(error: q * 1000000 + r * 1000 + n)\n}\nfn main() -> Int ! {} { 0 }\n";
+
+fn json_of(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    match jparse(o.stdout) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {o.stdout}{o.stderr}"),
+    }
+}
+
+fn read_json(h: Caps, path: Str) -> Result[JsonDoc, Str] ! { io } {
+    jparse(read_text(h, path)?)
+}
+
+/// The index of the entrypoint `name` in `abi.json`, or -1.
+fn entry(abi: JsonDoc, name: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < jlen(abi, "entrypoints") {
+        if jstr(abi, f"entrypoints/{i}/name") == name {
+            return f"entrypoints/{i}";
+        }
+        i = i + 1;
+    }
+    "entrypoints/missing"
+}
+
+fn hex_digit_value(b: Int) -> Int ! {} {
+    if b >= 48 && b <= 57 { b - 48 } else { if b >= 97 && b <= 102 { b - 87 } else { b - 55 } }
+}
+
+@test
+fn the_backend_writes_selectors_slots_and_gas_bounds_the_same_twice(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "c.nz", TOKEN)?;
+    let o = nazm(h, d, words("contract c.nz --evm out"));
+    check_that(o.code == 0, o.stderr)?;
+    check_that(jstr(json_of(o)?, "schema") == "nazm.evm/1", o.stdout)?;
+    let abi = read_json(h, f"{d}/out/abi.json")?;
+    check_that(jstr(abi, f"{entry(abi, "transfer")}/signature") == "transfer(int64)", jv(abi, ""))?;
+    check_that(jstr(abi, f"{entry(abi, "arith")}/signature") == "arith(int64,int64)", jv(abi, ""))?;
+    // Selectors are keccak-256, the compiler's own: six distinct, of four bytes each.
+    let selectors = strs_new();
+    let mut i = 0;
+    while i < jlen(abi, "entrypoints") {
+        let s = jstr(abi, f"entrypoints/{i}/selector");
+        check_that(str_len(s) == 8, s)?;
+        check_that(!strs_has(selectors, s), f"{s} twice")?;
+        strs_push(selectors, s);
+        i = i + 1;
+    }
+    check_that(strs_len(selectors) == 6, jv(abi, ""))?;
+    // Pinned against `eth_hash`'s keccak in `nazm-evm:n70`.
+    check_that(jstr(abi, f"{entry(abi, "transfer")}/selector") == "10022b66", jv(abi, ""))?;
+    check_that(jstr(abi, f"{entry(abi, "arith")}/selector") == "5faab410", jv(abi, ""))?;
+    // Loop-free entrypoints have a bound; one that calls a helper with a parameter-bound loop has
+    // none; one in the counted form (Gate 3) states it.
+    check_that(jint(abi, f"{entry(abi, "transfer")}/gas_bound") > 20000, jv(abi, ""))?;
+    check_that(jv(abi, f"{entry(abi, "charged")}/gas_bound") == "null", jv(abi, ""))?;
+    check_that(jint(abi, f"{entry(abi, "rebate")}/gas_bound") > 0, jv(abi, ""))?;
+    let storage = read_json(h, f"{d}/out/storage.json")?;
+    check_that(jstr(storage, "schema") == "nazm.evm-storage/1", jv(storage, ""))?;
+    let names = strs_new();
+    let mut k = 0;
+    while k < jlen(storage, "fields") {
+        strs_push(names, jstr(storage, f"fields/{k}/name"));
+        k = k + 1;
+    }
+    check_that(str_join(names, ",") == "owner,alice,bob,supply,paused", str_join(names, ","))?;
+    check_that(jstr(storage, "fields/4/type") == "Bool", jv(storage, ""))?;
+    check_that(jstr(storage, "fields/1/slot") == "0f66a9ac52373aea2ea84192a98c645c5109ada1e238603ca6b6712e72a4ecee", jv(storage, ""))?;
+    let deploy = read_text(h, f"{d}/out/deploy.hex")?;
+    let runtime = read_text(h, f"{d}/out/runtime.hex")?;
+    check_that(text_ends_with(deploy, runtime), "the deployment code returns the runtime it carries")?;
+    // The runtime raises its own two codes as five-byte reverts.
+    check_that(text_contains(runtime, "4e30333937"), "N0397 is not raised by the runtime")?;
+    check_that(text_contains(runtime, "4e30333938"), "N0398 is not raised by the runtime")?;
+    // And it copies the runtime from exactly where it starts: `PUSH2 offset; PUSH1 0; CODECOPY`.
+    let start = (str_len(deploy) - str_len(runtime)) / 2;
+    let at = find(deploy, "600039");
+    check_that(at >= 6, "a CODECOPY")?;
+    check_that(str_slice(deploy, at - 6, at - 4) == "61", "the offset is a PUSH2")?;
+    let mut offset = 0;
+    let mut j = at - 4;
+    while j < at {
+        offset = offset * 16 + hex_digit_value(str_byte(deploy, j));
+        j = j + 1;
+    }
+    check_that(offset == start, f"the runtime is copied from {offset}, but starts at {start}")?;
+    let again = nazm(h, d, words("contract c.nz --evm again"));
+    check_that(again.code == 0, again.stderr)?;
+    let twice = read_text(h, f"{d}/again/deploy.hex")?;
+    scratch_remove(h, d);
+    check_that(twice == deploy, "the same bytes twice")
+}
+
+@test
+fn a_construct_the_backend_does_not_emit_is_refused_before_emission(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "c.nz", "pub struct State { n: Int }\nfn init() -> State ! {} { State(n: 0) }\npub fn name(s: State, caller: Int) -> Result[State, Int] ! {} { Result[State, Int].Ok(value: State(n: str_len(\"abc\"))) }\nfn main() -> Int ! {} { 0 }\n")?;
+    let o = nazm(h, d, words("contract c.nz --evm out"));
+    let emitted = file_exists_at(h.io, f"{d}/out/deploy.hex");
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "error[N0399]"), o.stderr)?;
+    check_that(text_contains(o.stderr, "it calls the built-in `str_len`, which has no EVM form"), o.stderr)?;
+    check_that(!emitted, "something was emitted")
+}
+
+fn version(fields: Str, init: Str) -> Str ! {} {
+    f"pub struct State {{ {fields} }}\nfn init() -> State ! {{}} {{ State({init}) }}\npub fn touch(s: State, caller: Int) -> Result[State, Int] ! {{}} {{ Result[State, Int].Ok(value: s) }}\nfn main() -> Int ! {{}} {{ 0 }}\n"
+}
+
+@test
+fn the_upgrade_check_allows_an_added_field_and_refuses_a_removed_or_retyped_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "v1.nz", version("a: Int, b: Bool", "a: 1, b: true"))?;
+    // Reordered and one added: compatible — slots are by name.
+    scratch_write(h, d, "v2.nz", version("c: Int, b: Bool, a: Int", "a: 1, b: true, c: 0"))?;
+    scratch_write(h, d, "v3.nz", version("a: Bool", "a: true"))?;
+    let o = nazm(h, d, words("contract v2.nz --upgrade-check v1.nz"));
+    let o3 = nazm(h, d, words("contract v3.nz --upgrade-check v1.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let r = json_of(o)?;
+    check_that(jstr(r, "schema") == "nazm.evm-upgrade/1", jv(r, ""))?;
+    check_that(jstr(r, "outcome") == "compatible", jv(r, ""))?;
+    check_that(jstr(r, "changes/0/field") == "c", jv(r, ""))?;
+    check_that(o3.code != 0, ran_show(o3))?;
+    check_that(jstr(json_of(o3)?, "outcome") == "incompatible", o3.stdout)?;
+    check_that(text_contains(o3.stderr, "`a` cannot be upgraded in place: its type changed from `Int` to `Bool`"), o3.stderr)?;
+    check_that(text_contains(o3.stderr, "`b` cannot be upgraded in place: removed"), o3.stderr)
+}
+
+// `the_evm_agrees_with_the_simulator_and_stays_inside_its_gas_bounds` is `#[ignore]`d in Rust
+// "starts a container": it stays Rust (design decision 10).

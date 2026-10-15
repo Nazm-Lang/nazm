@@ -1,0 +1,151 @@
+// N64: WebAssembly — `wasm32-unknown-unknown`, its outside reached only by imports. A program builds
+// to WebAssembly objects, `link.txt` with its `wasm-ld` line, the reference host `host.mjs` and
+// `bounds.json`, the same bytes twice; device registers, allocation, Cranelift and the board's
+// watermark are refused for it by name; `--debug` carries DWARF. The three tests that link and run
+// in `nazm-wasm:n64` are `#[ignore]`d in Rust and stay there (design decision 10). Ported from
+// `crates/nazm-cli/tests/wasm.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+use "../lib/wasm.nz"
+
+const WASM: Str = "wasm32-unknown-unknown";
+
+const HELLO: Str = "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main(io: IoCap) -> Int ! { io } { print(\"hello from wasm\\n\"); fib(20) }\n";
+
+const PURE: Str = "fn main() -> Int { let mut i = 0; let mut s = 0; while i < 100 { s = s + i * i; i = i + 1; } s }\n";
+
+const UNITS: Str = "00-m0.o 01-runtime.o 02-entry.o";
+
+/// `nazm build --target wasm32-unknown-unknown --objects out EXTRA prog.nz` in `d`.
+fn objects(h: Caps, d: Str, extra: Str) -> Ran ! { io, spawn } {
+    let a = words(f"build --target {WASM} --objects out");
+    for x in words(extra) {
+        strs_push(a, x);
+    }
+    strs_push(a, "prog.nz");
+    nazm(h, d, a)
+}
+
+@test
+fn a_program_builds_to_webassembly_objects_a_link_line_and_a_host(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", HELLO)?;
+    let o = objects(h, d, "");
+    check_that(o.code == 0, o.stderr)?;
+    let out = f"{d}/out";
+    for name in words(UNITS) {
+        check_that(is_wasm(read_raw(h, f"{out}/{name}")?), f"{name} is not WebAssembly")?;
+    }
+    let list = read_text(h, f"{out}/link.txt")?;
+    check_that(text_contains(list, "target wasm32-unknown-unknown"), list)?;
+    check_that(text_contains(list, "wasm-ld --no-entry --stack-first -z stack-size=65536 --export=nazm_main"), list)?;
+    check_that(!file_exists_at(h.io, f"{out}/link.ld"), "a module has no linker script")?;
+    let host = read_text(h, f"{out}/host.mjs")?;
+    check_that(text_contains(host, "new Set(['write', 'report'])"), host)?;
+    check_that(text_contains(host, "does not grant"), host)?;
+    // The runtime's object asks for the host's `write` and nothing of a C library; the entry's
+    // asks for `report`.
+    let rt = imports(read_raw(h, f"{out}/01-runtime.o")?);
+    check_that(strs_has(rt, "nazm_host.write"), str_join(rt, ","))?;
+    for i in rt {
+        check_that(text_starts_with(i, "nazm_host.") || text_starts_with(i, "env.__"), str_join(rt, ","))?;
+    }
+    let entry = imports(read_raw(h, f"{out}/02-entry.o")?);
+    check_that(strs_has(entry, "nazm_host.report"), str_join(entry, ","))?;
+    let bounds = jparse(read_text(h, f"{out}/bounds.json")?)?;
+    scratch_remove(h, d);
+    // `fib` recurses: no stack bound, and why.
+    check_that(jstr(bounds, "stack/kind") == "unknown", jv(bounds, ""))
+}
+
+@test
+fn a_module_s_bound_is_rooted_at_its_export(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PURE)?;
+    let o = objects(h, d, "");
+    check_that(o.code == 0, o.stderr)?;
+    let b = jparse(read_text(h, f"{d}/out/bounds.json")?)?;
+    scratch_remove(h, d);
+    check_that(jstr(b, "target") == WASM, jv(b, ""))?;
+    check_that(jstr(b, "stack/kind") == "static bound", jv(b, ""))?;
+    check_that(jstr(b, "stack/path/0") == "nazm_main", jv(b, ""))?;
+    check_that(jint(b, "stack/reserved") == 65536, jv(b, ""))
+}
+
+@test
+fn the_same_program_gives_the_same_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", HELLO)?;
+    let o = objects(h, d, "");
+    check_that(o.code == 0, o.stderr)?;
+    let first = strs_new();
+    for n in words(UNITS) {
+        strs_push(first, read_raw(h, f"{d}/out/{n}")?);
+    }
+    scratch_remove(h, f"{d}/out");
+    let o2 = objects(h, d, "--no-cache");
+    check_that(o2.code == 0, o2.stderr)?;
+    let mut i = 0;
+    for n in words(UNITS) {
+        check_that(read_raw(h, f"{d}/out/{n}")? == strs_get(first, i), n)?;
+        i = i + 1;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn debug_information_reaches_the_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PURE)?;
+    let o = objects(h, d, "--debug");
+    check_that(o.code == 0, o.stderr)?;
+    let unit = read_raw(h, f"{d}/out/00-m0.o")?;
+    scratch_remove(h, d);
+    check_that(text_contains(unit, ".debug_line"), "no line table")?;
+    check_that(text_contains(unit, ".debug_info"), "no debug information")?;
+    check_that(text_contains(unit, "prog.nz"), "the source is not named")
+}
+
+@test
+fn what_a_module_cannot_have_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // No device registers: a module's only outside is its imports.
+    let a = prog_dir(h, "prog.nz", "fn main(m: MmioCap) -> Int ! {} { mmio_read32(0) }\n")?;
+    let o = objects(h, a, "");
+    scratch_remove(h, a);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "N0392"), o.stderr)?;
+    check_that(text_contains(o.stderr, "a build for `wasm32-unknown-unknown`"), o.stderr)?;
+    // No heap.
+    let b = prog_dir(h, "prog.nz", "fn main() -> Int { str_len(int_to_str(42)) }\n")?;
+    let o2 = objects(h, b, "");
+    scratch_remove(h, b);
+    check_that(o2.code == 1, o2.stderr)?;
+    check_that(text_contains(o2.stderr, "`wasm32-unknown-unknown` has no operating system"), o2.stderr)?;
+    check_that(text_contains(o2.stderr, "strings ("), o2.stderr)?;
+    // Not Cranelift, and not the board's watermark.
+    let d = prog_dir(h, "prog.nz", PURE)?;
+    let o3 = nazm(h, d, words(f"build --backend cranelift --target {WASM} --objects out prog.nz"));
+    check_that(o3.code == 5, ran_show(o3))?;
+    let o4 = objects(h, d, "--stack-watermark");
+    check_that(o4.code == 5, ran_show(o4))?;
+    check_that(text_contains(o4.stderr, "`--stack-watermark` measures a board's stack"), o4.stderr)?;
+    // Nor linked here: the host has no `wasm-ld`.
+    let o5 = nazm(h, d, words(f"build --target {WASM} prog.nz"));
+    scratch_remove(h, d);
+    check_that(o5.code == 4, ran_show(o5))?;
+    check_that(text_contains(o5.stderr, "--objects DIR"), o5.stderr)
+}
+
+// `absent_authority_is_an_absent_import`, `a_frame_larger_than_the_module_s_stack_fails_with_n0408`
+// and `the_corpus_runs_as_webassembly_as_the_interpreter_runs_it` are `#[ignore]`d in Rust "starts a
+// container": they stay Rust (design decision 10).

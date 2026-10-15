@@ -1,0 +1,1214 @@
+// `nazm lsp`, as an editor sees it: the real process, real framing, over stdio. N16. The
+// handshake, what is advertised, how diagnostics and locations cross the protocol boundary — above
+// all their UTF-16 positions after non-ASCII text — and that nothing but framed messages reaches
+// stdout. Ported from `crates/nazm-cli/tests/lsp.rs` (R7), with the harness's LSP client
+// (`lib/lsp.nz`): the session over the child's standard input and output.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/live.nz"
+use "../lib/lsp.nz"
+use "../lib/differential.nz"
+
+/// The project directory, by its canonical path, so URIs compare as the server writes them: the
+/// scratch directory and the root (name, text, … written into it).
+struct Project {
+    dir: Str,
+    root: Str,
+}
+
+fn project(h: Caps, files: Strs) -> Result[Project, Str] ! { io } {
+    let dir = scratch_new(h);
+    let root = match file_canonical(h.io, dir) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return Result[Project, Str].Err(error: f"canonical {dir}: {e.message}"); },
+    };
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, root, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Project, Str].Ok(value: Project(dir: dir, root: root))
+}
+
+fn files2(a: Str, at: Str, b: Str, bt: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, a);
+    strs_push(f, at);
+    strs_push(f, b);
+    strs_push(f, bt);
+    f
+}
+
+fn line_of(text: Str, n: Int) -> Str ! {} {
+    strs_get(text_lines(text), n)
+}
+
+fn pos(line: Int, character: Int) -> Str ! {} {
+    f"{{\"line\": {line}, \"character\": {character}}}"
+}
+
+/// Exit 0, and no panic on standard error.
+fn finished(h: Caps, c: Lsp) -> Result[Int, Str] ! { io } {
+    let r = lsp_finish(h, c)?;
+    check_that(r.code == 0, r.stderr)?;
+    check_that(!text_contains(r.stderr, "panicked"), r.stderr)
+}
+
+// Non-ASCII before every position the tests check: a two-byte `é`, a three-byte `→` and a
+// four-byte `😀` that is two UTF-16 units.
+const LIB: Str = "pub fn tag() -> Str { \"é→😀\" } pub fn helper(n: Int) -> Int { n }\n";
+const MAIN: Str = "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(s) }\n";
+const MAIN_OK: Str = "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(1) }\n";
+
+@test
+fn the_server_speaks_the_protocol_end_to_end(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", LIB, "main.nz", MAIN))?;
+    let root = pr.root;
+    let lib = f"{root}/lib.nz";
+    let main = f"{root}/main.nz";
+    let c = lsp_start(h, root)?;
+    // 1. The handshake, and exactly what is implemented.
+    let init = lsp_initialize(c, root)?;
+    let caps_ = jq(init, "result/capabilities");
+    check_that(caps_ >= 0 && json_kind(init, caps_) == "object", jv(init, ""))?;
+    let keys = strs_new();
+    let mut i = 0;
+    while i < json_len(init, caps_) {
+        strs_push(keys, match json_key_at(init, caps_, i) { Option.Some(value: k) => k, Option.None() => "", });
+        i = i + 1;
+    }
+    let advertised = str_join(strs_sort(keys), ",");
+    check_that(advertised == "callHierarchyProvider,codeActionProvider,completionProvider,definitionProvider,documentSymbolProvider,hoverProvider,positionEncoding,referencesProvider,renameProvider,semanticTokensProvider,signatureHelpProvider,textDocumentSync,workspaceSymbolProvider", f"only what is implemented is advertised: {jv(init, "")}")?;
+    let cp = "result/capabilities";
+    check_that(jstr(init, f"{cp}/positionEncoding") == "utf-16", jv(init, cp))?;
+    check_that(jv(init, f"{cp}/textDocumentSync/change") == "2", "incremental synchronisation (N76)")?;
+    check_that(jv(init, f"{cp}/textDocumentSync/openClose") == "true", jv(init, cp))?;
+    check_that(jv(init, f"{cp}/referencesProvider") == "true", jv(init, cp))?;
+    check_that(jis(init, f"{cp}/renameProvider", "{\"prepareProvider\": true}"), jv(init, cp))?;
+    check_that(jis(init, f"{cp}/completionProvider", "{\"resolveProvider\": false, \"triggerCharacters\": [\".\"]}"), "`.` the one trigger — not `(`, `,` or `:` — and nothing to resolve")?;
+    check_that(jis(init, f"{cp}/signatureHelpProvider", "{\"triggerCharacters\": [\"(\", \",\"]}"), "triggered where the active call or argument changes; no retrigger characters")?;
+    check_that(jv(init, f"{cp}/documentSymbolProvider") == "true", jv(init, cp))?;
+    check_that(jis(init, f"{cp}/codeActionProvider", "{\"codeActionKinds\": [\"quickfix\"], \"resolveProvider\": false}"), "quick fixes only, each complete when sent")?;
+    check_that(jv(init, f"{cp}/semanticTokensProvider/full") == "true", "the whole document, with no deltas")?;
+    check_that(jv(init, f"{cp}/semanticTokensProvider/range") == "false", jv(init, cp))?;
+    check_that(jis(init, f"{cp}/workspaceSymbolProvider", "{\"resolveProvider\": false}"), "every workspace symbol is complete when sent: there is no resolve")?;
+    // 2. Open: a diagnostic, its code, and its exact UTF-16 range after non-ASCII text.
+    lsp_open(c, main, 1, MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "version") == "1", jv(d, ""))?;
+    check_that(jstr(d, "diagnostics/0/code") == "N0300", jv(d, ""))?;
+    check_that(jstr(d, "diagnostics/0/source") == "nazm", jv(d, ""))?;
+    check_that(jv(d, "diagnostics/0/severity") == "1", jv(d, ""))?;
+    let line = line_of(MAIN, 1);
+    let s = rfind(line, "(s)") + 1;
+    check_that(jis(d, "diagnostics/0/range/start", pos(1, utf16(line, s))), jv(d, ""))?;
+    check_that(jis(d, "diagnostics/0/range/end", pos(1, utf16(line, s + 1))), jv(d, ""))?;
+    // 3. Change to valid source: the set is published empty, so the error is cleared.
+    lsp_change(c, main, 2, MAIN_OK)?;
+    let d2 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d2, "version") == "2", jv(d2, ""))?;
+    check_that(jis(d2, "diagnostics", "[]"), jv(d2, ""))?;
+    // 4. Definition, across files, to the defining token, in UTF-16 after non-ASCII text.
+    let ok_line = line_of(MAIN_OK, 1);
+    let call = find(ok_line, "helper");
+    let loc = lsp_definition(c, main, 1, utf16(ok_line, call) + 2)?;
+    check_that(jstr(loc, "uri") == file_uri(lib), jv(loc, ""))?;
+    let lib_line = line_of(LIB, 0);
+    let def = find(lib_line, "helper");
+    check_that(jis(loc, "range/start", pos(0, utf16(lib_line, def))), jv(loc, ""))?;
+    check_that(jis(loc, "range/end", pos(0, utf16(lib_line, def + 6))), jv(loc, ""))?;
+    // And hover, from the resolution.
+    let hv = lsp_request(c, "textDocument/hover", doc_at(main, 1, utf16(ok_line, call)))?;
+    check_that(jstr(hv, "result/contents/value") == "fn helper(n: Int) -> Int\ninferred effects: {}", jv(hv, ""))?;
+    // 5. An unsaved dependency: the importer's diagnostics are recomputed against the buffer.
+    lsp_open(c, lib, 1, "pub fn helper(n: Str) -> Int { 0 }\n")?;
+    let d3 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jstr(d3, "diagnostics/0/code") == "N0300", f"the importer sees the buffer: {jv(d3, "")}")?;
+    let loc2 = lsp_definition(c, main, 1, utf16(ok_line, call))?;
+    check_that(jis(loc2, "range/start", pos(0, 7)), f"the location is in the buffer's text: {jv(loc2, "")}")?;
+    // 6. Close the dependency: the disk is authoritative again.
+    lsp_close(c, lib)?;
+    let mut cleared_lib = false;
+    let mut main_again = "";
+    while !(cleared_lib && main_again != "") {
+        let m = lsp_next(c)?;
+        if jstr(m, "method") == "textDocument/publishDiagnostics" {
+            if jstr(m, "params/uri") == file_uri(lib) {
+                check_that(jis(m, "params/diagnostics", "[]"), jv(m, ""))?;
+                cleared_lib = true;
+            } else if jstr(m, "params/uri") == file_uri(main) {
+                main_again = jv(m, "params/diagnostics");
+            }
+        }
+    }
+    check_that(main_again == "[]", "disk truth is back")?;
+    // 7. Something not implemented is an error response, and the server carries on.
+    let r1 = lsp_request(c, "textDocument/formatting", "{}")?;
+    check_that(jv(r1, "error/code") == "-32601", jv(r1, ""))?;
+    let r2 = lsp_request(c, "textDocument/definition", "{\"nonsense\": true}")?;
+    check_that(jv(r2, "error/code") == "-32602", jv(r2, ""))?;
+    // 8. Shutdown and exit, cleanly, with nothing but protocol on stdout throughout.
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+fn range1(a: Int, b: Int) -> Str ! {} {
+    f"{{\"start\": {pos(1, a)}, \"end\": {pos(1, b)}}}"
+}
+
+@test
+fn ranged_changes_in_utf16_move_the_buffer_as_whole_ones_would(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", LIB, "main.nz", MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jstr(d, "diagnostics/0/code") == "N0300", jv(d, ""))?;
+    // `helper(s)` → `helper(1)`: one character, on line 1, after `é→😀`.
+    let line = line_of(MAIN, 1);
+    let s = utf16(line, rfind(line, "(s)") + 1);
+    let u = json_quote(file_uri(main));
+    lsp_notify(c, "textDocument/didChange", f"{{\"textDocument\": {{\"uri\": {u}, \"version\": 2}}, \"contentChanges\": [{{\"range\": {range1(s, s + 1)}, \"text\": \"1\"}}]}}")?;
+    let d2 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d2, "version") == "2" && jv(d2, "diagnostics") == "[]", jv(d2, ""))?;
+    // Two changes in one notification: a line inserted at the top, then a syntax error on what is
+    // now line 2.
+    lsp_notify(c, "textDocument/didChange", f"{{\"textDocument\": {{\"uri\": {u}, \"version\": 3}}, \"contentChanges\": [{{\"range\": {{\"start\": {pos(0, 0)}, \"end\": {pos(0, 0)}}}, \"text\": \"// é\\n\"}}, {{\"range\": {{\"start\": {pos(2, 0)}, \"end\": {pos(2, 0)}}}, \"text\": \"let \"}}]}}")?;
+    let d3 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d3, "version") == "3", jv(d3, ""))?;
+    check_that(jv(d3, "diagnostics/0/range/start/line") == "2", jv(d3, ""))?;
+    // A whole-document change still replaces everything.
+    lsp_change(c, main, 4, MAIN_OK)?;
+    let d4 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d4, "diagnostics") == "[]", jv(d4, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+@test
+fn malformed_source_is_diagnosed_and_never_stops_the_server(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, strs_new())?;
+    let m = f"{pr.root}/m.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    let texts = strs_new();
+    strs_push(texts, "fn main( {{{ ☕ \"open");
+    strs_push(texts, "}}}}))))");
+    strs_push(texts, "fn main() -> Int { let x = ; x }");
+    strs_push(texts, "");
+    strs_push(texts, "@@@ é 😀");
+    let mut k = 0;
+    while k < strs_len(texts) {
+        let text = strs_get(texts, k);
+        let version = k + 1;
+        if version == 1 {
+            lsp_open(c, m, version, text)?;
+        } else {
+            lsp_change(c, m, version, text)?;
+        }
+        let d = lsp_diagnostics_for(c, file_uri(m))?;
+        check_that(jv(d, "version") == int_to_str(version), jv(d, ""))?;
+        // A query in the middle of it all is answered.
+        let at_main = lsp_definition(c, m, 0, 3)?;
+        check_that(jv(at_main, "") == "null" || jstr(at_main, "uri") == file_uri(m), jv(at_main, ""))?;
+        let x = rfind(text, "x }");
+        if x >= 0 {
+            check_that(jv(lsp_definition(c, m, 0, x)?, "") == "null", text)?;
+            let r = lsp_request(c, "textDocument/references", f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(m))}}}, \"position\": {pos(0, x)}, \"context\": {{\"includeDeclaration\": true}}}}")?;
+            check_that(jv(r, "result") == "null", jv(r, ""))?;
+        }
+        k = k + 1;
+    }
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+@test
+fn a_frame_that_is_not_json_rpc_ends_the_session_without_a_panic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, strs_new())?;
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_write_raw(c, "Content-Length: 9\r\n\r\nnot json!")?;
+    let r = lsp_wait(h, c);
+    scratch_remove(h, pr.dir);
+    check_that(!text_contains(r.stderr, "panicked"), r.stderr)?;
+    check_that(ended_normally(r), f"the server did not end of itself: {r.code}")
+}
+
+/// `textDocument/references` at a position: the `result`.
+fn references(c: Lsp, path: Str, line: Int, character: Int, include_declaration: Bool) -> Result[JsonDoc, Str] ! { io } {
+    let r = lsp_request(c, "textDocument/references", f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(path))}}}, \"position\": {pos(line, character)}, \"context\": {{\"includeDeclaration\": {include_declaration}}}}}")?;
+    jparse(jv(r, "result"))
+}
+
+/// A location list as the protocol writes it: `uri line start end` each, one start line and end
+/// line each.
+fn located(v: JsonDoc) -> Result[Strs, Str] ! {} {
+    let root = json_root(v);
+    check_that(json_kind(v, root) == "array", f"not a list of locations: {jv(v, "")}")?;
+    let out = strs_new();
+    let mut i = 0;
+    while i < json_len(v, root) {
+        let r = f"{i}/range";
+        check_that(jv(v, f"{r}/start/line") == jv(v, f"{r}/end/line"), jv(v, f"{i}"))?;
+        strs_push(out, f"{jstr(v, f"{i}/uri")} {jint(v, f"{r}/start/line")} {jint(v, f"{r}/start/character")} {jint(v, f"{r}/end/character")}");
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+// Non-ASCII before the queried name and before every name returned, on the same line.
+const REF_LIB: Str = "pub fn tag() -> Str { \"é→😀\" } pub fn helper(n: Int) -> Int { n }\npub fn again() -> Int { let s = \"😀→\"; helper(2) }\n";
+const REF_MAIN: Str = "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(1) + again() }\n";
+
+fn span(uri: Str, n: Int, line: Str, at: Int) -> Str ! {} {
+    f"{uri} {n} {utf16(line, at)} {utf16(line, at + 6)}"
+}
+
+@test
+fn references_cross_the_protocol_in_utf16_from_the_current_buffers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", REF_LIB, "main.nz", REF_MAIN))?;
+    let lib = f"{pr.root}/lib.nz";
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    let init = lsp_initialize(c, pr.root)?;
+    check_that(jv(init, "result/capabilities/referencesProvider") == "true", jv(init, ""))?;
+    lsp_open(c, main, 1, REF_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "diagnostics") == "[]", jv(d, ""))?;
+    // Every expected column is counted here, independently, in UTF-16 units.
+    let main_line = line_of(REF_MAIN, 1);
+    let lib0 = line_of(REF_LIB, 0);
+    let lib1 = line_of(REF_LIB, 1);
+    let lu = file_uri(lib);
+    let mu = file_uri(main);
+    let declaration = span(lu, 0, lib0, find(lib0, "helper"));
+    let in_lib = span(lu, 1, lib1, find(lib1, "helper"));
+    let call = find(main_line, "helper");
+    let in_main = span(mu, 1, main_line, call);
+    // Sanity: the bytes and the units differ on every one of these lines.
+    check_that(utf16(main_line, call) != call, "bytes and units agree")?;
+    let q = utf16(main_line, call) + 3;
+    let a = str_join(located(references(c, main, 1, q, false)?)?, ",");
+    check_that(a == f"{in_lib},{in_main}", a)?;
+    let b = str_join(located(references(c, main, 1, q, true)?)?, ",");
+    check_that(b == f"{declaration},{in_lib},{in_main}", b)?;
+    // An unsaved change: a new use appears, at its UTF-16 position in the buffer.
+    let edited = "use \"lib.nz\";\nfn main() -> Int { let s = \"é→😀\"; helper(1) + again() + helper(3) }\n";
+    lsp_change(c, main, 2, edited)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let edited_line = line_of(edited, 1);
+    let third = rfind(edited_line, "helper");
+    let e = str_join(located(references(c, main, 1, q, false)?)?, ",");
+    check_that(e == f"{in_lib},{in_main},{span(mu, 1, edited_line, third)}", e)?;
+    // Nothing to refer to: a string's contents, and a keyword.
+    let in_string = utf16(edited_line, find(edited_line, "→"));
+    check_that(jv(references(c, main, 1, in_string, true)?, "") == "null", "a string")?;
+    check_that(jv(references(c, main, 1, 1, true)?, "") == "null", "a keyword")?;
+    // And a malformed request is an error, not a crash.
+    let r = lsp_request(c, "textDocument/references", "{\"nonsense\": true}")?;
+    check_that(jv(r, "error/code") == "-32602", jv(r, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+/// The references `nazm lsp` gives for `helper` in `main.nz` of the project at `root`, with the
+/// project's own directory taken out of every URI so two projects compare.
+fn references_in(h: Caps, root: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let main = f"{root}/main.nz";
+    let c = lsp_start(h, root)?;
+    lsp_initialize(c, root)?;
+    lsp_open(c, main, 1, REF_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line = line_of(REF_MAIN, 1);
+    let got = references(c, main, 1, utf16(line, find(line, "helper")), true)?;
+    let r = lsp_finish(h, c)?;
+    check_that(r.code == 0, r.stderr)?;
+    let prefix = file_uri(root);
+    let out = strs_new();
+    for l in located(got)? {
+        strs_push(out, replace_first(l, prefix, ""));
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn cache_report(h: Caps, dir: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let out = run(h, nazm_bin(h.io), words("check --cache-report main.nz"), dir, env_unset(suite_env(h), "NAZM_CACHE_DIR"));
+    check_that(out.code == 0, ran_show(out))?;
+    jparse(first_line(out.stdout))
+}
+
+@test
+fn references_do_not_depend_on_whether_semantic_analysis_was_cached(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let warm = project(h, files2("lib.nz", REF_LIB, "main.nz", REF_MAIN))?;
+    let cold = project(h, files2("lib.nz", REF_LIB, "main.nz", REF_MAIN))?;
+    let first = cache_report(h, warm.root)?;
+    check_that(jint(first, "stored") > 0, jv(first, ""))?;
+    let second = cache_report(h, warm.root)?;
+    check_that(jint(second, "reused") > 0, f"the cache is warm: {jv(second, "")}")?;
+    let from_warm = references_in(h, warm.root)?;
+    let from_cold = references_in(h, cold.root)?;
+    scratch_remove(h, warm.dir);
+    scratch_remove(h, cold.dir);
+    check_that(strs_len(from_warm) == 3, str_join(from_warm, ","))?;
+    check_that(str_join(from_warm, ",") == str_join(from_cold, ","), f"{str_join(from_warm, ",")} / {str_join(from_cold, ",")}")
+}
+
+// Non-ASCII before the declaration and before both calls, on their lines.
+const RENAME_LIB: Str = "pub fn exported() -> Int { 1 }\n";
+const RENAME_MAIN: Str = "use \"lib.nz\";\nfn helper(n: Int) -> Int { n } // é→😀\nfn main() -> Int { let s = \"é→😀\"; helper(str_len(s)) + helper(exported()) }\n";
+
+/// A request at a position, with `extra` (`"key": value, …`) beside the position.
+fn at_(c: Lsp, method: Str, path: Str, line: Int, character: Int, extra: Str) -> Result[JsonDoc, Str] ! { io } {
+    let more = if extra == "" { "" } else { f", {extra}" };
+    lsp_request(c, method, f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(path))}}}, \"position\": {pos(line, character)}{more}}}")
+}
+
+fn hrange(line: Int, text: Str, at: Int) -> Str ! {} {
+    f"{{\"start\": {pos(line, utf16(text, at))}, \"end\": {pos(line, utf16(text, at + 6))}}}"
+}
+
+@test
+fn rename_crosses_the_protocol_as_a_versioned_edit_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", RENAME_LIB, "main.nz", RENAME_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, RENAME_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "diagnostics") == "[]", jv(d, ""))?;
+    let decl_line = line_of(RENAME_MAIN, 1);
+    let call_line = line_of(RENAME_MAIN, 2);
+    let first = find(call_line, "helper");
+    let second = rfind(call_line, "helper");
+    // prepareRename: the token under the cursor and its spelling.
+    let q = utf16(call_line, second) + 2;
+    let r = at_(c, "textDocument/prepareRename", main, 2, q, "")?;
+    check_that(jis(r, "result/range", hrange(2, call_line, second)), jv(r, ""))?;
+    check_that(jstr(r, "result/placeholder") == "helper", jv(r, ""))?;
+    // ...and nothing for a built-in, a string, or an exported function.
+    let chars = ints_new();
+    ints_push(chars, utf16(call_line, find(call_line, "str_len")) + 1);
+    ints_push(chars, utf16(call_line, find(call_line, "→")));
+    ints_push(chars, utf16(call_line, find(call_line, "exported")) + 1);
+    let whats = text_split("a built-in|a string|an exported function", "|");
+    let mut k = 0;
+    while k < 3 {
+        let r2 = at_(c, "textDocument/prepareRename", main, 2, ints_get(chars, k), "")?;
+        check_that(jv(r2, "result") == "null", f"{strs_get(whats, k)}: {jv(r2, "")}")?;
+        k = k + 1;
+    }
+    // rename: one versioned change for the document, three edits, every range in UTF-16.
+    let rr = at_(c, "textDocument/rename", main, 2, q, "\"newName\": \"assist\"")?;
+    check_that(jv(rr, "result/changes") == "null", f"never the unversioned form: {jv(rr, "")}")?;
+    check_that(jlen(rr, "result/documentChanges") == 1, jv(rr, ""))?;
+    let ch = "result/documentChanges/0";
+    check_that(jis(rr, f"{ch}/textDocument", f"{{\"uri\": {json_quote(file_uri(main))}, \"version\": 1}}"), jv(rr, ""))?;
+    let ranges = strs_new();
+    let mut e = 0;
+    while e < jlen(rr, f"{ch}/edits") {
+        check_that(jstr(rr, f"{ch}/edits/{e}/newText") == "assist", jv(rr, ""))?;
+        strs_push(ranges, f"{ch}/edits/{e}/range");
+        e = e + 1;
+    }
+    check_that(strs_len(ranges) == 3, jv(rr, ""))?;
+    check_that(jis(rr, strs_get(ranges, 0), hrange(1, decl_line, find(decl_line, "helper"))), jv(rr, ""))?;
+    check_that(jis(rr, strs_get(ranges, 1), hrange(2, call_line, first)), jv(rr, ""))?;
+    check_that(jis(rr, strs_get(ranges, 2), hrange(2, call_line, second)), jv(rr, ""))?;
+    // After an unsaved edit the rename is of the new version.
+    let edited = text_replace(RENAME_MAIN, "+ helper(exported())", "+ helper(exported()) + helper(3)");
+    lsp_change(c, main, 2, edited)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let r3 = at_(c, "textDocument/rename", main, 2, q, "\"newName\": \"assist\"")?;
+    check_that(jv(r3, "result/documentChanges/0/textDocument/version") == "2", jv(r3, ""))?;
+    check_that(jlen(r3, "result/documentChanges/0/edits") == 4, jv(r3, ""))?;
+    // Refusals are errors with the reason: an exported function, an invalid name.
+    let exported = utf16(call_line, find(call_line, "exported")) + 1;
+    let r4 = at_(c, "textDocument/rename", main, 2, exported, "\"newName\": \"x\"")?;
+    check_that(jv(r4, "error/code") == "-32803", jv(r4, ""))?;
+    check_that(text_contains(jstr(r4, "error/message"), "exported"), jv(r4, ""))?;
+    let r5 = at_(c, "textDocument/rename", main, 2, q, "\"newName\": \"fn\"")?;
+    check_that(jv(r5, "error/code") == "-32803", jv(r5, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+@test
+fn a_client_that_cannot_take_versioned_edits_is_refused_a_rename(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", RENAME_LIB, "main.nz", RENAME_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize_with(c, pr.root, "{}")?;
+    lsp_open(c, main, 1, RENAME_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let call_line = line_of(RENAME_MAIN, 2);
+    let q = utf16(call_line, rfind(call_line, "helper"));
+    // prepareRename still answers — the entity is renameable — but the edit cannot be tied to a
+    // version, so no edit is sent.
+    let r = at_(c, "textDocument/prepareRename", main, 2, q, "")?;
+    check_that(jstr(r, "result/placeholder") == "helper", jv(r, ""))?;
+    let r2 = at_(c, "textDocument/rename", main, 2, q, "\"newName\": \"assist\"")?;
+    check_that(jv(r2, "error/code") == "-32803", jv(r2, ""))?;
+    check_that(text_contains(jstr(r2, "error/message"), "versioned"), jv(r2, ""))?;
+    let f = lsp_finish(h, c)?;
+    scratch_remove(h, pr.dir);
+    check_that(f.code == 0, f.stderr)
+}
+
+fn files1(a: Str, at: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, a);
+    strs_push(f, at);
+    f
+}
+
+/// The labels of a completion list's items, `label kind` each, joined by `,`.
+fn item_labels(r: JsonDoc, items: Str) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(r, items) {
+        let at = if items == "" { f"{i}" } else { f"{items}/{i}" };
+        strs_push(out, f"{jstr(r, f"{at}/label")} {jint(r, f"{at}/kind")}");
+        i = i + 1;
+    }
+    str_join(out, ",")
+}
+
+/// `start` to `end` on `line`, in UTF-16 units of `text`'s bytes.
+fn urange(line: Int, text: Str, start: Int, end: Int) -> Str ! {} {
+    f"{{\"start\": {pos(line, utf16(text, start))}, \"end\": {pos(line, utf16(text, end))}}}"
+}
+
+const COMPLETE_MAIN: Str = "fn helper(n: Int) -> Int { n }\nfn help_me() -> Int { 1 }\nfn main() -> Int { let s = \"é😀\"; let hel = str_len(s); hel + help }\n";
+
+@test
+fn completion_crosses_the_protocol_replacing_the_identifier_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", COMPLETE_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, COMPLETE_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line = line_of(COMPLETE_MAIN, 2);
+    // `hel` in `hel + help`, the cursor at its end: the local `hel`, and nothing else.
+    let word = rfind(line, "hel +");
+    let r = at_(c, "textDocument/completion", main, 2, utf16(line, word + 3), "")?;
+    check_that(jv(r, "result/isIncomplete") == "false", jv(r, ""))?;
+    check_that(jlen(r, "result/items") == 1, jv(r, ""))?;
+    check_that(jstr(r, "result/items/0/label") == "hel", jv(r, ""))?;
+    check_that(jint(r, "result/items/0/kind") == 6, "a variable")?;
+    check_that(jstr(r, "result/items/0/detail") == "hel: Int", jv(r, ""))?;
+    // The edit replaces the whole identifier, in UTF-16 after `é😀`.
+    check_that(jis(r, "result/items/0/textEdit/range", urange(2, line, word, word + 3)), jv(r, ""))?;
+    check_that(jstr(r, "result/items/0/textEdit/newText") == "hel", jv(r, ""))?;
+    check_that(utf16(line, word) != word, "bytes and units differ here")?;
+    // A call head: `str_len` with the prefix `str`.
+    let call = find(line, "str_len");
+    let r2 = at_(c, "textDocument/completion", main, 2, utf16(line, call + 3), "")?;
+    let mut has = false;
+    let mut i = 0;
+    while i < jlen(r2, "result/items") {
+        let l = jstr(r2, f"result/items/{i}/label");
+        check_that(text_starts_with(l, "str"), jv(r2, ""))?;
+        if l == "str_len" {
+            has = true;
+        }
+        i = i + 1;
+    }
+    check_that(has, jv(r2, ""))?;
+    check_that(jis(r2, "result/items/0/textEdit/range/end", pos(2, utf16(line, call + 7))), "the whole call head is replaced, not only its prefix")?;
+    // Nowhere to complete: a string's contents.
+    let r3 = at_(c, "textDocument/completion", main, 2, utf16(line, find(line, "😀")), "")?;
+    check_that(jv(r3, "result") == "null", jv(r3, ""))?;
+    // An unsaved edit is what is completed.
+    let edited = text_replace(COMPLETE_MAIN, "let hel = str_len(s);", "let hel = str_len(s); let helium = 2;");
+    lsp_change(c, main, 2, edited)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line2 = line_of(edited, 2);
+    let word2 = rfind(line2, "hel +");
+    let r4 = at_(c, "textDocument/completion", main, 2, utf16(line2, word2 + 3), "")?;
+    check_that(item_labels(r4, "result/items") == "hel 6,helium 6", jv(r4, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// Non-ASCII before the call and inside its first argument, on its line.
+const SIGNATURE_MAIN: Str = "fn pair(a: Str, b: Int) -> Int { b }\nfn ping() -> Int { 0 }\nfn main() -> Int { let s = \"é😀\"; pair(\"😀, é\", str_len(s)) + ping() + pair(s, 1, 2) }\n";
+
+fn help_at(c: Lsp, main: Str, line: Str, byte: Int) -> Result[JsonDoc, Str] ! { io } {
+    let r = at_(c, "textDocument/signatureHelp", main, 2, utf16(line, byte), "")?;
+    jparse(jv(r, "result"))
+}
+
+@test
+fn signature_help_crosses_the_protocol_with_utf16_positions_and_label_offsets(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", SIGNATURE_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, SIGNATURE_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line = line_of(SIGNATURE_MAIN, 2);
+    // Inside the first argument, a string with a comma after `😀`: parameter 0.
+    let first = find(line, "😀, é") + str_len("😀,");
+    let r = help_at(c, main, line, first)?;
+    check_that(jlen(r, "signatures") == 1, jv(r, ""))?;
+    check_that(jstr(r, "signatures/0/label") == "fn pair(a: Str, b: Int) -> Int", jv(r, ""))?;
+    check_that(jis(r, "signatures/0/parameters", "[{\"label\": [8, 14]}, {\"label\": [16, 22]}]"), "each parameter as offsets into the label")?;
+    check_that(jv(r, "activeSignature") == "0" && jv(r, "activeParameter") == "0", jv(r, ""))?;
+    check_that(jv(r, "signatures/0/activeParameter") == "0", jv(r, ""))?;
+    check_that(utf16(line, first) != first, "bytes and units differ here")?;
+    // After the separator, in the nested call's argument: the nested call.
+    let nested = find(line, "str_len(s)") + str_len("str_len(");
+    let r2 = help_at(c, main, line, nested)?;
+    check_that(jstr(r2, "signatures/0/label") == "fn str_len(Str) -> Int", jv(r2, ""))?;
+    check_that(jis(r2, "signatures/0/parameters", "[{\"label\": [11, 14]}]"), jv(r2, ""))?;
+    // After that call's `)`, still in the outer second argument.
+    let r3 = help_at(c, main, line, nested + 2)?;
+    check_that(jstr(r3, "signatures/0/label") == "fn pair(a: Str, b: Int) -> Int", jv(r3, ""))?;
+    check_that(jv(r3, "activeParameter") == "1", jv(r3, ""))?;
+    // No parameters: the signature, and no active parameter at all.
+    let r4 = help_at(c, main, line, find(line, "ping()") + str_len("ping("))?;
+    check_that(jstr(r4, "signatures/0/label") == "fn ping() -> Int", jv(r4, ""))?;
+    check_that(jv(r4, "signatures/0/parameters") == "[]", jv(r4, ""))?;
+    check_that(jq(r4, "activeParameter") < 0, jv(r4, ""))?;
+    check_that(jq(r4, "signatures/0/activeParameter") < 0, jv(r4, ""))?;
+    // Past the last parameter of a call with too many arguments: nothing.
+    let r5 = help_at(c, main, line, rfind(line, ", 2)") + 2)?;
+    check_that(jv(r5, "") == "null", jv(r5, ""))?;
+    // Outside any call's argument list: nothing, not the nearest call.
+    let r6 = help_at(c, main, line, find(line, ") + ping") + 1)?;
+    check_that(jv(r6, "") == "null", jv(r6, ""))?;
+    // The current, unsaved text.
+    let edited = text_replace(SIGNATURE_MAIN, "fn pair(a: Str, b: Int)", "fn pair(first: Str, b: Int)");
+    lsp_change(c, main, 2, edited)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line2 = line_of(edited, 2);
+    let r7 = help_at(c, main, line2, find(line2, "😀, é"))?;
+    check_that(jstr(r7, "signatures/0/label") == "fn pair(first: Str, b: Int) -> Int", jv(r7, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// Non-ASCII before every structure site, on its line.
+const STRUCTURE_MAIN: Str = "struct Point { x: Int, label: Str, }\nenum State { Done(code: Int), Idle, }\nfn main() -> Int { let s = \"é😀\"; let p = Point(x: 1, label: s); let d = State.Done(code: 2); let e = State.Idle(); p.label; match d { State.Done(code: c) => c, State.Idle() => p.x, } }\n";
+
+fn complete_at(c: Lsp, main: Str, line: Str, byte: Int) -> Result[JsonDoc, Str] ! { io } {
+    let r = at_(c, "textDocument/completion", main, 2, utf16(line, byte), "")?;
+    jparse(jv(r, "result/items"))
+}
+
+@test
+fn structure_completion_and_constructor_help_cross_the_protocol_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", STRUCTURE_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    let init = lsp_initialize(c, pr.root)?;
+    check_that(jis(init, "result/capabilities/completionProvider", "{\"resolveProvider\": false, \"triggerCharacters\": [\".\"]}"), "`.` alone triggers completion since N26")?;
+    lsp_open(c, main, 1, STRUCTURE_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let line = line_of(STRUCTURE_MAIN, 2);
+    // A member, at the end of `lab` in `p.label`: `label`, a field (5), replacing `label` whole.
+    let member = find(line, "p.label;") + 2;
+    let items = complete_at(c, main, line, member + 3)?;
+    check_that(item_labels(items, "") == "label 5", jv(items, ""))?;
+    check_that(jstr(items, "0/detail") == "label: Str", jv(items, ""))?;
+    check_that(jis(items, "0/textEdit/range", urange(2, line, member, member + 5)), jv(items, ""))?;
+    check_that(utf16(line, member) != member, "bytes and units differ here")?;
+    // A variant (20), from the start of `Idle` in `State.Idle()`.
+    let variant = find(line, "State.Idle()") + str_len("State.");
+    let items2 = complete_at(c, main, line, variant)?;
+    check_that(item_labels(items2, "") == "Done 20,Idle 20", jv(items2, ""))?;
+    check_that(jstr(items2, "0/detail") == "Done(code: Int)", jv(items2, ""))?;
+    // A construction label: `x` is given, so `label`.
+    let lab = find(line, "label: s");
+    check_that(item_labels(complete_at(c, main, line, lab)?, "") == "label 5", "a construction label")?;
+    // A payload label, in a construction and in a pattern.
+    let code = find(line, "code: 2");
+    check_that(item_labels(complete_at(c, main, line, code)?, "") == "code 5", "a payload label")?;
+    let pattern = find(line, "code: c");
+    check_that(item_labels(complete_at(c, main, line, pattern)?, "") == "code 5", "a pattern label")?;
+    // Constructor signature help, inside `x`'s initialiser: parameter 1 of `Point(label: Str, x: Int)`.
+    let r = help_at(c, main, line, find(line, "x: 1") + 3)?;
+    check_that(jstr(r, "signatures/0/label") == "Point(label: Str, x: Int)", jv(r, ""))?;
+    check_that(jis(r, "signatures/0/parameters", "[{\"label\": [6, 16]}, {\"label\": [18, 24]}]"), jv(r, ""))?;
+    check_that(jv(r, "activeParameter") == "1", jv(r, ""))?;
+    // Between initialisers: the shape, and no parameter marked.
+    let r2 = help_at(c, main, line, find(line, ", label: s") + 1)?;
+    check_that(jstr(r2, "signatures/0/label") == "Point(label: Str, x: Int)", jv(r2, ""))?;
+    check_that(jq(r2, "signatures/0/parameters") < 0, jv(r2, ""))?;
+    check_that(jq(r2, "activeParameter") < 0, jv(r2, ""))?;
+    // A variant construction.
+    let r3 = help_at(c, main, line, code + str_len("code: "))?;
+    check_that(jstr(r3, "signatures/0/label") == "State.Done(code: Int)", jv(r3, ""))?;
+    check_that(jv(r3, "activeParameter") == "0", jv(r3, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// N22: `é` is two bytes and one UTF-16 unit, `😀` four bytes and two units, before every
+// declaration whose position is checked.
+const SYMBOL_LIB: Str = "pub fn tag() -> Str { \"é😀\" } pub struct Pair { left: Int, right: Str }\n";
+const SYMBOL_MAIN: Str = "use \"lib.nz\";\nfn main() -> Int { let s = \"é😀\"; 0 } enum State { Idle, Done(code: Int) }\n";
+
+/// The range of the first `text` on `line` (line `n`), in UTF-16 units.
+fn text_range(line: Str, n: Int, text: Str) -> Str ! {} {
+    let start = find(line, text);
+    urange(n, line, start, start + str_len(text))
+}
+
+/// `name kind container` of each entry of a symbol list, `-` for no container.
+fn symbol_rows(r: JsonDoc, list: Str, with_kind: Bool) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(r, list) {
+        let at = f"{list}/{i}";
+        let container = if jq(r, f"{at}/containerName") < 0 { "-" } else { jstr(r, f"{at}/containerName") };
+        let kind = if with_kind { f" {jint(r, f"{at}/kind")}" } else { "" };
+        strs_push(out, f"{jstr(r, f"{at}/name")}{kind} {container}");
+        i = i + 1;
+    }
+    str_join(out, ",")
+}
+
+fn document_symbols(c: Lsp, path: Str) -> Result[JsonDoc, Str] ! { io } {
+    lsp_request(c, "textDocument/documentSymbol", f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(path))}}}}}")
+}
+
+@test
+fn symbols_cross_the_protocol_nested_and_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", SYMBOL_LIB, "main.nz", SYMBOL_MAIN))?;
+    let lib = f"{pr.root}/lib.nz";
+    let main = f"{pr.root}/main.nz";
+    let line = line_of(SYMBOL_MAIN, 1);
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize_with(c, pr.root, "{\"textDocument\": {\"documentSymbol\": {\"hierarchicalDocumentSymbolSupport\": true}}}")?;
+    lsp_open(c, main, 1, SYMBOL_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let r = document_symbols(c, main)?;
+    // Only this file's declarations: `lib.nz`'s are imported, not declared here.
+    check_that(jlen(r, "result") == 2, jv(r, ""))?;
+    check_that(jstr(r, "result/0/name") == "main" && jint(r, "result/0/kind") == 12, jv(r, ""))?;
+    // The signature `main` has, its implicit `out: OutCap` included (R1, 5b.1).
+    check_that(jstr(r, "result/0/detail") == "fn main(out: OutCap) -> Int", jv(r, ""))?;
+    check_that(jq(r, "result/0/children") < 0, f"no locals: {jv(r, "")}")?;
+    check_that(jstr(r, "result/1/name") == "State" && jint(r, "result/1/kind") == 10, jv(r, ""))?;
+    // The whole declaration, and the name, in UTF-16 columns after `é😀`.
+    check_that(jis(r, "result/1/range", text_range(line, 1, "enum State { Idle, Done(code: Int) }")), jv(r, ""))?;
+    check_that(jis(r, "result/1/selectionRange", text_range(line, 1, "State")), jv(r, ""))?;
+    check_that(utf16(line, find(line, "State")) != find(line, "State"), "bytes and units differ here")?;
+    check_that(symbol_rows(r, "result/1/children", true) == "Idle 22 -,Done 22 -", jv(r, ""))?;
+    let code = "result/1/children/1/children/0";
+    check_that(jstr(r, f"{code}/name") == "code" && jint(r, f"{code}/kind") == 8, jv(r, ""))?;
+    check_that(jis(r, f"{code}/selectionRange", text_range(line, 1, "code")), jv(r, ""))?;
+    check_that(jstr(r, f"{code}/detail") == "Int", jv(r, ""))?;
+    // Workspace symbols: `lib.nz` is loaded by the open program, and is searched.
+    let w = lsp_request(c, "workspace/symbol", "{\"query\": \"Pai\"}")?;
+    let lib_line = line_of(SYMBOL_LIB, 0);
+    check_that(jis(w, "result", f"[{{\"name\": \"Pair\", \"kind\": 23, \"location\": {{\"uri\": {json_quote(file_uri(lib))}, \"range\": {text_range(lib_line, 0, "Pair")}}}}}]"), jv(w, ""))?;
+    let all = lsp_request(c, "workspace/symbol", "{\"query\": \"\"}")?;
+    let listed = symbol_rows(all, "result", true);
+    check_that(listed == "Done 22 State,Idle 22 State,Pair 23 -,State 10 -,code 8 State.Done,left 8 Pair,main 12 -,right 8 Pair,tag 12 -", listed)?;
+    let mut i = 0;
+    while i < jlen(all, "result") {
+        if jstr(all, f"result/{i}/name") == "code" {
+            check_that(jis(all, f"result/{i}/location/range", text_range(line, 1, "code")), jv(all, ""))?;
+        }
+        i = i + 1;
+    }
+    finished(h, c)?;
+    // A client that does not read nested symbols is sent them flat, each naming its container,
+    // each at its whole declaration.
+    let c2 = lsp_start(h, pr.root)?;
+    lsp_initialize_with(c2, pr.root, "{}")?;
+    lsp_open(c2, main, 1, SYMBOL_MAIN)?;
+    lsp_diagnostics_for(c2, file_uri(main))?;
+    let f = document_symbols(c2, main)?;
+    let flat = symbol_rows(f, "result", false);
+    check_that(flat == "main -,State -,Idle State,Done State,code Done", flat)?;
+    check_that(jis(f, "result/1/location", f"{{\"uri\": {json_quote(file_uri(main))}, \"range\": {text_range(line, 1, "enum State { Idle, Done(code: Int) }")}}}"), jv(f, ""))?;
+    finished(h, c2)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// N23: `é` and `😀` before the identifiers of the last line; a blank line between.
+const TOKENS_MAIN: Str = "struct Pt[T] {\n    x: T,\n}\n\nfn main() -> Int { let s = \"é😀\"; let p = Pt[Int](x: str_len(s)); p.x }\n";
+
+/// The byte of the `n`-th occurrence of `needle` on `line` as a whole word.
+fn word_at(line: Str, needle: Str, n: Int) -> Int ! {} {
+    let mut seen = 0;
+    let mut i = 0;
+    while i + str_len(needle) <= str_len(line) {
+        let b = str_byte(line, i);
+        let boundary = b < 128 || b >= 192;
+        if boundary && str_slice(line, i, i + str_len(needle)) == needle {
+            let before = i == 0 || !is_ident_byte(str_byte(line, i - 1));
+            let end = i + str_len(needle);
+            let after = end >= str_len(line) || !is_ident_byte(str_byte(line, end));
+            if before && after {
+                if seen == n {
+                    return i;
+                }
+                seen = seen + 1;
+            }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+@test
+fn semantic_tokens_cross_the_protocol_relative_and_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", TOKENS_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    let init = lsp_initialize(c, pr.root)?;
+    check_that(jstr(init, "result/capabilities/semanticTokensProvider/legend/tokenTypes/8") == "function", jv(init, ""))?;
+    lsp_open(c, main, 1, TOKENS_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "diagnostics") == "[]", jv(d, ""))?;
+    // The expected tokens, `line needle n type modifiers`: type 0 type, 1 struct, 3 type
+    // parameter, 5 variable, 6 property, 8 function; modifier 1 declaration, 2 default library.
+    let expected = text_split("0 Pt 0 1 1|0 T 0 3 1|1 x 0 6 1|1 T 0 3 0|4 main 0 8 1|4 Int 0 0 2|4 s 0 5 1|4 p 0 5 1|4 Pt 0 1 0|4 Int 1 0 2|4 x 0 6 0|4 str_len 0 8 2|4 s 1 5 0|4 p 1 5 0|4 x 1 6 0", "|");
+    let ls = text_lines(TOKENS_MAIN);
+    let data = strs_new();
+    let mut previous_line = 0;
+    let mut previous_start = 0;
+    for e in expected {
+        let f = text_split(e, " ");
+        let ln = int_of(strs_get(f, 0));
+        let needle = strs_get(f, 1);
+        let text = strs_get(ls, ln);
+        let at = word_at(text, needle, int_of(strs_get(f, 2)));
+        check_that(at >= 0, f"{needle} on {text}")?;
+        let start = utf16(text, at);
+        let dl = ln - previous_line;
+        let ds = if dl == 0 { start - previous_start } else { start };
+        strs_push(data, f"{dl}, {ds}, {str_len(needle)}, {strs_get(f, 3)}, {strs_get(f, 4)}");
+        previous_line = ln;
+        previous_start = start;
+    }
+    let last = strs_get(ls, 4);
+    check_that(utf16(last, word_at(last, "p", 1)) != word_at(last, "p", 1), "bytes and units differ on the last line")?;
+    let r = lsp_request(c, "textDocument/semanticTokens/full", f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(main))}}}}}")?;
+    check_that(jis(r, "result", f"{{\"data\": [{str_join(data, ", ")}]}}"), jv(r, ""))?;
+    check_that(jq(r, "result/resultId") < 0, "no deltas, so no result id")?;
+    // Neither a range nor a delta is implemented, and neither is answered.
+    for method in text_split("textDocument/semanticTokens/range|textDocument/semanticTokens/full/delta", "|") {
+        let r2 = lsp_request(c, method, "{}")?;
+        check_that(jv(r2, "error/code") == "-32601", f"{method}: {jv(r2, "")}")?;
+    }
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+fn int_of(s: Str) -> Int ! {} {
+    match text_parse_int(s) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+// N24: `é😀` before the edit on line 1; the diagnostic is on line 2.
+const FIX_MAIN: Str = "fn main() -> Int {\n    let s = \"é😀\"; let x = str_len(s);\n    x = 2;\n    x\n}\n";
+const FIXED_MAIN: Str = "fn main() -> Int {\n    let s = \"é😀\"; let mut x = str_len(s);\n    x = 2;\n    x\n}\n";
+
+fn code_action(c: Lsp, path: Str, range: Str, context: Str) -> Result[JsonDoc, Str] ! { io } {
+    lsp_request(c, "textDocument/codeAction", f"{{\"textDocument\": {{\"uri\": {json_quote(file_uri(path))}}}, \"range\": {range}, \"context\": {context}}}")
+}
+
+fn point(line: Int, character: Int) -> Str ! {} {
+    f"{{\"start\": {pos(line, character)}, \"end\": {pos(line, character)}}}"
+}
+
+@test
+fn a_quick_fix_crosses_the_protocol_versioned_in_utf16_and_changes_nothing_until_applied(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", FIX_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 3, FIX_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jstr(d, "diagnostics/0/code") == "N0310", jv(d, ""))?;
+    let diagnostic = jv(d, "diagnostics/0");
+    let l1 = line_of(FIX_MAIN, 1);
+    // A cursor on the assignment: the diagnostic's line, not the edit's.
+    let r = code_action(c, main, point(2, 5), "{\"diagnostics\": []}")?;
+    check_that(jlen(r, "result") == 1, jv(r, ""))?;
+    check_that(jstr(r, "result/0/title") == "Fix N0310: make the binding mutable", jv(r, ""))?;
+    check_that(jstr(r, "result/0/kind") == "quickfix", jv(r, ""))?;
+    check_that(jv(r, "result/0/isPreferred") == "true", jv(r, ""))?;
+    check_that(jq(r, "result/0/command") < 0 && jq(r, "result/0/data") < 0, jv(r, ""))?;
+    // The current diagnostic, exactly as it was published.
+    check_that(jis(r, "result/0/diagnostics", f"[{diagnostic}]"), jv(r, ""))?;
+    // The edit: versioned, at the `let`'s `x` after `é😀`.
+    let x = find(l1, "x = str_len");
+    check_that(jis(r, "result/0/edit", f"{{\"documentChanges\": [{{\"textDocument\": {{\"uri\": {json_quote(file_uri(main))}, \"version\": 3}}, \"edits\": [{{\"range\": {urange(1, l1, x, x + 1)}, \"newText\": \"mut x\"}}]}}]}}"), jv(r, ""))?;
+    check_that(utf16(l1, x) != x, "bytes and units differ here")?;
+    check_that(jq(r, "result/0/edit/changes") < 0, "never the unversioned form")?;
+    // Returning it changed nothing: the same request gives the same answer.
+    let again = code_action(c, main, point(2, 5), "{\"diagnostics\": []}")?;
+    check_that(jsame(again, "result", r, "result"), jv(again, ""))?;
+    // The client applies it and says so: the diagnostic and the action are gone.
+    lsp_change(c, main, 4, FIXED_MAIN)?;
+    let d2 = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d2, "diagnostics") == "[]", jv(d2, ""))?;
+    check_that(jv(d2, "version") == "4", jv(d2, ""))?;
+    let r2 = code_action(c, main, point(2, 5), f"{{\"diagnostics\": [{diagnostic}]}}")?;
+    check_that(jv(r2, "result") == "[]", "the client's stale copy of the diagnostic resurrects nothing")?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// A contract narrower than its body (N0366): the fix that widens it needs review.
+const REVIEW: Str = "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main(out: OutCap) -> Int ! {io} { f(out) }\n";
+
+@test
+fn quick_fixes_come_from_current_diagnostics_only_and_only_as_quick_fixes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("main.nz", FIXED_MAIN, "loop.nz", REVIEW))?;
+    let main = f"{pr.root}/main.nz";
+    let looped = f"{pr.root}/loop.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, FIXED_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    // A plausible diagnostic the source does not have, with a real code: nothing.
+    let fabricated = "{\"range\": {\"start\": {\"line\": 2, \"character\": 4}, \"end\": {\"line\": 2, \"character\": 5}}, \"severity\": 1, \"code\": \"N0310\", \"source\": \"nazm\", \"message\": \"`x` is not mutable, so it cannot be assigned\"}";
+    let r = code_action(c, main, point(2, 4), f"{{\"diagnostics\": [{fabricated}]}}")?;
+    check_that(jv(r, "result") == "[]", jv(r, ""))?;
+    // A fix that needs review: offered, never preferred, its precondition in the title.
+    lsp_open(c, looped, 1, REVIEW)?;
+    lsp_diagnostics_for(c, file_uri(looped))?;
+    let tail = find(line_of(REVIEW, 1), "print");
+    let r2 = code_action(c, looped, point(1, tail), "{\"diagnostics\": []}")?;
+    check_that(jstr(r2, "result/0/kind") == "quickfix", jv(r2, ""))?;
+    let title = jstr(r2, "result/0/title");
+    check_that(text_starts_with(title, "Review fix N0366: declare `! { io }` — right only if "), title)?;
+    check_that(text_contains(title, "meant to exercise"), title)?;
+    check_that(jq(r2, "result/0/isPreferred") < 0, jv(r2, ""))?;
+    check_that(jstr(r2, "result/0/edit/documentChanges/0/edits/0/newText") == "! { io }", jv(r2, ""))?;
+    // Only refactors or source actions asked for: none; quick fixes asked for: the same.
+    for only in text_split("[\"refactor\"]|[\"source\", \"source.fixAll\"]", "|") {
+        let r3 = code_action(c, looped, point(1, tail), f"{{\"diagnostics\": [], \"only\": {only}}}")?;
+        check_that(jv(r3, "result") == "[]", f"{only}: {jv(r3, "")}")?;
+    }
+    let r4 = code_action(c, looped, point(1, tail), "{\"diagnostics\": [], \"only\": [\"quickfix\"]}")?;
+    check_that(jlen(r4, "result") == 1, jv(r4, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+@test
+fn a_client_that_cannot_take_versioned_edits_is_offered_no_quick_fix(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", FIX_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize_with(c, pr.root, "{}")?;
+    lsp_open(c, main, 1, FIX_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let r = code_action(c, main, point(2, 5), "{\"diagnostics\": []}")?;
+    check_that(jv(r, "result") == "[]", "an edit the client could apply to another version is not sent")?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// Call hierarchy (N25). `é` and `😀` before the declaration and before both calls, on their lines.
+const CALL_LIB: Str = "pub fn far() -> Int { 0 }\n";
+const CALL_MAIN: Str = "use \"lib.nz\";\nfn s() -> Str { \"é😀\" } fn helper(n: Int) -> Int { n }\nfn caller() -> Int { let t = \"é😀\"; helper(1) + helper(far()) }\n";
+
+fn prepare_hierarchy(c: Lsp, path: Str, line: Int, character: Int) -> Result[JsonDoc, Str] ! { io } {
+    lsp_request(c, "textDocument/prepareCallHierarchy", doc_at(path, line, character))
+}
+
+fn hierarchy(c: Lsp, method: Str, item: Str) -> Result[JsonDoc, Str] ! { io } {
+    lsp_request(c, method, f"{{\"item\": {item}}}")
+}
+
+@test
+fn call_hierarchy_crosses_the_protocol_in_utf16_and_an_old_item_has_no_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", CALL_LIB, "main.nz", CALL_MAIN))?;
+    let lib = f"{pr.root}/lib.nz";
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    let init = lsp_initialize(c, pr.root)?;
+    check_that(jv(init, "result/capabilities/callHierarchyProvider") == "true", jv(init, ""))?;
+    lsp_open(c, main, 1, CALL_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "diagnostics") == "[]", jv(d, ""))?;
+    let l1 = line_of(CALL_MAIN, 1);
+    let l2 = line_of(CALL_MAIN, 2);
+    let decl = find(l1, "fn helper");
+    let helper_name = find(l1, "helper");
+    let call1 = find(l2, "helper(1)");
+    let call2 = find(l2, "helper(far");
+    let far_call = find(l2, "far()");
+    check_that(utf16(l1, helper_name) != helper_name, "bytes and units differ")?;
+    // Prepared from a call, with the cursor counted in UTF-16.
+    let r = prepare_hierarchy(c, main, 2, utf16(l2, call1) + 1)?;
+    check_that(jlen(r, "result") == 1, jv(r, ""))?;
+    check_that(jstr(r, "result/0/name") == "helper", jv(r, ""))?;
+    check_that(jint(r, "result/0/kind") == 12, "a function")?;
+    check_that(jstr(r, "result/0/detail") == "fn helper(n: Int) -> Int", jv(r, ""))?;
+    check_that(jstr(r, "result/0/uri") == file_uri(main), jv(r, ""))?;
+    check_that(jis(r, "result/0/range", urange(1, l1, decl, str_len(l1))), jv(r, ""))?;
+    check_that(jis(r, "result/0/selectionRange", urange(1, l1, helper_name, helper_name + 6)), jv(r, ""))?;
+    check_that(text_starts_with(jv(r, "result/0/data"), "{"), jv(r, ""))?;
+    let helper = jv(r, "result/0");
+    // From its declaration: the same item.
+    let r2 = prepare_hierarchy(c, main, 1, utf16(l1, helper_name))?;
+    check_that(jis(r2, "result", f"[{helper}]"), jv(r2, ""))?;
+    // A string, a local, a keyword: nothing.
+    let r3 = prepare_hierarchy(c, main, 2, utf16(l2, find(l2, "é")))?;
+    check_that(jv(r3, "result") == "null", jv(r3, ""))?;
+    let r4 = prepare_hierarchy(c, main, 2, utf16(l2, find(l2, "t =")))?;
+    check_that(jv(r4, "result") == "null", jv(r4, ""))?;
+    let r5 = prepare_hierarchy(c, main, 1, 0)?;
+    check_that(jv(r5, "result") == "null", jv(r5, ""))?;
+    // Incoming: one caller, both calls on one line, in order.
+    let inc = hierarchy(c, "callHierarchy/incomingCalls", helper)?;
+    check_that(jlen(inc, "result") == 1, jv(inc, ""))?;
+    let caller = jv(inc, "result/0/from");
+    check_that(jstr(inc, "result/0/from/name") == "caller", jv(inc, ""))?;
+    check_that(jis(inc, "result/0/from/range", urange(2, l2, 0, str_len(l2))), jv(inc, ""))?;
+    check_that(jis(inc, "result/0/from/selectionRange", urange(2, l2, 3, 9)), jv(inc, ""))?;
+    let both = f"[{urange(2, l2, call1, call1 + 6)}, {urange(2, l2, call2, call2 + 6)}]";
+    check_that(jis(inc, "result/0/fromRanges", both), jv(inc, ""))?;
+    // Outgoing from the caller: `far` in the other file, then `helper`.
+    let out = hierarchy(c, "callHierarchy/outgoingCalls", caller)?;
+    check_that(jlen(out, "result") == 2, jv(out, ""))?;
+    check_that(jstr(out, "result/0/to/name") == "far", jv(out, ""))?;
+    check_that(jstr(out, "result/0/to/uri") == file_uri(lib), jv(out, ""))?;
+    check_that(jis(out, "result/0/to/selectionRange", urange(0, CALL_LIB, 7, 10)), jv(out, ""))?;
+    check_that(jis(out, "result/0/fromRanges", f"[{urange(2, l2, far_call, far_call + 3)}]"), jv(out, ""))?;
+    check_that(jis(out, "result/1/to", helper), jv(out, ""))?;
+    check_that(jis(out, "result/1/fromRanges", both), jv(out, ""))?;
+    let none = hierarchy(c, "callHierarchy/outgoingCalls", helper)?;
+    check_that(jv(none, "result") == "[]", jv(none, ""))?;
+    // Asking changed nothing: the same request, the same answer.
+    let again = hierarchy(c, "callHierarchy/incomingCalls", helper)?;
+    check_that(jis(again, "result/0/from", caller), jv(again, ""))?;
+    // Any change ends the item — the same text again included. Prepared again, it answers.
+    lsp_change(c, main, 2, CALL_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    for method in text_split("callHierarchy/incomingCalls|callHierarchy/outgoingCalls", "|") {
+        let r6 = hierarchy(c, method, helper)?;
+        check_that(jv(r6, "result") == "null", f"{method}: {jv(r6, "")}")?;
+        check_that(jq(r6, "error") < 0, jv(r6, ""))?;
+    }
+    let r7 = prepare_hierarchy(c, main, 2, utf16(l2, call1))?;
+    let fresh = jv(r7, "result/0");
+    check_that(!jsame(r7, "result/0/data", r, "result/0/data"), jv(r7, ""))?;
+    let r8 = hierarchy(c, "callHierarchy/incomingCalls", fresh)?;
+    check_that(jstr(r8, "result/0/from/name") == "caller", jv(r8, ""))?;
+    // An item this server did not prepare — no data, or data that is not a locator — has no
+    // answer, and is not looked up by its name.
+    let f = "result/0";
+    let forged = f"\"name\": {jv(r7, f"{f}/name")}, \"kind\": {jv(r7, f"{f}/kind")}, \"detail\": {jv(r7, f"{f}/detail")}, \"uri\": {jv(r7, f"{f}/uri")}, \"range\": {jv(r7, f"{f}/range")}, \"selectionRange\": {jv(r7, f"{f}/selectionRange")}";
+    let r9 = hierarchy(c, "callHierarchy/incomingCalls", f"{{{forged}}}")?;
+    check_that(jv(r9, "result") == "null", jv(r9, ""))?;
+    let r10 = hierarchy(c, "callHierarchy/incomingCalls", f"{{{forged}, \"data\": {{\"name\": \"helper\"}}}}")?;
+    check_that(jv(r10, "result") == "null", jv(r10, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+const SHARED: Str = "pub fn target() -> Int { 0 }\n";
+const ROOT_A: Str = "use \"shared.nz\";\nfn only_a() -> Int { target() }\n";
+const ROOT_B: Str = "use \"shared.nz\";\nfn only_b() -> Int { target() }\n";
+
+fn callers(c: Lsp, item: Str) -> Result[Str, Str] ! { io } {
+    let r = hierarchy(c, "callHierarchy/incomingCalls", item)?;
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(r, "result") {
+        strs_push(out, jstr(r, f"result/{i}/from/name"));
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: str_join(out, ","))
+}
+
+@test
+fn a_hierarchy_item_belongs_to_the_document_it_was_prepared_from(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = files2("shared.nz", SHARED, "a.nz", ROOT_A);
+    strs_push(files, "b.nz");
+    strs_push(files, ROOT_B);
+    let pr = project(h, files)?;
+    let a = f"{pr.root}/a.nz";
+    let b = f"{pr.root}/b.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, a, 1, ROOT_A)?;
+    lsp_diagnostics_for(c, file_uri(a))?;
+    lsp_open(c, b, 1, ROOT_B)?;
+    lsp_diagnostics_for(c, file_uri(b))?;
+    let at = utf16(line_of(ROOT_A, 1), 21);
+    let ra = prepare_hierarchy(c, a, 1, at)?;
+    let rb = prepare_hierarchy(c, b, 1, at)?;
+    // The same declaration, two items.
+    check_that(jsame(ra, "result/0/uri", rb, "result/0/uri"), jv(rb, ""))?;
+    check_that(jsame(ra, "result/0/selectionRange", rb, "result/0/selectionRange"), jv(rb, ""))?;
+    check_that(!jsame(ra, "result/0/data", rb, "result/0/data"), jv(rb, ""))?;
+    let via_a = jv(ra, "result/0");
+    let via_b = jv(rb, "result/0");
+    check_that(callers(c, via_a)? == "only_a", "a's callers")?;
+    check_that(callers(c, via_b)? == "only_b", "b's callers")?;
+    // `b` closed: its item is not answered from `a`, which still loads the file.
+    lsp_close(c, b)?;
+    let r = hierarchy(c, "callHierarchy/incomingCalls", via_b)?;
+    check_that(jv(r, "result") == "null", jv(r, ""))?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// Completion at a hole, and the `.` trigger (N26). `é😀` before each hole on its line; each hole
+// in a function of its own.
+const HOLE_MAIN: Str = "struct Point {\n    y: Int,\n    x: Int,\n}\nenum State {\n    Ready,\n    Done(code: Int),\n}\nfn a(p: Point) -> Int {\n    let s = \"é😀\"; let n = p.\n    0\n}\nfn b() -> Int {\n    let s = \"é😀\"; let t = State.\n    0\n}\nfn c() -> Int {\n    let s = \"p.\"; // State.\n    0\n}\n";
+
+const TRIGGERED: Str = "\"context\": {\"triggerKind\": 2, \"triggerCharacter\": \".\"}";
+const INVOKED: Str = "\"context\": {\"triggerKind\": 1}";
+
+@test
+fn a_hole_completes_over_the_protocol_triggered_by_a_dot_in_utf16(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files1("main.nz", HOLE_MAIN))?;
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, HOLE_MAIN)?;
+    lsp_diagnostics_for(c, file_uri(main))?;
+    let cases = text_split("9|p.|x x: Int,y y: Int;13|State.|Done Done(code: Int),Ready Ready()", ";");
+    for case in cases {
+        let f = text_split(case, "|");
+        let ln = int_of(strs_get(f, 0));
+        let needle = strs_get(f, 1);
+        let text = line_of(HOLE_MAIN, ln);
+        let byte = find(text, needle) + str_len(needle);
+        let character = utf16(text, byte);
+        check_that(character != byte, "bytes and units differ here")?;
+        let by_dot = at_(c, "textDocument/completion", main, ln, character, TRIGGERED)?;
+        let asked = at_(c, "textDocument/completion", main, ln, character, INVOKED)?;
+        // What the source says, however the client says it asked.
+        check_that(jsame(by_dot, "result", asked, "result"), needle)?;
+        let got = strs_new();
+        let mut i = 0;
+        while i < jlen(by_dot, "result/items") {
+            let it = f"result/items/{i}";
+            let l = jstr(by_dot, f"{it}/label");
+            strs_push(got, f"{l} {jstr(by_dot, f"{it}/detail")}");
+            // Each inserts its name at the cursor and replaces nothing: not the `.`.
+            check_that(jis(by_dot, f"{it}/textEdit", f"{{\"range\": {point(ln, character)}, \"newText\": {json_quote(l)}}}"), jv(by_dot, ""))?;
+            i = i + 1;
+        }
+        check_that(str_join(got, ",") == strs_get(f, 2), f"{needle}: {str_join(got, ",")}")?;
+        check_that(jv(by_dot, "result/isIncomplete") == "false", jv(by_dot, ""))?;
+    }
+    // A `.` the client reports as a trigger where the source has no hole: in a string, in a
+    // comment, and after whitespace. Nothing is made up.
+    let text = line_of(HOLE_MAIN, 17);
+    let bytes = ints_new();
+    ints_push(bytes, find(text, "p.") + 2);
+    ints_push(bytes, find(text, "State.") + 6);
+    ints_push(bytes, find(text, "    ") + 2);
+    let mut k = 0;
+    while k < 3 {
+        let r = at_(c, "textDocument/completion", main, 17, utf16(text, ints_get(bytes, k)), TRIGGERED)?;
+        check_that(jv(r, "result") == "null", f"{ints_get(bytes, k)}: {jv(r, "")}")?;
+        k = k + 1;
+    }
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
+
+// R1-C1: a named function written as a value is a reference to it over the protocol, as a call
+// is; in its own module and from an importer.
+const VALUE_LIB: Str = "pub fn triple(n: Int) -> Int ! {} { n * 3 }\n";
+const VALUE_MAIN: Str = "use \"lib.nz\";\nfn double(n: Int) -> Int { n * 2 }\nfn apply_twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn main() -> Int { let s = \"é→😀\"; apply_twice(double, str_len(s)) + double(1) + apply_twice(triple, 2) }\n";
+
+fn named_span(uri: Str, n: Int, line: Str, at: Int, name: Str) -> Str ! {} {
+    f"{uri} {n} {utf16(line, at)} {utf16(line, at + str_len(name))}"
+}
+
+@test
+fn a_function_written_as_a_value_is_one_of_its_references_over_the_protocol(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let pr = project(h, files2("lib.nz", VALUE_LIB, "main.nz", VALUE_MAIN))?;
+    let lib = f"{pr.root}/lib.nz";
+    let main = f"{pr.root}/main.nz";
+    let c = lsp_start(h, pr.root)?;
+    lsp_initialize(c, pr.root)?;
+    lsp_open(c, main, 1, VALUE_MAIN)?;
+    let d = lsp_diagnostics_for(c, file_uri(main))?;
+    check_that(jv(d, "diagnostics") == "[]", jv(d, ""))?;
+    let lu = file_uri(lib);
+    let mu = file_uri(main);
+    let l1 = line_of(VALUE_MAIN, 1);
+    let body = line_of(VALUE_MAIN, 3);
+    let value = find(body, "(double") + 1;
+    let call = find(body, "double(1)");
+    let want = f"{named_span(mu, 1, l1, find(l1, "double"), "double")},{named_span(mu, 3, body, value, "double")},{named_span(mu, 3, body, call, "double")}";
+    // From the definition, from the value and from the call: one answer, the value included.
+    let froms = ints_new();
+    ints_push(froms, 1);
+    ints_push(froms, utf16(l1, find(l1, "double")) + 1);
+    ints_push(froms, 3);
+    ints_push(froms, utf16(body, value) + 1);
+    ints_push(froms, 3);
+    ints_push(froms, utf16(body, call) + 1);
+    let mut k = 0;
+    while k < 6 {
+        let got = str_join(located(references(c, main, ints_get(froms, k), ints_get(froms, k + 1), true)?)?, ",");
+        check_that(got == want, f"from line {ints_get(froms, k)}, column {ints_get(froms, k + 1)}: {got}")?;
+        k = k + 2;
+    }
+    // An imported function written as a value: its declaration is in the module that exports it.
+    let triple = find(body, "triple");
+    let got = str_join(located(references(c, main, 3, utf16(body, triple), true)?)?, ",");
+    let lib0 = line_of(VALUE_LIB, 0);
+    check_that(got == f"{named_span(lu, 0, lib0, find(lib0, "triple"), "triple")},{named_span(mu, 3, body, triple, "triple")}", got)?;
+    finished(h, c)?;
+    scratch_remove(h, pr.dir);
+    ok()
+}
