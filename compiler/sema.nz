@@ -6601,7 +6601,11 @@ fn check_negation(c: Ck, e: Int, expected: Int) -> Int {
     // digits, for an `Int128`.
     if sx_kind(c.t, operand) != tk_tuple() && (kind_of(c, operand) == "Int" || kind_of(c, operand) == "WideInt") {
         if expected >= 0 && is_integer(c, expected) && expected != t_int() {
-            return integer_literal(c, str_concat("-", sx_text(c.t, fld(c, operand, "value"))), fld(c, operand, "span"), expected);
+            let ls = fld(c, operand, "span");
+            let lt = integer_literal(c, str_concat("-", sx_text(c.t, fld(c, operand, "value"))), ls, expected);
+            // The literal's type, as the reference records it of the literal (`NumericFact`).
+            sm_put(c.mlit, sps(c, ls), spe(c, ls), lt);
+            return lt;
         }
     }
     let mut hint = t_int();
@@ -6731,7 +6735,13 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
         rt = value_type(c, rhs, h);
     }
     // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, a `Str`.
-    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before { return t_str(); }
+    // The reference checks it as that call, so its operands are checked a second time, as the
+    // call's arguments — and what they declare (an arm's binding, a closure) is declared again.
+    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before {
+        value_type(c, lhs, t_str());
+        value_type(c, rhs, t_str());
+        return t_str();
+    }
     let mut ok = false;
     if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem" { ok = lt == rt && is_num(c, lt); }
     if is_order(op) { ok = lt == rt && ordering(c, lt) == ""; }
@@ -14137,6 +14147,28 @@ pub fn ck_seq_kind(c: Ck, t: Int) -> Str {
     ""
 }
 pub fn ck_type_arg(c: Ck, t: Int, i: Int) -> Int { targ(c, t, i) }
+// What a type is to the lowering's operators: `int` (`Int`), `integer` (another integer type),
+// `float`, `bool`, `str`, `text`, `record`, `enum`, `array`, `box`, `chain`, `param`, or "".
+pub fn ck_type_class(c: Ck, t: Int) -> Str {
+    if t < 0 { return ""; }
+    if t == t_int() { return "int"; }
+    if t == t_bool() { return "bool"; }
+    if t == t_str() { return "str"; }
+    let g = tag(c, t);
+    if g == tag_builtin() {
+        if is_integer(c, t) { return "integer"; }
+        if is_num(c, t) { return "float"; }
+        if bname_of(c, t) == "Text" { return "text"; }
+        return "";
+    }
+    if g == tag_record() { return "record"; }
+    if g == tag_enum() { return "enum"; }
+    if g == tag_array() { return "array"; }
+    if g == tag_box() { return "box"; }
+    if g == tag_chain() { return "chain"; }
+    if g == tag_param() { return "param"; }
+    ""
+}
 
 // The binding the name written at `s..e` (absolute) is, or -1.
 pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }

@@ -348,6 +348,17 @@
         the function's own type. `run.sh core`: 3,048 agree, 0 differ; of 56,791 functions the
         lowering carries 45,712, all agree; the other parts 10,374, all agree; 964 whole
         documents, all the reference's bytes
+  - [x] Operators and numbers: arithmetic, `-` and comparisons of every type that has them (the
+        law by type: `int`, `num`, `bool`, `bytes`, `structural`, `parametric`), the bit
+        operators, integer literals of every integer type (their 128-bit two's complement in the
+        digests) and a negated one as one constant, `s + t` as `str_concat` and an append as
+        `str_append` (`appends_to`). The checker now checks `s + t`'s operands a second time, as
+        the reference checks them again as `str_concat`'s arguments (what they declare is
+        declared twice, as there), and records a negated literal's type. `run.sh core`: 3,048
+        agree, 0 differ; of 56,805 functions the lowering carries 48,939, all agree; the other
+        parts 10,374, all agree; 1,022 whole documents, all the reference's bytes. check 3,046
+        agree, 2 differ (carried 3,042, all agree), render likewise, facts 3,042 agree, 6 differ
+        (carried 3,042, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
