@@ -1,0 +1,15 @@
+// A failure ten thousand frames deep through `defer`s: none runs, and every frame's string is
+// released by its landing pad (7.5).
+
+fn down(out: OutCap, n: Int, k: Int, tag: Str) -> Int ! {io} {
+    let held = str_concat(tag, "!")
+    defer { print("d") }
+    if n == 0 { k + str_len(held) } else { down(out, n - 1, k, tag) + 1 }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(down(out, 2, 1, "a"))
+    println(down(out, 10000, 9223372036854775807, "x"))
+    println(7)
+    0
+}
