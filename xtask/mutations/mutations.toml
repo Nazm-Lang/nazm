@@ -19846,3 +19846,27 @@ find = '''        /// The code generator, as `nazm build --backend`: `llvm`, `cr
 replace = '''        /// The code generator, as `nazm build --backend`: `llvm`, `cranelift` or `nazm`.
         #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger::a_profile_reports_what_one_run_did_under_both_backends" }]
+
+[[mutation]]
+name = "r9-7-6-a-fused-branch-falls-through-the-wrong-way"
+why = "on aarch64 a comparison fused with its block's branch skips to the else block when its condition holds, not when it fails"
+file = "toolchain/codegen/sel.nz"
+find = '''            branch_to(g, 1, b_cond(cond ^ 1, 0), t.c)'''
+replace = '''            branch_to(g, 1, b_cond(cond, 0), t.c)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]
+
+[[mutation]]
+name = "r9-7-6-the-unguarded-remainder-divides-by-minus-one"
+why = "on x86-64 the remainder selected without its guard no longer stops before idiv for a divisor of -1, so the minimum's remainder by -1 traps"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''        cmp_imm8(b, B, -1)'''
+replace = '''        cmp_imm8(b, B, 0)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta" }]
+
+[[mutation]]
+name = "r9-7-6-the-unguarded-remainder-reads-the-select"
+why = "on aarch64 the remainder selected without its guard divides by the guard's select, a value never computed, instead of the divisor"
+file = "toolchain/codegen/sel.nz"
+find = '''                y.b = f.insts[i + 6].b'''
+replace = '''                y.b = r.b'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]

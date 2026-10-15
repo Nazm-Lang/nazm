@@ -136,7 +136,28 @@
       Ten mutants (`r9-…`, seven for D15, three for 7.5), each applied by hand, killed by its
       killer, restored. Not done: installing `nzcg` as `libexec/nazm/nzcg` in the release
       build (`cargo xtask` packaging), and `nazm profile --backend nazm`
-- [ ] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions
+- [x] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions.
+      aarch64 now does what x86-64 has done since 7.3: a comparison (integer or float — each
+      condition's inverse is exact, an unordered result included) or a checked operation's
+      overflow bit that only feeds its block's branch stays in the flags, `cmp`/`fcmp`/`adds`
+      then `b.cond`, no `cset`/`cbnz`. The guard LIR puts before `srem` (the minimum by -1 —
+      `const`, `cmp eq`, `const`, `cmp eq`, `and`, `const`, `select`: 7 instructions, 24 machine
+      instructions on x86-64) is recognised (`common.nz` `guarded_rem`: exactly that sequence,
+      no value of it read elsewhere) and not selected: x86-64 divides with one `cmp $-1` and a
+      branch over `cqo; idiv` (8 instructions), or at 64 bits for a narrower class, where `idiv`
+      cannot trap; aarch64 needs no guard, `sdiv`/`msub` give 0 themselves. New program
+      `tests/programs/guards.nz` (each width's minimum by -1, by 1, by itself; every comparison
+      ending a block, NaNs among the floats; checked arithmetic in a loop) and a Rust test
+      building the generator's programs for `x86_64-apple-darwin` under Rosetta
+      (`nazm_backend::the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta`).
+      `run.sh` 118 agree, 0 differ on each target, mixed (`even`) 118; `lines.sh` 48 agree, 2
+      skipped, on each; `unwind.sh` agrees on each; `encode.sh` 117 + 91. Measured on a loaded
+      machine (load 17–53, two other tracks running), the generator's executables before and
+      after interleaved, best of 21 (ms; LLVM -O0 beside): aarch64 arith 26.7 → 20.4 (24.7),
+      words 405.7 → 397.3 (551.0), fib 127.0 → 126.8 (156.8), sieve 17.6 → 17.3 (17.4); x86_64
+      under Rosetta arith 45.8 → 33.1 (39.1), fib 129.0 → 129.0 (139.9), words 525.9 → 527.6
+      (574.5), sieve 26.5 → 27.9 (26.6) — the last two within this machine's noise. Mutants
+      `r9-7-6-…` (three), applied by hand, killed, restored
 - [x] 7.8 Packaging: `nzcg` installed as `libexec/nazm/nzcg` wherever a toolchain is assembled,
       on the two macOS targets — `scripts/host-archive.sh` (the archive, with a line in its
       `INSTALL.txt`) and `scripts/release-candidate.sh` (its `MANIFEST.txt` lists the file with
