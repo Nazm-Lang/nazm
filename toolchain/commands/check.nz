@@ -3,9 +3,8 @@
 // `nazm check [OPTIONS] FILE`, run by the dispatcher (`nazm.nz`).
 //
 // A port of `crates/nazm-cli/src/checking.rs` (`run`) and of what `prepare.rs` settles before it,
-// over R2's front end: the loader (`compiler/load.nz`), the parser (`compiler/syntax.nz`), the
-// attributes (`compiler/configure.nz`) and the checker (`compiler/sema.nz`), driven as
-// `compiler/diagnose.nz` drives them. The diagnostics are written as `crate::emit` writes them —
+// over R2's front end, run whole through its published facts (`compiler/facts.nz`'s `fx_check`,
+// R2 design D24) under the names the user gave (`front.nz`). The diagnostics are written as `crate::emit` writes them —
 // `Diagnostic::render` over the whole compilation's source map, or one `nazm.diagnostic/1` line
 // each with `--json` — the warnings first, then `ok` or `nazm: N errors`, with the reference's exit
 // statuses.
@@ -20,24 +19,12 @@
 
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
-use "../../compiler/load.nz"
 use "../../compiler/sema.nz"
-use "../../compiler/configure.nz"
+use "../../compiler/facts.nz"
 use "cli.nz"
+use "front.nz"
 
 fn nl() -> Str { str_from_byte(10) }
-
-// The host, as Rust's `std::env::consts` names it: what `@cfg` asks of (`BuildConfig::host`).
-@cfg(os = "macos")
-fn host_os() -> Str { "macos" }
-@cfg(os = "linux")
-fn host_os() -> Str { "linux" }
-@cfg(os = "windows")
-fn host_os() -> Str { "windows" }
-@cfg(arch = "aarch64")
-fn host_arch() -> Str { "aarch64" }
-@cfg(arch = "x86_64")
-fn host_arch() -> Str { "x86_64" }
 
 // The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm check`.
 pub fn check_cli() -> Cli {
@@ -173,212 +160,18 @@ fn utf8_ok(s: Str) -> Bool {
     true
 }
 
-// --- the compilation, as `compiler/diagnose.nz` drives it -------------------------------------------
+// --- the compilation, through R2's facts (`compiler/facts.nz`) ---------------------------------------
 
-// The source map: each file's name, text and offset in the concatenation of them all.
-struct Map {
-    names: Strs,
-    texts: Strs,
-    bases: Ints,
-    // Per diagnostic of the compilation, the file a syntax diagnostic is known to be in; -1 for one
-    // whose file is found from its span.
-    file_of: Ints,
-}
-
-fn module_named(loaded: Loaded, name: Str) -> Int {
-    for i in 0..ld_count(loaded) {
-        if ld_name(loaded, i) == name { return i }
-    }
-    0 - 1
-}
-
-fn split_commas(s: Str) -> Strs {
-    let out = strs_new()
-    let mut from = 0
-    for i in 0..str_len(s) + 1 {
-        if i == str_len(s) || str_byte(s, i) == 44 {
-            strs_push(out, str_slice(s, from, i))
-            from = i + 1
-        }
-    }
-    out
-}
-
-fn mark(m: Map, d: Diags, file: Int) -> Int {
-    while ints_len(m.file_of) < dg_len(d) { ints_push(m.file_of, file) }
-    0
-}
-
-// The compilation rooted at `path`, loaded, parsed and checked, every diagnostic into `d`; "" when
-// the checker carries it whole, else why it stops.
-fn check_compilation(io: IoCap, path: Str, library: Str, d: Diags, m: Map, loaded: Loaded) -> Str {
-    let t = sx_tree()
-    let mut root_program = 0 - 1
-    let programs = ints_new()
-    let bases = ints_new()
-    let names = strs_new()
-    let graph = ck_graph()
-    for i in 0..ld_count(loaded) {
-        let own = dg_new()
-        let program = sx_parse_source(ld_text(loaded, i), t, own)
-        if i == 0 { root_program = program }
-        ck_graph_module(graph, ld_standard(loaded, i))
-        let count = ints_len(sx_items(t, sx_field(t, program, "imports")))
-        for k in 0..count { ck_graph_import(graph, ld_import_target(loaded, i, k)) }
-        if ld_implicit(loaded, i) != "" {
-            let given = split_commas(ld_implicit(loaded, i))
-            for k in 0..strs_len(given) {
-                ck_graph_implicit(graph, module_named(loaded, "@std/" + strs_get(given, k) + ".nz"))
-            }
-        }
-        ints_push(programs, program)
-        ints_push(bases, ld_base(loaded, i))
-        strs_push(names, ld_name(loaded, i))
-        dg_append(d, own, ld_base(loaded, i))
-        mark(m, d, i)
-    }
-    let syntax_failed = dg_len(d) > 0
-    let unsure = cf_configure(t, programs, bases, d, cf_host(host_os(), host_arch()))
-    mark(m, d, 0 - 1)
-    let parse_failed = dg_len(d) > 0
-    if syntax_failed { ck_graph_syntax_error(graph) }
-    if !syntax_failed && parse_failed { ck_graph_attribute_error(graph) }
-    let c = ck_check(t, programs, bases, names, graph)
-    if unsure { return "a condition on the host" }
-    let stopped = ck_stopped(c)
-    if stopped != "" { return "the checker stops at " + stopped }
-    dg_append(d, ck_diags(c), 0)
-    mark(m, d, 0 - 1)
-    ""
-}
-
-// --- rendering, as `Diagnostic::render` over the whole source map --------------------------------
-
-fn chars_in(s: Str, from: Int, to: Int) -> Int {
-    let mut c = 0
-    for i in from..to {
-        let b = str_byte(s, i)
-        if b < 128 || b >= 192 { c += 1 }
-    }
-    c
-}
-
-fn repeat(s: Str, n: Int) -> Str {
-    let parts = strs_new()
-    for _ in 0..n { strs_push(parts, s) }
-    str_join(parts, "")
-}
-
-// The file a global offset is in: the one whose text holds it, the last for the very end.
-fn file_at(m: Map, at: Int) -> Int {
-    let n = strs_len(m.names)
-    for k in 0..n {
-        let b = ints_get(m.bases, k)
-        if at >= b && at < b + str_len(strs_get(m.texts, k)) { return k }
-    }
-    n - 1
-}
-
-// Whether a span found from its offset alone could be the end of the file before (design D11).
-fn ambiguous(m: Map, at: Int) -> Bool {
-    for k in 1..strs_len(m.names) {
-        if ints_get(m.bases, k) == at { return true }
-    }
-    false
-}
-
-// `line_col` and `line_text` of a file-local offset.
-fn line_of(text: Str, local: Int) -> Int {
-    let mut lines = 0
-    for i in 0..local {
-        if str_byte(text, i) == 10 { lines += 1 }
-    }
-    lines + 1
-}
-
-fn line_start(text: Str, local: Int) -> Int {
-    let mut s = local
-    while s > 0 && str_byte(text, s - 1) != 10 { s -= 1 }
-    s
-}
-
-fn place(m: Map, file: Int, at: Int) -> Str {
-    let text = strs_get(m.texts, file)
-    let local = at - ints_get(m.bases, file)
-    int_to_str(line_of(text, local)) + ":" + int_to_str(chars_in(text, line_start(text, local), local) + 1)
-}
-
-// Diagnostic `i` rendered; "" when a span's file cannot be told (the caller refuses).
-fn render(m: Map, d: Diags, i: Int) -> Str {
-    let known = ints_get(m.file_of, i)
-    let start = ints_get(d.start, i)
-    let end = ints_get(d.end, i)
-    if known < 0 && ambiguous(m, start) { return "" }
-    let file = if known >= 0 { known } else { file_at(m, start) }
-    let text = strs_get(m.texts, file)
-    let local = start - ints_get(m.bases, file)
-    let ls = line_start(text, local)
-    let mut le = local
-    while le < str_len(text) && str_byte(text, le) != 10 { le += 1 }
-    let line = str_slice(text, ls, le)
-    let column = chars_in(text, ls, local) + 1
-    let line_no = line_of(text, local)
-    let gutter = int_to_str(line_no)
-    let pad = repeat(" ", str_len(gutter))
-    let mut primary = strs_get(d.label, i)
-    if primary == "" { primary = strs_get(d.message, i) }
-    let caret_col = column - 1
-    let mut width = end - start
-    if width < 1 { width = 1 }
-    let mut remaining = chars_in(text, ls, le) - caret_col
-    if remaining < 1 { remaining = 1 }
-    if width > remaining { width = remaining }
-    let out = strs_new()
-    strs_push(out, strs_get(d.severity, i) + "[" + strs_get(d.code, i) + "]: " + strs_get(d.message, i) + nl())
-    strs_push(out, "  --> " + strs_get(m.names, file) + ":" + int_to_str(line_no) + ":" + int_to_str(column) + nl())
-    strs_push(out, pad + " |" + nl())
-    strs_push(out, gutter + " | " + line + nl())
-    strs_push(out, pad + " | " + repeat(" ", caret_col) + repeat("^", width) + " " + primary + nl())
-    let sf = ints_get(d.sec_first, i)
-    for k in 0..ints_get(d.sec_count, i) {
-        let at = ints_get(d.sec_start, sf + k)
-        let mut there = file
-        if known < 0 {
-            if ambiguous(m, at) { return "" }
-            there = file_at(m, at)
-        }
-        let mut where = place(m, there, at)
-        if there != file { where = strs_get(m.names, there) + ":" + where }
-        strs_push(out, pad + " = at " + where + ": " + strs_get(d.sec_message, sf + k) + nl())
-    }
-    let help = strs_get(d.help, i)
-    if help != "" { strs_push(out, pad + " = help: " + help + nl()) }
-    let ff = ints_get(d.fix_first, i)
-    for k in 0..ints_get(d.fix_count, i) {
-        let what = strs_get(d.fix_description, ff + k) + " -> `" + strs_get(d.fix_replacement, ff + k) + "`"
-        if strs_get(d.fix_applicability, ff + k) == "automatic" {
-            strs_push(out, pad + " = fix: " + what + nl())
-        } else {
-            strs_push(out, pad + " = suggestion: " + what + nl())
-            strs_push(out, pad + "   right when: " + strs_get(d.fix_precondition, ff + k) + nl())
-        }
-    }
-    str_join(out, "")
-}
-
-// `crate::emit` of the diagnostics `which` picks, into `out`; false when one cannot be rendered.
-fn emit(m: Map, d: Diags, which: Ints, json: Bool, out: Strs) -> Bool {
+// `crate::emit` of the diagnostics `which` picks, into `out`.
+fn emit(f: Facts, names: Strs, which: Ints, json: Bool, out: Strs) -> Int {
+    let d = fx_diags(f)
+    let texts = fe_texts(f)
+    let bases = fe_bases(f)
     for k in 0..ints_len(which) {
         let i = ints_get(which, k)
-        if json {
-            strs_push(out, dg_json(d, i) + nl())
-        } else {
-            let r = render(m, d, i)
-            if r == "" { return false }
-            strs_push(out, r)
-        }
+        if json { strs_push(out, dg_json(d, i) + nl()) } else { strs_push(out, dg_render(d, i, names, texts, bases)) }
     }
-    true
+    0
 }
 
 fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
@@ -415,17 +208,13 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
     if exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
 
-    let d = dg_new()
-    let loaded = ld_load(file, library, d, io)
-    let m = Map(names: strs_new(), texts: strs_new(), bases: ints_new(), file_of: ints_new())
-    for i in 0..ld_count(loaded) {
-        strs_push(m.names, ld_name(loaded, i))
-        strs_push(m.texts, ld_text(loaded, i))
-        ints_push(m.bases, ld_base(loaded, i))
-    }
-    mark(m, d, 0 - 1)
+    let prefix = fe_prefix(io, file)
+    let f = fx_check(prefix + file, library, fe_host_os(), fe_host_arch(), io)
+    let d = fx_diags(f)
+    fe_unprefix_diags(d, prefix)
+    let names = fe_names(f, prefix)
     let out = strs_new()
-    if dg_len(d) > 0 {
+    if fe_load_failed(f) {
         let all = ints_new()
         let mut missing = true
         for i in 0..dg_len(d) {
@@ -433,7 +222,7 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
             if strs_get(d.code, i) != "N0205" { missing = false }
             ints_push(all, i)
         }
-        if !emit(m, d, all, json, out) { refuse(io, "a span at the boundary of two files") }
+        emit(f, names, all, json, out)
         eprint(str_join(out, ""))
         exit_with(if missing { 3 } else { 1 })
     }
@@ -444,18 +233,17 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         eprint("nazm: `--features` enables a package's features, and this program is not in a package" + nl())
         exit_with(5)
     }
-    let stopped = check_compilation(io, file, library, d, m, loaded)
-    if stopped != "" { refuse(io, stopped) }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
 
     let warnings = ints_new()
     let errors = ints_new()
     for i in 0..dg_len(d) {
         if strs_get(d.severity, i) == "warning" { ints_push(warnings, i) } else { ints_push(errors, i) }
     }
-    if !emit(m, d, warnings, json, out) { refuse(io, "a span at the boundary of two files") }
+    emit(f, names, warnings, json, out)
     let warned = str_join(out, "")
     let failed = strs_new()
-    if !emit(m, d, errors, json, failed) { refuse(io, "a span at the boundary of two files") }
+    emit(f, names, errors, json, failed)
     eprint(warned)
     let denied = deny && ints_len(warnings) > 0
     if ints_len(errors) == 0 && !denied {
