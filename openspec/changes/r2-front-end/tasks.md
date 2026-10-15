@@ -365,6 +365,14 @@
         `str_pad_end`. Not yet: a hole read through `show()`, a float's with a precision. `run.sh
         core`: 3,048 agree, 0 differ; of 56,811 functions the lowering carries 50,980, all agree;
         the other parts 10,374, all agree; 1,126 whole documents, all the reference's bytes
+  - [x] General `match` patterns (`matching_general`, `pattern_test`, `extract`, `guarded`):
+        literals, or-patterns, tuples, nested variants and guards, as a value and as a
+        statement — the scrutinee held in `temp scrutinee`, the arm chosen in `temp arm`, each
+        tested payload in `temp payload`, a branch exhaustiveness rules out ending the process
+        (`exit_with(70)`). digest.nz now reads a tuple's type (its record is named `(,)`).
+        `run.sh core`: 3,048 agree, 0 differ; of 56,861 functions the lowering carries 51,235,
+        all agree; the other parts 10,374, all agree; 1,133 whole documents, all the
+        reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
