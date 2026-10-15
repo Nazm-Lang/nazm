@@ -1,0 +1,133 @@
+// N53: generic channels (`docs/architecture.md` §7.55, the spec's *Generic channels*). Ported
+// from `crates/nazm-cli/tests/generic_channels.rs` (R7).
+//
+// A `Chan[T]` of strings, records and enums means the same in the interpreter and the native
+// backends — stdout, exit status and memory report — a value still queued when the last reference
+// goes is released exactly once, a send after close is refused and its value released by the
+// sender, and an element which cannot cross into a task is refused before anything runs.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn ok(r: Result[Str, Str]) -> Result[Int, Str] ! {} {
+    r?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn records_and_strings_cross_tasks_through_typed_channels_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(agrees(caps(io, p, sp, v, t), "\nstruct Job { name: Str, size: Int, }\n\nfn worker(jobs: Chan[Job], done: Chan[Str]) -> Int ! {} {\n    let got = vec_new[Job]();\n    while chan_recv_of(jobs, got) {\n        let j = vec_pop(got);\n        chan_send_of(done, str_concat(j.name, int_to_str(j.size)));\n    }\n    chan_close_of(done)\n}\n\nfn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {\n    let jobs = chan_new_of[Job](2);\n    let done = chan_new_of[Str](4);\n    scope {\n        spawn worker(jobs, done);\n        chan_send_of(jobs, Job(name: str_concat(\"a\", \"b\"), size: 1));\n        chan_send_of(jobs, Job(name: \"cd\", size: 2));\n        chan_close_of(jobs);\n    }\n    let out = vec_new[Str]();\n    while chan_recv_of(done, out) { print(vec_pop(out)); print(\";\"); }\n    0\n}\n", "ab1;cd2;0"))
+}
+
+@test
+fn an_enum_with_a_payload_and_plain_values_cross_a_channel(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(agrees(caps(io, p, sp, v, t), "\nenum Msg { Word(text: Str), Stop, }\n\nfn main(out: OutCap) -> Int {\n    let c = chan_new_of[Msg](3);\n    chan_send_of(c, Msg.Word(text: str_concat(\"he\", \"y\")));\n    chan_send_of(c, Msg.Stop());\n    chan_close_of(c);\n    let got = vec_new[Msg]();\n    let mut n = 0;\n    while chan_recv_of(c, got) {\n        match vec_pop(got) {\n            Msg.Word(text: w) => { print(w); n = n + 1; },\n            Msg.Stop() => { print(\".\"); n = n + 10; },\n        }\n    }\n    let b = chan_new_of[Bool](1);\n    chan_send_of(b, true);\n    let bs = vec_new[Bool]();\n    if chan_recv_of(b, bs) { if vec_pop(bs) { n = n + 100; } }\n    print(int_to_str(n));\n    0\n}\n", "hey.1110"))
+}
+
+@test
+fn a_value_still_queued_when_the_channel_goes_is_released_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let line = agrees(caps(io, p, sp, v, t), "\nfn main() -> Int {\n    let c = chan_new_of[Str](3);\n    chan_send_of(c, str_concat(\"left\", \"over\"));\n    chan_send_of(c, int_to_str(42));\n    0\n}\n", "0")?;
+    check_that(text_contains(line, "channels allocated=1"), line)
+}
+
+@test
+fn a_queued_string_outlives_the_binding_it_was_sent_from(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The channel holds its own reference: the value received must still be the one sent.
+    ok(agrees(caps(io, p, sp, v, t), "\nfn put(c: Chan[Str]) -> Bool {\n    let s = str_concat(\"ab\", \"cd\");\n    chan_send_of(c, s)\n}\n\nfn main(out: OutCap) -> Int {\n    let c = chan_new_of[Str](1);\n    put(c);\n    let junk = vec_new[Str]();\n    let mut i = 0;\n    while i < 64 {\n        vec_push(junk, str_concat(\"zz\", \"zz\"));\n        i = i + 1;\n    }\n    let got = vec_new[Str]();\n    if chan_recv_of(c, got) { print(vec_pop(got)); }\n    0\n}\n", "abcd0"))
+}
+
+@test
+fn a_send_after_close_is_refused_and_its_value_released(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    ok(agrees(caps(io, p, sp, v, t), "\nfn main(out: OutCap) -> Int {\n    let c = chan_new_of[Str](2);\n    chan_close_of(c);\n    let sent = chan_send_of(c, str_concat(\"never\", \"queued\"));\n    let got = vec_new[Str]();\n    let r = chan_recv_of(c, got);\n    if sent || r { print(\"wrong\"); }\n    print(int_to_str(vec_len(got)));\n    0\n}\n", "00"))
+}
+
+fn pair(a: Str, b: Str) -> Strs ! {} {
+    let x = strs_new();
+    strs_push(x, a);
+    strs_push(x, b);
+    x
+}
+
+/// The `nazm.check-report/1` line of a run's standard output, read.
+fn report(r: Ran) -> Result[JsonDoc, Str] ! {} {
+    for l in lines(r.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            return jparse(l);
+        }
+    }
+    Result[JsonDoc, Str].Err(error: f"no cache report: {ran_show(r)}")
+}
+
+fn interface(h: Caps, d: Str, main: Str, lib: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "nazm.root", "")?;
+    scratch_write(h, d, "main.nz", main)?;
+    scratch_write(h, d, "lib.nz", lib)?;
+    let cr = words("check main.nz --cache-report --json");
+    let first = nazm(h, d, cr);
+    check_that(first.code == 0, ran_show(first))?;
+    check_that(jtext(report(first)?, "declined") == "0", ran_show(first))?;
+    let again = nazm(h, d, cr);
+    check_that(again.code == 0, ran_show(again))?;
+    let r = report(again)?;
+    check_that(jtext(r, "checked") == "0", again.stdout)?;
+    check_that(jint(r, "reused") >= 2, again.stdout)?;
+    // An edited `main` is checked again against the library's interface as read back.
+    scratch_write(h, d, "main.nz", text_replace(main, "\"x\"", "\"z\""))?;
+    let edited = nazm(h, d, cr);
+    check_that(edited.code == 0, ran_show(edited))?;
+    check_that(jtext(report(edited)?, "checked") == "1", edited.stdout)?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\";\nfn main() -> Int { let c = chan_new_of[Str](1); put(c, \"q\"); 0 }\n")?;
+    let refused = nazm(h, d, cr);
+    check_that(refused.code == 1, f"a `Chan[Str]` passed for a `Chan[Item]`: {ran_show(refused)}")
+}
+
+@test
+fn a_channel_type_crosses_a_module_boundary_and_its_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let lib = "pub struct Item { tag: Str, }\npub fn put(c: Chan[Item], s: Str) -> Bool ! {} { chan_send_of(c, Item(tag: s)) }\n";
+    let main = "use \"lib.nz\";\nfn main(out: OutCap) -> Int {\n    let c = chan_new_of[Item](1);\n    put(c, str_concat(\"x\", \"y\"));\n    let v = vec_new[Item]();\n    if chan_recv_of(c, v) { print(vec_pop(v).tag); }\n    0\n}\n";
+    agrees_on(h, pair("main.nz", "lib.nz"), pair(main, lib), "xy0", 0)?;
+    let d = scratch_new(h);
+    let r = interface(h, d, main, lib);
+    scratch_remove(h, d);
+    r
+}
+
+@test
+fn a_typed_channel_s_operations_are_resource_sites(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int {\n    let c = chan_new_of[Str](1);\n    chan_send_of(c, \"a\");\n    let v = vec_new[Str]();\n    if chan_recv_of(c, v) { 1 } else { 0 }\n}\n")?;
+    let r = nazm(h, d, words("explain-cost prog.nz --json"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let doc = jparse(text_trim(r.stdout))?;
+    check_that(jtext(doc, "totals/channel/at-most-once") == "3", r.stdout)?;
+    check_that(jtext(doc, "totals/block/at-most-once") == "2", r.stdout)?;
+    check_that(jint(doc, "totals/allocation/at-most-once") >= 3, r.stdout)
+}
+
+@test
+fn an_element_that_cannot_cross_into_a_task_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("Ints", codes(h, "fn main() -> Int { let c = chan_new_of[Ints](1); 0 }\n"), words("N0390"))?;
+    same_strs("Vec[Int]", codes(h, "fn f(c: Chan[Vec[Int]]) -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0390"))?;
+    same_strs("a record holding Ints", codes(h, "struct Bag { xs: Ints, }\nfn main() -> Int { let c = chan_new_of[Bag](1); 0 }\n"), words("N0390"))?;
+    // A closure may hold storage it shares with its maker: it does not cross either.
+    same_strs("a closure", codes(h, "fn f(c: Chan[fn(Int) -> Int]) -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0390"))?;
+    // Strings, records of plain values and enums do.
+    same_strs("plain values", codes(h, "struct P { a: Str, b: Int, }\nenum E { A(s: Str), B, }\nfn f(c: Chan[P], d: Chan[E], e: Chan[Str], g: Chan[Bool]) -> Int { 0 }\nfn main() -> Int { 0 }\n"), strs_new())
+}
+
+@test
+fn a_typed_channel_carries_only_its_element(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    check_that(strs_len(codes(h, "fn main() -> Int { let c = chan_new_of[Str](1); chan_send_of(c, 3); 0 }\n")) > 0, "an Int sent on a Chan[Str]")?;
+    check_that(strs_len(codes(h, "fn f(c: Chan[Int, Int]) -> Int { 0 }\nfn main() -> Int { 0 }\n")) > 0, "Chan[Int, Int]")?;
+    // A vector of the element is not a channel of it, to a generic built-in either.
+    check_that(strs_len(codes(h, "fn main() -> Int { let v = vec_new[Int](); chan_send_of(v, 1); 0 }\n")) > 0, "a vector sent on")
+}
