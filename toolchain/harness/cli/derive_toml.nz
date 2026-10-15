@@ -1,0 +1,79 @@
+// R1c, L2c: `@derive(toml)` (`docs/spec.md`, *Derived serialisation*, **TOML**). Ported from
+// `crates/nazm-cli/tests/derive_toml.rs` (R7).
+//
+// A deployment of nested records written as TOML, read back to the same text, read from
+// hand-written TOML, refused with its path where malformed, the same under the interpreter, the
+// LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; the repository's own package
+// manifest read through a derived record; and what TOML cannot carry.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn program() -> Str ! {} {
+    "@derive(json, toml)\npub enum Mode { Fast, Safe, Custom(level: Int), }\n\n@derive(toml)\n@codec(tag = \"type\")\npub enum Store { Memory, Disk(path: Str, size_mb: Int), }\n\n@derive(toml)\npub struct Server { host: Str, port: UInt16, }\n\n@derive(json, toml)\n@codec(rename_all = \"kebab-case\")\npub struct Config {\n    app_name: Str,\n    version: Float64,\n    debug: Bool,\n    owner: Option[Str],\n    tags: Vec[Str],\n    mode: Mode,\n    retry_after: Mode,\n}\n\n@derive(toml)\npub struct Deploy {\n    config: Config,\n    servers: Vec[Server],\n    store: Store,\n    @codec(default)\n    replicas: Int,\n}\n\nfn show(out: OutCap, s: Str) -> Int ! { io } { print(str_concat(s, \"\\n\")) }\n\nfn main(out: OutCap) -> Int ! { io } {\n    let tags = vec_new[Str]();\n    vec_push(tags, \"web\");\n    let servers = vec_new[Server]();\n    vec_push(servers, Server(host: \"a.example\", port: UInt16(8080)));\n    vec_push(servers, Server(host: \"b.example\", port: UInt16(8081)));\n    let c = Config(app_name: \"demo\", version: 1.5, debug: false, owner: Option[Str].None(), tags: tags, mode: Mode.Fast(), retry_after: Mode.Custom(level: 3));\n    let d = Deploy(config: c, servers: servers, store: Store.Disk(path: \"/var/data\", size_mb: 512), replicas: 2);\n    let text = deploy_to_toml(d);\n    print(text);\n    show(out, \"---\");\n    match deploy_from_toml(text) {\n        Result.Ok(value: e) => show(out, if deploy_to_toml(e) == text { \"round trip: same text\" } else { \"round trip: DIFFERENT\" }),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    show(out, config_to_json(c));\n    match deploy_from_toml(\"[config]\\napp-name = \\\"x\\\"\\nversion = 2\\ndebug = true\\ntags = []\\nmode = \\\"Safe\\\"\\nretry-after = { Custom = { level = 9 } }\\nowner = \\\"me\\\"\\n\\n[[servers]]\\nhost = \\\"h\\\"\\nport = 1\\n\\n[store]\\ntype = \\\"Memory\\\"\\n\") {\n        Result.Ok(value: e) => show(out, deploy_to_toml(e)),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    match deploy_from_toml(\"[config]\\napp-name = \\\"x\\\"\\nversion = 1.0\\ndebug = true\\ntags = [1]\\nmode = \\\"Safe\\\"\\nretry-after = \\\"Fast\\\"\\n[store]\\ntype = \\\"Memory\\\"\\nservers = []\\n\") {\n        Result.Ok(value: e) => show(out, \"WRONG\"),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    match deploy_from_toml(\"servers = [{ host = \\\"h\\\", port = 70000 }]\\n[config]\\napp-name = \\\"x\\\"\\nversion = 1.0\\ndebug = true\\ntags = []\\nmode = \\\"Safe\\\"\\nretry-after = \\\"Fast\\\"\\n[store]\\ntype = \\\"Memory\\\"\\n\") {\n        Result.Ok(value: e) => show(out, \"WRONG\"),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    0\n}\n"
+}
+
+fn expected() -> Str ! {} {
+    "replicas = 2\n\n[config]\napp-name = \"demo\"\nversion = 1.5\ndebug = false\ntags = [\"web\"]\nmode = \"Fast\"\n\n[config.retry-after]\n\n[config.retry-after.Custom]\nlevel = 3\n\n[[servers]]\nhost = \"a.example\"\nport = 8080\n\n[[servers]]\nhost = \"b.example\"\nport = 8081\n\n[store]\ntype = \"Disk\"\npath = \"/var/data\"\nsize_mb = 512\n---\nround trip: same text\n{\"app-name\":\"demo\",\"version\":1.5,\"debug\":false,\"owner\":null,\"tags\":[\"web\"],\"mode\":\"Fast\",\"retry-after\":{\"Custom\":{\"level\":3}}}\nreplicas = 0\n\n[config]\napp-name = \"x\"\nversion = 2.0\ndebug = true\nowner = \"me\"\ntags = []\nmode = \"Safe\"\n\n[config.retry-after]\n\n[config.retry-after.Custom]\nlevel = 9\n\n[[servers]]\nhost = \"h\"\nport = 1\n\n[store]\ntype = \"Memory\"\n\nerror: $.config.tags[0]: expected a string\nerror: $.servers[0].port: 70000 is outside `UInt16`\n0\n"
+}
+
+@test
+fn a_derived_toml_codec_agrees_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, program(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == expected(), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"{r.label}: no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_package_manifest_reads_through_a_derived_record(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let manifest = read_text(h, f"{repo_root(h)}/examples/packages/app/nazm.toml")?;
+    let d = prog_dir(h, "nazm.toml", manifest)?;
+    let wrote = scratch_write(h, d, "m.nz", "@derive(toml)\nstruct Package { name: Str, version: Str, main: Option[Str], }\n\n@derive(toml)\nstruct Manifest { schema: Str, package: Package, }\n\nfn main(io: IoCap) -> Int ! {io} {\n    match manifest_from_toml(read_file(\"nazm.toml\")) {\n        Result.Ok(value: m) => { print(f\"{m.schema} {m.package.name} {m.package.version}\\n\"); 0 },\n        Result.Err(error: e) => { print(f\"{e}\\n\"); 1 },\n    }\n}\n");
+    let r = nazm(h, d, words("run --interpret m.nz"));
+    scratch_remove(h, d);
+    wrote?;
+    check_that(r.stdout == "nazm.package/1 app 0.1.0\n0\n", ran_show(r))
+}
+
+fn first_error(h: Caps, d: Str, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "r.nz", f"{src}fn main() -> Int {{ 0 }}\n")?;
+    let r = nazm(h, d, words("check r.nz"));
+    check_that(r.code != 0, src)?;
+    let errors = strs_new();
+    for l in lines(r.stderr) {
+        if text_starts_with(l, "error") {
+            strs_push(errors, l);
+        }
+    }
+    check_that(strs_len(errors) > 0 && text_starts_with(strs_get(errors, 0), want), f"{src}: {str_join(errors, " | ")}")
+}
+
+fn cannot_carry(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    first_error(h, d, "@derive(toml)\nstruct A { xs: Vec[Option[Int]], }\n", "error[N0619]: `@derive(toml)` cannot carry the field `xs`: TOML has no `null`")?;
+    first_error(h, d, "@derive(toml)\nstruct B { o: Option[Option[Int]], }\n", "error[N0619]: `@derive(toml)` cannot carry the field `o`: TOML has no `null`")?;
+    first_error(h, d, "@derive(toml)\nstruct C { n: UInt64, }\n", "error[N0619]: `@derive(toml)` cannot carry the field `n`: `UInt64` has values past `Int`")?;
+    first_error(h, d, "struct Plain { n: Int, }\n@derive(json, toml)\nstruct D { p: Plain, }\n", "error[N0619]: `@derive(json)` cannot carry the field `p`: `Plain` does not derive `json`")
+}
+
+@test
+fn what_toml_cannot_carry_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = cannot_carry(h, d);
+    scratch_remove(h, d);
+    r
+}

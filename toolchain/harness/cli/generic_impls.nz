@@ -1,0 +1,108 @@
+// R1b, L11b: impls of generic types (`docs/spec.md`, *Traits and methods*, **Impls of generic
+// types**). Ported from `crates/nazm-cli/tests/generic_impls.rs` (R7).
+//
+// `impl[T: Show] Show for Maybe[T]` implements a trait for every instance whose arguments meet the
+// impl's requirements: every implementation answers what the rules work out by hand, with nothing
+// live; one builds across modules; the header's form, the requirements, coherence and the orphan
+// rule hold.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+const GENERIC: Str = "trait Show {\n    fn show(self: Self) -> Str;\n    fn loud(self: Self) -> Str { str_concat(self.show(), \"!\") }\n}\n\nstruct Pair[A, B] { a: A, b: B, }\nenum Maybe[T] { No, Yes(v: T), }\n\nimpl Show for Int { fn show(self: Int) -> Str { num_to_str(self) } }\nimpl Show for Str { fn show(self: Str) -> Str { self } }\n\nimpl[A: Show, B: Show] Show for Pair[A, B] {\n    fn show(self: Self) -> Str {\n        str_concat(\"(\", str_concat(self.a.show(), str_concat(\", \", str_concat(self.b.show(), \")\"))))\n    }\n}\n\nimpl[T: Show] Show for Maybe[T] {\n    fn show(self: Maybe[T]) -> Str {\n        match self { Maybe.No() => \"no\", Maybe.Yes(v: v) => str_concat(\"yes \", v.show()), }\n    }\n}\n\nfn twice[T: Show](x: T) -> Str { str_concat(x.show(), x.loud()) }\nfn none() -> Maybe[Int] { Maybe[Int].No() }\nfn line(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn main(out: OutCap) -> Int ! {io} {\n    let p = Pair[Int, Str](a: 1, b: \"x\");\n    line(out, p.show());\n    line(out, p.loud());\n    line(out, twice(p));\n    let m = Maybe[Pair[Maybe[Int], Int]].Yes(v: Pair[Maybe[Int], Int](a: Maybe[Int].Yes(v: 7), b: 2));\n    line(out, twice(m));\n    line(out, Show.show(none()));\n    0\n}\n";
+
+@test
+fn an_impl_of_a_generic_type_means_the_same_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, GENERIC, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, "(1, x)\n(1, x)!\n(1, x)(1, x)!\nyes (yes 7, 2)yes (yes 7, 2)!\nno\n"), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn modules(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "show.nz", "pub trait Show { fn show(self: Self) -> Str; }\nimpl Show for Int { fn show(self: Int) -> Str { num_to_str(self) } }\n")?;
+    scratch_write(h, d, "wrap.nz", "use \"show.nz\";\npub struct W[T] { v: T, }\npub fn wrap(n: Int) -> W[Int] ! {} { W[Int](v: n) }\nimpl[T: Show] Show for W[T] { fn show(self: W[T]) -> Str { str_concat(\"w\", self.v.show()) } }\n")?;
+    scratch_write(h, d, "main.nz", "use \"show.nz\";\nuse \"wrap.nz\";\nfn g[T: Show](x: T) -> Str { x.show() }\nfn main(out: OutCap) -> Int ! {io} { let w = wrap(4); print(str_concat(w.show(), g(w))); 0 }\n")?;
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(text_starts_with(r.stdout, "w4w4"), ran_show(r))?;
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --backend {backend} main.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let n = bounded_exe(h, exe, "", suite_env(h));
+        check_that(text_starts_with(n.stdout, "w4w4"), f"{backend}: {ran_show(n)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_impl_of_a_generic_type_crosses_modules(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = modules(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+const HEAD: Str = "trait Show { fn show(self: Self) -> Str; }\nstruct P[A, B] { a: A, b: B, }\nstruct W[T] { v: T, }\nimpl Show for Int { fn show(self: Int) -> Str { \"i\" } }\n";
+
+/// Every error code `nazm check` reports for `HEAD` then `rest`, in order.
+fn with(h: Caps, rest: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let r = check_errors(h, f"{HEAD}{rest}")?;
+    Result[Strs, Str].Ok(value: r.codes)
+}
+
+fn holds(xs: Strs, x: Str) -> Bool ! {} {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+@test
+fn a_generic_impl_is_for_the_type_applied_to_its_parameters_and_holds_its_requirements(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The type applied to exactly the impl's parameters, in order.
+    same_strs("P[T, Int]", with(h, "impl[T] Show for P[T, Int] { fn show(self: P[T, Int]) -> Str { \"p\" } }\nfn main() -> Int { 0 }\n")?, words("N0604"))?;
+    same_strs("P[B, A]", with(h, "impl[A, B] Show for P[B, A] { fn show(self: P[B, A]) -> Str { \"p\" } }\nfn main() -> Int { 0 }\n")?, words("N0604"))?;
+    same_strs("Int", with(h, "impl[T] Show for Int { fn show(self: Int) -> Str { \"p\" } }\nfn main() -> Int { 0 }\n")?, words("N0604"))?;
+    // An instance whose argument does not meet a requirement has no impl: by a call, and by a
+    // bound.
+    let req = "impl[T: Show] Show for W[T] { fn show(self: W[T]) -> Str { self.v.show() } }\n";
+    same_strs("by a call", with(h, f"{req}fn main() -> Int {{ let w = W[Str](v: \"x\"); str_len(w.show()) }}\n")?, words("N0605"))?;
+    same_strs("by a bound", with(h, f"{req}fn f[T: Show](x: T) -> Int {{ str_len(x.show()) }}\nfn main() -> Int {{ f(W[Bool](v: true)) }}\n")?, words("N0364"))?;
+    // One impl of a trait per generic definition.
+    let two = with(h, f"{req}impl[U] Show for W[U] {{ fn show(self: W[U]) -> Str {{ \"b\" }} }}\nfn main() -> Int {{ 0 }}\n")?;
+    check_that(holds(two, "N0600"), str_join(two, ", "))
+}
+
+fn orphan(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "t.nz", "pub trait Show { fn show(self: Self) -> Str; }\n")?;
+    scratch_write(h, d, "w.nz", "pub struct W[T] { v: T, }\n")?;
+    scratch_write(h, d, "main.nz", "use \"t.nz\";\nuse \"w.nz\";\nimpl[T] Show for W[T] { fn show(self: W[T]) -> Str { \"w\" } }\nfn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("check main.nz"));
+    check_that(text_contains(r.stderr, "error[N0601]"), ran_show(r))
+}
+
+@test
+fn a_generic_impl_in_a_third_module_is_an_orphan(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = orphan(h, d);
+    scratch_remove(h, d);
+    r
+}
