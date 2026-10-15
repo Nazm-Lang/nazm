@@ -110,3 +110,12 @@
       every MIR statement's span Rust's; `nazm core-ir --with-sources` gives each module's file
       index and path, a call's `callee_at` and a binding's `at`. `run.sh`: lir ops --debug 161
       of 161 (base) and 1002 of 1002 (full) identical
+
+## 8. After 4.1
+
+- [x] 8.1 Failures by unwinding (performance-leadership 4.2): `rtext.nz` regenerated — runtime
+      ABI 34, `nz.exc` among the one-thread globals; LIR's text and digests unchanged, and no LIR
+      validator here to take the reference's new rule (design.md). `run.sh` against the reference
+      built at `ce24bcd0`: MIR 1453 of 1453, LIR tables and ops 1007 of 1007 (document, digests
+      and `--debug` included), runtime units 982 of 982, object cache 982 of 982 inputs (4546
+      units), the runtime digest equal, 39924 of 39924 mutants caught
