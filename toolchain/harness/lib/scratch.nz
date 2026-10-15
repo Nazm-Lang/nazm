@@ -41,6 +41,17 @@ pub fn scratch_write(h: Caps, dir: Str, rel: Str, text: Str) -> Result[Int, Str]
     if n < 0 { Result[Int, Str].Err(error: f"write {path}") } else { Result[Int, Str].Ok(value: n) }
 }
 
+/// Make the directory `dir/rel` and any it needs: `std::fs::create_dir_all`.
+pub fn scratch_mkdir(h: Caps, dir: Str, rel: Str) -> Result[Int, Str] ! { io } {
+    let io = h.io;
+    let v = h.v;
+    let path = str_vouch(f"{dir}/{rel}");
+    match dir_create_all(io, path) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: f"mkdir {path}: {io_error_show(e)}"),
+    }
+}
+
 /// The text of the file at `path`, or `Err` naming it.
 pub fn read_text(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
     let io = h.io;

@@ -1,0 +1,230 @@
+// Where a project begins, and what that decides. Ported from
+// `crates/nazm-cli/tests/source_root.rs` (R7).
+//
+// Under one declared root, a module has one identity whichever file the compilation started from,
+// whichever directory the checkout sits in, and whichever directory the shell is in. Each runs the
+// binary, because "the same in two compilations" is not a property one process can demonstrate
+// about itself.
+
+use "@std/path"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// `nazm interface ARGS` run from `cwd`.
+fn interface_in(h: Caps, cwd: Str, args: Strs) -> Ran ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "interface");
+    for x in args {
+        strs_push(a, x);
+    }
+    nazm(h, cwd, a)
+}
+
+fn published(h: Caps, cwd: Str, args: Strs) -> Result[Str, Str] ! { io, spawn } {
+    let out = interface_in(h, cwd, args);
+    check_that(out.code == 0, f"nazm interface {str_join(args, " ")} refused: {out.stderr}")?;
+    Result[Str, Str].Ok(value: text_trim(out.stdout))
+}
+
+/// A project with two entry points over one library.
+fn two_entry_points(h: Caps, dir: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, dir, "app.nz", "use \"lib/common.nz\";\nfn main() -> Int { shared(1) }\n")?;
+    scratch_write(h, dir, "tool.nz", "use \"lib/common.nz\";\nfn main() -> Int { shared(2) }\n")?;
+    scratch_write(h, dir, "lib/common.nz", "pub fn shared(n: Int) -> Int { helper() + n }\nfn helper() -> Int { 3 }\n")
+}
+
+/// A fresh directory, `body` run on it, then removed.
+fn in_dir(h: Caps, body: fn(Caps, Str) -> Result[Int, Str] ! { io, spawn }) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let r = body(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn deps_of_common() -> Str ! {} {
+    "\"dependencies\":[\"@core/prelude\",\"lib/common.nz\"]"
+}
+
+fn one_identity(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    two_entry_points(h, d)?;
+    scratch_write(h, d, "nazm.root", "")?;
+    // The library's own interface, published on its own.
+    let alone = published(h, d, words("lib/common.nz"))?;
+    check_that(text_contains(alone, "\"module\":\"lib/common.nz\""), alone)?;
+    // The same key, from three compilations that began at three different files.
+    let from_app = published(h, d, words("app.nz"))?;
+    let from_tool = published(h, d, words("tool.nz"))?;
+    check_that(text_contains(from_app, deps_of_common()), from_app)?;
+    check_that(text_contains(from_tool, deps_of_common()), from_tool)
+}
+
+@test
+fn a_marker_gives_a_module_one_identity_whichever_file_was_named(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, one_identity)
+}
+
+fn without_marker(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    two_entry_points(h, d)?;
+    let alone = published(h, d, words("lib/common.nz"))?;
+    check_that(text_contains(alone, "\"module\":\"common.nz\""), alone)?;
+    let from_app = published(h, d, words("app.nz"))?;
+    check_that(text_contains(from_app, deps_of_common()), from_app)
+}
+
+@test
+fn without_a_marker_the_key_still_depends_on_which_file_was_named(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The N3 behaviour, unchanged and asserted rather than left implied.
+    in_dir(h, without_marker)
+}
+
+fn named_root(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    two_entry_points(h, d)?;
+    let a = words("lib/common.nz --source-root");
+    strs_push(a, d);
+    let alone = published(h, d, a)?;
+    check_that(text_contains(alone, "\"module\":\"lib/common.nz\""), alone)?;
+    // And it agrees with the marker, byte for byte: two ways of saying one thing.
+    scratch_write(h, d, "nazm.root", "")?;
+    let marked = published(h, d, words("lib/common.nz"))?;
+    check_that(alone == marked, f"{alone}\nvs\n{marked}")
+}
+
+@test
+fn a_named_root_does_what_a_marker_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, named_root)
+}
+
+fn three_shells(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    two_entry_points(h, d)?;
+    scratch_write(h, d, "nazm.root", "")?;
+    let from_root = published(h, d, words("lib/common.nz"))?;
+    let from_lib = published(h, f"{d}/lib", words("common.nz"))?;
+    let a = strs_new();
+    strs_push(a, f"{d}/lib/common.nz");
+    let from_above = published(h, path_dir(d), a)?;
+    check_that(from_root == from_lib, f"{from_root}\nvs\n{from_lib}")?;
+    check_that(from_root == from_above, f"{from_root}\nvs\n{from_above}")
+}
+
+@test
+fn the_working_directory_does_not_reach_a_key(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, three_shells)
+}
+
+fn checkouts(h: Caps, a: Str, b: Str) -> Result[Int, Str] ! { io, spawn } {
+    check_that(a != b, "one directory twice")?;
+    two_entry_points(h, a)?;
+    scratch_write(h, a, "nazm.root", "")?;
+    two_entry_points(h, b)?;
+    scratch_write(h, b, "nazm.root", "")?;
+    let x = published(h, a, words("lib/common.nz"))?;
+    let y = published(h, b, words("lib/common.nz"))?;
+    check_that(x == y, f"{x}\nvs\n{y}")
+}
+
+@test
+fn two_checkouts_under_one_declared_root_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = scratch_new(h);
+    let b = scratch_new(h);
+    let r = checkouts(h, a, b);
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    r
+}
+
+fn nearest(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // A project inside a project is its own project.
+    scratch_write(h, d, "nazm.root", "")?;
+    scratch_write(h, d, "inner/nazm.root", "")?;
+    scratch_write(h, d, "inner/lib/m.nz", "pub fn v() -> Int { 1 }\n")?;
+    let out = published(h, d, words("inner/lib/m.nz"))?;
+    check_that(text_contains(out, "\"module\":\"lib/m.nz\""), out)
+}
+
+@test
+fn the_nearest_marker_decides(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, nearest)
+}
+
+fn marker_with_content(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "nazm.root", "version = 1\n")?;
+    scratch_write(h, d, "m.nz", "pub fn v() -> Int { 1 }\n")?;
+    let out = interface_in(h, d, words("m.nz"));
+    check_that(out.code != 0, ran_show(out))?;
+    check_that(text_contains(out.stderr, "must be empty"), out.stderr)
+}
+
+@test
+fn a_marker_with_anything_in_it_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, marker_with_content)
+}
+
+fn root_elsewhere(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "a/m.nz", "pub fn v() -> Int { 1 }\n")?;
+    scratch_mkdir(h, d, "b")?;
+    let a = words("a/m.nz --source-root");
+    strs_push(a, f"{d}/b");
+    let out = interface_in(h, d, a);
+    check_that(out.code != 0, ran_show(out))?;
+    check_that(text_contains(out.stderr, "not inside the source root"), out.stderr)
+}
+
+@test
+fn a_root_that_does_not_contain_the_root_module_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, root_elsewhere)
+}
+
+fn above_root(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "outside.nz", "pub fn v() -> Int { 4 }\n")?;
+    scratch_write(h, d, "project/nazm.root", "")?;
+    scratch_write(h, d, "project/main.nz", "use \"../outside.nz\";\nfn main() -> Int { v() }\n")?;
+    let a = words("run --interpret");
+    strs_push(a, f"{d}/project/main.nz");
+    let ran = nazm(h, "", a);
+    check_that(ran.code == 0, ran.stderr)?;
+    check_that(text_trim(ran.stdout) == "4", ran.stdout)?;
+    let out = interface_in(h, d, words("project/main.nz"));
+    check_that(out.code != 0, ran_show(out))?;
+    check_that(text_contains(out.stderr, "durable identity"), out.stderr)
+}
+
+@test
+fn a_module_above_the_declared_root_compiles_and_declines_a_key(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A limitation on durable identity is not a reason to refuse a program: it runs, and has no
+    // key.
+    in_dir(h, above_root)
+}
+
+fn run_app(h: Caps, d: Str) -> Str ! { io, spawn } {
+    let a = words("run --interpret");
+    strs_push(a, f"{d}/app.nz");
+    let out = nazm(h, "", a);
+    f"{out.code == 0} {text_trim(out.stdout)}"
+}
+
+fn marker_meaning(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    two_entry_points(h, d)?;
+    let before = run_app(h, d);
+    scratch_write(h, d, "nazm.root", "")?;
+    let after = run_app(h, d);
+    check_that(before == after, f"{before} vs {after}")?;
+    check_that(before == "true 4", before)
+}
+
+@test
+fn a_marker_changes_no_programs_meaning(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The marker is a build-system fact, not a language one.
+    in_dir(h, marker_meaning)
+}

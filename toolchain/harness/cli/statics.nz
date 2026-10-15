@@ -1,0 +1,112 @@
+// Gate 3: statics (`docs/spec.md`, *Statics*; `docs/systems-domains.md` Part B). Ported from
+// `crates/nazm-cli/tests/statics.rs` (R7).
+//
+// A static is one storage for the whole run — a static `Atomic` one cell every function, task,
+// generic instance and module reaches, in the interpreter and in both native backends at both
+// optimisation levels — a numeric or `Bool` static reads as its value, and every misuse is
+// refused before anything runs.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// The program, with the modules `others` (`name|text|…`) beside `prog.nz`, under the
+/// interpreter, and built and run by each backend at each level: each prints exactly `expected`
+/// and then `main`'s result, `0`, and exits 0.
+fn agrees_with(h: Caps, src: Str, others: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let parts = text_split(others, "|");
+    let mut i = 0;
+    while i + 1 < strs_len(parts) {
+        scratch_write(h, d, strs_get(parts, i), strs_get(parts, i + 1))?;
+        i = i + 2;
+    }
+    let want = f"{expected}0\n";
+    let env = suite_env(h);
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
+    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    let mut failed = "";
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let exe = f"{d}/{text_replace(text_replace(name, " ", ""), "-", "")}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        if b.code != 0 && str_len(failed) == 0 {
+            failed = f"{name}: {b.stderr}";
+        }
+        vec_push(runs, Labeled(label: name, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failed) == 0, failed)?;
+    for r in runs {
+        check_that(r.ran.code == 0, f"{r.label}: {r.ran.stderr}\n{src}")?;
+        check_that(r.ran.stdout == want, f"{r.label}: {r.ran.stdout}\n{src}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+const SHOW: Str = "fn show(out: OutCap, n: Int) -> Int ! {io} { print(str_concat(num_to_str(n), \"\\n\")) }\n";
+
+@test
+fn a_number_or_bool_static_reads_as_its_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_with(h, f"{SHOW}static LIMIT: Int = 3 * 1000;\nstatic SMALL: UInt8 = 200;\nstatic SCALE: Float64 = 2.5;\nstatic ON: Bool = !false;\nconst TWICE: Int = LIMIT * 2;\n\nfn main(out: OutCap) -> Int ! {{io}} {{\n    show(out, LIMIT);\n    show(out, Int(SMALL) + 1);\n    show(out, Int(SCALE * 2.0));\n    show(out, if ON {{ 1 }} else {{ 0 }});\n    show(out, TWICE);\n    0\n}}\n", "", "3000\n201\n5\n1\n6000\n")
+}
+
+@test
+fn a_static_atomic_is_one_cell_for_every_function_task_and_instance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_with(h, f"{SHOW}static START: Int = 7;\nstatic TICKS: Atomic = atomic_new(START);\n\nfn tick(n: Int) -> Int {{\n    let mut i = 0;\n    while i < n {{\n        atomic_add(TICKS, 1);\n        i = i + 1;\n    }}\n    0\n}}\n\nfn through[T](x: T) -> Int {{ atomic_add(TICKS, 100) }}\n\nfn main(out: OutCap, tasks: SpawnCap) -> Int ! {{io, spawn}} {{\n    show(out, atomic_load(TICKS));\n    scope {{\n        spawn tick(1500);\n        spawn tick(1500);\n        spawn tick(1500);\n    }}\n    show(out, atomic_load(TICKS));\n    show(out, through(true));\n    show(out, through(\"s\"));\n    let copy = TICKS;\n    atomic_store(copy, 1);\n    show(out, atomic_load(TICKS));\n    0\n}}\n", "", "7\n4507\n4507\n4607\n1\n")
+}
+
+@test
+fn a_static_is_its_modules_and_its_functions_reach_it_from_anywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let counter = "static COUNT: Atomic = atomic_new(40);\npub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }\npub fn count() -> Int ! {} { atomic_load(COUNT) }\n";
+    agrees_with(h, f"{SHOW}use \"counter.nz\";\n\nfn main(out: OutCap) -> Int ! {{io}} {{\n    bump();\n    bump();\n    show(out, count());\n    0\n}}\n", f"counter.nz|{counter}", "42\n")
+}
+
+/// Two modules each declaring `COUNT` and `LIMIT` have four statics, not two: each function
+/// reaches its own module's, in the interpreter and both backends.
+@test
+fn two_modules_same_named_statics_are_each_their_own(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let counter = "static COUNT: Atomic = atomic_new(40);\nstatic LIMIT: Int = 70;\npub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }\npub fn count() -> Int ! {} { atomic_load(COUNT) }\npub fn limit() -> Int ! {} { LIMIT }\n";
+    agrees_with(h, f"{SHOW}use \"counter.nz\";\n\nstatic COUNT: Atomic = atomic_new(1);\nstatic LIMIT: Int = 5;\n\nfn main(out: OutCap) -> Int ! {{io}} {{\n    atomic_add(COUNT, 1);\n    bump();\n    bump();\n    show(out, atomic_load(COUNT));\n    show(out, count());\n    show(out, LIMIT + limit());\n    0\n}}\n", f"counter.nz|{counter}", "2\n42\n75\n")
+}
+
+@test
+fn every_misuse_of_a_static_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let MAIN = "fn main() -> Int { 0 }\n";
+    // Read-only: there are no mutable global variables.
+    same_strs("assigned", refused(h, "static A: Int = 1;\nfn main() -> Int { A = 2; 0 }\n")?, words("N0625"))?;
+    same_strs("assigned an atomic", refused(h, "static A: Atomic = atomic_new(1);\nfn main() -> Int { A = atomic_new(2); 0 }\n")?, words("N0625"))?;
+    // Its module's own.
+    same_strs("pub", refused(h, f"pub static A: Int = 1;\n{MAIN}")?, words("N0101"))?;
+    // A number, a `Bool` or an `Atomic`, started by a constant or `atomic_new` of one.
+    same_strs("Str", refused(h, f"static A: Str = \"x\";\n{MAIN}")?, words("N0622"))?;
+    same_strs("record", refused(h, f"struct P {{ x: Int, }}\nstatic A: P = P(x: 1);\n{MAIN}")?, words("N0622"))?;
+    same_strs("atomic of a number", refused(h, f"static A: Atomic = 5;\n{MAIN}")?, words("N0622"))?;
+    same_strs("a call", refused(h, f"fn f() -> Int {{ 1 }}\nstatic A: Int = f();\n{MAIN}")?, words("N0622"))?;
+    // Storage is not a length, and an atomic's cell is no constant's value.
+    same_strs("a length", refused(h, f"static N: Int = 2;\nstruct Q {{ xs: [Int; N], }}\n{MAIN}")?, words("N0622"))?;
+    same_strs("a constant's value", refused(h, f"static A: Atomic = atomic_new(1);\nconst B: Int = A;\n{MAIN}")?, words("N0622"))?;
+    // A value that would trap is refused where it is declared, as a constant's is.
+    same_strs("a trap", refused(h, f"static A: Int = 9223372036854775807 + 1;\n{MAIN}")?, words("N0623"))
+}
+
+@test
+fn static_stays_a_name_outside_an_item_start(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A word only before a name and a `:` at an item's start, as `const` is.
+    agrees_with(h, "fn main() -> Int { let static = 2; static * 21 - 42 }\n", "", "")
+}
