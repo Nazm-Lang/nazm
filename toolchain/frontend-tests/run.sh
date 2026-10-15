@@ -72,7 +72,9 @@ for mode in $modes; do
         timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
       check)
         { "$R2_NAZM" check --json --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep "^{" > "$want" || true
-        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" > "$got" 2>&1 || true ;;
+        # Standard error says where the checker stopped (design D13), kept beside the result.
+        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
@@ -86,7 +88,21 @@ for mode in $modes; do
   ' sh
   agree=$(find "$out/$mode" -name '*.ok' | wc -l | tr -d ' ')
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
-  echo "$mode: $agree agree, $differ differ"
+  if [ "$mode" = check ]; then
+    # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
+    # defect rather than a gap.
+    carried=0; carried_ok=0
+    for ok in "$out/$mode"/*.ok "$out/$mode"/*.diff; do
+      [ -e "$ok" ] || continue
+      base=${ok%.*}
+      [ -e "$base.stop" ] && continue
+      carried=$((carried + 1))
+      case $ok in *.ok) carried_ok=$((carried_ok + 1)) ;; esac
+    done
+    echo "$mode: $agree agree, $differ differ; the checker carries $carried, of which $carried_ok agree"
+  else
+    echo "$mode: $agree agree, $differ differ"
+  fi
   [ "$differ" -eq 0 ] || status=1
 done
 exit ${status:-0}

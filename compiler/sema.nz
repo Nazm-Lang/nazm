@@ -1,0 +1,2335 @@
+// The checker, written against `syntax.nz`'s tree (R2, slices 3-4; `openspec/changes/r2-front-end/`
+// design D13): a port of `nazm-core/src/check` and `nazm-sema`, stage by stage as `check_reusing`
+// runs them, each diagnostic as the reference words and places it.
+//
+// It knows where it stops. Whatever it meets that it does not carry yet — a construct, a type, a
+// built-in, a stage — it records as the reason it stopped (`ck_stopped`), and the driver then
+// reports none of its diagnostics for that compilation: a partial checker must never say what the
+// reference would not, so every difference among the compilations it does carry is a defect.
+//
+// Carried today: one module and the core prelude; records and enums (the prelude's generic two
+// included as declarations); functions with no type or effect parameters, contracts, attributes
+// or `pub`; `let`, assignment to a binding or its fields, `while`, `return`, `break`, `continue`;
+// literals, names, `-`, `!`, the binary operators but shifts, calls of the module's functions and
+// of the built-ins that are monomorphic and need no authority, construction of records and of
+// variants, field reads, `if` and blocks; the rules about `main`.
+
+use "syntax.nz";
+use "diag.nz";
+use "builtins.nz";
+
+// --- the checker's state -------------------------------------------------------------------
+
+pub struct Ck {
+    t: Tree,
+    d: Diags,
+    // Why it stopped; empty while it carries everything it has met.
+    stop: Strs,
+    // Scalars, by the slots below.
+    st: Ints,
+    // Modules, in the compilation's order: each one's program node and the offset of its text.
+    mprog: Ints,
+    mbase: Ints,
+    // Types, interned: a tag, three words, a name, and a run of arguments.
+    tytag: Ints,
+    tya: Ints,
+    tyb: Ints,
+    tyc: Ints,
+    tyname: Strs,
+    tyargf: Ints,
+    tyargc: Ints,
+    tyargs: Ints,
+    tykey: Strs,
+    // Records: name, module, name span (absolute), type parameters, fields (a run of the pool).
+    rname: Strs,
+    rmod: Ints,
+    rns: Ints,
+    rne: Ints,
+    rnp: Ints,
+    rff: Ints,
+    rfc: Ints,
+    // Enums: the same, with a run of variants.
+    ename: Strs,
+    emod: Ints,
+    ens: Ints,
+    ene: Ints,
+    enp: Ints,
+    evf: Ints,
+    evc: Ints,
+    // Variants, pooled: name, name span, fields (a run of the pool).
+    vname: Strs,
+    vns: Ints,
+    vne: Ints,
+    vff: Ints,
+    vfc: Ints,
+    // Fields, pooled: name, type, name span, type span.
+    fname: Strs,
+    fty: Ints,
+    fns: Ints,
+    fne: Ints,
+    // Functions: name, module, name span, tree node, parameter types (a run of `ptys`), result,
+    // whether it returns nothing.
+    fnname: Strs,
+    fnmod: Ints,
+    fnns: Ints,
+    fnne: Ints,
+    fnnode: Ints,
+    fnpf: Ints,
+    fnpc: Ints,
+    fnret: Ints,
+    fnnores: Ints,
+    ptys: Ints,
+    // The built-ins (`builtins.nz`): name, parameter types (a run of `ptys`), result, whether
+    // each is carried, whether a module's function of its name hides it, effect, authority.
+    bname: Strs,
+    bpf: Ints,
+    bpc: Ints,
+    bret: Ints,
+    bok: Ints,
+    bprelude: Ints,
+    beff: Strs,
+    bcaps: Strs,
+    // The type names the module being checked may write, and what each names.
+    tnames: Strs,
+    ttys: Ints,
+    // Scopes: bindings, innermost last, and where each frame begins.
+    sname: Strs,
+    sty: Ints,
+    smut: Ints,
+    sds: Ints,
+    sde: Ints,
+    frames: Ints,
+}
+
+fn s_ret() -> Int { 0 }
+fn s_rs() -> Int { 1 }
+fn s_re() -> Int { 2 }
+fn s_loop() -> Int { 3 }
+fn s_discard() -> Int { 4 }
+fn s_unwanted() -> Int { 5 }
+fn s_module() -> Int { 6 }
+fn s_slots() -> Int { 7 }
+
+fn gs(c: Ck, slot: Int) -> Int { ints_get(c.st, slot) }
+fn ss(c: Ck, slot: Int, v: Int) -> Int { ints_set(c.st, slot, v); 0 }
+
+// Stop: the compilation uses something this checker does not carry yet. The first reason is kept.
+fn stop(c: Ck, why: Str) -> Int {
+    if strs_len(c.stop) == 0 { strs_push(c.stop, why); }
+    0
+}
+
+pub fn ck_stopped(c: Ck) -> Str {
+    if strs_len(c.stop) == 0 { return ""; }
+    strs_get(c.stop, 0)
+}
+
+pub fn ck_diags(c: Ck) -> Diags { c.d }
+
+fn cat3(a: Str, b: Str, x: Str) -> Str { str_concat(str_concat(a, b), x) }
+fn cat4(a: Str, b: Str, x: Str, y: Str) -> Str { str_concat(cat3(a, b, x), y) }
+fn cat5(a: Str, b: Str, x: Str, y: Str, z: Str) -> Str { str_concat(cat4(a, b, x, y), z) }
+fn tick(s: Str) -> Str { cat3("`", s, "`") }
+fn plural(n: Int) -> Str { if n == 1 { return ""; } "s" }
+
+fn starts_upper(s: Str) -> Bool {
+    if str_len(s) == 0 { return false; }
+    let b = str_byte(s, 0);
+    b >= 65 && b <= 90
+}
+
+fn str_has(s: Str, part: Str) -> Bool {
+    let n = str_len(part);
+    let mut i = 0;
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn strs_find(xs: Strs, s: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        if strs_get(xs, i) == s { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// --- the tree, as the checker reads it ------------------------------------------------------
+
+fn fld(c: Ck, n: Int, name: Str) -> Int { sx_field(c.t, n, name) }
+fn fname_of(c: Ck, n: Int, name: Str) -> Str { sx_name(c.t, n, name) }
+fn kids(c: Ck, n: Int, name: Str) -> Ints { sx_items(c.t, sx_field(c.t, n, name)) }
+fn some(c: Ck, n: Int, name: Str) -> Bool { sx_is_some(c.t, sx_field(c.t, n, name)) }
+fn unwrap(c: Ck, n: Int, name: Str) -> Int { sx_unwrap(c.t, sx_field(c.t, n, name)) }
+fn flag(c: Ck, n: Int, name: Str) -> Bool { sx_text(c.t, sx_field(c.t, n, name)) == "true" }
+
+// A span's ends, at their offsets in the whole compilation: the module being worked on's base.
+fn base(c: Ck) -> Int { ints_get(c.mbase, gs(c, s_module())) }
+fn sps(c: Ck, span: Int) -> Int { sx_s(c.t, span) + base(c) }
+fn spe(c: Ck, span: Int) -> Int { sx_e(c.t, span) + base(c) }
+
+// An expression's span, and a statement's.
+fn espan(c: Ck, e: Int) -> Int { expr_span(c.t, e) }
+fn stmt_span(c: Ck, s: Int) -> Int {
+    if sx_kind(c.t, s) == tk_tuple() {
+        if sx_text(c.t, s) == "Expr" { return expr_span(c.t, sx_kid(c.t, s, 0)); }
+        return sx_field(c.t, sx_kid(c.t, s, 0), "span");
+    }
+    sx_field(c.t, s, "span")
+}
+
+// What kind of node an expression or a statement is: its variant's name.
+fn kind_of(c: Ck, n: Int) -> Str { sx_text(c.t, n) }
+
+// Report an error at a tree span of the module being worked on.
+fn err(c: Ck, code: Str, span: Int, message: Str, help: Str) -> Int {
+    dg_error(c.d, code, sps(c, span), spe(c, span), message, "", help)
+}
+fn sec(c: Ck, span: Int, message: Str) -> Int { dg_secondary(c.d, sps(c, span), spe(c, span), message) }
+fn sec_at(c: Ck, s: Int, e: Int, message: Str) -> Int { dg_secondary(c.d, s, e, message) }
+
+// --- types ------------------------------------------------------------------------------------
+
+fn tag_builtin() -> Int { 1 }
+fn tag_vec() -> Int { 2 }
+fn tag_record() -> Int { 3 }
+fn tag_enum() -> Int { 4 }
+fn tag_param() -> Int { 5 }
+
+fn t_int() -> Int { 0 }
+fn t_bool() -> Int { 1 }
+fn t_str() -> Int { 2 }
+fn t_ints() -> Int { 3 }
+fn t_strs() -> Int { 4 }
+
+// The owners a type parameter may have.
+fn own_record() -> Int { 1 }
+fn own_enum() -> Int { 2 }
+
+fn intern(c: Ck, tag: Int, a: Int, b: Int, x: Int, name: Str, args: Ints) -> Int {
+    let parts = strs_new();
+    strs_push(parts, int_to_str(tag));
+    strs_push(parts, int_to_str(a));
+    strs_push(parts, int_to_str(b));
+    strs_push(parts, int_to_str(x));
+    strs_push(parts, name);
+    let mut i = 0;
+    while i < ints_len(args) {
+        strs_push(parts, int_to_str(ints_get(args, i)));
+        i = i + 1;
+    }
+    let key = str_join(parts, ":");
+    let found = strs_find(c.tykey, key);
+    if found >= 0 { return found; }
+    strs_push(c.tykey, key);
+    ints_push(c.tytag, tag);
+    ints_push(c.tya, a);
+    ints_push(c.tyb, b);
+    ints_push(c.tyc, x);
+    strs_push(c.tyname, name);
+    ints_push(c.tyargf, ints_len(c.tyargs));
+    ints_push(c.tyargc, ints_len(args));
+    i = 0;
+    while i < ints_len(args) {
+        ints_push(c.tyargs, ints_get(args, i));
+        i = i + 1;
+    }
+    strs_len(c.tykey) - 1
+}
+
+fn builtin_ty(c: Ck, name: Str) -> Int { intern(c, tag_builtin(), 0, 0, 0, name, ints_new()) }
+fn vec_of(c: Ck, elem: Int) -> Int {
+    let a = ints_new();
+    ints_push(a, elem);
+    intern(c, tag_vec(), 0, 0, 0, "", a)
+}
+fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
+fn enum_ty(c: Ck, e: Int, args: Ints) -> Int { intern(c, tag_enum(), e, 0, 0, "", args) }
+fn param_ty(c: Ck, owner: Int, id: Int, index: Int, name: Str) -> Int { intern(c, tag_param(), owner, id, index, name, ints_new()) }
+
+fn tag(c: Ck, t: Int) -> Int { ints_get(c.tytag, t) }
+fn ta(c: Ck, t: Int) -> Int { ints_get(c.tya, t) }
+fn targc(c: Ck, t: Int) -> Int { ints_get(c.tyargc, t) }
+fn targ(c: Ck, t: Int, i: Int) -> Int { ints_get(c.tyargs, ints_get(c.tyargf, t) + i) }
+fn targs(c: Ck, t: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < targc(c, t) {
+        ints_push(out, targ(c, t, i));
+        i = i + 1;
+    }
+    out
+}
+fn is_record(c: Ck, t: Int) -> Bool { tag(c, t) == tag_record() }
+fn is_enum(c: Ck, t: Int) -> Bool { tag(c, t) == tag_enum() }
+fn bname_of(c: Ck, t: Int) -> Str {
+    if tag(c, t) == tag_builtin() { return strs_get(c.tyname, t); }
+    ""
+}
+
+// The built-in types, by name (`Type::from_name`), in `Type::ALL`'s order.
+fn builtin_names() -> Strs {
+    let s = strs_new();
+    strs_push(s, "Int");
+    strs_push(s, "Bool");
+    strs_push(s, "Str");
+    strs_push(s, "Ints");
+    strs_push(s, "Strs");
+    strs_push(s, "Chan");
+    strs_push(s, "IoCap");
+    strs_push(s, "SpawnCap");
+    strs_push(s, "ForeignCap");
+    strs_push(s, "VouchCap");
+    strs_push(s, "TimeCap");
+    strs_push(s, "MmioCap");
+    strs_push(s, "OutCap");
+    strs_push(s, "NetCap");
+    strs_push(s, "RandomCap");
+    strs_push(s, "ProcessCap");
+    strs_push(s, "Int8");
+    strs_push(s, "Int16");
+    strs_push(s, "Int32");
+    strs_push(s, "UInt8");
+    strs_push(s, "UInt16");
+    strs_push(s, "UInt32");
+    strs_push(s, "UInt64");
+    strs_push(s, "Float32");
+    strs_push(s, "Float64");
+    strs_push(s, "Bytes");
+    strs_push(s, "Text");
+    strs_push(s, "OsHandle");
+    strs_push(s, "Atomic");
+    strs_push(s, "Int128");
+    strs_push(s, "UInt128");
+    s
+}
+
+fn is_builtin_name(name: Str) -> Bool { strs_find(builtin_names(), name) >= 0 }
+
+fn all_names() -> Str {
+    let names = builtin_names();
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(names) {
+        strs_push(out, tick(strs_get(names, i)));
+        i = i + 1;
+    }
+    str_join(out, ", ")
+}
+
+fn is_cap_name(name: Str) -> Bool {
+    let i = strs_find(builtin_names(), name);
+    i >= 6 && i <= 15
+}
+
+fn is_num_name(name: Str) -> Bool {
+    if name == "Int" { return true; }
+    let i = strs_find(builtin_names(), name);
+    (i >= 16 && i <= 24) || i == 29 || i == 30
+}
+
+fn is_float_name(name: Str) -> Bool { name == "Float32" || name == "Float64" }
+
+fn is_cap(c: Ck, t: Int) -> Bool { is_cap_name(bname_of(c, t)) }
+fn is_num(c: Ck, t: Int) -> Bool { is_num_name(bname_of(c, t)) }
+fn is_integer(c: Ck, t: Int) -> Bool { is_num(c, t) && is_float_name(bname_of(c, t)) == false }
+
+// How a type is written in a message (`UserTypes::show`).
+fn show(c: Ck, t: Int) -> Str {
+    let g = tag(c, t);
+    if g == tag_builtin() { return strs_get(c.tyname, t); }
+    if g == tag_param() { return strs_get(c.tyname, t); }
+    if g == tag_vec() {
+        let e = targ(c, t, 0);
+        if e == t_int() { return "Ints"; }
+        if e == t_str() { return "Strs"; }
+        return cat3("Vec[", show(c, e), "]");
+    }
+    let mut name = "";
+    if g == tag_record() { name = strs_get(c.rname, ta(c, t)); }
+    if g == tag_enum() { name = strs_get(c.ename, ta(c, t)); }
+    if targc(c, t) == 0 { return name; }
+    let parts = strs_new();
+    let mut i = 0;
+    while i < targc(c, t) {
+        strs_push(parts, show(c, targ(c, t, i)));
+        i = i + 1;
+    }
+    cat4(name, "[", str_join(parts, ", "), "]")
+}
+
+// A definition's parameters replaced by an application's arguments.
+fn subst(c: Ck, t: Int, owner: Int, id: Int, args: Ints) -> Int {
+    let g = tag(c, t);
+    if g == tag_param() {
+        if ta(c, t) == owner && ints_get(c.tyb, t) == id {
+            let i = ints_get(c.tyc, t);
+            if i < ints_len(args) { return ints_get(args, i); }
+        }
+        return t;
+    }
+    if g == tag_builtin() { return t; }
+    if targc(c, t) == 0 { return t; }
+    let out = ints_new();
+    let mut i = 0;
+    while i < targc(c, t) {
+        ints_push(out, subst(c, targ(c, t, i), owner, id, args));
+        i = i + 1;
+    }
+    intern(c, g, ta(c, t), ints_get(c.tyb, t), ints_get(c.tyc, t), strs_get(c.tyname, t), out)
+}
+
+// A record type's fields: their names and types, the application's arguments substituted.
+fn record_field(c: Ck, t: Int, name: Str) -> Int {
+    let r = ta(c, t);
+    let mut i = 0;
+    while i < ints_get(c.rfc, r) {
+        if strs_get(c.fname, ints_get(c.rff, r) + i) == name { return ints_get(c.rff, r) + i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+fn field_ty_in(c: Ck, t: Int, f: Int) -> Int {
+    if targc(c, t) == 0 { return ints_get(c.fty, f); }
+    let mut owner = own_record();
+    if is_enum(c, t) { owner = own_enum(); }
+    subst(c, ints_get(c.fty, f), owner, ta(c, t), targs(c, t))
+}
+
+// An enum's variant by name, as an index into the pool; -1 when it has none of it.
+fn variant_of(c: Ck, t: Int, name: Str) -> Int {
+    let e = ta(c, t);
+    let mut i = 0;
+    while i < ints_get(c.evc, e) {
+        if strs_get(c.vname, ints_get(c.evf, e) + i) == name { return ints_get(c.evf, e) + i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+fn variant_field(c: Ck, v: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < ints_get(c.vfc, v) {
+        if strs_get(c.fname, ints_get(c.vff, v) + i) == name { return ints_get(c.vff, v) + i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Whether `==` (`equality`) or `<` (`ordering`) applies to a type, by the walk every derived
+// property shares (`UserTypes::derived`): "" when it does, otherwise the field path to the first
+// component that has none, then `|`, then that component's type.
+fn derived(c: Ck, t: Int, equality: Bool) -> Str {
+    if is_record(c, t) == false && is_enum(c, t) == false {
+        if leaf(c, t, equality) { return ""; }
+        return str_concat("|", int_to_str(t));
+    }
+    let seen = ints_new();
+    ints_push(seen, t);
+    // The stack: each frame a node, the next edge to look at, and how many names it pushed.
+    let snode = ints_new();
+    let sat = ints_new();
+    let spushed = ints_new();
+    ints_push(snode, t);
+    ints_push(sat, 0);
+    ints_push(spushed, 0);
+    let path = strs_new();
+    while ints_len(snode) > 0 {
+        let node = ints_pop(snode);
+        let at = ints_pop(sat);
+        let pushed = ints_pop(spushed);
+        let edges = contained(c, node);
+        if at >= ints_len(edges) {
+            let mut k = 0;
+            while k < pushed {
+                strs_pop(path);
+                k = k + 1;
+            }
+        } else {
+            ints_push(snode, node);
+            ints_push(sat, at + 1);
+            ints_push(spushed, pushed);
+            let f = ints_get(edges, at);
+            let ty = field_ty_in(c, node, f);
+            let names = edge_names(c, node, f);
+            if is_record(c, ty) || is_enum(c, ty) {
+                let mut found = false;
+                let mut k = 0;
+                while k < ints_len(seen) {
+                    if ints_get(seen, k) == ty { found = true; }
+                    k = k + 1;
+                }
+                if found == false {
+                    ints_push(seen, ty);
+                    let mut k = 0;
+                    while k < strs_len(names) {
+                        strs_push(path, strs_get(names, k));
+                        k = k + 1;
+                    }
+                    ints_push(snode, ty);
+                    ints_push(sat, 0);
+                    ints_push(spushed, strs_len(names));
+                }
+            } else {
+                if leaf(c, ty, equality) == false {
+                    let mut k = 0;
+                    while k < strs_len(names) {
+                        strs_push(path, strs_get(names, k));
+                        k = k + 1;
+                    }
+                    return cat3(str_join(path, "."), "|", int_to_str(ty));
+                }
+            }
+        }
+    }
+    ""
+}
+
+fn leaf(c: Ck, t: Int, equality: Bool) -> Bool {
+    let n = bname_of(c, t);
+    if n == "Int" || n == "Bool" || n == "Str" { return true; }
+    if equality { return n == "Text" || is_num_name(n); }
+    is_num_name(n) && is_float_name(n) == false
+}
+
+// A node's containment edges, as field indices of the pool, in declaration order.
+fn contained(c: Ck, node: Int) -> Ints {
+    let out = ints_new();
+    if is_record(c, node) {
+        let r = ta(c, node);
+        let mut i = 0;
+        while i < ints_get(c.rfc, r) {
+            ints_push(out, ints_get(c.rff, r) + i);
+            i = i + 1;
+        }
+        return out;
+    }
+    let e = ta(c, node);
+    let mut v = 0;
+    while v < ints_get(c.evc, e) {
+        let vi = ints_get(c.evf, e) + v;
+        let mut i = 0;
+        while i < ints_get(c.vfc, vi) {
+            ints_push(out, ints_get(c.vff, vi) + i);
+            i = i + 1;
+        }
+        v = v + 1;
+    }
+    out
+}
+
+// The path components one edge contributes: the field, after its variant for an enum's payload.
+fn edge_names(c: Ck, node: Int, f: Int) -> Strs {
+    let out = strs_new();
+    if is_enum(c, node) {
+        let e = ta(c, node);
+        let mut v = 0;
+        while v < ints_get(c.evc, e) {
+            let vi = ints_get(c.evf, e) + v;
+            if f >= ints_get(c.vff, vi) && f < ints_get(c.vff, vi) + ints_get(c.vfc, vi) {
+                strs_push(out, strs_get(c.vname, vi));
+            }
+            v = v + 1;
+        }
+    }
+    strs_push(out, strs_get(c.fname, f));
+    out
+}
+
+fn derived_type(c: Ck, why: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(why) {
+        if str_byte(why, i) == 124 { return parse_int(str_slice(why, i + 1, str_len(why))); }
+        i = i + 1;
+    }
+    0
+}
+fn derived_path(c: Ck, why: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(why) {
+        if str_byte(why, i) == 124 { return str_slice(why, 0, i); }
+        i = i + 1;
+    }
+    ""
+}
+
+fn parse_int(s: Str) -> Int {
+    let mut v = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        v = v * 10 + str_byte(s, i) - 48;
+        i = i + 1;
+    }
+    v
+}
+
+// --- the checker ------------------------------------------------------------------------------
+
+fn new_ck(t: Tree) -> Ck {
+    let c = Ck(t: t, d: dg_new(), stop: strs_new(), st: ints_new(), mprog: ints_new(), mbase: ints_new(), tytag: ints_new(),
+            tya: ints_new(), tyb: ints_new(), tyc: ints_new(), tyname: strs_new(), tyargf: ints_new(), tyargc: ints_new(),
+            tyargs: ints_new(), tykey: strs_new(), rname: strs_new(), rmod: ints_new(), rns: ints_new(), rne: ints_new(),
+            rnp: ints_new(), rff: ints_new(), rfc: ints_new(), ename: strs_new(), emod: ints_new(), ens: ints_new(),
+            ene: ints_new(), enp: ints_new(), evf: ints_new(), evc: ints_new(), vname: strs_new(), vns: ints_new(),
+            vne: ints_new(), vff: ints_new(), vfc: ints_new(), fname: strs_new(), fty: ints_new(), fns: ints_new(),
+            fne: ints_new(), fnname: strs_new(), fnmod: ints_new(), fnns: ints_new(), fnne: ints_new(), fnnode: ints_new(),
+            fnpf: ints_new(), fnpc: ints_new(), fnret: ints_new(), fnnores: ints_new(), ptys: ints_new(), bname: strs_new(),
+            bpf: ints_new(), bpc: ints_new(), bret: ints_new(), bok: ints_new(), bprelude: ints_new(), beff: strs_new(),
+            bcaps: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
+            sds: ints_new(), sde: ints_new(), frames: ints_new());
+    let mut i = 0;
+    while i < s_slots() {
+        ints_push(c.st, 0);
+        i = i + 1;
+    }
+    // `Int`, `Bool`, `Str`, then `Ints` and `Strs` — `Vec[Int]` and `Vec[Str]` — at fixed ids.
+    builtin_ty(c, "Int");
+    builtin_ty(c, "Bool");
+    builtin_ty(c, "Str");
+    vec_of(c, t_int());
+    vec_of(c, t_str());
+    load_builtins(c);
+    c
+}
+
+// The built-in table, its shapes as types; a built-in whose signature names its own parameter or a
+// type this checker does not carry is marked so, and a call of it stops the checker.
+fn load_builtins(c: Ck) -> Int {
+    let rows = bi_rows();
+    let mut i = 0;
+    while i < strs_len(rows) {
+        let cols = split(strs_get(rows, i), 124);
+        strs_push(c.bname, strs_get(cols, 0));
+        let mut ok = strs_get(cols, 3) == "0";
+        ints_push(c.bpf, ints_len(c.ptys));
+        let params = split(strs_get(cols, 1), 44);
+        let mut n = 0;
+        let mut k = 0;
+        while k < strs_len(params) {
+            if strs_get(params, k) != "" {
+                let t = shape_ty(c, strs_get(params, k));
+                if t < 0 { ok = false; }
+                ints_push(c.ptys, t);
+                n = n + 1;
+            }
+            k = k + 1;
+        }
+        ints_push(c.bpc, n);
+        let r = shape_ty(c, strs_get(cols, 2));
+        if r < 0 { ok = false; }
+        ints_push(c.bret, r);
+        if ok { ints_push(c.bok, 1); } else { ints_push(c.bok, 0); }
+        ints_push(c.bprelude, parse_int(strs_get(cols, 5)));
+        strs_push(c.beff, strs_get(cols, 6));
+        strs_push(c.bcaps, strs_get(cols, 7));
+        i = i + 1;
+    }
+    0
+}
+
+fn shape_ty(c: Ck, s: Str) -> Int {
+    if s == "Ints" { return t_ints(); }
+    if s == "Strs" { return t_strs(); }
+    if is_builtin_name(s) { return builtin_ty(c, s); }
+    0 - 1
+}
+
+fn split(s: Str, sep: Int) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == sep {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, str_len(s)));
+    out
+}
+
+fn builtin_index(c: Ck, name: Str) -> Int { strs_find(c.bname, name) }
+
+// --- the compilation ------------------------------------------------------------------------
+
+// Check the compilation whose modules' programs are `programs`, at text offsets `bases`, named
+// `names` (`load.nz`'s order: the root first, the core prelude last). The diagnostics are
+// `ck_diags`, to be published only when `ck_stopped` is "".
+pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs) -> Ck {
+    let c = new_ck(t);
+    let mut i = 0;
+    while i < ints_len(programs) {
+        ints_push(c.mprog, ints_get(programs, i));
+        ints_push(c.mbase, ints_get(bases, i));
+        i = i + 1;
+    }
+    if ints_len(programs) != 2 {
+        stop(c, "a module the root imports");
+        return c;
+    }
+    if strs_get(names, 1) != "@core/prelude.nz" {
+        stop(c, "a compilation without the core prelude");
+        return c;
+    }
+    refuse_unsupported_items(c, 0);
+    if strs_len(c.stop) > 0 { return c; }
+    // Stage 0a: every user-defined type's name.
+    declare_types(c, 0);
+    declare_types(c, 1);
+    // Stage 0b: each module's field types; stage 0c, the layouts they describe.
+    resolve_type_fields(c, 0);
+    resolve_type_fields(c, 1);
+    validate_layouts(c);
+    // Stage 1: each module's definitions.
+    declare_functions(c, 0);
+    declare_functions(c, 1);
+    // Stage 2: the bodies.
+    check_unit(c, 0);
+    // The rules about `main`.
+    main_rules(c);
+    c
+}
+
+// What a module may hold that the checker does not carry yet.
+fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
+    let p = ints_get(c.mprog, m);
+    if ints_len(kids(c, p, "imports")) > 0 { stop(c, "an import"); }
+    if ints_len(kids(c, p, "traits")) > 0 { stop(c, "a trait"); }
+    if ints_len(kids(c, p, "impls")) > 0 { stop(c, "an impl"); }
+    if ints_len(kids(c, p, "consts")) > 0 { stop(c, "a constant"); }
+    let records = kids(c, p, "records");
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        if ints_len(kids(c, r, "attrs")) > 0 { stop(c, "an attribute"); }
+        if ints_len(kids(c, r, "type_params")) > 0 { stop(c, "a generic record"); }
+        if some(c, r, "pub_span") { stop(c, "a `pub` item"); }
+        if some(c, r, "foreign") { stop(c, "a foreign record"); }
+        let n = fname_of(c, r, "name");
+        if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
+        let fields = kids(c, r, "fields");
+        let mut k = 0;
+        while k < ints_len(fields) {
+            if ints_len(kids(c, ints_get(fields, k), "attrs")) > 0 { stop(c, "an attribute"); }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    let enums = kids(c, p, "enums");
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        if ints_len(kids(c, e, "attrs")) > 0 { stop(c, "an attribute"); }
+        if ints_len(kids(c, e, "type_params")) > 0 { stop(c, "a generic enum"); }
+        if some(c, e, "pub_span") { stop(c, "a `pub` item"); }
+        let n = fname_of(c, e, "name");
+        if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
+        let variants = kids(c, e, "variants");
+        let mut k = 0;
+        while k < ints_len(variants) {
+            let v = ints_get(variants, k);
+            if ints_len(kids(c, v, "attrs")) > 0 { stop(c, "an attribute"); }
+            let fields = kids(c, v, "fields");
+            let mut j = 0;
+            while j < ints_len(fields) {
+                if ints_len(kids(c, ints_get(fields, j), "attrs")) > 0 { stop(c, "an attribute"); }
+                j = j + 1;
+            }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    let functions = kids(c, p, "functions");
+    i = 0;
+    while i < ints_len(functions) {
+        let f = ints_get(functions, i);
+        if ints_len(kids(c, f, "attrs")) > 0 { stop(c, "an attribute"); }
+        if ints_len(kids(c, f, "type_params")) > 0 { stop(c, "a generic function"); }
+        if ints_len(kids(c, f, "effect_params")) > 0 { stop(c, "an effect parameter"); }
+        if ints_len(kids(c, f, "contracts")) > 0 { stop(c, "a contract"); }
+        if some(c, f, "pub_span") { stop(c, "a `pub` item"); }
+        if some(c, f, "effects") { stop(c, "an effect set"); }
+        if some(c, f, "foreign") { stop(c, "a foreign function"); }
+        if some(c, f, "export") { stop(c, "an export"); }
+        if some(c, f, "method_of") { stop(c, "a method"); }
+        if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
+        if some(c, f, "body") == false { stop(c, "a function without a body"); }
+        i = i + 1;
+    }
+    0
+}
+
+// --- stage 0a: type names (`declare_types`) --------------------------------------------------
+
+fn declare_types(c: Ck, m: Int) -> Int {
+    ss(c, s_module(), m);
+    let p = ints_get(c.mprog, m);
+    let records = kids(c, p, "records");
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        let name = fname_of(c, r, "name");
+        let ns = fld(c, r, "name_span");
+        if refuse_type_name(c, m, name, ns) == false {
+            strs_push(c.rname, name);
+            ints_push(c.rmod, m);
+            ints_push(c.rns, sps(c, ns));
+            ints_push(c.rne, spe(c, ns));
+            ints_push(c.rnp, ints_len(kids(c, r, "type_params")));
+            ints_push(c.rff, 0);
+            ints_push(c.rfc, 0);
+        }
+        i = i + 1;
+    }
+    let enums = kids(c, p, "enums");
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        let name = fname_of(c, e, "name");
+        let ns = fld(c, e, "name_span");
+        if refuse_type_name(c, m, name, ns) == false {
+            strs_push(c.ename, name);
+            ints_push(c.emod, m);
+            ints_push(c.ens, sps(c, ns));
+            ints_push(c.ene, spe(c, ns));
+            ints_push(c.enp, ints_len(kids(c, e, "type_params")));
+            ints_push(c.evf, 0);
+            ints_push(c.evc, 0);
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn declared_record(c: Ck, m: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.rname) {
+        if ints_get(c.rmod, i) == m && strs_get(c.rname, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+fn declared_enum(c: Ck, m: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.ename) {
+        if ints_get(c.emod, i) == m && strs_get(c.ename, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn refuse_type_name(c: Ck, m: Int, name: Str, at: Int) -> Bool {
+    if is_builtin_name(name) || name == "Vec" {
+        err(c, "N0331", at, cat3("`", name, "` is a built-in type and cannot be redefined"),
+                "built-in type names mean the same thing in every module of every program, so none of them may be shadowed; choose another name");
+        return true;
+    }
+    let r = declared_record(c, m, name);
+    let e = declared_enum(c, m, name);
+    if r >= 0 || e >= 0 {
+        err(c, "N0330", at, cat3("`", name, "` is declared more than once in this module"),
+                "records and enums share one type namespace, so a `struct` and an `enum` of the same name collide exactly as two of either would");
+        if r >= 0 { sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "first declared here"); } else {
+            sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "first declared here");
+        }
+        return true;
+    }
+    false
+}
+
+// The names a module may write a type by: its own, then the prelude's (`type_environment`).
+fn type_environment(c: Ck, m: Int) -> Int {
+    while strs_len(c.tnames) > 0 {
+        strs_pop(c.tnames);
+        ints_pop(c.ttys);
+    }
+    let mut i = 0;
+    while i < strs_len(c.rname) {
+        if ints_get(c.rmod, i) == m || ints_get(c.rmod, i) == 1 {
+            if strs_find(c.tnames, strs_get(c.rname, i)) < 0 {
+                strs_push(c.tnames, strs_get(c.rname, i));
+                ints_push(c.ttys, record_ty(c, i, ints_new()));
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.ename) {
+        if ints_get(c.emod, i) == m || ints_get(c.emod, i) == 1 {
+            if strs_find(c.tnames, strs_get(c.ename, i)) < 0 {
+                strs_push(c.tnames, strs_get(c.ename, i));
+                ints_push(c.ttys, enum_ty(c, i, ints_new()));
+            }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn type_named(c: Ck, name: Str) -> Int {
+    let i = strs_find(c.tnames, name);
+    if i < 0 { return 0 - 1; }
+    ints_get(c.ttys, i)
+}
+
+// --- written types (`resolve_written`) --------------------------------------------------------
+
+// A type as written, resolved against the module's names and `scope` (type parameters by name),
+// every mistake reported to `d` — the checker's own, or one that is thrown away.
+fn resolve_written(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> Int {
+    let name = fname_of(c, w, "name");
+    let ns = fld(c, w, "name_span");
+    let span = fld(c, w, "span");
+    let has_args = some(c, w, "args");
+    let args = ints_new();
+    if has_args {
+        let written = sx_items(c.t, unwrap(c, w, "args"));
+        let mut i = 0;
+        while i < ints_len(written) {
+            ints_push(args, resolve_written(c, ints_get(written, i), pnames, ptys, d));
+            i = i + 1;
+        }
+    }
+    if some(c, w, "qualifier") || some(c, w, "function") || some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
+        stop(c, cat3("the type `", name, "`"));
+        return t_int();
+    }
+    let at = strs_find(pnames, name);
+    if at >= 0 {
+        if has_args { not_generic(c, d, name, "a type parameter", span); }
+        return ints_get(ptys, at);
+    }
+    if name == "Chan" && has_args {
+        stop(c, "`Chan[T]`");
+        return t_int();
+    }
+    if (name == "Box" || name == "List" || name == "Cell" || name == "Chain") && type_named(c, name) < 0 {
+        stop(c, cat3("`", name, "`"));
+        return t_int();
+    }
+    if name == "Vec" {
+        if has_args == false {
+            dg_error(d, "N0352", sps(c, ns), spe(c, ns), "`Vec` is written with its element type", "",
+                    "a vector of `Int` is `Vec[Int]`; `Vec` alone is not a type");
+            return t_int();
+        }
+        if ints_len(args) != 1 { wrong_arity(c, d, "Vec", 1, ints_len(args), span); }
+        let mut elem = t_int();
+        if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        if is_record(c, elem) || is_enum(c, elem) || tag(c, elem) == tag_vec() { stop(c, "a `Vec` of a type the checker does not carry"); }
+        return vec_of(c, elem);
+    }
+    let t = resolve_name(c, name, ns, d);
+    if is_builtin_name(name) {
+        if has_args { not_generic(c, d, name, "a built-in type", span); }
+        return t;
+    }
+    if is_record(c, t) == false && is_enum(c, t) == false { return t; }
+    let mut arity = 0;
+    if is_record(c, t) { arity = ints_get(c.rnp, ta(c, t)); } else { arity = ints_get(c.enp, ta(c, t)); }
+    if has_args == false {
+        if arity == 0 { return t; }
+        let shown = show(c, t);
+        dg_error(d, "N0352", sps(c, ns), spe(c, ns),
+                cat5("`", shown, "` is generic, so it is written with its ", int_to_str(arity), str_concat(" type argument", plural(arity))), "",
+                cat5("write `", shown, "[…]` with ", int_to_str(arity), str_concat(" type", plural(arity))));
+        let mut ds = 0;
+        let mut de = 0;
+        if is_record(c, t) { ds = ints_get(c.rns, ta(c, t)); de = ints_get(c.rne, ta(c, t)); } else {
+            ds = ints_get(c.ens, ta(c, t));
+            de = ints_get(c.ene, ta(c, t));
+        }
+        dg_secondary(d, ds, de, "declared here");
+        return t_int();
+    }
+    if arity == 0 {
+        not_generic(c, d, show(c, t), "not generic", span);
+        return t;
+    }
+    if ints_len(args) != arity {
+        wrong_arity(c, d, show(c, t), arity, ints_len(args), span);
+        while ints_len(args) > arity { ints_pop(args); }
+        while ints_len(args) < arity { ints_push(args, t_int()); }
+    }
+    let mut k = 0;
+    while k < ints_len(args) {
+        let a = ints_get(args, k);
+        if is_record(c, a) || is_enum(c, a) || tag(c, a) == tag_vec() { stop(c, "a generic type applied to a composite"); }
+        k = k + 1;
+    }
+    if is_record(c, t) { return record_ty(c, ta(c, t), args); }
+    enum_ty(c, ta(c, t), args)
+}
+
+fn not_generic(c: Ck, d: Diags, name: Str, what: Str, span: Int) -> Int {
+    let mut why = cat5("`", name, "` is ", what, ", so it takes no type arguments");
+    if what == "not generic" { why = cat3("`", name, "` is not generic, so it takes no type arguments"); }
+    dg_error(d, "N0351", sps(c, span), spe(c, span), why, "",
+            "only a definition that declares type parameters is applied to type arguments")
+}
+
+fn wrong_arity(c: Ck, d: Diags, name: Str, want: Int, got: Int, span: Int) -> Int {
+    let mut verb = " were given";
+    if got == 1 { verb = " was given"; }
+    dg_error(d, "N0353", sps(c, span), spe(c, span),
+            cat5(cat3("`", name, "` takes "), int_to_str(want), str_concat(" type argument", plural(want)), ", but ", str_concat(int_to_str(got), verb)), "",
+            "a generic definition is applied to exactly as many types as it declares")
+}
+
+// A type name against the built-ins and then the module's types (`resolve_name`).
+fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
+    if name == "Ints" { return t_ints(); }
+    if name == "Strs" { return t_strs(); }
+    if is_builtin_name(name) { return builtin_ty(c, name); }
+    let t = type_named(c, name);
+    if t >= 0 { return t; }
+    if name == "Map" {
+        dg_error(d, "N0305", sps(c, span), spe(c, span), "`Map` is `@std/hashmap`'s `HashMap`", "", "import it: `use \"@std/hashmap\";`");
+        return t_int();
+    }
+    dg_error(d, "N0305", sps(c, span), spe(c, span), cat3("`", name, "` is not a type"), "",
+            cat3("the built-in types are ", all_names(), ", and `struct` and `enum` declare others"));
+    t_int()
+}
+
+// --- stage 0b: fields (`resolve_type_fields`) --------------------------------------------------
+
+fn resolve_type_fields(c: Ck, m: Int) -> Int {
+    ss(c, s_module(), m);
+    type_environment(c, m);
+    let p = ints_get(c.mprog, m);
+    let done = strs_new();
+    let records = kids(c, p, "records");
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        let name = fname_of(c, r, "name");
+        let id = declared_record(c, m, name);
+        if id >= 0 && strs_find(done, name) < 0 {
+            strs_push(done, name);
+            let pn = strs_new();
+            let pt = ints_new();
+            type_params(c, r, own_record(), id, pn, pt);
+            let written = kids(c, r, "fields");
+            ints_set(c.rff, id, strs_len(c.fname));
+            ints_set(c.rfc, id, resolve_fields(c, name, written, pn, pt));
+            if ints_len(written) == 0 {
+                err(c, "N0101", fld(c, r, "name_span"), cat3("`", name, "` has no fields, which is not supported yet"),
+                        "a record with no fields would be built by writing `Name()`, which is exactly how a call to a function of that name is written — and types and functions are separate namespaces, so neither reading could be preferred. Give it a field, or use `Bool`");
+            }
+        }
+        i = i + 1;
+    }
+    let enums = kids(c, p, "enums");
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        let name = fname_of(c, e, "name");
+        let id = declared_enum(c, m, name);
+        if id >= 0 && strs_find(done, cat3("enum ", name, "")) < 0 {
+            strs_push(done, cat3("enum ", name, ""));
+            let variants = kids(c, e, "variants");
+            if ints_len(variants) == 0 {
+                err(c, "N0339", fld(c, e, "name_span"), cat3("`", name, "` has no variants, which is not supported yet"),
+                        "a type with no values decides what a function returning one means and whether a `match` on one is exhaustive, and neither has been settled. Give it a variant");
+            }
+            let pn = strs_new();
+            let pt = ints_new();
+            type_params(c, e, own_enum(), id, pn, pt);
+            // Variants are pooled in a run, so each one's fields are resolved first, into a
+            // run of their own, and the run of variants is written after.
+            let vnames = strs_new();
+            let vstarts = ints_new();
+            let vends = ints_new();
+            let vff = ints_new();
+            let vfc = ints_new();
+            let mut k = 0;
+            while k < ints_len(variants) {
+                let v = ints_get(variants, k);
+                let vn = fname_of(c, v, "name");
+                let vs = fld(c, v, "name_span");
+                let first = strs_find(vnames, vn);
+                if first >= 0 {
+                    err(c, "N0340", vs, cat5("`", name, "` has two variants called `", vn, "`"),
+                            "a variant is identified by its name, so two cannot share one");
+                    sec_at(c, ints_get(vstarts, first), ints_get(vends, first), "first declared here");
+                } else {
+                    strs_push(vnames, vn);
+                    ints_push(vstarts, sps(c, vs));
+                    ints_push(vends, spe(c, vs));
+                    ints_push(vff, strs_len(c.fname));
+                    ints_push(vfc, resolve_fields(c, vn, kids(c, v, "fields"), pn, pt));
+                }
+                k = k + 1;
+            }
+            ints_set(c.evf, id, strs_len(c.vname));
+            ints_set(c.evc, id, strs_len(vnames));
+            k = 0;
+            while k < strs_len(vnames) {
+                strs_push(c.vname, strs_get(vnames, k));
+                ints_push(c.vns, ints_get(vstarts, k));
+                ints_push(c.vne, ints_get(vends, k));
+                ints_push(c.vff, ints_get(vff, k));
+                ints_push(c.vfc, ints_get(vfc, k));
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// A declaration's type parameters, in scope by name.
+fn type_params(c: Ck, decl: Int, owner: Int, id: Int, pn: Strs, pt: Ints) -> Int {
+    let params = kids(c, decl, "type_params");
+    let mut i = 0;
+    while i < ints_len(params) {
+        let n = fname_of(c, ints_get(params, i), "name");
+        strs_push(pn, n);
+        ints_push(pt, param_ty(c, owner, id, i, n));
+        i = i + 1;
+    }
+    0
+}
+
+// Fields as written, each resolved, appended to the pool; how many were kept.
+fn resolve_fields(c: Ck, owner: Str, written: Ints, pn: Strs, pt: Ints) -> Int {
+    let first = strs_len(c.fname);
+    let mut i = 0;
+    while i < ints_len(written) {
+        let f = ints_get(written, i);
+        let name = fname_of(c, f, "name");
+        let ns = fld(c, f, "name_span");
+        let mut dup = 0 - 1;
+        let mut k = first;
+        while k < strs_len(c.fname) {
+            if strs_get(c.fname, k) == name && dup < 0 { dup = k; }
+            k = k + 1;
+        }
+        if dup >= 0 {
+            err(c, "N0332", ns, cat5("`", owner, "` has two fields called `", name, "`"),
+                    "a field is identified by its name, so two cannot share one");
+            sec_at(c, ints_get(c.fns, dup), ints_get(c.fne, dup), "first declared here");
+        } else {
+            let ty = resolve_written(c, fld(c, f, "ty"), pn, pt, c.d);
+            strs_push(c.fname, name);
+            ints_push(c.fty, ty);
+            ints_push(c.fns, sps(c, ns));
+            ints_push(c.fne, spe(c, ns));
+        }
+        i = i + 1;
+    }
+    strs_len(c.fname) - first
+}
+
+// --- stage 0c: layouts --------------------------------------------------------------------------
+
+// A record or enum that contains itself, inline or through a `Vec`, is refused by
+// `validate_type_layouts`; this checker does not carry that refusal yet, so it stops at any cycle
+// through the module's definitions.
+fn validate_layouts(c: Ck) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.rname) {
+        if reaches(c, record_ty(c, i, ints_new()), record_ty(c, i, ints_new()), ints_new()) { stop(c, "a type that contains itself"); }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.ename) {
+        if ints_get(c.enp, i) == 0 {
+            if reaches(c, enum_ty(c, i, ints_new()), enum_ty(c, i, ints_new()), ints_new()) { stop(c, "a type that contains itself"); }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// Whether `from`'s fields, through records, enums and `Vec`s, reach `target`.
+fn reaches(c: Ck, from: Int, target: Int, seen: Ints) -> Bool {
+    let edges = contained(c, from);
+    let mut i = 0;
+    while i < ints_len(edges) {
+        let mut t = field_ty_in(c, from, ints_get(edges, i));
+        while tag(c, t) == tag_vec() { t = targ(c, t, 0); }
+        if t == target { return true; }
+        if is_record(c, t) || is_enum(c, t) {
+            let mut met = false;
+            let mut k = 0;
+            while k < ints_len(seen) {
+                if ints_get(seen, k) == t { met = true; }
+                k = k + 1;
+            }
+            if met == false {
+                ints_push(seen, t);
+                if reaches(c, t, target, seen) { return true; }
+            }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// --- stage 1: functions (`declare_unit`) --------------------------------------------------------
+
+fn declare_functions(c: Ck, m: Int) -> Int {
+    ss(c, s_module(), m);
+    type_environment(c, m);
+    let p = ints_get(c.mprog, m);
+    let functions = kids(c, p, "functions");
+    let mut i = 0;
+    while i < ints_len(functions) {
+        let f = ints_get(functions, i);
+        let name = fname_of(c, f, "name");
+        let ns = fld(c, f, "name_span");
+        let params = kids(c, f, "params");
+        let pf = ints_len(c.ptys);
+        let mut k = 0;
+        while k < ints_len(params) {
+            ints_push(c.ptys, resolve_written(c, fld(c, ints_get(params, k), "ty"), strs_new(), ints_new(), c.d));
+            k = k + 1;
+        }
+        let rt = fld(c, f, "return_type");
+        let ret = resolve_written(c, rt, strs_new(), ints_new(), c.d);
+        let b = builtin_index(c, name);
+        let mut refused = false;
+        if b >= 0 {
+            if ints_get(c.bprelude, b) == 0 { refused = true; }
+        }
+        if name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "println" || name == "eprintln" { refused = true; }
+        if refused {
+            err(c, "N0203", ns, cat3("`", name, "` is a built-in and cannot be redefined"),
+                    "built-ins share the ordinary function namespace so that a call always means the same thing; choose another name");
+        } else {
+            let existing = defined_fn(c, m, name);
+            if existing >= 0 {
+                err(c, "N0203", ns, cat3("`", name, "` is defined more than once in this module"), "");
+                sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
+            } else {
+                strs_push(c.fnname, name);
+                ints_push(c.fnmod, m);
+                ints_push(c.fnns, sps(c, ns));
+                ints_push(c.fnne, spe(c, ns));
+                ints_push(c.fnnode, f);
+                ints_push(c.fnpf, pf);
+                ints_push(c.fnpc, ints_len(params));
+                ints_push(c.fnret, ret);
+                let rts = fld(c, rt, "span");
+                if sx_s(c.t, rts) == sx_e(c.t, rts) { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
+            }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+fn defined_fn(c: Ck, m: Int, name: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(c.fnname) {
+        if ints_get(c.fnmod, i) == m && strs_get(c.fnname, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// --- the rules about `main` -----------------------------------------------------------------
+
+fn main_rules(c: Ck) -> Int {
+    ss(c, s_module(), 0);
+    let id = defined_fn(c, 0, "main");
+    if id >= 0 {
+        let f = ints_get(c.fnnode, id);
+        let params = kids(c, f, "params");
+        let mut i = 0;
+        while i < ints_get(c.fnpc, id) {
+            let t = ints_get(c.ptys, ints_get(c.fnpf, id) + i);
+            if is_cap(c, t) == false {
+                err(c, "N0371", fld(c, ints_get(params, i), "span"), "a parameter of `main` must be a capability",
+                        "the runtime calls `main`, and what it can hand over is authority: `IoCap` and `SpawnCap`. Read the command line with `arg` instead");
+            }
+            i = i + 1;
+        }
+        return 0;
+    }
+    dg_error(c.d, "N0204", 0, 0, "this program has no `main` function", "", "`nazm run` evaluates `fn main() -> Int` in the file you named");
+    0
+}
+
+// --- stage 2: bodies (`check_unit`) -----------------------------------------------------------
+
+// How an expression or a block completes: a value's type (0 and up), nothing, or never.
+fn unit() -> Int { 0 - 1 }
+fn diverges() -> Int { 0 - 2 }
+fn none() -> Int { 0 - 1 }
+
+fn check_unit(c: Ck, m: Int) -> Int {
+    ss(c, s_module(), m);
+    type_environment(c, m);
+    let p = ints_get(c.mprog, m);
+    let functions = kids(c, p, "functions");
+    let mut i = 0;
+    while i < ints_len(functions) {
+        check_function(c, ints_get(functions, i));
+        i = i + 1;
+    }
+    0
+}
+
+// A type in the function's signature, resolved again silently: stage 1 reported it.
+fn signature_type(c: Ck, w: Int) -> Int { resolve_written(c, w, strs_new(), ints_new(), dg_new()) }
+
+fn check_function(c: Ck, f: Int) -> Int {
+    let name = fname_of(c, f, "name");
+    open_scope(c);
+    let params = kids(c, f, "params");
+    let mut i = 0;
+    while i < ints_len(params) {
+        let p = ints_get(params, i);
+        let ty = signature_type(c, fld(c, p, "ty"));
+        let pn = fname_of(c, p, "name");
+        if defined_here(c, pn) {
+            err(c, "N0202", fld(c, p, "span"), cat3("`", pn, "` is listed twice in this parameter list"), "");
+        }
+        define(c, pn, ty, false, 0 - 1, 0 - 1);
+        i = i + 1;
+    }
+    let rt = fld(c, f, "return_type");
+    let declared = signature_type(c, rt);
+    let rts = fld(c, rt, "span");
+    let body = unwrap(c, f, "body");
+    ss(c, s_ret(), declared);
+    ss(c, s_loop(), 0);
+    let completion = check_block(c, body, declared);
+    if completion >= 0 && assignable(c, completion, declared) == false {
+        let shown = show(c, completion);
+        let want = show(c, declared);
+        let mut at = fld(c, body, "span");
+        if some(c, body, "tail") { at = espan(c, unwrap(c, body, "tail")); }
+        err(c, "N0300", at, cat5(cat3("`", name, "` returns `"), shown, "`, but its signature says `", want, "`"), "");
+        sec(c, rts, cat3("declared `", want, "` here"));
+    }
+    if completion == unit() {
+        let want = show(c, declared);
+        err(c, "N0300", fld(c, body, "span"), cat5("`", name, "` must produce a `", want, "`, but this body does not"),
+                "a function's value is its final expression — one with no `;` after it — or it returns on every path");
+        sec(c, rts, cat3("declared `", want, "` here"));
+    }
+    close_scope(c);
+    0
+}
+
+fn assignable(c: Ck, got: Int, want: Int) -> Bool {
+    if got == want { return true; }
+    bname_of(c, got) == "IoCap" && bname_of(c, want) == "OutCap"
+}
+
+// --- scopes -------------------------------------------------------------------------------------
+
+fn open_scope(c: Ck) -> Int {
+    ints_push(c.frames, strs_len(c.sname));
+    0
+}
+
+fn close_scope(c: Ck) -> Int {
+    let start = ints_pop(c.frames);
+    while strs_len(c.sname) > start {
+        strs_pop(c.sname);
+        ints_pop(c.sty);
+        ints_pop(c.smut);
+        ints_pop(c.sds);
+        ints_pop(c.sde);
+    }
+    0
+}
+
+// A binding; `ds` and `de` where its name is declared, or -1 for a parameter.
+fn define(c: Ck, name: Str, ty: Int, mutable: Bool, ds: Int, de: Int) -> Int {
+    strs_push(c.sname, name);
+    ints_push(c.sty, ty);
+    if mutable { ints_push(c.smut, 1); } else { ints_push(c.smut, 0); }
+    ints_push(c.sds, ds);
+    ints_push(c.sde, de);
+    0
+}
+
+fn lookup(c: Ck, name: Str) -> Int {
+    let mut i = strs_len(c.sname) - 1;
+    while i >= 0 {
+        if strs_get(c.sname, i) == name { return i; }
+        i = i - 1;
+    }
+    0 - 1
+}
+
+fn defined_here(c: Ck, name: Str) -> Bool {
+    let mut i = ints_get(c.frames, ints_len(c.frames) - 1);
+    while i < strs_len(c.sname) {
+        if strs_get(c.sname, i) == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// --- blocks and statements ----------------------------------------------------------------------
+
+fn check_block(c: Ck, b: Int, expected: Int) -> Int {
+    open_scope(c);
+    let completion = check_block_inner(c, b, expected);
+    close_scope(c);
+    completion
+}
+
+fn check_block_inner(c: Ck, b: Int, expected: Int) -> Int {
+    let discard = gs(c, s_discard());
+    ss(c, s_discard(), 0);
+    let mut diverged = 0 - 1;
+    let statements = kids(c, b, "statements");
+    let mut i = 0;
+    while i < ints_len(statements) {
+        let s = ints_get(statements, i);
+        if diverged >= 0 {
+            err(c, "N0313", stmt_span(c, s), "this can never run", "");
+            sec(c, diverged, "control leaves the block here");
+            diverged = 0 - 1;
+        }
+        if check_stmt(c, s) { diverged = stmt_span(c, s); }
+        i = i + 1;
+    }
+    if diverged >= 0 {
+        if some(c, b, "tail") {
+            let ts = espan(c, unwrap(c, b, "tail"));
+            if sx_s(c.t, ts) != sx_e(c.t, ts) { err(c, "N0313", ts, "this can never run", ""); }
+        }
+        return diverges();
+    }
+    if some(c, b, "tail") {
+        ss(c, s_unwanted(), discard);
+        return check_expr(c, unwrap(c, b, "tail"), expected);
+    }
+    unit()
+}
+
+// One statement; whether it diverges.
+fn check_stmt(c: Ck, s: Int) -> Bool {
+    let k = kind_of(c, s);
+    if sx_kind(c.t, s) != tk_tuple() {
+        if k == "Break" { check_loop_control(c, "break", fld(c, s, "span")); }
+        if k == "Continue" { check_loop_control(c, "continue", fld(c, s, "span")); }
+        if k == "Break" || k == "Continue" { return true; }
+        stop(c, cat3("the statement `", k, "`"));
+        return false;
+    }
+    let n = sx_kid(c.t, s, 0);
+    if k == "Expr" {
+        ss(c, s_unwanted(), 1);
+        return check_expr(c, n, none()) == diverges();
+    }
+    if k == "Let" {
+        check_let(c, n);
+        return false;
+    }
+    if k == "Assign" {
+        check_assign(c, n);
+        return false;
+    }
+    if k == "While" {
+        check_while(c, n);
+        return false;
+    }
+    if k == "Return" {
+        check_return(c, n);
+        return true;
+    }
+    stop(c, cat3("the statement `", k, "`"));
+    false
+}
+
+fn check_let(c: Ck, l: Int) -> Int {
+    let name = fname_of(c, l, "name");
+    let value = fld(c, l, "value");
+    let mut ty = 0;
+    if some(c, l, "ty") {
+        let want = resolve_written(c, unwrap(c, l, "ty"), strs_new(), ints_new(), c.d);
+        let got = value_type(c, value, want);
+        if assignable(c, got, want) == false {
+            err(c, "N0300", espan(c, value), cat5(cat3("`", name, "` is written `"), show(c, want), "`, but this is `", show(c, got), "`"), "");
+        }
+        ty = want;
+    } else {
+        ty = value_type(c, value, none());
+    }
+    let ns = fld(c, l, "name_span");
+    if defined_here(c, name) {
+        err(c, "N0202", ns, cat3("`", name, "` is already defined in this scope"),
+                "Nazm allows shadowing in a nested scope but not in the same one, so a later mention of a name is never ambiguous");
+    }
+    define(c, name, ty, flag(c, l, "mutable"), sps(c, ns), spe(c, ns));
+    0
+}
+
+fn check_assign(c: Ck, a: Int) -> Int {
+    let place = fld(c, a, "place");
+    let name = fname_of(c, place, "name");
+    let ns = fld(c, place, "name_span");
+    let value = fld(c, a, "value");
+    let b = lookup(c, name);
+    if b < 0 {
+        err(c, "N0200", ns, cat3("`", name, "` is not defined"), "assignment changes an existing binding; `let` introduces one");
+        check_expr(c, value, none());
+        return 0;
+    }
+    let path = kids(c, place, "path");
+    let shown = strs_new();
+    let mut i = 0;
+    while i < ints_len(path) {
+        let step = ints_get(path, i);
+        if sx_kind(c.t, step) != tk_tuple() {
+            stop(c, "an index in an assignment");
+            return 0;
+        }
+        strs_push(shown, fname_of(c, sx_kid(c.t, step, 0), "name"));
+        i = i + 1;
+    }
+    if ints_get(c.smut, b) == 0 {
+        let mut written = cat3("`", name, "` is not mutable");
+        if ints_len(path) > 0 { written = cat5("`", name, "` is not mutable, so its `", str_join(shown, "."), "` cannot be replaced"); }
+        if ints_get(c.sds, b) >= 0 {
+            err(c, "N0310", ns, written, "bindings are immutable unless written `let mut`");
+            sec_at(c, ints_get(c.sds, b), ints_get(c.sde, b), "declared here");
+            dg_fix(c.d, ints_get(c.sds, b), ints_get(c.sde, b), str_concat("mut ", name), "make the binding mutable", "automatic",
+                    "`mut` is the only thing making this assignment illegal, and adding it to a declaration changes nothing else about the program");
+        } else {
+            err(c, "N0310", ns, written,
+                    "this is a parameter, and parameters are never mutable. Bind a local from it instead: `let mut n = n;`");
+        }
+    }
+    let mut target = ints_get(c.sty, b);
+    let mut ds = ints_get(c.sds, b);
+    let mut de = ints_get(c.sde, b);
+    i = 0;
+    while i < ints_len(path) {
+        let step = sx_kid(c.t, ints_get(path, i), 0);
+        let t = check_projection(c, target, fname_of(c, step, "name"), fld(c, step, "name_span"));
+        if t < 0 {
+            check_expr(c, value, none());
+            return 0;
+        }
+        let f = record_field(c, target, fname_of(c, step, "name"));
+        ds = ints_get(c.fns, f);
+        de = ints_get(c.fne, f);
+        target = t;
+        i = i + 1;
+    }
+    let vt = value_type(c, value, target);
+    if vt != target {
+        let mut written = name;
+        if ints_len(path) > 0 { written = cat3(name, ".", str_join(shown, ".")); }
+        let want = show(c, target);
+        err(c, "N0300", espan(c, value), cat5(cat3("`", written, "` is `"), want, "`, but this is `", show(c, vt), "`"), "");
+        if ds >= 0 { sec_at(c, ds, de, cat3("declared `", want, "` here")); }
+    }
+    0
+}
+
+fn check_while(c: Ck, w: Int) -> Int {
+    let cond = fld(c, w, "cond");
+    let ct = value_type(c, cond, t_bool());
+    if ct != t_bool() {
+        err(c, "N0301", espan(c, cond), cat3("a `while` condition must be `Bool`, but this is `", show(c, ct), "`"),
+                "Nazm has no truthiness: use a comparison such as `i < n`");
+    }
+    ss(c, s_loop(), gs(c, s_loop()) + 1);
+    ss(c, s_discard(), 1);
+    check_block(c, fld(c, w, "body"), none());
+    ss(c, s_loop(), gs(c, s_loop()) - 1);
+    0
+}
+
+fn check_return(c: Ck, r: Int) -> Int {
+    let declared = gs(c, s_ret());
+    let value = fld(c, r, "value");
+    let actual = value_type(c, value, declared);
+    if assignable(c, actual, declared) == false {
+        err(c, "N0300", espan(c, value), cat5("this returns `", show(c, actual), "`, but the function returns `", show(c, declared), "`"),
+                "`return` leaves the function, so its value must match the signature");
+    }
+    0
+}
+
+fn check_loop_control(c: Ck, word: Str, span: Int) -> Int {
+    if gs(c, s_loop()) == 0 {
+        err(c, "N0312", span, cat3("`", word, "` is only valid inside a loop"), cat3("there is no enclosing `while` for this `", word, "` to affect"));
+    }
+    0
+}
+
+// The type of an expression used where a value is required.
+fn value_type(c: Ck, e: Int, expected: Int) -> Int {
+    let k = check_expr(c, e, expected);
+    if k >= 0 { return k; }
+    if k == unit() {
+        err(c, "N0300", espan(c, e), "this produces no value",
+                "an `if` used as a value needs an `else`, and a block used as one needs a final expression with no `;` after it");
+    }
+    or_int(expected)
+}
+
+fn or_int(expected: Int) -> Int {
+    if expected >= 0 { return expected; }
+    t_int()
+}
+
+// --- expressions --------------------------------------------------------------------------------
+
+fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
+    let unwanted = gs(c, s_unwanted()) != 0;
+    ss(c, s_unwanted(), 0);
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() {
+        if k == "Block" { return check_block(c, sx_kid(c.t, e, 0), expected); }
+        stop(c, cat3("the expression `", k, "`"));
+        return or_int(expected);
+    }
+    if k == "Int" {
+        if expected >= 0 && is_num(c, expected) && expected != t_int() { stop(c, "a literal of a numeric type"); }
+        return t_int();
+    }
+    if k == "Bool" { return t_bool(); }
+    if k == "Str" {
+        if expected >= 0 && bname_of(c, expected) == "Text" { stop(c, "a `Text` literal"); }
+        return t_str();
+    }
+    if k == "Var" { return check_var(c, e, expected); }
+    if k == "Neg" { return check_negation(c, e, expected); }
+    if k == "Not" {
+        let t = value_type(c, fld(c, e, "operand"), t_bool());
+        if t != t_bool() { err(c, "N0304", fld(c, e, "op_span"), cat3("`!` applies to `Bool`, but this is `", show(c, t), "`"), ""); }
+        return t_bool();
+    }
+    if k == "Binary" { return check_binary(c, e, expected); }
+    if k == "Call" { return check_call(c, e, expected, unwanted); }
+    if k == "Construct" {
+        if some(c, e, "qualifier") || some(c, e, "type_args") {
+            stop(c, "a qualified or generic construction");
+            return or_int(expected);
+        }
+        let t = check_construction(c, fname_of(c, e, "ty"), fld(c, e, "ty_span"), written_inits(c, kids(c, e, "fields")), fld(c, e, "span"), expected);
+        if t < 0 { return t_int(); }
+        return t;
+    }
+    if k == "Variant" {
+        if some(c, e, "qualifier") || some(c, e, "type_args") {
+            stop(c, "a qualified or generic variant");
+            return or_int(expected);
+        }
+        let inits = written_inits(c, kids(c, e, "fields"));
+        if ints_len(inits.vals) == 0 && lookup(c, fname_of(c, e, "ty")) >= 0 {
+            stop(c, "a method call");
+            return or_int(expected);
+        }
+        let t = check_variant(c, fname_of(c, e, "ty"), fld(c, e, "ty_span"), fname_of(c, e, "variant"), fld(c, e, "variant_span"), inits,
+                fld(c, e, "span"), expected);
+        if t < 0 { return or_int(expected); }
+        return t;
+    }
+    if k == "Field" {
+        let bt = value_type(c, fld(c, e, "base"), none());
+        let t = check_projection(c, bt, fname_of(c, e, "name"), fld(c, e, "name_span"));
+        if t < 0 { return t_int(); }
+        return t;
+    }
+    if k == "If" { return check_if(c, e, expected, unwanted); }
+    stop(c, cat3("the expression `", k, "`"));
+    or_int(expected)
+}
+
+fn check_var(c: Ck, e: Int, expected: Int) -> Int {
+    let name = fname_of(c, e, "name");
+    let span = fld(c, e, "span");
+    let b = lookup(c, name);
+    if b >= 0 { return ints_get(c.sty, b); }
+    if env_has(c, name) {
+        stop(c, "a function as a value");
+        return or_int(expected);
+    }
+    if starts_upper(name) && ints_len(variant_owners(c, name)) > 0 {
+        let t = check_construction(c, name, span, no_inits(), span, expected);
+        if t < 0 { return or_int(expected); }
+        return t;
+    }
+    err(c, "N0200", span, cat3("`", name, "` is not defined"), "");
+    or_int(expected)
+}
+
+fn check_negation(c: Ck, e: Int, expected: Int) -> Int {
+    let operand = fld(c, e, "operand");
+    if kind_of(c, operand) == "WideInt" {
+        stop(c, "a wide integer");
+        return t_int();
+    }
+    let mut hint = t_int();
+    if expected >= 0 && is_num(c, expected) { hint = expected; }
+    let t = value_type(c, operand, hint);
+    if is_num(c, t) == false {
+        err(c, "N0304", fld(c, e, "op_span"), cat3("`-` applies to a number, but this is `", show(c, t), "`"), "");
+        return t_int();
+    }
+    t
+}
+
+fn is_number_literal(c: Ck, e: Int) -> Bool {
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() { return false; }
+    if k == "Int" || k == "WideInt" || k == "Float" { return true; }
+    if k == "Neg" { return is_number_literal(c, fld(c, e, "operand")); }
+    false
+}
+
+fn is_comparison(op: Str) -> Bool { op == "Eq" || op == "NotEq" || op == "Lt" || op == "LtEq" || op == "Gt" || op == "GtEq" }
+fn is_logical(op: Str) -> Bool { op == "And" || op == "Or" }
+fn is_equality(op: Str) -> Bool { op == "Eq" || op == "NotEq" }
+fn is_order(op: Str) -> Bool { op == "Lt" || op == "LtEq" || op == "Gt" || op == "GtEq" }
+
+fn symbol(op: Str) -> Str {
+    if op == "Add" { return "+"; }
+    if op == "Sub" { return "-"; }
+    if op == "Mul" { return "*"; }
+    if op == "Div" { return "/"; }
+    if op == "Rem" { return "%"; }
+    if op == "Eq" { return "=="; }
+    if op == "NotEq" { return "!="; }
+    if op == "Lt" { return "<"; }
+    if op == "LtEq" { return "<="; }
+    if op == "Gt" { return ">"; }
+    if op == "GtEq" { return ">="; }
+    if op == "And" { return "&&"; }
+    if op == "Or" { return "||"; }
+    if op == "BitAnd" { return "&"; }
+    if op == "BitOr" { return "|"; }
+    if op == "BitXor" { return "^"; }
+    if op == "Shl" { return "<<"; }
+    ">>"
+}
+
+fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
+    let op = sx_text(c.t, fld(c, e, "op"));
+    let lhs = fld(c, e, "lhs");
+    let rhs = fld(c, e, "rhs");
+    let op_span = fld(c, e, "op_span");
+    if op == "Shl" || op == "Shr" {
+        stop(c, "a shift");
+        return t_int();
+    }
+    let before = dg_len(c.d);
+    let mut hint = none();
+    if is_comparison(op) == false && is_logical(op) == false {
+        if expected >= 0 && is_num(c, expected) { hint = expected; }
+    }
+    let lit_first = is_number_literal(c, lhs) && is_number_literal(c, rhs) == false;
+    let str_first = kind_of(c, lhs) == "Str" && kind_of(c, rhs) != "Str";
+    let mut lt = 0;
+    let mut rt = 0;
+    if lit_first || str_first {
+        rt = value_type(c, rhs, hint);
+        let mut h = hint;
+        if takes_literal(c, rt) { h = rt; }
+        lt = value_type(c, lhs, h);
+    } else {
+        lt = value_type(c, lhs, hint);
+        let mut h = hint;
+        if takes_literal(c, lt) { h = lt; }
+        rt = value_type(c, rhs, h);
+    }
+    // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, a `Str`.
+    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before { return t_str(); }
+    let mut ok = false;
+    if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem" { ok = lt == rt && is_num(c, lt); }
+    if is_order(op) { ok = lt == rt && ordering(c, lt) == ""; }
+    if op == "BitAnd" || op == "BitOr" || op == "BitXor" { ok = lt == rt && is_integer(c, lt); }
+    if is_equality(op) { ok = lt == rt && derived(c, lt, true) == ""; }
+    if is_logical(op) { ok = lt == t_bool() && rt == t_bool(); }
+    if ok {
+        if is_comparison(op) || is_logical(op) { return t_bool(); }
+        return lt;
+    }
+    let mut verb = "combine";
+    if is_comparison(op) { verb = "compare"; }
+    let slt = show(c, lt);
+    let srt = show(c, rt);
+    let mut blocked = "";
+    if lt == rt {
+        if is_equality(op) { blocked = derived(c, lt, true); }
+        if is_order(op) { blocked = ordering(c, lt); }
+    }
+    let mut property = "order";
+    if is_equality(op) { property = "equality"; }
+    let mut detail = "";
+    if blocked != "" && derived_path(c, blocked) != "" {
+        detail = cat5(cat3("`", symbol(op), "` does not apply to `"), slt, "`: its `", derived_path(c, blocked),
+                cat4("` is a `", show(c, derived_type(c, blocked)), "`, which has no ", property));
+    } else {
+        if lt == rt { detail = cat5("`", symbol(op), "` does not apply to `", slt, "`"); } else {
+            detail = cat5(cat3("`", symbol(op), "` cannot "), verb, " `", slt, cat3("` with `", srt, "`"));
+        }
+    }
+    err(c, "N0304", op_span, detail, "");
+    sec(c, espan(c, lhs), cat3("this is `", slt, "`"));
+    sec(c, espan(c, rhs), cat3("this is `", srt, "`"));
+    if expected >= 0 { return expected; }
+    if is_comparison(op) || is_logical(op) { return t_bool(); }
+    if is_num(c, lt) { return lt; }
+    t_int()
+}
+
+fn takes_literal(c: Ck, t: Int) -> Bool { is_num(c, t) || bname_of(c, t) == "Text" }
+
+fn ordering(c: Ck, t: Int) -> Str {
+    if is_float_name(bname_of(c, t)) { return ""; }
+    derived(c, t, false)
+}
+
+fn check_if(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
+    let cond = fld(c, e, "cond");
+    let ct = value_type(c, cond, t_bool());
+    if ct != t_bool() {
+        err(c, "N0301", espan(c, cond), cat3("an `if` condition must be `Bool`, but this is `", show(c, ct), "`"),
+                "Nazm has no truthiness: use a comparison such as `x != 0`");
+    }
+    let then_block = fld(c, e, "then_block");
+    if unwanted { ss(c, s_discard(), 1); } else { ss(c, s_discard(), 0); }
+    let a = check_block(c, then_block, expected);
+    if some(c, e, "else_block") == false { return unit(); }
+    let else_block = unwrap(c, e, "else_block");
+    if unwanted { ss(c, s_discard(), 1); } else { ss(c, s_discard(), 0); }
+    let mut want = expected;
+    if want < 0 && a >= 0 { want = a; }
+    if unwanted { want = none(); }
+    let b = check_block(c, else_block, want);
+    if a == diverges() { return b; }
+    if b == diverges() { return a; }
+    if a >= 0 && b >= 0 && a == b { return a; }
+    if unwanted && (a >= 0 || b >= 0) { return unit(); }
+    if a >= 0 && b >= 0 {
+        let sa = show(c, a);
+        let sb = show(c, b);
+        let mut at = fld(c, else_block, "span");
+        if some(c, else_block, "tail") { at = espan(c, unwrap(c, else_block, "tail")); }
+        let mut other = fld(c, then_block, "span");
+        if some(c, then_block, "tail") { other = espan(c, unwrap(c, then_block, "tail")); }
+        err(c, "N0302", at, cat5("this branch is `", sb, "`, but the other is `", sa, "`"), "both branches of an `if` must have the same type");
+        sec(c, other, cat3("this one is `", sa, "`"));
+        return a;
+    }
+    if a >= 0 || b >= 0 {
+        let mut v = a;
+        if b >= 0 { v = b; }
+        err(c, "N0302", fld(c, e, "span"), cat3("one branch produces `", show(c, v), "` and the other produces nothing"),
+                "both branches of an `if` must agree, or neither may produce a value");
+        return v;
+    }
+    unit()
+}
+
+// --- calls ----------------------------------------------------------------------------------------
+
+// What a name calls: a function of this module (0 and up), a built-in (-2 and down), or nothing.
+fn callee_of(c: Ck, name: Str) -> Int {
+    let f = defined_fn(c, gs(c, s_module()), name);
+    if f >= 0 { return f; }
+    let b = builtin_index(c, name);
+    if b >= 0 { return 0 - 2 - b; }
+    0 - 1
+}
+
+fn env_has(c: Ck, name: Str) -> Bool { callee_of(c, name) != 0 - 1 }
+
+fn is_conversion(name: Str) -> Bool {
+    name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "Text" || is_num_name(name)
+}
+
+fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
+    if some(c, e, "qualifier") || some(c, e, "type_args") {
+        stop(c, "a qualified or generic call");
+        return or_int(expected);
+    }
+    let callee = fname_of(c, e, "callee");
+    let cs = fld(c, e, "callee_span");
+    let span = fld(c, e, "span");
+    let args = kids(c, e, "args");
+    let target = callee_of(c, callee);
+    if target == 0 - 1 && is_conversion(callee) {
+        stop(c, "a numeric conversion");
+        return or_int(expected);
+    }
+    if ints_len(args) > 0 && starts_upper(callee) && target == 0 - 1 {
+        if is_record(c, quiet_type(c, callee, cs)) || ints_len(variant_owners(c, callee)) > 0 {
+            let t = check_construction(c, callee, cs, positional_inits(c, args), span, expected);
+            if t < 0 { return or_int(expected); }
+            return t;
+        }
+    }
+    if target >= 0 {
+        if ints_get(c.fnnores, target) == 1 && unwanted == false {
+            err(c, "N0300", span, cat3("`", callee, "` returns nothing, so this call has no value to use"),
+                    cat3("call it as a statement of its own, or give `", callee, "` a result type"));
+        }
+    }
+    if target == 0 - 1 {
+        if callee == "list_from_vec" || callee == "list_empty" || callee == "list_len" || callee == "list_get" {
+            stop(c, "a renamed built-in");
+            return or_int(expected);
+        }
+        if is_cap_name(callee) {
+            stop(c, "a capability constructed");
+            return or_int(expected);
+        }
+        err(c, "N0201", cs, cat3("`", callee, "` is not a function"), "");
+        let mut i = 0;
+        while i < ints_len(args) {
+            check_expr(c, ints_get(args, i), none());
+            i = i + 1;
+        }
+        return or_int(expected);
+    }
+    let mut pf = 0;
+    let mut pc = 0;
+    let mut ret = 0;
+    let mut ds = 0;
+    let mut de = 0;
+    if target >= 0 {
+        pf = ints_get(c.fnpf, target);
+        pc = ints_get(c.fnpc, target);
+        ret = ints_get(c.fnret, target);
+        ds = ints_get(c.fnns, target);
+        de = ints_get(c.fnne, target);
+    } else {
+        let bi = 0 - 2 - target;
+        if ints_get(c.bok, bi) == 0 {
+            stop(c, cat3("the built-in `", callee, "`"));
+            return or_int(expected);
+        }
+        if strs_get(c.beff, bi) != "" || strs_get(c.bcaps, bi) != "" {
+            stop(c, cat3("the built-in `", callee, "`, which needs authority or has an effect"));
+            return or_int(expected);
+        }
+        pf = ints_get(c.bpf, bi);
+        pc = ints_get(c.bpc, bi);
+        ret = ints_get(c.bret, bi);
+        // A built-in has no declaration for "defined here" to point at; how the reference
+        // publishes that label is not carried yet.
+        if pc != ints_len(args) {
+            stop(c, "a built-in called with the wrong number of arguments");
+            return or_int(expected);
+        }
+    }
+    if ints_len(args) != pc {
+        let mut verb = " were given";
+        if ints_len(args) == 1 { verb = " was given"; }
+        err(c, "N0303", span, cat5(cat3("`", callee, "` takes "), int_to_str(pc), str_concat(" argument", plural(pc)), ", but ",
+                str_concat(int_to_str(ints_len(args)), verb)), "");
+        sec_at(c, ds, de, "defined here");
+    }
+    let mut i = 0;
+    while i < ints_len(args) {
+        let a = ints_get(args, i);
+        let mut want = none();
+        if i < pc { want = ints_get(c.ptys, pf + i); }
+        let got = value_type(c, a, want);
+        if want >= 0 && assignable(c, got, want) == false {
+            err(c, "N0300", espan(c, a),
+                    cat5(cat3("argument ", int_to_str(i + 1), " of `"), callee, "` is `", show(c, want), cat3("`, but this is `", show(c, got), "`")), "");
+        }
+        i = i + 1;
+    }
+    ret
+}
+
+// --- construction -------------------------------------------------------------------------------
+
+// Field initialisers: each one's name, name span (absolute) and value.
+pub struct Inits {
+    names: Strs,
+    ns: Ints,
+    ne: Ints,
+    vals: Ints,
+}
+
+fn no_inits() -> Inits { Inits(names: strs_new(), ns: ints_new(), ne: ints_new(), vals: ints_new()) }
+
+fn written_inits(c: Ck, fields: Ints) -> Inits {
+    let out = no_inits();
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        strs_push(out.names, fname_of(c, f, "name"));
+        ints_push(out.ns, sps(c, fld(c, f, "name_span")));
+        ints_push(out.ne, spe(c, fld(c, f, "name_span")));
+        ints_push(out.vals, fld(c, f, "value"));
+        i = i + 1;
+    }
+    out
+}
+
+// A call's arguments as fields given by position (R1.5, D4): no name, at a span of no width where
+// the value begins.
+fn positional_inits(c: Ck, args: Ints) -> Inits {
+    let out = no_inits();
+    let mut i = 0;
+    while i < ints_len(args) {
+        let a = ints_get(args, i);
+        strs_push(out.names, "");
+        ints_push(out.ns, sps(c, espan(c, a)));
+        ints_push(out.ne, sps(c, espan(c, a)));
+        ints_push(out.vals, a);
+        i = i + 1;
+    }
+    out
+}
+
+fn check_values(c: Ck, inits: Inits) -> Int {
+    let mut i = 0;
+    while i < ints_len(inits.vals) {
+        check_expr(c, ints_get(inits.vals, i), none());
+        i = i + 1;
+    }
+    0
+}
+
+// The type `name` means here, asked without reporting anything.
+fn quiet_type(c: Ck, name: Str, span: Int) -> Int { resolve_name(c, name, span, dg_new()) }
+
+// The enums in scope with a variant named `variant`, in the order of the names they are written by.
+fn variant_owners(c: Ck, variant: Str) -> Ints {
+    let names = strs_new();
+    let out = ints_new();
+    let mut i = 0;
+    while i < strs_len(c.tnames) {
+        let t = ints_get(c.ttys, i);
+        if is_enum(c, t) {
+            if variant_of(c, t, variant) >= 0 {
+                let n = strs_get(c.tnames, i);
+                let mut at = 0;
+                while at < strs_len(names) && str_less(strs_get(names, at), n) { at = at + 1; }
+                insert_str(names, at, n);
+                insert_int(out, at, t);
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn owner_names(c: Ck, owners: Ints) -> Strs {
+    let out = strs_new();
+    let mut i = 0;
+    while i < ints_len(owners) {
+        strs_push(out, strs_get(c.ename, ta(c, ints_get(owners, i))));
+        i = i + 1;
+    }
+    out
+}
+
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+fn insert_str(xs: Strs, at: Int, s: Str) -> Int {
+    strs_push(xs, s);
+    let mut i = strs_len(xs) - 1;
+    while i > at {
+        strs_set(xs, i, strs_get(xs, i - 1));
+        i = i - 1;
+    }
+    strs_set(xs, at, s);
+    0
+}
+
+fn insert_int(xs: Ints, at: Int, v: Int) -> Int {
+    ints_push(xs, v);
+    let mut i = ints_len(xs) - 1;
+    while i > at {
+        ints_set(xs, i, ints_get(xs, i - 1));
+        i = i - 1;
+    }
+    ints_set(xs, at, v);
+    0
+}
+
+fn quoted(names: Strs) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(names) {
+        strs_push(out, tick(strs_get(names, i)));
+        i = i + 1;
+    }
+    str_join(out, ", ")
+}
+
+// Positional fields named in declaration order (`positional_named`): 1 when the initialisers may
+// be checked (renamed in place where they were positional), 0 when a refusal was reported.
+fn positional_named(c: Ck, inits: Inits, declared: Strs, has_declared: Bool, what: Str, span: Int) -> Int {
+    let mut positional = false;
+    let mut named = false;
+    let mut i = 0;
+    while i < strs_len(inits.names) {
+        if strs_get(inits.names, i) == "" { positional = true; } else { named = true; }
+        i = i + 1;
+    }
+    if positional == false || has_declared == false { return 1; }
+    if named {
+        err(c, "N0334", span, cat3("`", what, "`'s fields are given both by position and by name"),
+                "give every field by position, in the order declared, or every one by name");
+        return 0;
+    }
+    if strs_len(inits.names) != strs_len(declared) {
+        let mut verb = " are given by position";
+        if strs_len(inits.names) == 1 { verb = " is given by position"; }
+        err(c, "N0334", span, cat5(cat3("`", what, "` has "), int_to_str(strs_len(declared)), str_concat(" field", plural(strs_len(declared))),
+                ", and ", str_concat(int_to_str(strs_len(inits.names)), verb)), "");
+        return 0;
+    }
+    i = 0;
+    while i < strs_len(declared) {
+        strs_set(inits.names, i, strs_get(declared, i));
+        i = i + 1;
+    }
+    1
+}
+
+fn record_field_names(c: Ck, t: Int) -> Strs {
+    let out = strs_new();
+    let r = ta(c, t);
+    let mut i = 0;
+    while i < ints_get(c.rfc, r) {
+        strs_push(out, strs_get(c.fname, ints_get(c.rff, r) + i));
+        i = i + 1;
+    }
+    out
+}
+
+// A record's construction; the record, or -1 when its type did not resolve.
+fn check_construction(c: Ck, ty: Str, ty_span: Int, inits: Inits, span: Int, expected: Int) -> Int {
+    let quiet = quiet_type(c, ty, ty_span);
+    if is_record(c, quiet) == false {
+        let owners = variant_owners(c, ty);
+        if ints_len(owners) == 1 {
+            return check_variant(c, strs_get(owner_names(c, owners), 0), ty_span, ty, ty_span, inits, span, expected);
+        }
+        if ints_len(owners) > 1 {
+            let names = owner_names(c, owners);
+            let a = strs_get(names, 0);
+            let b = strs_get(names, 1);
+            err(c, "N0636", ty_span, cat5(cat3("`", ty, "` is a variant of both `"), a, "` and `", b, "`"),
+                    cat5(cat3("write which: `", a, "."), ty, cat3("(…)` or `", b, "."), ty, "(…)`"));
+            check_values(c, inits);
+            return 0 - 1;
+        }
+    }
+    let mut declared = strs_new();
+    if is_record(c, quiet) { declared = record_field_names(c, quiet); }
+    if positional_named(c, inits, declared, is_record(c, quiet), ty, span) == 0 {
+        check_values(c, inits);
+        return 0 - 1;
+    }
+    let t = resolve_type(c, ty, ty_span);
+    if is_record(c, t) == false {
+        if is_enum(c, t) {
+            let name = show(c, t);
+            let mut help = "";
+            if ints_get(c.evc, ta(c, t)) > 0 { help = cat5("write `", name, ".", strs_get(c.vname, ints_get(c.evf, ta(c, t))), "(…)`"); }
+            err(c, "N0341", ty_span, cat3("`", name, "` is an enum, so a value of it names one of its variants"), help);
+        } else {
+            if is_cap_name(ty) {
+                stop(c, "a capability constructed");
+                return 0 - 1;
+            }
+            if is_builtin_name(ty) {
+                err(c, "N0333", ty_span, cat3("`", show(c, t), "` is not a record, so it has no fields to name"),
+                        "this form builds a record. A built-in type is built by its own operations");
+            }
+        }
+        check_values(c, inits);
+        return 0 - 1;
+    }
+    let r = ta(c, t);
+    let given = strs_new();
+    let gstart = ints_new();
+    let gend = ints_new();
+    let mut i = 0;
+    while i < strs_len(inits.names) {
+        let name = strs_get(inits.names, i);
+        let value = ints_get(inits.vals, i);
+        let f = record_field(c, t, name);
+        if f < 0 {
+            dg_error(c.d, "N0333", ints_get(inits.ns, i), ints_get(inits.ne, i), cat5("`", show(c, t), "` has no field `", name, "`"), "", "");
+            sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "declared here");
+            check_expr(c, value, none());
+        } else {
+            let first = strs_find(given, name);
+            if first >= 0 {
+                dg_error(c.d, "N0332", ints_get(inits.ns, i), ints_get(inits.ne, i), cat3("`", name, "` is given a value twice"), "",
+                        "every field is given exactly one value; there is no update form");
+                sec_at(c, ints_get(gstart, first), ints_get(gend, first), "first given here");
+                check_expr(c, value, none());
+            } else {
+                strs_push(given, name);
+                ints_push(gstart, ints_get(inits.ns, i));
+                ints_push(gend, ints_get(inits.ne, i));
+                let want = field_ty_in(c, t, f);
+                let got = value_type(c, value, want);
+                if got != want {
+                    let sw = show(c, want);
+                    err(c, "N0300", espan(c, value), cat5(cat3("`", name, "` is `"), sw, "`, but this is `", show(c, got), "`"), "");
+                    sec_at(c, ints_get(c.fns, f), ints_get(c.fne, f), cat3("declared `", sw, "` here"));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    let missing = strs_new();
+    i = 0;
+    while i < ints_get(c.rfc, r) {
+        let n = strs_get(c.fname, ints_get(c.rff, r) + i);
+        if strs_find(given, n) < 0 { strs_push(missing, n); }
+        i = i + 1;
+    }
+    if strs_len(missing) > 0 {
+        err(c, "N0334", span, cat4("this `", show(c, t), "` does not give a value for ", quoted(missing)),
+                "every field is given a value when a record is built. There are no default values and no partial records");
+        sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "declared here");
+    }
+    t
+}
+
+// A type name written in an expression, reported when it is no type.
+fn resolve_type(c: Ck, name: Str, span: Int) -> Int { resolve_name(c, name, span, c.d) }
+
+// `Enum.Variant(…)`; the enum, or -1 when its type did not resolve.
+fn check_variant(c: Ck, ty: Str, ty_span: Int, variant: Str, variant_span: Int, inits: Inits, span: Int, expected: Int) -> Int {
+    let quiet = quiet_type(c, ty, ty_span);
+    let declared = strs_new();
+    let mut has_declared = false;
+    if is_enum(c, quiet) {
+        let v = variant_of(c, quiet, variant);
+        if v >= 0 {
+            has_declared = true;
+            let mut i = 0;
+            while i < ints_get(c.vfc, v) {
+                strs_push(declared, strs_get(c.fname, ints_get(c.vff, v) + i));
+                i = i + 1;
+            }
+        }
+    }
+    if positional_named(c, inits, declared, has_declared, variant, span) == 0 {
+        check_values(c, inits);
+        return 0 - 1;
+    }
+    let t = resolve_type(c, ty, ty_span);
+    if is_enum(c, t) == false {
+        if is_record(c, t) {
+            err(c, "N0341", ty_span, cat3("`", show(c, t), "` is a record, so it has no variants"),
+                    "a record is built by naming its fields: `Point(x: 1, y: 2)`");
+        } else {
+            if is_builtin_name(ty) {
+                err(c, "N0341", ty_span, cat3("`", show(c, t), "` is a built-in type, so it has no variants"), "only an `enum` has variants");
+            }
+        }
+        check_values(c, inits);
+        return 0 - 1;
+    }
+    if ints_get(c.enp, ta(c, t)) > 0 {
+        stop(c, "a variant of a generic enum");
+        return 0 - 1;
+    }
+    let e = ta(c, t);
+    let v = variant_of(c, t, variant);
+    if v < 0 {
+        let known = strs_new();
+        let mut i = 0;
+        while i < ints_get(c.evc, e) {
+            strs_push(known, strs_get(c.vname, ints_get(c.evf, e) + i));
+            i = i + 1;
+        }
+        let mut help = "";
+        if strs_len(known) > 0 { help = str_concat("its variants are ", quoted(known)); }
+        err(c, "N0341", variant_span, cat5("`", show(c, t), "` has no variant `", variant, "`"), help);
+        sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "declared here");
+        check_values(c, inits);
+        return t;
+    }
+    let path = cat3(show(c, t), ".", variant);
+    let given = strs_new();
+    let gstart = ints_new();
+    let gend = ints_new();
+    let mut i = 0;
+    while i < strs_len(inits.names) {
+        let name = strs_get(inits.names, i);
+        let value = ints_get(inits.vals, i);
+        let f = variant_field(c, v, name);
+        if f < 0 {
+            dg_error(c.d, "N0333", ints_get(inits.ns, i), ints_get(inits.ne, i), cat5("`", path, "` has no payload field `", name, "`"), "", "");
+            sec_at(c, ints_get(c.vns, v), ints_get(c.vne, v), "declared here");
+            check_expr(c, value, none());
+        } else {
+            let first = strs_find(given, name);
+            if first >= 0 {
+                dg_error(c.d, "N0332", ints_get(inits.ns, i), ints_get(inits.ne, i), cat3("`", name, "` is given a value twice"), "",
+                        "every payload field is given exactly one value");
+                sec_at(c, ints_get(gstart, first), ints_get(gend, first), "first given here");
+                check_expr(c, value, none());
+            } else {
+                strs_push(given, name);
+                ints_push(gstart, ints_get(inits.ns, i));
+                ints_push(gend, ints_get(inits.ne, i));
+                let want = field_ty_in(c, t, f);
+                let got = value_type(c, value, want);
+                if got != want {
+                    let sw = show(c, want);
+                    err(c, "N0300", espan(c, value), cat5(cat3("`", name, "` is `"), sw, "`, but this is `", show(c, got), "`"), "");
+                    sec_at(c, ints_get(c.fns, f), ints_get(c.fne, f), cat3("declared `", sw, "` here"));
+                }
+            }
+        }
+        i = i + 1;
+    }
+    let missing = strs_new();
+    i = 0;
+    while i < ints_get(c.vfc, v) {
+        let n = strs_get(c.fname, ints_get(c.vff, v) + i);
+        if strs_find(given, n) < 0 { strs_push(missing, n); }
+        i = i + 1;
+    }
+    if strs_len(missing) > 0 {
+        err(c, "N0334", span, cat4("this `", path, "` does not give a value for ", quoted(missing)),
+                "every payload field is given a value when a variant is built. There are no default values");
+        sec_at(c, ints_get(c.vns, v), ints_get(c.vne, v), "declared here");
+    }
+    t
+}
+
+// `base.name`: the field's type, or -1 when it has none.
+fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
+    if is_record(c, base) == false {
+        let mut help = "`.` reads a declared field out of a record value";
+        if is_enum(c, base) {
+            help = "which fields an enum value has depends on its active variant, so a payload is read by `match` and not by `.`";
+        }
+        err(c, "N0335", name_span, cat5("`", show(c, base), "` is not a record, so `.", name, "` has nothing to read"), help);
+        return 0 - 1;
+    }
+    let f = record_field(c, base, name);
+    if f < 0 {
+        let r = ta(c, base);
+        err(c, "N0333", name_span, cat5("`", show(c, base), "` has no field `", name, "`"),
+                "a field is looked for on the type of the value it is read from, and nowhere else");
+        sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "declared here");
+        return 0 - 1;
+    }
+    field_ty_in(c, base, f)
+}

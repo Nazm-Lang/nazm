@@ -306,6 +306,7 @@ fn index_of_byte(s: Str, b: Int) -> Int {
 
 pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
 pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
+pub fn ld_name(l: Loaded, i: Int) -> Str { strs_get(l.names, i) }
 
 // Where file `i` begins in the concatenation of the compilation's files.
 pub fn ld_base(l: Loaded, i: Int) -> Int {

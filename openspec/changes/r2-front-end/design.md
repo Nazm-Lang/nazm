@@ -114,6 +114,19 @@ standard error what it stopped at. `run.sh check` then counts the inputs the che
 among them every difference is a defect, not a gap; coverage grows group by group (`tasks.md` 3,
 4), most frequent codes first — on 2026-10-15 N0304, N0201, N0300, N0619, N0369, N0372 by inputs.
 
+The checker is `compiler/sema.nz`, driven by `diagnose.nz`. Standard error is kept apart from the
+diagnostics: `run.sh check` writes each input's stop reason beside its result and reports how many
+inputs the checker carries whole and how many of those agree. A module that did not parse is a
+stop (the reference checks what did parse), and so is the loader's refusal of a package, which it
+does not resolve yet.
+
+**D14 — The built-in table is generated, never transcribed.** `compiler/builtins.nz` is printed by
+the reference dumper's `builtins` mode from `nazm_sema::Intrinsic::ALL` — each built-in's name,
+parameter and result shapes, type parameters, numeric class, whether it is a prelude name, effect
+and the authority it needs (`CapabilityKind::of_intrinsic`) — and `toolchain/frontend-tests/builtins.sh`
+regenerates it (`--check` says whether the tree's copy is current). One table, as `intrinsic.rs` says
+of its own two readers: the Nazm checker cannot drift from the Rust one by a hand-copied row.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

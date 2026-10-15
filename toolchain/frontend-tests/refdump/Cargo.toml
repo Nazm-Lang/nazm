@@ -14,3 +14,4 @@ publish = false
 nazm-syntax = { path = "../../../crates/nazm-syntax" }
 nazm-diag = { path = "../../../crates/nazm-diag" }
 nazm-span = { path = "../../../crates/nazm-span" }
+nazm-sema = { path = "../../../crates/nazm-sema" }

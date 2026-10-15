@@ -32,6 +32,10 @@
       diagnostic but a package's); packages, derives and the module graph's semantics are not
 - [x] 3.1a The `check` comparison (`run.sh check`): loader, every file's syntax diagnostics at their
       global offsets, and the missing `main` — every difference left is a checker diagnostic
+- [ ] 3.1b The checker's first stages (`compiler/sema.nz`, D13): one module and the prelude; type
+      names, fields, function declarations, bodies of the core subset, the `main` rules; the built-in
+      table generated (D14). `run.sh check`: 1,908 agree before, 2,112 after; the checker carries
+      922 inputs and all 922 agree (the loader stops at a package, which it does not resolve)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
