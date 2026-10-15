@@ -156,7 +156,8 @@
         "name": {
           "enum": [
             "llvm",
-            "cranelift"
+            "cranelift",
+            "nazm"
           ]
         },
         "opt_level": {
@@ -183,6 +184,11 @@
         },
         "cranelift": {
           "type": "string"
+        },
+        "nzcg": {
+          "description": "R9, D15: the BLAKE3 digest of Nazm's own code generator, present exactly when `--backend nazm` built the program",
+          "type": "string",
+          "pattern": "^blake3:[0-9a-f]{64}$"
         }
       }
     },

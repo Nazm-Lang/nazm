@@ -9315,7 +9315,10 @@ when the archive carries it.
 **Cache identity.** The backend's version is `nzcg-` and the generator's BLAKE3 digest, the
 runtime ABI revision and `debug`: a changed generator is a new key, as Cranelift's
 `TRANSLATOR_REVISION` and settings are. A unit's key also covers the target, the runtime's digest,
-whether the program has one thread, and the LIR's digest. A debug object is never reused.
+whether the program has one thread, and the LIR's digest. A debug object is never reused. The same
+digest is in a program's provenance record when the generator built it (`backend.nzcg`, the
+optional field `nazm.provenance/1` gained for it, and a tool of the SBOM's); `nazm profile
+--backend nazm` profiles the program as it builds it, its samples attributed by its line tables.
 
 **Refusals, and no fallback.** Before anything is compiled: a target the generator does not carry
 before 1.0 — anything but `aarch64-apple-darwin` and `x86_64-apple-darwin` (its D13) — is refused

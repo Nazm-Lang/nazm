@@ -19828,3 +19828,21 @@ file = "scripts/host-archive.sh"
 find = '''    aarch64-apple-darwin|x86_64-apple-darwin)'''
 replace = '''    none)'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable" }]
+
+[[mutation]]
+name = "r9-7-9-the-record-does-not-name-the-generator"
+why = "a program Nazm's own code generator built has a provenance record that does not name the generator by its digest, so the record no longer says what compiled it"
+file = "crates/nazm-cli/src/provenance.rs"
+find = '''    if r.backend == "nazm" {'''
+replace = '''    if false {'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest" }]
+
+[[mutation]]
+name = "r9-7-9-profile-refuses-the-nazm-backend"
+why = "nazm profile no longer accepts --backend nazm, so a program cannot be profiled as Nazm's own code generator builds it"
+file = "crates/nazm-cli/src/cli.rs"
+find = '''        /// The code generator, as `nazm build --backend`: `llvm`, `cranelift` or `nazm`.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift", "nazm"])]'''
+replace = '''        /// The code generator, as `nazm build --backend`: `llvm`, `cranelift` or `nazm`.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger::a_profile_reports_what_one_run_did_under_both_backends" }]

@@ -958,8 +958,8 @@ pub(crate) enum Command {
     /// where its samples fell (N91).
     Profile {
         file: PathBuf,
-        /// The code generator, as `nazm build --backend`.
-        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
+        /// The code generator, as `nazm build --backend`: `llvm`, `cranelift` or `nazm`.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift", "nazm"])]
         backend: String,
         /// Sample the run with the host's sampler, attributing each sample to a Nazm function
         /// and line, the runtime, foreign code or the system (N91).
