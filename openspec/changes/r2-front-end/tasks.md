@@ -316,14 +316,15 @@
       each function's printed object (D25), BLAKE3 by `@std/blake3`; `run.sh core` compares each
       function with its `digest`. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,435
       functions the lowering carries 29,774, all agree, digests included
-- [ ] 5.1c The document's other parts: modules, the type table in the reference's order, statics,
-      the impl table, `derived_hash`; then the whole document compared. Done but statics (23
-      inputs) and the byte-for-byte comparison: the entry, the modules, the type table (instances
-      completed as made, the reference's interning order — every carried input agrees on it), the
-      impl table and `derived_hash`, each a line of `run.sh core` (D25). `run.sh core`: 3,047
-      inputs agree, 0 differ; of 56,611 functions the lowering carries 29,948, all agree; of the
-      document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ (carried
-      3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041, all agree)
+- [x] 5.1c The document's other parts: modules, the type table in the reference's order, statics,
+      the impl table, `derived_hash`; then the whole document compared (5.1e): the entry, the
+      modules, the type table (instances completed as made, the reference's interning order), the
+      statics (`record_module_names`: module by module, each in declaration order, a value or an
+      `Atomic`'s cell and its start, its `@section`; a function's `@section` likewise) and the impl
+      table and `derived_hash`, each a line of `run.sh core` (D25). `run.sh core`: 3,048 inputs
+      agree, 0 differ; of 56,727 functions the lowering carries 43,510, all agree; of the
+      document's other parts 10,374 carried — every one — all agree; 944 whole documents, all the
+      reference's bytes
 - [ ] 5.1d The first stops (D25): variants and records built (by name, by position, `Dot` alone),
       generic functions and generic calls with their settled type arguments (written or not),
       impls' methods, and `match` of plain arms as a value and as a statement. `run.sh core`:

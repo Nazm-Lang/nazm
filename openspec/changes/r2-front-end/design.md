@@ -330,8 +330,11 @@ substituted (`substitute`: an array is left alone, a type that does not mention 
 not rebuilt), which interns what they name — or, while field types are resolved, at `settle`, the
 last made first; each module checked first makes the built-ins' `Option[T]` (`environment`); a
 tuple's record is declared when first asked for and is the root module's. `sema.nz` keeps the
-table's order as it goes (`rlog`, `elog`) and prints it (`ck_types_json`). Statics are printed
-where there are none; a compilation with one says so and is counted apart. Where every function
+table's order as it goes (`rlog`, `elog`) and prints it (`ck_types_json`). The statics are
+`record_module_names`' list: module by module in the checker's order, each module's in declaration
+order — a value (its type and value as `print.rs` writes them) or an `Atomic`'s cell and what it
+starts as (0 where that was not computed), its `@section` and its name's span (`ck_module_statics`
+computes the module's constants again, silently). Where every function
 and every part is carried, the comparison is also the whole document, byte for byte: `cr_core`
 assembles it from the same values and prints it as `print.rs` indents it (`cdg_pretty`, its
 strings quoted as `quote` quotes them), and `run.sh core` compares it with `nazm core-ir`'s

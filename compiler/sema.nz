@@ -9880,8 +9880,10 @@ pub struct Cev {
     vi: Ints,
     vs: Strs,
     d: Diags,
-    // The module's static `Atomic`s (Gate 3): cells, not values.
+    // The module's static `Atomic`s (Gate 3): cells, not values — and what each starts as (0
+    // where that could not be computed, as `cell` records it).
     cells: Strs,
+    cellv: Ints,
     // Each constant of a record, enum, tuple or array type whose type resolved (L8), by name.
     aggn: Strs,
     aggt: Ints,
@@ -9931,7 +9933,7 @@ fn ev_bool(ev: Cev, b: Bool) -> Int {
 fn evaluate_consts(c: Ck, m: Int, d: Diags, aggregates: Bool) -> Cev {
     ss(c, s_module(), m);
     let ev = Cev(decls: kids(c, ints_get(c.mprog, m), "consts"), names: strs_new(), kinds: ints_new(), ints: ints_new(), strs: strs_new(),
-            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new(), aggn: strs_new(), aggt: ints_new());
+            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new(), cellv: ints_new(), aggn: strs_new(), aggt: ints_new());
     let mut k = 0;
     while k < deps(c, m) {
         let dp = dep(c, m, k);
@@ -10216,6 +10218,7 @@ fn ev_cell(c: Ck, ev: Cev, decl: Int) -> Int {
     let name = fname_of(c, decl, "name");
     let value = fld(c, decl, "value");
     let mut call = false;
+    let mut init = 0;
     if sx_kind(c.t, value) != tk_tuple() && kind_of(c, value) == "Call" {
         call = some(c, value, "qualifier") == false && fname_of(c, value, "callee") == "atomic_new" && ints_len(kids(c, value, "args")) == 1
                 && some(c, value, "type_args") == false;
@@ -10226,11 +10229,13 @@ fn ev_cell(c: Ck, ev: Cev, decl: Int) -> Int {
         let v = ev_value(c, ev, a, k_int());
         strs_pop(ev.active);
         if v >= 0 && ints_get(ev.vk, v) != k_int() { dg_error(ev.d, "N0300", sps(c, espan(c, a)), spe(c, espan(c, a)), "an atomic holds an `Int`", "", ""); }
+        if v >= 0 && ints_get(ev.vk, v) == k_int() { init = ints_get(ev.vi, v); }
     } else {
         dg_error(ev.d, "N0622", sps(c, espan(c, value)), spe(c, espan(c, value)), "a static `Atomic` starts as `atomic_new(c)` of a constant `c`", "",
                 "`atomic_new` is the one call a static's value may make");
     }
     strs_push(ev.cells, name);
+    ints_push(ev.cellv, init);
     0
 }
 
@@ -10575,6 +10580,65 @@ fn const_environment(c: Ck, m: Int) -> Int {
         i = i + 1;
     }
     0
+}
+
+// Module `m`'s statics (Gate 3, `record_module_names`), four lines each: its name, then `cell`
+// and what it starts as, or `value`, its type's name and its value as `print.rs` writes it — or
+// `-` where this checker did not compute it (a float, a value that failed). In declaration order,
+// a name's first declaration only.
+pub fn ck_module_statics(c: Ck, m: Int) -> Strs {
+    let out = strs_new();
+    let consts = kids(c, ints_get(c.mprog, m), "consts");
+    let mut any = false;
+    let mut i = 0;
+    while i < ints_len(consts) {
+        if flag(c, ints_get(consts, i), "is_static") { any = true; }
+        i = i + 1;
+    }
+    if any == false { return out; }
+    let saved = gs(c, s_module());
+    let ev = evaluate_consts(c, m, dg_new(), false);
+    ss(c, s_module(), saved);
+    let seen = strs_new();
+    i = 0;
+    while i < ints_len(consts) {
+        let decl = ints_get(consts, i);
+        let name = fname_of(c, decl, "name");
+        if flag(c, decl, "is_static") && strs_find(seen, name) < 0 {
+            strs_push(seen, name);
+            let cell = strs_find(ev.cells, name);
+            let at = strs_find(ev.names, name);
+            if cell >= 0 {
+                strs_push(out, name);
+                strs_push(out, "cell");
+                strs_push(out, "Atomic");
+                strs_push(out, int_to_str(ints_get(ev.cellv, cell)));
+            } else {
+                if at >= 0 {
+                    let k = ints_get(ev.kinds, at);
+                    strs_push(out, name);
+                    strs_push(out, "value");
+                    strs_push(out, kind_name(k));
+                    if k == k_int() {
+                        strs_push(out, json_str(int_to_str(ints_get(ev.ints, at))));
+                    } else {
+                        if k == k_bool() {
+                            if ints_get(ev.ints, at) == 1 { strs_push(out, "true"); } else { strs_push(out, "false"); }
+                        } else {
+                            if k_is_integer(k) { strs_push(out, json_str(strs_get(ev.strs, at))); } else { strs_push(out, "-"); }
+                        }
+                    }
+                } else {
+                    strs_push(out, name);
+                    strs_push(out, "value");
+                    strs_push(out, "");
+                    strs_push(out, "-");
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
 }
 
 // The module being checked's static of this name, or -1 (`Constants::statics`).

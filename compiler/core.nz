@@ -204,20 +204,7 @@ pub fn cr_parts(f: Facts) -> Str {
     }
     co_part(out, "modules", co_list(modules));
     co_part(out, "types", ck_types_json(c, idents));
-    // Statics and impls: carried only where there are none, so far.
-    let mut statics = 0;
-    m = 0;
-    while m < fx_modules(f) {
-        let t = fx_tree(f);
-        let consts = sx_items(t, sx_field(t, fx_module_program(f, m), "consts"));
-        let mut k = 0;
-        while k < ints_len(consts) {
-            if sx_text(t, sx_field(t, ints_get(consts, k), "is_static")) == "true" { statics = statics + 1; }
-            k = k + 1;
-        }
-        m = m + 1;
-    }
-    if statics == 0 { co_part(out, "statics", "[]"); } else { co_part(out, "statics", "- statics"); }
+    co_part(out, "statics", co_statics(f, idents));
     co_part(out, "impls", co_impls(f, idents));
     // The trait a record, enum or tuple derives, with its two methods.
     let h = ck_derived_hash(c);
@@ -232,6 +219,70 @@ pub fn cr_parts(f: Facts) -> Str {
     }
     co_part(out, "derived_hash", derived);
     str_join(out, "")
+}
+
+// Every static (`StaticDef`), module by module in the checker's order and each module's in
+// declaration order: a read-only value, or an `Atomic`'s cell and what it starts as.
+fn co_statics(f: Facts, idents: Strs) -> Str {
+    let c = fx_checker(f);
+    let t = fx_tree(f);
+    let rows = strs_new();
+    let mut m = 0;
+    while m < fx_modules(f) {
+        let list = ck_module_statics(c, m);
+        let ident = strs_get(idents, m);
+        let mut i = 0;
+        while i + 3 < strs_len(list) {
+            let name = strs_get(list, i);
+            let value = strs_get(list, i + 3);
+            if value == "-" { return "- a static whose value is not computed"; }
+            let decl = co_static_decl(t, fx_module_program(f, m), name);
+            let ns = sx_field(t, decl, "name_span");
+            let o = strs_new();
+            strs_push(o, co_field_first("def", json_str(str_concat(str_concat(ident, "::static "), name))));
+            strs_push(o, co_field("module", json_str(ident)));
+            strs_push(o, co_field("name", json_str(name)));
+            strs_push(o, co_field("type", json_str(strs_get(list, i + 2))));
+            strs_push(o, co_field("cell", co_json_bool(strs_get(list, i + 1) == "cell")));
+            strs_push(o, co_field("value", value));
+            strs_push(o, co_field("section", co_json_or_null(co_section(t, decl))));
+            let range = str_concat(str_concat(int_to_str(sx_s(t, ns)), ".."), int_to_str(sx_e(t, ns)));
+            strs_push(o, co_field("at", json_str(str_concat(str_concat(ident, ":"), range))));
+            strs_push(rows, co_object(o));
+            i = i + 4;
+        }
+        m = m + 1;
+    }
+    co_list(rows)
+}
+
+// A module's first static of this name.
+fn co_static_decl(t: Tree, program: Int, name: Str) -> Int {
+    let consts = sx_items(t, sx_field(t, program, "consts"));
+    let mut k = 0;
+    while k < ints_len(consts) {
+        let d = ints_get(consts, k);
+        if sx_text(t, sx_field(t, d, "is_static")) == "true" && sx_name(t, d, "name") == name { return d; }
+        k = k + 1;
+    }
+    0 - 1
+}
+
+// The one string argument of a declaration's `@section`, or "" (`section_of`).
+fn co_section(t: Tree, decl: Int) -> Str {
+    let attrs = sx_items(t, sx_field(t, decl, "attrs"));
+    let mut k = 0;
+    while k < ints_len(attrs) {
+        let a = ints_get(attrs, k);
+        if sx_name(t, a, "name") == "section" {
+            if sx_is_some(t, sx_field(t, a, "args")) == false { return ""; }
+            let args = sx_items(t, sx_unwrap(t, sx_field(t, a, "args")));
+            if ints_len(args) == 1 && sx_text(t, ints_get(args, 0)) == "Str" { return sx_text(t, sx_field(t, ints_get(args, 0), "value")); }
+            return "";
+        }
+        k = k + 1;
+    }
+    ""
 }
 
 // The impl table (`ImplRow`): each impl the coherence table answers with, every method of its
@@ -323,7 +374,8 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let attrs = sx_items(t, sx_field(t, node, "attrs"));
     let mut k = 0;
     while k < ints_len(attrs) {
-        if sx_name(t, ints_get(attrs, k), "name") != "deprecated" { return co_stopped(lo, str_concat("the attribute @", sx_name(t, ints_get(attrs, k), "name"))); }
+        let an = sx_name(t, ints_get(attrs, k), "name");
+        if an != "deprecated" && an != "section" { return co_stopped(lo, str_concat("the attribute @", sx_name(t, ints_get(attrs, k), "name"))); }
         k = k + 1;
     }
     if ck_fn_required(c, i) < 0 { return co_stopped(lo, "a function whose effects were not settled"); }
@@ -374,7 +426,7 @@ fn co_function(lo: Lo, i: Int) -> Str {
     strs_push(out, co_field("captures", "[]"));
     let attributes = strs_new();
     strs_push(attributes, co_field_first("export", co_json_or_null(ck_fn_export(c, i))));
-    strs_push(attributes, co_field("section", "null"));
+    strs_push(attributes, co_field("section", co_json_or_null(co_section(t, node))));
     strs_push(attributes, co_field("interrupt", "null"));
     strs_push(attributes, co_field("task", "null"));
     strs_push(attributes, co_field("on_failure", "false"));
