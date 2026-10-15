@@ -20055,3 +20055,61 @@ file = "crates/nazm-runtime/src/platform.rs"
 find = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(58))'''
 replace = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(29))'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_default::ten_thousand_tasks_run_on_one_worker_per_processor_by_default" }]
+
+# --- v1 track C, C2: @std/http, HTTP/1.1 over TCP (2026-10-16) ----------------------------------
+
+[[mutation]]
+name = "c2-transfer-encoding-beside-content-length"
+why = "a request with both Transfer-Encoding and Content-Length is read by Transfer-Encoding instead of refused, the framing disagreement request smuggling rides on"
+file = "library/std/http.nz"
+find = '''        if strs_len(cls) > 0 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "both Transfer-Encoding and Content-Length")); }'''
+replace = '''        if strs_len(cls) > 99 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "both Transfer-Encoding and Content-Length")); }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_request_corpus_is_parsed_or_refused_alike_everywhere" }]
+
+[[mutation]]
+name = "c2-content-lengths-that-differ"
+why = "two Content-Length values that differ are read as the first, so a proxy and the server can disagree on where the message ends"
+file = "library/std/http.nz"
+find = '''        if t != first { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "Content-Length values that differ")); }'''
+replace = '''        if t == first && t != first { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "Content-Length values that differ")); }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_request_corpus_is_parsed_or_refused_alike_everywhere" }]
+
+[[mutation]]
+name = "c2-a-bare-line-feed-ends-a-line"
+why = "a line feed without its carriage return is let through the head scan, so a head with bare line feeds is not refused as it arrives"
+file = "library/std/http.nz"
+find = '''            if i == start || str_byte(buf, i - 1) != 13 { return refuse(400, "a bare line feed"); }'''
+replace = '''            if i == start && str_byte(buf, i) != 10 { return refuse(400, "a bare line feed"); }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_request_corpus_is_parsed_or_refused_alike_everywhere" }, { package = "nazm-cli", test = "cli_e_l", name = "http::malformed_requests_are_answered_on_the_wire_and_the_server_keeps_serving" }]
+
+[[mutation]]
+name = "c2-a-chunk-needs-no-line-end"
+why = "the CRLF after a chunk's data is not checked, so a chunk longer than its size is accepted and its tail read as the next size line"
+file = "library/std/http.nz"
+find = '''        if str_byte(buf, eol + 2 + size) != 13 || str_byte(buf, eol + 3 + size) != 10 { return refuse(400, "a chunk not followed by its line end"); }'''
+replace = '''        if str_byte(buf, eol + 2 + size) == 0 && str_byte(buf, eol + 3 + size) == 0 { return refuse(400, "a chunk not followed by its line end"); }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_request_corpus_is_parsed_or_refused_alike_everywhere" }]
+
+[[mutation]]
+name = "c2-connection-close-is-ignored"
+why = "a request asking to close its connection leaves it open, so the server answers the pipelined request after it"
+file = "library/std/http.nz"
+find = '''        let close = http_header_has_token(r.headers, "connection", "close") || (r.version'''
+replace = '''        let close = http_header_has_token(r.headers, "connection", "closed") || (r.version'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::malformed_requests_are_answered_on_the_wire_and_the_server_keeps_serving" }]
+
+[[mutation]]
+name = "c2-a-head-response-carries-a-body"
+why = "the answer to HEAD carries the GET body, which the client takes as the start of the next response on a kept-alive connection"
+file = "library/std/http.nz"
+find = '''        let text = match http_format_response(out, r.method == "HEAD", close) {'''
+replace = '''        let text = match http_format_response(out, false, close) {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_server_and_a_client_talk_over_loopback_alike_everywhere" }]
+
+[[mutation]]
+name = "c2-the-last-route-wins"
+why = "an earlier route's answer is not kept, so a later route for the same path and method overrides the first added"
+file = "library/std/http.nz"
+find = '''        if tried == 0 { return p; }'''
+replace = '''        if tried == 9 { return p; }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_router_matches_parameters_wildcards_and_methods" }]
