@@ -96,6 +96,9 @@ an empty program (a profile holds a program to everything it imports, used or no
 what attaches them; a program naming none sees exactly what it saw. A prelude name yields silently
 to the module's own and to a written import's. Only the program's own modules (as D8 defines them)
 get them: a package's imports stay written, so what a dependency reaches is in its text.
+Extended by 4.5 (2026-10-15, epoch 86): `@std/option` and `@std/result` join them, so
+`r.unwrap_or(1)` needs no `use`. Neither exports a name another prelude module does; `unwrap_or`,
+which both answer, attaches both, and the receiver's type picks the function as before.
 
 **D10 — `top(n)` and `sort_by(key)` on maps (4.3).** `m.top(n)` is the `n` entries with the largest
 values, ties by key ascending — the word-frequency program's ten lines in one call; `m.sort_by(f)` is
