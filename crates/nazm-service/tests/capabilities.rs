@@ -80,7 +80,8 @@ fn a_capability_is_a_built_in_type_to_every_tool_and_never_a_constructor() {
 
 #[test]
 fn authority_diagnostics_reach_the_editor_with_no_fix_to_apply() {
-    let src = "fn f() -> Int ! { io } { print(\"x\") }\nfn main() -> Int { f() }\n";
+    // A file write, which needs an `IoCap` passed (printing needs none in the program, D8).
+    let src = "fn f() -> Int ! { io } { write_file(\"f\", \"x\") }\nfn main() -> Int { f() }\n";
     let dir = tempfile::tempdir().unwrap();
     let main = dir.path().join("main.nz");
     std::fs::write(&main, src).unwrap();

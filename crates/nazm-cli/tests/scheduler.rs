@@ -268,14 +268,15 @@ fn a_task_has_exactly_the_authority_it_is_handed() {
                   fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(io, 7); } 0 }\n\
                   fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
     agrees(passed, "70");
-    // Withheld: a declared child cannot print without one, whatever its spawner holds.
-    let withheld = "fn child(n: Int) -> Int ! { io } { print(int_to_str(n)) }\n\
+    // Withheld: a declared child cannot write a file without one, whatever its spawner holds.
+    // (A file, not printing: since D8 every function of the program holds `main`'s output.)
+    let withheld = "fn child(n: Int) -> Int ! { io } { write_file(\"f\", int_to_str(n)) }\n\
                     fn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(7); } 0 }\n\
                     fn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
     assert!(check_codes(withheld).contains(&"N0369".to_owned()));
     // An undeclared child has no authority of its own to borrow (N104): it is refused where it
-    // prints, whatever its spawner holds.
-    let bridged = "fn child() -> Int { print(\"x\"); 0 }\n\
+    // writes, whatever its spawner holds.
+    let bridged = "fn child() -> Int { write_file(\"f\", \"x\") }\n\
                    fn run(t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(); } 0 }\n\
                    fn main(io: IoCap, t: SpawnCap) -> Int { run(t) }\n";
     assert!(check_codes(bridged).contains(&"N0369".to_owned()));
