@@ -136,10 +136,38 @@ through `@std/bytebuf`.
 - **No unwind information** until slice 5: a crash's backtrace stops at a Nazm frame in tools that
   use unwind tables rather than the frame pointer.
 
+**D15. Integration proposal: `nazm build --backend nazm` (a Rust change, the coordinator's).**
+A third `nazm_lir::backend::Backend`, beside LLVM's and Cranelift's, in a small crate
+(`nazm-codegen-nazm`) with no code generation of its own:
+
+1. **The program.** `nzcg` is built from `toolchain/codegen/` by the build that ships `nazm`
+   (`cargo xtask` with the LLVM backend, as the release does today; by itself once R8 cuts over)
+   and installed beside it, `libexec/nazm/nzcg`; `NAZM_NZCG` overrides the path for tests. Its
+   BLAKE3 digest is the backend's `version()`, so a changed generator is a new cache key, as
+   Cranelift's `TRANSLATOR_REVISION` and settings are.
+2. **The call.** `plan` is Cranelift's (modules, then instances, in link order). `generate` lowers
+   the unit as Cranelift does (`Target::failures` = the bit on every target, D14), prints it with
+   `op::print::module` (plus the `--debug` positions and `; file` lines `nazm lir --ops --debug`
+   prints, when `--debug`), writes it to the build's temporary directory and runs
+   `nzcg --target TRIPLE [--one-thread] UNIT.lir OUTDIR`, reading back `unit-0.o` as the
+   `Generated` object. One process per unit keeps the existing per-unit cache; a whole-program
+   batch (the text format already holds many units) is the faster option once the cache allows it.
+3. **What it must be told.** The triple, and whether the program has one thread
+   (`native.single_thread`), as `--one-thread`: with it the generator inlines the stack check
+   against a plain `nz.stack_limit`, as LLVM does, instead of calling the runtime (7.3; the test
+   scripts derive it today from the runtime object's symbol table).
+4. **Refusals.** Exit status 3 with `nzcg: refused: …` lines becomes `N0101` per line, naming the
+   construct, with nothing produced and no fallback ("neither falls back to the other", as for
+   Cranelift); any other non-zero status is `N0900`, a compiler defect, with its standard error.
+5. **Tests.** The backend-differential tests gain a `nazm` column (output, status and memory
+   counts against LLVM and the oracle), and `toolchain/codegen/tests/run.sh` becomes a Rust test
+   driving `--backend nazm` directly instead of substituting objects. In process (no subprocess)
+   comes at R8, when the compiler driving it is itself Nazm.
+
 ## Open Questions
 
-- Whether the generator becomes `nazm build --backend nazm` before R8, beside LLVM and Cranelift,
-  or only at cut-over (the coordinator's call at integration).
+- Whether `--backend nazm` (D15) lands before R8, beside LLVM and Cranelift, or only at cut-over
+  (the coordinator's call at integration).
 - Stage B's performance target relative to LLVM `-O0`, set when stage A's numbers are measured.
 
 ## As built (2026-10-15)
