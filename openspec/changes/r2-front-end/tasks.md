@@ -82,6 +82,14 @@
       the checker stops — two carried inputs differed once the reference had D9 — until the
       implicit edges are carried. `run.sh check` against `main` at `4b060478`: 2,399 agree, 371
       differ; the checker carries 1,897, all agree
+- [ ] 3.1l Function types and closures (N50): `fn(T…) -> R ! {e}` written, shown, assignable by
+      effect inclusion and unified structurally; a named function as a value (N0387, and N0366
+      where an undeclared one does more than its value's type says); calls through a value
+      (N0303, N0300); closures, short ones included (N0635), their result (N0300), their
+      captures — a `let mut` shared, refused where it can hold a function value (N0386), and a
+      capture of what can hold one refused (N0616) — and each closure a function of its own in
+      effects and authority ("this closure in `f`"). An effect parameter still stops the checker.
+      `run.sh check`: 2,443 agree, 329 differ; the checker carries 1,983, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
