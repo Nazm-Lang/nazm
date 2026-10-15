@@ -49,6 +49,8 @@ struct Fx {
     cleanups: HashMap[Str, Int],
     borrowed: HashMap[Int, Bool],
     err: Strs,
+    /// The span statements are made under (one element).
+    at: Strs,
 }
 
 fn k_owned() -> Int { 0 }
@@ -91,19 +93,34 @@ fn tasks_local(fx: Fx) -> Int {
 }
 
 fn new_block(fx: Fx, origin: Int) -> Int {
-    vec_push(fx.blocks, Block(stmts: vec_new(), term: vec_new(), origin: origin))
+    vec_push(fx.blocks, Block(stmts: vec_new(), term: vec_new(), origin: origin, ats: strs_new(), term_at: strs_new()))
     vec_len(fx.blocks) - 1
 }
 
 fn push(fx: Fx, s: Stmt) {
     let b = cur(fx)
-    if b >= 0 { vec_push(vec_get(fx.blocks, b).stmts, s) }
+    if b >= 0 {
+        let block = vec_get(fx.blocks, b)
+        vec_push(block.stmts, s)
+        strs_push(block.ats, strs_get(fx.at, 0))
+    }
 }
 
 fn set_term(fx: Fx, b: Int, t: Term) {
     let block = vec_get(fx.blocks, b)
     if vec_len(block.term) == 0 { vec_push(block.term, t) } else { vec_set(block.term, 0, t) }
+    if strs_len(block.term_at) == 0 { strs_push(block.term_at, strs_get(fx.at, 0)) } else { strs_set(block.term_at, 0, strs_get(fx.at, 0)) }
 }
+
+/// Lower under the span of node `n`, when it has one: what the statements made for it name.
+fn enter_at(fx: Fx, n: Int) -> Str {
+    let was = strs_get(fx.at, 0)
+    let here = sval(fx.c, n, "at")
+    if here != "" { strs_set(fx.at, 0, here) }
+    was
+}
+
+fn leave_at(fx: Fx, was: Str) { strs_set(fx.at, 0, was) }
 
 /// End the current block with `t`. Control does not reach past it.
 fn seal(fx: Fx, t: Term) {
@@ -141,6 +158,7 @@ fn unwind(fx: Fx) -> Int {
     let mut i = ints_len(fx.scopes) - 1
     while i >= 0 {
         vec_push(block.stmts, Stmt.ScopeJoin(list: ints_get(fx.scopes, i)))
+        strs_push(block.ats, strs_get(fx.at, 0))
         i -= 1
     }
     set_term(fx, b, Term.Goto(b: shared))
@@ -157,6 +175,7 @@ fn finish_unwind(fx: Fx) {
         let t = vec_get(fx.locals, i).ty
         if !hashmap_has(fx.borrowed, i) && t != "Tasks" && managed_ty(fx, t) {
             vec_push(block.stmts, Stmt.Drop(l: i))
+            strs_push(block.ats, strs_get(fx.at, 0))
         }
     }
     set_term(fx, b, Term.Unwind)
@@ -318,7 +337,7 @@ fn finish_blocks(fx: Fx) -> Vec[Block] {
                 for s in b.stmts { vec_push(stmts, remap_stmt(s, m)) }
                 let term: Vec[Term] = vec_new()
                 vec_push(term, remap_term(vec_get(b.term, 0), m))
-                vec_push(out, Block(stmts: stmts, term: term, origin: b.origin))
+                vec_push(out, Block(stmts: stmts, term: term, origin: b.origin, ats: b.ats, term_at: b.term_at))
             }
         }
     }
@@ -341,6 +360,12 @@ fn block_into(fx: Fx, b: Int, dst: Int) {
 }
 
 fn stmt(fx: Fx, s: Int) {
+    let was = enter_at(fx, s)
+    stmt_here(fx, s)
+    leave_at(fx, was)
+}
+
+fn stmt_here(fx: Fx, s: Int) {
     let c = fx.c
     let o = op(c, s)
     if o == "let" {
@@ -801,6 +826,12 @@ fn law_of(o: Str, t: Str) -> Str {
 
 /// Evaluate `e` into `dst`, which is empty; -1 only for an expression that never produces a value.
 fn expr_into(fx: Fx, e: Int, dst: Int) {
+    let was = enter_at(fx, e)
+    expr_here(fx, e, dst)
+    leave_at(fx, was)
+}
+
+fn expr_here(fx: Fx, e: Int, dst: Int) {
     if !live(fx) { return }
     let c = fx.c
     let o = op(c, e)
@@ -1127,9 +1158,13 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     let reg = ints_new()
     ints_push(reg, 0 - 1)
     ints_push(reg, 0 - 1)
+    // Statements name the span of what they were made for; the stack check names the function
+    // (`@name`, which LIR finds in the function's span).
+    let at0 = strs_new()
+    strs_push(at0, "@name")
     let fx0 = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: "Int", locals: locals, blocks: vec_new(), reg: reg,
         sk: ints_new(), sl: ints_new(), scopes: ints_new(), lid: ints_new(), lhead: ints_new(), lexit: ints_new(), ldepth: ints_new(),
-        cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new())
+        cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new(), at: at0)
     // Core IR's locals keep their numbers: parameters, bindings, then its own temporaries.
     for i in 0..vec_len(f.locals) {
         let l = vec_get(f.locals, i)
@@ -1138,7 +1173,7 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     }
     let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, f.ret), locals: locals, blocks: fx0.blocks, reg: reg,
         sk: fx0.sk, sl: fx0.sl, scopes: fx0.scopes, lid: fx0.lid, lhead: fx0.lhead, lexit: fx0.lexit, ldepth: fx0.ldepth,
-        cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err)
+        cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err, at: at0)
     let entry = new_block(fx, origin_source())
     set_cur(fx, entry)
     // A function in a call cycle, or whose locals are large, checks its stack first.

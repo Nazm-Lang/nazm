@@ -14,14 +14,15 @@ use "text.nz"
 use "verify.nz"
 use "mutants.nz"
 use "lir.nz"
+use "ops.nz"
 use "@std/fs"
 use "@std/process"
 
 fn main(io: IoCap) -> Int ! { io } {
     let args = process_args(io)
     let mode = if strs_len(args) == 2 { strs_get(args, 0) } else { "" }
-    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" {
-        eprint("usage: pipeline mir|lir|verify|mutants CORE.json\n")
+    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" {
+        eprint("usage: pipeline mir|lir|tables|ops|verify|mutants CORE.json\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -56,9 +57,15 @@ fn main(io: IoCap) -> Int ! { io } {
         for e in errors { eprint("pipeline: MIR invalid: " + e + "\n") }
         return 1
     }
-    if mode == "lir" {
-        match lir_tables(c, tt, p) {
-            Ok(t) => print(t + "\n"),
+    if mode == "lir" || mode == "ops" || mode == "tables" {
+        let printed = if mode == "ops" { lir_ops(c, tt, p) } else if mode == "tables" { lir_document(c, tt, p, strs_new()) } else {
+            match lir_texts(c, tt, p) {
+                Ok(ts) => lir_document(c, tt, p, ts),
+                Err(e) => Err(e),
+            }
+        }
+        match printed {
+            Ok(t) => print(if mode == "ops" { t } else { t + "\n" }),
             Err(e) => {
                 eprint("pipeline: " + e + "\n")
                 return 1

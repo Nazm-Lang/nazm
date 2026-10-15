@@ -94,6 +94,10 @@ pub struct Block {
     stmts: Vec[Stmt],
     term: Vec[Term],
     origin: Int,
+    /// Each statement's source span (`FILE:START..END`, Core IR's spelling), and the
+    /// terminator's: what LIR's failure messages name. Not part of the printed MIR.
+    ats: Strs,
+    term_at: Strs,
 }
 
 /// A local's type is a spelling, or `Tasks` for a scope's task list.

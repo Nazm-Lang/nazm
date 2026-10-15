@@ -58,7 +58,23 @@
 - [x] 6.2 Record and enum layouts: the types each unit mentions closed over their contents, by the
       checker's ids; canonical field and variant order, offsets, sizes, alignments, ownership;
       names as `Types::show` writes them (`Box`/`List`/`Cell` as their `Vec`, `Chan[_]`, `fn`).
-      `run.sh` compares `pipeline lir` with `nazm lir` minus each unit's `lir` member
+      `run.sh` compares `pipeline tables` with `nazm lir` minus each unit's `lir` member
       (`tests/tables.py` re-serialises byte for byte): 1009 of 1009 inputs with LIR identical
-- [ ] 6.3 Instructions (`--ops`) — needs MIR statement spans and module sources (design, *What
-      LIR needs beyond /3*)
+      when `compiler/tests/inputs` was in the set; 161 of 161 since it moved to
+      `toolchain/frontend-tests` (not this stage's set)
+- [ ] 6.3 Instructions (`--ops`, `ops.nz`), growing by what the inputs need
+  - [x] 6.3.1 Module sources (`nazm core-ir --with-sources`, added read-only at the coordinator's
+        decision) and each MIR statement's span (`Block.ats`, not printed)
+  - [x] 6.3.2 The module: symbols in first-use order, data (literals, failure messages with
+        `file:line:column`), the runtime registry (`runtime.nz`, generated from
+        `crates/nazm-runtime`'s `IMPORTS` by `tests/runtime_table.py`, checked by `run.sh`)
+  - [x] 6.3.3 Functions: locals in variables, slots or promoted values; integer arithmetic and
+        comparison with their guards; direct calls and their failure bits; strings
+        (`str_concat`, `num_to_str`, `print`), drops; the stack check; plain entries. `fib` and
+        `hello` identical, the whole `nazm lir` document (text and digests) included: 37 of 161
+        inputs with LIR. Every other input stops at a construct named as not ported; none
+        produces different text
+  - [ ] 6.3.4 The remaining primitives (`prims.rs`, `numeric.rs`, `bytes.rs`, `files.rs`,
+        `arrays.rs`, `atomics.rs`), records and enums (fields, variants, payloads, `match`),
+        the type helpers (retain, release, equality, order, hash), closures and indirect calls,
+        scopes and spawn, foreign calls and exports, statics, large frames

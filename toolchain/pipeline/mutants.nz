@@ -30,7 +30,7 @@ fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
                     }
                     vec_push(undo, b)
                     ints_push(at, bi)
-                    vec_set(f.blocks, bi, Block(stmts: stmts, term: b.term, origin: b.origin))
+                    vec_set(f.blocks, bi, Block(stmts: stmts, term: b.term, origin: b.origin, ats: b.ats, term_at: b.term_at))
                     return true
                 }
             }
@@ -51,7 +51,7 @@ fn apply(f: MirFn, kind: Int, undo: Vec[Block], at: Ints) -> Bool {
             if vec_len(nt) == 1 {
                 vec_push(undo, b)
                 ints_push(at, bi)
-                vec_set(f.blocks, bi, Block(stmts: b.stmts, term: nt, origin: b.origin))
+                vec_set(f.blocks, bi, Block(stmts: b.stmts, term: nt, origin: b.origin, ats: b.ats, term_at: b.term_at))
                 return true
             }
         }
