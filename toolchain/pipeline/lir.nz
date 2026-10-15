@@ -251,40 +251,40 @@ fn num_bits(t: Str) -> Int {
 }
 
 /// A canonical order (`/3`'s `canonical` under `n`), as declaration indices.
-fn canonical(lx: Lx, n: Int) -> Ints {
+pub fn canonical_order(lx: Lx, n: Int) -> Ints ! {} {
     let out = ints_new()
     let xs = kid(lx.c, n, "canonical")
     for i in 0..count(lx.c, xs) { ints_push(out, int_of(lx.c, at(lx.c, xs, i))) }
     out
 }
 
-fn def_node(lx: Lx, t: Str) -> Int {
+pub fn def_node(lx: Lx, t: Str) -> Int ! {} {
     match hashmap_get(lx.defs, spell(t).head) { Some(n) => n, None => 0 - 1 }
 }
 
 /// A record's field types, in canonical order.
-fn record_fields(lx: Lx, t: Str) -> Strs {
+pub fn record_fields(lx: Lx, t: Str) -> Strs ! {} {
     let out = strs_new()
-    for d in ints_iter_of(canonical(lx, def_node(lx, t))) { strs_push(out, field_ty(lx.tt, t, int_to_str(d))) }
+    for d in ints_iter_of(canonical_order(lx, def_node(lx, t))) { strs_push(out, field_ty(lx.tt, t, int_to_str(d))) }
     out
 }
 
-fn ints_iter_of(xs: Ints) -> Vec[Int] {
+pub fn ints_iter_of(xs: Ints) -> Vec[Int] ! {} {
     let out: Vec[Int] = vec_new()
     for i in 0..ints_len(xs) { vec_push(out, ints_get(xs, i)) }
     out
 }
 
 /// An enum's variants in canonical order: each its declaration index.
-fn enum_variants(lx: Lx, t: Str) -> Ints {
-    canonical(lx, def_node(lx, t))
+pub fn enum_variants(lx: Lx, t: Str) -> Ints ! {} {
+    canonical_order(lx, def_node(lx, t))
 }
 
 /// Variant `v`'s field types, in its canonical order.
-fn variant_fields(lx: Lx, t: Str, v: Int) -> Strs {
+pub fn variant_fields(lx: Lx, t: Str, v: Int) -> Strs ! {} {
     let out = strs_new()
     let vn = at(lx.c, kid(lx.c, def_node(lx, t), "variants"), v)
-    for d in ints_iter_of(canonical(lx, vn)) { strs_push(out, field_ty(lx.tt, t, int_to_str(v) + "." + int_to_str(d))) }
+    for d in ints_iter_of(canonical_order(lx, vn)) { strs_push(out, field_ty(lx.tt, t, int_to_str(v) + "." + int_to_str(d))) }
     out
 }
 
@@ -293,7 +293,7 @@ fn variant_name(lx: Lx, t: Str, v: Int) -> Str {
 }
 
 /// Offsets of `fields` laid out in order, then the whole's size and alignment.
-fn structure(lx: Lx, fields: Strs) -> Ints {
+pub fn structure(lx: Lx, fields: Strs) -> Ints ! {} {
     let out = ints_new()
     let mut off = 0
     let mut align = 1
