@@ -13,6 +13,14 @@
 //!
 //! A task's stack is the platform's stack unit's (`posix_memalign`, freed there) and is not heap,
 //! so that unit is the one the renaming leaves alone. What C allocates for itself is C's.
+//!
+//! The renaming is by name, so it holds only if every buffer the runtime frees is one it
+//! allocated: a buffer the C library mallocs and hands back to be freed would reach
+//! `nz.heap_free`, which reads a header that is not there and gives the C library a pointer it
+//! never returned. So the runtime never asks C to allocate on its behalf — no entry of
+//! [`C_ALLOCATING`], and no entry of [`C_ALLOCATING_ON_NULL`] given a null buffer — and what C
+//! allocates and frees itself (`getaddrinfo` and `freeaddrinfo`, `opendir` and `closedir`) stays
+//! C's on both sides.
 
 use std::fmt::Write as _;
 
@@ -23,6 +31,30 @@ pub const COUNTED: [(&str, &str); 3] = [
     ("@realloc(", "@nz.heap_realloc("),
     ("@free(", "@nz.heap_free("),
 ];
+
+/// C library functions that return a buffer of C's `malloc` for the caller to `free`, which the
+/// runtime therefore never calls (a program's own foreign calls are its own).
+pub const C_ALLOCATING: &[&str] = &[
+    "strdup",
+    "strndup",
+    "wcsdup",
+    "_strdup",
+    "_wcsdup",
+    "asprintf",
+    "vasprintf",
+    "getline",
+    "getdelim",
+    "open_memstream",
+    "backtrace_symbols",
+    "scandir",
+    "canonicalize_file_name",
+    "get_current_dir_name",
+    "tempnam",
+];
+
+/// C library functions that allocate the result for the caller when their buffer argument is
+/// null, which the runtime therefore always calls with a buffer of its own.
+pub const C_ALLOCATING_ON_NULL: &[&str] = &["realpath", "getcwd", "_fullpath", "_wfullpath"];
 
 /// `text` with every call and declaration of C's `malloc`, `realloc` and `free` made one of the
 /// counted heap's. A line holding a constant string is left as it is, so a program's own text that
@@ -193,6 +225,46 @@ mod tests {
             counted,
             "declare ptr @nz.heap_malloc(i64)\n  %p = call ptr @nz.heap_malloc(i64 8)\n  call void @nz.heap_free(ptr %p)\n  call void @freeaddrinfo(ptr %a)\n  %q = call ptr @nz.heap_realloc(ptr %p, i64 9)\n@.s = private constant [9 x i8] c\"@malloc(\\00\"\n"
         );
+    }
+
+    /// Every text the runtime emits for every target, as [`crate::digest`] covers it.
+    fn every_runtime_text() -> Vec<String> {
+        let mut texts = vec![
+            crate::emit_runtime(crate::EVERYTHING),
+            crate::emit_entry("@nz_main", 1, crate::EVERYTHING),
+        ];
+        for t in crate::switch::SwitchTarget::ALL {
+            texts.push(crate::switch::emit_switch(t));
+            texts.push(crate::switch::emit_errno(t));
+            texts.push(crate::platform::emit_os(t));
+            texts.push(crate::platform::emit_stack(t));
+            texts.push(crate::platform::emit_init(t).unwrap_or_default());
+        }
+        texts
+    }
+
+    #[test]
+    fn the_runtime_never_frees_what_the_c_library_allocated() {
+        // Under `--heap-limit` every `free` is the counted heap's, so a buffer C allocated and
+        // the runtime freed would be given back through a header it does not have: a program
+        // built with a limit that called `file_canonical` ended with SIGTRAP, status 133.
+        for text in every_runtime_text() {
+            for line in text.lines() {
+                for f in C_ALLOCATING {
+                    assert!(
+                        !line.contains(&format!("@{f}(")),
+                        "the runtime asks C to allocate: {line}"
+                    );
+                }
+                for f in C_ALLOCATING_ON_NULL {
+                    let call = line.split_once(&format!("@{f}(")).map(|(_, args)| args);
+                    assert!(
+                        !call.is_some_and(|args| args.contains("ptr null")),
+                        "the runtime asks C to allocate: {line}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
