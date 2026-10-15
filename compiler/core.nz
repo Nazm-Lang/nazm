@@ -5,11 +5,13 @@
 // It knows where it stops. A function using anything this lowering does not carry yet is not
 // printed: `cr_function` says what it stopped at instead, and the comparison (`run.sh core`)
 // counts it apart, so every function it does print is compared whole. Carried today: functions
-// with a body, no type or effect parameters, no contracts and no attributes but `@deprecated`;
-// `let` of a name, assignment to a binding, `while`, `return`, `break`, `continue`, an
-// expression as a statement, `if` and blocks; literals of `Int`, `Bool` and `Str`, bindings, `-`,
-// `!`, `&&`, `||`, the arithmetic operators and comparisons of `Int`, `Bool` and `Str`, field
-// reads, and calls of the compilation's functions and of the built-ins that are not generic.
+// with a body — generic ones and impls' methods included — and no effect parameters, contracts or
+// attributes but `@deprecated`; `let` of a name, assignment to a binding, `while`, `return`,
+// `break`, `continue`, an expression as a statement, `if`, blocks and `match` of plain arms;
+// literals of `Int`, `Bool` and `Str`, bindings, `-`, `!`, `&&`, `||`, the arithmetic operators and
+// comparisons of `Int`, `Bool` and `Str`, field reads, records and variants built (by name or by
+// position), and calls of the compilation's functions and of the built-ins, generic ones with the
+// type arguments the checker settled. The document's other parts are `cr_parts`'.
 
 use "syntax.nz";
 use "diag.nz";
@@ -245,9 +247,7 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let c = lo.c;
     let t = lo.t;
     if ck_fn_closure(c, i) { return co_stopped(lo, "a closure"); }
-    if ck_fn_method(c, i) { return co_stopped(lo, "an impl's method"); }
     if ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
-    if ck_fn_type_params(c, i) > 0 { return co_stopped(lo, "a generic function"); }
     if ck_fn_effect_param(c, i) { return co_stopped(lo, "an effect parameter"); }
     let node = ck_fn_node(c, i);
     if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
@@ -288,7 +288,7 @@ fn co_function(lo: Lo, i: Int) -> Str {
     strs_push(out, co_field_first("def", json_str(fx_fn_identity(f, i))));
     strs_push(out, co_field("module", json_str(fx_module_identity(f, co_g(lo, co_s_module())))));
     strs_push(out, co_field("name", json_str(ck_fn_name(c, i))));
-    strs_push(out, co_field("type_params", "0"));
+    strs_push(out, co_field("type_params", int_to_str(ck_fn_type_params(c, i))));
     strs_push(out, co_field("params", int_to_str(ck_fn_param_count(c, i))));
     strs_push(out, co_field("ret", json_str(co_durable(lo, ck_fn_ret_ty(c, i)))));
     let effects = strs_new();
@@ -480,9 +480,22 @@ fn co_bind(lo: Lo, l: Int) -> Int {
 
 // A region whose value is wanted (`value_block`): its statements, then its tail unless they
 // transfer.
-fn co_value_block(lo: Lo, b: Int) -> Str {
-    let t = lo.t;
+fn co_value_block(lo: Lo, b: Int) -> Str { co_value_block_in(lo, b, ints_new()) }
+
+// A region that owns the locals in `seed` before any it binds itself (an arm's bindings).
+fn co_open_seeded(lo: Lo, seed: Ints) -> Int {
     co_open_region(lo);
+    let mut i = 0;
+    while i < ints_len(seed) {
+        ints_push(lo.owned, ints_get(seed, i));
+        i = i + 1;
+    }
+    0
+}
+
+fn co_value_block_in(lo: Lo, b: Int, seed: Ints) -> Str {
+    let t = lo.t;
+    co_open_seeded(lo, seed);
     let stmts = strs_new();
     let transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
     let mut tail = "null";
@@ -501,9 +514,11 @@ fn co_value_block(lo: Lo, b: Int) -> Str {
 }
 
 // A region whose value is not wanted (`statement_block`): its tail, if written, a statement.
-fn co_statement_block(lo: Lo, b: Int) -> Str {
+fn co_statement_block(lo: Lo, b: Int) -> Str { co_statement_block_in(lo, b, ints_new()) }
+
+fn co_statement_block_in(lo: Lo, b: Int, seed: Ints) -> Str {
     let t = lo.t;
-    co_open_region(lo);
+    co_open_seeded(lo, seed);
     let stmts = strs_new();
     let mut transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
     if transfers == false && sx_is_some(t, sx_field(t, b, "tail")) {
@@ -689,7 +704,7 @@ fn co_effect(lo: Lo, e: Int) -> Str {
         co_set_last(lo, 0 - 1, transfers);
         return co_object(o);
     }
-    if k == "Match" { return co_stopped_stmt(lo, "a `match`"); }
+    if k == "Match" { return co_match(lo, e, false); }
     if sx_kind(t, e) == tk_tuple() && k == "Block" {
         let body = co_statement_block(lo, sx_kid(t, e, 0));
         let transfers = co_last_transfers(lo);
@@ -724,6 +739,35 @@ fn co_ends_process(lo: Lo, e: Int) -> Bool {
 fn co_expr(lo: Lo, e: Int) -> Str {
     let t = lo.t;
     let k = sx_text(t, e);
+    // `Point(1, 2)`, `Circle(2)` (R1.5, D4): a call the checker read as a construction.
+    if k == "Call" && sx_kind(t, e) != tk_tuple() {
+        let cs = sx_field(t, e, "callee_span");
+        if ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) < 0 {
+            if ck_construction_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) >= 0 || ck_variant_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) >= 0 {
+                return co_construction(lo, cs, cs, sx_items(t, sx_field(t, e, "args")), true);
+            }
+        }
+    }
+    // `Dot` (R1.5, D4): a name the checker read as a variant with no payload.
+    if k == "Var" && sx_kind(t, e) != tk_tuple() {
+        let vs = sx_field(t, e, "span");
+        if ck_binding_at(lo.c, co_abs_s(lo, vs), co_abs_e(lo, vs)) < 0 && ck_variant_at(lo.c, co_abs_s(lo, vs), co_abs_e(lo, vs)) >= 0 {
+            return co_variant(lo, vs, vs, ints_new(), false);
+        }
+    }
+    if k == "Construct" && sx_kind(t, e) != tk_tuple() {
+        let ts = sx_field(t, e, "ty_span");
+        if ck_construction_at(lo.c, co_abs_s(lo, ts), co_abs_e(lo, ts)) < 0 && ck_variant_at(lo.c, co_abs_s(lo, ts), co_abs_e(lo, ts)) >= 0 {
+            return co_variant(lo, ts, ts, sx_items(t, sx_field(t, e, "fields")), false);
+        }
+        return co_construction(lo, ts, ts, sx_items(t, sx_field(t, e, "fields")), false);
+    }
+    if k == "Variant" && sx_kind(t, e) != tk_tuple() {
+        let vs = sx_field(t, e, "variant_span");
+        let fields = sx_items(t, sx_field(t, e, "fields"));
+        if ints_len(fields) == 0 && ck_site_at(lo.c, co_abs_s(lo, vs), co_abs_e(lo, vs)) >= 0 { return co_stopped(lo, "a method call"); }
+        return co_variant(lo, sx_field(t, e, "ty_span"), vs, fields, false);
+    }
     if sx_kind(t, e) == tk_tuple() {
         if k == "Block" {
             let b = sx_kid(t, e, 0);
@@ -784,6 +828,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "field", str_join(fields, ""), ck_field_ty(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)), ns);
     }
     if k == "Call" { return co_call(lo, e); }
+    if k == "Match" { return co_match(lo, e, true); }
     if k == "If" {
         if sx_is_some(t, sx_field(t, e, "else_block")) == false { return co_stopped(lo, "an `if` with no `else` where a value is wanted"); }
         let cond = co_expr(lo, sx_field(t, e, "cond"));
@@ -799,6 +844,205 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "if", str_join(fields, ""), ty, span);
     }
     co_stopped(lo, str_concat("the expression ", k))
+}
+
+// A construction at `ts` (the checker recorded it at `ts`): a record's, or a variant's where the
+// checker read it as one; `items` its fields as written, or its arguments where `positional`.
+fn co_construction(lo: Lo, ts: Int, vs: Int, items: Ints, positional: Bool) -> Str {
+    let c = lo.c;
+    let rt = ck_construction_at(c, co_abs_s(lo, ts), co_abs_e(lo, ts));
+    if rt < 0 {
+        if ck_variant_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs)) >= 0 { return co_variant(lo, ts, vs, items, positional); }
+        return co_stopped(lo, "a construction the checker did not resolve");
+    }
+    if ck_is_record_type(c, rt) == false { return co_stopped(lo, "a construction of no record"); }
+    let fields = co_inits(lo, items, positional, rt, 0 - 1);
+    if co_halted(lo) { return ""; }
+    let members = strs_new();
+    strs_push(members, co_field_first("arity", int_to_str(ck_record_arity(c, rt))));
+    strs_push(members, co_field("fields", fields));
+    co_node(lo, "record", str_join(members, ""), rt, ts)
+}
+
+// `Enum.Variant(…)`, at `ts`, its variant named at `vs` (`ExprKind::Variant`).
+fn co_variant(lo: Lo, ts: Int, vs: Int, items: Ints, positional: Bool) -> Str {
+    let c = lo.c;
+    let et = ck_variant_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+    if et < 0 { return co_stopped(lo, "a variant the checker did not resolve"); }
+    let v = ck_variant_index_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+    let fields = co_inits(lo, items, positional, et, v);
+    if co_halted(lo) { return ""; }
+    let members = strs_new();
+    strs_push(members, co_field_first("variant", int_to_str(v)));
+    strs_push(members, co_field("name", json_str(ck_variant_name(c, et, v))));
+    strs_push(members, co_field("arity", int_to_str(ck_variant_arity(c, et, v))));
+    strs_push(members, co_field("fields", fields));
+    co_node(lo, "variant", str_join(members, ""), et, ts)
+}
+
+// The fields given, in the order written: each one's place in the declaration, its name and its
+// value. A record's where `v` is -1, else variant `v`'s payload.
+fn co_inits(lo: Lo, items: Ints, positional: Bool, ty: Int, v: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let out = strs_new();
+    let mut i = 0;
+    while i < ints_len(items) {
+        let item = ints_get(items, i);
+        let mut value = item;
+        let mut s = 0;
+        let mut e = 0;
+        if positional {
+            s = co_abs_s(lo, expr_span(t, item));
+            e = s;
+        } else {
+            value = sx_field(t, item, "value");
+            s = co_abs_s(lo, sx_field(t, item, "name_span"));
+            e = co_abs_e(lo, sx_field(t, item, "name_span"));
+        }
+        let f = ck_init_at(c, s, e);
+        if f < 0 {
+            co_halt(lo, "a field the checker did not resolve");
+            return "";
+        }
+        let mut name = "";
+        if v < 0 { name = ck_record_field_name(c, ty, f); } else { name = ck_payload_name(c, ty, v, f); }
+        let x = co_expr(lo, value);
+        let o = strs_new();
+        strs_push(o, co_field_first("field", int_to_str(f)));
+        strs_push(o, co_field("name", json_str(name)));
+        strs_push(o, co_field("value", x));
+        strs_push(out, co_object(o));
+        i = i + 1;
+    }
+    co_list(out)
+}
+
+// --- match ---------------------------------------------------------------------------------------
+
+// Whether every arm is plain (`plain_arm`): a variant pattern whose fields bind or discard, and
+// no guard.
+fn co_plain_arms(lo: Lo, arms: Ints) -> Bool {
+    let t = lo.t;
+    let mut i = 0;
+    while i < ints_len(arms) {
+        let arm = ints_get(arms, i);
+        if co_some_field(lo, arm, "guard") { return false; }
+        let p = sx_field(t, arm, "pattern");
+        if sx_kind(t, p) != tk_tuple() || sx_text(t, p) != "Variant" { return false; }
+        let fields = sx_items(t, sx_field(t, sx_kid(t, p, 0), "fields"));
+        let mut k = 0;
+        while k < ints_len(fields) {
+            let fp = sx_text(t, sx_field(t, ints_get(fields, k), "pattern"));
+            if fp != "Bind" && fp != "Wildcard" { return false; }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// A `match` of plain arms (`matching`), as a value or as a statement.
+fn co_match(lo: Lo, e: Int, value: Bool) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let arms = sx_items(t, sx_field(t, e, "arms"));
+    if co_plain_arms(lo, arms) == false {
+        if value { return co_stopped(lo, "a `match` with general patterns"); }
+        return co_stopped_stmt(lo, "a `match` with general patterns");
+    }
+    let scrutinee = co_expr(lo, sx_field(t, e, "scrutinee"));
+    let sty = co_last_ty(lo);
+    let mut enumeration = 0 - 1;
+    if ck_is_enum_type(c, sty) { enumeration = sty; }
+    let lowered = strs_new();
+    let mut ty = 0 - 1;
+    let mut all_transfer = ints_len(arms) > 0;
+    let mut i = 0;
+    while i < ints_len(arms) && co_halted(lo) == false {
+        let arm = ints_get(arms, i);
+        let vp = sx_kid(t, sx_field(t, arm, "pattern"), 0);
+        let vs = sx_field(t, vp, "variant_span");
+        let et = ck_variant_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+        if et < 0 { return co_stopped(lo, "an arm whose variant the checker did not resolve"); }
+        let vi = ck_variant_index_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+        if enumeration < 0 { enumeration = et; }
+        let bindings = strs_new();
+        let seed = ints_new();
+        let fields = sx_items(t, sx_field(t, vp, "fields"));
+        let mut k = 0;
+        while k < ints_len(fields) {
+            let f = ints_get(fields, k);
+            let pat = sx_field(t, f, "pattern");
+            if sx_text(t, pat) == "Bind" {
+                let ns = sx_field(t, f, "name_span");
+                let fi = ck_init_at(c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+                if fi < 0 { return co_stopped(lo, "a pattern field the checker did not resolve"); }
+                let l = co_local_at(lo, sx_field(t, pat, "span"));
+                if co_halted(lo) { return ""; }
+                ints_push(seed, l);
+                let o = strs_new();
+                strs_push(o, co_field_first("field", int_to_str(fi)));
+                strs_push(o, co_field("name", json_str(ck_payload_name(c, et, vi, fi))));
+                strs_push(o, co_field("local", int_to_str(l)));
+                strs_push(bindings, co_object(o));
+            }
+            k = k + 1;
+        }
+        let body = co_arm_region(lo, sx_field(t, arm, "body"), seed, value);
+        if co_last_ty(lo) >= 0 { ty = co_last_ty(lo); }
+        if co_last_transfers(lo) == false { all_transfer = false; }
+        let o = strs_new();
+        strs_push(o, co_field_first("variant", int_to_str(vi)));
+        strs_push(o, co_field("name", json_str(ck_variant_name(c, et, vi))));
+        strs_push(o, co_field("bindings", co_list(bindings)));
+        strs_push(o, co_field("body", body));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, arm, "span")))));
+        strs_push(lowered, co_object(o));
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    if enumeration < 0 { return co_stopped(lo, "a `match` on something that is not an enum"); }
+    let members = strs_new();
+    strs_push(members, co_field_first("origin", json_str("written")));
+    strs_push(members, co_field("enum", json_str(co_durable(lo, enumeration))));
+    strs_push(members, co_field("scrutinee", scrutinee));
+    strs_push(members, co_field("arms", co_list(lowered)));
+    let span = sx_field(t, e, "span");
+    if value { return co_node(lo, "match", str_join(members, ""), ty, span); }
+    let transfers = sty < 0 || all_transfer;
+    let o = strs_new();
+    strs_push(o, co_op_first("match"));
+    strs_push(o, str_concat(",", str_join(members, "")));
+    strs_push(o, co_field("ends", co_ends(transfers)));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+    co_set_last(lo, 0 - 1, transfers);
+    co_object(o)
+}
+
+// An arm's body: a block, as a value or a statement, or one expression in a region of its own
+// (`expr_region`), its bindings owned first.
+fn co_arm_region(lo: Lo, b: Int, seed: Ints, value: Bool) -> Str {
+    let t = lo.t;
+    if sx_kind(t, b) == tk_tuple() && sx_text(t, b) == "Block" {
+        if value { return co_value_block_in(lo, sx_kid(t, b, 0), seed); }
+        return co_statement_block_in(lo, sx_kid(t, b, 0), seed);
+    }
+    co_open_seeded(lo, seed);
+    let stmts = strs_new();
+    let mut tail = "null";
+    let mut ty = 0 - 1;
+    let mut transfers = false;
+    if value {
+        tail = co_expr(lo, b);
+        ty = co_last_ty(lo);
+    } else {
+        strs_push(stmts, co_effect(lo, b));
+        transfers = co_last_transfers(lo);
+    }
+    let owns = co_close_region(lo);
+    co_set_last(lo, ty, transfers);
+    co_block_json(lo, transfers, owns, stmts, tail, expr_span(t, b))
 }
 
 // An expression's object: its operation, its own members, its type and where it is.
@@ -898,6 +1142,16 @@ fn co_expr_at(lo: Lo, n: Int) -> Int {
     let k = sx_text(t, n);
     if k == "Binary" || k == "Neg" || k == "Not" { return sx_field(t, n, "op_span"); }
     if sx_kind(t, n) == tk_tuple() && k == "Block" { return sx_field(t, sx_kid(t, n, 0), "span"); }
+    // A field read is at its name; a construction at its type's name, a call read as one at
+    // its callee.
+    if k == "Field" { return sx_field(t, n, "name_span"); }
+    if k == "Construct" || k == "Variant" { return sx_field(t, n, "ty_span"); }
+    if k == "Call" {
+        let cs = sx_field(t, n, "callee_span");
+        if ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) < 0 {
+            if ck_construction_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) >= 0 || ck_variant_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs)) >= 0 { return cs; }
+        }
+    }
     sx_field(t, n, "span")
 }
 
@@ -927,7 +1181,6 @@ fn co_call(lo: Lo, e: Int) -> Str {
     let cs = sx_field(t, e, "callee_span");
     let site = ck_site_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
     if site < 0 { return co_stopped(lo, "a call the checker did not record as a call"); }
-    if co_some_field(lo, e, "type_args") { return co_stopped(lo, "a call with type arguments"); }
     // Its arguments first, as `call` lowers them.
     let args = strs_new();
     let list = sx_items(t, sx_field(t, e, "args"));
@@ -942,25 +1195,49 @@ fn co_call(lo: Lo, e: Int) -> Str {
     let b = ck_site_builtin(c, site);
     if callee >= 0 {
         if ck_fn_is_foreign(c, callee) { return co_stopped(lo, "a foreign call"); }
-        if ck_fn_type_params(c, callee) > 0 { return co_stopped(lo, "a generic call"); }
         if ck_fn_effect_param(c, callee) { return co_stopped(lo, "a call of an effect-polymorphic function"); }
+        let mut ret = ck_fn_ret_ty(c, callee);
+        let mut targs = "[]";
+        // A generic call: the type arguments the checker settled, and the result it formed.
+        if ck_fn_type_params(c, callee) > 0 {
+            ret = ck_site_ret(c, site);
+            targs = co_site_type_args(lo, site);
+            if ret < 0 { return co_stopped(lo, "a generic call whose result the checker did not form"); }
+        }
         let fields = strs_new();
         strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, callee))));
-        strs_push(fields, co_field("type_args", "[]"));
+        strs_push(fields, co_field("type_args", targs));
         strs_push(fields, co_field("args", co_list_of(args)));
-        return co_node(lo, "call", str_join(fields, ""), ck_fn_ret_ty(c, callee), span);
+        return co_node(lo, "call", str_join(fields, ""), ret, span);
     }
     if b >= 0 {
         let name = ck_builtin_name(c, b);
-        if ck_builtin_generic(c, b) { return co_stopped(lo, "a generic built-in"); }
         if co_special_builtin(name) { return co_stopped(lo, str_concat("the built-in ", name)); }
+        let mut ret = ck_builtin_ret(c, b);
+        let mut targs = "[]";
+        if ck_builtin_generic(c, b) {
+            ret = ck_site_ret(c, site);
+            targs = co_site_type_args(lo, site);
+            if ret < 0 { return co_stopped(lo, "a generic call whose result the checker did not form"); }
+        }
         let fields = strs_new();
         strs_push(fields, co_field_first("builtin", json_str(name)));
-        strs_push(fields, co_field("type_args", "[]"));
+        strs_push(fields, co_field("type_args", targs));
         strs_push(fields, co_field("args", co_list_of(args)));
-        return co_node(lo, "builtin", str_join(fields, ""), ck_builtin_ret(c, b), span);
+        return co_node(lo, "builtin", str_join(fields, ""), ret, span);
     }
     co_stopped(lo, "a call through a value")
+}
+
+// A generic call's settled type arguments, by their durable names.
+fn co_site_type_args(lo: Lo, site: Int) -> Str {
+    let out = strs_new();
+    let mut k = 0;
+    while k < ck_site_type_arg_count(lo.c, site) {
+        strs_push(out, json_str(co_durable(lo, ck_site_type_arg(lo.c, site, k))));
+        k = k + 1;
+    }
+    co_list(out)
 }
 
 // The built-ins `call` lowers as something else: made of operations a program cannot name, or

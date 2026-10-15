@@ -340,6 +340,19 @@ pub struct Ck {
     // written `-1 - index`, or an instance, by its type.
     rlog: Ints,
     elog: Ints,
+    // What Core IR reads of constructions (`Resolution::variant`, `payload`, `field`): each
+    // variant built, by its name's span — its enum (the instance) and its index; and each field or
+    // payload field given, by its name's span (of no width, where its value begins, for one given
+    // by position), its index in the declaration. A record's construction is `mcons`'s, its type.
+    mvty: Smap,
+    mvix: Smap,
+    minit: Smap,
+    // Per call site, a generic call's settled type arguments (a run of `sargs`) and the result
+    // type the checker formed for it (`type_args`, `checked_call`'s instance); -1 for none.
+    sargf: Ints,
+    sargc: Ints,
+    sargs: Ints,
+    sret: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -1393,7 +1406,8 @@ fn new_ck(t: Tree) -> Ck {
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
-            bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new());
+            bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
+            minit: sm_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -7874,6 +7888,16 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
                 "types may nest 32 deep, and the result of a generic call is a type too");
         return t_int();
     }
+    if ints_len(c.sfn) > sites {
+        ints_set(c.sargf, sites, ints_len(c.sargs));
+        ints_set(c.sargc, sites, call.n);
+        i = 0;
+        while i < call.n {
+            ints_push(c.sargs, ints_get(settled, i));
+            i = i + 1;
+        }
+        ints_set(c.sret, sites, ret);
+    }
     ret
 }
 
@@ -8188,7 +8212,7 @@ fn check_construction(c: Ck, ty: Str, ty_span: Int, targs: Int, inits: Inits, sp
         return 0 - 1;
     }
     let r = ta(c, t);
-    sm_put(c.mcons, sps(c, ty_span), spe(c, ty_span), 1);
+    sm_put(c.mcons, sps(c, ty_span), spe(c, ty_span), t);
     // Only C makes a handle (N85): it has no field a program could give a value.
     if is_opaque(c, t) {
         let mut k = 0;
@@ -8222,6 +8246,7 @@ fn check_construction(c: Ck, ty: Str, ty_span: Int, targs: Int, inits: Inits, sp
                 strs_push(given, name);
                 ints_push(gstart, ints_get(inits.ns, i));
                 ints_push(gend, ints_get(inits.ne, i));
+                sm_put(c.minit, ints_get(inits.ns, i), ints_get(inits.ne, i), f - ints_get(c.rff, r));
                 let want = field_ty_in(c, t, f);
                 let got = value_type(c, value, want);
                 if got != want {
@@ -8408,6 +8433,8 @@ fn check_variant(c: Ck, ty: Str, ty_span: Int, targs: Int, variant: Str, variant
         check_rest(c, inits, pre);
         return t;
     }
+    sm_put(c.mvty, sps(c, variant_span), spe(c, variant_span), t);
+    sm_put(c.mvix, sps(c, variant_span), spe(c, variant_span), v - ints_get(c.evf, e));
     let path = cat3(show(c, t), ".", variant);
     let given = strs_new();
     let gstart = ints_new();
@@ -8433,6 +8460,7 @@ fn check_variant(c: Ck, ty: Str, ty_span: Int, targs: Int, variant: Str, variant
                 strs_push(given, name);
                 ints_push(gstart, ints_get(inits.ns, i));
                 ints_push(gend, ints_get(inits.ne, i));
+                sm_put(c.minit, ints_get(inits.ns, i), ints_get(inits.ne, i), f - ints_get(c.vff, v));
                 let want = field_ty_in(c, t, f);
                 let mut got = done;
                 if done < 0 { got = value_type(c, value, want); }
@@ -9424,6 +9452,9 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
         return wild(c);
     }
     let at = vi - ints_get(c.evf, e);
+    // What Core IR reads of the arm (`Resolution::variant`): the scrutinee's enum and the index.
+    sm_put(c.mvty, sps(c, fld(c, v, "variant_span")), spe(c, fld(c, v, "variant_span")), ty);
+    sm_put(c.mvix, sps(c, fld(c, v, "variant_span")), spe(c, fld(c, v, "variant_span")), at);
     let path = cat3(show(c, ty), ".", variant);
     let arity = ints_get(c.vfc, vi);
     let args = wilds(c, arity);
@@ -9470,6 +9501,7 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
             } else {
                 strs_push(given, name);
                 ints_push(gs_, ns);
+                sm_put(c.minit, sps(c, ns), spe(c, ns), fi - ints_get(c.vff, vi));
                 let sub = check_pattern(c, fld(c, f, "pattern"), field_ty_in(c, ty, fi), scrutinee, binds);
                 ints_set(args, fi - ints_get(c.vff, vi), sub);
             }
@@ -10760,6 +10792,9 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
     ints_push(c.sspawn, 0);
     ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
+    ints_push(c.sargf, ints_len(c.sargs));
+    ints_push(c.sargc, 0);
+    ints_push(c.sret, 0 - 1);
     0
 }
 
@@ -10779,6 +10814,9 @@ fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     ints_push(c.sspawn, 0);
     ints_push(c.sbind, 0);
     ints_push(c.sheld, held_caps(c));
+    ints_push(c.sargf, ints_len(c.sargs));
+    ints_push(c.sargc, 0);
+    ints_push(c.sret, 0 - 1);
     0
 }
 
@@ -14046,6 +14084,11 @@ pub fn ck_builtin_name(c: Ck, b: Int) -> Str { strs_get(c.bname, b) }
 pub fn ck_builtin_generic(c: Ck, b: Int) -> Bool { ints_get(c.bgen, b) > 0 }
 // Its result type, where it is not generic.
 pub fn ck_builtin_ret(c: Ck, b: Int) -> Int { ints_get(c.bret, b) }
+// A generic call's type arguments as the checker settled them, and the result type it formed;
+// -1 for a call that is not generic.
+pub fn ck_site_type_arg_count(c: Ck, site: Int) -> Int { ints_get(c.sargc, site) }
+pub fn ck_site_type_arg(c: Ck, site: Int, k: Int) -> Int { ints_get(c.sargs, ints_get(c.sargf, site) + k) }
+pub fn ck_site_ret(c: Ck, site: Int) -> Int { ints_get(c.sret, site) }
 
 pub fn ck_fn_param_count(c: Ck, i: Int) -> Int { ints_get(c.fnpc, i) }
 pub fn ck_fn_param_ty(c: Ck, i: Int, k: Int) -> Int { ints_get(c.ptys, ints_get(c.fnpf, i) + k) }
@@ -14063,6 +14106,23 @@ pub fn ck_is_builtin(c: Ck, t: Int, name: Str) -> Bool { t >= 0 && tag(c, t) == 
 // record or enum by its definition's key — `idents` gives each module's identity — and its
 // arguments, a holder by its element, a type parameter by its position (`$0` a function's, `$?0`
 // a record's, an enum's or a built-in's, `$Self` a trait's), a function and an array spelled out.
+// What a construction at `s..e` (absolute) built: a record's type (`construction`), or -1; a
+// variant's enum and its index (`variant`), or -1; the field or payload field given at a name's
+// span (`field`, `payload`), or -1.
+pub fn ck_construction_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mcons, s, e) }
+pub fn ck_variant_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvty, s, e) }
+pub fn ck_variant_index_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvix, s, e) }
+pub fn ck_init_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.minit, s, e) }
+// A record type's fields: how many, and each one's name; an enum type's variant `v`: its name,
+// how many payload fields, and each one's name.
+pub fn ck_record_arity(c: Ck, t: Int) -> Int { ints_get(c.rfc, ta(c, t)) }
+pub fn ck_record_field_name(c: Ck, t: Int, i: Int) -> Str { strs_get(c.fname, ints_get(c.rff, ta(c, t)) + i) }
+pub fn ck_variant_name(c: Ck, t: Int, v: Int) -> Str { strs_get(c.vname, ints_get(c.evf, ta(c, t)) + v) }
+pub fn ck_variant_arity(c: Ck, t: Int, v: Int) -> Int { ints_get(c.vfc, ints_get(c.evf, ta(c, t)) + v) }
+pub fn ck_payload_name(c: Ck, t: Int, v: Int, i: Int) -> Str { strs_get(c.fname, ints_get(c.vff, ints_get(c.evf, ta(c, t)) + v) + i) }
+pub fn ck_is_record_type(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_record() }
+pub fn ck_is_enum_type(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_enum() }
+
 // How many impls were filed (N78); the trait a record, enum or tuple derives (`@std/hash`'s
 // `Hash`), or -1; and whether trait `t` declares a method `name`.
 pub fn ck_impl_count(c: Ck) -> Int { ints_len(c.imtrait) }
