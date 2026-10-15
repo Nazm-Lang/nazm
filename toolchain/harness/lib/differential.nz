@@ -8,6 +8,8 @@ use "@std/text";
 use "run.nz";
 use "scratch.nz";
 use "strings.nz";
+use "tree.nz";
+use "@std/env";
 
 /// Every run of one program, by label.
 pub struct Labeled {
@@ -15,16 +17,48 @@ pub struct Labeled {
     ran: Ran,
 }
 
-/// The environment the Rust suite's children see: this process's, with the result report on,
-/// as `.cargo/config.toml` sets it for every test Cargo starts (R1, 5b.3).
+/// The environment the Rust suite's children see: this process's, with the result report on and
+/// the user cache off, as `.cargo/config.toml` sets them for every test Cargo starts (R1, 5b.3;
+/// R1.5, D12).
 pub fn suite_env(h: Caps) -> Strs ! { io } {
     let io = h.io;
-    env_set(env_here(io), "NAZM_RESULT_REPORT", "1")
+    env_set(env_set(env_here(io), "NAZM_RESULT_REPORT", "1"), "NAZM_USER_CACHE_DIR", "")
 }
 
 /// `nazm ARGS` in `dir`, under the suite's environment.
 pub fn nazm(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
     run(h, nazm_bin(h.io), args, dir, suite_env(h))
+}
+
+/// Whether this host is macOS, where Nazm's own code generator builds before 1.0 (R9, D13).
+pub fn on_macos(h: Caps) -> Bool ! { io, spawn } {
+    let r = run(h, "uname", words("-s"), "", env_here(h.io));
+    text_trim(r.stdout) == "Darwin"
+}
+
+/// Nazm's own code generator (R9, D15), what `NAZM_NZCG` names for `--backend nazm`:
+/// `$NAZM_HARNESS_NZCG` where `tests/run.sh` built it once from `toolchain/codegen/`, else built
+/// by the `nazm` under test into `dir` (`differential::nzcg`, which builds it once per process).
+pub fn nzcg(h: Caps, dir: Str) -> Result[Str, Str] ! { io, spawn } {
+    match env_get(h.io, "NAZM_HARNESS_NZCG") {
+        Option.Some(value: g) => {
+            if str_len(g) > 0 {
+                return Result[Str, Str].Ok(value: g);
+            }
+            0
+        },
+        Option.None() => 0,
+    };
+    let exe = f"{dir}/nzcg";
+    let a = words("build --no-cache");
+    strs_push(a, f"{repo_root(h)}/toolchain/codegen/main.nz");
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    let r = nazm(h, dir, a);
+    if r.code != 0 {
+        return Result[Str, Str].Err(error: f"nzcg does not build: {r.stderr}");
+    }
+    Result[Str, Str].Ok(value: exe)
 }
 
 /// An executable under the address-space ceiling `bounded_exe` sets: 512 MiB, by `ulimit -v`,
@@ -37,9 +71,26 @@ pub fn bounded_exe(h: Caps, exe: Str, dir: Str, env: Strs) -> Ran ! { io, spawn 
     run(h, "sh", args, dir, env)
 }
 
+/// `bounded_exe` under a ceiling of `kb` KiB instead: `common::bounded_exe_within`.
+pub fn bounded_exe_within(h: Caps, exe: Str, dir: Str, env: Strs, kb: Int) -> Ran ! { io, spawn } {
+    let args = strs_new();
+    strs_push(args, "-c");
+    strs_push(args, bounded_script_kb(kb));
+    strs_push(args, exe);
+    run(h, "sh", args, dir, env)
+}
+
+/// The ceiling a program that starts many tasks runs under: `common::TASKS_ADDRESS_SPACE_KB`,
+/// 4 GiB.
+pub const TASKS_ADDRESS_SPACE_KB: Int = 4194304;
+
 /// The `sh -c` script `bounded_exe` runs its executable under, `$0` the executable.
 pub fn bounded_script() -> Str ! {} {
-    let kb = 524288;
+    bounded_script_kb(524288)
+}
+
+/// `bounded_script` with a ceiling of `kb` KiB.
+pub fn bounded_script_kb(kb: Int) -> Str ! {} {
     f"if [ \"$(uname -s)\" = Linux ]; then\n    ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS\n' >&2; exit 97; }}\n    got=$(ulimit -v)\n    if [ \"$got\" != {kb} ]; then\n        printf 'bounded_exe: RLIMIT_AS reads %s, expected {kb}\n' \"$got\" >&2\n        exit 97\n    fi\nelse\n    ulimit -v {kb} 2>/dev/null || true\nfi\nexec \"$0\" \"$@\""
 }
 
@@ -71,6 +122,7 @@ pub fn everywhere(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str
     let out = vec_new[Labeled]();
     let a = strs_new();
     strs_push(a, "run");
+    strs_push(a, "--interpret");
     strs_push(a, main);
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), a, d, env)));
     let labels = words("llvm-O0 llvm-O2 cranelift");
@@ -80,8 +132,23 @@ pub fn everywhere(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str
     strs_push(shown, "cranelift");
     let backends = words("llvm llvm cranelift");
     let opts = words("0 2 0");
+    // Nazm's own code generator, where it builds before 1.0 (its D13: macOS).
+    let mut gen = "";
+    if on_macos(h) {
+        strs_push(labels, "nazm");
+        strs_push(shown, "nazm");
+        strs_push(backends, "nazm");
+        strs_push(opts, "0");
+        gen = match nzcg(h, d) {
+            Result.Ok(value: g) => g,
+            Result.Err(error: e) => {
+                scratch_remove(h, d);
+                return Result[Vec[Labeled], Str].Err(error: e);
+            },
+        };
+    }
     let mut k = 0;
-    while k < 3 {
+    while k < strs_len(backends) {
         let name = strs_get(shown, k);
         let exe = f"{d}/{text_replace(strs_get(labels, k), "-", "")}";
         let b = strs_new();
@@ -91,7 +158,8 @@ pub fn everywhere(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str
         strs_push(b, main);
         strs_push(b, "-o");
         strs_push(b, exe);
-        let built = nazm(h, d, b);
+        let benv = if strs_get(backends, k) == "nazm" { env_set(suite_env(h), "NAZM_NZCG", gen) } else { suite_env(h) };
+        let built = run(h, nazm_bin(h.io), b, d, benv);
         if built.code != 0 {
             scratch_remove(h, d);
             return Result[Vec[Labeled], Str].Err(error: f"{name}: {built.stderr}");

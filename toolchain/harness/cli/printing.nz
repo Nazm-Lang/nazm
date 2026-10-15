@@ -8,6 +8,8 @@
 use "@std/text"
 use "../lib/run.nz"
 use "../lib/differential.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
 
 @test
 fn every_kind_of_value_prints_its_text_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
@@ -55,10 +57,43 @@ fn what_has_no_text_or_takes_the_name_is_refused(io: IoCap, p: ProcessCap, sp: S
     let h = caps(io, p, sp, v, t);
     same_strs("a record with no `Show`", codes(h, "struct Q { y: Int }\nfn main(out: OutCap) -> Int ! {io} { println(Q(y: 1)); 0 }\n"), words("N0300"))?;
     same_strs("a function named `println`", codes(h, "fn println(s: Str) -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0203"))?;
-    // `main` holds an `OutCap` it was not written (R1, 5b.1); a function of its that holds none
-    // still may not print.
-    same_strs("printing without the authority to", codes(h, "fn say() -> Int { println(\"x\"); 0 }\nfn main() -> Int { say() }\n"), words("N0369"))?;
-    // Nor may a `main` that writes an `IoCap` and so is given no `OutCap`, once it has lost the
-    // `IoCap`'s binding.
-    same_strs("a main that wrote its authority and shadowed it", codes(h, "fn main(io: IoCap) -> Int { let io = 0; println(\"x\"); io }\n"), words("N0369"))
+    // `main` holds an `OutCap` it was not written (R1, 5b.1), and since D8 (6.7) so does every
+    // function of the program itself: a function of its passed none prints, and so does a `main`
+    // that wrote an `IoCap` and then lost the `IoCap`'s binding.
+    same_strs("printing in the program's own function", codes(h, "fn say() -> Int { println(\"x\"); 0 }\nfn main() -> Int { say() }\n"), strs_new())?;
+    same_strs("a main that wrote its authority and shadowed it", codes(h, shadowed()), strs_new())?;
+    // That `main` is still given no `OutCap` beside the `IoCap` it wrote: its authority is the
+    // `IoCap` alone, and none is implicit.
+    let d = prog_dir(h, "p.nz", shadowed())?;
+    let r = nazm(h, d, words("inspect p.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let doc = jparse(r.stdout)?;
+    let got = strs_new();
+    let mut i = 0;
+    while jq(doc, f"authority/{i}") >= 0 {
+        strs_push(got, f"{jstr(doc, f"authority/{i}/capability")}:{jtext(doc, f"authority/{i}/implicit")}");
+        i = i + 1;
+    }
+    same_strs(r.stdout, got, words("IoCap:false"))?;
+    // A package's function that holds none still may not print: printing without the authority
+    // to is refused there, in its own module.
+    let e = scratch_new(h);
+    let made = package_case(h, e);
+    let c = nazm(h, e, words("check app"));
+    scratch_remove(h, e);
+    made?;
+    check_that(c.code != 0, ran_show(c))?;
+    check_that(text_contains(c.stderr, "N0369") && text_contains(c.stderr, "`say` holds no `OutCap`"), f"printing without the authority to: {ran_show(c)}")
+}
+
+fn shadowed() -> Str ! {} {
+    "fn main(io: IoCap) -> Int { let io = 0; println(\"x\"); io }\n"
+}
+
+fn package_case(h: Caps, d: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, d, "lib/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n")?;
+    scratch_write(h, d, "lib/src/say.nz", "pub fn say() -> Int { println(\"x\"); 0 }\n")?;
+    scratch_write(h, d, "app/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n")?;
+    scratch_write(h, d, "app/src/main.nz", "use \"lib:say.nz\";\nfn main() -> Int { say() }\n")
 }

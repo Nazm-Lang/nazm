@@ -45,7 +45,7 @@ fn checked_arithmetic_finds_every_edge_everywhere(io: IoCap, p: ProcessCap, sp: 
 
 fn run_once(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
     let d = prog_dir(h, "p.nz", src)?;
-    let r = nazm(h, d, words("run p.nz"));
+    let r = nazm(h, d, words("run --interpret p.nz"));
     scratch_remove(h, d);
     Result[Ran, Str].Ok(value: r)
 }

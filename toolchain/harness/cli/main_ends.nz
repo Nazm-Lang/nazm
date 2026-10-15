@@ -24,6 +24,7 @@ fn as_users_run(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str] 
     let out = vec_new[Labeled]();
     let a = strs_new();
     strs_push(a, "run");
+    strs_push(a, "--interpret");
     strs_push(a, main);
     vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), a, d, quiet)));
     let b = strs_new();
@@ -100,7 +101,7 @@ fn main_s_result_is_the_exit_status_everywhere(io: IoCap, p: ProcessCap, sp: Spa
     }
     // The result report prints it and ends with 0, as every program did before R1.
     let d = prog_dir(h, "p.nz", "fn main() -> Int { 300 }\n")?;
-    let r = run(h, nazm_bin(io), words("run p.nz"), d, env_set(env_here(io), "NAZM_RESULT_REPORT", "1"));
+    let r = run(h, nazm_bin(io), words("run --interpret p.nz"), d, env_set(env_here(io), "NAZM_RESULT_REPORT", "1"));
     scratch_remove(h, d);
     check_that(r.code == 0 && r.stdout == "300\n", ran_show(r))
 }

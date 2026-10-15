@@ -8,6 +8,7 @@ use "../lib/run.nz"
 use "../lib/scratch.nz"
 use "../lib/jsonq.nz"
 use "../lib/differential.nz"
+use "../lib/strings.nz"
 
 fn program() -> Str ! {} {
     "struct Q { flag: Bool, name: Str, n: Int }\nstruct H { a: Ints, b: Strs }\nstruct Plain { x: Int, y: Bool }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nenum T { One(x: Int), Two }\nfn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }\nfn tee(t: T) -> Int { match t { T.One(x: x) => x, T.Two() => 7, } }\nfn main(out: OutCap) -> Int {\nlet h = H(a: ints_new(), b: strs_new());\nints_push(h.a, 5);\nstrs_push(h.b, \"hello\");\nlet p = Plain(x: 3, y: false);\nprint(int_to_str(val(S.Pair(q: Q(flag: true, name: \"abc\", n: 10), k: 4))));\nprint(int_to_str(tee(T.One(x: 2)) + tee(T.Two()) + p.x + ints_get(h.a, 0) + str_len(strs_get(h.b, 0))));\n0\n}\n"
@@ -173,7 +174,7 @@ fn every_shape_in_the_tables_runs_the_same_on_both_backends(io: IoCap, p: Proces
     // The Cranelift backend lays every value out by these tables (N81); LLVM lays its own
     // aggregates out. Both must agree with the interpreter.
     let d = prog_dir(h, "p.nz", program())?;
-    let r = nazm(h, d, words("run p.nz"));
+    let r = nazm(h, d, words("run --interpret p.nz"));
     let mut failure = "";
     for backend in words("llvm cranelift") {
         let o = nazm(h, d, words(f"build --backend {backend} p.nz -o {backend}"));
@@ -188,4 +189,69 @@ fn every_shape_in_the_tables_runs_the_same_on_both_backends(io: IoCap, p: Proces
     check_that(r.code == 0, r.stderr)?;
     check_that(r.stdout == "17220\n", r.stdout)?;
     check_that(str_len(failure) == 0, failure)
+}
+
+fn positions(t: Str, k: Str) -> Int ! {} {
+    let mut n = 0;
+    for l in text_lines(t) {
+        if text_starts_with(trim_start_ws(l), k) {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+/// R9: `nazm lir --ops --debug` lowers as `nazm build --debug` does, so the positions a code
+/// generator makes line tables from — each function's `at` and every `loc` — are printed; without
+/// `--debug` there are none.
+@test
+fn debug_ops_print_positions_and_plain_ops_do_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let plain = nazm(h, d, words("lir --ops p.nz"));
+    let debug = nazm(h, d, words("lir --ops --debug p.nz"));
+    scratch_remove(h, d);
+    check_that(plain.code == 0 && debug.code == 0, f"{ran_show(plain)} {ran_show(debug)}")?;
+    let pl = plain.stdout;
+    let db = debug.stdout;
+    check_that(positions(pl, "loc ") == 0, pl)?;
+    check_that(positions(pl, "at ") == 0, pl)?;
+    check_that(positions(db, "loc ") > 0, db)?;
+    check_that(positions(db, "at ") > 0, db)?;
+    // The files the positions name, by name.
+    let mut named = false;
+    for l in text_lines(db) {
+        if text_starts_with(l, "; file ") && text_ends_with(l, "p.nz") {
+            named = true;
+        }
+    }
+    check_that(named, db)?;
+    check_that(!text_contains(pl, "; file "), pl)
+}
+
+/// R3 (6.3.6): a generic channel's helper is named by its element's key, as a vector's is, not by
+/// the checker's channel id — so `Chan[Int]`'s is the same symbol whatever other channel types a
+/// program makes first.
+@test
+fn a_generic_channels_helper_is_named_by_its_element(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let sources = strs_new();
+    strs_push(sources, "fn main(out: OutCap) -> Int {\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, chan_new_of[Int](1));\n    print(int_to_str(vec_len(cs)));\n    0\n}\n");
+    strs_push(sources, "fn main(out: OutCap) -> Int {\n    let s = chan_new_of[Str](1);\n    let b = chan_new_of[Bool](1);\n    chan_close_of(s);\n    chan_close_of(b);\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, chan_new_of[Int](1));\n    print(int_to_str(vec_len(cs)));\n    0\n}\n");
+    for source in sources {
+        let d = prog_dir(h, "p.nz", source)?;
+        let o = nazm(h, d, words("lir --ops p.nz"));
+        scratch_remove(h, d);
+        check_that(o.code == 0, o.stderr)?;
+        let text = o.stdout;
+        check_that(text_contains(text, "@nz.h.vel.chan.Int"), text)?;
+        let parts = text_split(text, ".chan.");
+        let mut i = 1;
+        while i < strs_len(parts) {
+            let rest = strs_get(parts, i);
+            check_that(!(str_len(rest) > 0 && str_byte(rest, 0) >= 48 && str_byte(rest, 0) <= 57), text)?;
+            i = i + 1;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
 }

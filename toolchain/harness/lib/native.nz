@@ -16,7 +16,7 @@ pub fn everywhere_with_oracle(h: Caps, src: Str, memory: Bool) -> Result[Vec[Lab
     let d = prog_dir(h, "prog.nz", src)?;
     let env = if memory { env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1") } else { suite_env(h) };
     let out = vec_new[Labeled]();
-    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run prog.nz"), d, env)));
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
     vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
     let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
     let backends = words("llvm llvm cranelift");
@@ -46,6 +46,7 @@ pub fn everywhere_with_oracle(h: Caps, src: Str, memory: Bool) -> Result[Vec[Lab
 pub fn agree_native(h: Caps, dir: Str, root: Str) -> Result[Str, Str] ! { io, spawn } {
     let a = strs_new();
     strs_push(a, "run");
+    strs_push(a, "--interpret");
     strs_push(a, root);
     let interpreted = nazm(h, dir, a);
     if interpreted.code != 0 {
@@ -87,7 +88,7 @@ pub fn everywhere_plain(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, 
     let d = prog_dir(h, "prog.nz", src)?;
     let env = suite_env(h);
     let out = vec_new[Labeled]();
-    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run prog.nz"), d, env)));
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
     let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
     let backends = words("llvm llvm cranelift");
     let opts = words("0 2 0");

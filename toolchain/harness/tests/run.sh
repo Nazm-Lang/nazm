@@ -13,7 +13,7 @@
 #
 # Environment:
 #   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: the 0.10.0 release)
-#   CARGO_TARGET_DIR  where Cargo builds the Rust side (default: ~/.cache/nazm-target-R7)
+#   CARGO_TARGET_DIR  where Cargo builds the Rust side (default: ~/.cache/nazm-target-track7)
 #   NAZM              the `nazm` under test (default: the tree's, `$CARGO_TARGET_DIR/debug/nazm`,
 #                     which is the binary the Rust tests run — so both sides test one binary)
 set -u
@@ -23,9 +23,12 @@ root=$(cd "$here/../.." && pwd)
 cd "$root" || exit 1
 
 HARNESS_NAZM=${HARNESS_NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
-export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7}
+export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-track7}
 export NAZM=${NAZM:-$CARGO_TARGET_DIR/debug/nazm}
 export NAZM_HARNESS_ROOT=$root
+# What `.cargo/config.toml` gives every process Cargo starts: no ported test writes to the real user
+# cache (R1.5, D12).
+export NAZM_USER_CACHE_DIR=
 what=${1:-all}
 [ $# -gt 0 ] && shift
 only=("$@")
@@ -65,6 +68,15 @@ compare_tests() {
     if ! cargo build -q -p nazm-cli --bin nazm 2>"$log/build.err"; then
         note_differ "the tree's nazm did not build: $(tail -1 "$log/build.err")"
         return
+    fi
+    # Nazm's own code generator (R9, D15), built once from `toolchain/codegen/` by the `nazm` under
+    # test, as `differential::nzcg` builds it once per test process: what `--backend nazm` runs.
+    if [ "$(uname -s)" = Darwin ]; then
+        if "$NAZM" build --no-cache "$root/toolchain/codegen/main.nz" -o "$log/nzcg" >"$log/nzcg.out" 2>&1; then
+            export NAZM_HARNESS_NZCG=$log/nzcg
+        else
+            note_differ "nzcg did not build: $(grep -m1 error "$log/nzcg.out")"
+        fi
     fi
     # The harness's own tests: the library and the mutation core.
     for t in "$here"/tests/*_self.nz; do

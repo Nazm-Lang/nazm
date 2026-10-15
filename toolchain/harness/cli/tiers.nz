@@ -69,7 +69,7 @@ fn last_line(s: Str) -> Str ! {} {
 
 fn interpreted(h: Caps, d: Str, expr: Str) -> Result[Str, Str] ! { io, spawn } {
     scratch_write(h, d, "p.nz", program(expr))?;
-    let o = nazm(h, d, words("run p.nz"));
+    let o = nazm(h, d, words("run --interpret p.nz"));
     if o.code == 0 {
         Result[Str, Str].Ok(value: f"= {last_line(o.stdout)}")
     } else {

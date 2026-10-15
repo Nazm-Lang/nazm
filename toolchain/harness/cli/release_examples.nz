@@ -118,6 +118,7 @@ fn tour_one(h: Caps, dir: Str, scratch: Str, file: Str, src: Str, expected: Str)
     };
     let a3 = strs_new();
     strs_push(a3, "run");
+    strs_push(a3, "--interpret");
     strs_push(a3, src);
     let out = nazm_as_reader(h, a3, dir);
     match exited(f"run {file}", out, 0) {

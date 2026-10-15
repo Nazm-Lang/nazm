@@ -55,7 +55,7 @@ fn make_tree(h: Caps, root: Str) -> Result[Int, Str] ! { io } {
 fn walk_everywhere(h: Caps, dir: Str, program: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
     scratch_write(h, dir, "prog.nz", program)?;
     let runs = vec_new[Labeled]();
-    vec_push(runs, Labeled(label: "interpreter", ran: nazm(h, dir, words("run prog.nz"))));
+    vec_push(runs, Labeled(label: "interpreter", ran: nazm(h, dir, words("run --interpret prog.nz"))));
     let a = words("build --no-cache --backend llvm prog.nz -o");
     strs_push(a, f"{dir}/walker");
     let b = nazm(h, dir, a);
