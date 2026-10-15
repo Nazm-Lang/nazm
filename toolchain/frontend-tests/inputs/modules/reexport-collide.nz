@@ -1,0 +1,4 @@
+use "lib/rx/mid.nz";
+fn make(a: Int, b: Int) -> Int { a }
+struct Point { z: Int }
+fn main() -> Int { make(1, 2) }

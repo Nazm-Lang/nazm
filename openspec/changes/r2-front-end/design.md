@@ -155,8 +155,7 @@ types (collisions reported there), layouts, declarations with each module's `pub
 module's environment (N0209, N0208, N0207 for functions) and bodies against its direct imports only.
 A standard module is checked as the reference checks it (`--no-cache` reuses nothing), and holds
 no output authority it is not given (R1.5, D8); an imported function with no declared effect set
-is assumed to do every bridged effect. A `pub use` re-export stops the checker until N103 is
-carried. R1.5 D9 (on `main` since `511f77d6`) gives a program module `@std/hash`, `@std/hashmap`,
+is assumed to do every bridged effect. What a module offers includes what it re-exports (D23). R1.5 D9 (on `main` since `511f77d6`) gives a program module `@std/hash`, `@std/hashmap`,
 `@std/ordmap`, `@std/sort` or `@std/text` where it names one of their items: the loader ports
 `prelude_named` to find where it does and loads those modules after the written imports, and the
 checker adds each as `import_implicit` does — plain, after the written edges and before the core
@@ -245,6 +244,24 @@ reference refuses (`N0500`) makes `nazm check` fail with no diagnostic of a modu
 publishes nothing for it. Paths are compared as normalised text where the reference compares
 canonical ones (as `load.nz` already does for modules): a package reached through a symbolic link
 may be seen differently. The driver takes the root module's absolute path (`run.sh` gives one).
+
+**D23 — Re-exports are a layer of what each module offers.** `pub use` (N103) is ported as
+`check/reexport.rs` applies it, into one layer of `compiler/sema.nz` (*re-exports*): per module,
+the functions, types and traits it offers beyond its own `pub` definitions, each the defining
+module's own — a function's id, a type, a trait — under the name offered. Every reader of an
+import asks that layer, never the declarations directly: `offered_fns` (plain imports, N0207 and
+N0208 included, and `alias::f`), `offered_types` (its nameable records — its own `pub` ones, then
+re-exported ones in the order first offered — then enums the same way, then the types renamed;
+the type namespace, `alias::T`), `offers_trait` (`trait_scope`), and `impl_usable`
+(`impl_scope`: an impl is usable where a module this one imports re-exports from its module,
+however far). The graph merges every `pub use` of one module as `ModuleGraph::reexport` does. The
+reference's two passes are kept: types and traits silently after the type names, then everything
+with its refusals (N0211, N0212, N0213) after the functions, the types offered again from nothing
+as the reference's fresh interfaces are. What each chosen name resolves to is recorded for tools.
+Two approximations stop instead of guessing: a module offering two re-exported records (or two
+enums) under their own names beside public items of its own, whose order the reference takes from
+its public surface's closure; and an enum written under two plain names, whose variant's owner
+the reference names in a hash map's order.
 
 ## Risks / Trade-offs
 

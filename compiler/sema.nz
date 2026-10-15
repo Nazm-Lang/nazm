@@ -11,7 +11,7 @@
 // core prelude — each checked against its direct imports' interfaces: `pub` visibility, plain
 // imports and imports under a name (`alias::f`, `alias::T`), their collisions (N0207, N0208,
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
-// and another module's undeclared effects; records and enums, generic ones included, and
+// and another module's undeclared effects; re-exports (`pub use`, N103); records and enums, generic ones included, and
 // `Vec`s, tuples (the generic record of their arity), arrays and applications of any type; functions
 // with type parameters (and `Equality` requirements), effect parameters (N51) and contracts (N87),
 // and result types taken from an expression body (R1.5, D2);
@@ -320,6 +320,8 @@ pub struct Ck {
     // Whether each function is a foreign declaration (N42) and whether it is an export (N55).
     fnfor: Ints,
     fnexp: Ints,
+    // What each module offers beyond its own `pub` definitions: its re-exports (N103).
+    rx: Rx,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -1202,7 +1204,7 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new());
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1361,6 +1363,10 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         declare_types(c, i);
         i = i + 1;
     }
+    // What `pub use` re-exports of types and traits (N103), before anything resolves a type name
+    // an importer writes; its refusals wait for the functions.
+    apply_reexports(c, false);
+    if strs_len(c.stop) > 0 { return c; }
     // Stage 0b: each module's field types; stage 0c, the layouts they describe.
     i = 0;
     while i < count {
@@ -1387,6 +1393,8 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         declare_functions(c, i);
         i = i + 1;
     }
+    // And everything `pub use` re-exports, now that every module offers its own (N103).
+    apply_reexports(c, true);
     declare_all_consts(c);
     // The arrays the signatures wrote (Gate 2).
     validate_new_arrays(c);
@@ -1436,7 +1444,6 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
             let imp = ints_get(imports, k);
             let to = ints_get(graph.target, gf + k);
             if to < 0 { stop(c, "an import the loader did not resolve"); }
-            if some(c, imp, "reexport") { stop(c, "a re-export"); }
             if to == m && some(c, imp, "alias") { stop(c, "a module imported under a name by itself"); }
             if to != m && index_of(targets, to) < 0 { ints_push(targets, to); }
             k = k + 1;
@@ -1470,6 +1477,7 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
             ints_push(c.date, spe(c, fld(c, first, "path_span")));
             if plain { ints_push(c.dplain, 1); } else { ints_push(c.dplain, 0); }
             ints_push(c.dimplicit, 0);
+            rx_spec(c, imports, gf, graph, to);
             n = n + 1;
         }
         // The prelude's standard modules (R1.5, D9): plain, after the written ones, and only
@@ -1487,6 +1495,7 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
                 ints_push(c.dimplicit, 1);
                 ints_push(c.daf, strs_len(c.aname));
                 ints_push(c.dac, 0);
+                rx_none(c);
             }
             k = k + 1;
         }
@@ -1498,6 +1507,7 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
             ints_push(c.dimplicit, 0);
             ints_push(c.daf, strs_len(c.aname));
             ints_push(c.dac, 0);
+            rx_none(c);
         }
         ints_push(c.dcount, ints_len(c.don) - ints_get(c.dfirst, m));
         m = m + 1;
@@ -1517,6 +1527,499 @@ fn imports_module(c: Ck, m: Int, x: Int) -> Bool {
         k = k + 1;
     }
     false
+}
+
+// --- re-exports (N103; `check/reexport.rs`) ------------------------------------------------------
+//
+// A module offers its own `pub` definitions and what it re-exports: `pub use "m.nz";` every name
+// `m` offers, `pub use "m.nz" { a, b as c };` the names chosen, `c` the name `b` is offered under.
+// A re-export is the same definition — its id is the defining module's — so nothing downstream
+// learns that re-exports exist: an import reads what a module offers (`offered_fns`,
+// `offered_types`, `offers_trait`), and an impl is usable where a module this one imports
+// re-exports from its module (`impl_usable`).
+
+pub struct Rx {
+    // Per dependency, beside `don`: 0 no re-export, 1 the names chosen, 2 every name; the `pub`'s
+    // span (absolute); the names chosen, a run of the pool below.
+    dk: Ints,
+    das: Ints,
+    dae: Ints,
+    dif: Ints,
+    dic: Ints,
+    // The names chosen: the name, its span, and the name it is offered under ("" for its own).
+    iname: Strs,
+    is: Ints,
+    ie: Ints,
+    ialias: Strs,
+    // Functions re-exported: the module offering it, the name it is offered under, the function.
+    fm: Ints,
+    fname: Strs,
+    ff: Ints,
+    // Types re-exported, in the order each was first offered: the module, the type, and whether
+    // it is offered under its own name (`nameable`).
+    tm: Ints,
+    tt: Ints,
+    tn: Ints,
+    // Types re-exported under another name: the module, the name, the type.
+    nm: Ints,
+    nname: Strs,
+    nt: Ints,
+    // Traits re-exported (`reexported_by`), and the modules each module re-exports from
+    // (`reexport_sources`), each pair once.
+    rm: Ints,
+    rt: Ints,
+    sm: Ints,
+    sf: Ints,
+    // What each chosen name resolves to, for tools (`nazm doc`): the module re-exporting, the
+    // name's span (absolute), the kind (1 a function, 2 a record or an enum, 3 a trait), and the
+    // function, the type or the trait.
+    xm: Ints,
+    xs: Ints,
+    xe: Ints,
+    xk: Ints,
+    xid: Ints,
+}
+
+fn rx_new() -> Rx {
+    Rx(dk: ints_new(), das: ints_new(), dae: ints_new(), dif: ints_new(), dic: ints_new(), iname: strs_new(), is: ints_new(), ie: ints_new(),
+            ialias: strs_new(), fm: ints_new(), fname: strs_new(), ff: ints_new(), tm: ints_new(), tt: ints_new(), tn: ints_new(), nm: ints_new(),
+            nname: strs_new(), nt: ints_new(), rm: ints_new(), rt: ints_new(), sm: ints_new(), sf: ints_new(), xm: ints_new(), xs: ints_new(),
+            xe: ints_new(), xk: ints_new(), xid: ints_new())
+}
+
+// A dependency with no re-export.
+fn rx_none(c: Ck) -> Int {
+    ints_push(c.rx.dk, 0);
+    ints_push(c.rx.das, 0);
+    ints_push(c.rx.dae, 0);
+    ints_push(c.rx.dif, strs_len(c.rx.iname));
+    ints_push(c.rx.dic, 0);
+    0
+}
+
+// The re-export of the dependency on `to` just added, as `ModuleGraph::reexport` merges every
+// `pub use` of it in source order: the first `pub` is where it is; every name once any of them
+// chooses none, else the names of each, in order.
+fn rx_spec(c: Ck, imports: Ints, gf: Int, graph: Graph, to: Int) -> Int {
+    let mut kind = 0;
+    let mut s = 0;
+    let mut e = 0;
+    let first = strs_len(c.rx.iname);
+    let mut k = 0;
+    while k < ints_len(imports) {
+        let imp = ints_get(imports, k);
+        if ints_get(graph.target, gf + k) == to && some(c, imp, "reexport") {
+            let r = unwrap(c, imp, "reexport");
+            if kind == 0 {
+                s = sps(c, fld(c, r, "pub_span"));
+                e = spe(c, fld(c, r, "pub_span"));
+                kind = 1;
+            }
+            if some(c, r, "names") == false {
+                kind = 2;
+            } else {
+                if kind == 1 {
+                    let items = sx_items(c.t, unwrap(c, r, "names"));
+                    let mut i = 0;
+                    while i < ints_len(items) {
+                        let it = ints_get(items, i);
+                        strs_push(c.rx.iname, fname_of(c, it, "name"));
+                        ints_push(c.rx.is, sps(c, fld(c, it, "span")));
+                        ints_push(c.rx.ie, spe(c, fld(c, it, "span")));
+                        if some(c, it, "alias") {
+                            strs_push(c.rx.ialias, sx_text(c.t, sx_kid(c.t, unwrap(c, it, "alias"), 0)));
+                        } else {
+                            strs_push(c.rx.ialias, "");
+                        }
+                        i = i + 1;
+                    }
+                }
+            }
+        }
+        k = k + 1;
+    }
+    ints_push(c.rx.dk, kind);
+    ints_push(c.rx.das, s);
+    ints_push(c.rx.dae, e);
+    ints_push(c.rx.dif, first);
+    ints_push(c.rx.dic, strs_len(c.rx.iname) - first);
+    0
+}
+
+// The functions a module offers (`UnitInterface::exports`), into `fns` and `names`: its own `pub`
+// ones, then those it re-exports, each under the name it is offered by.
+fn offered_fns(c: Ck, m: Int, fns: Ints, names: Strs) -> Int {
+    let mut f = 0;
+    while f < strs_len(c.fnname) {
+        if ints_get(c.fnmod, f) == m && ints_get(c.fnpub, f) == 1 {
+            ints_push(fns, f);
+            strs_push(names, strs_get(c.fnname, f));
+        }
+        f = f + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(c.rx.fm) {
+        if ints_get(c.rx.fm, i) == m {
+            ints_push(fns, ints_get(c.rx.ff, i));
+            strs_push(names, strs_get(c.rx.fname, i));
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// The records (`records`) or the enums a module re-exports under their own names, in the order
+// each was first offered.
+fn rx_offered_kind(c: Ck, m: Int, records: Bool, tys: Ints, names: Strs) -> Int {
+    let mut i = 0;
+    while i < ints_len(c.rx.tm) {
+        let t = ints_get(c.rx.tt, i);
+        if ints_get(c.rx.tm, i) == m && ints_get(c.rx.tn, i) == 1 && is_record(c, t) == records { offer_type(c, tys, names, t, ""); }
+        i = i + 1;
+    }
+    0
+}
+
+// Whether module `m` offers the trait `t`: its own `pub` one, or one it re-exports.
+fn offers_trait(c: Ck, m: Int, t: Int) -> Bool {
+    if ints_get(c.trmod, t) == m && ints_get(c.trpub, t) == 1 { return true; }
+    rx_pair(c.rx.rm, c.rx.rt, m, t)
+}
+
+fn rx_pair(xs: Ints, ys: Ints, x: Int, y: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == x && ints_get(ys, i) == y { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Whether an impl in module `at` is usable in module `m` (`impl_scope`): `m` itself, a module it
+// imports directly, or one those re-export from, however far.
+fn impl_usable(c: Ck, m: Int, at: Int) -> Bool {
+    if at == m { return true; }
+    let seen = ints_new();
+    ints_push(seen, m);
+    let work = ints_new();
+    let mut k = 0;
+    while k < deps(c, m) {
+        ints_push(work, ints_get(c.don, dep(c, m, k)));
+        k = k + 1;
+    }
+    while ints_len(work) > 0 {
+        let x = ints_pop(work);
+        if index_of(seen, x) < 0 {
+            if x == at { return true; }
+            ints_push(seen, x);
+            let mut i = 0;
+            while i < ints_len(c.rx.sm) {
+                if ints_get(c.rx.sm, i) == x { ints_push(work, ints_get(c.rx.sf, i)); }
+                i = i + 1;
+            }
+        }
+    }
+    false
+}
+
+// Apply every `pub use` (`apply_reexports`): a module re-exporting from one that re-exports is
+// applied after it, sweep by sweep in load order. Without `full`, types and traits only, silently,
+// for the type names importers resolve; with it, the functions too and every refusal — each
+// module's types offered again from nothing, as the reference's second pass starts from fresh
+// interfaces — and then each re-export left in a cycle (N0213).
+fn apply_reexports(c: Ck, full: Bool) -> Int {
+    let count = ints_len(c.mprog);
+    if full {
+        while ints_len(c.rx.tm) > 0 {
+            ints_pop(c.rx.tm);
+            ints_pop(c.rx.tt);
+            ints_pop(c.rx.tn);
+        }
+        while ints_len(c.rx.nm) > 0 {
+            ints_pop(c.rx.nm);
+            strs_pop(c.rx.nname);
+            ints_pop(c.rx.nt);
+        }
+    }
+    let done = ints_new();
+    let mut m = 0;
+    while m < count {
+        let mut none = 1;
+        let mut k = 0;
+        while k < deps(c, m) {
+            if ints_get(c.rx.dk, dep(c, m, k)) > 0 { none = 0; }
+            k = k + 1;
+        }
+        ints_push(done, none);
+        m = m + 1;
+    }
+    let mut progressed = true;
+    while progressed {
+        progressed = false;
+        m = 0;
+        while m < count {
+            if ints_get(done, m) == 0 {
+                let mut ready = true;
+                let mut k = 0;
+                while k < deps(c, m) {
+                    let d = dep(c, m, k);
+                    if ints_get(c.rx.dk, d) > 0 && ints_get(done, ints_get(c.don, d)) == 0 { ready = false; }
+                    k = k + 1;
+                }
+                if ready {
+                    k = 0;
+                    while k < deps(c, m) {
+                        let d = dep(c, m, k);
+                        if ints_get(c.rx.dk, d) > 0 { reexport_one(c, m, d, full); }
+                        k = k + 1;
+                    }
+                    ints_set(done, m, 1);
+                    progressed = true;
+                }
+            }
+            m = m + 1;
+        }
+    }
+    m = 0;
+    while m < count {
+        if full && ints_get(done, m) == 0 {
+            let mut k = 0;
+            while k < deps(c, m) {
+                let d = dep(c, m, k);
+                if ints_get(c.rx.dk, d) > 0 {
+                    dg_error(c.d, "N0213", ints_get(c.rx.das, d), ints_get(c.rx.dae, d), "this re-export is part of a cycle of re-exports", "",
+                            "a re-export offers what another module offers, so a cycle of them offers nothing in particular: re-export from the module that defines the name");
+                }
+                k = k + 1;
+            }
+        }
+        rx_order_known(c, m);
+        m = m + 1;
+    }
+    0
+}
+
+// Where a module offers two re-exported records (or two enums) under their own names and has
+// public items of its own, the reference orders them by what its public surface mentions first
+// (`RecordExport`'s closure), which this checker does not compute: it stops rather than risk an
+// order — of collisions reported, or of a whole-module re-export's names — the reference would
+// not give.
+fn rx_order_known(c: Ck, m: Int) -> Int {
+    let mut records = 0;
+    let mut enums = 0;
+    let mut i = 0;
+    while i < ints_len(c.rx.tm) {
+        if ints_get(c.rx.tm, i) == m {
+            if is_record(c, ints_get(c.rx.tt, i)) { records = records + 1; } else { enums = enums + 1; }
+        }
+        i = i + 1;
+    }
+    if records < 2 && enums < 2 { return 0; }
+    let p = ints_get(c.mprog, m);
+    let mut own = false;
+    let lists = strs_new();
+    strs_push(lists, "functions");
+    strs_push(lists, "records");
+    strs_push(lists, "enums");
+    strs_push(lists, "consts");
+    strs_push(lists, "traits");
+    i = 0;
+    while i < strs_len(lists) {
+        let xs = kids(c, p, strs_get(lists, i));
+        let mut k = 0;
+        while k < ints_len(xs) {
+            if some(c, ints_get(xs, k), "pub_span") { own = true; }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    if own { stop(c, "a module re-exporting two types of a kind beside public items of its own"); }
+    0
+}
+
+// One dependency's `pub use` (`reexport_one`): what module `from` offers, added to what `m` offers.
+fn reexport_one(c: Ck, m: Int, d: Int, full: Bool) -> Int {
+    let from = ints_get(c.don, d);
+    if rx_pair(c.rx.sm, c.rx.sf, m, from) == false {
+        ints_push(c.rx.sm, m);
+        ints_push(c.rx.sf, from);
+    }
+    // What `from` offers, by the name an importer writes.
+    let tys = ints_new();
+    let tnames = strs_new();
+    offered_types(c, from, tys, tnames);
+    let trs = ints_new();
+    let mut t = 0;
+    while t < strs_len(c.trname) {
+        if ints_get(c.trmod, t) == from && ints_get(c.trpub, t) == 1 { ints_push(trs, t); }
+        t = t + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(c.rx.rm) {
+        if ints_get(c.rx.rm, i) == from { ints_push(trs, ints_get(c.rx.rt, i)); }
+        i = i + 1;
+    }
+    let fns = ints_new();
+    let fnames = strs_new();
+    if full { offered_fns(c, from, fns, fnames); }
+    // The names chosen, or every one, each with the name it is offered under.
+    let names = strs_new();
+    let offered = strs_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let listed = ints_get(c.rx.dk, d) == 1;
+    if listed {
+        i = 0;
+        while i < ints_get(c.rx.dic, d) {
+            let it = ints_get(c.rx.dif, d) + i;
+            strs_push(names, strs_get(c.rx.iname, it));
+            if strs_get(c.rx.ialias, it) == "" { strs_push(offered, strs_get(c.rx.iname, it)); } else { strs_push(offered, strs_get(c.rx.ialias, it)); }
+            ints_push(starts, ints_get(c.rx.is, it));
+            ints_push(ends, ints_get(c.rx.ie, it));
+            i = i + 1;
+        }
+    } else {
+        let every = strs_new();
+        i = 0;
+        while i < strs_len(fnames) {
+            strs_push(every, strs_get(fnames, i));
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(tnames) {
+            strs_push(every, strs_get(tnames, i));
+            i = i + 1;
+        }
+        i = 0;
+        while i < ints_len(trs) {
+            strs_push(every, strs_get(c.trname, ints_get(trs, i)));
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(every) {
+            strs_push(names, strs_get(every, i));
+            strs_push(offered, strs_get(every, i));
+            ints_push(starts, ints_get(c.rx.das, d));
+            ints_push(ends, ints_get(c.rx.dae, d));
+            i = i + 1;
+        }
+    }
+    i = 0;
+    while i < strs_len(names) {
+        reexport_name(c, m, d, full, listed, strs_get(names, i), strs_get(offered, i), ints_get(starts, i), ints_get(ends, i), fns, fnames, tys, tnames, trs);
+        i = i + 1;
+    }
+    0
+}
+
+// One name of a re-export, as `reexport_one`'s loop takes it.
+fn reexport_name(c: Ck, m: Int, d: Int, full: Bool, listed: Bool, name: Str, offered: Str, s: Int, e: Int, fns: Ints, fnames: Strs, tys: Ints,
+        tnames: Strs, trs: Ints) -> Int {
+    let renamed = name != offered;
+    let fi = strs_find(fnames, name);
+    let ti = strs_find(tnames, name);
+    let mut tr = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(trs) && tr < 0 {
+        if strs_get(c.trname, ints_get(trs, i)) == name { tr = ints_get(trs, i); }
+        i = i + 1;
+    }
+    // A name this module already offers, its own or another re-export's.
+    let mine = ints_new();
+    let mine_names = strs_new();
+    offered_fns(c, m, mine, mine_names);
+    let taken_fn = strs_find(mine_names, offered) >= 0;
+    let mine_tys = ints_new();
+    let mine_tnames = strs_new();
+    offered_types(c, m, mine_tys, mine_tnames);
+    let mut taken_ty = strs_find(mine_tnames, offered) >= 0;
+    i = 0;
+    while i < strs_len(c.trname) {
+        if strs_get(c.trname, i) == offered {
+            if ints_get(c.trmod, i) == m || rx_pair(c.rx.rm, c.rx.rt, m, i) { taken_ty = true; }
+        }
+        i = i + 1;
+    }
+    if fi < 0 && ti < 0 && tr < 0 {
+        if full {
+            dg_error(c.d, "N0211", s, e, cat3("`", name, "` is not exported by the module this re-exports from"), "",
+                    "a module re-exports only what the module it names exports");
+        }
+        return 0;
+    }
+    if fi >= 0 && full {
+        if taken_fn { return rx_taken(c, offered, s, e); }
+        ints_push(c.rx.fm, m);
+        strs_push(c.rx.fname, offered);
+        ints_push(c.rx.ff, ints_get(fns, fi));
+        if listed { rx_resolved(c, m, s, e, 1, ints_get(fns, fi)); }
+    }
+    if ti >= 0 {
+        let ty = ints_get(tys, ti);
+        if taken_ty && full && fi < 0 { return rx_taken(c, offered, s, e); }
+        if taken_ty == false {
+            rx_add_type(c, m, ty, renamed, offered);
+            if listed && full { rx_resolved(c, m, s, e, 2, ty); }
+        }
+    }
+    if tr >= 0 {
+        if renamed {
+            if full {
+                dg_error(c.d, "N0211", s, e, cat3("`", name, "` is a trait, which is re-exported under its own name"), "",
+                        "a trait's name is how an importer's bounds and calls find it: drop `as`");
+            }
+            return 0;
+        }
+        // Recorded at the type stage already: the full stage only reports.
+        let again = rx_pair(c.rx.rm, c.rx.rt, m, tr);
+        if taken_ty && again == false && full && fi < 0 && ti < 0 { return rx_taken(c, offered, s, e); }
+        if again == false {
+            ints_push(c.rx.rm, m);
+            ints_push(c.rx.rt, tr);
+        }
+        if listed && full { rx_resolved(c, m, s, e, 3, tr); }
+    }
+    0
+}
+
+// A type offered by `m` (`add_reexported_type`): under its own name, or — `renamed` — another; a
+// type offered already keeps its place.
+fn rx_add_type(c: Ck, m: Int, ty: Int, renamed: Bool, name: Str) -> Int {
+    let mut at = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(c.rx.tm) {
+        if ints_get(c.rx.tm, i) == m && ints_get(c.rx.tt, i) == ty { at = i; }
+        i = i + 1;
+    }
+    if at < 0 {
+        ints_push(c.rx.tm, m);
+        ints_push(c.rx.tt, ty);
+        ints_push(c.rx.tn, 0);
+        at = ints_len(c.rx.tm) - 1;
+    }
+    if renamed {
+        ints_push(c.rx.nm, m);
+        strs_push(c.rx.nname, name);
+        ints_push(c.rx.nt, ty);
+    } else {
+        ints_set(c.rx.tn, at, 1);
+    }
+    0
+}
+
+fn rx_resolved(c: Ck, m: Int, s: Int, e: Int, kind: Int, id: Int) -> Int {
+    ints_push(c.rx.xm, m);
+    ints_push(c.rx.xs, s);
+    ints_push(c.rx.xe, e);
+    ints_push(c.rx.xk, kind);
+    ints_push(c.rx.xid, id);
+    0
+}
+
+// `N0212`: a name this module offers twice.
+fn rx_taken(c: Ck, name: Str, s: Int, e: Int) -> Int {
+    dg_error(c.d, "N0212", s, e, cat3("`", name, "` is already offered by this module"), "",
+            "a module offers each name once: re-export it under another name with `as`, or rename the definition")
 }
 
 // Whether a record or enum derives an encoding (`@derive`), which is generated into the source
@@ -1792,7 +2295,9 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
     while k < deps(c, m) {
         let d = dep(c, m, k);
         let on = ints_get(c.don, d);
-        let offered = offered_types(c, on);
+        let offered = ints_new();
+        let onames = strs_new();
+        offered_types(c, on, offered, onames);
         let mut a = 0;
         while a < ints_get(c.dac, d) {
             let alias = strs_get(c.aname, ints_get(c.daf, d) + a);
@@ -1800,7 +2305,7 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
             let mut j = 0;
             while j < ints_len(offered) {
                 let t = ints_get(offered, j);
-                set_type_name(c, cat3(alias, "::", type_name(c, t)), t);
+                set_type_name(c, cat3(alias, "::", strs_get(onames, j)), t);
                 j = j + 1;
             }
             a = a + 1;
@@ -1809,7 +2314,7 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
             let mut j = 0;
             while j < ints_len(offered) {
                 let t = ints_get(offered, j);
-                let name = type_name(c, t);
+                let name = strs_get(onames, j);
                 let own = own_type(c, m, name);
                 let first = strs_find(bnames, name);
                 if ints_get(c.dimplicit, d) == 1 && (own >= 0 || first >= 0) {
@@ -1871,20 +2376,34 @@ fn set_type_name(c: Ck, name: Str, t: Int) -> Int {
     0
 }
 
-// The types a module offers by name (`offered_types`): its `pub` records, then its `pub` enums.
-fn offered_types(c: Ck, m: Int) -> Ints {
-    let out = ints_new();
+// The types a module offers by name (`offered_types`), into `tys` and `names`: its nameable
+// records — its `pub` ones, then those it re-exports under their own names — then its nameable
+// enums the same way, then each type it re-exports under another name (N103).
+fn offered_types(c: Ck, m: Int, tys: Ints, names: Strs) -> Int {
     let mut i = 0;
     while i < strs_len(c.rname) {
-        if ints_get(c.rmod, i) == m && ints_get(c.rpub, i) == 1 { ints_push(out, record_ty(c, i, ints_new())); }
+        if ints_get(c.rmod, i) == m && ints_get(c.rpub, i) == 1 { offer_type(c, tys, names, record_ty(c, i, ints_new()), ""); }
         i = i + 1;
     }
+    rx_offered_kind(c, m, true, tys, names);
     i = 0;
     while i < strs_len(c.ename) {
-        if ints_get(c.emod, i) == m && ints_get(c.epub, i) == 1 { ints_push(out, enum_ty(c, i, ints_new())); }
+        if ints_get(c.emod, i) == m && ints_get(c.epub, i) == 1 { offer_type(c, tys, names, enum_ty(c, i, ints_new()), ""); }
         i = i + 1;
     }
-    out
+    rx_offered_kind(c, m, false, tys, names);
+    i = 0;
+    while i < ints_len(c.rx.nm) {
+        if ints_get(c.rx.nm, i) == m { offer_type(c, tys, names, ints_get(c.rx.nt, i), strs_get(c.rx.nname, i)); }
+        i = i + 1;
+    }
+    0
+}
+
+fn offer_type(c: Ck, tys: Ints, names: Strs, t: Int, name: Str) -> Int {
+    ints_push(tys, t);
+    if name == "" { strs_push(names, type_name(c, t)); } else { strs_push(names, name); }
+    0
 }
 
 // A module's own type of this name, or -1.
@@ -3329,7 +3848,7 @@ fn trait_scope(c: Ck, m: Int) -> Int {
         let on = ints_get(c.don, d);
         let mut t = 0;
         while t < strs_len(c.trname) {
-            if ints_get(c.trmod, t) == on && ints_get(c.trpub, t) == 1 {
+            if offers_trait(c, on, t) {
                 let name = strs_get(c.trname, t);
                 if ints_get(c.dimplicit, d) == 1 {
                     if strs_find(c.tsname, name) < 0 {
@@ -3718,8 +4237,7 @@ fn satisfies_within(c: Ck, tr: Int, ty: Int, depth: Int) -> Bool {
     let im = applying(c, tr, ty);
     if im < 0 { return derives(c, tr, ty); }
     let m = gs(c, s_module());
-    let at = ints_get(c.immod, im);
-    if at != m && imports_module(c, m, at) == false { return false; }
+    if impl_usable(c, m, ints_get(c.immod, im)) == false { return false; }
     // An impl of a generic definition: its parameters' requirements, of `ty`'s arguments.
     let mut i = 0;
     while i < ints_get(c.imrc, im) && i < targc(c, ty) {
@@ -4335,36 +4853,38 @@ fn environment(c: Ck, m: Int) -> Int {
             a = a + 1;
         }
         if ints_get(c.dplain, d) == 1 {
-            let mut f = 0;
-            while f < strs_len(c.fnname) {
-                if ints_get(c.fnmod, f) == on && ints_get(c.fnpub, f) == 1 {
-                    let name = strs_get(c.fnname, f);
-                    let own = defined_fn(c, m, name);
-                    let first = strs_find(c.envname, name);
-                    if ints_get(c.dimplicit, d) == 1 && (own >= 0 || first >= 0) {
-                        // The prelude's standard modules (R1.5, D9) yield, silently.
+            let ofns = ints_new();
+            let onames = strs_new();
+            offered_fns(c, on, ofns, onames);
+            let mut j = 0;
+            while j < ints_len(ofns) {
+                let f = ints_get(ofns, j);
+                let name = strs_get(onames, j);
+                let own = defined_fn(c, m, name);
+                let first = strs_find(c.envname, name);
+                if ints_get(c.dimplicit, d) == 1 && (own >= 0 || first >= 0) {
+                    // The prelude's standard modules (R1.5, D9) yield, silently.
+                } else {
+                    if own >= 0 {
+                        dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
+                                "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
+                        sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
+                        sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
                     } else {
-                        if own >= 0 {
-                            dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
-                                    "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
-                            sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
-                            sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
+                        if first >= 0 {
+                            dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
+                                    "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
+                            sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
+                            sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "exported here");
                         } else {
-                            if first >= 0 {
-                                dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
-                                        "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
-                                sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
-                                sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "exported here");
-                            } else {
-                                strs_push(c.envname, name);
-                                ints_push(c.envfn, f);
-                                ints_push(bstarts, ints_get(c.dats, d));
-                                ints_push(bends, ints_get(c.date, d));
-                            }
+                            strs_push(c.envname, name);
+                            ints_push(c.envfn, f);
+                            ints_push(bstarts, ints_get(c.dats, d));
+                            ints_push(bends, ints_get(c.date, d));
                         }
                     }
                 }
-                f = f + 1;
+                j = j + 1;
             }
         }
         k = k + 1;
@@ -6090,12 +6610,12 @@ fn qualified_callee(c: Ck, alias: Str, name: Str) -> Int {
     let a = strs_find(c.alname, alias);
     if a < 0 { return 0 - 1; }
     let m = ints_get(c.almod, a);
-    let mut f = 0;
-    while f < strs_len(c.fnname) {
-        if ints_get(c.fnmod, f) == m && ints_get(c.fnpub, f) == 1 && strs_get(c.fnname, f) == name { return f; }
-        f = f + 1;
-    }
-    0 - 1
+    let ofns = ints_new();
+    let onames = strs_new();
+    offered_fns(c, m, ofns, onames);
+    let at = strs_find(onames, name);
+    if at < 0 { return 0 - 1; }
+    ints_get(ofns, at)
 }
 
 // `NAME::item` that resolves to nothing (N0210): `NAME` is no alias, or its module exports no
@@ -7283,11 +7803,26 @@ fn variant_owners(c: Ck, variant: Str) -> Ints {
     out
 }
 
+// The names the module writes `owners` by (a re-exported enum may be offered under another name,
+// N103). An enum written under two plain names is one whose name the reference picks in a hash
+// map's order: the checker stops there.
 fn owner_names(c: Ck, owners: Ints) -> Strs {
     let out = strs_new();
     let mut i = 0;
     while i < ints_len(owners) {
-        strs_push(out, strs_get(c.ename, ta(c, ints_get(owners, i))));
+        let t = ints_get(owners, i);
+        let mut name = "";
+        let mut k = 0;
+        while k < strs_len(c.tnames) {
+            let n = strs_get(c.tnames, k);
+            if ints_get(c.ttys, k) == t && str_has(n, "::") == false {
+                if name != "" { stop(c, "an enum written under two names"); }
+                if name == "" { name = n; }
+            }
+            k = k + 1;
+        }
+        if name == "" { name = strs_get(c.ename, ta(c, t)); }
+        strs_push(out, name);
         i = i + 1;
     }
     out

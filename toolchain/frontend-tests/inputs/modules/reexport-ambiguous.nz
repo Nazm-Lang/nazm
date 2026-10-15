@@ -1,0 +1,6 @@
+use "lib/rx/base.nz";
+use "lib/rx/mid.nz";
+fn main() -> Int {
+    let p = make(1, 2);
+    p.x
+}
