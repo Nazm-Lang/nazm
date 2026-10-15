@@ -3169,7 +3169,6 @@ fn run_bounded(
     limit: std::time::Duration,
 ) -> Option<(Option<i32>, String, String)> {
     use std::io::Read;
-    use std::os::unix::process::CommandExt;
     use std::process::Stdio;
 
     fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
@@ -3196,13 +3195,15 @@ fn run_bounded(
     // Its own process group, so the deadline reaches what it started as well: a script's
     // stage, or a stage's program, still holding the pipes would keep both readers — and
     // this function — waiting after the child itself was killed.
-    let mut child = cmd
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .expect("spawn");
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().expect("spawn");
     let out = drain(child.stdout.take().expect("stdout pipe"));
     let err = drain(child.stderr.take().expect("stderr pipe"));
 

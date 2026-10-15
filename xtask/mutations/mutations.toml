@@ -18764,7 +18764,7 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "process_control::bo
 name = "r1d-the-interpreter-s-lstat-misses-a-link"
 why = "the interpreter's `os_lstat` never reports a symbolic link"
 file = "crates/nazm-core/src/eval/os.rs"
-find = '''                    let kind = if ft.is_symlink() {'''
+find = '''                    let kind = if ft.is_symlink() || reparse_point(&m) {'''
 replace = '''                    let kind = if false {'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
 
@@ -18772,8 +18772,8 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_p
 name = "r1d-the-interpreter-s-temporary-directory-is-open"
 why = "the interpreter makes a temporary directory `0o755`, not private"
 file = "crates/nazm-core/src/eval/os.rs"
-find = '''std::fs::Permissions::from_mode(0o700)'''
-replace = '''std::fs::Permissions::from_mode(0o755)'''
+find = '''if set_mode(&at, 0o700).is_err() {'''
+replace = '''if set_mode(&at, 0o755).is_err() {'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "platform_files::a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere" }]
 
 [[mutation]]

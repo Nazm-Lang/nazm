@@ -9,7 +9,6 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs as _, UdpSocket};
-use std::os::fd::AsRawFd as _;
 use std::time::{Duration, Instant};
 
 use nazm_sema::Intrinsic;
@@ -31,19 +30,15 @@ pub(super) fn shut(s: &TcpStream) {
 
 /// The host's `ETIMEDOUT`: what a deadline that runs out answers, as natively.
 const fn etimedout() -> i64 {
-    if cfg!(target_os = "linux") {
-        110
-    } else {
-        60
-    }
+    super::host::ETIMEDOUT
 }
 
 fn status(e: &std::io::Error) -> i64 {
     match e.raw_os_error() {
         // A read or write past `SO_RCVTIMEO` reports `EAGAIN`; the language says a deadline ran
-        // out.
+        // out. (Winsock says `WSAETIMEDOUT`, which is translated to the same.)
         Some(_) if e.kind() == std::io::ErrorKind::WouldBlock => -etimedout(),
-        Some(n) => -i64::from(n),
+        Some(_) => -super::host::errno(e),
         None if e.kind() == std::io::ErrorKind::TimedOut => -etimedout(),
         None => -EINVAL,
     }
@@ -69,7 +64,7 @@ pub(super) fn net_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 return handle(-EINVAL);
             };
             handle(match TcpListener::bind(at) {
-                Ok(l) => register(i64::from(l.as_raw_fd()), Object::Listener(l)),
+                Ok(l) => register(super::host::socket_key(&l), Object::Listener(l)),
                 Err(e) => status(&e),
             })
         }
@@ -85,7 +80,7 @@ pub(super) fn net_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                         match l.accept() {
                             Ok((s, _)) => {
                                 let _ = s.set_nonblocking(false);
-                                break register(i64::from(s.as_raw_fd()), Object::Tcp(s));
+                                break register(super::host::socket_key(&s), Object::Tcp(s));
                             }
                             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                 if object(*h).is_err() {
@@ -113,7 +108,7 @@ pub(super) fn net_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 TcpStream::connect(at)
             };
             handle(match r {
-                Ok(s) => register(i64::from(s.as_raw_fd()), Object::Tcp(s)),
+                Ok(s) => register(super::host::socket_key(&s), Object::Tcp(s)),
                 Err(e) => status(&e),
             })
         }
@@ -122,7 +117,7 @@ pub(super) fn net_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
                 return handle(-EINVAL);
             };
             handle(match UdpSocket::bind(at) {
-                Ok(u) => register(i64::from(u.as_raw_fd()), Object::Udp(u)),
+                Ok(u) => register(super::host::socket_key(&u), Object::Udp(u)),
                 Err(e) => status(&e),
             })
         }

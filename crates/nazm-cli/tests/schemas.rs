@@ -338,19 +338,21 @@ fn the_capability_inventory_matches_the_published_schema() {
 /// run gets its own process group, and the whole group is killed on the way out, so a
 /// looping case is not left running beneath a `nazm` that has already been stopped.
 fn test_corpus_with_deadline(corpus: &std::path::Path) -> std::process::Output {
-    use std::os::unix::process::CommandExt;
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(600);
     let dir = tempfile::tempdir().expect("tempdir");
     let out_path = dir.path().join("test.out");
     let err_path = dir.path().join("test.err");
-    let mut child = Command::new(NAZM)
-        .args(["test", "--json"])
+    let mut cmd = Command::new(NAZM);
+    cmd.args(["test", "--json"])
         .arg(corpus)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
-        .stderr(std::fs::File::create(&err_path).expect("stderr file"))
-        .process_group(0)
-        .spawn()
-        .expect("run");
+        .stderr(std::fs::File::create(&err_path).expect("stderr file"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().expect("run");
     let started = std::time::Instant::now();
     let status = loop {
         if let Some(status) = child.try_wait().expect("wait") {

@@ -492,11 +492,8 @@ pub(crate) fn observe(f: &procs::Finished, expected: usize, broad: bool) -> Obse
             f.stderr.lines().last().unwrap_or("").trim()
         ));
     }
-    {
-        use std::os::unix::process::ExitStatusExt as _;
-        if let Some(sig) = status.signal() {
-            return Observation::Failed(format!("the test runner was killed by signal {sig}"));
-        }
+    if let Some(sig) = procs::signal_of(status) {
+        return Observation::Failed(format!("the test runner was killed by signal {sig}"));
     }
     let count = |key: &str| -> usize {
         f.stdout
@@ -731,13 +728,10 @@ impl Executor for Real<'_> {
         self.rebuilt = rebuilt_units(&f.stdout);
         let b = match &f.ended {
             Ended::Exited(s) if s.success() => Build::Built,
-            Ended::Exited(s) => {
-                use std::os::unix::process::ExitStatusExt as _;
-                match s.signal() {
-                    Some(sig) => Build::Failed(format!("cargo build was killed by signal {sig}")),
-                    None => Build::Refused,
-                }
-            }
+            Ended::Exited(s) => match procs::signal_of(s) {
+                Some(sig) => Build::Failed(format!("cargo build was killed by signal {sig}")),
+                None => Build::Refused,
+            },
             Ended::TimedOut => Build::TimedOut(format!("deadline passed after {secs:.0}s")),
             other => Build::Failed(format!("{other:?}")),
         };
@@ -1723,7 +1717,7 @@ mod tests {
     #[test]
     fn the_libtest_summary_is_read_as_the_legacy_runner_read_it() {
         let f = procs::Finished {
-            ended: Ended::Exited(std::os::unix::process::ExitStatusExt::from_raw(256)),
+            ended: Ended::Exited(crate::suite::exited_with(1)),
             stdout: "running 2 tests\ntest a ... ok\ntest b ... FAILED\n\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.01s\n".to_owned(),
             stderr: "    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 2.50s\n".to_owned(),
             elapsed: Duration::from_secs(70),

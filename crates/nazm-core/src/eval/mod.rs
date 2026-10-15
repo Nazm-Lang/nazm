@@ -547,6 +547,7 @@ mod arith;
 mod channel;
 mod counters;
 mod exec;
+mod host;
 mod intrinsic;
 mod net;
 mod os;

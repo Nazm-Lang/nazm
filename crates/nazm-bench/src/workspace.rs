@@ -416,6 +416,8 @@ fn read_consistently(path: &Path, before: &fs::Metadata) -> std::io::Result<Vec<
 
     let mut file = fs::File::open(path)?;
 
+    #[cfg(not(unix))]
+    let _ = before;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;

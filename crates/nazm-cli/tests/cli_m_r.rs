@@ -34,11 +34,15 @@ mod order_hash;
 mod ownership_cycles;
 mod packages;
 mod patterns;
+// POSIX links, modes and `sh` scripts; Windows' answers differ by the spec (*Windows x86_64*).
+#[cfg(unix)]
 mod platform_files;
 mod platform_matrix;
 mod prelude;
 mod printing;
 mod process;
+// Children that are `sh` scripts.
+#[cfg(unix)]
 mod process_control;
 mod profiles;
 mod profiles_v2;

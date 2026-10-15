@@ -39,6 +39,9 @@
     clippy::panic,
     clippy::indexing_slicing
 )]
+// The lifecycle is process groups, signals and `sh`: POSIX's, where mutation campaigns run
+// (contained, on Linux). Not built on Windows (W1).
+#![cfg(unix)]
 
 use std::fs;
 use std::path::{Path, PathBuf};
