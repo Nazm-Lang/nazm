@@ -225,6 +225,13 @@
       of its own; its flows already walked at each exit (provenance). `inputs/check/defer.nz`.
       `run.sh check`: 2,779 agree, 22 differ; the checker carries 2,747, all agree (2,780 and
       2,748 with the new case)
+- [ ] 3.1zc Result types from the body (R1.5, D2; `check/infer.rs`): a `pub` function's or a
+      method's refused (N0634); the inferred bodies checked first, each after the inferred
+      functions it calls by name (`called_names`' walk, ported), a cycle's members refused
+      (N0634) and placed where met; each body's value its function's result type, one with none
+      refused (N0634); a `return` or `?` in such a body stops the checker.
+      `inputs/check/inferred-results.nz`. `run.sh check`: 2,785 agree, 17 differ; the checker
+      carries 2,754, all agree (2,786 and 2,755 with the new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

@@ -13,7 +13,8 @@
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s, tuples (the generic record of their arity), arrays and applications of any type; functions
-// with type parameters (and `Equality` requirements), effect parameters (N51) and contracts (N87);
+// with type parameters (and `Equality` requirements), effect parameters (N51) and contracts (N87),
+// and result types taken from an expression body (R1.5, D2);
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
 // assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`, `defer`;
 // literals,
@@ -1562,7 +1563,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
         if ints_len(kids(c, f, "effect_params")) > 0 && some(c, f, "method_of") { stop(c, "an effect parameter of a method"); }
-        if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
         // A function without a body is a foreign one, or one whose body did not parse.
         if some(c, f, "body") == false && some(c, f, "foreign") == false && gs(c, s_syntax()) != 1 { stop(c, "a function without a body"); }
         i = i + 1;
@@ -3910,6 +3910,13 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
                 eff = with_bit(0, 2);
             }
             if some(c, f, "export") { check_export(c, f, unwrap(c, f, "export"), pf, ret); }
+            // A result type left to an expression body (R1.5, D2) is the module's own business.
+            if flag(c, f, "inferred_result") && (some(c, f, "pub_span") || some(c, f, "method_of")) {
+                let mut whose = "`pub`";
+                if some(c, f, "method_of") { whose = "method's"; }
+                err(c, "N0634", ns, cat5("`", fname_of(c, f, "name"), "` must write its result type: a ", whose, " function's signature is its interface"),
+                        "write it after `:`, as `fn f(n: Int): Int = …`");
+            }
             strs_push(c.fnname, name);
             ints_push(c.fnmod, m);
             ints_push(c.fnclos, 0 - 1);
@@ -3929,7 +3936,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             ints_push(c.fnws, ws);
             ints_push(c.fnwe, we);
             let rts = fld(c, rt, "span");
-            if sx_s(c.t, rts) == sx_e(c.t, rts) { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
+            if sx_s(c.t, rts) == sx_e(c.t, rts) && flag(c, f, "inferred_result") == false { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
             ints_push(c.fntpf, strs_len(c.tpname));
             ints_push(c.fntpc, ints_len(tps));
             k = 0;
@@ -4126,11 +4133,267 @@ fn check_unit(c: Ck, m: Int) -> Int {
     trait_scope(c, m);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
+    // A result type left to an expression body (R1.5, D2) is settled before any caller is
+    // checked: those bodies first, each after the inferred functions it calls.
+    let inferred = infer_order(c, functions);
+    let mut i = 0;
+    while i < ints_len(inferred) {
+        check_function(c, ints_get(functions, ints_get(inferred, i)));
+        ss(c, s_eparam(), 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(functions) {
+        if index_of(inferred, i) < 0 {
+            check_function(c, ints_get(functions, i));
+            ss(c, s_eparam(), 0);
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// --- result types from the body (R1.5, D2; `check/infer.rs`) -----------------------------------
+
+// The positions in `functions` of those whose result type is inferred, callees before callers
+// (`infer::order`); each that reaches itself reported once (`N0634`) and placed where it was met.
+fn infer_order(c: Ck, functions: Ints) -> Ints {
+    let out = ints_new();
+    // The map the reference collects: a name's last inferred function.
+    let names = strs_new();
+    let at = ints_new();
     let mut i = 0;
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
-        check_function(c, f);
-        ss(c, s_eparam(), 0);
+        if flag(c, f, "inferred_result") && some(c, f, "method_of") == false {
+            let k = strs_find(names, fname_of(c, f, "name"));
+            if k >= 0 { ints_set(at, k, i); } else {
+                strs_push(names, fname_of(c, f, "name"));
+                ints_push(at, i);
+            }
+        }
+        i = i + 1;
+    }
+    if ints_len(at) == 0 { return out; }
+    let state = ints_new();
+    i = 0;
+    while i < ints_len(functions) {
+        ints_push(state, 0);
+        i = i + 1;
+    }
+    let starts = ints_new();
+    i = 0;
+    while i < ints_len(at) {
+        insert_sorted(starts, ints_get(at, i));
+        i = i + 1;
+    }
+    let reported = ints_new();
+    // The stack: each frame a function, with what it calls still to place at the end of `pool`
+    // from `fbase`.
+    let sf = ints_new();
+    let fbase = ints_new();
+    let pool = ints_new();
+    i = 0;
+    while i < ints_len(starts) {
+        let start = ints_get(starts, i);
+        if ints_get(state, start) == 0 {
+            ints_push(sf, start);
+            ints_push(fbase, ints_len(pool));
+            infer_calls(c, functions, names, at, start, pool);
+            ints_set(state, start, 1);
+            while ints_len(sf) > 0 {
+                let n = ints_get(sf, ints_len(sf) - 1);
+                let b = ints_get(fbase, ints_len(fbase) - 1);
+                if ints_len(pool) > b {
+                    let next = ints_pop(pool);
+                    let st = ints_get(state, next);
+                    if st == 1 {
+                        let mut on = false;
+                        let mut k = 0;
+                        while k < ints_len(sf) {
+                            if ints_get(sf, k) == next { on = true; }
+                            if on && index_of(reported, ints_get(sf, k)) < 0 { ints_push(reported, ints_get(sf, k)); }
+                            k = k + 1;
+                        }
+                    }
+                    if st == 0 {
+                        ints_set(state, next, 1);
+                        ints_push(sf, next);
+                        ints_push(fbase, ints_len(pool));
+                        infer_calls(c, functions, names, at, next, pool);
+                    }
+                } else {
+                    ints_set(state, n, 2);
+                    ints_push(out, n);
+                    ints_pop(sf);
+                    ints_pop(fbase);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    let sorted = ints_new();
+    i = 0;
+    while i < ints_len(reported) {
+        insert_sorted(sorted, ints_get(reported, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(sorted) {
+        let f = ints_get(functions, ints_get(sorted, i));
+        err(c, "N0634", fld(c, f, "name_span"), cat3("`", fname_of(c, f, "name"), "` reaches itself, so its result type cannot come from its body"),
+                "write it after `:`, as `fn f(n: Int): Int = …`");
+        i = i + 1;
+    }
+    out
+}
+
+// The inferred functions function `n`'s body calls by name (`called_names`), appended to `pool`.
+fn infer_calls(c: Ck, functions: Ints, names: Strs, at: Ints, n: Int, pool: Ints) -> Int {
+    let f = ints_get(functions, n);
+    if some(c, f, "body") == false { return 0; }
+    let called = called_names(c, unwrap(c, f, "body"));
+    let mut i = 0;
+    while i < strs_len(called) {
+        let k = strs_find(names, strs_get(called, i));
+        if k >= 0 { ints_push(pool, ints_get(at, k)); }
+        i = i + 1;
+    }
+    0
+}
+
+// Every name a block calls without a qualifier, in the order the reference's walk meets them
+// (`Block::called_names`).
+fn called_names(c: Ck, body: Int) -> Strs {
+    let out = strs_new();
+    let exprs = ints_new();
+    let blocks = ints_new();
+    ints_push(blocks, body);
+    while ints_len(blocks) > 0 || ints_len(exprs) > 0 {
+        if ints_len(blocks) > 0 {
+            let b = ints_pop(blocks);
+            let statements = kids(c, b, "statements");
+            let mut i = 0;
+            while i < ints_len(statements) {
+                let st = ints_get(statements, i);
+                if sx_kind(c.t, st) == tk_tuple() {
+                    let k = kind_of(c, st);
+                    let n = sx_kid(c.t, st, 0);
+                    if k == "Let" || k == "Assign" || k == "Return" { ints_push(exprs, fld(c, n, "value")); }
+                    if k == "While" {
+                        ints_push(exprs, fld(c, n, "cond"));
+                        ints_push(blocks, fld(c, n, "body"));
+                    }
+                    if k == "For" {
+                        let iter = fld(c, n, "iter");
+                        if sx_kind(c.t, iter) == tk_tuple() { ints_push(exprs, sx_kid(c.t, iter, 0)); } else {
+                            ints_push(exprs, fld(c, iter, "start"));
+                            ints_push(exprs, fld(c, iter, "end"));
+                        }
+                        ints_push(blocks, fld(c, n, "body"));
+                    }
+                    if k == "Expr" { ints_push(exprs, n); }
+                    if k == "Scope" || k == "Defer" { ints_push(blocks, fld(c, n, "body")); }
+                    if k == "Spawn" {
+                        let args = kids(c, n, "args");
+                        let mut a = 0;
+                        while a < ints_len(args) {
+                            ints_push(exprs, ints_get(args, a));
+                            a = a + 1;
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+            if some(c, b, "tail") { ints_push(exprs, unwrap(c, b, "tail")); }
+        } else {
+            let e = ints_pop(exprs);
+            push_children(c, e, exprs, blocks, out);
+        }
+    }
+    out
+}
+
+// An expression's call, if it is one by name, and its immediate sub-expressions and blocks
+// (`Expr::push_children`).
+fn push_children(c: Ck, e: Int, exprs: Ints, blocks: Ints, out: Strs) -> Int {
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() {
+        if k == "Block" { ints_push(blocks, sx_kid(c.t, e, 0)); }
+        return 0;
+    }
+    if k == "Call" && some(c, e, "qualifier") == false { strs_push(out, fname_of(c, e, "callee")); }
+    if k == "Closure" { ints_push(blocks, fld(c, e, "body")); }
+    if k == "Neg" || k == "Not" || k == "BitNot" || k == "Propagate" { ints_push(exprs, fld(c, e, "operand")); }
+    if k == "Array" || k == "Tuple" { push_all(exprs, kids(c, e, "elems")); }
+    if k == "ArrayRepeat" {
+        ints_push(exprs, fld(c, e, "value"));
+        ints_push(exprs, fld(c, e, "count"));
+    }
+    if k == "Index" {
+        ints_push(exprs, fld(c, e, "base"));
+        ints_push(exprs, fld(c, e, "index"));
+    }
+    if k == "Field" { ints_push(exprs, fld(c, e, "base")); }
+    if k == "Interp" {
+        let parts = kids(c, e, "parts");
+        let mut i = 0;
+        while i < ints_len(parts) {
+            if sx_kind(c.t, ints_get(parts, i)) != tk_tuple() { ints_push(exprs, fld(c, ints_get(parts, i), "expr")); }
+            i = i + 1;
+        }
+    }
+    if k == "Binary" {
+        ints_push(exprs, fld(c, e, "lhs"));
+        ints_push(exprs, fld(c, e, "rhs"));
+    }
+    if k == "Call" { push_all(exprs, kids(c, e, "args")); }
+    if k == "MethodCall" {
+        ints_push(exprs, fld(c, e, "receiver"));
+        push_all(exprs, kids(c, e, "args"));
+    }
+    if k == "Construct" || k == "Variant" {
+        let fields = kids(c, e, "fields");
+        let mut i = 0;
+        while i < ints_len(fields) {
+            ints_push(exprs, fld(c, ints_get(fields, i), "value"));
+            i = i + 1;
+        }
+    }
+    if k == "Match" {
+        ints_push(exprs, fld(c, e, "scrutinee"));
+        let arms = kids(c, e, "arms");
+        let mut i = 0;
+        while i < ints_len(arms) {
+            let arm = ints_get(arms, i);
+            if some(c, arm, "guard") { ints_push(exprs, unwrap(c, arm, "guard")); }
+            ints_push(exprs, fld(c, arm, "body"));
+            i = i + 1;
+        }
+    }
+    if k == "If" {
+        ints_push(exprs, fld(c, e, "cond"));
+        ints_push(blocks, fld(c, e, "then_block"));
+        if some(c, e, "else_block") { ints_push(blocks, unwrap(c, e, "else_block")); }
+    }
+    0
+}
+
+// `v` into the ascending `xs`.
+fn insert_sorted(xs: Ints, v: Int) -> Int {
+    let mut at = ints_len(xs);
+    let mut i = ints_len(xs) - 1;
+    while i >= 0 {
+        if ints_get(xs, i) > v { at = i; }
+        i = i - 1;
+    }
+    insert_int(xs, at, v)
+}
+
+fn push_all(to: Ints, xs: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        ints_push(to, ints_get(xs, i));
         i = i + 1;
     }
     0
@@ -4302,6 +4565,22 @@ fn check_function(c: Ck, f: Int) -> Int {
         return 0;
     }
     let body = unwrap(c, f, "body");
+    // An expression body with no result type written (R1.5, D2): its type is the function's
+    // result type, settled before any caller is checked; one with no value is `N0634`.
+    if flag(c, f, "inferred_result") {
+        ss(c, s_ret(), no_return_type());
+        ss(c, s_loop(), 0);
+        ss(c, s_defer(), 0);
+        let got = check_block(c, body, none());
+        if got >= 0 {
+            if id >= 0 { ints_set(c.fnret, id, got); }
+        } else {
+            err(c, "N0634", fld(c, body, "span"), cat3("`", name, "`'s body has no value to take its result type from"),
+                    "write the body as a block, `fn f() { … }`, for a function that returns nothing");
+        }
+        close_scope(c);
+        return 0;
+    }
     ss(c, s_ret(), declared);
     ss(c, s_rs(), rts);
     ss(c, s_loop(), 0);
@@ -4819,8 +5098,15 @@ fn check_while(c: Ck, w: Int) -> Int {
     0
 }
 
+// The return type while an inferred body is checked: none yet.
+fn no_return_type() -> Int { 0 - 5 }
+
 fn check_return(c: Ck, r: Int) -> Int {
     let declared = gs(c, s_ret());
+    if declared == no_return_type() {
+        stop(c, "a `return` in a body whose result type is inferred");
+        return 0;
+    }
     let value = fld(c, r, "value");
     let actual = value_type(c, value, declared);
     if assignable(c, actual, declared) == false {
@@ -9669,6 +9955,10 @@ fn check_propagate(c: Ck, e: Int, expected: Int) -> Int {
         return or_int(expected);
     }
     let declared = gs(c, s_ret());
+    if declared == no_return_type() {
+        stop(c, "a `?` in a body whose result type is inferred");
+        return or_int(expected);
+    }
     let shown_ret = show(c, declared);
     let rspan = gs(c, s_rs());
     if prelude_enum(c, ot, "Option") {
