@@ -1,0 +1,1581 @@
+// `@std/http`: HTTP/1.1 over TCP, server and client, and a small router (v1 track C, C2).
+//
+// Imported with `use "@std/http";` beside `use "@std/ioerror";` and `use "@std/net";`. The wire
+// format is RFC 9112's and the semantics RFC 9110's; `docs/spec.md`, *HTTP*, states what is
+// accepted and what is refused, and the design record is `openspec/changes/v1-every-domain/
+// design.md`, section C. The parsers are pure and see only bytes already received (sans-I/O), so
+// `@std/tls` (C1) supplies decrypted bytes to the same parsers without a change to them: a
+// connection's `tls` field is `0` for plain TCP until then. Every value a task needs — `Request`,
+// `Response`, `Headers`, `HttpServer`, `HttpConn` — may cross into one.
+
+use "@std/ioerror";
+use "@std/net";
+
+/// Header fields in the order received: each name lower-cased, each value without the
+/// whitespace around it.
+pub struct Headers {
+    lines: Str,
+}
+
+/// A request: method, target as sent, its path and query, version (`HTTP/1.1` or `HTTP/1.0`),
+/// header fields, the whole body (de-chunked), the router's parameters and the peer's address.
+pub struct Request {
+    method: Str,
+    target: Str,
+    path: Str,
+    query: Str,
+    version: Str,
+    headers: Headers,
+    body: Str,
+    params: Str,
+    peer: Str,
+}
+
+/// A response: status, header fields, the whole body.
+pub struct Response {
+    status: Int,
+    headers: Headers,
+    body: Str,
+}
+
+/// What failed: the socket, the protocol (with the status a server answers it with), or a request
+/// for something this module does not do.
+pub enum HttpError {
+    Io(error: IoError),
+    Protocol(status: Int, why: Str),
+    Unsupported(why: Str),
+}
+
+/// A server's limits and deadlines. `http_serve_options()` gives the defaults.
+pub struct ServeOptions {
+    max_head: Int,
+    max_headers: Int,
+    max_target: Int,
+    max_body: Int,
+    head_timeout_ms: Int,
+    idle_timeout_ms: Int,
+    body_timeout_ms: Int,
+    write_timeout_ms: Int,
+    max_requests: Int,
+    max_connections: Int,
+}
+
+/// A client's limits and deadline. `http_client_options()` gives the defaults.
+pub struct ClientOptions {
+    timeout_ms: Int,
+    max_head: Int,
+    max_headers: Int,
+    max_body: Int,
+}
+
+/// A listening server: its listener, whether it is draining, what it has served and accepted, the
+/// gate that caps open connections, its options and its TLS configuration (`0`: plain TCP).
+pub struct HttpServer {
+    listener: TcpListener,
+    draining: Atomic,
+    served: Atomic,
+    accepted: Atomic,
+    gate: Chan,
+    options: ServeOptions,
+    tls: Int,
+}
+
+/// An accepted connection and its TLS session (`0`: plain TCP).
+pub struct HttpConn {
+    stream: TcpStream,
+    tls: Int,
+}
+
+/// What `http_serve` did: requests answered and connections accepted.
+pub struct ServeStats {
+    requests: Int,
+    connections: Int,
+}
+
+/// A URL `http_url_parse` took apart: scheme (lower-cased), host as written, port, and the target
+/// (path and query, `/` when empty).
+pub struct Url {
+    scheme: Str,
+    host: Str,
+    port: Int,
+    target: Str,
+}
+
+/// A client connection kept open for several requests, in order.
+pub struct HttpClient {
+    stream: TcpStream,
+    authority: Str,
+    options: ClientOptions,
+    pending: Vec[Str],
+    tls: Int,
+}
+
+/// What a router made of a request: an answer, a path routed for other methods only (those
+/// methods, for `Allow`), or nothing.
+pub enum Routed {
+    Answered(response: Response),
+    NotAllowed(allow: Str),
+    NotFound,
+}
+
+/// Routes, tried in the order they were added; the first whose method and pattern match answers.
+pub struct Router {
+    step: fn(Request) -> Routed ! { io },
+}
+
+// A request waiting for the serving task's handler, and where its response goes.
+struct Pending {
+    request: Request,
+    reply: Chan[Response],
+}
+
+// What a parse step answers: done (`status` 0, `value`, `at` where it ended), more bytes needed
+// (`status` 1), or the HTTP status refusing it with `why`.
+struct Step {
+    status: Int,
+    value: Str,
+    at: Int,
+    why: Str,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bytes
+
+fn cr() -> Str ! {} {
+    str_from_byte(13)
+}
+
+fn lf() -> Str ! {} {
+    str_from_byte(10)
+}
+
+fn crlf() -> Str ! {} {
+    str_concat(str_from_byte(13), str_from_byte(10))
+}
+
+fn is_digit(b: Int) -> Bool ! {} {
+    b >= 48 && b <= 57
+}
+
+fn hex_value(b: Int) -> Int ! {} {
+    if b >= 48 && b <= 57 { b - 48 } else { if b >= 97 && b <= 102 { b - 87 } else { if b >= 65 && b <= 70 { b - 55 } else { 0 - 1 } } }
+}
+
+// RFC 9110's `tchar`.
+fn is_tchar(b: Int) -> Bool ! {} {
+    if b >= 48 && b <= 57 { return true; }
+    if b >= 65 && b <= 90 { return true; }
+    if b >= 97 && b <= 122 { return true; }
+    b == 33 || b == 35 || b == 36 || b == 37 || b == 38 || b == 39 || b == 42 || b == 43 || b == 45 || b == 46 || b == 94 || b == 95 || b == 96 || b == 124 || b == 126
+}
+
+fn is_token(s: Str) -> Bool ! {} {
+    if str_len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < str_len(s) {
+        if !is_tchar(str_byte(s, i)) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// A field value's bytes: HTAB, visible ASCII, space and obs-text; never a control or DEL.
+fn is_field_value(s: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b != 9 && (b < 32 || b == 127) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn lower(s: Str) -> Str ! {} {
+    let mut i = 0;
+    let mut plain = true;
+    while i < str_len(s) && plain {
+        let b = str_byte(s, i);
+        if b >= 65 && b <= 90 { plain = false; }
+        i = i + 1;
+    }
+    if plain { return s; }
+    let parts = strs_new();
+    i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        strs_push(parts, str_from_byte(if b >= 65 && b <= 90 { b + 32 } else { b }));
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+fn is_ows(b: Int) -> Bool ! {} {
+    b == 32 || b == 9
+}
+
+fn trim_ows(s: Str) -> Str ! {} {
+    let mut a = 0;
+    let mut b = str_len(s);
+    while a < b && is_ows(str_byte(s, a)) { a = a + 1; }
+    while b > a && is_ows(str_byte(s, b - 1)) { b = b - 1; }
+    str_slice(s, a, b)
+}
+
+// The first `needle` in `s` at or after `from`, or -1.
+fn find_from(s: Str, needle: Str, from: Int) -> Int ! {} {
+    let n = str_len(needle);
+    let m = str_len(s);
+    let mut i = from;
+    while i + n <= m {
+        if str_byte(s, i) == str_byte(needle, 0) && str_slice(s, i, i + n) == needle { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn find_byte(s: Str, b: Int, from: Int) -> Int ! {} {
+    let mut i = from;
+    while i < str_len(s) {
+        if str_byte(s, i) == b { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// A decimal count of at most 18 digits, or -1.
+fn parse_count(s: Str) -> Int ! {} {
+    if str_len(s) == 0 || str_len(s) > 18 { return 0 - 1; }
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if !is_digit(b) { return 0 - 1; }
+        n = n * 10 + (b - 48);
+        i = i + 1;
+    }
+    n
+}
+
+fn done(value: Str, at: Int) -> Step ! {} {
+    Step(status: 0, value: value, at: at, why: "")
+}
+
+fn more() -> Step ! {} {
+    Step(status: 1, value: "", at: 0, why: "")
+}
+
+fn refuse(status: Int, why: Str) -> Step ! {} {
+    Step(status: status, value: "", at: 0, why: why)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Header fields
+
+/// No header fields.
+pub fn http_headers() -> Headers ! {} {
+    Headers(lines: "")
+}
+
+/// `h` with the field `name: value` added after the others; the name is lower-cased. A name that
+/// is not a token, or a value holding a control byte, is kept as an invalid field, which a server
+/// answers with 500 and a client refuses to send.
+pub fn http_header_add(h: Headers, name: Str, value: Str) -> Headers ! {} {
+    let v = trim_ows(value);
+    if is_token(name) && is_field_value(v) {
+        Headers(lines: str_concat(h.lines, str_concat(str_concat(lower(name), ":"), str_concat(v, lf()))))
+    } else {
+        Headers(lines: str_concat(h.lines, str_concat(":", lf())))
+    }
+}
+
+/// How many fields `h` holds.
+pub fn http_header_count(h: Headers) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(h.lines) {
+        if str_byte(h.lines, i) == 10 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// Where field `k` starts, or -1.
+fn field_start(h: Headers, k: Int) -> Int ! {} {
+    let mut at = 0;
+    let mut i = 0;
+    while i < k {
+        let nl = find_byte(h.lines, 10, at);
+        if nl < 0 { return 0 - 1; }
+        at = nl + 1;
+        i = i + 1;
+    }
+    if at < str_len(h.lines) { at } else { 0 - 1 }
+}
+
+// Where the line from `at` ends: its line feed, or the end of `lines`.
+fn line_end(lines: Str, at: Int) -> Int ! {} {
+    let nl = find_byte(lines, 10, at);
+    if nl < 0 { str_len(lines) } else { nl }
+}
+
+// The colon of the field from `at` to `nl`, or `nl` when it has none (a value built by hand).
+fn colon_of(lines: Str, at: Int, nl: Int) -> Int ! {} {
+    let c = find_byte(lines, 58, at);
+    if c < 0 || c > nl { nl } else { c }
+}
+
+/// The name of field `i` (from 0), or `""` past the end.
+pub fn http_header_name_at(h: Headers, i: Int) -> Str ! {} {
+    let at = field_start(h, i);
+    if at < 0 { return ""; }
+    let nl = line_end(h.lines, at);
+    str_slice(h.lines, at, colon_of(h.lines, at, nl))
+}
+
+/// The value of field `i` (from 0), or `""` past the end.
+pub fn http_header_value_at(h: Headers, i: Int) -> Str ! {} {
+    let at = field_start(h, i);
+    if at < 0 { return ""; }
+    let nl = line_end(h.lines, at);
+    let c = colon_of(h.lines, at, nl);
+    if c == nl { "" } else { str_slice(h.lines, c + 1, nl) }
+}
+
+/// Every value of the fields named `name` (any case), in order.
+pub fn http_header_all(h: Headers, name: Str) -> Strs ! {} {
+    let want = lower(name);
+    let out = strs_new();
+    let mut at = 0;
+    while at < str_len(h.lines) {
+        let nl = line_end(h.lines, at);
+        let colon = colon_of(h.lines, at, nl);
+        if colon < nl && str_slice(h.lines, at, colon) == want { strs_push(out, str_slice(h.lines, colon + 1, nl)); }
+        at = nl + 1;
+    }
+    out
+}
+
+/// The first value of the field named `name` (any case), or `None`.
+pub fn http_header_get(h: Headers, name: Str) -> Option[Str] ! {} {
+    let all = http_header_all(h, name);
+    if strs_len(all) == 0 { Option[Str].None() } else { Option[Str].Some(value: strs_get(all, 0)) }
+}
+
+/// Whether a field named `name` (any case) is present.
+pub fn http_header_has(h: Headers, name: Str) -> Bool ! {} {
+    strs_len(http_header_all(h, name)) > 0
+}
+
+/// `h` without the fields named `name` (any case).
+pub fn http_header_remove(h: Headers, name: Str) -> Headers ! {} {
+    let want = lower(name);
+    let parts = strs_new();
+    let mut at = 0;
+    while at < str_len(h.lines) {
+        let nl = line_end(h.lines, at);
+        let colon = colon_of(h.lines, at, nl);
+        if str_slice(h.lines, at, colon) != want { strs_push(parts, str_concat(str_slice(h.lines, at, nl), lf())); }
+        at = nl + 1;
+    }
+    Headers(lines: str_join(parts, ""))
+}
+
+// The comma-separated elements of every field named `name`, trimmed and lower-cased; empty ones
+// dropped (RFC 9110 §5.6.1).
+fn header_tokens(h: Headers, name: Str) -> Strs ! {} {
+    let all = http_header_all(h, name);
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(all) {
+        let v = strs_get(all, i);
+        let mut start = 0;
+        let mut j = 0;
+        while j <= str_len(v) {
+            if j == str_len(v) || str_byte(v, j) == 44 {
+                let t = trim_ows(str_slice(v, start, j));
+                if str_len(t) > 0 { strs_push(out, lower(t)); }
+                start = j + 1;
+            }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Whether some field named `name` lists `token` (any case) among its comma-separated elements,
+/// as `Connection: close` does.
+pub fn http_header_has_token(h: Headers, name: Str, token: Str) -> Bool ! {} {
+    let all = header_tokens(h, name);
+    let want = lower(token);
+    let mut i = 0;
+    while i < strs_len(all) {
+        if strs_get(all, i) == want { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Whether every field is a token, a colon and a value without a control byte: what was added
+// through `http_header_add` or parsed always is; one built by hand may not be.
+fn headers_valid(h: Headers) -> Bool ! {} {
+    let mut at = 0;
+    while at < str_len(h.lines) {
+        let nl = find_byte(h.lines, 10, at);
+        if nl < 0 { return false; }
+        let colon = colon_of(h.lines, at, nl);
+        if colon == nl || !is_token(str_slice(h.lines, at, colon)) || !is_field_value(str_slice(h.lines, colon + 1, nl)) { return false; }
+        at = nl + 1;
+    }
+    true
+}
+
+// ---------------------------------------------------------------------------------------------
+// Messages
+
+/// The reason phrase RFC 9110 gives `status`, or `""`.
+pub fn http_reason(status: Int) -> Str ! {} {
+    if status == 100 { return "Continue"; }
+    if status == 101 { return "Switching Protocols"; }
+    if status == 200 { return "OK"; }
+    if status == 201 { return "Created"; }
+    if status == 202 { return "Accepted"; }
+    if status == 204 { return "No Content"; }
+    if status == 206 { return "Partial Content"; }
+    if status == 301 { return "Moved Permanently"; }
+    if status == 302 { return "Found"; }
+    if status == 303 { return "See Other"; }
+    if status == 304 { return "Not Modified"; }
+    if status == 307 { return "Temporary Redirect"; }
+    if status == 308 { return "Permanent Redirect"; }
+    if status == 400 { return "Bad Request"; }
+    if status == 401 { return "Unauthorized"; }
+    if status == 403 { return "Forbidden"; }
+    if status == 404 { return "Not Found"; }
+    if status == 405 { return "Method Not Allowed"; }
+    if status == 408 { return "Request Timeout"; }
+    if status == 409 { return "Conflict"; }
+    if status == 410 { return "Gone"; }
+    if status == 411 { return "Length Required"; }
+    if status == 413 { return "Content Too Large"; }
+    if status == 414 { return "URI Too Long"; }
+    if status == 415 { return "Unsupported Media Type"; }
+    if status == 417 { return "Expectation Failed"; }
+    if status == 422 { return "Unprocessable Content"; }
+    if status == 429 { return "Too Many Requests"; }
+    if status == 431 { return "Request Header Fields Too Large"; }
+    if status == 500 { return "Internal Server Error"; }
+    if status == 501 { return "Not Implemented"; }
+    if status == 502 { return "Bad Gateway"; }
+    if status == 503 { return "Service Unavailable"; }
+    if status == 504 { return "Gateway Timeout"; }
+    if status == 505 { return "HTTP Version Not Supported"; }
+    ""
+}
+
+/// A response with `status`, a `content-type` field (none when `content_type` is `""`) and `body`.
+pub fn http_response(status: Int, content_type: Str, body: Str) -> Response ! {} {
+    let h = if str_len(content_type) > 0 { http_header_add(http_headers(), "content-type", content_type) } else { http_headers() };
+    Response(status: status, headers: h, body: body)
+}
+
+/// A `text/plain; charset=utf-8` response.
+pub fn http_text(status: Int, body: Str) -> Response ! {} {
+    http_response(status, "text/plain; charset=utf-8", body)
+}
+
+/// An `application/json` response.
+pub fn http_json(status: Int, body: Str) -> Response ! {} {
+    http_response(status, "application/json", body)
+}
+
+/// A response with no body and no `content-type`.
+pub fn http_empty(status: Int) -> Response ! {} {
+    http_response(status, "", "")
+}
+
+/// `r` with the field `name: value` added (`http_header_add`'s rules).
+pub fn http_with_header(r: Response, name: Str, value: Str) -> Response ! {} {
+    Response(status: r.status, headers: http_header_add(r.headers, name, value), body: r.body)
+}
+
+// The path and query of an origin-form target.
+fn split_target(target: Str) -> Step ! {} {
+    let q = find_byte(target, 63, 0);
+    if q < 0 { done(target, str_len(target)) } else { done(str_slice(target, 0, q), q) }
+}
+
+/// A request for a client to send: `method` and `target` (origin form, `/path?query`), `body`,
+/// version `HTTP/1.1`, no fields yet.
+pub fn http_request(method: Str, target: Str, body: Str) -> Request ! {} {
+    let t = split_target(target);
+    let query = if t.at < str_len(target) { str_slice(target, t.at + 1, str_len(target)) } else { "" };
+    Request(method: method, target: target, path: t.value, query: query, version: "HTTP/1.1", headers: http_headers(), body: body, params: "", peer: "")
+}
+
+/// `r` with the field `name: value` added (`http_header_add`'s rules).
+pub fn http_request_with_header(r: Request, name: Str, value: Str) -> Request ! {} {
+    Request(method: r.method, target: r.target, path: r.path, query: r.query, version: r.version, headers: http_header_add(r.headers, name, value), body: r.body, params: r.params, peer: r.peer)
+}
+
+/// `s` with each `%XX` decoded, or `None` for a `%` not followed by two hexadecimal digits.
+pub fn http_percent_decode(s: Str) -> Option[Str] ! {} {
+    if find_byte(s, 37, 0) < 0 { return Option[Str].Some(value: s); }
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 37 {
+            if i + 2 >= str_len(s) { return Option[Str].None(); }
+            let hi = hex_value(str_byte(s, i + 1));
+            let lo = hex_value(str_byte(s, i + 2));
+            if hi < 0 || lo < 0 { return Option[Str].None(); }
+            strs_push(parts, str_from_byte(hi * 16 + lo));
+            i = i + 3;
+        } else {
+            strs_push(parts, str_from_byte(b));
+            i = i + 1;
+        }
+    }
+    Option[Str].Some(value: str_join(parts, ""))
+}
+
+/// The first value of the query parameter `name`, form-decoded (`+` is a space), or `None` when it
+/// is absent or its encoding is malformed.
+pub fn http_query(r: Request, name: Str) -> Option[Str] ! {} {
+    let q = r.query;
+    let mut start = 0;
+    let mut j = 0;
+    while j <= str_len(q) {
+        if j == str_len(q) || str_byte(q, j) == 38 {
+            let pair = str_slice(q, start, j);
+            let eq = find_byte(pair, 61, 0);
+            let k = if eq < 0 { pair } else { str_slice(pair, 0, eq) };
+            let v = if eq < 0 { "" } else { str_slice(pair, eq + 1, str_len(pair)) };
+            match http_percent_decode(plus_to_space(k)) {
+                Option.Some(value: key) => {
+                    if key == name { return http_percent_decode(plus_to_space(v)); }
+                },
+                Option.None() => {},
+            };
+            start = j + 1;
+        }
+        j = j + 1;
+    }
+    Option[Str].None()
+}
+
+fn plus_to_space(s: Str) -> Str ! {} {
+    if find_byte(s, 43, 0) < 0 { return s; }
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        strs_push(parts, str_from_byte(if b == 43 { 32 } else { b }));
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+// A router's parameters: each name and value as `LENGTH:BYTES`.
+fn param_piece(s: Str) -> Str ! {} {
+    str_concat(str_concat(int_to_str(str_len(s)), ":"), s)
+}
+
+/// The value the router matched for the pattern's `{name}` (`*` for a trailing `*`), decoded, or
+/// `None`.
+pub fn http_param(r: Request, name: Str) -> Option[Str] ! {} {
+    let p = r.params;
+    let mut at = 0;
+    let mut key = "";
+    let mut is_key = true;
+    while at < str_len(p) {
+        let colon = find_byte(p, 58, at);
+        if colon < 0 { return Option[Str].None(); }
+        let n = parse_count(str_slice(p, at, colon));
+        if n < 0 || colon + 1 + n > str_len(p) { return Option[Str].None(); }
+        let piece = str_slice(p, colon + 1, colon + 1 + n);
+        if is_key {
+            key = piece;
+        } else {
+            if key == name { return Option[Str].Some(value: piece); }
+        }
+        is_key = !is_key;
+        at = colon + 1 + n;
+    }
+    Option[Str].None()
+}
+
+/// What `e` says, for a person.
+pub fn http_error_show(e: HttpError) -> Str ! {} {
+    match e {
+        HttpError.Io(error: x) => io_error_show(x),
+        HttpError.Protocol(status: s, why: w) => str_concat(str_concat(int_to_str(s), " "), w),
+        HttpError.Unsupported(why: w) => str_concat("unsupported: ", w),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parsing (pure: each step sees the bytes received so far and answers done, more or a refusal)
+
+/// The defaults: a 16 KiB head of at most 100 fields and an 8 KiB target, a 1 MiB body; 10 s for
+/// the head, 60 s idle between requests, 30 s for each body read and each write; 1000 requests a
+/// connection and 10 000 open connections.
+pub fn http_serve_options() -> ServeOptions ! {} {
+    ServeOptions(max_head: 16384, max_headers: 100, max_target: 8192, max_body: 1048576, head_timeout_ms: 10000, idle_timeout_ms: 60000, body_timeout_ms: 30000, write_timeout_ms: 30000, max_requests: 1000, max_connections: 10000)
+}
+
+/// The defaults: 30 s for each wait, a 64 KiB head of at most 100 fields, a 16 MiB body.
+pub fn http_client_options() -> ClientOptions ! {} {
+    ClientOptions(timeout_ms: 30000, max_head: 65536, max_headers: 100, max_body: 16777216)
+}
+
+// The head in `buf`, ignoring empty lines before it (RFC 9112 §2.2): done with `value` its text up
+// to and including the last field's CRLF and `at` just after the empty line; more while incomplete,
+// with `at` where the next call resumes its scan (`scan`, from 0 the first time); 400 for a bare
+// carriage return or line feed, found as soon as it arrives; 431 once `max` bytes hold no end.
+fn find_head(buf: Str, scan: Int, max: Int) -> Step ! {} {
+    let n = str_len(buf);
+    let mut start = 0;
+    while start + 1 < n && str_byte(buf, start) == 13 && str_byte(buf, start + 1) == 10 {
+        start = start + 2;
+    }
+    let mut i = if scan > start { scan } else { start };
+    while i < n {
+        let b = str_byte(buf, i);
+        if b == 10 {
+            if i == start || str_byte(buf, i - 1) != 13 { return refuse(400, "a bare line feed"); }
+            if i >= start + 3 && str_byte(buf, i - 2) == 10 && str_byte(buf, i - 3) == 13 {
+                if i + 1 - start > max { return refuse(431, "the head is too large"); }
+                return Step(status: 0, value: str_slice(buf, start, i - 1), at: i + 1, why: "");
+            }
+        }
+        if b == 13 && i + 1 < n && str_byte(buf, i + 1) != 10 { return refuse(400, "a bare carriage return"); }
+        if i + 1 - start > max { return refuse(431, "the head is too large"); }
+        i = i + 1;
+    }
+    Step(status: 1, value: "", at: if n - 1 > start { n - 1 } else { start }, why: "")
+}
+
+// The head's lines, each without its CRLF; a bare CR or LF refused.
+fn head_lines(head: Str) -> Result[Strs, Str] ! {} {
+    let lines = strs_new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < str_len(head) {
+        let b = str_byte(head, i);
+        if b == 13 {
+            if i + 1 >= str_len(head) || str_byte(head, i + 1) != 10 { return Result[Strs, Str].Err(error: "a bare carriage return"); }
+            strs_push(lines, str_slice(head, start, i));
+            i = i + 2;
+            start = i;
+        } else {
+            if b == 10 { return Result[Strs, Str].Err(error: "a bare line feed"); }
+            i = i + 1;
+        }
+    }
+    if start < str_len(head) { return Result[Strs, Str].Err(error: "a line without its end"); }
+    Result[Strs, Str].Ok(value: lines)
+}
+
+// Header field lines from `first`, into `Headers`; obs-fold, a space before the colon, a name
+// that is not a token and a value holding a control byte refused (RFC 9112 §5).
+fn parse_fields(lines: Strs, first: Int, max: Int) -> Result[Headers, HttpError] ! {} {
+    let mut h = http_headers();
+    let mut i = first;
+    while i < strs_len(lines) {
+        let l = strs_get(lines, i);
+        if i - first >= max { return Result[Headers, HttpError].Err(error: HttpError.Protocol(status: 431, why: "too many header fields")); }
+        if str_len(l) > 0 && is_ows(str_byte(l, 0)) { return Result[Headers, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a folded header line")); }
+        let colon = find_byte(l, 58, 0);
+        if colon <= 0 { return Result[Headers, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a header line without a name and a colon")); }
+        let name = str_slice(l, 0, colon);
+        if !is_token(name) { return Result[Headers, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a header name that is not a token")); }
+        let value = trim_ows(str_slice(l, colon + 1, str_len(l)));
+        if !is_field_value(value) { return Result[Headers, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a control byte in a header value")); }
+        h = http_header_add(h, name, value);
+        i = i + 1;
+    }
+    Result[Headers, HttpError].Ok(value: h)
+}
+
+fn version_ok(v: Str) -> Int ! {} {
+    if v == "HTTP/1.1" || v == "HTTP/1.0" { return 0; }
+    if str_len(v) == 8 && str_slice(v, 0, 5) == "HTTP/" && is_digit(str_byte(v, 5)) && str_byte(v, 6) == 46 && is_digit(str_byte(v, 7)) { return 505; }
+    400
+}
+
+// The request target's form: its path and query, or why it is refused.
+fn target_path(method: Str, target: Str) -> Result[Request, HttpError] ! {} {
+    let mut i = 0;
+    while i < str_len(target) {
+        let b = str_byte(target, i);
+        if b <= 32 || b >= 127 { return Result[Request, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a request target with a byte a URI cannot hold")); }
+        i = i + 1;
+    }
+    if target == "*" {
+        if method == "OPTIONS" { return Result[Request, HttpError].Ok(value: http_request(method, "*", "")); }
+        return Result[Request, HttpError].Err(error: HttpError.Protocol(status: 400, why: "the asterisk target outside OPTIONS"));
+    }
+    if str_byte(target, 0) == 47 { return Result[Request, HttpError].Ok(value: http_request(method, target, "")); }
+    let low = lower(target);
+    let skip = if str_len(low) > 7 && str_slice(low, 0, 7) == "http://" { 7 } else { if str_len(low) > 8 && str_slice(low, 0, 8) == "https://" { 8 } else { 0 } };
+    if skip == 0 { return Result[Request, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a request target in no form this server serves")); }
+    let slash = find_byte(target, 47, skip);
+    let q = find_byte(target, 63, skip);
+    let cut = if slash < 0 { q } else { if q >= 0 && q < slash { q } else { slash } };
+    let origin = if cut < 0 { "/" } else { if str_byte(target, cut) == 63 { str_concat("/", str_slice(target, cut, str_len(target))) } else { str_slice(target, cut, str_len(target)) } };
+    let r = http_request(method, origin, "");
+    Result[Request, HttpError].Ok(value: Request(method: r.method, target: target, path: r.path, query: r.query, version: r.version, headers: r.headers, body: "", params: "", peer: ""))
+}
+
+fn bad(status: Int, why: Str) -> Result[Request, HttpError] ! {} {
+    Result[Request, HttpError].Err(error: HttpError.Protocol(status: status, why: why))
+}
+
+// A request head (its text up to and including the last field's CRLF), checked: the request line,
+// the target's form, the version, the fields, `Host`, and that the body's framing is one this
+// server can read. The body is `""`.
+fn parse_request_head(head: Str, o: ServeOptions) -> Result[Request, HttpError] ! {} {
+    let lines = match head_lines(head) {
+        Result.Ok(value: ls) => ls,
+        Result.Err(error: why) => { return bad(400, why); },
+    };
+    if strs_len(lines) == 0 { return bad(400, "no request line"); }
+    let line = strs_get(lines, 0);
+    let sp1 = find_byte(line, 32, 0);
+    if sp1 <= 0 { return bad(400, "a request line without a method"); }
+    let sp2 = find_byte(line, 32, sp1 + 1);
+    if sp2 < 0 || sp2 == sp1 + 1 { return bad(400, "a request line without a target"); }
+    let method = str_slice(line, 0, sp1);
+    let target = str_slice(line, sp1 + 1, sp2);
+    let version = str_slice(line, sp2 + 1, str_len(line));
+    if !is_token(method) { return bad(400, "a method that is not a token"); }
+    let v = version_ok(version);
+    if v == 400 { return bad(400, "a malformed version"); }
+    if v == 505 { return bad(505, "a version other than HTTP/1.1 and HTTP/1.0"); }
+    if str_len(target) > o.max_target { return bad(414, "the target is too long"); }
+    if method == "CONNECT" { return bad(501, "CONNECT is not served"); }
+    let base = match target_path(method, target) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return Result[Request, HttpError].Err(error: e); },
+    };
+    let h = match parse_fields(lines, 1, o.max_headers) {
+        Result.Ok(value: h) => h,
+        Result.Err(error: e) => { return Result[Request, HttpError].Err(error: e); },
+    };
+    let hosts = strs_len(http_header_all(h, "host"));
+    if hosts > 1 { return bad(400, "more than one Host field"); }
+    if hosts == 0 && version == "HTTP/1.1" { return bad(400, "an HTTP/1.1 request without Host"); }
+    let r = Request(method: method, target: base.target, path: base.path, query: base.query, version: version, headers: h, body: "", params: "", peer: "");
+    match framing(h, version == "HTTP/1.0", o.max_body) {
+        Result.Ok(value: n) => Result[Request, HttpError].Ok(value: r),
+        Result.Err(error: e) => Result[Request, HttpError].Err(error: e),
+    }
+}
+
+// How the body is framed: its length, or -1 for chunked. Transfer-Encoding with Content-Length,
+// a coding other than chunked, chunked not last or twice, Transfer-Encoding in HTTP/1.0, and a
+// Content-Length that is not one decimal count are refused (RFC 9112 §6, the smuggling rules).
+fn framing(h: Headers, http10: Bool, max_body: Int) -> Result[Int, HttpError] ! {} {
+    let te = header_tokens(h, "transfer-encoding");
+    let has_te = http_header_has(h, "transfer-encoding");
+    let cls = http_header_all(h, "content-length");
+    if has_te {
+        if strs_len(cls) > 0 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "both Transfer-Encoding and Content-Length")); }
+        if http10 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "Transfer-Encoding in an HTTP/1.0 message")); }
+        let mut i = 0;
+        while i < strs_len(te) {
+            if strs_get(te, i) != "chunked" { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 501, why: "a transfer coding other than chunked")); }
+            i = i + 1;
+        }
+        if strs_len(te) != 1 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "chunked more than once, or no coding")); }
+        return Result[Int, HttpError].Ok(value: 0 - 1);
+    }
+    if strs_len(cls) == 0 { return Result[Int, HttpError].Ok(value: 0); }
+    let all = header_tokens(h, "content-length");
+    if strs_len(all) == 0 { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "an empty Content-Length")); }
+    let first = strs_get(all, 0);
+    let mut i = 0;
+    while i < strs_len(all) {
+        let t = strs_get(all, i);
+        if t != first { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "Content-Length values that differ")); }
+        let mut j = 0;
+        while j < str_len(t) {
+            if !is_digit(str_byte(t, j)) { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a Content-Length that is not a decimal count")); }
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let n = parse_count(first);
+    if n < 0 || n > max_body { return Result[Int, HttpError].Err(error: HttpError.Protocol(status: 413, why: "the body is too large")); }
+    Result[Int, HttpError].Ok(value: n)
+}
+
+// A chunked body in `buf` from `at`, continuing a decode that has `so_far`: `value` is the body,
+// `at` where the message ends. More while incomplete, but `at` and `value` then say how far whole
+// chunks reached, so the next call resumes there (status 2). Refused: a size that is not hex, a
+// size or a body past `max`, a chunk not followed by CRLF, a control byte in an extension, a
+// malformed trailer field (RFC 9112 §7.1).
+fn chunked(buf: Str, at: Int, so_far: Str, max: Int, max_fields: Int) -> Step ! {} {
+    let mut pos = at;
+    let mut body = so_far;
+    while true {
+        let eol = find_from(buf, crlf(), pos);
+        if eol < 0 {
+            if str_len(buf) - pos > 4096 { return refuse(400, "a chunk line too long"); }
+            return Step(status: 2, value: body, at: pos, why: "");
+        }
+        let line = str_slice(buf, pos, eol);
+        let mut i = 0;
+        let mut size = 0;
+        while i < str_len(line) && hex_value(str_byte(line, i)) >= 0 {
+            if i >= 15 { return refuse(413, "a chunk size too large"); }
+            size = size * 16 + hex_value(str_byte(line, i));
+            i = i + 1;
+        }
+        if i == 0 { return refuse(400, "a chunk size that is not hexadecimal"); }
+        while i < str_len(line) && is_ows(str_byte(line, i)) { i = i + 1; }
+        if i < str_len(line) {
+            if str_byte(line, i) != 59 { return refuse(400, "text after a chunk size"); }
+            if !is_field_value(str_slice(line, i, str_len(line))) { return refuse(400, "a control byte in a chunk extension"); }
+        }
+        if str_len(body) + size > max { return refuse(413, "the body is too large"); }
+        if size == 0 {
+            // Trailer fields, then the empty line.
+            let mut t = eol + 2;
+            let mut fields = 0;
+            while true {
+                let e = find_from(buf, crlf(), t);
+                if e < 0 {
+                    if str_len(buf) - t > 4096 { return refuse(431, "a trailer field too long"); }
+                    return Step(status: 2, value: body, at: pos, why: "");
+                }
+                if e == t { return Step(status: 0, value: body, at: e + 2, why: ""); }
+                let field = str_slice(buf, t, e);
+                if find_byte(field, 10, 0) >= 0 || find_byte(field, 13, 0) >= 0 { return refuse(400, "a bare line end in a trailer"); }
+                let one = strs_new();
+                strs_push(one, field);
+                match parse_fields(one, 0, 1) {
+                    Result.Ok(value: h) => {},
+                    Result.Err(error: e2) => { return refuse(400, "a malformed trailer field"); },
+                };
+                fields = fields + 1;
+                if fields > max_fields { return refuse(431, "too many trailer fields"); }
+                t = e + 2;
+            }
+        }
+        if str_len(buf) < eol + 2 + size + 2 { return Step(status: 2, value: body, at: pos, why: ""); }
+        if str_byte(buf, eol + 2 + size) != 13 || str_byte(buf, eol + 3 + size) != 10 { return refuse(400, "a chunk not followed by its line end"); }
+        body = str_concat(body, str_slice(buf, eol + 2, eol + 2 + size));
+        pos = eol + 4 + size;
+    }
+    more()
+}
+
+/// A complete request — head and body — from `raw`, as a server reads one: `Protocol` with the
+/// status it would answer for anything refused or incomplete, and for bytes after the message.
+pub fn http_parse_request(raw: Str, o: ServeOptions) -> Result[Request, HttpError] ! {} {
+    let head = find_head(raw, 0, o.max_head);
+    if head.status == 1 { return bad(400, "an incomplete head"); }
+    if head.status != 0 { return bad(head.status, head.why); }
+    let r = match parse_request_head(head.value, o) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return Result[Request, HttpError].Err(error: e); },
+    };
+    let n = match framing(r.headers, r.version == "HTTP/1.0", o.max_body) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[Request, HttpError].Err(error: e); },
+    };
+    let body = body_of(raw, head.at, n, o.max_body, o.max_headers);
+    if body.status != 0 { return bad(if body.status == 1 || body.status == 2 { 400 } else { body.status }, if body.status == 1 || body.status == 2 { "an incomplete body" } else { body.why }); }
+    if body.at != str_len(raw) { return bad(400, "bytes after the message"); }
+    Result[Request, HttpError].Ok(value: with_body(r, body.value))
+}
+
+fn with_body(r: Request, body: Str) -> Request ! {} {
+    Request(method: r.method, target: r.target, path: r.path, query: r.query, version: r.version, headers: r.headers, body: body, params: r.params, peer: r.peer)
+}
+
+// The body from `at`: `n` bytes, or chunked for -1.
+fn body_of(buf: Str, at: Int, n: Int, max: Int, max_fields: Int) -> Step ! {} {
+    if n >= 0 {
+        if str_len(buf) - at < n { return more(); }
+        return done(str_slice(buf, at, at + n), at + n);
+    }
+    chunked(buf, at, "", max, max_fields)
+}
+
+// A response head: the status line (`HTTP/1.x`, three digits, a space, a reason) and the fields.
+fn parse_response_head(head: Str, o: ClientOptions) -> Result[Response, HttpError] ! {} {
+    let lines = match head_lines(head) {
+        Result.Ok(value: ls) => ls,
+        Result.Err(error: why) => { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: why)); },
+    };
+    if strs_len(lines) == 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "no status line")); }
+    let line = strs_get(lines, 0);
+    let shape = str_len(line) >= 12 && str_slice(line, 0, 7) == "HTTP/1." && is_digit(str_byte(line, 7)) && str_byte(line, 8) == 32;
+    if !shape || (str_len(line) > 12 && str_byte(line, 12) != 32) {
+        return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "a malformed status line"));
+    }
+    let code = str_slice(line, 9, 12);
+    if !is_digit(str_byte(code, 0)) || !is_digit(str_byte(code, 1)) || !is_digit(str_byte(code, 2)) || str_byte(code, 0) == 48 {
+        return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "a malformed status code"));
+    }
+    if !is_field_value(str_slice(line, 12, str_len(line))) { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "a control byte in the reason")); }
+    match parse_fields(lines, 1, o.max_headers) {
+        Result.Ok(value: h) => Result[Response, HttpError].Ok(value: Response(status: parse_count(code), headers: h, body: "")),
+        Result.Err(error: e) => Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: http_error_show(e))),
+    }
+}
+
+// How a response body is framed: none (-2), chunked (-1), a length, or to the close (-3).
+fn response_framing(r: Response, method: Str, max: Int) -> Result[Int, HttpError] ! {} {
+    if method == "HEAD" || r.status < 200 || r.status == 204 || r.status == 304 { return Result[Int, HttpError].Ok(value: 0 - 2); }
+    if http_header_has(r.headers, "transfer-encoding") {
+        let te = header_tokens(r.headers, "transfer-encoding");
+        if strs_len(te) > 0 && strs_get(te, strs_len(te) - 1) == "chunked" {
+            if strs_len(te) == 1 { return Result[Int, HttpError].Ok(value: 0 - 1); }
+            return Result[Int, HttpError].Err(error: HttpError.Unsupported(why: "a transfer coding other than chunked"));
+        }
+        return Result[Int, HttpError].Ok(value: 0 - 3);
+    }
+    if !http_header_has(r.headers, "content-length") { return Result[Int, HttpError].Ok(value: 0 - 3); }
+    match framing(r.headers, false, max) {
+        Result.Ok(value: n) => Result[Int, HttpError].Ok(value: n),
+        Result.Err(error: e) => Result[Int, HttpError].Err(error: HttpError.Protocol(status: 502, why: http_error_show(e))),
+    }
+}
+
+/// A complete response — head and body — from `raw`, as a client reads the answer to `method`: a
+/// body to the end of `raw` when the response has no length.
+pub fn http_parse_response(raw: Str, method: Str, o: ClientOptions) -> Result[Response, HttpError] ! {} {
+    let head = find_head(raw, 0, o.max_head);
+    if head.status != 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: if head.status == 1 { "an incomplete head" } else { head.why })); }
+    let r = match parse_response_head(head.value, o) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+    };
+    let n = match response_framing(r, method, o.max_body) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+    };
+    if n == 0 - 2 { return Result[Response, HttpError].Ok(value: r); }
+    if n == 0 - 3 {
+        if str_len(raw) - head.at > o.max_body { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "the body is too large")); }
+        return Result[Response, HttpError].Ok(value: Response(status: r.status, headers: r.headers, body: str_slice(raw, head.at, str_len(raw))));
+    }
+    let body = body_of(raw, head.at, n, o.max_body, o.max_headers);
+    if body.status != 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: if body.status == 1 || body.status == 2 { "an incomplete body" } else { body.why })); }
+    Result[Response, HttpError].Ok(value: Response(status: r.status, headers: r.headers, body: body.value))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Writing
+
+fn no_body_status(status: Int) -> Bool ! {} {
+    status < 200 || status == 204 || status == 304
+}
+
+/// The bytes a server sends for `r`: the status line, the fields (any `content-length`,
+/// `transfer-encoding` and `connection` of `r`'s replaced by the server's own), the body unless
+/// `head_only` or the status has none; `connection: close` when `close`. `Protocol(500)` for a
+/// status outside 100–999 or an invalid field.
+pub fn http_format_response(r: Response, head_only: Bool, close: Bool) -> Result[Str, HttpError] ! {} {
+    if r.status < 100 || r.status > 999 { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 500, why: "a status outside 100 to 999")); }
+    if !headers_valid(r.headers) { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 500, why: "an invalid header field")); }
+    let parts = strs_new();
+    strs_push(parts, str_concat(str_concat("HTTP/1.1 ", int_to_str(r.status)), str_concat(" ", http_reason(r.status))));
+    strs_push(parts, crlf());
+    let h = http_header_remove(http_header_remove(http_header_remove(r.headers, "content-length"), "transfer-encoding"), "connection");
+    let mut i = 0;
+    let n = http_header_count(h);
+    while i < n {
+        strs_push(parts, str_concat(str_concat(http_header_name_at(h, i), ": "), str_concat(http_header_value_at(h, i), crlf())));
+        i = i + 1;
+    }
+    let bodiless = no_body_status(r.status);
+    if !bodiless {
+        strs_push(parts, str_concat(str_concat("content-length: ", int_to_str(str_len(r.body))), crlf()));
+    }
+    if close { strs_push(parts, str_concat("connection: close", crlf())); }
+    strs_push(parts, crlf());
+    if !head_only && !bodiless { strs_push(parts, r.body); }
+    Result[Str, HttpError].Ok(value: str_join(parts, ""))
+}
+
+/// The bytes a client sends for `r` to `authority` (`host[:port]`, for `host` when `r` has none):
+/// `content-length` when there is a body or the method is POST, PUT or PATCH; `connection: close`
+/// when `close`. `Protocol(400)` for a method that is not a token, a target holding a space or a
+/// control byte, or an invalid field.
+pub fn http_format_request(r: Request, authority: Str, close: Bool) -> Result[Str, HttpError] ! {} {
+    if !is_token(r.method) { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a method that is not a token")); }
+    if str_len(r.target) == 0 { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 400, why: "an empty target")); }
+    let mut i = 0;
+    while i < str_len(r.target) {
+        let b = str_byte(r.target, i);
+        if b <= 32 || b >= 127 { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a target with a byte a URI cannot hold")); }
+        i = i + 1;
+    }
+    if !headers_valid(r.headers) { return Result[Str, HttpError].Err(error: HttpError.Protocol(status: 400, why: "an invalid header field")); }
+    let parts = strs_new();
+    strs_push(parts, str_concat(str_concat(r.method, " "), str_concat(r.target, str_concat(" HTTP/1.1", crlf()))));
+    if !http_header_has(r.headers, "host") { strs_push(parts, str_concat(str_concat("host: ", authority), crlf())); }
+    let h = http_header_remove(http_header_remove(http_header_remove(r.headers, "content-length"), "transfer-encoding"), "connection");
+    let n = http_header_count(h);
+    i = 0;
+    while i < n {
+        strs_push(parts, str_concat(str_concat(http_header_name_at(h, i), ": "), str_concat(http_header_value_at(h, i), crlf())));
+        i = i + 1;
+    }
+    if str_len(r.body) > 0 || r.method == "POST" || r.method == "PUT" || r.method == "PATCH" {
+        strs_push(parts, str_concat(str_concat("content-length: ", int_to_str(str_len(r.body))), crlf()));
+    }
+    if close { strs_push(parts, str_concat("connection: close", crlf())); }
+    strs_push(parts, crlf());
+    strs_push(parts, r.body);
+    Result[Str, HttpError].Ok(value: str_join(parts, ""))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The wire: bytes in through a buffer, out in full. `@std/tls` (C1) decrypts and encrypts here.
+
+struct Wire {
+    handle: OsHandle,
+    tls: Int,
+    buf: Bytes,
+}
+
+// What has arrived: `value` the bytes, `at` their count, 0 at the end, a status below 0.
+fn fill(w: Wire) -> Step ! { io } {
+    let n = os_read(w.handle, w.buf);
+    if n <= 0 { return Step(status: 0, value: "", at: n, why: ""); }
+    Step(status: 0, value: bytes_to_str(bytes_slice(w.buf, 0, n)), at: n, why: "")
+}
+
+fn send(w: Wire, text: Str) -> Int ! { io } {
+    let data = bytes_from_str(text);
+    let mut at = 0;
+    while at < bytes_len(data) {
+        let n = os_write(w.handle, bytes_slice(data, at, bytes_len(data)));
+        if n < 0 { return n; }
+        at = at + n;
+    }
+    0
+}
+
+fn set_wait(w: Wire, ms: Int) -> Int ! { io } {
+    os_set_timeout(w.handle, ms)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server
+
+/// A server listening on `addr` (port `0`: one the system picks) with options `o`.
+pub fn http_listen(net: NetCap, addr: Str, o: ServeOptions) -> Result[HttpServer, IoError] ! { io } {
+    match tcp_listen(net, addr) {
+        Result.Ok(value: l) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: l, draining: atomic_new(0), served: atomic_new(0), accepted: atomic_new(0), gate: chan_new(if o.max_connections > 0 { o.max_connections } else { 1 }), options: o, tls: 0)),
+        Result.Err(error: e) => Result[HttpServer, IoError].Err(error: e),
+    }
+}
+
+/// The address `s` listens on.
+pub fn http_server_addr(s: HttpServer) -> Str ! { io } {
+    tcp_listener_addr(s.listener)
+}
+
+/// Stop accepting: the listener closes, so a waiting accept wakes `Closed`, and each connection
+/// ends after the request it is serving, answering it with `connection: close`. The hook a
+/// termination signal (C4) calls; idle connections end at their idle deadline.
+pub fn http_drain(s: HttpServer) -> Int ! { io } {
+    atomic_store(s.draining, 1);
+    tcp_listener_close(s.listener);
+    0
+}
+
+/// Whether `http_drain` has been called on `s`.
+pub fn http_draining(s: HttpServer) -> Bool ! {} {
+    atomic_load(s.draining) != 0
+}
+
+/// The next connection, once fewer than `max_connections` are open (until then the kernel's
+/// backlog holds new ones). Each accepted connection is served by `http_serve_conn`, which frees
+/// its place.
+pub fn http_accept(s: HttpServer) -> Result[HttpConn, IoError] ! { io } {
+    chan_send(s.gate, 1);
+    match tcp_accept(s.listener) {
+        Result.Ok(value: c) => {
+            atomic_add(s.accepted, 1);
+            Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: 0))
+        },
+        Result.Err(error: e) => {
+            release(s);
+            Result[HttpConn, IoError].Err(error: e)
+        },
+    }
+}
+
+fn release(s: HttpServer) -> Int ! {} {
+    let got = ints_new();
+    chan_recv(s.gate, got);
+    0
+}
+
+/// Serve `c`'s requests in order with `h` — keep-alive, pipelined requests in turn — until the
+/// client closes, asks to, errs, waits past a deadline, reaches `max_requests`, or the server
+/// drains; then close it. Answers how many requests it served. Run in a task of its own per
+/// connection, it is the parallel form: the task names its handler, which a task may not be given.
+pub fn http_serve_conn(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) -> Int ! { io } {
+    let n = conn_loop(s, c, h);
+    tcp_close(c.stream);
+    release(s);
+    n
+}
+
+fn answer_error(w: Wire, status: Int, why: Str) -> Int ! { io } {
+    match http_format_response(http_text(status, str_concat(why, lf())), false, true) {
+        Result.Ok(value: t) => send(w, t),
+        Result.Err(error: e) => 0,
+    }
+}
+
+fn conn_loop(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) -> Int ! { io } {
+    let o = s.options;
+    let w = Wire(handle: c.stream.handle, tls: c.tls, buf: bytes_new(16384));
+    let peer = tcp_peer_addr(c.stream);
+    let mut pending = "";
+    let mut served = 0;
+    let mut open = true;
+    let mut wait = 0 - 1;
+    while open {
+        // The head: idle until a byte arrives, then the head's own deadline.
+        let mut head = find_head(pending, 0, o.max_head);
+        let mut ended = false;
+        while head.status == 1 && !ended {
+            let want = if str_len(pending) == 0 { if served == 0 { o.head_timeout_ms } else { o.idle_timeout_ms } } else { o.head_timeout_ms };
+            if want != wait { set_wait(w, want); wait = want; }
+            let f = fill(w);
+            if f.at <= 0 {
+                ended = true;
+                if f.at < 0 && timed_out(f.at) {
+                    if str_len(pending) > 0 { answer_error(w, 408, "the head did not arrive in time"); }
+                } else {
+                    if f.at == 0 && str_len(trim_crlf(pending)) > 0 { answer_error(w, 400, "the connection ended inside a head"); }
+                }
+            } else {
+                pending = str_concat(pending, f.value);
+                head = find_head(pending, head.at, o.max_head);
+            }
+        }
+        if ended { return served; }
+        if head.status != 0 {
+            answer_error(w, head.status, head.why);
+            return served;
+        }
+        let parsed = parse_request_head(head.value, o);
+        let r = match parsed {
+            Result.Ok(value: r) => r,
+            Result.Err(error: e) => {
+                match e {
+                    HttpError.Protocol(status: st, why: why) => { answer_error(w, st, why); },
+                    HttpError.Io(error: x) => {},
+                    HttpError.Unsupported(why: why) => { answer_error(w, 501, why); },
+                };
+                return served;
+            },
+        };
+        let n = match framing(r.headers, r.version == "HTTP/1.0", o.max_body) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => { return served; },
+        };
+        // Expect: 100-continue, answered before a body the client is holding back.
+        let expects = http_header_all(r.headers, "expect");
+        if strs_len(expects) > 0 {
+            if strs_len(expects) != 1 || lower(strs_get(expects, 0)) != "100-continue" {
+                answer_error(w, 417, "an expectation this server does not meet");
+                return served;
+            }
+            if r.version == "HTTP/1.1" && n != 0 && str_len(pending) == head.at {
+                if send(w, str_concat(str_concat("HTTP/1.1 100 Continue", crlf()), crlf())) < 0 { return served; }
+            }
+        }
+        // The body.
+        let mut body = body_of(pending, head.at, n, o.max_body, o.max_headers);
+        let mut so_far = "";
+        while body.status == 1 || body.status == 2 {
+            if o.body_timeout_ms != wait { set_wait(w, o.body_timeout_ms); wait = o.body_timeout_ms; }
+            let f = fill(w);
+            if f.at <= 0 {
+                if f.at < 0 && timed_out(f.at) { answer_error(w, 408, "the body did not arrive in time"); }
+                return served;
+            }
+            pending = str_concat(pending, f.value);
+            if body.status == 2 {
+                so_far = body.value;
+                body = chunked(pending, body.at, so_far, o.max_body, o.max_headers);
+            } else {
+                body = body_of(pending, head.at, n, o.max_body, o.max_headers);
+            }
+        }
+        if body.status != 0 {
+            answer_error(w, body.status, body.why);
+            return served;
+        }
+        pending = str_slice(pending, body.at, str_len(pending));
+        let req = Request(method: r.method, target: r.target, path: r.path, query: r.query, version: r.version, headers: r.headers, body: body.value, params: "", peer: peer);
+        let resp = h(req);
+        served = served + 1;
+        atomic_add(s.served, 1);
+        let close = http_header_has_token(r.headers, "connection", "close") || (r.version == "HTTP/1.0" && !http_header_has_token(r.headers, "connection", "keep-alive")) || atomic_load(s.draining) != 0 || (o.max_requests > 0 && served >= o.max_requests);
+        let out = if !close && r.version == "HTTP/1.0" { http_with_header(resp, "connection", "keep-alive") } else { resp };
+        let text = match http_format_response(out, r.method == "HEAD", close) {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => {
+                answer_error(w, 500, http_error_show(e));
+                return served;
+            },
+        };
+        if o.write_timeout_ms != wait { set_wait(w, o.write_timeout_ms); wait = o.write_timeout_ms; }
+        if send(w, text) < 0 { return served; }
+        if close { open = false; }
+    }
+    served
+}
+
+fn timed_out(status: Int) -> Bool ! {} {
+    io_kind_name(io_kind_of(status)) == "TimedOut"
+}
+
+fn trim_crlf(s: Str) -> Str ! {} {
+    let mut a = 0;
+    while a < str_len(s) && (str_byte(s, a) == 13 || str_byte(s, a) == 10) { a = a + 1; }
+    str_slice(s, a, str_len(s))
+}
+
+/// Accept connections on `s` until it drains, each served in a task of its own by the HTTP/1.1
+/// loop; the requests they read are answered by `h`, called on this task, in the order they
+/// arrive. Answers the requests served and connections accepted. For handlers that run in
+/// parallel, spawn `http_serve_conn` per connection instead (a task may not be given a function).
+pub fn http_serve(tasks: SpawnCap, s: HttpServer, h: fn(Request) -> Response ! { io }) -> Result[ServeStats, IoError] ! { io, spawn } {
+    let inbox = chan_new_of[Pending](64);
+    let got = vec_new[Pending]();
+    scope {
+        spawn accept_loop(tasks, s, inbox);
+        while chan_recv_of(inbox, got) {
+            let p = vec_pop(got);
+            chan_send_of(p.reply, h(p.request));
+        }
+    }
+    Result[ServeStats, IoError].Ok(value: ServeStats(requests: atomic_load(s.served), connections: atomic_load(s.accepted)))
+}
+
+fn accept_loop(tasks: SpawnCap, s: HttpServer, inbox: Chan[Pending]) -> Int ! { io, spawn } {
+    let mut running = true;
+    scope {
+        while running {
+            match http_accept(s) {
+                Result.Ok(value: c) => { spawn dispatched(s, c, inbox); },
+                Result.Err(error: e) => {
+                    if atomic_load(s.draining) != 0 || io_kind_name(e.kind) == "Closed" { running = false; }
+                },
+            };
+        }
+    }
+    chan_close_of(inbox);
+    0
+}
+
+fn dispatched(s: HttpServer, c: HttpConn, inbox: Chan[Pending]) -> Int ! { io } {
+    let ask = fn(r: Request) -> Response ! { io } {
+        let reply = chan_new_of[Response](1);
+        let got = vec_new[Response]();
+        if chan_send_of(inbox, Pending(request: r, reply: reply)) && chan_recv_of(reply, got) { vec_pop(got) } else { http_text(503, "the server is stopping") }
+    };
+    http_serve_conn(s, c, ask)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The router
+
+/// A router with no routes: every request is `NotFound`.
+pub fn http_router() -> Router ! {} {
+    Router(step: fn(r: Request) -> Routed ! { io } { Routed.NotFound() })
+}
+
+/// `rt` with a route for `method` (`""`: any) and `pattern` answered by `h`. A pattern is a path
+/// of segments: a literal matches itself, `{name}` one non-empty segment (read with `http_param`,
+/// decoded), and a final `*` the rest of the path (`http_param(r, "*")`). A GET route answers HEAD.
+pub fn http_route(rt: Router, method: Str, pattern: Str, h: fn(Request) -> Response ! { io }) -> Router ! {} {
+    let prev = rt.step;
+    Router(step: fn(r: Request) -> Routed ! { io } {
+        let p = prev(r);
+        let tried = match p {
+            Routed.Answered(response: x) => 0,
+            Routed.NotAllowed(allow: a) => 1,
+            Routed.NotFound() => 2,
+        };
+        if tried == 0 { return p; }
+        let m = route_match(pattern, r.path);
+        if m.status != 0 { return p; }
+        if str_len(method) == 0 || r.method == method || (method == "GET" && r.method == "HEAD") {
+            return Routed.Answered(response: h(Request(method: r.method, target: r.target, path: r.path, query: r.query, version: r.version, headers: r.headers, body: r.body, params: m.value, peer: r.peer)));
+        }
+        match p {
+            Routed.NotAllowed(allow: a) => Routed.NotAllowed(allow: str_concat(str_concat(a, ", "), method)),
+            Routed.Answered(response: x) => p,
+            Routed.NotFound() => Routed.NotAllowed(allow: method),
+        }
+    })
+}
+
+/// `http_route(rt, "GET", pattern, h)`.
+pub fn http_router_get(rt: Router, pattern: Str, h: fn(Request) -> Response ! { io }) -> Router ! {} {
+    http_route(rt, "GET", pattern, h)
+}
+
+/// `http_route(rt, "POST", pattern, h)`.
+pub fn http_router_post(rt: Router, pattern: Str, h: fn(Request) -> Response ! { io }) -> Router ! {} {
+    http_route(rt, "POST", pattern, h)
+}
+
+/// What `rt` makes of `r`.
+pub fn http_router_find(rt: Router, r: Request) -> Routed ! { io } {
+    let step = rt.step;
+    step(r)
+}
+
+/// A handler answering through `rt`: 404 for no route, 405 with `allow` for a path routed for
+/// other methods only.
+pub fn http_router_handler(rt: Router) -> fn(Request) -> Response ! { io } ! {} {
+    fn(r: Request) -> Response ! { io } {
+        match http_router_find(rt, r) {
+            Routed.Answered(response: x) => x,
+            Routed.NotAllowed(allow: a) => http_with_header(http_text(405, str_concat("method not allowed", lf())), "allow", a),
+            Routed.NotFound() => http_text(404, str_concat("not found", lf())),
+        }
+    }
+}
+
+// Whether `path` matches `pattern`: `value` holds the parameters.
+fn route_match(pattern: Str, path: Str) -> Step ! {} {
+    if str_len(path) == 0 || str_byte(path, 0) != 47 || str_len(pattern) == 0 || str_byte(pattern, 0) != 47 { return refuse(404, ""); }
+    let params = strs_new();
+    let mut pi = 1;
+    let mut si = 1;
+    while true {
+        let pe0 = find_byte(pattern, 47, pi);
+        let pe = if pe0 < 0 { str_len(pattern) } else { pe0 };
+        let seg = str_slice(pattern, pi, pe);
+        if seg == "*" && pe == str_len(pattern) {
+            match http_percent_decode(str_slice(path, si, str_len(path))) {
+                Option.Some(value: v) => {
+                    strs_push(params, param_piece("*"));
+                    strs_push(params, param_piece(v));
+                    return done(str_join(params, ""), 0);
+                },
+                Option.None() => { return refuse(404, ""); },
+            };
+        }
+        if si > str_len(path) { return refuse(404, ""); }
+        let se0 = find_byte(path, 47, si);
+        let se = if se0 < 0 { str_len(path) } else { se0 };
+        let got = str_slice(path, si, se);
+        if str_len(seg) >= 2 && str_byte(seg, 0) == 123 && str_byte(seg, str_len(seg) - 1) == 125 {
+            if str_len(got) == 0 { return refuse(404, ""); }
+            match http_percent_decode(got) {
+                Option.Some(value: v) => {
+                    strs_push(params, param_piece(str_slice(seg, 1, str_len(seg) - 1)));
+                    strs_push(params, param_piece(v));
+                },
+                Option.None() => { return refuse(404, ""); },
+            };
+        } else {
+            if seg != got { return refuse(404, ""); }
+        }
+        let p_end = pe == str_len(pattern);
+        let s_end = se == str_len(path);
+        if p_end && s_end { return done(str_join(params, ""), 0); }
+        if p_end || s_end { return refuse(404, ""); }
+        pi = pe + 1;
+        si = se + 1;
+    }
+    refuse(404, "")
+}
+
+// ---------------------------------------------------------------------------------------------
+// The client
+
+/// `url` taken apart: `http://` or `https://` (any case), a host — a name, an IPv4 literal or a
+/// bracketed IPv6 one — an optional port (80 and 443 by default), and the target (`/` when
+/// empty). `Protocol(400)` for anything else, and for userinfo or a fragment.
+pub fn http_url_parse(url: Str) -> Result[Url, HttpError] ! {} {
+    let low = lower(url);
+    let scheme = if str_len(low) >= 7 && str_slice(low, 0, 7) == "http://" { "http" } else { if str_len(low) >= 8 && str_slice(low, 0, 8) == "https://" { "https" } else { "" } };
+    if str_len(scheme) == 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a URL that is not http or https")); }
+    let start = str_len(scheme) + 3;
+    let mut end = start;
+    while end < str_len(url) && str_byte(url, end) != 47 && str_byte(url, end) != 63 && str_byte(url, end) != 35 { end = end + 1; }
+    let authority = str_slice(url, start, end);
+    let rest = str_slice(url, end, str_len(url));
+    if find_byte(authority, 64, 0) >= 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "userinfo in a URL")); }
+    if find_byte(rest, 35, 0) >= 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a fragment in a URL")); }
+    let mut i = 0;
+    while i < str_len(url) {
+        let b = str_byte(url, i);
+        if b <= 32 || b >= 127 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a URL with a byte a URI cannot hold")); }
+        i = i + 1;
+    }
+    let mut host = authority;
+    let mut port_text = "";
+    if str_len(authority) > 0 && str_byte(authority, 0) == 91 {
+        let close = find_byte(authority, 93, 0);
+        if close < 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "an IPv6 host without its bracket")); }
+        host = str_slice(authority, 0, close + 1);
+        if close + 1 < str_len(authority) {
+            if str_byte(authority, close + 1) != 58 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "text after an IPv6 host")); }
+            port_text = str_slice(authority, close + 2, str_len(authority));
+        }
+    } else {
+        let colon = find_byte(authority, 58, 0);
+        if colon >= 0 {
+            host = str_slice(authority, 0, colon);
+            port_text = str_slice(authority, colon + 1, str_len(authority));
+            if str_len(port_text) == 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "an empty port")); }
+        }
+    }
+    if str_len(host) == 0 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a URL without a host")); }
+    let port = if str_len(port_text) == 0 { if scheme == "https" { 443 } else { 80 } } else { parse_count(port_text) };
+    if port < 1 || port > 65535 { return Result[Url, HttpError].Err(error: HttpError.Protocol(status: 400, why: "a port outside 1 to 65535")); }
+    Result[Url, HttpError].Ok(value: Url(scheme: scheme, host: host, port: port, target: if str_len(rest) == 0 { "/" } else { if str_byte(rest, 0) == 63 { str_concat("/", rest) } else { rest } }))
+}
+
+fn authority_of(u: Url) -> Str ! {} {
+    if (u.scheme == "http" && u.port == 80) || (u.scheme == "https" && u.port == 443) { u.host } else { str_concat(str_concat(u.host, ":"), int_to_str(u.port)) }
+}
+
+fn is_ipv4_literal(host: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < str_len(host) {
+        let b = str_byte(host, i);
+        if !is_digit(b) && b != 46 { return false; }
+        i = i + 1;
+    }
+    str_len(host) > 0
+}
+
+/// A connection to `url`'s host and port, for `http_send`. `Unsupported` for `https` until
+/// `@std/tls` (C1); `Io` for a name that does not resolve or a connection refused.
+pub fn http_connect(net: NetCap, url: Str, o: ClientOptions) -> Result[HttpClient, HttpError] ! { io } {
+    let u = match http_url_parse(url) {
+        Result.Ok(value: u) => u,
+        Result.Err(error: e) => { return Result[HttpClient, HttpError].Err(error: e); },
+    };
+    if u.scheme == "https" { return Result[HttpClient, HttpError].Err(error: HttpError.Unsupported(why: "https needs @std/tls")); }
+    let addr = if str_byte(u.host, 0) == 91 || is_ipv4_literal(u.host) {
+        str_concat(str_concat(u.host, ":"), int_to_str(u.port))
+    } else {
+        match net_resolve(net, u.host, u.port) {
+            Result.Ok(value: all) => {
+                if strs_len(all) == 0 { return Result[HttpClient, HttpError].Err(error: HttpError.Io(error: io_context(io_error_new(IoErrorKind.NotFound(), "no address"), u.host))); }
+                strs_get(all, 0)
+            },
+            Result.Err(error: e) => { return Result[HttpClient, HttpError].Err(error: HttpError.Io(error: e)); },
+        }
+    };
+    match tcp_connect(net, addr, o.timeout_ms) {
+        Result.Ok(value: s) => {
+            tcp_set_timeout(s, o.timeout_ms);
+            let pending = vec_new[Str]();
+            vec_push(pending, "");
+            Result[HttpClient, HttpError].Ok(value: HttpClient(stream: s, authority: authority_of(u), options: o, pending: pending, tls: 0))
+        },
+        Result.Err(error: e) => Result[HttpClient, HttpError].Err(error: HttpError.Io(error: e)),
+    }
+}
+
+/// Send `r` on `c` and read its response; the connection stays open for the next request unless
+/// the response closes it. Interim (1xx) responses are skipped.
+pub fn http_send(c: HttpClient, r: Request) -> Result[Response, HttpError] ! { io } {
+    exchange(c, r, false)
+}
+
+fn exchange(c: HttpClient, r: Request, close: Bool) -> Result[Response, HttpError] ! { io } {
+    let text = match http_format_request(r, c.authority, close) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+    };
+    let w = Wire(handle: c.stream.handle, tls: c.tls, buf: bytes_new(16384));
+    let sent = send(w, text);
+    if sent < 0 { return Result[Response, HttpError].Err(error: HttpError.Io(error: io_error_from(sent))); }
+    let o = c.options;
+    let mut pending = vec_get(c.pending, 0);
+    while true {
+        let mut head = find_head(pending, 0, o.max_head);
+        while head.status == 1 {
+            let f = fill(w);
+            if f.at < 0 { return Result[Response, HttpError].Err(error: HttpError.Io(error: io_error_from(f.at))); }
+            if f.at == 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "the connection ended before a response")); }
+            pending = str_concat(pending, f.value);
+            head = find_head(pending, head.at, o.max_head);
+        }
+        if head.status != 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: head.why)); }
+        let resp = match parse_response_head(head.value, o) {
+            Result.Ok(value: x) => x,
+            Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+        };
+        if resp.status == 101 { return Result[Response, HttpError].Err(error: HttpError.Unsupported(why: "a protocol switch")); }
+        if resp.status >= 100 && resp.status < 200 {
+            pending = str_slice(pending, head.at, str_len(pending));
+        } else {
+            let n = match response_framing(resp, r.method, o.max_body) {
+                Result.Ok(value: n) => n,
+                Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+            };
+            let mut body = if n == 0 - 2 { done("", head.at) } else { if n == 0 - 3 { more() } else { body_of(pending, head.at, n, o.max_body, o.max_headers) } };
+            let mut eof = false;
+            while body.status == 1 || body.status == 2 {
+                let f = fill(w);
+                if f.at < 0 { return Result[Response, HttpError].Err(error: HttpError.Io(error: io_error_from(f.at))); }
+                if f.at == 0 { eof = true; }
+                if !eof { pending = str_concat(pending, f.value); }
+                if n == 0 - 3 {
+                    if str_len(pending) - head.at > o.max_body { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "the body is too large")); }
+                    if eof { body = done(str_slice(pending, head.at, str_len(pending)), str_len(pending)); }
+                } else {
+                    if eof { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "the connection ended inside a body")); }
+                    if body.status == 2 { body = chunked(pending, body.at, body.value, o.max_body, o.max_headers); } else { body = body_of(pending, head.at, n, o.max_body, o.max_headers); }
+                }
+            }
+            if body.status != 0 { return Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: body.why)); }
+            vec_set(c.pending, 0, str_slice(pending, body.at, str_len(pending)));
+            return Result[Response, HttpError].Ok(value: Response(status: resp.status, headers: resp.headers, body: body.value));
+        }
+    }
+    Result[Response, HttpError].Err(error: HttpError.Protocol(status: 502, why: "no response"))
+}
+
+/// Close `c`.
+pub fn http_close(c: HttpClient) -> Int ! { io } {
+    tcp_close(c.stream);
+    0
+}
+
+/// One request — `method` to `url` with `body` — on a connection of its own, closed after it.
+pub fn http_fetch(net: NetCap, method: Str, url: Str, body: Str, o: ClientOptions) -> Result[Response, HttpError] ! { io } {
+    let c = match http_connect(net, url, o) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+    };
+    let u = match http_url_parse(url) {
+        Result.Ok(value: u) => u,
+        Result.Err(error: e) => { return Result[Response, HttpError].Err(error: e); },
+    };
+    let r = exchange(c, http_request(method, u.target, body), true);
+    http_close(c);
+    r
+}
+
+/// `http_fetch(net, "GET", url, "", o)`.
+pub fn http_get(net: NetCap, url: Str, o: ClientOptions) -> Result[Response, HttpError] ! { io } {
+    http_fetch(net, "GET", url, "", o)
+}

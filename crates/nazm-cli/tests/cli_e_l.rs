@@ -45,6 +45,7 @@ mod generics;
 mod hash_vectors;
 mod heap;
 mod heap_limit;
+mod http;
 mod incremental;
 mod interpolation;
 mod interrupts;
