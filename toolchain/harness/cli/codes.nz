@@ -1,0 +1,312 @@
+// Q1-D-11, -13, -14 and v1, Q1-D-24: every diagnostic code is in `docs/diagnostics.md`'s registry,
+// each once, with its constant; every code is asserted by a test or named as unprovokable, with a
+// reason. A read of the tree, no `nazm` run. Ported from `crates/nazm-cli/tests/codes.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "@std/sort"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// Codes no test asserts, and why each cannot be reached from a test: `(code, reason)` pairs,
+/// empty since Gate 3, as the Rust file's `UNPROVOKABLE` is.
+fn unprovokable() -> Strs ! {} {
+    strs_new()
+}
+
+fn read(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    read_rust(h, f"{repo_root(h)}/{path}")
+}
+
+/// The files of the module at `base`: `base.rs`, or every `.rs` file under `base/`, sorted.
+fn module_files(h: Caps, base: Str) -> Result[Strs, Str] ! { io } {
+    let io = h.io;
+    let root = repo_root(h);
+    let file = f"{base}.rs";
+    match file_metadata(io, f"{root}/{file}") {
+        Result.Ok(value: m) => match m.kind {
+            FileKind.Regular() => {
+                let one = strs_new();
+                strs_push(one, file);
+                return Result[Strs, Str].Ok(value: one);
+            },
+            FileKind.Directory() => 0,
+            FileKind.Other() => 0,
+        },
+        Result.Err(error: e) => 0,
+    };
+    let out = strs_new();
+    match file_walk(io, f"{root}/{base}") {
+        Result.Ok(value: all) => {
+            for p in all {
+                if text_ends_with(p, ".rs") {
+                    strs_push(out, str_slice(p, str_len(root) + 1, str_len(p)));
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    };
+    if strs_len(out) == 0 {
+        return Result[Strs, Str].Err(error: f"{base}: neither a file nor a module directory");
+    }
+    Result[Strs, Str].Ok(value: strs_sort(out))
+}
+
+/// What the tests assert, read in one pass: every five bytes `N` and four digits, and every
+/// identifier after `codes::`, on the lines that are not comments.
+///
+/// The Rust test concatenates the uncommented texts and asks `contains` of the whole for each code;
+/// a code cannot span a line, so asking each line once, as it is read, is the same question — and
+/// it fits the interpreter's iteration budget, which two hundred searches of three megabytes do
+/// not (`nazm test` runs every test interpreted too, and has no option to raise the budget).
+struct Asserted {
+    numbers: StrMap[Int],
+    names: StrMap[Int],
+}
+
+fn is_digit(b: Int) -> Bool ! {} {
+    b >= 48 && b <= 57
+}
+
+fn is_ident(b: Int) -> Bool ! {} {
+    is_digit(b) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95
+}
+
+/// Every line of `text` that is not a comment, scanned into `into`.
+fn scan(text: Str, into: Asserted) -> Int ! {} {
+    let m = str_len(text);
+    let mut i = 0;
+    let mut line_start = true;
+    while i < m {
+        let b = str_byte(text, i);
+        if line_start {
+            line_start = false;
+            // `l.trim_start().starts_with("//")`: a comment line is skipped to its end.
+            let mut k = i;
+            while k < m && (str_byte(text, k) == 32 || str_byte(text, k) == 9) {
+                k = k + 1;
+            }
+            if k + 1 < m && str_byte(text, k) == 47 && str_byte(text, k + 1) == 47 {
+                while k < m && str_byte(text, k) != 10 {
+                    k = k + 1;
+                }
+                i = k + 1;
+                line_start = true;
+                continue;
+            }
+        }
+        if b == 10 {
+            line_start = true;
+        } else if b == 78 && i + 4 < m && is_digit(str_byte(text, i + 1)) && is_digit(str_byte(text, i + 2)) && is_digit(str_byte(text, i + 3)) && is_digit(str_byte(text, i + 4)) {
+            map_set(into.numbers, str_slice(text, i, i + 5), 0);
+        } else if b == 99 && i + 7 <= m && str_slice(text, i, i + 7) == "codes::" {
+            let mut e = i + 7;
+            while e < m && is_ident(str_byte(text, e)) {
+                e = e + 1;
+            }
+            map_set(into.names, str_slice(text, i + 7, e), 0);
+            i = e;
+            continue;
+        }
+        i = i + 1;
+    }
+    0
+}
+
+/// `all_tests`'s texts — every `.rs` file directly in the workspace's test directories but this
+/// one, and the test modules of the source modules that keep their unit tests beside them —
+/// scanned.
+fn all_tests(h: Caps) -> Result[Asserted, Str] ! { io } {
+    let io = h.io;
+    let root = repo_root(h);
+    let found = Asserted(numbers: map_new[Int](), names: map_new[Int]());
+    for dir in words("crates/nazm-core/tests crates/nazm-cli/tests crates/nazm-syntax/tests") {
+        let names = match dir_list(io, f"{root}/{dir}") {
+            Result.Ok(value: ns) => ns,
+            Result.Err(error: e) => { continue; },
+        };
+        for n in names {
+            if n == "codes.rs" || !text_ends_with(n, ".rs") {
+                continue;
+            }
+            match read_rust(h, f"{root}/{dir}/{n}") {
+                Result.Ok(value: t) => scan(t, found),
+                Result.Err(error: e) => 0,
+            };
+        }
+    }
+    for module in words("crates/nazm-syntax/src/lexer crates/nazm-syntax/src/parser crates/nazm-diag/src/lib crates/nazm-core/src/check crates/nazm-core/src/lower") {
+        for file in module_files(h, module)? {
+            let text = read(h, file)?;
+            if text_ends_with(file, "/tests.rs") {
+                scan(text, found);
+            } else {
+                let at = find(text, "\nmod tests {");
+                if at >= 0 {
+                    scan(str_slice(text, at, str_len(text)), found);
+                }
+            }
+        }
+    }
+    Result[Asserted, Str].Ok(value: found)
+}
+
+/// One declared code: its constant and its number.
+struct Declared {
+    name: Str,
+    code: Str,
+}
+
+/// Every declared code, from `crates/nazm-diag/src/lib.rs`.
+fn declared(h: Caps) -> Result[Vec[Declared], Str] ! { io } {
+    let out = vec_new[Declared]();
+    for raw in lines(read(h, "crates/nazm-diag/src/lib.rs")?) {
+        let line = trim_ws(raw);
+        let rest = match strip_prefix(line, "pub const ") {
+            Option.Some(value: r) => r,
+            Option.None() => { continue; },
+        };
+        let at = find(rest, ": Code = Code::new(\"");
+        if at < 0 {
+            continue;
+        }
+        let name = str_slice(rest, 0, at);
+        let after = str_slice(rest, at + 20, str_len(rest));
+        let number = strs_get(split(after, "\""), 0);
+        vec_push(out, Declared(name: name, code: number));
+    }
+    Result[Vec[Declared], Str].Ok(value: out)
+}
+
+fn trim_ticks(s: Str) -> Str ! {} {
+    trim_end_matches(trim_start_matches(s, "`"), "`")
+}
+
+@test
+fn the_registry_is_every_declared_code_and_only_them(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let docs = read(h, "docs/diagnostics.md")?;
+    let begin = find(docs, "<!-- registry:begin -->");
+    let end = find(docs, "<!-- registry:end -->");
+    check_that(begin >= 0, "registry start")?;
+    check_that(end >= 0, "registry end")?;
+    let codes = strs_new();
+    let names = strs_new();
+    for line in lines(str_slice(docs, begin, end)) {
+        let cols = strs_new();
+        for c in split(line, "|") {
+            strs_push(cols, trim_ws(c));
+        }
+        if strs_len(cols) < 3 {
+            continue;
+        }
+        let code = trim_ticks(strs_get(cols, 1));
+        if !text_starts_with(code, "N") || str_len(code) != 5 {
+            continue;
+        }
+        strs_push(codes, code);
+        strs_push(names, trim_ticks(strs_get(cols, 2)));
+    }
+    let decl = declared(h)?;
+    check_that(vec_len(decl) > 140, f"only {vec_len(decl)} declared")?;
+    let mut i = 0;
+    while i < strs_len(codes) {
+        let mut j = 0;
+        while j < i {
+            check_that(strs_get(codes, j) != strs_get(codes, i), f"{strs_get(codes, i)} has two rows")?;
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    for d in decl {
+        let mut found = false;
+        let mut k = 0;
+        while k < strs_len(codes) {
+            if strs_get(codes, k) == d.code && strs_get(names, k) == d.name {
+                found = true;
+            }
+            k = k + 1;
+        }
+        check_that(found, f"{d.code} ({d.name}) is declared and not in docs/diagnostics.md's registry: add the row\n| `{d.code}` | `{d.name}` | … |")?;
+    }
+    let mut k = 0;
+    while k < strs_len(codes) {
+        let code = strs_get(codes, k);
+        let name = strs_get(names, k);
+        let mut by_code = false;
+        let mut by_both = false;
+        for d in decl {
+            if d.code == code {
+                by_code = true;
+                if d.name == name {
+                    by_both = true;
+                }
+            }
+        }
+        if name == "—" {
+            check_that(!by_code, f"{code} is marked reserved and is declared")?;
+        } else {
+            check_that(by_both, f"the registry names {code} ({name}), which is not declared")?;
+        }
+        k = k + 1;
+    }
+    // The umbrella code says it is one.
+    let mut umbrella = false;
+    for c in codes {
+        if c == "N0101" {
+            umbrella = true;
+        }
+    }
+    check_that(umbrella, "N0101 is not in the registry")?;
+    check_that(text_contains(docs, "**the umbrella code**"), "the umbrella code does not say it is one")
+}
+
+@test
+fn every_code_is_asserted_by_a_test_or_named_as_unprovokable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let tests = all_tests(h)?;
+    let decl = declared(h)?;
+    check_that(vec_len(decl) > 25, f"only found {vec_len(decl)} codes")?;
+    let named = map_keys(tests.names);
+    let missing = strs_new();
+    for d in decl {
+        // Either the constant is named in a test, or the number appears in one.
+        let mut asserted = map_has(tests.numbers, d.code);
+        for n in named {
+            if text_starts_with(n, d.name) {
+                asserted = true;
+            }
+        }
+        let mut excused = false;
+        for u in unprovokable() {
+            if strs_get(text_split(u, "|"), 0) == d.code {
+                excused = true;
+            }
+        }
+        if !asserted && !excused {
+            strs_push(missing, f"{d.code} ({d.name})");
+        }
+        check_that(!(asserted && excused), f"{d.code} is listed as unprovokable and is also asserted by a test — remove it from the list")?;
+    }
+    let shown = str_join(missing, ", ");
+    check_that(strs_len(missing) == 0, f"these codes are promised and never asserted: [{shown}]. Either assert one, or add it to UNPROVOKABLE with the reason it cannot be reached.")
+}
+
+@test
+fn every_unprovokable_code_is_a_real_code_with_a_reason(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let declared_text = read(h, "crates/nazm-diag/src/lib.rs")?;
+    for u in unprovokable() {
+        let parts = text_split(u, "|");
+        let number = strs_get(parts, 0);
+        let why = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+        check_that(text_contains(declared_text, f"Code::new(\"{number}\")"), f"{number} is excused and is not a code")?;
+        check_that(str_len(why) > 40, f"{number}'s reason is too short to be one: {why}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

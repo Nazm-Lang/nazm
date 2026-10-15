@@ -110,22 +110,43 @@ pub fn run(h: Caps, program: Str, args: Strs, dir: Str, env: Strs) -> Ran ! { io
 
 /// `run`, the child ended with its process group once `ms` milliseconds have passed.
 pub fn run_within(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int) -> Ran ! { io, spawn } {
-    run_full(h, program, args, dir, env, ms, false, "")
+    run_full(h, program, args, dir, env, ms, false, "", 0)
 }
 
 /// `run`, `input` written to the child's standard input (in a task of its own, so a child that
 /// writes before it reads never waits on a pipe nobody empties), then closed.
 pub fn run_input(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, input: Str) -> Ran ! { io, spawn } {
-    run_full(h, program, args, dir, env, DEADLINE_MS, true, input)
+    run_full(h, program, args, dir, env, DEADLINE_MS, true, input, 0)
 }
 
-fn feed(to: OsHandle, text: Str) -> Int ! { io } {
-    file_write(File(handle: to), bytes_from_str(text));
+/// `run_input`, the input written a byte at a time with `gap_ms` milliseconds between bytes (`0`:
+/// whole) — what a reader that must not assume a whole line arrives at once is held to.
+pub fn run_trickle(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, input: Str, gap_ms: Int) -> Ran ! { io, spawn } {
+    run_full(h, program, args, dir, env, DEADLINE_MS, true, input, gap_ms)
+}
+
+fn feed(t: TimeCap, to: OsHandle, text: Str, gap_ms: Int) -> Int ! { io } {
+    let f = File(handle: to);
+    if gap_ms <= 0 {
+        file_write(f, bytes_from_str(text));
+    } else {
+        let mut i = 0;
+        let mut open = true;
+        while i < str_len(text) && open {
+            // A broken pipe means the program stopped reading, which its caller's checks report.
+            open = match file_write(f, bytes_from_str(str_slice(text, i, i + 1))) {
+                Result.Ok(value: n) => true,
+                Result.Err(error: e) => false,
+            };
+            time_sleep(t, time_duration_ms(gap_ms));
+            i = i + 1;
+        }
+    }
     os_close(to);
     0
 }
 
-fn run_full(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int, fed: Bool, input: Str) -> Ran ! { io, spawn } {
+fn run_full(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int, fed: Bool, input: Str, gap_ms: Int) -> Ran ! { io, spawn } {
     let p = h.p;
     let sp = h.sp;
     let v = h.v;
@@ -153,7 +174,7 @@ fn run_full(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, ms: Int, fed
         spawn collect(out, outs);
         spawn collect(err, errs);
         if fed {
-            spawn feed(inp, input);
+            spawn feed(t, inp, input, gap_ms);
         }
         // Both streams drain in tasks of their own while this waits, so a child that fills a pipe
         // never blocks; one past the deadline is ended with its whole process group, which closes
