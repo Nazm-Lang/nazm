@@ -16204,8 +16204,8 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "for_loops::every_ru
 name = "r1a-for-reads-one-past-the-end"
 why = "a for loop runs while i <= len, so its last step reads outside the sequence (N0405)"
 file = "crates/nazm-core/src/lower.rs"
-find = "                op: cir::CmpOp::Lt,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),"
-replace = "                op: cir::CmpOp::LtEq,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),"
+find = "                op: cir::CmpOp::Lt,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),\n                rhs: Box::new(bound),"
+replace = "                op: cir::CmpOp::LtEq,\n                operand: Type::Int,\n                law: Law::Int,\n                lhs: Box::new(read_index.clone()),\n                rhs: Box::new(bound),"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "for_loops::every_rule_holds_in_every_implementation_and_everything_is_reclaimed" }]
 
 [[mutation]]
@@ -19038,8 +19038,10 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::a_re
 name = "r1-a-split-compares-only-first-bytes"
 why = "`text_split` takes a matching first byte for the whole separator"
 file = "library/std/text.nz"
-find = '''            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) {'''
-replace = '''            if str_byte(s, i) == first {'''
+find = '''            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) {
+                strs_push(out, str_slice(s, start, i));'''
+replace = '''            if str_byte(s, i) == first {
+                strs_push(out, str_slice(s, start, i));'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "named_methods::lines_and_splits_keep_their_edges" }]
 
 [[mutation]]
@@ -19633,3 +19635,19 @@ file = "library/std/hashmap.nz"
 find = "    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) < 0)"
 replace = "    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) > 0)"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::the_prelude_imports_the_standard_modules_a_program_names_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-for-over-a-split-builds-its-list"
+why = "`for w in s.split(sep)` is lowered as a loop over the list `text_split` builds, not through `text_split_end` and `text_split_next` (R1.5, 3.3)"
+file = "crates/nazm-core/src/check/mod.rs"
+find = "    res.set_split_each(split_each);"
+replace = "    res.set_split_each(split_each.filter(|_| false));"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-split-loop-loses-its-last-piece"
+why = "the piece after the last separator is never read, so `a,b` gives one piece where `text_split` gives two (R1.5, 3.3)"
+file = "library/std/text.nz"
+find = "    if n > 0 && end < m { end + n } else { m + 1 }"
+replace = "    if n > 0 && end < m && end + n < m { end + n } else { m + 1 }"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
