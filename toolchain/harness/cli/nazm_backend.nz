@@ -1,0 +1,484 @@
+// R9, D15: `nazm build --backend nazm`, Nazm's own code generator (`nzcg`, `toolchain/codegen/`).
+// Every program of the generator's own differential suite behaves exactly as the LLVM build —
+// stdout, stderr, exit status and the runtime's memory report; the generator is told the target
+// and whether the program has one thread, and handed the positions with `--debug`; a construct it
+// refuses is `N0101`, named, with nothing written and no fallback, and any other failure `N0900`;
+// a generator that is not there, or a target it does not carry, is refused before anything is
+// compiled. macOS only before 1.0 (the generator's D13): elsewhere the Rust tests are ignored, and
+// these pass without looking. Ported from `crates/nazm-cli/tests/nazm_backend.rs` (R7).
+
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/host.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS` in `dir`, with `NAZM_NZCG` naming `nzcg`.
+fn nazm_with(h: Caps, dir: Str, nzcg_path: Str, args: Strs) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), args, dir, env_set(suite_env(h), "NAZM_NZCG", nzcg_path))
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => m.kind == FileKind.Directory(),
+        Result.Err(error: e) => false,
+    }
+}
+
+fn is_file(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => m.kind == FileKind.Regular(),
+        Result.Err(error: e) => false,
+    }
+}
+
+fn listed(h: Caps, dir: Str) -> Strs ! { io } {
+    strs_sort(match dir_list(h.io, dir) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => strs_new(),
+    })
+}
+
+/// The `.nz` files directly in `dir`, sorted, as full paths.
+fn nz_in(h: Caps, dir: Str) -> Strs ! { io } {
+    let out = strs_new();
+    for n in listed(h, dir) {
+        if text_ends_with(n, ".nz") && is_file(h, f"{dir}/{n}") {
+            strs_push(out, f"{dir}/{n}");
+        }
+    }
+    out
+}
+
+/// Every `.nz` file under `dir`, sorted, into `out`.
+fn nz_under(h: Caps, dir: Str, out: Strs) -> Int ! { io } {
+    for n in listed(h, dir) {
+        let p = f"{dir}/{n}";
+        if is_dir(h, p) {
+            nz_under(h, p, out);
+        } else {
+            if text_ends_with(n, ".nz") {
+                strs_push(out, p);
+            }
+        }
+    }
+    0
+}
+
+/// The inputs of `toolchain/codegen/tests/run.sh`, in its order.
+fn inputs(h: Caps) -> Strs ! { io } {
+    let r = repo_root(h);
+    let fib = f"{r}/bench/compare/nazm/fib.nz";
+    let out = strs_new();
+    strs_push(out, fib);
+    for p in nz_in(h, f"{r}/tests/compat/v1/run") {
+        strs_push(out, p);
+    }
+    for n in listed(h, f"{r}/tests/compat/v1/run") {
+        let m = f"{r}/tests/compat/v1/run/{n}/main.nz";
+        if is_file(h, m) {
+            strs_push(out, m);
+        }
+    }
+    for d in words("tests/compat/v1/trap toolchain/codegen/tests/programs bench/compare/nazm bench/programs examples examples/tour examples/std crates/nazm-cli/tests/transfers") {
+        for p in nz_in(h, f"{r}/{d}") {
+            if p != fib {
+                strs_push(out, p);
+            }
+        }
+    }
+    nz_under(h, f"{r}/corpus", out);
+    out
+}
+
+/// A memory report's `allocated=X reclaimed=X` pairs that are equal written as `N`: a program that
+/// runs until the stack is exhausted allocates as many times as its frames fit, which the
+/// backends' frames differ in; every `live` count is still compared exactly.
+fn depth_normalised(stderr: Str) -> Str ! {} {
+    let out = strs_new();
+    for l in text_lines(stderr) {
+        let ws = text_split(l, " ");
+        let fixed = strs_new();
+        let mut k = 0;
+        while k < strs_len(ws) {
+            let a = strs_get(ws, k);
+            let mut done = false;
+            if k + 1 < strs_len(ws) {
+                match strip_prefix(a, "allocated=") {
+                    Option.Some(value: x) => match strip_prefix(strs_get(ws, k + 1), "reclaimed=") {
+                        Option.Some(value: y) => {
+                            if x == y {
+                                strs_push(fixed, "allocated=N");
+                                strs_push(fixed, "reclaimed=N");
+                                done = true;
+                            }
+                        },
+                        Option.None() => {},
+                    },
+                    Option.None() => {},
+                };
+            }
+            if done {
+                k = k + 2;
+            } else {
+                strs_push(fixed, a);
+                k = k + 1;
+            }
+        }
+        strs_push(out, str_join(fixed, " "));
+    }
+    str_join(out, "\n")
+}
+
+/// One run, its memory report on, in `dir`, stdin empty, within 120 s.
+fn ran(h: Caps, exe: Str, dir: Str, depth: Bool) -> Ran ! { io, spawn } {
+    let r = run_within(h, exe, strs_new(), dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"), 120000);
+    if depth {
+        return Ran(code: r.code, stdout: r.stdout, stderr: depth_normalised(r.stderr));
+    }
+    r
+}
+
+/// What one input came to: `agree`, `skipped: …` or `differ: …`.
+fn one(h: Caps, src: Str, nzcg_path: Str, work: Str, target: Str) -> Result[Str, Str] ! { io, spawn } {
+    let root = f"{repo_root(h)}/";
+    let rel = match strip_prefix(src, root) {
+        Option.Some(value: r) => r,
+        Option.None() => src,
+    };
+    let w = f"{work}/{text_replace(text_replace(rel, "/", "_"), ".", "_")}";
+    let made = run(h, "mkdir", words(f"-p {w}"), "", env_here(h.io));
+    check_that(made.code == 0, made.stderr)?;
+    let link = strs_new();
+    let c = f"{str_slice(src, 0, str_len(src) - 3)}.c";
+    if is_file(h, c) {
+        let a = strs_new();
+        if target == "x86_64-apple-darwin" {
+            strs_push(a, "-arch");
+            strs_push(a, "x86_64");
+        }
+        for x in words(f"-c {c} -o {w}/c.o") {
+            strs_push(a, x);
+        }
+        let cc = run(h, "cc", a, "", env_here(h.io));
+        if cc.code != 0 {
+            return Result[Str, Str].Ok(value: f"skipped: {rel}: its C does not compile");
+        }
+        strs_push(link, "--link");
+        strs_push(link, f"{w}/c.o");
+    }
+    let rb = build(h, w, nzcg_path, "llvm", target, link, src, f"{w}/ref");
+    if rb.code != 0 {
+        return Result[Str, Str].Ok(value: f"skipped: {rel}: the LLVM build fails");
+    }
+    let gb = build(h, w, nzcg_path, "nazm", target, link, src, f"{w}/gen");
+    if gb.code != 0 {
+        let first = strs_new();
+        for l in text_lines(gb.stderr) {
+            if strs_len(first) < 3 {
+                strs_push(first, l);
+            }
+        }
+        return Result[Str, Str].Ok(value: f"differ: {rel}: `--backend nazm` does not build it ({gb.code}): {str_join(first, " | ")}");
+    }
+    let depth = text_contains(read_text(h, src)?, "nzcg: stack depth");
+    let a = ran(h, f"{w}/ref", w, depth);
+    let b = ran(h, f"{w}/gen", w, depth);
+    if a.code == TIMED_OUT || b.code == TIMED_OUT {
+        return Result[Str, Str].Ok(value: f"differ: {rel}: a run did not terminate");
+    }
+    if a.code == b.code && a.stdout == b.stdout && a.stderr == b.stderr {
+        scratch_remove(h, w);
+        return Result[Str, Str].Ok(value: "agree");
+    }
+    let what = strs_new();
+    if a.stdout != b.stdout {
+        strs_push(what, "stdout");
+    }
+    if a.stderr != b.stderr {
+        strs_push(what, f"stderr ({a.stderr} / {b.stderr})");
+    }
+    if a.code != b.code {
+        strs_push(what, f"status ({a.code} / {b.code})");
+    }
+    Result[Str, Str].Ok(value: f"differ: {rel}: {str_join(what, ", ")}")
+}
+
+fn build(h: Caps, w: Str, nzcg_path: Str, backend: Str, target: Str, link: Strs, src: Str, exe: Str) -> Ran ! { io, spawn } {
+    let a = words(f"build --no-cache --backend {backend}");
+    if target != "" {
+        strs_push(a, "--target");
+        strs_push(a, target);
+    }
+    for x in link {
+        strs_push(a, x);
+    }
+    strs_push(a, src);
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    nazm_with(h, w, nzcg_path, a)
+}
+
+/// Off macOS the Rust test is ignored, and this one passes without looking.
+@test
+fn every_input_of_the_generators_suite_agrees_with_the_llvm_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let work = scratch_new(h);
+    let g = nzcg(h, work)?;
+    let all = inputs(h);
+    check_that(strs_len(all) > 100, f"{strs_len(all)} inputs")?;
+    let mut agree = 0;
+    let skipped = strs_new();
+    let differ = strs_new();
+    for src in all {
+        let o = one(h, src, g, work, "")?;
+        if o == "agree" {
+            agree = agree + 1;
+        } else {
+            if text_starts_with(o, "skipped: ") {
+                strs_push(skipped, o);
+            } else {
+                strs_push(differ, o);
+            }
+        }
+    }
+    scratch_remove(h, work);
+    check_that(strs_len(differ) == 0, f"{agree} agree: {str_join(differ, "\n")}")?;
+    // A skip is not agreement: every input builds with LLVM today.
+    check_that(strs_len(skipped) == 0, str_join(skipped, "\n"))
+}
+
+/// The generator's own programs built for `x86_64-apple-darwin` and run under Rosetta: they behave
+/// as the LLVM build for that target does. Off Apple silicon the Rust test is ignored, and this one
+/// passes without looking.
+@test
+fn the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !macos_aarch64(h) {
+        return ok();
+    }
+    let rosetta = run(h, "arch", words("-x86_64 /usr/bin/true"), "", env_here(h.io)).code == 0;
+    if skip_without(h, rosetta, "no Rosetta 2 on this machine")? {
+        return ok();
+    }
+    let work = scratch_new(h);
+    let g = nzcg(h, work)?;
+    let programs = nz_in(h, f"{repo_root(h)}/toolchain/codegen/tests/programs");
+    let mut guards = false;
+    for pr in programs {
+        if text_ends_with(pr, "/guards.nz") {
+            guards = true;
+        }
+    }
+    check_that(guards, str_join(programs, " "))?;
+    let differ = strs_new();
+    for src in programs {
+        let o = one(h, src, g, work, "x86_64-apple-darwin")?;
+        if o != "agree" {
+            strs_push(differ, o);
+        }
+    }
+    scratch_remove(h, work);
+    check_that(strs_len(differ) == 0, str_join(differ, "\n"))
+}
+
+/// A stand-in generator: a shell script that does what `body` says.
+fn fake(h: Caps, dir: Str, body: Str) -> Result[Str, Str] ! { io, spawn } {
+    let path = f"{dir}/nzcg-fake";
+    write_at(h, path, f"#!/bin/sh\n{body}\n")?;
+    let c = run(h, "chmod", words(f"755 {path}"), "", env_here(h.io));
+    check_that(c.code == 0, c.stderr)?;
+    Result[Str, Str].Ok(value: path)
+}
+
+/// A fake that records its arguments (`args.txt`) and its LIR (`unit.lir`, the last unit's), then
+/// runs the real generator.
+fn recording(h: Caps, dir: Str, real: Str) -> Result[Str, Str] ! { io, spawn } {
+    fake(h, dir, f"echo \"$@\" >> '{dir}/args.txt'\nfor a; do last2=$last1; last1=$a; done\ncp \"$last2\" '{dir}/unit.lir'\nexec '{real}' \"$@\"")
+}
+
+/// This host's target triple, as `Target::host()` names it.
+fn host_triple(h: Caps) -> Str ! { io, spawn } {
+    let arch = uname(h, "-m");
+    let a = if arch == "arm64" { "aarch64" } else { arch };
+    if on_macos(h) { f"{a}-apple-darwin" } else { f"{a}-unknown-linux-gnu" }
+}
+
+@test
+fn the_generator_is_told_the_target_and_whether_the_program_has_one_thread(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let d = scratch_new(h);
+    let real = nzcg(h, d)?;
+    let host = host_triple(h);
+    let cases = text_split("one.nz|no|fn main(out: OutCap) -> Int ! {io} {\n    println(7)\n    0\n}\n~many.nz|yes|fn work(n: Int) -> Int { n * 2 }\nfn main(tasks: SpawnCap, out: OutCap) -> Int {\n    scope { spawn work(3); }\n    println(7)\n    0\n}\n", "~");
+    for case in cases {
+        let f = text_split(case, "|");
+        let name = strs_get(f, 0);
+        let threads = strs_get(f, 1) == "yes";
+        scratch_write(h, d, name, strs_get(f, 2))?;
+        file_remove(h.io, f"{d}/args.txt");
+        let nz = recording(h, d, real)?;
+        let r = nazm_with(h, d, nz, words(f"build --no-cache --backend nazm {name} -o p"));
+        check_that(r.code == 0, f"{name}: {r.stderr}")?;
+        let args = read_text(h, f"{d}/args.txt")?;
+        for l in text_lines(args) {
+            check_that(text_starts_with(l, f"--target {host} "), f"{name}: {args}")?;
+        }
+        check_that(text_contains(args, "--one-thread") == !threads, f"{name}: one thread is {!threads}: {args}")?;
+        let x = bounded_exe(h, f"{d}/p", "", suite_env(h));
+        // `main`'s result is printed after what it printed.
+        check_that(x.code == 0 && x.stdout == "7\n0\n", f"{name}: {ran_show(x)}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_debug_build_hands_the_generator_its_positions_and_their_files(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let d = prog_dir(h, "prog.nz", "fn add(a: Int, b: Int) -> Int { a + b }\n\nfn main() -> Int { add(1, 2) }\n")?;
+    let nz = recording(h, d, nzcg(h, d)?)?;
+    for flag in text_split("|--debug ", "|") {
+        let debug = flag != "";
+        let r = nazm_with(h, d, nz, words(f"build --no-cache --backend nazm {flag}prog.nz -o p"));
+        check_that(r.code == 0, r.stderr)?;
+        let lir = read_text(h, f"{d}/unit.lir")?;
+        check_that(text_contains(lir, "\n; file ") == debug, "a file line")?;
+        check_that(text_contains(lir, "  loc ") == debug, "loc lines")?;
+        let x = bounded_exe(h, f"{d}/p", "", suite_env(h));
+        check_that(x.code == 0 && x.stdout == "3\n", ran_show(x))?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    let nz = fake(h, d, "echo 'nzcg: refused: the instruction `frob i64`, in `main` of prog.nz' >&2\necho 'nzcg: refused: the terminator `jump.far`, in `main` of prog.nz' >&2\nexit 3")?;
+    let r = nazm_with(h, d, nz, words("build --no-cache --backend nazm prog.nz -o p"));
+    let built = file_exists_at(h.io, f"{d}/p");
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(count_matches(r.stderr, "[N0101]") == 2, r.stderr)?;
+    check_that(text_contains(r.stderr, "the instruction `frob i64`"), r.stderr)?;
+    check_that(text_contains(r.stderr, "the terminator `jump.far`"), r.stderr)?;
+    check_that(!text_contains(r.stderr, "N0900"), r.stderr)?;
+    check_that(!built, "no fallback: nothing is built")
+}
+
+@test
+fn any_other_failure_of_the_generator_is_a_compiler_defect_with_its_words(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    let nz = fake(h, d, "echo 'index out of bounds in sel.nz' >&2\nexit 2")?;
+    let r = nazm_with(h, d, nz, words("build --no-cache --backend nazm prog.nz -o p"));
+    let built = file_exists_at(h.io, f"{d}/p");
+    scratch_remove(h, d);
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0900"), r.stderr)?;
+    check_that(text_contains(r.stderr, "index out of bounds in sel.nz"), r.stderr)?;
+    check_that(!text_contains(r.stderr, "N0101"), r.stderr)?;
+    check_that(!built, "something was built")
+}
+
+@test
+fn a_missing_generator_or_a_target_it_does_not_carry_is_refused_before_compiling(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    let missing = f"{d}/no-such-nzcg";
+    if on_macos(h) {
+        let r = nazm_with(h, d, missing, words("build --no-cache --backend nazm prog.nz -o p"));
+        check_that(r.code == 4, ran_show(r))?;
+        check_that(text_contains(r.stderr, "no-such-nzcg"), r.stderr)?;
+    }
+    let r2 = nazm_with(h, d, missing, words("build --no-cache --backend nazm --target aarch64-unknown-linux-gnu --objects o prog.nz"));
+    let made = file_exists_at(h.io, f"{d}/o");
+    scratch_remove(h, d);
+    check_that(r2.code == 5, ran_show(r2))?;
+    check_that(text_contains(r2.stderr, "`--backend nazm` builds for aarch64-apple-darwin"), r2.stderr)?;
+    check_that(!made, "o was made")
+}
+
+/// The packaged layout (task 7.8): `scripts/host-archive.sh` builds `nzcg` with the `nazm` it
+/// packages and installs it as `libexec/nazm/nzcg`, where the unpacked `bin/nazm` finds it with
+/// `NAZM_NZCG` unset — and nowhere else. Off macOS the Rust test is ignored, and this one passes
+/// without looking.
+@test
+fn the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let triple = if uname(h, "-m") == "arm64" { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" };
+    let root = repo_root(h);
+    let d = scratch_new(h);
+    let out = f"{d}/archives";
+    let a = strs_new();
+    strs_push(a, f"{root}/scripts/host-archive.sh");
+    strs_push(a, triple);
+    strs_push(a, nazm_bin(h.io));
+    strs_push(a, out);
+    let r = run_within(h, "sh", a, "", suite_env(h), 600000);
+    check_that(r.code == 0, ran_show(r))?;
+    let archive = f"{out}/nazm-{triple}.tar.gz";
+    let clean_env = env_unset(env_unset(suite_env(h), "NAZM_NZCG"), "NAZM_RESULT_REPORT");
+    let ci = strs_new();
+    strs_push(ci, f"{root}/scripts/clean-install-test.sh");
+    strs_push(ci, archive);
+    let r2 = run_within(h, "sh", ci, "", clean_env, 600000);
+    check_that(r2.code == 0, ran_show(r2))?;
+    check_that(text_contains(r2.stdout, "clean-install: ok"), r2.stdout)?;
+    scratch_mkdir(h, d, "unpacked")?;
+    let tar = strs_new();
+    strs_push(tar, "-xzf");
+    strs_push(tar, archive);
+    strs_push(tar, "-C");
+    strs_push(tar, f"{d}/unpacked");
+    let r3 = run(h, "tar", tar, "", env_here(h.io));
+    check_that(r3.code == 0, ran_show(r3))?;
+    let top = f"{d}/unpacked/nazm-{triple}";
+    let installed = f"{top}/libexec/nazm/nzcg";
+    check_that(is_file(h, installed), f"the archive carries no {installed}")?;
+    let install = read_text(h, f"{top}/INSTALL.txt")?;
+    check_that(text_contains(install, "libexec/nazm/nzcg"), install)?;
+    let work = f"{d}/work";
+    scratch_write(h, d, "work/prog.nz", "fn main() {\n    println(\"from nzcg\")\n}\n")?;
+    let no_var = env_unset(suite_env(h), "NAZM_NZCG");
+    let b = run(h, f"{top}/bin/nazm", words(f"build --no-cache --backend nazm prog.nz -o {work}/p"), work, no_var);
+    check_that(b.code == 0, ran_show(b))?;
+    let x = run(h, f"{work}/p", strs_new(), work, env_unset(suite_env(h), "NAZM_RESULT_REPORT"));
+    check_that(x.code == 0 && x.stdout == "from nzcg\n", ran_show(x))?;
+    // Moved away, it is not found anywhere else: the refusal names the installed path.
+    let mv = strs_new();
+    strs_push(mv, installed);
+    strs_push(mv, f"{top}/nzcg-moved");
+    run(h, "mv", mv, "", env_here(h.io));
+    let q = run(h, f"{top}/bin/nazm", words(f"build --no-cache --backend nazm prog.nz -o {work}/q"), work, no_var);
+    let made = file_exists_at(h.io, f"{work}/q");
+    scratch_remove(h, d);
+    check_that(q.code == 4, ran_show(q))?;
+    check_that(text_contains(q.stderr, "libexec/nazm/nzcg"), q.stderr)?;
+    check_that(!made, "q was built")
+}
