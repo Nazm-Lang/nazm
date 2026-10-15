@@ -1,0 +1,17 @@
+// Attributes in an imported module (design D19): its items are the program's, so its refusals come
+// with the root's of the same kind.
+
+@zork
+pub struct Lib { a: Int }
+
+@cfg(os = "nowhere")
+pub fn gone() -> Int { 0 }
+
+@on_failure
+pub fn lib_hook(code: Int) -> Int ! {} { 0 }
+
+@interrupt("timer")
+pub fn lib_tick() -> Int ! {} { 0 }
+
+@bogus
+pub fn lib_f() -> Int { 1 }

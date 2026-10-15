@@ -13,9 +13,10 @@
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s and applications of any type; functions with type parameters (and `Equality`
-// requirements) but no effect parameters, contracts or attributes; `let`, assignment to a binding
-// or its fields, `while`, `for`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary
-// operators but shifts, calls of the module's functions and of the built-ins (generic ones by
+// requirements) but no effect parameters or contracts; attributes but `@derive`, configured
+// before the checker runs (`configure.nz`); `let`, assignment to a binding or its fields,
+// `while`, `for`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary operators
+// but shifts, calls of the module's functions and of the built-ins (generic ones by
 // inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
@@ -300,6 +301,14 @@ pub fn ck_graph() -> Graph {
 // no error (`analyse`, `check_map_with_warnings`).
 pub fn ck_graph_syntax_error(g: Graph) -> Int {
     ints_set(g.syntax, 0, 1);
+    0
+}
+
+// The compilation's attributes were refused (`attributes::configure`), and its trees parsed: as
+// after a syntax error, the missing `main` and the warnings are not reported, but a function
+// without a body is not one whose body failed to parse.
+pub fn ck_graph_attribute_error(g: Graph) -> Int {
+    ints_set(g.syntax, 0, 2);
     0
 }
 
@@ -1307,29 +1316,25 @@ fn imports_module(c: Ck, m: Int, x: Int) -> Bool {
     false
 }
 
+// Whether a record or enum derives an encoding (`@derive`), which is generated into the source
+// before it is parsed (`derive::expand`); this front end does not generate it.
+fn derives_encoding(c: Ck, decl: Int) -> Bool {
+    let attrs = kids(c, decl, "attrs");
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        if fname_of(c, ints_get(attrs, i), "name") == "derive" { return true; }
+        i = i + 1;
+    }
+    false
+}
+
 // What a module may hold that the checker does not carry yet.
 fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
-    let traits = kids(c, p, "traits");
-    let mut t = 0;
-    while t < ints_len(traits) {
-        let tr = ints_get(traits, t);
-        if ints_len(kids(c, tr, "attrs")) > 0 { stop(c, "an attribute"); }
-        // `@std/hash`'s `Hash` is derived where no impl is written (L6).
-        t = t + 1;
-    }
-    let impls = kids(c, p, "impls");
-    t = 0;
-    while t < ints_len(impls) {
-        let im = ints_get(impls, t);
-        if ints_len(kids(c, im, "attrs")) > 0 { stop(c, "an attribute"); }
-        t = t + 1;
-    }
     let consts = kids(c, p, "consts");
     let mut k = 0;
     while k < ints_len(consts) {
         let decl = ints_get(consts, k);
-        if ints_len(kids(c, decl, "attrs")) > 0 { stop(c, "an attribute"); }
         if flag(c, decl, "is_static") { stop(c, "a static"); }
         if const_kind(c, decl) < 0 { stop(c, "a constant of this type"); }
         k = k + 1;
@@ -1338,53 +1343,32 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let mut i = 0;
     while i < ints_len(records) {
         let r = ints_get(records, i);
-        if ints_len(kids(c, r, "attrs")) > 0 { stop(c, "an attribute"); }
+        if derives_encoding(c, r) { stop(c, "a derived encoding"); }
         if some(c, r, "foreign") { stop(c, "a foreign record"); }
         let n = fname_of(c, r, "name");
         if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
-        let fields = kids(c, r, "fields");
-        let mut k = 0;
-        while k < ints_len(fields) {
-            if ints_len(kids(c, ints_get(fields, k), "attrs")) > 0 { stop(c, "an attribute"); }
-            k = k + 1;
-        }
         i = i + 1;
     }
     let enums = kids(c, p, "enums");
     i = 0;
     while i < ints_len(enums) {
         let e = ints_get(enums, i);
-        if ints_len(kids(c, e, "attrs")) > 0 { stop(c, "an attribute"); }
+        if derives_encoding(c, e) { stop(c, "a derived encoding"); }
         let n = fname_of(c, e, "name");
         if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
-        let variants = kids(c, e, "variants");
-        let mut k = 0;
-        while k < ints_len(variants) {
-            let v = ints_get(variants, k);
-            if ints_len(kids(c, v, "attrs")) > 0 { stop(c, "an attribute"); }
-            let fields = kids(c, v, "fields");
-            let mut j = 0;
-            while j < ints_len(fields) {
-                if ints_len(kids(c, ints_get(fields, j), "attrs")) > 0 { stop(c, "an attribute"); }
-                j = j + 1;
-            }
-            k = k + 1;
-        }
         i = i + 1;
     }
     let functions = kids(c, p, "functions");
     i = 0;
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
-        if ints_len(kids(c, f, "attrs")) > 0 { stop(c, "an attribute"); }
         if ints_len(kids(c, f, "effect_params")) > 0 { stop(c, "an effect parameter"); }
         if ints_len(kids(c, f, "contracts")) > 0 { stop(c, "a contract"); }
-
         if some(c, f, "foreign") { stop(c, "a foreign function"); }
         if some(c, f, "export") { stop(c, "an export"); }
         if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
         // A function without a body is a foreign one, or one whose body did not parse.
-        if some(c, f, "body") == false && gs(c, s_syntax()) == 0 { stop(c, "a function without a body"); }
+        if some(c, f, "body") == false && gs(c, s_syntax()) != 1 { stop(c, "a function without a body"); }
         i = i + 1;
     }
     0
@@ -2972,7 +2956,7 @@ fn main_rules(c: Ck) -> Int {
         }
         return 0;
     }
-    if gs(c, s_syntax()) == 1 { return 0; }
+    if gs(c, s_syntax()) >= 1 { return 0; }
     dg_error(c.d, "N0204", 0, 0, "this program has no `main` function", "", "`nazm run` evaluates `fn main() -> Int` in the file you named");
     0
 }

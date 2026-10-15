@@ -29,6 +29,10 @@ modes=${*:-tokens tree syntax}
 
 mkdir -p "$out/bin"
 
+# The host, as Rust's `std::env::consts` names it: what `@cfg` asks of (design D19).
+case $(uname -s) in Darwin) host_os=macos ;; Linux) host_os=linux ;; *) host_os=$(uname -s | tr 'A-Z' 'a-z') ;; esac
+case $(uname -m) in arm64|aarch64) host_arch=aarch64 ;; *) host_arch=$(uname -m) ;; esac
+
 # The reference dumper, built from this checkout.
 (cd "$root/toolchain/frontend-tests/refdump" && CARGO_TARGET_DIR="$ref_target" cargo build --release --quiet) \
   || { echo "run.sh: the reference dumper did not build" >&2; exit 2; }
@@ -60,7 +64,8 @@ for mode in $modes; do
   rm -rf "$out/$mode"
   mkdir -p "$out/$mode"
   # One worker per input: compare, and leave a `.diff` behind when the two disagree.
-  export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline" R2_NAZM="$nazm"
+  export R2_ROOT="$root" R2_REF="$ref" R2_EXE="$exe" R2_MODE="$mode" R2_DIR="$out/$mode" R2_DEADLINE="$deadline" R2_NAZM="$nazm" \
+    R2_OS="$host_os" R2_ARCH="$host_arch"
   # shellcheck disable=SC2016
   tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
     f=$1
@@ -73,7 +78,7 @@ for mode in $modes; do
       check)
         { "$R2_NAZM" check --json --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep "^{" > "$want" || true
         # Standard error says where the checker stopped (design D13), kept beside the result.
-        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" > "$got" 2> "$R2_DIR/$name.stop" || true
+        timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true

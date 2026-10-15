@@ -1,0 +1,922 @@
+// Attributes and conditional compilation (R2; `openspec/changes/r2-front-end/design.md`, D19): a
+// port of `nazm-core/src/check/attributes.rs`'s `configure`, run over the whole compilation's
+// trees after they are parsed and before anything resolves a name.
+//
+// The vocabulary is held — `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, `@task`,
+// `@on_failure`, `@interrupt`, `@section`, `@codec` and `@derive`, each on what it applies to and
+// with the arguments it takes (`N0619`), the shapes of the functions the board calls (`N0627`) —
+// and every declaration whose `@cfg` does not hold for the host is dropped from its module's tree:
+// an impl with its methods. As in the reference, the program is one list of each kind of item,
+// the modules' in load order, so each kind's diagnostics come together.
+//
+// A derived encoding (`@derive`) is generated into the source before it is parsed
+// (`derive::expand`), which this front end does not do: the checker stops at one, so what
+// `configure` says of a type that derives a format is never published here.
+
+use "syntax.nz";
+use "diag.nz";
+
+// The build the conditions are asked of (`BuildConfig::host`): outside a package, no feature and
+// no profile is enabled.
+pub struct Config {
+    os: Str,
+    arch: Str,
+    target: Str,
+}
+
+pub fn cf_host(os: Str, arch: Str) -> Config {
+    let mut target = cf_cat3(arch, "-unknown-", os);
+    if os == "macos" { target = str_concat(arch, "-apple-darwin"); }
+    if os == "linux" { target = str_concat(arch, "-unknown-linux-gnu"); }
+    Config(os: os, arch: arch, target: target)
+}
+
+// The compilation's working state: its tree, its modules' programs and their offsets, the
+// diagnostics, and the declarations kept.
+struct Cf {
+    t: Tree,
+    d: Diags,
+    cfg: Config,
+    // The module whose item is being looked at: its offset in the whole compilation.
+    at: Ints,
+    // Why the last condition was not one, and where (a span of the tree).
+    why: Strs,
+    wat: Ints,
+    // Not empty once a condition asked of a host that was not given.
+    unsure: Ints,
+}
+
+fn cf_cat3(a: Str, b: Str, x: Str) -> Str { str_concat(str_concat(a, b), x) }
+fn tk(s: Str) -> Str { cf_cat3("`", s, "`") }
+
+fn base(c: Cf) -> Int { ints_get(c.at, 0) }
+fn s_of(c: Cf, span: Int) -> Int { sx_s(c.t, span) + base(c) }
+fn e_of(c: Cf, span: Int) -> Int { sx_e(c.t, span) + base(c) }
+
+fn field(c: Cf, n: Int, name: Str) -> Int { sx_field(c.t, n, name) }
+fn items(c: Cf, n: Int, name: Str) -> Ints { sx_items(c.t, sx_field(c.t, n, name)) }
+fn text_of(c: Cf, n: Int, name: Str) -> Str { sx_name(c.t, n, name) }
+fn has(c: Cf, n: Int, name: Str) -> Bool { sx_is_some(c.t, sx_field(c.t, n, name)) }
+fn inner(c: Cf, n: Int, name: Str) -> Int { sx_unwrap(c.t, sx_field(c.t, n, name)) }
+// What variant an attribute's argument is: `Pair`, `Call`, `Str` or `Word`.
+fn variant(c: Cf, n: Int) -> Str { sx_text(c.t, n) }
+
+fn refuse(c: Cf, span: Int, what: Str, help: Str) -> Int { dg_error(c.d, "N0619", s_of(c, span), e_of(c, span), what, "", help) }
+
+// What an item is, for a message (`Target::named`).
+fn tg_function() -> Int { 0 }
+fn tg_type() -> Int { 1 }
+fn tg_trait() -> Int { 2 }
+fn tg_impl() -> Int { 3 }
+fn tg_const() -> Int { 4 }
+fn tg_static() -> Int { 5 }
+
+fn named(target: Int) -> Str {
+    if target == tg_function() { return "a function"; }
+    if target == tg_type() { return "a type"; }
+    if target == tg_trait() { return "a trait"; }
+    if target == tg_impl() { return "an impl"; }
+    if target == tg_const() { return "a constant"; }
+    "a static"
+}
+
+// `configure`, over every module: `programs` are the modules' trees in load order, at the offsets
+// `bases`. Returns whether a condition asked of a host that was not given (`cf_host` with no
+// operating system): what it decided is a guess, and the checker stops.
+pub fn cf_configure(t: Tree, programs: Ints, bases: Ints, d: Diags, cfg: Config) -> Bool {
+    let c = Cf(t: t, d: d, cfg: cfg, at: ints_new(), why: strs_new(), wat: ints_new(), unsure: ints_new());
+    strs_push(c.why, "");
+    ints_push(c.wat, 0);
+    ints_push(c.at, 0);
+    let count = ints_len(programs);
+    // Records, then enums: each kept where its `@cfg` holds.
+    let mut m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        keep_types(c, ints_get(programs, m), "records");
+        m = m + 1;
+    }
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        keep_types(c, ints_get(programs, m), "enums");
+        m = m + 1;
+    }
+    // `@codec` inside each type, and against the type it shapes.
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let records = items(c, ints_get(programs, m), "records");
+        let mut i = 0;
+        while i < ints_len(records) {
+            codec_members(c, ints_get(records, i), false);
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let enums = items(c, ints_get(programs, m), "enums");
+        let mut i = 0;
+        while i < ints_len(enums) {
+            codec_members(c, ints_get(enums, i), true);
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    // Traits, constants and statics, impls.
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        keep_items(c, ints_get(programs, m), "traits");
+        m = m + 1;
+    }
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        keep_items(c, ints_get(programs, m), "consts");
+        m = m + 1;
+    }
+    let dropped = ints_new();
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let p = ints_get(programs, m);
+        let impls = items(c, p, "impls");
+        let kept = ints_new();
+        let mut i = 0;
+        while i < ints_len(impls) {
+            let im = ints_get(impls, i);
+            if admitted(c, items(c, im, "attrs"), tg_impl(), false) {
+                ints_push(kept, im);
+            } else {
+                ints_push(dropped, s_of(c, field(c, im, "impl_span")));
+            }
+            i = i + 1;
+        }
+        sx_set(t, p, "impls", mk_list(t, kept));
+        m = m + 1;
+    }
+    // Functions: an impl's method goes with its impl; any other is held to its attributes, and,
+    // kept, to the shape its marks ask of it.
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let p = ints_get(programs, m);
+        let functions = items(c, p, "functions");
+        let kept = ints_new();
+        let mut i = 0;
+        while i < ints_len(functions) {
+            let f = ints_get(functions, i);
+            if has(c, f, "method_of") {
+                if index_of(dropped, s_of(c, field(c, inner(c, f, "method_of"), "impl_span"))) < 0 { ints_push(kept, f); }
+            } else {
+                if admitted(c, items(c, f, "attrs"), tg_function(), has(c, f, "pub_span")) {
+                    ints_push(kept, f);
+                    shaped(c, f);
+                    handler(c, f);
+                    failure_hook(c, f);
+                    task(c, f);
+                }
+            }
+            i = i + 1;
+        }
+        sx_set(t, p, "functions", mk_list(t, kept));
+        m = m + 1;
+    }
+    // One failure hook, and one handler for each interrupt: the second is refused where it is
+    // written.
+    let mut first_hook = 0 - 1;
+    let mut hook_end = 0;
+    let handled = strs_new();
+    let hs = ints_new();
+    let he = ints_new();
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let functions = items(c, ints_get(programs, m), "functions");
+        let mut i = 0;
+        while i < ints_len(functions) {
+            let f = ints_get(functions, i);
+            let ns = field(c, f, "name_span");
+            if has_attr(c, f, "on_failure") {
+                if first_hook < 0 {
+                    first_hook = s_of(c, ns);
+                    hook_end = e_of(c, ns);
+                } else {
+                    dg_error(d, "N0627", s_of(c, ns), e_of(c, ns), "the program already has a failure hook", "",
+                            "one hook; call one function from the other");
+                    dg_secondary(d, first_hook, hook_end, "the first");
+                }
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        let functions = items(c, ints_get(programs, m), "functions");
+        let mut i = 0;
+        while i < ints_len(functions) {
+            let f = ints_get(functions, i);
+            let ns = field(c, f, "name_span");
+            let marked = interrupt_of(c, f);
+            if marked != "" {
+                let name = str_slice(marked, 1, str_len(marked));
+                let k = strs_index(handled, name);
+                if k >= 0 {
+                    dg_error(d, "N0627", s_of(c, ns), e_of(c, ns), cf_cat3("the interrupt `", name, "` already has a handler"), "",
+                            "one handler for each interrupt; call one function from the other");
+                    dg_secondary(d, ints_get(hs, k), ints_get(he, k), "its handler");
+                } else {
+                    strs_push(handled, name);
+                    ints_push(hs, s_of(c, ns));
+                    ints_push(he, e_of(c, ns));
+                }
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    ints_len(c.unsure) > 0
+}
+
+fn index_of(xs: Ints, x: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == x { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn strs_index(xs: Strs, s: Str) -> Int {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        if strs_get(xs, i) == s { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// A module's records or enums, each kept where its attributes admit it.
+fn keep_types(c: Cf, p: Int, list: Str) -> Int {
+    let all = items(c, p, list);
+    let kept = ints_new();
+    let mut i = 0;
+    while i < ints_len(all) {
+        let x = ints_get(all, i);
+        if admitted(c, items(c, x, "attrs"), tg_type(), has(c, x, "pub_span")) { ints_push(kept, x); }
+        i = i + 1;
+    }
+    sx_set(c.t, p, list, mk_list(c.t, kept));
+    0
+}
+
+// A module's traits or constants and statics, each kept where its attributes admit it.
+fn keep_items(c: Cf, p: Int, list: Str) -> Int {
+    let all = items(c, p, list);
+    let kept = ints_new();
+    let mut i = 0;
+    while i < ints_len(all) {
+        let x = ints_get(all, i);
+        let mut target = tg_trait();
+        if list == "consts" {
+            target = tg_const();
+            if sx_name(c.t, x, "is_static") == "true" { target = tg_static(); }
+        }
+        if admitted(c, items(c, x, "attrs"), target, has(c, x, "pub_span")) { ints_push(kept, x); }
+        i = i + 1;
+    }
+    sx_set(c.t, p, list, mk_list(c.t, kept));
+    0
+}
+
+fn has_attr(c: Cf, decl: Int, name: Str) -> Bool {
+    let attrs = items(c, decl, "attrs");
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        if text_of(c, ints_get(attrs, i), "name") == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The attribute's arguments, or -1 where it is written without parentheses.
+fn args_of(c: Cf, a: Int) -> Int {
+    if has(c, a, "args") { return inner(c, a, "args"); }
+    0 - 1
+}
+
+// The one string argument of the attribute `name` on `decl`, after a `=`, where its first is
+// written with one (`string_attr`); "" otherwise.
+fn string_attr(c: Cf, decl: Int, name: Str) -> Str {
+    let attrs = items(c, decl, "attrs");
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if text_of(c, a, "name") == name {
+            let l = args_of(c, a);
+            if l < 0 { return ""; }
+            if sx_count(c.t, l) != 1 { return ""; }
+            let x = sx_kid(c.t, l, 0);
+            if variant(c, x) != "Str" { return ""; }
+            return str_concat("=", text_of(c, x, "value"));
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+// The interrupt `@interrupt` names on `f`, after a `=`, or "".
+fn interrupt_of(c: Cf, f: Int) -> Str { string_attr(c, f, "interrupt") }
+
+fn derives_any(c: Cf, decl: Int) -> Bool { derives(c, decl, "json") || derives(c, decl, "toml") }
+
+fn derives(c: Cf, decl: Int, format: Str) -> Bool {
+    let attrs = items(c, decl, "attrs");
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if text_of(c, a, "name") == "derive" {
+            let l = args_of(c, a);
+            if l >= 0 {
+                let mut k = 0;
+                while k < sx_count(c.t, l) {
+                    let x = sx_kid(c.t, l, k);
+                    if variant(c, x) == "Word" && text_of(c, x, "name") == format { return true; }
+                    k = k + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn is_alnum(b: Int) -> Bool { (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) }
+
+// An interrupt's name a manifest can give: letters, digits, `_` and `-`.
+fn interrupt_name(s: Str) -> Bool {
+    if str_len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if is_alnum(b) == false && b != 95 && b != 45 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// A section's name a linker script can write: letters, digits, `.` and `_`.
+fn section_name(s: Str) -> Bool {
+    if str_len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if is_alnum(b) == false && b != 46 && b != 95 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// Whether `s` is what Rust's `str::parse` reads as an unsigned integer: an optional `+`, then
+// digits. Its value, as digits with no leading zero, is `digits`.
+fn digits(s: Str) -> Str {
+    let mut i = 0;
+    if str_len(s) > 0 && str_byte(s, 0) == 43 { i = 1; }
+    if i >= str_len(s) { return "-"; }
+    let mut k = i;
+    while k < str_len(s) {
+        let b = str_byte(s, k);
+        if b < 48 || b > 57 { return "-"; }
+        k = k + 1;
+    }
+    while i < str_len(s) - 1 && str_byte(s, i) == 48 { i = i + 1; }
+    str_slice(s, i, str_len(s))
+}
+
+// Whether the digits `a` are at most the digits `b` as numbers (no leading zeros).
+fn at_most(a: Str, b: Str) -> Bool {
+    if str_len(a) != str_len(b) { return str_len(a) < str_len(b); }
+    let mut i = 0;
+    while i < str_len(a) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    true
+}
+
+// `task_of`: whether the `@task` on `decl` writes its priority (0 to 255) and its period (at least
+// one tick) and no other key.
+fn task_ok(c: Cf, a: Int) -> Bool {
+    let l = args_of(c, a);
+    if l < 0 { return false; }
+    let mut priority = false;
+    let mut period = false;
+    let mut k = 0;
+    while k < sx_count(c.t, l) {
+        let x = sx_kid(c.t, l, k);
+        if variant(c, x) == "Pair" {
+            let key = text_of(c, x, "key");
+            let v = digits(text_of(c, x, "value"));
+            if key == "priority" {
+                priority = v != "-" && at_most(v, "255");
+            } else {
+                if key == "period" {
+                    period = v != "-" && v != "0" && at_most(v, "18446744073709551615");
+                } else {
+                    return false;
+                }
+            }
+        }
+        k = k + 1;
+    }
+    priority && period
+}
+
+// Every attribute on a declaration of kind `target` held to the vocabulary; whether every `@cfg`
+// among them holds for the build (`admitted`).
+fn admitted(c: Cf, attrs: Ints, target: Int, public: Bool) -> Bool {
+    let mut keep = true;
+    let seen = strs_new();
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        let name = text_of(c, a, "name");
+        let span = field(c, a, "span");
+        let l = args_of(c, a);
+        let mut twice = false;
+        if name != "cfg" && strs_index(seen, name) >= 0 {
+            refuse(c, span, cf_cat3("`@", name, "` is written twice"), "an attribute other than `@cfg` says one thing once");
+            twice = true;
+        }
+        if twice == false {
+            strs_push(seen, name);
+            if admit_one(c, a, name, span, l, target, public) == false { keep = false; }
+        }
+        i = i + 1;
+    }
+    keep
+}
+
+// One attribute held to the vocabulary; false where it is a `@cfg` that does not hold.
+fn admit_one(c: Cf, a: Int, name: Str, span: Int, l: Int, target: Int, public: Bool) -> Bool {
+    if name == "cfg" {
+        if l >= 0 && sx_count(c.t, l) == 1 {
+            let h = holds(c, sx_kid(c.t, l, 0));
+            if h == 2 {
+                refuse(c, ints_get(c.wat, 0), strs_get(c.why, 0),
+                        "a condition is `os = \"…\"`, `arch = \"…\"`, `target = \"…\"`, `feature = \"…\"` or `profile = \"…\"`, combined with `all(…)`, `any(…)` and `not(…)`");
+                return true;
+            }
+            return h == 1;
+        }
+        refuse(c, span, "`@cfg` takes one condition", "write `@cfg(os = \"linux\")`, or combine conditions with `all(…)` or `any(…)`");
+        return true;
+    }
+    if name == "test" || name == "bench" || name == "fuzz" {
+        if target != tg_function() { refuse(c, span, cf_cat3(cf_cat3("`@", name, "` marks a function, and this is "), named(target), ""), "write it before the `fn` it marks"); }
+        let mut fails = false;
+        if name == "test" && l >= 0 && sx_count(c.t, l) == 1 {
+            let x = sx_kid(c.t, l, 0);
+            fails = variant(c, x) == "Word" && text_of(c, x, "name") == "fails";
+        }
+        if l >= 0 && fails == false {
+            let mut help = "write it alone";
+            if name == "test" { help = "`@test` or `@test(fails)`"; }
+            refuse(c, span, cf_cat3("`@", name, "` takes no arguments"), help);
+        }
+        return true;
+    }
+    if name == "deprecated" {
+        let published = public && (target == tg_function() || target == tg_type());
+        if published == false {
+            let mut what = named(target);
+            if public == false { what = str_concat(named(target), ", and not `pub`"); }
+            refuse(c, span, cf_cat3("`@deprecated` marks what an importer's API documentation shows — a `pub` function, `struct` or `enum` — and this is ", what, ""),
+                    "it is metadata `nazm doc` publishes, and no diagnostic reports a use: write it before a `pub` function, `struct` or `enum`");
+        }
+        let mut fine = l < 0;
+        if l >= 0 && sx_count(c.t, l) == 1 { fine = variant(c, sx_kid(c.t, l, 0)) == "Str"; }
+        if fine == false { refuse(c, span, "`@deprecated` takes at most one string: why", "`@deprecated` or `@deprecated(\"use `g` instead\")`"); }
+        return true;
+    }
+    if name == "task" {
+        if target != tg_function() { refuse(c, span, str_concat("`@task` marks a function, and this is ", named(target)), "write it before the `fn` the board's scheduler runs"); }
+        if task_ok(c, a) == false {
+            refuse(c, span, "`@task` takes `priority = \"N\"`, from 0 to 255, and `period = \"P\"`, at least 1 tick, and nothing else",
+                    "`@task(priority = \"2\", period = \"10\")`");
+        }
+        return true;
+    }
+    if name == "on_failure" {
+        if target != tg_function() { refuse(c, span, str_concat("`@on_failure` marks a function, and this is ", named(target)), "write it before the `fn` the board calls when the program fails"); }
+        if l >= 0 { refuse(c, span, "`@on_failure` takes no arguments", "write it alone: the board hands the hook the failure's number"); }
+        return true;
+    }
+    if name == "interrupt" {
+        if target != tg_function() { refuse(c, span, str_concat("`@interrupt` marks a function, and this is ", named(target)), "write it before the `fn` that handles the interrupt"); }
+        if one_string(c, l, true) == false {
+            refuse(c, span, "`@interrupt` takes one string: the interrupt's name in the board's manifest", "`@interrupt(\"timer\")`");
+        }
+        return true;
+    }
+    if name == "section" {
+        if target != tg_function() && target != tg_static() {
+            refuse(c, span, str_concat("`@section` places a function or a static, and this is ", named(target)), "a constant is written where it is used and has no address to place");
+        }
+        if one_string(c, l, false) == false {
+            refuse(c, span, "`@section` takes one string: the section's name, of letters, digits, `.` and `_`", "`@section(\".text.boot\")`");
+        }
+        return true;
+    }
+    if name == "codec" {
+        if target != tg_type() {
+            refuse(c, span, str_concat("`@codec` shapes a derived encoding: it marks a type, a field or a variant, not ", named(target)),
+                    "write it before the type, or before one of its fields");
+        }
+        codec_args(c, a, 0);
+        return true;
+    }
+    if name == "derive" {
+        if target != tg_type() { refuse(c, span, str_concat("`@derive` marks a `struct` or an `enum`, not ", named(target)), "write it before the type whose encoding it derives"); }
+        if l >= 0 && sx_count(c.t, l) > 0 {
+            let mut k = 0;
+            while k < sx_count(c.t, l) {
+                let x = sx_kid(c.t, l, k);
+                let mut known = false;
+                if variant(c, x) == "Word" {
+                    let w = text_of(c, x, "name");
+                    known = w == "json" || w == "toml";
+                }
+                if known == false { refuse(c, field(c, x, "span"), "`@derive` takes the formats it derives", "`@derive(json)`"); }
+                k = k + 1;
+            }
+        } else {
+            refuse(c, span, "`@derive` takes the formats it derives", "`@derive(json)`");
+        }
+        return true;
+    }
+    refuse(c, field(c, a, "name_span"), cf_cat3("`@", name, "` is not an attribute Nazm has"),
+            "the attributes are `@cfg`, `@test`, `@bench`, `@fuzz`, `@deprecated`, `@section`, `@interrupt`, `@on_failure`, `@task` and `@derive`; there are no user-defined attributes");
+    true
+}
+
+// Whether `l` is one string argument naming an interrupt (`interrupt`) or a section.
+fn one_string(c: Cf, l: Int, interrupt: Bool) -> Bool {
+    if l < 0 { return false; }
+    if sx_count(c.t, l) != 1 { return false; }
+    let x = sx_kid(c.t, l, 0);
+    if variant(c, x) != "Str" { return false; }
+    if interrupt { return interrupt_name(text_of(c, x, "value")); }
+    section_name(text_of(c, x, "value"))
+}
+
+// Whether condition `x` holds: 1 it does, 0 it does not, 2 it is not a condition — with where
+// and why (`c.wat`, `c.why`).
+fn holds(c: Cf, x: Int) -> Int {
+    let v = variant(c, x);
+    let span = field(c, x, "span");
+    if v == "Pair" {
+        let key = text_of(c, x, "key");
+        let value = text_of(c, x, "value");
+        if (key == "os" || key == "arch" || key == "target") && host_os(c) == "" { ints_push(c.unsure, 1); }
+        if key == "os" { return truth(host_os(c) == value); }
+        if key == "arch" { return truth(host_arch(c) == value); }
+        if key == "target" { return truth(host_target(c) == value); }
+        if key == "feature" || key == "profile" { return 0; }
+        return not_a_condition(c, span, cf_cat3("`", key, "` is not something a condition can ask about"));
+    }
+    if v == "Call" {
+        let name = text_of(c, x, "name");
+        let args = items(c, x, "args");
+        if name == "all" || name == "any" {
+            let mut all = 1;
+            let mut any = 0;
+            let mut i = 0;
+            while i < ints_len(args) {
+                let h = holds(c, ints_get(args, i));
+                if h == 2 { return 2; }
+                if h == 0 { all = 0; } else { any = 1; }
+                i = i + 1;
+            }
+            if name == "all" { return all; }
+            return any;
+        }
+        if name == "not" {
+            if ints_len(args) != 1 { return not_a_condition(c, span, "`not(…)` takes one condition"); }
+            let h = holds(c, ints_get(args, 0));
+            if h == 2 { return 2; }
+            return 1 - h;
+        }
+        return not_a_condition(c, span, cf_cat3("`", name, "(…)` is not a way to combine conditions"));
+    }
+    not_a_condition(c, span, "this is not a condition")
+}
+
+fn host_os(c: Cf) -> Str {
+    let k = c.cfg;
+    k.os
+}
+fn host_arch(c: Cf) -> Str {
+    let k = c.cfg;
+    k.arch
+}
+fn host_target(c: Cf) -> Str {
+    let k = c.cfg;
+    k.target
+}
+
+fn truth(b: Bool) -> Int { if b { 1 } else { 0 } }
+
+fn not_a_condition(c: Cf, span: Int, why: Str) -> Int {
+    ints_set(c.wat, 0, span);
+    strs_set(c.why, 0, why);
+    2
+}
+
+// Where a `@codec` is written: 0 a type, 1 a field, 2 a variant.
+fn codec_help(at: Int) -> Str {
+    if at == 0 { return "a type takes `rename_all = \"camelCase\"`, `deny_unknown`, and for an enum `tag = \"kind\"` or `untagged`"; }
+    if at == 1 { return "a field takes `rename = \"name\"`, `default` and `omit_none`"; }
+    "a variant takes `rename = \"name\"`"
+}
+
+fn is_case(s: Str) -> Bool { s == "camelCase" || s == "snake_case" || s == "kebab-case" || s == "PascalCase" || s == "SCREAMING_SNAKE_CASE" }
+
+// One `@codec(…)`'s arguments held to what its place takes, each once (`codec_args`).
+fn codec_args(c: Cf, a: Int, at: Int) -> Int {
+    let help = codec_help(at);
+    let l = args_of(c, a);
+    let mut none = l < 0;
+    if l >= 0 { none = sx_count(c.t, l) == 0; }
+    if none {
+        refuse(c, field(c, a, "span"), "`@codec` says how; it takes arguments", help);
+        return 0;
+    }
+    let seen = strs_new();
+    let mut k = 0;
+    while k < sx_count(c.t, l) {
+        let x = sx_kid(c.t, l, k);
+        let v = variant(c, x);
+        let mut word = "";
+        let mut ok = false;
+        if v == "Pair" {
+            word = text_of(c, x, "key");
+            let value = text_of(c, x, "value");
+            if at == 0 && word == "rename_all" { ok = is_case(value); }
+            if (at == 0 && word == "tag") || (at != 0 && word == "rename") { ok = value != ""; }
+        }
+        if v == "Word" {
+            word = text_of(c, x, "name");
+            ok = (at == 0 && (word == "deny_unknown" || word == "untagged")) || (at == 1 && (word == "default" || word == "omit_none"));
+        }
+        if ok == false {
+            refuse(c, field(c, x, "span"), "`@codec` does not take this here", help);
+        } else {
+            if strs_index(seen, word) >= 0 { refuse(c, field(c, x, "span"), cf_cat3("`", word, "` is written twice"), "say each thing once"); }
+        }
+        strs_push(seen, word);
+        k = k + 1;
+    }
+    if strs_index(seen, "tag") >= 0 && strs_index(seen, "untagged") >= 0 {
+        refuse(c, field(c, a, "span"), "an enum is tagged or untagged, not both", "keep `tag = \"…\"` or `untagged`");
+    }
+    0
+}
+
+// What the `@codec`s among `attrs` say, as `type_codec` and `field_codec` read them: whether a
+// word is written, or a pair's key (its value may be empty).
+fn codec_says(c: Cf, attrs: Ints, word: Str, pair: Bool) -> Bool {
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if text_of(c, a, "name") == "codec" {
+            let l = args_of(c, a);
+            if l >= 0 {
+                let mut k = 0;
+                while k < sx_count(c.t, l) {
+                    let x = sx_kid(c.t, l, k);
+                    if pair && variant(c, x) == "Pair" && text_of(c, x, "key") == word { return true; }
+                    if pair == false && variant(c, x) == "Word" && text_of(c, x, "name") == word { return true; }
+                    k = k + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn first_codec(c: Cf, attrs: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        if text_of(c, ints_get(attrs, i), "name") == "codec" { return ints_get(attrs, i); }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// The attributes inside a type held to `@codec`, and every `@codec` to the type it shapes
+// (`codec_members`). A type that derives a format stops the checker, so only what is said of one
+// that derives none is carried here: names collide only in an encoding.
+fn codec_members(c: Cf, decl: Int, is_enum: Bool) -> Int {
+    let attrs = items(c, decl, "attrs");
+    let name = text_of(c, decl, "name");
+    let derived = derives_any(c, decl);
+    let a = first_codec(c, attrs);
+    if derived == false && a >= 0 {
+        refuse(c, field(c, a, "span"), cf_cat3("`@codec` shapes a derived encoding, and `", name, "` derives none"),
+                "write `@derive(json)` before the type, or remove the `@codec`");
+    }
+    if is_enum == false && (codec_says(c, attrs, "tag", true) || codec_says(c, attrs, "untagged", false)) && a >= 0 {
+        refuse(c, field(c, a, "span"), "`tag` and `untagged` shape an enum", "a record is an object already");
+    }
+    if is_enum {
+        let variants = items(c, decl, "variants");
+        let mut i = 0;
+        while i < ints_len(variants) {
+            let v = ints_get(variants, i);
+            let vattrs = items(c, v, "attrs");
+            let mut k = 0;
+            while k < ints_len(vattrs) {
+                let x = ints_get(vattrs, k);
+                if text_of(c, x, "name") == "codec" {
+                    codec_args(c, x, 2);
+                } else {
+                    refuse(c, field(c, x, "name_span"), cf_cat3("`@", text_of(c, x, "name"), "` is not written before a variant"), "only `@codec(…)` is");
+                }
+                k = k + 1;
+            }
+            codec_fields(c, items(c, v, "fields"));
+            i = i + 1;
+        }
+    } else {
+        codec_fields(c, items(c, decl, "fields"));
+    }
+    0
+}
+
+fn codec_fields(c: Cf, fields: Ints) -> Int {
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let fattrs = items(c, f, "attrs");
+        let mut k = 0;
+        while k < ints_len(fattrs) {
+            let x = ints_get(fattrs, k);
+            if text_of(c, x, "name") == "codec" {
+                codec_args(c, x, 1);
+            } else {
+                refuse(c, field(c, x, "name_span"), cf_cat3("`@", text_of(c, x, "name"), "` is not written before a field"), "only `@codec(…)` is");
+            }
+            k = k + 1;
+        }
+        let ty = field(c, f, "ty");
+        let fname = text_of(c, f, "name");
+        let optional = has(c, ty, "qualifier") == false && text_of(c, ty, "name") == "Option";
+        if codec_says(c, fattrs, "omit_none", false) && optional == false {
+            refuse(c, field(c, ty, "span"), cf_cat3("`omit_none` leaves out a `None`, and `", fname, "` is not an `Option`"), "use it on an `Option` field");
+        }
+        if codec_says(c, fattrs, "default", false) && has_empty_value(c, ty) == false {
+            refuse(c, field(c, ty, "span"), cf_cat3("`default` gives a missing `", fname, "` its type's empty value, and this type has none"),
+                    "a number, `Bool`, `Str`, `Option`, `Vec` (`List`) or `Chain` has one");
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// Whether `default` gives a field of this written type an empty value (`derive::empty_value`).
+fn has_empty_value(c: Cf, ty: Int) -> Bool {
+    if has(c, ty, "qualifier") || has(c, ty, "function") || has(c, ty, "length") { return false; }
+    let n = text_of(c, ty, "name");
+    let mut count = 0;
+    if has(c, ty, "args") { count = sx_count(c.t, inner(c, ty, "args")); }
+    if count == 0 {
+        return n == "Int" || n == "Int8" || n == "Int16" || n == "Int32" || n == "UInt8" || n == "UInt16" || n == "UInt32" || n == "Float64" || n == "Float32"
+                || n == "Bool" || n == "Str";
+    }
+    count == 1 && (n == "Option" || n == "Vec" || n == "List" || n == "Chain")
+}
+
+// Whether a written type is `name`, plainly: no qualifier and no arguments.
+fn plain(c: Cf, ty: Int, name: Str) -> Bool { has(c, ty, "qualifier") == false && has(c, ty, "args") == false && text_of(c, ty, "name") == name }
+
+fn is_cap_name(n: Str) -> Bool {
+    n == "IoCap" || n == "SpawnCap" || n == "ForeignCap" || n == "VouchCap" || n == "TimeCap" || n == "MmioCap" || n == "OutCap" || n == "NetCap" || n == "RandomCap"
+            || n == "ProcessCap"
+}
+
+fn cap(c: Cf, ty: Int) -> Bool { has(c, ty, "qualifier") == false && has(c, ty, "args") == false && is_cap_name(text_of(c, ty, "name")) }
+
+// `Result[Int, Str]`, written so.
+fn result_ty(c: Cf, ty: Int) -> Bool {
+    if has(c, ty, "qualifier") || text_of(c, ty, "name") != "Result" || has(c, ty, "args") == false { return false; }
+    let args = sx_items(c.t, inner(c, ty, "args"));
+    ints_len(args) == 2 && plain(c, ints_get(args, 0), "Int") && plain(c, ints_get(args, 1), "Str")
+}
+
+// Not generic, without effect parameters, not `main`, not foreign and not exported.
+fn ordinary(c: Cf, f: Int) -> Bool {
+    ints_len(items(c, f, "type_params")) == 0 && ints_len(items(c, f, "effect_params")) == 0 && text_of(c, f, "name") != "main" && has(c, f, "foreign") == false
+            && has(c, f, "export") == false
+}
+
+// A declared effect set that is empty.
+fn quiet(c: Cf, f: Int) -> Bool {
+    if has(c, f, "effects") == false { return false; }
+    ints_len(items(c, inner(c, f, "effects"), "names")) == 0
+}
+
+// A test's, a benchmark's or a fuzz target's shape (`shaped`).
+fn shaped(c: Cf, f: Int) -> Int {
+    let attrs = items(c, f, "attrs");
+    let params = items(c, f, "params");
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let name = text_of(c, ints_get(attrs, i), "name");
+        if name == "test" || name == "fuzz" || name == "bench" {
+            let mut shape = "fn NAME(capabilities…) -> Result[Int, Str]";
+            if name == "fuzz" { shape = "fn NAME(input: Bytes, capabilities…) -> Result[Int, Str]"; }
+            if name == "bench" { shape = "fn NAME(capabilities…) -> Int"; }
+            let mut held = true;
+            let mut k = 0;
+            if name == "fuzz" {
+                if ints_len(params) == 0 {
+                    held = false;
+                } else {
+                    held = plain(c, field(c, ints_get(params, 0), "ty"), "Bytes");
+                    k = 1;
+                }
+            }
+            while k < ints_len(params) {
+                if cap(c, field(c, ints_get(params, k), "ty")) == false { held = false; }
+                k = k + 1;
+            }
+            let ret = field(c, f, "return_type");
+            let mut answers = result_ty(c, ret);
+            if name == "bench" { answers = plain(c, ret, "Int"); }
+            if (held && answers && ordinary(c, f)) == false {
+                let ns = field(c, f, "name_span");
+                refuse(c, ns, cf_cat3(cf_cat3("`@", name, "` marks a function of the shape `"), shape, cf_cat3("`, and `", text_of(c, f, "name"), "` is not one")),
+                        "every parameter but a fuzz target's input is a capability, which the test's entry holds as `main` does; nothing generic, foreign or named `main`");
+            }
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// No parameter, or one `MmioCap`.
+fn device_only(c: Cf, params: Ints) -> Bool {
+    if ints_len(params) == 0 { return true; }
+    ints_len(params) == 1 && plain(c, field(c, ints_get(params, 0), "ty"), "MmioCap")
+}
+
+fn board_ok(c: Cf, f: Int) -> Bool { ordinary(c, f) && has(c, f, "method_of") == false && quiet(c, f) && plain(c, field(c, f, "return_type"), "Int") }
+
+fn shape_error(c: Cf, f: Int, message: Str, help: Str) -> Int {
+    let ns = field(c, f, "name_span");
+    dg_error(c.d, "N0627", s_of(c, ns), e_of(c, ns), message, "", help)
+}
+
+// An interrupt handler's shape (`handler`).
+fn handler(c: Cf, f: Int) -> Int {
+    if interrupt_of(c, f) == "" { return 0; }
+    if (device_only(c, items(c, f, "params")) && board_ok(c, f)) == false {
+        shape_error(c, f, cf_cat3("`@interrupt` marks a function of the shape `fn NAME() -> Int ! {}` or `fn NAME(m: MmioCap) -> Int ! {}`, and `", text_of(c, f, "name"), "` is not one"),
+                "the board calls a handler with nothing but the device's authority; it shares state through statics and atomics, and declares that it has no effect");
+    }
+    0
+}
+
+// A failure hook's shape (`failure_hook`).
+fn failure_hook(c: Cf, f: Int) -> Int {
+    if has_attr(c, f, "on_failure") == false { return 0; }
+    let params = items(c, f, "params");
+    let mut takes = false;
+    if ints_len(params) == 1 { takes = plain(c, field(c, ints_get(params, 0), "ty"), "Int"); }
+    if ints_len(params) == 2 { takes = plain(c, field(c, ints_get(params, 0), "ty"), "Int") && plain(c, field(c, ints_get(params, 1), "ty"), "MmioCap"); }
+    if (takes && board_ok(c, f)) == false {
+        shape_error(c, f,
+                cf_cat3("`@on_failure` marks a function of the shape `fn NAME(code: Int) -> Int ! {}` or `fn NAME(code: Int, m: MmioCap) -> Int ! {}`, and `", text_of(c, f, "name"), "` is not one"),
+                "the board calls the hook with the failure's number, before it stops the machine");
+    }
+    0
+}
+
+// A task's shape (`task`).
+fn task(c: Cf, f: Int) -> Int {
+    if has_attr(c, f, "task") == false { return 0; }
+    let alone = has_attr(c, f, "interrupt") == false && has_attr(c, f, "on_failure") == false;
+    if (device_only(c, items(c, f, "params")) && board_ok(c, f) && alone) == false {
+        shape_error(c, f,
+                cf_cat3("`@task` marks a function of the shape `fn NAME() -> Int ! {}` or `fn NAME(m: MmioCap) -> Int ! {}`, and neither a handler nor a hook, and `", text_of(c, f, "name"), "` is not one"),
+                "the scheduler calls a task with nothing but the device's authority");
+    }
+    0
+}
