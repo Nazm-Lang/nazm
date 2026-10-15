@@ -2,7 +2,8 @@
 //!
 //! Written after a build has succeeded, never instead of one: `nazm.provenance/1` names every
 //! source module and package with its digest, the target, the compiler's version, the C compiler's
-//! identity, the runtime's ABI revision and digest, the backend and its options, the profiles in
+//! identity, the runtime's ABI revision and digest, the backend and its options (with `--backend
+//! nazm`, the code generator's own digest, R9 D15), the profiles in
 //! force and the output's digest. Every digest is plain BLAKE3 over the file's bytes — `blake3:` and
 //! 64 hex digits, as a package's — so `b3sum` checks it without Nazm. No absolute path, time or host
 //! name enters it: two builds of one program with one toolchain write the same file.
@@ -183,6 +184,28 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
             })
         })
         .collect();
+    let mut backend = json!({
+        "name": r.backend,
+        "opt_level": r.opt_level,
+        "layout": r.layout,
+        "debug": r.debug,
+        "stack_watermark": r.stack_watermark,
+        "stack_size": r.stack_size,
+        "heap_limit": r.heap_limit.or_else(|| {
+            graph_of.as_ref().and_then(|g| g.packages.get(g.root)).and_then(|p| p.heap_limit)
+        }),
+        "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
+    });
+    // Nazm's own code generator, when it built the program (R9, D15): the program that compiled
+    // every unit is named by its digest, the same one in each object's key.
+    if r.backend == "nazm" {
+        let generator = nazm_codegen_nazm::locate()
+            .and_then(|p| std::fs::read(&p).map_err(|e| format!("`{}`: {e}", p.display())))
+            .map_err(|e| format!("Nazm's code generator could not be read again: {e}"))?;
+        if let Some(map) = backend.as_object_mut() {
+            map.insert("nzcg".into(), json!(digest(&generator)));
+        }
+    }
     Ok(json!({
         "schema": "nazm.provenance/1",
         "digest_algorithm": "blake3-256 over the file's bytes",
@@ -193,18 +216,7 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
         "semantic_epoch": nazm_cache::SEMANTIC_EPOCH,
         "c_compiler": c_compiler(),
         "runtime": runtime_record(r.runtime),
-        "backend": {
-            "name": r.backend,
-            "opt_level": r.opt_level,
-            "layout": r.layout,
-            "debug": r.debug,
-            "stack_watermark": r.stack_watermark,
-            "stack_size": r.stack_size,
-            "heap_limit": r.heap_limit.or_else(|| {
-                graph_of.as_ref().and_then(|g| g.packages.get(g.root)).and_then(|p| p.heap_limit)
-            }),
-            "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
-        },
+        "backend": backend,
         "linked": link,
         "profiles": profiles,
         "output": outputs(r),
@@ -274,6 +286,13 @@ pub(crate) fn sbom(record: &Value) -> Value {
         json!({ "type": "application", "name": "nazm", "version": record["compiler"]["version"] }),
         json!({ "type": "library", "name": "cranelift", "version": record["backend"]["cranelift"] }),
     ];
+    if let Some(h) = hex(&record["backend"]["nzcg"]) {
+        tools.push(json!({
+            "type": "application",
+            "name": "nzcg",
+            "hashes": [{ "alg": "BLAKE3", "content": h }],
+        }));
+    }
     if let Some(v) = record["c_compiler"]["version"].as_str() {
         tools.push(
             json!({ "type": "application", "name": record["c_compiler"]["driver"], "version": v }),

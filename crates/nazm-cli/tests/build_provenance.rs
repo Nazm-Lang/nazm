@@ -23,11 +23,13 @@ const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 const PROGRAM: &str = "fn twice(x: Int) -> Int { x * 2 }\nfn main() -> Int { twice(21) }\n";
 
 fn nazm(dir: &Path, args: &[&str]) -> Output {
-    Command::new(NAZM)
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .unwrap()
+    let mut c = Command::new(NAZM);
+    c.current_dir(dir).args(args);
+    // Nazm's own code generator (R9, D15), built once per test process, where it is asked for.
+    if args.windows(2).any(|w| w == ["--backend", "nazm"]) {
+        c.env(nazm_codegen_nazm::VARIABLE, crate::differential::nzcg());
+    }
+    c.output().unwrap()
 }
 
 fn build(dir: &Path, src: &str, extra: &[&str]) -> serde_json::Value {
@@ -114,6 +116,37 @@ fn the_backend_that_built_it_is_the_one_recorded() {
     let v = build(d.path(), PROGRAM, &["--backend", "cranelift"]);
     assert_eq!(v["backend"]["name"], "cranelift");
     assert_eq!(v["output"]["files"][0]["digest"], b3(&d.path().join("p")));
+    // Only Nazm's own code generator is named by its digest, and only when it built the program.
+    assert!(v["backend"].get("nzcg").is_none(), "{v}");
+}
+
+/// R9, D15: a program `--backend nazm` built names the generator that compiled it by its digest —
+/// the file `NAZM_NZCG` named, as anyone can recompute — and the SBOM lists it among the tools.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn a_program_nazms_own_generator_built_names_it_by_its_digest() {
+    let d = tempfile::tempdir().unwrap();
+    let v = build(
+        d.path(),
+        PROGRAM,
+        &["--backend", "nazm", "--sbom", "p.cdx.json"],
+    );
+    assert_eq!(v["backend"]["name"], "nazm");
+    assert_eq!(v["backend"]["nzcg"], b3(crate::differential::nzcg()), "{v}");
+    assert_eq!(v["output"]["files"][0]["digest"], b3(&d.path().join("p")));
+    let sbom: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(d.path().join("p.cdx.json")).unwrap())
+            .unwrap();
+    let tools = sbom["metadata"]["tools"]["components"].as_array().unwrap();
+    let nzcg = tools.iter().find(|t| t["name"] == "nzcg").expect("nzcg");
+    assert_eq!(
+        format!("blake3:{}", nzcg["hashes"][0]["content"].as_str().unwrap()),
+        v["backend"]["nzcg"]
+    );
+    // The LLVM build of the same program names none.
+    let e = tempfile::tempdir().unwrap();
+    let w = build(e.path(), PROGRAM, &[]);
+    assert!(w["backend"].get("nzcg").is_none(), "{w}");
 }
 
 #[test]

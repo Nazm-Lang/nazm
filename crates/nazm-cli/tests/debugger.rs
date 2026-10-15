@@ -25,11 +25,22 @@ const PROGRAM: &str = "fn greet(name: Str, times: Int, loud: Bool) -> Int {\n   
                        greet(who, 2, true)\n}\n";
 
 fn nazm(dir: &Path, args: &[&str]) -> Output {
-    Command::new(NAZM)
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .unwrap()
+    let mut c = Command::new(NAZM);
+    c.current_dir(dir).args(args);
+    // Nazm's own code generator (R9, D15), built once per test process, where it is asked for.
+    if args.windows(2).any(|w| w == ["--backend", "nazm"]) {
+        c.env(nazm_codegen_nazm::VARIABLE, crate::differential::nzcg());
+    }
+    c.output().unwrap()
+}
+
+/// The backends a profile is taken under: Nazm's own code generator too where it builds (macOS).
+fn backends() -> Vec<&'static str> {
+    let mut b = vec!["llvm", "cranelift"];
+    if cfg!(target_os = "macos") {
+        b.push("nazm");
+    }
+    b
 }
 
 fn err(o: &Output) -> String {
@@ -112,7 +123,7 @@ fn a_profile_reports_what_one_run_did_under_both_backends() {
          let got = vec_new[Int]();\n    chan_select_of(cs, got);\n    print(\"ok\");\n    0\n}\n",
     )
     .unwrap();
-    for backend in ["llvm", "cranelift"] {
+    for backend in backends() {
         let o = nazm(d.path(), &["profile", "--backend", backend, "prog.nz"]);
         assert!(o.status.success(), "{}", err(&o));
         let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();

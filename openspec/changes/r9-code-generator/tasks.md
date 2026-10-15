@@ -147,3 +147,12 @@
       packages the `nazm` under test, passes the clean install, builds with `NAZM_NZCG` unset, and
       with the generator moved away is refused (exit 4) naming `libexec/nazm/nzcg`. Mutant
       `r9-7-8-the-archive-carries-no-generator`, applied by hand, killed, restored
+- [x] 7.9 `nazm profile --backend nazm` (it builds with the backend asked for; the counts and,
+      with `--sample`, the samples attributed by the generator's line tables — `debugger.rs` and
+      `debugger_v3.rs` take a profile under all three backends on macOS); the provenance record of
+      a program the generator built names it, `backend.nzcg`, by its BLAKE3 digest, and the SBOM
+      lists it among the tools (`nazm.provenance/1` gains the optional field and the backend name
+      `nazm`, as R1b and R1d added theirs; `schemas.rs` checks such a record against it;
+      `build_provenance::a_program_nazms_own_generator_built_names_it_by_its_digest`). Mutants
+      `r9-7-9-the-record-does-not-name-the-generator` and
+      `r9-7-9-profile-refuses-the-nazm-backend`, applied by hand, killed, restored
