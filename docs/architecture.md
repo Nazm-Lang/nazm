@@ -8899,6 +8899,19 @@ tree. Mutants: seven new (`n106-*`), two repointed (`n15-nodes-at-one-place-nest
 `n53-the-runtime-abi-stays`), and N83's nine re-verified against the tests that now ask for threads
 by name.
 
+**Amended (performance leadership, multicore, 2026-10-15).** §7.84 wrote the default worker count as
+the online processors; the code started four on every machine, and the capability matrix recorded
+four. A parallel program on a ten-processor host therefore used at most four of them, and fewer
+when its tasks' work was uneven, since a task stays on the worker `spawn` gave it. The default is
+now §7.84's: `nz.os_cpus`, a sixth function of the per-target `stack` unit (`sysconf`'s
+`_SC_NPROCESSORS_ONLN` — 58 on Darwin, 84 in glibc and musl, 0x61 in Bionic — and
+`GetSystemInfo`'s `dwNumberOfProcessors` on Windows), at most 64, and four where the system will not
+say; `NAZM_WORKERS` still overrides it, and `NAZM_WORKERS=1` is still the deterministic mode. The
+name has a dot, so it is no C identifier a foreign declaration could name: no reserved symbol and
+no semantic epoch. Runtime ABI 34 → 35. Unchanged: round-robin placement, pinning, no stealing, no
+preemption — the same output, ending and memory report. Measured in `performance.md`, *Multicore:
+the parallel workload and the pool's default, measured (2026-10-15)*.
+
 ## 7.108 The core's scope, audited — N107, 2026-10-05
 
 Written before the audit's results. Five language-core rows are PARTIAL — 2 (resolution and modules),

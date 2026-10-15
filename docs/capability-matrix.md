@@ -2508,7 +2508,7 @@ convention and layout; nothing passes a value between code the two backends gene
 
 *N106, 2026-10-05: the pool by default — VERIFIED; the C policy — VERIFIED; a refused scheduler name
 — VERIFIED; a deterministic single-worker mode — VERIFIED.* `architecture.md` §7.107, written first.
-With `NAZM_SCHEDULER` unset a native program's tasks run on N83's pool — `NAZM_WORKERS` (4) workers,
+With `NAZM_SCHEDULER` unset a native program's tasks run on N83's pool — `NAZM_WORKERS` workers (default: one per processor online since 2026-10-15, four before),
 each task a guarded `NAZM_TASK_STACK` (256 KiB) stack — on every hosted target with a switch;
 `threads` asks for a thread per task, `pool` for the pool, and any other value starts no task
 (`N0404`). A program that calls C runs a thread per task unless the pool is asked for — a task
@@ -2630,7 +2630,7 @@ contained, Linux aarch64 — the Linux run N83 did not have.*
 blocked worker — VERIFIED; per-task failure state and stack limit — VERIFIED; deadlines on parked
 tasks — VERIFIED; work stealing, preemption, blocking-FFI hand-off, a model checker — not here.*
 `architecture.md` §7.84 is the constitution, written first. With `NAZM_SCHEDULER=pool` a native
-program's tasks run on `NAZM_WORKERS` threads (default 4), each task a guarded stack
+program's tasks run on `NAZM_WORKERS` threads (default: the processors online, at most 64; 4 before 2026-10-15), each task a guarded stack
 (`NAZM_TASK_STACK`, default 256 KiB) pinned to one worker, switched by a per-target routine
 (`crates/nazm-runtime/src/switch.rs`); the four suspension points park the task and free the worker
 (`nz.cwait`, `nz.ctimedwait`, `nz.cwake`, `nz.join_one`), its failure state and stack limit saved and
