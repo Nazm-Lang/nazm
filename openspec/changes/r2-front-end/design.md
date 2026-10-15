@@ -186,6 +186,23 @@ does, or calling through a value or a bound while anything reaches one. Anywhere
 stops until the flows themselves are ported. The table (D14) gains each built-in's flow and
 container use, generated, for that port.
 
+**D19 — Attributes are configured over the whole compilation, before the checker.**
+`compiler/configure.nz` ports `attributes::configure`: the reference runs it on the one program
+`parse_map` makes of every module — each kind of item the modules' in load order — so its
+refusals come kind by kind (records, enums, `@codec` inside them, traits, constants and statics,
+impls, functions, then the second failure hook and each second handler), not module by module.
+Every attribute is held to the vocabulary (`N0619`) and the board's functions to their shapes
+(`N0627`); a declaration whose `@cfg` does not hold is removed from its module's tree, an impl
+with its methods, so nothing later sees it. The conditions are asked of the host, as `nazm check`
+asks them (`BuildConfig::host`): `run.sh` hands the driver the host's operating system and
+architecture as Rust's `std::env::consts` names them — not `@cfg` in the driver, which the old
+parser the selfhost suite runs over `compiler/*.nz` does not read — and without them a condition
+on either stops the checker; outside a package no feature or profile is enabled. Its
+refusals count as a syntax error's do for the missing `main` and the warnings, but a function
+without a body after them is not one whose body failed to parse. A derived encoding is generated
+into a module's text before it is parsed (`derive::expand`), which this front end does not do: a
+record or enum that writes `@derive` stops the checker.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

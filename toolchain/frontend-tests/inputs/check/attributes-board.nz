@@ -1,0 +1,145 @@
+// Attributes (design D19): every mark held to what it applies to and to its arguments, the
+// board's functions to their shapes, one hook and one handler for each interrupt, conditions
+// over the host — and the checker after them, as after a syntax error.
+
+trait Show2 {
+    fn show2(self: Self) -> Str;
+}
+
+struct P {
+    @codec(rename = "q", bogus)
+    x: Int,
+    @codec(omit_none)
+    y: Int,
+    @codec(default, default)
+    z: R,
+    @inline
+    w: Int,
+}
+
+@codec(tag = "k")
+struct R { a: Int }
+
+enum E {
+    @codec(rename = "")
+    A(),
+    @test
+    B(x: Int),
+}
+
+@cfg(os = "nowhere")
+impl Show2 for P {
+    fn show2(self: P) -> Str { 1 }
+}
+
+@cfg(all(os = "macos", not(arch = "riscv")))
+fn kept() -> Int { 1 }
+
+@cfg(any(os = "linux", target = "aarch64-apple-darwin"))
+fn kept2() -> Int { 2 }
+
+@cfg(nothing = "x")
+fn odd() -> Int { 3 }
+
+@cfg(maybe(os = "x"))
+fn odd2() -> Int { 3 }
+
+@cfg(not(os = "a", os = "b"))
+fn odd3() -> Int { 3 }
+
+@cfg("macos")
+fn odd4() -> Int { 3 }
+
+@cfg(os = "a", os = "b")
+fn odd5() -> Int { 3 }
+
+@cfg(os = "nowhere")
+fn dropped() -> Int { "not checked" }
+
+@on_failure
+fn hook(code: Int) -> Int ! {} { 0 }
+
+@on_failure
+fn hook2(code: Int, m: MmioCap) -> Int ! {} { 0 }
+
+@on_failure(now)
+fn hook3(code: Str) -> Int { 0 }
+
+@interrupt("timer")
+fn tick() -> Int ! {} { 0 }
+
+@interrupt("timer")
+fn tick2(m: MmioCap) -> Int ! {} { 0 }
+
+@interrupt("bad name")
+fn tick3() -> Int ! {} { 0 }
+
+@interrupt("")
+fn tick4() -> Int ! {} { 0 }
+
+@interrupt("")
+fn tick5(x: Int) -> Int { 0 }
+
+@task(priority = "+7", period = "0010")
+fn job() -> Int ! {} { 0 }
+
+@task(priority = "256", period = "1")
+fn job2() -> Int ! {} { 0 }
+
+@task(priority = "1", period = "0", extra = "2")
+@interrupt("t2")
+fn job3() -> Int ! {} { 0 }
+
+@task(priority = "1", period = "18446744073709551616")
+fn job4(m: MmioCap, n: MmioCap) -> Int ! {} { 0 }
+
+@section(".text.boot")
+@section(".x")
+fn placed() -> Int { 0 }
+
+@section("bad-name")
+const C: Int = 1;
+
+@deprecated
+fn old() -> Int { 0 }
+
+@deprecated("why", "more")
+pub fn old2() -> Int { 0 }
+
+@deprecated
+pub struct Old { a: Int }
+
+@deprecated
+const D: Int = 2;
+
+@derive
+trait T2 {
+    fn m(self: Self) -> Int;
+}
+
+@test
+fn t1() -> Result[Int, Str] { Result.Ok(value: 0) }
+
+@test(fails)
+fn t2(io: IoCap) -> Result[Int, Str] { Result.Ok(value: 0) }
+
+@test(other)
+fn t3(x: Int) -> Int { 0 }
+
+@test()
+@bench
+fn t4() -> Int { 0 }
+
+@fuzz
+fn f1(input: Bytes, io: IoCap) -> Result[Int, Str] { Result.Ok(value: 0) }
+
+@fuzz
+fn f2() -> Result[Int, Str] { Result.Ok(value: 0) }
+
+@bench(x)
+fn b1[T](io: IoCap) -> Int { 0 }
+
+fn main() -> Int {
+    let s: Int = "type errors still follow";
+    kept() + kept2()
+}
