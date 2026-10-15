@@ -256,6 +256,20 @@ belongs with the LIR validator when one is ported. What does move is the runtime
 ordinary global in a one-thread program (`SINGLE_THREAD_STATE`). `rtext.nz` is regenerated from
 the runtime crate (`tests/runtime_text.py`); the runtime digest every object key carries follows.
 
+## Every target, narrowed to macOS (8.2)
+
+`rewrite-in-nazm` task 4.2 asks for every target in `docs/support.md`. The copyright holder
+narrowed it (2026-10-15) to macOS: `aarch64-apple-darwin` and `x86_64-apple-darwin` (built and
+run under Rosetta on an Apple silicon host). Linux, Windows, WebAssembly, WASI, Android, iOS and
+the boards are **deferred until after 1.0**, not ported now; the pipeline refuses them by name.
+
+`pipeline --target TRIPLE MODE ...` takes the target as `nazm lir --target` and `nazm build
+--target` do; without it, `aarch64-apple-darwin`. The two targets share LIR's data layout and
+instruction text; the target is named in the LIR document and chooses the runtime's per-target
+units (`x86_64-darwin`'s task switch and stack entry). `run.sh` with `TARGET=x86_64-apple-darwin`
+passes `--target` to both sides and compares everything but the object cache (whose backend
+probe is the host's).
+
 ## Order of work
 
 1. This proposal.

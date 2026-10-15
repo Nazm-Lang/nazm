@@ -25,6 +25,9 @@
 //                                  the entry filed under KEY, broken one way at a time: what the
 //                                  store's reader says of each
 //
+// `--target TRIPLE` before any of these names the target (aarch64-apple-darwin, the default, or
+// x86_64-apple-darwin), as `nazm lir --target` and `nazm build --target` do.
+//
 // CORE.json is `nazm core-ir --json FILE`. `openspec/changes/r3-pipeline/` is the design.
 
 use "cir.nz"
@@ -44,8 +47,28 @@ use "@std/text"
 use "@std/fs"
 use "@std/process"
 
+/// The targets this pipeline lowers for: macOS on Apple silicon and on Intel (run under Rosetta
+/// on an Apple silicon host). Linux, Windows, WebAssembly, WASI and the boards are deferred until
+/// after 1.0 by the copyright holder's decision (`openspec/changes/r3-pipeline/design.md`).
+fn target_supported(t: Str) -> Bool {
+    t == "aarch64-apple-darwin" || t == "x86_64-apple-darwin"
+}
+
 fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
-    let args = process_args(io)
+    let given = process_args(io)
+    // `--target TRIPLE` first, as `nazm lir --target`; without it, Apple silicon's macOS.
+    let mut target = "aarch64-apple-darwin"
+    let mut from = 0
+    if strs_len(given) >= 2 && strs_get(given, 0) == "--target" {
+        target = strs_get(given, 1)
+        from = 2
+        if !target_supported(target) {
+            eprint("pipeline: target `" + target + "` is not ported: only aarch64-apple-darwin and x86_64-apple-darwin are, the others deferred until after 1.0\n")
+            return 2
+        }
+    }
+    let args = strs_new()
+    for i in from..strs_len(given) { strs_push(args, strs_get(given, i)) }
     if strs_len(args) == 1 && strs_get(args, 0) == "runtime-digest" {
         print(runtime_digest() + "\n")
         return 0
@@ -64,7 +87,7 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
     let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) { first } else { "" }
     if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" && mode != "ops-debug" {
-        eprint("usage: pipeline mir|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP]\n")
+        eprint("usage: pipeline [--target TRIPLE] mir|lir|tables|ops|ops-debug|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP]\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -102,7 +125,7 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     if mode == "runtime" {
         let stack = if strs_len(args) == 4 { bytes_arg(strs_get(args, 2)) } else { -1 }
         let heap = if strs_len(args) == 4 { bytes_arg(strs_get(args, 3)) } else { -1 }
-        let units = match runtime_of(c, tt, p, stack, heap) {
+        let units = match runtime_of(c, tt, p, target, stack, heap) {
             Ok(u) => u,
             Err(e) => {
                 eprint("pipeline: " + e + "\n")
@@ -126,9 +149,9 @@ fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
         return 0
     }
     if mode == "lir" || mode == "ops" || mode == "tables" {
-        let printed = if mode == "ops" { lir_ops(c, tt, p) } else if mode == "tables" { lir_document(c, tt, p, strs_new()) } else {
+        let printed = if mode == "ops" { lir_ops(c, tt, p) } else if mode == "tables" { lir_document(c, tt, p, target, strs_new()) } else {
             match lir_texts(c, tt, p) {
-                Ok(ts) => lir_document(c, tt, p, ts),
+                Ok(ts) => lir_document(c, tt, p, target, ts),
                 Err(e) => Err(e),
             }
         }
@@ -156,7 +179,7 @@ fn bytes_arg(a: Str) -> Int {
 /// The runtime's units for the program (`runtime_units`): its needs are what its units reach,
 /// `single` when `main` holds no authority to start a thread; the entry is `main`'s symbol with a
 /// word per capability it takes, and calls C when any function does.
-fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, stack: Int, heap: Int) -> Result[Vec[Strs], Str] {
+fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, target: Str, stack: Int, heap: Int) -> Result[Vec[Strs], Str] {
     let names: HashMap[Str, Bool] = hashmap_new()
     match lir_texts_needs(c, tt, p, names) {
         Ok(_) => {},
@@ -181,7 +204,7 @@ fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, stack: Int, heap: Int) -> Re
             }
         }
     }
-    Ok(runtime_units(needs_of(names), "aarch64-apple-darwin", "@" + symbol_of(main), roots, calls_c, stack, heap))
+    Ok(runtime_units(needs_of(names), target, "@" + symbol_of(main), roots, calls_c, stack, heap))
 }
 
 /// `pipeline objects`: each unit's key looked up, a hit published again and compared.

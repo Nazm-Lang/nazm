@@ -119,3 +119,16 @@
       built at `ce24bcd0`: MIR 1453 of 1453, LIR tables and ops 1007 of 1007 (document, digests
       and `--debug` included), runtime units 982 of 982, object cache 982 of 982 inputs (4546
       units), the runtime digest equal, 39924 of 39924 mutants caught
+- [x] 8.2 Every target (`rewrite-in-nazm` 4.2), narrowed by the copyright holder's decision to
+      macOS: `pipeline --target aarch64-apple-darwin|x86_64-apple-darwin`, no hard-coded triple
+      in the LIR document or the runtime's units; `run.sh` takes `TARGET`. With
+      `TARGET=x86_64-apple-darwin`: MIR 1453 of 1453, LIR tables and ops 1007 of 1007 (document,
+      digests and `--debug` included), runtime units 982 of 982 (25 refused by `nazm build`),
+      the runtime digest equal, 39924 of 39924 mutants caught; the object cache not compared
+      (the probe is the host's); an x86_64 `fib` built by the reference runs under Rosetta. The
+      host run is unchanged (8.1's numbers)
+- [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
+      now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
+      WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
+      boards (`aarch64-unknown-none`, `riscv64gc-unknown-none-elf`, `thumbv7m-none-eabi`). The
+      pipeline refuses them by name; the runtime digest already covers their units
