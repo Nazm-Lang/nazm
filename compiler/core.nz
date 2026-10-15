@@ -844,6 +844,27 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
         co_set_last(lo, 0 - 1, false);
         return co_object(o);
     }
+    if k == "Spawn" {
+        let args = strs_new();
+        let list = sx_items(t, sx_field(t, n, "args"));
+        let mut i = 0;
+        while i < ints_len(list) {
+            strs_push(args, co_expr(lo, ints_get(list, i)));
+            i = i + 1;
+        }
+        let cs = sx_field(t, n, "callee_span");
+        let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+        if site < 0 || ck_site_fn(lo.c, site) < 0 { return co_stopped_stmt(lo, "a task whose function the checker did not resolve"); }
+        if co_halted(lo) { return co_stopped_stmt(lo, "a task"); }
+        let o = strs_new();
+        strs_push(o, co_op_first("spawn"));
+        strs_push(o, co_field("callee", json_str(fx_fn_identity(lo.f, ck_site_fn(lo.c, site)))));
+        strs_push(o, co_field("args", co_list(args)));
+        strs_push(o, co_field("ends", co_ends(false)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+        co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
     if k == "Scope" {
         let body = co_statement_block(lo, sx_field(t, n, "body"));
         let transfers = co_last_transfers(lo);
@@ -2563,9 +2584,9 @@ fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest
     }
     let target = ck_site_fn(c, site);
     if ck_site_builtin(c, site) >= 0 || (target >= 0 && ck_fn_method(c, target) == false) { return co_call_parts(lo, ms, pre, rest, span); }
-    if target < 0 { return co_stopped(lo, "a call through a trait's bound"); }
     let args = strs_new();
     co_push_all(args, pre);
+    if target < 0 { return co_trait_call(lo, site, args, rest, span); }
     let mut i = 0;
     while i < ints_len(rest) {
         strs_push(args, co_expr(lo, ints_get(rest, i)));
@@ -2584,6 +2605,31 @@ fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest
     strs_push(fields, co_field("type_args", targs));
     strs_push(fields, co_field("args", co_list(args)));
     co_node(lo, "call", str_join(fields, ""), ret, span)
+}
+
+// A call through a trait's bound, or of a derived method (`CallTrait`): the trait's method, the
+// receiver's type as the calling body sees it, the arguments (`pre` lowered, then `rest`), and
+// the method's result at that type.
+fn co_trait_call(lo: Lo, site: Int, pre: Strs, rest: Ints, span: Int) -> Str {
+    let c = lo.c;
+    let tm = ck_site_trait_method(c, site);
+    let ft = ck_site_indirect(c, site);
+    if tm < 0 || ft < 0 { return co_stopped(lo, "a call through a value"); }
+    let args = strs_new();
+    co_push_all(args, pre);
+    let mut i = 0;
+    while i < ints_len(rest) {
+        strs_push(args, co_expr(lo, ints_get(rest, i)));
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    let tr = ck_method_trait(c, tm);
+    let key = str_concat(str_concat(fx_trait_identity(lo.f, tr), "."), ck_trait_method_name(c, tr, tm - ck_trait_method_first(c, tr)));
+    let fields = strs_new();
+    strs_push(fields, co_field_first("method", json_str(key)));
+    strs_push(fields, co_field("self", json_str(co_durable(lo, ck_type_arg(c, ft, 0)))));
+    strs_push(fields, co_field("args", co_list(args)));
+    co_node(lo, "call_trait", str_join(fields, ""), ck_type_arg(c, ft, ck_type_arg_count(c, ft) - 1), span)
 }
 
 fn co_contains(s: Str, part: Str) -> Bool {
