@@ -3160,6 +3160,37 @@ fn call_indirect(fx: Fx, dst: Int, callee: Operand, args: Vec[Operand]) {
 
 fn compare(fx: Fx, op: Str, t: Str, a: Operand, b: Operand) -> Int {
     let k = class(t)
+    let ordering = !(op == "==" || op == "!=")
+    let s = spell(t)
+    // The derived order (L6): -1, 0 or 1 from the type's helper, against 0.
+    if ordering && (k == "str" || k == "record" || k == "enum") {
+        let x = place(fx, a)
+        let y = place(fx, b)
+        let h = helper(fx.lo, "ord", t)
+        let o = call(fx, h, ints_of2(x, y))
+        let cc = if op == "<" { "lt" } else if op == "<=" { "le" } else if op == ">" { "gt" } else { "ge" }
+        return cmp_imm(fx, cc, o, "i64", 0)
+    }
+    // A `Box` or `Chain` compares by what it holds (L6), through the helper: each handle is
+    // spilled, so the helper reads it through a pointer.
+    if s.kind == "vec" && s.head != "Chan" {
+        let x = opvalue(fx, a)
+        let y = opvalue(fx, b)
+        let pa = scratch(fx, 8)
+        store(fx, pa, 0, x);
+        let pb = scratch(fx, 8)
+        store(fx, pb, 0, y);
+        let h = helper(fx.lo, "eq", t)
+        let eq = call(fx, h, ints_of2(pa, pb))
+        return if op == "!=" { negate(fx, eq) } else { eq }
+    }
+    if k == "record" || k == "enum" || k == "array" {
+        let x = place(fx, a)
+        let y = place(fx, b)
+        let h = helper(fx.lo, "eq", t)
+        let eq = call(fx, h, ints_of2(x, y))
+        return if op == "!=" { negate(fx, eq) } else { eq }
+    }
     if k == "str" && (op == "==" || op == "!=") {
         let x = place(fx, a)
         let y = place(fx, b)
@@ -3292,6 +3323,19 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
             let r = compare(fx, op, t, a, b)
             set(fx, dst, r);
         },
+        Rvalue.Hash(operand: t, value: o) => {
+            // The derived hash (L6), from the type's helper, of the value where it is held.
+            let mut a = 0
+            if in_memory(t) {
+                a = place(fx, o)
+            } else {
+                let v = opvalue(fx, o)
+                a = scratch(fx, 8)
+                store(fx, a, 0, v);
+            }
+            let h = helper(fx.lo, "hash", t)
+            set(fx, dst, call(fx, h, ints_of(a)));
+        },
         Rvalue.Call(callee: g, args: args) => { direct_call(fx, dst, g, args); },
         Rvalue.Closure(func: g, captures: cs) => { closure(fx, dst, g, cs); },
         Rvalue.Array(elems: es) => { array_value(fx, dst, es); },
@@ -3347,7 +3391,6 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
             let a = ptr_off(fx, p, off)
             read_owned(fx, dst, a, field_ty(fx.lo.lx.tt, t, int_to_str(v) + "." + int_to_str(fi)));
         },
-        _ => { defect(fx.lo, "the rvalue `" + rvalue_name(v) + "` (not ported yet)"); },
     }
 }
 
@@ -3794,6 +3837,456 @@ fn each_owned(fx: Fx, a: Int, t: Str, retain: Bool) {
     }
 }
 
+// --- equality, order and hash (`helpers.rs`) ----------------------------------------------------
+
+/// Continue if `same` holds; jump to `differ` if not.
+fn next_if(fx: Fx, same: Int, differ: Int) {
+    let cont = new_lblock(fx.fb)
+    branch(fx, same, cont, differ);
+    switch_to(fx.fb, cont);
+}
+
+fn variant_name_of(lx: Lx, t: Str, v: Int) -> Str {
+    sval(lx.c, at(lx.c, kid(lx.c, def_node(lx, t), "variants"), v), "name")
+}
+
+/// Continue if the values of type `t` at `a` and `b` are equal; jump to `differ` if not.
+fn equal(fx: Fx, a: Int, b: Int, t: Str, differ: Int) {
+    let lx = fx.lo.lx
+    let k = class(t)
+    let s = spell(t)
+    if k == "int" || k == "bool" {
+        let x = load(fx, mclass(t), a, 0)
+        let y = load(fx, mclass(t), b, 0)
+        next_if(fx, cmp(fx, "eq", x, y), differ);
+    } else if k == "num" {
+        // A number's equality is its kind's: IEEE 754's for a float.
+        let x = load(fx, mclass(t), a, 0)
+        let y = load(fx, mclass(t), b, 0)
+        next_if(fx, num_compare(fx, "==", t, x, y), differ);
+    } else if k == "str" {
+        next_if(fx, string_equal(fx, a, b), differ);
+    } else if k == "record" {
+        let fs = record_fields(lx, t)
+        let st = structure(lx, fs)
+        for i in 0..strs_len(fs) {
+            let x = ptr_off(fx, a, ints_get(st, i))
+            let y = ptr_off(fx, b, ints_get(st, i))
+            field_equal(fx, x, y, strs_get(fs, i), differ);
+        }
+    } else if k == "enum" {
+        let ta = load(fx, "i64", a, 0)
+        let tb = load(fx, "i64", b, 0)
+        next_if(fx, cmp(fx, "eq", ta, tb), differ);
+        let equal_blk = new_lblock(fx.fb)
+        let cases = strs_new()
+        let arms = ints_new()
+        let arm_v = ints_new()
+        let order_ = enum_variants(lx, t)
+        for tagno in 0..ints_len(order_) {
+            let v = ints_get(order_, tagno)
+            if strs_len(variant_fields(lx, t, v)) > 0 {
+                let blk = new_lblock(fx.fb)
+                strs_push(cases, int_to_str(tagno) + ": b" + int_to_str(blk))
+                ints_push(arms, blk)
+                ints_push(arm_v, v)
+            }
+        }
+        term(fx.fb, "switch " + vn(ta) + " [" + str_join(cases, ", ") + "] else b" + int_to_str(equal_blk));
+        for i in 0..ints_len(arms) {
+            switch_to(fx.fb, ints_get(arms, i));
+            let fs = variant_fields(lx, t, ints_get(arm_v, i))
+            let st = structure(lx, fs)
+            for j in 0..strs_len(fs) {
+                let x = ptr_off(fx, a, 8 + ints_get(st, j))
+                let y = ptr_off(fx, b, 8 + ints_get(st, j))
+                field_equal(fx, x, y, strs_get(fs, j), differ);
+            }
+            jump(fx, equal_blk);
+        }
+        switch_to(fx.fb, equal_blk);
+    } else if k == "array" {
+        let elem = strs_get(s.args, 0)
+        let len = array_len(s.args)
+        let stride = size_of(fx, elem)
+        let i = new_var(fx.fb, "i64")
+        let zero = iconst(fx, 0)
+        set_var(fx, i, zero);
+        let head = new_lblock(fx.fb)
+        let body = new_lblock(fx.fb)
+        let done = new_lblock(fx.fb)
+        jump(fx, head);
+        switch_to(fx.fb, head);
+        let iv = get_var(fx, i)
+        let more = cmp_imm(fx, "lt", iv, "i64", len)
+        branch(fx, more, body, done);
+        switch_to(fx.fb, body);
+        let iv2 = get_var(fx, i)
+        let kk = iconst(fx, stride)
+        let off = bin(fx, "mul", iv2, kk)
+        let x = ptr_add(fx, a, off)
+        let y = ptr_add(fx, b, off)
+        field_equal(fx, x, y, elem, differ);
+        let iv3 = get_var(fx, i)
+        let step = add_imm(fx, iv3, 1)
+        set_var(fx, i, step);
+        jump(fx, head);
+        switch_to(fx.fb, done);
+    } else if s.kind == "vec" && s.head != "Chan" {
+        // A `Box` or `Chain`, a `Vec` underneath: one storage is equal to itself; otherwise the
+        // lengths, then element by element.
+        let elem = strs_get(s.args, 0)
+        let ha = load(fx, "ptr", a, 0)
+        let hb = load(fx, "ptr", b, 0)
+        let done = new_lblock(fx.fb)
+        let walk = new_lblock(fx.fb)
+        let one = cmp(fx, "eq", ha, hb)
+        branch(fx, one, done, walk);
+        switch_to(fx.fb, walk);
+        let la = load(fx, "i64", ha, 0)
+        let lb = load(fx, "i64", hb, 0)
+        next_if(fx, cmp(fx, "eq", la, lb), differ);
+        let da = load(fx, "ptr", ha, 16)
+        let db = load(fx, "ptr", hb, 16)
+        let stride = size_of(fx, elem)
+        let i = new_var(fx.fb, "i64")
+        let zero = iconst(fx, 0)
+        set_var(fx, i, zero);
+        let head = new_lblock(fx.fb)
+        let body = new_lblock(fx.fb)
+        jump(fx, head);
+        switch_to(fx.fb, head);
+        let iv = get_var(fx, i)
+        let more = cmp(fx, "lt", iv, la)
+        branch(fx, more, body, done);
+        switch_to(fx.fb, body);
+        let iv2 = get_var(fx, i)
+        let kk = iconst(fx, stride)
+        let off = bin(fx, "mul", iv2, kk)
+        let x = ptr_add(fx, da, off)
+        let y = ptr_add(fx, db, off)
+        field_equal(fx, x, y, elem, differ);
+        let iv3 = get_var(fx, i)
+        let step = add_imm(fx, iv3, 1)
+        set_var(fx, i, step);
+        jump(fx, head);
+        switch_to(fx.fb, done);
+    } else {
+        // No equality exists for a handle; the checker refuses the comparison.
+        jump(fx, differ);
+        let dead = new_lblock(fx.fb)
+        switch_to(fx.fb, dead);
+    }
+}
+
+fn field_equal(fx: Fx, x: Int, y: Int, t: Str, differ: Int) {
+    let k = class(t)
+    if k == "record" || k == "enum" {
+        let h = helper(fx.lo, "eq", t)
+        next_if(fx, call(fx, h, ints_of2(x, y)), differ);
+    } else {
+        equal(fx, x, y, t, differ);
+    }
+}
+
+/// To `less` if `lt`; then, in a block of its own, the caller computes `gt`.
+fn split_less(fx: Fx, lt: Int, less: Int) {
+    let not_less = new_lblock(fx.fb)
+    branch(fx, lt, less, not_less);
+    switch_to(fx.fb, not_less);
+}
+
+fn split_greater(fx: Fx, gt: Int, greater: Int) {
+    let cont = new_lblock(fx.fb)
+    branch(fx, gt, greater, cont);
+    switch_to(fx.fb, cont);
+}
+
+/// Continue if the values of type `t` at `a` and `b` order equal; jump to `less` or `greater`
+/// if not (L6): a walk of the layout, which is the canonical order.
+fn order(fx: Fx, a: Int, b: Int, t: Str, less: Int, greater: Int) {
+    let lx = fx.lo.lx
+    let k = class(t)
+    if k == "int" || k == "bool" {
+        let x = load(fx, mclass(t), a, 0)
+        let y = load(fx, mclass(t), b, 0)
+        // `false` before `true`: unsigned, as a bit is.
+        let bitwise = k == "bool"
+        split_less(fx, cmp(fx, if bitwise { "ult" } else { "lt" }, x, y), less);
+        split_greater(fx, cmp(fx, if bitwise { "ugt" } else { "gt" }, x, y), greater);
+    } else if k == "num" {
+        let x = load(fx, mclass(t), a, 0)
+        let y = load(fx, mclass(t), b, 0)
+        split_less(fx, num_compare(fx, "<", t, x, y), less);
+        split_greater(fx, num_compare(fx, ">", t, x, y), greater);
+    } else if k == "str" {
+        // By bytes: the common prefix, then the shorter first.
+        let la = load(fx, "i64", a, 8)
+        let lb = load(fx, "i64", b, 8)
+        let m = new_var(fx.fb, "i64")
+        set_var(fx, m, la);
+        let shorter = new_lblock(fx.fb)
+        let measured = new_lblock(fx.fb)
+        let b_short = cmp(fx, "lt", lb, la)
+        branch(fx, b_short, shorter, measured);
+        switch_to(fx.fb, shorter);
+        set_var(fx, m, lb);
+        jump(fx, measured);
+        switch_to(fx.fb, measured);
+        let n = get_var(fx, m)
+        let pa = load(fx, "ptr", a, 0)
+        let pb = load(fx, "ptr", b, 0)
+        let diff = rt_v(fx, "memcmp", ints_of3(pa, pb, n), "i32")
+        split_less(fx, cmp_imm(fx, "lt", diff, "i32", 0), less);
+        split_greater(fx, cmp_imm(fx, "gt", diff, "i32", 0), greater);
+        split_less(fx, cmp(fx, "lt", la, lb), less);
+        split_greater(fx, cmp(fx, "gt", la, lb), greater);
+    } else if k == "record" {
+        let fs = record_fields(lx, t)
+        let st = structure(lx, fs)
+        for i in 0..strs_len(fs) {
+            let x = ptr_off(fx, a, ints_get(st, i))
+            let y = ptr_off(fx, b, ints_get(st, i))
+            field_order(fx, x, y, strs_get(fs, i), less, greater);
+        }
+    } else if k == "enum" {
+        // The tag is the canonical position, by name.
+        let ta = load(fx, "i64", a, 0)
+        let tb = load(fx, "i64", b, 0)
+        split_less(fx, cmp(fx, "lt", ta, tb), less);
+        split_greater(fx, cmp(fx, "gt", ta, tb), greater);
+        let tied = new_lblock(fx.fb)
+        let cases = strs_new()
+        let arms = ints_new()
+        let arm_v = ints_new()
+        let order_ = enum_variants(lx, t)
+        for tagno in 0..ints_len(order_) {
+            let v = ints_get(order_, tagno)
+            if strs_len(variant_fields(lx, t, v)) > 0 {
+                let blk = new_lblock(fx.fb)
+                strs_push(cases, int_to_str(tagno) + ": b" + int_to_str(blk))
+                ints_push(arms, blk)
+                ints_push(arm_v, v)
+            }
+        }
+        term(fx.fb, "switch " + vn(ta) + " [" + str_join(cases, ", ") + "] else b" + int_to_str(tied));
+        for i in 0..ints_len(arms) {
+            switch_to(fx.fb, ints_get(arms, i));
+            let fs = variant_fields(lx, t, ints_get(arm_v, i))
+            let st = structure(lx, fs)
+            for j in 0..strs_len(fs) {
+                let x = ptr_off(fx, a, 8 + ints_get(st, j))
+                let y = ptr_off(fx, b, 8 + ints_get(st, j))
+                field_order(fx, x, y, strs_get(fs, j), less, greater);
+            }
+            jump(fx, tied);
+        }
+        switch_to(fx.fb, tied);
+    }
+}
+
+fn field_order(fx: Fx, x: Int, y: Int, t: Str, less: Int, greater: Int) {
+    let k = class(t)
+    if k == "record" || k == "enum" {
+        let h = helper(fx.lo, "ord", t)
+        let r = call(fx, h, ints_of2(x, y))
+        split_less(fx, cmp_imm(fx, "lt", r, "i64", 0), less);
+        split_greater(fx, cmp_imm(fx, "gt", r, "i64", 0), greater);
+    } else {
+        order(fx, x, y, t, less, greater);
+    }
+}
+
+/// FNV-1a's offset and prime and the finaliser's multipliers (`nazm_sema::fnv`), as `Int`s.
+fn fnv_offset() -> Int { 0 - 3750763034362895579 }
+fn fnv_prime() -> Int { 1099511628211 }
+
+/// `fnv::finish` on 64-bit words, at compile time.
+fn fnv_finish_u(x: UInt64) -> UInt64 {
+    let m1: UInt64 = 13787848793156543929
+    let m2: UInt64 = 10723151780598845931
+    let a = wrapping_mul(x ^ (x >> 30), m1)
+    let b = wrapping_mul(a ^ (a >> 27), m2)
+    b ^ (b >> 31)
+}
+
+/// `fnv::bytes(s)`, at compile time, as an `Int`.
+fn fnv_bytes(s: Str) -> Int {
+    let mut h: UInt64 = 14695981039346656037
+    let prime: UInt64 = 1099511628211
+    for i in 0..str_len(s) {
+        h = wrapping_mul(h ^ wrap_convert[UInt64](str_byte(s, i)), prime)
+    }
+    wrap_convert[Int](fnv_finish_u(h))
+}
+
+/// `fnv::word(x)`, at compile time, as an `Int`.
+fn fnv_word(x: Int) -> Int {
+    let mut h: UInt64 = 14695981039346656037
+    let prime: UInt64 = 1099511628211
+    let mut w = wrap_convert[UInt64](x)
+    let byte: UInt64 = 255
+    for i in 0..8 {
+        h = wrapping_mul(h ^ (w & byte), prime)
+        w = w >> 8
+    }
+    wrap_convert[Int](fnv_finish_u(h))
+}
+
+/// `hash_finish`, as instructions.
+fn mix_finish(fx: Fx, x0: Int) -> Int {
+    let mut x = x0
+    let shifts = ints_of3(30, 27, 31)
+    let muls = ints_of2(0 - 4658895280553007687, 0 - 7723592293110705685)
+    for i in 0..3 {
+        let s = iconst(fx, ints_get(shifts, i))
+        let hi = bin(fx, "lshr", x, s)
+        x = bin(fx, "xor", x, hi)
+        if i < 2 {
+            let m = iconst(fx, ints_get(muls, i))
+            x = bin(fx, "mul", x, m)
+        }
+    }
+    x
+}
+
+/// `hash_u64` of a 64-bit value, as instructions: eight bytes, least significant first.
+fn hash_word(fx: Fx, x: Int) -> Int {
+    let mut h = iconst(fx, fnv_offset())
+    let prime = iconst(fx, fnv_prime())
+    let byte = iconst(fx, 255)
+    let eight = iconst(fx, 8)
+    let mut w = x
+    for i in 0..8 {
+        let low = bin(fx, "and", w, byte)
+        let mixed = bin(fx, "xor", h, low)
+        h = bin(fx, "mul", mixed, prime)
+        w = bin(fx, "lshr", w, eight)
+    }
+    mix_finish(fx, h)
+}
+
+fn mix_combine(fx: Fx, a: Int, b: Int) -> Int {
+    let prime = iconst(fx, fnv_prime())
+    let m = bin(fx, "mul", a, prime)
+    let s = bin(fx, "add", m, b)
+    mix_finish(fx, s)
+}
+
+/// The derived hash of the value of type `t` at `a` (L6).
+fn hash_of(fx: Fx, a: Int, t: Str) -> Int {
+    let lx = fx.lo.lx
+    let k = class(t)
+    if t == "Int" || k == "int" && t != "Bool" && !is_num(t) {
+        return hash_word(fx, load(fx, "i64", a, 0))
+    }
+    if k == "bool" {
+        let x = load(fx, "bit", a, 0)
+        return hash_word(fx, ext(fx, "i64", x, false))
+    }
+    if k == "num" && mclass(t) == "i128" {
+        // A 128-bit integer: its low word's hash and its high word's, combined.
+        let lo0 = load(fx, "i64", a, 0)
+        let hi0 = load(fx, "i64", a, 8)
+        let lo = hash_word(fx, lo0)
+        let hi = hash_word(fx, hi0)
+        return mix_combine(fx, lo, hi)
+    }
+    if k == "num" {
+        let x = load(fx, mclass(t), a, 0)
+        let w = if mclass(t) == "i64" { x } else { ext(fx, "i64", x, is_signed(t)) }
+        return hash_word(fx, w)
+    }
+    if k == "str" {
+        let n = load(fx, "i64", a, 8)
+        let p = load(fx, "ptr", a, 0)
+        let h = new_var(fx.fb, "i64")
+        let start = iconst(fx, fnv_offset())
+        set_var(fx, h, start);
+        let i = new_var(fx.fb, "i64")
+        let zero = iconst(fx, 0)
+        set_var(fx, i, zero);
+        let head = new_lblock(fx.fb)
+        let body = new_lblock(fx.fb)
+        let done = new_lblock(fx.fb)
+        jump(fx, head);
+        switch_to(fx.fb, head);
+        let iv = get_var(fx, i)
+        let more = cmp(fx, "lt", iv, n)
+        branch(fx, more, body, done);
+        switch_to(fx.fb, body);
+        let iv2 = get_var(fx, i)
+        let at_ = ptr_add(fx, p, iv2)
+        let b0 = load(fx, "i8", at_, 0)
+        let b = ext(fx, "i64", b0, false)
+        let hv = get_var(fx, h)
+        let mixed = bin(fx, "xor", hv, b)
+        let prime = iconst(fx, fnv_prime())
+        let next_h = bin(fx, "mul", mixed, prime)
+        set_var(fx, h, next_h);
+        let step = add_imm(fx, iv2, 1)
+        set_var(fx, i, step);
+        jump(fx, head);
+        switch_to(fx.fb, done);
+        let hv2 = get_var(fx, h)
+        return mix_finish(fx, hv2)
+    }
+    if k == "record" {
+        let mut h = iconst(fx, fnv_word(0))
+        let fs = record_fields(lx, t)
+        let st = structure(lx, fs)
+        for i in 0..strs_len(fs) {
+            let x = ptr_off(fx, a, ints_get(st, i))
+            let fh = field_hash(fx, x, strs_get(fs, i))
+            h = mix_combine(fx, h, fh)
+        }
+        return h
+    }
+    if k == "enum" {
+        let out = new_var(fx.fb, "i64")
+        let zero = iconst(fx, 0)
+        set_var(fx, out, zero);
+        let tag = load(fx, "i64", a, 0)
+        let done = new_lblock(fx.fb)
+        let cases = strs_new()
+        let arms = ints_new()
+        let order_ = enum_variants(lx, t)
+        for tagno in 0..ints_len(order_) {
+            let blk = new_lblock(fx.fb)
+            strs_push(cases, int_to_str(tagno) + ": b" + int_to_str(blk))
+            ints_push(arms, blk)
+        }
+        term(fx.fb, "switch " + vn(tag) + " [" + str_join(cases, ", ") + "] else b" + int_to_str(done));
+        for tagno in 0..ints_len(order_) {
+            switch_to(fx.fb, ints_get(arms, tagno));
+            let v = ints_get(order_, tagno)
+            let mut h = iconst(fx, fnv_bytes(variant_name_of(lx, t, v)))
+            let fs = variant_fields(lx, t, v)
+            let st = structure(lx, fs)
+            for j in 0..strs_len(fs) {
+                let x = ptr_off(fx, a, 8 + ints_get(st, j))
+                let fh = field_hash(fx, x, strs_get(fs, j))
+                h = mix_combine(fx, h, fh)
+            }
+            set_var(fx, out, h);
+            jump(fx, done);
+        }
+        switch_to(fx.fb, done);
+        return get_var(fx, out)
+    }
+    // Nothing else hashes by derivation; the checker refuses it.
+    iconst(fx, 0)
+}
+
+fn field_hash(fx: Fx, x: Int, t: Str) -> Int {
+    let k = class(t)
+    if k == "record" || k == "enum" {
+        let h = helper(fx.lo, "hash", t)
+        return call(fx, h, ints_of(x))
+    }
+    hash_of(fx, x, t)
+}
+
 fn helper_fx(lo: Lo) -> Fx {
     let reg = ints_new()
     ints_push(reg, 0 - 1)
@@ -3829,6 +4322,34 @@ fn define_helper(lo: Lo, key: Str) -> Str {
         }
         term(fx.fb, "return");
         name = "release of one " + ty_word(t)
+    } else if what == "eq" {
+        let b = param(fx, 1)
+        let differ = new_lblock(fx.fb)
+        equal(fx, a, b, t, differ);
+        let yes = bit(fx, true)
+        term(fx.fb, "return " + vn(yes));
+        switch_to(fx.fb, differ);
+        let no = bit(fx, false)
+        term(fx.fb, "return " + vn(no));
+        name = "equality of " + ty_word(t)
+    } else if what == "ord" {
+        let b = param(fx, 1)
+        let less = new_lblock(fx.fb)
+        let greater = new_lblock(fx.fb)
+        order(fx, a, b, t, less, greater);
+        let zero = iconst(fx, 0)
+        term(fx.fb, "return " + vn(zero));
+        switch_to(fx.fb, less);
+        let minus = iconst(fx, 0 - 1)
+        term(fx.fb, "return " + vn(minus));
+        switch_to(fx.fb, greater);
+        let one = iconst(fx, 1)
+        term(fx.fb, "return " + vn(one));
+        name = "order of " + ty_word(t)
+    } else if what == "hash" {
+        let h = hash_of(fx, a, t)
+        term(fx.fb, "return " + vn(h));
+        name = "hash of " + ty_word(t)
     } else if what == "clo" {
         let f = vec_get(lo.p.fns, match text_parse_int(t) { Ok(v) => v, Err(e) => 0 })
         let carried = carried_of(lo, f)
