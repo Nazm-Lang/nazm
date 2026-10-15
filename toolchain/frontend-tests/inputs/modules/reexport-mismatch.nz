@@ -1,0 +1,6 @@
+use "lib/rx/top.nz";
+fn main() -> Int {
+    let s: Spot = build(1, 2);
+    let n: Str = s;
+    own()
+}

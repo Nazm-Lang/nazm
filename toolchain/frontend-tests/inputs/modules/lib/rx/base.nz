@@ -1,0 +1,8 @@
+pub struct Point { x: Int, y: Int }
+pub enum Shape { Dot, Line(len: Int) }
+pub trait Area { fn area(self: Self) -> Int; }
+impl Area for Point { fn area(self: Point) -> Int { self.x * self.y } }
+pub fn make(x: Int, y: Int) -> Point { Point(x: x, y: y) }
+pub fn twice(n: Int) -> Int { n * 2 }
+pub const LIMIT: Int = 10;
+fn hidden() -> Int { 0 }

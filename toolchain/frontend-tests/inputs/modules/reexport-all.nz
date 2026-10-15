@@ -1,0 +1,6 @@
+use "lib/rx/all.nz";
+fn main() -> Int {
+    let p = make(2, 5);
+    let s = Line(len: 3);
+    twice(p.area()) + LIMIT
+}

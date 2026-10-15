@@ -1,0 +1,7 @@
+use "lib/rx/mid.nz";
+struct Holder { p: Point, f: Form }
+fn main() -> Int {
+    let p = make(3, 4);
+    let h = Holder(p: p, f: Dot);
+    h.p.area() + own() + Area.area(p)
+}

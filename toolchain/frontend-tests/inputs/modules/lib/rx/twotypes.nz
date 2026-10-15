@@ -1,0 +1,2 @@
+pub use "base.nz" { Point };
+pub use "other.nz" { Point };

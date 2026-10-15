@@ -1,0 +1,14 @@
+use "lib/rx/mid.nz";
+use "lib/rx/top.nz" as t;
+fn size(f: Form) -> Int {
+    match f {
+        Dot => 0,
+        Form.Line(len: n) => n,
+    }
+}
+fn first(p: t::Spot) -> Int { p.x }
+fn main() -> Int {
+    let a = Form.Line(len: 2);
+    let b: Shape = Dot;
+    size(a) + size(Line(len: 1)) + first(make(1, 2))
+}

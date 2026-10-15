@@ -29,8 +29,8 @@
 
 - [ ] 3.1 Modules: `as`, `::`, re-exports, packages and manifests — the loader is done (`load.nz`: the
       root, its imports depth-first, `@std/`, the core prelude, global offsets, every loader
-      diagnostic but a package's); packages since 3.1ze (path dependencies); re-exports and derives
-      are not
+      diagnostic but a package's); packages since 3.1ze (path dependencies), re-exports since 3.1zh;
+      derives are not
 - [x] 3.1a The `check` comparison (`run.sh check`): loader, every file's syntax diagnostics at their
       global offsets, and the missing `main` — every difference left is a checker diagnostic
 - [ ] 3.1b The checker's first stages (`compiler/sema.nz`, D13): one module and the prelude; type
@@ -266,6 +266,13 @@
       comparisons skip a file that is not UTF-8 (the reference lexes text) and say so.
       `inputs/check/trap-tuple-let.nz`. `run.sh check`: 2,958 agree, 2 differ; the checker
       carries 2,952, all agree (tokens, tree, syntax: 2,959 agree, 0 differ, 1 skipped)
+- [ ] 3.1zh Re-exports (N103, D23): `pub use` of every name or of the names chosen, `as` for
+      functions and types, chains of re-exports applied in order, a cycle refused (N0213), a name
+      not offered (N0211, a trait renamed included) or offered twice (N0212); importers see them
+      plainly, as `alias::name` and `alias::T`, in collisions (N0207, N0208), as a renamed enum's
+      variants, and an impl of a re-exported module usable. `inputs/modules/reexport-*.nz`.
+      `run.sh check`: 2,977 agree, 2 differ; the checker carries 2,973, all agree (with the 19 new
+      inputs). Only `@derive` stops the checker now (6 inputs), left for last.
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

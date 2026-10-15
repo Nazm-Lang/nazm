@@ -1,0 +1,2 @@
+pub use "cyc2.nz";
+pub fn one() -> Int { 1 }
