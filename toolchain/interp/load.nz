@@ -835,14 +835,30 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     for i in 0..strs_len(bnames) {
         hashmap_set(bmap, strs_get(bnames, i), i)
     }
+    // R1.5 D7 renamed `List[T]` to `Chain[T]`, and its built-ins with it; a 0.10.0 Core IR still
+    // names them `list_*`.
+    let renamed = strs_new()
+    strs_push(renamed, "from_vec")
+    strs_push(renamed, "empty")
+    strs_push(renamed, "len")
+    strs_push(renamed, "get")
+    strs_push(renamed, "push")
+    for old in renamed {
+        match hashmap_get(bmap, "chain_" + old) {
+            Some(i) => hashmap_set(bmap, "list_" + old, i),
+            None => { },
+        }
+    }
     let l = L(doc: doc, p: p, fmap: p.fmap, imap: hashmap_new[Str, Int](),
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
             lhead: ints_new(), nscope: [0], lscope: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
             cells: hashmap_new[Str, Int]())
     let root = json_root(doc)
-    if gs(l, root, "schema") != "nazm.core-ir/2" {
-        return Err(f"the Core IR is `{gs(l, root, "schema")}`, and this interpreter reads `nazm.core-ir/2`")
+    // `/3` keeps every `/2` field where it was and adds tables this interpreter does not yet read.
+    let schema = gs(l, root, "schema")
+    if schema != "nazm.core-ir/2" && schema != "nazm.core-ir/3" {
+        return Err(f"the Core IR is `{schema}`, and this interpreter reads `nazm.core-ir/2` and `/3`")
     }
     let fs = g(l, root, "functions")
     // Every function first, so a call can name one defined later.

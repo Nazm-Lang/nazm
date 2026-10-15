@@ -27,7 +27,8 @@ pub enum V {
     // buffer.
     Byt(b: Bytes, obj: Int),
     // An `OsHandle` (Gate 2): the host's, which this interpreter's own runtime keeps.
-    Osh(h: OsHandle),
+    // A host handle; `sock` is its place in the heap's `socktime` when it is a socket, else 0.
+    Osh(h: OsHandle, sock: Int),
     // An `Atomic` (Gate 3): one cell, by reference.
     Atm(a: Atomic),
 }
@@ -105,6 +106,8 @@ pub struct Heap {
     sched: Ints,
     // The children whose exit has been seen, by process id.
     reaped: Ints,
+    // Each socket's deadline as the program set it (`os_set_timeout`), by its `sock`.
+    socktime: Ints,
 }
 
 /// One task's stacks (D3) and the run's state.
@@ -164,7 +167,9 @@ pub const ST_PENDING: Int = 9
 // Instructions run in the last turn, and loop turns since the task last gave way.
 pub const ST_STEPS: Int = 10
 pub const ST_TURNS: Int = 11
-pub const ST_SIZE: Int = 12
+/// When a task waiting on a socket gives up: the program's deadline, or -1 for none (0: not waiting).
+pub const ST_IOWAIT: Int = 12
+pub const ST_SIZE: Int = 13
 
 // `Heap.sched`: tasks started and joined, selects and their timeouts (`NAZM_SCHED_REPORT`), and
 // how many tasks are live.

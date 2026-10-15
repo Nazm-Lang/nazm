@@ -125,7 +125,7 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, caps: Caps) -> V {
         return channel_builtin(p, vm, pc, op, n, caps.time)
     }
     if is_os(op) {
-        return os_builtin(p, vm, pc, op, n, caps.io, caps.net, caps.proc, caps.rnd)
+        return os_builtin(p, vm, pc, op, n, caps.io, caps.net, caps.proc, caps.rnd, caps.time)
     }
     if is_bytes_text(op) {
         return bytes_text(p, vm, pc, op, n, strs_get(p.names, ints_get(p.c, pc)))
