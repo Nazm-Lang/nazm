@@ -312,7 +312,10 @@
       `run.sh core`: 2,984 inputs agree, 0 differ; of 41,353 functions the lowering carries
       22,595, all agree (the most frequent stops: a variant, a construction, a generic function,
       an impl's method, `match`)
-- [ ] 5.1b The digests (`digest.rs`: the semantic encoding, BLAKE3)
+- [ ] 5.1b The digests (`digest.rs`: the canonical encoding, BLAKE3): `compiler/digest.nz`, from
+      each function's printed object (D25), BLAKE3 by `@std/blake3`; `run.sh core` compares each
+      function with its `digest`. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,435
+      functions the lowering carries 29,774, all agree, digests included
 - [ ] 5.1c The document's other parts: modules, the type table in the reference's order, statics,
       the impl table, `derived_hash`; then the whole document compared
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)

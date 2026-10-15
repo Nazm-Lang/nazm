@@ -1,0 +1,752 @@
+// A function's two Core IR digests (R2, slice 5; `openspec/changes/r2-front-end/design.md` D25):
+// a port of `nazm-cir/src/digest.rs`. BLAKE3 over the canonical encoding — every item tagged,
+// every variable-length item length-prefixed, little-endian `u64` counts — of what the function
+// means (`semantic`: its effect contract and its code) and of what code generation reads (`body`).
+//
+// It reads the function as `nazm.core-ir/3` prints it (`core.nz`, without its `digest`): the
+// printed form names every definition, field, variant and payload field the encoding names, by
+// the same durable names, and only spells function and array types out where the encoding
+// writes `?` (`Names::new` against `Names::spelled`) — undone here, type by type. Where the
+// printed form does not say what the encoding needs (a constant of a numeric type other than
+// `Int`, whose bits it prints as a value), `cdg_digest` answers "" and the caller stops.
+
+use "@std/blake3";
+
+// A parsed JSON value, in an arena: kind (0 null, 1 bool, 2 number, 3 string, 4 array, 5 object),
+// its text (a number's or a boolean's as written, a string's decoded), the name it is a member
+// under, and its children — a run of `kids` from `first`.
+struct Js {
+    kind: Ints,
+    text: Strs,
+    key: Strs,
+    first: Ints,
+    count: Ints,
+    kids: Ints,
+    // The reading position, and whether the text was not JSON this reader reads.
+    st: Ints,
+}
+
+fn js_new() -> Js {
+    let j = Js(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), count: ints_new(), kids: ints_new(), st: ints_new());
+    ints_push(j.st, 0);
+    ints_push(j.st, 0);
+    j
+}
+
+fn js_pos(j: Js) -> Int { ints_get(j.st, 0) }
+fn js_go(j: Js, p: Int) -> Int {
+    ints_set(j.st, 0, p);
+    0
+}
+fn js_fail(j: Js) -> Int {
+    ints_set(j.st, 1, 1);
+    0 - 1
+}
+fn js_failed(j: Js) -> Bool { ints_get(j.st, 1) == 1 }
+
+fn js_node(j: Js, kind: Int, text: Str) -> Int {
+    ints_push(j.kind, kind);
+    strs_push(j.text, text);
+    strs_push(j.key, "");
+    ints_push(j.first, 0);
+    ints_push(j.count, 0);
+    ints_len(j.kind) - 1
+}
+
+fn js_hex_digit(b: Int) -> Int {
+    if b >= 48 && b <= 57 { return b - 48; }
+    if b >= 97 && b <= 102 { return b - 87; }
+    if b >= 65 && b <= 70 { return b - 55; }
+    0
+}
+
+// One value at the reading position (compact JSON: no white space).
+fn js_value(j: Js, s: Str) -> Int {
+    let p = js_pos(j);
+    if p >= str_len(s) { return js_fail(j); }
+    let b = str_byte(s, p);
+    if b == 123 || b == 91 {
+        let close = b + 2;
+        let kind = 4;
+        let items = ints_new();
+        let keys = strs_new();
+        js_go(j, p + 1);
+        if str_byte(s, p + 1) == close {
+            js_go(j, p + 2);
+        } else {
+            let mut more = true;
+            while more {
+                let mut key = "";
+                if b == 123 {
+                    let k = js_value(j, s);
+                    if k < 0 { return 0 - 1; }
+                    key = strs_get(j.text, k);
+                    js_go(j, js_pos(j) + 1);
+                }
+                let v = js_value(j, s);
+                if v < 0 { return 0 - 1; }
+                ints_push(items, v);
+                strs_push(keys, key);
+                let q = js_pos(j);
+                if q >= str_len(s) { return js_fail(j); }
+                if str_byte(s, q) == 44 {
+                    js_go(j, q + 1);
+                } else {
+                    if str_byte(s, q) != close { return js_fail(j); }
+                    js_go(j, q + 1);
+                    more = false;
+                }
+            }
+        }
+        let mut k = kind;
+        if b == 123 { k = 5; }
+        let n = js_node(j, k, "");
+        ints_set(j.first, n, ints_len(j.kids));
+        ints_set(j.count, n, ints_len(items));
+        let mut i = 0;
+        while i < ints_len(items) {
+            ints_push(j.kids, ints_get(items, i));
+            strs_set(j.key, ints_get(items, i), strs_get(keys, i));
+            i = i + 1;
+        }
+        return n;
+    }
+    if b == 34 {
+        let out = strs_new();
+        let mut i = p + 1;
+        let mut from = i;
+        while i < str_len(s) && str_byte(s, i) != 34 {
+            if str_byte(s, i) == 92 {
+                strs_push(out, str_slice(s, from, i));
+                let e = str_byte(s, i + 1);
+                if e == 110 { strs_push(out, str_from_byte(10)); }
+                if e == 114 { strs_push(out, str_from_byte(13)); }
+                if e == 116 { strs_push(out, str_from_byte(9)); }
+                if e == 98 { strs_push(out, str_from_byte(8)); }
+                if e == 102 { strs_push(out, str_from_byte(12)); }
+                if e == 34 || e == 92 || e == 47 { strs_push(out, str_from_byte(e)); }
+                if e == 117 {
+                    // Only the control characters are written `\u00XX`.
+                    let v = js_hex_digit(str_byte(s, i + 4)) * 16 + js_hex_digit(str_byte(s, i + 5));
+                    strs_push(out, str_from_byte(v));
+                    i = i + 4;
+                }
+                i = i + 2;
+                from = i;
+            } else {
+                i = i + 1;
+            }
+        }
+        if i >= str_len(s) { return js_fail(j); }
+        strs_push(out, str_slice(s, from, i));
+        js_go(j, i + 1);
+        return js_node(j, 3, str_join(out, ""));
+    }
+    let mut i = p;
+    while i < str_len(s) && str_byte(s, i) != 44 && str_byte(s, i) != 93 && str_byte(s, i) != 125 { i = i + 1; }
+    let word = str_slice(s, p, i);
+    js_go(j, i);
+    if word == "null" { return js_node(j, 0, word); }
+    if word == "true" || word == "false" { return js_node(j, 1, word); }
+    js_node(j, 2, word)
+}
+
+// Member `name` of object `o`, or -1.
+fn js_get(j: Js, o: Int, name: Str) -> Int {
+    if o < 0 { return 0 - 1; }
+    let mut i = 0;
+    while i < ints_get(j.count, o) {
+        let k = ints_get(j.kids, ints_get(j.first, o) + i);
+        if strs_get(j.key, k) == name { return k; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn js_len(j: Js, a: Int) -> Int {
+    if a < 0 { return 0; }
+    ints_get(j.count, a)
+}
+fn js_at(j: Js, a: Int, i: Int) -> Int { ints_get(j.kids, ints_get(j.first, a) + i) }
+fn js_text(j: Js, n: Int) -> Str { strs_get(j.text, n) }
+fn js_is_null(j: Js, n: Int) -> Bool { n < 0 || ints_get(j.kind, n) == 0 }
+fn js_str(j: Js, o: Int, name: Str) -> Str { js_text(j, js_get(j, o, name)) }
+
+fn js_int(j: Js, o: Int, name: Str) -> Int { cdg_to_int(js_str(j, o, name)) }
+
+fn cdg_to_int(s: Str) -> Int {
+    let mut neg = false;
+    let mut i = 0;
+    if str_len(s) > 0 && str_byte(s, 0) == 45 {
+        neg = true;
+        i = 1;
+    }
+    let mut n = 0;
+    while i < str_len(s) {
+        n = n * 10 - (str_byte(s, i) - 48);
+        i = i + 1;
+    }
+    if neg { return n; }
+    0 - n
+}
+
+// --- the encoding ------------------------------------------------------------------------------
+
+// The encoding being written: its pieces, the function's object and the parsed document, and
+// whether something it needs was not printed.
+struct Canon {
+    out: Strs,
+    j: Js,
+    f: Int,
+    stop: Strs,
+}
+
+fn cn_halt(c: Canon, why: Str) -> Int {
+    if strs_len(c.stop) == 0 { strs_push(c.stop, why); }
+    0
+}
+
+// `n` as eight little-endian bytes, two's complement.
+fn cn_n(c: Canon, n: Int) -> Int {
+    let mut v = n;
+    let mut i = 0;
+    while i < 8 {
+        let mut b = v % 256;
+        if b < 0 { b = b + 256; }
+        strs_push(c.out, str_from_byte(b));
+        v = (v - b) / 256;
+        i = i + 1;
+    }
+    0
+}
+
+fn cn_bytes(c: Canon, s: Str) -> Int {
+    cn_n(c, str_len(s));
+    strs_push(c.out, s);
+    0
+}
+
+fn cn_tag(c: Canon, t: Str) -> Int { cn_bytes(c, t) }
+
+fn cn_ty(c: Canon, spelled: Str) -> Int { cn_bytes(c, cdg_unspell(spelled)) }
+
+// A printed type as the digests name it: a function or array type is `?`, wherever it appears.
+pub fn cdg_unspell(t: Str) -> Str {
+    if cdg_find(t, "fn(") < 0 && cdg_find(t, "[") < 0 { return t; }
+    let at = ints_new();
+    ints_push(at, 0);
+    let out = cdg_type(t, at);
+    if ints_get(at, 0) != str_len(t) { return "?"; }
+    out
+}
+
+fn cdg_find(s: Str, want: Str) -> Int {
+    let n = str_len(want);
+    let mut i = 0;
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == want { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn cdg_starts_at(s: Str, i: Int, want: Str) -> Bool {
+    i + str_len(want) <= str_len(s) && str_slice(s, i, i + str_len(want)) == want
+}
+
+// One type at `at[0]`: `fn(…) -> T[ ! { … }]`, `[T; N]`, or a head and its arguments.
+fn cdg_type(s: Str, at: Ints) -> Str {
+    let p = ints_get(at, 0);
+    if cdg_starts_at(s, p, "fn(") {
+        ints_set(at, 0, p + 3);
+        if cdg_starts_at(s, p + 3, ")") == false {
+            let mut more = true;
+            while more {
+                cdg_type(s, at);
+                if cdg_starts_at(s, ints_get(at, 0), ", ") { ints_set(at, 0, ints_get(at, 0) + 2); } else { more = false; }
+            }
+        }
+        if cdg_starts_at(s, ints_get(at, 0), ") -> ") == false { return "?"; }
+        ints_set(at, 0, ints_get(at, 0) + 5);
+        cdg_type(s, at);
+        if cdg_starts_at(s, ints_get(at, 0), " ! { ") {
+            let mut q = ints_get(at, 0);
+            while q < str_len(s) && str_byte(s, q) != 125 { q = q + 1; }
+            ints_set(at, 0, q + 1);
+        }
+        return "?";
+    }
+    if cdg_starts_at(s, p, "[") {
+        ints_set(at, 0, p + 1);
+        cdg_type(s, at);
+        let mut q = ints_get(at, 0);
+        while q < str_len(s) && str_byte(s, q) != 93 { q = q + 1; }
+        ints_set(at, 0, q + 1);
+        return "?";
+    }
+    let mut q = p;
+    while q < str_len(s) && str_byte(s, q) != 91 && str_byte(s, q) != 44 && str_byte(s, q) != 93 && str_byte(s, q) != 41
+            && cdg_starts_at(s, q, " ! { ") == false {
+        q = q + 1;
+    }
+    let head = str_slice(s, p, q);
+    ints_set(at, 0, q);
+    if cdg_starts_at(s, q, "[") == false { return head; }
+    let parts = strs_new();
+    ints_set(at, 0, q + 1);
+    let mut more = true;
+    while more {
+        strs_push(parts, cdg_type(s, at));
+        if cdg_starts_at(s, ints_get(at, 0), ", ") { ints_set(at, 0, ints_get(at, 0) + 2); } else { more = false; }
+    }
+    ints_set(at, 0, ints_get(at, 0) + 1);
+    str_concat(str_concat(str_concat(head, "["), str_join(parts, ", ")), "]")
+}
+
+fn cn_set(c: Canon, list: Int) -> Int {
+    let j = c.j;
+    cn_n(c, js_len(j, list));
+    let mut i = 0;
+    while i < js_len(j, list) {
+        cn_tag(c, js_text(j, js_at(j, list, i)));
+        i = i + 1;
+    }
+    0
+}
+
+// What code generation reads: the signature's types, every local's type, the body (`code`).
+fn cn_code(c: Canon) -> Int {
+    let j = c.j;
+    let f = c.f;
+    if js_get(j, f, "foreign") >= 0 {
+        cn_tag(c, "foreign");
+        cn_tag(c, js_str(j, f, "foreign"));
+    }
+    let export = js_get(j, js_get(j, f, "attributes"), "export");
+    if js_is_null(j, export) == false {
+        cn_tag(c, "export");
+        cn_tag(c, js_text(j, export));
+    }
+    cn_n(c, js_int(j, f, "type_params"));
+    cn_n(c, js_int(j, f, "params"));
+    cn_ty(c, js_str(j, f, "ret"));
+    let locals = js_get(j, f, "locals");
+    cn_n(c, js_len(j, locals));
+    let mut i = 0;
+    while i < js_len(j, locals) {
+        cn_ty(c, js_str(j, js_at(j, locals, i), "type"));
+        i = i + 1;
+    }
+    if js_get(j, f, "body") >= 0 { cn_block(c, js_get(j, f, "body")); }
+    0
+}
+
+fn cn_block(c: Canon, b: Int) -> Int {
+    let j = c.j;
+    cn_tag(c, "block");
+    if js_str(j, b, "ends") == "transfers" { cn_tag(c, "transfers"); } else { cn_tag(c, "falls"); }
+    let owns = js_get(j, b, "owns");
+    cn_n(c, js_len(j, owns));
+    let mut i = 0;
+    while i < js_len(j, owns) {
+        cn_n(c, cdg_to_int(js_text(j, js_at(j, owns, i))));
+        i = i + 1;
+    }
+    let stmts = js_get(j, b, "stmts");
+    cn_n(c, js_len(j, stmts));
+    i = 0;
+    while i < js_len(j, stmts) {
+        cn_stmt(c, js_at(j, stmts, i));
+        i = i + 1;
+    }
+    let tail = js_get(j, b, "tail");
+    if js_is_null(j, tail) {
+        cn_tag(c, "no-tail");
+    } else {
+        cn_tag(c, "tail");
+        cn_expr(c, tail);
+    }
+    0
+}
+
+fn cn_exprs(c: Canon, list: Int) -> Int {
+    let j = c.j;
+    cn_n(c, js_len(j, list));
+    let mut i = 0;
+    while i < js_len(j, list) {
+        cn_expr(c, js_at(j, list, i));
+        i = i + 1;
+    }
+    0
+}
+
+fn cn_types(c: Canon, list: Int) -> Int {
+    let j = c.j;
+    cn_n(c, js_len(j, list));
+    let mut i = 0;
+    while i < js_len(j, list) {
+        cn_ty(c, js_text(j, js_at(j, list, i)));
+        i = i + 1;
+    }
+    0
+}
+
+fn cn_stmt(c: Canon, s: Int) -> Int {
+    let j = c.j;
+    let op = js_str(j, s, "op");
+    if op == "let" {
+        cn_tag(c, "let");
+        cn_n(c, js_int(j, s, "local"));
+        cn_expr(c, js_get(j, s, "value"));
+        return 0;
+    }
+    if op == "assign" {
+        cn_tag(c, "assign");
+        cn_n(c, js_int(j, s, "local"));
+        let path = js_get(j, s, "path");
+        cn_n(c, js_len(j, path));
+        let mut i = 0;
+        while i < js_len(j, path) {
+            let step = js_at(j, path, i);
+            if js_get(j, step, "record") >= 0 {
+                cn_ty(c, js_str(j, step, "record"));
+                cn_bytes(c, js_str(j, step, "name"));
+            } else {
+                cn_tag(c, "index");
+                cn_n(c, js_int(j, step, "len"));
+                cn_expr(c, js_get(j, step, "index"));
+            }
+            i = i + 1;
+        }
+        cn_expr(c, js_get(j, s, "value"));
+        return 0;
+    }
+    if op == "eval" {
+        cn_tag(c, "eval");
+        cn_expr(c, js_get(j, s, "value"));
+        return 0;
+    }
+    if op == "if" {
+        cn_tag(c, "if");
+        cn_expr(c, js_get(j, s, "cond"));
+        cn_block(c, js_get(j, s, "then"));
+        let otherwise = js_get(j, s, "else");
+        if js_is_null(j, otherwise) { cn_tag(c, "no-else"); } else { cn_block(c, otherwise); }
+        return 0;
+    }
+    if op == "match" {
+        cn_tag(c, "match-stmt");
+        cn_matching(c, s);
+        return 0;
+    }
+    if op == "loop" {
+        cn_tag(c, "loop");
+        cn_n(c, js_int(j, s, "loop"));
+        cn_expr(c, js_get(j, s, "cond"));
+        cn_block(c, js_get(j, s, "body"));
+        return 0;
+    }
+    if op == "block" {
+        cn_tag(c, "block-stmt");
+        cn_block(c, js_get(j, s, "body"));
+        return 0;
+    }
+    if op == "scope" {
+        cn_tag(c, "scope");
+        cn_block(c, js_get(j, s, "body"));
+        return 0;
+    }
+    if op == "spawn" {
+        cn_tag(c, "spawn");
+        cn_bytes(c, js_str(j, s, "callee"));
+        cn_exprs(c, js_get(j, s, "args"));
+        return 0;
+    }
+    if op == "return" {
+        cn_tag(c, "return");
+        cn_expr(c, js_get(j, s, "value"));
+        return 0;
+    }
+    if op == "break" || op == "continue" {
+        cn_tag(c, op);
+        cn_n(c, js_int(j, s, "loop"));
+        return 0;
+    }
+    cn_halt(c, str_concat("the statement ", op))
+}
+
+// A `match`: its arms in variant-name order, which means nothing to the program (`matching`).
+fn cn_matching(c: Canon, m: Int) -> Int {
+    let j = c.j;
+    cn_tag(c, js_str(j, m, "origin"));
+    cn_ty(c, js_str(j, m, "enum"));
+    cn_expr(c, js_get(j, m, "scrutinee"));
+    let arms = js_get(j, m, "arms");
+    let order = ints_new();
+    let mut i = 0;
+    while i < js_len(j, arms) {
+        // Insertion, stable: the names are distinct.
+        let name = js_str(j, js_at(j, arms, i), "name");
+        let mut at = ints_len(order);
+        while at > 0 && cdg_less(name, js_str(j, js_at(j, arms, ints_get(order, at - 1)), "name")) { at = at - 1; }
+        ints_push(order, 0);
+        let mut k = ints_len(order) - 1;
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1));
+            k = k - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    cn_n(c, ints_len(order));
+    i = 0;
+    while i < ints_len(order) {
+        let a = js_at(j, arms, ints_get(order, i));
+        cn_bytes(c, js_str(j, a, "name"));
+        let bindings = js_get(j, a, "bindings");
+        cn_n(c, js_len(j, bindings));
+        let mut k = 0;
+        while k < js_len(j, bindings) {
+            let b = js_at(j, bindings, k);
+            cn_bytes(c, js_str(j, b, "name"));
+            cn_n(c, js_int(j, b, "local"));
+            k = k + 1;
+        }
+        cn_block(c, js_get(j, a, "body"));
+        i = i + 1;
+    }
+    0
+}
+
+// Whether `a` sorts before `b`, byte by byte.
+fn cdg_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+fn cn_expr(c: Canon, e: Int) -> Int {
+    let j = c.j;
+    let ty = js_str(j, e, "type");
+    if ty == "never" {
+        cn_tag(c, "never");
+    } else {
+        cn_tag(c, "value");
+        cn_ty(c, ty);
+    }
+    let op = js_str(j, e, "op");
+    if op == "const" {
+        cn_tag(c, "const");
+        return cn_const(c, js_int(j, e, "const"));
+    }
+    if op == "local" {
+        cn_tag(c, "local");
+        return cn_n(c, js_int(j, e, "local"));
+    }
+    if op == "neg" {
+        cn_tag(c, "neg");
+        return cn_expr(c, js_get(j, e, "operand"));
+    }
+    if op == "+" || op == "-" || op == "*" || op == "/" || op == "%" {
+        cn_tag(c, op);
+        cn_expr(c, js_get(j, e, "lhs"));
+        return cn_expr(c, js_get(j, e, "rhs"));
+    }
+    if op == "&" || op == "|" || op == "^" || op == "<<" || op == ">>" {
+        cn_tag(c, "bits");
+        cn_tag(c, op);
+        cn_expr(c, js_get(j, e, "lhs"));
+        return cn_expr(c, js_get(j, e, "rhs"));
+    }
+    if op == "~" {
+        cn_tag(c, "complement");
+        return cn_expr(c, js_get(j, e, "operand"));
+    }
+    if op == "convert" {
+        cn_tag(c, "convert");
+        cn_tag(c, js_str(j, e, "mode"));
+        return cn_expr(c, js_get(j, e, "operand"));
+    }
+    if op == "fits" {
+        cn_tag(c, "fits");
+        cn_ty(c, js_str(j, e, "to"));
+        return cn_expr(c, js_get(j, e, "operand"));
+    }
+    if op == "array" {
+        cn_tag(c, "array");
+        return cn_exprs(c, js_get(j, e, "elems"));
+    }
+    if op == "array-repeat" {
+        cn_tag(c, "array-repeat");
+        cn_n(c, js_int(j, e, "count"));
+        return cn_expr(c, js_get(j, e, "value"));
+    }
+    if op == "index" {
+        cn_tag(c, "index");
+        cn_expr(c, js_get(j, e, "base"));
+        return cn_expr(c, js_get(j, e, "index"));
+    }
+    if op == "==" || op == "!=" || op == "<" || op == "<=" || op == ">" || op == ">=" {
+        cn_tag(c, op);
+        cn_ty(c, js_str(j, e, "operand"));
+        cn_tag(c, js_str(j, e, "law"));
+        cn_expr(c, js_get(j, e, "lhs"));
+        return cn_expr(c, js_get(j, e, "rhs"));
+    }
+    if op == "call" {
+        cn_tag(c, "call");
+        cn_bytes(c, js_str(j, e, "callee"));
+        cn_types(c, js_get(j, e, "type_args"));
+        return cn_exprs(c, js_get(j, e, "args"));
+    }
+    if op == "builtin" {
+        cn_tag(c, "builtin");
+        cn_tag(c, js_str(j, e, "builtin"));
+        cn_types(c, js_get(j, e, "type_args"));
+        return cn_exprs(c, js_get(j, e, "args"));
+    }
+    if op == "record" || op == "variant" {
+        // The record or enum is the expression's own type.
+        cn_tag(c, op);
+        cn_ty(c, ty);
+        if op == "variant" { cn_bytes(c, js_str(j, e, "name")); }
+        let fields = js_get(j, e, "fields");
+        cn_n(c, js_len(j, fields));
+        let mut i = 0;
+        while i < js_len(j, fields) {
+            cn_bytes(c, js_str(j, js_at(j, fields, i), "name"));
+            cn_expr(c, js_get(j, js_at(j, fields, i), "value"));
+            i = i + 1;
+        }
+        return 0;
+    }
+    if op == "field" {
+        // The record is the base's type.
+        cn_tag(c, "field");
+        cn_ty(c, js_str(j, js_get(j, e, "base"), "type"));
+        cn_bytes(c, js_str(j, e, "name"));
+        return cn_expr(c, js_get(j, e, "base"));
+    }
+    if op == "match" {
+        cn_tag(c, "match");
+        return cn_matching(c, e);
+    }
+    if op == "if" {
+        cn_tag(c, "if-value");
+        cn_expr(c, js_get(j, e, "cond"));
+        cn_block(c, js_get(j, e, "then"));
+        return cn_block(c, js_get(j, e, "else"));
+    }
+    if op == "block" {
+        cn_tag(c, "block-value");
+        return cn_block(c, js_get(j, e, "body"));
+    }
+    if op == "closure" {
+        cn_tag(c, "closure");
+        cn_bytes(c, js_str(j, e, "function"));
+        let caps = js_get(j, e, "captures");
+        cn_n(c, js_len(j, caps));
+        let mut i = 0;
+        while i < js_len(j, caps) {
+            cn_n(c, cdg_to_int(js_text(j, js_at(j, caps, i))));
+            i = i + 1;
+        }
+        return 0;
+    }
+    if op == "fn_value" {
+        cn_tag(c, "fn-value");
+        return cn_bytes(c, js_str(j, e, "function"));
+    }
+    if op == "call_indirect" {
+        cn_tag(c, "call-indirect");
+        cn_expr(c, js_get(j, e, "callee"));
+        return cn_exprs(c, js_get(j, e, "args"));
+    }
+    if op == "call_trait" {
+        cn_tag(c, "call-trait");
+        cn_bytes(c, js_str(j, e, "method"));
+        cn_ty(c, js_str(j, e, "self"));
+        return cn_exprs(c, js_get(j, e, "args"));
+    }
+    cn_halt(c, str_concat("the expression ", op))
+}
+
+// Constant `id` of the function, by its printed type and value.
+fn cn_const(c: Canon, id: Int) -> Int {
+    let j = c.j;
+    let k = js_at(j, js_get(j, c.f, "consts"), id);
+    let ty = js_str(j, k, "type");
+    let value = js_str(j, k, "value");
+    if ty == "Int" {
+        cn_tag(c, "int");
+        return cn_n(c, cdg_to_int(value));
+    }
+    if ty == "Bool" {
+        cn_tag(c, "bool");
+        if value == "true" { strs_push(c.out, str_from_byte(1)); } else { strs_push(c.out, str_from_byte(0)); }
+        return 0;
+    }
+    if ty == "Str" {
+        cn_tag(c, "str");
+        return cn_bytes(c, cdg_literal_bytes(value));
+    }
+    if ty == "Atomic" {
+        cn_tag(c, "cell");
+        return cn_bytes(c, str_slice(value, 7, str_len(value)));
+    }
+    cn_halt(c, str_concat("a constant of type ", ty))
+}
+
+// A string constant's bytes from its printed text: itself, or `\xNN` per byte where it was not
+// UTF-8 or held `\x` (`print.rs`'s `text`).
+fn cdg_literal_bytes(v: Str) -> Str {
+    if cdg_find(v, "\\x") < 0 { return v; }
+    let out = strs_new();
+    let mut i = 0;
+    while i + 4 <= str_len(v) {
+        strs_push(out, str_from_byte(js_hex_digit(str_byte(v, i + 2)) * 16 + js_hex_digit(str_byte(v, i + 3))));
+        i = i + 4;
+    }
+    str_join(out, "")
+}
+
+fn cn_hash(c: Canon) -> Str {
+    if strs_len(c.stop) > 0 { return ""; }
+    blake3_hex(bytes_from_str(str_join(c.out, "")))
+}
+
+fn cn_new(j: Js, f: Int, kind: Str) -> Canon {
+    let c = Canon(out: strs_new(), j: j, f: f, stop: strs_new());
+    strs_push(c.out, "nazm.core-ir/3");
+    cn_tag(c, kind);
+    c
+}
+
+// The `digest` member for a function printed as `object` (without one) —
+// `{"semantic":"…","body":"…"}` — or "" where the printed form does not say enough.
+pub fn cdg_digest(object: Str) -> Str {
+    let j = js_new();
+    let f = js_value(j, object);
+    if f < 0 || js_failed(j) { return ""; }
+    let body = cn_new(j, f, "body");
+    cn_code(body);
+    let b = cn_hash(body);
+    if b == "" { return ""; }
+    let sem = cn_new(j, f, "semantic");
+    let effects = js_get(j, f, "effects");
+    let declared = js_get(j, effects, "declared");
+    if js_is_null(j, declared) {
+        cn_tag(sem, "undeclared");
+    } else {
+        cn_tag(sem, "declared");
+        cn_set(sem, declared);
+    }
+    cn_set(sem, js_get(j, effects, "required"));
+    cn_code(sem);
+    let s = cn_hash(sem);
+    if s == "" { return ""; }
+    str_concat(str_concat(str_concat(str_concat("{", "\"semantic\":\""), s), str_concat("\",\"body\":\"", b)), "\"}")
+}

@@ -1,6 +1,6 @@
 // Core IR from the checked program (R2, slice 5; `openspec/changes/r2-front-end/design.md` D25): a
 // port of `nazm-core/src/lower.rs`, function by function, printed as `nazm.core-ir/3` prints each
-// function (`nazm-cir/src/print.rs`) — but its digest, which waits for the semantic encoding.
+// function (`nazm-cir/src/print.rs`), its digests computed from what is printed (`digest.nz`).
 //
 // It knows where it stops. A function using anything this lowering does not carry yet is not
 // printed: `cr_function` says what it stopped at instead, and the comparison (`run.sh core`)
@@ -15,6 +15,7 @@ use "syntax.nz";
 use "diag.nz";
 use "sema.nz";
 use "facts.nz";
+use "digest.nz";
 
 // One function's lowering (`Lower`).
 struct Lo {
@@ -188,7 +189,17 @@ fn co_function(lo: Lo, i: Int) -> Str {
     strs_push(out, co_field("attributes", co_object(attributes)));
     strs_push(out, co_field("at", json_str(co_tree_span(lo, sx_field(t, node, "span")))));
     strs_push(out, co_field("body", body));
-    co_object(out)
+    // Its digests, from what is printed (`digest.nz`), after `authority`.
+    let digest = cdg_digest(co_object(out));
+    if digest == "" { return co_stopped(lo, "what its digest needs, not printed"); }
+    let whole = strs_new();
+    let mut m = 0;
+    while m < strs_len(out) {
+        strs_push(whole, strs_get(out, m));
+        if m == 7 { strs_push(whole, co_field("digest", digest)); }
+        m = m + 1;
+    }
+    co_object(whole)
 }
 
 fn co_stopped(lo: Lo, why: Str) -> Str {

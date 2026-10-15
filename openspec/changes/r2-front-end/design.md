@@ -307,11 +307,18 @@ reference's, construct by construct.
 
 The comparison (`run.sh core`, `toolchain/frontend-tests/core-ir.py`) is by function: the
 reference's `nazm core-ir FILE` (the compilation as a module, `Entry::Absent`), each function's
-object without its `digest`, against the Nazm lowering's line for the same function — in the
+object, `digest` included, against the Nazm lowering's line for the same function — in the
 same order, so the lists of functions must agree too. A function using what the lowering does not
 carry yet is printed as `-` and the reason: it is counted apart, never compared, and every
 function printed is compared whole — so the lowering never agrees by leaving something out. The
-digests (BLAKE3 over `nazm-cir/src/digest.rs`'s semantic encoding, D5) come next, then the
+digests (BLAKE3 over `nazm-cir/src/digest.rs`'s canonical encoding, D5) are `compiler/digest.nz`'s,
+computed from the function's printed object rather than beside the lowering: the printed form
+names every definition, field, variant and payload field the encoding names, by the same durable
+names, so one reader of it serves every construct the lowering will carry. Two things it undoes or
+infers: the encoding names a function or array type `?` where `/3` spells it (`Names::new` against
+`Names::spelled`), wherever it appears; and a record construction's record is the expression's
+type, a field read's the base's. A constant of a numeric type other than `Int`, whose bits `/3`
+prints as a value, stops the function until that type is carried. Then the
 document's other parts — the module list, the type table (every record and enum instance in the
 reference's interning order, which the checker's interning must then follow), statics, the impl
 table and `derived_hash` — after which the comparison becomes the whole document, byte for byte
@@ -338,5 +345,5 @@ operators and every number type, closures, then the rest by count. `@derive` sta
 
 - Whether the coordinator wants the R2 comparisons folded into `selfhost.rs` (contained) or kept as
   a host test under the heap limit (R6).
-- The Core IR digests' encoding is not documented outside `nazm-cir`; slice 5 reads the code
-  (D25: after the function bodies).
+- The Core IR digests' encoding is not documented outside `nazm-cir`; slice 5 ported it from the
+  code (D25, `compiler/digest.nz`).
