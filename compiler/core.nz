@@ -1227,7 +1227,10 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     if k == "Variant" && sx_kind(t, e) != tk_tuple() {
         let vs = sx_field(t, e, "variant_span");
         let fields = sx_items(t, sx_field(t, e, "fields"));
-        if ints_len(fields) == 0 && ck_site_at(lo.c, co_abs_s(lo, vs), co_abs_e(lo, vs)) >= 0 { return co_stopped(lo, "a method call"); }
+        // `x.m` with no arguments, parsed as a variant: the method call the checker read it as.
+        if ints_len(fields) == 0 && ck_site_at(lo.c, co_abs_s(lo, vs), co_abs_e(lo, vs)) >= 0 {
+            return co_method(lo, vs, sx_field(t, e, "span"), 0 - 1, sx_text(t, sx_field(t, e, "ty")), sx_field(t, e, "ty_span"), ints_new());
+        }
         return co_variant(lo, sx_field(t, e, "ty_span"), vs, fields, false);
     }
     if sx_kind(t, e) == tk_tuple() {
@@ -1253,17 +1256,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         let id = co_constant(lo, "Str", json_str(v));
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
     }
-    if k == "Var" {
-        // A constant (Gate 2): the value the checker computed, written as a literal; a static
-        // `Atomic`, its cell.
-        if ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span)) < 0 {
-            let u = ck_const_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
-            if u >= 0 { return co_const_use(lo, u, sx_text(t, sx_field(t, e, "name")), span); }
-        }
-        let l = co_local_at(lo, span);
-        if co_halted(lo) { return ""; }
-        return co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span);
-    }
+    if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
     if k == "Neg" {
         // A literal negated, of a type the checker gave it (`integer`): the negative constant,
         // at the literal.
@@ -1300,6 +1293,9 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "field", str_join(fields, ""), ck_field_ty(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)), ns);
     }
     if k == "Call" { return co_call(lo, e); }
+    if k == "MethodCall" {
+        return co_method(lo, sx_field(t, e, "method_span"), sx_field(t, e, "span"), sx_field(t, e, "receiver"), "", 0 - 1, sx_items(t, sx_field(t, e, "args")));
+    }
     if k == "Propagate" { return co_propagate(lo, e); }
     if k == "Interp" { return co_interp(lo, e); }
     if k == "Match" { return co_match(lo, e, true); }
@@ -2392,18 +2388,25 @@ fn co_call(lo: Lo, e: Int) -> Str {
     let cs = sx_field(t, e, "callee_span");
     let cv = ck_conv_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
     if cv >= 0 { return co_conversion(lo, e, cv); }
+    co_call_parts(lo, cs, strs_new(), sx_items(t, sx_field(t, e, "args")), sx_field(t, e, "span"))
+}
+
+// A call whose callee is written at `cs` (`call`): its arguments `pre`, already lowered, then
+// `list`; the whole at `span`.
+fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
     let site = ck_site_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
     if site < 0 { return co_stopped(lo, "a call the checker did not record as a call"); }
     // Its arguments first, as `call` lowers them.
     let args = strs_new();
-    let list = sx_items(t, sx_field(t, e, "args"));
+    co_push_all(args, pre);
     let mut i = 0;
     while i < ints_len(list) {
         strs_push(args, co_expr(lo, ints_get(list, i)));
         i = i + 1;
     }
     if co_halted(lo) { return ""; }
-    let span = sx_field(t, e, "span");
     let callee = ck_site_fn(c, site);
     let b = ck_site_builtin(c, site);
     if callee >= 0 {
@@ -2526,6 +2529,71 @@ fn co_variant_value(lo: Lo, et: Int, v: Int, inits: Strs, at: Int) -> Str {
     strs_push(members, co_field("arity", int_to_str(strs_len(inits))));
     strs_push(members, co_field("fields", co_list(inits)));
     co_node(lo, "variant", str_join(members, ""), et, at)
+}
+
+// A name read (`Var`): a constant's value (Gate 2) or a static `Atomic`'s cell, else its binding.
+fn co_var(lo: Lo, name: Str, span: Int) -> Str {
+    if ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span)) < 0 {
+        let u = ck_const_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if u >= 0 { return co_const_use(lo, u, name, span); }
+    }
+    let l = co_local_at(lo, span);
+    if co_halted(lo) { return ""; }
+    co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span)
+}
+
+// `x.m(args)` (`method_call`), the method named at `ms`, the whole at `span`; the receiver the
+// node `recv`, or (where that is -1) the name `rname` at `rspan`. By name (R1, 5b.15), the
+// ordinary call the checker read it as, the receiver first; else the impl's method, or the
+// trait's default body at the receiver's type. A receiver that names no value (`Show.show(x)`)
+// is no argument.
+fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest: Ints) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let site = ck_site_at(c, co_abs_s(lo, ms), co_abs_e(lo, ms));
+    if site < 0 { return co_stopped(lo, "a method call the checker did not record"); }
+    let mut name_span = rspan;
+    if recv >= 0 && sx_kind(t, recv) != tk_tuple() && sx_text(t, recv) == "Var" { name_span = sx_field(t, recv, "span"); }
+    let mut ufcs = false;
+    if name_span >= 0 { ufcs = ck_binding_at(c, co_abs_s(lo, name_span), co_abs_e(lo, name_span)) < 0; }
+    let pre = strs_new();
+    let mut rty = 0 - 1;
+    if ufcs == false {
+        if recv >= 0 { strs_push(pre, co_expr(lo, recv)); } else { strs_push(pre, co_var(lo, rname, rspan)); }
+        rty = co_last_ty(lo);
+    }
+    let target = ck_site_fn(c, site);
+    if ck_site_builtin(c, site) >= 0 || (target >= 0 && ck_fn_method(c, target) == false) { return co_call_parts(lo, ms, pre, rest, span); }
+    if target < 0 { return co_stopped(lo, "a call through a trait's bound"); }
+    let args = strs_new();
+    co_push_all(args, pre);
+    let mut i = 0;
+    while i < ints_len(rest) {
+        strs_push(args, co_expr(lo, ints_get(rest, i)));
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    let mut targs = "[]";
+    if co_contains(ck_fn_name(c, target), "/default/") {
+        if ufcs || rty < 0 { return co_stopped(lo, "a default method called by its trait's name"); }
+        targs = co_list_one(json_str(co_durable(lo, rty)));
+    }
+    let ret = ck_fn_ret_ty(c, target);
+    if co_contains(co_durable(lo, ret), "$") { return co_stopped(lo, "a method whose result names a type parameter"); }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, target))));
+    strs_push(fields, co_field("type_args", targs));
+    strs_push(fields, co_field("args", co_list(args)));
+    co_node(lo, "call", str_join(fields, ""), ret, span)
+}
+
+fn co_contains(s: Str, part: Str) -> Bool {
+    let mut i = 0;
+    while i + str_len(part) <= str_len(s) {
+        if str_slice(s, i, i + str_len(part)) == part { return true; }
+        i = i + 1;
+    }
+    false
 }
 
 // A generic call's settled type arguments, by their durable names.
