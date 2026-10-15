@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Extract the Nazm programs written inside `crates/nazm-cli/tests/*.rs` into
-`compiler/tests/inputs/rs/`, one file per distinct program (R2, `openspec/changes/r2-front-end/`).
+`toolchain/frontend-tests/inputs/rs/`, one file per distinct program (R2, `openspec/changes/r2-front-end/`).
 
 A program is a Rust string literal — `"…"` with its escapes decoded, `r"…"` or `r#"…"#` — that
 contains `fn ` and a `{`. A literal that is a `format!` template (it holds `{name}` or `{}`
@@ -8,7 +8,7 @@ placeholders beside `{{`) is skipped: it is not a program until Rust fills it in
 written once. The output is deterministic: files are named after the test file and the
 literal's ordinal among that file's programs, and the folder is rewritten whole.
 
-Usage: python3 -I compiler/tests/extract-inputs.py   (from the repository root)
+Usage: python3 -I toolchain/frontend-tests/extract-inputs.py   (from the repository root)
 """
 import hashlib
 import os

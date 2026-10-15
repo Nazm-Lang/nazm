@@ -69,7 +69,7 @@ comparisons with it need: the R2 drivers (`tokens`, `tree`, `diagnose`), built b
 with `--heap-limit 2G` and run under a deadline (`run.sh`), and `host-check.sh`, which is the
 reference checking the compiler and the drivers and `nazm fmt --check`.
 
-**D7 — The reference dumper lives in `compiler/tests/refdump/`**, a Rust binary with its own
+**D7 — The reference dumper lives in `toolchain/frontend-tests/refdump/`**, a Rust binary with its own
 `[workspace]` and path dependencies on `nazm-syntax`, `nazm-diag` and `nazm-span` of the same
 checkout, built into `$HOME/.cache/nazm-target-r2`. It is the only Rust this track writes, it
 ships nowhere, and at integration its two functions belong in `selfhost.rs` beside the existing
@@ -77,7 +77,7 @@ dump.
 
 **D8 — Inputs.** `tests/compat/v1/`, `corpus/`, `examples/`, the compiler's own sources, and the
 programs written inside `crates/nazm-cli/tests/*.rs`, extracted by
-`compiler/tests/extract-inputs.py` into `compiler/tests/inputs/rs/` (2,286 distinct programs at
+`toolchain/frontend-tests/extract-inputs.py` into `toolchain/frontend-tests/inputs/rs/` (2,286 distinct programs at
 `c73dab2`), and the `.nz` corpora that live under `crates/nazm-cli/tests` (refusals, transfers,
 domains, …) and `crates/nazm-cli/templates` — 2,710 inputs in all. Many of the extracted programs
 are meant to be refused; they are the diagnostic corpus. No string literal in `compiler/*.nz` holds
@@ -94,7 +94,7 @@ digits with `_` removed (a hexadecimal, octal or binary literal converted to dec
 reference's value), a float's text with `_` removed, a string's decoded bytes, an interpolation's
 pieces in D2's form. Whether an integer fits `Int` is a separate kind, `IntTooLarge`, as in Rust.
 
-**D12 — Budgets are measured, not chased, in R2.** `compiler/tests/budget.sh` times the Nazm
+**D12 — Budgets are measured, not chased, in R2.** `toolchain/frontend-tests/budget.sh` times the Nazm
 lexer and parser drivers (built by the reference at `-O0`, heap-limited) against the reference
 dumper on the three largest sources. First measurement (2026-10-15, this host): lexing
 `analyse.nz` (7.4k lines) 0.04 s and 24 MB against the reference's 0.02 s and 11 MB; lexing and

@@ -48,7 +48,7 @@ fi
 entries='.agent .cargo .dockerignore .github .gitignore AGENTS.md CLAUDE.md CONTRIBUTING.md
 Cargo.lock Cargo.toml LICENSE LICENSE-CC-BY-4.0 NOTICE README.md SECURITY.md THIRD-PARTY-NOTICES.md _typos.toml bench compiler corpus crates
 deny.toml docker docs editors examples fuzz library openspec review rust-toolchain.toml
-rustfmt.toml schema scripts tests tools xtask'
+rustfmt.toml schema scripts tests toolchain tools xtask'
 
 files() {
     for e in $entries; do
