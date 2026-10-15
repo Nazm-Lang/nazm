@@ -8,6 +8,7 @@
 // compiler driver resolves for the triple.
 
 use "@std/env"
+use "@std/file"
 use "@std/json"
 use "@std/text"
 use "../lib/run.nz"
@@ -39,6 +40,14 @@ fn defined(h: Caps, name: Str) -> Bool ! { io, spawn } {
     run(h, "grep", a, "", env_here(h.io)).code == 0
 }
 
+/// Whether `path` is a regular file: `Path::is_file`.
+fn is_file(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => match m.kind { FileKind.Regular() => true, FileKind.Directory() => false, FileKind.Other() => false, },
+        Result.Err(error: e) => false,
+    }
+}
+
 @test
 fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
@@ -63,7 +72,8 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers(io: IoCap,
         k = k + 1;
     }
     check_that(strs_len(triples) == targets, "rows and targets differ in number")?;
-    let answers = text_split("run-verified|run-verified under Wine|run-verified on a Linux kernel|compile-only|unsupported", "|");
+    // 2026-10-15: "run-verified on a Windows host", by `scripts/windows-host.sh`.
+    let answers = text_split("run-verified|run-verified under Wine|run-verified on a Windows host|run-verified on a Linux kernel|compile-only|unsupported", "|");
     i = 0;
     while i < cells_len(doc) {
         let c = f"toolchain/support/{i}";
@@ -78,8 +88,11 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers(io: IoCap,
             check_that(known, jtext(doc, c))?;
             let evidence = jstr(doc, f"{c}/{backend}/evidence");
             check_that(str_len(evidence) > 0, jtext(doc, c))?;
-            // Evidence the tree holds: a test it defines, or a contained command.
-            if status != "unsupported" && !text_starts_with(evidence, "cargo xtask contained ") {
+            // Evidence the tree holds: a test it defines, a contained command, or a script it
+            // carries for a machine a test cannot reach.
+            if text_starts_with(evidence, "scripts/") {
+                check_that(is_file(h, f"{repo_root(h)}/{evidence}"), f"{evidence}: no such script")?;
+            } else if status != "unsupported" && !text_starts_with(evidence, "cargo xtask contained ") {
                 check_that(defined(h, evidence), f"{evidence}: no such test")?;
             }
         }
