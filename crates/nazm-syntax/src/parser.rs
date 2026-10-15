@@ -4613,7 +4613,12 @@ impl<'a> Parser<'a> {
                     false
                 }
             };
-            if !self.eat(&TokenKind::Comma) && !(hole_arm && !self.at(&TokenKind::RBrace)) {
+            // A line break separates two arms as it ends a statement (R1.5, 4.6; 5b.19): an arm
+            // whose line ends needs no `,` before the next.
+            if !self.eat(&TokenKind::Comma)
+                && !(hole_arm && !self.at(&TokenKind::RBrace))
+                && !self.line_break_before()
+            {
                 break;
             }
         }

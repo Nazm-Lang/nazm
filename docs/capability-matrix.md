@@ -359,6 +359,14 @@ EXPERIMENTAL until R1.5 closes. Evidence: `shorter_forms.rs`
 (`option_and_result_methods_need_no_use_everywhere` under the interpreter and both backends;
 `a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named`); three mutants.
 
+**R1.5 (2026-10-15)** · *A line break separates `match` arms* (`spec.md`, *Shorter forms*; R1.5 task
+4.6). An arm ending at a line break needs no `,` before the next, as a statement needs no `;`
+(5b.19); `,` is still read and the two mix; two arms on one line still need it (`N0100`); `nazm fmt`
+keeps whichever was written. The grammar's `match_arms` says so in prose (a line break is not a
+token). Semantic epoch 87; EXPERIMENTAL until R1.5 closes. Evidence: `shorter_forms.rs`
+(`match_arms_on_their_own_lines_need_no_comma_everywhere` under the interpreter and both backends;
+`two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written`); two mutants.
+
 **R1.5 (2026-10-15)** · *Printing in your own program* (`spec.md`, *Shorter forms*; R1.5 design
 D8). In a module of the program itself — a key with no `@`, so not `@std`, the prelude or a package —
 the authority check (`effects::authority`) counts the output authority `main` holds as held, so a

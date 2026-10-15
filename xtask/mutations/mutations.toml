@@ -8343,10 +8343,11 @@ Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing wit
 Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused.
 Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused.
 Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused.
-Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused."""
+Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused.
+Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 86;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 85;"
+find = "pub const SEMANTIC_EPOCH: u32 = 87;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 86;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19691,6 +19692,22 @@ file = "crates/nazm-service/src/load.rs"
 find = "                        named_in(text, idents, methods);"
 replace = "                        let _ = text;"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named" }]
+
+[[mutation]]
+name = "r1-5-4-6-a-line-break-does-not-separate-arms"
+why = "a `match` arm ended by a line break with no `,` is refused again (`N0100`), unlike a statement ended by one (4.6)"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                && !(hole_arm && !self.at(&TokenKind::RBrace))\n                && !self.line_break_before()\n"
+replace = "                && !(hole_arm && !self.at(&TokenKind::RBrace))\n"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::match_arms_on_their_own_lines_need_no_comma_everywhere" }]
+
+[[mutation]]
+name = "r1-5-4-6-any-arm-may-leave-out-its-comma"
+why = "two arms on one line need no `,` between them, so `0 => 1 _ => 2` is read as two arms rather than refused (4.6)"
+file = "crates/nazm-syntax/src/parser.rs"
+find = "                && !(hole_arm && !self.at(&TokenKind::RBrace))\n                && !self.line_break_before()\n"
+replace = "                && !(hole_arm && !self.at(&TokenKind::RBrace))\n                && self.at(&TokenKind::RBrace)\n"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written" }]
 
 [[mutation]]
 name = "r3-a-generic-channel-s-helper-named-by-the-checker-s-id"
