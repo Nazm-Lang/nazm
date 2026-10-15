@@ -173,18 +173,26 @@ keeps its value as an `Int`, any other as its decimal digits. A float is never c
 constant has its type and no value, and where a value would decide something — a float compared,
 converted to an integer, or a shift's amount — the checker stops rather than guess IEEE 754.
 
-**D18 — Provenance is carried where it cannot refuse, before its flows are.** `N0372`
-(`provenance::solve`, `FlowRule::LANGUAGE`) is the only diagnostic provenance gives, and only in a
-function that declares its effects — a closure and an impl's or a trait's default method always do
-— at a path it writes to, or at a call, a call through a value or a bound, or a closure's capture
-that hands a value to what writes to one, when that value may carry a file's contents or what the
-checker does not follow. So a compilation is carried, with no provenance diagnostic, when no
-built-in of a restricted origin (`Origin::of_intrinsic`'s `File` and `Unknown` sources) is called
-anywhere in it, when no restricted sink (`SinkClass::Path`) is, or when no function that declares
-its effects reaches one — calling one, calling a function that reaches one, making a closure that
-does, or calling through a value or a bound while anything reaches one. Anywhere else the checker
-stops until the flows themselves are ported. The table (D14) gains each built-in's flow and
-container use, generated, for that port.
+**D18 — Provenance is a port of `provenance::facts` and `solve`, fed by what the checker
+resolved.** `N0372` (`FlowRule::LANGUAGE`) is the only diagnostic provenance gives, and only in a
+function that declares its effects — a closure and an impl's method always do. The reference
+reduces each body to flows by walking it again with the checker's `Resolution`; the Nazm checker
+records the same answers as it checks, keyed by span as the reference keys them — the binding a
+name is (each binding an id, with its function, type and name), the call site a call is (its
+callee, a bound's trait method, a generic call's first type argument), the closure an expression
+makes and its captures in order, whether a `let mut` is shared with one, the sequence a `for`
+reads, whether a construction is a record's — and the walk, the solver and the witness chains
+are then ported rule for rule (`compiler/sema.nz`, *provenance*): the bodies in the reference's
+order (modules in load order, each closure after its maker, the last written first), each walked
+again while a binding grows after it is read, records and variants kept field by field to depth
+four, containers read and written through cells named by type. Summaries, reaches, receives and
+cells are least fixed points, so the solver iterates whole passes rather than the reference's
+worklists — same answers, which depend on no order; the chains depend on the facts' order and
+are built as the reference builds them. A parameter set is a mask of 61 bits (a function of more
+parameters and captures stops the checker). Where no restricted origin
+(`Origin::of_intrinsic`'s `File` and `Unknown` sources) is called, nothing writes to a path or no
+function declares its effects, the rule cannot fire and nothing is solved. The table (D14) gains
+each built-in's flow and container use, generated.
 
 **D19 — Attributes are configured over the whole compilation, before the checker.**
 `compiler/configure.nz` ports `attributes::configure`: the reference runs it on the one program
