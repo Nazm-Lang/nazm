@@ -35,8 +35,10 @@
       — 2026-10-15: `PRELUDE` gains both (no name either shares with the other five), and a method
       in an interpolation's hole names its module (D9 had missed it); epoch 86, two tests, three
       mutants
-- [ ] 4.6 A line break separates `match` arms as it separates statements (5b.19): today an arm
+- [x] 4.6 A line break separates `match` arms as it separates statements (5b.19): today an arm
       without its `,` before the next on a new line is a syntax error (`N0100`)
+      — 2026-10-15: parser (`match_expr`), grammar prose and example, spec *Shorter forms*, guide,
+      epoch 87, two tests, two mutants; `nazm fmt` unchanged (it keeps the tokens written)
 
 ## 6. Syntax: short and conventional (the copyright holder's choices, 2026-10-14)
 - [x] 6.1 Result types written with `:` like parameters — `fn fib(n: Int): Int`, function types

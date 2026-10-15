@@ -388,7 +388,9 @@ use crate::digest::{self, Framed};
 /// `86` — R1.5, 2026-10-15. `@std/option` and `@std/result` joined the prelude's standard
 /// modules (4.5): `r.unwrap_or(1)` or `o.is_some()` with no `use` moved from refused (`N0605`) to
 /// accepted.
-pub const SEMANTIC_EPOCH: u32 = 86;
+/// `87` — R1.5, 2026-10-15. A line break separates two `match` arms (4.6): an arm ending at a
+/// line break with no `,` before the next moved from refused (`N0100`) to accepted.
+pub const SEMANTIC_EPOCH: u32 = 87;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
