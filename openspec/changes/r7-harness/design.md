@@ -192,3 +192,11 @@ Things the comparisons turned up that belong outside `toolchain/harness/` — re
 - `NAZM` or `NAZM_BIN` (decision 3).
 - Whether a ported test file replaces its Rust file at integration or runs beside it until R8.
 - Whether the interpreter leg of `nazm test` should be skipped for the harness (decision 1).
+
+## The coordinator's answers on the last three questions (2026-10-16)
+
+1. **`NAZM`**, as every other track's scripts name the binary under test; `NAZM_BIN` is not added.
+2. **A port runs beside its Rust file until the cut-over (R8)**, and replaces it there: until then the
+   Rust tests are what gates main, and the ports are compared with them.
+3. **`nazm test`'s interpreter leg is kept** for the harness: it is part of what the command promises.
+
