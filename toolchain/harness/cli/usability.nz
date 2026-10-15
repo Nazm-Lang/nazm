@@ -1,0 +1,494 @@
+// Usability: string escapes, logical operators, operator precedence, modules imported under a
+// name, recursion that exhausts the stack, deep value types — each run by every implementation or
+// refused by name. Ported from `crates/nazm-cli/tests/usability.rs` (R7).
+
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+fn everywhere_in(h: Caps, dir: Str, main: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let out = vec_new[Labeled]();
+    let ia = words("run --interpret");
+    strs_push(ia, main);
+    vec_push(out, Labeled(label: "interpreter", ran: nazm(h, dir, ia)));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, dir, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} {main} -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(out, Labeled(label: who, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn agrees_in(h: Caps, d: Str, main: Str, expected: Str, code: Int) -> Result[Int, Str] ! { io, spawn } {
+    for run_ in everywhere_in(h, d, main)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == code, f"{who}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == expected, f"{who}: {r.stdout}")?;
+        if who != "interpreter" {
+            let line = memory_line(r);
+            check_that(str_len(line) > 0, f"{who}: no memory report: {r.stderr}")?;
+            for kind in words("sequences strings channels") {
+                let parts = text_split(line, kind);
+                let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+                check_that(text_contains(part, "live=0"), f"{who}: {kind} not all reclaimed: {line}")?;
+            }
+        }
+    }
+    ok()
+}
+
+/// Every implementation prints `expected` and exits with `code`; every native build reclaims all
+/// it allocated. `files` is name, text, name, text; a name's directories are made.
+fn agrees_pairs(h: Caps, files: Strs, expected: Str, code: Int) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        let rel = strs_get(files, i);
+        let parts = text_split(rel, "/");
+        if strs_len(parts) > 1 {
+            scratch_mkdir(h, d, str_join(every_but_last(parts), "/"))?;
+        }
+        scratch_write(h, d, rel, strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    let r = agrees_in(h, d, strs_get(files, 0), expected, code);
+    scratch_remove(h, d);
+    r
+}
+
+fn every_but_last(xs: Strs) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(xs) {
+        strs_push(out, strs_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+fn agrees_u(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let f = strs_new();
+    strs_push(f, "prog.nz");
+    strs_push(f, src);
+    agrees_pairs(h, f, expected, 0)
+}
+
+/// `check_codes` over `files` given as name, text, name, text.
+fn codes_pairs(h: Caps, files: Strs) -> Strs ! { io, spawn } {
+    check_codes(h, every_second(files, 0), every_second(files, 1))
+}
+
+fn exhausts_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    for bo in words("llvm:0 llvm:2 cranelift:0") {
+        let parts = text_split(bo, ":");
+        let backend = strs_get(parts, 0);
+        let opt = strs_get(parts, 1);
+        let exe = f"{d}/{backend}{opt}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {backend} --opt-level {opt} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let r = bounded_exe_within(h, exe, "", env, TASKS_ADDRESS_SPACE_KB);
+        check_that(r.code == 2, f"{backend} -O{opt}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "error[N0408]: the native call stack is exhausted at prog.nz:"), f"{backend} -O{opt}: {r.stderr}")?;
+        let line = memory_line(r);
+        check_that(str_len(line) > 0, r.stderr)?;
+        check_that(text_contains(line, "strings allocated=") && !text_contains(line, "live=1"), line)?;
+    }
+    ok()
+}
+
+/// Recursion with no base case, built by each backend; it must end with `N0408` at the function
+/// entered, exit status 2, and its frames released — never a signal.
+fn exhausts(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = exhausts_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// Records nested `levels` deep, each holding two of the one below.
+fn deep_program(levels: Int) -> Str ! {} {
+    let s = strs_new();
+    strs_push(s, "struct L0 { x: Int }\n");
+    let mut i = 1;
+    while i < levels {
+        strs_push(s, f"struct L{i} {{ a: L{i - 1}, b: L{i - 1} }}\n");
+        i = i + 1;
+    }
+    strs_push(s, "fn main() -> Int { 0 }\n");
+    str_join(s, "")
+}
+
+fn deep_codes(h: Caps, levels: Int) -> Strs ! { io, spawn } {
+    let f = strs_new();
+    strs_push(f, "deep.nz");
+    strs_push(f, deep_program(levels));
+    codes_pairs(h, f)
+}
+
+// --- string escapes --------------------------------------------------------------------
+
+@test
+fn escapes_are_the_same_bytes_in_every_implementation(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Each byte is printed as a number, so the comparison is of bytes, not of a terminal's
+    // rendering of them.
+    let src = "\nfn bytes(s: Str, out: OutCap) -> Int {\n    let mut i = 0;\n    while i < str_len(s) {\n        print(str_concat(int_to_str(str_byte(s, i)), \"\\n\"));\n        i = i + 1;\n    }\n    str_len(s)\n}\nfn main(io: IoCap) -> Int {\n    let n = bytes(\"a\\nb\\t\\r\\0\\\\\\\"\\x41\\x7f\", io);\n    print(\"line one\\nline two\\n\");\n    print(\"é\\x21\\n\");\n    if \"\\x41\" == \"A\" { n } else { 0 - 1 }\n}\n";
+    agrees_u(h, src, "97\n10\n98\n9\n13\n0\n92\n34\n65\n127\nline one\nline two\né!\n10")?;
+    ok()
+}
+
+@test
+fn unicode_escapes_are_the_same_bytes_in_every_implementation(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N76: `\u{…}` is the UTF-8 encoding of a scalar value — the bytes the character
+    // written directly would be — in the interpreter and every native build alike.
+    let src = "\nfn bytes(s: Str, out: OutCap) -> Int {\n    let mut i = 0;\n    while i < str_len(s) {\n        print(str_concat(int_to_str(str_byte(s, i)), \" \"));\n        i = i + 1;\n    }\n    print(\"\\n\");\n    str_len(s)\n}\nfn main(io: IoCap) -> Int {\n    let a = bytes(\"\\u{41}\\u{e9}\\u{20AC}\\u{1F600}\", io);\n    let same = \"\\u{e9}\" == \"é\";\n    let b = bytes(\"\\u{0}\\u{7F}\\u{80}\", io);\n    if same { a * 10 + b } else { 0 - 1 }\n}\n";
+    agrees_u(h, src, "65 195 169 226 130 172 240 159 152 128 \n0 127 194 128 \n104")?;
+    ok()
+}
+
+@test
+fn a_refused_unicode_escape_names_its_bytes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let bads1 = strs_new();
+    strs_push(bads1, "\\u{D800}");
+    strs_push(bads1, "\\u{110000}");
+    strs_push(bads1, "\\u{}");
+    strs_push(bads1, "\\u{1234567}");
+    strs_push(bads1, "\\u41");
+    for bad in bads1 {
+        let l2 = strs_new();
+        strs_push(l2, "prog.nz");
+        strs_push(l2, f"fn main() -> Int {{ str_len(\"{bad}\") }}\n");
+        let w3 = strs_new();
+        strs_push(w3, "N0004");
+        same_strs("codes", codes_pairs(h, l2), w3)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_refused_escape_stops_the_program_before_anything_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l4 = strs_new();
+    strs_push(l4, "prog.nz");
+    strs_push(l4, "fn main() -> Int { str_len(\"a\\qb\") }\n");
+    let w5 = strs_new();
+    strs_push(w5, "N0004");
+    same_strs("codes", codes_pairs(h, l4), w5)?;
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn main(out: OutCap) -> Int { print(\"ran\"); str_len(\"\\x80\") }\n")?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(!text_contains(r.stdout, "ran"), r.stdout)?;
+    check_that(text_contains(r.stderr, "N0004"), r.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_formatter_keeps_an_escape_as_it_was_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn main()->Int{str_len(\"a\\n\\x41\\\\\")}\n";
+    scratch_write(h, d, "prog.nz", src)?;
+    let r = nazm(h, d, words("fmt prog.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    let formatted = read_text(h, f"{d}/prog.nz")?;
+    check_that(text_contains(formatted, "\"a\\n\\x41\\\\\""), formatted)?;
+    let again = nazm(h, d, words("fmt --check prog.nz"));
+    check_that(again.code == 0, ran_show(again))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- logical operators -----------------------------------------------------------------
+
+@test
+fn logical_operators_short_circuit_and_bind_as_specified_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `seen` prints when it is evaluated, so the output is a trace of which operands ran.
+    // `boom` divides by zero: reached, it would fail the program, so its absence from the
+    // trace and the program's success are two observations of the same skipped operand.
+    let src = "\nfn seen(tag: Str, v: Bool, out: OutCap) -> Bool { print(str_concat(tag, \"\\n\")); v }\nfn boom() -> Bool { 1 / (1 - 1) == 0 }\nfn b(v: Bool) -> Int { if v { 1 } else { 0 } }\nfn main(io: IoCap) -> Int {\n    let mut n = 0;\n    n = n * 2 + b(seen(\"a\", false, io) && seen(\"never-1\", true, io));\n    n = n * 2 + b(seen(\"b\", true, io) || seen(\"never-2\", true, io));\n    n = n * 2 + b(seen(\"c\", true, io) && seen(\"d\", true, io));\n    n = n * 2 + b(seen(\"e\", false, io) || seen(\"f\", false, io));\n    n = n * 2 + b(false && boom());\n    n = n * 2 + b(true || boom());\n    // `||` loosest, then `&&`, then comparison; `!` as tight as `-`.\n    n = n * 2 + b(1 == 2 && 3 < 4 || 5 > 4);\n    n = n * 2 + b(!(1 == 1) || !false && 2 < 1);\n    n = n * 2 + b(!!true);\n    n = n * 2 + b(true || false && false);\n    n\n}\n";
+    // a b c d e f, and the bits 0 1 1 0 0 1 1 0 1 1 = 411.
+    agrees_u(h, src, "a\nb\nc\nd\ne\nf\n411")?;
+    ok()
+}
+
+@test
+fn a_logical_operand_that_is_not_bool_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs6 = strs_new();
+    strs_push(srcs6, "fn main() -> Int { if 1 && true { 1 } else { 0 } }\n");
+    strs_push(srcs6, "fn main() -> Int { if true || 0 { 1 } else { 0 } }\n");
+    strs_push(srcs6, "fn main() -> Int { if !1 { 1 } else { 0 } }\n");
+    for src in srcs6 {
+        let l7 = strs_new();
+        strs_push(l7, "prog.nz");
+        strs_push(l7, src);
+        let w8 = strs_new();
+        strs_push(w8, "N0304");
+        same_strs("codes", codes_pairs(h, l7), w8)?;
+    
+    }
+    ok()
+}
+
+@test
+fn the_formatter_spaces_the_logical_operators_and_keeps_the_effect_marker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn f(a: Bool, b: Bool)->Bool ! {} {!a&&b||!(a)}\nfn main()->Int{if f(true,false){1}else{0}}\n";
+    scratch_write(h, d, "prog.nz", src)?;
+    let r = nazm(h, d, words("fmt prog.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    let out = read_text(h, f"{d}/prog.nz")?;
+    check_that(text_contains(out, "!a && b || !(a)"), out)?;
+    check_that(text_contains(out, "-> Bool ! {}"), out)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- native recursion ------------------------------------------------------------------
+
+@test
+fn direct_mutual_generic_and_cross_module_recursion_compile_and_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "\nuse \"parity.nz\";\nstruct Node { value: Int, label: Str, }\nfn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * fact(n - 1) } }\nfn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn count[T](items: Vec[T], i: Int) -> Int { if i >= vec_len(items) { 0 } else { 1 + count(items, i + 1) } }\nfn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }\nfn labels(n: Int) -> Str { if n == 0 { \"\" } else { str_concat(Node(value: n, label: int_to_str(n)).label, labels(n - 1)) } }\nfn main(out: OutCap) -> Int {\n    let v = vec_new[Str]();\n    vec_push(v, \"a\");\n    vec_push(v, \"b\");\n    vec_push(v, \"c\");\n    print(str_concat(labels(5), \"\\n\"));\n    let e = if is_even(10) { 1 } else { 0 };\n    fact(10) % 1000 + fib(15) + count(v, 0) + depth(400) + e\n}\n";
+    let parity = "\npub fn is_even(n: Int) -> Bool { if n == 0 { true } else { is_odd(n - 1) } }\npub fn is_odd(n: Int) -> Bool { if n == 0 { false } else { is_even(n - 1) } }\n";
+    // 10! % 1000 = 800, fib(15) = 610, 3, 400, 1 — a depth inside the interpreter's own
+    // budget of 512, which is that implementation's limit and not the language's.
+    let l9 = strs_new();
+    strs_push(l9, "main.nz");
+    strs_push(l9, main);
+    strs_push(l9, "parity.nz");
+    strs_push(l9, parity);
+    agrees_pairs(h, l9, "54321\n1814", 0)?;
+    ok()
+}
+
+@test
+fn native_recursion_goes_as_deep_as_the_stack_allows(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Past the interpreter's default budget by two orders of magnitude, and inside a
+    // thread's stack budget at either optimisation level.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }\nfn main() -> Int { depth(50000) }\n")?;
+    let backends10 = strs_new();
+    strs_push(backends10, "llvm");
+    strs_push(backends10, "llvm");
+    strs_push(backends10, "cranelift");
+    let opts10 = strs_new();
+    strs_push(opts10, "0");
+    strs_push(opts10, "2");
+    strs_push(opts10, "0");
+    let mut k10 = 0 - 1;
+    for backend in backends10 {
+        k10 = k10 + 1;
+        let opt = strs_get(opts10, k10);
+        let exe = f"{d}/{backend}{opt}";
+        let l11 = strs_new();
+        strs_push(l11, "build");
+        strs_push(l11, "--no-cache");
+        strs_push(l11, "--backend");
+        strs_push(l11, backend);
+        strs_push(l11, "--opt-level");
+        strs_push(l11, opt);
+        strs_push(l11, "prog.nz");
+        strs_push(l11, "-o");
+        strs_push(l11, exe);
+        let b = nazm(h, d, l11);
+        check_that(b.code == 0, ran_show(b))?;
+        let r = bounded_exe(h, exe, "", suite_env(h));
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_trim(r.stdout) == "50000", "assert_eq!(text_trim(r.stdout), \"50000\");")?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn unbounded_recursion_reports_n0408_instead_of_crashing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A string per frame, so the unwinding has something to release at every level.
+    exhausts(h, "fn down(n: Int, s: Str) -> Int { let t = str_concat(s, \"x\"); down(n + 1, str_slice(t, 0, 1)) + str_len(t) }\nfn main() -> Int { down(0, \"a\") }\n")?;
+    // Mutual, and through a non-recursive helper between the two checks.
+    exhausts(h, "fn helper(n: Int) -> Int { ping(n) + 1 }\nfn ping(n: Int) -> Int { pong(n + 1) }\nfn pong(n: Int) -> Int { helper(n + 1) }\nfn main() -> Int { ping(0) }\n")?;
+    ok()
+}
+
+@test
+fn a_task_that_exhausts_its_stack_fails_its_scope_after_the_join(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    exhausts(h, "fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn job(c: Chan) -> Int { chan_send(c, 1); down(0) }\nfn main(t: SpawnCap) -> Int { let c = chan_new(4); scope { spawn job(c); spawn job(c); } 0 }\n")?;
+    ok()
+}
+
+@test
+fn the_interpreter_keeps_its_own_limit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn down(n: Int) -> Int { down(n + 1) + 1 }\nfn main() -> Int { down(0) }\n")?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(text_contains(r.stderr, "N0403"), r.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- qualified names -------------------------------------------------------------------
+
+const GEOMETRY: Str = "pub struct Point { x: Int, y: Int, }\npub enum Shape { Dot(at: Point), Square(side: Int), }\npub fn area(s: Shape) -> Int { match s { Shape.Dot(at: _) => 0, Shape.Square(side: n) => n * n, } }\npub fn parse(s: Str) -> Int { str_len(s) }\n";
+
+const OTHER: Str = "pub fn parse(s: Str) -> Int { 100 + str_len(s) }\n";
+
+@test
+fn qualified_names_resolve_to_the_definitions_an_import_would_and_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two modules export `parse`: unqualified that is N0207, qualified it is two names.
+    let main = "\nuse \"geometry.nz\" as g;\nuse \"other.nz\" as o;\nuse \"@std/text\" as t;\nfn corner(p: g::Point) -> Int { p.x + p.y }\nfn measure(s: g::Shape) -> Int {\n    match s { g::Shape.Dot(at: p) => corner(p), g::Shape.Square(side: n) => n, }\n}\nfn main(out: OutCap) -> Int {\n    let p = g::Point(x: 2, y: 3);\n    let sq = g::Shape.Square(side: 4);\n    print(str_concat(t::text_trim(\"  hi  \"), \"\\n\"));\n    g::area(sq) + measure(g::Shape.Dot(at: p)) + g::parse(\"ab\") + o::parse(\"ab\")\n}\n";
+    // 16 + 5 + 2 + 102.
+    let l12 = strs_new();
+    strs_push(l12, "main.nz");
+    strs_push(l12, main);
+    strs_push(l12, "geometry.nz");
+    strs_push(l12, GEOMETRY);
+    strs_push(l12, "other.nz");
+    strs_push(l12, OTHER);
+    agrees_pairs(h, l12, "hi\n125", 0)?;
+    ok()
+}
+
+@test
+fn a_module_imported_both_ways_is_one_module_seen_both_ways(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "use \"geometry.nz\";\nuse \"geometry.nz\" as g;\nfn main() -> Int { area(g::Shape.Square(side: 3)) + g::area(Shape.Square(side: 2)) }\n";
+    let l13 = strs_new();
+    strs_push(l13, "main.nz");
+    strs_push(l13, main);
+    strs_push(l13, "geometry.nz");
+    strs_push(l13, GEOMETRY);
+    agrees_pairs(h, l13, "13", 0)?;
+    ok()
+}
+
+@test
+fn an_import_under_a_name_brings_nothing_into_scope_unqualified(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "use \"geometry.nz\" as g;\nfn main() -> Int { parse(\"a\") }\n";
+    let l14 = strs_new();
+    strs_push(l14, "main.nz");
+    strs_push(l14, main);
+    strs_push(l14, "geometry.nz");
+    strs_push(l14, GEOMETRY);
+    let codes = codes_pairs(h, l14);
+    check_that(strs_has(codes, "N0201"), "assert!(strs_has(codes, \"N0201\"), \"{codes:?}\");")?;
+    ok()
+}
+
+@test
+fn an_alias_that_already_means_something_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let mains15 = strs_new();
+    strs_push(mains15, "use \"geometry.nz\" as main;\nfn main() -> Int { 0 }\n");
+    strs_push(mains15, "use \"geometry.nz\" as Item;\nstruct Item { v: Int, }\nfn main() -> Int { 0 }\n");
+    strs_push(mains15, "use \"geometry.nz\" as g;\nuse \"other.nz\" as g;\nfn main() -> Int { 0 }\n");
+    for main in mains15 {
+        let l16 = strs_new();
+        strs_push(l16, "main.nz");
+        strs_push(l16, main);
+        strs_push(l16, "geometry.nz");
+        strs_push(l16, GEOMETRY);
+        strs_push(l16, "other.nz");
+        strs_push(l16, OTHER);
+        let codes = codes_pairs(h, l16);
+        let w17 = strs_new();
+        strs_push(w17, "N0209");
+        same_strs("codes", codes, w17)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_qualified_name_that_names_nothing_is_refused_by_what_is_missing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let mains18 = strs_new();
+    strs_push(mains18, "use \"geometry.nz\" as g;\nfn main() -> Int { h::area(g::Shape.Square(side: 1)) }\n");
+    strs_push(mains18, "use \"geometry.nz\" as g;\nfn main() -> Int { g::nope(1) }\n");
+    strs_push(mains18, "use \"geometry.nz\" as g;\nfn f(p: g::Nope) -> Int { 0 }\nfn main() -> Int { 0 }\n");
+    for main in mains18 {
+        let l19 = strs_new();
+        strs_push(l19, "main.nz");
+        strs_push(l19, main);
+        strs_push(l19, "geometry.nz");
+        strs_push(l19, GEOMETRY);
+        let codes = codes_pairs(h, l19);
+        check_that(strs_has(codes, "N0210"), main)?;
+    
+    }
+    // A qualified name is a value since R1a (L8) — an exported constant, or a function named
+    // as a value (N50) as an unqualified one is — and one that names nothing is still refused.
+    let l20 = strs_new();
+    strs_push(l20, "main.nz");
+    strs_push(l20, "use \"geometry.nz\" as g;\nfn main() -> Int { let a = g::area; 0 }\n");
+    strs_push(l20, "geometry.nz");
+    strs_push(l20, GEOMETRY);
+    let codes = codes_pairs(h, l20);
+    check_that(strs_len(codes) == 0, str_join(codes, ", "))?;
+    let l21 = strs_new();
+    strs_push(l21, "main.nz");
+    strs_push(l21, "use \"geometry.nz\" as g;\nfn main() -> Int { let a = g::nothing; 0 }\n");
+    strs_push(l21, "geometry.nz");
+    strs_push(l21, GEOMETRY);
+    let codes_2 = codes_pairs(h, l21);
+    let w22 = strs_new();
+    strs_push(w22, "N0200");
+    same_strs("codes", codes_2, w22)?;
+    ok()
+}
+
+@test
+fn the_formatter_glues_a_qualified_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "geometry.nz", GEOMETRY)?;
+    scratch_write(h, d, "main.nz", "use \"geometry.nz\"   as   g;\nfn main()->Int{g :: area(g::Shape.Square(side:1))}\n")?;
+    let r = nazm(h, d, words("fmt main.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    let out = read_text(h, f"{d}/main.nz")?;
+    check_that(text_contains(out, "use \"geometry.nz\" as g;"), out)?;
+    check_that(text_contains(out, "g::area(g::Shape.Square(side: 1))"), out)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Q1-A1-09: a record whose two fields are the record one level down, 31 levels deep — 2^30 paths
+/// through the type, 31 definitions. Its depth is found once per definition, not once per path:
+/// before the fix 22 levels took seconds and 33 never finished. At 33 it is refused by its depth.
+@test
+fn nesting_depth_is_linear_in_the_definitions_not_the_paths(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let started = time_ms(t);
+    check_that(strs_len(deep_codes(h, 31)) == 0, "31 levels")?;
+    check_that(strs_has(deep_codes(h, 33), "N0338"), "33 levels")?;
+    check_that(time_since(t, started) < 20000, "the check took 20 seconds or more")?;
+    ok()
+}
+

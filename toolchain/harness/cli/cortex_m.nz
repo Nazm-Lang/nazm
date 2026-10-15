@@ -1,0 +1,138 @@
+// Gate 3E: a Cortex-M3 board (`thumbv7m-none-eabi`) — the vector table first, what the core has
+// no instruction for refused by name, the NVIC and SysTick from the board's manifest. The QEMU
+// boots are `#[ignore]`d in Rust and stay there (design decision 10). Ported from
+// `crates/nazm-cli/tests/cortex_m.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `src` built for the board at `opt` into `o/`: the directory, and what `nazm` said.
+fn build(h: Caps, src: Str, opt: Str) -> Result[(Str, Ran), Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words(f"build --opt-level {opt} --target {TARGET} --objects o prog.nz"));
+    Result[(Str, Ran), Str].Ok(value: (d, r))
+}
+
+/// `src` for the Cortex-M board with `manifest` as `board.toml`.
+fn build_on(h: Caps, src: Str, manifest: Str, opt: Str) -> Result[(Str, Ran), Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    scratch_write(h, d, "board.toml", manifest)?;
+    let r = nazm(h, d, words(f"build --opt-level {opt} --target {TARGET} --board board.toml --objects o prog.nz"));
+    Result[(Str, Ran), Str].Ok(value: (d, r))
+}
+
+const TARGET: Str = "thumbv7m-none-eabi";
+
+/// 64-bit arithmetic on a 32-bit core: signed division and remainder, the largest `Int` divided,
+/// the largest square that fits, a static atomic, and a multiplication that overflows.
+const ARITHMETIC: Str = "static HITS: Atomic = atomic_new(5);\nstatic UART: Int = 1073758208;\n\nfn show(m: MmioCap, n: Int) -> Int ! {} {\n    let mut v = n;\n    if v < 0 { mmio_write8(UART, 45); v = 0 - v; }\n    let mut d = 1000000000000000000;\n    let mut started = false;\n    while d > 0 {\n        let q = v / d;\n        if q > 0 || started || d == 1 { mmio_write8(UART, 48 + q); started = true; }\n        v = v % d;\n        d = d / 10;\n    }\n    mmio_write8(UART, 10)\n}\n\nfn main(m: MmioCap) -> Int ! {} {\n    show(m, -7 / 2);\n    show(m, -7 % 2);\n    show(m, 9223372036854775807 / 3);\n    show(m, 3037000499 * 3037000499);\n    atomic_add(HITS, 10);\n    show(m, atomic_swap(HITS, 1));\n    show(m, if atomic_compare_swap(HITS, 1, 2) { atomic_load(HITS) } else { 0 });\n    3037000500 * 3037000500\n}\n";
+
+@test
+fn a_cortex_m_build_puts_its_vector_table_first(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (d, r) = build(h, ARITHMETIC, "0")?;
+    check_that(r.code == 0, ran_show(r))?;
+    let script = read_text(h, f"{d}/o/link.ld")?;
+    check_that(text_contains(script, ". = 0x0;"), script)?;
+    check_that(text_contains(script, ".text : { KEEP(*(.vectors)) *(.text.start)"), script)?;
+    let link = read_text(h, f"{d}/o/link.txt")?;
+    check_that(text_contains(link, "target thumbv7m-none-eabi"), link)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn what_a_cortex_m3_has_no_instruction_for_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs1 = strs_new();
+    strs_push(srcs1, "fn main(m: MmioCap) -> Int ! {} { let x = 1.5; Int(x * 2.0) }\n");
+    strs_push(srcs1, "fn half(x: Float64) -> Float64 { x / 2.0 }\nfn main(m: MmioCap) -> Int ! {} { 0 }\n");
+    strs_push(srcs1, "fn main(m: MmioCap) -> Int ! {} { mmio_read64(1073758208) }\n");
+    strs_push(srcs1, "fn main(m: MmioCap) -> Int ! {} { mmio_write64(1073758208, 1) }\n");
+    let sayss1 = strs_new();
+    strs_push(sayss1, "no FPU");
+    strs_push(sayss1, "no FPU");
+    strs_push(sayss1, "`mmio_read64`");
+    strs_push(sayss1, "`mmio_write64`");
+    let mut k1 = 0 - 1;
+    for src in srcs1 {
+        k1 = k1 + 1;
+        let says = strs_get(sayss1, k1);
+        let (_d, r) = build(h, src, "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 1, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0392"), src)?;
+        check_that(text_contains(r.stderr, says), src)?;
+    
+    }
+    ok()
+}
+
+/// Built here at `-O0` and `-O2`, then linked and booted under QEMU's `mps2-an385` in the
+/// `nazm-qemu:n86` image: every line the interpreter's arithmetic gives, the atomic's 15 and 2,
+/// and the overflow's `N0400` with status 2.
+// `an_image_for_the_cortex_m_board_boots_under_qemu` is `#[ignore]`d in Rust "starts a container": it stays Rust (design decision 10).
+
+/// The Cortex-M board with its NVIC: SysTick every millisecond at the AN385's 25 MHz, and
+/// external interrupt 3 named `poke`.
+const NVIC_BOARD: Str = "name = \"MPS2 AN385, with its NVIC\"\nisa = \"thumbv7m\"\nload_address = 0x0\n\n[uart]\nkind = \"cmsdk\"\naddress = 0x40004000\n\n[stop]\nkind = \"semihosting\"\n\n[interrupts]\ncontroller = \"nvic\"\nclock_hz = 25000000\ntimer_period_us = 1000\n\n[interrupts.lines]\npoke = 3\n";
+
+/// SysTick counts five ticks into a static atomic `main` waits on.
+const TICKS: Str = "static TICKS: Atomic = atomic_new(0);\n\n@interrupt(\"timer\")\nfn tick() -> Int ! {} { atomic_add(TICKS, 1) }\n\nfn main(m: MmioCap) -> Int ! {} {\n    while atomic_load(TICKS) < 5 {\n        0;\n    }\n    atomic_load(TICKS)\n}\n";
+
+/// Line 3 made pending through the NVIC's set-pending register: its handler, given the device's
+/// authority, writes `!`.
+const POKE: Str = "static SEEN: Atomic = atomic_new(0);\n\n@interrupt(\"poke\")\nfn poked(m: MmioCap) -> Int ! {} {\n    mmio_write8(1073758208, 33);\n    atomic_store(SEEN, 1)\n}\n\nfn main(m: MmioCap) -> Int ! {} {\n    mmio_write32(3758154240, 8);\n    while atomic_load(SEEN) == 0 {\n        0;\n    }\n    3\n}\n";
+
+@test
+fn a_cortex_m_boards_interrupts_are_an_nvic_and_systick(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs2 = strs_new();
+    strs_push(srcs2, TICKS);
+    strs_push(srcs2, POKE);
+    for src in srcs2 {
+        let (_d, r) = build_on(h, src, NVIC_BOARD, "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 0, ran_show(r))?;
+    
+    }
+    let froms3 = strs_new();
+    strs_push(froms3, "controller = \"nvic\"");
+    strs_push(froms3, "clock_hz = 25000000\n");
+    strs_push(froms3, "timer_period_us = 1000");
+    strs_push(froms3, "poke = 3");
+    strs_push(froms3, "clock_hz = 25000000");
+    let tos3 = strs_new();
+    strs_push(tos3, "controller = \"gicv2\"");
+    strs_push(tos3, "");
+    strs_push(tos3, "timer_period_us = 1000000");
+    strs_push(tos3, "poke = 240");
+    strs_push(tos3, "clock_hz = 25000000\ndistributor = 1");
+    let keys3 = strs_new();
+    strs_push(keys3, "`interrupts.controller`");
+    strs_push(keys3, "`interrupts.clock_hz`");
+    strs_push(keys3, "`interrupts.timer_period_us`");
+    strs_push(keys3, "`interrupts.lines.poke`");
+    strs_push(keys3, "`interrupts.distributor`");
+    let mut k3 = 0 - 1;
+    for from in froms3 {
+        k3 = k3 + 1;
+        let to = strs_get(tos3, k3);
+        let key = strs_get(keys3, k3);
+        let (_d, r) = build_on(h, TICKS, text_replace(NVIC_BOARD, from, to), "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 1, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0626"), to)?;
+        check_that(text_contains(r.stderr, key), to)?;
+    
+    }
+    ok()
+}
+
+/// Booted under QEMU's `mps2-an385` in the `nazm-qemu:n86` image at `-O0` and `-O2`: SysTick's five
+/// ticks (`5`), and line 3's handler (`!3`), each status 0.
+// `the_cortex_m_boards_interrupts_are_taken_under_qemu` is `#[ignore]`d in Rust "starts a container": it stays Rust (design decision 10).
+

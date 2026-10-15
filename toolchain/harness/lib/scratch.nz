@@ -41,6 +41,12 @@ pub fn scratch_write(h: Caps, dir: Str, rel: Str, text: Str) -> Result[Int, Str]
     if n < 0 { Result[Int, Str].Err(error: f"write {path}") } else { Result[Int, Str].Ok(value: n) }
 }
 
+/// Write `text` to `path` (under a directory the harness made), making the directories it needs:
+/// `std::fs::write` on a path a test computed.
+pub fn write_at(h: Caps, path: Str, text: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, path_dir(path), path_base(path), text)
+}
+
 /// Make the directory `dir/rel` and any it needs: `std::fs::create_dir_all`.
 pub fn scratch_mkdir(h: Caps, dir: Str, rel: Str) -> Result[Int, Str] ! { io } {
     let io = h.io;

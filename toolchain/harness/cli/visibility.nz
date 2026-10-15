@@ -1,0 +1,671 @@
+// Modules, visibility and imports — the whole rule, through the binary: what a module owns, what
+// `pub` does, what `use` brings in, and what happens when two names collide; a value taken both
+// ways, interpreted and compiled, required to agree. Ported from
+// `crates/nazm-cli/tests/visibility.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The files `files` names (name, text, name, text, …) in a fresh directory.
+fn written(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn both_ways_in(h: Caps, d: Str, root: Str) -> Result[Str, Str] ! { io, spawn } {
+    let interpreted = nazm(h, d, words(f"run --interpret {root}"));
+    check_that(interpreted.code == 0, f"interpreted: {interpreted.stderr}")?;
+    let built = nazm(h, d, words(f"build {root} -o {d}/prog"));
+    check_that(built.code == 0, f"compiled: {built.stderr}")?;
+    let ran = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    check_that(ran.code == 0, "the compiled program failed")?;
+    let a = text_trim(interpreted.stdout);
+    let b = text_trim(ran.stdout);
+    check_that(a == b, f"the two consumers disagree about what a name means: {a} vs {b}")?;
+    Result[Str, Str].Ok(value: a)
+}
+
+/// Run a program interpreted and compiled, and require one answer.
+fn both_ways(h: Caps, files: Strs) -> Result[Str, Str] ! { io, spawn } {
+    let d = written(h, files)?;
+    let r = both_ways_in(h, d, f"{d}/{strs_get(files, 0)}");
+    scratch_remove(h, d);
+    r
+}
+
+/// Check a program; return its diagnostics and exit code.
+fn check(h: Caps, files: Strs) -> Result[(Str, Int), Str] ! { io, spawn } {
+    let d = written(h, files)?;
+    let out = nazm(h, d, words(f"check {d}/{strs_get(files, 0)}"));
+    scratch_remove(h, d);
+    let code = if out.code >= 0 && out.code < 256 { out.code } else { 0 - 1 };
+    Result[(Str, Int), Str].Ok(value: (out.stderr, code))
+}
+
+/// Check and require it to pass.
+fn accepted(h: Caps, files: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let (stderr, code) = check(h, files)?;
+    check_that(code == 0, stderr)
+}
+
+/// Check and require exactly this code, once.
+fn refused(h: Caps, files: Strs, code_wanted: Str) -> Result[Str, Str] ! { io, spawn } {
+    let (stderr, code) = check(h, files)?;
+    check_that(code == 1, f"expected a refusal, got:\n{stderr}")?;
+    check_that(text_contains(stderr, code_wanted), f"expected {code_wanted}, got:\n{stderr}")?;
+    Result[Str, Str].Ok(value: stderr)
+}
+
+fn cycle_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let root = f"{d}/a.nz";
+    let out = nazm(h, d, words(f"run --interpret {root}"));
+    check_that(out.code == 0, out.stderr)?;
+    check_that(text_trim(out.stdout) == "3", out.stdout)?;
+    // Refused natively until N49; compiled since, and the same answer.
+    let built = nazm(h, d, words(f"build {root} -o {d}/prog"));
+    check_that(built.code == 0, built.stderr)?;
+    let ran = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    check_that(text_trim(ran.stdout) == "3", ran.stdout)
+}
+// --- what a module may name ----------------------------------------------------------
+
+@test
+fn a_module_calls_its_own_private_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    strs_push(l1, "main.nz");
+    strs_push(l1, "fn helper() -> Int { 7 }\nfn main() -> Int { helper() }\n");
+    let out = both_ways(h, l1)?;
+    check_that(out == "7", out)?;
+    ok()
+}
+
+@test
+fn a_module_calls_an_imported_public_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l2 = strs_new();
+    strs_push(l2, "main.nz");
+    strs_push(l2, "use \"lib.nz\";\nfn main() -> Int { twice(3) }\n");
+    strs_push(l2, "lib.nz");
+    strs_push(l2, "pub fn twice(n: Int) -> Int { n + n }\n");
+    let out = both_ways(h, l2)?;
+    check_that(out == "6", out)?;
+    ok()
+}
+
+@test
+fn a_module_may_not_call_an_imported_private_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l3 = strs_new();
+    strs_push(l3, "main.nz");
+    strs_push(l3, "use \"lib.nz\";\nfn main() -> Int { secret() }\n");
+    strs_push(l3, "lib.nz");
+    strs_push(l3, "fn secret() -> Int { 1 }\n");
+    let stderr = refused(h, l3, "N0206")?;
+    // The definition is named, in the file the reader just imported. "Not defined" would
+    // be true and would send them looking for something that is in front of them.
+    check_that(text_contains(stderr, "defined privately here"), stderr)?;
+    check_that(text_contains(stderr, "lib.nz"), stderr)?;
+    ok()
+}
+
+@test
+fn two_modules_may_each_own_a_private_helper_of_the_same_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The case that decides whether these are modules or a naming convention.
+    let l4 = strs_new();
+    strs_push(l4, "main.nz");
+    strs_push(l4, "use \"lib.nz\";\nfn size() -> Int { 1 }\nfn main() -> Int { size() + report() }\n");
+    strs_push(l4, "lib.nz");
+    strs_push(l4, "pub fn report() -> Int { size() }\nfn size() -> Int { 40 }\n");
+    let out = both_ways(h, l4)?;
+    check_that(out == "41", out)?;
+    ok()
+}
+
+// --- imports are not transitive -------------------------------------------------------
+
+@test
+fn a_name_reachable_only_through_a_dependency_is_not_in_scope(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l5 = strs_new();
+    strs_push(l5, "a.nz");
+    strs_push(l5, "use \"b.nz\";\nfn main() -> Int { deep() }\n");
+    strs_push(l5, "b.nz");
+    strs_push(l5, "use \"c.nz\";\npub fn mid() -> Int { deep() }\n");
+    strs_push(l5, "c.nz");
+    strs_push(l5, "pub fn deep() -> Int { 7 }\n");
+    let stderr = refused(h, l5, "N0201")?;
+    // A missing `use` is the overwhelmingly likely cause, so the diagnostic says which
+    // module has it rather than only that this one does not.
+    check_that(text_contains(stderr, "imports are not transitive"), stderr)?;
+    check_that(text_contains(stderr, "c.nz"), stderr)?;
+    ok()
+}
+
+@test
+fn importing_it_directly_is_the_repair(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l6 = strs_new();
+    strs_push(l6, "a.nz");
+    strs_push(l6, "use \"b.nz\";\nuse \"c.nz\";\nfn main() -> Int { deep() + mid() }\n");
+    strs_push(l6, "b.nz");
+    strs_push(l6, "use \"c.nz\";\npub fn mid() -> Int { deep() }\n");
+    strs_push(l6, "c.nz");
+    strs_push(l6, "pub fn deep() -> Int { 7 }\n");
+    let out = both_ways(h, l6)?;
+    check_that(out == "14", out)?;
+    ok()
+}
+
+// --- collisions -----------------------------------------------------------------------
+
+@test
+fn two_imports_exporting_one_name_are_ambiguous(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l7 = strs_new();
+    strs_push(l7, "main.nz");
+    strs_push(l7, "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { same() }\n");
+    strs_push(l7, "a.nz");
+    strs_push(l7, "pub fn same() -> Int { 1 }\n");
+    strs_push(l7, "b.nz");
+    strs_push(l7, "pub fn same() -> Int { 2 }\n");
+    let stderr = refused(h, l7, "N0207")?;
+    // Both exporters, so the reader does not have to find the second one.
+    check_that(text_contains(stderr, "also brought in here"), stderr)?;
+    ok()
+}
+
+@test
+fn an_ambiguity_is_refused_where_it_is_created_not_where_it_is_used(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // No mention of `same` anywhere in the program. It is still refused: with no
+    // qualified path to write, deferring the error would only move the dead end.
+    let l8 = strs_new();
+    strs_push(l8, "main.nz");
+    strs_push(l8, "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l8, "a.nz");
+    strs_push(l8, "pub fn same() -> Int { 1 }\n");
+    strs_push(l8, "b.nz");
+    strs_push(l8, "pub fn same() -> Int { 2 }\n");
+    refused(h, l8, "N0207")?;
+    ok()
+}
+
+@test
+fn an_import_that_collides_with_a_local_definition_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l9 = strs_new();
+    strs_push(l9, "main.nz");
+    strs_push(l9, "use \"lib.nz\";\nfn size() -> Int { 1 }\nfn main() -> Int { size() }\n");
+    strs_push(l9, "lib.nz");
+    strs_push(l9, "pub fn size() -> Int { 2 }\n");
+    let stderr = refused(h, l9, "N0208")?;
+    check_that(text_contains(stderr, "defined here"), stderr)?;
+    check_that(text_contains(stderr, "and exported here"), stderr)?;
+    ok()
+}
+
+@test
+fn a_private_definition_of_that_name_is_not_a_collision(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Only exports collide. A module keeping a private `size` is not in anyone's way,
+    // which is the same rule as `two_modules_may_each_own_a_private_helper`, stated from
+    // the importer's side.
+    let l10 = strs_new();
+    strs_push(l10, "main.nz");
+    strs_push(l10, "use \"lib.nz\";\nfn size() -> Int { 1 }\nfn main() -> Int { size() + shown() }\n");
+    strs_push(l10, "lib.nz");
+    strs_push(l10, "pub fn shown() -> Int { size() }\nfn size() -> Int { 2 }\n");
+    let out = both_ways(h, l10)?;
+    check_that(out == "3", out)?;
+    ok()
+}
+
+@test
+fn a_definition_may_not_take_a_builtin_name_however_it_is_marked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for keyword in text_split("fn|pub fn", "|") {
+        let l0 = strs_new();
+        strs_push(l0, "main.nz");
+        strs_push(l0, f"{keyword} str_len(s: Str) -> Int {{ 0 }}\nfn main() -> Int {{ 0 }}\n");
+        refused(h, l0, "N0203")?;
+    }
+    ok()
+}
+
+// --- the shape of the graph -----------------------------------------------------------
+
+@test
+fn the_same_module_reached_two_ways_is_one_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l11 = strs_new();
+    strs_push(l11, "main.nz");
+    strs_push(l11, "use \"left.nz\";\nuse \"right.nz\";\nfn main() -> Int { l() + r() }\n");
+    strs_push(l11, "left.nz");
+    strs_push(l11, "use \"shared.nz\";\npub fn l() -> Int { s() }\n");
+    strs_push(l11, "right.nz");
+    strs_push(l11, "use \"shared.nz\";\npub fn r() -> Int { s() }\n");
+    strs_push(l11, "shared.nz");
+    strs_push(l11, "pub fn s() -> Int { 21 }\n");
+    let out = both_ways(h, l11)?;
+    check_that(out == "42", out)?;
+    ok()
+}
+
+@test
+fn a_module_may_import_itself_and_nothing_happens(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // It already sees all of its own definitions, so the import adds nothing — and in
+    // particular does not make the module collide with itself.
+    let l12 = strs_new();
+    strs_push(l12, "main.nz");
+    strs_push(l12, "use \"main.nz\";\npub fn v() -> Int { 3 }\nfn main() -> Int { v() }\n");
+    let out = both_ways(h, l12)?;
+    check_that(out == "3", out)?;
+    ok()
+}
+
+@test
+fn an_import_cycle_still_compiles_and_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Interfaces for the whole graph, then bodies. Neither stage needs an ordering, so
+    // there is no ordering for a cycle to violate — and each module calls into the other,
+    // so the cycle is load-bearing rather than decorative.
+    //
+    // The calls themselves do not recurse. A *call* cycle is refused by `nazm build`
+    // whatever the module structure (`N0101`, the native subset's bound on recursion),
+    // and mixing the two questions into one case would test that limitation instead of
+    // this rule.
+    let l13 = strs_new();
+    strs_push(l13, "a.nz");
+    strs_push(l13, "use \"b.nz\";\npub fn one() -> Int { 1 }\npub fn three() -> Int { 3 }\nfn main() -> Int { two() + three() }\n");
+    strs_push(l13, "b.nz");
+    strs_push(l13, "use \"a.nz\";\npub fn two() -> Int { one() + one() }\n");
+    let out = both_ways(h, l13)?;
+    check_that(out == "5", out)?;
+    ok()
+}
+
+@test
+fn a_module_cycle_may_also_be_a_call_cycle_when_it_is_interpreted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The language allows both, and since N49 so does the native backend. Kept because it
+    // is the case a reader would ask about after the test above.
+    let l0 = strs_new();
+    strs_push(l0, "a.nz");
+    strs_push(l0, "use \"b.nz\";\npub fn down(n: Int) -> Int { if n <= 0 { 0 } else { up(n - 1) } }\nfn main() -> Int { down(6) }\n");
+    strs_push(l0, "b.nz");
+    strs_push(l0, "use \"a.nz\";\npub fn up(n: Int) -> Int { down(n - 1) + 1 }\n");
+    let d = written(h, l0)?;
+    let got = cycle_in(h, d);
+    scratch_remove(h, d);
+    got?;
+    ok()
+}
+
+@test
+fn a_public_call_across_a_cycle_resolves_in_both_directions(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l14 = strs_new();
+    strs_push(l14, "a.nz");
+    strs_push(l14, "use \"b.nz\";\npub fn a_value() -> Int { 4 }\nfn main() -> Int { b_value() }\n");
+    strs_push(l14, "b.nz");
+    strs_push(l14, "use \"a.nz\";\npub fn b_value() -> Int { a_value() * 10 }\n");
+    let out = both_ways(h, l14)?;
+    check_that(out == "40", out)?;
+    ok()
+}
+
+@test
+fn a_forward_call_within_one_module_still_works(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l15 = strs_new();
+    strs_push(l15, "main.nz");
+    strs_push(l15, "fn main() -> Int { later() }\nfn later() -> Int { 9 }\n");
+    let out = both_ways(h, l15)?;
+    check_that(out == "9", out)?;
+    ok()
+}
+
+// --- the entry point ------------------------------------------------------------------
+
+@test
+fn an_imported_main_is_an_ordinary_definition_not_a_second_entry_point(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Until N2 this program did not exist: two `main`s in one compilation were a
+    // duplicate definition, so a helper file that was also runnable had to rename its
+    // entry point.
+    let l16 = strs_new();
+    strs_push(l16, "root.nz");
+    strs_push(l16, "use \"tool.nz\";\nfn main() -> Int { run() }\n");
+    strs_push(l16, "tool.nz");
+    strs_push(l16, "pub fn run() -> Int { 5 }\nfn main() -> Int { run() * 100 }\n");
+    let out = both_ways(h, l16)?;
+    check_that(out == "5", out)?;
+    ok()
+}
+
+@test
+fn a_main_in_an_imported_module_does_not_satisfy_the_root(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l17 = strs_new();
+    strs_push(l17, "root.nz");
+    strs_push(l17, "use \"tool.nz\";\npub fn v() -> Int { 1 }\n");
+    strs_push(l17, "tool.nz");
+    strs_push(l17, "fn main() -> Int { 0 }\n");
+    let (stderr, code) = check(h, l17)?;
+    check_that(code == 1, stderr)?;
+    check_that(text_contains(stderr, "N0204"), stderr)?;
+    ok()
+}
+
+@test
+fn main_need_not_be_public_to_be_the_entry_point(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l18 = strs_new();
+    strs_push(l18, "main.nz");
+    strs_push(l18, "fn main() -> Int { 0 }\n");
+    accepted(h, l18)?;
+    // And marking it `pub` is allowed, and means only that another module could call it.
+    let l19 = strs_new();
+    strs_push(l19, "main.nz");
+    strs_push(l19, "pub fn main() -> Int { 0 }\n");
+    accepted(h, l19)?;
+    ok()
+}
+
+// --- record types across modules ------------------------------------------------------
+//
+// The type namespace follows the same law as the function namespace, and these are the
+// same cases asked of it. What is new is that a record has a *shape* as well as a name:
+// an importer that can see one can construct it and project its fields, so the whole
+// definition crosses the boundary, not just the spelling.
+
+@test
+fn an_exported_record_is_named_constructed_and_projected_by_an_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l20 = strs_new();
+    strs_push(l20, "main.nz");
+    strs_push(l20, "use \"model.nz\";\nfn size(p: Point) -> Int { p.x + str_len(p.label) }\nfn main() -> Int { size(Point(x: 40, label: \"ab\")) }\n");
+    strs_push(l20, "model.nz");
+    strs_push(l20, "pub struct Point {\n    x: Int,\n    label: Str,\n}\n");
+    let out = both_ways(h, l20)?;
+    check_that(out == "42", out)?;
+    ok()
+}
+
+@test
+fn a_record_returned_across_a_module_boundary_keeps_its_owning_field(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The decisive shape: the library's frame exits, and the caller still holds a valid
+    // string. Both ways, and through independently generated objects in the compiled one.
+    let l21 = strs_new();
+    strs_push(l21, "main.nz");
+    strs_push(l21, "use \"model.nz\";\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 10 {\n        let p = at(i);\n        total = total + str_len(p.label) + p.x;\n        i = i + 1;\n    }\n    total\n}\n");
+    strs_push(l21, "model.nz");
+    strs_push(l21, "pub struct Point {\n    x: Int,\n    label: Str,\n}\npub fn at(n: Int) -> Point {\n    Point(x: n, label: str_concat(\"p\", int_to_str(n)))\n}\n");
+    let out = both_ways(h, l21)?;
+    check_that(out == "65", out)?;
+    ok()
+}
+
+@test
+fn a_private_record_is_not_nameable_from_an_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l22 = strs_new();
+    strs_push(l22, "main.nz");
+    strs_push(l22, "use \"model.nz\";\nfn main() -> Int { let p = Hidden(n: 1); p.n }\n");
+    strs_push(l22, "model.nz");
+    strs_push(l22, "struct Hidden {\n    n: Int,\n}\n");
+    refused(h, l22, "N0305")?;
+    ok()
+}
+
+@test
+fn a_public_function_may_not_return_a_private_record(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Without opaque types there is no honest way to publish this: the importer would
+    // have to name the type to use the result and cannot.
+    let l23 = strs_new();
+    strs_push(l23, "main.nz");
+    strs_push(l23, "use \"model.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l23, "model.nz");
+    strs_push(l23, "struct Secret {\n    value: Int,\n}\npub fn get() -> Secret { Secret(value: 1) }\n");
+    let out = refused(h, l23, "N0337")?;
+    check_that(text_contains(out, "Secret"), out)?;
+    ok()
+}
+
+@test
+fn a_public_record_may_not_expose_a_private_one_through_a_field(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l24 = strs_new();
+    strs_push(l24, "main.nz");
+    strs_push(l24, "use \"model.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l24, "model.nz");
+    strs_push(l24, "struct Secret {\n    value: Int,\n}\npub struct Public {\n    secret: Secret,\n}\n");
+    let out = refused(h, l24, "N0337")?;
+    check_that(text_contains(out, "Secret"), out)?;
+    ok()
+}
+
+@test
+fn a_public_parameter_of_a_private_record_type_is_refused_too(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l25 = strs_new();
+    strs_push(l25, "main.nz");
+    strs_push(l25, "use \"model.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l25, "model.nz");
+    strs_push(l25, "struct Secret {\n    value: Int,\n}\npub fn take(s: Secret) -> Int { s.value }\n");
+    refused(h, l25, "N0337")?;
+    ok()
+}
+
+@test
+fn two_imported_modules_exporting_one_type_name_is_ambiguous(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l26 = strs_new();
+    strs_push(l26, "main.nz");
+    strs_push(l26, "use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l26, "a.nz");
+    strs_push(l26, "pub struct User {\n    n: Int,\n}\n");
+    strs_push(l26, "b.nz");
+    strs_push(l26, "pub struct User {\n    m: Int,\n}\n");
+    refused(h, l26, "N0207")?;
+    ok()
+}
+
+@test
+fn an_imported_type_that_collides_with_a_local_one_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l27 = strs_new();
+    strs_push(l27, "main.nz");
+    strs_push(l27, "use \"a.nz\";\nstruct User {\n    n: Int,\n}\nfn main() -> Int { 0 }\n");
+    strs_push(l27, "a.nz");
+    strs_push(l27, "pub struct User {\n    m: Int,\n}\n");
+    refused(h, l27, "N0208")?;
+    ok()
+}
+
+@test
+fn the_same_record_name_in_two_modules_is_two_types(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Neither module imports the other, so both may own the name — and they are
+    // different types, with different native identities, in one program.
+    let l28 = strs_new();
+    strs_push(l28, "main.nz");
+    strs_push(l28, "use \"a.nz\";\nuse \"b.nz\";\nstruct Thing {\n    here: Int,\n}\nfn main() -> Int { Thing(here: 1).here + from_a() + from_b() }\n");
+    strs_push(l28, "a.nz");
+    strs_push(l28, "struct Thing {\n    n: Int,\n}\npub fn from_a() -> Int { Thing(n: 10).n }\n");
+    strs_push(l28, "b.nz");
+    strs_push(l28, "struct Thing {\n    m: Str,\n}\npub fn from_b() -> Int { str_len(Thing(m: \"abc\").m) }\n");
+    let out = both_ways(h, l28)?;
+    check_that(out == "14", out)?;
+    ok()
+}
+
+@test
+fn a_module_import_cycle_with_records_is_still_legal(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A module cycle and an inline layout cycle are different things: only the second is
+    // refused, and this is the first.
+    let l29 = strs_new();
+    strs_push(l29, "main.nz");
+    strs_push(l29, "use \"a.nz\";\nfn main() -> Int { via_a() }\n");
+    strs_push(l29, "a.nz");
+    strs_push(l29, "use \"b.nz\";\npub struct Ay {\n    n: Int,\n}\npub fn via_a() -> Int { Ay(n: 2).n * via_b() }\n");
+    strs_push(l29, "b.nz");
+    strs_push(l29, "use \"a.nz\";\npub struct Bee {\n    m: Int,\n}\npub fn via_b() -> Int { Bee(m: 21).m }\n");
+    let out = both_ways(h, l29)?;
+    check_that(out == "42", out)?;
+    ok()
+}
+
+@test
+fn a_layout_cycle_across_modules_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l30 = strs_new();
+    strs_push(l30, "main.nz");
+    strs_push(l30, "use \"a.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l30, "a.nz");
+    strs_push(l30, "use \"b.nz\";\npub struct Ay {\n    b: Bee,\n}\n");
+    strs_push(l30, "b.nz");
+    strs_push(l30, "use \"a.nz\";\npub struct Bee {\n    a: Ay,\n}\n");
+    refused(h, l30, "N0336")?;
+    ok()
+}
+
+// --- enums across a module boundary -----------------------------------------------------
+//
+// The same law as a record's, with one addition that is the milestone's: an importer that
+// can see an enum can *match* it, so what crosses the boundary is every variant and every
+// payload shape — and adding a variant is therefore a change to the public type.
+
+@test
+fn an_exported_enum_is_named_constructed_and_matched_by_an_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l31 = strs_new();
+    strs_push(l31, "main.nz");
+    strs_push(l31, "use \"state.nz\";\nfn weight(s: State) -> Int { match s { State.Ready() => 2, State.Done(code: c) => c, } }\nfn main() -> Int { weight(State.Done(code: 40)) + weight(State.Ready()) }\n");
+    strs_push(l31, "state.nz");
+    strs_push(l31, "pub enum State {\n    Ready,\n    Done(code: Int),\n}\n");
+    let out = both_ways(h, l31)?;
+    check_that(out == "42", out)?;
+    ok()
+}
+
+@test
+fn an_enum_returned_across_a_module_boundary_keeps_its_active_payload(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The library's frame exits and the caller still holds a valid string — through
+    // independently generated objects in the compiled one, which is where the two sides
+    // have to agree about the discriminant as well as the layout.
+    let l32 = strs_new();
+    strs_push(l32, "main.nz");
+    strs_push(l32, "use \"state.nz\";\nfn weight(s: State) -> Int { match s { State.Ready() => 0, State.Failed(why: w, code: c) => str_len(w) + c, } }\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 10 {\n        total = total + weight(failure(i));\n        i = i + 1;\n    }\n    total\n}\n");
+    strs_push(l32, "state.nz");
+    strs_push(l32, "pub enum State {\n    Ready,\n    Failed(why: Str, code: Int),\n}\npub fn failure(n: Int) -> State {\n    State.Failed(why: str_concat(\"e\", int_to_str(n)), code: n)\n}\n");
+    let out = both_ways(h, l32)?;
+    check_that(out == "65", out)?;
+    ok()
+}
+
+@test
+fn a_private_enum_is_not_nameable_from_an_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l33 = strs_new();
+    strs_push(l33, "main.nz");
+    strs_push(l33, "use \"state.nz\";\nfn main() -> Int { match Hidden.A() { Hidden.A() => 1, } }\n");
+    strs_push(l33, "state.nz");
+    strs_push(l33, "enum Hidden {\n    A,\n}\n");
+    refused(h, l33, "N0305")?;
+    ok()
+}
+
+@test
+fn a_public_enum_may_not_expose_a_private_type_through_a_payload(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An importer needs the payload's type to match the variant, and cannot name it.
+    let l34 = strs_new();
+    strs_push(l34, "main.nz");
+    strs_push(l34, "use \"state.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l34, "state.nz");
+    strs_push(l34, "struct Secret {\n    value: Int,\n}\npub enum Public {\n    Hidden(v: Secret),\n}\n");
+    refused(h, l34, "N0337")?;
+    ok()
+}
+
+@test
+fn a_public_record_may_not_expose_a_private_enum_through_a_field(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The closure runs through both kinds, so this is the same refusal one kind over.
+    let l35 = strs_new();
+    strs_push(l35, "main.nz");
+    strs_push(l35, "use \"state.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l35, "state.nz");
+    strs_push(l35, "enum Secret {\n    A,\n}\npub struct Public {\n    s: Secret,\n}\n");
+    refused(h, l35, "N0337")?;
+    ok()
+}
+
+@test
+fn the_same_enum_name_in_two_modules_is_two_types(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Neither imported module exports the name, so all three may own it — and they are
+    // different types, with different native identities and different discriminants, in
+    // one program.
+    let l36 = strs_new();
+    strs_push(l36, "main.nz");
+    strs_push(l36, "use \"a.nz\";\nuse \"b.nz\";\nenum State { Here, }\nfn main() -> Int {\n    match State.Here() { State.Here() => 1, } + from_a() + from_b()\n}\n");
+    strs_push(l36, "a.nz");
+    strs_push(l36, "enum State { Alpha, Beta(n: Int), }\npub fn from_a() -> Int { match State.Beta(n: 10) { State.Alpha() => 0, State.Beta(n: n) => n, } }\n");
+    strs_push(l36, "b.nz");
+    strs_push(l36, "enum State { Only(s: Str), }\npub fn from_b() -> Int { match State.Only(s: \"abc\") { State.Only(s: s) => str_len(s), } }\n");
+    let out = both_ways(h, l36)?;
+    check_that(out == "14", out)?;
+    ok()
+}
+
+@test
+fn a_layout_cycle_through_an_enum_across_modules_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l37 = strs_new();
+    strs_push(l37, "main.nz");
+    strs_push(l37, "use \"a.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(l37, "a.nz");
+    strs_push(l37, "use \"b.nz\";\npub struct Ay {\n    b: Bee,\n}\n");
+    strs_push(l37, "b.nz");
+    strs_push(l37, "use \"a.nz\";\npub enum Bee {\n    V(a: Ay),\n}\n");
+    refused(h, l37, "N0336")?;
+    ok()
+}
+
+@test
+fn an_enum_payload_reaches_a_third_modules_shape_through_the_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The closure, one kind over: `main` never imports `deep.nz`, cannot name `Inner`,
+    // and still has to understand the shape `State.V` hands it in order to match on it.
+    let l38 = strs_new();
+    strs_push(l38, "main.nz");
+    strs_push(l38, "use \"state.nz\";\nfn main() -> Int { match make() { State.V(i: i) => i.n, } }\n");
+    strs_push(l38, "state.nz");
+    strs_push(l38, "use \"deep.nz\";\npub enum State {\n    V(i: Inner),\n}\npub fn make() -> State { State.V(i: Inner(n: 42)) }\n");
+    strs_push(l38, "deep.nz");
+    strs_push(l38, "pub struct Inner {\n    n: Int,\n}\n");
+    let out = both_ways(h, l38)?;
+    check_that(out == "42", out)?;
+    ok()
+}
+

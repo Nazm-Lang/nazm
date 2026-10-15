@@ -1,0 +1,236 @@
+// The LIR oracle (`nazm lir --run`) against the native tiers: every program gets the same answer
+// from the oracle, LLVM at `-O0` and `-O2` and Cranelift at `-O2` — its output and `main`'s result,
+// or status 2 and the same failure line. Ported from `crates/nazm-cli/tests/lir_oracle.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The stdout, exit status and failure line of one tier.
+struct Answer {
+    out: Str,
+    code: Int,
+    fail: Str,
+}
+
+fn answer_show(a: Answer) -> Str ! {} {
+    f"({a.out}, {a.code}, {a.fail})"
+}
+
+fn same_answer(a: Answer, b: Answer) -> Bool ! {} {
+    a.out == b.out && a.code == b.code && a.fail == b.fail
+}
+
+/// The first line of `stderr` naming a runtime failure, `nazm: ` taken off.
+fn failure(stderr: Str) -> Str ! {} {
+    for l in lines(stderr) {
+        if text_contains(l, "error[N04") {
+            return trim_start_matches(l, "nazm: ");
+        }
+    }
+    ""
+}
+
+fn with_args(first: Str, args: Strs) -> Strs ! {} {
+    let a = words(first);
+    for x in args {
+        strs_push(a, x);
+    }
+    a
+}
+
+fn oracle(h: Caps, dir: Str, args: Strs) -> (Answer, Str) ! { io, spawn } {
+    let o = run(h, nazm_bin(h.io), with_args("lir --run prog.nz --", args), dir, suite_env(h));
+    (Answer(out: o.stdout, code: o.code, fail: failure(o.stderr)), o.stderr)
+}
+
+fn native(h: Caps, dir: Str, backend: Str, opt: Str, args: Strs) -> Result[Answer, Str] ! { io, spawn } {
+    let exe = f"{dir}/p-{backend}-{opt}";
+    let b = nazm(h, dir, words(f"build --backend {backend} --opt-level {opt} prog.nz -o {exe}"));
+    check_that(b.code == 0, f"{backend} -O{opt} does not build it:\n{b.stderr}")?;
+    let o = run(h, exe, args, "", suite_env(h));
+    Result[Answer, Str].Ok(value: Answer(out: o.stdout, code: o.code, fail: failure(o.stderr)))
+}
+
+fn agree_in(h: Caps, d: Str, src: Str, args: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (said, stderr) = oracle(h, d, args);
+    check_that(said.code != 4, f"the oracle refused it: {stderr}\n{src}")?;
+    if text_starts_with(expected, "error[") {
+        check_that(said.code == 2, f"{answer_show(said)}\n{src}")?;
+        check_that(text_contains(said.fail, expected), f"{answer_show(said)}\n{src}")?;
+    } else {
+        check_that(said.code == 0, f"{answer_show(said)} {stderr}\n{src}")?;
+        check_that(said.out == expected, f"{said.out}\n{src}")?;
+    }
+    for bo in words("llvm:0 llvm:2 cranelift:2") {
+        let parts = text_split(bo, ":");
+        let got = native(h, d, strs_get(parts, 0), strs_get(parts, 1), args)?;
+        check_that(same_answer(got, said), f"{strs_get(parts, 0)} -O{strs_get(parts, 1)} and the LIR oracle disagree: {answer_show(got)} vs {answer_show(said)}\n{src}")?;
+    }
+    ok()
+}
+
+/// Every tier gives `src` the same answer, and it is `expected`'s: its output, then `main`'s
+/// result, or status 2 and a failure line containing `expected` when it starts with `error[`.
+fn agree(h: Caps, src: Str, args: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = agree_in(h, d, src, args, expected);
+    scratch_remove(h, d);
+    r
+}
+
+/// The LIR function whose text holds `; r` — its body — and the divisor select's two arms and
+/// the constant 1's register, checked as the Rust test checks them.
+fn select_checks(text: Str) -> Result[Str, Str] ! {} {
+    let mut body = "";
+    let mut found = false;
+    for f in text_split(text, "function ") {
+        if !found && text_contains(f, "; r\n") {
+            body = f;
+            found = true;
+        }
+    }
+    check_that(found, "r")?;
+    let mut one = "";
+    let mut select = "";
+    for l in lines(body) {
+        match strip_suffix(trim_ws(l), " = const i64 1") {
+            Option.Some(value: x) => if str_len(one) == 0 { one = x; },
+            Option.None() => 0,
+        };
+        if str_len(select) == 0 && text_contains(l, " = select ") {
+            select = l;
+        }
+    }
+    check_that(str_len(one) > 0, "the constant 1")?;
+    check_that(str_len(select) > 0, "a select for the divisor")?;
+    let after = strs_get(text_split(select, " = select "), 1);
+    let parts = text_split(after, ", ");
+    let arms = strs_new();
+    let mut i = 1;
+    while i < strs_len(parts) {
+        strs_push(arms, strs_get(parts, i));
+        i = i + 1;
+    }
+    check_that(strs_len(arms) == 2, select)?;
+    check_that(strs_get(arms, 0) != strs_get(arms, 1), f"the divisor's select chooses nothing: {select}")?;
+    check_that(strs_get(arms, 0) == one || strs_get(arms, 1) == one, f"the divisor is never 1: {select}\n{body}")?;
+    Result[Str, Str].Ok(value: body)
+}
+
+@test
+fn integers_and_their_failures_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    agree(h, "fn f(a: Int, b: Int) -> Int { a * 3 - b / 2 + a % 7 }\nfn main() -> Int { f(10, 4) + f(0 - 9, 5) + (0 - 7) % 3 + (0 - 9223372036854775807 - 1) % (0 - 1) }\n", l1, "-1\n")?;
+    // Each remainder alone, so no two wrong answers can cancel (N108 found the sum above does on
+    // AArch64 Linux when a select's arms are swapped): 10 % 7 = 3, -9 % 7 = -2, 7 % -2 = 1.
+    let l2 = strs_new();
+    agree(h, "fn r(a: Int, b: Int) -> Int { a % b }\nfn main() -> Int { r(10, 7) * 100 + r(0 - 9, 7) * 10 + r(7, 0 - 2) }\n", l2, "281\n")?;
+    let l3 = strs_new();
+    agree(h, "fn main() -> Int { let big = 9223372036854775807; big + 1 }\n", l3, "error[N0400]")?;
+    let l4 = strs_new();
+    agree(h, "fn d(x: Int) -> Int { 10 / x }\nfn main() -> Int { d(0) }\n", l4, "error[N0401]")?;
+    ok()
+}
+
+@test
+fn control_flow_and_recursion_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Each prints its answer and returns 0 (R1, 5b.3), which the result report adds.
+    let l5 = strs_new();
+    agree(h, read_text(h, f"{repo_root(h)}/examples/primes.nz")?, l5, "1060\n0\n")?;
+    let l6 = strs_new();
+    agree(h, read_text(h, f"{repo_root(h)}/examples/sum.nz")?, l6, "6074\n0\n")?;
+    let l7 = strs_new();
+    agree(h, "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main() -> Int { let mut i = 0; let mut t = 0; while i < 15 { if i == 3 { i = i + 1; continue; } t = t + fib(i); i = i + 1; } t }\n", l7, "984\n")?;
+    ok()
+}
+
+@test
+fn strings_and_sequences_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l8 = strs_new();
+    agree(h, "fn main(out: OutCap) -> Int {\nlet xs = ints_new();\nlet ss = strs_new();\nlet mut i = 0;\nwhile i < 50 { ints_push(xs, i * i); strs_push(ss, str_concat(\"n\", int_to_str(i))); i = i + 1; }\nints_set(xs, 3, 1000);\nstrs_set(ss, 4, \"four\");\nlet joined = str_concat(strs_get(ss, 4), strs_get(ss, 49));\nprint(joined);\nprint(int_to_str(ints_get(xs, 3) + ints_get(xs, 49) + ints_len(xs) + strs_len(ss)));\nprint(str_slice(\"abcdef\", 1, 4));\nif joined == \"fourn49\" { 0 } else { 1 }\n}\n", l8, "fourn493501bcd0\n")?;
+    let l9 = strs_new();
+    agree(h, "fn main() -> Int { let xs = ints_new(); ints_push(xs, 1); ints_get(xs, 5) }\n", l9, "error[N04")?;
+    ok()
+}
+
+@test
+fn records_enums_and_equality_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l10 = strs_new();
+    agree(h, "struct Q { flag: Bool, name: Str, n: Int }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nfn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }\nfn main(out: OutCap) -> Int {\nlet a = Q(flag: true, name: str_concat(\"ab\", \"c\"), n: 10);\nlet b = Q(flag: true, name: \"abc\", n: 10);\nlet c = Q(flag: false, name: \"abc\", n: 10);\nprint(int_to_str(val(S.Pair(q: a, k: 4)) + val(S.Num(n: 5)) + val(S.Empty())));\nprint(if b == Q(flag: true, name: \"abc\", n: 10) { \"same\" } else { \"differ\" });\nprint(if b != c { \"differ\" } else { \"same\" });\nprint(if S.Num(n: 1) == S.Num(n: 1) && S.Empty() == S.Empty() && S.Num(n: 1) != S.Empty() { \"enums\" } else { \"wrong\" });\n0\n}\n", l10, "22samedifferenums0\n")?;
+    ok()
+}
+
+@test
+fn closures_and_vectors_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l11 = strs_new();
+    agree(h, "struct Op { name: Str, apply: fn(Int) -> Int }\nfn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int { fn(x: Int) -> Int { f(g(x)) } }\nfn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }\nfn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * apply(fact, n - 1) } }\nfn main(out: OutCap) -> Int {\nlet tag = str_concat(\"ab\", \"cd\");\nlet xs = ints_new();\nints_push(xs, 3);\nlet len_plus = fn(x: Int) -> Int { x + str_len(tag) + ints_get(xs, 0) };\nlet op = Op(name: tag, apply: len_plus);\nlet fs = vec_new[fn(Int) -> Int]();\nvec_push(fs, len_plus);\nvec_push(fs, compose(len_plus, op.apply));\nlet both = vec_get(fs, 1);\nlet ap = op.apply;\nprint(int_to_str(both(1) + ap(0) + fact(5)));\n0\n}\n", l11, "1420\n")?;
+    ok()
+}
+
+@test
+fn the_programs_arguments_agree_with_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l12 = strs_new();
+    strs_push(l12, "one");
+    strs_push(l12, "two words");
+    agree(h, "use \"@std/process\";\nfn main(io: IoCap, out: OutCap) -> Int {\nlet args = process_args(io);\nprint(str_join(args, \"+\"));\nstrs_len(args)\n}\n", l12, "one+two words2\n")?;
+    ok()
+}
+
+@test
+fn a_program_with_tasks_is_refused_and_not_answered(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", read_text(h, f"{repo_root(h)}/examples/worker-pool.nz")?)?;
+    let l13 = strs_new();
+    let (said, stderr) = oracle(h, d, l13);
+    check_that(said.code == 1, stderr)?;
+    check_that(text_contains(stderr, "the LIR interpreter does not run this"), stderr)?;
+    check_that((str_len(said.out) == 0), "assert!((str_len(said.out) == 0), \"a refusal printed an answer: {said:?}\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_remainder_never_divides_by_minus_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `Int::MIN % -1` is 0 (`docs/spec.md`), and the machine faults on that one pair on some
+    // targets and not on others (AArch64 does not), so no program's output on this host can say
+    // whether the lowering kept the guard. The LIR can: the divisor is a select between 1 and the
+    // operand, never the operand twice.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn r(a: Int, b: Int) -> Int { a % b }\nfn main() -> Int { r(7, 2) }\n")?;
+    let o = run(h, nazm_bin(h.io), words("lir --ops prog.nz"), d, suite_env(h));
+    check_that((o.code == 0), "assert!((o.code == 0), \"{}\", o.stderr);")?;
+    let text = o.stdout;
+    let body = select_checks(text)?;
+    check_that(text_contains(body, "srem"), body)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Q1-B-07: the oracle formats floats and `UInt64`s — every shape the shortest round-trip text
+/// takes, `Float32` and `Float64`, the edges (`-0`, an infinity, a NaN, `1e+21`, `1.5e-7`) and the
+/// largest `UInt64` — by the function the interpreter uses, so a program that prints a number now
+/// has its fifth tier, held to LLVM at both levels and Cranelift.
+@test
+fn floats_and_unsigned_words_print_alike_on_the_oracle(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l14 = strs_new();
+    agree(h, "fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \" \")) }\nfn main(out: OutCap) -> Int ! {io} {\nshow(out, num_to_str(1.5));\nshow(out, num_to_str(0.1 + 0.2));\nshow(out, num_to_str(1e21));\nshow(out, num_to_str(0.00000015));\nshow(out, num_to_str(100.0));\nshow(out, num_to_str(0.0 * (0.0 - 1.0)));\nshow(out, num_to_str(Float32(0.1)));\nshow(out, num_to_str(Float32(16777217.0)));\nshow(out, num_to_str(1.0 / 0.0));\nshow(out, num_to_str(0.0 - 1.0 / 0.0));\nshow(out, num_to_str(0.0 / 0.0));\nshow(out, num_to_str(UInt64(18446744073709551615)));\nshow(out, num_to_str(UInt64(0)));\n0\n}\n", l14, "1.5 0.30000000000000004 1e+21 1.5e-7 100 -0 0.1 16777216 inf -inf nan 18446744073709551615 0 0\n")?;
+    ok()
+}
+

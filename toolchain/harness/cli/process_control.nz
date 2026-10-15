@@ -1,0 +1,138 @@
+// Other programs, alike everywhere: a child started in its directory with exactly its environment,
+// bounded waits, a group's signal, a child's peak memory, the process library over them; and what
+// starting a child needs. Ported from `crates/nazm-cli/tests/process_control.rs` (R7), with
+// `platform_files`' `runs_in` and `alike` from `lib/platform.nz`.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/platform.nz"
+use "../lib/differential.nz"
+
+/// `scripted`: a directory `sub` with an executable script in it that says where it ran. `$0` is
+/// the path the program was started by: made absolute beside the directory, so where it was
+/// looked for was not the system's choice. One write, so the parent reads it in one piece.
+fn scripted() -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, "sub/run.sh");
+    strs_push(f, "#!/bin/sh\ncase \"$0\" in /*/sub/./run.sh) how=absolutely;; *) how=\"$0\";; esac\nprintf 'ran in %s\\nnamed %s\\n' \"$(basename \"$(pwd -P)\")\" \"$how\"\n");
+    f
+}
+
+const SCRIPTED: Str = "chmod 755 sub/run.sh";
+
+/// What `os_child_rusage` answers once a child has ended: a positive count natively, `-ENOSYS` in
+/// the interpreter, which cannot ask without C.
+fn interpreted_peak(h: Caps) -> Str ! { io, spawn } {
+    let r = run(h, "uname", words("-s"), "", env_here(h.io));
+    if text_trim(r.stdout) == "Linux" { "-38" } else { "-78" }
+}
+
+/// Each process group a run reported on its standard error, as `group N`, is gone.
+fn groups_gone(h: Caps, runs: Vec[Labeled]) -> Result[Int, Str] ! { io, spawn } {
+    for run_ in runs {
+        let who = run_.label;
+        for l in lines(run_.ran.stderr) {
+            match strip_prefix(l, "group ") {
+                Option.Some(value: g) => {
+                    let a = words("-0 --");
+                    strs_push(a, f"-{g}");
+                    let alive = run(h, "kill", a, "", env_here(h.io)).code == 0;
+                    if alive {
+                        let k = words("-9 --");
+                        strs_push(k, f"-{g}");
+                        run(h, "kill", k, "", env_here(h.io));
+                    }
+                    check_that(!alive, f"{who}: group {g} outlived the program")?;
+                },
+                Option.None() => 0,
+            };
+        }
+    }
+    ok()
+}
+
+const SPAWNING: Str = "use \"@std/ioerror\";\n\nfn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }\n\nfn list(a: Str, b: Str) -> Strs ! {} {\n    let x = strs_new();\n    if str_len(a) > 0 { strs_push(x, a); }\n    if str_len(b) > 0 { strs_push(x, b); }\n    x\n}\n\n// Everything the child writes to its output, to its end.\nfn output(h: OsHandle) -> Str ! { io } {\n    let pipe = os_child_pipe(h, 1);\n    let buf = bytes_new(4096);\n    let mut all = \"\";\n    let mut n = os_read(pipe, buf);\n    while n > 0 {\n        all = str_concat(all, bytes_to_str(bytes_slice(buf, 0, n)));\n        n = os_read(pipe, buf);\n    }\n    os_close(pipe);\n    os_close(os_child_pipe(h, 2));\n    os_close(os_child_pipe(h, 0));\n    all\n}\n\nfn run(io: IoCap, h: OsHandle) -> Int ! { io } {\n    print(output(h));\n    print(f\"exit {kind(os_wait(h))}\\n\");\n    os_close(h);\n    0\n}\n\nfn main(p: ProcessCap, io: IoCap) -> Int ! { io } {\n    let env = strs_new();\n    strs_push(env, \"ZED=last\");\n    strs_push(env, \"A=first\");\n    strs_push(env, \"PATH=/usr/bin:/bin\");\n    strs_push(env, \"MID=x=y\");\n    strs_push(env, \"AB=second\");\n    // Exactly that environment, ordered by name, from a program found on this process's PATH.\n    run(io, os_spawn_in(\"env\", strs_new(), \"\", env));\n    // A program named with a `/` is taken relative to the directory.\n    run(io, os_spawn_in(\"./run.sh\", strs_new(), \"sub\", env));\n    run(io, os_spawn_in(\"sh\", list(\"-c\", \"pwd -P | sed 's|.*/||'\"), \"sub\", env));\n    // Refused before anything starts.\n    let noeq = kind(os_status(os_spawn_in(\"env\", strs_new(), \"\", list(\"NOEQ\", \"\"))));\n    let unnamed = kind(os_status(os_spawn_in(\"env\", strs_new(), \"\", list(\"=x\", \"\"))));\n    let twice = kind(os_status(os_spawn_in(\"env\", strs_new(), \"\", list(\"A=1\", \"A=2\"))));\n    let flag = kind(os_status(os_spawn_with(\"env\", strs_new(), \"\", env, 4)));\n    print(f\"no = {noeq}\\nempty name {unnamed}\\ntwice {twice}\\nflag {flag}\\n\");\n    let nodir = kind(os_status(os_spawn_in(\"env\", strs_new(), \"nowhere\", env)));\n    let afile = kind(os_status(os_spawn_in(\"env\", strs_new(), \"sub/run.sh\", env)));\n    let noprog = kind(os_status(os_spawn_in(\"no-such-program-nazm\", strs_new(), \"\", env)));\n    print(f\"no dir {nodir}\\ndir a file {afile}\\nno program {noprog}\\n\");\n    // A null standard input reads as empty, and its pipe is closed.\n    let h = os_spawn_with(\"sh\", list(\"-c\", \"cat; echo read nothing\"), \"\", env, 2);\n    print(f\"input {kind(os_status(os_child_pipe(h, 0)))}\\n\");\n    run(io, h);\n    0\n}\n";
+
+@test
+fn a_child_runs_in_its_directory_with_exactly_its_environment_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, SPAWNING, scripted(), SCRIPTED)?;
+    alike(runs, 0, "A=first\nAB=second\nMID=x=y\nPATH=/usr/bin:/bin\nZED=last\nexit 0\nran in sub\nnamed absolutely\nexit 0\nsub\nexit 0\nno = InvalidInput\nempty name InvalidInput\ntwice InvalidInput\nflag InvalidInput\nno dir NotFound\ndir a file NotADirectory\nno program NotFound\ninput Closed\nread nothing\nexit 0\n0")?;
+    ok()
+}
+
+const WAITING: Str = "use \"@std/ioerror\";\n\nfn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }\n\nfn list(a: Str, b: Str) -> Strs ! {} {\n    let x = strs_new();\n    strs_push(x, a);\n    strs_push(x, b);\n    x\n}\n\n// One string either way, so the interpreter's `ENOSYS` allocates what a count does natively.\nfn peak(r: Int) -> Str ! {} {\n    let text = int_to_str(r);\n    if r > 0 { \"positive\" } else { text }\n}\n\nfn main(p: ProcessCap, io: IoCap, t: TimeCap) -> Int ! { io } {\n    let env = strs_new();\n    strs_push(env, \"PATH=/usr/bin:/bin\");\n    // A child that ends at once: every wait answers its status, the same every time.\n    let quick = os_spawn_with(\"sh\", list(\"-c\", \"exit 3\"), \"\", env, 2);\n    let far = time_now_ms() + 30000;\n    let id = os_child_pid(quick);\n    print(f\"until {kind(os_wait_until(quick, far))} try {kind(os_try_wait(quick))} wait {kind(os_wait(quick))}\\n\");\n    print(f\"id kept {os_child_pid(quick) == id} {id > 1} {id != os_pid()} {os_pid() > 1}\\n\");\n    print(f\"peak {peak(os_child_rusage(quick))}\\n\");\n    os_close(quick);\n    // A child leading its own group, with a child of its own: still running at the deadline.\n    let long = os_spawn_with(\"sh\", list(\"-c\", \"sleep 30 & sleep 30; wait\"), \"\", env, 3);\n    let group = os_child_pid(long);\n    eprint(str_concat(str_concat(\"group \", int_to_str(group)), \"\\n\"));\n    print(f\"try {kind(os_try_wait(long))} peak before {kind(os_child_rusage(long))}\\n\");\n    let start = time_now_ms();\n    print(f\"until {kind(os_wait_until(long, start + 100))} waited {time_now_ms() - start >= 100}\\n\");\n    print(f\"past deadline {kind(os_wait_until(long, start))}\\n\");\n    print(f\"asked {kind(os_kill_group(group, 0))} terminated {kind(os_kill_group(group, 15))}\\n\");\n    print(f\"ended {kind(os_wait(long))} again {kind(os_try_wait(long))} {kind(os_wait_until(long, 0))}\\n\");\n    // The group's other process ended with it; wait until the system has let it go.\n    let mut gone = os_kill_group(group, 0);\n    let mut tries = 0;\n    while gone == 0 && tries < 500 {\n        time_sleep_ms(10);\n        gone = os_kill_group(group, 0);\n        tries = tries + 1;\n    }\n    // Gone: the system says so as `ESRCH`, or — macOS, for a group whose last process is a zombie\n    // another parent will reap — `EPERM`.\n    let said = gone == 0 - 3 || gone == 0 - 1;\n    print(f\"group gone {said} after {tries < 500}\\n\");\n    print(f\"refused {kind(os_kill_group(1, 0))} {kind(os_kill_group(0, 9))} {kind(os_kill_group(group, 32))} {kind(os_kill_group(group, 0 - 1))} {kind(os_kill_group(2147483648, 0))}\\n\");\n    os_close(long);\n    // Not a child.\n    print(f\"not a child {kind(os_try_wait(os_stdin()))} {kind(os_child_pid(os_stdin()))} {kind(os_child_rusage(os_stdin()))}\\n\");\n    0\n}\n";
+
+@test
+fn bounded_waits_a_group_s_signal_and_a_child_s_peak_memory_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, WAITING, strs_new(), "")?;
+    groups_gone(h, runs)?;
+    alike_split(runs, 0, f"until 3 try 3 wait 3\nid kept true true true true\npeak {interpreted_peak(h)}\ntry WouldBlock peak before InvalidInput\nuntil TimedOut waited true\npast deadline TimedOut\nasked 0 terminated 0\nended 271 again 271 271\ngroup gone true after true\nrefused InvalidInput InvalidInput InvalidInput InvalidInput InvalidInput\nnot a child InvalidInput InvalidInput InvalidInput\n0", "until 3 try 3 wait 3\nid kept true true true true\npeak positive\ntry WouldBlock peak before InvalidInput\nuntil TimedOut waited true\npast deadline TimedOut\nasked 0 terminated 0\nended 271 again 271 271\ngroup gone true after true\nrefused InvalidInput InvalidInput InvalidInput InvalidInput InvalidInput\nnot a child InvalidInput InvalidInput InvalidInput\n0")?;
+    ok()
+}
+
+const LIBRARY: Str = "use \"@std/ioerror\";\nuse \"@std/file\";\nuse \"@std/process\";\nuse \"@std/time\";\n\nfn status(r: Result[Option[Int], IoError]) -> Str ! {} {\n    match r {\n        Result.Ok(value: Option.Some(value: s)) => int_to_str(s),\n        Result.Ok(value: Option.None()) => \"running\",\n        Result.Err(error: e) => io_kind_name(e.kind),\n    }\n}\n\nfn main(p: ProcessCap, io: IoCap, t: TimeCap) -> Int ! { io } {\n    let args = strs_new();\n    strs_push(args, \"-c\");\n    strs_push(args, \"echo $GREETING from $(basename $(pwd -P)); exit 4\");\n    let env = strs_new();\n    strs_push(env, \"GREETING=hello\");\n    strs_push(env, \"PATH=/usr/bin:/bin\");\n    match process_spawn_in(p, \"sh\", args, \"sub\", env) {\n        Result.Ok(value: c) => {\n            match file_read_rest(process_stdout(c)) {\n                Result.Ok(value: b) => { print(bytes_to_str(b)); },\n                Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n            };\n            let deadline = time_deadline(t, 30000);\n            print(f\"waited {status(process_wait_until(c, deadline))} {status(process_try_wait(c))}\\n\");\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    let sleeper = strs_new();\n    strs_push(sleeper, \"30\");\n    match process_spawn_with(p, \"sleep\", sleeper, \"\", env, true, true) {\n        Result.Ok(value: c) => {\n            let g = process_child_id(c);\n            eprint(str_concat(str_concat(\"group \", int_to_str(g)), \"\\n\"));\n            let soon = time_deadline(t, 50);\n            print(f\"sleeping {status(process_try_wait(c))} {status(process_wait_until(c, soon))}\\n\");\n            match process_kill_group(p, g, 9) {\n                Result.Ok(value: z) => { print(f\"killed {z}\\n\"); },\n                Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n            };\n            match process_wait(c) {\n                Result.Ok(value: s) => { print(f\"ended {s}\\n\"); },\n                Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n            };\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match process_spawn_in(p, \"env\", strs_new(), \"\", strs_new()) {\n        Result.Ok(value: c) => {\n            match file_read_rest(process_stdout(c)) {\n                Result.Ok(value: b) => { print(f\"empty environment [{bytes_to_str(b)}]\\n\"); },\n                Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n            };\n            process_wait(c);\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    print(f\"id {process_id(io) > 1}\\n\");\n    0\n}\n";
+
+@test
+fn the_process_library_wraps_them_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, LIBRARY, scripted(), SCRIPTED)?;
+    groups_gone(h, runs)?;
+    alike(runs, 0, "hello from sub\nwaited 4 4\nsleeping running running\nkilled 0\nended 265\nempty environment []\nid true\n0")?;
+    ok()
+}
+
+const PEAK: Str = "use \"@std/ioerror\";\nuse \"@std/process\";\n\nfn main(p: ProcessCap, io: IoCap) -> Int ! { io } {\n    let args = strs_new();\n    strs_push(args, \"-c\");\n    strs_push(args, \"exit 0\");\n    match process_spawn_with(p, \"sh\", args, \"\", strs_new(), false, true) {\n        Result.Ok(value: c) => {\n            process_wait(c);\n            match process_peak_memory(c) {\n                Result.Ok(value: m) => { print(f\"peak {m > 0}\\n\"); },\n                Result.Err(error: e) => { print(f\"peak {io_kind_name(e.kind)}\\n\"); },\n            };\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    0\n}\n";
+
+@test
+fn a_child_s_peak_memory_is_known_natively_once_it_has_ended(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The interpreter's answer is an error, whose message is a string a count is not: the
+    // implementations agree on what each says, and each reclaims all it made.
+    for run1 in runs_in(h, PEAK, strs_new(), "")? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        let want = if who == "interpreter" { "peak Other\n0" } else { "peak true\n0" };
+        check_that(text_trim_end(r.stdout) == want, who)?;
+        let line = memory_line(r);
+        check_that(count_matches(line, "live=0") == 4, who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn starting_a_child_anywhere_and_signalling_a_group_need_a_process_cap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs2 = strs_new();
+    strs_push(srcs2, "fn main(io: IoCap) -> Int ! { io } { os_status(os_spawn_in(\"ls\", strs_new(), \"\", strs_new())) }\n");
+    strs_push(srcs2, "fn main(io: IoCap) -> Int ! { io } { os_status(os_spawn_with(\"ls\", strs_new(), \"\", strs_new(), 0)) }\n");
+    strs_push(srcs2, "fn main(io: IoCap) -> Int ! { io } { os_kill_group(2, 0) }\n");
+    strs_push(srcs2, "fn main() -> Int ! { io } { os_pid() }\n");
+    strs_push(srcs2, "fn main(p: ProcessCap, io: IoCap) -> Int ! { io } { os_status(os_spawn_in(\"ls\", strs_new(), read_file(\"cfg\"), strs_new())) }\n");
+    strs_push(srcs2, "fn main(p: ProcessCap, io: IoCap) -> Int ! { io } { os_status(os_spawn_with(read_file(\"cfg\"), strs_new(), \"\", strs_new(), 0)) }\n");
+    let codes2 = strs_new();
+    strs_push(codes2, "N0369");
+    strs_push(codes2, "N0369");
+    strs_push(codes2, "N0369");
+    strs_push(codes2, "N0369");
+    strs_push(codes2, "N0372");
+    strs_push(codes2, "N0372");
+    let mut k2 = 0 - 1;
+    for src in srcs2 {
+        k2 = k2 + 1;
+        let code = strs_get(codes2, k2);
+        check_that(strs_has(codes(h, src), code), src)?;
+    
+    }
+    // A child already started is its handle's own authority.
+    let held = "fn look(h: OsHandle) -> Int ! { io } { os_child_pid(h) + os_try_wait(h) + os_wait_until(h, 0) + os_child_rusage(h) }\nfn main(p: ProcessCap) -> Int ! { io } { look(os_spawn_in(\"ls\", strs_new(), \"\", strs_new())) }\n";
+    check_that((strs_len(codes(h, held)) == 0), "assert!((strs_len(codes(h, held)) == 0), \"{:?}\", codes(held));")?;
+    ok()
+}
+

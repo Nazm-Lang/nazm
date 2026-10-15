@@ -1,0 +1,95 @@
+// "Every implementation agrees" as several Rust test files write it for themselves (R7):
+// `traits.rs`, `usability.rs` — files written into one directory (their directories made), the
+// first interpreted and built by LLVM at `-O0` and `-O2` and by Cranelift, each native run with the
+// memory report on; every run prints the same and exits the same, every native one reclaims its
+// sequences, strings and channels.
+
+use "@std/text"
+use "run.nz"
+use "scratch.nz"
+use "strings.nz"
+use "port.nz"
+use "differential.nz"
+
+/// `files` (name, text, name, text, …) written under a fresh directory, a name's directories made.
+pub fn files_dir(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        let rel = strs_get(files, i);
+        let parts = text_split(rel, "/");
+        let mut at = "";
+        let mut k = 0;
+        while k + 1 < strs_len(parts) {
+            at = if str_len(at) == 0 { strs_get(parts, k) } else { f"{at}/{strs_get(parts, k)}" };
+            scratch_mkdir(h, d, at)?;
+            k = k + 1;
+        }
+        scratch_write(h, d, rel, strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+/// The program at `dir/main` under the interpreter, then built and run by each backend at each
+/// optimisation level, with the memory report on: `everywhere(dir, main)`.
+pub fn everywhere_at(h: Caps, dir: Str, main: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let out = vec_new[Labeled]();
+    let ia = words("run --interpret");
+    strs_push(ia, main);
+    vec_push(out, Labeled(label: "interpreter", ran: nazm(h, dir, ia)));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)}");
+        strs_push(a, main);
+        strs_push(a, "-o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(out, Labeled(label: who, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn agrees_in(h: Caps, d: Str, main: Str, expected: Str, code: Int) -> Result[Int, Str] ! { io, spawn } {
+    for run_ in everywhere_at(h, d, main)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == code, f"{who}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == expected, f"{who}: {r.stdout}")?;
+        if who != "interpreter" {
+            let line = memory_line(r);
+            check_that(str_len(line) > 0, f"{who}: no memory report: {r.stderr}")?;
+            for kind in words("sequences strings channels") {
+                let parts = text_split(line, kind);
+                let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+                check_that(text_contains(part, "live=0"), f"{who}: {kind} not all reclaimed: {line}")?;
+            }
+        }
+    }
+    ok()
+}
+
+/// Every implementation prints `expected` and exits with `code`; every native build reclaims all
+/// it allocated: `agrees_on(files, expected, code)`.
+pub fn agrees_files(h: Caps, files: Strs, expected: Str, code: Int) -> Result[Int, Str] ! { io, spawn } {
+    let d = files_dir(h, files)?;
+    let r = agrees_in(h, d, strs_get(files, 0), expected, code);
+    scratch_remove(h, d);
+    r
+}
+
+/// `agrees_files` for `prog.nz` holding `src`, exiting 0.
+pub fn agrees_prog(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let f = strs_new();
+    strs_push(f, "prog.nz");
+    strs_push(f, src);
+    agrees_files(h, f, expected, 0)
+}

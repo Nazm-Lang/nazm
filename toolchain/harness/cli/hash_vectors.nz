@@ -1,0 +1,172 @@
+// SHA-256 and BLAKE3 against their published vectors: the short ones everywhere (the
+// interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, Cranelift), the long ones natively, each
+// hashed whole and fed in uneven pieces. Ported from `crates/nazm-cli/tests/hash_vectors.rs` (R7).
+
+use "@std/text"
+use "@std/blake3"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// SHA-256 of FIPS 180-4's example messages, `message:digest`; then of `i % 251` for `i` below
+/// each length, around the padding's boundaries; BLAKE3's official vectors (the default hash's
+/// first 32 bytes) for the same ramp; and FIPS 180-4's one million `a`s.
+const SHA256_FIPS: Str = "abc:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad :e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq:248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1 abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu:cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1";
+
+const SHA256_RAMP: Str = "55:463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59 56:da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562 57:2fe741af801cc238602ac0ec6a7b0c3a8a87c7fc7d7f02a3fe03d1c12eac4d8f 63:29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488 64:fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108 65:4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781 119:da18797ed7c3a777f0847f429724a2d8cd5138e6ed2895c3fa1a6d39d18f7ec6 120:f52b23db1fbb6ded89ef42a23ce0c8922c45f25c50b568a93bf1c075420bbb7c 1000:4e4c294b331f7a2099a379bec34b9f9fc03dc46ab465d998f4d683da53487e6d";
+
+const BLAKE3: Str = "0:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262 1:2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213 63:e9bc37a594daad83be9470df7f7b3798297c3d834ce80ba85d6e207627b7db7b 64:4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98 65:de1e5fa0be70df6d2be8fffd0e99ceaa8eb6e8c93a63f2d8d1c30ecb6b263dee 1023:10108970eeda3eb932baac1428c7a2163b0e924c9a9e25b35bba72b28f70bd11 1024:42214739f095a406f3fc83deb889744ac00df831c10daa55189b5d121c855af7 1025:d00278ae47eb27b34faecf67b4fe263f82d5412916c1ffd97c8cb7fb814b8444 2048:e776b6028c7cd22a4d0ba182a8bf62205d2ef576467e838ed6f2529b85fba24a 2049:5f4d72f40d7a5f82b15ca2b2e44b1de3c2ef86c426c95c1af0b6879522563030 3072:b98cb0ff3623be03326b373de6b9095218513e64f1ee2edd2525c7ad1e5cffd2 3073:7124b49501012f81cc7f11ca069ec9226cecb8a2c850cfe644e327d22d3e1cd3 4096:015094013f57a5277b59d8475c0501042c0b642e531b0a1c8f58d2163229e969 4097:9b4052b38f1c5fc8b1f9ff7ac7b27cd242487b3d890d15c96a1c25b8aa0fb995 5120:9cadc15fed8b5d854562b26a9536d9707cadeda9b143978f319ab34230535833 5121:628bd2cb2004694adaab7bbd778a25df25c47b9d4155a55f8fbd79f2fe154cff 6144:3e2e5b74e048f3add6d21faab3f83aa44d3b2278afb83b80b3c35164ebeca205 6145:f1323a8631446cc50536a9f705ee5cb619424d46887f3c376c695b70e0f0507f 7168:61da957ec2499a95d6b8023e2b0e604ec7f6b50e80a9678b89d2628e99ada77a 7169:a003fc7a51754a9b3c7fae0367ab3d782dccf28855a03d435f8cfe74605e7817 8192:aae792484c8efe4f19e2ca7d371d8c467ffb10748d8a5a1ae579948f718a2a63 8193:bab6c09cb8ce8cf459261398d2e7aef35700bf488116ceb94a36d0f5f1b7bc3b 16384:f875d6646de28985646f34ee13be9a576fd515f76b5b0a26bb324735041ddde4 31744:62b6960e1a44bcc1eb1a611a8d6235b6b4b78f32e7abc4fb4c6cdcce94895c47 102400:bc3e3d41a1146b069abffad3c0d44860cf664390afce4d9661f7902e7943e085";
+
+const PRELUDE: Str = "use \"@std/sha256\";\nuse \"@std/blake3\";\n\nfn ramp(n: Int) -> Bytes {\n    let b = bytes_new(n);\n    for i in 0..n { bytes_set(b, i, UInt8(i % 251)); }\n    b\n}\n\nfn hex(d: Bytes) -> Str {\n    let digits = \"0123456789abcdef\";\n    let out = bytes_new(2 * bytes_len(d));\n    for i in 0..bytes_len(d) {\n        let b = Int(bytes_get(d, i));\n        bytes_set(out, 2 * i, UInt8(str_byte(digits, b >> 4)));\n        bytes_set(out, 2 * i + 1, UInt8(str_byte(digits, b & 15)));\n    }\n    bytes_to_str(out)\n}\n\n// Pieces of 1, 63, 64, 65, 1000 and 7 bytes, over and over.\nfn piece(k: Int) -> Int {\n    let sizes = [1, 63, 64, 65, 1000, 7];\n    sizes[k % 6]\n}\n\nfn sha256_pieces(data: Bytes) -> Str {\n    let h = sha256_new();\n    let mut at = 0;\n    let mut k = 0;\n    while at < bytes_len(data) {\n        let end = if at + piece(k) < bytes_len(data) { at + piece(k) } else { bytes_len(data) };\n        sha256_update(h, bytes_slice(data, at, end));\n        // Finishing leaves the hasher as it was.\n        sha256_finish(h);\n        at = end;\n        k = k + 1;\n    }\n    hex(sha256_finish(h))\n}\n\nfn blake3_pieces(data: Bytes) -> Str {\n    let h = blake3_new();\n    let mut at = 0;\n    let mut k = 0;\n    while at < bytes_len(data) {\n        let end = if at + piece(k) < bytes_len(data) { at + piece(k) } else { bytes_len(data) };\n        blake3_update(h, bytes_slice(data, at, end));\n        blake3_finish(h);\n        at = end;\n        k = k + 1;\n    }\n    hex(blake3_finish(h))\n}\n";
+
+const SHA256_MILLION_A: Str = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+
+/// The longest BLAKE3 input every implementation is asked for: past three chunks, so the
+/// interpreter merges subtrees too.
+const SHORT_LIMIT: Int = 3073;
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// A table's `key:digest` entries, the key before the colon.
+fn key_of(entry: Str) -> Str ! {} {
+    strs_get(text_split(entry, ":"), 0)
+}
+
+fn digest_of(entry: Str) -> Str ! {} {
+    strs_get(text_split(entry, ":"), 1)
+}
+
+/// The BLAKE3 entries at or below (`short`) or above the limit, as `print` lines and wanted lines.
+fn blake3_lines(short: Bool, main: Strs, want: Strs) -> Int ! {} {
+    for e in words(BLAKE3) {
+        let n = parse_usize(key_of(e));
+        if (n <= SHORT_LIMIT) == short {
+            strs_push(main, f"    print(f\"blake3 {n} {{blake3_hex(ramp({n}))}} {{blake3_pieces(ramp({n}))}}\\n\");");
+            strs_push(want, f"blake3 {n} {digest_of(e)} {digest_of(e)}");
+        }
+    }
+    0
+}
+
+/// A program printing the short vectors, and what it should print.
+fn short_program() -> (Str, Str) ! {} {
+    let main = strs_new();
+    let want = strs_new();
+    strs_push(main, "fn main(io: IoCap) -> Int ! {io} {");
+    for e in text_split(SHA256_FIPS, " ") {
+        strs_push(main, f"    print(f\"sha256 {{sha256_hex(bytes_from_str(\"{key_of(e)}\"))}}\\n\");");
+        strs_push(want, f"sha256 {digest_of(e)}");
+    }
+    for e in words(SHA256_RAMP) {
+        let n = key_of(e);
+        strs_push(main, f"    print(f\"sha256 {n} {{hex(sha256(ramp({n})))}} {{sha256_pieces(ramp({n}))}}\\n\");");
+        strs_push(want, f"sha256 {n} {digest_of(e)} {digest_of(e)}");
+    }
+    blake3_lines(true, main, want);
+    strs_push(main, "    0\n}\n");
+    strs_push(want, "0\n");
+    (f"{PRELUDE}\n{str_join(main, "\n")}", str_join(want, "\n"))
+}
+
+/// A program printing the long vectors, and what it should print.
+fn long_program() -> (Str, Str) ! {} {
+    let main = strs_new();
+    let want = strs_new();
+    strs_push(main, "fn main(io: IoCap) -> Int ! {io} {\n    let a = bytes_new(1000);\n    for i in 0..1000 { bytes_set(a, i, UInt8(97)); }\n    let h = sha256_new();\n    for i in 0..1000 { sha256_update(h, a); }\n    let million = bytes_new(1000000);\n    for i in 0..1000000 { bytes_set(million, i, UInt8(97)); }\n    print(f\"sha256 million {hex(sha256_finish(h))} {hex(sha256(million))}\\n\");");
+    strs_push(want, f"sha256 million {SHA256_MILLION_A} {SHA256_MILLION_A}");
+    blake3_lines(false, main, want);
+    strs_push(main, "    0\n}\n");
+    strs_push(want, "0\n");
+    (f"{PRELUDE}\n{str_join(main, "\n")}", str_join(want, "\n"))
+}
+
+/// Build `prog.nz` in `dir` with each native backend named (`who:backend:opt`), and run it.
+fn native_runs(h: Caps, dir: Str, which: Strs, runs: Vec[Labeled]) -> Result[Int, Str] ! { io, spawn } {
+    for spec in which {
+        let parts = text_split(spec, ":");
+        let who = strs_get(parts, 0);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, dir, words(f"build --no-cache --backend {strs_get(parts, 1)} --opt-level {strs_get(parts, 2)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(runs, Labeled(label: who, ran: bounded_exe(h, exe, dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))));
+    }
+    ok()
+}
+
+fn assert_runs(runs: Vec[Labeled], want: Str) -> Result[Int, Str] ! {} {
+    for run_ in runs {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {ran_show(r)}")?;
+        check_that(r.stdout == want, f"{who}: {r.stdout}")?;
+        if who != "lir oracle" {
+            let line = memory_line(r);
+            check_that(str_len(line) > 0, f"{who}: no memory report: {ran_show(r)}")?;
+            for w in split_whitespace(line) {
+                check_that(!text_starts_with(w, "live=") || w == "live=0", f"{who}: {line}")?;
+            }
+        }
+    }
+    ok()
+}
+
+/// `i % 251` for `i` below `n`.
+fn ramp(n: Int) -> Bytes ! {} {
+    let b = bytes_new(n);
+    let mut i = 0;
+    while i < n {
+        bytes_set(b, i, UInt8(i % 251));
+        i = i + 1;
+    }
+    b
+}
+
+@test
+fn the_embedded_blake3_vectors_are_the_reference_implementations(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The Rust test computes each with the `blake3` crate; here `@std/blake3` of the release
+    // building the harness stands for it (a different implementation from the tree's, so a
+    // table entry wrong in a way both the tree and the crate agree on is still caught).
+    for e in words(BLAKE3) {
+        let n = parse_usize(key_of(e));
+        check_that(blake3_hex(ramp(n)) == digest_of(e), key_of(e))?;
+    }
+    ok()
+}
+
+fn short_in(h: Caps, d: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let runs = vec_new[Labeled]();
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    vec_push(runs, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
+    vec_push(runs, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
+    native_runs(h, d, text_split("llvm -O0:llvm:0|llvm -O2:llvm:2|cranelift:cranelift:0", "|"), runs)?;
+    assert_runs(runs, want)
+}
+
+@test
+fn the_short_vectors_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (program, want) = short_program();
+    let d = prog_dir(h, "prog.nz", program)?;
+    let got = short_in(h, d, want);
+    scratch_remove(h, d);
+    got
+}
+
+fn long_in(h: Caps, d: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let runs = vec_new[Labeled]();
+    native_runs(h, d, text_split("llvm -O2:llvm:2|cranelift:cranelift:0", "|"), runs)?;
+    assert_runs(runs, want)
+}
+
+@test
+fn the_long_vectors_hold_natively(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (program, want) = long_program();
+    let d = prog_dir(h, "prog.nz", program)?;
+    let got = long_in(h, d, want);
+    scratch_remove(h, d);
+    got
+}

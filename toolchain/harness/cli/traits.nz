@@ -1,0 +1,549 @@
+// Traits: what they mean, the same in every implementation; what they refuse, by name; and what
+// the tools see of them — occurrences, references, the interface. Ported from
+// `crates/nazm-cli/tests/traits.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/agree.nz"
+use "../lib/differential.nz"
+
+/// The codes `nazm check --json` reports on standard error for the program `files[0]`, in order
+/// (only a line's own `code`, as this Rust file's `check_codes` reads them).
+fn codes_pairs(h: Caps, files: Strs) -> Strs ! { io, spawn } {
+    let out = strs_new();
+    let d = match files_dir(h, files) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => {
+            return out;
+        },
+    };
+    let r = nazm(h, d, words(f"check --json {strs_get(files, 0)}"));
+    scratch_remove(h, d);
+    for l in lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                let c = jq(doc, "code");
+                if c >= 0 {
+                    match json_str(doc, c) {
+                        Option.Some(value: s) => strs_push(out, s),
+                        Option.None() => 0,
+                    };
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    out
+}
+
+/// The occurrences of a `nazm units` unit as `kind|item.member` strings.
+fn occurrence_kinds(unit: JsonDoc) -> Strs ! {} {
+    let out = strs_new();
+    let n = jq(unit, "occurrences");
+    if n < 0 {
+        return out;
+    }
+    let mut i = 0;
+    while i < json_len(unit, n) {
+        let kind = jstr(unit, f"occurrences/{i}/target/kind");
+        let item = jstr(unit, f"occurrences/{i}/target/item");
+        let member = jstr(unit, f"occurrences/{i}/target/member");
+        let shown = if str_len(member) > 0 { f"{item}.{member}" } else { item };
+        strs_push(out, f"{kind}|{shown}");
+        i = i + 1;
+    }
+    out
+}
+
+const SHOW: Str = "trait Show {\n    fn show(self: Self) -> Str;\n}\n";
+
+// --- semantics, the same in every implementation ----------------------------------------
+
+@test
+fn a_method_call_on_a_record_an_enum_and_a_builtin_calls_its_impl(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}struct P {{ x: Int, }}\nenum L {{ Red, Green, }}\nimpl Show for P {{ fn show(self: P) -> Str {{ str_concat(\"P\", int_to_str(self.x)) }} }}\nimpl Show for L {{ fn show(self: Self) -> Str {{ match self {{ L.Red() => \"red\", L.Green() => \"green\", }} }} }}\nimpl Show for Int {{ fn show(self: Int) -> Str {{ str_concat(\"#\", int_to_str(self)) }} }}\nfn main(out: OutCap) -> Int {{\nprint(str_concat(P(x: 4).show(), \"\\n\"));\nprint(str_concat(L.Green().show(), \"\\n\"));\nlet n = 7;\nprint(str_concat(n.show(), \"\\n\"));\nprint(str_concat(Show.show(n), \"\\n\"));\n0\n}}\n";
+    agrees_prog(h, src, "P4\ngreen\n#7\n#7\n0")?;
+    ok()
+}
+
+@test
+fn a_call_through_a_bound_runs_the_instances_impl_through_two_generic_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}struct P {{ x: Int, }}\nimpl Show for P {{ fn show(self: P) -> Str {{ int_to_str(self.x) }} }}\nimpl Show for Bool {{ fn show(self: Bool) -> Str {{ if self {{ \"yes\" }} else {{ \"no\" }} }} }}\nfn twice[T: Show](x: T) -> Str {{ str_concat(x.show(), Show.show(x)) }}\nfn outer[U: Show](u: U) -> Str {{ str_concat(\"<\", str_concat(twice(u), \">\")) }}\nfn main(out: OutCap) -> Int {{\nprint(str_concat(outer(P(x: 3)), \"\\n\"));\nprint(str_concat(outer(true), \"\\n\"));\nstr_len(twice(false))\n}}\n";
+    let l1 = strs_new();
+    strs_push(l1, "prog.nz");
+    strs_push(l1, src);
+    agrees_files(h, l1, "<33>\n<yesyes>\n4", 0)?;
+    ok()
+}
+
+@test
+fn a_method_takes_arguments_and_returns_any_type(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "trait Area { fn area(self: Self, scale: Int) -> Int; fn named(self: Self) -> Bool; }\nstruct Sq { s: Int, }\nimpl Area for Sq {\nfn area(self: Sq, scale: Int) -> Int { self.s * self.s * scale }\nfn named(self: Sq) -> Bool { self.s > 1 }\n}\nfn total[T: Area](a: T, b: T) -> Int { a.area(1) + b.area(2) }\nfn main() -> Int { let q = Sq(s: 3); if q.named() { total(q, Sq(s: 2)) } else { 0 } }\n";
+    let l2 = strs_new();
+    strs_push(l2, "prog.nz");
+    strs_push(l2, src);
+    agrees_files(h, l2, "17", 0)?;
+    ok()
+}
+
+@test
+fn a_standard_trait_shows_a_vector_of_a_programs_own_records(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "use \"@std/show\";\nstruct P { x: Int, }\nimpl Show for P { fn show(self: P) -> Str { str_concat(\"P\", int_to_str(self.x)) } }\nfn main(io: IoCap, tasks: SpawnCap) -> Int {\nlet v = vec_new[P]();\nvec_push(v, P(x: 1));\nvec_push(v, P(x: 2));\nlet w = vec_new[Int]();\nvec_push(w, 3);\nvec_push(w, 4);\nprint(str_concat(show_all(v, \", \"), \"\\n\"));\nprint(str_concat(show_all(w, \"|\"), \"\\n\"));\nprint(str_concat(true.show(), \"\\n\"));\n0\n}\n";
+    agrees_prog(h, src, "P1, P2\n3|4\ntrue\n0")?;
+    ok()
+}
+
+@test
+fn traits_and_impls_cross_modules_and_aliases(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The trait in one module, the type and its impl in another, the call in a third under an
+    // alias.
+    let shape = "pub trait Shape { fn sides(self: Self) -> Int; }\n";
+    let tri = "use \"shape.nz\";\npub struct Tri { a: Int, }\nimpl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }\n";
+    let main = "use \"shape.nz\" as s;\nuse \"tri.nz\";\nfn main() -> Int { let t = Tri(a: 1); t.sides() + s::Shape.sides(t) }\n";
+    let l3 = strs_new();
+    strs_push(l3, "main.nz");
+    strs_push(l3, main);
+    strs_push(l3, "shape.nz");
+    strs_push(l3, shape);
+    strs_push(l3, "tri.nz");
+    strs_push(l3, tri);
+    agrees_files(h, l3, "6", 0)?;
+    ok()
+}
+
+@test
+fn an_imported_impls_method_is_checked_against_its_traits_effects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // M1: a direct or UFCS call of a method whose impl is in another module was taken for a call
+    // of an undeclared function, and every effect assumed of it — so a caller declaring `! {}`
+    // was refused (`N0366`) for calling a method its trait declares pure. Its contract is its
+    // trait method's, the set the impl is held to.
+    let lib = "pub trait Show { fn show(self: Self) -> Str ! {}; }\npub trait Say { fn say(self: Self, out: OutCap) -> Int ! {io}; }\npub struct P { x: Int, }\nimpl Show for P { fn show(self: P) -> Str ! {} { int_to_str(self.x) } }\nimpl Show for Int { fn show(self: Int) -> Str ! {} { int_to_str(self) } }\nimpl Say for P { fn say(self: P, out: OutCap) -> Int ! {io} { print(\"P\\n\") } }\n";
+    let main = "use \"lib.nz\";\nfn direct(p: P) -> Str ! {} { p.show() }\nfn named(p: P) -> Str ! {} { Show.show(p) }\nfn builtin(n: Int) -> Str ! {} { n.show() }\nfn main() -> Int { str_len(direct(P(x: 7))) + str_len(named(P(x: 10))) + str_len(builtin(123)) }\n";
+    let l4 = strs_new();
+    strs_push(l4, "main.nz");
+    strs_push(l4, main);
+    strs_push(l4, "lib.nz");
+    strs_push(l4, lib);
+    agrees_files(h, l4, "6", 0)?;
+    // Checked from the dependency's persisted interface too: the second check reads it.
+    let d = scratch_new(h);
+    scratch_write(h, d, "lib.nz", lib)?;
+    scratch_write(h, d, "main.nz", main)?;
+    let passs5 = strs_new();
+    strs_push(passs5, "cold");
+    strs_push(passs5, "cached");
+    for pass in passs5 {
+        let r = nazm(h, d, words("check main.nz"));
+        check_that(r.code == 0, ran_show(r))?;
+    
+    }
+    // And the contract is still enforced: a method its trait declares `! {io}` is not pure.
+    let impure = "use \"lib.nz\";\nfn quiet(p: P, out: OutCap) -> Int ! {} { p.say(out) }\nfn main() -> Int { 0 }\n";
+    let l7 = strs_new();
+    strs_push(l7, "main.nz");
+    strs_push(l7, impure);
+    strs_push(l7, "lib.nz");
+    strs_push(l7, lib);
+    let w8 = strs_new();
+    strs_push(w8, "N0366");
+    same_strs("codes", codes_pairs(h, l7), w8)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- refusals, each by its own code -------------------------------------------------------
+
+@test
+fn two_impls_of_one_trait_for_one_type_are_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}struct P {{ x: Int, }}\nimpl Show for P {{ fn show(self: P) -> Str {{ \"a\" }} }}\nimpl Show for P {{ fn show(self: P) -> Str {{ \"b\" }} }}\nfn main() -> Int {{ 0 }}\n";
+    let l9 = strs_new();
+    strs_push(l9, "prog.nz");
+    strs_push(l9, src);
+    check_that(strs_has(codes_pairs(h, l9), "N0600"), "assert!(strs_has(codes_pairs(h, l9), \"N0600\"));")?;
+    ok()
+}
+
+@test
+fn an_impl_in_a_third_module_is_an_orphan(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let shape = "pub trait Shape { fn sides(self: Self) -> Int; }\n";
+    let tri = "pub struct Tri { a: Int, }\n";
+    let main = "use \"shape.nz\";\nuse \"tri.nz\";\nimpl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }\nfn main() -> Int { 0 }\n";
+    let l11 = strs_new();
+    strs_push(l11, "main.nz");
+    strs_push(l11, main);
+    strs_push(l11, "shape.nz");
+    strs_push(l11, shape);
+    strs_push(l11, "tri.nz");
+    strs_push(l11, tri);
+    let w12 = strs_new();
+    strs_push(w12, "N0601");
+    same_strs("codes", codes_pairs(h, l11), w12)?;
+    // And for a built-in type, only the trait's module may.
+    let main_2 = "use \"shape.nz\";\nimpl Shape for Int { fn sides(self: Int) -> Int { self } }\nfn main() -> Int { 0 }\n";
+    let l14 = strs_new();
+    strs_push(l14, "main.nz");
+    strs_push(l14, main_2);
+    strs_push(l14, "shape.nz");
+    strs_push(l14, shape);
+    let w15 = strs_new();
+    strs_push(w15, "N0601");
+    same_strs("codes", codes_pairs(h, l14), w15)?;
+    ok()
+}
+
+@test
+fn an_impl_must_define_exactly_its_traits_methods_with_its_signatures(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let two = "trait T { fn a(self: Self) -> Int; fn b(self: Self, n: Int) -> Int; }\nstruct P { x: Int, }\n";
+    let missing = f"{two}impl T for P {{ fn a(self: P) -> Int {{ 1 }} }}\nfn main() -> Int {{ 0 }}\n";
+    let l17 = strs_new();
+    strs_push(l17, "p.nz");
+    strs_push(l17, missing);
+    let w18 = strs_new();
+    strs_push(w18, "N0602");
+    same_strs("codes", codes_pairs(h, l17), w18)?;
+    let extra = f"{two}impl T for P {{ fn a(self: P) -> Int {{ 1 }} fn b(self: P, n: Int) -> Int {{ n }} fn c(self: P) -> Int {{ 0 }} }}\nfn main() -> Int {{ 0 }}\n";
+    let l20 = strs_new();
+    strs_push(l20, "p.nz");
+    strs_push(l20, extra);
+    let w21 = strs_new();
+    strs_push(w21, "N0603");
+    same_strs("codes", codes_pairs(h, l20), w21)?;
+    let wrong = f"{two}impl T for P {{ fn a(self: P) -> Int {{ 1 }} fn b(self: P, n: Str) -> Int {{ 0 }} }}\nfn main() -> Int {{ 0 }}\n";
+    let l23 = strs_new();
+    strs_push(l23, "p.nz");
+    strs_push(l23, wrong);
+    let w24 = strs_new();
+    strs_push(w24, "N0603");
+    strs_push(w24, "N0602");
+    same_strs("codes", codes_pairs(h, l23), w24)?;
+    let effects = "trait T { fn a(self: Self) -> Int; }\nstruct P { x: Int, }\nimpl T for P { fn a(self: P) -> Int ! {io} { print(\"x\"); 1 } }\nfn main() -> Int { 0 }\n";
+    let l25 = strs_new();
+    strs_push(l25, "p.nz");
+    strs_push(l25, effects);
+    check_that(strs_has(codes_pairs(h, l25), "N0603"), "assert!(strs_has(codes_pairs(h, l25), \"N0603\"));")?;
+    ok()
+}
+
+@test
+fn an_impl_for_a_type_that_cannot_have_one_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let tys26 = strs_new();
+    strs_push(tys26, "Vec[Int]");
+    strs_push(tys26, "Chan");
+    strs_push(tys26, "IoCap");
+    strs_push(tys26, "Box[Int]");
+    for ty in tys26 {
+        let src = f"{SHOW}struct Box[T] {{ v: T, }}\nimpl Show for {ty} {{ fn show(self: Self) -> Str {{ \"\" }} }}\nfn main() -> Int {{ 0 }}\n";
+        let l28 = strs_new();
+        strs_push(l28, "p.nz");
+        strs_push(l28, src);
+        let w29 = strs_new();
+        strs_push(w29, "N0604");
+        same_strs("codes", codes_pairs(h, l28), w29)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_number_of_any_width_has_impls_and_its_methods_run_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Gate 2 §7: `@std/hash` implements `Hash` for every integer type, so an impl is for any
+    // number, as one was for `Int` — called directly, by UFCS and through a bound.
+    let src = f"{SHOW}impl Show for UInt8 {{ fn show(self: UInt8) -> Str {{ str_concat(\"u8:\", num_to_str(self)) }} }}\nimpl Show for Int32 {{ fn show(self: Int32) -> Str {{ str_concat(\"i32:\", num_to_str(self)) }} }}\nimpl Show for Float64 {{ fn show(self: Float64) -> Str {{ str_concat(\"f64:\", num_to_str(self)) }} }}\nfn twice[T: Show](x: T) -> Str {{ str_concat(x.show(), x.show()) }}\nfn main(out: OutCap) -> Int {{\nlet b = UInt8(200);\nprint(str_concat(b.show(), \"\\n\"));\nprint(str_concat(Show.show(Int32(0 - 5)), \"\\n\"));\nprint(str_concat(twice(1.5), \"\\n\"));\n0\n}}\n";
+    agrees_prog(h, src, "u8:200\ni32:-5\nf64:1.5f64:1.5\n0")?;
+    ok()
+}
+
+@test
+fn a_method_no_trait_in_scope_gives_is_refused_and_two_are_ambiguous(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}struct P {{ x: Int, }}\nfn main() -> Int {{ str_len(P(x: 1).show()) }}\n";
+    let l31 = strs_new();
+    strs_push(l31, "p.nz");
+    strs_push(l31, src);
+    let w32 = strs_new();
+    strs_push(w32, "N0605");
+    same_strs("codes", codes_pairs(h, l31), w32)?;
+    let two = "trait A { fn go(self: Self) -> Int; }\ntrait B { fn go(self: Self) -> Int; }\nimpl A for Int { fn go(self: Int) -> Int { 1 } }\nimpl B for Int { fn go(self: Int) -> Int { 2 } }\n";
+    let src_2 = f"{two}fn main() -> Int {{ 3.go() }}\n";
+    let l34 = strs_new();
+    strs_push(l34, "p.nz");
+    strs_push(l34, src_2);
+    let w35 = strs_new();
+    strs_push(w35, "N0606");
+    same_strs("codes", codes_pairs(h, l34), w35)?;
+    // UFCS chooses.
+    let src_3 = f"{two}fn main() -> Int {{ A.go(3) * 10 + B.go(3) }}\n";
+    let l36 = strs_new();
+    strs_push(l36, "prog.nz");
+    strs_push(l36, src_3);
+    agrees_files(h, l36, "12", 0)?;
+    // A type parameter has its bound's methods and no others.
+    let src_4 = f"{SHOW}fn f[T](x: T) -> Str {{ x.show() }}\nfn main() -> Int {{ 0 }}\n";
+    let l38 = strs_new();
+    strs_push(l38, "p.nz");
+    strs_push(l38, src_4);
+    let w39 = strs_new();
+    strs_push(w39, "N0605");
+    same_strs("codes", codes_pairs(h, l38), w39)?;
+    ok()
+}
+
+@test
+fn an_impl_in_a_module_not_imported_is_not_in_scope(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `main` reaches a `Tri` through `make.nz` without importing `tri.nz`, where the impl is:
+    // the impl is not used, so a cached check of `main` never depends on it.
+    let shape = "pub trait Shape { fn sides(self: Self) -> Int; }\n";
+    let tri = "use \"shape.nz\";\npub struct Tri { a: Int, }\nimpl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }\n";
+    let make = "use \"tri.nz\";\npub fn make() -> Tri { Tri(a: 1) }\n";
+    let main = "use \"shape.nz\";\nuse \"make.nz\";\nfn main() -> Int { make().sides() }\n";
+    let l41 = strs_new();
+    strs_push(l41, "main.nz");
+    strs_push(l41, main);
+    strs_push(l41, "shape.nz");
+    strs_push(l41, shape);
+    strs_push(l41, "tri.nz");
+    strs_push(l41, tri);
+    strs_push(l41, "make.nz");
+    strs_push(l41, make);
+    let w42 = strs_new();
+    strs_push(w42, "N0605");
+    same_strs("codes", codes_pairs(h, l41), w42)?;
+    ok()
+}
+
+@test
+fn an_impl_out_of_scope_is_not_a_candidate_even_when_another_trait_has_the_method(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two traits in scope declare `sides`, and both impls for `Tri` are in a module `main`
+    // does not import: neither is usable, so this is no method, never an ambiguity between
+    // impls the module cannot use.
+    let shape = "pub trait Shape { fn sides(self: Self) -> Int; }\n";
+    let poly = "pub trait Poly { fn sides(self: Self) -> Int; }\n";
+    let tri = "use \"shape.nz\";\nuse \"poly.nz\";\npub struct Tri { a: Int, }\nimpl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }\nimpl Poly for Tri { fn sides(self: Tri) -> Int { 4 } }\n";
+    let make = "use \"tri.nz\";\npub fn make() -> Tri { Tri(a: 1) }\n";
+    let main = "use \"shape.nz\";\nuse \"poly.nz\";\nuse \"make.nz\";\nfn main() -> Int { make().sides() }\n";
+    let l44 = strs_new();
+    strs_push(l44, "main.nz");
+    strs_push(l44, main);
+    strs_push(l44, "shape.nz");
+    strs_push(l44, shape);
+    strs_push(l44, "poly.nz");
+    strs_push(l44, poly);
+    strs_push(l44, "tri.nz");
+    strs_push(l44, tri);
+    strs_push(l44, "make.nz");
+    strs_push(l44, make);
+    let w45 = strs_new();
+    strs_push(w45, "N0605");
+    same_strs("codes", codes_pairs(h, l44), w45)?;
+    ok()
+}
+
+@test
+fn an_enum_keeps_its_variant_calls_beside_an_imported_trait_of_its_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A module may declare an enum `E` and import a trait `E`: `E.A()` is the variant.
+    let t = "pub trait E { fn A(self: Self) -> Int; }\n";
+    let main = "use \"t.nz\";\nenum E { A, B, }\nfn main() -> Int { match E.A() { E.A() => 1, E.B() => 2, } }\n";
+    let l46 = strs_new();
+    strs_push(l46, "main.nz");
+    strs_push(l46, main);
+    strs_push(l46, "t.nz");
+    strs_push(l46, t);
+    agrees_files(h, l46, "1", 0)?;
+    ok()
+}
+
+@test
+fn a_trait_is_not_a_type_and_a_method_is_not_a_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}fn f(s: Show) -> Int {{ 0 }}\nfn main() -> Int {{ 0 }}\n";
+    let l48 = strs_new();
+    strs_push(l48, "p.nz");
+    strs_push(l48, src);
+    let w49 = strs_new();
+    strs_push(w49, "N0607");
+    same_strs("codes", codes_pairs(h, l48), w49)?;
+    let src_2 = f"{SHOW}impl Show for Int {{ fn show(self: Int) -> Str {{ \"\" }} }}\nfn main() -> Int {{ let f = 1.show; 0 }}\n";
+    let l50 = strs_new();
+    strs_push(l50, "p.nz");
+    strs_push(l50, src_2);
+    check_that(strs_has(codes_pairs(h, l50), "N0608"), "assert!(strs_has(codes_pairs(h, l50), \"N0608\"));")?;
+    ok()
+}
+
+@test
+fn a_trait_method_must_take_self_first_and_may_have_a_default_body(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "trait T { fn a(x: Int) -> Int; }\nfn main() -> Int { 0 }\n";
+    let l52 = strs_new();
+    strs_push(l52, "p.nz");
+    strs_push(l52, src);
+    let w53 = strs_new();
+    strs_push(w53, "N0609");
+    same_strs("codes", codes_pairs(h, l52), w53)?;
+    // A default body since R1b (L11); until then a syntax error (`N0100`).
+    let src_2 = "trait T { fn a(self: Self) -> Int { 1 } }\nfn main() -> Int { 0 }\n";
+    let l55 = strs_new();
+    strs_push(l55, "p.nz");
+    strs_push(l55, src_2);
+    let w56 = strs_new();
+    same_strs("codes", codes_pairs(h, l55), w56)?;
+    // Neither `;` nor a body is still one.
+    let src_3 = "trait T { fn a(self: Self) -> Int }\nfn main() -> Int { 0 }\n";
+    let l58 = strs_new();
+    strs_push(l58, "p.nz");
+    strs_push(l58, src_3);
+    let w59 = strs_new();
+    strs_push(w59, "N0100");
+    same_strs("codes", codes_pairs(h, l58), w59)?;
+    ok()
+}
+
+@test
+fn a_bound_or_an_impl_naming_something_else_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "struct P { x: Int, }\nfn f[T: P](x: T) -> Int { 0 }\nfn main() -> Int { 0 }\n";
+    let l61 = strs_new();
+    strs_push(l61, "p.nz");
+    strs_push(l61, src);
+    let w62 = strs_new();
+    strs_push(w62, "N0365");
+    same_strs("codes", codes_pairs(h, l61), w62)?;
+    let src_2 = "struct P { x: Int, }\nimpl P for Int { fn a(self: Int) -> Int { 1 } }\nfn main() -> Int { 0 }\n";
+    let l64 = strs_new();
+    strs_push(l64, "p.nz");
+    strs_push(l64, src_2);
+    let w65 = strs_new();
+    strs_push(w65, "N0610");
+    same_strs("codes", codes_pairs(h, l64), w65)?;
+    let src_3 = "impl Nowhere for Int { fn a(self: Int) -> Int { 1 } }\nfn main() -> Int { 0 }\n";
+    let l67 = strs_new();
+    strs_push(l67, "p.nz");
+    strs_push(l67, src_3);
+    let w68 = strs_new();
+    strs_push(w68, "N0305");
+    same_strs("codes", codes_pairs(h, l67), w68)?;
+    ok()
+}
+
+@test
+fn trait_is_a_keyword_now_and_an_enum_keeps_its_variant_calls(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn trait() -> Int { 1 }\nfn main() -> Int { 0 }\n";
+    let l69 = strs_new();
+    strs_push(l69, "p.nz");
+    strs_push(l69, src);
+    check_that(!(strs_len(codes_pairs(h, l69)) == 0), "assert!(!(strs_len(codes_pairs(h, l69)) == 0));")?;
+    // `E.A()` is still a variant where `E` is an enum, even with a method `A` in scope.
+    let src_2 = "trait T { fn A(self: Self) -> Int; }\nenum E { A, B, }\nimpl T for E { fn A(self: E) -> Int { 9 } }\nfn main() -> Int { match E.A() { E.A() => 1, E.B() => 2, } }\n";
+    let l70 = strs_new();
+    strs_push(l70, "prog.nz");
+    strs_push(l70, src_2);
+    agrees_files(h, l70, "1", 0)?;
+    ok()
+}
+
+// --- what the tools see ---------------------------------------------------------------
+
+@test
+fn a_method_call_refers_to_its_impls_function_and_a_bound_call_to_the_trait_method(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{SHOW}struct P {{ x: Int, }}\nimpl Show for P {{ fn show(self: P) -> Str {{ \"p\" }} }}\nfn f[T: Show](x: T) -> Str {{ x.show() }}\nfn main() -> Int {{ str_len(P(x: 1).show()) + str_len(f(P(x: 2))) }}\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "nazm.root", "")?;
+    scratch_write(h, d, "main.nz", src)?;
+    let units = nazm(h, d, words("resolve main.nz"));
+    check_that(units.code == 0, ran_show(units))?;
+    let unit = jparse(first_line(units.stdout))?;
+    let kinds = occurrence_kinds(unit);
+    check_that(strs_has(kinds, "function|main.nz::fn Show/P/show"), str_join(kinds, ", "))?;
+    check_that(strs_has(kinds, "trait method|main.nz::trait Show.show"), str_join(kinds, ", "))?;
+    check_that(strs_has(kinds, "trait|main.nz::trait Show"), str_join(kinds, ", "))?;
+    let l71 = strs_new();
+    strs_push(l71, "references");
+    strs_push(l71, "main.nz::trait Show");
+    strs_push(l71, "main.nz");
+    let refs = nazm(h, d, l71);
+    let refs_2 = jparse(text_trim(refs.stdout))?;
+    // The bound and the impl's header.
+    check_that(jlen(refs_2, "uses") == 2, jtext(refs_2, ""))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_interface_carries_exported_traits_impls_and_bounds(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "pub trait Show { fn show(self: Self) -> Str; }\npub struct P { x: Int, }\nimpl Show for P { fn show(self: P) -> Str { \"p\" } }\npub fn f[T: Show](x: T) -> Str { x.show() }\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "lib.nz", src)?;
+    let r = nazm(h, d, words("interface lib.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    let v = jparse(text_trim(r.stdout))?;
+    check_that(jstr(v, "schema") == "nazm.interface/13", "assert_eq!(jv(v, \"schema\"), \"nazm.interface/13\");")?;
+    check_that(jstr(v, "traits/0/def") == "lib.nz::trait Show", "assert_eq!(jv(v, \"traits/0/def\"), \"lib.nz::trait Show\");")?;
+    check_that(jstr(v, "impls/0/trait") == "lib.nz::trait Show", "assert_eq!(jv(v, \"impls/0/trait\"), \"lib.nz::trait Show\");")?;
+    check_that(jstr(v, "impls/0/methods/0") == "lib.nz::fn Show/P/show", "assert_eq!(jv(v, \"impls/0/methods/0\"), \"lib.nz::fn Show/P/show\");")?;
+    check_that(jstr(v, "exports/0/requires_traits/0/1") == "lib.nz::trait Show", "assert_eq!(jv(v, \"exports/0/requires_traits/0/1\"), \"lib.nz::trait Show\");")?;
+    // Adding an impl moves the fingerprint, so an importer is checked again.
+    let before = nazm(h, d, words("interface --hash lib.nz")).stdout;
+    scratch_write(h, d, "lib.nz", f"{src}impl Show for Int {{ fn show(self: Int) -> Str {{ \"\" }} }}\n")?;
+    let after = nazm(h, d, words("interface --hash lib.nz")).stdout;
+    check_that(before != after, "assert_ne!(before, after);")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_bound_is_satisfied_by_an_impl_in_scope_or_by_the_same_bound_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // No impl for `P`: refused at the call, by the requirement's own code.
+    let src = f"{SHOW}struct P {{ x: Int, }}\nfn f[T: Show](x: T) -> Str {{ x.show() }}\nfn main() -> Int {{ str_len(f(P(x: 1))) }}\n";
+    let l73 = strs_new();
+    strs_push(l73, "p.nz");
+    strs_push(l73, src);
+    let w74 = strs_new();
+    strs_push(w74, "N0364");
+    same_strs("codes", codes_pairs(h, l73), w74)?;
+    // Forwarding a `T` needs the same bound on the caller's `T`.
+    let src_2 = f"{SHOW}fn f[T: Show](x: T) -> Str {{ x.show() }}\nfn g[U](u: U) -> Str {{ f(u) }}\nfn main() -> Int {{ 0 }}\n";
+    let l76 = strs_new();
+    strs_push(l76, "p.nz");
+    strs_push(l76, src_2);
+    let w77 = strs_new();
+    strs_push(w77, "N0364");
+    same_strs("codes", codes_pairs(h, l76), w77)?;
+    let src_3 = f"{SHOW}fn f[T: Show](x: T) -> Str {{ x.show() }}\nfn g[U: Show](u: U) -> Str {{ f(u) }}\nfn main() -> Int {{ 0 }}\n";
+    let l78 = strs_new();
+    strs_push(l78, "p.nz");
+    strs_push(l78, src_3);
+    check_that((strs_len(codes_pairs(h, l78)) == 0), "assert!((strs_len(codes_pairs(h, l78)) == 0));")?;
+    // A written type argument is held to it too.
+    let src_4 = f"{SHOW}fn f[T: Show](x: T) -> Str {{ x.show() }}\nfn main() -> Int {{ str_len(f[Bool](true)) }}\n";
+    let l80 = strs_new();
+    strs_push(l80, "p.nz");
+    strs_push(l80, src_4);
+    let w81 = strs_new();
+    strs_push(w81, "N0364");
+    same_strs("codes", codes_pairs(h, l80), w81)?;
+    ok()
+}
+

@@ -1,0 +1,445 @@
+// Closures: function values that capture, run everywhere, reclaimed, refused where they would
+// form a cycle. Ported from `crates/nazm-cli/tests/closures.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The closures a memory line says were made: the number after `closures allocated=`.
+fn closures_made(line: Str) -> Int ! {} {
+    let parts = text_split(line, "closures");
+    if strs_len(parts) < 2 {
+        return 0 - 1;
+    }
+    let ws = split_whitespace(strs_get(parts, 1));
+    if strs_len(ws) == 0 {
+        return 0 - 1;
+    }
+    match strip_prefix(strs_get(ws, 0), "allocated=") {
+        Option.Some(value: n) => parse_usize(n),
+        Option.None() => 0 - 1,
+    }
+}
+
+/// `files` (name, text, …) split into names and texts.
+fn names_of(files: Strs, at: Int) -> Strs ! {} {
+    let out = strs_new();
+    let mut i = at;
+    while i < strs_len(files) {
+        strs_push(out, strs_get(files, i));
+        i = i + 2;
+    }
+    out
+}
+
+/// `agrees_on` over `files` given as name, text, name, text.
+fn agrees_pairs(h: Caps, files: Strs, expected: Str, code: Int) -> Result[Str, Str] ! { io, spawn } {
+    agrees_on(h, names_of(files, 0), names_of(files, 1), expected, code)
+}
+
+/// `check_codes` over `files` given as name, text, name, text.
+fn codes_pairs(h: Caps, files: Strs) -> Strs ! { io, spawn } {
+    check_codes(h, names_of(files, 0), names_of(files, 1))
+}
+
+/// The `nazm.check-report/1` line of a run's standard output, read.
+fn report(r: Ran) -> Result[JsonDoc, Str] ! {} {
+    for l in lines(r.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            return jparse(l);
+        }
+    }
+    Result[JsonDoc, Str].Err(error: f"no cache report: {ran_show(r)}")
+}
+
+/// Whether `xs` holds `s`.
+fn strs_has(xs: Strs, s: Str) -> Bool ! {} {
+    for x in xs {
+        if x == s {
+            return true;
+        }
+    }
+    false
+}
+
+// --- values and calls ------------------------------------------------------------------
+
+@test
+fn closures_named_functions_and_indirect_calls_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let line = agrees(h, "\nfn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }\nfn inc(x: Int) -> Int { x + 1 }\nfn make_adder(n: Int) -> fn(Int) -> Int {\n    fn(x: Int) -> Int { x + n }\n}\nfn main(out: OutCap) -> Int {\n    let s = str_concat(\"hel\", \"lo\");\n    let k = 10;\n    let add = make_adder(5);\n    let g = fn(x: Int) -> Int { x * k + str_len(s) };\n    let h = inc;\n    let nested = fn(y: Int) -> Int {\n        let inner = fn(z: Int) -> Int { z + k + y };\n        inner(1)\n    };\n    print(int_to_str(twice(add, 1)));\n    print(int_to_str(twice(g, 2)));\n    print(int_to_str(twice(h, 3)));\n    print(int_to_str(nested(100)));\n    0\n}\n", "1125551110")?;
+    // `add`, `g`, `h`, `nested`, and `inner` once: one object each, every one reclaimed.
+    check_that(closures_made(line) == 5, line)?;
+    ok()
+}
+
+@test
+fn a_capture_is_a_copy_taken_when_the_closure_is_made(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A name bound again in an inner scope after the closure is made changes nothing it
+    // holds; a sequence is a handle, so the copy is of the handle and a push through either
+    // is seen by both.
+    agrees(h, "\nfn main(out: OutCap) -> Int {\n    let n = 1;\n    let xs = ints_new();\n    let f = fn(x: Int) -> Int { x + n + ints_len(xs) };\n    if true {\n        let n = 100;\n        ints_push(xs, 7);\n        print(int_to_str(f(0) + n));\n    }\n    0\n}\n", "1020")?;
+    ok()
+}
+
+@test
+fn function_values_live_in_records_and_vecs_and_compose(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, "\nstruct Op { name: Str, apply: fn(Int) -> Int, }\nfn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int {\n    fn(x: Int) -> Int { g(f(x)) }\n}\nfn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }\nfn fact(n: Int) -> Int { if n <= 1 { 1 } else { n * apply(fact, n - 1) } }\nfn main(out: OutCap) -> Int {\n    let tag = str_concat(\"ab\", \"cd\");\n    let xs = ints_new();\n    ints_push(xs, 3);\n    let len_plus = fn(x: Int) -> Int { x + str_len(tag) + ints_get(xs, 0) };\n    let op = Op(name: tag, apply: len_plus);\n    let fs = vec_new[fn(Int) -> Int]();\n    vec_push(fs, len_plus);\n    vec_push(fs, compose(len_plus, op.apply));\n    let both = vec_get(fs, 1);\n    let ap = op.apply;\n    print(int_to_str(both(1) + ap(0) + fact(5)));\n    0\n}\n", "1420")?;
+    ok()
+}
+
+@test
+fn a_closure_with_managed_results_and_arguments_agrees(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, "\nstruct Pair { a: Str, b: Int, }\nfn main(out: OutCap) -> Int {\n    let sep = str_concat(\", \", \"\");\n    let join = fn(p: Pair, more: Str) -> Pair { Pair(a: str_concat(str_concat(p.a, sep), more), b: p.b + 1) };\n    let mut p = Pair(a: \"x\", b: 0);\n    let mut i = 0;\n    while i < 3 { p = join(p, int_to_str(i)); i = i + 1; }\n    print(p.a);\n    p.b - 3\n}\n", "x, 0, 1, 20")?;
+    ok()
+}
+
+// --- cleanup ---------------------------------------------------------------------------
+
+@test
+fn a_failure_inside_a_closure_reclaims_its_captures_and_its_callers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    strs_push(l1, "prog.nz");
+    strs_push(l1, "\nfn main(out: OutCap) -> Int {\n    let d = 0;\n    let s = str_concat(\"x\", \"y\");\n    let f = fn(x: Int) -> Int { x / d + str_len(s) };\n    let ys = ints_new();\n    ints_push(ys, 1);\n    let r = f(ints_len(ys));\n    print(\"not reached\");\n    r\n}\n");
+    let line = agrees_pairs(h, l1, "", 2)?;
+    check_that(closures_made(line) == 1, line)?;
+    ok()
+}
+
+@test
+fn an_early_return_and_a_loop_release_the_closures_they_made(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let line = agrees(h, "\nfn pick(n: Int) -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    while i < n {\n        let s = str_concat(\"v\", int_to_str(i));\n        let f = fn(x: Int) -> Int { x + str_len(s) };\n        if i == 7 { return total + f(0); }\n        total = total + f(i);\n        i = i + 1;\n    }\n    total\n}\nfn main(out: OutCap) -> Int {\n    print(int_to_str(pick(10)));\n    0\n}\n", "370")?;
+    check_that(closures_made(line) == 8, line)?;
+    ok()
+}
+
+@test
+fn a_returned_closure_keeps_what_it_captured_alive(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The maker's bindings go when it returns; the closure's own references keep the storage.
+    // Allocating after the maker returns would reuse storage a closure had not retained, so a
+    // closure that only borrowed reads someone else's value here.
+    let line = agrees(h, "\nfn make(k: Int) -> fn(Int) -> Str {\n    let xs = ints_new();\n    ints_push(xs, k);\n    let tag = str_concat(\"tag-\", int_to_str(k));\n    fn(i: Int) -> Str { str_concat(tag, int_to_str(ints_get(xs, i))) }\n}\nfn main(out: OutCap) -> Int {\n    let g = make(5);\n    let ys = ints_new();\n    ints_push(ys, 99);\n    let other = str_concat(\"xxxx-\", int_to_str(7));\n    let zs = ints_new();\n    ints_push(zs, 98);\n    print(g(0));\n    print(other);\n    ints_len(ys) + ints_len(zs) - 2\n}\n", "tag-55xxxx-70")?;
+    check_that(closures_made(line) == 1, line)?;
+    ok()
+}
+
+// --- recursion through a value -----------------------------------------------------------
+
+@test
+fn recursion_through_a_function_value_checks_the_stack_natively(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }\nfn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + apply(down, n - 1) } }\nfn main() -> Int { down(100000000) }\n")?;
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let l2 = strs_new();
+        strs_push(l2, "build");
+        strs_push(l2, "--no-cache");
+        strs_push(l2, "--backend");
+        strs_push(l2, backend);
+        strs_push(l2, "prog.nz");
+        strs_push(l2, "-o");
+        strs_push(l2, exe);
+        let b = nazm(h, d, l2);
+        check_that(b.code == 0, ran_show(b))?;
+        let r = bounded_exe(h, exe, "", suite_env(h));
+        check_that(text_contains(r.stderr, "N0408"), backend)?;
+        check_that(r.code >= 0 && r.code < 256, ran_show(r))?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- the standard library ---------------------------------------------------------------
+
+@test
+fn map_filter_and_fold_work_over_records_and_enums(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, "\nuse \"@std/seq\";\nstruct Item { name: Str, cost: Int, }\nenum Size { Small, Large(by: Int), }\nfn size_of(i: Item) -> Size { if i.cost > 10 { Size.Large(by: i.cost - 10) } else { Size.Small() } }\nfn extra(acc: Int, s: Size) -> Int {\n    match s { Size.Small() => acc, Size.Large(by: n) => acc + n, }\n}\nfn main(out: OutCap) -> Int {\n    let items = vec_new[Item]();\n    vec_push(items, Item(name: \"a\", cost: 4));\n    vec_push(items, Item(name: \"b\", cost: 15));\n    vec_push(items, Item(name: \"c\", cost: 30));\n    let limit = 5;\n    let dear = vec_filter(items, fn(i: Item) -> Bool { i.cost > limit });\n    let sizes = vec_map(dear, size_of);\n    let names = vec_map(dear, fn(i: Item) -> Str { i.name });\n    let total = vec_fold(sizes, 0, extra);\n    let joined = vec_fold(names, \"\", fn(acc: Str, s: Str) -> Str { str_concat(acc, s) });\n    print(joined);\n    print(int_to_str(total));\n    0\n}\n", "bc250")?;
+    ok()
+}
+
+// --- across modules ---------------------------------------------------------------------
+
+@test
+fn a_function_type_crosses_a_module_boundary_and_its_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let lib = "pub fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(f(x)) }\npub fn scaler(k: Int) -> fn(Int) -> Int ! {} { fn(x: Int) -> Int { x * k } }\n";
+    let main = "use \"lib.nz\";\nfn main(out: OutCap) -> Int { print(int_to_str(apply_twice(scaler(3), 2))); 0 }\n";
+    let l3 = strs_new();
+    strs_push(l3, "main.nz");
+    strs_push(l3, main);
+    strs_push(l3, "lib.nz");
+    strs_push(l3, lib);
+    agrees_pairs(h, l3, "180", 0)?;
+
+    // The interface publishes the function type, so `main` is reused on a second check. The
+    // library makes a closure, so it files no entry and is checked again every time (Q1-B-C1: a
+    // reused module has no closures, and facts naming one made the next run refuse what a cold
+    // check accepts) — declined, in the report's words.
+    let d = scratch_new(h);
+    scratch_write(h, d, "nazm.root", "")?;
+    scratch_write(h, d, "main.nz", main)?;
+    scratch_write(h, d, "lib.nz", lib)?;
+    let first = nazm(h, d, words("check main.nz --cache-report --json"));
+    check_that(first.code == 0, ran_show(first))?;
+    check_that(jint(report(first)?, "declined") == 1, ran_show(first))?;
+    let again = nazm(h, d, words("check main.nz --cache-report --json"));
+    check_that(again.code == 0, ran_show(again))?;
+    let r = report(again)?;
+    check_that(jint(r, "checked") == 1, jtext(r, ""))?;
+    check_that(jint(r, "declined") == 1, jtext(r, ""))?;
+    check_that(jint(r, "reused") >= 2, jtext(r, ""))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- refusals ---------------------------------------------------------------------------
+
+@test
+fn a_closure_shares_a_mutable_binding_unless_it_can_hold_a_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Shared since R1b (L10): the closure and the function name one variable.
+    let w4 = strs_new();
+    same_strs("codes", codes(h, "fn main() -> Int { let mut n = 1; let f = fn(x: Int) -> Int { x + n }; f(1) }\n"), w4)?;
+    // A binding that can hold a function value is still refused: the closure could be stored
+    // into it and own itself (`N0386`).
+    let w5 = strs_new();
+    strs_push(w5, "N0386");
+    same_strs("codes", codes(h, "fn main() -> Int { let mut g = fn(x: Int) -> Int { x }; let f = fn(x: Int) -> Int { g(x) }; f(1) }\n"), w5)?;
+    let w6 = strs_new();
+    strs_push(w6, "N0386");
+    same_strs("codes", codes(h, "struct H { f: fn() -> Int, }\nfn main() -> Int { let mut h = H(f: fn() -> Int { 1 }); let f = fn() -> Int { 0 }; let k = fn() -> Int { let x = h; f() }; k() }\n"), w6)?;
+    // A capability may be captured since N51 (`effect_params.rs`).
+    let w7 = strs_new();
+    same_strs("codes", codes(h, "fn use_it(c: IoCap) -> Int ! {} { 0 }\nfn main(io: IoCap) -> Int ! { io } { let f = fn(x: Int) -> Int { use_it(io) }; f(1) }\n"), w7)?;
+    // Assigning a captured binding inside the closure is assigning an immutable one.
+    let w8 = strs_new();
+    strs_push(w8, "N0310");
+    same_strs("codes", codes(h, "fn main() -> Int { let n = 1; let f = fn(x: Int) -> Int { n = 2; x }; f(1) }\n"), w8)?;
+    ok()
+}
+
+@test
+fn only_a_monomorphic_nazm_function_is_a_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w9 = strs_new();
+    strs_push(w9, "N0387");
+    same_strs("codes", codes(h, "fn id[T](x: T) -> T { x }\nfn main() -> Int { let f = id; 0 }\n"), w9)?;
+    let w10 = strs_new();
+    strs_push(w10, "N0387");
+    same_strs("codes", codes(h, "fn main() -> Int { let f = str_len; 0 }\n"), w10)?;
+    let w11 = strs_new();
+    strs_push(w11, "N0387");
+    same_strs("codes", codes(h, "extern \"C\" fn labs(x: Int) -> Int = \"labs\";\nfn main() -> Int { let f = labs; 0 }\n"), w11)?;
+    // Inside a generic function, a closure and a named function's value are both accepted
+    // since R1b (L10): each is instantiated with the function.
+    let w12 = strs_new();
+    same_strs("codes", codes(h, "fn g[T](x: T) -> T { let f = fn(y: Int) -> Int { y }; x }\nfn main() -> Int { g(1) }\n"), w12)?;
+    let w13 = strs_new();
+    same_strs("codes", codes(h, "fn inc(y: Int) -> Int { y + 1 }\nfn g[T](x: T) -> T { let f = inc; x }\nfn main() -> Int { g(1) }\n"), w13)?;
+    ok()
+}
+
+@test
+fn a_function_value_carries_its_effects_and_takes_its_authority_as_parameters(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A closure declares `! {}` unless it writes a set.
+    let w14 = strs_new();
+    strs_push(w14, "N0366");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let f = fn(c: IoCap, x: Int) -> Int { print(\"a\"); x }; f(io, 1) }\n"), w14)?;
+    // Its authority is what it holds: since N51 a capability visible where it is written
+    // too, so with none visible it holds none. (A file write: since D8 a function of the
+    // program holds the output authority `main` holds, so printing would not show it.)
+    let w15 = strs_new();
+    strs_push(w15, "N0369");
+    same_strs("codes", codes(h, "fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { write_file(\"f\", \"a\") + x }; f(1) }\nfn main() -> Int { 0 }\n"), w15)?;
+    // An undeclared function used as a value is held to the none its type assumed.
+    let w16 = strs_new();
+    strs_push(w16, "N0366");
+    same_strs("codes", codes(h, "fn loud(x: Int, out: OutCap) -> Int { print(\"a\"); x }\nfn main(io: IoCap) -> Int ! { io } { let f = loud; f(1, io) }\n"), w16)?;
+    // A call through a value requires what its type says.
+    let w17 = strs_new();
+    strs_push(w17, "N0366");
+    same_strs("codes", codes(h, "fn run(f: fn(Int) -> Int ! { io }, x: Int) -> Int ! {} { f(x) }\nfn main() -> Int { 0 }\n"), w17)?;
+    agrees(h, "\nfn run(c: IoCap, f: fn(IoCap, Int) -> Int ! { io }, x: Int) -> Int ! { io } { f(c, x) }\nfn main(io: IoCap) -> Int ! { io } {\n    run(io, fn(c: IoCap, x: Int) -> Int ! { io } { print(\"hi\"); x - 4 }, 4)\n}\n", "hi0")?;
+    ok()
+}
+
+@test
+fn a_function_value_has_no_equality_and_never_crosses_into_a_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w18 = strs_new();
+    strs_push(w18, "N0304");
+    same_strs("codes", codes(h, "fn main() -> Bool { let f = fn(x: Int) -> Int { x }; f == f }\n"), w18)?;
+    let w19 = strs_new();
+    strs_push(w19, "N0321");
+    same_strs("codes", codes(h, "fn w(f: fn(Int) -> Int) -> Int { f(1) }\nfn main(sp: SpawnCap) -> Int ! { spawn } { let f = fn(x: Int) -> Int { x }; scope { spawn w(f); } 0 }\n"), w19)?;
+    ok()
+}
+
+@test
+fn an_indirect_call_is_checked_against_the_values_type(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w20 = strs_new();
+    strs_push(w20, "N0303");
+    same_strs("codes", codes(h, "fn main() -> Int { let f = fn(x: Int) -> Int { x }; f(1, 2) }\n"), w20)?;
+    let w21 = strs_new();
+    strs_push(w21, "N0300");
+    same_strs("codes", codes(h, "fn main() -> Int { let f = fn(x: Int) -> Int { x }; f(\"a\") }\n"), w21)?;
+    let w22 = strs_new();
+    strs_push(w22, "N0300");
+    same_strs("codes", codes(h, "fn main() -> Int { let f = fn(x: Int) -> Int { \"a\" }; f(1) }\n"), w22)?;
+    let w23 = strs_new();
+    strs_push(w23, "N0300");
+    same_strs("codes", codes(h, "fn run(f: fn(Int) -> Bool) -> Bool { f(1) }\nfn main() -> Int { if run(fn(x: Int) -> Int { x }) { 1 } else { 0 } }\n"), w23)?;
+    ok()
+}
+
+// --- provenance -------------------------------------------------------------------------
+
+@test
+fn a_path_through_a_function_value_carries_what_the_values_it_may_be_carry(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An indirect call may run every function value of its type the program makes (N80):
+    // its result carries what they return, and a closure's parameter what such calls hand it.
+    let w24 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let p = fn(x: Int) -> Str { \"out.txt\" }; write_file(p(1), \"x\") }\n"), w24)?;
+    let w25 = strs_new();
+    strs_push(w25, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let p = fn(c: IoCap) -> Str ! { io } { read_file(\"cfg\") }; write_file(p(io), \"x\") }\n"), w25)?;
+    let w26 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let w = fn(c: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }; w(io, \"o\") }\n"), w26)?;
+    let w27 = strs_new();
+    strs_push(w27, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let w = fn(c: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }; w(io, read_file(\"cfg\")) }\n"), w27)?;
+    // A captured binding carries its own origins: a literal path is not restricted, and a
+    // file's contents captured are, at the closure that captures them.
+    let w28 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let path = \"out.txt\"; let w = fn(c: IoCap) -> Int ! { io } { write_file(path, \"x\") }; w(io) }\n"), w28)?;
+    let w29 = strs_new();
+    strs_push(w29, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let path = read_file(\"cfg\"); let w = fn(c: IoCap) -> Int ! { io } { write_file(path, \"x\") }; w(io) }\n"), w29)?;
+    ok()
+}
+
+// --- the formatter ----------------------------------------------------------------------
+
+@test
+fn the_formatter_keeps_function_types_and_closures(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn twice(f: fn(Int) -> Int ! {}, x: Int) -> Int {\n    f(f(x))\n}\n\nfn main() -> Int {\n    let k = 2;\n    twice(fn(x: Int) -> Int { x * k }, 1)\n}\n";
+    scratch_write(h, d, "prog.nz", src)?;
+    let r = nazm(h, d, words("fmt --check prog.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- Gate 1-C1: a closure's environment in the ownership graph --------------------------
+//
+// `docs/spec.md`, *Cycles*: a closure owns what it captures, so capturing a value that can hold
+// a function value behind a counted handle is the one way an environment could come to own
+// itself. Refused by the captured type (`N0616`), where the closure is written.
+
+/// Every shape of the cycle Gate 1 found, refused before anything runs — not by the spelling
+/// of one variable: an alias, a mutual pair, the container inside a record, an enum or an
+/// `Option`, records with a function field in a `Vec`, a nested closure, a `Vec` of `Vec`s.
+/// Each is refused once, at the capture, and with nothing else.
+@test
+fn a_closure_capturing_a_container_of_function_values_is_refused_in_every_shape(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let shapes = strs_new();
+    let srcs = strs_new();
+    strs_push(shapes, "direct");
+    strs_push(srcs, "fn main() -> Int {\n    let fs = vec_new[fn() -> Int]();\n    let f = fn() -> Int { vec_len(fs) };\n    vec_push(fs, f);\n    vec_len(fs)\n}\n");
+    strs_push(shapes, "alias");
+    strs_push(srcs, "fn main() -> Int {\n    let fs = vec_new[fn() -> Int]();\n    let alias = fs;\n    let f = fn() -> Int { vec_len(alias) };\n    vec_push(fs, f);\n    0\n}\n");
+    strs_push(shapes, "nested");
+    strs_push(srcs, "fn main() -> Int {\n    let fs = vec_new[fn() -> Int]();\n    let outer = fn() -> Int {\n        let inner = fn() -> Int { vec_len(fs) + vec_len(fs) };\n        inner()\n    };\n    vec_push(fs, outer);\n    0\n}\n");
+    strs_push(shapes, "record");
+    strs_push(srcs, "struct Handlers {\n    hs: Vec[fn() -> Int],\n}\n\nfn main() -> Int {\n    let h = Handlers(hs: vec_new[fn() -> Int]());\n    let f = fn() -> Int { vec_len(h.hs) };\n    vec_push(h.hs, f);\n    0\n}\n");
+    strs_push(shapes, "records in a vec");
+    strs_push(srcs, "struct Job {\n    run: fn() -> Int,\n}\n\nfn main() -> Int {\n    let jobs = vec_new[Job]();\n    let f = fn() -> Int { vec_len(jobs) };\n    vec_push(jobs, Job(run: f));\n    0\n}\n");
+    strs_push(shapes, "enum");
+    strs_push(srcs, "enum Slot {\n    Empty,\n    Full(hs: Vec[fn() -> Int]),\n}\n\nfn main() -> Int {\n    let hs = vec_new[fn() -> Int]();\n    let s = Slot.Full(hs: hs);\n    let f = fn() -> Int {\n        match s {\n            Slot.Empty() => 0,\n            Slot.Full(hs: v) => vec_len(v),\n        }\n    };\n    vec_push(hs, f);\n    0\n}\n");
+    strs_push(shapes, "option");
+    strs_push(srcs, "fn main() -> Int {\n    let o = Option[Vec[fn() -> Int]].None();\n    let f = fn() -> Int {\n        match o {\n            Option.None() => 0,\n            Option.Some(value: v) => vec_len(v),\n        }\n    };\n    f()\n}\n");
+    strs_push(shapes, "vec of vecs");
+    strs_push(srcs, "fn main() -> Int {\n    let fss = vec_new[Vec[fn() -> Int]]();\n    let f = fn() -> Int { vec_len(fss) };\n    f()\n}\n");
+    strs_push(shapes, "made in a helper");
+    strs_push(srcs, "fn counter(fs: Vec[fn() -> Int]) -> fn() -> Int {\n    fn() -> Int { vec_len(fs) }\n}\n\nfn main() -> Int {\n    let fs = vec_new[fn() -> Int]();\n    vec_push(fs, counter(fs));\n    0\n}\n");
+    let mut k = 0;
+    while k < strs_len(shapes) {
+        same_strs(strs_get(shapes, k), codes(h, strs_get(srcs, k)), words("N0616"))?;
+        k = k + 1;
+    }
+    // A mutual pair: each capture is its own refusal.
+    let mutual = "fn main() -> Int {\n    let a = vec_new[fn() -> Int]();\n    let b = vec_new[fn() -> Int]();\n    let fa = fn() -> Int { vec_len(b) };\n    let fb = fn() -> Int { vec_len(a) };\n    vec_push(a, fa);\n    vec_push(b, fb);\n    0\n}\n";
+    let w30 = strs_new();
+    strs_push(w30, "N0616");
+    strs_push(w30, "N0616");
+    same_strs("codes", codes(h, mutual), w30)?;
+    // And nothing is run: `nazm run` refuses it as `nazm check` does.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", strs_get(srcs, 0))?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "error[N0616]"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`fs`") && text_contains(r.stderr, "Vec[fn() -> Int]"), r.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// What stays accepted, and is reclaimed everywhere: a named function in a `Vec`; closures
+/// capturing an `Int`, a `Str`, a `Vec[Int]` and another closure; a record holding a function
+/// value, captured; a closure handed through a generic function; and a function value stored
+/// by a function that cannot know what it captured — every function value satisfies the rule
+/// where it was made, so storing one is never refused.
+@test
+fn acyclic_closures_in_containers_are_accepted_and_reclaimed_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let line = agrees(h, "\nstruct Tagged {\n    tag: Int,\n    f: fn(Int) -> Int,\n}\n\nfn double(x: Int) -> Int { x * 2 }\n\nfn keep(fs: Vec[fn(Int) -> Int], f: fn(Int) -> Int) -> Int { vec_push(fs, f) }\n\nfn ident[T](x: T) -> T { x }\n\nfn run_all(fs: Vec[fn(Int) -> Int], x: Int) -> Int {\n    let mut acc = 0;\n    let mut i = 0;\n    while i < vec_len(fs) {\n        let g = vec_get(fs, i);\n        acc = acc + g(x);\n        i = i + 1;\n    }\n    acc\n}\n\nfn main(out: OutCap) -> Int {\n    let fs = vec_new[fn(Int) -> Int]();\n    let others = vec_new[fn(Int) -> Int]();\n    let n = 10;\n    let word = str_concat(\"ab\", \"c\");\n    let data = vec_new[Int]();\n    vec_push(data, 5);\n    let add_n = fn(x: Int) -> Int { x + n };\n    let len_w = fn(x: Int) -> Int { x + str_len(word) };\n    let sum_d = fn(x: Int) -> Int { x + vec_get(data, 0) };\n    let twice_add = fn(x: Int) -> Int { add_n(add_n(x)) };\n    let t = Tagged(tag: 7, f: double);\n    let tagged = fn(x: Int) -> Int { let g = t.f; g(x) + t.tag };\n    vec_push(fs, double);\n    vec_push(fs, add_n);\n    keep(fs, len_w);\n    vec_push(fs, ident(sum_d));\n    vec_push(others, twice_add);\n    vec_push(others, tagged);\n    vec_push(data, 100);\n    print(int_to_str(run_all(fs, 1)));\n    print(\"\\n\");\n    run_all(others, 1)\n}\n", "23\n30")?;
+    check_that(closures_made(line) == 7, line)?;
+    ok()
+}
+
+/// A closure made in another module and stored here: accepted, because the rule held where it
+/// was written; and one written there capturing a container of function values is refused
+/// there.
+@test
+fn the_rule_holds_where_a_closure_is_written_in_any_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l31 = strs_new();
+    strs_push(l31, "main.nz");
+    strs_push(l31, "use \"lib.nz\";\n\nfn main(out: OutCap) -> Int {\n    let fs = vec_new[fn() -> Int]();\n    vec_push(fs, adder(4));\n    vec_push(fs, adder(5));\n    let a = vec_get(fs, 0);\n    let b = vec_get(fs, 1);\n    a() + b()\n}\n");
+    strs_push(l31, "lib.nz");
+    strs_push(l31, "pub fn adder(k: Int) -> fn() -> Int {\n    let data = vec_new[Int]();\n    vec_push(data, k);\n    fn() -> Int { vec_get(data, 0) * 10 }\n}\n");
+    let line = agrees_pairs(h, l31, "90", 0)?;
+    check_that(closures_made(line) == 2, line)?;
+    let rl = strs_new();
+    strs_push(rl, "main.nz");
+    strs_push(rl, "use \"lib.nz\";\n\nfn main() -> Int {\n    0\n}\n");
+    strs_push(rl, "lib.nz");
+    strs_push(rl, "pub fn counter(fs: Vec[fn() -> Int]) -> fn() -> Int {\n    fn() -> Int { vec_len(fs) }\n}\n");
+    let refused = codes_pairs(h, rl);
+    check_that(strs_has(refused, "N0616"), str_join(refused, ", "))?;
+    ok()
+}
+
