@@ -20,6 +20,8 @@ pub enum BackendId {
     Llvm,
     /// Cranelift, in process, to object bytes.
     Cranelift,
+    /// Nazm's own code generator, `nzcg` (R9), run per unit on the printed LIR.
+    Nazm,
 }
 
 impl BackendId {
@@ -28,6 +30,7 @@ impl BackendId {
         match self {
             Self::Llvm => "llvm",
             Self::Cranelift => "cranelift",
+            Self::Nazm => "nazm",
         }
     }
 
@@ -36,6 +39,7 @@ impl BackendId {
         match name {
             "llvm" => Some(Self::Llvm),
             "cranelift" => Some(Self::Cranelift),
+            "nazm" => Some(Self::Nazm),
             _ => None,
         }
     }

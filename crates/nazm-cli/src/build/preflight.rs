@@ -103,6 +103,35 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
+    // Nazm's own code generator (R9, D15) builds for the two macOS targets before 1.0 (its D13),
+    // and must be there to run: both asked before anything is compiled, so neither is reported
+    // later as the compiler's own fault, and nothing falls back to another backend.
+    if choice.backend == nazm_lir::backend::BackendId::Nazm {
+        if !nazm_codegen_nazm::carries(&target) {
+            if summary {
+                return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
+            }
+            eprintln!(
+                "nazm: `--backend nazm` builds for aarch64-apple-darwin and x86_64-apple-darwin \
+                 before 1.0; `{}` is the LLVM backend's",
+                target.triple
+            );
+            return Err(ExitCode::from(exit::USAGE));
+        }
+        if let Err(e) = nazm_codegen_nazm::NazmCodegen::new(target.clone()).program() {
+            if summary {
+                return Err(summarized(
+                    Status::Refused,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    None,
+                    None,
+                ));
+            }
+            eprintln!("nazm: `--backend nazm` runs Nazm's code generator: {e}");
+            return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+        }
+    }
     // RISC-V (N86) is code generation the host's `clang` may not have — Apple's has none. Asked
     // before anything is compiled, so a missing code generator is named rather than reported as
     // the compiler's own fault.

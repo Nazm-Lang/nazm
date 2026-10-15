@@ -1200,6 +1200,7 @@ dependencies = [
  "lsp-types",
  "nazm-cache",
  "nazm-codegen-clif",
+ "nazm-codegen-nazm",
  "nazm-core",
  "nazm-diag",
  "nazm-docs",
@@ -1231,6 +1232,16 @@ dependencies = [
  "nazm-span",
  "object",
  "target-lexicon",
+]
+
+[[package]]
+name = "nazm-codegen-nazm"
+version = "0.10.0"
+dependencies = [
+ "blake3",
+ "nazm-diag",
+ "nazm-lir",
+ "nazm-span",
 ]
 
 [[package]]

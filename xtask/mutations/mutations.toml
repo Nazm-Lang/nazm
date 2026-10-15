@@ -19740,3 +19740,83 @@ file = "crates/nazm-lir/src/debug.rs"
 find = '''                prologue = statements;'''
 replace = '''                let _ = statements;'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugging::a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
+
+[[mutation]]
+name = "r9-nazm-quietly-becomes-llvm"
+why = "asking for the Nazm backend builds with the LLVM backend instead: a silent fallback, which D15 forbids as §7.43 does for Cranelift"
+file = "crates/nazm-cli/src/build/mod.rs"
+find = '''        nazm_lir::backend::BackendId::Nazm => &nzcg,'''
+replace = '''        nazm_lir::backend::BackendId::Nazm => &llvm,'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+
+[[mutation]]
+name = "r9-a-refusal-is-reported-as-a-defect"
+why = "the generator's refusal (exit status 3) becomes one N0900 compiler defect instead of an N0101 per construct it named"
+file = "crates/nazm-codegen-nazm/src/lib.rs"
+find = '''        Some(REFUSED) => Err(refusals(&stderr)),'''
+replace = '''        Some(REFUSED) => Err(vec![defect(stderr.to_string())]),'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_refused_construct_is_n0101_by_name_and_nothing_is_written_or_fallen_back_to" }]
+
+[[mutation]]
+name = "r9-one-thread-is-said-backwards"
+why = "the generator is told a program has one thread exactly when it has several, so it reads a thread-local stack limit as a plain global"
+file = "crates/nazm-codegen-nazm/src/lib.rs"
+find = '''    if one_thread {'''
+replace = '''    if !one_thread {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generator_is_told_the_target_and_whether_the_program_has_one_thread" }]
+
+[[mutation]]
+name = "r9-the-generator-is-not-in-the-key"
+why = "the backend's version no longer carries the generator's digest, so a changed generator reuses objects the old one wrote"
+file = "crates/nazm-codegen-nazm/src/lib.rs"
+find = '''.map_or_else(|_| "none".to_owned(), |(_, d)| d.clone());'''
+replace = '''.map_or_else(|_| "none".to_owned(), |_| "same".to_owned());'''
+killers = [{ package = "nazm-codegen-nazm", lib = true, name = "tests::the_generators_digest_is_in_the_version_and_moves_with_it" }]
+
+[[mutation]]
+name = "r9-a-debug-build-hands-over-no-file-names"
+why = "a debug build hands the generator its positions without the names of the files they index, so its line tables cannot name them"
+file = "crates/nazm-codegen-nazm/src/lib.rs"
+find = '''self.run(&text(&m, names, self.debug), native.single_thread)'''
+replace = '''self.run(&text(&m, names, false), native.single_thread)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_debug_build_hands_the_generator_its_positions_and_their_files" }]
+
+[[mutation]]
+name = "r9-a-target-it-does-not-carry-is-not-refused-first"
+why = "a target the generator does not carry before 1.0 is not refused before compiling"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = '''        if !nazm_codegen_nazm::carries(&target) {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_missing_generator_or_a_target_it_does_not_carry_is_refused_before_compiling" }]
+
+[[mutation]]
+name = "r9-a-missing-generator-is-not-refused-first"
+why = "a generator that is not there is found missing only after the program is compiled, as a compiler defect rather than a toolchain refusal naming the path"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = '''        if let Err(e) = nazm_codegen_nazm::NazmCodegen::new(target.clone()).program() {'''
+replace = '''        if let Err(e) = Result::<(), String>::Ok(()) {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_missing_generator_or_a_target_it_does_not_carry_is_refused_before_compiling" }]
+
+[[mutation]]
+name = "r9-7-5-a-call-with-work-on-its-failure-edge-has-no-landing-pad"
+why = "where failures unwind, a call whose failure edge releases something has no landing pad, so the unwind passes the frame and what it owns leaks"
+file = "toolchain/codegen/sel.nz"
+find = '''        if !bare_fail(g.f, t.imm) { call_site(g, t.imm, 0) }'''
+replace = '''        if false { call_site(g, t.imm, 0) }'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r9-7-5-a-plain-entry-lands-nothing"
+why = "a plain entry's call of its body lands no unwind, so a failure unwinds off the end of the stack and the stop function aborts"
+file = "toolchain/codegen/sel.nz"
+find = '''        if x.dst2 < 0 {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "r9-7-5-the-lsda-is-not-announced"
+why = "a compact unwind entry with an LSDA does not say so in its encoding, so the image's table carries no LSDA and no landing pad is found"
+file = "toolchain/codegen/macho.nz"
+find = '''put32(unwind, c.fn_enc[i] | (if has { 0x40000000 } else { 0 }))'''
+replace = '''put32(unwind, c.fn_enc[i])'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]

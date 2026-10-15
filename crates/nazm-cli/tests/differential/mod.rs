@@ -1,12 +1,14 @@
 //! The differential harness: one program under the interpreter and built by each backend at each
 //! optimisation level, compared on stdout, exit status and memory report; and the codes `nazm
-//! check --json` reports for a program it refuses.
+//! check --json` reports for a program it refuses. On macOS the backends include Nazm's own code
+//! generator (R9, D15: `--backend nazm`), built once per test process by [`nzcg`].
 
 // Each test binary that includes this module uses only part of it.
 #![allow(dead_code)]
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::common::{self, run_bounded, Ran};
 
@@ -14,6 +16,31 @@ pub(crate) const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
 
 pub(crate) fn nazm(dir: &Path, args: &[&str]) -> Ran {
     run_bounded(Command::new(NAZM).current_dir(dir).args(args), "nazm")
+}
+
+/// Nazm's own code generator (R9, D15), built from `toolchain/codegen/` by this `nazm` once per
+/// test process, into a directory of its own: what `NAZM_NZCG` names for `--backend nazm`.
+pub(crate) fn nzcg() -> &'static Path {
+    static NZCG: OnceLock<PathBuf> = OnceLock::new();
+    NZCG.get_or_init(|| {
+        let dir =
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("nzcg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("nzcg");
+        let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../toolchain/codegen/main.nz");
+        let r = nazm(
+            &dir,
+            &[
+                "build",
+                "--no-cache",
+                main.to_str().unwrap(),
+                "-o",
+                exe.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(r.code, Some(0), "nzcg does not build: {}", r.stderr);
+        exe
+    })
 }
 
 pub(crate) fn memory_line(r: &Ran) -> String {
@@ -41,26 +68,33 @@ pub(crate) fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
         "interpreter".to_owned(),
         run_bounded(&mut interpreted, "nazm run"),
     )];
-    for (label, backend, opt) in [
+    let mut backends = vec![
         ("llvm -O0", "llvm", "0"),
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
-    ] {
+    ];
+    // Nazm's own code generator, where it builds before 1.0 (its D13: macOS).
+    if cfg!(target_os = "macos") {
+        backends.push(("nazm", "nazm", "0"));
+    }
+    for (label, backend, opt) in backends {
         let exe = d.path().join(label.replace([' ', '-'], ""));
-        let b = nazm(
-            d.path(),
-            &[
-                "build",
-                "--no-cache",
-                "--backend",
-                backend,
-                "--opt-level",
-                opt,
-                main,
-                "-o",
-                exe.to_str().unwrap(),
-            ],
-        );
+        let mut build = Command::new(NAZM);
+        build.current_dir(d.path()).args([
+            "build",
+            "--no-cache",
+            "--backend",
+            backend,
+            "--opt-level",
+            opt,
+            main,
+            "-o",
+            exe.to_str().unwrap(),
+        ]);
+        if backend == "nazm" {
+            build.env(nazm_codegen_nazm::VARIABLE, nzcg());
+        }
+        let b = run_bounded(&mut build, "nazm build");
         assert_eq!(b.code, Some(0), "{label}: {}", b.stderr);
         // In the program's directory, as the interpreter ran: a program that touches files
         // must find the same tree in every implementation (Gate 2).

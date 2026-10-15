@@ -27,6 +27,7 @@ mod mobile;
 mod named_methods;
 mod native_cache;
 mod native_units;
+mod nazm_backend;
 mod net;
 mod numbers;
 mod order_hash;

@@ -191,28 +191,9 @@ fn ops(
                 format!("LIR does not validate: {}", e.join("; ")),
             )]);
         }
-        out.push_str(&nazm_lir::op::print::module(&m));
-        if debug {
-            // What each position's file index names, as the backends' debug information names
-            // it (R9: a code generator's line table needs the names, which the module holds
-            // only as indices).
-            let mut files = std::collections::BTreeSet::new();
-            for f in &m.functions {
-                if let Some((file, _)) = f.at {
-                    files.insert(file);
-                }
-                for b in &f.blocks {
-                    for i in &b.insts {
-                        if let nazm_lir::op::ir::Inst::Loc(p) = i {
-                            files.insert(p.file);
-                        }
-                    }
-                }
-            }
-            for i in files {
-                out.push_str(&format!("; file {i} {}\n", names.debug_file(i)));
-            }
-        }
+        // As the Nazm backend hands it to its generator (R9, D15): with `--debug`, the positions
+        // and the names of the files they index, which a line table needs.
+        out.push_str(&nazm_codegen_nazm::text(&m, names, debug));
         out.push('\n');
     }
     Ok(out)

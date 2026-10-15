@@ -9,8 +9,9 @@
 //! a task, inside a C export, through a callback C calls, ten thousand frames deep through
 //! `defer`s, and with the stack exhausted — still ends the program with status 2 and the
 //! diagnostic at the failing line, and every frame on the way out still releases what it owns:
-//! the same answer on the interpreter, on LLVM at `-O0` and `-O2`, on Cranelift, and — where its
-//! subset reaches — on the LIR oracle.
+//! the same answer on the interpreter, on LLVM at `-O0` and `-O2`, on Cranelift, on Nazm's own
+//! code generator where it builds (R9 7.5, D15: macOS, where it unwinds as LLVM does), and — where
+//! its subset reaches — on the LIR oracle.
 
 #![allow(
     clippy::unwrap_used,
@@ -179,13 +180,18 @@ int main(void) {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("lib.nz"), lib).unwrap();
     std::fs::write(d.path().join("host.c"), host).unwrap();
-    for (backend, opt) in [
+    let mut backends = vec![
         ("llvm", "0"),
         ("llvm", "2"),
         ("cranelift", "0"),
         ("cranelift", "2"),
-    ] {
-        let b = differential::nazm(
+    ];
+    if cfg!(target_os = "macos") {
+        backends.push(("nazm", "0"));
+    }
+    for (backend, opt) in backends {
+        let b = nazm_by(
+            backend,
             d.path(),
             &[
                 "build",
@@ -238,10 +244,25 @@ fn a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry() {
     assert!(!text.contains("nz.failed_now"), "{text}");
 }
 
+/// `nazm ARGS` in `dir`, for `backend`: Nazm's own code generator, where it is the backend, is
+/// the one this test process built (`differential::nzcg`).
+fn nazm_by(backend: &str, dir: &std::path::Path, args: &[&str]) -> common::Ran {
+    let mut c = Command::new(NAZM);
+    c.current_dir(dir).args(args);
+    if backend == "nazm" {
+        c.env(nazm_codegen_nazm::VARIABLE, differential::nzcg());
+    }
+    common::run_bounded(&mut c, "nazm")
+}
+
 /// Each native build of `src`, run with the memory report on: `(label, result)`.
 fn natively(d: &std::path::Path, extra: &[&str]) -> Vec<(String, common::Ran)> {
     let mut out = Vec::new();
-    for (backend, opt) in [("llvm", "0"), ("llvm", "2"), ("cranelift", "0")] {
+    let mut backends = vec![("llvm", "0"), ("llvm", "2"), ("cranelift", "0")];
+    if cfg!(target_os = "macos") {
+        backends.push(("nazm", "0"));
+    }
+    for (backend, opt) in backends {
         let label = format!("{backend} -O{opt}");
         let exe = d.join(format!("p-{backend}-{opt}"));
         let mut args = vec![
@@ -254,7 +275,7 @@ fn natively(d: &std::path::Path, extra: &[&str]) -> Vec<(String, common::Ran)> {
         ];
         args.extend(extra);
         args.extend(["prog.nz", "-o", exe.to_str().unwrap()]);
-        let b = differential::nazm(d, &args);
+        let b = nazm_by(backend, d, &args);
         assert_eq!(b.code, Some(0), "{label}: {}", b.stderr);
         let mut c = common::bounded_exe(&exe);
         c.current_dir(d).env(nazm_lir::MEMORY_VARIABLE, "1");

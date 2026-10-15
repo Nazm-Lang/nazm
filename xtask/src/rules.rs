@@ -75,6 +75,10 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
         // would drift apart again (`docs/architecture.md` §7.106). The one crate besides
         // `xtask` that may depend on a code generator (`may_depend_on_codegen`).
         "nazm-codegen-clif" => &["nazm-span", "nazm-diag", "nazm-lir"],
+        // The Nazm backend (R9, D15): the same boundary as Cranelift's — it lowers LIR and
+        // hands it, printed, to Nazm's own code generator, a program it runs. It reads nothing
+        // above LIR and generates no code itself, so it is no codegen crate.
+        "nazm-codegen-nazm" => &["nazm-span", "nazm-diag", "nazm-lir"],
         // The driver library and the language service, N16. Through `nazm-core` only, like
         // the CLI and for the same reason: the service consumes the compiler's answers,
         // and a direct dependency on the parser or on `nazm-sema` would be the first step
@@ -115,6 +119,7 @@ pub(crate) fn allowed_internal_deps(crate_name: &str) -> Option<&'static [&'stat
             "nazm-lir",
             "nazm-mir",
             "nazm-codegen-clif",
+            "nazm-codegen-nazm",
             "nazm-iface",
             "nazm-cache",
             "nazm-service",
@@ -191,6 +196,8 @@ pub(crate) fn emission_allowlist() -> &'static [(&'static str, &'static [&'stati
         ("crates/nazm-lir", &["emits LLVM IR"]),
         // Object code, in process; it never runs a tool and never writes LLVM IR.
         ("crates/nazm-codegen-clif", &[]),
+        // It runs Nazm's own code generator, never `clang`, and writes no LLVM IR.
+        ("crates/nazm-codegen-nazm", &[]),
         // The language service answers questions; it never emits or runs anything.
         ("crates/nazm-service", &[]),
         // Nor does the repository planner, which only composes the service's answers.
@@ -321,6 +328,7 @@ mod tests {
             "nazm-mir",
             "nazm-lir",
             "nazm-codegen-clif",
+            "nazm-codegen-nazm",
             "nazm-service",
             "nazm-docs",
             "nazm-repo",

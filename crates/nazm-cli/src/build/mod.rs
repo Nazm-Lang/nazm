@@ -136,9 +136,15 @@ pub(crate) fn run(
         .with_debug(choice.debug)
         .with_soa(soa)
         .with_counted_heap(heap_limit.is_some());
+    // Nazm's own code generator (R9, D15): `nzcg`, found when first needed.
+    let nzcg = nazm_codegen_nazm::NazmCodegen::new(target.clone())
+        .with_debug(choice.debug)
+        .with_soa(soa)
+        .with_counted_heap(heap_limit.is_some());
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
         nazm_lir::backend::BackendId::Cranelift => &cranelift,
+        nazm_lir::backend::BackendId::Nazm => &nzcg,
     };
     // Objects a backend can key before generating them are looked up by that key, so a
     // reused unit is not generated at all. Keyed apart from clang's: a Cranelift object is a

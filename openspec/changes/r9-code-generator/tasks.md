@@ -121,4 +121,19 @@
       failure under fifty frames that own strings, walked and unwound as LLVM's: agree on both,
       61 frames, the image's table naming one personality and its LSDAs. `lines.sh` 47 agree,
       2 skipped (the programs with C); `encode.sh` 113 + 89
+- [x] 7.7 D15 implemented (approved as written): `nazm build --backend nazm`, crate
+      `nazm-codegen-nazm` (`BackendId::Nazm`); `nzcg` from `NAZM_NZCG` or `libexec/nazm/nzcg`
+      beside `nazm`, its BLAKE3 digest in the backend's version and so in every key, with the
+      one-thread fact; `--one-thread` from `Native::single_thread`; `--debug` hands over the
+      positions and `; file` lines (`nazm lir --ops` now prints through the same function);
+      exit 3 is one `N0101` per refused construct, nothing written, no fallback, any other
+      failure `N0900`; a missing generator (exit 4) and a target other than the two macOS ones
+      (exit 5) refused before compiling. `crates/nazm-cli/tests/nazm_backend.rs`: run.sh's 117
+      inputs built with `--backend nazm` agree with LLVM (output, diagnostics, status, memory
+      report; 42 s), and the rules above; a `nazm` column (macOS) in the differential harness
+      and `failure_convention.rs` — every module using them passes. Docs: `architecture.md`
+      §7.116 (and §7.115's bullet), the capability matrix (row 12a, EXPERIMENTAL), `--help`.
+      Ten mutants (`r9-…`, seven for D15, three for 7.5), each applied by hand, killed by its
+      killer, restored. Not done: installing `nzcg` as `libexec/nazm/nzcg` in the release
+      build (`cargo xtask` packaging), and `nazm profile --backend nazm`
 - [ ] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions
