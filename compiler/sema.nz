@@ -20,7 +20,8 @@
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
-// prelude's `Result` and `Option`; effects and authority; the rules about `main`.
+// prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; effects and
+// authority; the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -2419,6 +2420,18 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "If" { return check_if(c, e, expected, unwanted); }
     if k == "Match" { return check_match(c, e, expected); }
     if k == "Propagate" { return check_propagate(c, e, expected); }
+    if k == "Interp" {
+        // `f"…"` (L4), and what `print(x)` is written as: a `Str`, each hole a value
+        // interpolation writes.
+        let parts = kids(c, e, "parts");
+        let mut i = 0;
+        while i < ints_len(parts) {
+            let part = ints_get(parts, i);
+            if sx_kind(c.t, part) != tk_tuple() { check_hole(c, fld(c, part, "expr"), fld(c, part, "spec"), fld(c, part, "span")); }
+            i = i + 1;
+        }
+        return t_str();
+    }
     stop(c, cat3("the expression `", k, "`"));
     or_int(expected)
 }
@@ -2429,6 +2442,22 @@ fn written_key(c: Ck, n: Int, field: Str) -> Str {
     let name = fname_of(c, n, field);
     if some(c, n, "qualifier") { return cat3(fname_of(c, unwrap(c, n, "qualifier"), "name"), "::", name); }
     name
+}
+
+// One hole of an interpolation (`check_hole`): a precision only on a float; a `Str`, a number or
+// a `Bool` written as it is, and anything else by its `Show` — which needs a trait, and no
+// compilation the checker carries has one, so it is refused (N0300).
+fn check_hole(c: Ck, expr: Int, spec: Int, at: Int) -> Int {
+    let ty = value_type(c, expr, none());
+    let float = is_float_name(bname_of(c, ty));
+    if some(c, spec, "precision") && float == false {
+        err(c, "N0006", at, cat3("a precision is a float's, and this is `", show(c, ty), "`"),
+                "write the hole without `.precision`, or convert the value to a float");
+    }
+    if ty == t_str() || ty == t_int() || ty == t_bool() || is_num(c, ty) { return 0; }
+    let shown = show(c, ty);
+    err(c, "N0300", espan(c, expr), cat3("a value printed or interpolated is a `Str`, a number, a `Bool` or a `Show`, and this is `", shown, "`"),
+            cat3("implement `Show` (`@std/show`) for `", shown, "`, or write the value's text yourself"))
 }
 
 fn check_var(c: Ck, e: Int, expected: Int) -> Int {
