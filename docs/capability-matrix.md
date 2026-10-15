@@ -298,6 +298,22 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**R1.5 (2026-10-15)** · *A `for` over a split builds no list* (R1.5 task 3.3). `for w in
+s.split(sep)` is lowered in Core IR through `@std/text`'s `text_split_end` and `text_split_next`,
+which find each piece as `text_split` does; the pieces, the empty ones, `break` and `continue` are
+the list's. Word frequency 189 → 143 ms on the host (with the one-byte separator's own loop).
+Evidence: `shorter_forms.rs` (`a_for_over_a_split_reads_its_pieces_without_a_list_everywhere`)
+under the interpreter and both backends, and Core IR's calls; three mutants.
+
+**R1.5 (2026-10-15)** · *The prelude's standard modules; `top` and `sort_by`* (`spec.md`, *Shorter
+forms*; R1.5 design D9, D10). A program's own module is given `@std/hash`, `@std/hashmap`,
+`@std/ordmap`, `@std/sort` and `@std/text` where it names one of their items; a name the module
+declares or a written import brings in hides the prelude's; a package's and a standard module's
+imports stay written; a module naming none is unchanged, so restriction profiles see what they
+saw. `m.top(n)` and `m.sort_by(less)`. Semantic epoch 85; EXPERIMENTAL until R1.5 closes.
+Evidence: `shorter_forms.rs` — four tests (everywhere, hiding, profiles, packages) and the D5 test
+restated; five mutants.
+
 **R1.5 (2026-10-15)** · *Printing in your own program* (`spec.md`, *Shorter forms*; R1.5 design
 D8). In a module of the program itself — a key with no `@`, so not `@std`, the prelude or a package —
 the authority check (`effects::authority`) counts the output authority `main` holds as held, so a
@@ -336,7 +352,8 @@ two mutants.
 **R1.5 (2026-10-15)** · *Map literals and `Map[K, V]`* (`spec.md`, *Shorter forms*; R1.5 design D5).
 `{"a": 1, "b": 2}` is read by the parser as the block that builds it — `hashmap_single` for the
 first entry, which settles the types, then `hashmap_set` — and `Map[K, V]` is `HashMap[K, V]` where
-the hash map is in scope. The empty `{}` waits for the prelude (D9). Semantic epoch 80; EXPERIMENTAL
+the hash map is in scope — since D9, in a program's module with no `use`. The empty `{}` is still
+an empty block; an empty map is `hashmap_new()`. Semantic epoch 80; EXPERIMENTAL
 until R1.5 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` under every implementation;
 three mutants, one holding D4's conversions (`UInt64(x)` stays a call, found when D5's first test
 ran).
@@ -381,10 +398,12 @@ directory removed; mutants in `xtask/mutations/mutations.toml`.
 
 **R1.5 (2026-10-15)** · *Dead-stripping* (`docs/architecture.md` §7.114; R1.5 design D14). A hosted
 executable is linked with `-dead_strip` (macOS, iOS) or with `--gc-sections` over objects compiled
-with `-ffunction-sections -fdata-sections` (Linux, Android), so a standard function or runtime part
+with `-ffunction-sections -fdata-sections`, and Cranelift's with a section per function and datum
+(translator revision 6) (Linux, Android), so a standard function or runtime part
 nothing calls is left out; libraries, Windows, WebAssembly and the boards link as before. `words`
 at `-O2` 105,728 → 61,184 bytes under LLVM, 197,216 → 74,816 under Cranelift (`performance.md`,
-*R1.5 D14*). EXPERIMENTAL until R1.5 closes; Linux's sizes are unmeasured on the host. Evidence:
+*R1.5 D14*). EXPERIMENTAL until R1.5 closes; Linux's sizes are unmeasured on the host, but
+`dead_strip.rs` passes on Linux x86_64 (CI) and aarch64 (contained) since `0c8bad53`. Evidence:
 `crates/nazm-cli/tests/dead_strip.rs` — an unused `@std/text` function absent under both backends
 at `-O0` and `-O2`, the program's output unchanged, the same objects linked whole larger;
 `backend::tests` for each target's arguments; two mutants.

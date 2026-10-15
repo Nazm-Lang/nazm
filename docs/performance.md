@@ -1,8 +1,16 @@
 # Performance claims, and how each is measured
 
-**Status: the first measurements exist, and are below.** They cover this implementation
-against itself — interpreter against native, and one optimisation pass against its own
-baseline — and, **on one program only**, against `clang` and `python3`.
+**Status (2026-10-15).** The measurements below cover this implementation against itself and,
+since R1 (5b.10, below), against fifteen languages on three programs — `hello`, recursive `fib`
+and word frequency — re-run for 0.10.0. The standing target, set by the copyright holder on
+2026-10-15, is to lead every compared language on every measured parameter
+(`openspec/changes/performance-leadership`); it is a research target, and **no section here claims
+it**: on 2026-10-15 Nazm's word frequency took 143 ms against C's 74 and Rust's 65, and `fib` 55 ms
+against C's 35. The paragraph below is the history of how the first comparison arrived.
+
+*Before R1 (kept as written):* the first measurements covered this implementation against
+itself — interpreter against native, and one optimisation pass against its own baseline — and,
+**on one program only**, against `clang` and `python3`.
 
 **Corrected 2026-09-21.** This paragraph said the measurements *"say nothing about C, Rust,
 Zig, Go or Python: no cross-language comparison has been run"*. That stopped being true
@@ -3599,3 +3607,28 @@ probe a cached build makes. The host was loaded by other work throughout (load a
 columns were measured interleaved, so their ratios are the result. `python3 bench/compare/compare.py`
 on the same host and hour gave the two Nazm rows as 297 and 219 ms (`fib`) and 1564 and 1289 ms
 (`words`), median of three each; its output was checked for both.
+
+## R1.5 3.3: word frequency without a split list, measured (2026-10-15)
+
+What changed: `for w in s.split(sep)` builds no list — it is lowered through `text_split_end` and
+`text_split_next`, which find each piece as `text_split` does (`8e871bb7`) — and a one-byte
+separator has its own loop, whose only check each step is the bound (`R1.5 3.3`, the commit after
+it). Before that change, a profile over twenty million words put 20% of the time in allocating and
+freeing each line's list (`openspec/changes/performance-leadership/design.md`).
+
+`bench/compare/nazm/words.nz` on the comparison's input (`gen_words.py`), built `--opt-level 2`
+(LLVM) by release binaries of each tree, `hyperfine -N --warmup 3 --runs 15`, interleaved, on an
+Apple M1 Pro, macOS 27.2, Apple clang 21.0.0, with other work running; every run printed
+`words.expected`:
+
+| tree | mean | ± σ | peak memory |
+| --- | ---: | ---: | ---: |
+| before (`c86f2f81`) | 189.0 ms | 1.9 ms | 19.4 MiB |
+| no list (`8e871bb7`) | 151.0 ms | 3.3 ms | 19.2 MiB |
+| and the one-byte loop | 143.1 ms | 1.6 ms | 19.2 MiB |
+
+24% less time; memory unchanged, since each word was already a view of its line. Linking every
+unit with LTO (`clang -flto`) was tried and gave 3.4% more, so the remaining cost is in the
+operations — the byte scan, the map's probe and update, the string comparison — not in the calls
+between modules. C (73.9 ms) and Rust (65.0 ms) from the 0.10.0 run are 1.9× and 2.2× ahead.
+

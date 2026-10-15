@@ -71,8 +71,9 @@ taste
 36
 ```
 
-`nazm run` checks and interprets; `nazm build` compiles the same program to a native executable,
-which gives the same answer.
+`nazm run` checks, compiles (Cranelift, in process) and runs; `nazm run --interpret` interprets
+instead, and `nazm build` writes a native executable — all three give the same answer. (Since
+the R1.5 work after 0.10.0; the 0.10.0 release's `nazm run` interprets.)
 
 ## Install
 
@@ -117,7 +118,7 @@ formatted, natively built program and a package in about ten minutes, and the te
 every command on it. In short:
 
 ```sh
-nazm run FILE.nz        # check, then interpret; main's result is the exit status
+nazm run FILE.nz        # check, compile, run; main's result is the exit status (--interpret to interpret)
 nazm check FILE.nz      # type-check only; --json for nazm.diagnostic/1
 nazm build FILE.nz -o OUT [--backend llvm|cranelift] [--debug]
 nazm test DIR           # every NAME.nz with a NAME.expected, interpreted and compiled
@@ -285,7 +286,7 @@ tokenizers; and `nazm-bench` and `nazm-agent-bench`, the agent-cost evaluation h
 | | |
 | --- | --- |
 | `nazm init DIR [--template T]` | A new project from a template — `cli`, `library`, `server`, `embedded`, `wasm` or `contract` — whose README names the commands that check, test, build and document it; an existing non-empty directory is refused (N74) |
-| `nazm run FILE` | Check and evaluate, printing the value of `main` |
+| `nazm run FILE` | Check, compile with Cranelift and run, passing `main`'s exit status through; `--interpret` evaluates instead (R1.5, D11) |
 | `nazm check FILE` | Check without evaluating. Reuses the result of checking a module whose source and dependencies' interfaces are unchanged; `--no-cache` checks everything, `--cache-report` says what it did, `--summary-json` prints one compact `nazm.command-summary/1` — status, exit status and a reference to each diagnostic, no prose |
 | `nazm build FILE` | Compile to a native executable. Each module becomes its own object, and an object whose exact LLVM input, backend and codegen configuration were compiled before is reused instead; `--no-cache` compiles everything, `--build-report` says what it did, `--summary-json` prints one `nazm.command-summary/1` with the artifact written. The link runs every time. `--backend llvm\|cranelift` picks the code generator (N41), `--target TRIPLE` names one of the seven targets — an executable where this host links it, `--objects` elsewhere (N57) — `--link FILE` adds C objects (N42), `--locked` and a package directory build a package against its lockfile (N46), `--profile NAME` holds it to a restriction profile (N47), `--debug` writes DWARF — under either backend since N91 — and `--timings` reports each phase (N48) |
 | `nazm test PATH…` | Run every `NAME.nz` with a `NAME.expected` beside it, and every `@test` and `@fuzz` function, interpreted **and** compiled. `--filter TEXT` narrows by name; `--fuzz N` sets a fuzz target's inputs. `--summary-json` prints one `nazm.test-summary/1`: counts, and only the cases that did not pass, with how each leg ended |
