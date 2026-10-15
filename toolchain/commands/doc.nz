@@ -1,0 +1,863 @@
+// `nazm doc`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D10, D13).
+//
+// `nazm doc [-o DIR] PATH`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/apidoc.rs` over R2's front end, read through its published facts
+// (`compiler/facts.nz`, R2 design D24): every exported function that is not a closure, every `pub`
+// record and enum and every `pub use` of the program's own modules with a durable key, as one
+// `nazm.api-doc/2` line on standard output, or `api.json` (pretty) and `api.md` in `-o DIR`.
+//
+// A file is one compilation, checked as a module (`fx_check_module`). A package's directory is
+// every `.nz` file under its source root, each checked as the root of its own compilation, their
+// items merged by module and identity. Where the front end does not carry a compilation, or the
+// package's resolution meets what `compiler/package.nz` does not read, the command says so and
+// exits 6 before writing anything (design D5).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm doc`.
+pub fn doc_cli() -> Cli {
+    let c = cli_command("doc", "Document a program's public API (N74), from its semantic definitions: every exported function, "
+            + "record and enum of its own modules, with effects, capabilities, foreign symbols and a link to the source. One "
+            + "`nazm.api-doc/2` line on stdout, or `api.json` and `api.md` in `-o DIR`. Not `nazm docs`, which reads Nazm's "
+            + "own documentation", "")
+    cli_positional(c, "PATH", true, false, true, "A source file, or a package's directory", "")
+    cli_option(c, "o", "out", "DIR", true, "", false, "", "")
+    c
+}
+
+// What this port does not carry: said on standard error, status 6 (design D5).
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("doc: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+fn fail(io: IoCap, why: Str, status: Int) -> Int {
+    eprint("nazm: " + why + nl())
+    exit_with(status)
+    0
+}
+
+// --- paths ----------------------------------------------------------------------------------------
+
+fn stat_kind(io: IoCap, p: Str) -> Int {
+    let out = bytes_new(32)
+    if os_stat(p, out) != 0 { return 0 - 1 }
+    bytes_read_le[Int](out, 8)
+}
+
+fn lstat_kind(io: IoCap, p: Str) -> Int {
+    let out = bytes_new(48)
+    if os_lstat(p, out) != 0 { return 0 - 1 }
+    bytes_read_le[Int](out, 8)
+}
+
+// `Path::parent` of a file argument, "." where it is empty.
+fn parent_or_dot(path: Str) -> Str {
+    let mut end = str_len(path)
+    while end > 1 && str_byte(path, end - 1) == 47 { end -= 1 }
+    let mut i = end
+    while i > 0 && str_byte(path, i - 1) != 47 { i -= 1 }
+    if i == 0 { return "." }
+    let mut j = i
+    while j > 1 && str_byte(path, j - 1) == 47 { j -= 1 }
+    let p = str_slice(path, 0, j)
+    if p == "" { "." } else { p }
+}
+
+// `relative`: the module's path below `base`, both canonical; its name where it is not below.
+fn relative(io: IoCap, name: Str, shown: Str, base: Str) -> Str {
+    let mut canon = fe_canonical(io, name)
+    if canon == "" { canon = name }
+    let mut b = fe_canonical(io, base)
+    if b == "" { b = base }
+    if canon == b { return "" }
+    if b == "/" && fe_starts(canon, "/") { return str_slice(canon, 1, str_len(canon)) }
+    if fe_starts(canon, b + "/") { return str_slice(canon, str_len(b) + 1, str_len(canon)) }
+    shown
+}
+
+// --- JSON -----------------------------------------------------------------------------------------
+
+fn jstrs(xs: Strs) -> Str {
+    let parts = strs_new()
+    for i in 0..strs_len(xs) { strs_push(parts, json_str(strs_get(xs, i))) }
+    "[" + str_join(parts, ",") + "]"
+}
+
+fn jor_null(s: Str) -> Str { if s == "" { "null" } else { json_str(s) } }
+
+// serde_json's pretty form (`{:#}`) of a compact document: two spaces a level.
+fn pretty(s: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(s)
+    let mut depth = 0
+    let mut from = 0
+    let mut i = 0
+    let mut in_str = false
+    while i < n {
+        let b = str_byte(s, i)
+        if in_str {
+            if b == 92 { i += 2 } else {
+                if b == 34 { in_str = false }
+                i += 1
+            }
+            continue
+        }
+        if b == 34 {
+            in_str = true
+            i += 1
+            continue
+        }
+        if b == 123 || b == 91 {
+            let close = if b == 123 { 125 } else { 93 }
+            if i + 1 < n && str_byte(s, i + 1) == close {
+                i += 2
+                continue
+            }
+            depth += 1
+            strs_push(out, str_slice(s, from, i + 1))
+            strs_push(out, nl() + indent(depth))
+            i += 1
+            from = i
+        } else if b == 125 || b == 93 {
+            depth -= 1
+            strs_push(out, str_slice(s, from, i))
+            strs_push(out, nl() + indent(depth))
+            from = i
+            i += 1
+        } else if b == 44 {
+            strs_push(out, str_slice(s, from, i + 1))
+            strs_push(out, nl() + indent(depth))
+            i += 1
+            from = i
+        } else if b == 58 {
+            strs_push(out, str_slice(s, from, i + 1) + " ")
+            i += 1
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(s, from, n))
+    str_join(out, "")
+}
+
+fn indent(depth: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..depth { strs_push(parts, "  ") }
+    str_join(parts, "")
+}
+
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+// --- the items --------------------------------------------------------------------------------------
+
+// Every item documented, in `BTreeMap` order: by module, then by identity; a later item of the
+// same module and identity replaces an earlier one. Each with its JSON object and its Markdown.
+struct Items {
+    module: Strs,
+    id: Strs,
+    json: Strs,
+    md: Strs,
+}
+
+fn put(items: Items, module: Str, id: Str, json: Str, md: Str) -> Int {
+    let n = strs_len(items.module)
+    let mut at = 0
+    while at < n {
+        let m = strs_get(items.module, at)
+        let k = strs_get(items.id, at)
+        if m == module && k == id {
+            strs_set(items.json, at, json)
+            strs_set(items.md, at, md)
+            return 0
+        }
+        if str_less(module, m) || (m == module && str_less(id, k)) { break }
+        at += 1
+    }
+    strs_push(items.module, "")
+    strs_push(items.id, "")
+    strs_push(items.json, "")
+    strs_push(items.md, "")
+    let mut j = n
+    while j > at {
+        strs_set(items.module, j, strs_get(items.module, j - 1))
+        strs_set(items.id, j, strs_get(items.id, j - 1))
+        strs_set(items.json, j, strs_get(items.json, j - 1))
+        strs_set(items.md, j, strs_get(items.md, j - 1))
+        j -= 1
+    }
+    strs_set(items.module, at, module)
+    strs_set(items.id, at, id)
+    strs_set(items.json, at, json)
+    strs_set(items.md, at, md)
+    0
+}
+
+// `slug`: every character not an ASCII letter or digit a `-`, letters lowered.
+fn slug(id: Str) -> Str {
+    let out = strs_new()
+    let n = str_len(id)
+    let mut i = 0
+    while i < n {
+        let b = str_byte(id, i)
+        if b >= 65 && b <= 90 {
+            strs_push(out, str_from_byte(b + 32))
+            i += 1
+        } else if (b >= 97 && b <= 122) || (b >= 48 && b <= 57) {
+            strs_push(out, str_from_byte(b))
+            i += 1
+        } else {
+            strs_push(out, "-")
+            let w = if b >= 240 { 4 } else if b >= 224 { 3 } else if b >= 192 { 2 } else { 1 }
+            i += w
+        }
+    }
+    str_join(out, "")
+}
+
+// Rust's `char::is_whitespace` at byte `i`: its width, or 0.
+fn space_at(s: Str, i: Int) -> Int {
+    let b = str_byte(s, i)
+    if b == 32 || (b >= 9 && b <= 13) { return 1 }
+    let n = str_len(s)
+    if b == 194 && i + 1 < n && (str_byte(s, i + 1) == 133 || str_byte(s, i + 1) == 160) { return 2 }
+    if b == 225 && i + 2 < n && str_byte(s, i + 1) == 154 && str_byte(s, i + 2) == 128 { return 3 }
+    if b == 226 && i + 2 < n {
+        let c1 = str_byte(s, i + 1)
+        let c2 = str_byte(s, i + 2)
+        if c1 == 128 && ((c2 >= 128 && c2 <= 138) || c2 == 168 || c2 == 169 || c2 == 175) { return 3 }
+        if c1 == 129 && c2 == 159 { return 3 }
+    }
+    if b == 227 && i + 2 < n && str_byte(s, i + 1) == 128 && str_byte(s, i + 2) == 128 { return 3 }
+    0
+}
+
+fn trim(s: Str) -> Str {
+    let mut a = 0
+    let n = str_len(s)
+    while a < n && space_at(s, a) > 0 { a += space_at(s, a) }
+    let mut e = n
+    let mut moved = true
+    while moved && e > a {
+        moved = false
+        for w in 1..4 {
+            if !moved && e - w >= a && space_at(s, e - w) == w {
+                e -= w
+                moved = true
+            }
+        }
+    }
+    str_slice(s, a, e)
+}
+
+// `description`: the comment lines directly above byte `at`, without their `//`.
+fn description(text: Str, at: Int) -> Str {
+    let before = str_slice(text, 0, at)
+    // `str::lines`: split at `\n`, a final `\r` dropped, no empty line after a final `\n`.
+    let lines = strs_new()
+    let mut from = 0
+    for i in 0..str_len(before) {
+        if str_byte(before, i) == 10 {
+            strs_push(lines, strip_cr(str_slice(before, from, i)))
+            from = i + 1
+        }
+    }
+    if from < str_len(before) { strs_push(lines, strip_cr(str_slice(before, from, str_len(before)))) }
+    let ends_nl = str_len(before) > 0 && str_byte(before, str_len(before) - 1) == 10
+    let mut k = strs_len(lines)
+    if !ends_nl && k > 0 { k -= 1 }
+    let got = strs_new()
+    while k > 0 {
+        let t = trim(strs_get(lines, k - 1))
+        if !fe_starts(t, "//") { break }
+        let mut c = str_slice(t, 2, str_len(t))
+        if fe_starts(c, " ") { c = str_slice(c, 1, str_len(c)) }
+        strs_push(got, c)
+        k -= 1
+    }
+    let out = strs_new()
+    let mut j = strs_len(got)
+    while j > 0 {
+        strs_push(out, strs_get(got, j - 1))
+        j -= 1
+    }
+    str_join(out, nl())
+}
+
+fn strip_cr(s: Str) -> Str {
+    if str_len(s) > 0 && str_byte(s, str_len(s) - 1) == 13 { return str_slice(s, 0, str_len(s) - 1) }
+    s
+}
+
+fn line_of(text: Str, at: Int) -> Int {
+    let mut line = 1
+    let mut i = 0
+    while i < at && i < str_len(text) {
+        if str_byte(text, i) == 10 { line += 1 }
+        i += 1
+    }
+    line
+}
+
+
+fn trim_semis(s: Str) -> Str {
+    let mut end = str_len(s)
+    while end > 0 && str_byte(s, end - 1) == 59 { end -= 1 }
+    str_slice(s, 0, end)
+}
+
+// A signature as `apidoc.rs` cuts a function's: trailing white space, then trailing `;`s.
+fn trim_signature(s: Str) -> Str {
+    let mut end = str_len(s)
+    while end > 0 && trailing_space(s, end) > 0 { end -= trailing_space(s, end) }
+    trim_semis(str_slice(s, 0, end))
+}
+
+// The width of a white-space character ending at `end`, or 0.
+fn trailing_space(s: Str, end: Int) -> Int {
+    for w in 1..4 {
+        if end - w >= 0 && space_at(s, end - w) == w { return w }
+    }
+    0
+}
+
+// One document's context: the compilation, its names as shown, and the directory paths are
+// relative to.
+struct Doc {
+    f: Facts,
+    names: Strs,
+    base: Strs,
+}
+
+fn module_path(io: IoCap, d: Doc, m: Int) -> Str {
+    relative(io, fx_module_name(d.f, m), strs_get(d.names, m), strs_get(d.base, 0))
+}
+
+// A JSON object written a field at a time, its keys given in sorted order (`serde_json`'s map).
+fn kv(o: Strs, key: Str, value: Str) -> Int {
+    strs_push(o, json_str(key) + ":" + value)
+    0
+}
+
+fn close(o: Strs) -> Str { "{" + str_join(o, ",") + "}" }
+
+// Text a piece at a time.
+fn put_text(o: Strs, s: Str) -> Int {
+    strs_push(o, s)
+    0
+}
+
+fn source(io: IoCap, d: Doc, m: Int, at: Int) -> Str {
+    let o = strs_new()
+    kv(o, "line", int_to_str(line_of(fx_module_text(d.f, m), at)))
+    kv(o, "path", json_str(module_path(io, d, m)))
+    close(o)
+}
+
+fn source_md(io: IoCap, d: Doc, m: Int, at: Int) -> Str {
+    let path = module_path(io, d, m)
+    let line = int_to_str(line_of(fx_module_text(d.f, m), at))
+    let o = strs_new()
+    put_text(o, "- source: [" + path)
+    put_text(o, ":" + line)
+    put_text(o, "](" + path)
+    put_text(o, "#L" + line)
+    put_text(o, ")" + nl())
+    put_text(o, nl())
+    str_join(o, "")
+}
+
+fn effects(mask: Int) -> Str { if mask < 0 { "null" } else { jstrs(ck_effect_names(mask)) } }
+
+fn show_list(xs: Strs) -> Str { if strs_len(xs) == 0 { "none" } else { str_join(xs, ", ") } }
+
+fn show_effects(mask: Int) -> Str { if mask < 0 { "not declared" } else { show_list(ck_effect_names(mask)) } }
+
+// The Markdown head of an item: its anchor, heading, signature, deprecation and description.
+fn md_head(o: Strs, anchor: Str, kind: Str, name: Str, signature: Str, deprecated: Bool, why: Str, desc: Str) -> Int {
+    put_text(o, "<a id=\"" + anchor)
+    put_text(o, "\"></a>" + nl())
+    put_text(o, "### `" + kind)
+    put_text(o, " " + name)
+    put_text(o, "`" + nl())
+    put_text(o, nl() + "```nazm")
+    put_text(o, nl() + signature)
+    put_text(o, nl() + "```")
+    put_text(o, nl() + nl())
+    if deprecated {
+        if why == "" {
+            put_text(o, "**Deprecated.**" + nl())
+        } else {
+            put_text(o, "**Deprecated:** " + why)
+            put_text(o, nl())
+        }
+        put_text(o, nl())
+    }
+    if desc != "" {
+        put_text(o, desc + nl())
+        put_text(o, nl())
+    }
+    0
+}
+
+fn function_item(io: IoCap, d: Doc, i: Int, items: Items) -> Int {
+    let f = d.f
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    let m = ck_fn_module(c, i)
+    let node = ck_fn_node(c, i)
+    let text = fx_module_text(f, m)
+    let span = sx_field(t, node, "span")
+    let mut start = fx_start(f, span)
+    if sx_is_some(t, sx_field(t, node, "pub_span")) {
+        let ps = fx_start(f, sx_unwrap(t, sx_field(t, node, "pub_span")))
+        if ps < start { start = ps }
+    }
+    let mut end = fx_end(f, span)
+    if sx_is_some(t, sx_field(t, node, "body")) { end = fx_start(f, sx_field(t, sx_unwrap(t, sx_field(t, node, "body")), "span")) }
+    let id = fx_fn_identity(f, i)
+    let anchor = slug(id)
+    let signature = trim_signature(str_slice(text, start, end))
+    let desc = description(text, start)
+    let name = ck_fn_name(c, i)
+    let at = fx_start(f, sx_field(t, node, "name_span"))
+    let deprecated = fx_is_deprecated(f, node)
+    let fx = strs_new()
+    kv(fx, "declared", effects(ck_fn_declared(c, i)))
+    kv(fx, "required", effects(ck_fn_required(c, i)))
+    let o = strs_new()
+    kv(o, "anchor", json_str(anchor))
+    kv(o, "capabilities", jstrs(ck_fn_capabilities(c, i)))
+    if deprecated { kv(o, "deprecated", json_str(fx_deprecated(f, node))) }
+    kv(o, "description", json_str(desc))
+    kv(o, "effects", close(fx))
+    kv(o, "export", jor_null(ck_fn_export(c, i)))
+    kv(o, "foreign", jor_null(ck_fn_foreign(c, i)))
+    kv(o, "generic", if ck_fn_generic(c, i) { "true" } else { "false" })
+    kv(o, "id", json_str(id))
+    kv(o, "kind", json_str("fn"))
+    kv(o, "name", json_str(name))
+    kv(o, "params", jstrs(ck_fn_params(c, i)))
+    kv(o, "ret", json_str(ck_fn_ret(c, i)))
+    kv(o, "signature", json_str(signature))
+    kv(o, "source", source(io, d, m, at))
+    let md = strs_new()
+    md_head(md, anchor, "fn", name, signature, deprecated, fx_deprecated(f, node), desc)
+    put_text(md, "- effects: declared " + show_effects(ck_fn_declared(c, i)))
+    put_text(md, "; required " + show_effects(ck_fn_required(c, i)))
+    put_text(md, nl())
+    put_text(md, "- capabilities: " + show_list(ck_fn_capabilities(c, i)))
+    put_text(md, nl())
+    if ck_fn_foreign(c, i) != "" {
+        put_text(md, "- foreign: calls C's `" + ck_fn_foreign(c, i))
+        put_text(md, "`" + nl())
+    }
+    if ck_fn_export(c, i) != "" {
+        put_text(md, "- export: C calls it as `" + ck_fn_export(c, i))
+        put_text(md, "`" + nl())
+    }
+    put_text(md, source_md(io, d, m, at))
+    put(items, fx_module_key(f, m), id, close(o), str_join(md, ""))
+}
+
+fn type_item(io: IoCap, d: Doc, m: Int, kind: Str, decl: Int, items: Items) -> Int {
+    let f = d.f
+    let t = fx_tree(f)
+    let text = fx_module_text(f, m)
+    let span = sx_field(t, decl, "span")
+    let mut start = fx_start(f, span)
+    let ps = fx_start(f, sx_unwrap(t, sx_field(t, decl, "pub_span")))
+    if ps < start { start = ps }
+    let name = sx_name(t, decl, "name")
+    let module = fx_module_key(f, m)
+    let id = module + "::" + kind + " " + name
+    let anchor = slug(id)
+    let signature = str_slice(text, start, fx_end(f, span))
+    let desc = description(text, start)
+    let parts = strs_new()
+    let mut key = "fields"
+    if kind == "struct" {
+        let fields = sx_items(t, sx_field(t, decl, "fields"))
+        for k in 0..ints_len(fields) {
+            let fd = ints_get(fields, k)
+            let ts = sx_field(t, sx_field(t, fd, "ty"), "span")
+            let e = strs_new()
+            kv(e, "name", json_str(sx_name(t, fd, "name")))
+            kv(e, "type", json_str(str_slice(text, fx_start(f, ts), fx_end(f, ts))))
+            strs_push(parts, close(e))
+        }
+    } else {
+        key = "variants"
+        let variants = sx_items(t, sx_field(t, decl, "variants"))
+        for k in 0..ints_len(variants) {
+            let v = ints_get(variants, k)
+            let names = strs_new()
+            let vf = sx_items(t, sx_field(t, v, "fields"))
+            for j in 0..ints_len(vf) { strs_push(names, sx_name(t, ints_get(vf, j), "name")) }
+            let e = strs_new()
+            kv(e, "fields", jstrs(names))
+            kv(e, "name", json_str(sx_name(t, v, "name")))
+            strs_push(parts, close(e))
+        }
+    }
+    let list = "[" + str_join(parts, ",") + "]"
+    let at = fx_start(f, sx_field(t, decl, "name_span"))
+    let deprecated = fx_is_deprecated(f, decl)
+    let o = strs_new()
+    kv(o, "anchor", json_str(anchor))
+    if deprecated { kv(o, "deprecated", json_str(fx_deprecated(f, decl))) }
+    kv(o, "description", json_str(desc))
+    if key == "fields" { kv(o, "fields", list) }
+    kv(o, "id", json_str(id))
+    kv(o, "kind", json_str(kind))
+    kv(o, "name", json_str(name))
+    kv(o, "signature", json_str(signature))
+    kv(o, "source", source(io, d, m, at))
+    if key == "variants" { kv(o, "variants", list) }
+    let md = strs_new()
+    md_head(md, anchor, kind, name, signature, deprecated, fx_deprecated(f, decl), desc)
+    put_text(md, source_md(io, d, m, at))
+    put(items, module, id, close(o), str_join(md, ""))
+}
+
+fn reexport_item(io: IoCap, d: Doc, m: Int, at: Int, id: Str, name: Str, signature: Str, of: Str, items: Items) -> Int {
+    let anchor = slug(id)
+    let o = strs_new()
+    kv(o, "anchor", json_str(anchor))
+    kv(o, "description", json_str(""))
+    kv(o, "id", json_str(id))
+    kv(o, "kind", json_str("reexport"))
+    kv(o, "name", json_str(name))
+    kv(o, "of", jor_null(of))
+    kv(o, "signature", json_str(signature))
+    kv(o, "source", source(io, d, m, at))
+    let shown = if of == "" { "nothing resolved" } else { of }
+    let md = strs_new()
+    md_head(md, anchor, "reexport", name, signature, false, "", "")
+    put_text(md, "- re-exports: `" + shown)
+    put_text(md, "`" + nl())
+    put_text(md, source_md(io, d, m, at))
+    put(items, fx_module_key(d.f, m), id, close(o), str_join(md, ""))
+}
+
+fn reexports(io: IoCap, d: Doc, m: Int, items: Items) -> Int {
+    let f = d.f
+    let t = fx_tree(f)
+    let text = fx_module_text(f, m)
+    let imports = sx_items(t, sx_field(t, fx_module_program(f, m), "imports"))
+    let module = fx_module_key(f, m)
+    for k in 0..ints_len(imports) {
+        let imp = ints_get(imports, k)
+        let re = sx_field(t, imp, "reexport")
+        if sx_is_some(t, re) {
+            let span = sx_field(t, imp, "span")
+            let signature = trim_semis(str_slice(text, fx_start(f, span), fx_end(f, span)))
+            let at = fx_start(f, span)
+            let names = sx_field(t, sx_unwrap(t, re), "names")
+            if !sx_is_some(t, names) {
+                let path = sx_name(t, imp, "path")
+                reexport_item(io, d, m, at, module + "::reexport " + path, path, signature, "every export", items)
+            } else {
+                let list = sx_items(t, sx_unwrap(t, names))
+                for j in 0..ints_len(list) {
+                    let it = ints_get(list, j)
+                    let mut offered = sx_name(t, it, "name")
+                    let alias = sx_field(t, it, "alias")
+                    if sx_is_some(t, alias) { offered = sx_text(t, sx_kid(t, sx_unwrap(t, alias), 0)) }
+                    let s = sx_field(t, it, "span")
+                    let of = fx_reexport_of(f, m, fx_start(f, s), fx_end(f, s))
+                    reexport_item(io, d, m, at, module + "::reexport " + offered, offered, signature, of, items)
+                }
+            }
+        }
+    }
+    0
+}
+
+// Whether module `m`'s items are documented: the program's own, with a durable key.
+fn documented(f: Facts, m: Int) -> Bool { fx_module_own(f, m) && fx_module_key(f, m) != "" }
+
+// `document`: one compilation, rooted at `path` (shown as `shown`), its items into `items`.
+fn document(io: IoCap, path: Str, shown: Str, prefix: Str, base: Str, library: Str, items: Items) -> Int {
+    let f = fx_check_module(path, library, fe_host_os(), fe_host_arch(), io)
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    if fx_refusal(f) != "" { fail(io, fx_refusal(f), 1) }
+    let dg = fx_diags(f)
+    fe_unprefix_diags(dg, prefix)
+    let names = fe_names(f, prefix)
+    if fe_load_failed(f) {
+        let why = strs_new()
+        for i in 0..dg_len(dg) { strs_push(why, strs_get(dg.message, i)) }
+        fail(io, "cannot load " + shown + ": " + str_join(why, "; "), 1)
+    }
+    if fx_failed(f) {
+        let texts = fe_texts(f)
+        let bases = fe_bases(f)
+        let out = strs_new()
+        let mut n = 0
+        for i in 0..dg_len(dg) {
+            if dg_severity(dg, i) == "error" {
+                strs_push(out, dg_render(dg, i, names, texts, bases))
+                n += 1
+            }
+        }
+        eprint(str_join(out, ""))
+        fail(io, int_to_str(n) + " error" + (if n == 1 { "" } else { "s" }) + " — a program that does not check has no API to document", 1)
+    }
+    let base_s = strs_new()
+    strs_push(base_s, base)
+    let d = Doc(f: f, names: names, base: base_s)
+    let c = fx_checker(f)
+    let t = fx_tree(f)
+    for i in 0..ck_fn_count(c) {
+        let m = ck_fn_module(c, i)
+        if !ck_fn_closure(c, i) && ck_fn_public(c, i) && documented(f, m) { function_item(io, d, i, items) }
+    }
+    for m in 0..fx_modules(f) {
+        if documented(f, m) {
+            let p = fx_module_program(f, m)
+            let records = sx_items(t, sx_field(t, p, "records"))
+            for k in 0..ints_len(records) {
+                let r = ints_get(records, k)
+                if sx_is_some(t, sx_field(t, r, "pub_span")) { type_item(io, d, m, "struct", r, items) }
+            }
+        }
+    }
+    for m in 0..fx_modules(f) {
+        if documented(f, m) {
+            let p = fx_module_program(f, m)
+            let enums = sx_items(t, sx_field(t, p, "enums"))
+            for k in 0..ints_len(enums) {
+                let e = ints_get(enums, k)
+                if sx_is_some(t, sx_field(t, e, "pub_span")) { type_item(io, d, m, "enum", e, items) }
+            }
+        }
+    }
+    for m in 0..fx_modules(f) {
+        if documented(f, m) { reexports(io, d, m, items) }
+    }
+    0
+}
+
+// --- a package's directory ---------------------------------------------------------------------------
+
+// `PathBuf`'s order: component by component.
+fn path_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        let x = str_byte(a, i)
+        let y = str_byte(b, i)
+        if x != y {
+            if x == 47 { return true }
+            if y == 47 { return false }
+            return x < y
+        }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+// Every `.nz` file under `dir` (absolute), not through a symbolic link to a directory; false when a
+// directory cannot be read.
+fn walk(io: IoCap, dir: Str, out: Strs) -> Bool {
+    let h = os_dir_open(dir)
+    if os_status(h) < 0 { return false }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    let subdirs = strs_new()
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        let p = if dir == "/" { "/" + name } else { dir + "/" + name }
+        let k = lstat_kind(io, p)
+        if k == 1 {
+            strs_push(subdirs, p)
+        } else if stat_kind(io, p) == 1 {
+            // a link to a directory: not walked
+        } else if str_len(name) > 3 && str_slice(name, str_len(name) - 3, str_len(name)) == ".nz" {
+            strs_push(out, p)
+        }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    if n < 0 { return false }
+    for i in 0..strs_len(subdirs) {
+        if !walk(io, strs_get(subdirs, i), out) { return false }
+    }
+    true
+}
+
+fn sort_paths(xs: Strs) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(xs) {
+        let x = strs_get(xs, i)
+        let mut at = 0
+        while at < strs_len(out) && path_less(strs_get(out, at), x) { at += 1 }
+        strs_push(out, "")
+        let mut j = strs_len(out) - 1
+        while j > at {
+            strs_set(out, j, strs_get(out, j - 1))
+            j -= 1
+        }
+        strs_set(out, at, x)
+    }
+    out
+}
+
+// The package object of the document: its name, version and every package's profile.
+fn package_json(p: Packages) -> Str {
+    if pk_packages_state(p) != 1 { return "null" }
+    let r = pk_root_package(p)
+    let profiles = strs_new()
+    for i in 0..pk_count(p) {
+        if pk_profile(p, i) != "" { strs_push(profiles, pk_profile(p, i)) }
+    }
+    "{\"name\":" + json_str(pk_name(p, r)) + ",\"profiles\":" + jstrs(profiles) + ",\"version\":" + json_str(pk_package_version(p, r)) + "}"
+}
+
+fn package_md(p: Packages) -> Str {
+    if pk_packages_state(p) != 1 { return "# API" + nl() + nl() }
+    let mut s = "# " + pk_name(p, pk_root_package(p)) + nl() + nl()
+    let profiles = strs_new()
+    for i in 0..pk_count(p) {
+        if pk_profile(p, i) != "" { strs_push(profiles, pk_profile(p, i)) }
+    }
+    if strs_len(profiles) > 0 { s = s + "Held to the profiles: " + str_join(profiles, ", ") + "." + nl() + nl() }
+    s
+}
+
+// --- the command ----------------------------------------------------------------------------------
+
+// `nazm doc`, its arguments read into `c` (`doc_cli`) from where `cli_from` says.
+pub fn doc_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let path = cli_value(c, 0)
+    let has_out = cli_present(c, 1)
+    let out = cli_value(c, 1)
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let items = Items(module: strs_new(), id: strs_new(), json: strs_new(), md: strs_new())
+    let prefix = fe_prefix(io, path)
+    let mut packages = pk_none()
+    if stat_kind(io, path) == 1 {
+        // `nazm_package::resolve`, then every module under the root package's source root.
+        let dir = pk_normalise(prefix + path)
+        let manifest = pk_join(dir, "nazm.toml")
+        if stat_kind(io, manifest) < 0 { fail(io, "no manifest `" + path_join(path, "nazm.toml") + "`", 1) }
+        if stat_kind(io, manifest) != 0 { refuse(io, "a manifest that is not a file") }
+        let m = pk_parse(read_file(manifest))
+        // A manifest that is not one: `resolve`'s first diagnostic, the manifest named as given.
+        if pk_state(m) == 0 { fail(io, "`" + path_join(path, "nazm.toml") + "`: " + pk_why(m), 1) }
+        if pk_state(m) != 1 { refuse(io, "a manifest the front end does not read") }
+        let declared = pk_normalise(pk_join(dir, strs_get(m.root, 0)))
+        let source_root = fe_canonical(io, declared)
+        if source_root == "" { refuse(io, "a package without its source root") }
+        packages = pk_context(declared, io)
+        if pk_packages_state(packages) != 1 { refuse(io, "a package that does not resolve here") }
+        let found = strs_new()
+        if !walk(io, source_root, found) { refuse(io, "a source root that cannot be read") }
+        let files = sort_paths(found)
+        for i in 0..strs_len(files) {
+            let f = strs_get(files, i)
+            document(io, f, f, "", dir, library, items)
+        }
+    } else {
+        let abs = prefix + path
+        let k = stat_kind(io, path)
+        if k >= 0 && k != 0 { refuse(io, "a root module that is not a regular file") }
+        document(io, abs, path, prefix, parent_or_dot(path), library, items)
+        // `graph_for`: the package the file lies in, where its source root is a package's.
+        let root = pk_decide(abs, io)
+        if pk_root_how(root) == 1 {
+            packages = pk_context(pk_root_path(root), io)
+            if pk_packages_state(packages) != 1 { refuse(io, "a package that does not resolve here") }
+        }
+    }
+    let modules = strs_new()
+    let md = strs_new()
+    strs_push(md, package_md(packages))
+    let mut i = 0
+    while i < strs_len(items.module) {
+        let module = strs_get(items.module, i)
+        let list = strs_new()
+        strs_push(md, "## Module `" + module + "`" + nl() + nl())
+        while i < strs_len(items.module) && strs_get(items.module, i) == module {
+            strs_push(list, strs_get(items.json, i))
+            strs_push(md, strs_get(items.md, i))
+            i += 1
+        }
+        strs_push(modules, "{\"items\":[" + str_join(list, ",") + "],\"module\":" + json_str(module) + "}")
+    }
+    let doc = "{\"modules\":[" + str_join(modules, ",") + "],\"package\":" + package_json(packages) + ",\"schema\":\"nazm.api-doc/2\"}"
+    if !has_out {
+        print(doc + nl())
+        return 0
+    }
+    let mut s = mkdirs(io, out)
+    if s == 0 { s = write_all(io, path_join(out, "api.json"), pretty(doc) + nl()) }
+    if s == 0 { s = write_all(io, path_join(out, "api.md"), str_join(md, "")) }
+    if s != 0 { fail(io, "cannot write " + out + ": " + os_error_text(s) + " (os error " + int_to_str(0 - s) + ")", 4) }
+    eprint("nazm: wrote " + out + "/api.json and " + out + "/api.md" + nl())
+    0
+}
+
+// `Path::join`: a name after the directory, a `/` between unless it ends in one.
+fn path_join(dir: Str, name: Str) -> Str {
+    if str_len(dir) > 0 && str_byte(dir, str_len(dir) - 1) == 47 { return dir + name }
+    dir + "/" + name
+}
+
+// Rust's `create_dir_all`: 0, or the failing status.
+fn mkdirs(io: IoCap, p: Str) -> Int {
+    if p == "" { return 0 }
+    let s = os_mkdir(p)
+    if s == 0 { return 0 }
+    if s != 0 - 2 {
+        if stat_kind(io, p) == 1 { return 0 }
+        return s
+    }
+    let up = pk_parent(p)
+    if up == "" || up == p { return s }
+    let r = mkdirs(io, up)
+    if r != 0 { return r }
+    let again = os_mkdir(p)
+    if again == 0 || stat_kind(io, p) == 1 { return 0 }
+    again
+}
+
+// `fs::write`: created or truncated, every byte written. 0, or the failing status.
+fn write_all(io: IoCap, p: Str, text: Str) -> Int {
+    let h = os_open_write(p, 0)
+    let s = os_status(h)
+    if s < 0 { return s }
+    let data = bytes_from_str(text)
+    let n = bytes_len(data)
+    let mut done = 0
+    while done < n {
+        let w = os_write(h, bytes_slice(data, done, n))
+        if w < 0 {
+            os_close(h)
+            return w
+        }
+        done += w
+    }
+    os_close(h)
+    0
+}
