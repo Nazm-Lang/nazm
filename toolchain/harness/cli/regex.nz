@@ -1,0 +1,520 @@
+// R1e, S5: `@std/regex`. A table of patterns and texts, each pattern's every match as
+// `regex_find_all` finds them — leftmost-first, as Rust's `regex` and Perl find them; capture
+// groups; every malformed pattern refused with the byte offset where; patterns that take
+// exponential time in a backtracking matcher finishing at once on long texts; and a tokeniser's
+// pre-split, captures and errors alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
+// Cranelift, with nothing live. Ported from `crates/nazm-cli/tests/regex.rs` (R7); the tables are
+// the Rust test's, its literals carried over byte for byte.
+
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+const GPT2: Str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
+const CL100K: Str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const HEAD: Str = "use \"@std/regex\";\n\nfn spans(ms: Vec[Match]) -> Str {\n    let mut out = \"\";\n    for i in 0..vec_len(ms) {\n        let m = vec_get(ms, i);\n        out = f\"{out}({m.start},{m.end})\";\n    }\n    out\n}\n\nfn all(pattern: Str, text: Str) -> Str {\n    match regex_compile(pattern) {\n        Result.Ok(value: r) => spans(regex_find_all(r, text)),\n        Result.Err(error: e) => f\"error: {e}\",\n    }\n}\n\nfn groups(pattern: Str, text: Str) -> Str {\n    match regex_compile(pattern) {\n        Result.Ok(value: r) => match regex_captures(r, text, 0) {\n            Option.Some(value: gs) => {\n                let mut out = \"\";\n                for i in 0..vec_len(gs) {\n                    let g = match vec_get(gs, i) {\n                        Option.Some(value: m) => f\"({m.start},{m.end})\",\n                        Option.None() => \"-\",\n                    };\n                    out = f\"{out}{g}\";\n                }\n                out\n            },\n            Option.None() => \"no match\",\n        },\n        Result.Err(error: e) => f\"error: {e}\",\n    }\n}\n\n";
+const PATHOLOGICAL: Str = "use \"@std/regex\";\n\nfn probe(p: Str, text: Str) -> Str {\n    match regex_compile(p) {\n        Result.Ok(value: r) => {\n            let found = match regex_find(r, text, 0) {\n                Option.Some(value: m) => f\"({m.start},{m.end})\",\n                Option.None() => \"none\",\n            };\n            f\"{p}: {regex_is_match(r, text)} {found}\\n\"\n        },\n        Result.Err(error: e) => f\"{p}: {e}\\n\",\n    }\n}\n\nfn main(io: IoCap) -> Int ! {io} {\n    let n = 40;\n    let mut text = \"\";\n    for i in 0..n { text = str_concat(text, \"a\"); }\n    print(probe(\"(a*)*b\", text));\n    print(probe(\"(a|aa)*c\", text));\n    print(probe(\"(a+a+)+b\", text));\n    print(probe(\"(a?){40}a{40}b\", text));\n    print(probe(\"(?:a*)*$x\", text));\n    match regex_compile(\"(a*)*b\") {\n        Result.Ok(value: r) => {\n            let ms = regex_find_all(r, str_concat(text, \"b\"));\n            print(f\"{vec_len(ms)} {vec_get(ms, 0).start} {vec_get(ms, 0).end}\\n\");\n        },\n        Result.Err(error: e) => print(e),\n    };\n    0\n}\n";
+const PROGRAM: Str = "use \"@std/regex\";\n\nfn spans(ms: Vec[Match]) -> Str {\n    let mut out = \"\";\n    for i in 0..vec_len(ms) {\n        let m = vec_get(ms, i);\n        out = f\"{out}({m.start},{m.end})\";\n    }\n    out\n}\n\nfn main(io: IoCap) -> Int ! {io} {\n    let text = \"It's 12345 cafés...\\n\\n  OK, naïve 日本語!\";\n    match regex_compile(\"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\\\r\\\\n\\\\p{L}\\\\p{N}]?\\\\p{L}+|\\\\p{N}{1,3}| ?[^\\\\s\\\\p{L}\\\\p{N}]+[\\\\r\\\\n]*|\\\\s*[\\\\r\\\\n]+|\\\\s+(?!\\\\S)|\\\\s+\") {\n        Result.Ok(value: r) => {\n            let ms = regex_find_all(r, text);\n            let pieces = strs_new();\n            for i in 0..vec_len(ms) {\n                let m = vec_get(ms, i);\n                strs_push(pieces, str_slice(text, m.start, m.end));\n            }\n            print(f\"{spans(ms)}\\n{str_join(pieces, \"|\")}\\n\");\n        },\n        Result.Err(error: e) => print(f\"error: {e}\\n\"),\n    };\n    match regex_compile(\"(\\\\w+)@(\\\\w+)(?:\\\\.(com|org))?\") {\n        Result.Ok(value: r) => {\n            print(f\"groups: {regex_groups(r)}\\n\");\n            match regex_captures(r, \"to: bob@example.org, amy@home\", 0) {\n                Option.Some(value: gs) => {\n                    for i in 0..vec_len(gs) {\n                        match vec_get(gs, i) {\n                            Option.Some(value: m) => print(f\"{i}: {m.start}..{m.end}\\n\"),\n                            Option.None() => print(f\"{i}: -\\n\"),\n                        };\n                    }\n                },\n                Option.None() => print(\"no match\\n\"),\n            };\n            match regex_find(r, \"to: bob@example.org, amy@home\", 20) {\n                Option.Some(value: m) => print(f\"from 20: {m.start}..{m.end}\\n\"),\n                Option.None() => print(\"from 20: none\\n\"),\n            };\n            print(f\"{regex_is_match(r, \"nobody\")} {regex_is_match(r, \"a@b\")}\\n\");\n        },\n        Result.Err(error: e) => print(f\"error: {e}\\n\"),\n    };\n    match regex_compile(\"[a-\") {\n        Result.Ok(value: r) => print(\"compiled\\n\"),\n        Result.Err(error: e) => print(f\"error: {e}\\n\"),\n    };\n    0\n}\n";
+const EXPECTED: Str = "(0,2)(2,4)(4,5)(5,8)(8,10)(10,17)(17,22)(22,23)(23,26)(26,27)(27,34)(34,44)(44,45)\nIt|'s| |123|45| cafés|...\n\n| | OK|,| naïve| 日本語|!\ngroups: 3\n0: 4..19\n1: 4..7\n2: 8..15\n3: 16..19\nfrom 20: 21..29\nfalse true\nerror: an unclosed class at byte 0\n0\n";
+
+/// `pattern text want` triples.
+fn leftmost_first_table() -> Strs ! {} {
+    let t = strs_new();
+    strs_push(t, "abc");
+    strs_push(t, "xabcabc");
+    strs_push(t, "(1,4)(4,7)");
+    strs_push(t, "a|ab");
+    strs_push(t, "ab");
+    strs_push(t, "(0,1)");
+    strs_push(t, "ab|a");
+    strs_push(t, "ab");
+    strs_push(t, "(0,2)");
+    strs_push(t, "(a|ab)(c|bcd)(d*)");
+    strs_push(t, "abcd");
+    strs_push(t, "(0,4)");
+    strs_push(t, "(ab|a)(bc|c)?");
+    strs_push(t, "abc");
+    strs_push(t, "(0,3)");
+    strs_push(t, "a*");
+    strs_push(t, "baaab");
+    strs_push(t, "(0,0)(1,4)(5,5)");
+    strs_push(t, "a|");
+    strs_push(t, "ba");
+    strs_push(t, "(0,0)(1,2)");
+    strs_push(t, "");
+    strs_push(t, "ab");
+    strs_push(t, "(0,0)(1,1)(2,2)");
+    strs_push(t, "a+?");
+    strs_push(t, "aaa");
+    strs_push(t, "(0,1)(1,2)(2,3)");
+    strs_push(t, "a*?b");
+    strs_push(t, "aaab");
+    strs_push(t, "(0,4)");
+    strs_push(t, "a{2,3}");
+    strs_push(t, "aaaaaaa");
+    strs_push(t, "(0,3)(3,6)");
+    strs_push(t, "a{2,3}?");
+    strs_push(t, "aaaaa");
+    strs_push(t, "(0,2)(2,4)");
+    strs_push(t, "a{2}");
+    strs_push(t, "aaaaa");
+    strs_push(t, "(0,2)(2,4)");
+    strs_push(t, "a{2,}");
+    strs_push(t, "a aa aaaa");
+    strs_push(t, "(2,4)(5,9)");
+    strs_push(t, "a{0,2}?b");
+    strs_push(t, "aab");
+    strs_push(t, "(0,3)");
+    strs_push(t, "x{0}y");
+    strs_push(t, "xy");
+    strs_push(t, "(1,2)");
+    strs_push(t, "x?y");
+    strs_push(t, "xyy");
+    strs_push(t, "(0,2)(2,3)");
+    strs_push(t, "(a|b)*c");
+    strs_push(t, "abacbc");
+    strs_push(t, "(0,4)(4,6)");
+    strs_push(t, "(?:ab)+");
+    strs_push(t, "ababab abab");
+    strs_push(t, "(0,6)(7,11)");
+    strs_push(t, "<.+?>");
+    strs_push(t, "<a><b>");
+    strs_push(t, "(0,3)(3,6)");
+    strs_push(t, "<.+>");
+    strs_push(t, "<a><b>");
+    strs_push(t, "(0,6)");
+    strs_push(t, "[a-c]+");
+    strs_push(t, "xxabcbay");
+    strs_push(t, "(2,7)");
+    strs_push(t, "[^a-c]+");
+    strs_push(t, "abxyzc");
+    strs_push(t, "(2,5)");
+    strs_push(t, "[-a]+");
+    strs_push(t, "a-a-b");
+    strs_push(t, "(0,4)");
+    strs_push(t, "[a-]+");
+    strs_push(t, "a-a-b");
+    strs_push(t, "(0,4)");
+    strs_push(t, "[]a]+");
+    strs_push(t, "]a]b");
+    strs_push(t, "(0,3)");
+    strs_push(t, "[^]a]+");
+    strs_push(t, "]a]bc");
+    strs_push(t, "(3,5)");
+    strs_push(t, "[\\d\\s]+");
+    strs_push(t, "a1 2b");
+    strs_push(t, "(1,4)");
+    strs_push(t, "[\\]\\\\]+");
+    strs_push(t, "x]\\]y");
+    strs_push(t, "(1,4)");
+    strs_push(t, "\\d+");
+    strs_push(t, "a12b345");
+    strs_push(t, "(1,3)(4,7)");
+    strs_push(t, "\\D+");
+    strs_push(t, "a12b345");
+    strs_push(t, "(0,1)(3,4)");
+    strs_push(t, "\\w+");
+    strs_push(t, "foo_bar baz-qux");
+    strs_push(t, "(0,7)(8,11)(12,15)");
+    strs_push(t, "\\W+");
+    strs_push(t, "foo_bar baz-qux");
+    strs_push(t, "(7,8)(11,12)");
+    strs_push(t, "\\s+");
+    strs_push(t, "a \t\nb\r\x0B\x0Cc");
+    strs_push(t, "(1,4)(5,8)");
+    strs_push(t, "\\S+");
+    strs_push(t, "a \t\nbc");
+    strs_push(t, "(0,1)(4,6)");
+    strs_push(t, "[^\\n]+");
+    strs_push(t, "ab\ncd");
+    strs_push(t, "(0,2)(3,5)");
+    strs_push(t, "^a");
+    strs_push(t, "aaa");
+    strs_push(t, "(0,1)");
+    strs_push(t, "a$");
+    strs_push(t, "aaa");
+    strs_push(t, "(2,3)");
+    strs_push(t, "^$");
+    strs_push(t, "");
+    strs_push(t, "(0,0)");
+    strs_push(t, "(?m)^\\w+$");
+    strs_push(t, "ab\ncd\n");
+    strs_push(t, "(0,2)(3,5)");
+    strs_push(t, "(?m)$");
+    strs_push(t, "a\nb");
+    strs_push(t, "(1,1)(3,3)");
+    strs_push(t, "\\bfoo\\b");
+    strs_push(t, "foo foobar barfoo foo");
+    strs_push(t, "(0,3)(18,21)");
+    strs_push(t, "\\Bo\\B");
+    strs_push(t, "foo boo");
+    strs_push(t, "(1,2)(5,6)");
+    strs_push(t, "\\Afoo");
+    strs_push(t, "foofoo");
+    strs_push(t, "(0,3)");
+    strs_push(t, "foo\\z");
+    strs_push(t, "foofoo");
+    strs_push(t, "(3,6)");
+    strs_push(t, ".");
+    strs_push(t, "héllo");
+    strs_push(t, "(0,1)(1,3)(3,4)(4,5)(5,6)");
+    strs_push(t, ".+");
+    strs_push(t, "a\nb");
+    strs_push(t, "(0,1)(2,3)");
+    strs_push(t, "(?s).+");
+    strs_push(t, "a\nb");
+    strs_push(t, "(0,3)");
+    strs_push(t, "(?s:.)b");
+    strs_push(t, "\nb");
+    strs_push(t, "(0,2)");
+    strs_push(t, "é+");
+    strs_push(t, "aéééb");
+    strs_push(t, "(1,7)");
+    strs_push(t, "[é-ë]+");
+    strs_push(t, "aéêëb");
+    strs_push(t, "(1,7)");
+    strs_push(t, "(?i)hello");
+    strs_push(t, "HeLLo hello");
+    strs_push(t, "(0,5)(6,11)");
+    strs_push(t, "(?i)[a-c]+");
+    strs_push(t, "xABCcbx");
+    strs_push(t, "(1,6)");
+    strs_push(t, "(?i)[^a]");
+    strs_push(t, "aAb");
+    strs_push(t, "(2,3)");
+    strs_push(t, "(?i:a)b");
+    strs_push(t, "Ab AB");
+    strs_push(t, "(0,2)");
+    strs_push(t, "a(?i)b|c");
+    strs_push(t, "aB C");
+    strs_push(t, "(0,2)(3,4)");
+    strs_push(t, "(?i)a(?-i)b");
+    strs_push(t, "AB Ab ab");
+    strs_push(t, "(3,5)(6,8)");
+    strs_push(t, "\\x41\\u{42}\\x{43}\\u0044");
+    strs_push(t, "ABCD");
+    strs_push(t, "(0,4)");
+    strs_push(t, "a\\.b");
+    strs_push(t, "a.b axb");
+    strs_push(t, "(0,3)");
+    strs_push(t, "\\(\\)\\[\\]\\{\\}\\*\\+\\?\\|\\^\\$");
+    strs_push(t, "()[]{}*+?|^$");
+    strs_push(t, "(0,12)");
+    strs_push(t, "\\t\\n");
+    strs_push(t, "x\t\ny");
+    strs_push(t, "(1,3)");
+    strs_push(t, "}");
+    strs_push(t, "}}");
+    strs_push(t, "(0,1)(1,2)");
+    strs_push(t, "]");
+    strs_push(t, "]");
+    strs_push(t, "(0,1)");
+    strs_push(t, "\\s+(?!\\S)|\\s+");
+    strs_push(t, "a   b  ");
+    strs_push(t, "(1,3)(3,4)(5,7)");
+    strs_push(t, "(?=a)\\w");
+    strs_push(t, "ba");
+    strs_push(t, "(1,2)");
+    strs_push(t, "a(?!b)");
+    strs_push(t, "ab ac a");
+    strs_push(t, "(3,4)(6,7)");
+    strs_push(t, "\\p{L}+");
+    strs_push(t, "héllo wörld 123");
+    strs_push(t, "(0,6)(7,13)");
+    strs_push(t, "\\p{Lu}\\p{Ll}+");
+    strs_push(t, "Hello World");
+    strs_push(t, "(0,5)(6,11)");
+    strs_push(t, "\\pN+");
+    strs_push(t, "x٣٤5½");
+    strs_push(t, "(1,8)");
+    strs_push(t, "\\P{L}+");
+    strs_push(t, "ab12cd");
+    strs_push(t, "(2,4)");
+    strs_push(t, "[^\\p{L}\\p{N}\\s]+");
+    strs_push(t, "hi, there! 42");
+    strs_push(t, "(2,3)(9,10)");
+    strs_push(t, "\\p{M}");
+    strs_push(t, "é");
+    strs_push(t, "(1,3)");
+    strs_push(t, "\\d");
+    strs_push(t, "٣");
+    strs_push(t, "(0,2)");
+    strs_push(t, "\\w+");
+    strs_push(t, "naïve_日本");
+    strs_push(t, "(0,13)");
+    strs_push(t, "\\s");
+    strs_push(t, "　 ");
+    strs_push(t, "(0,3)(3,5)");
+    strs_push(t, GPT2);
+    strs_push(t, "Hello's world  42!!  I'LL");
+    strs_push(t, "(0,5)(5,7)(7,13)(13,14)(14,17)(17,19)(19,20)(20,22)(22,25)");
+    strs_push(t, CL100K);
+    strs_push(t, "It's 12345 cafés...\n\n  ok");
+    strs_push(t, "(0,2)(2,4)(4,5)(5,8)(8,10)(10,17)(17,22)(22,23)(23,26)");
+    t
+}
+
+/// `pattern text want` triples.
+fn captures_table() -> Strs ! {} {
+    let t = strs_new();
+    strs_push(t, "(a)(b)?");
+    strs_push(t, "a");
+    strs_push(t, "(0,1)(0,1)-");
+    strs_push(t, "(a|ab)(c|bcd)(d*)");
+    strs_push(t, "abcd");
+    strs_push(t, "(0,4)(0,1)(1,4)(4,4)");
+    strs_push(t, "(\\w+)@(\\w+)\\.com");
+    strs_push(t, "mail bob@example.com now");
+    strs_push(t, "(5,20)(5,8)(9,16)");
+    strs_push(t, "(?:(a)|b)+");
+    strs_push(t, "ab");
+    strs_push(t, "(0,2)(0,1)");
+    strs_push(t, "(?<y>\\d{4})-(?P<m>\\d{2})");
+    strs_push(t, "on 2026-10 ok");
+    strs_push(t, "(3,10)(3,7)(8,10)");
+    strs_push(t, "(a*)+");
+    strs_push(t, "b");
+    strs_push(t, "(0,0)(0,0)");
+    strs_push(t, "(?:x)(y)");
+    strs_push(t, "zxy");
+    strs_push(t, "(1,3)(2,3)");
+    strs_push(t, "(é)(.)");
+    strs_push(t, "aéb");
+    strs_push(t, "(1,4)(1,3)(3,4)");
+    strs_push(t, "x(y)");
+    strs_push(t, "abc");
+    strs_push(t, "no match");
+    t
+}
+
+/// `pattern message` pairs.
+fn malformed_table() -> Strs ! {} {
+    let t = strs_new();
+    strs_push(t, "(ab");
+    strs_push(t, "an unclosed group at byte 0");
+    strs_push(t, "ab)");
+    strs_push(t, "an unmatched `)` at byte 2");
+    strs_push(t, "x[ab");
+    strs_push(t, "an unclosed class at byte 1");
+    strs_push(t, "a{2,1}");
+    strs_push(t, "a counted repetition whose most is below its least at byte 1");
+    strs_push(t, "a{");
+    strs_push(t, "a counted repetition needs a count at byte 1");
+    strs_push(t, "a{2");
+    strs_push(t, "an unclosed counted repetition at byte 1");
+    strs_push(t, "*a");
+    strs_push(t, "a repetition with nothing to repeat at byte 0");
+    strs_push(t, "a|+");
+    strs_push(t, "a repetition with nothing to repeat at byte 2");
+    strs_push(t, "a**");
+    strs_push(t, "a repetition of a repetition at byte 2");
+    strs_push(t, "(a)\\1");
+    strs_push(t, "backreferences are not supported at byte 3");
+    strs_push(t, "(?<=a)b");
+    strs_push(t, "lookbehind is not supported at byte 0");
+    strs_push(t, "(?=ab)");
+    strs_push(t, "a lookahead holds one character or class at byte 0");
+    strs_push(t, "\\p{Greek}");
+    strs_push(t, "an unknown Unicode class `Greek` at byte 0");
+    strs_push(t, "[z-a]");
+    strs_push(t, "a range whose end is before its start at byte 1");
+    strs_push(t, "[\\w-z]");
+    strs_push(t, "a class cannot begin a range at byte 3");
+    strs_push(t, "[a-\\d]");
+    strs_push(t, "a class cannot end a range at byte 3");
+    strs_push(t, "a\\q");
+    strs_push(t, "an unknown escape `\\q` at byte 1");
+    strs_push(t, "(?x)a");
+    strs_push(t, "an unknown group flag at byte 2");
+    strs_push(t, "a\\");
+    strs_push(t, "a `\\` at the end of the pattern at byte 1");
+    strs_push(t, "[[:alpha:]]");
+    strs_push(t, "POSIX classes are not supported at byte 1");
+    strs_push(t, "[a[b]]");
+    strs_push(t, "a `[` inside a class must be escaped at byte 2");
+    strs_push(t, "[a&&b]");
+    strs_push(t, "class set operations are not supported at byte 2");
+    strs_push(t, "\\x{110000}");
+    strs_push(t, "an escape that is not a Unicode scalar value at byte 0");
+    strs_push(t, "\\xZ1");
+    strs_push(t, "an escape needs 2 hex digits at byte 0");
+    strs_push(t, "(a{1000}){1000}");
+    strs_push(t, "a repetition too large once written out at byte 9");
+    strs_push(t, "(?P<>a)");
+    strs_push(t, "a group name is letters, digits and `_`, then `>` at byte 0");
+    t
+}
+
+/// `s` as a Nazm string literal.
+fn lit(s: Str) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, "\"");
+    let mut run_from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let esc = if b == 92 { "\\\\" } else { if b == 34 { "\\\"" } else { if b == 10 { "\\n" } else { if b == 9 { "\\t" } else { if b < 32 || b == 127 { f"\\x{hex2(b)}" } else { "" } } } } };
+        if esc != "" {
+            strs_push(out, str_slice(s, run_from, i));
+            strs_push(out, esc);
+            run_from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, run_from, str_len(s)));
+    strs_push(out, "\"");
+    str_join(out, "")
+}
+
+fn hex2(b: Int) -> Str ! {} {
+    let digits = "0123456789ABCDEF";
+    f"{str_slice(digits, b / 16, b / 16 + 1)}{str_slice(digits, b % 16, b % 16 + 1)}"
+}
+
+/// A program printing `f(pattern, text)` for each pair of `cases`, a line each.
+fn program(f: Str, cases: Strs) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, HEAD);
+    strs_push(parts, "fn main(io: IoCap) -> Int ! {io} {\n");
+    let mut i = 0;
+    while i + 1 < strs_len(cases) {
+        strs_push(parts, f"    print(str_concat({f}({lit(strs_get(cases, i))}, {lit(strs_get(cases, i + 1))}), \"\\n\"));\n");
+        i = i + 2;
+    }
+    strs_push(parts, "    0\n}\n");
+    str_join(parts, "")
+}
+
+/// Each case's line, under the interpreter.
+fn lines_of(h: Caps, f: Str, cases: Strs) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", program(f, cases))?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    Result[Strs, Str].Ok(value: text_lines(r.stdout))
+}
+
+/// `f` over each `pattern text want` triple of `table`: every line the one wanted.
+fn check_table(h: Caps, f: Str, table: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let cases = strs_new();
+    let mut i = 0;
+    while i + 2 < strs_len(table) {
+        strs_push(cases, strs_get(table, i));
+        strs_push(cases, strs_get(table, i + 1));
+        i = i + 3;
+    }
+    let got = lines_of(h, f, cases)?;
+    let mut k = 0;
+    while k * 3 + 2 < strs_len(table) {
+        let line = if k < strs_len(got) { strs_get(got, k) } else { "<none>" };
+        check_that(line == strs_get(table, k * 3 + 2), f"{lit(strs_get(table, k * 3))} on {lit(strs_get(table, k * 3 + 1))}: {line}")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn every_pattern_finds_its_leftmost_first_matches(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    check_table(h, "all", leftmost_first_table())
+}
+
+@test
+fn capture_groups_report_what_each_matched(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    check_table(h, "groups", captures_table())
+}
+
+@test
+fn every_malformed_pattern_is_refused_with_its_offset(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let table = malformed_table();
+    let cases = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(table) {
+        strs_push(cases, strs_get(table, i));
+        strs_push(cases, "");
+        i = i + 2;
+    }
+    let got = lines_of(h, "all", cases)?;
+    let mut k = 0;
+    while k * 2 + 1 < strs_len(table) {
+        let line = if k < strs_len(got) { strs_get(got, k) } else { "<none>" };
+        check_that(line == f"error: {strs_get(table, k * 2 + 1)}", f"{lit(strs_get(table, k * 2))}: {line}")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+fn pathological_want(n: Int) -> Str ! {} {
+    f"(a*)*b: false none\n(a|aa)*c: false none\n(a+a+)+b: false none\n(a?){{40}}a{{40}}b: false none\n(?:a*)*$x: false none\n1 0 {n + 1}\n0\n"
+}
+
+/// What a backtracking matcher takes 2^40 steps or more for, on texts of 40 `a`s and of 200,000.
+@test
+fn pathological_patterns_take_linear_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PATHOLOGICAL)?;
+    let tc = h.t;
+    let started = time_ms(tc);
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    let took = time_ms(tc) - started;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(r.stdout == pathological_want(40), r.stdout)?;
+    check_that(took < 30000, f"{took} ms")?;
+    // 200,000 `a`s, compiled.
+    scratch_write(h, d, "prog.nz", text_replace(PATHOLOGICAL, "let n = 40;", "let n = 200000;"))?;
+    let b = nazm(h, d, words(f"build --no-cache --backend llvm --opt-level 2 prog.nz -o {d}/long"));
+    check_that(b.code == 0, b.stderr)?;
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, f"{d}/long");
+    let x = run_within(h, "sh", a, d, suite_env(h), 30000);
+    scratch_remove(h, d);
+    check_that(x.code == 0, f"200,000 bytes searched within 30 seconds: {ran_show(x)}")?;
+    check_that(x.stdout == pathological_want(200000), x.stdout)
+}
+
+@test
+fn a_tokeniser_split_agrees_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let interp = run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env);
+    let oracle = run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env);
+    check_that(interp.code == 0 && interp.stdout == EXPECTED, f"interpreter: {ran_show(interp)}")?;
+    check_that(oracle.code == 0 && oracle.stdout == EXPECTED, f"lir oracle: {ran_show(oracle)}")?;
+    check_that(all_live_zero(interp), f"interpreter: {interp.stderr}")?;
+    for case in text_split("llvm -O0|llvm|0;llvm -O2|llvm|2;cranelift|cranelift|0", ";") {
+        let f = text_split(case, "|");
+        let which = strs_get(f, 0);
+        let exe = f"{d}/{text_replace(text_replace(which, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(f, 1)} --opt-level {strs_get(f, 2)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{which}: {b.stderr}")?;
+        let r = bounded_exe(h, exe, d, env);
+        check_that(r.code == 0, f"{which}: {ran_show(r)}")?;
+        check_that(r.stdout == EXPECTED, f"{which}: {r.stdout}")?;
+        check_that(all_live_zero(r), f"{which}: {r.stderr}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// A memory report, and every `live=` on it `live=0`.
+fn all_live_zero(r: Ran) -> Bool ! {} {
+    let line = memory_line(r);
+    if line == "" {
+        return false;
+    }
+    for w in split_whitespace(line) {
+        if text_starts_with(w, "live=") && w != "live=0" {
+            return false;
+        }
+    }
+    true
+}
