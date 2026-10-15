@@ -17,7 +17,7 @@ pub fn const_text(c: MConst) -> Str ! {} {
         MConst.Int(v: v) => int_to_str(v),
         MConst.Bool(v: v) => if v { "true" } else { "false" },
         MConst.Num(text: t, kind: k) => t + ":" + k,
-        MConst.Cell(name: n) => "static " + n,
+        MConst.Cell(name: n, key: _) => "static " + n,
         MConst.Str(bytes: s) => {
             let parts = strs_new()
             strs_push(parts, "b\"")
