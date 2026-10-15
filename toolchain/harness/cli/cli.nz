@@ -1,0 +1,176 @@
+// The `nazm` command as a caller sees it: stdout, stderr, and exit status. Ported from
+// `crates/nazm-cli/tests/cli.rs` (R7).
+//
+// Exit status is part of the interface: a caller that has to parse stderr to learn whether a
+// program failed to type-check or failed while running is doing work the process could have told
+// it in one byte.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/tree.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS` in `crates/nazm-cli`, where the Rust tests run.
+fn nz(h: Caps, args: Str) -> Ran ! { io, spawn } {
+    nazm(h, f"{repo_root(h)}/crates/nazm-cli", words(args))
+}
+
+/// `nazm run` of an example as a user runs it: without the result report the suite sets (R1,
+/// 5b.3), so what it prints is what it printed, and its status is `main`'s.
+fn run_as_user(h: Caps, name: Str) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), words(f"run --interpret ../../examples/{name}"), f"{repo_root(h)}/crates/nazm-cli", env_unset(suite_env(h), "NAZM_RESULT_REPORT"))
+}
+
+/// Paths are relative to the workspace root, two levels up from `crates/nazm-cli`.
+fn example(name: Str) -> Str ! {} {
+    f"../../examples/{name}"
+}
+
+@test
+fn running_the_example_prints_its_value_and_exits_zero(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = run_as_user(caps(io, p, sp, v, t), "max.nz");
+    check_that(r.stdout == "25\n" && r.code == 0, ran_show(r))
+}
+
+@test
+fn a_type_error_exits_one_and_names_the_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), f"run --interpret {example("bad/undefined_variable.nz")}");
+    check_that(r.code == 1, "a check failure is exit 1")?;
+    check_that(str_len(text_trim(r.stdout)) == 0, "nothing should be printed as a value")?;
+    check_that(text_contains(r.stderr, "N0200"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`y` is not defined"), r.stderr)
+}
+
+@test
+fn a_runtime_error_exits_two_so_it_is_distinguishable_from_a_type_error(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), f"run --interpret {example("bad/division_by_zero.nz")}");
+    check_that(r.code == 2, "a runtime failure is exit 2, not 1")?;
+    check_that(text_contains(r.stderr, "N0401"), r.stderr)
+}
+
+@test
+fn a_missing_file_exits_three(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), "run --interpret does-not-exist.nz");
+    check_that(r.code == 3, ran_show(r))?;
+    check_that(text_contains(r.stderr, "cannot read"), r.stderr)
+}
+
+@test
+fn check_does_not_evaluate(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The program divides by zero. `check` must not discover that, because it must not run it.
+    let r = nz(caps(io, p, sp, v, t), f"check {example("bad/division_by_zero.nz")}");
+    check_that(r.code == 0, "it type-checks fine")?;
+    check_that(text_trim(r.stdout) == "ok", r.stdout)
+}
+
+@test
+fn json_output_is_one_object_per_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), f"run --interpret {example("bad/wrong_argument_count.nz")} --json");
+    check_that(r.code == 1, ran_show(r))?;
+    let ls = lines(r.stderr);
+    check_that(strs_len(ls) > 0, "a diagnostic line")?;
+    let doc = jparse(strs_get(ls, 0))?;
+    check_that(jstr(doc, "code") == "N0303", strs_get(ls, 0))?;
+    let start = jtext(doc, "primary/span/start");
+    check_that(parse_usize(start) >= 0, "spans must be machine-usable")
+}
+
+@test
+fn every_bad_example_is_refused_with_its_own_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A shared code would make two different mistakes indistinguishable to anything matching on it.
+    let files = words("undefined_variable wrong_argument_count condition_not_bool invalid_operands unsupported_construct division_by_zero assign_to_immutable mutable_parameter break_outside_loop unreachable_after_break break_as_value bare_return return_type_mismatch runaway_recursion");
+    let codes_ = words("N0200 N0303 N0301 N0304 N0101 N0401 N0310 N0311 N0312 N0313 N0314 N0101 N0300 N0403");
+    let mut i = 0;
+    while i < strs_len(files) {
+        let file = f"bad/{strs_get(files, i)}.nz";
+        let code = strs_get(codes_, i);
+        let r = nz(h, f"run --interpret {example(file)}");
+        check_that(r.code != 0, f"{file} should fail")?;
+        check_that(text_contains(r.stderr, code), f"{file} should report {code}, got:\n{r.stderr}")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn reports(r: Ran, code: Str, status: Int) -> Result[Int, Str] ! {} {
+    check_that(text_contains(r.stderr, code), f"got:\n{r.stderr}")?;
+    check_that(r.code == status, ran_show(r))
+}
+
+@test
+fn deep_trees_and_deep_recursion_report_rather_than_abort(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Child processes on purpose: an in-process test cannot survive its own subject to report.
+    reports(nz(h, f"run --interpret {example("bad/nesting_too_deep.nz")}"), "N0102", 1)?;
+    // Nested parentheses, which no tree bound can catch.
+    reports(nz(h, f"check {example("bad/paren_nesting.nz")}"), "N0102", 1)?;
+    // A long arithmetic chain: the likeliest deep tree in a real program.
+    reports(nz(h, f"run --interpret {example("bad/long_chain.nz")}"), "N0102", 1)?;
+    // `nazm check` never reaches the evaluator, and parsing recurses just as deep.
+    reports(nz(h, f"check {example("bad/nesting_too_deep.nz")}"), "N0102", 1)?;
+    // 15,000 nested calls is past what a fixed reservation held.
+    reports(nz(h, f"run --interpret {example("bad/deep_recursion.nz")} --max-depth 15000"), "N0403", 2)
+}
+
+@test
+fn a_depth_budget_the_stack_could_not_back_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), f"run --interpret {example("max.nz")} --max-depth 99999999");
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "GiB of stack"), f"should say what it would cost, got:\n{r.stderr}")
+}
+
+@test
+fn one_mistake_produces_one_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Counted through `--json`, where each diagnostic is exactly one line.
+    for name in words("bare_return return_type_mismatch undefined_variable unsupported_construct") {
+        let file = f"bad/{name}.nz";
+        let r = nz(h, f"run --interpret {example(file)} --json");
+        let mut n = 0;
+        for l in lines(r.stderr) {
+            if text_starts_with(l, "{") {
+                n = n + 1;
+            }
+        }
+        check_that(n == 1, f"{file} should report one diagnostic, got:\n{r.stderr}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn recursion_runs_and_runaway_recursion_reports(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let s = run_as_user(h, "search.nz");
+    check_that(s.stdout == "1723\n" && s.code == 0, ran_show(s))?;
+    // The iteration budget does not bound recursion.
+    reports(nz(h, f"run --interpret {example("bad/runaway_recursion.nz")}"), "N0403", 2)?;
+    // Mutual recursion counts against the same budget.
+    reports(nz(h, f"run --interpret {example("bad/mutual_recursion.nz")}"), "N0403", 2)?;
+    // And the bound is adjustable.
+    let r = nz(h, f"run --interpret {example("bad/runaway_recursion.nz")} --max-depth 16");
+    check_that(text_contains(r.stderr, "deeper than 16"), f"--max-depth should be honoured, got:\n{r.stderr}")
+}
+
+@test
+fn loops_and_mutation_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = run_as_user(caps(io, p, sp, v, t), "sum.nz");
+    check_that(r.stdout == "6074\n" && r.code == 0, ran_show(r))
+}
+
+@test
+fn a_runaway_loop_reports_instead_of_hanging(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = nz(caps(io, p, sp, v, t), f"run --interpret {example("bad/runaway_loop.nz")} --max-iterations 1000");
+    check_that(r.code == 2, "a runaway loop is a runtime failure")?;
+    check_that(text_contains(r.stderr, "N0402"), r.stderr)?;
+    check_that(text_contains(r.stderr, "--max-iterations"), f"the diagnostic should say how to raise it: {r.stderr}")
+}
+
+@test
+fn break_and_continue_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let r = run_as_user(caps(io, p, sp, v, t), "primes.nz");
+    check_that(r.stdout == "1060\n" && r.code == 0, ran_show(r))
+}
