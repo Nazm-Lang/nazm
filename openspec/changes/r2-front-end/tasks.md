@@ -128,6 +128,14 @@
       checker. `inputs/check/numeric-body.nz`, `inputs/check/numeric-consts.nz`. `run.sh check`
       (reference rebuilt at `deca183c`): 2,503 agree, 280 differ; the checker carries 2,132, all
       agree
+- [ ] 3.1q Tasks (N53): `Chan[T]` written (N0353, N0390), shown, unified and inferred through its
+      element, the generic channel built-ins (`chan_new_of`'s element refused as N0390,
+      `chan_select_of` over a `Vec[Chan[T]]`); `scope` (N0300 for a value) and `spawn` — inside a
+      scope only (N0320, a closure's body its own), the callee by the ordinary rule (N0201,
+      N0303, N0300), a generic one refused (N0101), each argument by the task-safety walk
+      (`task_safety`, N0321, with the path to what may not cross); `spawn`'s effect and its
+      `SpawnCap` authority (N0366, N0369). `inputs/check/tasks.nz`. `run.sh check`: 2,543 agree,
+      241 differ; the checker carries 2,289, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

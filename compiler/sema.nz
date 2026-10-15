@@ -212,6 +212,8 @@ pub struct Ck {
     capb: Ints,
     // Per call site, the function type a call through a value reached, or -1.
     sind: Ints,
+    // Whether each call site is a `spawn`'s.
+    sspawn: Ints,
     // Each named function used as a value (N50): the function, where, the effects its type was
     // given, and the module.
     vfn: Ints,
@@ -341,7 +343,9 @@ fn s_closures() -> Int { 10 }
 fn s_captured() -> Int { 11 }
 // `@std/hash`'s `Hash`, when the compilation has it (L6), or -1.
 fn s_hash() -> Int { 12 }
-fn s_slots() -> Int { 13 }
+// How many `scope`s enclose the statement being checked, within its function (`scope_depth`).
+fn s_scope() -> Int { 13 }
+fn s_slots() -> Int { 14 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -440,6 +444,8 @@ fn tag_param() -> Int { 5 }
 // A function type (N50): its effects as the first word, its parameters and then its result as
 // its arguments.
 fn tag_fn() -> Int { 6 }
+// `Chan[T]` (N53): a generic channel, its element as its one argument.
+fn tag_chan() -> Int { 7 }
 
 fn t_int() -> Int { 0 }
 fn t_bool() -> Int { 1 }
@@ -491,6 +497,11 @@ fn vec_of(c: Ck, elem: Int) -> Int {
     let a = ints_new();
     ints_push(a, elem);
     intern(c, tag_vec(), 0, 0, 0, "", a)
+}
+fn chan_of(c: Ck, elem: Int) -> Int {
+    let a = ints_new();
+    ints_push(a, elem);
+    intern(c, tag_chan(), 0, 0, 0, "", a)
 }
 fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
 fn enum_ty(c: Ck, e: Int, args: Ints) -> Int { intern(c, tag_enum(), e, 0, 0, "", args) }
@@ -627,6 +638,7 @@ fn show(c: Ck, t: Int) -> Str {
         if e == t_str() { return "Strs"; }
         return cat3("Vec[", show(c, e), "]");
     }
+    if g == tag_chan() { return cat3("Chan[", show(c, targ(c, t, 0)), "]"); }
     let mut name = "";
     if g == tag_record() { name = strs_get(c.rname, ta(c, t)); }
     if g == tag_enum() { name = strs_get(c.ename, ta(c, t)); }
@@ -705,8 +717,19 @@ fn derived(c: Ck, t: Int, equality: Bool) -> Str { derived_by(c, t, equality, 0 
 // The same walk, refusing at a record or enum inside `t` with an impl of `stop_trait` (-1 for
 // none): exactly for that type with `exact`, else by `applying` (`UserTypes::hashing`).
 fn derived_by(c: Ck, t: Int, equality: Bool, stop_trait: Int, exact: Bool) -> Str {
+    let mut mode = 0;
+    if equality { mode = 1; }
+    derived_walk(c, t, mode, stop_trait, exact)
+}
+
+// Whether a value of `t` may be passed to a task (`UserTypes::task_safety`, N53): "" or the path
+// to the first component that may not cross, as `derived` writes it.
+fn task_safety(c: Ck, t: Int) -> Str { derived_walk(c, t, 2, 0 - 1, false) }
+
+// The walk, for ordering (`mode` 0), equality (1) or crossing into a task (2).
+fn derived_walk(c: Ck, t: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str {
     if is_record(c, t) == false && is_enum(c, t) == false {
-        if leaf(c, t, equality) { return ""; }
+        if leaf_mode(c, t, mode) { return ""; }
         return str_concat("|", int_to_str(t));
     }
     let seen = ints_new();
@@ -768,7 +791,7 @@ fn derived_by(c: Ck, t: Int, equality: Bool, stop_trait: Int, exact: Bool) -> St
                     ints_push(spushed, strs_len(names));
                 }
             } else {
-                if leaf(c, ty, equality) == false {
+                if leaf_mode(c, ty, mode) == false {
                     let mut k = 0;
                     while k < strs_len(names) {
                         strs_push(path, strs_get(names, k));
@@ -780,6 +803,20 @@ fn derived_by(c: Ck, t: Int, equality: Bool, stop_trait: Int, exact: Bool) -> St
         }
     }
     ""
+}
+
+fn leaf_mode(c: Ck, t: Int, mode: Int) -> Bool {
+    if mode == 2 { return crosses(c, t); }
+    leaf(c, t, mode == 1)
+}
+
+// Whether a type that is not a record or an enum may cross into a task (`may_cross_into_a_task`):
+// not a sequence, a type parameter or a function value.
+fn crosses(c: Ck, t: Int) -> Bool {
+    let g = tag(c, t);
+    if g == tag_vec() || g == tag_param() || g == tag_fn() { return false; }
+    let n = bname_of(c, t);
+    n != "Ints" && n != "Strs" && n != "Bytes"
 }
 
 fn leaf(c: Ck, t: Int, equality: Bool) -> Bool {
@@ -885,7 +922,7 @@ fn new_ck(t: Tree) -> Ck {
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
             taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
             xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
-            capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
+            capf: ints_new(), capb: ints_new(), sind: ints_new(), sspawn: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
             trname: strs_new(), trmod: ints_new(), trns: ints_new(), trne: ints_new(), trpub: ints_new(), trmf: ints_new(), trmc: ints_new(),
             tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(), tmdef: ints_new(),
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
@@ -958,9 +995,9 @@ fn load_builtins(c: Ck) -> Int {
 }
 
 // Whether a generic built-in's shape is one this checker makes: its parameter, a `Vec` or an
-// `Option` of it, or a monomorphic type.
+// `Option` of it, a `Chan` of it or a `Vec` of those (N53), or a monomorphic type.
 fn generic_shape(s: Str) -> Bool {
-    if s == "T" || s == "Vec[T]" || s == "Option[T]" { return true; }
+    if s == "T" || s == "Vec[T]" || s == "Option[T]" || s == "Chan[T]" || s == "Vec[Chan[T]]" { return true; }
     is_builtin_name(s) && s != "Chan"
 }
 
@@ -968,6 +1005,8 @@ fn generic_shape(s: Str) -> Bool {
 fn shape_of(c: Ck, s: Str, t: Int) -> Int {
     if s == "T" { return t; }
     if s == "Vec[T]" { return vec_of(c, t); }
+    if s == "Chan[T]" { return chan_of(c, t); }
+    if s == "Vec[Chan[T]]" { return vec_of(c, chan_of(c, t)); }
     if s == "Option[T]" {
         let a = ints_new();
         ints_push(a, t);
@@ -1695,9 +1734,14 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         if has_args { not_generic(c, d, name, "a type parameter", span); }
         return ints_get(ptys, at);
     }
+    // `Chan[T]` (N53): a generic channel, for a `T` that may cross into a task; `Chan` alone is
+    // the `Int` channel.
     if name == "Chan" && has_args {
-        stop(c, "`Chan[T]`");
-        return t_int();
+        if ints_len(args) != 1 { wrong_arity(c, d, "Chan", 1, ints_len(args), span); }
+        let mut elem = t_int();
+        if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        channel_element(c, d, elem, span);
+        return chan_of(c, elem);
     }
     if (name == "Box" || name == "Cell" || name == "Chain") && type_named(c, name) < 0 {
         stop(c, cat3("`", name, "`"));
@@ -1773,6 +1817,24 @@ fn not_generic(c: Ck, d: Diags, name: Str, what: Str, span: Int) -> Int {
     if what == "not generic" { why = cat3("`", name, "` is not generic, so it takes no type arguments"); }
     dg_error(d, "N0351", sps(c, span), spe(c, span), why, "",
             "only a definition that declares type parameters is applied to type arguments")
+}
+
+// `N0390` for a `Chan[elem]` whose element may not cross into a task: the rule a `spawn` argument
+// follows, so a channel carries exactly what a task may be given.
+fn channel_element(c: Ck, d: Diags, elem: Int, span: Int) -> Int {
+    let why = task_safety(c, elem);
+    if why == "" { return 0; }
+    let shown = show(c, elem);
+    let mut message = cat3("a channel cannot carry `", shown, "`: it may not cross into a task");
+    if derived_path(c, why) != "" {
+        message = cat5(cat3("a channel cannot carry `", shown, "`: its `"), derived_path(c, why), "` is a `", show(c, derived_type(c, why)),
+                "`, which may not cross into a task");
+    }
+    dg_error(d, "N0390", sps(c, span), spe(c, span), message, "", channel_help())
+}
+
+fn channel_help() -> Str {
+    "a channel's values reach another task, so they follow the rule a `spawn` argument does: `Int`, `Bool`, `Str`, channels, and records and enums of those"
 }
 
 fn wrong_arity(c: Ck, d: Diags, name: Str, want: Int, got: Int, span: Int) -> Int {
@@ -3149,7 +3211,7 @@ fn captured_by(c: Ck, frame: Int, b: Int) -> Bool {
 fn holds_fn(c: Ck, t: Int, depth: Int) -> Bool {
     if depth > max_depth() * 4 { return true; }
     if is_fn(c, t) { return true; }
-    if tag(c, t) == tag_vec() { return holds_fn(c, targ(c, t, 0), depth + 1); }
+    if tag(c, t) == tag_vec() || tag(c, t) == tag_chan() { return holds_fn(c, targ(c, t, 0), depth + 1); }
     if is_record(c, t) || is_enum(c, t) {
         let edges = contained(c, t);
         let mut i = 0;
@@ -3188,7 +3250,7 @@ fn function_holder(c: Ck, t: Int) -> Int {
             if is_fn(c, ty) {
                 if holder >= 0 { return holder; }
             }
-            if tag(c, ty) == tag_vec() {
+            if tag(c, ty) == tag_vec() || tag(c, ty) == tag_chan() {
                 ints_push(st, targ(c, ty, 0));
                 if holder >= 0 { ints_push(sh, holder); } else { ints_push(sh, ty); }
             }
@@ -3289,6 +3351,23 @@ fn check_stmt(c: Ck, s: Int) -> Bool {
     if k == "Return" {
         check_return(c, n);
         return true;
+    }
+    // A scope joins every task it started, so it always completes — and a `break` inside one
+    // still leaves the enclosing loop, exactly as a nested block does.
+    if k == "Scope" {
+        let body = fld(c, n, "body");
+        ss(c, s_scope(), gs(c, s_scope()) + 1);
+        let completion = check_block(c, body, none());
+        ss(c, s_scope(), gs(c, s_scope()) - 1);
+        if completion >= 0 && some(c, body, "tail") {
+            err(c, "N0300", espan(c, unwrap(c, body, "tail")), cat3("a `scope` has no value, but this produces `", show(c, completion), "`"),
+                    "add `;` to discard it, or send it through a channel");
+        }
+        return false;
+    }
+    if k == "Spawn" {
+        check_spawn(c, n);
+        return false;
     }
     stop(c, cat3("the statement `", k, "`"));
     false
@@ -3760,6 +3839,8 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     let saved_ret = gs(c, s_ret());
     let saved_rs = gs(c, s_rs());
     let saved_loop = gs(c, s_loop());
+    let saved_scope = gs(c, s_scope());
+    ss(c, s_scope(), 0);
     ss(c, s_fn(), id);
     ss(c, s_ret(), ret);
     ss(c, s_rs(), fld(c, rt, "span"));
@@ -3812,6 +3893,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ss(c, s_ret(), saved_ret);
     ss(c, s_rs(), saved_rs);
     ss(c, s_loop(), saved_loop);
+    ss(c, s_scope(), saved_scope);
     ty
 }
 
@@ -4354,6 +4436,99 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
     ret
 }
 
+// `spawn f(args);` (`check_spawn`): the call by the ordinary rule, inside a `scope`, with only
+// what may cross into a task passed.
+fn check_spawn(c: Ck, s: Int) -> Int {
+    let callee = fname_of(c, s, "callee");
+    let cs = fld(c, s, "callee_span");
+    let span = fld(c, s, "span");
+    let args = kids(c, s, "args");
+    if gs(c, s_scope()) == 0 {
+        err(c, "N0320", span, "`spawn` is only valid inside a `scope`",
+                "a task outside a scope would be detached work, and nothing would join it; wrap it in `scope { … }`");
+    }
+    let target = callee_of(c, callee);
+    let mut generics = 0;
+    if target >= 0 { generics = ints_get(c.fntpc, target); }
+    if target < 0 - 1 { generics = ints_get(c.bgen, 0 - 2 - target); }
+    if target == 0 - 1 || generics > 0 {
+        if target == 0 - 1 {
+            if callee == "list_from_vec" || callee == "list_empty" || callee == "list_len" || callee == "list_get" || is_cap_name(callee) {
+                stop(c, "a renamed built-in or a capability spawned");
+                return 0;
+            }
+            if why_invisible(c, callee, cs) == false { err(c, "N0201", cs, cat3("`", callee, "` is not a function"), ""); }
+        } else {
+            err(c, "N0101", cs, cat3("`spawn ", callee, "` runs a generic function, which is not supported yet"),
+                    "a task runs a function that is not generic. Spawn a non-generic wrapper that calls the generic one");
+        }
+        let mut i = 0;
+        while i < ints_len(args) {
+            check_expr(c, ints_get(args, i), none());
+            i = i + 1;
+        }
+        return 0;
+    }
+    let formals = ints_new();
+    let mut ds = 0;
+    let mut de = 0;
+    if target >= 0 {
+        let pf = ints_get(c.fnpf, target);
+        let mut k = 0;
+        while k < ints_get(c.fnpc, target) {
+            ints_push(formals, ints_get(c.ptys, pf + k));
+            k = k + 1;
+        }
+        ds = ints_get(c.fnns, target);
+        de = ints_get(c.fnne, target);
+    } else {
+        let bi = 0 - 2 - target;
+        if ints_get(c.bok, bi) == 0 || ints_get(c.bpath, bi) == 1 {
+            stop(c, cat3("the built-in `", callee, "` spawned"));
+            return 0;
+        }
+        let pf = ints_get(c.bpf, bi);
+        let mut k = 0;
+        while k < ints_get(c.bpc, bi) {
+            ints_push(formals, ints_get(c.ptys, pf + k));
+            k = k + 1;
+        }
+    }
+    record_site(c, cs, target);
+    ints_set(c.sspawn, ints_len(c.sspawn) - 1, 1);
+    let pc = ints_len(formals);
+    if ints_len(args) != pc {
+        let mut verb = " were given";
+        if ints_len(args) == 1 { verb = " was given"; }
+        err(c, "N0303", span, cat5(cat3("`", callee, "` takes "), int_to_str(pc), str_concat(" argument", plural(pc)), ", but ",
+                str_concat(int_to_str(ints_len(args)), verb)), "");
+        sec_at(c, ds, de, "defined here");
+    }
+    let mut i = 0;
+    while i < ints_len(args) {
+        let a = ints_get(args, i);
+        let mut want = none();
+        if i < pc { want = ints_get(formals, i); }
+        let got = value_type(c, a, want);
+        if want >= 0 && assignable(c, got, want) == false {
+            err(c, "N0300", espan(c, a),
+                    cat5(cat3("argument ", int_to_str(i + 1), " of `"), callee, "` is `", show(c, want), cat3("`, but this is `", show(c, got), "`")), "");
+        }
+        let why = task_safety(c, got);
+        if why != "" {
+            let shown = show(c, got);
+            let mut message = cat3("a `", shown, "` may not be passed to a task");
+            if derived_path(c, why) != "" {
+                message = cat5(cat3("a `", shown, "` may not be passed to a task: its `"), derived_path(c, why), "` is a `", show(c, derived_type(c, why)), "`");
+            }
+            err(c, "N0321", espan(c, a), message,
+                    "`Ints`, `Strs` and every `Vec[T]` are handles to shared mutable storage with no synchronisation, and a record or enum containing one at any depth inherits that — as does a type parameter, about which nothing is known. For an enum it is every variant that counts, not the one the value currently holds: what a task is given is a value of a type, and the guarantee is about the type. Pass `Int`, `Bool` or `Str` values, a `Chan`, or a record or enum whose every field may cross");
+        }
+        i = i + 1;
+    }
+    0
+}
+
 // --- method calls (N78, `check_method_call`) -----------------------------------------------------
 
 // Whether `name.m()` written as a variant names a receiver (`names_a_receiver`): a value in scope,
@@ -4681,7 +4856,7 @@ fn inferred_from(c: Ck, call: Call, formal: Int, actual: Int, index: Int) -> Int
         if ta(c, formal) == call.owner && ints_get(c.tyb, formal) == call.oid && ints_get(c.tyc, formal) == index { return actual; }
         return 0 - 1;
     }
-    if g == tag_vec() || g == tag_record() || g == tag_enum() || g == tag_fn() {
+    if g == tag_vec() || g == tag_chan() || g == tag_record() || g == tag_enum() || g == tag_fn() {
         let mut k = 0;
         while k < targc(c, formal) && k < targc(c, actual) {
             let r = inferred_from(c, call, targ(c, formal, k), targ(c, actual, k), index);
@@ -4716,8 +4891,9 @@ fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> In
         ints_set(g.conflict, 2, ints_get(g.from, i));
         return 1;
     }
-    if tg == tag_vec() {
-        if tag(c, actual) != tag_vec() { return 2; }
+    // A generic channel, as a `Vec` is: through its element (N53).
+    if tg == tag_vec() || tg == tag_chan() {
+        if tag(c, actual) != tg { return 2; }
         return unify(c, call, targ(c, formal, 0), targ(c, actual, 0), g, arg);
     }
     // Structural through a function type's parameters and result (N50), its effects the same set.
@@ -4875,6 +5051,8 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
             describe = "a numeric type";
         }
         if admits == false { err(c, "N0300", call.at, cat5("`", name, "` applies to ", describe, cat3(", and this is `", show(c, t), "`")), ""); }
+        // The one generic built-in that makes a `Chan[T]` from a written `T` (N53).
+        if strs_get(c.bname, call.oid) == "chan_new_of" { channel_element(c, c.d, t, call.at); }
     }
     record_site(c, call.at, call.target);
     let ret = subst(c, call.ret, call.owner, call.oid, settled);
@@ -7348,6 +7526,7 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
         ints_push(c.suser, 0 - 1);
     }
     ints_push(c.sind, 0 - 1);
+    ints_push(c.sspawn, 0);
     ints_push(c.sheld, held_caps(c));
     0
 }
@@ -7362,6 +7541,7 @@ fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     ints_push(c.sbuiltin, 0 - 1);
     ints_push(c.suser, 0 - 1);
     ints_push(c.sind, t);
+    ints_push(c.sspawn, 0);
     ints_push(c.sheld, held_caps(c));
     0
 }
@@ -7418,6 +7598,7 @@ fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
     if src == 2 { return cat4("calls `", strs_get(c.fnname, w), "`, whose declared set includes ", e); }
     if src == 4 { return cat3("calls `", strs_get(c.fnname, w), "`, which is in another module and declares no effect set, so every effect is assumed of it"); }
     if src == 5 { return cat4("calls a function value of type `", show(c, w), "`, whose type includes ", e); }
+    if src == 6 { return "`spawn` starts a task, which requires `spawn`"; }
     cat4("calls `", strs_get(c.fnname, w), "`, which requires ", e)
 }
 
@@ -7455,6 +7636,11 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                 let b = ints_get(c.sbuiltin, s);
                 let g = ints_get(c.suser, s);
                 let ind = ints_get(c.sind, s);
+                // `spawn` starts a task, which requires `spawn`.
+                if ints_get(c.sspawn, s) == 1 && has_bit(set, 1) == false {
+                    set = with_bit(set, 1);
+                    add_reason(rs, me, 1, ints_get(c.sstart, s), ints_get(c.send, s), 6, 0);
+                }
                 if b >= 0 {
                     let e = builtin_effect(c, b);
                     if e >= 0 && has_bit(set, e) == false {
@@ -7642,34 +7828,50 @@ fn check_authority(c: Ck, me: Int, program: Bool) -> Int {
     let mut reported = 0;
     let mut s = 0;
     while s < ints_len(c.sfn) {
-        let b = ints_get(c.sbuiltin, s);
-        if ints_get(c.sfn, s) == me && b >= 0 {
+        if ints_get(c.sfn, s) == me {
             // A module of the program holds `main`'s output authority (R1.5, D8); an `IoCap`
             // gives an `OutCap`.
             let mut held = ints_get(c.sheld, s);
             if program || has_bit(held, cap_bit("IoCap")) { held = with_bit(held, cap_bit("OutCap")); }
-            let need = without(without(builtin_caps(c, b), held), reported);
-            let mut k = 0;
-            while k < 10 {
-                if has_bit(need, k) {
-                    reported = with_bit(reported, k);
-                    let kind = cap_name(k);
-                    let bn = strs_get(c.bname, b);
-                    dg_error(c.d, "N0369", ints_get(c.sstart, s), ints_get(c.send, s),
-                            cat5(cat3("the built-in `", bn, "` requires `"), kind, "` authority, and ", who, cat3(" holds no `", kind, "` here")),
-                            cat5("`", bn, "` is authorised by ", cap_article(k), cat3(" `", kind, "`")),
-                            cat5(cat3("authority is a value: give ", who, " "), cap_article(k), " `", kind,
-                            "` parameter and have each caller pass one. The only source of one is `main`'s parameters"));
-                    if ints_get(c.fnws, me) >= 0 {
-                        sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), "an effect set says what a function does, not what allows it");
-                    }
-                }
-                k = k + 1;
+            // A `spawn` needs the authority to start a task, before what its callee needs.
+            if ints_get(c.sspawn, s) == 1 {
+                reported = missing_authority(c, me, who, s, without(without(with_bit(0, cap_bit("SpawnCap")), held), reported), reported, 0 - 1);
             }
+            let b = ints_get(c.sbuiltin, s);
+            if b >= 0 { reported = missing_authority(c, me, who, s, without(without(builtin_caps(c, b), held), reported), reported, b); }
         }
         s = s + 1;
     }
     0
+}
+
+// Each kind of `need` reported at site `s`, for the built-in `b` or, with -1, a `spawn`
+// (`missing_authority`); what is reported after.
+fn missing_authority(c: Ck, me: Int, who: Str, s: Int, need: Int, reported: Int, b: Int) -> Int {
+    let mut out = reported;
+    let mut k = 0;
+    while k < 10 {
+        if has_bit(need, k) {
+            out = with_bit(out, k);
+            let kind = cap_name(k);
+            let mut what = "starting a task";
+            let mut primary = cat5("`spawn` is authorised by ", cap_article(k), " `", kind, "`");
+            if b >= 0 {
+                let bn = strs_get(c.bname, b);
+                what = cat3("the built-in `", bn, "`");
+                primary = cat5("`", bn, "` is authorised by ", cap_article(k), cat3(" `", kind, "`"));
+            }
+            dg_error(c.d, "N0369", ints_get(c.sstart, s), ints_get(c.send, s),
+                    cat5(cat3(what, " requires `", kind), "` authority, and ", who, cat3(" holds no `", kind, "` here"), ""), primary,
+                    cat5(cat3("authority is a value: give ", who, " "), cap_article(k), " `", kind,
+                    "` parameter and have each caller pass one. The only source of one is `main`'s parameters"));
+            if ints_get(c.fnws, me) >= 0 {
+                sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), "an effect set says what a function does, not what allows it");
+            }
+        }
+        k = k + 1;
+    }
+    out
 }
 
 // `N0366`: a declared set the body exceeds, with the chain of reasons to where it ends.
