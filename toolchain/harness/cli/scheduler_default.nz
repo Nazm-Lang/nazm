@@ -1,0 +1,234 @@
+// The default scheduler: a program's tasks run on the pool with no variable set, on both
+// backends; ten thousand tasks on four workers; a scheduler the environment does not name starts
+// nothing; a program that calls C runs a thread per task unless the pool is asked for; one worker
+// runs tasks in one order. Ported from `crates/nazm-cli/tests/scheduler_default.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS` in `dir`, `NAZM_SCHEDULER` unset.
+fn nazm_s(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), args, dir, env_unset(suite_env(h), "NAZM_SCHEDULER"))
+}
+
+/// `src` built with `backend` into `dir/name`.
+fn built(h: Caps, dir: Str, name: Str, src: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, dir, f"{name}.nz", src)?;
+    let o = nazm_s(h, dir, words(f"build --backend {backend} {name}.nz -o {name}"));
+    check_that(o.code == 0, f"{name}/{backend}: {o.stderr}")
+}
+
+/// Run `dir/name` with exactly `env` (name, value, …) beside the reports, under a deadline:
+/// `(stdout, stderr, status)`.
+fn run_s(h: Caps, dir: Str, name: Str, args: Strs, env: Strs) -> Result[(Str, Str, Int), Str] ! { io, spawn } {
+    let mut e = env_unset(env_unset(env_unset(suite_env(h), "NAZM_SCHEDULER"), "NAZM_WORKERS"), "NAZM_TASK_STACK");
+    e = env_set(env_set(e, "NAZM_MEMORY_REPORT", "1"), "NAZM_SCHED_REPORT", "1");
+    let mut i = 0;
+    while i + 1 < strs_len(env) {
+        e = env_set(e, strs_get(env, i), strs_get(env, i + 1));
+        i = i + 2;
+    }
+    let o = run(h, f"{dir}/{name}", args, dir, e);
+    Result[(Str, Str, Int), Str].Ok(value: (o.stdout, o.stderr, o.code))
+}
+
+/// The report lines both models share: everything but the pool's own line.
+fn shared(stderr: Str) -> Str ! {} {
+    let keep = strs_new();
+    for l in lines(stderr) {
+        if !text_starts_with(l, "nazm-pool:") {
+            strs_push(keep, l);
+        }
+    }
+    str_join(keep, "\n")
+}
+
+/// The other runs print, end and report as the default one does.
+fn same_runs(backend: Str, default: (Str, Str, Int), other: (Str, Str, Int)) -> Result[Int, Str] ! {} {
+    check_that(other.0 == default.0 && other.2 == default.2, backend)?;
+    check_that(shared(other.1) == shared(default.1), f"{backend}: reports")
+}
+
+/// `nazm explain-cost --json file` in `dir`, read.
+fn cost(h: Caps, dir: Str, file: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let a = words("explain-cost --json");
+    strs_push(a, file);
+    let o = nazm_s(h, dir, a);
+    check_that(o.code == 0, o.stderr)?;
+    jparse(o.stdout)
+}
+
+/// `0 1 2 … 31 ` then `main`'s `0`.
+fn order_wanted() -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < 32 {
+        strs_push(parts, f"{i} ");
+        i = i + 1;
+    }
+    f"{str_join(parts, "")}0\n"
+}
+
+const FANIN: Str = "fn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n * n); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(2); let got = ints_new();\nscope { let mut i = 0; while i < 50 { spawn worker(io, c, i); i = i + 1; }\nlet mut k = 0; while k < 50 { let r = chan_recv(c, got); k = k + 1; } }\nlet mut s = 0; let mut j = 0; while j < 50 { s = s + ints_get(got, j); j = j + 1; }\nprint(int_to_str(s)); 0 }\n";
+
+@test
+fn with_no_variable_a_programs_tasks_run_on_the_pool_on_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let backends1 = strs_new();
+    strs_push(backends1, "llvm");
+    strs_push(backends1, "cranelift");
+    for backend in backends1 {
+        built(h, d, "fanin", FANIN, backend)?;
+        let l2 = strs_new();
+        let l3 = strs_new();
+        let default = run_s(h, d, "fanin", l2, l3)?;
+        let l4 = strs_new();
+        let l5 = strs_new();
+        strs_push(l5, "NAZM_SCHEDULER");
+        strs_push(l5, "threads");
+        let threads = run_s(h, d, "fanin", l4, l5)?;
+        let l6 = strs_new();
+        let l7 = strs_new();
+        strs_push(l7, "NAZM_SCHEDULER");
+        strs_push(l7, "pool");
+        let pool = run_s(h, d, "fanin", l6, l7)?;
+        // The sum of the first fifty squares, worked out: 49 · 50 · 99 / 6 = 40425, then `main`'s 0.
+        check_that(default.0 == "404250\n", backend)?;
+        check_that(default.2 == 0, backend)?;
+        check_that(text_contains(default.1, "nazm-pool: workers=4"), backend)?;
+        check_that(!text_contains(threads.1, "nazm-pool:"), backend)?;
+        same_runs(backend, default, threads)?;
+        same_runs(backend, default, pool)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn ten_thousand_tasks_run_on_four_workers_by_default(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn worker(io: IoCap, jobs: Chan, results: Chan) -> Int ! { io } {\nlet got = ints_new();\nif chan_recv(jobs, got) { chan_send(results, ints_get(got, 0) + 1); }\n0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet n = str_len(arg(0));\nlet jobs = chan_new(1); let results = chan_new(1); let sum = ints_new(); ints_push(sum, 0);\nscope {\nlet mut i = 0; while i < n { spawn worker(io, jobs, results); i = i + 1; }\nlet mut k = 0; let got = ints_new();\nwhile k < n { chan_send(jobs, k); let r = chan_recv(results, got); k = k + 1; }\nlet mut j = 0; let mut s = 0; while j < n { s = s + ints_get(got, j); j = j + 1; }\nints_set(sum, 0, s);\n}\nprint(int_to_str(ints_get(sum, 0))); 0 }\n";
+    let d = scratch_new(h);
+    built(h, d, "many", src, "llvm")?;
+    let n = "x".repeat(10_000);
+    let l8 = strs_new();
+    strs_push(l8, n);
+    let l9 = strs_new();
+    let (out, err, code) = run_s(h, d, "many", l8, l9)?;
+    check_that(code == 0, err)?;
+    // 1 + 2 + … + 10,000 = 50005000, then `main`'s 0.
+    check_that(out == "500050000\n", "assert_eq!(out, \"500050000\\n\");")?;
+    // Ten thousand logical tasks alive at once on four OS threads, where the thread model
+    // would have made ten thousand.
+    check_that(text_contains(err, "nazm-pool: workers=4 peak=10000"), err)?;
+    check_that(text_contains(err, "spawned=10000 joined=10000"), err)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_scheduler_the_environment_does_not_name_starts_no_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    built(h, d, "fanin", FANIN, "llvm")?;
+    let bads10 = strs_new();
+    strs_push(bads10, "bogus");
+    strs_push(bads10, "Pool");
+    strs_push(bads10, "thread");
+    strs_push(bads10, "");
+    for bad in bads10 {
+        let l11 = strs_new();
+        let l12 = strs_new();
+        strs_push(l12, "NAZM_SCHEDULER");
+        strs_push(l12, bad);
+        let (out, err, code) = run_s(h, d, "fanin", l11, l12)?;
+        check_that(code == 2, bad)?;
+        check_that(text_contains(err, "error[N0404]"), bad)?;
+        check_that((str_len(out) == 0), bad)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_program_that_calls_c_runs_a_thread_per_task_unless_the_pool_is_asked_for(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "extern \"C\" fn labs(a: Int) -> Int = \"labs\";\nfn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n); 0 }\nfn main(io: IoCap, t: SpawnCap, f: ForeignCap) -> Int {\nlet c = chan_new(4); let got = ints_new();\nscope { let mut i = 0; while i < 4 { spawn worker(io, c, i); i = i + 1; }\nlet mut k = 0; while k < 4 { let r = chan_recv(c, got); k = k + 1; } }\nprint(int_to_str(labs(0 - 6) + ints_len(got))); 0 }\n";
+    let d = scratch_new(h);
+    let backends13 = strs_new();
+    strs_push(backends13, "llvm");
+    strs_push(backends13, "cranelift");
+    for backend in backends13 {
+        built(h, d, "withc", src, backend)?;
+        let l14 = strs_new();
+        let l15 = strs_new();
+        let default = run_s(h, d, "withc", l14, l15)?;
+        // |-6| + 4 tasks' values = 10, then `main`'s 0.
+        check_that(default.0 == "100\n", "assert_eq!(default.0, \"100\\n\");")?;
+        check_that(default.2 == 0, "assert_eq!(default.2, Some(0));")?;
+        check_that(!text_contains(default.1, "nazm-pool:"), backend)?;
+        let l16 = strs_new();
+        let l17 = strs_new();
+        strs_push(l17, "NAZM_SCHEDULER");
+        strs_push(l17, "pool");
+        let pool = run_s(h, d, "withc", l16, l17)?;
+        check_that(pool.0 == default.0, "assert_eq!(&pool.0, &default.0);")?;
+        check_that(pool.2 == default.2, "assert_eq!(pool.2, default.2);")?;
+        check_that(text_contains(pool.1, "nazm-pool: workers=4"), backend)?;
+    
+    }
+    // And the cost report says which scheduler, and why.
+    scratch_write(h, d, "fanin.nz", FANIN)?;
+    scratch_write(h, d, "plain.nz", "fn main() -> Int { 1 }\n")?;
+    let c = cost(h, d, "withc.nz")?;
+    check_that(jstr(c, "schema") == "nazm.cost/2", jtext(c, ""))?;
+    check_that(jstr(c, "scheduler/default") == "threads", jtext(c, ""))?;
+    check_that(text_contains(jstr(c, "scheduler/why"), "calls C"), jtext(c, ""))?;
+    check_that(jstr(cost(h, d, "fanin.nz")?, "scheduler/default") == "pool", "fanin")?;
+    check_that(jtext(cost(h, d, "plain.nz")?, "scheduler") == "null", "plain")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn one_worker_runs_a_programs_tasks_in_the_same_order_every_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Each task appends its number to a shared channel the moment it runs; on one worker,
+    // first in, first out, they run in the order they were spawned, every time — where four
+    // workers may interleave them differently from run to run.
+    let src = "fn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(64); let got = ints_new();\nscope { let mut i = 0; while i < 32 { spawn worker(io, c, i); i = i + 1; } }\nlet mut k = 0; while k < 32 { let r = chan_recv(c, got); k = k + 1; }\nlet mut j = 0; while j < 32 { print(int_to_str(ints_get(got, j))); print(\" \"); j = j + 1; }\n0 }\n";
+    let d = scratch_new(h);
+    built(h, d, "order", src, "llvm")?;
+    let want = order_wanted();
+    let mut i19 = 0;
+    while i19 < 5 {
+        let l20 = strs_new();
+        let l21 = strs_new();
+        strs_push(l21, "NAZM_WORKERS");
+        strs_push(l21, "1");
+        let (out, err, code) = run_s(h, d, "order", l20, l21)?;
+        check_that(code == 0, err)?;
+        check_that(text_contains(err, "nazm-pool: workers=1"), err)?;
+        check_that(out == want, "assert_eq!(out, want);")?;
+    
+        i19 = i19 + 1;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// What the default costs against threads (N106, `docs/performance.md`): spawn and join, a
+/// channel round trip, a blocked receive woken, and resident memory per live task — each program
+/// built once at `-O2`, five runs, median. Run with `--ignored --nocapture`; it measures, it does
+/// not judge.
+// `what_the_default_scheduler_costs` is `#[ignore]`d in Rust "a measurement, printed for performance.md": it stays Rust (design decision 10).
+
