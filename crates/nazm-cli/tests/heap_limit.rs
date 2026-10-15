@@ -229,6 +229,33 @@ fn what_is_freed_is_counted_back_in_every_task() {
 }
 
 #[test]
+fn a_canonical_path_is_found_within_a_limit() {
+    // `realpath` once allocated its answer for the runtime to free; under a limit that free was
+    // the counted heap's, given a block with no header, and the program ended with SIGTRAP.
+    let d = with(
+        "use std.file
+
+fn main(io: IoCap) ! { io } {
+    match file_canonical(io, \"sub/..\") {
+        Ok(p) => print(\"found\\n\"),
+        Err(e) => print(\"refused\\n\"),
+    }
+    match file_canonical(io, \"missing\") {
+        Ok(p) => print(\"wrong\\n\"),
+        Err(e) => print(\"missing\\n\"),
+    }
+}
+",
+    );
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    for (label, exe) in builds(d.path(), Some("2G")) {
+        let r = run(d.path(), &exe);
+        assert_eq!(r.code, Some(0), "{label}: {r:?}");
+        assert!(r.stdout.starts_with("found\nmissing\n"), "{label}: {r:?}");
+    }
+}
+
+#[test]
 fn a_manifest_gives_the_limit_and_the_flag_overrides_it() {
     let d = tempfile::tempdir().unwrap();
     let manifest = |limit: &str| {
