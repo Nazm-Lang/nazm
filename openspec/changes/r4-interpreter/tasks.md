@@ -39,5 +39,5 @@
 - [x] 6.2 `tests/run.sh`: the reference's `run --interpret` when it has one; `NAZM_BUILD` apart from
       `NAZM`; files the programs write removed after the run
 - [x] 6.3 Sockets on one thread (D10): kvd agrees
-- [ ] 6.4 The `/3` tables (`impls`, `orders`, `derived_hash`, `statics`) replace D8's reconstruction
+- [x] 6.4 The `/3` tables (`impls`, `orders`, `derived_hash`, `statics`) replace D8's reconstruction
 - [ ] 6.5 `--rust-tests`: the programs the Rust CLI tests embed, every difference reported

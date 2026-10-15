@@ -83,6 +83,9 @@ pub struct Prog {
     shapes: Shapes,
     // A trait call's impl, once found: by `method * 1000003 + receiver type`, both interned.
     tcache: HashMap[Int, Int],
+    // `/3`'s impl table: `METHOD|SELF` (the trait method's key and the impl's self type, without
+    // type arguments) to the function that answers it, a trait's default method included.
+    impls: HashMap[Str, Int],
 }
 
 /// The heap: every object a handle names (D4). `kind` 0 is a free entry.
