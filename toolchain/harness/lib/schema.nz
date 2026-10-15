@@ -1,0 +1,346 @@
+// The JSON Schema subset `crates/nazm-cli/tests/schemas.rs` validates the compiler's machine output
+// against (R7): its `validate`, keyword for keyword. Supported, and deliberately no others: `$ref`
+// (to `#/$defs/*` only), `oneOf`, `type`, `const`, `enum`, `required`, `properties`,
+// `additionalProperties: false`, `items`, `minimum`, and the three `pattern`s the schemas use,
+// checked for what they mean. An unrecognised keyword is a problem, so a schema cannot quietly
+// assert something this does not check. `tools/jtool.nz validate` runs it natively: the documents
+// are too large for `nazm test`'s interpreted leg (design decision 16).
+
+use "@std/json"
+use "@std/text"
+use "jsonq.nz"
+
+const KNOWN: Str = "$schema $id $defs title description type const enum required properties additionalProperties items minimum pattern oneOf";
+
+fn child(doc: JsonDoc, node: Int, key: Str) -> Int ! {} {
+    match json_get(doc, node, key) {
+        Option.Some(value: n) => n,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn str_of(doc: JsonDoc, node: Int) -> Str ! {} {
+    if node < 0 {
+        return "";
+    }
+    match json_str(doc, node) {
+        Option.Some(value: s) => s,
+        Option.None() => "",
+    }
+}
+
+fn at_index(doc: JsonDoc, node: Int, i: Int) -> Int ! {} {
+    match json_at(doc, node, i) {
+        Option.Some(value: n) => n,
+        Option.None() => 0 - 1,
+    }
+}
+
+fn kind_of(doc: JsonDoc, node: Int) -> Str ! {} {
+    if node < 0 { "null" } else { json_kind(doc, node) }
+}
+
+/// The JSON Schema type name of a value: `integer` for a number that is an `i64` or `u64`.
+fn type_name(doc: JsonDoc, node: Int) -> Str ! {} {
+    let k = kind_of(doc, node);
+    if k == "bool" || k == "boolean" {
+        return "boolean";
+    }
+    if k == "number" {
+        return match json_int(doc, node) {
+            Option.Some(value: i) => "integer",
+            Option.None() => if is_u64_text(json_encode_node(doc, node)) { "integer" } else { "number" },
+        };
+    }
+    k
+}
+
+/// Whether a number's text is a whole number past `i64` that `u64` holds: serde's `is_u64`.
+fn is_u64_text(t: Str) -> Bool ! {} {
+    if str_len(t) == 0 || str_len(t) > 20 {
+        return false;
+    }
+    let mut i = 0;
+    while i < str_len(t) {
+        let b = str_byte(t, i);
+        if b < 48 || b > 57 {
+            return false;
+        }
+        i = i + 1;
+    }
+    str_len(t) < 20 || text_compare(t, "18446744073709551615") <= 0
+}
+
+fn hex_digits(s: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// Whether the string value `s` matches the pattern `p`, `-1` for a pattern this does not know.
+fn pattern_ok(p: Str, s: Str, is_str: Bool) -> Int ! {} {
+    if p == "^N[0-9]{4}$" {
+        let mut good = is_str && str_len(s) == 5 && text_starts_with(s, "N");
+        let mut i = 1;
+        while good && i < 5 {
+            let b = str_byte(s, i);
+            good = b >= 48 && b <= 57;
+            i = i + 1;
+        }
+        return if good { 1 } else { 0 };
+    }
+    if p == "^[0-9a-f]{64}$" {
+        return if is_str && str_len(s) == 64 && hex_digits(s) { 1 } else { 0 };
+    }
+    if p == "^blake3:[0-9a-f]{64}$" {
+        let rest = if text_starts_with(s, "blake3:") { str_slice(s, 7, str_len(s)) } else { "" };
+        return if is_str && text_starts_with(s, "blake3:") && str_len(rest) == 64 && hex_digits(rest) { 1 } else { 0 };
+    }
+    0 - 1
+}
+
+/// Validate the node `v` of `value` against the node `node` of `schema` (whose `$defs` resolve a
+/// `$ref`), each problem pushed onto `problems` naming where (`at`).
+pub fn validate(value: JsonDoc, v: Int, schema: JsonDoc, node: Int, at: Str, problems: Strs) -> Int ! {} {
+    if kind_of(schema, node) != "object" {
+        strs_push(problems, f"{at}: schema node is not an object");
+        return 0;
+    }
+    // A node whose `type` admits null accepts null and describes nothing further about it.
+    let t = child(schema, node, "type");
+    let mut admits_null = false;
+    if t >= 0 {
+        if kind_of(schema, t) == "array" {
+            let mut i = 0;
+            while i < json_len(schema, t) {
+                if str_of(schema, at_index(schema, t, i)) == "null" {
+                    admits_null = true;
+                }
+                i = i + 1;
+            }
+        } else {
+            admits_null = str_of(schema, t) == "null";
+        }
+    }
+    if kind_of(value, v) == "null" && admits_null {
+        return 0;
+    }
+    let r = child(schema, node, "$ref");
+    if r >= 0 && kind_of(schema, r) == "string" {
+        let reference = str_of(schema, r);
+        if !text_starts_with(reference, "#/$defs/") {
+            strs_push(problems, f"{at}: unsupported $ref {reference}");
+            return 0;
+        }
+        let name = str_slice(reference, 8, str_len(reference));
+        let defs = child(schema, json_root(schema), "$defs");
+        let target = if defs >= 0 { child(schema, defs, name) } else { 0 - 1 };
+        if target < 0 {
+            strs_push(problems, f"{at}: $ref {reference} does not resolve");
+        } else {
+            validate(value, v, schema, target, at, problems);
+        }
+        return 0;
+    }
+    let known = text_split(KNOWN, " ");
+    let mut k = 0;
+    while k < json_len(schema, node) {
+        let key = match json_key_at(schema, node, k) { Option.Some(value: s) => s, Option.None() => "", };
+        let mut ok = false;
+        for x in known {
+            if x == key {
+                ok = true;
+            }
+        }
+        if !ok {
+            strs_push(problems, f"{at}: the test does not check the keyword {json_quote(key)}");
+        }
+        k = k + 1;
+    }
+    // `oneOf`: exactly one alternative accepts the value.
+    let one_of = child(schema, node, "oneOf");
+    if one_of >= 0 && kind_of(schema, one_of) == "array" {
+        let mut accepting = 0;
+        let mut i = 0;
+        while i < json_len(schema, one_of) {
+            let inner = strs_new();
+            validate(value, v, schema, at_index(schema, one_of, i), at, inner);
+            if strs_len(inner) == 0 {
+                accepting = accepting + 1;
+            }
+            i = i + 1;
+        }
+        if accepting != 1 {
+            strs_push(problems, f"{at}: {accepting} of {json_len(schema, one_of)} alternatives accept {shown(value, v)}");
+        }
+    }
+    let c = child(schema, node, "const");
+    if c >= 0 && !jsame_at(value, v, schema, c) {
+        strs_push(problems, f"{at}: expected {json_encode_node(schema, c)}, found {shown(value, v)}");
+    }
+    let e = child(schema, node, "enum");
+    if e >= 0 && kind_of(schema, e) == "array" {
+        let mut found = false;
+        let mut i = 0;
+        while i < json_len(schema, e) {
+            if jsame_at(value, v, schema, at_index(schema, e, i)) {
+                found = true;
+            }
+            i = i + 1;
+        }
+        if !found {
+            strs_push(problems, f"{at}: {shown(value, v)} is not one of {json_encode_node(schema, e)}");
+        }
+    }
+    if t >= 0 {
+        let names = strs_new();
+        if kind_of(schema, t) == "string" {
+            strs_push(names, str_of(schema, t));
+        } else {
+            if kind_of(schema, t) == "array" {
+                let mut i = 0;
+                while i < json_len(schema, t) {
+                    let s = at_index(schema, t, i);
+                    if kind_of(schema, s) == "string" {
+                        strs_push(names, str_of(schema, s));
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+        let actual = type_name(value, v);
+        let mut ok = false;
+        for n in names {
+            if n == actual {
+                ok = true;
+            }
+        }
+        if !ok {
+            strs_push(problems, f"{at}: expected {str_join(names, ",")}, found {actual}");
+        }
+    }
+    let m = child(schema, node, "minimum");
+    if m >= 0 && v >= 0 && kind_of(value, v) == "number" {
+        match json_int(value, v) {
+            Option.Some(value: n) => match json_int(schema, m) {
+                Option.Some(value: least) => {
+                    if n < least {
+                        strs_push(problems, f"{at}: {n} is below the minimum");
+                    }
+                },
+                Option.None() => {},
+            },
+            Option.None() => {},
+        };
+    }
+    // The only patterns the schemas use are the diagnostic code's and a digest's.
+    let p = child(schema, node, "pattern");
+    if p >= 0 && kind_of(schema, p) == "string" {
+        let pat = str_of(schema, p);
+        let s = if kind_of(value, v) == "string" { str_of(value, v) } else { "" };
+        let ok = pattern_ok(pat, s, kind_of(value, v) == "string");
+        if ok < 0 {
+            strs_push(problems, f"{at}: the test does not know the pattern {json_quote(pat)}");
+        } else {
+            if ok == 0 {
+                strs_push(problems, f"{at}: {shown(value, v)} does not match {pat}");
+            }
+        }
+    }
+    let props = child(schema, node, "properties");
+    if props >= 0 && kind_of(schema, props) == "object" {
+        if kind_of(value, v) != "object" {
+            strs_push(problems, f"{at}: expected an object");
+            return 0;
+        }
+        let req = child(schema, node, "required");
+        if req >= 0 && kind_of(schema, req) == "array" {
+            let mut i = 0;
+            while i < json_len(schema, req) {
+                let key = str_of(schema, at_index(schema, req, i));
+                if child(value, v, key) < 0 && !has_key(value, v, key) {
+                    strs_push(problems, f"{at}: required field {json_quote(key)} is missing");
+                }
+                i = i + 1;
+            }
+        }
+        let ap = child(schema, node, "additionalProperties");
+        if ap >= 0 && json_encode_node(schema, ap) == "false" {
+            let mut i = 0;
+            while i < json_len(value, v) {
+                let key = match json_key_at(value, v, i) { Option.Some(value: s) => s, Option.None() => "", };
+                if child(schema, props, key) < 0 {
+                    strs_push(problems, f"{at}: {json_quote(key)} is not in the schema");
+                }
+                i = i + 1;
+            }
+        }
+        let mut i = 0;
+        while i < json_len(schema, props) {
+            let key = match json_key_at(schema, props, i) { Option.Some(value: s) => s, Option.None() => "", };
+            let sub = match json_value_at(schema, props, i) { Option.Some(value: n) => n, Option.None() => 0 - 1, };
+            if has_key(value, v, key) {
+                validate(value, child(value, v, key), schema, sub, f"{at}.{key}", problems);
+            }
+            i = i + 1;
+        }
+    }
+    let items = child(schema, node, "items");
+    if items >= 0 {
+        if kind_of(value, v) != "array" {
+            strs_push(problems, f"{at}: expected an array");
+            return 0;
+        }
+        let mut i = 0;
+        while i < json_len(value, v) {
+            validate(value, at_index(value, v, i), schema, items, f"{at}[{i}]", problems);
+            i = i + 1;
+        }
+    }
+    0
+}
+
+/// Whether the object node `v` has the member `key` (whatever its value, `null` included).
+fn has_key(value: JsonDoc, v: Int, key: Str) -> Bool ! {} {
+    if kind_of(value, v) != "object" {
+        return false;
+    }
+    let mut i = 0;
+    while i < json_len(value, v) {
+        match json_key_at(value, v, i) {
+            Option.Some(value: s) => {
+                if s == key {
+                    return true;
+                }
+            },
+            Option.None() => {},
+        };
+        i = i + 1;
+    }
+    false
+}
+
+fn shown(value: JsonDoc, v: Int) -> Str ! {} {
+    if v < 0 { "null" } else { json_encode_node(value, v) }
+}
+
+/// Every problem of each object of `objects` (one JSON text each) against `schema`, named
+/// `{name}#{i}` as `check_against` names them.
+pub fn schema_problems(schema: JsonDoc, objects: Strs, name: Str) -> Strs ! {} {
+    let problems = strs_new();
+    let mut i = 0;
+    for text in objects {
+        match jparse(text) {
+            Result.Ok(value: v) => { validate(v, json_root(v), schema, json_root(schema), f"{name}#{i}", problems); },
+            Result.Err(error: e) => { strs_push(problems, f"{name}#{i}: not JSON: {e}"); },
+        };
+        i = i + 1;
+    }
+    problems
+}

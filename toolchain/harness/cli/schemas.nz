@@ -1,0 +1,764 @@
+// The machine-readable output, checked against the schemas that describe it: these tests run the
+// real commands and validate the real output against `schema/*.json`, so the schema documents are
+// themselves tested. The validator is `lib/schema.nz` — `schemas.rs`' `validate`, keyword for
+// keyword, an unrecognised keyword a problem — run natively by `tools/jtool.nz validate`, and a
+// field of a document too large for the interpreted leg is read by `jtool get` (design decision
+// 16). Ported from `crates/nazm-cli/tests/schemas.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/tools.nz"
+use "../lib/differential.nz"
+
+/// The lines of `text` that are JSON objects: `lines` in the Rust test.
+fn objects_in(text: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in text_lines(text) {
+        if text_starts_with(l, "{") {
+            strs_push(out, l);
+        }
+    }
+    out
+}
+
+/// The directory the Rust tests run in when they name none: the package's.
+fn package_dir(h: Caps) -> Str ! { io } {
+    f"{repo_root(h)}/crates/nazm-cli"
+}
+
+/// A program provoking one of every diagnostic shape that carries a fix, plus one with no fix and
+/// no help.
+const BROKEN: Str = "fn f(mut n: Int) -> Int { n }\nfn g(out: OutCap) -> Int ! {} { print(\"x\"); 0 }\nfn main() -> Int {\n    let x = 1;\n    x = 2;\n    y\n}\n";
+
+@test
+fn every_diagnostic_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", BROKEN)?;
+    let out = nazm(h, package_dir(h), words(f"check --json {d}/prog.nz"));
+    scratch_remove(h, d);
+    let objects = objects_in(out.stderr);
+    check_that(strs_len(objects) >= 3, f"expected several diagnostics, got {strs_len(objects)}")?;
+    check_against(h, "nazm.diagnostic-1.json", objects)?;
+    // Both applicabilities and both states of `help` must actually occur.
+    let applicabilities = strs_new();
+    for o in objects {
+        let doc = jparse(o)?;
+        let mut i = 0;
+        while i < jlen(doc, "fixes") {
+            strs_push(applicabilities, jstr(doc, f"fixes/{i}/applicability"));
+            check_that(jstr(doc, f"fixes/{i}/precondition") != "", "a fix reached the output with no precondition")?;
+            i = i + 1;
+        }
+    }
+    check_that(strs_has(applicabilities, "automatic") && strs_has(applicabilities, "needs_review"), f"the sample exercises only {str_join(applicabilities, ",")}")
+}
+
+@test
+fn every_edit_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", BROKEN)?;
+    let out = nazm(h, package_dir(h), words(f"fix --json {d}/prog.nz"));
+    scratch_remove(h, d);
+    let objects = objects_in(out.stdout);
+    check_against(h, "nazm.fix-1.json", objects)?;
+    for o in objects {
+        check_that(jv(jparse(o)?, "applied") == "false", "`nazm fix` without --apply must write nothing")?;
+    }
+    ok()
+}
+
+@test
+fn the_capability_inventory_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let out = nazm(h, package_dir(h), words("capabilities --json"));
+    let objects = objects_in(out.stdout);
+    check_that(strs_len(objects) == 1, "one object, not a stream")?;
+    check_against(h, "nazm.capabilities-1.json", objects)
+}
+
+@test
+fn every_test_case_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `nazm test` runs every case natively as well as interpreted, and a native program that never
+    // finishes is a wrong answer: under a deadline, its process group ended on the way out.
+    let a = words("test --json");
+    strs_push(a, f"{repo_root(h)}/compiler/conformance");
+    let out = run_within(h, nazm_bin(h.io), a, package_dir(h), suite_env(h), 600000);
+    check_that(out.code != TIMED_OUT, "`nazm test` on the conformance corpus did not finish within 600 s")?;
+    let objects = objects_in(out.stdout);
+    check_that(strs_len(objects) >= 5, "expected the conformance corpus")?;
+    check_against(h, "nazm.test-1.json", objects)?;
+    for o in objects {
+        check_that(jv(jparse(o)?, "passed") == "true", f"the conformance corpus should pass: {o}")?;
+    }
+    check_that(out.code == 0, ran_show(out))
+}
+
+/// The first object of a run's standard output, or `Err`.
+fn first_object(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    let objects = objects_in(o.stdout);
+    check_that(strs_len(objects) > 0, ran_show(o))?;
+    jparse(strs_get(objects, 0))
+}
+
+@test
+fn the_cache_report_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Twice, because the interesting fields only move on the second run.
+    let d = prog_dir(h, "nazm.root", "")?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n * 2 }\n")?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { twice(21) }\n")?;
+    let cold = nazm(h, d, words("check a.nz --cache-report"));
+    let warm = nazm(h, d, words("check a.nz --cache-report"));
+    scratch_remove(h, d);
+    check_that(cold.code == 0, cold.stderr)?;
+    check_that(warm.code == 0, warm.stderr)?;
+    check_that(strs_len(objects_in(cold.stdout)) == 1, "one object, not a stream")?;
+    check_against(h, "nazm.check-report-1.json", objects_in(cold.stdout))?;
+    check_that(jint(first_object(cold)?, "reused") == 0, cold.stdout)?;
+    check_against(h, "nazm.check-report-1.json", objects_in(warm.stdout))?;
+    // Two project modules and the core prelude.
+    let w = first_object(warm)?;
+    check_that(jint(w, "reused") == 3, warm.stdout)?;
+    check_that(jint(w, "checked") == 0, warm.stdout)
+}
+
+/// The schema identifier the compiler emits and the schema document's `const` are one string: what
+/// the Rust test reads as the library's constant, `nazm check --json` prints on every diagnostic.
+@test
+fn the_schema_identifier_is_the_one_the_compiler_emits(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = jparse(read_text(h, f"{repo_root(h)}/schema/nazm.diagnostic-1.json")?)?;
+    let declared = jstr(root, "properties/schema/const");
+    check_that(declared != "", "the schema declares its own identifier")?;
+    let d = prog_dir(h, "prog.nz", BROKEN)?;
+    let out = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    let objects = objects_in(out.stderr);
+    check_that(strs_len(objects) > 0, out.stderr)?;
+    for o in objects {
+        let emitted = jstr(jparse(o)?, "schema");
+        check_that(emitted == declared, f"{emitted} / {declared}")?;
+    }
+    check_that(jstr(root, "title") == declared, "the title and the identifier should be the same string")
+}
+
+@test
+fn the_build_report_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Cold and warm, because the counters are the whole content.
+    let d = prog_dir(h, "nazm.root", "")?;
+    scratch_write(h, d, "b.nz", "pub fn twice(n: Int) -> Int { n * 2 }\n")?;
+    scratch_write(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { twice(21) }\n")?;
+    let cold = build_report(h, d, "")?;
+    let warm = build_report(h, d, "")?;
+    // And with the cache off, which must read as a cold build that stored nothing.
+    let off = build_report(h, d, " --no-cache")?;
+    scratch_remove(h, d);
+    check_against(h, "nazm.build-report-1.json", one(cold))?;
+    let c = jparse(cold)?;
+    check_that(jint(c, "native/reused") == 0, cold)?;
+    check_that(jsame(c, "native/compiled", c, "native/units"), cold)?;
+    check_against(h, "nazm.build-report-1.json", one(warm))?;
+    let w = jparse(warm)?;
+    check_that(jint(w, "native/compiled") == 0, warm)?;
+    check_that(jsame(w, "native/reused", w, "native/units"), warm)?;
+    check_against(h, "nazm.build-report-1.json", one(off))?;
+    let o = jparse(off)?;
+    check_that(jint(o, "native/reused") == 0, off)?;
+    check_that(jint(o, "native/stored") == 0, off)
+}
+
+fn one(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, s);
+    out
+}
+
+/// The `nazm.build-report/1` line of `nazm build a.nz -o prog --build-report EXTRA` in `d`.
+fn build_report(h: Caps, d: Str, extra: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = nazm(h, d, words(f"build a.nz -o prog --build-report{extra}"));
+    check_that(out.code == 0, out.stderr)?;
+    for l in text_lines(out.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            return Result[Str, Str].Ok(value: l);
+        }
+    }
+    Result[Str, Str].Err(error: f"a report: {out.stdout}")
+}
+
+/// `nazm ARGS` (in the package's directory): its one compact line of output, and its status.
+fn one_line(h: Caps, args: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    let out = nazm(h, package_dir(h), args);
+    check_that(strs_len(text_lines(out.stdout)) == 1, f"one compact line: {out.stdout}{out.stderr}")?;
+    Result[Ran, Str].Ok(value: out)
+}
+
+fn args3(a: Str, b: Str, c: Str) -> Strs ! {} {
+    let out = words(a);
+    strs_push(out, b);
+    for x in words(c) {
+        strs_push(out, x);
+    }
+    out
+}
+
+@test
+fn a_context_packet_is_nazm_context_1_available_or_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A function with callers, callees, dependencies, a diagnostic and a prelude type; a record and
+    // an enum, whose calls are not applicable; and each reason there is no packet.
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P, s: S) -> Option[Int] { let y = 1 + \"s\"; Option.Some(value: g(p.x)) }\nfn h() -> Int { match f(P(x: 1), S.A()) { Option.Some(value: v) => v, Option.None() => 0, } }\n";
+    let d = prog_dir(h, "main.nz", text)?;
+    scratch_write(h, d, "lib.nz", "pub fn g(n: Int) -> Int { n }\n")?;
+    let main = f"{d}/main.nz";
+    let bytes = ints_new();
+    for needle in text_split("f(p|P {|S {|h()|y =", "|") {
+        ints_push(bytes, find(text, needle));
+    }
+    ints_push(bytes, 0);
+    ints_push(bytes, str_len(text) + 5);
+    let packets = strs_new();
+    for b in bytes {
+        let o = one_line(h, args3("context --json --root", main, f"--file {main} --byte {b}"))?;
+        strs_push(packets, text_trim(o.stdout));
+    }
+    let o = one_line(h, args3("context --json --root", main, f"--file {d}/elsewhere.nz --byte 0"))?;
+    strs_push(packets, text_trim(o.stdout));
+    scratch_remove(h, d);
+    let p0 = jparse(strs_get(packets, 0))?;
+    check_that(jstr(p0, "status") == "available", strs_get(packets, 0))?;
+    check_that(jlen(p0, "diagnostics") > 0, strs_get(packets, 0))?;
+    check_that(jstr(jparse(strs_get(packets, 1))?, "callers/status") == "not_applicable", strs_get(packets, 1))?;
+    check_that(jstr(jparse(strs_get(packets, 4))?, "reason") == "not_a_target", strs_get(packets, 4))?;
+    check_that(jstr(jparse(strs_get(packets, 5))?, "reason") == "not_a_name", strs_get(packets, 5))?;
+    check_that(jstr(jparse(strs_get(packets, 6))?, "reason") == "out_of_range", strs_get(packets, 6))?;
+    check_that(jstr(jparse(strs_get(packets, 7))?, "reason") == "not_in_compilation", strs_get(packets, 7))?;
+    check_against(h, "nazm.context-3.json", packets)
+}
+
+@test
+fn a_snapshot_and_a_delta_are_nazm_snapshot_1_and_nazm_delta_1_available_or_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nenum S {\n    A,\n    B(v: Int),\n}\nfn f(p: P, s: S) -> Int { let y = 1 + \"s\"; g(p.x) }\nfn h() -> Int { f(P(x: 1), S.A()) }\n";
+    let d = prog_dir(h, "main.nz", text)?;
+    scratch_write(h, d, "lib.nz", "pub fn g(n: Int) -> Int { n }\n")?;
+    let main = f"{d}/main.nz";
+    let lib = f"{d}/lib.nz";
+    let good = one_line(h, args3("snapshot --json --root", main, ""))?;
+    check_that(good.code == 0, ran_show(good))?;
+    check_that(jstr(jparse(good.stdout)?, "status") == "available", good.stdout)?;
+    scratch_write(h, d, "baseline.json", text_trim(good.stdout))?;
+    let baseline = f"{d}/baseline.json";
+    scratch_write(h, d, "lib.nz", "pub fn g(n: Int) -> Int { n + 1 }\npub fn k() -> Int { 2 }\n")?;
+    let changed = one_line(h, args3("delta --json --root", main, f"--baseline {baseline}"))?;
+    check_that(changed.code == 0, ran_show(changed))?;
+    let c = jparse(changed.stdout)?;
+    check_that(jstr(c, "changed/0/identity") == "lib.nz::fn g", changed.stdout)?;
+    check_that(jstr(c, "added/0/identity") == "lib.nz::fn k", changed.stdout)?;
+    scratch_write(h, d, "other.json", "{not json")?;
+    let malformed = one_line(h, args3("delta --json --root", main, f"--baseline {d}/other.json"))?;
+    check_that(malformed.code == 1, ran_show(malformed))?;
+    check_that(jstr(jparse(malformed.stdout)?, "reason") == "baseline_malformed", malformed.stdout)?;
+    let wrong_root = one_line(h, args3("delta --json --root", lib, f"--baseline {baseline}"))?;
+    check_that(jstr(jparse(wrong_root.stdout)?, "reason") == "baseline_wrong_root", wrong_root.stdout)?;
+    scratch_write(h, d, "lib.nz", "pub fn g(n: Int) -> Int { n + }\n")?;
+    let broken = one_line(h, args3("snapshot --json --root", main, ""))?;
+    check_that(broken.code == 1, ran_show(broken))?;
+    check_that(jstr(jparse(broken.stdout)?, "reason") == "incomplete_compilation", broken.stdout)?;
+    let broken_delta = one_line(h, args3("delta --json --root", main, f"--baseline {baseline}"))?;
+    scratch_remove(h, d);
+    check_that(jstr(jparse(broken_delta.stdout)?, "reason") == "incomplete_compilation", broken_delta.stdout)?;
+    let snaps = strs_new();
+    strs_push(snaps, text_trim(good.stdout));
+    strs_push(snaps, text_trim(broken.stdout));
+    check_against(h, "nazm.snapshot-3.json", snaps)?;
+    let deltas = strs_new();
+    for r in vec_of4(changed, malformed, wrong_root, broken_delta) {
+        strs_push(deltas, text_trim(r.stdout));
+    }
+    check_against(h, "nazm.delta-3.json", deltas)
+}
+
+fn vec_of4(a: Ran, b: Ran, c: Ran, d: Ran) -> Vec[Ran] ! {} {
+    let v = vec_new[Ran]();
+    vec_push(v, a);
+    vec_push(v, b);
+    vec_push(v, c);
+    vec_push(v, d);
+    v
+}
+
+fn rename(h: Caps, root: Str, file: Str, byte: Int, name: Str) -> Result[Ran, Str] ! { io, spawn } {
+    one_line(h, args3("patch rename --json --root", root, f"--file {file} --byte {byte} --new-name {name}"))
+}
+
+fn fix_at(h: Caps, broken: Str, byte: Int, index: Int) -> Result[Ran, Str] ! { io, spawn } {
+    one_line(h, args3("patch fix --json --root", broken, f"--file {broken} --byte {byte} --fix {index}"))
+}
+
+@test
+fn a_patch_is_nazm_patch_1_available_or_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A rename of a private function, of a local and of a field; an automatic and a needs-review
+    // fix; and refusals: exported, invalid name, no fix, a file outside.
+    let text = "use \"lib.nz\";\nstruct P {\n    x: Int,\n}\nfn g(p: P) -> Int { let y = p.x; y + far() }\nfn main() -> Int { g(P(x: 1)) }\n";
+    let broken_text = "fn g(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n";
+    let d = prog_dir(h, "main.nz", text)?;
+    scratch_write(h, d, "lib.nz", "pub fn far() -> Int { 1 }\n")?;
+    scratch_write(h, d, "broken.nz", broken_text)?;
+    let main = f"{d}/main.nz";
+    let lib = f"{d}/lib.nz";
+    let broken = f"{d}/broken.nz";
+    let function = rename(h, main, main, find(text, "g(p"), "go")?;
+    check_that(function.code == 0, ran_show(function))?;
+    check_that(jstr(jparse(function.stdout)?, "status") == "available", function.stdout)?;
+    let local = rename(h, main, main, find(text, "y ="), "why")?;
+    let field = rename(h, main, main, find(text, "x: Int"), "ex")?;
+    let automatic = fix_at(h, broken, find(broken_text, "x = 2"), 0)?;
+    check_that(automatic.code == 0, ran_show(automatic))?;
+    check_that(jstr(jparse(automatic.stdout)?, "operation/applicability") == "automatic", automatic.stdout)?;
+    let review = fix_at(h, broken, find(broken_text, "print"), 0)?;
+    check_that(jstr(jparse(review.stdout)?, "operation/applicability") == "needs_review", review.stdout)?;
+    let exported = rename(h, main, lib, 7, "near")?;
+    check_that(exported.code == 1, ran_show(exported))?;
+    check_that(jstr(jparse(exported.stdout)?, "reason") == "exported", exported.stdout)?;
+    let invalid = rename(h, main, main, find(text, "g(p"), "fn")?;
+    check_that(jstr(jparse(invalid.stdout)?, "reason") == "invalid_name", invalid.stdout)?;
+    let none = fix_at(h, broken, 0, 0)?;
+    check_that(jstr(jparse(none.stdout)?, "reason") == "no_such_fix", none.stdout)?;
+    let outside = rename(h, main, "/etc/passwd", 0, "x")?;
+    scratch_remove(h, d);
+    check_that(jstr(jparse(outside.stdout)?, "reason") == "not_in_compilation", outside.stdout)?;
+    let all = strs_new();
+    for r in vec_of4(function, local, field, automatic) {
+        strs_push(all, text_trim(r.stdout));
+    }
+    for r in vec_of4(review, exported, invalid, none) {
+        strs_push(all, text_trim(r.stdout));
+    }
+    strs_push(all, text_trim(outside.stdout));
+    check_against(h, "nazm.patch-1.json", all)
+}
+
+@test
+fn a_diagnostic_index_and_detail_are_their_schemas_and_detail_is_nazm_check_s_diagnostic(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Type errors, one with an automatic fix; a syntax error with a compiler fix; and the refusals.
+    let d = prog_dir(h, "typed.nz", "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x + true\n}\n")?;
+    scratch_write(h, d, "syntax.nz", "fn main() -> Str {\n    \"open\n}\n")?;
+    let indexes = strs_new();
+    let details = strs_new();
+    let published = strs_new();
+    let zeros = "0000000000000000000000000000000000000000000000000000000000000000";
+    for name in words("typed.nz syntax.nz") {
+        let root = f"{d}/{name}";
+        let ir = one_line(h, args3("diagnostics --json --root", root, ""))?;
+        check_that(ir.code == 0, ran_show(ir))?;
+        let i = jparse(ir.stdout)?;
+        let state = jstr(i, "state/source");
+        // `nazm check --json`, as it always was: one nazm.diagnostic/1 per line on stderr.
+        let check = nazm(h, package_dir(h), args3("check --json", root, ""));
+        let stream = strs_new();
+        for l in objects_in(check.stderr) {
+            if jstr(jparse(l)?, "schema") == "nazm.diagnostic/1" {
+                strs_push(stream, l);
+            }
+        }
+        let mut k = 0;
+        while k < jlen(i, "diagnostics") {
+            let id = jstr(i, f"diagnostics/{k}/id");
+            let dr = one_line(h, args3("diagnostics --json --root", root, f"--detail {id} --state {state}"))?;
+            check_that(dr.code == 0, dr.stdout)?;
+            let dv = jparse(dr.stdout)?;
+            let body = jv(dv, "diagnostic");
+            let diagnostic = if jq(dv, "diagnostic/schema") >= 0 { body } else { f"{{\"schema\":\"nazm.diagnostic/1\",{str_slice(body, 1, str_len(body))}" };
+            let want = jparse(diagnostic)?;
+            let mut found = false;
+            for s in stream {
+                if jsame(jparse(s)?, "", want, "") {
+                    found = true;
+                }
+            }
+            check_that(found, f"{diagnostic} not in {str_join(stream, " ")}")?;
+            strs_push(published, diagnostic);
+            strs_push(details, text_trim(dr.stdout));
+            k = k + 1;
+        }
+        let first = jstr(i, "diagnostics/0/id");
+        let stale = one_line(h, args3("diagnostics --json --root", root, f"--detail {first} --state {zeros}"))?;
+        check_that(stale.code == 1, ran_show(stale))?;
+        check_that(jstr(jparse(stale.stdout)?, "reason") == "stale_state", stale.stdout)?;
+        strs_push(details, text_trim(stale.stdout));
+        strs_push(indexes, text_trim(ir.stdout));
+    }
+    scratch_remove(h, d);
+    let mut planned = false;
+    let mut compiler_only = false;
+    for x in details {
+        let dv = jparse(x)?;
+        if jint(dv, "semantic_patches") == 1 {
+            planned = true;
+        }
+        if jint(dv, "compiler_fixes") == 1 && jint(dv, "semantic_patches") == 0 {
+            compiler_only = true;
+        }
+    }
+    check_that(planned, "an automatic fix planned")?;
+    check_that(compiler_only, "a compiler fix and no semantic patch")?;
+    check_against(h, "nazm.diagnostic-index-1.json", indexes)?;
+    check_against(h, "nazm.diagnostic-detail-1.json", details)?;
+    check_against(h, "nazm.diagnostic-1.json", published)
+}
+
+/// `nazm ARGS` in `d`: its one line of output.
+fn line_in(h: Caps, d: Str, args: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = nazm(h, d, words(args));
+    check_that(strs_len(text_lines(out.stdout)) == 1, f"one line: {out.stdout}{out.stderr}")?;
+    Result[Str, Str].Ok(value: text_trim(out.stdout))
+}
+
+@test
+fn command_and_test_summaries_are_their_schemas(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "ok.nz", "fn main() -> Int { 1 }\n")?;
+    scratch_write(h, d, "typed.nz", "fn helper() -> Int { 1 + true }\n")?;
+    scratch_write(h, d, "syntax.nz", "fn main() -> Int { 1 +  }\n")?;
+    scratch_write(h, d, "t/a.nz", "fn main() -> Int { 1 }\n")?;
+    scratch_write(h, d, "t/a.expected", "1\n")?;
+    scratch_write(h, d, "t/b.nz", "fn main() -> Int { 2 }\n")?;
+    scratch_write(h, d, "t/b.expected", "1\n")?;
+    scratch_mkdir(h, d, "none")?;
+    let commands = strs_new();
+    for args in text_split("check --summary-json ok.nz|check --summary-json typed.nz|check --summary-json syntax.nz|check --summary-json missing.nz|build --summary-json ok.nz -o ok|build --summary-json typed.nz -o typed|build --summary-json ok.nz -o ok.nz", "|") {
+        strs_push(commands, line_in(h, d, args)?);
+    }
+    let statuses = strs_new();
+    for c in commands {
+        strs_push(statuses, jstr(jparse(c)?, "status"));
+    }
+    for s in words("success rejected unreadable refused") {
+        check_that(strs_has(statuses, s), f"{s} in {str_join(statuses, ",")}")?;
+    }
+    check_against(h, "nazm.command-summary-1.json", commands)?;
+    let tests = strs_new();
+    for args in text_split("test --summary-json t|test --summary-json --interpret-only t|test --summary-json none|test --summary-json nowhere", "|") {
+        strs_push(tests, line_in(h, d, args)?);
+    }
+    scratch_remove(h, d);
+    check_against(h, "nazm.test-summary-1.json", tests)
+}
+
+/// `nazm ARGS` in the package's directory: its one line of output (`args` space-separated, with
+/// `{}` standing for `extra` as one argument).
+fn line_of(h: Caps, args: Str, extra: Str) -> Result[Str, Str] ! { io, spawn } {
+    let a = strs_new();
+    for w in words(args) {
+        strs_push(a, if w == "{}" { extra } else { w });
+    }
+    let out = nazm(h, package_dir(h), a);
+    check_that(strs_len(text_lines(out.stdout)) == 1, f"one line: {args}: {out.stdout}{out.stderr}")?;
+    Result[Str, Str].Ok(value: text_trim(out.stdout))
+}
+
+/// The `status` of a document too large to parse in the interpreted leg.
+fn status_of(h: Caps, doc: Str) -> Result[Str, Str] ! { io, spawn } {
+    let p = strs_new();
+    strs_push(p, "status");
+    let got = json_paths(h, doc, p)?;
+    let s = jparse(strs_get(got, 0))?;
+    Result[Str, Str].Ok(value: jstr(s, ""))
+}
+
+@test
+fn a_docs_index_and_section_are_their_schemas_in_every_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let nowhere = scratch_new(h);
+    let index = line_of(h, "docs --index --json", "")?;
+    let paths = strs_new();
+    strs_push(paths, "state");
+    strs_push(paths, "documents/#");
+    let got = json_paths(h, index, paths)?;
+    let state = jstr(jparse(strs_get(got, 0))?, "");
+    let documents = parse_usize(strs_get(got, 1));
+    let indexes = strs_new();
+    strs_push(indexes, index);
+    strs_push(indexes, line_of(h, "docs --index --document grammar --json", "")?);
+    strs_push(indexes, line_of(h, "docs --index --document nowhere --json", "")?);
+    strs_push(indexes, line_of(h, "docs --index --json --root {}", nowhere)?);
+    let statuses = strs_new();
+    for i in indexes {
+        strs_push(statuses, status_of(h, i)?);
+    }
+    check_that(str_join(statuses, ",") == "available,available,not_found,unavailable", str_join(statuses, ","))?;
+    check_against(h, "nazm.docs-index-1.json", indexes)?;
+    // Every document's first three sections, and every refusal.
+    let counts = strs_new();
+    let mut k = 0;
+    while k < documents {
+        strs_push(counts, f"documents/{k}/sections/#");
+        k = k + 1;
+    }
+    let lens = json_paths(h, index, counts)?;
+    let ids = strs_new();
+    let mut i = 0;
+    while i < documents {
+        let n = parse_usize(strs_get(lens, i));
+        let mut j = 0;
+        while j < n && j < 3 {
+            strs_push(ids, f"documents/{i}/sections/{j}/id");
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    let sections = strs_new();
+    for id in json_paths(h, index, ids)? {
+        strs_push(sections, line_of(h, "docs --section {} --json", jstr(jparse(id)?, ""))?);
+    }
+    strs_push(sections, line_of(h, f"docs --section grammar:expression --state {state} --json", "")?);
+    strs_push(sections, line_of(h, "docs --section spec:nowhere --json", "")?);
+    strs_push(sections, line_of(h, "docs --section spec --state 0000000000000000000000000000000000000000000000000000000000000000 --json", "")?);
+    strs_push(sections, line_of(h, "docs --section spec --json --root {}", nowhere)?);
+    scratch_remove(h, nowhere);
+    let seen = strs_new();
+    for s in sections {
+        strs_push(seen, status_of(h, s)?);
+    }
+    for status in words("available not_found stale_state unavailable") {
+        check_that(strs_has(seen, status), status)?;
+    }
+    check_against(h, "nazm.docs-section-1.json", sections)
+}
+
+@test
+fn a_repository_map_and_a_task_context_are_their_schemas_in_every_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let nowhere = scratch_new(h);
+    let map = line_of(h, "repo --map --json", "")?;
+    let maps = strs_new();
+    strs_push(maps, map);
+    strs_push(maps, line_of(h, "repo --map --json --root {}", nowhere)?);
+    let statuses = strs_new();
+    for m in maps {
+        strs_push(statuses, status_of(h, m)?);
+    }
+    check_that(str_join(statuses, ",") == "available,unavailable", str_join(statuses, ","))?;
+    check_against(h, "nazm.repository-map-1.json", maps)?;
+    let sp2 = strs_new();
+    strs_push(sp2, "state");
+    let state = jstr(jparse(strs_get(json_paths(h, map, sp2)?, 0))?, "");
+    let zeros = "0000000000000000000000000000000000000000000000000000000000000000";
+    // `seed|intent|extra`, `{}` in the extra standing for the empty directory.
+    let cases = text_split(f"def:compiler:module.nz::fn attach_core|edit|--state {state};def:compiler:analyse.nz::fn check_program|understand|--max-doc-bytes 400;def:examples-bad:return_type_mismatch.nz::fn describe|diagnose|;diagnostic:examples-bad:return_type_mismatch.nz:N0300@return_type_mismatch.nz:59-69#0|diagnose|;doc:spec:returns|understand|;doc:guide:the-syntax/record|edit|;package:nazm-docs|test|;package:nazm-repo|edit|;target:nazm-docs:test:corpus|test|;mutation:selfhost-the-core-is-the-last-module|edit|;profile:docs|test|;module:compiler:lex.nz|understand|;root:examples-bad:bare_return.nz|understand|;sources:examples|edit|;schema:nazm.context/3|understand|;def:compiler:module.nz::fn attach_core|edit|--state {zeros};def:compiler:module.nz::fn nowhere|edit|;/etc/passwd|edit|;def:compiler:module.nz::fn attach_core|edit|--max-entities 0;package:nazm-docs|edit|--root {{}}", ";");
+    let tasks = strs_new();
+    for case in cases {
+        let f = text_split(case, "|");
+        // The seed holds spaces (`fn attach_core`): one argument.
+        let a = words("repo --task --json --seed");
+        strs_push(a, strs_get(f, 0));
+        strs_push(a, "--intent");
+        strs_push(a, strs_get(f, 1));
+        for w in words(strs_get(f, 2)) {
+            strs_push(a, if w == "{}" { nowhere } else { w });
+        }
+        let out = nazm(h, package_dir(h), a);
+        check_that(strs_len(text_lines(out.stdout)) == 1, f"one line: {strs_get(f, 0)}: {out.stdout}{out.stderr}")?;
+        strs_push(tasks, text_trim(out.stdout));
+    }
+    scratch_remove(h, nowhere);
+    let seen = strs_new();
+    for tk in tasks {
+        strs_push(seen, status_of(h, tk)?);
+    }
+    for status in words("complete partial stale_state not_found invalid_request insufficient_budget unavailable") {
+        check_that(strs_has(seen, status), f"{status} in {str_join(seen, ",")}")?;
+    }
+    check_against(h, "nazm.task-context-1.json", tasks)
+}
+
+/// `nazm ARGS` in `d`, which must succeed unless it is `bindgen`.
+fn nazm_in(h: Caps, d: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let o = nazm(h, d, words(args));
+    check_that(o.code == 0 || text_starts_with(args, "bindgen"), f"nazm {args}: {o.stderr}")?;
+    Result[Ran, Str].Ok(value: o)
+}
+
+@test
+fn a_provenance_record_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", "fn main() -> Int { 1 }\n")?;
+    nazm_in(h, d, "build p.nz -o p --provenance p.json")?;
+    let records = strs_new();
+    strs_push(records, text_replace(read_text(h, f"{d}/p.json")?, "\n", " "));
+    // Nazm's own code generator's build, with its digest (R9, D15), where it builds: macOS.
+    if on_macos(h) {
+        let o = run(h, nazm_bin(h.io), words("build --backend nazm p.nz -o q --provenance q.json"), d, env_set(suite_env(h), "NAZM_NZCG", nzcg(h, d)?));
+        check_that(o.code == 0, o.stderr)?;
+        let w = read_text(h, f"{d}/q.json")?;
+        let wp = strs_new();
+        strs_push(wp, "backend/nzcg");
+        let nz = jparse(strs_get(json_paths(h, w, wp)?, 0))?;
+        check_that(json_kind(nz, json_root(nz)) == "string", w)?;
+        strs_push(records, text_replace(w, "\n", " "));
+    }
+    scratch_remove(h, d);
+    check_against(h, "nazm.provenance-1.json", records)
+}
+
+@test
+fn an_api_document_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "// A point.\npub struct P { x: Int }\npub enum E { A, B(p: P) }\npub extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\npub extern \"C\" fn tri(x: Int) -> Int ! {} = \"tri\" { x * 3 }\npub fn say(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\nfn main() -> Int { 0 }\n")?;
+    let o = nazm_in(h, d, "doc m.nz")?;
+    scratch_remove(h, d);
+    check_against(h, "nazm.api-doc-2.json", objects_in(o.stdout))
+}
+
+@test
+fn a_binding_report_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.h", "#include <stdint.h>\nint64_t add(int64_t a, int64_t b);\nint small(int x);\n")?;
+    let o = nazm_in(h, d, "bindgen m.h -o m.nz")?;
+    scratch_remove(h, d);
+    check_against(h, "nazm.bindgen-1.json", objects_in(o.stdout))
+}
+
+@test
+fn a_publish_plan_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    nazm_in(h, d, "init lib --template library")?;
+    scratch_mkdir(h, d, "reg")?;
+    let o = nazm_in(h, d, "publish --registry reg lib --dry-run")?;
+    scratch_remove(h, d);
+    check_against(h, "nazm.publish-plan-1.json", objects_in(o.stdout))
+}
+
+@test
+fn resolved_units_and_references_match_the_published_schemas(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N77: the units a check entry stores, and an entity's occurrences read from them.
+    let d = prog_dir(h, "nazm.root", "")?;
+    scratch_write(h, d, "lib.nz", "pub fn helper(x: Int) -> Int { x + 1 }\npub struct P { a: Int, }\npub enum E { A, B(v: Int), }\n")?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\" as l;\nfn main() -> Int { let p = l::P(a: l::helper(1)); match l::E.B(v: p.a) { l::E.A() => 0, l::E.B(v: x) => x } }\n")?;
+    let units = nazm_in(h, d, "resolve main.nz")?;
+    let u = objects_in(units.stdout);
+    check_that(strs_len(u) >= 2, units.stdout)?;
+    check_against(h, "nazm.resolved-1.json", u)?;
+    let refs = strs_new();
+    for def in text_split("lib.nz::fn helper|lib.nz::enum E.B|lib.nz::enum E.B.v|lib.nz::record P.a", "|") {
+        let a = words("references");
+        strs_push(a, def);
+        strs_push(a, "main.nz");
+        let o = nazm(h, d, a);
+        check_that(o.code == 0, o.stderr)?;
+        for x in objects_in(o.stdout) {
+            strs_push(refs, x);
+        }
+    }
+    scratch_remove(h, d);
+    check_against(h, "nazm.references-1.json", refs)
+}
+
+@test
+fn the_lir_tables_match_the_published_schema_on_every_target_class(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N81: one program with a record of three widths, an enum with a payload and a `Vec`, printed
+    // for a 64-bit target and for wasm32.
+    let d = prog_dir(h, "prog.nz", "struct Q { flag: Bool, name: Str, n: Int, xs: Ints }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nfn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => q.n + k, S.Empty() => 0, } }\nfn main() -> Int { let v = vec_new[Str](); vec_push(v, \"a\"); val(S.Pair(q: Q(flag: true, name: \"x\", n: 1, xs: ints_new()), k: 2)) + vec_len(v) }\n")?;
+    let objects = strs_new();
+    for target in words("aarch64-apple-darwin wasm32-unknown-unknown") {
+        let o = nazm(h, d, words(f"lir --target {target} {d}/prog.nz"));
+        check_that(o.code == 0, o.stderr)?;
+        for x in objects_in(o.stdout) {
+            strs_push(objects, x);
+        }
+    }
+    scratch_remove(h, d);
+    check_that(strs_len(objects) == 2, f"{strs_len(objects)} objects")?;
+    check_against(h, "nazm.lir-2.json", objects)
+}
+
+@test
+fn an_obligation_census_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N87: contracts, a proved and a checked call, arithmetic, an index and a function value.
+    let d = prog_dir(h, "prog.nz", "fn half(n: Int) -> Int ! {} requires n >= 0 ensures result * 2 <= n { n / 2 }\nfn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }\nfn main() -> Int { half(8) + half(str_len(\"ab\")) + str_byte(\"a\", 0) + ap(half, 4) }\n")?;
+    let o = nazm(h, d, words(f"obligations --json {d}/prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let objects = objects_in(o.stdout);
+    check_that(strs_len(objects) == 1, o.stdout)?;
+    check_against(h, "nazm.obligations-1.json", objects)
+}
+
+@test
+fn a_runtime_manifest_matches_the_published_schema_for_every_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N82: a hosted, a board and a WebAssembly artifact.
+    let d = scratch_new(h);
+    let objects = strs_new();
+    for case in text_split("hosted|;board| --target aarch64-unknown-none;wasm| --target wasm32-unknown-unknown", ";") {
+        let f = text_split(case, "|");
+        let name = strs_get(f, 0);
+        let o = nazm(h, d, words(f"runtime build -o {name}{strs_get(f, 1)}"));
+        check_that(o.code == 0, o.stderr)?;
+        for x in objects_in(read_text(h, f"{d}/{name}/nazm-runtime.json")?) {
+            strs_push(objects, x);
+        }
+    }
+    scratch_remove(h, d);
+    check_that(strs_len(objects) == 3, f"{strs_len(objects)} manifests")?;
+    check_against(h, "nazm.runtime-1.json", objects)
+}
+
+/// Gate 2 (§18–§19): a test function's row, a fuzz target's, and a benchmark's, from real output.
+@test
+fn test_function_and_benchmark_rows_match_the_published_schemas(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "t.nz", "@test\nfn ok() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\n\n@fuzz\nfn f(input: Bytes) -> Result[Int, Str] { Result[Int, Str].Ok(value: bytes_len(input)) }\n\n@bench\nfn b() -> Int { 1 }\n")?;
+    let tested = nazm(h, d, words("test --json --fuzz 5 t.nz"));
+    let benched = nazm(h, d, words("bench --json --iterations 3 t.nz"));
+    scratch_remove(h, d);
+    let rows = objects_in(tested.stdout);
+    check_that(strs_len(rows) == 2, tested.stderr)?;
+    check_against(h, "nazm.test-1.json", rows)?;
+    let brows = objects_in(benched.stdout);
+    check_that(strs_len(brows) == 1, benched.stderr)?;
+    check_against(h, "nazm.bench-1.json", brows)
+}
+
+/// G2-C1: an item's `deprecated`, from real `nazm doc` output.
+@test
+fn a_deprecated_items_api_doc_matches_the_published_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "lib.nz", "@deprecated(\"use g\")\npub fn f() -> Int { 0 }\n@deprecated\npub struct S { x: Int, }\nfn main() -> Int { f() }\n")?;
+    let o = nazm(h, d, words("doc lib.nz"));
+    scratch_remove(h, d);
+    let doc = jparse(o.stdout)?;
+    let compact = jv(doc, "");
+    check_that(text_contains(compact, "\"deprecated\":\"use g\""), compact)?;
+    check_against(h, "nazm.api-doc-2.json", one(compact))
+}
+
+@test
+fn trace_output_matches_its_schema(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for f in words("heater.nz requirements.toml") {
+        scratch_write(h, d, f, read_text(h, f"{repo_root(h)}/examples/requirements/{f}")?)?;
+    }
+    let o = nazm(h, d, words("trace heater.nz --requirements requirements.toml"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let objects = objects_in(o.stdout);
+    check_that(strs_len(objects) == 1, o.stdout)?;
+    check_against(h, "nazm.trace-1.json", objects)
+}
