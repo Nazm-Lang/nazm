@@ -413,6 +413,24 @@
         effect parameters, float literals, `[v; n]` and array literals, an assignment to a
         field or an element, aggregate constants, calls through a value, foreign functions,
         contracts, `defer`, the built-ins `box`/`cell`/`checked`/`chain`; `@derive` last
+  - [x] Closures and the bindings they share (`closure`, `shared`, `through_cell`): a closure
+        as a function of its own — `env` first, its parameters, then its copy of each binding it
+        captures where the checker made the copy (`synthetic`, among its own bindings), owned
+        by its body first; `type_params` its maker's; the closure expression with the maker's
+        locals it captures. A `let mut` a closure shares is a `Cell` made holding its value
+        (`made_holding`), read by `vec_get` and assigned by `vec_set` at 0. sema.nz records
+        where each capture's copy is made (`capat`), each closure's type, a closure
+        parameter's declaration and a closure's settled effects. `run.sh core` (reference
+        rebuilt at 5dd044c4): 3,094 inputs agree, 0 differ; of 76,929 functions the lowering
+        carries 75,937, all agree; the other parts 10,662, all agree; 1,488 whole documents,
+        all the reference's bytes. check 3,092 agree, 2 differ (carried 3,088, all agree);
+        facts 3,088 agree, 6 differ (carried 3,088, all agree). Remaining stops, most frequent
+        first: effect parameters
+        (176, and 129 calls of an effect-polymorphic function), float literals (130), an
+        assignment to a field or an element (112), calls through a value (86), `[v; n]` (66),
+        a function used as a value (65), aggregate constants (51), foreign functions (49, 15
+        calls), array literals (24), contracts (23), `defer` (12), `~` (10), the built-ins
+        `checked_*`/`box_new`/`cell_*`/`chain_from_vec` (35)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
