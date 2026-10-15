@@ -114,6 +114,8 @@ pub struct MirFn {
     type_args: Strs,
     /// The C symbol of a foreign function, or `""`.
     foreign: Str,
+    /// The C symbol `@export` also names it by, or `""`.
+    export: Str,
     locals: Vec[LocalDecl],
     blocks: Vec[Block],
 }

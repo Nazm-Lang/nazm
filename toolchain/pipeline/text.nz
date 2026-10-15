@@ -155,6 +155,7 @@ pub fn canonical(p: MirProgram, f: MirFn) -> Str ! {} {
     let lines = strs_new()
     strs_push(lines, "nazm.mir/1 function")
     if f.foreign != "" { strs_push(lines, "foreign " + f.foreign) }
+    if f.export != "" { strs_push(lines, "export " + f.export) }
     let args = strs_new()
     for a in f.type_args { strs_push(args, key(a)) }
     strs_push(lines, "args [" + str_join(args, ",") + "]")
