@@ -211,6 +211,17 @@ without a body after them is not one whose body failed to parse. A derived encod
 into a module's text before it is parsed (`derive::expand`), which this front end does not do: a
 record or enum that writes `@derive` stops the checker.
 
+**D20 — The C boundary is checked where the reference checks it.** Each record carries how C
+sees it (`CRepr`: not at all, an opaque handle, a C layout), read wherever the reference reads it —
+a C struct's own rules after its fields resolve, an opaque handle's one unnamed `#pointer` field,
+construction and field reads (N0611), the derived walks (no equality, order or crossing into a
+task) and an array's elements. A foreign function is declared with the effect `foreign` and checked
+after the duplicate rules, as `declare_functions` does; a C symbol's first signature in a module is
+found among the module's foreign functions already declared rather than in a map of its own. The
+`ForeignCap` each call needs is checked after every function's authority and effects, the first
+missing call in each. Provenance gives a foreign function the reference's summary — `Unknown`
+from every argument — before solving, and names it in the chain as C's.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

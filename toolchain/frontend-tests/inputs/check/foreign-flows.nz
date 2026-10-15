@@ -1,0 +1,9 @@
+extern "C" fn c_name(h: Int) -> Str = "nz_c_name";
+extern "C" fn c_pick(a: Str, b: Str) -> Str = "nz_c_pick";
+fn path_of(f: ForeignCap, n: Int) -> Str ! { foreign } { c_name(n) }
+fn save(io: IoCap, f: ForeignCap) -> Int ! { io, foreign } {
+    write_file(path_of(f, 3), "x");
+    write_file(c_pick("a", "b"), "y");
+    0
+}
+fn main(io: IoCap, f: ForeignCap) -> Int { save(io, f) }
