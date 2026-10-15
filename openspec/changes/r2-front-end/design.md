@@ -332,7 +332,15 @@ last made first; each module checked first makes the built-ins' `Option[T]` (`en
 tuple's record is declared when first asked for and is the root module's. `sema.nz` keeps the
 table's order as it goes (`rlog`, `elog`) and prints it (`ck_types_json`). Statics are printed
 where there are none; a compilation with one says so and is counted apart. After the constructs
-below the comparison becomes the whole document, byte for byte (task 5.1). Construct by construct, the order of the remaining stops: field and variant
+below the comparison becomes the whole document, byte for byte (task 5.1).
+
+The constructs read what the checker recorded, by span, as the reference's lowering reads its
+`Resolution`: a construction's record type (`construction`), a variant's enum instance and index
+(`variant`, at the variant's name — an arm's pattern too), each field or payload field given
+(`field`, `payload`, at its name, or at a span of no width where its value begins when given by
+position), and a generic call's settled type arguments and the result the checker formed
+(`type_args`, `checked_call`). An expression is placed where `Expr::at` places it: a field read
+at its name, a construction at its type's name. Construct by construct, the order of the remaining stops: field and variant
 construction (with their positional forms), `match` and its desugarings, generic functions and
 calls with their type arguments, impl methods and trait calls, `for`, `?`, interpolation, bit
 operators and every number type, closures, then the rest by count. `@derive` stays last (D19).

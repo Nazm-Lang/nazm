@@ -324,6 +324,13 @@
       inputs agree, 0 differ; of 56,611 functions the lowering carries 29,948, all agree; of the
       document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ (carried
       3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041, all agree)
+- [ ] 5.1d The first stops (D25): variants and records built (by name, by position, `Dot` alone),
+      generic functions and generic calls with their settled type arguments (written or not),
+      impls' methods, and `match` of plain arms as a value and as a statement. `run.sh core`:
+      3,047 inputs agree, 0 differ; of 56,681 functions the lowering carries 43,473, all agree;
+      of the document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ
+      (carried 3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041,
+      all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
