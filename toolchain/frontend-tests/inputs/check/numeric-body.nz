@@ -1,0 +1,72 @@
+// R2: numbers in bodies — typed literals, wide integers, floats, bit operators and shifts,
+// conversions; every refusal of each.
+
+fn widths() -> Int {
+    let a: UInt8 = 255;
+    let b: UInt8 = 256;
+    let c: Int8 = -128;
+    let d: Int8 = -129;
+    let e: UInt64 = 18446744073709551615;
+    let f: Int128 = -170141183460469231731687303715884105728;
+    let g = 99999999999999999999;
+    let h: UInt16 = a;
+    let i = a + 1;
+    let j = 1 + a;
+    let k = a + c;
+    let x: Float32 = 1.5;
+    let y = 2.5;
+    let z: Float64 = x;
+    0
+}
+
+fn bits(a: UInt32, n: Int) -> UInt32 {
+    let b = a & 255;
+    let c = a | b;
+    let d = a ^ ~b;
+    let e = a << 3;
+    let f = a >> n;
+    let g = a << 32;
+    let h = a << -1;
+    let i = 1.5 & 2.5;
+    let j = ~1.5;
+    let k = a << a;
+    let m: Int = 1 << 63;
+    d
+}
+
+fn conversions(a: UInt8, s: Str) -> Int {
+    let b = Int(a);
+    let c: UInt8 = UInt8(300);
+    let d = UInt16(a) + 1;
+    let e = try_convert[UInt8](b);
+    let f = wrap_convert[Int8](b);
+    let g = saturate_convert[UInt8](-5);
+    let h = Float64(b);
+    let i = wrap_convert[Int8](h);
+    let j = try_convert(b);
+    let k = try_convert[Str](b);
+    let m = UInt8(s);
+    let n = UInt8(1, 2);
+    let o = Int[UInt8](a);
+    let t = Text(s);
+    let u = Text(b);
+    let v = try_convert[Text](s);
+    b
+}
+
+fn compare(x: Float64, y: Float64) -> Bool {
+    let n: Int = -9223372036854775808;
+    x < y && -x == y
+}
+
+fn patterns(v: UInt64) -> Int {
+    match v {
+        18446744073709551615 => 1,
+        0 => 2,
+        _ => 3,
+    }
+}
+
+fn main() {
+    print(widths());
+}

@@ -1,0 +1,46 @@
+// R2: constants of every number type — wide values, bit operators, shifts, conversions, and
+// every way one fails.
+
+const OFFSET: UInt64 = 14695981039346656037;
+const PRIME: UInt64 = 1099511628211;
+const MASK: UInt32 = 0xFFFF_0000 | 0x00FF;
+const LOW: UInt8 = UInt8(MASK & 0xFF);
+const FLIP: Int8 = ~0;
+const NOT_U: UInt16 = ~1;
+const SHIFTED: UInt64 = 1 << 63;
+const SIGNED: Int32 = -64 >> 3;
+const ROUNDED: Int32 = -65 >> 3;
+const XORED: Int16 = -1 ^ 255;
+const BIG: Int128 = 170141183460469231731687303715884105727;
+const HUGE: UInt128 = 340282366920938463463374607431768211455;
+const PI: Float64 = 3.14159;
+const HALF: Float32 = 0.5 * 1.0;
+const AS_FLOAT: Float64 = Float64(7);
+const NEG: Int8 = -128;
+
+const TOO_BIG: UInt8 = 256;
+const TOO_SMALL: Int8 = -129;
+const WRAPS: UInt8 = 255 + 1;
+const UNDER: UInt8 = 0 - 1;
+const NEG_U: UInt32 = -PRIME32;
+const PRIME32: UInt32 = 16777619;
+const SQUARE: UInt64 = OFFSET * OFFSET;
+const BY_ZERO: UInt16 = 1 / 0;
+const SHIFT_FAR: UInt8 = 1 << 8;
+const SHIFT_NEG: Int32 = 1 >> -1;
+const MIXED: UInt8 = LOW + FLIP;
+const CONVERTED: UInt8 = UInt8(300);
+const NOT_NUM: UInt8 = UInt8(true);
+const FLOAT_BITS: Float64 = PI & PI;
+const WRONG: UInt16 = PI;
+const WIDE_INT: Int = 9223372036854775808;
+const MIN_DIV: Int8 = NEG / -1;
+const MIN_REM: Int8 = NEG % -1;
+const CMP: Bool = OFFSET > PRIME;
+const NOT_INT: Int32 = ~true;
+
+fn main() {
+    let h: UInt64 = OFFSET * 1;
+    print(LOW);
+    print(CMP);
+}

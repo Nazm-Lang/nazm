@@ -118,6 +118,16 @@
       `break` and `continue`, its last line discarded. A `for` over `Bytes` stops the checker.
       `inputs/check/for-loops.nz`. `run.sh check`: 2,489 agree, 292 differ; the checker carries
       2,073, all agree
+- [ ] 3.1p Numbers (Gate 2, D17): every integer width and both floats — a literal of the type
+      expected and its range (N0003), `-128` as one literal, wide integers, `Float32` where one is
+      expected; the bit operators, `~` and shifts, a constant amount out of range (N0617);
+      conversions `T(x)`, `try_convert`/`wrap_convert`/`saturate_convert[T](x)` and `Text(s)`
+      (N0300, N0303, N0351, N0354); a `Str` literal as a `Text`; wide integer patterns; constants
+      of every number type computed exactly (N0003, N0622, N0623) — `@std/hash`'s `UInt64`
+      constants included. A float compared or converted to an integer in a constant stops the
+      checker. `inputs/check/numeric-body.nz`, `inputs/check/numeric-consts.nz`. `run.sh check`
+      (reference rebuilt at `deca183c`): 2,503 agree, 280 differ; the checker carries 2,132, all
+      agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

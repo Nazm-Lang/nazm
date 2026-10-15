@@ -3490,15 +3490,19 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         stop(c, cat3("the expression `", k, "`"));
         return or_int(expected);
     }
-    if k == "Int" {
-        if expected >= 0 && is_num(c, expected) && expected != t_int() { stop(c, "a literal of a numeric type"); }
-        return t_int();
+    if k == "Int" || k == "WideInt" { return integer_literal(c, sx_text(c.t, fld(c, e, "value")), fld(c, e, "span"), expected); }
+    // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
+    if k == "Float" {
+        if expected >= 0 && bname_of(c, expected) == "Float32" { return expected; }
+        return builtin_ty(c, "Float64");
     }
     if k == "Bool" { return t_bool(); }
+    // A literal is UTF-8 by construction, so it is a `Text` where one is expected (Gate 2).
     if k == "Str" {
-        if expected >= 0 && bname_of(c, expected) == "Text" { stop(c, "a `Text` literal"); }
+        if expected >= 0 && bname_of(c, expected) == "Text" { return expected; }
         return t_str();
     }
+    if k == "BitNot" { return check_complement(c, e, expected); }
     if k == "Var" { return check_var(c, e, expected); }
     if k == "Neg" { return check_negation(c, e, expected); }
     if k == "Not" {
@@ -3593,7 +3597,7 @@ fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
     if b >= 0 { return ints_get(c.sty, b); }
     // A constant (Gate 2): its type.
     let k = strs_find(c.kname, name);
-    if k >= 0 { return kind_type(ints_get(c.kkind, k)); }
+    if k >= 0 { return kind_type(c, ints_get(c.kkind, k)); }
     let callee = callee_of(c, name);
     if callee != 0 - 1 { return function_value(c, name, callee, span, expected); }
     if starts_upper(name) && ints_len(variant_owners(c, name)) > 0 {
@@ -3823,9 +3827,12 @@ fn index_of_text(s: Str, part: Str) -> Int {
 
 fn check_negation(c: Ck, e: Int, expected: Int) -> Int {
     let operand = fld(c, e, "operand");
-    if kind_of(c, operand) == "WideInt" {
-        stop(c, "a wide integer");
-        return t_int();
+    // `-128` written where an `Int8` is expected is one literal, judged whole — and past `Int`'s
+    // digits, for an `Int128`.
+    if sx_kind(c.t, operand) != tk_tuple() && (kind_of(c, operand) == "Int" || kind_of(c, operand) == "WideInt") {
+        if expected >= 0 && is_integer(c, expected) && expected != t_int() {
+            return integer_literal(c, str_concat("-", sx_text(c.t, fld(c, operand, "value"))), fld(c, operand, "span"), expected);
+        }
     }
     let mut hint = t_int();
     if expected >= 0 && is_num(c, expected) { hint = expected; }
@@ -3835,6 +3842,53 @@ fn check_negation(c: Ck, e: Int, expected: Int) -> Int {
         return t_int();
     }
     t
+}
+
+// `~operand` (Gate 2).
+fn check_complement(c: Ck, e: Int, expected: Int) -> Int {
+    let mut hint = t_int();
+    if expected >= 0 && is_integer(c, expected) { hint = expected; }
+    let t = value_type(c, fld(c, e, "operand"), hint);
+    if is_integer(c, t) == false {
+        err(c, "N0304", fld(c, e, "op_span"), cat3("`~` applies to an integer, but this is `", show(c, t), "`"), "");
+        return t_int();
+    }
+    t
+}
+
+// An integer literal's type (Gate 2): the integer type expected, where one is, and `Int`
+// everywhere else — refused, by name, when its value does not fit that type.
+fn integer_literal(c: Ck, digits: Str, span: Int, expected: Int) -> Int {
+    let mut k = k_int();
+    if expected >= 0 && is_integer(c, expected) { k = k_num(bname_of(c, expected)); }
+    let w = w_parse(digits);
+    if kind_fits(k, w) == false {
+        err(c, "N0003", span, cat5("`", w_show(w), "` does not fit in `", kind_name(k), "`"),
+                cat4(cat3("`", kind_name(k), "` holds "), kind_lo(k), " to ", kind_hi(k)));
+    }
+    kind_type(c, k)
+}
+
+// A shift by a constant amount outside `0..width` (Gate 2): it would stop the program every time
+// it ran, so it is refused where it is written (`N0617`).
+fn refuse_constant_shift(c: Ck, lt: Int, amount: Int) -> Int {
+    if is_integer(c, lt) == false || sx_kind(c.t, amount) == tk_tuple() { return 0; }
+    let mut n = "";
+    if kind_of(c, amount) == "Int" { n = sx_text(c.t, fld(c, amount, "value")); }
+    if kind_of(c, amount) == "Neg" {
+        let o = fld(c, amount, "operand");
+        if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "Int" { n = str_concat("-", sx_text(c.t, fld(c, o, "value"))); }
+    }
+    if n == "" { return 0; }
+    let k = k_num(bname_of(c, lt));
+    let bits = kind_bits(k);
+    let w = w_parse(n);
+    if w_neg_of(w) || w_cmp(w, w_from_int(bits)) >= 0 {
+        err(c, "N0617", espan(c, amount), cat4(cat3("`", kind_name(k), "` cannot be shifted by "), w_show(w), "", ""),
+                cat5(cat3("a shift's amount is 0 to ", int_to_str(bits - 1), " for a `"), kind_name(k),
+                "`; a larger or negative one stops the program (`N0412`) rather than being masked", "", ""));
+    }
+    0
 }
 
 fn is_number_literal(c: Ck, e: Int) -> Bool {
@@ -3876,10 +3930,7 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
     let lhs = fld(c, e, "lhs");
     let rhs = fld(c, e, "rhs");
     let op_span = fld(c, e, "op_span");
-    if op == "Shl" || op == "Shr" {
-        stop(c, "a shift");
-        return t_int();
-    }
+    let shift = op == "Shl" || op == "Shr";
     let before = dg_len(c.d);
     let mut hint = none();
     if is_comparison(op) == false && is_logical(op) == false {
@@ -3889,12 +3940,21 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
     let str_first = kind_of(c, lhs) == "Str" && kind_of(c, rhs) != "Str";
     let mut lt = 0;
     let mut rt = 0;
-    if lit_first || str_first {
+    // A shift's amount is an `Int`, whatever its value's type.
+    if shift {
+        let mut h = none();
+        if hint >= 0 && is_integer(c, hint) { h = hint; }
+        lt = value_type(c, lhs, h);
+        rt = value_type(c, rhs, t_int());
+        refuse_constant_shift(c, lt, rhs);
+    }
+    if shift == false && (lit_first || str_first) {
         rt = value_type(c, rhs, hint);
         let mut h = hint;
         if takes_literal(c, rt) { h = rt; }
         lt = value_type(c, lhs, h);
-    } else {
+    }
+    if shift == false && lit_first == false && str_first == false {
         lt = value_type(c, lhs, hint);
         let mut h = hint;
         if takes_literal(c, lt) { h = lt; }
@@ -3906,6 +3966,7 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
     if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem" { ok = lt == rt && is_num(c, lt); }
     if is_order(op) { ok = lt == rt && ordering(c, lt) == ""; }
     if op == "BitAnd" || op == "BitOr" || op == "BitXor" { ok = lt == rt && is_integer(c, lt); }
+    if shift { ok = is_integer(c, lt) && rt == t_int(); }
     if is_equality(op) { ok = lt == rt && derived(c, lt, true) == ""; }
     if is_logical(op) { ok = lt == t_bool() && rt == t_bool(); }
     if ok {
@@ -4081,6 +4142,68 @@ fn why_invisible(c: Ck, name: Str, at: Int) -> Bool {
     true
 }
 
+// A numeric conversion (Gate 2): `T(x)` exactly, or `try_convert[T](x)`, `wrap_convert[T](x)`,
+// `saturate_convert[T](x)`; `Text(s)` and `try_convert[Text](s)`.
+fn check_conversion(c: Ck, name: Str, at: Int, has_targs: Bool, targs: Int, args: Ints, span: Int) -> Int {
+    let exact = name != "try_convert" && name != "wrap_convert" && name != "saturate_convert";
+    let mut to = t_int();
+    if exact {
+        if has_targs { not_generic(c, c.d, name, "a conversion, not generic", at); }
+        to = builtin_ty(c, name);
+    } else {
+        let mut written = ints_new();
+        if has_targs { written = sx_items(c.t, targs); }
+        if ints_len(written) == 1 {
+            let t = resolve_written(c, ints_get(written, 0), c.tsn, c.tst, c.d);
+            let text = bname_of(c, t) == "Text" && name == "try_convert";
+            if is_num(c, t) == false && text == false {
+                err(c, "N0300", at, cat5("`", name, "` converts to a numeric type, and `", show(c, t), "` is not one"), "");
+            } else {
+                to = t;
+            }
+        } else {
+            err(c, "N0354", at, cat3("`", name, "` needs the type it converts to, written"), cat3("write it as `", name, "[UInt8](x)`"));
+        }
+    }
+    let n = ints_len(args);
+    if n != 1 {
+        let mut verb = " were given";
+        if n == 1 { verb = " was given"; }
+        err(c, "N0303", span, cat4("`", name, "` takes 1 argument, but ", str_concat(int_to_str(n), verb)), "");
+    }
+    // A literal converted exactly is that literal, written at the target type.
+    let text_to = bname_of(c, to) == "Text";
+    let mut hint = none();
+    if exact && text_to == false { hint = to; }
+    let mut from = t_int();
+    let mut i = 0;
+    while i < n {
+        let t = value_type(c, ints_get(args, i), hint);
+        if i == 0 { from = t; }
+        i = i + 1;
+    }
+    if text_to {
+        if from != t_str() && n > 0 {
+            err(c, "N0300", espan(c, ints_get(args, 0)), cat5("`", name, "` converts a `Str` to `Text`, and this is `", show(c, from), "`"), "");
+        }
+    } else {
+        if is_num(c, from) == false {
+            if n > 0 { err(c, "N0300", espan(c, ints_get(args, 0)), cat5("`", name, "` converts a number, but this is `", show(c, from), "`"), ""); }
+        } else {
+            if name == "wrap_convert" && (is_integer(c, from) && is_integer(c, to)) == false {
+                err(c, "N0300", at, cat5("`wrap_convert` is between integer types, and this converts `", show(c, from), "` to `", show(c, to), "`"),
+                        "a float converts by `T(x)`, `try_convert` or `saturate_convert`");
+            }
+        }
+    }
+    if name == "try_convert" {
+        let a = ints_new();
+        ints_push(a, to);
+        return enum_ty(c, declared_enum(c, prelude(c), "Option"), a);
+    }
+    to
+}
+
 fn is_conversion(name: Str) -> Bool {
     name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "Text" || is_num_name(name)
 }
@@ -4111,10 +4234,7 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
     let has_targs = some(c, e, "type_args");
     let mut targs = 0 - 1;
     if has_targs { targs = unwrap(c, e, "type_args"); }
-    if target == 0 - 1 && is_conversion(callee) {
-        stop(c, "a numeric conversion");
-        return or_int(expected);
-    }
+    if target == 0 - 1 && is_conversion(callee) { return check_conversion(c, callee, cs, has_targs, targs, args, span); }
     if qualified == false && ints_len(args) > 0 && starts_upper(callee) && target == 0 - 1 {
         if is_record(c, quiet_type(c, callee, cs)) || ints_len(variant_owners(c, callee)) > 0 {
             let t = check_construction(c, callee, cs, targs, positional_inits(c, args), span, expected);
@@ -6144,23 +6264,15 @@ fn check_literal_pattern(c: Ck, e: Int, ty: Int) -> Int {
     let mut key = "";
     let mut has_key = false;
     if sx_kind(c.t, e) != tk_tuple() {
-        if k == "Int" {
+        if k == "Int" || k == "WideInt" {
             key = str_concat("i", sx_text(c.t, fld(c, e, "value")));
             has_key = true;
         }
-        if k == "WideInt" {
-            stop(c, "a wide integer");
-            return wild(c);
-        }
         if k == "Neg" {
             let o = fld(c, e, "operand");
-            if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "Int" {
+            if sx_kind(c.t, o) != tk_tuple() && (kind_of(c, o) == "Int" || kind_of(c, o) == "WideInt") {
                 key = str_concat("i-", sx_text(c.t, fld(c, o, "value")));
                 has_key = true;
-            }
-            if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "WideInt" {
-                stop(c, "a wide integer");
-                return wild(c);
             }
         }
         if k == "Str" {
@@ -6301,23 +6413,73 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
 
 // --- constants (`constants::evaluate`, Gate 2 and L8) ----------------------------------------------
 
-// A constant's kind: what this checker computes — an `Int`, a `Bool` or a `Str`. A constant of a
-// sized number, a float, a record, an enum, a tuple or an array, and a static, stop it.
+// A constant's kind: what this checker computes — a number of any type, a `Bool` or a `Str`. A
+// constant of a record, an enum, a tuple or an array, and a static, stop it. A number's kind is
+// 100 plus its type's place among the built-in types; `Int`'s is 0.
 fn k_int() -> Int { 0 }
 fn k_bool() -> Int { 1 }
 fn k_str() -> Int { 2 }
 
-fn kind_type(k: Int) -> Int {
+fn k_num(name: Str) -> Int {
+    if name == "Int" { return k_int(); }
+    100 + strs_find(builtin_names(), name)
+}
+
+fn k_is_num(k: Int) -> Bool { k == k_int() || k >= 100 }
+fn k_is_float(k: Int) -> Bool { k >= 100 && is_float_name(kind_name(k)) }
+fn k_is_integer(k: Int) -> Bool { k_is_num(k) && k_is_float(k) == false }
+
+fn kind_type(c: Ck, k: Int) -> Int {
     if k == k_bool() { return t_bool(); }
     if k == k_str() { return t_str(); }
+    if k >= 100 { return builtin_ty(c, kind_name(k)); }
     t_int()
 }
 
 fn kind_name(k: Int) -> Str {
     if k == k_bool() { return "Bool"; }
     if k == k_str() { return "Str"; }
+    if k >= 100 { return strs_get(builtin_names(), k - 100); }
     "Int"
 }
+
+// A number type's width and whether it is signed (`NumKind::bits`).
+fn kind_bits(k: Int) -> Int {
+    let n = kind_name(k);
+    if n == "Int8" || n == "UInt8" { return 8; }
+    if n == "Int16" || n == "UInt16" { return 16; }
+    if n == "Int32" || n == "UInt32" || n == "Float32" { return 32; }
+    if n == "Int128" || n == "UInt128" { return 128; }
+    64
+}
+fn kind_signed(k: Int) -> Bool { str_starts(kind_name(k), "U") == false }
+fn str_starts(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p }
+
+// An integer type's range (`NumKind::int_range`), as its refusal's help writes it.
+fn kind_lo(k: Int) -> Str {
+    let n = kind_name(k);
+    if n == "Int8" { return "-128"; }
+    if n == "Int16" { return "-32768"; }
+    if n == "Int32" { return "-2147483648"; }
+    if n == "Int" { return "-9223372036854775808"; }
+    if n == "Int128" { return "-170141183460469231731687303715884105728"; }
+    "0"
+}
+fn kind_hi(k: Int) -> Str {
+    let n = kind_name(k);
+    if n == "Int8" { return "127"; }
+    if n == "Int16" { return "32767"; }
+    if n == "Int32" { return "2147483647"; }
+    if n == "Int" { return "9223372036854775807"; }
+    if n == "Int128" { return "170141183460469231731687303715884105727"; }
+    if n == "UInt8" { return "255"; }
+    if n == "UInt16" { return "65535"; }
+    if n == "UInt32" { return "4294967295"; }
+    if n == "UInt64" { return "18446744073709551615"; }
+    "340282366920938463463374607431768211455"
+}
+
+fn kind_fits(k: Int, w: Ints) -> Bool { w_cmp(w, w_parse(kind_lo(k))) >= 0 && w_cmp(w, w_parse(kind_hi(k))) <= 0 }
 
 // A declaration's kind as its written type says (`declared`), or -1 for one this checker does not
 // compute.
@@ -6325,10 +6487,268 @@ fn const_kind(c: Ck, decl: Int) -> Int {
     let ty = fld(c, decl, "ty");
     if some(c, ty, "args") || some(c, ty, "function") || some(c, ty, "qualifier") || some(c, ty, "length") { return 0 - 1; }
     let name = fname_of(c, ty, "name");
-    if name == "Int" { return k_int(); }
+    if is_num_name(name) { return k_num(name); }
     if name == "Bool" { return k_bool(); }
     if name == "Str" { return k_str(); }
     0 - 1
+}
+
+// --- wide integers (`numeric::Wide`) -------------------------------------------------------------
+
+// A sign (index 0) and a magnitude of 16 limbs of 16 bits, least first: every integer type's
+// value, and the product of any two, exact without passing `Int`'s range.
+fn wl() -> Int { 16 }
+fn w_base() -> Int { 65536 }
+
+fn w_zero() -> Ints {
+    let w = ints_new();
+    let mut i = 0;
+    while i <= wl() {
+        ints_push(w, 0);
+        i = i + 1;
+    }
+    w
+}
+
+fn w_copy(a: Ints) -> Ints {
+    let w = ints_new();
+    let mut i = 0;
+    while i <= wl() {
+        ints_push(w, ints_get(a, i));
+        i = i + 1;
+    }
+    w
+}
+
+fn w_neg_of(a: Ints) -> Bool { ints_get(a, 0) == 1 }
+
+fn m_is_zero(a: Ints) -> Bool {
+    let mut i = 1;
+    while i <= wl() {
+        if ints_get(a, i) != 0 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// `a`, its sign made `-` only where it is negative and not zero.
+fn w_signed(a: Ints, negative: Bool) -> Ints {
+    if negative && m_is_zero(a) == false { ints_set(a, 0, 1); } else { ints_set(a, 0, 0); }
+    a
+}
+
+// `a = a * m + add` on the magnitude; the carry out of the top limb.
+fn m_muladd(a: Ints, m: Int, add: Int) -> Int {
+    let mut carry = add;
+    let mut i = 1;
+    while i <= wl() {
+        let v = ints_get(a, i) * m + carry;
+        ints_set(a, i, v % w_base());
+        carry = v / w_base();
+        i = i + 1;
+    }
+    carry
+}
+
+// `a = a / d` on the magnitude, for a small `d`; the remainder.
+fn m_divsmall(a: Ints, d: Int) -> Int {
+    let mut rem = 0;
+    let mut i = wl();
+    while i >= 1 {
+        let v = rem * w_base() + ints_get(a, i);
+        ints_set(a, i, v / d);
+        rem = v % d;
+        i = i - 1;
+    }
+    rem
+}
+
+// A decimal integer, perhaps after a `-`.
+fn w_parse(s: Str) -> Ints {
+    let w = w_zero();
+    let mut i = 0;
+    let negative = str_len(s) > 0 && str_byte(s, 0) == 45;
+    if negative { i = 1; }
+    while i < str_len(s) {
+        m_muladd(w, 10, str_byte(s, i) - 48);
+        i = i + 1;
+    }
+    w_signed(w, negative)
+}
+
+fn w_from_int(n: Int) -> Ints {
+    if n >= 0 { return w_parse(int_to_str(n)); }
+    // `-(-(n + 1) + 1)`, so `Int`'s least value is never negated.
+    let w = w_parse(int_to_str(0 - (n + 1)));
+    m_muladd(w, 1, 1);
+    w_signed(w, true)
+}
+
+// A value in `Int`'s range, as an `Int`.
+fn w_to_int(a: Ints) -> Int {
+    let mut v = 0;
+    let mut i = 4;
+    while i >= 1 {
+        if w_neg_of(a) { v = v * w_base() - ints_get(a, i); } else { v = v * w_base() + ints_get(a, i); }
+        i = i - 1;
+    }
+    v
+}
+
+fn w_show(a: Ints) -> Str {
+    let m = w_copy(a);
+    if m_is_zero(m) { return "0"; }
+    let digits = strs_new();
+    while m_is_zero(m) == false { strs_push(digits, int_to_str(m_divsmall(m, 10))); }
+    let out = strs_new();
+    if w_neg_of(a) { strs_push(out, "-"); }
+    let mut i = strs_len(digits) - 1;
+    while i >= 0 {
+        strs_push(out, strs_get(digits, i));
+        i = i - 1;
+    }
+    str_join(out, "")
+}
+
+fn m_cmp(a: Ints, b: Ints) -> Int {
+    let mut i = wl();
+    while i >= 1 {
+        if ints_get(a, i) < ints_get(b, i) { return 0 - 1; }
+        if ints_get(a, i) > ints_get(b, i) { return 1; }
+        i = i - 1;
+    }
+    0
+}
+
+fn w_cmp(a: Ints, b: Ints) -> Int {
+    if w_neg_of(a) && w_neg_of(b) == false { return 0 - 1; }
+    if w_neg_of(a) == false && w_neg_of(b) { return 1; }
+    if w_neg_of(a) { return m_cmp(b, a); }
+    m_cmp(a, b)
+}
+
+fn m_add(a: Ints, b: Ints) -> Ints {
+    let w = w_zero();
+    let mut carry = 0;
+    let mut i = 1;
+    while i <= wl() {
+        let v = ints_get(a, i) + ints_get(b, i) + carry;
+        ints_set(w, i, v % w_base());
+        carry = v / w_base();
+        i = i + 1;
+    }
+    w
+}
+
+// `a - b` on magnitudes, `a` the larger.
+fn m_sub(a: Ints, b: Ints) -> Ints {
+    let w = w_zero();
+    let mut borrow = 0;
+    let mut i = 1;
+    while i <= wl() {
+        let mut v = ints_get(a, i) - ints_get(b, i) - borrow;
+        borrow = 0;
+        if v < 0 {
+            v = v + w_base();
+            borrow = 1;
+        }
+        ints_set(w, i, v);
+        i = i + 1;
+    }
+    w
+}
+
+fn w_add(a: Ints, b: Ints) -> Ints {
+    if w_neg_of(a) == w_neg_of(b) { return w_signed(m_add(a, b), w_neg_of(a)); }
+    if m_cmp(a, b) >= 0 { return w_signed(m_sub(a, b), w_neg_of(a)); }
+    w_signed(m_sub(b, a), w_neg_of(b))
+}
+
+fn w_negate(a: Ints) -> Ints { w_signed(w_copy(a), w_neg_of(a) == false) }
+fn w_sub(a: Ints, b: Ints) -> Ints { w_add(a, w_negate(b)) }
+
+fn w_mul(a: Ints, b: Ints) -> Ints {
+    let w = w_zero();
+    let mut i = 1;
+    while i <= wl() {
+        let x = ints_get(a, i);
+        if x != 0 {
+            let mut carry = 0;
+            let mut j = 1;
+            while i + j - 1 <= wl() {
+                let v = ints_get(w, i + j - 1) + x * ints_get(b, j) + carry;
+                ints_set(w, i + j - 1, v % w_base());
+                carry = v / w_base();
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    w_signed(w, w_neg_of(a) != w_neg_of(b))
+}
+
+fn m_bit(a: Ints, n: Int) -> Int { (ints_get(a, n / 16 + 1) / pow2(n % 16)) % 2 }
+
+// Truncating division of magnitudes, bit by bit: the quotient, or with `rem` the remainder.
+fn m_divmod(a: Ints, b: Ints, rem: Bool) -> Ints {
+    let q = w_zero();
+    let r = w_zero();
+    let mut n = wl() * 16 - 1;
+    while n >= 0 {
+        m_muladd(r, 2, m_bit(a, n));
+        if m_cmp(r, b) >= 0 {
+            let s = m_sub(r, b);
+            let mut i = 1;
+            while i <= wl() {
+                ints_set(r, i, ints_get(s, i));
+                i = i + 1;
+            }
+            ints_set(q, n / 16 + 1, ints_get(q, n / 16 + 1) + pow2(n % 16));
+        }
+        n = n - 1;
+    }
+    if rem { return r; }
+    q
+}
+
+// `a / b` and `a % b`, truncating (`Wide::quotient`, `Wide::remainder`).
+fn w_quot(a: Ints, b: Ints) -> Ints { w_signed(m_divmod(a, b, false), w_neg_of(a) != w_neg_of(b)) }
+fn w_rem(a: Ints, b: Ints) -> Ints { w_signed(m_divmod(a, b, true), w_neg_of(a)) }
+
+fn w_pow2(n: Int) -> Ints {
+    let w = w_zero();
+    ints_set(w, n / 16 + 1, pow2(n % 16));
+    w
+}
+
+// A value's bits in a type `bits` wide, as a magnitude: two's complement for a negative one.
+fn w_bits(a: Ints, bits: Int) -> Ints {
+    if w_neg_of(a) { return m_sub(w_pow2(bits), a); }
+    w_signed(w_copy(a), false)
+}
+
+// The value whose bits are a magnitude's low `bits` (`NumVal::wrapped`).
+fn w_wrapped(a: Ints, bits: Int, signed: Bool) -> Ints {
+    let m = m_divmod(a, w_pow2(bits), true);
+    if signed && m_cmp(m, w_pow2(bits - 1)) >= 0 { return w_signed(m_sub(w_pow2(bits), m), true); }
+    m
+}
+
+// `&`, `|` or `^` (`op` 0, 1, 2) of two magnitudes, bit by bit.
+fn m_bitwise(a: Ints, b: Ints, op: Int) -> Ints {
+    let w = w_zero();
+    let mut n = 0;
+    while n < wl() * 16 {
+        let x = m_bit(a, n);
+        let y = m_bit(b, n);
+        let mut v = 0;
+        if op == 0 { v = x * y; }
+        if op == 1 && x + y > 0 { v = 1; }
+        if op == 2 && x + y == 1 { v = 1; }
+        if v == 1 { ints_set(w, n / 16 + 1, ints_get(w, n / 16 + 1) + pow2(n % 16)); }
+        n = n + 1;
+    }
+    w
 }
 
 // One module's constants as they are computed: the values done so far (an import's first, then
@@ -6345,9 +6765,6 @@ pub struct Cev {
     vs: Strs,
     d: Diags,
 }
-
-fn max_int() -> Int { 9223372036854775807 }
-fn min_int() -> Int { 0 - 9223372036854775807 - 1 }
 
 // The declaration of `name` a map collected from the module's would hold: its last.
 fn const_decl(c: Ck, ev: Cev, name: Str) -> Int {
@@ -6456,7 +6873,7 @@ fn ev_constant(c: Ck, ev: Cev, name: Str) -> Int {
     let kind = const_kind(c, decl);
     let value = fld(c, decl, "value");
     strs_push(ev.active, name);
-    let v = ev_value(c, ev, value);
+    let v = ev_value(c, ev, value, kind);
     strs_pop(ev.active);
     // One that could not be computed is still declared, at its type: one mistake, one error.
     if v < 0 {
@@ -6482,16 +6899,49 @@ fn ev_fails(c: Ck, ev: Cev, span: Int, what: Str) -> Int {
     0 - 1
 }
 
-// An expression's value (`value`): its index in the pool, or -1 where it was refused.
-fn ev_value(c: Ck, ev: Cev, e: Int) -> Int {
+// A number's value in the pool: an `Int`'s as itself, any other integer's as its decimal digits,
+// and a float's as nothing — this checker computes no float, and stops where one would decide
+// anything (a comparison, a conversion to an integer).
+fn ev_num(ev: Cev, kind: Int, w: Ints) -> Int {
+    if kind == k_int() { return ev_val(ev, k_int(), w_to_int(w), ""); }
+    ev_val(ev, kind, 0, w_show(w))
+}
+
+fn ev_wide(ev: Cev, v: Int) -> Ints {
+    if ints_get(ev.vk, v) == k_int() { return w_from_int(ints_get(ev.vi, v)); }
+    w_parse(strs_get(ev.vs, v))
+}
+
+// A number checked against its type's range (`NumVal::checked`): its value, or -1 where it
+// overflows.
+fn ev_checked(c: Ck, ev: Cev, kind: Int, w: Ints, at: Int) -> Int {
+    if kind_fits(kind, w) == false { return ev_fails(c, ev, at, "overflows its type"); }
+    ev_num(ev, kind, w)
+}
+
+// An integer literal (`integer`): of the integer type expected, `Int` otherwise; refused, by name,
+// where its value does not fit.
+fn ev_integer(c: Ck, ev: Cev, digits: Str, want: Int, span: Int) -> Int {
+    let mut k = k_int();
+    if k_is_integer(want) { k = want; }
+    let w = w_parse(digits);
+    if kind_fits(k, w) == false {
+        dg_error(ev.d, "N0003", sps(c, span), spe(c, span), cat5("`", w_show(w), "` does not fit in `", kind_name(k), "`"), "",
+                cat4(cat3("`", kind_name(k), "` holds "), kind_lo(k), " to ", kind_hi(k)));
+        return 0 - 1;
+    }
+    ev_num(ev, k, w)
+}
+
+// An expression's value (`value`), as a value of `want` where that decides a literal's type: its
+// index in the pool, or -1 where it was refused.
+fn ev_value(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
     let k = kind_of(c, e);
     if sx_kind(c.t, e) == tk_tuple() { return ev_refuse(c, ev, espan(c, e), "be computed from this"); }
-    if k == "Int" { return ev_val(ev, k_int(), parse_int(sx_text(c.t, fld(c, e, "value"))), ""); }
-    if k == "WideInt" {
-        let span = fld(c, e, "span");
-        dg_error(ev.d, "N0003", sps(c, span), spe(c, span), cat3("`", sx_text(c.t, fld(c, e, "value")), "` does not fit in `Int`"), "",
-                "`Int` holds -9223372036854775808 to 9223372036854775807");
-        return 0 - 1;
+    if k == "Int" || k == "WideInt" { return ev_integer(c, ev, sx_text(c.t, fld(c, e, "value")), want, fld(c, e, "span")); }
+    if k == "Float" {
+        if kind_name(want) == "Float32" { return ev_val(ev, want, 0, ""); }
+        return ev_val(ev, k_num("Float64"), 0, "");
     }
     if k == "Bool" { return ev_bool(ev, sx_text(c.t, fld(c, e, "value")) == "true"); }
     if k == "Str" { return ev_val(ev, k_str(), 0, sx_text(c.t, fld(c, e, "value"))); }
@@ -6503,89 +6953,125 @@ fn ev_value(c: Ck, ev: Cev, e: Int) -> Int {
         return ev_refuse(c, ev, fld(c, e, "span"), cat3("name `", name, "`, which is not a constant"));
     }
     if k == "Neg" {
-        let v = ev_value(c, ev, fld(c, e, "operand"));
+        let o = fld(c, e, "operand");
+        // `-128` where an `Int8` is wanted is one literal, judged whole.
+        if sx_kind(c.t, o) != tk_tuple() && (kind_of(c, o) == "Int" || kind_of(c, o) == "WideInt") && k_is_integer(want) && want != k_int() {
+            return ev_integer(c, ev, str_concat("-", sx_text(c.t, fld(c, o, "value"))), want, fld(c, o, "span"));
+        }
+        let v = ev_value(c, ev, o, want);
         if v < 0 { return 0 - 1; }
-        if ints_get(ev.vk, v) != k_int() { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a number"); }
-        if ints_get(ev.vi, v) == min_int() { return ev_fails(c, ev, fld(c, e, "span"), "overflows its type"); }
-        return ev_val(ev, k_int(), 0 - ints_get(ev.vi, v), "");
+        let vk = ints_get(ev.vk, v);
+        if k_is_num(vk) == false { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a number"); }
+        if k_is_float(vk) { return ev_val(ev, vk, 0, ""); }
+        return ev_checked(c, ev, vk, w_negate(ev_wide(ev, v)), fld(c, e, "span"));
+    }
+    if k == "BitNot" {
+        let v = ev_value(c, ev, fld(c, e, "operand"), want);
+        if v < 0 { return 0 - 1; }
+        let vk = ints_get(ev.vk, v);
+        if k_is_integer(vk) == false { return ev_refuse(c, ev, fld(c, e, "span"), "complement something that is not an integer"); }
+        // `~x` is `-x - 1` for a signed type and `MAX - x` for an unsigned one.
+        if kind_signed(vk) { return ev_num(ev, vk, w_sub(w_negate(ev_wide(ev, v)), w_parse("1"))); }
+        return ev_num(ev, vk, w_sub(w_parse(kind_hi(vk)), ev_wide(ev, v)));
     }
     if k == "Not" {
-        let v = ev_value(c, ev, fld(c, e, "operand"));
+        let v = ev_value(c, ev, fld(c, e, "operand"), k_bool());
         if v < 0 { return 0 - 1; }
         if ints_get(ev.vk, v) != k_bool() { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a `Bool`"); }
         return ev_bool(ev, ints_get(ev.vi, v) == 0);
     }
-    if k == "Binary" { return ev_binary(c, ev, e); }
-    if k == "Float" || k == "BitNot" {
-        stop(c, cat3("the expression `", k, "` in a constant"));
-        return 0 - 1;
-    }
+    if k == "Binary" { return ev_binary(c, ev, e, want); }
     if k == "Call" {
-        if some(c, e, "qualifier") == false && some(c, e, "type_args") == false && is_num_name(fname_of(c, e, "callee")) && ints_len(kids(c, e, "args")) == 1 {
-            stop(c, "a numeric conversion in a constant");
-            return 0 - 1;
+        let callee = fname_of(c, e, "callee");
+        let args = kids(c, e, "args");
+        if some(c, e, "qualifier") == false && some(c, e, "type_args") == false && is_num_name(callee) && ints_len(args) == 1 {
+            let to = k_num(callee);
+            let span = fld(c, e, "span");
+            let v = ev_value(c, ev, ints_get(args, 0), to);
+            if v < 0 { return 0 - 1; }
+            let vk = ints_get(ev.vk, v);
+            if k_is_num(vk) == false { return ev_refuse(c, ev, span, "convert something that is not a number"); }
+            if k_is_float(to) { return ev_val(ev, to, 0, ""); }
+            if k_is_float(vk) {
+                stop(c, "a float converted to an integer in a constant");
+                return 0 - 1;
+            }
+            return ev_checked(c, ev, to, ev_wide(ev, v), span);
         }
     }
     ev_refuse(c, ev, espan(c, e), "be computed from this")
 }
 
-fn ev_binary(c: Ck, ev: Cev, e: Int) -> Int {
+fn ev_binary(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
     let op = sx_text(c.t, fld(c, e, "op"));
     let at = fld(c, e, "op_span");
     if is_logical(op) {
-        let l = ev_value(c, ev, fld(c, e, "lhs"));
+        let l = ev_value(c, ev, fld(c, e, "lhs"), k_bool());
         if l < 0 { return 0 - 1; }
         if ints_get(ev.vk, l) != k_bool() { return ev_refuse(c, ev, at, "combine values that are not `Bool`s with this"); }
         let a = ints_get(ev.vi, l) == 1;
         if (op == "And" && a == false) || (op == "Or" && a) { return ev_bool(ev, a); }
-        return ev_value(c, ev, fld(c, e, "rhs"));
+        return ev_value(c, ev, fld(c, e, "rhs"), k_bool());
     }
-    if op == "Shl" || op == "Shr" {
-        stop(c, "a shift in a constant");
-        return 0 - 1;
-    }
-    let l = ev_value(c, ev, fld(c, e, "lhs"));
+    // A comparison's operands are typed by each other; arithmetic's by what is wanted.
+    let mut hint = want;
+    if is_comparison(op) { hint = k_int(); }
+    let shift = op == "Shl" || op == "Shr";
+    let l = ev_value(c, ev, fld(c, e, "lhs"), hint);
     if l < 0 { return 0 - 1; }
-    let r = ev_value(c, ev, fld(c, e, "rhs"));
-    if r < 0 { return 0 - 1; }
     let lk = ints_get(ev.vk, l);
+    let mut rhint = lk;
+    if shift { rhint = k_int(); }
+    let r = ev_value(c, ev, fld(c, e, "rhs"), rhint);
+    if r < 0 { return 0 - 1; }
     let rk = ints_get(ev.vk, r);
-    if lk == k_int() && rk == k_int() {
-        let a = ints_get(ev.vi, l);
-        let b = ints_get(ev.vi, r);
-        if op == "Add" {
-            if add_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
-            return ev_val(ev, k_int(), a + b, "");
-        }
-        if op == "Sub" {
-            if sub_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
-            return ev_val(ev, k_int(), a - b, "");
-        }
-        if op == "Mul" {
-            if mul_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
-            return ev_val(ev, k_int(), a * b, "");
-        }
-        if op == "Div" || op == "Rem" {
-            if b == 0 { return ev_fails(c, ev, at, "divides by zero"); }
-            // Truncating; `MIN / -1` is out of range, and `MIN % -1` is 0.
-            if b == 0 - 1 {
-                if op == "Rem" { return ev_val(ev, k_int(), 0, ""); }
-                if a == min_int() { return ev_fails(c, ev, at, "overflows its type"); }
-                return ev_val(ev, k_int(), 0 - a, "");
+    if k_is_num(lk) && k_is_num(rk) {
+        if shift == false && lk != rk { return ev_refuse(c, ev, at, "combine two numeric types"); }
+        let arith = op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem";
+        if k_is_float(lk) {
+            // Floats never fail; this checker computes none, so one compared stops it.
+            if arith { return ev_val(ev, lk, 0, ""); }
+            if is_comparison(op) {
+                stop(c, "a float compared in a constant");
+                return 0 - 1;
             }
-            if op == "Div" { return ev_val(ev, k_int(), a / b, ""); }
-            return ev_val(ev, k_int(), a % b, "");
+            return ev_refuse(c, ev, at, "apply this operator to these values");
         }
-        if op == "BitAnd" || op == "BitOr" || op == "BitXor" {
-            stop(c, "a bit operator in a constant");
+        let a = ev_wide(ev, l);
+        if shift && k_is_float(rk) {
+            stop(c, "a shift by a float in a constant");
             return 0 - 1;
         }
-        if op == "Eq" { return ev_bool(ev, a == b); }
-        if op == "NotEq" { return ev_bool(ev, a != b); }
-        if op == "Lt" { return ev_bool(ev, a < b); }
-        if op == "LtEq" { return ev_bool(ev, a <= b); }
-        if op == "Gt" { return ev_bool(ev, a > b); }
-        if op == "GtEq" { return ev_bool(ev, a >= b); }
+        let b = ev_wide(ev, r);
+        if op == "Add" { return ev_checked(c, ev, lk, w_add(a, b), at); }
+        if op == "Sub" { return ev_checked(c, ev, lk, w_sub(a, b), at); }
+        if op == "Mul" { return ev_checked(c, ev, lk, w_mul(a, b), at); }
+        if op == "Div" || op == "Rem" {
+            if m_is_zero(b) { return ev_fails(c, ev, at, "divides by zero"); }
+            if op == "Div" { return ev_checked(c, ev, lk, w_quot(a, b), at); }
+            return ev_checked(c, ev, lk, w_rem(a, b), at);
+        }
+        let bits = kind_bits(lk);
+        let signed = kind_signed(lk);
+        if op == "BitAnd" { return ev_num(ev, lk, w_wrapped(m_bitwise(w_bits(a, bits), w_bits(b, bits), 0), bits, signed)); }
+        if op == "BitOr" { return ev_num(ev, lk, w_wrapped(m_bitwise(w_bits(a, bits), w_bits(b, bits), 1), bits, signed)); }
+        if op == "BitXor" { return ev_num(ev, lk, w_wrapped(m_bitwise(w_bits(a, bits), w_bits(b, bits), 2), bits, signed)); }
+        if shift {
+            if w_neg_of(b) || w_cmp(b, w_from_int(bits)) >= 0 { return ev_fails(c, ev, at, "shifts out of range"); }
+            let p = w_pow2(w_to_int(b));
+            if op == "Shl" { return ev_num(ev, lk, w_wrapped(w_mul(w_bits(a, bits), p), bits, signed)); }
+            // Arithmetic for a signed type, so the quotient rounds toward negative infinity.
+            let q = w_quot(a, p);
+            if w_neg_of(a) && m_is_zero(w_rem(a, p)) == false { return ev_num(ev, lk, w_sub(q, w_parse("1"))); }
+            return ev_num(ev, lk, q);
+        }
+        let order = w_cmp(a, b);
+        if op == "Eq" { return ev_bool(ev, order == 0); }
+        if op == "NotEq" { return ev_bool(ev, order != 0); }
+        if op == "Lt" { return ev_bool(ev, order < 0); }
+        if op == "LtEq" { return ev_bool(ev, order <= 0); }
+        if op == "Gt" { return ev_bool(ev, order > 0); }
+        if op == "GtEq" { return ev_bool(ev, order >= 0); }
         return ev_refuse(c, ev, at, "apply this operator to these values");
     }
     if lk == k_bool() && rk == k_bool() {
@@ -6599,24 +7085,6 @@ fn ev_binary(c: Ck, ev: Cev, e: Int) -> Int {
         return ev_refuse(c, ev, at, "apply this operator to `Str`s");
     }
     ev_refuse(c, ev, at, "combine values of two types")
-}
-
-// Whether `a + b`, `a - b` and `a * b` stay in `Int`'s range.
-fn add_fits(a: Int, b: Int) -> Bool {
-    if b > 0 { return a <= max_int() - b; }
-    a >= min_int() - b
-}
-fn sub_fits(a: Int, b: Int) -> Bool {
-    if b < 0 { return a <= max_int() + b; }
-    a >= min_int() + b
-}
-fn mul_fits(a: Int, b: Int) -> Bool {
-    if a > 0 {
-        if b > 0 { return a <= max_int() / b; }
-        return b >= min_int() / a;
-    }
-    if b > 0 { return a >= min_int() / b; }
-    a == 0 || b >= max_int() / a
 }
 
 // The modules in an order with each after the modules it imports (`dependency_order`), where the
