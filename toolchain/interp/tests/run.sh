@@ -7,17 +7,33 @@
 #
 #   toolchain/interp/tests/run.sh [-v] [FILE.nz ...]
 #
-# NAZM names the Rust toolchain (default: the 0.10.0 release). -v shows each difference's diff.
+# NAZM names the Rust toolchain compared with (default: the 0.10.0 release); NAZM_BUILD the one that
+# builds the interpreter, which is written in the 0.10.0 language (default: the 0.10.0 release).
+# Where NAZM has `run --interpret` (R1.5 D11), that is the oracle; before, plain `run` was.
+# -v shows each difference's diff.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 repo=$(cd "$here/../../.." && pwd)
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+NAZM_BUILD=${NAZM_BUILD:-$HOME/.local/nazm-0.10.0/bin/nazm}
+interpret=""
+if "$NAZM" run --help 2>/dev/null | grep -q -- '--interpret'; then interpret="--interpret"; fi
 verbose=0
 if [ "${1:-}" = "-v" ]; then verbose=1; shift; fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/r4-interp.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+# A program may write files beside itself (examples/std/pkgtool.nz, examples/provenance/tally.nz):
+# what the runs leave in the repository that was not there before is removed at the end.
+untracked() { (cd "$repo" && git ls-files -o --exclude-standard examples tests toolchain/interp) 2>/dev/null; }
+untracked >"$work/before" 2>/dev/null || true
+tidy() {
+    untracked | while read -r f; do
+        grep -qxF "$f" "$work/before" || rm -f "$repo/$f"
+    done
+    rm -rf "$work"
+}
+trap tidy EXIT
 
-if ! "$NAZM" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$work/interp" >"$work/build.log" 2>&1; then
+if ! "$NAZM_BUILD" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$work/interp" >"$work/build.log" 2>&1; then
     grep -v '^warning' "$work/build.log" | grep -A8 '^error' | head -40
     echo "interp: the build failed"
     exit 1
@@ -65,7 +81,7 @@ for path in $cases; do
     name=${path#"$repo"/}
     # A program that does not check, or a library with no `main`, is the checker's to refuse.
     if ! (cd "$dir" && "$NAZM" core-ir --json "$file" >"$work/ir.json" 2>/dev/null) ||
-        grep -q '^{"schema":"nazm.core-ir/2","entry":null' "$work/ir.json"; then
+        grep -q '^{"schema":"nazm.core-ir/[23]","entry":null' "$work/ir.json"; then
         unchecked=$((unchecked + 1))
         continue
     fi
@@ -85,7 +101,7 @@ for path in $cases; do
             flags=""
             [ "$mode" = json ] && json="--json"
         fi
-        (cd "$dir" && bounded "$@" "$NAZM" run $json "$file" </dev/null >"$work/rust.out" 2>"$work/rust.err")
+        (cd "$dir" && bounded "$@" "$NAZM" run $interpret $json "$file" </dev/null >"$work/rust.out" 2>"$work/rust.err")
         rust=$?
         (cd "$dir" && bounded "$work/interp" $json $flags --std "$repo/library" "$work/ir.json" "$file" \
             </dev/null >"$work/nazm.out" 2>"$work/nazm.err")
