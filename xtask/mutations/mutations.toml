@@ -19675,3 +19675,11 @@ file = "crates/nazm-cir/src/print.rs"
 find = '''                        o.push(("path", J::Str(map.name(file).to_owned())));'''
 replace = '''                        o.push(("path", J::Str(String::new())));'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::with_sources_gives_each_module_its_text_and_only_then" }]
+
+[[mutation]]
+name = "r1-5-a-one-byte-split-never-reads-the-last-byte"
+why = "the one-byte separator's loop stops a byte early, so a piece ending the string loses its last byte (R1.5, 3.3)"
+file = "library/std/text.nz"
+find = "            while i < m && str_byte(s, i) != first { i = i + 1; }"
+replace = "            while i + 1 < m && str_byte(s, i) != first { i = i + 1; }"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
