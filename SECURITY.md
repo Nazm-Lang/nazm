@@ -58,3 +58,13 @@ Capabilities, provenance and restriction profiles are **compile-time checks of s
 They are not a sandbox, not run-time isolation, and not a certification under any standard. The
 `critical` and `cyber` profiles refuse the constructs their rules name and claim nothing else.
 `docs/limitations.md` and `docs/capability-matrix.md` (areas 6, 7, 19 and 20) state their scope.
+
+## Verifying a download
+
+From 1.0, each release's `SHA256SUMS` is signed with [Sigstore](https://www.sigstore.dev) — keyless:
+the signature is tied to the copyright holder's identity and recorded in Sigstore's public
+transparency log; no private key exists to be stolen. With `cosign` installed
+(`brew install cosign`), put the archive, `SHA256SUMS` and `SHA256SUMS.sigstore.json` in one
+directory and run `scripts/verify-release.sh DIR IDENTITY ISSUER` with the identity and issuer
+published here at that release. It refuses an unsigned, wrongly signed or altered download.
+
