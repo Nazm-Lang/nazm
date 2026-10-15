@@ -613,10 +613,13 @@ fn co_open_seeded(lo: Lo, seed: Ints) -> Int {
     0
 }
 
-fn co_value_block_in(lo: Lo, b: Int, seed: Ints) -> Str {
+fn co_value_block_in(lo: Lo, b: Int, seed: Ints) -> Str { co_value_block_pre(lo, b, seed, strs_new()) }
+
+fn co_value_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
     let t = lo.t;
     co_open_seeded(lo, seed);
     let stmts = strs_new();
+    co_push_all(stmts, prefix);
     let transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
     let mut tail = "null";
     let mut ty = 0 - 1;
@@ -1328,10 +1331,7 @@ fn co_match(lo: Lo, e: Int, value: Bool) -> Str {
     let t = lo.t;
     let c = lo.c;
     let arms = sx_items(t, sx_field(t, e, "arms"));
-    if co_plain_arms(lo, arms) == false {
-        if value { return co_stopped(lo, "a `match` with general patterns"); }
-        return co_stopped_stmt(lo, "a `match` with general patterns");
-    }
+    if co_plain_arms(lo, arms) == false { return co_general(lo, e, value); }
     let scrutinee = co_expr(lo, sx_field(t, e, "scrutinee"));
     let sty = co_last_ty(lo);
     let mut enumeration = 0 - 1;
@@ -1588,16 +1588,519 @@ fn co_propagate_arm(lo: Lo, et: Int, v: Int, local: Int, stmts: Strs, tail: Str,
     co_object(o)
 }
 
+// --- a general `match` (`matching_general`) -------------------------------------------------------
+
+// `{ let scrutinee = e; let arm = <the first arm whose pattern matches>; <arm `arm`> }`, as a
+// value (a block expression) or as a statement (a block statement), at the `match`.
+fn co_general(lo: Lo, e: Int, value: Bool) -> Str {
+    let t = lo.t;
+    let at = sx_field(t, e, "span");
+    let arms = sx_items(t, sx_field(t, e, "arms"));
+    let sval = co_expr(lo, sx_field(t, e, "scrutinee"));
+    let sty = co_last_ty(lo);
+    if co_halted(lo) { return co_general_stop(lo, value); }
+    if sty < 0 {
+        co_halt(lo, "a `match` scrutinee the checker gave no type");
+        return co_general_stop(lo, value);
+    }
+    if ints_len(arms) == 0 {
+        co_halt(lo, "a `match` with no arms");
+        return co_general_stop(lo, value);
+    }
+    co_open_region(lo);
+    let stmts = strs_new();
+    let st = co_temp(lo, "scrutinee", sty, at);
+    co_bind(lo, st);
+    strs_push(stmts, co_let(st, sval));
+    let k = co_temp(lo, "arm", ck_t_int(), at);
+    co_bind(lo, k);
+    let n = ints_len(arms);
+    let mut choose = co_int_const(lo, n - 1, at);
+    let mut i = n - 2;
+    while i >= 0 && co_halted(lo) == false {
+        let arm = ints_get(arms, i);
+        let mut test = co_test(lo, sx_field(t, arm, "pattern"), co_read(lo, st, at), sty);
+        if co_some_field(lo, arm, "guard") { test = co_guarded(lo, test, arm, st, sty, at); }
+        let here = co_int_const(lo, i, at);
+        choose = co_conditional(lo, test, here, choose, ck_t_int(), at);
+        i = i - 1;
+    }
+    strs_push(stmts, co_let(k, choose));
+    // Each arm, chosen by `arm`: its bindings, then its body.
+    let regions = strs_new();
+    let rtys = ints_new();
+    let rends = ints_new();
+    i = 0;
+    while i < n && co_halted(lo) == false {
+        let arm = ints_get(arms, i);
+        let pre = strs_new();
+        let seed = co_arm_bindings(lo, arm, st, sty, at, pre);
+        strs_push(regions, co_arm_region_pre(lo, sx_field(t, arm, "body"), seed, value, pre));
+        ints_push(rtys, co_last_ty(lo));
+        if co_last_transfers(lo) { ints_push(rends, 1); } else { ints_push(rends, 0); }
+        i = i + 1;
+    }
+    if co_halted(lo) {
+        co_close_region(lo);
+        return co_general_stop(lo, value);
+    }
+    let mut chosen = strs_get(regions, n - 1);
+    let mut cty = ints_get(rtys, n - 1);
+    let mut cends = ints_get(rends, n - 1) == 1;
+    i = n - 2;
+    while i >= 0 {
+        let here = co_int_const(lo, i, at);
+        let fields = strs_new();
+        strs_push(fields, co_field_first("operand", json_str("Int")));
+        strs_push(fields, co_field("law", json_str("int")));
+        strs_push(fields, co_field("lhs", co_read(lo, k, at)));
+        strs_push(fields, co_field("rhs", here));
+        let cond = co_node(lo, "==", str_join(fields, ""), ck_t_bool(), at);
+        let region = strs_get(regions, i);
+        if value {
+            let mut ty = ints_get(rtys, i);
+            if ty < 0 { ty = cty; }
+            let ifs = strs_new();
+            strs_push(ifs, co_field_first("cond", cond));
+            strs_push(ifs, co_field("then", region));
+            strs_push(ifs, co_field("else", chosen));
+            let tail = co_node(lo, "if", str_join(ifs, ""), ty, at);
+            chosen = co_block_json(lo, false, "[]", strs_new(), tail, at);
+            cty = ty;
+            cends = false;
+        } else {
+            let both = ints_get(rends, i) == 1 && cends;
+            let o = strs_new();
+            strs_push(o, co_op_first("if"));
+            strs_push(o, co_field("cond", cond));
+            strs_push(o, co_field("then", region));
+            strs_push(o, co_field("else", chosen));
+            strs_push(o, co_field("ends", co_ends(both)));
+            strs_push(o, co_field("at", json_str(co_tree_span(lo, at))));
+            let one = strs_new();
+            strs_push(one, co_object(o));
+            chosen = co_block_json(lo, both, "[]", one, "null", at);
+            cends = both;
+        }
+        i = i - 1;
+    }
+    let mut tail = "null";
+    let mut transfers = false;
+    if value {
+        tail = co_node(lo, "block", co_field_first("body", chosen), cty, at);
+        transfers = cty < 0;
+    } else {
+        let o = strs_new();
+        strs_push(o, co_op_first("block"));
+        strs_push(o, co_field("body", chosen));
+        strs_push(o, co_field("ends", co_ends(cends)));
+        strs_push(stmts, co_object(o));
+        transfers = cends;
+    }
+    let owns = co_close_region(lo);
+    let block = co_block_json(lo, transfers, owns, stmts, tail, at);
+    if value {
+        // A block expression of the type its tail has.
+        let mut ty = cty;
+        if transfers { ty = 0 - 1; }
+        return co_node(lo, "block", co_field_first("body", block), ty, at);
+    }
+    let o = strs_new();
+    strs_push(o, co_op_first("block"));
+    strs_push(o, co_field("body", block));
+    strs_push(o, co_field("ends", co_ends(transfers)));
+    co_set_last(lo, 0 - 1, transfers);
+    co_object(o)
+}
+
+fn co_general_stop(lo: Lo, value: Bool) -> Str {
+    if value { return ""; }
+    co_set_last(lo, 0 - 1, false);
+    ""
+}
+
+fn co_int_const(lo: Lo, n: Int, at: Int) -> Str {
+    let id = co_constant(lo, "Int", int_to_str(n));
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_int(), at)
+}
+
+fn co_push_all(out: Strs, xs: Strs) -> Int {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        strs_push(out, strs_get(xs, i));
+        i = i + 1;
+    }
+    0
+}
+
+// The names a pattern binds, in the order written (`Pattern::bindings`): each one's span.
+fn co_pattern_binds(lo: Lo, p: Int, out: Ints) -> Int {
+    let t = lo.t;
+    if sx_kind(t, p) == tk_tuple() {
+        if sx_text(t, p) == "Variant" {
+            let fields = sx_items(t, sx_field(t, sx_kid(t, p, 0), "fields"));
+            let mut i = 0;
+            while i < ints_len(fields) {
+                co_pattern_binds(lo, sx_field(t, ints_get(fields, i), "pattern"), out);
+                i = i + 1;
+            }
+        }
+        return 0;
+    }
+    let k = sx_text(t, p);
+    if k == "Bind" { ints_push(out, sx_field(t, p, "span")); }
+    if k == "Tuple" {
+        let elems = sx_items(t, sx_field(t, p, "elems"));
+        let mut i = 0;
+        while i < ints_len(elems) {
+            co_pattern_binds(lo, ints_get(elems, i), out);
+            i = i + 1;
+        }
+    }
+    if k == "Or" {
+        let alts = sx_items(t, sx_field(t, p, "alts"));
+        if ints_len(alts) > 0 { co_pattern_binds(lo, ints_get(alts, 0), out); }
+    }
+    0
+}
+
+// Whether pattern `p` binds the name written at `bound` (by name, as `bindings` compares).
+fn co_binds_name(lo: Lo, p: Int, name: Str) -> Bool {
+    let spans = ints_new();
+    co_pattern_binds(lo, p, spans);
+    let mut i = 0;
+    while i < ints_len(spans) {
+        if co_span_name(lo, ints_get(spans, i)) == name { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+fn co_span_name(lo: Lo, span: Int) -> Str {
+    let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+    if b < 0 { return ""; }
+    ck_binding_name(lo.c, b)
+}
+
+// An arm's names, each bound out of the scrutinee (`arm_bindings`): the `let`s into `lets`, and
+// the locals, returned.
+fn co_arm_bindings(lo: Lo, arm: Int, st: Int, sty: Int, at: Int, lets: Strs) -> Ints {
+    let t = lo.t;
+    let p = sx_field(t, arm, "pattern");
+    let spans = ints_new();
+    co_pattern_binds(lo, p, spans);
+    let seed = ints_new();
+    let mut i = 0;
+    while i < ints_len(spans) && co_halted(lo) == false {
+        let bound = ints_get(spans, i);
+        let local = co_local_at(lo, bound);
+        let name = co_span_name(lo, bound);
+        let x = co_extract(lo, p, co_read(lo, st, at), sty, name, ints_new());
+        if x == "" {
+            co_halt(lo, "a binding its pattern does not bind");
+            return seed;
+        }
+        strs_push(lets, co_let(local, x));
+        ints_push(seed, local);
+        i = i + 1;
+    }
+    seed
+}
+// Whether `v` (of type `vt`) matches pattern `p` (`pattern_test`): a `Bool` of plain matches and
+// comparisons, at the pattern.
+fn co_test(lo: Lo, p: Int, v: Str, vt: Int) -> Str {
+    let t = lo.t;
+    let at = pattern_span(t, p);
+    if sx_kind(t, p) == tk_tuple() {
+        if sx_text(t, p) == "Literal" {
+            let lit = co_expr(lo, sx_kid(t, p, 0));
+            let law = co_eq_law(lo, vt);
+            if law == "" { return co_stopped(lo, "a literal pattern against a type with no equality"); }
+            let fields = strs_new();
+            strs_push(fields, co_field_first("operand", json_str(co_durable(lo, vt))));
+            strs_push(fields, co_field("law", json_str(law)));
+            strs_push(fields, co_field("lhs", v));
+            strs_push(fields, co_field("rhs", lit));
+            return co_node(lo, "==", str_join(fields, ""), ck_t_bool(), at);
+        }
+        return co_variant_test(lo, sx_kid(t, p, 0), v, vt, at);
+    }
+    let k = sx_text(t, p);
+    if k == "Wildcard" || k == "Bind" { return co_boolean(lo, "true", at); }
+    if k == "Tuple" {
+        let elems = sx_items(t, sx_field(t, p, "elems"));
+        let mut acc = "";
+        let mut i = ints_len(elems) - 1;
+        while i >= 0 {
+            let element = co_tuple_elem(lo, v, vt, i, at);
+            let test = co_test(lo, ints_get(elems, i), element, ck_type_arg(lo.c, vt, i));
+            if acc == "" { acc = test; } else { acc = co_conditional(lo, test, acc, co_boolean(lo, "false", at), ck_t_bool(), at); }
+            i = i - 1;
+        }
+        if acc == "" { return co_boolean(lo, "true", at); }
+        return acc;
+    }
+    if k == "Or" {
+        let alts = sx_items(t, sx_field(t, p, "alts"));
+        let tests = strs_new();
+        let mut i = 0;
+        while i < ints_len(alts) {
+            strs_push(tests, co_test(lo, ints_get(alts, i), v, vt));
+            i = i + 1;
+        }
+        if strs_len(tests) == 0 { return co_stopped(lo, "an or-pattern with no alternatives"); }
+        let mut acc = strs_pop(tests);
+        while strs_len(tests) > 0 {
+            let test = strs_pop(tests);
+            acc = co_conditional(lo, test, co_boolean(lo, "true", at), acc, ck_t_bool(), at);
+        }
+        return acc;
+    }
+    co_stopped(lo, str_concat("the pattern ", k))
+}
+
+// The law `==` follows for a type (`Law::of`), or "".
+fn co_eq_law(lo: Lo, ty: Int) -> Str {
+    let class = ck_type_class(lo.c, ty);
+    if class == "int" { return "int"; }
+    if class == "integer" || class == "float" { return "num"; }
+    if class == "bool" { return "bool"; }
+    if class == "str" || class == "text" { return "bytes"; }
+    if class == "record" || class == "enum" || class == "array" || class == "box" || class == "chain" { return "structural"; }
+    if class == "param" { return "parametric"; }
+    ""
+}
+
+// A variant pattern's test: a `match` on `v` whose chosen variant's arm tests each field whose
+// pattern tests something (read into a `temp payload`), and whose other arms are `false`.
+fn co_variant_test(lo: Lo, vp: Int, v: Str, vt: Int, at: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    if ck_is_enum_type(c, vt) == false { return co_stopped(lo, "a variant pattern against a value that is not an enum"); }
+    let vs = sx_field(t, vp, "variant_span");
+    if ck_variant_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs)) < 0 { return co_stopped(lo, "a variant pattern the checker did not resolve"); }
+    let chosen = ck_variant_index_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+    let n = ck_variant_count(c, vt);
+    let fields = sx_items(t, sx_field(t, vp, "fields"));
+    let arms = strs_new();
+    let mut w = 0;
+    while w < n && co_halted(lo) == false {
+        co_open_region(lo);
+        let bindings = strs_new();
+        let owns = strs_new();
+        let mut test = "";
+        if w == chosen {
+            let parts = strs_new();
+            let mut i = 0;
+            while i < ints_len(fields) {
+                let f = ints_get(fields, i);
+                let fp = sx_field(t, f, "pattern");
+                let plain = sx_kind(t, fp) != tk_tuple() && (sx_text(t, fp) == "Wildcard" || sx_text(t, fp) == "Bind");
+                if plain == false {
+                    let ns = sx_field(t, f, "name_span");
+                    let fi = ck_init_at(c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+                    if fi < 0 { return co_stopped(lo, "a pattern field the checker did not resolve"); }
+                    let fty = ck_payload_ty(c, vt, chosen, fi);
+                    let local = co_temp(lo, "payload", fty, ns);
+                    strs_push(bindings, co_binding(lo, vt, chosen, fi, local));
+                    strs_push(owns, int_to_str(local));
+                    strs_push(parts, co_test(lo, fp, co_read(lo, local, ns), fty));
+                }
+                i = i + 1;
+            }
+            while strs_len(parts) > 0 {
+                let part = strs_pop(parts);
+                if test == "" { test = part; } else { test = co_conditional(lo, part, test, co_boolean(lo, "false", at), ck_t_bool(), at); }
+            }
+        }
+        co_close_region(lo);
+        if test == "" {
+            if w == chosen { test = co_boolean(lo, "true", at); } else { test = co_boolean(lo, "false", at); }
+        }
+        strs_push(arms, co_arm_json(lo, vt, w, bindings, co_block_json(lo, false, co_list(owns), strs_new(), test, at), at));
+        w = w + 1;
+    }
+    if co_halted(lo) { return ""; }
+    co_match_node(lo, vt, v, arms, ck_t_bool(), at)
+}
+
+fn co_binding(lo: Lo, et: Int, v: Int, field: Int, local: Int) -> Str {
+    let o = strs_new();
+    strs_push(o, co_field_first("field", int_to_str(field)));
+    strs_push(o, co_field("name", json_str(ck_payload_name(lo.c, et, v, field))));
+    strs_push(o, co_field("local", int_to_str(local)));
+    co_object(o)
+}
+
+fn co_arm_json(lo: Lo, et: Int, v: Int, bindings: Strs, body: Str, at: Int) -> Str {
+    let o = strs_new();
+    strs_push(o, co_field_first("variant", int_to_str(v)));
+    strs_push(o, co_field("name", json_str(ck_variant_name(lo.c, et, v))));
+    strs_push(o, co_field("bindings", co_list(bindings)));
+    strs_push(o, co_field("body", body));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, at))));
+    co_object(o)
+}
+
+fn co_match_node(lo: Lo, et: Int, scrutinee: Str, arms: Strs, ty: Int, at: Int) -> Str {
+    let m = strs_new();
+    strs_push(m, co_field_first("origin", json_str("written")));
+    strs_push(m, co_field("enum", json_str(co_durable(lo, et))));
+    strs_push(m, co_field("scrutinee", scrutinee));
+    strs_push(m, co_field("arms", co_list(arms)));
+    co_node(lo, "match", str_join(m, ""), ty, at)
+}
+
+// Element `i` of the tuple `v` (`tuple_element`): a read of its record's field.
+fn co_tuple_elem(lo: Lo, v: Str, vt: Int, i: Int, at: Int) -> Str {
+    if ck_is_tuple(lo.c, vt) == false { return co_stopped(lo, "a tuple pattern against a value that is not a tuple"); }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("field", int_to_str(i)));
+    strs_push(fields, co_field("name", json_str(int_to_str(i))));
+    strs_push(fields, co_field("base", v));
+    co_node(lo, "field", str_join(fields, ""), ck_type_arg(lo.c, vt, i), at)
+}
+
+// The value `name` takes when `v` (of type `vt`) matches `p` (`extract`), or "" where `p` does
+// not bind it; its type into `tyout`.
+fn co_extract(lo: Lo, p: Int, v: Str, vt: Int, name: Str, tyout: Ints) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let at = pattern_span(t, p);
+    if sx_kind(t, p) != tk_tuple() {
+        let k = sx_text(t, p);
+        if k == "Bind" {
+            if sx_name(t, p, "name") != name { return ""; }
+            ints_push(tyout, vt);
+            return v;
+        }
+        if k == "Tuple" {
+            let elems = sx_items(t, sx_field(t, p, "elems"));
+            let mut i = 0;
+            while i < ints_len(elems) {
+                if co_binds_name(lo, ints_get(elems, i), name) {
+                    let element = co_tuple_elem(lo, v, vt, i, at);
+                    return co_extract(lo, ints_get(elems, i), element, ck_type_arg(c, vt, i), name, tyout);
+                }
+                i = i + 1;
+            }
+            return "";
+        }
+        if k == "Or" {
+            let alts = sx_items(t, sx_field(t, p, "alts"));
+            let which = ints_new();
+            let xs = strs_new();
+            let tys = ints_new();
+            let mut i = 0;
+            while i < ints_len(alts) {
+                let x = co_extract(lo, ints_get(alts, i), v, vt, name, tys);
+                if x != "" {
+                    ints_push(which, ints_get(alts, i));
+                    strs_push(xs, x);
+                }
+                i = i + 1;
+            }
+            if strs_len(xs) == 0 { return ""; }
+            let mut acc = strs_pop(xs);
+            ints_pop(which);
+            let ty = ints_get(tys, ints_len(tys) - 1);
+            while strs_len(xs) > 0 {
+                let x = strs_pop(xs);
+                let alt = ints_pop(which);
+                let test = co_test(lo, alt, v, vt);
+                acc = co_conditional(lo, test, x, acc, ty, at);
+            }
+            ints_push(tyout, ty);
+            return acc;
+        }
+        return "";
+    }
+    if sx_text(t, p) != "Variant" { return ""; }
+    let vp = sx_kid(t, p, 0);
+    let fields = sx_items(t, sx_field(t, vp, "fields"));
+    let mut f = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(fields) && f < 0 {
+        if co_binds_name(lo, sx_field(t, ints_get(fields, i), "pattern"), name) { f = ints_get(fields, i); }
+        i = i + 1;
+    }
+    if f < 0 { return ""; }
+    if ck_is_enum_type(c, vt) == false { return co_stopped(lo, "a variant pattern against a value that is not an enum"); }
+    let vs = sx_field(t, vp, "variant_span");
+    let chosen = ck_variant_index_at(c, co_abs_s(lo, vs), co_abs_e(lo, vs));
+    let n = ck_variant_count(c, vt);
+    let arms = strs_new();
+    let mut ty = 0 - 1;
+    let mut w = 0;
+    while w < n && co_halted(lo) == false {
+        if w == chosen {
+            let ns = sx_field(t, f, "name_span");
+            let fi = ck_init_at(c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+            if fi < 0 { return co_stopped(lo, "a pattern field the checker did not resolve"); }
+            let fty = ck_payload_ty(c, vt, chosen, fi);
+            let local = co_temp(lo, "payload", fty, ns);
+            let inner = ints_new();
+            let x = co_extract(lo, sx_field(t, f, "pattern"), co_read(lo, local, ns), fty, name, inner);
+            if x == "" { return co_stopped(lo, "a binding its field's pattern lost"); }
+            ty = ints_get(inner, 0);
+            let bindings = strs_new();
+            strs_push(bindings, co_binding(lo, vt, chosen, fi, local));
+            let owns = co_list_one(int_to_str(local));
+            strs_push(arms, co_arm_json(lo, vt, w, bindings, co_block_json(lo, false, owns, strs_new(), x, at), at));
+        } else {
+            let code = co_int_const(lo, 70, at);
+            let exit = co_builtin(lo, "exit_with", "[]", code, ck_t_int(), at);
+            let o = strs_new();
+            strs_push(o, co_op_first("eval"));
+            strs_push(o, co_field("value", exit));
+            strs_push(o, co_field("ends", co_ends(true)));
+            let stmts = strs_new();
+            strs_push(stmts, co_object(o));
+            strs_push(arms, co_arm_json(lo, vt, w, strs_new(), co_block_json(lo, true, "[]", stmts, "null", at), at));
+        }
+        w = w + 1;
+    }
+    if co_halted(lo) { return ""; }
+    ints_push(tyout, ty);
+    co_match_node(lo, vt, v, arms, ty, at)
+}
+
+// A guarded arm's test (`guarded`): `if <its pattern matches> { <its names bound>; guard } else
+// { false }`.
+fn co_guarded(lo: Lo, test: Str, arm: Int, st: Int, sty: Int, at: Int) -> Str {
+    let t = lo.t;
+    let pre = strs_new();
+    let seed = co_arm_bindings(lo, arm, st, sty, at, pre);
+    if co_halted(lo) { return ""; }
+    let then = co_expr_region_pre(lo, sx_unwrap(t, sx_field(t, arm, "guard")), seed, true, pre);
+    let no = co_boolean(lo, "false", at);
+    let fields = strs_new();
+    strs_push(fields, co_field_first("cond", test));
+    strs_push(fields, co_field("then", then));
+    strs_push(fields, co_field("else", co_branch(lo, no, at)));
+    co_node(lo, "if", str_join(fields, ""), ck_t_bool(), at)
+}
+
 // An arm's body: a block, as a value or a statement, or one expression in a region of its own
 // (`expr_region`), its bindings owned first.
-fn co_arm_region(lo: Lo, b: Int, seed: Ints, value: Bool) -> Str {
+fn co_arm_region(lo: Lo, b: Int, seed: Ints, value: Bool) -> Str { co_arm_region_pre(lo, b, seed, value, strs_new()) }
+
+// The same, `prefix` (an arm's bindings) before its statements.
+fn co_arm_region_pre(lo: Lo, b: Int, seed: Ints, value: Bool, prefix: Strs) -> Str {
     let t = lo.t;
     if sx_kind(t, b) == tk_tuple() && sx_text(t, b) == "Block" {
-        if value { return co_value_block_in(lo, sx_kid(t, b, 0), seed); }
-        return co_statement_block_in(lo, sx_kid(t, b, 0), seed);
+        if value { return co_value_block_pre(lo, sx_kid(t, b, 0), seed, prefix); }
+        return co_statement_block_pre(lo, sx_kid(t, b, 0), seed, prefix);
     }
+    co_expr_region_pre(lo, b, seed, value, prefix)
+}
+
+// A region holding one expression (`expr_region`), `prefix` before it, at the expression.
+fn co_expr_region_pre(lo: Lo, b: Int, seed: Ints, value: Bool, prefix: Strs) -> Str {
+    let t = lo.t;
     co_open_seeded(lo, seed);
     let stmts = strs_new();
+    co_push_all(stmts, prefix);
     let mut tail = "null";
     let mut ty = 0 - 1;
     let mut transfers = false;

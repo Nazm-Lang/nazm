@@ -14147,6 +14147,10 @@ pub fn ck_seq_kind(c: Ck, t: Int) -> Str {
     ""
 }
 pub fn ck_type_arg(c: Ck, t: Int, i: Int) -> Int { targ(c, t, i) }
+// Whether a type is a tuple, and the type of payload field `i` of variant `v` of an enum type,
+// its arguments substituted.
+pub fn ck_is_tuple(c: Ck, t: Int) -> Bool { is_tuple(c, t) }
+pub fn ck_payload_ty(c: Ck, t: Int, v: Int, i: Int) -> Int { field_ty_in(c, t, ints_get(c.vff, ints_get(c.evf, ta(c, t)) + v) + i) }
 // What a type is to the lowering's operators: `int` (`Int`), `integer` (another integer type),
 // `float`, `bool`, `str`, `text`, `record`, `enum`, `array`, `box`, `chain`, `param`, or "".
 pub fn ck_type_class(c: Ck, t: Int) -> Str {

@@ -285,9 +285,15 @@ fn cdg_type(s: Str, at: Ints) -> Str {
         return "?";
     }
     let mut q = p;
-    while q < str_len(s) && str_byte(s, q) != 91 && str_byte(s, q) != 44 && str_byte(s, q) != 93 && str_byte(s, q) != 41
-            && cdg_starts_at(s, q, " ! { ") == false {
-        q = q + 1;
+    let mut going = true;
+    while going && q < str_len(s) {
+        // A tuple's record is named `(,)`, which is part of its name.
+        if cdg_starts_at(s, q, "(,)") {
+            q = q + 3;
+        } else {
+            let b = str_byte(s, q);
+            if b == 91 || b == 44 || b == 93 || b == 41 || cdg_starts_at(s, q, " ! { ") { going = false; } else { q = q + 1; }
+        }
     }
     let head = str_slice(s, p, q);
     ints_set(at, 0, q);
