@@ -1,0 +1,156 @@
+// N96: the contract simulator on generated transaction sequences (`docs/architecture.md` §7.97).
+// Ported from `crates/nazm-cli/tests/contract_property.rs` (R7): the test that needs no VM. The
+// `#[ignore]`d comparisons with the EVM and WebAssembly start Docker and stay Rust (`design.md`).
+//
+// Sequences are generated — seeded, the same on every host — from the contract's own facts, with
+// callers among the owner and two others and arguments from the edges of `Int`; each runs
+// deterministically and every committed state keeps the conserved quantity.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// Every construct the backends share.
+fn contract() -> Str ! {} {
+    "pub struct State { owner: Int, alice: Int, bob: Int, supply: Int, paused: Bool }\nfn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, supply: 100, paused: false) }\nfn conserved(s: State) -> Int ! {} { s.alice + s.bob }\npub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nif s.paused { return Result[State, Int].Err(error: 3); }\nif amount <= 0 { return Result[State, Int].Err(error: 1); }\nif caller == 1 {\nif s.alice < amount { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n} else {\nif s.bob < amount { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + amount, bob: s.bob - amount, supply: s.supply, paused: s.paused))\n}\n}\npub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {\nif caller != s.owner { return Result[State, Int].Err(error: 4); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, supply: s.supply, paused: on == 1))\n}\npub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n}\nfn fee(amount: Int) -> Int ! {} { let mut f = 0; let mut i = 0; while i < amount { f = f + 1; i = i + 10; } f }\npub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\nif amount > 1000 { return Result[State, Int].Err(error: 5); }\nlet f = fee(amount);\nif caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))\n}\npub fn boom(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} {\nResult[State, Int].Ok(value: State(owner: s.owner, alice: s.alice * n, bob: s.bob, supply: s.supply, paused: s.paused))\n}\npub fn arith(s: State, caller: Int, a: Int, b: Int) -> Result[State, Int] ! {} {\nlet q = a / b;\nlet r = a % b;\nResult[State, Int].Err(error: q + r)\n}\nfn main() -> Int ! {} { 0 }\n"
+}
+
+const LENGTH: Int = 250;
+
+/// xorshift64*, as the Rust test's `Rng`: its state in `s[0]`.
+fn next(s: Vec[UInt64]) -> UInt64 ! {} {
+    let mut x = vec_get(s, 0);
+    x = x ^ (x >> 12);
+    x = x ^ (x << 25);
+    x = x ^ (x >> 27);
+    vec_set(s, 0, x);
+    wrapping_mul(x, UInt64(2685821657736338717))
+}
+
+fn below(s: Vec[UInt64], n: Int) -> Int ! {} {
+    Int(next(s) % UInt64(n))
+}
+
+fn json_of(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    match jparse(o.stdout) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {o.stderr}"),
+    }
+}
+
+/// One generated sequence: each line `CALLER ENTRY ARGS…`, entrypoints and their arities from the
+/// contract's facts.
+fn sequence(facts: JsonDoc, seed: UInt64) -> Result[Str, Str] ! {} {
+    let names = strs_new();
+    let arities = ints_new();
+    let mut i = 0;
+    while jq(facts, f"entrypoints/{i}") >= 0 {
+        strs_push(names, jstr(facts, f"entrypoints/{i}/name"));
+        ints_push(arities, json_len(facts, jq(facts, f"entrypoints/{i}/args")));
+        i = i + 1;
+    }
+    check_that(strs_len(names) >= 6, json_encode_node(facts, json_root(facts)))?;
+    let max = 9223372036854775807;
+    let min = 0 - 9223372036854775807 - 1;
+    let edges = ints_new();
+    for e in words("0 1 2 5 7 10 25 30 99 100 101 1000") {
+        ints_push(edges, parse_usize(e));
+    }
+    // In the Rust test's order: 0, 1, -1, 2, … then the four edges of `Int`.
+    let ordered = ints_new();
+    ints_push(ordered, 0);
+    ints_push(ordered, 1);
+    ints_push(ordered, 0 - 1);
+    let mut k = 2;
+    while k < ints_len(edges) {
+        ints_push(ordered, ints_get(edges, k));
+        k = k + 1;
+    }
+    ints_push(ordered, max);
+    ints_push(ordered, min);
+    ints_push(ordered, max - 1);
+    ints_push(ordered, min + 1);
+    let callers = ints_new();
+    ints_push(callers, 1);
+    ints_push(callers, 1);
+    ints_push(callers, 2);
+    ints_push(callers, 3);
+    let rng = vec_new[UInt64]();
+    vec_push(rng, seed);
+    let out = strs_new();
+    let mut n = 0;
+    while n < LENGTH {
+        let e = below(rng, strs_len(names));
+        let caller = ints_get(callers, below(rng, 4));
+        let line = strs_new();
+        strs_push(line, f"{caller} {strs_get(names, e)}");
+        let mut a = 0;
+        while a < ints_get(arities, e) {
+            let v = if next(rng) % UInt64(4) == UInt64(0) { below(rng, 200) - 50 } else { ints_get(ordered, below(rng, ints_len(ordered))) };
+            strs_push(line, f" {v}");
+            a = a + 1;
+        }
+        strs_push(out, str_join(line, ""));
+        n = n + 1;
+    }
+    Result[Str, Str].Ok(value: f"{str_join(out, "\n")}\n")
+}
+
+fn generated(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let facts = json_of(nazm(h, d, words("contract c.nz")))?;
+    let seeds = vec_new[UInt64]();
+    vec_push(seeds, UInt64(24301));
+    vec_push(seeds, UInt64(12648430));
+    vec_push(seeds, UInt64(912559));
+    let mut i = 0;
+    while i < 3 {
+        let file = f"txs{i}.txt";
+        scratch_write(h, d, file, sequence(facts, vec_get(seeds, i))?)?;
+        let o = nazm(h, d, words(f"contract c.nz --txs {file}"));
+        let sim = json_of(o)?;
+        // The same bytes on a second run.
+        let again = json_of(nazm(h, d, words(f"contract c.nz --txs {file}")))?;
+        check_that(json_encode_node(again, json_root(again)) == json_encode_node(sim, json_root(sim)), file)?;
+        check_that(json_len(sim, jq(sim, "transactions")) == LENGTH, file)?;
+        let kinds = strs_new();
+        let mut t = 0;
+        while t < LENGTH {
+            let k = jstr(sim, f"transactions/{t}/outcome");
+            let mut seen = false;
+            for x in kinds {
+                if x == k {
+                    seen = true;
+                }
+            }
+            if !seen {
+                strs_push(kinds, k);
+            }
+            t = t + 1;
+        }
+        // The sequences reach commits, reverts and rejections alike.
+        check_that(strs_len(kinds) >= 3, f"{file}: {str_join(kinds, ", ")}")?;
+        // Every committed state keeps `alice + bob`; the state's values are written as text.
+        let alice = jstr(sim, "state/alice");
+        let bob = jstr(sim, "state/bob");
+        check_that(signed(alice) + signed(bob) == 100, f"{file}: {jtext(sim, "state")}")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn signed(s: Str) -> Int ! {} {
+    if text_starts_with(s, "-") { 0 - parse_usize(str_slice(s, 1, str_len(s))) } else { parse_usize(s) }
+}
+
+@test
+fn generated_sequences_run_deterministically_and_keep_the_conserved_quantity(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "c.nz", contract())?;
+    let r = generated(h, d);
+    scratch_remove(h, d);
+    r
+}

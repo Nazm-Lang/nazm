@@ -1,0 +1,310 @@
+// Gate 3: the storage engine reference workload (`examples/apps/pagestore/`,
+// `docs/systems-domains.md` Part M). Ported from `crates/nazm-cli/tests/storage.rs` (R7).
+//
+// `pagestore` is built once and a run crashed at every write boundary it has, each crash writing
+// half of that write; a recovering open must find every acknowledged write with its last value,
+// and nothing else but possibly the one in flight. Then the store is held by one process at a
+// time, reopened with what it had, and served to concurrent readers and one writer.
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// The engine, built into `dir`.
+fn engine(h: Caps, dir: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = f"{dir}/pagestore";
+    let a = strs_new();
+    strs_push(a, "build");
+    strs_push(a, f"{repo_root(h)}/examples/apps/pagestore/pagestore.nz");
+    strs_push(a, "-o");
+    strs_push(a, out);
+    let r = nazm(h, "", a);
+    check_that(r.code == 0, r.stderr)?;
+    Result[Str, Str].Ok(value: out)
+}
+
+fn ps(h: Caps, exe: Str, store: Str, script: Str, extra: Str) -> Ran ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, store);
+    strs_push(a, script);
+    for w in words(extra) {
+        strs_push(a, w);
+    }
+    run(h, exe, a, "", suite_env(h))
+}
+
+/// A map from `Int` to `Int` as two parallel lists, written out as `k=v` sorted by key.
+struct Model {
+    keys: Ints,
+    values: Ints,
+}
+
+fn model_new() -> Model ! {} {
+    Model(keys: ints_new(), values: ints_new())
+}
+
+fn model_put(m: Model, k: Int, v: Int) -> Int ! {} {
+    let mut i = 0;
+    while i < ints_len(m.keys) {
+        if ints_get(m.keys, i) == k {
+            ints_set(m.values, i, v);
+            return 0;
+        }
+        i = i + 1;
+    }
+    ints_push(m.keys, k);
+    ints_push(m.values, v);
+    0
+}
+
+fn model_text(m: Model) -> Str ! {} {
+    let sorted = ints_sort(m.keys);
+    let parts = strs_new();
+    for k in sorted {
+        let mut i = 0;
+        while i < ints_len(m.keys) {
+            if ints_get(m.keys, i) == k {
+                strs_push(parts, f"{k}={ints_get(m.values, i)}");
+            }
+            i = i + 1;
+        }
+    }
+    str_join(parts, " ")
+}
+
+/// The store's contents, from a `dump` line.
+fn contents(dump: Str) -> Result[Str, Str] ! {} {
+    let t = trim_ws(dump);
+    if !text_starts_with(t, "dump ->") {
+        return Result[Str, Str].Err(error: f"not a dump: {dump}");
+    }
+    let m = model_new();
+    for kv in split_whitespace(str_slice(t, 7, str_len(t))) {
+        let p = split(kv, "=");
+        model_put(m, int_of(strs_get(p, 0)), int_of(strs_get(p, 1)));
+    }
+    Result[Str, Str].Ok(value: model_text(m))
+}
+
+fn int_of(s: Str) -> Int ! {} {
+    if text_starts_with(s, "-") { 0 - parse_usize(str_slice(s, 1, str_len(s))) } else { parse_usize(s) }
+}
+
+fn first_line(s: Str) -> Str ! {} {
+    let ls = lines(s);
+    if strs_len(ls) > 0 { strs_get(ls, 0) } else { "" }
+}
+
+fn script_text() -> Str ! {} {
+    "put 1 10\nput 17 170\nput 2 20\nput 1 11\ncheckpoint\nput 33 330\nput 18 180\nreopen\nput 2 21\nput 49 490\nput 1 12\ncheckpoint\nput 65 650\nput 3 30\n"
+}
+
+fn crash_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let exe = engine(h, d)?;
+    let script = f"{d}/script.txt";
+    scratch_write(h, d, "script.txt", script_text())?;
+    let dump = f"{d}/dump.txt";
+    scratch_write(h, d, "dump.txt", "dump\n")?;
+    // The writes an uncrashed run makes: every boundary there is.
+    scratch_mkdir(h, d, "clean")?;
+    let r = ps(h, exe, f"{d}/clean", script, "");
+    check_that(r.code == 0, r.stderr)?;
+    let mut total = 0 - 1;
+    for l in lines(r.stdout) {
+        if total < 0 && text_starts_with(l, "writes ") {
+            total = parse_usize(str_slice(l, 7, str_len(l)));
+        }
+    }
+    check_that(total > 20, r.stdout)?;
+    let put_k = ints_new();
+    let put_v = ints_new();
+    for l in lines(script_text()) {
+        if text_starts_with(l, "put ") {
+            let kv = split(str_slice(l, 4, str_len(l)), " ");
+            ints_push(put_k, int_of(strs_get(kv, 0)));
+            ints_push(put_v, int_of(strs_get(kv, 1)));
+        }
+    }
+    let mut torn_pages_repaired = 0;
+    let mut crash = 1;
+    while crash <= total {
+        let store = f"{d}/crash{crash}";
+        scratch_mkdir(h, d, f"crash{crash}")?;
+        let c = ps(h, exe, store, script, f"{crash}");
+        check_that(c.code == 3, f"boundary {crash}: {ran_show(c)}")?;
+        check_that(text_contains(c.stderr, f"crashed at write {crash}"), c.stderr)?;
+        let mut acked = 0;
+        for l in lines(c.stdout) {
+            if text_ends_with(l, " -> ok") {
+                acked = acked + 1;
+            }
+        }
+        // A crash leaves the lock: a plain open refuses, and `recover` breaks it.
+        let refused = ps(h, exe, store, dump, "");
+        check_that(refused.code == 1, f"boundary {crash}")?;
+        check_that(text_contains(refused.stderr, "LOCK"), refused.stderr)?;
+        let back = ps(h, exe, store, dump, "0 recover");
+        check_that(back.code == 0, f"boundary {crash}: {ran_show(back)}")?;
+        let got = contents(first_line(back.stdout))?;
+        // The model: every acknowledged put, in order; then, possibly, the one in flight.
+        let model = model_new();
+        let mut i = 0;
+        while i < acked {
+            model_put(model, ints_get(put_k, i), ints_get(put_v, i));
+            i = i + 1;
+        }
+        let without = model_text(model);
+        if acked < ints_len(put_k) {
+            model_put(model, ints_get(put_k, acked), ints_get(put_v, acked));
+        }
+        let with_next = model_text(model);
+        check_that(got == without || got == with_next, f"boundary {crash}: {acked} acknowledged, found {got}, wanted {without} or {with_next}")?;
+        if got == with_next && got != without {
+            torn_pages_repaired = torn_pages_repaired + 1;
+        }
+        crash = crash + 1;
+    }
+    // Some crashes tore a page after its record was in the log: the log made it whole.
+    check_that(torn_pages_repaired > 0, "no crash fell between a record and its page")
+}
+
+/// A path the harness made, vouched for: the stores live under its own scratch directory.
+fn str_vouch_in(h: Caps, path: Str) -> Str ! {} {
+    let v = h.v;
+    str_vouch(path)
+}
+
+@test
+fn a_crash_at_every_write_boundary_recovers_every_acknowledged_write(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = crash_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// The little-endian `Int` at `o` of `b`.
+fn at(b: Bytes, o: Int) -> Int ! {} {
+    bytes_read_le(bytes_slice(b, o, o + 8), 0)
+}
+
+fn reopen_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let exe = engine(h, d)?;
+    let store = f"{d}/s";
+    scratch_mkdir(h, d, "s")?;
+    scratch_write(h, d, "script.txt", "put 5 50\nput 21 210\nreopen\nget 5\nget 21\nget 6\ndump\n")?;
+    let script = f"{d}/script.txt";
+    let r = ps(h, exe, store, script, "");
+    check_that(r.code == 0, r.stderr)?;
+    check_that(text_contains(r.stdout, "get 5 -> 50\nget 21 -> 210\nget 6 -> (none)\n"), r.stdout)?;
+    // A second process, the store held: refused by its lock.
+    scratch_write(h, d, "s/LOCK", "")?;
+    let held = ps(h, exe, store, script, "");
+    check_that(held.code == 1, ran_show(held))?;
+    check_that(text_contains(held.stderr, "held by another process"), held.stderr)?;
+    file_remove(h.io, str_vouch_in(h, f"{store}/LOCK"));
+    // The fixed layout, read without the engine: page 5's first slot holds key 5 and value 50.
+    let pages = match file_read_all(h.io, f"{store}/pages") {
+        Result.Ok(value: b) => b,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "pages"); },
+    };
+    check_that(bytes_len(pages) == 16 * 256, f"{bytes_len(pages)} bytes of pages")?;
+    check_that(at(pages, 5 * 256) == 5 && at(pages, 5 * 256 + 8) == 2, "page 5: its number, two keys")?;
+    check_that(at(pages, 5 * 256 + 16) == 5 && at(pages, 5 * 256 + 24) == 50, "page 5's first slot")?;
+    check_that(at(pages, 5 * 256 + 32) == 21 && at(pages, 5 * 256 + 40) == 210, "page 5's second slot")?;
+    // A closed store's log is empty: everything is in the pages.
+    let wal = match file_metadata(h.io, f"{store}/wal") {
+        Result.Ok(value: m) => m.size,
+        Result.Err(error: e) => 0 - 1,
+    };
+    check_that(wal == 0, f"the log holds {wal} bytes")
+}
+
+@test
+fn the_store_is_one_processs_and_a_reopen_finds_what_it_held(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = reopen_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn serve_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let exe = engine(h, d)?;
+    scratch_mkdir(h, d, "s")?;
+    scratch_write(h, d, "script.txt", "serve 4 25\nget 24\ndump\n")?;
+    let r = ps(h, exe, f"{d}/s", f"{d}/script.txt", "");
+    check_that(r.code == 0, r.stderr)?;
+    check_that(text_contains(r.stdout, "serve 4 25 -> served 25 puts and 100 gets"), r.stdout)?;
+    check_that(text_contains(r.stdout, "get 24 -> 240"), r.stdout)?;
+    let mut dump = "";
+    for l in lines(r.stdout) {
+        if str_len(dump) == 0 && text_starts_with(l, "dump") {
+            dump = l;
+        }
+    }
+    let got = contents(dump)?;
+    let want = model_new();
+    let mut i = 0;
+    while i < 25 {
+        model_put(want, i, i * 10);
+        i = i + 1;
+    }
+    check_that(got == model_text(want), got)
+}
+
+@test
+fn readers_and_one_writer_share_the_store_through_channels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = serve_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn checksum_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let exe = engine(h, d)?;
+    let store = f"{d}/s";
+    scratch_mkdir(h, d, "s")?;
+    scratch_write(h, d, "script.txt", "put 1 10\nput 2 20\n")?;
+    scratch_write(h, d, "dump.txt", "dump\n")?;
+    let r = ps(h, exe, store, f"{d}/script.txt", "");
+    check_that(r.code == 0, r.stderr)?;
+    // Page 2's sealed image, offered as page 1's next version, its checksum wrong.
+    let pages = match file_read_all(h.io, f"{store}/pages") {
+        Result.Ok(value: b) => b,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "pages"); },
+    };
+    let record = bytes_new(288);
+    bytes_write_le(record, 0, 5638093645399082316);
+    bytes_write_le(record, 8, 1);
+    bytes_write_le(record, 16, 1);
+    bytes_copy(bytes_slice(record, 24, 280), bytes_slice(pages, 2 * 256, 3 * 256));
+    bytes_write_le(record, 280, 0);
+    let f = match file_create(h.io, str_vouch_in(h, f"{store}/wal")) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "wal"); },
+    };
+    file_write(f, record);
+    file_close(f);
+    let back = ps(h, exe, store, f"{d}/dump.txt", "");
+    check_that(back.code == 0, ran_show(back))?;
+    let got = contents(first_line(back.stdout))?;
+    check_that(got == "1=10 2=20", got)
+}
+
+/// A whole record whose checksum does not hold is not replayed, whatever it carries: here a sealed
+/// image of another page, which, applied, would change the store without a word.
+@test
+fn a_whole_record_whose_checksum_fails_is_not_replayed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = checksum_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
