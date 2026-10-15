@@ -177,6 +177,35 @@ fn main(out: OutCap) -> Int ! {{io}} {{
     agrees_with(&src, &[("counter.nz", counter)], "42\n");
 }
 
+/// Two modules each declaring `COUNT` and `LIMIT` have four statics, not two: each function
+/// reaches its own module's, in the interpreter and both backends.
+#[test]
+fn two_modules_same_named_statics_are_each_their_own() {
+    let counter = "static COUNT: Atomic = atomic_new(40);\n\
+                   static LIMIT: Int = 70;\n\
+                   pub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }\n\
+                   pub fn count() -> Int ! {} { atomic_load(COUNT) }\n\
+                   pub fn limit() -> Int ! {} { LIMIT }\n";
+    let src = format!(
+        "{SHOW}use \"counter.nz\";
+
+static COUNT: Atomic = atomic_new(1);
+static LIMIT: Int = 5;
+
+fn main(out: OutCap) -> Int ! {{io}} {{
+    atomic_add(COUNT, 1);
+    bump();
+    bump();
+    show(out, atomic_load(COUNT));
+    show(out, count());
+    show(out, LIMIT + limit());
+    0
+}}
+"
+    );
+    agrees_with(&src, &[("counter.nz", counter)], "2\n42\n75\n");
+}
+
 #[test]
 fn every_misuse_of_a_static_is_refused() {
     const MAIN: &str = "fn main() -> Int { 0 }\n";
