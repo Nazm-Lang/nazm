@@ -49,6 +49,7 @@ pub struct Prog {
     a: Ints,
     b: Ints,
     c: Ints,
+    d: Ints,
     smod: Ints,
     slo: Ints,
     shi: Ints,
@@ -102,6 +103,8 @@ pub struct Heap {
     flag: Ints,
     // The scheduler's counts, `SC_` below.
     sched: Ints,
+    // The children whose exit has been seen, by process id.
+    reaped: Ints,
 }
 
 /// One task's stacks (D3) and the run's state.
@@ -134,6 +137,8 @@ pub const K_CHAN: Int = 5
 pub const K_FUNC: Int = 6
 pub const K_ATOMIC: Int = 7
 pub const K_HANDLE: Int = 8
+// A record or enum value that holds references: one count for all its copies (D4).
+pub const K_AGG: Int = 9
 
 // The counters of the memory report.
 pub const C_SEQ: Int = 0

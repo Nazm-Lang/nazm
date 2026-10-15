@@ -6,6 +6,7 @@
 use "@std/hash"
 use "@std/hashmap"
 use "types.nz"
+use "heap.nz"
 use "shapes.nz"
 use "numkinds.nz"
 
@@ -54,8 +55,8 @@ fn runtime_type(p: Prog, v: V) -> (Str, Int) {
         V.Str(s: x, obj: o, start: st) => ("Str", 0 - 4),
         V.Num(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
         V.Flt(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
-        V.Rec(def: d, fields: fs) => (strs_get(p.names, d), d),
-        V.Enm(def: d, variant: x, fields: fs) => (strs_get(p.names, d), d),
+        V.Rec(def: d, fields: fs) => (strs_get(p.names, dname(d)), dname(d)),
+        V.Enm(def: d, variant: x, fields: fs) => (strs_get(p.names, dname(d)), dname(d)),
         _ => ("?", 0 - 1),
     }
 }

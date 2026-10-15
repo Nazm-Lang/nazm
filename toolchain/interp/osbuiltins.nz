@@ -120,13 +120,32 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         return V.Osh(h: os_spawn_with(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3)), i_of(argo(vm, n, 4))))
     }
     if op == B_OS_CHILD_PIPE { return V.Osh(h: os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
-    if op == B_OS_WAIT { return V.Int(v: os_wait(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_TRY_WAIT { return V.Int(v: os_try_wait(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_WAIT_UNTIL { return V.Int(v: os_wait_until(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_WAIT || op == B_OS_TRY_WAIT || op == B_OS_WAIT_UNTIL {
+        let child = h_of(io, argo(vm, n, 0))
+        let r = if op == B_OS_WAIT {
+            os_wait(child)
+        } else if op == B_OS_TRY_WAIT {
+            os_try_wait(child)
+        } else {
+            os_wait_until(child, i_of(argo(vm, n, 1)))
+        }
+        if r >= 0 { ints_push(h.reaped, os_child_pid(child)) }
+        return V.Int(v: r)
+    }
     if op == B_OS_KILL { return V.Int(v: os_kill(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_KILL_GROUP { return V.Int(v: os_kill_group(i_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
     if op == B_OS_CHILD_PID { return V.Int(v: os_child_pid(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_CHILD_RUSAGE { return V.Int(v: os_child_rusage(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_CHILD_RUSAGE {
+        // The Rust interpreter measures no child: `ENOSYS` once its exit has been seen, `EINVAL`
+        // before (`process.rs`). The native runtime answers the peak; the oracle is followed here.
+        let pid = os_child_pid(h_of(io, argo(vm, n, 0)))
+        for i in 0..ints_len(h.reaped) {
+            if ints_get(h.reaped, i) == pid && pid > 0 {
+                return V.Int(v: if os_family() == 0 { 0 - 78 } else { 0 - 38 })
+            }
+        }
+        return V.Int(v: 0 - 22)
+    }
     if op == B_OS_LOCK { return V.Int(v: os_lock(h_of(io, argo(vm, n, 0)), bool_of(argo(vm, n, 1)))) }
     if op == B_OS_TRY_LOCK { return V.Int(v: os_try_lock(h_of(io, argo(vm, n, 0)), bool_of(argo(vm, n, 1)))) }
     if op == B_OS_UNLOCK { return V.Int(v: os_unlock(h_of(io, argo(vm, n, 0)))) }
