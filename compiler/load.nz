@@ -16,6 +16,8 @@
 
 use "syntax.nz";
 use "diag.nz";
+use "lex.nz";
+use "builtins.nz";
 
 // A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
 // string's value on one line).
@@ -33,6 +35,9 @@ pub struct Loaded {
     tfirst: Ints,
     tcount: Ints,
     targets: Strs,
+    // Per file, the prelude's standard modules it names (R1.5, D9: `prelude_named`), joined by
+    // `,` — which the reference then imports into it, and this loader does not yet.
+    implicit: Strs,
 }
 
 // The standard modules, by name (`nazm-sema/src/stdlib.rs`, `MODULES`, in its order).
@@ -195,6 +200,8 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
     let tfirst = ints_new();
     let tcount = ints_new();
     let targets = strs_new();
+    let implicit = strs_new();
+    let table = prelude_table(library, io);
     let pending = Pending(file: ints_new(), start: ints_new(), end: ints_new(), message: strs_new(), help: strs_new(), code: strs_new());
     let stds = std_names();
     // The stack: each entry a path, and whether it is a standard module (its name then).
@@ -222,6 +229,7 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
             ints_push(standard, 0);
             ints_push(tfirst, strs_len(targets));
             ints_push(tcount, 0);
+            strs_push(implicit, "");
             pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), "No such file or directory (os error 2)");
             continue;
         }
@@ -298,6 +306,17 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
         strs_push(texts, ld_with_newline(text));
         ints_push(tfirst, strs_len(targets));
         ints_push(tcount, strs_len(named));
+        if is_std {
+            strs_push(implicit, "");
+        } else {
+            let written = strs_new();
+            let mut w = 0;
+            while w < strs_len(children) {
+                if ints_get(children_std, w) == 1 { strs_push(written, strs_get(children, w)); }
+                w = w + 1;
+            }
+            strs_push(implicit, str_join(prelude_named(table, text, written), ","));
+        }
         let mut k = 0;
         while k < strs_len(named) {
             strs_push(targets, strs_get(named, k));
@@ -312,7 +331,9 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
     strs_push(identities, "@core/prelude.nz");
     ints_push(tfirst, strs_len(targets));
     ints_push(tcount, 0);
-    let loaded = Loaded(names: names, texts: texts, standard: standard, identities: identities, tfirst: tfirst, tcount: tcount, targets: targets);
+    strs_push(implicit, "");
+    let loaded = Loaded(names: names, texts: texts, standard: standard, identities: identities, tfirst: tfirst, tcount: tcount, targets: targets,
+            implicit: implicit);
     let mut k = 0;
     while k < strs_len(pending.code) {
         let base = ld_base(loaded, ints_get(pending.file, k));
@@ -336,6 +357,199 @@ pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
 pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
 pub fn ld_name(l: Loaded, i: Int) -> Str { strs_get(l.names, i) }
 pub fn ld_standard(l: Loaded, i: Int) -> Bool { ints_get(l.standard, i) == 1 }
+
+// The prelude's standard modules file `i` names (R1.5, D9), joined by `,`; "" for none.
+pub fn ld_implicit(l: Loaded, i: Int) -> Str { strs_get(l.implicit, i) }
+
+// --- the prelude's standard modules (R1.5, D9; `prelude_named`) --------------------------------
+
+// The prelude modules (`stdlib::PRELUDE`), each with its public items' names and its traits'
+// methods, the method names its functions answer to and no built-in does, and the prelude modules
+// it imports — each list a run of its pool, by entry.
+struct PreludeTable {
+    entry: Strs,
+    nfirst: Ints,
+    ncount: Ints,
+    names: Strs,
+    mfirst: Ints,
+    mcount: Ints,
+    methods: Strs,
+    ifirst: Ints,
+    icount: Ints,
+    imports: Strs,
+}
+
+fn prelude_modules() -> Strs {
+    let s = strs_new();
+    strs_push(s, "hash");
+    strs_push(s, "hashmap");
+    strs_push(s, "ordmap");
+    strs_push(s, "sort");
+    strs_push(s, "text");
+    s
+}
+
+// The prelude modules' names, read from their sources in the library (`prelude_table`).
+fn prelude_table(library: Str, io: IoCap) -> PreludeTable {
+    let tb = PreludeTable(entry: strs_new(), nfirst: ints_new(), ncount: ints_new(), names: strs_new(), mfirst: ints_new(), mcount: ints_new(),
+            methods: strs_new(), ifirst: ints_new(), icount: ints_new(), imports: strs_new());
+    let mods = prelude_modules();
+    let builtins = strs_new();
+    let rows = bi_rows();
+    let mut r = 0;
+    while r < strs_len(rows) {
+        let row = strs_get(rows, r);
+        strs_push(builtins, str_slice(row, 0, index_of_byte(row, 124)));
+        r = r + 1;
+    }
+    let prefixes = strs_new();
+    strs_push(prefixes, "vec_");
+    strs_push(prefixes, "ints_");
+    strs_push(prefixes, "strs_");
+    strs_push(prefixes, "bytes_");
+    strs_push(prefixes, "str_");
+    strs_push(prefixes, "int_");
+    let mut e = 0;
+    while e < strs_len(mods) {
+        let name = strs_get(mods, e);
+        let file = str_concat(str_concat(str_concat(library, "/std/"), name), ".nz");
+        let t = sx_tree();
+        let mut text = "";
+        if file_exists(file) { text = read_file(file); }
+        let program = sx_parse_source(text, t, dg_new());
+        strs_push(tb.entry, name);
+        ints_push(tb.nfirst, strs_len(tb.names));
+        ints_push(tb.mfirst, strs_len(tb.methods));
+        ints_push(tb.ifirst, strs_len(tb.imports));
+        let functions = sx_items(t, sx_field(t, program, "functions"));
+        let mut i = 0;
+        while i < ints_len(functions) {
+            let f = ints_get(functions, i);
+            if sx_is_some(t, sx_field(t, f, "pub_span")) && sx_is_some(t, sx_field(t, f, "method_of")) == false {
+                let fname = sx_name(t, f, "name");
+                strs_push(tb.names, fname);
+                let cut = index_of_byte(fname, 95);
+                if cut >= 0 {
+                    let m = str_slice(fname, cut + 1, str_len(fname));
+                    let mut builtin = false;
+                    let mut p = 0;
+                    while p < strs_len(prefixes) {
+                        if contains(builtins, str_concat(strs_get(prefixes, p), m)) { builtin = true; }
+                        p = p + 1;
+                    }
+                    if builtin == false { strs_push(tb.methods, m); }
+                }
+            }
+            i = i + 1;
+        }
+        let records = sx_items(t, sx_field(t, program, "records"));
+        i = 0;
+        while i < ints_len(records) {
+            if sx_is_some(t, sx_field(t, ints_get(records, i), "pub_span")) { strs_push(tb.names, sx_name(t, ints_get(records, i), "name")); }
+            i = i + 1;
+        }
+        let enums = sx_items(t, sx_field(t, program, "enums"));
+        i = 0;
+        while i < ints_len(enums) {
+            if sx_is_some(t, sx_field(t, ints_get(enums, i), "pub_span")) { strs_push(tb.names, sx_name(t, ints_get(enums, i), "name")); }
+            i = i + 1;
+        }
+        let traits = sx_items(t, sx_field(t, program, "traits"));
+        i = 0;
+        while i < ints_len(traits) {
+            let tr = ints_get(traits, i);
+            if sx_is_some(t, sx_field(t, tr, "pub_span")) {
+                strs_push(tb.names, sx_name(t, tr, "name"));
+                let ms = sx_items(t, sx_field(t, tr, "methods"));
+                let mut k = 0;
+                while k < ints_len(ms) {
+                    strs_push(tb.methods, sx_name(t, ints_get(ms, k), "name"));
+                    k = k + 1;
+                }
+            }
+            i = i + 1;
+        }
+        if name == "hashmap" { strs_push(tb.names, "Map"); }
+        let imports = sx_items(t, sx_field(t, program, "imports"));
+        i = 0;
+        while i < ints_len(imports) {
+            let path = sx_name(t, ints_get(imports, i), "path");
+            if starts_with(path, "@std/") {
+                let n = str_slice(path, 5, str_len(path));
+                if contains(mods, n) { strs_push(tb.imports, n); }
+            }
+            i = i + 1;
+        }
+        ints_push(tb.ncount, strs_len(tb.names) - ints_get(tb.nfirst, e));
+        ints_push(tb.mcount, strs_len(tb.methods) - ints_get(tb.mfirst, e));
+        ints_push(tb.icount, strs_len(tb.imports) - ints_get(tb.ifirst, e));
+        e = e + 1;
+    }
+    tb
+}
+
+fn run_has(pool: Strs, first: Int, count: Int, set: Strs) -> Bool {
+    let mut i = 0;
+    while i < count {
+        if contains(set, strs_get(pool, first + i)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The prelude modules a program module names (`prelude_named`), in the prelude's order, leaving
+// out those it imports itself: by an identifier that is one of their items, or by a method that
+// resolves to one of their functions and to no built-in; with the prelude modules those import.
+// The calls the parser writes for a form (a map literal's `hashmap_single`) are the checker's to
+// stop at.
+fn prelude_named(tb: PreludeTable, text: Str, written: Strs) -> Strs {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex_all(text, kinds, starts, ends, texts, dg_new());
+    let idents = strs_new();
+    let methods = strs_new();
+    let mut n = 0;
+    while n < ints_len(kinds) {
+        if ints_get(kinds, n) == k_ident() {
+            let name = strs_get(texts, n);
+            if contains(idents, name) == false { strs_push(idents, name); }
+            let after_dot = n > 0 && ints_get(kinds, n - 1) == k_dot();
+            let called = n + 1 < ints_len(kinds) && ints_get(kinds, n + 1) == k_lparen();
+            if after_dot && called && contains(methods, name) == false { strs_push(methods, name); }
+        }
+        n = n + 1;
+    }
+    let wanted = strs_new();
+    let mut e = 0;
+    while e < strs_len(tb.entry) {
+        let name = strs_get(tb.entry, e);
+        let named = contains(written, name) || run_has(tb.names, ints_get(tb.nfirst, e), ints_get(tb.ncount, e), idents)
+                || run_has(tb.methods, ints_get(tb.mfirst, e), ints_get(tb.mcount, e), methods);
+        if named { strs_push(wanted, name); }
+        e = e + 1;
+    }
+    let mut i = 0;
+    while i < strs_len(wanted) {
+        let at = index_of(tb.entry, strs_get(wanted, i));
+        let mut k = 0;
+        while k < ints_get(tb.icount, at) {
+            let dep = strs_get(tb.imports, ints_get(tb.ifirst, at) + k);
+            if contains(wanted, dep) == false { strs_push(wanted, dep); }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    let out = strs_new();
+    e = 0;
+    while e < strs_len(tb.entry) {
+        let name = strs_get(tb.entry, e);
+        if contains(wanted, name) && contains(written, name) == false { strs_push(out, name); }
+        e = e + 1;
+    }
+    out
+}
 
 // The file the `k`th import of file `i` names, by its index in load order; -1 where it did not
 // resolve.

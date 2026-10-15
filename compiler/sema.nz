@@ -2282,6 +2282,8 @@ fn check_stmt(c: Ck, s: Int) -> Bool {
 
 fn check_let(c: Ck, l: Int) -> Int {
     let name = fname_of(c, l, "name");
+    // A map literal's calls give a program `@std/hashmap` (R1.5, D9), which is not carried yet.
+    if name == "map#literal" { stop(c, "a map literal"); }
     let value = fld(c, l, "value");
     let mut ty = 0;
     if some(c, l, "ty") {
