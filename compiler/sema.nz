@@ -17,7 +17,7 @@
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
 // assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
 // names, `-`, `!`, the binary operators but shifts, calls of the module's functions and of the built-ins (generic ones by
-// inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
+// inference, `Box`, `Cell` and `Chain` among them), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
@@ -567,6 +567,11 @@ fn tag_chan() -> Int { 7 }
 // an argument: the reference's `type_args` of an array is empty, so nothing that walks a type's
 // arguments (nesting, substitution, inference) looks inside one.
 fn tag_array() -> Int { 8 }
+// `Box[T]` and `Chain[T]` (R1a), immutable indirections, and `Cell[T]` (R1b), a mutable one: each
+// its element as its one argument.
+fn tag_box() -> Int { 9 }
+fn tag_cell() -> Int { 10 }
+fn tag_chain() -> Int { 11 }
 
 fn t_int() -> Int { 0 }
 fn t_bool() -> Int { 1 }
@@ -625,6 +630,13 @@ fn chan_of(c: Ck, elem: Int) -> Int {
     intern(c, tag_chan(), 0, 0, 0, "", a)
 }
 fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
+fn holder_of(c: Ck, g: Int, elem: Int) -> Int {
+    let a = ints_new();
+    ints_push(a, elem);
+    intern(c, g, 0, 0, 0, "", a)
+}
+// Whether a type holds one element behind a handle, as a `Vec` does: `Vec`, `Box`, `Cell`, `Chain`.
+fn is_holder_tag(g: Int) -> Bool { g == tag_vec() || g == tag_box() || g == tag_cell() || g == tag_chain() }
 fn array_of(c: Ck, elem: Int, n: Int) -> Int { intern(c, tag_array(), n, elem, 0, "", ints_new()) }
 fn is_array(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_array() }
 fn array_elem(c: Ck, t: Int) -> Int { ints_get(c.tyb, t) }
@@ -852,6 +864,9 @@ fn show(c: Ck, t: Int) -> Str {
         return cat3("Vec[", show(c, e), "]");
     }
     if g == tag_chan() { return cat3("Chan[", show(c, targ(c, t, 0)), "]"); }
+    if g == tag_box() { return cat3("Box[", show(c, targ(c, t, 0)), "]"); }
+    if g == tag_cell() { return cat3("Cell[", show(c, targ(c, t, 0)), "]"); }
+    if g == tag_chain() { return cat3("Chain[", show(c, targ(c, t, 0)), "]"); }
     if g == tag_array() { return cat5("[", show(c, array_elem(c, t)), "; ", int_to_str(ta(c, t)), "]"); }
     let mut name = "";
     if g == tag_record() { name = strs_get(c.rname, ta(c, t)); }
@@ -952,7 +967,8 @@ fn task_safety(c: Ck, t: Int) -> Str { derived_walk(c, t, 2, 0 - 1, false) }
 
 // The walk, for ordering (`mode` 0), equality (1) or crossing into a task (2).
 fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str {
-    let t = strip_array(c, top);
+    // A `Box` or `Chain` compares by what it holds (L6): equality looks through them.
+    let t = open_derived(c, top, mode == 1);
     if is_record(c, t) == false && is_enum(c, t) == false {
         if leaf_mode(c, t, mode) { return ""; }
         return str_concat("|", int_to_str(t));
@@ -984,7 +1000,7 @@ fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str
             ints_push(spushed, pushed);
             let f = ints_get(edges, at);
             // An array field contains its elements inline (`contained`).
-            let ty = strip_array(c, field_ty_in(c, node, f));
+            let ty = open_derived(c, field_ty_in(c, node, f), mode == 1);
             let names = edge_names(c, node, f);
             let mut refused = false;
             if stop_trait >= 0 && (is_record(c, ty) || is_enum(c, ty)) {
@@ -1031,6 +1047,20 @@ fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str
     ""
 }
 
+// A component as the derived walk sees it (`derived`'s `open`): its arrays removed, and, `through`,
+// the `Box`es and `Chain`s around it too.
+fn open_derived(c: Ck, t: Int, through: Bool) -> Int {
+    let mut u = strip_array(c, t);
+    if through {
+        let mut i = 0;
+        while i < 64 && (tag(c, u) == tag_box() || tag(c, u) == tag_chain()) {
+            u = strip_array(c, targ(c, u, 0));
+            i = i + 1;
+        }
+    }
+    u
+}
+
 fn leaf_mode(c: Ck, t: Int, mode: Int) -> Bool {
     if mode == 2 { return crosses(c, t); }
     leaf(c, t, mode == 1)
@@ -1040,7 +1070,7 @@ fn leaf_mode(c: Ck, t: Int, mode: Int) -> Bool {
 // not a sequence, a type parameter or a function value.
 fn crosses(c: Ck, t: Int) -> Bool {
     let g = tag(c, t);
-    if g == tag_vec() || g == tag_param() || g == tag_fn() { return false; }
+    if is_holder_tag(g) || g == tag_param() || g == tag_fn() { return false; }
     let n = bname_of(c, t);
     n != "Ints" && n != "Strs" && n != "Bytes"
 }
@@ -1230,6 +1260,7 @@ fn load_builtins(c: Ck) -> Int {
 // `Option` of it, a `Chan` of it or a `Vec` of those (N53), or a monomorphic type.
 fn generic_shape(s: Str) -> Bool {
     if s == "T" || s == "Vec[T]" || s == "Option[T]" || s == "Chan[T]" || s == "Vec[Chan[T]]" { return true; }
+    if s == "Box[T]" || s == "Cell[T]" || s == "Chain[T]" { return true; }
     is_builtin_name(s) && s != "Chan"
 }
 
@@ -1239,6 +1270,9 @@ fn shape_of(c: Ck, s: Str, t: Int) -> Int {
     if s == "Vec[T]" { return vec_of(c, t); }
     if s == "Chan[T]" { return chan_of(c, t); }
     if s == "Vec[Chan[T]]" { return vec_of(c, chan_of(c, t)); }
+    if s == "Box[T]" { return holder_of(c, tag_box(), t); }
+    if s == "Cell[T]" { return holder_of(c, tag_cell(), t); }
+    if s == "Chain[T]" { return holder_of(c, tag_chain(), t); }
     if s == "Option[T]" {
         let a = ints_new();
         ints_push(a, t);
@@ -1993,9 +2027,23 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         channel_element(c, d, elem, span);
         return chan_of(c, elem);
     }
+    // `Box[T]` and `Chain[T]` (R1a) and `Cell[T]` (R1b): prelude names, so a module's own type of
+    // the name keeps it.
     if (name == "Box" || name == "Cell" || name == "Chain") && type_named(c, name) < 0 {
-        stop(c, cat3("`", name, "`"));
-        return t_int();
+        if has_args == false {
+            let mut what = "box";
+            if name == "Cell" { what = "cell"; }
+            if name == "Chain" { what = "chain"; }
+            dg_error(d, "N0352", sps(c, ns), spe(c, ns), cat3("`", name, "` is written with its element type"), "",
+                    cat5(cat5("a ", what, " of `Int` is `", name, "[Int]`; `"), name, "` alone is not a type", "", ""));
+            return t_int();
+        }
+        if ints_len(args) != 1 { wrong_arity(c, d, name, 1, ints_len(args), span); }
+        let mut elem = t_int();
+        if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        if name == "Box" { return holder_of(c, tag_box(), elem); }
+        if name == "Cell" { return holder_of(c, tag_cell(), elem); }
+        return holder_of(c, tag_chain(), elem);
     }
     // `List[T]` (R1.5, D7) is `Vec[T]`: a prelude name, so a module's own type of the name keeps it.
     if name == "List" && type_named(c, name) < 0 {
@@ -2451,66 +2499,463 @@ fn validate_new_arrays(c: Ck) -> Int {
 fn validate_layouts(c: Ck) -> Int {
     // Every array written in a field (Gate 2), once every definition it might contain is known.
     validate_new_arrays(c);
+    let g = own_graph(c);
+    let reported = ints_new();
+    let cycles = Cyc(through: ints_new(), tf: ints_new(), tc: ints_new(), hops: ints_new(), hf: ints_new(), hc: ints_new(), inline: ints_new());
+    let n = own_nodes(c);
+    // The impossible layouts first, over inline edges only; then the cycles through a counted
+    // handle, staying out of what the first reported (`ownership_cycles`).
     let mut i = 0;
-    while i < strs_len(c.rname) {
-        if reaches(c, record_ty(c, i, ints_new()), record_ty(c, i, ints_new()), ints_new()) { stop(c, "a type that contains itself"); }
+    while i < n {
+        if index_of(reported, i) < 0 {
+            if find_cycle(c, g, i, reported, cycles) { add_reported(cycles, reported); }
+        }
         i = i + 1;
     }
     i = 0;
-    while i < strs_len(c.ename) {
-        if reaches(c, enum_ty(c, i, ints_new()), enum_ty(c, i, ints_new()), ints_new()) { stop(c, "a type that contains itself"); }
+    while i < n {
+        if index_of(reported, i) < 0 {
+            if find_counted_cycle(c, g, i, reported, cycles) { add_reported(cycles, reported); }
+        }
+        i = i + 1;
+    }
+    let mut k = 0;
+    while k < ints_len(cycles.tf) {
+        report_cycle(c, cycles, k);
+        k = k + 1;
+    }
+    // Depth is only meaningful once there is no cycle to walk forever, and it is asked of
+    // declarations.
+    i = 0;
+    while i < n {
+        if index_of(reported, i) < 0 && type_depth(c, own_node_ty(c, i)) < 0 {
+            dg_error(c.d, "N0338", own_node_span_s(c, i), own_node_span_e(c, i), "user-defined types may nest 32 deep", "",
+                    "each level multiplies the copy and cleanup code generated for every value of the outer type, so the bound is on the emitted program rather than on the compiler. It is stated rather than discovered");
+        }
         i = i + 1;
     }
     0
 }
 
-// Whether `from`'s definition, through every definition its fields mention anywhere — inline,
-// in a `Vec`, or as a type argument — reaches `target`'s definition. Over definitions rather
-// than instances, so it ends, and it finds every cycle the reference could refuse (and more).
-fn reaches(c: Ck, from: Int, target: Int, seen: Ints) -> Bool {
-    // The definitions met, as `tag * 100000 + id`, and a worklist of them.
-    let work = ints_new();
-    ints_push(work, def_key(c, from));
-    while ints_len(work) > 0 {
-        let key = ints_pop(work);
-        let node = def_of_key(c, key);
-        let edges = contained(c, node);
-        let mut i = 0;
-        while i < ints_len(edges) {
-            let mentioned = ints_new();
-            mentioned_defs(c, ints_get(c.fty, ints_get(edges, i)), mentioned);
+// --- the ownership graph of the definitions (`UserTypes::ownership_cycles`) -----------------------
+//
+// A definition is a node: records in id order, then enums. Each field of each definition gives
+// edges to the definitions its type owns, each one inline, counted (through a `Vec`, a `Cell` or a
+// channel) or immutable (through a `Box` or a `Chain`); a generic definition owns what its
+// parameters are applied to as its fields use them (`parameter_uses`).
+
+fn r_inline() -> Int { 1 }
+fn r_counted() -> Int { 2 }
+fn r_immutable() -> Int { 4 }
+
+pub struct Og {
+    // Each parameter's uses, at `uoff` of its definition.
+    uoff: Ints,
+    uses: Ints,
+    // Edges, by node (`eoff`, `ecnt`): the node reached, its reach, and the field it leaves by.
+    eoff: Ints,
+    ecnt: Ints,
+    eto: Ints,
+    ereach: Ints,
+    efield: Ints,
+}
+
+// The cycles found: each a run of `through` (nodes, the first again at the end) and a run of
+// `hops` (the fields), and whether it is inline.
+pub struct Cyc {
+    through: Ints,
+    tf: Ints,
+    tc: Ints,
+    hops: Ints,
+    hf: Ints,
+    hc: Ints,
+    inline: Ints,
+}
+
+fn own_nodes(c: Ck) -> Int { strs_len(c.rname) + strs_len(c.ename) }
+fn own_node_ty(c: Ck, n: Int) -> Int {
+    if n < strs_len(c.rname) { return record_ty(c, n, ints_new()); }
+    enum_ty(c, n - strs_len(c.rname), ints_new())
+}
+fn own_node_of(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ta(c, t); }
+    if is_enum(c, t) { return strs_len(c.rname) + ta(c, t); }
+    0 - 1
+}
+fn own_params(c: Ck, n: Int) -> Int {
+    if n < strs_len(c.rname) { return ints_get(c.rnp, n); }
+    ints_get(c.enp, n - strs_len(c.rname))
+}
+fn own_node_span_s(c: Ck, n: Int) -> Int {
+    if n < strs_len(c.rname) { return ints_get(c.rns, n); }
+    ints_get(c.ens, n - strs_len(c.rname))
+}
+fn own_node_span_e(c: Ck, n: Int) -> Int {
+    if n < strs_len(c.rname) { return ints_get(c.rne, n); }
+    ints_get(c.ene, n - strs_len(c.rname))
+}
+
+// One path kind followed by another (`then`).
+fn r_then(a: Int, b: Int) -> Int {
+    if a == r_counted() || b == r_counted() { return r_counted(); }
+    if a == r_immutable() || b == r_immutable() { return r_immutable(); }
+    r_inline()
+}
+
+// How a use through `outer` composes with a use of kind `inner` (`compose`).
+fn r_compose(outer: Int, inner: Int) -> Int {
+    let mut out = 0;
+    let mut i = 0;
+    while i < 3 {
+        let mut k = 0;
+        while k < 3 {
+            if has_bit(outer, i) && has_bit(inner, k) { out = eff_union(out, r_then(pow2(i), pow2(k))); }
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+fn own_use(c: Ck, g: Og, n: Int, k: Int) -> Int {
+    if n < 0 || k >= own_params(c, n) { return 0; }
+    ints_get(g.uses, ints_get(g.uoff, n) + k)
+}
+
+// Whether `t` is parameter `index` of node `n`'s definition.
+fn is_own_param(c: Ck, t: Int, n: Int, index: Int) -> Bool {
+    if tag(c, t) != tag_param() || ints_get(c.tyc, t) != index { return false; }
+    if n < strs_len(c.rname) { return ta(c, t) == own_record() && ints_get(c.tyb, t) == n; }
+    ta(c, t) == own_enum() && ints_get(c.tyb, t) == n - strs_len(c.rname)
+}
+
+// How `t` reaches a value of node `n`'s parameter `index` (`reaches_param`).
+fn reaches_param(c: Ck, g: Og, t: Int, n: Int, index: Int) -> Int {
+    let tg = tag(c, t);
+    if tg == tag_param() {
+        if is_own_param(c, t, n, index) { return r_inline(); }
+        return 0;
+    }
+    if tg == tag_vec() || tg == tag_cell() { return r_compose(r_counted(), reaches_param(c, g, targ(c, t, 0), n, index)); }
+    if tg == tag_box() || tg == tag_chain() { return r_compose(r_immutable(), reaches_param(c, g, targ(c, t, 0), n, index)); }
+    if tg == tag_chan() {
+        if reaches_param(c, g, targ(c, t, 0), n, index) != 0 { return r_counted(); }
+        return 0;
+    }
+    if tg == tag_record() || tg == tag_enum() {
+        let template = own_node_of(c, t);
+        let mut out = 0;
+        let mut k = 0;
+        while k < targc(c, t) {
+            let inner = reaches_param(c, g, targ(c, t, k), n, index);
+            if inner != 0 { out = eff_union(out, r_compose(own_use(c, g, template, k), inner)); }
+            k = k + 1;
+        }
+        return out;
+    }
+    0
+}
+
+// A definition's fields, by their indices in the pool (`contained`).
+fn own_fields(c: Ck, n: Int) -> Ints { contained(c, own_node_ty(c, n)) }
+
+// Every definition a type owns, and how (`owned_by`), as edges leaving by field `f`.
+fn owned_by(c: Ck, g: Og, t: Int, reach: Int, f: Int) -> Int {
+    let tg = tag(c, t);
+    if tg == tag_vec() || tg == tag_cell() || tg == tag_chan() { return owned_by(c, g, targ(c, t, 0), r_counted(), f); }
+    if tg == tag_box() || tg == tag_chain() { return owned_by(c, g, targ(c, t, 0), r_then(reach, r_immutable()), f); }
+    if tg == tag_record() || tg == tag_enum() {
+        let to = own_node_of(c, t);
+        ints_push(g.eto, to);
+        ints_push(g.ereach, reach);
+        ints_push(g.efield, f);
+        let mut k = 0;
+        while k < targc(c, t) {
+            let through = r_compose(own_use(c, g, to, k), reach);
+            let mut b = 0;
+            while b < 3 {
+                if has_bit(through, b) { owned_by(c, g, targ(c, t, k), pow2(b), f); }
+                b = b + 1;
+            }
+            k = k + 1;
+        }
+    }
+    0
+}
+
+fn own_graph(c: Ck) -> Og {
+    let g = Og(uoff: ints_new(), uses: ints_new(), eoff: ints_new(), ecnt: ints_new(), eto: ints_new(), ereach: ints_new(), efield: ints_new());
+    let n = own_nodes(c);
+    let mut i = 0;
+    while i < n {
+        ints_push(g.uoff, ints_len(g.uses));
+        let mut k = 0;
+        while k < own_params(c, i) {
+            ints_push(g.uses, 0);
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    // How each generic definition uses each of its parameters, to a fixed point.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        i = 0;
+        while i < n {
+            let fields = own_fields(c, i);
             let mut k = 0;
-            while k < ints_len(mentioned) {
-                let m = ints_get(mentioned, k);
-                if m == def_key(c, target) { return true; }
-                if index_of(seen, m) < 0 {
-                    ints_push(seen, m);
-                    ints_push(work, m);
+            while k < own_params(c, i) {
+                let mut used = 0;
+                let mut f = 0;
+                while f < ints_len(fields) {
+                    used = eff_union(used, reaches_param(c, g, strip_array(c, ints_get(c.fty, ints_get(fields, f))), i, k));
+                    f = f + 1;
+                }
+                let at = ints_get(g.uoff, i) + k;
+                if eff_union(ints_get(g.uses, at), used) != ints_get(g.uses, at) {
+                    ints_set(g.uses, at, eff_union(ints_get(g.uses, at), used));
+                    changed = true;
                 }
                 k = k + 1;
             }
             i = i + 1;
         }
     }
-    false
+    i = 0;
+    while i < n {
+        ints_push(g.eoff, ints_len(g.eto));
+        let fields = own_fields(c, i);
+        let mut f = 0;
+        while f < ints_len(fields) {
+            let fi = ints_get(fields, f);
+            owned_by(c, g, strip_array(c, ints_get(c.fty, fi)), r_inline(), fi);
+            f = f + 1;
+        }
+        ints_push(g.ecnt, ints_len(g.eto) - ints_get(g.eoff, i));
+        i = i + 1;
+    }
+    g
 }
 
-fn def_key(c: Ck, t: Int) -> Int { tag(c, t) * 100000 + ta(c, t) }
-fn def_of_key(c: Ck, key: Int) -> Int {
-    if key / 100000 == tag_record() { return record_ty(c, key % 100000, ints_new()); }
-    enum_ty(c, key % 100000, ints_new())
-}
-
-// Every record and enum definition a type mentions, at any depth.
-fn mentioned_defs(c: Ck, t: Int, out: Ints) -> Int {
-    if is_record(c, t) || is_enum(c, t) { ints_push(out, def_key(c, t)); }
-    if is_array(c, t) { mentioned_defs(c, strip_array(c, t), out); }
+fn add_reported(cy: Cyc, reported: Ints) -> Int {
+    let last = ints_len(cy.tf) - 1;
     let mut i = 0;
-    while i < targc(c, t) {
-        mentioned_defs(c, targ(c, t, i), out);
+    while i < ints_get(cy.tc, last) {
+        ints_push(reported, ints_get(cy.through, ints_get(cy.tf, last) + i));
         i = i + 1;
     }
     0
+}
+
+// Close a cycle found: the path's nodes from `from` on, each hop the field its frame was entered
+// by, then the closing edge's field and node.
+fn close_cycle(g: Og, cy: Cyc, sn: Ints, sin: Ints, from: Int, edge: Int, to: Int, inline: Int) -> Bool {
+    ints_push(cy.tf, ints_len(cy.through));
+    ints_push(cy.hf, ints_len(cy.hops));
+    let mut i = from;
+    while i < ints_len(sn) {
+        ints_push(cy.through, ints_get(sn, i));
+        if i > from { ints_push(cy.hops, ints_get(g.efield, ints_get(sin, i))); }
+        i = i + 1;
+    }
+    ints_push(cy.hops, ints_get(g.efield, edge));
+    ints_push(cy.through, to);
+    ints_push(cy.tc, ints_len(cy.through) - ints_get(cy.tf, ints_len(cy.tf) - 1));
+    ints_push(cy.hc, ints_len(cy.hops) - ints_get(cy.hf, ints_len(cy.hf) - 1));
+    ints_push(cy.inline, inline);
+    true
+}
+
+// A cycle reachable from `start` over inline edges, avoiding `excluded` (`find_cycle`).
+fn find_cycle(c: Ck, g: Og, start: Int, excluded: Ints, cy: Cyc) -> Bool {
+    let sn = ints_new();
+    let sat = ints_new();
+    let sin = ints_new();
+    let done = ints_new();
+    ints_push(sn, start);
+    ints_push(sat, 0);
+    ints_push(sin, 0 - 1);
+    while ints_len(sn) > 0 {
+        let top = ints_len(sn) - 1;
+        let node = ints_get(sn, top);
+        let at = ints_get(sat, top);
+        if at >= ints_get(g.ecnt, node) {
+            ints_push(done, node);
+            ints_pop(sn);
+            ints_pop(sat);
+            ints_pop(sin);
+        } else {
+            ints_set(sat, top, at + 1);
+            let edge = ints_get(g.eoff, node) + at;
+            let to = ints_get(g.eto, edge);
+            if ints_get(g.ereach, edge) == r_inline() && index_of(excluded, to) < 0 && index_of(done, to) < 0 {
+                let from = index_of(sn, to);
+                if from >= 0 { return close_cycle(g, cy, sn, sin, from, edge, to, 1); }
+                ints_push(sn, to);
+                ints_push(sat, 0);
+                ints_push(sin, edge);
+            }
+        }
+    }
+    false
+}
+
+// A cycle through `start` with a counted edge on it, closed over edges of any kind and avoiding
+// `excluded` (`find_counted_cycle`): over (definition, whether the path has a counted edge).
+fn find_counted_cycle(c: Ck, g: Og, start: Int, excluded: Ints, cy: Cyc) -> Bool {
+    let sn = ints_new();
+    let scounted = ints_new();
+    let sat = ints_new();
+    let sin = ints_new();
+    let seen = ints_new();
+    ints_push(sn, start);
+    ints_push(scounted, 0);
+    ints_push(sat, 0);
+    ints_push(sin, 0 - 1);
+    ints_push(seen, start * 2);
+    while ints_len(sn) > 0 {
+        let top = ints_len(sn) - 1;
+        let node = ints_get(sn, top);
+        let at = ints_get(sat, top);
+        if at >= ints_get(g.ecnt, node) {
+            ints_pop(sn);
+            ints_pop(scounted);
+            ints_pop(sat);
+            ints_pop(sin);
+        } else {
+            ints_set(sat, top, at + 1);
+            let edge = ints_get(g.eoff, node) + at;
+            let to = ints_get(g.eto, edge);
+            if index_of(excluded, to) < 0 {
+                let mut counted = ints_get(scounted, top);
+                if ints_get(g.ereach, edge) == r_counted() { counted = 1; }
+                if to == start {
+                    if counted == 1 { return close_cycle(g, cy, sn, sin, 0, edge, start, 0); }
+                } else {
+                    if index_of(seen, to * 2 + counted) < 0 {
+                        ints_push(seen, to * 2 + counted);
+                        ints_push(sn, to);
+                        ints_push(scounted, counted);
+                        ints_push(sat, 0);
+                        ints_push(sin, edge);
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+// One hop of an ownership path as a reader finds it (`hop_name`): `Node.children`, or
+// `Tree.Branch.kids` for a payload field.
+fn hop_name(c: Ck, f: Int) -> Str {
+    let mut i = 0;
+    while i < strs_len(c.rname) {
+        let r0 = ints_get(c.rff, i);
+        if f >= r0 && f < r0 + ints_get(c.rfc, i) { return cat3(strs_get(c.rname, i), ".", strs_get(c.fname, f)); }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.ename) {
+        let mut v = 0;
+        while v < ints_get(c.evc, i) {
+            let vi = ints_get(c.evf, i) + v;
+            if f >= ints_get(c.vff, vi) && f < ints_get(c.vff, vi) + ints_get(c.vfc, vi) {
+                return cat5(strs_get(c.ename, i), ".", strs_get(c.vname, vi), ".", strs_get(c.fname, f));
+            }
+            v = v + 1;
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn report_cycle(c: Ck, cy: Cyc, k: Int) -> Int {
+    let tf = ints_get(cy.tf, k);
+    let tc = ints_get(cy.tc, k);
+    let first = ints_get(cy.through, tf);
+    let start = show(c, own_node_ty(c, first));
+    let names = strs_new();
+    let mut i = 0;
+    while i < tc {
+        strs_push(names, show(c, own_node_ty(c, ints_get(cy.through, tf + i))));
+        i = i + 1;
+    }
+    let s = own_node_span_s(c, first);
+    let e = own_node_span_e(c, first);
+    if ints_get(cy.inline, k) == 1 {
+        let mut message = cat3("`", start, "` contains itself");
+        if tc != 2 { message = cat4("`", start, "` contains itself through ", str_join(names, " → ")); }
+        dg_error(c.d, "N0336", s, e, message, "",
+                "a record holds its fields by value and an enum holds its active payload by value, so this one would have no finite size. This is an impossible layout rather than a safety problem: a later type that holds its contents somewhere else would make the same shape expressible");
+    } else {
+        let path = strs_new();
+        i = 0;
+        while i < ints_get(cy.hc, k) {
+            strs_push(path, hop_name(c, ints_get(cy.hops, ints_get(cy.hf, k) + i)));
+            i = i + 1;
+        }
+        strs_push(path, start);
+        dg_error(c.d, "N0359", s, e, cat4("`", start, "` can own itself through a `Vec`: ", str_join(path, " → ")), "",
+                "a `Vec` holds its elements through a reference-counted handle, so this layout is finite — but a value of it could hold a `Vec` containing itself, and no count would ever reach zero. Nazm refuses such an ownership cycle rather than leak it. Store the children somewhere that does not own them: an index into a `Vec` owned outside the type");
+    }
+    let hc = ints_get(cy.hc, k);
+    if hc > 0 {
+        let closing = ints_get(cy.hops, ints_get(cy.hf, k) + hc - 1);
+        sec_at(c, ints_get(c.fns, closing), ints_get(c.fne, closing), "this field closes the cycle");
+    }
+    0
+}
+
+// How deep a type nests definitions inline (`depth`): -1 past 32.
+fn type_depth(c: Ck, t: Int) -> Int {
+    if is_record(c, t) == false && is_enum(c, t) == false { return 0; }
+    let memo_t = ints_new();
+    let memo_d = ints_new();
+    let st = ints_new();
+    let sx = ints_new();
+    ints_push(st, t);
+    ints_push(sx, 0);
+    while ints_len(st) > 0 {
+        let node = ints_pop(st);
+        let expanded = ints_pop(sx);
+        if index_of(memo_t, node) < 0 {
+            let inner = ints_new();
+            let edges = contained(c, node);
+            let mut i = 0;
+            while i < ints_len(edges) {
+                let ty = strip_array(c, field_ty_in(c, node, ints_get(edges, i)));
+                if is_record(c, ty) || is_enum(c, ty) { ints_push(inner, ty); }
+                i = i + 1;
+            }
+            if expanded == 1 {
+                let mut most = 0;
+                i = 0;
+                while i < ints_len(inner) {
+                    let at = index_of(memo_t, ints_get(inner, i));
+                    if at >= 0 && ints_get(memo_d, at) > most { most = ints_get(memo_d, at); }
+                    i = i + 1;
+                }
+                if most + 1 > max_depth() { return 0 - 1; }
+                ints_push(memo_t, node);
+                ints_push(memo_d, most + 1);
+            } else {
+                ints_push(st, node);
+                ints_push(sx, 1);
+                i = 0;
+                while i < ints_len(inner) {
+                    if index_of(memo_t, ints_get(inner, i)) < 0 {
+                        ints_push(st, ints_get(inner, i));
+                        ints_push(sx, 0);
+                    }
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    let at = index_of(memo_t, t);
+    if at < 0 { return 0; }
+    ints_get(memo_d, at)
 }
 
 // --- traits and impls (N78, `check/traits.rs`) -------------------------------------------------
@@ -3696,21 +4141,7 @@ fn captured_by(c: Ck, frame: Int, b: Int) -> Bool {
 }
 
 // Whether a value of `t` can reach a function value (`function_holder` of a `Cell` of it).
-fn holds_fn(c: Ck, t: Int, depth: Int) -> Bool {
-    if depth > max_depth() * 4 { return true; }
-    if is_array(c, t) { return holds_fn(c, strip_array(c, t), depth + 1); }
-    if is_fn(c, t) { return true; }
-    if tag(c, t) == tag_vec() || tag(c, t) == tag_chan() { return holds_fn(c, targ(c, t, 0), depth + 1); }
-    if is_record(c, t) || is_enum(c, t) {
-        let edges = contained(c, t);
-        let mut i = 0;
-        while i < ints_len(edges) {
-            if holds_fn(c, field_ty_in(c, t, ints_get(edges, i)), depth + 1) { return true; }
-            i = i + 1;
-        }
-    }
-    false
-}
+fn holds_fn(c: Ck, t: Int, depth: Int) -> Bool { function_holder(c, holder_of(c, tag_cell(), t)) >= 0 }
 
 // The mutable container through which a value of `t` can hold a function value
 // (`function_holder`), or -1: a function type met inside a `Vec`; records and enums are walked
@@ -3739,9 +4170,15 @@ fn function_holder(c: Ck, t: Int) -> Int {
             if is_fn(c, ty) {
                 if holder >= 0 { return holder; }
             }
-            if tag(c, ty) == tag_vec() || tag(c, ty) == tag_chan() {
+            // A `Cell` (R1b) is a mutable handle, as a `Vec` is.
+            if tag(c, ty) == tag_vec() || tag(c, ty) == tag_chan() || tag(c, ty) == tag_cell() {
                 ints_push(st, targ(c, ty, 0));
                 if holder >= 0 { ints_push(sh, holder); } else { ints_push(sh, ty); }
+            }
+            // Immutable (R1a): what a `Box` or `Chain` holds cannot be replaced, so it is no holder.
+            if tag(c, ty) == tag_box() || tag(c, ty) == tag_chain() {
+                ints_push(st, targ(c, ty, 0));
+                ints_push(sh, holder);
             }
             if is_record(c, ty) || is_enum(c, ty) {
                 let edges = contained(c, ty);
@@ -4018,7 +4455,7 @@ fn check_for(c: Ck, f: Int) -> Int {
             stop(c, "a `for` over `Bytes`");
             return 0;
         }
-        if tag(c, t) == tag_vec() {
+        if tag(c, t) == tag_vec() || tag(c, t) == tag_chain() {
             element = targ(c, t, 0);
             let fsp = fld(c, f, "name_span");
             sm_put(c.mfor, sps(c, fsp), spe(c, fsp), t);
@@ -4969,6 +5406,19 @@ fn sorted(xs: Strs) -> Strs {
 // reported; false when nothing does. A private function of a module this one imports is N0206;
 // an exported one of a module it does not import, N0201 with where it is.
 fn why_invisible(c: Ck, name: Str, at: Int) -> Bool {
+    // R1a's sequence built-ins, renamed with their type by R1.5 (D7): only after resolution
+    // failed, so a module's own function of one of these names keeps it.
+    let mut renamed = "";
+    if name == "list_from_vec" { renamed = "chain_from_vec"; }
+    if name == "list_empty" { renamed = "chain_empty"; }
+    if name == "list_len" { renamed = "chain_len"; }
+    if name == "list_get" { renamed = "chain_get"; }
+    if renamed != "" {
+        err(c, "N0637", at, cat5("`", name, "` is now `", renamed, "`"),
+                cat3("R1a's immutable sequence is `Chain[T]` and its built-ins `chain_`; write `", renamed,
+                "`. `List[T]` now names the growable list, `Vec[T]`"));
+        return true;
+    }
     let m = gs(c, s_module());
     let mut elsewhere = 0 - 1;
     let mut f = 0;
@@ -5099,10 +5549,6 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
         }
     }
     if target == 0 - 1 {
-        if callee == "list_from_vec" || callee == "list_empty" || callee == "list_len" || callee == "list_get" {
-            stop(c, "a renamed built-in");
-            return or_int(expected);
-        }
         if qualified {
             unknown_qualified(c, c.d, callee, sorted(c.alname), sps(c, cs), spe(c, cs), "function");
         } else {
@@ -5670,7 +6116,7 @@ fn inferred_from(c: Ck, call: Call, formal: Int, actual: Int, index: Int) -> Int
         if ta(c, formal) == call.owner && ints_get(c.tyb, formal) == call.oid && ints_get(c.tyc, formal) == index { return actual; }
         return 0 - 1;
     }
-    if g == tag_vec() || g == tag_chan() || g == tag_record() || g == tag_enum() {
+    if is_holder_tag(g) || g == tag_chan() || g == tag_record() || g == tag_enum() {
         let mut k = 0;
         while k < targc(c, formal) && k < targc(c, actual) {
             let r = inferred_from(c, call, targ(c, formal, k), targ(c, actual, k), index);
@@ -5706,7 +6152,8 @@ fn unify(c: Ck, call: Call, formal: Int, actual: Int, g: Solved, arg: Int) -> In
         return 1;
     }
     // A generic channel, as a `Vec` is: through its element (N53).
-    if tg == tag_vec() || tg == tag_chan() {
+    // `Box` and `Chain` (R1a) and `Cell` (R1b) as a `Vec` is, each only with its own kind.
+    if is_holder_tag(tg) || tg == tag_chan() {
         if tag(c, actual) != tg { return 2; }
         return unify(c, call, targ(c, formal, 0), targ(c, actual, 0), g, arg);
     }
@@ -8843,7 +9290,7 @@ fn receives_foreign(c: Ck, g: Int) -> Bool {
 fn carries_foreign(c: Ck, t: Int, depth: Int) -> Bool {
     if depth > max_depth() * 4 { return true; }
     if bname_of(c, t) == "ForeignCap" { return true; }
-    if tag(c, t) == tag_vec() { return carries_foreign(c, targ(c, t, 0), depth + 1); }
+    if is_holder_tag(tag(c, t)) { return carries_foreign(c, targ(c, t, 0), depth + 1); }
     if is_record(c, t) || is_enum(c, t) {
         let edges = contained(c, t);
         let mut i = 0;
@@ -9851,13 +10298,14 @@ fn w_stmt(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int) -> Int {
             w_expr(c, pf, w, bloc, fld(c, iter, "end"));
         } else {
             let handle = w_expr(c, pf, w, bloc, sx_kid(c.t, iter, 0));
-            // The cell its sequence's `*_get` reads (R1a).
+            // The cell its sequence's `*_get` reads (R1a); a `Chain` has none: what it holds rides
+            // on the value, as `chain_get` reads it.
             let t = sm_get(c.mfor, s0, e0);
             let mut cell = "*";
             if t >= 0 {
                 if tag(c, t) == tag_vec() && concrete(c, targ(c, t, 0)) { cell = vec_cell(show(c, targ(c, t, 0))); }
             }
-            v = sh_whole(w, fl_joined(fl_cell(cell, s0, e0), handle));
+            if t >= 0 && tag(c, t) == tag_chain() { v = sh_whole(w, handle); } else { v = sh_whole(w, fl_joined(fl_cell(cell, s0, e0), handle)); }
         }
         w_assign(c, pf, w, bloc, s0, e0, v);
         w_block(c, pf, w, bloc, fld(c, n, "body"));
