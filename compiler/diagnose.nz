@@ -91,6 +91,15 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
             ck_graph_import(graph, ld_import_target(loaded, i, k));
             k = k + 1;
         }
+        // The prelude's standard modules it names (R1.5, D9), by the module each is.
+        if ld_implicit(loaded, i) != "" {
+            let given = split_commas(ld_implicit(loaded, i));
+            k = 0;
+            while k < strs_len(given) {
+                ck_graph_implicit(graph, module_named(loaded, str_concat(str_concat("@std/", strs_get(given, k)), ".nz")));
+                k = k + 1;
+            }
+        }
         ints_push(programs, program);
         ints_push(bases, ld_base(loaded, i));
         strs_push(names, ld_name(loaded, i));
@@ -98,28 +107,16 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
         i = i + 1;
     }
     let parse_failed = dg_len(d) > 0;
-    // A program module naming one of the prelude's standard modules is given it (R1.5, D9),
-    // which this loader does not do yet.
-    let mut implicit = false;
-    i = 0;
-    while i < ld_count(loaded) {
-        if ld_implicit(loaded, i) != "" { implicit = true; }
-        i = i + 1;
-    }
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, it says why on standard error and reports nothing. After a syntax error it checks
     // what did parse, as the reference does.
     if parse_failed { ck_graph_syntax_error(graph); }
-    if implicit {
-        eprint(str_concat("diagnose: the checker stops at a standard module the prelude gives a program (R1.5, D9)", nl()));
-    } else {
-        let c = ck_check(t, programs, bases, names, graph);
-        if ck_stopped(c) == "" {
-            dg_append(d, ck_diags(c), 0);
-            return 0;
-        }
-        eprint(str_concat(str_concat("diagnose: the checker stops at ", ck_stopped(c)), nl()));
+    let c = ck_check(t, programs, bases, names, graph);
+    if ck_stopped(c) == "" {
+        dg_append(d, ck_diags(c), 0);
+        return 0;
     }
+    eprint(str_concat(str_concat("diagnose: the checker stops at ", ck_stopped(c)), nl()));
     // The root owns `main` (`nazm-core/src/check/mod.rs`); a function that failed to parse was
     // never registered, so the missing `main` is not reported after a syntax error.
     if parse_failed == false {
@@ -136,6 +133,33 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
         }
     }
     0
+}
+
+// The module of this name in load order, or -1.
+fn module_named(loaded: Loaded, name: Str) -> Int {
+    let mut i = 0;
+    while i < ld_count(loaded) {
+        if ld_name(loaded, i) == name { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn split_commas(s: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(s) {
+        let end = i == str_len(s);
+        let mut cut = end;
+        if end == false { cut = str_byte(s, i) == 44; }
+        if cut {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
 }
 
 // Whether a package manifest is in the directory holding `path`, or in one of the two above it.
