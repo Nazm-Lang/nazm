@@ -227,3 +227,19 @@ the sampler's attribution to Nazm functions.
 The reference with tests, mutants and the bit kept for boards and WebAssembly: 3–4 days. R3's
 port: 1 day. Cranelift's unwind tables and `try_call`: 4–6 days, deferrable. R9: after its
 object writer, 3–5 days, deferrable. Windows: 1–2 days under Wine, deferrable.
+
+### Coordinator's answers on 4.2 (2026-10-15)
+
+1. The stack check's cold weighting lands **with** unwinding, not alone: alone it gained nothing.
+2. Two conventions are accepted: unwinding on hosted targets, the bit on WebAssembly, WASI and the
+   boards. A program cannot tell them apart.
+3. Cranelift and R9 keep the bit until each writes unwind tables; R9 is to write them before 1.0,
+   since it replaces Cranelift as the fast build.
+4. A slower failure path on deep unwinds is accepted: a failure ends the program or its task, and is
+   not the path speed is measured on.
+5. The system's unwinder and the C personality (macOS's libSystem; libgcc_s elsewhere) are accepted.
+
+A correction to the table above: the bit's measured +57% in C included LLVM no longer turning one
+call into a loop. The prototype shows the bit and the taken stack-check branch together cost Nazm's
+gap: without both, `fib` is 44.3 ms — C with the same overflow and stack checks to the tenth.
+
