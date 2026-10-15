@@ -1,0 +1,68 @@
+// R2: `Chan[T]`, `scope` and `spawn` — the task-safety walk and every refusal of each.
+
+struct Pair {
+    a: Int,
+    b: Str,
+}
+
+struct Holder {
+    pair: Pair,
+    items: Ints,
+}
+
+enum Message {
+    Done,
+    Data(values: Vec[Int]),
+}
+
+fn worker(c: Chan[Int], n: Int) -> Int ! { spawn } {
+    chan_send_of(c, n);
+    0
+}
+
+fn pairs(c: Chan[Pair], p: Pair) -> Int {
+    chan_send_of(c, p);
+    0
+}
+
+fn takes(h: Holder) -> Int { 0 }
+fn takes_msg(m: Message) -> Int { 0 }
+fn takes_ints(xs: Ints) -> Int { 0 }
+fn ident[T](x: T) -> T { x }
+
+fn bad_channels(c: Chan[Ints], d: Chan[Holder], e: Chan[Int, Str]) -> Int { 0 }
+
+fn no_authority(c: Chan[Int]) -> Int {
+    scope {
+        spawn worker(c, 1);
+    }
+    0
+}
+
+fn main(io: IoCap, sp: SpawnCap) {
+    let c = chan_new_of[Int](4);
+    let p = chan_new_of[Pair](2);
+    let v = chan_new_of[Vec[Int]](2);
+    let h = Holder(pair: Pair(a: 1, b: "x"), items: ints_new());
+    spawn worker(c, 1);
+    scope {
+        spawn worker(c, 2);
+        spawn pairs(p, Pair(a: 1, b: "y"));
+        spawn takes(h);
+        spawn takes_msg(Message.Done);
+        spawn takes_ints(ints_new());
+        spawn worker(c);
+        spawn worker(c, "three");
+        spawn ident(1);
+        spawn missing(1);
+        let f = |x: Int| {
+            spawn worker(c, x);
+            x
+        };
+    }
+    scope {
+        1
+    }
+    let ok = chan_select_of(vec_new[Chan[Int]](), vec_new[Int]());
+    print(ok);
+}
