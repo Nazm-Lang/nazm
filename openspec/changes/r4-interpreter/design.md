@@ -174,7 +174,9 @@ tasks (counted `joined`); a channel operation that cannot proceed suspends the t
 is suspended and one has a deadline, the host sleeps until the earliest; when none has one, the
 program is deadlocked — the Rust interpreter would hang, so this is reported as a new failure only
 behind a decision (open question 1). One heap, so a value sent through a channel shares its backing
-as in Rust, and the counts agree.
+as in Rust, and the counts agree. A task whose `chan_select_until` times out gives way at its next
+loop turn, so one polling with a zero timeout lets the task it waits for run, as that task's own
+thread would on the Rust interpreter (`selects` and `timeouts` then agree).
 
 Rejected: running interpreted tasks on Nazm tasks. 0.10.0 lets nothing but channels, atomics and
 immutable values cross `spawn`, so each task would need its own heap and every channel message an
@@ -230,6 +232,21 @@ To the coordinator — none blocks slices 2 and 3:
 2. **`nazm run --interpret`** is not on `main`; the suite compares with plain `nazm run`, which is the
    interpreter in 0.10.0. *Answered (R1.5 D11): the suite uses `--interpret` where the reference
    has it.*
+
+## Differences that remain
+
+`run.sh --rust-tests` (1,783 programs, 925 that check; 2,083 comparisons) leaves 15, none the
+interpreter's to remove:
+
+- **Different on every run of the Rust interpreter too:** process and group ids
+  (`platform_files-18`, `-20`, `process_control-2`, `-3`, `-11`), a span's nanoseconds
+  (`stdlib-12`), the order 32 threads finish in (`scheduler_default-5`).
+- **Timing:** `process-1`'s memory report counts one string per read of a child's pipe, and how
+  much a read finds depends on when it runs.
+- **The comparison itself:** `process-2` lists its environment, and the Rust run's has the three
+  report variables, which this interpreter takes as flags.
+- **Speed:** `collections_r1e-2` (300,000 ordered-map inserts) takes about 38 s on the Rust
+  interpreter and 63 s here, past the 60 s bound; under the default 300 s it agrees.
 
 ## Risks / Trade-offs
 
