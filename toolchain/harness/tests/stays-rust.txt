@@ -64,3 +64,7 @@ fuzz_replay::the_front_end_corpus_replays_without_a_panic  stage R2-R3 replace
 fuzz_replay::the_lowering_corpus_replays_and_its_mir_verifies  stage R2-R3 replace
 fuzz_replay::the_interpreter_corpus_replays_within_its_budgets  stage R2-R3 replace
 fuzz_replay::the_manifest_corpus_replays_without_a_panic  library entry
+ffi::a_reserved_c_symbol_is_every_one_the_runtime_calls  LLVM text not written
+runtime::the_runtime_s_services_keep_their_contract_when_called_directly  LLVM text not written
+runtime::root_capabilities_come_from_the_entry_alone  table not printed
+runtime::every_targets_os_unit_is_llvm_its_toolchain_compiles  LLVM text not written

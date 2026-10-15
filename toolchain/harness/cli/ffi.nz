@@ -1,0 +1,398 @@
+// N42: foreign functions — the C boundary. A Nazm program calls C functions compiled by clang,
+// `Int` and `Bool` crossing by the C convention, under both backends, with identical results and
+// a balanced memory report; every declaration outside the v1 subset is refused by its own code; a
+// foreign call needs a `ForeignCap` wherever it is made; `nazm run` refuses such a program before
+// running any of it; the linker is handed exactly what `--link` names; the C symbol enters the
+// object's key. Ported from `crates/nazm-cli/tests/ffi.rs` (R7);
+// `a_reserved_c_symbol_is_every_one_the_runtime_calls` reads the runtime's LLVM text and the
+// compiler's symbol tables as a library, and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The C side of every test: `int64_t` and `bool`, by value, in registers and on the stack.
+const C: Str = "\n#include <stdalign.h>\n#include <stdbool.h>\n#include <stdint.h>\n/* The layout the boundary table promises, checked by the C compiler on this target. */\n_Static_assert(sizeof(int64_t) == 8 && alignof(int64_t) == 8, \"Int is int64_t\");\n_Static_assert(sizeof(bool) == 1 && alignof(bool) == 1, \"Bool is a one-byte bool\");\nint64_t c_add(int64_t a, int64_t b) { return a + b; }\nint64_t c_neg(int64_t a) { return -a; }\nbool c_is_even(int64_t n) { return (n % 2) == 0; }\nbool c_not(bool b) { return !b; }\nint64_t c_bool_to_int(bool b) { return b ? 1 : 0; }\nint64_t c_sum9(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f,\n               int64_t g, int64_t h, int64_t i) {\n    return a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i;\n}\nbool c_mixed(int64_t a, bool b, int64_t c, bool d) { return (a + c > 0) == (b && !d); }\nint64_t c_one(void) { return 1; }\nint64_t c_two(void) { return 2; }\nstatic int64_t counter = 0;\nint64_t c_tick(void) { return ++counter; }\n";
+
+/// A directory holding `files` (name, text, …).
+fn dir_of(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn files1(name: Str, text: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, name);
+    strs_push(f, text);
+    f
+}
+
+/// The C fixture, compiled by clang to an object in `d`.
+fn object(h: Caps, d: Str) -> Result[Str, Str] ! { io, spawn } {
+    scratch_write(h, d, "fixture.c", C)?;
+    let a = words("-c -O1");
+    strs_push(a, f"{d}/fixture.c");
+    strs_push(a, "-o");
+    strs_push(a, f"{d}/fixture.o");
+    let r = run(h, "clang", a, d, env_here(h.io));
+    check_that(r.code == 0, r.stderr)?;
+    Result[Str, Str].Ok(value: f"{d}/fixture.o")
+}
+
+/// Every `nazm.diagnostic/1` on stderr, by code.
+fn codes_in(o: Ran) -> Strs ! {} {
+    let out = strs_new();
+    for l in text_lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v) => {
+                if jstr(v, "code") != "" {
+                    strs_push(out, jstr(v, "code"));
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    out
+}
+
+/// Build `prog.nz` in `d` against the fixture with `backend` and run it, with the memory report.
+fn built(h: Caps, d: Str, backend: Str, extra: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let obj = object(h, d)?;
+    let exe = f"{d}/prog-{backend}";
+    let a = words(f"build --backend {backend} --link");
+    strs_push(a, obj);
+    for x in words(extra) {
+        strs_push(a, x);
+    }
+    strs_push(a, "prog.nz");
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    let b = nazm(h, d, a);
+    check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+    Result[Ran, Str].Ok(value: bounded_exe(h, exe, "", env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1")))
+}
+
+/// Both backends, with the memory report: they must agree, exactly.
+fn both(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = dir_of(h, files1("prog.nz", src))?;
+    let l = built(h, d, "llvm", "--no-cache")?;
+    let c = built(h, d, "cranelift", "--no-cache")?;
+    scratch_remove(h, d);
+    check_that(c.code == l.code && c.stdout == l.stdout && c.stderr == l.stderr, f"Cranelift and LLVM disagree: {ran_show(c)} {ran_show(l)}")?;
+    Result[Ran, Str].Ok(value: l)
+}
+
+const DECLS: Str = "\nextern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\nextern \"C\" fn c_neg(a: Int) -> Int = \"c_neg\";\nextern \"C\" fn c_is_even(n: Int) -> Bool = \"c_is_even\";\nextern \"C\" fn c_not(b: Bool) -> Bool = \"c_not\";\nextern \"C\" fn c_bool_to_int(b: Bool) -> Int = \"c_bool_to_int\";\nextern \"C\" fn c_sum9(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int) -> Int = \"c_sum9\";\nextern \"C\" fn c_mixed(a: Int, b: Bool, c: Int, d: Bool) -> Bool = \"c_mixed\";\nextern \"C\" fn c_tick() -> Int = \"c_tick\";\n";
+
+fn with_decls(body: Str) -> Str ! {} {
+    f"{DECLS}{body}"
+}
+
+fn say(n: Str) -> Str ! {} {
+    f"print(int_to_str({n})); print(\" \");"
+}
+
+@test
+fn a_program_calls_c_with_ints_and_bools_and_both_backends_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let says = strs_new();
+    for n in text_split("c_add(40, 2)|c_add(9223372036854775807, 0)|c_neg(-9223372036854775807)|b(c_is_even(10)) + 2 * b(c_is_even(7))|b(c_not(true)) + 2 * b(c_not(false))|c_bool_to_int(true) + 2 * c_bool_to_int(false)|c_sum9(1, 2, 3, 4, 5, 6, 7, 8, 9)|b(c_mixed(1, true, 1, false)) + 2 * b(c_mixed(-5, true, 1, true))|c_add(c_add(1, 2), c_neg(c_add(3, 4)))|c_tick() + c_tick() * 10|if c_is_even(c_add(1, 1)) { 7 } else { 8 }", "|") {
+        strs_push(says, say(n));
+    }
+    let body = f"fn b(x: Bool) -> Int {{ if x {{ 1 }} else {{ 0 }} }}\nfn main(io: IoCap, f: ForeignCap) -> Int\n{{ {str_join(says, " ")} 0 }}\n";
+    let r = both(h, with_decls(body))?;
+    check_that(r.code == 0, ran_show(r))?;
+    // `main`'s result is printed last.
+    let got = str_join(split_ws(r.stdout), " ");
+    check_that(got == "42 9223372036854775807 9223372036854775807 1 2 1 285 3 -4 21 7 0", r.stdout)
+}
+
+fn split_ws(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    for w in text_split(text_replace(text_replace(s, "\n", " "), "\t", " "), " ") {
+        if w != "" {
+            strs_push(out, w);
+        }
+    }
+    out
+}
+
+@test
+fn a_foreign_call_inside_managed_code_leaks_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Strings and sequences live across foreign calls, and a failure after one unwinds.
+    let body = "fn main(io: IoCap, f: ForeignCap) -> Int\n{ let s = int_to_str(c_add(1, 2)); let v = ints_new(); ints_push(v, c_neg(5)); ints_push(v, c_add(ints_get(v, 0), 10)); print(s); print(int_to_str(ints_get(v, 1))); let t = str_concat(s, int_to_str(c_tick())); print(t); ints_get(v, c_add(5, 0)) }\n";
+    let r = both(h, with_decls(body))?;
+    check_that(r.stdout == "3531", ran_show(r))?;
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0405"), r.stderr)?;
+    let report = memory_line(r);
+    check_that(report != "", r.stderr)?;
+    // Sequences, strings, channels and — since N50 — closure objects.
+    check_that(text_count(report, "live=0") == 4, f"everything reclaimed: {report}")
+}
+
+@test
+fn a_foreign_function_declared_in_one_module_is_called_from_another(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = files1("lib.nz", "pub extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\npub fn twice(f: ForeignCap, n: Int) -> Int ! { foreign }\n{ c_add(n, n) }\n");
+    strs_push(f, "prog.nz");
+    strs_push(f, "use \"lib.nz\";\nextern \"C\" fn add(a: Int, b: Int) -> Int = \"c_add\";\nfn main(io: IoCap, f: ForeignCap) -> Int\n{ print(int_to_str(twice(f, 21) + add(0, 1))); 0 }\n");
+    let d = dir_of(h, f)?;
+    for backend in words("llvm cranelift") {
+        let r = built(h, d, backend, "")?;
+        check_that(r.stdout == "430\n", f"{backend}: {ran_show(r)}")?;
+    }
+    // The cache holds the interface with its foreign export: a second build reuses it and links
+    // the same program.
+    let r = built(h, d, "cranelift", "")?;
+    scratch_remove(h, d);
+    check_that(r.stdout == "430\n", ran_show(r))
+}
+
+fn c_codes(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = dir_of(h, files1("prog.nz", src))?;
+    let o = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, f"check accepted:\n{src}")?;
+    Result[Strs, Str].Ok(value: codes_in(o))
+}
+
+@test
+fn every_declaration_outside_the_subset_is_refused_by_its_own_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "fn main(f: ForeignCap) -> Int { 0 }\n";
+    let decls = strs_new();
+    let wants = strs_new();
+    strs_push(decls, "extern \"Rust\" fn a(x: Int) -> Int = \"a\";");
+    strs_push(wants, "N0380");
+    strs_push(decls, "extern \"c\" fn a(x: Int) -> Int = \"a\";");
+    strs_push(wants, "N0380");
+    strs_push(decls, "extern \"C\" fn a(x: Ints) -> Int = \"a\";");
+    strs_push(wants, "N0381");
+    // A `Str` result crosses since N85, copied; a sequence result never does.
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Strs = \"a\";");
+    strs_push(wants, "N0381");
+    strs_push(decls, "extern \"C\" fn a(x: Ints) -> Int = \"a\";");
+    strs_push(wants, "N0381");
+    strs_push(decls, "extern \"C\" fn a(x: ForeignCap) -> Int = \"a\";");
+    strs_push(wants, "N0381");
+    strs_push(decls, "struct P { x: Int }\nextern \"C\" fn a(p: P) -> Int = \"a\";");
+    strs_push(wants, "N0381");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"1a\";");
+    strs_push(wants, "N0382");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"a.b\";");
+    strs_push(wants, "N0382");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"\";");
+    strs_push(wants, "N0382");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"malloc\";");
+    strs_push(wants, "N0383");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"main\";");
+    strs_push(wants, "N0383");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int = \"f\";\nextern \"C\" fn b(x: Bool) -> Int = \"f\";");
+    strs_push(wants, "N0383");
+    strs_push(decls, "extern \"C\" fn a[T](x: Int) -> Int = \"a\";");
+    strs_push(wants, "N0384");
+    strs_push(decls, "extern \"C\" fn a(x: Int) -> Int ! { io } = \"a\";");
+    strs_push(wants, "N0384");
+    let mut k = 0;
+    while k < strs_len(decls) {
+        let decl = strs_get(decls, k);
+        let want = strs_get(wants, k);
+        let got = c_codes(h, f"{decl}\n{main}")?;
+        check_that(strs_has(got, want), f"`{decl}`: wanted {want}, got {str_join(got, ", ")}")?;
+        k = k + 1;
+    }
+    // The same symbol declared twice the same way is one C function, and fine.
+    let d = dir_of(h, files1("prog.nz", "extern \"C\" fn a(x: Int) -> Int = \"f\";\nextern \"C\" fn b(y: Int) -> Int = \"f\";\nfn main() -> Int { 0 }\n"))?;
+    let o = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+@test
+fn two_modules_that_disagree_about_a_symbol_are_refused_before_linking(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = files1("lib.nz", "extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\npub fn one(f: ForeignCap) -> Int ! { foreign }\n{ c_add(1, 0) }\n");
+    strs_push(f, "prog.nz");
+    strs_push(f, "use \"lib.nz\";\nextern \"C\" fn wrong(a: Int) -> Bool = \"c_add\";\nfn main(f: ForeignCap) -> Int\n{ if wrong(1) { one(f) } else { 0 } }\n");
+    let d = dir_of(h, f)?;
+    let obj = object(h, d)?;
+    let a = words("build --json --link");
+    strs_push(a, obj);
+    for x in words("prog.nz -o x") {
+        strs_push(a, x);
+    }
+    let o = nazm(h, d, a);
+    let wrote = file_exists(f"{d}/x");
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(str_join(codes_in(o), ",") == "N0383", o.stderr)?;
+    check_that(!wrote, "x was written")
+}
+
+@test
+fn a_foreign_call_needs_a_foreign_cap_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Without an effect set, too: N37's bridge does not reach C.
+    let plain = f"{DECLS}fn g(n: Int) -> Int\n{{ c_add(n, 1) }}\nfn main(f: ForeignCap) -> Int {{ g(1) }}\n";
+    check_that(strs_has(c_codes(h, plain)?, "N0369"), "N0369")?;
+    // With a declared set that leaves `foreign` out, the effect is missing too.
+    let typed = f"{DECLS}fn g(f: ForeignCap, n: Int) -> Int ! {{}}\n{{ c_add(n, 1) }}\nfn main(f: ForeignCap) -> Int {{ g(f, 1) }}\n";
+    check_that(strs_has(c_codes(h, typed)?, "N0366"), "N0366")?;
+    // Held and declared: accepted.
+    let good = f"{DECLS}fn g(f: ForeignCap, n: Int) -> Int ! {{ foreign }}\n{{ c_add(n, 1) }}\nfn main(f: ForeignCap) -> Int {{ g(f, 1) }}\n";
+    let d = dir_of(h, files1("prog.nz", good))?;
+    let o = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+@test
+fn an_imported_foreign_function_needs_a_foreign_cap_too(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The importer sees only `lib.nz`'s interface, and it must say the export is C's.
+    let lib = "pub extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\n";
+    let f = files1("lib.nz", lib);
+    strs_push(f, "prog.nz");
+    strs_push(f, "use \"lib.nz\";\nfn g(n: Int) -> Int\n{ c_add(n, 1) }\nfn main(f: ForeignCap) -> Int { g(1) }\n");
+    let d = dir_of(h, f)?;
+    for cache in text_split("check --json --no-cache prog.nz|check --json prog.nz|check --json prog.nz", "|") {
+        let o = nazm(h, d, words(cache));
+        check_that(o.code != 0, cache)?;
+        check_that(strs_has(codes_in(o), "N0369"), f"{cache}: {o.stderr}")?;
+    }
+    // An edit to the importer re-checks it against `lib.nz`'s interface as the store holds it.
+    scratch_write(h, d, "prog.nz", "use \"lib.nz\";\nfn g(n: Int) -> Int\n{ c_add(n, 2) }\nfn main(f: ForeignCap) -> Int { g(1) }\n")?;
+    let o = nazm(h, d, words("check --json prog.nz"));
+    check_that(strs_has(codes_in(o), "N0369"), o.stderr)?;
+    // The published interface names the symbol.
+    let i = nazm(h, d, words("interface lib.nz"));
+    scratch_remove(h, d);
+    check_that(text_contains(i.stdout, "\"effects\":[\"foreign\"],\"foreign\":\"c_add\""), i.stdout)?;
+    let g = files1("lib.nz", lib);
+    strs_push(g, "prog.nz");
+    strs_push(g, "use \"lib.nz\";\nfn main(io: IoCap, f: ForeignCap) -> Int\n{ print(int_to_str(c_add(20, 22))); 0 }\n");
+    let e = dir_of(h, g)?;
+    for backend in words("llvm cranelift") {
+        let r = built(h, e, backend, "")?;
+        check_that(r.stdout == "420\n", f"{backend}: {ran_show(r)}")?;
+    }
+    scratch_remove(h, e);
+    ok()
+}
+
+fn c_src(effects: Str) -> Str ! {} {
+    f"extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\nfn save(io: IoCap, f: ForeignCap) -> Int{effects}\n{{ write_file(int_to_str(c_add(1, 2)), \"x\") }}\nfn main(io: IoCap, f: ForeignCap) -> Int {{ save(io, f) }}\n"
+}
+
+@test
+fn what_c_returns_carries_the_unknown_origin(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A path computed from a C result is not one a restricted function may write to.
+    let d = dir_of(h, files1("prog.nz", c_src(" ! { io, foreign }")))?;
+    let o = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(str_join(codes_in(o), ",") == "N0372", o.stderr)?;
+    check_that(text_contains(o.stderr, "is a foreign function"), o.stderr)?;
+    // A function with no effect set is not restricted (N38); a path that does not come from C is
+    // fine.
+    let e = dir_of(h, files1("prog.nz", c_src("")))?;
+    let o2 = nazm(h, e, words("check prog.nz"));
+    scratch_remove(h, e);
+    check_that(o2.code == 0, o2.stderr)?;
+    let good = "extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\nfn save(io: IoCap, f: ForeignCap) -> Int ! { io, foreign }\n{ c_add(1, 2); write_file(\"out\", \"x\") }\nfn main(io: IoCap, f: ForeignCap) -> Int { save(io, f) }\n";
+    let g = dir_of(h, files1("prog.nz", good))?;
+    let o3 = nazm(h, g, words("check prog.nz"));
+    scratch_remove(h, g);
+    check_that(o3.code == 0, o3.stderr)
+}
+
+@test
+fn a_task_calls_c_on_its_own_thread(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\nfn worker(f: ForeignCap, c: Chan, n: Int) -> Int\n{ chan_send(c, c_add(n, 1)); 0 }\nfn main(io: IoCap, t: SpawnCap, f: ForeignCap) -> Int\n{ let c = chan_new(4); let buf = ints_new(); scope { spawn worker(f, c, 10); spawn worker(f, c, 20); } chan_recv(c, buf); chan_recv(c, buf); print(int_to_str(ints_get(buf, 0) + ints_get(buf, 1))); 0 }\n";
+    let r = both(h, src)?;
+    check_that(r.stdout == "320\n", ran_show(r))
+}
+
+@test
+fn nazm_run_refuses_a_foreign_call_before_running_anything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = with_decls("fn main(io: IoCap, f: ForeignCap) -> Int\n{ print(\"started\"); print(int_to_str(c_add(1, 2))); 0 }\n");
+    let d = dir_of(h, files1("prog.nz", src))?;
+    let o = nazm(h, d, words("run --interpret --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(str_join(codes_in(o), ",") == "N0385", o.stderr)?;
+    check_that(o.stdout == "", "nothing ran")?;
+    // A program that only declares one runs.
+    let e = dir_of(h, files1("prog.nz", with_decls("fn main() -> Int { 3 }\n")))?;
+    let o2 = nazm(h, e, words("run --interpret prog.nz"));
+    scratch_remove(h, e);
+    check_that(o2.code == 0, o2.stderr)
+}
+
+@test
+fn the_linker_is_handed_exactly_what_link_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = with_decls("fn main(io: IoCap, f: ForeignCap) -> Int\n{ print(int_to_str(c_add(1, 2))); 0 }\n");
+    let d = dir_of(h, files1("prog.nz", src))?;
+    // A file that is not there is refused before anything is compiled.
+    let o = nazm(h, d, words("build --link missing.o prog.nz -o x"));
+    check_that(o.code == 3, ran_show(o))?;
+    check_that(text_contains(o.stderr, "`--link missing.o`: no such file"), f"refused by nazm, not by the linker: {o.stderr}")?;
+    check_that(!file_exists(f"{d}/x"), "x was written")?;
+    // No `--link` at all: the linker cannot resolve the symbol, and the message says that the
+    // user's definition is what is missing — not that the compiler is broken.
+    for backend in words("llvm cranelift") {
+        let b = nazm(h, d, words(f"build --backend {backend} prog.nz -o x"));
+        check_that(b.code == 4, backend)?;
+        check_that(text_contains(b.stderr, "`c_add`") && text_contains(b.stderr, "--link"), f"{backend}: {b.stderr}")?;
+        check_that(!text_contains(b.stderr, "bug in"), f"{backend}: {b.stderr}")?;
+        check_that(!file_exists(f"{d}/x"), "x was written")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+fn sym_src(sym: Str) -> Str ! {} {
+    f"extern \"C\" fn k() -> Int = \"{sym}\";\nfn main(io: IoCap, f: ForeignCap) -> Int\n{{ k() }}\n"
+}
+
+@test
+fn the_c_symbol_enters_the_object_key(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two C functions with one signature: a declaration that changes only its symbol must not
+    // reuse the object built for the other.
+    let d = dir_of(h, files1("prog.nz", sym_src("c_one")))?;
+    for backend in words("cranelift llvm") {
+        scratch_write(h, d, "prog.nz", sym_src("c_one"))?;
+        let one = built(h, d, backend, "")?;
+        check_that(one.stdout == "1\n", f"{backend}: {ran_show(one)}")?;
+        scratch_write(h, d, "prog.nz", sym_src("c_two"))?;
+        let two = built(h, d, backend, "")?;
+        check_that(two.stdout == "2\n", f"{backend}: {ran_show(two)}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn mir_names_the_foreign_symbol_and_has_no_body_for_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = dir_of(h, files1("prog.nz", with_decls("fn main(f: ForeignCap) -> Int { c_add(1, 2) }\n")))?;
+    let o = nazm(h, d, words("mir prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    check_that(text_contains(o.stdout, "\"foreign\": \"c_add\""), o.stdout)
+}
