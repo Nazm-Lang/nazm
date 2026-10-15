@@ -390,7 +390,10 @@ use crate::digest::{self, Framed};
 /// accepted.
 /// `87` — R1.5, 2026-10-15. A line break separates two `match` arms (4.6): an arm ending at a
 /// line break with no `,` before the next moved from refused (`N0100`) to accepted.
-pub const SEMANTIC_EPOCH: u32 = 87;
+/// `88` — R5 fixes, 2026-10-16. A pattern `let` binds in the scope it is written in: `let (a, b) =
+/// e;` after another binding of `a` in that scope, by either kind of `let`, moved from accepted to
+/// refused (`N0202`), as `let a` twice already was.
+pub const SEMANTIC_EPOCH: u32 = 88;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

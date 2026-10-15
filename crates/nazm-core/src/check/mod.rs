@@ -129,15 +129,23 @@ fn forged(k: nazm_sema::CapabilityKind, at: Span) -> Diagnostic {
 #[derive(Debug, Default)]
 struct Scopes {
     frames: Vec<HashMap<String, Binding>>,
+    /// Per frame: whether it continues the frame outside it, as far as shadowing goes. A
+    /// pattern `let` (`let (a, b) = e; rest`) is read as a `match` whose one arm binds the
+    /// pattern's names and holds the rest of the block, so the arm and the rest are frames of
+    /// their own — but to a reader they are the block the `let` is written in, and a name bound
+    /// there twice is the same-scope shadowing `docs/spec.md` refuses.
+    joined: Vec<bool>,
 }
 
 impl Scopes {
-    fn push(&mut self) {
+    fn push(&mut self, joined: bool) {
         self.frames.push(HashMap::new());
+        self.joined.push(joined);
     }
 
     fn pop(&mut self) {
         self.frames.pop();
+        self.joined.pop();
     }
 
     fn lookup(&self, name: &str) -> Option<Binding> {
@@ -184,7 +192,24 @@ impl Scopes {
     /// Only the innermost: an inner scope may shadow an outer one, because there the
     /// reader can see the boundary. Two `let`s of the same name side by side is what
     /// makes a later mention ambiguous. See `docs/spec.md`.
+    ///
+    /// The innermost scope is a frame and every frame it continues ([`Self::joined`]): the
+    /// block a pattern `let` is written in, its arm and the rest of the block are one scope.
     fn defined_here(&self, name: &str) -> bool {
+        for (f, joined) in self.frames.iter().zip(&self.joined).rev() {
+            if f.contains_key(name) {
+                return true;
+            }
+            if !joined {
+                return false;
+            }
+        }
+        false
+    }
+
+    /// Whether the name is bound in the innermost frame itself: by an earlier part of the
+    /// pattern being bound there.
+    fn bound_in_frame(&self, name: &str) -> bool {
         self.frames.last().is_some_and(|f| f.contains_key(name))
     }
 
@@ -465,6 +490,9 @@ pub struct Checker<'a> {
     /// produces nothing (R1, 5b.19); a call there may be of a function that returns nothing
     /// (R1, 5b.2).
     unwanted: bool,
+    /// Whether the next block checked is the rest of a block after a pattern `let`, whose
+    /// scope continues the `let`'s ([`Scopes::joined`]). Taken by that block.
+    join_block: bool,
     /// Expressions checked already, with their types, that a desugaring is about to check again
     /// as the arguments of the call it is read as: `s + t` as `str_concat(s, t)`, `x.m()` as
     /// `<type>_m(x)`, `xs[i]` as `vec_get(xs, i)`. Each is taken by the first check that meets
