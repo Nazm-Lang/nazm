@@ -7,6 +7,9 @@
 #     toolchain/codegen/tests/perf.sh            (NZCG_TARGET as tests/run.sh reads it)
 set -u
 NAZM=${NAZM:-$HOME/.local/nazm-0.10.0/bin/nazm}
+# The reference: the Rust `nazm` built from this checkout (rebuild it when library/, crates/ or
+# the runtime change); the 0.10.0 release above only builds the generator.
+REF=${NAZM_REF:-$HOME/.cache/nazm-target-track9/debug/nazm}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 OUT=${NZCG_OUT:-$HERE/out}
@@ -38,16 +41,16 @@ for src in "$ROOT/bench/compare/nazm/fib.nz" "$ROOT/bench/compare/nazm/words.nz"
   rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
   args=()
   [ "$name" = words ] && args=("$P/words.txt")
-  "$NAZM" build --target "$TARGET" "$src" -o "$W/o0" >/dev/null 2>&1 || { echo "$name: no reference"; continue; }
-  "$NAZM" build --target "$TARGET" --opt-level 2 "$src" -o "$W/o2" >/dev/null 2>&1
-  "$NAZM" build --target "$TARGET" --objects "$W/obj" "$src" >/dev/null 2>&1
-  "$NAZM" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>/dev/null
+  "$REF" build --target "$TARGET" "$src" -o "$W/o0" >/dev/null 2>&1 || { echo "$name: no reference"; continue; }
+  "$REF" build --target "$TARGET" --opt-level 2 "$src" -o "$W/o2" >/dev/null 2>&1
+  "$REF" build --target "$TARGET" --objects "$W/obj" "$src" >/dev/null 2>&1
+  "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>/dev/null
   if ! "$NZCG" --target "$TARGET" "$W/lir.txt" "$W/gen" 2>"$W/gen.err"; then
     echo "$name: refused: $(head -1 "$W/gen.err")"; continue
   fi
   k=0; list=()
   for o in $(sed -n 's/^objects //p' "$W/obj/link.txt"); do
-    if [[ $o =~ -m[0-9]+\.o$ ]]; then cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1)); fi
+    if [[ $o =~ -[mg][0-9]+\.o$ ]]; then cp "$W/gen/unit-$k.o" "$W/obj/$o"; k=$((k+1)); fi
     list+=("$W/obj/$o")
   done
   cc -arch "$ARCH" -o "$W/gen.exe" "${list[@]}" $(sed -n 's/^libraries //p' "$W/obj/link.txt") 2>/dev/null

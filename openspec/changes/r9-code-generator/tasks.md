@@ -56,4 +56,19 @@
 - [x] 6.2 The x86-64 encoder and System V convention; Mach-O and ELF
       (`NZCG_TARGET=x86_64-apple-darwin tests/run.sh` runs under Rosetta: 106 agree, 0 differ,
       0 refused)
-- [ ] 6.3 The ELF objects linked and run on a Linux host (the coordinator's, or CI's)
+- [ ] 6.3 The ELF objects linked and run on a Linux host — **deferred until after 1.0**: the
+      copyright holder narrowed every target to macOS before 1.0 (2026-10-15). The ELF writer and
+      `tests/elf.sh` stay as built; no further work on ELF or Linux until then
+
+## 7. On main after R1.5, 3.3 and failures by unwinding (macOS only: aarch64-apple-darwin, x86_64-apple-darwin under Rosetta)
+
+- [x] 7.1 Re-established on main `a23a1fe9`, the reference the Rust `nazm` built from the same
+      checkout (`NAZM_REF`, `CARGO_TARGET_DIR=~/.cache/nazm-target-track9`), the 0.10.0 release
+      only building the generator. Hosted LLVM now unwinds on a failure while the generator keeps
+      the bit (performance-leadership 4.2, answer 3), so a program may no longer mix the two
+      backends' unit objects: the suites replaced only the modules' objects (`NN-mK.o`) and left
+      LLVM's generic instantiations (`NN-gK.o`) in place, which had also meant generic code was
+      never the generator's. Every unit object is now the generator's, and `tests/run.sh` checks
+      that it wrote as many as `link.txt` lists. `tests/run.sh`: 106 agree, 0 differ, 0 refused on
+      aarch64 and on x86_64; `tests/lines.sh` 38 agree on each; `tests/unwind.sh` agrees on each
+      (7 frames); `tests/encode.sh` 113 + 89 agree
