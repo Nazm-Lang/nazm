@@ -28,7 +28,10 @@ pub(super) fn trait_scope(unit: &Unit<'_>, res: &Resolution) -> HashMap<String, 
             if !offered {
                 continue;
             }
-            if d.plain {
+            if d.implicit {
+                // The prelude's standard modules (R1.5, D9) yield to a written import's trait.
+                out.entry(t.name.clone()).or_insert(Some(id));
+            } else if d.plain {
                 out.entry(t.name.clone())
                     .and_modify(|e| {
                         if *e != Some(id) {

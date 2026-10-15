@@ -40,14 +40,14 @@ large boundaries only, not one per stage (`releases/0.9.0.md`).
 | Stage | What | Status |
 | --- | --- | --- |
 | **R1** | The language the rewrite is written in: patterns, tuples, `for`, closures in generics, `defer`, 128-bit integers, serialisation, `@std/regex` and the other libraries, the platform built-ins, and the conveniences for a first program (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`) | **complete**, 2026-10-15; published as **0.10.0** |
-| **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | next |
-| **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | planned |
-| **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | planned |
-| **R4** | The interpreter in Nazm | planned |
+| **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | in progress: D1–D12 and D14 done; D13, D15–D17 and the comparison's re-run open |
+| **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | in progress: the parser agrees on every input; the checker carries generics, `match` and `?` |
+| **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | in progress: MIR and LIR's tables agree with the reference; instruction-level LIR begun |
+| **R4** | The interpreter in Nazm | in progress |
 | **R5** | Every command in Nazm: `fmt`, `check`, `fix`, `test`, `doc`, `init`, `lsp`, the MCP server and the rest | planned |
 | **R6** | Host qualification: the Nazm toolchain builds itself under a bounded heap | planned |
-| **R7** | The harness and the tests in Nazm | planned |
-| **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | planned |
+| **R7** | The harness and the tests in Nazm | in progress |
+| **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | in progress: every program of its suite agrees with LLVM on aarch64 and x86_64 Mach-O |
 | **R8** | Cut-over: the released `nazm` built by Nazm, then the 1.0 release gate | last |
 
 The milestone tables below are the history that led here; the "R1" among them (2026-10-07) is the

@@ -9,6 +9,8 @@
 //! D6 — `[1, 2, 3]` is a list where no fixed array is expected.
 //! D7 — `use std.json`, and `List[T]` the growable list, R1a's sequence `Chain[T]`.
 //! D8 — printing in your own program's functions without passing `out`.
+//! D9 — the prelude's standard modules, imported where a program's module names them.
+//! D10 — `m.top(n)` and `m.sort_by(less)` on maps.
 
 #![allow(
     clippy::unwrap_used,
@@ -289,6 +291,8 @@ fn main(out: OutCap): Int ! {io} {
 
 #[test]
 fn map_without_the_hash_map_names_the_import() {
+    // Since D9 the prelude gives a program's module the hash map when it names `Map`; a
+    // dependency's module imports only what it writes, so there `Map` still names the import.
     let d = tempfile::tempdir().unwrap();
     std::fs::write(
         d.path().join("p.nz"),
@@ -296,6 +300,25 @@ fn map_without_the_hash_map_names_the_import() {
     )
     .unwrap();
     let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    for (rel, text) in [
+        (
+            "lib/nazm.toml",
+            "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n",
+        ),
+        ("lib/src/f.nz", "pub fn f(m: Map[Str, Int]) -> Int { 0 }\n"),
+        (
+            "app/nazm.toml",
+            "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\n\
+             main = \"main.nz\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n",
+        ),
+        ("app/src/main.nz", "use \"lib:f.nz\";\nfn main() { }\n"),
+    ] {
+        let p = d.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    let r = differential::nazm(d.path(), &["check", "app"]);
     assert_ne!(r.code, Some(0), "{r:?}");
     assert!(r.stderr.contains("@std/hashmap"), "{r:?}");
 }
@@ -532,4 +555,115 @@ fn an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not() {
     .unwrap();
     let r = nazm(d.path(), &["check", "p.nz"]);
     assert_eq!(r.code, Some(0), "{r:?}");
+}
+
+#[test]
+fn the_prelude_imports_the_standard_modules_a_program_names_everywhere() {
+    // D9 and D10: no `use` — `split` is `@std/text`'s, `hashmap_new` and `top` `@std/hashmap`'s,
+    // `compare` `@std/ordmap`'s, `sort_by` `@std/sort`'s, and a map literal's `hashmap_single`.
+    differential::agrees(
+        "fn count(text: Str): Map[Str, Int] {
+    let counts = hashmap_new[Str, Int]()
+    for w in text.split(\" \") {
+        if w.len() > 0 { counts[w] += 1 }
+    }
+    counts
+}
+
+fn main() {
+    let counts = count(\"b a c a b a d e e e\")
+    for (w, n) in counts.top(3) { println(f\"{w} {n}\") }
+    println(f\"{counts.top(0).len()} {counts.top(99).len()} {\"x\".compare(\"y\")}\")
+    let mut keys = \"\"
+    for (k, _) in counts.sort_by(|a, b| a.0 < b.0) { keys = keys + k }
+    let m = {\"one\": 1}
+    println(f\"{keys} {m[\"one\"]}\")
+}
+",
+        "a 3\ne 3\nb 2\n0 5 -1\nabcde 1\n0",
+    );
+}
+
+#[test]
+fn a_module_s_own_name_hides_the_prelude_s_and_a_written_use_does_not() {
+    // D9: the module's `text_split` is the one called, with no collision; written, the same
+    // import collides as it always did (`N0208`).
+    differential::agrees(
+        "fn text_split(s: Str, sep: Str): Int = 7
+
+fn main() {
+    println(text_split(\"a b\", \" \"))
+    println(\"a b\".split(\" \"))
+}
+",
+        "7\n7\n0",
+    );
+    let codes = differential::check_codes(&[(
+        "p.nz",
+        "use \"@std/text\"\n\nfn text_split(s: Str, sep: Str): Int = 7\n\nfn main() {\n    println(text_split(\"a b\", \" \"))\n}\n",
+    )]);
+    assert_eq!(codes, ["N0208"]);
+}
+
+#[test]
+fn a_module_that_names_none_of_them_imports_none() {
+    // D9: a restriction profile holds a program to everything it imports, so attaching the
+    // prelude's modules to every module would refuse every embedded program. `v.len()` is a
+    // built-in's, and names none; `s.split` names `@std/text`, which `embedded` refuses.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main(): Int {\n    let v = vec_new[Int]()\n    vec_push(v, 1)\n    v.len()\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "--profile", "embedded", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main(): Int {\n    \"a b\".split(\" \").len()\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "--profile", "embedded", "p.nz"]);
+    assert_ne!(r.code, Some(0), "{r:?}");
+    assert!(r.stderr.contains("@std/text"), "{r:?}");
+}
+
+#[test]
+fn a_package_s_module_imports_only_what_it_writes() {
+    // D9 is the program's: a dependency's module that calls `text_split` with no `use` is
+    // refused there, so what a package reaches stays written in it.
+    let d = tempfile::tempdir().unwrap();
+    for (rel, text) in [
+        (
+            "lib/nazm.toml",
+            "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n",
+        ),
+        (
+            "lib/src/words.nz",
+            "pub fn words(s: Str): Int { text_split(s, \" \").len() }\n",
+        ),
+        (
+            "app/nazm.toml",
+            "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\n\
+             main = \"main.nz\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n",
+        ),
+        (
+            "app/src/main.nz",
+            "use \"lib:words.nz\";\nfn main(): Int { words(\"a b\") + \"c d\".split(\" \").len() }\n",
+        ),
+    ] {
+        let p = d.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    }
+    let r = differential::nazm(d.path(), &["check", "app"]);
+    assert_ne!(r.code, Some(0), "{r:?}");
+    assert!(
+        r.stderr.contains("N0201") && r.stderr.contains("words.nz"),
+        "the package's call is refused in its own module: {r:?}"
+    );
+    assert!(
+        !r.stderr.contains("main.nz"),
+        "and the program's `split` is not: {r:?}"
+    );
 }

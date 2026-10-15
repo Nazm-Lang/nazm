@@ -941,6 +941,14 @@ fn environment(
             continue;
         }
         for e in iface.exports() {
+            // The prelude's standard modules (R1.5, D9) yield: to the module's own name, and
+            // to a name a written import brought in, met first.
+            if d.implicit
+                && (res.definition(unit.module, &e.name).is_some()
+                    || brought_in.contains_key(e.name.as_str()))
+            {
+                continue;
+            }
             if let Some(own) = res
                 .definition(unit.module, &e.name)
                 .and_then(|id| res.function(id))

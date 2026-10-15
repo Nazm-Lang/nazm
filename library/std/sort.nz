@@ -6,6 +6,9 @@
 // program that only searches and sums a sequence should not be refused for a sort it never
 // calls.
 
+use "@std/hash";
+use "@std/hashmap";
+
 /// A new vector holding `xs` sorted by `less`, which says whether its first argument sorts before
 /// its second. Stable: elements `less` holds neither way keep their order. A bottom-up merge
 /// sort — at most `n log n` calls of `less` — doing exactly what `less` does, so it is
@@ -35,6 +38,19 @@ pub fn vec_sort_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> 
         width = width * 2;
     }
     src
+}
+
+/// The entries of `m` as `(key, value)` pairs ordered by `less`, which says whether its first
+/// argument sorts before its second (R1.5, D10): `counts.sort_by(|a, b| a.1 > b.1)` is a count's
+/// entries, most first. Stable over the map's table order, and as `vec_sort_by` in its calls of
+/// `less` and its effects. `m` is unchanged.
+pub fn hashmap_sort_by[K: Hash, V, effects E](m: HashMap[K, V], less: fn((K, V), (K, V)) -> Bool ! { E }) -> Vec[(K, V)] ! { E } {
+    let keys = hashmap_keys(m);
+    let values = hashmap_values(m);
+    let entries = vec_new[(K, V)]();
+    let mut i = 0;
+    while i < vec_len(keys) { vec_push(entries, (vec_get(keys, i), vec_get(values, i))); i = i + 1; }
+    vec_sort_by(entries, less)
 }
 
 /// A new sequence holding `xs` in ascending order.

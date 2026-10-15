@@ -8,6 +8,7 @@
 // the keys, their order of insertion and the seed decide — the same in every run.
 
 use "@std/hash";
+use "@std/ordmap";
 
 /// One slot of the table as Gate 2 stored it: never used, used and emptied, or holding an entry.
 /// Kept because the 1.0 interface names it; since R1 (5b.9) the table holds positions instead.
@@ -264,4 +265,44 @@ pub fn hashmap_values[K: Hash, V](m: HashMap[K, V]) -> Vec[V] ! {} {
         i = i + 1;
     }
     out
+}
+
+/// The `n` entries of `m` with the largest values, largest first, a tie ordered by key ascending
+/// (R1.5, D10): `counts.top(10)` is a word count's ten most frequent words. Fewer than `n` when
+/// `m` holds fewer; none when `n` is not positive. Keeps the best `n` seen so far, so it takes
+/// time proportional to the map's size times `n`, and allocates only the result.
+pub fn hashmap_top[K: Ord, V: Ord](m: HashMap[K, V], n: Int) -> Vec[(K, V)] ! {} {
+    let best = vec_new[Int]();
+    let mut i = 0;
+    while i < vec_len(m.slots) {
+        let e = vec_get(m.slots, i);
+        if e >= 0 && n > 0 {
+            // `at` is where `e` belongs among the best so far: after every one before it.
+            let mut at = vec_len(best);
+            while at > 0 && top_before(m, e, vec_get(best, at - 1)) { at = at - 1; }
+            if at < n {
+                if vec_len(best) == n { vec_pop(best); }
+                vec_push(best, e);
+                let mut j = vec_len(best) - 1;
+                while j > at { vec_set(best, j, vec_get(best, j - 1)); j = j - 1; }
+                vec_set(best, at, e);
+            }
+        }
+        i = i + 1;
+    }
+    let out = vec_new[(K, V)]();
+    let mut k = 0;
+    while k < vec_len(best) {
+        let e = vec_get(best, k);
+        vec_push(out, (vec_get(m.keys, e), vec_get(m.values, e)));
+        k = k + 1;
+    }
+    out
+}
+
+// Whether entry `a` of `m` comes before entry `b` in `hashmap_top`'s order: a larger value first,
+// and of equal values the smaller key.
+fn top_before[K: Ord, V: Ord](m: HashMap[K, V], a: Int, b: Int) -> Bool ! {} {
+    let c = vec_get(m.values, a).compare(vec_get(m.values, b));
+    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) < 0)
 }
