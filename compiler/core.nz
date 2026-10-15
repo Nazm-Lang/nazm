@@ -1252,8 +1252,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
         if lt != ck_t_str() { return co_stopped(lo, "a string literal of a type other than `Str`"); }
         let v = sx_text(t, sx_field(t, e, "value"));
-        if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
-        let id = co_constant(lo, "Str", json_str(v));
+        let id = co_constant(lo, "Str", co_str_value(v));
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
     }
     if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
@@ -1528,8 +1527,7 @@ fn co_interp(lo: Lo, e: Int) -> Str {
 
 // A `Str` constant at `span`.
 fn co_str_const(lo: Lo, v: Str, span: Int) -> Str {
-    if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
-    let id = co_constant(lo, "Str", json_str(v));
+    let id = co_constant(lo, "Str", co_str_value(v));
     co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span)
 }
 
@@ -2464,8 +2462,7 @@ fn co_const_use(lo: Lo, u: Int, name: Str, span: Int) -> Str {
     }
     if class == "str" {
         let v = ck_const_text(c, u);
-        if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
-        id = co_constant(lo, "Str", json_str(v));
+        id = co_constant(lo, "Str", co_str_value(v));
     }
     if class == "integer" { id = co_constant(lo, co_durable(lo, ty), json_str(ck_const_text(c, u))); }
     if id < 0 { return co_stopped(lo, "a constant of a type not carried yet"); }
@@ -2616,15 +2613,63 @@ fn co_special_builtin(name: Str) -> Bool {
     false
 }
 
-// Whether a literal's text is printed as it is: printable ASCII, tab and line break, and no `\x`.
-fn co_plain_text(s: Str) -> Bool {
+// A `Str` constant's printed value (`text`, then `quote`): its text where it is UTF-8 holding no
+// `\x`, else `\xNN` for every byte.
+fn co_str_value(v: Str) -> Str {
+    if co_utf8(v) && co_contains(v, str_concat(str_from_byte(92), "x")) == false { return cdg_quote(v); }
+    let digits = "0123456789abcdef";
+    let out = strs_new();
     let mut i = 0;
-    while i < str_len(s) {
-        let b = str_byte(s, i);
-        if b >= 127 { return false; }
-        if b < 32 && b != 9 && b != 10 && b != 13 { return false; }
-        if b == 92 && i + 1 < str_len(s) && str_byte(s, i + 1) == 120 { return false; }
+    while i < str_len(v) {
+        let b = str_byte(v, i);
+        strs_push(out, str_concat(str_concat(str_from_byte(92), "x"), str_concat(str_slice(digits, b / 16, b / 16 + 1), str_slice(digits, b % 16, b % 16 + 1))));
         i = i + 1;
+    }
+    cdg_quote(str_join(out, ""))
+}
+
+// Whether `s` is UTF-8 as Rust's `str::from_utf8` holds it (`load.nz`'s `valid_utf8`).
+fn co_utf8(s: Str) -> Bool {
+    let n = str_len(s);
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, i);
+        let mut more = 0;
+        let mut lo = 128;
+        let mut hi = 191;
+        if b >= 128 {
+            if b >= 194 && b <= 223 {
+                more = 1;
+            } else {
+                if b >= 224 && b <= 239 {
+                    more = 2;
+                    if b == 224 { lo = 160; }
+                    if b == 237 { hi = 159; }
+                } else {
+                    if b >= 240 && b <= 244 {
+                        more = 3;
+                        if b == 240 { lo = 144; }
+                        if b == 244 { hi = 143; }
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+        let mut k = 1;
+        while k <= more {
+            if i + k >= n { return false; }
+            let x = str_byte(s, i + k);
+            let mut low = 128;
+            let mut high = 191;
+            if k == 1 {
+                low = lo;
+                high = hi;
+            }
+            if x < low || x > high { return false; }
+            k = k + 1;
+        }
+        i = i + 1 + more;
     }
     true
 }
