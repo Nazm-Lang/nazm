@@ -7,14 +7,15 @@
 // command that does not exist (with the similar one `strsim::jaro` finds above 0.7), and the help
 // on standard error with status 5 when no command is named. Help and the version are standard output
 // and status 0; a usage error is standard error and status 5 (`main.rs`, `parse_cli`). Then the
-// command: `fmt`, `init`, `check` and `doc` are carried (`fmt.nz`, `init.nz`, `check.nz`,
-// `doc.nz`), every other says it is not carried and exits 6.
+// command: `fmt`, `init`, `check`, `doc` and `fix` are carried (`fmt.nz`, `init.nz`, `check.nz`,
+// `doc.nz`, `fix.nz`), every other says it is not carried and exits 6.
 
 use "cli.nz"
 use "fmt.nz"
 use "init.nz"
 use "check.nz"
 use "doc.nz"
+use "fix.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -219,6 +220,7 @@ fn command_cli(name: Str) -> Cli {
     if name == "init" { return init_cli() }
     if name == "check" { return check_cli() }
     if name == "doc" { return doc_cli() }
+    if name == "fix" { return fix_cli() }
     cli_command("", "", "")
 }
 
@@ -299,6 +301,7 @@ fn main(io: IoCap) -> Int {
     if s == "fmt" { return fmt_command(io, c) }
     if s == "init" { return init_command(io, c) }
     if s == "doc" { return doc_command(io, c) }
+    if s == "fix" { return fix_command(io, c) }
     check_command(io, c)
 }
 

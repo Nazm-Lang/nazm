@@ -1,0 +1,391 @@
+// `nazm fix`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D14).
+//
+// `nazm fix [--apply] [--json] FILE`, run by the dispatcher (`nazm.nz`).
+//
+// A port of `crates/nazm-cli/src/fix.rs` over R2's front end (`compiler/facts.nz`'s `fx_check`, as
+// `check_map` checks a program): every fix of every error, resolved to the file and the bytes it
+// edits; with `--apply`, the automatic ones written right to left, an overlapping, stale or
+// unparsable one skipped with the reference's reason; each edit reported (text, or one
+// `nazm.fix/1` line with `--json`), then the summary and the status of a fresh check.
+//
+// Where the front end stops, or a fix's span could lie in either of two files, the command says so
+// and exits 6 before writing anything (design D5).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm fix`.
+pub fn fix_cli() -> Cli {
+    let c = cli_command("fix", "Apply the repairs the compiler already knows about",
+            "Apply the repairs the compiler already knows about." + nl() + nl()
+            + "Only fixes marked `automatic` are applied; one marked `needs_review` is printed with the condition under "
+            + "which it is right and left for a person. Nothing is written without `--apply`.")
+    cli_positional(c, "FILE", true, false, true, "", "")
+    cli_flag(c, "", "apply", "Write the edits. Without this the command reports and changes nothing", "")
+    cli_flag(c, "", "json", "One JSON object per edit, on stdout. See `docs/diagnostics.md`", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("fix: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// The edits, in the order the diagnostics and their fixes come.
+struct Edits {
+    code: Strs,
+    file: Strs,
+    start: Ints,
+    end: Ints,
+    replacement: Strs,
+    description: Strs,
+    applicability: Strs,
+    precondition: Strs,
+    expected: Strs,
+    applied: Ints,
+    // "" for none.
+    skipped: Strs,
+}
+
+// The compilation rooted at `file`, checked as `check_map` checks it: the facts, or the status its
+// loading failed with, after the loader's diagnostics (`opened`).
+fn checked(io: IoCap, file: Str, prefix: Str, library: Str, json: Bool) -> Facts {
+    let f = fx_check(prefix + file, library, fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" {
+        let why = fx_refusal(f)
+        eprint("nazm: " + why + nl())
+        exit_with(if fe_starts(why, "could not read") { 3 } else { 1 })
+    }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    let d = fx_diags(f)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
+    if fe_load_failed(f) {
+        let names = fe_names(f, prefix)
+        let texts = fe_texts(f)
+        let bases = fe_bases(f)
+        let out = strs_new()
+        let mut missing = true
+        for i in 0..dg_len(d) {
+            if strs_get(d.code, i) != "N0205" { missing = false }
+            if json { strs_push(out, dg_json(d, i) + nl()) } else { strs_push(out, dg_render(d, i, names, texts, bases)) }
+        }
+        eprint(str_join(out, ""))
+        exit_with(if missing { 3 } else { 1 })
+    }
+    f
+}
+
+fn errors(f: Facts) -> Int {
+    let d = fx_diags(f)
+    let mut n = 0
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" { n += 1 }
+    }
+    n
+}
+
+// `collect`: every fix of every error, resolved to the file it edits.
+fn collect(io: IoCap, f: Facts, names: Strs) -> Edits {
+    let e = Edits(code: strs_new(), file: strs_new(), start: ints_new(), end: ints_new(), replacement: strs_new(), description: strs_new(),
+            applicability: strs_new(), precondition: strs_new(), expected: strs_new(), applied: ints_new(), skipped: strs_new())
+    let d = fx_diags(f)
+    let n = fx_modules(f)
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) != "error" { continue }
+        let ff = ints_get(d.fix_first, i)
+        for k in 0..ints_get(d.fix_count, i) {
+            let s = ints_get(d.fix_start, ff + k)
+            let t = ints_get(d.fix_end, ff + k)
+            let mut file = ints_get(d.file, i)
+            if file < 0 {
+                for m in 0..n {
+                    if fx_module_base(f, m) <= s { file = m }
+                    if m > 0 && fx_module_base(f, m) == s { refuse(io, "a fix at the boundary of two files") }
+                }
+            }
+            if file < 0 { file = 0 }
+            let base = fx_module_base(f, file)
+            let text = fx_module_text(f, file)
+            let mut expected = ""
+            if s - base >= 0 && t - base <= str_len(text) && s <= t { expected = str_slice(text, s - base, t - base) }
+            strs_push(e.code, strs_get(d.code, i))
+            strs_push(e.file, strs_get(names, file))
+            ints_push(e.start, s - base)
+            ints_push(e.end, t - base)
+            strs_push(e.replacement, strs_get(d.fix_replacement, ff + k))
+            strs_push(e.description, strs_get(d.fix_description, ff + k))
+            let a = strs_get(d.fix_applicability, ff + k)
+            strs_push(e.applicability, a)
+            strs_push(e.precondition, strs_get(d.fix_precondition, ff + k))
+            strs_push(e.expected, expected)
+            ints_push(e.applied, 0)
+            strs_push(e.skipped, if a == "needs_review" { "it needs review" } else { "" })
+        }
+    }
+    e
+}
+
+fn is_boundary(s: Str, at: Int) -> Bool {
+    if at == 0 || at == str_len(s) { return true }
+    if at > str_len(s) { return false }
+    let b = str_byte(s, at)
+    b < 128 || b >= 192
+}
+
+// `read_to_string`: the text, or "" with `ok` false when it cannot be read whole as UTF-8.
+fn read_text(io: IoCap, path: Str, ok: Ints) -> Str {
+    let st = bytes_new(32)
+    if os_stat(path, st) != 0 || bytes_read_le[Int](st, 8) != 0 {
+        ints_set(ok, 0, 0)
+        return ""
+    }
+    let h = os_open_read(path)
+    if os_status(h) != 0 {
+        ints_set(ok, 0, 0)
+        return ""
+    }
+    os_close(h)
+    let text = read_file(path)
+    if !utf8_ok(text) { ints_set(ok, 0, 0) }
+    text
+}
+
+fn utf8_ok(s: Str) -> Bool {
+    let n = str_len(s)
+    let mut i = 0
+    while i < n {
+        let b = str_byte(s, i)
+        if b < 128 {
+            i += 1
+            continue
+        }
+        let mut need = 0
+        let mut lo = 128
+        let mut hi = 191
+        if b >= 194 && b <= 223 {
+            need = 1
+        } else if b == 224 {
+            need = 2
+            lo = 160
+        } else if b >= 225 && b <= 236 {
+            need = 2
+        } else if b == 237 {
+            need = 2
+            hi = 159
+        } else if b >= 238 && b <= 239 {
+            need = 2
+        } else if b == 240 {
+            need = 3
+            lo = 144
+        } else if b >= 241 && b <= 243 {
+            need = 3
+        } else if b == 244 {
+            need = 3
+            hi = 143
+        } else {
+            return false
+        }
+        if i + need >= n { return false }
+        let c1 = str_byte(s, i + 1)
+        if c1 < lo || c1 > hi { return false }
+        for k in 2..need + 1 {
+            let c = str_byte(s, i + k)
+            if c < 128 || c > 191 { return false }
+        }
+        i += need + 1
+    }
+    true
+}
+
+// `fs::write`: created or truncated, every byte written.
+fn write_all(io: IoCap, p: Str, text: Str) -> Bool {
+    let h = os_open_write(p, 0)
+    if os_status(h) < 0 { return false }
+    let data = bytes_from_str(text)
+    let n = bytes_len(data)
+    let mut done = 0
+    while done < n {
+        let w = os_write(h, bytes_slice(data, done, n))
+        if w < 0 {
+            os_close(h)
+            return false
+        }
+        done += w
+    }
+    os_close(h)
+    true
+}
+
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+// Whether the text parses (`parse_source`): a fix may leave a type error, never a syntax error.
+fn parses(text: Str) -> Bool {
+    let d = dg_new()
+    sx_parse_source(text, sx_tree(), d)
+    dg_len(d) == 0
+}
+
+// `write_back`: every automatic edit applied, file by file in name order, right to left.
+fn write_back(io: IoCap, e: Edits) -> Int {
+    let n = strs_len(e.code)
+    // The files, in `BTreeMap` order.
+    let files = strs_new()
+    for i in 0..n {
+        if strs_get(e.skipped, i) != "" { continue }
+        let name = strs_get(e.file, i)
+        let mut at = 0
+        let mut seen = false
+        while at < strs_len(files) && !seen && str_less(strs_get(files, at), name) { at += 1 }
+        if at < strs_len(files) && strs_get(files, at) == name { seen = true }
+        if !seen {
+            strs_push(files, "")
+            let mut j = strs_len(files) - 1
+            while j > at {
+                strs_set(files, j, strs_get(files, j - 1))
+                j -= 1
+            }
+            strs_set(files, at, name)
+        }
+    }
+    for fi in 0..strs_len(files) {
+        let name = strs_get(files, fi)
+        // Its edits, by descending start; a stable sort, as `sort_by_key` is.
+        let order = ints_new()
+        for i in 0..n {
+            if strs_get(e.skipped, i) == "" && strs_get(e.file, i) == name {
+                let mut at = ints_len(order)
+                while at > 0 && ints_get(e.start, ints_get(order, at - 1)) < ints_get(e.start, i) { at -= 1 }
+                ints_push(order, 0)
+                let mut j = ints_len(order) - 1
+                while j > at {
+                    ints_set(order, j, ints_get(order, j - 1))
+                    j -= 1
+                }
+                ints_set(order, at, i)
+            }
+        }
+        let ok = ints_new()
+        ints_push(ok, 1)
+        let original = read_text(io, name, ok)
+        if ints_get(ok, 0) == 0 {
+            for k in 0..ints_len(order) { strs_set(e.skipped, ints_get(order, k), "the file could not be read") }
+            continue
+        }
+        let mut text = original
+        let mut lowest = 4294967295
+        let written = ints_new()
+        for k in 0..ints_len(order) {
+            let i = ints_get(order, k)
+            let from = ints_get(e.start, i)
+            let to = ints_get(e.end, i)
+            if to > lowest {
+                strs_set(e.skipped, i, "it overlaps an edit already applied in this run")
+                continue
+            }
+            if to > str_len(text) || from > to || !is_boundary(text, from) || !is_boundary(text, to) {
+                strs_set(e.skipped, i, "the span does not name a range of this file")
+                continue
+            }
+            if str_slice(text, from, to) != strs_get(e.expected, i) {
+                strs_set(e.skipped, i, "the file changed since it was checked")
+                continue
+            }
+            text = str_slice(text, 0, from) + strs_get(e.replacement, i) + str_slice(text, to, str_len(text))
+            lowest = from
+            ints_push(written, i)
+        }
+        if !parses(text) {
+            for k in 0..ints_len(written) { strs_set(e.skipped, ints_get(written, k), "applying it produced a file that does not parse") }
+            continue
+        }
+        let wrote = text == original || write_all(io, name, text)
+        for k in 0..ints_len(written) {
+            if wrote { ints_set(e.applied, ints_get(written, k), 1) } else { strs_set(e.skipped, ints_get(written, k), "the file could not be written") }
+        }
+    }
+    0
+}
+
+fn report(io: IoCap, e: Edits, json: Bool) -> Int {
+    let out = strs_new()
+    for i in 0..strs_len(e.code) {
+        let applied = ints_get(e.applied, i) == 1
+        let skipped = strs_get(e.skipped, i)
+        if json {
+            strs_push(out, "{\"schema\":\"nazm.fix/1\",\"code\":" + json_str(strs_get(e.code, i)))
+            strs_push(out, ",\"file\":" + json_str(strs_get(e.file, i)))
+            strs_push(out, ",\"start\":" + int_to_str(ints_get(e.start, i)))
+            strs_push(out, ",\"end\":" + int_to_str(ints_get(e.end, i)))
+            strs_push(out, ",\"replacement\":" + json_str(strs_get(e.replacement, i)))
+            strs_push(out, ",\"description\":" + json_str(strs_get(e.description, i)))
+            strs_push(out, ",\"applicability\":" + json_str(strs_get(e.applicability, i)))
+            strs_push(out, ",\"precondition\":" + json_str(strs_get(e.precondition, i)))
+            strs_push(out, ",\"applied\":" + (if applied { "true" } else { "false" }))
+            strs_push(out, ",\"skipped\":" + (if skipped == "" { "null" } else { json_str(skipped) }))
+            strs_push(out, "}" + nl())
+            continue
+        }
+        let state = if applied { "applied" } else if skipped != "" { "not applied — " + skipped } else { "would apply" }
+        strs_push(out, strs_get(e.code, i) + ": " + strs_get(e.description, i))
+        strs_push(out, " [" + state + "]" + nl())
+        strs_push(out, "  in " + strs_get(e.file, i))
+        strs_push(out, " at bytes " + int_to_str(ints_get(e.start, i)))
+        strs_push(out, ".." + int_to_str(ints_get(e.end, i)) + nl())
+        strs_push(out, "  right when: " + strs_get(e.precondition, i) + nl())
+    }
+    print(str_join(out, ""))
+    0
+}
+
+fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
+
+// `nazm fix`, its arguments read into `c` (`fix_cli`) from where `cli_from` says.
+pub fn fix_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    let file = cli_value(c, 0)
+    let apply = cli_present(c, 1)
+    let json = cli_present(c, 2)
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    // A root the loader would not read whole: its own refusal (`N0205` with the system's reason),
+    // which `compiler/load.nz` does not give for a directory.
+    let st = bytes_new(32)
+    if os_stat(file, st) == 0 {
+        let ok = ints_new()
+        ints_push(ok, 1)
+        read_text(io, file, ok)
+        if ints_get(ok, 0) == 0 { refuse(io, "a root module that is not a readable UTF-8 file") }
+    }
+    let prefix = fe_prefix(io, file)
+    let first = checked(io, file, prefix, library, json)
+    let e = collect(io, first, fe_names(first, prefix))
+    if apply { write_back(io, e) }
+    report(io, e, json)
+    let mut remaining = errors(first)
+    if apply { remaining = errors(checked(io, file, prefix, library, json)) }
+    let mut applied = 0
+    for i in 0..ints_len(e.applied) { applied += ints_get(e.applied, i) }
+    if !json {
+        if !apply { print("nazm: nothing written; pass --apply to make these edits" + nl()) }
+        print("nazm: " + int_to_str(applied) + " edit" + plural(applied) + " applied, " + int_to_str(remaining) + " diagnostic"
+                + plural(remaining) + " remaining" + nl())
+    }
+    if remaining == 0 { 0 } else {
+        exit_with(1)
+        1
+    }
+}

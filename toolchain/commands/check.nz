@@ -211,7 +211,7 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
     let prefix = fe_prefix(io, file)
     let f = fx_check(prefix + file, library, fe_host_os(), fe_host_arch(), io)
     let d = fx_diags(f)
-    fe_unprefix_diags(d, prefix)
+    fe_unprefix_diags(io, d, prefix, prefix + file)
     let names = fe_names(f, prefix)
     let out = strs_new()
     if fe_load_failed(f) {
