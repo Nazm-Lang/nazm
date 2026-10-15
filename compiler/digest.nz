@@ -841,6 +841,13 @@ fn js_write(j: Js, n: Int, level: Int, out: Strs) -> Int {
     0
 }
 
+// A string as `quote` writes it.
+pub fn cdg_quote(s: Str) -> Str {
+    let out = strs_new();
+    js_quote(s, out);
+    str_join(out, "")
+}
+
 // `quote`: `"` and `\` escaped, a line break, return and tab by name, any other byte below `0x20`
 // as `\u00XX`; every other byte as it is.
 fn js_quote(s: Str, out: Strs) -> Int {
