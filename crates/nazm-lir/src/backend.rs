@@ -65,7 +65,7 @@ pub enum Os {
     Macos,
     Linux,
     /// Windows, through MinGW-w64's C runtime (Gate 3, `docs/spec.md` *Windows x86_64*): its
-    /// programs are run under Wine here, never claimed as run on a Windows host.
+    /// programs are run on a Windows 10 host by `scripts/windows-host.sh`, and under Wine.
     Windows,
     /// No operating system and no C library (N62, §7.64): a freestanding image.
     None,
@@ -525,8 +525,8 @@ mod tests {
 }
 
 /// What this compiler has shown of a target under one backend (N95, `docs/architecture.md` §7.96).
-/// A cell is run, run under Wine, run on a Linux kernel as Bionic, compiled only, or refused;
-/// there is no sixth answer.
+/// A cell is run, run on a Windows host, run under Wine, run on a Linux kernel as Bionic,
+/// compiled only, or refused; there is no seventh answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Support {
     /// Programs built for it ran — on the host, under Rosetta, in a container or an emulator —
@@ -536,6 +536,10 @@ pub enum Support {
     /// interpreter (Gate 3, `docs/systems-domains.md` Part A-W). Never evidence from a Windows
     /// host, and never reported as plain run-verified.
     Wine(&'static str),
+    /// Programs built for Windows ran on a real Windows x86_64 host and agreed with the same
+    /// programs built natively (2026-10-15): the evidence is `scripts/windows-host.sh`, run by
+    /// hand against the host, which a test cannot reach. The Wine runs stand beside it.
+    WindowsHost(&'static str),
     /// Programs built for Android ran as static Bionic executables on an aarch64 Linux kernel in a
     /// container and agreed with what they should print (Gate 3, `docs/spec.md` *Mobile*): Android's
     /// C library on Linux, never an Android device or emulator, and never reported as plain
@@ -554,6 +558,7 @@ impl Support {
         match self {
             Self::Run(_) => "run-verified",
             Self::Wine(_) => "run-verified under Wine",
+            Self::WindowsHost(_) => "run-verified on a Windows host",
             Self::Bionic(_) => "run-verified on a Linux kernel",
             Self::Compile(_) => "compile-only",
             Self::Unsupported(_) => "unsupported",
@@ -565,6 +570,7 @@ impl Support {
         match self {
             Self::Run(e)
             | Self::Wine(e)
+            | Self::WindowsHost(e)
             | Self::Bionic(e)
             | Self::Compile(e)
             | Self::Unsupported(e) => e,
@@ -637,8 +643,8 @@ pub const SUPPORT: &[Cell] = &[
         triple: "x86_64-pc-windows-gnu",
         llvm_cpu: "x86-64",
         cranelift_cpu: "x86-64 baseline (SSE2)",
-        llvm: Support::Wine("the_programs_run_under_wine_as_they_do_natively"),
-        cranelift: Support::Wine("the_programs_run_under_wine_as_they_do_natively"),
+        llvm: Support::WindowsHost("scripts/windows-host.sh"),
+        cranelift: Support::WindowsHost("scripts/windows-host.sh"),
         debugger: "not exercised",
     },
     Cell {
