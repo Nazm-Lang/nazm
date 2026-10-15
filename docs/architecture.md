@@ -4669,6 +4669,11 @@ and types in declaration order, and `canonical` orders. Then come `statics`, eac
 `type`, `cell`, starting `value` and `section`; `impls`, each impl's trait, `self` type and, per
 method, the function a call reaches, its `type_args` and whether it is the trait's `default`; and
 `derived_hash`. Every one of these is a fact the checker settled, printed rather than decided.
+A function's `Atomic` constant, whose `value` is `static NAME` as its module spells it, also
+carries `static`: that static's durable key, the `def` of its `statics` entry. Two modules may each
+declare a `static COUNT`, and only the key says which cell a use reaches. The field was added
+within `/3` (R4's finding, 2026-10-15): every existing field keeps its place and meaning, the
+schema is debug/internal, and a reader of the earlier output loses nothing it had. No digest moved.
 
 **Why regions and not basic blocks.** Both consumers are structured: the interpreter walks a tree,
 and LIR is a structured tree the emitter turns into LLVM blocks, placing releases by region. A CFG

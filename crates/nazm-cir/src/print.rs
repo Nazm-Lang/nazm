@@ -308,11 +308,18 @@ impl Printer<'_> {
                     ),
                     Const::Cell { name, .. } => ("Atomic", J::Str(format!("static {name}"))),
                 };
-                J::Obj(vec![
+                let mut o = vec![
                     ("id", J::uint(u64::try_from(i).unwrap_or(u64::MAX))),
                     ("type", J::Str(ty.to_owned())),
                     ("value", value),
-                ])
+                ];
+                // `value` names the static as its module spells it; `static` is its durable key,
+                // the `def` of its `statics` entry, so two modules' same-named statics stay two
+                // cells to a reader (added within `/3`).
+                if let Const::Cell { module, name } = c {
+                    o.push(("static", J::Str(self.names.static_key(*module, name))));
+                }
+                J::Obj(o)
             })
             .collect();
         let mut o = vec![

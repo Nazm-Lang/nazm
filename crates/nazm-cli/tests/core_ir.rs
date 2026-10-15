@@ -228,6 +228,57 @@ fn core_ir_3_prints_the_tables_a_lowering_needs() {
     );
 }
 
+/// Two modules each with a `static COUNT` are two cells, and Core IR says which one a use reaches:
+/// an `Atomic` constant carries its static's durable key, the `def` of its `statics` entry. Its
+/// `value`, `static COUNT`, is the same in both, which once left a reader of `/3` to guess.
+#[test]
+fn two_modules_same_named_statics_are_two_cells() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    std::fs::write(
+        dir.path().join("main.nz"),
+        "use \"lib.nz\";\nstatic COUNT: Atomic = atomic_new(1);\n\
+         fn main() -> Int { atomic_add(COUNT, 1); bump(); atomic_load(COUNT) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("lib.nz"),
+        "static COUNT: Atomic = atomic_new(40);\npub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }\n",
+    )
+    .unwrap();
+    let out = core_ir(&dir.path().join("main.nz"), &["--json", "--no-spans"]);
+    assert!(out.status.success(), "{out:?}");
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let defs: Vec<&str> = v["statics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["def"].as_str().unwrap())
+        .collect();
+    assert_eq!(defs, ["main.nz::static COUNT", "lib.nz::static COUNT"]);
+    let cell = |def: &str| -> serde_json::Value {
+        let f = v["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["def"] == def)
+            .unwrap_or_else(|| panic!("no {def}"));
+        f["consts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["type"] == "Atomic")
+            .unwrap_or_else(|| panic!("{def} has no Atomic constant"))
+            .clone()
+    };
+    let main = cell("main.nz::fn main");
+    let bump = cell("lib.nz::fn bump");
+    assert_eq!(main["value"], "static COUNT");
+    assert_eq!(bump["value"], "static COUNT");
+    assert_eq!(main["static"], "main.nz::static COUNT");
+    assert_eq!(bump["static"], "lib.nz::static COUNT");
+}
+
 #[test]
 fn with_sources_gives_each_module_its_text_and_only_then() {
     let dir = tempfile::tempdir().expect("tempdir");
