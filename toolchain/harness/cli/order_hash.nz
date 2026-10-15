@@ -1,0 +1,129 @@
+// R1a: ordering and hashing are derived (`docs/spec.md`, *Ordering and hashing are derived*), and
+// a `Box` or `Chain` compares by what it holds. Ported from `crates/nazm-cli/tests/order_hash.rs`
+// (R7).
+//
+// Every implementation answers what the section's rules work out by hand, with every allocation
+// reclaimed: orders, maps keyed by tuples, records and enums, and derived hashes against the
+// library's own functions; reordering a declaration changes no order and no hash; and what is
+// refused, by which code.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn run_everywhere(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for r in everywhere_with_oracle(h, src, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, expected), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0 && all_reclaimed(line), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+const ORDERS: Str = "struct P { y: Int, x: Int, }\nstruct Q { tag: Str, at: P, small: Int8, flag: Bool, }\nenum L { Zed, Alpha(n: Int), Mid(s: Str), }\nenum Expr { Num(v: Int), Neg(e: Box[Expr]), }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\nfn b(c: Bool) -> Str { if c { \"1\" } else { \"0\" } }\n\nfn main(out: OutCap) -> Int ! {io} {\n    // Strings by bytes, a prefix first; `false` before `true`.\n    show(out, str_concat(b(\"apple\" < \"banana\"), str_concat(b(\"ab\" < \"a\"),\n        str_concat(b(\"\" < \"a\"), b(false < true)))));\n    // A record by its fields in the order of their names: `x` before `y`.\n    show(out, str_concat(b(P(y: 9, x: 1) < P(y: 0, x: 2)), b(P(y: 1, x: 5) < P(y: 2, x: 5))));\n    // Nested, with a narrow signed integer and a `Bool`: `at`, `flag`, `small`, `tag`.\n    let q1 = Q(tag: \"z\", at: P(y: 1, x: 1), small: Int8(-3), flag: true);\n    let q2 = Q(tag: \"a\", at: P(y: 1, x: 1), small: Int8(2), flag: true);\n    show(out, str_concat(b(q1 < q2), str_concat(b(q1 >= q1), b(q2 > q1))));\n    // An enum by its variants' names — `Alpha`, `Mid`, `Zed` — then the payload.\n    show(out, str_concat(b(L.Alpha(n: 5) < L.Zed()), str_concat(b(L.Mid(s: \"a\") < L.Alpha(n: 0)),\n        str_concat(b(L.Alpha(n: 1) < L.Alpha(n: 2)), b(L.Mid(s: \"b\") <= L.Mid(s: \"a\"))))));\n    // A tuple by position.\n    show(out, str_concat(b((1, \"b\") < (2, \"a\")), str_concat(b((1, \"b\") <= (1, \"b\")),\n        b((2, P(y: 0, x: 0)) > (2, P(y: 0, x: 1))))));\n    // A `Box` and a `Chain` compare by what they hold, through a recursive type.\n    let e1 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));\n    let e2 = Expr.Neg(e: box_new(Expr.Neg(e: box_new(Expr.Num(v: 3)))));\n    let e3 = Expr.Neg(e: box_new(Expr.Num(v: 3)));\n    let xs = vec_new[Str]();\n    vec_push(xs, \"a\");\n    let l1 = chain_from_vec(xs);\n    let l2 = chain_from_vec(xs);\n    show(out, str_concat(b(e1 == e2), str_concat(b(e1 != e3), str_concat(b(l1 == l2),\n        b(l1 == chain_empty[Str]())))));\n    0\n}\n";
+
+/// By hand: `q1 < q2` is decided by `small`, and `Mid(s: "b") <= Mid(s: "a")` by the payload.
+const ORDERS_EXPECTED: Str = "1011\n11\n111\n1010\n110\n1110\n";
+
+@test
+fn derived_orders_mean_the_same_everywhere_and_are_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    run_everywhere(caps(io, p, sp, v, t), ORDERS, ORDERS_EXPECTED)
+}
+
+/// Derived hashes and maps keyed by them. `Point`'s fields are declared `y` then `x`; its hash
+/// folds `x` first, by name.
+fn hashes(point: Str, key: Str) -> Str ! {} {
+    f"use \"@std/hash\";\nuse \"@std/hashmap\";\n{point}\n{key}\n\nfn show(out: OutCap, s: Str) -> Int ! {{io}} {{ print(str_concat(s, \"\\n\")) }}\nfn b(c: Bool) -> Str {{ if c {{ \"1\" }} else {{ \"0\" }} }}\n\nfn main(out: OutCap) -> Int ! {{io}} {{\n    let m = hashmap_new[(Str, Point), Int]();\n    hashmap_set(m, (\"a\", Point(y: 2, x: 1)), 7);\n    hashmap_set(m, (\"b\", Point(y: 2, x: 1)), 8);\n    hashmap_set(m, (\"a\", Point(y: 2, x: 1)), 9);\n    let k = hashmap_new[Key, Int]();\n    hashmap_set(k, Key.One(s: \"z\", n: Int8(-1), f: true), 1);\n    hashmap_set(k, Key.Two(), 2);\n    hashmap_set(k, Key.One(s: \"z\", n: Int8(-1), f: true), 3);\n    let got = match hashmap_get(m, (\"a\", Point(y: 2, x: 1))) {{\n        Option.Some(value: v) => v,\n        Option.None() => 0,\n    }};\n    show(out, num_to_str(hashmap_len(m) * 100 + got * 10 + hashmap_len(k)));\n    // Each by the definition, in the library's own functions.\n    let p = Hash.hash(Point(y: 5, x: 3));\n    let p_def = hash_combine(hash_combine(hash_u64(UInt64(0)), Hash.hash(3)), Hash.hash(5));\n    let e = Hash.hash(Key.One(s: \"z\", n: Int8(-1), f: true));\n    let e_def = hash_combine(hash_combine(hash_combine(hash_bytes(\"One\"), Hash.hash(true)),\n        Hash.hash(Int8(-1))), Hash.hash(\"z\"));\n    let t = Hash.hash((7, \"q\"));\n    let t_def = hash_combine(hash_combine(hash_u64(UInt64(0)), Hash.hash(7)), Hash.hash(\"q\"));\n    let z = Hash.hash(Key.Two());\n    show(out, str_concat(b(p == p_def), str_concat(b(e == e_def), str_concat(b(t == t_def),\n        b(z == hash_bytes(\"Two\"))))));\n    show(out, str_concat(b(Hash.same((1, \"a\"), (1, \"a\"))), b(Hash.same(Point(y: 1, x: 2), Point(y: 2, x: 1)))));\n    // The hash itself, which reordering a declaration must not change.\n    show(out, num_to_str(Int(p >> 40)));\n    show(out, num_to_str(Int(e >> 40)));\n    0\n}}\n"
+}
+
+/// The first `n` lines of `s`, joined by newlines.
+fn first_lines(s: Str, n: Int) -> Str ! {} {
+    let ls = lines(s);
+    let out = strs_new();
+    let mut i = 0;
+    while i < n && i < strs_len(ls) {
+        strs_push(out, strs_get(ls, i));
+        i = i + 1;
+    }
+    str_join(out, "\n")
+}
+
+@test
+fn derived_hashes_follow_the_definition_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = hashes("struct Point { y: Int, x: Int, }", "enum Key { Two, One(s: Str, n: Int8, f: Bool), }");
+    let runs = everywhere_with_oracle(h, src, true)?;
+    let first = vec_get(runs, 0).ran.stdout;
+    // Two `(Str, Point)` keys, the first's value replaced by 9; two `Key`s.
+    check_that(first_lines(first, 3) == "292\n1111\n10", first)?;
+    run_everywhere(h, src, first_lines(first, 5))
+}
+
+fn out_of(h: Caps, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("run --interpret p.nz"));
+    scratch_remove(h, d);
+    Result[Str, Str].Ok(value: r.stdout)
+}
+
+fn swap(src: Str) -> Str ! {} {
+    text_replace(text_replace(src, "struct P { y: Int, x: Int, }", "struct P { x: Int, y: Int, }"), "enum L { Zed, Alpha(n: Int), Mid(s: Str), }", "enum L { Mid(s: Str), Alpha(n: Int), Zed, }")
+}
+
+@test
+fn reordering_a_declaration_changes_no_order_and_no_hash(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = hashes("struct Point { y: Int, x: Int, }", "enum Key { Two, One(s: Str, n: Int8, f: Bool), }");
+    let b = hashes("struct Point { x: Int, y: Int, }", "enum Key { One(f: Bool, n: Int8, s: Str), Two, }");
+    let x = out_of(h, a)?;
+    let y = out_of(h, b)?;
+    check_that(strs_len(lines(x)) >= 5, x)?;
+    check_that(x == y, f"{x}\nvs\n{y}")?;
+    check_that(swap(ORDERS) != ORDERS, "the swap changed nothing")?;
+    let s = out_of(h, swap(ORDERS))?;
+    let o = out_of(h, ORDERS)?;
+    check_that(s == o, f"{s}\nvs\n{o}")
+}
+
+fn one_error(h: Caps, src: Str, code: Str, says: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    let first_code = if strs_len(r.codes) > 0 { strs_get(r.codes, 0) } else { "" };
+    check_that(first_code == code, f"{src}: [{str_join(r.codes, ", ")}]")?;
+    check_that(strs_len(r.codes) == 1, f"{src}: one mistake, one error: [{str_join(r.codes, ", ")}]")?;
+    check_that(text_contains(r.first, says), f"{src}: {r.first}")
+}
+
+@test
+fn what_has_no_order_or_derived_hash_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A component with no order, named.
+    one_error(h, "struct R { v: Vec[Int], }\nfn main() -> Int { let a = R(v: vec_new[Int]()); if a < a { 1 } else { 0 } }", "N0304", "its `v` is a `Ints`, which has no order")?;
+    // A float orders on its own, but makes no structure ordered.
+    one_error(h, "struct F { x: Float64, }\nfn main() -> Int { if F(x: 1.0) < F(x: 2.0) { 1 } else { 0 } }", "N0304", "which has no order")?;
+    // Through an indirection, nothing orders.
+    one_error(h, "fn main() -> Int { if box_new(1) < box_new(2) { 1 } else { 0 } }", "N0304", "")?;
+    // An unconstrained parameter has no order.
+    one_error(h, "fn f[T](a: T, b: T) -> Bool { a < b }\nfn main() -> Int { 0 }", "N0304", "")?;
+    // A key whose component cannot be hashed.
+    one_error(h, "use \"@std/hash\";\nuse \"@std/hashmap\";\nstruct R { w: (Int, Vec[Int]), }\nfn main() -> Int { let m = hashmap_new[R, Int](); 0 }", "N0364", "does not derive one: its `w.1` is a `Ints`")?;
+    // A component with a written impl: its `same` may mean more than `==`.
+    one_error(h, "use \"@std/hash\";\nuse \"@std/hashmap\";\nstruct K { n: Int, }\nimpl Hash for K { fn hash(self: K) -> UInt64 ! {} { hash_u64(UInt64(0)) } fn same(self: K, other: K) -> Bool ! {} { true } }\nstruct W { k: K, }\nfn main() -> Int { let m = hashmap_new[W, Int](); 0 }", "N0364", "its `k` is a `K`")?;
+    // Inside a generic body only a concrete type derives.
+    one_error(h, "use \"@std/hash\";\nstruct P[T] { v: T, }\nfn f[T: Hash](x: P[T]) -> UInt64 { Hash.hash(x) }\nfn main() -> Int { 0 }", "N0605", "")?;
+    // A ninth tuple element is refused.
+    one_error(h, "fn main() -> Int { let t = (1, 2, 3, 4, 5, 6, 7, 8, 9); 0 }", "N0101", "at most eight")
+}
+
+@test
+fn a_type_with_a_written_impl_keeps_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let o = out_of(h, "use \"@std/hash\";\nuse \"@std/hashmap\";\nstruct K { n: Int, }\nimpl Hash for K { fn hash(self: K) -> UInt64 ! {} { hash_u64(UInt64(0)) } fn same(self: K, other: K) -> Bool ! {} { true } }\nfn main() -> Int { let m = hashmap_new[K, Int](); hashmap_set(m, K(n: 1), 1); hashmap_set(m, K(n: 2), 2); hashmap_len(m) }\n")?;
+    // Every `K` is the same key by its own `same`: one entry, not two.
+    check_that(text_starts_with(o, "1\n"), o)
+}
