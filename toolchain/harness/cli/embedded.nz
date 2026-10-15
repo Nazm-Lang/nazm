@@ -1,0 +1,67 @@
+// Gate 3: the embedded domain's reference workload and `@std/hal` (`docs/systems-domains.md` Part
+// C; `library/std/hal.nz`). Ported from `crates/nazm-cli/tests/embedded.rs` (R7): what any host
+// builds. The `#[ignore]`d boot under QEMU starts Docker and stays Rust (`design.md`).
+//
+// A traffic light written once in `embedded/light.nz`, generic over the HAL's `Uart`, `Pin` and
+// `Timer`; two boards supply the impls in their own `main`.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn fixtures(h: Caps) -> Str ! { io } {
+    f"{repo_root(h)}/crates/nazm-cli/tests/embedded"
+}
+
+/// The workload for `board` copied into `d`, built for `target` at `opt` into `d/o`.
+fn build(h: Caps, d: Str, board: Str, target: Str, opt: Str) -> Result[Ran, Str] ! { io, spawn } {
+    for f in words(f"light.nz {board}.nz {board}.toml") {
+        scratch_write(h, d, f, read_text(h, f"{fixtures(h)}/{f}")?)?;
+    }
+    Result[Ran, Str].Ok(value: nazm(h, d, words(f"build --opt-level {opt} --target {target} --board {board}.toml --objects o {board}.nz")))
+}
+
+fn both_boards(h: Caps, d: Str, e: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = build(h, d, "virt", "aarch64-unknown-none", "0")?;
+    check_that(r.code == 0, f"virt: {r.stderr}")?;
+    let m = build(h, e, "mps2", "thumbv7m-none-eabi", "0")?;
+    check_that(m.code == 0, f"mps2: {m.stderr}")?;
+    // The device code is generic and names no board: the impls are in each `main`.
+    let light = read_text(h, f"{fixtures(h)}/light.nz")?;
+    for device in words("Pl011 Pl061 CmsdkUart FpgaLed mmio_") {
+        check_that(!text_contains(light, device), f"light.nz names {device}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn one_traffic_light_builds_for_both_boards_through_the_hal(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let e = scratch_new(h);
+    let r = both_boards(h, d, e);
+    scratch_remove(h, d);
+    scratch_remove(h, e);
+    r
+}
+
+fn no_heap(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let manifest = read_text(h, f"{fixtures(h)}/mps2.toml")?;
+    build(h, d, "mps2", "thumbv7m-none-eabi", "0")?;
+    scratch_write(h, d, "mps2.toml", f"{manifest}\n[heap]\nsize = 4096\n")?;
+    let r = nazm(h, d, words("build --target thumbv7m-none-eabi --board mps2.toml --objects h mps2.nz"));
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0626"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`heap`"), r.stderr)
+}
+
+@test
+fn a_cortex_m_board_has_no_heap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = no_heap(h, d);
+    scratch_remove(h, d);
+    r
+}

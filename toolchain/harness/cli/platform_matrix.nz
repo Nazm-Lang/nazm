@@ -1,0 +1,176 @@
+// N95: the support matrix — every target, under each backend, run-verified, run-verified under
+// Wine, compile-only or unsupported, and nothing in between (`docs/architecture.md` §7.96). Ported
+// from `crates/nazm-cli/tests/platform_matrix.rs` (R7).
+//
+// The matrix is one table in `nazm-lir`, printed by `nazm inspect`; this holds the capability
+// matrix's table to it cell for cell, every run-verified or compile-only cell to evidence the tree
+// contains, every target the compiler accepts to a row, and each recorded LLVM CPU to what the C
+// compiler driver resolves for the triple.
+
+use "@std/env"
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+/// `nazm inspect`'s report of a trivial program: its `toolchain/support` and `toolchain/targets`.
+fn support(h: Caps) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", "fn main() -> Int { 0 }\n")?;
+    let o = nazm(h, d, words("inspect p.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    jparse(o.stdout)
+}
+
+fn cells_len(v: JsonDoc) -> Int ! {} {
+    json_len(v, jq(v, "toolchain/support"))
+}
+
+/// Whether the tree's Rust sources define a function of this name: a `.rs` file under `crates/`
+/// holds `fn NAME(` (`grep`, which reads them faster than a loop here would).
+fn defined(h: Caps, name: Str) -> Bool ! { io, spawn } {
+    let a = words("-rqF --include=*.rs");
+    strs_push(a, f"fn {name}(");
+    strs_push(a, f"{repo_root(h)}/crates");
+    run(h, "grep", a, "", env_here(h.io)).code == 0
+}
+
+@test
+fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let doc = support(h)?;
+    let triples = strs_new();
+    let mut i = 0;
+    while i < cells_len(doc) {
+        strs_push(triples, jstr(doc, f"toolchain/support/{i}/triple"));
+        i = i + 1;
+    }
+    let mut k = 0;
+    let targets = json_len(doc, jq(doc, "toolchain/targets"));
+    while k < targets {
+        let tr = jstr(doc, f"toolchain/targets/{k}/triple");
+        let mut found = false;
+        for x in triples {
+            if x == tr {
+                found = true;
+            }
+        }
+        check_that(found, f"{jtext(doc, f"toolchain/targets/{k}")} has no row")?;
+        k = k + 1;
+    }
+    check_that(strs_len(triples) == targets, "rows and targets differ in number")?;
+    let answers = text_split("run-verified|run-verified under Wine|run-verified on a Linux kernel|compile-only|unsupported", "|");
+    i = 0;
+    while i < cells_len(doc) {
+        let c = f"toolchain/support/{i}";
+        for backend in words("llvm cranelift") {
+            let status = jstr(doc, f"{c}/{backend}/status");
+            let mut known = false;
+            for a in answers {
+                if a == status {
+                    known = true;
+                }
+            }
+            check_that(known, jtext(doc, c))?;
+            let evidence = jstr(doc, f"{c}/{backend}/evidence");
+            check_that(str_len(evidence) > 0, jtext(doc, c))?;
+            // Evidence the tree holds: a test it defines, or a contained command.
+            if status != "unsupported" && !text_starts_with(evidence, "cargo xtask contained ") {
+                check_that(defined(h, evidence), f"{evidence}: no such test")?;
+            }
+        }
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_capability_matrix_states_exactly_what_the_compiler_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let doc = support(h)?;
+    let text = read_text(h, f"{repo_root(h)}/docs/capability-matrix.md")?;
+    // The N95 table: `| triple | LLVM | Cranelift | CPU (LLVM / Cranelift) | debugger |`.
+    let mut i = 0;
+    while i < cells_len(doc) {
+        let c = f"toolchain/support/{i}";
+        let triple = jstr(doc, f"{c}/triple");
+        let key = f"| `{triple}` |";
+        let mut row = "";
+        for l in lines(text) {
+            if str_len(row) == 0 && text_starts_with(l, key) {
+                row = l;
+            }
+        }
+        check_that(str_len(row) > 0, f"no row for {triple} in docs/capability-matrix.md")?;
+        let cols = strs_new();
+        for col in split(row, "|") {
+            strs_push(cols, trim_ws(col));
+        }
+        check_that(strs_get(cols, 2) == jstr(doc, f"{c}/llvm/status"), row)?;
+        check_that(strs_get(cols, 3) == jstr(doc, f"{c}/cranelift/status"), row)?;
+        check_that(strs_get(cols, 4) == f"{jstr(doc, f"{c}/llvm/cpu")} / {jstr(doc, f"{c}/cranelift/cpu")}", row)?;
+        i = i + 1;
+    }
+    // No row says anything vaguer.
+    check_that(!text_contains(text, "| supported |"), "a row says `supported`")
+}
+
+/// `common::skip_without`: `true` (skip) when `present` is false, unless
+/// `NAZM_REQUIRE_HOST_TOOLS=1` turns the skip into a failure.
+fn skip_without(h: Caps, present: Bool, what: Str) -> Result[Bool, Str] ! { io } {
+    if present {
+        return Result[Bool, Str].Ok(value: false);
+    }
+    let required = match env_get(h.io, "NAZM_REQUIRE_HOST_TOOLS") {
+        Option.Some(value: x) => x == "1",
+        Option.None() => false,
+    };
+    check_that(!required, f"NAZM_REQUIRE_HOST_TOOLS=1, and {what}")?;
+    Result[Bool, Str].Ok(value: true)
+}
+
+fn cpus(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let probe = run(h, "clang", words("--version"), "", env_here(h.io));
+    if skip_without(h, probe.code >= 0, "no clang")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    check_that(probe.code == 0, ran_show(probe))?;
+    // The table records Apple clang's choices, the host's.
+    if skip_without(h, text_contains(probe.stdout, "Apple clang"), "Apple clang only; this driver is another")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let doc = support(h)?;
+    scratch_write(h, d, "e.c", "")?;
+    let mut i = 0;
+    while i < cells_len(doc) {
+        let triple = jstr(doc, f"toolchain/support/{i}/triple");
+        let args = if triple == "riscv64gc-unknown-none-elf" { words("-target riscv64-unknown-elf -march=rv64gc -mabi=lp64d") } else { words(f"-target {triple}") };
+        for w in words("-### -c e.c") {
+            strs_push(args, w);
+        }
+        let o = run(h, "clang", args, d, env_here(h.io));
+        let parts = split(o.stderr, "\"-target-cpu\" \"");
+        let cpu = if strs_len(parts) > 1 { strs_get(split(strs_get(parts, 1), "\""), 0) } else { "" };
+        check_that(cpu == jstr(doc, f"toolchain/support/{i}/llvm/cpu"), f"{triple}: {cpu}")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// The table records Apple clang's choices: elsewhere the Rust test is ignored (Q1-D-02), and so
+/// this one passes without looking off macOS.
+@test
+fn each_llvm_cpu_is_the_one_the_driver_resolves(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let r = cpus(h, d);
+    scratch_remove(h, d);
+    r
+}

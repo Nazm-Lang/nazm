@@ -1,0 +1,188 @@
+// N13: derived equality compiled by `nazm build` exactly as `nazm run` evaluates it. Ported from
+// `crates/nazm-cli/tests/equality.rs` (R7).
+//
+// The compiled program gives the stated answer, and the interpreter's, at `-O0` and at `-O2`;
+// comparing borrows, so every memory counter agrees between the two implementations and nothing
+// stays live; an enum's helper reads only the active variant's slot, and declaration order changes
+// no byte of the program. The churn hands a prematurely freed block back out, so a wrong answer
+// shows where the counters alone would not.
+
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/strings.nz"
+use "../lib/memory_report.nz"
+
+/// The text of one `define` in `ir`, from its line to its closing brace.
+fn function(ir: Str, symbol: Str) -> Result[Str, Str] ! {} {
+    let key = f"@{symbol}(";
+    for l in lines(ir) {
+        if text_starts_with(l, "define ") && text_contains(l, key) {
+            let start = find(ir, l);
+            let rel = find(str_slice(ir, start, str_len(ir)), "\n}");
+            let end = if rel < 0 { str_len(ir) } else { start + rel + 2 };
+            return Result[Str, Str].Ok(value: str_slice(ir, start, end));
+        }
+    }
+    Result[Str, Str].Err(error: f"no definition of {symbol} in:\n{ir}")
+}
+
+/// The symbol of the only equality helper whose name contains `ty`.
+fn helper(ir: Str, ty: Str) -> Result[Str, Str] ! {} {
+    let found = strs_new();
+    for l in lines(ir) {
+        if text_starts_with(l, "define internal i1 @nz.h.eq.") {
+            let at = split(l, "@");
+            if strs_len(at) > 1 {
+                let s = strs_get(split(strs_get(at, 1), "("), 0);
+                if text_contains(s, ty) {
+                    strs_push(found, s);
+                }
+            }
+        }
+    }
+    check_that(strs_len(found) == 1, f"{str_join(found, ", ")}\n{ir}")?;
+    Result[Str, Str].Ok(value: strs_get(found, 0))
+}
+
+/// Small strings made and thrown away, so that a block released too early is reused.
+const CHURN: Str = "fn churn() -> Int {\n    let mut noise = vec_new[Str]();\n    let mut k = 0;\n    while k < 64 {\n        vec_push(noise, str_concat(\"noise-\", int_to_str(k)));\n        k = k + 1;\n    }\n    noise = vec_new[Str]();\n    vec_len(noise)\n}\n";
+
+/// Owning types: a record, an enum whose variants each own something else, and a nest.
+const TYPES: Str = "struct Item {\n    name: Str,\n    n: Int,\n}\nenum Shape {\n    Plain,\n    Named(label: Str),\n    Pair(left: Str, right: Str),\n}\nstruct Outer {\n    item: Item,\n    shape: Shape,\n    note: Option[Str],\n}\nfn text(n: Int) -> Str { str_concat(\"t-\", int_to_str(n)) }\nfn item(n: Int) -> Item { Item(name: text(n), n: n) }\nfn shape(k: Int) -> Shape {\n    if k % 3 == 0 { return Shape.Plain(); }\n    if k % 3 == 1 { return Shape.Named(label: text(k)); }\n    Shape.Pair(left: text(k), right: text(k + 1))\n}\nfn outer(n: Int) -> Outer { Outer(item: item(n), shape: shape(n), note: Option[Str].Some(value: text(n))) }\nfn some_text(n: Int) -> Option[Str] { Option[Str].Some(value: text(n)) }\n";
+
+fn with(body: Str) -> Str ! {} {
+    f"{TYPES}{CHURN}{body}"
+}
+
+fn answers(h: Caps, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    agree(h, src, want)?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn record_equality_compiles_to_the_interpreter_s_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), "struct Point { x: Int, y: Int, }\nstruct Named { name: Str, count: Int, flag: Bool, }\nfn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\nfn main() -> Int {\n    let p = Point(x: 1, y: 2);\n    bit(p == Point(x: 1, y: 2), 1) + bit(p == Point(x: 9, y: 2), 2) + bit(p == Point(x: 1, y: 9), 4)\n    + bit(p != Point(x: 1, y: 9), 8) + bit(p != p, 16)\n    + bit(Named(name: str_concat(\"a\", \"b\"), count: 2, flag: true) == Named(flag: true, count: 2, name: \"ab\"), 32)\n    + bit(Named(name: \"ab\", count: 2, flag: true) == Named(name: \"ab\", count: 2, flag: false), 64)\n}\n", "41")
+}
+
+@test
+fn enum_equality_compiles_to_the_interpreter_s_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), "enum MaybeInt { None, Some(value: Int), }\nenum Twins { Left(n: Int), Right(n: Int), }\nenum P { Empty, Pair(left: Int, right: Str), }\nenum Solo { Only, }\nfn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\nfn main() -> Int {\n    bit(MaybeInt.None() == MaybeInt.None(), 1) + bit(MaybeInt.None() == MaybeInt.Some(value: 0), 2)\n    + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 1), 4) + bit(MaybeInt.Some(value: 1) == MaybeInt.Some(value: 2), 8)\n    + bit(Twins.Left(n: 1) == Twins.Right(n: 1), 16) + bit(Twins.Right(n: 1) != Twins.Right(n: 2), 32)\n    + bit(P.Pair(left: 1, right: \"a\") == P.Pair(right: \"a\", left: 1), 64) + bit(P.Pair(left: 1, right: \"a\") == P.Pair(left: 1, right: \"b\"), 128)\n    + bit(P.Empty() == P.Empty(), 256) + bit(Solo.Only() == Solo.Only(), 512)\n}\n", "869")
+}
+
+@test
+fn option_result_and_generic_instances_compile_to_the_interpreter_s_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), "struct Box[T] { value: T, }\nstruct Point { x: Int, y: Int, }\nfn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\nfn main() -> Int {\n    bit(Option[Int].None() == Option[Int].None(), 1) + bit(Option[Int].Some(value: 1) == Option[Int].Some(value: 1), 2)\n    + bit(Option[Int].Some(value: 1) == Option[Int].Some(value: 2), 4)\n    + bit(Option[Str].Some(value: str_concat(\"a\", \"b\")) == Option[Str].Some(value: \"ab\"), 8)\n    + bit(Result[Int, Str].Ok(value: 1) == Result[Int, Str].Ok(value: 1), 16)\n    + bit(Result[Int, Str].Ok(value: 1) == Result[Int, Str].Err(error: \"1\"), 32)\n    + bit(Box[Int](value: 1) == Box[Int](value: 1), 64) + bit(Box[Str](value: \"a\") == Box[Str](value: \"b\"), 128)\n    + bit(Box[Point](value: Point(x: 1, y: 2)) == Box[Point](value: Point(x: 1, y: 2)), 256)\n    + bit(Box[Box[Int]](value: Box[Int](value: 4)) != Box[Box[Int]](value: Box[Int](value: 5)), 512)\n}\n", "859")
+}
+
+@test
+fn nested_composites_compile_to_the_interpreter_s_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), "struct Name { text: Str, }\nstruct Person { name: Name, age: Int, }\nenum Shape { Dot, Circle(centre: Person, r: Int), }\nstruct Drawing { shape: Shape, }\nenum Layer { Hidden, Shown(top: Drawing), }\nstruct Box[T] { value: T, }\nfn person(t: Str, age: Int) -> Person { Person(name: Name(text: t), age: age) }\nfn layer(t: Str) -> Layer { Layer.Shown(top: Drawing(shape: Shape.Circle(centre: person(t, 1), r: 2))) }\nfn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\nfn main() -> Int {\n    bit(person(\"a\", 1) == person(\"a\", 1), 1) + bit(person(\"a\", 1) == person(\"b\", 1), 2)\n    + bit(layer(\"a\") == layer(\"a\"), 4) + bit(layer(\"a\") == layer(\"q\"), 8) + bit(layer(\"a\") == Layer.Hidden(), 16)\n    + bit(Option[Person].Some(value: person(\"a\", 1)) == Option[Person].Some(value: person(\"a\", 1)), 32)\n    + bit(Result[Shape, Person].Err(error: person(\"a\", 1)) == Result[Shape, Person].Ok(value: Shape.Dot()), 64)\n    + bit(Box[Shape](value: Shape.Dot()) == Box[Shape](value: Shape.Dot()), 128)\n}\n", "165")
+}
+
+@test
+fn owning_temporaries_live_through_the_comparison_and_are_released_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Every operand here is a temporary that owns heap strings: built, compared, and released
+    // after the answer.
+    let r = agree(h, with("fn bit(b: Bool, n: Int) -> Int { if b { n } else { 0 } }\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 6 {\n        total = total + bit(item(i) == item(i), 1) + bit(item(i) != item(i + 1), 10);\n        total = total + bit(shape(i) == shape(i), 100) + bit(shape(i) == shape(i + 1), 1000);\n        total = total + bit(outer(i) == outer(i), 10000);\n        total = total + bit(Option[Str].Some(value: text(i)) == Option[Str].Some(value: text(i)), 100000);\n        total = total + bit(Result[Str, Str].Ok(value: text(i)) == Result[Str, Str].Err(error: text(i)), 1000000);\n        total = total + bit(some_text(i) == some_text(i + 1), 10000000);\n        churn();\n        i = i + 1;\n    }\n    total\n}\n"), "660666")?;
+    check_that(r.strings.allocated > 100, counted_show(r))
+}
+
+@test
+fn a_compared_binding_is_still_its_own_afterwards(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Equality observes and does not move.
+    answers(caps(io, p, sp, v, t), with("fn main() -> Int {\n    let a = outer(4);\n    let b = outer(4);\n    let c = outer(5);\n    let same = a == b;\n    let differ = a != c;\n    churn();\n    let mut n = 0;\n    if same { n = n + 1; }\n    if differ { n = n + 10; }\n    n + 100 * (str_len(a.item.name) + str_len(b.item.name) + str_len(c.item.name))\n}\n"), "911")
+}
+
+@test
+fn an_operand_that_leaves_releases_what_the_other_side_built(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), with("fn right(k: Int) -> Int {\n    if item(k) == Item(name: text(k), n: { return 7; }) { 1 } else { 2 }\n}\nfn left(k: Int) -> Int {\n    if Item(name: text(k), n: { return 8; }) == item(k) { 1 } else { 2 }\n}\nfn main() -> Int { let a = right(1); churn(); let b = left(2); a * 10 + b }\n"), "78")
+}
+
+@test
+fn equality_inside_a_value_block_and_after_propagation_compiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    answers(caps(io, p, sp, v, t), with("fn found(ok: Bool) -> Result[Option[Str], Int] {\n    if ok { Result[Option[Str], Int].Ok(value: Option[Str].Some(value: text(3))) } else { Result[Option[Str], Int].Err(error: 3) }\n}\nfn compare(ok: Bool) -> Result[Int, Int] {\n    let got = found(ok)?;\n    if got == Option[Str].Some(value: text(3)) { Result[Int, Int].Ok(value: 1) } else { Result[Int, Int].Ok(value: 0) }\n}\nfn main() -> Int {\n    let s = shape(1);\n    let same = match s {\n        Shape.Named(label: x) => {\n            let want = text(1);\n            x == want\n        },\n        Shape.Plain() => { false },\n        Shape.Pair(left: _, right: _) => { false },\n    };\n    churn();\n    let one = if same { 1 } else { 0 };\n    let ten = match compare(true) { Result.Ok(value: v) => 10 * v, Result.Err(error: _) => 0, };\n    let hundred = match compare(false) { Result.Ok(value: _) => 0, Result.Err(error: c) => 100 * c, };\n    one + ten + hundred\n}\n"), "311")
+}
+
+/// The sorted offsets of every `getelementptr i8, ptr P, i64 N` in `arm`.
+fn offsets(arm: Str, p: Str) -> Strs ! {} {
+    let key = f"getelementptr i8, ptr {p}, i64 ";
+    let o = strs_new();
+    for l in lines(arm) {
+        if text_contains(l, key) {
+            let ws = split(l, " ");
+            strs_push(o, strs_get(ws, strs_len(ws) - 1));
+        }
+    }
+    strs_sort(o)
+}
+
+@test
+fn an_enum_helper_reads_only_the_active_variant_s_slot(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Different tags leave before any payload is read, and each arm of the `switch` reads one
+    // variant's payload at the same offsets from both operands.
+    let ir = ir_of(h, "enum Shape { Plain, Named(label: Str), Pair(left: Str, right: Int), }\nfn main() -> Int { if Shape.Named(label: \"a\") == Shape.Plain() { 1 } else { 0 } }\n")?;
+    let body = function(ir, helper(ir, "Shape")?)?;
+    let parts = split(body, "\nb");
+    let entry = strs_get(parts, 0);
+    check_that(!text_contains(entry, "getelementptr"), f"a payload read before the tags agree:\n{body}")?;
+    check_that(text_contains(entry, "icmp eq i64"), body)?;
+    // Canonical order: `Named` is tag 0, `Pair` 1, `Plain` 2 — and `Plain` has no arm.
+    check_that(text_contains(body, "switch i64"), body)?;
+    check_that(text_contains(body, "i64 0, label") && text_contains(body, "i64 1, label"), body)?;
+    check_that(!text_contains(body, "i64 2, label"), f"a zero-payload variant has an arm:\n{body}")?;
+    let mut arms = 0;
+    let mut i = 1;
+    while i < strs_len(parts) {
+        let arm = strs_get(parts, i);
+        let a = offsets(arm, "%p0");
+        let b = offsets(arm, "%p1");
+        if strs_len(a) > 0 || strs_len(b) > 0 {
+            arms = arms + 1;
+            check_that(str_join(a, ",") == str_join(b, ",") && strs_len(a) == strs_len(b), f"two different payloads compared:\n{arm}")?;
+        }
+        i = i + 1;
+    }
+    check_that(arms >= 2, body)?;
+    // `!=` calls the same helper and negates it: there is no second one.
+    let ne = ir_of(h, "enum E { A(n: Int), B, }\nfn main() -> Int { if E.A(n: 1) != E.A(n: 1) { 1 } else { 0 } }\n")?;
+    check_that(count_matches(ne, "define internal i1 @nz.h.eq.") == 1, ne)?;
+    check_that(text_contains(ne, "xor i1"), ne)
+}
+
+@test
+fn declaration_order_changes_no_byte_of_the_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Fields, variants and payload fields written in another order.
+    let a = "struct P { a: Int, b: Str, }\nenum E { A(p: Int, q: Str), B, }\nfn main() -> Int { let x = P(a: 1, b: \"s\"); let y = E.A(p: 1, q: \"t\"); if x == P(b: \"s\", a: 1) { if y != E.B() { 1 } else { 2 } } else { 3 } }\n";
+    let b = "struct P { b: Str, a: Int, }\nenum E { B, A(q: Str, p: Int), }\nfn main() -> Int { let x = P(a: 1, b: \"s\"); let y = E.A(p: 1, q: \"t\"); if x == P(b: \"s\", a: 1) { if y != E.B() { 1 } else { 2 } } else { 3 } }\n";
+    check_that(str_len(a) == str_len(b), "two lengths")?;
+    let ia = ir_of(h, a)?;
+    let ib = ir_of(h, b)?;
+    check_that(ia == ib, f"{ia}\n---\n{ib}")?;
+    agree(h, a, "1")?;
+    agree(h, b, "1")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_helper_is_named_by_the_type_s_durable_identity_and_its_arguments(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `Box[Int]` and `Box[Str]` are two types and get two helpers; one comparison written twice
+    // gets one. No helper is emitted for a type nobody compares.
+    let ir = ir_of(h, "struct Box[T] { value: T, }\nstruct Unused { n: Int, }\nfn main() -> Int {\n    let mut n = 0;\n    if Box[Int](value: 1) == Box[Int](value: 1) { n = n + 1; }\n    if Box[Int](value: 2) == Box[Int](value: 2) { n = n + 1; }\n    if Box[Str](value: \"a\") == Box[Str](value: \"a\") { n = n + 1; }\n    n\n}\n")?;
+    let helpers = strs_new();
+    for l in lines(ir) {
+        if text_starts_with(l, "define internal i1 @nz.h.eq.") {
+            strs_push(helpers, l);
+        }
+    }
+    check_that(strs_len(helpers) == 2, str_join(helpers, "\n"))?;
+    check_that(strs_get(helpers, 0) != strs_get(helpers, 1), str_join(helpers, "\n"))?;
+    for x in helpers {
+        check_that(text_contains(x, "Box"), str_join(helpers, "\n"))?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

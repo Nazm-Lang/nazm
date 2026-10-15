@@ -1,0 +1,171 @@
+// N56: the registry from the command line — publish, require, lock, build, yank, and the refusals
+// a build must make before it compiles anything (`docs/architecture.md` §7.58). Ported from
+// `crates/nazm-cli/tests/registry.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// A library `shapes` at `version` whose `sides` returns `answer` more than its argument, in
+/// `root/rel`.
+fn shapes(h: Caps, root: Str, rel: Str, version: Str, answer: Int) -> Result[Int, Str] ! { io } {
+    scratch_write(h, root, f"{rel}/nazm.toml", f"schema = \"nazm.package/1\"\n\n[package]\nname = \"shapes\"\nversion = \"{version}\"\n")?;
+    scratch_write(h, root, f"{rel}/src/poly.nz", f"pub fn sides(n: Int) -> Int {{ n + {answer} }}\n")
+}
+
+fn app(h: Caps, root: Str, req: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, root, "app/nazm.toml", f"schema = \"nazm.package/1\"\n\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n\n[registry]\npath = \"../registry\"\n\n[dependencies]\nshapes = {{ version = \"{req}\" }}\n")?;
+    scratch_write(h, root, "app/src/main.nz", "use \"shapes:poly.nz\";\nfn main() -> Int { sides(1) }\n")
+}
+
+/// Publish `shapes` `version` (answering `answer`) through the command line.
+fn publish(h: Caps, root: Str, version: Str, answer: Int) -> Result[Int, Str] ! { io, spawn } {
+    shapes(h, root, f"work/shapes-{version}", version, answer)?;
+    let a = strs_new();
+    strs_push(a, "publish");
+    strs_push(a, f"{root}/work/shapes-{version}");
+    strs_push(a, "--registry");
+    strs_push(a, "registry");
+    let o = nazm(h, root, a);
+    check_that(o.code == 0, o.stderr)
+}
+
+fn printed(h: Caps, root: Str, args: Str) -> Str ! { io, spawn } {
+    nazm(h, root, words(args)).stdout
+}
+
+/// A fresh directory, `body` run on it, then removed.
+fn in_dir(h: Caps, body: fn(Caps, Str) -> Result[Int, Str] ! { io, spawn }) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let r = body(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn published_and_locked(h: Caps, root: Str) -> Result[Int, Str] ! { io, spawn } {
+    publish(h, root, "1.0.0", 10)?;
+    publish(h, root, "1.1.0", 20)?;
+    publish(h, root, "2.0.0", 30)?;
+    app(h, root, "^1.0.0")?;
+    // `^1.0.0` takes 1.1.0, the highest it admits.
+    let r = nazm(h, root, words("run --interpret app"));
+    check_that(r.stdout == "21\n", r.stderr)?;
+    // Locked, then a newer 1.x published: the lockfile's choice stands, and `--locked` holds.
+    let l = nazm(h, root, words("lock app"));
+    check_that(l.code == 0, l.stderr)?;
+    let lock = read_text(h, f"{root}/app/nazm.lock")?;
+    check_that(text_contains(lock, "source = \"registry+shapes@1.1.0\""), lock)?;
+    publish(h, root, "1.2.0", 40)?;
+    let r2 = nazm(h, root, words("run --interpret --locked app"));
+    check_that(r2.stdout == "21\n", r2.stderr)?;
+    let b = nazm(h, root, words("build --locked app -o app.exe"));
+    check_that(b.code == 0, b.stderr)?;
+    let ran = run(h, f"{root}/app.exe", strs_new(), "", suite_env(h));
+    check_that(ran.stdout == "21\n", ran_show(ran))?;
+    // Yanking the locked version keeps it for the lockfile; without one, it is never chosen.
+    let y = nazm(h, root, words("yank shapes@1.1.0 --registry registry"));
+    check_that(y.code == 0, y.stderr)?;
+    check_that(printed(h, root, "run --interpret app") == "21\n", "the lockfile's yanked version")?;
+    let v = h.v;
+    file_remove(h.io, str_vouch(f"{root}/app/nazm.lock"));
+    let unlocked = printed(h, root, "run --interpret app");
+    check_that(unlocked == "41\n", unlocked)
+}
+
+@test
+fn a_registry_dependency_is_published_resolved_locked_built_and_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, published_and_locked)
+}
+
+fn tampered(h: Caps, root: Str) -> Result[Int, Str] ! { io, spawn } {
+    publish(h, root, "1.0.0", 10)?;
+    app(h, root, "^1.0.0")?;
+    check_that(printed(h, root, "run --interpret app") == "11\n", "before")?;
+    scratch_write(h, root, "registry/packages/shapes/1.0.0/src/poly.nz", "pub fn sides(n: Int) -> Int { n + 999 }\n")?;
+    let r = nazm(h, root, words("build app -o app.exe"));
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0507"), r.stderr)?;
+    check_that(!file_exists_at(h.io, f"{root}/app.exe"), "an executable was built")
+}
+
+@test
+fn a_tampered_registry_is_refused_before_anything_is_compiled(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, tampered)
+}
+
+fn republished(h: Caps, root: Str) -> Result[Int, Str] ! { io, spawn } {
+    publish(h, root, "1.0.0", 10)?;
+    shapes(h, root, "work/again", "1.0.0", 11)?;
+    let a = strs_new();
+    strs_push(a, "publish");
+    strs_push(a, f"{root}/work/again");
+    strs_push(a, "--registry");
+    strs_push(a, "registry");
+    let o = nazm(h, root, a);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "N0512"), o.stderr)?;
+    app(h, root, "^3.0.0")?;
+    let r = nazm(h, root, words("check app"));
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0513") && text_contains(r.stderr, "`app` requires ^3.0.0"), r.stderr)?;
+    let y = nazm(h, root, words("yank shapes --registry registry"));
+    check_that(y.code != 0, ran_show(y))?;
+    check_that(text_contains(y.stderr, "NAME@VERSION"), y.stderr)
+}
+
+@test
+fn a_published_version_cannot_be_published_again_and_nothing_satisfiable_is_named(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, republished)
+}
+
+fn linked(h: Caps, root: Str) -> Result[Int, Str] ! { io, spawn } {
+    publish(h, root, "1.0.0", 10)?;
+    app(h, root, "^1.0.0")?;
+    scratch_write(h, root, "secret.nz", "pub fn sides(n: Int) -> Int { 0 }\n")?;
+    let a = words("-s");
+    strs_push(a, f"{root}/secret.nz");
+    strs_push(a, f"{root}/registry/packages/shapes/1.0.0/src/linked.nz");
+    let ln = run(h, "ln", a, "", env_here(h.io));
+    check_that(ln.code == 0, ln.stderr)?;
+    let r = nazm(h, root, words("check app"));
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0514"), r.stderr)
+}
+
+@test
+fn a_registry_package_holding_a_link_is_refused_by_the_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, linked)
+}
+
+fn updated(h: Caps, root: Str) -> Result[Int, Str] ! { io, spawn } {
+    // N90, §7.91.
+    publish(h, root, "1.0.0", 10)?;
+    app(h, root, "^1.0.0")?;
+    check_that(nazm(h, root, words("lock app")).code == 0, "lock")?;
+    publish(h, root, "1.1.0", 20)?;
+    // The lockfile still holds 1.0.0.
+    check_that(printed(h, root, "run --interpret app") == "11\n", "locked to 1.0.0")?;
+    let u = nazm(h, root, words("update app shapes"));
+    check_that(u.code == 0, u.stderr)?;
+    check_that(u.stdout == "shapes 1.0.0 → 1.1.0\n", u.stdout)?;
+    let lock = read_text(h, f"{root}/app/nazm.lock")?;
+    check_that(text_contains(lock, "registry+shapes@1.1.0"), lock)?;
+    check_that(printed(h, root, "run --interpret app") == "21\n", "updated to 1.1.0")?;
+    let again = printed(h, root, "update app");
+    check_that(again == "no changes\n", again)?;
+    let unknown = nazm(h, root, words("update app circles"));
+    check_that(unknown.code == 1, ran_show(unknown))?;
+    check_that(text_contains(unknown.stderr, "N0501"), unknown.stderr)
+}
+
+@test
+fn update_rewrites_the_lockfile_and_prints_each_change(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_dir(h, updated)
+}
