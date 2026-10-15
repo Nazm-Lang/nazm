@@ -111,6 +111,9 @@ pub fn channel_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, time: TimeCap)
         if op == B_CHAN_SELECT_UNTIL && time_now_ms() >= deadline - 1 {
             ints_set(h.sched, SC_TIMEOUTS, ints_get(h.sched, SC_TIMEOUTS) + 1)
             done_waiting(vm)
+            // A task polling with a select that timed out gives way at its next loop turn: on the
+            // Rust interpreter the task it waits for runs on a thread of its own meanwhile.
+            ints_set(vm.st, ST_TURNS, 999)
             return V.Int(v: 0 - 2)
         }
         return wait(vm)
