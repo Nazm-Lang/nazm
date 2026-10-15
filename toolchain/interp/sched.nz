@@ -125,7 +125,12 @@ pub fn run_program(p: Prog, main: Vm, caps: Caps) -> Int {
         let s = ints_get(state, t)
         let mut progressed = false
         let mut stay = false
-        if s == T_RUN || s == T_WAIT {
+        // A task waiting on a socket tries again only once no other task has made progress for a
+        // whole round: a try that finds nothing holds every task while it lasts (0.10.0's runtime
+        // takes about 100 ms to time out a 1 ms deadline), and the task that would answer it may
+        // be one of those others (`osbuiltins.nz`, *sockets on one thread*).
+        let held = s == T_WAIT && ints_get(vm.st, ST_IOWAIT) != 0 && idle + 1 < vec_len(tasks)
+        if (s == T_RUN || s == T_WAIT) && !held {
             let x = exec(p, vm, caps)
             progressed = ints_get(vm.st, ST_STEPS) > 0
             if x == X_DONE {

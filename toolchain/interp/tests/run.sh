@@ -40,16 +40,31 @@ if ! "$NAZM_BUILD" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$wor
 fi
 
 # Every input: the compatibility corpus's run and trap cases, the examples and this track's own.
-# `--rust-tests` instead takes the programs the Rust CLI tests embed: each raw string literal of
-# `crates/nazm-cli/tests/*.rs` with a `fn main` in it, written out as a file of its own.
+# `--rust-tests` instead takes the programs the Rust CLI tests embed: each string literal of
+# `crates/nazm-cli/tests/*.rs` with a `fn main` in it — raw, or plain with Rust's escapes and line
+# continuations undone — written out as a file of its own. A format string (one with `{{`) is left
+# out: its text is not the program. Character literals are stepped over, so a `'"'` starts nothing.
 if [ "${1:-}" = "--rust-tests" ]; then
     mkdir -p "$work/rs"
     for t in "$repo"/crates/nazm-cli/tests/*.rs; do
         perl -0777 -ne '
             my $base = $ARGV; $base =~ s{.*/}{}; $base =~ s{\.rs$}{};
             my $n = 0;
-            while (/r(#*)"(.*?)"\1/sg) {
-                my $src = $2;
+            while (/\br(#*)"(.*?)"\1|(?<![\w])\x27(?:[^\x27\\\n]|\\.[^\x27\n]*)\x27|"((?:[^"\\]|\\.)*)"/sg) {
+                my $src;
+                if (defined $2) {
+                    $src = $2;
+                } elsif (defined $3) {
+                    $src = $3;
+                    next if $src =~ /\{\{|\}\}/;
+                    $src =~ s/\\\n\s*//g;
+                    $src =~ s/\\(u\{[0-9a-fA-F]+\}|.)/
+                        my $e = $1;
+                        $e eq "n" ? "\n" : $e eq "t" ? "\t" : $e eq "r" ? "\r" : $e eq "0" ? "\0" :
+                        $e =~ m{^u\{(.*)\}$} ? chr(hex($1)) : $e/ge;
+                } else {
+                    next;
+                }
                 next unless $src =~ /fn main\b/;
                 $n++;
                 open(my $f, ">", "'"$work"'/rs/$base-$n.nz") or die;

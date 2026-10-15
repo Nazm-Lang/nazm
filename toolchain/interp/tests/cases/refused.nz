@@ -1,0 +1,13 @@
+// What `nazm run` refuses before the program starts (design.md, D11): of a call into C and a
+// placement only a board's image has, the call into C, reported at its callee's name.
+static TICKS: Atomic = atomic_new(0)
+
+extern "C" fn labs(x: Int) -> Int = "labs";
+
+@interrupt("timer")
+fn tick() -> Int ! {} { atomic_add(TICKS, 1) }
+
+fn main(f: ForeignCap) -> Int ! { foreign } {
+    let a = 1
+    labs(0 - 3)
+}

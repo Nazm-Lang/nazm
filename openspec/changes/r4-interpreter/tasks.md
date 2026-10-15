@@ -40,4 +40,9 @@
       `NAZM`; files the programs write removed after the run
 - [x] 6.3 Sockets on one thread (D10): kvd agrees
 - [x] 6.4 The `/3` tables (`impls`, `orders`, `derived_hash`, `statics`) replace D8's reconstruction
-- [ ] 6.5 `--rust-tests`: the programs the Rust CLI tests embed, every difference reported
+- [x] 6.5 `--rust-tests`: the programs the Rust CLI tests embed (raw and plain string literals),
+      every difference reported
+- [x] 6.6 What `nazm run` refuses before the program starts (D11): calls into C, device registers,
+      board-only placements
+- [x] 6.7 The clocks from the program's first reading; a child's pipes polled as sockets are; a
+      waiting socket tried only after a round in which no other task progressed
