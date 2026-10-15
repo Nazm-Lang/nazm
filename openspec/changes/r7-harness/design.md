@@ -85,6 +85,22 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
    killer is given to it (a command), so the core never decides how a workspace is built — that,
    and containment, stay with the Rust runner until the coordinator moves them.
 
+10. **What a Rust test only some hosts run, the port runs on the same hosts.** A `#[ignore]`d test
+    that starts Docker (a QEMU boot, `node:wasi`, the EVM, a measured memory bound, gdb) is not
+    ported: `tests/run.sh` reads libtest's `ok`/`FAILED` lines, so an ignored test has no verdict to
+    agree with, and the container stays Rust (decision 9). A test `cfg_attr`-ignored off macOS
+    (`ssh-keygen`, Apple clang's CPU table, `--backend nazm`) asks `uname` and returns `Ok` off
+    macOS, and on macOS skips as `common::skip_without` does (`NAZM_REQUIRE_HOST_TOOLS=1` fails).
+11. **Nazm's own code generator is built once per run.** Where a Rust test asks for
+    `--backend nazm` it sets `NAZM_NZCG` to `differential::nzcg()`, built from
+    `toolchain/codegen/main.nz` once per test process. `tests/run.sh` builds it once (on macOS,
+    where it builds before 1.0) and hands it down as `NAZM_HARNESS_NZCG`; without that variable
+    `lib/differential.nz`'s `nzcg` builds it into the test's own scratch directory. The harness
+    variable is not `NAZM_NZCG` itself, so a ported test that asserts what happens without
+    `NAZM_NZCG` still sees it unset.
+12. **The suite's environment follows `.cargo/config.toml`.** Since R1.5 (D12) it also sets
+    `NAZM_USER_CACHE_DIR=` (the user cache off); `suite_env` sets it and `tests/run.sh` exports it.
+
 ## Risks / Trade-offs
 
 - [`nazm test` runs every test twice] → the interpreter leg is a second reference for the harness

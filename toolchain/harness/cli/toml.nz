@@ -1,0 +1,167 @@
+// R1e, S4: `@std/toml` (`docs/spec.md`, *The standard library*). Ported from
+// `crates/nazm-cli/tests/toml.rs` (R7).
+//
+// Every form of a document decodes alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2`
+// and Cranelift, with nothing live, and encodes to a fixed point; every invalid shape is refused
+// with its line and column; and every manifest in the tree, and a lockfile, parse and round-trip.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+const DECODER: Str = "use \"@std/toml\";\nuse \"@std/json\";\n\nfn tagged(kind: Str, value: Str) -> Str { f\"{{\\\"type\\\":\\\"{kind}\\\",\\\"value\\\":{json_quote(value)}}}\" }\n\nfn float_text(x: Float64) -> Str {\n    if float_is_nan(x) { \"nan\" } else { if float_is_infinite(x) { if x > 0.0 { \"inf\" } else { \"-inf\" } } else { num_to_str(x) } }\n}\n\nfn json(t: Toml) -> Str {\n    match t {\n        Toml.Str(value: s) => tagged(\"string\", s),\n        Toml.Int(value: n) => tagged(\"integer\", int_to_str(n)),\n        Toml.Float(value: x) => tagged(\"float\", float_text(x)),\n        Toml.Bool(value: b) => tagged(\"bool\", if b { \"true\" } else { \"false\" }),\n        Toml.OffsetDatetime(value: s) => tagged(\"datetime\", s),\n        Toml.LocalDatetime(value: s) => tagged(\"datetime-local\", s),\n        Toml.LocalDate(value: s) => tagged(\"date-local\", s),\n        Toml.LocalTime(value: s) => tagged(\"time-local\", s),\n        Toml.Array(items: items) => {\n            let parts = strs_new();\n            for i in 0..chain_len(items) { strs_push(parts, json(chain_get(items, i))); }\n            f\"[{str_join(parts, \",\")}]\"\n        },\n        Toml.Table(keys: keys, values: values) => {\n            let parts = strs_new();\n            for i in 0..chain_len(keys) { strs_push(parts, f\"{json_quote(chain_get(keys, i))}:{json(chain_get(values, i))}\"); }\n            f\"{{{str_join(parts, \",\")}}}\"\n        },\n    }\n}\n\nfn main(io: IoCap) -> Int ! {io} {\n    match toml_parse(read_file(\"doc.toml\")) {\n        Result.Ok(value: t) => {\n            print(str_concat(json(t), \"\\n\"));\n            let text = toml_encode(t);\n            print(text);\n            let fixed = match toml_parse(text) {\n                Result.Ok(value: u) => toml_encode(u) == text,\n                Result.Err(error: e) => false,\n            };\n            let port = match toml_get(t, \"database\") {\n                Option.Some(value: db) => match toml_get(db, \"ports\") {\n                    Option.Some(value: ports) => json(ports),\n                    Option.None() => \"no ports\",\n                },\n                Option.None() => \"no database\",\n            };\n            print(f\"fixed point: {fixed}\\nports: {port}\\n\");\n            0\n        },\n        Result.Err(error: e) => { print(f\"error: {e}\\n\"); 0 },\n    }\n}\n";
+
+const DOCUMENT: Str = "# A TOML document\ntitle = \"TOML \\\"Example\\\"\\tdone \\u00E9\"\nlit = 'C:\\Users\\nodejs'\nmulti = \"\"\"\nRoses are red\nViolets are \\\n    blue\"\"\"\n[owner]\nname = \"Tom Preston-Werner\"\ndob = 1979-05-27T07:32:00-08:00\n\n[database]\nenabled = true\nports = [ 8000, 8001, 8002, ]\ndata = [ [\"delta\", \"phi\"], [3.14] ]\ntemp_targets = { cpu = 79.5, case = 72.0 }\nhex = 0xDEAD_BEEF\nbig = -9_223_372_036_854_775_808\nfloat = 6.626e-34\ninf = -inf\nlocal = 07:32:00.5\nday = 1979-05-27\n\n[servers]\n  [servers.alpha]\n  ip = \"10.0.0.1\"\n  site.\"google.com\" = true\n\n[[fruits]]\nname = \"apple\"\n[fruits.physical]\ncolor = \"red\"\n[[fruits.varieties]]\nname = \"red delicious\"\n[[fruits]]\nname = \"banana\"\n";
+
+const EXPECTED: Str = "{\"title\":{\"type\":\"string\",\"value\":\"TOML \\\"Example\\\"\\tdone é\"},\"lit\":{\"type\":\"string\",\"value\":\"C:\\\\Users\\\\nodejs\"},\"multi\":{\"type\":\"string\",\"value\":\"Roses are red\\nViolets are blue\"},\"owner\":{\"name\":{\"type\":\"string\",\"value\":\"Tom Preston-Werner\"},\"dob\":{\"type\":\"datetime\",\"value\":\"1979-05-27T07:32:00-08:00\"}},\"database\":{\"enabled\":{\"type\":\"bool\",\"value\":\"true\"},\"ports\":[{\"type\":\"integer\",\"value\":\"8000\"},{\"type\":\"integer\",\"value\":\"8001\"},{\"type\":\"integer\",\"value\":\"8002\"}],\"data\":[[{\"type\":\"string\",\"value\":\"delta\"},{\"type\":\"string\",\"value\":\"phi\"}],[{\"type\":\"float\",\"value\":\"3.14\"}]],\"temp_targets\":{\"cpu\":{\"type\":\"float\",\"value\":\"79.5\"},\"case\":{\"type\":\"float\",\"value\":\"72\"}},\"hex\":{\"type\":\"integer\",\"value\":\"3735928559\"},\"big\":{\"type\":\"integer\",\"value\":\"-9223372036854775808\"},\"float\":{\"type\":\"float\",\"value\":\"6.626e-34\"},\"inf\":{\"type\":\"float\",\"value\":\"-inf\"},\"local\":{\"type\":\"time-local\",\"value\":\"07:32:00.5\"},\"day\":{\"type\":\"date-local\",\"value\":\"1979-05-27\"}},\"servers\":{\"alpha\":{\"ip\":{\"type\":\"string\",\"value\":\"10.0.0.1\"},\"site\":{\"google.com\":{\"type\":\"bool\",\"value\":\"true\"}}}},\"fruits\":[{\"name\":{\"type\":\"string\",\"value\":\"apple\"},\"physical\":{\"color\":{\"type\":\"string\",\"value\":\"red\"}},\"varieties\":[{\"name\":{\"type\":\"string\",\"value\":\"red delicious\"}}]},{\"name\":{\"type\":\"string\",\"value\":\"banana\"}}]}\ntitle = \"TOML \\\"Example\\\"\\tdone é\"\nlit = \"C:\\\\Users\\\\nodejs\"\nmulti = \"Roses are red\\nViolets are blue\"\n\n[owner]\nname = \"Tom Preston-Werner\"\ndob = 1979-05-27T07:32:00-08:00\n\n[database]\nenabled = true\nports = [8000, 8001, 8002]\ndata = [[\"delta\", \"phi\"], [3.14]]\nhex = 3735928559\nbig = -9223372036854775808\nfloat = 6.626e-34\ninf = -inf\nlocal = 07:32:00.5\nday = 1979-05-27\n\n[database.temp_targets]\ncpu = 79.5\ncase = 72.0\n\n[servers]\n\n[servers.alpha]\nip = \"10.0.0.1\"\n\n[servers.alpha.site]\n\"google.com\" = true\n\n[[fruits]]\nname = \"apple\"\n\n[fruits.physical]\ncolor = \"red\"\n\n[[fruits.varieties]]\nname = \"red delicious\"\n\n[[fruits]]\nname = \"banana\"\nfixed point: true\nports: [{\"type\":\"integer\",\"value\":\"8000\"},{\"type\":\"integer\",\"value\":\"8001\"},{\"type\":\"integer\",\"value\":\"8002\"}]\n0\n";
+
+fn decoded_everywhere(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", DECODER)?;
+    scratch_write(h, d, "doc.toml", DOCUMENT)?;
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
+    vec_push(runs, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
+    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let exe = f"{d}/{text_replace(text_replace(name, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{name}: {b.stderr}")?;
+        vec_push(runs, Labeled(label: name, ran: bounded_exe(h, exe, d, env)));
+        k = k + 1;
+    }
+    for r in runs {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(r.ran.stdout == EXPECTED, f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"{r.label}: no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn every_form_decodes_alike_everywhere_and_encodes_to_a_fixed_point(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = decoded_everywhere(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// `text` through the decoder under the interpreter: its whole run.
+fn decode_run(h: Caps, text: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", DECODER)?;
+    let w = scratch_write(h, d, "doc.toml", text);
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    scratch_remove(h, d);
+    w?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// `text` through the decoder under the interpreter, which must succeed: its first line.
+fn decode(h: Caps, text: Str) -> Result[Str, Str] ! { io, spawn } {
+    let r = decode_run(h, text)?;
+    check_that(r.code == 0, ran_show(r))?;
+    let ls = lines(r.stdout);
+    Result[Str, Str].Ok(value: if strs_len(ls) > 0 { strs_get(ls, 0) } else { "" })
+}
+
+fn decodes_to(h: Caps, text: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = decode(h, text)?;
+    check_that(got == want, f"{text}: {got}")
+}
+
+@test
+fn every_invalid_shape_is_refused_with_its_line_and_column(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    decodes_to(h, "a = 1\na = 2\n", "error: 2:5: `a` is defined twice")?;
+    decodes_to(h, "[t]\n[t]\n", "error: 2:4: the table `t` is defined twice")?;
+    decodes_to(h, "[a]\nb.c = 1\n[a.b]\n", "error: 3:6: the table `b` is defined twice")?;
+    decodes_to(h, "a = { b = 1 }\na.c = 2\n", "error: 2:7: `a` is already defined, and a dotted key cannot extend it")?;
+    decodes_to(h, "a = [1]\n[[a]]\n", "error: 2:6: `a` is already defined, and not as an array of tables")?;
+    decodes_to(h, "n = 9223372036854775808\n", "error: 1:24: an integer past `Int`")?;
+    decodes_to(h, "n = 99999999999999999999\n", "error: 1:25: an integer past `Int`")?;
+    decodes_to(h, "[a.b.c]\nz = 9\n[a]\nb.c.t = 1\n", "error: 4:9: `b` is already defined, and a dotted key cannot extend it")?;
+    decodes_to(h, "n = 012\n", "error: 1:5: a malformed number")?;
+    decodes_to(h, "n = 1__2\n", "error: 1:5: a malformed number")?;
+    decodes_to(h, "x = 1.\n", "error: 1:5: a fraction needs a digit on each side of its `.`")?;
+    decodes_to(h, "d = 2021-02-29\n", "error: 1:5: a malformed date or time")?;
+    decodes_to(h, "t = 24:00:00\n", "error: 1:5: a malformed date or time")?;
+    decodes_to(h, "s = \"\\x\"\n", "error: 1:6: an escape TOML does not have")?;
+    decodes_to(h, "s = \"\\uD800\"\n", "error: 1:6: an escape that is not a Unicode scalar value")?;
+    decodes_to(h, "s = \"open\n", "error: 1:10: a string that does not end on its line")?;
+    decodes_to(h, "a = 1 b = 2\n", "error: 1:7: expected the end of the line")?;
+    decodes_to(h, "a = { b = 1, }\n", "error: 1:14: a trailing `,` in an inline table")?;
+    decodes_to(h, "= 1\n", "error: 1:1: expected a key")?;
+    decodes_to(h, "a = \n", "error: 1:5: expected a value")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn manifests_under(h: Caps, dir: Str, into: Strs) -> Result[Int, Str] ! { io } {
+    let all = match file_walk(h.io, dir) {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: dir); },
+    };
+    for p in all {
+        if text_ends_with(p, "/nazm.toml") {
+            strs_push(into, p);
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn copy_package(h: Caps, root: Str, d: Str, pkg: Str) -> Result[Int, Str] ! { io } {
+    let from = f"{root}/examples/packages/{pkg}";
+    scratch_write(h, d, f"{pkg}/nazm.toml", read_text(h, f"{from}/nazm.toml")?)?;
+    let names = match dir_list(h.io, f"{from}/src") {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"{from}/src"); },
+    };
+    for n in names {
+        scratch_write(h, d, f"{pkg}/src/{n}", read_text(h, f"{from}/src/{n}")?)?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn round_trips(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let root = repo_root(h);
+    let manifests = strs_new();
+    for dir in words("crates/nazm-cli/templates examples/packages tests/compat") {
+        manifests_under(h, f"{root}/{dir}", manifests)?;
+    }
+    check_that(strs_len(manifests) >= 10, str_join(manifests, ", "))?;
+    // A lockfile, as `nazm lock` writes one.
+    copy_package(h, root, d, "app")?;
+    copy_package(h, root, d, "geometry")?;
+    let r = nazm(h, d, words("lock app"));
+    check_that(r.code == 0, ran_show(r))?;
+    strs_push(manifests, f"{d}/app/nazm.lock");
+    for m in manifests {
+        let text = read_text(h, m)?;
+        let line = decode(h, text)?;
+        check_that(text_starts_with(line, "{"), f"{m}: {line}")?;
+        let again = decode_run(h, text)?;
+        check_that(text_contains(again.stdout, "fixed point: true"), f"{m}: {ran_show(again)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn every_manifest_and_a_lockfile_parse_and_round_trip(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = round_trips(h, d);
+    scratch_remove(h, d);
+    r
+}

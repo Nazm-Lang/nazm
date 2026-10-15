@@ -27,9 +27,16 @@
 - [x] 4.3 `short_variants` (the brief's `shorter_forms`)
 - [x] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
       (`tests/mutants.sh`: 18 mutations, each caught by the Rust killer and the Nazm test)
-- [ ] 4.5 The remaining black-box files, `common`/`differential`-only first — 38 of them so far
-      (41 files, every test agreeing with its Rust test on the tree; `tests/mutants.sh`
-      over the mutations they kill: see each commit)
+- [ ] 4.5 The remaining black-box files, `common`/`differential`/`memory_report`-only first — 85
+      of the 186 test files of `crates/nazm-cli/tests/` so far (every test agreeing with its Rust
+      test on the tree, `tests/run.sh`; `tests/mutants.sh` over the mutations the first files kill:
+      see each commit). Docker-only `#[ignore]`d tests stay Rust (design decision 10). Left: the
+      files that call a Rust API (`builtins`, `fuzz_replay`, `repository`, `resolution`,
+      `documentation`, `manifests`, `domain_profiles`, `profiles_v2`, `numbers`, `cross`, `docs`,
+      `boards`, `realtime`, `cranelift`, `core_ir`, `reexports`, `ffi`, `runtime`, `prelude`,
+      `summary`, `mir`, `durable_identity`, `native_cache`, `incremental`, `build`, …), two that
+      drive concurrent processes over TCP (`distributed`, `secure_service`), and the rest
+- [ ] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `613047d2`
 
 ## 5. The mutation runner's core
 - [x] 5.1 Read the catalogue; apply exactly once; restore byte for byte, in the Rust runner's own
