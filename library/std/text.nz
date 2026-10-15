@@ -61,11 +61,17 @@ pub fn text_split_end(s: Str, sep: Str, from: Int) -> Int ! {} {
     } else {
         let first = str_byte(sep, 0);
         let mut i = from;
-        let mut found = m;
-        while i + n <= m && found == m {
-            if str_byte(s, i) == first && (n == 1 || str_slice(s, i, i + n) == sep) { found = i; } else { i = i + 1; }
+        if n == 1 {
+            // One byte: the tightest loop, whose only check each step is `i < m`.
+            while i < m && str_byte(s, i) != first { i = i + 1; }
+            i
+        } else {
+            let mut found = m;
+            while i + n <= m && found == m {
+                if str_byte(s, i) == first && str_slice(s, i, i + n) == sep { found = i; } else { i = i + 1; }
+            }
+            found
         }
-        found
     }
 }
 
