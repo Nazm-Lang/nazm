@@ -1,0 +1,7 @@
+fn a() -> Int { let (a, b) = (1, 2); let (a, c) = (3, 4); a + b + c }
+fn b() -> Int { let x = 1; let (x, y) = (3, 4); x + y }
+fn c() -> Int { let (a, b) = (1, 2); let a = 3; a + b }
+fn d() -> Int { let x = 1; let Some(x) = Some(2) else { return 0 }; x }
+fn e() -> Int { let (a, b) = (1, 2); let (a, b) = (3, 4); a + b }
+fn f() -> Int { let (a, b) = (1, 2); let c = { let (a, b) = (10, 20); a + b }; let d = match (a, b) { (a, b) => a * b }; a + b + c + d }
+fn main() -> Int { a() }
