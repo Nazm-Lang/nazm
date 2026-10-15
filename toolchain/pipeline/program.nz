@@ -313,11 +313,11 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
     let home = match text_find(target.def, "::fn ") { Some(k) => str_slice(target.def, 0, k), None => target.module }
     let name = target.name + "#value@" + home
     let locals: Vec[CirLocal] = vec_new()
-    vec_push(locals, CirLocal(name: "env", ty: "?", origin: "param"))
+    vec_push(locals, CirLocal(name: "env", ty: "?", origin: "param", at: "@name"))
     let args = ints_new()
     for i in 0..target.params {
         let l = vec_get(target.locals, i)
-        vec_push(locals, CirLocal(name: l.name, ty: l.ty, origin: "param"))
+        vec_push(locals, CirLocal(name: l.name, ty: l.ty, origin: "param", at: l.at))
         let ak = strs_new()
         let av = ints_new()
         strs_push(ak, "op")
@@ -340,6 +340,11 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
     ints_push(cv, json_add_array(d, args))
     strs_push(ck, "type")
     ints_push(cv, json_add_str(d, target.ret))
+    // Every span of a thunk is its target's name (`thunk_of`), which LIR finds as `@name`.
+    strs_push(ck, "at")
+    ints_push(cv, json_add_str(d, "@name"))
+    strs_push(ck, "callee_at")
+    ints_push(cv, json_add_str(d, "@name"))
     let call = json_add_object(d, ck, cv)
     let bk = strs_new()
     let bv = ints_new()
@@ -347,6 +352,8 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
     ints_push(bv, json_add_array(d, ints_new()))
     strs_push(bk, "tail")
     ints_push(bv, call)
+    strs_push(bk, "at")
+    ints_push(bv, json_add_str(d, "@name"))
     let body = json_add_object(d, bk, bv)
     CirFn(def: module + "::fn " + name, module: module, name: name, type_params: 0, params: target.params + 1,
         ret: target.ret, published: target.published, locals: locals, consts: vec_new(), body: body, foreign: "", node: 0 - 1, captures: ints_new(), export: "")

@@ -106,6 +106,10 @@ pub struct LocalDecl {
     name: Str,
     /// `param`, `binding`, `binding mut` or `temp`.
     origin: Str,
+    /// Where it is declared, and (a binding in a block of the body) that block's span: what a
+    /// debugger is told (not printed).
+    at: Str,
+    region: Str,
 }
 
 pub struct MirFn {

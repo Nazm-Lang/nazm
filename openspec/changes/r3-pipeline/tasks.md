@@ -105,4 +105,8 @@
       inputs found under the key computed here, each entry written again byte for byte the one
       `nazm build` wrote; the runtime digest equal to the one `--provenance` records; 9 of 9
       broken entries read as expected. The Cranelift key is left to R9, whose own replaces it
-- [ ] 7.3 Debug information
+- [x] 7.3 Debug information: `pipeline ops-debug`, as `nazm lir --ops --debug` — positions,
+      the variables a debugger shows with their scopes, the files the positions name — with
+      every MIR statement's span Rust's; `nazm core-ir --with-sources` gives each module's file
+      index and path, a call's `callee_at` and a binding's `at`. `run.sh`: lir ops --debug 161
+      of 161 (base) and 1002 of 1002 (full) identical

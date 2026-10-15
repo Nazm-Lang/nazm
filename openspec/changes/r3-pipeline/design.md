@@ -219,6 +219,31 @@ Not ported: the Cranelift backend's key (its input is the unit's LIR digest with
 version and printed settings), which R9's code generator replaces with its own; and the check
 store (`nazm.check/5`), which is R2's.
 
+## Debug information (7.3)
+
+A `--debug` build's LIR (`nazm lir --ops --debug`, what both backends make line tables and
+variables from): each function's `at FILE LINE`; before each MIR statement and terminator a
+`loc FILE LINE COLUMN` of its span, a block switched to before anything is in it restating the
+last one (N108); a borrowed parameter's address kept in a variable of its own; a `debug` line per
+parameter or source binding of an integer word, `Bool` or string with a plain name — where it is
+kept, its parameter position, its line, its kind and its lexical scope (its block's first and
+last positions, or none in the function's body); and after each unit the files its positions
+name, `; file INDEX PATH`. The DWARF the LLVM emitter attaches to LLVM text (`debug.rs`) is the
+LLVM emitter's, not this stage's.
+
+Every MIR statement's span now matters, not only a failing one's. MIR keeps Rust's: a call at
+its callee (`callee_at`), a `match` binding's payload at the binding, a region's drops at its
+block, a `match` arm's end at the arm, a `scope`'s join at its body, the function's end at its
+body, a discarded value's drop at its expression; the shared unwind block, a failure cleanup
+block and an orphan's `unwind` at no position; a thunk's spans its target's name. A local keeps
+its declaring span and (a binding) its block's span, which MIR's text does not print.
+
+Three facts Core IR did not give, now given only with `--with-sources` (read-only, additive, so
+the default document and every digest are unchanged; `crates/nazm-cir/src/print.rs`): each
+module's `file` (the index a position names) and `path` (the loader's name for it), a call's
+`callee_at` (calls, trait calls, indirect calls) and a `match` binding's `at`. Without them the
+positions, file names and those statements' spans could only be guessed.
+
 ## Order of work
 
 1. This proposal.

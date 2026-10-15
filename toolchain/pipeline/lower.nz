@@ -51,6 +51,8 @@ struct Fx {
     err: Strs,
     /// The span statements are made under (one element).
     at: Strs,
+    /// The spans of the blocks being lowered, the body's first: a binding's scope.
+    open: Strs,
 }
 
 fn k_owned() -> Int { 0 }
@@ -82,13 +84,13 @@ fn local_ty(fx: Fx, l: Int) -> Str {
 
 fn temp(fx: Fx, t: Str, what: Str) -> Int {
     let id = vec_len(fx.locals)
-    vec_push(fx.locals, LocalDecl(ty: t, name: what + "#" + int_to_str(id), origin: "temp"))
+    vec_push(fx.locals, LocalDecl(ty: t, name: what + "#" + int_to_str(id), origin: "temp", at: "", region: ""))
     id
 }
 
 fn tasks_local(fx: Fx) -> Int {
     let id = vec_len(fx.locals)
-    vec_push(fx.locals, LocalDecl(ty: "Tasks", name: "tasks#" + int_to_str(id), origin: "temp"))
+    vec_push(fx.locals, LocalDecl(ty: "Tasks", name: "tasks#" + int_to_str(id), origin: "temp", at: "", region: ""))
     id
 }
 
@@ -106,10 +108,13 @@ fn push(fx: Fx, s: Stmt) {
     }
 }
 
-fn set_term(fx: Fx, b: Int, t: Term) {
+fn set_term(fx: Fx, b: Int, t: Term) { set_term_at(fx, b, t, strs_get(fx.at, 0)) }
+
+/// `set_term` at `at` (`""`: no position, as Rust's synthetic span).
+fn set_term_at(fx: Fx, b: Int, t: Term, at: Str) {
     let block = vec_get(fx.blocks, b)
     if vec_len(block.term) == 0 { vec_push(block.term, t) } else { vec_set(block.term, 0, t) }
-    if strs_len(block.term_at) == 0 { strs_push(block.term_at, strs_get(fx.at, 0)) } else { strs_set(block.term_at, 0, strs_get(fx.at, 0)) }
+    if strs_len(block.term_at) == 0 { strs_push(block.term_at, at) } else { strs_set(block.term_at, 0, at) }
 }
 
 /// Lower under the span of node `n`, when it has one: what the statements made for it name.
@@ -158,10 +163,10 @@ fn unwind(fx: Fx) -> Int {
     let mut i = ints_len(fx.scopes) - 1
     while i >= 0 {
         vec_push(block.stmts, Stmt.ScopeJoin(list: ints_get(fx.scopes, i)))
-        strs_push(block.ats, strs_get(fx.at, 0))
+        strs_push(block.ats, "")
         i -= 1
     }
-    set_term(fx, b, Term.Goto(b: shared))
+    set_term_at(fx, b, Term.Goto(b: shared), "")
     hashmap_set(fx.cleanups, k, b)
     b
 }
@@ -175,10 +180,10 @@ fn finish_unwind(fx: Fx) {
         let t = vec_get(fx.locals, i).ty
         if !hashmap_has(fx.borrowed, i) && t != "Tasks" && managed_ty(fx, t) {
             vec_push(block.stmts, Stmt.Drop(l: i))
-            strs_push(block.ats, strs_get(fx.at, 0))
+            strs_push(block.ats, "")
         }
     }
-    set_term(fx, b, Term.Unwind)
+    set_term_at(fx, b, Term.Unwind, "")
 }
 
 /// The cleanup for leaving everything above `depth`, innermost first, without popping it.
@@ -250,6 +255,15 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
 
 fn write(fx: Fx, dst: Int, v: Rvalue) {
     if dst >= 0 { assign(fx, dst, v) } else { fail(fx, "a value produced where none is wanted") }
+}
+
+/// `write` at a call's callee (`callee_at`), where MIR puts a call.
+fn write_call(fx: Fx, dst: Int, v: Rvalue, e: Int) {
+    let was = strs_get(fx.at, 0)
+    let here = sval(fx.c, e, "callee_at")
+    if here != "" { strs_set(fx.at, 0, here) }
+    write(fx, dst, v)
+    strs_set(fx.at, 0, was)
 }
 
 fn constant(fx: Fx, id: Int) -> MConst {
@@ -348,6 +362,7 @@ fn finish_blocks(fx: Fx) -> Vec[Block] {
 
 /// A region: its statements, then its tail into `dst` (-1 for none), then the drop of what it bound.
 fn block_into(fx: Fx, b: Int, dst: Int) {
+    strs_push(fx.open, sval(fx.c, b, "at"))
     let depth = ints_len(fx.sk)
     let ss = kid(fx.c, b, "stmts")
     for i in 0..count(fx.c, ss) {
@@ -356,7 +371,11 @@ fn block_into(fx: Fx, b: Int, dst: Int) {
     }
     let tail = kid(fx.c, b, "tail")
     if tail >= 0 && live(fx) { expr_into(fx, tail, dst) }
+    // What the region bound is dropped at its end, at the block's span.
+    let was = enter_at(fx, b)
     pop_to(fx, depth)
+    leave_at(fx, was)
+    strs_pop(fx.open);
 }
 
 fn stmt(fx: Fx, s: Int) {
@@ -370,6 +389,12 @@ fn stmt_here(fx: Fx, s: Int) {
     let o = op(c, s)
     if o == "let" {
         let l = ival(c, s, "local")
+        // Its scope: the block it is in, or none in the function's own body.
+        if l >= 0 && l < vec_len(fx.locals) {
+            let d = vec_get(fx.locals, l)
+            let n = strs_len(fx.open)
+            vec_set(fx.locals, l, LocalDecl(ty: d.ty, name: d.name, origin: d.origin, at: d.at, region: if n > 1 { strs_get(fx.open, n - 1) } else { "" }))
+        }
         expr_into(fx, kid(c, s, "value"), l)
         own(fx, l)
     } else if o == "assign" {
@@ -383,7 +408,10 @@ fn stmt_here(fx: Fx, s: Int) {
             let t2 = ty(fx, t)
             let tmp = temp(fx, t2, "discard")
             expr_into(fx, e, tmp)
+            // Let go of at the expression's span.
+            let was = enter_at(fx, e)
             if live(fx) && managed_ty(fx, t2) { push(fx, Stmt.Drop(l: tmp)) }
+            leave_at(fx, was)
         }
     } else if o == "if" {
         statement_if(fx, kid(c, s, "cond"), kid(c, s, "then"), kid(c, s, "else"))
@@ -563,7 +591,7 @@ fn statement_if(fx: Fx, cond: Int, then: Int, other: Int) {
 
 /// A join nothing reached: sealed so no block is left open; `finish_blocks` drops it.
 fn seal_orphan(fx: Fx, b: Int) {
-    if vec_len(vec_get(fx.blocks, b).term) == 0 { set_term(fx, b, Term.Unwind) }
+    if vec_len(vec_get(fx.blocks, b).term) == 0 { set_term_at(fx, b, Term.Unwind, "") }
 }
 
 fn lower_loop(fx: Fx, id: Int, cond: Int, body: Int) {
@@ -606,6 +634,8 @@ fn lower_scope(fx: Fx, body: Int) {
     ints_push(fx.scopes, list)
     let depth = ints_len(fx.sk)
     block_into(fx, body, 0 - 1)
+    // The body's end, at the body's span: what it bound, then the join and its check.
+    let was = enter_at(fx, body)
     pop_to(fx, depth)
     stack_pop(fx)
     ints_pop(fx.scopes)
@@ -614,6 +644,7 @@ fn lower_scope(fx: Fx, body: Int) {
         let u2 = unwind(fx)
         push(fx, Stmt.CheckFailed(unwind: u2))
     }
+    leave_at(fx, was)
 }
 
 fn lower_spawn(fx: Fx, callee_def: Str, args: Int) {
@@ -735,7 +766,9 @@ fn operand(fx: Fx, e: Int, snapshot: Bool) -> Opnd {
         let tmp = temp(fx, t, "borrow")
         hashmap_set(fx.borrowed, tmp, true)
         let f = FieldRef(rec: bt, field: ival(c, e, "field"), name: sval(c, e, "name"))
+        let was = enter_at(fx, e)
         write(fx, tmp, Rvalue.FieldBorrow(base: Operand.Local(l: ival(c, base, "local")), f: f))
+        leave_at(fx, was)
         if !live(fx) { return none_opnd() }
         return Opnd(ok: true, o: Operand.Local(l: tmp), held: 0 - 1)
     }
@@ -893,7 +926,7 @@ fn expr_here(fx: Fx, e: Int, dst: Int) {
         if target < 0 { return }
         let os = operands(fx, kid(c, e, "args"))
         if !os.ok { return }
-        write(fx, dst, Rvalue.Call(callee: target, args: os.ops))
+        write_call(fx, dst, Rvalue.Call(callee: target, args: os.ops), e)
         release_all(fx, os.held)
     } else if o == "builtin" {
         builtin(fx, e, dst)
@@ -908,7 +941,7 @@ fn expr_here(fx: Fx, e: Int, dst: Int) {
             if target < 0 { return }
             let os = operands(fx, kid(c, e, "args"))
             if !os.ok { return }
-            write(fx, dst, Rvalue.Call(callee: target, args: os.ops))
+            write_call(fx, dst, Rvalue.Call(callee: target, args: os.ops), e)
             release_all(fx, os.held)
         } else if derived_hash(c, method) > 0 {
             // A derived `Hash`: the type's own walk, or its `==`.
@@ -935,7 +968,7 @@ fn expr_here(fx: Fx, e: Int, dst: Int) {
         if !os.ok { return }
         let rest: Vec[Operand] = vec_new()
         for i in 1..vec_len(os.ops) { vec_push(rest, vec_get(os.ops, i)) }
-        write(fx, dst, Rvalue.CallIndirect(callee: vec_get(os.ops, 0), args: rest))
+        write_call(fx, dst, Rvalue.CallIndirect(callee: vec_get(os.ops, 0), args: rest), e)
         release_all(fx, os.held)
     } else if o == "record" || o == "variant" {
         aggregate(fx, e, dst, o == "variant")
@@ -1119,15 +1152,23 @@ fn lower_match(fx: Fx, m: Int, dst: Int) {
         for j in 0..count(c, bs) {
             let b = at(c, bs, j)
             let l = ival(c, b, "local")
+            // At the binding (its span, which Core IR gives beside the sources).
+            let bwas = strs_get(fx.at, 0)
+            let bat = sval(c, b, "at")
+            if bat != "" { strs_set(fx.at, 0, bat) }
             assign(fx, l, Rvalue.Payload(base: s, ty: st, variant: ints_get(variants, i), vname: strs_get(names, i), field: ival(c, b, "field"), fname: sval(c, b, "name")))
+            leave_at(fx, bwas)
             own(fx, l)
         }
         block_into(fx, kid(c, a, "body"), dst)
+        // The arm's end, at the arm's span.
+        let awas = enter_at(fx, a)
         pop_to(fx, depth)
         if live(fx) {
             arrives = true
             goto(fx, join)
         }
+        leave_at(fx, awas)
     }
     if arrives {
         set_cur(fx, join)
@@ -1151,7 +1192,7 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     if f.foreign != "" {
         for i in 0..f.params {
             let l = vec_get(f.locals, i)
-            vec_push(locals, LocalDecl(ty: l.ty, name: l.name, origin: "param"))
+            vec_push(locals, LocalDecl(ty: l.ty, name: l.name, origin: "param", at: l.at, region: ""))
         }
         return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, export: f.export, module: f.module, def: f.def, node: f.node, captures: f.captures, locals: locals, blocks: vec_new()))
     }
@@ -1164,16 +1205,16 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     strs_push(at0, "@name")
     let fx0 = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: "Int", locals: locals, blocks: vec_new(), reg: reg,
         sk: ints_new(), sl: ints_new(), scopes: ints_new(), lid: ints_new(), lhead: ints_new(), lexit: ints_new(), ldepth: ints_new(),
-        cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new(), at: at0)
+        cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new(), at: at0, open: strs_new())
     // Core IR's locals keep their numbers: parameters, bindings, then its own temporaries.
     for i in 0..vec_len(f.locals) {
         let l = vec_get(f.locals, i)
         let origin = if l.origin == "param" { "param" } else if l.origin == "let" { "binding" } else if l.origin == "let mut" { "binding mut" } else { "temp" }
-        vec_push(locals, LocalDecl(ty: ty(fx0, l.ty), name: l.name, origin: origin))
+        vec_push(locals, LocalDecl(ty: ty(fx0, l.ty), name: l.name, origin: origin, at: l.at, region: ""))
     }
     let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, f.ret), locals: locals, blocks: fx0.blocks, reg: reg,
         sk: fx0.sk, sl: fx0.sl, scopes: fx0.scopes, lid: fx0.lid, lhead: fx0.lhead, lexit: fx0.lexit, ldepth: fx0.ldepth,
-        cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err, at: at0)
+        cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err, at: at0, open: fx0.open)
     let entry = new_block(fx, origin_source())
     set_cur(fx, entry)
     // A function in a call cycle, or whose locals are large, checks its stack first.
@@ -1192,6 +1233,8 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     }
     let result = temp(fx, fx.ret, "result")
     block_into(fx, f.body, result)
+    // The body's end: what is still owned dropped, and the return, at the body's span.
+    strs_set(fx.at, 0, sval(c, f.body, "at"))
     if live(fx) {
         cleanup_to(fx, 0)
         while ints_len(fx.sk) > 0 { stack_pop(fx) }
