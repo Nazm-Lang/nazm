@@ -127,6 +127,13 @@
       the runtime digest equal, 39924 of 39924 mutants caught; the object cache not compared
       (the probe is the host's); an x86_64 `fib` built by the reference runs under Rosetta. The
       host run is unchanged (8.1's numbers)
+- [x] 8.4 Plain reference counts in a program of one thread (performance-leadership,
+      `501b9538`): `rtgen.nz`'s `plain_reference_counts` over the runtime unit under `single`,
+      `PLAIN_IN_ONE_THREAD` as `rt_plain_in_one_thread()` from `runtime_text.py`. `run.sh`
+      against the reference built at `501b9538`: MIR 1469 of 1469, LIR tables, ops and
+      `--debug` 1009 of 1009, runtime units 984 of 984 (25 refused by `nazm build`; 485 compared
+      files carry the plain counts), object cache 984 of 984 inputs (4559 units), the runtime
+      digest equal, 56362 of 56362 mutants caught
 - [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
       now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
