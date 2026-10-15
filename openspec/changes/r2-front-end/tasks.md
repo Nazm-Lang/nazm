@@ -219,6 +219,12 @@
       body its type. `inputs/check/const-tables.nz`, `inputs/modules/const-tables.nz`.
       `run.sh check`: 2,771 agree, 27 differ; the checker carries 2,732, all agree (2,774 and
       2,735 with the new cases)
+- [ ] 3.1zb `defer` (R1b, L12; `check/stmt.rs`): a body checked as a block whose last line is
+      discarded, where the loop depth it begins at is its floor — `return` and `?` anywhere in
+      it, and `break` and `continue` at its floor, refused (N0631), a closure in it a function
+      of its own; its flows already walked at each exit (provenance). `inputs/check/defer.nz`.
+      `run.sh check`: 2,779 agree, 22 differ; the checker carries 2,747, all agree (2,780 and
+      2,748 with the new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
