@@ -1,0 +1,375 @@
+// N45: the standard library — `use "@std/…"`. Each standard module is found by name and only by
+// name; its functions behave as documented at their edges under the interpreter, both
+// optimisation levels of the LLVM backend and the Cranelift backend, and reclaim everything; the
+// ones reaching the outside world need the authority their signatures show and carry the origins
+// of what they read; ordinary failure is a value; the spec's example runs; every public function
+// is documented where the spec lists it. The cost measurement is `#[ignore]`d in Rust and stays
+// there (design decision 10). Ported from `crates/nazm-cli/tests/stdlib.rs` (R7); the programs and
+// expected lines are the Rust test's, carried over byte for byte.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+const CACHED_PROG: Str = "use \"@std/text\";\nuse \"@std/seq\";\nfn main() -> Int { str_len(text_trim(\" a \")) }\n";
+const SHOUT_LIB: Str = "use \"@std/text\";\npub fn shout(s: Str) -> Str ! {} { str_concat(text_trim(s), \"!\") }\n";
+const SHOUT_PROG: Str = "use \"lib.nz\";\nuse \"@std/text\";\nfn main(io: IoCap) -> Int { print(shout(\"  hi \")); print(text_repeat(\"-\", 2)); 0 }\n";
+const CLASH: Str = "use \"@std/text\";\nfn text_trim(s: Str) -> Str { s }\nfn main() -> Int { 0 }\n";
+const COLLECTIONS: Str = "use \"@std/hash\";\nuse \"@std/hashmap\";\nuse \"@std/hashset\";\nuse \"@std/deque\";\n\nstruct Point { x: Int, y: Int, }\n\nimpl Hash for Point {\n    fn hash(self: Point) -> UInt64 ! {} { hash_combine(self.x.hash(), self.y.hash()) }\n    fn same(self: Point, other: Point) -> Bool ! {} { self == other }\n}\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn get_or(m: HashMap[Str, Int], k: Str) -> Int {\n    match hashmap_get(m, k) {\n        Option.Some(value: v) => v,\n        Option.None() => 0 - 1,\n    }\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let m = hashmap_new[Str, Int]();\n    hashmap_set(m, \"one\", 1);\n    hashmap_set(m, \"two\", 2);\n    if hashmap_set(m, \"one\", 11) { show(out, \"replaced\"); } else { show(out, \"new\"); };\n    show(out, int_to_str(get_or(m, \"one\") + get_or(m, \"two\") + get_or(m, \"three\")));\n    let big = hashmap_new[Int, Int]();\n    let mut i = 0;\n    while i < 1000 {\n        hashmap_set(big, i, i * i);\n        i = i + 1;\n    }\n    let mut j = 0;\n    while j < 1000 {\n        if j % 3 == 0 { hashmap_remove(big, j); };\n        j = j + 1;\n    }\n    let mut total = 0;\n    let vs = hashmap_values(big);\n    let mut k = 0;\n    while k < vec_len(vs) { total = total + vec_get(vs, k); k = k + 1; }\n    show(out, int_to_str(hashmap_len(big)));\n    show(out, int_to_str(total));\n    hashmap_set(big, 3, 7);\n    show(out, int_to_str(hashmap_len(big)));\n    let pts = hashset_new[Point]();\n    hashset_add(pts, Point(x: 1, y: 2));\n    if hashset_add(pts, Point(x: 1, y: 2)) { show(out, \"added twice\"); } else { show(out, \"already there\"); };\n    hashset_add(pts, Point(x: 2, y: 1));\n    show(out, int_to_str(hashset_len(pts)));\n    if hashset_has(pts, Point(x: 2, y: 1)) && !hashset_has(pts, Point(x: 3, y: 3)) { show(out, \"set ok\"); } else { show(out, \"set wrong\"); };\n    show(out, num_to_str(hash_bytes(\"\")));\n    show(out, num_to_str(hash_bytes(\"nazm\")));\n    show(out, num_to_str(UInt8(7).hash()));\n    let d = deque_new[Int]();\n    let mut n = 0;\n    while n < 10 {\n        deque_push_back(d, n);\n        deque_push_front(d, 0 - n);\n        n = n + 1;\n    }\n    let mut line = \"\";\n    let mut p = 0;\n    while p < deque_len(d) {\n        match deque_get(d, p) {\n            Option.Some(value: v) => { line = str_concat(line, str_concat(int_to_str(v), \" \")); },\n            Option.None() => {},\n        };\n        p = p + 1;\n    }\n    show(out, line);\n    match deque_pop_front(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, \"empty\"), };\n    match deque_pop_back(d) { Option.Some(value: v) => show(out, int_to_str(v)), Option.None() => show(out, \"empty\"), };\n    show(out, int_to_str(deque_len(d)));\n    0\n}\n";
+const COLLECTIONS_WANT: Str = "replaced\n12\n666\n221555889\n667\nalready there\n2\nset ok\n17665956581633026203\n10414939609503865103\n12548494866695815710\n-9 -8 -7 -6 -5 -4 -3 -2 -1 0 0 1 2 3 4 5 6 7 8 9 \n-9\n9\n18\n0\n";
+const ERRORS: Str = "use \"@std/ioerror\";\nuse \"@std/error\";\nuse \"@std/file\";\nfn load(io: IoCap, path: Str) -> Result[Int, Error] ! { io } {\n    let b = error_io_result(file_read_all(io, path))?;\n    Result[Int, Error].Ok(value: bytes_len(b))\n}\nfn config(io: IoCap) -> Result[Int, Error] ! { io } {\n    match load(io, \"missing.cfg\") {\n        Result.Ok(value: n) => Result[Int, Error].Ok(value: n),\n        Result.Err(error: e) => Result[Int, Error].Err(error: error_context(e, \"loading the configuration\")),\n    }\n}\nfn main(io: IoCap) -> Int {\n    match config(io) {\n        Result.Ok(value: n) => print(\"loaded\\n\"),\n        Result.Err(error: e) => print(str_concat(error_show(e), \"\\n\")),\n    };\n    print(str_concat(error_show(error_context(error_context(error_new(\"bad digit\"), \"line 3\"), \"reading the table\")), \"\\n\"));\n    print(str_concat(io_kind_name(io_error_from_errno(2).kind), \"\\n\"));\n    0\n}\n";
+const ERRORS_WANT: Str = "loading the configuration: No such file or directory (NotFound)\nreading the table: line 3: bad digit\nNotFound\n0\n";
+const JSON_FLOATS: Str = "use \"@std/json\";\nfn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\nfn main(out: OutCap) -> Int {\n    match json_parse(\"[1, 2.5]\") { Result.Ok(value: d) => line(out, \"accepted\"), Result.Err(error: e) => line(out, e) };\n    match json_parse_floats(\"{\\\"a\\\": [1, 2.5, -0.125e2, 1e400, 12345678901234567890], \\\"b\\\": {}, \\\"c\\\": []}\") {\n        Result.Ok(value: d) => {\n            line(out, json_encode(d));\n            line(out, json_encode_pretty(d));\n            let a = match json_get(d, json_root(d), \"a\") { Option.Some(value: n) => n, Option.None() => 0 - 1 };\n            let x = match json_at(d, a, 1) { Option.Some(value: n) => n, Option.None() => 0 - 1 };\n            line(out, match json_float(d, x) { Option.Some(value: f) => num_to_str(f), Option.None() => \"none\" });\n            line(out, match json_int(d, x) { Option.Some(value: i) => int_to_str(i), Option.None() => \"not an integer\" });\n            line(out, json_kind(d, x));\n        },\n        Result.Err(error: e) => line(out, e),\n    };\n    match json_parse_floats(\"[01.5]\") { Result.Ok(value: d) => line(out, \"accepted\"), Result.Err(error: e) => line(out, e) };\n    match json_parse_floats(\"[1.]\") { Result.Ok(value: d) => line(out, \"accepted\"), Result.Err(error: e) => line(out, e) };\n    let d = json_new();\n    let n = json_add_float(d, 3.0);\n    line(out, json_encode(json_with_root(d, n)));\n    0\n}\n";
+const JSON_FLOATS_WANT: Str = "a number with a fraction or exponent is not supported at byte 5\n{\"a\":[1,2.5,-12.5,null,12345678901234567000.0],\"b\":{},\"c\":[]}\n{\n  \"a\": [\n    1,\n    2.5,\n    -12.5,\n    null,\n    12345678901234567000.0\n  ],\n  \"b\": {},\n  \"c\": []\n}\n2.5\nnot an integer\nnumber\na number with a leading zero at byte 3\nexpected a digit after the point at byte 3\n3.0\n0\n";
+const BINARY: Str = "use \"@std/binary\";\nfn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\nfn hex(b: Bytes) -> Str {\n    let digits = \"0123456789abcdef\";\n    let mut out = \"\";\n    let mut i = 0;\n    while i < bytes_len(b) {\n        let v = Int(bytes_get(b, i));\n        out = str_concat(out, str_concat(str_slice(digits, v / 16, v / 16 + 1), str_slice(digits, v % 16, v % 16 + 1)));\n        i = i + 1;\n    }\n    out\n}\nfn main(out: OutCap) -> Int {\n    let w = binary_writer();\n    binary_put_u8(w, UInt8(255));\n    binary_put_u16_be(w, UInt16(0x1234));\n    binary_put_u32_le(w, UInt32(0xDEADBEEF));\n    binary_put_i64_be(w, 0 - 2);\n    binary_put_f64_le(w, 1.5);\n    binary_put_varint(w, UInt64(300));\n    binary_put_varint(w, UInt64(18446744073709551615));\n    binary_put_zigzag(w, 0 - 1);\n    binary_put_zigzag(w, 0 - 9223372036854775807 - 1);\n    binary_put_str(w, \"héllo\");\n    let b = binary_finish(w);\n    line(out, hex(b));\n    line(out, int_to_str(binary_len(w)));\n    let r = binary_reader(b);\n    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_u16_be(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_u32_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_i64_be(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_f64_le(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_varint(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_zigzag(r) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_str(r) { Result.Ok(value: v) => v, Result.Err(error: e) => e });\n    line(out, int_to_str(binary_remaining(r)));\n    line(out, match binary_get_u8(r) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    let bad = binary_reader(bytes_from_str(\"\\x7f\"));\n    let over = bytes_new(11);\n    let mut i = 0;\n    while i < 10 { bytes_set(over, i, UInt8(255)); i = i + 1; }\n    line(out, match binary_get_varint(binary_reader(over)) { Result.Ok(value: v) => num_to_str(v), Result.Err(error: e) => e });\n    line(out, match binary_get_bytes(bad) { Result.Ok(value: v) => \"bytes\", Result.Err(error: e) => e });\n    0\n}\n";
+const BINARY_WANT: Str = "ff1234efbeaddefffffffffffffffe000000000000f83fac02ffffffffffffffffff0101ffffffffffffffffff010668c3a96c6c6f\n53\n255\n4660\n3735928559\n-2\n1.5\n300\n18446744073709551615\n-1\n-9223372036854775808\nhéllo\n0\na byte needs more bytes than are left at byte 53\na varint past 64 bits at byte 0\na length longer than the data at byte 1\n0\n";
+const RANDOM: Str = "use \"@std/random\";\nfn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\nfn main(out: OutCap, rc: RandomCap) -> Int {\n    let r = random_new(UInt64(42));\n    line(out, num_to_str(random_u64(r)));\n    line(out, num_to_str(random_u64(r)));\n    line(out, num_to_str(random_u64(r)));\n    let mut counts = ints_new();\n    let mut k = 0;\n    while k < 6 { ints_push(counts, 0); k = k + 1; }\n    let mut i = 0;\n    while i < 6000 { let d = random_int(r, 0, 6); ints_set(counts, d, ints_get(counts, d) + 1); i = i + 1; }\n    let mut fair = true;\n    let mut j = 0;\n    while j < 6 { if ints_get(counts, j) < 850 || ints_get(counts, j) > 1150 { fair = false; } j = j + 1; }\n    line(out, if fair { \"fair\" } else { \"unfair\" });\n    let f = random_float(r);\n    line(out, if f >= 0.0 && f < 1.0 { \"in [0, 1)\" } else { \"out of range\" });\n    let v = vec_new[Int]();\n    let mut n = 0;\n    while n < 10 { vec_push(v, n); n = n + 1; }\n    random_shuffle(random_new(UInt64(7)), v);\n    let mut s = \"\";\n    let mut m = 0;\n    while m < 10 { s = str_concat(s, int_to_str(vec_get(v, m))); m = m + 1; }\n    line(out, s);\n    let a = random_seed(rc);\n    let b = random_seed(rc);\n    line(out, if a != b { \"two seeds differ\" } else { \"the same seed twice\" });\n    let buf = bytes_new(1000);\n    line(out, match random_bytes(rc, buf) { Result.Ok(value: k2) => int_to_str(k2), Result.Err(error: e) => e });\n    0\n}\n";
+const RANDOM_WANT: Str = "1546998764402558742\n6990951692964543102\n12544586762248559009\nfair\nin [0, 1)\n8390721654\ntwo seeds differ\n1000\n0\n";
+const ENTROPY_UNHELD: Str = "fn main() -> Int { os_random_bytes(bytes_new(8)) }\n";
+const SEEDED_PURE: Str = "use \"@std/random\";\nfn main() -> Int ! {} { Int(random_u64(random_new(UInt64(1))) % UInt64(10)) }\n";
+const LOG: Str = "use \"@std/log\";\nfn main(out: OutCap, t: TimeCap) -> Int {\n    let base = log_new(LogLevel.Info());\n    let l = log_with(base, log_fields());\n    let svc = strs_new();\n    strs_push(svc, log_str(\"service\", \"kvd\"));\n    let lk = log_with(l, svc);\n    let f = strs_new();\n    strs_push(f, log_int(\"port\", 8080));\n    strs_push(f, log_bool(\"tls\", false));\n    strs_push(f, log_str(\"note\", \"quote \\\" and newline \\n\"));\n    log_info(out, lk, \"listening\", f);\n    log_debug(out, lk, \"dropped\", log_fields());\n    log_error(out, lk, \"failed\", log_fields());\n    let s = log_span_begin(t, \"load\");\n    let n = log_span_end(out, t, lk, s, log_fields());\n    print(if n > 0 { \"span written\\n\" } else { \"no span\\n\" });\n    0\n}\n";
+const LOG_1: Str = "{\"level\":\"info\",\"msg\":\"listening\",\"service\":\"kvd\",\"port\":8080,\"tls\":false,\"note\":\"quote \\\" and newline \\n\"}";
+const LOG_2: Str = "{\"level\":\"error\",\"msg\":\"failed\",\"service\":\"kvd\"}";
+const LOG_3: Str = "{\"level\":\"info\",\"msg\":\"span\",\"service\":\"kvd\",\"span\":\"load\",\"ns\":N}";
+const SEEDED_ORDER: Str = "use \"@std/hash\";\nuse \"@std/hashmap\";\nfn keys(m: HashMap[Int, Int]) -> Str {\nlet ks = hashmap_keys(m);\nlet mut s = \"\";\nlet mut i = 0;\nwhile i < vec_len(ks) { s = str_concat(s, int_to_str(vec_get(ks, i))); i = i + 1; }\ns\n}\nfn fill(m: HashMap[Int, Int]) -> Int { let mut i = 0; while i < 6 { hashmap_set(m, i, i); i = i + 1; } 0 }\nfn main(out: OutCap) -> Int {\nlet a = hashmap_new[Int, Int]();\nlet b = hashmap_with_seed[Int, Int](UInt64(99));\nfill(a); fill(b);\nlet c = hashmap_with_seed[Int, Int](UInt64(0));\nfill(c);\nprint(if keys(a) == keys(b) { \"same order\\n\" } else { \"other order\\n\" });\nprint(if hashmap_len(a) == hashmap_len(b) { \"same length\\n\" } else { \"other length\\n\" });\nprint(if keys(a) == keys(c) { \"reproducible\\n\" } else { \"not reproducible\\n\" });\n0\n}\n";
+const SEEDED_ORDER_WANT: Str = "other order\nsame length\nreproducible\n0\n";
+const TEXT_PROG: Str = "use \"@std/text\";\nuse \"@std/option\";\nuse \"@std/result\";\nfn b(x: Bool) -> Str { if x { \"T\" } else { \"F\" } }\nfn o(x: Option[Int]) -> Str { match x { Option.Some(value: v) => int_to_str(v), Option.None() => \"none\" } }\nfn p(s: Str) -> Str { match text_parse_int(s) { Result.Ok(value: v) => int_to_str(v), Result.Err(error: e) => str_concat(\"err:\", e) } }\nfn line(io: IoCap, s: Str) -> Int { print(s); print(\"|\") }\nfn main(io: IoCap) -> Int {\n    line(io, b(text_starts_with(\"abc\", \"\"))); line(io, b(text_starts_with(\"abc\", \"ab\"))); line(io, b(text_starts_with(\"ab\", \"abc\")));\n    line(io, b(text_ends_with(\"abc\", \"bc\"))); line(io, b(text_ends_with(\"abc\", \"abcd\"))); line(io, b(text_ends_with(\"\", \"\")));\n    line(io, o(text_find(\"aaa\", \"aa\"))); line(io, o(text_find(\"abc\", \"\"))); line(io, o(text_find(\"\", \"a\"))); line(io, o(text_find(\"abcabc\", \"ca\")));\n    line(io, b(text_contains(\"hello\", \"ll\"))); line(io, b(text_contains(\"hello\", \"lo!\")));\n    line(io, text_repeat(\"ab\", 3)); line(io, text_repeat(\"x\", 0)); line(io, text_repeat(\"x\", 0 - 3));\n    let s = text_split(\"a,,b,\", \",\"); line(io, int_to_str(strs_len(s))); line(io, str_join(s, \"/\"));\n    line(io, int_to_str(strs_len(text_split(\"\", \",\")))); line(io, str_join(text_split(\"a,b\", \"\"), \"/\"));\n    line(io, str_join(text_split(\"a--b--c\", \"--\"), \"+\"));\n    let ws = str_concat(str_concat(str_from_byte(9), \" x y \"), str_concat(str_from_byte(10), str_from_byte(13)));\n    line(io, text_trim(ws)); line(io, text_trim(\"   \")); line(io, text_trim(\"\")); line(io, b(text_is_space(11))); line(io, b(text_is_space(14)));\n    line(io, p(\"0\")); line(io, p(\"-0\")); line(io, p(\"+7\")); line(io, p(\"007\")); line(io, p(\"\")); line(io, p(\"-\")); line(io, p(\"12a\"));\n    line(io, p(\"9223372036854775807\")); line(io, p(\"-9223372036854775808\")); line(io, p(\"9223372036854775808\")); line(io, p(\"-9223372036854775809\")); line(io, p(\"99999999999999999999\"));\n    0\n}\n";
+const TEXT_WANT: Str = "T|T|F|T|F|T|0|0|none|2|T|F|ababab|||4|a//b/|1|a,b|a+b+c|x y|||T|F|0|0|7|7|err:no digits|err:no digits|err:not a digit|9223372036854775807|-9223372036854775808|err:out of range|err:out of range|err:out of range|0\n";
+const HELPERS_PROG: Str = "use \"@std/option\";\nuse \"@std/result\";\nuse \"@std/seq\";\nstruct P { x: Int, name: Str }\nfn i(n: Int) -> Str { int_to_str(n) }\nfn b(x: Bool) -> Str { if x { \"T\" } else { \"F\" } }\nfn show(io: IoCap, s: Str) -> Int { print(s); print(\"|\") }\nfn main(io: IoCap) -> Int {\n    let some = Option[Str].Some(value: \"v\"); let none = Option[Str].None();\n    show(io, b(option_is_some(some))); show(io, b(option_is_none(none))); show(io, option_unwrap_or(none, \"fallback\")); show(io, option_unwrap_or(some, \"fallback\"));\n    let ok = Result[P, Str].Ok(value: P(x: 3, name: \"p\")); let bad = Result[P, Str].Err(error: \"e\");\n    show(io, b(result_is_ok(ok))); show(io, b(result_is_err(bad))); show(io, result_unwrap_or(bad, P(x: 9, name: \"d\")).name);\n    show(io, match result_ok(ok) { Option.Some(value: v) => i(v.x), Option.None() => \"none\" });\n    show(io, match result_err(bad) { Option.Some(value: e) => e, Option.None() => \"none\" });\n    show(io, match result_err(ok) { Option.Some(value: e) => e, Option.None() => \"none\" });\n    let xs = ints_new(); ints_push(xs, 4); ints_push(xs, 0 - 2); ints_push(xs, 9); ints_push(xs, 4);\n    show(io, i(ints_sum(xs))); show(io, i(option_unwrap_or(ints_max(xs), 0))); show(io, i(option_unwrap_or(ints_min(xs), 0)));\n    show(io, i(option_unwrap_or(ints_index_of(xs, 4), 0 - 1))); show(io, i(option_unwrap_or(ints_index_of(xs, 5), 0 - 1))); show(io, b(ints_contains(xs, 9)));\n    let empty = ints_new(); show(io, b(option_is_none(ints_max(empty)))); show(io, b(option_is_none(ints_min(empty)))); show(io, i(ints_sum(empty)));\n    let ss = strs_new(); strs_push(ss, \"a\"); strs_push(ss, \"b\"); show(io, i(option_unwrap_or(strs_index_of(ss, \"b\"), 0 - 1))); show(io, b(strs_contains(ss, \"c\")));\n    let ps = vec_new[P](); vec_push(ps, P(x: 1, name: \"a\")); vec_push(ps, P(x: 2, name: \"b\"));\n    show(io, i(option_unwrap_or(vec_index_of(ps, P(x: 2, name: \"b\")), 0 - 1))); show(io, i(option_unwrap_or(vec_index_of(ps, P(x: 2, name: \"c\")), 0 - 1)));\n    0\n}\n";
+const HELPERS_WANT: Str = "T|T|fallback|v|T|T|d|3|e|none|15|9|-2|0|-1|T|T|T|0|1|F|1|-1|0\n";
+const IO_PROG: Str = "use \"@std/io\";\nuse \"@std/process\";\nuse \"@std/result\";\nfn main(io: IoCap) -> Int {\n    io_println(io, result_unwrap_or(io_read(io, \"data.txt\"), \"missing\"));\n    match io_read(io, \"absent.txt\") { Result.Ok(value: v) => io_println(io, v), Result.Err(error: e) => io_eprintln(io, e) };\n    let args = process_args(io);\n    io_println(io, str_join(args, \"+\"));\n    strs_len(args)\n}\n";
+const IO_UNDECLARED: Str = "use \"@std/io\";\nfn f(io: IoCap) -> Int ! {} { io_println(io, \"x\") }\nfn main(io: IoCap) -> Int { f(io) }\n";
+const IO_UNHELD: Str = "use \"@std/process\";\nfn main() -> Int { strs_len(process_args(0)) }\n";
+const ORIGIN_READ: Str = "use \"@std/io\";\nuse \"@std/result\";\nfn save(io: IoCap) -> Int ! { io } { let p = result_unwrap_or(io_read(io, \"cfg\"), \"out\"); write_file(p, \"x\") }\nfn main(io: IoCap) -> Int { save(io) }\n";
+const ORIGIN_THROUGH: Str = "use \"@std/text\";\nfn save(io: IoCap) -> Int ! { io } { let p = text_trim(read_file(\"cfg\")); write_file(p, \"x\") }\nfn main(io: IoCap) -> Int { save(io) }\n";
+const ORIGIN_COMPUTED: Str = "use \"@std/text\";\nfn save(io: IoCap) -> Int ! { io } { let p = text_trim(\"  out.txt \"); write_file(p, \"x\") }\nfn main(io: IoCap) -> Int { save(io) }\n";
+const CHAN_PROG: Str = "use \"@std/chan\";\nuse \"@std/option\";\nfn produce(c: Chan, n: Int) -> Int { let mut i = 1; while i <= n { chan_send(c, i); i = i + 1; } chan_close(c); 0 }\nfn main(t: SpawnCap) -> Int { let c = chan_new(2); let mut total = 0; let mut more = true;\nscope { spawn produce(c, 100); while more { match chan_take(c) { Option.Some(value: v) => { total = total + v; }, Option.None() => { more = false; } } } }\ntotal }\n";
+
+const MODULES: Str = "args binary bitset blake3 bytebuf chan deque env error file fmt fs hash hashmap hashset io ioerror json log map net num option ordmap path process random regex result seq sha256 show sort test text time toml";
+
+/// A run's name and what it did.
+struct Run {
+    name: Str,
+    ran: Ran,
+}
+
+/// `files` (name, text, …) written to a directory, `prog.nz` run by the interpreter and three
+/// native builds, each given `args`.
+fn four(h: Caps, files: Strs, args: Strs) -> Result[Vec[Run], Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    let path = f"{d}/prog.nz";
+    let out = vec_new[Run]();
+    let a = words("run --interpret");
+    strs_push(a, path);
+    strs_push(a, "--");
+    for x in args {
+        strs_push(a, x);
+    }
+    vec_push(out, Run(name: "interpreter", ran: nazm(h, d, a)));
+    for case in text_split("llvm -O0|llvm|0;llvm -O2|llvm|2;cranelift|cranelift|0", ";") {
+        let f = text_split(case, "|");
+        let which = strs_get(f, 0);
+        let exe = f"{d}/{text_replace(text_replace(which, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(f, 1)} --opt-level {strs_get(f, 2)} {path} -o {exe}"));
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Run], Str].Err(error: f"{which}: {b.stderr}");
+        }
+        let x = strs_new();
+        strs_push(x, "-c");
+        strs_push(x, bounded_script());
+        strs_push(x, exe);
+        for y in args {
+            strs_push(x, y);
+        }
+        vec_push(out, Run(name: which, ran: run(h, "sh", x, d, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))));
+    }
+    scratch_remove(h, d);
+    Result[Vec[Run], Str].Ok(value: out)
+}
+
+fn one_file(text: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, "prog.nz");
+    strs_push(f, text);
+    f
+}
+
+fn agrees4(h: Caps, files: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for r in four(h, files, strs_new())? {
+        check_that(r.ran.code == 0, f"{r.name}: {r.ran.stderr}")?;
+        check_that(r.ran.stdout == expected, f"{r.name}: {r.ran.stdout}")?;
+        if r.name != "interpreter" {
+            let report = memory_line(r.ran);
+            check_that(report != "", f"{r.name}: {r.ran.stderr}")?;
+            check_that(count_matches(report, "live=0") == 4, f"{r.name}: {report}")?;
+        }
+    }
+    ok()
+}
+
+/// The codes `nazm check --json prog.nz` reports over `files`, joined by `,`.
+fn codes_of(h: Caps, files: Strs) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    let o = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    let found = strs_new();
+    for l in text_lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v) => {
+                if jq(v, "code") >= 0 && json_kind(v, jq(v, "code")) == "string" {
+                    strs_push(found, jstr(v, "code"));
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    Result[Str, Str].Ok(value: str_join(found, ","))
+}
+
+@test
+fn every_standard_module_is_found_by_name_and_checks_cleanly(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for m in words(MODULES) {
+        let c = codes_of(h, one_file(f"use \"@std/{m}\";\nfn main() -> Int {{ 0 }}\n"))?;
+        check_that(c == "", f"@std/{m}: {c}")?;
+    }
+    // Only by name: an unknown one or a file name is refused, and a path beginning with `@std/` is
+    // never looked for on disk — a project file of that very name is there, and is not read.
+    for bad in words("@std/nope @std/text.nz") {
+        let d = prog_dir(h, "prog.nz", f"use \"{bad}\";\nfn main() -> Int {{ 0 }}\n")?;
+        scratch_write(h, d, bad, "pub fn f() -> Int { 1 }\n")?;
+        let o = nazm(h, d, words("check --json prog.nz"));
+        scratch_remove(h, d);
+        check_that(o.code != 0 && text_contains(o.stderr, "\"N0205\""), f"{bad}: {o.stderr}")?;
+    }
+    // Any other `@` path is an ordinary relative path, as it always was.
+    let d = prog_dir(h, "prog.nz", "use \"@elsewhere/lib.nz\";\nfn main() -> Int { f() }\n")?;
+    scratch_write(h, d, "@elsewhere/lib.nz", "pub fn f() -> Int { 1 }\n")?;
+    let o = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+/// `checked reused` of the run's `nazm.check-report/1` line.
+fn report_of(o: Ran) -> Result[Str, Str] ! {} {
+    for l in text_lines(o.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            let v = jparse(l)?;
+            return Result[Str, Str].Ok(value: f"{jint(v, "checked")} {jint(v, "reused")}");
+        }
+    }
+    Result[Str, Str].Err(error: f"{o.stdout}{o.stderr}")
+}
+
+@test
+fn a_standard_module_is_reused_from_the_cache_like_any_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Its key, `@std/text`, reads back from a stored entry as itself.
+    let d = prog_dir(h, "nazm.root", "")?;
+    scratch_write(h, d, "prog.nz", CACHED_PROG)?;
+    let first = report_of(nazm(h, d, words("check prog.nz --cache-report")))?;
+    let second = report_of(nazm(h, d, words("check prog.nz --cache-report")))?;
+    scratch_remove(h, d);
+    check_that(parse_usize(strs_get(words(first), 0)) >= 3, first)?;
+    check_that(second == "0 4", f"the program, two standard modules and the prelude: {second}")
+}
+
+@test
+fn a_standard_module_is_one_module_however_many_import_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = strs_new();
+    strs_push(files, "lib.nz");
+    strs_push(files, SHOUT_LIB);
+    strs_push(files, "prog.nz");
+    strs_push(files, SHOUT_PROG);
+    agrees4(h, files, "hi!--0\n")?;
+    // Its names are the importer's: defining one of them beside the import is a collision.
+    let c = codes_of(h, one_file(CLASH))?;
+    check_that(strs_has(text_split(c, ","), "N0208"), c)
+}
+
+@test
+fn hash_maps_sets_and_deques_behave_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(COLLECTIONS), COLLECTIONS_WANT)
+}
+
+@test
+fn an_error_gathers_context_and_reads_outermost_first_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(ERRORS), ERRORS_WANT)
+}
+
+@test
+fn json_reads_and_writes_floats_beside_its_frozen_integers_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(JSON_FLOATS), JSON_FLOATS_WANT)
+}
+
+@test
+fn binary_encodes_byte_for_byte_and_reads_back_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(BINARY), BINARY_WANT)
+}
+
+@test
+fn a_seeded_generator_repeats_everywhere_and_entropy_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(RANDOM), RANDOM_WANT)
+}
+
+@test
+fn entropy_needs_a_random_cap_and_a_seeded_generator_needs_none(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = codes_of(h, one_file(ENTROPY_UNHELD))?;
+    check_that(a == "N0369", a)?;
+    let b = codes_of(h, one_file(SEEDED_PURE))?;
+    check_that(b == "", b)
+}
+
+@test
+fn log_records_are_one_json_object_a_line_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let want = f"{LOG_1}\n{LOG_2}\n{LOG_3}";
+    for r in four(h, one_file(LOG), strs_new())? {
+        check_that(r.ran.code == 0, f"{r.name}: {r.ran.stderr}")?;
+        check_that(r.ran.stdout == "span written\n0\n", f"{r.name}: {r.ran.stdout}")?;
+        // A span's duration is the clock's; everything else is the program's.
+        let records = strs_new();
+        for l in text_lines(r.ran.stderr) {
+            if text_starts_with(l, "{") {
+                let at = find(l, "\"ns\":");
+                strs_push(records, if at >= 0 { f"{str_slice(l, 0, at)}\"ns\":N}}" } else { l });
+            }
+        }
+        check_that(str_join(records, "\n") == want, f"{r.name}: {str_join(records, "\n")}")?;
+    }
+    ok()
+}
+
+@test
+fn a_seed_changes_a_maps_order_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(SEEDED_ORDER), SEEDED_ORDER_WANT)
+}
+
+@test
+fn text_behaves_as_documented_at_its_edges(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(TEXT_PROG), TEXT_WANT)
+}
+
+@test
+fn option_result_and_seq_helpers_work_for_every_type(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(HELPERS_PROG), HELPERS_WANT)
+}
+
+@test
+fn io_and_process_need_the_authority_they_show(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Reading a file that is there and one that is not; a newline after each line; the arguments
+    // without the program's name.
+    let files = one_file(IO_PROG);
+    strs_push(files, "data.txt");
+    strs_push(files, "contents");
+    let args = strs_new();
+    strs_push(args, "x");
+    strs_push(args, "y z");
+    for r in four(h, files, args)? {
+        check_that(r.ran.code == 0, f"{r.name}: {r.ran.stderr}")?;
+        check_that(r.ran.stdout == "contents\nx+y z\n2\n", f"{r.name}: {r.ran.stdout}")?;
+        check_that(text_contains(r.ran.stderr, "no such file: absent.txt\n"), f"{r.name}: {r.ran.stderr}")?;
+    }
+    // A function that calls one must declare `io`, and hold the capability to hand over.
+    let a = codes_of(h, one_file(IO_UNDECLARED))?;
+    check_that(strs_has(text_split(a, ","), "N0366"), a)?;
+    let b = codes_of(h, one_file(IO_UNHELD))?;
+    check_that(b != "", "process_args without the authority")
+}
+
+@test
+fn what_a_standard_function_reads_keeps_its_origin(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A path read from a file, through `io_read`, is still a file's contents.
+    let a = codes_of(h, one_file(ORIGIN_READ))?;
+    check_that(a == "N0372", a)?;
+    // A pure helper passes its arguments' origins through, like any function.
+    let b = codes_of(h, one_file(ORIGIN_THROUGH))?;
+    check_that(b == "N0372", b)?;
+    let c = codes_of(h, one_file(ORIGIN_COMPUTED))?;
+    check_that(c == "", c)
+}
+
+@test
+fn chan_take_receives_one_value_at_a_time_across_tasks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees4(h, one_file(CHAN_PROG), "5050\n")
+}
+
+/// The standard library section of `docs/spec.md`: from its marker to the next `### ` heading.
+fn spec_from_marker(h: Caps) -> Result[Str, Str] ! { io } {
+    let spec = read_text(h, f"{repo_root(h)}/docs/spec.md")?;
+    let at = find(spec, "<!-- id: std -->");
+    check_that(at >= 0, "the standard library section")?;
+    Result[Str, Str].Ok(value: str_slice(spec, at, str_len(spec)))
+}
+
+@test
+fn the_spec_s_example_runs_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let rest = spec_from_marker(h)?;
+    let open = find(rest, "```nazm\n") + str_len("```nazm\n");
+    let after = str_slice(rest, open, str_len(rest));
+    let block = str_slice(after, 0, find(after, "```"));
+    agrees4(h, one_file(block), "4\n42\n")
+}
+
+@test
+fn every_public_standard_function_is_documented_and_listed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let rest = spec_from_marker(h)?;
+    let section = str_slice(rest, 0, find(rest, "\n### "));
+    let mut seen = 0;
+    for m in words(MODULES) {
+        let text = read_text(h, f"{repo_root(h)}/library/std/{m}.nz")?;
+        check_that(text_contains(section, f"`@std/{m}`"), f"@std/{m} is not in the spec's table")?;
+        let ls = text_lines(text);
+        let mut i = 0;
+        while i < strs_len(ls) {
+            let l = strs_get(ls, i);
+            match strip_prefix(l, "pub fn ") {
+                Option.Some(value: r) => {
+                    let name = ident(r);
+                    check_that(i > 0 && text_starts_with(strs_get(ls, i - 1), "///"), f"`{name}` in @std/{m} has no doc comment")?;
+                    check_that(text_contains(section, f"`{name}"), f"`{name}` is not in the spec's table")?;
+                    check_that(text_contains(l, " ! {"), f"`{name}` declares no effect set")?;
+                    seen = seen + 1;
+                },
+                Option.None() => {},
+            };
+            i = i + 1;
+        }
+    }
+    check_that(seen >= 30, f"{seen}")
+}
+
+// `what_the_standard_library_costs` is `#[ignore]`d in Rust "a measurement, run by the benchmark
+// gate": it stays Rust (design decision 10).
