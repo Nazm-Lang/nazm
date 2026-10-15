@@ -510,11 +510,12 @@ fn an_undeclared_import_needs_no_authority_of_its_caller() {
     let refused = cold(dir.path(), "a.nz");
     assert_eq!(refused.diagnostics.len(), 1, "{refused:?}");
     assert!(refused.diagnostics[0].starts_with("N0366"), "{refused:?}");
-    // And the import itself, given nothing, is refused where it prints.
+    // And the import itself, given nothing, is refused where it writes a file. (Not where it
+    // prints: since D8 every function of the program holds the output authority `main` holds.)
     write(
         dir.path(),
         "b.nz",
-        "pub fn old(n: Int) -> Int { print(int_to_str(n)) }\n",
+        "pub fn old(n: Int) -> Int { write_file(\"f\", int_to_str(n)) }\n",
     );
     write(
         dir.path(),

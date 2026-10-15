@@ -142,20 +142,32 @@ fn cyber_refuses_what_the_service_is_written_without() {
     let r = nazm(d.path(), &["check", "--profile", "cyber", "svc"]);
     assert_eq!(r.code, Some(1), "{r:?}");
     assert!(r.stderr.contains("`locked-build`"), "{}", r.stderr);
-    // A request shown on standard output, where `serve` holds no authority to write: the
-    // language's own rule, before any profile's (N0369).
+    // A request saved to a file, where `serve` holds no authority to write one: the language's
+    // own rule, before any profile's (N0369). (A file: since D8 every function of the program
+    // holds the output authority `main` holds, so standard output would not show it.)
+    let saved = src.replace(
+        "                        tcp_write(c, answer(req));",
+        "                        tcp_write(c, answer(req));\n                        \
+         write_file(\"requests\", bytes_to_str(req));",
+    );
+    let d = tempfile::tempdir().unwrap();
+    package_in(d.path(), &saved);
+    let r = nazm(d.path(), &["check", "svc"]);
+    assert_eq!(r.code, Some(1), "{r:?}");
+    assert!(
+        r.stderr.contains("N0369") && r.stderr.contains("`serve` holds no `IoCap`"),
+        "{}",
+        r.stderr
+    );
+    // A request shown on standard output: `serve` holds `main`'s output (D8) — and `cyber`
+    // refuses it: what a client sent is a handle's contents, which stay off standard output.
     let shown = src.replace(
         "                        tcp_write(c, answer(req));",
         "                        tcp_write(c, answer(req));\n                        \
          print(bytes_to_str(req));",
     );
-    let d = tempfile::tempdir().unwrap();
-    package_in(d.path(), &shown);
-    let r = nazm(d.path(), &["check", "svc"]);
-    assert_eq!(r.code, Some(1), "{r:?}");
-    assert!(r.stderr.contains("N0369"), "{}", r.stderr);
-    // Handed the authority, it may write — and `cyber` refuses it: what a client sent is a
-    // handle's contents, which stay off standard output.
+    refused(&shown, "contents-stay-in-files");
+    // Handed the authority explicitly, it is the same: `cyber` refuses it.
     refused(
         &shown
             .replace(

@@ -263,8 +263,10 @@ fn a_call_of_literals_is_proved_or_refused_at_compile_time() {
 fn a_clause_is_only_what_cannot_fail_for_want_of_authority_or_memory() {
     let main = "fn main() -> Int { 0 }\n";
     let cases: &[(&str, &[&str])] = &[
+        // A file write: the clause's function holds no `IoCap`. (Printing would not show the
+        // authority refusal: since D8 every function of the program holds `main`'s output.)
         (
-            "fn f(x: Int) -> Int ! {} requires print(\"x\") == 0 { x }\n",
+            "fn f(x: Int) -> Int ! {} requires write_file(\"f\", \"x\") == 0 { x }\n",
             &["N0366", "N0369", "N0614"],
         ),
         (

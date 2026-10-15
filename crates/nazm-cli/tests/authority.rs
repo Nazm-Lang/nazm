@@ -196,21 +196,23 @@ fn a_function_value_with_more_effects_is_refused() {
 #[test]
 fn nothing_inherits_authority_and_inspect_reports_no_inheritance() {
     // N104: a function that declares no effect set no longer exercises its caller's authority.
-    // It holds what it exercises, or it is refused at the first site that needs it.
+    // It holds what it exercises, or it is refused at the first site that needs it. (Writing a
+    // file: since D8 every function of the program holds the output authority `main` holds, so
+    // printing no longer shows it; an `IoCap` is still only ever passed.)
     let d = program(
-        "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
+        "fn helper() -> Int { write_file(\"f\", \"x\") }\n\
          fn main(io: IoCap) -> Int ! {io} { helper() }\n",
     );
     let o = nazm(d.path(), &["check", "p.nz"]);
     let t = text(&o);
     assert!(!o.status.success(), "{t}");
     assert!(
-        t.contains("N0369") && t.contains("`helper` holds no `OutCap`"),
+        t.contains("N0369") && t.contains("`helper` holds no `IoCap`"),
         "{t}"
     );
     // Given one, it is accepted; and `nazm inspect`, now `/2`, reports no inheritance at all.
     let d = program(
-        "fn helper(out: OutCap) -> Int { print(\"x\\n\"); 0 }\n\
+        "fn helper(io: IoCap) -> Int { write_file(\"f\", \"x\") }\n\
          fn pure(n: Int) -> Int { n + 1 }\n\
          fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(0) }\n",
     );
@@ -227,9 +229,10 @@ fn nothing_inherits_authority_and_inspect_reports_no_inheritance() {
 fn the_authority_profile_and_the_default_refuse_the_same_programs() {
     // N104: `explicit-authority` is the language's rule now. A function exercising what it
     // does not hold is refused by the default (`N0369`) and the profile alike; the profile's
-    // own rule has nothing left to refuse.
+    // own rule has nothing left to refuse. (A file write: printing in the program needs
+    // nothing passed since D8.)
     let d = program(
-        "fn helper() -> Int { print(\"x\\n\"); 0 }\n\
+        "fn helper() -> Int { write_file(\"f\", \"x\") }\n\
          fn main(io: IoCap) -> Int ! {io} { helper() }\n",
     );
     for args in [
@@ -244,7 +247,7 @@ fn the_authority_profile_and_the_default_refuse_the_same_programs() {
     }
     // Held authority, and a function that exercises none, are accepted by both.
     let d = program(
-        "fn helper(o: OutCap) -> Int { print(\"x\\n\"); 0 }\n\
+        "fn helper(io: IoCap) -> Int { write_file(\"f\", \"x\") }\n\
          fn pure(n: Int) -> Int { n + 1 }\n\
          fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(1) }\n",
     );

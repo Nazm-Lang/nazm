@@ -406,10 +406,11 @@ fn a_function_value_carries_its_effects_and_takes_its_authority_as_parameters() 
         ["N0366"]
     );
     // Its authority is what it holds: since N51 a capability visible where it is written
-    // too, so with none visible it holds none.
+    // too, so with none visible it holds none. (A file write: since D8 a function of the
+    // program holds the output authority `main` holds, so printing would not show it.)
     assert_eq!(
         codes(
-            "fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { print(\"a\"); x }; f(1) }\n\
+            "fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { write_file(\"f\", \"a\") + x }; f(1) }\n\
              fn main() -> Int { 0 }\n"
         ),
         ["N0369"]
