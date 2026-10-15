@@ -283,6 +283,12 @@ found only by reading all of it.
   run cannot enable; no debug adapter (DAP). Sampling (`nazm profile --sample`) uses macOS's
   `sample` and is refused on a host without it; no Linux sampler, timeline or event trace (area 27).
   *Narrowed in N58 and N91.*
+- A failure on a hosted target under LLVM unwinds (performance leadership 4.2, §7.115), and the
+  unwind lands once in every frame that owns something, each landing starting a new forced unwind:
+  a failure through deep recursion is slower than the failure bit was — a stack exhausted 196,098
+  frames deep at `-O2`, each frame owning a string and a `defer`, fails in 2.26 s against 8.9 ms
+  (macOS arm64). The path that does not fail is the faster one. Windows unwinds only once verified
+  under Wine; until then it, WebAssembly, WASI, the boards and Cranelift keep the bit.
 
 ## FFI
 
