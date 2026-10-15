@@ -1116,8 +1116,8 @@ the bad one is a language that quietly grew a per-module failure state
 Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has.
 Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-lir/src/backend.rs"
-find = '        let text = crate::op::llvm::module(&m, self.target.failures());'
-replace = '        let text = crate::op::llvm::module(&m, self.target.failures()) + &crate::runtime::emit_runtime(m.needs);'
+find = '        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes());'
+replace = '        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes()) + &crate::runtime::emit_runtime(m.needs);'
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "attestation::identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
@@ -14664,9 +14664,25 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "scratch::tests::a_name_
 name = "q1-no-stack-probes"
 why = "generated functions ask for no stack probes, so a frame larger than a task stack's guard page steps over it"
 file = "crates/nazm-lir/src/op/llvm.rs"
-find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section}{personality} {{   ; {}",'
-replace = '        "define {}{} {}({params}){section}{personality} {{   ; {}",'
+find = '            Self::Inline => " \"probe-stack\"=\"inline-asm\"",'
+replace = '            Self::Inline => "",'
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build::every_generated_function_asks_for_stack_probes" }]
+
+[[mutation]]
+name = "windows-probes-inline"
+why = "Windows functions ask LLVM for its inline probe, which it does not do there: a frame larger than a page calls a function named `inline-asm` and the program does not link"
+file = "crates/nazm-lir/src/backend.rs"
+find = '            Os::Windows => crate::op::llvm::Probes::Platform,'
+replace = '            Os::Windows => crate::op::llvm::Probes::Inline,'
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "windows::a_large_frame_is_probed_by_what_mingw_links" }]
+
+[[mutation]]
+name = "windows-main-stack-default"
+why = "a Windows executable keeps the 1 MiB main stack Windows gives by default, so a recursion that runs on macOS and Linux meets N0408 on Windows only"
+file = "crates/nazm-cli/src/build/objects.rs"
+find = '            format!("-static -pthread -lws2_32 -lbcrypt -Wl,--stack,{WINDOWS_MAIN_STACK}")'
+replace = '            format!("-static -pthread -lws2_32 -lbcrypt{}", "")'
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "windows::the_main_thread_reserves_what_macos_and_linux_give_it" }]
 
 [[mutation]]
 name = "q1-an-output-may-overwrite-a-module"

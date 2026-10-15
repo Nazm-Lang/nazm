@@ -1,0 +1,12 @@
+// A recursion in `main`'s thread deeper than Windows' default 1 MiB main stack holds, and well
+// within the 8 MiB macOS and Linux give it: it meets `N0408` nowhere, since every Windows
+// executable reserves 8 MiB for its main thread.
+
+fn down(n: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { str_len(held) } else { down(n - 1, tag) + 1 }
+}
+
+fn main() {
+    println(down(20000, "x"))
+}
