@@ -1,0 +1,99 @@
+// Provenance (N38, N80): flows through records kept field by field, variants and `match`, `?`,
+// calls and their summaries, parameters handed on, closures and their captures, function values,
+// calls through bounds, containers' cells, and a `let mut` a closure shares — each refusal with the
+// chain that shows where the file's contents came from.
+
+struct Paths { safe: Str, risky: Str }
+
+enum Pick { Safe(p: Str), Risky(p: Str) }
+
+trait Source {
+    fn path(self: Self, io: IoCap) -> Str ! { io };
+}
+
+struct FromFile { name: Str }
+
+impl Source for FromFile {
+    fn path(self: FromFile, io: IoCap) -> Str ! { io } { read_file(self.name) }
+}
+
+fn read(io: IoCap) -> Str ! { io } { read_file("cfg") }
+
+fn pass(s: Str) -> Str { s }
+
+fn write_to(io: IoCap, p: Str) -> Int ! { io } { write_file(p, "x") }
+
+fn via_bound[T: Source](x: T, io: IoCap) -> Str ! { io } { x.path(io) }
+
+fn pick(io: IoCap) -> Result[Str, Str] ! { io } {
+    let p = read_file("p");
+    if str_len(p) > 3 { return Result.Ok(value: p); }
+    Result.Err(error: "short")
+}
+
+fn records(io: IoCap) -> Int ! { io } {
+    let ps = Paths(safe: "out", risky: read(io));
+    write_file(ps.safe, "a");
+    write_file(ps.risky, "b")
+}
+
+fn variants(io: IoCap) -> Int ! { io } {
+    let v = Pick.Risky(p: read_file("v"));
+    match v {
+        Pick.Safe(p: s) => write_file(s, "a"),
+        Pick.Risky(p: r) => write_file(r, "b"),
+    }
+}
+
+fn propagated(io: IoCap) -> Result[Int, Str] ! { io } {
+    let p = pick(io)?;
+    Result.Ok(value: write_file(pass(p), "c"))
+}
+
+fn handed(io: IoCap) -> Int ! { io } {
+    let p = pass(read(io));
+    write_to(io, p)
+}
+
+fn closures(io: IoCap) -> Int ! { io } {
+    let p = read(io);
+    let w = fn(q: Str) -> Int ! { io } { write_file(q, "d") };
+    let cap = fn() -> Int ! { io } { write_file(p, "e") };
+    w(p) + cap()
+}
+
+fn values(io: IoCap) -> Int ! { io } {
+    let f = write_to;
+    f(io, read(io))
+}
+
+fn containers(io: IoCap) -> Int ! { io } {
+    let xs = strs_new();
+    strs_push(xs, read(io));
+    let ys = vec_new[Str]();
+    vec_push(ys, "fine");
+    write_file(strs_get(xs, 0), "f") + write_file(vec_get(ys, 0), "g")
+}
+
+fn shared(io: IoCap) -> Int ! { io } {
+    let mut p = "out";
+    let set = fn() -> Int ! { io } {
+        p = read_file("s");
+        0
+    };
+    set();
+    write_file(p, "h")
+}
+
+fn bounds(io: IoCap) -> Int ! { io } {
+    let f = FromFile(name: "n");
+    write_file(via_bound(f, io), "i")
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let n = records(io) + variants(io) + handed(io) + closures(io) + values(io) + containers(io) + shared(io) + bounds(io);
+    match propagated(io) {
+        Result.Ok(value: v) => n + v,
+        Result.Err(error: e) => n,
+    }
+}
