@@ -81,6 +81,7 @@ fn main(io: IoCap) -> Int {
                 return 0;
             }
             print(cr_functions(f));
+            print(cr_parts(f));
             return 0;
         }
         if mode == "--facts" {

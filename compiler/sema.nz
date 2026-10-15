@@ -334,6 +334,12 @@ pub struct Ck {
     // Each field read, by its name's span: the field (in the pool) and the type it read.
     mfld: Smap,
     mfldty: Smap,
+    // The instances made and not yet completed (`Generics::pending`), last made last.
+    ipend: Ints,
+    // The reference's record and enum tables (`RecordId`, `EnumId` order): each a definition,
+    // written `-1 - index`, or an instance, by its type.
+    rlog: Ints,
+    elog: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -487,7 +493,12 @@ fn s_arrays() -> Int { 18 }
 // Where the `defer` body being checked begins (R1b, L12): the loop depth there plus one, or 0
 // outside one.
 fn s_defer() -> Int { 19 }
-fn s_slots() -> Int { 20 }
+// Instances (`nazm_sema::generic`): whether completing them waits for `settle` (while field types
+// are resolved), whether a settling is under way, and how many have been made.
+fn s_deferred() -> Int { 20 }
+fn s_settling() -> Int { 21 }
+fn s_created() -> Int { 22 }
+fn s_slots() -> Int { 23 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -628,6 +639,7 @@ fn intern(c: Ck, tag: Int, a: Int, b: Int, x: Int, name: Str, args: Ints) -> Int
     let key = str_join(parts, ":");
     let found = strs_find(c.tykey, key);
     if found >= 0 { return found; }
+    let made = strs_len(c.tykey);
     strs_push(c.tykey, key);
     ints_push(c.tytag, tag);
     ints_push(c.tya, a);
@@ -641,7 +653,170 @@ fn intern(c: Ck, tag: Int, a: Int, b: Int, x: Int, name: Str, args: Ints) -> Int
         ints_push(c.tyargs, ints_get(args, i));
         i = i + 1;
     }
-    strs_len(c.tykey) - 1
+    // A record's or an enum's application is an instance, completed as the reference completes
+    // one (`apply_record`, `apply_enum`): its fields substituted, which may make more.
+    if (tag == tag_record() || tag == tag_enum()) && ints_len(args) > 0 {
+        if tag == tag_record() { ints_push(c.rlog, made); } else { ints_push(c.elog, made); }
+        enqueue_instance(c, made);
+    }
+    made
+}
+
+// --- instances (`nazm_sema::generic`) ---------------------------------------------------------
+//
+// The reference gives an instance its fields when it is made — its definition's, substituted —
+// which interns the types they name, so the type table (Core IR's `types`) lists them in that
+// order. This checker reads an instance's fields through its definition instead; it completes
+// each one only for what completing interns, in the reference's order: at once, or, while field
+// types are being resolved, at `settle`, the last made first.
+
+fn enqueue_instance(c: Ck, t: Int) -> Int {
+    ss(c, s_created(), gs(c, s_created()) + 1);
+    ints_push(c.ipend, t);
+    if gs(c, s_deferred()) == 0 && gs(c, s_settling()) == 0 { settle_instances(c); }
+    0
+}
+
+fn defer_instances(c: Ck) -> Int {
+    ss(c, s_deferred(), 1);
+    0
+}
+
+fn settle_instances(c: Ck) -> Int {
+    ss(c, s_deferred(), 0);
+    if gs(c, s_settling()) == 1 { return 0; }
+    ss(c, s_settling(), 1);
+    while ints_len(c.ipend) > 0 { complete_instance(c, ints_pop(c.ipend)); }
+    ss(c, s_settling(), 0);
+    0
+}
+
+// The definition's fields (or its variants' payload fields), substituted (`complete_instance`).
+fn complete_instance(c: Ck, t: Int) -> Int {
+    if gs(c, s_created()) > 100000 { return 0; }
+    if type_nesting(c, t) > 256 { return 0; }
+    let args = ints_new();
+    let mut i = 0;
+    while i < targc(c, t) {
+        ints_push(args, targ(c, t, i));
+        i = i + 1;
+    }
+    let d = ta(c, t);
+    if tag(c, t) == tag_record() {
+        if d < 0 || d >= ints_len(c.rff) { return 0; }
+        i = 0;
+        while i < ints_get(c.rfc, d) {
+            inst_subst(c, ints_get(c.fty, ints_get(c.rff, d) + i), own_record(), d, args);
+            i = i + 1;
+        }
+        return 0;
+    }
+    if d < 0 || d >= ints_len(c.evf) { return 0; }
+    let mut v = 0;
+    while v < ints_get(c.evc, d) {
+        let vi = ints_get(c.evf, d) + v;
+        i = 0;
+        while i < ints_get(c.vfc, vi) {
+            inst_subst(c, ints_get(c.fty, ints_get(c.vff, vi) + i), own_enum(), d, args);
+            i = i + 1;
+        }
+        v = v + 1;
+    }
+    0
+}
+
+// How deeply a type term nests (`nesting`): `Int` is 1, `Vec[Int]` 2.
+fn type_nesting(c: Ck, t: Int) -> Int {
+    let work = ints_new();
+    let depth = ints_new();
+    ints_push(work, t);
+    ints_push(depth, 1);
+    let mut deepest = 0;
+    while ints_len(work) > 0 {
+        let u = ints_pop(work);
+        let d = ints_pop(depth);
+        if d > deepest { deepest = d; }
+        if d > 256 { return d; }
+        if tag(c, u) != tag_array() {
+            let mut i = 0;
+            while i < targc(c, u) {
+                ints_push(work, targ(c, u, i));
+                ints_push(depth, d + 1);
+                i = i + 1;
+            }
+        }
+    }
+    deepest
+}
+
+// Whether `t` mentions a type parameter of `owner` `oid` (`mentions`); an array is not looked into.
+fn inst_mentions(c: Ck, t: Int, owner: Int, oid: Int) -> Bool {
+    let work = ints_new();
+    ints_push(work, t);
+    while ints_len(work) > 0 {
+        let u = ints_pop(work);
+        let g = tag(c, u);
+        if g == tag_param() {
+            if ta(c, u) == owner && ints_get(c.tyb, u) == oid { return true; }
+        } else {
+            if g != tag_array() {
+                let mut i = 0;
+                while i < targc(c, u) {
+                    ints_push(work, targ(c, u, i));
+                    i = i + 1;
+                }
+            }
+        }
+    }
+    false
+}
+
+// `t` with every parameter of `owner` `oid` replaced by its argument (`substitute`), interning
+// what it builds; an array is left as it is.
+fn inst_subst(c: Ck, t: Int, owner: Int, oid: Int, args: Ints) -> Int {
+    let g = tag(c, t);
+    if g == tag_param() {
+        if ta(c, t) == owner && ints_get(c.tyb, t) == oid {
+            if ints_get(c.tyc, t) < ints_len(args) { return ints_get(args, ints_get(c.tyc, t)); }
+            return t_int();
+        }
+        return t;
+    }
+    if is_holder_tag(g) || g == tag_chan() {
+        if inst_mentions(c, targ(c, t, 0), owner, oid) == false { return t; }
+        let elem = inst_subst(c, targ(c, t, 0), owner, oid, args);
+        if g == tag_chan() { return chan_of(c, elem); }
+        return holder_of(c, g, elem);
+    }
+    if g == tag_fn() {
+        if inst_mentions(c, t, owner, oid) == false { return t; }
+        let params = ints_new();
+        let mut i = 0;
+        while i < fn_arity(c, t) {
+            ints_push(params, inst_subst(c, targ(c, t, i), owner, oid, args));
+            i = i + 1;
+        }
+        let ret = inst_subst(c, fn_ret(c, t), owner, oid, args);
+        return fn_ty(c, params, ret, ta(c, t), fn_row(c, t));
+    }
+    if (g == tag_record() || g == tag_enum()) && targc(c, t) > 0 {
+        let mut any = false;
+        let mut i = 0;
+        while i < targc(c, t) {
+            if inst_mentions(c, targ(c, t, i), owner, oid) { any = true; }
+            i = i + 1;
+        }
+        if any == false { return t; }
+        let out = ints_new();
+        i = 0;
+        while i < targc(c, t) {
+            ints_push(out, inst_subst(c, targ(c, t, i), owner, oid, args));
+            i = i + 1;
+        }
+        if g == tag_record() { return record_ty(c, ta(c, t), out); }
+        return enum_ty(c, ta(c, t), out);
+    }
+    t
 }
 
 fn builtin_ty(c: Ck, name: Str) -> Int { intern(c, tag_builtin(), 0, 0, 0, name, ints_new()) }
@@ -693,6 +868,7 @@ fn tuple_ty(c: Ck, elems: Ints) -> Int {
     }
     if r < 0 {
         r = strs_len(c.rname);
+        ints_push(c.rlog, 0 - 1 - r);
         strs_push(c.rname, "(,)");
         ints_push(c.rmod, 0 - 1);
         ints_push(c.rns, 0);
@@ -1217,7 +1393,7 @@ fn new_ck(t: Tree) -> Ck {
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
-            bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new());
+            bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1370,7 +1546,9 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
     if strs_len(c.stop) > 0 { return c; }
     build_dependencies(c, graph);
     if strs_len(c.stop) > 0 { return c; }
-    // Stage 0a: every user-defined type's name.
+    // Stage 0a: every user-defined type's name. Instances met while field types are still being
+    // resolved are completed once every definition has its fields.
+    defer_instances(c);
     i = 0;
     while i < count {
         declare_types(c, i);
@@ -1386,6 +1564,7 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         resolve_type_fields(c, i);
         i = i + 1;
     }
+    settle_instances(c);
     validate_layouts(c);
     // Every trait's method signatures, before any module declares an impl of one.
     i = 0;
@@ -2090,6 +2269,7 @@ fn declare_types(c: Ck, m: Int) -> Int {
         if refuse_type_name(c, m, name, ns) == false {
             declared_type_params(c, r);
             requirements(c, r, false, 0);
+            ints_push(c.rlog, 0 - 1 - strs_len(c.rname));
             strs_push(c.rname, name);
             ints_push(c.rmod, m);
             ints_push(c.rns, sps(c, ns));
@@ -2111,6 +2291,7 @@ fn declare_types(c: Ck, m: Int) -> Int {
         if refuse_type_name(c, m, name, ns) == false {
             declared_type_params(c, e);
             requirements(c, e, false, 0);
+            ints_push(c.elog, 0 - 1 - strs_len(c.ename));
             strs_push(c.ename, name);
             ints_push(c.emod, m);
             ints_push(c.ens, sps(c, ns));
@@ -4654,6 +4835,16 @@ fn none() -> Int { 0 - 1 }
 
 fn check_unit(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
+    // The reference's `environment` makes each built-in's shapes into types here, once, its `T`
+    // its own: `checked_add`'s `Option[T]` is an instance of the prelude's `Option`, interned in
+    // the type table's order at the first module checked (Core IR's `types`).
+    if m != prelude(c) && declared_enum(c, prelude(c), "Option") >= 0 {
+        let mut bi = 0;
+        while bi < strs_len(c.bname) {
+            if strs_get(c.bretshape, bi) == "Option[T]" { shape_of(c, "Option[T]", param_ty(c, own_builtin(), bi, 0, "T")); }
+            bi = bi + 1;
+        }
+    }
     environment(c, m);
     type_environment(c, m, false);
     const_environment(c, m);
@@ -13872,6 +14063,200 @@ pub fn ck_is_builtin(c: Ck, t: Int, name: Str) -> Bool { t >= 0 && tag(c, t) == 
 // record or enum by its definition's key — `idents` gives each module's identity — and its
 // arguments, a holder by its element, a type parameter by its position (`$0` a function's, `$?0`
 // a record's, an enum's or a built-in's, `$Self` a trait's), a function and an array spelled out.
+// How many impls were filed (N78); the trait a record, enum or tuple derives (`@std/hash`'s
+// `Hash`), or -1; and whether trait `t` declares a method `name`.
+pub fn ck_impl_count(c: Ck) -> Int { ints_len(c.imtrait) }
+// Impl `i`'s trait and type, and whether it is the one the coherence table answers with (the
+// first filed for its trait and type).
+pub fn ck_impl_trait(c: Ck, i: Int) -> Int { ints_get(c.imtrait, i) }
+pub fn ck_impl_type(c: Ck, i: Int) -> Int { ints_get(c.imty, i) }
+pub fn ck_impl_answers(c: Ck, i: Int) -> Bool { impl_of(c, ints_get(c.imtrait, i), ints_get(c.imty, i)) == i }
+// The function impl `i` defines for its trait's `k`th method, or -1 where it leaves it out.
+pub fn ck_impl_fn(c: Ck, i: Int, k: Int) -> Int { ints_get(c.imfn, ints_get(c.imff, i) + k) }
+// Trait `t`'s methods: how many, each one's name, and its default body's function (or -1).
+pub fn ck_trait_method_count(c: Ck, t: Int) -> Int { ints_get(c.trmc, t) }
+pub fn ck_trait_method_name(c: Ck, t: Int, k: Int) -> Str { strs_get(c.tmname, ints_get(c.trmf, t) + k) }
+pub fn ck_trait_method_default(c: Ck, t: Int, k: Int) -> Int {
+    if ints_get(c.tmdef, ints_get(c.trmf, t) + k) == 0 { return 0 - 1; }
+    defined_fn(c, ints_get(c.trmod, t), cat4(strs_get(c.trname, t), "/default/", ck_trait_method_name(c, t, k), ""))
+}
+pub fn ck_derived_hash(c: Ck) -> Int { gs(c, s_hash()) }
+pub fn ck_trait_has_method(c: Ck, t: Int, name: Str) -> Bool {
+    let mut k = 0;
+    while k < ints_get(c.trmc, t) {
+        if strs_get(c.tmname, ints_get(c.trmf, t) + k) == name { return true; }
+        k = k + 1;
+    }
+    false
+}
+
+// Module `m`'s imports as the graph holds them, in order (the core prelude last): how many, and
+// the module the `k`th names.
+pub fn ck_module_deps(c: Ck, m: Int) -> Int { deps(c, m) }
+pub fn ck_module_dep(c: Ck, m: Int, k: Int) -> Int { ints_get(c.don, dep(c, m, k)) }
+
+// The type table as `nazm.core-ir/3` prints it (`Printer::records`, `Printer::enums`): every
+// record and every enum the reference makes, definitions and instances, in its id order —
+// `{"records":[…],"enums":[…]}`, compact.
+pub fn ck_types_json(c: Ck, idents: Strs) -> Str {
+    let records = strs_new();
+    let mut i = 0;
+    while i < ints_len(c.rlog) {
+        strs_push(records, table_entry(c, ints_get(c.rlog, i), true, i, idents));
+        i = i + 1;
+    }
+    let enums = strs_new();
+    i = 0;
+    while i < ints_len(c.elog) {
+        strs_push(enums, table_entry(c, ints_get(c.elog, i), false, i, idents));
+        i = i + 1;
+    }
+    cat5("{\"records\":[", str_join(records, ","), "],\"enums\":[", str_join(enums, ","), "]}")
+}
+
+fn jfield(name: Str, value: Str) -> Str { cat3(json_str(name), ":", value) }
+fn jbool(b: Bool) -> Str { if b { "true" } else { "false" } }
+fn jlist(items: Strs) -> Str { cat3("[", str_join(items, ","), "]") }
+fn jobject(items: Strs) -> Str { cat3("{", str_join(items, ","), "}") }
+
+// One entry of the table: `entry` a definition (`-1 - index`) or an instance's type.
+fn table_entry(c: Ck, entry: Int, record: Bool, id: Int, idents: Strs) -> Str {
+    let mut d = 0 - 1 - entry;
+    let mut t = 0;
+    let args = ints_new();
+    if entry >= 0 {
+        t = entry;
+        d = ta(c, t);
+        let mut k = 0;
+        while k < targc(c, t) {
+            ints_push(args, targ(c, t, k));
+            k = k + 1;
+        }
+    } else {
+        if record { t = record_ty(c, d, ints_new()); } else { t = enum_ty(c, d, ints_new()); }
+    }
+    let mut definition = t;
+    if entry >= 0 {
+        if record { definition = record_ty(c, d, ints_new()); } else { definition = enum_ty(c, d, ints_new()); }
+    }
+    let mut module = 0;
+    let mut public = false;
+    if record {
+        module = ints_get(c.rmod, d);
+        public = ints_get(c.rpub, d) == 1;
+    } else {
+        module = ints_get(c.emod, d);
+        public = ints_get(c.epub, d) == 1;
+    }
+    if module < 0 { module = 0; }
+    let o = strs_new();
+    strs_push(o, jfield("id", int_to_str(id)));
+    strs_push(o, jfield("type", json_str(ck_durable(c, t, idents))));
+    strs_push(o, jfield("display", json_str(show(c, t))));
+    strs_push(o, jfield("definition", json_str(ck_durable(c, definition, idents))));
+    strs_push(o, jfield("module", json_str(strs_get(idents, module))));
+    strs_push(o, jfield("pub", jbool(public)));
+    let targs = strs_new();
+    let mut k = 0;
+    while k < ints_len(args) {
+        strs_push(targs, json_str(ck_durable(c, ints_get(args, k), idents)));
+        k = k + 1;
+    }
+    strs_push(o, jfield("type_args", jlist(targs)));
+    // An instance nested too deeply was never completed: it has no fields.
+    let complete = entry < 0 || type_nesting(c, t) <= 256;
+    if record {
+        let names = strs_new();
+        let fields = strs_new();
+        if complete {
+            k = 0;
+            while k < ints_get(c.rfc, d) {
+                let fi = ints_get(c.rff, d) + k;
+                strs_push(names, strs_get(c.fname, fi));
+                let mut ft = ints_get(c.fty, fi);
+                if entry >= 0 { ft = inst_subst(c, ft, own_record(), d, args); }
+                let f = strs_new();
+                strs_push(f, jfield("name", json_str(strs_get(c.fname, fi))));
+                strs_push(f, jfield("type", json_str(ck_durable(c, ft, idents))));
+                strs_push(fields, jobject(f));
+                k = k + 1;
+            }
+        }
+        strs_push(o, jfield("fields", jlist(fields)));
+        // A record C sees keeps its declared order (N85); any other is laid out by field name.
+        strs_push(o, jfield("canonical", by_name(names, ints_get(c.rrepr, d) == 0)));
+        return jobject(o);
+    }
+    let vnames = strs_new();
+    let variants = strs_new();
+    if complete {
+        let mut v = 0;
+        while v < ints_get(c.evc, d) {
+            let vi = ints_get(c.evf, d) + v;
+            strs_push(vnames, strs_get(c.vname, vi));
+            let names = strs_new();
+            let fields = strs_new();
+            k = 0;
+            while k < ints_get(c.vfc, vi) {
+                let fi = ints_get(c.vff, vi) + k;
+                strs_push(names, strs_get(c.fname, fi));
+                let mut ft = ints_get(c.fty, fi);
+                if entry >= 0 { ft = inst_subst(c, ft, own_enum(), d, args); }
+                let f = strs_new();
+                strs_push(f, jfield("name", json_str(strs_get(c.fname, fi))));
+                strs_push(f, jfield("type", json_str(ck_durable(c, ft, idents))));
+                strs_push(fields, jobject(f));
+                k = k + 1;
+            }
+            let vo = strs_new();
+            strs_push(vo, jfield("name", json_str(strs_get(c.vname, vi))));
+            strs_push(vo, jfield("fields", jlist(fields)));
+            strs_push(vo, jfield("canonical", by_name(names, true)));
+            strs_push(variants, jobject(vo));
+            v = v + 1;
+        }
+    }
+    strs_push(o, jfield("variants", jlist(variants)));
+    strs_push(o, jfield("canonical", by_name(vnames, true)));
+    jobject(o)
+}
+
+// The positions of `names`, sorted by name byte by byte where `sorted`, else in order.
+fn by_name(names: Strs, sorted: Bool) -> Str {
+    let order = ints_new();
+    let mut i = 0;
+    while i < strs_len(names) {
+        let mut at = ints_len(order);
+        if sorted {
+            while at > 0 && name_before(strs_get(names, i), strs_get(names, ints_get(order, at - 1))) { at = at - 1; }
+        }
+        ints_push(order, 0);
+        let mut k = ints_len(order) - 1;
+        while k > at {
+            ints_set(order, k, ints_get(order, k - 1));
+            k = k - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    let out = strs_new();
+    i = 0;
+    while i < ints_len(order) {
+        strs_push(out, int_to_str(ints_get(order, i)));
+        i = i + 1;
+    }
+    jlist(out)
+}
+
+fn name_before(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
 pub fn ck_durable(c: Ck, t: Int, idents: Strs) -> Str {
     let g = tag(c, t);
     if g == tag_builtin() {
@@ -13895,7 +14280,10 @@ pub fn ck_durable(c: Ck, t: Int, idents: Strs) -> Str {
     if g == tag_record() || g == tag_enum() {
         let mut head = "";
         if g == tag_record() {
-            head = cat4(strs_get(idents, ints_get(c.rmod, ta(c, t))), "::record ", strs_get(c.rname, ta(c, t)), "");
+            // A tuple's record is the root module's (`tuple_of`).
+            let mut rm = ints_get(c.rmod, ta(c, t));
+            if rm < 0 { rm = 0; }
+            head = cat4(strs_get(idents, rm), "::record ", strs_get(c.rname, ta(c, t)), "");
         } else {
             head = cat4(strs_get(idents, ints_get(c.emod, ta(c, t))), "::enum ", strs_get(c.ename, ta(c, t)), "");
         }

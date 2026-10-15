@@ -135,9 +135,9 @@ for mode in $modes; do
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
   if [ "$mode" = core ]; then
     # Functions: the reference's, those the lowering carried, those of them that agree.
-    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3 } END { printf "%d %d %d", t, c, a }')
+    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5 } END { printf "%d %d %d %d %d", t, c, a, p, q }')
     set -- $counts
-    echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree"
+    echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree"
   elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
