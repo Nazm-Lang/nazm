@@ -122,7 +122,36 @@ yet stops the unit with a message naming it, and `run.sh` counts it as a differe
 
 `run.sh` compares three things for an input with LIR: the tables, the instruction text against
 `nazm lir --ops`, and — when the text agrees — the whole `nazm lir` document, the text's BLAKE3
-digests included.
+digests included. Its inputs are the base set (the brief's, `compiler/`, the pipeline itself)
+and the front end's test programs (`toolchain/frontend-tests/inputs`), which moved out of
+`compiler/tests/inputs`; it prints the summary over both, and a text that differs without a
+stop is counted apart and always shown.
+
+What 6.3.5 found, and decided:
+
+- **`Ints` and `Strs` are vectors.** Since 5b.18 the checker interns `Ints` and `Strs` as
+  `Vec[Int]` and `Vec[Str]` (Core IR spells them so), and LIR releases a `Vec[Str]` as any
+  vector of owned elements (`nz.vec_release` with `nz.h.vel.Str`), never `nz.strs_release`.
+  The stage's earlier rule (a `Vec[Str]` released as `Strs`) agreed only on inputs that never
+  dropped one; it made two front-end inputs' text differ, and is gone.
+- **One helper per symbol.** A `Box`, `Chain` or `Cell` is its `Vec`, so their helpers share a
+  symbol; the stage keys helpers by symbol, as Rust's keying by `Ty` comes to.
+- **A thunk's spans are its target's** (Rust's `thunk_of`): its stack check names the target
+  function, found from the thunk's name `NAME#value@HOME`.
+- **A static atomic constant** is spelled by its name alone in Core IR (`static NAME`): the stage
+  takes the static of that name in the function's module, else the only one of that name, and
+  stops if there are several.
+- **Compile-time constants** are computed here: a float literal's IEEE bits (`float_parse_raw`,
+  then its bits), an integer of any kind as its class's two's complement (decimal arithmetic
+  past 64 bits), FNV-1a of a variant's name for an enum's hash (`UInt64` wrapping), and the
+  powers of two `float_fits` compares with.
+- **A generic channel's helper** (`nz.h.vel.chan.N`) is named by the checker's channel id.
+  Core IR does not carry it, and it is not a function of the type: `Chan[Int]` is `chan.0` in
+  `select-004` and `chan.6` in `select-001` (the built-ins' `Chan[T]`s are interned first, in a
+  session-dependent order). Such a unit stops, named (19 front-end and example inputs). Asked
+  of the coordinator, one of: Core IR gives each `Chan[T]` type its id; or — better, since a
+  helper's symbol should be durable as a `Vec`'s is — LIR names it by the element's key
+  (`chan.KEY`, as `vec.KEY`), a change to `crates/nazm-lir` (`Lw::type_name`).
 
 ## Order of work
 

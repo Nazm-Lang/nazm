@@ -60,8 +60,8 @@
       names as `Types::show` writes them (`Box`/`List`/`Cell` as their `Vec`, `Chan[_]`, `fn`).
       `run.sh` compares `pipeline tables` with `nazm lir` minus each unit's `lir` member
       (`tests/tables.py` re-serialises byte for byte): 1009 of 1009 inputs with LIR identical
-      when `compiler/tests/inputs` was in the set; 161 of 161 since it moved to
-      `toolchain/frontend-tests` (not this stage's set)
+      when `compiler/tests/inputs` was in the set; 161 of 161 when it moved to
+      `toolchain/frontend-tests`, and 1000 of 1000 since `run.sh` reads it there (6.3.5)
 - [ ] 6.3 Instructions (`--ops`, `ops.nz`), growing by what the inputs need
   - [x] 6.3.1 Module sources (`nazm core-ir --with-sources`, added read-only at the coordinator's
         decision) and each MIR statement's span (`Block.ats`, not printed)
@@ -77,7 +77,16 @@
         vector's elements), simple string and sequence primitives. `run.sh`: 68 of 161 inputs
         with LIR identical, document and digests included; every other stops at a construct
         named as not ported, and none produces different text
-  - [ ] 6.3.5 The remaining primitives (sequences' push/get/set, channels, files, bytes and text,
-        contracts, `numeric.rs`, `arrays.rs`, `atomics.rs`), conversions, the helpers that
-        compare and hash, closures and indirect calls, scopes and spawn, foreign calls and
-        exports, statics, large frames
+  - [x] 6.3.5 The remaining primitives (sequences' push/get/set/pop, channels, files, bytes and
+        text, contracts, `numeric.rs`, `arrays.rs`, `atomics.rs`), conversions, the helpers that
+        compare, order and hash, closures and indirect calls, scopes and spawn, foreign calls
+        and exports, statics and sections, large frames. `run.sh` reads the front end's test
+        programs again (`toolchain/frontend-tests/inputs`) and prints its summary over the base
+        set and the full set: lir ops 158 of 161 (base) and 981 of 1000 (full) identical,
+        document and digests included; the 19 others all stop at a generic channel's helper
+        (6.3.6), and none produces different text
+  - [ ] 6.3.6 A generic channel's helper (`nz.h.vel.chan.N`): named by the checker's channel id,
+        which Core IR does not carry and which is not a function of the type (`Chan[Int]` is
+        `chan.0` in one program and `chan.6` in another). Asked of the coordinator: either Core
+        IR gives each `Chan[T]` its id, or LIR names the helper durably by the element's key, as
+        a `Vec`'s is (`vec.KEY`) — design, *Instruction-level LIR*
