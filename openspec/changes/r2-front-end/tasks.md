@@ -162,6 +162,15 @@
       `(…)`). A field run is written once all its types are resolved, since resolving one may make a
       tuple's record. `inputs/check/tuples.nz`. `run.sh check`: 2,654 agree, 139 differ; the checker
       carries 2,497, all agree
+- [ ] 3.1v Effect parameters (N51): `[effects E]` declared once (N0388 for a second, for one
+      without a declared set and on `main`), named in function types written in its function
+      and refused inside a type's arguments (N0388); a function type's effects naming its owner's
+      parameter (`row`), shown by its name or `*`; a polymorphic callee called as a generic one
+      is, each argument's function type binding the parameter to what it has beyond the named
+      effects (N0389 for a second set, N0300 where the named ones are missing), the result's
+      function types bound, and the call performing the callee's set bound; never assignable by
+      inclusion, never a value (N0387); N0366 naming the parameter. `@std/seq`'s programs are
+      carried. `run.sh check`: 2,665 agree, 128 differ; the checker carries 2,533, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
