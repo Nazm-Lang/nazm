@@ -16,7 +16,7 @@ use "@std/sort"
 use "@std/blake3"
 
 /// What the tables are computed from.
-struct Lx {
+pub struct Lx {
     c: Cir,
     tt: TypeTable,
     p: MirProgram,
@@ -76,7 +76,7 @@ fn generic_uses(lx: Lx, f: CirFn, n: Int) {
     }
 }
 
-fn lx_new(c: Cir, tt: TypeTable, p: MirProgram) -> Lx {
+pub fn lx_new(c: Cir, tt: TypeTable, p: MirProgram) -> Lx ! {} {
     let next = ints_new()
     ints_push(next, 0)
     ints_push(next, 0)
@@ -148,13 +148,13 @@ fn show(lx: Lx, t: Str) -> Str {
     t
 }
 
-fn is_cap(t: Str) -> Bool {
+pub fn is_cap(t: Str) -> Bool ! {} {
     str_len(t) > 3 && text_ends_with(t, "Cap") && !text_contains(t, "[")
 }
 
 /// LIR's machine type of a spelling, as a class: `int`, `num`, `bool`, `str`, `word` (a
 /// pointer: a sequence, a channel, a function), `record`, `enum`, `array`.
-fn class(t: Str) -> Str {
+pub fn class(t: Str) -> Str ! {} {
     let s = spell(t)
     if s.kind == "record" || s.kind == "enum" || s.kind == "array" { return s.kind }
     if s.kind == "vec" || s.kind == "unknown" { return "word" }
@@ -167,7 +167,7 @@ fn class(t: Str) -> Str {
 }
 
 /// A type as `nazm lir` names it (`ty_name`).
-fn ty_name(lx: Lx, t: Str) -> Str {
+pub fn ty_name(lx: Lx, t: Str) -> Str ! {} {
     let k = class(t)
     let s = spell(t)
     if k == "int" { return "Int" }
@@ -183,7 +183,7 @@ fn ty_name(lx: Lx, t: Str) -> Str {
 }
 
 /// What the linker calls a function: its definition's module and name, an instance's arguments.
-fn symbol_of(f: MirFn) -> Str {
+pub fn symbol_of(f: MirFn) -> Str ! {} {
     if f.foreign != "" { return f.foreign }
     let at = match text_find(f.def, "::fn ") { Some(i) => i, None => 0 }
     let module = str_slice(f.def, 0, at)
@@ -223,7 +223,7 @@ fn thunk_target(lx: Lx, f: MirFn) -> Str {
     ""
 }
 
-fn linkage(lx: Lx, i: Int) -> Str {
+pub fn linkage(lx: Lx, i: Int) -> Str ! {} {
     let f = vec_get(lx.p.fns, i)
     let exported = f.node >= 0 && bval(lx.c, f.node, "pub")
     let from_generic = if f.node >= 0 {
@@ -237,12 +237,12 @@ fn linkage(lx: Lx, i: Int) -> Str {
 // --- layout -------------------------------------------------------------------------------------
 
 /// A size and an alignment.
-struct Lay {
+pub struct Lay {
     size: Int,
     align: Int,
 }
 
-fn round(n: Int, align: Int) -> Int {
+pub fn round(n: Int, align: Int) -> Int ! {} {
     if align <= 1 { n } else { (n + align - 1) / align * align }
 }
 
@@ -309,7 +309,7 @@ fn structure(lx: Lx, fields: Strs) -> Ints {
     out
 }
 
-fn lay(lx: Lx, t: Str) -> Lay {
+pub fn lay(lx: Lx, t: Str) -> Lay ! {} {
     let k = class(t)
     if k == "int" || k == "word" { return Lay(size: 8, align: 8) }
     if k == "bool" { return Lay(size: 1, align: 1) }
@@ -341,7 +341,7 @@ fn lay(lx: Lx, t: Str) -> Lay {
 }
 
 /// Whether a value of `t` owns anything a drop gives back.
-fn owns(lx: Lx, t: Str, depth: Int) -> Bool {
+pub fn owns(lx: Lx, t: Str, depth: Int) -> Bool ! {} {
     if depth > 64 { return true }
     let k = class(t)
     if k == "int" || k == "bool" || k == "num" { return false }
@@ -381,7 +381,7 @@ fn js(s: Str) -> Str {
     str_join(parts, "")
 }
 
-fn hex_byte(b: Int) -> Str {
+pub fn hex_byte(b: Int) -> Str ! {} {
     let digits = "0123456789abcdef"
     str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1)
 }
@@ -418,7 +418,7 @@ fn enum_json(lx: Lx, t: Str) -> Str {
 
 // --- units --------------------------------------------------------------------------------------
 
-fn params_of(f: MirFn) -> Strs {
+pub fn params_of(f: MirFn) -> Strs ! {} {
     let out = strs_new()
     for i in 0..f.params { strs_push(out, vec_get(f.locals, i).ty) }
     out
@@ -446,7 +446,7 @@ fn note_rvalue(v: Rvalue, used: Strs, lx: Lx) {
     }
 }
 
-fn callees_of(f: MirFn) -> Ints {
+pub fn callees_of(f: MirFn) -> Ints ! {} {
     let out = ints_new()
     for b in f.blocks {
         for s in b.stmts {
@@ -464,14 +464,15 @@ fn callees_of(f: MirFn) -> Ints {
     out
 }
 
-fn has(xs: Ints, x: Int) -> Bool {
+pub fn has(xs: Ints, x: Int) -> Bool ! {} {
     for i in 0..ints_len(xs) { if ints_get(xs, i) == x { return true } }
     false
 }
 
 /// One unit: `fns` (MIR positions), the module whose source names it, whether it owns that
 /// module's definitions.
-fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool) -> Str {
+/// `lir` is the unit's `lir` member (its digest and text), or `""` for the tables alone.
+fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool, lir: Str) -> Str {
     let used = strs_new()
     let externals = strs_new()
     for i in 0..ints_len(fns) {
@@ -539,7 +540,7 @@ fn unit_json(lx: Lx, artefact: Str, fns: Ints, module: Str, owns_module: Bool) -
     }
     "{\"artefact\":\"" + artefact + "\",\"enums\":[" + by_id(lx, enums, false) + "],\"externals\":[" + str_join(sorted_externals(externals), ",")
         + "],\"functions\":[" + str_join(functions, ",") + "],\"instance\":" + (if owns_module { "false" } else { "true" })
-        + ",\"records\":[" + by_id(lx, recs, true) + "],\"source\":" + js(module) + "}"
+        + (if lir == "" { "" } else { ",\"lir\":" + lir }) + ",\"records\":[" + by_id(lx, recs, true) + "],\"source\":" + js(module) + "}"
 }
 
 /// Externals sorted by symbol (each is `{"foreign":…,"symbol":"…"}`, so by the text after it).
@@ -576,12 +577,19 @@ fn by_id(lx: Lx, set: HashMap[Str, Bool], rec: Bool) -> Str {
     str_join(out, ",")
 }
 
-/// `nazm lir`'s tables for the program, every unit's instruction text left out.
-pub fn lir_tables(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Str, Str] ! {} {
-    let lx = lx_new(c, tt, p)
-    if p.entry < 0 { return Err("this program has no `main` to compile") }
-    let units = strs_new()
-    let mut m = 0
+/// One unit: its artefact name, its functions (MIR positions), the module whose source names it,
+/// and whether it owns that module's definitions (a module's unit) or not (an instance's).
+pub struct UnitPlan {
+    artefact: Str,
+    fns: Ints,
+    module: Str,
+    owns: Bool,
+}
+
+/// The units, in order: one per module that defines a function (in load order), then one per
+/// generic instance (in MIR's order).
+pub fn unit_plans(c: Cir, p: MirProgram) -> Vec[UnitPlan] ! {} {
+    let out: Vec[UnitPlan] = vec_new()
     let mods = kid(c, json_root(c.doc), "modules")
     for i in 0..count(c, mods) {
         let name = sval(c, at(c, mods, i), "name")
@@ -593,8 +601,7 @@ pub fn lir_tables(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Str, Str] ! {}
                 let f = vec_get(p.fns, j)
                 if f.module == name && vec_len(f.type_args) == 0 && f.foreign == "" { ints_push(fns, j) }
             }
-            strs_push(units, unit_json(lx, "m" + int_to_str(m), fns, name, true))
-            m += 1
+            vec_push(out, UnitPlan(artefact: "m" + int_to_str(vec_len(out)), fns: fns, module: name, owns: true))
         }
     }
     let mut g = 0
@@ -603,9 +610,28 @@ pub fn lir_tables(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Str, Str] ! {}
         if vec_len(f.type_args) > 0 {
             let fns = ints_new()
             ints_push(fns, j)
-            strs_push(units, unit_json(lx, "g" + int_to_str(g), fns, f.module, false))
+            vec_push(out, UnitPlan(artefact: "g" + int_to_str(g), fns: fns, module: f.module, owns: false))
             g += 1
         }
+    }
+    out
+}
+
+/// `nazm lir`'s document: the tables, and with `texts` (one per unit, in `unit_plans` order) each
+/// unit's `lir` member, its instruction text and that text's BLAKE3 digest; with none, the tables
+/// alone.
+pub fn lir_document(c: Cir, tt: TypeTable, p: MirProgram, texts: Strs) -> Result[Str, Str] ! {} {
+    let lx = lx_new(c, tt, p)
+    if p.entry < 0 { return Err("this program has no `main` to compile") }
+    let units = strs_new()
+    let mut i = 0
+    for u in unit_plans(c, p) {
+        let lir = if strs_len(texts) == 0 { "" } else {
+            let t = strs_get(texts, i)
+            "{\"digest\":\"" + blake3_hex(bytes_from_str(t)) + "\",\"text\":" + js(t) + "}"
+        }
+        strs_push(units, unit_json(lx, u.artefact, u.fns, u.module, u.owns, lir))
+        i += 1
     }
     let layout = "{\"bool\":1,\"int\":8,\"pointer\":8,\"str\":{\"align\":8,\"length\":8,\"owner\":16,\"pointer\":0,\"size\":24}}"
     Ok("{\"data_layout\":" + layout + ",\"entry\":" + js(symbol_of(vec_get(p.fns, p.entry))) + ",\"schema\":\"nazm.lir/2\",\"target\":\"aarch64-apple-darwin\",\"units\":[" + str_join(units, ",") + "]}")

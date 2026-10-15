@@ -27,10 +27,14 @@ else
     while IFS= read -r f; do FILES+=("$f"); done < <(find tests/compat/v1 corpus examples bench/compare/nazm compiler -name '*.nz' | sort; echo toolchain/pipeline/main.nz)
 fi
 agree=0; differ=0; skipped=0; made=0; caught=0; missed=0; lagree=0; ldiffer=0; lskipped=0
+oagree=0; odiffer=0; fagree=0; fdiffer=0
+if ! python3 toolchain/pipeline/tests/runtime_table.py --check; then
+    echo "pipeline: runtime.nz is not the runtime's registry; run tests/runtime_table.py"; exit 2
+fi
 for f in "${FILES[@]}"; do
     o="$OUT/cmp/$(echo "$f" | tr '/' '_')"
     # An input with no Core IR (a program that does not check) or no MIR is not this stage's.
-    if ! "$NAZM" core-ir --json "$f" > "$o.cir" 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
+    if ! "$NAZM" core-ir --json --with-sources "$f" > "$o.cir" 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
     if ! "$NAZM" mir "$f" > "$o.want" 2>/dev/null; then skipped=$((skipped + 1)); continue; fi
     # The validator against its mutants: every one must be caught.
     if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" mutants "$o.cir" > "$o.mut" 2>&1 || grep -q "^missed" "$o.mut"; then :; fi
@@ -51,10 +55,25 @@ for f in "${FILES[@]}"; do
         if [ $VERBOSE = 1 ]; then diff "$o.want" "$o.got" | head -20; fi
     fi
     # LIR's tables (task 6.1, 6.2): `nazm lir` with each unit's instruction text taken out
-    # (`tables.py`, which re-serialises byte for byte), until 6.3 prints the text too.
+    # (`tables.py`, which re-serialises byte for byte); then the instruction text (6.3) against
+    # `nazm lir --ops`; then the whole document, text and digests included.
     if ! "$NAZM" lir "$f" > "$o.lwant0" 2>/dev/null; then lskipped=$((lskipped + 1)); continue; fi
     python3 toolchain/pipeline/tests/tables.py < "$o.lwant0" > "$o.lwant"
-    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" lir "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
+    "$NAZM" lir --ops "$f" > "$o.owant" 2>/dev/null
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" ops "$o.cir" > "$o.ogot" 2> "$o.oerr" && cmp -s "$o.ogot" "$o.owant"; then
+        oagree=$((oagree + 1))
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" lir "$o.cir" > "$o.fgot" 2>/dev/null && cmp -s "$o.fgot" "$o.lwant0"; then
+            fagree=$((fagree + 1))
+        else
+            fdiffer=$((fdiffer + 1)); echo "lir document differ: $f"
+        fi
+    else
+        odiffer=$((odiffer + 1))
+        if [ $VERBOSE = 1 ]; then
+            if [ -s "$o.oerr" ]; then echo "ops differ: $f: $(head -1 "$o.oerr")"; else echo "ops differ: $f: $(cmp "$o.owant" "$o.ogot" 2>&1 | head -1 | sed "s/.* differ: //")"; fi
+        fi
+    fi
+    if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
         lagree=$((lagree + 1))
     else
         ldiffer=$((ldiffer + 1))
@@ -68,3 +87,4 @@ done
 echo "validator: $made mutants, $caught caught, $missed missed"
 echo "mir: $agree agree, $differ differ ($skipped inputs without Core IR or MIR)"
 echo "lir tables: $lagree agree, $ldiffer differ ($lskipped inputs with MIR but no LIR)"
+echo "lir ops: $oagree agree, $odiffer differ (-v lists each; the whole document: $fagree agree, $fdiffer differ)"

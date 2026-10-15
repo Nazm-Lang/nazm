@@ -93,10 +93,12 @@ that text's digest (`lir`). The tables are functions of MIR and `/3` (`modules`,
   `file:line:column` (`nazm: error[N0400]: … at fib.nz:2:33`). Core IR carries byte spans
   (`"at": "fib.nz:313..317"`), not lines and columns: the stage needs each module's source text
   (or a line table) to convert them. Requested: a `source` member per `/3` module, or a read-only
-  `--with-sources` option on `nazm core-ir`. Until then the stage can read the files itself (the
-  root's directory, `library/` for `@std` and `@core`), which ties it to a checkout. The MIR this
-  stage builds must also carry each statement's span (Rust's `s.at`, `callee_at`), which it does
-  not yet: the first step of 6.3.
+  `--with-sources` option on `nazm core-ir`. Decided: `--with-sources`, read-only, giving each
+  `/3` module a `source` member only on request (`crates/nazm-cli`, `crates/nazm-cir`). The MIR
+  this stage builds carries each statement's span beside it (`Block.ats`, `term_at`; not printed):
+  the span of the innermost Core IR node being lowered, which is what Rust's MIR gives the
+  statements whose failures LIR names. A stack check names the function's name, which Core IR
+  does not span: found as `fn NAME` within the function's span in its source.
 - **Types the checker never interned.** A unit lists its records and enums by the checker's ids.
   A concrete type that appears only once MIR substitutes an instance's arguments (a `Pair[T]`
   inside `f[T]`, called at `Int`) has no `/3` entry and so no id; the Rust lowering interns it then.
@@ -108,6 +110,19 @@ The tables are compared now (`run.sh`, *lir tables*): `nazm lir`'s document with
 `lir` member — the instruction text and its digest, 6.3 — taken out, every other byte compared.
 Function types are spelled inside the stage as `?fn(PARAMS) -> RET` (MIR's text still names them
 `?`), so a `Vec[fn(Int) -> Int]` is named as the checker shows it.
+
+## Instruction-level LIR (6.3)
+
+`ops.nz` builds each unit's module as text, in the order Rust's `Lw` builds it — functions
+declared in MIR order, then every runtime import, datum and message in first-use order — because
+the printed order of symbols is that order. A function is built as Rust's `Fb` builds it: block 0
+initialises the locals, one block per MIR block follows, and every guard opens its two blocks
+where it stands. Values are numbered in emission order. Nothing is guessed: a construct not ported
+yet stops the unit with a message naming it, and `run.sh` counts it as a difference.
+
+`run.sh` compares three things for an input with LIR: the tables, the instruction text against
+`nazm lir --ops`, and — when the text agrees — the whole `nazm lir` document, the text's BLAKE3
+digests included.
 
 ## Order of work
 
