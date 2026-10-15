@@ -1,0 +1,330 @@
+// The LIR forms a program uses, and every form LIR's grammar and validator admit (design D12):
+// what `tests/cover.sh` measures the differential suite's coverage by. A form is an operation
+// with the classes it is applied to — `add i32`, `sext i64<-i8`, `call c arg i16` — since the
+// selection's templates differ by class, not by value.
+
+use "lir.nz"
+use "common.nz"
+use "@std/text"
+
+pub fn cname(c: Int) -> Str {
+    match c {
+        0 => "bit",
+        1 => "i8",
+        2 => "i16",
+        3 => "i32",
+        4 => "i64",
+        5 => "f32",
+        6 => "f64",
+        7 => "ptr",
+        8 => "i128",
+        _ => "none",
+    }
+}
+
+fn bin_name(k: Int) -> Str {
+    match k {
+        0 => "add",
+        1 => "sub",
+        2 => "mul",
+        3 => "sdiv",
+        4 => "srem",
+        5 => "and",
+        6 => "or",
+        7 => "xor",
+        8 => "udiv",
+        9 => "urem",
+        10 => "shl",
+        11 => "lshr",
+        12 => "ashr",
+        13 => "rotl",
+        14 => "rotr",
+        15 => "fadd",
+        16 => "fsub",
+        17 => "fmul",
+        18 => "fdiv",
+        _ => "?",
+    }
+}
+
+fn ovf_name(k: Int) -> Str {
+    match k {
+        0 => "add.ovf",
+        1 => "sub.ovf",
+        2 => "mul.ovf",
+        3 => "uadd.ovf",
+        4 => "usub.ovf",
+        5 => "umul.ovf",
+        _ => "?",
+    }
+}
+
+fn cmp_name(k: Int) -> Str {
+    match k {
+        0 => "eq",
+        1 => "ne",
+        2 => "lt",
+        3 => "le",
+        4 => "gt",
+        5 => "ge",
+        6 => "ult",
+        7 => "ule",
+        8 => "ugt",
+        9 => "uge",
+        10 => "feq",
+        11 => "fne",
+        12 => "flt",
+        13 => "fle",
+        14 => "fgt",
+        15 => "fge",
+        _ => "?",
+    }
+}
+
+fn un_name(k: Int) -> Str {
+    match k {
+        0 => "fneg",
+        1 => "fsqrt",
+        2 => "fabs",
+        3 => "ffloor",
+        4 => "fceil",
+        5 => "ftrunc",
+        6 => "popcnt",
+        7 => "clz",
+        8 => "ctz",
+        9 => "bswap",
+        _ => "?",
+    }
+}
+
+fn conv_name(k: Int) -> Str {
+    match k {
+        0 => "stof",
+        1 => "utof",
+        2 => "ftos",
+        3 => "ftou",
+        4 => "fext",
+        5 => "ftrunc",
+        6 => "bits",
+        _ => "?",
+    }
+}
+
+fn conv_word(k: Int) -> Str {
+    if k == CONV_C { "c" } else if k == CONV_PLAIN { "plain" } else { "nazm" }
+}
+
+fn class_at(vc: Ints, v: Int) -> Int {
+    if v >= 0 && v < ints_len(vc) { vc[v] } else { -1 }
+}
+
+/// The forms of a call: its convention and result, a C callee's argument classes, and whether
+/// it passes arguments on the stack.
+fn call_forms(out: Strs, word: Str, conv: Int, params: Ints, ret: Int, failed: Bool) {
+    let cw = conv_word(conv)
+    strs_push(out, f"{word} {cw} -> {cname(ret)}")
+    if failed { strs_push(out, f"{word} {cw} failed") }
+    if conv == CONV_C {
+        for p in params { strs_push(out, f"{word} c arg {cname(p)}") }
+    }
+    let mut ints = 0
+    let mut floats = 0
+    for p in params {
+        if is_float(p) { floats += 1 } else if p == C_I128 { ints += 2 } else { ints += 1 }
+    }
+    if ints > 6 || floats > 8 { strs_push(out, f"{word} {cw} stack args (x86_64)") }
+    if ints > 8 || floats > 8 { strs_push(out, f"{word} {cw} stack args (aarch64)") }
+}
+
+/// Every form `u` uses, unsorted and repeated.
+pub fn unit_forms(u: Unit, out: Strs) {
+    for f in u.funcs {
+        let mut n = 0
+        for x in f.insts {
+            if x.dst + 1 > n { n = x.dst + 1 }
+            if x.dst2 + 1 > n { n = x.dst2 + 1 }
+        }
+        let vc = infer(u, f, n)
+        for x in f.insts {
+            let op = x.op
+            let ca = class_at(vc, x.a)
+            if op == OP_PARAM {
+                strs_push(out, f"param {cname(class_at(vc, x.dst))}")
+            } else if op == OP_CONST {
+                strs_push(out, f"const {cname(x.cls)}")
+            } else if op == OP_ADDR {
+                let s = u.syms[x.sym]
+                let what = if s.kind == 0 { "func" } else { "data" }
+                let link = if s.link == L_IMPORT { "import" } else { "defined" }
+                strs_push(out, f"addr {link} {what}")
+            } else if op == OP_SLOT {
+                strs_push(out, "slot")
+            } else if op == OP_LOAD {
+                strs_push(out, f"load {cname(x.cls)}")
+            } else if op == OP_STORE {
+                strs_push(out, f"store {cname(class_at(vc, x.b))}")
+            } else if op == OP_BIN {
+                strs_push(out, f"{bin_name(x.sub)} {cname(ca)}")
+            } else if op == OP_OVF {
+                strs_push(out, f"{ovf_name(x.sub)} {cname(ca)}")
+            } else if op == OP_CMP {
+                strs_push(out, f"cmp {cmp_name(x.sub)} {cname(ca)}")
+            } else if op == OP_SELECT {
+                strs_push(out, f"select {cname(ca)}")
+            } else if op == OP_UN {
+                strs_push(out, f"{un_name(x.sub)} {cname(ca)}")
+            } else if op == OP_CONV {
+                strs_push(out, f"{conv_name(x.sub)} {cname(x.cls)}<-{cname(ca)}")
+            } else if op == OP_EXT {
+                let w = if x.sub == 1 { "sext" } else { "zext" }
+                strs_push(out, f"{w} {cname(x.cls)}<-{cname(ca)}")
+            } else if op == OP_TRUNC {
+                strs_push(out, f"trunc {cname(x.cls)}<-{cname(ca)}")
+            } else if op == OP_PTRADD {
+                strs_push(out, "ptradd")
+            } else if op == OP_PTRTOINT {
+                strs_push(out, "ptrtoint")
+            } else if op == OP_INTTOPTR {
+                strs_push(out, "inttoptr")
+            } else if op == OP_GET {
+                strs_push(out, f"var {cname(class_at(vc, x.dst))}")
+            } else if op == OP_SET {
+                strs_push(out, f"var {cname(ca)}")
+            } else if op == OP_CALL {
+                let s = u.syms[x.sym]
+                call_forms(out, "call", s.conv, s.params, s.ret, x.dst2 >= 0)
+            } else if op == OP_CALLI {
+                call_forms(out, "call_indirect", x.sig_conv, x.sig_params, x.sig_ret, x.dst2 >= 0)
+            } else if op == OP_COPY {
+                strs_push(out, "copy")
+            } else if op == OP_ZERO {
+                strs_push(out, "zero")
+            } else if op == OP_LOC {
+                strs_push(out, "loc")
+            }
+        }
+        for t in f.terms {
+            let op = t.op
+            if op == T_JUMP {
+                strs_push(out, "jump")
+            } else if op == T_BRANCH {
+                strs_push(out, "branch")
+            } else if op == T_SWITCH {
+                strs_push(out, f"switch {cname(class_at(vc, t.a))}")
+            } else if op == T_RETURN {
+                strs_push(out, f"return {cname(class_at(vc, t.a))}")
+            } else if op == T_FAIL {
+                strs_push(out, "fail")
+            } else if op == T_UNREACHABLE {
+                strs_push(out, "unreachable")
+            }
+        }
+    }
+    for d in u.data {
+        let w = if d.writable { "writable" } else { "read-only" }
+        let r = if ints_len(d.reloc_at) > 0 { " with addresses" } else { "" }
+        strs_push(out, f"data {w}{r}")
+    }
+}
+
+fn each_class(out: Strs, word: Str, classes: Ints) {
+    for c in classes { strs_push(out, f"{word} {cname(c)}") }
+}
+
+fn list(a: Int, b: Int) -> Ints {
+    let r = ints_new()
+    let mut i = a
+    while i <= b {
+        ints_push(r, i)
+        i += 1
+    }
+    r
+}
+
+/// Every form LIR admits (the validator's class rules, `crates/nazm-lir/src/op/validate.rs`),
+/// one each.
+pub fn universe(out: Strs) {
+    let all = list(0, 8)
+    let ints = ints_new()
+    ints_push(ints, C_I8)
+    ints_push(ints, C_I16)
+    ints_push(ints, C_I32)
+    ints_push(ints, C_I64)
+    ints_push(ints, C_I128)
+    let bits = ints_new()
+    ints_push(bits, C_BIT)
+    for c in ints { ints_push(bits, c) }
+    let floats = ints_new()
+    ints_push(floats, C_F32)
+    ints_push(floats, C_F64)
+    let numbers = ints_new()
+    for c in ints { ints_push(numbers, c) }
+    for c in floats { ints_push(numbers, c) }
+    each_class(out, "param", all)
+    each_class(out, "const", all)
+    each_class(out, "load", all)
+    each_class(out, "store", all)
+    each_class(out, "var", all)
+    each_class(out, "select", all)
+    each_class(out, "return", all)
+    strs_push(out, "return none")
+    let fixed = "addr import func|addr defined func|addr import data|addr defined data|slot|ptradd|ptrtoint|inttoptr|copy|zero|loc|jump|branch|fail|unreachable|data read-only|data writable|data read-only with addresses|data writable with addresses"
+    for a in text_split(fixed, "|") { strs_push(out, a) }
+    each_class(out, "switch", ints)
+    for k in list(B_ADD, B_ROTR) {
+        if k == B_AND || k == B_OR || k == B_XOR {
+            each_class(out, bin_name(k), bits)
+        } else {
+            each_class(out, bin_name(k), ints)
+        }
+    }
+    for k in list(B_FADD, B_FDIV) { each_class(out, bin_name(k), floats) }
+    for k in list(O_ADD, O_UMUL) { each_class(out, ovf_name(k), ints) }
+    // Integer comparisons on every integer class; equality also on bits and addresses.
+    for k in list(K_EQ, K_UGE) { each_class(out, f"cmp {cmp_name(k)}", ints) }
+    for k in list(K_EQ, K_NE) {
+        strs_push(out, f"cmp {cmp_name(k)} bit")
+        strs_push(out, f"cmp {cmp_name(k)} ptr")
+    }
+    for k in list(K_FEQ, K_FGE) { each_class(out, f"cmp {cmp_name(k)}", floats) }
+    for k in list(U_FNEG, U_FTRUNC) { each_class(out, un_name(k), floats) }
+    for k in list(U_POPCNT, U_BSWAP) { each_class(out, un_name(k), ints) }
+    for t in floats {
+        for s in ints {
+            strs_push(out, f"stof {cname(t)}<-{cname(s)}")
+            strs_push(out, f"utof {cname(t)}<-{cname(s)}")
+            strs_push(out, f"ftos {cname(s)}<-{cname(t)}")
+            strs_push(out, f"ftou {cname(s)}<-{cname(t)}")
+        }
+    }
+    strs_push(out, "fext f64<-f32")
+    strs_push(out, "ftrunc f32<-f64")
+    strs_push(out, "bits f32<-i32")
+    strs_push(out, "bits i32<-f32")
+    strs_push(out, "bits f64<-i64")
+    strs_push(out, "bits i64<-f64")
+    // Widening and narrowing between the integer classes, a bit the narrowest.
+    let order = bits
+    let mut i = 0
+    while i < 6 {
+        let mut j = i + 1
+        while j < 6 {
+            strs_push(out, f"sext {cname(order[j])}<-{cname(order[i])}")
+            strs_push(out, f"zext {cname(order[j])}<-{cname(order[i])}")
+            strs_push(out, f"trunc {cname(order[i])}<-{cname(order[j])}")
+            j += 1
+        }
+        i += 1
+    }
+    for w in text_split("call|call_indirect", "|") {
+        for cv in list(CONV_NAZM, CONV_PLAIN) {
+            let cw = conv_word(cv)
+            for c in all { strs_push(out, f"{w} {cw} -> {cname(c)}") }
+            strs_push(out, f"{w} {cw} -> none")
+            strs_push(out, f"{w} {cw} stack args (x86_64)")
+            strs_push(out, f"{w} {cw} stack args (aarch64)")
+        }
+        strs_push(out, f"{w} nazm failed")
+        for c in all { strs_push(out, f"{w} c arg {cname(c)}") }
+    }
+}

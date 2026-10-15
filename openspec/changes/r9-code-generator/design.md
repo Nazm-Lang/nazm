@@ -98,6 +98,29 @@ next integer return register, `rdx` after `rax`), reusing the frame-slot selecti
 hosts only where one is available without Docker; otherwise the objects are checked by
 `llvm-objdump`/`readelf` round trips and recorded as unexecuted.
 
+**D12. Coverage is measured in LIR forms.** A *form* is an operation with the classes it is
+applied to (`add i32`, `sext i64<-i8`, `call c arg i16`, `switch i8`, `data writable`), since
+selection's templates differ by class, not by value. `nzcg --universe` lists every form LIR's
+validator admits (485); `nzcg --forms LIR` the forms a program uses; `tests/cover.sh` reports how
+many of the universe the inputs that *agreed* in the last `tests/run.sh` used, and lists the rest.
+The universe is wider than what the reference lowering emits — it never writes a `select` of a
+float or an address, a `switch` on anything but an `i64`, a C call with a narrow or float
+argument (N0381 allows only `Int`, `Bool`, `Str`, handles and C structs), an indirect call of a C
+or plain function, a `sext`/`zext` from or `trunc` to a `bit`, or `i128` division, `mul.ovf` and
+float conversions (runtime calls) — so a form left uncovered is either one of those or a program
+still to write, and the list says which.
+
+**D13. Scope before 1.0: macOS.** The copyright holder narrowed every target to macOS before 1.0
+(2026-10-15): `aarch64-apple-darwin`, and `x86_64-apple-darwin` run under Rosetta. The ELF writer
+and `tests/elf.sh` stay as built and are not extended; Linux is after 1.0.
+
+**D14. The failure convention: the bit, until unwind tables.** On hosted targets the LLVM backend
+now unwinds on a failure (performance-leadership 4.2); this generator keeps the bit beside the
+result (D4), as Cranelift does, until it writes `.eh_frame`/compact-unwind personalities and
+LSDAs — before 1.0, since it replaces Cranelift as the fast build. The convention is per backend
+and invisible to a program, but objects of the two conventions are never linked together: the
+suite replaces every unit object, generic instantiations included.
+
 **Language.** The generator is written in the 0.10.0 language. `Int` arithmetic traps on overflow,
 so encodings are built with shifts and masks (which never trap) and `wrapping_*`; bytes are written
 through `@std/bytebuf`.
@@ -124,9 +147,9 @@ through `@std/bytebuf`.
 - **Files.** `toolchain/codegen/`: `lir.nz` (the reader), `common.nz` (the code buffer and
   relocations, value classes, frame layout, the stage-B allocator), `a64.nz` and `x64.nz` (the
   encoders), `sel.nz` and `sel_x64.nz` (selection), `macho.nz` and `elf.nz` (the writers),
-  `main.nz` (`nzcg [--target TRIPLE] LIR OUTDIR`). Tests in `tests/`: `run.sh` (D8's
+  `forms.nz` (D12), `main.nz` (`nzcg [--target TRIPLE] LIR OUTDIR`). Tests in `tests/`: `run.sh` (D8's
   differential suite), `encode.sh` (D8's encoder check), `elf.sh` (D11's structural check),
-  `perf.sh` (D3's report) and `programs/`.
+  `perf.sh` (D3's report), `cover.sh` (D12) and `programs/`.
 - **D3 stage B** allocates into callee-saved registers only (x19–x28 on aarch64; rbx, r12–r15
   on x86-64), saved and restored by the frame. No call can clobber an allocated value, so the
   scratch and argument registers stay the selection's and its templates did not change: a name

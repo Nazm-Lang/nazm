@@ -1,0 +1,50 @@
+// Statics (a read-only table and a writable atomic cell), `Float32` fields in memory, and
+// function values with more arguments than the registers hold or a result held by address
+// (design D12: writable data, `load`/`store f32`, indirect calls on the stack).
+
+static TICKS: Atomic = atomic_new(40);
+static LIMIT: Int = 7;
+
+struct Sample {
+    weight: Float32,
+    count: Int16,
+    label: Str,
+}
+
+fn spread(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int, k: Int) -> Int {
+    a + 2 * b + 3 * c + 4 * d + 5 * e + 6 * f + 7 * g + 8 * h + 9 * i + 10 * j + 11 * k
+}
+
+fn spread_f(a: Float64, b: Float64, c: Float64, d: Float64, e: Float64, f: Float64, g: Float64, h: Float64, i: Float64, j: Float32) -> Float64 {
+    a + b + c + d + e + f + g + h + i * 10.0 + Float64(j) * 100.0
+}
+
+fn listed(n: Int) -> Vec[Int] {
+    let v = vec_new[Int]()
+    for i in 0..n { v.push(i * i) }
+    v
+}
+
+fn heavier(s: Sample) -> Sample {
+    Sample(weight: s.weight * Float32(1.5), count: s.count + Int16(1), label: s.label + "+")
+}
+
+fn main() {
+    atomic_add(TICKS, 2)
+    println(f"{atomic_load(TICKS)} {LIMIT}")
+    let f: fn(Int, Int, Int, Int, Int, Int, Int, Int, Int, Int, Int) -> Int = spread
+    println(f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
+    let g: fn(Float64, Float64, Float64, Float64, Float64, Float64, Float64, Float64, Float64, Float32) -> Float64 = spread_f
+    println(g(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, Float32(0.25)))
+    let h: fn(Int) -> Vec[Int] = listed
+    let v = h(5)
+    println(f"{v.len()} {v[4]}")
+    let samples = vec_new[Sample]()
+    samples.push(Sample(weight: Float32(2.5), count: Int16(3), label: "a"))
+    samples.push(heavier(samples[0]))
+    let k: fn(Sample) -> Sample = heavier
+    samples.push(k(samples[1]))
+    let mut total = Float32(0.0)
+    for s in samples { total = total + s.weight }
+    println(f"{total} {samples[2].count} {samples[2].label}")
+}
