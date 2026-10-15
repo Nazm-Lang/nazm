@@ -10,6 +10,18 @@
 //                                  what `nazm build` generates beside the program's units; STACK
 //                                  and HEAP are `--stack-size` and `--heap-limit` in bytes, `-`
 //                                  for none
+//     pipeline runtime-digest      print the runtime's digest, as an object key carries it
+//     pipeline objects ROOT SCRATCH TOOL CONFIG UNIT.ll ...
+//                                  each LLVM unit's object key (with the backend identity TOOL
+//                                  and configuration CONFIG), looked up in the store under ROOT;
+//                                  a hit is published again under SCRATCH and compared with the
+//                                  entry found, byte for byte
+//     pipeline backend REPORT PROBE.ll PROBE.o
+//                                  the backend identity and configuration a `clang -###` report
+//                                  of compiling PROBE.ll describes, as the build keys objects
+//     pipeline entry-check ROOT KEY
+//                                  the entry filed under KEY, broken one way at a time: what the
+//                                  store's reader says of each
 //
 // CORE.json is `nazm core-ir --json FILE`. `openspec/changes/r3-pipeline/` is the design.
 
@@ -22,6 +34,7 @@ use "mutants.nz"
 use "lir.nz"
 use "ops.nz"
 use "rtgen.nz"
+use "objcache.nz"
 use "mir.nz"
 use "@std/hash"
 use "@std/hashmap"
@@ -29,8 +42,23 @@ use "@std/text"
 use "@std/fs"
 use "@std/process"
 
-fn main(io: IoCap) -> Int ! { io } {
+fn main(io: IoCap, v: VouchCap) -> Int ! { io } {
     let args = process_args(io)
+    if strs_len(args) == 1 && strs_get(args, 0) == "runtime-digest" {
+        print(runtime_digest() + "\n")
+        return 0
+    }
+    if strs_len(args) >= 6 && strs_get(args, 0) == "objects" {
+        return objects(io, v, args)
+    }
+    if strs_len(args) == 4 && strs_get(args, 0) == "backend" {
+        let tc = backend_of(read_file(strs_get(args, 1)), strs_get(args, 2), strs_get(args, 3))
+        print(strs_get(tc, 0) + " " + strs_get(tc, 1) + "\n")
+        return 0
+    }
+    if strs_len(args) == 3 && strs_get(args, 0) == "entry-check" {
+        return entry_check(io, v, strs_get(args, 1), strs_get(args, 2))
+    }
     let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
     let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) { first } else { "" }
     if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" {
@@ -141,4 +169,79 @@ fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, stack: Int, heap: Int) -> Re
         }
     }
     Ok(runtime_units(needs_of(names), "aarch64-apple-darwin", "@" + symbol_of(main), roots, calls_c, stack, heap))
+}
+
+/// `pipeline objects`: each unit's key looked up, a hit published again and compared.
+fn objects(io: IoCap, v: VouchCap, args: Strs) -> Int ! { io } {
+    let root = strs_get(args, 1)
+    let scratch = strs_get(args, 2)
+    let tool = strs_get(args, 3)
+    let config = strs_get(args, 4)
+    let mut bad = 0
+    for i in 5..strs_len(args) {
+        let unit = strs_get(args, i)
+        let key = object_key(llvm_input(read_file(unit)), tool, config)
+        match store_get(io, v, root, key) {
+            Ok(object) => {
+                let mut verdict = "hit"
+                match store_put(io, v, scratch, llvm_input(read_file(unit)), tool, config, object, "check") {
+                    Ok(_) => {
+                        if read_file(str_vouch(entry_path(scratch, key))) != read_file(str_vouch(entry_path(root, key))) {
+                            verdict = "hit, but the entry written again differs"
+                            bad += 1
+                        }
+                    },
+                    Err(e) => {
+                        verdict = "hit, but " + e
+                        bad += 1
+                    },
+                }
+                print(unit + " " + verdict + " " + key + "\n")
+            },
+            Err(e) => {
+                print(unit + " " + e + " " + key + "\n")
+                bad += 1
+            },
+        }
+    }
+    if bad == 0 { 0 } else { 1 }
+}
+
+/// `pipeline entry-check`: the entry under KEY, and each way of breaking it, read.
+fn entry_check(io: IoCap, v: VouchCap, root: Str, key: Str) -> Int ! { io } {
+    let raw = read_file(str_vouch(entry_path(root, key)))
+    let nl = match text_find(raw, "\n") { Some(i) => i, None => 0 }
+    let head = str_slice(raw, 0, nl)
+    let body = str_slice(raw, nl, str_len(raw))
+    let last = str_len(raw) - 1
+    let flipped = str_slice(raw, 0, last) + (if str_byte(raw, last) == 65 { "B" } else { "A" })
+    let cases = strs_new()
+    let texts = strs_new()
+    strs_push(cases, "whole")
+    strs_push(texts, raw)
+    strs_push(cases, "no header line")
+    strs_push(texts, text_replace(raw, "\n", " "))
+    strs_push(cases, "not JSON")
+    strs_push(texts, "{" + raw)
+    strs_push(cases, "another schema")
+    strs_push(texts, text_replace(head, "nazm.object/1", "nazm.object/2") + body)
+    strs_push(cases, "a key not in canonical form")
+    strs_push(texts, text_replace(head, "\"key\":\"", "\"key\":\"X") + body)
+    strs_push(cases, "a tool not its own")
+    let at = match text_find(head, "\"tool\":\"") { Some(i) => i + 8, None => 0 }
+    strs_push(texts, str_slice(head, 0, at) + llvm_input("another tool") + str_slice(head, at + 64, str_len(head)) + body)
+    strs_push(cases, "an object one byte longer")
+    strs_push(texts, raw + "x")
+    strs_push(cases, "an object byte changed")
+    strs_push(texts, flipped)
+    for i in 0..strs_len(cases) {
+        let verdict = match entry_read(strs_get(texts, i), key) {
+            Ok(_) => "accepted",
+            Err(e) => e,
+        }
+        print(strs_get(cases, i) + ": " + verdict + "\n")
+    }
+    let other = match entry_read(raw, object_key(key, key, key)) { Ok(_) => "accepted", Err(e) => e }
+    print("asked for another key: " + other + "\n")
+    0
 }
