@@ -147,7 +147,8 @@ fn ran(exe: &Path, dir: &Path, depth: bool) -> Option<Ran> {
     Some(r)
 }
 
-fn one(src: &Path, nzcg: &Path, work: &Path) -> Outcome {
+/// Built for `target` when one is given (x86-64 runs under Rosetta), else for this host.
+fn one(src: &Path, nzcg: &Path, work: &Path, target: Option<&str>) -> Outcome {
     let rel = src
         .strip_prefix(repo())
         .unwrap_or(src)
@@ -159,7 +160,11 @@ fn one(src: &Path, nzcg: &Path, work: &Path) -> Outcome {
     let c = src.with_extension("c");
     if c.is_file() {
         let o = w.join("c.o");
-        let r = run_bounded(Command::new("cc").arg("-c").arg(&c).arg("-o").arg(&o), "cc");
+        let mut cc = Command::new("cc");
+        if target == Some("x86_64-apple-darwin") {
+            cc.args(["-arch", "x86_64"]);
+        }
+        let r = run_bounded(cc.arg("-c").arg(&c).arg("-o").arg(&o), "cc");
         if r.code != Some(0) {
             return Outcome::Skipped(format!("{rel}: its C does not compile"));
         }
@@ -172,6 +177,9 @@ fn one(src: &Path, nzcg: &Path, work: &Path) -> Outcome {
             "--backend".into(),
             backend.into(),
         ];
+        if let Some(t) = target {
+            args.extend(["--target".to_owned(), t.to_owned()]);
+        }
         args.extend(link.iter().cloned());
         args.push(src.display().to_string());
         args.push("-o".into());
@@ -228,7 +236,7 @@ fn every_input_of_the_generators_suite_agrees_with_the_llvm_build() {
             s.spawn(|| loop {
                 let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(src) = all.get(k) else { break };
-                let o = one(src, nzcg, work.path());
+                let o = one(src, nzcg, work.path(), None);
                 results.lock().unwrap().push(o);
             });
         }
@@ -260,6 +268,40 @@ fn every_input_of_the_generators_suite_agrees_with_the_llvm_build() {
     assert!(differ.is_empty(), "{differ:#?}");
     // A skip is not agreement: every input builds with LLVM today.
     assert!(skipped.is_empty(), "{skipped:#?}");
+}
+
+/// The generator's own programs (`toolchain/codegen/tests/programs/`: every width, the failure
+/// convention, C on both sides, and `guards.nz` — the remainder selected without its divisor
+/// guard, 7.6) built for `x86_64-apple-darwin` and run under Rosetta: they behave as the LLVM
+/// build for that target does. The suite above runs only this host's target.
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    ignore = "x86-64 under Rosetta 2, on Apple silicon"
+)]
+#[test]
+fn the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta() {
+    let rosetta = Command::new("arch")
+        .args(["-x86_64", "/usr/bin/true"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if common::skip_without(rosetta, "no Rosetta 2 on this machine") {
+        return;
+    }
+    let nzcg = differential::nzcg();
+    let work = tempfile::tempdir().unwrap();
+    let programs = nz_in(&repo().join("toolchain/codegen/tests/programs"));
+    assert!(
+        programs.iter().any(|p| p.ends_with("guards.nz")),
+        "{programs:?}"
+    );
+    let mut differ = Vec::new();
+    for src in &programs {
+        match one(src, nzcg, work.path(), Some("x86_64-apple-darwin")) {
+            Outcome::Agree => {}
+            Outcome::Skipped(s) | Outcome::Differ(s) => differ.push(s),
+        }
+    }
+    assert!(differ.is_empty(), "{differ:#?}");
 }
 
 /// A stand-in generator: a shell script that records its arguments and its input, then runs the

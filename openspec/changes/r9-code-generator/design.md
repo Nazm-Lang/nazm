@@ -221,6 +221,16 @@ A third `nazm_lir::backend::Backend`, beside LLVM's and Cranelift's, in a small 
   track uses no Docker. Imported symbols are reached through the GOT on every target. On Linux
   aarch64 a stack argument takes at least eight bytes (AAPCS64); Apple's packing applies only
   to the Apple targets.
+- **Branch fusion and the remainder's guard (7.6).** On both targets a comparison or a checked
+  operation's overflow bit that is its block's last instruction and read only by the block's
+  branch stays in the flags (`fusable`); every instruction a template emits after it moves or
+  stores and never sets flags. A signed remainder's divisor guard — the LIR sequence
+  `cmp eq a, MIN; cmp eq b, -1; and; select …, 1, b` before `srem a, s` — is recognised when
+  none of its values is read elsewhere (`guarded_rem`) and not selected: it exists for x86-64's
+  `idiv`, which traps on the minimum by -1, so x86-64 branches over `idiv` for a 64-bit divisor
+  of -1 (the remainder is 0) and divides narrower classes at 64 bits, and aarch64's `sdiv` and
+  `msub` give 0 themselves. A recognition of the lowering's own sequence, not an optimisation
+  of arbitrary code: anything else falls back to the per-instruction templates.
 - **x86-64 floor, ceil and truncate** use SSE2 alone (convert to an integer and back, adjust by
   one, keep the sign; a magnitude of 2^52 or more, an infinity or a NaN passes through), since
   SSE4.1's `roundsd` is not in x86-64 v1's baseline; one sequence for both x86-64 targets, so
