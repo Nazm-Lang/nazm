@@ -68,3 +68,5 @@ ffi::a_reserved_c_symbol_is_every_one_the_runtime_calls  LLVM text not written
 runtime::the_runtime_s_services_keep_their_contract_when_called_directly  LLVM text not written
 runtime::root_capabilities_come_from_the_entry_alone  table not printed
 runtime::every_targets_os_unit_is_llvm_its_toolchain_compiles  LLVM text not written
+incremental::an_entry_from_the_checker_before_derived_equality_is_never_read  library entry
+incremental::an_entry_from_the_checker_before_requirements_is_never_read  library entry
