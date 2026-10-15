@@ -66,9 +66,17 @@ pub fn text_split_end(s: Str, sep: Str, from: Int) -> Int ! {} {
             while i < m && str_byte(s, i) != first { i = i + 1; }
             i
         } else {
+            // Compared byte by byte where the first byte matches, not as a slice: the function
+            // then calls nothing, so the one-byte loop above runs without a frame to save.
             let mut found = m;
             while i + n <= m && found == m {
-                if str_byte(s, i) == first && str_slice(s, i, i + n) == sep { found = i; } else { i = i + 1; }
+                if str_byte(s, i) == first {
+                    let mut j = 1;
+                    while j < n && str_byte(s, i + j) == str_byte(sep, j) { j = j + 1; }
+                    if j == n { found = i; } else { i = i + 1; }
+                } else {
+                    i = i + 1;
+                }
             }
             found
         }
