@@ -229,6 +229,34 @@ fn core_ir_3_prints_the_tables_a_lowering_needs() {
 }
 
 #[test]
+fn with_sources_gives_each_module_its_text_and_only_then() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    let text = "fn main() -> Int {\n    1 + 2\n}\n";
+    std::fs::write(dir.path().join("prog.nz"), text).unwrap();
+    let modules = |extra: &[&str]| -> Vec<serde_json::Value> {
+        let out = core_ir(&dir.path().join("prog.nz"), extra);
+        assert!(out.status.success(), "{out:?}");
+        let doc: serde_json::Value = serde_json::from_slice(&out.stdout).expect("JSON");
+        doc["modules"].as_array().expect("modules").clone()
+    };
+    // By default no module carries its text: the document names no file's contents.
+    for m in modules(&["--json"]) {
+        assert!(m.get("source").is_none(), "{m}");
+    }
+    // Asked for, every module carries it, the root's exactly as written.
+    let with = modules(&["--json", "--with-sources"]);
+    let root = with
+        .iter()
+        .find(|m| m["root"] == serde_json::Value::Bool(true))
+        .expect("the root module");
+    assert_eq!(root["source"], serde_json::Value::String(text.to_owned()));
+    for m in &with {
+        assert!(m["source"].is_string(), "{m}");
+    }
+}
+
+#[test]
 fn a_program_that_does_not_check_prints_no_core_ir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let file = dir.path().join("bad.nz");

@@ -675,6 +675,10 @@ pub(crate) enum Command {
         /// their text sits print the same.
         #[arg(long)]
         no_spans: bool,
+        /// Give each module its source text, as `source`: what turns a span into a line and a
+        /// column. Read-only; without it the document names no file's contents.
+        #[arg(long)]
+        with_sources: bool,
         /// Where this project begins. As `nazm check --source-root`.
         #[arg(long, value_name = "DIR")]
         source_root: Option<PathBuf>,
