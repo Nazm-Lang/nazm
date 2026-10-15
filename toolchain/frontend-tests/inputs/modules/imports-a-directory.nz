@@ -1,0 +1,4 @@
+// A module that is a directory: N0205, cannot read it (os error 21), not a trap.
+use "lib/a-directory.nz";
+
+fn main() { }
