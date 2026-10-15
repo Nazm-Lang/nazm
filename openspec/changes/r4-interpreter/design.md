@@ -100,6 +100,15 @@ through a worklist (never recursion), as Rust's `release` does. A slot of a free
 The memory report is the four classes' allocated and reclaimed counts, printed after the run —
 including after a failure, after which every frame has been unwound and released.
 
+**Aggregates count once.** A record or enum value whose fields hold a reference carries one heap
+object of its own (`K_AGG`, never in the memory report) that counts its copies, packed into its
+`def` with its type's name: copying it takes one reference, not one per field, and its fields are
+released only when its last copy goes. A value of plain data is copied at no cost. A field
+assignment on the only copy moves the fields into the new value. Built-in arguments that are a
+constant, a local or a local's projection are lent rather than copied (`OP_BORROW`, `OP_LFIELD`):
+nothing between their push and the built-in can fail or leave, so the slot keeps them alive. None
+of this is visible in the report; it is what keeps the interpreter's speed near the Rust one's.
+
 **Append in place.** `s = str_append(s, t)` takes the slot's value out first, as Rust's
 `exec::append` does; the backing grows in place exactly when its count is one and the result fits
 its `room`; otherwise a copy into `max(2n, 16)` room, counted as a new string.

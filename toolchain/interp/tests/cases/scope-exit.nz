@@ -1,0 +1,38 @@
+// return, break and continue out of a scope join its tasks first: each worker's sends are seen.
+fn worker(c: Chan[Int], n: Int) -> Int ! {} {
+    chan_send_of(c, n);
+    chan_close_of(c)
+}
+
+fn drain(c: Chan[Int]) -> Int {
+    let got = vec_new[Int]();
+    let mut t = 0;
+    while chan_recv_of(c, got) { t = t + vec_pop(got); }
+    t
+}
+
+fn early(tasks: SpawnCap, c: Chan[Int]) -> Int ! { spawn } {
+    scope {
+        spawn worker(c, 7);
+        return 1;
+    }
+    0
+}
+
+fn main(out: OutCap, tasks: SpawnCap) -> Int {
+    let c = chan_new_of[Int](4);
+    let r = early(tasks, c);
+    println(r + drain(c));
+    let mut total = 0;
+    for k in 0..4 {
+        let d = chan_new_of[Int](4);
+        scope {
+            spawn worker(d, k);
+            if k == 1 { continue; }
+            if k == 3 { break; }
+        }
+        total = total + drain(d);
+    }
+    println(total);
+    0
+}

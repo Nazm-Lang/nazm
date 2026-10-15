@@ -9,6 +9,7 @@ use "@std/hashmap"
 use "types.nz"
 use "ops.nz"
 use "names.nz"
+use "builtins.nz"
 use "shapes.nz"
 use "num.nz"
 use "numkinds.nz"
@@ -33,6 +34,10 @@ struct L {
     lreg: Ints,
     lsp: Ints,
     lhead: Ints,
+    // How many `scope`s are open in this function, and how many were at each loop's head: a
+    // transfer out of a scope joins its tasks first (`exec.rs`, `Scope`).
+    nscope: Ints,
+    lscope: Ints,
     // `break` jumps to patch: the instruction and its loop.
     brk: Ints,
     brkloop: Ints,
@@ -161,6 +166,7 @@ fn emit(l: L, op: Int, a: Int, b: Int, c: Int, at: (Int, Int, Int)) -> Int {
     ints_push(p.a, a)
     ints_push(p.b, b)
     ints_push(p.c, c)
+    ints_push(p.d, 0)
     ints_push(p.smod, m)
     ints_push(p.slo, lo)
     ints_push(p.shi, hi)
@@ -229,6 +235,14 @@ fn leave(l: L, depth: Int, at: (Int, Int, Int)) {
     }
 }
 
+/// Join every scope opened since `depth` scopes were open, innermost first: what a transfer out
+/// of them does before it goes.
+fn joins(l: L, depth: Int, at: (Int, Int, Int)) {
+    for i in depth..ints_get(l.nscope, 0) {
+        let o = emit(l, OP_JOIN, 0, 0, 0, at)
+    }
+}
+
 // --- blocks and statements ---------------------------------------------------------------------
 
 /// A region: its statements and, when `value`, its tail, which is pushed.
@@ -286,6 +300,7 @@ fn stmt(l: L, s: Int, outer: (Int, Int, Int)) {
         block(l, g(l, s, "body"), false, at)
     } else if op == "return" {
         expr(l, g(l, s, "value"), at)
+        joins(l, 0, at)
         let o = emit(l, OP_RET, 0, 0, 0, at)
         set_sp(l, sp(l) - 1)
     } else if op == "break" || op == "continue" {
@@ -295,6 +310,7 @@ fn stmt(l: L, s: Int, outer: (Int, Int, Int)) {
         if extra > 0 {
             let o = emit(l, OP_DROPN, extra, 0, 0, at)
         }
+        joins(l, ints_get(l.lscope, id), at)
         if op == "break" {
             ints_push(l.brk, emit(l, OP_JMP, 0, 0, 0, at))
             ints_push(l.brkloop, id)
@@ -303,7 +319,9 @@ fn stmt(l: L, s: Int, outer: (Int, Int, Int)) {
         }
     } else if op == "scope" {
         let o = emit(l, OP_SCOPE, 0, 0, 0, at)
+        ints_set(l.nscope, 0, ints_get(l.nscope, 0) + 1)
         block(l, g(l, s, "body"), false, at)
+        ints_set(l.nscope, 0, ints_get(l.nscope, 0) - 1)
         let j = emit(l, OP_JOIN, 0, 0, 0, at)
     } else if op == "spawn" {
         let args = g(l, s, "args")
@@ -323,7 +341,9 @@ fn looping(l: L, s: Int, at: (Int, Int, Int)) {
         ints_push(l.lreg, 0)
         ints_push(l.lsp, 0)
         ints_push(l.lhead, 0)
+        ints_push(l.lscope, 0)
     }
+    ints_set(l.lscope, id, ints_get(l.nscope, 0))
     let head = pc(l)
     ints_set(l.lhead, id, head)
     ints_set(l.lreg, id, ints_len(l.regs))
@@ -513,8 +533,21 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
         let o = emit(l, OP_CALL, callee(l, gs(l, e, "callee")), len(l, args), 0, at)
     } else if op == "builtin" {
         let args = g(l, e, "args")
+        // When every argument is a constant, a local or a local's projection, nothing between the
+        // first and the call can fail or leave, so the locals are lent rather than copied.
+        let mut simple = true
         for i in 0..len(l, args) {
-            expr(l, nth(l, args, i), at)
+            if !is_simple(l, nth(l, args, i)) { simple = false }
+        }
+        let mut lent = 0
+        for i in 0..len(l, args) {
+            let arg = nth(l, args, i)
+            if simple && gs(l, arg, "op") != "const" {
+                lend(l, arg, at)
+                lent += pow2(i)
+            } else {
+                expr(l, arg, at)
+            }
         }
         let bname = gs(l, e, "builtin")
         let id = match hashmap_get(l.bmap, bname) {
@@ -524,7 +557,8 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
                 0
             },
         }
-        let o = emit(l, OP_BUILTIN, id, len(l, args), name(l, gs(l, e, "type")), at)
+        let o = emit(l, OP_BUILTIN, canonical(id), len(l, args), name(l, gs(l, e, "type")), at)
+        ints_set(l.p.d, o, lent)
     } else if arith_op(op) >= 0 && g(l, e, "lhs") >= 0 {
         expr(l, g(l, e, "lhs"), at)
         expr(l, g(l, e, "rhs"), at)
@@ -582,6 +616,8 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
             aux(l, gi(l, nth(l, fields, i), "field"))
         }
         let o = emit(l, OP_VARIANT, name(l, gs(l, e, "type")), len(l, fields), start, at)
+    } else if op == "field" && local_root(l, e) >= 0 {
+        projection(l, e, 0, at)
     } else if op == "field" {
         expr(l, g(l, e, "base"), at)
         let o = emit(l, OP_FIELD, gi(l, e, "field"), 0, 0, at)
@@ -634,6 +670,54 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
         let o = emit(l, OP_DEFECT, 0, 0, 0, at)
     }
     set_sp(l, s0 + 1)
+}
+
+/// The local a chain of projections starts from, or -1 when it starts from anything else.
+fn local_root(l: L, e: Int) -> Int {
+    let mut x = e
+    while gs(l, x, "op") == "field" { x = g(l, x, "base") }
+    if gs(l, x, "op") == "local" { gi(l, x, "local") } else { 0 - 1 }
+}
+
+/// `local.f.g…` as one instruction: the path outermost first.
+fn projection(l: L, e: Int, lent: Int, at: (Int, Int, Int)) {
+    let fields = ints_new()
+    let mut x = e
+    while gs(l, x, "op") == "field" {
+        ints_push(fields, gi(l, x, "field"))
+        x = g(l, x, "base")
+    }
+    let start = ints_len(l.p.aux)
+    aux(l, ints_len(fields))
+    let mut i = ints_len(fields) - 1
+    while i >= 0 {
+        aux(l, ints_get(fields, i))
+        i -= 1
+    }
+    let o = emit(l, OP_LFIELD, gi(l, x, "local"), start, lent, at)
+    set_sp(l, sp(l) + 1)
+}
+
+/// A constant, a local, or a local's projection: an argument that can neither fail nor leave.
+fn is_simple(l: L, e: Int) -> Bool {
+    let op = gs(l, e, "op")
+    op == "const" || op == "local" || (op == "field" && local_root(l, e) >= 0)
+}
+
+/// A simple argument, lent.
+fn lend(l: L, e: Int, at: (Int, Int, Int)) {
+    if gs(l, e, "op") == "local" {
+        let o = emit(l, OP_BORROW, gi(l, e, "local"), 0, 0, here(l, e, at))
+        set_sp(l, sp(l) + 1)
+    } else {
+        projection(l, e, 1, here(l, e, at))
+    }
+}
+
+fn pow2(i: Int) -> Int {
+    let mut x = 1
+    for k in 0..i { x = x * 2 }
+    x
 }
 
 // --- constants ---------------------------------------------------------------------------------
@@ -740,7 +824,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
         Ok(d) => d,
         Err(e) => { return Err(f"the Core IR is not JSON: {e}") },
     }
-    let p = Prog(op: ints_new(), a: ints_new(), b: ints_new(), c: ints_new(),
+    let p = Prog(op: ints_new(), a: ints_new(), b: ints_new(), c: ints_new(), d: ints_new(),
             smod: ints_new(), slo: ints_new(), shi: ints_new(), aux: ints_new(),
             fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
             fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
@@ -754,7 +838,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     let l = L(doc: doc, p: p, fmap: p.fmap, imap: hashmap_new[Str, Int](),
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
-            lhead: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
+            lhead: ints_new(), nscope: [0], lscope: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
             cells: hashmap_new[Str, Int]())
     let root = json_root(doc)
     if gs(l, root, "schema") != "nazm.core-ir/2" {
@@ -792,7 +876,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     }
     let entry = gs(l, root, "entry")
     let e = if entry == "" { 0 - 1 } else { callee(l, entry) }
-    Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
+    Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, d: p.d, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
             fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
             fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
             morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache))

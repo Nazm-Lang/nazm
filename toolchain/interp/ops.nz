@@ -79,3 +79,9 @@ pub const OP_SCOPE: Int = 36
 pub const OP_JOIN: Int = 37
 /// Start function `a` as a task with the top `b` operands.
 pub const OP_SPAWN: Int = 38
+/// Push slot `a` without taking a reference: a built-in's argument, which the slot keeps alive
+/// for the built-in's whole run, since nothing between this and the built-in can fail or leave.
+pub const OP_BORROW: Int = 39
+/// Push field `aux[b+1]` of field `aux[b+2]` … (`aux[b]` steps) of slot `a`'s record: a local's
+/// projection, without copying the record. `c` is 1 when it is borrowed, as `OP_BORROW` is.
+pub const OP_LFIELD: Int = 40

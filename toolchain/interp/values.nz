@@ -78,11 +78,11 @@ pub fn order(p: Prog, a: V, b: V) -> Int {
         (V.Bool(v: x), V.Bool(v: y)) => if x == y { 0 } else if y { 0 - 1 } else { 1 },
         (V.Str(s: x, obj: o, start: s1), V.Str(s: y, obj: q, start: s2)) => str_order(x, y),
         (V.Rec(def: d, fields: xs), V.Rec(def: e, fields: ys)) => {
-            let canon = record_order(p.shapes, strs_get(p.names, d), list_len(xs))
+            let canon = record_order(p.shapes, strs_get(p.names, dname(d)), list_len(xs))
             fields_order(p, canon, xs, ys)
         },
         (V.Enm(def: d, variant: i, fields: xs), V.Enm(def: e, variant: j, fields: ys)) => {
-            let ty = strs_get(p.names, d)
+            let ty = strs_get(p.names, dname(d))
             if i != j { return variant_rank(p.shapes, ty, i, j) }
             fields_order(p, payload_order(p.shapes, ty, i, list_len(xs)), xs, ys)
         },
@@ -193,10 +193,10 @@ pub fn derived_hash(p: Prog, v: V) -> (UInt64, Bool) {
         V.Bool(v: b) => (fnv_word(if b { UInt64(1) } else { UInt64(0) }), true),
         V.Str(s: s, obj: o, start: st) => (fnv_bytes(s), true),
         V.Rec(def: d, fields: xs) => {
-            fold(p, fnv_word(UInt64(0)), record_order(p.shapes, strs_get(p.names, d), list_len(xs)), xs)
+            fold(p, fnv_word(UInt64(0)), record_order(p.shapes, strs_get(p.names, dname(d)), list_len(xs)), xs)
         },
         V.Enm(def: d, variant: i, fields: xs) => {
-            let ty = strs_get(p.names, d)
+            let ty = strs_get(p.names, dname(d))
             fold(p, fnv_bytes(variant_name(p.shapes, ty, i)), payload_order(p.shapes, ty, i, list_len(xs)), xs)
         },
         _ => (UInt64(0), false),

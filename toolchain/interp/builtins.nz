@@ -50,13 +50,10 @@ fn bug(p: Prog, vm: Vm, pc: Int, id: Int, what: Str) -> V {
             "this is a bug in the interpreter; the checker should have caught it")
 }
 
-/// Built-in `id` on the top `n` operands.
-pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, caps: Caps) -> V {
-    let h = vm.heap
-    let out = caps.out
-    let io = caps.io
-    // `Ints`, `Strs`, `Box` and `List` operations are the `Vec` ones (`intrinsic.rs`, `same`).
-    let op = if id == B_INTS_NEW || id == B_STRS_NEW || id == B_BOX_FRESH || id == B_LIST_EMPTY {
+/// What built-in `id` is run as: an `Ints`, `Strs`, `Box` or `List` operation is the `Vec` one
+/// (`intrinsic.rs`, `same`), and its failures name the `Vec` one, as there.
+pub fn canonical(id: Int) -> Int {
+    if id == B_INTS_NEW || id == B_STRS_NEW || id == B_BOX_FRESH || id == B_LIST_EMPTY {
         B_VEC_NEW
     } else if id == B_INTS_LEN || id == B_STRS_LEN || id == B_LIST_LEN {
         B_VEC_LEN
@@ -70,6 +67,59 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, caps: Caps) -> V {
         B_VEC_POP
     } else {
         id
+    }
+}
+
+/// `vec_new` to `vec_pop`.
+fn sequence(p: Prog, vm: Vm, pc: Int, op: Int, n: Int) -> V {
+    let h = vm.heap
+    if op == B_VEC_NEW { return V.Ref(obj: alloc(h, K_SEQ, 0)) }
+    let xs = items(h, obj_of(arg_v(vm, n, 0)))
+    let len = vec_len(xs)
+    if op == B_VEC_LEN { return V.Int(v: len) }
+    if op == B_VEC_GET {
+        let i = int_of(arg_v(vm, n, 1))
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the sequence", f"asked for item {i} of a `Vec` holding {len}")
+        }
+        let v = vec_get(xs, i)
+        retain(h, v)
+        return v
+    }
+    if op == B_VEC_PUSH {
+        let v = arg_v(vm, n, 1)
+        retain(h, v)
+        vec_push(xs, v)
+        return V.Int(v: len + 1)
+    }
+    if op == B_VEC_SET {
+        let i = int_of(arg_v(vm, n, 1))
+        if i < 0 || i >= len {
+            return outside(p, vm, pc, "this index is outside the sequence", f"asked to write item {i} of a `Vec` holding {len}")
+        }
+        let v = arg_v(vm, n, 2)
+        retain(h, v)
+        let old = vec_get(xs, i)
+        vec_set(xs, i, v)
+        release(h, old)
+        return V.Int(v: i)
+    }
+    if len == 0 {
+        return outside(p, vm, pc, "this sequence is empty", "asked to remove the last item of an empty `Vec`")
+    }
+    vec_pop(xs)
+}
+
+/// Built-in `id` on the top `n` operands.
+pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, caps: Caps) -> V {
+    let h = vm.heap
+    let out = caps.out
+    let io = caps.io
+    // The sequence operations first: they are most of what a program calls. `Ints`, `Strs`, `Box`
+    // and `List` operations were made `Vec` ones when the code was loaded (`canonical`).
+    let op = id
+    if op >= B_VEC_NEW && op <= B_VEC_POP {
+        return sequence(p, vm, pc, op, n)
     }
     if is_channel(op) {
         return channel_builtin(p, vm, pc, op, n, caps.time)

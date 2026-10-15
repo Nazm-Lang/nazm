@@ -24,7 +24,26 @@ if ! "$NAZM" build --opt-level 2 "$repo/toolchain/interp/main.nz" -o "$work/inte
 fi
 
 # Every input: the compatibility corpus's run and trap cases, the examples and this track's own.
-if [ $# -gt 0 ]; then
+# `--rust-tests` instead takes the programs the Rust CLI tests embed: each raw string literal of
+# `crates/nazm-cli/tests/*.rs` with a `fn main` in it, written out as a file of its own.
+if [ "${1:-}" = "--rust-tests" ]; then
+    mkdir -p "$work/rs"
+    for t in "$repo"/crates/nazm-cli/tests/*.rs; do
+        perl -0777 -ne '
+            my $base = $ARGV; $base =~ s{.*/}{}; $base =~ s{\.rs$}{};
+            my $n = 0;
+            while (/r(#*)"(.*?)"\1/sg) {
+                my $src = $2;
+                next unless $src =~ /fn main\b/;
+                $n++;
+                open(my $f, ">", "'"$work"'/rs/$base-$n.nz") or die;
+                print $f $src;
+                close($f);
+            }' "$t"
+    done
+    cases=$(ls "$work"/rs/*.nz)
+    R4_BOUND=${R4_BOUND:-300}
+elif [ $# -gt 0 ]; then
     cases="$*"
 else
     cases=$( (ls "$repo"/tests/compat/v1/run/*.nz "$repo"/tests/compat/v1/run/*/main.nz \
@@ -33,7 +52,9 @@ else
 fi
 
 # A run is bounded, so a hang in either interpreter is a difference rather than a stuck suite.
-bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' 60 "$@"; }
+# `R4_BOUND` seconds each (default 60; 300 for `--rust-tests`, some of which run long).
+bound=${R4_BOUND:-60}
+bounded() { perl -e 'alarm shift; exec @ARGV or exit 127' "$bound" "$@"; }
 
 agree=0
 differ=0
