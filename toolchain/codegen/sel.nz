@@ -1150,7 +1150,29 @@ fn convert(g: G, x: Ins) {
     st(g, 9, x.dst)
 }
 
+/// The stack check as LLVM inlines it: the runtime is called only when the limit is unset or
+/// the frame is below it; otherwise the check's result is 0 without a call.
+fn stack_check(g: G, x: Ins) {
+    sym_addr(g, 9, g.c.limit_sym)
+    w(g, ldr_x(9, 9, 0))
+    w(g, cbz(9, 20))
+    w(g, cmp(29, 9))
+    w(g, b_cond(LO, 12))
+    w(g, mov(0, ZR))
+    w(g, b(8))
+    reloc(g, R_BRANCH26, x.sym)
+    w(g, bl(0))
+    if x.dst >= 0 {
+        norm(g, 0, C_I32)
+        st(g, 0, x.dst)
+    }
+}
+
 fn call(g: G, x: Ins) {
+    if inline_check(g.u, g.c, x) {
+        stack_check(g, x)
+        return
+    }
     let params = call_params(g.u, x)
     let ret = call_ret(g.u, x)
     let conv = call_conv(g.u, x)

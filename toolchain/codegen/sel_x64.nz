@@ -40,6 +40,10 @@ struct G {
     loc: Ints,
     nvals: Int,
     saved: Ints,
+    /// A comparison fused with its block's branch (7.3): the value the next instruction may
+    /// leave in the flags, the value it left there, and their condition code.
+    fuse: Ints,
+    uses: Ints,
 }
 
 /// The callee-saved registers the allocator hands out: rbx, r12–r15.
@@ -310,7 +314,8 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
     let size = align_up(off + pushed, 16) - pushed
     let g = G(c: c, u: u, f: f, vcls: vcls, param_offs: param_offs, voffs: voffs,
             varoffs: varoffs, slot_off: slot_off, blk_at: ints_new(), fix_at: ints_new(),
-            fix_blk: ints_new(), loc: loc, nvals: n, saved: saved)
+            fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
+            fuse: fuse_new(), uses: use_counts(f, n))
     ints_set(c.sym_at, f.sym, here(g))
     // Compact unwind's RBP-frame mode: how many registers are saved below rbp, and which, the
     // lowest address first (D10, 5.2).
@@ -327,8 +332,10 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
     let mut bi = 0
     while bi < nb {
         ints_push(g.blk_at, here(g))
+        ints_set(g.fuse, 1, -1)
         let mut i = f.block_first[bi]
         while i < f.block_end[bi] {
+            ints_set(g.fuse, 0, fusable(f, g.uses, bi, i))
             inst(g, f.insts[i])
             i += 1
         }
@@ -746,10 +753,23 @@ fn ovf(g: G, x: Ins) {
         let ra = use_reg(g, x.a, A)
         let rb = use_reg(g, x.b, B)
         let rd = def_reg(g, x.dst, A)
-        let ro = def_reg(g, x.dst2, D)
+        // rb is read after rd is written: when they are one register, through rcx.
+        let src = if rb == rd && rd != ra {
+            mov(b, B, rb)
+            B
+        } else {
+            rb
+        }
         if rd != ra { mov(b, rd, ra) }
-        alu(b, if s == O_ADD || s == O_UADD { ALU_ADD } else { ALU_SUB }, rd, rb)
-        setcc(b, if s == O_ADD || s == O_SUB { CC_O } else { CC_B }, ro)
+        alu(b, if s == O_ADD || s == O_UADD { ALU_ADD } else { ALU_SUB }, rd, src)
+        let cc = if s == O_ADD || s == O_SUB { CC_O } else { CC_B }
+        // `def_done` only moves, so the flags survive it to the branch.
+        if fused(g, x.dst2, cc) {
+            def_done(g, rd, x.dst)
+            return
+        }
+        let ro = def_reg(g, x.dst2, D)
+        setcc(b, cc, ro)
         def_done(g, rd, x.dst)
         def_done(g, ro, x.dst2)
         return
@@ -767,10 +787,27 @@ fn ovf(g: G, x: Ins) {
             setcc(b, if s == O_SUB { CC_O } else { CC_B }, D)
         } else if s == O_MUL {
             imul(b, A, B)
-            setcc(b, CC_O, D)
+            // A store only moves, so the flags survive it to the branch (7.3).
+            if fused(g, x.dst2, CC_O) {
+                st(g, A, x.dst)
+                return
+            }
+            // Not `seto`: under Rosetta a multiply's overflow flag read into a register costs
+            // several times the branch on it (7.3). `mov` leaves the flags alone.
+            mov_imm(b, D, 0)
+            let no = jcc8(b, CC_O ^ 1)
+            mov_imm(b, D, 1)
+            land8(b, no)
         } else {
             f7(b, 4, B)
-            setcc(b, CC_O, D)
+            if fused(g, x.dst2, CC_O) {
+                st(g, A, x.dst)
+                return
+            }
+            mov_imm(b, D, 0)
+            let no = jcc8(b, CC_O ^ 1)
+            mov_imm(b, D, 1)
+            land8(b, no)
         }
     } else {
         if signed {
@@ -849,8 +886,9 @@ fn compare(g: G, x: Ins) {
     if width_bits(c) == 64 || k < K_LT || k > K_GE {
         let ra = use_reg(g, x.a, A)
         let rb = use_reg(g, x.b, B)
-        let rd = def_reg(g, x.dst, A)
         alu(b, ALU_CMP, ra, rb)
+        if fused(g, x.dst, int_cc(k)) { return }
+        let rd = def_reg(g, x.dst, A)
         setcc(b, int_cc(k), rd)
         def_done(g, rd, x.dst)
         return
@@ -862,8 +900,17 @@ fn compare(g: G, x: Ins) {
         sext(g, B, c)
     }
     alu(b, ALU_CMP, A, B)
+    if fused(g, x.dst, int_cc(k)) { return }
     setcc(b, int_cc(k), A)
     st(g, A, x.dst)
+}
+
+/// Leave `v` in the flags for the block's branch, when it may be (7.3): true if it was.
+fn fused(g: G, v: Int, cc: Int) -> Bool {
+    if v < 0 || g.fuse[0] != v { return false }
+    ints_set(g.fuse, 1, v)
+    ints_set(g.fuse, 2, cc)
+    true
 }
 
 fn unary(g: G, x: Ins) {
@@ -1080,7 +1127,34 @@ fn convert(g: G, x: Ins) {
     st(g, A, x.dst)
 }
 
+/// The stack check as LLVM inlines it (7.3): the runtime is called only when the limit is unset
+/// or rbp is below it; otherwise the result is 0 without a call.
+fn stack_check(g: G, x: Ins) {
+    let b = buf(g)
+    sym_addr(g, R11, g.c.limit_sym)
+    load(b, 8, R11, R11, 0)
+    alu(b, ALU_TEST, R11, R11)
+    let unset = jcc8(b, CC_E)
+    alu(b, ALU_CMP, RBP, R11)
+    let below = jcc8(b, CC_B)
+    mov_imm(b, A, 0)
+    let done = jmp8(b)
+    land8(b, unset)
+    land8(b, below)
+    let at = call_rel(b)
+    add_reloc(g.c, at, X_BRANCH, x.sym, 1, 2)
+    land8(b, done)
+    if x.dst >= 0 {
+        norm(g, A, C_I32)
+        st(g, A, x.dst)
+    }
+}
+
 fn call(g: G, x: Ins) {
+    if inline_check(g.u, g.c, x) {
+        stack_check(g, x)
+        return
+    }
     let b = buf(g)
     let params = call_params(g.u, x)
     let ret = call_ret(g.u, x)
@@ -1155,12 +1229,18 @@ fn term(g: G, t: Ins, bi: Int) {
     if op == T_JUMP {
         if t.imm != bi + 1 { jump_to(g, jmp32(b), t.imm) }
     } else if op == T_BRANCH {
-        let r = use_reg(g, t.a, A)
-        alu(b, ALU_TEST, r, r)
-        if t.imm == bi + 1 {
-            jump_to(g, jcc32(b, CC_E), t.c)
+        // The condition in the flags when its comparison left it there (7.3), else tested.
+        let mut cc = CC_NE
+        if t.a >= 0 && g.fuse[1] == t.a {
+            cc = g.fuse[2]
         } else {
-            jump_to(g, jcc32(b, CC_NE), t.imm)
+            let r = use_reg(g, t.a, A)
+            alu(b, ALU_TEST, r, r)
+        }
+        if t.imm == bi + 1 {
+            jump_to(g, jcc32(b, cc ^ 1), t.c)
+        } else {
+            jump_to(g, jcc32(b, cc), t.imm)
             if t.c != bi + 1 { jump_to(g, jmp32(b), t.c) }
         }
     } else if op == T_SWITCH {
