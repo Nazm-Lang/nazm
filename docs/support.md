@@ -13,6 +13,7 @@ shown, not what is released.
 | --- | --- |
 | **run-verified** | Programs built for the target ran — on the host, under Rosetta 2, in a Linux container or on a WebAssembly engine — and agreed with the interpreter |
 | **emulator-verified** | Run-verified where the run was a full-system emulator (QEMU): no hardware has run it |
+| **run-verified on a Windows host** | Windows executables, linked by MinGW-w64's `gcc`, ran on a real Windows x86_64 machine and agreed with the same programs built natively (`scripts/windows-host.sh`) |
 | **run-verified under Wine** | Windows executables ran under Wine in a Linux container and agreed with the interpreter: **not** evidence from a Windows host |
 | **compile-only** | Objects are built and read back from their headers; nothing built for it has run |
 | **unsupported** | Refused by name, with the reason |
@@ -29,7 +30,7 @@ No cell says just "supported".
 | `x86_64-apple-darwin` | run-verified | run-verified | under Rosetta 2 on Apple silicon | not exercised |
 | `aarch64-unknown-linux-gnu` | run-verified | run-verified | the contained runner's Linux container | gdb, live, both backends (nazm-debug image) |
 | `x86_64-unknown-linux-gnu` | compile-only | compile-only | nowhere: no x86_64 Linux machine or emulator here | not exercised |
-| `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | Wine 8 in a Debian x86_64 container (`docker/wine.Dockerfile`), linked by MinGW-w64's `gcc`; no Windows host | not exercised |
+| `x86_64-pc-windows-gnu` | run-verified on a Windows host | run-verified on a Windows host | a Windows 10 laptop (version 1903, 10.0.18362.113), linked by MinGW-w64's `gcc`: `scripts/windows-host.sh`, 68 agree, 0 differ, 7 skipped under each backend (2026-10-15); and Wine 8 in a Debian x86_64 container (`docker/wine.Dockerfile`) | not exercised |
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
 | `thumbv7m-none-eabi` | emulator-verified | unsupported | QEMU `mps2-an385`, Cortex-M3 (Gate 3) | not exercised |
@@ -55,8 +56,19 @@ says: `-static`, Winsock (`-lws2_32`) and `BCryptGenRandom` (`-lbcrypt`); nothin
 SDK or C runtime is used. Files, sockets and the reactor (`WSAPoll`), processes and their pipes,
 the clocks, UTF-8 arguments, a trap and an exhausted stack run under Wine as they do natively,
 with two differences the spec states: `os_family()` is 2, and `os_kill` ends a child with exit
-code 1. Execution on a real Windows x86_64 host is a final-v1 qualification item, not yet done. A
-DLL is refused by name (`--shared`); a static library (`--lib`) is built.
+code 1. The main thread reserves 8 MiB (`-Wl,--stack,8388608`), as macOS and Linux give it, and
+a frame of a page or more is probed by MinGW-w64's `___chkstk_ms`. A DLL is refused by name
+(`--shared`); a static library (`--lib`) is built.
+
+*On a Windows host (2026-10-15).* `scripts/windows-host.sh HOST` builds each program of the
+differential set for Windows, links it here, runs it on the host over `ssh`, and compares its
+standard output, standard error and exit status with the same program built natively. On a
+Windows 10 laptop (1903, 10.0.18362.113): 68 agree, 0 differ, 7 skipped — programs that call C
+or read arguments, input or files, counted and never passed — under LLVM and under Cranelift
+(`BACKEND=cranelift`) alike. The first run, before two fixes, found 64 agree, 1 differ and 3 that
+did not link: LLVM's inline stack-probe attribute names a function on Windows, and Windows'
+1 MiB main stack met `N0408` where 8 MiB does not. Files, sockets, processes and arguments are
+still shown only under Wine; the host run covers what the differential set prints.
 
 **x86_64 Linux.** Compile-only, because no Nazm-built program has been run on x86_64 Linux. It
 moves to run-verified when one is — the differential corpus built for it and run on such a machine
