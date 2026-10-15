@@ -1627,3 +1627,15 @@ for static executables; WASI services on WASI 0.2, experimental at 1.0; the Rasp
 its Debug Probe and an ESP32-C3-DevKitM-1; probe-rs on the Mac host; Float64 refused on the MCUs at
 1.0; a hardware watchdog behind `[watchdog]` where a board has one; no production driver signing in
 1.0; drivers refuse every possible trap.
+
+## Decisions during C2 (2026-10-16, delegated)
+
+- **Handlers in tasks (`N0321`).** A function value may not cross into a task, so `http_serve` runs
+  handlers one at a time on the serving task, and the parallel shape is a named function spawned per
+  connection. Lifting `N0321` for function values that capture only crossable values is a checker
+  change: it is made after the cut-over (R8), written once in Nazm, as the rule for every language
+  change in these tracks; `@std/http` then gains a parallel `http_serve` without breaking the two shapes.
+- **Allocation counts across tiers in networked programs** differ (the interpreter counts fewer
+  string allocations than compiled code on the same exchange) while every tier reclaims everything;
+  the socket tests check output and full reclamation. Recorded for the interpreter's next round.
+
