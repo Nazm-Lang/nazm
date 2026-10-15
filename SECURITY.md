@@ -4,7 +4,7 @@
 
 | Release | Supported |
 | --- | --- |
-| the latest 0.x preview (macOS on Apple Silicon) | yes — a fix lands in the next preview release; a preview makes no compatibility promise |
+| the latest 0.x preview (macOS on Apple Silicon) | yes — a fix lands on `main` at once and in the next release, which is 1.0 (no further preview is planned before it); a preview makes no compatibility promise |
 | from 1.0: the latest 1.x release | yes — a fix lands in the next patch release of the latest 1.x minor |
 | from 1.0: an older 1.x minor | no — upgrade to the latest 1.x, which the 1.x compatibility promise keeps compatible for programs on stable surfaces (`docs/stability.md`) |
 | the internal 0.3.x candidates, and anything older | no |

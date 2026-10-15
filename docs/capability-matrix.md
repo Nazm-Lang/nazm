@@ -211,7 +211,7 @@ out of memory: the heap limit of N bytes is reached` and exits 2 at once, from a
 unit's task stacks are not heap and keep C's allocator. LLVM units are renamed in their text, a
 Cranelift unit's LIR imports before its object is keyed; refused for a board, WebAssembly, a library
 and a runtime artifact. Without a limit the program's text is what it was. Build provenance records
-the limit. EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/heap_limit.rs` — 3,000 live
+the limit. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/heap_limit.rs` — 3,000 live
 strings print what the interpreter and the LIR oracle print, with the same memory report and nothing
 live, under a 4 MiB limit at LLVM `-O0`/`-O2` and Cranelift, and end with the fixed line, status 2
 and what was printed before under 64 KiB; four pool tasks five times over allocate millions of bytes
@@ -224,7 +224,7 @@ standard input**, and *The standard library*; `openspec/changes/archive/2026-10-
 never past the line; `os_read` of standard input now reads the same 16 KiB buffer first, so lines
 and frames mix — LSP's headers then the body they announce, MCP's lines. Any other handle is a
 status (`InvalidInput`, a directory `IsADirectory`). `@std/io` gains `io_stdin_read`,
-`io_stdin_read_exact` and `io_stdin_read_line`. EXPERIMENTAL until R1 closes. Evidence:
+`io_stdin_read_exact` and `io_stdin_read_line`. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/stdin_lines.rs` — two `\r\n` header lines, a five-byte frame, a line read
 three bytes at a time, a byte, whole lines, a last line without a newline, the end and an
 `UnexpectedEof`, alike in the interpreter, LLVM `-O0`/`-O2` and Cranelift, fed whole and a byte at a
@@ -243,7 +243,7 @@ kept, which the GPT-2 and `cl100k_base` pre-tokenisers' `\s+(?!\S)` needs. UTF-8
 match one scalar value. Unicode 16.0's general categories `L`, `M`, `N`, their subcategories and `Pc`
 are carried as compact range tables; `\d`, `\s`, `\w` are Unicode's (`\w` but for a few
 `Other_Alphabetic` scalar values); `(?i)` folds ASCII letters only. Errors are `what at byte N`.
-EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/regex.rs` — 77 patterns on their texts,
+EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/regex.rs` — 77 patterns on their texts,
 the first part's expectations checked against Python's `re` searched as Rust's `find_iter` searches,
 the Unicode classes and both pre-tokenisers' patterns by hand; nine captures; 26 malformed patterns
 refused at their offset; five patterns exponential under backtracking (`(a*)*b`, `(a|aa)*c`, …) failing
@@ -261,7 +261,7 @@ into storage of twice the length (at least 16), marked. A literal has no storage
 copied. The interpreter applies the same rule to a backing an append made, taking the binding's
 string out before it appends, so the two allocate the same strings. No checker rule moved, so no
 epoch.
-EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/string_append.rs` — two names for
+EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/string_append.rs` — two names for
 one string each appended to, a slice kept across an append, a string appended to itself and a
 literal, under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live;
 100,000 appends allocating fewer than 64 strings under LLVM and Cranelift (200,000 allocated one
@@ -276,7 +276,7 @@ allocator churn or a count of concatenations now prepend, which still allocates 
 admitted `_`). The checker records warnings on the resolution, apart from the errors a stage stops
 on; `nazm check` and `nazm build` report them and succeed, `--deny-warnings` refuses, and the
 language service publishes them at the warning severity. A module that warns is not kept as
-checked, so the warning is not cached away. Semantic epoch 66; EXPERIMENTAL until R1 closes.
+checked, so the warning is not cached away. Semantic epoch 66; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since).
 `nazm run` and `nazm test` do not report warnings, and a `@deprecated` use draws none yet (`N0620`
 reserved). Evidence: `crates/nazm-cli/tests/warnings.rs` — both forms of the warning with exact
 lists, none for a match naming every variant or an `if let`, again from the cache, as JSON;
@@ -289,7 +289,7 @@ the stack it runs on*; `openspec/changes/archive/2026-10-14-r1-language-for-the-
 if it cannot start — and stores `N` in the runtime's `nz.stack_bytes`, which a task's thread, the
 pool's task stacks (under `NAZM_TASK_STACK`) and `nz.stack_check`'s limit read in place of 8 MiB,
 256 KiB and 8 MiB. Runtime ABI 31; build provenance records the size. The interpreter's threads
-follow `--max-depth`, as before. EXPERIMENTAL until R1 closes. Evidence:
+follow `--max-depth`, as before. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/stack_size.rs` — a 250,000-deep recursion in `main` and in a task that
 meets `N0408` by default and finishes with `--stack-size 64M`, and meets it again with `4M`, under
 LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected (2026-10-13):**
@@ -323,6 +323,12 @@ authority is passed as before. Semantic epoch 82; EXPERIMENTAL until R1.5 closes
 implementation; a dependency's printing function refused with `N0369`; a file still needing an
 `IoCap`; two mutants.
 
+**R1.5 (2026-10-15)** · *A standard module by its dotted path* (`spec.md`, *Shorter forms*; R1.5
+design D7). `use std.json` is `use "@std/json"`, with `as name` as before; a quoted path is still a
+file. Semantic epoch 81; EXPERIMENTAL until R1.5 closes. Evidence: `shorter_forms.rs`
+(`a_standard_module_by_its_dotted_path_is_the_quoted_import_everywhere`) under every
+implementation; one mutant.
+
 **R1.5 (2026-10-15)** · *`List[T]` is the list; `Chain[T]`* (`spec.md`, *Shorter forms* and
 *Immutable indirection*; R1.5 design D7). `List[T]` in a type position is `Vec[T]` — one type with
 `Vec[T]`, `Ints` and `Strs`, shown as before — a prelude name a module's own `List` hides. R1a's
@@ -332,7 +338,7 @@ symbols, messages, the Nazm-written pipeline's type spellings), `@derive(json)`/
 generated code and `@std/toml`'s `Toml`; a call of a `list_` built-in a module does not define is
 refused, `N0637`, naming the `chain_` one. A breaking change of a 0.10.0-stable surface, listed for
 the next release; the compatibility corpus held no case using it. The checker's Rust identifiers
-(`Type::List`, `Intrinsic::List*`) keep their names. Semantic epoch 82; EXPERIMENTAL until R1.5
+(`Type::List`, `Intrinsic::List*`) keep their names. Semantic epoch 83; EXPERIMENTAL until R1.5
 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` — `List[T]` as a `Vec[T]` and `Chain[T]`
 as R1a's list under every implementation, the refusal by name; `box_list.rs`, `order_hash.rs`,
 `derive_json.rs`, `toml.rs` and `build.rs`' coverage of every built-in, renamed; two mutants.
@@ -469,7 +475,7 @@ apart from its write. Evidence: `crates/nazm-cli/tests/named_methods.rs` — met
 alike everywhere with nothing live; what has no function of the name refused. Six mutants.
 
 **R1 (2026-10-14)** · *R1 promoted to stable* (8.1; `spec.md`, *Stability classification for 1.0*).
-Nineteen R1 sections and every inline "EXPERIMENTAL until R1 closes" became STABLE 1.0, as a 1.x
+Nineteen R1 sections and every inline "EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since)" became STABLE 1.0, as a 1.x
 addition stable since R1 closed (0.10.0); `stability.md` and `limitations.md` follow. Seven cases
 joined the 1.0 compatibility corpus, pinned (`tests/compat/v1/run/r1-*`): syntax, methods and
 maps, patterns and tuples, strings, cells, `defer` and `for`, derived ordering and JSON, and R1e's
@@ -620,7 +626,7 @@ hasher — a handle whose finish leaves it unchanged. Digests for identity and i
 cryptography 1.0 leaves out: no constant-time claim, no audit. `@std/file` gained `file_walk(io,
 dir)`: every regular file and directory under `dir`, sorted by bytes. With no `lstat` built-in yet
 (P2), a symbolic link is walked as what it names; a dangling one is left out, and one reaching its
-own ancestor ends in the system's `Err`. EXPERIMENTAL until R1 closes. Evidence:
+own ancestor ends in the system's `Err`. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/hash_vectors.rs` — FIPS 180-4's examples and messages on each side of the
 padding's boundaries, and the BLAKE3 team's `test_vectors.json` lengths up to 3,073 bytes, each
 whole and in uneven pieces, alike under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
@@ -638,7 +644,7 @@ for the process's own — answering an `Args` read by name, or an `Err` naming t
 argument at fault. The POSIX and GNU forms: `--name value`, `--name=value`, `-n value`, `-nvalue`,
 bundled `-abc`, `--`, `-`; repeated options and counted flags; `--help`, and the help and usage text
 generated from the specification. No new built-in and no checker change: the arguments come from the
-existing `arg`/`args_count` through `@std/process`. EXPERIMENTAL until R1 closes. Evidence:
+existing `arg`/`args_count` through `@std/process`. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/args.rs` — twenty-six command lines (every form, and every mistake with its
 message) and the help of three commands, alike under the interpreter, the LIR oracle, LLVM
 `-O0`/`-O2` and Cranelift with nothing live; and executables built by LLVM and Cranelift parsing the
@@ -703,7 +709,7 @@ runs the same functions and nothing below the front end is new. Decoding never t
 names the path. The schema is JSON Schema 2020-12 with `$defs`, so a recursive type's is finite. A
 generic type, an unknown format, a field of a type the format cannot carry, or of a type the program
 declares without the derive, is `N0619` at the attribute or the field. Semantic epoch 68;
-EXPERIMENTAL until R1 closes; the attribute set (L2b) and `@derive(toml)` (L2c) remain. Evidence:
+EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since); the attribute set (L2b) and `@derive(toml)` (L2c) remain. Evidence:
 `crates/nazm-cli/tests/derive_json.rs` — every carried field kind, out-of-range and mistyped
 members refused at their path, under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
 Cranelift with nothing live; a derived type of another module, plain and qualified; each refusal
@@ -738,7 +744,7 @@ load and store); LLVM and Cranelift make instructions of the rest, and division,
 signed checked product, float conversions and text are the runtime's wide part, taking values by
 address (runtime ABI 32), which a board or WebAssembly build that reaches it refuses by name. A
 derived hash is `hash_combine` of the two words' `hash_u64`, as `@std/hash`'s new impls are. No C
-export of one (`N0391`). Semantic epoch 67; EXPERIMENTAL until R1 closes. Evidence:
+export of one (`N0391`). Semantic epoch 67; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/wide.rs` — every operation at each bound, the conversions by every mode, a
 `Vec` and an `Option` of one, `Bytes` at sixteen, literals, under the interpreter, the LIR oracle,
 LLVM `-O0`/`-O2` and Cranelift with nothing live; each failure with its code everywhere; a hash map
@@ -768,7 +774,7 @@ Lowering only: Core IR registers each body with its loop depth and emits it — 
 where its block falls through, in `leave` before every `return` (and so every `?` and `ensures`),
 and before a `break`/`continue` for the bodies registered inside the loop it leaves; nothing below
 Core IR is new. Provenance walks a body where it is written and again where its block ends.
-Semantic epoch 64; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/defer.rs` —
+Semantic epoch 64; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/defer.rs` —
 order, nesting, an early return, a loop's `break` and `continue`, `?` on success and failure,
 under the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; the
 refusals and what stays accepted; provenance reaching a body from after it.
@@ -786,7 +792,7 @@ the requirements, recursively (`Checker::satisfies`); a direct call records the 
 bound dispatch passes them, the instance planner follows each call through a bound inside an
 instance to the impl or default it reaches, and Core IR carries each instance's definition for the
 interpreter's impl table. Coherence and the orphan rule are the definition's. Semantic epoch 63;
-EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/generic_impls.rs` — a pair and an
+EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/generic_impls.rs` — a pair and an
 option of nested instances shown directly, by UFCS, through a bound and by a default, under the
 interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; across modules by
 both backends; the header's form, unmet requirements by a call and by a bound, coherence, the
@@ -803,7 +809,7 @@ receiver's type as the call's type argument, MIR's bound dispatch passes the ins
 instance planner plans the default at every type whose impl relies on it, and Core IR's impl
 table, which the interpreter dispatches through, fills the slot with the default. A default called
 from another module is held to its trait method's effects, as an impl's method is (M1). Semantic
-epoch 62; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/default_methods.rs` —
+epoch 62; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/default_methods.rs` —
 defaults called directly, by UFCS and through a bound, one overridden, one performing `io`, under
 the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; a trait and its
 impl in different modules built by both backends; a body checked once, generic over `Self`, held
@@ -821,7 +827,7 @@ checker records it and every closure's copy as shared, and Core IR lowering keep
 `let mut x = e` makes the cell, a read is `vec_get(x, 0)`, `x = v` is `vec_set(x, 0, v)` and
 `x.f = v` copies out, changes and sets back — so nothing below Core IR is new. Provenance reads and
 writes a shared binding through its cell, so a closure's write reaches its function's read.
-Semantic epoch 61; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/
+Semantic epoch 61; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/
 generic_closures.rs` — generic closures (nested, over `Int` and `Str`, with a named function's
 value) and shared bindings (a closure's writes, a field through a closure, a write after the closure
 is made, nested closures, a generic function's) by hand-worked output under the interpreter, the LIR
@@ -838,7 +844,7 @@ can hold a function value (`N0616`). A `Vec[T]` of one element underneath and a 
 checker only: Core IR lowering writes the three as `vec_new` with `vec_push`, `vec_get(c, 0)` and
 `vec_set(c, 0, v)`, so the interpreter, MIR, LIR and both backends need nothing new, and no runtime
 ABI moved. Provenance follows what a cell holds, from `cell_new` and from every `cell_set`.
-Semantic epoch 60; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/cell.rs` — a
+Semantic epoch 60; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/cell.rs` — a
 context record updated by callees, sharing, replacement releasing what it replaced (a string, a
 record, a vector) and a cell inside a box, by hand-worked output under the interpreter, the LIR
 oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; the ownership rule; the refusals; the
@@ -851,7 +857,7 @@ value with `Show` in scope (its `show()` resolved as the method call at the hole
 bound too). The lexer reads an `FSTRING` token whose holes the parser parses on their own and
 places; lowering joins the pieces with `str_concat`. New prelude built-ins `float_to_str_fixed`
 (runtime `nz.format_fixed`, C's `%.*f`; runtime ABI 30) and `str_pad_start`/`str_pad_end` (a
-loop in LIR). `N0006`; semantic epoch 59; EXPERIMENTAL until R1 closes. Evidence:
+loop in LIR). `N0006`; semantic epoch 59; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/interpolation.rs` — every kind of hole by hand-worked output on the
 interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; ties to even and
 `-0.0`; refusals by code.
@@ -862,7 +868,7 @@ every line (`N0005` for a line short of it, or text after the opening delimiter)
 ordinary literal's and a backslash ending a line joining it; raw `r"…"`/`r#"…"#` with any number of
 `#`s, no escape, line breaks as written; CR LF read as LF in both. The lexer decides each from the
 literal's own bytes, so incremental relexing is unchanged; an ordinary literal stays one line.
-Semantic epoch 58; EXPERIMENTAL until R1 closes. Evidence: `crates/nazm-cli/tests/
+Semantic epoch 58; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence: `crates/nazm-cli/tests/
 string_literals.rs` — the bytes by hand on the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and
 Cranelift; the formatter keeping each as written; refusals by code.
 
@@ -875,7 +881,7 @@ enum value, tuple or array of constant parts, computed by a second phase once ty
 and lowered at each use to its construction; `pub const` publishes the value in the interface
 (`nazm.interface/12`, each value keyed by field and variant names) and an importer reads it as
 `NAME` or `m::NAME`; a stage 1b computes constants in dependency order so one may be computed
-from an import's. Semantic epoch 57; EXPERIMENTAL until R1 closes. Evidence:
+from an import's. Semantic epoch 57; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/const_tables.rs` — string arrays and constant tables by hand-worked output
 in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; constants
 across modules, plain and under a name, under `run` and two `build`s (the second from the cache);
@@ -891,7 +897,7 @@ integers, `Bool`s and `Str`s, `hash` folding `hash_combine` from `hash_u64(0)` (
 name) in the canonical order and `same` being `==`. The interpreter computes both from Core IR's
 new canonical-order table; MIR lowers a derived trait call to `Rvalue::Hash` or a comparison; LIR
 generates `ord.*` and `hash.*` helpers (FNV-1a and SplitMix64 as instructions, constants folded at
-build time). Semantic epoch 56; EXPERIMENTAL until R1 closes. Evidence:
+build time). Semantic epoch 56; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/order_hash.rs` — orders and hashes by hand-worked output, and against the
 library's own functions, in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with
 nothing live; reordering a declaration changes no order and no hash; refusals by code, naming the
@@ -903,7 +909,7 @@ parser splits), `t.0 = e` on a `let mut`, tuple patterns, `let P = e;` (a `let` 
 match every value, `N0343` otherwise) and `for (a, b) in e`. A tuple is an anonymous generic record
 the checker interns by arity (fields `0`, `1`, …), so layout, release, equality, task crossing and
 every backend take it as a record with no new code; an interface writes it as its elements
-(`{"tuple":[…]}`). `(x,)` is refused (`N0101`). Semantic epoch 55; EXPERIMENTAL until R1 closes.
+(`{"tuple":[…]}`). `(x,)` is refused (`N0101`). Semantic epoch 55; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since).
 Evidence: `crates/nazm-cli/tests/tuples.rs` — a program of every form by hand-worked output in the
 interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; refusals by code with
 one error each; a tuple across a module's interface under `run` and `build`; the formatter's
@@ -919,7 +925,7 @@ refused with the words it was before R1a. A `match` of plain variant patterns lo
 IR `match` as before; any other is `{ scrutinee; which arm; that arm }`, each pattern's test a
 `Bool` of plain matches and comparisons and each arm's body written once, its bindings read out of
 the scrutinee (a branch exhaustiveness rules out is an `exit_with`, which Core IR now counts as a
-transfer). `N0629`, `N0630`; semantic epoch 54; EXPERIMENTAL until R1 closes; no warning for a `_`
+transfer). `N0629`, `N0630`; semantic epoch 54; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since); no warning for a `_`
 over variants until L15. Evidence: `crates/nazm-cli/tests/patterns.rs` — every kind of pattern by
 hand-worked output in the interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing
 live; exhaustiveness witnesses; ten refusals by code; one error, not a cascade, for a wrong
@@ -1475,7 +1481,7 @@ no program can name, and the interpreter, the LIR oracle and LIR carry each oper
 `Vec` one it means. Release is a worklist, not recursion, in all three: the interpreter's
 sequence storage hands its elements to a per-thread queue, and the runtime's `nz.vec_release`
 takes the queue of the release in progress — runtime ABI 29. Prelude names: a module's own `Box`,
-`List` or `box_new` keeps its meaning. Semantic epoch 53; EXPERIMENTAL until R1 closes. Evidence:
+`List` or `box_new` keeps its meaning. Semantic epoch 53; EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/box_list.rs` — trees of boxes and lists by hand-worked output under the
 interpreter, the LIR oracle, LLVM `-O0`/`-O2` and Cranelift with nothing live; a million-deep `Box`
 chain built and released by the interpreter, LLVM and Cranelift with every sequence reclaimed
@@ -2622,7 +2628,7 @@ locks held by the open file (`os_lock`, `os_try_lock`, `os_unlock`: `flock`, `Lo
 `file_unlock`), `@std/process` (`process_id`, `process_spawn_in`, `process_spawn_with`,
 `process_child_id`, `process_try_wait`, `process_wait_until`, `process_kill_group`,
 `process_peak_memory`) and `@std/fs` (`fs_temp_dir`): API-1.0 gains 20 lines. `file_walk` lists a
-symbolic link and never follows it, as D4 approved. EXPERIMENTAL until R1 closes. Evidence:
+symbolic link and never follows it, as D4 approved. EXPERIMENTAL until R1 closed (2026-10-15; `stability.md` gives its status since). Evidence:
 `crates/nazm-cli/tests/platform_files.rs` and `process_control.rs` — each program in a fresh
 directory under the interpreter, LLVM `-O0`/`-O2` and Cranelift with the same memory report and
 nothing live: raw bytes among `print`'s and a closed stream handle; a file, a directory, a link, a

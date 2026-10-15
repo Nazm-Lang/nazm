@@ -293,7 +293,8 @@ found only by reading all of it.
   results, unions, arrays, bit-fields, closures as callbacks, out-buffers C writes into, `dlopen`,
   ABIs other than `"C"`. C is trusted entirely once called — a handle used after C freed it is C's
   undefined behaviour; `errno` is per thread, so a pool task that blocks between a call and
-  `c_errno()` may read another task's; `nazm run` cannot call C; one Nazm library per C program,
+  `c_errno()` may read another task's; `nazm run --interpret` cannot call C (a compiled `nazm run`
+can, since R1.5 D11, from the system's libraries); one Nazm library per C program,
   since each carries a runtime. Shared libraries are linked and run on macOS; Linux's link is the
   same `-shared` command, not run here. *Narrowed in N85:* until then, no handles, structs, string
   results, callbacks, `errno` or shared libraries; *in N55:* import only and no strings.
