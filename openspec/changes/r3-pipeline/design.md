@@ -184,6 +184,15 @@ for `nz.strs_release`, I/O for `nz.argc`/`nz.argv`; `single` when `main` holds n
 `NetCap` or `ForeignCap`; the entry's `foreign` when any function calls C; a word per capability
 `main` takes.
 
+In a program of one thread (`single`) the reference counts are plain too (performance-leadership,
+*Plain reference counts in a program of one thread*): `emit_runtime` applies
+`plain_reference_counts` to the whole unit after every part is pushed — inside the functions of
+`PLAIN_IN_ONE_THREAD` only (carried as data, `rt_plain_in_one_thread()`, extracted by
+`runtime_text.py` from `core.rs`), from the `define` line to its `}`, each
+`%r = atomicrmw add|sub ptr P, i64 1 monotonic|release` becomes `%r = load` / `%r.plain = add|sub`
+/ `store`, and `  fence acquire` goes; every other line byte for byte. The pipeline prints no hosted
+LLVM of its own, so `inline_reference_counting`'s copies have no counterpart here.
+
 `pipeline runtime CORE.json [STACK HEAP]` prints the units, each after `;;; unit NAME`; `run.sh`
 builds every input with LIR with `nazm build --emit-ir`, by default and with `--stack-size` and
 `--heap-limit`, and compares every runtime unit byte for byte and that the build wrote exactly

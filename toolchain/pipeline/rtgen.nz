@@ -205,6 +205,55 @@ fn pool_hooked(text: Str) -> Str {
     str_join(out, "")
 }
 
+/// One count's atomic step as three plain instructions (`plain_count`), or `None` for any other
+/// line: `  %r = atomicrmw add|sub ptr P, i64 1 monotonic|release`.
+fn plain_count(line: Str) -> Option[Str] {
+    if !text_starts_with(line, "  %") { return None }
+    let rest = str_slice(line, 3, str_len(line))
+    let i = match text_find(rest, " = atomicrmw ") { Some(i) => i, None => { return None } }
+    let result = str_slice(rest, 0, i)
+    let tail = str_slice(rest, i + 13, str_len(rest))
+    let j = match text_find(tail, " ptr ") { Some(j) => j, None => { return None } }
+    let op = str_slice(tail, 0, j)
+    let step = str_slice(tail, j + 5, str_len(tail))
+    let k = match text_find(step, ", i64 1 ") { Some(k) => k, None => { return None } }
+    let at = str_slice(step, 0, k)
+    let order = str_slice(step, k + 8, str_len(step))
+    if !(op == "add" || op == "sub") || !(order == "monotonic" || order == "release") { return None }
+    Some("  %" + result + " = load i64, ptr " + at + "\n  %" + result + ".plain = " + op + " i64 %" + result + ", 1\n  store i64 %" + result + ".plain, ptr " + at)
+}
+
+/// `text` with the counts of `PLAIN_IN_ONE_THREAD`'s functions made plain, for a program of one
+/// thread (`plain_reference_counts`): inside those functions only, from the `define` line to its
+/// closing `}`, each atomic count becomes a load, the same step and a store (`plain_count`), and
+/// `  fence acquire` goes; every other line is kept byte for byte.
+fn plain_reference_counts(text: Str) -> Str {
+    let names = text_lines(rt_plain_in_one_thread())
+    let out = strs_new()
+    let mut inside = false
+    for line in text_split(text, "\n") {
+        if text_starts_with(line, "define ") {
+            inside = false
+            for n in names {
+                if text_contains(line, " @" + n + "(") { inside = true }
+            }
+        } else if line == "}" {
+            inside = false
+        }
+        if inside && line == "  fence acquire" {
+            // dropped, with its line break
+        } else if inside {
+            match plain_count(line) {
+                Some(p) => strs_push(out, p),
+                None => strs_push(out, line),
+            }
+        } else {
+            strs_push(out, line)
+        }
+    }
+    str_join(out, "\n")
+}
+
 /// The program's runtime, defined once for the whole executable (`emit_runtime`).
 pub fn emit_runtime(needs: Needs) -> Str ! {} {
     let n = settled(needs)
@@ -288,7 +337,8 @@ pub fn emit_runtime(needs: Needs) -> Str ! {} {
         if n.tasks { strs_push(out, rt_core_SHIM_TASK_RUNTIME()) }
     }
     strs_push(out, "\n")
-    str_join(out, "")
+    // A program of one thread: its strings', closures' and channels' counts are plain.
+    if n.single { plain_reference_counts(str_join(out, "")) } else { str_join(out, "") }
 }
 
 // --- the platform entry -------------------------------------------------------------------------
