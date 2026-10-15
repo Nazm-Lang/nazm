@@ -679,6 +679,18 @@ the state plain for a `main` of output alone, thread-local for one with `SpawnCa
 `ForeignCap` and for a library, the check inlined; a stack overflow and an overflow still reported
 by a program of one thread under LLVM and Cranelift. Five mutants.
 
+**Performance leadership (2026-10-15)** · *Plain reference counts in a program of one thread*
+(`openspec/changes/performance-leadership`, design.md). In the same program of one thread
+(`Needs::single`) a string's, a closure's and a channel's reference count is an ordinary load, add
+or subtract and store, with the old count still deciding the free, and no acquire fence: in the
+runtime unit (both backends link it) and in the copies a hosted LLVM unit inlines. Every other
+program, and one linked to a prebuilt runtime, keeps the atomic counts. Word frequency −7 to −8%
+(three rounds, `-O2`), `fib` unchanged. Evidence: the runtime's
+`a_program_of_one_thread_counts_without_atomics_and_any_other_with_them` (plain counts, nothing
+else changed, atomic otherwise, the inlined copies alike); `single_thread.rs`'s
+`a_program_of_one_thread_counts_its_strings_without_atomics` (built IR, one thread against
+`SpawnCap`); the memory suite through the plain counts. Six mutants.
+
 **R1e (2026-10-13)** · *`@std/sha256`, `@std/blake3` and `file_walk`* (`spec.md`, *The standard
 library*; `openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`, D4 and S1). Two digests in Nazm, over
 32-bit wrapping arithmetic and rotations: SHA-256 (FIPS 180-4) and BLAKE3's unkeyed 32-byte output

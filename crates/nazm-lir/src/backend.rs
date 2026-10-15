@@ -461,11 +461,12 @@ impl Backend for LlvmText {
             ir
         };
         // A hosted unit inlines the runtime's reference counting where it optimises (R1, 5b.9); a
-        // board's runtime defines its own.
+        // board's runtime defines its own. In a program of one thread the copies' counts are
+        // plain, as the runtime unit's are there (`Needs::single`).
         let ir = if self.target.os == Os::None {
             ir
         } else {
-            nazm_runtime::inline_reference_counting(&ir)
+            nazm_runtime::inline_reference_counting(&ir, native.single_thread)
         };
         // A build with a heap limit (R1d, D5): the unit's allocations, the copies above included,
         // are the counted heap's.

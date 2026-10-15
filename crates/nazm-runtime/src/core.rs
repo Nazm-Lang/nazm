@@ -77,6 +77,70 @@ const INLINABLE: [&str; 5] = [
     "nz.str_release",
 ];
 
+/// The reference counts a program of one thread adjusts with ordinary loads and stores
+/// (`Needs::single`, the speed milestone): a string's, a closure's and a channel's. Each is
+/// atomic because a task may hold the value too (a `Str` and a channel may cross into one), and
+/// a program whose `main` holds no authority to start a thread has no task — the rule that
+/// already makes its failure state plain globals. A sequence's count is plain everywhere.
+pub const PLAIN_IN_ONE_THREAD: [&str; 7] = [
+    "nz.str_retain",
+    "nz.str_release",
+    "nz.closure_retain",
+    "nz.closure_release",
+    "nz.chan_retain",
+    "nz.chan_release",
+    "nz.chanv_release",
+];
+
+/// `text` with the counts of [`PLAIN_IN_ONE_THREAD`]'s functions made plain, for a program of
+/// one thread: each `%r = atomicrmw add|sub ptr %p, i64 1 monotonic|release` becomes a load of
+/// the old count, the same addition or subtraction (wrapping, as the atomic one does) and a
+/// store, `%r` still the old count, so the test for the last reference and the free after it are
+/// unchanged; the `fence acquire` before the free goes, having no other thread to order against.
+/// Every other line, and every other function, is kept as it is.
+#[must_use]
+pub fn plain_reference_counts(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 512);
+    let mut inside = false;
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches('\n');
+        if bare.starts_with("define ") {
+            inside = PLAIN_IN_ONE_THREAD
+                .iter()
+                .any(|n| bare.contains(&format!(" @{n}(")));
+        } else if bare == "}" {
+            inside = false;
+        }
+        if inside {
+            if bare == "  fence acquire" {
+                continue;
+            }
+            if let Some(plain) = plain_count(bare) {
+                out.push_str(&plain);
+                if line.ends_with('\n') {
+                    out.push('\n');
+                }
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// One count's atomic step as three plain instructions, or `None` for any other line.
+fn plain_count(line: &str) -> Option<String> {
+    let (result, rest) = line.strip_prefix("  %")?.split_once(" = atomicrmw ")?;
+    let (op, rest) = rest.split_once(" ptr ")?;
+    let (at, order) = rest.split_once(", i64 1 ")?;
+    if !matches!(op, "add" | "sub") || !matches!(order, "monotonic" | "release") {
+        return None;
+    }
+    Some(format!(
+        "  %{result} = load i64, ptr {at}\n  %{result}.plain = {op} i64 %{result}, 1\n  store i64 %{result}.plain, ptr {at}"
+    ))
+}
+
 /// One runtime function's definition, as the runtime holds it.
 fn definition(name: &str) -> Option<&'static str> {
     for text in [SEQUENCE_RUNTIME, STRING_RUNTIME] {
@@ -95,8 +159,11 @@ fn definition(name: &str) -> Option<&'static str> {
 /// `available_externally`, so the runtime's stays the one definition the program links. A
 /// retain and the release that follows it then cost a few instructions, not two calls, and an
 /// optimised build may drop the pair. What the copies use is declared once.
+///
+/// In a program of one thread (`single`) the copies' counts are plain, as the runtime unit's are
+/// there ([`plain_reference_counts`]): a copy is the definition the program links, or nothing.
 #[must_use]
-pub fn inline_reference_counting(unit: &str) -> String {
+pub fn inline_reference_counting(unit: &str, single: bool) -> String {
     let declared = |name: &str| {
         unit.lines()
             .any(|l| l.starts_with("declare ") && l.contains(&format!(" @{name}(")))
@@ -130,7 +197,12 @@ pub fn inline_reference_counting(unit: &str) -> String {
     }
     for n in wanted {
         if let Some(d) = definition(n) {
-            out.push_str(&d.replacen("define hidden ", "define available_externally hidden ", 1));
+            let d = d.replacen("define hidden ", "define available_externally hidden ", 1);
+            if single {
+                out.push_str(&plain_reference_counts(&d));
+            } else {
+                out.push_str(&d);
+            }
         }
     }
     out
@@ -345,6 +417,10 @@ pub fn emit_runtime(needs: Needs) -> String {
         }
     }
     out.push('\n');
+    // A program of one thread: its strings', closures' and channels' counts are plain.
+    if needs.single {
+        out = plain_reference_counts(&out);
+    }
     out
 }
 
@@ -1247,7 +1323,8 @@ done:
 /// sibling tasks doing that to the same backing really are two threads adjusting one
 /// count. A sequence's count cannot be reached by two threads at all, which is why that
 /// one stays an ordinary `add`. Neither choice is a guess: each follows from a rule the
-/// language already had.
+/// language already had. A program of one thread has no task to hand a string to, and there
+/// [`emit_runtime`] makes this count plain too ([`plain_reference_counts`]).
 ///
 /// The decrement is `release` and the free is preceded by an `acquire` fence, which is the
 /// standard pairing: it is what makes every other thread's writes to the buffer visible to
