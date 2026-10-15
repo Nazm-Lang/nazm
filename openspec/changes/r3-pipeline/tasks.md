@@ -71,10 +71,13 @@
   - [x] 6.3.3 Functions: locals in variables, slots or promoted values; integer arithmetic and
         comparison with their guards; direct calls and their failure bits; strings
         (`str_concat`, `num_to_str`, `print`), drops; the stack check; plain entries. `fib` and
-        `hello` identical, the whole `nazm lir` document (text and digests) included: 37 of 161
-        inputs with LIR. Every other input stops at a construct named as not ported; none
-        produces different text
-  - [ ] 6.3.4 The remaining primitives (`prims.rs`, `numeric.rs`, `bytes.rs`, `files.rs`,
-        `arrays.rs`, `atomics.rs`), records and enums (fields, variants, payloads, `match`),
-        the type helpers (retain, release, equality, order, hash), closures and indirect calls,
-        scopes and spawn, foreign calls and exports, statics, large frames
+        `hello` identical, the whole `nazm lir` document (text and digests) included
+  - [x] 6.3.4 Records and enums (construction, fields owned and borrowed, payloads, `switch`),
+        `exit_with`, the type helpers that retain and release (records, enums, arrays, a
+        vector's elements), simple string and sequence primitives. `run.sh`: 68 of 161 inputs
+        with LIR identical, document and digests included; every other stops at a construct
+        named as not ported, and none produces different text
+  - [ ] 6.3.5 The remaining primitives (sequences' push/get/set, channels, files, bytes and text,
+        contracts, `numeric.rs`, `arrays.rs`, `atomics.rs`), conversions, the helpers that
+        compare and hash, closures and indirect calls, scopes and spawn, foreign calls and
+        exports, statics, large frames
