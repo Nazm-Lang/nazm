@@ -30,9 +30,9 @@ fn each_package_sees_its_own_features_in_every_implementation(io: IoCap, p: Proc
     let h = caps(io, p, sp, v, t);
     let d = scratch_new(h);
     packages(h, d)?;
-    let plain = nazm(h, d, words("run app/src/main.nz"));
-    let verbose = nazm(h, d, words("run --features verbose app/src/main.nz"));
-    let all = nazm(h, d, words("run --features all app/src/main.nz"));
+    let plain = nazm(h, d, words("run --interpret app/src/main.nz"));
+    let verbose = nazm(h, d, words("run --interpret --features verbose app/src/main.nz"));
+    let all = nazm(h, d, words("run --interpret --features all app/src/main.nz"));
     let a = words("build --features all app/src/main.nz -o");
     strs_push(a, f"{d}/app-all");
     let built = nazm(h, d, a);
@@ -52,7 +52,7 @@ fn a_feature_nobody_declares_is_refused_before_anything_is_checked(io: IoCap, p:
     let h = caps(io, p, sp, v, t);
     let d = scratch_new(h);
     packages(h, d)?;
-    let r = nazm(h, d, words("run --features nope app/src/main.nz"));
+    let r = nazm(h, d, words("run --interpret --features nope app/src/main.nz"));
     scratch_write(h, d, "solo.nz", "fn main() -> Int { 0 }\n")?;
     let outside = nazm(h, d, words("check --features x solo.nz"));
     // A manifest whose feature enables something that is not one.

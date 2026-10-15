@@ -25,7 +25,7 @@ fn polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name(io: Io
     let h = caps(io, p, sp, v, t);
     // `grow[T]` calls `grow[Vec[T]]`: every instance needs a larger one.
     let d = prog_dir(h, "m.nz", "fn grow[T](x: T, n: Int) -> Int {\n    if n == 0 { 0 } else {\n        let v = vec_new[T]();\n        vec_push(v, x);\n        grow(v, n - 1) + 1\n    }\n}\nfn main() -> Int { grow(1, 3) }\n")?;
-    let r = nz(h, d, "run m.nz");
+    let r = nz(h, d, "run --interpret m.nz");
     let b = nz(h, d, "build m.nz -o prog");
     scratch_remove(h, d);
     check_that(r.code == 0 && r.stdout == "3", ran_show(r))?;
@@ -39,7 +39,7 @@ fn polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name(io: Io
 fn ordinary_recursion_through_a_generic_function_compiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let d = prog_dir(h, "m.nz", "fn count[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { count(x, n - 1) + 1 } }\nfn main() -> Int { count(\"a\", 3) }\n")?;
-    let r = nz(h, d, "run m.nz");
+    let r = nz(h, d, "run --interpret m.nz");
     let b = nz(h, d, "build m.nz -o prog");
     let ran = ran_prog(h, d);
     scratch_remove(h, d);
@@ -59,7 +59,7 @@ fn an_instance_nested_past_the_stated_bound_is_refused_rather_than_generated(io:
     }
     strs_push(parts, "fn f70[T](x: T) -> Int { 0 }\nfn main() -> Int { f0(1) }\n");
     let d = prog_dir(h, "m.nz", str_join(parts, ""))?;
-    let r = nz(h, d, "run m.nz");
+    let r = nz(h, d, "run --interpret m.nz");
     let b = nz(h, d, "build m.nz -o prog");
     scratch_remove(h, d);
     check_that(r.code == 0, "the interpreter has no such bound")?;
@@ -81,7 +81,7 @@ fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol(io: IoCap, p: Proc
     }
     strs_push(parts, "fn main() -> Int { g16(1) }\n");
     let d = prog_dir(h, "m.nz", str_join(parts, ""))?;
-    let r = nz(h, d, "run m.nz");
+    let r = nz(h, d, "run --interpret m.nz");
     let mut failure = "";
     if r.code != 0 || r.stdout != "65536" {
         failure = ran_show(r);
@@ -122,7 +122,7 @@ fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol(io: IoCap, p: Proc
 fn a_failure_inside_an_instance_names_the_generic_definitions_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let d = prog_dir(h, "m.nz", "fn pick[T](xs: Vec[T], i: Int) -> T {\n    vec_get(xs, i)\n}\nfn main() -> Int {\n    let xs = vec_new[Str]();\n    str_len(pick(xs, 3))\n}\n")?;
-    let interpreted = nz(h, d, "run m.nz");
+    let interpreted = nz(h, d, "run --interpret m.nz");
     let b = nz(h, d, "build m.nz -o prog");
     let ran = ran_prog(h, d);
     scratch_remove(h, d);

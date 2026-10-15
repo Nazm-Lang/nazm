@@ -15,7 +15,7 @@ fn heavy_recursion_reports_n0403_and_never_crashes(io: IoCap, p: ProcessCap, sp:
     let d = prog_dir(h, "prog.nz", "fn g(n: Int) -> Int { n }\nfn f(n: Int) -> Int { n }\nfn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + f(g(down(n - 1))) } }\nfn main() -> Int { down(1000000) }\n")?;
     let mut failure = "";
     for depth in text_split("|15000", "|") {
-        let args = words("run prog.nz");
+        let args = words("run --interpret prog.nz");
         if str_len(depth) > 0 {
             strs_push(args, "--max-depth");
             strs_push(args, depth);

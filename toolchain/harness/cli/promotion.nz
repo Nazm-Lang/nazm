@@ -63,7 +63,7 @@ fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one(io: IoCap, p: 
             failure = f"-O{opt}: {ran_show(r)}";
         }
     }
-    let ran = nazm(h, d, words("run prog.nz"));
+    let ran = nazm(h, d, words("run --interpret prog.nz"));
     scratch_remove(h, d);
     check_that(str_len(failure) == 0, failure)?;
     check_that(ran.stdout == "617\n", ran_show(ran))
