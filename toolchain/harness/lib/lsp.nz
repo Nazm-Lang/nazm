@@ -1,0 +1,223 @@
+// An LSP client for the harness (R7): `nazm lsp` as an editor sees it — the real process, real
+// framing, over its standard input and output — what `crates/nazm-cli/tests/lsp.rs`' `Client` is.
+//
+// The Rust client reads frames on a thread and waits for each with a 30 s deadline. Here a frame is
+// read when the test asks for one, and the deadline is a watchdog: a second child that ends the
+// server's process group 120 s after the session starts, which closes its output and so ends any
+// read that is waiting — a test that would hang fails instead.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "run.nz"
+use "live.nz"
+use "jsonq.nz"
+use "strings.nz"
+use "differential.nz"
+
+/// The server, its watchdog, and the next request's id.
+pub struct Lsp {
+    server: Live,
+    watchdog: Live,
+    ids: Ints,
+}
+
+/// `nazm lsp` started in `dir`.
+pub fn lsp_start(h: Caps, dir: Str) -> Result[Lsp, Str] ! { io, spawn } {
+    let server = start_fed(h, nazm_bin(h.io), words("lsp"), dir, suite_env(h))?;
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, f"sleep 120; kill -9 -- -{live_pid(server)} 2>/dev/null");
+    let watchdog = start(h, "sh", a, "", env_here(h.io))?;
+    let ids = ints_new();
+    ints_push(ids, 1);
+    Result[Lsp, Str].Ok(value: Lsp(server: server, watchdog: watchdog, ids: ids))
+}
+
+/// Write `body` (a JSON text) as one frame.
+pub fn lsp_write(c: Lsp, body: Str) -> Result[Int, Str] ! { io } {
+    write_in(c.server, f"Content-Length: {str_len(body)}\r\n\r\n{body}")
+}
+
+/// Write raw bytes to the server: a frame the test makes by hand.
+pub fn lsp_write_raw(c: Lsp, text: Str) -> Result[Int, Str] ! { io } {
+    write_in(c.server, text)
+}
+
+/// The next message from the server, read **strictly**: a frame is `Content-Length: N`, a blank
+/// line and N bytes of JSON, and anything else is an error the test reports.
+pub fn lsp_next(c: Lsp) -> Result[JsonDoc, Str] ! { io } {
+    let header = read_line_out(c.server);
+    if header == "" {
+        return Result[JsonDoc, Str].Err(error: "no message from the server: its output ended");
+    }
+    let n = match strip_prefix(header, "Content-Length: ") {
+        Option.Some(value: v) => match text_parse_int(text_trim_end(v)) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => 0 - 1,
+        },
+        Option.None() => 0 - 1,
+    };
+    if n < 0 {
+        return Result[JsonDoc, Str].Err(error: f"the server's stdout is not the protocol: not a frame header: {header}");
+    }
+    let blank = read_line_out(c.server);
+    if blank != "\r\n" {
+        return Result[JsonDoc, Str].Err(error: f"the server's stdout is not the protocol: expected a blank line, got {blank}");
+    }
+    let body = read_out(c.server, n);
+    if str_len(body) != n {
+        return Result[JsonDoc, Str].Err(error: "the server's stdout is not the protocol: truncated frame");
+    }
+    match jparse(body) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"the server's stdout is not the protocol: json: {e}"),
+    }
+}
+
+/// A request, and the response to it; notifications that come first are skipped, any other
+/// response is an error.
+pub fn lsp_request(c: Lsp, method: Str, params: Str) -> Result[JsonDoc, Str] ! { io } {
+    let id = ints_get(c.ids, 0);
+    ints_set(c.ids, 0, id + 1);
+    lsp_write(c, f"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":{json_quote(method)},\"params\":{params}}}")?;
+    let mut going = true;
+    while going {
+        let m = lsp_next(c)?;
+        if jv(m, "id") == int_to_str(id) {
+            return Result[JsonDoc, Str].Ok(value: m);
+        }
+        if jq(m, "method") < 0 {
+            return Result[JsonDoc, Str].Err(error: f"an unexpected response: {jv(m, "")}");
+        }
+    }
+    Result[JsonDoc, Str].Err(error: "unreachable")
+}
+
+/// A notification.
+pub fn lsp_notify(c: Lsp, method: Str, params: Str) -> Result[Int, Str] ! { io } {
+    lsp_write(c, f"{{\"jsonrpc\":\"2.0\",\"method\":{json_quote(method)},\"params\":{params}}}")
+}
+
+/// The `params` of the next `publishDiagnostics` for `uri`, skipping any for other documents.
+pub fn lsp_diagnostics_for(c: Lsp, uri: Str) -> Result[JsonDoc, Str] ! { io } {
+    let mut going = true;
+    while going {
+        let m = lsp_next(c)?;
+        if jstr(m, "method") == "textDocument/publishDiagnostics" && jstr(m, "params/uri") == uri {
+            return jparse(jv(m, "params"));
+        }
+    }
+    Result[JsonDoc, Str].Err(error: "unreachable")
+}
+
+/// `initialize` with the client capabilities `capabilities` (a JSON text), then `initialized`:
+/// the response.
+pub fn lsp_initialize_with(c: Lsp, root: Str, capabilities: Str) -> Result[JsonDoc, Str] ! { io } {
+    let r = lsp_request(c, "initialize", f"{{\"processId\":null,\"rootUri\":{json_quote(file_uri(root))},\"capabilities\":{capabilities}}}")?;
+    lsp_notify(c, "initialized", "{}")?;
+    Result[JsonDoc, Str].Ok(value: r)
+}
+
+/// `initialize` as an editor that takes versioned workspace edits.
+pub fn lsp_initialize(c: Lsp, root: Str) -> Result[JsonDoc, Str] ! { io } {
+    lsp_initialize_with(c, root, "{\"workspace\":{\"workspaceEdit\":{\"documentChanges\":true}}}")
+}
+
+pub fn lsp_open(c: Lsp, path: Str, version: Int, text: Str) -> Result[Int, Str] ! { io } {
+    lsp_notify(c, "textDocument/didOpen", f"{{\"textDocument\":{{\"uri\":{json_quote(file_uri(path))},\"languageId\":\"nazm\",\"version\":{version},\"text\":{json_quote(text)}}}}}")
+}
+
+pub fn lsp_change(c: Lsp, path: Str, version: Int, text: Str) -> Result[Int, Str] ! { io } {
+    lsp_notify(c, "textDocument/didChange", f"{{\"textDocument\":{{\"uri\":{json_quote(file_uri(path))},\"version\":{version}}},\"contentChanges\":[{{\"text\":{json_quote(text)}}}]}}")
+}
+
+pub fn lsp_close(c: Lsp, path: Str) -> Result[Int, Str] ! { io } {
+    lsp_notify(c, "textDocument/didClose", f"{{\"textDocument\":{{\"uri\":{json_quote(file_uri(path))}}}}}")
+}
+
+/// `{"textDocument": {"uri": …}, "position": {"line": …, "character": …}}`.
+pub fn doc_at(path: Str, line: Int, character: Int) -> Str ! {} {
+    f"{{\"textDocument\":{{\"uri\":{json_quote(file_uri(path))}}},\"position\":{{\"line\":{line},\"character\":{character}}}}}"
+}
+
+/// The `result` of `textDocument/definition`, as a document.
+pub fn lsp_definition(c: Lsp, path: Str, line: Int, character: Int) -> Result[JsonDoc, Str] ! { io } {
+    let r = lsp_request(c, "textDocument/definition", doc_at(path, line, character))?;
+    jparse(jv(r, "result"))
+}
+
+/// `shutdown`, `exit`, the server's standard input closed: its exit status and standard error.
+pub fn lsp_finish(h: Caps, c: Lsp) -> Result[Ran, Str] ! { io } {
+    let r = lsp_request(c, "shutdown", "null")?;
+    check_that(jv(r, "result") == "null", jv(r, ""))?;
+    lsp_notify(c, "exit", "null")?;
+    close_in(c.server);
+    let status = wait_for(h, c.server, 30000);
+    let err = rest_err(c.server);
+    lsp_done(h, c, status);
+    Result[Ran, Str].Ok(value: Ran(code: status, stdout: "", stderr: err))
+}
+
+/// The server's standard input closed after a frame the test wrote by hand: its status and error.
+pub fn lsp_wait(h: Caps, c: Lsp) -> Ran ! { io } {
+    let status = wait_for(h, c.server, 30000);
+    let err = rest_err(c.server);
+    lsp_done(h, c, status);
+    Ran(code: status, stdout: "", stderr: err)
+}
+
+/// After the server was waited for (`status`; `wait_for` already ended it at its deadline): the
+/// watchdog ended and every handle closed.
+fn lsp_done(h: Caps, c: Lsp, status: Int) -> Int ! { io } {
+    kill(h, c.watchdog);
+    release(c.server);
+    release(c.watchdog);
+    0
+}
+
+/// End the session: the server and the watchdog ended, the handles closed.
+pub fn lsp_end(h: Caps, c: Lsp) -> Int ! { io } {
+    kill(h, c.server);
+    kill(h, c.watchdog);
+    release(c.server);
+    release(c.watchdog);
+    0
+}
+
+fn hex_digit(n: Int) -> Str ! {} {
+    str_slice("0123456789ABCDEF", n, n + 1)
+}
+
+/// A `file:` URI, percent-encoding what the server would.
+pub fn file_uri(path: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, "file://");
+    let mut i = 0;
+    while i < str_len(path) {
+        let b = str_byte(path, i);
+        let keep = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 46 || b == 95 || b == 126 || b == 47;
+        if keep {
+            strs_push(parts, str_slice(path, i, i + 1));
+        } else {
+            strs_push(parts, f"%{hex_digit(b / 16)}{hex_digit(b % 16)}");
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+/// The UTF-16 column of byte `at` of `line`: how an editor counts, computed independently of the
+/// server — one unit for each character, two for one of four bytes.
+pub fn utf16(line: Str, at: Int) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < at {
+        let b = str_byte(line, i);
+        if b < 128 || b >= 192 {
+            n = n + if b >= 240 { 2 } else { 1 };
+        }
+        i = i + 1;
+    }
+    n
+}

@@ -1,0 +1,108 @@
+// Gate 3: Windows x86_64. Every program in `crates/nazm-cli/tests/windows/` builds for
+// `x86_64-pc-windows-gnu` to objects whose `link.txt` names MinGW-w64's libraries and Winsock's.
+// That the executables run is the two tests that start a `nazm-wine:g3` container: `#[ignore]`d in
+// Rust, they stay there (design decision 10). Ported from `crates/nazm-cli/tests/windows.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+const TARGET: Str = "x86_64-pc-windows-gnu";
+
+/// The programs the Wine run runs, and `child`, which some of them start.
+const PROGRAMS: Str = "files net_echo net_datagram net_failures net_close net_peer_gone net_pool time time_pool pipe_pool process args trap deep big_frame deep_main task_deep child";
+
+fn backends() -> Strs ! {} {
+    words("llvm cranelift")
+}
+
+/// `name.nz` from the fixtures, built for Windows by `backend` to `name-backend/` in `dir`.
+fn objects(h: Caps, dir: Str, name: Str, backend: Str) -> Result[Str, Str] ! { io, spawn } {
+    let src = read_text(h, f"{repo_root(h)}/crates/nazm-cli/tests/windows/{name}.nz")?;
+    scratch_write(h, dir, f"{name}.nz", src)?;
+    let out = f"{name}-{backend}";
+    let r = nazm(h, dir, words(f"build --backend {backend} --target {TARGET} --objects {out} {name}.nz"));
+    check_that(r.code == 0, f"{out}: {r.stderr}")?;
+    Result[Str, Str].Ok(value: out)
+}
+
+/// The libraries line of `out`'s `link.txt`, split.
+fn libraries(h: Caps, dir: Str, out: Str) -> Result[Strs, Str] ! { io } {
+    let link = read_text(h, f"{dir}/{out}/link.txt")?;
+    for l in text_lines(link) {
+        match strip_prefix(l, "libraries ") {
+            Option.Some(value: rest) => { return Result[Strs, Str].Ok(value: text_split(rest, " ")); },
+            Option.None() => {},
+        };
+    }
+    Result[Strs, Str].Err(error: f"{out}: {link}")
+}
+
+@test
+fn every_program_builds_for_windows_with_mingw_and_winsock(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for name in words(PROGRAMS) {
+        for backend in backends() {
+            let out = objects(h, d, name, backend)?;
+            let libs = libraries(h, d, out)?;
+            for lib in words("-static -lws2_32 -lbcrypt") {
+                check_that(strs_has(libs, lib), f"{out}: {str_join(libs, " ")}")?;
+            }
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Q1-A1-01 on Windows: a frame larger than a page is probed by MinGW-w64's `___chkstk_ms` under
+/// LLVM and inline under Cranelift, and no object calls a function named `inline-asm`.
+@test
+fn a_large_frame_is_probed_by_what_mingw_links(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for backend in backends() {
+        let out = objects(h, d, "big_frame", backend)?;
+        let m0 = read_raw(h, f"{d}/{out}/00-m0.o")?;
+        check_that(!text_contains(m0, "inline-asm"), out)?;
+        if backend == "llvm" {
+            check_that(text_contains(m0, "___chkstk_ms"), out)?;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Windows gives an executable's main thread 1 MiB unless it asks; every Windows executable asks
+/// for the 8 MiB macOS and Linux give.
+@test
+fn the_main_thread_reserves_what_macos_and_linux_give_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for backend in backends() {
+        let out = objects(h, d, "deep_main", backend)?;
+        let libs = libraries(h, d, out)?;
+        check_that(strs_has(libs, "-Wl,--stack,8388608"), f"{out}: {str_join(libs, " ")}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_dll_is_refused_by_name_and_a_static_library_is_built(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "lib.nz", "pub extern \"C\" fn nz_add(a: Int, b: Int) -> Int ! {} = \"nz_add\" { a + b }\n")?;
+    let r = nazm(h, d, words(f"build --lib --shared --target {TARGET} --objects o lib.nz"));
+    let s = nazm(h, d, words(f"build --lib --target {TARGET} --objects s lib.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 5, r.stderr)?;
+    check_that(text_contains(r.stderr, "builds no DLL"), r.stderr)?;
+    check_that(s.code == 0, s.stderr)
+}
+
+// `the_programs_run_under_wine_as_they_do_natively` and `the_conformance_programs_run_under_wine`
+// are `#[ignore]`d in Rust "starts a container": they stay Rust (design decision 10).

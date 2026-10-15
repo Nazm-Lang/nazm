@@ -1,0 +1,211 @@
+// Gate 3: accelerator providers and float kernels. The CPU provider runs on any host with `clang`
+// and threads: a kernel's one source text, compiled as C and run on a thread pool, agrees with the
+// interpreter for `Int` kernels — the lowest failing index's failure included — and bit for bit for
+// `Float32` and `Float64` kernels. The GPU run is `#[ignore]`d in Rust and stays there (design
+// decision 10). Ported from `crates/nazm-cli/tests/accel_providers.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const KERNELS: Str = "fn square(x: Int) -> Int ! {} { x * x }\nfn collatz(n: Int) -> Int ! {} {\nlet mut x = n;\nlet mut steps = 0;\nwhile x > 1 {\nif x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; }\nsteps = steps + 1;\n}\nsteps + square(n % 7)\n}\nfn inverse(x: Int) -> Int ! {} { 100 / (x - 3) }\nfn poly(x: Float64) -> Float64 ! {} { let y = x * 0.5 + 1.25; float_sqrt(float_abs(y * x - 3.0)) / (x + 0.1) }\nfn polyf(x: Float32) -> Float32 ! {} { let y = x * 0.5 + 1.25; float_sqrt(float_abs(y * x - 3.0)) / (x + 0.1) }\nfn rem(a: Float64, b: Float64) -> Float64 ! {} { if a < b { a % b } else { -b } }\nfn axpy(a: Float32, b: Float32) -> Float32 ! {} { 2.5 * a + b }\nfn mixed(x: Float64) -> Float64 ! {} { let n = 3; x }\nfn wide(x: Float32) -> Float64 ! {} { 0.0 }\nfn sine(x: Float64) -> Float64 ! {} { float_sin(x) }\nfn main() -> Int { 0 }\n";
+
+/// A fresh directory holding the kernels as `k.nz` and each `name`, `text` pair of `inputs`.
+fn setup(h: Caps, inputs: Strs) -> Result[Str, Str] ! { io } {
+    let d = prog_dir(h, "k.nz", KERNELS)?;
+    let mut i = 0;
+    while i + 1 < strs_len(inputs) {
+        scratch_write(h, d, strs_get(inputs, i), strs_get(inputs, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn pair(a: Str, b: Str) -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, a);
+    strs_push(s, b);
+    s
+}
+
+/// `nazm accel ARGS` in `dir`.
+fn accel(h: Caps, dir: Str, args: Str) -> Ran ! { io, spawn } {
+    let a = words("accel");
+    for x in words(args) {
+        strs_push(a, x);
+    }
+    nazm(h, dir, a)
+}
+
+fn report(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    match jparse(o.stdout) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {o.stdout}{o.stderr}"),
+    }
+}
+
+/// `1 2 … n`, space-separated.
+fn counting(n: Int) -> Str ! {} {
+    let parts = strs_new();
+    let mut i = 1;
+    while i <= n {
+        strs_push(parts, f"{i} ");
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+/// `n` numbers spread over -1000 to 1000 with six decimals, the same every run: a fixed linear
+/// congruential sequence. (Not the Rust test's sequence — it formats `f64`s — but, like it, fixed
+/// numbers the kernels are run over.)
+fn floats(n: Int, seed: Int) -> Str ! {} {
+    let parts = strs_new();
+    let mut x = seed;
+    let mut i = 0;
+    while i < n {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        let whole = x % 2000 - 1000;
+        let frac = (x / 2000) % 1000000;
+        let digits = f"{1000000 + frac}";
+        strs_push(parts, f"{whole}.{str_slice(digits, 1, 7)} ");
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+@test
+fn the_cpu_provider_runs_the_same_kernel_and_agrees_with_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h, pair("in.txt", counting(20000)))?;
+    let o = accel(h, d, "--provider cpu k.nz collatz --input in.txt --reduce add");
+    check_that(o.code == 0, o.stderr)?;
+    let r = report(o)?;
+    check_that(jstr(r, "schema") == "nazm.accel/3", jv(r, ""))?;
+    check_that(jstr(r, "provider/name") == "cpu", jv(r, ""))?;
+    check_that(jstr(r, "provider/reason") == "asked for", jv(r, ""))?;
+    check_that(jv(r, "provider/vectorised") == "true", jv(r, ""))?;
+    check_that(jint(r, "provider/threads") >= 1, jv(r, ""))?;
+    check_that(jstr(r, "device/api") == "C (the CPU provider)", jv(r, ""))?;
+    check_that(jstr(r, "kernel/element") == "Int", jv(r, ""))?;
+    check_that(jv(r, "transfers") == "[]", jv(r, ""))?;
+    check_that(jstr(r, "reference") == "agrees with the interpreter", jv(r, ""))?;
+    check_that(jv(r, "cross_check") == "null", jv(r, ""))?;
+    // The sum of `steps + (n % 7)²` over 1..=20000, computed outside the compiler.
+    let want = 2094622;
+    check_that(jint(r, "result/checksum") == want, jv(r, ""))?;
+    check_that(jint(r, "reduce/value") == want, jv(r, ""))?;
+    // The same source text the device builds: the element function beside the kernel.
+    let src = accel(h, d, "--print-kernel k.nz collatz --input in.txt").stdout;
+    scratch_remove(h, d);
+    check_that(text_contains(src, "static long nz_item(long a,"), src)?;
+    check_that(text_contains(src, "__kernel void nz_kernel("), src)
+}
+
+@test
+fn a_failure_on_the_cpu_is_the_lowest_failing_index_at_its_site(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Elements 9 and 5000 divide by zero; the pool's threads may meet either first.
+    let parts = strs_new();
+    let mut i = 0;
+    while i < 20000 {
+        let n = if i == 9 || i == 5000 { 3 } else { i + 4 };
+        strs_push(parts, f"{n} ");
+        i = i + 1;
+    }
+    let d = setup(h, pair("in.txt", str_join(parts, "")))?;
+    let o = accel(h, d, "--provider cpu k.nz inverse --input in.txt");
+    scratch_remove(h, d);
+    check_that(o.code == 2, o.stderr)?;
+    let r = report(o)?;
+    check_that(jstr(r, "result/failure") == "N0401", jv(r, ""))?;
+    check_that(jint(r, "result/index") == 9, jv(r, ""))?;
+    check_that(jstr(r, "reference") == "agrees with the interpreter", jv(r, ""))?;
+    check_that(text_contains(o.stderr, "division by zero at element 9"), o.stderr)
+}
+
+@test
+fn float_kernels_agree_with_the_interpreter_bit_for_bit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let inputs = pair("f.txt", floats(50000, 7));
+    strs_push(inputs, "g.txt");
+    strs_push(inputs, floats(50000, 8));
+    strs_push(inputs, "edge.txt");
+    strs_push(inputs, "0.0 -0.0 inf -inf nan 1e-310 -3.0 0.1 1e300");
+    let d = setup(h, inputs)?;
+    let cases = text_split("poly|--input f.txt|Float64;polyf|--input f.txt|Float32;rem|--input f.txt --input g.txt|Float64;axpy|--input f.txt --input g.txt|Float32;poly|--input edge.txt|Float64;polyf|--input edge.txt|Float32", ";");
+    for case in cases {
+        let f = text_split(case, "|");
+        let kernel = strs_get(f, 0);
+        let mut k = 0;
+        while k < 2 {
+            let scalar = k == 1;
+            let flag = if scalar { " --scalar" } else { "" };
+            let o = accel(h, d, f"--provider cpu k.nz {kernel} --reduce add {strs_get(f, 1)}{flag}");
+            check_that(o.code == 0, f"{kernel}: {o.stderr}")?;
+            let r = report(o)?;
+            check_that(jstr(r, "kernel/element") == strs_get(f, 2), kernel)?;
+            check_that(jstr(r, "reference") == "agrees with the interpreter", f"{kernel} {strs_get(f, 1)}: {jv(r, "")}")?;
+            check_that(jv(r, "provider/vectorised") == if scalar { "false" } else { "true" }, jv(r, ""))?;
+            check_that(json_kind(r, jq(r, "reduce/value")) == "string", jv(r, ""))?;
+            k = k + 1;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_float_kernel_is_one_type_throughout_and_calls_only_what_is_exact(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h, pair("f.txt", "1.0 2.0"))?;
+    let cases = text_split("mixed|it has a value that is not an `Float64` or a `Bool`;wide|`(T) -> T` or `(T, T) -> T`;sine|it calls the built-in `float_sin`, which has no device form", ";");
+    for case in cases {
+        let f = text_split(case, "|");
+        let kernel = strs_get(f, 0);
+        let o = accel(h, d, f"--provider cpu k.nz {kernel} --input f.txt");
+        check_that(o.code == 1, kernel)?;
+        check_that(text_contains(o.stderr, "error[N0394]") && text_contains(o.stderr, strs_get(f, 1)), f"{kernel}: {o.stderr}")?;
+        check_that(o.stdout == "", f"{kernel} reported a run")?;
+    }
+    // Input that is not the kernel's type, refused by its name.
+    scratch_write(h, d, "bad.txt", "1.0 two")?;
+    let o = accel(h, d, "--provider cpu k.nz poly --input bad.txt");
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "is not whitespace-separated `Float64`s"), o.stderr)
+}
+
+/// `auto`, the default, runs the kernel where it can and says where: on the GPU, or — on a host
+/// without OpenCL, such as Linux — on the CPU provider, the reason in the report and on stderr.
+@test
+fn auto_runs_where_it_can_and_says_where(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h, pair("in.txt", "1 2 3 4"))?;
+    let o = accel(h, d, "k.nz square --input in.txt");
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let r = report(o)?;
+    check_that(jstr(r, "reference") == "agrees with the interpreter", jv(r, ""))?;
+    check_that(jint(r, "result/checksum") == 30, jv(r, ""))?;
+    let reason = jstr(r, "provider/reason");
+    check_that(text_starts_with(reason, "auto: "), reason)?;
+    if jstr(r, "provider/name") == "cpu" {
+        check_that(text_contains(o.stderr, "the CPU provider runs the kernel"), "a fallback is never silent")?;
+    } else {
+        check_that(jstr(r, "provider/name") == "opencl", jv(r, ""))?;
+        check_that(reason == "auto: the GPU can run it", reason)?;
+    }
+    if !on_macos(h) {
+        check_that(jstr(r, "provider/name") == "cpu", jv(r, ""))?;
+        check_that(text_contains(reason, "this host has no OpenCL"), reason)?;
+    }
+    ok()
+}
+
+// `on_the_gpu_the_cpu_provider_is_the_second_oracle_and_float64_falls_back` is `#[ignore]`d in
+// Rust "runs on the GPU": it stays Rust (design decision 10).
