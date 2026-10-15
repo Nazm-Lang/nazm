@@ -292,6 +292,33 @@ fields of `nazm doc FILE`'s `nazm.api-doc/2` (`toolchain/frontend-tests/doc-fact
 driver `diagnose` is now a client of the interface (`--text`, `--facts`). Packages' resolution
 and the source root's rule for a directory (`nazm doc DIR`) stay R5's, as D10 says.
 
+**D25 — Core IR is lowered from the checked tree, function by function, and compared so.**
+Slice 5 ports `nazm-core/src/lower.rs` as `compiler/core.nz`, reading the parser's tree and the
+checker's facts through `compiler/facts.nz` (D24) and `sema.nz`'s tables — what the reference's
+lowering reads of its `Resolution`: each binding's slot, type, mutability and declaration (the
+checker's own order, parameters first, as `allocate` numbers them), each name's binding, each
+call site's callee, each literal's type and each field read's field, recorded by span as the
+checker meets them. It prints each function as `nazm-cir/src/print.rs` does, compact, its
+members in the printed order; types by their durable names (`Names::spelled`, `sema.nz`'s
+`ck_durable`), spans as `Names::span` writes them. The constants, the locals made for
+temporaries, the loop numbering, the regions' `owns` and `ends` and every desugaring are the
+reference's, construct by construct.
+
+The comparison (`run.sh core`, `toolchain/frontend-tests/core-ir.py`) is by function: the
+reference's `nazm core-ir FILE` (the compilation as a module, `Entry::Absent`), each function's
+object without its `digest`, against the Nazm lowering's line for the same function — in the
+same order, so the lists of functions must agree too. A function using what the lowering does not
+carry yet is printed as `-` and the reason: it is counted apart, never compared, and every
+function printed is compared whole — so the lowering never agrees by leaving something out. The
+digests (BLAKE3 over `nazm-cir/src/digest.rs`'s semantic encoding, D5) come next, then the
+document's other parts — the module list, the type table (every record and enum instance in the
+reference's interning order, which the checker's interning must then follow), statics, the impl
+table and `derived_hash` — after which the comparison becomes the whole document, byte for byte
+(task 5.1). Construct by construct, the order of the remaining stops: field and variant
+construction (with their positional forms), `match` and its desugarings, generic functions and
+calls with their type arguments, impl methods and trait calls, `for`, `?`, interpolation, bit
+operators and every number type, closures, then the rest by count. `@derive` stays last (D19).
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
@@ -310,4 +337,5 @@ and the source root's rule for a directory (`nazm doc DIR`) stay R5's, as D10 sa
 
 - Whether the coordinator wants the R2 comparisons folded into `selfhost.rs` (contained) or kept as
   a host test under the heap limit (R6).
-- The Core IR digests' encoding is not documented outside `nazm-cir`; slice 5 reads the code.
+- The Core IR digests' encoding is not documented outside `nazm-cir`; slice 5 reads the code
+  (D25: after the function bodies).

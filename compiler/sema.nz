@@ -325,6 +325,15 @@ pub struct Ck {
     // Per function, what its body requires once its module's effects are settled
     // (`inferred_effects`), as a mask like `fneff`'s; -1 for none recorded.
     fnreq: Ints,
+    // What Core IR reads of the bindings and literals (slice 5): each binding's declaration
+    // (absolute; a parameter's name) and whether it is `let mut`; each literal's type, by span.
+    bds: Ints,
+    bde: Ints,
+    bmut: Ints,
+    mlit: Smap,
+    // Each field read, by its name's span: the field (in the pool) and the type it read.
+    mfld: Smap,
+    mfldty: Smap,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -1207,7 +1216,8 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new());
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
+            bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -4944,6 +4954,7 @@ fn check_function(c: Ck, f: Int) -> Int {
             err(c, "N0202", fld(c, p, "span"), cat3("`", pn, "` is listed twice in this parameter list"), "");
         }
         define(c, pn, ty, false, 0 - 1, 0 - 1);
+        declared_at(c, fld(c, p, "name_span"));
         i = i + 1;
     }
     let rt = fld(c, f, "return_type");
@@ -5050,6 +5061,17 @@ fn define(c: Ck, name: Str, ty: Int, mutable: Bool, ds: Int, de: Int) -> Int {
     ints_push(c.bty, ty);
     strs_push(c.bnm, name);
     ints_push(c.bshr, 0);
+    ints_push(c.bds, ds);
+    ints_push(c.bde, de);
+    if mutable { ints_push(c.bmut, 1); } else { ints_push(c.bmut, 0); }
+    0
+}
+
+// Where the binding the last `define` made is declared, for Core IR: a parameter's name, which
+// a diagnostic never points at as a declaration.
+fn declared_at(c: Ck, span: Int) -> Int {
+    ints_set(c.bds, last_binding(c), sps(c, span));
+    ints_set(c.bde, last_binding(c), spe(c, span));
     0
 }
 
@@ -5550,7 +5572,11 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         stop(c, cat3("the expression `", k, "`"));
         return or_int(expected);
     }
-    if k == "Int" || k == "WideInt" { return integer_literal(c, sx_text(c.t, fld(c, e, "value")), fld(c, e, "span"), expected); }
+    if k == "Int" || k == "WideInt" {
+        let lt = integer_literal(c, sx_text(c.t, fld(c, e, "value")), fld(c, e, "span"), expected);
+        sm_put(c.mlit, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), lt);
+        return lt;
+    }
     // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
     if k == "Float" {
         if expected >= 0 && bname_of(c, expected) == "Float32" { return expected; }
@@ -5559,7 +5585,12 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "Bool" { return t_bool(); }
     // A literal is UTF-8 by construction, so it is a `Text` where one is expected (Gate 2).
     if k == "Str" {
-        if expected >= 0 && bname_of(c, expected) == "Text" { return expected; }
+        let ls = fld(c, e, "span");
+        if expected >= 0 && bname_of(c, expected) == "Text" {
+            sm_put(c.mlit, sps(c, ls), spe(c, ls), expected);
+            return expected;
+        }
+        sm_put(c.mlit, sps(c, ls), spe(c, ls), t_str());
         return t_str();
     }
     if k == "BitNot" { return check_complement(c, e, expected); }
@@ -8273,7 +8304,10 @@ fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
         sec_at(c, ints_get(c.rns, r), ints_get(c.rne, r), "declared here");
         return 0 - 1;
     }
-    field_ty_in(c, base, f)
+    let ft = field_ty_in(c, base, f);
+    sm_put(c.mfld, sps(c, name_span), spe(c, name_span), f);
+    sm_put(c.mfldty, sps(c, name_span), spe(c, name_span), ft);
+    ft
 }
 
 // --- matching (`check_match`, `nazm-core/src/check/pattern.rs`) ---------------------------------
@@ -13787,3 +13821,129 @@ pub fn ck_none(t: Tree) -> Ck {
     stop(c, "nothing, as nothing was loaded");
     c
 }
+
+// --- what Core IR reads of the checker (slice 5; design D25) ----------------------------------
+
+pub fn ck_t_int() -> Int { t_int() }
+pub fn ck_t_bool() -> Int { t_bool() }
+pub fn ck_t_str() -> Int { t_str() }
+
+// The binding the name written at `s..e` (absolute) is, or -1.
+pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }
+pub fn ck_binding_count(c: Ck) -> Int { ints_len(c.bfn) }
+pub fn ck_binding_fn(c: Ck, b: Int) -> Int { ints_get(c.bfn, b) }
+pub fn ck_binding_ty(c: Ck, b: Int) -> Int { ints_get(c.bty, b) }
+pub fn ck_binding_name(c: Ck, b: Int) -> Str { strs_get(c.bnm, b) }
+pub fn ck_binding_mutable(c: Ck, b: Int) -> Bool { ints_get(c.bmut, b) == 1 }
+// Whether a closure shares it (R1b, L10): Core IR keeps it in a cell.
+pub fn ck_binding_shared(c: Ck, b: Int) -> Bool { ints_get(c.bshr, b) == 1 }
+// Where it is declared (absolute), or -1.
+pub fn ck_binding_start(c: Ck, b: Int) -> Int { ints_get(c.bds, b) }
+pub fn ck_binding_end(c: Ck, b: Int) -> Int { ints_get(c.bde, b) }
+
+// The type the literal at `s..e` (absolute) was checked as, or -1.
+pub fn ck_literal_ty(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mlit, s, e) }
+
+// The call site whose callee is written at `s..e` (absolute), or -1; what it reached: one of the
+// compilation's functions, a built-in, or a value of function type (each -1 where not).
+pub fn ck_site_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.msite, s, e) }
+pub fn ck_site_fn(c: Ck, site: Int) -> Int { ints_get(c.suser, site) }
+pub fn ck_site_builtin(c: Ck, site: Int) -> Int { ints_get(c.sbuiltin, site) }
+pub fn ck_site_indirect(c: Ck, site: Int) -> Int { ints_get(c.sind, site) }
+
+pub fn ck_builtin_name(c: Ck, b: Int) -> Str { strs_get(c.bname, b) }
+pub fn ck_builtin_generic(c: Ck, b: Int) -> Bool { ints_get(c.bgen, b) > 0 }
+// Its result type, where it is not generic.
+pub fn ck_builtin_ret(c: Ck, b: Int) -> Int { ints_get(c.bret, b) }
+
+pub fn ck_fn_param_count(c: Ck, i: Int) -> Int { ints_get(c.fnpc, i) }
+pub fn ck_fn_param_ty(c: Ck, i: Int, k: Int) -> Int { ints_get(c.ptys, ints_get(c.fnpf, i) + k) }
+pub fn ck_fn_ret_ty(c: Ck, i: Int) -> Int { ints_get(c.fnret, i) }
+pub fn ck_fn_type_params(c: Ck, i: Int) -> Int { ints_get(c.fntpc, i) }
+pub fn ck_fn_effect_param(c: Ck, i: Int) -> Bool { ints_len(kids(c, ints_get(c.fnnode, i), "effect_params")) > 0 }
+pub fn ck_fn_is_foreign(c: Ck, i: Int) -> Bool { ints_get(c.fnfor, i) == 1 }
+
+pub fn ck_is_cap(c: Ck, t: Int) -> Bool { is_cap(c, t) }
+// A capability's place in `CapabilityKind::ALL`, which is the order an authority set lists them.
+pub fn ck_cap_order(c: Ck, t: Int) -> Int { cap_bit(bname_of(c, t)) }
+pub fn ck_is_builtin(c: Ck, t: Int, name: Str) -> Bool { t >= 0 && tag(c, t) == tag_builtin() && strs_get(c.tyname, t) == name }
+
+// A type as Core IR names it, spelled (`Names::ty` of `Names::spelled`): a built-in by its name, a
+// record or enum by its definition's key — `idents` gives each module's identity — and its
+// arguments, a holder by its element, a type parameter by its position (`$0` a function's, `$?0`
+// a record's, an enum's or a built-in's, `$Self` a trait's), a function and an array spelled out.
+pub fn ck_durable(c: Ck, t: Int, idents: Strs) -> Str {
+    let g = tag(c, t);
+    if g == tag_builtin() {
+        let n = strs_get(c.tyname, t);
+        if n == "Ints" { return "Vec[Int]"; }
+        if n == "Strs" { return "Vec[Str]"; }
+        return n;
+    }
+    if g == tag_vec() { return cat3("Vec[", ck_durable(c, targ(c, t, 0), idents), "]"); }
+    if g == tag_box() { return cat3("Box[", ck_durable(c, targ(c, t, 0), idents), "]"); }
+    if g == tag_cell() { return cat3("Cell[", ck_durable(c, targ(c, t, 0), idents), "]"); }
+    if g == tag_chain() { return cat3("Chain[", ck_durable(c, targ(c, t, 0), idents), "]"); }
+    if g == tag_chan() { return cat3("Chan[", ck_durable(c, targ(c, t, 0), idents), "]"); }
+    if g == tag_array() { return cat5("[", ck_durable(c, array_elem(c, t), idents), "; ", int_to_str(ints_get(c.tya, t)), "]"); }
+    if g == tag_param() {
+        let owner = ints_get(c.tya, t);
+        if owner == own_fn() { return str_concat("$", int_to_str(ints_get(c.tyc, t))); }
+        if owner == own_trait() { return "$Self"; }
+        return str_concat("$?", int_to_str(ints_get(c.tyc, t)));
+    }
+    if g == tag_record() || g == tag_enum() {
+        let mut head = "";
+        if g == tag_record() {
+            head = cat4(strs_get(idents, ints_get(c.rmod, ta(c, t))), "::record ", strs_get(c.rname, ta(c, t)), "");
+        } else {
+            head = cat4(strs_get(idents, ints_get(c.emod, ta(c, t))), "::enum ", strs_get(c.ename, ta(c, t)), "");
+        }
+        if targc(c, t) == 0 { return head; }
+        let parts = strs_new();
+        let mut i = 0;
+        while i < targc(c, t) {
+            strs_push(parts, ck_durable(c, targ(c, t, i), idents));
+            i = i + 1;
+        }
+        return cat4(head, "[", str_join(parts, ", "), "]");
+    }
+    if g == tag_fn() {
+        let parts = strs_new();
+        let mut i = 0;
+        while i < fn_arity(c, t) {
+            strs_push(parts, ck_durable(c, targ(c, t, i), idents));
+            i = i + 1;
+        }
+        let names = strs_new();
+        let mut e = 0;
+        while e < 3 {
+            if has_bit(ta(c, t), e) { strs_push(names, effect_text(e, "*")); }
+            e = e + 1;
+        }
+        if has_bit(ta(c, t), 3) { strs_push(names, "$effects"); }
+        let mut effects = "";
+        if strs_len(names) > 0 { effects = cat3(" ! { ", str_join(names, ", "), " }"); }
+        return cat5("fn(", str_join(parts, ", "), ") -> ", ck_durable(c, fn_ret(c, t), idents), effects);
+    }
+    "?"
+}
+
+// The field read whose name is written at `s..e` (absolute): its place in its record, its name and
+// the type it read; -1 (and "") where none was read there.
+pub fn ck_field_index(c: Ck, s: Int, e: Int) -> Int {
+    let f = sm_get(c.mfld, s, e);
+    if f < 0 { return 0 - 1; }
+    let mut r = 0;
+    while r < strs_len(c.rname) {
+        if f >= ints_get(c.rff, r) && f < ints_get(c.rff, r) + ints_get(c.rfc, r) { return f - ints_get(c.rff, r); }
+        r = r + 1;
+    }
+    0 - 1
+}
+pub fn ck_field_name(c: Ck, s: Int, e: Int) -> Str {
+    let f = sm_get(c.mfld, s, e);
+    if f < 0 { return ""; }
+    strs_get(c.fname, f)
+}
+pub fn ck_field_ty(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mfldty, s, e) }

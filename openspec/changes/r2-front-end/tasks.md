@@ -293,7 +293,20 @@
 
 ## 5. Core IR
 
-- [ ] 5.1 `nazm.core-ir/2` identical with `nazm core-ir` on every accepted input (D5)
+- [ ] 5.1 `nazm.core-ir/3` identical with `nazm core-ir` on every accepted input (D5, D25)
+- [ ] 5.1a The lowering's first constructs (D25, `compiler/core.nz`), compared function by function
+      without digests (`run.sh core`): functions with a body and no type or effect parameters,
+      contracts or attributes but `@deprecated`; `let` of a name, assignment to a binding,
+      `while`, `return`, `break`, `continue`, expression statements, `if` and blocks; literals of
+      `Int`, `Bool` and `Str`, bindings, `-`, `!`, `&&`, `||`, arithmetic and comparisons of
+      `Int`, `Bool` and `Str`, field reads, calls of the compilation's functions and of the
+      built-ins that are not generic. Every other construct stops the function, named.
+      `run.sh core`: 2,984 inputs agree, 0 differ; of 41,353 functions the lowering carries
+      22,595, all agree (the most frequent stops: a variant, a construction, a generic function,
+      an impl's method, `match`)
+- [ ] 5.1b The digests (`digest.rs`: the semantic encoding, BLAKE3)
+- [ ] 5.1c The document's other parts: modules, the type table in the reference's order, statics,
+      the impl table, `derived_hash`; then the whole document compared
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

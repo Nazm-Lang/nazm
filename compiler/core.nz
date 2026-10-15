@@ -1,0 +1,878 @@
+// Core IR from the checked program (R2, slice 5; `openspec/changes/r2-front-end/design.md` D25): a
+// port of `nazm-core/src/lower.rs`, function by function, printed as `nazm.core-ir/3` prints each
+// function (`nazm-cir/src/print.rs`) — but its digest, which waits for the semantic encoding.
+//
+// It knows where it stops. A function using anything this lowering does not carry yet is not
+// printed: `cr_function` says what it stopped at instead, and the comparison (`run.sh core`)
+// counts it apart, so every function it does print is compared whole. Carried today: functions
+// with a body, no type or effect parameters, no contracts and no attributes but `@deprecated`;
+// `let` of a name, assignment to a binding, `while`, `return`, `break`, `continue`, an
+// expression as a statement, `if` and blocks; literals of `Int`, `Bool` and `Str`, bindings, `-`,
+// `!`, `&&`, `||`, the arithmetic operators and comparisons of `Int`, `Bool` and `Str`, field
+// reads, and calls of the compilation's functions and of the built-ins that are not generic.
+
+use "syntax.nz";
+use "diag.nz";
+use "sema.nz";
+use "facts.nz";
+
+// One function's lowering (`Lower`).
+struct Lo {
+    f: Facts,
+    c: Ck,
+    t: Tree,
+    // The function, its module and that module's base offset.
+    st: Ints,
+    stop: Strs,
+    // Its locals: the binding each is (-1 for a temporary), name, type, origin and where.
+    lb: Ints,
+    lname: Strs,
+    lty: Ints,
+    lorig: Strs,
+    lat: Strs,
+    // Its constants, by value: each one's key, type and printed value.
+    ckey: Strs,
+    cty: Strs,
+    cval: Strs,
+    // The loops whose bodies enclose the point being lowered, innermost last.
+    targets: Ints,
+    // For each open region, the locals bound directly in it: a run of `owned` from `ofirst`.
+    ofirst: Ints,
+    owned: Ints,
+    // What the last expression or block lowered gave: its type (-1 where it never completes) and
+    // whether it ends by transferring (blocks and statements).
+    last: Ints,
+    // Every module's identity, for the durable names.
+    idents: Strs,
+}
+
+fn co_nl() -> Str { str_from_byte(10) }
+
+fn co_s_fn() -> Int { 0 }
+fn co_s_module() -> Int { 1 }
+fn co_s_base() -> Int { 2 }
+fn co_s_loops() -> Int { 3 }
+
+fn co_g(lo: Lo, slot: Int) -> Int { ints_get(lo.st, slot) }
+fn co_sv(lo: Lo, slot: Int, v: Int) -> Int {
+    ints_set(lo.st, slot, v);
+    0
+}
+
+fn co_halt(lo: Lo, why: Str) -> Int {
+    if strs_len(lo.stop) == 0 { strs_push(lo.stop, why); }
+    0
+}
+fn co_halted(lo: Lo) -> Bool { strs_len(lo.stop) > 0 }
+
+// The type and ending of what was lowered last.
+fn co_set_last(lo: Lo, ty: Int, transfers: Bool) -> Int {
+    ints_set(lo.last, 0, ty);
+    if transfers { ints_set(lo.last, 1, 1); } else { ints_set(lo.last, 1, 0); }
+    0
+}
+fn co_last_ty(lo: Lo) -> Int { ints_get(lo.last, 0) }
+fn co_last_transfers(lo: Lo) -> Bool { ints_get(lo.last, 1) == 1 }
+
+// --- the document's functions ----------------------------------------------------------------
+
+// Every function of the compilation, in the checker's order, one line each: its identity, a tab,
+// and either its `nazm.core-ir/3` object without `digest` (compact, its members in the printed
+// order) or `-` and what the lowering stopped at.
+pub fn cr_functions(f: Facts) -> Str {
+    let c = fx_checker(f);
+    let out = strs_new();
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        strs_push(out, fx_fn_identity(f, i));
+        strs_push(out, str_from_byte(9));
+        strs_push(out, cr_function(f, i));
+        strs_push(out, co_nl());
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+// Function `i`'s object, or `-` and why it is not carried.
+pub fn cr_function(f: Facts, i: Int) -> Str {
+    let c = fx_checker(f);
+    let idents = strs_new();
+    let mut m = 0;
+    while m < fx_modules(f) {
+        strs_push(idents, fx_module_identity(f, m));
+        m = m + 1;
+    }
+    let lo = Lo(f: f, c: c, t: fx_tree(f), st: ints_new(), stop: strs_new(), lb: ints_new(), lname: strs_new(), lty: ints_new(), lorig: strs_new(),
+            lat: strs_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
+            last: ints_new(), idents: idents);
+    ints_push(lo.st, i);
+    ints_push(lo.st, ck_fn_module(c, i));
+    ints_push(lo.st, fx_module_base(f, ck_fn_module(c, i)));
+    ints_push(lo.st, 0);
+    ints_push(lo.last, 0 - 1);
+    ints_push(lo.last, 0);
+    let text = co_function(lo, i);
+    if co_halted(lo) { return str_concat("- ", strs_get(lo.stop, 0)); }
+    text
+}
+
+fn co_function(lo: Lo, i: Int) -> Str {
+    let c = lo.c;
+    let t = lo.t;
+    if ck_fn_closure(c, i) { return co_stopped(lo, "a closure"); }
+    if ck_fn_method(c, i) { return co_stopped(lo, "an impl's method"); }
+    if ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
+    if ck_fn_type_params(c, i) > 0 { return co_stopped(lo, "a generic function"); }
+    if ck_fn_effect_param(c, i) { return co_stopped(lo, "an effect parameter"); }
+    let node = ck_fn_node(c, i);
+    if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
+    if ints_len(sx_items(t, sx_field(t, node, "contracts"))) > 0 { return co_stopped(lo, "a contract"); }
+    let attrs = sx_items(t, sx_field(t, node, "attrs"));
+    let mut k = 0;
+    while k < ints_len(attrs) {
+        if sx_name(t, ints_get(attrs, k), "name") != "deprecated" { return co_stopped(lo, str_concat("the attribute @", sx_name(t, ints_get(attrs, k), "name"))); }
+        k = k + 1;
+    }
+    if ck_fn_required(c, i) < 0 { return co_stopped(lo, "a function whose effects were not settled"); }
+    // Its locals are its bindings, parameters first, in the order the checker made them.
+    let mut b = 0;
+    let mut n = 0;
+    while b < ck_binding_count(c) {
+        if ck_binding_fn(c, b) == i {
+            if ck_binding_shared(c, b) { co_halt(lo, "a binding a closure shares"); }
+            if ck_binding_start(c, b) < 0 { co_halt(lo, "a binding declared nowhere"); }
+            ints_push(lo.lb, b);
+            strs_push(lo.lname, ck_binding_name(c, b));
+            ints_push(lo.lty, ck_binding_ty(c, b));
+            let mut origin = "let";
+            if n < ck_fn_param_count(c, i) { origin = "param"; } else { if ck_binding_mutable(c, b) { origin = "let mut"; } }
+            strs_push(lo.lorig, origin);
+            strs_push(lo.lat, co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
+            n = n + 1;
+        }
+        b = b + 1;
+    }
+    let body = co_value_block(lo, sx_unwrap(t, sx_field(t, node, "body")));
+    if co_halted(lo) { return ""; }
+    let f = lo.f;
+    let declared = ck_fn_declared(c, i);
+    let required = ck_fn_required(c, i);
+    let mut published = required;
+    if declared >= 0 { published = declared; }
+    let out = strs_new();
+    strs_push(out, co_field_first("def", json_str(fx_fn_identity(f, i))));
+    strs_push(out, co_field("module", json_str(fx_module_identity(f, co_g(lo, co_s_module())))));
+    strs_push(out, co_field("name", json_str(ck_fn_name(c, i))));
+    strs_push(out, co_field("type_params", "0"));
+    strs_push(out, co_field("params", int_to_str(ck_fn_param_count(c, i))));
+    strs_push(out, co_field("ret", json_str(co_durable(lo, ck_fn_ret_ty(c, i)))));
+    let effects = strs_new();
+    if declared < 0 { strs_push(effects, co_field_first("declared", "null")); } else { strs_push(effects, co_field_first("declared", co_effect_list(declared))); }
+    strs_push(effects, co_field("required", co_effect_list(required)));
+    strs_push(effects, co_field("published", co_effect_list(published)));
+    strs_push(effects, co_field("pure", co_json_bool(published == 0)));
+    strs_push(out, co_field("effects", co_object(effects)));
+    strs_push(out, co_field("authority", co_authority(lo, i)));
+    strs_push(out, co_field("locals", co_locals(lo)));
+    strs_push(out, co_field("consts", co_consts(lo)));
+    strs_push(out, co_field("loops", int_to_str(co_g(lo, co_s_loops()))));
+    strs_push(out, co_field("pub", co_json_bool(ck_fn_public(c, i))));
+    strs_push(out, co_field("closure", "false"));
+    strs_push(out, co_field("captures", "[]"));
+    let attributes = strs_new();
+    strs_push(attributes, co_field_first("export", co_json_or_null(ck_fn_export(c, i))));
+    strs_push(attributes, co_field("section", "null"));
+    strs_push(attributes, co_field("interrupt", "null"));
+    strs_push(attributes, co_field("task", "null"));
+    strs_push(attributes, co_field("on_failure", "false"));
+    strs_push(out, co_field("attributes", co_object(attributes)));
+    strs_push(out, co_field("at", json_str(co_tree_span(lo, sx_field(t, node, "span")))));
+    strs_push(out, co_field("body", body));
+    co_object(out)
+}
+
+fn co_stopped(lo: Lo, why: Str) -> Str {
+    co_halt(lo, why);
+    ""
+}
+
+// The capabilities it is handed, each kind once, in `CapabilityKind::ALL`'s order.
+fn co_authority(lo: Lo, i: Int) -> Str {
+    let c = lo.c;
+    let orders = ints_new();
+    let names = strs_new();
+    let mut k = 0;
+    while k < ck_fn_param_count(c, i) {
+        let pt = ck_fn_param_ty(c, i, k);
+        if ck_is_cap(c, pt) {
+            let o = ck_cap_order(c, pt);
+            let mut at = 0;
+            while at < ints_len(orders) && ints_get(orders, at) < o { at = at + 1; }
+            let present = at < ints_len(orders) && ints_get(orders, at) == o;
+            if present == false {
+                ints_push(orders, 0);
+                strs_push(names, "");
+                let mut j = ints_len(orders) - 1;
+                while j > at {
+                    ints_set(orders, j, ints_get(orders, j - 1));
+                    strs_set(names, j, strs_get(names, j - 1));
+                    j = j - 1;
+                }
+                ints_set(orders, at, o);
+                strs_set(names, at, json_str(co_durable(lo, pt)));
+            }
+        }
+        k = k + 1;
+    }
+    co_list(names)
+}
+
+fn co_locals(lo: Lo) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(lo.lname) {
+        let o = strs_new();
+        strs_push(o, co_field_first("id", int_to_str(i)));
+        strs_push(o, co_field("name", json_str(strs_get(lo.lname, i))));
+        strs_push(o, co_field("type", json_str(co_durable(lo, ints_get(lo.lty, i)))));
+        strs_push(o, co_field("origin", json_str(strs_get(lo.lorig, i))));
+        strs_push(o, co_field("at", json_str(strs_get(lo.lat, i))));
+        strs_push(out, co_object(o));
+        i = i + 1;
+    }
+    co_list(out)
+}
+
+fn co_consts(lo: Lo) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(lo.ckey) {
+        let o = strs_new();
+        strs_push(o, co_field_first("id", int_to_str(i)));
+        strs_push(o, co_field("type", json_str(strs_get(lo.cty, i))));
+        strs_push(o, co_field("value", strs_get(lo.cval, i)));
+        strs_push(out, co_object(o));
+        i = i + 1;
+    }
+    co_list(out)
+}
+
+// --- identities ----------------------------------------------------------------------------------
+
+fn co_durable(lo: Lo, t: Int) -> Str {
+    if t < 0 { return "never"; }
+    let d = ck_durable(lo.c, t, lo.idents);
+    if d == "?" { co_halt(lo, "a type Core IR does not name yet"); }
+    d
+}
+
+// A span of the function's module as `Names::span` writes it: the module and the byte range.
+fn co_span_text(lo: Lo, s: Int, e: Int) -> Str {
+    let base = co_g(lo, co_s_base());
+    str_concat(str_concat(fx_module_identity(lo.f, co_g(lo, co_s_module())), ":"), str_concat(str_concat(int_to_str(s - base), ".."), int_to_str(e - base)))
+}
+
+fn co_tree_span(lo: Lo, span: Int) -> Str {
+    let base = co_g(lo, co_s_base());
+    co_span_text(lo, sx_s(lo.t, span) + base, sx_e(lo.t, span) + base)
+}
+
+fn co_abs_s(lo: Lo, span: Int) -> Int { sx_s(lo.t, span) + co_g(lo, co_s_base()) }
+fn co_abs_e(lo: Lo, span: Int) -> Int { sx_e(lo.t, span) + co_g(lo, co_s_base()) }
+
+// The local the name written at `span` is, or -1 having stopped.
+fn co_local_at(lo: Lo, span: Int) -> Int {
+    let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+    if b < 0 {
+        co_halt(lo, "a name that is no binding");
+        return 0;
+    }
+    let l = co_index_of(lo.lb, b);
+    if l < 0 {
+        co_halt(lo, "a binding of another function");
+        return 0;
+    }
+    l
+}
+
+fn co_index_of(xs: Ints, v: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == v { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// The constant of this type and value, made once (`constant`).
+fn co_constant(lo: Lo, ty: Str, value: Str) -> Int {
+    let key = str_concat(str_concat(ty, ":"), value);
+    let mut i = 0;
+    while i < strs_len(lo.ckey) {
+        if strs_get(lo.ckey, i) == key { return i; }
+        i = i + 1;
+    }
+    strs_push(lo.ckey, key);
+    strs_push(lo.cty, ty);
+    strs_push(lo.cval, value);
+    strs_len(lo.ckey) - 1
+}
+
+fn co_open_region(lo: Lo) -> Int {
+    ints_push(lo.ofirst, ints_len(lo.owned));
+    0
+}
+
+// The locals bound directly in the region closed, printed.
+fn co_close_region(lo: Lo) -> Str {
+    let first = ints_pop(lo.ofirst);
+    let out = strs_new();
+    let mut i = first;
+    while i < ints_len(lo.owned) {
+        strs_push(out, int_to_str(ints_get(lo.owned, i)));
+        i = i + 1;
+    }
+    while ints_len(lo.owned) > first { ints_pop(lo.owned); }
+    co_list(out)
+}
+
+fn co_bind(lo: Lo, l: Int) -> Int {
+    if ints_len(lo.ofirst) > 0 { ints_push(lo.owned, l); }
+    0
+}
+
+// --- regions ---------------------------------------------------------------------------------------
+
+// A region whose value is wanted (`value_block`): its statements, then its tail unless they
+// transfer.
+fn co_value_block(lo: Lo, b: Int) -> Str {
+    let t = lo.t;
+    co_open_region(lo);
+    let stmts = strs_new();
+    let transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
+    let mut tail = "null";
+    let mut ty = 0 - 1;
+    if transfers == false {
+        if sx_is_some(t, sx_field(t, b, "tail")) {
+            tail = co_expr(lo, sx_unwrap(t, sx_field(t, b, "tail")));
+            ty = co_last_ty(lo);
+        } else {
+            co_halt(lo, "a block whose value is wanted with no final expression");
+        }
+    }
+    let owns = co_close_region(lo);
+    co_set_last(lo, ty, transfers);
+    co_block_json(lo, transfers, owns, stmts, tail, sx_field(t, b, "span"))
+}
+
+// A region whose value is not wanted (`statement_block`): its tail, if written, a statement.
+fn co_statement_block(lo: Lo, b: Int) -> Str {
+    let t = lo.t;
+    co_open_region(lo);
+    let stmts = strs_new();
+    let mut transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
+    if transfers == false && sx_is_some(t, sx_field(t, b, "tail")) {
+        strs_push(stmts, co_effect(lo, sx_unwrap(t, sx_field(t, b, "tail"))));
+        transfers = co_last_transfers(lo);
+    }
+    let owns = co_close_region(lo);
+    co_set_last(lo, 0 - 1, transfers);
+    co_block_json(lo, transfers, owns, stmts, "null", sx_field(t, b, "span"))
+}
+
+fn co_block_json(lo: Lo, transfers: Bool, owns: Str, stmts: Strs, tail: Str, span: Int) -> Str {
+    let o = strs_new();
+    strs_push(o, co_field_first("ends", co_ends(transfers)));
+    strs_push(o, co_field("owns", owns));
+    strs_push(o, co_field("stmts", co_list(stmts)));
+    strs_push(o, co_field("tail", tail));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+    co_object(o)
+}
+
+fn co_ends(transfers: Bool) -> Str {
+    if transfers { return json_str("transfers"); }
+    json_str("falls-through")
+}
+
+// The statements, each lowered until one transfers; whether one did.
+fn co_statements(lo: Lo, list: Ints, out: Strs) -> Bool {
+    let mut i = 0;
+    while i < ints_len(list) {
+        strs_push(out, co_stmt(lo, ints_get(list, i)));
+        if co_last_transfers(lo) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// --- statements --------------------------------------------------------------------------------
+
+fn co_stmt(lo: Lo, s: Int) -> Str {
+    let t = lo.t;
+    let k = sx_text(t, s);
+    if k == "Break" || k == "Continue" {
+        if ints_len(lo.targets) == 0 { return co_stopped_stmt(lo, "a `break` outside a loop body"); }
+        let o = strs_new();
+        if k == "Break" { strs_push(o, co_op_first("break")); } else { strs_push(o, co_op_first("continue")); }
+        strs_push(o, co_field("loop", int_to_str(ints_get(lo.targets, ints_len(lo.targets) - 1))));
+        strs_push(o, co_field("ends", co_ends(true)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, s, "span")))));
+        co_set_last(lo, 0 - 1, true);
+        return co_object(o);
+    }
+    if sx_kind(t, s) != tk_tuple() { return co_stopped_stmt(lo, str_concat("the statement ", k)); }
+    let n = sx_kid(t, s, 0);
+    if k == "Expr" { return co_effect(lo, n); }
+    if k == "Let" {
+        if co_some_field(lo, n, "pattern") { return co_stopped_stmt(lo, "a `let` of a pattern"); }
+        let value = co_expr(lo, sx_field(t, n, "value"));
+        let local = co_local_at(lo, sx_field(t, n, "name_span"));
+        co_bind(lo, local);
+        let o = strs_new();
+        strs_push(o, co_op_first("let"));
+        strs_push(o, co_field("local", int_to_str(local)));
+        strs_push(o, co_field("value", value));
+        strs_push(o, co_field("ends", co_ends(false)));
+        co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
+    if k == "Assign" {
+        let place = sx_field(t, n, "place");
+        if ints_len(sx_items(t, sx_field(t, place, "path"))) > 0 { return co_stopped_stmt(lo, "an assignment to a field or an element"); }
+        let value = co_expr(lo, sx_field(t, n, "value"));
+        let local = co_local_at(lo, sx_field(t, place, "name_span"));
+        if co_appends(lo, local, sx_field(t, n, "value")) { return co_stopped_stmt(lo, "an append to a string"); }
+        let o = strs_new();
+        strs_push(o, co_op_first("assign"));
+        strs_push(o, co_field("local", int_to_str(local)));
+        strs_push(o, co_field("path", "[]"));
+        strs_push(o, co_field("value", value));
+        strs_push(o, co_field("ends", co_ends(false)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+        co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
+    if k == "While" {
+        // Numbered where the `while` is; its condition is outside its own target.
+        let id = co_g(lo, co_s_loops());
+        co_sv(lo, co_s_loops(), id + 1);
+        let cond = co_expr(lo, sx_field(t, n, "cond"));
+        ints_push(lo.targets, id);
+        let body = co_statement_block(lo, sx_field(t, n, "body"));
+        ints_pop(lo.targets);
+        let o = strs_new();
+        strs_push(o, co_op_first("loop"));
+        strs_push(o, co_field("loop", int_to_str(id)));
+        strs_push(o, co_field("cond", cond));
+        strs_push(o, co_field("body", body));
+        strs_push(o, co_field("ends", co_ends(false)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+        co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
+    if k == "Return" {
+        let value = co_expr(lo, sx_field(t, n, "value"));
+        let o = strs_new();
+        strs_push(o, co_op_first("return"));
+        strs_push(o, co_field("value", value));
+        strs_push(o, co_field("ends", co_ends(true)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+        co_set_last(lo, 0 - 1, true);
+        return co_object(o);
+    }
+    co_stopped_stmt(lo, str_concat("the statement ", k))
+}
+
+fn co_stopped_stmt(lo: Lo, why: Str) -> Str {
+    co_halt(lo, why);
+    co_set_last(lo, 0 - 1, false);
+    ""
+}
+
+fn co_some_field(lo: Lo, n: Int, name: Str) -> Bool {
+    let f = sx_field(lo.t, n, name);
+    if f < 0 { return false; }
+    sx_is_some(lo.t, f)
+}
+
+// Whether `value` is `str_concat(x, t)`, or `x + t` on strings, with `x` local `local` (R1b, D2).
+fn co_appends(lo: Lo, local: Int, value: Int) -> Bool {
+    let t = lo.t;
+    let k = sx_text(t, value);
+    // `s + t` on strings is `str_concat(s, t)`, whatever the left side.
+    if k == "Binary" {
+        if sx_text(t, sx_field(t, value, "op")) == "Add" && co_strings(lo, sx_field(t, value, "lhs")) { return true; }
+    }
+    if k == "Call" {
+        let cs = sx_field(t, value, "callee_span");
+        let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+        if site >= 0 {
+            if ck_site_builtin(lo.c, site) >= 0 {
+                if ck_builtin_name(lo.c, ck_site_builtin(lo.c, site)) == "str_concat" { return true; }
+            }
+        }
+    }
+    false
+}
+
+// Whether `e` is a binding of type `Str` (which `+` joins), or anything this lowering does not
+// type itself — conservatively, so an unknown left side never passes for an `Int`.
+fn co_strings(lo: Lo, e: Int) -> Bool {
+    let t = lo.t;
+    if sx_text(t, e) == "Var" {
+        let span = sx_field(t, e, "span");
+        let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if b < 0 { return true; }
+        return ck_binding_ty(lo.c, b) == ck_t_str();
+    }
+    if sx_text(t, e) == "Int" || sx_text(t, e) == "Binary" || sx_text(t, e) == "Neg" { return false; }
+    true
+}
+
+// An expression where no value is wanted (`effect`).
+fn co_effect(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let k = sx_text(t, e);
+    if k == "If" {
+        let cond = co_expr(lo, sx_field(t, e, "cond"));
+        let then = co_statement_block(lo, sx_field(t, e, "then_block"));
+        let then_transfers = co_last_transfers(lo);
+        let mut otherwise = "null";
+        let mut transfers = false;
+        if sx_is_some(t, sx_field(t, e, "else_block")) {
+            otherwise = co_statement_block(lo, sx_unwrap(t, sx_field(t, e, "else_block")));
+            transfers = then_transfers && co_last_transfers(lo);
+        }
+        let o = strs_new();
+        strs_push(o, co_op_first("if"));
+        strs_push(o, co_field("cond", cond));
+        strs_push(o, co_field("then", then));
+        strs_push(o, co_field("else", otherwise));
+        strs_push(o, co_field("ends", co_ends(transfers)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, e, "span")))));
+        co_set_last(lo, 0 - 1, transfers);
+        return co_object(o);
+    }
+    if k == "Match" { return co_stopped_stmt(lo, "a `match`"); }
+    if sx_kind(t, e) == tk_tuple() && k == "Block" {
+        let body = co_statement_block(lo, sx_kid(t, e, 0));
+        let transfers = co_last_transfers(lo);
+        let o = strs_new();
+        strs_push(o, co_op_first("block"));
+        strs_push(o, co_field("body", body));
+        strs_push(o, co_field("ends", co_ends(transfers)));
+        co_set_last(lo, 0 - 1, transfers);
+        return co_object(o);
+    }
+    let value = co_expr(lo, e);
+    // `exit_with` ends the process: the statement transfers.
+    let exits = sx_text(t, e) == "Call" && co_ends_process(lo, e);
+    let o = strs_new();
+    strs_push(o, co_op_first("eval"));
+    strs_push(o, co_field("value", value));
+    strs_push(o, co_field("ends", co_ends(exits)));
+    co_set_last(lo, 0 - 1, exits);
+    co_object(o)
+}
+
+fn co_ends_process(lo: Lo, e: Int) -> Bool {
+    let cs = sx_field(lo.t, e, "callee_span");
+    let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+    if site < 0 { return false; }
+    if ck_site_builtin(lo.c, site) < 0 { return false; }
+    ck_builtin_name(lo.c, ck_site_builtin(lo.c, site)) == "exit_with"
+}
+
+// --- values --------------------------------------------------------------------------------------
+
+fn co_expr(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let k = sx_text(t, e);
+    if sx_kind(t, e) == tk_tuple() {
+        if k == "Block" {
+            let b = sx_kid(t, e, 0);
+            let body = co_value_block(lo, b);
+            let ty = co_last_ty(lo);
+            return co_node(lo, "block", co_field_first("body", body), ty, sx_field(t, b, "span"));
+        }
+        return co_stopped(lo, str_concat("the expression ", k));
+    }
+    let span = sx_field(t, e, "span");
+    if k == "Int" {
+        let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if lt != ck_t_int() { return co_stopped(lo, "a literal of a type other than `Int`"); }
+        let id = co_constant(lo, "Int", sx_text(t, sx_field(t, e, "value")));
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_int(), span);
+    }
+    if k == "Bool" {
+        let id = co_constant(lo, "Bool", sx_text(t, sx_field(t, e, "value")));
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_bool(), span);
+    }
+    if k == "Str" {
+        let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if lt != ck_t_str() { return co_stopped(lo, "a string literal of a type other than `Str`"); }
+        let v = sx_text(t, sx_field(t, e, "value"));
+        if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
+        let id = co_constant(lo, "Str", json_str(v));
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
+    }
+    if k == "Var" {
+        let l = co_local_at(lo, span);
+        if co_halted(lo) { return ""; }
+        return co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span);
+    }
+    if k == "Neg" {
+        let operand = co_expr(lo, sx_field(t, e, "operand"));
+        let mut ty = co_last_ty(lo);
+        if ty < 0 { ty = ck_t_int(); }
+        return co_node(lo, "neg", co_field_first("operand", operand), ty, sx_field(t, e, "op_span"));
+    }
+    if k == "Not" {
+        let operand = co_expr(lo, sx_field(t, e, "operand"));
+        let at = sx_field(t, e, "op_span");
+        let no = co_boolean(lo, "false", at);
+        let yes = co_boolean(lo, "true", at);
+        return co_conditional(lo, operand, no, yes, ck_t_bool(), at);
+    }
+    if k == "Binary" { return co_binary(lo, e); }
+    // A record's field, read (`ExprKind::Field`), at its name.
+    if k == "Field" {
+        let ns = sx_field(t, e, "name_span");
+        let index = ck_field_index(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+        if index < 0 { return co_stopped(lo, "a field read the checker did not record"); }
+        let base = co_expr(lo, sx_field(t, e, "base"));
+        let fields = strs_new();
+        strs_push(fields, co_field_first("field", int_to_str(index)));
+        strs_push(fields, co_field("name", json_str(ck_field_name(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)))));
+        strs_push(fields, co_field("base", base));
+        return co_node(lo, "field", str_join(fields, ""), ck_field_ty(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)), ns);
+    }
+    if k == "Call" { return co_call(lo, e); }
+    if k == "If" {
+        if sx_is_some(t, sx_field(t, e, "else_block")) == false { return co_stopped(lo, "an `if` with no `else` where a value is wanted"); }
+        let cond = co_expr(lo, sx_field(t, e, "cond"));
+        let then = co_value_block(lo, sx_field(t, e, "then_block"));
+        let then_ty = co_last_ty(lo);
+        let otherwise = co_value_block(lo, sx_unwrap(t, sx_field(t, e, "else_block")));
+        let mut ty = then_ty;
+        if ty < 0 { ty = co_last_ty(lo); }
+        let fields = strs_new();
+        strs_push(fields, co_field_first("cond", cond));
+        strs_push(fields, co_field("then", then));
+        strs_push(fields, co_field("else", otherwise));
+        return co_node(lo, "if", str_join(fields, ""), ty, span);
+    }
+    co_stopped(lo, str_concat("the expression ", k))
+}
+
+// An expression's object: its operation, its own members, its type and where it is.
+fn co_node(lo: Lo, op: Str, members: Str, ty: Int, span: Int) -> Str {
+    if co_halted(lo) { return ""; }
+    let o = strs_new();
+    strs_push(o, co_op_first(op));
+    if members != "" { strs_push(o, str_concat(",", members)); }
+    strs_push(o, co_field("type", json_str(co_durable(lo, ty))));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+    co_set_last(lo, ty, false);
+    co_object(o)
+}
+
+// The constant `value` (`true` or `false`) as a `Bool` expression at `span`.
+fn co_boolean(lo: Lo, value: Str, span: Int) -> Str {
+    let id = co_constant(lo, "Bool", value);
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_bool(), span)
+}
+
+// `if cond { then } else { otherwise }`, each branch a block of its expression alone, at `span`
+// (`conditional`): what a logical operator is.
+fn co_conditional(lo: Lo, cond: Str, then: Str, otherwise: Str, ty: Int, span: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("cond", cond));
+    strs_push(fields, co_field("then", co_branch(lo, then, span)));
+    strs_push(fields, co_field("else", co_branch(lo, otherwise, span)));
+    co_node(lo, "if", str_join(fields, ""), ty, span)
+}
+
+// A block holding only `e`, at `e`'s own span — which every caller passes as `span`.
+fn co_branch(lo: Lo, e: Str, span: Int) -> Str {
+    let o = strs_new();
+    strs_push(o, co_field_first("ends", co_ends(false)));
+    strs_push(o, co_field("owns", "[]"));
+    strs_push(o, co_field("stmts", "[]"));
+    strs_push(o, co_field("tail", e));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+    co_object(o)
+}
+
+fn co_binary(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let op = sx_text(t, sx_field(t, e, "op"));
+    let at = sx_field(t, e, "op_span");
+    if op == "And" || op == "Or" {
+        let lhs = co_expr(lo, sx_field(t, e, "lhs"));
+        let rhs = co_expr(lo, sx_field(t, e, "rhs"));
+        if op == "And" { return co_conditional_spans(lo, lhs, rhs, co_boolean(lo, "false", at), sx_field(t, e, "rhs"), at, at); }
+        return co_conditional_spans(lo, lhs, co_boolean(lo, "true", at), rhs, at, sx_field(t, e, "rhs"), at);
+    }
+    let lhs = co_expr(lo, sx_field(t, e, "lhs"));
+    let lt = co_last_ty(lo);
+    let rhs = co_expr(lo, sx_field(t, e, "rhs"));
+    let rt = co_last_ty(lo);
+    let mut operand = lt;
+    if operand < 0 { operand = rt; }
+    if operand < 0 { operand = ck_t_int(); }
+    let arith = co_arithmetic(op);
+    if arith != "" {
+        if operand != ck_t_int() { return co_stopped(lo, "arithmetic of a type other than `Int`"); }
+        let fields = strs_new();
+        strs_push(fields, co_field_first("lhs", lhs));
+        strs_push(fields, co_field("rhs", rhs));
+        return co_node(lo, arith, str_join(fields, ""), operand, at);
+    }
+    let cmp = co_comparison(op);
+    if cmp == "" { return co_stopped(lo, "a bit operator"); }
+    let mut law = "";
+    if operand == ck_t_int() { law = "int"; }
+    if operand == ck_t_bool() { law = "bool"; }
+    if operand == ck_t_str() { law = "bytes"; }
+    if law == "" { return co_stopped(lo, "a comparison of a type other than `Int`, `Bool` or `Str`"); }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("operand", json_str(co_durable(lo, operand))));
+    strs_push(fields, co_field("law", json_str(law)));
+    strs_push(fields, co_field("lhs", lhs));
+    strs_push(fields, co_field("rhs", rhs));
+    co_node(lo, cmp, str_join(fields, ""), ck_t_bool(), at)
+}
+
+// A logical operator's `if`: each branch a block of its expression alone, at that expression's
+// span — the right operand's own, or the operator's for a constant made there.
+fn co_conditional_spans(lo: Lo, cond: Str, then: Str, otherwise: Str, then_span: Int, else_span: Int, at: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("cond", cond));
+    strs_push(fields, co_field("then", co_branch(lo, then, co_expr_at(lo, then_span))));
+    strs_push(fields, co_field("else", co_branch(lo, otherwise, co_expr_at(lo, else_span))));
+    co_node(lo, "if", str_join(fields, ""), ck_t_bool(), at)
+}
+
+// Where an expression's lowering puts it (`Expr::at`): a binary or unary operator's at its operator,
+// a call's, a literal's and a name's at its span. A span node passes through.
+fn co_expr_at(lo: Lo, n: Int) -> Int {
+    let t = lo.t;
+    if sx_kind(t, n) == tk_span() { return n; }
+    let k = sx_text(t, n);
+    if k == "Binary" || k == "Neg" || k == "Not" { return sx_field(t, n, "op_span"); }
+    if sx_kind(t, n) == tk_tuple() && k == "Block" { return sx_field(t, sx_kid(t, n, 0), "span"); }
+    sx_field(t, n, "span")
+}
+
+fn co_arithmetic(op: Str) -> Str {
+    if op == "Add" { return "+"; }
+    if op == "Sub" { return "-"; }
+    if op == "Mul" { return "*"; }
+    if op == "Div" { return "/"; }
+    if op == "Rem" { return "%"; }
+    ""
+}
+
+fn co_comparison(op: Str) -> Str {
+    if op == "Eq" { return "=="; }
+    if op == "NotEq" { return "!="; }
+    if op == "Lt" { return "<"; }
+    if op == "LtEq" { return "<="; }
+    if op == "Gt" { return ">"; }
+    if op == "GtEq" { return ">="; }
+    ""
+}
+
+// A call of one of the compilation's functions or of a built-in, as the checker resolved it.
+fn co_call(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let cs = sx_field(t, e, "callee_span");
+    let site = ck_site_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+    if site < 0 { return co_stopped(lo, "a call the checker did not record as a call"); }
+    if co_some_field(lo, e, "type_args") { return co_stopped(lo, "a call with type arguments"); }
+    // Its arguments first, as `call` lowers them.
+    let args = strs_new();
+    let list = sx_items(t, sx_field(t, e, "args"));
+    let mut i = 0;
+    while i < ints_len(list) {
+        strs_push(args, co_expr(lo, ints_get(list, i)));
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    let span = sx_field(t, e, "span");
+    let callee = ck_site_fn(c, site);
+    let b = ck_site_builtin(c, site);
+    if callee >= 0 {
+        if ck_fn_is_foreign(c, callee) { return co_stopped(lo, "a foreign call"); }
+        if ck_fn_type_params(c, callee) > 0 { return co_stopped(lo, "a generic call"); }
+        if ck_fn_effect_param(c, callee) { return co_stopped(lo, "a call of an effect-polymorphic function"); }
+        let fields = strs_new();
+        strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, callee))));
+        strs_push(fields, co_field("type_args", "[]"));
+        strs_push(fields, co_field("args", co_list_of(args)));
+        return co_node(lo, "call", str_join(fields, ""), ck_fn_ret_ty(c, callee), span);
+    }
+    if b >= 0 {
+        let name = ck_builtin_name(c, b);
+        if ck_builtin_generic(c, b) { return co_stopped(lo, "a generic built-in"); }
+        if co_special_builtin(name) { return co_stopped(lo, str_concat("the built-in ", name)); }
+        let fields = strs_new();
+        strs_push(fields, co_field_first("builtin", json_str(name)));
+        strs_push(fields, co_field("type_args", "[]"));
+        strs_push(fields, co_field("args", co_list_of(args)));
+        return co_node(lo, "builtin", str_join(fields, ""), ck_builtin_ret(c, b), span);
+    }
+    co_stopped(lo, "a call through a value")
+}
+
+// The built-ins `call` lowers as something else: made of operations a program cannot name, or
+// conversions.
+fn co_special_builtin(name: Str) -> Bool {
+    if name == "box_new" || name == "cell_new" || name == "cell_get" || name == "cell_set" { return true; }
+    if name == "checked_add" || name == "checked_sub" || name == "checked_mul" || name == "list_from_vec" || name == "chain_from_vec" { return true; }
+    if str_len(name) > 0 && str_byte(name, 0) >= 65 && str_byte(name, 0) <= 90 { return true; }
+    false
+}
+
+// Whether a literal's text is printed as it is: printable ASCII, tab and line break, and no `\x`.
+fn co_plain_text(s: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b >= 127 { return false; }
+        if b < 32 && b != 9 && b != 10 && b != 13 { return false; }
+        if b == 92 && i + 1 < str_len(s) && str_byte(s, i + 1) == 120 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// --- JSON, as `print.rs` writes it compactly -----------------------------------------------------
+
+fn co_field_first(name: Str, value: Str) -> Str { str_concat(str_concat(json_str(name), ":"), value) }
+fn co_field(name: Str, value: Str) -> Str { str_concat(",", co_field_first(name, value)) }
+fn co_op_first(op: Str) -> Str { co_field_first("op", json_str(op)) }
+fn co_object(parts: Strs) -> Str { str_concat(str_concat("{", str_join(parts, "")), "}") }
+fn co_list(items: Strs) -> Str { str_concat(str_concat("[", str_join(items, ",")), "]") }
+fn co_list_of(items: Strs) -> Str { co_list(items) }
+
+fn co_json_bool(b: Bool) -> Str { if b { "true" } else { "false" } }
+
+fn co_json_or_null(s: Str) -> Str {
+    if s == "" { return "null"; }
+    json_str(s)
+}
+
+fn co_effect_list(mask: Int) -> Str {
+    let names = ck_effect_names(mask);
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(names) {
+        strs_push(out, json_str(strs_get(names, i)));
+        i = i + 1;
+    }
+    co_list(out)
+}
