@@ -12,7 +12,7 @@
 // imports and imports under a name (`alias::f`, `alias::T`), their collisions (N0207, N0208,
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
-// `Vec`s, tuples (the generic record of their arity) and applications of any type; functions
+// `Vec`s, tuples (the generic record of their arity), arrays and applications of any type; functions
 // with type parameters (and `Equality` requirements) and effect parameters (N51), but no contracts;
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
 // assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
@@ -306,6 +306,11 @@ pub struct Ck {
     epnm: Strs,
     // Per call site, the set a call of an effect-polymorphic callee bound its parameter to (N51).
     sbind: Ints,
+    // Every array type written, once, with where it was first (Gate 2, `arrays_written`); the
+    // ones before `s_arrays` are held to the rules already.
+    awty: Ints,
+    aws: Ints,
+    awe: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -454,7 +459,9 @@ fn s_sink() -> Int { 15 }
 fn s_fields() -> Int { 16 }
 // The effect parameter in scope for the types written (N51): its function's id plus one, or 0.
 fn s_eparam() -> Int { 17 }
-fn s_slots() -> Int { 18 }
+// How many of the array types written are held to the rules already (Gate 2).
+fn s_arrays() -> Int { 18 }
+fn s_slots() -> Int { 19 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -556,6 +563,10 @@ fn tag_param() -> Int { 5 }
 fn tag_fn() -> Int { 6 }
 // `Chan[T]` (N53): a generic channel, its element as its one argument.
 fn tag_chan() -> Int { 7 }
+// `[T; n]` (Gate 2): a fixed array, its length the first word and its element the second — not
+// an argument: the reference's `type_args` of an array is empty, so nothing that walks a type's
+// arguments (nesting, substitution, inference) looks inside one.
+fn tag_array() -> Int { 8 }
 
 fn t_int() -> Int { 0 }
 fn t_bool() -> Int { 1 }
@@ -614,6 +625,22 @@ fn chan_of(c: Ck, elem: Int) -> Int {
     intern(c, tag_chan(), 0, 0, 0, "", a)
 }
 fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
+fn array_of(c: Ck, elem: Int, n: Int) -> Int { intern(c, tag_array(), n, elem, 0, "", ints_new()) }
+fn is_array(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_array() }
+fn array_elem(c: Ck, t: Int) -> Int { ints_get(c.tyb, t) }
+
+// `t` with every enclosing array removed (`strip_array`): an array is inline, so for what a type
+// contains — equality, crossing into a task, holding a function, containing itself — it answers
+// as its element does.
+fn strip_array(c: Ck, t: Int) -> Int {
+    let mut u = t;
+    let mut i = 0;
+    while i < 32 && is_array(c, u) {
+        u = array_elem(c, u);
+        i = i + 1;
+    }
+    u
+}
 
 // `(elems…)` (R1a, L5): a tuple — an application of the generic record of its arity, made the
 // first time it is asked for (`tuple_of`): no name a program can write, `(,)`, no module, fields
@@ -825,6 +852,7 @@ fn show(c: Ck, t: Int) -> Str {
         return cat3("Vec[", show(c, e), "]");
     }
     if g == tag_chan() { return cat3("Chan[", show(c, targ(c, t, 0)), "]"); }
+    if g == tag_array() { return cat5("[", show(c, array_elem(c, t)), "; ", int_to_str(ta(c, t)), "]"); }
     let mut name = "";
     if g == tag_record() { name = strs_get(c.rname, ta(c, t)); }
     // A tuple (L5) spells its elements.
@@ -923,7 +951,8 @@ fn derived_by(c: Ck, t: Int, equality: Bool, stop_trait: Int, exact: Bool) -> St
 fn task_safety(c: Ck, t: Int) -> Str { derived_walk(c, t, 2, 0 - 1, false) }
 
 // The walk, for ordering (`mode` 0), equality (1) or crossing into a task (2).
-fn derived_walk(c: Ck, t: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str {
+fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str {
+    let t = strip_array(c, top);
     if is_record(c, t) == false && is_enum(c, t) == false {
         if leaf_mode(c, t, mode) { return ""; }
         return str_concat("|", int_to_str(t));
@@ -954,7 +983,8 @@ fn derived_walk(c: Ck, t: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str {
             ints_push(sat, at + 1);
             ints_push(spushed, pushed);
             let f = ints_get(edges, at);
-            let ty = field_ty_in(c, node, f);
+            // An array field contains its elements inline (`contained`).
+            let ty = strip_array(c, field_ty_in(c, node, f));
             let names = edge_names(c, node, f);
             let mut refused = false;
             if stop_trait >= 0 && (is_record(c, ty) || is_enum(c, ty)) {
@@ -1126,7 +1156,7 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new());
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1308,6 +1338,8 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         i = i + 1;
     }
     declare_all_consts(c);
+    // The arrays the signatures wrote (Gate 2).
+    validate_new_arrays(c);
     // Stage 2: the bodies, module by module, each module's effects once its bodies are.
     i = 0;
     while i < count {
@@ -1923,6 +1955,20 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
     }
     // `(A, B, …)` (L5): a tuple of the elements written.
     if name == "()" && some(c, w, "qualifier") == false && some(c, w, "length") == false { return tuple_ty(c, args); }
+    // `[T; N]` (Gate 2): an array of the element written, its length a constant.
+    if some(c, w, "length") && name == "[]" {
+        let mut elem = t_int();
+        if ints_len(args) > 0 { elem = ints_get(args, 0); }
+        let mut n = array_length(c, unwrap(c, w, "length"), d);
+        if n < 0 { n = 1; }
+        let t = array_of(c, elem, n);
+        if index_of(c.awty, t) < 0 {
+            ints_push(c.awty, t);
+            ints_push(c.aws, sps(c, span));
+            ints_push(c.awe, spe(c, span));
+        }
+        return t;
+    }
     if some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
         stop(c, cat3("the type `", name, "`"));
         return t_int();
@@ -2238,7 +2284,173 @@ fn resolve_fields(c: Ck, owner: Str, written: Ints, pn: Strs, pt: Ints) -> Int {
 // A record or enum that contains itself, inline or through a `Vec`, is refused by
 // `validate_type_layouts`; this checker does not carry that refusal yet, so it stops at any cycle
 // through the module's definitions.
+// --- arrays (Gate 2; `check/layout.rs`, `UserTypes::array_problem`) ----------------------------
+
+// The most an array may hold, in `data_bytes`: 64 KiB (`MAX_ARRAY_BYTES`).
+fn max_array_bytes() -> Int { 65536 }
+
+// An array's length, written as an integer literal or an `Int` constant's name (`array_length`):
+// the length, or -1 where it is refused (into `d`).
+fn array_length(c: Ck, e: Int, d: Diags) -> Int {
+    let mut known = false;
+    let mut n = 0;
+    if sx_kind(c.t, e) != tk_tuple() {
+        let k = kind_of(c, e);
+        if k == "Int" {
+            known = true;
+            n = parse_int(sx_text(c.t, fld(c, e, "value")));
+        }
+        // A static is storage, not a length (Gate 3).
+        if k == "Var" {
+            let name = fname_of(c, e, "name");
+            if static_named(c, name) < 0 {
+                let ev = evaluate_consts(c, gs(c, s_module()), dg_new());
+                let at = strs_find(ev.names, name);
+                if at >= 0 {
+                    if ints_get(ev.kinds, at) == k_int() {
+                        known = true;
+                        n = ints_get(ev.ints, at);
+                    }
+                }
+            }
+        }
+    }
+    let span = espan(c, e);
+    if known == false {
+        dg_error(d, "N0622", sps(c, span), spe(c, span), "an array's length is an integer literal or an `Int` constant's name", "",
+                "declare one at the top of the module: `const SIZE: Int = 64;`");
+        return 0 - 1;
+    }
+    if n <= 0 || n > 4294967295 {
+        dg_error(d, "N0618", sps(c, span), spe(c, span), str_concat("an array has 1 to 4294967295 elements, and this is ", int_to_str(n)), "", "");
+        return 0 - 1;
+    }
+    n
+}
+
+// The first component of `t` that is not a value, or -1 (`not_value`): numbers, `Bool`, strings
+// where `strings` is set, and records, enums and arrays of them.
+fn not_value(c: Ck, t: Int, strings: Bool) -> Int {
+    let seen = ints_new();
+    let work = ints_new();
+    ints_push(work, strip_array(c, t));
+    while ints_len(work) > 0 {
+        let ty = ints_pop(work);
+        if index_of(seen, ty) < 0 {
+            ints_push(seen, ty);
+            let n = bname_of(c, ty);
+            let plain = n == "Int" || n == "Bool" || is_num_name(n) || (strings && (n == "Str" || n == "Text"));
+            if plain == false {
+                if is_record(c, ty) || is_enum(c, ty) {
+                    let edges = contained(c, ty);
+                    let mut k = 0;
+                    while k < ints_len(edges) {
+                        ints_push(work, strip_array(c, field_ty_in(c, ty, ints_get(edges, k))));
+                        k = k + 1;
+                    }
+                } else {
+                    return ty;
+                }
+            }
+        }
+    }
+    0 - 1
+}
+
+fn sat_mul(a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 { return 0; }
+    let most = 9223372036854775807;
+    if a > most / b { return most; }
+    a * b
+}
+
+// The bytes a plain value of `t` holds, without padding (`data_bytes`).
+fn data_bytes(c: Ck, t: Int, depth: Int) -> Int {
+    if depth > max_depth() * 4 { return 0; }
+    let n = bname_of(c, t);
+    if n == "Int" { return 8; }
+    if n == "Bool" { return 1; }
+    if n == "Int8" || n == "UInt8" { return 1; }
+    if n == "Int16" || n == "UInt16" { return 2; }
+    if n == "Int32" || n == "UInt32" || n == "Float32" { return 4; }
+    if n == "UInt64" || n == "Float64" { return 8; }
+    if n == "Int128" || n == "UInt128" { return 16; }
+    if n == "Str" || n == "Text" { return 24; }
+    if is_array(c, t) { return sat_mul(data_bytes(c, array_elem(c, t), depth + 1), ta(c, t)); }
+    if is_record(c, t) {
+        let mut sum = 0;
+        let r = ta(c, t);
+        let mut i = 0;
+        while i < ints_get(c.rfc, r) {
+            sum = sum + data_bytes(c, field_ty_in(c, t, ints_get(c.rff, r) + i), depth + 1);
+            i = i + 1;
+        }
+        return sum;
+    }
+    if is_enum(c, t) {
+        let e = ta(c, t);
+        let mut most = 0;
+        let mut v = 0;
+        while v < ints_get(c.evc, e) {
+            let vi = ints_get(c.evf, e) + v;
+            let mut sum = 0;
+            let mut i = 0;
+            while i < ints_get(c.vfc, vi) {
+                sum = sum + data_bytes(c, field_ty_in(c, t, ints_get(c.vff, vi) + i), depth + 1);
+                i = i + 1;
+            }
+            if sum > most { most = sum; }
+            v = v + 1;
+        }
+        return 8 + most;
+    }
+    8
+}
+
+// Why an array type is refused, reported at `s..e` into `d` (`array_refusal`); 1 when it was.
+fn array_refusal(c: Ck, t: Int, s: Int, e: Int, d: Diags) -> Int {
+    if is_array(c, t) == false { return 0; }
+    let elem = array_elem(c, t);
+    let len = ta(c, t);
+    if len == 0 {
+        dg_error(d, "N0618", s, e, "an array has at least one element", "", "");
+        return 1;
+    }
+    let owner = not_value(c, elem, true);
+    if owner >= 0 {
+        let mut message = cat3("an array holds values, and `", show(c, elem), "` is a handle");
+        if owner != elem { message = cat5("an array holds values, and `", show(c, elem), "` holds a `", show(c, owner), "`"); }
+        dg_error(d, "N0621", s, e, message, "",
+                "an array's elements are numbers, `Bool`s, strings, and records, enums and arrays of them — values, copied with the strings they hold; a collection of handles is a `Vec`");
+        return 1;
+    }
+    let bytes = sat_mul(data_bytes(c, elem, 0), len);
+    if bytes > max_array_bytes() {
+        if bytes == 9223372036854775807 {
+            stop(c, "an array too large to count");
+            return 1;
+        }
+        dg_error(d, "N0618", s, e, cat5("`", show(c, t), "` holds ", int_to_str(bytes), " bytes, and an array holds at most 65536"), "",
+                "an array lives inline, on a task's stack; a larger buffer is a `Vec`");
+        return 1;
+    }
+    0
+}
+
+// Hold every array type written since the last stage to the rules (`validate_new_arrays`).
+fn validate_new_arrays(c: Ck) -> Int {
+    let mut i = gs(c, s_arrays());
+    while i < ints_len(c.awty) {
+        array_refusal(c, ints_get(c.awty, i), ints_get(c.aws, i), ints_get(c.awe, i), c.d);
+        i = i + 1;
+    }
+    ss(c, s_arrays(), ints_len(c.awty));
+    0
+}
+
 fn validate_layouts(c: Ck) -> Int {
+    // Every array written in a field (Gate 2), once every definition it might contain is known.
+    validate_new_arrays(c);
     let mut i = 0;
     while i < strs_len(c.rname) {
         if reaches(c, record_ty(c, i, ints_new()), record_ty(c, i, ints_new()), ints_new()) { stop(c, "a type that contains itself"); }
@@ -2292,6 +2504,7 @@ fn def_of_key(c: Ck, key: Int) -> Int {
 // Every record and enum definition a type mentions, at any depth.
 fn mentioned_defs(c: Ck, t: Int, out: Ints) -> Int {
     if is_record(c, t) || is_enum(c, t) { ints_push(out, def_key(c, t)); }
+    if is_array(c, t) { mentioned_defs(c, strip_array(c, t), out); }
     let mut i = 0;
     while i < targc(c, t) {
         mentioned_defs(c, targ(c, t, i), out);
@@ -3072,6 +3285,8 @@ fn report_private_type(c: Ck, t: Int, s: Int, e: Int, is: Int, ie: Int, kind: St
             ints_push(work, targ(c, u, k));
             k = k + 1;
         }
+        // An array's element (L8): `[Secret; 2]` exposes `Secret`.
+        if is_array(c, u) { ints_push(work, array_elem(c, u)); }
         let mut pname = "";
         let mut ds = 0;
         let mut de = 0;
@@ -3483,6 +3698,7 @@ fn captured_by(c: Ck, frame: Int, b: Int) -> Bool {
 // Whether a value of `t` can reach a function value (`function_holder` of a `Cell` of it).
 fn holds_fn(c: Ck, t: Int, depth: Int) -> Bool {
     if depth > max_depth() * 4 { return true; }
+    if is_array(c, t) { return holds_fn(c, strip_array(c, t), depth + 1); }
     if is_fn(c, t) { return true; }
     if tag(c, t) == tag_vec() || tag(c, t) == tag_chan() { return holds_fn(c, targ(c, t, 0), depth + 1); }
     if is_record(c, t) || is_enum(c, t) {
@@ -3504,7 +3720,7 @@ fn function_holder(c: Ck, t: Int) -> Int {
     let sh = ints_new();
     let seen_t = ints_new();
     let seen_h = ints_new();
-    ints_push(st, t);
+    ints_push(st, strip_array(c, t));
     ints_push(sh, 0 - 1);
     while ints_len(st) > 0 {
         let ty = ints_pop(st);
@@ -3531,7 +3747,7 @@ fn function_holder(c: Ck, t: Int) -> Int {
                 let edges = contained(c, ty);
                 let mut k = 0;
                 while k < ints_len(edges) {
-                    ints_push(st, field_ty_in(c, ty, ints_get(edges, k)));
+                    ints_push(st, strip_array(c, field_ty_in(c, ty, ints_get(edges, k))));
                     ints_push(sh, holder);
                     k = k + 1;
                 }
@@ -3695,20 +3911,37 @@ fn check_assign(c: Ck, a: Int) -> Int {
     }
     note_var(c, sps(c, ns), spe(c, ns), b);
     let path = kids(c, place, "path");
-    let shown = strs_new();
+    // The path as a message writes it (`shown_path`): fields by name, an index as `[…]`.
+    let mut shown = "";
     let mut i = 0;
     while i < ints_len(path) {
         let step = ints_get(path, i);
         if sx_kind(c.t, step) != tk_tuple() {
-            stop(c, "an index in an assignment");
-            return 0;
+            shown = str_concat(shown, "[…]");
+        } else {
+            if shown != "" { shown = str_concat(shown, "."); }
+            shown = str_concat(shown, fname_of(c, sx_kid(c.t, step, 0), "name"));
         }
-        strs_push(shown, fname_of(c, sx_kid(c.t, step, 0), "name"));
         i = i + 1;
+    }
+    // `xs[i] = v` on a sequence binding (R1, 5b.15): `vec_set(xs, i, v)` and its kin. A sequence
+    // is a handle, so this needs no `mut`, as the call does not.
+    if ints_len(path) == 1 && sx_kind(c.t, ints_get(path, 0)) != tk_tuple() {
+        let step = ints_get(path, 0);
+        let args = ints_new();
+        let vf = fs();
+        fa(vf, "name", sx_str(c.t, name));
+        fa(vf, "span", ns);
+        ints_push(args, mk_struct(c.t, "Var", vf));
+        ints_push(args, fld(c, step, "index"));
+        ints_push(args, value);
+        ss(c, s_unwanted(), 1);
+        if element_by_name(c, ints_get(c.sty, b), "set", fld(c, step, "span"), args, none()) != no_element() { return 0; }
+        ss(c, s_unwanted(), 0);
     }
     if ints_get(c.smut, b) == 0 || copy {
         let mut written = cat3("`", name, "` is not mutable");
-        if ints_len(path) > 0 { written = cat5("`", name, "` is not mutable, so its `", str_join(shown, "."), "` cannot be replaced"); }
+        if ints_len(path) > 0 { written = cat5("`", name, "` is not mutable, so its `", shown, "` cannot be replaced"); }
         if ints_get(c.sds, b) >= 0 && copy == false {
             err(c, "N0310", ns, written, "bindings are immutable unless written `let mut`");
             sec_at(c, ints_get(c.sds, b), ints_get(c.sde, b), "declared here");
@@ -3725,22 +3958,34 @@ fn check_assign(c: Ck, a: Int) -> Int {
     if copy { ds = 0 - 1; }
     i = 0;
     while i < ints_len(path) {
-        let step = sx_kid(c.t, ints_get(path, i), 0);
-        let t = check_projection(c, target, fname_of(c, step, "name"), fld(c, step, "name_span"));
-        if t < 0 {
-            check_expr(c, value, none());
-            return 0;
+        let raw = ints_get(path, i);
+        if sx_kind(c.t, raw) != tk_tuple() {
+            // An element of an array (Gate 2).
+            if is_array(c, target) == false {
+                err(c, "N0624", fld(c, raw, "span"), cat3("`[…]` indexes an array, and this is `", show(c, target), "`"), "");
+                check_expr(c, value, none());
+                return 0;
+            }
+            check_index_value(c, fld(c, raw, "index"), ta(c, target));
+            target = array_elem(c, target);
+        } else {
+            let step = sx_kid(c.t, raw, 0);
+            let t = check_projection(c, target, fname_of(c, step, "name"), fld(c, step, "name_span"));
+            if t < 0 {
+                check_expr(c, value, none());
+                return 0;
+            }
+            let f = record_field(c, target, fname_of(c, step, "name"));
+            ds = ints_get(c.fns, f);
+            de = ints_get(c.fne, f);
+            target = t;
         }
-        let f = record_field(c, target, fname_of(c, step, "name"));
-        ds = ints_get(c.fns, f);
-        de = ints_get(c.fne, f);
-        target = t;
         i = i + 1;
     }
     let vt = value_type(c, value, target);
     if vt != target {
         let mut written = name;
-        if ints_len(path) > 0 { written = cat3(name, ".", str_join(shown, ".")); }
+        if ints_len(path) > 0 { written = cat3(name, ".", shown); }
         let want = show(c, target);
         err(c, "N0300", espan(c, value), cat5(cat3("`", written, "` is `"), want, "`, but this is `", show(c, vt), "`"), "");
         if ds >= 0 { sec_at(c, ds, de, cat3("declared `", want, "` here")); }
@@ -3923,6 +4168,10 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         }
         return tuple_ty(c, tys);
     }
+    // Arrays (Gate 2), and `xs[i]` on a sequence (R1, 5b.15).
+    if k == "Array" { return check_array_literal(c, e, expected); }
+    if k == "ArrayRepeat" { return check_array_repeat(c, e, expected); }
+    if k == "Index" { return check_index(c, e, expected); }
     if k == "Interp" {
         // `f"…"` (L4), and what `print(x)` is written as: a `Str`, each hole a value
         // interpolation writes.
@@ -4213,6 +4462,215 @@ fn index_of_text(s: Str, part: Str) -> Int {
     while i + n <= str_len(s) {
         if str_slice(s, i, i + n) == part { return i; }
         i = i + 1;
+    }
+    0 - 1
+}
+
+// --- arrays and indexing (Gate 2; `check/operators.rs`) -----------------------------------------
+
+// The element type an expected array type gives, or -1.
+fn expected_element(c: Ck, expected: Int) -> Int {
+    if is_array(c, expected) { return array_elem(c, expected); }
+    0 - 1
+}
+
+// `[a, b, c]` (`check_array_literal`): where a sequence is wanted, that sequence (R1, 5b.16);
+// where no fixed array is expected, a list — a `Vec` of its first element's type (R1.5, D6); and
+// where one is, an array of the element expected.
+fn check_array_literal(c: Ck, e: Int, expected: Int) -> Int {
+    let elems = kids(c, e, "elems");
+    let span = fld(c, e, "span");
+    if expected >= 0 && tag(c, expected) == tag_vec() {
+        let elem = targ(c, expected, 0);
+        let mut i = 0;
+        while i < ints_len(elems) {
+            let x = ints_get(elems, i);
+            let t = value_type(c, x, elem);
+            if assignable(c, t, elem) == false {
+                err(c, "N0300", espan(c, x), cat5(cat3("this `", show(c, expected), "`'s elements are `"), show(c, elem), "`, and this is `", show(c, t), "`"), "");
+            }
+            i = i + 1;
+        }
+        return expected;
+    }
+    let want = expected_element(c, expected);
+    if want < 0 {
+        if ints_len(elems) == 0 {
+            err(c, "N0618", span, "an empty list needs its element type written", "write the type where it is bound: `let v: List[Int] = []`");
+            return or_int(expected);
+        }
+        let elem = value_type(c, ints_get(elems, 0), none());
+        let mut i = 1;
+        while i < ints_len(elems) {
+            let x = ints_get(elems, i);
+            let t = value_type(c, x, elem);
+            if assignable(c, t, elem) == false {
+                err(c, "N0300", espan(c, x), cat5("this list's elements are `", show(c, elem), "`, and this is `", show(c, t), "`"), "");
+            }
+            i = i + 1;
+        }
+        return vec_of(c, elem);
+    }
+    if ints_len(elems) == 0 {
+        err(c, "N0618", span, "an array has at least one element", "an empty collection is a `Vec`: `vec_new[Int]()`");
+        return or_int(expected);
+    }
+    let elem = value_type(c, ints_get(elems, 0), want);
+    let mut i = 1;
+    while i < ints_len(elems) {
+        let x = ints_get(elems, i);
+        let t = value_type(c, x, elem);
+        if t != elem { err(c, "N0300", espan(c, x), cat5("this array's elements are `", show(c, elem), "`, and this is `", show(c, t), "`"), ""); }
+        i = i + 1;
+    }
+    let t = array_of(c, elem, ints_len(elems));
+    array_refusal(c, t, sps(c, span), spe(c, span), c.d);
+    t
+}
+
+// `[value; count]` (`check_array_repeat`): `count` copies, `count` a literal or a constant.
+fn check_array_repeat(c: Ck, e: Int, expected: Int) -> Int {
+    let span = fld(c, e, "span");
+    let elem = value_type(c, fld(c, e, "value"), expected_element(c, expected));
+    let n = array_length(c, fld(c, e, "count"), c.d);
+    if n < 0 { return array_of(c, elem, 1); }
+    let t = array_of(c, elem, n);
+    array_refusal(c, t, sps(c, span), spe(c, span), c.d);
+    t
+}
+
+// An index's type, which is an `Int`, and a constant one's range against an array of `len`
+// elements, -1 for none (`check_index_value`).
+fn check_index_value(c: Ck, index: Int, len: Int) -> Int {
+    let it = value_type(c, index, t_int());
+    if it != t_int() {
+        err(c, "N0300", espan(c, index), cat3("an index is an `Int`, and this is `", show(c, it), "`"), "");
+        return 0;
+    }
+    let mut known = false;
+    let mut v = 0;
+    if sx_kind(c.t, index) != tk_tuple() {
+        if kind_of(c, index) == "Int" {
+            known = true;
+            v = parse_int(sx_text(c.t, fld(c, index, "value")));
+        }
+        if kind_of(c, index) == "Neg" {
+            let o = fld(c, index, "operand");
+            if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "Int" {
+                known = true;
+                v = 0 - parse_int(sx_text(c.t, fld(c, o, "value")));
+            }
+        }
+    }
+    if known && len >= 0 {
+        if v < 0 || v >= len {
+            err(c, "N0624", espan(c, index), cat5("index ", int_to_str(v), " is outside an array of ", int_to_str(len), " elements"), "");
+        }
+    }
+    0
+}
+
+// `base[index]` (`check_index`): an element of an array, or of a sequence or a map by name.
+fn check_index(c: Ck, e: Int, expected: Int) -> Int {
+    let base = fld(c, e, "base");
+    let index = fld(c, e, "index");
+    let bracket = fld(c, e, "bracket_span");
+    let before = dg_len(c.d);
+    let bt = value_type(c, base, none());
+    let array = is_array(c, bt);
+    if array == false && dg_len(c.d) == before {
+        let args = ints_new();
+        ints_push(args, base);
+        ints_push(args, index);
+        let t = element_by_name(c, bt, "get", bracket, args, expected);
+        if t != no_element() { return t; }
+    }
+    let mut len = 0 - 1;
+    if array { len = ta(c, bt); }
+    check_index_value(c, index, len);
+    if array { return array_elem(c, bt); }
+    let mut help = "";
+    if bname_of(c, bt) == "Bytes" { help = "a `Bytes`'s byte is read with `bytes_get(b, i)`"; }
+    if tag(c, bt) == tag_vec() { help = "a `Vec`'s element is read with `vec_get(xs, i)`"; }
+    err(c, "N0624", bracket, cat3("`[…]` indexes an array, and this is `", show(c, bt), "`"), help);
+    or_int(expected)
+}
+
+// What `element_by_name` answers where no function of the name is in scope.
+fn no_element() -> Int { 0 - 3 }
+
+// `xs[i]` and `xs[i] = v` by name (`element_by_name`, R1 5b.15): the call `<prefix>_<op>(args…)`
+// keyed by the brackets' span — `vec_`, `bytes_`, or a type's name in lower case, whose read is
+// `<prefix>_at`, or `<prefix>_at_or` with the value type's zero where a compound update reads
+// it. `no_element()` where no such function is in scope.
+fn element_by_name(c: Ck, of: Int, op: Str, bracket: Int, args: Ints, expected: Int) -> Int {
+    let mut name = "";
+    if tag(c, of) == tag_vec() {
+        name = cat3("vec_", op, "");
+    } else {
+        if bname_of(c, of) == "Bytes" {
+            name = cat3("bytes_", op, "");
+        } else {
+            let shown = show(c, of);
+            let cut = index_of_text(shown, "[");
+            let mut prefix = shown;
+            if cut >= 0 { prefix = str_slice(shown, 0, cut); }
+            prefix = str_lower(prefix);
+            if str_len(prefix) == 0 { return no_element(); }
+            let mut i = 0;
+            while i < str_len(prefix) {
+                let b = str_byte(prefix, i);
+                if (b >= 48 && b <= 57) || (b >= 97 && b <= 122) || (b >= 65 && b <= 90) { i = i + 1; } else { return no_element(); }
+            }
+            let mut value = 0 - 1;
+            if targc(c, of) > 0 { value = targ(c, of, targc(c, of) - 1); }
+            let compound = sx_s(c.t, bracket) == sx_e(c.t, bracket);
+            if op == "get" {
+                let mut zero = 0 - 1;
+                if value >= 0 { zero = zero_of(c, value, bracket); }
+                if zero >= 0 && compound && callee_of(c, cat3(prefix, "_at_or", "")) != 0 - 1 {
+                    ints_push(args, zero);
+                    name = cat3(prefix, "_at_or", "");
+                } else {
+                    name = cat3(prefix, "_at", "");
+                }
+            } else {
+                name = cat3(prefix, "_", op);
+            }
+        }
+    }
+    if callee_of(c, name) == 0 - 1 { return no_element(); }
+    let f = fs();
+    fa(f, "qualifier", sx_none(c.t));
+    fa(f, "callee", sx_str(c.t, name));
+    fa(f, "callee_span", bracket);
+    fa(f, "type_args", sx_none(c.t));
+    fa(f, "args", mk_list(c.t, args));
+    fa(f, "span", bracket);
+    let t = check_expr(c, mk_struct(c.t, "Call", f), expected);
+    if t >= 0 { return t; }
+    or_int(expected)
+}
+
+// The zero a compound update of a map's absent entry starts from (`zero_of`): `0`, `0.0` or `""`
+// written at `span`, or -1 for any other type.
+fn zero_of(c: Ck, t: Int, span: Int) -> Int {
+    let n = bname_of(c, t);
+    let f = fs();
+    if n == "Str" {
+        fa(f, "value", sx_str(c.t, ""));
+        fa(f, "span", span);
+        return mk_struct(c.t, "Str", f);
+    }
+    if is_float_name(n) {
+        fa(f, "text", sx_str(c.t, "0.0"));
+        fa(f, "span", span);
+        return mk_struct(c.t, "Float", f);
+    }
+    if is_num_name(n) {
+        fa(f, "value", sx_atom(c.t, "0"));
+        fa(f, "span", span);
+        return mk_struct(c.t, "Int", f);
     }
     0 - 1
 }
@@ -4913,9 +5371,9 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
         tm = lookup_method(c, recv_ty, method, at, false);
         if tm < 0 {
             // By name (R1, 5b.15): `x.m(…)` is `<type>_m(x, …)` where one is in scope.
-            if known < 0 && receiver_failed == false && by_name(c, recv_ty, method) {
-                stop(c, "a method called by name");
-                return fallback;
+            if known < 0 && receiver_failed == false {
+                let named = named_method(c, recv, rname, rspan, recv_ty, method, at, args, span, expected);
+                if named != no_element() { return named; }
             }
             lookup_method(c, recv_ty, method, at, true);
             check_args_from(c, args, first);
@@ -5004,16 +5462,52 @@ fn method_trait(c: Ck, tm: Int) -> Int {
     0 - 1
 }
 
-// Whether `x.m(…)` would be the function `<type>_m` by name (`named_method`).
-fn by_name(c: Ck, t: Int, method: Str) -> Bool {
+// `x.m(args)` as the function `<prefix>_m(x, args)` (`named_method`, R1 5b.15), where no trait
+// gives the receiver's type an `m`: the prefix is the type's name in lower case, and for a `Str`
+// also `text`, the first whose function is in scope; checked as that call is, at the method's
+// name. `no_element()` where none is in scope. The receiver is `recv`, or the name `rname`.
+fn named_method(c: Ck, recv: Int, rname: Str, rspan: Int, t: Int, method: Str, at: Int, rest: Ints, span: Int, expected: Int) -> Int {
     let shown = show(c, t);
     let cut = index_of_text(shown, "[");
     let mut base = shown;
     if cut >= 0 { base = str_slice(shown, 0, cut); }
-    if str_len(base) == 0 { return false; }
-    let lower = str_lower(base);
-    if callee_of(c, cat3(lower, "_", method)) != 0 - 1 { return true; }
-    t == t_str() && callee_of(c, cat3("text", "_", method)) != 0 - 1
+    base = str_lower(base);
+    if str_len(base) == 0 { return no_element(); }
+    let mut i = 0;
+    while i < str_len(base) {
+        let b = str_byte(base, i);
+        if (b >= 48 && b <= 57) || (b >= 97 && b <= 122) || (b >= 65 && b <= 90) { i = i + 1; } else { return no_element(); }
+    }
+    let mut name = cat3(base, "_", method);
+    if callee_of(c, name) == 0 - 1 {
+        if t != t_str() { return no_element(); }
+        name = cat3("text", "_", method);
+        if callee_of(c, name) == 0 - 1 { return no_element(); }
+    }
+    let args = ints_new();
+    if recv >= 0 {
+        ints_push(args, recv);
+    } else {
+        let vf = fs();
+        fa(vf, "name", sx_str(c.t, rname));
+        fa(vf, "span", rspan);
+        ints_push(args, mk_struct(c.t, "Var", vf));
+    }
+    i = 0;
+    while i < ints_len(rest) {
+        ints_push(args, ints_get(rest, i));
+        i = i + 1;
+    }
+    let f = fs();
+    fa(f, "qualifier", sx_none(c.t));
+    fa(f, "callee", sx_str(c.t, name));
+    fa(f, "callee_span", at);
+    fa(f, "type_args", sx_none(c.t));
+    fa(f, "args", mk_list(c.t, args));
+    fa(f, "span", span);
+    let r = check_expr(c, mk_struct(c.t, "Call", f), expected);
+    if r >= 0 { return r; }
+    or_int(expected)
 }
 
 fn str_lower(s: Str) -> Str {

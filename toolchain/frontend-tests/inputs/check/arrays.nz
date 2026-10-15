@@ -1,0 +1,33 @@
+// Arrays and indexing (Gate 2) and elements by name (R1, 5b.15), as the checker refuses them.
+const N: Int = 3;
+const BIG: Int = 70000;
+static S: Int = 2;
+
+struct Holder { xs: Vec[Int], }
+struct Wide { a: [Int; 9000], }
+struct Point { x: Int, y: Float64, }
+
+fn handles(h: [Holder; 2]) -> Int { 0 }
+fn strings(s: [Str; N]) -> Int { 0 }
+fn sized(s: [Int; S]) -> Int { 0 }
+fn zero(s: [Int; 0]) -> Int { 0 }
+
+fn main() -> Int {
+    let mut a: [Int; 3] = [1, 2, 3];
+    a[3] = 4;
+    a[-1] = 0;
+    a[0] = "x";
+    let b = [0; BIG];
+    let c: [Point; 2] = [Point(x: 1, y: 2.0), Point(x: 3, y: 4.0)];
+    let d = c[1].x + a["i"];
+    let e = [1, "two"];
+    let f: [Int; 2] = [1, true];
+    let g = [];
+    let v = vec_new[Int]();
+    v[0] = 5;
+    let w = v[1] + v.len();
+    let q = d[0];
+    let h: Vec[Str] = ["a", 1];
+    a == a;
+    0
+}
