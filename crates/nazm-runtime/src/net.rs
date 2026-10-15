@@ -12,8 +12,9 @@
 //! descriptor, once, with the **reactor**: one runtime thread blocked in `kqueue` or `epoll` whose
 //! every event names a handle. The reactor bumps that handle's sequence number and wakes its
 //! waiters with `nz.cwake`; a waiter that sees the number move retries its operation. A deadline is
-//! the handle's (`os_set_timeout`), as an absolute time the timed wait gives up at; a close marks
-//! the handle closing and wakes its waiters the same way, and each answers `Closed`.
+//! the handle's (`os_set_timeout`), as an absolute time on the monotonic clock (Q1-M-12) the timed
+//! wait gives up at; a close marks the handle closing and wakes its waiters the same way, and each
+//! answers `Closed`.
 //!
 //! The reactor holds no lock while it waits, and takes the handle table's only to find a wait
 //! record; a waiter holds its record's mutex and takes the table's to ask whether its handle is
@@ -57,12 +58,14 @@ declare i64 @nz_os_pid()
 declare i32 @nz_os_signal_group(i64, i64)
 declare void @nz_os_nap(i64)
 
-; The wall clock in nanoseconds: what `nz.ctimedwait`'s deadline is measured against.
+; The monotonic clock in nanoseconds: what `nz.ctimedwait`'s deadline is measured against
+; (Q1-M-12). A wall-clock deadline there is decades ahead of the monotonic clock: a thread waited
+; out the nap's 100 ms cap on every wait however little was left, and a pool task never timed out.
 define hidden i64 @nz.net_now() {
 entry:
   %ts = alloca [16 x i8], align 8
   call void @llvm.memset.p0.i64(ptr %ts, i8 0, i64 16, i1 false)
-  %r = call i32 @nz_os_clock(i32 0, ptr %ts)
+  %r = call i32 @nz_os_clock(i32 4, ptr %ts)
   %s = load i64, ptr %ts
   %np = getelementptr i8, ptr %ts, i64 8
   %n = load i64, ptr %np
