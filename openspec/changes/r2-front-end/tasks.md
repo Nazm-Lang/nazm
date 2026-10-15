@@ -404,6 +404,15 @@
         literal past `Int`'s digits (`WideInt`) as any other. `run.sh core`: 3,048 agree, 0
         differ; of 56,956 functions the lowering carries 54,798, all agree; the other parts
         10,374, all agree; 1,228 whole documents, all the reference's bytes
+  - [x] Calls through a trait's bound and tasks: a method call the checker reached through a
+        bound, or a derived method, as `call_trait` (the trait's method, the receiver's type as
+        the body sees it, the result at that type); `spawn` as the task it starts. `run.sh
+        core`: 3,048 agree, 0 differ; of 56,978 functions the lowering carries 55,841, all
+        agree; the other parts 10,374, all agree; 1,447 whole documents, all the reference's
+        bytes. Remaining stops, most frequent first: closures and the bindings they share,
+        effect parameters, float literals, `[v; n]` and array literals, an assignment to a
+        field or an element, aggregate constants, calls through a value, foreign functions,
+        contracts, `defer`, the built-ins `box`/`cell`/`checked`/`chain`; `@derive` last
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
