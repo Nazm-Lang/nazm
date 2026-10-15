@@ -9210,8 +9210,9 @@ moves.
 
 **The conventions.**
 
-- **The bit** — WebAssembly, WASI, the boards, Windows, Cranelift (and so R9's code generator), and
-  the LIR oracle: as §7.106 says. These have no unwinder this compiler uses, and a board's image must
+- **The bit** — WebAssembly, WASI, the boards, Windows, Cranelift and the LIR oracle: as §7.106
+  says. (R9's code generator kept it too until its 7.5; it now unwinds as LLVM does on the macOS
+  targets it builds, §7.116.) These have no unwinder this compiler uses, and a board's image must
   not grow one. Windows (MinGW, SEH, `__gcc_personality_seh0`) unwinds only once verified under Wine.
   Cranelift keeps the bit until it writes `.eh_frame` with a personality and a `gcc_except_table`
   per function (`try_call` exists; `cranelift-object` writes no personality or LSDA, and none for
@@ -9283,3 +9284,58 @@ Seven mutants, and the bit's LLVM exit mutant repointed to the printer's test.
 **The compiler written in Nazm** (R3's port, `toolchain/pipeline`) prints LIR, whose text is
 unchanged, and no LLVM: it regenerates `rtext.nz` for runtime ABI 34 and takes the validator's rule
 (`openspec/changes/performance-leadership/design.md`, *4.2 in the reference*).
+
+## 7.116 Nazm's own code generator as a backend: `nazm build --backend nazm` — R9 D15, 2026-10-15
+
+Written from `openspec/changes/r9-code-generator/design.md`, D14 and D15. Nazm's own code
+generator, `nzcg` (`toolchain/codegen/`, written in Nazm), turns a unit's printed LIR into a
+relocatable object; it is to replace Cranelift as the fast build before 1.0. Since D15 it is a third
+`nazm_lir::backend::Backend`, beside LLVM's and Cranelift's: `--backend nazm`.
+
+**The crate.** `nazm-codegen-nazm` has no code generation of its own, and the same boundary as
+Cranelift's backend (`xtask` *rules*: span, diagnostics, LIR). `plan` is Cranelift's — modules,
+then instances, in link order. `generate` lowers and validates the unit's LIR as Cranelift does
+(the counted heap and the field-by-field layout included), prints it as `nazm lir --ops` does —
+with `--debug`, its positions and one `; file INDEX NAME` line per file they name, the one printer
+both use (`nazm_codegen_nazm::text`) — writes it into a scratch directory of its own (created
+exclusively, mode 0700) and runs `nzcg --target TRIPLE [--one-thread] UNIT.lir OUTDIR`, reading back
+the one object it wrote. `--one-thread` is `Native::single_thread`, the fact that makes the runtime
+define the stack limit as a plain global, which the generator then reads inline (its 7.3). One
+process per unit keeps the per-unit object cache.
+
+**Where it is.** `NAZM_NZCG` names it; otherwise it is installed beside `nazm` as
+`../libexec/nazm/nzcg`, built from `toolchain/codegen/` by the build that ships `nazm` (until R8
+cuts over, with the LLVM backend). It is read once, when first needed; a build with another backend
+never reads it.
+
+**Cache identity.** The backend's version is `nzcg-` and the generator's BLAKE3 digest, the
+runtime ABI revision and `debug`: a changed generator is a new key, as Cranelift's
+`TRANSLATOR_REVISION` and settings are. A unit's key also covers the target, the runtime's digest,
+whether the program has one thread, and the LIR's digest. A debug object is never reused.
+
+**Refusals, and no fallback.** Before anything is compiled: a target the generator does not carry
+before 1.0 — anything but `aarch64-apple-darwin` and `x86_64-apple-darwin` (its D13) — is refused
+(exit 5), and so is a generator that is not there (exit 4, naming the path looked at). After: the
+generator's exit status 3, one `nzcg: refused: …` line per construct, is one `N0101` per line,
+naming the construct, with nothing written; any other failure is `N0900`, a compiler defect, with
+the generator's own words. Neither falls back to another backend.
+
+**The failure convention.** The generator unwinds on a failure as LLVM does on these targets (§7.115;
+its D14, task 7.5): `fail` calls a forced unwind under the C personality, a call whose failure edge
+has work has a landing pad — the edge's own block — and every plain entry lands the unwind. Its
+`nz.raise` and stop function are local to each unit, and its exception object lives in `nz.raise`'s
+frame, so it needs no thread-local storage; objects of the two backends link into one program.
+
+**Evidence.** `crates/nazm-cli/tests/nazm_backend.rs`: every input of the generator's differential
+suite (`toolchain/codegen/tests/run.sh`'s 117) built with `--backend nazm` behaves as the LLVM build —
+output, diagnostics, status and the memory report; the generator is told the target and whether
+the program has one thread, and handed the positions with `--debug`; a refusal is `N0101` per
+construct with nothing written, any other failure `N0900`; a missing generator and a target it
+does not carry are refused before compiling. The backend-differential harness
+(`tests/differential`) and `failure_convention.rs` gain a `nazm` column on macOS: the same output,
+status and memory counts as the interpreter, LLVM and Cranelift, failures through recursion,
+function values, trait methods, tasks, C exports and callbacks, ten thousand frames of `defer`s and
+an exhausted stack included. The tests build the generator from `toolchain/codegen/` with the
+`nazm` under test, once per test process. Mutants in `xtask/mutations/mutations.toml` (`r9-…`).
+In process, without a subprocess, comes at R8, when the compiler driving it is itself Nazm.
+

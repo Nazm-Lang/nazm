@@ -36,6 +36,7 @@ members = [
     "crates/nazm-formal",
     "crates/nazm-mir",
     "crates/nazm-codegen-clif",
+    "crates/nazm-codegen-nazm",
     "crates/nazm-package",
     "crates/nazm-service",
     "crates/nazm-docs",
@@ -92,6 +93,7 @@ nazm-lir = { path = "crates/nazm-lir" }
 nazm-runtime = { path = "crates/nazm-runtime" }
 nazm-mir = { path = "crates/nazm-mir" }
 nazm-codegen-clif = { path = "crates/nazm-codegen-clif" }
+nazm-codegen-nazm = { path = "crates/nazm-codegen-nazm" }
 nazm-package = { path = "crates/nazm-package" }
 nazm-service = { path = "crates/nazm-service" }
 nazm-docs = { path = "crates/nazm-docs" }

@@ -1,0 +1,24 @@
+[package]
+name = "nazm-codegen-nazm"
+description = "The Nazm backend: each unit's LIR, as text, compiled by Nazm's own code generator, nzcg."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.nazm]
+# The sections that are this package's authority, as N32 identifies them (N33).
+docs = ["architecture:7.43"]
+
+[dependencies]
+nazm-span = { workspace = true }
+nazm-diag = { workspace = true }
+# What it hands the generator (R9, D15): each unit's instruction-level LIR, printed, and the
+# backend boundary. Not MIR: every decision a program can observe is LIR's.
+nazm-lir = { workspace = true }
+# Each object's cache key, and the generator's own digest in it.
+blake3 = { workspace = true }
+
+[lints]
+workspace = true
