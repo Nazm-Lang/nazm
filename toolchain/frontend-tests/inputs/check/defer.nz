@@ -1,0 +1,38 @@
+// `defer` (R1b, L12): a body run at every exit of its block, which leaves nothing.
+fn tidy(out: OutCap) -> Int ! { io } {
+    defer { print("one") }
+    defer { print("two"); }
+    let mut i = 0;
+    while i < 3 {
+        defer {
+            let mut j = 0;
+            while j < 2 {
+                if j == 1 { break; }
+                j = j + 1;
+                continue;
+            }
+        }
+        defer { break; }
+        defer { continue; }
+        defer { return 1; }
+        i = i + 1;
+    }
+    defer { let f = fn(x: Int) -> Int { return x; }; f(1) }
+    defer { 7 }
+    0
+}
+
+fn first(xs: Option[Int]) -> Option[Int] {
+    defer { let y = xs?; }
+    xs
+}
+
+fn scoped(n: Int) -> Int {
+    defer {
+        if n > 0 { return n; }
+    }
+    defer { undefined_name; }
+    n
+}
+
+fn main(out: OutCap) -> Int { tidy(out) + scoped(1) }

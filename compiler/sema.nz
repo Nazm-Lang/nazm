@@ -15,7 +15,8 @@
 // `Vec`s, tuples (the generic record of their arity), arrays and applications of any type; functions
 // with type parameters (and `Equality` requirements), effect parameters (N51) and contracts (N87);
 // attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
-// assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
+// assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`, `defer`;
+// literals,
 // names, `-`, `!`, the binary operators but shifts, calls of the module's functions and of the built-ins (generic ones by
 // inference, `Box`, `Cell` and `Chain` among them), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
@@ -468,7 +469,10 @@ fn s_fields() -> Int { 16 }
 fn s_eparam() -> Int { 17 }
 // How many of the array types written are held to the rules already (Gate 2).
 fn s_arrays() -> Int { 18 }
-fn s_slots() -> Int { 19 }
+// Where the `defer` body being checked begins (R1b, L12): the loop depth there plus one, or 0
+// outside one.
+fn s_defer() -> Int { 19 }
+fn s_slots() -> Int { 20 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -4301,6 +4305,7 @@ fn check_function(c: Ck, f: Int) -> Int {
     ss(c, s_ret(), declared);
     ss(c, s_rs(), rts);
     ss(c, s_loop(), 0);
+    ss(c, s_defer(), 0);
     let completion = check_block(c, body, declared);
     if completion >= 0 && assignable(c, completion, declared) == false {
         let shown = show(c, completion);
@@ -4585,8 +4590,20 @@ fn check_stmt(c: Ck, s: Int) -> Bool {
         return false;
     }
     if k == "Return" {
+        refuse_leaving_defer(c, "`return`", fld(c, n, "span"));
         check_return(c, n);
         return true;
+    }
+    // Run at every exit of the enclosing block (R1b, L12): it completes there, and leaves nothing —
+    // no value, and no `return`, `?`, `break` or `continue` out. A value its last line produces is
+    // discarded, as a loop body's is.
+    if k == "Defer" {
+        let saved = gs(c, s_defer());
+        ss(c, s_defer(), gs(c, s_loop()) + 1);
+        ss(c, s_discard(), 1);
+        check_block(c, fld(c, n, "body"), none());
+        ss(c, s_defer(), saved);
+        return false;
     }
     // A scope joins every task it started, so it always completes — and a `break` inside one
     // still leaves the enclosing loop, exactly as a nested block does.
@@ -4813,7 +4830,18 @@ fn check_return(c: Ck, r: Int) -> Int {
     0
 }
 
+// `what` at `at` would leave the `defer` body being checked, if there is one (`N0631`).
+fn refuse_leaving_defer(c: Ck, what: Str, at: Int) -> Int {
+    if gs(c, s_defer()) == 0 { return 0; }
+    err(c, "N0631", at, str_concat(what, " cannot leave a `defer` body"),
+            "a `defer` body runs while its block is being left, by its end or by a `return`, `?`, `break` or `continue`; it finishes, and the leaving goes on")
+}
+
 fn check_loop_control(c: Ck, word: Str, span: Int) -> Int {
+    if gs(c, s_defer()) == gs(c, s_loop()) + 1 {
+        refuse_leaving_defer(c, cat3("`", word, "`"), span);
+        return 0;
+    }
     if gs(c, s_loop()) == 0 {
         err(c, "N0312", span, cat3("`", word, "` is only valid inside a loop"), cat3("there is no enclosing `while` for this `", word, "` to affect"));
     }
@@ -5153,6 +5181,9 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     let saved_ret = gs(c, s_ret());
     let saved_rs = gs(c, s_rs());
     let saved_loop = gs(c, s_loop());
+    // A closure in a `defer` body is a function of its own, which may return (L12).
+    let saved_defer = gs(c, s_defer());
+    ss(c, s_defer(), 0);
     let saved_scope = gs(c, s_scope());
     ss(c, s_scope(), 0);
     ss(c, s_fn(), id);
@@ -5208,6 +5239,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ss(c, s_ret(), saved_ret);
     ss(c, s_rs(), saved_rs);
     ss(c, s_loop(), saved_loop);
+    ss(c, s_defer(), saved_defer);
     ss(c, s_scope(), saved_scope);
     ty
 }
@@ -9629,6 +9661,7 @@ fn prelude_enum(c: Ck, t: Int, name: Str) -> Bool { is_enum(c, t) && ta(c, t) ==
 fn check_propagate(c: Ck, e: Int, expected: Int) -> Int {
     let operand = fld(c, e, "operand");
     let at = fld(c, e, "op_span");
+    refuse_leaving_defer(c, "`?`", at);
     let ot = check_expr(c, operand, none());
     if ot == diverges() { return diverges(); }
     if ot == unit() {
