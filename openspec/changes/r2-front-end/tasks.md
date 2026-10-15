@@ -250,6 +250,13 @@
       modules given). Registry dependencies, features, profiles, `heap-limit` and markers stop.
       `inputs/packages/`. `run.sh check`: 2,802 agree, 3 differ; the checker carries 2,794, all
       agree (2,812 and 2,804 with the new cases)
+- [ ] 3.1zf Map literals and `for` over `Bytes`: the calls the parser writes for a map literal
+      (`hashmap_single`, `hashmap_set`) found by `called_names` (now `syntax.nz`'s
+      `sx_called_names`) and given to `prelude_named`, so `@std/hashmap` is the module's as in the
+      reference, and checked as written; a `for` over a `Bytes` binds each byte as a `UInt8`, its
+      flows read through the `Bytes` cell. `inputs/check/map-literals.nz`,
+      `inputs/check/bytes-flows.nz`. `run.sh check`: 2,813 agree, 2 differ; the checker carries
+      2,807, all agree (2,815 and 2,809 with the new cases)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

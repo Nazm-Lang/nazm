@@ -329,6 +329,22 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
         // The prelude's standard modules a program module names (R1.5, D9): never a package's.
         let in_program = is_std == false && is_program(source_root, packages, path);
         let mut given = strs_new();
+        // The calls the parser wrote for a form (a map literal's `hashmap_single`).
+        let called = strs_new();
+        let functions = sx_items(t, sx_field(t, program, "functions"));
+        let mut f = 0;
+        while f < ints_len(functions) {
+            let body = sx_field(t, ints_get(functions, f), "body");
+            if sx_is_some(t, body) {
+                let names = sx_called_names(t, sx_unwrap(t, body));
+                let mut q = 0;
+                while q < strs_len(names) {
+                    strs_push(called, strs_get(names, q));
+                    q = q + 1;
+                }
+            }
+            f = f + 1;
+        }
         if in_program {
             let written = strs_new();
             let mut w = 0;
@@ -336,7 +352,7 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
                 if ints_get(children_std, w) == 1 { strs_push(written, strs_get(children, w)); }
                 w = w + 1;
             }
-            given = prelude_named(table, text, written);
+            given = prelude_named(table, text, written, called);
         }
         // Pushed in reverse, so they are read in source order; the prelude's after the written.
         let mut g = strs_len(given) - 1;
@@ -558,11 +574,10 @@ fn run_has(pool: Strs, first: Int, count: Int, set: Strs) -> Bool {
 }
 
 // The prelude modules a program module names (`prelude_named`), in the prelude's order, leaving
-// out those it imports itself: by an identifier that is one of their items, or by a method that
-// resolves to one of their functions and to no built-in; with the prelude modules those import.
-// The calls the parser writes for a form (a map literal's `hashmap_single`) are the checker's to
-// stop at.
-fn prelude_named(tb: PreludeTable, text: Str, written: Strs) -> Strs {
+// out those it imports itself: by an identifier that is one of their items or a call the parser
+// wrote for a form (a map literal's `hashmap_single`), or by a method that resolves to one of their
+// functions and to no built-in; with the prelude modules those import.
+fn prelude_named(tb: PreludeTable, text: Str, written: Strs, called: Strs) -> Strs {
     let kinds = ints_new();
     let starts = ints_new();
     let ends = ints_new();
@@ -586,6 +601,7 @@ fn prelude_named(tb: PreludeTable, text: Str, written: Strs) -> Strs {
     while e < strs_len(tb.entry) {
         let name = strs_get(tb.entry, e);
         let named = contains(written, name) || run_has(tb.names, ints_get(tb.nfirst, e), ints_get(tb.ncount, e), idents)
+                || run_has(tb.names, ints_get(tb.nfirst, e), ints_get(tb.ncount, e), called)
                 || run_has(tb.methods, ints_get(tb.mfirst, e), ints_get(tb.mcount, e), methods);
         if named { strs_push(wanted, name); }
         e = e + 1;
