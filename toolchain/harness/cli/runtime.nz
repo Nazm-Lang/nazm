@@ -1,0 +1,93 @@
+// N43: the native runtime, as a built program shows it: the three ways a program ends, an `Err`
+// that is data, the arguments stored once at startup. Ported from
+// `crates/nazm-cli/tests/runtime.rs` (R7). The tests that compile the runtime's LLVM text with a C
+// harness (`nazm_lir::emit_runtime`, the platform and switch emitters) or read its inventory stay
+// Rust (`tests/stays-rust.txt`).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// Build `src` with `backend` and run it with `args` (split at spaces; `|` separates arguments
+/// that hold one), with or without the memory report.
+fn run_prog(h: Caps, src: Str, backend: Str, args: Strs, report: Bool) -> Result[Ran, Str] ! { io, spawn } {
+    let dir = prog_dir(h, "prog.nz", src)?;
+    let a = words(f"build --no-cache --backend {backend}");
+    strs_push(a, f"{dir}/prog.nz");
+    strs_push(a, "-o");
+    strs_push(a, f"{dir}/prog");
+    let b = nazm(h, "", a);
+    check_that(b.code == 0, b.stderr)?;
+    let sh = strs_new();
+    strs_push(sh, "-c");
+    strs_push(sh, bounded_script());
+    strs_push(sh, f"{dir}/prog");
+    for x in args {
+        strs_push(sh, x);
+    }
+    let env = if report { env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1") } else { env_unset(suite_env(h), "NAZM_MEMORY_REPORT") };
+    let r = run(h, "sh", sh, "", env);
+    scratch_remove(h, dir);
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn the_three_ways_a_program_ends_are_distinguished(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for backend in words("llvm cranelift") {
+        // Normal return: the report (when asked for), then the result on stdout, status 0.
+        let r = run_prog(h, "fn main(io: IoCap) -> Int { let s = str_concat(\"a\", \"b\"); print(s); 7 }\n", backend, strs_new(), true)?;
+        check_that(r.code == 0 && r.stdout == "ab7\n", f"{backend}: {ran_show(r)}")?;
+        check_that(text_starts_with(r.stderr, "nazm-memory: "), f"{backend}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "strings allocated=1 reclaimed=1 live=0"), f"{backend}: {ran_show(r)}")?;
+        // Without the variable, nothing on stderr.
+        let q = run_prog(h, "fn main() -> Int { 7 }\n", backend, strs_new(), false)?;
+        check_that(q.code == 0 && q.stdout == "7\n" && q.stderr == "", backend)?;
+        // Failure: the report first (the counts are final), then the first failure, status 2, and
+        // no result.
+        let f = run_prog(h, "fn main() -> Int { let s = str_concat(\"a\", \"b\"); 9223372036854775807 + str_len(s) }\n", backend, strs_new(), true)?;
+        check_that(f.code == 2 && f.stdout == "", f"{backend}: {ran_show(f)}")?;
+        let lines = text_lines(f.stderr);
+        check_that(strs_len(lines) > 1, f"{backend}: {ran_show(f)}")?;
+        check_that(text_starts_with(strs_get(lines, 0), "nazm-memory: ") && text_contains(strs_get(lines, 0), "live=0"), f"{backend}: {ran_show(f)}")?;
+        check_that(text_contains(strs_get(lines, 1), "N0400"), f"{backend}: {ran_show(f)}")?;
+        // Explicit exit: that status at once — no report, no result, nothing reclaimed.
+        let e = run_prog(h, "fn main(io: IoCap) -> Int { let s = str_concat(\"a\", \"b\"); print(s); exit_with(5); 0 }\n", backend, strs_new(), true)?;
+        check_that(e.code == 5 && e.stdout == "ab" && e.stderr == "", f"{backend}: {ran_show(e)}")?;
+    }
+    ok()
+}
+
+@test
+fn an_err_is_data_and_never_a_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn parse(n: Int) -> Result[Int, Str] { if n > 0 { Result[Int, Str].Ok(value: n) } else { Result[Int, Str].Err(error: \"no\") } }\nfn main() -> Int { match parse(0) { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e) + 40 } }\n";
+    for backend in words("llvm cranelift") {
+        let r = run_prog(h, src, backend, strs_new(), true)?;
+        check_that(r.code == 0 && r.stdout == "42\n", f"{backend}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "live=0") && !text_contains(r.stderr, "N04"), f"{backend}: {ran_show(r)}")?;
+    }
+    ok()
+}
+
+@test
+fn the_arguments_are_stored_once_at_startup_without_the_program_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main(io: IoCap) -> Int { let mut i = 0; while i < args_count() { print(arg(i)); print(\",\"); i = i + 1; } args_count() }\n";
+    let args = strs_new();
+    strs_push(args, "one");
+    strs_push(args, "two words");
+    strs_push(args, "");
+    for backend in words("llvm cranelift") {
+        let r = run_prog(h, src, backend, args, true)?;
+        check_that(r.code == 0, f"{backend}: {ran_show(r)}")?;
+        check_that(r.stdout == "one,two words,,3\n", f"{backend}: {ran_show(r)}")?;
+        // `arg` strings are the process's own storage: nothing to allocate, nothing to free.
+        check_that(text_contains(r.stderr, "strings allocated=0 reclaimed=0 live=0"), f"{backend}: {ran_show(r)}")?;
+        let q = run_prog(h, src, backend, strs_new(), false)?;
+        check_that(q.stdout == "0\n", f"{backend}: {ran_show(q)}")?;
+    }
+    ok()
+}
