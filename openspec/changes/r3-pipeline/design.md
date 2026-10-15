@@ -244,6 +244,18 @@ module's `file` (the index a position names) and `path` (the loader's name for i
 `callee_at` (calls, trait calls, indirect calls) and a `match` binding's `at`. Without them the
 positions, file names and those statements' spans could only be guessed.
 
+## Failures by unwinding (8.1)
+
+The reference crosses a call's failure by unwinding on the hosted targets (performance-leadership
+4.2, `docs/architecture.md` §7.115). LIR's text is unchanged — a call still names its `failed`
+value, now only the condition of the branch ending its block, which `ops.nz`'s lowering already
+obeys — so no digest here moves. This pipeline prints no LLVM of its own and does not validate
+LIR (its validator is MIR's, `verify.nz`), so the validator's new rule has no place here yet; it
+belongs with the LIR validator when one is ported. What does move is the runtime: ABI revision 34
+(an image now links the system's unwinder) and `nz.exc`, the exception object a unit defines, an
+ordinary global in a one-thread program (`SINGLE_THREAD_STATE`). `rtext.nz` is regenerated from
+the runtime crate (`tests/runtime_text.py`); the runtime digest every object key carries follows.
+
 ## Order of work
 
 1. This proposal.
