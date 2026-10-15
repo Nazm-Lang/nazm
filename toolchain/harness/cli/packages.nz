@@ -1,0 +1,345 @@
+// N46: packages, the lockfile, and reproducible builds. A package built from its directory under
+// every implementation, with a diamond resolved to one package; every resolution refusal by its
+// code; a package seeing only its own dependencies; a lockfile whose bytes are a function of the
+// packages alone and that a `--locked` build is held to, refusing tampering; dependency modules
+// keyed by package; the caches reusing an unchanged dependency and redoing a changed one; and two
+// copies of one package, built from empty caches in two directories, byte-identical. The cost
+// measurement is `#[ignore]`d in Rust and stays there (design decision 10). Ported from
+// `crates/nazm-cli/tests/packages.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/time"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// A manifest; `deps` is `name path version` triples joined by `;`.
+fn manifest(name: Str, version: Str, main: Bool, deps: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, f"schema = \"nazm.package/1\"\n[package]\nname = \"{name}\"\nversion = \"{version}\"\n");
+    if main {
+        strs_push(parts, "main = \"main.nz\"\n");
+    }
+    if deps != "" {
+        strs_push(parts, "[dependencies]\n");
+        for dep in text_split(deps, ";") {
+            let f = words(dep);
+            strs_push(parts, f"{strs_get(f, 0)} = {{ path = \"{strs_get(f, 1)}\", version = \"{strs_get(f, 2)}\" }}\n");
+        }
+    }
+    str_join(parts, "")
+}
+
+/// app → geo → shapes, and app → shapes too: a diamond.
+fn diamond(h: Caps, root: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, root, "shapes/nazm.toml", manifest("shapes", "0.3.1", false, ""))?;
+    scratch_write(h, root, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n }\n")?;
+    scratch_write(h, root, "shapes/src/extra.nz", "pub fn unused() -> Int { 0 }\n")?;
+    scratch_write(h, root, "geo/nazm.toml", manifest("geo", "1.2.0", false, "shapes ../shapes 0.3.1"))?;
+    scratch_write(h, root, "geo/src/lib.nz", "use \"shapes:poly.nz\";\npub fn perimeter(n: Int, len: Int) -> Int { sides(n) * len }\n")?;
+    scratch_write(h, root, "app/nazm.toml", manifest("app", "0.1.0", true, "geo ../geo 1.2.0;shapes ../shapes 0.3.1"))?;
+    scratch_write(h, root, "app/src/main.nz", "use \"geo:lib.nz\";\nuse \"shapes:poly.nz\";\nfn main() -> Int { perimeter(4, 10) + sides(2) }\n")
+}
+
+fn diamond_dir(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    diamond(h, d)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+@test
+fn a_package_builds_from_its_directory_everywhere_and_a_diamond_is_one_package(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = diamond_dir(h)?;
+    let r = nazm(h, d, words("run --interpret app"));
+    check_that(r.code == 0 && r.stdout == "42\n", r.stderr)?;
+    let c = nazm(h, d, words("check app"));
+    check_that(c.code == 0, c.stderr)?;
+    for backend in words("llvm cranelift") {
+        let b = nazm(h, d, words(f"build --backend {backend} app -o {d}/app-{backend}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let x = bounded_exe(h, f"{d}/app-{backend}", "", suite_env(h));
+        check_that(x.stdout == "42\n", backend)?;
+    }
+    // The lockfile lists `shapes` once.
+    let l = nazm(h, d, words("lock app"));
+    check_that(l.code == 0, l.stderr)?;
+    let lock = read_text(h, f"{d}/app/nazm.lock")?;
+    scratch_remove(h, d);
+    check_that(count_matches(lock, "name = \"shapes\"") == 1, lock)?;
+    check_that(text_contains(lock, "dependencies = [\"geo\", \"shapes\"]"), lock)
+}
+
+/// `nazm ARGS` in `d` refused with `code`: its standard error.
+fn refused_in(h: Caps, d: Str, args: Str, code: Str) -> Result[Str, Str] ! { io, spawn } {
+    let o = nazm(h, d, words(args));
+    scratch_remove(h, d);
+    check_that(o.code != 0, f"{args} succeeded")?;
+    check_that(text_contains(o.stderr, f"[{code}]") || text_contains(o.stderr, f"\"code\":\"{code}\""), f"{args}: wanted {code}: {o.stderr}")?;
+    Result[Str, Str].Ok(value: o.stderr)
+}
+
+const ZERO: Str = "fn main() -> Int { 0 }\n";
+
+@test
+fn every_resolution_refusal_has_its_own_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An unknown key, and a version of the wrong shape.
+    let a = scratch_new(h);
+    scratch_write(h, a, "app/nazm.toml", f"{manifest("app", "0.1.0", true, "")}edition = 2\n")?;
+    scratch_write(h, a, "app/src/main.nz", ZERO)?;
+    refused_in(h, a, "run --interpret app", "N0500")?;
+    let b = scratch_new(h);
+    scratch_write(h, b, "app/nazm.toml", manifest("app", "0.1", true, ""))?;
+    scratch_write(h, b, "app/src/main.nz", ZERO)?;
+    refused_in(h, b, "run --interpret app", "N0500")?;
+    // A dependency that is not there.
+    let c = scratch_new(h);
+    scratch_write(h, c, "app/nazm.toml", manifest("app", "0.1.0", true, "gone ../gone 1.0.0"))?;
+    scratch_write(h, c, "app/src/main.nz", ZERO)?;
+    refused_in(h, c, "run --interpret app", "N0501")?;
+    // A declared version its manifest does not state.
+    let e = diamond_dir(h)?;
+    scratch_write(h, e, "geo/nazm.toml", manifest("geo", "1.2.0", false, "shapes ../shapes 0.3.2"))?;
+    refused_in(h, e, "run --interpret app", "N0502")?;
+    // Two packages of one name: `shapes` at two paths.
+    let f = diamond_dir(h)?;
+    scratch_write(h, f, "shapes2/nazm.toml", manifest("shapes", "0.3.1", false, ""))?;
+    scratch_write(h, f, "shapes2/src/poly.nz", "pub fn sides(n: Int) -> Int { n }\n")?;
+    scratch_write(h, f, "geo/nazm.toml", manifest("geo", "1.2.0", false, "shapes ../shapes2 0.3.1"))?;
+    refused_in(h, f, "run --interpret app", "N0503")?;
+    // A declared name the package at that path does not have.
+    let g = diamond_dir(h)?;
+    scratch_write(h, g, "app/nazm.toml", manifest("app", "0.1.0", true, "geometry ../geo 1.2.0"))?;
+    refused_in(h, g, "run --interpret app", "N0503")?;
+    // A cycle, named in full.
+    let k = scratch_new(h);
+    scratch_write(h, k, "a/nazm.toml", manifest("a", "1.0.0", true, "b ../b 1.0.0"))?;
+    scratch_write(h, k, "a/src/main.nz", ZERO)?;
+    scratch_write(h, k, "b/nazm.toml", manifest("b", "1.0.0", false, "a ../a 1.0.0"))?;
+    scratch_write(h, k, "b/src/lib.nz", "pub fn f() -> Int { 0 }\n")?;
+    let e1 = refused_in(h, k, "run --interpret a", "N0504")?;
+    check_that(text_contains(e1, "a → b → a"), e1)?;
+    // Reached through a package outside it, the cycle is still named alone.
+    let m = scratch_new(h);
+    scratch_write(h, m, "app/nazm.toml", manifest("app", "1.0.0", true, "a ../a 1.0.0"))?;
+    scratch_write(h, m, "app/src/main.nz", ZERO)?;
+    scratch_write(h, m, "a/nazm.toml", manifest("a", "1.0.0", false, "b ../b 1.0.0"))?;
+    scratch_write(h, m, "a/src/lib.nz", "pub fn f() -> Int { 0 }\n")?;
+    scratch_write(h, m, "b/nazm.toml", manifest("b", "1.0.0", false, "a ../a 1.0.0"))?;
+    scratch_write(h, m, "b/src/lib.nz", "pub fn g() -> Int { 0 }\n")?;
+    let e2 = refused_in(h, m, "run --interpret app", "N0504")?;
+    check_that(text_contains(e2, "a dependency cycle: a → b → a"), e2)?;
+    check_that(!text_contains(e2, "app →"), e2)?;
+    // A package with no entry, and a directory that is not a package.
+    let n = scratch_new(h);
+    scratch_write(h, n, "lib/nazm.toml", manifest("lib", "1.0.0", false, ""))?;
+    scratch_write(h, n, "lib/src/lib.nz", "pub fn f() -> Int { 0 }\n")?;
+    refused_in(h, n, "run --interpret lib", "N0509")?;
+    let q = scratch_new(h);
+    scratch_mkdir(h, q, "plain")?;
+    let o = nazm(h, q, words("run --interpret plain"));
+    scratch_remove(h, q);
+    check_that(o.code == 3, o.stderr)
+}
+
+@test
+fn a_package_sees_its_own_dependencies_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `shapes` is `geo`'s, not `app`'s: `app` may not reach it.
+    let a = diamond_dir(h)?;
+    scratch_write(h, a, "app/nazm.toml", manifest("app", "0.1.0", true, "geo ../geo 1.2.0"))?;
+    let e = refused_in(h, a, "check --json app", "N0508")?;
+    check_that(text_contains(e, "`geo`"), e)?;
+    // A relative import may not leave its package's source root.
+    let b = diamond_dir(h)?;
+    scratch_write(h, b, "app/src/main.nz", "use \"../../shapes/src/poly.nz\";\nfn main() -> Int { sides(1) }\n")?;
+    refused_in(h, b, "check app", "N0205")?;
+    // And `NAME:` outside any package means nothing.
+    let c = prog_dir(h, "prog.nz", "use \"shapes:poly.nz\";\nfn main() -> Int { 0 }\n")?;
+    let o = nazm(h, c, words("check prog.nz"));
+    scratch_remove(h, c);
+    check_that(text_contains(o.stderr, "N0508"), o.stderr)
+}
+
+@test
+fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = diamond_dir(h)?;
+    let o = nazm(h, d, words("run --interpret --locked app"));
+    check_that(text_contains(o.stderr, "[N0505]"), o.stderr)?;
+    check_that(nazm(h, d, words("lock app")).code == 0, "lock")?;
+    let lock = read_text(h, f"{d}/app/nazm.lock")?;
+    // Locked again: the same bytes, and not rewritten.
+    let again = nazm(h, d, words("lock app"));
+    check_that(text_contains(again.stderr, "up to date"), again.stderr)?;
+    // The same packages in another directory lock to the same bytes: nothing absolute enters.
+    let e = diamond_dir(h)?;
+    check_that(nazm(h, e, words("lock app")).code == 0, "lock elsewhere")?;
+    let other = read_text(h, f"{e}/app/nazm.lock")?;
+    scratch_remove(h, e);
+    check_that(other == lock, other)?;
+    let fine = nazm(h, d, words("run --interpret --locked app"));
+    check_that(fine.stdout == "42\n", fine.stderr)?;
+    // A file inside the package under `--locked` is held to it too.
+    let one = nazm(h, d, words("check --locked app/src/main.nz"));
+    check_that(one.code == 0, one.stderr)?;
+    // Tampering with a dependency's source, or its manifest, without locking again.
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n + 1 }\n")?;
+    let tb = nazm(h, d, words("build --locked app -o x"));
+    check_that(text_contains(tb.stderr, "[N0507]") && text_contains(tb.stderr, "`shapes`"), tb.stderr)?;
+    check_that(!file_exists_at(h.io, f"{d}/x"), "nothing was built")?;
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n }\n")?;
+    check_that(nazm(h, d, words("run --interpret --locked app")).code == 0, "restored")?;
+    scratch_write(h, d, "shapes/src/new.nz", "pub fn g() -> Int { 0 }\n")?;
+    let added = nazm(h, d, words("run --interpret --locked app"));
+    check_that(text_contains(added.stderr, "[N0507]"), added.stderr)?;
+    file_remove(h.io, f"{d}/shapes/src/new.nz");
+    // A changed dependency set or version is a different resolution.
+    scratch_write(h, d, "app/nazm.toml", text_replace(manifest("app", "0.1.0", true, "geo ../geo 1.2.0;shapes ../shapes 0.3.1"), "0.1.0", "0.2.0"))?;
+    let moved = nazm(h, d, words("run --interpret --locked app"));
+    scratch_remove(h, d);
+    check_that(text_contains(moved.stderr, "[N0506]"), moved.stderr)
+}
+
+@test
+fn a_dependency_s_module_is_keyed_by_its_package(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = diamond_dir(h)?;
+    let main = f"{d}/app/src/main.nz";
+    let at = find(read_text(h, main)?, "perimeter(");
+    let o = nazm(h, d, words(f"context --root {main} --file {main} --byte {at} --json"));
+    scratch_remove(h, d);
+    check_that(text_contains(o.stdout, "\"definition\":\"geo@1.2.0/lib.nz::fn perimeter\""), f"{o.stdout}{o.stderr}")
+}
+
+/// `checked` of the run's `nazm.check-report/1` line.
+fn checked_of(o: Ran) -> Result[Int, Str] ! {} {
+    for l in text_lines(o.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            let v = jparse(l)?;
+            return Result[Int, Str].Ok(value: jint(v, "checked"));
+        }
+    }
+    Result[Int, Str].Err(error: f"{o.stdout}{o.stderr}")
+}
+
+@test
+fn an_unchanged_dependency_is_reused_and_a_changed_one_is_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = diamond_dir(h)?;
+    let first = nazm(h, d, words("check app --cache-report"));
+    check_that(checked_of(first)? >= 3, first.stdout)?;
+    let second = nazm(h, d, words("check app --cache-report"));
+    check_that(checked_of(second)? == 0, f"nothing changed: {second.stdout}")?;
+    // A body-only change to `shapes`: it is checked again; its dependents are reused.
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n + 0 }\n")?;
+    let third = nazm(h, d, words("check app --cache-report"));
+    check_that(checked_of(third)? == 1, third.stdout)?;
+    let r = nazm(h, d, words("run --interpret app"));
+    scratch_remove(h, d);
+    check_that(r.stdout == "42\n", ran_show(r))
+}
+
+@test
+fn two_copies_built_from_empty_caches_are_byte_identical(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for backend in words("llvm cranelift") {
+        let exes = strs_new();
+        let mut k = 0;
+        while k < 2 {
+            let d = diamond_dir(h)?;
+            let b = nazm(h, d, words(f"build --no-cache --backend {backend} app -o {d}/out"));
+            check_that(b.code == 0, b.stderr)?;
+            strs_push(exes, read_raw(h, f"{d}/out")?);
+            scratch_remove(h, d);
+            k = k + 1;
+        }
+        check_that(strs_get(exes, 0) == strs_get(exes, 1), f"{backend}: two builds of one package differ")?;
+    }
+    ok()
+}
+
+@test
+fn a_large_package_graph_resolves_and_locks_deterministically(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two hundred packages, each depending on up to three earlier ones.
+    let d = scratch_new(h);
+    let n = 200;
+    let mut i = 0;
+    while i < n {
+        let picks = ints_new();
+        let low = if i > 0 { i - 1 } else { 0 };
+        for j in text_split(f"{i / 2} {i / 3} {low}", " ") {
+            let jn = parse_usize(j);
+            if jn < i && !ints_has(picks, jn) {
+                ints_push(picks, jn);
+            }
+        }
+        ints_sort(picks);
+        let deps = strs_new();
+        let uses = strs_new();
+        let calls = strs_new();
+        for j in picks {
+            strs_push(deps, f"p{j} ../p{j} 1.0.0");
+            strs_push(uses, f"use \"p{j}:lib.nz\";\n");
+            strs_push(calls, f"f_p{j}()");
+        }
+        let last = i == n - 1;
+        scratch_write(h, d, f"p{i}/nazm.toml", manifest(f"p{i}", "1.0.0", last, str_join(deps, ";")))?;
+        let sum = if strs_len(calls) == 0 { "1" } else { f"1 + {str_join(calls, " + ")}" };
+        if last {
+            scratch_write(h, d, f"p{i}/src/main.nz", f"{str_join(uses, "")}fn main() -> Int {{ ({sum}) % 1000 }}\n")?;
+        } else {
+            scratch_write(h, d, f"p{i}/src/lib.nz", f"{str_join(uses, "")}pub fn f_p{i}() -> Int {{ ({sum}) % 1000 }}\n")?;
+        }
+        i = i + 1;
+    }
+    let root = f"p{n - 1}";
+    let tc = h.t;
+    let s = time_ms(tc);
+    let l = nazm(h, d, words(f"lock {root}"));
+    let lock_ms = time_ms(tc) - s;
+    check_that(l.code == 0, l.stderr)?;
+    let lock = read_text(h, f"{d}/{root}/nazm.lock")?;
+    check_that(count_matches(lock, "[[package]]") == n, "every package locked")?;
+    // In name order, whatever order resolution met them in.
+    let names = strs_new();
+    for ln in text_lines(lock) {
+        match strip_prefix(ln, "name = \"") {
+            Option.Some(value: rest) => { strs_push(names, trim_end_matches(rest, "\"")); },
+            Option.None() => {},
+        };
+    }
+    let mut k = 1;
+    while k < strs_len(names) {
+        check_that(text_compare(strs_get(names, k - 1), strs_get(names, k)) < 0, f"{strs_get(names, k - 1)} before {strs_get(names, k)}")?;
+        k = k + 1;
+    }
+    let c = nazm(h, d, words(f"check {root}"));
+    check_that(c.code == 0, c.stderr)?;
+    file_remove(h.io, f"{d}/{root}/nazm.lock");
+    check_that(nazm(h, d, words(f"lock {root}")).code == 0, "lock again")?;
+    let relocked = read_text(h, f"{d}/{root}/nazm.lock")?;
+    scratch_remove(h, d);
+    check_that(relocked == lock, "a second lock differs")?;
+    check_that(lock_ms < 20000, f"{lock_ms} ms to resolve and lock {n} packages")
+}
+
+fn ints_has(xs: Ints, x: Int) -> Bool ! {} {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+// `what_packages_cost` is `#[ignore]`d in Rust "a measurement, run by the benchmark gate": it
+// stays Rust (design decision 10).

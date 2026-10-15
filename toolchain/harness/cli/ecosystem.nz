@@ -1,0 +1,431 @@
+// N74: the ecosystem a fresh user meets — templates, API docs, C headers, a publish dry run and an
+// editor client. Every template initialises into a project its own README's commands check, test,
+// build and inspect; a library package is checked as its modules; `nazm doc` documents exactly the
+// public definitions with their semantic facts and links back to the source, the same bytes twice;
+// `nazm bindgen` translates only what crosses the C boundary, refuses the rest by name, and what it
+// writes links against real C; a dry-run publish writes nothing and records what the publish then
+// does; the editor client holds no language logic. Ported from
+// `crates/nazm-cli/tests/ecosystem.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS` in `dir`, which must succeed: its standard output.
+fn must(h: Caps, dir: Str, args: Str) -> Result[Str, Str] ! { io, spawn } {
+    let o = nazm(h, dir, words(args));
+    check_that(o.code == 0, f"nazm {args} in {dir}: {o.stdout}{o.stderr}")?;
+    Result[Str, Str].Ok(value: o.stdout)
+}
+
+fn init(h: Caps, root: Str, name: Str, template: Str) -> Result[Str, Str] ! { io, spawn } {
+    must(h, root, f"init {name} --template {template}")?;
+    Result[Str, Str].Ok(value: f"{root}/{name}")
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => m.kind == FileKind.Directory(),
+        Result.Err(error: e) => false,
+    }
+}
+
+fn is_file(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => m.kind == FileKind.Regular(),
+        Result.Err(error: e) => false,
+    }
+}
+
+@test
+fn every_template_is_a_project_its_own_commands_hold(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for tp in words("cli library server embedded wasm contract") {
+        let pr = init(h, d, f"my-{tp}", tp)?;
+        let manifest = read_text(h, f"{pr}/nazm.toml")?;
+        check_that(text_contains(manifest, f"name = \"my-{tp}\""), f"{tp}: {manifest}")?;
+        check_that(text_starts_with(read_text(h, f"{pr}/README.md")?, f"# my-{tp}"), tp)?;
+        check_that(text_trim(must(h, pr, "check .")?) == "ok", tp)?;
+        check_that(text_contains(must(h, pr, "test tests")?, "ok"), tp)?;
+        must(h, pr, "lock .")?;
+        // Whatever it is, its API is documented.
+        must(h, pr, "doc . -o api")?;
+    }
+    let cli = f"{d}/my-cli";
+    check_that(must(h, cli, "run --interpret .")? == "hello, world\n0\n", "cli run")?;
+    must(h, cli, "build . -o app")?;
+    let app = run(h, f"{cli}/app", strs_new(), cli, suite_env(h));
+    check_that(app.stdout == "hello, world\n0\n", ran_show(app))?;
+    check_that(text_contains(must(h, cli, "inspect .")?, "\"nazm.inspect/2\""), "inspect")?;
+    // Its total printed, then `main`'s 0 as the result report shows it (R1, 5b.3).
+    let server = f"{d}/my-server";
+    let served = must(h, server, "run --interpret . -- requests.txt")?;
+    check_that(served == "4 requests served\n30\n0\n", served)?;
+    let usage = nazm(h, server, words("run --interpret ."));
+    check_that(usage.code == 2, "a missing argument is a usage error")?;
+    for pair in text_split("embedded aarch64-unknown-none|wasm wasm32-unknown-unknown", "|") {
+        let f = words(pair);
+        let at = f"{d}/my-{strs_get(f, 0)}";
+        must(h, at, f"build --target {strs_get(f, 1)} . --objects build")?;
+        check_that(is_file(h, f"{at}/build/link.txt"), strs_get(f, 0))?;
+    }
+    let ran = must(h, f"{d}/my-contract", "contract src/main.nz --txs txs.txt")?;
+    check_that(jstr(jparse(ran)?, "schema") == "nazm.contract-run/1", ran)?;
+    // A library has nothing to run, and says so.
+    let r = nazm(h, f"{d}/my-library", words("run --interpret ."));
+    scratch_remove(h, d);
+    check_that(text_contains(r.stderr, "N0509"), r.stderr)
+}
+
+@test
+fn init_refuses_rather_than_overwrite_or_guess(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    init(h, d, "taken", "cli")?;
+    let a = nazm(h, d, words("init taken"));
+    let b = nazm(h, d, words("init Not_A_Name"));
+    let c = nazm(h, d, words("init x --template nope"));
+    let made = file_exists_at(h.io, f"{d}/x");
+    scratch_remove(h, d);
+    check_that(a.code != 0 && text_contains(a.stderr, "exists and is not empty"), ran_show(a))?;
+    check_that(b.code != 0 && text_contains(b.stderr, "is not a package name"), ran_show(b))?;
+    check_that(c.code != 0 && text_contains(c.stderr, "cli, library, server, embedded, wasm, contract"), ran_show(c))?;
+    check_that(!made, "x was made")
+}
+
+/// Every file under `dir`, relative to `base`, into `out`.
+fn files_under(h: Caps, base: Str, rel: Str, out: Strs) -> Result[Int, Str] ! { io } {
+    let dir = if rel == "" { base } else { f"{base}/{rel}" };
+    let names = match dir_list(h.io, dir) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"{dir}: {e.message}"); },
+    };
+    for n in names {
+        let r = if rel == "" { n } else { f"{rel}/{n}" };
+        if is_dir(h, f"{base}/{r}") {
+            files_under(h, base, r, out)?;
+        } else {
+            strs_push(out, r);
+        }
+    }
+    ok()
+}
+
+@test
+fn every_template_file_is_one_init_writes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let templates = f"{repo_root(h)}/crates/nazm-cli/templates";
+    let names = match dir_list(h.io, templates) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: e.message); },
+    };
+    for name in names {
+        // The templates' licence (MIT-0) sits beside them and is not a template.
+        if name != "LICENSE" {
+            let pr = init(h, d, f"t-{name}", name)?;
+            let files = strs_new();
+            files_under(h, f"{templates}/{name}", "", files)?;
+            for rel in files {
+                check_that(is_file(h, f"{pr}/{rel}"), f"{name}: {rel} is not written by `nazm init`")?;
+            }
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_library_is_checked_as_its_modules_each_error_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let pr = init(h, d, "lib", "library")?;
+    scratch_write(h, pr, "src/extra.nz", "pub fn bad() -> Int ! {} { true }\n")?;
+    scratch_write(h, pr, "src/uses.nz", "use \"extra.nz\";\npub fn b2() -> Int ! {} { bad() }\n")?;
+    let o = nazm(h, pr, words("check ."));
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(count_matches(o.stderr, "error[N0300]") == 1, o.stderr)?;
+    check_that(text_contains(o.stderr, "nazm: 1 error"), o.stderr)
+}
+
+const DOC_SRC: Str = "// A point on the grid.\npub struct Point { x: Int, y: Int }\n\npub enum Dir { North, To(p: Point) }\n\n// C's adder.\npub extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\npub extern \"C\" fn nazm_triple(x: Int) -> Int ! {} = \"nazm_triple\" { x * 3 }\npub fn shout(io: IoCap, s: Str) -> Int ! { io } { print(s); 0 }\nfn hidden() -> Int { 1 }\nfn main(io: IoCap) -> Int ! { io } { shout(io, \"x\") }\n";
+
+@test
+fn the_api_document_is_the_public_definitions_with_their_facts_and_sources(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", DOC_SRC)?;
+    let first = must(h, d, "doc m.nz")?;
+    check_that(must(h, d, "doc m.nz")? == first, "the same bytes twice")?;
+    let doc = jparse(first)?;
+    let items = "modules/0/items";
+    let names = strs_new();
+    let mut i = 0;
+    while i < jlen(doc, items) {
+        strs_push(names, jstr(doc, f"{items}/{i}/name"));
+        i = i + 1;
+    }
+    check_that(str_join(names, ",") == "Dir,c_add,nazm_triple,shout,Point", str_join(names, ","))?;
+    check_that(!text_contains(first, "hidden") && !text_contains(first, "\"main\""), first)?;
+    let shout = f"{items}/{3}";
+    let c_add = f"{items}/1";
+    check_that(jis(doc, f"{shout}/capabilities", "[\"IoCap\"]"), jv(doc, shout))?;
+    check_that(jis(doc, f"{shout}/effects/required", "[\"io\"]"), jv(doc, shout))?;
+    check_that(jstr(doc, f"{c_add}/foreign") == "c_add", jv(doc, c_add))?;
+    check_that(jstr(doc, f"{c_add}/description") == "C's adder.", jv(doc, c_add))?;
+    check_that(jstr(doc, f"{items}/2/export") == "nazm_triple", jv(doc, f"{items}/2"))?;
+    check_that(jstr(doc, f"{items}/4/description") == "A point on the grid.", jv(doc, f"{items}/4"))?;
+    check_that(jis(doc, f"{items}/4/source", "{\"path\": \"m.nz\", \"line\": 2}"), jv(doc, f"{items}/4"))?;
+    check_that(jis(doc, f"{items}/0/variants/1/fields", "[\"p\"]"), jv(doc, f"{items}/0"))?;
+    // A budget, so the document stays a thing an agent can read: under 700 bytes a definition.
+    check_that(str_len(first) < 700 * jlen(doc, items), f"{str_len(first)} bytes for {jlen(doc, items)} definitions")?;
+    must(h, d, "doc m.nz -o api")?;
+    let md = read_text(h, f"{d}/api/api.md")?;
+    check_that(text_contains(md, f"<a id=\"{jstr(doc, f"{shout}/anchor")}\"></a>"), md)?;
+    check_that(text_contains(md, "- source: [m.nz:9](m.nz#L9)"), md)?;
+    // A program that does not check has no API to document.
+    scratch_write(h, d, "bad.nz", "pub fn f() -> Int { true }\nfn main() -> Int { 0 }\n")?;
+    let bad = nazm(h, d, words("doc bad.nz"));
+    scratch_remove(h, d);
+    check_that(bad.code != 0, ran_show(bad))
+}
+
+const HEADER: Str = "#ifndef M_H\n#define M_H\n#include <stdint.h>\n#include <stdbool.h>\n#define LIMIT 10\n/* Adds. */\nint64_t m_add(int64_t a, int64_t b);\nbool m_is_even(int64_t n);\nint64_t m_len(const char *s);\nint m_small(int x);\nvoid m_log(int64_t level);\nconst char *m_name(void);\ndouble m_half(double x);\nint64_t m_sum(int64_t n, ...);\nvoid m_on(void (*cb)(int64_t));\nstruct point { int64_t x; int64_t y; };\nint64_t m_buf(char *out);\nint64_t malloc(int64_t n);\nint64_t m_widen(int x);\n#endif\n";
+
+/// The reason given for refusing the C text holding `c`, or `Err`.
+fn refused_for(v: JsonDoc, c: Str) -> Result[Str, Str] ! {} {
+    let mut i = 0;
+    while i < jlen(v, "refused") {
+        if text_contains(jstr(v, f"refused/{i}/c"), c) {
+            return Result[Str, Str].Ok(value: jstr(v, f"refused/{i}/reason"));
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"{c} not refused: {jv(v, "")}")
+}
+
+@test
+fn bindgen_translates_what_crosses_and_refuses_the_rest_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.h", HEADER)?;
+    let o = nazm(h, d, words("bindgen m.h -o m.nz"));
+    let module = read_text(h, f"{d}/m.nz")?;
+    scratch_remove(h, d);
+    check_that(o.code == 1, "something was refused")?;
+    let r = jparse(o.stdout)?;
+    let translated = strs_new();
+    let mut i = 0;
+    while i < jlen(r, "translated") {
+        strs_push(translated, jstr(r, f"translated/{i}/nazm"));
+        i = i + 1;
+    }
+    // A complete struct of `int64_t` fields is a C struct since N85, declared first; a `const char *`
+    // result a copy, which a header never promises is not null.
+    let want = text_split("pub extern \"C\" struct point { x: Int, y: Int }|pub extern \"C\" fn m_add(a: Int, b: Int) -> Int = \"m_add\";|pub extern \"C\" fn m_is_even(n: Int) -> Bool = \"m_is_even\";|pub extern \"C\" fn m_len(s: Str) -> Int = \"m_len\";|pub extern \"C\" fn m_name() -> Option[Str] = \"m_name\";", "|");
+    same_strs("translated", translated, want)?;
+    let reasons = text_split("m_small|`int` is not `int64_t`;m_log|returns nothing;m_half|no floating-point;m_sum|variadic;m_on|function pointer;m_buf|`char *` is a pointer;LIMIT|macro;malloc|N0383;m_widen|parameter 1: `int` is not `int64_t`", ";");
+    for case in reasons {
+        let f = text_split(case, "|");
+        let why = refused_for(r, strs_get(f, 0))?;
+        check_that(text_contains(why, strs_get(f, 1)), f"{strs_get(f, 0)}: {why}")?;
+    }
+    // The include guard and the includes are a header's shape, not refused.
+    let mut k = 0;
+    while k < jlen(r, "refused") {
+        check_that(!text_contains(jstr(r, f"refused/{k}/c"), "M_H"), jv(r, f"refused/{k}"))?;
+        k = k + 1;
+    }
+    // Nothing written but what checks.
+    check_that(!text_contains(module, "m_small") && text_contains(module, "m_add"), module)
+}
+
+@test
+fn what_bindgen_writes_links_against_real_c(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.h", "#include <stdint.h>\n#include <stdbool.h>\nint64_t m_add(int64_t a, int64_t b);\nbool m_is_even(int64_t n);\n")?;
+    scratch_write(h, d, "m.c", "#include <stdint.h>\n#include <stdbool.h>\nint64_t m_add(int64_t a, int64_t b) { return a + b; }\nbool m_is_even(int64_t n) { return n % 2 == 0; }\n")?;
+    let b = nazm(h, d, words("bindgen m.h -o m.nz"));
+    check_that(b.code == 0, ran_show(b))?;
+    let cc = run(h, "clang", words("-c m.c -o m.o"), d, env_here(h.io));
+    check_that(cc.code == 0, cc.stderr)?;
+    scratch_write(h, d, "main.nz", "use \"m.nz\";\nfn main(f: ForeignCap) -> Int ! { foreign } { if m_is_even(4) { m_add(40, 2) } else { 0 } }\n")?;
+    must(h, d, "build main.nz -o app --link m.o")?;
+    let out = run(h, f"{d}/app", strs_new(), d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(out.stdout == "42\n", ran_show(out))
+}
+
+@test
+fn a_dry_run_publish_writes_nothing_and_records_what_the_publish_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    init(h, d, "lib", "library")?;
+    scratch_mkdir(h, d, "reg")?;
+    let plan = jparse(must(h, d, "publish --registry reg lib --dry-run")?)?;
+    check_that(jstr(plan, "schema") == "nazm.publish-plan/1", jv(plan, ""))?;
+    check_that(jis(plan, "files", "[\"nazm.toml\", \"src/lib.nz\"]"), jv(plan, ""))?;
+    let listed = match dir_list(h.io, f"{d}/reg") {
+        Result.Ok(value: n) => strs_len(n),
+        Result.Err(error: e) => 0 - 1,
+    };
+    check_that(listed == 0, "nothing written")?;
+    let o = nazm(h, d, words("publish --registry reg lib"));
+    check_that(o.code == 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, jstr(plan, "digest")), "the digest the plan named")?;
+    // Refused for the same reason the publish would be.
+    let again = nazm(h, d, words("publish --registry reg lib --dry-run"));
+    scratch_remove(h, d);
+    check_that(again.code != 0 && text_contains(again.stderr, "already published"), ran_show(again))
+}
+
+@test
+fn the_editor_client_starts_the_compilers_server_and_knows_no_language(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = f"{repo_root(h)}/editors/vscode";
+    let package = jparse(read_text(h, f"{root}/package.json")?)?;
+    check_that(jis(package, "contributes/languages/0/extensions", "[\".nz\"]"), jv(package, "contributes"))?;
+    check_that(jstr(package, "contributes/configuration/properties/nazm.path/default") == "nazm", jv(package, "contributes"))?;
+    let client = read_text(h, f"{root}/extension.js")?;
+    check_that(text_contains(client, "args: [\"lsp\"]"), client)?;
+    // A client, not a second implementation: no more than starting the server takes.
+    check_that(strs_len(text_lines(client)) < 40, f"{strs_len(text_lines(client))} lines")?;
+    for f in words("launch.example.json tasks.example.json language-configuration.json") {
+        jparse(read_text(h, f"{root}/{f}")?)?;
+    }
+    check_that(text_contains(read_text(h, f"{root}/tasks.example.json")?, "nazm build --debug"), "tasks.example.json")
+}
+
+fn has_in(v: JsonDoc, key: Str, x: Str) -> Bool ! {} {
+    let mut i = 0;
+    while i < jlen(v, key) {
+        if jstr(v, f"{key}/{i}") == x {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+@test
+fn the_capability_inventory_names_every_authority_target_and_command(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let inv = jparse(must(h, d, "capabilities --json")?)?;
+    scratch_remove(h, d);
+    for c in words("IoCap SpawnCap ForeignCap VouchCap TimeCap MmioCap") {
+        check_that(has_in(inv, "authority", c), c)?;
+    }
+    for tg in words("aarch64-unknown-none wasm32-unknown-unknown") {
+        check_that(has_in(inv, "targets", tg), tg)?;
+    }
+    for c in words("init doc bindgen publish contract repl") {
+        check_that(has_in(inv, "commands", c), c)?;
+    }
+    ok()
+}
+
+/// The human `types:` line lists every built-in type a program can write, capability types
+/// included, each once, and the JSON `types` is the same list.
+@test
+fn the_human_types_line_names_every_capability_type_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let text = must(h, d, "capabilities")?;
+    let inv = jparse(must(h, d, "capabilities --json")?)?;
+    scratch_remove(h, d);
+    let mut line = "";
+    let mut found = false;
+    for l in text_lines(text) {
+        match strip_prefix(l, "types: ") {
+            Option.Some(value: rest) => {
+                if !found {
+                    line = rest;
+                    found = true;
+                }
+            },
+            Option.None() => {},
+        };
+    }
+    check_that(found, f"a types line: {text}")?;
+    let types = text_split(line, ", ");
+    for ty in words("Int Bool Str Chan IoCap SpawnCap ForeignCap VouchCap TimeCap MmioCap OutCap") {
+        let mut n = 0;
+        for x in types {
+            if x == ty {
+                n = n + 1;
+            }
+        }
+        check_that(n == 1, f"{ty} in {line}")?;
+    }
+    let json = strs_new();
+    let mut i = 0;
+    while i < jlen(inv, "types") {
+        if json_kind(inv, jq(inv, f"types/{i}")) == "string" {
+            strs_push(json, jstr(inv, f"types/{i}"));
+        }
+        i = i + 1;
+    }
+    same_strs("the JSON `types` and the human line are one inventory", json, types)
+}
+
+/// Every command says what it does, in its own help, and names the schema it prints at the
+/// version it prints.
+@test
+fn every_command_has_its_own_help_naming_the_schema_it_prints(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let inv = jparse(must(h, d, "capabilities --json")?)?;
+    let mut i = 0;
+    while i < jlen(inv, "commands") {
+        let c = jstr(inv, f"commands/{i}");
+        let help = must(h, d, f"help {c}")?;
+        let ls = text_lines(help);
+        let first = if strs_len(ls) > 0 { strs_get(ls, 0) } else { "" };
+        check_that(!text_starts_with(first, "Usage:") && text_trim(first) != "", f"`nazm {c}` has no description: {help}")?;
+        i = i + 1;
+    }
+    for case in text_split("explain-cost nazm.cost/2 nazm.profile/|profile nazm.profile/2 nazm.cost/|explain-flow nazm.flow/2 nazm.flow/1|accel nazm.accel/3 nazm.accel/2|core-ir nazm.core-ir/3 nazm.core-ir/2", "|") {
+        let f = words(case);
+        let c = strs_get(f, 0);
+        let help = must(h, d, f"help {c}")?;
+        check_that(text_contains(help, strs_get(f, 1)), f"`nazm {c}` names {strs_get(f, 1)}: {help}")?;
+        check_that(!text_contains(help, strs_get(f, 2)), f"`nazm {c}` does not name {strs_get(f, 2)}: {help}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The workspace's version, which every crate inherits: `CARGO_PKG_VERSION`.
+fn crate_version(h: Caps) -> Result[Str, Str] ! { io } {
+    let manifest = read_text(h, f"{repo_root(h)}/Cargo.toml")?;
+    for l in text_lines(manifest) {
+        match strip_prefix(l, "version = \"") {
+            Option.Some(value: rest) => { return Result[Str, Str].Ok(value: strs_get(text_split(rest, "\""), 0)); },
+            Option.None() => {},
+        };
+    }
+    Result[Str, Str].Err(error: "no workspace version in Cargo.toml")
+}
+
+/// `nazm --version` and `nazm --help` name the release they are; the help's sentence is written
+/// by hand and is held to the crate version here.
+@test
+fn the_help_and_version_name_the_release(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let version = crate_version(h)?;
+    let d = scratch_new(h);
+    let said = must(h, d, "--version")?;
+    let help = must(h, d, "--help")?;
+    scratch_remove(h, d);
+    check_that(text_trim(said) == f"nazm {version}", said)?;
+    check_that(text_contains(help, f"Nazm language 1.0 draft, toolchain {version}"), help)?;
+    check_that(!text_contains(help, "experimental release"), help)
+}

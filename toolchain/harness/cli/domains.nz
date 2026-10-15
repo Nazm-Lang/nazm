@@ -1,0 +1,280 @@
+// Gate 3: the domain reference workloads. Each workload in `crates/nazm-cli/tests/domains/` is held,
+// as a locked package, to its domain's profile, and built for the boards it runs on. The six tests
+// that boot each under QEMU in a container are `#[ignore]`d in Rust and stay there (design decision
+// 10). Every sensor is simulated, every board emulated. Ported from
+// `crates/nazm-cli/tests/domains.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn fixture(h: Caps, name: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{repo_root(h)}/crates/nazm-cli/tests/domains/{name}")
+}
+
+/// The workloads, `name profile m3` each: the profile, and whether a Cortex-M3 (no floating point)
+/// runs it.
+const WORKLOADS: Str = "robotics robotics no|aerospace aerospace no|automotive automotive yes|assurance assurance yes|industrial industrial yes|medical medical yes";
+
+/// The CMSDK UART's data register on the MPS2, for the virt PL011's.
+fn for_mps2(src: Str) -> Str ! {} {
+    text_replace(src, "static UART: Int = 150994944;", "static UART: Int = 1073758208;")
+}
+
+/// `src` as the package `name`, locked, in a fresh directory with both boards' manifests.
+fn package(h: Caps, name: Str, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    scratch_write(h, d, f"{name}/nazm.toml", f"schema = \"nazm.package/1\"\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\n")?;
+    scratch_write(h, d, f"{name}/src/main.nz", src)?;
+    for board in words("virt.toml mps2.toml virt-wd.toml mps2-wd.toml") {
+        scratch_write(h, d, board, fixture(h, board)?)?;
+    }
+    let r = nazm(h, d, words(f"lock {name}"));
+    check_that(r.code == 0, r.stderr)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// The package `name` built under `profile` for one board, into `out`.
+fn build(h: Caps, d: Str, name: Str, profile: Str, board: Str, opt: Str, out: Str) -> Ran ! { io, spawn } {
+    let target = if board == "mps2" { "thumbv7m-none-eabi" } else { "aarch64-unknown-none" };
+    // The industrial controller's board has a watchdog.
+    let manifest = if name == "industrial" { f"{board}-wd.toml" } else { f"{board}.toml" };
+    nazm(h, d, words(f"build --locked --profile {profile} --opt-level {opt} --target {target} --board {manifest} --objects {out} {name}"))
+}
+
+@test
+fn each_workload_meets_its_domain_profile_and_builds_for_its_boards(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for w in text_split(WORKLOADS, "|") {
+        let f = words(w);
+        let name = strs_get(f, 0);
+        let profile = strs_get(f, 1);
+        let src = fixture(h, f"{name}.nz")?;
+        let d = package(h, name, src)?;
+        let c = nazm(h, d, words(f"check --locked --profile {profile} {name}"));
+        check_that(c.code == 0, f"{name}: {c.stderr}")?;
+        let b = build(h, d, name, profile, "virt", "0", "o");
+        scratch_remove(h, d);
+        check_that(b.code == 0, f"{name}: {b.stderr}")?;
+        if strs_get(f, 2) == "yes" {
+            let m = package(h, name, for_mps2(src))?;
+            let r = build(h, m, name, profile, "mps2", "0", "o");
+            scratch_remove(h, m);
+            check_that(r.code == 0, f"{name} on the M3: {r.stderr}")?;
+        }
+    }
+    ok()
+}
+
+/// A heapless board's runtime carries the C library's memory functions: code generation calls
+/// `memcpy` to copy a `Mat3`, whatever allocates (Gate 3).
+@test
+fn a_heapless_boards_runtime_has_the_memory_functions(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = package(h, "robotics", fixture(h, "robotics.nz")?)?;
+    let r = build(h, d, "robotics", "robotics", "virt", "0", "o");
+    check_that(r.code == 0, r.stderr)?;
+    let link = read_text(h, f"{d}/o/link.txt")?;
+    let mut runtime = "";
+    for l in text_lines(link) {
+        match strip_prefix(l, "objects ") {
+            Option.Some(value: rest) => {
+                for o in text_split(rest, " ") {
+                    if text_ends_with(o, "runtime.o") {
+                        runtime = o;
+                    }
+                }
+            },
+            Option.None() => {},
+        };
+    }
+    check_that(runtime != "", link)?;
+    let bytes = read_raw(h, f"{d}/o/{runtime}")?;
+    scratch_remove(h, d);
+    for f in words("memcpy memmove memset memcmp") {
+        check_that(has_symbol(bytes, f), f)?;
+    }
+    ok()
+}
+
+/// Whether `bytes` holds `name` followed by a NUL.
+fn has_symbol(bytes: Str, name: Str) -> Bool ! {} {
+    let mut at = find_from(bytes, name, 0);
+    while at >= 0 {
+        let end = at + str_len(name);
+        if end < str_len(bytes) && str_byte(bytes, end) == 0 {
+            return true;
+        }
+        at = find_from(bytes, name, at + 1);
+    }
+    false
+}
+
+@test
+fn the_profiles_tell_the_workloads_apart(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The robotics controller's command is bounded with `float_sqrt`, which `aerospace` admits.
+    let d = package(h, "robotics", fixture(h, "robotics.nz")?)?;
+    let r = nazm(h, d, words("check --locked --profile aerospace robotics"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    // An attitude from `float_atan2` is the host library's: `aerospace` refuses it.
+    let atan = text_replace(fixture(h, "aerospace.nz")?, "let incline = angle + noise();", "let incline = float_atan2(angle, 1.0) + noise();");
+    let a = package(h, "aerospace", atan)?;
+    let r2 = nazm(h, a, words("check --locked --profile aerospace aerospace"));
+    scratch_remove(h, a);
+    check_that(r2.code == 1, ran_show(r2))?;
+    check_that(text_contains(r2.stderr, "`no-float-nondeterminism`"), r2.stderr)?;
+    // `robotics` holds no package to a lockfile, so it admits the same program built loose.
+    let l = prog_dir(h, "a.nz", atan)?;
+    let r3 = nazm(h, l, words("check --profile robotics a.nz"));
+    scratch_remove(h, l);
+    check_that(r3.code == 0, r3.stderr)?;
+    // A controller that recurses has no stack bound: `assurance` refuses it.
+    let recursive = f"{fixture(h, "assurance.nz")?}\nfn settle(t: Int, n: Int) -> Int ! {{}} {{ if n == 0 {{ t }} else {{ settle(plant(t, 0), n - 1) }} }}\n";
+    let s = package(h, "assurance", recursive)?;
+    let r4 = nazm(h, s, words("check --locked --profile assurance assurance"));
+    scratch_remove(h, s);
+    check_that(r4.code == 1, ran_show(r4))?;
+    check_that(text_contains(r4.stderr, "`bounded-stack`"), r4.stderr)
+}
+
+/// The watchdog is a board's, counted on its scheduler's ticks and fed from a task (Gate 3);
+/// `industrial` asks that a task feed it.
+@test
+fn the_watchdog_is_a_boards_fed_from_a_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = fixture(h, "industrial.nz")?;
+    // A board without one.
+    let d = package(h, "industrial", src)?;
+    let r = nazm(h, d, words("build --target aarch64-unknown-none --board virt.toml --objects o industrial"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0626"), r.stderr)?;
+    check_that(text_contains(r.stderr, "feeds a watchdog"), r.stderr)?;
+    // A watchdog with no task to feed it.
+    let s = package(h, "still", "fn main(m: MmioCap) -> Int ! {} { 0 }\n")?;
+    let r2 = nazm(h, s, words("build --target aarch64-unknown-none --board virt-wd.toml --objects o still"));
+    check_that(r2.code == 1, ran_show(r2))?;
+    check_that(text_contains(r2.stderr, "no `@task` to feed it"), r2.stderr)?;
+    // A watchdog of no ticks, or without the timer it counts.
+    let virt = fixture(h, "virt.toml")?;
+    for case in text_split("[watchdog]\nticks = 0\n|watchdog.ticks;[watchdog]\nticks = 5\nbark = 1\n|watchdog.bark", ";") {
+        let f = text_split(case, "|");
+        scratch_write(h, s, "bad.toml", f"{virt}\n{strs_get(f, 0)}")?;
+        let r3 = nazm(h, s, words("build --target aarch64-unknown-none --board bad.toml --objects o still"));
+        check_that(text_contains(r3.stderr, "N0626") && text_contains(r3.stderr, strs_get(f, 1)), f"{strs_get(f, 1)}: {r3.stderr}")?;
+    }
+    let kept = strs_new();
+    for l in text_lines(virt) {
+        if !text_starts_with(l, "timer_period_us") {
+            strs_push(kept, f"{l}\n");
+        }
+    }
+    scratch_write(h, s, "bad.toml", f"{str_join(kept, "")}\n[watchdog]\nticks = 5\n")?;
+    let r4 = nazm(h, s, words("build --target aarch64-unknown-none --board bad.toml --objects o still"));
+    scratch_remove(h, s);
+    check_that(text_contains(r4.stderr, "timer_period_us"), r4.stderr)?;
+    // Nothing but a board has one.
+    let o = prog_dir(h, "a.nz", "fn main(m: MmioCap) -> Int ! {} { watchdog_feed() }\n")?;
+    let r5 = nazm(h, o, words("run --interpret a.nz"));
+    check_that(text_contains(r5.stderr, "N0392"), r5.stderr)?;
+    // A feed is a device's authority.
+    scratch_write(h, o, "b.nz", "fn main() -> Int ! {} { watchdog_feed() }\n")?;
+    let r6 = nazm(h, o, words("check b.nz"));
+    scratch_remove(h, o);
+    check_that(r6.code == 1, ran_show(r6))?;
+    check_that(text_contains(r6.stderr, "MmioCap"), r6.stderr)?;
+    // `industrial` asks that a task feed it: a controller that does not is refused at `main`.
+    let u = package(h, "industrial", text_replace(src, "    watchdog_feed();\n", ""))?;
+    let r7 = nazm(h, u, words("check --locked --profile industrial industrial"));
+    scratch_remove(h, u);
+    check_that(r7.code == 1, ran_show(r7))?;
+    check_that(text_contains(r7.stderr, "`watchdog`"), r7.stderr)?;
+    check_that(text_contains(r7.stderr, "watchdog_feed()"), r7.stderr)
+}
+
+/// The `audit` rule's verdict in `nazm check --profile medical --profile-report` over `src`.
+fn audit_verdict(h: Caps, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = prog_dir(h, "a.nz", src)?;
+    let r = nazm(h, d, words("check --profile medical --profile-report a.nz"));
+    scratch_remove(h, d);
+    let mut line = "";
+    for l in text_lines(r.stdout) {
+        if line == "" && text_contains(l, "profile-report") {
+            line = l;
+        }
+    }
+    let v = jparse(line)?;
+    let mut i = 0;
+    while i < jlen(v, "rules") {
+        if jstr(v, f"rules/{i}/id") == "audit" {
+            return Result[Str, Str].Ok(value: jstr(v, f"rules/{i}/verdict"));
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"no audit rule: {line}")
+}
+
+/// `medical` asks every function that changes a state to record it (Gate 3, `audit`).
+@test
+fn medical_refuses_a_transition_it_has_no_record_of(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A call, but not a record's.
+    let unrecorded = text_replace(fixture(h, "medical.nz")?, "    let from = atomic_swap(STATE, to);\n    audit_transition(UART, m, 1, from, to)", "    pressure(atomic_swap(STATE, to))");
+    let d = package(h, "medical", unrecorded)?;
+    let r = nazm(h, d, words("check --locked --profile medical medical"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "`audit`"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`transition` changes a state here and records no transition"), r.stderr)?;
+    // Each of the three ways a state changes is a transition.
+    for change in text_split("atomic_store(S, 1)|atomic_swap(S, 1)|if atomic_compare_swap(S, 0, 1) { 1 } else { 0 }", "|") {
+        let verdict = audit_verdict(h, f"static S: Atomic = atomic_new(0);\nfn main(m: MmioCap) -> Int ! {{}} {{ {change} }}\n")?;
+        check_that(verdict == "fail", change)?;
+    }
+    // Counting is not a change of state.
+    let counted = audit_verdict(h, "static S: Atomic = atomic_new(0);\nfn main(m: MmioCap) -> Int ! {} { atomic_add(S, 1) }\n")?;
+    check_that(counted == "pass", counted)
+}
+
+@test
+fn every_obligation_of_the_assurance_controller_is_proved_or_checked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = package(h, "assurance", fixture(h, "assurance.nz")?)?;
+    let r = nazm(h, d, words("obligations --json assurance/src/main.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    let v2 = jparse(r.stdout)?;
+    let statuses = strs_new();
+    let kinds = strs_new();
+    let mut i = 0;
+    while i < jlen(v2, "obligations") {
+        strs_push(statuses, jstr(v2, f"obligations/{i}/status"));
+        strs_push(kinds, jstr(v2, f"obligations/{i}/kind"));
+        i = i + 1;
+    }
+    for s in statuses {
+        check_that(s == "proved" || s == "checked", str_join(statuses, ","))?;
+    }
+    check_that(strs_has(statuses, "proved"), str_join(statuses, ","))?;
+    // Each contract the controller states is among them.
+    for kind in words("precondition postcondition call-precondition") {
+        check_that(strs_has(kinds, kind), kind)?;
+    }
+    ok()
+}
+
+// The six QEMU runs — `the_robotics_loop_converges_and_stops_safely_under_qemu`,
+// `the_aerospace_loop_reports_faults_and_shuts_down_under_qemu`,
+// `the_ecu_runs_its_state_machine_on_both_boards_under_qemu`,
+// `the_assurance_controller_holds_and_trips_on_both_boards_under_qemu`,
+// `the_industrial_controller_batches_fails_safe_and_is_watched_under_qemu` and
+// `the_infusion_pump_records_every_transition_under_qemu` — are `#[ignore]`d in Rust "starts a
+// container": they stay Rust (design decision 10).
