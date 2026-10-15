@@ -586,7 +586,14 @@ fn abstract_constructs(program: &Program) -> (Vec<(SyntaxKind, Span)>, Vec<Span>
                                     stack.push(Node::Expr(index));
                                 }
                             }
-                            stack.push(Node::Expr(&a.value));
+                            // `x += e` is `x = x + e` (R1, 5b.12): the read of `x` is the place
+                            // again, which the concrete tree has as the place and not as a name.
+                            match &a.value {
+                                Expr::Binary { lhs, rhs, .. } if lhs.span() == a.place.span => {
+                                    stack.push(Node::Expr(rhs));
+                                }
+                                v => stack.push(Node::Expr(v)),
+                            }
                         }
                         Stmt::Return(r) => {
                             spans.push((SyntaxKind::ReturnStmt, r.span));
