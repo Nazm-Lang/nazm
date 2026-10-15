@@ -1,11 +1,11 @@
 ## 1. The proposal and the harness
 
 - [x] 1.1 The missing constructs in dependency order (`proposal.md`) and the decisions (`design.md`)
-- [x] 1.2 The inputs: `compiler/tests/extract-inputs.py` → `compiler/tests/inputs/rs/`
-- [x] 1.3 The reference dumper `compiler/tests/refdump/` (tokens, tree)
-- [x] 1.4 `compiler/tests/run.sh`: builds the drivers with the reference under the heap limit, compares
+- [x] 1.2 The inputs: `toolchain/frontend-tests/extract-inputs.py` → `toolchain/frontend-tests/inputs/rs/`
+- [x] 1.3 The reference dumper `toolchain/frontend-tests/refdump/` (tokens, tree)
+- [x] 1.4 `toolchain/frontend-tests/run.sh`: builds the drivers with the reference under the heap limit, compares
       every input, prints `N agree, M differ` per comparison
-- [x] 1.5 `compiler/tests/host-check.sh`: the reference checks the compiler and the drivers (D6; no
+- [x] 1.5 `toolchain/frontend-tests/host-check.sh`: the reference checks the compiler and the drivers (D6; no
       stage runs on the host)
 
 ## 2. Lexer and parser complete

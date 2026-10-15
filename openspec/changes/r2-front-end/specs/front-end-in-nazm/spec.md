@@ -6,7 +6,7 @@ the same tokens as the Rust lexer and the same syntax tree as the Rust parser, c
 forms `openspec/changes/r2-front-end/design.md` (D2, D3) fixes.
 
 #### Scenario: an input that lexes and parses
-- **WHEN** `compiler/tests/run.sh` compares an input the reference parses without diagnostics
+- **WHEN** `toolchain/frontend-tests/run.sh` compares an input the reference parses without diagnostics
 - **THEN** the Nazm lexer's token dump and the Nazm parser's tree dump are byte-identical with the
   reference dumper's
 

@@ -1089,7 +1089,8 @@ fn every_written_declaration_of_the_repository_is_one_symbol() {
 #[test]
 fn the_compilers_workspace_is_every_declaration_of_its_files_once() {
     // The compiler opened as four programs whose imports overlap — `lex.nz` is loaded by
-    // all four — lists every declaration of the eight files those programs load, each
+    // all four, and `diag.nz` by `lex.nz` since R2 — lists every declaration of the nine files those
+    // programs load, each
     // exactly once, and nothing from anywhere else.
     let compiler = workspace().join("compiler");
     let roots: Vec<PathBuf> = ["check.nz", "emit.nz", "parser.nz", "lexer.nz"]
@@ -1117,6 +1118,7 @@ fn the_compilers_workspace_is_every_declaration_of_its_files_once() {
         for f in [
             "analyse.nz",
             "check.nz",
+            "diag.nz",
             "emit.nz",
             "lex.nz",
             "lexer.nz",

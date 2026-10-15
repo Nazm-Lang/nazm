@@ -4,7 +4,7 @@
 // Output: one token per line, `Kind start end payload` — `Kind` the reference's `TokenKind`
 // name, the payload the decoded value — then each lexing diagnostic, `error CODE start end
 // message`. Payloads and messages are written with `lex_esc`. It is what
-// `compiler/tests/refdump` prints for the reference lexer, byte for byte, when the two agree.
+// `toolchain/frontend-tests/refdump` prints for the reference lexer, byte for byte, when the two agree.
 // Exits 1 when there was a diagnostic.
 
 use "lex.nz";
