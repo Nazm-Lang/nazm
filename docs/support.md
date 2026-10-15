@@ -104,9 +104,29 @@ target made run-verified:
 | Linux x86_64 (`ubuntu-latest`) | passes, the required job |
 | Linux ARM64 (`ubuntu-24.04-arm`) | passed on its first run (`c86f2f81`) |
 | macOS ARM64 (`macos-latest`) | three wasm tests failed only for Apple's clang lacking the wasm target; Homebrew's LLVM installed since `27923d5d` |
-| Windows x86_64 (`windows-latest`) | **the toolchain does not build**: `nazm-core`'s interpreter uses Unix file descriptors (`std::os::fd`, `std::os::unix`) for files, processes and sockets. A Windows host is a port, not yet started |
+| Windows x86_64 (`windows-latest`) | did not build until W1 (the interpreter used Unix file descriptors); since W1 the workspace builds and lints for `x86_64-pc-windows-gnu` here (below). Not yet run on CI since; MSVC is CI's default host target there |
 
 The three new jobs gather evidence (`continue-on-error`) until each is green once.
+
+### The toolchain on a Windows host (W1, 2026-10-16)
+
+`nazm` itself, cross-built here for `x86_64-pc-windows-gnu` and run on the copyright holder's
+Windows 10 laptop (`ssh win-dell`, a standard account, Windows 10 Version 10.0.18362.113). Nothing
+was installed there: no Rust, no clang, no MinGW-w64.
+
+| What | Result |
+| --- | --- |
+| `cargo build --workspace` and `cargo clippy --workspace --all-targets -D warnings` for `x86_64-pc-windows-gnu` | passed (cross-built on macOS with MinGW-w64; the interpreter's files, processes and sockets have a Windows path, `crates/nazm-core/src/eval/host.rs`) |
+| `nazm run --interpret`, `nazm check`, `nazm fmt --check` on `bench/compare/nazm/*.nz`, `examples/*.nz`, `examples/tour/*.nz`, `examples/std/*.nz` (`scripts/windows-toolchain.sh`) | 60 agree with macOS's output, error output and exit status, 0 differ (20 files × 3 commands) |
+| `nazm build`, and `nazm run` without `--interpret` | exit 4: `clang` was not found on `PATH` — a native build needs clang and a linker on Windows (W2); its advice still names Xcode |
+| The workspace's test binaries but `selfhost` (contained-only): 95, run on the laptop | 2014 passed, 892 failed, 83 ignored, none timed out. Of the failures, 785 are a native build without clang and about 40 more a tool the laptop has not got (clang or `cc` spawned directly, `cargo`, `ps`); the rest were ours: on a second run after W1's fixes, the language server's 20, workspace rename's 6, the user cache's and scratch directory's 2 and the MCP server's 7 passed; the mutation runner's 5 (`ps`, a locked file read) are POSIX-only now, campaigns running contained on Linux; `@cfg(os)` on a Windows host, a temporary directory named by `TMP`, and the DLL refusal are fixed in the tests or the compiler but wait on clang to be shown passing |
+| Not run on Windows | `selfhost` (contained); the interpreter's own POSIX tests (`platform_files`, `process_control`: links, modes, `sh` children); the mutation lifecycle; tests whose child is an `sh` script |
+
+Interpreter differences on Windows, beside the spec's (*Windows x86_64*): `os_lstat`'s device and
+inode are `0` (the volume serial and file index need `GetFileInformationByHandle`, which a crate
+that forbids `unsafe` cannot call on stable Rust); entropy is 128 bits of the system's generator
+per call, expanded by SipHash, for the same reason. The benchmark harness's Postgres sandbox reads
+`/dev/urandom` and does not run on Windows.
 
 ## Not supported, by decision
 
