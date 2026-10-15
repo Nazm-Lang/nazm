@@ -142,6 +142,15 @@ pub struct Ck {
     sds: Ints,
     sde: Ints,
     frames: Ints,
+    // Per frame: whether it continues the frame outside it as far as shadowing goes (`joined`):
+    // a pattern `let`'s arm and the rest of its block.
+    fjoin: Ints,
+    // Expressions a desugaring checked already, about to check again as the arguments of the
+    // call it is read as (`Checker::checked`): each one's span and type, taken by the first
+    // check that meets its span.
+    cks: Ints,
+    cke: Ints,
+    ckt: Ints,
     // Each function's type parameters, a run of the pool below: names, and whether each
     // requires `Equality` (N14).
     fntpf: Ints,
@@ -533,7 +542,9 @@ fn s_defer() -> Int { 19 }
 fn s_deferred() -> Int { 20 }
 fn s_settling() -> Int { 21 }
 fn s_created() -> Int { 22 }
-fn s_slots() -> Int { 23 }
+// Whether the next block checked is the rest of a block after a pattern `let` (`join_block`).
+fn s_join() -> Int { 23 }
+fn s_slots() -> Int { 24 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -1411,7 +1422,7 @@ fn new_ck(t: Tree) -> Ck {
             send: ints_new(), sbuiltin: ints_new(), suser: ints_new(), sheld: ints_new(), ptys: ints_new(), bname: strs_new(),
             bpf: ints_new(), bpc: ints_new(), bret: ints_new(), bok: ints_new(), bprelude: ints_new(), beff: strs_new(),
             bcaps: strs_new(), bpath: ints_new(), bflow: strs_new(), bcont: strs_new(), bsk: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
-            sds: ints_new(), sde: ints_new(), frames: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
+            sds: ints_new(), sde: ints_new(), frames: ints_new(), fjoin: ints_new(), cks: ints_new(), cke: ints_new(), ckt: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
             tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
             pargs: ints_new(), cells: ints_new(), w: dg_new(), mstd: ints_new(), dfirst: ints_new(), dcount: ints_new(), don: ints_new(),
@@ -5260,11 +5271,20 @@ fn assignable(c: Ck, got: Int, want: Int) -> Bool {
 
 fn open_scope(c: Ck) -> Int {
     ints_push(c.frames, strs_len(c.sname));
+    ints_push(c.fjoin, 0);
+    0
+}
+
+// A scope that continues the one outside it as far as shadowing goes (`open_joined_scope`).
+fn open_joined_scope(c: Ck) -> Int {
+    ints_push(c.frames, strs_len(c.sname));
+    ints_push(c.fjoin, 1);
     0
 }
 
 fn close_scope(c: Ck) -> Int {
     let start = ints_pop(c.frames);
+    ints_pop(c.fjoin);
     while strs_len(c.sname) > start {
         strs_pop(c.sname);
         ints_pop(c.sty);
@@ -5432,7 +5452,26 @@ fn function_holder(c: Ck, t: Int) -> Int {
     0 - 1
 }
 
+// Whether `name` is bound in the innermost scope: its frame and every frame it continues
+// (`Scopes::defined_here`).
 fn defined_here(c: Ck, name: Str) -> Bool {
+    let mut f = ints_len(c.frames) - 1;
+    let mut end = strs_len(c.sname);
+    while f >= 0 {
+        let mut i = ints_get(c.frames, f);
+        while i < end {
+            if strs_get(c.sname, i) == name { return true; }
+            i = i + 1;
+        }
+        if ints_get(c.fjoin, f) == 0 { return false; }
+        end = ints_get(c.frames, f);
+        f = f - 1;
+    }
+    false
+}
+
+// Whether `name` is bound in the innermost frame itself (`bound_in_frame`).
+fn bound_in_frame(c: Ck, name: Str) -> Bool {
     let mut i = ints_get(c.frames, ints_len(c.frames) - 1);
     while i < strs_len(c.sname) {
         if strs_get(c.sname, i) == name { return true; }
@@ -5444,7 +5483,12 @@ fn defined_here(c: Ck, name: Str) -> Bool {
 // --- blocks and statements ----------------------------------------------------------------------
 
 fn check_block(c: Ck, b: Int, expected: Int) -> Int {
-    open_scope(c);
+    if gs(c, s_join()) == 1 {
+        ss(c, s_join(), 0);
+        open_joined_scope(c);
+    } else {
+        open_scope(c);
+    }
     let completion = check_block_inner(c, b, expected);
     close_scope(c);
     completion
@@ -5621,7 +5665,7 @@ fn check_assign(c: Ck, a: Int) -> Int {
         ints_push(args, fld(c, step, "index"));
         ints_push(args, value);
         ss(c, s_unwanted(), 1);
-        if element_by_name(c, ints_get(c.sty, b), "set", fld(c, step, "span"), args, none()) != no_element() { return 0; }
+        if element_by_name(c, ints_get(c.sty, b), "set", fld(c, step, "span"), args, 0 - 1, none()) != no_element() { return 0; }
         ss(c, s_unwanted(), 0);
     }
     if ints_get(c.smut, b) == 0 || copy {
@@ -5793,6 +5837,18 @@ fn or_int(expected: Int) -> Int {
 // --- expressions --------------------------------------------------------------------------------
 
 fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
+    // Checked already by the desugaring whose call this is an argument of (`take_checked`).
+    if ints_len(c.cks) > 0 {
+        let k = checked_index(c, espan(c, e));
+        if k >= 0 {
+            let t = ints_get(c.ckt, k);
+            ints_remove(c.cks, k);
+            ints_remove(c.cke, k);
+            ints_remove(c.ckt, k);
+            ss(c, s_unwanted(), 0);
+            return t;
+        }
+    }
     let unwanted = gs(c, s_unwanted()) != 0;
     ss(c, s_unwanted(), 0);
     let k = kind_of(c, e);
@@ -6535,7 +6591,7 @@ fn check_index(c: Ck, e: Int, expected: Int) -> Int {
         let args = ints_new();
         ints_push(args, base);
         ints_push(args, index);
-        let t = element_by_name(c, bt, "get", bracket, args, expected);
+        let t = element_by_name(c, bt, "get", bracket, args, base, expected);
         if t != no_element() { return t; }
     }
     let mut len = 0 - 1;
@@ -6549,6 +6605,46 @@ fn check_index(c: Ck, e: Int, expected: Int) -> Int {
     or_int(expected)
 }
 
+// The last expression checked already at `span` and not yet taken, or -1 (`take_checked`).
+fn checked_index(c: Ck, span: Int) -> Int {
+    let s = sps(c, span);
+    let e = spe(c, span);
+    let mut k = ints_len(c.cks) - 1;
+    while k >= 0 {
+        if ints_get(c.cks, k) == s && ints_get(c.cke, k) == e { return k; }
+        k = k - 1;
+    }
+    0 - 1
+}
+
+fn ints_remove(xs: Ints, k: Int) -> Int {
+    let mut i = k;
+    while i + 1 < ints_len(xs) {
+        ints_set(xs, i, ints_get(xs, i + 1));
+        i = i + 1;
+    }
+    ints_pop(xs);
+    0
+}
+
+// `call`, a desugaring's, checked with `pre` — one of its arguments, checked already, of type
+// `pt` (-1 for none) — not checked again (`check_again`).
+fn check_again(c: Ck, pre: Int, pt: Int, call: Int, expected: Int) -> Int {
+    let mark = ints_len(c.cks);
+    if pre >= 0 {
+        ints_push(c.cks, sps(c, espan(c, pre)));
+        ints_push(c.cke, spe(c, espan(c, pre)));
+        ints_push(c.ckt, pt);
+    }
+    let t = check_expr(c, call, expected);
+    while ints_len(c.cks) > mark {
+        ints_pop(c.cks);
+        ints_pop(c.cke);
+        ints_pop(c.ckt);
+    }
+    t
+}
+
 // What `element_by_name` answers where no function of the name is in scope.
 fn no_element() -> Int { 0 - 3 }
 
@@ -6556,7 +6652,7 @@ fn no_element() -> Int { 0 - 3 }
 // keyed by the brackets' span — `vec_`, `bytes_`, or a type's name in lower case, whose read is
 // `<prefix>_at`, or `<prefix>_at_or` with the value type's zero where a compound update reads
 // it. `no_element()` where no such function is in scope.
-fn element_by_name(c: Ck, of: Int, op: Str, bracket: Int, args: Ints, expected: Int) -> Int {
+fn element_by_name(c: Ck, of: Int, op: Str, bracket: Int, args: Ints, pre: Int, expected: Int) -> Int {
     let mut name = "";
     if tag(c, of) == tag_vec() {
         name = cat3("vec_", op, "");
@@ -6600,7 +6696,7 @@ fn element_by_name(c: Ck, of: Int, op: Str, bracket: Int, args: Ints, expected: 
     fa(f, "type_args", sx_none(c.t));
     fa(f, "args", mk_list(c.t, args));
     fa(f, "span", bracket);
-    let t = check_expr(c, mk_struct(c.t, "Call", f), expected);
+    let t = check_again(c, pre, of, mk_struct(c.t, "Call", f), expected);
     if t >= 0 { return t; }
     or_int(expected)
 }
@@ -6767,14 +6863,8 @@ fn check_binary(c: Ck, e: Int, expected: Int) -> Int {
         if takes_literal(c, lt) { h = lt; }
         rt = value_type(c, rhs, h);
     }
-    // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, a `Str`.
-    // The reference checks it as that call, so its operands are checked a second time, as the
-    // call's arguments — and what they declare (an arm's binding, a closure) is declared again.
-    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before {
-        value_type(c, lhs, t_str());
-        value_type(c, rhs, t_str());
-        return t_str();
-    }
+    // `s + t` on two `Str`s (R1, 5b.6): `str_concat(s, t)`, a `Str`, its operands checked once.
+    if op == "Add" && lt == t_str() && rt == t_str() && dg_len(c.d) == before { return t_str(); }
     let mut ok = false;
     if op == "Add" || op == "Sub" || op == "Mul" || op == "Div" || op == "Rem" { ok = lt == rt && is_num(c, lt); }
     if is_order(op) { ok = lt == rt && ordering(c, lt) == ""; }
@@ -7503,6 +7593,7 @@ fn named_method(c: Ck, recv: Int, rname: Str, rspan: Int, t: Int, method: Str, a
         fa(vf, "span", rspan);
         ints_push(args, mk_struct(c.t, "Var", vf));
     }
+    let receiver = ints_get(args, 0);
     i = 0;
     while i < ints_len(rest) {
         ints_push(args, ints_get(rest, i));
@@ -7515,7 +7606,8 @@ fn named_method(c: Ck, recv: Int, rname: Str, rspan: Int, t: Int, method: Str, a
     fa(f, "type_args", sx_none(c.t));
     fa(f, "args", mk_list(c.t, args));
     fa(f, "span", span);
-    let r = check_expr(c, mk_struct(c.t, "Call", f), expected);
+    // The receiver is checked already: the call reads its type.
+    let r = check_again(c, receiver, t, mk_struct(c.t, "Call", f), expected);
     if r >= 0 { return r; }
     or_int(expected)
 }
@@ -9074,7 +9166,10 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
         let arm = ints_get(arms, i);
         let pattern = fld(c, arm, "pattern");
         let body = fld(c, arm, "body");
-        open_scope(c);
+        // A pattern `let`'s arm, and the rest of the block it holds, are the scope the `let` is
+        // written in: a name bound there already is refused as `let x` twice is.
+        let joined = i == 0 && (source == "Let" || source == "LetElse");
+        if joined { open_joined_scope(c); } else { open_scope(c); }
         let binds = no_binds();
         let before = dg_len(c.d);
         while strs_len(c.pan) > 0 {
@@ -9091,12 +9186,17 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
             let mut k = 0;
             while k < strs_len(binds.names) {
                 let name = strs_get(binds.names, k);
-                if defined_here(c, name) {
+                if bound_in_frame(c, name) {
                     dg_error(c.d, "N0202", ints_get(binds.starts, k), ints_get(binds.ends, k), cat3("`", name, "` is bound twice by this pattern"), "",
                             "each part of a pattern binds a name of its own, or is `_`");
                 } else {
-                    define(c, name, ints_get(binds.tys, k), false, ints_get(binds.starts, k), ints_get(binds.ends, k));
-                    sm_put(c.mvar, ints_get(binds.starts, k), ints_get(binds.ends, k), last_binding(c));
+                    if defined_here(c, name) {
+                        dg_error(c.d, "N0202", ints_get(binds.starts, k), ints_get(binds.ends, k), cat3("`", name, "` is already defined in this scope"), "",
+                                "Nazm allows shadowing in a nested scope but not in the same one, so a later mention of a name is never ambiguous");
+                    } else {
+                        define(c, name, ints_get(binds.tys, k), false, ints_get(binds.starts, k), ints_get(binds.ends, k));
+                        sm_put(c.mvar, ints_get(binds.starts, k), ints_get(binds.ends, k), last_binding(c));
+                    }
                 }
                 k = k + 1;
             }
@@ -9131,7 +9231,9 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
             }
             let mut want = expected;
             if want < 0 { want = first_value; }
+            if joined && sx_kind(c.t, body) == tk_tuple() && kind_of(c, body) == "Block" { ss(c, s_join(), 1); }
             let completion = check_expr(c, body, want);
+            ss(c, s_join(), 0);
             close_scope(c);
             if source == "LetElse" && i == 1 && completion != diverges() {
                 err(c, "N0630", fld(c, arm, "span"), "a `let … else`'s `else` must leave, and this one can finish",

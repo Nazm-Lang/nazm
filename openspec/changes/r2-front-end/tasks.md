@@ -431,6 +431,18 @@
         a function used as a value (65), aggregate constants (51), foreign functions (49, 15
         calls), array literals (24), contracts (23), `defer` (12), `~` (10), the built-ins
         `checked_*`/`box_new`/`cell_*`/`chain_from_vec` (35)
+  - [x] The reference's checker followed (main's aa9f22e9 and c02d12e5, epoch 88): a desugared
+        call no longer checks its operands twice — `s + t` on `Str`s checks them once, and
+        `x.m()` by name and `xs[i]` hand the call the receiver or sequence checked already
+        (`check_again`, `take_checked` by span); a pattern `let`'s arm and the rest of its
+        block are joined to the scope the `let` is written in (`open_joined_scope`), so a name
+        bound there already is N0202, "already defined in this scope", once per name.
+        `inputs/check/pattern-let-rebinds.nz`. Reference rebuilt at f90693fb. `run.sh`: core
+        3,095 agree, 0 differ; of 76,198 functions the lowering carries 75,206, all agree (a
+        closure in `s + t` is now declared once, as there); the other parts 10,644, all agree;
+        1,485 whole documents, all the reference's bytes. check 3,093 agree, 2 differ (carried
+        3,089, all agree), render likewise, facts 3,089 agree, 6 differ (carried 3,089, all
+        agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
