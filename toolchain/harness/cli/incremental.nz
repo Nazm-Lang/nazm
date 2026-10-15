@@ -1,0 +1,1150 @@
+// Semantic reuse: what is skipped, what is not, and where invalidation stops. Every test runs
+// `nazm check` as a program, repeatedly, and reads the decisions out of its own report; and every
+// program is also checked with `--no-cache`, the two runs agreeing on acceptance and every
+// diagnostic. Ported from `crates/nazm-cli/tests/incremental.rs` (R7).
+//
+// The two tests that forge an older checker's entries through `nazm_cache`'s types
+// (`CheckArtifact::of`, `Store::put`) stay Rust (`tests/stays-rust.txt`). Where the Rust tests read
+// a check entry through `nazm_cache::CheckArtifact`, the port reads the entry's JSON, which is the
+// same document; where one asserts `SEMANTIC_EPOCH` and the interface `SCHEMA`, the port asks
+// `nazm inspect`, which prints both.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "@std/process"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The core prelude: one module in every compilation, counted wherever modules are counted.
+const PRELUDE: Int = 1;
+
+/// What one `nazm check` decided.
+struct Run {
+    accepted: Bool,
+    /// Every diagnostic, as its code and then the whole JSON line — the part a cache may not
+    /// change.
+    diagnostics: Strs,
+    checked: Int,
+    reused: Int,
+    missed: Int,
+    rejected: Int,
+    declined: Int,
+    stored: Int,
+    root: Str,
+}
+
+fn run_show_(r: Run) -> Str ! {} {
+    f"Run {{ accepted: {r.accepted}, checked: {r.checked}, reused: {r.reused}, missed: {r.missed}, rejected: {r.rejected}, declined: {r.declined}, stored: {r.stored}, root: {r.root}, diagnostics: {str_join(r.diagnostics, " | ")} }}"
+}
+
+fn check_in(h: Caps, dir: Str, file: Str, extra: Str) -> Result[Run, Str] ! { io, spawn } {
+    let a = words("check");
+    strs_push(a, file);
+    strs_push(a, "--cache-report");
+    strs_push(a, "--json");
+    for x in words(extra) {
+        strs_push(a, x);
+    }
+    let out = nazm(h, dir, a);
+    let mut line = "";
+    for l in text_lines(out.stdout) {
+        if line == "" && text_contains(l, "nazm.check-report/1") {
+            line = l;
+        }
+    }
+    check_that(line != "", f"a cache report on stdout: {ran_show(out)}")?;
+    let report = jparse(line)?;
+    let diagnostics = strs_new();
+    for l in text_lines(out.stderr) {
+        match jparse(l) {
+            Result.Ok(value: d) => {
+                let code = jstr(d, "code");
+                strs_push(diagnostics, f"{if code == "" { "?" } else { code }} {l}");
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    let root = jstr(report, "root");
+    Result[Run, Str].Ok(value: Run(accepted: out.code == 0, diagnostics: diagnostics, checked: jint(report, "checked"), reused: jint(report, "reused"), missed: jint(report, "missed"), rejected: jint(report, "rejected"), declined: jint(report, "declined"), stored: jint(report, "stored"), root: if root == "" { "?" } else { root }))
+}
+
+fn check(h: Caps, dir: Str, file: Str) -> Result[Run, Str] ! { io, spawn } {
+    check_in(h, dir, file, "")
+}
+
+fn cold(h: Caps, dir: Str, file: Str) -> Result[Run, Str] ! { io, spawn } {
+    check_in(h, dir, file, "--no-cache")
+}
+
+/// What a cache may not change: the answer, and every diagnostic in it.
+fn meaning(r: Run) -> Str ! {} {
+    f"{r.accepted}\n{str_join(r.diagnostics, "\n")}"
+}
+
+fn same_meaning(a: Run, b: Run, what: Str) -> Result[Int, Str] ! {} {
+    check_that(meaning(a) == meaning(b), f"{what}: {run_show_(a)} / {run_show_(b)}")
+}
+
+fn all_start(xs: Strs, p: Str) -> Bool ! {} {
+    for x in xs {
+        if !text_starts_with(x, p) {
+            return false;
+        }
+    }
+    true
+}
+
+fn any_start(xs: Strs, p: Str) -> Bool ! {} {
+    for x in xs {
+        if text_starts_with(x, p) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A project marked with a root, so its modules keep one identity.
+fn project(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "nazm.root", "")?;
+    Result[Str, Str].Ok(value: d)
+}
+
+fn w(h: Caps, d: Str, name: Str, text: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, d, name, text)
+}
+
+// --- A → B ------------------------------------------------------------------------------------
+
+fn two_modules(h: Caps, b: Str) -> Result[Str, Str] ! { io } {
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { twice(21) }\n")?;
+    w(h, d, "b.nz", b)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+const B: Str = "pub fn twice(n: Int) -> Int { helper() * n }\nfn helper() -> Int { 2 }\n";
+
+@test
+fn a_second_run_over_an_unchanged_project_checks_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.reused == 0 && first.stored == 2 + PRELUDE, run_show_(first))?;
+    check_that(first.root == "marker", first.root)?;
+    let second = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(second.checked == 0 && second.reused == 2 + PRELUDE, run_show_(second))?;
+    check_that(second.accepted, run_show_(second))
+}
+
+@test
+fn a_private_change_rechecks_the_module_and_leaves_its_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    check(h, d, "a.nz")?;
+    w(h, d, "b.nz", "pub fn twice(n: Int) -> Int { helper() * n }\nfn helper() -> Int { 1 + 1 }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE && after.missed == 1, f"exactly B should have been checked: {run_show_(after)}")?;
+    check_that(after.accepted, run_show_(after))?;
+    // And the answer is the one a compilation with no cache at all reaches.
+    let disabled = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, disabled, "cold")
+}
+
+@test
+fn every_kind_of_private_change_leaves_the_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("a private body changes|a private function is added|a private function is removed|an exported body changes|a comment is added|the layout changes", "|");
+    let bs = strs_new();
+    strs_push(bs, "pub fn twice(n: Int) -> Int { helper() * n }\nfn helper() -> Int { 2 }\nfn unused() -> Int { 9 }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Int { helper() * n }\nfn helper() -> Int { 2 }\nfn extra() -> Int { 3 }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Int { 2 * n }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Int { n * helper() }\nfn helper() -> Int { 2 }\n");
+    strs_push(bs, "// what it does\npub fn twice(n: Int) -> Int { helper() * n }\nfn helper() -> Int { 2 }\n");
+    strs_push(bs, "pub fn twice( n : Int ) -> Int {\n    helper() * n\n}\nfn helper() -> Int { 2 }\n");
+    let mut k = 0;
+    while k < strs_len(bs) {
+        let what = strs_get(whats, k);
+        let d = two_modules(h, B)?;
+        check(h, d, "a.nz")?;
+        w(h, d, "b.nz", strs_get(bs, k))?;
+        let after = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        check_that(after.checked == 1 && after.reused == 1 + PRELUDE, f"{what}: the importer should not have been re-checked: {run_show_(after)}")?;
+        check_that(after.accepted, what)?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn an_exported_signature_change_rechecks_the_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub fn twice(n: Str) -> Int { str_len(n) }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 2 && after.reused == PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, "the call in A no longer type-checks")?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, c, "cold")
+}
+
+@test
+fn every_kind_of_exported_change_rechecks_the_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("a parameter type changes|the return type changes|pub is removed|pub is added to another definition|an export is added|an export is renamed", "|");
+    let bs = strs_new();
+    strs_push(bs, "pub fn twice(n: Str) -> Int { str_len(n) }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Str { int_to_str(n) }\n");
+    strs_push(bs, "fn twice(n: Int) -> Int { n * 2 }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Int { helper() * n }\npub fn helper() -> Int { 2 }\n");
+    strs_push(bs, "pub fn twice(n: Int) -> Int { n * 2 }\npub fn thrice(n: Int) -> Int { n * 3 }\n");
+    strs_push(bs, "pub fn doubled(n: Int) -> Int { n * 2 }\n");
+    let mut k = 0;
+    while k < strs_len(bs) {
+        let what = strs_get(whats, k);
+        let d = two_modules(h, B)?;
+        check(h, d, "a.nz")?;
+        w(h, d, "b.nz", strs_get(bs, k))?;
+        let after = check(h, d, "a.nz")?;
+        check_that(after.reused == PRELUDE, f"{what}: the importer kept a stale answer")?;
+        let c = cold(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        same_meaning(after, c, what)?;
+        k = k + 1;
+    }
+    ok()
+}
+
+// --- N36: effect contracts cross the boundary, bodies do not ------------------------------------
+
+fn pure_importer(h: Caps, b: Str) -> Result[Str, Str] ! { io } {
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn pure() -> Int ! {} { twice(21) }\nfn main() -> Int { pure() }\n")?;
+    w(h, d, "b.nz", b)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+@test
+fn an_effect_only_change_rechecks_the_importer_and_finds_what_it_breaks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = pure_importer(h, "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n")?;
+    check_that(check(h, d, "a.nz")?.accepted, "first")?;
+    w(h, d, "b.nz", "pub fn twice(n: Int) -> Int ! { io } { n * 2 }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 2 && after.reused == PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, run_show_(after))?;
+    check_that(all_start(after.diagnostics, "N0366"), run_show_(after))?;
+    same_meaning(after, cold(h, d, "a.nz")?, "cold")?;
+    // And back: the contract is pure again, and so is the answer.
+    w(h, d, "b.nz", "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n")?;
+    let back = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(back.accepted, run_show_(back))
+}
+
+@test
+fn a_body_change_within_its_declared_contract_leaves_the_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { twice(io, 21) }\n")?;
+    w(h, d, "b.nz", "pub fn twice(io: IoCap, n: Int) -> Int ! { io } { n * 2 }\n")?;
+    check_that(check(h, d, "a.nz")?.accepted, "first")?;
+    w(h, d, "b.nz", "pub fn twice(io: IoCap, n: Int) -> Int ! { io } { print(\"x\") + n * 2 }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.accepted, run_show_(after))?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, run_show_(after))?;
+    // A body that leaves its contract is refused in the module that wrote it.
+    w(h, d, "b.nz", "pub fn twice(io: IoCap, n: Int) -> Int ! {} { print(\"x\") + n * 2 }\n")?;
+    let broken = check(h, d, "a.nz")?;
+    check_that(!broken.accepted, run_show_(broken))?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(broken, c, "cold")
+}
+
+@test
+fn an_import_that_declares_nothing_is_every_effect_to_a_pure_caller(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = pure_importer(h, "pub fn twice(n: Int) -> Int { n * 2 }\n")?;
+    let refused = cold(h, d, "a.nz")?;
+    check_that(!refused.accepted, run_show_(refused))?;
+    let codes = strs_new();
+    for x in refused.diagnostics {
+        strs_push(codes, str_slice(x, 0, 5));
+    }
+    check_that(str_join(codes, ",") == "N0366", run_show_(refused))?;
+    w(h, d, "b.nz", "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n")?;
+    let after = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.accepted, run_show_(after))
+}
+
+/// Every check entry under `dir`'s store (`.nazm`), of the current schema, as its text.
+fn check_entries(h: Caps, dir: Str) -> Result[Strs, Str] ! { io } {
+    let out = strs_new();
+    let all = match file_walk(h.io, f"{dir}/.nazm") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for p in all {
+        if text_ends_with(p, ".json") {
+            let text = read_text(h, p)?;
+            match jparse(text) {
+                Result.Ok(value: v) => {
+                    if jstr(v, "schema") == "nazm.check/5" {
+                        strs_push(out, text);
+                    }
+                },
+                Result.Err(error: e) => {},
+            };
+        }
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// The entry of the module `module`, parsed.
+fn entry_of(h: Caps, dir: Str, module: Str) -> Result[JsonDoc, Str] ! { io } {
+    for text in check_entries(h, dir)? {
+        let v = jparse(text)?;
+        if jstr(v, "module") == module {
+            return Result[JsonDoc, Str].Ok(value: v);
+        }
+    }
+    Result[JsonDoc, Str].Err(error: f"{module}'s entry")
+}
+
+@test
+fn the_interface_a_cache_keeps_carries_the_declared_set_and_not_the_inferred_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int { loud(io) + quiet() + plain(io) }\n")?;
+    w(h, d, "b.nz", "pub fn loud(io: IoCap) -> Int ! { io } { print(\"x\") }\npub fn quiet() -> Int ! {} { 1 }\npub fn plain(out: OutCap) -> Int { print(\"y\") }\n")?;
+    check_that(check(h, d, "a.nz")?.accepted, "first")?;
+    let b = entry_of(h, d, "b.nz")?;
+    scratch_remove(h, d);
+    let text = jv(b, "interface");
+    check_that(text_contains(text, "\"name\":\"loud\",\"kind\":\"fn\",\"generics\":0,\"params\":[\"IoCap\"],\"ret\":\"Int\",\"effects\":[\"io\"]"), text)?;
+    check_that(text_contains(text, "\"name\":\"quiet\",\"kind\":\"fn\",\"generics\":0,\"params\":[],\"ret\":\"Int\",\"effects\":[]"), text)?;
+    check_that(text_contains(text, "\"name\":\"plain\",\"kind\":\"fn\",\"generics\":0,\"params\":[\"OutCap\"],\"ret\":\"Int\"}"), text)
+}
+
+// --- N37: authority crosses the boundary in signatures --------------------------------------------
+
+@test
+fn a_capability_only_change_rechecks_the_importer_and_finds_what_it_breaks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, 1) }\n")?;
+    let body = "! { io } { print(int_to_str(n)) }\n";
+    w(h, d, "b.nz", f"pub fn save(io: IoCap, n: Int) -> Int {body}")?;
+    check_that(check(h, d, "a.nz")?.accepted, "first")?;
+    w(h, d, "b.nz", f"pub fn save(io: IoCap, tasks: SpawnCap, n: Int) -> Int {body}")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 2 && after.reused == PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, run_show_(after))?;
+    same_meaning(after, cold(h, d, "a.nz")?, "cold")?;
+    // A different kind in the same position, under the same name, is a different contract too.
+    w(h, d, "b.nz", f"pub fn save(io: IoCap, n: Int) -> Int {body}")?;
+    check_that(check(h, d, "a.nz")?.accepted, "back")?;
+    w(h, d, "b.nz", "pub fn save(io: SpawnCap, n: Int) -> Int ! { io } { n }\n")?;
+    let kind = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(kind.checked == 2 && kind.reused == PRELUDE, run_show_(kind))?;
+    check_that(strs_len(kind.diagnostics) > 0 && all_start(kind.diagnostics, "N0300"), run_show_(kind))
+}
+
+@test
+fn an_undeclared_import_needs_no_authority_of_its_caller(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "b.nz", "pub fn old(n: Int, out: OutCap) -> Int { print(int_to_str(n)) }\n")?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io, spawn } { old(1, io) }\n")?;
+    check_that(cold(h, d, "a.nz")?.accepted, "first")?;
+    // A contract narrower than every effect is refused for the effect, not for authority.
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { old(1, io) }\n")?;
+    let refused = cold(h, d, "a.nz")?;
+    check_that(strs_len(refused.diagnostics) == 1, run_show_(refused))?;
+    check_that(text_starts_with(strs_get(refused.diagnostics, 0), "N0366"), run_show_(refused))?;
+    // And the import itself, given nothing, is refused where it writes a file.
+    w(h, d, "b.nz", "pub fn old(n: Int) -> Int { write_file(\"f\", int_to_str(n)) }\n")?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { old(1) }\n")?;
+    let again = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(any_start(again.diagnostics, "N0369"), run_show_(again))
+}
+
+// --- N38: provenance crosses as facts, and is solved every run ------------------------------------
+
+@test
+fn a_callees_provenance_reaches_a_caller_the_cache_did_not_check_again(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { write_file(target(io), \"x\"); 0 }\n")?;
+    let local = "pub fn target(io: IoCap) -> Str ! { io } { \"out.txt\" }\n";
+    w(h, d, "b.nz", local)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub fn target(io: IoCap) -> Str ! { io } { read_file(\"manifest\") }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, run_show_(after))?;
+    check_that(strs_len(after.diagnostics) == 1, run_show_(after))?;
+    check_that(text_starts_with(strs_get(after.diagnostics, 0), "N0372"), run_show_(after))?;
+    same_meaning(after, cold(h, d, "a.nz")?, "cold")?;
+    // Once more with every module reused: the facts come from the entries.
+    let again = check(h, d, "a.nz")?;
+    check_that(again.reused == 2 + PRELUDE, run_show_(again))?;
+    same_meaning(again, after, "again")?;
+    // And back: nothing stale either way.
+    w(h, d, "b.nz", local)?;
+    let back = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(back.accepted, run_show_(back))
+}
+
+@test
+fn a_container_written_in_a_module_the_cache_reused_still_reaches_its_reader(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { let xs = names(io); write_file(strs_get(xs, 0), \"x\") }\n")?;
+    let from_args = "pub fn names(io: IoCap) -> Strs ! { io } { let xs = strs_new(); strs_push(xs, arg(1)); xs }\n";
+    w(h, d, "b.nz", from_args)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub fn names(io: IoCap) -> Strs ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"m\")); xs }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, run_show_(after))?;
+    check_that(strs_len(after.diagnostics) > 0 && text_starts_with(strs_get(after.diagnostics, 0), "N0372"), run_show_(after))?;
+    same_meaning(after, cold(h, d, "a.nz")?, "cold")?;
+    // Every module reused: the cells come from the entries' facts.
+    let again = check(h, d, "a.nz")?;
+    check_that(again.reused == 2 + PRELUDE, run_show_(again))?;
+    same_meaning(again, after, "again")?;
+    w(h, d, "b.nz", from_args)?;
+    let back = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(back.accepted, run_show_(back))
+}
+
+@test
+fn a_function_value_made_in_a_reused_module_is_still_a_candidate(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { let f = maker(); write_file(f(io), \"x\") }\n")?;
+    w(h, d, "b.nz", "pub fn maker() -> fn(IoCap) -> Str ! { io } ! {} { fn(c: IoCap) -> Str ! { io } { \"out\" } }\n")?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub fn maker() -> fn(IoCap) -> Str ! { io } ! {} { fn(c: IoCap) -> Str ! { io } { read_file(\"m\") } }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, run_show_(after))?;
+    check_that(!after.accepted, run_show_(after))?;
+    check_that(strs_len(after.diagnostics) > 0 && text_starts_with(strs_get(after.diagnostics, 0), "N0372"), run_show_(after))?;
+    // B makes a closure, so it files no entry and is checked again (Q1-B-C1); A is reused.
+    let again = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(again.reused == 1 + PRELUDE, run_show_(again))?;
+    same_meaning(again, after, "again")
+}
+
+/// Q1-B-C1: a cache hit must not change a verdict.
+@test
+fn a_module_that_makes_a_closure_gives_the_same_verdict_warm_as_cold(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { let f = maker(); write_file(f(io), \"x\") }\n")?;
+    w(h, d, "b.nz", "pub fn maker() -> fn(IoCap) -> Str ! { io } ! {} { fn(c: IoCap) -> Str ! { io } { \"out\" } }\n")?;
+    let c = cold(h, d, "a.nz")?;
+    check_that(c.accepted, run_show_(c))?;
+    let mut r = 0;
+    while r < 3 {
+        let warm = check(h, d, "a.nz")?;
+        same_meaning(warm, c, f"run {r}")?;
+        r = r + 1;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_helper_in_another_module_that_writes_to_its_parameter_carries_the_rule_across(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "b.nz", "pub fn save(io: IoCap, p: Str) -> Int ! { io } { write_file(p, \"x\") }\n")?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, read_file(\"cfg\")) }\n")?;
+    let warm = check(h, d, "a.nz")?;
+    check_that(all_start(warm.diagnostics, "N0372") && !warm.accepted, run_show_(warm))?;
+    // The whole meaning, wording included: a reused module's parameter is named from its
+    // signature, as a cold check names it.
+    let reused = check(h, d, "a.nz")?;
+    same_meaning(reused, warm, "reused")?;
+    let mut named = false;
+    let mut numbered = false;
+    for x in reused.diagnostics {
+        if text_contains(x, "`p`") { named = true; }
+        if text_contains(x, "#1") { numbered = true; }
+    }
+    check_that(named && !numbered, run_show_(reused))?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int ! { io } { save(io, arg(0)) }\n")?;
+    let good = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(good.accepted, run_show_(good))
+}
+
+@test
+fn an_entry_keeps_the_modules_provenance_facts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main(io: IoCap) -> Int { str_len(load(io)) }\n")?;
+    w(h, d, "b.nz", "pub fn load(io: IoCap) -> Str { read_file(\"f\") }\n")?;
+    check_that(check(h, d, "a.nz")?.accepted, "first")?;
+    let b = entry_of(h, d, "b.nz")?;
+    scratch_remove(h, d);
+    check_that(jstr(b, "schema") == "nazm.check/5", jv(b, "schema"))?;
+    check_that(jstr(b, "provenance/functions/0/name") == "load", jv(b, "provenance"))?;
+    check_that(jlen(b, "provenance/functions/0/result/origins") == 1, jv(b, "provenance"))?;
+    check_that(jstr(b, "provenance/functions/0/result/origins/0/0") == "file", jv(b, "provenance"))
+}
+
+// --- A → B → C, and where propagation stops ------------------------------------------------------
+
+fn three_modules(h: Caps, c: Str) -> Result[Str, Str] ! { io } {
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { mid(1) }\n")?;
+    w(h, d, "b.nz", "use \"c.nz\";\npub fn mid(n: Int) -> Int { deep(n) }\n")?;
+    w(h, d, "c.nz", c)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+const C: Str = "pub fn deep(n: Int) -> Int { inner() + n }\nfn inner() -> Int { 7 }\n";
+
+@test
+fn a_private_change_three_modules_down_reaches_nobody(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = three_modules(h, C)?;
+    check_that(check(h, d, "a.nz")?.checked == 3 + PRELUDE, "cold")?;
+    w(h, d, "c.nz", "pub fn deep(n: Int) -> Int { inner() + n }\nfn inner() -> Int { 3 + 4 }\n")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.checked == 1 && after.reused == 2 + PRELUDE, run_show_(after))?;
+    check_that(after.accepted, run_show_(after))
+}
+
+@test
+fn an_exported_change_propagates_one_step_and_stops(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = three_modules(h, C)?;
+    check_that(check(h, d, "a.nz")?.checked == 3 + PRELUDE, "cold")?;
+    w(h, d, "c.nz", "pub fn deep(n: Int, k: Int) -> Int { inner() + n + k }\nfn inner() -> Int { 7 }\n")?;
+    w(h, d, "b.nz", "use \"c.nz\";\npub fn mid(n: Int) -> Int { deep(n, 0) }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 2 && after.reused == 1 + PRELUDE, f"A's interface dependency on B did not move, so A should have been left alone: {run_show_(after)}")?;
+    check_that(after.accepted, run_show_(after))?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, c, "cold")
+}
+
+@test
+fn a_change_that_moves_every_interface_reaches_every_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = three_modules(h, C)?;
+    check_that(check(h, d, "a.nz")?.checked == 3 + PRELUDE, "cold")?;
+    w(h, d, "c.nz", "pub fn deep(n: Int, k: Int) -> Int { inner() + n + k }\nfn inner() -> Int { 7 }\n")?;
+    w(h, d, "b.nz", "use \"c.nz\";\npub fn mid(n: Int, k: Int) -> Int { deep(n, k) }\n")?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { mid(1, 2) }\n")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.checked == 3 && after.reused == PRELUDE, run_show_(after))?;
+    check_that(after.accepted, run_show_(after))
+}
+
+// --- a cache may change the work, not the meaning ------------------------------------------------
+
+@test
+fn cold_warm_and_disabled_agree_on_every_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("accepted|a type error in the importer|a private definition named across a module boundary|an undefined name|an import that collides with a definition|a program with no main|an error in the dependency", "|");
+    let as_ = strs_new();
+    strs_push(as_, "use \"b.nz\";\nfn main() -> Int { twice(1) }\n");
+    strs_push(as_, "use \"b.nz\";\nfn main() -> Int { twice(\"x\") }\n");
+    strs_push(as_, "use \"b.nz\";\nfn main() -> Int { helper() }\n");
+    strs_push(as_, "use \"b.nz\";\nfn main() -> Int { nowhere() }\n");
+    strs_push(as_, "use \"b.nz\";\nfn twice(n: Int) -> Int { n }\nfn main() -> Int { twice(1) }\n");
+    strs_push(as_, "use \"b.nz\";\npub fn other() -> Int { twice(1) }\n");
+    strs_push(as_, "use \"b.nz\";\nfn main() -> Int { twice(1) }\n");
+    let mut k = 0;
+    while k < strs_len(as_) {
+        let what = strs_get(whats, k);
+        let b = if k == 6 { "pub fn twice(n: Int) -> Int { missing() }\n" } else { B };
+        let d = project(h)?;
+        w(h, d, "a.nz", strs_get(as_, k))?;
+        w(h, d, "b.nz", b)?;
+        let disabled = cold(h, d, "a.nz")?;
+        let first = check(h, d, "a.nz")?;
+        let warm = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        same_meaning(disabled, first, f"{what}: cold")?;
+        same_meaning(disabled, warm, f"{what}: warm")?;
+        check_that(strs_len(disabled.diagnostics) > 0 || disabled.accepted, what)?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn a_program_that_does_not_check_is_never_reused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "fn main() -> Int { nowhere() }\n")?;
+    let first = check(h, d, "a.nz")?;
+    check_that(!first.accepted, run_show_(first))?;
+    // The prelude checked cleanly, and an entry means *this module* did.
+    check_that(first.stored == PRELUDE, run_show_(first))?;
+    let second = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(second.reused == PRELUDE, "a refusal must not be reused")?;
+    same_meaning(first, second, "second")
+}
+
+@test
+fn deleting_the_cache_changes_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    let warm_setup = check(h, d, "a.nz")?;
+    check_that(warm_setup.stored == 2 + PRELUDE, run_show_(warm_setup))?;
+    check_that(scratch_remove(h, f"{d}/.nazm") == 0, "remove the cache")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.checked == 2 + PRELUDE && after.reused == 0, run_show_(after))?;
+    same_meaning(after, warm_setup, "after")
+}
+
+@test
+fn a_disabled_cache_writes_nothing_and_reads_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    let disabled = cold(h, d, "a.nz")?;
+    check_that(disabled.reused == 0 && disabled.stored == 0, run_show_(disabled))?;
+    check_that(!file_exists(f"{d}/.nazm"), "nothing should be written")?;
+    // And a warm store is ignored rather than consulted.
+    check(h, d, "a.nz")?;
+    let again = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(again.reused == 0, run_show_(again))
+}
+
+// --- nothing on disk is authority ----------------------------------------------------------------
+
+/// Every entry the store holds, sorted.
+fn entries(h: Caps, dir: Str) -> Strs ! { io } {
+    let out = strs_new();
+    let all = match file_walk(h.io, f"{dir}/.nazm/check") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for p in all {
+        if text_ends_with(p, ".json") {
+            strs_push(out, p);
+        }
+    }
+    strs_sort(out)
+}
+
+/// The entry **for** the module whose durable key is `key`, not one that merely mentions it.
+fn entry_path(h: Caps, dir: Str, key: Str) -> Result[Str, Str] ! { io } {
+    let wanted = f"\"module\":\"{key}\",\"source\"";
+    for p in entries(h, dir) {
+        match read_text(h, p) {
+            Result.Ok(value: t) => {
+                if text_contains(t, wanted) {
+                    return Result[Str, Str].Ok(value: p);
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    Result[Str, Str].Err(error: "an entry for that module")
+}
+
+/// Replace the 64-character digest after `"<field>":"`.
+fn swap_digest(text: Str, field: Str) -> Str ! {} {
+    let marker = f"\"{field}\":\"";
+    let at = find(text, marker) + str_len(marker);
+    f"{str_slice(text, 0, at)}{text_repeat("0", 64)}{str_slice(text, at + 64, str_len(text))}"
+}
+
+fn damaged(what: Int, t: Str) -> Str ! {} {
+    if what == 0 { return str_slice(t, 0, str_len(t) / 2); }
+    if what == 1 { return ""; }
+    if what == 2 { return "nonsense"; }
+    if what == 3 { return text_replace(t, "nazm.check/5", "nazm.check/9"); }
+    if what == 4 { return text_replace(t, "\"ret\":\"Int\"", "\"ret\":\"Str\""); }
+    if what == 5 { return swap_digest(t, "source"); }
+    if what == 6 { return swap_digest(t, "checker"); }
+    if what == 7 { return replace_first(t, "\"module\":\"b.nz\"", "\"module\":\"z.nz\""); }
+    // The provenance facts and resolved unit are sealed by a digest (Q1-M-07).
+    replace_first(t, "\"facts_digest\":\"blake3:", "\"facts_digest\":\"blake3:f")
+}
+
+@test
+fn a_damaged_entry_is_recomputed_rather_than_believed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("truncated|emptied|not json at all|a schema from the future|an edited interface|an edited source fingerprint|a foreign checker|an edited module key|an edited facts digest", "|");
+    let mut k = 0;
+    while k < strs_len(whats) {
+        let what = strs_get(whats, k);
+        let d = two_modules(h, B)?;
+        let good = check(h, d, "a.nz")?;
+        check_that(good.accepted, run_show_(good))?;
+        let path = entry_path(h, d, "b.nz")?;
+        let text = read_raw(h, path)?;
+        write_at(h, path, damaged(k, text))?;
+        let after = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        check_that(after.accepted, f"{what}: a damaged entry changed the answer")?;
+        same_meaning(after, good, what)?;
+        check_that(after.checked == 1 && after.reused == 1 + PRELUDE && after.rejected == 1, f"{what}: a damaged entry must be a miss, and only for its own module: {run_show_(after)}")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn a_damaged_entry_cannot_hide_an_error(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    check(h, d, "a.nz")?;
+    let paths = entries(h, d);
+    let texts = strs_new();
+    for path in paths {
+        strs_push(texts, read_raw(h, path)?);
+    }
+    // A now calls `twice` with the wrong type, and its stale entry is restored on top of the new
+    // source.
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { twice(\"x\") }\n")?;
+    let mut i = 0;
+    while i < strs_len(paths) {
+        write_at(h, strs_get(paths, i), strs_get(texts, i))?;
+        i = i + 1;
+    }
+    let after = check(h, d, "a.nz")?;
+    check_that(!after.accepted, "a stale entry accepted a wrong program")?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, c, "cold")
+}
+
+/// `text` with every `"sinks":[…]` list of its provenance functions emptied: the count of lists
+/// emptied, and the text.
+fn emptied_sinks(text: Str) -> Strs ! {} {
+    let marker = "\"sinks\":[";
+    let parts = strs_new();
+    let mut count = 0;
+    let mut from = 0;
+    let at_prov = find(text, "\"provenance\":");
+    let mut at = if at_prov >= 0 { find_from(text, marker, at_prov) } else { 0 - 1 };
+    while at >= 0 {
+        let open = at + str_len(marker);
+        // The list's closing bracket, nesting counted.
+        let mut depth = 1;
+        let mut j = open;
+        while j < str_len(text) && depth > 0 {
+            let b = str_byte(text, j);
+            if b == 91 { depth = depth + 1; }
+            if b == 93 { depth = depth - 1; }
+            j = j + 1;
+        }
+        strs_push(parts, str_slice(text, from, open));
+        from = j - 1;
+        count = count + 1;
+        at = find_from(text, marker, j);
+    }
+    strs_push(parts, str_slice(text, from, str_len(text)));
+    let out = strs_new();
+    strs_push(out, int_to_str(count));
+    strs_push(out, str_join(parts, ""));
+    out
+}
+
+/// Q1-M-07: an entry's provenance facts are sealed by a digest. Emptying a module's sink list in
+/// its entry must not let a caller's new flow into that sink be accepted.
+@test
+fn an_edited_provenance_fact_cannot_hide_a_flow(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "store.nz", "pub fn save(io: IoCap, path: Str, text: Str) -> Int ! { io } {\n    write_file(path, text)\n}\n")?;
+    w(h, d, "main.nz", "use \"store.nz\";\nfn main(io: IoCap) -> Int ! { io } {\n    save(io, \"out.txt\", \"hi\")\n}\n")?;
+    check_that(check(h, d, "main.nz")?.accepted, "first")?;
+    let path = entry_path(h, d, "store.nz")?;
+    let text = read_raw(h, path)?;
+    let e = emptied_sinks(text);
+    // The edit, checked against the parsed entry: every function's sinks are now empty.
+    let edited = jparse(strs_get(e, 1))?;
+    let mut f = 0;
+    while f < jlen(edited, "provenance/functions") {
+        check_that(jlen(edited, f"provenance/functions/{f}/sinks") <= 0, "a sink list left")?;
+        f = f + 1;
+    }
+    check_that(strs_get(e, 0) != "0", "the entry records `save`'s sink")?;
+    write_at(h, path, strs_get(e, 1))?;
+    w(h, d, "main.nz", "use \"store.nz\";\nfn main(io: IoCap) -> Int ! { io } {\n    save(io, read_file(\"cfg\"), \"hi\")\n}\n")?;
+    let warm = check(h, d, "main.nz")?;
+    let c = cold(h, d, "main.nz")?;
+    scratch_remove(h, d);
+    check_that(!c.accepted, "the flow is refused from source")?;
+    check_that(!warm.accepted, "an edited entry accepted a refused flow")?;
+    check_that(warm.rejected >= 1, "the edited entry is refused, not believed")?;
+    same_meaning(warm, c, "cold")
+}
+
+// --- identity across checkouts and across entry points -------------------------------------------
+
+fn with_shared(h: Caps, dir: Str, shared: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = run(h, nazm_bin(h.io), words("check a.nz --cache-report"), dir, env_set(suite_env(h), "NAZM_CACHE_DIR", shared));
+    for l in text_lines(out.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            let v = jparse(l)?;
+            let c = jint(v, "checked");
+            let r = jint(v, "reused");
+            return Result[Str, Str].Ok(value: f"{out.code == 0} {if c < 0 { 9 } else { c }} {if r < 0 { 9 } else { r }}");
+        }
+    }
+    Result[Str, Str].Err(error: "a report")
+}
+
+@test
+fn two_checkouts_of_one_project_share_entries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let shared = scratch_new(h);
+    let a = two_modules(h, B)?;
+    let b = two_modules(h, B)?;
+    check_that(a != b, "one directory")?;
+    let first = with_shared(h, a, shared)?;
+    let second = with_shared(h, b, shared)?;
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    scratch_remove(h, shared);
+    check_that(first == f"true {2 + PRELUDE} 0", first)?;
+    check_that(second == f"true 0 {2 + PRELUDE}", f"a different directory should not be a different project: {second}")
+}
+
+/// Two applications at different depths over one library.
+fn two_entry_points(h: Caps, d: Str) -> Result[Int, Str] ! { io } {
+    w(h, d, "app.nz", "use \"lib/common.nz\";\nfn main() -> Int { shared(1) }\n")?;
+    w(h, d, "tool/run.nz", "use \"../lib/common.nz\";\nfn main() -> Int { shared(2) }\n")?;
+    w(h, d, "lib/common.nz", "pub fn shared(n: Int) -> Int { helper() + n }\nfn helper() -> Int { 3 }\n")
+}
+
+@test
+fn a_shared_module_is_reused_across_two_entry_points(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    two_entry_points(h, d)?;
+    let first = check(h, d, "app.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.reused == 0, run_show_(first))?;
+    let second = check(h, d, "tool/run.nz")?;
+    scratch_remove(h, d);
+    check_that(second.checked == 1 && second.reused == 1 + PRELUDE, f"the library was checked for `app.nz`; `tool/run.nz` should not check it again: {run_show_(second)}")?;
+    check_that(second.accepted, run_show_(second))
+}
+
+@test
+fn without_a_declared_root_the_two_entry_points_share_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    two_entry_points(h, d)?;
+    let first = check(h, d, "app.nz")?;
+    check_that(first.root == "derived", first.root)?;
+    check_that(first.checked == 2 + PRELUDE && first.reused == 0, run_show_(first))?;
+    // Each derived root has a store of its own, so not even the prelude is shared.
+    let second = check(h, d, "tool/run.nz")?;
+    scratch_remove(h, d);
+    check_that(second.checked == 2 + PRELUDE && second.reused == 0, run_show_(second))?;
+    check_that(second.declined >= 1, run_show_(second))?;
+    check_that(second.accepted, run_show_(second))
+}
+
+@test
+fn two_modules_with_identical_source_do_not_share_an_entry(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    let same = "pub fn v() -> Int { 1 }\n";
+    w(h, d, "a/m.nz", same)?;
+    w(h, d, "b/m.nz", same)?;
+    w(h, d, "one.nz", "use \"a/m.nz\";\nfn main() -> Int { v() }\n")?;
+    w(h, d, "two.nz", "use \"b/m.nz\";\nfn main() -> Int { v() }\n")?;
+    let first = check(h, d, "one.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.stored == 2 + PRELUDE, run_show_(first))?;
+    let second = check(h, d, "two.nz")?;
+    scratch_remove(h, d);
+    check_that(second.checked == 2 && second.reused == PRELUDE && second.rejected == 0, f"`b/m.nz` has the same bytes as `a/m.nz` and is not the same module: {run_show_(second)}")?;
+    check_that(second.accepted, run_show_(second))
+}
+
+@test
+fn a_module_with_no_durable_identity_is_checked_every_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    w(h, d, "outside.nz", "pub fn v() -> Int { 4 }\n")?;
+    w(h, d, "project/nazm.root", "")?;
+    w(h, d, "project/main.nz", "use \"../outside.nz\";\nfn main() -> Int { v() }\n")?;
+    let first = check(h, d, "project/main.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    check_that(first.declined >= 1, run_show_(first))?;
+    let second = check(h, d, "project/main.nz")?;
+    scratch_remove(h, d);
+    check_that(second.accepted, run_show_(second))?;
+    check_that(second.reused == PRELUDE, f"nothing here but the prelude should have a key: {run_show_(second)}")
+}
+
+/// One `nazm check a.nz` started and not waited for: its process, to wait on later.
+fn racer(h: Caps, dir: Str) -> Result[Child, Str] ! { io, spawn } {
+    let v = h.v;
+    match process_spawn_with(h.p, str_vouch(nazm_bin(h.io)), words("check a.nz"), str_vouch(dir), suite_env(h), true, true) {
+        Result.Ok(value: c) => Result[Child, Str].Ok(value: c),
+        Result.Err(error: e) => Result[Child, Str].Err(error: "spawn"),
+    }
+}
+
+@test
+fn two_compilers_publishing_at_once_leave_a_usable_store(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules(h, B)?;
+    let racers = vec_new[Child]();
+    let mut i = 0;
+    while i < 4 {
+        vec_push(racers, racer(h, d)?);
+        i = i + 1;
+    }
+    let mut j = 0;
+    while j < 4 {
+        let c = vec_get(racers, j);
+        let status = match process_wait(c) { Result.Ok(value: s) => s, Result.Err(error: e) => 0 - 1, };
+        os_close(c.handle);
+        check_that(status == 0, "a concurrent check failed")?;
+        j = j + 1;
+    }
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.checked == 0 && after.reused == 2 + PRELUDE, run_show_(after))?;
+    check_that(after.accepted, run_show_(after))
+}
+
+// --- records, and which edits reach an importer --------------------------------------------------
+
+fn two_modules_with_a_record(h: Caps, b: Str) -> Result[Str, Str] ! { io } {
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn size(p: Point) -> Int { p.x }\nfn main() -> Int { size(at(21)) + Point(x: 21).x }\n")?;
+    w(h, d, "b.nz", b)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+const RECORD_B: Str = "pub struct Point {\n    x: Int,\n}\nstruct Hidden {\n    n: Int,\n}\nfn secret() -> Int { Hidden(n: 1).n }\npub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }\n";
+
+@test
+fn a_private_record_change_leaves_the_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules_with_a_record(h, RECORD_B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.reused == 0, run_show_(first))?;
+    w(h, d, "b.nz", "pub struct Point {\n    x: Int,\n}\nstruct Hidden {\n    n: Str,\n    extra: Int,\n}\nfn secret() -> Int { str_len(Hidden(n: \"\", extra: 0).n) + 1 }\npub fn at(n: Int) -> Point { Point(x: n + secret() - 1) }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, f"exactly B should have been checked: {run_show_(after)}")?;
+    check_that(after.accepted, run_show_(after))?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, c, "cold")
+}
+
+@test
+fn an_exported_record_change_rechecks_the_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("a field is added|a field changes type|a record is added", "|");
+    let bs = strs_new();
+    strs_push(bs, "pub struct Point {\n    x: Int,\n    y: Int,\n}\npub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n");
+    strs_push(bs, "pub struct Point {\n    x: Str,\n}\npub fn at(n: Int) -> Point { Point(x: int_to_str(n)) }\n");
+    strs_push(bs, "pub struct Point {\n    x: Int,\n}\npub struct Other {\n    y: Int,\n}\npub fn at(n: Int) -> Point { Point(x: n) }\n");
+    let mut k = 0;
+    while k < 3 {
+        let d = two_modules_with_a_record(h, RECORD_B)?;
+        check(h, d, "a.nz")?;
+        w(h, d, "b.nz", strs_get(bs, k))?;
+        let after = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        check_that(after.reused == PRELUDE, f"{strs_get(whats, k)}: A should have been re-checked")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn reordering_an_exported_records_fields_reaches_nobody(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules_with_a_record(h, "pub struct Point {\n    x: Int,\n    y: Int,\n}\npub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n")?;
+    // This B's `Point` has two fields, so A's own construction names both.
+    w(h, d, "a.nz", "use \"b.nz\";\nfn size(p: Point) -> Int { p.x }\nfn main() -> Int { size(at(21)) + Point(x: 21, y: 0).x }\n")?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.stored == 2 + PRELUDE, "both should be stored")?;
+    w(h, d, "b.nz", "pub struct Point {\n    y: Int,\n    x: Int,\n}\npub fn at(n: Int) -> Point { Point(x: n, y: 0) }\n")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, f"reordering fields should reach nobody: {run_show_(after)}")
+}
+
+@test
+fn an_entry_written_before_records_or_enums_existed_cannot_become_a_hit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules_with_a_record(h, RECORD_B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.stored == 2 + PRELUDE, run_show_(first))?;
+    // The epoch and the interface schema, as the binary states them.
+    let i = nazm(h, d, words("inspect a.nz"));
+    scratch_remove(h, d);
+    check_that(i.code == 0, i.stderr)?;
+    let inv = jparse(i.stdout)?;
+    check_that(jint(inv, "toolchain/semantic_epoch") == 87, f"the epoch moved: {jv(inv, "toolchain/semantic_epoch")}")?;
+    check_that(jstr(inv, "toolchain/interface") == "nazm.interface/13", jv(inv, "toolchain/interface"))
+}
+
+@test
+fn a_module_that_uses_an_enum_was_refused_by_the_build_before_this_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    w(h, d, "a.nz", "enum State { Ready, }\nfn main() -> Int { match State.Ready() { State.Ready() => 0, } }\n")?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.stored == 1 + PRELUDE, run_show_(first))?;
+    let again = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(again.reused == 1 + PRELUDE, run_show_(again))
+}
+
+// --- enums, and which edits reach an importer ----------------------------------------------------
+
+fn two_modules_with_an_enum(h: Caps, b: Str) -> Result[Str, Str] ! { io } {
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn weight(s: State) -> Int { match s { State.Ready() => 21, State.Done(code: c) => c, } }\nfn main() -> Int { weight(start()) + weight(State.Done(code: 21)) }\n")?;
+    w(h, d, "b.nz", b)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+const ENUM_B: Str = "pub enum State {\n    Ready,\n    Done(code: Int),\n}\nenum Hidden {\n    A,\n}\nfn secret() -> Int { match Hidden.A() { Hidden.A() => 0, } }\npub fn start() -> State { State.Ready() }\n";
+
+@test
+fn a_private_enum_change_leaves_the_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules_with_an_enum(h, ENUM_B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.checked == 2 + PRELUDE && first.reused == 0, run_show_(first))?;
+    w(h, d, "b.nz", "pub enum State {\n    Ready,\n    Done(code: Int),\n}\nenum Hidden {\n    A(n: Str),\n    B,\n}\nfn secret() -> Int { match Hidden.B() { Hidden.A(n: s) => str_len(s), Hidden.B() => 0, } }\npub fn start() -> State { State.Ready() }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE, f"exactly B should have been checked: {run_show_(after)}")?;
+    check_that(after.accepted, run_show_(after))?;
+    let c = cold(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    same_meaning(after, c, "cold")
+}
+
+@test
+fn a_public_variant_addition_rechecks_the_importer_and_breaks_its_match(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = two_modules_with_an_enum(h, ENUM_B)?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub enum State {\n    Ready,\n    Done(code: Int),\n    Failed,\n}\npub fn start() -> State { State.Ready() }\n")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.reused == PRELUDE, f"A should have been re-checked: {run_show_(after)}")?;
+    check_that(!after.accepted, "A's match should no longer be exhaustive")?;
+    check_that(any_start(after.diagnostics, "N0343"), f"expected a non-exhaustive match: {run_show_(after)}")
+}
+
+@test
+fn an_exported_enum_change_rechecks_the_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("a variant is renamed|a payload field is added|a payload type changes|an enum is added", "|");
+    let bs = strs_new();
+    strs_push(bs, "pub enum State {\n    Waiting,\n    Done(code: Int),\n}\npub fn start() -> State { State.Waiting() }\n");
+    strs_push(bs, "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\npub fn start() -> State { State.Ready() }\n");
+    strs_push(bs, "pub enum State {\n    Ready,\n    Done(code: Str),\n}\npub fn start() -> State { State.Ready() }\n");
+    strs_push(bs, "pub enum State {\n    Ready,\n    Done(code: Int),\n}\npub enum Other {\n    A,\n}\npub fn start() -> State { State.Ready() }\n");
+    let mut k = 0;
+    while k < 4 {
+        let d = two_modules_with_an_enum(h, ENUM_B)?;
+        check(h, d, "a.nz")?;
+        w(h, d, "b.nz", strs_get(bs, k))?;
+        let after = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        check_that(after.reused == PRELUDE, f"{strs_get(whats, k)}: A should have been re-checked")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn reordering_an_exported_enums_variants_reaches_nobody(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let whats = text_split("variants reordered|payload fields reordered", "|");
+    let edits = strs_new();
+    strs_push(edits, "pub enum State {\n    Done(code: Int, why: Str),\n    Ready,\n}\npub fn start() -> State { State.Ready() }\n");
+    strs_push(edits, "pub enum State {\n    Ready,\n    Done(why: Str, code: Int),\n}\npub fn start() -> State { State.Ready() }\n");
+    let mut k = 0;
+    while k < 2 {
+        let what = strs_get(whats, k);
+        let d = project(h)?;
+        w(h, d, "a.nz", "use \"b.nz\";\nfn weight(s: State) -> Int { match s { State.Ready() => 21, State.Done(code: c, why: w) => c + str_len(w), } }\nfn main() -> Int { weight(start()) + weight(State.Done(code: 21, why: \"\")) }\n")?;
+        w(h, d, "b.nz", "pub enum State {\n    Ready,\n    Done(code: Int, why: Str),\n}\npub fn start() -> State { State.Ready() }\n")?;
+        let first = check(h, d, "a.nz")?;
+        check_that(first.checked == 2 + PRELUDE && first.stored == 2 + PRELUDE, f"{what}: both should be stored")?;
+        w(h, d, "b.nz", strs_get(edits, k))?;
+        let after = check(h, d, "a.nz")?;
+        scratch_remove(h, d);
+        check_that(after.checked == 1 && after.reused == 1 + PRELUDE, f"{what} should reach nobody: {run_show_(after)}")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+// --- N14: a requirement is part of what a module offers -------------------------------------------
+
+@test
+fn a_public_requirement_added_rechecks_and_refuses_the_importer_that_breaks_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { vec_len(keep(vec_new[Int]())) }\n")?;
+    w(h, d, "b.nz", "pub fn keep[T](x: T) -> T { x }\n")?;
+    let first = check(h, d, "a.nz")?;
+    check_that(first.accepted, run_show_(first))?;
+    w(h, d, "b.nz", "pub fn keep[T: Equality](x: T) -> T { x }\n")?;
+    let after = check(h, d, "a.nz")?;
+    check_that(!after.accepted, run_show_(after))?;
+    check_that(strs_len(after.diagnostics) == 1, run_show_(after))?;
+    check_that(text_starts_with(strs_get(after.diagnostics, 0), "N0364"), run_show_(after))?;
+    check_that(after.checked == 2 && after.reused == PRELUDE, run_show_(after))?;
+    same_meaning(after, cold(h, d, "a.nz")?, "cold")?;
+    // And removed again, the importer is accepted again.
+    w(h, d, "b.nz", "pub fn keep[T](x: T) -> T { x }\n")?;
+    let back = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(back.accepted, run_show_(back))
+}
+
+@test
+fn a_private_requirement_changed_leaves_the_importer_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = project(h)?;
+    w(h, d, "a.nz", "use \"b.nz\";\nfn main() -> Int { if same_int(1, 1) { 1 } else { 0 } }\n")?;
+    w(h, d, "b.nz", "pub fn same_int(a: Int, b: Int) -> Bool { eq(a, b) }\nfn eq[T: Equality](a: T, b: T) -> Bool { a == b }\n")?;
+    check(h, d, "a.nz")?;
+    w(h, d, "b.nz", "pub fn same_int(a: Int, b: Int) -> Bool { eq(a, b) }\nfn eq[T](a: T, b: T) -> Bool { true }\n")?;
+    let after = check(h, d, "a.nz")?;
+    scratch_remove(h, d);
+    check_that(after.accepted, run_show_(after))?;
+    check_that(after.checked == 1 && after.reused == 1 + PRELUDE && after.missed == 1, f"exactly B should have been checked: {run_show_(after)}")
+}
