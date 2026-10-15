@@ -1,0 +1,323 @@
+// N73: semantic differential fuzzing — generated programs, one answer from every tier
+// (`docs/architecture.md` §7.75). A seeded generator writes well-typed programs that terminate by
+// construction; each is run by the interpreter, built by LLVM at `-O0` and `-O2` and by
+// Cranelift, and run on LIR's interpreter; every tier must print the same value or fail with the
+// same code at the same place. A disagreement is shrunk and printed for the regression corpus
+// (`tests/fuzz-corpus`), which every run replays first. Ported from
+// `crates/nazm-cli/tests/fuzz_diff.rs` (R7): the generator is the Rust test's, step for step — the
+// same xorshift on `UInt64`, the same draws in the same order — so a seed writes the same programs.
+
+use "@std/text"
+use "@std/env"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// The generator's state: one word, xorshifted.
+struct Rng {
+    s: Vec[UInt64],
+}
+
+fn next(r: Rng) -> UInt64 ! {} {
+    let mut s = vec_get(r.s, 0);
+    s = s ^ (s >> 12);
+    s = s ^ (s << 25);
+    s = s ^ (s >> 27);
+    vec_set(r.s, 0, s);
+    wrapping_mul(s, UInt64(2685821657736338717))
+}
+
+fn below(r: Rng, n: Int) -> Int ! {} {
+    let m = if n < 1 { 1 } else { n };
+    Int(next(r) % UInt64(m))
+}
+
+fn pick(r: Rng, xs: Strs) -> Str ! {} {
+    strs_get(xs, below(r, strs_len(xs)))
+}
+
+/// Every generated program's types (N81).
+const LAYOUTS: Str = "struct P { a: Int, b: Int }\nstruct Q { flag: Bool, name: Str, n: Int }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nfn q_of(x: Int, y: Int) -> Q { Q(flag: x < y, name: int_to_str(x), n: y) }\nfn s_of(x: Int, y: Int) -> S { if x < y { S.Pair(q: q_of(x, y), k: x) } else { if x == y { S.Empty() } else { S.Num(n: y) } } }\nfn s_val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 - str_len(q.name) }) + k % 7, S.Empty() => 3, } }\n";
+
+fn literal(r: Rng) -> Str ! {} {
+    let k = below(r, 10);
+    if k == 0 { return "9223372036854775807"; }
+    if k == 1 { return "(0 - 9223372036854775807 - 1)"; }
+    if k == 2 { return "3037000500"; }
+    if k == 3 { return "-1"; }
+    if k == 4 { return "0"; }
+    int_to_str(below(r, 41) - 20)
+}
+
+fn int_expr(r: Rng, vars: Strs, depth: Int, callable: Int) -> Str ! {} {
+    if depth == 0 || below(r, 3) == 0 {
+        return if strs_len(vars) > 0 && below(r, 3) != 0 { pick(r, vars) } else { literal(r) };
+    }
+    let k = below(r, 10);
+    if k <= 3 {
+        let op = pick(r, text_split("+|-|*|/|%|+|-", "|"));
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"({a} {op} {b})";
+    }
+    if k == 4 {
+        return f"(0 - {int_expr(r, vars, depth - 1, callable)})";
+    }
+    if k == 5 {
+        let c = cond(r, vars, depth - 1, callable);
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"(if {c} {{ {a} }} else {{ {b} }})";
+    }
+    if k == 6 && callable > 0 {
+        let f = below(r, callable);
+        let a = int_expr(r, vars, depth - 1, callable);
+        let b = int_expr(r, vars, depth - 1, callable);
+        return f"f{f}({a}, {b})";
+    }
+    let a = int_expr(r, vars, depth - 1, callable);
+    let b = int_expr(r, vars, depth - 1, callable);
+    // Layouts (N81): a record with a `Bool` and a `Str` beside an `Int`, inside an enum's payload.
+    if k == 8 { return f"s_val(s_of({a}, {b}))"; }
+    if k == 9 { return f"q_of({a}, {b}).n"; }
+    f"P(a: {a}, b: {b}).a"
+}
+
+fn cond(r: Rng, vars: Strs, depth: Int, callable: Int) -> Str ! {} {
+    let op = pick(r, text_split("<|<=|>|>=|==|!=", "|"));
+    let a = int_expr(r, vars, depth, callable);
+    let b = int_expr(r, vars, depth, callable);
+    let c = f"{a} {op} {b}";
+    let k = below(r, 5);
+    if k == 0 { return f"({c} && {cond(r, vars, 0, callable)})"; }
+    if k == 1 { return f"({c} || {cond(r, vars, 0, callable)})"; }
+    c
+}
+
+fn copy_strs(xs: Strs) -> Strs ! {} {
+    let out = strs_new();
+    for x in xs {
+        strs_push(out, x);
+    }
+    out
+}
+
+/// One function body: a statement per line, so a line can be removed when shrinking.
+fn body(r: Rng, params: Strs, callable: Int) -> Str ! {} {
+    let vars = copy_strs(params);
+    let out = strs_new();
+    let n = 1 + below(r, 5);
+    let mut k = 0;
+    while k < n {
+        let v = f"v{k}";
+        let which = below(r, 4);
+        if which == 0 {
+            strs_push(out, f"    let mut {v} = {int_expr(r, vars, 2, callable)};\n");
+            let bound = 1 + below(r, 6);
+            let e = int_expr(r, vars, 1, callable);
+            strs_push(out, f"    let mut i{k} = 0; while i{k} < {bound} {{ {v} = {v} + {e}; i{k} = i{k} + 1; }}\n");
+        } else if which == 1 {
+            strs_push(out, f"    let mut {v} = {int_expr(r, vars, 2, callable)};\n");
+            let c = cond(r, vars, 1, callable);
+            let a = int_expr(r, vars, 1, callable);
+            let b = int_expr(r, vars, 1, callable);
+            strs_push(out, f"    if {c} {{ {v} = {a}; }} else {{ {v} = {b}; }}\n");
+        } else {
+            strs_push(out, f"    let {v} = {int_expr(r, vars, 3, callable)};\n");
+        }
+        strs_push(vars, v);
+        k = k + 1;
+    }
+    strs_push(out, f"    let result = {int_expr(r, vars, 2, callable)};\n");
+    strs_push(out, "    result\n");
+    str_join(out, "")
+}
+
+fn program(r: Rng) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, LAYOUTS);
+    let n = 1 + below(r, 3);
+    let mut f = 0;
+    while f < n {
+        strs_push(out, f"fn f{f}(x: Int, y: Int) -> Int {{\n");
+        strs_push(out, body(r, words("x y"), f));
+        strs_push(out, "}\n");
+        f = f + 1;
+    }
+    strs_push(out, "fn main() -> Int {\n");
+    strs_push(out, body(r, strs_new(), n));
+    strs_push(out, "}\n");
+    str_join(out, "")
+}
+
+/// The first line holding `error[N04`, without its `nazm: `.
+fn failure(stderr: Str) -> Str ! {} {
+    for l in text_lines(stderr) {
+        if text_contains(l, "error[N04") {
+            return trim_start_matches(l, "nazm: ");
+        }
+    }
+    ""
+}
+
+/// What each tier did with one program: `name`, `stdout`, `status`, `failure` — four entries a tier.
+fn tiers(h: Caps, dir: Str, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", src)?;
+    let out = strs_new();
+    let run_ = nazm(h, dir, words("run --interpret prog.nz"));
+    // The interpreter names the place on the next line; the native tiers on the same one.
+    let mut place = "";
+    for l in text_lines(run_.stderr) {
+        let t = trim_start_ws(l);
+        if place == "" && text_starts_with(t, "--> ") {
+            place = trim_start_matches(t, "--> ");
+        }
+    }
+    let line = failure(run_.stderr);
+    strs_push(out, "run");
+    strs_push(out, run_.stdout);
+    strs_push(out, int_to_str(run_.code));
+    strs_push(out, if line == "" { "" } else { f"{line} at {place}" });
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 2");
+    let mut i = 0;
+    while i < 3 {
+        let backend = strs_get(backends, i);
+        let opt = strs_get(opts, i);
+        let exe = f"{dir}/p-{backend}-{opt}";
+        let a = words(f"build --backend {backend} --opt-level {opt} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        strs_push(out, f"{backend} -O{opt}");
+        if b.code != 0 {
+            strs_push(out, "build failed");
+            strs_push(out, int_to_str(b.code));
+            strs_push(out, failure(b.stderr));
+        } else {
+            let o = run(h, exe, strs_new(), "", suite_env(h));
+            strs_push(out, o.stdout);
+            strs_push(out, int_to_str(o.code));
+            strs_push(out, failure(o.stderr));
+        }
+        i = i + 1;
+    }
+    // N105: the LIR both backends translate, run on LIR's own interpreter — the oracle.
+    let o = nazm(h, dir, words("lir --run prog.nz"));
+    strs_push(out, "lir oracle");
+    strs_push(out, o.stdout);
+    strs_push(out, int_to_str(o.code));
+    strs_push(out, failure(o.stderr));
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn tiers_agree(t: Strs) -> Bool ! {} {
+    let mut i = 4;
+    while i < strs_len(t) {
+        if strs_get(t, i + 1) != strs_get(t, 1) || strs_get(t, i + 2) != strs_get(t, 2) || strs_get(t, i + 3) != strs_get(t, 3) {
+            return false;
+        }
+        i = i + 4;
+    }
+    true
+}
+
+fn shown(t: Strs) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(t) {
+        strs_push(out, f"{strs_get(t, i)}: stdout {strs_get(t, i + 1)} status {strs_get(t, i + 2)} failure {strs_get(t, i + 3)}");
+        i = i + 4;
+    }
+    str_join(out, "\n")
+}
+
+fn checks(h: Caps, dir: Str, src: Str) -> Result[Bool, Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", src)?;
+    Result[Bool, Str].Ok(value: nazm(h, dir, words("check prog.nz")).code == 0)
+}
+
+/// Remove lines while the program still checks and the tiers still disagree.
+fn shrink(h: Caps, dir: Str, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let mut lines = text_lines(src);
+    let mut i = 0;
+    while i < strs_len(lines) {
+        let candidate = strs_new();
+        let mut j = 0;
+        while j < strs_len(lines) {
+            if j != i {
+                strs_push(candidate, strs_get(lines, j));
+            }
+            j = j + 1;
+        }
+        let text = f"{str_join(candidate, "\n")}\n";
+        if checks(h, dir, text)? && !tiers_agree(tiers(h, dir, text)?) {
+            lines = candidate;
+        } else {
+            i = i + 1;
+        }
+    }
+    Result[Str, Str].Ok(value: f"{str_join(lines, "\n")}\n")
+}
+
+/// `src` checked and run on every tier: its tiers, or `Err` when it does not check or they disagree.
+fn check_one(h: Caps, dir: Str, src: Str, lbl: Str) -> Result[Strs, Str] ! { io, spawn } {
+    if !checks(h, dir, src)? {
+        let why = nazm(h, dir, words("check prog.nz"));
+        return Result[Strs, Str].Err(error: f"{lbl}: the generator wrote a program that does not check:\n{src}\n{why.stderr}");
+    }
+    let results = tiers(h, dir, src)?;
+    if !tiers_agree(results) {
+        let small = shrink(h, dir, src)?;
+        let shrunk = tiers(h, dir, small)?;
+        return Result[Strs, Str].Err(error: f"{lbl}: the tiers disagree. Shrunk, for tests/fuzz-corpus:\n---\n{small}---\n{shown(shrunk)}");
+    }
+    Result[Strs, Str].Ok(value: results)
+}
+
+fn env_int(h: Caps, name: Str, default: Int) -> Int ! { io } {
+    match env_get(h.io, name) {
+        Option.Some(value: s) => match text_parse_int(s) {
+            Result.Ok(value: n) => n,
+            Result.Err(error: e) => default,
+        },
+        Option.None() => default,
+    }
+}
+
+@test
+fn every_tier_gives_a_generated_program_the_same_answer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    // The regression corpus first.
+    let corpus = f"{repo_root(h)}/crates/nazm-cli/tests/fuzz-corpus";
+    let names = match dir_list(h.io, corpus) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for name in strs_sort(names) {
+        if text_ends_with(name, ".nz") {
+            check_one(h, d, read_text(h, f"{corpus}/{name}")?, f"{corpus}/{name}")?;
+        }
+    }
+    // `0x6e61_7a6d_0073`, the Rust test's seed.
+    let seed = env_int(h, "NAZM_FUZZ_SEED", 121364944846963);
+    let cases = env_int(h, "NAZM_FUZZ_CASES", 24);
+    let rs = vec_new[UInt64]();
+    vec_push(rs, UInt64(seed) | UInt64(1));
+    let r = Rng(s: rs);
+    let mut failing = 0;
+    let mut c = 0;
+    while c < cases {
+        let src = program(r);
+        let results = check_one(h, d, src, f"seed {seed} case {c}")?;
+        if strs_get(results, 2) == "2" {
+            failing = failing + 1;
+        }
+        c = c + 1;
+    }
+    scratch_remove(h, d);
+    // The generator reaches failures as well as values: the edge literals see to it.
+    check_that(cases < 10 || failing > 0, "no generated program failed: the edges are not reached")
+}

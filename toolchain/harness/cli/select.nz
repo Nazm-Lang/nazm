@@ -1,0 +1,212 @@
+// N54: select, deadlines, cooperative cancellation and the scheduler's counters
+// (`docs/architecture.md` §7.56). A select takes the lowest ready channel, a closed one included,
+// under the interpreter and both native backends alike; a waiting select is woken by another
+// task's send and by a close; a deadline is a lower bound; a clock needs a `TimeCap`; and a wall
+// clock stepped back an hour — a C shim preloaded into the program — moves no deadline. Ported from
+// `crates/nazm-cli/tests/select.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+fn sched_line(r: Ran) -> Result[Str, Str] ! {} {
+    for l in text_lines(r.stderr) {
+        if text_starts_with(l, "nazm-sched:") {
+            return Result[Str, Str].Ok(value: l);
+        }
+    }
+    Result[Str, Str].Err(error: f"no scheduler report: {r.stderr}")
+}
+
+fn reports(h: Caps) -> Strs ! { io } {
+    env_set(env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"), "NAZM_SCHED_REPORT", "1")
+}
+
+/// `prog.nz` holding `src` under the interpreter and built and run by each backend at each
+/// optimisation level, every one with the memory and scheduler reports on.
+fn everywhere_sched(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, reports(h))));
+    let labels = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut i = 0;
+    while i < 3 {
+        let lbl = strs_get(labels, i);
+        let exe = f"{d}/{text_replace(text_replace(lbl, " ", ""), "-", "")}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, i)} --opt-level {strs_get(opts, i)} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, f"{lbl}: {b.stderr}")?;
+        vec_push(out, Labeled(label: lbl, ran: bounded_exe(h, exe, "", reports(h))));
+        i = i + 1;
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// Every implementation prints `expected`, exits 0, writes the same memory report and scheduler
+/// counts, and reclaims all it allocated: the memory line.
+fn agrees_sched(h: Caps, src: Str, expected: Str) -> Result[Str, Str] ! { io, spawn } {
+    let runs = everywhere_sched(h, src)?;
+    let first_run = vec_get(runs, 0).ran;
+    let first = memory_line(first_run);
+    let first_sched = sched_line(first_run)?;
+    let mut i = 0;
+    while i < vec_len(runs) {
+        let lbl = vec_get(runs, i).label;
+        let r = vec_get(runs, i).ran;
+        check_that(r.code == 0, f"{lbl}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == expected, f"{lbl}: {r.stdout}")?;
+        check_that(sched_line(r)? == first_sched, f"{lbl} and the interpreter disagree about what the scheduler did")?;
+        let line = memory_line(r);
+        check_that(line == first, f"{lbl} and the interpreter disagree about storage")?;
+        for kind in words("sequences strings channels closures") {
+            let parts = split(line, kind);
+            let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+            let ws = split_whitespace(part);
+            let live = if strs_len(ws) > 2 { strs_get(ws, 2) } else { "" };
+            check_that(live == "live=0", f"{lbl}: {kind} not all reclaimed: {line}")?;
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: first)
+}
+
+@test
+fn a_select_takes_the_lowest_ready_channel_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let line = agrees_sched(h, "\nfn main(out: OutCap) -> Int {\n    let a = chan_new_of[Int](2);\n    let b = chan_new_of[Int](2);\n    chan_send_of(a, 1);\n    chan_send_of(b, 2);\n    chan_send_of(b, 3);\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, a);\n    vec_push(cs, b);\n    let got = vec_new[Int]();\n    let mut i = 0;\n    while i < 3 {\n        print(int_to_str(chan_select_of(cs, got)));\n        i = i + 1;\n    }\n    print(\":\");\n    print(int_to_str(vec_get(got, 0) * 100 + vec_get(got, 1) * 10 + vec_get(got, 2)));\n    chan_close_of(b);\n    // `b` closed and drained, `a` empty and open: `b` is the one ready, and gives nothing.\n    print(\":\");\n    print(int_to_str(chan_select_of(cs, got)));\n    print(int_to_str(vec_len(got)));\n    chan_close_of(a);\n    print(int_to_str(chan_select_of(cs, got)));\n    let none = vec_new[Chan[Int]]();\n    print(\":\");\n    print(int_to_str(chan_select_of(none, got)));\n    0\n}\n", "011:123:130:-10")?;
+    check_that(text_contains(line, "channels allocated=2"), line)
+}
+
+@test
+fn a_value_select_did_not_choose_stays_queued_and_is_released_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_sched(h, "\nstruct Note { text: Str, }\n\nfn main(out: OutCap) -> Int {\n    let a = chan_new_of[Note](1);\n    let b = chan_new_of[Note](1);\n    chan_send_of(a, Note(text: str_concat(\"fi\", \"rst\")));\n    chan_send_of(b, Note(text: str_concat(\"sec\", \"ond\")));\n    let cs = vec_new[Chan[Note]]();\n    vec_push(cs, a);\n    vec_push(cs, b);\n    let got = vec_new[Note]();\n    chan_select_of(cs, got);\n    print(vec_pop(got).text);\n    0\n}\n", "first0")?;
+    ok()
+}
+
+@test
+fn a_waiting_select_is_woken_by_another_task_s_send(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_sched(h, "\nfn later(t: TimeCap, go: Chan[Int], c: Chan[Str]) -> Bool ! {} {\n    let g = vec_new[Int]();\n    chan_recv_of(go, g);\n    time_sleep_ms(50);\n    chan_send_of(c, str_concat(\"wo\", \"ke\"))\n}\n\nfn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {\n    let go = chan_new_of[Int](1);\n    let c = chan_new_of[Str](1);\n    let idle = chan_new_of[Str](1);\n    let cs = vec_new[Chan[Str]]();\n    vec_push(cs, idle);\n    vec_push(cs, c);\n    let got = vec_new[Str]();\n    let mut i = 0;\n    scope {\n        spawn later(t, go, c);\n        chan_send_of(go, 1);\n        i = chan_select_of(cs, got);\n    }\n    print(int_to_str(i));\n    print(vec_pop(got));\n    0\n}\n", "1woke0")?;
+    ok()
+}
+
+@test
+fn closing_a_channel_cancels_a_task_waiting_in_select(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_sched(h, "\nfn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, stop);\n    vec_push(cs, jobs);\n    let got = vec_new[Int]();\n    let mut running = true;\n    let mut done = 0;\n    while running {\n        let i = chan_select_of(cs, got);\n        if i == 1 && vec_len(got) > 0 {\n            chan_send_of(out, vec_pop(got) * 2);\n            done = done + 1;\n        } else {\n            running = false;\n        }\n    }\n    done\n}\n\nfn main(io: IoCap, sp: SpawnCap, t: TimeCap) -> Int ! { io, spawn } {\n    let stop = chan_new_of[Int](1);\n    let jobs = chan_new_of[Int](4);\n    let out = chan_new_of[Int](4);\n    let r = vec_new[Int]();\n    let mut sum = 0;\n    scope {\n        spawn worker(stop, jobs, out);\n        chan_send_of(jobs, 5);\n        chan_send_of(jobs, 6);\n        if chan_recv_of(out, r) { sum = sum + vec_pop(r); }\n        if chan_recv_of(out, r) { sum = sum + vec_pop(r); }\n        time_sleep_ms(50);\n        chan_close_of(stop);\n    }\n    print(int_to_str(sum));\n    0\n}\n", "220")?;
+    ok()
+}
+
+@test
+fn a_deadline_is_a_lower_bound_and_a_zero_one_only_looks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_sched(h, "\nfn main(io: IoCap, t: TimeCap) -> Int ! { io } {\n    let quiet = chan_new_of[Int](1);\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, quiet);\n    let got = vec_new[Int]();\n    let t0 = time_now_ms();\n    print(int_to_str(chan_select_until(cs, got, 40)));\n    if time_now_ms() - t0 >= 40 { print(\" waited\") } else { print(\" early\") };\n    print(\" \");\n    print(int_to_str(chan_select_until(cs, got, 0)));\n    chan_send_of(quiet, 7);\n    print(\" \");\n    print(int_to_str(chan_select_until(cs, got, 0)));\n    print(int_to_str(vec_pop(got)));\n    0\n}\n", "-2 waited -2 070")?;
+    ok()
+}
+
+@test
+fn the_scheduler_s_counters_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = everywhere_sched(h, "\nfn one(c: Chan[Int]) -> Bool ! {} { chan_send_of(c, 1) }\n\nfn main(sp: SpawnCap, t: TimeCap) -> Int ! { spawn } {\n    let c = chan_new_of[Int](4);\n    scope {\n        spawn one(c);\n        spawn one(c);\n        spawn one(c);\n    }\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, c);\n    let got = vec_new[Int]();\n    chan_select_of(cs, got);\n    chan_select_until(cs, got, 1);\n    let empty = chan_new_of[Int](1);\n    let es = vec_new[Chan[Int]]();\n    vec_push(es, empty);\n    chan_select_until(es, got, 1)\n}\n")?;
+    let mut i = 0;
+    while i < vec_len(runs) {
+        let r = vec_get(runs, i);
+        check_that(sched_line(r.ran)? == "nazm-sched: spawned=3 joined=3 selects=3 timeouts=1", r.label)?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn a_clock_needs_a_time_cap_held_where_it_is_read(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    check_that(str_join(codes(h, "fn main() -> Int { time_now_ms() }\n"), ",") == "N0369", "time_now_ms")?;
+    check_that(str_join(codes(h, "fn main() -> Int { let cs = vec_new[Chan[Int]](); chan_select_until(cs, vec_new[Int](), 1) }\n"), ",") == "N0369", "chan_select_until")?;
+    // Held as a parameter; a select without a deadline needs nothing.
+    check_that(strs_len(codes(h, "fn now(t: TimeCap) -> Int ! {} { time_now_ms() }\nfn main(t: TimeCap) -> Int { now(t) }\n")) == 0, "held")?;
+    check_that(strs_len(codes(h, "fn main() -> Int { let cs = vec_new[Chan[Int]](); chan_select_of(cs, vec_new[Int]()) }\n")) == 0, "select")?;
+    // The vector a select fills holds the channels' element, nothing else.
+    check_that(strs_len(codes(h, "fn main() -> Int { let cs = vec_new[Chan[Int]](); chan_select_of(cs, vec_new[Str]()) }\n")) > 0, "element")
+}
+
+@test
+fn critical_refuses_a_clock(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main(t: TimeCap) -> Int ! {} { time_now_ms() }\n")?;
+    let r = nazm(h, d, words("check --profile critical prog.nz"));
+    let good = nazm(h, d, words("check --profile general prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0510") && text_contains(r.stderr, "no-ambient-time"), ran_show(r))?;
+    check_that(good.code == 0, ran_show(good))
+}
+
+@test
+fn a_select_s_operations_are_resource_sites(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int {\n    let cs = vec_new[Chan[Int]]();\n    chan_select_of(cs, vec_new[Int]())\n}\n")?;
+    let r = nazm(h, d, words("explain-cost prog.nz --json"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let v = jparse(text_trim(r.stdout))?;
+    let ops = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "functions/0/sites") {
+        if jstr(v, f"functions/0/sites/{i}/kind") == "block" && jstr(v, f"functions/0/sites/{i}/op") != "" {
+            strs_push(ops, jstr(v, f"functions/0/sites/{i}/op"));
+        }
+        i = i + 1;
+    }
+    check_that(str_join(ops, ",") == "chan_select_of", jv(v, ""))
+}
+
+/// A C shim the native programs below run with: 150 ms after its first call, the wall clock
+/// (`CLOCK_REALTIME`) it reports steps back an hour; the monotonic clock is untouched. Interposed
+/// with `DYLD_INSERT_LIBRARIES` or `LD_PRELOAD`.
+const CLOCK_STEP: Str = "\n#define _GNU_SOURCE\n#include <stdatomic.h>\n#include <time.h>\nstatic _Atomic long long first_ms = -1;\nstatic long long mono_ms(void) {\n    struct timespec m;\n#ifdef __APPLE__\n    clock_gettime(CLOCK_MONOTONIC_RAW, &m);\n#else\n    clock_gettime(CLOCK_MONOTONIC, &m);\n#endif\n    return (long long)m.tv_sec * 1000 + m.tv_nsec / 1000000;\n}\nstatic void step(clockid_t c, struct timespec *t) {\n    if (c != CLOCK_REALTIME) return;\n    long long now = mono_ms(), none = -1;\n    atomic_compare_exchange_strong(&first_ms, &none, now);\n    if (now - atomic_load(&first_ms) >= 150) t->tv_sec -= 3600;\n}\n#ifdef __APPLE__\nstatic int shim(clockid_t c, struct timespec *t) { int r = clock_gettime(c, t); step(c, t); return r; }\n__attribute__((used)) static struct { const void *n; const void *o; } interposers[]\n    __attribute__((section(\"__DATA,__interpose\"))) = { { (const void *)shim, (const void *)clock_gettime } };\n#else\n#include <dlfcn.h>\nint clock_gettime(clockid_t c, struct timespec *t) {\n    static int (*real)(clockid_t, struct timespec *);\n    if (!real) real = (int (*)(clockid_t, struct timespec *))dlsym(RTLD_NEXT, \"clock_gettime\");\n    int r = real(c, t);\n    step(c, t);\n    return r;\n}\n#endif\n";
+
+const STEPPED: Str = "\nfn wait(io: IoCap, t: TimeCap, done: Chan[Int]) -> Int ! { io } {\n    let quiet = chan_new_of[Int](1);\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, quiet);\n    let got = vec_new[Int]();\n    let t0 = time_now_ms();\n    let r = chan_select_until(cs, got, 1000);\n    time_sleep_ms(300);\n    chan_send_of(done, time_now_ms() - t0);\n    r\n}\n\nfn main(io: IoCap, t: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {\n    let done = chan_new_of[Int](2);\n    let mine = wait(io, t, done);\n    scope { spawn wait(io, t, done); }\n    let got = vec_new[Int]();\n    chan_recv_of(done, got);\n    chan_recv_of(done, got);\n    let b = vec_pop(got);\n    let a = vec_pop(got);\n    if a >= 1300 && b >= 1300 && a < 4000 && b < 4000 { print(\"on time\") } else { print(\"off\") };\n    print(\" \");\n    print(int_to_str(mine));\n    0\n}\n";
+
+/// Q1-M-12: a deadline is on the monotonic clock, so a wall clock stepped back an hour while a
+/// select or a sleep waits moves nothing — under both backends, on a thread and as a pool task.
+@test
+fn a_wall_clock_stepped_back_moves_no_deadline(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let mac = uname(h, "-s") == "Darwin";
+    let d = scratch_new(h);
+    let shim = if mac { f"{d}/step.dylib" } else { f"{d}/step.so" };
+    scratch_write(h, d, "step.c", CLOCK_STEP)?;
+    let cc = if mac { words("-dynamiclib step.c -o") } else { words("-shared -fPIC step.c -ldl -o") };
+    strs_push(cc, shim);
+    let o = run(h, "clang", cc, d, env_here(h.io));
+    check_that(o.code == 0, o.stderr)?;
+    scratch_write(h, d, "prog.nz", STEPPED)?;
+    let inject = if mac { "DYLD_INSERT_LIBRARIES" } else { "LD_PRELOAD" };
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --no-cache --backend {backend} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        for scheduler in words("pool threads") {
+            // Not through `bounded_exe`: its `/bin/sh` is a protected binary on macOS, whose loader
+            // drops `DYLD_*` before the program runs.
+            let r = run_within(h, exe, strs_new(), "", env_set(env_set(suite_env(h), inject, shim), "NAZM_SCHEDULER", scheduler), 20000);
+            check_that(r.code != TIMED_OUT, f"{backend}, {scheduler}: a wait did not end — its deadline moved")?;
+            check_that(r.code == 0 && r.stdout == "on time -20\n", f"{backend}, {scheduler}: {ran_show(r)}")?;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
