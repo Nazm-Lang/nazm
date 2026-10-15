@@ -350,6 +350,15 @@ saw. `m.top(n)` and `m.sort_by(less)`. Semantic epoch 85; EXPERIMENTAL until R1.
 Evidence: `shorter_forms.rs` — four tests (everywhere, hiding, profiles, packages) and the D5 test
 restated; five mutants.
 
+**R1.5 (2026-10-15)** · *`@std/option` and `@std/result` in the prelude* (`spec.md`, *Shorter forms*;
+R1.5 task 4.5). The two join D9's prelude modules, so `r.unwrap_or(1)`, `o.is_some()` and `r.ok()`
+need no `use` in a program's own module; `unwrap_or`, which both answer, attaches both and the
+receiver's type picks the function. A method called only in an interpolation's hole now names its
+module too (D9 had missed it). Hiding, packages and profiles as D9. Semantic epoch 86;
+EXPERIMENTAL until R1.5 closes. Evidence: `shorter_forms.rs`
+(`option_and_result_methods_need_no_use_everywhere` under the interpreter and both backends;
+`a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named`); three mutants.
+
 **R1.5 (2026-10-15)** · *Printing in your own program* (`spec.md`, *Shorter forms*; R1.5 design
 D8). In a module of the program itself — a key with no `@`, so not `@std`, the prelude or a package —
 the authority check (`effects::authority`) counts the output authority `main` holds as held, so a

@@ -8342,10 +8342,11 @@ Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.jso
 Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused.
 Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused.
 Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused.
-Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused."""
+Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused.
+Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 85;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 84;"
+find = "pub const SEMANTIC_EPOCH: u32 = 86;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 85;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19666,6 +19667,30 @@ file = "library/std/text.nz"
 find = "    if n > 0 && end < m { end + n } else { m + 1 }"
 replace = "    if n > 0 && end < m && end + n < m { end + n } else { m + 1 }"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
+
+[[mutation]]
+name = "r1-5-4-5-option-is-not-a-prelude-module"
+why = "`o.unwrap_or(0)` with no `use` is refused again: `@std/option` is not among the prelude's standard modules (4.5)"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = '"hash", "hashmap", "option", "ordmap", "result", "sort", "text",'
+replace = '"hash", "hashmap", "ordmap", "result", "sort", "text",'
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::option_and_result_methods_need_no_use_everywhere" }]
+
+[[mutation]]
+name = "r1-5-4-5-result-is-not-a-prelude-module"
+why = "`r.unwrap_or(1)` with no `use` is refused again: `@std/result` is not among the prelude's standard modules (4.5)"
+file = "crates/nazm-sema/src/stdlib.rs"
+find = '"hash", "hashmap", "option", "ordmap", "result", "sort", "text",'
+replace = '"hash", "hashmap", "option", "ordmap", "sort", "text",'
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::option_and_result_methods_need_no_use_everywhere" }]
+
+[[mutation]]
+name = "r1-5-4-5-an-interpolation-names-nothing"
+why = "a method called only in an interpolation's hole, `f\"{r.unwrap_or(3)}\"`, does not name the prelude module that answers it (4.5)"
+file = "crates/nazm-service/src/load.rs"
+find = "                        named_in(text, idents, methods);"
+replace = "                        let _ = text;"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named" }]
 
 [[mutation]]
 name = "r3-a-generic-channel-s-helper-named-by-the-checker-s-id"

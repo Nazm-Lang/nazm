@@ -48,7 +48,7 @@ pub mod __syntax {
     /// A completion probe's hole (N26).
     pub use nazm_syntax::HoleSite;
     pub use nazm_syntax::{
-        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, Field,
+        format, lex, lex_in, parse_file, parse_map, parse_source, Block, Enum, Expr, FPiece, Field,
         FieldInit, Function, Import, InterpPart, MatchArm, MatchSource, Pattern, PatternField,
         Place, PlaceField, PlaceStep, Program, Qualifier, Record, Stmt, TokenKind, TypeName,
         TypeParam, Variant, VariantPattern, PARSE_STACK_BYTES,
