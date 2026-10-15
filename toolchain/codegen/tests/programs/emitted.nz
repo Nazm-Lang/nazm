@@ -1,0 +1,34 @@
+// The forms the lowering emits that no other program of the suite used (7.10, after a survey
+// of every program in the repository and of probes per construct): the address of a function
+// imported from another unit — a closure written in a generic function, whose body is the
+// module's unit and whose instances are not — and a checked `UInt8` multiplication, both its
+// result and, at the end, its overflow, which fails the program.
+
+fn apply_twice[T](x: T, n: Int) -> Int {
+    let f = fn(y: Int) -> Int { y * 3 + 1 }
+    f(f(n))
+}
+
+fn keep[T](x: T) -> T {
+    let g = fn(s: Str) -> Int { str_len(s) }
+    let h = g
+    println(h("four"))
+    x
+}
+
+fn times8(a: UInt8, b: UInt8) -> UInt8 { a * b }
+
+fn main() {
+    let s = "s"
+    let seven = "seven"
+    println(f"{apply_twice(1, 2)} {apply_twice(s, 5)} {apply_twice(true, -3)}")
+    println(f"{keep(7)} {keep(seven)}")
+    let mut acc = UInt8(1)
+    let mut i = 0
+    while i < 4 {
+        acc = times8(acc, UInt8(3))
+        i += 1
+    }
+    println(f"{acc} {times8(UInt8(15), UInt8(17))} {times8(UInt8(0), UInt8(255))}")
+    println(f"{times8(UInt8(16), UInt8(16))}")
+}
