@@ -313,7 +313,10 @@ backend-differential harness and `failure_convention.rs` on macOS; mutants `r9-�
 package and install it as `libexec/nazm/nzcg` on the macOS targets (the candidate's `MANIFEST.txt`
 and `PROVENANCE.txt` name its digest), and `scripts/clean-install-test.sh` builds with
 `--backend nazm` where the archive carries it; the unpacked toolchain finds it with `NAZM_NZCG`
-unset (`the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable`).
+unset (`the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable`). Its 7.9:
+`nazm profile --backend nazm`, sampled too (`debugger.rs`, `debugger_v3.rs`), and the provenance
+record naming the generator by its digest (`backend.nzcg`, checked against the schema; the SBOM
+lists it as a tool; `a_program_nazms_own_generator_built_names_it_by_its_digest`).
 
 **Performance leadership (2026-10-15)** · *Failures by unwinding* (`docs/architecture.md` §7.115;
 `openspec/changes/performance-leadership`, 4.2). On the hosted targets under LLVM a Nazm function

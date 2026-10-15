@@ -1051,7 +1051,32 @@ fn a_provenance_record_matches_the_published_schema() {
     );
     let v: Value =
         serde_json::from_str(&std::fs::read_to_string(d.path().join("p.json")).unwrap()).unwrap();
-    check_against("nazm.provenance-1.json", &[v]);
+    let mut records = vec![v];
+    // Nazm's own code generator's build, with its digest (R9, D15), where it builds: macOS.
+    if cfg!(target_os = "macos") {
+        let o = Command::new(env!("CARGO_BIN_EXE_nazm"))
+            .current_dir(d.path())
+            .env(nazm_codegen_nazm::VARIABLE, crate::differential::nzcg())
+            .args([
+                "build",
+                "--backend",
+                "nazm",
+                "p.nz",
+                "-o",
+                "q",
+                "--provenance",
+                "q.json",
+            ])
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let w: Value =
+            serde_json::from_str(&std::fs::read_to_string(d.path().join("q.json")).unwrap())
+                .unwrap();
+        assert!(w["backend"]["nzcg"].is_string(), "{w}");
+        records.push(w);
+    }
+    check_against("nazm.provenance-1.json", &records);
 }
 
 #[test]

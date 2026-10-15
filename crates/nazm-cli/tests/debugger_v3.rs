@@ -34,11 +34,13 @@ const SPIN: &str = "fn work(n: Int) -> Int {\n    let mut i = 0;\n    let mut ac
                     }\n    acc\n}\nfn main() -> Int { work(120000000) }\n";
 
 fn nazm(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(NAZM)
-        .current_dir(cwd)
-        .args(args)
-        .output()
-        .unwrap()
+    let mut c = Command::new(NAZM);
+    c.current_dir(cwd).args(args);
+    // Nazm's own code generator (R9, D15), built once per test process, where it is asked for.
+    if args.windows(2).any(|w| w == ["--backend", "nazm"]) {
+        c.env(nazm_codegen_nazm::VARIABLE, crate::differential::nzcg());
+    }
+    c.output().unwrap()
 }
 
 fn err(o: &Output) -> String {
@@ -257,7 +259,8 @@ fn a_sampled_run_is_attributed_to_nazm_functions_and_lines() {
         return;
     }
     let d = with("spin.nz", SPIN);
-    for backend in ["llvm", "cranelift"] {
+    // Nazm's own code generator too: its line tables attribute the samples (R9, D15).
+    for backend in ["llvm", "cranelift", "nazm"] {
         let o = nazm(
             d.path(),
             &["profile", "--sample", "--backend", backend, "spin.nz"],
