@@ -292,7 +292,12 @@ pub fn escape(s: &str) -> String {
 /// `nz_os_child_id`, `nz_os_pid`, `nz_os_signal_group`, `nz_os_nap`, `nz_os_lstat`,
 /// `nz_os_chmod`, `nz_os_realpath` and `nz_os_flock`. Also R1 (5b.3): the entry ends with
 /// `main`'s result as the exit status unless `NAZM_RESULT_REPORT` asks for it printed.
-pub const RUNTIME_ABI_REVISION: u32 = 33;
+/// 34 is 4.2's failures by unwinding (`docs/architecture.md` §7.115): on the hosted targets under
+/// LLVM a Nazm function returns its result alone and a failure is a forced unwind — `nz.raise`,
+/// `nz.unwind_stop` and the exception object `nz.exc`, which each unit defines once per image —
+/// under the C personality `__gcc_personality_v0`, so an image links the system's unwinder; a plain
+/// entry lands the unwind and reads the flag as before. No runtime entry's signature moves.
+pub const RUNTIME_ABI_REVISION: u32 = 34;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -1074,9 +1079,16 @@ impl RuntimeSymbol {
 }
 
 /// The thread-local globals that are plain ones in a program of one thread (`Needs::single`):
-/// its failure state and its stack limit. The rest stay thread-local; a program of one thread
+/// its failure state, its stack limit and, where failures unwind, the exception object each unit
+/// defines (`nz.exc`, 4.2). The rest stay thread-local; a program of one thread
 /// never reaches them.
-pub const SINGLE_THREAD_STATE: &[&str] = &["nz.failed", "nz.errmsg", "nz.errlen", "nz.stack_limit"];
+pub const SINGLE_THREAD_STATE: &[&str] = &[
+    "nz.failed",
+    "nz.errmsg",
+    "nz.errlen",
+    "nz.stack_limit",
+    "nz.exc",
+];
 
 impl RuntimeGlobal {
     /// How every unit that does not define it declares it.
@@ -1299,10 +1311,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_three_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_thirty_four_and_reaches_the_system_only_through_its_platform_layer()
     {
-        // R1b's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 33);
+        // 4.2's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 34);
         // 128-bit integers (R1b, L13b), in the wide part only.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("@nz.i128_divrem("));
         assert!(!crate::emit_runtime(crate::Needs::default()).contains("@nz.i128_divrem("));

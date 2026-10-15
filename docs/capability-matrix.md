@@ -298,6 +298,22 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
 
+**Performance leadership (2026-10-15)** · *Failures by unwinding* (`docs/architecture.md` §7.115;
+`openspec/changes/performance-leadership`, 4.2). On the hosted targets under LLVM a Nazm function
+returns its result alone and a failure is a forced unwind (`nz.raise`, `_Unwind_ForcedUnwind`, the C
+personality `__gcc_personality_v0`): a call whose failure edge releases something is an `invoke`
+whose landing pad continues on that edge, one into a bare failure exit a plain call, and every plain
+entry lands the unwind and reads the flag, so C is never unwound into. WebAssembly, WASI, the boards,
+Windows, Cranelift and the LIR oracle keep the failure bit; LIR's text and schema are unchanged, its
+validator holds a call's `failed` value to the branch ending its block. Runtime ABI 34; no semantic
+epoch. `fib(35)` at `-O2` 55.7 → 44.3 ms; `words` 132.4 → 129.4 ms; a failure through frames that
+own something is slower (`limitations.md`). EXPERIMENTAL until the performance-leadership change
+closes; Linux and the mobile targets are built and checked by object here, not run. Evidence:
+`crates/nazm-cli/tests/failure_convention.rs` — failures through recursion, function values, trait
+methods, a task, a C export, a callback C calls, ten thousand frames of `defer`s and an exhausted
+stack, the same on every implementation; the hosted IR's shape and which targets' objects name the
+unwinder; `op::llvm::tests`, `op::validate::tests`; seven mutants.
+
 **R1.5 (2026-10-15)** · *A `for` over a split builds no list* (R1.5 task 3.3). `for w in
 s.split(sep)` is lowered in Core IR through `@std/text`'s `text_split_end` and `text_split_next`,
 which find each piece as `text_split` does; the pieces, the empty ones, `break` and `continue` are
@@ -447,7 +463,7 @@ under its symbol with its old signature, the function itself being `<symbol>.bod
 unchanged (ABI as before); `TRANSLATOR_REVISION` 4. Blocks only a failure reaches are laid out cold
 in both backends (LLVM branch weights, Cranelift cold blocks), without which the bit was slower
 under clang. `fib(35)`, Apple M1 Pro, hyperfine median of 20: LLVM `-O2` 66.8 → 55.4 ms, Cranelift
-106.3 → 83.8 ms. Evidence: `crates/nazm-cli/tests/failure_bit.rs` — a failure 400 frames deep in a
+106.3 → 83.8 ms. Evidence: `crates/nazm-cli/tests/failure_convention.rs` — a failure 400 frames deep in a
 direct recursion, through a function value, through a trait method's generic instance, and in a
 task, each ending with status 2 and `N0401` at its line with nothing live on the interpreter, LLVM
 `-O0` and `-O2` and Cranelift (and the LIR oracle outside tasks); one inside a C export under both

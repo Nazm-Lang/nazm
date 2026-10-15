@@ -130,6 +130,18 @@ impl Target {
         self.os == Os::None && self.arch != Arch::Wasm32
     }
 
+    /// How a Nazm function's failure crosses a call in the LLVM backend's code for this target
+    /// (4.2, `docs/architecture.md` §7.115): a forced unwind on the hosted targets, whose system
+    /// has an unwinder and the C personality; the failure bit on WebAssembly, WASI and the boards,
+    /// which have none, and on Windows until its unwinding is verified under Wine.
+    #[must_use]
+    pub fn failures(&self) -> crate::op::llvm::Failures {
+        match self.os {
+            Os::Macos | Os::Linux | Os::Android | Os::Ios => crate::op::llvm::Failures::Unwind,
+            Os::Windows | Os::None | Os::Wasi => crate::op::llvm::Failures::Bit,
+        }
+    }
+
     /// Whether this is WebAssembly (N64): freestanding, its outside reached only by imports.
     #[must_use]
     pub fn is_wasm(&self) -> bool {
@@ -397,7 +409,7 @@ impl Backend for LlvmText {
                 format!("LIR does not validate: {}", e.join("; ")),
             )]);
         }
-        let text = crate::op::llvm::module(&m);
+        let text = crate::op::llvm::module(&m, self.target.failures());
         let ir = if self.debug {
             crate::debug::attach(&text, &|i| names.debug_file(i))
         } else {

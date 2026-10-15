@@ -1116,8 +1116,8 @@ the bad one is a language that quietly grew a per-module failure state
 Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has.
 Repointed by N105: the rule is LIR's, made once for both backends."""
 file = "crates/nazm-lir/src/backend.rs"
-find = '        let text = crate::op::llvm::module(&m);'
-replace = '        let text = crate::op::llvm::module(&m) + &crate::runtime::emit_runtime(m.needs);'
+find = '        let text = crate::op::llvm::module(&m, self.target.failures());'
+replace = '        let text = crate::op::llvm::module(&m, self.target.failures()) + &crate::runtime::emit_runtime(m.needs);'
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "attestation::identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
@@ -10545,11 +10545,12 @@ Repointed by R1a's release queue, which moved it to 29.
 Repointed by R1a's fixed-point floats, which moved it to 30.
 Repointed by R1b's stack size, which moved it to 31.
 Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part.
-Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part."""
+Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part.
+Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 33;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 32;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_three_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 34;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 33;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_four_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11033,12 +11034,8 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugger::parameter
 name = "n58-the-prologue-has-a-line"
 why = "the prologue's stores carry a line, so a breakpoint stops before the parameters are stored"
 file = "crates/nazm-lir/src/debug.rs"
-find = '''
-            if prologue
-                && instruction(l)'''
-replace = '''
-            if false
-                && instruction(l)'''
+find = '''            if prologue && instruction(l) && (intrinsic || !call) {'''
+replace = '''            if false && instruction(l) && (intrinsic || !call) {'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugging::a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]
 
 [[mutation]]
@@ -14667,8 +14664,8 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "scratch::tests::a_name_
 name = "q1-no-stack-probes"
 why = "generated functions ask for no stack probes, so a frame larger than a task stack's guard page steps over it"
 file = "crates/nazm-lir/src/op/llvm.rs"
-find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section} {{   ; {}",'
-replace = '        "define {}{} {}({params}){section} {{   ; {}",'
+find = '        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section}{personality} {{   ; {}",'
+replace = '        "define {}{} {}({params}){section}{personality} {{   ; {}",'
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "build::every_generated_function_asks_for_stack_probes" }]
 
 [[mutation]]
@@ -19110,11 +19107,13 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "defer::a_deferred_b
 
 [[mutation]]
 name = "r1-the-llvm-failure-exit-says-it-did-not-fail"
-why = "under LLVM a function's failure exit returns its failure bit clear: its caller carries on past the failure"
+why = """under LLVM, where the bit is kept (WebAssembly, WASI, the boards, Windows), a function's failure exit returns its failure bit clear: its caller carries on past the failure
+
+Repointed by 4.2: the hosted targets unwind, so the exit is held by the printer's own test, on a module printed with the bit."""
 file = "crates/nazm-lir/src/op/llvm.rs"
 find = '''                        "  ret {} {{ {} zeroinitializer, i1 true }}",'''
 replace = '''                        "  ret {} {{ {} zeroinitializer, i1 false }}",'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+killers = [{ package = "nazm-lir", lib = true, name = "op::llvm::tests::a_failure_is_the_bit_or_an_unwind_by_the_target" }]
 
 [[mutation]]
 name = "r1-the-cranelift-failure-exit-says-it-did-not-fail"
@@ -19122,7 +19121,7 @@ why = "under Cranelift a function's failure exit returns its failure bit clear: 
 file = "crates/nazm-codegen-clif/src/translate.rs"
 find = '''                r.push(fx.b.ins().iconst(types::I8, 1));'''
 replace = '''                r.push(fx.b.ins().iconst(types::I8, 0));'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
 
 [[mutation]]
 name = "r1-the-oracle-failure-exit-says-it-did-not-fail"
@@ -19130,7 +19129,7 @@ why = "the LIR oracle's failure exit returns its failure bit clear, so the oracl
 file = "crates/nazm-lir/src/op/interp.rs"
 find = '''                    return Ok((zero, true));'''
 replace = '''                    return Ok((zero, false));'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
 
 [[mutation]]
 name = "r1-a-direct-call-ignores-its-callee-s-failure"
@@ -19142,7 +19141,7 @@ find = '''        if !foreign {
 replace = '''        if false {
             self.check_call(failed);
         }'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
 
 [[mutation]]
 name = "r1-a-nazm-call-reads-the-flag-not-the-bit"
@@ -19150,7 +19149,7 @@ why = "a call of a Nazm function reads the thread's failure flag again, as befor
 file = "crates/nazm-lir/src/op/func.rs"
 find = '''            Some(f) => self.leave_if(f),'''
 replace = '''            Some(_) => self.check_failed(),'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
 
 [[mutation]]
 name = "r1-the-platform-calls-main-with-the-bit"
@@ -19158,7 +19157,7 @@ why = "no plain entry: the platform calls `main` and the other entered functions
 file = "crates/nazm-lir/src/op/lower.rs"
 find = '''            if sig.entered && !sig.foreign {'''
 replace = '''            if false && sig.entered && !sig.foreign {'''
-killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_bit::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_nazm_call_takes_the_bit_and_the_platform_calls_a_plain_entry" }]
 
 [[mutation]]
 name = "r1-a-plain-function-may-fail-by-the-bit"
@@ -19683,3 +19682,61 @@ file = "library/std/text.nz"
 find = "            while i < m && str_byte(s, i) != first { i = i + 1; }"
 replace = "            while i + 1 < m && str_byte(s, i) != first { i = i + 1; }"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
+
+# --- Performance leadership 4.2: failures by unwinding ------------------------------------------
+
+[[mutation]]
+name = "pl-4-2-the-llvm-failure-exit-returns"
+why = "where failures unwind, a failure exit returns as the bit's did instead of raising: the unit is not valid LLVM, or a caller carries on past the failure"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''            Term::Fail if unwind => {'''
+replace = '''            Term::Fail if false => {'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "pl-4-2-a-call-that-releases-has-no-landing-pad"
+why = "every Nazm call is a plain call, as if its failure edge were a bare failure exit: an unwind passes a frame that owns something without releasing it"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''                t.term == Term::Fail && t.insts.iter().all(|i| matches!(i, Inst::Loc(_)))'''
+replace = '''                true'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "pl-4-2-a-plain-entry-s-call-has-no-landing-pad"
+why = "a call with no failure edge — a plain entry's call of its body — is a plain call: the unwind runs off the end of the stack into C and aborts instead of exiting 2"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''    let plain = p.bare && failed.is_some();'''
+replace = '''    let plain = (p.bare && failed.is_some()) || failed.is_none();'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "pl-4-2-a-failure-edge-may-be-read-as-a-value"
+why = "the validator no longer holds a call's `failed` value to the branch that ends its block, so a backend may meet a failure edge it cannot make an unwind edge"
+file = "crates/nazm-lir/src/op/validate.rs"
+find = '''    failure_edges(f, &mut e);'''
+replace = '''    let _ = failure_edges;'''
+killers = [{ package = "nazm-lir", lib = true, name = "op::validate::tests::a_failure_edge_is_only_the_branch_that_ends_its_call_s_block" }]
+
+[[mutation]]
+name = "pl-4-2-the-boards-and-webassembly-unwind"
+why = "WebAssembly, WASI, the boards and Windows are given the unwinding convention, which needs an unwinder and a personality they do not have"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''            Os::Windows | Os::None | Os::Wasi => crate::op::llvm::Failures::Bit,'''
+replace = '''            Os::Windows | Os::None | Os::Wasi => crate::op::llvm::Failures::Unwind,'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::hosted_code_unwinds_and_the_boards_and_webassembly_keep_the_bit" }]
+
+[[mutation]]
+name = "pl-4-2-hosted-targets-keep-the-bit"
+why = "the hosted targets keep returning the failure bit beside every result: right, and the 20% on a recursive call 4.2 measured is lost"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''            Os::Macos | Os::Linux | Os::Android | Os::Ios => crate::op::llvm::Failures::Unwind,'''
+replace = '''            Os::Macos | Os::Linux | Os::Android | Os::Ios => crate::op::llvm::Failures::Bit,'''
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::hosted_code_unwinds_and_the_boards_and_webassembly_keep_the_bit" }]
+
+[[mutation]]
+name = "pl-4-2-a-plain-entry-s-landing-pad-has-no-line"
+why = "a function with no statement of its own keeps its prologue past its entry branch, so a plain entry's landing pad and join carry no location in a debug build"
+file = "crates/nazm-lir/src/debug.rs"
+find = '''                prologue = statements;'''
+replace = '''                let _ = statements;'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "debugging::a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information" }]

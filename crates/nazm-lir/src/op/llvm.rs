@@ -3,6 +3,10 @@
 //! Each LIR instruction is the LLVM instruction it names; each variable and each slot an
 //! `alloca` in the entry block, which LLVM's own promotion turns into registers. Nothing here
 //! decides anything a program can observe.
+//!
+//! How a failure crosses a call is the target's (4.2, `docs/architecture.md` §7.115): the failure
+//! bit returned beside the result ([`Failures::Bit`]), or a forced unwind ([`Failures::Unwind`]).
+//! LIR is the same for both.
 
 use std::fmt::Write as _;
 
@@ -55,16 +59,53 @@ fn sig_ty(c: Class, conv: Conv, result: bool) -> String {
     }
 }
 
+/// How a Nazm function's failure reaches its caller on a target (4.2, `docs/architecture.md`
+/// §7.115). A program cannot tell them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failures {
+    /// The failure bit, returned beside the result (R1, 5b.8): WebAssembly, WASI, the boards
+    /// and Windows, which have no unwinder this compiler uses.
+    Bit,
+    /// A forced unwind (`nz.raise`, `_Unwind_ForcedUnwind`) under the C personality,
+    /// `__gcc_personality_v0`: the hosted targets. A Nazm function returns its result alone.
+    Unwind,
+}
+
 /// A function's LLVM result: a Nazm function's failure bit beside its result, as a first-class
-/// pair a target returns in two registers (R1, 5b.8), or alone where there is no result.
-fn ret_ty(s: &Sig) -> String {
-    match (s.ret, s.fails()) {
+/// pair a target returns in two registers (R1, 5b.8), or alone where there is no result. Where
+/// failures unwind, the result alone.
+fn ret_ty(s: &Sig, failures: Failures) -> String {
+    match (s.ret, s.fails() && failures == Failures::Bit) {
         (Some(c), true) => format!("{{{}, i1}}", ty(c)),
         (None, true) => "i1".to_owned(),
         (Some(c), false) => sig_ty(c, s.conv, true),
         (None, false) => "void".to_owned(),
     }
 }
+
+/// Where failures unwind: the exception object, one per thread; the stop function, which lets
+/// every frame's cleanup run and aborts only at the end of the stack — never reached, since every
+/// plain entry lands the unwind; and `nz.raise`, which a failure exit calls. Phase 2 only: no
+/// search, no catch, no type information. Defined once per image whichever units define them.
+const RAISE: &str = r#"declare i32 @_Unwind_ForcedUnwind(ptr, ptr, ptr)
+declare void @abort() noreturn
+@nz.exc = linkonce_odr hidden thread_local global [4 x i64] zeroinitializer, align 16
+define linkonce_odr hidden i32 @nz.unwind_stop(i32 %v, i32 %a, i64 %c, ptr %e, ptr %x, ptr %p) "probe-stack"="inline-asm" {
+  %end = and i32 %a, 16
+  %at = icmp ne i32 %end, 0
+  br i1 %at, label %over, label %on
+over:
+  call void @abort()
+  unreachable
+on:
+  ret i32 0
+}
+define linkonce_odr hidden void @nz.raise() noinline cold "probe-stack"="inline-asm" {
+  store i64 5638864641536806221, ptr @nz.exc
+  %r = call i32 @_Unwind_ForcedUnwind(ptr @nz.exc, ptr @nz.unwind_stop, ptr null)
+  call void @abort()
+  unreachable
+}"#;
 
 /// LLVM's constant-string escaping.
 fn escape(bytes: &[u8]) -> String {
@@ -94,7 +135,7 @@ fn name(m: &Module, s: SymId) -> String {
 
 /// The text of one module.
 #[must_use]
-pub fn module(m: &Module) -> String {
+pub fn module(m: &Module, failures: Failures) -> String {
     let mut out = String::new();
     crate::runtime::preamble(&mut out, &m.source);
     // Every width's overflow-checked operations, bit counts and rotations, and the float
@@ -130,6 +171,15 @@ pub fn module(m: &Module) -> String {
         "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)"
     );
     let _ = writeln!(out, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)");
+    if failures == Failures::Unwind {
+        let _ = writeln!(out, "declare i32 @__gcc_personality_v0(...)");
+        if m.functions
+            .iter()
+            .any(|f| f.blocks.iter().any(|b| b.term == Term::Fail))
+        {
+            let _ = writeln!(out, "{RAISE}");
+        }
+    }
     if m.symbols.iter().any(|s| s.name == "nz.failed_now") {
         let _ = writeln!(out, "@nz.failed = external hidden thread_local global i1");
     }
@@ -155,7 +205,12 @@ pub fn module(m: &Module) -> String {
                     .map(|c| sig_ty(*c, sig.conv, false))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let _ = writeln!(out, "declare {} {}({params})", ret_ty(sig), name(m, id));
+                let _ = writeln!(
+                    out,
+                    "declare {} {}({params})",
+                    ret_ty(sig, failures),
+                    name(m, id)
+                );
             }
             SymKind::Data { class } => {
                 // The runtime's state is `hidden` in the image this unit is linked into, so it is
@@ -229,7 +284,7 @@ pub fn module(m: &Module) -> String {
     }
     out.push('\n');
     for f in &m.functions {
-        function(&mut out, m, f);
+        function(&mut out, m, f, failures);
     }
     out
 }
@@ -239,6 +294,10 @@ struct Pr<'m> {
     vals: Vec<Option<String>>,
     classes: Vec<Class>,
     temp: u32,
+    failures: Failures,
+    /// Where failures unwind, the call being printed fails to a bare failure exit: a plain call,
+    /// which an unwind passes through, with no landing pad (4.2).
+    bare: bool,
 }
 
 impl Pr<'_> {
@@ -316,8 +375,44 @@ fn linkage(l: Linkage) -> &'static str {
     }
 }
 
+/// Whether block `bi` ends in a Nazm call whose failure edge is a bare failure exit — a block that
+/// only fails, releasing nothing (4.2): where failures unwind, that call needs no landing pad.
+fn bare_edge(f: &Function, bi: usize) -> bool {
+    let Some(b) = f.blocks.get(bi) else {
+        return false;
+    };
+    let failed = match b.insts.last() {
+        Some(
+            Inst::Call {
+                failed: Some(fv), ..
+            }
+            | Inst::CallIndirect {
+                failed: Some(fv), ..
+            },
+        ) => *fv,
+        _ => return false,
+    };
+    match &b.term {
+        Term::Branch { cond, then, .. } if *cond == failed => {
+            f.blocks.get(then.index()).is_some_and(|t| {
+                t.term == Term::Fail && t.insts.iter().all(|i| matches!(i, Inst::Loc(_)))
+            })
+        }
+        _ => false,
+    }
+}
+
+/// Whether `i` calls a Nazm function: where failures unwind, a call that may unwind.
+fn nazm_call(m: &Module, i: &Inst) -> bool {
+    match i {
+        Inst::Call { callee, .. } => m.sig(*callee).is_some_and(Sig::fails),
+        Inst::CallIndirect { sig, .. } => sig.fails(),
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn function(out: &mut String, m: &Module, f: &Function) {
+fn function(out: &mut String, m: &Module, f: &Function, failures: Failures) {
     let Some(sym) = m.symbol(f.sym) else { return };
     let Some(sig) = m.sig(f.sym) else { return };
     let params = sig
@@ -336,11 +431,29 @@ fn function(out: &mut String, m: &Module, f: &Function) {
         .section
         .as_ref()
         .map_or_else(String::new, |s| format!(" section \"{s}\""));
+    // Where failures unwind, a function with a landing pad names the C personality (4.2): one
+    // that calls a Nazm function other than straight into a bare failure exit.
+    let unwind = failures == Failures::Unwind;
+    let bare: Vec<bool> = (0..f.blocks.len())
+        .map(|bi| unwind && bare_edge(f, bi))
+        .collect();
+    let pads = unwind
+        && f.blocks.iter().enumerate().any(|(bi, b)| {
+            let n = b.insts.len();
+            b.insts.iter().enumerate().any(|(k, i)| {
+                nazm_call(m, i) && !(k + 1 == n && bare.get(bi).copied().unwrap_or(false))
+            })
+        });
+    let personality = if pads {
+        " personality ptr @__gcc_personality_v0"
+    } else {
+        ""
+    };
     let _ = writeln!(
         out,
-        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section} {{   ; {}",
+        "define {}{} {}({params}) \"probe-stack\"=\"inline-asm\"{section}{personality} {{   ; {}",
         linkage(sym.linkage),
-        ret_ty(sig),
+        ret_ty(sig, failures),
         name(m, f.sym),
         f.name
     );
@@ -349,6 +462,8 @@ fn function(out: &mut String, m: &Module, f: &Function) {
         vals: vec![None; f.values as usize],
         classes: vec![Class::I64; f.values as usize],
         temp: 0,
+        failures,
+        bare: false,
     };
     let cold = f.cold_blocks(m);
     for (bi, b) in f.blocks.iter().enumerate() {
@@ -394,9 +509,12 @@ fn function(out: &mut String, m: &Module, f: &Function) {
                 );
             }
         }
-        for i in &b.insts {
+        let last = b.insts.len();
+        for (k, i) in b.insts.iter().enumerate() {
+            p.bare = k + 1 == last && bare.get(bi).copied().unwrap_or(false);
             inst(out, &mut p, sig, &f.vars, i);
         }
+        p.bare = false;
         match &b.term {
             Term::Jump(t) => {
                 let _ = writeln!(out, "  br label %{}", label(t.index()));
@@ -439,14 +557,14 @@ fn function(out: &mut String, m: &Module, f: &Function) {
                 }
                 let _ = writeln!(out, "  ]");
             }
-            Term::Return(Some(v)) if sig.fails() => {
-                let r = ret_ty(sig);
+            Term::Return(Some(v)) if sig.fails() && !unwind => {
+                let r = ret_ty(sig, failures);
                 let (a, b) = (p.temp(), p.temp());
                 let _ = writeln!(out, "  {a} = insertvalue {r} undef, {}, 0", p.tv(*v));
                 let _ = writeln!(out, "  {b} = insertvalue {r} {a}, i1 false, 1");
                 let _ = writeln!(out, "  ret {r} {b}");
             }
-            Term::Return(None) if sig.fails() => {
+            Term::Return(None) if sig.fails() && !unwind => {
                 let _ = writeln!(out, "  ret i1 false");
             }
             Term::Return(Some(v)) => {
@@ -455,13 +573,18 @@ fn function(out: &mut String, m: &Module, f: &Function) {
             Term::Return(None) => {
                 let _ = writeln!(out, "  ret void");
             }
+            // The failure exit, where failures unwind: to the nearest frame with a landing pad.
+            Term::Fail if unwind => {
+                let _ = writeln!(out, "  call void @nz.raise()");
+                let _ = writeln!(out, "  unreachable");
+            }
             // The failure exit: the bit set, and a zero where the result would be.
             Term::Fail => {
                 let _ = match sig.ret {
                     Some(c) => writeln!(
                         out,
                         "  ret {} {{ {} zeroinitializer, i1 true }}",
-                        ret_ty(sig),
+                        ret_ty(sig, failures),
                         ty(c)
                     ),
                     None => writeln!(out, "  ret i1 true"),
@@ -760,9 +883,11 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
             let _ = writeln!(out, "  {past} = icmp ult i64 {sp}, {lim}");
             let _ = writeln!(out, "  {unset} = icmp eq i64 {lim}, 0");
             let _ = writeln!(out, "  {slow} = or i1 {past}, {unset}");
+            // Weighted, so the path that does not call the runtime falls through (4.2): with the
+            // failure bit gone, this is half of what a recursive call gains.
             let _ = writeln!(
                 out,
-                "  br i1 {slow}, label %sc.slow.{n}, label %sc.fast.{n}"
+                "  br i1 {slow}, label %sc.slow.{n}, label %sc.fast.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"
             );
             let _ = writeln!(out, "sc.slow.{n}:");
             let _ = writeln!(out, "  {r} = call i32 @nz.stack_check()");
@@ -822,7 +947,7 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
 }
 
 /// A call, direct or not: its result, and a Nazm callee's failure bit, each taken out of the pair
-/// it returns (R1, 5b.8).
+/// it returns (R1, 5b.8) — or, where failures unwind, the unwind's edge (4.2).
 fn call(
     out: &mut String,
     p: &mut Pr<'_>,
@@ -838,7 +963,11 @@ fn call(
         .map(|(v, c)| format!("{} {}", sig_ty(*c, s.conv, false), p.v(*v)))
         .collect::<Vec<_>>()
         .join(", ");
-    let r = ret_ty(s);
+    let r = ret_ty(s, p.failures);
+    if s.fails() && p.failures == Failures::Unwind {
+        unwinding_call(out, p, s, &format!("{r} {callee}({a})"), dst, failed);
+        return;
+    }
     match (s.ret, s.fails()) {
         (Some(c), true) => {
             let t = p.temp();
@@ -870,5 +999,250 @@ fn call(
         _ => {
             let _ = writeln!(out, "  call {r} {callee}({a})");
         }
+    }
+}
+
+/// A Nazm call where failures unwind (4.2, `docs/architecture.md` §7.115). Straight into a bare
+/// failure exit it is a plain call, which an unwind passes through, and its failure edge is never
+/// taken here. Otherwise an `invoke` whose cleanup landing pad joins the normal path with the edge
+/// taken — the LIR's own branch then goes where the failure goes — or, from a call with no failure
+/// edge (a plain entry's call of its body), as if the call had returned, the result a zero: the
+/// caller reads the flag, and C is never unwound into.
+fn unwinding_call(
+    out: &mut String,
+    p: &mut Pr<'_>,
+    s: &Sig,
+    call: &str,
+    dst: Option<V>,
+    failed: Option<V>,
+) {
+    let named = match (s.ret, dst) {
+        (Some(c), Some(d)) => Some((p.named(d, c), c)),
+        _ => None,
+    };
+    let plain = p.bare && failed.is_some();
+    if plain {
+        if let Some(fv) = failed {
+            p.alias(fv, "false".to_owned(), Class::Bit);
+        }
+        let _ = match &named {
+            Some((d, _)) => writeln!(out, "  {d} = call {call}"),
+            None => writeln!(out, "  call {call}"),
+        };
+        return;
+    }
+    p.temp += 1;
+    let n = p.temp;
+    let _ = writeln!(out, "  br label %iv.{n}");
+    let _ = writeln!(out, "iv.{n}:");
+    let t = format!("%iv.{n}.r");
+    let _ = match &named {
+        Some(_) => writeln!(
+            out,
+            "  {t} = invoke {call} to label %ok.{n} unwind label %lp.{n}"
+        ),
+        None => writeln!(out, "  invoke {call} to label %ok.{n} unwind label %lp.{n}"),
+    };
+    let _ = writeln!(out, "lp.{n}:");
+    let _ = writeln!(out, "  %lp.{n}.x = landingpad {{ ptr, i32 }} cleanup");
+    let _ = writeln!(out, "  br label %ok.{n}");
+    let _ = writeln!(out, "ok.{n}:");
+    if let Some((d, c)) = named {
+        let stand_in = if failed.is_some() {
+            "poison"
+        } else {
+            "zeroinitializer"
+        };
+        let _ = writeln!(
+            out,
+            "  {d} = phi {} [ {t}, %iv.{n} ], [ {stand_in}, %lp.{n} ]",
+            ty(c)
+        );
+    }
+    if let Some(fv) = failed {
+        let f = p.named(fv, Class::Bit);
+        let _ = writeln!(out, "  {f} = phi i1 [ false, %iv.{n} ], [ true, %lp.{n} ]");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
+
+    use super::{module, Failures};
+    use crate::op::ir::{
+        Block, Class, Conv, Function, Inst, Linkage, Module, Sig, SymId, SymKind, Symbol, Term, B,
+        V,
+    };
+
+    fn func(name: &str, conv: Conv, linkage: Linkage) -> Symbol {
+        Symbol {
+            name: name.to_owned(),
+            linkage,
+            kind: SymKind::Func {
+                sig: Sig {
+                    params: vec![Class::I64],
+                    ret: Some(Class::I64),
+                    conv,
+                },
+            },
+        }
+    }
+
+    fn function(sym: u32, name: &str, blocks: Vec<Block>) -> Function {
+        Function {
+            sym: SymId(sym),
+            name: name.to_owned(),
+            vars: Vec::new(),
+            slots: Vec::new(),
+            var_names: Vec::new(),
+            slot_names: Vec::new(),
+            blocks,
+            values: 8,
+            at: None,
+            debug_vars: Vec::new(),
+            section: None,
+        }
+    }
+
+    fn call(arg: V, dst: u32, failed: Option<u32>) -> Inst {
+        Inst::Call {
+            dst: Some(V(dst)),
+            failed: failed.map(V),
+            callee: SymId(1),
+            args: vec![arg],
+        }
+    }
+
+    /// `f` calls the Nazm `g` twice: the first call's failure edge is a bare `fail`, the second's
+    /// does something first. `h`, a plain entry, calls `f` with no failure edge.
+    fn calls() -> Module {
+        let param = Inst::Param {
+            dst: V(0),
+            index: 0,
+        };
+        let branch = |cond: u32, then: u32, otherwise: u32| Term::Branch {
+            cond: V(cond),
+            then: B(then),
+            otherwise: B(otherwise),
+        };
+        let f = function(
+            0,
+            "f",
+            vec![
+                Block {
+                    insts: vec![param.clone(), call(V(0), 1, Some(2))],
+                    term: branch(2, 1, 2),
+                },
+                Block {
+                    insts: Vec::new(),
+                    term: Term::Fail,
+                },
+                Block {
+                    insts: vec![call(V(1), 3, Some(4))],
+                    term: branch(4, 3, 4),
+                },
+                Block {
+                    insts: vec![Inst::Const {
+                        dst: V(5),
+                        class: Class::I64,
+                        value: 0,
+                    }],
+                    term: Term::Fail,
+                },
+                Block {
+                    insts: Vec::new(),
+                    term: Term::Return(Some(V(3))),
+                },
+            ],
+        );
+        let mut entry = call(V(0), 1, None);
+        if let Inst::Call { callee, .. } = &mut entry {
+            *callee = SymId(0);
+        }
+        let h = function(
+            2,
+            "h",
+            vec![Block {
+                insts: vec![param, entry],
+                term: Term::Return(Some(V(1))),
+            }],
+        );
+        Module {
+            source: "t.nz".to_owned(),
+            pointer: 8,
+            symbols: vec![
+                func("f", Conv::Nazm, Linkage::Local),
+                func("g", Conv::Nazm, Linkage::Import),
+                func("h", Conv::Plain, Linkage::Hidden),
+            ],
+            functions: vec![f, h],
+            data: Vec::new(),
+            needs: crate::Needs::default(),
+        }
+    }
+
+    #[test]
+    fn a_failure_is_the_bit_or_an_unwind_by_the_target() {
+        let m = calls();
+        assert!(
+            crate::op::validate::module(&m).is_ok(),
+            "{:?}",
+            crate::op::validate::module(&m)
+        );
+        // The bit (WebAssembly, WASI, the boards, Windows): the pair, and the exit that sets it.
+        let bit = module(&m, Failures::Bit);
+        assert!(
+            bit.contains("define internal {i64, i1} @f(i64 %p0)"),
+            "{bit}"
+        );
+        assert!(bit.contains("declare {i64, i1} @g(i64)"), "{bit}");
+        assert!(
+            bit.contains("  ret {i64, i1} { i64 zeroinitializer, i1 true }"),
+            "{bit}"
+        );
+        assert!(
+            !bit.contains("invoke") && !bit.contains("nz.raise"),
+            "{bit}"
+        );
+        // Unwinding (the hosted targets, 4.2): the result alone; a call into a bare failure exit
+        // is a plain call, one whose edge does something an invoke with a landing pad, the plain
+        // entry's an invoke whose pad continues with a zero, and a failure exit raises.
+        let unwind = module(&m, Failures::Unwind);
+        assert!(unwind.contains("declare i64 @g(i64)"), "{unwind}");
+        assert!(
+            unwind.contains(
+                "define internal i64 @f(i64 %p0) \"probe-stack\"=\"inline-asm\" personality ptr @__gcc_personality_v0"
+            ),
+            "{unwind}"
+        );
+        assert!(
+            unwind.contains("  %v1 = call i64 @g(i64 %p0)\n"),
+            "{unwind}"
+        );
+        assert!(
+            unwind.contains("= invoke i64 @g(i64 %v1) to label"),
+            "{unwind}"
+        );
+        assert!(
+            unwind.contains("landingpad { ptr, i32 } cleanup"),
+            "{unwind}"
+        );
+        assert!(unwind.contains("%v4 = phi i1 [ false, %iv."), "{unwind}");
+        assert!(
+            unwind.contains("= invoke i64 @f(i64 %p0) to label"),
+            "{unwind}"
+        );
+        assert!(unwind.contains("[ zeroinitializer, %lp."), "{unwind}");
+        assert_eq!(
+            unwind
+                .matches("  call void @nz.raise()\n  unreachable")
+                .count(),
+            2
+        );
+        assert!(
+            !unwind.contains(", i1} @f") && !unwind.contains(", i1} @g"),
+            "{unwind}"
+        );
     }
 }
