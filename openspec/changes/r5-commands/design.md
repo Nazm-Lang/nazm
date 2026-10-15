@@ -108,6 +108,30 @@ system's message from `os_error_text`, as `io::Error` displays it. The compariso
 into a fresh directory, a nested one, an empty one and one written `./NAME/`, and `args/init.txt`
 covers the refusals, a regular file in the way and every option form.
 
+**D10 — `doc` waits for what R2's checker publishes.** `nazm doc` (`apidoc.rs`) documents a
+program only after it checks completely, from the checker's own facts; a port must refuse wherever
+the checker stops, and it needs from `compiler/` what R2 does not expose yet:
+
+1. A type as `Types::show` writes it (`params`, `ret`, `capabilities`), generics and capabilities
+   included.
+2. Each function's required effects (`inferred_effects`), beside the declared set `fneff` holds, and
+   both as `inspect::effects` names them.
+3. Durable identities: a function's as `cir::Names::function` writes it, a record's and an enum's as
+   `Names::ty`, a trait's as `Names::module` and its name, and each module's key (`graph.key`).
+4. Per function: whether it is a closure, its foreign symbol (`foreign`) and C export (`export`),
+   whether it has type parameters, its visibility, and its declaration's spans — `pub`, the whole
+   declaration, and where the body starts — with its attributes (`@deprecated` and its reason).
+5. Per record and enum: the `pub` span, the whole span and the attributes; per enum variant its
+   field names (records' field type spans are held already).
+6. Each `pub use` (N103): its path, its list with aliases, and what each item resolves to — a
+   function (`res.callee`), a record or an enum (`res.type_name`), or a trait (`traits().mentions()`).
+7. Whether the whole compilation is carried (`ck_stopped` empty) — `doc` refuses otherwise — and
+   its diagnostics rendered for several files (`crate::emit`), for a program that does not check.
+
+Outside `compiler/` it also needs a package's resolution (`nazm_package::resolve`: the manifest, the
+dependencies, the source root) and the source root's rule (`root::decide`); those are R5's own to
+port, after the checker's facts. Until 1–7 are public, `doc` is not started.
+
 ## Risks / Trade-offs
 
 - **Two formatters until the Rust one retires.** A change to `format.rs` must be ported too; the

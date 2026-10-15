@@ -20,6 +20,8 @@
 
 ## 3. `doc`
 - [ ] 3.1 `nazm.api-doc/2` and `-o DIR` (`api.json`, `api.md`), from the checker's public definitions
+      — waits for R2 to publish what design D10 lists (types shown, required effects, durable
+      identities, declarations' spans and attributes, re-exports resolved)
 
 ## 4. `init`
 - [x] 4.1 Every template written as the reference writes it; the directory rules (design D9): 24 of
