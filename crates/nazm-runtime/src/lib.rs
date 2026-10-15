@@ -27,8 +27,9 @@ pub mod wasm;
 use std::fmt::Write as _;
 
 pub use self::core::{
-    emit_runtime, inline_reference_counting, runtime_declarations, MEMORY_FORMAT, MEMORY_VARIABLE,
-    RESULT_STATUS, RESULT_VARIABLE, SCHED_FORMAT, SCHED_VARIABLE,
+    emit_runtime, inline_reference_counting, plain_reference_counts, runtime_declarations,
+    MEMORY_FORMAT, MEMORY_VARIABLE, PLAIN_IN_ONE_THREAD, RESULT_STATUS, RESULT_VARIABLE,
+    SCHED_FORMAT, SCHED_VARIABLE,
 };
 pub use self::entry::{emit_entry, emit_entry_for, policy as scheduler_policy};
 pub use self::os::declarations;
@@ -1203,6 +1204,75 @@ mod tests {
         for (i, a) in INVENTORY.iter().enumerate() {
             assert!(INVENTORY.iter().skip(i + 1).all(|b| b.symbol != a.symbol));
         }
+    }
+
+    /// The body of `name`'s definition in `text`, from `define` to its closing brace.
+    fn body<'a>(text: &'a str, name: &str) -> &'a str {
+        let at = text.find(&format!(" @{name}(")).unwrap();
+        let start = text[..at].rfind("define ").unwrap();
+        let end = at + text[at..].find("\n}\n").unwrap() + 3;
+        &text[start..end]
+    }
+
+    #[test]
+    fn a_program_of_one_thread_counts_without_atomics_and_any_other_with_them() {
+        let many = crate::emit_runtime(all());
+        let one = crate::emit_runtime(Needs {
+            single: true,
+            ..all()
+        });
+        for name in crate::PLAIN_IN_ONE_THREAD {
+            let (a, p) = (body(&many, name), body(&one, name));
+            // Atomic everywhere a task may hold the value, and the free ordered after it.
+            assert!(a.contains(" = atomicrmw "), "{name}: {a}");
+            // Plain in a program of one thread: no count is atomic (the report's counters, globals
+            // the program's tasks would share, are not reference counts and stay as they are).
+            assert!(
+                !p.contains("atomicrmw add ptr %") && !p.contains("atomicrmw sub ptr %"),
+                "{name}: {p}"
+            );
+            assert!(!p.contains("fence "), "{name}: {p}");
+            assert!(p.contains(".plain = "), "{name}: {p}");
+        }
+        // The old count is still what the test for the last reference reads.
+        let rel = body(&one, "nz.str_release");
+        assert!(
+            rel.contains("%old = load i64, ptr %b\n  %old.plain = sub i64 %old, 1\n  store i64 %old.plain, ptr %b\n  %last = icmp eq i64 %old, 1"),
+            "{rel}"
+        );
+        let ret = body(&one, "nz.str_retain");
+        assert!(ret.contains("%old.plain = add i64 %old, 1"), "{ret}");
+        // Nothing else changes: every other line is the same, in the same order, but for the
+        // failure state's globals, plain there already.
+        let strip = |t: &str| -> Vec<String> {
+            let mut out = Vec::new();
+            let mut skip = false;
+            for l in t.lines() {
+                if l.starts_with("define ") {
+                    skip = crate::PLAIN_IN_ONE_THREAD
+                        .iter()
+                        .any(|n| l.contains(&format!(" @{n}(")));
+                }
+                if !skip {
+                    out.push(l.replacen(" thread_local ", " ", 1));
+                }
+                if l == "}" {
+                    skip = false;
+                }
+            }
+            out
+        };
+        assert_eq!(strip(&many), strip(&one));
+        // The copies a unit inlines follow the same rule.
+        let unit = "declare void @nz.str_retain(ptr)\ndeclare void @nz.str_release(ptr)\n";
+        let copied = crate::inline_reference_counting(unit, false);
+        let plain = crate::inline_reference_counting(unit, true);
+        assert!(copied.contains("atomicrmw add ptr %b"), "{copied}");
+        assert!(copied.contains("atomicrmw sub ptr %b"), "{copied}");
+        assert!(!plain.contains("atomicrmw add ptr %b"), "{plain}");
+        assert!(!plain.contains("atomicrmw sub ptr %b"), "{plain}");
+        assert!(!plain.contains("fence "), "{plain}");
+        assert!(plain.contains("define available_externally hidden void @nz.str_release("));
     }
 
     #[test]
