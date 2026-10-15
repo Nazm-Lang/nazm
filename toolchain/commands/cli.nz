@@ -13,7 +13,7 @@
 // (standard error, status 5, the contract's `USAGE`) and exits.
 //
 // Not carried, because no command ported so far has them: subcommands, aliases, possible values,
-// groups, conflicts, environment variables, `num_args` other than a flag's none, an option's one
+// groups, `requires`, environment variables, `num_args` other than a flag's none, an option's one
 // and a positional's one-or-more, hyphen values, and terminal-width wrapping (the reference is built
 // without `wrap_help`).
 
@@ -56,13 +56,19 @@ pub struct Cli {
     // The pending argument (-1 for none), how it was given, and its values so far.
     pend: Ints,
     pend_vals: Strs,
+    // Per argument, the delimiter its values are split at ("" for none); and the conflicts
+    // declared, each a pair (`conflicts_with`: the first conflicts with the second).
+    delim: Strs,
+    conf_a: Ints,
+    conf_b: Ints,
 }
 
 pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
     Cli(name: name, about: about, long_about: long_about, kind: ints_new(), short: strs_new(), long: strs_new(),
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
-            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new())
+            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(),
+            conf_a: ints_new(), conf_b: ints_new())
 }
 
 fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
@@ -78,6 +84,7 @@ fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool,
     ints_push(c.has_default, if has_default { 1 } else { 0 })
     strs_push(c.help, help)
     strs_push(c.long_help, long_help)
+    strs_push(c.delim, "")
     ints_push(c.explicit, 0)
     ints_len(c.kind) - 1
 }
@@ -96,6 +103,21 @@ pub fn cli_flag(c: Cli, short: Str, long: Str, help: Str, long_help: Str) -> Int
 pub fn cli_option(c: Cli, short: Str, long: Str, value: Str, path: Bool, default: Str, has_default: Bool, help: Str,
         long_help: Str) -> Int {
     cli_add(c, cli_k_opt(), short, long, value, false, false, path, default, has_default, help, long_help)
+}
+
+// An option that may be given again, each value split at `delim` (`Vec<String>` with
+// `value_delimiter`: clap's `ArgAction::Append`).
+pub fn cli_list(c: Cli, short: Str, long: Str, value: Str, delim: Str, help: Str, long_help: Str) -> Int {
+    let a = cli_add(c, cli_k_opt(), short, long, value, false, true, false, "", false, help, long_help)
+    strs_set(c.delim, a, delim)
+    a
+}
+
+// `a` conflicts with `b` (`conflicts_with`), and so `b` with `a`.
+pub fn cli_conflicts(c: Cli, a: Int, b: Int) -> Int {
+    ints_push(c.conf_a, a)
+    ints_push(c.conf_b, b)
+    0
 }
 
 pub fn cli_present(c: Cli, a: Int) -> Bool { ints_get(c.explicit, a) == 1 }
@@ -577,7 +599,7 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
         if quiet { return 1 }
         cli_show_help(io, c, by != cli_by_short())
     }
-    let appends = k == cli_k_pos() && cli_is_multiple(c, a)
+    let appends = cli_is_multiple(c, a)
     if !appends && cli_remove(c, a) {
         if quiet { return 1 }
         cli_fail_usage(io, c, "the argument '" + cli_display(c, a) + "' cannot be used multiple times", ints_new())
@@ -588,8 +610,23 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
         strs_push(c.val_text, "true")
         return 0
     }
+    let delim = strs_get(c.delim, a)
     for i in 0..strs_len(vals) {
         let v = strs_get(vals, i)
+        if delim != "" {
+            // `split_arg_values`: each piece a value of its own.
+            let mut from = 0
+            for j in 0..str_len(v) {
+                if str_slice(v, j, j + 1) == delim {
+                    ints_push(c.val_arg, a)
+                    strs_push(c.val_text, str_slice(v, from, j))
+                    from = j + 1
+                }
+            }
+            ints_push(c.val_arg, a)
+            strs_push(c.val_text, str_slice(v, from, str_len(v)))
+            continue
+        }
         if v == "" && ints_get(c.path, a) == 1 {
             if quiet { return 1 }
             cli_empty_value(io, c, a)
@@ -749,6 +786,42 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
             ints_push(c.val_arg, a)
             strs_push(c.val_text, strs_get(c.default, a))
         }
+    }
+    // `validate_conflicts`: each argument given, in the order first matched, against those given
+    // that it conflicts with or that conflict with it.
+    let given = cli_used(c, false)
+    for i in 0..ints_len(given) {
+        let a = ints_get(given, i)
+        let with = ints_new()
+        for j in 0..ints_len(given) {
+            let b = ints_get(given, j)
+            if b == a { continue }
+            let mut hit = false
+            for k in 0..ints_len(c.conf_a) {
+                if ints_get(c.conf_a, k) == a && ints_get(c.conf_b, k) == b { hit = true }
+                if ints_get(c.conf_a, k) == b && ints_get(c.conf_b, k) == a { hit = true }
+            }
+            if hit { ints_push(with, b) }
+        }
+        if ints_len(with) == 0 { continue }
+        let mut text = "the argument '" + cli_display(c, a) + "' cannot be used with"
+        if ints_len(with) == 1 {
+            text = text + " '" + cli_display(c, ints_get(with, 0)) + "'"
+        } else {
+            text = text + ":"
+            for j in 0..ints_len(with) { text = text + cli_nl() + "  " + cli_display(c, ints_get(with, j)) }
+        }
+        // `build_conflict_err_usage`: the arguments given but those it conflicts with.
+        let used = ints_new()
+        for j in 0..ints_len(given) {
+            let b = ints_get(given, j)
+            let mut out = false
+            for k in 0..ints_len(with) {
+                if ints_get(with, k) == b { out = true }
+            }
+            if !out { ints_push(used, b) }
+        }
+        cli_fail_usage(io, c, text, used)
     }
     // `validate_required`.
     let missing = ints_new()

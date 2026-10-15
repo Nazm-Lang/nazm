@@ -28,7 +28,14 @@
       24 projects and every command line of `tests/args/init.txt` agree (2026-10-15)
 
 ## 5. `check`
-- [ ] 5.1 Text and `--json` diagnostics, as R2's checker carries them; refusing past what it carries
+- [x] 5.1 Text and `--json` diagnostics, as R2's checker carries them; refusing past what it carries
+      (design D11): `toolchain/commands/check.nz`. 2026-10-15, 2,993 inputs: 2,837 agree, 146
+      refused (the checker's stops, packages, package imports), 10 differ — every one R2's checker
+      trapping (`N0405` in `compiler/syntax.nz`'s `sx_kid`) on the interpreter's modules that reach
+      `toolchain/interp/vm.nz`, a defect of `compiler/` (hand-back); every command line of
+      `tests/args/check.txt` agrees
+- [ ] 5.2 `--summary-json`, `--cache-report`, `--source-root`, `--profile`, `--profile-report`, packages
+      and `nazm.root` markers (refused today, design D11)
 
 ## 6. `test`
 - [ ] 6.1 The corpus runner, interpreted and compiled (after R3, R4 and R9 are integrated)
