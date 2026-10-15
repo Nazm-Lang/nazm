@@ -105,6 +105,14 @@
       309 differ; the checker carries 2,036, all agree — with default methods 2,473 agree, 305
       differ; the checker carries 2,044, all agree — with generic impls 2,478 agree, 301 differ;
       the checker carries 2,050, all agree
+- [ ] 3.1n R1.5 D9's implicit edges (D16): the loader loads the prelude's standard modules a
+      program module names, after its written imports; the checker adds them as
+      `import_implicit` does, their names yielding to the module's own and to written imports'.
+      `@std/hash`'s `Hash` is derived (L6, `Traits::derives`): found as a method, satisfying a
+      bound, called as a bound's method is, and N0364 saying which component refuses it. The 25
+      inputs that stopped at D9 now stop at `@std/hash`'s `UInt64` constants (a constant of
+      this type); `inputs/modules/prelude-text.nz` is carried. `run.sh check`: 2,478 agree,
+      301 differ; the checker carries 2,051, all agree (2,479 agree with the new case)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

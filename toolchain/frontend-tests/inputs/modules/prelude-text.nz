@@ -1,0 +1,7 @@
+fn text_ends_with(s: Str, x: Int) -> Bool { x > 0 }
+fn main() -> Int {
+    let a = text_starts_with("abc", "a");
+    let b = text_ends_with("abc", 1);
+    let c = text_starts_with("abc", 2);
+    if a && b && c { 1 } else { 0 }
+}

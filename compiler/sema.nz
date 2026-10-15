@@ -172,6 +172,9 @@ pub struct Ck {
     dats: Ints,
     date: Ints,
     dplain: Ints,
+    // Whether the prelude gave the module this one (R1.5, D9): no `use` names it, and a name it
+    // brings in yields, silently, to the module's own and to a written import's.
+    dimplicit: Ints,
     daf: Ints,
     dac: Ints,
     aname: Strs,
@@ -272,10 +275,15 @@ pub struct Graph {
     target: Ints,
     // Whether a module had a syntax error (its tree is the parser's recovery).
     syntax: Ints,
+    // The standard modules the prelude gives each module (R1.5, D9), by load order.
+    ifirst: Ints,
+    icount: Ints,
+    itarget: Ints,
 }
 
 pub fn ck_graph() -> Graph {
-    let g = Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new(), syntax: ints_new());
+    let g = Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new(), syntax: ints_new(), ifirst: ints_new(),
+            icount: ints_new(), itarget: ints_new());
     ints_push(g.syntax, 0);
     g
 }
@@ -293,6 +301,16 @@ pub fn ck_graph_module(g: Graph, standard: Bool) -> Int {
     if standard { ints_push(g.standard, 1); } else { ints_push(g.standard, 0); }
     ints_push(g.first, ints_len(g.target));
     ints_push(g.count, 0);
+    ints_push(g.ifirst, ints_len(g.itarget));
+    ints_push(g.icount, 0);
+    0
+}
+
+// A standard module the prelude gives the module added last (R1.5, D9: `import_implicit`).
+pub fn ck_graph_implicit(g: Graph, target: Int) -> Int {
+    ints_push(g.itarget, target);
+    let last = ints_len(g.icount) - 1;
+    ints_set(g.icount, last, ints_get(g.icount, last) + 1);
     0
 }
 
@@ -321,7 +339,9 @@ fn s_closures() -> Int { 10 }
 // Whether the binding the last `lookup_var` reached is seen through a closure as one that is
 // neither mutable nor declared anywhere it could be made so (a captured copy).
 fn s_captured() -> Int { 11 }
-fn s_slots() -> Int { 12 }
+// `@std/hash`'s `Hash`, when the compilation has it (L6), or -1.
+fn s_hash() -> Int { 12 }
+fn s_slots() -> Int { 13 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -680,7 +700,11 @@ fn variant_field(c: Ck, v: Int, name: Str) -> Int {
 // Whether `==` (`equality`) or `<` (`ordering`) applies to a type, by the walk every derived
 // property shares (`UserTypes::derived`): "" when it does, otherwise the field path to the first
 // component that has none, then `|`, then that component's type.
-fn derived(c: Ck, t: Int, equality: Bool) -> Str {
+fn derived(c: Ck, t: Int, equality: Bool) -> Str { derived_by(c, t, equality, 0 - 1, false) }
+
+// The same walk, refusing at a record or enum inside `t` with an impl of `stop_trait` (-1 for
+// none): exactly for that type with `exact`, else by `applying` (`UserTypes::hashing`).
+fn derived_by(c: Ck, t: Int, equality: Bool, stop_trait: Int, exact: Bool) -> Str {
     if is_record(c, t) == false && is_enum(c, t) == false {
         if leaf(c, t, equality) { return ""; }
         return str_concat("|", int_to_str(t));
@@ -713,6 +737,18 @@ fn derived(c: Ck, t: Int, equality: Bool) -> Str {
             let f = ints_get(edges, at);
             let ty = field_ty_in(c, node, f);
             let names = edge_names(c, node, f);
+            let mut refused = false;
+            if stop_trait >= 0 && (is_record(c, ty) || is_enum(c, ty)) {
+                if exact { refused = impl_of(c, stop_trait, ty) >= 0; } else { refused = applying(c, stop_trait, ty) >= 0; }
+            }
+            if refused {
+                let mut k = 0;
+                while k < strs_len(names) {
+                    strs_push(path, strs_get(names, k));
+                    k = k + 1;
+                }
+                return cat3(str_join(path, "."), "|", int_to_str(ty));
+            }
             if is_record(c, ty) || is_enum(c, ty) {
                 let mut found = false;
                 let mut k = 0;
@@ -845,7 +881,7 @@ fn new_ck(t: Tree) -> Ck {
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
             tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
             pargs: ints_new(), cells: ints_new(), w: dg_new(), mstd: ints_new(), dfirst: ints_new(), dcount: ints_new(), don: ints_new(),
-            dats: ints_new(), date: ints_new(), dplain: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
+            dats: ints_new(), date: ints_new(), dplain: ints_new(), dimplicit: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
             taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
             xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
@@ -1017,6 +1053,13 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         declare_trait_methods(c, i);
         i = i + 1;
     }
+    // The trait a record, enum or tuple derives (L6): `@std/hash`'s `Hash`, if it is here.
+    ss(c, s_hash(), 0 - 1);
+    i = 0;
+    while i < strs_len(c.trname) {
+        if strs_get(c.trname, i) == "Hash" && strs_get(names, ints_get(c.trmod, i)) == "@std/hash.nz" && gs(c, s_hash()) < 0 { ss(c, s_hash(), i); }
+        i = i + 1;
+    }
     // Stage 1: each module's definitions; stage 1b, each module's constants in dependency order.
     i = 0;
     while i < count {
@@ -1092,13 +1135,33 @@ fn build_dependencies(c: Ck, graph: Graph) -> Int {
             ints_push(c.dats, sps(c, fld(c, first, "path_span")));
             ints_push(c.date, spe(c, fld(c, first, "path_span")));
             if plain { ints_push(c.dplain, 1); } else { ints_push(c.dplain, 0); }
+            ints_push(c.dimplicit, 0);
             n = n + 1;
+        }
+        // The prelude's standard modules (R1.5, D9): plain, after the written ones, and only
+        // where no `use` names the module.
+        k = 0;
+        while k < ints_get(graph.icount, m) {
+            let to = ints_get(graph.itarget, ints_get(graph.ifirst, m) + k);
+            if to < 0 { stop(c, "an import the loader did not resolve"); }
+            if to >= 0 && to != m && index_of(targets, to) < 0 {
+                ints_push(targets, to);
+                ints_push(c.don, to);
+                ints_push(c.dats, 0);
+                ints_push(c.date, 0);
+                ints_push(c.dplain, 1);
+                ints_push(c.dimplicit, 1);
+                ints_push(c.daf, strs_len(c.aname));
+                ints_push(c.dac, 0);
+            }
+            k = k + 1;
         }
         if m != prelude(c) {
             ints_push(c.don, prelude(c));
             ints_push(c.dats, 0);
             ints_push(c.date, 0);
             ints_push(c.dplain, 1);
+            ints_push(c.dimplicit, 0);
             ints_push(c.daf, strs_len(c.aname));
             ints_push(c.dac, 0);
         }
@@ -1131,7 +1194,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         let tr = ints_get(traits, t);
         if ints_len(kids(c, tr, "attrs")) > 0 { stop(c, "an attribute"); }
         // `@std/hash`'s `Hash` is derived where no impl is written (L6).
-        if fname_of(c, tr, "name") == "Hash" && ints_get(c.mstd, m) == 1 { stop(c, "a derived `Hash`"); }
         t = t + 1;
     }
     let impls = kids(c, p, "impls");
@@ -1457,33 +1519,37 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
                 let name = type_name(c, t);
                 let own = own_type(c, m, name);
                 let first = strs_find(bnames, name);
-                if own >= 0 {
-                    // The prelude's names are reserved (N0363), which the checker stops at.
-                    if on != prelude(c) && report {
-                        dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d),
-                                cat3("this import brings in the type `", name, "`, which this module declares"), "",
-                                "an imported type and a local one are not ranked: rename one of them, or stop exporting the other");
-                        sec_at(c, type_start(c, own), type_end(c, own), "declared here");
-                        sec_at(c, type_start(c, t), type_end(c, t), "and exported here");
-                    }
+                if ints_get(c.dimplicit, d) == 1 && (own >= 0 || first >= 0) {
+                    // The prelude's standard modules (R1.5, D9) yield, silently.
                 } else {
-                    if first >= 0 {
-                        if on == prelude(c) {
-                            set_type_name(c, name, t);
-                        } else {
-                            if report {
-                                dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d),
-                                        cat3("the type `", name, "` is exported by two imported modules"), "",
-                                        "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
-                                sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
-                                sec_at(c, type_start(c, t), type_end(c, t), "exported here");
-                            }
+                    if own >= 0 {
+                        // The prelude's names are reserved (N0363), which the checker stops at.
+                        if on != prelude(c) && report {
+                            dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d),
+                                    cat3("this import brings in the type `", name, "`, which this module declares"), "",
+                                    "an imported type and a local one are not ranked: rename one of them, or stop exporting the other");
+                            sec_at(c, type_start(c, own), type_end(c, own), "declared here");
+                            sec_at(c, type_start(c, t), type_end(c, t), "and exported here");
                         }
                     } else {
-                        strs_push(bnames, name);
-                        ints_push(bstarts, ints_get(c.dats, d));
-                        ints_push(bends, ints_get(c.date, d));
-                        set_type_name(c, name, t);
+                        if first >= 0 {
+                            if on == prelude(c) {
+                                set_type_name(c, name, t);
+                            } else {
+                                if report {
+                                    dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d),
+                                            cat3("the type `", name, "` is exported by two imported modules"), "",
+                                            "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
+                                    sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
+                                    sec_at(c, type_start(c, t), type_end(c, t), "exported here");
+                                }
+                            }
+                        } else {
+                            strs_push(bnames, name);
+                            ints_push(bstarts, ints_get(c.dats, d));
+                            ints_push(bends, ints_get(c.date, d));
+                            set_type_name(c, name, t);
+                        }
                     }
                 }
                 j = j + 1;
@@ -2077,13 +2143,20 @@ fn trait_scope(c: Ck, m: Int) -> Int {
         while t < strs_len(c.trname) {
             if ints_get(c.trmod, t) == on && ints_get(c.trpub, t) == 1 {
                 let name = strs_get(c.trname, t);
-                if ints_get(c.dplain, d) == 1 {
-                    let at = strs_find(c.tsname, name);
-                    if at < 0 {
+                if ints_get(c.dimplicit, d) == 1 {
+                    if strs_find(c.tsname, name) < 0 {
                         strs_push(c.tsname, name);
                         ints_push(c.tsid, t);
-                    } else {
-                        if ints_get(c.tsid, at) != t { ints_set(c.tsid, at, 0 - 1); }
+                    }
+                } else {
+                    if ints_get(c.dplain, d) == 1 {
+                        let at = strs_find(c.tsname, name);
+                        if at < 0 {
+                            strs_push(c.tsname, name);
+                            ints_push(c.tsid, t);
+                        } else {
+                            if ints_get(c.tsid, at) != t { ints_set(c.tsid, at, 0 - 1); }
+                        }
                     }
                 }
                 let mut a = 0;
@@ -2455,7 +2528,7 @@ fn satisfies_within(c: Ck, tr: Int, ty: Int, depth: Int) -> Bool {
     if depth > max_depth() { return false; }
     if tag(c, ty) == tag_param() { return param_bound(c, ty) == tr; }
     let im = applying(c, tr, ty);
-    if im < 0 { return false; }
+    if im < 0 { return derives(c, tr, ty); }
     let m = gs(c, s_module());
     let at = ints_get(c.immod, im);
     if at != m && imports_module(c, m, at) == false { return false; }
@@ -2473,6 +2546,16 @@ fn satisfies_within(c: Ck, tr: Int, ty: Int, depth: Int) -> Bool {
         i = i + 1;
     }
     true
+}
+
+// Whether `ty` satisfies `tr` by derivation rather than an impl (`Traits::derives`, L6): `tr` is
+// `@std/hash`'s `Hash`, `ty` a record or enum with no impl of its own, every component an
+// integer, `Bool`, `Str`, or a record or enum of them none of which has an impl.
+fn derives(c: Ck, tr: Int, ty: Int) -> Bool {
+    if tr < 0 || tr != gs(c, s_hash()) { return false; }
+    if applying(c, tr, ty) >= 0 { return false; }
+    if is_record(c, ty) == false && is_enum(c, ty) == false { return false; }
+    derived_by(c, ty, false, tr, false) == ""
 }
 
 // The impl of `tr` that applies to `ty` (`applying`): the one for exactly `ty`, or the one for the
@@ -2844,22 +2927,26 @@ fn environment(c: Ck, m: Int) -> Int {
                     let name = strs_get(c.fnname, f);
                     let own = defined_fn(c, m, name);
                     let first = strs_find(c.envname, name);
-                    if own >= 0 {
-                        dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
-                                "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
-                        sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
-                        sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
+                    if ints_get(c.dimplicit, d) == 1 && (own >= 0 || first >= 0) {
+                        // The prelude's standard modules (R1.5, D9) yield, silently.
                     } else {
-                        if first >= 0 {
-                            dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
-                                    "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
-                            sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
-                            sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "exported here");
+                        if own >= 0 {
+                            dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
+                                    "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
+                            sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
+                            sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
                         } else {
-                            strs_push(c.envname, name);
-                            ints_push(c.envfn, f);
-                            ints_push(bstarts, ints_get(c.dats, d));
-                            ints_push(bends, ints_get(c.date, d));
+                            if first >= 0 {
+                                dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
+                                        "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
+                                sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
+                                sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "exported here");
+                            } else {
+                                strs_push(c.envname, name);
+                                ints_push(c.envfn, f);
+                                ints_push(bstarts, ints_get(c.dats, d));
+                                ints_push(bends, ints_get(c.date, d));
+                            }
                         }
                     }
                 }
@@ -4190,8 +4277,9 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
         k = k + 1;
     }
     let ret = subst(c, ints_get(c.tmret, tm), own_trait(), tr, one(recv_ty));
-    if tag(c, recv_ty) == tag_param() {
-        // Through a bound: the method's signature, called as a value of its type is.
+    if tag(c, recv_ty) == tag_param() || derives(c, tr, recv_ty) {
+        // Through a bound, or a derived `Hash` (L6): the method's signature, called as a value of
+        // its type is.
         let all = ints_new();
         ints_push(all, recv_ty);
         k = 0;
@@ -4304,8 +4392,13 @@ fn lookup_method(c: Ck, t: Int, method: Str, at: Int, report: Bool) -> Int {
     let mut tr = 0;
     while tr < strs_len(c.trname) {
         let tm = trait_method(c, tr, method);
-        if tm >= 0 && applying(c, tr, t) >= 0 {
-            if trait_in_scope(c, tr) && satisfies(c, tr, t) { ints_push(found, tm); } else { strs_push(elsewhere, tick(strs_get(c.trname, tr))); }
+        if tm >= 0 {
+            if applying(c, tr, t) >= 0 {
+                if trait_in_scope(c, tr) && satisfies(c, tr, t) { ints_push(found, tm); } else { strs_push(elsewhere, tick(strs_get(c.trname, tr))); }
+            } else {
+                // A derived `Hash` (L6) has no impl to find, and no module it belongs to.
+                if trait_in_scope(c, tr) && derives(c, tr, t) { ints_push(found, tm); }
+            }
         }
         tr = tr + 1;
     }
@@ -4639,8 +4732,16 @@ fn require_trait(c: Ck, call: Call, i: Int, t: Int, from: Int, tr: Int) -> Int {
         place_s = sps(c, a);
         place_e = spe(c, a);
     }
+    // Where `Hash` is derived (L6), why this type does not derive it.
+    let mut underived = "";
+    if tr == gs(c, s_hash()) && tag(c, t) != tag_param() {
+        let why = derived_by(c, t, false, tr, true);
+        if derived_path(c, why) != "" {
+            underived = cat5(", and does not derive one: its `", derived_path(c, why), "` is a `", show(c, derived_type(c, why)), "`");
+        }
+    }
     let message = cat5(cat5("`", call.name, "` requires `", p, ": "), tname, cat3("`, and `", p, "` is `"), shown,
-            cat5("` here, which has no impl of `", tname, "` in this module's scope", "", ""));
+            cat5("` here, which has no impl of `", tname, "` in this module's scope", underived, ""));
     let mut help = cat5(cat5("implement it, `impl ", tname, " for ", shown, "`, in the module of `"), tname, "` or of `", shown, "`, and import that module here");
     if tag(c, t) == tag_param() { help = cat5("declare `", shown, ": ", tname, "` on this definition"); }
     dg_error(c.d, "N0364", place_s, place_e, message, "", help);
