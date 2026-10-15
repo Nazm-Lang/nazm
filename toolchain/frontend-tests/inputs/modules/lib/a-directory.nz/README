@@ -1,0 +1,2 @@
+A directory whose name ends in .nz: imports-a-directory.nz imports it, and the loader
+refuses it as a module that cannot be read (N0205, "Is a directory").
