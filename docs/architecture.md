@@ -8790,7 +8790,8 @@ object key: the unit's LIR digest, `TRANSLATOR_REVISION` 1, Cranelift's version 
 target and the runtime digest (was MIR without positions). LLVM object key: unchanged in form (its
 text and clang), every key moved because the text did. Package, lock and registry: unchanged.
 
-**The failure bit (R1, 5b.8, 2026-10-14).** A caller used to learn that a Nazm callee failed by
+**The failure bit (R1, 5b.8, 2026-10-14; since 4.2 not on the hosted targets under LLVM, which
+unwind: §7.115).** A caller used to learn that a Nazm callee failed by
 reading the thread's failure flag after every call — a load, on the path of every recursive call.
 Now a Nazm function (`Conv::Nazm`: MIR's functions, and a large frame's entry) returns one more
 thing than its signature says, a bit beside its result: false on every `return`, true on its
@@ -9186,3 +9187,94 @@ Cranelift every part of the runtime, whether the program called it or not.
 carries none of its others under either backend at `-O0` and `-O2` and prints what it did before; the
 same objects linked whole from `--objects` are larger and hold the unused function. Measured in
 `docs/performance.md`, *R1.5 D14*. Two mutants.
+
+## 7.115 Failures by unwinding: how a failure crosses a call, by target — Performance leadership 4.2, 2026-10-15
+
+Written from `openspec/changes/performance-leadership/design.md`, *4.2 in detail* and *Coordinator's
+answers on 4.2*. The failure bit (§7.106, *The failure bit*) costs a recursive call a second result
+and a branch after it; on `fib` that bit and a stack check whose fast path was a taken branch were
+the whole of Nazm's gap to C with the same checks.
+
+**What a program sees is unchanged.** MIR gives every statement that can fail its failure edge,
+which releases what the frame owns, joins every open `scope` and ends in `Unwind` (LIR's `fail`).
+`nz.fail` still records the first failure, its diagnostic and position, in the thread's flag;
+`defer` blocks still do not run on a failure (`docs/spec.md`, `defer`); the process still exits 2
+from the plain entry, and a task's failure still fails its `scope`. Only how a failure crosses a
+*call* is the target's, and a program cannot tell the two conventions apart. No semantic epoch
+moves.
+
+**The conventions.**
+
+- **The bit** — WebAssembly, WASI, the boards, Windows, Cranelift (and so R9's code generator), and
+  the LIR oracle: as §7.106 says. These have no unwinder this compiler uses, and a board's image must
+  not grow one. Windows (MinGW, SEH, `__gcc_personality_seh0`) unwinds only once verified under Wine.
+  Cranelift keeps the bit until it writes `.eh_frame` with a personality and a `gcc_except_table`
+  per function (`try_call` exists; `cranelift-object` writes no personality or LSDA, and none for
+  Mach-O); its objects and LLVM's are never linked into one program, so the convention is per
+  backend.
+- **Unwinding** — the hosted targets under LLVM (macOS, Linux, Android, iOS; `Target::failures`,
+  `op::llvm::Failures`). A Nazm function returns its result alone. A failure exit calls `nz.raise`,
+  which starts a **forced unwind** (`_Unwind_ForcedUnwind`: phase 2 only, no search, no catch
+  clause, no type information, no C++ runtime) with a per-thread exception object `nz.exc` and a stop
+  function `nz.unwind_stop` that aborts only at the end of the stack — never reached, below. The
+  personality is C's, `__gcc_personality_v0` (libSystem's compiler-rt on Apple, `libgcc_s` or
+  `libunwind` elsewhere); every landing pad is a `cleanup`. `nz.raise`, its stop function and
+  `nz.exc` are defined `linkonce_odr hidden` by each unit that has a failure exit, so an image has
+  one of each and needs no runtime part for them; `nz.exc` is an ordinary global in a program of one
+  thread (`SINGLE_THREAD_STATE`).
+
+**Calls, where failures unwind.** A Nazm call whose failure edge is a bare `fail` — a block that
+releases nothing — is a plain `call`: the unwind passes through the frame at no cost, and the edge is
+never taken in the caller (`fib` has no landing pad at all). A Nazm call whose edge has work (a
+release, a `scope` join) is an `invoke`; its landing pad joins the normal path with the edge taken,
+so LIR's own branch goes where the failure goes, does the work and reaches `fail`, which raises
+again: each frame that owns something lands once, and an unwind is linear in the depth. A function
+with a landing pad names the personality; one without names none.
+
+**Boundaries.** Every call of a Nazm function with no failure edge — a plain entry's call of its
+body: `main`, a C export (and so a callback C calls), a task's body, an interrupt handler or a board's
+hooks where those unwind — is an `invoke` whose landing pad continues as if the call had returned,
+its result a zero. The plain entry's caller then reads the flag, as it always has. So C is never
+unwound into, and a task's failure stops at its entry, where its `scope` learns of it as before.
+
+**LIR.** Unchanged in text and schema: `v1, failed v2 = call …` is now read as *the call's failure
+edge*, an abstract value. The validator has one more rule (`validate::failure_edges`): a `failed`
+value is only the condition of the branch that ends the call's block, the call that block's last
+instruction — so every backend can make it an unwind edge, or keep it in a register where the bit
+is kept. `nazm.lir/2` is unchanged (every module the lowering makes already obeyed the rule).
+
+**`N0408`.** The stack check is unchanged (§7.106; 4.1). The unwinder runs in the quarter of the
+stack the limit leaves as headroom — at least 2 MiB on every hosted thread. The check's slow branch
+is now weighted cold, on every target: alone it gained nothing; with the bit gone it is half of what
+a recursive call gains.
+
+**Debug information.** A definition the unit carries for the runtime (`linkonce_odr`) gets no
+subprogram; an `invoke` is a call, so it carries a location even in a prologue; and a function with
+no statement of its own (a plain entry) ends its prologue at its entry block's branch, so its landing
+pad and join are at the function's line.
+
+**Versions.** Runtime ABI revision `33 → 34`: a Nazm function's machine result on the hosted
+targets, `nz.raise` and the personality, and the system's unwinder an image links. The LLVM
+backend's object keys follow it. Cranelift's `TRANSLATOR_REVISION` does not move. No semantic epoch
+or schema moves.
+
+**Measured** (release `nazm`, `--opt-level 2`, `hyperfine -N --warmup 3 --runs 15`, same host and
+session): `fib(35)` 55.7 ± 0.3 → **44.3 ± 0.3 ms** (−20%), C's time with the same overflow and stack checks;
+word frequency 132.4 ± 1.0 → 129.4 ± 0.8 ms (−2%). The failure path is slower where frames own
+something: the unwind lands once in each, and each landing starts a new forced unwind, whose cost
+on macOS is the system unwinder's lookup of every frame's unwind information. A stack exhausted
+196,098 frames deep at `-O2`, each frame owning a string and a `defer`, fails in 2.26 s against
+8.9 ms with the bit (`docs/limitations.md`). A failure ends its program or its task, and is not
+what speed is measured on (the coordinator's answer 4).
+
+**Evidence.** `crates/nazm-cli/tests/failure_convention.rs` (once `failure_bit.rs`): a failure deep
+in a recursion, through a function value, a trait method, a task and a C export; ten thousand frames
+deep through `defer`s; with the stack exhausted; through a callback C calls — the same output,
+status and memory counts on the interpreter where it reaches, LLVM `-O0` and `-O2` and Cranelift;
+the hosted IR's shape, and that only a hosted target's object names the unwinder and the
+personality. `op::llvm::tests` prints one module both ways; `op::validate::tests` holds the new rule.
+Seven mutants, and the bit's LLVM exit mutant repointed to the printer's test.
+
+**The compiler written in Nazm** (R3's port, `toolchain/pipeline`) prints LIR, whose text is
+unchanged, and no LLVM: it regenerates `rtext.nz` for runtime ABI 34 and takes the validator's rule
+(`openspec/changes/performance-leadership/design.md`, *4.2 in the reference*).
