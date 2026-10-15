@@ -132,7 +132,9 @@ the checker stops, and it needs from `compiler/` what R2 does not expose yet:
 
 Outside `compiler/` it also needs a package's resolution (`nazm_package::resolve`: the manifest, the
 dependencies, the source root) and the source root's rule (`root::decide`); those are R5's own to
-port, after the checker's facts. Until 1–7 are public, `doc` is not started.
+port, after the checker's facts. Until 1–7 are public, `doc` is not started. (2026-10-15: R2
+publishes 1–7 as `compiler/facts.nz`, its design D24, with the package resolution and the root's
+rule in `compiler/package.nz`; `doc` is D13.)
 
 **D11 — `check` is `checking.rs` over R2's front end, and refuses where that stops.**
 `toolchain/commands/check.nz` drives the loader, the parser, the attributes and the checker as
@@ -180,8 +182,42 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init` and `check` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check` and `doc` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
+
+**D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
+`toolchain/commands/doc.nz` documents what `apidoc::document` documents, read from
+`compiler/facts.nz` alone: each compilation checked as a module (`fx_check_module`), its exported
+non-closure functions, `pub` records and enums and `pub use` items of the program's own modules
+with a durable key, keyed by module and identity in `BTreeMap` order (bytes), a later item of one
+identity replacing an earlier. Each item is a JSON object written with sorted keys, as serde_json's
+default map writes it, and its Markdown block is made beside it; `-o DIR` writes the pretty form
+(`{:#}`, two spaces) and `api.md` after `create_dir_all`, `nazm: cannot write DIR: …` (4) on a
+failure. The `description` is the comment lines above the declaration (`str::lines`, `trim` by
+`char::is_whitespace`), the anchor the identity with every character but an ASCII letter or digit a
+`-`, a source's path relative to the base (`canonicalize` of both, through `os_realpath`). A
+directory is `nazm_package::resolve`'s: no manifest is `nazm: no manifest \`DIR/nazm.toml\`` (1), a
+manifest that is not one is its reason after the manifest's path (1), and every `.nz` file under the
+canonical source root — not through a link to a directory — sorted as `PathBuf` sorts (component by
+component), each the root of its own compilation; the `package` object is the root package's name
+and version and every package's profile, from `compiler/package.nz`, and `null` for a file outside
+a package. A compilation that does not load is `cannot load PATH: MESSAGES` (1); one that fails is its
+errors rendered (`dg_render`), then `N errors — a program that does not check has no API to
+document` (1). Not carried, refused with 6: where the front end stops (`fx_why`), a manifest
+`package.nz` does not read, a package it does not resolve, a source root that cannot be read.
+
+`fx_check` takes an absolute path, and the reference names every module by the path the user gave.
+So `front.nz` (shared by `check` and `doc`) prefixes a relative path with the working directory and
+takes that prefix off every module's name and off every path a diagnostic's words name after a
+backquote — except a dependency package's module, which the reference names under its canonical
+source root. `check` now runs `fx_check` instead of driving the stages itself (main's loader took the
+source root and the packages, 2026-10-15); its refusals and outputs are unchanged.
+
+The port is built without `--heap-limit`: under one, 0.10.0's `os_realpath` traps (status 133, no
+message) — a runtime defect, handed back. `run.sh doc` runs `doc FILE` and, where the reference
+succeeds, `doc -o DIR FILE` for every input of `check` plus the repository's package directories and
+a project of every template, comparing status, output, error and both files; `tests/args/doc.txt`
+covers the options, packages, re-exports, deprecation and the failures.
 
 ## Risks / Trade-offs
 

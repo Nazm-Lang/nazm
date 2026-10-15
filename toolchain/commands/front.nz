@@ -1,0 +1,122 @@
+// What `check` and `doc` share over R2's front end (`compiler/facts.nz`, R2 design D24): paths as
+// the reference holds them, and a compilation's diagnostics rendered under the names the user gave.
+//
+// `fx_check` takes an absolute path; the reference loads the path as given and names every module
+// by it (an import joined to its importer's directory, never normalised). So a relative path is
+// made absolute by prefixing the working directory, and that prefix is taken off every module's
+// name — and off any path a diagnostic's words name — before anything is shown (R5 design D11).
+
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/facts.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+// The host, as Rust's `std::env::consts` names it: what `@cfg` asks of (`BuildConfig::host`).
+@cfg(os = "macos")
+pub fn fe_host_os() -> Str { "macos" }
+@cfg(os = "linux")
+pub fn fe_host_os() -> Str { "linux" }
+@cfg(os = "windows")
+pub fn fe_host_os() -> Str { "windows" }
+@cfg(arch = "aarch64")
+pub fn fe_host_arch() -> Str { "aarch64" }
+@cfg(arch = "x86_64")
+pub fn fe_host_arch() -> Str { "x86_64" }
+
+pub fn fe_starts(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p }
+
+// `fs::canonicalize`: the absolute path with every link resolved, or "" when it does not exist.
+pub fn fe_canonical(io: IoCap, path: Str) -> Str {
+    let mut room = 4096
+    while room <= 1048576 {
+        let out = bytes_new(room)
+        let n = os_realpath(path, out)
+        if n >= 0 { return bytes_to_str(bytes_slice(out, 0, n)) }
+        room = room * 4
+    }
+    ""
+}
+
+// The prefix a relative path is given to make it absolute: the working directory and a `/`; ""
+// for an absolute path.
+pub fn fe_prefix(io: IoCap, path: Str) -> Str {
+    if fe_starts(path, "/") { return "" }
+    let cwd = fe_canonical(io, ".")
+    if cwd == "/" { return "/" }
+    cwd + "/"
+}
+
+// `s` with every `prefix` that follows a backquote, or begins it, taken off.
+pub fn fe_unprefix(s: Str, prefix: Str) -> Str {
+    if prefix == "" { return s }
+    let out = strs_new()
+    let n = str_len(s)
+    let p = str_len(prefix)
+    let mut from = 0
+    let mut i = 0
+    while i < n {
+        let begins = i == 0 || str_byte(s, i - 1) == 96
+        if begins && i + p <= n && str_slice(s, i, i + p) == prefix {
+            strs_push(out, str_slice(s, from, i))
+            i += p
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(out, str_slice(s, from, n))
+    str_join(out, "")
+}
+
+// Each module's name as the reference names it. A dependency package's module is named under that
+// package's source root, which the reference canonicalises: an absolute path, kept.
+pub fn fe_names(f: Facts, prefix: Str) -> Strs {
+    let out = strs_new()
+    for m in 0..fx_modules(f) {
+        if fe_dependency(fx_module_key(f, m)) {
+            strs_push(out, fx_module_name(f, m))
+        } else {
+            strs_push(out, fe_unprefix(fx_module_name(f, m), prefix))
+        }
+    }
+    out
+}
+
+// Whether a module key is a dependency package's, `NAME@VERSION/PATH`: an `@` in its first
+// component, which no other key has.
+fn fe_dependency(key: Str) -> Bool {
+    if fe_starts(key, "@") { return false }
+    let mut i = 0
+    while i < str_len(key) && str_byte(key, i) != 47 {
+        if str_byte(key, i) == 64 { return true }
+        i += 1
+    }
+    false
+}
+
+pub fn fe_texts(f: Facts) -> Strs {
+    let out = strs_new()
+    for m in 0..fx_modules(f) { strs_push(out, fx_module_text(f, m)) }
+    out
+}
+
+pub fn fe_bases(f: Facts) -> Ints {
+    let out = ints_new()
+    for m in 0..fx_modules(f) { ints_push(out, fx_module_base(f, m)) }
+    out
+}
+
+// The diagnostics' words with the prefix taken off the paths they name.
+pub fn fe_unprefix_diags(d: Diags, prefix: Str) -> Int {
+    for i in 0..dg_len(d) {
+        strs_set(d.message, i, fe_unprefix(strs_get(d.message, i), prefix))
+        strs_set(d.help, i, fe_unprefix(strs_get(d.help, i), prefix))
+        strs_set(d.label, i, fe_unprefix(strs_get(d.label, i), prefix))
+    }
+    0
+}
+
+// Whether the loader stopped the compilation: diagnostics, and no module parsed.
+pub fn fe_load_failed(f: Facts) -> Bool { dg_len(fx_diags(f)) > 0 && ints_len(f.programs) == 0 }

@@ -19,9 +19,11 @@
       (design, *Future work*) — in both formatters together
 
 ## 3. `doc`
-- [ ] 3.1 `nazm.api-doc/2` and `-o DIR` (`api.json`, `api.md`), from the checker's public definitions
-      — waits for R2 to publish what design D10 lists (types shown, required effects, durable
-      identities, declarations' spans and attributes, re-exports resolved)
+- [x] 3.1 `nazm.api-doc/2` and `-o DIR` (`api.json`, `api.md`), from R2's published facts
+      (`compiler/facts.nz`) and package resolution (design D13): `toolchain/commands/doc.nz`.
+      2026-10-15, 3,115 inputs (every input of `check`, the repository's packages, a project of
+      every template): 3,108 agree, 0 differ, 7 refused (6 where the checker stops, 1 package
+      `compiler/package.nz` does not resolve); every command line of `tests/args/doc.txt` agrees
 
 ## 4. `init`
 - [x] 4.1 Every template written as the reference writes it; the directory rules (design D9): 24 of
@@ -33,7 +35,9 @@
       refused (the checker's stops, packages, package imports), 10 differ — every one R2's checker
       trapping (`N0405` in `compiler/syntax.nz`'s `sx_kid`) on the interpreter's modules that reach
       `toolchain/interp/vm.nz`, a defect of `compiler/` (hand-back); every command line of
-      `tests/args/check.txt` agrees
+      `tests/args/check.txt` agrees. Since 2026-10-15 run through `fx_check` (design D13): 3,097
+      inputs, 3,048 agree, 0 differ, 49 refused (32 packages, 10 package imports, 6 the checker's
+      stops, 1 not UTF-8)
 - [ ] 5.2 `--summary-json`, `--cache-report`, `--source-root`, `--profile`, `--profile-report`, packages
       and `nazm.root` markers (refused today, design D11)
 

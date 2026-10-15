@@ -1,0 +1,29 @@
+# `nazm doc` command lines (design D8, D13), run in the fixture run.sh writes: a.nz documents
+# functions, a record and an enum, b.nz does not check, m.nz imports a file that is not there,
+# pkg/ is a package with a re-export, sub/ is a directory with no manifest, and ro/api.json is a
+# file where -o would make a directory.
+--help
+-h
+
+a.nz
+./a.nz
+a.nz -o out
+a.nz --out=out/deeper
+-o out a.nz
+a.nz -oout
+a.nz -o out/
+b.nz
+m.nz
+absent.nz
+pkg
+pkg/
+pkg -o docs
+pkg/src/a.nz
+pkg/src/inner/b.nz
+sub
+a.nz -o ro/api.json
+a.nz -o
+a.nz b.nz
+-o out
+--bogus a.nz
+--ou out a.nz
