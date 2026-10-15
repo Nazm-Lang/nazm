@@ -432,10 +432,7 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let c = lo.c;
     let t = lo.t;
     let closure = ck_fn_closure(c, i);
-    if closure == false {
-        if ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
-        if ck_fn_effect_param(c, i) { return co_stopped(lo, "an effect parameter"); }
-    }
+    if closure == false && ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
     let node = ck_fn_node(c, i);
     let mut body_node = 0 - 1;
     if closure {
@@ -2508,7 +2505,6 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
     let b = ck_site_builtin(c, site);
     if callee >= 0 {
         if ck_fn_is_foreign(c, callee) { return co_stopped(lo, "a foreign call"); }
-        if ck_fn_effect_param(c, callee) { return co_stopped(lo, "a call of an effect-polymorphic function"); }
         let mut ret = ck_fn_ret_ty(c, callee);
         let mut targs = "[]";
         // A generic call: the type arguments the checker settled, and the result it formed.

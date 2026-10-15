@@ -443,6 +443,12 @@
         1,485 whole documents, all the reference's bytes. check 3,093 agree, 2 differ (carried
         3,089, all agree), render likewise, facts 3,089 agree, 6 differ (carried 3,089, all
         agree)
+  - [x] Effect parameters (N51): a function with an effect parameter, and a call of one, as
+        any other — its effect sets name the parameter `*`, a function type's `$effects`, and
+        a call binds it without a type argument. `run.sh core`: 3,095 agree, 0 differ; of
+        76,198 functions the lowering carries 75,363, all agree; the other parts 10,644, all
+        agree; 1,485 whole documents, all the reference's bytes (most of these functions call
+        through a value, the next group)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
