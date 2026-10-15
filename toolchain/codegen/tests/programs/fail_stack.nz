@@ -1,0 +1,15 @@
+// The stack exhausted (`N0408`): the failure unwinds in the headroom the limit leaves, through
+// every frame that owns a string (7.5). How deep it gets depends on the frames' size, which
+// differs between the backends (nzcg: stack depth).
+
+fn deep(out: OutCap, n: Int, tag: Str) -> Int ! {io} {
+    let held = str_concat(tag, "!")
+    defer { print("d") }
+    deep(out, n + 1, tag) + str_len(held)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(1)
+    println(deep(out, 0, "x"))
+    0
+}

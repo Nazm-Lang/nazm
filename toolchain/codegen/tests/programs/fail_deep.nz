@@ -1,0 +1,14 @@
+// A failure four hundred frames deep in a direct recursion, each frame owning a string: where
+// failures unwind (7.5), each frame's landing pad releases its string and raises again.
+
+fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, held) + str_len(held) }
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    println(down(3, 5, "a"))
+    println(down(400, 0, "x"))
+    println(7)
+    0
+}

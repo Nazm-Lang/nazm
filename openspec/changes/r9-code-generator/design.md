@@ -114,12 +114,44 @@ still to write, and the list says which.
 (2026-10-15): `aarch64-apple-darwin`, and `x86_64-apple-darwin` run under Rosetta. The ELF writer
 and `tests/elf.sh` stay as built and are not extended; Linux is after 1.0.
 
-**D14. The failure convention: the bit, until unwind tables.** On hosted targets the LLVM backend
-now unwinds on a failure (performance-leadership 4.2); this generator keeps the bit beside the
-result (D4), as Cranelift does, until it writes `.eh_frame`/compact-unwind personalities and
-LSDAs — before 1.0, since it replaces Cranelift as the fast build. The convention is per backend
-and invisible to a program, but objects of the two conventions are never linked together: the
-suite replaces every unit object, generic instantiations included.
+**D14. The failure convention: LLVM's, by target.** On the hosted targets the LLVM backend
+unwinds on a failure (performance-leadership 4.2, `docs/architecture.md` §7.115). Until 7.5 this
+generator kept the bit beside the result (D4), as Cranelift does, so objects of the two backends
+were never linked together. Since 7.5 it unwinds where LLVM does on the targets it carries
+before 1.0 (D13: `aarch64-apple-darwin`, `x86_64-apple-darwin`), with the same tables, so a
+program may again be linked from both backends' objects; the ELF targets, frozen by D13, keep the
+bit, which no program can tell apart (4.2, answer 2). How, as LLVM lowers it:
+
+- **Raising.** `fail` calls `nz.raise`, which starts a forced unwind (`_Unwind_ForcedUnwind`,
+  phase 2 only, under a stop function that aborts only at the end of the stack). Both are
+  written by the generator into each unit with a failure exit, as *local* functions — LLVM's
+  are `linkonce_odr hidden`, so a mixed program links either kind — and the exception object
+  lives in `nz.raise`'s own frame rather than in LLVM's thread-local `nz.exc`: nothing reads it
+  once a landing pad is reached, and every failure raises afresh, so no thread-local storage is
+  needed in the generator's objects.
+- **Landing pads.** A Nazm call whose failure edge has work (a release, a join) has a landing
+  pad, and the pad *is* the edge's block: the call's `failed` value is only ever the condition of
+  the branch that ends the call's block (LIR's validator), so the branch becomes a jump to its
+  `else` and the unwind lands on its `then`. A call whose edge is a bare `fail` has no pad and
+  no branch: the unwind passes through the frame. A call with no failure edge — a plain entry's
+  call of its body (`main`, a C export or callback, a task's trampoline) — lands the unwind on
+  a two-instruction pad that makes its result a zero and goes on as if the call had returned;
+  the entry then reads the flag, so C is never unwound into.
+- **Tables.** On Mach-O, each function with a pad has its compact unwind entry name the C
+  personality, `__gcc_personality_v0`, and its LSDA in `__TEXT,__gcc_except_tab` (the entry's
+  encoding then has `UNWIND_HAS_LSDA`); the linker builds the image's personality array and
+  LSDA index. The LSDA is the C personality's: no landing-pad base, no type table, ULEB128 call
+  sites (start, length, pad, no action), one per call with a pad. The frame is unchanged —
+  compact unwind's frame modes already described where every callee-saved register is saved
+  (5.2), which is what the unwinder restores a frame's allocated values from, and `sp` never
+  moves after the prologue, so a pad finds the frame as the call left it.
+- **Frames share slots.** A failure unwinds as deep as the frames fit: a stack-exhausting
+  program (`N0408`) fails at a depth set by the frame's size, and a deep one that LLVM's frames
+  fit must fit the generator's. Values and variables left in memory by the allocator now share
+  8-byte slots with others whose lives do not overlap (the allocator's own intervals); one held
+  in a register has none. `down` in `tests/programs/fail_task.nz`, recursing in a task's stack,
+  went from 720 bytes a frame to 176 (LLVM's: 224); before, it exhausted that stack 278 frames
+  down where LLVM's reached the failure 400 frames down.
 
 **Language.** The generator is written in the 0.10.0 language. `Int` arithmetic traps on overflow,
 so encodings are built with shifts and masks (which never trap) and `wrapping_*`; bytes are written

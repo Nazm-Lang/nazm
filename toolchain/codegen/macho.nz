@@ -1,7 +1,8 @@
 // The Mach-O object writer (design D6): one `MH_OBJECT` for `aarch64-apple-darwin` or
 // `x86_64-apple-darwin`, with `__TEXT,__text`, `__TEXT,__const` (read-only data),
 // `__DATA,__const` (data holding addresses), `__DATA,__data` (writable data),
-// `__LD,__compact_unwind` (5.2) and, with positions, `__DWARF`'s `__debug_abbrev`,
+// `__TEXT,__gcc_except_tab` (7.5, the LSDAs where failures unwind), `__LD,__compact_unwind`
+// (5.2) and, with positions, `__DWARF`'s `__debug_abbrev`,
 // `__debug_info` and `__debug_line` (D10); `LC_BUILD_VERSION`, `LC_SYMTAB` and `LC_DYSYMTAB`.
 // Deterministic (D7): no timestamps or paths; locals in definition order, the rest by name.
 
@@ -137,20 +138,38 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
             k += 2
         }
     }
-    // Compact unwind (5.2): one 32-byte entry per function — its address, length, encoding, no
-    // personality or LSDA — which the linker turns into the image's unwind table.
+    // The LSDAs of the functions with landing pads (7.5), `__TEXT,__gcc_except_tab`.
+    let lsda_sec = if bytebuf_len(c.lsda) > 0 { secs.len() } else { -1 }
+    if lsda_sec >= 0 {
+        secs.push(c.lsda)
+        ints_push(sec_align, 4)
+        strs_push(sect, "__gcc_except_tab")
+        strs_push(seg, "__TEXT")
+        ints_push(flags, 0)
+    }
+    // Compact unwind (5.2): one 32-byte entry per function — its address, length, encoding,
+    // and, for a function with landing pads (7.5), the C personality and its LSDA, which the
+    // encoding then says it has — which the linker turns into the image's unwind table.
+    let cu = secs.len()
     let unwind = bytebuf_new()
     let unwind_at = ints_new()
     let unwind_sym = ints_new()
+    let lsda_at = ints_new()
+    let lsda_off = ints_new()
     i = 0
     while i < ns {
         if c.sym_at[i] >= 0 {
+            let has = c.fn_lsda[i] >= 0
             ints_push(unwind_at, bytebuf_len(unwind))
             ints_push(unwind_sym, i)
             put64(unwind, 0)
             put32(unwind, func_end(c, c.sym_at[i]) - c.sym_at[i])
-            put32(unwind, c.fn_enc[i])
+            put32(unwind, c.fn_enc[i] | (if has { 0x40000000 } else { 0 }))
             put64(unwind, 0)
+            if has {
+                ints_push(lsda_at, bytebuf_len(unwind))
+                ints_push(lsda_off, c.fn_lsda[i])
+            }
             put64(unwind, 0)
         }
         i += 1
@@ -186,6 +205,13 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
         i += 1
     }
     let vmsize = addr
+    // Each LSDA's address, written where its entry names it (a section relocation, below).
+    i = 0
+    while i < ints_len(lsda_at) {
+        let a = sec_addr[lsda_sec] + lsda_off[i]
+        bytebuf_patch_u32_le(unwind, lsda_at[i], UInt32(a & 0xFFFFFFFF))
+        i += 1
+    }
     // Symbols: locals, then definitions others see, then imports.
     let locals = ints_new()
     let extdefs = ints_new()
@@ -246,26 +272,36 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
             k += 1
         }
     }
-    // The unwind entries' and the DWARF's addresses: eight bytes, against the function.
+    // The unwind entries' and the DWARF's addresses: eight bytes, against the function; an
+    // entry's personality against the personality's symbol, its LSDA against the section.
     i = 0
     while i < ints_len(unwind_at) {
-        put_reloc(rel[4], unwind_at[i], nidx[unwind_sym[i]], 0, 3, 0)
+        put_reloc(rel[cu], unwind_at[i], nidx[unwind_sym[i]], 0, 3, 0)
+        if c.fn_lsda[unwind_sym[i]] >= 0 {
+            put_reloc(rel[cu], unwind_at[i] + 16, nidx[c.uw[UW_PERSONALITY]], 0, 3, 0)
+            nrel[cu] = nrel[cu] + 1
+        }
         i += 1
     }
-    nrel[4] = ints_len(unwind_at)
+    i = 0
+    while i < ints_len(lsda_at) {
+        put_sect_reloc(rel[cu], lsda_at[i], lsda_sec + 1, 3)
+        i += 1
+    }
+    nrel[cu] = nrel[cu] + ints_len(unwind_at) + ints_len(lsda_at)
     if dbg.present {
         i = 0
         while i < ints_len(dbg.info_rel_at) {
-            put_sect_reloc(rel[6], dbg.info_rel_at[i], 1, 3)
+            put_sect_reloc(rel[cu + 2], dbg.info_rel_at[i], 1, 3)
             i += 1
         }
-        nrel[6] = ints_len(dbg.info_rel_at)
+        nrel[cu + 2] = ints_len(dbg.info_rel_at)
         i = 0
         while i < ints_len(dbg.line_rel_at) {
-            put_sect_reloc(rel[7], dbg.line_rel_at[i], 1, 3)
+            put_sect_reloc(rel[cu + 3], dbg.line_rel_at[i], 1, 3)
             i += 1
         }
-        nrel[7] = ints_len(dbg.line_rel_at)
+        nrel[cu + 3] = ints_len(dbg.line_rel_at)
     }
     if strs_len(errors) > 0 { return bytes_new(0) }
     // The string table: an empty name first, then each symbol's, `_`-prefixed.

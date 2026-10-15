@@ -1,0 +1,18 @@
+// Nazm calls C, which calls an export: the failure four hundred frames into the export is
+// landed by its C entry, a plain entry, never unwinding into C (7.5). C: `fail_callback.c`.
+
+extern "C" fn apply(f: fn(Int) -> Int, x: Int) -> Int = "apply";
+
+fn down(n: Int, k: Int, tag: Str) -> Int {
+    let held = str_concat(tag, "!")
+    if n == 0 { 10 / k } else { down(n - 1, k, tag) + str_len(held) }
+}
+
+pub extern "C" fn cb(n: Int) -> Int ! {} = "nz_cb" { down(n, 400 - n, "x") }
+
+fn main(out: OutCap, f: ForeignCap) -> Int ! {io, foreign} {
+    println(apply(cb, 3))
+    println(apply(cb, 400))
+    println(7)
+    0
+}
