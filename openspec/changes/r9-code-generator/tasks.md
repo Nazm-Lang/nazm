@@ -84,3 +84,19 @@
       generator: `i128` `rotl`/`rotr`, `popcnt`, `clz`, `ctz` and `bswap` on both targets (they
       were refused). Coverage of the 485-form universe: 273 before, 393 after (aarch64);
       `tests/run.sh` 110 agree, 0 differ, 0 refused on each target (393 of 485 forms on each)
+- [x] 7.3 The x86_64 slowness under Rosetta, found ours and fixed. Two causes: (1) every
+      function called `nz.stack_check` where LLVM inlines it — under Rosetta a call and return
+      cost far more than natively (fib with the call removed by hand: 209 to 139 ms); (2) the
+      overflow bit of a 64-bit multiply read with `seto` costs Rosetta several times a `jo` on
+      it (`i % 7 * 3` in a loop: 378 against LLVM's 131 ms). Now: `nzcg --one-thread` (the
+      harness passes it when the reference's runtime defines `nz.stack_limit` as a plain
+      global, which is `native.single_thread`) inlines the check as LLVM does, both targets; on
+      x86_64 a comparison or checked operation whose result only feeds its block's branch is
+      left in the flags (`jcc`, no `setcc`/`test`), and a multiply's overflow bit that must be
+      a value is set by a branch, not `seto`. `tests/perf.sh`, best of five, x86_64 under
+      Rosetta, LLVM -O0 / -O2 / nzcg: fib 139 / 71 / 129 ms (was 140 / 71 / 199), words
+      575 / 181 / 517 (585 / 184 / 571), arith 36 / 23 / 42 (37 / 22 / 70); aarch64: fib
+      155 / 53 / 122, words 548 / 140 / 406, arith 24 / 15 / 25. What remains on x86_64 is
+      template verbosity (the remainder's divisor guard: ~12 more instructions than LLVM -O0),
+      not Rosetta. `tests/run.sh` 110 agree on each target; `lines.sh` 41 agree, 1 skipped
+      (`ffi.nz`, whose C it does not link); `unwind.sh` agrees; `encode.sh` 113 + 89
