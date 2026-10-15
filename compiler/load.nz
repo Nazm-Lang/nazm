@@ -519,7 +519,9 @@ fn prelude_modules() -> Strs {
     let s = strs_new();
     strs_push(s, "hash");
     strs_push(s, "hashmap");
+    strs_push(s, "option");
     strs_push(s, "ordmap");
+    strs_push(s, "result");
     strs_push(s, "sort");
     strs_push(s, "text");
     s
@@ -638,24 +640,9 @@ fn run_has(pool: Strs, first: Int, count: Int, set: Strs) -> Bool {
 // wrote for a form (a map literal's `hashmap_single`), or by a method that resolves to one of their
 // functions and to no built-in; with the prelude modules those import.
 fn prelude_named(tb: PreludeTable, text: Str, written: Strs, called: Strs) -> Strs {
-    let kinds = ints_new();
-    let starts = ints_new();
-    let ends = ints_new();
-    let texts = strs_new();
-    lex_all(text, kinds, starts, ends, texts, dg_new());
     let idents = strs_new();
     let methods = strs_new();
-    let mut n = 0;
-    while n < ints_len(kinds) {
-        if ints_get(kinds, n) == k_ident() {
-            let name = strs_get(texts, n);
-            if contains(idents, name) == false { strs_push(idents, name); }
-            let after_dot = n > 0 && ints_get(kinds, n - 1) == k_dot();
-            let called = n + 1 < ints_len(kinds) && ints_get(kinds, n + 1) == k_lparen();
-            if after_dot && called && contains(methods, name) == false { strs_push(methods, name); }
-        }
-        n = n + 1;
-    }
+    named_in(text, idents, methods);
     let wanted = strs_new();
     let mut e = 0;
     while e < strs_len(tb.entry) {
@@ -685,6 +672,46 @@ fn prelude_named(tb: PreludeTable, text: Str, written: Strs, called: Strs) -> St
         e = e + 1;
     }
     out
+}
+
+// The identifiers `text` names, and the methods it calls (`x.m(`), into `idents` and `methods` —
+// the holes of an interpolated string's too, which the lexer keeps as text (`named_in`, R1.5 4.5).
+fn named_in(text: Str, idents: Strs, methods: Strs) -> Int {
+    let kinds = ints_new();
+    let starts = ints_new();
+    let ends = ints_new();
+    let texts = strs_new();
+    lex_all(text, kinds, starts, ends, texts, dg_new());
+    let mut n = 0;
+    while n < ints_len(kinds) {
+        if ints_get(kinds, n) == k_ident() {
+            let name = strs_get(texts, n);
+            if contains(idents, name) == false { strs_push(idents, name); }
+            let after_dot = n > 0 && ints_get(kinds, n - 1) == k_dot();
+            let called = n + 1 < ints_len(kinds) && ints_get(kinds, n + 1) == k_lparen();
+            if after_dot && called && contains(methods, name) == false { strs_push(methods, name); }
+        }
+        if ints_get(kinds, n) == k_fstr() && str_len(strs_get(texts, n)) > 0 {
+            let pieces = sx_split(strs_get(texts, n), 124);
+            let mut j = 0;
+            while j < strs_len(pieces) {
+                let piece = strs_get(pieces, j);
+                if str_byte(piece, 0) == 72 {
+                    // `H:at:align:width:precision:start:end:text`, the text last.
+                    let mut cuts = 0;
+                    let mut q = 0;
+                    while q < str_len(piece) && cuts < 7 {
+                        if str_byte(piece, q) == 58 { cuts = cuts + 1; }
+                        q = q + 1;
+                    }
+                    named_in(sx_unesc(str_slice(piece, q, str_len(piece))), idents, methods);
+                }
+                j = j + 1;
+            }
+        }
+        n = n + 1;
+    }
+    0
 }
 
 // The file the `k`th import of file `i` names, by its index in load order; -1 where it did not

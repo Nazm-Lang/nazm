@@ -1,0 +1,5 @@
+fn main() {
+    let s = "a b c"
+    let o: Option[Int] = Some(1)
+    println(f"{s.split(" ").len()} {f"{o.is_some()}"}")
+}

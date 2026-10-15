@@ -3403,7 +3403,9 @@ fn match_expr(p: Px, start: Int) -> Int {
         } else {
             if recover_member(p, astart, k_rbrace()) == false { return 0 - 1; }
         }
-        if eat(p, k_comma()) == false { break; }
+        // A line break separates two arms as it ends a statement (R1.5 4.6; 5b.19): an arm whose
+        // line ends needs no `,` before the next.
+        if eat(p, k_comma()) == false && line_break_before(p) == false { break; }
     }
     let close = expect(p, k_rbrace(), "to close the arms");
     if close < 0 { return 0 - 1; }
@@ -4044,6 +4046,11 @@ fn if_let(p: Px, span: Int) -> Int {
 // --- interpolation (R1a, L4) ----------------------------------------------------------------
 
 // `lex_esc` undone: `\xHH` back to its byte.
+// A lexer payload's escapes decoded, and a text split at a byte — for the loader's reading of an
+// interpolation's holes (R1.5 4.5).
+pub fn sx_unesc(s: Str) -> Str { unesc(s) }
+pub fn sx_split(s: Str, sep: Int) -> Strs { split(s, sep) }
+
 fn unesc(s: Str) -> Str {
     let out = strs_new();
     let n = str_len(s);

@@ -282,6 +282,14 @@
       facts 2,977 agree, 6 differ (carried 2,977, all agree — 5,619 functions, 516 records, 121
       enums and 20 re-exports documented by the reference among them); tokens, tree, syntax 2,982
       agree, 0 differ
+- [ ] 3.1zj R1.5 4.5 and 4.6 followed: `@std/option` and `@std/result` among the prelude's standard
+      modules, in `stdlib::PRELUDE`'s order (hash, hashmap, option, ordmap, result, sort, text), and
+      an interpolation's holes scanned for the names and methods they hold (`named_in`); a line
+      break separates two `match` arms as it ends a statement. `inputs/check/prelude-option-*.nz`,
+      `inputs/check/prelude-hole-only.nz`, `inputs/parse/match-arms-*.nz`. `run.sh`: tokens, tree
+      3,045 agree, 0 differ (1 not UTF-8, skipped), syntax likewise; check 3,044 agree, 2 differ
+      (the checker carries 3,040, all agree); render likewise; facts 3,040 agree, 6 differ (carried
+      3,040, all agree)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
