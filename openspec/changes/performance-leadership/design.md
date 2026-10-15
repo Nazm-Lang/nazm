@@ -36,3 +36,15 @@ Measured: 0.18 s, 20 MB peak, 61 KB executable for the comparison's input.
    cost; it must keep the heap limit's accounting and every memory test's live counts.
 4. **Probing** : a key's stored hash is compared before its bytes already; the remaining cost is
    the bounds checks on the table's vectors, which a proof of `index < len` would remove (phase 2).
+
+### After the split change (2026-10-15)
+
+Re-profiled at 151 ms (828 samples over ten copies): `text_split_end` 29% (a byte loop of about
+twelve instructions per byte — the length and pointer reloaded and the index bounds- and
+overflow-checked each step), `hashmap_find` 25%, `hashmap_set` + `at_or` 15%, `memcmp` 8%, the
+`Str` hash 6%, the program's own loop 7%. Linking every unit with LTO (`clang -flto`) gave only
+3.4% (151 → 146 ms): the cost is in the operations, not the calls between modules.
+
+Next, ranked: a `memchr`-backed byte search as a built-in for `text_split_end`, `text_find` and
+`text_lines` (a new built-in name, so an epoch); the probe's checks proved away (phase 2); a
+string equality that compares lengths and the first word inline before `memcmp`.
