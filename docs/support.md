@@ -81,6 +81,21 @@ archive where no `cargo` or `rustc` is reachable, then checks, runs, builds and 
 
 Nothing is uploaded or published: the archives are local, under `target/archives/`.
 
+### The toolchain's own tests on GitHub's hosts (since 2026-10-15)
+
+CI (`.github/workflows/ci.yml`) builds the toolchain and runs its host-safe test subset — not the
+contained gates — on GitHub's machines. This is evidence about **the toolchain as a host**, not a
+target made run-verified:
+
+| host | result |
+| --- | --- |
+| Linux x86_64 (`ubuntu-latest`) | passes, the required job |
+| Linux ARM64 (`ubuntu-24.04-arm`) | passed on its first run (`c86f2f81`) |
+| macOS ARM64 (`macos-latest`) | three wasm tests failed only for Apple's clang lacking the wasm target; Homebrew's LLVM installed since `27923d5d` |
+| Windows x86_64 (`windows-latest`) | **the toolchain does not build**: `nazm-core`'s interpreter uses Unix file descriptors (`std::os::fd`, `std::os::unix`) for files, processes and sockets. A Windows host is a port, not yet started |
+
+The three new jobs gather evidence (`continue-on-error`) until each is green once.
+
 ## Not supported, by decision
 
 | | |
