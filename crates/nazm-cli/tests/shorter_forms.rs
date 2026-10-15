@@ -709,7 +709,11 @@ fn main() {
             .matches(&format!("\"callee\": \"@std/text::fn {name}\""))
             .count()
     };
-    assert_eq!(calls("text_split_end"), 2, "each loop reads its pieces one at a time");
+    assert_eq!(
+        calls("text_split_end"),
+        2,
+        "each loop reads its pieces one at a time"
+    );
     // `text_split` is called as often as in a program with no loop over one: only inside
     // `@std/text` itself, never by the program's loops.
     let in_loops = calls("text_split");
