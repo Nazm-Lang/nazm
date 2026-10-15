@@ -1610,3 +1610,20 @@ hands it to them. D2's flag table is the long-term cost: every kernel generation
 - **Totals, for planning:** C 24–35k lines and 24–33 weeks; M 14–21k and 14–21 weeks to its gate;
   D 17–25k and 17–24 weeks — about 55–81k lines and 55–78 track-weeks for the three, beside H's
   23–34 and Q's 15–21.
+
+## Decisions on C, M and D (2026-10-15)
+
+**The copyright holder's:**
+1. **Driver licensing:** the driver runtime and the C shim templates are licensed under MIT as well
+   (the compiler stays Apache-2.0 WITH LLVM-exception), and driver samples declare "Dual MIT/GPL".
+   This joins the open CLA and licence legal review before anything is published.
+2. **Testing the Windows driver on the Dell:** decided when track D reaches it; until then the
+   Windows driver is built and checked statically, not loaded.
+
+**Delegated, taken on the designs' recommendations:** OpenSSL 3 on Linux and macOS with Apple's trust
+evaluation, SChannel on Windows; protocols and operations in `@std`, frameworks as packages; programs
+may watch for termination signals (amending the 1.0 non-claim, for graceful shutdown); musl targets
+for static executables; WASI services on WASI 0.2, experimental at 1.0; the Raspberry Pi Pico 2 with
+its Debug Probe and an ESP32-C3-DevKitM-1; probe-rs on the Mac host; Float64 refused on the MCUs at
+1.0; a hardware watchdog behind `[watchdog]` where a board has one; no production driver signing in
+1.0; drivers refuse every possible trap.
