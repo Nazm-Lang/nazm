@@ -164,6 +164,15 @@ prelude, only where no `use` names the module — whose names yield, silently, t
 and to a written import's (types, functions, traits). A map literal, whose calls the parser
 writes, still stops the checker.
 
+**D17 — Numbers are computed exactly, floats not at all.** The checker is written in `Int`, so a
+constant's integer value of any type is a `numeric::Wide` of its own: a sign and sixteen 16-bit
+limbs, enough for the product of two 128-bit values, so `checked_add`, `checked_mul`, the
+truncating quotient and remainder, two's-complement bit operators and shifts give the reference's
+answer and its refusal (N0003, N0622, N0623) without passing `Int`'s range; an `Int` constant
+keeps its value as an `Int`, any other as its decimal digits. A float is never computed: a float
+constant has its type and no value, and where a value would decide something — a float compared,
+converted to an integer, or a shift's amount — the checker stops rather than guess IEEE 754.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
