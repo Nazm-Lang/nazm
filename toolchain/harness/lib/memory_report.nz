@@ -1,0 +1,144 @@
+// The memory report a run prints with `NAZM_MEMORY_REPORT` set, read into numbers (R7): what each
+// class of storage allocated, reclaimed and left live — `crates/nazm-cli/tests/memory_report/`.
+
+use "@std/file";
+use "@std/sort";
+use "@std/text";
+use "run.nz";
+use "scratch.nz";
+use "strings.nz";
+use "differential.nz";
+
+/// What one class of storage did in one run.
+pub struct Class {
+    allocated: Int,
+    reclaimed: Int,
+    live: Int,
+}
+
+/// What one run reported: its value, and what it did with each class of storage.
+pub struct Counted {
+    value: Str,
+    sequences: Class,
+    strings: Class,
+    channels: Class,
+}
+
+fn field(words_: Strs, at: Int, prefix: Str, name: Str, line: Str) -> Result[Int, Str] ! {} {
+    if at < strs_len(words_) {
+        let w = strs_get(words_, at);
+        if text_starts_with(w, prefix) {
+            let n = parse_usize(str_slice(w, str_len(prefix), str_len(w)));
+            if n >= 0 {
+                return Result[Int, Str].Ok(value: n);
+            }
+        }
+    }
+    Result[Int, Str].Err(error: f"no `{prefix}` after `{name}` in: {line}")
+}
+
+fn class(words_: Strs, name: Str, line: Str) -> Result[Class, Str] ! {} {
+    let mut at = 0 - 1;
+    let mut i = 0;
+    while i < strs_len(words_) && at < 0 {
+        if strs_get(words_, i) == name {
+            at = i;
+        }
+        i = i + 1;
+    }
+    if at < 0 {
+        return Result[Class, Str].Err(error: f"no `{name}` in: {line}");
+    }
+    Result[Class, Str].Ok(value: Class(allocated: field(words_, at + 1, "allocated=", name, line)?, reclaimed: field(words_, at + 2, "reclaimed=", name, line)?, live: field(words_, at + 3, "live=", name, line)?))
+}
+
+/// Read `<class> allocated=… reclaimed=… live=…` for sequences, strings and channels, by the
+/// class word — the three use the same field names.
+pub fn counts(stderr: Str, value: Str) -> Result[Counted, Str] ! {} {
+    let mut line = "";
+    for l in lines(stderr) {
+        if str_len(line) == 0 && text_starts_with(l, "nazm-memory:") {
+            line = l;
+        }
+    }
+    if str_len(line) == 0 {
+        return Result[Counted, Str].Err(error: f"no memory report in: {stderr}");
+    }
+    let ws = split_whitespace(line);
+    Result[Counted, Str].Ok(value: Counted(value: value, sequences: class(ws, "sequences", line)?, strings: class(ws, "strings", line)?, channels: class(ws, "channels", line)?))
+}
+
+fn class_show(c: Class) -> Str ! {} {
+    f"Class {{ allocated: {c.allocated}, reclaimed: {c.reclaimed}, live: {c.live} }}"
+}
+
+/// `c` as the Rust `Debug` of `Ran` shows it, for an assertion's message.
+pub fn counted_show(c: Counted) -> Str ! {} {
+    f"Ran {{ value: {c.value}, sequences: {class_show(c.sequences)}, strings: {class_show(c.strings)}, channels: {class_show(c.channels)} }}"
+}
+
+fn same_class(a: Class, b: Class) -> Bool ! {} {
+    a.allocated == b.allocated && a.reclaimed == b.reclaimed && a.live == b.live
+}
+
+/// Two runs reported one value and the same storage, class for class: `assert_eq!` on `Ran`.
+pub fn same_counted(a: Counted, b: Counted) -> Bool ! {} {
+    a.value == b.value && same_class(a.sequences, b.sequences) && same_class(a.strings, b.strings) && same_class(a.channels, b.channels)
+}
+
+/// `source` as `m.nz`: interpret it, compile and run it at `-O0` and at `-O2`, require all three to agree about
+/// everything, and what they agree on to be `expected`, with nothing left live.
+pub fn agree(h: Caps, source: Str, expected: Str) -> Result[Counted, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", source)?;
+    let r = agree_in(h, d, source, expected);
+    scratch_remove(h, d);
+    r
+}
+
+fn agree_in(h: Caps, d: Str, source: Str, expected: Str) -> Result[Counted, Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let interpreted = run(h, nazm_bin(h.io), words("run --interpret m.nz"), d, env);
+    check_that(interpreted.code == 0, f"interpreting: {interpreted.stderr}\n{source}")?;
+    let a = counts(interpreted.stderr, text_trim(interpreted.stdout))?;
+    check_that(a.value == expected, f"the interpreter's answer: {a.value}\n{source}")?;
+    for level in words("0 2") {
+        let built = nazm(h, d, words(f"build m.nz -o prog --no-cache --opt-level {level}"));
+        check_that(built.code == 0, f"building at -O{level} failed: {built.stderr}\n{source}")?;
+        let native = run(h, f"{d}/prog", strs_new(), d, env);
+        check_that(native.code == 0, f"the program at -O{level}: {native.stderr}\n{source}")?;
+        let b = counts(native.stderr, text_trim(native.stdout))?;
+        check_that(same_counted(a, b), f"the two implementations disagree at -O{level}: {counted_show(a)} vs {counted_show(b)}\n{source}")?;
+    }
+    check_that(a.sequences.live == 0 && a.sequences.allocated == a.sequences.reclaimed, f"sequences: {counted_show(a)}")?;
+    check_that(a.strings.live == 0 && a.strings.allocated == a.strings.reclaimed, f"strings: {counted_show(a)}")?;
+    check_that(a.channels.live == 0 && a.channels.allocated == a.channels.reclaimed, f"channels: {counted_show(a)}")?;
+    Result[Counted, Str].Ok(value: a)
+}
+
+/// The IR `nazm build --emit-ir` writes for `source`: every unit, in name order.
+pub fn ir_of(h: Caps, source: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", source)?;
+    let built = nazm(h, d, words("build m.nz -o prog --emit-ir --no-cache"));
+    let names = match dir_list(h.io, d) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => strs_new(),
+    };
+    let lls = strs_new();
+    for n in names {
+        if text_ends_with(n, ".ll") {
+            strs_push(lls, n);
+        }
+    }
+    let texts = strs_new();
+    for n in strs_sort(lls) {
+        match read_text(h, f"{d}/{n}") {
+            Result.Ok(value: t) => strs_push(texts, t),
+            Result.Err(error: e) => 0,
+        };
+    }
+    scratch_remove(h, d);
+    check_that(built.code == 0, f"building failed: {built.stderr}")?;
+    check_that(strs_len(texts) > 0, "no IR was emitted")?;
+    Result[Str, Str].Ok(value: str_join(texts, ""))
+}
+
