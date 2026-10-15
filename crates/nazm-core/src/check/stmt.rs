@@ -384,7 +384,7 @@ impl Checker<'_> {
             ];
             self.unwanted = true;
             if self
-                .element_by_name(binding.ty, "set", *span, args, None)
+                .element_by_name(binding.ty, "set", *span, args, Vec::new(), None)
                 .is_some()
             {
                 return;

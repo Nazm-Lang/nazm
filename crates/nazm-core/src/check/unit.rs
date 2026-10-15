@@ -667,6 +667,7 @@ pub fn check_unit(
         loop_depth: 0,
         discard_tail: false,
         unwanted: false,
+        checked: Vec::new(),
         defer_floor: None,
         type_scope: Vec::new(),
         closures: Vec::new(),

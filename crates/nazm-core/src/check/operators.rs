@@ -336,6 +336,7 @@ impl Checker<'_> {
                 "get",
                 bracket,
                 vec![base.clone(), index.clone()],
+                vec![(base.span(), bt)],
                 expected,
             ) {
                 return t;
@@ -490,10 +491,9 @@ impl Checker<'_> {
             };
             if self.env.get("str_concat").is_some() {
                 self.res.record_named_method(op_span);
-                return match self.check_expr(&call, expected) {
-                    Completion::Value(t) => t,
-                    Completion::Unit | Completion::Diverges => Type::Str,
-                };
+                // Both operands are checked already: the call reads their types.
+                let t = self.check_again(&[(lhs.span(), lt), (rhs.span(), rt)], &call, expected);
+                return t.unwrap_or(Type::Str);
             }
         }
         self.check_binary(
@@ -763,6 +763,7 @@ impl Checker<'_> {
         op: &str,
         bracket: Span,
         mut args: Vec<Expr>,
+        checked: Vec<(Span, Type)>,
         expected: Option<Type>,
     ) -> Option<Type> {
         let name = match of {
@@ -801,9 +802,37 @@ impl Checker<'_> {
             span: bracket,
         };
         self.res.record_named_method(bracket);
-        Some(match self.check_expr(&call, expected) {
-            Completion::Value(t) => t,
-            Completion::Unit | Completion::Diverges => expected.unwrap_or(Type::Int),
-        })
+        // The sequence is checked already where it is read (`check_index`): the call reads its
+        // type.
+        let t = self.check_again(&checked, &call, expected);
+        Some(t.unwrap_or(expected.unwrap_or(Type::Int)))
+    }
+
+    /// Check `call`, a desugaring's, whose arguments include `checked` — expressions checked
+    /// already, with their types — without checking those again ([`Checker::checked`]).
+    /// `None` when the call completes with no value.
+    pub(super) fn check_again(
+        &mut self,
+        checked: &[(Span, Type)],
+        call: &Expr,
+        expected: Option<Type>,
+    ) -> Option<Type> {
+        let mark = self.checked.len();
+        self.checked.extend_from_slice(checked);
+        let c = self.check_expr(call, expected);
+        self.checked.truncate(mark);
+        match c {
+            Completion::Value(t) => Some(t),
+            Completion::Unit | Completion::Diverges => None,
+        }
+    }
+
+    /// The type of the expression at `span` when it is one checked already and not yet taken.
+    pub(super) fn take_checked(&mut self, span: Span) -> Option<Type> {
+        if self.checked.is_empty() {
+            return None;
+        }
+        let i = self.checked.iter().rposition(|(s, _)| *s == span)?;
+        Some(self.checked.remove(i).1)
     }
 }

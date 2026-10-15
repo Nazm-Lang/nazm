@@ -465,6 +465,13 @@ pub struct Checker<'a> {
     /// produces nothing (R1, 5b.19); a call there may be of a function that returns nothing
     /// (R1, 5b.2).
     unwanted: bool,
+    /// Expressions checked already, with their types, that a desugaring is about to check again
+    /// as the arguments of the call it is read as: `s + t` as `str_concat(s, t)`, `x.m()` as
+    /// `<type>_m(x)`, `xs[i]` as `vec_get(xs, i)`. Each is taken by the first check that meets
+    /// its span, which answers its type without walking it again — so a chain of such forms is
+    /// checked once, not twice at every link (a `+` chain of thirty `Str`s took minutes and
+    /// gigabytes). Everything its first check recorded stands.
+    checked: Vec<(Span, Type)>,
     /// The loop depth where the `defer` body being checked begins (R1b, L12), or `None` outside
     /// one: a `break` or `continue` at that depth, a `return` or a `?` would leave it.
     defer_floor: Option<u32>,

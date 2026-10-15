@@ -12,6 +12,10 @@ impl Checker<'_> {
     /// unknowable, it is returned so the caller does not then report a second, invented
     /// mismatch.
     pub(super) fn check_expr(&mut self, e: &Expr, expected: Option<Type>) -> Completion {
+        if let Some(t) = self.take_checked(e.span()) {
+            self.unwanted = false;
+            return Completion::Value(t);
+        }
         let unwanted = std::mem::take(&mut self.unwanted);
         match e {
             Expr::Int { value, span } => {
