@@ -1,0 +1,6 @@
+// Statics are storage, their own module's (Gate 3): never exported, so an importer cannot name
+// one, plainly or under its module's name.
+pub static LEVEL: Int = 3;
+pub const SHARED: Int = LEVEL + 1;
+static CELL: Atomic = atomic_new(0);
+pub fn level() -> Int { LEVEL + atomic_load(CELL) }
