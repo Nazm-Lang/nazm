@@ -1122,7 +1122,7 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
             let l = vec_get(f.locals, i)
             vec_push(locals, LocalDecl(ty: l.ty, name: l.name, origin: "param"))
         }
-        return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, export: f.export, locals: locals, blocks: vec_new()))
+        return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, export: f.export, module: f.module, def: f.def, node: f.node, captures: f.captures, locals: locals, blocks: vec_new()))
     }
     let reg = ints_new()
     ints_push(reg, 0 - 1)
@@ -1165,5 +1165,5 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     finish_unwind(fx)
     let blocks = finish_blocks(fx)
     if strs_len(fx.err) > 0 { return Err(strs_get(fx.err, 0)) }
-    Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: fx.ret, type_args: args, foreign: "", export: f.export, locals: locals, blocks: blocks))
+    Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: fx.ret, type_args: args, foreign: "", export: f.export, module: f.module, def: f.def, node: f.node, captures: f.captures, locals: locals, blocks: blocks))
 }

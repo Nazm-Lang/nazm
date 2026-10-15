@@ -93,12 +93,21 @@ that text's digest (`lir`). The tables are functions of MIR and `/3` (`modules`,
   `file:line:column` (`nazm: error[N0400]: … at fib.nz:2:33`). Core IR carries byte spans
   (`"at": "fib.nz:313..317"`), not lines and columns: the stage needs each module's source text
   (or a line table) to convert them. Requested: a `source` member per `/3` module, or a read-only
-  `--with-sources` option on `nazm core-ir`.
+  `--with-sources` option on `nazm core-ir`. Until then the stage can read the files itself (the
+  root's directory, `library/` for `@std` and `@core`), which ties it to a checkout. The MIR this
+  stage builds must also carry each statement's span (Rust's `s.at`, `callee_at`), which it does
+  not yet: the first step of 6.3.
 - **Types the checker never interned.** A unit lists its records and enums by the checker's ids.
   A concrete type that appears only once MIR substitutes an instance's arguments (a `Pair[T]`
   inside `f[T]`, called at `Int`) has no `/3` entry and so no id; the Rust lowering interns it then.
   Until a difference shows which order that is, such a type sorts after every listed one, in the
-  order MIR first meets it.
+  order MIR first meets it. No input of the 1009 with LIR shows one: every unit's records and
+  enums agree, ids included.
+
+The tables are compared now (`run.sh`, *lir tables*): `nazm lir`'s document with each unit's
+`lir` member — the instruction text and its digest, 6.3 — taken out, every other byte compared.
+Function types are spelled inside the stage as `?fn(PARAMS) -> RET` (MIR's text still names them
+`?`), so a `Vec[fn(Int) -> Int]` is named as the checker shows it.
 
 ## Order of work
 
