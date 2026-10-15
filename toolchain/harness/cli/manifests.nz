@@ -1,0 +1,180 @@
+// Gate 3: board manifests (`docs/spec.md`, *Boards*; `docs/systems-domains.md` Part B). A
+// manifest's load address and stack reach the linker script and the stack bound; a key it does not
+// know, a value of the wrong kind or out of range, and an instruction set that is not the target's
+// are refused by name (`N0626`). Ported from `crates/nazm-cli/tests/manifests.rs` (R7).
+//
+// The Rust test of the built-in boards reads `nazm_lir::runtime::board::BOARDS[0].manifest()`;
+// `nazm inspect` prints every board's manifest (`toolchain.boards[].manifest`), so the port reads
+// it there. `an_image_for_a_manifests_board_boots_under_qemu` is `#[ignore]`d for a container and
+// stays Rust (design decision 10).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const PROGRAM: Str = "fn main(m: MmioCap) -> Int ! {} { 7 }\n";
+
+/// QEMU `virt`'s AArch64 board, loaded 1 MiB higher, with a 32 KiB stack.
+const MOVED: Str = "name = \"virt, loaded higher\"\nisa = \"aarch64\"\nload_address = 0x40180000\nstack = 0x8000\n\n[uart]\nkind = \"pl011\"\naddress = 0x9000000\n\n[stop]\nkind = \"semihosting\"\n";
+
+/// A build's directory and run.
+struct Built {
+    dir: Str,
+    ran: Ran,
+}
+
+/// A build for `target` with `manifest` as `board.toml`.
+fn build(h: Caps, manifest: Str, target: Str) -> Result[Built, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    scratch_write(h, d, "board.toml", manifest)?;
+    let r = nazm(h, d, words(f"build --target {target} --board board.toml --objects o prog.nz"));
+    Result[Built, Str].Ok(value: Built(dir: d, ran: r))
+}
+
+@test
+fn a_manifests_load_address_and_stack_reach_the_script_and_the_bound(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let b = build(h, MOVED, "aarch64-unknown-none")?;
+    check_that(b.ran.code == 0, b.ran.stderr)?;
+    let script = read_text(h, f"{b.dir}/o/link.ld")?;
+    check_that(text_contains(script, ". = 0x40180000;"), script)?;
+    check_that(text_contains(script, ". = . + 0x8000;"), script)?;
+    let bounds = read_text(h, f"{b.dir}/o/bounds.json")?;
+    scratch_remove(h, b.dir);
+    check_that(text_contains(bounds, "32768"), bounds)
+}
+
+@test
+fn every_built_in_board_is_a_manifest_that_builds_as_itself(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let e = prog_dir(h, "m.nz", "fn main() -> Int { 0 }\n")?;
+    let i = nazm(h, e, words("inspect m.nz"));
+    scratch_remove(h, e);
+    check_that(i.code == 0, ran_show(i))?;
+    let inv = jparse(i.stdout)?;
+    let manifest = jstr(inv, "toolchain/boards/0/manifest");
+    let triple = jstr(inv, "toolchain/boards/0/triple");
+    check_that(manifest != "" && triple != "", jv(inv, "toolchain/boards/0"))?;
+    let b = build(h, manifest, triple)?;
+    check_that(b.ran.code == 0, b.ran.stderr)?;
+    let with = read_text(h, f"{b.dir}/o/link.ld")?;
+    let r = nazm(h, b.dir, words(f"build --target {triple} --objects p prog.nz"));
+    check_that(r.code == 0, r.stderr)?;
+    let without = read_text(h, f"{b.dir}/p/link.ld")?;
+    scratch_remove(h, b.dir);
+    check_that(with == without, f"{with}\n---\n{without}")
+}
+
+/// `MOVED` with `change` applied: a key added or replaced, or a table replaced whole.
+fn edited(change: Str) -> Str ! {} {
+    if text_starts_with(change, "[") {
+        let table = strs_get(text_lines(change), 0);
+        let out = strs_new();
+        let mut skipping = false;
+        for line in text_lines(MOVED) {
+            let mut take = true;
+            if text_starts_with(line, "[") {
+                skipping = line == table;
+                if skipping {
+                    strs_push(out, change);
+                    take = false;
+                }
+            }
+            if take && !skipping {
+                strs_push(out, f"{line}\n");
+            }
+        }
+        let joined = str_join(out, "");
+        if !text_contains(joined, table) {
+            return f"{joined}{change}";
+        }
+        return joined;
+    }
+    let key = strs_get(text_split(change, " "), 0);
+    let out = strs_new();
+    strs_push(out, change);
+    for l in text_lines(MOVED) {
+        if !text_starts_with(l, f"{key} ") {
+            strs_push(out, f"{l}\n");
+        }
+    }
+    str_join(out, "")
+}
+
+@test
+fn a_manifest_it_cannot_honour_is_refused_naming_the_key(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let changes = strs_new();
+    let keys = strs_new();
+    strs_push(changes, "color = \"red\"\n");
+    strs_push(keys, "`color`");
+    strs_push(changes, "isa = \"riscv64\"\n");
+    strs_push(keys, "`isa`");
+    strs_push(changes, "isa = \"mips\"\n");
+    strs_push(keys, "`isa`");
+    strs_push(changes, "stack = 0x10\n");
+    strs_push(keys, "`stack`");
+    strs_push(changes, "stack = 0x1001\n");
+    strs_push(keys, "`stack`");
+    strs_push(changes, "load_address = -1\n");
+    strs_push(keys, "`load_address`");
+    strs_push(changes, "load_address = \"high\"\n");
+    strs_push(keys, "`load_address`");
+    strs_push(changes, "[uart]\nkind = \"usb\"\naddress = 0x9000000\n");
+    strs_push(keys, "`uart.kind`");
+    strs_push(changes, "[uart]\nkind = \"pl011\"\nbaud = 9600\naddress = 1\n");
+    strs_push(keys, "`uart.baud`");
+    strs_push(changes, "[stop]\nkind = \"semihosting\"\naddress = 4\n");
+    strs_push(keys, "`stop.address`");
+    strs_push(changes, "[stop]\nkind = \"sifive-test\"\n");
+    strs_push(keys, "`stop.address`");
+    strs_push(changes, "[heap]\nsize = 0\n");
+    strs_push(keys, "`heap.size`");
+    strs_push(changes, "[heap]\nsize = 4096\nalign = 8\n");
+    strs_push(keys, "`heap.align`");
+    strs_push(changes, "not toml at all [");
+    strs_push(keys, "the file");
+    let mut k = 0;
+    while k < strs_len(changes) {
+        let change = strs_get(changes, k);
+        let key = strs_get(keys, k);
+        let b = build(h, edited(change), "aarch64-unknown-none")?;
+        scratch_remove(h, b.dir);
+        check_that(b.ran.code == 1, f"{change}: {ran_show(b.ran)}")?;
+        check_that(text_contains(b.ran.stderr, "N0626"), f"{change}: {b.ran.stderr}")?;
+        check_that(text_contains(b.ran.stderr, key), f"{change}: {b.ran.stderr}")?;
+        k = k + 1;
+    }
+    // Missing a table it needs.
+    let m = build(h, "name = \"x\"\nisa = \"aarch64\"\nload_address = 0x40080000\n[stop]\nkind = \"semihosting\"\n", "aarch64-unknown-none")?;
+    scratch_remove(h, m.dir);
+    check_that(text_contains(m.ran.stderr, "`uart`"), m.ran.stderr)?;
+    // A RISC-V board stops through the SiFive test device, not semihosting.
+    let rv = "name = \"rv\"\nisa = \"riscv64\"\nload_address = 0x80000000\n\n[uart]\nkind = \"ns16550a\"\naddress = 0x10000000\n\n[stop]\nkind = \"semihosting\"\n";
+    let r = build(h, rv, "riscv64gc-unknown-none-elf")?;
+    scratch_remove(h, r.dir);
+    check_that(r.ran.code == 1, ran_show(r.ran))?;
+    check_that(text_contains(r.ran.stderr, "`stop.kind`"), r.ran.stderr)
+}
+
+@test
+fn board_needs_a_boards_target_and_a_file_that_is_there(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w = build(h, MOVED, "wasm32-unknown-unknown")?;
+    scratch_remove(h, w.dir);
+    check_that(w.ran.code == 5, ran_show(w.ran))?;
+    check_that(text_contains(w.ran.stderr, "--board"), w.ran.stderr)?;
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let r = nazm(h, d, words("build --target aarch64-unknown-none --board absent.toml --objects o prog.nz"));
+    check_that(r.code == 3, ran_show(r))?;
+    // A runtime artifact is a built-in board's: with another board's manifest, refused by name.
+    scratch_write(h, d, "board.toml", MOVED)?;
+    let q = nazm(h, d, words("build --target aarch64-unknown-none --board board.toml --runtime rt --objects o prog.nz"));
+    scratch_remove(h, d);
+    check_that(q.code == 5, ran_show(q))?;
+    check_that(text_contains(q.stderr, "--runtime"), q.stderr)
+}

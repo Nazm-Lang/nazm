@@ -8,8 +8,10 @@
 #   toolchain/harness/tests/run.sh tests F…   only the CLI test files named (`line_breaks` …)
 #   toolchain/harness/tests/run.sh checks     only the gates
 #
-# Prints one line per comparison and ends with `N agree, M differ`; exits 1 when anything
-# differs or a Rust run could not be made.
+# Prints one line per comparison and ends with `N agree, M differ, stays Rust (K)`; exits 1 when
+# anything differs or a Rust run could not be made. A Rust test named in `tests/stays-rust.txt`
+# reaches a Rust API the CLI does not offer: it is counted as staying Rust, never as agreeing, and
+# it must have no port (the list is revisited after the cut-over, R8).
 #
 # Environment:
 #   HARNESS_NAZM      the `nazm` that builds and runs the harness (default: the 0.10.0 release)
@@ -35,11 +37,28 @@ only=("$@")
 
 agree=0
 differ=0
+stays=0
+stays_list="$here/tests/stays-rust.txt"
 log=$(mktemp -d "${TMPDIR:-/tmp}/r7-run.XXXXXX")
 trap 'rm -rf "$log"' EXIT
 
 note_agree() { agree=$((agree + 1)); printf 'agree   %s\n' "$1"; }
 note_differ() { differ=$((differ + 1)); printf 'DIFFER  %s\n' "$1"; }
+note_stays() { stays=$((stays + 1)); printf 'rust    %s\n' "$1"; }
+
+# The reason `FILE::TEST` is listed as staying Rust, or nothing.
+stays_reason() {
+    [ -f "$stays_list" ] || return
+    awk -v n="$1" '$1 == n { $1 = ""; sub(/^ +/, ""); print; exit }' "$stays_list"
+}
+
+# The files the list names that have no port at all (every test of theirs stays Rust).
+stays_only_files() {
+    [ -f "$stays_list" ] || return
+    sed -nE 's/^([a-z0-9_]+)::.*/\1/p' "$stays_list" | sort -u | while read -r f; do
+        [ -f "$here/cli/$f.nz" ] || echo "$f"
+    done
+}
 
 # --- the CLI test files ----------------------------------------------------------------------
 
@@ -48,8 +67,10 @@ binary_of() {
     grep -l "^mod $1;" crates/nazm-cli/tests/cli_*.rs 2>/dev/null | head -1 | sed 's|.*/||; s|\.rs$||'
 }
 
-# `NAME pass|fail` for every `@test` of a ported file, from `nazm test --json`.
+# `NAME pass|fail` for every `@test` of a ported file, from `nazm test --json` (nothing for a
+# file with no port).
 nazm_verdicts() {
+    [ -f "$here/cli/$1.nz" ] || return
     "$HARNESS_NAZM" test --json "$here/cli/$1.nz" 2>/dev/null \
         | grep '"schema":"nazm.test/1"' \
         | sed -E 's/.*"name":"([^"]*)".*"passed":(true|false).*/\1 \2/' \
@@ -91,6 +112,7 @@ compare_tests() {
         for f in "${only[@]}"; do files+=("$here/cli/$f.nz"); done
     else
         files=("$here"/cli/*.nz)
+        while read -r f; do files+=("$here/cli/$f.nz"); done < <(stays_only_files)
     fi
     for f in "${files[@]}"; do
         local file bin
@@ -101,11 +123,21 @@ compare_tests() {
         nazm_verdicts "$file" >"$log/$file.nazm"
         if [ ! -s "$log/$file.rust" ]; then note_differ "$file: the Rust tests did not run"; continue; fi
         while read -r name verdict; do
-            local got
+            local got why
             got=$(awk -v n="$name" '$1 == n { print $2 }' "$log/$file.nazm")
-            if [ "$got" = "$verdict" ]; then note_agree "$name ($verdict)"; else
+            why=$(stays_reason "$name")
+            if [ -n "$why" ]; then
+                if [ -n "$got" ]; then note_differ "$name: listed as staying Rust, and ported"
+                else note_stays "$name ($verdict; $why)"; fi
+            elif [ "$got" = "$verdict" ]; then note_agree "$name ($verdict)"; else
                 note_differ "$name: rust $verdict, nazm ${got:-missing}"; fi
         done <"$log/$file.rust"
+        # A test the list keeps in Rust that the Rust file does not have is a stale entry.
+        if [ -f "$stays_list" ]; then
+            while read -r name _; do
+                grep -q "^$name " "$log/$file.rust" || note_differ "$name: listed as staying Rust, and no Rust test has this name"
+            done < <(grep "^$file::" "$stays_list")
+        fi
         # A Nazm test with no Rust test of its name is a port that invented something.
         while read -r name _; do
             grep -q "^$name " "$log/$file.rust" || note_differ "$name: no Rust test of this name"
@@ -158,5 +190,5 @@ case $what in
     *) echo "usage: $0 [all|tests|checks]" >&2; exit 2 ;;
 esac
 
-echo "$agree agree, $differ differ"
+echo "$agree agree, $differ differ, stays Rust ($stays)"
 [ "$differ" -eq 0 ]

@@ -64,6 +64,19 @@ pub fn find(s: Str, p: Str) -> Int ! {} {
     find_from(s, p, 0)
 }
 
+/// `s.rfind(p)`: the byte offset of the last occurrence, or `-1`.
+pub fn rfind(s: Str, p: Str) -> Int ! {} {
+    let n = str_len(p);
+    let mut i = str_len(s) - n;
+    while i >= 0 {
+        if str_slice(s, i, i + n) == p {
+            return i;
+        }
+        i = i - 1;
+    }
+    0 - 1
+}
+
 /// `s.split(sep)`, every piece, empty ones included (`text_split`'s meaning, said here once).
 pub fn split(s: Str, sep: Str) -> Strs ! {} {
     let out = strs_new();
