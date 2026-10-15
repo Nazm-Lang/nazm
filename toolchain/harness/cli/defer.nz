@@ -1,0 +1,106 @@
+// R1b, L12: `defer` (`docs/spec.md`, *Defer*). Deferred blocks run on every way out — the block's
+// end, `return`, `break`, `continue`, `?` — in reverse order, everywhere, nothing live; a deferred
+// body leaves nothing; and it sees what is assigned after it. Ported from
+// `crates/nazm-cli/tests/defer.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn defers() -> Str ! {} {
+    r#"fn say(out: OutCap, s: Str) -> Int ! {io} { print(s) }
+
+fn order(out: OutCap) -> Int ! {io} {
+    defer { say(out, "a"); }
+    defer { say(out, "b"); }
+    { defer { say(out, "inner"); } say(out, "[block]"); }
+    say(out, "[body]");
+    0
+}
+
+fn early(out: OutCap, n: Int) -> Int ! {io} {
+    defer { say(out, "E"); }
+    if n > 1 { return n * 10; }
+    defer { say(out, "F"); }
+    n
+}
+
+fn loops(out: OutCap) -> Int ! {io} {
+    let mut i = 0;
+    while i < 4 {
+        defer { say(out, num_to_str(i)); }
+        i = i + 1;
+        if i == 2 { continue; }
+        if i == 3 { break; }
+        say(out, ".");
+    }
+    i
+}
+
+fn parse(s: Str) -> Result[Int, Str] { if str_len(s) > 0 { Result[Int, Str].Ok(value: str_len(s)) } else { Result[Int, Str].Err(error: "empty") } }
+
+fn tries(out: OutCap, s: Str) -> Result[Int, Str] ! {io} {
+    defer { say(out, "T"); }
+    let n = parse(s)?;
+    Result[Int, Str].Ok(value: n + 1)
+}
+
+fn main(out: OutCap) -> Int ! {io} {
+    order(out); say(out, "\n");
+    say(out, num_to_str(early(out, 5))); say(out, "|");
+    say(out, num_to_str(early(out, 1))); say(out, "\n");
+    say(out, num_to_str(loops(out))); say(out, "\n");
+    let a = match tries(out, "abc") { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };
+    let b = match tries(out, "") { Result.Ok(value: v) => v, Result.Err(error: e) => 0 - 1, };
+    say(out, str_concat(num_to_str(a), num_to_str(b))); say(out, "\n");
+    0
+}
+"#
+}
+
+@test
+fn deferred_blocks_run_on_every_way_out_everywhere_and_nothing_is_live(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, defers(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, "[block]inner[body]ba\nE50|FE1\n.1233\nTT4-1\n"), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn codes_are(h: Caps, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    let got = str_join(r.codes, " ");
+    check_that(got == want, f"{src}: [{got}], expected [{want}]")
+}
+
+@test
+fn a_deferred_body_leaves_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    codes_are(h, "fn main() -> Int { defer { return 1; } 0 }\n", "N0631")?;
+    codes_are(h, "fn main() -> Int { let mut i = 0; while i < 3 { defer { break; } i = i + 1; } 0 }\n", "N0631")?;
+    codes_are(h, "fn f() -> Result[Int, Str] { defer { let x = Result[Int, Str].Ok(value: 1)?; } Result[Int, Str].Ok(value: 2) }\nfn main() -> Int { 0 }\n", "N0631")?;
+    // Its last line's value is discarded, as a loop body's is (R1, 5b.19).
+    codes_are(h, "fn main() -> Int { defer { 5 } 0 }\n", "")?;
+    // So its branches need not agree, as a statement `if`'s need not.
+    codes_are(h, "fn main() -> Int { defer { if 1 < 2 { 5 } else { \"five\" } } 0 }\n", "")?;
+    // A loop inside the body may leave itself; a closure inside it may return.
+    codes_are(h, "fn main() -> Int { defer { let mut j = 0; while j < 2 { j = j + 1; if j == 1 { continue; } break; } } 0 }\n", "")?;
+    codes_are(h, "fn main() -> Int { defer { let f = fn() -> Int { return 3; }; f(); } 0 }\n", "")?;
+    // A name everywhere else, as in 1.0.
+    codes_are(h, "fn main() -> Int { let defer = 2; defer }\n", "")
+}
+
+@test
+fn a_deferred_body_sees_what_is_assigned_after_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file's contents assigned after the `defer` reach the write it makes as its block ends.
+    codes_are(h, "fn main(io: IoCap) -> Int ! { io } { let mut p = \"out.txt\"; { defer { write_file(p, \"x\"); } p = read_file(\"cfg\"); } 0 }\n", "N0372")?;
+    codes_are(h, "fn main(io: IoCap) -> Int ! { io } { let mut p = \"out.txt\"; { defer { write_file(p, \"x\"); } p = \"b.txt\"; } 0 }\n", "")
+}

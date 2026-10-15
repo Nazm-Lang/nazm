@@ -1,0 +1,192 @@
+// R1, 5b.1, 5b.3 and 5b.5 (`docs/spec.md`, *What `main` holds, and how it ends*): hello world is
+// one line and prints only what it prints; `main`'s result is the exit status everywhere; a function
+// with no result type returns nothing; what `main` holds is checked; a private function declares no
+// effects; and a build and `inspect` say what the program may touch. Ported from
+// `crates/nazm-cli/tests/main_ends.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// Every implementation's run of `names[0]`, as a user runs it: without the result report.
+fn as_users_run(h: Caps, names: Strs, texts: Strs) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i < strs_len(names) {
+        scratch_write(h, d, strs_get(names, i), strs_get(texts, i))?;
+        i = i + 1;
+    }
+    let main = strs_get(names, 0);
+    let quiet = env_unset(env_here(h.io), "NAZM_RESULT_REPORT");
+    let out = vec_new[Labeled]();
+    let a = strs_new();
+    strs_push(a, "run");
+    strs_push(a, main);
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), a, d, quiet)));
+    let b = strs_new();
+    strs_push(b, "lir");
+    strs_push(b, "--run");
+    strs_push(b, main);
+    vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), b, d, quiet)));
+    let shown = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let name = strs_get(shown, k);
+        let flat = text_replace(text_replace(name, " ", ""), "-", "");
+        let exe = f"{d}/{flat}";
+        let built = build(h, d, strs_get(backends, k), strs_get(opts, k), main, exe);
+        if built.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Labeled], Str].Err(error: f"{name}: {ran_show(built)}");
+        }
+        vec_push(out, Labeled(label: name, ran: bounded_exe(h, exe, d, quiet)));
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn build(h: Caps, d: Str, backend: Str, opt: Str, main: Str, exe: Str) -> Ran ! { io, spawn } {
+    let a = words(f"build --no-cache --backend {backend} --opt-level {opt}");
+    strs_push(a, main);
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    nazm(h, d, a)
+}
+
+fn one(x: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, x);
+    out
+}
+
+fn two(x: Str, y: Str) -> Strs ! {} {
+    let out = one(x);
+    strs_push(out, y);
+    out
+}
+
+@test
+fn hello_world_is_one_line_and_prints_only_what_it_prints(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in as_users_run(h, one("prog.nz"), one("fn main() {\n    println(\"Hello, world!\")\n}\n"))? {
+        check_that(r.ran.code == 0 && r.ran.stdout == "Hello, world!\n", f"{r.label}: {ran_show(r.ran)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn main_s_result_is_the_exit_status_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for result in words("0 7 255") {
+        let code = parse_usize(result);
+        let src = f"fn main() -> Int {{\n    println(\"ran\")\n    {result}\n}}\n";
+        for r in as_users_run(h, one("prog.nz"), one(src))? {
+            check_that(r.ran.code == code, f"{r.label} {result}: {ran_show(r.ran)}")?;
+            check_that(r.ran.stdout == "ran\n", f"{r.label} {result}")?;
+        }
+    }
+    for result in text_split("256|0 - 1|9223372036854775807", "|") {
+        let src = f"fn main() -> Int {{ {result} }}\n";
+        for r in as_users_run(h, one("prog.nz"), one(src))? {
+            check_that(r.ran.code == 2, f"{r.label} {result}: {ran_show(r.ran)}")?;
+            check_that(text_contains(r.ran.stderr, "error[N0416]") && str_len(r.ran.stdout) == 0, f"{r.label} {result}: {ran_show(r.ran)}")?;
+        }
+    }
+    // The result report prints it and ends with 0, as every program did before R1.
+    let d = prog_dir(h, "p.nz", "fn main() -> Int { 300 }\n")?;
+    let r = run(h, nazm_bin(io), words("run p.nz"), d, env_set(env_here(io), "NAZM_RESULT_REPORT", "1"));
+    scratch_remove(h, d);
+    check_that(r.code == 0 && r.stdout == "300\n", ran_show(r))
+}
+
+@test
+fn a_function_with_no_result_type_returns_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let prog = r#"use "noise.nz";
+
+fn greet(out: OutCap, who: Str) {
+    if who == "" { return }
+    println(f"hello, {who}")
+    str_len(who)
+}
+
+fn main() {
+    greet(out, "")
+    greet(out, "you")
+    noise(out)
+}
+"#;
+    for r in as_users_run(h, two("prog.nz", "noise.nz"), two(prog, "pub fn noise(out: OutCap) {\n    println(\"noise\")\n}\n"))? {
+        check_that(r.ran.code == 0 && r.ran.stdout == "hello, you\nnoise\n", f"{r.label}: {ran_show(r.ran)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn first_code_is(h: Caps, names: Strs, texts: Strs, code: Str, why: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = check_codes(h, names, texts);
+    let first = if strs_len(got) > 0 { strs_get(got, 0) } else { "(none)" };
+    let all = str_join(got, ", ");
+    check_that(first == code, f"{why}: [{all}]")
+}
+
+@test
+fn what_main_holds_and_what_returns_nothing_is_checked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    first_code_is(h, one("prog.nz"), one("fn main() -> Int { let s = read_file(\"x\"); 0 }\n"), "N0369", "an `IoCap` is still written")?;
+    first_code_is(h, one("prog.nz"), one("fn quiet() { }\nfn main() -> Int { let x = quiet(); x }\n"), "N0300", "the value of a call of a function that returns nothing")?;
+    first_code_is(h, two("prog.nz", "noise.nz"), two("use \"noise.nz\";\nfn main() -> Int { noise(out) + 1 }\n", "pub fn noise(out: OutCap) {\n    println(\"noise\")\n}\n"), "N0300", "an imported function that returns nothing")
+}
+
+@test
+fn a_private_function_declares_no_effects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // R1, 5b.5: a function that is not `pub` writes no `! { … }`; its own module's callers see what
+    // its body requires, while another module's undeclared function may still do anything.
+    let prog = r#"fn double(x: Int) -> Int { x * 2 }
+fn pure_user(x: Int) -> Int ! {} { double(x) }
+fn report(out: OutCap, n: Int) { println(f"n = {n}") }
+fn main() {
+    report(out, pure_user(21))
+}
+"#;
+    for r in as_users_run(h, one("prog.nz"), one(prog))? {
+        check_that(r.ran.code == 0 && r.ran.stdout == "n = 42\n", f"{r.label}: {ran_show(r.ran)}")?;
+    }
+    first_code_is(h, two("prog.nz", "helper.nz"), two("use \"helper.nz\";\nfn f(x: Int) -> Int ! {} { twice(x) }\nfn main() -> Int { f(2) }\n", "pub fn twice(x: Int) -> Int { x * 2 }\n"), "N0366", "another module's undeclared function")
+}
+
+@test
+fn build_and_inspect_say_what_the_program_may_touch(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // R1, option C: `main`'s capabilities, given or written, after a build and in `inspect`.
+    let srcs = two("fn main() {\n    println(\"hi\")\n}\n", "fn main(io: IoCap, net: NetCap) -> Int { 0 }\n");
+    let lines = two("authority: OutCap (given to main): prints to standard output and error", "authority: IoCap: files, arguments, the terminal and the process's exit; NetCap: the network");
+    let mut i = 0;
+    while i < 2 {
+        let src = strs_get(srcs, i);
+        let d = prog_dir(h, "prog.nz", src)?;
+        let b = build(h, d, "llvm", "0", "prog.nz", f"{d}/prog");
+        let r = nazm(h, d, words("inspect prog.nz"));
+        scratch_remove(h, d);
+        check_that(b.code == 0, ran_show(b))?;
+        let mut said = false;
+        for l in text_lines(b.stderr) {
+            if l == strs_get(lines, i) {
+                said = true;
+            }
+        }
+        check_that(said, ran_show(b))?;
+        let doc = jparse(r.stdout)?;
+        let implicit = if text_starts_with(src, "fn main()") { "true" } else { "false" };
+        check_that(jtext(doc, "authority/0/implicit") == implicit, r.stdout)?;
+        check_that(text_ends_with(jstr(doc, "authority/0/capability"), "Cap"), r.stdout)?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}

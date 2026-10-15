@@ -1,0 +1,189 @@
+// R1d, P3: standard input read by lines, exactly and in pieces (`docs/spec.md`, *The platform,
+// further*). Headers, frames and lines read alike everywhere — the input written whole or a byte at
+// a time; a line read of another handle is a value; and a line read has `os_read`'s authority and
+// provenance. Ported from `crates/nazm-cli/tests/stdin_lines.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// An LSP-shaped exchange and then MCP-shaped lines.
+fn frames() -> Str ! {} {
+    r#"use "@std/ioerror";
+use "@std/io";
+
+fn show(r: Result[Option[Str], IoError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: o) => match o {
+            Option.Some(value: s) => str_concat("line ", marked(s)),
+            Option.None() => "end",
+        },
+        Result.Err(error: e) => io_kind_name(e.kind),
+    }
+}
+
+fn marked(s: Str) -> Str ! {} {
+    let n = str_len(s);
+    if n > 0 {
+        if str_byte(s, n - 1) == 13 {
+            return str_concat(str_slice(s, 0, n - 1), "<CR>");
+        }
+    }
+    s
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    let body = bytes_new(5);
+    match io_stdin_read_exact(io, body) {
+        Result.Ok(value: n) => { print(f"frame {n} {bytes_to_str(body)}\n"); },
+        Result.Err(error: e) => { print(f"frame {io_kind_name(e.kind)}\n"); },
+    };
+    let small = bytes_new(3);
+    let h = os_stdin();
+    let mut n = os_read_line(h, small);
+    while n == 3 {
+        print(f"piece {bytes_to_str(small)}\n");
+        if bytes_get(small, 2) == 10 {
+            n = 0 - 1;
+        } else {
+            n = os_read_line(h, small);
+        }
+    }
+    if n >= 0 {
+        print(f"piece {bytes_to_str(bytes_slice(small, 0, n))}|\n");
+    }
+    let one = bytes_new(1);
+    match io_stdin_read(io, one) {
+        Result.Ok(value: k) => { print(f"byte {k} {bytes_to_str(bytes_slice(one, 0, k))}\n"); },
+        Result.Err(error: e) => { print(f"byte {io_kind_name(e.kind)}\n"); },
+    };
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    print(f"{show(io_stdin_read_line(io))}\n");
+    let rest = bytes_new(4);
+    match io_stdin_read_exact(io, rest) {
+        Result.Ok(value: k) => { print(f"rest {k}\n"); },
+        Result.Err(error: e) => { print(f"rest {io_kind_name(e.kind)}\n"); },
+    };
+    0
+}
+"#
+}
+
+const INPUT: Str = "Content-Length: 5\r\n\r\nhelloabcdefgh\nxsecond line\nthird\nlast";
+
+const EXPECTED: Str = "line Content-Length: 5<CR>\nline <CR>\nframe 5 hello\npiece abc\npiece def\npiece gh\n\nbyte 1 x\nline second line\nline third\nline last\nend\nrest UnexpectedEof\n0";
+
+@test
+fn headers_frames_and_lines_read_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", frames())?;
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let labels = strs_new();
+    let programs = strs_new();
+    for backend_opt in text_split("llvm -O0|llvm -O2|cranelift", "|") {
+        let flat = text_replace(text_replace(backend_opt, " ", ""), "-", "");
+        let backend = if text_starts_with(backend_opt, "llvm") { "llvm" } else { "cranelift" };
+        let opt = if text_ends_with(backend_opt, "-O2") { "2" } else { "0" };
+        let a = words(f"build --no-cache --backend {backend} --opt-level {opt} prog.nz -o");
+        strs_push(a, f"{d}/{flat}");
+        let b = nazm(h, d, a);
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Int, Str].Err(error: f"{backend_opt}: {b.stderr}");
+        }
+        strs_push(labels, backend_opt);
+        strs_push(programs, f"{d}/{flat}");
+    }
+    let mut first = "";
+    let mut failure = "";
+    let mut k = 0 - 1;
+    while k < strs_len(programs) && str_len(failure) == 0 {
+        for trickle in words("false true") {
+            if str_len(failure) > 0 {
+                continue;
+            }
+            let run_name = if k < 0 { f"interpreter trickle={trickle}" } else { f"{strs_get(labels, k)} trickle={trickle}" };
+            let gap = if trickle == "true" { 2 } else { 0 };
+            let r = if k < 0 {
+                run_trickle(h, nazm_bin(io), words("run prog.nz"), d, env, INPUT, gap)
+            } else {
+                let a = strs_new();
+                strs_push(a, "-c");
+                strs_push(a, bounded_script());
+                strs_push(a, strs_get(programs, k));
+                run_trickle(h, "sh", a, d, env, INPUT, gap)
+            };
+            let line = memory_line(r);
+            if r.code != 0 {
+                failure = f"{run_name}: {r.stderr}";
+            } else if text_trim_end(r.stdout) != EXPECTED {
+                failure = f"{run_name}: {r.stdout}";
+            } else if !kinds_reclaimed(line) {
+                failure = f"{run_name}: not all reclaimed: {line}";
+            } else if str_len(first) == 0 {
+                first = line;
+            } else if line != first {
+                failure = f"{run_name} and the interpreter disagree about storage: {line} vs {first}";
+            }
+        }
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}
+
+@test
+fn a_line_read_of_another_handle_is_a_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file, a directory and a closed handle: `InvalidInput`, `IsADirectory`, `Closed` — the same
+    // in every implementation, and nothing is read.
+    agrees(h, r#"use "@std/ioerror";
+
+fn main(io: IoCap) -> Int ! { io } {
+    write_file("lines.txt", "one\ntwo\n");
+    let buf = bytes_new(8);
+    let f = os_open_read("lines.txt");
+    print(f"{io_kind_name(io_kind_of(os_read_line(f, buf)))}\n");
+    print(f"{os_read(f, buf)}\n");
+    os_close(f);
+    print(f"{io_kind_name(io_kind_of(os_read_line(f, buf)))}\n");
+    let d = os_dir_open(".");
+    print(f"{io_kind_name(io_kind_of(os_read_line(d, buf)))}\n");
+    os_close(d);
+    os_unlink("lines.txt");
+    0
+}
+"#, "InvalidInput\n8\nClosed\nIsADirectory\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_line_read_has_os_reads_authority_and_provenance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The handle is its own authority: a function handed standard input reads its lines with no
+    // capability of its own.
+    let a = codes(h, "fn lines(h: OsHandle, buf: Bytes) -> Int ! { io } { os_read_line(h, buf) }\nfn main(io: IoCap) -> Int ! { io } { lines(os_stdin(), bytes_new(8)) }\n");
+    for c in a {
+        check_that(!text_starts_with(c, "N03"), f"an authority code: {c}")?;
+    }
+    // It performs `io`: a function that declares none cannot read a line.
+    let b = codes(h, "fn lines(h: OsHandle, buf: Bytes) -> Int ! {} { os_read_line(h, buf) }\nfn main(io: IoCap) -> Int ! { io } { lines(os_stdin(), bytes_new(8)) }\n");
+    check_that(contains_code(b, "N0366"), str_join(b, ", "))?;
+    // What it reads is the outside world's: it may not name the file a program writes.
+    let c = codes(h, "fn main(io: IoCap) -> Int ! { io } {\nlet buf = bytes_new(64);\nlet n = os_read_line(os_stdin(), buf);\nwrite_file(bytes_to_str(bytes_slice(buf, 0, n)), \"x\");\n0\n}\n");
+    check_that(contains_code(c, "N0372"), str_join(c, ", "))
+}
+
+fn contains_code(xs: Strs, code: Str) -> Bool ! {} {
+    for x in xs {
+        if x == code {
+            return true;
+        }
+    }
+    false
+}

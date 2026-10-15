@@ -1,0 +1,115 @@
+// R1a, L4: string interpolation (`docs/spec.md`, *String interpolation*). It means the same in every
+// implementation and is reclaimed; a built-in outside its range stops the program everywhere; and
+// what an interpolation refuses, by which code, once. Ported from
+// `crates/nazm-cli/tests/interpolation.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn interp() -> Str ! {} {
+    r###"use "@std/show";
+
+struct Point { x: Int, y: Int, }
+impl Show for Point { fn show(self: Point) -> Str { f"({self.x}, {self.y})" } }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+fn render[T: Show](v: T) -> Str { f"<{v}>" }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let name = "ab";
+    let ratio = 2.0 / 3.0;
+    // Width and side, a number to the right by default and text to the left; precision; Show;
+    // braces; a Bool.
+    show(out, f"{name:<5}|{42:>5}|{ratio:.3}|{Point(x: 1, y: -2)}|{{x}}|{true}");
+    show(out, f"{name:5}|{7:3}|{Float32(0.125):.2}|{1.5}|{UInt8(255)}|{-0.0:.1}|{0.375:.2}");
+    // Through a bound; a nested string and call; the built-ins directly.
+    show(out, render(Point(x: 3, y: 4)));
+    show(out, f"{str_concat("q", "r")}{float_to_str_fixed(1e10, 0)}");
+    show(out, str_concat(str_pad_start("7", 3, "0"), str_pad_end("x", 3, ".")));
+    // Each hole once, in order.
+    let mut n = 0;
+    let marks = vec_new[Int]();
+    show(out, f"{vec_push(marks, 1)}-{vec_push(marks, 2)}");
+    // Multi-line, with a hole on each line.
+    show(out, f"""
+        a = {n}
+          b = {name}
+        """);
+    0
+}
+"###
+}
+
+/// By hand: `0.125` and `0.375` to two places are exact ties, to even — `0.12` and `0.38`.
+const EXPECTED: Str = "ab   |   42|0.667|(1, -2)|{x}|true\nab   |  7|0.12|1.5|255|-0.0|0.38\n<(3, 4)>\nqr10000000000\n007x..\n1-2\na = 0\n  b = ab\n";
+
+fn nothing_live(r: Ran) -> Bool ! {} {
+    let line = memory_line(r);
+    str_len(line) > 0 && all_reclaimed(line)
+}
+
+@test
+fn interpolation_means_the_same_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, interp(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, EXPECTED), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            check_that(nothing_live(r.ran), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_built_in_outside_its_range_stops_the_program_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    strs_push(srcs, "fn main() -> Int { str_len(float_to_str_fixed(1.0, 31)) }\n");
+    strs_push(srcs, "fn main() -> Int { str_len(str_pad_start(\"a\", 3, \"ab\")) }\n");
+    let says = text_split("0 to 30 decimals|fill is one byte", "|");
+    let mut i = 0;
+    while i < 2 {
+        for r in everywhere_with_oracle(h, strs_get(srcs, i), true)? {
+            check_that(r.ran.code == 2, f"{r.label}: {ran_show(r.ran)}")?;
+            check_that(text_contains(r.ran.stderr, "N0405") && text_contains(r.ran.stderr, strs_get(says, i)), f"{r.label}: {r.ran.stderr}")?;
+        }
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn what_an_interpolation_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let bodies = strs_new();
+    strs_push(bodies, "let s = f\"{}\"; 0");
+    strs_push(bodies, "let s = f\"a}b\"; 0");
+    strs_push(bodies, "let s = f\"{1:x}\"; 0");
+    strs_push(bodies, "let s = f\"{1:.2}\"; 0");
+    strs_push(bodies, "let s = f\"{let x = 1; x}\"; 0");
+    strs_push(bodies, "let v = vec_new[Int](); let s = f\"{v}\"; 0");
+    strs_push(bodies, "let s = f\"{nope}\"; 0");
+    let want = words("N0006 N0006 N0006 N0006 N0006 N0300 N0200");
+    // `Vec[Int]` by its shorter name (R1, 5b.18).
+    let says = text_split("no expression|closes nothing|format|a precision is a float's|not one expression|`Ints`|nope", "|");
+    let mut i = 0;
+    while i < strs_len(bodies) {
+        let src = f"fn main() -> Int {{ {strs_get(bodies, i)} }}\n";
+        let r = check_errors(h, src)?;
+        let all = str_join(r.codes, ", ");
+        let first = if strs_len(r.codes) > 0 { strs_get(r.codes, 0) } else { "(none)" };
+        check_that(first == strs_get(want, i), f"{src}: [{all}]")?;
+        check_that(strs_len(r.codes) == 1, f"{src}: one mistake, one error: [{all}]")?;
+        check_that(text_contains(r.first, strs_get(says, i)), f"{src}: {r.first}")?;
+        i = i + 1;
+    }
+    // A name `f` is still a name, and a module's own `str_pad_start` hides the built-in.
+    let a = check_errors(h, "fn main() -> Int { let f = 1; f }\n")?;
+    check_that(strs_len(a.codes) == 0, str_join(a.codes, ", "))?;
+    let b = check_errors(h, "fn str_pad_start(n: Int) -> Int { n }\nfn main() -> Int { str_pad_start(3) }\n")?;
+    check_that(strs_len(b.codes) == 0, str_join(b.codes, ", "))
+}
