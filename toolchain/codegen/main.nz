@@ -1,6 +1,8 @@
 // nzcg: Nazm's own code generator (R9, `openspec/changes/r9-code-generator/`).
 //
 //     nzcg [--target TRIPLE] LIR OUTDIR
+//     nzcg --forms LIR          the LIR forms the program uses, one per line (design D12)
+//     nzcg --universe           every form LIR admits, one per line
 //
 // Reads a program's units as `nazm lir --ops` prints them from the file LIR, and writes one
 // relocatable object per unit, `OUTDIR/unit-K.o` for the K-th unit, for the target:
@@ -18,8 +20,24 @@ use "common.nz"
 use "macho.nz"
 use "elf.nz"
 use "dwarf.nz"
+use "forms.nz"
 
 fn main(io: IoCap) {
+    if args_count() == 1 && arg(0) == "--universe" {
+        let all = strs_new()
+        universe(all)
+        for s in all { println(s) }
+        return
+    }
+    if args_count() == 2 && arg(0) == "--forms" {
+        let p = read_program(read_file(arg(1)))
+        for e in p.errors { eprintln(f"nzcg: refused: {e}") }
+        if strs_len(p.errors) > 0 { exit_with(3) }
+        let all = strs_new()
+        for u in p.units { unit_forms(u, all) }
+        for s in all { println(s) }
+        return
+    }
     let mut first = 0
     let mut target = "aarch64-apple-darwin"
     if args_count() == 4 && arg(0) == "--target" {
