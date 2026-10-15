@@ -97,10 +97,12 @@
       the orphan rule (N0601), each method against the trait's (N0603), what is missing (N0602),
       coherence (N0600); bounds `[T: Trait]` and their calls (N0364); method calls on a concrete
       type, through a bound and as `Trait.m(x)` (N0605, N0606, N0303, N0300), a method taken as a
-      value (N0608); `Show` in interpolation. A default method, an impl of a generic type, a
+      value (N0608); `Show` in interpolation; default methods (L11a), `Trait/default/m` generic over
+      `Self`, called where an impl leaves the method out. An impl of a generic type, a
       derived `Hash` and a method called by name (5b.15) stop the checker. Hand-written cases in
       `inputs/check/traits-*.nz` and `inputs/modules/traits-*.nz`. `run.sh check`: 2,469 agree,
-      309 differ; the checker carries 2,036, all agree
+      309 differ; the checker carries 2,036, all agree — with default methods 2,473 agree, 305
+      differ; the checker carries 2,044, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
