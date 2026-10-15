@@ -40,6 +40,13 @@ pub struct CirFn {
     body: Int,
     /// The C symbol of a foreign function, or `""`.
     foreign: Str,
+    /// The function's object in the document (its `pub`, `closure` and `attributes`), or -1 for
+    /// a thunk this stage writes.
+    node: Int,
+    /// A closure's code: the locals its captures arrive in, in order.
+    captures: Ints,
+    /// The C symbol `@export` names, or `""`.
+    export: Str,
 }
 
 /// A program's Core IR.
@@ -212,6 +219,9 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
         }
         vec_push(consts, cst)
     }
+    let captures = ints_new()
+    let cs2 = kid(c, n, "captures")
+    for i in 0..count(c, cs2) { ints_push(captures, int_of(c, at(c, cs2, i))) }
     let published = strs_new()
     let pub_ = kid(c, kid(c, n, "effects"), "published")
     for i in 0..count(c, pub_) {
@@ -229,7 +239,17 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
         consts: consts,
         body: kid(c, n, "body"),
         foreign: sval(c, n, "foreign"),
+        node: n,
+        captures: captures,
+        export: sval(c, kid(c, n, "attributes"), "export"),
     )
+}
+
+/// Boolean `key` of object `n`, false when absent.
+pub fn bval(c: Cir, n: Int, key: Str) -> Bool ! {} {
+    let k = kid(c, n, key)
+    if k < 0 { return false }
+    match json_bool(c.doc, k) { Some(b) => b, None => false }
 }
 
 /// Read a Core IR document, or say why it is not one.
@@ -241,7 +261,7 @@ pub fn cir_read(text: Str) -> Result[Cir, Str] ! {} {
     let c0 = Cir(doc: doc, entry: "", fns: vec_new(), by_def: hashmap_new())
     let root = json_root(doc)
     let schema = sval(c0, root, "schema")
-    if schema != "nazm.core-ir/3" && schema != "nazm.core-ir/2" {
+    if schema != "nazm.core-ir/3" {
         return Err("not nazm.core-ir/3 but `" + schema + "`")
     }
     let c = Cir(doc: doc, entry: sval(c0, root, "entry"), fns: vec_new(), by_def: hashmap_new())

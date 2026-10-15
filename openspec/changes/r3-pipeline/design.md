@@ -6,7 +6,7 @@ info, 3.9k) and the drivers in `crates/nazm-core`. MIR is printed by `nazm mir` 
 per function its identity, effects, parameter count, result type, executable digest (BLAKE3 over a
 canonical text), locals and blocks, every statement and terminator as one canonical text line.
 
-The input is `nazm core-ir --json` (`nazm.core-ir/2`): per function its definition key, module,
+The input is `nazm core-ir --json` (`nazm.core-ir/3`; `/2` until `dcb43aab`): per function its definition key, module,
 type-parameter count, parameter count, result type, effects, locals, constants and body, with every
 expression typed by its spelled type (`Int`, `Vec[Str]`, `enums.nz::enum Shape`,
 `@core/prelude::enum Option[Int]`, `$0`).
@@ -62,37 +62,43 @@ failure edge through the joins of the scopes open at it to one unwind block that
 non-parameter local except borrowed temporaries; blocks nothing reaches removed and the rest
 renumbered in creation order.
 
-## Gaps in `nazm.core-ir/2`, and what the stage does until they close
+## Core IR /3, as this stage reads it
 
-| Needed by MIR | In Core IR /2? | Until `nazm.core-ir/3` |
+The stage reads `nazm.core-ir/3` only (main at `dcb43aab`); the reconstructions it needed under `/2`
+are gone. What each `/3` fact replaced:
+
+| Fact | `/3` member | Replaced |
 | --- | --- | --- |
-| Whether a record or enum is managed; its fields' types (temporaries, frame size) | No type table | Recovered from uses: every `record`/`variant` construction, `field` read and `match` binding gives a field's type; a generic definition's fields are kept as templates over its parameters when the construction's arguments are its function's parameters. Correct whenever every type the program uses is constructed somewhere in it, which holds for the inputs so far |
-| Function and array types | Printed `?` | MIR prints both `?` too, so only ownership needs them. A `?` is taken as a function type (managed) unless `refine.nz` recovers an array from how it is made (`[…]`, `[v; n]`, an index, a binding of one), carried to a fixpoint into parameters (from what callers pass) and results (from what bodies return) — spelled internally `?array[ELEM, LEN]`. Every input agrees on this since, `@std/blake3` included |
-| A closure's captures and `closure` flag | No | Recovered: a closure's code is a function `NAME#K`, its captures the locals right after its parameters, as many as the `closure` expression lists |
-| Thunks for function values | Not in Core IR (Rust synthesises them) | Synthesised the same way, as Core IR nodes added to the document: `env`, the target's parameters, a body that is the call |
-| `@export` symbol | No | The canonical text names it (`export SYM`), so the digest differs: 2 inputs differ (`desktop/counter`, `check/export-numbers`). `@section`, `@interrupt`, `@task`, `@on_failure` are not in the MIR text; LIR needs them |
-| Statics (`Atomic` cells) | No | Matter for LIR only |
-| The impl a `call_trait` resolves to at a type, and derived `Hash` | No | Recovered from the impl functions' names (`Trait/Self/method`, first parameter unified with the concrete type); no impl and the trait `Hash` means derived. A trait's *default* body at a type (L11a) is not recoverable; no input uses one |
-| Which calls close a call cycle | Calls yes; a call through a bound is not marked | A `call_trait` counts as an indirect call, as the Rust facts treat it (every generic body making one checks its stack) |
+| Records' and enums' fields and variants | `types.records` / `types.enums`: the entries whose `type` is their `definition`, fields over the definition's own parameters `$?J` | The table recovered from constructions, field reads and `match` bindings (`types.nz`) |
+| Function and array types | spelled (`fn(Int) -> Str`, `[Int; 4]`) | `refine.nz`'s array fixpoint (deleted). `read_ty` reads a function type as `?` and an array as `?array[ELEM, LEN]`, the spellings MIR's text needs: `?` for a local or result of either, `Array(ELEM,LEN)` inside a key (`tkey`, Rust's `type_key`) |
+| A closure's captures | `captures` (the locals they arrive in) | "the locals after the parameters" |
+| The impl a `call_trait` reaches | `impls`: the row of the method's trait whose `self` is the type or its definition; its `function`, and `type_args` read with `self` as the concrete type (a default body) or bound from the function's `Self` parameter (a generic impl) | Matching the impl functions' names `Trait/Self/method` |
+| Default bodies at every concrete impl | `impls[].methods[].default` | Not recoverable before: now planned as Rust plans them, from every impl of a non-generic type |
+| Derived `Hash` | `derived_hash` | "a trait named `Hash` with no impl" |
+| `@export` | `attributes.export` | The digest's `export SYM` line: closes `desktop/counter` and `check/export-numbers` |
 
-LIR (`nazm lir`, `nazm.lir/2`) needs more than MIR does, and none of it is recoverable from Core IR
-/2: a function's visibility (`pub` makes it `hidden` rather than `internal`); the type table **in the
-checker's own order** (a unit lists its records and enums by the checker's type ids, which interning
-decides — `Point`, then `@std/json`'s records, then a tuple, then `HashSet[Point]`, in one input),
-with each type's display name (`HashMap[Point, Bool]`, as `Types::show` writes it) and its fields'
-names, whose order by name is the layout order; the modules in load order with each one's source
-name (`@std/hashset` has a unit with no functions); the attributes; the statics; and the source
-text of every module, which the instruction-level text needs for the `file:line:column` of each
-failure message. The instruction-level text itself (`crates/nazm-lir/src/op/`, ~6k lines) is the
-bulk of slice 6.
+Two facts Core IR does not carry and the stage derives, both shown equal to Rust's on every input:
+a function value written as `callback_address("SYM")` is a use of the `@export`ed function `SYM`
+(the checker records it as a function value, so MIR makes it a thunk); and a closure of a generic
+function is planned at its owner's arguments wherever the owner's instance makes it.
 
-The request to the coordinator is `nazm.core-ir/3`: a `types` table in the checker's id order (each
-record and enum: definition key, display name, type arguments, fields in declaration order with
-their names and types, canonical order; each variant likewise), function and array types spelled
-(`fn(Int) -> Str`, `[Int; 4]`), a function's visibility, `closure`, `captures` and attributes
-(`@export` symbol, `@section`, `@interrupt`, `@task`, `@on_failure`), the statics, the modules in
-load order with their source names, and the impl table (trait, self type, method, target
-definition and type arguments, defaults included). These are facts the checker already has; printing them changes no decision.
+## What LIR needs beyond `/3`
+
+`nazm lir` (`nazm.lir/2`) prints, per unit, its functions' symbols, linkage and signatures, its
+externals, the layouts of the records and enums it mentions — and its instruction-level text with
+that text's digest (`lir`). The tables are functions of MIR and `/3` (`modules`, `types` ids and
+`display`, `pub`, `attributes`, `impls`), with one exception and one open point:
+
+- **Source positions.** The instruction text embeds each failure's message with its
+  `file:line:column` (`nazm: error[N0400]: … at fib.nz:2:33`). Core IR carries byte spans
+  (`"at": "fib.nz:313..317"`), not lines and columns: the stage needs each module's source text
+  (or a line table) to convert them. Requested: a `source` member per `/3` module, or a read-only
+  `--with-sources` option on `nazm core-ir`.
+- **Types the checker never interned.** A unit lists its records and enums by the checker's ids.
+  A concrete type that appears only once MIR substitutes an instance's arguments (a `Pair[T]`
+  inside `f[T]`, called at `Int`) has no `/3` entry and so no id; the Rust lowering interns it then.
+  Until a difference shows which order that is, such a type sorts after every listed one, in the
+  order MIR first meets it.
 
 ## Order of work
 
@@ -107,10 +113,8 @@ definition and type arguments, defaults included). These are facts the checker a
 
 ## Risks / Trade-offs
 
-- **The type table recovered from uses** is a workaround, not a design: it is replaced by Core IR
-  /3's table the day it exists, and every input it cannot serve is counted as a difference.
 - **Speed:** measured on the largest input, this pipeline's own Core IR (3.9 MB, ~500 functions):
   2.3 s against `nazm mir`'s 0.09 s, which includes checking. Several whole-document walks (the
   type table, closures, the plan, call cycles, the array fixpoint) over `@std/json`'s linear key
-  lookups are the likely cost; a budget is R3 work at integration, once Core IR /3 removes the
-  recovery walks.
+  lookups are the likely cost; a budget is R3 work at integration. Core IR /3 removed the type
+  table and array walks.

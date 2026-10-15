@@ -41,7 +41,15 @@
       moved), the first place each fits in every function: 11967 made over the inputs (this pipeline among them, so the count moves with it), all caught;
       `pipeline mir` prints only what the validator accepted, as `nazm mir` does
 
-## 6. LIR — blocked on `nazm.core-ir/3` for the tables (design, *Gaps*); not started
+## 4b. Core IR /3
+
+- [x] 4b.1 The reconstructions replaced by `/3` (design, *Core IR /3*): the type table, `refine.nz`
+      (deleted), closure captures, the impl table with default bodies, derived `Hash`; `@export`
+      in the digest. `run.sh` with main's `nazm` (which reaches `compiler/tests/inputs/`): 1449 of
+      1449 inputs with MIR identical (from 1425 of 1449 under the reconstructions), 33991 validator
+      mutants, all caught
+
+## 6. LIR
 
 - [ ] 6.1 Data layout, units, symbols, linkage
 - [ ] 6.2 Record and enum layouts

@@ -11,7 +11,6 @@ use "cir.nz"
 use "types.nz"
 use "mir.nz"
 use "traits.nz"
-use "refine.nz"
 use "@std/hash"
 use "@std/hashmap"
 use "@std/json"
@@ -24,8 +23,6 @@ pub struct FuncMap {
     /// The thunk through which a module calls a named function used as a value, by
     /// `MODULE|DEF`.
     thunks: HashMap[Str, Int],
-    /// The array types Core IR /2 spells `?`, recovered.
-    refined: Refined,
 }
 
 /// The lowering state of one function. A record is a value, so everything that changes lives in
@@ -625,7 +622,7 @@ fn callee_at(fx: Fx, def: Str, args: Strs) -> Int {
     let generic = i >= 0 && vec_get(fx.c.fns, i).type_params > 0
     let found = if generic {
         let keys = strs_new()
-        for a in args { strs_push(keys, key(a)) }
+        for a in args { strs_push(keys, tkey(a)) }
         match hashmap_get(fx.fm.inst, def + "[" + str_join(keys, ",") + "]") { Some(x) => x, None => 0 - 1 }
     } else {
         match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 }
@@ -634,11 +631,9 @@ fn callee_at(fx: Fx, def: Str, args: Strs) -> Int {
     found
 }
 
-// --- arrays, which Core IR /2 spells `?` ----------------------------------------------------------
-
-/// An expression's type, with an array type recovered where Core IR /2 says `?` (`refine.nz`).
+/// An expression's type, as Core IR /3 spells it (an array as `?array[ELEM, LEN]`, `read_ty`).
 fn ety_of(fx: Fx, e: Int) -> Str {
-    refined_ty(fx.c, fx.fm.refined, fx.f.def, e)
+    ety(fx.c, e)
 }
 
 // --- expressions ----------------------------------------------------------------------------------
@@ -884,11 +879,11 @@ fn expr_into(fx: Fx, e: Int, dst: Int) {
             if !os.ok { return }
             write(fx, dst, Rvalue.Call(callee: target, args: os.ops))
             release_all(fx, os.held)
-        } else if strs_get(trait_parts(method), 0) == "Hash" {
+        } else if derived_hash(c, method) > 0 {
             // A derived `Hash`: the type's own walk, or its `==`.
             let os = operands(fx, kid(c, e, "args"))
             if !os.ok { return }
-            if strs_get(trait_parts(method), 1) == "hash" && vec_len(os.ops) == 1 {
+            if derived_hash(c, method) == 1 && vec_len(os.ops) == 1 {
                 write(fx, dst, Rvalue.Hash(operand: concrete, value: vec_get(os.ops, 0)))
             } else if vec_len(os.ops) == 2 {
                 write(fx, dst, Rvalue.Compare(op: "==", law: law_of("==", concrete), operand: concrete, a: vec_get(os.ops, 0), b: vec_get(os.ops, 1)))
@@ -940,7 +935,7 @@ fn expr_into(fx: Fx, e: Int, dst: Int) {
         let def = sval(c, e, "function")
         let target = if strs_len(fx.args) > 0 {
             let keys = strs_new()
-            for a in fx.args { strs_push(keys, key(a)) }
+            for a in fx.args { strs_push(keys, tkey(a)) }
             match hashmap_get(fx.fm.inst, def + "[" + str_join(keys, ",") + "]") { Some(x) => x, None => match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 } }
         } else {
             match hashmap_get(fx.fm.plain, def) { Some(x) => x, None => 0 - 1 }
@@ -1120,14 +1115,14 @@ fn lower_match(fx: Fx, m: Int, dst: Int) {
 // --- functions --------------------------------------------------------------------------------------
 
 /// Lower one function — a definition, or an instance under `args` — whose identity is `identity`.
-pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, identity: Str, recursive: Bool, caps: Int) -> Result[MirFn, Str] ! {} {
+pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, identity: Str, recursive: Bool) -> Result[MirFn, Str] ! {} {
     let locals: Vec[LocalDecl] = vec_new()
     if f.foreign != "" {
         for i in 0..f.params {
             let l = vec_get(f.locals, i)
             vec_push(locals, LocalDecl(ty: l.ty, name: l.name, origin: "param"))
         }
-        return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, locals: locals, blocks: vec_new()))
+        return Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: f.ret, type_args: args, foreign: f.foreign, export: f.export, locals: locals, blocks: vec_new()))
     }
     let reg = ints_new()
     ints_push(reg, 0 - 1)
@@ -1136,16 +1131,12 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
         sk: ints_new(), sl: ints_new(), scopes: ints_new(), lid: ints_new(), lhead: ints_new(), lexit: ints_new(), ldepth: ints_new(),
         cleanups: hashmap_new(), borrowed: hashmap_new(), err: strs_new())
     // Core IR's locals keep their numbers: parameters, bindings, then its own temporaries.
-    // With the array types `refine.nz` recovered where Core IR /2 says `?`.
-    let known = match hashmap_get(fm.refined.locals, f.def) { Some(x) => x, None => strs_new() }
     for i in 0..vec_len(f.locals) {
         let l = vec_get(f.locals, i)
         let origin = if l.origin == "param" { "param" } else if l.origin == "let" { "binding" } else if l.origin == "let mut" { "binding mut" } else { "temp" }
-        let t = if i < strs_len(known) { strs_get(known, i) } else { l.ty }
-        vec_push(locals, LocalDecl(ty: ty(fx0, t), name: l.name, origin: origin))
+        vec_push(locals, LocalDecl(ty: ty(fx0, l.ty), name: l.name, origin: origin))
     }
-    let ret = match hashmap_get(fm.refined.rets, f.def) { Some(x) => x, None => f.ret }
-    let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, ret), locals: locals, blocks: fx0.blocks, reg: reg,
+    let fx = Fx(c: c, tt: tt, fm: fm, f: f, args: args, ret: ty(fx0, f.ret), locals: locals, blocks: fx0.blocks, reg: reg,
         sk: fx0.sk, sl: fx0.sl, scopes: fx0.scopes, lid: fx0.lid, lhead: fx0.lhead, lexit: fx0.lexit, ldepth: fx0.ldepth,
         cleanups: fx0.cleanups, borrowed: fx0.borrowed, err: fx0.err)
     let entry = new_block(fx, origin_source())
@@ -1157,11 +1148,10 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
         let u = unwind(fx)
         push(fx, Stmt.StackCheck(unwind: u))
     }
-    // A closure's code reads what its closure object carries into its own locals, which it
-    // then owns like bindings. Core IR /2 does not list them: they are the locals after the
-    // parameters, as many as the closure captures.
-    for k in 0..caps {
-        let l = f.params + k
+    // A closure's code reads what its closure object carries into its own locals (Core IR's
+    // `captures`), which it then owns like bindings.
+    for k in 0..ints_len(f.captures) {
+        let l = ints_get(f.captures, k)
         assign(fx, l, Rvalue.Capture(env: 0, index: k))
         own(fx, l)
     }
@@ -1175,5 +1165,5 @@ pub fn lower_function(c: Cir, tt: TypeTable, fm: FuncMap, f: CirFn, args: Strs, 
     finish_unwind(fx)
     let blocks = finish_blocks(fx)
     if strs_len(fx.err) > 0 { return Err(strs_get(fx.err, 0)) }
-    Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: fx.ret, type_args: args, foreign: "", locals: locals, blocks: blocks))
+    Ok(MirFn(identity: identity, name: f.name, effects: f.published, params: f.params, ret: fx.ret, type_args: args, foreign: "", export: f.export, locals: locals, blocks: blocks))
 }

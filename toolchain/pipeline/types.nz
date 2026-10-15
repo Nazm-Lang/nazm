@@ -109,11 +109,25 @@ pub fn encode(text: Str) -> Str ! {} {
     str_join(parts, "")
 }
 
-/// A type's canonical key, as MIR names it.
+/// A type as MIR's text names a local's or a result's: its canonical key ([`tkey`]), except that
+/// a parameter is `?param` and an array or a function type is `?`
+/// (`crates/nazm-mir/src/text.rs` has no case for either).
 pub fn key(t: Str) -> Str ! {} {
     let s = spell(t)
+    if s.kind == "param" { return "?param" }
+    if s.kind == "unknown" || s.kind == "array" { return "?" }
+    tkey(t)
+}
+
+/// A type's canonical key (`type_key`): what an instance's arguments, a container's element and
+/// a record's or enum's arguments are named by — an array as `Array(ELEM,LEN)`.
+pub fn tkey(t: Str) -> Str ! {} {
+    let s = spell(t)
     if s.kind == "vec" {
-        return s.head + "(" + key(strs_get(s.args, 0)) + ")"
+        return s.head + "(" + tkey(strs_get(s.args, 0)) + ")"
+    }
+    if s.kind == "array" {
+        return "Array(" + tkey(strs_get(s.args, 0)) + "," + strs_get(s.args, 1) + ")"
     }
     if s.kind == "record" || s.kind == "enum" {
         let k = if s.kind == "record" { "R" } else { "E" }
@@ -124,12 +138,10 @@ pub fn key(t: Str) -> Str ! {} {
         }
         if strs_len(s.args) == 0 { return head }
         let inner = strs_new()
-        for a in s.args { strs_push(inner, key(a)) }
+        for a in s.args { strs_push(inner, tkey(a)) }
         return head + "(" + str_join(inner, ",") + ")"
     }
-    if s.kind == "param" { return "?param" }
-    // MIR names an array type `?` (`crates/nazm-mir/src/text.rs` has no case for it).
-    if s.kind == "unknown" || s.kind == "array" { return "?" }
+    if s.kind == "param" || s.kind == "unknown" { return "?" }
     t
 }
 
@@ -162,20 +174,19 @@ fn num_bytes(t: Str) -> Int {
     if t == "Int8" || t == "UInt8" { 1 } else if t == "Int16" || t == "UInt16" { 2 } else if t == "Int32" || t == "UInt32" || t == "Float32" { 4 } else if t == "Int128" || t == "UInt128" { 16 } else { 8 }
 }
 
-// --- the type table, recovered from uses ----------------------------------------------------------
+// --- the type table, as `nazm.core-ir/3` prints it -----------------------------------------------
 
-/// What the program says about each record's and enum's fields. A field is filed under its
-/// definition (`MODULE::record NAME`) and an index — `v.f` for variant `v`'s field `f`, `f` for a
-/// record's — as a template whose `#J` is the definition's `J`th type argument, or under a
-/// concrete type's whole spelling when its arguments are not the parameters of the function that
-/// used it.
+/// The checker's records and enums, read once from Core IR /3's `types`: each definition's fields,
+/// filed under the definition (`MODULE::record NAME`) and a slot — `f` for a record's field `f`,
+/// `v.f` for variant `v`'s field `f` — as declared, over the definition's own parameters `$?J`;
+/// and each enum's variant names.
 pub struct TypeTable {
     templ: HashMap[Str, Str],
-    /// The field slots each definition (or concrete spelling) has been seen with.
+    /// Each definition's slots, in declaration order.
     slots: HashMap[Str, Strs],
-    /// Each enum definition's variant names, by index, as `match` arms list every one.
+    /// Each enum definition's variant names, by index.
     variants: HashMap[Str, Strs],
-    /// `managed`'s answers, once the table is complete.
+    /// `managed`'s answers.
     memo: HashMap[Str, Bool],
 }
 
@@ -183,99 +194,39 @@ pub fn table_new() -> TypeTable ! {} {
     TypeTable(templ: hashmap_new(), slots: hashmap_new(), variants: hashmap_new(), memo: hashmap_new())
 }
 
-/// `v` written over `#J` for each argument `$I` of `args` at position `J`, or `""` when it mentions
-/// a parameter that is not one of them.
-fn template(v: Str, args: Strs) -> Str {
-    if !open(v) { return v }
-    let s = spell(v)
-    if s.kind == "param" {
-        for j in 0..strs_len(args) {
-            if strs_get(args, j) == v { return "#" + int_to_str(j) }
-        }
-        return ""
-    }
-    let out = strs_new()
-    for a in s.args {
-        let x = template(a, args)
-        if x == "" { return "" }
-        strs_push(out, x)
-    }
-    unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
-}
-
+/// A definition's field type `t` at the type arguments `args`: each `$?J` replaced by `args[J]`.
 fn instantiate(t: Str, args: Strs) -> Str {
-    if !text_contains(t, "#") { return t }
+    if !text_contains(t, "$?") { return t }
     let s = spell(t)
-    if strs_len(s.args) == 0 && str_len(t) > 1 && str_byte(t, 0) == 35 {
-        let n = match text_parse_int(str_slice(t, 1, str_len(t))) { Ok(v) => v, Err(e) => 0 - 1 }
+    if s.kind == "param" && strs_len(s.args) == 0 {
+        let n = match text_parse_int(str_slice(t, 2, str_len(t))) { Ok(v) => v, Err(e) => 0 - 1 }
         if n >= 0 && n < strs_len(args) { return strs_get(args, n) }
-        return "?"
+        return t
     }
     let out = strs_new()
     for a in s.args { strs_push(out, instantiate(a, args)) }
     unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
 }
 
-fn note_slot(tt: TypeTable, owner: Str, slot: Str) {
+fn file_field(tt: TypeTable, owner: Str, slot: Str, v: Str) {
+    hashmap_set(tt.templ, owner + "|" + slot, v)
     let have = match hashmap_get(tt.slots, owner) { Some(s) => s, None => {
         let s = strs_new()
         hashmap_set(tt.slots, owner, s)
         s
     } }
-    for x in have { if x == slot { return } }
     strs_push(have, slot)
 }
 
-/// Whether every argument is a distinct type parameter.
-fn bare(args: Strs) -> Bool {
-    for i in 0..strs_len(args) {
-        let a = strs_get(args, i)
-        if spell(a).kind != "param" { return false }
-        for j in 0..i { if strs_get(args, j) == a { return false } }
-    }
-    true
-}
-
-/// Record that a value of type `v` sits in field `slot` of a value of type `owner`.
-pub fn observe(tt: TypeTable, owner: Str, slot: Str, v: Str) ! {} {
-    if v == "never" || v == "" || v == "?" { return }
-    let s = spell(owner)
-    if s.kind != "record" && s.kind != "enum" { return }
-    if bare(s.args) {
-        let t = template(v, s.args)
-        if t != "" {
-            hashmap_set(tt.templ, s.head + "|" + slot, t)
-            note_slot(tt, s.head, slot)
-        }
-    } else if !open(owner) && !open(v) {
-        hashmap_set(tt.templ, owner + "|" + slot, v)
-        note_slot(tt, owner, slot)
-    }
-}
-
-/// The field types the table knows for `t`, concrete: its definition's, then any slot only a
-/// concrete use of this very type showed.
+/// The field types of `t`, concrete, in declaration order.
 pub fn fields_of(tt: TypeTable, t: Str) -> Strs ! {} {
     let s = spell(t)
     let out = strs_new()
-    let head = match hashmap_get(tt.slots, s.head) { Some(x) => x, None => strs_new() }
-    for slot in head {
+    let slots = match hashmap_get(tt.slots, s.head) { Some(x) => x, None => strs_new() }
+    for slot in slots {
         match hashmap_get(tt.templ, s.head + "|" + slot) {
             Some(x) => strs_push(out, instantiate(x, s.args)),
             None => {},
-        }
-    }
-    if t != s.head {
-        let own = match hashmap_get(tt.slots, t) { Some(x) => x, None => strs_new() }
-        for slot in own {
-            let mut known = false
-            for h in head { if h == slot { known = true } }
-            if !known {
-                match hashmap_get(tt.templ, t + "|" + slot) {
-                    Some(x) => strs_push(out, x),
-                    None => {},
-                }
-            }
         }
     }
     out
@@ -286,7 +237,7 @@ pub fn field_ty(tt: TypeTable, t: Str, slot: Str) -> Str ! {} {
     let s = spell(t)
     match hashmap_get(tt.templ, s.head + "|" + slot) {
         Some(x) => instantiate(x, s.args),
-        None => match hashmap_get(tt.templ, t + "|" + slot) { Some(x) => x, None => "" },
+        None => "",
     }
 }
 
@@ -370,83 +321,43 @@ fn variant_fields(tt: TypeTable, t: Str, v: Int) -> Strs {
     out
 }
 
-/// Record an enum's variant names from a `match`, which lists every variant once.
-pub fn observe_variant(tt: TypeTable, enum_ty: Str, index: Int, name: Str) ! {} {
-    let head = spell(enum_ty).head
-    let have = match hashmap_get(tt.variants, head) { Some(s) => s, None => {
-        let s = strs_new()
-        hashmap_set(tt.variants, head, s)
-        s
-    } }
-    while strs_len(have) <= index { strs_push(have, "") }
-    strs_set(have, index, name)
-}
-
-/// Walk every function of `c` and fill the table from what it constructs, reads and matches.
+/// The type table of a Core IR /3 document, from its definitions (an entry whose `type` is its
+/// `definition`): the applied instances the checker also lists are those fields instantiated.
 pub fn table_build(c: Cir) -> TypeTable ! {} {
     let tt = table_new()
-    for f in c.fns {
-        if f.body >= 0 { walk(c, tt, f, f.body) }
+    let types = kid(c, json_root(c.doc), "types")
+    if types < 0 { return tt }
+    let rs = kid(c, types, "records")
+    for i in 0..count(c, rs) {
+        let r = at(c, rs, i)
+        let head = sval(c, r, "type")
+        if head == sval(c, r, "definition") {
+            let fs = kid(c, r, "fields")
+            for j in 0..count(c, fs) { file_field(tt, head, int_to_str(j), tval(c, at(c, fs, j), "type")) }
+        }
+    }
+    let es = kid(c, types, "enums")
+    for i in 0..count(c, es) {
+        let e = at(c, es, i)
+        let head = sval(c, e, "type")
+        if head == sval(c, e, "definition") {
+            let names = strs_new()
+            let vs = kid(c, e, "variants")
+            for v in 0..count(c, vs) {
+                let x = at(c, vs, v)
+                strs_push(names, sval(c, x, "name"))
+                let fs = kid(c, x, "fields")
+                for j in 0..count(c, fs) {
+                    file_field(tt, head, int_to_str(v) + "." + int_to_str(j), tval(c, at(c, fs, j), "type"))
+                }
+            }
+            hashmap_set(tt.variants, head, names)
+        }
     }
     tt
 }
 
-fn walk(c: Cir, tt: TypeTable, f: CirFn, n: Int) {
-    if n < 0 { return }
-    let kind = json_kind(c.doc, n)
-    if kind == "array" {
-        for i in 0..count(c, n) { walk(c, tt, f, at(c, n, i)) }
-        return
-    }
-    if kind != "object" { return }
-    let o = op(c, n)
-    if o == "record" {
-        let t = ety(c, n)
-        let fs = kid(c, n, "fields")
-        for i in 0..count(c, fs) {
-            let x = at(c, fs, i)
-            observe(tt, t, int_to_str(ival(c, x, "field")), ety(c, kid(c, x, "value")))
-        }
-    } else if o == "variant" {
-        let t = ety(c, n)
-        let v = ival(c, n, "variant")
-        let fs = kid(c, n, "fields")
-        for i in 0..count(c, fs) {
-            let x = at(c, fs, i)
-            observe(tt, t, int_to_str(v) + "." + int_to_str(ival(c, x, "field")), ety(c, kid(c, x, "value")))
-        }
-    } else if o == "field" {
-        let b = kid(c, n, "base")
-        observe(tt, ety(c, b), int_to_str(ival(c, n, "field")), ety(c, n))
-    } else if o == "match" {
-        let t = sval(c, n, "enum")
-        let arms = kid(c, n, "arms")
-        for i in 0..count(c, arms) {
-            let a = at(c, arms, i)
-            let v = ival(c, a, "variant")
-            observe_variant(tt, t, v, sval(c, a, "name"))
-            let bs = kid(c, a, "bindings")
-            for j in 0..count(c, bs) {
-                let b = at(c, bs, j)
-                let l = ival(c, b, "local")
-                if l < vec_len(f.locals) {
-                    observe(tt, t, int_to_str(v) + "." + int_to_str(ival(c, b, "field")), vec_get(f.locals, l).ty)
-                }
-            }
-        }
-    }
-    for i in 0..json_len(c.doc, n) {
-        match json_value_at(c.doc, n, i) {
-            Some(k) => {
-                let kk = json_kind(c.doc, k)
-                if kk == "object" || kk == "array" { walk(c, tt, f, k); }
-            },
-            None => {},
-        }
-    }
-}
-
-/// How many variants an enum has, as its `match`es list them, or -1 when no `match` showed it.
+/// How many variants an enum has, or -1 for a type the table does not list.
 pub fn variant_count(tt: TypeTable, enum_ty: Str) -> Int ! {} {
     match hashmap_get(tt.variants, spell(enum_ty).head) {
         Some(vs) => strs_len(vs),

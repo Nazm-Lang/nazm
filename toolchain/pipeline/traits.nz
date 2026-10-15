@@ -1,11 +1,13 @@
-// A call through a trait bound, resolved at a concrete type. `nazm.core-ir/2` carries no impl
-// table, so the impl is found the way the checker names its functions: an impl's method is the
-// function `Trait/Self/method` of the impl's module, whose first parameter is `Self` — matched
-// against the concrete type, so a generic impl's type arguments come out of the match
-// (`openspec/changes/r3-pipeline/design.md`, *Gaps*).
+// A call through a trait bound, resolved at a concrete type through Core IR /3's impl table:
+// the row for the method's trait whose `self` is the concrete type (or, for a generic impl, its
+// definition), and that row's function for the method. A generic impl's method takes the type
+// arguments its `Self` parameter binds against the concrete type; a trait's default body takes
+// the row's `type_args` with the impl's `self` read as the concrete type. A trait with no row
+// for the type may be the derived `Hash` (`derived_hash`).
 
 use "cir.nz"
 use "types.nz"
+use "@std/json"
 use "@std/text"
 
 /// Where a trait method lands: a function of `c.fns` (or -1) and its type arguments.
@@ -36,31 +38,61 @@ fn unify(pattern: Str, concrete: Str, binds: Strs) -> Bool {
     true
 }
 
-/// The trait's name and the method's, from `MODULE::trait NAME.method`.
+/// The trait's key and the method's name, from `MODULE::trait NAME.method`.
 pub fn trait_parts(method: Str) -> Strs ! {} {
     let out = strs_new()
     let start = match text_find(method, "::trait ") { Some(i) => i + 8, None => 0 }
     let rest = str_slice(method, start, str_len(method))
     let dot = match text_find(rest, ".") { Some(i) => i, None => str_len(rest) }
-    strs_push(out, str_slice(rest, 0, dot))
+    strs_push(out, str_slice(method, 0, start + dot))
     strs_push(out, if dot < str_len(rest) { str_slice(rest, dot + 1, str_len(rest)) } else { "" })
     out
 }
 
+/// `t` with every spelling equal to `from` (a generic impl's `self`) read as `to`.
+fn replace_ty(t: Str, from: Str, to: Str) -> Str {
+    if t == from { return to }
+    let s = spell(t)
+    if strs_len(s.args) == 0 { return t }
+    let out = strs_new()
+    for a in s.args { strs_push(out, replace_ty(a, from, to)) }
+    unspell(Spelled(kind: s.kind, head: s.head, module: s.module, name: s.name, args: out))
+}
+
 /// The function a call of `method` (`MODULE::trait NAME.method`) reaches at `concrete`.
 pub fn method_target(c: Cir, method: Str, concrete: Str) -> Target ! {} {
-    let parts = trait_parts(method)
-    let prefix = strs_get(parts, 0) + "/"
-    let suffix = "/" + strs_get(parts, 1)
-    for i in 0..vec_len(c.fns) {
-        let f = vec_get(c.fns, i)
-        let name = match text_find(f.def, "::fn ") { Some(k) => str_slice(f.def, k + 5, str_len(f.def)), None => f.def }
-        if text_starts_with(name, prefix) && text_ends_with(name, suffix) && f.params > 0 {
-            let binds = strs_new()
-            if unify(vec_get(f.locals, 0).ty, concrete, binds) && strs_len(binds) == f.type_params {
-                return Target(index: i, args: binds)
+    let tr = strs_get(trait_parts(method), 0)
+    let head = spell(concrete).head
+    let rows = kid(c, json_root(c.doc), "impls")
+    for i in 0..count(c, rows) {
+        let row = at(c, rows, i)
+        let self_ty = tval(c, row, "self")
+        if sval(c, row, "trait") == tr && (self_ty == concrete || self_ty == head) {
+            let ms = kid(c, row, "methods")
+            for j in 0..count(c, ms) {
+                let m = at(c, ms, j)
+                if sval(c, m, "method") == method {
+                    let fi = fn_index(c, sval(c, m, "function"))
+                    if fi < 0 { return Target(index: 0 - 1, args: strs_new()) }
+                    let f = vec_get(c.fns, fi)
+                    let args = strs_new()
+                    let ta = kid(c, m, "type_args")
+                    if count(c, ta) > 0 {
+                        for k in 0..count(c, ta) { strs_push(args, replace_ty(tof(c, at(c, ta, k)), self_ty, concrete)) }
+                    } else if f.type_params > 0 && f.params > 0 {
+                        if !unify(vec_get(f.locals, 0).ty, concrete, args) || strs_len(args) != f.type_params { return Target(index: 0 - 1, args: strs_new()) }
+                    }
+                    return Target(index: fi, args: args)
+                }
             }
         }
     }
     Target(index: 0 - 1, args: strs_new())
+}
+
+/// Whether `method` is the derived `Hash`'s: 1 for `hash`, 2 for `same`, 0 otherwise.
+pub fn derived_hash(c: Cir, method: Str) -> Int ! {} {
+    let d = kid(c, json_root(c.doc), "derived_hash")
+    if d < 0 || json_kind(c.doc, d) != "object" { return 0 }
+    if sval(c, d, "hash") == method { 1 } else if sval(c, d, "same") == method { 2 } else { 0 }
 }
