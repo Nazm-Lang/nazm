@@ -71,3 +71,5 @@ runtime::every_targets_os_unit_is_llvm_its_toolchain_compiles  LLVM text not wri
 incremental::an_entry_from_the_checker_before_derived_equality_is_never_read  library entry
 incremental::an_entry_from_the_checker_before_requirements_is_never_read  library entry
 native_cache::every_unit_declares_the_runtime_it_calls_as_the_registry_states_it  table not printed
+build::every_front_end_builtin_is_lowered_or_refused_by_name  table not printed
+build::every_front_end_builtin_is_evaluated_by_the_interpreter  table not printed
