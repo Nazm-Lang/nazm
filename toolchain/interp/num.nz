@@ -127,7 +127,7 @@ pub fn arith(op: Int, a: V, b: V) -> (V, Int) {
 pub fn neg(a: V) -> (V, Int) {
     let k = kind_of(a)
     if is_float(k) {
-        return (mkf(k, 0.0 - as_f64(a)), 0)
+        return (mkf(k, flip(as_f64(a))), 0)
     }
     let x = wide(a)
     if k == NK_U128 {
@@ -254,7 +254,7 @@ pub fn parse_const(k: Int, s: Str) -> V {
         } else if s == "-inf" {
             0.0 - 1.0 / 0.0
         } else if s == "-0" {
-            0.0 - 0.0
+            flip(0.0)
         } else {
             float_parse_raw(s)
         }
@@ -263,4 +263,9 @@ pub fn parse_const(k: Int, s: Str) -> V {
     let negative = str_len(s) > 0 && str_byte(s, 0) == 45
     let m = digits_value(s, if negative { 1 } else { 0 })
     mk(k, if negative { of_u128(wrapping_sub(UInt128(0), m)) } else { of_u128(m) })
+}
+
+/// `-x` for a float: its sign bit flipped, so `-0.0` is negative zero (`numeric.rs`, `neg`).
+fn flip(x: Float64) -> Float64 {
+    float64_from_bits(float64_to_bits(x) ^ (UInt64(1) << 63))
 }

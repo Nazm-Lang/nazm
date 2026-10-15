@@ -103,7 +103,7 @@ fn int_compare(op: Int, a: Int, b: Int) -> Bool {
 /// Push the value of slot `slot` of the frame at `base`, taking a reference.
 fn push_local(vm: Vm, base: Int, slot: Int) {
     let v = vec_get(vm.slots, base + slot)
-    retain(vm.heap, v)
+    if holds(v) { retain(vm.heap, v) }
     vec_push(vm.ops, v)
 }
 
@@ -141,11 +141,29 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
     let mut steps = 0
     let code = p.op
     let pa = p.a
+    let rc = h.rc
     loop {
         steps += 1
         let op = ints_get(code, pc)
         if op == OP_LOCAL {
-            push_local(vm, base, ints_get(pa, pc))
+            let v = vec_get(slots, base + ints_get(pa, pc))
+            inc(rc, v)
+            vec_push(ops, v)
+            pc += 1
+        } else if op == OP_BORROW {
+            vec_push(ops, vec_get(slots, base + ints_get(pa, pc)))
+            pc += 1
+        } else if op == OP_LFIELD {
+            let mut v = vec_get(slots, base + ints_get(pa, pc))
+            let path = ints_get(p.b, pc)
+            for i in 0..ints_get(p.aux, path) {
+                v = match v {
+                    V.Rec(def: d, fields: fs) => list_get(fs, ints_get(p.aux, path + 1 + i)),
+                    _ => V.Unset,
+                }
+            }
+            if ints_get(p.c, pc) == 0 { retain(h, v) }
+            vec_push(ops, v)
             pc += 1
         } else if op == OP_CONST {
             vec_push(ops, vec_get(p.consts, ints_get(pa, pc)))
@@ -204,10 +222,12 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
             let fb = ints_len(frames) - 4
             let opbase = ints_get(frames, fb + 3)
             while vec_len(ops) > opbase {
-                release(h, vec_pop(ops))
+                let x = vec_pop(ops)
+                if !dec(rc, x) { release(h, x) }
             }
             while vec_len(slots) > base {
-                release(h, vec_pop(slots))
+                let x = vec_pop(slots)
+                if !dec(rc, x) { release(h, x) }
             }
             let ret = ints_get(frames, fb + 1)
             let x1 = ints_pop(frames)
@@ -224,13 +244,20 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
             vec_push(ops, v)
             pc = ret
         } else if op == OP_STORE {
-            store(vm, base + ints_get(pa, pc), vec_pop(ops))
+            let at = base + ints_get(pa, pc)
+            let old = vec_get(slots, at)
+            vec_set(slots, at, vec_pop(ops))
+            if !dec(rc, old) { release(h, old) }
             pc += 1
         } else if op == OP_RELEASE {
-            store(vm, base + ints_get(pa, pc), V.Unset)
+            let at = base + ints_get(pa, pc)
+            let old = vec_get(slots, at)
+            vec_set(slots, at, V.Unset)
+            if !dec(rc, old) { release(h, old) }
             pc += 1
         } else if op == OP_POP {
-            release(h, vec_pop(ops))
+            let x = vec_pop(ops)
+            if !dec(rc, x) { release(h, x) }
             pc += 1
         } else if op == OP_ITER {
             let left = ints_get(vm.st, ST_ITER)
@@ -252,7 +279,51 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
             }
         } else if op == OP_BUILTIN {
             let n = ints_get(p.b, pc)
-            let v = builtin(p, vm, pc, ints_get(pa, pc), n, caps)
+            let id = ints_get(pa, pc)
+            // A sequence's length, element, push or write, in range, here; anything else, and any
+            // failure, through `builtin`.
+            let mut v = V.Unset
+            let mut fast = false
+            if id >= B_VEC_LEN && id <= B_VEC_PUSH {
+                let top = vec_len(ops)
+                let xs = match vec_get(ops, top - n) {
+                    V.Ref(obj: o) => vec_get(h.items, o),
+                    _ => h.none,
+                }
+                let len = vec_len(xs)
+                if id == B_VEC_LEN {
+                    v = V.Int(v: len)
+                    fast = true
+                } else if id == B_VEC_PUSH {
+                    let x = vec_get(ops, top - 1)
+                    inc(rc, x)
+                    vec_push(xs, x)
+                    v = V.Int(v: len + 1)
+                    fast = true
+                } else {
+                    let i = match vec_get(ops, top - n + 1) {
+                        V.Int(v: k) => k,
+                        _ => 0 - 1,
+                    }
+                    if i >= 0 && i < len {
+                        if id == B_VEC_GET {
+                            v = vec_get(xs, i)
+                            inc(rc, v)
+                        } else {
+                            let x = vec_get(ops, top - 1)
+                            inc(rc, x)
+                            let old = vec_get(xs, i)
+                            vec_set(xs, i, x)
+                            if !dec(rc, old) { release(h, old) }
+                            v = V.Int(v: i)
+                        }
+                        fast = true
+                    }
+                }
+            }
+            if !fast {
+                v = builtin(p, vm, pc, id, n, caps)
+            }
             if ints_get(vm.st, ST_BLOCKED) == 1 {
                 // Not yet: the task waits, and this instruction runs again when it resumes.
                 ints_set(vm.st, ST_BLOCKED, 0)
@@ -260,15 +331,22 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
                 status = X_BLOCKED
                 break
             }
-            if failed(vm) { break }
+            // The arguments: released, but for those lent (`OP_BORROW`).
+            let lent = ints_get(p.d, pc)
+            let mut bit = 1
+            for i in 0..n { bit = bit * 2 }
             for i in 0..n {
-                release(h, vec_pop(ops))
+                bit = bit / 2
+                let x = vec_pop(ops)
+                if (lent / bit) % 2 == 0 && !dec(rc, x) { release(h, x) }
             }
+            if failed(vm) { break }
             vec_push(ops, v)
             pc += 1
         } else if op == OP_DROPN {
             for i in 0..ints_get(pa, pc) {
-                release(h, vec_pop(ops))
+                let x = vec_pop(ops)
+                if !dec(rc, x) { release(h, x) }
             }
             pc += 1
         } else if op == OP_NEG {
@@ -352,9 +430,9 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
                 let x = vec_pop(ops)
             }
             if op == OP_RECORD {
-                vec_push(ops, V.Rec(def: ints_get(pa, pc), fields: list_from_vec(built)))
+                vec_push(ops, V.Rec(def: def_bits(h, ints_get(pa, pc), built), fields: list_from_vec(built)))
             } else {
-                vec_push(ops, V.Enm(def: ints_get(pa, pc), variant: ints_get(p.aux, c), fields: list_from_vec(built)))
+                vec_push(ops, V.Enm(def: def_bits(h, ints_get(pa, pc), built), variant: ints_get(p.aux, c), fields: list_from_vec(built)))
             }
             pc += 1
         } else if op == OP_APPEND {
@@ -631,11 +709,23 @@ fn rebuild(p: Prog, vm: Vm, pc: Int, whole: V, step: Int, steps: Int, indexes: I
     let which = ints_get(p.aux, step + 1)
     match whole {
         V.Rec(def: d, fields: fs) => {
+            // The only copy: its fields move into the new value, which keeps its count. A copy
+            // shared with another binding: the new value copies the fields, and this one is let go.
+            let h = vm.heap
+            let sole = d % 2 == 0 || unique(h, drid(d))
             let xs = vec_new[V]()
-            for f in fs { vec_push(xs, f) }
+            for f in fs {
+                if !sole { retain(h, f) }
+                vec_push(xs, f)
+            }
             let inner = rebuild(p, vm, pc, list_get(fs, which), step + 2, steps - 1, indexes, k, v)
             vec_set(xs, which, inner)
-            V.Rec(def: d, fields: list_from_vec(xs))
+            if sole && d % 2 == 1 {
+                V.Rec(def: d, fields: list_from_vec(xs))
+            } else {
+                if !sole { release(h, whole) }
+                V.Rec(def: def_bits(h, dname(d), xs), fields: list_from_vec(xs))
+            }
         },
         V.Arr(items: fs) => {
             let i = ints_get(indexes, k)
