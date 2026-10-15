@@ -935,6 +935,79 @@ fn a_program_of_thousands_of_functions_lowers_in_time_proportional_to_its_size()
     );
 }
 
+/// One `+` chain of `n` terms — strings, alternately literals and a parameter, and integers —
+/// and a chain of `n` methods by name, `a.again()` being `str_again(a)`.
+fn plus_chain(n: usize) -> String {
+    let strs: Vec<String> = (0..n)
+        .map(|i| {
+            if i % 2 == 0 {
+                format!("\"s{i}\"")
+            } else {
+                "a".to_owned()
+            }
+        })
+        .collect();
+    let ints: Vec<String> = (0..n)
+        .map(|i| {
+            if i % 2 == 0 {
+                i.to_string()
+            } else {
+                "k".to_owned()
+            }
+        })
+        .collect();
+    format!(
+        "fn s(a: Str) -> Str {{\n    {}\n}}\nfn i(k: Int) -> Int {{\n    {}\n}}\n\
+         fn str_again(a: Str) -> Str {{\n    a\n}}\nfn m(a: Str) -> Str {{\n    a{}\n}}\n\
+         fn main() -> Int {{\n    str_len(s(\"x\")) + str_len(m(\"y\")) + i(1)\n}}\n",
+        strs.join(" + "),
+        ints.join(" + "),
+        ".again()".repeat(n)
+    )
+}
+
+/// How long checking `src` takes, best of three.
+fn checking_time(src: &str) -> std::time::Duration {
+    let (map, graph) = nazm_core::one_file(src);
+    (0..3)
+        .map(|_| {
+            let start = std::time::Instant::now();
+            assert!(nazm_core::check_map(&map, &graph).is_empty());
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+#[test]
+fn a_long_plus_chain_checks_and_lowers_in_time_proportional_to_its_size() {
+    // `s + t` on `Str`s is `str_concat(s, t)`, and `a.again()` is `str_again(a)`; the checker
+    // once checked the operands or the receiver, then checked them again as that call's
+    // arguments, so every link of a chain doubled the work before it: thirty terms took
+    // minutes and gigabytes. Eight and sixteen terms first, which that told apart at once, so
+    // a regression fails here rather than hangs.
+    let (a, b) = (
+        checking_time(&plus_chain(8)),
+        checking_time(&plus_chain(16)),
+    );
+    assert!(
+        b < a * 10 + std::time::Duration::from_millis(100),
+        "8 → {a:?}, 16 → {b:?}"
+    );
+    let (c, d) = (
+        checking_time(&plus_chain(50)),
+        checking_time(&plus_chain(200)),
+    );
+    assert!(
+        d < c * 10 + std::time::Duration::from_millis(200),
+        "50 → {c:?}, 200 → {d:?}"
+    );
+    // And the chain lowers to Core IR that verifies.
+    with(&plus_chain(200), |core, res, _| {
+        assert!(cir::verify(core, res).is_empty());
+    });
+}
+
 /// Q1-D-19: the verifier's Gate 2 rules refuse a broken array literal, a repeat of the wrong
 /// length and an index by something not an `Int`.
 #[test]
