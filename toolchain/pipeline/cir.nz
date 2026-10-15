@@ -16,6 +16,8 @@ pub struct CirLocal {
     ty: Str,
     /// `param`, `let`, `let mut` or `temp WHAT`.
     origin: Str,
+    /// Where it is declared (a span, `FILE:START..END`).
+    at: Str,
 }
 
 /// One literal: its type (`Int`, `Bool`, `Str`, a numeric kind, `Atomic`) and its value's text.
@@ -242,7 +244,7 @@ fn read_fn(c: Cir, n: Int) -> CirFn {
     let ls = kid(c, n, "locals")
     for i in 0..count(c, ls) {
         let l = at(c, ls, i)
-        vec_push(locals, CirLocal(name: sval(c, l, "name"), ty: tval(c, l, "type"), origin: sval(c, l, "origin")))
+        vec_push(locals, CirLocal(name: sval(c, l, "name"), ty: tval(c, l, "type"), origin: sval(c, l, "origin"), at: sval(c, l, "at")))
     }
     let consts: Vec[CirConst] = vec_new()
     let cs = kid(c, n, "consts")

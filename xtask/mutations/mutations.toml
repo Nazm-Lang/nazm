@@ -19658,3 +19658,19 @@ file = "crates/nazm-lir/src/op/lower.rs"
 find = '                |i| format!("chan.{}", crate::symbol::encoded(&i.elem_key)),'
 replace = '                |_| format!("chan.{}", c.0),'
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lir::a_generic_channels_helper_is_named_by_its_element" }]
+
+[[mutation]]
+name = "r3-core-ir-with-sources-gives-no-callee-span"
+why = "beside the sources, Core IR gives no call's callee span or binding's span, so the R3 pipeline cannot place a call's or a binding's statement for a debugger (7.3)"
+file = "crates/nazm-cir/src/print.rs"
+find = "        if self.spans && self.sources.is_some() {"
+replace = "        if self.spans && self.sources.is_none() {"
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::with_sources_gives_the_spans_a_debugger_is_told" }]
+
+[[mutation]]
+name = "r3-core-ir-with-sources-names-no-file"
+why = "beside the sources, Core IR names no module's file index and path, so a debugger's positions and file names could only be guessed (7.3)"
+file = "crates/nazm-cir/src/print.rs"
+find = '''                        o.push(("path", J::Str(map.name(file).to_owned())));'''
+replace = '''                        o.push(("path", J::Str(String::new())));'''
+killers = [{ package = "nazm-cli", test = "cli_c_d", name = "core_ir::with_sources_gives_each_module_its_text_and_only_then" }]

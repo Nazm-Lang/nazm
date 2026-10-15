@@ -243,6 +243,7 @@ fn with_sources_gives_each_module_its_text_and_only_then() {
     // By default no module carries its text: the document names no file's contents.
     for m in modules(&["--json"]) {
         assert!(m.get("source").is_none(), "{m}");
+        assert!(m.get("file").is_none() && m.get("path").is_none(), "{m}");
     }
     // Asked for, every module carries it, the root's exactly as written.
     let with = modules(&["--json", "--with-sources"]);
@@ -251,9 +252,49 @@ fn with_sources_gives_each_module_its_text_and_only_then() {
         .find(|m| m["root"] == serde_json::Value::Bool(true))
         .expect("the root module");
     assert_eq!(root["source"], serde_json::Value::String(text.to_owned()));
+    // And where a debugger finds it: the file's index a position names, the loader's name.
+    assert_eq!(root["file"], serde_json::Value::from(0));
+    assert!(
+        root["path"]
+            .as_str()
+            .is_some_and(|p| p.ends_with("prog.nz")),
+        "{root}"
+    );
     for m in &with {
         assert!(m["source"].is_string(), "{m}");
+        assert!(m["file"].is_u64() && m["path"].is_string(), "{m}");
     }
+}
+
+/// R3 (debug information): beside the sources, a call names its callee's span and a `match`
+/// binding its own — the positions MIR gives those statements — and only then.
+#[test]
+fn with_sources_gives_the_spans_a_debugger_is_told() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    let text = "fn two(x: Int) -> Int { x * 2 }\n\
+                fn main() -> Int {\n    match Option.Some(value: two(3)) {\n        \
+                Option.Some(value: v) => v,\n        Option.None() => 0,\n    }\n}\n";
+    std::fs::write(dir.path().join("prog.nz"), text).unwrap();
+    let doc = |extra: &[&str]| -> String {
+        let out = core_ir(&dir.path().join("prog.nz"), extra);
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8(out.stdout).expect("UTF-8")
+    };
+    let plain = doc(&["--json"]);
+    assert!(!plain.contains("\"callee_at\""), "{plain}");
+    let with = doc(&["--json", "--with-sources"]);
+    // `two`'s name in the call, at its byte offset; `v` in the binding.
+    let call = text.find("two(3)").expect("the call");
+    assert!(
+        with.contains(&format!("\"callee_at\":\"prog.nz:{call}..{}\"", call + 3)),
+        "{with}"
+    );
+    let binding = text.find("value: v").expect("the binding") + 7;
+    assert!(
+        with.contains(&format!("\"at\":\"prog.nz:{binding}..{}\"", binding + 1)),
+        "{with}"
+    );
 }
 
 #[test]
