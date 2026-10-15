@@ -34,6 +34,10 @@ mkdir -p "$OUT/cmp"
 if ! python3 toolchain/pipeline/tests/runtime_table.py --check; then
     echo "pipeline: runtime.nz is not the runtime's registry; run tests/runtime_table.py"; exit 2
 fi
+if ! python3 toolchain/pipeline/tests/runtime_text.py --check; then
+    echo "pipeline: rtext.nz is not the runtime crate's texts; run tests/runtime_text.py"; exit 2
+fi
+mkdir -p "$OUT/cache"
 if [ $# -gt 0 ]; then
     printf '%s\n' "$@" > "$OUT/inputs"
 else
@@ -83,6 +87,29 @@ one() {
         # Text that differs with no stop: a wrong agreement in the making — always shown.
         echo "ops wrong $(cmp "$o.owant" "$o.ogot" 2>&1 | head -1 | sed "s/.* differ: //")" >> "$r"
     fi
+    # The runtime's units (task 4.1's runtime generator): `pipeline runtime` against the units
+    # `nazm build --emit-ir` wrote beside the program's, by default and with a stack size and a
+    # heap limit (`units.py`); an input `nazm build` refuses is counted apart.
+    rm -f "$o".bin*
+    if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
+            v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
+        else
+            v="differ $(head -1 "$o.rerr")"
+        fi
+        if [ "$v" = agree ]; then
+            rm -f "$o".bin*
+            if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
+                && perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
+                v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
+                [ "$v" = agree ] || v="$v (with a stack size and a heap limit)"
+            fi
+        fi
+        echo "rt $v" >> "$r"
+        rm -f "$o".bin*
+    else
+        echo "rt nobuild" >> "$r"
+    fi
     if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" tables "$o.cir" > "$o.lgot" 2> "$o.lerr" && cmp -s "$o.lgot" "$o.lwant"; then
         echo "tables agree" >> "$r"
     elif [ -s "$o.lerr" ]; then
@@ -117,11 +144,17 @@ summary() {
             else { ostop++; if (verbose && details) print "ops stop: " $1 ": " rest }
         }
         k == "doc" { if (v == "agree") fagree++; else { fdiffer++; if (details) print "lir document differ: " $1 } }
+        k == "rt" {
+            if (v == "agree") ragree++
+            else if (v == "nobuild") rnobuild++
+            else { rdiffer++; if (details) print "runtime differ: " $1 ": " rest }
+        }
         END {
             printf "[%s] validator: %d mutants, %d caught, %d missed\n", label, made, caught, made - caught
             printf "[%s] mir: %d agree, %d differ (%d inputs without Core IR or MIR)\n", label, magree, mdiffer, skipped
             printf "[%s] lir tables: %d agree, %d differ (%d inputs with MIR but no LIR)\n", label, lagree, ldiffer, lskipped
             printf "[%s] lir ops: %d agree, %d differ (%d stops naming an unported construct, %d different text; the whole document: %d agree, %d differ)\n", label, oagree, ostop + owrong, ostop, owrong, fagree, fdiffer
+            printf "[%s] runtime units: %d agree, %d differ (%d inputs with LIR that nazm build refuses)\n", label, ragree, rdiffer, rnobuild
         }' "$OUT/results.$label"
 }
 # The details once: with the full set's summary when there is one, else with the base set's.
