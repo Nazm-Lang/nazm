@@ -80,29 +80,24 @@ fn key_hash[K: Hash](seed: UInt64, key: K) -> UInt64 ! {} {
 
 // Where `key` is: its slot when present, and `-(the slot it would take) - 1` when not.
 fn hashmap_find[K: Hash, V](m: HashMap[K, V], key: K, h: UInt64) -> Int ! {} {
-    // The three vectors read once, not at every step of the probe (R1, 5b.9).
-    let slots = m.slots;
-    let hashes = m.hashes;
-    let keys = m.keys;
-    let mask = vec_len(slots) - 1;
+    // The vectors are read through `m` at each step: a field read borrows, where a local copy
+    // of each would retain it and release it again on every look-up.
+    let mask = vec_len(m.slots) - 1;
     let mut i = Int(h & UInt64(mask));
     let mut free = 0 - 1;
     let mut found = 0 - 1;
     let mut looking = true;
     while looking {
-        let e = vec_get(slots, i);
-        if e == 0 - 1 {
-            if free < 0 { free = i; }
-            looking = false;
-        } else {
-            if e == 0 - 2 {
-                if free < 0 { free = i; }
-            } else {
-                if vec_get(hashes, e) == h && key.same(vec_get(keys, e)) {
-                    found = i;
-                    looking = false;
-                }
+        let e = vec_get(m.slots, i);
+        // A used slot first: the test a look-up that finds its key makes most.
+        if e >= 0 {
+            if vec_get(m.hashes, e) == h && key.same(vec_get(m.keys, e)) {
+                found = i;
+                looking = false;
             }
+        } else {
+            if free < 0 { free = i; }
+            if e == 0 - 1 { looking = false; }
         }
         i = (i + 1) & mask;
     }

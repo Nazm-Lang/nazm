@@ -691,6 +691,7 @@ fn main() {
     show(\" \", \" \")
     show(\"abc\", \"\")
     show(\"a--b--\", \"--\")
+    show(\"a-b--c-\", \"--\")
     show(\"x skip y stop z\", \" \")
     for w in text_split(\"p,q\", \",\") { print(w) }
     println(\"\")
@@ -698,7 +699,7 @@ fn main() {
 ";
     differential::agrees(
         src,
-        "4 [a][b][][c]\n1 []\n2 [][]\n1 [abc]\n3 [a][b][]\n4 [x][skip][y][stop]\npq\n0",
+        "4 [a][b][][c]\n1 []\n2 [][]\n1 [abc]\n3 [a][b][]\n2 [a-b][c-]\n4 [x][skip][y][stop]\npq\n0",
     );
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("p.nz"), src).unwrap();

@@ -280,3 +280,49 @@ ending the call's block, the call that block's last instruction (its lowering al
 and keep `failure_convention.rs`'s expectations in mind wherever its harness ports
 `failure_bit.rs` (renamed) or reads `{i64, i1}` from hosted LLVM text. R9's code generator keeps the
 bit (`sel.nz`, `sel_x64.nz`) until it writes unwind tables.
+
+### Word frequency through the standard library and the runtime (2026-10-15)
+
+Release `nazm` from `613047d2`, `--opt-level 2`; A/B as three alternating rounds of
+`hyperfine -N --warmup 3 --runs 7` per binary on the comparison's input, the host loaded by other
+work, so only relative numbers (and the counted cycles and instructions) are kept. Each candidate
+was first measured on a copy of the library's path in a program of its own (the library is compiled
+into `nazm`), then in the library.
+
+| change | cycles | instructions | kept |
+|---|---:|---:|---|
+| `hashmap_find` reads `m.slots`, `m.hashes`, `m.keys` at each step: a field read borrows, where the local copies were three retains and three releases (one a call of `nz.vec_release`) per look-up | −1.9% | −5.2% | yes |
+| `text_split_end` compares a separator of several bytes byte by byte, not as a slice: the function calls nothing, so the one-byte loop runs with no frame to save (twelve register saves and restores per piece before) | −2.4% | −2.9% | yes |
+| the probe tests a used slot first | −0.5 to −0.8% | −1.4% | yes |
+| `hashmap_at_or` hashes inline rather than through `key_hash` | −0.3% | −1.2% | no (noise) |
+| `Str`'s `same` as a byte loop below 17 bytes instead of `memcmp` | +3.1% | +5.5% | no: a mispredicted exit per word |
+| `text_split_end` testing eight bytes per step, the first match chosen by selects | +7.2% | +5.9% | no: every byte keeps its bounds check |
+| `text_lines` with an inner scan per line | +1.6% | −3.4% | no |
+| a runtime byte search: `text_split_end` calling `memchr` (linked by hand) | +7.3% | −2.2% | no: words are 3–8 bytes, `memchr`'s set-up costs more than the loop. **No byte-search built-in is needed for this workload** |
+| non-atomic `Str` reference counts in a one-thread program (the IR edited by hand) | **−7.4%** | +1.1% | not made: see below |
+
+The three kept, in the library: 132.1 → 127.8 ms median (−3.3%), cycles −3.4%, instructions −8.5%;
+the output is `words.expected`'s. The hash's values, and so every map's order, are unchanged.
+
+Re-profiled (`sample`, ten copies of the input, 790 samples): `text_split_end` 30%,
+`hashmap_find` 24%, `memcmp` + `Hash/Str/same` 14%, `hashmap_set` 7%, the program's loop 7%,
+`hashmap_at_or` 5%, the `Str` hash + `hash_combine` 7%, `text_lines` 4%.
+
+What remains is not the library's to remove:
+
+1. **A `Str` read out of a vector is retained and released atomically** (`ldadd`, `ldaddl` with a
+   release fence) on every key the probe compares, twice per counted word (`hashmap_find`, then
+   `hashmap_set`'s check of the remembered entry). In a program of one thread (`Needs::single`, the
+   rule that already makes the failure state plain globals) the counts can be ordinary loads and
+   stores: −7.4% measured. It is a runtime change, but its single-thread variant is chosen where
+   `nazm-lir`'s backend calls `inline_reference_counting` and in the runtime unit, and R3's
+   `toolchain/pipeline` (`rtgen.nz`, `rtext.nz`) must port it so its text stays the reference's —
+   left for the coordinator to schedule. Stage P's borrowed reads of vector elements would remove
+   the pair altogether.
+2. `hashmap_set` must compare the key with the remembered entry again (a different key may be
+   passed; mutant `r1-a-remembered-entry-is-any-key-s`): only the compiler knows `m[k] += n` passes
+   the same `k` to both calls — stage P (one probe for the read and the write).
+3. The one-byte scan is eight instructions a byte, the bounds check's `i < 0` test kept inside the
+   loop and the string's pointer reloaded; its exit mispredicts once a word. Range proofs (stage P)
+   remove the check; the misprediction is the workload's (C's `strtok` pays it too).
+4. FNV-1a is a serial chain of multiplies, four cycles a byte; it stays while map order is promised.
