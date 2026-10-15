@@ -1,0 +1,3 @@
+use "lib/a.nz";
+fn take(s: Secret) -> Int { 0 }
+fn main() -> Int { 0 }

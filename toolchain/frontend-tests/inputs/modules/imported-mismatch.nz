@@ -1,0 +1,6 @@
+use "lib/a.nz";
+fn main() -> Int {
+    let p = Point(x: 1, y: true);
+    let s = Circle(r: "no");
+    shared(true) + only_a(1)
+}

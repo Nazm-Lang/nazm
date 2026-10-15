@@ -1,0 +1,4 @@
+use "lib/a.nz";
+use "lib/a.nz" as a;
+use "both-ways.nz";
+fn main() -> Int { shared(1) + a::shared(2) + only_a() }

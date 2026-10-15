@@ -1,0 +1,2 @@
+pub fn deep() -> Int { 7 }
+pub struct Deep { n: Int }

@@ -1,0 +1,5 @@
+use "c.nz";
+pub fn shared(x: Int) -> Int { x + 2 }
+pub struct Point { x: Int }
+pub enum Shape { Square(side: Int) }
+pub fn via_c() -> Int { deep() }
