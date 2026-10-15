@@ -129,8 +129,15 @@ pub(crate) fn object(
     debug: bool,
     verify: bool,
 ) -> Result<Vec<u8>, Vec<Diagnostic>> {
-    let builder = ObjectBuilder::new(isa, name, cranelift_module::default_libcall_names())
+    // A section per function and per datum on ELF (R1.5, D14), as clang's `-ffunction-sections`
+    // and `-fdata-sections` give LLVM's objects, so `--gc-sections` can leave out each one nothing
+    // reaches. Mach-O's linker strips by symbol and needs none.
+    let elf = isa.triple().binary_format == target_lexicon::BinaryFormat::Elf;
+    let mut builder = ObjectBuilder::new(isa, name, cranelift_module::default_libcall_names())
         .map_err(|e| vec![defect(e.to_string())])?;
+    builder
+        .per_function_section(elf)
+        .per_data_object_section(elf);
     let module = ObjectModule::new(builder);
     let ptr = module.target_config().pointer_type();
     let mut t = Tr {
