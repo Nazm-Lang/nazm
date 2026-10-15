@@ -1,0 +1,160 @@
+// Gate 3: the mobile targets. Library targets over the stable C ABI: Android ARM64 objects for the
+// NDK's `clang`, iOS ARM64 objects, a static archive and a C host linked against Xcode's iOS SDK —
+// link-verified only. The Bionic run in a container and the Cocoa window are `#[ignore]`d in Rust
+// and stay there (design decision 10). Ported from `crates/nazm-cli/tests/mobile.rs` (R7).
+
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+const LIB: Str = "fn square(x: Int) -> Int ! {} { x * x }\npub extern \"C\" fn sum_squares(a: Int, b: Int) -> Int ! {} = \"nazm_sum_squares\" { square(a) + square(b) }\npub extern \"C\" fn label_len(n: Int) -> Int ! {} = \"nazm_label_len\" { str_len(str_concat(\"item-\", int_to_str(n))) }\n";
+
+const HOST: Str = "#include <stdio.h>\n#include <stdint.h>\nint64_t nazm_sum_squares(int64_t, int64_t);\nint64_t nazm_label_len(int64_t);\nint main(void) { printf(\"%lld %lld\\n\", (long long)nazm_sum_squares(3, 4), (long long)nazm_label_len(12345)); return 0; }\n";
+
+const APP: Str = "use \"@std/io\";\nuse \"@std/fs\";\nuse \"@std/time\";\nfn work(n: Int, out: Chan[Int]) -> Int ! {} {\n    let mut s = 0;\n    let mut i = 0;\n    while i < n { s = s + i; i = i + 1; }\n    chan_send_of(out, s);\n    0\n}\nfn main(io: IoCap, t: SpawnCap, time: TimeCap) -> Int ! { io, spawn } {\n    let out = chan_new_of[Int](8);\n    scope {\n        let mut k = 1;\n        while k <= 4 { spawn work(k * 1000, out); k = k + 1; }\n    }\n    let got = vec_new[Int]();\n    let mut total = 0;\n    let mut j = 0;\n    while j < 4 { if chan_recv_of(out, got) { total = total + vec_pop(got); } j = j + 1; }\n    io_println(io, str_concat(\"total \", int_to_str(total)));\n    match fs_write(io, \"/tmp/nz.txt\", \"android\\n\") { Result.Ok(value: n) => {}, Result.Err(error: e) => { io_println(io, e); }, };\n    match fs_read(io, \"/tmp/nz.txt\") { Result.Ok(value: s) => { io_println(io, str_concat(\"read \", str_slice(s, 0, 7))); }, Result.Err(error: e) => { io_println(io, e); }, };\n    io_println(io, if time_ms(time) > 0 { \"clock ok\" } else { \"clock wrong\" });\n    args_count()\n}\n";
+
+/// `src`'s objects for `target` in `dir/out` (a library with `lib`), as `out/NAME` paths.
+fn objects(h: Caps, dir: Str, src: Str, target: Str, lib: Bool) -> Result[Strs, Str] ! { io, spawn } {
+    scratch_write(h, dir, "prog.nz", src)?;
+    let flag = if lib { "--lib " } else { "" };
+    let o = nazm(h, dir, words(f"build {flag}--target {target} --objects out prog.nz"));
+    check_that(o.code == 0, f"{target}: {o.stderr}")?;
+    let link = read_text(h, f"{dir}/out/link.txt")?;
+    check_that(text_contains(link, f"target {target}"), link)?;
+    let objs = strs_new();
+    for l in text_lines(link) {
+        match strip_prefix(l, "objects ") {
+            Option.Some(value: rest) => {
+                for o2 in text_split(rest, " ") {
+                    strs_push(objs, f"out/{o2}");
+                }
+            },
+            Option.None() => {},
+        };
+    }
+    Result[Strs, Str].Ok(value: objs)
+}
+
+/// The object of `objs` whose name ends in `unit`.
+fn unit_of(objs: Strs, unit: Str) -> Str ! {} {
+    for o in objs {
+        if text_ends_with(o, unit) {
+            return o;
+        }
+    }
+    ""
+}
+
+/// Whether `bytes` holds `name` followed by a NUL: a symbol in the object's string table.
+fn has_symbol(bytes: Str, name: Str) -> Bool ! {} {
+    let mut at = find_from(bytes, name, 0);
+    while at >= 0 {
+        let end = at + str_len(name);
+        if end < str_len(bytes) && str_byte(bytes, end) == 0 {
+            return true;
+        }
+        at = find_from(bytes, name, at + 1);
+    }
+    false
+}
+
+@test
+fn both_mobile_targets_build_objects_for_their_toolchains(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for target in text_split("aarch64-linux-android|aarch64-apple-ios", "|") {
+        let l = scratch_new(h);
+        let lobjs = objects(h, l, LIB, target, true)?;
+        scratch_remove(h, l);
+        check_that(strs_len(lobjs) == 2, f"{target}: the library's module and the runtime")?;
+        let d = scratch_new(h);
+        let objs = objects(h, d, APP, target, false)?;
+        // A program: its modules, the runtime, the task switch, the stack, errno, the platform
+        // unit and the entry.
+        for unit in text_split("runtime.o|switch.o|stack.o|errno.o|os.o|entry.o", "|") {
+            check_that(unit_of(objs, unit) != "", f"{target}: {unit} in {str_join(objs, " ")}")?;
+        }
+        // Each C library's own names: Bionic's `errno` and XSI `strerror_r`, Darwin's `__error`.
+        let errno = read_raw(h, f"{d}/{unit_of(objs, "errno.o")}")?;
+        if text_contains(target, "android") {
+            let os = read_raw(h, f"{d}/{unit_of(objs, "os.o")}")?;
+            check_that(has_symbol(errno, "__errno") && !has_symbol(errno, "__errno_location"), "Bionic's errno")?;
+            check_that(has_symbol(os, "strerror_r") && !has_symbol(os, "__xpg_strerror_r"), "XSI strerror_r")?;
+        } else {
+            check_that(has_symbol(errno, "___error"), "Darwin's __error")?;
+        }
+        // The LLVM backend's alone.
+        let o = nazm(h, d, words(f"build --backend cranelift --target {target} --objects c prog.nz"));
+        check_that(o.code != 0, f"{target}: {o.stderr}")?;
+        check_that(text_contains(o.stderr, "builds no mobile target"), o.stderr)?;
+        let link = read_text(h, f"{d}/out/link.txt")?;
+        scratch_remove(h, d);
+        let libs = if text_contains(target, "android") { "-lm" } else { "" };
+        check_that(text_contains(link, f"libraries {libs}\n"), link)?;
+    }
+    ok()
+}
+
+// `a_static_bionic_executable_runs_a_nazm_library_and_a_whole_program_on_linux` is `#[ignore]`d in
+// Rust "links with the NDK and starts a container": it stays Rust (design decision 10).
+
+const XCODE: Str = "/Applications/Xcode.app/Contents/Developer";
+
+fn xcrun(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
+    let a = words("--sdk iphoneos");
+    for x in args {
+        strs_push(a, x);
+    }
+    run(h, "xcrun", a, dir, env_set(env_here(h.io), "DEVELOPER_DIR", XCODE))
+}
+
+/// Needs Xcode: the iOS SDK. Linked, never run — no simulator runtime is installed here. Off macOS
+/// the Rust test is ignored, and this one passes without looking.
+@test
+fn an_ios_archive_and_program_link_against_the_ios_sdk(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    if skip_without(h, file_exists_at(h.io, XCODE), "no Xcode at /Applications/Xcode.app")? {
+        return ok();
+    }
+    let d = scratch_new(h);
+    scratch_write(h, d, "main.c", HOST)?;
+    let objs = objects(h, d, LIB, "aarch64-apple-ios", true)?;
+    let ar = words("libtool -static -o libnazm.a");
+    for o in objs {
+        strs_push(ar, o);
+    }
+    let a = xcrun(h, d, ar);
+    check_that(a.code == 0, a.stderr)?;
+    let c = xcrun(h, d, words("clang -target arm64-apple-ios17.0 main.c libnazm.a -o host"));
+    check_that(c.code == 0, c.stderr)?;
+    let e = scratch_new(h);
+    let link = words("clang -target arm64-apple-ios17.0");
+    for o in objects(h, e, APP, "aarch64-apple-ios", false)? {
+        strs_push(link, o);
+    }
+    strs_push(link, "-o");
+    strs_push(link, "app");
+    let l = xcrun(h, e, link);
+    check_that(l.code == 0, l.stderr)?;
+    // Each is an iOS executable: platform 2 in its build version.
+    for exe in text_split(f"{d}/host|{e}/app", "|") {
+        let a2 = strs_new();
+        strs_push(a2, "-l");
+        strs_push(a2, exe);
+        let o = run(h, "otool", a2, "", env_here(h.io));
+        check_that(text_contains(o.stdout, "platform 2"), f"{exe}: {o.stdout}")?;
+    }
+    scratch_remove(h, d);
+    scratch_remove(h, e);
+    ok()
+}
+
+// `a_cocoa_window_runs_on_a_nazm_library_through_the_c_abi` is `#[ignore]`d in Rust "opens a
+// window": it stays Rust (design decision 10).

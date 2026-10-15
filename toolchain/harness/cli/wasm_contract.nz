@@ -1,0 +1,88 @@
+// N71: contracts on WebAssembly — the ordinary backend with a host adapter. On any host: `--wasm`
+// writes WebAssembly objects, the metadata (`nazm.wasm-contract/1`) and the reference host, the
+// same bytes twice; the contract's object asks its host for exactly `state_get`, `state_set`,
+// `revert` and `report`. The run in `nazm-wasm:n64` is `#[ignore]`d in Rust and stays there (design
+// decision 10). Ported from `crates/nazm-cli/tests/wasm_contract.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+use "../lib/wasm.nz"
+
+const TOKEN: Str = "pub struct State { owner: Int, alice: Int, bob: Int, supply: Int, paused: Bool }\nfn init() -> State ! {} { State(owner: 1, alice: 100, bob: 0, supply: 100, paused: false) }\nfn conserved(s: State) -> Int ! {} { s.alice + s.bob }\npub fn transfer(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    if s.paused { return Result[State, Int].Err(error: 3); }\n    if amount <= 0 { return Result[State, Int].Err(error: 1); }\n    if caller == 1 {\n        if s.alice < amount { return Result[State, Int].Err(error: 2); }\n        Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n    } else {\n        if s.bob < amount { return Result[State, Int].Err(error: 2); }\n        Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice + amount, bob: s.bob - amount, supply: s.supply, paused: s.paused))\n    }\n}\npub fn pause(s: State, caller: Int, on: Int) -> Result[State, Int] ! {} {\n    if caller != s.owner { return Result[State, Int].Err(error: 4); }\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob, supply: s.supply, paused: on == 1))\n}\npub fn airdrop(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice, bob: s.bob + amount, supply: s.supply, paused: s.paused))\n}\nfn fee(amount: Int) -> Int ! {} { let mut f = 0; let mut i = 0; while i < amount { f = f + 1; i = i + 10; } f }\npub fn charged(s: State, caller: Int, amount: Int) -> Result[State, Int] ! {} {\n    let f = fee(amount);\n    if caller != 1 || s.alice < amount + f { return Result[State, Int].Err(error: 2); }\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice - amount - f, bob: s.bob + amount + f, supply: s.supply, paused: s.paused))\n}\npub fn boom(s: State, caller: Int, n: Int) -> Result[State, Int] ! {} {\n    Result[State, Int].Ok(value: State(owner: s.owner, alice: s.alice * n, bob: s.bob, supply: s.supply, paused: s.paused))\n}\nfn main() -> Int ! {} { 0 }\n";
+
+@test
+fn the_contract_builds_for_webassembly_with_its_adapter_and_metadata(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "c.nz", TOKEN)?;
+    let o = nazm(h, d, words("contract c.nz --wasm out"));
+    check_that(o.code == 0, o.stderr)?;
+    let meta = jparse(read_text(h, f"{d}/out/contract.json")?)?;
+    check_that(jstr(meta, "schema") == "nazm.wasm-contract/1", jv(meta, ""))?;
+    check_that(jint(meta, "version") == 1, jv(meta, ""))?;
+    let fields = strs_new();
+    let mut i = 0;
+    while i < jlen(meta, "state/fields") {
+        let f = f"state/fields/{i}";
+        strs_push(fields, f"{jint(meta, f"{f}/index")} {jstr(meta, f"{f}/name")} {jstr(meta, f"{f}/type")}");
+        i = i + 1;
+    }
+    check_that(str_join(fields, ",") == "0 owner Int,1 alice Int,2 bob Int,3 supply Int,4 paused Bool", str_join(fields, ","))?;
+    let exports = strs_new();
+    let mut k = 0;
+    while k < jlen(meta, "entrypoints") {
+        strs_push(exports, jstr(meta, f"entrypoints/{k}/export"));
+        k = k + 1;
+    }
+    check_that(str_join(exports, ",") == "nazm_call_transfer,nazm_call_pause,nazm_call_airdrop,nazm_call_charged,nazm_call_boom", str_join(exports, ","))?;
+    check_that(file_exists_at(h.io, f"{d}/out/contract_host.mjs"), "no reference host")?;
+    // The contract's unit asks its host for the state, the revert and the report, and nothing
+    // else. `env` names what another unit defines, which the linker resolves.
+    let unit = read_raw(h, f"{d}/out/00-m0.o")?;
+    let want = text_split("nazm_host.state_get|nazm_host.state_set|nazm_host.revert|nazm_host.report", "|");
+    let asked = strs_new();
+    for a in imports(unit) {
+        if !text_starts_with(a, "env.") {
+            check_that(strs_has(want, a), f"{a} asked of the host")?;
+            strs_push(asked, a);
+        }
+    }
+    check_that(strs_has(asked, "nazm_host.state_get") && strs_has(asked, "nazm_host.state_set"), str_join(asked, ","))?;
+    // The same bytes twice.
+    let again = nazm(h, d, words("contract c.nz --wasm again"));
+    check_that(again.code == 0, again.stderr)?;
+    for f in text_split("00-m0.o|contract.json", "|") {
+        check_that(read_raw(h, f"{d}/out/{f}")? == read_raw(h, f"{d}/again/{f}")?, f)?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_adapter_leaves_the_ordinary_build_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Without `--wasm`, the same contract built for WebAssembly is an ordinary module: no adapter
+    // export or host state import.
+    let d = prog_dir(h, "c.nz", TOKEN)?;
+    let o = nazm(h, d, words("build --target wasm32-unknown-unknown --objects plain c.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let unit = read_raw(h, f"{d}/plain/00-m0.o")?;
+    for a in imports(unit) {
+        check_that(!text_ends_with(a, ".state_get") && !text_ends_with(a, ".state_set"), str_join(imports(unit), ","))?;
+    }
+    check_that(!text_contains(unit, "nazm_call_transfer"), "an adapter export in the ordinary build")?;
+    let c = nazm(h, d, words("contract c.nz --wasm out"));
+    check_that(c.code == 0, c.stderr)?;
+    let adapted = read_raw(h, f"{d}/out/00-m0.o")?;
+    scratch_remove(h, d);
+    check_that(text_contains(adapted, "nazm_call_transfer"), "no adapter export")
+}
+
+// `the_webassembly_contract_agrees_with_the_simulator` is `#[ignore]`d in Rust "starts a
+// container": it stays Rust (design decision 10).
