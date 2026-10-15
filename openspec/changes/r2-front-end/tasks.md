@@ -113,6 +113,11 @@
       inputs that stopped at D9 now stop at `@std/hash`'s `UInt64` constants (a constant of
       this type); `inputs/modules/prelude-text.nz` is carried. `run.sh check`: 2,478 agree,
       301 differ; the checker carries 2,051, all agree (2,479 agree with the new case)
+- [ ] 3.1o `for` (`check_for`): an `Ints`, a `Strs` or a `Vec[T]` iterated (N0628 otherwise), or
+      `Int` bounds `a..b` (N0300); the binding the element, in the body's scope, a loop for
+      `break` and `continue`, its last line discarded. A `for` over `Bytes` stops the checker.
+      `inputs/check/for-loops.nz`. `run.sh check`: 2,489 agree, 292 differ; the checker carries
+      2,073, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
