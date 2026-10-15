@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check (all by default)
 #
 # Each command (toolchain/commands/CMD.nz) is built by the 0.10.0 release ($NAZM). The reference is
 # `nazm` built from this checkout into $CARGO_TARGET_DIR (default ~/.cache/nazm-target-track5), or
@@ -17,6 +17,10 @@
 #   args  Every command line in tests/args/CMD.txt, run by both sides in the same fixture
 #         directory: clap's usage errors and help, and what the command then does (design, D8).
 #   init  `nazm init` of every template, the trees written compared file by file (design, D9).
+#   check For every input (as for fmt, or the FILEs named), `check --no-cache FILE` and
+#         `check --json --no-cache FILE` from the repository's root, and `--deny-warnings` too where
+#         the reference warns (design, D11). The standard library is the checkout's (NAZM_LIBRARY);
+#         the reference's check cache goes to a scratch directory (NAZM_CACHE_DIR).
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
 # anything differs or is refused. Leaves nothing behind unless KEEP=DIR is given, where every
@@ -29,11 +33,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init) parts="$parts $1"; shift ;;
+    fmt|args|init|check) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init"
+[ -n "$parts" ] || parts="fmt args init check"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -52,9 +56,11 @@ else
   ref="$target/release/nazm"
 fi
 
-mkdir -p "$work/bin"
-for cmd in fmt init; do
-  "$nazm" build "$root/toolchain/commands/$cmd.nz" -o "$work/bin/$cmd" > "$work/build.log" 2>&1 \
+mkdir -p "$work/bin" "$work/cache"
+# The checker recurses with the program's nesting, as the reference's does on its 24 MiB stack.
+export NAZM_LIBRARY="$root/library" NAZM_CACHE_DIR="$work/cache"
+for cmd in fmt init check; do
+  "$nazm" build --heap-limit 2G --stack-size 256M "$root/toolchain/commands/$cmd.nz" -o "$work/bin/$cmd" > "$work/build.log" 2>&1 \
     || { cat "$work/build.log" >&2; echo "run.sh: toolchain/commands/$cmd.nz did not build" >&2; exit 2; }
 done
 
@@ -152,6 +158,14 @@ fixture() {
       printf 'fn main() -> Int { 1+2 }\n' > "$dir/b.nz"
       mkdir -p "$dir/sub"
       ;;
+    check)
+      printf 'fn main() -> Int {\n    0\n}\n' > "$dir/a.nz"
+      printf 'fn main() -> Int {\n    let x: Bool = 1;\n    x\n}\n' > "$dir/b.nz"
+      printf 'enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n' > "$dir/w.nz"
+      printf 'use "gone.nz";\nfn main() -> Int { 0 }\n' > "$dir/m.nz"
+      printf 'fn main() -> Int { 1 + }\n' > "$dir/s.nz"
+      mkdir -p "$dir/sub"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -178,7 +192,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init; do
+  for cmd in fmt init check; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -243,11 +257,76 @@ part_init() {
   [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
 }
 
+# --- check: every input ------------------------------------------------------------------------------
+
+part_check() {
+  list="$work/check-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/cres"
+  export R5_ROOT="$root" R5_REF="$ref" R5_CHECK="$work/bin/check" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  # One input: each side's runs recorded — status, output, error — and compared byte for byte.
+  # Writes `agree`, `differ`, `refused` or `timeout`, then the refusal's reason, to cres/NAME.
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/c-$name"
+    mkdir -p "$d"
+    run() {
+      out=$1; shift
+      (cd "$R5_ROOT" && { rc=0; "$@" > "$out.o" 2> "$out.e" || rc=$?; echo "exit $rc" > "$out"; cat "$out.o" "$out.e" >> "$out"; })
+    }
+    run "$d/ref.text" "$R5_REF" check --no-cache "$f"
+    run "$d/ref.json" "$R5_REF" check --json --no-cache "$f"
+    run "$d/got.text" timeout "$R5_DEADLINE" "$R5_CHECK" --no-cache "$f"
+    run "$d/got.json" timeout "$R5_DEADLINE" "$R5_CHECK" --json --no-cache "$f"
+    kinds="text json"
+    if grep -q "^warning\[" "$d/ref.text.e"; then
+      run "$d/ref.deny" "$R5_REF" check --no-cache --deny-warnings "$f"
+      run "$d/got.deny" timeout "$R5_DEADLINE" "$R5_CHECK" --no-cache --deny-warnings "$f"
+      kinds="$kinds deny"
+    fi
+    verdict=agree
+    why=""
+    for k in $kinds; do
+      if grep -q "^exit 6$" "$d/got.$k"; then verdict=refused; why=$(cat "$d/got.$k.e"); break; fi
+      if grep -q "^exit 124$" "$d/got.$k"; then verdict=timeout; break; fi
+      cmp -s "$d/ref.$k" "$d/got.$k" || verdict=differ
+    done
+    printf "%s\n%s\n" "$verdict" "$why" > "$R5_WORK/cres/$name"
+    if [ "$verdict" = differ ] || [ "$verdict" = timeout ]; then
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/check-$name" && for k in $kinds; do cp "$d/ref.$k" "$KEEP/check-$name/want.$k"; cp "$d/got.$k" "$KEEP/check-$name/got.$k"; done
+      fi
+    fi
+    rm -rf "$d"
+  ' sh
+
+  agree=$(grep -l '^agree$' "$work/cres/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/cres/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/cres/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/cres/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/cres/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  # Why the port refused, most frequent first.
+  for r in "$work/cres/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^check: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "check: $agree agree, $differ differ, $refused refused, $timeout timed out (of $total inputs)"
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fmt) part_fmt "$@" ;;
     args) part_args ;;
     init) part_init ;;
+    check) part_check "$@" ;;
   esac
 done
 exit $status

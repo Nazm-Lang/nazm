@@ -132,6 +132,37 @@ Outside `compiler/` it also needs a package's resolution (`nazm_package::resolve
 dependencies, the source root) and the source root's rule (`root::decide`); those are R5's own to
 port, after the checker's facts. Until 1–7 are public, `doc` is not started.
 
+**D11 — `check` is `checking.rs` over R2's front end, and refuses where that stops.**
+`toolchain/commands/check.nz` drives the loader, the parser, the attributes and the checker as
+`compiler/diagnose.nz` does — reading them with `use`, changing none — and then writes what
+`checking::run` writes: the warnings first (`crate::emit`), then `ok` on standard output (0), or
+`nazm: N warnings, refused by --deny-warnings` (1), or the errors and `nazm: N errors` (1); a
+compilation that does not load is its loader's diagnostics alone, 3 when every one is `N0205`,
+else 1. The human form is `Diagnostic::render` over the whole compilation's source map: a span is
+published at its offset in the concatenation of the files, so its file is the one whose text
+holds it — except a syntax diagnostic, whose file is known — and where an offset is also the end
+of the file before (a span the reference could have meant there), the command refuses rather than
+pick. `prepare.rs` comes first: a directory without a manifest is `nazm: \`DIR\` is a directory
+with no \`nazm.toml\`, so it is not a package` (3), `--locked` outside a package is 5, and
+`--features` outside one is 5 after the load. Not carried, each refused with status 6 before
+anything else is written: whatever the checker stops at (its own reason, `ck_stopped`), a package
+or a `nazm.root` marker at or above the file (found by walking `..` from its directory — the root
+decision, the package loader and the profiles a manifest names are not ported), an import of a
+package (`N0508`), `--source-root`, `--profile`, `--profile-report`, `--cache-report` (the cache's
+tally) and `--summary-json` (it needs the language service's diagnostic identities and the BLAKE3
+source digest of the durable paths, which need the source root decided), a root module that is
+not a readable UTF-8 file, and an empty `--features` value. The check cache (`.nazm/check/`) is
+derived data — deleting it changes no program's meaning, which the reference's equivalence tests
+hold — so the port neither reads nor writes it: a run is `--no-cache`'s, with the same output.
+The standard library is read from the directory `NAZM_LIBRARY` names (the reference compiles the
+same files in); without it the command refuses. `cli.nz` gains what `check`'s arguments need:
+`conflicts_with_all` (clap's `validate_conflicts`, before the required arguments, its usage the
+arguments used but the conflicting ones) and an option given again with its values split at a
+delimiter (`--features`, `ArgAction::Append` with `value_delimiter`). The comparison runs every
+input from the repository's root with `--no-cache`, text and `--json`, and `--deny-warnings` where
+the reference warns, and every command line of `tests/args/check.txt`; the reference's cache, where
+a command line uses it, goes to a scratch `NAZM_CACHE_DIR`.
+
 ## Risks / Trade-offs
 
 - **Two formatters until the Rust one retires.** A change to `format.rs` must be ported too; the
