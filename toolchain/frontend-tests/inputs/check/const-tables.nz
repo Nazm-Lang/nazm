@@ -1,0 +1,47 @@
+// Constants of record, enum, tuple and array types (L8): each refusal once, the rest used.
+struct Point { x: Int, y: Int, }
+struct Named { name: Str, at: Point, }
+struct Holder[T] { item: T, }
+enum Kind { Plain, Sized(n: Int, wide: Bool), }
+
+const ORIGIN: Point = Point(x: 0, y: 0);
+const HOME: Named = Named(name: "home", at: ORIGIN);
+const BOXED: Holder[Int] = Holder[Int](item: 3);
+const SIZED: Kind = Kind.Sized(n: 2, wide: false);
+const PLAIN: Kind = Kind.Plain;
+const GRID: [[Int; 2]; 2] = [[1, 2], [3, 4]];
+const ROW: [Point; 3] = [ORIGIN; 3];
+const PAIRS: [(Int, Bool); 2] = [(1, true), (2, false)];
+const MAYBE: Option[Int] = Option.Some(value: 4);
+
+const MISSING: Point = Point(x: 1);
+const EXTRA: Point = Point(x: 1, y: 2, z: 3);
+const TWICE: Point = Point(x: 1, x: 2, y: 3);
+const SHORT: [Int; 3] = [1, 2];
+const REPEAT: [Int; 3] = [0; 4];
+const NOT_INT: [Int; 2] = [0; true];
+const TUPLE_SIZE: (Int, Int) = (1, 2, 3);
+const NO_VARIANT: Kind = Kind.Huge(n: 1);
+const ANOTHER: Point = Named(name: "x", at: ORIGIN);
+const SCALAR: Point = 3;
+const BAD_FIELD: Point = Point(x: true, y: 1);
+const OVER: Holder[UInt8] = Holder[UInt8](item: 256);
+const LOOP_A: Named = Named(name: "a", at: LOOP_B);
+const LOOP_B: Point = LOOP_C;
+const LOOP_C: Point = LOOP_B;
+const CALLS: Point = make();
+const SHADE: Text = "x";
+const LIST: Holder[Ints] = Holder[Ints](item: ints_new());
+const UNKNOWN: Nowhere = 1;
+const FROM_FIELD: Int = ORIGIN.x;
+const BY_POSITION: Kind = Kind.Sized(1, true);
+const SHORT_POSITION: Kind = Kind.Sized(1);
+
+fn make() -> Point { Point(x: 1, y: 1) }
+
+fn main() -> Int {
+    let p = HOME.at;
+    let k = match SIZED { Kind.Sized(n: n, wide: _) => n, Kind.Plain => 0, };
+    let m = match MAYBE { Some(v) => v, None => 0, };
+    p.x + k + m + GRID[1][0] + ROW[2].y + BOXED.item + PAIRS[0].0
+}

@@ -22,7 +22,8 @@
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
-// numbers, `Bool` and `Str`, imported ones included, and statics (Gate 3); function types, named
+// numbers, `Bool` and `Str` and tables of records, enums, tuples and arrays (L8), imported ones
+// included, and statics (Gate 3); function types, named
 // functions as values, calls through values and closures with their captures (N50); traits,
 // impls, bounds, method calls, default methods and `Show` in interpolation (N78); effects
 // and authority; provenance and its one rule, `N0372` (N38, N80); the C boundary — foreign
@@ -1532,7 +1533,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let mut k = 0;
     while k < ints_len(consts) {
         let decl = ints_get(consts, k);
-        if flag(c, decl, "is_static") == false && const_kind(c, decl) < 0 { stop(c, "a constant of this type"); }
         k = k + 1;
     }
     let records = kids(c, p, "records");
@@ -2602,7 +2602,7 @@ fn array_length(c: Ck, e: Int, d: Diags) -> Int {
         if k == "Var" {
             let name = fname_of(c, e, "name");
             if static_named(c, name) < 0 {
-                let ev = evaluate_consts(c, gs(c, s_module()), dg_new());
+                let ev = evaluate_consts(c, gs(c, s_module()), dg_new(), false);
                 let at = strs_find(ev.names, name);
                 if at >= 0 {
                     if ints_get(ev.kinds, at) == k_int() {
@@ -4010,6 +4010,19 @@ fn report_exported_types(c: Ck, m: Int) -> Int {
             }
         }
         e = e + 1;
+    }
+    // Its exported constants' types (L8): an importer builds the value where it uses it.
+    let consts = kids(c, ints_get(c.mprog, m), "consts");
+    let mut k = 0;
+    while k < ints_len(consts) {
+        let decl = ints_get(consts, k);
+        if some(c, decl, "pub_span") && flag(c, decl, "is_static") == false {
+            let ts = fld(c, fld(c, decl, "ty"), "span");
+            let ns = fld(c, decl, "name_span");
+            let t = resolve_written(c, fld(c, decl, "ty"), strs_new(), ints_new(), dg_new());
+            report_private_type(c, t, sps(c, ts), spe(c, ts), sps(c, ns), spe(c, ns), "constant", fname_of(c, decl, "name"));
+        }
+        k = k + 1;
     }
     0
 }
@@ -8528,9 +8541,9 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
 
 // --- constants (`constants::evaluate`, Gate 2 and L8) ----------------------------------------------
 
-// A constant's kind: what this checker computes — a number of any type, a `Bool` or a `Str`. A
-// constant of a record, an enum, a tuple or an array, and a static, stop it. A number's kind is
-// 100 plus its type's place among the built-in types; `Int`'s is 0.
+// A constant's kind: what this checker computes — a number of any type, a `Bool` or a `Str`; a
+// constant of a record, an enum, a tuple or an array is checked against its type (`k_agg`). A
+// number's kind is 100 plus its type's place among the built-in types; `Int`'s is 0.
 fn k_int() -> Int { 0 }
 fn k_bool() -> Int { 1 }
 fn k_str() -> Int { 2 }
@@ -8547,6 +8560,7 @@ fn k_is_float(k: Int) -> Bool { k >= 100 && is_float_name(kind_name(k)) }
 fn k_is_integer(k: Int) -> Bool { k_is_num(k) && k_is_float(k) == false }
 
 fn kind_type(c: Ck, k: Int) -> Int {
+    if k_is_agg(k) { return 0 - 10 - k; }
     if k == k_atomic() { return builtin_ty(c, "Atomic"); }
     if k == k_bool() { return t_bool(); }
     if k == k_str() { return t_str(); }
@@ -8555,6 +8569,7 @@ fn kind_type(c: Ck, k: Int) -> Int {
 }
 
 fn kind_name(k: Int) -> Str {
+    if k_is_agg(k) { return "this type"; }
     if k == k_bool() { return "Bool"; }
     if k == k_str() { return "Str"; }
     if k >= 100 { return strs_get(builtin_names(), k - 100); }
@@ -8884,6 +8899,9 @@ pub struct Cev {
     d: Diags,
     // The module's static `Atomic`s (Gate 3): cells, not values.
     cells: Strs,
+    // Each constant of a record, enum, tuple or array type whose type resolved (L8), by name.
+    aggn: Strs,
+    aggt: Ints,
 }
 
 // The declaration of `name` a map collected from the module's would hold: its last.
@@ -8927,10 +8945,10 @@ fn ev_bool(ev: Cev, b: Bool) -> Int {
 // Compute module `m`'s constants (`evaluate`), each refusal into `d`: the constants its imports
 // export first — under each name it imports them by, a later import's hiding an earlier's — its
 // own names hiding them, then each declaration in order.
-fn evaluate_consts(c: Ck, m: Int, d: Diags) -> Cev {
+fn evaluate_consts(c: Ck, m: Int, d: Diags, aggregates: Bool) -> Cev {
     ss(c, s_module(), m);
     let ev = Cev(decls: kids(c, ints_get(c.mprog, m), "consts"), names: strs_new(), kinds: ints_new(), ints: ints_new(), strs: strs_new(),
-            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new());
+            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new(), aggn: strs_new(), aggt: ints_new());
     let mut k = 0;
     while k < deps(c, m) {
         let dp = dep(c, m, k);
@@ -8982,7 +9000,224 @@ fn evaluate_consts(c: Ck, m: Int, d: Diags) -> Cev {
         }
         i = i + 1;
     }
+    // The second phase (L8, `compute_aggregates`): each constant of a record, enum, tuple or array
+    // type, its type resolved where the module's types are known — one that does not resolve is
+    // one error, not a second about its value — then each computed in declaration order.
+    if aggregates {
+        type_environment(c, m, false);
+        let order = strs_new();
+        i = 0;
+        while i < ints_len(ev.decls) {
+            let decl = ints_get(ev.decls, i);
+            if flag(c, decl, "is_static") == false && const_kind(c, decl) < 0 {
+                let before = dg_len(d);
+                let t = resolve_written(c, fld(c, decl, "ty"), strs_new(), ints_new(), d);
+                if dg_len(d) == before {
+                    strs_push(ev.aggn, fname_of(c, decl, "name"));
+                    ints_push(ev.aggt, t);
+                    strs_push(order, fname_of(c, decl, "name"));
+                }
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(order) {
+            ev_constant(c, ev, strs_get(order, i));
+            i = i + 1;
+        }
+    }
     ev
+}
+
+// A constant of a record, enum, tuple or array type has the kind -10 minus its type.
+fn k_agg(t: Int) -> Int { 0 - 10 - t }
+fn k_is_agg(k: Int) -> Bool { k <= 0 - 10 }
+
+// The kind of a value of a number type, `Bool` or `Str`, or -1.
+fn scalar_kind(c: Ck, t: Int) -> Int {
+    if t == t_int() { return k_int(); }
+    if t == t_bool() { return k_bool(); }
+    if t == t_str() { return k_str(); }
+    if t >= 0 && is_num(c, t) { return k_num(bname_of(c, t)); }
+    0 - 1
+}
+
+// A constant of a record, enum, tuple or array type (`aggregate`): a value, never a handle; still
+// declared at its type when refused, so a use is not a second error.
+fn ev_aggregate(c: Ck, ev: Cev, name: Str, decl: Int, t: Int) -> Int {
+    let handle = not_value(c, t, true);
+    if handle >= 0 {
+        let ts = fld(c, fld(c, decl, "ty"), "span");
+        dg_error(ev.d, "N0622", sps(c, ts), spe(c, ts), cat5("a constant is a value, and `", show(c, t), "` holds a `", show(c, handle), "`"), "",
+                "a constant is a number, a `Bool`, a `Str`, or a record, enum, tuple or array of them — computed when the program is checked, with no storage");
+        return 0 - 1;
+    }
+    strs_push(ev.active, name);
+    ev_agg(c, ev, fld(c, decl, "value"), t);
+    strs_pop(ev.active);
+    ev_set(ev, name, k_agg(t), 0, "")
+}
+
+fn ev_mismatch(c: Ck, ev: Cev, span: Int, t: Int) -> Bool {
+    dg_error(ev.d, "N0300", sps(c, span), spe(c, span), cat3("a constant of type `", show(c, t), "` is not this"), "", "");
+    false
+}
+
+// The written name of a record's or enum's type, before its arguments (`base`).
+fn base_name(c: Ck, t: Int) -> Str {
+    let shown = show(c, t);
+    let mut i = 0;
+    while i < str_len(shown) {
+        if str_byte(shown, i) == 91 { return str_slice(shown, 0, i); }
+        i = i + 1;
+    }
+    shown
+}
+
+// `e` as a value of `t` (`agg`): a record, enum, tuple or array built of constant parts, or a
+// scalar constant expression; whether it is one.
+fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
+    let sk = scalar_kind(c, t);
+    if sk >= 0 {
+        let v = ev_value(c, ev, e, sk);
+        if v < 0 { return false; }
+        if ints_get(ev.vk, v) != sk { return ev_mismatch(c, ev, espan(c, e), t); }
+        return true;
+    }
+    if sx_kind(c.t, e) == tk_tuple() { return ev_mismatch(c, ev, espan(c, e), t); }
+    let k = kind_of(c, e);
+    if k == "Var" {
+        let name = fname_of(c, e, "name");
+        let span = fld(c, e, "span");
+        let own = const_decl(c, ev, name) >= 0;
+        // Its own constant, or one an import exports (L8).
+        if own == false && strs_find(ev.names, name) < 0 {
+            ev_refuse(c, ev, span, cat3("name `", name, "`, which is not a constant"));
+            return false;
+        }
+        let i = ev_constant(c, ev, name);
+        if i < 0 { return false; }
+        if kind_type(c, ints_get(ev.kinds, i)) != t { return ev_mismatch(c, ev, span, t); }
+        return true;
+    }
+    if is_record(c, t) && k == "Tuple" {
+        let elems = kids(c, e, "elems");
+        if is_tuple(c, t) == false || targc(c, t) != ints_len(elems) { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
+        let mut i = 0;
+        while i < ints_len(elems) {
+            if ev_agg(c, ev, ints_get(elems, i), targ(c, t, i)) == false { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    if is_record(c, t) && k == "Construct" && is_tuple(c, t) == false {
+        if fname_of(c, e, "ty") == base_name(c, t) {
+            let want = strs_new();
+            let wty = ints_new();
+            let r = ta(c, t);
+            let mut i = 0;
+            while i < ints_get(c.rfc, r) {
+                strs_push(want, strs_get(c.fname, ints_get(c.rff, r) + i));
+                ints_push(wty, field_ty_in(c, t, ints_get(c.rff, r) + i));
+                i = i + 1;
+            }
+            return ev_fields(c, ev, want, wty, kids(c, e, "fields"), fld(c, e, "span"));
+        }
+    }
+    if is_enum(c, t) && k == "Variant" {
+        if fname_of(c, e, "ty") == base_name(c, t) {
+            let en = ta(c, t);
+            let vn = fname_of(c, e, "variant");
+            let mut vi = 0 - 1;
+            let mut v = 0;
+            while v < ints_get(c.evc, en) {
+                if vi < 0 && strs_get(c.vname, ints_get(c.evf, en) + v) == vn { vi = ints_get(c.evf, en) + v; }
+                v = v + 1;
+            }
+            if vi < 0 { return ev_mismatch(c, ev, fld(c, e, "variant_span"), t); }
+            let want = strs_new();
+            let wty = ints_new();
+            let mut i = 0;
+            while i < ints_get(c.vfc, vi) {
+                strs_push(want, strs_get(c.fname, ints_get(c.vff, vi) + i));
+                ints_push(wty, field_ty_in(c, t, ints_get(c.vff, vi) + i));
+                i = i + 1;
+            }
+            return ev_fields(c, ev, want, wty, kids(c, e, "fields"), fld(c, e, "span"));
+        }
+    }
+    if is_array(c, t) && k == "Array" {
+        let elems = kids(c, e, "elems");
+        if ints_len(elems) != ta(c, t) { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
+        let mut i = 0;
+        while i < ints_len(elems) {
+            if ev_agg(c, ev, ints_get(elems, i), array_elem(c, t)) == false { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    if is_array(c, t) && k == "ArrayRepeat" {
+        let n = ev_value(c, ev, fld(c, e, "count"), k_int());
+        if n < 0 { return false; }
+        let nk = ints_get(ev.vk, n);
+        if k_is_integer(nk) == false || w_cmp(ev_wide(ev, n), w_from_int(ta(c, t))) != 0 { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
+        return ev_agg(c, ev, fld(c, e, "value"), array_elem(c, t));
+    }
+    if k == "Call" {
+        ev_refuse(c, ev, fld(c, e, "span"), "call a function");
+        return false;
+    }
+    ev_mismatch(c, ev, espan(c, e), t)
+}
+
+// A construction's fields as declared (`fields`): each once, in declaration order — or every one
+// by position.
+fn ev_fields(c: Ck, ev: Cev, want: Strs, wty: Ints, inits: Ints, at: Int) -> Bool {
+    let mut positional = ints_len(inits) > 0;
+    let mut i = 0;
+    while i < ints_len(inits) {
+        if fname_of(c, ints_get(inits, i), "name") != "" { positional = false; }
+        i = i + 1;
+    }
+    if positional {
+        if ints_len(inits) != strs_len(want) {
+            dg_error(ev.d, "N0300", sps(c, at), spe(c, at),
+                    cat5("this constant's construction gives ", int_to_str(ints_len(inits)), " of its ", int_to_str(strs_len(want)), " fields by position"), "", "");
+            return false;
+        }
+        i = 0;
+        while i < ints_len(inits) {
+            if ev_agg(c, ev, fld(c, ints_get(inits, i), "value"), ints_get(wty, i)) == false { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    i = 0;
+    while i < ints_len(inits) {
+        let f = ints_get(inits, i);
+        if strs_find(want, fname_of(c, f, "name")) < 0 {
+            let ns = fld(c, f, "name_span");
+            dg_error(ev.d, "N0300", sps(c, ns), spe(c, ns), cat3("there is no field `", fname_of(c, f, "name"), "` here"), "", "");
+            return false;
+        }
+        i = i + 1;
+    }
+    let mut w = 0;
+    while w < strs_len(want) {
+        let mut found = 0 - 1;
+        i = 0;
+        while i < ints_len(inits) {
+            if found < 0 && fname_of(c, ints_get(inits, i), "name") == strs_get(want, w) { found = ints_get(inits, i); }
+            i = i + 1;
+        }
+        if found < 0 {
+            dg_error(ev.d, "N0300", sps(c, at), spe(c, at), cat3("this constant's construction does not give `", strs_get(want, w), "`"), "", "");
+            return false;
+        }
+        if ev_agg(c, ev, fld(c, found, "value"), ints_get(wty, w)) == false { return false; }
+        w = w + 1;
+    }
+    true
 }
 
 // Whether a declaration is a static `Atomic`, its type written plainly (`is_atomic`).
@@ -9028,6 +9263,15 @@ fn ev_constant(c: Ck, ev: Cev, name: Str) -> Int {
         return 0 - 1;
     }
     let kind = const_kind(c, decl);
+    // A record, enum, tuple or array (L8): the second phase's, where its type resolved.
+    if kind < 0 && flag(c, decl, "is_static") == false {
+        let a = strs_find(ev.aggn, name);
+        if a >= 0 { return ev_aggregate(c, ev, name, decl, ints_get(ev.aggt, a)); }
+        if strs_len(ev.active) > 0 {
+            dg_error(ev.d, "N0622", sps(c, ns), spe(c, ns), cat3("`", name, "` is not a number, a `Bool` or a `Str`, which this needs"), "", "");
+        }
+        return 0 - 1;
+    }
     // A static is a number or a `Bool` (an `Atomic` is a cell): storage, which a `Str` is not.
     if flag(c, decl, "is_static") && (kind < 0 || kind == k_str()) {
         let ty = fld(c, decl, "ty");
@@ -9304,7 +9548,7 @@ fn declare_all_consts(c: Ck) -> Int {
     let mut i = 0;
     while i < ints_len(order) {
         let m = ints_get(order, i);
-        let ev = evaluate_consts(c, m, c.d);
+        let ev = evaluate_consts(c, m, c.d, true);
         let mut k = 0;
         while k < ints_len(ev.decls) {
             let decl = ints_get(ev.decls, k);
@@ -9331,7 +9575,7 @@ fn const_environment(c: Ck, m: Int) -> Int {
         strs_pop(c.kname);
         ints_pop(c.kkind);
     }
-    let ev = evaluate_consts(c, m, dg_new());
+    let ev = evaluate_consts(c, m, dg_new(), true);
     let mut i = 0;
     while i < strs_len(ev.names) {
         strs_push(c.kname, strs_get(ev.names, i));

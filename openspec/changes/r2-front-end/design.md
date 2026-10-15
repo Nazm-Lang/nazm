@@ -222,6 +222,14 @@ found among the module's foreign functions already declared rather than in a map
 missing call in each. Provenance gives a foreign function the reference's summary — `Unknown`
 from every argument — before solving, and names it in the chain as C's.
 
+**D21 — A constant table is checked, not computed.** The reference computes a constant of a
+record, enum, tuple or array type into a `ConstValue`; nothing the checker reports depends on that
+value beyond its type (an array's length reads only `Int` constants, and a constant table is never
+read by another constant's arithmetic), so the Nazm checker walks the value against the type with
+the reference's rules and refusals, in its order, and records only the type: its kind is `-10 - t`
+for the type `t`, shown as `this type` where a scalar's message names a kind. Core IR (slice 5)
+will need the values; they are computed then.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
