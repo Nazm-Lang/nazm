@@ -121,6 +121,10 @@ const CASES: &[Case] = &[
         stderr_names: Some("error[N0408]"),
         ..case("deep")
     },
+    // Found on a Windows host: a frame larger than a page, and a recursion that needs more than
+    // Windows' default 1 MiB main stack.
+    case("big_frame"),
+    case("deep_main"),
     Case {
         code: 2,
         stderr_names: Some("error[N0408]"),
@@ -148,6 +152,50 @@ fn every_program_builds_for_windows_with_mingw_and_winsock() {
                 assert!(libraries.split(' ').any(|l| l == lib), "{out}: {libraries}");
             }
         }
+    }
+}
+
+/// The libraries line of `out`'s `link.txt`, split.
+fn libraries(dir: &Path, out: &str) -> Vec<String> {
+    let link = std::fs::read_to_string(dir.join(out).join("link.txt")).unwrap();
+    link.lines()
+        .find_map(|l| l.strip_prefix("libraries "))
+        .unwrap_or_else(|| panic!("{out}: {link}"))
+        .split(' ')
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Q1-A1-01 on Windows, found on a Windows host: a frame larger than a page is probed by
+/// MinGW-w64's `___chkstk_ms` under LLVM and inline under Cranelift, and no object calls a
+/// function named after LLVM's inline probe, `inline-asm`, which no linker has.
+#[test]
+fn a_large_frame_is_probed_by_what_mingw_links() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in BACKENDS {
+        let out = objects(d.path(), "big_frame", backend);
+        let m0 = std::fs::read(d.path().join(&out).join("00-m0.o")).unwrap();
+        let names = |s: &str| m0.windows(s.len()).any(|w| w == s.as_bytes());
+        assert!(!names("inline-asm"), "{out}");
+        if backend == "llvm" {
+            assert!(names("___chkstk_ms"), "{out}");
+        }
+    }
+}
+
+/// Found on a Windows host: Windows gives an executable's main thread 1 MiB unless it asks, where
+/// macOS and Linux give 8 MiB, so a recursion that runs natively met `N0408` there. Every Windows
+/// executable asks for 8 MiB (`docs/spec.md`, *The limit*).
+#[test]
+fn the_main_thread_reserves_what_macos_and_linux_give_it() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in BACKENDS {
+        let out = objects(d.path(), "deep_main", backend);
+        let libs = libraries(d.path(), &out);
+        assert!(
+            libs.iter().any(|l| l == "-Wl,--stack,8388608"),
+            "{out}: {libs:?}"
+        );
     }
 }
 
