@@ -981,12 +981,6 @@ fn primitive_base(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
         let fd = iconst_c(fx, "i32", if op == "print" { 1 } else { 2 })
         let w = rt_v(fx, "write", ints_of3(fd, ints_get(pn, 0), ints_get(pn, 1)), "i64")
         set(fx, dst, w);
-    } else if op == "num_to_str" && (elem == "Int" || elem == "") {
-        let x = arg_value(fx, args, 0)
-        let room = iconst(fx, 48)
-        let ob = string_backing(fx, room)
-        let n = rt_v(fx, "nz.format_int", ints_of2(ints_get(ob, 1), x), "i64")
-        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
     } else if op == "int_to_str" {
         let x = arg_value(fx, args, 0)
         let room = iconst(fx, 21)
@@ -2880,35 +2874,6 @@ fn read_owned(fx: Fx, dst: Int, a: Int, t: Str) {
         let v = load(fx, mclass(t), a, 0)
         if owns_ty(fx, t) { retain_value(fx, v, t); }
         set(fx, dst, v);
-    }
-}
-
-fn rvalue_name(v: Rvalue) -> Str {
-    match v {
-        Rvalue.Use(o: _) => "use",
-        Rvalue.Copy(l: _) => "copy",
-        Rvalue.Move(l: _) => "move",
-        Rvalue.Neg(o: _) => "neg",
-        Rvalue.Arith(op: _, a: _, b: _) => "arith",
-        Rvalue.Bits(op: _, a: _, b: _) => "bits",
-        Rvalue.Complement(o: _) => "complement",
-        Rvalue.Convert(mode: _, to: _, o: _) => "convert",
-        Rvalue.Fits(to: _, o: _) => "fits",
-        Rvalue.Array(elems: _) => "array",
-        Rvalue.ArrayRepeat(value: _, count: _) => "array-repeat",
-        Rvalue.Index(base: _, index: _) => "index",
-        Rvalue.Compare(op: _, law: _, operand: _, a: _, b: _) => "compare",
-        Rvalue.Hash(operand: _, value: _) => "hash",
-        Rvalue.Call(callee: _, args: _) => "call",
-        Rvalue.CallIndirect(callee: _, args: _) => "call_indirect",
-        Rvalue.Closure(func: _, captures: _) => "closure",
-        Rvalue.Capture(env: _, index: _) => "capture",
-        Rvalue.Primitive(op: _, elem: _, args: _) => "primitive",
-        Rvalue.Record(ty: _, fields: _, names: _, locals: _) => "record",
-        Rvalue.Variant(ty: _, variant: _, vname: _, fields: _, names: _, locals: _) => "variant",
-        Rvalue.Field(base: _, f: _) => "field",
-        Rvalue.FieldBorrow(base: _, f: _) => "field borrow",
-        Rvalue.Payload(base: _, ty: _, variant: _, vname: _, field: _, fname: _) => "payload",
     }
 }
 
