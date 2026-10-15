@@ -1,0 +1,41 @@
+// Contracts (N87): clause types, what a clause may not contain, and preconditions refuted by
+// literal arguments.
+struct P { x: Int, }
+
+fn pure_len(s: Str) -> Int ! {} { str_len(s) }
+fn loud(x: Int) -> Int ! {io} { print("x"); x }
+
+fn shape(a: Int, s: Str, p: P, v: Vec[Int]) -> Int
+    requires a
+    requires s == "x" && pure_len(s) > 0 && str_len(s) < 9 && vec_len(v) >= 0 && p.x > 0
+    requires loud(a) > 0
+    requires if a > 0 { true } else { false }
+    requires fn() -> Bool { true }
+    requires f"{a}" == "1"
+    requires { a > 0 }
+    ensures result > a
+    ensures [a, 1] == [a, 1]
+{
+    a + 1
+}
+
+fn bits(a: Int, b: Bool)
+    -> Int
+    requires a & 3 == 1
+    requires (a << 2) >> 1 == 2
+    requires a % 2 == 1 && a / 2 == 0 && -a < 0
+    requires !b || a ^ 1 == 0
+{
+    a
+}
+
+fn wrap(n: Int) -> Int requires n * 9223372036854775807 > 0 { n }
+
+fn main() -> Int {
+    let one = bits(1, true);
+    let two = bits(2, false);
+    let three = bits(5, false);
+    let w = wrap(2);
+    let x = bits(1 + 0, !false);
+    one + two + three + w + x
+}

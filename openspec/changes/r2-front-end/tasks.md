@@ -191,6 +191,13 @@
       that closes each, and the nesting bound of declarations (N0338).
       `inputs/check/box-cell.nz`. `run.sh check`: 2,727 agree, 67 differ; the checker carries
       2,633, all agree (2,728 and 2,634 with the new case)
+- [ ] 3.1y Contracts (N87, `check_contracts`, `prove_preconditions`): each clause a `Bool` (N0300),
+      `ensures` over `result` in a scope of its own, each made only of literals, names, operators,
+      field reads, indices and calls of pure functions (N0614, with what it may not contain); a
+      call of this module's function whose arguments are all literals evaluated against its
+      `requires` clauses as `clauses::literal` does — checked `Int` arithmetic, bit operators and
+      shifts — and a false one refuted (N0615). `inputs/check/contracts.nz`. `run.sh check`:
+      2,740 agree, 56 differ; the checker carries 2,667, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
