@@ -1,0 +1,48 @@
+# `nazm check` command lines (design D8, D11), run in the fixture run.sh writes: a.nz checks, b.nz
+# does not, w.nz is warned of, m.nz imports a file that is not there, s.nz does not parse, and sub/
+# is a directory with no manifest.
+--help
+-h
+--version
+
+a.nz
+--json a.nz
+--no-cache a.nz
+a.nz --no-cache --json
+b.nz
+--json b.nz
+w.nz
+--json w.nz
+w.nz --deny-warnings
+--json --deny-warnings w.nz
+m.nz
+--json m.nz
+s.nz
+--json s.nz
+absent.nz
+--json absent.nz
+sub
+sub --json
+a.nz --locked
+--locked absent.nz
+a.nz --features x
+a.nz --features=x,y
+a.nz --features a --features b
+absent.nz --features x
+a.nz b.nz
+--jsn a.nz
+--bogus a.nz
+-x a.nz
+--json --json a.nz
+--json=yes a.nz
+--source-root
+--profile
+--features
+--json --summary-json a.nz
+--summary-json --json a.nz
+--cache-report --summary-json a.nz
+--summary-json --json --cache-report a.nz
+--json --cache-report --summary-json a.nz
+-- --json
+--source-root= a.nz
+''
