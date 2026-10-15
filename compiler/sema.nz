@@ -120,8 +120,12 @@ pub struct Ck {
     bprelude: Ints,
     beff: Strs,
     bcaps: Strs,
-    // Whether an argument of it is the restricted sink, a path written to (N38).
+    // Whether an argument of it is the restricted sink, a path written to (N38); where its result
+    // comes from (`Origin::of_intrinsic`) and how it touches a container (`Origin::container`), as
+    // the table spells them.
     bpath: Ints,
+    bflow: Strs,
+    bcont: Strs,
     // The type names the module being checked may write, and what each names.
     tnames: Strs,
     ttys: Ints,
@@ -345,7 +349,11 @@ fn s_captured() -> Int { 11 }
 fn s_hash() -> Int { 12 }
 // How many `scope`s enclose the statement being checked, within its function (`scope_depth`).
 fn s_scope() -> Int { 13 }
-fn s_slots() -> Int { 14 }
+// Whether a built-in whose result is a file's contents or not followed (a restricted origin,
+// N38) is called anywhere in the compilation, and whether a restricted sink is.
+fn s_source() -> Int { 14 }
+fn s_sink() -> Int { 15 }
+fn s_slots() -> Int { 16 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -913,7 +921,7 @@ fn new_ck(t: Tree) -> Ck {
             fnpf: ints_new(), fnpc: ints_new(), fnret: ints_new(), fnnores: ints_new(), fneff: ints_new(), fnws: ints_new(), fnwe: ints_new(), sfn: ints_new(), sstart: ints_new(),
             send: ints_new(), sbuiltin: ints_new(), suser: ints_new(), sheld: ints_new(), ptys: ints_new(), bname: strs_new(),
             bpf: ints_new(), bpc: ints_new(), bret: ints_new(), bok: ints_new(), bprelude: ints_new(), beff: strs_new(),
-            bcaps: strs_new(), bpath: ints_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
+            bcaps: strs_new(), bpath: ints_new(), bflow: strs_new(), bcont: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
             sds: ints_new(), sde: ints_new(), frames: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
             tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
@@ -989,6 +997,8 @@ fn load_builtins(c: Ck) -> Int {
         strs_push(c.beff, strs_get(cols, 6));
         strs_push(c.bcaps, strs_get(cols, 7));
         if str_has(strs_get(cols, 8), ":path") { ints_push(c.bpath, 1); } else { ints_push(c.bpath, 0); }
+        strs_push(c.bflow, strs_get(cols, 9));
+        strs_push(c.bcont, strs_get(cols, 10));
         i = i + 1;
     }
     0
@@ -1115,7 +1125,80 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
     }
     // The rules about `main`.
     main_rules(c);
+    restricted_flow(c);
     c
+}
+
+// What a call of the built-in `bi` means for provenance (N38): whether it brings in a restricted
+// origin — a file's contents, or what the checker does not follow — and whether it is a
+// restricted sink.
+fn note_flow(c: Ck, bi: Int) -> Int {
+    let flow = strs_get(c.bflow, bi);
+    if flow == "source:file" || flow == "source:unknown" { ss(c, s_source(), 1); }
+    if ints_get(c.bpath, bi) == 1 { ss(c, s_sink(), 1); }
+    0
+}
+
+// Provenance (N38, N80; `provenance::solve`): the language's one flow rule, `N0372`, refuses a
+// restricted origin reaching a path that a function declaring its effects writes to, or hands
+// to what writes to one, through a call, a function value, a bound or a closure's captures. The
+// flows are not carried yet, but the rule cannot fire where no restricted origin enters the
+// compilation, nor in a function that cannot reach a restricted sink: such a compilation is
+// carried, and anywhere else the checker stops. A function reaches a sink where it calls one,
+// calls a function that reaches one, makes a closure that does, or calls through a value or a
+// bound while any function reaches one.
+fn restricted_flow(c: Ck) -> Int {
+    if gs(c, s_source()) == 0 || gs(c, s_sink()) == 0 { return 0; }
+    let n = strs_len(c.fnname);
+    let reach = ints_new();
+    let mut f = 0;
+    while f < n {
+        ints_push(reach, 0);
+        f = f + 1;
+    }
+    let mut any = false;
+    let mut grew = true;
+    while grew {
+        grew = false;
+        let mut i = 0;
+        while i < ints_len(c.sfn) {
+            let g = ints_get(c.sfn, i);
+            if ints_get(reach, g) == 0 {
+                let b = ints_get(c.sbuiltin, i);
+                let u = ints_get(c.suser, i);
+                let mut hit = false;
+                if b >= 0 { hit = ints_get(c.bpath, b) == 1; }
+                if u >= 0 { hit = ints_get(reach, u) == 1; }
+                if ints_get(c.sind, i) >= 0 { hit = any; }
+                if hit {
+                    ints_set(reach, g, 1);
+                    any = true;
+                    grew = true;
+                }
+            }
+            i = i + 1;
+        }
+        f = 0;
+        while f < n {
+            let maker = ints_get(c.fnclos, f);
+            if maker >= 0 && ints_get(reach, f) == 1 && ints_get(reach, maker) == 0 {
+                ints_set(reach, maker, 1);
+                grew = true;
+            }
+            f = f + 1;
+        }
+    }
+    f = 0;
+    while f < n {
+        // A closure, an impl's method and a trait's default method always declare theirs.
+        let explicit = ints_get(c.fneff, f) >= 0 || ints_get(c.fnclos, f) >= 0 || ints_get(c.fnmeth, f) == 1 || str_has(strs_get(c.fnname, f), "/");
+        if explicit && ints_get(reach, f) == 1 {
+            stop(c, "a restricted origin and a restricted sink (provenance, N38)");
+            return 0;
+        }
+        f = f + 1;
+    }
+    0
 }
 
 // Each module's imports as the graph holds them (`ModuleGraph::import_as`): one edge per module
@@ -4379,11 +4462,7 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
             stop(c, cat3("the built-in `", callee, "`"));
             return or_int(expected);
         }
-        // Provenance (N38) is not carried yet: a call that writes to a path stops the checker.
-        if ints_get(c.bpath, bi) == 1 {
-            stop(c, cat3("the built-in `", callee, "`, whose path is a restricted sink"));
-            return or_int(expected);
-        }
+        note_flow(c, bi);
         generics = ints_get(c.bgen, bi);
         owner = own_builtin();
         oid = bi;
@@ -4483,10 +4562,11 @@ fn check_spawn(c: Ck, s: Int) -> Int {
         de = ints_get(c.fnne, target);
     } else {
         let bi = 0 - 2 - target;
-        if ints_get(c.bok, bi) == 0 || ints_get(c.bpath, bi) == 1 {
+        if ints_get(c.bok, bi) == 0 {
             stop(c, cat3("the built-in `", callee, "` spawned"));
             return 0;
         }
+        note_flow(c, bi);
         let pf = ints_get(c.bpf, bi);
         let mut k = 0;
         while k < ints_get(c.bpc, bi) {

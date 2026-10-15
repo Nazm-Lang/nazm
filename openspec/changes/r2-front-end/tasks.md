@@ -136,6 +136,11 @@
       (`task_safety`, N0321, with the path to what may not cross); `spawn`'s effect and its
       `SpawnCap` authority (N0366, N0369). `inputs/check/tasks.nz`. `run.sh check`: 2,543 agree,
       241 differ; the checker carries 2,289, all agree
+- [ ] 3.1r Restricted sinks (N38, D18): `write_file`, `os_open_write`, `os_spawn*` and the other path
+      sinks checked as built-ins, and carried wherever `N0372` cannot fire; the table gains each
+      built-in's flow and container use. `run.sh check`: 2,549 agree, 235 differ; the checker
+      carries 2,314, all agree. The flows themselves (`provenance::facts` and `solve`, with their
+      traces) are left: 67 inputs stop there, 26 of them refused with `N0372`
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
