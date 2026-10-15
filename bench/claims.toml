@@ -414,3 +414,8 @@ why = "the byte sizes of bench/compare/nazm/*.nz built `--no-cache` with the rel
 heading = "R1.5 1.2: Nazm's build, uncached and from a warm user cache, measured (2026-10-15)"
 status = "dated"
 why = "hyperfine over four build configurations on one loaded host, recorded with that load; `bench/compare/compare.py` reproduces the uncached and warm-user-cache rows by its method, not these numbers"
+
+[[claim]]
+heading = "R1.5 3.3: word frequency without a split list, measured (2026-10-15)"
+status = "dated"
+why = "hyperfine over release builds of three trees on one loaded host; a record of that date and machine — `bench/compare/compare.py` reproduces the current tree's row by its method, not the before rows"

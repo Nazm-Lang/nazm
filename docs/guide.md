@@ -18,8 +18,8 @@ fn main() -> Int {
 }
 ```
 
-`nazm run` evaluates `main` and prints its value. `nazm build` compiles the same program
-to a native executable that prints the same value. `nazm check` type-checks without
+`nazm run` compiles and runs `main` (`--interpret` evaluates it instead). `nazm build`
+compiles the same program to a native executable that does the same. `nazm check` type-checks without
 running anything, and `nazm test` runs a directory of programs against recorded outputs
 — interpreted and compiled, requiring both to agree.
 
@@ -44,8 +44,10 @@ Declare what each function does and hand it the authority it needs, rather than 
 caller's: `fn save(io: IoCap, path: Str, data: Str) -> Int ! { io } { write_file(path, data) }`.
 A function that declares `! {}` is pure, and a profile such as `critical` or `cyber` refuses any
 function that declares nothing. Reach for the standard library before writing helpers —
-`use "@std/text";` gives `text_split`, `text_trim` and `text_parse_int`, which returns a `Result`
-rather than failing. A program that grows past one directory becomes a package: a `nazm.toml`
+`@std/text` gives `text_split`, `text_trim` and `text_parse_int`, which returns a `Result`
+rather than failing; in your own program `@std/text`, `@std/hashmap`, `@std/hash`, `@std/ordmap`
+and `@std/sort` need no `use` — naming one of their functions, or calling `s.split(" ")` or
+`counts.top(10)`, is enough (R1.5, D9) — while a package's modules write theirs. A program that grows past one directory becomes a package: a `nazm.toml`
 beside `src/`, dependencies as `use "NAME:path.nz";`, and `nazm lock` before a `--locked` build.
 `nazm build --debug` makes a program a debugger can stop in, `nazm build --timings` says where a
 build's time went, and `nazm inspect` prints everything the compiler knows about a program.
