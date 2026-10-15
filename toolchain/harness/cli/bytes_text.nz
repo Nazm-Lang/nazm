@@ -1,0 +1,323 @@
+// Gate 2: `Bytes` and `Text`. A `Bytes` is one buffer every view of which sees every write, read
+// and written in either byte order at every width; a `Text` is UTF-8 by every way of making one,
+// the validation table agreeing byte for byte; scalar values iterate the same way; every failure
+// stops with its code and sentence; buffers are reclaimed — in the interpreter and in both native
+// backends at both optimisation levels. Ported from `crates/nazm-cli/tests/bytes_text.rs` (R7);
+// the programs and expected lines are the Rust test's, carried over byte for byte.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const SHARE_BODY: Str = "\nlet b = bytes_new(8);\nshow(out, num_to_str(bytes_get(b, 7)));\nbytes_set(b, 0, 72);\nlet v = bytes_slice(b, 4, 8);\nlet w = bytes_slice(v, 1, 3);\nbytes_set(w, 0, 9);\nshow(out, num_to_str(bytes_get(b, 5)));\nshow(out, int_to_str(bytes_len(v) + bytes_len(w)));\nlet c = bytes_from_str(\"hello\");\nshow(out, int_to_str(bytes_copy(c, bytes_from_str(\"J\"))));\nshow(out, bytes_to_str(c));\nlet s = bytes_to_str(c);\nbytes_set(c, 0, 77);\nshow(out, s);\nshow(out, bytes_to_str(c));\nbytes_copy(bytes_slice(c, 1, 5), bytes_slice(c, 0, 4));\nshow(out, bytes_to_str(c));\nshow(out, int_to_str(bytes_len(bytes_new(0))));\n";
+const SHARE_WANT: Str = "0\n9\n6\n1\nJello\nJello\nMello\nMMell\n0\n";
+const WIDTH_BODY: Str = "\nlet b = bytes_new(16);\nbytes_write_be(b, 0, UInt32(0xDEADBEEF));\nshow(out, num_to_str(bytes_get(b, 0)));\nshow(out, num_to_str(bytes_read_le[UInt32](b, 0)));\nshow(out, num_to_str(bytes_read_be[UInt32](b, 0)));\nshow(out, num_to_str(bytes_read_be[UInt16](b, 1)));\nshow(out, num_to_str(bytes_read_le[Int8](b, 0)));\nbytes_write_le(b, 0, Int16(-2));\nshow(out, num_to_str(bytes_read_le[Int16](b, 0)));\nshow(out, num_to_str(bytes_read_be[UInt16](b, 0)));\nbytes_write_le(b, 2, -9223372036854775807 - 1);\nshow(out, int_to_str(bytes_read_le[Int](b, 2)));\nshow(out, num_to_str(bytes_get(b, 9)));\nbytes_write_be(b, 8, UInt64(18446744073709551615));\nshow(out, num_to_str(bytes_read_le[UInt64](b, 8)));\nbytes_write_le(b, 0, -1.5);\nshow(out, num_to_str(bytes_read_le[Float64](b, 0)));\nshow(out, num_to_str(bytes_get(b, 7)));\nbytes_write_be(b, 4, Float32(0.1));\nshow(out, num_to_str(bytes_read_be[Float32](b, 4)));\nshow(out, num_to_str(bytes_read_be[UInt32](b, 4)));\nbytes_write_le(b, 12, Int32(-123456789));\nshow(out, num_to_str(bytes_read_le[Int32](b, 12)));\n";
+const WIDTH_WANT: Str = "222\n4022250974\n3735928559\n44478\n-34\n-2\n65279\n-9223372036854775808\n128\n18446744073709551615\n-1.5\n191\n0.1\n1036831949\n-123456789\n";
+const SCALAR_ITEMS: Str = "\nfn scalars(t: Text) -> Str {\n    let mut i = 0;\n    let mut acc = \"\";\n    while i < text_len(t) {\n        acc = str_concat(acc, str_concat(int_to_str(text_scalar_at(t, i)), \" \"));\n        i = text_next(t, i);\n    }\n    acc\n}\n\nfn boundaries(t: Text) -> Str {\n    let mut i = 0;\n    let mut acc = \"\";\n    while i <= text_len(t) {\n        acc = str_concat(acc, if text_is_boundary(t, i) { \"|\" } else { \".\" });\n        i = i + 1;\n    }\n    acc\n}\n";
+const SCALAR_BODY: Str = "\nshow(out, scalars(\"héllo, 世界! 😀\"));\nshow(out, boundaries(\"aé世😀\"));\nlet t = Text(\"añb\");\nshow(out, int_to_str(text_scalar_count(t)));\nshow(out, int_to_str(text_len(t)));\nshow(out, text_as_str(text_slice(t, 1, 3)));\nshow(out, text_as_str(text_concat(t, scalar_text(128512))));\nshow(out, text_as_str(scalar_text(0)));\nshow(out, int_to_str(text_scalar_at(scalar_text(1114111), 0)));\nif scalar_valid(55295) && scalar_valid(57344) && !scalar_valid(55296) && !scalar_valid(57343) && !scalar_valid(1114112) && !scalar_valid(0 - 1) { show(out, \"scalars\"); } else { show(out, \"wrong\"); };\nif t == Text(\"añb\") && t != \"ana\" && \"añb\" == t { show(out, \"equal by bytes\"); } else { show(out, \"wrong\"); };\nif text_is_boundary(t, 0 - 1) || text_is_boundary(t, 9) { show(out, \"wrong\"); } else { show(out, \"outside is no boundary\"); };\n";
+const SCALAR_WANT: Str = "104 233 108 108 111 44 32 19990 30028 33 32 128512 \n||.|..|...|\n3\n4\nñ\nañb😀\n\x00\n1114111\nscalars\nequal by bytes\noutside is no boundary\n";
+const RECLAIM: Str = "\nfn view(b: Bytes) -> Bytes { bytes_slice(b, 1, 3) }\nfn main() -> Int {\n    let mut i = 0;\n    let mut keep = bytes_new(1);\n    while i < 5 {\n        let b = bytes_new(8);\n        let v = view(b);\n        bytes_set(v, 0, 7);\n        keep = v;\n        let t = Text(\"añb\");\n        let u = text_slice(text_concat(t, scalar_text(66)), 1, 3);\n        i = i + 1;\n    }\n    let a = bytes_new(8);\n    bytes_set(a, 1, 9);\n    let b = bytes_new(8);\n    bytes_set(b, 1, 9);\n    let c = bytes_new(8);\n    bytes_set(c, 1, 9);\n    let e = bytes_new(8);\n    bytes_set(e, 1, 9);\n    Int(bytes_get(keep, 0))\n}\n";
+const LIB: Str = "pub fn greet(t: Text) -> Text ! {} { text_concat(\"hi \", t) }\npub fn fill(b: Bytes, v: UInt8) -> Bytes ! {} { bytes_set(b, 0, v); b }\n";
+const MAIN: Str = "use \"lib.nz\";\nfn main(out: OutCap) -> Int ! {io} {\nprint(str_concat(text_as_str(greet(\"añ\")), \"\\n\"));\nInt(bytes_get(fill(bytes_new(2), 9), 0))\n}\n";
+const ITEMS: Str = "\nstruct Frame { tag: Int, data: Bytes, name: Text }\n\nfn make(n: Int) -> Result[Bytes, Str] {\n    if n > 0 { Result[Bytes, Str].Ok(value: bytes_new(n)) } else { Result[Bytes, Str].Err(error: \"none\") }\n}\n\nfn take(n: Int) -> Result[Int, Str] {\n    let b = make(n)?;\n    Result[Int, Str].Ok(value: bytes_len(b))\n}\n\nfn round(i: Int) -> Int {\n    let f = Frame(tag: i, data: bytes_from_str(\"abcdef\"), name: Text(\"añb\"));\n    let v = vec_new[Bytes]();\n    vec_push(v, bytes_slice(f.data, 1, 3));\n    vec_push(v, bytes_new(2));\n    let len = fn() -> Int { bytes_len(f.data) + text_len(f.name) };\n    let got = match take(i) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1 };\n    bytes_copy(bytes_slice(f.data, 2, 6), bytes_slice(f.data, 0, 4));\n    len() + got + bytes_len(vec_get(v, 0))\n}\n";
+const NORMAL_MAIN: Str = "\nfn main(io: IoCap) -> Int ! { io } {\n    let mut i = 0;\n    let mut sum = 0;\n    while i < 4 {\n        sum = sum + round(i);\n        i = i + 1;\n    }\n    let b = bytes_from_str(\"abcdef\");\n    bytes_copy(bytes_slice(b, 2, 6), bytes_slice(b, 0, 4));\n    print(bytes_to_str(b));\n    let c = bytes_from_str(\"abcdef\");\n    bytes_copy(bytes_slice(c, 0, 4), bytes_slice(c, 2, 6));\n    print(str_concat(\" \", bytes_to_str(c)));\n    print(str_concat(\" \", int_to_str(sum)));\n    print(\"\\n\");\n    0\n}\n";
+const TRAP_MAIN: Str = "\nfn main(io: IoCap) -> Int ! { io } {\n    let kept = round(3);\n    let f = Frame(tag: 1, data: bytes_new(4), name: Text(\"x\"));\n    let v = vec_new[Bytes]();\n    vec_push(v, f.data);\n    bytes_get(vec_get(v, 0), 9 + kept);\n    0\n}\n";
+
+/// A run's name and what it did.
+struct Run {
+    name: Str,
+    ran: Ran,
+}
+
+/// The program under the interpreter, and built and run by each backend at each level.
+fn everywhere_bt(h: Caps, src: Str) -> Result[Vec[Run], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let out = vec_new[Run]();
+    vec_push(out, Run(name: "interpreter", ran: nazm(h, d, words("run --interpret prog.nz"))));
+    for case in text_split("llvm -O0|llvm|0;llvm -O2|llvm|2;cranelift|cranelift|0", ";") {
+        let f = text_split(case, "|");
+        let which = strs_get(f, 0);
+        let exe = f"{d}/{text_replace(text_replace(which, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(f, 1)} --opt-level {strs_get(f, 2)} prog.nz -o {exe}"));
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Run], Str].Err(error: f"{which}: {b.stderr}");
+        }
+        vec_push(out, Run(name: which, ran: bounded_exe(h, exe, d, suite_env(h))));
+    }
+    scratch_remove(h, d);
+    Result[Vec[Run], Str].Ok(value: out)
+}
+
+/// Every implementation prints exactly `expected` — then `main`'s result, `0` — and exits 0, with
+/// `items` declared beside `main`.
+fn agrees_with(h: Caps, items: Str, body: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let want = f"{expected}0\n";
+    let src = f"fn show(out: OutCap, s: Str) -> Int ! {{io}} {{ print(str_concat(s, \"\\n\")) }}\n{items}\nfn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n0\n}}\n";
+    let runs = everywhere_bt(h, src)?;
+    for r in runs {
+        check_that(r.ran.code == 0, f"{r.name}: {r.ran.stderr}")?;
+        check_that(r.ran.stdout == want, f"{r.name}: {r.ran.stdout}")?;
+    }
+    ok()
+}
+
+/// The error codes `nazm check` refuses a program with, joined by `,`.
+fn refused(h: Caps, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"expected a refusal: {ran_show(r)}")?;
+    let found = strs_new();
+    for l in text_lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v) => {
+                if jstr(v, "severity") == "error" && jstr(v, "code") != "" {
+                    strs_push(found, jstr(v, "code"));
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    Result[Str, Str].Ok(value: str_join(found, ","))
+}
+
+@test
+fn a_bytes_is_one_buffer_that_every_view_shares(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_with(h, "", SHARE_BODY, SHARE_WANT)
+}
+
+@test
+fn every_width_reads_and_writes_in_either_byte_order_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_with(h, "", WIDTH_BODY, WIDTH_WANT)
+}
+
+/// RFC 3629's table: each line is a byte sequence, in hex, and whether it is UTF-8.
+const UTF8_CASES: Str = "|yes;7F|yes;C2 80|yes;DF BF|yes;E0 A0 80|yes;EF BF BF|yes;ED 9F BF|yes;EE 80 80|yes;F0 90 80 80|yes;F4 8F BF BF|yes;80|no;BF|no;C0 80|no;C1 BF|no;E0 9F BF|no;F0 8F BF BF|no;ED A0 80|no;ED BF BF|no;F4 90 80 80|no;F5 80 80 80|no;FE|no;FF|no;E2 82|no;F0 9F 98|no;C2 41|no;41 C2|no;E2 28 A1|no";
+
+fn hex_byte(s: Str) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        n = n * 16 + if b >= 48 && b <= 57 { b - 48 } else { b - 55 };
+        i = i + 1;
+    }
+    n
+}
+
+@test
+fn utf8_validation_agrees_on_every_edge_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The shortest forms at each length's edges, overlong forms, surrogates, past U+10FFFF,
+    // truncations, stray continuation bytes and the bytes that never appear.
+    let body = strs_new();
+    let expected = strs_new();
+    for case in text_split(UTF8_CASES, ";") {
+        let f = text_split(case, "|");
+        let mut s = "\"\"";
+        for b in words(strs_get(f, 0)) {
+            s = f"str_concat({s}, str_from_byte({hex_byte(b)}))";
+        }
+        strs_push(body, f"if utf8_valid({s}) {{ show(out, \"yes\"); }} else {{ show(out, \"no\"); }};\nmatch try_convert[Text]({s}) {{ Option.Some(value: t) => show(out, \"some\"), Option.None() => show(out, \"none\"), }};\n");
+        strs_push(expected, if strs_get(f, 1) == "yes" { "yes\nsome\n" } else { "no\nnone\n" });
+    }
+    agrees_with(h, "", str_join(body, ""), str_join(expected, ""))
+}
+
+@test
+fn text_iterates_by_scalar_value_and_cuts_only_at_boundaries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_with(h, SCALAR_ITEMS, SCALAR_BODY, SCALAR_WANT)
+}
+
+/// Every implementation stops with exit status 2, `code` and `sentence`.
+fn traps_saying(h: Caps, body: Str, code: Str, sentence: Str) -> Result[Int, Str] ! { io, spawn } {
+    let src = f"fn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n}}\n";
+    for r in everywhere_bt(h, src)? {
+        check_that(r.ran.code == 2, f"{r.name}: {ran_show(r.ran)}\n{src}")?;
+        check_that(text_contains(r.ran.stderr, code), f"{r.name}: {r.ran.stderr}\n{src}")?;
+        check_that(text_contains(r.ran.stderr, sentence), f"{r.name}: {r.ran.stderr}\n{src}")?;
+    }
+    ok()
+}
+
+@test
+fn every_bytes_and_text_failure_traps_with_its_code_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let outside = "this index is outside the `Bytes`";
+    traps_saying(h, "let b = bytes_new(4); bytes_get(b, 4); 0", "N0405", outside)?;
+    traps_saying(h, "let b = bytes_new(4); let i = 0 - 1; bytes_set(b, i, 1); 0", "N0405", outside)?;
+    traps_saying(h, "let b = bytes_new(4); bytes_slice(b, 2, 5); 0", "N0405", "this slice is not inside the `Bytes`")?;
+    traps_saying(h, "let b = bytes_new(4); bytes_read_le[UInt32](b, 1); 0", "N0405", "this read is outside the `Bytes`")?;
+    traps_saying(h, "let b = bytes_new(4); bytes_read_le[Int](b, 9223372036854775807); 0", "N0405", "this read is outside the `Bytes`")?;
+    traps_saying(h, "let b = bytes_new(4); bytes_write_be(b, 3, UInt16(1)); 0", "N0405", "this write is outside the `Bytes`")?;
+    traps_saying(h, "let b = bytes_new(2); bytes_copy(b, bytes_new(3)); 0", "N0405", "the source is longer than the destination")?;
+    traps_saying(h, "let n = 0 - 1; bytes_new(n); 0", "N0405", "a buffer's length is never negative")?;
+    traps_saying(h, "Text(str_from_byte(255)); 0", "N0413", "this is not UTF-8")?;
+    traps_saying(h, "text_slice(Text(\"añ\"), 0, 2); 0", "N0413", "this is not UTF-8")?;
+    traps_saying(h, "text_slice(Text(\"añ\"), 0, 9); 0", "N0405", "this slice is not inside the `Text`")?;
+    traps_saying(h, "text_scalar_at(Text(\"añ\"), 2); 0", "N0413", "this is not UTF-8")?;
+    traps_saying(h, "text_next(Text(\"añ\"), 3); 0", "N0405", "this index is outside the `Text`")?;
+    traps_saying(h, "scalar_text(55296); 0", "N0413", "this is not a Unicode scalar value")?;
+    traps_saying(h, "scalar_text(1114112); 0", "N0413", "this is not a Unicode scalar value")
+}
+
+fn in_main(body: Str) -> Str ! {} {
+    f"fn main() -> Int {{ {body} }}\n"
+}
+
+fn refused_as(h: Caps, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = refused(h, src)?;
+    check_that(got == want, f"{got} for {src}")
+}
+
+@test
+fn bytes_and_text_misuse_is_refused_before_anything_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A `Bytes` is a mutable handle: no `==`, no inline copy, no crossing into a task.
+    refused_as(h, in_main("let a = bytes_new(1); if a == a { 1 } else { 0 }"), "N0304")?;
+    refused_as(h, in_main("let a = [bytes_new(1); 2]; 0"), "N0621")?;
+    refused_as(h, "fn w(b: Bytes) -> Int ! {spawn} { 0 }\nfn main(s: SpawnCap) -> Int ! {spawn} { scope { spawn w(bytes_new(1)); } 0 }\n", "N0321")?;
+    // A `Text` is made from a `Str`, and is not one.
+    refused_as(h, in_main("Text(5); 0"), "N0300")?;
+    refused_as(h, in_main("try_convert[Text](1); 0"), "N0300")?;
+    refused_as(h, in_main("let t = Text(\"a\"); str_len(t)"), "N0300")?;
+    refused_as(h, in_main("let s = \"a\"; text_len(s)"), "N0300")?;
+    // A byte is a `UInt8`, and both names are the language's.
+    refused_as(h, in_main("bytes_set(bytes_new(1), 0, 256); 0"), "N0003")?;
+    refused_as(h, "struct Text { a: Int, }\nfn main() -> Int { 0 }\n", "N0331")?;
+    refused_as(h, "fn bytes_new(n: Int) -> Int { n }\nfn main() -> Int { 0 }\n", "N0203")
+}
+
+/// The environment a native run's memory is watched under: the report, and freed memory scribbled
+/// by glibc and by macOS's allocator, so a view whose buffer was freed under it reads the scribble.
+fn scribbled(h: Caps) -> Strs ! { io } {
+    env_set(env_set(env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"), "MALLOC_PERTURB_", "165"), "MallocScribble", "1")
+}
+
+@test
+fn every_buffer_is_reclaimed_by_its_last_view_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", RECLAIM)?;
+    // Four buffers made after the loop, each marked at the byte the view reads: an allocator that
+    // hands out a freed buffer again gives one of them a buffer freed under a living view (G2-C1).
+    let report = "strings allocated=20 reclaimed=20 live=0";
+    let r = run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"));
+    check_that(text_contains(r.stderr, report), f"interpreter: {r.stderr}")?;
+    for backend in words("llvm cranelift") {
+        let b = nazm(h, d, words(f"build --no-cache --backend {backend} prog.nz -o {d}/{backend}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let x = bounded_exe(h, f"{d}/{backend}", d, scribbled(h));
+        check_that(x.stdout == "7\n", f"{backend}: {ran_show(x)}")?;
+        check_that(text_contains(x.stderr, report), f"{backend}: {x.stderr}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn bytes_and_text_cross_a_public_signature_cold_and_cached(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "lib.nz", LIB)?;
+    scratch_write(h, d, "main.nz", MAIN)?;
+    // Twice: the second check reads `lib`'s persisted interface, where the types are named.
+    for pass in words("cold cached") {
+        let c = nazm(h, d, words("check main.nz"));
+        check_that(c.code == 0, f"{pass}: {c.stderr}")?;
+    }
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.stdout == "hi añ\n9\n", r.stderr)?;
+    for backend in words("llvm cranelift") {
+        let b = nazm(h, d, words(f"build --backend {backend} main.nz -o {d}/{backend}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let x = bounded_exe(h, f"{d}/{backend}", "", suite_env(h));
+        check_that(x.stdout == "hi añ\n9\n", f"{backend}: {ran_show(x)}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The three counts after `{what} allocated=` on the memory line — allocated, reclaimed, live —
+/// or an empty list.
+fn counts(stderr: Str, what: Str) -> Ints ! {} {
+    let out = ints_new();
+    let mut line = "";
+    for l in text_lines(stderr) {
+        if line == "" && text_starts_with(l, "nazm-memory:") {
+            line = l;
+        }
+    }
+    let at = find(line, f"{what} allocated=");
+    if at < 0 {
+        return out;
+    }
+    let mut n = 0;
+    let mut in_num = false;
+    let mut i = at;
+    while i < str_len(line) && ints_len(out) < 3 {
+        let b = str_byte(line, i);
+        if b >= 48 && b <= 57 {
+            n = n * 10 + (b - 48);
+            in_num = true;
+        } else {
+            if in_num {
+                ints_push(out, n);
+                n = 0;
+                in_num = false;
+            }
+        }
+        i = i + 1;
+    }
+    if in_num && ints_len(out) < 3 {
+        ints_push(out, n);
+    }
+    out
+}
+
+/// Q1-M-02: a buffer and a text are reclaimed in every shape that can hold one — a record field, a
+/// `Vec`, a closure's environment, a `Result` passed on by `?`, a view in a `Vec` — and on every way
+/// out: the normal end, and a trap after they were made.
+@test
+fn a_buffer_and_a_text_are_reclaimed_in_every_shape_on_every_path(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    for case in text_split("normal|0|ababcd cdefef 53\n0\n;trap|2|", ";") {
+        let f = text_split(case, "|");
+        let name = strs_get(f, 0);
+        let status = parse_usize(strs_get(f, 1));
+        let stdout = strs_get(f, 2);
+        let tail = if name == "normal" { NORMAL_MAIN } else { TRAP_MAIN };
+        scratch_write(h, d, f"{name}.nz", f"{ITEMS}{tail}")?;
+        let runs = vec_new[Run]();
+        vec_push(runs, Run(name: "interpreter", ran: run(h, nazm_bin(h.io), words(f"run --interpret {name}.nz"), d, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))));
+        for backend in words("llvm cranelift") {
+            let exe = f"{d}/{name}-{backend}";
+            let b = nazm(h, d, words(f"build --no-cache --backend {backend} {name}.nz -o {exe}"));
+            check_that(b.code == 0, f"{name} {backend}: {b.stderr}")?;
+            vec_push(runs, Run(name: backend, ran: bounded_exe(h, exe, d, scribbled(h))));
+        }
+        for r in runs {
+            check_that(r.ran.code == status, f"{name} {r.name}: {ran_show(r.ran)}")?;
+            check_that(r.ran.stdout == stdout, f"{name} {r.name}: {ran_show(r.ran)}")?;
+            if status == 2 {
+                check_that(text_contains(r.ran.stderr, "N0405"), f"{name} {r.name}: {r.ran.stderr}")?;
+            }
+            for what in words("strings sequences closures") {
+                let c = counts(r.ran.stderr, what);
+                check_that(ints_len(c) == 3, f"{name} {r.name}: no {what} count: {r.ran.stderr}")?;
+                check_that(ints_get(c, 0) > 0 || what == "closures", f"{name} {r.name}: {what}")?;
+                check_that(ints_get(c, 0) == ints_get(c, 1) && ints_get(c, 2) == 0, f"{name} {r.name}: {what}: {r.ran.stderr}")?;
+            }
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
