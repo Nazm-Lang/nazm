@@ -10,14 +10,16 @@
 // Where it differs from the reference, and why: a file's identity is its **textually normalised**
 // path, not its canonical one — the runtime has no `realpath` — so one file reached through a
 // symbolic link under two names is read twice (`docs/bootstrap.md` records the same of
-// `module.nz`). Packages (`NAME:path` of a declared dependency, N46) and derives (R1c, L2) are
-// not carried yet: an import of a package is refused as the reference refuses one outside a
-// package, and a file is read as written.
+// `module.nz`). A package's compilation (N46) is the reference's: `NAME:path` names a module of a
+// dependency the importing package declares, a relative import stays inside its package's source
+// root, and a dependency's modules are not the program's (`package.nz` resolves the packages).
+// Derives (R1c, L2) are not carried yet: a file is read as written.
 
 use "syntax.nz";
 use "diag.nz";
 use "lex.nz";
 use "builtins.nz";
+use "package.nz";
 
 // A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
 // string's value on one line).
@@ -27,8 +29,10 @@ pub struct Loaded {
     // Per file, in load order: the name it is published under and its text, newline included.
     names: Strs,
     texts: Strs,
-    // Per file, whether it is a standard module.
+    // Per file, whether it is a standard module, and whether it is a module of the program itself
+    // (`ModuleKey::is_program`): under the source root, and no package's.
     standard: Ints,
+    program: Ints,
     // Per file, its identity; and the identity each of its imports names, in source order (a
     // run of `targets`: "" where the import did not resolve).
     identities: Strs,
@@ -192,10 +196,11 @@ fn pend(p: Pending, code: Str, file: Int, start: Int, end: Int, message: Str, he
 // Read `root` and everything it imports, the standard modules from `library/std` and the core
 // prelude from `library/core/prelude.nz`. Every loading error goes to `d`, published at its
 // global offset; the compilation is loaded even then, as far as it could be.
-pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
+pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d: Diags, io: IoCap) -> Loaded {
     let names = strs_new();
     let texts = strs_new();
     let standard = ints_new();
+    let in_programs = ints_new();
     let identities = strs_new();
     let tfirst = ints_new();
     let tcount = ints_new();
@@ -227,6 +232,7 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
             strs_push(names, name);
             strs_push(texts, nl());
             ints_push(standard, 0);
+            ints_push(in_programs, 0);
             ints_push(tfirst, strs_len(targets));
             ints_push(tcount, 0);
             strs_push(implicit, "");
@@ -275,15 +281,41 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
                 pend(pending, "N0205", id, s, e, str_concat(str_concat("a standard module cannot import `", ipath), "`"), "");
                 continue;
             }
+            // `NAME:path` (N46): a module of a package the importing package depends on.
             let colon = index_of_byte(ipath, 58);
+            let mut target = join_path(dir, ipath);
+            let mut within = "";
+            let from = pk_package_of(packages, path);
+            if from >= 0 { within = pk_source_root(packages, from); }
             if colon >= 0 {
                 let pkg = str_slice(ipath, 0, colon);
+                if pk_packages_state(packages) != 1 {
+                    strs_push(named, "");
+                    pend(pending, "N0508", id, s, e, str_concat(str_concat("`", pkg), ":` names a package, and this compilation is not a package's"),
+                            "a package is a directory holding `nazm.toml`; build it by naming its directory");
+                    continue;
+                }
+                let dep = pk_dependency(packages, from, pkg);
+                if dep < 0 {
+                    strs_push(named, "");
+                    let mut whose = "this package";
+                    if from >= 0 { whose = pk_name(packages, from); }
+                    let declared = pk_declared(packages, from);
+                    let mut help = "it declares no dependencies; add one under `[dependencies]` in `nazm.toml`";
+                    if declared != "" { help = str_concat("it declares ", declared); }
+                    pend(pending, "N0508", id, s, e, str_concat(str_concat(str_concat(str_concat("`", pkg), "` is not a dependency of `"), whose), "`"), help);
+                    continue;
+                }
+                target = join_path(pk_source_root(packages, dep), str_slice(ipath, colon + 1, str_len(ipath)));
+                within = pk_source_root(packages, dep);
+            }
+            // Inside a package, an import stays inside the source root it resolves against.
+            if within != "" && file_exists(target) && pk_under(normalise(target), within) == false {
                 strs_push(named, "");
-                pend(pending, "N0508", id, s, e, str_concat(str_concat("`", pkg), ":` names a package, and this compilation is not a package's"),
-                        "a package is a directory holding `nazm.toml`; build it by naming its directory");
+                pend(pending, "N0205", id, s, e, str_concat(str_concat("`", ipath), "` leaves its package's source root"),
+                        "a package reaches another package's modules as `NAME:path`");
                 continue;
             }
-            let target = join_path(dir, ipath);
             if file_exists(target) {
                 strs_push(children, target);
                 ints_push(children_std, 0);
@@ -294,9 +326,10 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
                         str_concat(str_concat("looked for `", target), "`, relative to the importing file"));
             }
         }
-        // The prelude's standard modules a program module names (R1.5, D9).
+        // The prelude's standard modules a program module names (R1.5, D9): never a package's.
+        let in_program = is_std == false && is_program(source_root, packages, path);
         let mut given = strs_new();
-        if is_std == false {
+        if in_program {
             let written = strs_new();
             let mut w = 0;
             while w < strs_len(children) {
@@ -330,16 +363,18 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
             k = k + 1;
         }
         if is_std { ints_push(standard, 1); } else { ints_push(standard, 0); }
+        if in_program { ints_push(in_programs, 1); } else { ints_push(in_programs, 0); }
     }
     // The core prelude, last.
     strs_push(names, "@core/prelude.nz");
     strs_push(texts, ld_with_newline(read_file(str_concat(library, "/core/prelude.nz"))));
     ints_push(standard, 1);
+    ints_push(in_programs, 0);
     strs_push(identities, "@core/prelude.nz");
     ints_push(tfirst, strs_len(targets));
     ints_push(tcount, 0);
     strs_push(implicit, "");
-    let loaded = Loaded(names: names, texts: texts, standard: standard, identities: identities, tfirst: tfirst, tcount: tcount, targets: targets,
+    let loaded = Loaded(names: names, texts: texts, standard: standard, program: in_programs, identities: identities, tfirst: tfirst, tcount: tcount, targets: targets,
             implicit: implicit);
     let mut k = 0;
     while k < strs_len(pending.code) {
@@ -364,6 +399,24 @@ pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
 pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
 pub fn ld_name(l: Loaded, i: Int) -> Str { strs_get(l.names, i) }
 pub fn ld_standard(l: Loaded, i: Int) -> Bool { ints_get(l.standard, i) == 1 }
+pub fn ld_program(l: Loaded, i: Int) -> Bool { ints_get(l.program, i) == 1 }
+
+// Whether the file at `path` is a module of the program itself (`ModuleKey::is_program`): a
+// dependency package's module is keyed by its package, and any other by its path relative to the
+// source root — none for one outside it, or one whose first component holds an `@`.
+fn is_program(source_root: Str, packages: Packages, path: Str) -> Bool {
+    let at = normalise(path);
+    let p = pk_package_of(packages, at);
+    if p >= 0 && p != pk_root_package(packages) { return false; }
+    let root = normalise(source_root);
+    if at == root || pk_under(at, root) == false { return false; }
+    let mut rest = str_slice(at, str_len(root) + 1, str_len(at));
+    if root == "/" { rest = str_slice(at, 1, str_len(at)); }
+    let slash = index_of_byte(rest, 47);
+    let mut first = rest;
+    if slash >= 0 { first = str_slice(rest, 0, slash); }
+    index_of_byte(first, 64) < 0
+}
 
 // The prelude's standard modules file `i` names (R1.5, D9), joined by `,`; "" for none.
 pub fn ld_implicit(l: Loaded, i: Int) -> Str { strs_get(l.implicit, i) }

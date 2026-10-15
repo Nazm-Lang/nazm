@@ -1,0 +1,5 @@
+schema = "nazm.package/1"
+
+[package]
+name = "util"
+version = "0.2.0"

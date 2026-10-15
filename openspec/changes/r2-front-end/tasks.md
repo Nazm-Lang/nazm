@@ -29,7 +29,8 @@
 
 - [ ] 3.1 Modules: `as`, `::`, re-exports, packages and manifests — the loader is done (`load.nz`: the
       root, its imports depth-first, `@std/`, the core prelude, global offsets, every loader
-      diagnostic but a package's); packages, derives and the module graph's semantics are not
+      diagnostic but a package's); packages since 3.1ze (path dependencies); re-exports and derives
+      are not
 - [x] 3.1a The `check` comparison (`run.sh check`): loader, every file's syntax diagnostics at their
       global offsets, and the missing `main` — every difference left is a checker diagnostic
 - [ ] 3.1b The checker's first stages (`compiler/sema.nz`, D13): one module and the prelude; type
@@ -238,6 +239,17 @@
       (N0370), its arguments still checked. `inputs/check/prelude-names.nz`. `run.sh check`:
       2,793 agree, 10 differ; the checker carries 2,762, all agree (2,794 and 2,763 with the
       new case)
+- [ ] 3.1ze Packages (N46; `root::decide`, `package_context`, `nazm-package`'s `Manifest::parse` and
+      `resolve`, `load_packaged`; `compiler/package.nz`, D22): the source root found upward from
+      the root module — the first manifest whose source root holds it — a manifest read as the
+      reference reads it (an invalid one publishes nothing), the root package and its path
+      dependencies resolved in name order (cycles, diamonds, names and versions), `NAME:path` to
+      a declared dependency's module (N0508 otherwise, with what is declared), a relative import
+      held inside its package's source root (N0205), and a dependency's modules — and any module
+      outside the source root — not the program's (no `main`'s output authority, no prelude
+      modules given). Registry dependencies, features, profiles, `heap-limit` and markers stop.
+      `inputs/packages/`. `run.sh check`: 2,802 agree, 3 differ; the checker carries 2,794, all
+      agree (2,812 and 2,804 with the new cases)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

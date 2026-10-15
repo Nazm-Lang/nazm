@@ -1,0 +1,7 @@
+// A dependency's module: not the program's, so it holds only the authority it is given.
+pub fn greeting(name: Str) -> Str { str_concat("hello ", name) }
+
+pub fn shout(name: Str) -> Int ! { io } {
+    print(greeting(name));
+    0
+}
