@@ -697,7 +697,62 @@ fn cn_const(c: Canon, id: Int) -> Int {
         cn_tag(c, "cell");
         return cn_bytes(c, str_slice(value, 7, str_len(value)));
     }
+    // A number of another integer type (`Const::Num`): its kind's name and its bits, two's
+    // complement in 128 bits (sign-extended), little-endian.
+    if cdg_integer_kind(ty) {
+        cn_tag(c, ty);
+        return cdg_wide_bytes(c, value);
+    }
     cn_halt(c, str_concat("a constant of type ", ty))
+}
+
+fn cdg_integer_kind(ty: Str) -> Bool {
+    ty == "Int8" || ty == "Int16" || ty == "Int32" || ty == "Int128" || ty == "UInt8" || ty == "UInt16" || ty == "UInt32" || ty == "UInt64"
+            || ty == "UInt128"
+}
+
+// The decimal text `v` as 16 bytes, little-endian two's complement.
+fn cdg_wide_bytes(c: Canon, v: Str) -> Int {
+    let bytes = ints_new();
+    let mut k = 0;
+    while k < 16 {
+        ints_push(bytes, 0);
+        k = k + 1;
+    }
+    let mut neg = false;
+    let mut i = 0;
+    if str_len(v) > 0 && str_byte(v, 0) == 45 {
+        neg = true;
+        i = 1;
+    }
+    while i < str_len(v) {
+        let mut carry = str_byte(v, i) - 48;
+        k = 0;
+        while k < 16 {
+            let x = ints_get(bytes, k) * 10 + carry;
+            ints_set(bytes, k, x % 256);
+            carry = x / 256;
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    if neg {
+        // Complement every byte, then add one.
+        let mut carry = 1;
+        k = 0;
+        while k < 16 {
+            let x = 255 - ints_get(bytes, k) + carry;
+            ints_set(bytes, k, x % 256);
+            carry = x / 256;
+            k = k + 1;
+        }
+    }
+    k = 0;
+    while k < 16 {
+        strs_push(c.out, str_from_byte(ints_get(bytes, k)));
+        k = k + 1;
+    }
+    0
 }
 
 // A string constant's bytes from its printed text: itself, or `\xNN` per byte where it was not
