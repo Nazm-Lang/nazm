@@ -219,6 +219,27 @@ succeeds, `doc -o DIR FILE` for every input of `check` plus the repository's pac
 a project of every template, comparing status, output, error and both files; `tests/args/doc.txt`
 covers the options, packages, re-exports, deprecation and the failures.
 
+**D14 — `fix` is `fix.rs` over the same facts.** `toolchain/commands/fix.nz` checks the program
+as `check_map` does (`fx_check`: the root must have `main`; warnings carry no fixes it reads) and
+turns every fix of every error into an edit of the file its diagnostic is in — the file the stage
+named, else the last whose text begins at or before the fix's offset; an offset that is also where
+a later file begins is refused, since the reference's span knows its file and the port's does not.
+The edit's bytes are local to that file and the text it expects there is taken from the check's
+own copy. `--apply` writes automatic edits file by file in name order, right to left by start
+(stable for equal starts), and skips with the reference's words an overlap, a span off a character
+boundary or past the end, bytes changed since the check, a result that does not parse
+(`sx_parse_source`), a file that cannot be read or written. The report is the reference's — three
+lines an edit, or one `nazm.fix/1` object with the struct's field order — then, without `--json`,
+the dry run's note and `N edits applied, M diagnostics remaining` from a fresh check after
+`--apply`; status 1 while errors remain. Loading is `opened`'s: a manifest the reference refuses is
+its words (3 for `could not read…`, else 1), a load failure its diagnostics, text or JSON, and 3 when
+every one is `N0205`. Not carried, with 6: where the front end stops, and a root that is a
+directory or not UTF-8, which `compiler/load.nz` traps on rather than reporting `N0205` (a defect of
+`compiler/`, handed back). `run.sh fix` runs `fix` and `fix --json` over every input from the
+repository's root and, where the reference would apply an edit, `fix --apply` on a copy, the file
+compared too; `tests/args/fix.txt` covers both applicabilities, several edits in one file, an edit
+in an imported module, the failures and the options.
+
 ## Risks / Trade-offs
 
 - **Two formatters until the Rust one retires.** A change to `format.rs` must be ported too; the

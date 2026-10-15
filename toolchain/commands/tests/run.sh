@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -40,11 +40,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc"
+[ -n "$parts" ] || parts="fmt args init check doc fix"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -189,6 +189,17 @@ fixture() {
       printf 'pub fn g() -> Int { 1 }\n' > "$dir/pkg/src/inner/b.nz"
       printf 'x\n' > "$dir/ro/api.json"
       ;;
+    fix)
+      printf 'fn main() -> Int {\n    0\n}\n' > "$dir/ok.nz"
+      printf 'fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n' > "$dir/mut.nz"
+      printf 'fn main() -> Int {\n    let x = 1;\n    let y = 2;\n    x = 3;\n    y = 4;\n    x + y\n}\n' > "$dir/two.nz"
+      printf 'fn main() -> Int {\n    let s = "abc;\n    0\n}\n' > "$dir/lex.nz"
+      printf 'fn f() -> Int { 1 }\nfn main() -> Int {\n    f()\n    0\n}\n' > "$dir/semi.nz"
+      printf 'use "helper.nz";\nfn main() -> Int { h() }\n' > "$dir/imp.nz"
+      printf 'pub fn h() -> Int {\n    let v = 1;\n    v = 2;\n    v\n}\n' > "$dir/helper.nz"
+      printf 'use "gone.nz";\nfn main() -> Int { 0 }\n' > "$dir/m.nz"
+      mkdir -p "$dir/sub"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -215,7 +226,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc nazm; do
+  for cmd in fmt init check doc fix nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -420,8 +431,77 @@ part_doc() {
   [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
 }
 
+# --- fix: every input ----------------------------------------------------------------------------------
+
+part_fix() {
+  list="$work/fix-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/xres"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  # One input: `fix FILE` and `fix --json FILE` from the repository's root; where the reference
+  # would apply an edit, `fix --apply case.nz` on a copy, each side its own, the file compared too.
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/x-$name"
+    mkdir -p "$d/ref" "$d/got"
+    run() {
+      out=$1; at=$2; shift 2
+      (cd "$at" && { rc=0; "$@" > "$out.o" 2> "$out.e" || rc=$?; echo "exit $rc" > "$out"; cat "$out.o" "$out.e" >> "$out"; })
+    }
+    run "$d/ref.text" "$R5_ROOT" "$R5_REF" fix "$f"
+    run "$d/ref.json" "$R5_ROOT" "$R5_REF" fix --json "$f"
+    run "$d/got.text" "$R5_ROOT" timeout "$R5_DEADLINE" "$R5_PORT" fix "$f"
+    run "$d/got.json" "$R5_ROOT" timeout "$R5_DEADLINE" "$R5_PORT" fix --json "$f"
+    kinds="text json"
+    if grep -q "\[would apply\]$" "$d/ref.text.o"; then
+      cp "$R5_ROOT/$f" "$d/ref/case.nz"
+      cp "$R5_ROOT/$f" "$d/got/case.nz"
+      run "$d/ref.apply" "$d/ref" "$R5_REF" fix --apply case.nz
+      run "$d/got.apply" "$d/got" timeout "$R5_DEADLINE" "$R5_PORT" fix --apply case.nz
+      cat "$d/ref/case.nz" >> "$d/ref.apply"
+      cat "$d/got/case.nz" >> "$d/got.apply"
+      kinds="$kinds apply"
+    fi
+    verdict=agree
+    why=""
+    for k in $kinds; do
+      if grep -q "^exit 6$" "$d/got.$k"; then verdict=refused; why=$(cat "$d/got.$k.e"); break; fi
+      if grep -q "^exit 124$" "$d/got.$k"; then verdict=timeout; break; fi
+      cmp -s "$d/ref.$k" "$d/got.$k" || verdict=differ
+    done
+    printf "%s\n%s\n%s\n" "$verdict" "$why" "$kinds" > "$R5_WORK/xres/$name"
+    if [ "$verdict" = differ ] || [ "$verdict" = timeout ]; then
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/fix-$name" && for k in $kinds; do cp "$d/ref.$k" "$KEEP/fix-$name/want.$k"; cp "$d/got.$k" "$KEEP/fix-$name/got.$k"; done
+      fi
+    fi
+    rm -rf "$d"
+  ' sh
+
+  agree=$(grep -l '^agree$' "$work/xres/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/xres/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/xres/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/xres/"* 2>/dev/null | wc -l | tr -d ' ')
+  applied=$(grep -l 'apply$' "$work/xres/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/xres/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  for r in "$work/xres/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^fix: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "fix: $agree agree, $differ differ, $refused refused, $timeout timed out (of $total inputs; $applied applied)"
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
+    fix) part_fix "$@" ;;
     fmt) part_fmt "$@" ;;
     args) part_args ;;
     init) part_init ;;
