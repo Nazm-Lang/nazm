@@ -1,5 +1,5 @@
 ## 1. Phase 1 — a verified baseline (with R1.5)
-- [ ] 1.1 Audit: the passes, backends, runtime, allocation, ownership and concurrency costs as the
+- [ ] 1.1 Audit (begun 2026-10-15: word frequency profiled, design.md): the passes, backends, runtime, allocation, ownership and concurrency costs as the
       code has them (not as the documents say), with the bottlenecks ranked
 - [ ] 1.2 The suite: 15–20 workloads across numeric, memory-intensive, branch-heavy, concurrent,
       I/O-bound and application kinds, one algorithm and one output check in every language
