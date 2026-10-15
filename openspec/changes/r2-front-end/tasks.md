@@ -337,6 +337,12 @@
       `nazm core-ir`'s output. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,701 functions
       the lowering carries 43,490, all agree; of the other parts 10,349 carried, all agree; 944
       whole documents carried, all 944 the reference's bytes
+- [ ] 5.1f The remaining stops, in the order of their frequency (D25), one group a commit:
+  - [x] `for` (`for_loop`, `split_loop`): over a range, a `Vec`, a `Chain`, a `Bytes`, and
+        `@std/text`'s `text_split` without the list, its hidden locals (`temp i`, `seq`, `end`)
+        made as the reference makes them. `run.sh core`: 3,048 inputs agree, 0 differ; of 56,772
+        functions the lowering carries 44,910, all agree; the other parts 10,374, all agree; 949
+        whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

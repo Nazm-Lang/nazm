@@ -636,10 +636,19 @@ fn co_value_block_in(lo: Lo, b: Int, seed: Ints) -> Str {
 // A region whose value is not wanted (`statement_block`): its tail, if written, a statement.
 fn co_statement_block(lo: Lo, b: Int) -> Str { co_statement_block_in(lo, b, ints_new()) }
 
-fn co_statement_block_in(lo: Lo, b: Int, seed: Ints) -> Str {
+fn co_statement_block_in(lo: Lo, b: Int, seed: Ints) -> Str { co_statement_block_pre(lo, b, seed, strs_new()) }
+
+// A statement block whose lowered statements follow `prefix` (a `for` loop's step, which never
+// transfers).
+fn co_statement_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
     let t = lo.t;
     co_open_seeded(lo, seed);
     let stmts = strs_new();
+    let mut p = 0;
+    while p < strs_len(prefix) {
+        strs_push(stmts, strs_get(prefix, p));
+        p = p + 1;
+    }
     let mut transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
     if transfers == false && sx_is_some(t, sx_field(t, b, "tail")) {
         strs_push(stmts, co_effect(lo, sx_unwrap(t, sx_field(t, b, "tail"))));
@@ -741,6 +750,21 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
         co_set_last(lo, 0 - 1, false);
         return co_object(o);
     }
+    if k == "For" {
+        // Numbered where the `for` is, as a `while` is; its hidden locals are its own region's.
+        let id = co_g(lo, co_s_loops());
+        co_sv(lo, co_s_loops(), id + 1);
+        co_open_region(lo);
+        let stmts = co_for(lo, n, id);
+        let owns = co_close_region(lo);
+        if co_halted(lo) { return co_stopped_stmt(lo, "a `for` loop"); }
+        let o = strs_new();
+        strs_push(o, co_op_first("block"));
+        strs_push(o, co_field("body", co_block_json(lo, false, owns, stmts, "null", sx_field(t, n, "span"))));
+        strs_push(o, co_field("ends", co_ends(false)));
+        co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
     if k == "Return" {
         let value = co_expr(lo, sx_field(t, n, "value"));
         let o = strs_new();
@@ -753,6 +777,245 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
     }
     co_stopped_stmt(lo, str_concat("the statement ", k))
 }
+
+// A `for` loop as the `while` loop it means (`for_loop`): `let seq = e; let mut i = 0;
+// while i < len(seq) { let x = get(seq, i); i = i + 1; body }`, or `let mut i = a; let end = b;
+// while i < end { let x = i; i = i + 1; body }` — every hidden part at the loop's name.
+fn co_for(lo: Lo, n: Int, id: Int) -> Strs {
+    let t = lo.t;
+    let c = lo.c;
+    let at = sx_field(t, n, "name_span");
+    let tint = ck_t_int();
+    let stmts = strs_new();
+    let index = co_temp(lo, "i", tint, at);
+    let iter = sx_field(t, n, "iter");
+    let mut bound = "";
+    let mut seq = 0 - 1;
+    let mut get = "";
+    let mut elem = 0 - 1;
+    let mut targs = "[]";
+    if sx_kind(t, iter) != tk_tuple() && sx_text(t, iter) == "Range" {
+        let start = co_expr(lo, sx_field(t, iter, "start"));
+        let end = co_expr(lo, sx_field(t, iter, "end"));
+        strs_push(stmts, co_let(index, start));
+        co_bind(lo, index);
+        let last = co_temp(lo, "end", tint, at);
+        strs_push(stmts, co_let(last, end));
+        co_bind(lo, last);
+        bound = co_read(lo, last, at);
+    } else {
+        let e = sx_kid(t, iter, 0);
+        if co_split_call(lo, e) { return co_split_loop(lo, n, id, index, e, stmts); }
+        let value = co_expr(lo, e);
+        let sty = co_last_ty(lo);
+        if co_halted(lo) { return stmts; }
+        let kind = ck_seq_kind(c, sty);
+        let mut len = "";
+        if kind == "bytes" {
+            len = "bytes_len";
+            get = "bytes_get";
+            elem = ck_t_named(c, "UInt8");
+        }
+        if kind == "ints" || kind == "strs" {
+            len = str_concat(kind, "_len");
+            get = str_concat(kind, "_get");
+            elem = tint;
+            if kind == "strs" { elem = ck_t_str(); }
+        }
+        if kind == "vec" || kind == "chain" {
+            len = str_concat(kind, "_len");
+            get = str_concat(kind, "_get");
+            elem = ck_type_arg(c, sty, 0);
+            targs = co_list_one(json_str(co_durable(lo, elem)));
+        }
+        if len == "" {
+            co_halt(lo, "a `for` over a type the checker refuses");
+            return stmts;
+        }
+        seq = co_temp(lo, "seq", sty, at);
+        strs_push(stmts, co_let(seq, value));
+        co_bind(lo, seq);
+        let zero = co_constant(lo, "Int", "0");
+        strs_push(stmts, co_let(index, co_node(lo, "const", co_field_first("const", int_to_str(zero)), tint, at)));
+        co_bind(lo, index);
+        bound = co_builtin(lo, len, targs, co_read(lo, seq, at), tint, at);
+    }
+    let cond = co_less(lo, co_read(lo, index, at), bound, at);
+    let name = co_local_at(lo, at);
+    let one = co_constant(lo, "Int", "1");
+    let mut element = co_read(lo, index, at);
+    if seq >= 0 {
+        let args = strs_new();
+        strs_push(args, co_read(lo, seq, at));
+        strs_push(args, co_read(lo, index, at));
+        element = co_builtin(lo, get, targs, str_join(args, ","), elem, at);
+    }
+    let step = strs_new();
+    strs_push(step, co_let(name, element));
+    strs_push(step, co_assign(lo, index, co_add(lo, co_read(lo, index, at), co_node(lo, "const", co_field_first("const", int_to_str(one)), tint, at), at), at));
+    strs_push(stmts, co_loop(lo, id, cond, n, name, step));
+    stmts
+}
+
+// The loop of a `for`: its body lowered after its step, the loop's name owned first.
+fn co_loop(lo: Lo, id: Int, cond: Str, n: Int, name: Int, step: Strs) -> Str {
+    let t = lo.t;
+    ints_push(lo.targets, id);
+    let seed = ints_new();
+    ints_push(seed, name);
+    let body = co_statement_block_pre(lo, sx_field(t, n, "body"), seed, step);
+    ints_pop(lo.targets);
+    let o = strs_new();
+    strs_push(o, co_op_first("loop"));
+    strs_push(o, co_field("loop", int_to_str(id)));
+    strs_push(o, co_field("cond", cond));
+    strs_push(o, co_field("body", body));
+    strs_push(o, co_field("ends", co_ends(false)));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+    co_object(o)
+}
+
+// Whether `e` calls `@std/text`'s `text_split`, and the module has the two functions a `for`
+// reads a split through (`split_each`).
+fn co_split_call(lo: Lo, e: Int) -> Bool {
+    let t = lo.t;
+    if sx_kind(t, e) == tk_tuple() || sx_text(t, e) != "Call" { return false; }
+    let cs = sx_field(t, e, "callee_span");
+    let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+    if site < 0 { return false; }
+    let callee = ck_site_fn(lo.c, site);
+    if callee < 0 { return false; }
+    callee == co_text_fn(lo, "text_split") && co_text_fn(lo, "text_split_end") >= 0 && co_text_fn(lo, "text_split_next") >= 0
+}
+
+// `@std/text`'s function of this name, or -1.
+fn co_text_fn(lo: Lo, name: Str) -> Int {
+    let c = lo.c;
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        if ck_fn_name(c, i) == name && ck_fn_closure(c, i) == false && ck_fn_method(c, i) == false {
+            if strs_get(lo.idents, ck_fn_module(c, i)) == "@std/text" { return i; }
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// `for x in text_split(s, sep)` (`split_loop`): `let s = …; let sep = …; let mut i = 0;
+// let mut end = 0; while i < str_len(s) + 1 { end = text_split_end(s, sep, i);
+// let x = str_slice(s, i, end); i = text_split_next(s, sep, end); body }`.
+fn co_split_loop(lo: Lo, n: Int, id: Int, index: Int, e: Int, stmts: Strs) -> Strs {
+    let t = lo.t;
+    let at = sx_field(t, n, "name_span");
+    let tint = ck_t_int();
+    let tstr = ck_t_str();
+    let list = sx_items(t, sx_field(t, e, "args"));
+    if ints_len(list) != 2 {
+        co_halt(lo, "a `text_split` call without two arguments");
+        return stmts;
+    }
+    let sv = co_expr(lo, ints_get(list, 0));
+    let sepv = co_expr(lo, ints_get(list, 1));
+    if co_halted(lo) { return stmts; }
+    let s = co_temp(lo, "seq", tstr, at);
+    strs_push(stmts, co_let(s, sv));
+    co_bind(lo, s);
+    let sep = co_temp(lo, "seq", tstr, at);
+    strs_push(stmts, co_let(sep, sepv));
+    co_bind(lo, sep);
+    let zero = co_constant(lo, "Int", "0");
+    strs_push(stmts, co_let(index, co_node(lo, "const", co_field_first("const", int_to_str(zero)), tint, at)));
+    co_bind(lo, index);
+    let end = co_temp(lo, "end", tint, at);
+    strs_push(stmts, co_let(end, co_node(lo, "const", co_field_first("const", int_to_str(zero)), tint, at)));
+    co_bind(lo, end);
+    let one = co_constant(lo, "Int", "1");
+    let len = co_builtin(lo, "str_len", "[]", co_read(lo, s, at), tint, at);
+    let cond = co_less(lo, co_read(lo, index, at), co_add(lo, len, co_node(lo, "const", co_field_first("const", int_to_str(one)), tint, at), at), at);
+    let name = co_local_at(lo, at);
+    let step = strs_new();
+    strs_push(step, co_assign(lo, end, co_split_call_of(lo, "text_split_end", s, sep, co_read(lo, index, at), at), at));
+    let slice = strs_new();
+    strs_push(slice, co_read(lo, s, at));
+    strs_push(slice, co_read(lo, index, at));
+    strs_push(slice, co_read(lo, end, at));
+    strs_push(step, co_let(name, co_builtin(lo, "str_slice", "[]", str_join(slice, ","), tstr, at)));
+    strs_push(step, co_assign(lo, index, co_split_call_of(lo, "text_split_next", s, sep, co_read(lo, end, at), at), at));
+    strs_push(stmts, co_loop(lo, id, cond, n, name, step));
+    stmts
+}
+
+fn co_split_call_of(lo: Lo, name: Str, s: Int, sep: Int, last: Str, at: Int) -> Str {
+    let args = strs_new();
+    strs_push(args, co_read(lo, s, at));
+    strs_push(args, co_read(lo, sep, at));
+    strs_push(args, last);
+    let fields = strs_new();
+    strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, co_text_fn(lo, name)))));
+    strs_push(fields, co_field("type_args", "[]"));
+    strs_push(fields, co_field("args", co_list(args)));
+    co_node(lo, "call", str_join(fields, ""), ck_t_int(), at)
+}
+
+// A local made by the lowering (`temp`): its name, type and where.
+fn co_temp(lo: Lo, name: Str, ty: Int, span: Int) -> Int {
+    ints_push(lo.lb, 0 - 1);
+    strs_push(lo.lname, name);
+    ints_push(lo.lty, ty);
+    strs_push(lo.lorig, str_concat("temp ", name));
+    strs_push(lo.lat, co_tree_span(lo, span));
+    strs_len(lo.lname) - 1
+}
+
+// Local `l`, read at `span`.
+fn co_read(lo: Lo, l: Int, span: Int) -> Str { co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span) }
+
+fn co_let(l: Int, value: Str) -> Str {
+    let o = strs_new();
+    strs_push(o, co_op_first("let"));
+    strs_push(o, co_field("local", int_to_str(l)));
+    strs_push(o, co_field("value", value));
+    strs_push(o, co_field("ends", co_ends(false)));
+    co_object(o)
+}
+
+fn co_assign(lo: Lo, l: Int, value: Str, span: Int) -> Str {
+    let o = strs_new();
+    strs_push(o, co_op_first("assign"));
+    strs_push(o, co_field("local", int_to_str(l)));
+    strs_push(o, co_field("path", "[]"));
+    strs_push(o, co_field("value", value));
+    strs_push(o, co_field("ends", co_ends(false)));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+    co_object(o)
+}
+
+// A built-in's call, its arguments already printed and joined.
+fn co_builtin(lo: Lo, name: Str, targs: Str, args: Str, ty: Int, span: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("builtin", json_str(name)));
+    strs_push(fields, co_field("type_args", targs));
+    strs_push(fields, co_field("args", str_concat(str_concat("[", args), "]")));
+    co_node(lo, "builtin", str_join(fields, ""), ty, span)
+}
+
+// `lhs < rhs` of `Int`s, and `lhs + rhs`.
+fn co_less(lo: Lo, lhs: Str, rhs: Str, span: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("operand", json_str("Int")));
+    strs_push(fields, co_field("law", json_str("int")));
+    strs_push(fields, co_field("lhs", lhs));
+    strs_push(fields, co_field("rhs", rhs));
+    co_node(lo, "<", str_join(fields, ""), ck_t_bool(), span)
+}
+fn co_add(lo: Lo, lhs: Str, rhs: Str, span: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("lhs", lhs));
+    strs_push(fields, co_field("rhs", rhs));
+    co_node(lo, "+", str_join(fields, ""), ck_t_int(), span)
+}
+
+fn co_list_one(item: Str) -> Str { str_concat(str_concat("[", item), "]") }
 
 fn co_stopped_stmt(lo: Lo, why: Str) -> Str {
     co_halt(lo, why);
