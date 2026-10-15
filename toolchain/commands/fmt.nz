@@ -1,6 +1,6 @@
 // `nazm fmt`, written in Nazm (R5, `openspec/changes/r5-commands/`).
 //
-// Usage: fmt [--check] FILE...
+// `nazm fmt [--check] FILE...`, run by the dispatcher (`nazm.nz`).
 //
 // A port of `crates/nazm-syntax/src/format.rs` and `crates/nazm-cli/src/fmt.rs`, function by
 // function, so that every file is laid out byte for byte as the reference lays it out, and the
@@ -670,7 +670,7 @@ fn readable(io: IoCap, path: Str) -> Bool {
 fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
 
 // The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm fmt` (`toolchain/commands/cli.nz`).
-fn fmt_cli() -> Cli {
+pub fn fmt_cli() -> Cli {
     let c = cli_command("fmt", "Lay out source files canonically",
             "Lay out source files canonically." + newline() + newline()
             + "One layout and no options: a formatter with settings has as many canonical forms as it has settings. "
@@ -682,9 +682,9 @@ fn fmt_cli() -> Cli {
     c
 }
 
-fn main(io: IoCap) -> Int {
+// `nazm fmt`, its arguments read into `c` (`fmt_cli`) from where `cli_from` says.
+pub fn fmt_command(io: IoCap, c: Cli) -> Int {
     let nl = newline()
-    let c = fmt_cli()
     cli_parse(io, c)
     let files = cli_values(c, 0)
     let check = cli_present(c, 1)

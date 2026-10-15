@@ -1,0 +1,86 @@
+# The top level's command lines (design D12), run as `nazm LINE` in check's fixture: the help and
+# the version, the `help` command, usage errors, and the carried commands reached through it.
+--help
+-h
+-V
+--version
+-hV
+-Vh
+-hx
+-Vx
+-h=x
+-V=1
+-V x
+-V --help
+--help --bogus
+--help check
+-h check
+--version check
+--version=1
+--help=x
+--help=
+--bogus
+--bogus --help
+-x
+-x -h
+-xV
+-H
+-v
+-=
+-é
+---x
+--=x
+--json
+--json=1
+--hepl
+--he
+--hélp
+--verson
+--versio
+--Version
+--template x
+--check
+--no-cache
+-
+''
+bogus
+chek
+Check
+hlp
+fm
+--
+-- check
+-- fmt
+-- bogus
+-- chek
+-- -- check
+-- ''
+help
+help help
+help help check
+help help help
+help check
+help fmt
+help init
+help bogus
+help fm
+help ''
+help -h
+help -V
+help --help
+help -- check
+help check fmt
+help init extra
+help fmt extra
+fmt
+init
+check
+fmt --help
+init -h
+check -h
+check --version
+check --json x -- y
+check a.nz
+check --json b.nz
+fmt --check a.nz
+init app

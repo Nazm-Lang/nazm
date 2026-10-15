@@ -61,6 +61,8 @@ pub struct Cli {
     delim: Strs,
     conf_a: Ints,
     conf_b: Ints,
+    // Where the command's own arguments begin: after `nazm CMD`, the argument after the command.
+    first: Ints,
 }
 
 pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
@@ -68,7 +70,7 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
             val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(),
-            conf_a: ints_new(), conf_b: ints_new())
+            conf_a: ints_new(), conf_b: ints_new(), first: ints_new())
 }
 
 fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
@@ -203,7 +205,7 @@ fn cli_chars(s: Str) -> Strs {
 }
 
 // `strsim::jaro`, over characters, in `f64` as the reference computes it.
-fn cli_jaro(x: Str, y: Str) -> Float64 {
+pub fn cli_jaro(x: Str, y: Str) -> Float64 {
     let a = cli_chars(x)
     let b = cli_chars(y)
     let a_len = strs_len(a)
@@ -329,7 +331,7 @@ fn cli_needs_options_tag(c: Cli) -> Bool {
 }
 
 // The usage with no title: the help's usage when nothing is used, the "smart" usage otherwise.
-fn cli_usage_no_title(c: Cli, used: Ints) -> Str {
+pub fn cli_usage_no_title(c: Cli, used: Ints) -> Str {
     let mut s = "nazm " + c.name + " "
     if ints_len(used) == 0 && cli_needs_options_tag(c) { s = s + "[OPTIONS] " }
     cli_trim_end(s + cli_write_args(c, used))
@@ -339,7 +341,7 @@ fn cli_usage(c: Cli, used: Ints) -> Str { "Usage: " + cli_usage_no_title(c, used
 
 // --- errors -------------------------------------------------------------------------------------
 
-fn cli_fail(io: IoCap, text: Str) -> Int {
+pub fn cli_fail(io: IoCap, text: Str) -> Int {
     eprint("error: " + text + cli_nl() + cli_nl() + "For more information, try '--help'." + cli_nl())
     exit_with(5)
     0
@@ -474,6 +476,23 @@ fn cli_section(c: Cli, args: Ints, use_long: Bool) -> Str {
         }
     }
     str_join(parts, "")
+}
+
+// The help `--help` (`use_long`) or `-h` prints.
+pub fn cli_help(c: Cli, use_long: Bool) -> Str {
+    cli_add_help(c)
+    cli_help_text(c, use_long && cli_long_help_exists(c))
+}
+
+// The help flag clap adds last, once; its index.
+fn cli_add_help(c: Cli) -> Int {
+    for a in 0..ints_len(c.kind) {
+        if ints_get(c.kind, a) == cli_k_help() { return a }
+    }
+    let has_long = cli_long_help_exists(c)
+    let help_short = if has_long { "Print help (see more with '--help')" } else { "Print help" }
+    let help_long = if has_long { "Print help (see a summary with '-h')" } else { "" }
+    cli_add(c, cli_k_help(), "h", "help", "", false, false, false, "", false, help_short, help_long)
 }
 
 fn cli_help_text(c: Cli, use_long: Bool) -> Str {
@@ -671,19 +690,23 @@ fn cli_did_you_mean(io: IoCap, c: Cli, name: Str, trailing: Bool) -> Int {
     cli_unknown(io, c, "--" + name, similar, best < 0 && !trailing && cli_has_positionals(c), cli_used(c, false))
 }
 
+// The command's own arguments begin at argument `k` (`nazm CMD ARGS`: the one after CMD).
+pub fn cli_from(c: Cli, k: Int) -> Int {
+    while ints_len(c.first) > 0 { ints_pop(c.first) }
+    ints_push(c.first, k)
+}
+
 // Read the command line into `c`; prints help or a usage error and exits instead when clap would.
 pub fn cli_parse(io: IoCap, c: Cli) -> Int {
-    let has_long = cli_long_help_exists(c)
-    let help_short = if has_long { "Print help (see more with '--help')" } else { "Print help" }
-    let help_long = if has_long { "Print help (see a summary with '-h')" } else { "" }
-    let help = cli_add(c, cli_k_help(), "h", "help", "", false, false, false, "", false, help_short, help_long)
+    let from = if ints_len(c.first) > 0 { ints_get(c.first, 0) } else { 0 }
+    let help = cli_add_help(c)
     ints_push(c.pend, 0 - 1)
     ints_push(c.pend, 0)
     let mut trailing = false
     // 0: values done; 1: an option waits for its value; 2: a positional takes more.
     let mut state = 0
     let mut pos_counter = 1
-    for i in 0..args_count() {
+    for i in from..args_count() {
         let s = arg(i)
         let n = str_len(s)
         if !trailing {

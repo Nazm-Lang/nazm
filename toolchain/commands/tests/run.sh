@@ -4,7 +4,8 @@
 #
 #   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check (all by default)
 #
-# Each command (toolchain/commands/CMD.nz) is built by the 0.10.0 release ($NAZM). The reference is
+# The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
+# release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
 # `nazm` built from this checkout into $CARGO_TARGET_DIR (default ~/.cache/nazm-target-track5), or
 # $NAZM_REF when set. Every comparison is of the whole observable behaviour — standard output,
 # standard error, the exit status and every file afterwards — byte for byte. A refusal (exit 6:
@@ -14,8 +15,9 @@
 #         toolchain/frontend-tests/inputs, or the FILEs named — a copy is formatted by each side
 #         twice: `fmt --check FILE`, then `fmt FILE`, which rewrites it. Then one `fmt --check`
 #         over every input at once, and a missing file named after one that is rewritten.
-#   args  Every command line in tests/args/CMD.txt, run by both sides in the same fixture
-#         directory: clap's usage errors and help, and what the command then does (design, D8).
+#   args  Every command line in tests/args/CMD.txt, run by both sides as `nazm CMD LINE` in the same
+#         fixture directory: clap's usage errors and help, and what the command then does (design,
+#         D8); and every line of tests/args/nazm.txt as `nazm LINE`: the top level (design, D12).
 #   init  `nazm init` of every template, the trees written compared file by file (design, D9).
 #   check For every input (as for fmt, or the FILEs named), `check --no-cache FILE` and
 #         `check --json --no-cache FILE` from the repository's root, and `--deny-warnings` too where
@@ -59,10 +61,9 @@ fi
 mkdir -p "$work/bin" "$work/cache"
 # The checker recurses with the program's nesting, as the reference's does on its 24 MiB stack.
 export NAZM_LIBRARY="$root/library" NAZM_CACHE_DIR="$work/cache"
-for cmd in fmt init check; do
-  "$nazm" build --heap-limit 2G --stack-size 256M "$root/toolchain/commands/$cmd.nz" -o "$work/bin/$cmd" > "$work/build.log" 2>&1 \
-    || { cat "$work/build.log" >&2; echo "run.sh: toolchain/commands/$cmd.nz did not build" >&2; exit 2; }
-done
+"$nazm" build --heap-limit 2G --stack-size 256M "$root/toolchain/commands/nazm.nz" -o "$work/bin/nazm" > "$work/build.log" 2>&1 \
+  || { cat "$work/build.log" >&2; echo "run.sh: toolchain/commands/nazm.nz did not build" >&2; exit 2; }
+port="$work/bin/nazm"
 
 status=0
 
@@ -78,7 +79,7 @@ part_fmt() {
   total=$(wc -l < "$list" | tr -d ' ')
 
   mkdir -p "$work/res" "$work/batch/ref" "$work/batch/got"
-  export R5_ROOT="$root" R5_REF="$ref" R5_FMT="$work/bin/fmt" R5_WORK="$work"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work"
 
   # One input: a record per side — each run's exit status, output and error, and the file after the
   # rewrite — compared byte for byte. Writes `agree`, `differ` or `refused` to res/NAME.
@@ -96,7 +97,7 @@ part_fmt() {
       (cd "$dir" && cat check.out check.err fmt.out fmt.err case.nz >> record)
     }
     side "$d/ref" "$R5_REF" fmt
-    side "$d/got" "$R5_FMT"
+    side "$d/got" "$R5_PORT" fmt
     if grep -q "exit 6$" "$d/got/record"; then
       verdict=refused
     elif cmp -s "$d/ref/record" "$d/got/record"; then
@@ -129,7 +130,7 @@ part_fmt() {
   # shellcheck disable=SC2086
   (cd "$work/batch/ref" && { rc=0; "$ref" fmt --check $args > ../ref.out 2> ../ref.err || rc=$?; echo "exit $rc" >> ../ref.out; })
   # shellcheck disable=SC2086
-  (cd "$work/batch/got" && { rc=0; "$work/bin/fmt" --check $args > ../got.out 2> ../got.err || rc=$?; echo "exit $rc" >> ../got.out; })
+  (cd "$work/batch/got" && { rc=0; "$port" fmt --check $args > ../got.out 2> ../got.err || rc=$?; echo "exit $rc" >> ../got.out; })
   if cmp -s "$work/batch/ref.out" "$work/batch/got.out" && cmp -s "$work/batch/ref.err" "$work/batch/got.err"; then batch=agree; else batch=differ; fi
 
   # A file that is not there, after one that is rewritten: the command stops at it, as the
@@ -139,7 +140,7 @@ part_fmt() {
     cp "$root/toolchain/commands/tests/inputs/unicode-space.nz" "$work/missing/$side/a.nz"
   done
   (cd "$work/missing/ref" && { rc=0; "$ref" fmt a.nz absent.nz > out 2> err || rc=$?; echo "exit $rc" >> out; cat a.nz >> out; })
-  (cd "$work/missing/got" && { rc=0; "$work/bin/fmt" a.nz absent.nz > out 2> err || rc=$?; echo "exit $rc" >> out; cat a.nz >> out; })
+  (cd "$work/missing/got" && { rc=0; "$port" fmt a.nz absent.nz > out 2> err || rc=$?; echo "exit $rc" >> out; cat a.nz >> out; })
   if cmp -s "$work/missing/ref/out" "$work/missing/got/out" && cmp -s "$work/missing/ref/err" "$work/missing/got/err"; then :; else batch=differ; fi
 
   echo "fmt: $agree agree, $differ differ, $refused refused (of $total inputs); batch $batch"
@@ -192,18 +193,20 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check; do
+  for cmd in fmt init check nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
       case $line in '#'*|'') continue ;; esac
       n=$((n + 1))
       d="$work/args/$n"
-      fixture "$cmd" "$d/ref"
-      fixture "$cmd" "$d/got"
-      eval "set -- $line"
-      record "$d/ref" "$ref" "$cmd" "$@"
-      record "$d/got" "$work/bin/$cmd" "$@"
+      # The top level's lines run where `check`'s would, so a carried command they name has files.
+      if [ "$cmd" = nazm ]; then fx=check; else fx=$cmd; fi
+      fixture "$fx" "$d/ref"
+      fixture "$fx" "$d/got"
+      if [ "$cmd" = nazm ]; then eval "set -- $line"; else eval "set -- $cmd $line"; fi
+      record "$d/ref" "$ref" "$@"
+      record "$d/got" "$port" "$@"
       if grep -q '^exit 6$' "$d/got.record"; then
         refused=$((refused + 1)); echo "  refused: $cmd $line"
       elif cmp -s "$d/ref.record" "$d/got.record"; then
@@ -239,7 +242,7 @@ part_init() {
       fixture init "$d/ref"
       fixture init "$d/got"
       record "$d/ref" "$ref" init "$where" --template "$t"
-      record "$d/got" "$work/bin/init" "$where" --template "$t"
+      record "$d/got" "$port" init "$where" --template "$t"
       if grep -q '^exit 6$' "$d/got.record"; then
         refused=$((refused + 1)); echo "  refused: init $where --template $t"
       elif cmp -s "$d/ref.record" "$d/got.record"; then
@@ -268,7 +271,7 @@ part_check() {
   fi
   total=$(wc -l < "$list" | tr -d ' ')
   mkdir -p "$work/cres"
-  export R5_ROOT="$root" R5_REF="$ref" R5_CHECK="$work/bin/check" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
   # One input: each side's runs recorded — status, output, error — and compared byte for byte.
   # Writes `agree`, `differ`, `refused` or `timeout`, then the refusal's reason, to cres/NAME.
   # shellcheck disable=SC2016
@@ -283,12 +286,12 @@ part_check() {
     }
     run "$d/ref.text" "$R5_REF" check --no-cache "$f"
     run "$d/ref.json" "$R5_REF" check --json --no-cache "$f"
-    run "$d/got.text" timeout "$R5_DEADLINE" "$R5_CHECK" --no-cache "$f"
-    run "$d/got.json" timeout "$R5_DEADLINE" "$R5_CHECK" --json --no-cache "$f"
+    run "$d/got.text" timeout "$R5_DEADLINE" "$R5_PORT" check --no-cache "$f"
+    run "$d/got.json" timeout "$R5_DEADLINE" "$R5_PORT" check --json --no-cache "$f"
     kinds="text json"
     if grep -q "^warning\[" "$d/ref.text.e"; then
       run "$d/ref.deny" "$R5_REF" check --no-cache --deny-warnings "$f"
-      run "$d/got.deny" timeout "$R5_DEADLINE" "$R5_CHECK" --no-cache --deny-warnings "$f"
+      run "$d/got.deny" timeout "$R5_DEADLINE" "$R5_PORT" check --no-cache --deny-warnings "$f"
       kinds="$kinds deny"
     fi
     verdict=agree

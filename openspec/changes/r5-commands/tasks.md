@@ -54,9 +54,10 @@
 - [ ] 10.1 `lock`, `update`, `publish`, `yank`, `attest`
 
 ## 11. The rest
-- [ ] 11.1 The command-line grammar: one `nazm` dispatching to every command, `--help`, `-V`, usage
-      errors (each command's own arguments, usage errors and help are `cli.nz`'s since 2.5; what is
-      left is the top level and what `cli.nz` does not carry yet: subcommands, aliases, possible
-      values, groups, conflicts)
+- [x] 11.1 The command-line grammar: one `nazm` dispatching to every command, `--help`, `-V`, usage
+      errors (design D1, D12): `toolchain/commands/nazm.nz` routes to `fmt`, `init` and `check` and
+      refuses the rest; every line of `tests/args/nazm.txt` agrees (2026-10-15). Left in `cli.nz`:
+      a command's own subcommands (`runtime`, `attest`, `patch`), aliases, possible values, groups,
+      `requires` — each with the first command that declares it
 - [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`,
       `obligations`, `trace`, `reload-check`, `repl`, `comptime`, `capabilities`
