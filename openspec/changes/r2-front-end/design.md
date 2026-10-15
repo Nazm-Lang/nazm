@@ -156,8 +156,10 @@ module's environment (N0209, N0208, N0207 for functions) and bodies against its 
 A standard module is checked as the reference checks it (`--no-cache` reuses nothing), and holds
 no output authority it is not given (R1.5, D8); an imported function with no declared effect set
 is assumed to do every bridged effect. A `pub use` re-export stops the checker until N103 is
-carried. When R1.5 D9 lands (the prelude importing standard modules), the prelude's own imports are
-edges like any other's.
+carried. R1.5 D9 (on `main` since `511f77d6`) gives a program module `@std/hash`, `@std/hashmap`,
+`@std/ordmap`, `@std/sort` or `@std/text` where it names one of their items: the loader ports
+`prelude_named` to find where it does, and the driver stops there (and the checker at a map
+literal, whose calls the parser writes) until the implicit edges are carried.
 
 ## Risks / Trade-offs
 

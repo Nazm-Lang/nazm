@@ -78,6 +78,10 @@
       constant of another type, a static, a float, a shift, a bit operator or a conversion in a
       constant stops the checker. `run.sh check`: 2,399 agree, 371 differ; the checker carries
       1,899, all agree
+- [ ] 3.1k Rebased on R1.5 D9 (D16): where the prelude gives a program module a standard module
+      the checker stops — two carried inputs differed once the reference had D9 — until the
+      implicit edges are carried. `run.sh check` against `main` at `4b060478`: 2,399 agree, 371
+      differ; the checker carries 1,897, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
