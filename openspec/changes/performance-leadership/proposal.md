@@ -1,7 +1,9 @@
 ## Why
 
 The copyright holder set Nazm's performance target on 2026-10-15: **10–30% faster than optimised
-C, C++ and Rust**, and **the best of every compared language on every measured parameter** — run
+C, C++ and Rust**, and **the best of every compared language on every measured parameter** —
+widened the same day to every language compared: C, C++, Rust, Zig, Go, C#, Java, Swift, Python,
+Ruby, JavaScript, TypeScript, Ada, Pascal, Fortran, COBOL and hand-written assembly — run
 time, peak memory, compile time, binary size, start-up, latency, multicore scaling and lines of
 code — without giving up correctness or memory safety. It is a research target, not an achievement:
 on 2026-10-15 Nazm took 55 ms for `fib` (C 35 ms) and 188 ms for word frequency (Rust 65 ms, C 74 ms),
