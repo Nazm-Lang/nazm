@@ -3826,7 +3826,7 @@ fn promotable(f: MirFn) -> Ints {
 // --- type helpers -------------------------------------------------------------------------------
 
 /// A type's name in a helper's symbol (`Lw::type_name`): a record's or enum's native type name,
-/// a vector's element key, an array's length and element.
+/// a vector's or a generic channel's element key, an array's length and element.
 fn type_name(lo: Lo, t: Str) -> Str {
     let s = spell(t)
     if s.kind == "record" || s.kind == "enum" {
@@ -3846,10 +3846,8 @@ fn type_name(lo: Lo, t: Str) -> Str {
     if s.kind == "array" { return "arr" + strs_get(s.args, 1) + "." + type_name(lo, strs_get(s.args, 0)) }
     if s.kind == "vec" && s.head != "Chan" { return "vec." + encode(tkey(strs_get(s.args, 0))) }
     if s.kind == "unknown" { return "a function value" }
-    if s.head == "Chan" && strs_len(s.args) > 0 {
-        defect(lo, "a helper of a generic channel's type (not ported yet)");
-        return "chan"
-    }
+    // A generic channel's, by its element's key as a vector's is (6.3.6).
+    if s.head == "Chan" && strs_len(s.args) > 0 { return "chan." + encode(tkey(strs_get(s.args, 0))) }
     let k = class(t)
     if k == "int" { return "Int" }
     if k == "str" { return "Str" }

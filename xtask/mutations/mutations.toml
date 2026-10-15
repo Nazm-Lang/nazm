@@ -19651,3 +19651,10 @@ file = "library/std/text.nz"
 find = "    if n > 0 && end < m { end + n } else { m + 1 }"
 replace = "    if n > 0 && end < m && end + n < m { end + n } else { m + 1 }"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
+
+name = "r3-a-generic-channel-s-helper-named-by-the-checker-s-id"
+why = "a generic channel's helper is named by the checker's channel id again, which depends on what other channel types the session interned first, so the symbol is not durable and the pipeline cannot derive it (R3 6.3.6)"
+file = "crates/nazm-lir/src/op/lower.rs"
+find = '                |i| format!("chan.{}", crate::symbol::encoded(&i.elem_key)),'
+replace = '                |_| format!("chan.{}", c.0),'
+killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lir::a_generic_channels_helper_is_named_by_its_element" }]

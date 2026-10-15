@@ -655,8 +655,12 @@ impl<'a> Lw<'a> {
                 .iter()
                 .find(|l| l.id == v)
                 .map_or_else(|| format!("v{}", v.0), |l| format!("vec.{}", l.name)),
-            // One name per generic channel type, as a `Vec`'s is per element (N54).
-            Ty::ChanOf(c) => format!("chan.{}", c.0),
+            // One name per generic channel type, by its element's key as a `Vec`'s is, so it is
+            // durable: the checker's channel id depends on the session (N54, R3).
+            Ty::ChanOf(c) => self.native.program.types.chans.get(&c.0).map_or_else(
+                || format!("chan.{}", c.0),
+                |i| format!("chan.{}", crate::symbol::encoded(&i.elem_key)),
+            ),
             // One per element type and length, by structure, so it is durable (Gate 2).
             Ty::Array(crate::ir::ArrayTy(id)) => match self.lay.arrays.get(&id).copied() {
                 Some((elem, len)) => format!("arr{len}.{}", self.type_name(elem)),
