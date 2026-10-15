@@ -312,6 +312,9 @@ pub struct Ck {
     // record's (`construction`), and the call site a call is (`callee`).
     mvar: Smap,
     mclo: Smap,
+    // The zero a compound update of a map's absent entry starts from (`map_fallback`), by the
+    // brackets' span: the literal made for it.
+    mzero: Smap,
     // The type a list or array literal, or a `[v; n]`, was made as, by its span.
     marr: Smap,
     mfor: Smap,
@@ -1438,7 +1441,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), mzero: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -6691,6 +6694,7 @@ fn element_by_name(c: Ck, of: Int, op: Str, bracket: Int, args: Ints, pre: Int, 
                 if value >= 0 { zero = zero_of(c, value, bracket); }
                 if zero >= 0 && compound && callee_of(c, cat3(prefix, "_at_or", "")) != 0 - 1 {
                     ints_push(args, zero);
+                    sm_put(c.mzero, sps(c, bracket), spe(c, bracket), zero);
                     name = cat3(prefix, "_at_or", "");
                 } else {
                     name = cat3(prefix, "_at", "");
@@ -14384,6 +14388,10 @@ pub fn ck_capture_binding(c: Ck, k: Int) -> Int { ints_get(c.capbd, k) }
 pub fn ck_capture_at(c: Ck, k: Int) -> Int { ints_get(c.capat, k) }
 // The `Cell` a binding a closure shares is kept in (R1b, L10).
 pub fn ck_cell_of(c: Ck, t: Int) -> Int { holder_of(c, tag_cell(), t) }
+// The zero literal a compound update's read of a map at the brackets `s..e` (absolute) passes,
+// or -1.
+pub fn ck_zero_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mzero, s, e) }
+
 // The type closure `i` was given, or -1.
 pub fn ck_closure_ty(c: Ck, i: Int) -> Int {
     let mut k = 0;
