@@ -182,6 +182,8 @@ impl Target {
             ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
             ("x86_64", "macos") => "x86_64-apple-darwin",
             ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+            // The toolchain on Windows (W1): its programs are MinGW-w64's, as a cross build's.
+            ("x86_64", "windows") => "x86_64-pc-windows-gnu",
             (a, o) => {
                 return Err(format!(
                     "this host ({a}-{o}) is outside the v1 target matrix"
