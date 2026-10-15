@@ -4,6 +4,12 @@
 //                                  accepted it
 //     pipeline verify CORE.json    lower and validate, and say so
 //     pipeline mutants CORE.json   break one invariant at a time and check the validator says so
+//     pipeline runtime CORE.json [STACK HEAP]
+//                                  print the runtime's units the program links (`runtime`,
+//                                  `entry`, the target's), each after a line `;;; unit NAME`:
+//                                  what `nazm build` generates beside the program's units; STACK
+//                                  and HEAP are `--stack-size` and `--heap-limit` in bytes, `-`
+//                                  for none
 //
 // CORE.json is `nazm core-ir --json FILE`. `openspec/changes/r3-pipeline/` is the design.
 
@@ -15,14 +21,20 @@ use "verify.nz"
 use "mutants.nz"
 use "lir.nz"
 use "ops.nz"
+use "rtgen.nz"
+use "mir.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/text"
 use "@std/fs"
 use "@std/process"
 
 fn main(io: IoCap) -> Int ! { io } {
     let args = process_args(io)
-    let mode = if strs_len(args) == 2 { strs_get(args, 0) } else { "" }
-    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" {
-        eprint("usage: pipeline mir|lir|tables|ops|verify|mutants CORE.json\n")
+    let first = if strs_len(args) > 0 { strs_get(args, 0) } else { "" }
+    let mode = if strs_len(args) == 2 || (first == "runtime" && strs_len(args) == 4) { first } else { "" }
+    if mode != "mir" && mode != "verify" && mode != "mutants" && mode != "lir" && mode != "ops" && mode != "tables" && mode != "runtime" {
+        eprint("usage: pipeline mir|lir|tables|ops|verify|mutants CORE.json | pipeline runtime CORE.json [STACK HEAP]\n")
         return 2
     }
     let text = match fs_read(io, strs_get(args, 1)) {
@@ -57,6 +69,21 @@ fn main(io: IoCap) -> Int ! { io } {
         for e in errors { eprint("pipeline: MIR invalid: " + e + "\n") }
         return 1
     }
+    if mode == "runtime" {
+        let stack = if strs_len(args) == 4 { bytes_arg(strs_get(args, 2)) } else { -1 }
+        let heap = if strs_len(args) == 4 { bytes_arg(strs_get(args, 3)) } else { -1 }
+        let units = match runtime_of(c, tt, p, stack, heap) {
+            Ok(u) => u,
+            Err(e) => {
+                eprint("pipeline: " + e + "\n")
+                return 1
+            },
+        }
+        let names = vec_get(units, 0)
+        let texts = vec_get(units, 1)
+        for i in 0..strs_len(names) { print(";;; unit " + strs_get(names, i) + "\n" + strs_get(texts, i)) }
+        return 0
+    }
     if mode == "lir" || mode == "ops" || mode == "tables" {
         let printed = if mode == "ops" { lir_ops(c, tt, p) } else if mode == "tables" { lir_document(c, tt, p, strs_new()) } else {
             match lir_texts(c, tt, p) {
@@ -79,4 +106,39 @@ fn main(io: IoCap) -> Int ! { io } {
         print(print_mir(p))
     }
     0
+}
+
+fn bytes_arg(a: Str) -> Int {
+    if a == "-" { -1 } else { match text_parse_int(a) { Ok(n) => n, Err(_) => -1 } }
+}
+
+/// The runtime's units for the program (`runtime_units`): its needs are what its units reach,
+/// `single` when `main` holds no authority to start a thread; the entry is `main`'s symbol with a
+/// word per capability it takes, and calls C when any function does.
+fn runtime_of(c: Cir, tt: TypeTable, p: MirProgram, stack: Int, heap: Int) -> Result[Vec[Strs], Str] {
+    let names: HashMap[Str, Bool] = hashmap_new()
+    match lir_texts_needs(c, tt, p, names) {
+        Ok(_) => {},
+        Err(e) => { return Err(e) },
+    }
+    let main = vec_get(p.fns, p.entry)
+    let mut roots = 0
+    let mut single = true
+    for t in params_of(main) {
+        if t == "IoCap" || t == "SpawnCap" || t == "ForeignCap" || t == "VouchCap" || t == "TimeCap" || t == "MmioCap" || t == "OutCap" || t == "NetCap" || t == "RandomCap" || t == "ProcessCap" {
+            roots += 1
+        }
+        if t == "SpawnCap" || t == "NetCap" || t == "ForeignCap" { single = false }
+    }
+    if single { hashmap_set(names, "single", true); }
+    let mut calls_c = false
+    for f in p.fns {
+        if f.foreign == "" {
+            let cs = callees_of(f)
+            for j in 0..ints_len(cs) {
+                if vec_get(p.fns, ints_get(cs, j)).foreign != "" { calls_c = true }
+            }
+        }
+    }
+    Ok(runtime_units(needs_of(names), "aarch64-apple-darwin", "@" + symbol_of(main), roots, calls_c, stack, heap))
 }
