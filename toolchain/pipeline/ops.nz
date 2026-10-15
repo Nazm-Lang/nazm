@@ -16,6 +16,7 @@ use "@std/hash"
 use "@std/hashmap"
 use "@std/json"
 use "@std/text"
+use "@std/blake3"
 
 // --- the module ---------------------------------------------------------------------------------
 
@@ -39,6 +40,9 @@ struct Lo {
     functions: Strs,
     anon: Ints,
     messages: HashMap[Str, Int],
+    /// The type helpers asked for (`what|type`) and their symbols, in the order asked.
+    helpers: HashMap[Str, Int],
+    pending: Strs,
     blobs: HashMap[Str, Int],
     strvals: HashMap[Str, Int],
     /// MIR function position -> its symbol, and -> its plain entry's.
@@ -701,7 +705,8 @@ fn retain_at(fx: Fx, a: Int, t: Str) {
         let o = load(fx, "ptr", a, 16)
         rt(fx, "nz.str_retain", ints_of(o))
     } else if k == "record" || k == "enum" || k == "array" {
-        defect(fx.lo, "a retain helper (not ported yet)");
+        let h = helper(fx.lo, "ret", t)
+        call(fx, h, ints_of(a));
     } else {
         let v = load(fx, "ptr", a, 0)
         retain_value(fx, v, t);
@@ -721,7 +726,11 @@ fn release_value(fx: Fx, v: Int, t: Str) {
             // `Vec[Int]` and `Vec[Str]` are `Ints` and `Strs`.
             release_value(fx, v, if elem == "Int" { "Ints" } else { "Strs" });
         } else if owns_ty(fx, elem) {
-            defect(fx.lo, "an element release helper (not ported yet)");
+            let h = helper(fx.lo, "vel", elem)
+            let f = addr_of(fx, h)
+            let stride = iconst(fx, size_of(fx, elem))
+            let q = release_queue(fx)
+            rt(fx, "nz.vec_release", ints_of4(v, f, stride, q));
         } else {
             rt(fx, "nz.seq_release", ints_of(v))
         }
@@ -735,7 +744,9 @@ fn release_at(fx: Fx, a: Int, t: Str) {
         let o = load(fx, "ptr", a, 16)
         rt(fx, "nz.str_release", ints_of(o))
     } else if k == "record" || k == "enum" || k == "array" {
-        defect(fx.lo, "a release helper (not ported yet)");
+        let h = helper(fx.lo, "rel", t)
+        let q = release_queue(fx)
+        call(fx, h, ints_of2(a, q));
     } else {
         let v = load(fx, "ptr", a, 0)
         release_value(fx, v, t);
@@ -1418,9 +1429,214 @@ fn promotable(f: MirFn) -> Ints {
 
 // --- functions and units ------------------------------------------------------------------------
 
+// --- type helpers -------------------------------------------------------------------------------
+
+/// A type's name in a helper's symbol (`Lw::type_name`): a record's or enum's native type name,
+/// a vector's element key, an array's length and element.
+fn type_name(lo: Lo, t: Str) -> Str {
+    let s = spell(t)
+    if s.kind == "record" || s.kind == "enum" {
+        let module = s.module
+        let base = if str_len(module) > 0 && str_byte(module, 0) == 35 {
+            "nz.tu." + str_slice(module, 1, str_len(module)) + "." + encode(s.name)
+        } else {
+            "nz.t." + encode(module) + "." + encode(s.name)
+        }
+        if strs_len(s.args) == 0 { return base }
+        let keys = strs_new()
+        for a in s.args { strs_push(keys, tkey(a)) }
+        let joined = str_join(keys, ",")
+        let spelled = encode(joined)
+        return base + (if str_len(spelled) <= 512 { ".g." + spelled } else { ".d." + blake3_hex(bytes_from_str(joined)) })
+    }
+    if s.kind == "array" { return "arr" + strs_get(s.args, 1) + "." + type_name(lo, strs_get(s.args, 0)) }
+    if s.kind == "vec" && s.head != "Chan" { return "vec." + encode(tkey(strs_get(s.args, 0))) }
+    let k = class(t)
+    if k == "int" { return "Int" }
+    if k == "str" { return "Str" }
+    if k == "bool" || k == "num" { return t }
+    if t == "Ints" || t == "Strs" || t == "Chan" { return t }
+    t
+}
+
+/// A type as LIR's `Ty::name` says it, in a helper's comment.
+fn ty_word(t: Str) -> Str {
+    let s = spell(t)
+    let k = class(t)
+    if k == "record" { return "a record" }
+    if k == "enum" { return "an enum" }
+    if k == "array" { return "an array" }
+    if k == "int" { return "Int" }
+    if k == "str" { return "Str" }
+    if k == "bool" || k == "num" { return t }
+    if t == "Ints" || t == "Strs" || t == "Chan" { return t }
+    if s.head == "Chan" { return "a `Chan[T]`" }
+    if s.kind == "vec" {
+        let e = strs_get(s.args, 0)
+        if e == "Int" { return "Ints" }
+        if e == "Str" { return "Strs" }
+        return "a `Vec`"
+    }
+    "a function value"
+}
+
+/// The helper `what` (`ret`, `rel`, `vel`) for `t`: its symbol, asked for once.
+fn helper(lo: Lo, what: Str, t: Str) -> Int {
+    let key = what + "|" + t
+    match hashmap_get(lo.helpers, key) {
+        Some(h) => { return h },
+        None => {},
+    }
+    let params = if what == "ret" || what == "hash" { "(ptr)" } else { "(ptr, ptr)" }
+    let ret = if what == "eq" { " -> bit" } else if what == "ord" || what == "hash" { " -> i64" } else { "" }
+    let sym = symbol(lo, "nz.h." + what + "." + type_name(lo, t), "local", "func", "plain " + params + ret, sig_ret(ret), false)
+    hashmap_set(lo.helpers, key, sym)
+    strs_push(lo.pending, key)
+    sym
+}
+
+fn release_queue(fx: Fx) -> Int {
+    let q = ints_get(fx.reg, 2)
+    if q >= 0 { q } else { null(fx) }
+}
+
+fn ints_of4(a: Int, b: Int, c: Int, d: Int) -> Ints {
+    let out = ints_of3(a, b, c)
+    ints_push(out, d)
+    out
+}
+
+fn one_owned(fx: Fx, a: Int, t: Str, retain: Bool) {
+    if retain { retain_at(fx, a, t); } else { release_at(fx, a, t); }
+}
+
+/// Retain or release what a value of `t` at `a` owns, field by field.
+fn each_owned(fx: Fx, a: Int, t: Str, retain: Bool) {
+    let lx = fx.lo.lx
+    let k = class(t)
+    if k == "record" {
+        let fs = record_fields(lx, t)
+        let st = structure(lx, fs)
+        for i in 0..strs_len(fs) {
+            let ft = strs_get(fs, i)
+            if owns_ty(fx, ft) {
+                let at_ = ptr_off(fx, a, ints_get(st, i))
+                one_owned(fx, at_, ft, retain);
+            }
+        }
+    } else if k == "enum" {
+        let tg = load(fx, "i64", a, 0)
+        let done = new_lblock(fx.fb)
+        let cases = strs_new()
+        let arms = ints_new()
+        let arm_variants = ints_new()
+        let order = enum_variants(lx, t)
+        for tagno in 0..ints_len(order) {
+            let v = ints_get(order, tagno)
+            let mut any = false
+            for f in variant_fields(lx, t, v) { if owns_ty(fx, f) { any = true } }
+            if any {
+                let blk = new_lblock(fx.fb)
+                strs_push(cases, int_to_str(tagno) + ": b" + int_to_str(blk))
+                ints_push(arms, blk)
+                ints_push(arm_variants, v)
+            }
+        }
+        term(fx.fb, "switch " + vn(tg) + " [" + str_join(cases, ", ") + "] else b" + int_to_str(done));
+        for i in 0..ints_len(arms) {
+            switch_to(fx.fb, ints_get(arms, i));
+            let v = ints_get(arm_variants, i)
+            let fs = variant_fields(lx, t, v)
+            let st = structure(lx, fs)
+            for j in 0..strs_len(fs) {
+                let ft = strs_get(fs, j)
+                if owns_ty(fx, ft) {
+                    let at_ = ptr_off(fx, a, 8 + ints_get(st, j))
+                    one_owned(fx, at_, ft, retain);
+                }
+            }
+            jump(fx, done);
+        }
+        switch_to(fx.fb, done);
+    } else if k == "array" {
+        let s = spell(t)
+        let elem = strs_get(s.args, 0)
+        if !owns_ty(fx, elem) { return }
+        let len = match text_parse_int(strs_get(s.args, 1)) { Ok(v) => v, Err(e) => 0 }
+        let stride = size_of(fx, elem)
+        let n = iconst(fx, len)
+        let i = new_var(fx.fb, "i64")
+        let z = iconst(fx, 0)
+        set_var(fx, i, z);
+        let head = new_lblock(fx.fb)
+        let body = new_lblock(fx.fb)
+        let done = new_lblock(fx.fb)
+        jump(fx, head);
+        switch_to(fx.fb, head);
+        let iv = get_var(fx, i)
+        let more = cmp(fx, "lt", iv, n)
+        branch(fx, more, body, done);
+        switch_to(fx.fb, body);
+        let iv2 = get_var(fx, i)
+        let kk = iconst(fx, stride)
+        let off = bin(fx, "mul", iv2, kk)
+        let at_ = ptr_add(fx, a, off)
+        one_owned(fx, at_, elem, retain);
+        let iv3 = get_var(fx, i)
+        let step = add_imm(fx, iv3, 1)
+        set_var(fx, i, step);
+        jump(fx, head);
+        switch_to(fx.fb, done);
+    } else {
+        one_owned(fx, a, t, retain);
+    }
+}
+
+fn helper_fx(lo: Lo) -> Fx {
+    let reg = ints_new()
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
+    let at = strs_new()
+    strs_push(at, "")
+    Fx(lo: lo, fb: fb_new(), f: vec_get(lo.p.fns, 0), kinds: strs_new(), idx: ints_new(), tys: strs_new(),
+        promoted: ints_new(), blocks: ints_new(), reg: reg, at: at)
+}
+
+/// A helper's function (`helpers::define`).
+fn define_helper(lo: Lo, key: Str) -> Str {
+    let bar = match text_find(key, "|") { Some(i) => i, None => 0 }
+    let what = str_slice(key, 0, bar)
+    let t = str_slice(key, bar + 1, str_len(key))
+    let sym = match hashmap_get(lo.helpers, key) { Some(h) => h, None => 0 }
+    let fx = helper_fx(lo)
+    let a = param(fx, 0)
+    if what == "rel" || what == "vel" { ints_set(fx.reg, 2, param(fx, 1)) }
+    let mut name = ""
+    if what == "ret" || what == "rel" {
+        let retain = what == "ret"
+        each_owned(fx, a, t, retain);
+        term(fx.fb, "return");
+        name = (if retain { "retain" } else { "release" }) + " of " + ty_word(t)
+    } else if what == "vel" {
+        if in_memory(t) {
+            release_at(fx, a, t);
+        } else {
+            let v = load(fx, "ptr", a, 0)
+            release_value(fx, v, t);
+        }
+        term(fx.fb, "return");
+        name = "release of one " + ty_word(t)
+    } else {
+        defect(lo, "the helper `" + what + "` (not ported yet)");
+    }
+    finish(lo, fx.fb, sym, name)
+}
+
 fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
     let f = vec_get(lo.p.fns, fi)
     let reg = ints_new()
+    ints_push(reg, 0 - 1)
     ints_push(reg, 0 - 1)
     ints_push(reg, 0 - 1)
     let at = strs_new()
@@ -1499,6 +1715,7 @@ fn plain_entry(lo: Lo, sym: Int, body: Int) -> Str {
     let reg = ints_new()
     ints_push(reg, 0 - 1)
     ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
     let at = strs_new()
     strs_push(at, "")
     let fx = Fx(lo: lo, fb: fb_new(), f: vec_get(lo.p.fns, 0), kinds: strs_new(), idx: ints_new(), tys: strs_new(),
@@ -1532,7 +1749,7 @@ fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, 
     let lo = Lo(lx: lx, c: c, p: p, unit: u, sym_name: strs_new(), sym_link: strs_new(), sym_kind: strs_new(), sym_sig: strs_new(),
         sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
         messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
-        runtime: runtime, sources: sources, errors: strs_new())
+        runtime: runtime, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new())
     declare_functions(lo)
     for i in 0..ints_len(u.fns) {
         let fi = ints_get(u.fns, i)
@@ -1547,6 +1764,13 @@ fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, 
             },
             None => {},
         }
+    }
+    // Helpers ask for helpers: each defined once, in the order asked for.
+    let mut done = 0
+    while done < strs_len(lo.pending) {
+        let key = strs_get(lo.pending, done)
+        done += 1
+        strs_push(lo.functions, define_helper(lo, key));
     }
     if strs_len(lo.errors) > 0 { return Err(strs_get(lo.errors, 0)) }
     Ok(print_module(lo))
