@@ -1,0 +1,72 @@
+# `nazm init`'s command lines, one per line, its words as the shell reads them. Each runs in a
+# directory holding `empty/` (an empty directory), `full/` (one that is not: `keep.txt` and an empty
+# `sub/`) and `file` (a regular file); its output, error, status and the tree afterwards are
+# compared with the reference's.
+
+-h
+--help
+app -h
+init
+app
+app --template cli
+app --template library
+app --template=server
+app --template embedded
+app --template wasm
+app --template contract
+app --template lib
+app --template ""
+app --template=
+app --template
+--template x
+--template=x
+--template cli app
+app --template cli --template cli
+app --templ cli
+app --tmplate cli
+app --templates cli
+app -t cli
+app b
+app -- b
+-- app
+-- -x
+-x
+--x app
+"" --template cli
+app --template -x
+app --template --x
+app --template -
+app --template -- b
+--template -- app
+app --template=-x
+empty
+full
+full/sub
+file
+file/sub
+file/
+.
+..
+./
+/
+app/..
+app/.
+./app
+app/
+app//
+nested/deeper/app
+nested//app
+Bad
+1abc
+a-
+a-b
+a_b
+a--b
+é
+"a b"
+abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklm
+abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijkl
+app --help --template x
+app --template x --help
+--help=1
+--template=cli=x app
