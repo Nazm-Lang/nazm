@@ -22,7 +22,8 @@
 - [ ] 3.1 `nazm.api-doc/2` and `-o DIR` (`api.json`, `api.md`), from the checker's public definitions
 
 ## 4. `init`
-- [ ] 4.1 Every template written as the reference writes it; the directory rules
+- [x] 4.1 Every template written as the reference writes it; the directory rules (design D9): 24 of
+      24 projects and every command line of `tests/args/init.txt` agree (2026-10-15)
 
 ## 5. `check`
 - [ ] 5.1 Text and `--json` diagnostics, as R2's checker carries them; refusing past what it carries

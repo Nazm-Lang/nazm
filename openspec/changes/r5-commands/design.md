@@ -53,8 +53,8 @@ U+10FFFF), since `read_file` returns any bytes.
 
 **D5 — What is not carried refuses with exit status 6.** A command meeting what its port does not
 carry says `CMD: not carried: …` on standard error and exits 6 — never an output the reference
-would not give — and the comparison counts it apart. Since the shared parser (D8), `fmt` carries
-every path of `crates/nazm-cli/src/fmt.rs`, so it refuses nothing today.
+would not give — and the comparison counts it apart. Since the shared parser (D8), `fmt` and `init`
+carry every path of `crates/nazm-cli/src/fmt.rs` and `init.rs`, so neither refuses anything today.
 
 **D6 — The comparison (`toolchain/commands/tests/run.sh`).** The reference is `nazm` built from
 the same checkout (`CARGO_TARGET_DIR=$HOME/.cache/nazm-target-track5`, `-j 4`; `NAZM_REF` to name
@@ -69,7 +69,7 @@ rewritten. One summary line: `fmt: N agree, M differ, R refused (of T inputs); b
 
 **D7 — The comparisons of later commands** follow D6: a temporary copy per input, both sides' whole
 observable behaviour recorded and compared, refusals counted apart. `check` compares text and
-`--json`; `doc` its `nazm.api-doc/2` line and `-o` files; `init` the tree written; `test` and
+`--json`; `doc` its `nazm.api-doc/2` line and `-o` files; `init` the tree written (D9); `test` and
 the commands that build or run programs compare after R3/R4/R9 are integrated; `lsp` and the MCP
 server by a scripted session of requests and the responses, byte for byte. Every ported command's
 command lines are compared too (D8): `run.sh`'s `args` part runs each line of
@@ -93,6 +93,20 @@ its arguments in `cli.rs`'s order with the text clap derives from their doc comm
 paragraph, its final period dropped, as `about`, and the whole as `long_about` when there is more
 than one paragraph. Subcommands, aliases, possible values, groups, conflicts, environment variables,
 other `num_args` and hyphen values are not carried yet: no command ported so far declares them.
+
+**D9 — `init` writes the templates the Rust binary compiles in.** `init.rs` holds its templates with
+`include_str!`; the Nazm command holds the same files as string literals in
+`toolchain/commands/init_templates.nz`, generated from `crates/nazm-cli/templates` by
+`tests/gen-templates.sh` (one literal per line, so the build stays fast), and `run.sh` fails when the
+committed file is not the generator's output. The refusals come in `init.rs`'s order and words: an
+unknown template (5), a path whose last component is not a name — Rust's `Path::file_name` — (5),
+a name that is not a package's (`nazm_package::valid_name`, 1), a directory that exists and is not
+empty (1). Directories are made as `create_dir_all` makes them (`NotFound` climbs to the parent,
+another failure stands unless the path is a directory) and files written as `fs::write` (created
+or truncated), so a failure is `nazm: cannot write PATH: MESSAGE (os error N)`, status 4 — the
+system's message from `os_error_text`, as `io::Error` displays it. The comparison runs every template
+into a fresh directory, a nested one, an empty one and one written `./NAME/`, and `args/init.txt`
+covers the refusals, a regular file in the way and every option form.
 
 ## Risks / Trade-offs
 

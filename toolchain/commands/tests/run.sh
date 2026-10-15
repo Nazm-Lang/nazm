@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args (both by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init (all by default)
 #
 # Each command (toolchain/commands/CMD.nz) is built by the 0.10.0 release ($NAZM). The reference is
 # `nazm` built from this checkout into $CARGO_TARGET_DIR (default ~/.cache/nazm-target-track5), or
@@ -16,6 +16,7 @@
 #         over every input at once, and a missing file named after one that is rewritten.
 #   args  Every command line in tests/args/CMD.txt, run by both sides in the same fixture
 #         directory: clap's usage errors and help, and what the command then does (design, D8).
+#   init  `nazm init` of every template, the trees written compared file by file (design, D9).
 #
 # Prints one summary line per part, after the names of the first differences. Exits 1 when
 # anything differs or is refused. Leaves nothing behind unless KEEP=DIR is given, where every
@@ -28,11 +29,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args) parts="$parts $1"; shift ;;
+    fmt|args|init) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args"
+[ -n "$parts" ] || parts="fmt args init"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -52,7 +53,7 @@ else
 fi
 
 mkdir -p "$work/bin"
-for cmd in fmt; do
+for cmd in fmt init; do
   "$nazm" build "$root/toolchain/commands/$cmd.nz" -o "$work/bin/$cmd" > "$work/build.log" 2>&1 \
     || { cat "$work/build.log" >&2; echo "run.sh: toolchain/commands/$cmd.nz did not build" >&2; exit 2; }
 done
@@ -151,6 +152,11 @@ fixture() {
       printf 'fn main() -> Int { 1+2 }\n' > "$dir/b.nz"
       mkdir -p "$dir/sub"
       ;;
+    init)
+      mkdir -p "$dir/empty" "$dir/full/sub"
+      printf 'kept\n' > "$dir/full/keep.txt"
+      printf 'a file\n' > "$dir/file"
+      ;;
   esac
 }
 
@@ -172,7 +178,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt; do
+  for cmd in fmt init; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -201,10 +207,47 @@ part_args() {
   [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
 }
 
+# --- init: every template ---------------------------------------------------------------------------
+
+part_init() {
+  n=0 agree=0 differ=0 refused=0
+  # The templates compiled into init.nz are the reference's.
+  "$root/toolchain/commands/tests/gen-templates.sh" > "$work/init_templates.nz"
+  if cmp -s "$work/init_templates.nz" "$root/toolchain/commands/init_templates.nz"; then templates=current; else
+    templates=stale
+    status=1
+    echo "  differ: toolchain/commands/init_templates.nz is not tests/gen-templates.sh's output"
+  fi
+  for t in cli library server embedded wasm contract; do
+    for where in "app" "nested/deeper/app" "empty" "./app2/"; do
+      n=$((n + 1))
+      d="$work/init/$n"
+      fixture init "$d/ref"
+      fixture init "$d/got"
+      record "$d/ref" "$ref" init "$where" --template "$t"
+      record "$d/got" "$work/bin/init" "$where" --template "$t"
+      if grep -q '^exit 6$' "$d/got.record"; then
+        refused=$((refused + 1)); echo "  refused: init $where --template $t"
+      elif cmp -s "$d/ref.record" "$d/got.record"; then
+        agree=$((agree + 1))
+      else
+        differ=$((differ + 1)); echo "  differ: init $where --template $t"
+        if [ -n "${KEEP:-}" ]; then
+          mkdir -p "$KEEP/init-$n" && cp "$d/ref.record" "$KEEP/init-$n/want" && cp "$d/got.record" "$KEEP/init-$n/got"
+        fi
+      fi
+      rm -rf "$d"
+    done
+  done
+  echo "init: $agree agree, $differ differ, $refused refused (of $n projects); templates $templates"
+  [ "$differ" -eq 0 ] && [ "$refused" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fmt) part_fmt "$@" ;;
     args) part_args ;;
+    init) part_init ;;
   esac
 done
 exit $status

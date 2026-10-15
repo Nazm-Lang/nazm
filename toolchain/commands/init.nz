@@ -1,0 +1,207 @@
+// `nazm init`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D9).
+//
+// Usage: init [--template NAME] DIR
+//
+// A port of `crates/nazm-cli/src/init.rs`: the template's files written into DIR, `{{name}}` in each
+// replaced by the package's name — the directory's — after the same refusals in the same order (an
+// unknown template, a path naming no directory, a name that is not a package's, a directory that is
+// not empty). The files are those the Rust binary compiles in, generated into `init_templates.nz`.
+// Directories are made as Rust's `create_dir_all` makes them and files written as `fs::write`
+// writes them, so a failure is reported with the same system error, as `io::Error` displays it.
+
+use "cli.nz"
+use "init_templates.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn template_names() -> Strs {
+    let s = strs_new()
+    strs_push(s, "cli")
+    strs_push(s, "library")
+    strs_push(s, "server")
+    strs_push(s, "embedded")
+    strs_push(s, "wasm")
+    strs_push(s, "contract")
+    s
+}
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm init`.
+fn init_cli() -> Cli {
+    let c = cli_command("init", "Create a project from a template (N74): `cli`, `library`, `server`, `embedded`, `wasm` or "
+            + "`contract`. The directory is the package's name; it must not exist or must be empty. Its README.md names "
+            + "the commands that check, test, build and document it", "")
+    cli_positional(c, "DIR", true, false, true, "", "")
+    cli_option(c, "", "template", "NAME", false, "cli", true, "", "")
+    c
+}
+
+// --- paths, as Rust's `Path` reads them ----------------------------------------------------------
+
+// `Path::file_name`: the last component if it is a name — not `.`, `..` or the root — or "".
+fn file_name(p: Str) -> Str {
+    let mut last = ""
+    let mut from = 0
+    let n = str_len(p)
+    for i in 0..n + 1 {
+        if i == n || str_byte(p, i) == 47 {
+            let part = str_slice(p, from, i)
+            if part != "" && part != "." { last = part }
+            from = i + 1
+        }
+    }
+    if last == ".." { "" } else { last }
+}
+
+// `Path::parent` for the paths `init` makes: everything before the last component, trailing
+// separators dropped; "" for a single component.
+fn parent(p: Str) -> Str {
+    let mut end = str_len(p)
+    while end > 1 && str_byte(p, end - 1) == 47 { end -= 1 }
+    let mut cut = end
+    while cut > 0 && str_byte(p, cut - 1) != 47 { cut -= 1 }
+    if cut == 0 { return "" }
+    let mut keep = cut
+    while keep > 1 && str_byte(p, keep - 1) == 47 { keep -= 1 }
+    str_slice(p, 0, keep)
+}
+
+// `PathBuf::push` of a relative path: a separator unless there is one.
+fn join(dir: Str, rel: Str) -> Str {
+    if str_len(dir) > 0 && str_byte(dir, str_len(dir) - 1) == 47 { dir + rel } else { dir + "/" + rel }
+}
+
+// Whether `p` names a directory, following links (`Path::is_dir`).
+fn is_dir(io: IoCap, p: Str) -> Bool {
+    let out = bytes_new(32)
+    os_stat(p, out) == 0 && bytes_read_le[Int](out, 8) == 1
+}
+
+// `nazm_package::valid_name`.
+fn valid_name(name: Str) -> Bool {
+    let n = str_len(name)
+    if n == 0 || n > 64 { return false }
+    let first = str_byte(name, 0)
+    if first < 97 || first > 122 { return false }
+    for i in 0..n {
+        let b = str_byte(name, i)
+        if !((b >= 97 && b <= 122) || (b >= 48 && b <= 57) || b == 45) { return false }
+    }
+    str_byte(name, n - 1) != 45
+}
+
+fn replace_all(s: Str, what: Str, with: Str) -> Str {
+    let parts = strs_new()
+    let n = str_len(s)
+    let w = str_len(what)
+    let mut from = 0
+    let mut i = 0
+    while i + w <= n {
+        if str_slice(s, i, i + w) == what {
+            strs_push(parts, str_slice(s, from, i))
+            strs_push(parts, with)
+            i += w
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    strs_push(parts, str_slice(s, from, n))
+    str_join(parts, "")
+}
+
+// --- writing, as `std::fs` does -------------------------------------------------------------------
+
+// An `io::Error` from a status, as it displays: the system's message and its number.
+fn os_error(status: Int) -> Str { os_error_text(status) + " (os error " + int_to_str(0 - status) + ")" }
+
+// Rust's `create_dir_all`: 0, or the failing status.
+fn create_dir_all(io: IoCap, p: Str) -> Int {
+    if p == "" { return 0 }
+    let s = os_mkdir(p)
+    if s == 0 { return 0 }
+    // NotFound: the parent first, then this directory again.
+    if s != 0 - 2 {
+        if is_dir(io, p) { return 0 }
+        return s
+    }
+    let up = parent(p)
+    if up == "" && str_len(p) > 0 && str_byte(p, 0) == 47 { return s }
+    let r = create_dir_all(io, up)
+    if r != 0 { return r }
+    let again = os_mkdir(p)
+    if again == 0 || is_dir(io, p) { return 0 }
+    again
+}
+
+// `fs::write`: created or truncated, every byte written. 0, or the failing status.
+fn write_all(io: IoCap, p: Str, text: Str) -> Int {
+    let h = os_open_write(p, 0)
+    let s = os_status(h)
+    if s < 0 { return s }
+    let data = bytes_from_str(text)
+    let n = bytes_len(data)
+    let mut done = 0
+    while done < n {
+        let w = os_write(h, bytes_slice(data, done, n))
+        if w < 0 {
+            os_close(h)
+            return w
+        }
+        done += w
+    }
+    os_close(h)
+    0
+}
+
+fn main(io: IoCap) -> Int {
+    let c = init_cli()
+    cli_parse(io, c)
+    let dir = cli_value(c, 0)
+    let template = cli_value(c, 1)
+
+    let names = template_names()
+    let mut known = false
+    for i in 0..strs_len(names) {
+        if strs_get(names, i) == template { known = true }
+    }
+    if !known {
+        eprint("nazm: no template `" + template + "`; there are " + str_join(names, ", ") + nl())
+        exit_with(5)
+    }
+    let name = file_name(dir)
+    if name == "" {
+        eprint("nazm: `" + dir + "` names no directory to create" + nl())
+        exit_with(5)
+    }
+    if !valid_name(name) {
+        eprint("nazm: `" + name + "` is not a package name: lowercase ASCII letters, digits and `-`, starting with a letter "
+                + "— the directory's name is the package's" + nl())
+        exit_with(1)
+    }
+    let d = os_dir_open(dir)
+    if os_status(d) == 0 {
+        let entry = bytes_new(1024)
+        let first = os_dir_next(d, entry)
+        os_close(d)
+        if first > 0 {
+            eprint("nazm: `" + dir + "` exists and is not empty; nothing was written" + nl())
+            exit_with(1)
+        }
+    }
+    let t = init_templates()
+    let mut written = 0
+    for i in 0..strs_len(t.template) {
+        if strs_get(t.template, i) != template { continue }
+        let to = join(dir, strs_get(t.path, i))
+        let mut s = create_dir_all(io, parent(to))
+        if s == 0 { s = write_all(io, to, replace_all(strs_get(t.text, i), "{{name}}", name)) }
+        if s != 0 {
+            eprint("nazm: cannot write " + to + ": " + os_error(s) + nl())
+            exit_with(4)
+        }
+        written += 1
+    }
+    eprint("nazm: created `" + name + "` from the `" + template + "` template (" + int_to_str(written)
+            + " files); its README.md says what to run" + nl())
+    0
+}
