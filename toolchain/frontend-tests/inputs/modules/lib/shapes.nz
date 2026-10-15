@@ -1,0 +1,5 @@
+pub trait Shape { fn sides(self: Self) -> Int; }
+pub struct Tri { a: Int }
+impl Shape for Tri { fn sides(self: Tri) -> Int { 3 } }
+trait Hidden { fn h(self: Self) -> Int; }
+impl Hidden for Tri { fn h(self: Tri) -> Int { 0 } }

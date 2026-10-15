@@ -1,0 +1,5 @@
+use "lib/shapes.nz";
+fn main() -> Int {
+    let t = Tri(a: 1);
+    t.h()
+}

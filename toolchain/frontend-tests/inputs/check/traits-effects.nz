@@ -1,0 +1,9 @@
+trait Show { fn show(self: Self) -> Str; }
+trait Say { fn say(self: Self) -> Int ! { io }; }
+struct P { x: Int }
+impl Show for P { fn show(self: P) -> Str { print("x"); "p" } }
+impl Say for P { fn say(self: P) -> Int ! { io } { print("p"); 1 } }
+fn quiet[T: Say](x: T) -> Int { x.say() }
+fn loud[T: Say](x: T) -> Int ! { io } { x.say() }
+fn direct(p: P) -> Int { p.say() }
+fn main() -> Int { 0 }
