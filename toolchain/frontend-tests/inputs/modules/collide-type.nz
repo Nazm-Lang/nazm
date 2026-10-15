@@ -1,0 +1,6 @@
+use "lib/a.nz";
+struct Point { z: Int }
+fn main() -> Int {
+    let p = Point(z: 1);
+    p.z
+}

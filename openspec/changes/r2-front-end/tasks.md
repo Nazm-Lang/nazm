@@ -56,6 +56,14 @@
 - [ ] 3.1f `?` (`check_propagate`): the prelude's `Result` and `Option` by definition (N0360,
       N0361, N0362, N0300). `run.sh check`: 2,342 agree, 394 differ; the checker carries 1,648,
       all agree
+- [ ] 3.1g Imports and module graphs (D16): every stage over every module in load order, each
+      module against its direct imports' interfaces — `pub` visibility, plain imports and imports
+      under a name (`alias::f`, `alias::T`, qualified constructions, variants and patterns), their
+      collisions (N0207, N0208, N0209), private and unimported names (N0206, N0201 and N0305 with
+      where the name is), unknown qualified names (N0210), another module's undeclared effects
+      assumed, a standard module's authority; re-exports stop. Hand-written cases in
+      `toolchain/frontend-tests/inputs/modules/`. `run.sh check`: 2,369 agree, 392 differ; the
+      checker carries 1,704, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

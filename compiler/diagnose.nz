@@ -75,11 +75,21 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
     let programs = ints_new();
     let bases = ints_new();
     let names = strs_new();
+    // The module graph as the loader resolved it: each module's imports, in source order, by
+    // the index of the module each names; and whether each module is a standard one.
+    let graph = ck_graph();
     let mut i = 0;
     while i < ld_count(loaded) {
         let own = dg_new();
         let program = sx_parse_source(ld_text(loaded, i), t, own);
         if i == 0 { root_program = program; }
+        ck_graph_module(graph, ld_standard(loaded, i));
+        let count = ints_len(sx_items(t, sx_field(t, program, "imports")));
+        let mut k = 0;
+        while k < count {
+            ck_graph_import(graph, ld_import_target(loaded, i, k));
+            k = k + 1;
+        }
         ints_push(programs, program);
         ints_push(bases, ld_base(loaded, i));
         strs_push(names, ld_name(loaded, i));
@@ -90,7 +100,7 @@ fn check_compilation(path: Str, library: Str, d: Diags, io: IoCap) -> Int {
     // The checker (`sema.nz`), where it carries the whole compilation (design D13); where it
     // stops, it says why on standard error and reports nothing.
     if parse_failed == false {
-        let c = ck_check(t, programs, bases, names);
+        let c = ck_check(t, programs, bases, names, graph);
         if ck_stopped(c) == "" {
             dg_append(d, ck_diags(c), 0);
             return 0;

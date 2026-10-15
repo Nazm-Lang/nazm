@@ -1,0 +1,6 @@
+use "lib/a.nz";
+use "lib/b.nz";
+fn main() -> Int {
+    let s = Dot;
+    0
+}

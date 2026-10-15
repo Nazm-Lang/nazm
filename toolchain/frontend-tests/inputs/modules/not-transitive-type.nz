@@ -1,0 +1,3 @@
+use "lib/b.nz";
+fn take(d: Deep) -> Int { d.n }
+fn main() -> Int { 0 }

@@ -1,0 +1,3 @@
+struct Hidden { n: Int }
+pub fn leak(h: Hidden) -> Int { h.n }
+pub struct Holder { h: Hidden }

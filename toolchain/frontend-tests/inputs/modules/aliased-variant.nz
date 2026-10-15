@@ -1,0 +1,10 @@
+use "lib/a.nz" as a;
+use "lib/a.nz";
+fn main() -> Int {
+    let s = Circle(r: 2);
+    let t = Circle(1);
+    match s {
+        Dot => 0,
+        Circle(r) => r,
+    }
+}

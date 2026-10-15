@@ -1,0 +1,3 @@
+use "lib/a.nz";
+use "lib/b.nz";
+fn main() -> Int { shared(1) + only_a() }

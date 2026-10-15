@@ -1,0 +1,17 @@
+use "lib/a.nz" as a;
+use "lib/b.nz" as b;
+fn area(s: a::Shape) -> Int {
+    match s {
+        a::Shape.Dot => 0,
+        a::Shape.Circle(r) => r * r,
+    }
+}
+fn main() -> Int {
+    let p = a::Point(x: 1, y: 2);
+    let q: b::Point = b::Point(x: 3);
+    let s = a::Shape.Circle(r: 2);
+    let xs = ints_new();
+    ints_push(xs, 1);
+    let f = a::first(xs);
+    a::shared(p.x) + b::shared(q.x) + area(s)
+}

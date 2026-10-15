@@ -7,7 +7,11 @@
 // reports none of its diagnostics for that compilation: a partial checker must never say what the
 // reference would not, so every difference among the compilations it does carry is a defect.
 //
-// Carried today: one module and the core prelude; records and enums, generic ones included, and
+// Carried today: a compilation's modules — the root, what it imports, the standard modules and the
+// core prelude — each checked against its direct imports' interfaces: `pub` visibility, plain
+// imports and imports under a name (`alias::f`, `alias::T`), their collisions (N0207, N0208,
+// N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
+// and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s and applications of any type; functions with type parameters (and `Equality`
 // requirements) but no effect parameters, contracts or attributes; `let`, assignment to a binding
 // or its fields, `while`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary
@@ -151,6 +155,60 @@ pub struct Ck {
     cells: Ints,
     // Warnings, published only where there is no error (`check_map_with_warnings`).
     w: Diags,
+    // Whether each module is a standard one (or the prelude), whose functions hold no output
+    // authority they are not given (R1.5, D8).
+    mstd: Ints,
+    // Each module's imports as the graph holds them (`Dependency`), a run of the pool below: the
+    // module named, where the first `use` of it names it (absolute), whether a plain `use` named
+    // it, and the names it is imported under (a run of the alias pool, with their spans). The
+    // core prelude is every other module's last.
+    dfirst: Ints,
+    dcount: Ints,
+    don: Ints,
+    dats: Ints,
+    date: Ints,
+    dplain: Ints,
+    daf: Ints,
+    dac: Ints,
+    aname: Strs,
+    aats: Ints,
+    aate: Ints,
+    // Whether each function is exported (`pub`).
+    fnpub: Ints,
+    // The module being checked's environment beyond its own functions and the built-ins
+    // (`environment`): each name a plain import brought in and the function it is; and each
+    // alias it may write before `::`, and the module it names.
+    envname: Strs,
+    envfn: Ints,
+    alname: Strs,
+    almod: Ints,
+    // Every alias the module's types may be written under (`Types::aliases`).
+    taliases: Strs,
+}
+
+// The module graph as the loader resolved it, handed to `ck_check`: per module, whether it is a
+// standard one, and the module each of its `use` items names (by load order; -1 for none).
+pub struct Graph {
+    standard: Ints,
+    first: Ints,
+    count: Ints,
+    target: Ints,
+}
+
+pub fn ck_graph() -> Graph { Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new()) }
+
+pub fn ck_graph_module(g: Graph, standard: Bool) -> Int {
+    if standard { ints_push(g.standard, 1); } else { ints_push(g.standard, 0); }
+    ints_push(g.first, ints_len(g.target));
+    ints_push(g.count, 0);
+    0
+}
+
+pub fn ck_graph_import(g: Graph, target: Int) -> Int {
+    ints_push(g.target, target);
+    let last = ints_len(g.count) - 1;
+    ints_set(g.count, last, ints_get(g.count, last) + 1);
+    0
 }
 
 fn s_ret() -> Int { 0 }
@@ -162,7 +220,11 @@ fn s_unwanted() -> Int { 5 }
 fn s_module() -> Int { 6 }
 // The function whose body is being checked, or -1.
 fn s_fn() -> Int { 7 }
-fn s_slots() -> Int { 8 }
+// The core prelude's module.
+fn s_prelude() -> Int { 8 }
+fn s_slots() -> Int { 9 }
+
+fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
 fn gs(c: Ck, slot: Int) -> Int { ints_get(c.st, slot) }
 fn ss(c: Ck, slot: Int, v: Int) -> Int { ints_set(c.st, slot, v); 0 }
@@ -644,7 +706,10 @@ fn new_ck(t: Tree) -> Ck {
             sds: ints_new(), sde: ints_new(), frames: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
             tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
-            pargs: ints_new(), cells: ints_new(), w: dg_new());
+            pargs: ints_new(), cells: ints_new(), w: dg_new(), mstd: ints_new(), dfirst: ints_new(), dcount: ints_new(), don: ints_new(),
+            dats: ints_new(), date: ints_new(), dplain: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
+            aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
+            taliases: strs_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -725,7 +790,7 @@ fn shape_of(c: Ck, s: Str, t: Int) -> Int {
     if s == "Option[T]" {
         let a = ints_new();
         ints_push(a, t);
-        return enum_ty(c, declared_enum(c, 1, "Option"), a);
+        return enum_ty(c, declared_enum(c, prelude(c), "Option"), a);
     }
     shape_ty(c, s)
 }
@@ -757,48 +822,155 @@ fn builtin_index(c: Ck, name: Str) -> Int { strs_find(c.bname, name) }
 // --- the compilation ------------------------------------------------------------------------
 
 // Check the compilation whose modules' programs are `programs`, at text offsets `bases`, named
-// `names` (`load.nz`'s order: the root first, the core prelude last). The diagnostics are
-// `ck_diags`, to be published only when `ck_stopped` is "".
-pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs) -> Ck {
+// `names`, its import edges `graph` (`load.nz`'s order: the root first, the core prelude last).
+// The diagnostics are `ck_diags`, to be published only when `ck_stopped` is "".
+//
+// Every stage runs over every module in load order, as `check_reusing` runs them: each type's
+// name, each module's field types against its imports' interfaces, the layouts, each module's
+// declarations, then each module's bodies against its direct imports' interfaces.
+pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph) -> Ck {
     let c = new_ck(t);
+    let count = ints_len(programs);
     let mut i = 0;
-    while i < ints_len(programs) {
+    while i < count {
         ints_push(c.mprog, ints_get(programs, i));
         ints_push(c.mbase, ints_get(bases, i));
+        ints_push(c.mstd, ints_get(graph.standard, i));
         i = i + 1;
     }
-    if ints_len(programs) != 2 {
-        stop(c, "a module the root imports");
-        return c;
-    }
-    if strs_get(names, 1) != "@core/prelude.nz" {
+    if strs_get(names, count - 1) != "@core/prelude.nz" {
         stop(c, "a compilation without the core prelude");
         return c;
     }
-    refuse_unsupported_items(c, 0);
+    ss(c, s_prelude(), count - 1);
+    i = 0;
+    while i < count {
+        refuse_unsupported_items(c, i);
+        i = i + 1;
+    }
+    if strs_len(c.stop) > 0 { return c; }
+    build_dependencies(c, graph);
     if strs_len(c.stop) > 0 { return c; }
     // Stage 0a: every user-defined type's name.
-    declare_types(c, 0);
-    declare_types(c, 1);
+    i = 0;
+    while i < count {
+        declare_types(c, i);
+        i = i + 1;
+    }
     // Stage 0b: each module's field types; stage 0c, the layouts they describe.
-    resolve_type_fields(c, 0);
-    resolve_type_fields(c, 1);
+    i = 0;
+    while i < count {
+        resolve_type_fields(c, i);
+        i = i + 1;
+    }
     validate_layouts(c);
     // Stage 1: each module's definitions.
-    declare_functions(c, 0);
-    declare_functions(c, 1);
-    // Stage 2: the bodies.
-    check_unit(c, 0);
-    analyse_effects(c, 0);
+    i = 0;
+    while i < count {
+        declare_functions(c, i);
+        i = i + 1;
+    }
+    // Stage 2: the bodies, module by module, each module's effects once its bodies are.
+    i = 0;
+    while i < count {
+        check_unit(c, i);
+        analyse_effects(c, i);
+        i = i + 1;
+    }
     // The rules about `main`.
     main_rules(c);
     c
 }
 
+// Each module's imports as the graph holds them (`ModuleGraph::import_as`): one edge per module
+// named, in the order of the first `use` naming it, plain when any `use` of it is, with every
+// name it is imported under; a module naming itself adds none. The core prelude is imported by
+// every other module, last, at no place.
+fn build_dependencies(c: Ck, graph: Graph) -> Int {
+    let count = ints_len(c.mprog);
+    let mut m = 0;
+    while m < count {
+        ss(c, s_module(), m);
+        let imports = kids(c, ints_get(c.mprog, m), "imports");
+        let gf = ints_get(graph.first, m);
+        let targets = ints_new();
+        if m != prelude(c) {
+            if ints_get(graph.count, m) != ints_len(imports) {
+                stop(c, "an import the loader did not resolve");
+                return 0;
+            }
+        }
+        let mut k = 0;
+        while k < ints_len(imports) {
+            let imp = ints_get(imports, k);
+            let to = ints_get(graph.target, gf + k);
+            if to < 0 { stop(c, "an import the loader did not resolve"); }
+            if some(c, imp, "reexport") { stop(c, "a re-export"); }
+            if to == m && some(c, imp, "alias") { stop(c, "a module imported under a name by itself"); }
+            if to != m && index_of(targets, to) < 0 { ints_push(targets, to); }
+            k = k + 1;
+        }
+        ints_push(c.dfirst, ints_len(c.don));
+        let mut n = 0;
+        while n < ints_len(targets) {
+            let to = ints_get(targets, n);
+            let mut plain = false;
+            let mut first = 0 - 1;
+            ints_push(c.daf, strs_len(c.aname));
+            k = 0;
+            while k < ints_len(imports) {
+                let imp = ints_get(imports, k);
+                if ints_get(graph.target, gf + k) == to {
+                    if first < 0 { first = imp; }
+                    if some(c, imp, "alias") {
+                        let q = unwrap(c, imp, "alias");
+                        strs_push(c.aname, fname_of(c, q, "name"));
+                        ints_push(c.aats, sps(c, fld(c, q, "span")));
+                        ints_push(c.aate, spe(c, fld(c, q, "span")));
+                    } else {
+                        plain = true;
+                    }
+                }
+                k = k + 1;
+            }
+            ints_push(c.dac, strs_len(c.aname) - ints_get(c.daf, ints_len(c.daf) - 1));
+            ints_push(c.don, to);
+            ints_push(c.dats, sps(c, fld(c, first, "path_span")));
+            ints_push(c.date, spe(c, fld(c, first, "path_span")));
+            if plain { ints_push(c.dplain, 1); } else { ints_push(c.dplain, 0); }
+            n = n + 1;
+        }
+        if m != prelude(c) {
+            ints_push(c.don, prelude(c));
+            ints_push(c.dats, 0);
+            ints_push(c.date, 0);
+            ints_push(c.dplain, 1);
+            ints_push(c.daf, strs_len(c.aname));
+            ints_push(c.dac, 0);
+        }
+        ints_push(c.dcount, ints_len(c.don) - ints_get(c.dfirst, m));
+        m = m + 1;
+    }
+    0
+}
+
+// Module `m`'s `k`th dependency, as an index into the pool.
+fn dep(c: Ck, m: Int, k: Int) -> Int { ints_get(c.dfirst, m) + k }
+fn deps(c: Ck, m: Int) -> Int { ints_get(c.dcount, m) }
+
+// Whether module `m` imports module `x` directly (the prelude included).
+fn imports_module(c: Ck, m: Int, x: Int) -> Bool {
+    let mut k = 0;
+    while k < deps(c, m) {
+        if ints_get(c.don, dep(c, m, k)) == x { return true; }
+        k = k + 1;
+    }
+    false
+}
+
 // What a module may hold that the checker does not carry yet.
 fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
-    if ints_len(kids(c, p, "imports")) > 0 { stop(c, "an import"); }
     if ints_len(kids(c, p, "traits")) > 0 { stop(c, "a trait"); }
     if ints_len(kids(c, p, "impls")) > 0 { stop(c, "an impl"); }
     if ints_len(kids(c, p, "consts")) > 0 { stop(c, "a constant"); }
@@ -809,7 +981,7 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         if ints_len(kids(c, r, "attrs")) > 0 { stop(c, "an attribute"); }
         if some(c, r, "foreign") { stop(c, "a foreign record"); }
         let n = fname_of(c, r, "name");
-        if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
+        if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
         let fields = kids(c, r, "fields");
         let mut k = 0;
         while k < ints_len(fields) {
@@ -824,7 +996,7 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         let e = ints_get(enums, i);
         if ints_len(kids(c, e, "attrs")) > 0 { stop(c, "an attribute"); }
         let n = fname_of(c, e, "name");
-        if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
+        if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
         let variants = kids(c, e, "variants");
         let mut k = 0;
         while k < ints_len(variants) {
@@ -1016,33 +1188,147 @@ fn refuse_type_name(c: Ck, m: Int, name: Str, at: Int) -> Bool {
     false
 }
 
-// The names a module may write a type by: its own, then the prelude's (`type_environment`).
-fn type_environment(c: Ck, m: Int) -> Int {
+// The names a module may write a type by (`type_environment`): its own, then each direct
+// import's nameable types — under each name it is imported by as `alias::Name`, and plainly where
+// a plain `use` named it. With `report`, an import bringing in a type the module declares
+// (N0208) or one another import brought in (N0207) is reported; the prelude's names are never
+// ambiguous.
+fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
     while strs_len(c.tnames) > 0 {
         strs_pop(c.tnames);
         ints_pop(c.ttys);
     }
+    while strs_len(c.taliases) > 0 { strs_pop(c.taliases); }
     let mut i = 0;
     while i < strs_len(c.rname) {
-        if ints_get(c.rmod, i) == m || ints_get(c.rmod, i) == 1 {
-            if strs_find(c.tnames, strs_get(c.rname, i)) < 0 {
-                strs_push(c.tnames, strs_get(c.rname, i));
-                ints_push(c.ttys, record_ty(c, i, ints_new()));
-            }
+        if ints_get(c.rmod, i) == m && strs_find(c.tnames, strs_get(c.rname, i)) < 0 {
+            strs_push(c.tnames, strs_get(c.rname, i));
+            ints_push(c.ttys, record_ty(c, i, ints_new()));
         }
         i = i + 1;
     }
     i = 0;
     while i < strs_len(c.ename) {
-        if ints_get(c.emod, i) == m || ints_get(c.emod, i) == 1 {
-            if strs_find(c.tnames, strs_get(c.ename, i)) < 0 {
-                strs_push(c.tnames, strs_get(c.ename, i));
-                ints_push(c.ttys, enum_ty(c, i, ints_new()));
-            }
+        if ints_get(c.emod, i) == m && strs_find(c.tnames, strs_get(c.ename, i)) < 0 {
+            strs_push(c.tnames, strs_get(c.ename, i));
+            ints_push(c.ttys, enum_ty(c, i, ints_new()));
         }
         i = i + 1;
     }
+    // Which import brought each plain name in, for the second.
+    let bnames = strs_new();
+    let bstarts = ints_new();
+    let bends = ints_new();
+    let mut k = 0;
+    while k < deps(c, m) {
+        let d = dep(c, m, k);
+        let on = ints_get(c.don, d);
+        let offered = offered_types(c, on);
+        let mut a = 0;
+        while a < ints_get(c.dac, d) {
+            let alias = strs_get(c.aname, ints_get(c.daf, d) + a);
+            strs_push(c.taliases, alias);
+            let mut j = 0;
+            while j < ints_len(offered) {
+                let t = ints_get(offered, j);
+                set_type_name(c, cat3(alias, "::", type_name(c, t)), t);
+                j = j + 1;
+            }
+            a = a + 1;
+        }
+        if ints_get(c.dplain, d) == 1 {
+            let mut j = 0;
+            while j < ints_len(offered) {
+                let t = ints_get(offered, j);
+                let name = type_name(c, t);
+                let own = own_type(c, m, name);
+                let first = strs_find(bnames, name);
+                if own >= 0 {
+                    // The prelude's names are reserved (N0363), which the checker stops at.
+                    if on != prelude(c) && report {
+                        dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d),
+                                cat3("this import brings in the type `", name, "`, which this module declares"), "",
+                                "an imported type and a local one are not ranked: rename one of them, or stop exporting the other");
+                        sec_at(c, type_start(c, own), type_end(c, own), "declared here");
+                        sec_at(c, type_start(c, t), type_end(c, t), "and exported here");
+                    }
+                } else {
+                    if first >= 0 {
+                        if on == prelude(c) {
+                            set_type_name(c, name, t);
+                        } else {
+                            if report {
+                                dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d),
+                                        cat3("the type `", name, "` is exported by two imported modules"), "",
+                                        "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
+                                sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
+                                sec_at(c, type_start(c, t), type_end(c, t), "exported here");
+                            }
+                        }
+                    } else {
+                        strs_push(bnames, name);
+                        ints_push(bstarts, ints_get(c.dats, d));
+                        ints_push(bends, ints_get(c.date, d));
+                        set_type_name(c, name, t);
+                    }
+                }
+                j = j + 1;
+            }
+        }
+        k = k + 1;
+    }
     0
+}
+
+// A name in the module's types, replacing what it named before (a map's insert).
+fn set_type_name(c: Ck, name: Str, t: Int) -> Int {
+    let at = strs_find(c.tnames, name);
+    if at >= 0 {
+        ints_set(c.ttys, at, t);
+        return 0;
+    }
+    strs_push(c.tnames, name);
+    ints_push(c.ttys, t);
+    0
+}
+
+// The types a module offers by name (`offered_types`): its `pub` records, then its `pub` enums.
+fn offered_types(c: Ck, m: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < strs_len(c.rname) {
+        if ints_get(c.rmod, i) == m && ints_get(c.rpub, i) == 1 { ints_push(out, record_ty(c, i, ints_new())); }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(c.ename) {
+        if ints_get(c.emod, i) == m && ints_get(c.epub, i) == 1 { ints_push(out, enum_ty(c, i, ints_new())); }
+        i = i + 1;
+    }
+    out
+}
+
+// A module's own type of this name, or -1.
+fn own_type(c: Ck, m: Int, name: Str) -> Int {
+    let r = declared_record(c, m, name);
+    if r >= 0 { return record_ty(c, r, ints_new()); }
+    let e = declared_enum(c, m, name);
+    if e >= 0 { return enum_ty(c, e, ints_new()); }
+    0 - 1
+}
+
+// A record's or an enum's declared name, and where it is written.
+fn type_name(c: Ck, t: Int) -> Str {
+    if is_record(c, t) { return strs_get(c.rname, ta(c, t)); }
+    strs_get(c.ename, ta(c, t))
+}
+fn type_start(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ints_get(c.rns, ta(c, t)); }
+    ints_get(c.ens, ta(c, t))
+}
+fn type_end(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ints_get(c.rne, ta(c, t)); }
+    ints_get(c.ene, ta(c, t))
 }
 
 fn type_named(c: Ck, name: Str) -> Int {
@@ -1096,9 +1382,15 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
             i = i + 1;
         }
     }
-    if some(c, w, "qualifier") || some(c, w, "function") || some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
+    if some(c, w, "function") || some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
         stop(c, cat3("the type `", name, "`"));
         return t_int();
+    }
+    // A qualified type names a module's definition (N49): never a type parameter, never `Vec`
+    // or a built-in, which belong to no module.
+    if some(c, w, "qualifier") {
+        let t = resolve_name(c, written_key(c, w, "name"), ns, d);
+        return applied_written(c, t, has_args, args, ns, span, d);
     }
     let at = strs_find(pnames, name);
     if at >= 0 {
@@ -1141,6 +1433,12 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         if has_args { not_generic(c, d, name, "a built-in type", span); }
         return t;
     }
+    applied_written(c, t, has_args, args, ns, span, d)
+}
+
+// A record or an enum as written, applied to the arguments written after it: exactly as many as
+// it declares.
+fn applied_written(c: Ck, t: Int, has_args: Bool, args: Ints, ns: Int, span: Int, d: Diags) -> Int {
     if is_record(c, t) == false && is_enum(c, t) == false { return t; }
     let mut arity = 0;
     if is_record(c, t) { arity = ints_get(c.rnp, ta(c, t)); } else { arity = ints_get(c.enp, ta(c, t)); }
@@ -1194,12 +1492,26 @@ fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
     if is_builtin_name(name) { return builtin_ty(c, name); }
     let t = type_named(c, name);
     if t >= 0 { return t; }
+    // `Map[K, V]` (R1.5, D5): the standard hash map under a shorter name, where it is in scope.
+    if name == "Map" && type_named(c, "HashMap") >= 0 { return type_named(c, "HashMap"); }
     if name == "Map" {
         dg_error(d, "N0305", sps(c, span), spe(c, span), "`Map` is `@std/hashmap`'s `HashMap`", "", "import it: `use \"@std/hashmap\";`");
         return t_int();
     }
+    if str_has(name, "::") {
+        unknown_qualified(c, d, name, c.taliases, sps(c, span), spe(c, span), "type");
+        return t_int();
+    }
     dg_error(d, "N0305", sps(c, span), spe(c, span), cat3("`", name, "` is not a type"), "",
             cat3("the built-in types are ", all_names(), ", and `struct` and `enum` declare others"));
+    // A type that exists somewhere is more usefully reported as unreachable.
+    let r = strs_find(c.rname, name);
+    if r >= 0 {
+        dg_secondary(d, ints_get(c.rns, r), ints_get(c.rne, r), "a type of this name is declared here");
+    } else {
+        let e = strs_find(c.ename, name);
+        if e >= 0 { dg_secondary(d, ints_get(c.ens, e), ints_get(c.ene, e), "a type of this name is declared here"); }
+    }
     t_int()
 }
 
@@ -1207,7 +1519,7 @@ fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
 
 fn resolve_type_fields(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
-    type_environment(c, m);
+    type_environment(c, m, true);
     let p = ints_get(c.mprog, m);
     let done = strs_new();
     let records = kids(c, p, "records");
@@ -1407,7 +1719,7 @@ fn mentioned_defs(c: Ck, t: Int, out: Ints) -> Int {
 
 fn declare_functions(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
-    type_environment(c, m);
+    type_environment(c, m, false);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
     let mut i = 0;
@@ -1464,6 +1776,7 @@ fn declare_functions(c: Ck, m: Int) -> Int {
             } else {
                 strs_push(c.fnname, name);
                 ints_push(c.fnmod, m);
+                if some(c, f, "pub_span") { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
                 ints_push(c.fnns, sps(c, ns));
                 ints_push(c.fnne, spe(c, ns));
                 ints_push(c.fnnode, f);
@@ -1619,13 +1932,113 @@ fn none() -> Int { 0 - 1 }
 
 fn check_unit(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
-    type_environment(c, m);
+    environment(c, m);
+    type_environment(c, m, false);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
     let mut i = 0;
     while i < ints_len(functions) {
         check_function(c, ints_get(functions, i));
         i = i + 1;
+    }
+    0
+}
+
+// The names module `m` may call beyond its own functions and the built-ins (`environment`):
+// each direct import's exports, as `alias::name` under each name it is imported by — an alias
+// that already names something here refused (N0209) — and plainly where a plain `use` named it,
+// an export this module also defines (N0208) or another import brought in (N0207) refused.
+fn environment(c: Ck, m: Int) -> Int {
+    while strs_len(c.envname) > 0 {
+        strs_pop(c.envname);
+        ints_pop(c.envfn);
+    }
+    while strs_len(c.alname) > 0 {
+        strs_pop(c.alname);
+        ints_pop(c.almod);
+    }
+    // Where each alias is written, and which import brought each plain name in.
+    let alstart = ints_new();
+    let alend = ints_new();
+    let bstarts = ints_new();
+    let bends = ints_new();
+    let mut k = 0;
+    while k < deps(c, m) {
+        let d = dep(c, m, k);
+        let on = ints_get(c.don, d);
+        let mut a = 0;
+        while a < ints_get(c.dac, d) {
+            let ai = ints_get(c.daf, d) + a;
+            let alias = strs_get(c.aname, ai);
+            let at_s = ints_get(c.aats, ai);
+            let at_e = ints_get(c.aate, ai);
+            let mut what = "";
+            let mut os = 0;
+            let mut oe = 0;
+            let first = strs_find(c.alname, alias);
+            let own = defined_fn(c, m, alias);
+            let brought = strs_find(c.envname, alias);
+            if first >= 0 {
+                what = "another import already has this name";
+                os = ints_get(alstart, first);
+                oe = ints_get(alend, first);
+            } else {
+                if own >= 0 || brought >= 0 {
+                    let mut f = own;
+                    if f < 0 { f = ints_get(c.envfn, brought); }
+                    what = "a function of this module";
+                    os = ints_get(c.fnns, f);
+                    oe = ints_get(c.fnne, f);
+                } else {
+                    if declared_record(c, m, alias) >= 0 || declared_enum(c, m, alias) >= 0 {
+                        what = "a type of this module";
+                        os = at_s;
+                        oe = at_e;
+                    }
+                }
+            }
+            if what != "" {
+                dg_error(c.d, "N0209", at_s, at_e, cat4("`", alias, "` already names ", what), "",
+                        "an import's name is written before `::` and must mean only that module here: choose another");
+                sec_at(c, os, oe, "the other meaning");
+            } else {
+                strs_push(c.alname, alias);
+                ints_push(c.almod, on);
+                ints_push(alstart, at_s);
+                ints_push(alend, at_e);
+            }
+            a = a + 1;
+        }
+        if ints_get(c.dplain, d) == 1 {
+            let mut f = 0;
+            while f < strs_len(c.fnname) {
+                if ints_get(c.fnmod, f) == on && ints_get(c.fnpub, f) == 1 {
+                    let name = strs_get(c.fnname, f);
+                    let own = defined_fn(c, m, name);
+                    let first = strs_find(c.envname, name);
+                    if own >= 0 {
+                        dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d), cat3("this import brings in `", name, "`, which this module defines"), "",
+                                "an imported name and a local one are not ranked: rename one of them, or stop exporting the other");
+                        sec_at(c, ints_get(c.fnns, own), ints_get(c.fnne, own), "defined here");
+                        sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "and exported here");
+                    } else {
+                        if first >= 0 {
+                            dg_error(c.d, "N0207", ints_get(c.dats, d), ints_get(c.date, d), cat3("`", name, "` is exported by two imported modules"), "",
+                                    "there is no way to write which one is meant, so the ambiguity is refused where it is created rather than where it is used");
+                            sec_at(c, ints_get(bstarts, first), ints_get(bends, first), "also brought in here");
+                            sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "exported here");
+                        } else {
+                            strs_push(c.envname, name);
+                            ints_push(c.envfn, f);
+                            ints_push(bstarts, ints_get(c.dats, d));
+                            ints_push(bends, ints_get(c.date, d));
+                        }
+                    }
+                }
+                f = f + 1;
+            }
+        }
+        k = k + 1;
     }
     0
 }
@@ -1981,26 +2394,18 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "Binary" { return check_binary(c, e, expected); }
     if k == "Call" { return check_call(c, e, expected, unwanted); }
     if k == "Construct" {
-        if some(c, e, "qualifier") {
-            stop(c, "a qualified construction");
-            return or_int(expected);
-        }
-        let t = check_construction(c, fname_of(c, e, "ty"), fld(c, e, "ty_span"), type_args_of(c, e), written_inits(c, kids(c, e, "fields")),
+        let t = check_construction(c, written_key(c, e, "ty"), fld(c, e, "ty_span"), type_args_of(c, e), written_inits(c, kids(c, e, "fields")),
                 fld(c, e, "span"), expected);
         if t < 0 { return t_int(); }
         return t;
     }
     if k == "Variant" {
-        if some(c, e, "qualifier") {
-            stop(c, "a qualified variant");
-            return or_int(expected);
-        }
         let inits = written_inits(c, kids(c, e, "fields"));
-        if ints_len(inits.vals) == 0 && some(c, e, "type_args") == false && lookup(c, fname_of(c, e, "ty")) >= 0 {
+        if some(c, e, "qualifier") == false && ints_len(inits.vals) == 0 && some(c, e, "type_args") == false && lookup(c, fname_of(c, e, "ty")) >= 0 {
             stop(c, "a method call");
             return or_int(expected);
         }
-        let t = check_variant(c, fname_of(c, e, "ty"), fld(c, e, "ty_span"), type_args_of(c, e), fname_of(c, e, "variant"), fld(c, e, "variant_span"),
+        let t = check_variant(c, written_key(c, e, "ty"), fld(c, e, "ty_span"), type_args_of(c, e), fname_of(c, e, "variant"), fld(c, e, "variant_span"),
                 inits, fld(c, e, "span"), expected);
         if t < 0 { return or_int(expected); }
         return t;
@@ -2016,6 +2421,14 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "Propagate" { return check_propagate(c, e, expected); }
     stop(c, cat3("the expression `", k, "`"));
     or_int(expected)
+}
+
+// A name written with an optional qualifier, as the key it is looked up by (`written_key`):
+// `alias::name`.
+fn written_key(c: Ck, n: Int, field: Str) -> Str {
+    let name = fname_of(c, n, field);
+    if some(c, n, "qualifier") { return cat3(fname_of(c, unwrap(c, n, "qualifier"), "name"), "::", name); }
+    name
 }
 
 fn check_var(c: Ck, e: Int, expected: Int) -> Int {
@@ -2219,6 +2632,8 @@ fn check_if(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
 fn callee_of(c: Ck, name: Str) -> Int {
     let f = defined_fn(c, gs(c, s_module()), name);
     if f >= 0 { return f; }
+    let imported = strs_find(c.envname, name);
+    if imported >= 0 { return ints_get(c.envfn, imported); }
     let b = builtin_index(c, name);
     if b >= 0 { return 0 - 2 - b; }
     0 - 1
@@ -2226,28 +2641,101 @@ fn callee_of(c: Ck, name: Str) -> Int {
 
 fn env_has(c: Ck, name: Str) -> Bool { callee_of(c, name) != 0 - 1 }
 
+// What `alias::name` calls: an export of the module imported under `alias`, or -1.
+fn qualified_callee(c: Ck, alias: Str, name: Str) -> Int {
+    let a = strs_find(c.alname, alias);
+    if a < 0 { return 0 - 1; }
+    let m = ints_get(c.almod, a);
+    let mut f = 0;
+    while f < strs_len(c.fnname) {
+        if ints_get(c.fnmod, f) == m && ints_get(c.fnpub, f) == 1 && strs_get(c.fnname, f) == name { return f; }
+        f = f + 1;
+    }
+    0 - 1
+}
+
+// `NAME::item` that resolves to nothing (N0210): `NAME` is no alias, or its module exports no
+// `item`.
+fn unknown_qualified(c: Ck, d: Diags, key: Str, aliases: Strs, s: Int, e: Int, what: Str) -> Int {
+    let mut i = 0;
+    while i + 1 < str_len(key) && str_slice(key, i, i + 2) != "::" { i = i + 1; }
+    let alias = str_slice(key, 0, i);
+    let item = str_slice(key, i + 2, str_len(key));
+    if strs_find(aliases, alias) >= 0 {
+        return dg_error(d, "N0210", s, e, cat5("the module imported as `", alias, "` exports no ", what, cat3(" `", item, "`")), "",
+                cat3("`", alias, "::` names what that module marks `pub`; check the name, or export it there"));
+    }
+    dg_error(d, "N0210", s, e, cat3("`", alias, "` is not the name of an imported module"), "",
+            cat3("import one under that name: `use \"path.nz\" as ", alias, ";`"))
+}
+
+fn sorted(xs: Strs) -> Strs {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(xs) {
+        let x = strs_get(xs, i);
+        let mut at = 0;
+        while at < strs_len(out) && str_less(strs_get(out, at), x) { at = at + 1; }
+        insert_str(out, at, x);
+        i = i + 1;
+    }
+    out
+}
+
+// Why this module cannot call `name` when something in the compilation has it (`why_invisible`),
+// reported; false when nothing does. A private function of a module this one imports is N0206;
+// an exported one of a module it does not import, N0201 with where it is.
+fn why_invisible(c: Ck, name: Str, at: Int) -> Bool {
+    let m = gs(c, s_module());
+    let mut elsewhere = 0 - 1;
+    let mut f = 0;
+    while f < strs_len(c.fnname) {
+        if strs_get(c.fnname, f) == name {
+            let owner = ints_get(c.fnmod, f);
+            if imports_module(c, m, owner) && ints_get(c.fnpub, f) == 0 {
+                err(c, "N0206", at, cat3("`", name, "` is private to the module that defines it"),
+                        cat3("write `pub fn ", name, "` there to export it, if it is meant to be part of that module's interface"));
+                sec_at(c, ints_get(c.fnns, f), ints_get(c.fnne, f), "defined privately here");
+                return true;
+            }
+            if imports_module(c, m, owner) == false && owner != m && ints_get(c.fnpub, f) == 1 { elsewhere = f; }
+        }
+        f = f + 1;
+    }
+    if elsewhere < 0 { return false; }
+    err(c, "N0201", at, cat3("`", name, "` is not defined in this module"),
+            "imports are not transitive: add a `use` for the module that exports it");
+    sec_at(c, ints_get(c.fnns, elsewhere), ints_get(c.fnne, elsewhere), "exported here, by a module this one does not import");
+    true
+}
+
 fn is_conversion(name: Str) -> Bool {
     name == "try_convert" || name == "wrap_convert" || name == "saturate_convert" || name == "Text" || is_num_name(name)
 }
 
 fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
-    if some(c, e, "qualifier") {
-        stop(c, "a qualified call");
-        return or_int(expected);
+    // `m::f` is looked up as one key (N49); everything below names it as written.
+    let qualified = some(c, e, "qualifier");
+    let mut callee = fname_of(c, e, "callee");
+    let mut target = 0 - 1;
+    if qualified {
+        let alias = fname_of(c, unwrap(c, e, "qualifier"), "name");
+        target = qualified_callee(c, alias, callee);
+        callee = cat3(alias, "::", callee);
+    } else {
+        target = callee_of(c, callee);
     }
-    let callee = fname_of(c, e, "callee");
     let cs = fld(c, e, "callee_span");
     let span = fld(c, e, "span");
     let args = kids(c, e, "args");
     let has_targs = some(c, e, "type_args");
     let mut targs = 0 - 1;
     if has_targs { targs = unwrap(c, e, "type_args"); }
-    let target = callee_of(c, callee);
     if target == 0 - 1 && is_conversion(callee) {
         stop(c, "a numeric conversion");
         return or_int(expected);
     }
-    if ints_len(args) > 0 && starts_upper(callee) && target == 0 - 1 {
+    if qualified == false && ints_len(args) > 0 && starts_upper(callee) && target == 0 - 1 {
         if is_record(c, quiet_type(c, callee, cs)) || ints_len(variant_owners(c, callee)) > 0 {
             let t = check_construction(c, callee, cs, targs, positional_inits(c, args), span, expected);
             if t < 0 { return or_int(expected); }
@@ -2265,11 +2753,17 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
             stop(c, "a renamed built-in");
             return or_int(expected);
         }
-        if is_cap_name(callee) {
-            stop(c, "a capability constructed");
-            return or_int(expected);
+        if qualified {
+            unknown_qualified(c, c.d, callee, sorted(c.alname), sps(c, cs), spe(c, cs), "function");
+        } else {
+            if why_invisible(c, callee, cs) == false {
+                if is_cap_name(callee) {
+                    stop(c, "a capability constructed");
+                    return or_int(expected);
+                }
+                err(c, "N0201", cs, cat3("`", callee, "` is not a function"), "");
+            }
         }
-        err(c, "N0201", cs, cat3("`", callee, "` is not a function"), "");
         let mut i = 0;
         while i < ints_len(args) {
             check_expr(c, ints_get(args, i), none());
@@ -2757,7 +3251,8 @@ fn variant_owners(c: Ck, variant: Str) -> Ints {
     let mut i = 0;
     while i < strs_len(c.tnames) {
         let t = ints_get(c.ttys, i);
-        if is_enum(c, t) {
+        // Not under an import's name, nor twice for one enum.
+        if is_enum(c, t) && str_has(strs_get(c.tnames, i), "::") == false && index_of(out, t) < 0 {
             if variant_of(c, t, variant) >= 0 {
                 let n = strs_get(c.tnames, i);
                 let mut at = 0;
@@ -4035,11 +4530,7 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
         err(c, "N0342", fld(c, v, "ty_span"), cat3("a variant pattern needs an enum, but this is a `", show(c, ty), "`"), "");
         return wild(c);
     }
-    if some(c, v, "qualifier") {
-        stop(c, "a qualified variant pattern");
-        return wild(c);
-    }
-    let tname = fname_of(c, v, "ty");
+    let tname = written_key(c, v, "ty");
     let mut named = ta(c, ty);
     if tname != "" {
         let def = resolve_type(c, tname, fld(c, v, "ty_span"));
@@ -4144,7 +4635,7 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
 
 // Whether a type is an application of the core prelude's enum of this name — by definition, so a
 // module's own enum of the same shape is not one.
-fn prelude_enum(c: Ck, t: Int, name: Str) -> Bool { is_enum(c, t) && ta(c, t) == declared_enum(c, 1, name) && targc(c, t) > 0 }
+fn prelude_enum(c: Ck, t: Int, name: Str) -> Bool { is_enum(c, t) && ta(c, t) == declared_enum(c, prelude(c), name) && targc(c, t) > 0 }
 
 // `operand?`: a `Result[T, E]`'s `T` in a function returning a `Result[U, E]`, or an
 // `Option[T]`'s `T` in one returning an `Option` (R1, 5b.17); its completion is the operand's.
@@ -4354,6 +4845,7 @@ fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
     let w = ints_get(rs.which, r);
     if src == 1 { return cat4("the built-in `", strs_get(c.bname, w), "` requires ", e); }
     if src == 2 { return cat4("calls `", strs_get(c.fnname, w), "`, whose declared set includes ", e); }
+    if src == 4 { return cat3("calls `", strs_get(c.fnname, w), "`, which is in another module and declares no effect set, so every effect is assumed of it"); }
     cat4("calls `", strs_get(c.fnname, w), "`, which requires ", e)
 }
 
@@ -4397,12 +4889,25 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
                         add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 1, b);
                     }
                 }
-                if g >= 0 && ints_get(c.fneff, g) >= 0 {
+                // A callee's declared set is its contract; another module's undeclared one is
+                // assumed to do everything the bridge covers, and `foreign` if it can be handed
+                // the authority for it.
+                let mut contract = 0 - 1;
+                let mut source = 2;
+                if g >= 0 {
+                    contract = ints_get(c.fneff, g);
+                    if contract < 0 && ints_get(c.fnmod, g) != m {
+                        contract = 3;
+                        if receives_foreign(c, g) { contract = 7; }
+                        source = 4;
+                    }
+                }
+                if contract >= 0 {
                     let mut e = 0;
                     while e < 3 {
-                        if has_bit(ints_get(c.fneff, g), e) && has_bit(set, e) == false {
+                        if has_bit(contract, e) && has_bit(set, e) == false {
                             set = with_bit(set, e);
-                            add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 2, g);
+                            add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), source, g);
                         }
                         e = e + 1;
                     }
@@ -4429,7 +4934,7 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
             while s < ints_len(c.sfn) {
                 let g = ints_get(c.suser, s);
                 if ints_get(c.sfn, s) == me && g >= 0 {
-                    if ints_get(c.fneff, g) < 0 {
+                    if ints_get(c.fneff, g) < 0 && ints_get(c.fnmod, g) == m {
                         let theirs = ints_get(before, index_of(nodes, g));
                         let mut e = 0;
                         while e < 3 {
@@ -4451,7 +4956,7 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
     n = 0;
     while n < ints_len(nodes) {
         let me = ints_get(nodes, n);
-        check_authority(c, me);
+        check_authority(c, me, ints_get(c.mstd, m) == 0);
         let declared = ints_get(c.fneff, me);
         if declared >= 0 {
             let missing = without(ints_get(sets, n), declared);
@@ -4460,6 +4965,32 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
         n = n + 1;
     }
     0
+}
+
+// Whether one of a function's parameters can carry a `ForeignCap` (`carries`): the only way a
+// function of another module could reach C.
+fn receives_foreign(c: Ck, g: Int) -> Bool {
+    let mut k = 0;
+    while k < ints_get(c.fnpc, g) {
+        if carries_foreign(c, ints_get(c.ptys, ints_get(c.fnpf, g) + k), 0) { return true; }
+        k = k + 1;
+    }
+    false
+}
+
+fn carries_foreign(c: Ck, t: Int, depth: Int) -> Bool {
+    if depth > max_depth() * 4 { return true; }
+    if bname_of(c, t) == "ForeignCap" { return true; }
+    if tag(c, t) == tag_vec() { return carries_foreign(c, targ(c, t, 0), depth + 1); }
+    if is_record(c, t) || is_enum(c, t) {
+        let edges = contained(c, t);
+        let mut i = 0;
+        while i < ints_len(edges) {
+            if carries_foreign(c, field_ty_in(c, t, ints_get(edges, i)), depth + 1) { return true; }
+            i = i + 1;
+        }
+    }
+    false
 }
 
 fn add_reason(rs: Reasons, f: Int, effect: Int, s: Int, e: Int, source: Int, which: Int) -> Int {
@@ -4493,7 +5024,7 @@ fn without(a: Int, b: Int) -> Int {
 
 // Every kind the body exercises without holding it, once each, at the first call that needs it
 // (`authority` and `missing_authority`).
-fn check_authority(c: Ck, me: Int) -> Int {
+fn check_authority(c: Ck, me: Int, program: Bool) -> Int {
     let who = tick(strs_get(c.fnname, me));
     let mut reported = 0;
     let mut s = 0;
@@ -4502,7 +5033,8 @@ fn check_authority(c: Ck, me: Int) -> Int {
         if ints_get(c.sfn, s) == me && b >= 0 {
             // A module of the program holds `main`'s output authority (R1.5, D8); an `IoCap`
             // gives an `OutCap`.
-            let held = with_bit(ints_get(c.sheld, s), cap_bit("OutCap"));
+            let mut held = ints_get(c.sheld, s);
+            if program || has_bit(held, cap_bit("IoCap")) { held = with_bit(held, cap_bit("OutCap")); }
             let need = without(without(builtin_caps(c, b), held), reported);
             let mut k = 0;
             while k < 10 {

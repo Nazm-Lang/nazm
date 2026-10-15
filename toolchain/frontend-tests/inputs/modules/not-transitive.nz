@@ -1,0 +1,2 @@
+use "lib/b.nz";
+fn main() -> Int { deep() + via_c() }

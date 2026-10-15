@@ -27,6 +27,12 @@ pub struct Loaded {
     texts: Strs,
     // Per file, whether it is a standard module.
     standard: Ints,
+    // Per file, its identity; and the identity each of its imports names, in source order (a
+    // run of `targets`: "" where the import did not resolve).
+    identities: Strs,
+    tfirst: Ints,
+    tcount: Ints,
+    targets: Strs,
 }
 
 // The standard modules, by name (`nazm-sema/src/stdlib.rs`, `MODULES`, in its order).
@@ -186,6 +192,9 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
     let texts = strs_new();
     let standard = ints_new();
     let identities = strs_new();
+    let tfirst = ints_new();
+    let tcount = ints_new();
+    let targets = strs_new();
     let pending = Pending(file: ints_new(), start: ints_new(), end: ints_new(), message: strs_new(), help: strs_new(), code: strs_new());
     let stds = std_names();
     // The stack: each entry a path, and whether it is a standard module (its name then).
@@ -211,6 +220,8 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
             strs_push(names, name);
             strs_push(texts, nl());
             ints_push(standard, 0);
+            ints_push(tfirst, strs_len(targets));
+            ints_push(tcount, 0);
             pend(pending, "N0205", id, 0, 0, str_concat(str_concat("cannot read `", path), "`"), "No such file or directory (os error 2)");
             continue;
         }
@@ -223,6 +234,7 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
         let dir = parent(path);
         let children = strs_new();
         let children_std = ints_new();
+        let named = strs_new();
         let mut i = 0;
         while i < ints_len(imports) {
             let imp = ints_get(imports, i);
@@ -236,7 +248,9 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
                 if contains(stds, sname) {
                     strs_push(children, sname);
                     ints_push(children_std, 1);
+                    strs_push(named, str_concat(str_concat("@std/", sname), ".nz"));
                 } else {
+                    strs_push(named, "");
                     let known = strs_new();
                     let mut k = 0;
                     while k < strs_len(stds) {
@@ -249,12 +263,14 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
                 continue;
             }
             if is_std {
+                strs_push(named, "");
                 pend(pending, "N0205", id, s, e, str_concat(str_concat("a standard module cannot import `", ipath), "`"), "");
                 continue;
             }
             let colon = index_of_byte(ipath, 58);
             if colon >= 0 {
                 let pkg = str_slice(ipath, 0, colon);
+                strs_push(named, "");
                 pend(pending, "N0508", id, s, e, str_concat(str_concat("`", pkg), ":` names a package, and this compilation is not a package's"),
                         "a package is a directory holding `nazm.toml`; build it by naming its directory");
                 continue;
@@ -263,7 +279,9 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
             if file_exists(target) {
                 strs_push(children, target);
                 ints_push(children_std, 0);
+                strs_push(named, normalise(target));
             } else {
+                strs_push(named, "");
                 pend(pending, "N0205", id, s, e, str_concat(str_concat("cannot find `", ipath), "`"),
                         str_concat(str_concat("looked for `", target), "`, relative to the importing file"));
             }
@@ -278,13 +296,23 @@ pub fn ld_load(root: Str, library: Str, d: Diags, io: IoCap) -> Loaded {
         strs_push(identities, identity);
         strs_push(names, name);
         strs_push(texts, ld_with_newline(text));
+        ints_push(tfirst, strs_len(targets));
+        ints_push(tcount, strs_len(named));
+        let mut k = 0;
+        while k < strs_len(named) {
+            strs_push(targets, strs_get(named, k));
+            k = k + 1;
+        }
         if is_std { ints_push(standard, 1); } else { ints_push(standard, 0); }
     }
     // The core prelude, last.
     strs_push(names, "@core/prelude.nz");
     strs_push(texts, ld_with_newline(read_file(str_concat(library, "/core/prelude.nz"))));
     ints_push(standard, 1);
-    let loaded = Loaded(names: names, texts: texts, standard: standard);
+    strs_push(identities, "@core/prelude.nz");
+    ints_push(tfirst, strs_len(targets));
+    ints_push(tcount, 0);
+    let loaded = Loaded(names: names, texts: texts, standard: standard, identities: identities, tfirst: tfirst, tcount: tcount, targets: targets);
     let mut k = 0;
     while k < strs_len(pending.code) {
         let base = ld_base(loaded, ints_get(pending.file, k));
@@ -307,6 +335,16 @@ fn index_of_byte(s: Str, b: Int) -> Int {
 pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
 pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
 pub fn ld_name(l: Loaded, i: Int) -> Str { strs_get(l.names, i) }
+pub fn ld_standard(l: Loaded, i: Int) -> Bool { ints_get(l.standard, i) == 1 }
+
+// The file the `k`th import of file `i` names, by its index in load order; -1 where it did not
+// resolve.
+pub fn ld_import_target(l: Loaded, i: Int, k: Int) -> Int {
+    if k >= ints_get(l.tcount, i) { return 0 - 1; }
+    let want = strs_get(l.targets, ints_get(l.tfirst, i) + k);
+    if want == "" { return 0 - 1; }
+    index_of(l.identities, want)
+}
 
 // Where file `i` begins in the concatenation of the compilation's files.
 pub fn ld_base(l: Loaded, i: Int) -> Int {

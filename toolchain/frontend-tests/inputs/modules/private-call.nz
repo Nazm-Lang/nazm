@@ -1,0 +1,2 @@
+use "lib/a.nz";
+fn main() -> Int { hidden() }

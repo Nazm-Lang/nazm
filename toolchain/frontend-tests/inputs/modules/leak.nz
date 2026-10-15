@@ -1,0 +1,2 @@
+use "lib/leak.nz";
+fn main() -> Int { 0 }

@@ -1,0 +1,6 @@
+use "lib/a.nz" as a;
+fn main() -> Int {
+    let p = a::Point(x: 1);
+    let s: a::Shape = a::Shape.Square(side: 1);
+    a::shared("x")
+}

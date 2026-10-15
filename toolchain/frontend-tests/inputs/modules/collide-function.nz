@@ -1,0 +1,3 @@
+use "lib/a.nz";
+fn shared(x: Int) -> Int { x }
+fn main() -> Int { shared(1) }

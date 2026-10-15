@@ -142,6 +142,21 @@ a refusal it does not word yet. The `check` comparison's reference is `nazm` bui
 checkout (the checker ports `main`, R1.5 included): run with `NAZM` set to that build, not the
 0.10.0 release, which lacks R1.5 D8 and N0636 and so differs on ten inputs the checker carries.
 
+**D16 — The module graph is the loader's, and every stage runs over every module.** The loader
+(`load.nz`) records, for each file, the identity each of its `use` items names; the driver hands the
+checker each module's targets by load order. The checker builds the edges as
+`ModuleGraph::import_as` does — one per module named, in the order of the first `use` of it, plain
+when any `use` of it is, with every name it is imported under, none for a module naming itself — and
+the core prelude last on every other module. Then `check_reusing`'s stages run module by module in
+load order (`graph.ids()`): type names, each module's field types against its imports' nameable
+types (collisions reported there), layouts, declarations with each module's `pub` exports, then each
+module's environment (N0209, N0208, N0207 for functions) and bodies against its direct imports only.
+A standard module is checked as the reference checks it (`--no-cache` reuses nothing), and holds
+no output authority it is not given (R1.5, D8); an imported function with no declared effect set
+is assumed to do every bridged effect. A `pub use` re-export stops the checker until N103 is
+carried. When R1.5 D9 lands (the prelude importing standard modules), the prelude's own imports are
+edges like any other's.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
