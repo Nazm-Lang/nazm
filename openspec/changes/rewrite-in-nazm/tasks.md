@@ -23,7 +23,8 @@
 ## 4. R3 — the native pipeline
 
 - [ ] 4.1 Ownership and cleanup (MIR), LIR, the runtime generator, the object cache, debug info
-- [ ] 4.2 Every target in `docs/support.md`, with its tests
+- [ ] 4.2 Every target in `docs/support.md`, with its tests — narrowed by the copyright holder (2026-10-15)
+      to macOS (aarch64 and x86_64-apple-darwin), done in R3 8.2; the other targets after 1.0
 
 ## 5. R4 — the interpreter
 - [ ] 5.1 The interpreter in Nazm; the interpreter-driven suites pass
