@@ -19,11 +19,13 @@ code generator (R3, R4, R9), which the commands that build or run programs will 
 
 ## Decisions
 
-**D1 — One program per command, then one dispatcher.** `toolchain/commands/<command>.nz` is a
-program taking the command's own arguments (`fmt [--check] FILE...`, as after `nazm fmt`), read by
-the shared parser (D8), which prints `nazm <command>` in its usage and help as the reference does.
-The one `nazm` binary dispatching to them, with the top level's own `--help` and `-V`, is the last
-item (proposal, 10); until then the comparison calls the Rust `nazm fmt …` and the Nazm `fmt …`.
+**D1 — One module per command, one dispatcher.** `toolchain/commands/<command>.nz` declares the
+command's arguments (`<command>_cli`, read by the shared parser, D8, which prints `nazm <command>`
+in its usage and help as the reference does) and carries it out (`<command>_command`).
+`toolchain/commands/nazm.nz` is the one program: the top level (D12), then the command, its own
+arguments read from the one after its name (`cli_from`). The comparison runs both sides the same
+way, `nazm CMD ARGS`. (Until 2026-10-15 each command was a program of its own, compared as
+`fmt …` against `nazm fmt …`.)
 
 **D2 — `fmt` is a port of `nazm_syntax::format` over `compiler/lex.nz`'s tokens.** The reference
 formatter works on tokens and comments, not on the tree (`format.rs`, *It works on tokens, not on
@@ -162,6 +164,24 @@ delimiter (`--features`, `ArgAction::Append` with `value_delimiter`). The compar
 input from the repository's root with `--no-cache`, text and `--json`, and `--deny-warnings` where
 the reference warns, and every command line of `tests/args/check.txt`; the reference's cache, where
 a command line uses it, goes to a scratch `NAZM_CACHE_DIR`.
+
+**D12 — The top level is clap's, for a command that requires a subcommand.** `nazm.nz` ports what
+clap does with `Cli` before a command sees its arguments, as `nazm` 0.10.0 prints it: `--help` the
+long help (`long_about`, then `Usage: nazm <COMMAND>`, every command with its `about` aligned at
+the longest name, and the options with their help on the next line), `-h` the short one (`about`,
+the options aligned), `-V` and `--version` `nazm 0.10.0`, each the moment it is read — so
+`--help --bogus` is help and `--bogus --help` an error — and `--help=VALUE` a usage error whose
+usage names `--help`. An unknown option is `unexpected argument`, with the similar one of `--help`
+and `--version` (`strsim::jaro` above 0.7) as a tip and in the usage; an argument that names no
+command is `unrecognized subcommand`, with the similar command as a tip; after `--` a command's
+exact name is refused as a value with the tip to remove the `--`; no command at all prints the
+short help on standard error, status 5 (`arg_required_else_help`). `help` takes names, not
+options: none is the long help, a command its `--help`, `help help` its own text, and a name after
+a command that has no commands of its own is `unrecognized subcommand` under that command's usage
+(under `help`'s own, without the closing line). The commands and their `about`s are a table in
+`nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init` and `check` are carried; any other
+command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 ## Risks / Trade-offs
 

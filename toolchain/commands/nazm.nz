@@ -1,0 +1,307 @@
+// `nazm`, written in Nazm: the command line's top level (R5, `openspec/changes/r5-commands/`,
+// design D12).
+//
+// A port of what clap does with `crates/nazm-cli/src/cli.rs`'s `Cli` before a command sees its own
+// arguments: `--help` and `-h` (the long and the short help, every command listed with its `about`),
+// `-V` and `--version`, the `help` command, a usage error for an argument it does not know or a
+// command that does not exist (with the similar one `strsim::jaro` finds above 0.7), and the help
+// on standard error with status 5 when no command is named. Help and the version are standard output
+// and status 0; a usage error is standard error and status 5 (`main.rs`, `parse_cli`). Then the
+// command: `fmt`, `init` and `check` are carried (`fmt.nz`, `init.nz`, `check.nz`), every other
+// says it is not carried and exits 6.
+
+use "cli.nz"
+use "fmt.nz"
+use "init.nz"
+use "check.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+
+fn version() -> Str { "0.10.0" }
+
+fn about() -> Str { "The Nazm programming language." }
+
+fn long_about() -> Str {
+    "Nazm language 1.0 draft, toolchain 0.10.0 — a public preview for macOS on Apple Silicon, with no compatibility "
+            + "promise until 1.0. Records, enums and `match`, first-order generics, traits and methods, `Result`, `Option` and "
+            + "`?`, closures, modules and packages, declared effects, capabilities and provenance, structured concurrency (scope, "
+            + "spawn, channels), integers of every width, floats, fixed arrays, constants, `Bytes` and UTF-8 `Text`. `nazm run` "
+            + "interprets a program; `nazm build` compiles it natively through LLVM or Cranelift, and the two are held to the "
+            + "same results. Trait objects and effect handlers are not in the language; a program using an absent construct is "
+            + "refused by name rather than misparsed. Run `nazm capabilities` for this build's own answer. See docs/spec.md and "
+            + "docs/stability.md."
+}
+
+// Every command, in `cli.rs`'s order, and its `about` (the first paragraph of its doc comment, its
+// final period dropped); `help` last, as clap adds it. Name, then about.
+fn commands() -> Strs {
+    let s = strs_new()
+    strs_push(s, "run")
+    strs_push(s, "Build a program with Cranelift and run it, ending with its exit status; `--interpret` evaluates it in the interpreter instead (R1.5, D11)")
+    strs_push(s, "check")
+    strs_push(s, "Type-check without evaluating")
+    strs_push(s, "fix")
+    strs_push(s, "Apply the repairs the compiler already knows about")
+    strs_push(s, "context")
+    strs_push(s, "Print one definition's semantic context packet, `nazm.context/3`")
+    strs_push(s, "snapshot")
+    strs_push(s, "Print the semantic snapshot of a root's compilation, `nazm.snapshot/3`")
+    strs_push(s, "delta")
+    strs_push(s, "Print what changed since a baseline snapshot, `nazm.delta/3`")
+    strs_push(s, "diagnostics")
+    strs_push(s, "Print the root's current diagnostics compactly, `nazm.diagnostic-index/1`, or one of them in full, `nazm.diagnostic-detail/1`")
+    strs_push(s, "docs")
+    strs_push(s, "Retrieve Nazm's own documentation by section: a compact index, `nazm.docs-index/1`, or one section's exact canonical text, `nazm.docs-section/1`")
+    strs_push(s, "repo")
+    strs_push(s, "Print the repository context map, `nazm.repository-map/1`, or the minimum context for a task, `nazm.task-context/1`")
+    strs_push(s, "patch")
+    strs_push(s, "Print a semantic patch plan, `nazm.patch/1`. Plans; never applies")
+    strs_push(s, "lsp")
+    strs_push(s, "Serve the Language Server Protocol to an editor, on stdin and stdout")
+    strs_push(s, "fmt")
+    strs_push(s, "Lay out source files canonically")
+    strs_push(s, "test")
+    strs_push(s, "Run a corpus of programs against their recorded outputs")
+    strs_push(s, "bench")
+    strs_push(s, "Measure every `@bench` function of the files named (Gate 2, §19): each built natively at `-O2` and called `--iterations` times between two readings of the monotonic clock")
+    strs_push(s, "repl")
+    strs_push(s, "An interactive session (N65): definitions and expressions a line at a time on standard input, checked as one program on every edit and evaluated by the interpreter. A redefinition that breaks another definition is refused by that one's name. `:defs`, `:reset`, `:quit`")
+    strs_push(s, "comptime")
+    strs_push(s, "Evaluate a function at compile time (N65): one of no parameters, declared or inferred pure, under the interpreter's budgets — so it holds no capability and reaches nothing of the host")
+    strs_push(s, "contract")
+    strs_push(s, "A contract (N69): its facts as `nazm.contract/1` (`--interface`, the default), or a deterministic run of the transactions in `--txs` — `CALLER ENTRY ARG…` per line — as `nazm.contract-run/1`. The module is held to the `web3` profile first")
+    strs_push(s, "accel")
+    strs_push(s, "Map a kernel over a sequence on an accelerator (N67): an eligible pure `(T) -> T` function of the file — `T` an `Int`, or (Gate 3) a `Float32` or `Float64` — over the whitespace-separated numbers of `--input`, on macOS's OpenCL GPU or the CPU provider. One `nazm.accel/3` line: the provider and why, the device, every transfer and the synchronisation, timings, the kernel's identity, and whether the results agree with the interpreter's")
+    strs_push(s, "reload-check")
+    strs_push(s, "Whether a running image could take a new version of a program (N65): one `nazm.reload-check/1` line naming each change as `reloadable` or `restart`, and why. Exits non-zero when any change needs a restart")
+    strs_push(s, "resolve")
+    strs_push(s, "Print the compilation's resolved units (N77): one `nazm.resolved/1` line per module with a durable identity — its imports, definitions and every resolved occurrence, by durable identity. Runs the cached check; a reused module's unit is its entry's")
+    strs_push(s, "references")
+    strs_push(s, "Every occurrence of one entity in the compilation (N77), from its modules' resolved units: `nazm.references/1`. `DEF` is a durable key, `module::kind name`, with `.member` for a variant, field or payload field (`Variant.field`). A module whose check is reused is not checked again; the output says how many were")
+    strs_push(s, "interface")
+    strs_push(s, "Write a module's published interface: what it offers, durably")
+    strs_push(s, "core-ir")
+    strs_push(s, "Print a checked program's Core IR, `nazm.core-ir/3`: what each function became, typed, with every name resolved and every transfer explicit")
+    strs_push(s, "trace")
+    strs_push(s, "Trace requirements to what verifies them, `nazm.trace/1` (Gate 3): each requirement of a `requirements.toml` to the definitions it constrains — by durable identity and digest, with their obligations — and to the `@test` functions it names, run. A definition renamed away, a test missing or failing is reported by name and fails the command. Not certification")
+    strs_push(s, "obligations")
+    strs_push(s, "Print every obligation of a checked program, `nazm.obligations/1` (N87): each contract clause, call of a function with a precondition, operation that can overflow or divide by zero, index, allocation, call through a function value and call into C, each proved, checked as the program runs, or unknown. Compiler evidence, not certification")
+    strs_push(s, "mir")
+    strs_push(s, "Print each concrete function of the native program as MIR, `nazm.mir/1` (N40): basic blocks with every copy, move, drop, scope join and failure edge written out, after the validator accepted it. Debug output, internal and unstable; `docs/architecture.md` §7.42")
+    strs_push(s, "runtime")
+    strs_push(s, "Build or check a runtime artifact (N82, `docs/architecture.md` §7.83): the whole runtime for one target and profile, compiled once into `libnazmrt.a` beside a `nazm.runtime/1` manifest, which `nazm build --runtime DIR` links")
+    strs_push(s, "lir")
+    strs_push(s, "Print what LIR decided for a checked program, `nazm.lir/2` (N81, N105): the target's data layout, every unit's symbols and linkage, every record's and enum's byte layout on that target, which types own anything, and every unit's instructions — what both backends read, validated. `docs/architecture.md` §7.82 and §7.106")
+    strs_push(s, "doc")
+    strs_push(s, "Document a program's public API (N74), from its semantic definitions: every exported function, record and enum of its own modules, with effects, capabilities, foreign symbols and a link to the source. One `nazm.api-doc/2` line on stdout, or `api.json` and `api.md` in `-o DIR`. Not `nazm docs`, which reads Nazm's own documentation")
+    strs_push(s, "bindgen")
+    strs_push(s, "Declare the supported subset of a C header as `extern \"C\"` functions (N74): prototypes of `int64_t` and `bool` (and `const char *` arguments). Everything else is refused with the reason, never widened. With `-o FILE`, the module is written there and one `nazm.bindgen/1` line is printed; exits 1 when anything was refused")
+    strs_push(s, "init")
+    strs_push(s, "Create a project from a template (N74): `cli`, `library`, `server`, `embedded`, `wasm` or `contract`. The directory is the package's name; it must not exist or must be empty. Its README.md names the commands that check, test, build and document it")
+    strs_push(s, "capabilities")
+    strs_push(s, "Report what this build of the compiler actually supports")
+    strs_push(s, "build")
+    strs_push(s, "Compile to a native executable")
+    strs_push(s, "inspect")
+    strs_push(s, "Print one program's facts as `nazm.inspect/2` (N48; `/2` since N104): every definition's identity, signature, effects, capabilities, provenance, Core IR and MIR digests, and the toolchain, package and lock identities — one deterministic line of JSON")
+    strs_push(s, "profile")
+    strs_push(s, "Build the program and run it once with its memory and scheduler counters on (N58), and print `nazm.profile/2`: its exit status, wall time and the counts; with `--sample`, also where its samples fell (N91)")
+    strs_push(s, "explain-cost")
+    strs_push(s, "Print where each function allocates, retains, blocks, talks to a channel, calls C or starts a task (N52), read off MIR, each with its count per call — `at-most-once` or `unknown`, never a guess. `--json` prints `nazm.cost/2`, which since N106 also says which scheduler a native build runs the program's tasks on, and why")
+    strs_push(s, "explain-flow")
+    strs_push(s, "Print every sink — a path written to, standard output, a file's data — and every declassification, with the origins that reach it (N52). `--json` prints `nazm.flow/2`")
+    strs_push(s, "attest")
+    strs_push(s, "Sign and verify in-toto statements of a build's provenance (N94)")
+    strs_push(s, "lock")
+    strs_push(s, "Resolve a package and write its `nazm.lock` (N46): the exact package versions, sources and digests a `--locked` build is held to. Written only when its bytes would change")
+    strs_push(s, "update")
+    strs_push(s, "Re-resolve a package with its lockfile's registry versions no longer preferred — every one's, or only the named packages' — write `nazm.lock`, and print each change (N90)")
+    strs_push(s, "publish")
+    strs_push(s, "Publish a package into a local registry (N56): copy its manifest and sources and record the version and its digest. A published version never changes")
+    strs_push(s, "yank")
+    strs_push(s, "Withdraw a published version (N56): never chosen anew, still used where a lockfile names it")
+    strs_push(s, "help")
+    strs_push(s, "Print this message or the help of the given subcommand(s)")
+    s
+}
+
+fn is_command(name: Str) -> Bool {
+    let cs = commands()
+    let mut i = 0
+    while i < strs_len(cs) {
+        if strs_get(cs, i) == name { return true }
+        i += 2
+    }
+    false
+}
+
+fn starts(s: Str, p: Str) -> Bool { str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p }
+
+fn spaces(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, " ") }
+    str_join(parts, "")
+}
+
+// The top level's help: long for `--help` and `help`, short for `-h` and a missing command.
+fn top_help(use_long: Bool) -> Str {
+    let cs = commands()
+    let mut longest = 0
+    let mut i = 0
+    while i < strs_len(cs) {
+        if str_len(strs_get(cs, i)) > longest { longest = str_len(strs_get(cs, i)) }
+        i += 2
+    }
+    let out = strs_new()
+    strs_push(out, (if use_long { long_about() } else { about() }) + nl() + nl())
+    strs_push(out, "Usage: nazm <COMMAND>" + nl() + nl() + "Commands:" + nl())
+    i = 0
+    while i < strs_len(cs) {
+        let name = strs_get(cs, i)
+        strs_push(out, "  " + name + spaces(longest + 2 - str_len(name)) + strs_get(cs, i + 1) + nl())
+        i += 2
+    }
+    strs_push(out, nl() + "Options:" + nl())
+    if use_long {
+        strs_push(out, "  -h, --help" + nl() + "          Print help (see a summary with '-h')" + nl() + nl())
+        strs_push(out, "  -V, --version" + nl() + "          Print version" + nl())
+    } else {
+        strs_push(out, "  -h, --help     Print help (see more with '--help')" + nl())
+        strs_push(out, "  -V, --version  Print version" + nl())
+    }
+    str_join(out, "")
+}
+
+fn show(io: IoCap, text: Str) -> Int {
+    print(text)
+    exit_with(0)
+    0
+}
+
+// A usage error of the top level: `Usage: nazm [USED] <COMMAND>`.
+fn top_fail(io: IoCap, text: Str, used: Str) -> Int {
+    let shown = if used == "" { "" } else { used + " " }
+    cli_fail(io, text + nl() + nl() + "Usage: nazm " + shown + "<COMMAND>")
+}
+
+// `unrecognized subcommand`, with the similar command when `suggest` (none from `help`).
+fn unrecognized(io: IoCap, name: Str, suggest: Bool) -> Int {
+    let mut text = "unrecognized subcommand '" + name + "'"
+    if suggest {
+        let cs = commands()
+        let mut best = ""
+        let mut best_score = 0.0
+        let mut i = 0
+        while i < strs_len(cs) {
+            let score = cli_jaro(name, strs_get(cs, i))
+            // Ties go to the later candidate, as clap's sorted insertion and `pop` do.
+            if score > 0.7 && (best == "" || score >= best_score) {
+                best = strs_get(cs, i)
+                best_score = score
+            }
+            i += 2
+        }
+        if best != "" { text = text + nl() + nl() + "  tip: a similar subcommand exists: '" + best + "'" }
+    }
+    top_fail(io, text, "")
+}
+
+fn not_carried(io: IoCap, what: Str) -> Int {
+    eprint("nazm: not carried: " + what + nl())
+    exit_with(6)
+    0
+}
+
+// A carried command's arguments, declared; an empty name for one that is not carried.
+fn command_cli(name: Str) -> Cli {
+    if name == "fmt" { return fmt_cli() }
+    if name == "init" { return init_cli() }
+    if name == "check" { return check_cli() }
+    cli_command("", "", "")
+}
+
+// `nazm help [COMMAND]...`, its names from argument `k`.
+fn help_command(io: IoCap, k: Int) -> Int {
+    if k >= args_count() { show(io, top_help(true)) }
+    let name = arg(k)
+    if !is_command(name) { unrecognized(io, name, false) }
+    if name == "help" {
+        if k + 1 < args_count() {
+            // `help` has no `--help` of its own to point to, so clap leaves the last line out.
+            eprint("error: unrecognized subcommand '" + arg(k + 1) + "'" + nl() + nl() + "Usage: nazm help [COMMAND]..." + nl())
+            exit_with(5)
+        }
+        show(io, "Print this message or the help of the given subcommand(s)" + nl() + nl() + "Usage: nazm help [COMMAND]..."
+                + nl() + nl() + "Arguments:" + nl() + "  [COMMAND]...  Print help for the subcommand(s)" + nl())
+    }
+    let c = command_cli(name)
+    if c.name == "" { not_carried(io, "nazm help " + name) }
+    if k + 1 < args_count() {
+        // None of the carried commands has commands of its own.
+        cli_fail(io, "unrecognized subcommand '" + arg(k + 1) + "'" + nl() + nl() + "Usage: " + cli_usage_no_title(c, ints_new()))
+    }
+    show(io, cli_help(c, true))
+}
+
+fn main(io: IoCap) -> Int {
+    let n = args_count()
+    if n == 0 { missing(io) }
+    let s = arg(0)
+    if s == "--" {
+        // After `--` the first argument is still the command; one named exactly is refused as a value.
+        if n == 1 { missing(io) }
+        if is_command(arg(1)) {
+            top_fail(io, "unexpected argument '" + arg(1) + "' found" + nl() + nl() + "  tip: subcommand '" + arg(1)
+                    + "' exists; to use it, remove the '--' before it", "")
+        }
+        unrecognized(io, arg(1), true)
+    } else if str_len(s) > 2 && starts(s, "--") {
+        let body = str_slice(s, 2, str_len(s))
+        let mut eq = 0 - 1
+        for j in 0..str_len(body) {
+            if eq < 0 && str_byte(body, j) == 61 { eq = j }
+        }
+        let name = if eq >= 0 { str_slice(body, 0, eq) } else { body }
+        if name == "help" || name == "version" {
+            if eq >= 0 {
+                top_fail(io, "unexpected value '" + str_slice(body, eq + 1, str_len(body)) + "' for '--" + name
+                        + "' found; no more were expected", "--" + name)
+            }
+            if name == "help" { show(io, top_help(true)) }
+            show(io, "nazm " + version() + nl())
+        }
+        // `did_you_mean_error` over the top level's own long options.
+        let h = cli_jaro(name, "help")
+        let v = cli_jaro(name, "version")
+        let mut similar = ""
+        if h > 0.7 { similar = "--help" }
+        if v > 0.7 && v >= h { similar = "--version" }
+        let mut text = "unexpected argument '--" + name + "' found"
+        if similar != "" { text = text + nl() + nl() + "  tip: a similar argument exists: '" + similar + "'" }
+        top_fail(io, text, similar)
+    } else if str_len(s) > 1 && starts(s, "-") && !starts(s, "--") {
+        // A cluster: `-h` and `-V` answer at once; the first other character is not an argument.
+        let ch = str_slice(s, 1, 2)
+        if ch == "h" { show(io, top_help(false)) }
+        if ch == "V" { show(io, "nazm " + version() + nl()) }
+        let mut w = 1
+        let b = str_byte(s, 1)
+        if b >= 240 { w = 4 } else if b >= 224 { w = 3 } else if b >= 192 { w = 2 }
+        top_fail(io, "unexpected argument '-" + str_slice(s, 1, 1 + w) + "' found", "")
+    }
+    if !is_command(s) { unrecognized(io, s, true) }
+    if s == "help" { return help_command(io, 1) }
+    let c = command_cli(s)
+    if c.name == "" { not_carried(io, "nazm " + s) }
+    cli_from(c, 1)
+    if s == "fmt" { return fmt_command(io, c) }
+    if s == "init" { return init_command(io, c) }
+    check_command(io, c)
+}
+
+// No command named: the short help, as an error (status 5, clap's `arg_required_else_help`).
+fn missing(io: IoCap) -> Int {
+    eprint(top_help(false))
+    exit_with(5)
+    0
+}
