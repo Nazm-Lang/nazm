@@ -23,7 +23,7 @@
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
 // `Int`, `Bool` and `Str`, imported ones included; function types, named functions as values,
 // calls through values and closures with their captures (N50); traits, impls of non-generic
-// types, bounds, method calls and `Show` in interpolation (N78), default methods aside; effects
+// types, bounds, method calls, default methods and `Show` in interpolation (N78); effects
 // and authority; the rules about `main`.
 
 use "syntax.nz";
@@ -232,6 +232,8 @@ pub struct Ck {
     tmpc: Ints,
     tmret: Ints,
     tmeff: Ints,
+    // Whether each trait method has a default body (R1b, L11): the function `Trait/default/m`.
+    tmdef: Ints,
     // Impls filed: trait, type, module, the `impl` keyword's span, and each trait method's
     // function (a run of `imfn`, -1 where none); and the table's answer for a trait and type.
     imtrait: Ints,
@@ -844,7 +846,7 @@ fn new_ck(t: Tree) -> Ck {
             xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
             capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
             trname: strs_new(), trmod: ints_new(), trns: ints_new(), trne: ints_new(), trpub: ints_new(), trmf: ints_new(), trmc: ints_new(),
-            tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(),
+            tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(), tmdef: ints_new(),
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new());
@@ -1125,12 +1127,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         if ints_len(kids(c, tr, "attrs")) > 0 { stop(c, "an attribute"); }
         // `@std/hash`'s `Hash` is derived where no impl is written (L6).
         if fname_of(c, tr, "name") == "Hash" && ints_get(c.mstd, m) == 1 { stop(c, "a derived `Hash`"); }
-        let ms = kids(c, tr, "methods");
-        let mut k = 0;
-        while k < ints_len(ms) {
-            if some(c, ints_get(ms, k), "body") { stop(c, "a default method"); }
-            k = k + 1;
-        }
         t = t + 1;
     }
     let impls = kids(c, p, "impls");
@@ -2043,6 +2039,7 @@ fn trait_methods(c: Ck, t: Int, id: Int) -> Int {
                 }
                 ints_push(c.tmret, ret);
                 ints_push(c.tmeff, eff);
+                if some(c, f, "body") { ints_push(c.tmdef, 1); } else { ints_push(c.tmdef, 0); }
             }
         }
         i = i + 1;
@@ -2274,7 +2271,8 @@ fn register_impl(c: Ck, m: Int, im: Int, tr: Int, ty: Int, functions: Ints) -> I
     let missing = strs_new();
     k = 0;
     while k < mc {
-        if ints_get(methods, k) < 0 { strs_push(missing, strs_get(c.tmname, mf + k)); }
+        // A method with a default body may be left out.
+        if ints_get(methods, k) < 0 && ints_get(c.tmdef, mf + k) == 0 { strs_push(missing, strs_get(c.tmname, mf + k)); }
         k = k + 1;
     }
     if strs_len(missing) > 0 {
@@ -4082,6 +4080,10 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
         if satisfies(c, tr, recv_ty) {
             let im = impl_of(c, tr, recv_ty);
             target = ints_get(c.imfn, ints_get(c.imff, im) + tm - ints_get(c.trmf, tr));
+            // Where the impl leaves the method to its default, the default (L11a).
+            if target < 0 && ints_get(c.tmdef, tm) == 1 {
+                target = defined_fn(c, ints_get(c.trmod, tr), cat4(tname, "/default/", method, ""));
+            }
         }
         if target < 0 {
             err(c, "N0605", at, cat5("`", show(c, recv_ty), "` does not implement `", tname, "` in this module's scope"),
