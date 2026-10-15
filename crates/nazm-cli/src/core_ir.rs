@@ -13,7 +13,13 @@ use std::process::ExitCode;
 
 use crate::exit;
 
-pub(crate) fn run(path: &Path, compact: bool, spans: bool, declared: Option<&Path>) -> ExitCode {
+pub(crate) fn run(
+    path: &Path,
+    compact: bool,
+    spans: bool,
+    sources: bool,
+    declared: Option<&Path>,
+) -> ExitCode {
     let loaded = match crate::opened::opened(path, declared, false) {
         Ok(l) => l,
         Err(code) => return ExitCode::from(code),
@@ -24,12 +30,12 @@ pub(crate) fn run(path: &Path, compact: bool, spans: bool, declared: Option<&Pat
         &loaded.graph,
         nazm_core::Entry::Absent,
         |core, res| {
-            Ok(nazm_core::cir::print(
-                core,
-                res,
-                &loaded.graph,
-                nazm_core::cir::Options { spans, compact },
-            ))
+            let options = nazm_core::cir::Options { spans, compact };
+            Ok(if sources {
+                nazm_core::cir::print_with_sources(core, res, &loaded.graph, options, &loaded.map)
+            } else {
+                nazm_core::cir::print(core, res, &loaded.graph, options)
+            })
         },
     );
     match printed {
