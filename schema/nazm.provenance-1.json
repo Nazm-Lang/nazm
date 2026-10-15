@@ -185,6 +185,10 @@
         "cranelift": {
           "type": "string"
         },
+        "release": {
+          "description": "R1.5, D15: `nazm build --release` — stripped, position-independent, stack-protected, signed ad hoc with the hardened runtime; present exactly when it was asked for",
+          "const": true
+        },
         "nzcg": {
           "description": "R9, D15: the BLAKE3 digest of Nazm's own code generator, present exactly when `--backend nazm` built the program",
           "type": "string",

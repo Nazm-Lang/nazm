@@ -367,6 +367,15 @@ token). Semantic epoch 87; EXPERIMENTAL until R1.5 closes. Evidence: `shorter_fo
 (`match_arms_on_their_own_lines_need_no_comma_everywhere` under the interpreter and both backends;
 `two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written`); two mutants.
 
+**R1.5 (2026-10-15)** · *`nazm build --release`* (`docs/architecture.md` §7.117; R1.5 design D15). A
+hardened macOS executable from the LLVM backend: every function stack-protected (`sspstrong`, so
+one with a local array or an address-taken local checks a canary), linked `-pie`, stripped of its
+symbols and debug map, and signed ad hoc with the hardened runtime. Refused, by name, for another
+backend or target and with `--debug`, `--lib`, `--objects` or `--runtime`; the default build is
+unchanged. Linux, Windows and the other targets are not hardened yet. EXPERIMENTAL until R1.5
+closes. Evidence: `crates/nazm-cli/tests/release_build.rs` (macOS host) — a test per property with
+`nm`, `otool` and `codesign`, reproducibility, refusals, provenance; four mutants.
+
 **R1.5 (2026-10-15)** · *Printing in your own program* (`spec.md`, *Shorter forms*; R1.5 design
 D8). In a module of the program itself — a key with no `@`, so not `@std`, the prelude or a package —
 the authority check (`effects::authority`) counts the output authority `main` holds as held, so a

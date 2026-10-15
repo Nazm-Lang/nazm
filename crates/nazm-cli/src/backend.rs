@@ -67,7 +67,7 @@ pub(crate) const DRIVER: &str = "clang";
 ///
 /// Everything else is removed, including `CCC_OVERRIDE_OPTIONS`, whose entire purpose is
 /// to rewrite the arguments a driver was given.
-const PASSED: &[&str] = &[
+pub(crate) const PASSED: &[&str] = &[
     "PATH",
     "LD_LIBRARY_PATH",
     "TMPDIR",
@@ -174,6 +174,14 @@ impl Backend {
     pub(crate) fn link(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
         let mut c = self.link_command(output, objects);
         c.args(dead_strip_args(self.cross.as_deref()));
+        run(&mut c)
+    }
+
+    /// [`Self::link`] for `nazm build --release` (R1.5, D15): position-independent as well.
+    pub(crate) fn link_release(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
+        let mut c = self.link_command(output, objects);
+        c.args(dead_strip_args(self.cross.as_deref()));
+        c.args(crate::build::release_link_args());
         run(&mut c)
     }
 

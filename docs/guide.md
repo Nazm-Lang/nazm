@@ -50,7 +50,8 @@ rather than failing; in your own program `@std/text`, `@std/hashmap`, `@std/hash
 `@std/sort`, `@std/option` and `@std/result` need no `use` — naming one of their functions, or calling `s.split(" ")`,
 `counts.top(10)` or `r.unwrap_or(0)`, is enough (R1.5, D9, 4.5) — while a package's modules write theirs. A program that grows past one directory becomes a package: a `nazm.toml`
 beside `src/`, dependencies as `use "NAME:path.nz";`, and `nazm lock` before a `--locked` build.
-`nazm build --debug` makes a program a debugger can stop in, `nazm build --timings` says where a
+`nazm build --debug` makes a program a debugger can stop in, `nazm build --release` a hardened macOS
+executable (stack-protected, PIE, stripped, signed with the hardened runtime), `nazm build --timings` says where a
 build's time went, and `nazm inspect` prints everything the compiler knows about a program.
 `docs/limitations.md` lists what v1 does not do.
 

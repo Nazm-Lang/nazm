@@ -69,8 +69,10 @@
 - [ ] 5.1 Safety-equivalent rows and a safety column; re-run and publish
 
 ## 7. Security (the copyright holder's choices, 2026-10-14)
-- [ ] 7.1 `nazm build --release`: symbols and debug information stripped, PIE, stack protection,
-      hardened-runtime signing on macOS
+- [x] 7.1 `nazm build --release`: symbols and debug information stripped, PIE, stack protection,
+      hardened-runtime signing on macOS — 2026-10-15 (D15): `build/release.rs`, architecture
+      §7.117, `tests/release_build.rs` (a test per property), four mutants; macOS and the LLVM
+      backend only, the rest refused by name
 - [ ] 7.2 Every release archive signed (minisign or Sigstore) and checked reproducible in CI
 
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
