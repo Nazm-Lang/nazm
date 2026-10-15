@@ -9,12 +9,22 @@ short as is natural there:
     words  counts the words of a generated file with the language's standard hash map and prints
            the number of distinct words, then the ten most frequent as `word count`, most frequent
            first, ties by word ascending (words.expected; the input is gen_words.py's)
+    primes the parallel workload (performance leadership, multicore; Nazm, C, Go and Rust):
+           counts the primes below 3,000,000 by trial division, printing 216816, on W workers —
+           blocks of 1,000 numbers dealt round robin, block b to worker b mod W, each worker
+           sending its count back — run at W = 1, 2, 4, 8 and the host's processor count, each
+           with its speed-up over the same build's W=1. Blocks rather than single numbers: with
+           n ≡ w mod W and W even, every odd number, so every prime but 2, falls to the odd
+           workers, and half the workers would have nothing to do in every language.
+           Interpreters are not timed on it. Each run records the load average before and after
 
 Every program is built with its language's usual release flags (recorded in the output) and must
 print the expected output before it is timed; one that does not is recorded as not measured. A
 toolchain that is absent is recorded as absent, never skipped silently.
 
-    python3 bench/compare/compare.py NAZM OUT_DIR [--runs N]
+    python3 bench/compare/compare.py NAZM OUT_DIR [--runs N] [--only NAME,...]
+
+`--only` measures the named programs alone (say `--only primes`); the default is every one.
 
 NAZM is the `nazm` binary to measure. Results go to OUT_DIR/compare.json and OUT_DIR/compare.md;
 builds (run in OUT_DIR/work, since gnatmake writes objects to its working directory), caches
@@ -49,7 +59,37 @@ SLOW_RUNS = 3  # for a program whose checking run took longer than SLOW_SECONDS
 SLOW_SECONDS = 2.0
 BUILD_RUNS = 3
 WORKLOADS = ["hello", "fib", "words"]
+# The parallel workload (performance leadership, multicore): run at each of worker_counts().
+PARALLEL = ["primes"]
 DASH = "—"
+
+
+def worker_counts():
+    """W = 1, 2, 4 and 8, and the host's processors when that is another count."""
+    counts = [1, 2, 4, 8]
+    cpus = os.cpu_count() or 1
+    return counts if cpus in counts else counts + [cpus]
+
+
+def plan_first(plan, name):
+    """The first record key of a program's runs."""
+    return next(key for key, n, _ in plan if n == name)
+
+
+def speedups(record):
+    """Each parallel row's speed-up: its own W=1 median over its median, by language and variant."""
+    base = {}
+    for key, w in record["workloads"].items():
+        for r in w["rows"]:
+            if key.endswith(" W=1") and r.get("run"):
+                base[(key.split(" ")[0], r["language"], r["variant"])] = r["run"]["median_ms"]
+    for key, w in record["workloads"].items():
+        if " W=" not in key:
+            continue
+        for r in w["rows"]:
+            one = base.get((key.split(" ")[0], r["language"], r["variant"]))
+            if one and r.get("run"):
+                r["speedup"] = round(one / r["run"]["median_ms"], 2)
 
 
 def version(cmd, env=None):
@@ -304,6 +344,11 @@ def main():
         i = args.index("--runs")
         runs = int(args[i + 1])
         del args[i:i + 2]
+    only = None
+    if "--only" in args:
+        i = args.index("--only")
+        only = set(args[i + 1].split(","))
+        del args[i:i + 2]
     # A quick development pass (`--runs 1` or 2) skips the warm-up runs.
     warmup = WARMUP if runs >= 3 else 0
     if len(args) != 2:
@@ -330,6 +375,7 @@ def main():
         "hello": "Hello, world!",
         "fib": "9227465",
         "words": (HERE / "words.expected").read_text().strip(),
+        "primes": "216816",
     }
 
     def tool_version(name, cmd, venv=env):
@@ -379,9 +425,20 @@ def main():
     }
 
     langs = languages(nazm, tools, work, env, goenv, zigenv, gnatenv)
-    for name in WORKLOADS:
+    # Each timed run: (the record's key, the program, its arguments). The parallel workload is one
+    # program run at each worker count, built once.
+    plan = [(name, name, [str(words_txt)] if name == "words" else []) for name in WORKLOADS]
+    plan += [(f"primes W={w}", "primes", [str(w)]) for w in worker_counts()]
+    if only is not None:
+        plan = [p for p in plan if p[1] in only]
+    record["method"]["primes"] = (
+        "primes below 3,000,000 by trial division, in blocks of 1,000 dealt round robin to W "
+        f"workers; W = {', '.join(str(w) for w in worker_counts())} (the last the host's "
+        "processors); the speed-up is each row's median over its own W=1 median")
+    builds = {}
+    for key, name, extra in plan:
         rows = []
-        extra = [str(words_txt)] if name == "words" else []
+        load_before = os.getloadavg()
         for lang, d, pattern, variants in langs:
             src = HERE / d / pattern.format(n=name, N=name.capitalize())
             for variant in variants:
@@ -389,18 +446,32 @@ def main():
                 prepare = variant[6] if len(variant) > 6 else None
                 row = {"language": lang, "variant": label, "flags": flags,
                        "source": str(src.relative_to(HERE.parent.parent))}
-                print(f"{name}: {lang}, {label}", file=sys.stderr, flush=True)
+                print(f"{key}: {lang}, {label}", file=sys.stderr, flush=True)
                 if not src.exists():
-                    row["status"] = "unmeasured: no source"
-                    rows.append(row)
+                    # A language with no parallel program is said once, not at every W.
+                    if key == name or key == plan_first(plan, name):
+                        row["status"] = "unmeasured: no source"
+                        rows.append(row)
                     continue
                 row["loc"] = loc(src)
                 if tool != nazm and not tools.get(tool):
                     row["status"] = f"absent: {tool} is not installed"
                     rows.append(row)
                     continue
+                if name in PARALLEL and build is None:
+                    if key == plan_first(plan, name):
+                        row["status"] = ("unmeasured: the parallel workload is timed on "
+                                         "compiled builds only (an interpreter would take "
+                                         "minutes a run)")
+                        rows.append(row)
+                    continue
                 srcs = str(src)
-                if build is not None:
+                if (lang, label, name) in builds:
+                    row.update(builds[(lang, label, name)])
+                    if "status" in row:
+                        rows.append(row)
+                        continue
+                elif build is not None:
                     cmd = build(srcs, name)
                     failed = None
                     times = []
@@ -416,11 +487,14 @@ def main():
                             times.append(t)
                     if failed is not None:
                         row["status"] = f"unmeasured: the build failed: {failed}"
+                        builds[(lang, label, name)] = {"status": row["status"]}
                         rows.append(row)
                         continue
                     row["build"] = spread(times)
                     row["build_command"] = " ".join(
                         Path(a).name if "/" in a else a for a in cmd)
+                    builds[(lang, label, name)] = {"build": row["build"],
+                                                   "build_command": row["build_command"]}
                 runc = run(srcs, name) + extra
                 exe_path = Path(runc[0])
                 if build is not None and exe_path.is_file() and str(exe_path).startswith(
@@ -450,7 +524,10 @@ def main():
                 row["peak_rss_kib"] = peak_rss(runc, venv)
                 row["status"] = "measured; output checked"
                 rows.append(row)
-        record["workloads"][name] = {"expected": expected[name], "rows": rows}
+        record["workloads"][key] = {"expected": expected[name], "rows": rows,
+                                    "load_before": [round(x, 2) for x in load_before],
+                                    "load_after": [round(x, 2) for x in os.getloadavg()]}
+    speedups(record)
 
     (out_dir / "compare.json").write_text(json.dumps(record, indent=2) + "\n")
     md = render(record)
@@ -465,10 +542,16 @@ def render(record):
     lines = [f"Host: {h['processor']}, {h['cpus']} CPUs{mem}, macOS {h['os']} "
              f"({h['system']}, {h['machine']}); {record['date']}. Not controlled.", ""]
     for name, w in record["workloads"].items():
-        lines += [f"### {name}", "",
-                  "| language | variant | LOC | run median (ms) | run min–max (ms) | "
-                  "peak RSS (KiB) | binary (KiB) | build median (ms) | status |",
-                  "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+        parallel = " W=" in name
+        lines += [f"### {name}", ""]
+        if "load_before" in w:
+            lines += [f"Load average (1, 5, 15 min): {w['load_before']} before, "
+                      f"{w['load_after']} after.", ""]
+        lines += ["| language | variant | LOC | run median (ms) | run min–max (ms) | "
+                  + ("speed-up over W=1 | " if parallel else "")
+                  + "peak RSS (KiB) | binary (KiB) | build median (ms) | status |",
+                  "| --- | --- | ---: | ---: | ---: | " + ("---: | " if parallel else "")
+                  + "---: | ---: | ---: | --- |"]
         for r in w["rows"]:
             run = r.get("run")
             build = r.get("build")
@@ -476,9 +559,11 @@ def render(record):
             size = f"{r['binary_bytes'] / 1024:.0f}" if r.get("binary_bytes") else DASH
             median = f"{run['median_ms']:.1f}" if run else DASH
             built = f"{build['median_ms']:.0f}" if build else DASH
+            gain = (f"{r['speedup']:.2f}× | " if r.get("speedup") else f"{DASH} | ") \
+                if parallel else ""
             lines.append(
                 f"| {r['language']} | {r['variant']} | {r.get('loc', DASH)} | {median} | "
-                f"{span} | {r.get('peak_rss_kib') or DASH} | {size} | {built} | "
+                f"{span} | {gain}{r.get('peak_rss_kib') or DASH} | {size} | {built} | "
                 f"{r['status']} |")
         lines.append("")
     lines += ["Toolchains:", ""]
