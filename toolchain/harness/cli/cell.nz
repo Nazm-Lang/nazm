@@ -1,0 +1,121 @@
+// R1b: a mutable cell, `Cell[T]` (`docs/spec.md`, *A mutable cell*). Ported from
+// `crates/nazm-cli/tests/cell.rs` (R7).
+//
+// One value that can be replaced, reached through a handle, so a callee's change is its caller's.
+// Every implementation answers what the section's rules work out by hand, with every allocation
+// reclaimed; the ownership rule counts a cell as it counts a `Vec`; the refusals a mutable handle
+// has; the prelude names that keep every 1.0 program's meaning; provenance through a cell; and a
+// `Cell` type crossing a module's published interface.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+const CELLS: Str = "struct Context { next: Cell[Int], log: Cell[Str], }\nstruct Point { x: Int, y: Int, }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} {\n    print(str_concat(s, \"\\n\"))\n}\n\n// A callee changes what its caller sees: the reason a cell exists.\nfn fresh(c: Context, base: Str) -> Str {\n    let n = cell_get(c.next);\n    cell_set(c.next, n + 1);\n    cell_set(c.log, str_concat(cell_get(c.log), base));\n    str_concat(base, num_to_str(n))\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let c = Context(next: cell_new(0), log: cell_new(\"\"));\n    show(out, fresh(c, \"t\"));\n    show(out, fresh(c, \"u\"));\n    show(out, cell_get(c.log));\n    // Assignment shares: one cell, two names.\n    let d = c.next;\n    show(out, num_to_str(cell_set(d, 40)));\n    show(out, num_to_str(cell_get(c.next) + 2));\n    // Replacing a value releases the old one: a string, a record, a vector.\n    let s = cell_new(str_concat(\"a\", \"b\"));\n    cell_set(s, str_concat(\"c\", \"d\"));\n    let p = cell_new(Point(x: 1, y: 2));\n    let q = cell_get(p);\n    cell_set(p, Point(x: q.y, y: q.x));\n    let v = cell_new(vec_new[Int]());\n    vec_push(cell_get(v), 5);\n    cell_set(v, vec_new[Int]());\n    vec_push(cell_get(v), 6);\n    show(out, str_concat(cell_get(s), num_to_str(cell_get(p).x * 10 + vec_get(cell_get(v), 0))));\n    // A cell inside a box is still a cell: the box cannot change, what the cell holds can.\n    let b = box_new(cell_new(1));\n    cell_set(box_get(b), 7);\n    show(out, num_to_str(cell_get(box_get(b))));\n    0\n}\n";
+
+/// What the section's rules give, worked out by hand.
+const EXPECTED: Str = "t0\nu1\ntu\n0\n42\ncd26\n7\n";
+
+@test
+fn a_cell_means_the_same_everywhere_and_everything_in_it_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, CELLS, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, EXPECTED), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0 && all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `nazm check` on `src`: every error code it reports, in order.
+fn codes_of(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    Result[Strs, Str].Ok(value: r.codes)
+}
+
+@test
+fn the_ownership_rule_counts_a_cell_as_it_counts_a_vec(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A cell of what holds no cycle: accepted.
+    same_strs("no cycle", codes_of(h, "struct C { n: Cell[Int], s: Cell[Str], }\nfn main() -> Int { 0 }")?, strs_new())?;
+    // A cycle through a cell: it could be set to hold the value that holds it.
+    same_strs("Option[Cell[Node]]", codes_of(h, "struct Node { next: Option[Cell[Node]], }\nfn main() -> Int { 0 }")?, words("N0359"))?;
+    same_strs("Cell[B] and Box[A]", codes_of(h, "struct A { b: Cell[B], }\nstruct B { a: Box[A], }\nfn main() -> Int { 0 }")?, words("N0359"))?;
+    // Through a generic definition's parameter, which a `Cell` counts.
+    same_strs("W[Node]", codes_of(h, "struct W[T] { c: Cell[T], }\nstruct Node { w: W[Node], }\nfn main() -> Int { 0 }")?, words("N0359"))?;
+    // A cell inside an immutable indirection is still counted.
+    same_strs("Box[Cell[Node]]", codes_of(h, "struct Node { b: Box[Cell[Node]], }\nfn main() -> Int { 0 }")?, words("N0359"))
+}
+
+@test
+fn a_cell_is_neither_compared_nor_given_to_a_task_nor_written_bare(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("compared", codes_of(h, "fn main() -> Int { let a = cell_new(1); if a == a { 1 } else { 0 } }")?, words("N0304"))?;
+    // A record holding one has no derived equality either.
+    same_strs("a record holding one", codes_of(h, "struct R { c: Cell[Int], }\nfn main() -> Int { let a = R(c: cell_new(1)); if a == a { 1 } else { 0 } }")?, words("N0304"))?;
+    let task = codes_of(h, "fn w(c: Cell[Int]) -> Int { 0 }\nfn main() -> Int ! {spawn} { let c = cell_new(1); scope { spawn w(c); } 0 }")?;
+    check_that(strs_len(task) > 0 && strs_get(task, 0) == "N0321", str_join(task, ", "))?;
+    same_strs("bare", codes_of(h, "fn f(c: Cell) -> Int { 0 }\nfn main() -> Int { 0 }")?, words("N0352"))?;
+    // A closure may capture a cell of what can hold no function value; not one that can.
+    same_strs("captured", codes_of(h, "fn main() -> Int { let c = cell_new(1); let f = fn() -> Int { cell_get(c) }; f() }")?, strs_new())?;
+    same_strs("a cell of a function", codes_of(h, "fn one() -> Int { 1 }\nfn main() -> Int { let c = cell_new(one); let f = fn() -> Int { let g = cell_get(c); g() }; f() }")?, words("N0616"))
+}
+
+/// `nazm run` on `src`: its status and output.
+fn run_src(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("run --interpret p.nz"));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn the_cell_names_are_prelude_names_a_1_0_program_keeps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A 1.0 program's own `Cell` type and `cell_new` function mean what they meant.
+    let r = run_src(h, "struct Cell { v: Int, }\nfn cell_new(x: Int) -> Cell { Cell(v: x + 1) }\nfn main() -> Int { cell_new(41).v }\n")?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_starts_with(r.stdout, "42"), r.stdout)?;
+    let g = run_src(h, "fn cell_get(x: Int) -> Int { x * 3 }\nfn main() -> Int { cell_get(3) }\n")?;
+    check_that(text_starts_with(g.stdout, "9"), ran_show(g))
+}
+
+@test
+fn what_a_cell_holds_carries_its_provenance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file's contents in a cell — put there when it was made or set later — may not name a
+    // written file (`N0372`); a literal through the same may.
+    same_strs("made", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let c = cell_new(read_file(\"cfg\")); write_file(cell_get(c), \"x\") }\n")?, words("N0372"))?;
+    same_strs("set", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let c = cell_new(\"out.txt\"); cell_set(c, read_file(\"cfg\")); write_file(cell_get(c), \"x\") }\n")?, words("N0372"))?;
+    same_strs("a literal", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let c = cell_new(\"out.txt\"); write_file(cell_get(c), \"x\") }\n")?, strs_new())?;
+    // The cell is the element type's.
+    same_strs("another cell", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let n = cell_new(str_len(read_file(\"cfg\"))); let c = cell_new(\"out.txt\"); write_file(cell_get(c), \"x\") }\n")?, strs_new())
+}
+
+fn interface(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "counter.nz", "pub struct Counter { n: Cell[Int], }\npub fn counter() -> Counter { Counter(n: cell_new(0)) }\npub fn bump(c: Counter, by: Int) -> Int { cell_set(c.n, cell_get(c.n) + by) }\npub fn count(c: Counter) -> Int { cell_get(c.n) }\n")?;
+    scratch_write(h, d, "main.nz", "use \"counter.nz\";\nfn main() -> Int { let c = counter(); bump(c, 20); bump(c, 22); count(c) }\n")?;
+    let mut i = 0;
+    while i < 2 {
+        let c = nazm(h, d, words("check main.nz"));
+        check_that(c.code == 0, ran_show(c))?;
+        i = i + 1;
+    }
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(text_starts_with(r.stdout, "42"), ran_show(r))
+}
+
+@test
+fn a_cell_type_crosses_a_modules_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Its importer checks twice — the second time from the persisted interface — and runs.
+    let d = scratch_new(h);
+    let r = interface(h, d);
+    scratch_remove(h, d);
+    r
+}

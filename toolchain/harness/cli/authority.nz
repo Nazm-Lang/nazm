@@ -1,0 +1,189 @@
+// N79: effects and capabilities v3 — the bridge as a recorded contract, attenuation, subsumption
+// (`docs/architecture.md` §7.80). Ported from `crates/nazm-cli/tests/authority.rs` (R7).
+//
+// An `OutCap` authorises the standard streams and nothing else; an `IoCap` is accepted where an
+// `OutCap` is expected, never the reverse; a function value whose effects are a subset of the
+// expected ones is accepted, passed or returned, and one with more is refused; and nothing
+// inherits authority.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// `p.nz` holding `src`, `nazm ARGS` run on it: the run, the directory removed.
+fn on(h: Caps, src: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words(args));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: r)
+}
+
+fn text(r: Ran) -> Str ! {} {
+    f"{r.stdout}{r.stderr}"
+}
+
+/// `p.nz` holding `src` built by `backend` and run: its run, or `Err` when the build failed.
+fn built_run(h: Caps, src: Str, backend: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let b = nazm(h, d, words(f"build --backend {backend} p.nz -o p"));
+    let r = run(h, f"{d}/p", strs_new(), "", suite_env(h));
+    scratch_remove(h, d);
+    check_that(b.code == 0, f"{backend}: {text(b)}")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn an_out_cap_prints_and_authorises_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let o = on(h, "fn shout(o: OutCap) -> Int ! {io} { print(\"loud\\n\"); eprint(\"err\\n\"); 1 }\nfn main(io: IoCap) -> Int ! {io} { shout(io) }\n", "run --interpret p.nz")?;
+    check_that(o.code == 0, text(o))?;
+    check_that(o.stdout == "loud\n1\n", o.stdout)?;
+    for call in text_split("write_file(\"x\", \"y\")|read_file(\"x\")|file_exists(\"x\")", "|") {
+        let c = on(h, f"fn log(o: OutCap) -> Int ! {{io}} {{ let r = {call}; 0 }}\nfn main(io: IoCap) -> Int ! {{io}} {{ log(io) }}\n", "check p.nz")?;
+        let tx = text(c);
+        check_that(c.code != 0, f"{call}: {tx}")?;
+        check_that(text_contains(tx, "N0369"), f"{call}: {tx}")?;
+        check_that(text_contains(tx, "holds no `IoCap`"), f"{call}: {tx}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_io_cap_is_accepted_for_an_out_cap_and_never_the_reverse(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let o = on(h, "fn wide(i: IoCap) -> Int ! {io} { 0 }\nfn main(o: OutCap) -> Int ! {io} { wide(o) }\n", "check p.nz")?;
+    check_that(o.code != 0, text(o))?;
+    check_that(text_contains(text(o), "N0300") && text_contains(text(o), "is `IoCap`, but this is `OutCap`"), text(o))?;
+    // Nothing makes an `IoCap` from an `OutCap`, returned either.
+    let w = on(h, "fn widen(o: OutCap) -> IoCap ! {} { o }\nfn main(o: OutCap) -> Int ! {io} { 0 }\n", "check p.nz")?;
+    check_that(w.code != 0, text(w))?;
+    check_that(text_contains(text(w), "N03"), text(w))
+}
+
+@test
+fn main_may_hold_only_an_out_cap_on_every_engine(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn inc(n: Int) -> Int ! {} { n + 1 }\nfn main(o: OutCap) -> Int ! {io} { print(\"hi\\n\"); inc(41) }\n";
+    let o = on(h, src, "run --interpret p.nz")?;
+    check_that(o.code == 0, text(o))?;
+    check_that(o.stdout == "hi\n42\n", o.stdout)?;
+    let n = built_run(h, src, "cranelift")?;
+    check_that(n.code == 0, ran_show(n))?;
+    check_that(n.stdout == "hi\n42\n", n.stdout)
+}
+
+/// An `IoCap` handed where an `OutCap` is expected compiles natively, on both backends, and runs
+/// as the interpreter does — to a generic function too.
+@test
+fn an_io_cap_given_for_an_out_cap_compiles_on_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn say(out: OutCap, n: Int) -> Int { print(int_to_str(n)); n }\nfn twice[T](x: T, out: OutCap) -> Int { print(\"!\"); 0 }\nfn main(io: IoCap) -> Int { say(io, 7) - 7 + twice(true, io) }\n";
+    let o = on(h, src, "run --interpret p.nz")?;
+    check_that(o.code == 0, text(o))?;
+    // `print` adds no newline; `nazm run` then prints `main`'s result.
+    check_that(o.stdout == "7!0\n", o.stdout)?;
+    for backend in words("llvm cranelift") {
+        let n = built_run(h, src, backend)?;
+        check_that(n.code == 0, backend)?;
+        check_that(n.stdout == "7!0\n", f"{backend}: {n.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_out_cap_cannot_be_defined_by_a_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let o = on(h, "struct OutCap { x: Int }\nfn main() -> Int { 0 }\n", "check p.nz")?;
+    check_that(o.code != 0, text(o))?;
+    check_that(text_contains(text(o), "N0331"), text(o))
+}
+
+@test
+fn a_function_value_with_fewer_effects_is_accepted_passed_or_returned(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn apply(f: fn(Int) -> Int ! {io}, x: Int) -> Int ! {io} { f(x) }\nfn inc(n: Int) -> Int ! {} { n + 1 }\nfn pick() -> fn(Int) -> Int ! {io} { inc }\nfn main(io: IoCap) -> Int ! {io} { let f = pick(); apply(inc, 40) + f(0) }\n";
+    let o = on(h, src, "run --interpret p.nz")?;
+    check_that(o.code == 0, text(o))?;
+    check_that(o.stdout == "42\n", o.stdout)?;
+    // Below the checker nothing moved: the verifiers compare up to effects, so it builds.
+    let n = built_run(h, src, "cranelift")?;
+    check_that(n.code == 0, ran_show(n))?;
+    check_that(n.stdout == "42\n", n.stdout)
+}
+
+@test
+fn a_function_value_with_more_effects_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let passed = on(h, "fn apply(f: fn(Int) -> Int ! {}, x: Int) -> Int { f(x) }\nfn loud(n: Int) -> Int ! {io} { n }\nfn main(io: IoCap) -> Int ! {io} { apply(loud, 1) }\n", "check p.nz")?;
+    check_that(passed.code != 0 && text_contains(text(passed), "N03"), f"passed: {text(passed)}")?;
+    let returned = on(h, "fn loud(n: Int) -> Int ! {io} { n }\nfn pick() -> fn(Int) -> Int ! {} { loud }\nfn main() -> Int { 0 }\n", "check p.nz")?;
+    check_that(returned.code != 0 && text_contains(text(returned), "N03"), f"returned: {text(returned)}")
+}
+
+@test
+fn nothing_inherits_authority_and_inspect_reports_no_inheritance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N104: a function that declares no effect set no longer exercises its caller's authority.
+    let o = on(h, "fn helper() -> Int { write_file(\"f\", \"x\") }\nfn main(io: IoCap) -> Int ! {io} { helper() }\n", "check p.nz")?;
+    check_that(o.code != 0, text(o))?;
+    check_that(text_contains(text(o), "N0369") && text_contains(text(o), "`helper` holds no `IoCap`"), text(o))?;
+    // Given one, it is accepted; and `nazm inspect`, now `/2`, reports no inheritance at all.
+    let i = on(h, "fn helper(io: IoCap) -> Int { write_file(\"f\", \"x\") }\nfn pure(n: Int) -> Int { n + 1 }\nfn main(io: IoCap) -> Int ! {io} { helper(io) + pure(0) }\n", "inspect p.nz")?;
+    check_that(i.code == 0, text(i))?;
+    let doc = jparse(i.stdout)?;
+    check_that(jstr(doc, "schema") == "nazm.inspect/2", i.stdout)?;
+    let mut k = 0;
+    while jq(doc, f"definitions/{k}") >= 0 {
+        check_that(jq(doc, f"definitions/{k}/inherits") < 0, jtext(doc, f"definitions/{k}"))?;
+        k = k + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_authority_profile_and_the_default_refuse_the_same_programs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N104: `explicit-authority` is the language's rule now.
+    for args in text_split("check p.nz|check --profile authority p.nz", "|") {
+        let o = on(h, "fn helper() -> Int { write_file(\"f\", \"x\") }\nfn main(io: IoCap) -> Int ! {io} { helper() }\n", args)?;
+        check_that(o.code != 0, f"{args}: {text(o)}")?;
+        check_that(text_contains(text(o), "N0369"), f"{args}: {text(o)}")?;
+        check_that(!text_contains(text(o), "explicit-authority"), f"{args}: {text(o)}")?;
+        // Held authority, and a function that exercises none, are accepted by both.
+        let a = on(h, "fn helper(io: IoCap) -> Int { write_file(\"f\", \"x\") }\nfn pure(n: Int) -> Int { n + 1 }\nfn main(io: IoCap) -> Int ! {io} { helper(io) + pure(1) }\n", args)?;
+        check_that(a.code == 0, f"{args}: {text(a)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_profile_report_names_the_rule(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let o = on(h, "fn helper(out: OutCap) -> Int { print(\"x\\n\"); 0 }\nfn main(io: IoCap) -> Int ! {io} { helper(io) }\n", "check --profile authority --profile-report p.nz")?;
+    check_that(text_contains(o.stdout, "\"explicit-authority\""), o.stdout)
+}
+
+@test
+fn a_held_io_cap_covers_what_an_undeclared_helper_prints(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `IoCap` implies `OutCap` (N79).
+    let d = prog_dir(h, "a.nz", "fn say(out: OutCap) -> Int { print(\"hi\"); 0 }\nfn main(io: IoCap) -> Int ! { io } { say(io) }\n")?;
+    let o = nazm(h, d, words("check a.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+@test
+fn a_held_io_cap_authorises_its_own_print(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N101: a declared function holding only an `IoCap` prints itself.
+    let o = on(h, "fn say(io: IoCap) -> Int ! {io} { print(\"hi\\n\"); eprint(\"e\\n\"); 2 }\nfn main(io: IoCap) -> Int ! {io} { say(io) }\n", "run --interpret p.nz")?;
+    check_that(o.code == 0, text(o))?;
+    check_that(o.stdout == "hi\n2\n", o.stdout)?;
+    // The implication is one way: an `OutCap` gives no `IoCap`.
+    let c = on(h, "fn say(o: OutCap) -> Int ! {io} { exit_with(1); 0 }\nfn main(io: IoCap) -> Int ! {io} { say(io) }\n", "check p.nz")?;
+    check_that(c.code != 0 && text_contains(text(c), "N0369"), text(c))
+}
