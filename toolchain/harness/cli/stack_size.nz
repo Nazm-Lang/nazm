@@ -1,0 +1,94 @@
+// R1b, L14: `nazm build --stack-size` (`docs/spec.md`, *Native recursion, and the stack it runs
+// on*). Ported from `crates/nazm-cli/tests/stack_size.rs` (R7).
+//
+// A program that recurses 250,000 calls deep, in `main` and in a task, meets `N0408` on the
+// default stacks and finishes on the one it asks for — under LLVM and Cranelift, on the pool and
+// on a thread per task. Asking for too little is still `N0408`, reported as a failure. A board or
+// WebAssembly target, and a size that is not one, are refused. A sized program runs under the
+// many-task address-space ceiling.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn deep() -> Str ! {} {
+    r#"fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }
+fn task(c: Chan) -> Int { chan_send(c, down(250000)); 0 }
+fn main(t: SpawnCap) -> Int ! {spawn} {
+    let c = chan_new(1);
+    scope { spawn task(c); }
+    let got = ints_new();
+    chan_recv(c, got);
+    down(250000) + ints_get(got, 0)
+}
+"#
+}
+
+fn build(h: Caps, dir: Str, backend: Str, size: Str) -> Result[Str, Str] ! { io, spawn } {
+    let shown = if str_len(size) == 0 { "default" } else { size };
+    let exe = f"{dir}/{backend}-{shown}";
+    let a = words(f"build --backend {backend} deep.nz -o");
+    strs_push(a, exe);
+    if str_len(size) > 0 {
+        strs_push(a, "--stack-size");
+        strs_push(a, size);
+    }
+    let b = nazm(h, dir, a);
+    check_that(b.code == 0, f"{backend} {shown}: {b.stderr}")?;
+    Result[Str, Str].Ok(value: exe)
+}
+
+fn sized_run(h: Caps, exe: Str, scheduler: Str) -> Ran ! { io, spawn } {
+    bounded_exe_within(h, exe, "", env_set(suite_env(h), "NAZM_SCHEDULER", scheduler), TASKS_ADDRESS_SPACE_KB)
+}
+
+fn stack_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "deep.nz", deep())?;
+    for backend in words("llvm cranelift") {
+        let plain = build(h, d, backend, "")?;
+        let r0 = bounded_exe(h, plain, "", suite_env(h));
+        check_that(text_contains(r0.stderr, "error[N0408]"), f"{backend}: {ran_show(r0)}")?;
+        let sized = build(h, d, backend, "64M")?;
+        let small = build(h, d, backend, "4M")?;
+        for scheduler in words("pool threads") {
+            let big = sized_run(h, sized, scheduler);
+            check_that(text_starts_with(big.stdout, "500000"), f"{backend} {scheduler}: {ran_show(big)}")?;
+            let r = sized_run(h, small, scheduler);
+            check_that(r.code == 2, f"{backend} {scheduler}: {ran_show(r)}")?;
+            check_that(str_len(r.stdout) == 0, f"{backend} {scheduler}: {ran_show(r)}")?;
+            check_that(text_contains(r.stderr, "error[N0408]"), f"{backend} {scheduler}: {ran_show(r)}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_stack_asked_for_carries_a_recursion_the_default_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = stack_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn size_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "deep.nz", deep())?;
+    let w = nazm(h, d, words("build --target wasm32-wasip1 --stack-size 1M deep.nz -o w.wasm"));
+    check_that(w.code != 0, ran_show(w))?;
+    check_that(text_contains(w.stderr, "`--stack-size`"), ran_show(w))?;
+    for bad in words("12 1x 8G M") {
+        let r = nazm(h, d, words(f"build --stack-size {bad} deep.nz -o x"));
+        check_that(r.code != 0, f"{bad}: {ran_show(r)}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_stack_size_is_a_hosted_programs_and_a_size(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = size_cases(h, d);
+    scratch_remove(h, d);
+    r
+}

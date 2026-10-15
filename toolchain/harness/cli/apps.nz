@@ -1,0 +1,222 @@
+// Gate 2: the reference applications (`examples/apps/`, `docs/general-purpose.md` §24). Ported
+// from `crates/nazm-cli/tests/apps.rs` (R7).
+//
+// Five programs that do ordinary work — a command-line counter, a concurrent server, a JSON
+// pipeline, a numeric simulation and a persistent store — each run under the interpreter and built
+// by LLVM at `-O0` and `-O2` and by Cranelift, with real arguments, files and standard input, and
+// held to the output recorded beside it (`NAME.expected`) and its exit status.
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn app_dir(h: Caps, name: Str) -> Str ! { io } {
+    f"{repo_root(h)}/examples/apps/{name}"
+}
+
+/// The app copied into a fresh directory, so a run that writes leaves the repository alone.
+fn staged(h: Caps, name: Str) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let src = app_dir(h, name);
+    let names = match dir_list(h.io, src) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { return Result[Str, Str].Err(error: f"{src}: {rust_io_error(e)}"); },
+    };
+    for n in names {
+        let path = f"{src}/{n}";
+        let regular = match file_metadata(h.io, path) {
+            Result.Ok(value: m) => match m.kind {
+                FileKind.Regular() => true,
+                FileKind.Directory() => false,
+                FileKind.Other() => false,
+            },
+            Result.Err(error: e) => false,
+        };
+        if regular {
+            scratch_write(h, d, n, read_raw(h, path)?)?;
+        }
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn quoted(w: Str) -> Str ! {} {
+    f"'{text_replace(w, "'", "'\\''")}'"
+}
+
+/// `sh -c` running `program…` with standard input from `stdin` (`""`: none).
+fn shell(h: Caps, dir: Str, program: Strs, args: Strs, stdin: Str) -> Ran ! { io, spawn } {
+    let parts = strs_new();
+    strs_push(parts, "exec");
+    for w in program {
+        strs_push(parts, quoted(w));
+    }
+    for w in args {
+        strs_push(parts, quoted(w));
+    }
+    if str_len(stdin) > 0 {
+        strs_push(parts, f"< '{stdin}'");
+    }
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, str_join(parts, " "));
+    run(h, "sh", a, dir, suite_env(h))
+}
+
+/// `file` under the interpreter and each backend, with `args(label)`: one run per implementation.
+fn every_way(h: Caps, dir: Str, file: Str, args: fn(Str) -> Strs ! {}, stdin: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let out = vec_new[Labeled]();
+    let interp = strs_new();
+    strs_push(interp, nazm_bin(h.io));
+    for w in words(f"run --interpret {file} --") {
+        strs_push(interp, w);
+    }
+    vec_push(out, Labeled(label: "interpreter", ran: shell(h, dir, interp, args("interpreter"), stdin)));
+    let labels = words("llvm-O0 llvm-O2 cranelift");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let tag = strs_get(labels, k);
+        let exe = f"{dir}/exe-{tag}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} {file} -o");
+        strs_push(a, exe);
+        let b = nazm(h, dir, a);
+        check_that(b.code == 0, f"{tag}: {b.stderr}")?;
+        let prog = strs_new();
+        strs_push(prog, exe);
+        vec_push(out, Labeled(label: tag, ran: shell(h, dir, prog, args(tag), stdin)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn expected(h: Caps, name: Str, which: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{app_dir(h, name)}/{which}")
+}
+
+fn hold(runs: Vec[Labeled], stdout: Str, code: Int) -> Result[Int, Str] ! {} {
+    for r in runs {
+        check_that(r.ran.code == code, f"{r.label}: {r.ran.stderr}")?;
+        check_that(r.ran.stdout == stdout, f"{r.label}: {r.ran.stdout}\n{r.ran.stderr}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// An app staged, `body` run on it, the stage removed.
+fn on_app(h: Caps, name: Str, body: fn(Caps, Str) -> Result[Int, Str] ! { io, spawn }) -> Result[Int, Str] ! { io, spawn } {
+    let d = staged(h, name)?;
+    let r = body(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn two_files(tag: Str) -> Strs ! {} { words("a.txt b.txt") }
+fn flag_args(tag: Str) -> Strs ! {} { words("-l -c a.txt") }
+fn no_args(tag: Str) -> Strs ! {} { strs_new() }
+fn missing_args(tag: Str) -> Strs ! {} { words("a.txt no-such-file") }
+
+fn nwc(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    hold(every_way(h, d, "nwc.nz", two_files, "")?, expected(h, "nwc", "files.expected")?, 0)?;
+    hold(every_way(h, d, "nwc.nz", flag_args, "")?, expected(h, "nwc", "flags.expected")?, 0)?;
+    hold(every_way(h, d, "nwc.nz", no_args, "a.txt")?, expected(h, "nwc", "stdin.expected")?, 0)?;
+    for r in every_way(h, d, "nwc.nz", missing_args, "")? {
+        check_that(r.ran.code == 1, f"{r.label}: {r.ran.stderr}")?;
+        check_that(text_contains(r.ran.stderr, "nwc: no-such-file: ") && text_contains(r.ran.stderr, "(NotFound)"), f"{r.label}: {r.ran.stderr}")?;
+        check_that(text_starts_with(r.ran.stdout, "       4      11      63 a.txt\n"), f"{r.label}: {r.ran.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn nwc_counts_files_flags_and_standard_input_as_wc_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    on_app(h, "nwc", nwc)
+}
+
+fn access_logs(tag: Str) -> Strs ! {} { words("access-1.jsonl access-2.jsonl") }
+fn access_errors(tag: Str) -> Strs ! {} { words("--min-status 400 access-1.jsonl access-2.jsonl") }
+
+fn jsonpipe(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let all = every_way(h, d, "jsonpipe.nz", access_logs, "")?;
+    hold(all, expected(h, "jsonpipe", "all.expected")?, 0)?;
+    for r in all {
+        let mut n = 0;
+        for l in lines(r.ran.stderr) {
+            if text_starts_with(l, "access-") {
+                n = n + 1;
+            }
+        }
+        check_that(n == 3, f"{r.label}: {r.ran.stderr}")?;
+    }
+    hold(every_way(h, d, "jsonpipe.nz", access_errors, "")?, expected(h, "jsonpipe", "errors.expected")?, 0)
+}
+
+@test
+fn jsonpipe_filters_and_totals_records_and_names_every_rejected_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    on_app(h, "jsonpipe", jsonpipe)
+}
+
+fn thousand(tag: Str) -> Strs ! {} { words("1000") }
+
+fn nbody(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    hold(every_way(h, d, "nbody.nz", thousand, "")?, expected(h, "nbody", "nbody.expected")?, 0)
+}
+
+@test
+fn nbody_conserves_energy_to_the_same_nine_digits_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    on_app(h, "nbody", nbody)
+}
+
+fn first_script(tag: Str) -> Strs ! {} {
+    let a = strs_new();
+    strs_push(a, f"store-{tag}");
+    strs_push(a, "script.txt");
+    a
+}
+
+fn second_script(tag: Str) -> Strs ! {} {
+    let a = strs_new();
+    strs_push(a, f"store-{tag}");
+    strs_push(a, "again.txt");
+    a
+}
+
+fn kvstore(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // A store of each implementation's own, so no run reads another's.
+    hold(every_way(h, d, "kvstore.nz", first_script, "")?, expected(h, "kvstore", "script.expected")?, 0)?;
+    let second = every_way(h, d, "kvstore.nz", second_script, "")?;
+    hold(second, expected(h, "kvstore", "again.expected")?, 0)?;
+    for r in second {
+        let log = read_text(h, f"{d}/store-{r.label}/store.log")?;
+        check_that(log == "S\tcolour\tgreen\nS\tgreeting\thello, world\nS\tcount\t1\n", f"{r.label}: {log}")?;
+        let left = match dir_list(h.io, f"{d}/store-{r.label}") {
+            Result.Ok(value: ns) => ns,
+            Result.Err(error: e) => strs_new(),
+        };
+        check_that(strs_len(left) == 1, f"{r.label}: compaction left {str_join(left, ", ")}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn kvstore_survives_a_reopen_and_a_second_process_and_compacts_atomically(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    on_app(h, "kvstore", kvstore)
+}
+
+fn kvd(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    hold(every_way(h, d, "kvd.nz", no_args, "")?, expected(h, "kvd", "kvd.expected")?, 0)
+}
+
+@test
+fn kvd_serves_concurrent_clients_from_one_owner_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    on_app(h, "kvd", kvd)
+}

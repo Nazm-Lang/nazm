@@ -1,0 +1,116 @@
+// Dead-stripping (R1.5, D14; `docs/architecture.md` §7.114): a hosted executable is linked with
+// `-dead_strip` (Mach-O) or `--gc-sections` over a section per function (ELF), so a standard
+// function the program never calls is not in it. Ported from
+// `crates/nazm-cli/tests/dead_strip.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// Calls one function of `@std/text`, and none of the others.
+fn program() -> Str ! {} {
+    "use \"@std/text\"\n\nfn main() {\n    println(text_starts_with(\"nazm\", \"na\"))\n}\n"
+}
+
+/// `nazm ARGS` in `dir` with no user cache, which must succeed.
+fn nazm_ok(h: Caps, dir: Str, args: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let r = run(h, nazm_bin(h.io), args, dir, env_set(suite_env(h), "NAZM_USER_CACHE_DIR", ""));
+    check_that(r.code == 0, f"nazm {str_join(args, " ")}: {r.stderr}")
+}
+
+/// The symbols an executable defines, as `nm` prints them.
+fn symbols(h: Caps, exe: Str) -> Result[Str, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, exe);
+    let r = run(h, "nm", a, "", env_here(h.io));
+    check_that(r.code == 0, r.stderr)?;
+    Result[Str, Str].Ok(value: r.stdout)
+}
+
+fn unused_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "main.nz", program())?;
+    for backend in words("llvm cranelift") {
+        for opt in words("0 2") {
+            let exe = f"prog-{backend}-{opt}";
+            nazm_ok(h, d, words(f"build --no-cache --backend {backend} --opt-level {opt} main.nz -o {exe}"))?;
+            let path = f"{d}/{exe}";
+            let out = run(h, path, strs_new(), "", env_here(h.io));
+            check_that(out.code == 0, f"{backend} -O{opt}")?;
+            check_that(text_starts_with(out.stdout, "true\n"), f"{backend} -O{opt}")?;
+            let defined = symbols(h, path)?;
+            // `@std/text`'s `text_repeat`, which nothing calls, by its symbol's spelling.
+            check_that(!text_contains(defined, "text_5Frepeat"), f"{backend} -O{opt}: an unused standard function was linked in")?;
+            if opt == "0" && backend == "llvm" {
+                check_that(text_contains(defined, "text_5Fstarts_5Fwith"), "the function the program calls is gone")?;
+            }
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_unused_standard_function_is_left_out_and_the_program_still_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = unused_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// The words after `name ` on the first line of `listing` that starts so.
+fn field(listing: Str, name: Str) -> Strs ! {} {
+    let key = f"{name} ";
+    for l in text_lines(listing) {
+        if text_starts_with(l, key) {
+            return words(text_replace(str_slice(l, str_len(key), str_len(l)), "\t", " "));
+        }
+    }
+    strs_new()
+}
+
+fn size_of(h: Caps, path: Str) -> Result[Int, Str] ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => Result[Int, Str].Ok(value: m.size),
+        Result.Err(error: e) => Result[Int, Str].Err(error: f"{path}: size"),
+    }
+}
+
+fn whole_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // The same objects, from `--objects`, linked as `link.txt` says without stripping: the build's
+    // own executable is smaller, and only the whole link holds the unused function.
+    scratch_write(h, d, "main.nz", program())?;
+    nazm_ok(h, d, words("build --no-cache main.nz -o stripped"))?;
+    nazm_ok(h, d, words("build --no-cache main.nz --objects objects"))?;
+    let listing = read_text(h, f"{d}/objects/link.txt")?;
+    let whole = f"{d}/whole";
+    let a = strs_new();
+    strs_push(a, "-o");
+    strs_push(a, whole);
+    for o in field(listing, "objects") {
+        strs_push(a, f"{d}/objects/{o}");
+    }
+    for l in field(listing, "libraries") {
+        strs_push(a, l);
+    }
+    let c = run(h, "clang", a, "", env_here(h.io));
+    check_that(c.code == 0, c.stderr)?;
+    check_that(run(h, whole, strs_new(), "", env_here(h.io)).code == 0, "the whole link does not run")?;
+    let stripped = f"{d}/stripped";
+    let s = size_of(h, stripped)?;
+    let w = size_of(h, whole)?;
+    check_that(s < w, f"dead-stripping saved nothing: {s} against {w} bytes")?;
+    check_that(text_contains(symbols(h, whole)?, "text_5Frepeat"), "the whole link lacks text_repeat")?;
+    check_that(!text_contains(symbols(h, stripped)?, "text_5Frepeat"), "the stripped build holds text_repeat")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_dead_stripped_executable_is_smaller_than_the_same_objects_linked_whole(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = whole_cases(h, d);
+    scratch_remove(h, d);
+    r
+}

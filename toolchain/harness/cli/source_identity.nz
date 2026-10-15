@@ -1,0 +1,123 @@
+// A diagnostic names the file it is about, and an edit lands in that file. Ported from
+// `crates/nazm-cli/tests/source_identity.rs` (R7).
+//
+// A span carries the file it is in, so these hold by construction; they are asserted through the
+// binary, because the question is what a caller sees.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/strings.nz"
+
+/// A fresh directory holding the files `files` lists as `name|text|name|text…` — no program
+/// here holds a `|`.
+fn tree(h: Caps, files: Str) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let parts = text_split(files, "|");
+    let mut i = 0;
+    while i + 1 < strs_len(parts) {
+        scratch_write(h, d, strs_get(parts, i), strs_get(parts, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn in_tree(h: Caps, files: Str, body: fn(Caps, Str) -> Result[Int, Str] ! { io, spawn }) -> Result[Int, Str] ! { io, spawn } {
+    let d = tree(h, files)?;
+    let r = body(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn root_names_root(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("check main.nz"));
+    check_that(r.code == 1, r.stderr)?;
+    check_that(text_contains(r.stderr, "N0200"), r.stderr)?;
+    check_that(text_contains(r.stderr, "main.nz:1:20"), f"the root's own name and position: {r.stderr}")
+}
+
+@test
+fn a_diagnostic_in_the_root_names_the_root(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, "main.nz|fn main() -> Int { nope }\n", root_names_root)
+}
+
+fn imported_names_import(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("check main.nz"));
+    check_that(r.code == 1, r.stderr)?;
+    check_that(text_contains(r.stderr, "N0200"), r.stderr)?;
+    check_that(text_contains(r.stderr, "helper.nz:1:20"), f"the imported file, at its own line 1: {r.stderr}")?;
+    check_that(!text_contains(r.stderr, "main.nz:1:20"), f"the error is not in the root: {r.stderr}")
+}
+
+@test
+fn a_diagnostic_in_an_imported_file_names_that_file(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, "main.nz|use \"helper.nz\";\nfn main() -> Int { help() }\n|helper.nz|fn help() -> Int { missing }\n", imported_names_import)
+}
+
+fn same_text(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("check main.nz"));
+    check_that(r.code == 1, r.stderr)?;
+    check_that(text_contains(r.stderr, "b.nz:1:19"), r.stderr)?;
+    check_that(!text_contains(r.stderr, "a.nz:1:19"), r.stderr)
+}
+
+@test
+fn two_files_with_the_same_text_are_not_confused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, "main.nz|use \"a.nz\";\nuse \"b.nz\";\nfn main() -> Int { one() + two() }\n|a.nz|fn one() -> Int { 1 }\n|b.nz|fn two() -> Int { oops }\n", same_text)
+}
+
+fn diamond(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.code == 0, r.stderr)?;
+    check_that(text_trim(r.stdout) == "42", r.stdout)
+}
+
+@test
+fn a_diamond_import_yields_one_file_not_two(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, "main.nz|use \"left.nz\";\nuse \"right.nz\";\nfn main() -> Int { l() + r() }\n|left.nz|use \"shared.nz\";\npub fn l() -> Int { s() }\n|right.nz|use \"shared.nz\";\npub fn r() -> Int { s() }\n|shared.nz|pub fn s() -> Int { 21 }\n", diamond)
+}
+
+fn bump_files() -> Str ! {} {
+    "main.nz|use \"helper.nz\";\nfn main() -> Int { bump() }\n|helper.nz|pub fn bump() -> Int {\n    let n = 1;\n    n = 2;\n    n\n}\n"
+}
+
+fn fix_range(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("fix --json main.nz"));
+    check_that(r.code == 1, f"assigning to an immutable binding: {r.stderr}")?;
+    check_that(text_contains(r.stdout, "helper.nz"), f"the edit names the file it belongs to: {r.stdout}")?;
+    // The range is local to that file, not offset by the length of `main.nz`.
+    let helper = read_text(h, f"{d}/helper.nz")?;
+    let at = find(helper, "n = 1");
+    check_that(at >= 0, "the binding")?;
+    check_that(text_contains(r.stdout, f"\"start\":{at}"), f"expected a local offset {at} in {r.stdout}")
+}
+
+@test
+fn a_fix_addresses_a_byte_range_in_the_file_it_belongs_to(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, bump_files(), fix_range)
+}
+
+fn fix_apply(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let before = read_text(h, f"{d}/main.nz")?;
+    let r = nazm(h, d, words("fix --apply main.nz"));
+    let after = read_text(h, f"{d}/main.nz")?;
+    check_that(before == after, f"the root was edited: {r.stderr}")?;
+    let helper = read_text(h, f"{d}/helper.nz")?;
+    check_that(text_contains(helper, "let mut n = 1;"), f"the imported file got the edit: {helper}")?;
+    // And the program now checks.
+    let c = nazm(h, d, words("check main.nz"));
+    check_that(c.code == 0, c.stderr)
+}
+
+@test
+fn applying_that_fix_edits_the_imported_file_and_leaves_the_root_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    in_tree(h, bump_files(), fix_apply)
+}
