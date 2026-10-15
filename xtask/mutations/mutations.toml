@@ -8341,10 +8341,11 @@ Repointed by R1.5 (D5), which moved it to 80: an entry that refused `{"a": 1}` m
 Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.json` must not be reused.
 Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused.
 Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused.
-Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused."""
+Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused.
+Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 84;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 83;"
+find = "pub const SEMANTIC_EPOCH: u32 = 85;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 84;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19592,3 +19593,43 @@ file = "crates/nazm-core/src/check/operators.rs"
 find = "                        codes::ARRAY_TOO_LARGE,\n                        span,\n                        \"an empty list needs its element type written\","
 replace = "                        codes::TYPE_MISMATCH,\n                        span,\n                        \"an empty list needs its element type written\","
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not" }]
+
+[[mutation]]
+name = "r1-5-the-prelude-imports-nothing"
+why = "a program module that names `split`, `hashmap_new` or `top` with no `use` is not given the standard module that has it (D9)"
+file = "crates/nazm-service/src/load.rs"
+find = "            prelude_named(&text, &program, &written)"
+replace = "            { let _ = prelude_named(&text, &program, &written); Vec::new() }"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::the_prelude_imports_the_standard_modules_a_program_names_everywhere" }]
+
+[[mutation]]
+name = "r1-5-the-prelude-imports-into-every-module"
+why = "every program module is given all the prelude's standard modules, named or not, so a restriction profile refuses a program for modules it never uses (D9)"
+file = "crates/nazm-service/src/load.rs"
+find = "        let named = written.contains(&entry.name)"
+replace = "        let named = true || written.contains(&entry.name)"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_module_that_names_none_of_them_imports_none" }]
+
+[[mutation]]
+name = "r1-5-a-package-module-gets-the-prelude"
+why = "a dependency's module is given the prelude's standard modules too, so what a package reaches is no longer written in it (D9)"
+file = "crates/nazm-service/src/load.rs"
+find = "if standard.is_none() && logical.as_ref().is_some_and(ModuleKey::is_program) {"
+replace = "if standard.is_none() && logical.is_some() {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_package_s_module_imports_only_what_it_writes" }]
+
+[[mutation]]
+name = "r1-5-a-prelude-name-collides-with-the-module-s-own"
+why = "a prelude module's function collides with the module's own of the name instead of yielding to it (D9)"
+file = "crates/nazm-core/src/check/unit.rs"
+find = "            if d.implicit\n                && (res.definition(unit.module, &e.name).is_some()"
+replace = "            if d.implicit\n                && false && (res.definition(unit.module, &e.name).is_some()"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_module_s_own_name_hides_the_prelude_s_and_a_written_use_does_not" }]
+
+[[mutation]]
+name = "r1-5-top-breaks-a-tie-by-the-larger-key"
+why = "`m.top(n)` orders entries of equal value by key descending, not ascending (D10)"
+file = "library/std/hashmap.nz"
+find = "    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) < 0)"
+replace = "    c > 0 || (c == 0 && vec_get(m.keys, a).compare(vec_get(m.keys, b)) > 0)"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::the_prelude_imports_the_standard_modules_a_program_names_everywhere" }]

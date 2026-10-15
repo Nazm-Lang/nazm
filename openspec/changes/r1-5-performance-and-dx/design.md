@@ -87,10 +87,24 @@ as R1 does.
 **D9 — the prelude imports common modules (4.2).** `@std/hash`, `@std/hashmap` (as `Map`) and
 `@std/text` are imported into every module of a program; a module's own declaration of a name hides
 the prelude's, as built-ins already are. `@std/json` and the rest are still imported by `use`.
+Settled in the code (2026-10-15, epoch 85): `@std/ordmap` (for `Ord`, which D10's `top` needs) and
+`@std/sort` (for `sort_by`) join them; and a module is given **only the ones it names** — an item by
+name, `Map`, a function the parser wrote for a form (a map literal's `hashmap_single`), or a method
+`x.m(…)` that one of their `<prefix>_m` functions answers and no built-in does — with the prelude
+modules those import. Importing all five everywhere was measured to make `--profile embedded` refuse
+an empty program (a profile holds a program to everything it imports, used or not), so naming is
+what attaches them; a program naming none sees exactly what it saw. A prelude name yields silently
+to the module's own and to a written import's. Only the program's own modules (as D8 defines them)
+get them: a package's imports stay written, so what a dependency reaches is in its text.
 
 **D10 — `top(n)` and `sort_by(key)` on maps (4.3).** `m.top(n)` is the `n` entries with the largest
 values, ties by key ascending — the word-frequency program's ten lines in one call; `m.sort_by(f)` is
 the entries ordered by `f(key, value)`. Both return a `List[(K, V)]`.
+Settled in the code: `hashmap_top[K: Ord, V: Ord]` in `@std/hashmap` keeps the best `n` seen so far
+(no function value, so a profile that refuses those does not refuse the map module), and
+`hashmap_sort_by(m, less)` in `@std/sort` takes `less` over `(key, value)` tuples, as
+`vec_sort_by` takes it over elements — a key function would need an ordering bound on its result,
+which the language does not have yet (*Ordering and hashing are derived*).
 
 ### Performance (sections 1–3, 4.1)
 

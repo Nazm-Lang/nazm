@@ -69,6 +69,9 @@ pub struct Dependency {
     pub aliases: Vec<(String, Span)>,
     /// What a `pub use` of it re-exports (N103), or `None` where no `use` of it is `pub`.
     pub reexport: Option<ReexportSpec>,
+    /// Whether the prelude imported it (R1.5, D9): no `use` names it, so a name it brings in
+    /// yields to the module's own and to every written import's, silently.
+    pub implicit: bool,
 }
 
 /// What a module re-exports of one it imports (N103): every export, or the names chosen, each
@@ -333,6 +336,7 @@ impl ModuleGraph {
                 Some(d) => {
                     d.plain |= plain;
                     d.aliases.extend(alias);
+                    d.implicit = false;
                 }
                 None => m.imports.push(Dependency {
                     on: to,
@@ -340,7 +344,28 @@ impl ModuleGraph {
                     plain,
                     aliases: alias.into_iter().collect(),
                     reexport: None,
+                    implicit: false,
                 }),
+            }
+        }
+    }
+
+    /// Record that the prelude imports `to` into `from` (R1.5, D9): a plain import no `use`
+    /// wrote, made after the written ones so it is met last, and only where none names `to`.
+    pub fn import_implicit(&mut self, from: ModuleId, to: ModuleId) {
+        if from == to {
+            return;
+        }
+        if let Some(m) = self.modules.get_mut(from.index()) {
+            if m.imports.iter().all(|d| d.on != to) {
+                m.imports.push(Dependency {
+                    on: to,
+                    at: Span::synthetic(),
+                    plain: true,
+                    aliases: Vec::new(),
+                    reexport: None,
+                    implicit: true,
+                });
             }
         }
     }

@@ -228,6 +228,7 @@
 @std/hashmap pub fn hashmap_remove[K: Hash, V](m: HashMap[K, V], key: K) -> Option[V] ! {}
 @std/hashmap pub fn hashmap_keys[K: Hash, V](m: HashMap[K, V]) -> Vec[K] ! {}
 @std/hashmap pub fn hashmap_values[K: Hash, V](m: HashMap[K, V]) -> Vec[V] ! {}
+@std/hashmap pub fn hashmap_top[K: Ord, V: Ord](m: HashMap[K, V], n: Int) -> Vec[(K, V)] ! {}
 @std/hashset pub struct HashSet[K]
 @std/hashset pub fn hashset_new[K: Hash]() -> HashSet[K] ! {}
 @std/hashset pub fn hashset_with_seed[K: Hash](seed: UInt64) -> HashSet[K] ! {}
@@ -449,6 +450,7 @@
 @std/show pub trait Show
 @std/show pub fn show_all[T: Show](v: Vec[T], sep: Str) -> Str ! {}
 @std/sort pub fn vec_sort_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Vec[T] ! { E }
+@std/sort pub fn hashmap_sort_by[K: Hash, V, effects E](m: HashMap[K, V], less: fn((K, V), (K, V)) -> Bool ! { E }) -> Vec[(K, V)] ! { E }
 @std/sort pub fn ints_sort(xs: Ints) -> Ints ! {}
 @std/sort pub fn strs_sort(xs: Strs) -> Strs ! {}
 @std/sort pub fn vec_sort_in_place_by[T, effects E](xs: Vec[T], less: fn(T, T) -> Bool ! { E }) -> Int ! { E }

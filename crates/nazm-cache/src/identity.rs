@@ -382,7 +382,10 @@ use crate::digest::{self, Framed};
 /// `84` — R1.5, 2026-10-15. `[1, 2, 3]` where no `[T; n]` is expected became a list, `Vec[T]`, rather
 /// than a fixed array (D6): a program that copied such a value and wrote either copy changed
 /// meaning, and an empty `[]` with no type to take moved to refused (`N0618`).
-pub const SEMANTIC_EPOCH: u32 = 84;
+/// `85` — R1.5, 2026-10-15. The prelude imports `@std/hash`, `@std/hashmap`, `@std/ordmap`,
+/// `@std/sort` and `@std/text` into a program module that names one of their items (D9): a call of
+/// `text_split` or `s.split(…)` with no `use` moved from refused (`N0201`, `N0605`) to accepted.
+pub const SEMANTIC_EPOCH: u32 = 85;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.
