@@ -1,0 +1,298 @@
+// N12: the core prelude as a module, and `Result` across module, interface and cache boundaries.
+// Ported from `crates/nazm-cli/tests/prelude.rs` (R7).
+//
+// Three Rust tests check a module against deserialised interfaces with the checker as a library,
+// or hash fixtures of the prelude's source, and stay Rust (`tests/stays-rust.txt`). Where
+// `writing_a_match_as_a_question_mark_moves_no_interface` hashes B's interface with
+// `InterfaceHash::of`, the port reads the hash the binary stored for B (`interface_hash` in B's
+// check entry), before and after.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The stored check entry whose own module is `key`, or `""`.
+fn entry_for(h: Caps, dir: Str, key: Str) -> Str ! { io } {
+    let wanted = f"\"module\":\"{key}\",\"source\"";
+    let all = match file_walk(h.io, f"{dir}/.nazm/check") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for p in all {
+        match read_text(h, p) {
+            Result.Ok(value: text) => {
+                if text_contains(text, wanted) {
+                    return text;
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    ""
+}
+
+/// `nazm check` with a cache report: `accepted checked reused`, and the codes raised after a `|`.
+fn check(h: Caps, dir: Str, file: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = nazm(h, dir, words(f"check {file} --cache-report --json"));
+    let mut report = "";
+    for l in text_lines(out.stdout) {
+        if report == "" && text_contains(l, "nazm.check-report/1") {
+            report = l;
+        }
+    }
+    check_that(report != "", "a cache report")?;
+    let r = jparse(report)?;
+    let codes = strs_new();
+    for l in text_lines(out.stderr) {
+        match jparse(l) {
+            Result.Ok(value: d) => {
+                if jstr(d, "code") != "" {
+                    strs_push(codes, jstr(d, "code"));
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    Result[Str, Str].Ok(value: f"{out.code == 0} {jint(r, "checked")} {jint(r, "reused")}|{str_join(codes, ",")}")
+}
+
+fn interface_of(h: Caps, dir: Str, file: Str) -> Result[Str, Str] ! { io, spawn } {
+    let out = nazm(h, dir, words(f"interface {file}"));
+    check_that(out.code == 0, f"nazm interface refused {file}: {out.stderr}")?;
+    Result[Str, Str].Ok(value: text_trim(out.stdout))
+}
+
+/// `compiled reused instances-compiled instances-reused` from a build report.
+fn build(h: Caps, dir: Str, root: Str) -> Result[Ints, Str] ! { io, spawn } {
+    let out = nazm(h, dir, words(f"build {root} -o prog --build-report"));
+    check_that(out.code == 0, f"build failed: {out.stderr}")?;
+    for l in text_lines(out.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            let v = jparse(l)?;
+            let n = ints_new();
+            ints_push(n, jint(v, "native/compiled"));
+            ints_push(n, jint(v, "native/reused"));
+            ints_push(n, jint(v, "native/instances/compiled"));
+            ints_push(n, jint(v, "native/instances/reused"));
+            return Result[Ints, Str].Ok(value: n);
+        }
+    }
+    Result[Ints, Str].Err(error: "a build report")
+}
+
+@test
+fn the_prelude_is_the_same_bytes_in_every_project_from_every_directory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two unrelated projects, in two directories, with different entry points, checked from
+    // different working directories. The prelude's stored entry is one file's worth of bytes in
+    // both, and names neither directory.
+    let parent = scratch_new(h);
+    let one = f"{parent}/one";
+    let two = f"{parent}/two";
+    scratch_write(h, one, "nazm.root", "")?;
+    scratch_write(h, one, "main.nz", "fn main() -> Int { 1 }\n")?;
+    scratch_write(h, two, "nazm.root", "")?;
+    scratch_write(h, two, "deep/app.nz", "fn f() -> Result[Int, Str] { Result[Int, Str].Ok(value: 2) }\nfn main() -> Int { 0 }\n")?;
+    let c = check(h, one, "main.nz")?;
+    check_that(text_starts_with(c, "true "), c)?;
+    // From the parent of the project, naming the file by a longer path.
+    let a = strs_new();
+    strs_push(a, "check");
+    strs_push(a, f"{two}/deep/app.nz");
+    let out = nazm(h, parent, a);
+    check_that(out.code == 0, out.stderr)?;
+    let ea = entry_for(h, one, "@core/prelude");
+    let eb = entry_for(h, two, "@core/prelude");
+    scratch_remove(h, parent);
+    check_that(ea != "", "the prelude's entry, project one")?;
+    check_that(eb != "", "the prelude's entry, project two")?;
+    check_that(ea == eb, "the prelude is not the same module in two projects")?;
+    check_that(!text_contains(ea, one) && !text_contains(ea, two) && !text_contains(ea, parent), f"the entry names a directory: {ea}")?;
+    check_that(text_contains(ea, "\"dependencies\":[]"), f"the prelude imports nothing: {ea}")
+}
+
+@test
+fn a_project_file_under_a_directory_named_core_is_not_the_prelude(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `@core` is the toolchain's. A project file that happens to sit under a directory of that
+    // name compiles, has no durable identity, and is never mistaken for the prelude.
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "@core/prelude.nz", "pub fn v() -> Int { 3 }\n")?;
+    scratch_write(h, dir, "main.nz", "use \"@core/prelude.nz\";\nfn main() -> Int { v() }\n")?;
+    let c = check(h, dir, "main.nz")?;
+    check_that(text_starts_with(c, "true "), c)?;
+    let out = nazm(h, dir, words("run --interpret main.nz"));
+    scratch_remove(h, dir);
+    check_that(text_trim(out.stdout) == "3", ran_show(out))
+}
+
+const B: Str = "pub struct ParseError {\n    at: Int,\n}\npub fn parse(s: Str) -> Result[Int, ParseError] {\n    let mut i = 0;\n    let mut n = 0;\n    while i < str_len(s) {\n        let d = str_byte(s, i) - 48;\n        if d < 0 {\n            return Result[Int, ParseError].Err(error: ParseError(at: i));\n        }\n        if d > 9 {\n            return Result[Int, ParseError].Err(error: ParseError(at: i));\n        }\n        n = n * 10 + d;\n        i = i + 1;\n    }\n    Result[Int, ParseError].Ok(value: n)\n}\n";
+
+const A: Str = "use \"b.nz\";\nfn sum(x: Str, y: Str) -> Result[Int, ParseError] {\n    Result[Int, ParseError].Ok(value: parse(x)? + parse(y)?)\n}\nfn main() -> Int {\n    let good = match sum(\"40\", \"2\") {\n        Result.Ok(value: n) => n,\n        Result.Err(error: e) => 0 - 1,\n    };\n    let bad = match sum(\"4\", \"x2\") {\n        Result.Ok(value: n) => 0 - 1,\n        Result.Err(error: e) => e.at,\n    };\n    good * 10 + bad\n}\n";
+
+fn a_and_b(h: Caps, b: Str) -> Result[Str, Str] ! { io } {
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "a.nz", A)?;
+    scratch_write(h, dir, "b.nz", b)?;
+    Result[Str, Str].Ok(value: dir)
+}
+
+@test
+fn a_dependency_s_result_propagates_in_its_importer(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = a_and_b(h, B)?;
+    let interpreted = nazm(h, dir, words("run --interpret a.nz"));
+    check_that(text_trim(interpreted.stdout) == "420", ran_show(interpreted))?;
+    build(h, dir, "a.nz")?;
+    let native = run(h, f"{dir}/prog", strs_new(), dir, suite_env(h));
+    scratch_remove(h, dir);
+    check_that(text_trim(native.stdout) == "420", ran_show(native))
+}
+
+@test
+fn every_module_s_check_entry_depends_on_the_prelude_s_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // §11: the implicit import is a dependency like any other, so a module's stored entry names
+    // the prelude's key and the exact interface hash it was checked against.
+    let dir = a_and_b(h, B)?;
+    let c = check(h, dir, "a.nz")?;
+    check_that(text_starts_with(c, "true "), c)?;
+    let core = entry_for(h, dir, "@core/prelude");
+    check_that(core != "", "the prelude's entry")?;
+    let hash = jstr(jparse(core)?, "interface_hash");
+    check_that(hash != "", "a hash")?;
+    for module in words("a.nz b.nz") {
+        let entry = entry_for(h, dir, module);
+        check_that(entry != "", "an entry")?;
+        let wanted = f"{{\"module\":\"@core/prelude\",\"interface\":\"{hash}\"}}";
+        check_that(text_contains(entry, wanted), f"{module}'s entry does not depend on the prelude's interface: {entry}")?;
+    }
+    scratch_remove(h, dir);
+    ok()
+}
+
+const B_BY_MATCH: Str = "pub struct ParseError {\n    at: Int,\n}\nfn digit(s: Str, i: Int) -> Result[Int, ParseError] {\n    let d = str_byte(s, i) - 48;\n    if d < 0 { return Result[Int, ParseError].Err(error: ParseError(at: i)); }\n    if d > 9 { return Result[Int, ParseError].Err(error: ParseError(at: i)); }\n    Result[Int, ParseError].Ok(value: d)\n}\npub fn parse(s: Str) -> Result[Int, ParseError] {\n    let mut i = 0;\n    let mut n = 0;\n    while i < str_len(s) {\n        let d = match digit(s, i) {\n            Result.Ok(value: d) => d,\n            Result.Err(error: e) => if true { return Result[Int, ParseError].Err(error: e); } else { return Result[Int, ParseError].Err(error: e); },\n        };\n        n = n * 10 + d;\n        i = i + 1;\n    }\n    Result[Int, ParseError].Ok(value: n)\n}\n";
+
+fn b_by_question() -> Str ! {} {
+    text_replace(B_BY_MATCH, "let d = match digit(s, i) {\n            Result.Ok(value: d) => d,\n            Result.Err(error: e) => if true { return Result[Int, ParseError].Err(error: e); } else { return Result[Int, ParseError].Err(error: e); },\n        };", "let d = digit(s, i)?;")
+}
+
+/// The interface hash of every stored check entry of B's (one per source B has been checked as),
+/// sorted.
+fn b_hashes(h: Caps, dir: Str) -> Result[Strs, Str] ! { io } {
+    let wanted = "\"module\":\"b.nz\",\"source\"";
+    let out = strs_new();
+    let all = match file_walk(h.io, f"{dir}/.nazm/check") { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for p in all {
+        match read_text(h, p) {
+            Result.Ok(value: text) => {
+                if text_contains(text, wanted) {
+                    let hash = jstr(jparse(text)?, "interface_hash");
+                    check_that(hash != "", f"no interface_hash: {text}")?;
+                    strs_push(out, hash);
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+@test
+fn writing_a_match_as_a_question_mark_moves_no_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // §59 and §103. B's body changes from an explicit `match` to `?`: B is checked again and
+    // recompiled, its interface hash does not move, and so A is neither.
+    let dir = a_and_b(h, B_BY_MATCH)?;
+    let before = interface_of(h, dir, "b.nz")?;
+    let c1 = check(h, dir, "a.nz")?;
+    check_that(text_starts_with(c1, "true 3 0|"), c1)?;
+    let first = b_hashes(h, dir)?;
+    check_that(strs_len(first) == 1, str_join(first, ", "))?;
+    let before_hash = strs_get(first, 0);
+    let cold = build(h, dir, "a.nz")?;
+    check_that(ints_get(cold, 0) > 0, "a cold build compiled nothing")?;
+    let edited = b_by_question();
+    check_that(edited != B_BY_MATCH, "the body was not rewritten")?;
+    scratch_write(h, dir, "b.nz", edited)?;
+    let after = interface_of(h, dir, "b.nz")?;
+    check_that(before == after, "a body edit moved B's interface")?;
+    // B alone is checked; A and the prelude are reused.
+    let c2 = check(h, dir, "a.nz")?;
+    check_that(text_starts_with(c2, "true 1 2|"), c2)?;
+    // B's second entry, for its new source, records the hash its first did.
+    let both = b_hashes(h, dir)?;
+    check_that(strs_len(both) == 2, str_join(both, ", "))?;
+    for x in both {
+        check_that(x == before_hash, "a body edit moved B's interface hash")?;
+    }
+    // B's object misses — its IR changed — and A's is reused.
+    let warm = build(h, dir, "a.nz")?;
+    check_that(ints_get(warm, 0) == 1, "only B's unit should be recompiled")?;
+    check_that(ints_get(warm, 1) >= 1, "A's object should be reused")?;
+    let native = run(h, f"{dir}/prog", strs_new(), dir, suite_env(h));
+    scratch_remove(h, dir);
+    check_that(text_trim(native.stdout) == "420", ran_show(native))
+}
+
+@test
+fn changing_an_exported_error_type_reaches_the_importer_and_its_question_marks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // §104. `parse` now fails with `BadInput`: B's interface moves, A is checked again, and A's
+    // `?` inside a `Result[Int, ParseError]` function is refused.
+    let dir = a_and_b(h, B)?;
+    let before = interface_of(h, dir, "b.nz")?;
+    let c = check(h, dir, "a.nz")?;
+    check_that(text_starts_with(c, "true "), c)?;
+    let changed = f"pub struct BadInput {{\n    at: Int,\n}}\n{text_replace(text_replace(text_replace(B, "pub fn parse(s: Str) -> Result[Int, ParseError]", "pub fn parse(s: Str) -> Result[Int, BadInput]"), "return Result[Int, ParseError].Err(error: ParseError(at: i));", "return Result[Int, BadInput].Err(error: BadInput(at: i));"), "Result[Int, ParseError].Ok(value: n)", "Result[Int, BadInput].Ok(value: n)")}";
+    scratch_write(h, dir, "b.nz", changed)?;
+    check_that(before != interface_of(h, dir, "b.nz")?, "B's interface did not move")?;
+    let r = check(h, dir, "a.nz")?;
+    scratch_remove(h, dir);
+    // A and B checked, the prelude reused; both `?` sites.
+    check_that(r == "false 2 1|N0362,N0362", r)
+}
+
+@test
+fn the_prelude_has_no_native_unit_of_its_own(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // §100. It declares two enums and no function, so there is nothing to compile. Two project
+    // modules, the runtime and the entry are the whole build.
+    let dir = a_and_b(h, B)?;
+    let out = nazm(h, dir, words("build a.nz -o prog --build-report --emit-ir"));
+    check_that(out.code == 0, out.stderr)?;
+    let mut line = "";
+    for l in text_lines(out.stdout) {
+        if line == "" && text_contains(l, "nazm.build-report/1") {
+            line = l;
+        }
+    }
+    let v = jparse(line)?;
+    check_that(jint(v, "native/units") == 4, jv(v, ""))?;
+    let names = match dir_list(h.io, dir) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), };
+    for n in names {
+        if text_ends_with(n, ".ll") {
+            let ir = read_text(h, f"{dir}/{n}")?;
+            check_that(!text_contains(ir, "source_filename = \"@core/prelude\""), f"{n} is a unit for the prelude")?;
+        }
+    }
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn a_warm_build_of_a_result_heavy_program_compiles_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // §102: modules and generic instances alike, including instances whose bodies use `?`.
+    let dir = a_and_b(h, B)?;
+    scratch_write(h, dir, "a.nz", f"{A}\nfn pass[T, E](r: Result[T, E]) -> Result[T, E] {{\n    let v = r?;\n    Result[T, E].Ok(value: v)\n}}\nfn more() -> Int {{\n    match pass(parse(\"12\")) {{ Result.Ok(value: n) => n, Result.Err(error: e) => 0, }}\n        + match pass(Result[Str, Int].Err(error: 3)) {{ Result.Ok(value: s) => 0, Result.Err(error: n) => n, }}\n}}\n")?;
+    let cold = build(h, dir, "a.nz")?;
+    check_that(ints_get(cold, 0) >= 2 && ints_get(cold, 2) >= 2, f"{ints_get(cold, 0)} {ints_get(cold, 2)}")?;
+    let warm = build(h, dir, "a.nz")?;
+    scratch_remove(h, dir);
+    check_that(ints_get(warm, 0) == 0 && ints_get(warm, 2) == 0, "a warm build ran the object compiler")
+}
