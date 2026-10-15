@@ -1,0 +1,115 @@
+// Gate 2: process and environment (`docs/general-purpose.md` §12, the spec's *Process and
+// environment*). Ported from `crates/nazm-cli/tests/process.rs` (R7).
+//
+// What only a whole run shows: that `@std/process` runs a program with input, collecting its
+// output, errors and status — a signal's ending as 256 and the signal — even when both streams
+// carry more than a pipe holds; that a missing program is `NotFound`; that a task reading a
+// child's pipe parks on the pool; that the environment and standard input read alike; and that
+// running a program needs a `ProcessCap` and may not be chosen by what a file says.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// `prog.nz` under the interpreter and built by each backend, run with `env` and `input` on
+/// standard input: each implementation's label and run.
+fn everywhere_with(h: Caps, src: Str, env: Strs, input: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: run_input(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env, input)));
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --no-cache --backend {backend} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        if b.code != 0 {
+            scratch_remove(h, d);
+            return Result[Vec[Labeled], Str].Err(error: b.stderr);
+        }
+        let sh = strs_new();
+        strs_push(sh, "-c");
+        strs_push(sh, bounded_script());
+        strs_push(sh, exe);
+        vec_push(out, Labeled(label: backend, ran: run_input(h, "sh", sh, d, env, input)));
+    }
+    scratch_remove(h, d);
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn run_program() -> Str ! {} {
+    "use \"@std/ioerror\";\nuse \"@std/process\";\nfn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\nfn args(a: Str, b: Str) -> Strs { let x = strs_new(); strs_push(x, a); strs_push(x, b); x }\nfn run(p: ProcessCap, s: SpawnCap, out: OutCap, script: Str, input: Str) -> Int ! { io, spawn } {\nmatch process_run(p, s, \"sh\", args(\"-c\", script), bytes_from_str(input)) {\nResult.Ok(value: r) => {\nline(out, int_to_str(r.status));\nline(out, if str_len(r.stdout) > 40 { int_to_str(str_len(r.stdout)) } else { r.stdout });\nline(out, if str_len(r.stderr) > 40 { int_to_str(str_len(r.stderr)) } else { r.stderr });\n},\nResult.Err(error: e) => { line(out, io_kind_name(e.kind)); },\n};\n0\n}\nfn main(p: ProcessCap, s: SpawnCap, out: OutCap) -> Int {\nrun(p, s, out, \"cat; echo oops >&2; exit 3\", \"hello child|\");\nrun(p, s, out, \"head -c 300000 /dev/zero; head -c 200000 /dev/zero >&2\", \"\");\nrun(p, s, out, \"kill -9 $$\", \"\");\nmatch process_spawn(p, \"no-such-program-nazm\", strs_new()) {\nResult.Ok(value: c) => { line(out, \"started\"); },\nResult.Err(error: e) => { line(out, io_kind_name(e.kind)); },\n};\n0\n}\n"
+}
+
+@test
+fn a_program_runs_with_input_and_its_output_errors_and_status_come_back_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // How a pipe splits 300 KB into reads is the system's timing, so the buffers a run allocates
+    // vary; what the program says and how it ends are compared.
+    for r in everywhere_one(h, run_program())? {
+        check_that(r.ran.code == 0, f"{r.label}: {r.ran.stderr}")?;
+        check_that(text_trim_end(r.ran.stdout) == "3\nhello child|\noops\n\n0\n300000\n200000\n265\n\n\nNotFound\n0", f"{r.label}: {r.ran.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_environment_and_standard_input_read_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "use \"@std/ioerror\";\nuse \"@std/io\";\nuse \"@std/env\";\nfn line(out: OutCap, s: Str) -> Int { print(str_concat(s, \"\\n\")) }\nfn main(io: IoCap) -> Int {\nline(io, match env_get(io, \"NAZM_TEST_VALUE\") { Option.Some(value: v) => v, Option.None() => \"unset\" });\nline(io, match env_get(io, \"NAZM_SURELY_UNSET\") { Option.Some(value: v) => v, Option.None() => \"unset\" });\nlet vars = env_vars(io);\nlet mut found = 0;\nlet mut i = 0;\nwhile i < strs_len(vars) { if strs_get(vars, i) == \"NAZM_TEST_VALUE=a=b c\" { found = found + 1; } i = i + 1; }\nline(io, int_to_str(found));\nmatch io_stdin_lines(io) {\nResult.Ok(value: lines) => { line(io, str_join(lines, \"|\")); },\nResult.Err(error: e) => { line(io, io_kind_name(e.kind)); },\n};\n0\n}\n";
+    let env = env_set(suite_env(h), "NAZM_TEST_VALUE", "a=b c");
+    for r in everywhere_with(h, src, env, "one\ntwo\nthree")? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_trim_end(r.ran.stdout) == "a=b c\nunset\n1\none|two|three\n0", f"{r.label}: {r.ran.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn pool_program() -> Str ! {} {
+    "use \"@std/ioerror\";\nuse \"@std/file\";\nuse \"@std/process\";\nfn reader(c: OsHandle, done: Chan) -> Int ! { io } {\nlet buf = bytes_new(16);\nlet n = os_read(os_child_pipe(c, 1), buf);\nchan_send(done, 1);\n0\n}\nfn busy(done: Chan) -> Int { let mut i = 0; let mut s = 0; while i < 100000 { s = s + i % 3; i = i + 1; } chan_send(done, 2); 0 }\nfn main(p: ProcessCap, sp: SpawnCap, out: OutCap) -> Int {\nlet a = strs_new();\nstrs_push(a, \"-c\");\nstrs_push(a, \"sleep 0.3; echo done\");\nlet c = os_spawn(\"sh\", a);\nlet done = chan_new(4);\nlet got = ints_new();\nscope {\nspawn reader(c, done);\nspawn busy(done);\nchan_recv(done, got);\nchan_recv(done, got);\n}\nos_wait(c);\nprint(str_concat(int_to_str(ints_get(got, 0)), int_to_str(ints_get(got, 1))));\n0\n}\n"
+}
+
+fn pool_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --no-cache --backend {backend} prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, b.stderr)?;
+        let r = bounded_exe(h, exe, d, env_set(suite_env(h), "NAZM_WORKERS", "1"));
+        check_that(r.code == 0, f"{backend}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == "210", f"{backend}: {r.stdout}")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_task_reading_a_childs_pipe_does_not_hold_its_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", pool_program())?;
+    let r = pool_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn holds(xs: Strs, x: Str) -> Bool ! {} {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+@test
+fn running_a_program_needs_its_own_authority_and_a_file_does_not_choose_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let no_cap = codes(h, "fn main(io: IoCap) -> Int ! { io } { os_status(os_spawn(\"ls\", strs_new())) }\n");
+    check_that(holds(no_cap, "N0369"), str_join(no_cap, ", "))?;
+    let held = codes(h, "fn main(p: ProcessCap) -> Int ! { io } { os_status(os_spawn(\"ls\", strs_new())) }\n");
+    check_that(strs_len(held) == 0, str_join(held, ", "))?;
+    let chosen = codes(h, "fn main(p: ProcessCap, io: IoCap) -> Int ! { io } { os_status(os_spawn(read_file(\"cfg\"), strs_new())) }\n");
+    check_that(holds(chosen, "N0372"), str_join(chosen, ", "))?;
+    let env = codes(h, "fn main() -> Int ! { io } { str_len(os_env_get(\"HOME\")) }\n");
+    check_that(holds(env, "N0369"), str_join(env, ", "))
+}
