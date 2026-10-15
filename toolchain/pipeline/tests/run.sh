@@ -38,6 +38,9 @@ if ! python3 toolchain/pipeline/tests/runtime_text.py --check; then
     echo "pipeline: rtext.nz is not the runtime crate's texts; run tests/runtime_text.py"; exit 2
 fi
 mkdir -p "$OUT/cache"
+# The object cache (task 4.1): the backend identity and configuration this pipeline derives from
+# the probe `nazm build` makes (`probe.sh`), which every object key below is computed with.
+TC=$(bash toolchain/pipeline/tests/probe.sh "$OUT/pipeline" "$OUT")
 if [ $# -gt 0 ]; then
     printf '%s\n' "$@" > "$OUT/inputs"
 else
@@ -92,6 +95,15 @@ one() {
     # heap limit (`units.py`); an input `nazm build` refuses is counted apart.
     rm -f "$o".bin*
     if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
+        # Every unit the build compiled, keyed here from its bytes, must be in the store under
+        # that key, and the entry written again must be the one found, byte for byte.
+        rm -rf "$o.scratch"
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
+            echo "obj agree $(wc -l < "$o.objs" | tr -d ' ')" >> "$r"
+        else
+            echo "obj differ $(grep -v ' hit [0-9a-f]*$' "$o.objs" | head -1 | sed "s|$OUT/cmp/||")" >> "$r"
+        fi
+        rm -rf "$o.scratch"
         if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" runtime "$o.cir" > "$o.rgot" 2> "$o.rerr"; then
             v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
         else
@@ -119,7 +131,7 @@ one() {
     fi
 }
 export -f one
-export NAZM OUT
+export NAZM OUT TC
 tr '\n' '\0' < "$OUT/inputs" | xargs -0 -n 1 -P "$JOBS" bash -c 'one "$0"'
 
 # The summary over a set of inputs (`base` leaves out the front end's test programs).
@@ -144,6 +156,7 @@ summary() {
             else { ostop++; if (verbose && details) print "ops stop: " $1 ": " rest }
         }
         k == "doc" { if (v == "agree") fagree++; else { fdiffer++; if (details) print "lir document differ: " $1 } }
+        k == "obj" { if (v == "agree") { oba++; obu += w[3] } else { obd++; if (details) print "object cache differ: " $1 ": " rest } }
         k == "rt" {
             if (v == "agree") ragree++
             else if (v == "nobuild") rnobuild++
@@ -155,6 +168,7 @@ summary() {
             printf "[%s] lir tables: %d agree, %d differ (%d inputs with MIR but no LIR)\n", label, lagree, ldiffer, lskipped
             printf "[%s] lir ops: %d agree, %d differ (%d stops naming an unported construct, %d different text; the whole document: %d agree, %d differ)\n", label, oagree, ostop + owrong, ostop, owrong, fagree, fdiffer
             printf "[%s] runtime units: %d agree, %d differ (%d inputs with LIR that nazm build refuses)\n", label, ragree, rdiffer, rnobuild
+            printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
         }' "$OUT/results.$label"
 }
 # The details once: with the full set's summary when there is one, else with the base set's.
@@ -164,3 +178,25 @@ if grep -q '^toolchain/frontend-tests/' "$OUT/inputs"; then
 else
     summary base base 1
 fi
+
+# The runtime's digest, which every object key carries, against the one `nazm build` records, and
+# the store's reader against the ways an entry can be broken.
+printf 'fn main(out: OutCap) -> Int {\n    print("x");\n    0\n}\n' > "$OUT/digest.nz"
+NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build "$OUT/digest.nz" -o "$OUT/digest" --provenance "$OUT/digest.json" > /dev/null 2>&1
+want=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"]["digest"])' "$OUT/digest.json")
+got="blake3:$("$OUT/pipeline" runtime-digest)"
+if [ "$want" = "$got" ]; then echo "runtime digest: agree"; else echo "runtime digest: differ ($got, nazm build records $want)"; fi
+entry=$(ls "$OUT"/cache/native/*/*.nzo | head -1)
+"$OUT/pipeline" entry-check "$OUT/cache" "$(basename "$entry" .nzo)" > "$OUT/entry-check"
+if cmp -s "$OUT/entry-check" - <<'EOF'
+whole: accepted
+no header line: not a `nazm.object/1` entry: it has no header line
+not JSON: not a `nazm.object/1` entry: expected a key at byte 1
+another schema: entry schema `nazm.object/2` is not `nazm.object/1`
+a key not in canonical form: `key` is not in canonical form
+a tool not its own: its recorded inputs do not produce the key it is filed under
+an object one byte longer: the object is not the length it claims
+an object byte changed: the object is not the one its digest describes
+asked for another key: it is an entry for something else
+EOF
+then echo "store reader: 9 of 9 cases read as expected (each break refused, by the check Rust makes first)"; else echo "store reader: differs from the expected"; cat "$OUT/entry-check"; fi

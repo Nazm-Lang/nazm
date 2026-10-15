@@ -98,6 +98,11 @@
       units 160 of 160 (base) and 977 of 977 (full) identical to `nazm build --emit-ir`'s, by
       default and with `--stack-size` and `--heap-limit` (25 inputs with LIR `nazm build`
       refuses on the host: board, WebAssembly and C-library programs)
-- [ ] 7.2 The object cache: the object keys of both backends (the runtime digest among their
-      parts) and the store
+- [x] 7.2 The object cache (`objcache.nz`): framed digests, the LLVM object key with the
+      backend identity and configuration derived from the build's `clang -###` probe
+      (`tests/probe.sh`, `pipeline backend`), the runtime digest over every target's units, and
+      the store's entries read, refused and published as Rust's. `run.sh`: 4521 units of 977
+      inputs found under the key computed here, each entry written again byte for byte the one
+      `nazm build` wrote; the runtime digest equal to the one `--provenance` records; 9 of 9
+      broken entries read as expected. The Cranelift key is left to R9, whose own replaces it
 - [ ] 7.3 Debug information

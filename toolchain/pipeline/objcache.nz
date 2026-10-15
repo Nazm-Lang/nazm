@@ -1,0 +1,306 @@
+// The object cache (R3, `rewrite-in-nazm` task 4.1): what an object is a function of, as one
+// number, and the store that keeps objects by it (`crates/nazm-cache`, `object.rs`, `objects.rs`,
+// `digest.rs`). A key is the backend's actual input — the exact LLVM unit — with the backend's
+// identity and the configuration it resolved, the runtime's ABI revision and digest among them;
+// an entry is a JSON header line and the object's bytes, validated whole before it is used, every
+// failure a miss.
+
+use "rtext.nz"
+use "rtgen.nz"
+use "@std/blake3"
+use "@std/json"
+use "@std/text"
+
+// --- framed digests ----------------------------------------------------------------------------
+
+/// One framed field: its length in decimal, `:`, its bytes (`digest::push`).
+fn frame(value: Str) -> Str {
+    int_to_str(str_len(value)) + ":" + value
+}
+
+/// BLAKE3 over a domain and fields, each framed so no boundary can move (`Framed`), as 64
+/// lower-case hexadecimal digits.
+fn framed(domain: Str, fields: Strs) -> Str {
+    let parts = strs_new()
+    strs_push(parts, frame(domain))
+    for f in fields { strs_push(parts, frame(f)) }
+    blake3_hex(bytes_from_str(str_join(parts, "")))
+}
+
+fn one(a: Str) -> Strs {
+    let xs = strs_new()
+    strs_push(xs, a)
+    xs
+}
+
+/// The exact bytes handed to the object compiler (`LlvmInput`).
+pub fn llvm_input(bytes: Str) -> Str ! {} {
+    framed("nazm.llvm-input/1", one(bytes))
+}
+
+/// Which backend produced an object (`BackendIdentity`): the driver and its report about itself.
+pub fn backend_identity(driver: Str, report: Str) -> Str ! {} {
+    let xs = one(driver)
+    strs_push(xs, report)
+    framed("nazm.backend-tool/1", xs)
+}
+
+/// How the backend was told to compile, as it resolved it (`CodegenConfig`): the count, then
+/// each argument.
+pub fn codegen_config(arguments: Strs) -> Str ! {} {
+    let xs = one(int_to_str(strs_len(arguments)))
+    for a in arguments { strs_push(xs, a) }
+    framed("nazm.codegen-config/1", xs)
+}
+
+/// An object's own bytes (`ObjectFingerprint`).
+pub fn object_fingerprint(bytes: Str) -> Str ! {} {
+    framed("nazm.object-bytes/1", one(bytes))
+}
+
+/// The key an object is filed under (`ObjectKey`): its input, tool and configuration.
+pub fn object_key(input: Str, tool: Str, config: Str) -> Str ! {} {
+    let xs = one(input)
+    strs_push(xs, tool)
+    strs_push(xs, config)
+    framed("nazm.object-key/1", xs)
+}
+
+/// The argument every configuration ends with (`runtime_abi`): the runtime's contract, so an
+/// object built against another runtime is another object.
+pub fn runtime_abi() -> Str ! {} {
+    "nazm-runtime-abi=" + int_to_str(rt_abi_revision()) + "+" + runtime_digest()
+}
+
+// --- the runtime's identity ---------------------------------------------------------------------
+
+fn everything() -> Needs {
+    Needs(
+        tasks: true, channels: true, sequences: true, io: true, join: true, strings: true,
+        shims: true, stack: true, closures: true, foreign: true, numbers: true, files: true,
+        net: true, wide: true, single: false,
+    )
+}
+
+/// The runtime as text, hashed (`digest`): its ABI revision as four little-endian bytes, the
+/// whole runtime, the platform entry, the counted heap, every target's switch, `errno`, `os`,
+/// stack and start-up units, and each inventory entry as Rust's `Debug` writes it.
+pub fn runtime_digest() -> Str ! {} {
+    let parts = strs_new()
+    let r = rt_abi_revision()
+    strs_push(parts, str_from_byte(r % 256) + str_from_byte((r / 256) % 256) + str_from_byte((r / 65536) % 256) + str_from_byte(r / 16777216))
+    let all = everything()
+    strs_push(parts, emit_runtime(all))
+    strs_push(parts, emit_entry("@nz_main", 1, all, "", -1))
+    strs_push(parts, emit_heap(1073741824))
+    for t in text_split("aarch64-darwin aarch64-linux x86_64-darwin x86_64-linux x86_64-windows aarch64-android", " ") {
+        strs_push(parts, emit_switch(t))
+        strs_push(parts, emit_errno(t))
+        strs_push(parts, emit_os(t))
+        strs_push(parts, emit_stack(t))
+        strs_push(parts, emit_init(t))
+    }
+    for line in text_lines(rt_inventory_debug()) { strs_push(parts, line) }
+    blake3_hex(bytes_from_str(str_join(parts, "")))
+}
+
+// --- the store ----------------------------------------------------------------------------------
+
+/// An entry's file under a derived-data root: `ROOT/native/KE/KEY.nzo`.
+pub fn entry_path(root: Str, key: Str) -> Str ! {} {
+    root + "/native/" + str_slice(key, 0, 2) + "/" + key + ".nzo"
+}
+
+/// An entry as it is written (`ObjectArtifact::to_bytes`): the header as one JSON line, then the
+/// object.
+pub fn entry_bytes(input: Str, tool: Str, config: Str, object: Str) -> Str ! {} {
+    let key = object_key(input, tool, config)
+    "{\"schema\":\"nazm.object/1\",\"key\":\"" + key + "\",\"llvm_input\":\"" + input + "\",\"tool\":\"" + tool
+        + "\",\"config\":\"" + config + "\",\"object\":\"" + object_fingerprint(object) + "\",\"length\":"
+        + int_to_str(str_len(object)) + "}\n" + object
+}
+
+fn hex64(s: Str) -> Bool {
+    if str_len(s) != 64 { return false }
+    for i in 0..64 {
+        let b = str_byte(s, i)
+        if !((b >= 48 && b <= 57) || (b >= 97 && b <= 102)) { return false }
+    }
+    true
+}
+
+fn field(doc: JsonDoc, name: Str) -> Option[Str] {
+    match json_get(doc, json_root(doc), name) {
+        Some(n) => json_str(doc, n),
+        None => None,
+    }
+}
+
+/// An entry read and checked whole against the key it was asked for (`ObjectArtifact::read`):
+/// `Ok` with the object's bytes, or `Err` saying why it is not one — every such entry a miss.
+pub fn entry_read(raw: Str, wanted: Str) -> Result[Str, Str] ! {} {
+    let nl = match text_find(raw, "\n") {
+        Some(i) => i,
+        None => { return Err("not a `nazm.object/1` entry: it has no header line") },
+    }
+    let head = str_slice(raw, 0, nl)
+    let bytes = str_slice(raw, nl + 1, str_len(raw))
+    let doc = match json_parse(head) {
+        Ok(d) => d,
+        Err(e) => { return Err("not a `nazm.object/1` entry: " + e) },
+    }
+    if json_kind(doc, json_root(doc)) != "object" { return Err("not a `nazm.object/1` entry: its header is not an object") }
+    let schema = match field(doc, "schema") {
+        Some(s) => s,
+        None => { return Err("not a `nazm.object/1` entry: its header has no schema") },
+    }
+    if schema != "nazm.object/1" { return Err("entry schema `" + schema + "` is not `nazm.object/1`") }
+    let names = text_split("key llvm_input tool config object", " ")
+    let vals = strs_new()
+    for n in names {
+        match field(doc, n) {
+            Some(v) => { strs_push(vals, v); },
+            None => { return Err("not a `nazm.object/1` entry: its header has no `" + n + "`") },
+        }
+    }
+    let length = match json_get(doc, json_root(doc), "length") {
+        Some(l) => match json_int(doc, l) { Some(v) => v, None => -1 },
+        None => -1,
+    }
+    if length < 0 { return Err("not a `nazm.object/1` entry: its header has no `length`") }
+    for i in 0..strs_len(names) {
+        if !hex64(strs_get(vals, i)) { return Err("`" + strs_get(names, i) + "` is not in canonical form") }
+    }
+    let filed = strs_get(vals, 0)
+    if object_key(strs_get(vals, 1), strs_get(vals, 2), strs_get(vals, 3)) != filed {
+        return Err("its recorded inputs do not produce the key it is filed under")
+    }
+    if filed != wanted { return Err("it is an entry for something else") }
+    if length != str_len(bytes) { return Err("the object is not the length it claims") }
+    if object_fingerprint(bytes) != strs_get(vals, 4) { return Err("the object is not the one its digest describes") }
+    Ok(bytes)
+}
+
+/// Look `key` up under `root` (`ObjectStore::get`): `Ok` with the object, or `Err` with `miss`
+/// or why the entry there is not one.
+pub fn store_get(io: IoCap, v: VouchCap, root: Str, key: Str) -> Result[Str, Str] ! { io } {
+    let path = str_vouch(entry_path(root, key))
+    if !file_exists(path) { return Err("miss") }
+    entry_read(read_file(path), key)
+}
+
+/// Publish an entry under `root` (`ObjectStore::put`): written beside its final name, then
+/// renamed over it, so a reader sees all of an entry or none; `tag` makes the temporary's name
+/// this writer's own. `Err` says what failed, and leaves no temporary.
+pub fn store_put(io: IoCap, v: VouchCap, root: Str, input: Str, tool: Str, config: Str, object: Str, tag: Str) -> Result[Int, Str] ! { io } {
+    let key = object_key(input, tool, config)
+    let native = str_vouch(root + "/native")
+    let parent = str_vouch(native + "/" + str_slice(key, 0, 2))
+    os_mkdir(str_vouch(root))
+    os_mkdir(native)
+    os_mkdir(parent)
+    let final = str_vouch(entry_path(root, key))
+    let temp = str_vouch(parent + "/" + key + "." + tag + ".part")
+    let text = entry_bytes(input, tool, config, object)
+    if write_file(temp, text) != str_len(text) {
+        os_unlink(temp)
+        return Err("cannot write " + temp)
+    }
+    if os_rename(temp, final) != 0 {
+        os_unlink(temp)
+        return Err("cannot publish " + final)
+    }
+    Ok(str_len(text))
+}
+
+// --- the backend's identity and configuration ---------------------------------------------------
+
+/// What the driver says it is, minus where it says it is installed (`banner`): the lines of a
+/// `-###` report before its first job.
+pub fn driver_banner(report: Str) -> Str ! {} {
+    let out = strs_new()
+    for l in text_lines(report) {
+        if text_starts_with(l, " ") { return str_join(out, "\n") }
+        if !text_starts_with(l, "InstalledDir:") { strs_push(out, l) }
+    }
+    str_join(out, "\n")
+}
+
+/// The quoted arguments of one `-###` job line (`split`): each in double quotes, a quote and a
+/// backslash escaped with a backslash; anything outside quotes separates.
+fn job_args(line: Str) -> Strs {
+    let out = strs_new()
+    let cur = strs_new()
+    let mut inside = false
+    let mut escaped = false
+    for i in 0..str_len(line) {
+        let c = str_slice(line, i, i + 1)
+        if escaped {
+            strs_push(cur, c)
+            escaped = false
+        } else if c == "\\" && inside {
+            escaped = true
+        } else if c == "\"" {
+            if inside {
+                strs_push(out, str_join(cur, ""))
+                while strs_len(cur) > 0 { strs_pop(cur); }
+            }
+            inside = !inside
+        } else if inside {
+            strs_push(cur, c)
+        }
+    }
+    out
+}
+
+fn file_name(path: Str) -> Str {
+    let mut start = 0
+    for i in 0..str_len(path) { if str_byte(path, i) == 47 { start = i + 1 } }
+    str_slice(path, start, str_len(path))
+}
+
+/// The arguments the driver resolved, this invocation's own file names removed (`resolved`):
+/// each job's program by its file name, then its arguments but `-main-file-name`, `-o`, the
+/// compilation directories and the input's and output's paths and names.
+pub fn driver_resolved(report: Str, input: Str, output: Str) -> Strs ! {} {
+    let names = strs_new()
+    strs_push(names, input)
+    strs_push(names, file_name(input))
+    strs_push(names, output)
+    strs_push(names, file_name(output))
+    let out = strs_new()
+    for line in text_lines(report) {
+        if text_starts_with(line, " ") {
+            let job = job_args(line)
+            if strs_len(job) > 0 {
+                strs_push(out, "@" + file_name(strs_get(job, 0)))
+                let mut i = 1
+                while i < strs_len(job) {
+                    let a = strs_get(job, i)
+                    i += 1
+                    if a == "-main-file-name" || a == "-o" {
+                        i += 1
+                    } else if text_starts_with(a, "-fdebug-compilation-dir") || text_starts_with(a, "-fcoverage-compilation-dir") {
+                        if !text_contains(a, "=") { i += 1 }
+                    } else {
+                        let mut named = false
+                        for n in names { if n == a { named = true } }
+                        if !named { strs_push(out, a) }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The backend identity and configuration a `-###` report of the probe describes (`probe`):
+/// the driver `clang` and its banner; what it resolved, and the runtime's ABI.
+pub fn backend_of(report: Str, input: Str, output: Str) -> Strs ! {} {
+    let args = driver_resolved(report, input, output)
+    strs_push(args, runtime_abi())
+    let out = strs_new()
+    strs_push(out, backend_identity("clang", driver_banner(report)))
+    strs_push(out, codegen_config(args))
+    out
+}
