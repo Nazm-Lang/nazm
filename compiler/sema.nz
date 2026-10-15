@@ -14,7 +14,9 @@
 // operators but shifts, calls of the module's functions and of the built-ins (generic ones by
 // inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
-// and blocks; effects and authority; the rules about `main`.
+// and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
+// pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; effects and
+// authority; the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -137,6 +139,18 @@ pub struct Ck {
     // The type parameters in scope for the types written in the body being checked.
     tsn: Strs,
     tst: Ints,
+    // Patterns as exhaustiveness sees them (`usefulness::Pat`), pooled: kind, value, literal key,
+    // enum, and a run of arguments; and the cells of the pattern matrices' rows.
+    pkind: Ints,
+    pval: Ints,
+    pkey: Strs,
+    pty: Ints,
+    paf: Ints,
+    pac: Ints,
+    pargs: Ints,
+    cells: Ints,
+    // Warnings, published only where there is no error (`check_map_with_warnings`).
+    w: Diags,
 }
 
 fn s_ret() -> Int { 0 }
@@ -164,7 +178,11 @@ pub fn ck_stopped(c: Ck) -> Str {
     strs_get(c.stop, 0)
 }
 
-pub fn ck_diags(c: Ck) -> Diags { c.d }
+// The errors; where there are none, the warnings (`check_map_with_warnings`).
+pub fn ck_diags(c: Ck) -> Diags {
+    if dg_len(c.d) == 0 { return c.w; }
+    c.d
+}
 
 fn cat3(a: Str, b: Str, x: Str) -> Str { str_concat(str_concat(a, b), x) }
 fn cat4(a: Str, b: Str, x: Str, y: Str) -> Str { str_concat(cat3(a, b, x), y) }
@@ -625,7 +643,8 @@ fn new_ck(t: Tree) -> Ck {
             bcaps: strs_new(), bpath: ints_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
             sds: ints_new(), sde: ints_new(), frames: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
-            tst: ints_new());
+            tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
+            pargs: ints_new(), cells: ints_new(), w: dg_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1992,6 +2011,7 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
         return t;
     }
     if k == "If" { return check_if(c, e, expected, unwanted); }
+    if k == "Match" { return check_match(c, e, expected); }
     stop(c, cat3("the expression `", k, "`"));
     or_int(expected)
 }
@@ -2716,7 +2736,17 @@ fn check_values(c: Ck, inits: Inits) -> Int {
 }
 
 // The type `name` means here, asked without reporting anything.
-fn quiet_type(c: Ck, name: Str, span: Int) -> Int { resolve_name(c, name, span, dg_new()) }
+fn quiet_type(c: Ck, name: Str, span: Int) -> Int {
+    if strs_find(c.tsn, name) >= 0 { return param_named(c, name); }
+    resolve_name(c, name, span, dg_new())
+}
+
+// A type parameter named where an expression or a pattern names a type: the reference refuses it
+// in words this checker does not carry yet.
+fn param_named(c: Ck, name: Str) -> Int {
+    stop(c, "a type parameter named in an expression");
+    ints_get(c.tst, strs_find(c.tsn, name))
+}
 
 // The enums in scope with a variant named `variant`, in the order of the names they are written by.
 fn variant_owners(c: Ck, variant: Str) -> Ints {
@@ -2974,7 +3004,10 @@ fn type_args_of(c: Ck, e: Int) -> Int {
 }
 
 // A type name written in an expression, reported when it is no type.
-fn resolve_type(c: Ck, name: Str, span: Int) -> Int { resolve_name(c, name, span, c.d) }
+fn resolve_type(c: Ck, name: Str, span: Int) -> Int {
+    if strs_find(c.tsn, name) >= 0 { return param_named(c, name); }
+    resolve_name(c, name, span, c.d)
+}
 
 // A generic enum's arguments where none are written (R1, 5b.14; `inferred_enum`): the type the
 // construction is wanted as, when it is this enum; otherwise each payload field declared as one of
@@ -3160,6 +3193,961 @@ fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
         return 0 - 1;
     }
     field_ty_in(c, base, f)
+}
+
+// --- matching (`check_match`, `nazm-core/src/check/pattern.rs`) ---------------------------------
+
+// What a pattern matches, for exhaustiveness and reachability (`usefulness::Pat`), in the
+// checker's pattern pool: its kind, a value (a `Bool`'s, or a variant's index), a literal's key,
+// a variant's enum (the scrutinee's instance), and a run of arguments.
+fn pk_wild() -> Int { 0 }
+fn pk_bool() -> Int { 1 }
+fn pk_lit() -> Int { 2 }
+fn pk_ctor() -> Int { 3 }
+fn pk_or() -> Int { 4 }
+
+fn pat_new(c: Ck, kind: Int, value: Int, key: Str, ty: Int, args: Ints) -> Int {
+    ints_push(c.pkind, kind);
+    ints_push(c.pval, value);
+    strs_push(c.pkey, key);
+    ints_push(c.pty, ty);
+    ints_push(c.paf, ints_len(c.pargs));
+    ints_push(c.pac, ints_len(args));
+    let mut i = 0;
+    while i < ints_len(args) {
+        ints_push(c.pargs, ints_get(args, i));
+        i = i + 1;
+    }
+    ints_len(c.pkind) - 1
+}
+
+fn wild(c: Ck) -> Int { pat_new(c, pk_wild(), 0, "", 0, ints_new()) }
+fn pkind(c: Ck, p: Int) -> Int { ints_get(c.pkind, p) }
+fn pargs_of(c: Ck, p: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_get(c.pac, p) {
+        ints_push(out, ints_get(c.pargs, ints_get(c.paf, p) + i));
+        i = i + 1;
+    }
+    out
+}
+
+// Whether a pattern has a head constructor, and whether two heads are the same one.
+fn has_head(c: Ck, p: Int) -> Bool { pkind(c, p) == pk_bool() || pkind(c, p) == pk_lit() || pkind(c, p) == pk_ctor() }
+fn same_head(c: Ck, p: Int, h: Int) -> Bool {
+    if pkind(c, p) != pkind(c, h) { return false; }
+    if pkind(c, p) == pk_lit() { return strs_get(c.pkey, p) == strs_get(c.pkey, h); }
+    ints_get(c.pval, p) == ints_get(c.pval, h)
+}
+
+// A matrix of patterns: its rows, each a run of the checker's cell pool.
+pub struct Mat {
+    rs: Ints,
+    rl: Ints,
+}
+
+fn mat_new() -> Mat { Mat(rs: ints_new(), rl: ints_new()) }
+fn mat_rows(m: Mat) -> Int { ints_len(m.rs) }
+fn mat_push(c: Ck, m: Mat, row: Ints) -> Int {
+    ints_push(m.rs, ints_len(c.cells));
+    ints_push(m.rl, ints_len(row));
+    let mut i = 0;
+    while i < ints_len(row) {
+        ints_push(c.cells, ints_get(row, i));
+        i = i + 1;
+    }
+    0
+}
+fn mat_row(c: Ck, m: Mat, r: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_get(m.rl, r) {
+        ints_push(out, ints_get(c.cells, ints_get(m.rs, r) + i));
+        i = i + 1;
+    }
+    out
+}
+fn mat_first(c: Ck, m: Mat, r: Int) -> Int {
+    if ints_get(m.rl, r) == 0 { return 0 - 1; }
+    ints_get(c.cells, ints_get(m.rs, r))
+}
+
+fn tail_of(xs: Ints, from: Int) -> Ints {
+    let out = ints_new();
+    let mut i = from;
+    while i < ints_len(xs) {
+        ints_push(out, ints_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+fn joined(a: Ints, b: Ints) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_len(a) {
+        ints_push(out, ints_get(a, i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(b) {
+        ints_push(out, ints_get(b, i));
+        i = i + 1;
+    }
+    out
+}
+fn wilds(c: Ck, n: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < n {
+        ints_push(out, wild(c));
+        i = i + 1;
+    }
+    out
+}
+
+// Rows with every or-pattern at their head spread into one row per alternative (`spread`).
+fn spread(c: Ck, m: Mat) -> Mat {
+    let out = mat_new();
+    let work = mat_new();
+    let mut r = mat_rows(m) - 1;
+    while r >= 0 {
+        mat_push(c, work, mat_row(c, m, r));
+        r = r - 1;
+    }
+    while mat_rows(work) > 0 {
+        let last = mat_rows(work) - 1;
+        let row = mat_row(c, work, last);
+        ints_pop(work.rs);
+        ints_pop(work.rl);
+        if ints_len(row) > 0 && pkind(c, ints_get(row, 0)) == pk_or() {
+            let alts = pargs_of(c, ints_get(row, 0));
+            let rest = tail_of(row, 1);
+            let mut k = ints_len(alts) - 1;
+            while k >= 0 {
+                let one_alt = ints_new();
+                ints_push(one_alt, ints_get(alts, k));
+                mat_push(c, work, joined(one_alt, rest));
+                k = k - 1;
+            }
+        } else {
+            mat_push(c, out, row);
+        }
+    }
+    out
+}
+
+// The rows whose head matches `head`, its arguments (`arity` wildcards for a `_`) in front of the
+// rest (`specialise`).
+fn specialise(c: Ck, m: Mat, head: Int, arity: Int) -> Mat {
+    let rows = spread(c, m);
+    let out = mat_new();
+    let mut r = 0;
+    while r < mat_rows(rows) {
+        let row = mat_row(c, rows, r);
+        if ints_len(row) > 0 {
+            let first = ints_get(row, 0);
+            let rest = tail_of(row, 1);
+            if pkind(c, first) == pk_wild() {
+                mat_push(c, out, joined(wilds(c, arity), rest));
+            } else {
+                if has_head(c, first) && same_head(c, first, head) {
+                    if pkind(c, first) == pk_ctor() { mat_push(c, out, joined(pargs_of(c, first), rest)); } else { mat_push(c, out, rest); }
+                }
+            }
+        }
+        r = r + 1;
+    }
+    out
+}
+
+// The rows whose head is `_`, without it (`default`).
+fn default_rows(c: Ck, m: Mat) -> Mat {
+    let rows = spread(c, m);
+    let out = mat_new();
+    let mut r = 0;
+    while r < mat_rows(rows) {
+        let first = mat_first(c, rows, r);
+        if first >= 0 {
+            if pkind(c, first) == pk_wild() { mat_push(c, out, tail_of(mat_row(c, rows, r), 1)); }
+        }
+        r = r + 1;
+    }
+    out
+}
+
+// A finite type's constructors, as head patterns: every variant of an enum (its fields' types a
+// run of `ctys`), or `true` and `false`. None (an empty list) for any other type.
+pub struct Ctors {
+    heads: Ints,
+    tf: Ints,
+    tc: Ints,
+    tys: Ints,
+}
+
+fn ctors_of(c: Ck, t: Int) -> Ctors {
+    let out = Ctors(heads: ints_new(), tf: ints_new(), tc: ints_new(), tys: ints_new());
+    if is_enum(c, t) {
+        let e = ta(c, t);
+        let mut v = 0;
+        while v < ints_get(c.evc, e) {
+            let vi = ints_get(c.evf, e) + v;
+            ints_push(out.heads, pat_new(c, pk_ctor(), v, "", t, ints_new()));
+            ints_push(out.tf, ints_len(out.tys));
+            ints_push(out.tc, ints_get(c.vfc, vi));
+            let mut k = 0;
+            while k < ints_get(c.vfc, vi) {
+                ints_push(out.tys, field_ty_in(c, t, ints_get(c.vff, vi) + k));
+                k = k + 1;
+            }
+            v = v + 1;
+        }
+    }
+    if t == t_bool() {
+        ints_push(out.heads, pat_new(c, pk_bool(), 1, "", 0, ints_new()));
+        ints_push(out.tf, 0);
+        ints_push(out.tc, 0);
+        ints_push(out.heads, pat_new(c, pk_bool(), 0, "", 0, ints_new()));
+        ints_push(out.tf, 0);
+        ints_push(out.tc, 0);
+    }
+    out
+}
+
+fn finite(c: Ck, t: Int) -> Bool { is_enum(c, t) || t == t_bool() }
+
+fn ctor_fields(k: Ctors, i: Int) -> Ints {
+    let out = ints_new();
+    let mut j = 0;
+    while j < ints_get(k.tc, i) {
+        ints_push(out, ints_get(k.tys, ints_get(k.tf, i) + j));
+        j = j + 1;
+    }
+    out
+}
+
+// Whether some row's head is `h`.
+fn present(c: Ck, rows: Mat, h: Int) -> Bool {
+    let mut r = 0;
+    while r < mat_rows(rows) {
+        let first = mat_first(c, rows, r);
+        if first >= 0 {
+            if has_head(c, first) && same_head(c, first, h) { return true; }
+        }
+        r = r + 1;
+    }
+    false
+}
+
+fn complete(c: Ck, rows: Mat, k: Ctors) -> Bool {
+    let mut i = 0;
+    while i < ints_len(k.heads) {
+        if present(c, rows, ints_get(k.heads, i)) == false { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn max_pattern_depth() -> Int { 256 }
+
+// Whether `row` matches some value no row of `m` matches (`useful`).
+fn useful(c: Ck, m: Mat, row: Ints, tys: Ints, depth: Int) -> Bool {
+    if ints_len(row) == 0 || ints_len(tys) == 0 { return mat_rows(m) == 0; }
+    if depth > max_pattern_depth() { return false; }
+    let first = ints_get(row, 0);
+    let rest = tail_of(row, 1);
+    let ty = ints_get(tys, 0);
+    let rest_tys = tail_of(tys, 1);
+    if pkind(c, first) == pk_or() {
+        let alts = pargs_of(c, first);
+        let mut i = 0;
+        while i < ints_len(alts) {
+            let r = ints_new();
+            ints_push(r, ints_get(alts, i));
+            if useful(c, m, joined(r, rest), tys, depth + 1) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+    if pkind(c, first) == pk_wild() {
+        let rows = spread(c, m);
+        let k = ctors_of(c, ty);
+        if finite(c, ty) && complete(c, rows, k) {
+            let mut i = 0;
+            while i < ints_len(k.heads) {
+                let fields = ctor_fields(k, i);
+                let r = joined(wilds(c, ints_len(fields)), rest);
+                let t = joined(fields, rest_tys);
+                if useful(c, specialise(c, rows, ints_get(k.heads, i), ints_len(fields)), r, t, depth + 1) { return true; }
+                i = i + 1;
+            }
+            return false;
+        }
+        return useful(c, default_rows(c, rows), rest, rest_tys, depth + 1);
+    }
+    let args = pargs_of(c, first);
+    let mut fields = ints_new();
+    if pkind(c, first) == pk_ctor() {
+        let k = ctors_of(c, ty);
+        let v = ints_get(c.pval, first);
+        if v < ints_len(k.heads) { fields = ctor_fields(k, v); }
+        if ints_len(fields) != ints_len(args) || v >= ints_len(k.heads) {
+            fields = ints_new();
+            let mut i = 0;
+            while i < ints_len(args) {
+                ints_push(fields, t_int());
+                i = i + 1;
+            }
+        }
+    }
+    useful(c, specialise(c, m, first, ints_len(args)), joined(args, rest), joined(fields, rest_tys), depth + 1)
+}
+
+// "No witness": every value is matched.
+fn no_witness() -> Str { "?none" }
+
+// A row of values, one per column of `tys`, that no row of `m` matches, each as it is shown;
+// `no_witness()` alone when every value is matched (`witness`).
+fn witness(c: Ck, m: Mat, tys: Ints, depth: Int) -> Strs {
+    let none_found = strs_new();
+    strs_push(none_found, no_witness());
+    if ints_len(tys) == 0 {
+        if mat_rows(m) == 0 { return strs_new(); }
+        return none_found;
+    }
+    if depth > max_pattern_depth() { return none_found; }
+    let ty = ints_get(tys, 0);
+    let rest_tys = tail_of(tys, 1);
+    let rows = spread(c, m);
+    let k = ctors_of(c, ty);
+    if finite(c, ty) && complete(c, rows, k) {
+        let mut i = 0;
+        while i < ints_len(k.heads) {
+            let fields = ctor_fields(k, i);
+            let sub = specialise(c, rows, ints_get(k.heads, i), ints_len(fields));
+            let w = witness(c, sub, joined(fields, rest_tys), depth + 1);
+            if is_witness(w) {
+                let n = imin(ints_len(fields), strs_len(w));
+                let args = strs_new();
+                let mut j = 0;
+                while j < n {
+                    strs_push(args, strs_get(w, j));
+                    j = j + 1;
+                }
+                let out = strs_new();
+                strs_push(out, build_witness(c, ints_get(k.heads, i), args, ty));
+                while j < strs_len(w) {
+                    strs_push(out, strs_get(w, j));
+                    j = j + 1;
+                }
+                return out;
+            }
+            i = i + 1;
+        }
+        return none_found;
+    }
+    let w = witness(c, default_rows(c, rows), rest_tys, depth + 1);
+    if is_witness(w) == false { return none_found; }
+    let mut first = "_";
+    if finite(c, ty) {
+        let mut i = 0;
+        let mut found = false;
+        while i < ints_len(k.heads) && found == false {
+            if present(c, rows, ints_get(k.heads, i)) == false {
+                let anys = strs_new();
+                let mut j = 0;
+                while j < ints_get(k.tc, i) {
+                    strs_push(anys, "_");
+                    j = j + 1;
+                }
+                first = build_witness(c, ints_get(k.heads, i), anys, ty);
+                found = true;
+            }
+            i = i + 1;
+        }
+    }
+    let out = strs_new();
+    strs_push(out, first);
+    let mut j = 0;
+    while j < strs_len(w) {
+        strs_push(out, strs_get(w, j));
+        j = j + 1;
+    }
+    out
+}
+
+fn is_witness(w: Strs) -> Bool {
+    if strs_len(w) == 0 { return true; }
+    strs_get(w, 0) != no_witness()
+}
+
+fn imin(a: Int, b: Int) -> Int {
+    if a < b { return a; }
+    b
+}
+
+// A constructor applied to its arguments' witnesses, as `Witness::show` writes it.
+fn build_witness(c: Ck, head: Int, args: Strs, ty: Int) -> Str {
+    if pkind(c, head) == pk_bool() {
+        if ints_get(c.pval, head) == 1 { return "true"; }
+        return "false";
+    }
+    let vi = ints_get(c.evf, ta(c, ty)) + ints_get(c.pval, head);
+    let parts = strs_new();
+    let mut i = 0;
+    while i < ints_get(c.vfc, vi) && i < strs_len(args) {
+        strs_push(parts, cat3(strs_get(c.fname, ints_get(c.vff, vi) + i), ": ", strs_get(args, i)));
+        i = i + 1;
+    }
+    cat5(show(c, ty), ".", strs_get(c.vname, vi), "(", str_concat(str_join(parts, ", "), ")"))
+}
+
+// What one pattern binds: each name, where (absolute), and its type.
+pub struct Binds {
+    names: Strs,
+    starts: Ints,
+    ends: Ints,
+    tys: Ints,
+}
+
+fn no_binds() -> Binds { Binds(names: strs_new(), starts: ints_new(), ends: ints_new(), tys: ints_new()) }
+
+fn pattern_kind(c: Ck, p: Int) -> Str { sx_text(c.t, p) }
+
+// Whether a pattern names a variant anywhere at its top: what needs an enum scrutinee.
+fn has_variant_pattern(c: Ck, p: Int) -> Bool {
+    let k = pattern_kind(c, p);
+    if k == "Variant" { return true; }
+    if k == "Or" {
+        let alts = kids(c, p, "alts");
+        let mut i = 0;
+        while i < ints_len(alts) {
+            if has_variant_pattern(c, ints_get(alts, i)) { return true; }
+            i = i + 1;
+        }
+    }
+    false
+}
+
+// `match scrutinee { … }` — written, or what `if let`, `let … else`, `while let` and a `let` of a
+// pattern mean (`check_match`).
+fn check_match(c: Ck, m: Int, expected: Int) -> Int {
+    let scrutinee = fld(c, m, "scrutinee");
+    let arms = kids(c, m, "arms");
+    let source = sx_text(c.t, fld(c, m, "source"));
+    let span = fld(c, m, "span");
+    let sty = value_type(c, scrutinee, none());
+    let errors_before = dg_len(c.d);
+    let mut wants_enum = ints_len(arms) == 0;
+    let mut i = 0;
+    while i < ints_len(arms) {
+        if has_variant_pattern(c, fld(c, ints_get(arms, i), "pattern")) { wants_enum = true; }
+        i = i + 1;
+    }
+    if wants_enum && is_enum(c, sty) == false {
+        err(c, "N0342", espan(c, scrutinee), cat3("`match` needs an enum, but this is `", show(c, sty), "`"),
+                "a variant pattern selects one variant of an enum. A `Bool`, an integer or a string is matched by literals, and any value by `_` or a name");
+        return or_int(expected);
+    }
+    let mut unresolved = false;
+    let rows = mat_new();
+    let row_arms = ints_new();
+    let mut result = 0 - 3;
+    let mut first_value = 0 - 1;
+    let mut first_span = 0;
+    i = 0;
+    while i < ints_len(arms) {
+        let arm = ints_get(arms, i);
+        let pattern = fld(c, arm, "pattern");
+        let body = fld(c, arm, "body");
+        open_scope(c);
+        let binds = no_binds();
+        let before = dg_len(c.d);
+        let pat = check_pattern(c, pattern, sty, scrutinee, binds);
+        if dg_len(c.d) > before {
+            // The pattern is the mistake: its arm's body would only repeat it.
+            unresolved = true;
+            close_scope(c);
+        } else {
+            let mut k = 0;
+            while k < strs_len(binds.names) {
+                let name = strs_get(binds.names, k);
+                if defined_here(c, name) {
+                    dg_error(c.d, "N0202", ints_get(binds.starts, k), ints_get(binds.ends, k), cat3("`", name, "` is bound twice by this pattern"), "",
+                            "each part of a pattern binds a name of its own, or is `_`");
+                } else {
+                    define(c, name, ints_get(binds.tys, k), false, ints_get(binds.starts, k), ints_get(binds.ends, k));
+                }
+                k = k + 1;
+            }
+            let guarded = some(c, arm, "guard");
+            if guarded {
+                let g = unwrap(c, arm, "guard");
+                let gt = value_type(c, g, t_bool());
+                if gt != t_bool() {
+                    err(c, "N0301", espan(c, g), cat3("a `match` arm's guard must be `Bool`, but this is `", show(c, gt), "`"),
+                            "Nazm has no truthiness: use a comparison such as `x != 0`");
+                }
+            }
+            if unresolved == false {
+                let one_pat = ints_new();
+                ints_push(one_pat, pat);
+                let one_ty = ints_new();
+                ints_push(one_ty, sty);
+                if useful(c, rows, one_pat, one_ty, 0) == false { unreachable_arm(c, arms, i, rows, row_arms, pat); }
+            }
+            if guarded == false {
+                let one_pat = ints_new();
+                ints_push(one_pat, pat);
+                mat_push(c, rows, one_pat);
+                ints_push(row_arms, i);
+            }
+            let mut want = expected;
+            if want < 0 { want = first_value; }
+            let completion = check_expr(c, body, want);
+            close_scope(c);
+            if source == "LetElse" && i == 1 && completion != diverges() {
+                err(c, "N0630", fld(c, arm, "span"), "a `let … else`'s `else` must leave, and this one can finish",
+                        "end it with `return`, `break` or `continue`: the names the pattern binds do not exist when it does not match");
+            } else {
+                if completion >= 0 {
+                    if first_value < 0 {
+                        first_value = completion;
+                        first_span = espan(c, body);
+                    } else {
+                        if first_value != completion {
+                            let swant = show(c, first_value);
+                            err(c, "N0302", espan(c, body), cat5("this arm is `", show(c, completion), "`, but an earlier one is `", swant, "`"),
+                                    "every arm of a `match` must have the same type");
+                            sec(c, first_span, cat3("this one is `", swant, "`"));
+                        }
+                    }
+                }
+                if result == 0 - 3 {
+                    result = completion;
+                } else {
+                    if result == diverges() {
+                        result = completion;
+                    } else {
+                        if completion != diverges() {
+                            if result == unit() || completion == unit() { result = unit(); }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if unresolved == false { report_uncovered(c, sty, rows, span, source); }
+    if unresolved == false && source == "Written" && dg_len(c.d) == errors_before { warn_covering(c, sty, arms); }
+    if result != 0 - 3 { return result; }
+    if unresolved { return diverges(); }
+    or_int(expected)
+}
+
+// `N0344`: an arm whose every value an earlier arm matches.
+fn unreachable_arm(c: Ck, arms: Ints, index: Int, rows: Mat, row_arms: Ints, pat: Int) -> Int {
+    let arm = ints_get(arms, index);
+    let pattern = fld(c, arm, "pattern");
+    if plain(c, pat) && pattern_kind(c, pattern) == "Variant" {
+        let v = sx_kid(c.t, pattern, 0);
+        let mut r = 0;
+        while r < mat_rows(rows) {
+            let first = mat_first(c, rows, r);
+            if first >= 0 {
+                if plain(c, first) && ints_get(c.pty, first) == ints_get(c.pty, pat) && ints_get(c.pval, first) == ints_get(c.pval, pat) {
+                    let other = fld(c, ints_get(arms, ints_get(row_arms, r)), "pattern");
+                    if pattern_kind(c, other) == "Variant" {
+                        let ty = ints_get(c.pty, pat);
+                        let vi = ints_get(c.evf, ta(c, ty)) + ints_get(c.pval, pat);
+                        err(c, "N0344", fld(c, v, "variant_span"), cat5("`", show(c, ty), ".", strs_get(c.vname, vi), "` already has an arm"),
+                                "the discriminant selects exactly one arm, so a second one for the same variant can never run");
+                        sec(c, fld(c, sx_kid(c.t, other, 0), "variant_span"), "first covered here");
+                        return 0;
+                    }
+                    r = mat_rows(rows);
+                }
+            }
+            r = r + 1;
+        }
+    }
+    err(c, "N0344", pattern_span(c.t, pattern), "this arm can never run: the arms above match every value it does",
+            "arms are tried in order, and the first that matches runs")
+}
+
+// One variant's pattern with every payload discarded.
+fn plain(c: Ck, p: Int) -> Bool {
+    if pkind(c, p) != pk_ctor() { return false; }
+    let args = pargs_of(c, p);
+    let mut i = 0;
+    while i < ints_len(args) {
+        if pkind(c, ints_get(args, i)) != pk_wild() { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// `N0343`: a `match` some value of `sty` escapes.
+fn report_uncovered(c: Ck, sty: Int, rows: Mat, span: Int, source: Str) -> Int {
+    let one_ty = ints_new();
+    ints_push(one_ty, sty);
+    let w = witness(c, rows, one_ty, 0);
+    if is_witness(w) == false { return 0; }
+    let mut shown = "_";
+    if strs_len(w) > 0 { shown = strs_get(w, 0); }
+    if source == "Let" {
+        return err(c, "N0343", span, cat3("this `let` pattern does not match `", shown, "`"),
+                "a pattern that can fail needs an `else`: `let P = e else { return …; };`");
+    }
+    let mut all_plain = true;
+    let mut r = 0;
+    while r < mat_rows(rows) {
+        let first = mat_first(c, rows, r);
+        if first < 0 { all_plain = false; } else {
+            if plain(c, first) == false { all_plain = false; }
+        }
+        r = r + 1;
+    }
+    if is_enum(c, sty) && all_plain {
+        let e = ta(c, sty);
+        let missing = strs_new();
+        let mut v = 0;
+        while v < ints_get(c.evc, e) {
+            let mut covered = false;
+            r = 0;
+            while r < mat_rows(rows) {
+                if ints_get(c.pval, mat_first(c, rows, r)) == v { covered = true; }
+                r = r + 1;
+            }
+            if covered == false { strs_push(missing, strs_get(c.vname, ints_get(c.evf, e) + v)); }
+            v = v + 1;
+        }
+        err(c, "N0343", span, str_concat("this `match` does not cover ", quoted(missing)),
+                cat3("an enum is closed, so every variant of `", show(c, sty), "` gets an arm — or a `_` covers the rest, which gives up being told when a variant is added"));
+        sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "declared here");
+        return 0;
+    }
+    let mut help = "an integer or a string has more values than any list of literals: end with `_` or a name to cover the rest";
+    if is_enum(c, sty) || sty == t_bool() { help = "add an arm for it, or end with `_` or a name to cover the rest"; }
+    err(c, "N0343", span, cat3("this `match` does not cover `", shown, "`"), help)
+}
+
+// `N0632`, a warning: a `match` on an enum whose `_`, or bare name, covers variants no arm names.
+fn warn_covering(c: Ck, sty: Int, arms: Ints) -> Int {
+    if is_enum(c, sty) == false { return 0; }
+    let seen = strs_new();
+    let mut i = 0;
+    while i < ints_len(arms) {
+        named_variants(c, fld(c, ints_get(arms, i), "pattern"), seen);
+        i = i + 1;
+    }
+    let mut catch_all = 0 - 1;
+    i = 0;
+    while i < ints_len(arms) && catch_all < 0 {
+        let arm = ints_get(arms, i);
+        let k = pattern_kind(c, fld(c, arm, "pattern"));
+        if some(c, arm, "guard") == false && (k == "Wildcard" || k == "Bind") { catch_all = fld(c, arm, "pattern"); }
+        i = i + 1;
+    }
+    if catch_all < 0 { return 0; }
+    let shown = show(c, sty);
+    let mut base = shown;
+    let mut j = 0;
+    while j < str_len(shown) {
+        if str_byte(shown, j) == 91 {
+            base = str_slice(shown, 0, j);
+            j = str_len(shown);
+        }
+        j = j + 1;
+    }
+    let e = ta(c, sty);
+    let covered = strs_new();
+    let mut v = 0;
+    while v < ints_get(c.evc, e) {
+        let n = strs_get(c.vname, ints_get(c.evf, e) + v);
+        if strs_find(seen, n) < 0 { strs_push(covered, cat5("`", base, ".", n, "`")); }
+        v = v + 1;
+    }
+    if strs_len(covered) == 0 { return 0; }
+    let mut which = "this name";
+    if pattern_kind(c, catch_all) == "Wildcard" { which = "`_`"; }
+    let at = fld(c, catch_all, "span");
+    dg_push(c.w, "N0632", "warning", sps(c, at), spe(c, at),
+            cat5(which, " covers ", str_join(covered, ", "), ", which no arm names: a variant added to `", cat3(base, "` later is covered too, without a word", "")), "",
+            cat3("name them, so that adding a variant to `", base, "` is reported at this `match`"))
+}
+
+fn named_variants(c: Ck, p: Int, out: Strs) -> Int {
+    let k = pattern_kind(c, p);
+    if k == "Variant" { strs_push(out, fname_of(c, sx_kid(c.t, p, 0), "variant")); }
+    if k == "Or" {
+        let alts = kids(c, p, "alts");
+        let mut i = 0;
+        while i < ints_len(alts) {
+            named_variants(c, ints_get(alts, i), out);
+            i = i + 1;
+        }
+    }
+    0
+}
+
+// One pattern against a value of type `ty`: what it binds into `binds`, and what it matches.
+fn check_pattern(c: Ck, p: Int, ty: Int, scrutinee: Int, binds: Binds) -> Int {
+    let k = pattern_kind(c, p);
+    if k == "Wildcard" { return wild(c); }
+    if k == "Bind" {
+        let at = fld(c, p, "span");
+        strs_push(binds.names, fname_of(c, p, "name"));
+        ints_push(binds.starts, sps(c, at));
+        ints_push(binds.ends, spe(c, at));
+        ints_push(binds.tys, ty);
+        return wild(c);
+    }
+    if k == "Literal" { return check_literal_pattern(c, sx_kid(c.t, p, 0), ty); }
+    if k == "Variant" { return check_variant_pattern(c, sx_kid(c.t, p, 0), ty, scrutinee, binds); }
+    if k == "Tuple" {
+        // No tuple type is carried, so the value is never one.
+        err(c, "N0300", fld(c, p, "span"), cat5("this pattern is a tuple of ", int_to_str(ints_len(kids(c, p, "elems"))), ", but the value is a `", show(c, ty), "`"), "");
+        return wild(c);
+    }
+    // `p | q | …`: each alternative binds the same names, with the same types.
+    let alts = kids(c, p, "alts");
+    let out = ints_new();
+    let mut first = no_binds();
+    let mut have_first = false;
+    let mut i = 0;
+    while i < ints_len(alts) {
+        let alt = ints_get(alts, i);
+        let own = no_binds();
+        ints_push(out, check_pattern(c, alt, ty, scrutinee, own));
+        if have_first == false {
+            first = own;
+            have_first = true;
+        } else {
+            if same_bindings(c, first, own) == false {
+                err(c, "N0629", pattern_span(c.t, alt), "this alternative binds other names, or other types, than the first",
+                        "the arm's body sees the same names whichever alternative matched, so each binds them all, with one type each");
+                sec(c, fld(c, p, "span"), "in this or-pattern");
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(first.names) {
+        strs_push(binds.names, strs_get(first.names, i));
+        ints_push(binds.starts, ints_get(first.starts, i));
+        ints_push(binds.ends, ints_get(first.ends, i));
+        ints_push(binds.tys, ints_get(first.tys, i));
+        i = i + 1;
+    }
+    pat_new(c, pk_or(), 0, "", 0, out)
+}
+
+// Whether two alternatives bind the same names with the same types, each list sorted by name.
+fn same_bindings(c: Ck, a: Binds, b: Binds) -> Bool {
+    if strs_len(a.names) != strs_len(b.names) { return false; }
+    let sa = sorted_bindings(a);
+    let sb = sorted_bindings(b);
+    let mut i = 0;
+    while i < strs_len(sa) {
+        if strs_get(sa, i) != strs_get(sb, i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// A binding list as `name|type` strings, stably sorted by name.
+fn sorted_bindings(b: Binds) -> Strs {
+    let names = strs_new();
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(b.names) {
+        let n = strs_get(b.names, i);
+        let mut at = 0;
+        while at < strs_len(names) && (str_less(strs_get(names, at), n) || strs_get(names, at) == n) { at = at + 1; }
+        insert_str(names, at, n);
+        insert_str(out, at, cat3(n, "|", int_to_str(ints_get(b.tys, i))));
+        i = i + 1;
+    }
+    out
+}
+
+// A literal pattern: an integer (perhaps negated), a string, `true` or `false`, of the scrutinee's
+// type.
+fn check_literal_pattern(c: Ck, e: Int, ty: Int) -> Int {
+    let k = kind_of(c, e);
+    let mut key = "";
+    let mut has_key = false;
+    if sx_kind(c.t, e) != tk_tuple() {
+        if k == "Int" {
+            key = str_concat("i", sx_text(c.t, fld(c, e, "value")));
+            has_key = true;
+        }
+        if k == "WideInt" {
+            stop(c, "a wide integer");
+            return wild(c);
+        }
+        if k == "Neg" {
+            let o = fld(c, e, "operand");
+            if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "Int" {
+                key = str_concat("i-", sx_text(c.t, fld(c, o, "value")));
+                has_key = true;
+            }
+            if sx_kind(c.t, o) != tk_tuple() && kind_of(c, o) == "WideInt" {
+                stop(c, "a wide integer");
+                return wild(c);
+            }
+        }
+        if k == "Str" {
+            key = str_concat("s", sx_text(c.t, fld(c, e, "value")));
+            has_key = true;
+        }
+        if k == "Bool" {
+            key = str_concat("b", sx_text(c.t, fld(c, e, "value")));
+            has_key = true;
+        }
+    }
+    let literal_type = is_integer(c, ty) || ty == t_bool() || ty == t_str() || bname_of(c, ty) == "Text";
+    if has_key == false || literal_type == false {
+        let mut message = cat3("a `", show(c, ty), "` has no literal pattern");
+        if literal_type { message = "a literal pattern is an integer, a string, `true` or `false`"; }
+        err(c, "N0300", espan(c, e), message,
+                "a `Bool`, an integer or a string is matched by literals; a float's equality is not what a literal reads as, so it has none");
+        return wild(c);
+    }
+    let t = value_type(c, e, ty);
+    if t != ty {
+        err(c, "N0300", espan(c, e), cat5("this pattern is a `", show(c, t), "`, but the value is a `", show(c, ty), "`"), "");
+        return wild(c);
+    }
+    if k == "Bool" {
+        if sx_text(c.t, fld(c, e, "value")) == "true" { return pat_new(c, pk_bool(), 1, "", 0, ints_new()); }
+        return pat_new(c, pk_bool(), 0, "", 0, ints_new());
+    }
+    pat_new(c, pk_lit(), 0, key, 0, ints_new())
+}
+
+// `Enum.Variant(field: pattern, …)` against a value of type `ty`.
+fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -> Int {
+    if is_enum(c, ty) == false {
+        err(c, "N0342", fld(c, v, "ty_span"), cat3("a variant pattern needs an enum, but this is a `", show(c, ty), "`"), "");
+        return wild(c);
+    }
+    if some(c, v, "qualifier") {
+        stop(c, "a qualified variant pattern");
+        return wild(c);
+    }
+    let tname = fname_of(c, v, "ty");
+    let mut named = ta(c, ty);
+    if tname != "" {
+        let def = resolve_type(c, tname, fld(c, v, "ty_span"));
+        if is_enum(c, def) == false {
+            enum_refused(c, tname, def, fld(c, v, "ty_span"));
+            return wild(c);
+        }
+        named = ta(c, def);
+    }
+    // The enum a pattern names is a definition: the value supplies its arguments.
+    if named != ta(c, ty) {
+        let want = show(c, ty);
+        err(c, "N0345", fld(c, v, "ty_span"), cat5("this pattern is a `", show(c, enum_ty(c, named, ints_new())), "`, but the value is a `", want, "`"),
+                "a variant belongs to its enum, so a pattern names the value's own enum. There is no structural matching between two enums that happen to have a variant of the same name");
+        sec(c, espan(c, scrutinee), cat3("this is a `", want, "`"));
+        return wild(c);
+    }
+    let variant = fname_of(c, v, "variant");
+    let vi = variant_of(c, ty, variant);
+    let e = ta(c, ty);
+    if vi < 0 {
+        let known = strs_new();
+        let mut i = 0;
+        while i < ints_get(c.evc, e) {
+            strs_push(known, strs_get(c.vname, ints_get(c.evf, e) + i));
+            i = i + 1;
+        }
+        let mut help = "";
+        if strs_len(known) > 0 { help = str_concat("its variants are ", quoted(known)); }
+        err(c, "N0341", fld(c, v, "variant_span"), cat5("`", show(c, ty), "` has no variant `", variant, "`"), help);
+        sec_at(c, ints_get(c.ens, e), ints_get(c.ene, e), "declared here");
+        return wild(c);
+    }
+    let at = vi - ints_get(c.evf, e);
+    let path = cat3(show(c, ty), ".", variant);
+    let arity = ints_get(c.vfc, vi);
+    let args = wilds(c, arity);
+    let fields = kids(c, v, "fields");
+    // Payload patterns by position (R1.5, D4): named in declaration order.
+    let names = strs_new();
+    let mut positional = false;
+    let mut by_name = false;
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let n = fname_of(c, ints_get(fields, i), "name");
+        strs_push(names, n);
+        if n == "" { positional = true; } else { by_name = true; }
+        i = i + 1;
+    }
+    if positional {
+        if by_name || ints_len(fields) != arity {
+            err(c, "N0334", fld(c, v, "span"), cat5(cat3("`", path, "` has "), int_to_str(arity), str_concat(" payload field", plural(arity)),
+                    ": a pattern gives every one by position, in the order declared, or every one by name", ""), "");
+            return wild(c);
+        }
+        i = 0;
+        while i < arity {
+            strs_set(names, i, strs_get(c.fname, ints_get(c.vff, vi) + i));
+            i = i + 1;
+        }
+    }
+    let given = strs_new();
+    let gs_ = ints_new();
+    i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let name = strs_get(names, i);
+        let ns = fld(c, f, "name_span");
+        let fi = variant_field(c, vi, name);
+        if fi < 0 {
+            err(c, "N0333", ns, cat5("`", path, "` has no payload field `", name, "`"), "");
+            sec_at(c, ints_get(c.vns, vi), ints_get(c.vne, vi), "declared here");
+        } else {
+            let first = strs_find(given, name);
+            if first >= 0 {
+                err(c, "N0332", ns, cat3("this pattern names `", name, "` twice"), "");
+                sec(c, ints_get(gs_, first), "first named here");
+            } else {
+                strs_push(given, name);
+                ints_push(gs_, ns);
+                let sub = check_pattern(c, fld(c, f, "pattern"), field_ty_in(c, ty, fi), scrutinee, binds);
+                ints_set(args, fi - ints_get(c.vff, vi), sub);
+            }
+        }
+        i = i + 1;
+    }
+    let missing = strs_new();
+    i = 0;
+    while i < arity {
+        let n = strs_get(c.fname, ints_get(c.vff, vi) + i);
+        if strs_find(given, n) < 0 { strs_push(missing, n); }
+        i = i + 1;
+    }
+    if strs_len(missing) > 0 {
+        err(c, "N0334", fld(c, v, "variant_span"), cat5("this pattern does not name ", quoted(missing), " of `", path, "`"),
+                "a pattern names every payload field, matching it or discarding it with `_`. There is no rest pattern, so adding a payload field breaks the patterns that did not know about it rather than ignoring it");
+    }
+    pat_new(c, pk_ctor(), at, "", ty, args)
+}
+
+// Why a name before a variant's `.` is no enum (`resolve_enum`), its unknown name already reported.
+fn enum_refused(c: Ck, name: Str, t: Int, span: Int) -> Int {
+    if is_record(c, t) {
+        return err(c, "N0341", span, cat3("`", show(c, t), "` is a record, so it has no variants"),
+                "a record is built by naming its fields: `Point(x: 1, y: 2)`");
+    }
+    if is_builtin_name(name) {
+        return err(c, "N0341", span, cat3("`", show(c, t), "` is a built-in type, so it has no variants"), "only an `enum` has variants");
+    }
+    0
 }
 
 // --- effects and authority (`nazm-core/src/effects.rs`) -----------------------------------------
