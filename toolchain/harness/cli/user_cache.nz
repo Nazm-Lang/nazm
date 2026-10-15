@@ -1,0 +1,317 @@
+// The user cache (R1.5, D12): a second project reuses the runtime and the standard library from it;
+// a build from a warm user cache is the executable an uncached one is; another optimisation level,
+// heap limit or target reuses nothing shared; a heap limit is never reused from another limit;
+// deleting the cache changes nothing; the cache is under the home directory unless a variable
+// moves it. Ported from `crates/nazm-cli/tests/user_cache.rs` (R7).
+
+use "@std/file"
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// A program that reaches the runtime and one standard module, `@std/text`.
+const PROGRAM: Str = "use \"@std/text\"\n\nfn main() {\n    println(text_repeat(\"ab\", 3))\n    println(text_starts_with(\"nazm\", \"na\"))\n}\n";
+
+/// What it prints; `NAZM_RESULT_REPORT`, which the suite sets, adds `main`'s result after it.
+const OUTPUT: Str = "ababab\ntrue\n";
+
+/// A project in a directory of its own: a marker, and the program.
+fn project(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = prog_dir(h, "main.nz", PROGRAM)?;
+    scratch_write(h, d, "nazm.root", "")?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// What one build did with the object stores.
+struct Did {
+    units: Int,
+    compiled: Int,
+    reused: Int,
+    stored: Int,
+}
+
+fn did_show(d: Did) -> Str ! {} {
+    f"Did {{ units: {d.units}, compiled: {d.compiled}, reused: {d.reused}, stored: {d.stored} }}"
+}
+
+/// `nazm build` in `dir` under `env`, reporting what it did.
+fn build_with(h: Caps, env: Strs, dir: Str, out: Str, extra: Strs) -> Result[Did, Str] ! { io, spawn } {
+    let a = words("build main.nz -o");
+    strs_push(a, out);
+    strs_push(a, "--build-report");
+    for x in extra {
+        strs_push(a, x);
+    }
+    let r = run(h, nazm_bin(h.io), a, dir, env);
+    check_that(r.code == 0, f"build failed: {r.stderr}")?;
+    let mut report = "";
+    for l in lines(r.stdout) {
+        if str_len(report) == 0 && text_contains(l, "nazm.build-report/1") {
+            report = l;
+        }
+    }
+    check_that(str_len(report) > 0, "a report")?;
+    let v = jparse(report)?;
+    Result[Did, Str].Ok(value: Did(units: jint(v, "native/units"), compiled: jint(v, "native/compiled"), reused: jint(v, "native/reused"), stored: jint(v, "native/stored")))
+}
+
+/// The suite's environment with `user` as the user cache, `NAZM_CACHE_DIR` unset.
+fn with_user(h: Caps, user: Str) -> Strs ! { io } {
+    env_unset(env_set(suite_env(h), "NAZM_USER_CACHE_DIR", user), "NAZM_CACHE_DIR")
+}
+
+fn build(h: Caps, dir: Str, user: Str, extra: Strs) -> Result[Did, Str] ! { io, spawn } {
+    build_with(h, with_user(h, user), dir, "prog", extra)
+}
+
+/// How many files are under `dir`, at any depth; none when it does not exist.
+fn files(h: Caps, dir: Str) -> Int ! { io } {
+    match file_walk(h.io, dir) {
+        Result.Ok(value: fs) => {
+            let mut n = 0;
+            for f in fs {
+                match file_metadata(h.io, f) {
+                    Result.Ok(value: m) => match m.kind {
+                        FileKind.Directory() => 0,
+                        FileKind.Regular() => { n = n + 1; 0 },
+                        FileKind.Other() => { n = n + 1; 0 },
+                    },
+                    Result.Err(error: e) => 0,
+                };
+            }
+            n
+        },
+        Result.Err(error: e) => 0,
+    }
+}
+
+/// `exe`'s output, which must end well.
+fn run_ok(h: Caps, exe: Str) -> Result[Str, Str] ! { io, spawn } {
+    let r = run(h, exe, strs_new(), "", suite_env(h));
+    check_that(r.code == 0, r.stderr)?;
+    Result[Str, Str].Ok(value: r.stdout)
+}
+
+fn two(a: Str, b: Str) -> Strs ! {} {
+    let x = strs_new();
+    strs_push(x, a);
+    strs_push(x, b);
+    x
+}
+
+fn second_project_in(h: Caps, user: Str, a: Str, b: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    let extra = two("--backend", backend);
+    let first = build(h, a, user, extra)?;
+    check_that(first.compiled == first.units, f"{backend}: {did_show(first)}")?;
+    let shared = files(h, f"{user}/native");
+    // The runtime, and `@std/text`'s own unit, at least.
+    check_that(shared >= 2, f"{backend}: {shared} shared objects")?;
+    check_that(files(h, f"{a}/.nazm/native") + shared == first.stored, f"{backend}: every object is filed once, in one of the two stores")?;
+    // The project's own: its one module and its entry.
+    check_that(files(h, f"{a}/.nazm/native") == 2, f"{backend}: a shared unit was filed with the project")?;
+    // Another project: its own units compiled, every shared one reused from the user cache.
+    let second = build(h, b, user, extra)?;
+    check_that(second.reused == shared, f"{backend}: {did_show(second)}")?;
+    check_that(second.compiled == second.units - shared, f"{backend}: {did_show(second)}")?;
+    check_that(files(h, f"{b}/.nazm/native") == second.units - shared, f"{backend}: the project's store holds its own objects and no shared one")?;
+    check_that(files(h, f"{user}/native") == shared, f"{backend}: nothing of the second project's own reached the user cache")?;
+    check_that(text_starts_with(run_ok(h, f"{b}/prog")?, OUTPUT), backend)
+}
+
+@test
+fn a_second_project_reuses_the_runtime_and_the_standard_library_from_the_user_cache(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for backend in words("llvm cranelift") {
+        let user = scratch_new(h);
+        let a = project(h)?;
+        let b = project(h)?;
+        let got = second_project_in(h, user, a, b, backend);
+        scratch_remove(h, user);
+        scratch_remove(h, a);
+        scratch_remove(h, b);
+        got?;
+    }
+    ok()
+}
+
+fn warm_in(h: Caps, user: Str, a: Str, b: Str) -> Result[Int, Str] ! { io, spawn } {
+    build(h, a, user, strs_new())?;
+    let warm = build(h, b, user, strs_new())?;
+    check_that(warm.reused > 0, did_show(warm))?;
+    let cached = read_raw(h, f"{b}/prog")?;
+    // The same output name, so the linker writes the same name into the executable (N46).
+    match file_remove(h.io, f"{b}/prog") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    };
+    build(h, b, user, words("--no-cache"))?;
+    let uncached = read_raw(h, f"{b}/prog")?;
+    check_that(cached == uncached, "a build from the user cache is not the executable an uncached build makes")
+}
+
+@test
+fn a_build_from_a_warm_user_cache_is_the_same_executable_as_an_uncached_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let user = scratch_new(h);
+    let a = project(h)?;
+    let b = project(h)?;
+    let got = warm_in(h, user, a, b);
+    scratch_remove(h, user);
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    got
+}
+
+/// A fresh project built with `extra` against `user`, removed after: what it did.
+fn fresh_build(h: Caps, user: Str, extra: Strs) -> Result[Did, Str] ! { io, spawn } {
+    let p = project(h)?;
+    let did = build(h, p, user, extra);
+    scratch_remove(h, p);
+    did
+}
+
+fn configurations_in(h: Caps, user: Str) -> Result[Int, Str] ! { io, spawn } {
+    fresh_build(h, user, strs_new())?;
+    let whats = text_split("-O2|a heap limit", "|");
+    let extras = text_split("--opt-level 2|--heap-limit 64M", "|");
+    let mut i = 0;
+    while i < 2 {
+        let what = strs_get(whats, i);
+        let extra = words(strs_get(extras, i));
+        let p = project(h)?;
+        let did = build(h, p, user, extra)?;
+        let out = run_ok(h, f"{p}/prog");
+        scratch_remove(h, p);
+        check_that(did.reused == 0, f"{what} reused another configuration's object: {did_show(did)}")?;
+        check_that(text_starts_with(out?, OUTPUT), what)?;
+        // And each keeps its own: a second project with the same configuration reuses them.
+        let again = fresh_build(h, user, extra)?;
+        check_that(again.reused > 0, f"{what}: {did_show(again)}")?;
+        i = i + 1;
+    }
+    // Another target, compiled to objects: nothing of the host's is reused.
+    let host = run(h, "uname", words("-s -m"), "", env_here(h.io));
+    let other = if text_trim(host.stdout) == "Linux x86_64" { "aarch64-unknown-linux-gnu" } else { "x86_64-unknown-linux-gnu" };
+    let p = project(h)?;
+    let a = two("--target", other);
+    strs_push(a, "--objects");
+    strs_push(a, f"{p}/objects");
+    let did = build(h, p, user, a);
+    scratch_remove(h, p);
+    let did_ = did?;
+    check_that(did_.reused == 0, f"{other} reused a host object: {did_show(did_)}")?;
+    check_that(did_.stored > 0, f"{other}: {did_show(did_)}")
+}
+
+@test
+fn another_optimisation_level_heap_limit_or_target_reuses_nothing_shared(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let user = scratch_new(h);
+    let got = configurations_in(h, user);
+    scratch_remove(h, user);
+    got
+}
+
+const BIG: Str = "use \"@std/text\"\n\nfn main() {\n    println(text_repeat(\"x\", 1000000).len())\n}\n";
+
+/// `BIG` in a fresh project built with `--heap-limit limit`: what the build did, and how the
+/// program ended.
+fn ends(h: Caps, user: Str, limit: Str) -> Result[(Did, Int), Str] ! { io, spawn } {
+    let p = project(h)?;
+    scratch_write(h, p, "main.nz", BIG)?;
+    let did = build(h, p, user, two("--heap-limit", limit));
+    let out = run(h, f"{p}/prog", strs_new(), "", suite_env(h));
+    scratch_remove(h, p);
+    Result[(Did, Int), Str].Ok(value: (did?, out.code))
+}
+
+fn limits_in(h: Caps, user: Str) -> Result[Int, Str] ! { io, spawn } {
+    // The runtime's units under a heap limit do not depend on its value, and are shared; the unit
+    // holding the limit does, and is not. Proved by what the program does: a megabyte fits under
+    // one limit and not under the other, whichever was built first.
+    let (first, roomy) = ends(h, user, "1G")?;
+    check_that(roomy == 0, f"{roomy}")?;
+    let (tight, code) = ends(h, user, "64K")?;
+    check_that(tight.reused > 0, f"the limit-free runtime units were not shared: {did_show(tight)}")?;
+    check_that(tight.compiled > 0, f"the unit holding the limit was reused: {did_show(tight)}")?;
+    check_that(code == 2, "a 64K limit let a megabyte through")?;
+    let (last, again) = ends(h, user, "1G")?;
+    check_that(again == 0, "a 1G build took the 64K limit")
+}
+
+@test
+fn a_heap_limit_is_never_reused_from_another_limit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let user = scratch_new(h);
+    let got = limits_in(h, user);
+    scratch_remove(h, user);
+    got
+}
+
+fn deleting_in(h: Caps, user: Str, p: Str) -> Result[Int, Str] ! { io, spawn } {
+    build(h, p, user, strs_new())?;
+    let before = read_raw(h, f"{p}/prog")?;
+    let out = run_ok(h, f"{p}/prog")?;
+    scratch_remove(h, f"{user}/native");
+    scratch_remove(h, f"{p}/.nazm");
+    let again = build(h, p, user, strs_new())?;
+    check_that(again.compiled == again.units, "something survived the deletion")?;
+    check_that(read_raw(h, f"{p}/prog")? == before, "the rebuilt executable differs")?;
+    check_that(run_ok(h, f"{p}/prog")? == out, "the rebuilt executable prints otherwise")
+}
+
+@test
+fn deleting_the_user_cache_changes_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let user = scratch_new(h);
+    let pr = project(h)?;
+    let got = deleting_in(h, user, pr);
+    scratch_remove(h, user);
+    scratch_remove(h, pr);
+    got
+}
+
+fn home_in(h: Caps, home: Str, xdg: Str, moved: Str, home2: Str, home3: Str) -> Result[Int, Str] ! { io, spawn } {
+    let p = project(h)?;
+    let env = env_set(env_set(env_unset(env_unset(suite_env(h), "NAZM_USER_CACHE_DIR"), "NAZM_CACHE_DIR"), "HOME", home), "XDG_CACHE_HOME", xdg);
+    let did0 = build_with(h, env, p, "prog", strs_new());
+    scratch_remove(h, p);
+    did0?;
+    let expected = if on_macos(h) { f"{home}/Library/Caches/nazm" } else { f"{xdg}/nazm" };
+    check_that(files(h, f"{expected}/native") > 0, f"nothing was filed in {expected}")?;
+    // `NAZM_CACHE_DIR` alone moves the user cache too: one variable still moves everything.
+    let env2 = env_set(env_set(env_set(env_unset(suite_env(h), "NAZM_USER_CACHE_DIR"), "NAZM_CACHE_DIR", moved), "HOME", home2), "XDG_CACHE_HOME", home2);
+    let p2 = project(h)?;
+    let did = build_with(h, env2, p2, "prog", strs_new());
+    scratch_remove(h, p2);
+    check_that(files(h, f"{moved}/native") == did?.stored, "the moved cache holds what was stored")?;
+    check_that(files(h, home2) == 0, "the home directory was written")?;
+    // And an empty `NAZM_USER_CACHE_DIR` turns it off: every object is the project's.
+    let env3 = env_set(env_set(env_unset(env_set(suite_env(h), "NAZM_USER_CACHE_DIR", ""), "NAZM_CACHE_DIR"), "HOME", home3), "XDG_CACHE_HOME", home3);
+    let p3 = project(h)?;
+    let did3 = build_with(h, env3, p3, "prog", strs_new());
+    let own = files(h, f"{p3}/.nazm/native");
+    scratch_remove(h, p3);
+    check_that(own == did3?.stored, "every object is the project's")?;
+    check_that(files(h, home3) == 0, "the home directory was written")
+}
+
+@test
+fn the_user_cache_is_under_the_home_directory_unless_a_variable_moves_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let home = scratch_new(h);
+    let xdg = scratch_new(h);
+    let moved = scratch_new(h);
+    let home2 = scratch_new(h);
+    let home3 = scratch_new(h);
+    let got = home_in(h, home, xdg, moved, home2, home3);
+    for d in words(f"{home} {xdg} {moved} {home2} {home3}") {
+        scratch_remove(h, d);
+    }
+    got
+}

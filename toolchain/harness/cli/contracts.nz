@@ -1,0 +1,408 @@
+// Contracts: `requires` and `ensures` hold or fail alike on every tier; a clause that itself fails;
+// what the checker proves or refuses at compile time; what a clause may be; the census of
+// obligations; critical and cyber profiles; preconditions through an interface; the formatter; the
+// representative programs. Ported from `crates/nazm-cli/tests/contracts.rs` (R7).
+
+use "@std/json"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+fn err(o: Ran) -> Str ! {} {
+    o.stderr
+}
+
+fn out(o: Ran) -> Str ! {} {
+    o.stdout
+}
+
+/// `files` (name, text, …) in a fresh directory.
+fn program(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+/// The codes a JSON check reported on standard error, sorted and each once.
+fn codes_s(o: Ran) -> Strs ! {} {
+    let found = strs_new();
+    for l in lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                let c = jstr(doc, "code");
+                if str_len(c) > 0 {
+                    strs_push(found, c);
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    let out_ = strs_new();
+    for c in strs_sort(found) {
+        if strs_len(out_) == 0 || strs_get(out_, strs_len(out_) - 1) != c {
+            strs_push(out_, c);
+        }
+    }
+    out_
+}
+
+/// How one tier ran is a `Ran` whose `stderr` is the failure's first line without where a native
+/// build printed it from (`""` for none): the Rust test's `failure`.
+
+fn failure_of(stderr: Str) -> Str ! {} {
+    for l in lines(stderr) {
+        let at = find(l, "error[N");
+        if at >= 0 {
+            let rest = str_slice(l, at, str_len(l));
+            return strs_get(text_split(rest, " at "), 0);
+        }
+    }
+    ""
+}
+
+fn everywhere_in(h: Caps, d: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let interpreted = nazm(h, d, words("run --interpret prog.nz"));
+    let runs = vec_new[Ran]();
+    vec_push(runs, Ran(code: interpreted.code, stdout: interpreted.stdout, stderr: failure_of(interpreted.stderr)));
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/prog-{backend}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {backend} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let o = bounded_exe(h, exe, "", env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"));
+        let line = memory_line(o);
+        if str_len(line) > 0 {
+            check_that(text_contains(line, "strings allocated=") && !text_contains(line, "live=1"), f"{backend}: {line}")?;
+        }
+        vec_push(runs, Ran(code: o.code, stdout: o.stdout, stderr: failure_of(o.stderr)));
+    }
+    let i = vec_get(runs, 0);
+    let l = vec_get(runs, 1);
+    let c = vec_get(runs, 2);
+    check_that(l.code == c.code && l.stdout == c.stdout && l.stderr == c.stderr, f"LLVM and Cranelift disagree: {ran_show(l)} vs {ran_show(c)}")?;
+    check_that(i.code == l.code, f"the interpreter disagrees: {ran_show(i)} vs {ran_show(l)}")?;
+    check_that(i.stderr == l.stderr, f"the interpreter disagrees: {ran_show(i)} vs {ran_show(l)}")?;
+    Result[Ran, Str].Ok(value: l)
+}
+
+/// The program run by the interpreter and built by both backends: all three must agree on how
+/// the run ended and the failure's code and sentence, the two backends on everything. The
+/// LLVM build's run.
+fn everywhere_c(h: Caps, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = everywhere_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// The obligations of `kind` in a census, as `status witness` (the witness `-` for none).
+fn calls_of(v: JsonDoc, kind: Str) -> Strs ! {} {
+    let out_ = strs_new();
+    let n = jlen(v, "obligations");
+    let mut i = 0;
+    while i < n {
+        if jstr(v, f"obligations/{i}/kind") == kind {
+            let w = jstr(v, f"obligations/{i}/witness");
+            strs_push(out_, f"{jstr(v, f"obligations/{i}/status")} {if str_len(w) > 0 { w } else { "-" }}");
+        }
+        i = i + 1;
+    }
+    out_
+}
+
+/// Each obligation of a census as `function kind line:column status`.
+fn census_rows(v: JsonDoc) -> Strs ! {} {
+    let out_ = strs_new();
+    let n = jlen(v, "obligations");
+    let mut i = 0;
+    while i < n {
+        let o = f"obligations/{i}";
+        strs_push(out_, f"{jstr(v, f"{o}/function")} {jstr(v, f"{o}/kind")} {jtext(v, f"{o}/line")}:{jtext(v, f"{o}/column")} {jstr(v, f"{o}/status")}");
+        i = i + 1;
+    }
+    out_
+}
+
+/// The census's call preconditions in `main`.
+fn main_calls(v: JsonDoc) -> Int ! {} {
+    let n = jlen(v, "obligations");
+    let mut count = 0;
+    let mut i = 0;
+    while i < n {
+        if jstr(v, f"obligations/{i}/function") == "main" && jstr(v, f"obligations/{i}/kind") == "call-precondition" {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+const ISQRT: Str = "fn isqrt(n: Int) -> Int ! {}\n    requires n >= 0\n    ensures result >= 0\n    ensures result * result <= n && n - result * result <= 2 * result\n{\n    let mut r = 0;\n    while (r + 1) * (r + 1) <= n { r = r + 1; }\n    r\n}\n";
+
+@test
+fn a_contract_holds_or_fails_alike_on_every_tier(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let ok_v = everywhere_c(h, f"{ISQRT}fn main(io: IoCap) -> Int ! {{ io }} {{\n    print(int_to_str(isqrt(0))); print(\" \"); print(int_to_str(isqrt(99))); print(\" \");\n    print(int_to_str(isqrt(str_len(\"abcdefghi\")))); 0\n}}\n")?;
+    check_that(ok_v.code == 0, ran_show(ok_v))?;
+    check_that(text_starts_with(ok_v.stdout, "0 9 3"), ok_v.stdout)?;
+    // A precondition broken at run time: `N0410` at the clause, before the body runs.
+    let pre = everywhere_c(h, f"{ISQRT}fn main(io: IoCap) -> Int ! {{ io }} {{\n    print(\"before \"); let n = 0 - str_len(\"abc\"); print(int_to_str(isqrt(n))); 0\n}}\n")?;
+    check_that(pre.code == 2, ran_show(pre))?;
+    check_that(pre.stdout == "before ", "assert_eq!(pre.stdout, \"before \");")?;
+    check_that(pre.stderr == "error[N0410]: this precondition does not hold", "assert_eq!(pre.stderr, Some(\"error[N0410]: this precondition does not hold\"));")?;
+    ok()
+}
+
+/// The functions under test, with `arg` as the body of `main`.
+fn post_src(arg: Str) -> Str ! {} {
+    f"fn grow(n: Int) -> Int ! {{}}\n    ensures result > n\n{{\n    if n > 10 {{ return n; }}\n    n + 1\n}}\nfn parse(s: Str) -> Result[Int, Str] ! {{}}\n    ensures match_ok(result)\n{{\n    let n = digits(s)?;\n    Result[Int, Str].Ok(value: n)\n}}\nfn match_ok(r: Result[Int, Str]) -> Bool ! {{}} {{ match r {{ Result.Ok(value: v) => true, Result.Err(error: e) => false }} }}\nfn digits(s: Str) -> Result[Int, Str] ! {{}} {{ if str_len(s) > 0 {{ Result[Int, Str].Ok(value: str_len(s)) }} else {{ Result[Int, Str].Err(error: \"empty\") }} }}\nfn main(io: IoCap) -> Int ! {{ io }} {{ {arg} }}\n"
+}
+
+@test
+fn a_postcondition_is_checked_on_every_return_a_question_mark_included(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `post_src(arg)`: the program, `arg` the body of `main`.
+    // The tail and the early `return` both answer to `ensures`.
+    let tail = everywhere_c(h, post_src("print(int_to_str(grow(3))); 0"))?;
+    check_that(tail.code == 0, ran_show(tail))?;
+    check_that(tail.stdout == "40\n", "assert_eq!(tail.stdout, \"40\\n\");")?;
+    let early = everywhere_c(h, post_src("print(int_to_str(grow(20))); 0"))?;
+    check_that(early.code == 2, ran_show(early))?;
+    check_that(early.stderr == "error[N0411]: this postcondition does not hold", "assert_eq!(early.stderr, Some(\"error[N0411]: this postcondition does not hold\"));")?;
+    // A `?` that leaves with the error leaves through the postcondition too.
+    let ok_v = everywhere_c(h, post_src("match parse(\"12\") { Result.Ok(value: v) => print(int_to_str(v)), Result.Err(error: e) => print(e) }; 0"))?;
+    check_that(ok_v.code == 0, ran_show(ok_v))?;
+    check_that(ok_v.stdout == "20\n", "assert_eq!(ok.stdout, \"20\\n\");")?;
+    let failed = everywhere_c(h, post_src("match parse(\"\") { Result.Ok(value: v) => print(int_to_str(v)), Result.Err(error: e) => print(e) }; 0"))?;
+    check_that(failed.code == 2, ran_show(failed))?;
+    check_that(failed.stderr == "error[N0411]: this postcondition does not hold", "assert_eq!(failed.stderr, Some(\"error[N0411]: this postcondition does not hold\"));")?;
+    ok()
+}
+
+@test
+fn a_string_result_is_held_for_its_postcondition_and_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = everywhere_c(h, "fn shout(s: Str) -> Str ! {}\n    requires str_len(s) > 0\n    ensures str_len(result) == str_len(s) + 1\n{ str_concat(s, \"!\") }\nfn main(io: IoCap) -> Int ! { io } {\n    let mut i = 0;\n    while i < 100 { let t = shout(int_to_str(i)); i = i + 1; }\n    print(shout(\"hey\")); 0\n}\n")?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(r.stdout == "hey!0\n", "assert_eq!(r.stdout, \"hey!0\\n\");")?;
+    ok()
+}
+
+@test
+fn a_clause_that_itself_fails_fails_the_call_with_its_own_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = everywhere_c(h, "fn sq(n: Int) -> Int ! {}\n    ensures result == n * n\n{ n }\nfn main() -> Int { sq(9223372036854775807) }\n")?;
+    check_that(r.code == 2, ran_show(r))?;
+    check_that(r.stderr == "error[N0400]: this multiplication overflows `Int`", "assert_eq!(r.stderr, Some(\"error[N0400]: this multiplication overflows `Int`\"));")?;
+    ok()
+}
+
+// --- what the checker decides ------------------------------------------------------------------
+
+@test
+fn a_call_of_literals_is_proved_or_refused_at_compile_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    strs_push(l1, "prog.nz");
+    strs_push(l1, f"{ISQRT}fn main() -> Int {{ isqrt(-4) + isqrt(16) }}\n");
+    let d = program(h, l1)?;
+    let o = nazm(h, d, words("check --json prog.nz"));
+    let w2 = strs_new();
+    strs_push(w2, "N0615");
+    same_strs("codes", codes_s(o), w2)?;
+    scratch_write(h, d, "prog.nz", f"{ISQRT}fn main() -> Int {{ isqrt(16) + isqrt(str_len(\"ab\")) }}\n")?;
+    let o_2 = nazm(h, d, words("obligations --json prog.nz"));
+    check_that((o_2.code == 0), "assert!((o.code == 0), \"{}\", err(o));")?;
+    let v = jparse(o_2.stdout)?;
+    let calls = calls_of(v, "call-precondition");
+    check_that(strs_len(calls) == 2 && strs_get(calls, 0) == "proved n >= 0 holds with n = 16" && strs_get(calls, 1) == "checked -", str_join(calls, " | "))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_clause_is_only_what_cannot_fail_for_want_of_authority_or_memory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "fn main() -> Int { 0 }\n";
+    let srcs = strs_new();
+    let wants = strs_new();
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} requires write_file(\"f\", \"x\") == 0 { x }\n");
+    strs_push(wants, "N0366 N0369 N0614");
+    strs_push(srcs, "fn g(x: Int) -> Int { x }\nfn f(x: Int) -> Int ! {} requires g(x) > 0 { x }\n");
+    strs_push(wants, "N0614");
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} requires str_len(int_to_str(x)) > 0 { x }\n");
+    strs_push(wants, "N0614");
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} requires if x > 0 { true } else { false } { x }\n");
+    strs_push(wants, "N0614");
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} requires x { x }\n");
+    strs_push(wants, "N0300");
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} ensures x > 0 requires x > 0 { x }\n");
+    strs_push(wants, "N0100");
+    strs_push(srcs, "fn f(x: Int) -> Int ! {} requires result > 0 { x }\n");
+    strs_push(wants, "N0200");
+    let mut ci = 0;
+    while ci < strs_len(srcs) {
+        let src = strs_get(srcs, ci);
+        let files = strs_new();
+        strs_push(files, "prog.nz");
+        strs_push(files, f"{src}{main}");
+        let d = program(h, files)?;
+        let o = nazm(h, d, words("check --json prog.nz"));
+        scratch_remove(h, d);
+        same_strs(src, codes_s(o), words(strs_get(wants, ci)))?;
+        ci = ci + 1;
+    }
+    // A pure function of this module, a pure built-in that only reads, a field: each allowed.
+    let fine = "struct P { x: Int }\nfn pos(n: Int) -> Bool ! {} { n > 0 }\nfn f(p: P, s: Str) -> Int ! {} requires pos(p.x) && str_len(s) < 10 { p.x }\n";
+    let l5 = strs_new();
+    strs_push(l5, "prog.nz");
+    strs_push(l5, f"{fine}{main}");
+    let d = program(h, l5)?;
+    let o = nazm(h, d, words("check prog.nz"));
+    check_that((o.code == 0), "assert!((o.code == 0), \"{}\", err(o));")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+// --- the census -------------------------------------------------------------------------------
+
+@test
+fn the_census_lists_every_obligation_with_its_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l6 = strs_new();
+    strs_push(l6, "prog.nz");
+    strs_push(l6, "fn half(n: Int) -> Int ! {}\n    requires n >= 0\n    ensures result * 2 <= n\n{ n / 2 }\nfn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }\nfn main() -> Int { half(8) + str_byte(\"a\", 0) + 2 * 3 + ap(half, 4) }\n");
+    let d = program(h, l6)?;
+    let o = nazm(h, d, words("obligations --json prog.nz"));
+    check_that((o.code == 0), "assert!((o.code == 0), \"{}\", err(o));")?;
+    let v = jparse(o.stdout)?;
+    check_that(jstr(v, "schema") == "nazm.obligations/1", "assert_eq!(jv(v, \"schema\"), \"nazm.obligations/1\");")?;
+    check_that(jstr(v, "evidence") == "compiler evidence, not certification", "assert_eq!(jv(v, \"evidence\"), \"compiler evidence, not certification\");")?;
+    let rows = census_rows(v);
+    let w7 = strs_new();
+    strs_push(w7, "half precondition 2:5 checked");
+    strs_push(w7, "half postcondition 3:5 checked");
+    strs_push(w7, "half overflow 3:20 checked");
+    strs_push(w7, "half division 4:5 proved");
+    strs_push(w7, "ap indirect-call 5:48 unknown");
+    strs_push(w7, "main call-precondition 6:20 proved");
+    strs_push(w7, "main overflow 6:28 checked");
+    strs_push(w7, "main index 6:30 checked");
+    strs_push(w7, "main overflow 6:47 checked");
+    strs_push(w7, "main overflow 6:51 proved");
+    strs_push(w7, "main overflow 6:55 checked");
+    same_strs("codes", rows, w7)?;
+    check_that(jint(v, "proved") == 3, "assert_eq!(jint(v, \"proved\"), Some(3));")?;
+    check_that(jint(v, "checked") == 7, "assert_eq!(jint(v, \"checked\"), Some(7));")?;
+    check_that(jint(v, "unknown") == 1, "assert_eq!(jint(v, \"unknown\"), Some(1));")?;
+    // The same bytes every time.
+    let again = nazm(h, d, words("obligations --json prog.nz"));
+    check_that(again.stdout == o.stdout, "assert_eq!(again.stdout, o.stdout);")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn critical_and_cyber_refuse_an_obligation_of_unknown_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn twice(x: Int) -> Int ! {} { x * 2 }\nfn ap(f: fn(Int) -> Int, x: Int) -> Int ! {} { f(x) }\nfn main() -> Int ! {} { ap(twice, 4) }\n";
+    let l8 = strs_new();
+    strs_push(l8, "prog.nz");
+    strs_push(l8, src);
+    let d = program(h, l8)?;
+    let profiles9 = strs_new();
+    strs_push(profiles9, "critical");
+    strs_push(profiles9, "cyber");
+    for profile in profiles9 {
+        let l10 = strs_new();
+        strs_push(l10, "check");
+        strs_push(l10, "--profile");
+        strs_push(l10, profile);
+        strs_push(l10, "prog.nz");
+        let o = nazm(h, d, l10);
+        check_that(!(o.code == 0), "assert!(!(o.code == 0));")?;
+        check_that(text_contains(err(o), "rule `no-unknown-calls`") && text_contains(err(o), "calls a function value"), profile)?;
+    
+    }
+    // Called by name, every obligation is proved or checked, and the rule passes.
+    scratch_write(h, d, "prog.nz", "fn twice(x: Int) -> Int ! {} { x * 2 }\nfn main() -> Int ! {} { twice(4) }\n")?;
+    let o = nazm(h, d, words("check --profile critical prog.nz"));
+    check_that(!text_contains(err(o), "no-unknown-calls"), err(o))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn an_imported_function_s_preconditions_reach_its_callers_through_the_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l11 = strs_new();
+    strs_push(l11, "nazm.root");
+    strs_push(l11, "");
+    strs_push(l11, "lib.nz");
+    strs_push(l11, "pub fn half(n: Int) -> Int ! {}\n    requires n >= 0\n    requires n % 2 == 0\n{ n / 2 }\n");
+    strs_push(l11, "prog.nz");
+    strs_push(l11, "use \"lib.nz\";\nfn main() -> Int { half(str_len(\"abcd\")) }\n");
+    let d = program(h, l11)?;
+    let i = nazm(h, d, words("interface lib.nz"));
+    check_that(text_contains(out(i), "\"requires\":2"), out(i))?;
+    let mut i12 = 0;
+    while i12 < 2 {
+        // The second reads `lib.nz`'s interface back from the cache.
+        let o = nazm(h, d, words("obligations --json prog.nz"));
+        check_that((o.code == 0), "assert!((o.code == 0), \"{}\", err(o));")?;
+        let v = jparse(o.stdout)?;
+        let calls_in_main = main_calls(v);
+        check_that(calls_in_main == 1, jtext(v, ""))?;
+    
+        i12 = i12 + 1;
+    }
+    // And the call runs against them.
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(out(r) == "2\n", "assert_eq!(out(r), \"2\\n\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn contract_clauses_are_formatted_as_the_header_s(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l13 = strs_new();
+    strs_push(l13, "prog.nz");
+    strs_push(l13, "fn f(x: Int) -> Int ! {}\nrequires x > 0\n        ensures result > x\n    {\n    x + 1\n}\n");
+    let d = program(h, l13)?;
+    let o = nazm(h, d, words("fmt prog.nz"));
+    check_that((o.code == 0), "assert!((o.code == 0), \"{}\", err(o));")?;
+    check_that(read_text(h, f"{d}/prog.nz")? == "fn f(x: Int) -> Int ! {}\n    requires x > 0\n    ensures result > x\n{\n    x + 1\n}\n", "assert_eq!(read_text(h, f\"{d}/prog.nz\")?, \"fn f(x: Int) -> Int ! {}\\n    requires x > 0\\n    ensures result > x\\n{\\n    x + 1\\n}\\n\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_representative_programs_run_alike_and_their_obligations_are_known(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = f"{repo_root(h)}/examples/contracts";
+    let isqrt = everywhere_c(h, read_text(h, f"{root}/isqrt.nz")?)?;
+    check_that(isqrt.code == 0, ran_show(isqrt))?;
+    check_that(isqrt.stdout == "0 9 3037000499\n0\n", "assert_eq!(isqrt.stdout, \"0 9 3037000499\\n0\\n\");")?;
+    let ledger = everywhere_c(h, read_text(h, f"{root}/ledger.nz")?)?;
+    check_that(ledger.code == 0, ran_show(ledger))?;
+    check_that(ledger.stdout == "150\n0\n", "assert_eq!(ledger.stdout, \"150\\n0\\n\");")?;
+    let a14 = strs_new();
+    strs_push(a14, "obligations");
+    strs_push(a14, "--json");
+    strs_push(a14, f"{root}/ledger.nz");
+    let o = run(h, nazm_bin(h.io), a14, "", suite_env(h));
+    let v = jparse(o.stdout)?;
+    check_that(jint(v, "unknown") == 0, jtext(v, ""))?;
+    ok()
+}
+

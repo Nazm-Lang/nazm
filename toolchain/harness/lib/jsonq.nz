@@ -82,3 +82,9 @@ pub fn jlen(doc: JsonDoc, path: Str) -> Int ! {} {
     }
     json_len(doc, n)
 }
+
+/// The node at `path` written as JSON (`null` where there is none): a JSON value compared whole,
+/// as `assert_eq!` on two `serde_json::Value`s compares them.
+pub fn jv(doc: JsonDoc, path: Str) -> Str ! {} {
+    jtext(doc, path)
+}

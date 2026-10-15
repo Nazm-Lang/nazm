@@ -1,0 +1,387 @@
+// The Nazm 1.0 compatibility corpus, `tests/compat/v1/` (Gate 1): every file pinned by its BLAKE3
+// digest; `run/` cases print what they say interpreted and built by both backends; `trap/` cases
+// trap with their code; `refuse/` cases are refused with theirs and not built; `check/` cases
+// check; a superseded refusal is kept and now checks. Ported from
+// `crates/nazm-cli/tests/compat_v1.rs` (R7). The digests are `@std/blake3`'s where the Rust test
+// uses the `blake3` crate.
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "@std/blake3"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/tree.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// The corpus as committed. Only read: every case runs from a `staged` copy.
+fn committed(h: Caps) -> Str ! { io } {
+    f"{repo_root(h)}/tests/compat/v1"
+}
+
+/// Every file under `dir` (not its directories), as paths relative to it, in name order.
+fn every_file(h: Caps, dir: Str) -> Result[Strs, Str] ! { io } {
+    match file_walk(h.io, dir) {
+        Result.Ok(value: fs) => {
+            let rel = strs_new();
+            for f in fs {
+                if is_dir(h, f) {
+                    continue;
+                }
+                match strip_prefix(f, f"{dir}/") {
+                    Option.Some(value: r) => strs_push(rel, r),
+                    Option.None() => strs_push(rel, f),
+                };
+            }
+            Result[Strs, Str].Ok(value: strs_sort(rel))
+        },
+        Result.Err(error: e) => Result[Strs, Str].Err(error: f"{dir}: {e.message}"),
+    }
+}
+
+/// A copy of the corpus in a scratch directory, for the cases to run in.
+fn staged(h: Caps) -> Result[Str, Str] ! { io } {
+    let root = committed(h);
+    let d = scratch_new(h);
+    for rel in every_file(h, root)? {
+        scratch_write(h, d, rel, read_raw(h, f"{root}/{rel}")?)?;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => match m.kind { FileKind.Directory() => true, FileKind.Regular() => false, FileKind.Other() => false, },
+        Result.Err(error: e) => false,
+    }
+}
+
+/// The cases of one directory: their names and the path `nazm` is given for each, by name.
+fn cases(h: Caps, corpus: Str, kind: Str) -> Result[(Strs, Strs), Str] ! { io } {
+    let dir = f"{corpus}/{kind}";
+    let names = match dir_list(h.io, dir) {
+        Result.Ok(value: ns) => strs_sort(ns),
+        Result.Err(error: e) => {
+            return Result[(Strs, Strs), Str].Err(error: f"{dir}: {e.message}");
+        },
+    };
+    let out_names = strs_new();
+    let entries = strs_new();
+    for n in names {
+        let p = f"{dir}/{n}";
+        if is_dir(h, p) {
+            let entry = if file_exists_at(h.io, f"{p}/nazm.toml") { p } else { f"{p}/main.nz" };
+            check_that(file_exists_at(h.io, entry), f"{p}: no main.nz or nazm.toml")?;
+            strs_push(out_names, n);
+            strs_push(entries, entry);
+        } else {
+            match strip_suffix(n, ".nz") {
+                Option.Some(value: stem) => {
+                    strs_push(out_names, stem);
+                    strs_push(entries, p);
+                },
+                Option.None() => 0,
+            };
+        }
+    }
+    Result[(Strs, Strs), Str].Ok(value: (out_names, entries))
+}
+
+/// The code a case's first line says it expects: `// expect: N0400`.
+fn expected_code(h: Caps, src: Str) -> Result[Str, Str] ! { io } {
+    let text = read_text(h, src)?;
+    match strip_prefix(first_line(text), "// expect: ") {
+        Option.Some(value: c) => Result[Str, Str].Ok(value: text_trim(c)),
+        Option.None() => Result[Str, Str].Err(error: f"{src}: first line is not `// expect: CODE`"),
+    }
+}
+
+fn nazm_in(h: Caps, cwd: Str, args: Strs) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), args, cwd, suite_env(h))
+}
+
+fn with_arg(first: Str, arg: Str) -> Strs ! {} {
+    let a = words(first);
+    strs_push(a, arg);
+    a
+}
+
+/// `path  rest` lines of a corpus file as two lists.
+fn two_columns(text: Str) -> Result[(Strs, Strs), Str] ! {} {
+    let a = strs_new();
+    let b = strs_new();
+    for l in lines(text) {
+        if str_len(text_trim(l)) > 0 {
+            let at = find(l, "  ");
+            check_that(at >= 0, f"not two columns: {l}")?;
+            strs_push(a, str_slice(l, 0, at));
+            strs_push(b, str_slice(l, at + 2, str_len(l)));
+        }
+    }
+    Result[(Strs, Strs), Str].Ok(value: (a, b))
+}
+
+/// The value at `key` in two parallel lists, or `""`.
+fn lookup(keys: Strs, values: Strs, key: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < strs_len(keys) {
+        if strs_get(keys, i) == key {
+            return strs_get(values, i);
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn pins_in(h: Caps, root: Str) -> Result[Int, Str] ! { io } {
+    // `DIGEST  PATH`, a line each.
+    let (digests, pinned) = two_columns(read_text(h, f"{root}/BLAKE3SUMS")?)?;
+    let seen = strs_new();
+    for rel in every_file(h, root)? {
+        if rel == "BLAKE3SUMS" || rel == "README.md" {
+            continue;
+        }
+        strs_push(seen, rel);
+        let digest = blake3_hex(file_bytes(h, f"{root}/{rel}")?);
+        let pin = lookup(pinned, digests, rel);
+        check_that(str_len(pin) > 0, f"{rel} is not pinned in BLAKE3SUMS: a new case is added with its pin")?;
+        check_that(pin == digest, f"{rel} changed. A 1.x toolchain keeps every case's meaning: an edited case or expectation is a 2.0 change or a recorded defect fix (README.md)")?;
+    }
+    for path in pinned {
+        check_that(strs_has(seen, path), f"{path} is pinned but gone: cases are never removed in 1.x")?;
+    }
+    let kinds = words("run trap refuse check");
+    let floors = ints_new();
+    ints_push(floors, 23);
+    ints_push(floors, 9);
+    ints_push(floors, 39);
+    ints_push(floors, 1);
+    let mut k = 0;
+    while k < 4 {
+        let (names, entries) = cases(h, root, strs_get(kinds, k))?;
+        check_that(strs_len(names) >= ints_get(floors, k), f"{strs_get(kinds, k)}/ holds fewer than {ints_get(floors, k)} cases")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+/// The bytes of a file.
+fn file_bytes(h: Caps, path: Str) -> Result[Bytes, Str] ! { io } {
+    match file_read_all(h.io, path) {
+        Result.Ok(value: b) => Result[Bytes, Str].Ok(value: b),
+        Result.Err(error: e) => Result[Bytes, Str].Err(error: f"{path}: {e.message}"),
+    }
+}
+
+@test
+fn every_corpus_file_is_pinned_by_its_digest(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    pins_in(h, committed(h))
+}
+
+fn the_dir_of(path: Str) -> Str ! {} {
+    let parts = text_split(path, "/");
+    let keep = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(parts) {
+        strs_push(keep, strs_get(parts, i));
+        i = i + 1;
+    }
+    str_join(keep, "/")
+}
+
+fn run_cases(h: Caps, corpus: Str, scratch: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (names, entries) = cases(h, corpus, "run")?;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let name = strs_get(names, i);
+        let entry = strs_get(entries, i);
+        let cwd = if is_dir(h, entry) { entry } else { the_dir_of(entry) };
+        let expected = read_text(h, f"{corpus}/run/{name}.stdout")?;
+        let c = nazm_in(h, cwd, with_arg("check", entry));
+        check_that(c.code == 0, f"check {name}: {c.stderr}")?;
+        let r = nazm_in(h, cwd, with_arg("run --interpret", entry));
+        check_that(r.code == 0, f"run {name}: {r.stderr}")?;
+        check_that(r.stdout == expected, f"run {name}: {r.stdout}")?;
+        for backend in words("llvm cranelift") {
+            let exe = f"{scratch}/{name}.{backend}";
+            let a = with_arg("build", entry);
+            strs_push(a, "-o");
+            strs_push(a, exe);
+            strs_push(a, "--backend");
+            strs_push(a, backend);
+            let b = nazm_in(h, cwd, a);
+            check_that(b.code == 0, f"build {name} ({backend}): {b.stderr}")?;
+            let ran = run(h, exe, strs_new(), cwd, suite_env(h));
+            check_that(ran.code == 0, f"{name} ({backend}): {ran.stderr}")?;
+            check_that(ran.stdout == expected, f"{name} built by {backend}: {ran.stdout}")?;
+        }
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn every_run_case_prints_what_it_says_interpreted_and_compiled_by_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let scratch = scratch_new(h);
+    let corpus = staged(h)?;
+    let got = run_cases(h, corpus, scratch);
+    scratch_remove(h, corpus);
+    scratch_remove(h, scratch);
+    got
+}
+
+fn trap_cases(h: Caps, corpus: Str, scratch: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (names, entries) = cases(h, corpus, "trap")?;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let name = strs_get(names, i);
+        let entry = strs_get(entries, i);
+        let cwd = the_dir_of(entry);
+        let code = expected_code(h, entry)?;
+        let c = nazm_in(h, cwd, with_arg("check", entry));
+        check_that(c.code == 0, f"check {name}: {c.stderr}")?;
+        let r = nazm_in(h, cwd, with_arg("run --interpret", entry));
+        check_that(r.code == 2, f"run {name}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, f"error[{code}]"), f"run {name}: {r.stderr}")?;
+        for backend in words("llvm cranelift") {
+            let exe = f"{scratch}/{name}.{backend}";
+            let a = with_arg("build", entry);
+            strs_push(a, "-o");
+            strs_push(a, exe);
+            strs_push(a, "--backend");
+            strs_push(a, backend);
+            let b = nazm_in(h, cwd, a);
+            check_that(b.code == 0, f"build {name} ({backend}): {b.stderr}")?;
+            let ran = run(h, exe, strs_new(), cwd, suite_env(h));
+            check_that(ran.code == 2, f"{name} ({backend}): {ran_show(ran)}")?;
+            check_that(text_contains(ran.stderr, f"[{code}]"), f"{name} ({backend}): {ran.stderr}")?;
+        }
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn every_trap_case_traps_with_its_code_interpreted_and_compiled_by_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let scratch = scratch_new(h);
+    let corpus = staged(h)?;
+    let got = trap_cases(h, corpus, scratch);
+    scratch_remove(h, corpus);
+    scratch_remove(h, scratch);
+    got
+}
+
+/// The refusal cases a later 1.x superseded by adding their construct, by path from the corpus
+/// root, each with the addition that superseded it (`SUPERSEDED`).
+fn superseded(h: Caps, root: Str) -> Result[(Strs, Strs), Str] ! { io } {
+    let text = match read_text(h, f"{root}/SUPERSEDED") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => "",
+    };
+    two_columns(text)
+}
+
+fn superseded_in(h: Caps, corpus: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (paths, whys) = superseded(h, committed(h))?;
+    check_that(strs_len(paths) > 0, "SUPERSEDED lists the cases a 1.x addition superseded")?;
+    let mut i = 0;
+    while i < strs_len(paths) {
+        let path = strs_get(paths, i);
+        check_that(str_len(text_trim(strs_get(whys, i))) > 0, f"{path}: SUPERSEDED says why")?;
+        let entry = f"{corpus}/{path}";
+        check_that(file_exists_at(h.io, entry) && !is_dir(h, entry), f"{path} is superseded, never removed")?;
+        let c = nazm_in(h, the_dir_of(entry), with_arg("check", entry));
+        check_that(c.code == 0, f"{path} is superseded by an addition, so it checks now: {c.stderr}")?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn a_superseded_refusal_is_kept_and_now_checks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let corpus = staged(h)?;
+    let got = superseded_in(h, corpus);
+    scratch_remove(h, corpus);
+    got
+}
+
+/// The first `error` diagnostic's code among a JSON check's lines on standard error, or `Err`.
+fn first_error_code(stderr: Str, name: Str) -> Result[Str, Str] ! {} {
+    for l in lines(stderr) {
+        match jparse(l) {
+            Result.Ok(value: d) => {
+                if jstr(d, "severity") == "error" {
+                    return Result[Str, Str].Ok(value: jstr(d, "code"));
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Str, Str].Err(error: f"{name}: no error reported: {stderr}")
+}
+
+fn refusal_cases(h: Caps, corpus: Str, scratch: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (sup, whys) = superseded(h, committed(h))?;
+    let (names, entries) = cases(h, corpus, "refuse")?;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let name = strs_get(names, i);
+        let entry = strs_get(entries, i);
+        if !strs_has(sup, f"refuse/{name}.nz") {
+            let cwd = the_dir_of(entry);
+            let code = expected_code(h, entry)?;
+            let c = nazm_in(h, cwd, with_arg("check --json", entry));
+            check_that(c.code == 1, f"check {name}: {ran_show(c)}")?;
+            let first = first_error_code(c.stderr, name)?;
+            check_that(first == code, f"{name}: {first}")?;
+            let exe = f"{scratch}/{name}";
+            let a = with_arg("build", entry);
+            strs_push(a, "-o");
+            strs_push(a, exe);
+            let b = nazm_in(h, cwd, a);
+            check_that(b.code == 1, f"build {name}: {ran_show(b)}")?;
+            check_that(!file_exists_at(h.io, exe), f"{name}: a refused program was built")?;
+        }
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn every_refusal_case_is_refused_with_its_code_and_not_built(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let scratch = scratch_new(h);
+    let corpus = staged(h)?;
+    let got = refusal_cases(h, corpus, scratch);
+    scratch_remove(h, corpus);
+    scratch_remove(h, scratch);
+    got
+}
+
+fn check_cases(h: Caps, corpus: Str) -> Result[Int, Str] ! { io, spawn } {
+    let (names, entries) = cases(h, corpus, "check")?;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let entry = strs_get(entries, i);
+        let c = nazm_in(h, the_dir_of(entry), with_arg("check", entry));
+        check_that(c.code == 0, f"check {strs_get(names, i)}: {c.stderr}")?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn every_check_case_checks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let corpus = staged(h)?;
+    let got = check_cases(h, corpus);
+    scratch_remove(h, corpus);
+    got
+}

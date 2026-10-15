@@ -1,0 +1,238 @@
+// Constant tables: `const` arrays and records read alike under the interpreter, the LIR oracle and
+// every native tier, with nothing live; what a constant may not hold. Ported from
+// `crates/nazm-cli/tests/const_tables.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/jsonq.nz"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/tiers.nz"
+use "../lib/differential.nz"
+
+/// The program under the interpreter and the LIR oracle, and built and run by each backend, each
+/// with the memory report asked for.
+fn everywhere_f(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    tiers_of(h, "prog.nz", src, Tiers(oracle: true, interp_memory: true, native_memory: true, native_in_dir: false))
+}
+
+/// The run wrote a memory report and nothing in it is live.
+fn nothing_live_in(r: Ran) -> Bool ! {} {
+    let line = memory_line(r);
+    str_len(line) > 0 && nothing_live(line)
+}
+
+/// `files` (name, text, …) in a fresh directory.
+fn in_dir(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn run_in(h: Caps, d: Str, file: Str) -> Ran ! { io, spawn } {
+    let a = words("run --interpret");
+    strs_push(a, file);
+    nazm(h, d, a)
+}
+
+fn build_in(h: Caps, d: Str, file: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let a = words("build");
+    strs_push(a, file);
+    strs_push(a, "-o");
+    strs_push(a, f"{d}/prog");
+    let b = nazm(h, d, a);
+    check_that(b.code == 0, b.stderr)?;
+    Result[Ran, Str].Ok(value: bounded_exe(h, f"{d}/prog", "", suite_env(h)))
+}
+
+/// `nazm check p.nz` on `src`: every error code the report names, and its first error line.
+fn refused(h: Caps, src: Str) -> Result[(Strs, Str), Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("check p.nz"));
+    scratch_remove(h, d);
+    let codes = strs_new();
+    let parts = text_split(r.stderr, "error[");
+    let mut i = 1;
+    while i < strs_len(parts) {
+        strs_push(codes, str_slice(strs_get(parts, i), 0, 5));
+        i = i + 1;
+    }
+    let mut first = "";
+    for l in lines(r.stderr) {
+        if str_len(first) == 0 && text_starts_with(l, "error[") {
+            first = l;
+        }
+    }
+    Result[(Strs, Str), Str].Ok(value: (codes, first))
+}
+
+/// The `key` of every element of the array at `path`.
+fn json_names(v: JsonDoc, path: Str, key: Str) -> Strs ! {} {
+    let out = strs_new();
+    let n = jlen(v, path);
+    let mut i = 0;
+    while i < n {
+        strs_push(out, jstr(v, f"{path}/{i}/{key}"));
+        i = i + 1;
+    }
+    out
+}
+
+const ARRAYS: Str = "struct Kw { name: Str, code: Int, }\nstruct Holder { words: [Str; 2], n: Int, }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\nfn pick(xs: [Str; 3], i: Int) -> Str { xs[i] }\n\nfn main(out: OutCap) -> Int ! {io} {\n    // Built from literals and from strings made at run time; copied, then written.\n    let names: [Str; 3] = [\"alpha\", \"beta\", str_concat(\"gam\", \"ma\")];\n    let mut copy = names;\n    copy[0] = str_concat(\"del\", \"ta\");\n    show(out, str_concat(names[0], copy[0]));\n    show(out, pick(names, 2));\n    // Records holding strings, in an array; an array in a record; arrays of arrays.\n    let kws: [Kw; 2] = [Kw(name: \"if\", code: 1), Kw(name: str_concat(\"wh\", \"ile\"), code: 2)];\n    let mut t = 0;\n    let mut i = 0;\n    while i < 2 { t = t + str_len(kws[i].name) * kws[i].code; i = i + 1; }\n    show(out, num_to_str(t));\n    let mut h = Holder(words: [str_concat(\"x\", \"y\"), \"z\"], n: 1);\n    h.words[1] = str_concat(\"q\", \"r\");\n    show(out, str_concat(h.words[0], h.words[1]));\n    let grid = [[str_concat(\"a\", \"\"); 2]; 2];\n    show(out, grid[1][1]);\n    // In a `Vec`, compared, given to a task.\n    let v = vec_new[[Str; 3]]();\n    vec_push(v, names);\n    vec_push(v, copy);\n    show(out, vec_get(v, 1)[0]);\n    let spelled: [Str; 3] = [\"alpha\", \"beta\", \"gamma\"];\n    if names == spelled && names != copy { show(out, \"eq\"); }\n    // Overwriting a string the array alone holds releases it: written twice, the first value is\n    // a run-time string nothing else holds, which only the second write can give back.\n    let mut owned: [Str; 2] = [str_concat(\"on\", \"e\"), str_concat(\"tw\", \"o\")];\n    owned[0] = str_concat(\"thr\", \"ee\");\n    owned[0] = str_concat(\"fo\", \"ur\");\n    // What an array holds stays its own after the temporaries that made it are gone, and\n    // after other strings of the same size are made: read back, it is what was written.\n    let made: [Str; 2] = [str_concat(\"ka\", \"pa\"), str_concat(\"ra\", \"ma\")];\n    let other: [Str; 2] = [str_concat(\"zz\", \"zz\"), str_concat(\"yy\", \"yy\")];\n    show(out, str_concat(str_concat(owned[0], owned[1]), str_concat(made[0], made[1])));\n    show(out, other[1]);\n    0\n}\n";
+
+/// By hand: `while` is 5 letters, `if` 2, so 2·1 + 5·2.
+const ARRAYS_EXPECTED: Str = "alphadelta\ngamma\n12\nxyqr\na\ndelta\neq\nfourtwokaparama\nyyyy\n";
+
+@test
+fn arrays_of_strings_mean_the_same_everywhere_and_are_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for run1 in everywhere_f(h, ARRAYS)? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_starts_with(r.stdout, ARRAYS_EXPECTED), who)?;
+        if who != "lir oracle" {
+            check_that(nothing_live_in(r), who)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+const TABLES: Str = "struct Keyword { text: Str, code: Int, }\nenum Color { Red, Rgb(r: UInt8, g: UInt8, b: UInt8), }\nconst N: Int = 3;\nconst KEYWORDS: [Keyword; N] = [\n    Keyword(text: \"fn\", code: 1),\n    Keyword(code: N - 1, text: \"let\"),\n    Keyword(text: \"match\", code: N),\n];\nconst ORIGIN: (Int, Int) = (0, -1);\nconst TEAL: Color = Color.Rgb(r: 0, g: 128, b: UInt8(64) * 2);\nconst ZEROS: [Int; 4] = [0; 4];\nconst TABLE: [[Str; 2]; 2] = [[\"a\", \"b\"], [\"c\", \"d\"]];\nconst COPY: [Keyword; 3] = KEYWORDS;\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn code_of(word: Str) -> Int {\n    let mut i = 0;\n    while i < N {\n        if KEYWORDS[i].text == word { return KEYWORDS[i].code; }\n        i = i + 1;\n    }\n    ORIGIN.1\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    show(out, num_to_str(code_of(\"let\") * 100 + code_of(\"match\") * 10 + code_of(\"zz\")));\n    let b = match TEAL { Color.Rgb(r: _, g: _, b: b) => Int(b), Color.Red() => 0, };\n    show(out, num_to_str(b + ZEROS[3]));\n    show(out, str_concat(TABLE[1][0], COPY[0].text));\n    // A use is a copy: writing one changes no other.\n    let mut mine = KEYWORDS;\n    mine[0] = Keyword(text: str_concat(\"f\", \"un\"), code: 9);\n    show(out, str_concat(mine[0].text, KEYWORDS[0].text));\n    0\n}\n";
+
+const TABLES_EXPECTED: Str = "229\n128\ncfn\nfunfn\n";
+
+@test
+fn constant_tables_mean_the_same_everywhere_and_are_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for run2 in everywhere_f(h, TABLES)? {
+        let who = run2.label;
+        let r = run2.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_starts_with(r.stdout, TABLES_EXPECTED), who)?;
+        if who != "lir oracle" {
+            check_that(nothing_live_in(r), who)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+const LIB: Str = "pub struct Keyword { text: Str, code: Int, }\npub const N: Int = 2;\npub const KEYWORDS: [Keyword; N] = [Keyword(text: \"fn\", code: 1), Keyword(text: \"let\", code: 2)];\npub const GREETING: Str = \"hi\";\n";
+
+@test
+fn an_exported_constant_crosses_a_module_plainly_and_under_a_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l3 = strs_new();
+    strs_push(l3, "lib.nz");
+    strs_push(l3, LIB);
+    strs_push(l3, "main.nz");
+    strs_push(l3, "use \"lib.nz\";\nconst DOUBLE: Int = N * 2;\nconst FIRST: [Keyword; 1] = [Keyword(text: GREETING, code: DOUBLE)];\nfn main() -> Int { KEYWORDS[1].code * 100 + FIRST[0].code * 10 + str_len(GREETING) }\n");
+    strs_push(l3, "q.nz");
+    strs_push(l3, "use \"lib.nz\" as lib;\nfn main() -> Int { lib::KEYWORDS[1].code * 10 + lib::N }\n");
+    let d = in_dir(h, l3)?;
+    let files4 = strs_new();
+    strs_push(files4, "main.nz");
+    strs_push(files4, "q.nz");
+    let wants4 = strs_new();
+    strs_push(wants4, "242\n");
+    strs_push(wants4, "22\n");
+    let mut k4 = 0 - 1;
+    for file in files4 {
+        k4 = k4 + 1;
+        let want = strs_get(wants4, k4);
+        let r = run_in(h, d, file);
+        check_that(text_starts_with(r.stdout, want), file)?;
+        // Twice built: the second reads the library's interface from the cache.
+        let mut i5 = 0;
+        while i5 < 2 {
+            let r = build_in(h, d, file)?;
+            check_that(r.code == 0, ran_show(r))?;
+        
+            i5 = i5 + 1;
+        }
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn an_exported_constant_is_in_the_published_interface(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l6 = strs_new();
+    strs_push(l6, "lib.nz");
+    strs_push(l6, LIB);
+    let d = in_dir(h, l6)?;
+    let r = run(h, nazm_bin(h.io), words("interface lib.nz"), d, suite_env(h));
+    check_that(r.code == 0, ran_show(r))?;
+    let v = jparse(r.stdout)?;
+    check_that(jstr(v, "schema") == "nazm.interface/13", "assert_eq!(jv(v, \"schema\"), \"nazm.interface/13\");")?;
+    let names = json_names(v, "consts", "name");
+    let w7 = strs_new();
+    strs_push(w7, "GREETING");
+    strs_push(w7, "KEYWORDS");
+    strs_push(w7, "N");
+    same_strs("codes", names, w7)?;
+    check_that(jstr(v, "consts/0/value/bytes") == "6869", "assert_eq!(jv(v, \"consts/0/value/bytes\"), \"6869\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn what_a_constant_table_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let codes_ = strs_new();
+    let sayss = strs_new();
+    strs_push(srcs, "struct P { x: Int, }\nconst A: P = P(x: 1, y: 2);\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0300");
+    strs_push(sayss, "no field `y`");
+    strs_push(srcs, "struct P { x: Int, }\nconst A: [P; 2] = [P(x: 1)];\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0300");
+    strs_push(sayss, "[P; 2]");
+    strs_push(srcs, "struct P { x: UInt8, }\nconst A: P = P(x: 300);\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0003");
+    strs_push(sayss, "");
+    strs_push(srcs, "struct P { x: Int, }\nconst A: P = P(x: 1 / 0);\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0623");
+    strs_push(sayss, "divides by zero");
+    strs_push(srcs, "struct P { x: Int, }\nfn f() -> Int { 1 }\nconst A: P = P(x: f());\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0622");
+    strs_push(sayss, "");
+    strs_push(srcs, "struct P { x: Int, }\nconst A: P = P(x: 1);\nconst B: Int = A;\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0622");
+    strs_push(sayss, "not a number");
+    strs_push(srcs, "struct P { x: Int, }\nconst A: P = B;\nconst B: P = A;\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0622");
+    strs_push(sayss, "depends on itself");
+    strs_push(srcs, "fn main() -> Int { let a: [Vec[Int]; 1] = [vec_new[Int]()]; 0 }");
+    strs_push(codes_, "N0621");
+    strs_push(sayss, "is a handle");
+    strs_push(srcs, "pub static S: Int = 1;\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0101");
+    strs_push(sayss, "a static is its own module's");
+    strs_push(srcs, "struct P { x: Int, }\npub const A: [P; 1] = [P(x: 1)];\nfn main() -> Int { 0 }");
+    strs_push(codes_, "N0337");
+    strs_push(sayss, "exposes `P`");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        let src = strs_get(srcs, i);
+        let (codes, first) = refused(h, src)?;
+        check_that(strs_len(codes) > 0 && strs_get(codes, 0) == strs_get(codes_, i), f"{src}: {str_join(codes, ", ")}")?;
+        check_that(strs_len(codes) == 1, f"{src}: one mistake, one error: {str_join(codes, ", ")}")?;
+        check_that(text_contains(first, strs_get(sayss, i)), f"{src}: {first}")?;
+        i = i + 1;
+    }
+    ok()
+}
+

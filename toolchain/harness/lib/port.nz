@@ -45,3 +45,12 @@ pub fn found(s: Str, p: Str) -> Result[Int, Str] ! {} {
     }
     Result[Int, Str].Ok(value: at)
 }
+
+/// `s` with the first `from` replaced by `to`: `str::replacen(from, to, 1)`.
+pub fn replace_first(s: Str, from: Str, to: Str) -> Str ! {} {
+    let at = find(s, from);
+    if at < 0 || str_len(from) == 0 {
+        return s;
+    }
+    f"{str_slice(s, 0, at)}{to}{str_slice(s, at + str_len(from), str_len(s))}"
+}

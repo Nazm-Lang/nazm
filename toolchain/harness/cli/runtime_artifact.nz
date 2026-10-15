@@ -1,0 +1,264 @@
+// `nazm runtime build`: an artifact built, described and the same bytes twice; a program reaching
+// every service behaves the same linked to it on both backends; every artifact that does not fit
+// is refused by name and nothing is written; a target's profile and a board's archive; the
+// provenance record names the archive. Ported from `crates/nazm-cli/tests/runtime_artifact.rs` (R7).
+
+use "@std/file"
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+fn text(o: Ran) -> Str ! {} {
+    f"{o.stdout}{o.stderr}"
+}
+
+/// `nazm runtime build -o name` and `extra` in `dir`: the artifact's manifest, read.
+fn artifact(h: Caps, dir: Str, name: Str, extra: Strs) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let a = words("runtime build -o");
+    strs_push(a, name);
+    for x in extra {
+        strs_push(a, x);
+    }
+    let o = nazm(h, dir, a);
+    check_that(o.code == 0, text(o))?;
+    jparse(read_text(h, f"{dir}/{name}/nazm-runtime.json")?)
+}
+
+fn setup(h: Caps) -> Result[Str, Str] ! { io } {
+    prog_dir(h, "p.nz", EVERY)
+}
+
+/// Build `p.nz` with `extra` arguments and run it with the memory report on: what it wrote, and
+/// its status.
+fn built_and_run(h: Caps, dir: Str, out: Str, extra: Strs) -> Result[(Str, Int), Str] ! { io, spawn } {
+    let a = words("build p.nz -o");
+    strs_push(a, out);
+    for x in extra {
+        strs_push(a, x);
+    }
+    let o = nazm(h, dir, a);
+    check_that(o.code == 0, f"{str_join(extra, " ")}: {text(o)}")?;
+    let r = run(h, f"{dir}/{out}", strs_new(), dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))
+    Result[(Str, Int), Str].Ok(value: (text(r), r.code))
+}
+
+/// The strings of the array at `path`.
+fn strings_at(v: JsonDoc, path: Str) -> Strs ! {} {
+    let out = strs_new();
+    let n = jlen(v, path);
+    let mut i = 0;
+    while i < n {
+        strs_push(out, jstr(v, f"{path}/{i}"));
+        i = i + 1;
+    }
+    out
+}
+
+/// A build against the artifact `rt` is refused saying `why`, with status 3 for an artifact that
+/// cannot be read and 1 for one that does not fit, and writes nothing; `runtime verify` says the
+/// same status, unless what does not fit is what the program reaches.
+fn refused(h: Caps, d: Str, why: Str) -> Result[Int, Str] ! { io, spawn } {
+    let status = if text_contains(why, "no readable") { 3 } else { 1 };
+    let o = nazm(h, d, words("build p.nz -o out --runtime rt"));
+    check_that(o.code == status, f"{why}: {text(o)}")?;
+    check_that(text_contains(text(o), why), f"{why}: {text(o)}")?;
+    check_that(!file_exists_at(h.io, f"{d}/out"), f"{why}: nothing is written")?;
+    let v = nazm(h, d, words("runtime verify rt"));
+    if !text_contains(why, "reaches") {
+        check_that(v.code == status, f"verify, {why}")?;
+    }
+    ok()
+}
+
+/// The manifest written back with the first `from` made `to`.
+fn edit(h: Caps, manifest: Str, original: Str, from: Str, to: Str) -> Result[Int, Str] ! { io } {
+    write_at(h, manifest, replace_first(original, from, to))
+}
+
+fn does_not_fit_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    artifact(h, d, "rt", strs_new())?;
+    let manifest = f"{d}/rt/nazm-runtime.json";
+    let original = read_text(h, manifest)?;
+    let m = jparse(original)?;
+    edit(h, manifest, original, "nazm.runtime/1", "nazm.runtime/2")?;
+    refused(h, d, "this compiler reads `nazm.runtime/1`")?;
+    edit(h, manifest, original, f"\"abi\":{jtext(m, "abi")}", "\"abi\":1")?;
+    refused(h, d, "ABI revision 1")?;
+    edit(h, manifest, original, jstr(m, "runtime"), text_repeat("0", 64))?;
+    refused(h, d, "was built from runtime 0000")?;
+    // A target that is not this host's, whichever host runs the suite.
+    let host = jstr(m, "target");
+    let other = if host == "x86_64-unknown-linux-gnu" { "aarch64-unknown-linux-gnu" } else { "x86_64-unknown-linux-gnu" };
+    edit(h, manifest, original, host, other)?;
+    refused(h, d, f"the runtime is for {other}")?;
+    edit(h, manifest, original, "\"tasks\",", "")?;
+    refused(h, d, "the program reaches tasks of the runtime")?;
+    edit(h, manifest, original, "\"tasks\",", "\"teleport\",")?;
+    refused(h, d, "a service this compiler does not know")?;
+    write_at(h, manifest, original)?;
+    // An archive whose bytes are not the ones built.
+    let archive = f"{d}/rt/libnazmrt.a";
+    write_at(h, archive, str_concat(read_raw(h, archive)?, str_from_byte(0)))?;
+    refused(h, d, "is not the archive that was built")?;
+    match file_remove(h.io, manifest) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0,
+    };
+    refused(h, d, "has no readable manifest")
+}
+
+/// Every runtime service: strings, sequences, I/O, a closure, a task, a channel, a join and a
+/// call cycle (the stack check).
+const EVERY: Str = "fn count(n: Int) -> Int { if n == 0 { 0 } else { 1 + count(n - 1) } }\nfn work(io: IoCap, c: Chan) -> Int ! { io } { chan_send(c, 7); chan_close(c); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet xs = strs_new(); strs_push(xs, \"a\"); strs_push(xs, \"b\");\nlet joined = str_join(xs, \"-\");\nlet add = fn(x: Int) -> Int { x + 1 };\nlet c = chan_new(4);\nscope { spawn work(io, c); }\nlet got = ints_new(); let ok = chan_recv(c, got);\nprint(joined); print(int_to_str(add(ints_pop(got)) + count(5) + args_count()));\n0\n}\n";
+
+@test
+fn an_artifact_is_built_described_and_the_same_bytes_twice(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h)?;
+    let l1 = strs_new();
+    let m = artifact(h, d, "rt", l1)?;
+    check_that(jstr(m, "schema") == "nazm.runtime/1", "assert_eq!(jv(m, \"schema\"), \"nazm.runtime/1\");")?;
+    check_that(jstr(m, "profile") == "hosted", "assert_eq!(jv(m, \"profile\"), \"hosted\");")?;
+    check_that((jint(m, "abi") >= 0), "assert!((jint(m, \"abi\") >= 0));")?;
+    check_that(str_len(jstr(m, "runtime")) == 64, jtext(m, ""))?;
+    let services = strings_at(m, "services");
+    let ss2 = strs_new();
+    strs_push(ss2, "tasks");
+    strs_push(ss2, "channels");
+    strs_push(ss2, "sequences");
+    strs_push(ss2, "io");
+    strs_push(ss2, "join");
+    strs_push(ss2, "strings");
+    strs_push(ss2, "shims");
+    strs_push(ss2, "stack");
+    strs_push(ss2, "closures");
+    for s in ss2 {
+        check_that(strs_has(services, s), s)?;
+    
+    }
+    check_that(!file_exists_at(h.io, f"{d}/rt/.nazm-runtime-work"), "assert!(!file_exists_at(h.io, f\"{d}/rt/.nazm-runtime-work\"), \"the working files are gone\");")?;
+    let l3 = strs_new();
+    let again = artifact(h, d, "rt2", l3)?;
+    check_that(jv(m, "archive") == jv(again, "archive"), "assert_eq!(jv(m, \"archive\"), jv(again, \"archive\"), \"the same archive bytes twice\");")?;
+    check_that(jv(m, "text") == jv(again, "text"), "assert_eq!(jv(m, \"text\"), jv(again, \"text\"));")?;
+    let v = nazm(h, d, words("runtime verify rt"));
+    check_that((v.code == 0), "assert!((v.code == 0), \"{}\", text(v));")?;
+    check_that(text_contains(text(v), "fits this compiler"), text(v))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_program_reaching_every_service_behaves_the_same_with_the_artifact_on_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h)?;
+    let l4 = strs_new();
+    artifact(h, d, "rt", l4)?;
+    let backends5 = strs_new();
+    strs_push(backends5, "llvm");
+    strs_push(backends5, "cranelift");
+    for backend in backends5 {
+        let l6 = strs_new();
+        strs_push(l6, "--backend");
+        strs_push(l6, backend);
+        let generated = built_and_run(h, d, f"gen-{backend}", l6)?;
+        let l7 = strs_new();
+        strs_push(l7, "--backend");
+        strs_push(l7, backend);
+        strs_push(l7, "--runtime");
+        strs_push(l7, "rt");
+        let linked = built_and_run(h, d, f"art-{backend}", l7)?;
+        check_that(generated == linked, backend)?;
+        check_that(text_contains(linked.0, "a-b"), backend)?;
+        check_that(text_contains(linked.0, "nazm-memory:"), backend)?;
+        check_that(linked.1 == 0, "assert_eq!(linked.1, Some(0));")?;
+        // The artifact is what was linked: no runtime is generated beside it, which on a linker
+        // that pulls archive members only when needed would leave the artifact silently unused.
+        let objects = f"objects-{backend}";
+        let l8 = strs_new();
+        strs_push(l8, "build");
+        strs_push(l8, "p.nz");
+        strs_push(l8, "--backend");
+        strs_push(l8, backend);
+        strs_push(l8, "--runtime");
+        strs_push(l8, "rt");
+        strs_push(l8, "--objects");
+        strs_push(l8, objects);
+        let o = nazm(h, d, l8);
+        check_that((o.code == 0), "assert!((o.code == 0), \"{}\", text(o));")?;
+        let names = match dir_list(h.io, f"{d}/{objects}") {
+            Result.Ok(value: ns) => ns,
+            Result.Err(error: e) => strs_new(),
+        };
+        let mut has_archive = false;
+        let mut has_runtime_o = false;
+        for n in names {
+            if text_ends_with(n, "libnazmrt.a") { has_archive = true; }
+            if text_ends_with(n, "-runtime.o") { has_runtime_o = true; }
+        }
+        check_that(has_archive && !has_runtime_o, f"{backend}: {str_join(names, ", ")}")?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn every_artifact_that_does_not_fit_is_refused_by_name_and_nothing_is_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h)?;
+    let got = does_not_fit_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+@test
+fn a_targets_profile_is_its_own_and_a_board_links_its_archive(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h)?;
+    let m = artifact(h, d, "board", words("--target aarch64-unknown-none"))?;
+    check_that(jstr(m, "profile") == "board", "assert_eq!(jv(m, \"profile\"), \"board\");")?;
+    let w = artifact(h, d, "wasm", words("--target wasm32-unknown-unknown"))?;
+    check_that(jstr(w, "profile") == "wasm", "assert_eq!(jv(w, \"profile\"), \"wasm\");")?;
+    let o = nazm(h, d, words("runtime build --target aarch64-unknown-none --profile hosted -o x"));
+    check_that(o.code == 5, ran_show(o))?;
+    check_that(text_contains(text(o), "links the `board` runtime, not `hosted`"), text(o))?;
+    // A hosted build given the board's artifact is refused for its target.
+    let o_2 = nazm(h, d, words("build p.nz -o h --runtime board"));
+    check_that(o_2.code == 1, ran_show(o_2))?;
+    check_that(text_contains(text(o_2), "the runtime is for aarch64-unknown-none"), text(o_2))?;
+    // A freestanding image's objects include the board's archive, in place of its runtime.
+    scratch_write(h, d, "fs.nz", "fn main() -> Int { 40 + 2 }\n")?;
+    let o_3 = nazm(h, d, words("build --target aarch64-unknown-none --runtime board --objects objs fs.nz -o fs"));
+    check_that((o_3.code == 0), "assert!((o.code == 0), \"{}\", text(o));")?;
+    let link = read_text(h, f"{d}/objs/link.txt")?;
+    check_that(text_contains(link, "libnazmrt.a"), link)?;
+    check_that(!text_contains(link, "runtime.o"), link)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_provenance_record_names_the_archive_linked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h)?;
+    let l10 = strs_new();
+    let m = artifact(h, d, "rt", l10)?;
+    let o = nazm(h, d, words("build p.nz -o out --runtime rt --provenance prov.json"));
+    check_that((o.code == 0), "assert!((o.code == 0), \"{}\", text(o));")?;
+    let p = jparse(read_text(h, f"{d}/prov.json")?)?;
+    check_that(jstr(p, "runtime/archive") == f"blake3:{jstr(m, "archive")}", jtext(p, ""))?;
+    // Without an artifact the record is as before.
+    let o_2 = nazm(h, d, words("build p.nz -o out2 --provenance prov2.json"));
+    check_that((o_2.code == 0), "assert!((o.code == 0), \"{}\", text(o));")?;
+    let p_2 = jparse(read_text(h, f"{d}/prov2.json")?)?;
+    check_that(jq(p_2, "runtime/archive") < 0, jtext(p_2, ""))?;
+    scratch_remove(h, d);
+    ok()
+}
+
