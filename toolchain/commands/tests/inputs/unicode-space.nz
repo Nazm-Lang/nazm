@@ -1,0 +1,6 @@
+fn main() -> Int {
+    // a trailing no-break space 
+    let x = 1 /* inside */ + 2   // ideographic space　
+    /* a /* nested */ block */ let y = x - -1
+    x+y
+}
