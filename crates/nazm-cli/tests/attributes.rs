@@ -22,6 +22,8 @@ use differential::{agrees, check_codes, codes, nazm};
 fn host_and_other() -> (&'static str, &'static str, &'static str) {
     if cfg!(target_os = "macos") {
         ("macos", "linux", "x86_64-unknown-linux-gnu")
+    } else if cfg!(windows) {
+        ("windows", "linux", "x86_64-unknown-linux-gnu")
     } else {
         ("linux", "macos", "aarch64-apple-darwin")
     }

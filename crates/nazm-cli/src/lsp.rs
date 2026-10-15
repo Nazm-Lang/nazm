@@ -1288,13 +1288,32 @@ fn path_of(uri: &Uri) -> Option<PathBuf> {
     }
     let bytes = percent_decode(path)?;
     let text = String::from_utf8(bytes).ok()?;
+    // On Windows (W1) `file:///C:/dir/a.nz` is `C:\dir\a.nz`.
+    if cfg!(windows) {
+        if let Some(drive) = text
+            .strip_prefix('/')
+            .filter(|t| t.as_bytes().get(1) == Some(&b':'))
+        {
+            return Some(PathBuf::from(drive.replace('/', "\\")));
+        }
+    }
     Some(PathBuf::from(text))
 }
 
 /// A `file:` URI for `path`, with everything outside the unreserved set and `/`
-/// percent-encoded.
+/// percent-encoded. On Windows (W1) `C:\dir\a.nz`, or its verbatim `\\?\C:\dir\a.nz`, is
+/// `file:///C%3A/dir/a.nz`.
 fn uri_of(path: &Path) -> Option<Uri> {
-    let text = path.to_str()?;
+    let mut text = path.to_str()?.to_owned();
+    if cfg!(windows) {
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            text = rest.to_owned();
+        }
+        text = text.replace('\\', "/");
+        if text.as_bytes().get(1) == Some(&b':') {
+            text.insert(0, '/');
+        }
+    }
     let mut out = String::from("file://");
     for b in text.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {

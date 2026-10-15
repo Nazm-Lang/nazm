@@ -161,6 +161,8 @@ impl BuildConfig {
             ("aarch64", "macos") => "aarch64-apple-darwin".to_owned(),
             ("x86_64", "macos") => "x86_64-apple-darwin".to_owned(),
             (a, "linux") => format!("{a}-unknown-linux-gnu"),
+            // The toolchain on Windows (W1): MinGW-w64's target, the one Windows target.
+            ("x86_64", "windows") => "x86_64-pc-windows-gnu".to_owned(),
             (a, o) => format!("{a}-unknown-{o}"),
         };
         Self {
@@ -174,7 +176,9 @@ impl BuildConfig {
     }
 
     /// The configuration for building to `triple`: its operating system (`macos`, `linux`,
-    /// `wasm` or `none`) and architecture read from it.
+    /// `windows`, `wasm` or `none`) and architecture read from it. `windows` is what the host's
+    /// configuration says on Windows too, so `nazm run` there and a build for Windows anywhere
+    /// decide `@cfg` alike (W1).
     #[must_use]
     pub fn for_target(triple: &str) -> Self {
         let arch = triple.split('-').next().unwrap_or("");
@@ -184,6 +188,8 @@ impl BuildConfig {
                 "macos"
             } else if triple.contains("linux") {
                 "linux"
+            } else if triple.contains("windows") {
+                "windows"
             } else if triple.starts_with("wasm") {
                 "wasm"
             } else {

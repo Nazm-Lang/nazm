@@ -62,6 +62,9 @@ mod tests {
         std::fs::create_dir(base.join(format!("w-{pid}"))).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&base, base.join(format!("w-{pid}-1"))).unwrap();
+        // Windows: a link needs a privilege an ordinary account lacks; a directory takes it.
+        #[cfg(not(unix))]
+        std::fs::create_dir(base.join(format!("w-{pid}-1"))).unwrap();
         let got = exclusive(&base, "w-").unwrap();
         assert_eq!(
             got.file_name().unwrap().to_string_lossy(),

@@ -675,6 +675,7 @@ fn a_shared_library_links_into_a_c_program_and_shows_only_its_exports() {
 
 /// What kind of object file `bytes` is, by its header: a shared library (ELF `ET_DYN`, Mach-O
 /// `MH_DYLIB`), a static archive, or something else.
+#[cfg(not(windows))]
 fn object_kind(bytes: &[u8]) -> &'static str {
     let half = |at: usize| {
         bytes
@@ -702,6 +703,7 @@ fn object_kind(bytes: &[u8]) -> &'static str {
 /// (Linking it into a C program is the macOS test above; this one is the format, which needs no
 /// platform's loader.)
 #[test]
+#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/spec.md`, *Windows x86_64*)
 fn a_shared_library_build_writes_a_shared_object_not_an_archive() {
     let name = if cfg!(target_os = "macos") {
         "libnz.dylib"

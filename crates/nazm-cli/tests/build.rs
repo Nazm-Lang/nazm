@@ -4394,6 +4394,7 @@ fn an_output_over_any_module_of_the_program_is_refused() {
 /// Q1-A1-06: a shared library names itself to the linker in a comma-separated `-Wl,` argument, so
 /// a comma in its file name is refused rather than read as another linker argument.
 #[test]
+#[cfg(not(windows))] // Windows has no DLL from this compiler (`docs/spec.md`, *Windows x86_64*)
 fn a_shared_library_name_with_a_comma_is_refused() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(

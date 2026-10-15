@@ -207,8 +207,16 @@ fn wait(child: &mut Child) -> Option<i32> {
 
 /// A `file:` URI, percent-encoding what the server would.
 fn uri(path: &Path) -> String {
+    let mut text = path.to_str().unwrap().to_owned();
+    // Windows: `\\?\C:\dir` is `/C:/dir`, as an editor writes it.
+    if cfg!(windows) {
+        text = text.trim_start_matches(r"\\?\").replace('\\', "/");
+        if text.as_bytes().get(1) == Some(&b':') {
+            text.insert(0, '/');
+        }
+    }
     let mut out = String::from("file://");
-    for b in path.to_str().unwrap().bytes() {
+    for b in text.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
             out.push(char::from(b));
         } else {
