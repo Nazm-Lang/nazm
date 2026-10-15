@@ -27,8 +27,10 @@ reference before R3 and R9 port that part, so the rewrite copies only what stays
 - [ ] 2.2 Proven-unnecessary checks removed; alias and escape analysis; inlining; vectorisation; PGO
 
 ## 4. A call's design (now, before R3 and R9 port it)
-- [ ] 4.1 Stack overflow by a guard page and a fault handler, in place of a check per call
-- [ ] 4.2 Failures by unwinding, or the bit kept: decided by measurement and recorded
+- [x] 4.1 Stack overflow by a guard page — decided against (2026-10-15): the check costs nothing
+      measurable and a guard page cannot keep `N0408`'s unwinding (design.md)
+- [ ] 4.2 Failures by unwinding, replacing the returned bit — decided 2026-10-15 (the bit is
+      `fib`'s whole gap, design.md); to implement in the reference before R3/R9 port the convention
 
 ## 5. Zero dependence on LLVM (after 1.0)
 - [ ] 5.1 Nazm's own optimiser and code generator for optimised builds, so no build needs `clang`

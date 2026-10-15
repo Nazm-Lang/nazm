@@ -65,3 +65,31 @@ Candidates, each a design change to weigh against what the language promises:
    pay; the bit was chosen in R1 (5b.8) for the interpreter's and both backends' simplicity.
 3. The overflow check stays — it is what the language means — but a range proof removes it where
    the operands are bounded.
+
+### What each part of a call costs, measured in C (2026-10-15)
+
+`fib(35)` written in C five ways, `clang -O2`, `hyperfine -N --runs 10`, on the same host:
+
+| variant | time | over plain C |
+| --- | ---: | ---: |
+| plain C | 35.6 ms | — |
+| + the overflow check on `+` only | 44.4 ms | +25% |
+| + the failure bit only (returned beside the result, tested after each call) | 55.9 ms | +57% |
+| + both | 58.3 ms | +64% |
+| + both and a stack check against a global limit | 58.2 ms | +64% |
+
+So the **failure bit is Nazm's whole gap on `fib`** (Nazm: 55.4 ms), the overflow check a quarter,
+and the stack check nothing measurable.
+
+### Decisions (delegated detail, 2026-10-15)
+
+- **4.1 — no guard page.** The check per call costs nothing measurable, and a guard page could not
+  keep what the spec promises for `N0408` — the failure unwinds, `defer` blocks run, an enclosing
+  `scope` joins its tasks — since a fault handler cannot resume into a frame's cleanup. Kept as is.
+- **4.2 — failures by unwinding**, replacing the returned bit: no cost on the path where nothing
+  fails, as C++ and Rust pay, and LLVM may again transform the calls. What a program sees is
+  unchanged (the same diagnostic, the same cleanup order, exit status 2). It touches LIR's calling
+  convention, both backends (LLVM `invoke`/landing pads with a personality; Cranelift's exception
+  calls), the runtime, and R3/R9, which port the convention — so it is made in the reference before
+  they port that part. Expected on `fib`: about 44 ms (the overflow check remaining), against C's 36.
+
