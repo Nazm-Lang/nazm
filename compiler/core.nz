@@ -719,9 +719,12 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
     if k == "Assign" {
         let place = sx_field(t, n, "place");
         if ints_len(sx_items(t, sx_field(t, place, "path"))) > 0 { return co_stopped_stmt(lo, "an assignment to a field or an element"); }
-        let value = co_expr(lo, sx_field(t, n, "value"));
+        let mut value = co_expr(lo, sx_field(t, n, "value"));
         let local = co_local_at(lo, sx_field(t, place, "name_span"));
-        if co_appends(lo, local, sx_field(t, n, "value")) { return co_stopped_stmt(lo, "an append to a string"); }
+        // `s = str_concat(s, t)`, `s = s + t`, `s += t` (R1b, D2): an append (`appends_to`).
+        if co_appends(lo, local, sx_field(t, n, "value"), value) {
+            value = str_concat(co_append_head(), str_slice(value, str_len(co_concat_head()), str_len(value)));
+        }
         let o = strs_new();
         strs_push(o, co_op_first("assign"));
         strs_push(o, co_field("local", int_to_str(local)));
@@ -1029,39 +1032,28 @@ fn co_some_field(lo: Lo, n: Int, name: Str) -> Bool {
     sx_is_some(lo.t, f)
 }
 
-// Whether `value` is `str_concat(x, t)`, or `x + t` on strings, with `x` local `local` (R1b, D2).
-fn co_appends(lo: Lo, local: Int, value: Int) -> Bool {
+// Whether `value`, lowered as `lowered`, is `str_concat(x, t)` — a call or `x + t` on strings —
+// with `x` the name of local `local` (`appends_to`).
+fn co_appends(lo: Lo, local: Int, value: Int, lowered: Str) -> Bool {
     let t = lo.t;
+    let head = co_concat_head();
+    if str_len(lowered) < str_len(head) || str_slice(lowered, 0, str_len(head)) != head { return false; }
     let k = sx_text(t, value);
-    // `s + t` on strings is `str_concat(s, t)`, whatever the left side.
-    if k == "Binary" {
-        if sx_text(t, sx_field(t, value, "op")) == "Add" && co_strings(lo, sx_field(t, value, "lhs")) { return true; }
-    }
+    let mut first = 0 - 1;
+    if k == "Binary" { first = sx_field(t, value, "lhs"); }
     if k == "Call" {
-        let cs = sx_field(t, value, "callee_span");
-        let site = ck_site_at(lo.c, co_abs_s(lo, cs), co_abs_e(lo, cs));
-        if site >= 0 {
-            if ck_site_builtin(lo.c, site) >= 0 {
-                if ck_builtin_name(lo.c, ck_site_builtin(lo.c, site)) == "str_concat" { return true; }
-            }
-        }
+        let args = sx_items(t, sx_field(t, value, "args"));
+        if ints_len(args) > 0 { first = ints_get(args, 0); }
     }
-    false
+    if first < 0 || sx_kind(t, first) == tk_tuple() || sx_text(t, first) != "Var" { return false; }
+    let span = sx_field(t, first, "span");
+    let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+    if b < 0 { return false; }
+    co_index_of(lo.lb, b) == local
 }
 
-// Whether `e` is a binding of type `Str` (which `+` joins), or anything this lowering does not
-// type itself — conservatively, so an unknown left side never passes for an `Int`.
-fn co_strings(lo: Lo, e: Int) -> Bool {
-    let t = lo.t;
-    if sx_text(t, e) == "Var" {
-        let span = sx_field(t, e, "span");
-        let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
-        if b < 0 { return true; }
-        return ck_binding_ty(lo.c, b) == ck_t_str();
-    }
-    if sx_text(t, e) == "Int" || sx_text(t, e) == "Binary" || sx_text(t, e) == "Neg" { return false; }
-    true
-}
+fn co_concat_head() -> Str { "{\"op\":\"builtin\",\"builtin\":\"str_concat\"" }
+fn co_append_head() -> Str { "{\"op\":\"builtin\",\"builtin\":\"str_append\"" }
 
 // An expression where no value is wanted (`effect`).
 fn co_effect(lo: Lo, e: Int) -> Str {
@@ -1161,12 +1153,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_stopped(lo, str_concat("the expression ", k));
     }
     let span = sx_field(t, e, "span");
-    if k == "Int" {
-        let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
-        if lt != ck_t_int() { return co_stopped(lo, "a literal of a type other than `Int`"); }
-        let id = co_constant(lo, "Int", sx_text(t, sx_field(t, e, "value")));
-        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_int(), span);
-    }
+    if k == "Int" { return co_integer(lo, sx_text(t, sx_field(t, e, "value")), span); }
     if k == "Bool" {
         let id = co_constant(lo, "Bool", sx_text(t, sx_field(t, e, "value")));
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_bool(), span);
@@ -1185,6 +1172,15 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span);
     }
     if k == "Neg" {
+        // A literal negated, of a type the checker gave it (`integer`): the negative constant,
+        // at the literal.
+        let x = sx_field(t, e, "operand");
+        if sx_kind(t, x) != tk_tuple() && sx_text(t, x) == "Int" {
+            let xs = sx_field(t, x, "span");
+            if ck_type_class(lo.c, ck_literal_ty(lo.c, co_abs_s(lo, xs), co_abs_e(lo, xs))) == "integer" {
+                return co_integer(lo, co_negated(sx_text(t, sx_field(t, x, "value"))), xs);
+            }
+        }
         let operand = co_expr(lo, sx_field(t, e, "operand"));
         let mut ty = co_last_ty(lo);
         if ty < 0 { ty = ck_t_int(); }
@@ -1565,21 +1561,37 @@ fn co_binary(lo: Lo, e: Int) -> Str {
     let mut operand = lt;
     if operand < 0 { operand = rt; }
     if operand < 0 { operand = ck_t_int(); }
-    let arith = co_arithmetic(op);
+    let class = ck_type_class(lo.c, operand);
+    // `s + t` on strings (R1, 5b.6): the `str_concat` the checker read it as, at the whole.
+    if op == "Add" && class == "str" {
+        let args = strs_new();
+        strs_push(args, lhs);
+        strs_push(args, rhs);
+        return co_builtin(lo, "str_concat", "[]", str_join(args, ","), ck_t_str(), sx_field(t, e, "span"));
+    }
+    let mut arith = co_arithmetic(op);
+    if arith == "" { arith = co_bitwise(op); }
     if arith != "" {
-        if operand != ck_t_int() { return co_stopped(lo, "arithmetic of a type other than `Int`"); }
         let fields = strs_new();
         strs_push(fields, co_field_first("lhs", lhs));
         strs_push(fields, co_field("rhs", rhs));
         return co_node(lo, arith, str_join(fields, ""), operand, at);
     }
     let cmp = co_comparison(op);
-    if cmp == "" { return co_stopped(lo, "a bit operator"); }
+    if cmp == "" { return co_stopped(lo, str_concat("the operator ", op)); }
+    let ordering = op == "Lt" || op == "LtEq" || op == "Gt" || op == "GtEq";
     let mut law = "";
-    if operand == ck_t_int() { law = "int"; }
-    if operand == ck_t_bool() { law = "bool"; }
-    if operand == ck_t_str() { law = "bytes"; }
-    if law == "" { return co_stopped(lo, "a comparison of a type other than `Int`, `Bool` or `Str`"); }
+    if class == "int" { law = "int"; }
+    if class == "integer" || class == "float" { law = "num"; }
+    if class == "bool" { law = "bool"; }
+    if class == "str" { law = "bytes"; }
+    if class == "record" || class == "enum" { law = "structural"; }
+    if ordering == false {
+        if class == "array" || class == "box" || class == "chain" { law = "structural"; }
+        if class == "text" { law = "bytes"; }
+        if class == "param" { law = "parametric"; }
+    }
+    if law == "" { return co_stopped(lo, "a comparison of a type with no such law"); }
     let fields = strs_new();
     strs_push(fields, co_field_first("operand", json_str(co_durable(lo, operand))));
     strs_push(fields, co_field("law", json_str(law)));
@@ -1626,6 +1638,40 @@ fn co_arithmetic(op: Str) -> Str {
     if op == "Div" { return "/"; }
     if op == "Rem" { return "%"; }
     ""
+}
+
+fn co_bitwise(op: Str) -> Str {
+    if op == "BitAnd" { return "&"; }
+    if op == "BitOr" { return "|"; }
+    if op == "BitXor" { return "^"; }
+    if op == "Shl" { return "<<"; }
+    if op == "Shr" { return ">>"; }
+    ""
+}
+
+// An integer literal's constant (`integer`), in the type the checker gave it: an `Int` by its
+// value, another integer type's by its decimal text; a float's is not carried yet.
+fn co_integer(lo: Lo, digits: Str, span: Int) -> Str {
+    let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+    let class = ck_type_class(lo.c, lt);
+    if class == "int" {
+        let id = co_constant(lo, "Int", digits);
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), lt, span);
+    }
+    if class != "integer" { return co_stopped(lo, "a literal of a type other than an integer's"); }
+    let name = co_durable(lo, lt);
+    let id = co_constant(lo, name, json_str(digits));
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), lt, span)
+}
+
+// `-` and the digits, or `0` for zero.
+fn co_negated(digits: Str) -> Str {
+    let mut i = 0;
+    while i < str_len(digits) {
+        if str_byte(digits, i) != 48 { return str_concat("-", digits); }
+        i = i + 1;
+    }
+    "0"
 }
 
 fn co_comparison(op: Str) -> Str {
