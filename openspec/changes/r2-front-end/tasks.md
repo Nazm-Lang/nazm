@@ -449,6 +449,16 @@
         76,198 functions the lowering carries 75,363, all agree; the other parts 10,644, all
         agree; 1,485 whole documents, all the reference's bytes (most of these functions call
         through a value, the next group)
+  - [x] Float literals (`Const::Num`): of the type the checker recorded (`Float32` where one
+        is expected, `Float64` else), the literal read as the nearest value of that type, ties
+        to even, and printed as its shortest digits that read back (`numeric::to_str`: the
+        first precision whose correctly rounded `{:.p$e}` parses back, laid out as ECMAScript
+        does); its digest the bits, read back from those digits. Both exactly, without a float
+        type (`digest.nz`: decimal digits in `Ints`), checked against Python's own on 1,800
+        random literals of both widths. `run.sh core`: 3,095 agree, 0 differ; of 76,240
+        functions the lowering carries 75,530, all agree; the other parts 10,644, all agree;
+        1,514 whole documents, all the reference's bytes. check 3,093 agree, 2 differ (carried
+        3,089, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

@@ -5864,8 +5864,11 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     }
     // `Float32` where one is expected, `Float64` everywhere else (Gate 2).
     if k == "Float" {
-        if expected >= 0 && bname_of(c, expected) == "Float32" { return expected; }
-        return builtin_ty(c, "Float64");
+        let mut ft = builtin_ty(c, "Float64");
+        if expected >= 0 && bname_of(c, expected) == "Float32" { ft = expected; }
+        // The literal's type, as the reference records it (`NumericFact::Literal`).
+        sm_put(c.mlit, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), ft);
+        return ft;
     }
     if k == "Bool" { return t_bool(); }
     // A literal is UTF-8 by construction, so it is a `Text` where one is expected (Gate 2).
