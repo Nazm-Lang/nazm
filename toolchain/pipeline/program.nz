@@ -5,7 +5,6 @@ use "cir.nz"
 use "types.nz"
 use "mir.nz"
 use "traits.nz"
-use "refine.nz"
 use "lower.nz"
 use "@std/hash"
 use "@std/json"
@@ -103,6 +102,44 @@ fn inst_id(def: Str, keys: Strs) -> Str {
     def + "[" + str_join(keys, ",") + "]"
 }
 
+/// Instance `targs` of function `target`, appended to the plan unless it is there or is not
+/// concrete.
+fn plan_add(c: Cir, target: Int, targs: Strs, seen: HashMap[Str, Int], plan: Vec[Inst], work: Ints) {
+    for a in targs { if open(a) { return } }
+    let keys = strs_new()
+    for a in targs { strs_push(keys, tkey(a)) }
+    let id = inst_id(vec_get(c.fns, target).def, keys)
+    if !hashmap_has(seen, id) {
+        hashmap_set(seen, id, vec_len(plan))
+        ints_push(work, vec_len(plan))
+        vec_push(plan, Inst(fi: target, args: targs, keys: keys))
+    }
+}
+
+/// Whether the impl `row` is of a generic type (filed under its definition, which no value has):
+/// a method of its own is generic, or the checker applied the definition to arguments.
+fn generic_impl(c: Cir, row: Int) -> Bool {
+    let ms = kid(c, row, "methods")
+    for j in 0..count(c, ms) {
+        let m = at(c, ms, j)
+        let fi = fn_index(c, sval(c, m, "function"))
+        if !bval(c, m, "default") && fi >= 0 && vec_get(c.fns, fi).type_params > 0 { return true }
+    }
+    let self_ty = sval(c, row, "self")
+    let types = kid(c, json_root(c.doc), "types")
+    let kinds = strs_new()
+    strs_push(kinds, "records")
+    strs_push(kinds, "enums")
+    for k in kinds {
+        let es = kid(c, types, k)
+        for i in 0..count(c, es) {
+            let e = at(c, es, i)
+            if sval(c, e, "definition") == self_ty && count(c, kid(c, e, "type_args")) > 0 { return true }
+        }
+    }
+    false
+}
+
 /// Every instance the calls in `n` need under the substitution `args`, appended to the plan.
 fn plan_sites(c: Cir, n: Int, args: Strs, seen: HashMap[Str, Int], plan: Vec[Inst], work: Ints) {
     let kind = json_kind(c.doc, n)
@@ -121,6 +158,13 @@ fn plan_sites(c: Cir, n: Int, args: Strs, seen: HashMap[Str, Int], plan: Vec[Ins
             let ta = kid(c, n, "type_args")
             for i in 0..count(c, ta) { strs_push(targs, subst(tof(c, at(c, ta, i)), args)) }
         }
+    } else if o == "closure" {
+        // A closure of a generic function is instantiated with it, at its arguments.
+        let g = fn_index(c, sval(c, n, "function"))
+        if g >= 0 && vec_get(c.fns, g).type_params > 0 && strs_len(args) > 0 {
+            target = g
+            for a in args { strs_push(targs, a) }
+        }
     } else if o == "call_trait" {
         let concrete = subst(tval(c, n, "self"), args)
         if !open(concrete) {
@@ -131,20 +175,7 @@ fn plan_sites(c: Cir, n: Int, args: Strs, seen: HashMap[Str, Int], plan: Vec[Ins
             }
         }
     }
-    if target >= 0 {
-        let mut concrete = true
-        for a in targs { if open(a) { concrete = false } }
-        if concrete {
-            let keys = strs_new()
-            for a in targs { strs_push(keys, key(a)) }
-            let id = inst_id(vec_get(c.fns, target).def, keys)
-            if !hashmap_has(seen, id) {
-                hashmap_set(seen, id, vec_len(plan))
-                ints_push(work, vec_len(plan))
-                vec_push(plan, Inst(fi: target, args: targs, keys: keys))
-            }
-        }
-    }
+    if target >= 0 { plan_add(c, target, targs, seen, plan, work) }
     for i in 0..json_len(c.doc, n) {
         match json_value_at(c.doc, n, i) {
             Some(k) => {
@@ -183,6 +214,25 @@ fn plan_instances(c: Cir) -> Vec[Inst] {
     let seen: HashMap[Str, Int] = hashmap_new()
     let plan: Vec[Inst] = vec_new()
     let work = ints_new()
+    // A trait's default body at every concrete type whose impl leaves the method to it: a call
+    // through a bound reaches it at an instance's type, which no call site records.
+    let rows = kid(c, json_root(c.doc), "impls")
+    for i in 0..count(c, rows) {
+        let row = at(c, rows, i)
+        if !open(tval(c, row, "self")) && !generic_impl(c, row) {
+            let ms = kid(c, row, "methods")
+            for j in 0..count(c, ms) {
+                let m = at(c, ms, j)
+                let fi = fn_index(c, sval(c, m, "function"))
+                let ta = kid(c, m, "type_args")
+                if fi >= 0 && count(c, ta) > 0 {
+                    let targs = strs_new()
+                    for k in 0..count(c, ta) { strs_push(targs, tof(c, at(c, ta, k))) }
+                    plan_add(c, fi, targs, seen, plan, work)
+                }
+            }
+        }
+    }
     for f in c.fns {
         if !in_generic(c, f) && f.body >= 0 { plan_sites(c, f.body, strs_new(), seen, plan, work) }
     }
@@ -217,20 +267,29 @@ fn plan_instances(c: Cir) -> Vec[Inst] {
 
 // --- closures and function values -------------------------------------------------------------------
 
-/// How many captures each closure's code reads (by its definition), and each `MODULE|DEF` a named
-/// function is used as a value in, in the order they are met.
-fn closures_and_values(c: Cir, n: Int, module: Str, caps: HashMap[Str, Int], uses: Strs) {
+/// Each `MODULE|DEF` a named function is used as a value in, in the order they are met. A
+/// `callback_address` of an `@export`ed function is such a use too: Core IR writes it as the C
+/// symbol, and the checker records the function value it was written as.
+fn function_values(c: Cir, f: CirFn, n: Int, uses: Strs) {
     let kind = json_kind(c.doc, n)
     if kind == "array" {
-        for i in 0..count(c, n) { closures_and_values(c, at(c, n, i), module, caps, uses) }
+        for i in 0..count(c, n) { function_values(c, f, at(c, n, i), uses) }
         return
     }
     if kind != "object" { return }
     let o = op(c, n)
-    if o == "closure" {
-        hashmap_set(caps, sval(c, n, "function"), count(c, kid(c, n, "captures")))
-    } else if o == "fn_value" {
-        let u = module + "|" + sval(c, n, "function")
+    let mut named = ""
+    if o == "fn_value" { named = sval(c, n, "function") }
+    if o == "builtin" && sval(c, n, "builtin") == "callback_address" {
+        let a = at(c, kid(c, n, "args"), 0)
+        let k = ival(c, a, "const")
+        if op(c, a) == "const" && k >= 0 && k < vec_len(f.consts) {
+            let sym = vec_get(f.consts, k).text
+            for g in c.fns { if g.export == sym && sym != "" { named = g.def } }
+        }
+    }
+    if named != "" {
+        let u = f.module + "|" + named
         let mut seen = false
         for x in uses { if x == u { seen = true } }
         if !seen { strs_push(uses, u) }
@@ -239,7 +298,7 @@ fn closures_and_values(c: Cir, n: Int, module: Str, caps: HashMap[Str, Int], use
         match json_value_at(c.doc, n, i) {
             Some(k) => {
                 let kk = json_kind(c.doc, k)
-                if kk == "object" || kk == "array" { closures_and_values(c, k, module, caps, uses); }
+                if kk == "object" || kk == "array" { function_values(c, f, k, uses); }
             },
             None => {},
         }
@@ -290,18 +349,17 @@ fn thunk_of(c: Cir, target: CirFn, module: Str) -> CirFn {
     ints_push(bv, call)
     let body = json_add_object(d, bk, bv)
     CirFn(def: module + "::fn " + name, module: module, name: name, type_params: 0, params: target.params + 1,
-        ret: target.ret, published: target.published, locals: locals, consts: vec_new(), body: body, foreign: "")
+        ret: target.ret, published: target.published, locals: locals, consts: vec_new(), body: body, foreign: "", node: 0 - 1, captures: ints_new(), export: "")
 }
 
 /// Lower a program's Core IR to MIR, or say why not.
 pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
     let tt = table_build(c)
     let recursive = in_call_cycles(c)
-    let fm = FuncMap(plain: hashmap_new(), inst: hashmap_new(), thunks: hashmap_new(), refined: refine(c))
-    let caps: HashMap[Str, Int] = hashmap_new()
+    let fm = FuncMap(plain: hashmap_new(), inst: hashmap_new(), thunks: hashmap_new())
     let uses = strs_new()
     for f in c.fns {
-        if f.body >= 0 { closures_and_values(c, f.body, f.module, caps, uses) }
+        if f.body >= 0 { function_values(c, f, f.body, uses) }
     }
     let mut next = 0
     for f in c.fns {
@@ -329,8 +387,7 @@ pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
     for i in 0..vec_len(c.fns) {
         let f = vec_get(c.fns, i)
         if f.type_params == 0 {
-            let n = match hashmap_get(caps, f.def) { Some(x) => x, None => 0 }
-            match lower_function(c, tt, fm, f, strs_new(), f.def, ints_get(recursive, i) == 1, n) {
+            match lower_function(c, tt, fm, f, strs_new(), f.def, ints_get(recursive, i) == 1) {
                 Ok(m) => vec_push(fns, m),
                 Err(e) => strs_push(errors, e),
             }
@@ -338,8 +395,7 @@ pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
     }
     for inst in plan {
         let f = vec_get(c.fns, inst.fi)
-        let n = match hashmap_get(caps, f.def) { Some(x) => x, None => 0 }
-        match lower_function(c, tt, fm, f, inst.args, inst_id(f.def, inst.keys), ints_get(recursive, inst.fi) == 1, n) {
+        match lower_function(c, tt, fm, f, inst.args, inst_id(f.def, inst.keys), ints_get(recursive, inst.fi) == 1) {
             Ok(m) => vec_push(fns, m),
             Err(e) => strs_push(errors, e),
         }
@@ -352,7 +408,7 @@ pub fn lower_program(c: Cir) -> Result[MirProgram, Str] ! {} {
             strs_push(errors, "a function value names a function with no Core IR")
         } else {
             let thunk = thunk_of(c, vec_get(c.fns, ti), module)
-            match lower_function(c, tt, fm, thunk, strs_new(), thunk.def, ints_get(recursive, ti) == 1, 0) {
+            match lower_function(c, tt, fm, thunk, strs_new(), thunk.def, ints_get(recursive, ti) == 1) {
                 Ok(m) => vec_push(fns, m),
                 Err(e) => strs_push(errors, e),
             }
