@@ -1,0 +1,7 @@
+// The other module of `main.nz`: its own `COUNT` and `LIMIT`, spelled as main's are.
+static COUNT: Atomic = atomic_new(40);
+static LIMIT: Int = 70;
+
+pub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }
+pub fn count() -> Int ! {} { atomic_load(COUNT) }
+pub fn limit() -> Int ! {} { LIMIT }

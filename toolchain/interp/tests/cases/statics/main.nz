@@ -1,0 +1,15 @@
+// Two modules each declaring `static COUNT: Atomic` (and `LIMIT`) have four statics, not two:
+// each function reaches its own module's cell, by the constant's durable key (Core IR `static`).
+use "counter.nz";
+
+static COUNT: Atomic = atomic_new(1);
+static LIMIT: Int = 5;
+
+fn main() {
+    atomic_add(COUNT, 1);
+    bump();
+    bump();
+    println(atomic_load(COUNT));
+    println(count());
+    println(LIMIT + limit());
+}

@@ -163,7 +163,9 @@ only the fallback for a `/2` input: `impls` maps each `trait method | self type`
 a trait's default method included (which no `Trait/Type/method` key names, so a default reached
 through a generic call failed before); `types` gives each record's, enum's and variant's canonical
 order; `statics` gives each static `Atomic` its initial value (it started at 0 before). A static is
-still found by its name alone, as the constant names it without its module.
+found by its durable key (main `ef1bf70a`): the constant's `static` field is the `def` of its
+`statics` entry, so two modules each declaring `static COUNT` are two cells (case
+`tests/cases/statics/`); a `/2` input, which has neither, keys the cell by its `value`.
 
 ### D9. Concurrency (slice 5)
 
@@ -206,7 +208,9 @@ polled: they do not wait on another task of the same program in any input.
 
 **The clocks.** `time_now_ms` and `time_now_ns` count from the program's first reading of each, as
 the Rust interpreter's do (`intrinsic.rs`, `monotonic_ms`), and `os_wait_until`'s deadline is on
-that clock. A program that returns `time_now_ms()` from `main` ends with status 0 on both.
+that clock. A socket's deadline is the runtime's (`os_set_timeout`); the waits around it here are
+on `time_now_ms`, monotonic (main `0a8f07cf` moved `nz.net_now` there too). A program that
+returns `time_now_ms()` from `main` ends with status 0 on both.
 
 ### D11. What `nazm run` refuses before the program starts
 
