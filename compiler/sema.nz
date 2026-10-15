@@ -14199,6 +14199,16 @@ pub fn ck_init_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.minit, s, e) }
 pub fn ck_record_arity(c: Ck, t: Int) -> Int { ints_get(c.rfc, ta(c, t)) }
 pub fn ck_record_field_name(c: Ck, t: Int, i: Int) -> Str { strs_get(c.fname, ints_get(c.rff, ta(c, t)) + i) }
 pub fn ck_variant_name(c: Ck, t: Int, v: Int) -> Str { strs_get(c.vname, ints_get(c.evf, ta(c, t)) + v) }
+// How many variants an enum type has, and the index of the one named `name` (-1 for none).
+pub fn ck_variant_count(c: Ck, t: Int) -> Int { ints_get(c.evc, ta(c, t)) }
+pub fn ck_variant_named(c: Ck, t: Int, name: Str) -> Int {
+    let mut v = 0;
+    while v < ck_variant_count(c, t) {
+        if ck_variant_name(c, t, v) == name { return v; }
+        v = v + 1;
+    }
+    0 - 1
+}
 pub fn ck_variant_arity(c: Ck, t: Int, v: Int) -> Int { ints_get(c.vfc, ints_get(c.evf, ta(c, t)) + v) }
 pub fn ck_payload_name(c: Ck, t: Int, v: Int, i: Int) -> Str { strs_get(c.fname, ints_get(c.vff, ints_get(c.evf, ta(c, t)) + v) + i) }
 pub fn ck_is_record_type(c: Ck, t: Int) -> Bool { t >= 0 && tag(c, t) == tag_record() }

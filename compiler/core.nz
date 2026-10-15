@@ -1211,6 +1211,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "field", str_join(fields, ""), ck_field_ty(lo.c, co_abs_s(lo, ns), co_abs_e(lo, ns)), ns);
     }
     if k == "Call" { return co_call(lo, e); }
+    if k == "Propagate" { return co_propagate(lo, e); }
     if k == "Match" { return co_match(lo, e, true); }
     if k == "If" {
         if sx_is_some(t, sx_field(t, e, "else_block")) == false { return co_stopped(lo, "an `if` with no `else` where a value is wanted"); }
@@ -1400,6 +1401,86 @@ fn co_match(lo: Lo, e: Int, value: Bool) -> Str {
     strs_push(o, co_field("ends", co_ends(transfers)));
     strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
     co_set_last(lo, 0 - 1, transfers);
+    co_object(o)
+}
+
+// `operand?` (`propagate`): a `match` of origin `propagate` on the operand's `Result` or `Option`
+// — its success's payload the value, its failure returned in the function's own type — every
+// part at the `?`.
+fn co_propagate(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let at = sx_field(t, e, "op_span");
+    let scrutinee = co_expr(lo, sx_field(t, e, "operand"));
+    let ot = co_last_ty(lo);
+    if co_halted(lo) { return ""; }
+    let into = ck_fn_ret_ty(c, co_g(lo, co_s_fn()));
+    if ck_is_enum_type(c, ot) == false || ck_is_enum_type(c, into) == false { return co_stopped(lo, "a `?` the checker did not resolve"); }
+    let mut ok_name = "Ok";
+    let mut err_name = "Err";
+    if ck_variant_named(c, ot, "Ok") < 0 {
+        ok_name = "Some";
+        err_name = "None";
+    }
+    let okv = ck_variant_named(c, ot, ok_name);
+    let errv = ck_variant_named(c, ot, err_name);
+    let into_err = ck_variant_named(c, into, err_name);
+    if okv < 0 || errv < 0 || into_err < 0 { return co_stopped(lo, "a `?` the checker did not resolve"); }
+    let ok_ty = ck_type_arg(c, ot, 0);
+    let ok = co_temp(lo, "ok", ok_ty, at);
+    let mut err = 0 - 1;
+    if ck_variant_arity(c, ot, errv) > 0 { err = co_temp(lo, "err", ck_type_arg(c, ot, 1), at); }
+    let fields = strs_new();
+    if err >= 0 && ck_variant_arity(c, into, into_err) > 0 {
+        let o = strs_new();
+        strs_push(o, co_field_first("field", "0"));
+        strs_push(o, co_field("name", json_str(ck_payload_name(c, into, into_err, 0))));
+        strs_push(o, co_field("value", co_read(lo, err, at)));
+        strs_push(fields, co_object(o));
+    }
+    let members = strs_new();
+    strs_push(members, co_field_first("variant", int_to_str(into_err)));
+    strs_push(members, co_field("name", json_str(ck_variant_name(c, into, into_err))));
+    strs_push(members, co_field("arity", int_to_str(ck_variant_arity(c, into, into_err))));
+    strs_push(members, co_field("fields", co_list(fields)));
+    let rebuilt = co_node(lo, "variant", str_join(members, ""), into, at);
+    let leave = strs_new();
+    strs_push(leave, co_op_first("return"));
+    strs_push(leave, co_field("value", rebuilt));
+    strs_push(leave, co_field("ends", co_ends(true)));
+    strs_push(leave, co_field("at", json_str(co_tree_span(lo, at))));
+    let arms = strs_new();
+    let ok_stmts = strs_new();
+    strs_push(arms, co_propagate_arm(lo, ot, okv, ok, ok_stmts, co_read(lo, ok, at), false, at));
+    let err_stmts = strs_new();
+    strs_push(err_stmts, co_object(leave));
+    strs_push(arms, co_propagate_arm(lo, ot, errv, err, err_stmts, "null", true, at));
+    let m = strs_new();
+    strs_push(m, co_field_first("origin", json_str("propagate")));
+    strs_push(m, co_field("enum", json_str(co_durable(lo, ot))));
+    strs_push(m, co_field("scrutinee", scrutinee));
+    strs_push(m, co_field("arms", co_list(arms)));
+    co_node(lo, "match", str_join(m, ""), ok_ty, at)
+}
+
+fn co_propagate_arm(lo: Lo, et: Int, v: Int, local: Int, stmts: Strs, tail: Str, transfers: Bool, at: Int) -> Str {
+    let c = lo.c;
+    let bindings = strs_new();
+    let owns = strs_new();
+    if local >= 0 {
+        let b = strs_new();
+        strs_push(b, co_field_first("field", "0"));
+        strs_push(b, co_field("name", json_str(ck_payload_name(c, et, v, 0))));
+        strs_push(b, co_field("local", int_to_str(local)));
+        strs_push(bindings, co_object(b));
+        strs_push(owns, int_to_str(local));
+    }
+    let o = strs_new();
+    strs_push(o, co_field_first("variant", int_to_str(v)));
+    strs_push(o, co_field("name", json_str(ck_variant_name(c, et, v))));
+    strs_push(o, co_field("bindings", co_list(bindings)));
+    strs_push(o, co_field("body", co_block_json(lo, transfers, co_list(owns), stmts, tail, at)));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, at))));
     co_object(o)
 }
 
