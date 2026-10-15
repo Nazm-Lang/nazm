@@ -263,6 +263,35 @@ enums) under their own names beside public items of its own, whose order the ref
 its public surface's closure; and an enum written under two plain names, whose variant's owner
 the reference names in a hash map's order.
 
+**D24 — The front end's facts are an interface, `compiler/facts.nz`, held to `nazm doc`.** What
+R5's `nazm doc` reads of the checker (R5 design D10) is published as one documented module a
+command can `use`: `fx_check(path, library, os, arch, io)` runs the whole front end as `nazm check
+FILE` does (`fx_check_module` as `nazm doc` does, `Entry::Absent`: no `main` asked of the root),
+and keeps what each stage knew. Its answers: whether the compilation was carried (`fx_carried`;
+`fx_why` where not) and whether it fails (`fx_failed`; `fx_refusal`, the reference's words for a
+manifest it refuses without a diagnostic of a module); its diagnostics (`fx_diags`) and their
+text as `nazm check` writes them over every file (`fx_render`, `diag.nz`'s `dg_render` — a
+port of `Diagnostic::render`, each primary span in the file its stage named); each module's
+name, text, base, program node, durable key (`fx_module_key`, `ModuleKey` as the loader
+derives it: `@core/prelude`, `@std/NAME`, `NAME@VERSION/PATH` for a dependency, the path under
+the source root, else none), identity (`fx_module_identity`, `Names::module`) and whether it is
+the program's own; the checker's tables through `fx_checker` — per function its name, module,
+node, whether a closure or a method, its visibility, parameters' and result's types as
+`Types::show` writes them, whether generic, declared and required effects
+(`inferred_effects`, recorded per function as the reference's `record_effects` does, named by
+`ck_effect_names`), capabilities, foreign symbol and C export; per record and enum its name,
+module, visibility and declaration node; per trait its name and module — each definition's
+durable identity as `cir::Names` writes it (`fx_fn_identity`, `fx_record_identity`,
+`fx_enum_identity`, `fx_trait_identity`), spans local to a module (`fx_start`, `fx_end`),
+`@deprecated`'s reason (`fx_deprecated`), and what each name a `pub use` chooses resolves to
+(`fx_reexport_of`, D23). Two comparisons hold it to the reference on every input: `run.sh
+render` compares `fx_render` with `nazm check`'s standard error (task 4.2), and `run.sh facts`
+compares what `compiler/facts-dump.nz` prints from the interface alone — every field of every
+item `apidoc.rs` documents but the two it derives (`anchor`, `description`) — with the same
+fields of `nazm doc FILE`'s `nazm.api-doc/2` (`toolchain/frontend-tests/doc-facts.py`). The
+driver `diagnose` is now a client of the interface (`--text`, `--facts`). Packages' resolution
+and the source root's rule for a directory (`nazm doc DIR`) stay R5's, as D10 says.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

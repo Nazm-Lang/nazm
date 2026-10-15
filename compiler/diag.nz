@@ -30,16 +30,22 @@ pub struct Diags {
     fix_description: Strs,
     fix_applicability: Strs,
     fix_precondition: Strs,
+    // The file each diagnostic's primary span is in, by load order, where the stage that reported
+    // it knew (`dg_append_in`); -1 where it is found from the offset (`dg_render`).
+    file: Ints,
 }
 
 pub fn dg_new() -> Diags {
     Diags(code: strs_new(), severity: strs_new(), start: ints_new(), end: ints_new(), message: strs_new(), label: strs_new(),
             help: strs_new(), sec_first: ints_new(), sec_count: ints_new(), sec_start: ints_new(), sec_end: ints_new(),
             sec_message: strs_new(), fix_first: ints_new(), fix_count: ints_new(), fix_start: ints_new(), fix_end: ints_new(),
-            fix_replacement: strs_new(), fix_description: strs_new(), fix_applicability: strs_new(), fix_precondition: strs_new())
+            fix_replacement: strs_new(), fix_description: strs_new(), fix_applicability: strs_new(), fix_precondition: strs_new(), file: ints_new())
 }
 
 pub fn dg_len(d: Diags) -> Int { strs_len(d.code) }
+pub fn dg_code(d: Diags, i: Int) -> Str { strs_get(d.code, i) }
+// "error" or "warning".
+pub fn dg_severity(d: Diags, i: Int) -> Str { strs_get(d.severity, i) }
 
 // Report one error; its index, for labels and fixes added after it.
 pub fn dg_error(d: Diags, code: Str, start: Int, end: Int, message: Str, primary: Str, help: Str) -> Int {
@@ -58,7 +64,14 @@ pub fn dg_push(d: Diags, code: Str, severity: Str, start: Int, end: Int, message
     ints_push(d.sec_count, 0);
     ints_push(d.fix_first, ints_len(d.fix_start));
     ints_push(d.fix_count, 0);
+    ints_push(d.file, 0 - 1);
     strs_len(d.code) - 1
+}
+
+// Say which file the last diagnostic reported is in (by load order).
+pub fn dg_in_file(d: Diags, file: Int) -> Int {
+    ints_set(d.file, strs_len(d.code) - 1, file);
+    0
 }
 
 // A secondary label on the last diagnostic reported.
@@ -86,25 +99,45 @@ pub fn dg_fix(d: Diags, start: Int, end: Int, replacement: Str, description: Str
 
 // Every diagnostic of `from`, appended to `to` — shifted by `by` bytes, as a span of an
 // imported module is published at its offset in the whole compilation.
-pub fn dg_append(to: Diags, from: Diags, by: Int) -> Int {
+pub fn dg_append(to: Diags, from: Diags, by: Int) -> Int { dg_append_in(to, from, by, 0 - 1) }
+
+// Every diagnostic of `from` but those of code `code`, appended to `to`.
+pub fn dg_append_without(to: Diags, from: Diags, code: Str) -> Int {
     let mut i = 0;
     while i < dg_len(from) {
-        dg_push(to, strs_get(from.code, i), strs_get(from.severity, i), ints_get(from.start, i) + by, ints_get(from.end, i) + by,
-                strs_get(from.message, i), strs_get(from.label, i), strs_get(from.help, i));
-        let sf = ints_get(from.sec_first, i);
-        let mut k = 0;
-        while k < ints_get(from.sec_count, i) {
-            dg_secondary(to, ints_get(from.sec_start, sf + k) + by, ints_get(from.sec_end, sf + k) + by, strs_get(from.sec_message, sf + k));
-            k = k + 1;
-        }
-        let ff = ints_get(from.fix_first, i);
-        k = 0;
-        while k < ints_get(from.fix_count, i) {
-            dg_fix(to, ints_get(from.fix_start, ff + k) + by, ints_get(from.fix_end, ff + k) + by, strs_get(from.fix_replacement, ff + k),
-                    strs_get(from.fix_description, ff + k), strs_get(from.fix_applicability, ff + k), strs_get(from.fix_precondition, ff + k));
-            k = k + 1;
-        }
+        if strs_get(from.code, i) != code { copy_one(to, from, i, 0, 0 - 1); }
         i = i + 1;
+    }
+    0
+}
+
+// The same, every one of them in file `file` (by load order; -1 to keep what each says).
+pub fn dg_append_in(to: Diags, from: Diags, by: Int, file: Int) -> Int {
+    let mut i = 0;
+    while i < dg_len(from) {
+        copy_one(to, from, i, by, file);
+        i = i + 1;
+    }
+    0
+}
+
+// Diagnostic `i` of `from`, appended to `to`, shifted by `by`, in `file` (-1 to keep its own).
+fn copy_one(to: Diags, from: Diags, i: Int, by: Int, file: Int) -> Int {
+    dg_push(to, strs_get(from.code, i), strs_get(from.severity, i), ints_get(from.start, i) + by, ints_get(from.end, i) + by,
+            strs_get(from.message, i), strs_get(from.label, i), strs_get(from.help, i));
+    if file >= 0 { dg_in_file(to, file); } else { dg_in_file(to, ints_get(from.file, i)); }
+    let sf = ints_get(from.sec_first, i);
+    let mut k = 0;
+    while k < ints_get(from.sec_count, i) {
+        dg_secondary(to, ints_get(from.sec_start, sf + k) + by, ints_get(from.sec_end, sf + k) + by, strs_get(from.sec_message, sf + k));
+        k = k + 1;
+    }
+    let ff = ints_get(from.fix_first, i);
+    k = 0;
+    while k < ints_get(from.fix_count, i) {
+        dg_fix(to, ints_get(from.fix_start, ff + k) + by, ints_get(from.fix_end, ff + k) + by, strs_get(from.fix_replacement, ff + k),
+                strs_get(from.fix_description, ff + k), strs_get(from.fix_applicability, ff + k), strs_get(from.fix_precondition, ff + k));
+        k = k + 1;
     }
     0
 }
@@ -204,3 +237,138 @@ pub fn dg_json(d: Diags, i: Int) -> Str {
     strs_push(out, "]}");
     str_join(out, "")
 }
+
+// --- the text rendering (`Diagnostic::render`) ---------------------------------------------------
+
+// Diagnostic `i` as `nazm check` writes it to standard error, over the compilation's files: each
+// one's name, its text (newline included) and where it begins among them (`ld_base`). A span
+// is placed in the file its stage said, else in the last file beginning at or before it — a
+// synthetic span, `0..0`, in the first, as the reference's is in `FileId::ROOT`.
+pub fn dg_render(d: Diags, i: Int, names: Strs, texts: Strs, bases: Ints) -> Str {
+    let out = strs_new();
+    let start = ints_get(d.start, i);
+    let end = ints_get(d.end, i);
+    let file = file_of(ints_get(d.file, i), start, bases);
+    let local = start - ints_get(bases, file);
+    let text = strs_get(texts, file);
+    let line = line_of(text, local);
+    let column = column_of(text, local);
+    let nl = str_from_byte(10);
+    strs_push(out, cat_all4(strs_get(d.severity, i), "[", strs_get(d.code, i), "]: "));
+    strs_push(out, strs_get(d.message, i));
+    strs_push(out, nl);
+    strs_push(out, cat_all4("  --> ", strs_get(names, file), ":", int_to_str(line)));
+    strs_push(out, cat_all4(":", int_to_str(column), nl, ""));
+    let shown = line_text(text, local);
+    let gutter = int_to_str(line);
+    let pad = spaces(str_len(gutter));
+    strs_push(out, cat_all4(pad, " |", nl, ""));
+    strs_push(out, cat_all4(gutter, " | ", shown, nl));
+    let mut width = end - start;
+    if width < 1 { width = 1; }
+    let mut remaining = chars_in(shown) - (column - 1);
+    if remaining < 1 { remaining = 1; }
+    if width > remaining { width = remaining; }
+    let mut primary = strs_get(d.label, i);
+    if primary == "" { primary = strs_get(d.message, i); }
+    strs_push(out, cat_all4(pad, " | ", spaces(column - 1), repeat("^", width)));
+    strs_push(out, cat_all4(" ", primary, nl, ""));
+    let sf = ints_get(d.sec_first, i);
+    let mut k = 0;
+    while k < ints_get(d.sec_count, i) {
+        let ss = ints_get(d.sec_start, sf + k);
+        let there = file_of(0 - 1, ss, bases);
+        let st = strs_get(texts, there);
+        let sl = ss - ints_get(bases, there);
+        let mut at = cat_all4(int_to_str(line_of(st, sl)), ":", int_to_str(column_of(st, sl)), "");
+        if there != file { at = cat_all4(strs_get(names, there), ":", at, ""); }
+        strs_push(out, cat_all4(pad, " = at ", at, ": "));
+        strs_push(out, cat_all4(strs_get(d.sec_message, sf + k), nl, "", ""));
+        k = k + 1;
+    }
+    if strs_get(d.help, i) != "" { strs_push(out, cat_all4(pad, " = help: ", strs_get(d.help, i), nl)); }
+    let ff = ints_get(d.fix_first, i);
+    k = 0;
+    while k < ints_get(d.fix_count, i) {
+        let desc = strs_get(d.fix_description, ff + k);
+        let replacement = cat_all4(" -> `", strs_get(d.fix_replacement, ff + k), "`", nl);
+        if strs_get(d.fix_applicability, ff + k) == "automatic" {
+            strs_push(out, cat_all4(pad, " = fix: ", desc, replacement));
+        } else {
+            strs_push(out, cat_all4(pad, " = suggestion: ", desc, replacement));
+            strs_push(out, cat_all4(pad, "   right when: ", strs_get(d.fix_precondition, ff + k), nl));
+        }
+        k = k + 1;
+    }
+    str_join(out, "")
+}
+
+// The file an offset is in: `known` where a stage said, else the last beginning at or before it.
+fn file_of(known: Int, at: Int, bases: Ints) -> Int {
+    if known >= 0 { return known; }
+    let mut f = 0;
+    let mut k = 0;
+    while k < ints_len(bases) {
+        if ints_get(bases, k) <= at { f = k; }
+        k = k + 1;
+    }
+    f
+}
+
+// The 1-based line of byte `at` (`SourceMap::line_col`): the line breaks before it, plus one.
+fn line_of(text: Str, at: Int) -> Int {
+    let mut n = 1;
+    let mut i = 0;
+    while i < at && i < str_len(text) {
+        if str_byte(text, i) == 10 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn line_start(text: Str, at: Int) -> Int {
+    let mut i = at;
+    if i > str_len(text) { i = str_len(text); }
+    while i > 0 && str_byte(text, i - 1) != 10 { i = i - 1; }
+    i
+}
+
+// The 1-based column of byte `at`, in characters.
+fn column_of(text: Str, at: Int) -> Int {
+    let from = line_start(text, at);
+    if at > str_len(text) { return 1; }
+    chars_in(str_slice(text, from, at)) + 1
+}
+
+// The line holding byte `at`, without its line break.
+fn line_text(text: Str, at: Int) -> Str {
+    let from = line_start(text, at);
+    let mut to = from;
+    while to < str_len(text) && str_byte(text, to) != 10 { to = to + 1; }
+    str_slice(text, from, to)
+}
+
+fn chars_in(s: Str) -> Int {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b < 128 || b >= 192 { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+fn spaces(n: Int) -> Str { repeat(" ", n) }
+
+fn repeat(s: Str, n: Int) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < n {
+        strs_push(out, s);
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+fn cat_all4(a: Str, b: Str, c: Str, d: Str) -> Str { str_concat(str_concat(a, b), str_concat(c, d)) }

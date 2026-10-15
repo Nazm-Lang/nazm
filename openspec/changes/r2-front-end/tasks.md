@@ -273,13 +273,22 @@
       variants, and an impl of a re-exported module usable. `inputs/modules/reexport-*.nz`.
       `run.sh check`: 2,977 agree, 2 differ; the checker carries 2,973, all agree (with the 19 new
       inputs). Only `@derive` stops the checker now (6 inputs), left for last.
+- [ ] 3.1zi The facts `nazm doc` reads (D24; R5 D10's seven items): `compiler/facts.nz` — the whole
+      front end as one call, the checker's tables, durable identities, required effects, spans and
+      attributes, `pub use` resolutions, whether the compilation is carried, its diagnostics and
+      their text over every file (`dg_render`). A manifest's unknown field worded as serde words it
+      (`inputs/packages/unknowntop`, `unknowndep`). `run.sh`: check 2,981 agree, 2 differ (the
+      checker carries 2,977, all agree); render 2,981 agree, 2 differ (carried 2,977, all agree);
+      facts 2,977 agree, 6 differ (carried 2,977, all agree — 5,619 functions, 516 records, 121
+      enums and 20 re-exports documented by the reference among them); tokens, tree, syntax 2,982
+      agree, 0 differ
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
 ## 4. The checker's rules
 
 - [ ] 4.1 Group by group, every diagnostic identical as `nazm check --json` (D4), with recovery
-- [ ] 4.2 The text rendering compared
+- [x] 4.2 The text rendering compared — `run.sh render`, every carried input (3.1zi)
 - [ ] 4.3 Built-ins of group F; `selfhost.rs`'s `NOT_CARRIED` emptied (asked of the coordinator)
 
 ## 5. Core IR

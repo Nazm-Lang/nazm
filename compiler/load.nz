@@ -454,6 +454,7 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
         let base = ld_base(loaded, ints_get(pending.file, k));
         dg_error(d, strs_get(pending.code, k), base + ints_get(pending.start, k), base + ints_get(pending.end, k),
                 strs_get(pending.message, k), "", strs_get(pending.help, k));
+        dg_in_file(d, ints_get(pending.file, k));
         k = k + 1;
     }
     loaded
@@ -471,6 +472,8 @@ fn index_of_byte(s: Str, b: Int) -> Int {
 pub fn ld_count(l: Loaded) -> Int { strs_len(l.names) }
 pub fn ld_text(l: Loaded, i: Int) -> Str { strs_get(l.texts, i) }
 pub fn ld_name(l: Loaded, i: Int) -> Str { strs_get(l.names, i) }
+// Its identity: its normalised absolute path, `@std/NAME.nz` or `@core/prelude.nz`.
+pub fn ld_identity(l: Loaded, i: Int) -> Str { strs_get(l.identities, i) }
 pub fn ld_standard(l: Loaded, i: Int) -> Bool { ints_get(l.standard, i) == 1 }
 pub fn ld_program(l: Loaded, i: Int) -> Bool { ints_get(l.program, i) == 1 }
 

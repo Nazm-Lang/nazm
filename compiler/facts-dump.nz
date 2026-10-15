@@ -1,0 +1,323 @@
+// What `nazm doc` would read of a compilation, from `facts.nz` alone (R2, design D24): the check
+// that the interface is complete. For every item `apidoc.rs` documents — each exported function
+// that is not a closure, each `pub` record and enum, each `pub use` — of the program's own
+// modules with a durable key, one line per field, `MODULE<TAB>ID<TAB>FIELD=VALUE`, the value as
+// compact JSON with sorted keys; modules and items in `nazm doc`'s order (by key, then by id), its
+// own fields sorted, and the `anchor` and `description` it derives from these left out.
+// `toolchain/frontend-tests/doc-facts.py` prints the same lines from the reference's
+// `nazm.api-doc/2`. A compilation that fails is one line, `fails`; one the front end does not
+// carry, `stops`.
+
+use "syntax.nz";
+use "diag.nz";
+use "sema.nz";
+use "facts.nz";
+
+// A line break, written so that no string literal in this file holds one.
+fn nl() -> Str { str_from_byte(10) }
+fn tab() -> Str { str_from_byte(9) }
+
+pub fn fd_dump(f: Facts) -> Str {
+    if fx_carried(f) == false { return str_concat("stops", nl()); }
+    if fx_failed(f) { return str_concat("fails", nl()); }
+    let keys = strs_new();
+    let bodies = strs_new();
+    let c = fx_checker(f);
+    let t = fx_tree(f);
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        let m = ck_fn_module(c, i);
+        if ck_fn_closure(c, i) == false && ck_fn_public(c, i) && documented(f, m) { add(keys, bodies, f, m, fx_fn_identity(f, i), function_item(f, i)); }
+        i = i + 1;
+    }
+    let mut m = 0;
+    while m < fx_modules(f) {
+        if documented(f, m) {
+            let p = fx_module_program(f, m);
+            let records = sx_items(t, sx_field(t, p, "records"));
+            let mut k = 0;
+            while k < ints_len(records) {
+                let r = ints_get(records, k);
+                if sx_is_some(t, sx_field(t, r, "pub_span")) { add(keys, bodies, f, m, type_id(f, m, "struct", r), type_item(f, m, "struct", r)); }
+                k = k + 1;
+            }
+            let enums = sx_items(t, sx_field(t, p, "enums"));
+            k = 0;
+            while k < ints_len(enums) {
+                let e = ints_get(enums, k);
+                if sx_is_some(t, sx_field(t, e, "pub_span")) { add(keys, bodies, f, m, type_id(f, m, "enum", e), type_item(f, m, "enum", e)); }
+                k = k + 1;
+            }
+            reexports(f, m, keys, bodies);
+        }
+        m = m + 1;
+    }
+    // In order, by module and then by identity; a later item of one identity replaces an earlier.
+    let order = ints_new();
+    i = 0;
+    while i < strs_len(keys) {
+        let key = strs_get(keys, i);
+        let mut at = 0;
+        let mut same = 0 - 1;
+        while at < ints_len(order) && str_less(strs_get(keys, ints_get(order, at)), key) { at = at + 1; }
+        if at < ints_len(order) {
+            if strs_get(keys, ints_get(order, at)) == key { same = at; }
+        }
+        if same >= 0 {
+            ints_set(order, same, i);
+        } else {
+            ints_push(order, 0);
+            let mut j = ints_len(order) - 1;
+            while j > at {
+                ints_set(order, j, ints_get(order, j - 1));
+                j = j - 1;
+            }
+            ints_set(order, at, i);
+        }
+        i = i + 1;
+    }
+    let out = strs_new();
+    i = 0;
+    while i < ints_len(order) {
+        strs_push(out, strs_get(bodies, ints_get(order, i)));
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+// Whether module `m`'s items are documented: the program's own, with a durable key.
+fn documented(f: Facts, m: Int) -> Bool { fx_module_own(f, m) && fx_module_key(f, m) != "" }
+
+// An item: its fields, each `NAME=VALUE`, sorted by name, written as lines under its module and id.
+fn add(keys: Strs, bodies: Strs, f: Facts, m: Int, id: Str, fields: Strs) -> Int {
+    let module = fx_module_key(f, m);
+    // The key sorts by module, then by id: a tab is below every character either holds.
+    strs_push(keys, cat3(module, tab(), id));
+    let sorted = sorted_strs(fields);
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(sorted) {
+        strs_push(out, cat3(module, tab(), id));
+        strs_push(out, tab());
+        strs_push(out, strs_get(sorted, i));
+        strs_push(out, nl());
+        i = i + 1;
+    }
+    strs_push(bodies, str_join(out, ""));
+    0
+}
+
+fn function_item(f: Facts, i: Int) -> Strs {
+    let c = fx_checker(f);
+    let t = fx_tree(f);
+    let m = ck_fn_module(c, i);
+    let node = ck_fn_node(c, i);
+    let text = fx_module_text(f, m);
+    let span = sx_field(t, node, "span");
+    let mut start = fx_start(f, span);
+    if sx_is_some(t, sx_field(t, node, "pub_span")) {
+        let ps = fx_start(f, sx_unwrap(t, sx_field(t, node, "pub_span")));
+        if ps < start { start = ps; }
+    }
+    let mut end = fx_end(f, span);
+    if sx_is_some(t, sx_field(t, node, "body")) { end = fx_start(f, sx_field(t, sx_unwrap(t, sx_field(t, node, "body")), "span")); }
+    let out = strs_new();
+    let id = fx_fn_identity(f, i);
+    field(out, "id", json_str(id));
+    field(out, "kind", json_str("fn"));
+    field(out, "name", json_str(ck_fn_name(c, i)));
+    field(out, "signature", json_str(trim_signature(str_slice(text, start, end))));
+    field(out, "params", json_strs(ck_fn_params(c, i)));
+    field(out, "ret", json_str(ck_fn_ret(c, i)));
+    field(out, "generic", json_bool(ck_fn_generic(c, i)));
+    field(out, "effects", cat5("{\"declared\":", effects(ck_fn_declared(c, i)), ",\"required\":", effects(ck_fn_required(c, i)), "}"));
+    field(out, "capabilities", json_strs(ck_fn_capabilities(c, i)));
+    field(out, "foreign", json_or_null(ck_fn_foreign(c, i)));
+    field(out, "export", json_or_null(ck_fn_export(c, i)));
+    field(out, "source", source(f, m, fx_start(f, sx_field(t, node, "name_span"))));
+    if fx_is_deprecated(f, node) { field(out, "deprecated", json_str(fx_deprecated(f, node))); }
+    out
+}
+
+fn type_id(f: Facts, m: Int, kind: Str, decl: Int) -> Str {
+    cat5(fx_module_key(f, m), "::", kind, " ", sx_name(fx_tree(f), decl, "name"))
+}
+
+fn type_item(f: Facts, m: Int, kind: Str, decl: Int) -> Strs {
+    let t = fx_tree(f);
+    let text = fx_module_text(f, m);
+    let span = sx_field(t, decl, "span");
+    let mut start = fx_start(f, span);
+    let ps = fx_start(f, sx_unwrap(t, sx_field(t, decl, "pub_span")));
+    if ps < start { start = ps; }
+    let out = strs_new();
+    field(out, "id", json_str(type_id(f, m, kind, decl)));
+    field(out, "kind", json_str(kind));
+    field(out, "name", json_str(sx_name(t, decl, "name")));
+    field(out, "signature", json_str(str_slice(text, start, fx_end(f, span))));
+    let parts = strs_new();
+    if kind == "struct" {
+        let fields = sx_items(t, sx_field(t, decl, "fields"));
+        let mut k = 0;
+        while k < ints_len(fields) {
+            let fd = ints_get(fields, k);
+            let ts = sx_field(t, sx_field(t, fd, "ty"), "span");
+            strs_push(parts, cat5("{\"name\":", json_str(sx_name(t, fd, "name")), ",\"type\":", json_str(str_slice(text, fx_start(f, ts), fx_end(f, ts))), "}"));
+            k = k + 1;
+        }
+        field(out, "fields", cat3("[", str_join(parts, ","), "]"));
+    } else {
+        let variants = sx_items(t, sx_field(t, decl, "variants"));
+        let mut k = 0;
+        while k < ints_len(variants) {
+            let v = ints_get(variants, k);
+            let names = strs_new();
+            let vf = sx_items(t, sx_field(t, v, "fields"));
+            let mut j = 0;
+            while j < ints_len(vf) {
+                strs_push(names, sx_name(t, ints_get(vf, j), "name"));
+                j = j + 1;
+            }
+            strs_push(parts, cat5("{\"fields\":", json_strs(names), ",\"name\":", json_str(sx_name(t, v, "name")), "}"));
+            k = k + 1;
+        }
+        field(out, "variants", cat3("[", str_join(parts, ","), "]"));
+    }
+    field(out, "source", source(f, m, fx_start(f, sx_field(t, decl, "name_span"))));
+    if fx_is_deprecated(f, decl) { field(out, "deprecated", json_str(fx_deprecated(f, decl))); }
+    out
+}
+
+// Each `pub use` of module `m`: one item for every name, or one for each chosen.
+fn reexports(f: Facts, m: Int, keys: Strs, bodies: Strs) -> Int {
+    let t = fx_tree(f);
+    let text = fx_module_text(f, m);
+    let imports = sx_items(t, sx_field(t, fx_module_program(f, m), "imports"));
+    let module = fx_module_key(f, m);
+    let mut k = 0;
+    while k < ints_len(imports) {
+        let imp = ints_get(imports, k);
+        let re = sx_field(t, imp, "reexport");
+        if sx_is_some(t, re) {
+            let span = sx_field(t, imp, "span");
+            let signature = trim_semis(str_slice(text, fx_start(f, span), fx_end(f, span)));
+            let line = source(f, m, fx_start(f, span));
+            let names = sx_field(t, sx_unwrap(t, re), "names");
+            if sx_is_some(t, names) == false {
+                let path = sx_name(t, imp, "path");
+                let id = cat3(module, "::reexport ", path);
+                add(keys, bodies, f, m, id, reexport_item(id, path, signature, json_str("every export"), line));
+            } else {
+                let items = sx_items(t, sx_unwrap(t, names));
+                let mut j = 0;
+                while j < ints_len(items) {
+                    let it = ints_get(items, j);
+                    let mut offered = sx_name(t, it, "name");
+                    let alias = sx_field(t, it, "alias");
+                    if sx_is_some(t, alias) { offered = sx_text(t, sx_kid(t, sx_unwrap(t, alias), 0)); }
+                    let s = sx_field(t, it, "span");
+                    let id = cat3(module, "::reexport ", offered);
+                    add(keys, bodies, f, m, id, reexport_item(id, offered, signature, json_or_null(fx_reexport_of(f, m, fx_start(f, s), fx_end(f, s))), line));
+                    j = j + 1;
+                }
+            }
+        }
+        k = k + 1;
+    }
+    0
+}
+
+fn reexport_item(id: Str, name: Str, signature: Str, of: Str, source: Str) -> Strs {
+    let out = strs_new();
+    field(out, "id", json_str(id));
+    field(out, "kind", json_str("reexport"));
+    field(out, "name", json_str(name));
+    field(out, "signature", json_str(signature));
+    field(out, "of", of);
+    field(out, "source", source);
+    out
+}
+
+fn source(f: Facts, m: Int, at: Int) -> Str {
+    let text = fx_module_text(f, m);
+    let mut line = 1;
+    let mut i = 0;
+    while i < at && i < str_len(text) {
+        if str_byte(text, i) == 10 { line = line + 1; }
+        i = i + 1;
+    }
+    cat5("{\"line\":", int_to_str(line), ",\"path\":", json_str(fx_module_path(f, m)), "}")
+}
+
+fn effects(mask: Int) -> Str {
+    if mask < 0 { return "null"; }
+    json_strs(ck_effect_names(mask))
+}
+
+fn field(out: Strs, name: Str, value: Str) -> Int {
+    strs_push(out, cat3(name, "=", value));
+    0
+}
+
+// A signature as `apidoc.rs` cuts it: trailing white space, then trailing `;`s, removed.
+fn trim_signature(s: Str) -> Str {
+    let mut end = str_len(s);
+    while end > 0 && is_space(str_byte(s, end - 1)) { end = end - 1; }
+    trim_semis(str_slice(s, 0, end))
+}
+
+fn trim_semis(s: Str) -> Str {
+    let mut end = str_len(s);
+    while end > 0 && str_byte(s, end - 1) == 59 { end = end - 1; }
+    str_slice(s, 0, end)
+}
+
+fn is_space(b: Int) -> Bool { b == 32 || b == 9 || b == 10 || b == 13 || b == 11 || b == 12 }
+
+fn json_bool(b: Bool) -> Str { if b { "true" } else { "false" } }
+
+fn json_or_null(s: Str) -> Str {
+    if s == "" { return "null"; }
+    json_str(s)
+}
+
+fn json_strs(xs: Strs) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < strs_len(xs) {
+        strs_push(parts, json_str(strs_get(xs, i)));
+        i = i + 1;
+    }
+    cat3("[", str_join(parts, ","), "]")
+}
+
+fn sorted_strs(xs: Strs) -> Strs {
+    let out = strs_new();
+    let mut i = 0;
+    while i < strs_len(xs) {
+        let x = strs_get(xs, i);
+        let mut at = 0;
+        while at < strs_len(out) && str_less(strs_get(out, at), x) { at = at + 1; }
+        strs_push(out, "");
+        let mut j = strs_len(out) - 1;
+        while j > at {
+            strs_set(out, j, strs_get(out, j - 1));
+            j = j - 1;
+        }
+        strs_set(out, at, x);
+        i = i + 1;
+    }
+    out
+}
+
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+fn cat3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
+fn cat5(a: Str, b: Str, c: Str, d: Str, e: Str) -> Str { str_concat(cat3(a, b, c), str_concat(d, e)) }

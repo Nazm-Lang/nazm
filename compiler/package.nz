@@ -277,7 +277,7 @@ pub fn pk_parse(text: Str) -> Manifest {
                 if table == "registry" { return unsupported_m(m, "a manifest's `[registry]`"); }
                 if table == "features" { return unsupported_m(m, "a manifest's `[features]`"); }
                 if table == "package" { has_package = true; }
-                if table != "package" && table != "dependencies" { invalid(m, pk_cat3("unknown field `", table, "`")); }
+                if table != "package" && table != "dependencies" { invalid(m, pk_cat3("unknown field `", table, str_concat("`", ", expected one of `schema`, `package`, `dependencies`, `registry`, `features`"))); }
             } else {
                 let keys = strs_new();
                 let mut j = read_key(line, at, keys);
@@ -306,14 +306,15 @@ pub fn pk_parse(text: Str) -> Manifest {
                         if kind == 3 && (key == "package" || key == "dependencies" || key == "registry" || key == "features") {
                             return unsupported_m(m, "a table written inline at the top of a manifest");
                         }
-                        invalid(m, pk_cat3("unknown field `", key, "`"));
+                        invalid(m, pk_cat3("unknown field `", key, str_concat("`", ", expected one of `schema`, `package`, `dependencies`, `registry`, `features`")));
                     }
                 }
                 if table == "package" {
                     if key == "heap-limit" { return unsupported_m(m, "a manifest's `heap-limit`"); }
                     let known = key == "name" || key == "version" || key == "root" || key == "main" || key == "profile";
                     if known == false {
-                        invalid(m, pk_cat3("unknown field `", key, "`"));
+                        // serde's words for a field `deny_unknown_fields` refuses: what it expected.
+                        invalid(m, pk_cat3("unknown field `", key, str_concat("`", ", expected one of `name`, `version`, `root`, `main`, `profile`, `heap-limit`")));
                     } else {
                         if kind != 1 {
                             invalid(m, pk_cat3("`", key, "` is not a string"));
@@ -371,7 +372,7 @@ pub fn pk_parse(text: Str) -> Manifest {
                                         if dkind != 2 { invalid(m, "`features` is not an array"); }
                                         if strs_get(v.vals, q) != "" { return unsupported_m(m, "a dependency's features"); }
                                     } else {
-                                        invalid(m, pk_cat3("unknown field `", dk, "`"));
+                                        invalid(m, pk_cat3("unknown field `", dk, str_concat("`", ", expected one of `path`, `version`, `features`")));
                                     }
                                 }
                             }
@@ -702,6 +703,7 @@ pub fn pk_packages_state(p: Packages) -> Int { ints_get(p.state, 0) }
 pub fn pk_packages_why(p: Packages) -> Str { strs_get(p.why, 0) }
 pub fn pk_count(p: Packages) -> Int { strs_len(p.names) }
 pub fn pk_name(p: Packages, i: Int) -> Str { strs_get(p.names, i) }
+pub fn pk_package_version(p: Packages, i: Int) -> Str { strs_get(p.versions, i) }
 pub fn pk_source_root(p: Packages, i: Int) -> Str { strs_get(p.roots, i) }
 pub fn pk_profile(p: Packages, i: Int) -> Str { strs_get(p.profiles, i) }
 pub fn pk_root_package(p: Packages) -> Int { ints_get(p.root, 0) }

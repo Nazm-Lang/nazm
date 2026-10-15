@@ -2,7 +2,11 @@
 # R2's comparisons (`openspec/changes/r2-front-end/design.md`): the front end written in Nazm
 # against the Rust toolchain, on every input.
 #
-#   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check (default: the first three)
+#   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts
+#                                                  (default: the first three)
+#
+# `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
+# `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24).
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
 # under a deadline; the reference side is `toolchain/frontend-tests/refdump`, built from this checkout's
@@ -55,7 +59,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check) driver=diagnose ;;
+    syntax|check|render|facts) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -87,6 +91,18 @@ for mode in $modes; do
         # Standard error says where the checker stopped (design D13), kept beside the result.
         timeout "$R2_DEADLINE" "$R2_EXE" "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      render)
+        # The standard error of `nazm check`, without its summary line.
+        { "$R2_NAZM" check --no-cache "$R2_ROOT/$f" 2>&1 >/dev/null || true; } | grep -Ev "^nazm: [0-9]+ (error|warning)" > "$want" || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --text "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
+      facts)
+        status=0
+        "$R2_NAZM" doc "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
+        python3 "$R2_ROOT/toolchain/frontend-tests/doc-facts.py" "$status" < "$want.json" > "$want"
+        rm -f "$want.json"
+        timeout "$R2_DEADLINE" "$R2_EXE" --facts "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
@@ -100,7 +116,7 @@ for mode in $modes; do
   ' sh
   agree=$(find "$out/$mode" -name '*.ok' | wc -l | tr -d ' ')
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
-  if [ "$mode" = check ]; then
+  if [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.
     carried=0; carried_ok=0
