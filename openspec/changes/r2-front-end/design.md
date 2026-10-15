@@ -128,6 +128,20 @@ and the authority it needs (`CapabilityKind::of_intrinsic`), and which arguments
 regenerates it (`--check` says whether the tree's copy is current). One table, as `intrinsic.rs` says
 of its own two readers: the Nazm checker cannot drift from the Rust one by a hand-copied row.
 
+**D15 — Generics as the reference settles them, instance by interned application.** A type
+parameter is an interned type naming its owner (a record, an enum, a function, or a built-in's
+`T`) and its position; an application is its definition's id with an argument run, and a field's
+type in it is the definition's with the arguments substituted, so the reference's instances need
+no table of their own. A call of a generic callee is `check_generic_call` step for step: written
+arguments, or each argument unified left to right with its declared type, then the wanted result
+type; one mistake one error (`excuse`). A generic built-in's types are made per call from the
+table's shapes (D14), its `T` named `T` and declared at no place (`0..0`, as the reference prints
+a synthetic span). Layout cycles are searched over definitions rather than instances, which ends
+and over-approximates: any cycle through a generic definition stops the checker rather than risk
+a refusal it does not word yet. The `check` comparison's reference is `nazm` built from this
+checkout (the checker ports `main`, R1.5 included): run with `NAZM` set to that build, not the
+0.10.0 release, which lacks R1.5 D8 and N0636 and so differs on ten inputs the checker carries.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
