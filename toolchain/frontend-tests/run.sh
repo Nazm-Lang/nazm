@@ -7,7 +7,7 @@
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
-# and `core` each function's Core IR with `nazm core-ir`'s, digests aside (D25): an input agrees
+# and `core` each function's Core IR with `nazm core-ir`'s, digests included (D25): an input agrees
 # when every function the Nazm lowering carries agrees, and the summary counts functions too.
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
