@@ -1,0 +1,86 @@
+// R1b, L10: closures in generic functions, and a `let mut` binding a closure shares
+// (`docs/spec.md`, *Function values and closures*). Ported from
+// `crates/nazm-cli/tests/generic_closures.rs` (R7).
+//
+// A closure written in a generic function is instantiated with it, and so is a named function's
+// value made there; a captured `let mut` binding is one variable the function and the closure
+// share, kept in a cell. Every implementation answers what the rules work out by hand, with every
+// allocation reclaimed; a generic closure builds across modules; provenance flows through a shared
+// binding.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// Every implementation, the LIR oracle among them, exits 0 and prints `expected` first, and all
+/// but the oracle reclaim everything.
+fn holds(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for r in everywhere_with_oracle(h, src, true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, expected), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {r.ran.stderr}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+const GENERIC: Str = "fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn inc(x: Int) -> Int { x + 1 }\n\nfn map_all[T](xs: Vec[T], f: fn(T) -> T) -> Vec[T] {\n    let out = vec_new[T]();\n    for x in xs { vec_push(out, f(x)); }\n    out\n}\n\n// A closure over the function's own parameter type, calling a function value it captured.\nfn twice_each[T](xs: Vec[T], g: fn(T) -> T) -> Vec[T] {\n    map_all(xs, fn(x: T) -> T { g(g(x)) })\n}\n\n// A closure nested in a closure, both in a generic function, and a named function's value.\nfn nested[T](x: T, f: fn(T) -> Int) -> Int {\n    let outer = fn() -> Int {\n        let inner = fn(y: T) -> Int { f(y) * 10 };\n        inner(x)\n    };\n    let step = inc;\n    step(outer())\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let xs = vec_new[Int]();\n    vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);\n    let ys = twice_each(xs, fn(x: Int) -> Int { x * 3 });\n    show(out, num_to_str(vec_get(ys, 0) + vec_get(ys, 1) + vec_get(ys, 2)));\n    let ss = vec_new[Str]();\n    vec_push(ss, \"a\"); vec_push(ss, \"bb\");\n    let ts = twice_each(ss, fn(s: Str) -> Str { str_concat(s, \"!\") });\n    show(out, str_concat(vec_get(ts, 0), vec_get(ts, 1)));\n    show(out, num_to_str(nested(\"abc\", fn(s: Str) -> Int { str_len(s) })));\n    show(out, num_to_str(nested(4, fn(n: Int) -> Int { n })));\n    0\n}\n";
+
+@test
+fn a_closure_in_a_generic_function_means_the_same_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    holds(caps(io, p, sp, v, t), GENERIC, "54\na!!bb!!\n31\n41\n")
+}
+
+const SHARED: Str = "struct P { x: Int, y: Int, }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn each(xs: Vec[Int], f: fn(Int) -> Int) -> Int {\n    for x in xs { f(x); }\n    0\n}\n\nfn count_where[T](xs: Vec[T], p: fn(T) -> Bool) -> Int {\n    let mut n = 0;\n    for x in xs { let hit = fn() -> Int { if p(x) { n = n + 1; } 0 }; hit(); }\n    n\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let xs = vec_new[Int]();\n    vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);\n    // A closure updates what its function then reads.\n    let mut total = 0;\n    let mut seen = \"\";\n    each(xs, fn(x: Int) -> Int { total = total + x; seen = str_concat(seen, num_to_str(x)); x });\n    show(out, str_concat(seen, num_to_str(total)));\n    // A field of a shared record, written through the closure.\n    let mut p = P(x: 1, y: 2);\n    let swap = fn() -> Int { p.x = p.y; 0 };\n    swap();\n    show(out, num_to_str(p.x * 10 + p.y));\n    // The function writes after the closure is made, and the closure sees it.\n    let mut k = 1;\n    let read = fn() -> Int { k };\n    k = 7;\n    show(out, num_to_str(read()));\n    // Nested closures share one variable; a generic function's too.\n    let mut n = 0;\n    let outer = fn() -> Int { let inner = fn() -> Int { n = n + 10; n }; inner() + inner() };\n    show(out, num_to_str(outer() + n));\n    show(out, num_to_str(count_where(xs, fn(x: Int) -> Bool { x > 1 })));\n    0\n}\n";
+
+@test
+fn a_shared_binding_is_one_variable_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    holds(caps(io, p, sp, v, t), SHARED, "1236\n22\n7\n50\n2\n")
+}
+
+fn modules(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "seq.nz", "fn bump(x: Int) -> Int { x + 1 }\npub fn fold[T](xs: Vec[T], f: fn(T) -> Int) -> Int {\nlet mut acc = 0;\nlet add = fn(x: T) -> Int { acc = acc + f(x); 0 };\nfor x in xs { add(x); }\nlet b = bump;\nb(acc)\n}\n")?;
+    scratch_write(h, d, "main.nz", "use \"seq.nz\";\nfn main() -> Int {\nlet xs = vec_new[Int](); vec_push(xs, 10); vec_push(xs, 20);\nlet ss = vec_new[Str](); vec_push(ss, \"abc\");\nfold(xs, fn(x: Int) -> Int { x }) + fold(ss, fn(s: Str) -> Int { str_len(s) })\n}\n")?;
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let a = words(f"build --backend {backend} main.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        let r = bounded_exe(h, exe, "", suite_env(h));
+        check_that(text_starts_with(r.stdout, "35"), f"{backend}: {ran_show(r)}")?;
+    }
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(text_starts_with(r.stdout, "35"), ran_show(r))
+}
+
+@test
+fn a_generic_closure_and_a_function_value_are_built_across_modules(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The generic function and its closure are in one module; their instances, and the thunk of
+    // the named function the generic body makes a value of, are reached from another.
+    let d = scratch_new(h);
+    let r = modules(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn codes_of(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    Result[Strs, Str].Ok(value: r.codes)
+}
+
+@test
+fn what_a_shared_binding_holds_carries_its_provenance(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file's contents written into a shared binding by the closure reach the function's read,
+    // and the other way round (`N0372`); a literal the same way does not.
+    same_strs("written by the closure", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let mut p = \"out.txt\"; let f = fn() -> Int ! { io } { p = read_file(\"cfg\"); 0 }; f(); write_file(p, \"x\") }\n")?, words("N0372"))?;
+    same_strs("read by the closure", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let mut p = read_file(\"cfg\"); let f = fn() -> Int ! { io } { write_file(p, \"x\") }; f() }\n")?, words("N0372"))?;
+    same_strs("a literal", codes_of(h, "fn main(io: IoCap) -> Int ! { io } { let mut p = \"a.txt\"; let f = fn() -> Int { p = \"b.txt\"; 0 }; f(); write_file(p, \"x\") }\n")?, strs_new())
+}

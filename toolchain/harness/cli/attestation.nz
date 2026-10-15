@@ -1,0 +1,269 @@
+// N94: reproducibility v2 — the model's first two claims, an SBOM, and signed statements
+// (`docs/architecture.md` §7.95). Ported from `crates/nazm-cli/tests/attestation.rs` (R7).
+//
+// Identical input gives identical artefacts, and so does the same input in another directory,
+// under either backend; the SBOM lists the build's packages, sources and runtime with their
+// digests; a statement signed with `ssh-keygen` verifies for its signer and for the artefacts it
+// names, and for nothing else.
+
+use "@std/blake3"
+use "@std/env"
+use "@std/file"
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const PROGRAM: Str = "fn twice(n: Int) -> Int { n * 2 }\nfn main() -> Int { twice(21) }\n";
+
+/// Build `p.nz` in `dir` with its provenance and SBOM.
+fn build(h: Caps, dir: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    let o = nazm(h, dir, words(f"build --no-cache --backend {backend} p.nz -o p --provenance p.prov.json --sbom p.cdx.json"));
+    check_that(o.code == 0, o.stderr)
+}
+
+fn identical(h: Caps, a: Str, b: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    // A second checkout, one directory deeper: no path reaches an artefact.
+    let deeper = f"{b}/checkout/elsewhere";
+    scratch_write(h, a, "p.nz", PROGRAM)?;
+    scratch_write(h, b, "checkout/elsewhere/p.nz", PROGRAM)?;
+    build(h, a, backend)?;
+    let files = words("p p.prov.json p.cdx.json");
+    let first = strs_new();
+    for f in files {
+        strs_push(first, read_raw(h, f"{a}/{f}")?);
+    }
+    // The same input again, in place, and elsewhere.
+    build(h, a, backend)?;
+    build(h, deeper, backend)?;
+    let mut i = 0;
+    while i < 3 {
+        let f = strs_get(files, i);
+        check_that(read_raw(h, f"{a}/{f}")? == strs_get(first, i), f"{backend}: {f} changed on a rebuild")?;
+        check_that(read_raw(h, f"{deeper}/{f}")? == strs_get(first, i), f"{backend}: {f} differs in another directory")?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn identical_input_gives_identical_artefacts_here_and_in_another_directory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for backend in words("llvm cranelift") {
+        let a = scratch_new(h);
+        let b = scratch_new(h);
+        let r = identical(h, a, b, backend);
+        scratch_remove(h, a);
+        scratch_remove(h, b);
+        r?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn holds(xs: Strs, x: Str) -> Bool ! {} {
+    for y in xs {
+        if y == x {
+            return true;
+        }
+    }
+    false
+}
+
+fn sbom(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "shapes/nazm.toml", "schema = \"nazm.package/1\"\n\n[package]\nname = \"shapes\"\nversion = \"1.2.0\"\n")?;
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides() -> Int { 4 }\n")?;
+    scratch_write(h, d, "app/nazm.toml", "schema = \"nazm.package/1\"\n\n[package]\nname = \"app\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\n\n[dependencies]\nshapes = { path = \"../shapes\", version = \"1.2.0\" }\n")?;
+    scratch_write(h, d, "app/src/main.nz", "use \"shapes:poly.nz\";\nfn main() -> Int { sides() }\n")?;
+    let o = nazm(h, d, words("build --no-cache app -o out --provenance out.prov.json --sbom out.cdx.json"));
+    check_that(o.code == 0, o.stderr)?;
+    let bom = jparse(read_text(h, f"{d}/out.cdx.json")?)?;
+    let prov = jparse(read_text(h, f"{d}/out.prov.json")?)?;
+    check_that(jstr(bom, "bomFormat") == "CycloneDX", "bomFormat")?;
+    check_that(jstr(bom, "specVersion") == "1.5", "specVersion")?;
+    let exe = match file_read_all(h.io, f"{d}/out") {
+        Result.Ok(value: b) => blake3_hex(b),
+        Result.Err(error: e) => "",
+    };
+    check_that(jstr(bom, "metadata/component/hashes/0/alg") == "BLAKE3", "the component's hash")?;
+    check_that(jstr(bom, "metadata/component/hashes/0/content") == exe, "the executable's digest")?;
+    let refs = strs_new();
+    let mut i = 0;
+    while jq(bom, f"components/{i}") >= 0 {
+        strs_push(refs, jstr(bom, f"components/{i}/bom-ref"));
+        i = i + 1;
+    }
+    // Every package the provenance names, and only those.
+    let packages = strs_new();
+    i = 0;
+    while jq(prov, f"packages/{i}") >= 0 {
+        strs_push(packages, f"package:{jstr(prov, f"packages/{i}/name")}@{jstr(prov, f"packages/{i}/version")}");
+        i = i + 1;
+    }
+    check_that(strs_len(packages) == 2, str_join(packages, ", "))?;
+    for p in packages {
+        check_that(holds(refs, p), f"{p} missing: {str_join(refs, ", ")}")?;
+    }
+    let mut pk = 0;
+    for r in refs {
+        if text_starts_with(r, "package:") {
+            pk = pk + 1;
+        }
+    }
+    check_that(pk == strs_len(packages), str_join(refs, ", "))?;
+    // Every source module, and the runtime.
+    i = 0;
+    while jq(prov, f"sources/{i}") >= 0 {
+        let r = f"source:{jstr(prov, f"sources/{i}/module")}";
+        check_that(holds(refs, r), f"{r} missing: {str_join(refs, ", ")}")?;
+        i = i + 1;
+    }
+    check_that(holds(refs, "runtime"), "runtime missing")?;
+    i = 0;
+    let mut shapes = "";
+    while jq(bom, f"components/{i}") >= 0 {
+        let c = f"components/{i}";
+        if str_len(shapes) == 0 && jstr(bom, f"{c}/name") == "shapes" {
+            shapes = c;
+        }
+        check_that(str_len(jstr(bom, f"{c}/hashes/0/content")) == 64, jtext(bom, c))?;
+        i = i + 1;
+    }
+    check_that(str_len(shapes) > 0, "no shapes component")?;
+    check_that(jstr(bom, f"{shapes}/purl") == "pkg:generic/shapes@1.2.0", jtext(bom, shapes))?;
+    check_that(jstr(bom, f"{shapes}/hashes/0/alg") == "BLAKE3", jtext(bom, shapes))?;
+    let deps = strs_new();
+    i = 0;
+    while jq(bom, f"dependencies/0/dependsOn/{i}") >= 0 {
+        strs_push(deps, jstr(bom, f"dependencies/0/dependsOn/{i}"));
+        i = i + 1;
+    }
+    check_that(holds(deps, "package:shapes@1.2.0") && holds(deps, "runtime"), str_join(deps, ", "))
+}
+
+@test
+fn the_sbom_lists_every_package_source_and_the_runtime_with_their_digests(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = sbom(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn verify(h: Caps, p: Str, id: Str) -> Ran ! { io, spawn } {
+    let a = words("attest verify --allowed-signers allowed --identity");
+    strs_push(a, id);
+    strs_push(a, "p.prov.json.intoto.json");
+    strs_push(a, "p");
+    nazm(h, p, a)
+}
+
+fn write_bytes(h: Caps, path: Str, b: Bytes) -> Result[Int, Str] ! { io } {
+    let v = h.v;
+    let f = match file_create(h.io, str_vouch(path)) {
+        Result.Ok(value: f) => f,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: path); },
+    };
+    let w = file_write(f, b);
+    file_close(f);
+    match w {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: path),
+    }
+}
+
+fn read_bytes(h: Caps, path: Str) -> Result[Bytes, Str] ! { io } {
+    match file_read_all(h.io, path) {
+        Result.Ok(value: b) => Result[Bytes, Str].Ok(value: b),
+        Result.Err(error: e) => Result[Bytes, Str].Err(error: path),
+    }
+}
+
+fn signed(h: Caps, p: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, p, "p.nz", PROGRAM)?;
+    build(h, p, "llvm")?;
+    let keys = words("key other");
+    let whos = words("builder someone");
+    let mut i = 0;
+    while i < 2 {
+        let a = words("-q -t ed25519 -N");
+        strs_push(a, "");
+        strs_push(a, "-C");
+        strs_push(a, strs_get(whos, i));
+        strs_push(a, "-f");
+        strs_push(a, strs_get(keys, i));
+        let k = run(h, "ssh-keygen", a, p, env_here(h.io));
+        check_that(k.code == 0, ran_show(k))?;
+        i = i + 1;
+    }
+    let public = read_text(h, f"{p}/key.pub")?;
+    scratch_write(h, p, "allowed", f"builder@example {public}")?;
+    // An artefact the record does not name is refused before any key is used.
+    scratch_write(h, p, "stray", "not the output")?;
+    let stray = nazm(h, p, words("attest sign --key missing-key p.prov.json stray"));
+    check_that(stray.code != 0, ran_show(stray))?;
+    check_that(text_contains(stray.stderr, "not an output the provenance record names"), stray.stderr)?;
+    let s = nazm(h, p, words("attest sign --key key p.prov.json p"));
+    check_that(s.code == 0, s.stderr)?;
+    let statement = jparse(read_text(h, f"{p}/p.prov.json.intoto.json")?)?;
+    check_that(jstr(statement, "_type") == "https://in-toto.io/Statement/v1", "_type")?;
+    check_that(jstr(statement, "predicateType") == "urn:nazm:provenance:1", "predicateType")?;
+    check_that(jstr(statement, "subject/0/name") == "p", "subject")?;
+    check_that(jstr(statement, "predicate/schema") == "nazm.provenance/1", "predicate")?;
+    let ok = verify(h, p, "builder@example");
+    check_that(ok.code == 0, ok.stderr)?;
+    // Another identity than the one the key is allowed for.
+    check_that(verify(h, p, "someone@example").code != 0, "another identity verified")?;
+    // The artefact changed after signing.
+    let exe = read_bytes(h, f"{p}/p")?;
+    let changed = bytes_new(bytes_len(exe) + 1);
+    bytes_copy(bytes_slice(changed, 0, bytes_len(exe)), exe);
+    write_bytes(h, f"{p}/p", changed)?;
+    let after = verify(h, p, "builder@example");
+    check_that(after.code != 0, ran_show(after))?;
+    check_that(text_contains(after.stderr, "is not a subject of the statement"), after.stderr)?;
+    write_bytes(h, f"{p}/p", exe)?;
+    // The statement changed after signing.
+    let text = read_text(h, f"{p}/p.prov.json.intoto.json")?;
+    scratch_write(h, p, "p.prov.json.intoto.json", text_replace(text, "\"name\": \"p\"", "\"name\": \"q\""))?;
+    let edited = verify(h, p, "builder@example");
+    check_that(edited.code != 0, ran_show(edited))?;
+    check_that(text_contains(edited.stderr, "does not verify"), edited.stderr)?;
+    scratch_write(h, p, "p.prov.json.intoto.json", text)?;
+    // A statement signed by a key nobody allowed.
+    let o = nazm(h, p, words("attest sign --key other p.prov.json p"));
+    check_that(o.code == 0, o.stderr)?;
+    check_that(verify(h, p, "builder@example").code != 0, "a key nobody allowed verified")
+}
+
+/// `common::skip_without`: `true` (skip) when `present` is false, unless
+/// `NAZM_REQUIRE_HOST_TOOLS=1` turns the skip into a failure.
+fn skip_without(h: Caps, present: Bool, what: Str) -> Result[Bool, Str] ! { io } {
+    if present {
+        return Result[Bool, Str].Ok(value: false);
+    }
+    let required = match env_get(h.io, "NAZM_REQUIRE_HOST_TOOLS") {
+        Option.Some(value: x) => x == "1",
+        Option.None() => false,
+    };
+    check_that(!required, f"NAZM_REQUIRE_HOST_TOOLS=1, and {what}")?;
+    Result[Bool, Str].Ok(value: true)
+}
+
+/// Signs with the host's `ssh-keygen`: off macOS the Rust test is ignored, and this one passes
+/// without looking.
+@test
+fn a_signed_statement_verifies_for_its_signer_and_its_artefacts_only(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    if skip_without(h, run(h, "ssh-keygen", words("-?"), "", env_here(h.io)).code >= 0, "no ssh-keygen on this machine")? {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let r = signed(h, d);
+    scratch_remove(h, d);
+    r
+}
