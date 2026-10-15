@@ -1,0 +1,2201 @@
+// `nazm build`, end to end: source → executable → run it. Every case compiles a real `.nz` file
+// with the real `nazm` binary and executes the result, checked against an explicitly written
+// expected result and against the interpreter, at `-O0` and `-O2`. Ported from
+// `crates/nazm-cli/tests/build.rs` (R7).
+//
+// The two tests that hold the backend and the interpreter to every built-in's *shape*
+// (`nazm_core::Intrinsic::ALL` with each one's `Shape` and numeric class, to write a program per
+// built-in) stay Rust (`tests/stays-rust.txt`): `nazm capabilities` prints the built-ins' names and
+// spelled types, not the shapes the program generator needs.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+/// How long any subprocess here may take before the test fails: what stops a compiled program
+/// that does not terminate from holding the suite.
+const DEADLINE_30: Int = 30000;
+
+/// A build: whether it succeeded, its directory and executable, and its run when it failed.
+struct Built {
+    ok: Bool,
+    dir: Str,
+    exe: Str,
+    out: Ran,
+}
+
+/// `prog.nz` holding `body`, in a new directory: the directory.
+fn write_program(h: Caps, body: Str) -> Result[Str, Str] ! { io } {
+    prog_dir(h, "prog.nz", body)
+}
+
+fn build_at(h: Caps, body: Str, opt: Int) -> Result[Built, Str] ! { io, spawn } {
+    let dir = write_program(h, body)?;
+    let exe = f"{dir}/prog";
+    let a = words("build");
+    strs_push(a, f"{dir}/prog.nz");
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    strs_push(a, "--opt-level");
+    strs_push(a, int_to_str(opt));
+    let out = run_within(h, nazm_bin(h.io), a, "", suite_env(h), DEADLINE_30);
+    check_that(out.code != TIMED_OUT, "`nazm build` did not terminate within the deadline")?;
+    Result[Built, Str].Ok(value: Built(ok: out.code == 0, dir: dir, exe: exe, out: out))
+}
+
+/// `build_at`, insisting that it succeeded.
+fn built_at(h: Caps, body: Str, opt: Int) -> Result[Built, Str] ! { io, spawn } {
+    let b = build_at(h, body, opt)?;
+    check_that(b.ok, f"-O{opt} build failed: {ran_show(b.out)}")?;
+    Result[Built, Str].Ok(value: b)
+}
+
+/// Run a built executable under `bounded_exe`, failing if it outlives the deadline.
+fn run_exe(h: Caps, b: Built) -> Result[Ran, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, b.exe);
+    let r = run_within(h, "sh", a, "", suite_env(h), DEADLINE_30);
+    check_that(r.code != TIMED_OUT, "the compiled program did not terminate within 30s. A timeout is a failure, not a result — `nazm build` emits no iteration budget, so a miscompiled loop runs forever instead of reporting.")?;
+    scratch_remove(h, b.dir);
+    Result[Ran, Str].Ok(value: r)
+}
+
+fn interpret(h: Caps, body: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let dir = write_program(h, body)?;
+    let a = words("run --interpret");
+    strs_push(a, f"{dir}/prog.nz");
+    let r = run_within(h, nazm_bin(h.io), a, "", suite_env(h), DEADLINE_30);
+    scratch_remove(h, dir);
+    check_that(r.code != TIMED_OUT, "`nazm run` did not terminate within the deadline")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+fn program(body: Str) -> Str ! {} {
+    f"fn main() -> Int {{\n{body}\n}}\n"
+}
+
+/// A program that must succeed, checked against its expected value and the interpreter, at both
+/// optimisation levels.
+fn expect_value(h: Caps, body: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    expect_source_value(h, program(body), expected)
+}
+
+/// `expect_value`, for a whole program rather than `main`'s body.
+fn expect_source_value(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, f"the interpreter did not accept this program: {interp.stderr}")?;
+    check_that(text_trim(interp.stdout) == expected, f"the *expectation* disagrees with the interpreter — one of them is wrong: {interp.stdout} vs {expected}")?;
+    for opt in ints_of2(0, 2) {
+        let built = built_at(h, src, opt)?;
+        let ran = run_exe(h, built)?;
+        check_that(ran.code == 0, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == expected, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == text_trim(interp.stdout), f"-O{opt}: the native program and the interpreter disagree")?;
+    }
+    ok()
+}
+
+fn ints_of2(a: Int, b: Int) -> Ints ! {} {
+    let xs = ints_new();
+    ints_push(xs, a);
+    ints_push(xs, b);
+    xs
+}
+
+/// A program that must fail at run time with a given code, at both optimisation levels.
+fn expect_runtime_error(h: Caps, body: Str, code: Str, message: Str) -> Result[Int, Str] ! { io, spawn } {
+    let src = program(body);
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, f"the interpreter did not fail: {ran_show(interp)}")?;
+    check_that(text_contains(interp.stderr, code) && text_contains(interp.stderr, message), f"the expectation disagrees with the interpreter: {interp.stderr}")?;
+    for opt in ints_of2(0, 2) {
+        let built = built_at(h, src, opt)?;
+        let ran = run_exe(h, built)?;
+        check_that(ran.code == 2, f"-O{opt}: a specified runtime failure must exit 2, not {ran.code}. stderr: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, code), f"-O{opt}: missing diagnostic code {code}: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, message), f"-O{opt}: missing message {message}: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, "prog.nz:"), f"-O{opt}: a runtime error must say where: {ran.stderr}")?;
+        check_that(ran.stdout == "", f"-O{opt}: nothing should be printed")?;
+    }
+    ok()
+}
+
+/// `nazm ARGS` (split at spaces), then `extra` appended whole.
+fn nz(h: Caps, args: Str, extra: Strs) -> Ran ! { io, spawn } {
+    let a = words(args);
+    for x in extra {
+        strs_push(a, x);
+    }
+    nazm(h, "", a)
+}
+
+fn list1(a: Str) -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, a);
+    s
+}
+
+fn list2(a: Str, b: Str) -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, a);
+    strs_push(s, b);
+    s
+}
+
+fn list3(a: Str, b: Str, c: Str) -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, a);
+    strs_push(s, b);
+    strs_push(s, c);
+    s
+}
+
+/// `nazm build SRC -o EXE` (with `flags` before `-o`), in an environment of `env`.
+fn build_cmd(h: Caps, src: Str, flags: Str, exe: Str, env: Strs) -> Ran ! { io, spawn } {
+    let a = words("build");
+    strs_push(a, src);
+    for f in words(flags) {
+        strs_push(a, f);
+    }
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    run(h, nazm_bin(h.io), a, "", env)
+}
+
+/// Every `.ll` file of `dir`, concatenated.
+fn emitted_ir(h: Caps, dir: Str) -> Result[Str, Str] ! { io } {
+    let parts = strs_new();
+    for n in strs_sort(match dir_list(h.io, dir) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), }) {
+        if text_ends_with(n, ".ll") {
+            strs_push(parts, read_text(h, f"{dir}/{n}")?);
+        }
+    }
+    let all = str_join(parts, "");
+    check_that(all != "", "no IR was emitted")?;
+    Result[Str, Str].Ok(value: all)
+}
+
+/// The program unit's own LLVM text.
+fn unit_ir(h: Caps, dir: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{dir}/prog.m0.ll")
+}
+
+/// How many `return` terminators the program's LIR has (N105).
+fn lir_returns(h: Caps, path: Str) -> Result[Int, Str] ! { io, spawn } {
+    let out = nz(h, "lir --ops", list1(path));
+    check_that(out.code == 0, out.stderr)?;
+    let mut n = 0;
+    for l in text_lines(out.stdout) {
+        let t = trim_start_ws(l);
+        if text_starts_with(t, "return") || t == "fail" {
+            n = n + 1;
+        }
+    }
+    Result[Int, Str].Ok(value: n)
+}
+
+/// A file made executable.
+fn set_executable(h: Caps, path: Str) -> Result[Int, Str] ! { io, spawn } {
+    let a = words("755");
+    strs_push(a, path);
+    let r = run(h, "chmod", a, "", env_here(h.io));
+    check_that(r.code == 0, ran_show(r))
+}
+
+// --- successful arithmetic ------------------------------------------------------------------------
+
+@test
+fn ordinary_arithmetic_agrees_with_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    1 + 2 * 3 - 4", "3")?;
+    expect_value(h, "    (1 + 2) * (3 - 4)", "-3")?;
+    expect_value(h, "    100 / 7", "14")?;
+    expect_value(h, "    100 % 7", "2")?;
+    expect_value(h, "    -(3 * 4)", "-12")
+}
+
+@test
+fn boundary_values_survive_the_round_trip(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    9223372036854775807", "9223372036854775807")?;
+    expect_value(h, "    -9223372036854775808", "-9223372036854775808")?;
+    expect_value(h, "    9223372036854775807 - 1", "9223372036854775806")?;
+    expect_value(h, "    -9223372036854775808 + 1", "-9223372036854775807")
+}
+
+@test
+fn negative_division_and_remainder_truncate_toward_zero(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    -7 / 2", "-3")?;
+    expect_value(h, "    -7 % 2", "-1")?;
+    expect_value(h, "    7 / -2", "-3")?;
+    expect_value(h, "    7 % -2", "1")?;
+    expect_value(h, "    -7 / -2", "3")?;
+    expect_value(h, "    -7 % -2", "-1")
+}
+
+@test
+fn the_minimum_divided_into_by_minus_one_is_zero_for_remainder(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let a = -9223372036854775808;\n    let b = -1;\n    a % b", "0")
+}
+
+@test
+fn local_bindings_resolve_and_nest(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let x = 10;\n    let y = 32;\n    x + y", "42")?;
+    expect_value(h, "    let a = 2;\n    let b = a * 3;\n    let c = b + a;\n    c", "8")?;
+    expect_value(h, "    let x = 1;\n    let y = x + 10;\n    y", "11")
+}
+
+// --- each exceptional case, separately -------------------------------------------------------------
+
+@test
+fn addition_overflow_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let m = 9223372036854775807;\n    m + 1", "N0400", "this addition overflows `Int`")
+}
+
+@test
+fn subtraction_overflow_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let m = -9223372036854775808;\n    m - 1", "N0400", "this subtraction overflows `Int`")
+}
+
+@test
+fn multiplication_overflow_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let m = 9223372036854775807;\n    m * 2", "N0400", "this multiplication overflows `Int`")
+}
+
+@test
+fn negating_the_minimum_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let m = -9223372036854775808;\n    -m", "N0400", "this negation overflows `Int`")
+}
+
+@test
+fn division_by_zero_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let z = 0;\n    7 / z", "N0401", "division by zero")
+}
+
+@test
+fn remainder_by_zero_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let z = 0;\n    7 % z", "N0401", "division by zero")
+}
+
+@test
+fn the_minimum_divided_by_minus_one_traps(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let a = -9223372036854775808;\n    let b = -1;\n    a / b", "N0400", "this division overflows `Int`")
+}
+
+@test
+fn the_leftmost_failure_is_the_one_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = program("    let z = 0;\n    let m = 9223372036854775807;\n    (m + 1) / z");
+    let interp = interpret(h, src)?;
+    check_that(text_contains(interp.stderr, "N0400"), interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(text_contains(ran.stderr, "N0400"), f"-O{opt}: the right operand's failure was reported first: {ran.stderr}")?;
+    }
+    ok()
+}
+
+@test
+fn the_two_implementations_report_the_same_source_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main() -> Int {\n    let z = 0;\n    7 / z\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, ran_show(interp))?;
+    check_that(text_contains(interp.stderr, "prog.nz:3:7"), f"the interpreter moved: {interp.stderr}")?;
+    let ran = run_exe(h, built_at(h, src, 0)?)?;
+    check_that(text_contains(ran.stderr, "prog.nz:3:7"), f"the compiled program points elsewhere: {ran.stderr}")
+}
+
+// --- refusals ---------------------------------------------------------------------------------------
+
+/// Everything outside the subset, refused by name and with nothing written.
+@test
+fn constructs_outside_the_subset_are_refused_and_nothing_is_emitted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `main` must still return `Int`, even though `Str` is otherwise native.
+    let src = "fn main() -> Str {\n    \"hi\"\n}\n";
+    let expected = "a `main` that does not return `Int`";
+    let dir = write_program(h, src)?;
+    let path = f"{dir}/prog.nz";
+    let exe = f"{dir}/prog";
+    let out = build_cmd(h, path, "", exe, suite_env(h));
+    check_that(out.code == 1, f"{expected}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, "N0101"), f"{expected}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, expected), f"expected {expected} in: {out.stderr}")?;
+    check_that(text_contains(out.stderr, "nazm run"), f"{expected}: a refusal should say what still works: {out.stderr}")?;
+    check_that(!file_exists(exe), f"{expected}: an unsupported program produced an executable")?;
+    // And the same program still runs under the interpreter.
+    let ran = nz(h, "run --interpret", list1(path));
+    scratch_remove(h, dir);
+    check_that(ran.code == 0, f"{expected}: `nazm run` should still accept it: {ran.stderr}")
+}
+
+@test
+fn a_program_that_does_not_check_is_a_check_failure_not_a_subset_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    undefined_name\n}\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", suite_env(h));
+    scratch_remove(h, dir);
+    check_that(out.code == 1, ran_show(out))?;
+    check_that(text_contains(out.stderr, "N0200"), out.stderr)?;
+    check_that(!text_contains(out.stderr, "N0101"), f"reported as unsupported: {out.stderr}")
+}
+
+@test
+fn build_diagnostics_are_available_as_json(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Bool {\n    true\n}\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--json", f"{dir}/prog", suite_env(h));
+    scratch_remove(h, dir);
+    let first = first_line(out.stderr);
+    check_that(text_starts_with(first, "{"), f"not JSON: {first}")?;
+    check_that(text_contains(first, "N0101"), first)
+}
+
+// --- the toolchain, and the output path --------------------------------------------------------------
+
+@test
+fn a_missing_clang_is_reported_as_a_toolchain_problem_not_a_program_problem(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    // Nothing on PATH, so `clang` cannot be found.
+    let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", env_set(suite_env(h), "PATH", ""));
+    scratch_remove(h, dir);
+    check_that(out.code == 4, f"a missing tool must not be reported as a bad program: {out.stderr}")?;
+    check_that(text_contains(out.stderr, "clang"), out.stderr)?;
+    check_that(text_contains(out.stderr, "nazm run"), f"it should say what still works without clang: {out.stderr}")
+}
+
+@test
+fn a_failing_clang_is_reported_with_its_own_output(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    scratch_write(h, dir, "bin/clang", "#!/bin/sh\necho 'stub: refusing' >&2\nexit 1\n")?;
+    set_executable(h, f"{dir}/bin/clang")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", env_set(suite_env(h), "PATH", f"{dir}/bin"));
+    scratch_remove(h, dir);
+    check_that(out.code == 4, out.stderr)?;
+    check_that(text_contains(out.stderr, "stub: refusing"), f"clang's own output was lost: {out.stderr}")?;
+    check_that(text_contains(out.stderr, "bug in `nazm build`"), f"IR the compiler generated being rejected is a compiler bug, and should say so: {out.stderr}")
+}
+
+@test
+fn an_existing_executable_survives_a_failed_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    scratch_write(h, dir, "prog", "an earlier, working build")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", env_set(suite_env(h), "PATH", ""));
+    let kept = read_text(h, f"{dir}/prog")?;
+    scratch_remove(h, dir);
+    check_that(out.code == 4, ran_show(out))?;
+    check_that(kept == "an earlier, working build", "a failed build destroyed the previous executable")
+}
+
+@test
+fn the_output_may_not_overwrite_the_input(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    let src = f"{dir}/prog.nz";
+    let before = read_text(h, src)?;
+    let out = build_cmd(h, src, "", src, suite_env(h));
+    let after = read_text(h, src)?;
+    scratch_remove(h, dir);
+    check_that(out.code != 0, out.stderr)?;
+    check_that(text_contains(out.stderr, "own source"), out.stderr)?;
+    check_that(after == before, "the build overwrote its own source")
+}
+
+@test
+fn the_generated_ir_can_be_kept_for_inspection(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    1 + 1\n}\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", f"{dir}/prog", suite_env(h));
+    check_that(out.code == 0, ran_show(out))?;
+    let ir = emitted_ir(h, dir)?;
+    scratch_remove(h, dir);
+    check_that(text_contains(ir, "@llvm.sadd.with.overflow.i64"), ir)?;
+    check_that(!text_contains(ir, " nsw "), "emitted nsw")?;
+    check_that(!text_contains(ir, "llvm.trap"), "emitted llvm.trap")
+}
+
+@test
+fn run_and_check_are_unchanged_by_the_new_subcommand(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = words("examples/max.nz examples/sum.nz examples/primes.nz examples/search.nz examples/pipeline.nz");
+    let expected = words("25 6074 1060 1723 42925");
+    let mut k = 0;
+    while k < 5 {
+        let file = strs_get(files, k);
+        let path = f"{repo_root(h)}/{file}";
+        // As a user runs it (R1, 5b.3): each prints its answer and ends with status 0.
+        let a = words("run --interpret");
+        strs_push(a, path);
+        let out = run(h, nazm_bin(h.io), a, "", env_unset(suite_env(h), "NAZM_RESULT_REPORT"));
+        check_that(out.code == 0, file)?;
+        check_that(out.stdout == f"{strs_get(expected, k)}\n", f"{file}: {out.stdout}")?;
+        let c = nz(h, "check", list1(path));
+        check_that(c.code == 0, file)?;
+        k = k + 1;
+    }
+    ok()
+}
+
+/// The native toolchain is present, asserted separately and first.
+@test
+fn the_native_toolchain_is_available(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let out = run(h, "clang", words("--version"), "", env_here(h.io));
+    check_that(out.code >= 0, f"`clang` is not usable ({out.stderr}). Every compiling test in this file needs it.")?;
+    check_that(out.code == 0, f"`clang --version` exited {out.code}")
+}
+
+// --- M1b: Bool, comparisons, and value-position if/else -------------------------------------------
+
+@test
+fn every_comparison_operator_agrees_with_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Each of the six, with operands on either side of the answer and on it.
+    let cases = "< 1 2 1|< 2 2 0|< 3 2 0|<= 1 2 1|<= 2 2 1|<= 3 2 0|> 3 2 1|> 2 2 0|> 1 2 0|>= 3 2 1|>= 2 2 1|>= 1 2 0|== 2 2 1|== 2 3 0|!= 2 3 1|!= 2 2 0";
+    for c in text_split(cases, "|") {
+        let w = text_split(c, " ");
+        expect_value(h, f"    if {strs_get(w, 1)} {strs_get(w, 0)} {strs_get(w, 2)} {{ 1 }} else {{ 0 }}", strs_get(w, 3))?;
+    }
+    ok()
+}
+
+@test
+fn comparisons_are_signed_at_the_boundaries(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    if -1 < 1 { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if -9223372036854775808 < 9223372036854775807 { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if -9223372036854775808 >= 0 { 1 } else { 0 }", "0")?;
+    expect_value(h, "    let m = -9223372036854775808;\n    if m == -9223372036854775808 { 1 } else { 0 }", "1")
+}
+
+@test
+fn bool_locals_and_bool_equality_work(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let t = true;\n    if t { 7 } else { 8 }", "7")?;
+    expect_value(h, "    let f = false;\n    if f { 7 } else { 8 }", "8")?;
+    expect_value(h, "    if true == true { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if true != false { 1 } else { 0 }", "1")?;
+    expect_value(h, "    let a = 1 < 2;\n    let b = 3 < 2;\n    if a == b { 1 } else { 0 }", "0")
+}
+
+@test
+fn both_branch_outcomes_are_reachable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let n = 5;\n    if n > 0 { n * 2 } else { 0 - n }", "10")?;
+    expect_value(h, "    let n = 0 - 5;\n    if n > 0 { n * 2 } else { 0 - n }", "5")
+}
+
+@test
+fn conditionals_nest_in_conditions_and_in_branches(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let a = 12;\n    let b = 5;\n    if if a > b { a % b == 2 } else { false } { 1 } else { 0 }", "1")?;
+    expect_value(h, "    let n = 7;\n    if n > 0 { if n > 5 { 2 } else { 1 } } else { 0 }", "2")?;
+    expect_value(h, "    let n = 3;\n    if n > 0 { if n > 5 { 2 } else { 1 } } else { 0 }", "1")?;
+    expect_value(h, "    let n = 9;\n    if n > 0 { if n > 5 { if n > 8 { 3 } else { 2 } } else { 1 } } else { 0 }", "3")
+}
+
+@test
+fn branch_local_bindings_and_shadowing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let n = 4;\n    if n > 0 { let double = n * 2; double + 1 } else { 0 }", "9")?;
+    expect_value(h, "    let x = 1;\n    if true { let x = 100; x } else { x }", "100")?;
+    expect_value(h, "    let x = 1;\n    if false { let x = 100; x } else { x }", "1")?;
+    expect_value(h, "    let c = true;\n    if c { let v = 10; v } else { let v = 20; v }", "10")
+}
+
+@test
+fn conditionals_compose_with_arithmetic_and_comparisons(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    1 + if true { 10 } else { 20 }", "11")?;
+    expect_value(h, "    (if false { 10 } else { 20 }) * 2", "40")?;
+    expect_value(h, "    if (if true { 3 } else { 4 }) < 4 { 1 } else { 0 }", "1")?;
+    expect_value(h, "    let a = 6;\n    if a > 0 { a * 7 + 1 } else { 0 }", "43")
+}
+
+@test
+fn a_failure_in_the_branch_not_taken_does_not_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    if true { 1 } else { 1 / 0 }", "1")?;
+    expect_value(h, "    if false { 1 / 0 } else { 2 }", "2")?;
+    expect_value(h, "    let m = 9223372036854775807;\n    if false { m + 1 } else { 5 }", "5")?;
+    expect_value(h, "    let z = 0;\n    let m = -9223372036854775808;\n    if 1 > 2 { m / -1 } else { if 2 > 1 { 42 } else { 7 / z } }", "42")
+}
+
+@test
+fn a_failure_in_the_branch_taken_reports_correctly(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    if true { 1 / 0 } else { 1 }", "N0401", "division by zero")?;
+    expect_runtime_error(h, "    let m = 9223372036854775807;\n    if 1 < 2 { m + 1 } else { 0 }", "N0400", "this addition overflows `Int`")?;
+    expect_runtime_error(h, "    let m = -9223372036854775808;\n    if false { 0 } else { m / -1 }", "N0400", "this division overflows `Int`")
+}
+
+@test
+fn the_failing_branch_reports_its_own_source_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main() -> Int {\n    let z = 0;\n    if true {\n        7 / z\n    } else {\n        1\n    }\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, ran_show(interp))?;
+    check_that(text_contains(interp.stderr, "prog.nz:4:11"), interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 2, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_contains(ran.stderr, "prog.nz:4:11"), f"-O{opt}: wrong position: {ran.stderr}")?;
+    }
+    ok()
+}
+
+@test
+fn among_evaluated_operands_the_first_failure_still_wins(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = program("    let z = 0;\n    let m = 9223372036854775807;\n    if (m + 1) > 0 { 7 / z } else { 0 }");
+    let interp = interpret(h, src)?;
+    check_that(text_contains(interp.stderr, "N0400"), interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(text_contains(ran.stderr, "N0400"), f"-O{opt}: the branch's failure was reported before the condition's: {ran.stderr}")?;
+    }
+    ok()
+}
+
+@test
+fn the_condition_is_evaluated_exactly_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error(h, "    let z = 0;\n    if (7 / z) > 0 { 1 } else { 2 }", "N0401", "division by zero")
+}
+
+@test
+fn front_end_type_errors_are_not_reported_as_backend_limits(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    strs_push(srcs, "fn main() -> Int {\n    if 1 { 2 } else { 3 }\n}\n");
+    strs_push(srcs, "fn main() -> Int {\n    if true { 1 } else { false }\n}\n");
+    let codes = words("N0301 N0302");
+    let mut k = 0;
+    while k < 2 {
+        let code = strs_get(codes, k);
+        let dir = write_program(h, strs_get(srcs, k))?;
+        let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", suite_env(h));
+        scratch_remove(h, dir);
+        check_that(out.code == 1, out.stderr)?;
+        check_that(text_contains(out.stderr, code), f"expected {code}: {out.stderr}")?;
+        check_that(!text_contains(out.stderr, "N0101"), f"a type error was reported as a backend limit: {out.stderr}")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn recursion_reached_from_either_branch_compiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_source_value(h, "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\nfn main() -> Int {\n    if true { f(3) } else { 0 }\n}\n", "3")?;
+    expect_source_value(h, "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\nfn main() -> Int {\n    if false { 0 } else { f(4) }\n}\n", "4")
+}
+
+@test
+fn a_statement_position_if_compiles_but_other_expression_statements_do_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut x = 1;\n    if x > 0 { x = 5; }\n    x", "5")?;
+    expect_value(h, "    let mut x = 1;\n    if x > 9 { x = 5; }\n    x", "1")?;
+    expect_value(h, "    1 + 1;\n    3", "3")?;
+    expect_value(h, "    let mut x = 1;\n    { let y = 2; x = x + y; };\n    x", "3")?;
+    expect_value(h, "    { 1 }", "1")
+}
+
+@test
+fn the_emitted_ir_for_a_conditional_is_well_formed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    let a = 6;\n    if a > 5 { a * 7 } else { 0 }\n}\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", f"{dir}/prog", suite_env(h));
+    check_that(out.code == 0, out.stderr)?;
+    let ir = emitted_ir(h, dir)?;
+    scratch_remove(h, dir);
+    check_that(text_contains(ir, "icmp sgt i64"), ir)?;
+    check_that(text_contains(ir, "br i1 %"), ir)?;
+    // Since N40 a value crosses MIR blocks in a slot, never a `phi`; the one `phi` is where an
+    // invoke's landing pad rejoins its normal path (4.2).
+    let mut stored = 0;
+    for l in text_lines(ir) {
+        check_that(!(text_contains(l, " = phi ") && !text_contains(l, ", %lp.")), l)?;
+        if text_starts_with(text_trim(l), "store i64 %") {
+            stored = stored + 1;
+        }
+    }
+    check_that(stored >= 2, "each branch stores the value")?;
+    check_that(!text_contains(ir, " nsw "), "nsw")?;
+    check_that(!text_contains(ir, "llvm.trap"), "llvm.trap")
+}
+
+// --- stack safety, out of process -----------------------------------------------------------------
+
+/// `nazm ARGS`, its run.
+fn nz_ran(h: Caps, args: Strs) -> Ran ! { io, spawn } {
+    nazm(h, "", args)
+}
+
+/// Exit 0, and no sign of a panic or a signal.
+fn assert_ok(r: Ran, what: Str) -> Result[Int, Str] ! {} {
+    assert_no_panic(r, what)?;
+    check_that(r.code == 0, f"{what} should have succeeded: {r.stderr}")
+}
+
+/// Exit 1 carrying exactly this diagnostic code, and no sign of a panic or a signal.
+fn assert_diagnostic(r: Ran, code: Str, what: Str) -> Result[Int, Str] ! {} {
+    assert_no_panic(r, what)?;
+    check_that(r.code == 1, f"{what} should have been refused with a diagnostic, not exited {r.code}: {r.stderr}")?;
+    check_that(text_contains(r.stderr, code), f"{what} should have reported {code}: {r.stderr}")
+}
+
+/// A signal death or a Rust panic is never an acceptable outcome, whatever the exit code.
+fn assert_no_panic(r: Ran, what: Str) -> Result[Int, Str] ! {} {
+    check_that(ended_normally(r), f"{what} was killed by a signal — a depth bound that aborts is not a bound")?;
+    check_that(!text_contains(r.stderr, "panicked at") && !text_contains(r.stderr, "RUST_BACKTRACE"), f"{what} panicked: {r.stderr}")?;
+    check_that(r.code != 101, f"{what} exited with a panic status")
+}
+
+fn chain(n: Int) -> Str ! {} {
+    let ones = strs_new();
+    let mut i = 0;
+    while i < n {
+        strs_push(ones, "1");
+        i = i + 1;
+    }
+    f"fn main() -> Int {{\n    {str_join(ones, " + ")}\n}}\n"
+}
+
+@test
+fn deep_syntax_produces_exactly_the_expected_outcome(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Accepted, and it must *work*.
+    let dir = write_program(h, chain(511))?;
+    let src = f"{dir}/prog.nz";
+    assert_ok(nz_ran(h, list2("check", src)), "`nazm check` on a 511-term chain")?;
+    let exe = f"{dir}/prog";
+    let b = words("build");
+    strs_push(b, src);
+    strs_push(b, "-o");
+    strs_push(b, exe);
+    assert_ok(nz_ran(h, b), "`nazm build` on a 511-term chain")?;
+    check_that(file_exists(exe), "the accepted program produced no executable")?;
+    let ran = run_exe(h, Built(ok: true, dir: dir, exe: exe, out: Ran(code: 0, stdout: "", stderr: "")))?;
+    check_that(ran.code == 0, ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == "511", ran.stdout)?;
+    // Over the limit: refused, with the nesting diagnostic and nothing else.
+    for cmd in words("check build") {
+        let d = write_program(h, chain(600))?;
+        let s = f"{d}/prog.nz";
+        let e = f"{d}/prog";
+        let a = strs_new();
+        strs_push(a, cmd);
+        strs_push(a, s);
+        if cmd == "build" {
+            strs_push(a, "-o");
+            strs_push(a, e);
+        }
+        let out = nz_ran(h, a);
+        let made = file_exists(e);
+        scratch_remove(h, d);
+        assert_diagnostic(out, "N0102", f"`nazm {cmd}` on a 600-term chain")?;
+        check_that(!made, "a refused program produced an executable")?;
+    }
+    ok()
+}
+
+fn nest(n: Int) -> Str ! {} {
+    f"fn main() -> Int {{\n{text_repeat("{ ", n)}1{text_repeat(" }", n)}\n}}\n"
+}
+
+@test
+fn deeply_nested_blocks_check_and_compile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, nest(255))?;
+    let src = f"{dir}/prog.nz";
+    let c = strs_new();
+    strs_push(c, "check");
+    strs_push(c, src);
+    assert_ok(nz_ran(h, c), "`nazm check` on 255 nested blocks")?;
+    let exe = f"{dir}/prog";
+    let b = words("build");
+    strs_push(b, src);
+    strs_push(b, "-o");
+    strs_push(b, exe);
+    assert_ok(nz_ran(h, b), "`nazm build` on 255 nested blocks")?;
+    let ran = run(h, exe, strs_new(), "", suite_env(h));
+    scratch_remove(h, dir);
+    check_that(text_trim(ran.stdout) == "1", ran_show(ran))?;
+    // Past the limit: the nesting diagnostic, from the parser, before anything else.
+    let d2 = write_program(h, nest(400))?;
+    let c2 = strs_new();
+    strs_push(c2, "check");
+    strs_push(c2, f"{d2}/prog.nz");
+    let out = nz_ran(h, c2);
+    scratch_remove(h, d2);
+    assert_diagnostic(out, "N0102", "`nazm check` on 400 nested blocks")
+}
+
+/// `nazm check` must not need the native toolchain.
+@test
+fn check_does_not_need_clang(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    if 1 < 2 { 3 } else { 4 }\n}\n")?;
+    let a = words("check");
+    strs_push(a, f"{dir}/prog.nz");
+    let out = run(h, nazm_bin(h.io), a, "", env_set(suite_env(h), "PATH", ""));
+    scratch_remove(h, dir);
+    check_that(out.code == 0, f"`nazm check` failed with no toolchain on PATH: {out.stderr}")
+}
+
+// --- M1c: several functions, and non-recursive direct calls ---------------------------------------
+
+/// A whole program, checked against an expected value and the interpreter at both levels; only the
+/// entry wrapper prints.
+fn expect_program(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, f"the interpreter did not accept this program: {interp.stderr}")?;
+    check_that(text_trim(interp.stdout) == expected, "the expectation disagrees with the interpreter")?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 0, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == expected, f"-O{opt}: {ran_show(ran)}")?;
+        // Only the platform wrapper prints.
+        check_that(strs_len(text_lines(ran.stdout)) == 1, f"-O{opt}: something other than the entry wrapper produced output: {ran.stdout}")?;
+        check_that(ran.stderr == "", f"-O{opt}: unexpected stderr: {ran.stderr}")?;
+    }
+    ok()
+}
+
+@test
+fn functions_of_zero_one_and_several_parameters(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn answer() -> Int { 42 }\nfn main() -> Int { answer() }\n", "42")?;
+    expect_program(h, "fn double(n: Int) -> Int { n * 2 }\nfn main() -> Int { double(21) }\n", "42")?;
+    expect_program(h, "fn clamp(v: Int, lo: Int, hi: Int) -> Int {\n    if v < lo { lo } else { if v > hi { hi } else { v } }\n}\nfn main() -> Int { clamp(150, 0, 100) }\n", "100")
+}
+
+@test
+fn arguments_are_not_swapped(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn sub(a: Int, b: Int) -> Int { a - b }\nfn main() -> Int { sub(10, 3) }\n", "7")?;
+    expect_program(h, "fn div(a: Int, b: Int) -> Int { a / b }\nfn main() -> Int { div(100, 7) }\n", "14")?;
+    expect_program(h, "fn rem(a: Int, b: Int) -> Int { a % b }\nfn main() -> Int { rem(100, 7) }\n", "2")?;
+    expect_program(h, "fn mix(a: Int, b: Int, c: Int) -> Int { a * 100 + b * 10 + c }\nfn main() -> Int { mix(1, 2, 3) }\n", "123")
+}
+
+@test
+fn forward_references_and_shared_helpers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn main() -> Int { later(4) }\nfn later(n: Int) -> Int { n * 11 }\n", "44")?;
+    expect_program(h, "fn main() -> Int { twice(3) + indirect(5) }\nfn twice(n: Int) -> Int { n * 2 }\nfn indirect(n: Int) -> Int { twice(n) + 1 }\n", "17")
+}
+
+@test
+fn calls_nest_and_compose(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn inc(n: Int) -> Int { n + 1 }\nfn main() -> Int { inc(inc(inc(0))) }\n", "3")?;
+    expect_program(h, "fn f(n: Int) -> Int { n * 3 }\nfn main() -> Int {\n    if f(2) > 5 { f(1) + f(2) } else { 0 }\n}\n", "9")?;
+    expect_program(h, "fn add(a: Int, b: Int) -> Int { a + b }\nfn one() -> Int { 1 }\nfn main() -> Int { add(one(), add(one(), one())) }\n", "3")
+}
+
+@test
+fn bool_travels_through_parameters_and_returns(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn is_negative(n: Int) -> Bool { n < 0 }\nfn main() -> Int { if is_negative(0 - 3) { 1 } else { 0 } }\n", "1")?;
+    expect_program(h, "fn pick(flag: Bool, a: Int, b: Int) -> Int { if flag { a } else { b } }\nfn main() -> Int { pick(false, 10, 20) }\n", "20")?;
+    expect_program(h, "fn gt(a: Int, b: Int) -> Bool { a > b }\nfn both(x: Bool, y: Bool) -> Bool { if x { y } else { false } }\nfn main() -> Int { if both(gt(3, 1), gt(5, 4)) { 7 } else { 8 } }\n", "7")
+}
+
+@test
+fn calls_in_selected_and_unselected_branches(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn boom(n: Int) -> Int { n / 0 }\nfn main() -> Int { if false { boom(1) } else { 5 } }\n", "5")?;
+    expect_program(h, "fn ok(n: Int) -> Int { n + 1 }\nfn boom(n: Int) -> Int { n / 0 }\nfn main() -> Int { if 2 > 1 { ok(1) } else { boom(1) } }\n", "2")?;
+    expect_program(h, "fn positive(n: Int) -> Bool { n > 0 }\nfn main() -> Int { if positive(3) { 1 } else { 0 } }\n", "1")
+}
+
+@test
+fn each_function_owns_its_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn helper(n: Int) -> Int {\n    let total = n * 2;\n    total\n}\nfn main() -> Int {\n    let total = 100;\n    let n = 3;\n    total + helper(n)\n}\n", "106")?;
+    expect_program(h, "fn f(x: Int) -> Int {\n    let x = x + 1;\n    x\n}\nfn main() -> Int { f(1) }\n", "2")?;
+    expect_program(h, "fn f(x: Int) -> Int { if true { let x = 100; x } else { x } }\nfn main() -> Int { f(1) }\n", "100")?;
+    expect_program(h, "fn g(n: Int) -> Int { n }\nfn main() -> Int {\n    let g = 5;\n    g + g(1)\n}\n", "6")
+}
+
+@test
+fn boundary_values_survive_a_parameter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn id(n: Int) -> Int { n }\nfn main() -> Int { id(-9223372036854775808) }\n", "-9223372036854775808")?;
+    expect_program(h, "fn id(n: Int) -> Int { n }\nfn main() -> Int { id(9223372036854775807) }\n", "9223372036854775807")?;
+    expect_program(h, "fn neg(n: Int) -> Int { 0 - n }\nfn main() -> Int { neg(-9223372036854775807) }\n", "9223372036854775807")
+}
+
+@test
+fn a_failure_inside_a_callee_reports_the_callees_own_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn bad(n: Int) -> Int {\n    let z = 0;\n    n / z\n}\nfn main() -> Int {\n    bad(7)\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, ran_show(interp))?;
+    check_that(text_contains(interp.stderr, "prog.nz:3:7"), interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 2, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_contains(ran.stderr, "N0401"), f"-O{opt}: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, "prog.nz:3:7"), f"-O{opt}: reported the call site instead of the failing operator: {ran.stderr}")?;
+        check_that(ran.stdout == "", f"-O{opt}: a failing program printed a result")?;
+    }
+    ok()
+}
+
+@test
+fn an_earlier_failing_argument_stops_everything_after_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn bad(n: Int) -> Int {\n    let z = 0;\n    n % z\n}\nfn two(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int {\n    let z = 0;\n    let m = 9223372036854775807;\n    two(m + 1, 7 / z)\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, ran_show(interp))?;
+    check_that(text_contains(interp.stderr, "N0400"), f"the first argument's overflow should win: {interp.stderr}")?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 2, f"-O{opt}")?;
+        check_that(text_contains(ran.stderr, "N0400"), f"-O{opt}: a later argument was evaluated first: {ran.stderr}")?;
+        check_that(!text_contains(ran.stderr, "N0401"), f"-O{opt}: the second argument ran despite the first failing: {ran.stderr}")?;
+    }
+    ok()
+}
+
+@test
+fn a_failing_argument_stops_the_callee_body(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn bad(n: Int) -> Int {\n    let z = 0;\n    n / z\n}\nfn main() -> Int {\n    let m = 9223372036854775807;\n    bad(m + 1)\n}\n";
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 2, f"-O{opt}")?;
+        check_that(text_contains(ran.stderr, "N0400"), f"-O{opt}: {ran.stderr}")?;
+        check_that(!text_contains(ran.stderr, "N0401"), f"-O{opt}: the callee body ran despite a failing argument: {ran.stderr}")?;
+    }
+    check_that(text_contains(interpret(h, src)?.stderr, "N0400"), "the interpreter")
+}
+
+@test
+fn recursion_compiles_and_agrees_with_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_source_value(h, "fn f(n: Int) -> Int { if n < 1 { 0 } else { f(n - 1) + 1 } }\nfn main() -> Int { f(3) }\n", "3")?;
+    expect_source_value(h, "fn a(n: Int) -> Int { if n < 1 { 0 } else { b(n - 1) + 1 } }\nfn b(n: Int) -> Int { a(n) }\nfn main() -> Int { a(2) }\n", "2")?;
+    expect_source_value(h, "fn x(n: Int) -> Int { y(n) }\nfn y(n: Int) -> Int { x(n) }\nfn main() -> Int { 7 }\n", "7")
+}
+
+/// `nazm build` of `src`, refused with `code` by the checker and never as a backend limit.
+fn refused_by_checker(h: Caps, src: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let dir = write_program(h, src)?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "", f"{dir}/prog", suite_env(h));
+    scratch_remove(h, dir);
+    check_that(out.code == 1, f"{code}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, code), f"expected {code}: {out.stderr}")?;
+    check_that(!text_contains(out.stderr, "N0101"), f"a language error was reported as a backend limit: {out.stderr}")
+}
+
+@test
+fn call_errors_belong_to_the_checker_not_the_backend(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_by_checker(h, "fn f(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int { f(1) }\n", "N0303")?;
+    refused_by_checker(h, "fn f(a: Int) -> Int { a }\nfn main() -> Int { f(true) }\n", "N0300")?;
+    refused_by_checker(h, "fn main() -> Int { nope(1) }\n", "N0201")?;
+    refused_by_checker(h, "fn f() -> Int { 1 }\nfn f() -> Int { 2 }\nfn main() -> Int { f() }\n", "N0203")
+}
+
+@test
+fn unsupported_signatures_and_bodies_are_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let expected = "a `main` that does not return `Int`";
+    let dir = write_program(h, "fn main() -> Bool {\n    true\n}\n")?;
+    let exe = f"{dir}/prog";
+    let out = build_cmd(h, f"{dir}/prog.nz", "", exe, suite_env(h));
+    let made = file_exists(exe);
+    scratch_remove(h, dir);
+    check_that(out.code == 1, f"{expected}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, "N0101"), f"{expected}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, expected), f"expected {expected}: {out.stderr}")?;
+    check_that(!made, f"{expected}: produced an executable")
+}
+
+@test
+fn the_emitted_ir_for_a_multi_function_program_is_well_formed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn helper(n: Int, flag: Bool) -> Int { if flag { n * 2 } else { n } }\nfn main() -> Int { helper(21, true) }\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", f"{dir}/prog", suite_env(h));
+    check_that(out.code == 0, out.stderr)?;
+    let ir = emitted_ir(h, dir)?;
+    scratch_remove(h, dir);
+    check_that(text_contains(ir, "define i32 @main(i32 %argc, ptr %argv) {"), ir)?;
+    let defs = strs_new();
+    for l in text_lines(ir) {
+        if text_starts_with(l, "define ") && text_contains(l, " @nz.m.") {
+            strs_push(defs, l);
+        }
+    }
+    check_that(strs_len(defs) == 3, f"expected two Nazm functions and main's entry:\n{ir}")?;
+    let mut plain = false;
+    let mut helper = false;
+    let mut main = false;
+    for d in defs {
+        if text_starts_with(d, "define hidden i64 @nz.m.prog_2Enz.main(i64 %p0)") { plain = true; }
+        if text_contains(d, "(i64 %p0, i1 %p1)") && text_ends_with(d, "; helper") { helper = true; }
+        if text_contains(d, "(i64 %p0)") && text_ends_with(d, "; main") { main = true; }
+    }
+    check_that(plain, f"main's plain entry:\n{ir}")?;
+    check_that(helper, f"the two-parameter signature is wrong:\n{ir}")?;
+    check_that(main, f"nazm's main should take its one root, `out`:\n{ir}")?;
+    // A Nazm function returns its result alone where failures unwind (4.2).
+    check_that((text_contains(ir, "call i64 @nz.m.") || text_contains(ir, "invoke i64 @nz.m.")) && text_contains(ir, "(i64 %"), "no typed call emitted")?;
+    check_that(text_contains(ir, "@nz.fail"), "@nz.fail")?;
+    check_that(text_count(ir, "call i32 (ptr, ...) @printf") == 1, "exactly one print, in the wrapper")?;
+    check_that(!text_contains(ir, " nsw "), "nsw")
+}
+
+// --- M1d: mutable locals, assignment, and `while` --------------------------------------------------
+
+/// A runtime failure whose reported position is checked exactly, in both implementations.
+fn expect_runtime_error_at(h: Caps, body: Str, code: Str, message: Str, position: Str) -> Result[Int, Str] ! { io, spawn } {
+    let src = program(body);
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 2, f"the interpreter did not fail: {ran_show(interp)}")?;
+    check_that(text_contains(interp.stderr, code) && text_contains(interp.stderr, message), f"the expectation disagrees with the interpreter: {interp.stderr}")?;
+    check_that(text_contains(interp.stderr, position), f"the expected position {position} is not where the interpreter points: {interp.stderr}")?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 2, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_contains(ran.stderr, code), f"-O{opt}: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, message), f"-O{opt}: {ran.stderr}")?;
+        check_that(text_contains(ran.stderr, position), f"-O{opt}: expected {position}: {ran.stderr}")?;
+        check_that(ran.stdout == "", f"-O{opt}: nothing should be printed")?;
+    }
+    ok()
+}
+
+@test
+fn a_loop_runs_zero_one_or_many_times(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 0 { n = n + 1; i = i + 1; }\n    n", "0")?;
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 1 { n = n + 7; i = i + 1; }\n    n", "7")?;
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 5 { n = n + 1; i = i + 1; }\n    n", "5")?;
+    expect_value(h, "    let mut go = false;\n    let mut n = 0;\n    while go { n = n + 1; }\n    n", "0")
+}
+
+@test
+fn sum_to_n_and_factorial_stay_inside_int(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 1;\n    let mut total = 0;\n    while i <= 100 { total = total + i; i = i + 1; }\n    total", "5050")?;
+    expect_value(h, "    let mut k = 1;\n    let mut f = 1;\n    while k <= 20 { f = f * k; k = k + 1; }\n    f", "2432902008176640000")
+}
+
+@test
+fn nested_loops_agree_with_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 4 {\n        let mut j = 0;\n        while j < 6 { n = n + 1; j = j + 1; }\n        i = i + 1;\n    }\n    n", "24")?;
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 5 {\n        let mut j = 0;\n        while j < i { n = n + 1; j = j + 1; }\n        i = i + 1;\n    }\n    n", "10")?;
+    expect_value(h, "    let mut a = 0;\n    let mut n = 0;\n    while a < 3 {\n        let mut b = 0;\n        while b < 3 {\n            let mut c = 0;\n            while c < 3 { n = n + 1; c = c + 1; }\n            b = b + 1;\n        }\n        a = a + 1;\n    }\n    n", "27")
+}
+
+@test
+fn a_bool_local_changed_by_the_body_ends_the_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut go = true;\n    let mut n = 0;\n    while go {\n        n = n + 1;\n        go = n < 4;\n    }\n    n", "4")?;
+    expect_value(h, "    let mut go = true;\n    let mut n = 0;\n    while go {\n        n = n + 3;\n        go = if n > 8 { false } else { true };\n    }\n    n", "9")
+}
+
+/// `src` interpreted and built at both levels, each printing `expected` with status 0.
+fn three_print(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    check_that(text_trim(interp.stdout) == expected, ran_show(interp))?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 0, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == expected, f"-O{opt}")?;
+    }
+    ok()
+}
+
+@test
+fn helper_functions_are_callable_from_a_condition_and_a_body(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // 1 → 2 → 4 → … → 128 is seven doublings.
+    three_print(h, "fn below(n: Int, limit: Int) -> Bool { n < limit }\nfn twice(n: Int) -> Int { n * 2 }\nfn main() -> Int {\n    let mut i = 1;\n    let mut steps = 0;\n    while below(i, 100) {\n        i = twice(i);\n        steps = steps + 1;\n    }\n    i + steps\n}\n", "135")
+}
+
+@test
+fn an_assignment_value_may_be_an_if_else_expression(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 6 {\n        s = s + if i % 2 == 0 { i } else { 0 };\n        i = i + 1;\n    }\n    s", "6")?;
+    expect_value(h, "    let mut i = 0;\n    let mut hops = 0;\n    while i < 20 {\n        i = if i < 5 { i + 1 } else { if i < 10 { i + 2 } else { i + 5 } };\n        hops = hops + 1;\n    }\n    hops", "10")
+}
+
+@test
+fn a_loop_local_is_initialised_on_every_iteration(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut total = 0;\n    while i < 3 {\n        let mut acc = 100;\n        acc = acc + i;\n        total = total + acc;\n        i = i + 1;\n    }\n    total", "303")?;
+    expect_value(h, "    let mut i = 0;\n    let mut total = 0;\n    while i < 4 {\n        let doubled = i * 2;\n        total = total + doubled;\n        i = i + 1;\n    }\n    total", "12")
+}
+
+@test
+fn shadowing_inside_a_loop_leaves_the_outer_binding_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut x = 1;\n    let mut i = 0;\n    while i < 3 {\n        x = x + 10;\n        let mut x = 100;\n        x = x + 1;\n        i = i + 1;\n    }\n    x", "31")?;
+    expect_value(h, "    let mut n = 5;\n    let mut i = 0;\n    while i < 2 {\n        let mut n = true;\n        n = false;\n        i = i + 1;\n    }\n    n", "5")?;
+    expect_value(h, "    let mut i = 0;\n    let mut seen = 0;\n    while i < 3 {\n        let mut j = 0;\n        while j < 2 {\n            let i = 99;\n            seen = seen + i;\n            j = j + 1;\n        }\n        i = i + 1;\n    }\n    seen", "594")
+}
+
+@test
+fn mutable_locals_in_different_functions_are_independent(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // inner(0)+inner(1)+inner(2)+inner(3) = 6, and `main`'s own count reaches 4.
+    let src = "fn inner(n: Int) -> Int {\n    let mut count = 0;\n    let mut total = 0;\n    while count < n { total = total + 1; count = count + 1; }\n    total\n}\nfn main() -> Int {\n    let mut count = 0;\n    let mut total = 0;\n    while count < 4 {\n        total = total + inner(count);\n        count = count + 1;\n    }\n    total * 100 + count\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    check_that(text_trim(interp.stdout) == "604", ran_show(interp))?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(text_trim(ran.stdout) == "604", f"-O{opt}")?;
+    }
+    ok()
+}
+
+@test
+fn a_failure_in_the_condition_reports_the_conditions_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    let mut d = 2;\n    let mut n = 0;\n    while 10 / d > 0 {\n        n = n + 1;\n        d = d - 1;\n    }\n    n", "N0401", "division by zero", "prog.nz:4:14")
+}
+
+@test
+fn a_failure_in_the_body_reports_the_bodys_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    let m = 9223372036854775807;\n    let mut i = 0;\n    let mut x = 0;\n    while i < 3 {\n        x = m + 1;\n        i = i + 1;\n    }\n    x", "N0400", "this addition overflows `Int`", "prog.nz:6:15")
+}
+
+@test
+fn a_loop_can_fail_on_a_later_iteration_rather_than_the_first(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    let mut i = 0;\n    let mut q = 0;\n    while i < 6 {\n        q = q + 10 / (3 - i);\n        i = i + 1;\n    }\n    q", "N0401", "division by zero", "prog.nz:5:20")?;
+    expect_runtime_error_at(h, "    let mut x = 1;\n    let mut i = 0;\n    while i < 100 {\n        x = x * 3;\n        i = i + 1;\n    }\n    x", "N0400", "this multiplication overflows `Int`", "prog.nz:5:15")
+}
+
+/// `refused_by_checker`, and nothing written.
+fn refused_unwritten(h: Caps, src: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let io = h.io;
+    let dir = write_program(h, src)?;
+    let exe = f"{dir}/prog";
+    let out = build_cmd(h, f"{dir}/prog.nz", "", exe, suite_env(h));
+    let made = file_exists(exe);
+    scratch_remove(h, dir);
+    check_that(out.code == 1, f"{code}: {out.stderr}")?;
+    check_that(text_contains(out.stderr, code), f"expected {code}: {out.stderr}")?;
+    check_that(!text_contains(out.stderr, "N0101"), f"a language error was reported as a backend limit: {out.stderr}")?;
+    check_that(!made, f"{code}: produced an executable")
+}
+
+@test
+fn assignment_and_loop_condition_errors_belong_to_the_checker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_unwritten(h, "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n", "N0310")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut b = true;\n    b = 1;\n    0\n}\n", "N0300")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while i { i = i + 1; }\n    i\n}\n", "N0301")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1; missing = 1; }\n    i\n}\n", "N0200")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + \"a\"; }\n    i\n}\n", "N0304")
+}
+
+@test
+fn recursion_reached_from_inside_a_loop_compiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_source_value(h, "fn f(n: Int) -> Int { if n < 1 { return 0; } return f(n - 1); }\nfn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + f(2); }\n    i\n}\n", "3")?;
+    expect_source_value(h, "fn f(n: Int) -> Int { if n < 1 { return 0; } return g(n - 1); }\nfn g(n: Int) -> Int { f(n) }\nfn main() -> Int {\n    let mut i = 0;\n    while i < 3 { i = i + 1 + g(2); }\n    i\n}\n", "3")
+}
+
+@test
+fn a_working_loop_executable_survives_a_later_refused_build(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int {\n    let mut i = 0;\n    while i < 5 { i = i + 1; }\n    i\n}\n")?;
+    let src = f"{dir}/prog.nz";
+    let exe = f"{dir}/prog";
+    let first = build_cmd(h, src, "", exe, suite_env(h));
+    check_that(first.code == 0, first.stderr)?;
+    let before = read_raw(h, exe)?;
+    // Now edit the source to something the backend refuses: a `main` that does not return `Int`.
+    scratch_write(h, dir, "prog.nz", "fn main() -> Bool {\n    let mut i = 0;\n    while i < 5 { i = i + 1; }\n    i == 5\n}\n")?;
+    let second = build_cmd(h, src, "", exe, suite_env(h));
+    check_that(second.code == 1, ran_show(second))?;
+    check_that(text_contains(second.stderr, "N0101"), second.stderr)?;
+    check_that(read_raw(h, exe)? == before, "the refused build replaced a working executable")?;
+    let ran = run_exe(h, Built(ok: true, dir: dir, exe: exe, out: second))?;
+    check_that(ran.code == 0, ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == "5", "the surviving executable still works")
+}
+
+@test
+fn many_iterations_with_body_locals_allocate_once_in_the_entry_block(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main() -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    while i < 20000 {\n        let mut a = 1;\n        let b = i % 7;\n        let mut c = 0;\n        a = a + b;\n        c = a;\n        total = total + c;\n        i = i + 1;\n    }\n    total\n}\n";
+    let dir = write_program(h, src)?;
+    let path = f"{dir}/prog.nz";
+    let exe = f"{dir}/prog";
+    let out = build_cmd(h, path, "--emit-ir", exe, suite_env(h));
+    check_that(out.code == 0, out.stderr)?;
+    let ir = emitted_ir(h, dir)?;
+    // `main`'s body is under `main.body`, returning its result alone.
+    let parts = split(ir, "define hidden i64 @nz.m.prog_2Enz.main.body(i64 %p0)");
+    check_that(strs_len(parts) > 1, "main's definition")?;
+    let body = strs_get(parts, 1);
+    // Every `alloca` must be in `entry`, the block before the first label.
+    let mut block = "entry";
+    let mut allocas = 0;
+    let mut done = false;
+    for line in text_lines(body) {
+        let trimmed = text_trim(line);
+        if !done {
+            if trimmed == "}" {
+                done = true;
+            } else if text_ends_with(trimmed, ":") && !text_contains(trimmed, " ") && !text_contains(trimmed, "\t") {
+                block = str_slice(trimmed, 0, str_len(trimmed) - 1);
+            } else if text_contains(trimmed, "alloca") {
+                allocas = allocas + 1;
+                check_that(block == "entry", f"an alloca outside the entry block, in {block}: {trimmed}")?;
+            }
+        }
+    }
+    // One slot per MIR local at most, counted from `nazm mir`.
+    let mir_run = nz(h, "mir --json", list1(path));
+    let mir = jparse(mir_run.stdout)?;
+    let mut locals = 0;
+    let mut f = 0;
+    while f < jlen(mir, "functions") {
+        if jstr(mir, f"functions/{f}/name") == "main" && locals == 0 {
+            locals = jlen(mir, f"functions/{f}/locals");
+            if locals < 0 { locals = 0; }
+        }
+        f = f + 1;
+    }
+    check_that(locals >= 5, "at least the five bindings")?;
+    check_that(allocas <= locals, f"more slots than MIR locals ({allocas} > {locals})")?;
+    for binding in text_split("i : Int|total : Int|a : Int|b : Int|c : Int", "|") {
+        let mut has = false;
+        for l in text_lines(body) {
+            if text_contains(l, " = alloca ") && text_ends_with(l, binding) {
+                has = true;
+            }
+        }
+        check_that(has, f"the binding {binding} has no slot")?;
+    }
+    // The loop really does go round: some branch targets a block already open above it.
+    let seen = strs_new();
+    let mut back_edge = false;
+    for line in text_lines(ir) {
+        let trimmed = text_trim(line);
+        if !back_edge {
+            if text_ends_with(trimmed, ":") && !text_contains(trimmed, " ") && !text_contains(trimmed, "\t") {
+                strs_push(seen, str_slice(trimmed, 0, str_len(trimmed) - 1));
+            } else {
+                match strip_prefix(trimmed, "br label %") {
+                    Option.Some(value: rest) => {
+                        let ws = split_whitespace(rest);
+                        let target = if strs_len(ws) > 0 { strs_get(ws, 0) } else { rest };
+                        if strs_has(seen, target) {
+                            back_edge = true;
+                        }
+                    },
+                    Option.None() => {},
+                };
+            }
+        }
+    }
+    check_that(back_edge, "no back edge: every `br label` goes forward, so the loop cannot repeat")?;
+    // 20000 iterations of `(i % 7) + 1`.
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    let ran = run_exe(h, Built(ok: true, dir: dir, exe: exe, out: out))?;
+    check_that(ran.code == 0, ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == text_trim(interp.stdout), "the native program and the interpreter disagree")?;
+    check_that(text_trim(ran.stdout) == "79997", ran.stdout)
+}
+
+/// Run a built executable with an explicit deadline: `Err` when it did not finish.
+fn run_exe_within(h: Caps, b: Built, ms: Int) -> Result[Ran, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, b.exe);
+    let r = run_within(h, "sh", a, "", suite_env(h), ms);
+    scratch_remove(h, b.dir);
+    check_that(r.code != TIMED_OUT, f"did not terminate within {ms} ms")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn the_condition_is_reevaluated_on_every_iteration(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = program("    let mut i = 0;\n    let mut n = 0;\n    while i < 3 {\n        n = n + 1;\n        i = i + 1;\n    }\n    n");
+    for opt in ints_of2(0, 2) {
+        let ran = match run_exe_within(h, built_at(h, src, opt)?, 10000) {
+            Result.Ok(value: r) => r,
+            Result.Err(error: e) => { return Result[Int, Str].Err(error: f"-O{opt}: the loop did not terminate within 10s — the condition is not being re-evaluated. A timeout here is a failure, never a result."); },
+        };
+        check_that(ran.code == 0, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == "3", f"-O{opt}")?;
+    }
+    expect_value(h, "    let mut go = true;\n    let mut n = 0;\n    while go { n = n + 1; go = n < 10; }\n    n", "10")
+}
+
+@test
+fn a_loop_inside_a_branch_is_the_joins_predecessor(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut n = 0;\n    let v = if n < 1 {\n        let mut i = 0;\n        let mut s = 0;\n        while i < 4 { s = s + i; i = i + 1; }\n        s\n    } else { 99 };\n    n = v + 1;\n    n", "7")?;
+    expect_value(h, "    let mut n = 5;\n    let v = if n < 1 {\n        99\n    } else {\n        let mut i = 0;\n        while i < 3 { i = i + 1; }\n        i\n    };\n    v", "3")?;
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while if n < 2 { i < 10 } else { false } {\n        n = n + 1;\n        i = i + 1;\n    }\n    i * 100 + n", "202")?;
+    expect_value(h, "    let mut outer = 0;\n    let mut total = 0;\n    while outer < 3 {\n        total = total + if outer % 2 == 0 {\n            let mut a = 0;\n            let mut x = 0;\n            while a < 2 { x = x + 10; a = a + 1; }\n            x\n        } else {\n            let mut b = 0;\n            let mut y = 0;\n            while b < 3 { y = y + 1; b = b + 1; }\n            y\n        };\n        outer = outer + 1;\n    }\n    total", "43")
+}
+
+// --- M1e: `break`, `continue`, and statement-position `if` ------------------------------------------
+
+@test
+fn a_loop_can_break_immediately(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    while i < 10 { break; }\n    i", "0")?;
+    expect_value(h, "    let mut i = 0;\n    while i < 10 { i = i + 7; break; }\n    i", "7")
+}
+
+@test
+fn continue_skips_the_rest_of_the_iteration_and_rechecks_the_condition(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 6 {\n        i = i + 1;\n        if i == 3 { continue; }\n        s = s + i;\n    }\n    s", "18")?;
+    expect_value(h, "    let mut i = 0;\n    let mut n = 0;\n    while i < 4 {\n        i = i + 1;\n        n = n + 1;\n        continue;\n    }\n    i * 10 + n", "44")?;
+    let src = "fn limit() -> Int { 5 }\nfn main() -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    while i * 1 < limit() {\n        i = i + 1;\n        n = n + 1;\n        continue;\n    }\n    n\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(text_trim(interp.stdout) == "5", interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        check_that(text_trim(run_exe(h, built_at(h, src, opt)?)?.stdout) == "5", f"-O{opt}")?;
+    }
+    ok()
+}
+
+@test
+fn break_and_continue_may_be_conditional(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut n = 20;\n    while true {\n        n = n + 1;\n        if n % 7 == 0 { break; }\n    }\n    n", "21")?;
+    expect_value(h, "    let mut i = 0;\n    let mut odd = 0;\n    while i < 10 {\n        i = i + 1;\n        if i % 2 == 0 { continue; } else { odd = odd + i; }\n    }\n    odd", "25")
+}
+
+@test
+fn a_statement_if_reaches_its_continuation_from_whichever_branches_fall_through(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut x = 0;\n    let mut i = 0;\n    while i < 4 {\n        i = i + 1;\n        if i % 2 == 0 { x = x + 10; } else { x = x + 1; }\n        x = x + 100;\n    }\n    x", "422")?;
+    expect_value(h, "    let mut x = 0;\n    let mut i = 0;\n    while i < 9 {\n        i = i + 1;\n        if i == 3 { break; } else { x = x + 1; }\n        x = x + 100;\n    }\n    x", "202")?;
+    expect_value(h, "    let mut x = 0;\n    let mut i = 0;\n    while i < 9 {\n        i = i + 1;\n        if i < 3 { x = x + 1; } else { break; }\n        x = x + 100;\n    }\n    x", "202")?;
+    expect_value(h, "    let mut i = 0;\n    let mut x = 0;\n    while i < 9 {\n        i = i + 1;\n        if i > 3 { break; } else { continue; }\n    }\n    i * 10 + x", "40")
+}
+
+@test
+fn a_statement_if_without_else_always_falls_through(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        if i == 2 { continue; }\n        s = s + i;\n    }\n    s", "13")?;
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 100 {\n        i = i + 1;\n        if i == 4 { break; }\n        s = s + i;\n    }\n    s", "6")?;
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 8 {\n        i = i + 1;\n        if i > 2 { if i % 2 == 1 { continue; } }\n        s = s + i;\n    }\n    s", "21")
+}
+
+@test
+fn an_inner_break_leaves_only_the_inner_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 4 {\n        let mut j = 0;\n        while j < 10 {\n            if j == 2 { break; }\n            s = s + 1;\n            j = j + 1;\n        }\n        s = s + 100;\n        o = o + 1;\n    }\n    s", "408")?;
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 5 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 3 { j = j + 1; }\n        if o % 2 == 0 { continue; }\n        s = s + j;\n    }\n    s", "9")?;
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 100 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 2 { j = j + 1; s = s + 1; }\n        if o == 3 { break; }\n    }\n    o * 100 + s", "306")
+}
+
+@test
+fn an_inner_continue_reevaluates_the_inner_condition(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while j < 5 {\n            j = j + 1;\n            if j % 2 == 0 { continue; }\n            s = s + 1;\n        }\n    }\n    s", "9")
+}
+
+@test
+fn a_transfer_in_a_loop_condition_targets_the_enclosing_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while (if o == 2 { break; } else { j < 2 }) { j = j + 1; s = s + 1; }\n        s = s + 100;\n    }\n    s", "102")?;
+    expect_value(h, "    let mut o = 0;\n    let mut s = 0;\n    while o < 3 {\n        o = o + 1;\n        let mut j = 0;\n        while (if o == 2 { continue; } else { j < 2 }) { j = j + 1; s = s + 1; }\n        s = s + 100;\n    }\n    s", "204")
+}
+
+@test
+fn control_transfers_out_of_every_value_position_the_frontend_accepts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // 1. A `let` initialiser.
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        let x = if i == 3 { break; } else { i };\n        s = s + x;\n    }\n    s", "3")?;
+    // 2. An assignment right-hand side.
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = if i == 3 { break; } else { s + i };\n    }\n    s", "3")?;
+    // 3. An arithmetic operand.
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + (if i == 3 { break; } else { i });\n    }\n    s", "3")?;
+    // 4. A call argument.
+    let src = "fn dbl(n: Int) -> Int { n * 2 }\nfn main() -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + dbl(if i == 3 { break; } else { i });\n    }\n    s\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(text_trim(interp.stdout) == "6", interp.stderr)?;
+    for opt in ints_of2(0, 2) {
+        check_that(text_trim(run_exe(h, built_at(h, src, opt)?)?.stdout) == "6", f"-O{opt}")?;
+    }
+    // 5. A nested `if`'s condition.
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + if (if i == 3 { break; } else { true }) { 10 } else { 0 };\n    }\n    s", "20")?;
+    // Both branches transferring, in a `let` initialiser.
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        let x = if i == 3 { break; } else { continue; };\n        s = s + x;\n    }\n    s", "0")
+}
+
+@test
+fn an_interrupted_expression_keeps_earlier_effects_and_skips_later_ones(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    let z = 0;\n    let mut i = 0;\n    while i < 3 {\n        i = (10 / z) + (if true { break; } else { 1 });\n    }\n    i", "N0401", "division by zero", "prog.nz:5:17")?;
+    expect_value(h, "    let z = 0;\n    let mut i = 0;\n    let mut s = 7;\n    while i < 3 {\n        s = (if true { break; } else { 1 }) + (10 / z);\n    }\n    s", "7")?;
+    expect_value(h, "    let mut i = 0;\n    let mut s = 100;\n    while i < 5 {\n        i = i + 1;\n        s = if i == 2 { break; } else { s + 1 };\n    }\n    s", "101")?;
+    let src = "fn boom(n: Int) -> Int { 10 / n }\nfn main() -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < 3 {\n        i = i + 1;\n        s = s + boom(if i == 2 { break; } else { i });\n    }\n    s\n}\n";
+    three_print(h, src, "10")?;
+    expect_value(h, "    let mut i = 0;\n    let mut s = 0;\n    while i < 5 {\n        i = i + 1;\n        s = s + 1;\n        if i == 2 { break; }\n        s = s + 100;\n    }\n    s", "102")
+}
+
+@test
+fn loop_locals_and_shadowing_survive_break_and_continue(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut i = 0;\n    let mut total = 0;\n    while i < 5 {\n        i = i + 1;\n        let mut acc = 10;\n        if i % 2 == 0 { continue; }\n        acc = acc + i;\n        total = total + acc;\n    }\n    total", "39")?;
+    expect_value(h, "    let mut x = 1;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        if i < 3 { let mut x = 100; x = x + 1; continue; }\n        x = x + 10;\n    }\n    x", "11")
+}
+
+@test
+fn misplaced_transfers_and_unreachable_code_belong_to_the_checker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_unwritten(h, "fn main() -> Int {\n    break;\n    1\n}\n", "N0312")?;
+    refused_unwritten(h, "fn main() -> Int {\n    continue;\n    1\n}\n", "N0312")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while (if i > 1 { break; } else { true }) { i = i + 1; }\n    i\n}\n", "N0312")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { break; i = i + 1; }\n    i\n}\n", "N0313")?;
+    refused_unwritten(h, "fn main() -> Int {\n    let mut i = 0;\n    while i < 3 { if i == 1 { break; } else { continue; } i = i + 1; }\n    i\n}\n", "N0313")
+}
+
+fn is_terminator(l: Str) -> Bool ! {} {
+    text_starts_with(l, "br ") || text_starts_with(l, "ret ") || l == "unreachable" || text_starts_with(l, "switch ") || text_starts_with(l, "invoke ") || text_contains(l, " = invoke ")
+}
+
+/// Structural facts about a generated module, read out of the text: every block ends in exactly one
+/// terminator, and every `phi` incoming names a block that branches to it. The number of blocks
+/// inspected, so a test cannot pass by finding nothing.
+fn assert_control_flow_is_well_formed(ir: Str) -> Result[Int, Str] ! {} {
+    let mut blocks = 0;
+    let functions = split(ir, "\ndefine ");
+    let mut fi = 1;
+    while fi < strs_len(functions) {
+        let body = strs_get(split(strs_get(functions, fi), "\n}"), 0);
+        // Pass one: the instructions of each block, in order; `labels[k]` and `instrs[k]` (one
+        // instruction a line).
+        let labels = strs_new();
+        let instrs = strs_new();
+        let lines = text_lines(body);
+        let mut li = 1;
+        while li < strs_len(lines) {
+            let tt = text_trim(strs_get(split(strs_get(lines, li), ";"), 0));
+            if tt != "" {
+                let is_label = text_ends_with(tt, ":") && !text_contains(tt, " ") && !text_contains(tt, "\t");
+                if is_label {
+                    strs_push(labels, str_slice(tt, 0, str_len(tt) - 1));
+                    strs_push(instrs, "");
+                } else {
+                    if strs_len(labels) == 0 {
+                        strs_push(labels, "entry");
+                        strs_push(instrs, "");
+                    }
+                    let last = strs_len(instrs) - 1;
+                    let prev = strs_get(instrs, last);
+                    strs_set(instrs, last, if prev == "" { tt } else { f"{prev}\n{tt}" });
+                }
+            }
+            li = li + 1;
+        }
+        let mut b = 0;
+        while b < strs_len(labels) {
+            blocks = blocks + 1;
+            let lbl = strs_get(labels, b);
+            let ins = text_lines(strs_get(instrs, b));
+            let n = strs_len(ins);
+            let mut count = 0;
+            for l in ins {
+                if is_terminator(l) {
+                    count = count + 1;
+                }
+            }
+            check_that(n > 0 && is_terminator(strs_get(ins, n - 1)), f"block %{lbl} does not end in a terminator:\n{strs_get(instrs, b)}")?;
+            check_that(count == 1, f"block %{lbl} has {count} terminators, so something was appended after one:\n{strs_get(instrs, b)}")?;
+            b = b + 1;
+        }
+        // Pass two: every `phi` incoming must name a block that really branches here.
+        let mut c = 0;
+        while c < strs_len(labels) {
+            let lbl = strs_get(labels, c);
+            for instr in text_lines(strs_get(instrs, c)) {
+                let ps = split(instr, " = phi ");
+                if strs_len(ps) > 1 {
+                    let incomings = split(strs_get(ps, 1), "[");
+                    let mut k = 1;
+                    while k < strs_len(incomings) {
+                        let inside = strs_get(split(strs_get(incomings, k), "]"), 0);
+                        let parts = split(inside, ",");
+                        let from = trim_start_matches(text_trim(if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" }), "%");
+                        let mut src_at = 0 - 1;
+                        let mut s = 0;
+                        while s < strs_len(labels) {
+                            if src_at < 0 && strs_get(labels, s) == from {
+                                src_at = s;
+                            }
+                            s = s + 1;
+                        }
+                        check_that(src_at >= 0, f"phi in %{lbl} names %{from}, which is not a block in this function")?;
+                        let mut branches = false;
+                        for l in text_lines(strs_get(instrs, src_at)) {
+                            if is_terminator(l) && text_contains(l, f"label %{lbl}") {
+                                branches = true;
+                            }
+                        }
+                        check_that(branches, f"phi in %{lbl} names %{from}, but %{from} does not branch there")?;
+                        k = k + 1;
+                    }
+                }
+            }
+            c = c + 1;
+        }
+        fi = fi + 1;
+    }
+    Result[Int, Str].Ok(value: blocks)
+}
+
+/// `src` interpreted and built at both levels, each printing `expected` (only standard output is
+/// compared, as the Rust tests that write `assert_eq!(…stdout.trim(), …)` alone compare it).
+fn same_out(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = interpret(h, src)?;
+    check_that(text_trim(interp.stdout) == expected, f"{interp.stdout} {interp.stderr}")?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(text_trim(ran.stdout) == expected, f"-O{opt}: {ran_show(ran)}")?;
+    }
+    ok()
+}
+
+/// `src` built with `--emit-ir` into its own directory: the directory, path and executable.
+fn built_ir(h: Caps, src: Str) -> Result[Built, Str] ! { io, spawn } {
+    let dir = write_program(h, src)?;
+    let exe = f"{dir}/prog";
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", exe, suite_env(h));
+    check_that(out.code == 0, f"clang rejected the generated IR: {out.stderr}")?;
+    Result[Built, Str].Ok(value: Built(ok: true, dir: dir, exe: exe, out: out))
+}
+
+@test
+fn the_emitted_ir_for_nested_control_flow_is_well_formed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn keep(n: Int) -> Bool { n % 4 != 0 }\nfn main() -> Int {\n    let mut o = 0;\n    let mut total = 0;\n    while o < 6 {\n        o = o + 1;\n        if o == 5 { break; }\n        let mut j = 0;\n        while j * 1 < o {\n            j = j + 1;\n            if keep(j) { total = total + (if j > 2 { continue; } else { j }); } else { break; }\n        }\n        if o % 2 == 0 { continue; } else { total = total + 100; }\n    }\n    total\n}\n";
+    let b = built_ir(h, src)?;
+    let ir = emitted_ir(h, b.dir)?;
+    let blocks = assert_control_flow_is_well_formed(ir)?;
+    check_that(blocks > 15, f"only {blocks} blocks — the shape is too simple to mean much")?;
+    let mut phis = 0;
+    for l in text_lines(ir) {
+        if text_contains(l, " = phi ") && !text_contains(l, ", %lp.") {
+            phis = phis + 1;
+        }
+    }
+    check_that(phis == 0, "no phi in the program's code")?;
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    let ran = run_exe(h, b)?;
+    check_that(ran.code == 0, ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == text_trim(interp.stdout), "the native program and the interpreter disagree")
+}
+
+// --- M1f: native `return` ---------------------------------------------------------------------------
+
+@test
+fn a_body_where_every_path_returns_needs_no_tail(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_print(h, "fn sign(n: Int) -> Int {\n    if n < 0 { return 0 - 1; } else { return 1; }\n}\nfn main() -> Int { sign(0 - 5) * 10 + sign(3) }\n", "-9")?;
+    expect_value(h, "    return 42;", "42")?;
+    expect_value(h, "    let mut i = 0;\n    while i < 3 { i = i + 1; }\n    return i * 7;", "21")
+}
+
+@test
+fn an_early_return_leaves_the_function_not_the_loop(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_out(h, "fn first_div(n: Int) -> Int {\n    let mut d = 2;\n    while d < n {\n        if n % d == 0 { return d; }\n        d = d + 1;\n    }\n    n\n}\nfn main() -> Int { first_div(91) * 100 + first_div(97) }\n", "797")?;
+    same_out(h, "fn meet(target: Int) -> Int {\n    let mut a = 0;\n    while a < 5 {\n        let mut b = 0;\n        while b < 5 {\n            if a * b == target { return a * 10 + b; }\n            b = b + 1;\n        }\n        a = a + 1;\n    }\n    0 - 1\n}\nfn main() -> Int { meet(6) * 1000 + meet(99) }\n", "22999")
+}
+
+@test
+fn a_return_in_main_is_still_printed_only_by_the_wrapper(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "fn shout() -> Int { return 5; }\nfn main() -> Int {\n    let mut i = 0;\n    while i < 10 { if i == 4 { return i * 11 + shout(); } i = i + 1; }\n    0\n}\n", "49")
+}
+
+@test
+fn return_reaches_every_value_position_the_frontend_accepts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_out(h, "fn f(n: Int) -> Int {\n    let x = if n > 10 { return 999; } else { n * 2 };\n    x + 1\n}\nfn main() -> Int { f(3) * 1000 + f(20) }\n", "7999")?;
+    let src = "fn twice(n: Int) -> Int { n * 2 }\nfn rhs(n: Int) -> Int { let mut s = 1; s = if n > 0 { return 7; } else { 2 }; s }\nfn operand(n: Int) -> Int { 100 + (if n > 0 { return 8; } else { 3 }) }\nfn argument(n: Int) -> Int { twice(if n > 0 { return 9; } else { 4 }) }\nfn condition(n: Int) -> Int { if (if n > 0 { return 10; } else { true }) { 5 } else { 6 } }\nfn main() -> Int {\n    rhs(1) * 10000 + operand(1) * 1000 + argument(1) * 100 + condition(1) * 10\n        + rhs(0 - 1) + operand(0 - 1) + argument(0 - 1) + condition(0 - 1)\n}\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    let expected = text_trim(interp.stdout);
+    check_that(expected == "79118", "the expectation disagrees with the interpreter")?;
+    for opt in ints_of2(0, 2) {
+        check_that(text_trim(run_exe(h, built_at(h, src, opt)?)?.stdout) == expected, f"-O{opt}")?;
+    }
+    ok()
+}
+
+@test
+fn a_transferring_operand_beats_the_return_it_sits_in(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn h() -> Int {\n    let mut i = 0;\n    while i < 5 {\n        i = i + 1;\n        return if i == 3 { break; } else { i * 100 };\n    }\n    i\n}\nfn main() -> Int { h() }\n";
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    check_that(text_trim(interp.stdout) == "100", interp.stdout)?;
+    for opt in ints_of2(0, 2) {
+        check_that(text_trim(run_exe(h, built_at(h, src, opt)?)?.stdout) == "100", f"-O{opt}")?;
+    }
+    same_out(h, "fn h() -> Int {\n    let mut i = 0;\n    while i < 5 {\n        i = i + 1;\n        return if i < 3 { continue; } else { i * 100 };\n    }\n    i\n}\nfn main() -> Int { h() }\n", "300")
+}
+
+@test
+fn an_early_return_skips_the_operands_and_stores_after_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let mut kept = 11;\n    let mut i = 0;\n    while i < 3 {\n        i = i + 1;\n        if i == 2 { return kept; }\n        kept = kept + 100;\n    }\n    0", "111")?;
+    three_print(h, "fn safe(n: Int) -> Int { if n > 0 { return 3; } 10 / n }\nfn main() -> Int { safe(1) }\n", "3")?;
+    expect_runtime_error_at(h, "    let z = 0;\n    z / z", "N0401", "division by zero", "prog.nz:3:7")
+}
+
+@test
+fn return_carries_bool_as_well_as_int(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_out(h, "fn even(n: Int) -> Bool {\n    if n % 2 == 0 { return true; }\n    return false;\n}\nfn main() -> Int { if even(4) { if even(7) { 0 } else { 42 } } else { 0 } }\n", "42")
+}
+
+@test
+fn a_callee_returning_early_does_not_disturb_its_caller(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_out(h, "fn clamp(n: Int) -> Int {\n    if n > 10 { return 10; }\n    if n < 0 { return 0; }\n    n\n}\nfn main() -> Int {\n    let mut i = 0 - 3;\n    let mut s = 0;\n    while i < 14 { s = s + clamp(i); i = i + 1; }\n    s\n}\n", "85")
+}
+
+@test
+fn the_emitted_ir_for_a_return_heavy_function_is_well_formed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn classify(n: Int) -> Int {\n    if n < 0 { return 0 - 1; }\n    let mut i = 0;\n    while i < n {\n        if i * i == n { return i; }\n        if i > 100 { break; }\n        i = i + 1;\n    }\n    return 0;\n}\nfn main() -> Int { classify(49) * 100 + classify(0 - 2) + classify(5) }\n";
+    let b = built_ir(h, src)?;
+    let ir = emitted_ir(h, b.dir)?;
+    let blocks = assert_control_flow_is_well_formed(ir)?;
+    check_that(blocks > 10, f"only {blocks} blocks")?;
+    // One `ret` per return site, and no more.
+    let unit = unit_ir(h, b.dir)?;
+    let mut rets = 0;
+    let fs = split(unit, "\ndefine ");
+    for f in fs {
+        if !text_starts_with(f, "linkonce_odr ") {
+            for l in text_lines(f) {
+                let tt = text_trim(l);
+                if text_starts_with(tt, "ret ") || tt == "call void @nz.raise()" {
+                    rets = rets + 1;
+                }
+            }
+        }
+    }
+    let want = lir_returns(h, f"{b.dir}/prog.nz")?;
+    check_that(rets == want, f"expected one `ret` per return site ({rets} vs {want}):\n{unit}")?;
+    check_that(rets >= 6, unit)?;
+    // The specific regression: a terminator written *after* a `ret`.
+    let mut prev = "";
+    for l in text_lines(ir) {
+        let tt = text_trim(l);
+        check_that(!(text_starts_with(prev, "ret ") && tt == "unreachable"), "a terminator was written after the body's own `ret`")?;
+        prev = tt;
+    }
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    let ran = run_exe(h, b)?;
+    check_that(text_trim(ran.stdout) == text_trim(interp.stdout), ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == "699", ran.stdout)
+}
+
+@test
+fn a_wrongly_typed_return_belongs_to_the_checker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused_unwritten(h, "fn f() -> Int { return true; }\nfn main() -> Int { f() }\n", "N0300")?;
+    refused_unwritten(h, "fn f() -> Bool { return 1; }\nfn main() -> Int { if f() { 1 } else { 0 } }\n", "N0300")
+}
+
+// --- B1: `Str` as bytes, natively --------------------------------------------------------------------
+
+/// A program returning `Int`, checked against an expectation and the interpreter, at both levels.
+fn expect_whole(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, f"the interpreter rejected it: {interp.stderr}")?;
+    check_that(text_trim(interp.stdout) == expected, "the expectation disagrees with the interpreter")?;
+    for opt in ints_of2(0, 2) {
+        let ran = run_exe(h, built_at(h, src, opt)?)?;
+        check_that(ran.code == 0, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(text_trim(ran.stdout) == expected, f"-O{opt}")?;
+    }
+    ok()
+}
+
+@test
+fn str_len_and_str_byte_are_measured_in_bytes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    str_len(\"hello\") + str_len(\"\") + str_len(\"é\")", "7")?;
+    expect_value(h, "    str_byte(\"abc\", 0) * 1000 + str_byte(\"é\", 0)", "97195")?;
+    expect_value(h, "    let s = str_concat(str_concat(\"a\", str_from_byte(0)), \"b\");\n    str_len(s) * 1000 + str_byte(s, 1) * 10 + str_byte(s, 2) - 97", "3001")?;
+    expect_value(h, "    str_byte(str_from_byte(255), 0)", "255")
+}
+
+@test
+fn a_slice_shares_storage_and_may_split_a_character(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let s = str_slice(\"hello world\", 6, 11);\n    str_len(s) * 1000 + str_byte(s, 0)", "5119")?;
+    expect_value(h, "    str_byte(str_slice(\"é\", 0, 1), 0)", "195")?;
+    expect_value(h, "    str_len(str_slice(\"abc\", 0, 0)) + str_len(str_slice(\"abc\", 3, 3)) + str_len(str_slice(\"abc\", 0, 3))", "3")
+}
+
+@test
+fn concatenation_and_equality_compare_bytes_not_buffers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let joined = str_concat(str_slice(\"xabcx\", 1, 3), \"cd\");\n    if joined == \"abcd\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if \"\" == \"\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if str_concat(\"\", \"\") == \"\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if \"ab\" == \"abc\" { 1 } else { 0 }", "0")?;
+    expect_value(h, "    if \"ab\" != \"abc\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if \"A\" == \"a\" { 1 } else { 0 }", "0")
+}
+
+@test
+fn int_to_str_covers_the_whole_int_range(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    str_len(int_to_str(0))", "1")?;
+    expect_value(h, "    if int_to_str(0) == \"0\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if int_to_str(0 - 42) == \"-42\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if int_to_str(9223372036854775807) == \"9223372036854775807\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    if int_to_str(-9223372036854775808) == \"-9223372036854775808\" { 1 } else { 0 }", "1")?;
+    expect_value(h, "    str_len(int_to_str(-9223372036854775808))", "20")
+}
+
+@test
+fn str_travels_through_parameters_returns_locals_loops_and_joins(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_whole(h, "fn count(s: Str, want: Int) -> Int {\n    let mut i = 0;\n    let mut n = 0;\n    while i < str_len(s) {\n        if str_byte(s, i) == want { n = n + 1; }\n        i = i + 1;\n    }\n    n\n}\nfn repeat(s: Str, times: Int) -> Str {\n    let mut out = \"\";\n    let mut i = 0;\n    while i < times { out = str_concat(out, s); i = i + 1; }\n    out\n}\nfn pick(c: Bool) -> Str { if c { \"yes\" } else { \"no\" } }\nfn main() -> Int {\n    count(repeat(\"ab\", 5), 97) * 100 + str_len(pick(true)) * 10 + str_len(pick(false))\n}\n", "532")?;
+    expect_whole(h, "fn name_of(n: Int) -> Str {\n    if n < 0 { return \"negative\"; }\n    return \"other\";\n}\nfn main() -> Int { str_len(name_of(0 - 1)) * 10 + str_len(name_of(1)) }\n", "85")
+}
+
+@test
+fn every_string_bound_fails_at_its_own_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    str_byte(\"abc\", 3)", "N0405", "this byte index is outside the `Str`", "prog.nz:2:5")?;
+    expect_runtime_error_at(h, "    str_byte(\"abc\", 0 - 1)", "N0405", "this byte index is outside the `Str`", "prog.nz:2:5")?;
+    expect_runtime_error_at(h, "    str_len(str_from_byte(256))", "N0405", "this is not a byte value", "prog.nz:2:13")?;
+    expect_runtime_error_at(h, "    str_len(str_slice(\"abc\", 2, 1))", "N0405", "this slice is not inside the `Str`", "prog.nz:2:13")?;
+    expect_runtime_error_at(h, "    str_len(str_slice(\"abc\", 0, 4))", "N0405", "this slice is not inside the `Str`", "prog.nz:2:13")?;
+    expect_runtime_error_at(h, "    let s = \"abc\";\n    let mut i = 0;\n    let mut n = 0;\n    while i < 10 { n = n + str_byte(s, i); i = i + 1; }\n    n", "N0405", "this byte index is outside the `Str`", "prog.nz:5:28")
+}
+
+@test
+fn the_emitted_ir_for_strings_is_well_formed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn describe(s: Str) -> Str {\n    if str_len(s) == 0 { return \"empty\"; }\n    str_concat(\"len=\", int_to_str(str_len(s)))\n}\nfn main() -> Int {\n    let a = describe(\"\");\n    let b = describe(str_slice(\"hello\", 1, 4));\n    if a == \"empty\" { str_len(b) } else { 0 }\n}\n";
+    let b = built_ir(h, src)?;
+    let ir = emitted_ir(h, b.dir)?;
+    assert_control_flow_is_well_formed(ir)?;
+    check_that(!text_contains(ir, "icmp eq { ptr, i64, ptr }"), "two strings were compared as pairs rather than as bytes")?;
+    check_that(text_contains(ir, "@memcmp"), "no byte comparison was emitted")?;
+    let unit = unit_ir(h, b.dir)?;
+    let mut literal = "";
+    for l in text_lines(unit) {
+        if literal == "" && text_contains(l, "= private unnamed_addr constant <{ ptr, [16 x i8] }>") {
+            literal = l;
+        }
+    }
+    check_that(literal != "", f"no literal value:\n{unit}")?;
+    check_that(text_ends_with(literal, "\\00\\00\\00\\00\\00\\00\\00\\00\" }>, align 8"), f"a literal claimed an owner: {literal}")?;
+    let interp = interpret(h, src)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    let first = bounded_exe(h, b.exe, "", suite_env(h));
+    let second = run_exe(h, b)?;
+    check_that(text_trim(first.stdout) == text_trim(interp.stdout), ran_show(first))?;
+    check_that(text_trim(second.stdout) == "5", second.stdout)
+}
+
+// --- B2: sequences, natively ------------------------------------------------------------------------
+
+@test
+fn a_native_sequence_is_shared_storage(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_whole(h, "fn fill(a: Ints, n: Int) -> Int {\n    let mut i = 0;\n    while i < n { ints_push(a, i * i); i = i + 1; }\n    ints_len(a)\n}\nfn total(a: Ints) -> Int {\n    let mut i = 0;\n    let mut s = 0;\n    while i < ints_len(a) { s = s + ints_get(a, i); i = i + 1; }\n    s\n}\nfn main() -> Int {\n    let a = ints_new();\n    let b = a;\n    fill(a, 5);\n    ints_push(b, 100);\n    ints_set(a, 0, 7);\n    total(b) * 100 + ints_len(a)\n}\n", "13706")
+}
+
+@test
+fn growth_survives_many_pushes_and_keeps_every_element(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_whole(h, "fn main() -> Int {\n    let a = ints_new();\n    let mut i = 0;\n    while i < 1000 { ints_push(a, i); i = i + 1; }\n    let mut s = 0;\n    let mut j = 0;\n    while j < ints_len(a) { s = s + ints_get(a, j); j = j + 1; }\n    s * 10 + ints_len(a) / 1000\n}\n", "4995001")
+}
+
+@test
+fn strs_sequences_carry_strings_by_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_whole(h, "fn main() -> Int {\n    let words = strs_new();\n    strs_push(words, \"alpha\");\n    strs_push(words, str_concat(\"be\", \"ta\"));\n    let first = strs_get(words, 0);\n    strs_set(words, 0, \"x\");\n    let mut chars = 0;\n    let mut i = 0;\n    while i < strs_len(words) { chars = chars + str_len(strs_get(words, i)); i = i + 1; }\n    str_len(first) * 100 + chars\n}\n", "505")
+}
+
+@test
+fn every_sequence_bound_fails_at_its_own_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_runtime_error_at(h, "    let a = ints_new();\n    ints_get(a, 0)", "N0405", "this index is outside the sequence", "prog.nz:3:5")?;
+    expect_runtime_error_at(h, "    let a = ints_new();\n    ints_push(a, 1);\n    ints_set(a, 2, 5)", "N0405", "this index is outside the sequence", "prog.nz:4:5")?;
+    expect_runtime_error_at(h, "    let a = strs_new();\n    str_len(strs_get(a, 0 - 1))", "N0405", "this index is outside the sequence", "prog.nz:3:13")
+}
+
+@test
+fn a_program_without_sequences_carries_none_of_their_runtime(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int { 1 + 1 }\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", f"{dir}/prog", suite_env(h));
+    check_that(out.code == 0, out.stderr)?;
+    let ir = emitted_ir(h, dir)?;
+    check_that(!text_contains(ir, "define hidden ptr @nz.arr_new"), "unused sequence runtime emitted")?;
+    // And a program that does use one carries it, with well-formed control flow.
+    scratch_write(h, dir, "seq.nz", "fn main() -> Int { let a = ints_new(); ints_push(a, 5); ints_get(a, 0) }\n")?;
+    let out2 = build_cmd(h, f"{dir}/seq.nz", "--emit-ir", f"{dir}/seq", suite_env(h));
+    check_that(out2.code == 0, out2.stderr)?;
+    let ir2 = emitted_ir(h, dir)?;
+    scratch_remove(h, dir);
+    check_that(text_contains(ir2, "@nz.arr_new"), "@nz.arr_new")?;
+    check_that(text_contains(ir2, "@nz.arr_grow"), "@nz.arr_grow")?;
+    assert_control_flow_is_well_formed(ir2)?;
+    ok()
+}
+
+@test
+fn a_call_and_a_bare_block_may_each_be_a_statement(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_value(h, "    let a = ints_new();\n    ints_push(a, 1);\n    ints_push(a, 2);\n    ints_len(a)", "2")?;
+    expect_value(h, "    1 + 1;\n    3", "3")?;
+    expect_value(h, "    { let y = 2; };\n    3", "3")
+}
+
+// --- B3: arguments, files, output, exit -------------------------------------------------------------
+
+/// Build a program, run it with arguments, and compare everything with the interpreter.
+fn expect_same_run(h: Caps, src: Str, args: Strs, stdout: Str, stderr: Str, code: Int) -> Result[Int, Str] ! { io, spawn } {
+    let dir = write_program(h, src)?;
+    let path = f"{dir}/prog.nz";
+    let a = words("run --interpret");
+    strs_push(a, path);
+    strs_push(a, "--");
+    for x in args {
+        strs_push(a, x);
+    }
+    let interp = run_within(h, nazm_bin(h.io), a, "", suite_env(h), DEADLINE_30);
+    check_that(interp.code != TIMED_OUT, "the interpreter hung")?;
+    check_that(interp.code == code, f"interpreter: {ran_show(interp)}")?;
+    check_that(interp.stdout == stdout, f"interpreter stdout: {interp.stdout}")?;
+    check_that(text_contains(interp.stderr, stderr), f"interpreter stderr {interp.stderr} lacks {stderr}")?;
+    for opt in ints_of2(0, 2) {
+        let exe = f"{dir}/prog{opt}";
+        let built = build_cmd(h, path, f"--opt-level {opt}", exe, suite_env(h));
+        check_that(built.code == 0, f"-O{opt}: {built.stderr}")?;
+        let sh = strs_new();
+        strs_push(sh, "-c");
+        strs_push(sh, bounded_script());
+        strs_push(sh, exe);
+        for x in args {
+            strs_push(sh, x);
+        }
+        let ran = run_within(h, "sh", sh, "", suite_env(h), DEADLINE_30);
+        check_that(ran.code != TIMED_OUT, "the compiled program hung")?;
+        check_that(ran.code == code, f"-O{opt}: {ran_show(ran)}")?;
+        check_that(ran.stdout == stdout, f"-O{opt} stdout: {ran.stdout}")?;
+        check_that(text_contains(ran.stderr, stderr), f"-O{opt} stderr {ran.stderr} lacks {stderr}")?;
+    }
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn arguments_exclude_the_program_name_in_both_implementations(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main(io: IoCap) -> Int {\n    let mut i = 0;\n    let mut total = 0;\n    while i < args_count() {\n        print(arg(i));\n        print(str_from_byte(10));\n        total = total + str_len(arg(i));\n        i = i + 1;\n    }\n    total\n}\n";
+    expect_same_run(h, src, words("alpha beta"), "alpha\nbeta\n9\n", "", 0)?;
+    expect_same_run(h, src, strs_new(), "0\n", "", 0)
+}
+
+@test
+fn an_argument_past_the_end_fails_at_its_own_position(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main(io: IoCap) -> Int { str_len(arg(0)) }\n")?;
+    let path = f"{dir}/prog.nz";
+    let interp = run_within(h, nazm_bin(h.io), list3("run", "--interpret", path), "", suite_env(h), DEADLINE_30);
+    check_that(interp.code == 2, ran_show(interp))?;
+    check_that(text_contains(interp.stderr, "N0405"), interp.stderr)?;
+    check_that(text_contains(interp.stderr, "this index is outside the arguments"), interp.stderr)?;
+    let b = build_cmd(h, path, "", f"{dir}/prog", suite_env(h));
+    check_that(b.code == 0, b.stderr)?;
+    let ran = run_exe(h, Built(ok: true, dir: dir, exe: f"{dir}/prog", out: b))?;
+    check_that(ran.code == 2, ran_show(ran))?;
+    check_that(text_contains(ran.stderr, "N0405"), ran.stderr)?;
+    check_that(text_contains(ran.stderr, "this index is outside the arguments"), ran.stderr)
+}
+
+@test
+fn a_file_round_trips_through_both_implementations(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main(io: IoCap) -> Int {\n    let path = arg(0);\n    let payload = str_concat(\"bytes: \", int_to_str(1234));\n    write_file(path, payload);\n    let back = read_file(path);\n    if back == payload { str_len(back) } else { 0 - 1 }\n}\n";
+    let dir = scratch_new(h);
+    expect_same_run(h, src, list1(f"{dir}/roundtrip.txt"), "11\n", "", 0)?;
+    // The file really is on disk with the bytes the program wrote.
+    let back = read_text(h, f"{dir}/roundtrip.txt")?;
+    scratch_remove(h, dir);
+    check_that(back == "bytes: 1234", back)
+}
+
+@test
+fn a_missing_file_is_reported_and_a_present_one_is_found(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "present.txt", "x")?;
+    let src = "fn main(io: IoCap) -> Int {\n    if file_exists(arg(0)) { 1 } else { 0 }\n}\n";
+    expect_same_run(h, src, list1(f"{dir}/present.txt"), "1\n", "", 0)?;
+    expect_same_run(h, src, list1(f"{dir}/absent.txt"), "0\n", "", 0)?;
+    // Reading one that is not there stops the program, in both.
+    let r = expect_same_run(h, "fn main(io: IoCap) -> Int { str_len(read_file(arg(0))) }\n", list1(f"{dir}/absent.txt"), "", "this file could not be read", 2);
+    scratch_remove(h, dir);
+    r
+}
+
+@test
+fn exit_with_ends_the_program_and_nothing_after_it_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_same_run(h, "fn main(io: IoCap) -> Int {\n    eprint(\"before\");\n    exit_with(7);\n    print(\"after\");\n    0\n}\n", strs_new(), "", "before", 7)
+}
+
+@test
+fn print_and_eprint_go_to_different_descriptors_and_add_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_same_run(h, "fn main(out_cap: OutCap) -> Int {\n    print(\"out\");\n    eprint(\"err\");\n    print(str_from_byte(10));\n    0\n}\n", strs_new(), "out\n0\n", "err", 0)
+}
+
+@test
+fn a_program_without_io_carries_none_of_its_runtime(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "fn main() -> Int { 1 + 1 }\n")?;
+    let out = build_cmd(h, f"{dir}/prog.nz", "--emit-ir", f"{dir}/prog", suite_env(h));
+    check_that(out.code == 0, out.stderr)?;
+    let ir = emitted_ir(h, dir)?;
+    scratch_remove(h, dir);
+    for absent in text_split("define hidden { ptr, i64 } @nz.read_file|define hidden ptr @nz.cstr|@nz.argv = hidden|@.rb = private", "|") {
+        check_that(!text_contains(ir, absent), f"unused {absent} emitted")?;
+    }
+    ok()
+}
+
+// --- B4: modules ------------------------------------------------------------------------------------
+
+/// A tree of files (name, text, …) in a new directory: the directory; its root is the first file.
+fn write_tree(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn files2(a: Str, at: Str, b: Str, bt: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, a);
+    strs_push(f, at);
+    strs_push(f, b);
+    strs_push(f, bt);
+    f
+}
+
+fn run_root(h: Caps, root: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let r = run_within(h, nazm_bin(h.io), list3("run", "--interpret", root), "", suite_env(h), DEADLINE_30);
+    check_that(r.code != TIMED_OUT, "the interpreter hung")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// `nazm build ROOT -o DIR/prog`, then the executable run under `bounded_exe`.
+fn build_and_run_root(h: Caps, dir: Str, root: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let exe = f"{dir}/prog";
+    let a = list3("build", root, "-o");
+    strs_push(a, exe);
+    let out = run_within(h, nazm_bin(h.io), a, "", suite_env(h), DEADLINE_30);
+    check_that(out.code != TIMED_OUT, "the build hung")?;
+    check_that(out.code == 0, f"build: {ran_show(out)}")?;
+    let sh = strs_new();
+    strs_push(sh, "-c");
+    strs_push(sh, bounded_script());
+    strs_push(sh, exe);
+    let r = run_within(h, "sh", sh, "", suite_env(h), DEADLINE_30);
+    check_that(r.code != TIMED_OUT, "hung")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+@test
+fn a_program_can_span_several_files_and_a_diamond_loads_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = files2("main.nz", "use \"util.nz\";\nuse \"sub/deep.nz\";\n\nfn main() -> Int { quad(5) * 100 + str_len(greet()) + twice(1) }\n", "util.nz", "pub fn twice(n: Int) -> Int { n * 2 }\npub fn greet() -> Str { \"hello\" }\n");
+    strs_push(f, "sub/deep.nz");
+    strs_push(f, "use \"../util.nz\";\npub fn quad(n: Int) -> Int { twice(twice(n)) }\n");
+    let dir = write_tree(h, f)?;
+    let root = f"{dir}/main.nz";
+    let interp = run_root(h, root)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    check_that(text_trim(interp.stdout) == "2007", interp.stdout)?;
+    let ran = build_and_run_root(h, dir, root)?;
+    scratch_remove(h, dir);
+    check_that(ran.code == 0, ran_show(ran))?;
+    check_that(text_trim(ran.stdout) == "2007", "the compiled program disagrees")
+}
+
+@test
+fn an_import_cycle_terminates_and_is_not_an_error(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_tree(h, files2("a.nz", "use \"b.nz\";\nfn main() -> Int { from_b() + 1 }\n", "b.nz", "use \"a.nz\";\npub fn from_b() -> Int { 41 }\n"))?;
+    let root = f"{dir}/a.nz";
+    let interp = run_root(h, root)?;
+    check_that(interp.code == 0, interp.stderr)?;
+    check_that(text_trim(interp.stdout) == "42", interp.stdout)?;
+    let ran = build_and_run_root(h, dir, root)?;
+    scratch_remove(h, dir);
+    check_that(text_trim(ran.stdout) == "42", ran_show(ran))
+}
+
+@test
+fn a_diagnostic_in_an_imported_file_names_that_file_and_its_own_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_tree(h, files2("main.nz", "use \"lib.nz\";\nfn main() -> Int { helper() }\n", "lib.nz", "fn unused() -> Int { 1 }\npub fn helper() -> Int { \"oops\" }\n"))?;
+    let out = nz(h, "check", list1(f"{dir}/main.nz"));
+    scratch_remove(h, dir);
+    check_that(out.code == 1, out.stderr)?;
+    check_that(text_contains(out.stderr, "N0300"), out.stderr)?;
+    check_that(text_contains(out.stderr, "lib.nz:2:26"), f"wrong file or line: {out.stderr}")
+}
+
+@test
+fn a_name_defined_here_and_exported_there_is_reported_with_both(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_tree(h, files2("main.nz", "use \"lib.nz\";\nfn helper() -> Int { 2 }\nfn main() -> Int { helper() }\n", "lib.nz", "pub fn helper() -> Int { 1 }\n"))?;
+    let out = nz(h, "check", list1(f"{dir}/main.nz"));
+    scratch_remove(h, dir);
+    check_that(out.code == 1, out.stderr)?;
+    check_that(text_contains(out.stderr, "N0208"), out.stderr)?;
+    check_that(text_contains(out.stderr, "main.nz:1:5"), out.stderr)?;
+    check_that(text_contains(out.stderr, "lib.nz:1:8"), out.stderr)?;
+    check_that(text_contains(out.stderr, "at 2:4: defined here"), out.stderr)
+}
+
+@test
+fn the_same_name_defined_privately_in_two_files_is_not_a_conflict(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_tree(h, files2("main.nz", "use \"lib.nz\";\nfn helper() -> Int { 2 }\nfn main() -> Int { helper() + shown() }\n", "lib.nz", "pub fn shown() -> Int { helper() }\nfn helper() -> Int { 40 }\n"))?;
+    let out = nz(h, "run --interpret", list1(f"{dir}/main.nz"));
+    scratch_remove(h, dir);
+    check_that(out.code == 0, out.stderr)?;
+    check_that(text_trim(out.stdout) == "42", out.stdout)
+}
+
+@test
+fn a_missing_import_points_at_the_path_that_named_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = write_program(h, "use \"nope.nz\";\nfn main() -> Int { 1 }\n")?;
+    let out = nz(h, "check", list1(f"{dir}/prog.nz"));
+    scratch_remove(h, dir);
+    check_that(out.code == 3, out.stderr)?;
+    check_that(text_contains(out.stderr, "N0205"), out.stderr)?;
+    check_that(text_contains(out.stderr, "prog.nz:1:5"), out.stderr)?;
+    check_that(text_contains(out.stderr, "cannot find `nope.nz`"), out.stderr)
+}
+
+@test
+fn imports_resolve_relative_to_the_importing_file_not_the_working_directory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = files2("app/main.nz", "use \"util.nz\";\nfn main() -> Int { answer() }\n", "app/util.nz", "pub fn answer() -> Int { 42 }\n");
+    strs_push(f, "util.nz");
+    strs_push(f, "pub fn answer() -> Int { 0 - 1 }\n");
+    let dir = write_tree(h, f)?;
+    let out = nazm(h, dir, list3("run", "--interpret", f"{dir}/app/main.nz"));
+    scratch_remove(h, dir);
+    check_that(out.code == 0, out.stderr)?;
+    check_that(text_trim(out.stdout) == "42", out.stdout)
+}
+
+/// `examples/worker-pool.nz` is the spec's concurrency example, and it terminates with 90.
+@test
+fn the_spec_worker_pool_example_terminates_and_answers_ninety(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = repo_root(h);
+    let src = read_text(h, f"{root}/examples/worker-pool.nz")?;
+    let spec = read_text(h, f"{root}/docs/spec.md")?;
+    let fence = "```nazm\nfn worker(jobs: Chan, results: Chan) -> Int {";
+    let at = find(spec, fence);
+    check_that(at >= 0, "docs/spec.md no longer shows the worker-pool example")?;
+    let after = str_slice(spec, at + str_len("```nazm\n"), str_len(spec));
+    let close = find(after, "```");
+    check_that(close >= 0, "unclosed fence")?;
+    let block = str_slice(after, 0, close);
+    check_that(trim_end_ws(block) == trim_end_ws(src), "docs/spec.md and examples/worker-pool.nz have drifted. The spec is meant to show the program that is actually run.")?;
+    // It prints 90 (R1, 5b.3); the result report the suite sets adds `main`'s 0.
+    let ran = interpret(h, src)?;
+    check_that(ran.code == 0, f"interpreted: {ran.stderr}")?;
+    check_that(text_trim(ran.stdout) == "90\n0", "interpreted")?;
+    for opt in ints_of2(0, 2) {
+        let b = build_at(h, src, opt)?;
+        check_that(b.ok, f"-O{opt} did not compile: {b.out.stderr}")?;
+        let r = run_exe(h, b)?;
+        check_that(r.code == 0, f"-O{opt}: {r.stderr}")?;
+        check_that(text_trim(r.stdout) == "90\n0", f"-O{opt}")?;
+    }
+    ok()
+}
+
+// --- records, across the three backends ---------------------------------------------------------------
+
+@test
+fn records_of_mixed_field_sizes_read_and_write_the_right_field(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "struct Inner {\n    n: Int,\n}\nstruct Mixed {\n    zz: Str,\n    flag: Bool,\n    mid: Int,\n    inner: Inner,\n    aa: Ints,\n}\nfn main() -> Int {\n    let m = Mixed(zz: \"abcd\", flag: true, mid: 7, inner: Inner(n: 100), aa: ints_new());\n    ints_push(m.aa, 3);\n    let f = if m.flag { 1000 } else { 0 };\n    f + m.inner.n + m.mid * 10 + str_len(m.zz) + ints_get(m.aa, 0)\n}\n", "1177")
+}
+
+@test
+fn a_record_survives_construction_copy_replacement_and_return_at_both_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "struct Inner {\n    text: Str,\n}\nstruct Outer {\n    inner: Inner,\n    count: Int,\n}\nfn make(n: Int) -> Outer { Outer(inner: Inner(text: int_to_str(n)), count: n) }\nfn returned(n: Int) -> Outer {\n    let o = make(n);\n    return o;\n}\nfn size(o: Outer) -> Int { str_len(o.inner.text) + o.count }\nfn main() -> Int {\n    let mut a = make(5);\n    let b = a;\n    a.inner.text = str_concat(a.inner.text, \"!\");\n    a.count = 6;\n    let c = returned(40);\n    size(a) + size(b) + size(c) + str_len(b.inner.text)\n}\n", "57")
+}
+
+@test
+fn a_record_field_written_in_a_loop_keeps_the_right_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "struct Holder {\n    name: Str,\n    n: Int,\n}\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 50 {\n        let mut h = Holder(name: int_to_str(i), n: i);\n        h.name = str_concat(h.name, \"x\");\n        total = total + str_len(h.name) + h.n;\n        i = i + 1;\n    }\n    total\n}\n", "1365")
+}
+
+// --- enums, at both optimisation levels -------------------------------------------------------------
+
+@test
+fn every_variant_shape_agrees_across_the_interpreter_and_both_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "enum Token {\n    Pair(left: Int, right: Int),\n    Eof,\n    Number(value: Int),\n    Name(text: Str),\n}\nfn size(t: Token) -> Int {\n    match t {\n        Token.Eof() => 0,\n        Token.Number(value: n) => n,\n        Token.Name(text: s) => str_len(s),\n        Token.Pair(left: a, right: b) => a + b,\n    }\n}\nfn main() -> Int {\n    size(Token.Eof()) + size(Token.Number(value: 30))\n        + size(Token.Name(text: str_concat(\"ab\", \"cd\")))\n        + size(Token.Pair(left: 3, right: 5))\n}\n", "42")
+}
+
+@test
+fn a_variant_built_in_a_loop_keeps_the_right_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "enum E {\n    Text(value: Str),\n    Count(n: Int),\n}\nfn size(e: E) -> Int { match e { E.Text(value: s) => str_len(s), E.Count(n: n) => n, } }\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 50 {\n        let e = if i > 24 { E.Text(value: int_to_str(i)) } else { E.Count(n: i) };\n        total = total + size(e);\n        i = i + 1;\n    }\n    total\n}\n", "350")
+}
+
+@test
+fn a_nested_match_and_a_record_payload_agree_at_both_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "struct Point { x: Int, label: Str, }\nenum Inner { Some(n: Int), None, }\nenum Outer { Wrapped(value: Inner), At(p: Point), Empty, }\nfn depth(o: Outer) -> Int {\n    match o {\n        Outer.Empty() => 0,\n        Outer.At(p: p) => p.x + str_len(p.label),\n        Outer.Wrapped(value: v) => match v { Inner.None() => 1, Inner.Some(n: n) => n, },\n    }\n}\nfn main() -> Int {\n    depth(Outer.Empty()) + depth(Outer.Wrapped(value: Inner.None()))\n        + depth(Outer.Wrapped(value: Inner.Some(n: 30)))\n        + depth(Outer.At(p: Point(x: 9, label: \"ab\")))\n}\n", "42")
+}
+
+@test
+fn a_payload_returned_from_an_arm_is_valid_at_both_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    expect_program(h, "enum E {\n    Empty,\n    Text(value: Str),\n}\nfn take(e: E) -> Str { match e { E.Empty() => \"\", E.Text(value: s) => s, } }\nfn main() -> Int {\n    let held = take(E.Text(value: str_concat(\"abcde\", \"fghij\")));\n    let mut i = 0;\n    while i < 100 {\n        let churn = str_concat(\"xxxxxxxxxx\", int_to_str(i));\n        i = i + str_len(churn) - str_len(churn) + 1;\n    }\n    str_len(held) * 100 + str_byte(held, 0)\n}\n", "1097")
+}
+
+/// Q1-A1-07: `-o` naming any module of the program — not only the entry — is refused.
+@test
+fn an_output_over_any_module_of_the_program_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let f = files2("nazm.root", "", "util.nz", "pub fn two() -> Int { 2 }\n");
+    strs_push(f, "main.nz");
+    strs_push(f, "use \"util.nz\";\nfn main() -> Int { two() }\n");
+    let d = write_tree(h, f)?;
+    let o = nazm(h, d, words("build main.nz -o util.nz"));
+    let kept = read_text(h, f"{d}/util.nz")?;
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "over its own source"), o.stderr)?;
+    check_that(kept == "pub fn two() -> Int { 2 }\n", kept)
+}
+
+/// Q1-A1-06: a comma in a shared library's file name is refused.
+@test
+fn a_shared_library_name_with_a_comma_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "lib.nz", "extern \"C\" pub fn twice(n: Int) -> Int ! {} { n * 2 }\n")?;
+    let o = nazm(h, d, words("build --lib --shared lib.nz -o libx,-Wl,-sectcreate.dylib"));
+    let made = file_exists(f"{d}/libx,-Wl,-sectcreate.dylib");
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "may not contain a comma"), o.stderr)?;
+    check_that(!made, "the library was written")
+}
+
+/// Q1-A1-01: every generated function asks for stack probes.
+@test
+fn every_generated_function_asks_for_stack_probes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = write_program(h, "fn inc(n: Int) -> Int { n + 1 }\nfn main() -> Int { inc(1) }\n")?;
+    let a = words("build --emit-ir");
+    strs_push(a, f"{d}/prog.nz");
+    strs_push(a, "-o");
+    strs_push(a, "p");
+    let o = nazm(h, d, a);
+    check_that(o.code == 0, o.stderr)?;
+    let mut defines = 0;
+    for name in match dir_list(h.io, d) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), } {
+        // The program's own units (`p.m0.ll`, …).
+        let parts = text_split(name, ".");
+        let unit = strs_len(parts) > 1 && text_starts_with(strs_get(parts, 1), "m");
+        if text_ends_with(name, ".ll") && unit {
+            for line in text_lines(read_text(h, f"{d}/{name}")?) {
+                if text_starts_with(line, "define ") {
+                    defines = defines + 1;
+                    check_that(text_contains(line, "\"probe-stack\"=\"inline-asm\""), line)?;
+                }
+            }
+        }
+    }
+    scratch_remove(h, d);
+    check_that(defines > 0, "no definitions")
+}
+
+/// Gate 3: when clang fails in the link step because of its environment, the report says so.
+/// (`#[cfg(target_os = "macos")]`: the Rust test exists only on macOS, as this one asks.)
+@test
+fn a_toolchain_environment_failure_is_not_blamed_on_the_ir(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if uname(h, "-s") != "Darwin" {
+        return ok();
+    }
+    let d = write_program(h, "fn main() -> Int { 0 }\n")?;
+    let out = run(h, nazm_bin(h.io), words("build --no-cache prog.nz -o prog"), d, env_set(suite_env(h), "SDKROOT", "/nonexistent/nazm-sdk"));
+    scratch_remove(h, d);
+    check_that(out.code != 0, out.stderr)?;
+    check_that(text_contains(out.stderr, "not about the generated IR"), out.stderr)?;
+    check_that(!text_contains(out.stderr, "This is a bug in `nazm build`"), out.stderr)
+}

@@ -1,0 +1,283 @@
+// N83: the task pool — M:N tasks on bounded workers (`docs/architecture.md` §7.84). Every
+// concurrency shape gives the same output, ending and memory report on the pool as on one thread
+// per task, on both backends; ten thousand tasks run on two workers; a task's failure and stack
+// limit are its own; a polling select lets a sibling run; a deadline fires for a parked task, and a
+// parked task uses no CPU while it waits. Ported from `crates/nazm-cli/tests/scheduler_pool.rs`
+// (R7); the CPU a running child has used is read with `ps` while it runs (`lib/live.nz`).
+
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/live.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn env_base(h: Caps) -> Strs ! { io } {
+    env_unset(suite_env(h), "NAZM_SCHEDULER")
+}
+
+fn text(o: Ran) -> Str ! {} {
+    f"{o.stdout}{o.stderr}"
+}
+
+/// Build `src` with `backend`, into `dir/name`.
+fn built(h: Caps, dir: Str, name: Str, src: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, dir, f"{name}.nz", src)?;
+    let o = run(h, nazm_bin(h.io), words(f"build --backend {backend} {name}.nz -o {name}"), dir, env_base(h));
+    check_that(o.code == 0, f"{name}/{backend}: {text(o)}")
+}
+
+/// Run `dir/name` with `env` (`NAME=value` each), the memory and schedule reports on, ended at
+/// 60 s (then its status is `TIMED_OUT`, as a killed child's is no exit code).
+fn run_prog(h: Caps, dir: Str, name: Str, args: Strs, env: Strs) -> Ran ! { io, spawn } {
+    let mut e = env_set(env_set(env_base(h), "NAZM_MEMORY_REPORT", "1"), "NAZM_SCHED_REPORT", "1");
+    for kv in env {
+        let at = find(kv, "=");
+        e = env_set(e, str_slice(kv, 0, at), str_slice(kv, at + 1, str_len(kv)));
+    }
+    run_within(h, f"{dir}/{name}", args, dir, e, 60000)
+}
+
+fn vars(a: Str) -> Strs ! {} {
+    words(a)
+}
+
+/// The report lines both models share: everything but the pool's own line.
+fn shared(stderr: Str) -> Str ! {} {
+    let out = strs_new();
+    for l in text_lines(stderr) {
+        if !text_starts_with(l, "nazm-pool:") {
+            strs_push(out, l);
+        }
+    }
+    str_join(out, "\n")
+}
+
+fn shapes() -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, "fanin");
+    strs_push(s, "fn worker(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, n * n); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(2); let got = ints_new();\nscope { let mut i = 0; while i < 50 { spawn worker(io, c, i); i = i + 1; }\nlet mut k = 0; while k < 50 { let r = chan_recv(c, got); k = k + 1; } }\nlet mut s = 0; let mut j = 0; while j < 50 { s = s + ints_get(got, j); j = j + 1; }\nprint(int_to_str(s)); 0 }\n");
+    strs_push(s, "pipeline");
+    strs_push(s, "fn stage(io: IoCap, inp: Chan[Str], out: Chan[Str]) -> Int ! { io } {\nlet got = vec_new[Str]();\nwhile chan_recv_of(inp, got) { chan_send_of(out, str_concat(vec_pop(got), \"!\")); }\nchan_close_of(out); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet a = chan_new_of[Str](1); let b = chan_new_of[Str](1); let c = chan_new_of[Str](1);\nlet got = vec_new[Str]();\nscope { spawn stage(io, a, b); spawn stage(io, b, c);\nlet mut i = 0; while i < 20 { chan_send_of(a, int_to_str(i)); let r = chan_recv_of(c, got); i = i + 1; }\nchan_close_of(a); let e = chan_recv_of(c, got); }\nprint(vec_get(got, 19)); print(int_to_str(vec_len(got))); 0 }\n");
+    strs_push(s, "selecting");
+    strs_push(s, "fn producer(io: IoCap, c: Chan[Int], n: Int) -> Int ! { io } { chan_send_of(c, n); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet x = chan_new_of[Int](1); let y = chan_new_of[Int](1);\nlet cs = vec_new[Chan[Int]](); vec_push(cs, x); vec_push(cs, y);\nlet out = vec_new[Int](); let mut sum = 0; let mut n = 0;\nscope { spawn producer(io, x, 3); spawn producer(io, y, 4);\nwhile n < 2 { let i = chan_select_of(cs, out); sum = sum + vec_pop(out); n = n + 1; } }\nprint(int_to_str(sum)); 0 }\n");
+    strs_push(s, "nested");
+    strs_push(s, "fn leaf(io: IoCap, c: Chan) -> Int ! { io } { chan_send(c, 1); 0 }\nfn branch(io: IoCap, t: SpawnCap, c: Chan) -> Int ! { io, spawn } { scope { spawn leaf(io, c); spawn leaf(io, c); } 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(16); let got = ints_new();\nscope { spawn branch(io, t, c); spawn branch(io, t, c); }\nlet mut k = 0; while k < 4 { let r = chan_recv(c, got); k = k + 1; }\nprint(int_to_str(ints_len(got))); 0 }\n");
+    s
+}
+
+@test
+fn every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let s = shapes();
+    let mut i = 0;
+    while i < strs_len(s) {
+        let name = strs_get(s, i);
+        let src = strs_get(s, i + 1);
+        for backend in words("llvm cranelift") {
+            built(h, d, name, src, backend)?;
+            let threads = run_prog(h, d, name, strs_new(), vars("NAZM_SCHEDULER=threads"));
+            let pool = run_prog(h, d, name, strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=2"));
+            check_that(threads.code == 0, f"{name}/{backend}: {threads.stderr}")?;
+            check_that(threads.stdout == pool.stdout, f"{name}/{backend}: output")?;
+            check_that(threads.code == pool.code, f"{name}/{backend}: ending")?;
+            check_that(shared(threads.stderr) == shared(pool.stderr), f"{name}/{backend}: reports")?;
+            check_that(text_contains(pool.stderr, "nazm-pool: workers=2"), f"{name}/{backend}: {pool.stderr}")?;
+            check_that(!text_contains(threads.stderr, "nazm-pool:"), f"{name}/{backend}: no pool line on threads")?;
+        }
+        i = i + 2;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+const MANY: Str = "fn worker(io: IoCap, jobs: Chan, results: Chan) -> Int ! { io } {\nlet got = ints_new();\nif chan_recv(jobs, got) { chan_send(results, ints_get(got, 0) + 1); }\n0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet n = str_len(arg(0));\nlet jobs = chan_new(1); let results = chan_new(1); let sum = ints_new(); ints_push(sum, 0);\nscope {\nlet mut i = 0; while i < n { spawn worker(io, jobs, results); i = i + 1; }\nlet mut k = 0; let got = ints_new();\nwhile k < n { chan_send(jobs, k); let r = chan_recv(results, got); k = k + 1; }\nlet mut j = 0; let mut s = 0; while j < n { s = s + ints_get(got, j); j = j + 1; }\nints_set(sum, 0, s);\n}\nprint(int_to_str(ints_get(sum, 0))); 0 }\n";
+
+@test
+fn ten_thousand_tasks_all_alive_at_once_run_on_two_workers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    built(h, d, "many", MANY, "llvm")?;
+    let r = run_prog(h, d, "many", list1(text_repeat("x", 10000)), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=2"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    check_that(r.stdout == "500050000\n", r.stdout)?;
+    check_that(text_contains(r.stderr, "nazm-pool: workers=2 peak=10000"), r.stderr)?;
+    check_that(text_contains(r.stderr, "spawned=10000 joined=10000"), r.stderr)
+}
+
+fn list1(a: Str) -> Strs ! {} {
+    let s = strs_new();
+    strs_push(s, a);
+    s
+}
+
+@test
+fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn bad(io: IoCap, c: Chan, z: Int) -> Int ! { io } { let r = chan_recv(c, ints_new()); 10 / z }\nfn good(io: IoCap, c: Chan, done: Chan) -> Int ! { io } { chan_send(c, 1); chan_send(done, 7); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(1); let done = chan_new(1); let got = ints_new();\nscope { spawn bad(io, c, str_len(\"\")); spawn good(io, c, done); let r = chan_recv(done, got); }\nprint(int_to_str(ints_get(got, 0))); 0 }\n";
+    built(h, d, "fail", src, "llvm")?;
+    let threads = run_prog(h, d, "fail", strs_new(), vars("NAZM_SCHEDULER=threads"));
+    let pool = run_prog(h, d, "fail", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=1"));
+    check_that(threads.code == 2, threads.stderr)?;
+    check_that(threads.stdout == pool.stdout && threads.code == pool.code, f"{ran_show(threads)} {ran_show(pool)}")?;
+    check_that(text_contains(pool.stderr, "division by zero") || text_contains(pool.stderr, "N04"), pool.stderr)?;
+    let deep = "fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }\nfn work(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, down(n)); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(1); let got = ints_new();\nscope { spawn work(io, c, str_len(arg(0)) * 1000); }\nlet r = chan_recv(c, got);\nprint(int_to_str(ints_get(got, 0))); 0 }\n";
+    built(h, d, "deep", deep, "llvm")?;
+    let n = list1(text_repeat("x", 20));
+    let small = run_prog(h, d, "deep", n, vars("NAZM_SCHEDULER=pool"));
+    check_that(small.code == 2, small.stderr)?;
+    check_that(text_contains(small.stderr, "N0408"), small.stderr)?;
+    let t2 = run_prog(h, d, "deep", n, vars("NAZM_SCHEDULER=threads"));
+    let large = run_prog(h, d, "deep", n, vars("NAZM_SCHEDULER=pool NAZM_TASK_STACK=16777216"));
+    scratch_remove(h, d);
+    check_that(t2.code == 0, t2.stderr)?;
+    check_that(t2.stdout == large.stdout && t2.code == large.code, f"{ran_show(t2)} {ran_show(large)}")
+}
+
+/// Q1-A1-01: a task whose own frame is larger than its stack fails with `N0408` at the function's
+/// name under both backends and both levels; a stack that holds it runs it.
+@test
+fn a_task_frame_larger_than_its_stack_fails_with_n0408_rather_than_faulting(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let big = "fn worker(c: Chan[Int]) -> Int ! {spawn} {\nlet mut a = [0; 8192]; let mut b = [0; 8192]; let mut x = [0; 8192];\nlet mut y = [0; 8192]; let mut z = [0; 8192];\na[1] = 1; b[2] = 2; x[3] = 3; y[4] = 4; z[5] = 5;\nchan_send_of(c, a[1] + b[2] + x[3] + y[4] + z[5]); 0 }\nfn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {\nlet c = chan_new_of[Int](1);\nscope { spawn worker(c); }\nlet got = vec_new[Int](); chan_recv_of(c, got);\nprint(int_to_str(vec_get(got, 0))); 0 }\n";
+    let deep = "fn down(n: Int) -> Int { let mut pad = [0; 1024]; pad[n % 1024] = n;\nif n == 0 { 0 } else { pad[n % 1024] - n + 1 + down(n - 1) } }\nfn work(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, down(n)); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\nlet c = chan_new(1); let got = ints_new();\nscope { spawn work(io, c, str_len(arg(0)) * 10); }\nlet r = chan_recv(c, got);\nprint(int_to_str(ints_get(got, 0))); 0 }\n";
+    for backend in words("llvm cranelift") {
+        for level in words("0 2") {
+            let name = f"big-{backend}-{level}";
+            scratch_write(h, d, "big.nz", big)?;
+            let o = run(h, nazm_bin(h.io), words(f"build --backend {backend} --opt-level {level} big.nz -o {name}"), d, env_base(h));
+            check_that(o.code == 0, f"{name}: {text(o)}")?;
+            let small = run_prog(h, d, name, strs_new(), strs_new());
+            check_that(small.code == 2, f"{name}: {small.stderr}")?;
+            check_that(text_contains(small.stderr, "error[N0408]"), f"{name}: {small.stderr}")?;
+            check_that(text_contains(small.stderr, "big.nz:1:4"), f"{name}: {small.stderr}")?;
+            let large = run_prog(h, d, name, strs_new(), vars("NAZM_TASK_STACK=1048576"));
+            check_that(large.stdout == "150\n" && large.code == 0, f"{name}: {large.stderr}")?;
+        }
+        let name = f"deep-{backend}";
+        built(h, d, name, deep, backend)?;
+        let n = list1(text_repeat("x", 20));
+        let small = run_prog(h, d, name, n, strs_new());
+        check_that(small.code == 2, f"{name}: {small.stderr}")?;
+        check_that(text_contains(small.stderr, "error[N0408]"), f"{name}: {small.stderr}")?;
+        let threads = run_prog(h, d, name, n, vars("NAZM_SCHEDULER=threads"));
+        check_that(threads.stdout == "2000\n" && threads.code == 0, f"{name}: {threads.stderr}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn sender(io: IoCap, go: Chan[Int], c: Chan[Int]) -> Int ! { io } {\nlet g = vec_new[Int](); let r = chan_recv_of(go, g); chan_send_of(c, 42); 0 }\nfn poller(io: IoCap, tm: TimeCap, go: Chan[Int], c: Chan[Int], done: Chan[Int]) -> Int ! { io } {\nlet cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\nchan_send_of(go, 1);\nlet mut spins = 0;\nwhile chan_select_until(cs, out, 0) == 0 - 2 { spins = spins + 1; }\nchan_send_of(done, vec_pop(out)); 0 }\nfn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\nlet go = chan_new_of[Int](1); let c = chan_new_of[Int](1); let done = chan_new_of[Int](1); let got = vec_new[Int]();\nscope { spawn poller(io, tm, go, c, done); spawn sender(io, go, c); let r = chan_recv_of(done, got); }\nprint(int_to_str(vec_get(got, 0))); 0 }\n";
+    built(h, d, "poll", src, "llvm")?;
+    // Five runs, every one required.
+    let mut k = 0;
+    while k < 5 {
+        let r = run_prog(h, d, "poll", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=1"));
+        check_that(r.code == 0, r.stderr)?;
+        check_that(r.stdout == "420\n", r.stdout)?;
+        k = k + 1;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The CPU time `ps` reports for a running process, in hundredths of a second: `00:00:01`
+/// (procps) or `0:01.49` (BSD) — seconds, minutes, hours from the right. A part that does not
+/// parse counts as a great deal, as the Rust test's `f64::MAX` does.
+fn cpu_centis(h: Caps, pid: Int) -> Ran ! { io, spawn } {
+    let a = words("-o time= -p");
+    strs_push(a, int_to_str(pid));
+    run(h, "ps", a, "", env_here(h.io))
+}
+
+fn centis_of(text: Str) -> Int ! {} {
+    let parts = split(text_trim(text), ":");
+    let mut total = 0;
+    let mut unit = 100;
+    let mut i = strs_len(parts) - 1;
+    let mut k = 0;
+    while i >= 0 && k < 3 {
+        let part = text_trim(strs_get(parts, i));
+        // `SS` or `SS.hh`: whole seconds, then hundredths.
+        let dot = find(part, ".");
+        let whole = if dot >= 0 { str_slice(part, 0, dot) } else { part };
+        let frac = if dot >= 0 { str_slice(part, dot + 1, str_len(part)) } else { "" };
+        let w = match text_parse_int(whole) { Result.Ok(value: n) => n, Result.Err(error: e) => 1000000000, };
+        let f2 = if str_len(frac) >= 2 { str_slice(frac, 0, 2) } else if str_len(frac) == 1 { f"{frac}0" } else { "00" };
+        let f = match text_parse_int(f2) { Result.Ok(value: n) => n, Result.Err(error: e) => 0, };
+        total = total + w * unit + (if unit == 100 { f } else { 0 });
+        unit = unit * 60;
+        i = i - 1;
+        k = k + 1;
+    }
+    total
+}
+
+/// `name` started under one pool worker, its CPU time read three seconds in, then waited for.
+fn parked(h: Caps, d: Str, name: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let env = env_set(env_set(suite_env(h), "NAZM_SCHEDULER", "pool"), "NAZM_WORKERS", "1");
+    let child = start(h, f"{d}/{name}", strs_new(), "", env)?;
+    time_sleep(h.t, time_duration_ms(3000));
+    let cpu = cpu_centis(h, live_pid(child));
+    let code = wait_for(h, child, 60000);
+    let out = rest_out(child);
+    let err = rest_err(child);
+    release(child);
+    let r = strs_new();
+    strs_push(r, int_to_str(code));
+    strs_push(r, out);
+    strs_push(r, err);
+    strs_push(r, text_trim(cpu.stdout));
+    Result[Strs, Str].Ok(value: r)
+}
+
+/// Q1-M-12: a pool task waiting on an ordinary deadline — four seconds — is parked until the
+/// pool's monotonic clock reaches it: three seconds in, the process must have used next to no CPU.
+@test
+fn a_pool_task_waiting_on_a_deadline_parks_without_spinning(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\nlet cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\nchan_send_of(res, chan_select_until(cs, out, 4000)); 0 }\nfn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\nlet c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\nscope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }\nprint(int_to_str(vec_get(got, 0))); 0 }\n";
+    built(h, d, "near", src, "llvm")?;
+    let r = parked(h, d, "near")?;
+    scratch_remove(h, d);
+    check_that(strs_get(r, 0) == "0", strs_get(r, 2))?;
+    check_that(strs_get(r, 1) == "-20\n", strs_get(r, 1))?;
+    check_that(centis_of(strs_get(r, 3)) < 100, f"a pool task waiting four seconds used {strs_get(r, 3)} of CPU in three")
+}
+
+@test
+fn a_deadline_past_the_nanosecond_range_parks_without_spinning(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\nlet cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\nchan_send_of(res, chan_select_until(cs, out, 10000000000000)); 0 }\nfn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\nlet c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\nlet idle = chan_new_of[Int](1); let ics = vec_new[Chan[Int]](); vec_push(ics, idle);\nlet none = vec_new[Int]();\nscope { spawn waiter(io, tm, c, res);\nlet w = chan_select_until(ics, none, 4000);\nchan_send_of(c, 42); let r = chan_recv_of(res, got); }\nprint(int_to_str(vec_get(got, 0))); 0 }\n";
+    built(h, d, "far", src, "llvm")?;
+    let r = parked(h, d, "far")?;
+    scratch_remove(h, d);
+    check_that(strs_get(r, 0) == "0", strs_get(r, 2))?;
+    check_that(strs_get(r, 1) == "00\n", strs_get(r, 1))?;
+    check_that(centis_of(strs_get(r, 3)) < 100, f"a parked task with a far deadline used {strs_get(r, 3)} of CPU in three seconds")
+}
+
+@test
+fn a_parked_tasks_deadline_fires_on_the_pool(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {\nlet cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();\nchan_send_of(res, chan_select_until(cs, out, 30)); 0 }\nfn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {\nlet c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();\nlet before = time_now_ms();\nscope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }\nlet waited = time_now_ms() - before;\nprint(int_to_str(vec_get(got, 0))); print(if waited >= 30 { \" waited\" } else { \" early\" }); 0 }\n";
+    built(h, d, "dead", src, "llvm")?;
+    let r = run_prog(h, d, "dead", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=1"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    check_that(r.stdout == "-2 waited0\n", r.stdout)?;
+    check_that(text_contains(r.stderr, "timeouts=1"), r.stderr)
+}

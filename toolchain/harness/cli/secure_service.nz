@@ -1,0 +1,170 @@
+// Gate 3: the cybersecurity reference workload (`docs/systems-domains.md` Part K; `docs/spec.md`,
+// *Domain profiles*). `tests/domains/cyber.nz` is a TCP service held to the `cyber` profile as a
+// locked package: served to real clients over the loopback, refused by the profile where it must
+// be, built twice to the same bytes, and its record signed and verified. Ported from
+// `crates/nazm-cli/tests/secure_service.rs` (R7): the service runs as a child left running
+// (`lib/live.nz`) and the clients are `@std/net` connections under a `NetCap`.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/live.nz"
+use "../lib/host.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn service(h: Caps) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{repo_root(h)}/crates/nazm-cli/tests/domains/cyber.nz")
+}
+
+/// `src` as the package `svc` in `dir`, locked.
+fn package_in(h: Caps, dir: Str, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, dir, "svc/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"svc\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\n")?;
+    scratch_write(h, dir, "svc/src/main.nz", src)?;
+    let r = nazm(h, dir, words("lock svc"));
+    check_that(r.code == 0, r.stderr)
+}
+
+/// The service built under `cyber` in `dir`, with its provenance record and SBOM.
+fn build_in(h: Caps, dir: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, dir, words("build --no-cache --locked --profile cyber svc -o svc.bin --provenance svc.prov.json --sbom svc.cdx.json"));
+    check_that(r.code == 0, r.stderr)
+}
+
+@test
+fn the_secure_service_answers_its_clients_and_shows_none_of_what_they_sent(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap, net: NetCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    package_in(h, d, service(h)?)?;
+    let r = nazm(h, d, words("check --locked --profile cyber svc"));
+    check_that(r.code == 0, r.stderr)?;
+    build_in(h, d)?;
+    let child = start(h, f"{d}/svc.bin", strs_new(), "", suite_env(h))?;
+    let first = read_line_out(child);
+    let addr = match strip_prefix_of(text_trim(first), "listening ") {
+        Option.Some(value: a) => a,
+        Option.None() => { kill(h, child); release(child); return Result[Int, Str].Err(error: first); },
+    };
+    check_that(text_starts_with(addr, "127.0.0.1:"), addr)?;
+    let a1 = ask(net, addr, "NAZMS")?;
+    // Anything but five capital letters is denied, and never echoed.
+    let a2 = ask(net, addr, "hello")?;
+    let a3 = ask(net, addr, f"A{str_from_byte(0)}B;C")?;
+    let rest = rest_out(child);
+    let status = wait_for(h, child, 30000);
+    release(child);
+    scratch_remove(h, d);
+    check_that(a1 == "SMZAN", a1)?;
+    check_that(a2 == "DENY!", a2)?;
+    check_that(a3 == "DENY!", a3)?;
+    check_that(status == 0, f"status {status}")?;
+    check_that(rest == "served 3\n0\n", rest)
+}
+
+fn strip_prefix_of(s: Str, p: Str) -> Option[Str] ! {} {
+    if text_starts_with(s, p) { Option[Str].Some(value: str_slice(s, str_len(p), str_len(s))) } else { Option[Str].None() }
+}
+
+/// Each variant locked as it is, then checked: what it refuses is the variant's alone.
+fn refused(h: Caps, src: Str, rule: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    package_in(h, d, src)?;
+    let r = nazm(h, d, words("check --profile cyber svc"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"{rule}: {ran_show(r)}")?;
+    check_that(text_contains(r.stderr, "N0510"), f"{rule}: {r.stderr}")?;
+    check_that(text_contains(r.stderr, f"`{rule}`"), f"{rule}: {r.stderr}")
+}
+
+@test
+fn cyber_refuses_what_the_service_is_written_without(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = service(h)?;
+    // A source changed after it was locked: the lockfile no longer verifies.
+    let d = scratch_new(h);
+    package_in(h, d, src)?;
+    scratch_write(h, d, "svc/src/main.nz", text_replace(src, "\"DENY!\"", "\"NOPE!\""))?;
+    let r = nazm(h, d, words("check --profile cyber svc"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "`locked-build`"), r.stderr)?;
+    // A request saved to a file, where `serve` holds no authority to write one (N0369).
+    let call = "                        tcp_write(c, answer(req));";
+    let saved = text_replace(src, call, f"{call}\n                        write_file(\"requests\", bytes_to_str(req));");
+    let e = scratch_new(h);
+    package_in(h, e, saved)?;
+    let s = nazm(h, e, words("check svc"));
+    scratch_remove(h, e);
+    check_that(s.code == 1, ran_show(s))?;
+    check_that(text_contains(s.stderr, "N0369") && text_contains(s.stderr, "`serve` holds no `IoCap`"), s.stderr)?;
+    // A request shown on standard output: `cyber` refuses it.
+    let shown = text_replace(src, call, f"{call}\n                        print(bytes_to_str(req));");
+    refused(h, shown, "contents-stay-in-files")?;
+    // Handed the authority explicitly, it is the same.
+    refused(h, text_replace(text_replace(shown, "fn serve(l: TcpListener, n: Int) -> Int ! { io } {", "fn serve(l: TcpListener, n: Int, out: OutCap) -> Int ! { io } {"), "serve(l, clients);", "serve(l, clients, out);"), "contents-stay-in-files")?;
+    // A function that does not say what it may do.
+    refused(h, text_replace(src, "fn valid(b: Bytes) -> Bool ! {} {", "fn valid(b: Bytes) -> Bool {"), "declared-effects")?;
+    // A call into C, which `main` makes.
+    let with_c = text_replace(src, "fn main(net: NetCap, out: OutCap) -> Int ! { io } {", "fn main(net: NetCap, out: OutCap, f: ForeignCap) -> Int ! { io, foreign } {\n    checked(f);");
+    refused(h, f"extern \"C\" fn c_check(a: Int) -> Int = \"c_check\";\nfn checked(f: ForeignCap) -> Int ! {{ foreign }} {{ c_check(1) }}\n{with_c}", "no-foreign")?;
+    // A call through a function value, whose callee nothing here knows.
+    refused(h, text_replace(src, call, "                        let reply = answer;\n                        tcp_write(c, reply(req));"), "no-unknown-calls")
+}
+
+@test
+fn the_services_build_is_reproduced_in_another_directory(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let a = scratch_new(h);
+    let b = scratch_new(h);
+    let src = service(h)?;
+    package_in(h, a, src)?;
+    build_in(h, a)?;
+    package_in(h, b, src)?;
+    build_in(h, b)?;
+    for f in words("svc.bin svc.prov.json svc.cdx.json") {
+        check_that(read_raw(h, f"{a}/{f}")? == read_raw(h, f"{b}/{f}")?, f)?;
+    }
+    let prov = read_text(h, f"{a}/svc.prov.json")?;
+    scratch_remove(h, a);
+    scratch_remove(h, b);
+    check_that(text_contains(prov, "cyber"), prov)
+}
+
+// The contained Linux image has no ssh-keygen: there it is ignored, not a pass (Q1-D-02).
+@test
+fn the_services_record_is_signed_and_verifies_for_it_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `cfg_attr`-ignored off macOS: it signs with the host's ssh-keygen.
+    if uname(h, "-s") != "Darwin" {
+        return ok();
+    }
+    let probe = run(h, "ssh-keygen", words("-?"), "", env_here(h.io));
+    if skip_without(h, probe.code >= 0, "no ssh-keygen on this machine")? {
+        return ok();
+    }
+    let d = scratch_new(h);
+    package_in(h, d, service(h)?)?;
+    build_in(h, d)?;
+    let ka = words("-q -t ed25519 -N");
+    strs_push(ka, "");
+    for x in words("-C builder -f key") {
+        strs_push(ka, x);
+    }
+    let k = run(h, "ssh-keygen", ka, d, env_here(h.io));
+    check_that(k.code == 0, ran_show(k))?;
+    let public = read_text(h, f"{d}/key.pub")?;
+    scratch_write(h, d, "allowed", f"builder@example {public}")?;
+    let s = nazm(h, d, words("attest sign --key key svc.prov.json svc.bin"));
+    check_that(s.code == 0, s.stderr)?;
+    let verify = "attest verify --allowed-signers allowed --identity builder@example svc.prov.json.intoto.json svc.bin";
+    let good = nazm(h, d, words(verify));
+    check_that(good.code == 0, good.stderr)?;
+    // The service changed after it was signed for.
+    let exe = read_raw(h, f"{d}/svc.bin")?;
+    write_at(h, f"{d}/svc.bin", f"{exe}{str_from_byte(0)}")?;
+    let after = nazm(h, d, words(verify));
+    scratch_remove(h, d);
+    check_that(after.code != 0, ran_show(after))?;
+    check_that(text_contains(after.stderr, "is not a subject of the statement"), after.stderr)
+}

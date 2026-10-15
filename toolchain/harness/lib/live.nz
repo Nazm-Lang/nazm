@@ -1,0 +1,225 @@
+// A child the harness starts and does not wait for (R7, the coordinator's decision on the TCP
+// files): a server left running while a client talks to it, a node stopped and restarted. What
+// `std::process::Command::spawn` and a `Child` give a Rust test — its standard output and error
+// piped, read when the test chooses; a wait with a deadline; a kill — with the child in a process
+// group of its own, ended whole.
+//
+// The pipes are read only when the test reads them, as the Rust tests read them: a child that
+// writes more than a pipe holds before it is read would block, and the programs these tests start
+// write a line or two.
+
+use "@std/process"
+use "@std/file"
+use "@std/ioerror"
+use "@std/time"
+use "@std/net"
+use "run.nz"
+
+/// A running child, the read ends of its standard output and error, and the write end of its
+/// standard input (unused where it was started with none).
+pub struct Live {
+    child: Child,
+    out: OsHandle,
+    err: OsHandle,
+    inp: OsHandle,
+}
+
+/// Start `program` with `args` in `dir`, its environment exactly `env`, its standard input empty,
+/// in a process group of its own; return at once.
+pub fn start(h: Caps, program: Str, args: Strs, dir: Str, env: Strs) -> Result[Live, Str] ! { io, spawn } {
+    start_full(h, program, args, dir, env, false)
+}
+
+/// `start`, the child's standard input a pipe the test writes to (`write_in`) and closes
+/// (`close_in`).
+pub fn start_fed(h: Caps, program: Str, args: Strs, dir: Str, env: Strs) -> Result[Live, Str] ! { io, spawn } {
+    start_full(h, program, args, dir, env, true)
+}
+
+fn start_full(h: Caps, program: Str, args: Strs, dir: Str, env: Strs, fed: Bool) -> Result[Live, Str] ! { io, spawn } {
+    let p = h.p;
+    let v = h.v;
+    let c = match process_spawn_with(p, str_vouch(program), args, str_vouch(dir), env, true, !fed) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return Result[Live, Str].Err(error: f"{program}: {io_error_show(e)}"); },
+    };
+    Result[Live, Str].Ok(value: Live(child: c, out: os_child_pipe(c.handle, 1), err: os_child_pipe(c.handle, 2), inp: os_child_pipe(c.handle, 0)))
+}
+
+/// Write `text` to the child's standard input: `Err` when the pipe is closed.
+pub fn write_in(l: Live, text: Str) -> Result[Int, Str] ! { io } {
+    match file_write(File(handle: l.inp), bytes_from_str(text)) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: f"write: {io_error_show(e)}"),
+    }
+}
+
+/// Close the child's standard input: the end of what it is sent.
+pub fn close_in(l: Live) -> Int ! { io } {
+    os_close(l.inp);
+    0
+}
+
+/// Exactly `n` bytes of the child's standard output, read as they come (`read_exact`): fewer when
+/// the stream ends first.
+pub fn read_out(l: Live, n: Int) -> Str ! { io } {
+    let f = File(handle: l.out);
+    let parts = strs_new();
+    let mut got = 0;
+    let mut open = true;
+    while got < n && open {
+        let buf = bytes_new(n - got);
+        let k = match file_read(f, buf) {
+            Result.Ok(value: k) => k,
+            Result.Err(error: e) => 0,
+        };
+        if k <= 0 {
+            open = false;
+        } else {
+            strs_push(parts, bytes_to_str(bytes_slice(buf, 0, k)));
+            got = got + k;
+        }
+    }
+    str_join(parts, "")
+}
+
+/// One line of the child's standard output, its line break included (`BufRead::read_line`): read
+/// a byte at a time, so nothing past the line is taken from the pipe.
+pub fn read_line_out(l: Live) -> Str ! { io } {
+    let f = File(handle: l.out);
+    let parts = strs_new();
+    let mut going = true;
+    while going {
+        let buf = bytes_new(1);
+        let k = match file_read(f, buf) {
+            Result.Ok(value: k) => k,
+            Result.Err(error: e) => 0,
+        };
+        if k <= 0 {
+            going = false;
+        } else {
+            let c = bytes_to_str(buf);
+            strs_push(parts, c);
+            if c == "\n" {
+                going = false;
+            }
+        }
+    }
+    str_join(parts, "")
+}
+
+/// One client's request and the answer it gets: connected to `addr`, `request` written, the
+/// answer read to its end under a 10 s read deadline (`std::net::TcpStream` in the Rust tests).
+pub fn ask(net: NetCap, addr: Str, request: Str) -> Result[Str, Str] ! { io } {
+    let c = match tcp_connect(net, addr, 10000) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return Result[Str, Str].Err(error: f"connect {addr}: {io_error_show(e)}"); },
+    };
+    tcp_set_timeout(c, 10000);
+    match tcp_write_str(c, request) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => { tcp_close(c); return Result[Str, Str].Err(error: f"write: {io_error_show(e)}"); },
+    };
+    let parts = strs_new();
+    let mut going = true;
+    while going {
+        let buf = bytes_new(4096);
+        let k = match tcp_read(c, buf) {
+            Result.Ok(value: k) => k,
+            Result.Err(error: e) => {
+                // The peer's end of the stream is `Closed` here, which `read_to_end` reads as the end.
+                if io_kind_name(e.kind) != "Closed" {
+                    tcp_close(c);
+                    return Result[Str, Str].Err(error: f"read: {io_error_show(e)}");
+                }
+                0
+            },
+        };
+        if k <= 0 {
+            going = false;
+        } else {
+            strs_push(parts, bytes_to_str(bytes_slice(buf, 0, k)));
+        }
+    }
+    tcp_close(c);
+    Result[Str, Str].Ok(value: str_join(parts, ""))
+}
+
+fn rest_of(h: OsHandle) -> Str ! { io } {
+    match file_read_rest(File(handle: h)) {
+        Result.Ok(value: b) => bytes_to_str(b),
+        Result.Err(error: e) => "",
+    }
+}
+
+/// The rest of the child's standard output, to its end.
+pub fn rest_out(l: Live) -> Str ! { io } {
+    rest_of(l.out)
+}
+
+/// The rest of the child's standard error, to its end.
+pub fn rest_err(l: Live) -> Str ! { io } {
+    rest_of(l.err)
+}
+
+/// The child waited for at most `ms` milliseconds: its status, or `TIMED_OUT` when it was still
+/// running and has been ended, with its group (`wait` in the Rust tests: killed past the limit).
+pub fn wait_for(h: Caps, l: Live, ms: Int) -> Int ! { io } {
+    let t = h.t;
+    let p = h.p;
+    let deadline = time_deadline(t, ms);
+    match process_wait_until(l.child, deadline) {
+        Result.Ok(value: o) => match o {
+            Option.Some(value: s) => s,
+            Option.None() => {
+                kill(h, l);
+                TIMED_OUT
+            },
+        },
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+/// End the child and its group now, and reap it.
+pub fn kill(h: Caps, l: Live) -> Int ! { io } {
+    let p = h.p;
+    process_kill_group(p, process_child_id(l.child), 9);
+    match process_wait(l.child) {
+        Result.Ok(value: s) => s,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+/// The child's process id (`Child::id`).
+pub fn live_pid(l: Live) -> Int ! { io } {
+    process_child_id(l.child)
+}
+
+/// Close the pipes and the child's handle.
+pub fn release(l: Live) -> Int ! { io } {
+    os_close(l.out);
+    os_close(l.err);
+    os_close(l.child.handle);
+    0
+}
+
+/// A local port nothing listens on now: bound to port 0, its number read, the listener closed.
+pub fn free_port(net: NetCap) -> Result[Int, Str] ! { io } {
+    let l = match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => l,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: io_error_show(e)); },
+    };
+    let addr = tcp_listener_addr(l);
+    tcp_listener_close(l);
+    let mut at = str_len(addr) - 1;
+    while at >= 0 && str_byte(addr, at) != 58 {
+        at = at - 1;
+    }
+    let mut n = 0;
+    let mut i = at + 1;
+    while i < str_len(addr) {
+        n = n * 10 + str_byte(addr, i) - 48;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: n)
+}
