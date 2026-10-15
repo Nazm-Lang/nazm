@@ -66,7 +66,8 @@ fn strs_of(h: Heap, v: V) -> Strs {
 // The Rust interpreter runs each task on a thread of its own, so a socket operation that waits
 // holds only its task. Here every task shares this one thread (D9): an operation that could wait
 // is tried with a deadline of a millisecond, and when that runs out the task waits and tries again
-// when it resumes, until the deadline the program gave the socket, if it gave one, has passed.
+// when it resumes, until the deadline the program gave the socket, if it gave one, has passed. A
+// child's pipe is read the same way.
 
 /// A new socket handle, with its place in the table of deadlines.
 fn socket(h: Heap, x: OsHandle) -> V {
@@ -83,7 +84,7 @@ fn sock_of(v: V) -> Int {
 }
 
 /// Before a socket operation that could wait: a deadline of a millisecond.
-fn brief(x: OsHandle, k: Int) {
+fn brief(h: Heap, x: OsHandle, k: Int, time: TimeCap) {
     if k > 0 { let z = os_set_timeout(x, 1) }
 }
 
@@ -106,14 +107,31 @@ fn waits(vm: Vm, k: Int, r: Int, time: TimeCap) -> Bool {
         }
         let end = ints_get(vm.st, ST_IOWAIT)
         if end < 0 || now < end {
-            ints_set(vm.st, ST_DEADLINE, now + 2)
+            // Not before the next poll: a waiting task tries again after 25 ms, then twice as long
+            // each time up to `POLL_MAX_MS`, leaving the run to the tasks that can proceed.
+            let gap = ints_get(vm.st, ST_IOGAP)
+            let next = if gap <= 0 { POLL_MS } else if gap * 2 > POLL_MAX_MS { POLL_MAX_MS } else { gap * 2 }
+            ints_set(vm.st, ST_IOGAP, next)
+            ints_set(vm.st, ST_DEADLINE, now + next)
             ints_set(vm.st, ST_BLOCKED, 1)
             return true
         }
     }
     ints_set(vm.st, ST_IOWAIT, 0)
+    ints_set(vm.st, ST_IOGAP, 0)
     ints_set(vm.st, ST_DEADLINE, 0)
     false
+}
+
+const POLL_MS: Int = 25
+const POLL_MAX_MS: Int = 400
+
+/// Whether a task waiting on socket `k` waits on without trying: its next poll has not come.
+fn polling(vm: Vm, k: Int, time: TimeCap) -> Bool {
+    if k == 0 || ints_get(vm.st, ST_IOWAIT) == 0 { return false }
+    if time_now_ms() >= ints_get(vm.st, ST_DEADLINE) { return false }
+    ints_set(vm.st, ST_BLOCKED, 1)
+    true
 }
 
 /// An OS built-in on the top `n` operands.
@@ -128,8 +146,9 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_STATUS { return V.Int(v: os_status(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_READ {
         let f = argo(vm, n, 0)
+        if polling(vm, sock_of(f), time) { return V.Unset }
         let x = h_of(io, f)
-        brief(x, sock_of(f))
+        brief(h, x, sock_of(f), time)
         let r = os_read(x, b_of(argo(vm, n, 1)))
         relax(h, x, sock_of(f))
         if sock_of(f) > 0 && waits(vm, sock_of(f), r, time) { return V.Unset }
@@ -181,7 +200,9 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_SPAWN_WITH {
         return V.Osh(h: os_spawn_with(s_of(argo(vm, n, 0)), strs_of(h, argo(vm, n, 1)), s_of(argo(vm, n, 2)), strs_of(h, argo(vm, n, 3)), i_of(argo(vm, n, 4))), sock: 0)
     }
-    if op == B_OS_CHILD_PIPE { return V.Osh(h: os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1))), sock: 0) }
+    // A child's pipe waits as a socket does (a read of one, `process_run`'s, while the child is
+    // held writing to another), so it is polled as one.
+    if op == B_OS_CHILD_PIPE { return socket(h, os_child_pipe(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
     if op == B_OS_WAIT || op == B_OS_TRY_WAIT || op == B_OS_WAIT_UNTIL {
         let child = h_of(io, argo(vm, n, 0))
         let r = if op == B_OS_WAIT {
@@ -189,7 +210,7 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         } else if op == B_OS_TRY_WAIT {
             os_try_wait(child)
         } else {
-            os_wait_until(child, i_of(argo(vm, n, 1)))
+            os_wait_until(child, host_ms(h, i_of(argo(vm, n, 1)), time))
         }
         if r >= 0 { ints_push(h.reaped, os_child_pid(child)) }
         return V.Int(v: r)
@@ -215,8 +236,9 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_TCP_LISTEN { return socket(h, os_tcp_listen(s_of(argo(vm, n, 0)))) }
     if op == B_OS_TCP_ACCEPT {
         let l = argo(vm, n, 0)
+        if polling(vm, sock_of(l), time) { return V.Unset }
         let x = h_of(io, l)
-        brief(x, sock_of(l))
+        brief(h, x, sock_of(l), time)
         let c = os_tcp_accept(x)
         relax(h, x, sock_of(l))
         if sock_of(l) > 0 && waits(vm, sock_of(l), os_status(c), time) { return V.Unset }
@@ -227,8 +249,9 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_UDP_SEND_TO { return V.Int(v: os_udp_send_to(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), s_of(argo(vm, n, 2)))) }
     if op == B_OS_UDP_RECV_FROM {
         let u = argo(vm, n, 0)
+        if polling(vm, sock_of(u), time) { return V.Unset }
         let x = h_of(io, u)
-        brief(x, sock_of(u))
+        brief(h, x, sock_of(u), time)
         let r = os_udp_recv_from(x, b_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))
         relax(h, x, sock_of(u))
         if sock_of(u) > 0 && waits(vm, sock_of(u), r, time) { return V.Unset }

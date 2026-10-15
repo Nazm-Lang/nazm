@@ -23,6 +23,11 @@ fn repeat(s: Str, n: Int) -> Str {
 /// The text of `error[CODE]: MESSAGE` and what follows it, for a span `lo..hi` of `text`, the file
 /// a reader knows as `file`.
 pub fn render(code: Str, message: Str, help: Str, file: Str, text: Str, lo: Int, hi: Int) -> Str {
+    render_labelled(code, message, message, help, file, text, lo, hi)
+}
+
+/// `render`, with a label under the carets other than the message.
+pub fn render_labelled(code: Str, message: Str, lab: Str, help: Str, file: Str, text: Str, lo: Int, hi: Int) -> Str {
     let n = str_len(text)
     let start = if lo > n { n } else { lo }
     // The line the span starts on, from 1, and where it begins.
@@ -49,7 +54,7 @@ pub fn render(code: Str, message: Str, help: Str, file: Str, text: Str, lo: Int,
     out = out + f"  --> {file}:{line}:{column}\n"
     out = out + f"{pad} |\n"
     out = out + f"{gutter} | {source}\n"
-    out = out + f"{pad} | " + repeat(" ", caret_col) + repeat("^", carets) + f" {message}\n"
+    out = out + f"{pad} | " + repeat(" ", caret_col) + repeat("^", carets) + f" {lab}\n"
     if help != "" {
         out = out + f"{pad} = help: {help}\n"
     }
@@ -87,7 +92,13 @@ fn quote(s: Str) -> Str {
 
 /// One `nazm.diagnostic/1` object (`Diagnostic::to_json`), without its newline.
 pub fn render_json(code: Str, message: Str, help: Str, lo: Int, hi: Int) -> Str {
+    render_json_labelled(code, message, message, help, lo, hi)
+}
+
+/// `render_json`, with a primary label other than the message.
+pub fn render_json_labelled(code: Str, message: Str, lab: Str, help: Str, lo: Int, hi: Int) -> Str {
     let m = quote(message)
+    let lb = quote(lab)
     let h = if help == "" { "null" } else { quote(help) }
-    f"{{\"schema\":\"nazm.diagnostic/1\",\"code\":\"{code}\",\"severity\":\"error\",\"message\":{m},\"primary\":{{\"span\":{{\"start\":{lo},\"end\":{hi}}},\"message\":{m}}},\"secondary\":[],\"help\":{h},\"fixes\":[]}}"
+    f"{{\"schema\":\"nazm.diagnostic/1\",\"code\":\"{code}\",\"severity\":\"error\",\"message\":{m},\"primary\":{{\"span\":{{\"start\":{lo},\"end\":{hi}}},\"message\":{lb}}},\"secondary\":[],\"help\":{h},\"fixes\":[]}}"
 }

@@ -46,6 +46,8 @@ struct L {
     cells: HashMap[Str, Int],
     // A static `Atomic`'s name (`static NAME`) to its initial value, from `/3`'s `statics`.
     inits: HashMap[Str, Int],
+    // A foreign function's key to its name: a call to one is refused (`N0385`).
+    foreign: HashMap[Str, Str],
 }
 
 // --- JSON access --------------------------------------------------------------------------------
@@ -518,6 +520,64 @@ fn inits(l: L, fields: Int, at: (Int, Int, Int)) -> Int {
     start
 }
 
+// --- what `nazm run` refuses before the program starts ----------------------------------------
+// `nazm_core::pipeline` refuses, in this order, a call into C (`N0385`), a device register's
+// built-in (`N0392`) and a placement only a board's image has (`N0392`): each the first in the
+// program's functions. Each is a rank here; the lowest rank's first refusal is the one reported.
+
+fn refuse(l: L, rank: Int, code: Str, message: Str, lab: Str, help: Str, find: Str, at: (Int, Int, Int)) -> Bool {
+    let r = l.p.refat
+    if rank >= ints_get(r, 0) { return false }
+    let (m, lo, hi) = at
+    ints_set(r, 0, rank)
+    ints_set(r, 1, m)
+    ints_set(r, 2, lo)
+    ints_set(r, 3, hi)
+    let s = l.p.refusal
+    while strs_len(s) > 0 { let x = strs_pop(s) }
+    strs_push(s, code)
+    strs_push(s, message)
+    strs_push(s, lab)
+    strs_push(s, help)
+    strs_push(s, find)
+    true
+}
+
+/// A call into C at `at`, the callee's name written where the call starts.
+fn foreign_call(l: L, name: Str, at: (Int, Int, Int)) -> Bool {
+    let (m, lo, hi) = at
+    refuse(l, 0, "N0385", f"`nazm run` cannot call the foreign function `{name}`", "a call into C",
+            "foreign functions run only in a native build: `nazm build`, then run the executable",
+            "", (m, lo, lo + str_len(name)))
+}
+
+fn machine_only(b: Str) -> Bool {
+    b == "mmio_read32" || b == "mmio_write32" || b == "mmio_read8" || b == "mmio_write8" ||
+        b == "mmio_read16" || b == "mmio_write16" || b == "mmio_read64" || b == "mmio_write64" ||
+        b == "watchdog_feed"
+}
+
+/// A placement only a board's image has: `what`, at the name `find` from `at`'s start.
+fn board_only(l: L, rank: Int, what: Str, find: Str, at: (Int, Int, Int)) -> Bool {
+    refuse(l, rank, "N0392", f"`nazm run` cannot honour {what}: only a board's image has sections and interrupts",
+            "a board's alone",
+            "sections exist only in a board's build: `nazm build --target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`",
+            find, at)
+}
+
+/// The placements of function `f` and, after every function, of the statics.
+fn placements(l: L, f: Int) {
+    let a = g(l, f, "attributes")
+    if a < 0 { return }
+    let name = gs(l, f, "name")
+    let at = here(l, f, (0 - 1, 0, 0))
+    if !is_null(l, g(l, a, "section")) { let z = board_only(l, 2, f"`@section` on `{name}`", name, at) }
+    if !is_null(l, g(l, a, "interrupt")) { let z = board_only(l, 3, f"`@interrupt` on `{name}`", name, at) }
+    let fail = g(l, a, "on_failure")
+    if fail >= 0 && json_bool_or(l, fail) { let z = board_only(l, 4, f"`@on_failure` on `{name}`", name, at) }
+    if !is_null(l, g(l, a, "task")) { let z = board_only(l, 5, f"`@task` on `{name}`", name, at) }
+}
+
 /// One expression, leaving its value pushed.
 fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
     let op = gs(l, e, "op")
@@ -532,7 +592,12 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
         for i in 0..len(l, args) {
             expr(l, nth(l, args, i), at)
         }
-        let o = emit(l, OP_CALL, callee(l, gs(l, e, "callee")), len(l, args), 0, at)
+        let key = gs(l, e, "callee")
+        match hashmap_get(l.foreign, key) {
+            Some(fname) => { let z = foreign_call(l, fname, at) },
+            None => { },
+        }
+        let o = emit(l, OP_CALL, callee(l, key), len(l, args), 0, at)
     } else if op == "builtin" {
         let args = g(l, e, "args")
         // When every argument is a constant, a local or a local's projection, nothing between the
@@ -552,6 +617,14 @@ fn expr(l: L, e: Int, outer: (Int, Int, Int)) {
             }
         }
         let bname = gs(l, e, "builtin")
+        if bname == "c_errno" { let z = foreign_call(l, bname, at) }
+        if machine_only(bname) {
+            let (m, lo, hi) = at
+            let z = refuse(l, 1, "N0392", f"`nazm run` cannot perform the built-in `{bname}`: it has no device registers",
+                    "a device register",
+                    "device registers exist only in a board's build: `nazm build --target aarch64-unknown-none` or `--target riscv64gc-unknown-none-elf`",
+                    "", (m, lo, lo + str_len(bname)))
+        }
         let id = match hashmap_get(l.bmap, bname) {
             Some(i) => i,
             None => {
@@ -834,7 +907,8 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             fname: strs_new(), fkey: strs_new(), fentry: ints_new(), flocals: ints_new(),
             fparams: ints_new(), fclosure: ints_new(), fcapt: ints_new(),
             consts: vec_new[V](), names: strs_new(), mods: strs_new(), morder: strs_new(), entry: 0 - 1,
-            fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int](), impls: hashmap_new[Str, Int]())
+            fmap: hashmap_new[Str, Int](), shapes: shapes_new(), tcache: hashmap_new[Int, Int](), impls: hashmap_new[Str, Int](),
+            refusal: strs_new(), refat: [99, 0 - 1, 0, 0])
     let bmap = hashmap_new[Str, Int]()
     let bnames = builtin_names()
     for i in 0..strs_len(bnames) {
@@ -858,7 +932,8 @@ pub fn load(text: Str) -> Result[Prog, Str] {
             bmap: bmap, mmap: hashmap_new[Str, Int](), cmap: ints_new(), sp: [0],
             regs: ints_new(), rlocals: ints_new(), lreg: ints_new(), lsp: ints_new(),
             lhead: ints_new(), nscope: [0], lscope: ints_new(), brk: ints_new(), brkloop: ints_new(), errs: strs_new(),
-            cells: hashmap_new[Str, Int](), inits: hashmap_new[Str, Int]())
+            cells: hashmap_new[Str, Int](), inits: hashmap_new[Str, Int](),
+            foreign: hashmap_new[Str, Str]())
     let root = json_root(doc)
     // `/3` keeps every `/2` field where it was and adds tables this interpreter does not yet read.
     let schema = gs(l, root, "schema")
@@ -868,6 +943,9 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     let statics = g(l, root, "statics")
     for i in 0..len(l, statics) {
         let st = nth(l, statics, i)
+        if !is_null(l, g(l, st, "section")) {
+            let z = board_only(l, 6, f"`@section` on `{gs(l, st, "name")}`", "", here(l, st, (0 - 1, 0, 0)))
+        }
         if gs(l, st, "type") == "Atomic" {
             hashmap_set(l.inits, "static " + gs(l, st, "name"), gi(l, st, "value"))
         }
@@ -878,6 +956,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
         let f = nth(l, fs, i)
         let key = gs(l, f, "def")
         hashmap_set(l.fmap, key, i)
+        if !is_null(l, g(l, f, "foreign")) { hashmap_set(l.foreign, key, gs(l, f, "name")) }
         strs_push(p.fkey, key)
         strs_push(p.fname, gs(l, f, "name"))
         let module = gs(l, f, "module")
@@ -929,6 +1008,7 @@ pub fn load(text: Str) -> Result[Prog, Str] {
         }
     }
     for i in 0..len(l, fs) {
+        placements(l, nth(l, fs, i))
         function(l, nth(l, fs, i), i)
     }
     if strs_len(l.errs) > 0 {
@@ -939,7 +1019,8 @@ pub fn load(text: Str) -> Result[Prog, Str] {
     Ok(Prog(op: p.op, a: p.a, b: p.b, c: p.c, d: p.d, smod: p.smod, slo: p.slo, shi: p.shi, aux: p.aux,
             fname: p.fname, fkey: p.fkey, fentry: p.fentry, flocals: p.flocals, fparams: p.fparams,
             fclosure: p.fclosure, fcapt: p.fcapt, consts: p.consts, names: p.names, mods: p.mods,
-            morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache, impls: p.impls))
+            morder: p.morder, entry: e, fmap: p.fmap, shapes: p.shapes, tcache: p.tcache, impls: p.impls,
+            refusal: p.refusal, refat: p.refat))
 }
 
 /// A JSON array of integers.

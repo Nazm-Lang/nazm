@@ -191,11 +191,32 @@ the Rust `os` module is kept.
 **Sockets on one thread.** The Rust interpreter gives each task a thread, so a socket operation
 that waits holds only its own task; here every task shares one thread (D9). So `os_tcp_accept`,
 `os_read` and `os_udp_recv_from` on a socket are tried with a deadline of one millisecond; when it
-runs out, the task waits (polled every 2 ms by the scheduler) and tries again when it resumes,
-until the deadline the program gave the socket with `os_set_timeout`, if any, has passed — then
+runs out, the task waits. A try that finds nothing holds the whole interpreter for as long as
+0.10.0's runtime takes to time out a 1 ms deadline — about 100 ms on macOS (`nz.timed_nap`, a
+finding for the coordinator) — so a waiting task tries again only after a whole round of the
+scheduler in which no other task progressed (the task that would answer it may be one of them),
+and no sooner than 25 ms after its last try, doubling up to 400 ms — until the deadline the program gave the socket with `os_set_timeout`, if any, has passed — then
 the last try's own answer (`ETIMEDOUT`) is the program's. Each socket value carries its place in
-the heap's table of the deadlines the program set. Writes and `connect` are not polled: they do
-not wait on another task of the same program in any input.
+the heap's table of the deadlines the program set. A child's pipe (`os_child_pipe`) is read the
+same way: `process_run` reads the child's output while another task collects its errors, and a
+child held writing a full pipe would otherwise hold the whole run. Writes and `connect` are not
+polled: they do not wait on another task of the same program in any input.
+
+**The clocks.** `time_now_ms` and `time_now_ns` count from the program's first reading of each, as
+the Rust interpreter's do (`intrinsic.rs`, `monotonic_ms`), and `os_wait_until`'s deadline is on
+that clock. A program that returns `time_now_ms()` from `main` ends with status 0 on both.
+
+### D11. What `nazm run` refuses before the program starts
+
+`nazm_core::pipeline` refuses, after checking and before running, a call into C (`N0385`: a call
+of a function the Core IR marks `foreign`, or of `c_errno`), a device register's built-in (`N0392`:
+`mmio_*`, `watchdog_feed`) and a placement only a board's image has (`N0392`: a function's
+`@section`, `@interrupt`, `@on_failure` or `@task`, a static's `@section`), in that order, each the
+first in the program's functions. The loader records the first refusal of each rank; `main`
+reports the lowest one as the Rust toolchain does — the reports with nothing counted, the
+diagnostic with its own label, `nazm: 1 error` — with the check's status, 1. The span of a call is
+its callee's name, from where the call starts; a function's is its name, found in the source from
+the function's start; a static's is the one the table prints.
 
 ## Requests
 

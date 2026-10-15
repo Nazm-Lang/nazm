@@ -1,0 +1,8 @@
+// The clocks count from the program's first reading (design.md, D10), so `main` can end with one
+// as its status, as it does on the Rust interpreter.
+fn main(time: TimeCap) -> Int ! { io } {
+    let t = time_now_ns()
+    let u = time_now_ns()
+    println(f"{u >= t}")
+    time_now_ms() / 1000
+}
