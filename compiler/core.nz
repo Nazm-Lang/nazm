@@ -1208,6 +1208,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     }
     if k == "Call" { return co_call(lo, e); }
     if k == "Propagate" { return co_propagate(lo, e); }
+    if k == "Interp" { return co_interp(lo, e); }
     if k == "Match" { return co_match(lo, e, true); }
     if k == "If" {
         if sx_is_some(t, sx_field(t, e, "else_block")) == false { return co_stopped(lo, "an `if` with no `else` where a value is wanted"); }
@@ -1398,6 +1399,113 @@ fn co_match(lo: Lo, e: Int, value: Bool) -> Str {
     strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
     co_set_last(lo, 0 - 1, transfers);
     co_object(o)
+}
+
+// An interpolation (`interpolation`): each piece's text joined left to right by `str_concat` —
+// an integer's digits by `str_concat_num` straight after the text before them — at the whole.
+fn co_interp(lo: Lo, e: Int) -> Str {
+    let t = lo.t;
+    let at = sx_field(t, e, "span");
+    let parts = sx_items(t, sx_field(t, e, "parts"));
+    let mut acc = "";
+    let mut i = 0;
+    while i < ints_len(parts) && co_halted(lo) == false {
+        let p = ints_get(parts, i);
+        // What the piece is: its text, and — for an integer's digits unpadded — its type and value.
+        let piece = strs_new();
+        if sx_kind(t, p) == tk_tuple() && sx_text(t, p) == "Text" {
+            strs_push(piece, co_str_const(lo, sx_text(t, sx_kid(t, p, 0)), at));
+        } else {
+            co_hole(lo, p, piece);
+        }
+        if co_halted(lo) { return ""; }
+        if acc == "" {
+            acc = strs_get(piece, 0);
+        } else {
+            let args = strs_new();
+            strs_push(args, acc);
+            if strs_len(piece) == 3 {
+                strs_push(args, strs_get(piece, 2));
+                acc = co_builtin(lo, "str_concat_num", co_list_one(json_str(strs_get(piece, 1))), str_join(args, ","), ck_t_str(), at);
+            } else {
+                strs_push(args, strs_get(piece, 0));
+                acc = co_builtin(lo, "str_concat", "[]", str_join(args, ","), ck_t_str(), at);
+            }
+        }
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    if acc == "" { return co_str_const(lo, "", at); }
+    co_set_last(lo, ck_t_str(), false);
+    acc
+}
+
+// A `Str` constant at `span`.
+fn co_str_const(lo: Lo, v: Str, span: Int) -> Str {
+    if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
+    let id = co_constant(lo, "Str", json_str(v));
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span)
+}
+
+// One hole's text (`hole_text`) into `piece`: the text, then — where it is an integer's digits
+// of at most 64 bits, unpadded — the integer's type and the value.
+fn co_hole(lo: Lo, p: Int, piece: Strs) -> Int {
+    let t = lo.t;
+    let c = lo.c;
+    let at = sx_field(t, p, "span");
+    if ck_site_at(c, co_abs_s(lo, at), co_abs_e(lo, at)) >= 0 {
+        co_halt(lo, "a hole's `show()`");
+        return 0;
+    }
+    let v = co_expr(lo, sx_field(t, p, "expr"));
+    let ty = co_last_ty(lo);
+    if co_halted(lo) { return 0; }
+    let class = ck_type_class(c, ty);
+    let spec = sx_field(t, p, "spec");
+    let mut text = "";
+    let mut numeric = false;
+    if class == "str" { text = v; }
+    if class == "bool" {
+        let yes = co_str_const(lo, "true", at);
+        let no = co_str_const(lo, "false", at);
+        text = co_conditional(lo, v, yes, no, ck_t_str(), at);
+    }
+    if class == "float" && sx_is_some(t, sx_field(t, spec, "precision")) {
+        co_halt(lo, "a float's hole with a precision");
+        return 0;
+    }
+    let name = co_durable(lo, ty);
+    if class == "int" || class == "integer" || class == "float" {
+        text = co_builtin(lo, "num_to_str", co_list_one(json_str(name)), v, ck_t_str(), at);
+        numeric = true;
+    }
+    if text == "" {
+        co_halt(lo, "a hole the checker gave no text");
+        return 0;
+    }
+    let width = sx_field(t, spec, "width");
+    if sx_is_some(t, width) == false {
+        strs_push(piece, text);
+        if class == "int" || (class == "integer" && name != "Int128" && name != "UInt128") {
+            strs_push(piece, name);
+            strs_push(piece, v);
+        }
+        return 0;
+    }
+    let mut start = numeric;
+    let align = sx_field(t, spec, "align");
+    if sx_is_some(t, align) { start = sx_text(t, sx_unwrap(t, align)) == "Right"; }
+    let wid = co_constant(lo, "Int", sx_text(t, sx_unwrap(t, width)));
+    let wexpr = co_node(lo, "const", co_field_first("const", int_to_str(wid)), ck_t_int(), at);
+    let fill = co_str_const(lo, " ", at);
+    let args = strs_new();
+    strs_push(args, text);
+    strs_push(args, wexpr);
+    strs_push(args, fill);
+    let mut op = "str_pad_end";
+    if start { op = "str_pad_start"; }
+    strs_push(piece, co_builtin(lo, op, "[]", str_join(args, ","), ck_t_str(), at));
+    0
 }
 
 // `operand?` (`propagate`): a `match` of origin `propagate` on the operand's `Result` or `Option`

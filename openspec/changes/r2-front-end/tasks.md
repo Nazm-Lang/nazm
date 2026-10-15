@@ -359,6 +359,12 @@
         parts 10,374, all agree; 1,022 whole documents, all the reference's bytes. check 3,046
         agree, 2 differ (carried 3,042, all agree), render likewise, facts 3,042 agree, 6 differ
         (carried 3,042, all agree)
+  - [x] Interpolation (`interpolation`, `hole_text`): each piece joined left to right by
+        `str_concat`, an integer's unpadded digits by `str_concat_num`; a hole's text by its type
+        (`Str` itself, `Bool` by an `if`, a number by `num_to_str`), padded by `str_pad_start` or
+        `str_pad_end`. Not yet: a hole read through `show()`, a float's with a precision. `run.sh
+        core`: 3,048 agree, 0 differ; of 56,811 functions the lowering carries 50,980, all agree;
+        the other parts 10,374, all agree; 1,126 whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
