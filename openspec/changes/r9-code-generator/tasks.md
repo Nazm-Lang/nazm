@@ -100,3 +100,10 @@
       template verbosity (the remainder's divisor guard: ~12 more instructions than LLVM -O0),
       not Rosetta. `tests/run.sh` 110 agree on each target; `lines.sh` 41 agree, 1 skipped
       (`ffi.nz`, whose C it does not link); `unwind.sh` agrees; `encode.sh` 113 + 89
+- [x] 7.4 The integration proposed (design D15): `nazm build --backend nazm` as a third
+      `Backend` that runs the shipped `nzcg` per unit on the printed LIR, keeping the bit and
+      passing `--one-thread`; refusals as `N0101`, no fallback. The Rust change is the
+      coordinator's; not made here
+- [ ] 7.5 Unwind tables and LSDAs, so the generator unwinds on a failure as hosted LLVM does
+      (D14; before 1.0)
+- [ ] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions
