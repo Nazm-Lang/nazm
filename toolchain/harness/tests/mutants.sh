@@ -12,8 +12,11 @@
 # killer that no longer catches its mutation: a finding for the catalogue, said on its line). The
 # harness is copied before the first mutation, so editing it while this runs changes nothing here.
 #
-# Environment: HARNESS_NAZM (builds and runs the harness; default the 0.10.0 release) and
-# CARGO_TARGET_DIR (the scratch tree's own; default ~/.cache/nazm-target-R7-mut).
+# Environment: HARNESS_NAZM (builds and runs the harness; default the 0.10.0 release),
+# CARGO_TARGET_DIR (the scratch tree's own; default ~/.cache/nazm-target-R7-mut), and
+# MUTANTS_PER_FILE (at most this many mutations per file, the catalogue's first; default all) —
+# each mutation rebuilds `nazm` and a test binary, minutes apiece, so a sweep over many files
+# samples.
 set -u
 
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -48,7 +51,8 @@ differ=0
 "$mutate" list "$catalogue" >"$log/list" || exit 1
 for file in "${files[@]}"; do
     # name <TAB> file <TAB> killers, for the mutations a test of FILE kills.
-    grep -E "	nazm-cli:test=cli_[a-z_]+:$file::" "$log/list" >"$log/$file.mutants"
+    grep -E "	nazm-cli:test=cli_[a-z_]+:$file::" "$log/list" \
+        | head -n "${MUTANTS_PER_FILE:-1000000}" >"$log/$file.mutants"
     while IFS=$'\t' read -r name _ killers; do
         for k in $killers; do
             case $k in nazm-cli:test=cli_*:"$file"::*) ;; *) continue ;; esac

@@ -36,7 +36,10 @@
       `boards`, `realtime`, `cranelift`, `core_ir`, `reexports`, `ffi`, `runtime`, `prelude`,
       `summary`, `mir`, `durable_identity`, `native_cache`, `incremental`, `build`, …), two that
       drive concurrent processes over TCP (`distributed`, `secure_service`), and the rest
-- [ ] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `613047d2`
+- [x] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `613047d2`: the 45
+      of them a catalogued mutation names a killer in, the catalogue's first such mutation each
+      (`MUTANTS_PER_FILE=1`; 281 mutation-killer pairs in all, each a rebuild of `nazm` and a test
+      binary): 45 agree, 0 differ, every one caught by the Rust killer and the Nazm test alike
 
 ## 5. The mutation runner's core
 - [x] 5.1 Read the catalogue; apply exactly once; restore byte for byte, in the Rust runner's own
