@@ -1,6 +1,6 @@
-//! N95: the support matrix — every target, under each backend, run-verified, run-verified under
-//! Wine (Gate 3, Windows only and never a Windows host's evidence), compile-only or unsupported,
-//! and nothing in between.
+//! N95: the support matrix — every target, under each backend, run-verified, run-verified on a
+//! Windows host (`scripts/windows-host.sh`), run-verified under Wine (Gate 3), run-verified on a
+//! Linux kernel (Android's Bionic), compile-only or unsupported, and nothing in between.
 //!
 //! `docs/architecture.md` §7.96. The matrix is one table in `nazm-lir`, printed by `nazm inspect`;
 //! this holds the capability matrix's table to it cell for cell, every run-verified or
@@ -83,6 +83,8 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers() {
                 [
                     "run-verified",
                     "run-verified under Wine",
+                    // 2026-10-15: a real Windows 10 host, by `scripts/windows-host.sh`.
+                    "run-verified on a Windows host",
                     // Gate 3: static Bionic on an aarch64 Linux kernel, never an Android device.
                     "run-verified on a Linux kernel",
                     "compile-only",
@@ -93,8 +95,14 @@ fn every_accepted_target_has_a_row_and_every_cell_one_of_five_answers() {
             );
             let evidence = c[backend]["evidence"].as_str().unwrap();
             assert!(!evidence.is_empty(), "{c}");
-            // Evidence the tree holds: a test it defines, or a contained command.
-            if status != "unsupported" && !evidence.starts_with("cargo xtask contained ") {
+            // Evidence the tree holds: a test it defines, a contained command, or a script it
+            // carries for a machine a test cannot reach.
+            if evidence.starts_with("scripts/") {
+                assert!(
+                    root().join(evidence).is_file(),
+                    "{evidence}: no such script"
+                );
+            } else if status != "unsupported" && !evidence.starts_with("cargo xtask contained ") {
                 assert!(defined(evidence), "{evidence}: no such test");
             }
         }

@@ -140,7 +140,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 30 | Mutation testing and fuzzing | VERIFIED / PARTIAL — coverage-guided fuzzing of five targets with a replayed corpus (N93; `lir`, N105), re-run in Q1: 3.4 million executions, no crash; no sanitizers, Miri, Loom or backend/FFI/registry fuzzing |
 | 31 | Bootstrap | VERIFIED as scoped — the declared subset the Nazm-written compiler carries; not Gate 2 (Q1-D-25) |
 | 32 | Reproducibility and provenance | PARTIAL — a stated five-part model, signed in-toto statements and a CycloneDX SBOM (N94); one host and one image, no transparency log |
-| 33 | Platform and target matrix | PARTIAL — every cell in the support matrix's words (N95, Gate 3): twelve targets — five run-verified, three emulator-verified, Windows run-verified under Wine only, Android run-verified on a Linux kernel only, x86_64 Linux and iOS compile-only; x86_64 Linux and a Windows host deferred to the final v1 qualification |
+| 33 | Platform and target matrix | PARTIAL — every cell in the support matrix's words (N95, Gate 3): twelve targets — five run-verified, three emulator-verified, Windows run-verified on a Windows host (a Windows 10 laptop, `scripts/windows-host.sh`, 2026-10-15) and under Wine, Android run-verified on a Linux kernel only, x86_64 Linux and iOS compile-only; x86_64 Linux deferred to the final v1 qualification |
 | 34 | Smart contracts (chain-neutral model and backends) | PARTIAL — model and simulator (N69); EVM backend, run in py-evm (N70); WebAssembly adapter (N71); signed writes and account metadata, sBPF execution BLOCKED (N72); both VMs held to the simulator on generated sequences (N96) |
 
 After N107, 2026-10-05: twenty-nine VERIFIED (areas 2, 3, 5, 6 and 7 moved, the last four as scoped:
@@ -5259,8 +5259,16 @@ clocks, a waiting task releasing the only worker (socket, sleep and pipe), UTF-8
 (`N0400`) and an exhausted stack on a thread and in a task (`N0408`), each agreeing with the native
 run, by both backends. Two differences, stated in the spec: `os_family()` is 2, and `os_kill` ends a
 child with exit code 1. Found on the way: an IR string carried a literal NUL byte (now `\00`).
-**Not done**: execution on a real Windows host (a final-v1 qualification item), a DLL, the MSVC
-environment, Windows ARM64, a prebuilt toolchain for a Windows host.
+**Not done**: a DLL, the MSVC environment, Windows ARM64, a prebuilt toolchain for a Windows host.
+*Execution on a real Windows host, 2026-10-15* (macOS and Windows x86_64 both targets, by the
+copyright holder's decision): `scripts/windows-host.sh` on a Windows 10 laptop (1903,
+10.0.18362.113) — the differential set built for Windows by each backend, linked by MinGW-w64's
+`gcc`, run over `ssh` and compared with the native build: 68 agree, 0 differ, 7 skipped (C,
+arguments, input or files), under LLVM and Cranelift. The first run found two target bugs, fixed in
+`e974b437` with a test and a mutant each: LLVM's `"probe-stack"="inline-asm"` became a call to a
+function `inline-asm` on Windows, so a frame of a page or more did not link (now the platform's
+`___chkstk_ms`); and Windows' 1 MiB main stack met `N0408` where macOS and Linux's 8 MiB does not
+(now `-Wl,--stack,8388608`). Files, sockets, processes and arguments remain shown under Wine.
 
 **Evidence** · *At N95:* two verified targets: `aarch64-apple-darwin` and `aarch64-unknown-linux-gnu`
 (the latter inside `docker/contained.Dockerfile`). The emitter states its own scope, and
@@ -5322,7 +5330,7 @@ to be the one the C compiler driver resolves for the triple.
 | `x86_64-apple-darwin` | run-verified | run-verified | penryn / x86-64 baseline (SSE2) | not exercised |
 | `aarch64-unknown-linux-gnu` | run-verified | run-verified | generic / aarch64 baseline | gdb, live, both backends |
 | `x86_64-unknown-linux-gnu` | compile-only | compile-only | x86-64 / x86-64 baseline (SSE2) | not exercised |
-| `x86_64-pc-windows-gnu` | run-verified under Wine | run-verified under Wine | x86-64 / x86-64 baseline (SSE2) | not exercised |
+| `x86_64-pc-windows-gnu` | run-verified on a Windows host | run-verified on a Windows host | x86-64 / x86-64 baseline (SSE2) | not exercised |
 | `aarch64-unknown-none` | run-verified | unsupported | generic / none | not exercised |
 | `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
 | `thumbv7m-none-eabi` | run-verified | unsupported | cortex-m3 / none | not exercised |
@@ -5336,8 +5344,9 @@ under Rosetta, in the Linux image, under QEMU — the three boards, which `suppo
 **emulator-verified**, the kind of run-verified no hardware stands behind (Q1-D-24) — under Node — each cell's test is named in the table in
 code. `x86_64-unknown-linux-gnu` is compile-only: no x86_64 Linux machine or image is here. A
 freestanding target is unsupported by Cranelift, whose object writer has no format for it, and
-WebAssembly by this Cranelift build. `x86_64-pc-windows-gnu` is run-verified **under Wine**: Gate
-3C's evidence, from Wine in a Linux container, never from a Windows host. **Non-goals, by
+WebAssembly by this Cranelift build. `x86_64-pc-windows-gnu` is run-verified **on a Windows host**: a Windows 10
+laptop, by `scripts/windows-host.sh` (2026-10-15), beside Gate 3C's runs under Wine in a Linux
+container. **Non-goals, by
 decision**: Windows with Microsoft's toolchain and Windows ARM64 (no Microsoft SDK or C runtime is
 accepted here, and no ARM64 Windows machine is here), 32-bit hosted targets (`Int` is 64-bit and hosted layouts assume 64-bit
 pointers), big-endian targets (nothing here runs one; layouts and the DWARF writer assume
@@ -5346,7 +5355,8 @@ checked, not pinned by a flag — and the driver's own: the recorded CPUs are Ap
 Linux image's clang 19 resolves `core2` for `x86_64-apple-darwin` (found by N100's gate), so the check
 runs against Apple clang only. Cranelift detects nothing of the building host.
 
-**Limitation** · No Windows host has run anything (Wine only), no MSVC or Windows ARM64; no 32-bit,
+**Limitation** · One Windows host (Windows 10 1903) has run the differential set, files, sockets
+and processes only under Wine; no MSVC or Windows ARM64; no 32-bit,
 big-endian or CPU-feature targets; no bundled linker or
 sysroot, so a Linux target from macOS is objects only; cross-host byte reproducibility not
 measured.

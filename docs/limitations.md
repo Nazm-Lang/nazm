@@ -242,7 +242,8 @@ found only by reading all of it.
   32-bit hosted target and no CPU-feature selection; the Cortex-M board has no heap in 1.0 (the
   arena's runtime is a 64-bit board's); a target the host has no linker for is built to objects (`--objects`) for its own
   toolchain, with no bundled sysroot or linker; `x86_64-unknown-linux-gnu` is compile-only here,
-  Windows is run-verified **under Wine** only — no Windows host has run it, no DLL is built, and
+  Windows is run-verified on one Windows 10 host (the differential set, `scripts/windows-host.sh`)
+  and under Wine (files, sockets, processes and arguments only there), no DLL is built, and
   the MSVC environment and Windows ARM64 are refused — and Cranelift builds no freestanding or
   WebAssembly target (area 33). 32-bit hosted and big-endian targets are non-goals, each with its
   reason in `nazm inspect`'s support matrix (N95). An LLVM object's CPU is the C compiler driver's

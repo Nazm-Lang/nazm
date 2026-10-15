@@ -10,11 +10,13 @@
 # program is built to objects with `nazm build --target x86_64-pc-windows-gnu --objects`, linked
 # here with MinGW-w64's gcc as its link.txt says, copied over, run once, and deleted there. A
 # program that reads an argument, a file or standard input, or calls C, is skipped and counted,
-# never passed. Output: one line per program and a summary.
+# never passed. BACKEND (`llvm`, the default, or `cranelift`) builds both the Windows program and
+# the native one. Output: one line per program and a summary.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${1:-win-dell}"; [ $# -gt 0 ] && shift
 NAZM="${NAZM:-$ROOT/target/release/nazm}"
+BACKEND="${BACKEND:-llvm}"
 GCC="${GCC:-x86_64-w64-mingw32-gcc}"
 command -v "$GCC" >/dev/null || { echo "need $GCC (brew install mingw-w64)" >&2; exit 2; }
 [ -x "$NAZM" ] || { echo "need a nazm at $NAZM (or set NAZM)" >&2; exit 2; }
@@ -39,14 +41,14 @@ for f in "${inputs[@]}"; do
     skipped=$((skipped + 1)); echo "skip   $name (needs C, input or arguments)"; continue
   fi
   d="$work/$name"; mkdir -p "$d"
-  if ! "$NAZM" build --target x86_64-pc-windows-gnu --objects "$d/o" "$f" >"$d/build.log" 2>&1; then
+  if ! "$NAZM" build --backend "$BACKEND" --target x86_64-pc-windows-gnu --objects "$d/o" "$f" >"$d/build.log" 2>&1; then
     skipped=$((skipped + 1)); echo "skip   $name (not built for Windows: $(grep -m1 -oE 'N[0-9]{4}' "$d/build.log"))"; continue
   fi
   objs=$(sed -n 's/^objects //p' "$d/o/link.txt"); libs=$(sed -n 's/^libraries //p' "$d/o/link.txt")
   (cd "$d/o" && "$GCC" $objs $libs -o "$d/$name.exe") >"$d/link.log" 2>&1 \
     || { skipped=$((skipped + 1)); echo "skip   $name (link failed)"; continue; }
   # The same program built for this machine, the reference.
-  if ! "$NAZM" build "$f" -o "$d/host" >"$d/host.log" 2>&1; then
+  if ! "$NAZM" build --backend "$BACKEND" "$f" -o "$d/host" >"$d/host.log" 2>&1; then
     skipped=$((skipped + 1)); echo "skip   $name (not built for this host)"; continue
   fi
   (cd "$d" && ./host >"$d/want.out" 2>"$d/want.err"); echo "exit=$?" >>"$d/want.out"
@@ -62,5 +64,5 @@ for f in "${inputs[@]}"; do
   fi
 done
 ver=$(ssh "$HOST" "ver" | tr -d '\r' | grep -o 'Version [0-9.]*')
-echo "windows-host ($HOST, $ver): $agree agree, $differ differ, $skipped skipped"
+echo "windows-host ($HOST, $ver, $BACKEND): $agree agree, $differ differ, $skipped skipped"
 [ "$differ" -eq 0 ]
