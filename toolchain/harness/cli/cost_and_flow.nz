@@ -1,0 +1,302 @@
+// N52: resource facts, the sink registry and declassification. `nazm explain-cost` reports what MIR
+// does — each site with a count per call that is `at-most-once` or `unknown`, never a number —
+// every sink class is solved through helpers, closures and modules, declassification needs its
+// authority everywhere and is recorded, profiles read all of it, and the analysis stays
+// deterministic and bounded on a large call graph. Ported from
+// `crates/nazm-cli/tests/cost_and_flow.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/time"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tools.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS --json FILE` over `files` (name, text, …; the first is FILE): its standard output.
+fn json_text(h: Caps, files: Strs, args: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        scratch_write(h, d, strs_get(files, i), strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    let a = words(args);
+    strs_push(a, "--json");
+    strs_push(a, strs_get(files, 0));
+    let r = nazm(h, d, a);
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    Result[Str, Str].Ok(value: text_trim(r.stdout))
+}
+
+fn one(src: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, "prog.nz");
+    strs_push(f, src);
+    f
+}
+
+fn json_of(h: Caps, src: Str, args: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let t = json_text(h, one(src), args)?;
+    match jparse(t) {
+        Result.Ok(value: v) => Result[JsonDoc, Str].Ok(value: v),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {t}"),
+    }
+}
+
+/// The path of the `sites` of the function whose identity ends in `::fn NAME`.
+fn sites_of(cost: JsonDoc, function: Str) -> Result[Str, Str] ! {} {
+    let mut i = 0;
+    while i < jlen(cost, "functions") {
+        if text_ends_with(jstr(cost, f"functions/{i}/identity"), f"::fn {function}") {
+            return Result[Str, Str].Ok(value: f"functions/{i}/sites");
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"no `{function}` in {jv(cost, "")}")
+}
+
+/// The `count` of the site of `kind` and `op` among `sites`.
+fn count_of(cost: JsonDoc, sites: Str, kind: Str, op: Str) -> Result[Str, Str] ! {} {
+    let mut i = 0;
+    while i < jlen(cost, sites) {
+        let s = f"{sites}/{i}";
+        if jstr(cost, f"{s}/kind") == kind && jstr(cost, f"{s}/op") == op {
+            return Result[Str, Str].Ok(value: jstr(cost, f"{s}/count"));
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"no {kind} `{op}` in {jv(cost, sites)}")
+}
+
+const COSTLY: Str = "\nfn work(c: Chan) -> Int ! {} { if chan_send(c, 1) { 1 } else { 0 } }\nfn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {\n    let xs = ints_new();\n    let mut i = 0;\n    while i < 3 { ints_push(xs, i); i = i + 1; }\n    let s = str_concat(\"a\", \"b\");\n    let t = s;\n    let f = fn(x: Int) -> Int { x + str_len(t) };\n    let c = chan_new(1);\n    scope { spawn work(c); }\n    let got = ints_new();\n    if chan_recv(c, got) { print(int_to_str(ints_get(got, 0) + f(1))); }\n    0\n}\n";
+
+@test
+fn explain_cost_reports_each_site_with_a_count_per_call(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let text = json_text(h, one(COSTLY), "explain-cost")?;
+    let cost = jparse(text)?;
+    check_that(jstr(cost, "schema") == "nazm.cost/2", text)?;
+    let main = sites_of(cost, "main")?;
+    let wants = text_split("allocation ints_new at-most-once|allocation ints_push unknown|allocation str_concat at-most-once|allocation closure at-most-once|retain copy at-most-once|channel chan_new at-most-once|block chan_recv at-most-once|task spawn at-most-once|block join at-most-once", "|");
+    // Inside the loop: a count the compiler does not know, and never a number.
+    for w in wants {
+        let f = words(w);
+        let c = count_of(cost, main, strs_get(f, 0), strs_get(f, 1))?;
+        check_that(c == strs_get(f, 2), f"{w}: {c}")?;
+    }
+    let work = sites_of(cost, "work")?;
+    count_of(cost, work, "block", "chan_send")?;
+    // Every count is one of the two words; every site has a source position, or is a
+    // compiler-made failure path that says it is one.
+    let mut i = 0;
+    while i < jlen(cost, "functions") {
+        let sites = f"functions/{i}/sites";
+        let mut k = 0;
+        while k < jlen(cost, sites) {
+            let s = f"{sites}/{k}";
+            let c = jstr(cost, f"{s}/count");
+            check_that(c == "at-most-once" || c == "unknown", jv(cost, s))?;
+            let at_line = jq(cost, f"{s}/at/line") >= 0 && json_kind(cost, jq(cost, f"{s}/at/line")) == "number";
+            check_that(at_line || jv(cost, f"{s}/on_failure") == "true", jv(cost, s))?;
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    check_that(jint(cost, "totals/allocation/unknown") == 1, jv(cost, "totals"))?;
+    // Deterministic: the same value twice.
+    let again = json_text(h, one(COSTLY), "explain-cost")?;
+    check_that(json_same(h, text, again)?, "explain-cost differs between two runs")
+}
+
+@test
+fn a_foreign_call_is_a_resource_site(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let cost = json_of(h, "extern \"C\" fn labs(x: Int) -> Int = \"labs\";\nfn main(f: ForeignCap) -> Int ! { foreign } { labs(0 - 3) }\n", "explain-cost")?;
+    let main = sites_of(cost, "main")?;
+    count_of(cost, main, "foreign", "labs")?;
+    ok()
+}
+
+/// Whether the sink at `s` has `origin` among its origins.
+fn has_origin(flow: JsonDoc, s: Str, origin: Str) -> Bool ! {} {
+    let o = f"{s}/origins";
+    let mut i = 0;
+    while i < jlen(flow, o) {
+        if jstr(flow, f"{o}/{i}") == origin {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn origins_empty(flow: JsonDoc, s: Str) -> Bool ! {} {
+    let n = jq(flow, f"{s}/origins");
+    n >= 0 && json_kind(flow, n) == "array" && jlen(flow, f"{s}/origins") == 0
+}
+
+/// The path of the first sink of `class` in `function` with `origin`, or `""`.
+fn sink_at(flow: JsonDoc, class: Str, function: Str, origin: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < jlen(flow, "sinks") {
+        let s = f"sinks/{i}";
+        if (class == "" || jstr(flow, f"{s}/class") == class) && jstr(flow, f"{s}/function") == function && (origin == "" || has_origin(flow, s, origin)) {
+            return s;
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+const SINKS: Str = "\nfn show(s: Str, out: OutCap) -> Int { print(s) }\nfn main(io: IoCap) -> Int ! { io } {\n    let secret = read_file(\"prog.nz\");\n    show(str_slice(secret, 0, 2), io);\n    let names = strs_new();\n    strs_push(names, \"x\");\n    print(strs_get(names, 0));\n    let echo = fn(t: Str) -> Int ! { io } { eprint(t) };\n    echo(\"plain\");\n    write_file(str_concat(\"o\", \"ut.txt\"), secret);\n    print(arg(0));\n    0\n}\n";
+
+@test
+fn every_sink_class_is_solved_through_helpers_closures_and_containers(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let flow = json_of(h, SINKS, "explain-flow")?;
+    check_that(jstr(flow, "schema") == "nazm.flow/2", jv(flow, ""))?;
+    // Through a helper's parameter, from its caller.
+    check_that(sink_at(flow, "output", "show", "file") != "", jv(flow, ""))?;
+    // Out of a container, and through a closure's parameter: each carries what was written into
+    // its cell, or handed by the calls that may reach it (N80) — here, literals.
+    let mut closure_empty = false;
+    let mut path_empty = false;
+    let mut i = 0;
+    while i < jlen(flow, "sinks") {
+        let s = f"sinks/{i}";
+        check_that(!has_origin(flow, s, "unknown"), jv(flow, s))?;
+        if jstr(flow, f"{s}/function") == "main#0" && origins_empty(flow, s) {
+            closure_empty = true;
+        }
+        if jstr(flow, f"{s}/class") == "path" && origins_empty(flow, s) {
+            path_empty = true;
+        }
+        i = i + 1;
+    }
+    check_that(closure_empty, jv(flow, ""))?;
+    // Each origin at a sink carries its chain, from where it entered to the sink (N80).
+    let shown = sink_at(flow, "output", "show", "");
+    let trace = f"{shown}/traces/0";
+    check_that(jstr(flow, f"{trace}/origin") == "file", jv(flow, shown))?;
+    let steps = f"{trace}/steps";
+    let n = jlen(flow, steps);
+    check_that(n > 0 && jstr(flow, f"{steps}/0/note") == "a file's contents are read here", jv(flow, shown))?;
+    check_that(text_contains(jstr(flow, f"{steps}/{n - 1}/note"), "standard output"), jv(flow, shown))?;
+    let mut called = false;
+    let mut k = 0;
+    while k < n {
+        if text_contains(jstr(flow, f"{steps}/{k}/note"), "`show` is called here") {
+            called = true;
+        }
+        k = k + 1;
+    }
+    check_that(called, jv(flow, shown))?;
+    check_that(sink_at(flow, "file-data", "main", "file") != "", jv(flow, ""))?;
+    check_that(sink_at(flow, "output", "main", "argument") != "", jv(flow, ""))?;
+    // The path is computed in the program: nothing restricted reaches it.
+    check_that(path_empty, jv(flow, ""))
+}
+
+fn want_codes(h: Caps, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let got = str_join(codes(h, src), ",");
+    check_that(got == want, f"{got} for {src}")
+}
+
+@test
+fn a_vouch_needs_its_authority_everywhere_and_is_recorded(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Declared or not, a vouch needs a `VouchCap` held.
+    want_codes(h, "fn main(io: IoCap) -> Int { let s = str_vouch(\"x\"); 0 }\n", "N0369")?;
+    want_codes(h, "fn main(io: IoCap) -> Int ! {} { let s = str_vouch(\"x\"); 0 }\n", "N0369")?;
+    // Neither the type nor the built-in can be redefined.
+    want_codes(h, "struct VouchCap { x: Int, }\nfn main() -> Int { 0 }\n", "N0331")?;
+    // It clears an origin, so the path rule no longer applies — and the clearing is evidence.
+    want_codes(h, "fn main(io: IoCap) -> Int ! { io } { let p = read_file(\"prog.nz\"); write_file(p, \"x\") }\n", "N0372")?;
+    let vouched = "fn main(io: IoCap, v: VouchCap) -> Int ! { io } { let p = read_file(\"prog.nz\"); write_file(str_vouch(str_slice(p, 0, 0)), \"x\") }\n";
+    want_codes(h, vouched, "")?;
+    let flow = json_of(h, vouched, "explain-flow")?;
+    let mut found = false;
+    let mut i = 0;
+    while i < jlen(flow, "sinks") {
+        let s = f"sinks/{i}";
+        if jstr(flow, f"{s}/class") == "vouch" && has_origin(flow, s, "file") {
+            found = true;
+        }
+        i = i + 1;
+    }
+    check_that(found, jv(flow, ""))
+}
+
+@test
+fn a_vouch_changes_nothing_at_run_time_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, "\nfn tag(v: VouchCap) -> Str ! {} {\n    let s = str_concat(\"to\", \"ken\");\n    str_vouch(str_slice(s, 0, 3))\n}\nfn main(io: IoCap, v: VouchCap) -> Int ! { io } {\n    // The vouched value outlives the string it was cut from, and storage is allocated after:\n    // a vouch that took no reference of its own would print what reused it.\n    let t = tag(v);\n    let other = str_concat(\"xx\", \"yyyy\");\n    print(t);\n    print(other);\n    0\n}\n", "tokxxyyyy0")?;
+    ok()
+}
+
+fn profile_refuses(h: Caps, src: Str, profile: Str, rule: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words(f"check --profile {profile} prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0510") && text_contains(r.stderr, rule), ran_show(r))
+}
+
+@test
+fn profiles_read_resource_and_flow_facts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    profile_refuses(h, "fn main() -> Int ! {} { let xs = ints_new(); let mut i = 0; while i < 3 { ints_push(xs, i); i = i + 1; } ints_len(xs) }\n", "embedded", "bounded-allocation")?;
+    profile_refuses(h, "fn main(io: IoCap) -> Int ! { io } { print(read_file(\"prog.nz\")) }\n", "cyber", "contents-stay-in-files")?;
+    profile_refuses(h, "fn main(io: IoCap, v: VouchCap) -> Int ! { io } { print(str_vouch(\"a\")) }\n", "critical", "no-declassification")?;
+    // A file's contents may go back to a file under `cyber`.
+    let d = prog_dir(h, "prog.nz", "fn main(io: IoCap) -> Int ! { io } { write_file(\"copy.txt\", read_file(\"prog.nz\")) }\n")?;
+    let r = nazm(h, d, words("check --profile cyber --profile-report prog.nz"));
+    scratch_remove(h, d);
+    check_that(text_contains(r.stdout, "\"contents-stay-in-files\"") && !text_contains(r.stderr, "contents-stay-in-files"), ran_show(r))
+}
+
+@test
+fn a_long_call_chain_is_solved_deterministically_and_in_bounded_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let n = 2000;
+    let parts = strs_new();
+    let mut i = 0;
+    while i < n {
+        strs_push(parts, f"fn f{i}(s: Str, out: OutCap) -> Int {{ f{i + 1}(str_concat(s, \"x\"), out) }}\n");
+        i = i + 1;
+    }
+    strs_push(parts, f"fn f{n}(s: Str, out: OutCap) -> Int {{ print(s) }}\n");
+    strs_push(parts, "fn main(io: IoCap) -> Int ! { io } { f0(read_file(\"prog.nz\"), io) }\n");
+    let src = str_join(parts, "");
+    let tc = h.t;
+    let start = time_ms(tc);
+    let a = json_text(h, one(src), "explain-flow")?;
+    let b = json_text(h, one(src), "explain-flow")?;
+    let took = time_ms(tc) - start;
+    check_that(took < 120000, f"{took} ms")?;
+    check_that(json_same(h, a, b)?, "explain-flow differs between two runs")?;
+    // The file's origin reaches the sink at the far end of the chain.
+    let flow = jparse(a)?;
+    check_that(sink_at(flow, "", f"f{n}", "file") != "", "no file origin at the chain's end")
+}
+
+@test
+fn a_cached_module_keeps_its_sink_classes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The library's sinks are read back from its cache entry on the second check: an output sink
+    // that came back as a path sink would refuse what the first check accepted.
+    let d = prog_dir(h, "nazm.root", "")?;
+    scratch_write(h, d, "lib.nz", "pub fn show(io: IoCap, s: Str) -> Int ! { io } { print(s) }\n")?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\";\nfn main(io: IoCap) -> Int ! { io } { show(io, read_file(\"lib.nz\")) }\n")?;
+    let first = nazm(h, d, words("check main.nz"));
+    let again = nazm(h, d, words("check main.nz --cache-report --json"));
+    scratch_remove(h, d);
+    check_that(first.code == 0, ran_show(first))?;
+    check_that(again.code == 0, ran_show(again))?;
+    check_that(text_contains(again.stdout, "\"reused\":"), ran_show(again))
+}

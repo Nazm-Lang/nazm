@@ -1,0 +1,312 @@
+// N80: provenance v3 — container cells, indirect targets, local shapes, one policy engine. Each in
+// both directions: a container carries what any container of its type was given; a receive and a
+// select move a channel's cell, and a select's index carries nothing; generic code is the wild
+// cell; a call through a function value or a bound carries what its candidates return, and a
+// closure's parameters and captures what they are handed; fields and variants are apart within a
+// body and whole across a call; an export to C is handed anything; `cyber`'s `checked-paths` is the
+// language's rule in every function; `nazm explain-flow` prints each origin's chain; and nothing
+// that runs changes. Ported from `crates/nazm-cli/tests/flow_v3.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn text_of(o: Ran) -> Str ! {} {
+    f"{o.stdout}{o.stderr}"
+}
+
+/// `nazm ARGS` over `src` as `p.nz`.
+fn on(h: Caps, src: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let o = nazm(h, d, words(args));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: o)
+}
+
+/// The codes `nazm check` reports, in order, joined by `,`; empty when it accepts.
+fn codes_of(h: Caps, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    let o = on(h, src, "check p.nz --json")?;
+    let found = strs_new();
+    for l in text_lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: v) => {
+                if jq(v, "code") >= 0 && json_kind(v, jq(v, "code")) == "string" {
+                    strs_push(found, jstr(v, "code"));
+                }
+            },
+            Result.Err(error: e) => {},
+        };
+    }
+    check_that((o.code == 0) == (strs_len(found) == 0), text_of(o))?;
+    Result[Str, Str].Ok(value: str_join(found, ","))
+}
+
+fn accepted(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let c = codes_of(h, src)?;
+    check_that(c == "", f"{c}: {src}")
+}
+
+fn refused(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let c = codes_of(h, src)?;
+    check_that(c == "N0372", f"{c}: {src}")
+}
+
+/// The human `nazm check` output, for a refused program.
+fn explained(h: Caps, src: Str) -> Result[Str, Str] ! { io, spawn } {
+    Result[Str, Str].Ok(value: text_of(on(h, src, "check p.nz")?))
+}
+
+const MAIN: Str = "fn main(io: IoCap) -> Int ! { io } {\n";
+
+/// `main` with `body`.
+fn m(body: Str) -> Str ! {} {
+    f"{MAIN} {body}\n}}\n"
+}
+
+@test
+fn a_container_carries_what_any_container_of_its_type_was_given(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    accepted(h, m("let xs = strs_new(); strs_push(xs, arg(1)); write_file(strs_get(xs, 0), \"x\")"))?;
+    refused(h, m("let xs = strs_new(); strs_push(xs, read_file(\"c\")); write_file(strs_get(xs, 0), \"x\")"))?;
+    // Another container of the same type, written anywhere, is the same cell…
+    let other = "fn fill(io: IoCap) -> Int ! { io } { let ys = strs_new(); strs_push(ys, read_file(\"c\")); 0 }\nfn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, arg(1)); fill(io); write_file(strs_get(xs, 0), \"x\") }\n";
+    refused(h, other)?;
+    let why = explained(h, other)?;
+    check_that(text_contains(why, "in `fill`: data from the contents of a file is written into a `Strs` here"), why)?;
+    // …and a container of another type is not.
+    accepted(h, "fn fill(io: IoCap) -> Int ! { io } { let ys = vec_new[Int](); vec_push(ys, str_len(read_file(\"c\"))); 0 }\nfn main(io: IoCap) -> Int ! { io } { let xs = vec_new[Str](); vec_push(xs, arg(1)); fill(io); write_file(vec_get(xs, 0), \"x\") }\n")?;
+    // Set, pop, length and join read and write the same cell.
+    refused(h, m("let xs = strs_new(); strs_push(xs, \"a\"); strs_set(xs, 0, read_file(\"c\")); write_file(strs_pop(xs), \"x\")"))?;
+    refused(h, m("let xs = strs_new(); strs_push(xs, read_file(\"c\")); write_file(str_join(xs, \"/\"), \"x\")"))?;
+    refused(h, m("let xs = ints_new(); ints_push(xs, str_len(read_file(\"c\"))); write_file(int_to_str(ints_len(xs)), \"x\")"))
+}
+
+fn select_of(path: Str) -> Str ! {} {
+    m(f"let c = chan_new_of[Str](4); chan_send_of(c, read_file(\"c\")); let cs = vec_new[Chan[Str]](); vec_push(cs, c); let out = vec_new[Str](); let i = chan_select_of(cs, out); write_file({path}, \"x\")")
+}
+
+@test
+fn a_receive_and_a_select_move_a_channels_cell_and_an_index_carries_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    refused(h, m("let c = chan_new_of[Str](4); chan_send_of(c, read_file(\"c\")); let out = vec_new[Str](); let got = chan_recv_of(c, out); write_file(vec_get(out, 0), \"x\")"))?;
+    accepted(h, m("let c = chan_new_of[Str](4); chan_send_of(c, arg(1)); let out = vec_new[Str](); let got = chan_recv_of(c, out); write_file(vec_get(out, 0), \"x\")"))?;
+    refused(h, select_of("vec_get(out, 0)"))?;
+    // Which channel was ready is control, as a condition is: it carries nothing.
+    accepted(h, select_of("int_to_str(i)"))?;
+    // The legacy `Chan` moves into an `Ints`.
+    refused(h, m("let c = chan_new(1); chan_send(c, str_len(read_file(\"c\"))); let b = ints_new(); let got = chan_recv(c, b); write_file(int_to_str(ints_pop(b)), \"x\")"))
+}
+
+@test
+fn a_container_in_generic_code_is_every_container(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn put[T](v: Vec[T], x: T) -> Int ! {} { vec_push(v, x); 0 }\nfn main(io: IoCap) -> Int ! { io } { let ps = vec_new[Str](); let qs = vec_new[Int](); put(ps, arg(1)); put(qs, str_len(read_file(\"c\"))); write_file(vec_get(ps, 0), \"x\") }\n";
+    refused(h, src)?;
+    let why = explained(h, src)?;
+    check_that(text_contains(why, "a container in generic code"), why)?;
+    check_that(text_contains(why, "`put` is called here"), why)?;
+    // With nothing restricted written anywhere, generic code adds nothing.
+    accepted(h, "fn put[T](v: Vec[T], x: T) -> Int ! {} { vec_push(v, x); 0 }\nfn main(io: IoCap) -> Int ! { io } { let ps = vec_new[Str](); put(ps, arg(1)); write_file(vec_get(ps, 0), \"x\") }\n")
+}
+
+@test
+fn a_call_through_a_value_carries_what_its_candidates_return(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A named function as a value, and a closure, of the call's type.
+    refused(h, "fn reader(io: IoCap) -> Str ! { io } { read_file(\"c\") }\nfn main(io: IoCap) -> Int ! { io } { let f = reader; write_file(f(io), \"x\") }\n")?;
+    accepted(h, "fn named(io: IoCap) -> Str ! { io } { \"out.txt\" }\nfn main(io: IoCap) -> Int ! { io } { let f = named; write_file(f(io), \"x\") }\n")?;
+    // A function value of another type is not a candidate.
+    accepted(h, "fn reader(n: Int) -> Str ! {} { int_to_str(n) }\nfn bad(io: IoCap) -> Str ! { io } { read_file(\"c\") }\nfn main(io: IoCap) -> Int ! { io } { let g = bad; let f = reader; write_file(f(1), \"x\") }\n")?;
+    // A pure value where an effectful one is expected (N79) is still a candidate.
+    refused(h, "fn apply(f: fn(Str) -> Str ! { io }, s: Str) -> Str ! { io } { f(s) }\nfn same(s: Str) -> Str ! {} { s }\nfn main(io: IoCap) -> Int ! { io } { write_file(apply(same, read_file(\"c\")), \"x\") }\n")
+}
+
+/// The path of the first sink of `function` in an `explain-flow` report, or `""`.
+fn sink_of(flow: JsonDoc, function: Str) -> Str ! {} {
+    let mut i = 0;
+    while i < jlen(flow, "sinks") {
+        if jstr(flow, f"sinks/{i}/function") == function {
+            return f"sinks/{i}";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+/// The notes of the first trace's steps at sink `s`.
+fn notes_of(flow: JsonDoc, s: Str) -> Strs ! {} {
+    let out = strs_new();
+    let steps = f"{s}/traces/0/steps";
+    let mut i = 0;
+    while i < jlen(flow, steps) {
+        strs_push(out, jstr(flow, f"{steps}/{i}/note"));
+        i = i + 1;
+    }
+    out
+}
+
+fn flow_of(h: Caps, src: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let o = on(h, src, "explain-flow --json p.nz")?;
+    check_that(o.code == 0, text_of(o))?;
+    jparse(o.stdout)
+}
+
+@test
+fn a_closures_parameters_and_captures_are_what_it_is_handed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let apply = "fn apply(f: fn(Str) -> Int ! { io }, s: Str) -> Int ! { io } { f(s) }\n";
+    accepted(h, f"{apply}fn main(io: IoCap) -> Int ! {{ io }} {{ let w = fn(p: Str) -> Int ! {{ io }} {{ write_file(p, \"x\") }}; apply(w, arg(1)) }}\n")?;
+    refused(h, f"{apply}fn main(io: IoCap) -> Int ! {{ io }} {{ let w = fn(p: Str) -> Int ! {{ io }} {{ write_file(p, \"x\") }}; apply(w, read_file(\"c\")) }}\n")?;
+    accepted(h, m("let p = arg(1); let w = fn(d: Str) -> Int ! { io } { write_file(p, d) }; w(read_file(\"c\"))"))?;
+    let captured = m("let p = read_file(\"c\"); let w = fn(d: Str) -> Int ! { io } { write_file(p, d) }; w(\"x\")");
+    refused(h, captured)?;
+    let why = explained(h, captured)?;
+    check_that(text_contains(why, "this closure writes to a path made from what it captures, `p`"), why)?;
+    // A closure that returns what it captured hands it to whoever calls through the value.
+    refused(h, m("let p = read_file(\"c\"); let g = fn(n: Int) -> Str ! {} { p }; write_file(g(1), \"x\")"))?;
+    accepted(h, m("let p = arg(1); let g = fn(n: Int) -> Str ! {} { p }; write_file(g(1), \"x\")"))?;
+    // What a closure's parameter is handed reaches its sinks as solved (N80).
+    let flow = flow_of(h, m("let e = fn(t: Str) -> Int ! { io } { print(t) }; e(read_file(\"c\"))"))?;
+    let shown = sink_of(flow, "main#0");
+    check_that(shown != "" && jis(flow, f"{shown}/origins", "[\"file\"]"), jv(flow, ""))?;
+    // A capture of a parameter is what the maker's callers hand it.
+    refused(h, "fn make(io: IoCap, p: Str) -> Int ! { io } { let w = fn(d: Str) -> Int ! { io } { write_file(p, d) }; w(\"x\") }\nfn main(io: IoCap) -> Int ! { io } { make(io, read_file(\"c\")) }\n")?;
+    accepted(h, "fn make(io: IoCap, p: Str) -> Int ! { io } { let w = fn(d: Str) -> Int ! { io } { write_file(p, d) }; w(\"x\") }\nfn main(io: IoCap) -> Int ! { io } { make(io, arg(1)) }\n")
+}
+
+@test
+fn fields_and_variants_are_apart_within_a_body_and_whole_across_a_call(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let job = "struct Job { path: Str, body: Str }\n";
+    accepted(h, f"{job}{m("let j = Job(path: arg(1), body: read_file(\"c\")); write_file(j.path, j.body)")}")?;
+    refused(h, f"{job}{m("let j = Job(path: read_file(\"c\"), body: arg(1)); write_file(j.path, j.body)")}")?;
+    // Across a call the record is one value: its fields are all of it.
+    refused(h, f"{job}fn path_of(j: Job) -> Str ! {{}} {{ j.path }}\n{m("let j = Job(path: arg(1), body: read_file(\"c\")); write_file(path_of(j), \"x\")")}")?;
+    // A field written through a place makes the binding whole.
+    refused(h, f"{job}{m("let mut j = Job(path: arg(1), body: \"b\"); j.body = read_file(\"c\"); write_file(j.path, \"x\")")}")?;
+    let src = "enum Src { Arg(path: Str), File(text: Str) }\n";
+    accepted(h, f"{src}{m("let s = Src.Arg(path: arg(1)); let t = Src.File(text: read_file(\"c\")); match s { Src.Arg(path: p) => write_file(p, \"x\"), Src.File(text: q) => 0 }")}")?;
+    refused(h, f"{src}{m("let mut s = Src.Arg(path: arg(1)); s = Src.File(text: read_file(\"c\")); match s { Src.Arg(path: p) => 0, Src.File(text: q) => write_file(q, \"x\") }")}")?;
+    // `?` reads the payload, not the error.
+    accepted(h, "fn pick(io: IoCap) -> Result[Str, Str] ! { io } { let mut r = Result[Str, Str].Ok(value: arg(1)); r = Result[Str, Str].Err(error: read_file(\"c\")); let p = r?; Result[Str, Str].Ok(value: p) }\nfn main(io: IoCap) -> Int ! { io } { match pick(io) { Result.Ok(value: p) => write_file(p, \"x\"), Result.Err(error: e) => 0 } }\n")
+}
+
+const BOUND_HEAD: Str = "trait Src { fn get(self: Self) -> Str; }\nstruct A { n: Int }\nstruct B { n: Int }\nimpl Src for A { fn get(self: A) -> Str ! {} { \"a\" } }\nfn fill(io: IoCap) -> Int ! { io } { let ys = strs_new(); strs_push(ys, read_file(\"c\")); 0 }\nfn path[T: Src](x: T) -> Str ! {} { x.get() }\nfn main(io: IoCap) -> Int ! { io } { fill(io); write_file(path(A(n: 1)), \"x\") }\n";
+
+@test
+fn a_call_through_a_bound_reaches_every_impl_of_its_method(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    accepted(h, f"{BOUND_HEAD}impl Src for B {{ fn get(self: B) -> Str ! {{}} {{ \"b\" }} }}\n")?;
+    // An impl that returns what a `Strs` holds is a candidate of every call through the bound,
+    // whichever instance runs: stated, and conservative.
+    refused(h, f"{BOUND_HEAD}impl Src for B {{ fn get(self: B) -> Str ! {{}} {{ let xs = strs_new(); strs_get(xs, 0) }} }}\n")
+}
+
+@test
+fn a_function_exported_to_c_is_handed_anything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An export is pure, so it has no sink of its own; what C hands it reaches the program through
+    // what it writes, here an `Ints`, which every `Ints` read then carries.
+    let flow = flow_of(h, "pub extern \"C\" fn kept(x: Int) -> Int ! {} = \"kept\" { let xs = ints_new(); ints_push(xs, x); 0 }\nfn main(io: IoCap) -> Int ! { io } { let ys = ints_new(); ints_push(ys, 1); print(int_to_str(ints_get(ys, 0))); 0 }\n")?;
+    let main = sink_of(flow, "main");
+    check_that(main != "" && jis(flow, f"{main}/origins", "[\"unknown\"]"), jv(flow, ""))?;
+    let notes = notes_of(flow, main);
+    let mut said = false;
+    for n in notes {
+        if text_contains(n, "exported to C, which may call it with anything") {
+            said = true;
+        }
+    }
+    check_that(said, str_join(notes, " | "))
+}
+
+@test
+fn checked_paths_is_the_languages_rule_in_every_function(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An undeclared helper is N37's bridge: the language does not check its own writes…
+    let src = "fn save(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\nfn main(io: IoCap) -> Int { save(read_file(\"c\"), io) }\n";
+    accepted(h, src)?;
+    // …and `cyber`'s `checked-paths` does, with the chain.
+    let o = on(h, src, "check --profile cyber p.nz")?;
+    let tx = text_of(o);
+    check_that(o.code != 0, tx)?;
+    check_that(text_contains(tx, "rule `checked-paths`"), tx)?;
+    check_that(text_contains(tx, "this path comes from the contents of a file"), tx)?;
+    check_that(text_contains(tx, "`save` is called here"), tx)?;
+    check_that(text_contains(tx, "a file's contents are read here"), tx)?;
+    // A path from the command line passes it.
+    let o2 = on(h, "fn save(p: Str, io: IoCap) -> Int { write_file(p, \"x\") }\nfn main(io: IoCap) -> Int { save(arg(1), io) }\n", "check --profile cyber --profile-report p.nz")?;
+    check_that(text_contains(o2.stdout, "\"checked-paths\""), o2.stdout)?;
+    check_that(!text_contains(text_of(o2), "rule `checked-paths`"), text_of(o2))
+}
+
+/// The index of the first note holding `needle`, or `Err`.
+fn pos_of(notes: Strs, needle: Str) -> Result[Int, Str] ! {} {
+    let mut i = 0;
+    while i < strs_len(notes) {
+        if text_contains(strs_get(notes, i), needle) {
+            return Result[Int, Str].Ok(value: i);
+        }
+        i = i + 1;
+    }
+    Result[Int, Str].Err(error: f"{needle}: {str_join(notes, " | ")}")
+}
+
+@test
+fn explain_flow_prints_each_origins_chain_from_where_it_entered(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn show(s: Str, out: OutCap) -> Int { print(s) }\nfn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"c\")); show(strs_get(xs, 0), io); print(arg(0)); 0 }\n";
+    let d = prog_dir(h, "p.nz", src)?;
+    let o = nazm(h, d, words("explain-flow --json p.nz"));
+    let again = nazm(h, d, words("explain-flow --json p.nz"));
+    let human = nazm(h, d, words("explain-flow p.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, text_of(o))?;
+    let flow = jparse(o.stdout)?;
+    check_that(jstr(flow, "schema") == "nazm.flow/2", o.stdout)?;
+    let show = sink_of(flow, "show");
+    check_that(show != "" && jis(flow, f"{show}/origins", "[\"file\"]"), o.stdout)?;
+    let notes = notes_of(flow, show);
+    let joined = str_join(notes, " | ");
+    // From the source to the sink, every hop in order.
+    check_that(strs_len(notes) > 0 && strs_get(notes, 0) == "a file's contents are read here", joined)?;
+    check_that(pos_of(notes, "written into a `Strs`")? < pos_of(notes, "read out of a `Strs`")?, joined)?;
+    check_that(pos_of(notes, "read out of a `Strs`")? < pos_of(notes, "`show` is called here")?, joined)?;
+    check_that(text_contains(strs_get(notes, strs_len(notes) - 1), "standard output"), joined)?;
+    // Every step names a place.
+    let steps = f"{show}/traces/0/steps";
+    let mut i = 0;
+    while i < jlen(flow, steps) {
+        let at = jq(flow, f"{steps}/{i}/at/line");
+        check_that(at >= 0 && json_kind(flow, at) == "number", jv(flow, f"{steps}/{i}"))?;
+        i = i + 1;
+    }
+    // Deterministic: the same bytes twice.
+    check_that(o.stdout == again.stdout, "explain-flow differs between two runs")?;
+    // And the human form shows the chain under the sink.
+    let ht = text_of(human);
+    check_that(text_contains(ht, "    file:"), ht)?;
+    check_that(text_contains(ht, "a file's contents are read here"), ht)
+}
+
+@test
+fn nothing_that_runs_changes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Provenance is erased before Core IR: an accepted program behaves the same in the interpreter
+    // and natively.
+    let src = "struct Job { path: Str, body: Str }\nfn main(io: IoCap) -> Int ! { io } {\nlet xs = strs_new(); strs_push(xs, \"out\");\nlet j = Job(path: strs_get(xs, 0), body: \"b\");\nlet f = fn(s: Str) -> Int ! {} { str_len(s) };\nprint(j.path); f(j.body)\n}\n";
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("run --interpret p.nz"));
+    let b = nazm(h, d, words("build --backend cranelift p.nz -o p"));
+    let native = run(h, f"{d}/p", strs_new(), d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(r.code == 0, text_of(r))?;
+    check_that(b.code == 0, text_of(b))?;
+    check_that(r.stdout == native.stdout, f"{r.stdout} / {native.stdout}")?;
+    check_that(r.stdout == "out1\n", r.stdout)
+}

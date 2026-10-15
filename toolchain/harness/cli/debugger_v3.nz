@@ -1,0 +1,261 @@
+// N91: debugger and profiler v3 — lexical scopes, Cranelift's debug information, and sampling. A
+// binding visible only in its own block (LLVM); a Cranelift build's functions and lines found by
+// `lldb`; a sampled run's samples attributed to Nazm functions and `.nz` lines by macOS's `sample`.
+// Tools a host lacks are skipped by name. The live `gdb` session (Docker) and the cost measurement
+// are `#[ignore]`d in Rust and stay there (design decision 10). Ported from
+// `crates/nazm-cli/tests/debugger_v3.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+/// Three blocks: the function's own (`outer`), and each branch's (`inner`, `other`).
+const SCOPES: Str = "fn f(n: Int) -> Int {\n    let outer = n + 1;\n    if n > 0 {\n        let inner = outer * 2;\n        inner + 1\n    } else {\n        let other = outer - 1;\n        other\n    }\n}\nfn main() -> Int { f(3) }\n";
+
+/// A loop long enough to be sampled: about a second of work.
+const SPIN: Str = "fn work(n: Int) -> Int {\n    let mut i = 0;\n    let mut acc = 0;\n    while i < n {\n        acc = (acc + i * 7) % 1000003;\n        i = i + 1;\n    }\n    acc\n}\nfn main() -> Int { work(120000000) }\n";
+
+/// `nazm ARGS` in `dir`, Nazm's own code generator named where `--backend nazm` asks for it.
+fn nz(h: Caps, dir: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let env = if text_contains(args, "--backend nazm") { env_set(suite_env(h), "NAZM_NZCG", nzcg(h, dir)?) } else { suite_env(h) };
+    Result[Ran, Str].Ok(value: run(h, nazm_bin(h.io), words(args), dir, env))
+}
+
+/// The first word of an IR line: its metadata node, `!12`.
+fn node(l: Str) -> Str ! {} {
+    strs_get(text_split(l, " "), 0)
+}
+
+/// The scope a `DILocalVariable` named `var` is in.
+fn scope_of(ir: Str, var: Str) -> Str ! {} {
+    for l in text_lines(ir) {
+        if text_contains(l, f"DILocalVariable(name: \"{var}\"") {
+            let at = find(l, "scope: ") + 7;
+            return strs_get(text_split(str_slice(l, at, str_len(l)), ","), 0);
+        }
+    }
+    ""
+}
+
+@test
+fn a_binding_is_scoped_to_its_own_block(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "s.nz", SCOPES)?;
+    let b = nz(h, d, "build --debug --no-cache --emit-ir s.nz -o s")?;
+    check_that(b.code == 0, b.stderr)?;
+    let ir = read_text(h, f"{d}/s.m0.ll")?;
+    // One lexical block per branch, each opening where its `{` is, inside the subprogram.
+    let blocks = strs_new();
+    let mut sp_node = "";
+    for l in text_lines(ir) {
+        if text_contains(l, "DILexicalBlock(") {
+            strs_push(blocks, l);
+        }
+        if sp_node == "" && text_contains(l, "DISubprogram(name: \"f\"") {
+            sp_node = node(l);
+        }
+    }
+    check_that(strs_len(blocks) == 2, ir)?;
+    check_that(text_contains(strs_get(blocks, 0), "line: 3, column: 14"), str_join(blocks, "\n"))?;
+    check_that(text_contains(strs_get(blocks, 1), "line: 6, column: 12"), str_join(blocks, "\n"))?;
+    let first = node(strs_get(blocks, 0));
+    check_that(scope_of(ir, "inner") == first, ir)?;
+    check_that(scope_of(ir, "other") == node(strs_get(blocks, 1)), ir)?;
+    // A binding of the function's own body, and a parameter, are the subprogram's.
+    check_that(sp_node != "" && scope_of(ir, "outer") == sp_node, ir)?;
+    check_that(scope_of(ir, "n") == sp_node, ir)?;
+    // An instruction of `inner`'s line is in `inner`'s block.
+    check_that(text_contains(ir, f"DILocation(line: 5, column: 15, scope: {first})"), ir)?;
+    // The scopes change nothing the program does.
+    let r = bounded_exe(h, f"{d}/s", d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(r.stdout == "9\n", ran_show(r))
+}
+
+@test
+fn a_cranelift_build_carries_debug_information_only_when_asked(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "s.nz", SCOPES)?;
+    for dir in words("plain debug") {
+        let debug = dir == "debug";
+        let flag = if debug { "--debug " } else { "" };
+        let b = nz(h, d, f"build {flag}--no-cache --backend cranelift --objects {dir} s.nz")?;
+        check_that(b.code == 0, b.stderr)?;
+        let object = read_raw(h, f"{d}/{dir}/00-m0.o")?;
+        check_that(text_contains(object, "debug_info") == debug, f"{dir}: debug_info")?;
+        check_that(text_contains(object, "debug_line") == debug, f"{dir}: debug_line")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// `lldb`'s answer to static queries — nothing is launched.
+fn query(h: Caps, dir: Str, exe: Str, commands: Strs) -> Str ! { io, spawn } {
+    let a = words("--batch");
+    for q in commands {
+        strs_push(a, "-o");
+        strs_push(a, q);
+    }
+    strs_push(a, exe);
+    run(h, "lldb", a, dir, env_here(h.io)).stdout
+}
+
+fn hex_to_int(s: Str) -> Int ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let d = if b >= 48 && b <= 57 { b - 48 } else { if b >= 97 && b <= 102 { b - 87 } else { b - 55 } };
+        n = n * 16 + d;
+        i = i + 1;
+    }
+    n
+}
+
+/// The `DW_AT_low_pc` of the subprogram named `f` in `dwarfdump --debug-info`'s text, or -1.
+fn low_pc(dwarf: Str, f: Str) -> Int ! {} {
+    for die in text_split(dwarf, "DW_TAG_subprogram") {
+        if text_contains(die, f"DW_AT_name\t(\"{f}\")") {
+            let at = find(die, "DW_AT_low_pc\t(0x");
+            if at >= 0 {
+                let rest = str_slice(die, at + str_len("DW_AT_low_pc\t(0x"), str_len(die));
+                return hex_to_int(strs_get(text_split(rest, ")"), 0));
+            }
+        }
+    }
+    0 - 1
+}
+
+/// The address `nm` gives the symbol ending in `suffix` among Nazm's (`nz.m.`), or -1.
+fn symbol_at(symbols: Str, suffix: Str) -> Int ! {} {
+    for l in text_lines(symbols) {
+        if text_ends_with(l, suffix) && text_contains(l, "nz.m.") {
+            return hex_to_int(strs_get(split_whitespace(l), 0));
+        }
+    }
+    0 - 1
+}
+
+fn breakpoints(cmds: Str) -> Strs ! {} {
+    text_split(cmds, "|")
+}
+
+/// Off macOS the Rust test is ignored, and this one passes without looking.
+@test
+fn a_debugger_finds_a_cranelift_build_s_functions_and_lines(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let has_lldb = run(h, "lldb", words("--version"), "", env_here(h.io)).code == 0;
+    if skip_without(h, has_lldb, "no lldb on this machine")? {
+        return ok();
+    }
+    let d = prog_dir(h, "s.nz", SCOPES)?;
+    let b = nz(h, d, "build --debug --backend cranelift s.nz -o s")?;
+    check_that(b.code == 0, b.stderr)?;
+    // Each subprogram's address in the gathered DWARF is its symbol's in the executable.
+    let dwarf = run(h, "dwarfdump", words("--debug-info s.dSYM"), d, env_here(h.io)).stdout;
+    let symbols = run(h, "nm", words("s"), d, env_here(h.io)).stdout;
+    for f in words("f main") {
+        let at = low_pc(dwarf, f);
+        check_that(at >= 0, f"no subprogram {f}: {dwarf}")?;
+        // `main` is under `main.body`, beside the plain entry the platform calls (R1, 5b.8).
+        let suffix = if f == "main" { ".main.body" } else { f".{f}" };
+        let symbol = symbol_at(symbols, suffix);
+        check_that(symbol >= 0, f"no symbol for {f}: {symbols}")?;
+        check_that(at == symbol, f"{f}: DWARF {at}, symbol {symbol}")?;
+    }
+    let text = query(h, d, "./s", breakpoints("breakpoint set -n f|breakpoint set -f s.nz -l 5"));
+    // By function: after the prologue, on the first statement.
+    check_that(text_contains(text, "`f + ") && text_contains(text, "at s.nz:2:"), text)?;
+    check_that(text_contains(text, "at s.nz:5:"), f"a breakpoint by line: {text}")?;
+    // A line added above the function moves every line, and the next build says so — no debug
+    // object is reused from the cache.
+    scratch_write(h, d, "s.nz", f"// a comment\n{SCOPES}")?;
+    let b2 = nz(h, d, "build --debug --backend cranelift s.nz -o s")?;
+    check_that(b2.code == 0, b2.stderr)?;
+    let text2 = query(h, d, "./s", breakpoints("breakpoint set -n f"));
+    scratch_remove(h, d);
+    check_that(text_contains(text2, "at s.nz:3:"), text2)
+}
+
+/// The sum of `samples` over the array at `key` of the report's `samples`.
+fn sum_of(v: JsonDoc, key: Str) -> Int ! {} {
+    let mut s = 0;
+    let mut i = 0;
+    while i < jlen(v, f"samples/{key}") {
+        s = s + jint(v, f"samples/{key}/{i}/samples");
+        i = i + 1;
+    }
+    s
+}
+
+/// Off macOS the Rust test is ignored, and this one passes without looking.
+@test
+fn a_sampled_run_is_attributed_to_nazm_functions_and_lines(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    if skip_without(h, file_exists_at(h.io, "/usr/bin/sample"), "no sampler on this machine")? {
+        return ok();
+    }
+    let d = prog_dir(h, "spin.nz", SPIN)?;
+    // Nazm's own code generator too: its line tables attribute the samples (R9, D15).
+    for backend in words("llvm cranelift nazm") {
+        let o = nz(h, d, f"profile --sample --backend {backend} spin.nz")?;
+        check_that(o.code == 0, o.stderr)?;
+        let r = jparse(o.stdout)?;
+        check_that(jstr(r, "schema") == "nazm.profile/2", backend)?;
+        check_that(jint(r, "exit") == 0, backend)?;
+        check_that(jstr(r, "samples/sampler") == "sample", backend)?;
+        check_that(jint(r, "samples/interval_ms") == 1, backend)?;
+        // Every sample is in exactly one place.
+        let total = jint(r, "samples/total");
+        let placed = sum_of(r, "nazm") + sum_of(r, "runtime") + sum_of(r, "foreign") + sum_of(r, "system") + jint(r, "samples/unattributed");
+        check_that(total == placed, f"{backend}: {total} samples, {placed} placed")?;
+        // The loop is where the program's own time is: `work`, on its lines — the loop's
+        // condition, body and increment — or on code no statement made (line 0).
+        let mut in_work = 0;
+        let mut on_five = false;
+        let mut i = 0;
+        while i < jlen(r, "samples/nazm") {
+            let e = f"samples/nazm/{i}";
+            if jstr(r, f"{e}/function") == "work" && jstr(r, f"{e}/file") == "spin.nz" {
+                in_work = in_work + jint(r, f"{e}/samples");
+            }
+            let line = jint(r, f"{e}/line");
+            check_that(line == 0 || line == 4 || line == 5 || line == 6 || line == 10, f"{backend}: line {line}")?;
+            if line == 5 {
+                on_five = true;
+            }
+            i = i + 1;
+        }
+        check_that(in_work > 100, f"{backend}: {in_work} samples in work")?;
+        check_that(on_five, f"{backend}: no sample on line 5")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn an_interval_without_sampling_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "spin.nz", SPIN)?;
+    let o = nz(h, d, "profile --interval-ms 5 spin.nz")?;
+    scratch_remove(h, d);
+    check_that(o.code == 5, o.stderr)?;
+    check_that(text_contains(o.stderr, "--sample"), o.stderr)
+}
+
+// `a_live_session_on_either_backend_shows_nazm_frames_and_lines` ("needs Docker and the
+// nazm-debug image") and `what_debugging_and_sampling_cost` ("a measurement") are `#[ignore]`d in
+// Rust: they stay Rust (design decision 10).
