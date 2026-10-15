@@ -308,7 +308,12 @@ other failure `N0900`; a missing generator or a target it does not carry (anythi
 macOS targets before 1.0) is refused before compiling. Failures unwind as LLVM's do (its 7.5), so
 the two backends' objects link together. EXPERIMENTAL. Evidence: `crates/nazm-cli/tests/nazm_backend.rs`
 (117 inputs agree with LLVM, output, diagnostics, status and memory report), a `nazm` column in the
-backend-differential harness and `failure_convention.rs` on macOS; mutants `r9-…`.
+backend-differential harness and `failure_convention.rs` on macOS; mutants `r9-…`. Packaged (its
+7.8): `scripts/host-archive.sh` and `scripts/release-candidate.sh` build `nzcg` with the `nazm` they
+package and install it as `libexec/nazm/nzcg` on the macOS targets (the candidate's `MANIFEST.txt`
+and `PROVENANCE.txt` name its digest), and `scripts/clean-install-test.sh` builds with
+`--backend nazm` where the archive carries it; the unpacked toolchain finds it with `NAZM_NZCG`
+unset (`the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable`).
 
 **Performance leadership (2026-10-15)** · *Failures by unwinding* (`docs/architecture.md` §7.115;
 `openspec/changes/performance-leadership`, 4.2). On the hosted targets under LLVM a Nazm function

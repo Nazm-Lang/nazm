@@ -123,6 +123,18 @@ if [ -x "$target/bootstrap/stage2/nazmc" ]; then
 else
     fail "the bootstrap produced no stage-2 compiler to package"
 fi
+# Nazm's own code generator (R9, D15), where `--backend nazm` builds before 1.0 — macOS — built
+# from toolchain/codegen/ by the `nazm` being packaged and installed where the backend looks for
+# it, `../libexec/nazm/nzcg` from `bin/nazm`. Without a cache, and from the target directory,
+# since the checkout may be read-only.
+nzcg=no
+if [ "$(uname -s)" = Darwin ]; then
+    mkdir -p "$out/libexec/nazm"
+    (cd "$target" && "$out/bin/nazm" build --no-cache "$root/toolchain/codegen/main.nz" \
+        -o "$out/libexec/nazm/nzcg" >/dev/null) \
+        || fail "Nazm's code generator (toolchain/codegen/) did not build"
+    nzcg=yes
+fi
 cp README.md LICENSE* NOTICE THIRD-PARTY-NOTICES.md SECURITY.md CONTRIBUTING.md "$out/"
 cp docs/*.md docs/*.ebnf "$out/docs/"
 cp schema/*.json "$out/schema/"
@@ -200,6 +212,11 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf '  bin/nazmc-selfhosted                 the compiler written in Nazm, as C2 —\n'
     printf '                                       built by C1 from compiler/emit.nz, for %s.\n' "$(uname -sm)"
     printf '                                       Byte-identical to C3.\n'
+    if [ "$nzcg" = yes ]; then
+        printf '  libexec/nazm/nzcg                    Nazm'"'"'s own code generator, `--backend nazm`,\n'
+        printf '                                       built by bin/nazm from toolchain/codegen/.\n'
+        printf '                                       sha256 %s\n' "$(sha256 "$out/libexec/nazm/nzcg")"
+    fi
     printf '\n'
     printf 'Neither binary is portable off %s. The sources are; see docs/bootstrap.md.\n' "$(uname -sm)"
     printf '\n'
@@ -238,6 +255,7 @@ cp "$target/bootstrap/record.txt" "$out/docs/bootstrap-record.txt"
     printf 'what is measured in docs/performance.md, and what is not done in\n'
     printf 'docs/limitations.md.\n'
     printf '\n'
+    [ "$nzcg" = yes ] && printf 'nzcg-sha:    %s (libexec/nazm/nzcg)\n\n' "$(sha256 "$out/libexec/nazm/nzcg")"
     printf 'contains: the binary, the documentation, the JSON schemas, the examples,\n'
     printf 'the compiler written in Nazm with its bootstrap script and conformance\n'
     printf 'corpus, the benchmark programs, and the scripts the documentation names.\n'

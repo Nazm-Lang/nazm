@@ -137,3 +137,13 @@
       killer, restored. Not done: installing `nzcg` as `libexec/nazm/nzcg` in the release
       build (`cargo xtask` packaging), and `nazm profile --backend nazm`
 - [ ] 7.6 aarch64 branch fusion, and the x86_64 remainder's divisor guard in fewer instructions
+- [x] 7.8 Packaging: `nzcg` installed as `libexec/nazm/nzcg` wherever a toolchain is assembled,
+      on the two macOS targets — `scripts/host-archive.sh` (the archive, with a line in its
+      `INSTALL.txt`) and `scripts/release-candidate.sh` (its `MANIFEST.txt` lists the file with
+      its digest, `PROVENANCE.txt` names it among the binaries) — built from `toolchain/codegen/`
+      by the `nazm` being packaged, `--no-cache` and outside the checkout (which may be
+      read-only). `scripts/clean-install-test.sh` builds and runs with `--backend nazm` when the
+      archive carries it. `nazm_backend::the_packaged_toolchain_finds_its_generator_beside_nazm_without_the_variable`
+      packages the `nazm` under test, passes the clean install, builds with `NAZM_NZCG` unset, and
+      with the generator moved away is refused (exit 4) naming `libexec/nazm/nzcg`. Mutant
+      `r9-7-8-the-archive-carries-no-generator`, applied by hand, killed, restored
