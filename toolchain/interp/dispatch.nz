@@ -1,7 +1,8 @@
 // A trait call's impl (`openspec/changes/r4-interpreter/design.md`, D8): chosen by the receiver's
 // type, as the Rust interpreter chooses it (`exec.rs`, `CallTrait`), and found by the impl
 // function's key, `MODULE::fn Trait/Type/method` — in the trait's module or the type's, the only
-// two an impl may be in — since the printed Core IR does not carry the impl table (*Requests*).
+// two an impl may be in — when the Core IR is `/2`, which does not carry the impl table; `/3`'s
+// impl table answers first, a default method included.
 
 use "@std/hash"
 use "@std/hashmap"
@@ -20,6 +21,13 @@ pub fn impl_for(p: Prog, method: Int, receiver: V) -> Int {
         None => { },
     }
     let m = strs_get(p.names, method)
+    match hashmap_get(p.impls, m + "|" + def_key(ty)) {
+        Some(f) => {
+            hashmap_set(p.tcache, key, f)
+            return f
+        },
+        None => { },
+    }
     let sep = find(m, "::trait ")
     let tmod = str_slice(m, 0, sep)
     let rest = str_slice(m, sep + 8, str_len(m))

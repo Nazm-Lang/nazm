@@ -1,0 +1,45 @@
+// What `nazm.core-ir/3`'s tables carry: a static `Atomic`'s initial value (`statics`), a trait's
+// default method reached through a generic call (`impls`), and the canonical orders a derived
+// comparison walks (`types`).
+static COUNT: Atomic = atomic_new(7)
+static LIMIT: Int = 40
+
+trait Size {
+    fn size(self: Self) -> Int;
+    fn twice(self: Self) -> Int { self.size() * 2 }
+}
+
+struct Holder[T] { item: T, n: Int, }
+
+impl[T] Size for Holder[T] { fn size(self: Holder[T]) -> Int { self.n } }
+
+impl Size for Int {
+    fn size(self: Int) -> Int { self }
+    fn twice(self: Int) -> Int { self * 3 }
+}
+
+fn total[T: Size](xs: Vec[T]) -> Int {
+    let mut t = 0
+    for x in xs { t += x.twice() }
+    t
+}
+
+enum Pri { Low, Mid(n: Int), High(z: Str, a: Int) }
+
+struct Q { c: Int, a: Int, b: Int }
+
+fn main() {
+    let a = atomic_add(COUNT, 1)
+    println(f"{a} {atomic_load(COUNT)} {LIMIT}")
+    let h = Holder[Str](item: "s", n: 4)
+    let k = Holder[Int](item: 1, n: 5)
+    println(f"{h.twice()} {k.twice()} {(7).twice()}")
+    let v = vec_new[Holder[Str]]()
+    vec_push(v, h)
+    vec_push(v, Holder[Str](item: "t", n: 10))
+    let w = vec_new[Int]()
+    vec_push(w, 2)
+    println(f"{total(v)} {total(w)}")
+    println(f"{Pri.Low < Pri.Mid(n: 1)} {Pri.High(z: "a", a: 2) < Pri.High(z: "a", a: 1)} {Pri.High(z: "b", a: 0) > Pri.Mid(n: 9)}")
+    println(f"{Q(c: 1, a: 2, b: 3) < Q(c: 0, a: 2, b: 4)} {Q(c: 1, a: 2, b: 3) == Q(c: 1, a: 2, b: 3)}")
+}
