@@ -382,6 +382,12 @@
         3,048 agree, 0 differ; of 56,919 functions the lowering carries 53,517, all agree; the
         other parts 10,374, all agree; 1,164 whole documents, all the reference's bytes. check,
         render and facts as before
+  - [x] Attributes and `scope`: every attribute is carried (`@test`, `@bench`, `@fuzz`,
+        `@cfg` and the rest change nothing Core IR prints); `@interrupt`, `@task` (`task_of`) and
+        `@on_failure` are printed in the function's attributes; a `scope` block as `scope`.
+        `run.sh core`: 3,048 agree, 0 differ; of 56,929 functions the lowering carries 53,923,
+        all agree; the other parts 10,374, all agree; 1,184 whole documents, all the
+        reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

@@ -271,20 +271,81 @@ fn co_static_decl(t: Tree, program: Int, name: Str) -> Int {
 }
 
 // The one string argument of a declaration's `@section`, or "" (`section_of`).
-fn co_section(t: Tree, decl: Int) -> Str {
+fn co_section(t: Tree, decl: Int) -> Str { co_string_attr(t, decl, "section") }
+
+// A declaration's first attribute of this name, or -1.
+fn co_attr(t: Tree, decl: Int, name: Str) -> Int {
     let attrs = sx_items(t, sx_field(t, decl, "attrs"));
     let mut k = 0;
     while k < ints_len(attrs) {
-        let a = ints_get(attrs, k);
-        if sx_name(t, a, "name") == "section" {
-            if sx_is_some(t, sx_field(t, a, "args")) == false { return ""; }
-            let args = sx_items(t, sx_unwrap(t, sx_field(t, a, "args")));
-            if ints_len(args) == 1 && sx_text(t, ints_get(args, 0)) == "Str" { return sx_text(t, sx_field(t, ints_get(args, 0), "value")); }
-            return "";
+        if sx_name(t, ints_get(attrs, k), "name") == name { return ints_get(attrs, k); }
+        k = k + 1;
+    }
+    0 - 1
+}
+
+// The one string argument of a declaration's attribute `name`, or "" (`string_attr`).
+fn co_string_attr(t: Tree, decl: Int, name: Str) -> Str {
+    let a = co_attr(t, decl, name);
+    if a < 0 || sx_is_some(t, sx_field(t, a, "args")) == false { return ""; }
+    let args = sx_items(t, sx_unwrap(t, sx_field(t, a, "args")));
+    if ints_len(args) == 1 && sx_text(t, ints_get(args, 0)) == "Str" { return sx_text(t, sx_field(t, ints_get(args, 0), "value")); }
+    ""
+}
+
+// A function's `@task(priority = "N", period = "P")` (`task_of`): its priority and period where
+// both are written and in range, or `null`.
+fn co_task(t: Tree, decl: Int) -> Str {
+    let a = co_attr(t, decl, "task");
+    if a < 0 || sx_is_some(t, sx_field(t, a, "args")) == false { return "null"; }
+    let args = sx_items(t, sx_unwrap(t, sx_field(t, a, "args")));
+    let mut priority = "";
+    let mut period = "";
+    let mut k = 0;
+    while k < ints_len(args) {
+        let x = ints_get(args, k);
+        if sx_text(t, x) == "Pair" {
+            let key = sx_name(t, x, "key");
+            let value = sx_name(t, x, "value");
+            if key == "priority" {
+                priority = "";
+                if co_digits(value) && str_len(value) <= 3 && int_from_digits(value) <= 255 { priority = int_to_str(int_from_digits(value)); }
+            } else {
+                if key == "period" {
+                    period = "";
+                    if co_digits(value) && str_len(value) <= 18 && int_from_digits(value) >= 1 { period = int_to_str(int_from_digits(value)); }
+                } else {
+                    return "null";
+                }
+            }
         }
         k = k + 1;
     }
-    ""
+    if priority == "" || period == "" { return "null"; }
+    let o = strs_new();
+    strs_push(o, co_field_first("priority", priority));
+    strs_push(o, co_field("period", period));
+    co_object(o)
+}
+
+fn co_digits(s: Str) -> Bool {
+    if str_len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) < 48 || str_byte(s, i) > 57 { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn int_from_digits(s: Str) -> Int {
+    let mut v = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        v = v * 10 + str_byte(s, i) - 48;
+        i = i + 1;
+    }
+    v
 }
 
 // The impl table (`ImplRow`): each impl the coherence table answers with, every method of its
@@ -373,13 +434,6 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let node = ck_fn_node(c, i);
     if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
     if ints_len(sx_items(t, sx_field(t, node, "contracts"))) > 0 { return co_stopped(lo, "a contract"); }
-    let attrs = sx_items(t, sx_field(t, node, "attrs"));
-    let mut k = 0;
-    while k < ints_len(attrs) {
-        let an = sx_name(t, ints_get(attrs, k), "name");
-        if an != "deprecated" && an != "section" { return co_stopped(lo, str_concat("the attribute @", sx_name(t, ints_get(attrs, k), "name"))); }
-        k = k + 1;
-    }
     if ck_fn_required(c, i) < 0 { return co_stopped(lo, "a function whose effects were not settled"); }
     // Its locals are its bindings, parameters first, in the order the checker made them.
     let mut b = 0;
@@ -429,9 +483,9 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let attributes = strs_new();
     strs_push(attributes, co_field_first("export", co_json_or_null(ck_fn_export(c, i))));
     strs_push(attributes, co_field("section", co_json_or_null(co_section(t, node))));
-    strs_push(attributes, co_field("interrupt", "null"));
-    strs_push(attributes, co_field("task", "null"));
-    strs_push(attributes, co_field("on_failure", "false"));
+    strs_push(attributes, co_field("interrupt", co_json_or_null(co_string_attr(t, node, "interrupt"))));
+    strs_push(attributes, co_field("task", co_task(t, node)));
+    strs_push(attributes, co_field("on_failure", co_json_bool(co_attr(t, node, "on_failure") >= 0)));
     strs_push(out, co_field("attributes", co_object(attributes)));
     strs_push(out, co_field("at", json_str(co_tree_span(lo, sx_field(t, node, "span")))));
     strs_push(out, co_field("body", body));
@@ -788,6 +842,17 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
         strs_push(o, co_field("body", co_block_json(lo, false, owns, stmts, "null", sx_field(t, n, "span"))));
         strs_push(o, co_field("ends", co_ends(false)));
         co_set_last(lo, 0 - 1, false);
+        return co_object(o);
+    }
+    if k == "Scope" {
+        let body = co_statement_block(lo, sx_field(t, n, "body"));
+        let transfers = co_last_transfers(lo);
+        let o = strs_new();
+        strs_push(o, co_op_first("scope"));
+        strs_push(o, co_field("body", body));
+        strs_push(o, co_field("ends", co_ends(transfers)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
+        co_set_last(lo, 0 - 1, transfers);
         return co_object(o);
     }
     if k == "Return" {
