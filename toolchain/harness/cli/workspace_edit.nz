@@ -1,0 +1,197 @@
+// `nazm patch rename` across a workspace: an exported function renamed in every module, a plan
+// applied only to the bytes it was made from, no rename without a declared workspace or in a
+// library package, a rename that would capture a name refused, a record and its field renamed.
+// Ported from `crates/nazm-cli/tests/workspace_edit.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/agree.nz"
+use "../lib/differential.nz"
+
+/// `files` (name, text, …) written under a fresh directory, their directories made.
+fn workspace(h: Caps, files: Strs) -> Result[Str, Str] ! { io } {
+    files_dir(h, files)
+}
+
+fn read(h: Caps, d: Str, name: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{d}/{name}")
+}
+
+/// The rename plan `nazm patch rename` makes for the name at `byte` of `util/math.nz`.
+fn plan(h: Caps, d: Str, byte: Str, name: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let o = nazm(h, d, words(f"patch rename --root app/main.nz --file util/math.nz --byte {byte} --new-name {name} --json"));
+    match jparse(o.stdout) {
+        Result.Ok(value: doc) => Result[JsonDoc, Str].Ok(value: doc),
+        Result.Err(error: e) => Result[JsonDoc, Str].Err(error: f"{e}: {o.stderr}"),
+    }
+}
+
+/// Each file of a plan as `path:edits`.
+fn plan_files(p: JsonDoc) -> Strs ! {} {
+    let out = strs_new();
+    let n = jlen(p, "files");
+    let mut i = 0;
+    while i < n {
+        strs_push(out, f"{jstr(p, f"files/{i}/path")}:{jlen(p, f"files/{i}/edits")}");
+        i = i + 1;
+    }
+    out
+}
+
+const MATH: Str = "pub fn double(x: Int) -> Int ! {} { x * 2 }\nfn helper() -> Int ! {} { double(1) }\n";
+const MAIN: Str = "use \"../util/math.nz\";\nfn main() -> Int { double(21) }\n";
+const OTHER: Str = "use \"../util/math.nz\" as m;\npub fn quad(x: Int) -> Int ! {} { m::double(m::double(x)) }\n";
+
+@test
+fn an_exported_function_is_renamed_in_every_module_of_the_workspace(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    strs_push(l1, "nazm.root");
+    strs_push(l1, "");
+    strs_push(l1, "util/math.nz");
+    strs_push(l1, MATH);
+    strs_push(l1, "app/main.nz");
+    strs_push(l1, MAIN);
+    strs_push(l1, "app/other.nz");
+    strs_push(l1, OTHER);
+    strs_push(l1, "app/unrelated.nz");
+    strs_push(l1, "fn double(x: Int) -> Int ! {} { x + x }\nfn main() -> Int { double(2) }\n");
+    let d = workspace(h, l1)?;
+    let p = plan(h, d, "7", "twice")?;
+    check_that(jstr(p, "status") == "available", jtext(p, ""))?;
+    let files = plan_files(p);
+    // `app/other.nz` is in no compilation `app/main.nz` loads; the workspace finds it.
+    same_strs("files", files, words("app/main.nz:1 app/other.nz:2 util/math.nz:2"))?;
+    scratch_write(h, d, "plan.json", jtext(p, ""))?;
+    let a = nazm(h, d, words("patch apply plan.json"));
+    check_that((a.code == 0), "assert!((a.code == 0), \"{}\", a.stderr);")?;
+    check_that(read(h, d, "util/math.nz")? == text_replace(MATH, "double", "twice"), "assert_eq!(read(h, d, \"util/math.nz\")?, text_replace(MATH, \"double\", \"twice\"));")?;
+    check_that(read(h, d, "app/main.nz")? == text_replace(MAIN, "double", "twice"), "assert_eq!(read(h, d, \"app/main.nz\")?, text_replace(MAIN, \"double\", \"twice\"));")?;
+    check_that(read(h, d, "app/other.nz")? == text_replace(OTHER, "double", "twice"), "assert_eq!(read(h, d, \"app/other.nz\")?, text_replace(OTHER, \"double\", \"twice\"));")?;
+    check_that(text_contains(read(h, d, "app/unrelated.nz")?, "fn double"), read(h, d, "app/unrelated.nz")?)?;
+    // The renamed workspace checks and runs as before.
+    let r = nazm(h, d, words("run --interpret app/main.nz"));
+    check_that(r.stdout == "42\n", "assert_eq!(r.stdout, \"42\\n\");")?;
+    ok()
+}
+
+@test
+fn a_plan_is_applied_only_to_the_bytes_it_was_made_from(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l2 = strs_new();
+    strs_push(l2, "nazm.root");
+    strs_push(l2, "");
+    strs_push(l2, "util/math.nz");
+    strs_push(l2, MATH);
+    strs_push(l2, "app/main.nz");
+    strs_push(l2, MAIN);
+    strs_push(l2, "app/other.nz");
+    strs_push(l2, OTHER);
+    let d = workspace(h, l2)?;
+    let p = plan(h, d, "7", "twice")?;
+    scratch_write(h, d, "plan.json", jtext(p, ""))?;
+    // One file edited after planning: nothing is written, the file is named.
+    let edited = f"{OTHER}// later\n";
+    scratch_write(h, d, "app/other.nz", edited)?;
+    let a = nazm(h, d, words("patch apply plan.json"));
+    check_that(a.code == 1, ran_show(a))?;
+    check_that(text_contains(a.stderr, "`app/other.nz` is not the file the plan was made from"), a.stderr)?;
+    check_that(read(h, d, "util/math.nz")? == MATH, "assert_eq!(read(h, d, \"util/math.nz\")?, MATH);")?;
+    check_that(read(h, d, "app/main.nz")? == MAIN, "assert_eq!(read(h, d, \"app/main.nz\")?, MAIN);")?;
+    check_that(read(h, d, "app/other.nz")? == edited, "assert_eq!(read(h, d, \"app/other.nz\")?, edited);")?;
+    // A plan whose path leaves the base is refused.
+    let first = jstr(p, "files/0/path");
+    let escaping = text_replace(jtext(p, ""), f"\"path\":\"{first}\"", "\"path\":\"../outside.nz\"");
+    check_that(escaping != jtext(p, ""), "the plan's first path was not replaced")?;
+    scratch_write(h, d, "bad.json", escaping)?;
+    let b = nazm(h, d, words("patch apply bad.json"));
+    check_that(b.code == 1, ran_show(b))?;
+    check_that(text_contains(b.stderr, "not a path inside the base"), b.stderr)?;
+    ok()
+}
+
+@test
+fn without_a_declared_workspace_or_in_a_library_package_an_export_is_not_renamed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // No marker, no manifest: the root is the file's directory, and no workspace is declared.
+    let l3 = strs_new();
+    strs_push(l3, "math.nz");
+    strs_push(l3, MATH);
+    strs_push(l3, "main.nz");
+    strs_push(l3, "use \"math.nz\";\nfn main() -> Int { double(21) }\n");
+    let d = workspace(h, l3)?;
+    let o = nazm(h, d, words("patch rename --root main.nz --file math.nz --byte 7 --new-name twice --json"));
+    let v = jparse(o.stdout)?;
+    check_that(jstr(v, "status") == "unavailable", "assert_eq!(jstr(v, \"status\"), Some(\"unavailable\"));")?;
+    check_that(jstr(v, "reason") == "exported", "assert_eq!(jstr(v, \"reason\"), Some(\"exported\"));")?;
+    // A library package — no `main` in its manifest — has an API other packages import.
+    let l4 = strs_new();
+    strs_push(l4, "nazm.toml");
+    strs_push(l4, "schema = \"nazm.package/1\"\n\n[package]\nname = \"mathlib\"\nversion = \"1.0.0\"\n");
+    strs_push(l4, "src/math.nz");
+    strs_push(l4, MATH);
+    strs_push(l4, "src/use.nz");
+    strs_push(l4, "use \"math.nz\";\npub fn four() -> Int ! {} { double(2) }\n");
+    let lib = workspace(h, l4)?;
+    let o_2 = nazm(h, lib, words("patch rename --root src/use.nz --file src/math.nz --byte 7 --new-name twice --json"));
+    let v_2 = jparse(o_2.stdout)?;
+    check_that(jstr(v_2, "status") == "unavailable", "assert_eq!(jstr(v, \"status\"), Some(\"unavailable\"));")?;
+    check_that(jstr(v_2, "reason") == "package_api", "assert_eq!(jstr(v, \"reason\"), Some(\"package_api\"));")?;
+    // An application package — with a `main` — is a workspace like any declared root.
+    scratch_write(h, lib, "nazm.toml", "schema = \"nazm.package/1\"\n\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"use.nz\"\n")?;
+    scratch_write(h, lib, "src/use.nz", "use \"math.nz\";\nfn main() -> Int { double(2) }\n")?;
+    let o_3 = nazm(h, lib, words("patch rename --root src/use.nz --file src/math.nz --byte 7 --new-name twice --json"));
+    let v_3 = jparse(o_3.stdout)?;
+    check_that(jstr(v_3, "status") == "available", jtext(v_3, ""))?;
+    ok()
+}
+
+@test
+fn a_rename_that_would_capture_a_name_in_an_importer_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `other.nz` already has its own `twice`: renaming `double` to it would make two meanings
+    // of one name there.
+    let l5 = strs_new();
+    strs_push(l5, "nazm.root");
+    strs_push(l5, "");
+    strs_push(l5, "util/math.nz");
+    strs_push(l5, MATH);
+    strs_push(l5, "app/main.nz");
+    strs_push(l5, MAIN);
+    strs_push(l5, "app/other.nz");
+    strs_push(l5, "use \"../util/math.nz\";\nfn twice(x: Int) -> Int ! {} { x }\npub fn quad(x: Int) -> Int ! {} { double(twice(x)) }\n");
+    let d = workspace(h, l5)?;
+    let p = plan(h, d, "7", "twice")?;
+    check_that(jstr(p, "status") == "unavailable", jtext(p, ""))?;
+    let reason = jstr(p, "reason");
+    check_that(reason == "rejected" || reason == "meaning_changed", jtext(p, ""))?;
+    ok()
+}
+
+@test
+fn an_exported_record_and_its_field_are_renamed_across_modules(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l6 = strs_new();
+    strs_push(l6, "nazm.root");
+    strs_push(l6, "");
+    strs_push(l6, "shape.nz");
+    strs_push(l6, "pub struct Point { x: Int, y: Int }\npub fn origin() -> Point ! {} { Point(x: 0, y: 0) }\n");
+    strs_push(l6, "main.nz");
+    strs_push(l6, "use \"shape.nz\";\nfn main() -> Int { let p = Point(x: 3, y: 4); p.x + origin().y }\n");
+    let d = workspace(h, l6)?;
+    // The field `x` (byte 19 of `shape.nz`).
+    let o = nazm(h, d, words("patch rename --root main.nz --file shape.nz --byte 19 --new-name east --json"));
+    let p = jparse(o.stdout)?;
+    check_that(jstr(p, "status") == "available", jtext(p, ""))?;
+    scratch_write(h, d, "plan.json", jtext(p, ""))?;
+    check_that((nazm(h, d, words("patch apply plan.json")).code == 0), "assert!((nazm(h, d, words(\"patch apply plan.json\")).code == 0));")?;
+    check_that(text_contains(read(h, d, "main.nz")?, "Point(east: 3, y: 4); p.east"), read(h, d, "main.nz")?)?;
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.stdout == "3\n", "assert_eq!(r.stdout, \"3\\n\");")?;
+    ok()
+}
+

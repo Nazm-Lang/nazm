@@ -1,0 +1,225 @@
+// Numbers: every numeric type's operations, conversions and failures alike everywhere; what the
+// checker refuses, by name. Ported from `crates/nazm-cli/tests/numbers.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/tiers.nz"
+use "../lib/differential.nz"
+
+fn shape() -> Tiers ! {} {
+    Tiers(oracle: false, interp_memory: false, native_memory: false, native_in_dir: false)
+}
+
+/// Every implementation prints exactly `expected` — then `main`'s result, `0` — and exits 0.
+fn agrees_a(h: Caps, body: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let want = f"{expected}0\n";
+    let src = f"fn show(out: OutCap, s: Str) -> Int ! {{io}} {{ print(str_concat(s, \"\\n\")) }}\nfn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n0\n}}\n";
+    for run_ in tiers_of(h, "prog.nz", src, shape())? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}\n{src}")?;
+        check_that(r.stdout == want, f"{who}: {r.stdout}\n{src}")?;
+    }
+    ok()
+}
+
+/// Every implementation stops with exit status 2 and `code`.
+fn traps(h: Caps, body: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let src = f"fn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n}}\n";
+    for run_ in tiers_of(h, "prog.nz", src, shape())? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 2, f"{who}: {ran_show(r)}\n{src}")?;
+        check_that(text_contains(r.stderr, code), f"{who}: {r.stderr}\n{src}")?;
+    }
+    ok()
+}
+
+/// The codes `nazm check` refuses a program with: the error diagnostics' codes on standard error.
+fn refused(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"expected a refusal: {ran_show(r)}\n{src}")?;
+    let out = strs_new();
+    for l in lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if jstr(doc, "severity") == "error" {
+                    let c = jq(doc, "code");
+                    if c >= 0 {
+                        match json_str(doc, c) {
+                            Option.Some(value: s) => strs_push(out, s),
+                            Option.None() => 0,
+                        };
+                    }
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn everywhere_a(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    tiers_of(h, "prog.nz", src, shape())
+}
+
+/// `fn main() -> Int { body }`.
+fn main_of(body: Str) -> Str ! {} {
+    f"fn main() -> Int {{ {body} }}\n"
+}
+
+@test
+fn floats_are_ieee_754_and_written_by_their_shortest_digits(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(0.1 + 0.2));\nshow(out, num_to_str(1.5 * 4.0));\nshow(out, num_to_str(100.0));\nshow(out, num_to_str(1e21));\nshow(out, num_to_str(1e20));\nshow(out, num_to_str(0.000001));\nshow(out, num_to_str(1.5e-7));\nshow(out, num_to_str(-2.5));\nshow(out, num_to_str(1.0 / 0.0));\nshow(out, num_to_str(-1.0 / 0.0));\nshow(out, num_to_str(0.0 / 0.0));\nshow(out, num_to_str(-0.0));\nshow(out, num_to_str(1.7976931348623157e308));\nshow(out, num_to_str(5e-324));\nshow(out, num_to_str(7.0 % 2.5));\nshow(out, num_to_str(float_sqrt(2.0)));\nshow(out, num_to_str(Float32(0.1)));\nshow(out, num_to_str(Float32(16777217.0)));\nshow(out, num_to_str(Float32(0.1) + Float32(0.2)));\n", "0.30000000000000004\n6\n100\n1e+21\n100000000000000000000\n0.000001\n1.5e-7\n-2.5\ninf\n-inf\nnan\n-0\n1.7976931348623157e+308\n5e-324\n2\n1.4142135623730951\n0.1\n16777216\n0.3\n")?;
+    ok()
+}
+
+@test
+fn float_comparison_is_ieee_754_a_nan_equals_nothing(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nlet nan = 0.0 / 0.0;\nif nan == nan { show(out, \"eq\"); } else { show(out, \"ne\"); };\nif nan != nan { show(out, \"ne\"); } else { show(out, \"eq\"); };\nif nan < 1.0 || nan >= 1.0 { show(out, \"ordered\"); } else { show(out, \"unordered\"); };\nif -0.0 == 0.0 { show(out, \"zeros equal\"); } else { show(out, \"zeros differ\"); };\nif float_is_nan(nan) && float_is_infinite(1.0 / 0.0) && float_is_finite(2.0) { show(out, \"classified\"); } else { show(out, \"no\"); };\nshow(out, num_to_str(float_min(nan, 3.0)));\nshow(out, num_to_str(float_max(2.0, nan)));\n", "ne\nne\nunordered\nzeros equal\nclassified\n3\n2\n")?;
+    ok()
+}
+
+@test
+fn float_functions_round_and_convert_as_specified(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(float_floor(-2.5)));\nshow(out, num_to_str(float_ceil(-2.5)));\nshow(out, num_to_str(float_trunc(-2.5)));\nshow(out, num_to_str(float_round(-2.5)));\nshow(out, num_to_str(float_round(2.5)));\nshow(out, num_to_str(float_abs(-3.25)));\nshow(out, num_to_str(Float64(9007199254740993)));\nshow(out, num_to_str(Int(-7.9)));\nshow(out, num_to_str(saturate_convert[Int8](1000.0)));\nshow(out, num_to_str(saturate_convert[UInt8](-5.0)));\nshow(out, num_to_str(saturate_convert[Int32](0.0 / 0.0)));\nshow(out, num_to_str(float64_to_bits(1.0)));\nshow(out, num_to_str(float64_from_bits(float64_to_bits(0.5))));\nshow(out, num_to_str(float32_to_bits(Float32(1.0))));\nshow(out, num_to_str(float_parse_raw(\"2.5e3\")));\nif float_parses(\"1.\") && float_parses(\".5\") && !float_parses(\"1e\") && !float_parses(\" 1\") { show(out, \"parsing\"); } else { show(out, \"no\"); };\n", "-3\n-2\n-2\n-3\n3\n3.25\n9007199254740992\n-7\n127\n0\n0\n4607182418800017408\n0.5\n1065353216\n2500\nparsing\n")?;
+    ok()
+}
+
+@test
+fn every_integer_width_has_its_own_range_and_signedness(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(UInt8(200) + UInt8(55)));\nshow(out, num_to_str(Int8(-128) / Int8(2)));\nshow(out, num_to_str(Int8(-128) % Int8(-1)));\nshow(out, num_to_str(UInt16(65535) / UInt16(256)));\nshow(out, num_to_str(Int16(-7) % Int16(3)));\nshow(out, num_to_str(UInt32(4000000000) / UInt32(3)));\nshow(out, num_to_str(Int32(-2147483648) + Int32(1)));\nshow(out, num_to_str(UInt64(18446744073709551615)));\nshow(out, num_to_str(UInt64(18446744073709551615) / UInt64(2)));\nif UInt64(18446744073709551615) > UInt64(1) { show(out, \"unsigned order\"); } else { show(out, \"signed order\"); };\nif UInt8(200) > UInt8(100) { show(out, \"u8 order\"); } else { show(out, \"wrong\"); };\nshow(out, num_to_str(-Int32(5)));\n", "255\n-64\n0\n255\n-1\n1333333333\n-2147483647\n18446744073709551615\n9223372036854775807\nunsigned order\nu8 order\n-5\n")?;
+    ok()
+}
+
+@test
+fn wrapping_and_saturating_arithmetic_never_trap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(wrapping_add(UInt8(250), UInt8(10))));\nshow(out, num_to_str(wrapping_sub(UInt8(3), UInt8(10))));\nshow(out, num_to_str(wrapping_mul(Int8(64), Int8(2))));\nshow(out, num_to_str(wrapping_add(9223372036854775807, 1)));\nshow(out, num_to_str(saturating_add(UInt8(250), UInt8(10))));\nshow(out, num_to_str(saturating_sub(UInt8(3), UInt8(10))));\nshow(out, num_to_str(saturating_add(Int8(100), Int8(100))));\nshow(out, num_to_str(saturating_sub(Int8(-100), Int8(100))));\nshow(out, num_to_str(saturating_mul(Int16(300), Int16(-300))));\nshow(out, num_to_str(saturating_mul(UInt32(70000), UInt32(70000))));\n", "4\n249\n-128\n-9223372036854775808\n255\n0\n127\n-128\n-32768\n4294967295\n")?;
+    ok()
+}
+
+@test
+fn bit_operations_shifts_rotations_and_counts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nlet m = UInt32(0xFF00_FF00);\nshow(out, num_to_str((m >> 8) & 0xFF));\nshow(out, num_to_str(~m));\nshow(out, num_to_str(m | 0xF));\nshow(out, num_to_str(m ^ m));\nshow(out, num_to_str(Int8(-128) >> 7));\nshow(out, num_to_str(UInt8(128) >> 7));\nshow(out, num_to_str(UInt8(0b1000_0001) << 1));\nshow(out, num_to_str(1 << 62));\nshow(out, num_to_str(~0));\nshow(out, num_to_str(6 & 3 | 8 ^ 1));\nif 12 & 4 == 4 { show(out, \"precedence\"); } else { show(out, \"c precedence\"); };\nshow(out, num_to_str(rotate_left(UInt8(0b1000_0001), 1)));\nshow(out, num_to_str(rotate_right(UInt16(1), 1)));\nshow(out, num_to_str(rotate_left(UInt8(1), 9)));\nshow(out, num_to_str(count_ones(m)));\nshow(out, num_to_str(leading_zeros(UInt16(1))));\nshow(out, num_to_str(trailing_zeros(UInt32(0))));\nshow(out, num_to_str(trailing_zeros(Int8(-128))));\nshow(out, num_to_str(swap_bytes(UInt16(0x1234))));\nshow(out, num_to_str(to_big_endian(UInt32(1))));\nshow(out, num_to_str(from_big_endian(to_big_endian(UInt32(305419896)))));\nshow(out, num_to_str(to_little_endian(UInt32(7))));\nshow(out, num_to_str(from_little_endian(UInt64(9))));\nshow(out, num_to_str(0x7fff_ffff_ffff_fff0 + 0o7 - 0b111));\n", "255\n16711935\n4278255375\n0\n-1\n1\n2\n4611686018427387904\n-1\n11\nprecedence\n3\n32768\n2\n16\n15\n32\n7\n13330\n16777216\n305419896\n7\n9\n9223372036854775792\n")?;
+    ok()
+}
+
+@test
+fn conversions_are_exact_wrapping_saturating_or_tried(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(wrap_convert[UInt8](300)));\nshow(out, num_to_str(wrap_convert[Int8](UInt8(255))));\nshow(out, num_to_str(saturate_convert[UInt8](300)));\nshow(out, num_to_str(saturate_convert[Int16](-70000)));\nshow(out, num_to_str(saturate_convert[UInt64](-1)));\nshow(out, num_to_str(saturate_convert[Int](UInt64(18446744073709551615))));\nshow(out, num_to_str(UInt64(Int8(5))));\nshow(out, num_to_str(Int(UInt32(4294967295))));\nshow(out, num_to_str(Float32(16777217)));\nmatch try_convert[UInt8](300) { Option.Some(value: v) => show(out, \"some\"), Option.None() => show(out, \"none\"), };\nmatch try_convert[UInt8](200) { Option.Some(value: v) => show(out, num_to_str(v)), Option.None() => show(out, \"none\"), };\nmatch try_convert[Int32](3.9) { Option.Some(value: v) => show(out, num_to_str(v)), Option.None() => show(out, \"none\"), };\nmatch try_convert[Int32](0.0 / 0.0) { Option.Some(value: v) => show(out, \"some\"), Option.None() => show(out, \"nan none\"), };\nmatch try_convert[Int8](-128.9) { Option.Some(value: v) => show(out, num_to_str(v)), Option.None() => show(out, \"none\"), };\nmatch try_convert[UInt8](-0.5) { Option.Some(value: v) => show(out, num_to_str(v)), Option.None() => show(out, \"none\"), };\nmatch try_convert[Int](9223372036854775807.0) { Option.Some(value: v) => show(out, \"some\"), Option.None() => show(out, \"2^63 none\"), };\n", "44\n-1\n255\n-32768\n0\n9223372036854775807\n5\n4294967295\n16777216\nnone\n200\n3\nnan none\n-128\n0\n2^63 none\n")?;
+    ok()
+}
+
+@test
+fn numbers_live_in_records_vectors_and_tasks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "\nstruct Point { x: Float64, y: Float64, tag: UInt8, }\n\nfn norm(p: Point) -> Float64 { float_sqrt(p.x * p.x + p.y * p.y) }\n\nfn worker(c: Chan[Float64], x: Float64) -> Int ! {spawn} { chan_send_of(c, x * 2.0); 0 }\n\nfn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {\n    let p = Point(x: 3.0, y: 4.0, tag: UInt8(7));\n    let q = Point(x: 3.0, y: 4.0, tag: UInt8(7));\n    print(str_concat(num_to_str(norm(p)), \"\\n\"));\n    if p == q { print(\"equal\\n\"); } else { print(\"differ\\n\"); };\n    let xs = vec_new[Int16]();\n    vec_push(xs, Int16(-3));\n    vec_push(xs, 1000);\n    print(str_concat(num_to_str(vec_get(xs, 0) * vec_get(xs, 1)), \"\\n\"));\n    let c = chan_new_of[Float64](1);\n    scope { spawn worker(c, 1.25); }\n    let got = vec_new[Float64]();\n    chan_recv_of(c, got);\n    print(str_concat(num_to_str(vec_get(got, 0)), \"\\n\"));\n    0\n}\n";
+    for run1 in everywhere_a(h, src)? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(r.stdout == "5\nequal\n-3000\n2.5\n0\n", who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn every_integer_failure_traps_with_its_code_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    traps(h, "let x = UInt8(255) + UInt8(1); 0", "N0400")?;
+    traps(h, "let x = UInt8(0) - UInt8(1); 0", "N0400")?;
+    traps(h, "let x = Int8(-128) * Int8(-1); 0", "N0400")?;
+    traps(h, "let x = Int16(-32768) / Int16(-1); 0", "N0400")?;
+    traps(h, "let x = -UInt32(1); 0", "N0400")?;
+    traps(h, "let x = UInt64(18446744073709551615) + UInt64(1); 0", "N0400")?;
+    traps(h, "let z = UInt32(0); let x = UInt32(5) / z; 0", "N0401")?;
+    traps(h, "let z = Int8(0); let x = Int8(5) % z; 0", "N0401")?;
+    traps(h, "let n = 8; let x = UInt8(1) << n; 0", "N0412")?;
+    traps(h, "let n = -1; let x = 1 >> n; 0", "N0412")?;
+    traps(h, "let n = -1; let x = rotate_left(UInt8(1), n); 0", "N0412")?;
+    traps(h, "let v = 300; let x = UInt8(v); 0", "N0400")?;
+    traps(h, "let v = -1; let x = UInt64(v); 0", "N0400")?;
+    traps(h, "let f = 1e20; let x = Int(f); 0", "N0400")?;
+    traps(h, "let f = 0.0 / 0.0; let x = Int32(f); 0", "N0400")?;
+    ok()
+}
+
+@test
+fn numeric_misuse_is_refused_before_anything_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // No implicit conversion between numeric types.
+    let w2 = strs_new();
+    strs_push(w2, "N0304");
+    same_strs("codes", refused(h, main_of("let x = UInt8(1) + 1.5; 0"))?, w2)?;
+    let w3 = strs_new();
+    strs_push(w3, "N0304");
+    same_strs("codes", refused(h, main_of("let x = Int32(1) + 1; let y = x + UInt32(1); 0"))?, w3)?;
+    let w4 = strs_new();
+    strs_push(w4, "N0304");
+    same_strs("codes", refused(h, main_of("let x = 1.5 & 2.5; 0"))?, w4)?;
+    // A literal out of the range it is written at.
+    let w5 = strs_new();
+    strs_push(w5, "N0003");
+    same_strs("codes", refused(h, main_of("let x = UInt8(256); 0"))?, w5)?;
+    let w6 = strs_new();
+    strs_push(w6, "N0003");
+    same_strs("codes", refused(h, main_of("let x = Int8(-129); 0"))?, w6)?;
+    let w7 = strs_new();
+    strs_push(w7, "N0003");
+    same_strs("codes", refused(h, main_of("let x = 18446744073709551615; 0"))?, w7)?;
+    // A constant shift out of range.
+    let w8 = strs_new();
+    strs_push(w8, "N0617");
+    same_strs("codes", refused(h, main_of("let x = UInt8(1) << 8; 0"))?, w8)?;
+    let w9 = strs_new();
+    strs_push(w9, "N0617");
+    same_strs("codes", refused(h, main_of("let x = 1 >> -1; 0"))?, w9)?;
+    // A built-in outside its class.
+    let w10 = strs_new();
+    strs_push(w10, "N0300");
+    same_strs("codes", refused(h, main_of("let x = count_ones(1.5); 0"))?, w10)?;
+    let w11 = strs_new();
+    strs_push(w11, "N0300");
+    same_strs("codes", refused(h, main_of("let x = float_sqrt(4); 0"))?, w11)?;
+    // Conversions say what they convert to, and wrapping is between integers.
+    let w12 = strs_new();
+    strs_push(w12, "N0354");
+    same_strs("codes", refused(h, main_of("let x = try_convert(5); 0"))?, w12)?;
+    let w13 = strs_new();
+    strs_push(w13, "N0300");
+    same_strs("codes", refused(h, main_of("let x = wrap_convert[UInt8](1.5); 0"))?, w13)?;
+    let w14 = strs_new();
+    strs_push(w14, "N0300");
+    same_strs("codes", refused(h, main_of("let x = UInt8(\"a\"); 0"))?, w14)?;
+    // The conversion names are reserved, as built-ins' are.
+    let w15 = strs_new();
+    strs_push(w15, "N0203");
+    same_strs("codes", refused(h, "fn try_convert(x: Int) -> Int { x }\nfn main() -> Int { 0 }\n")?, w15)?;
+    ok()
+}
+
+/// The C library's functions may differ in the last place between hosts (`docs/general-purpose.md`
+/// §1), so each is compared rounded to six decimal places — which every conforming library
+/// agrees on — rather than digit for digit.
+@test
+fn the_c_librarys_functions_agree_to_six_places(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nshow(out, num_to_str(float_round(float_sin(1.0) * 1e6)));\nshow(out, num_to_str(float_round(float_cos(1.0) * 1e6)));\nshow(out, num_to_str(float_round(float_tan(1.0) * 1e6)));\nshow(out, num_to_str(float_round(float_exp(1.0) * 1e6)));\nshow(out, num_to_str(float_round(float_ln(10.0) * 1e6)));\nshow(out, num_to_str(float_round(float_log2(10.0) * 1e6)));\nshow(out, num_to_str(float_round(float_log10(2.0) * 1e6)));\nshow(out, num_to_str(float_round(float_pow(2.0, 0.5) * 1e6)));\nshow(out, num_to_str(float_round(float_atan2(1.0, 1.0) * 1e6)));\nshow(out, num_to_str(float_round(float_sin(Float32(1.0)) * Float32(1e4))));\nshow(out, num_to_str(float32_from_bits(float32_to_bits(Float32(2.5)))));\n", "841471\n540302\n1557408\n2718282\n2302585\n3321928\n301030\n1414214\n785398\n8415\n2.5\n")?;
+    ok()
+}
+

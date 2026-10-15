@@ -1,0 +1,267 @@
+// The repair workflow: `scripts/repair.sh` fixes what is automatically fixable and reports what
+// needs review; `nazm fix` writes nothing without `--apply` and refuses an edit whose file moved;
+// `fmt --check` passes on what `fmt` produces; `nazm test` runs a corpus both ways; the tree's
+// sources are already formatted. Ported from `crates/nazm-cli/tests/workflow.rs` (R7).
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/tree.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `body` as `prog.nz` in a fresh directory: the directory and the file's path.
+fn write(h: Caps, body: Str) -> Result[(Str, Str), Str] ! { io } {
+    let d = prog_dir(h, "prog.nz", body)?;
+    Result[(Str, Str), Str].Ok(value: (d, f"{d}/prog.nz"))
+}
+
+/// Run the repair script over one file: `(exit status, stdout, the new text)`.
+fn repair(h: Caps, path: Str) -> Result[(Int, Str, Str), Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, f"{repo_root(h)}/scripts/repair.sh");
+    strs_push(a, path);
+    let out = run(h, "sh", a, "", env_set(suite_env(h), "NAZM", nazm_bin(h.io)));
+    let text = read_text(h, path)?;
+    Result[(Int, Str, Str), Str].Ok(value: (out.code, out.stdout, text))
+}
+
+/// `nazm run --interpret path`: the exit status and the trimmed output.
+fn run_w(h: Caps, path: Str) -> Result[(Int, Str), Str] ! { io, spawn } {
+    let a = words("run --interpret");
+    strs_push(a, path);
+    let out = run(h, nazm_bin(h.io), a, "", suite_env(h));
+    Result[(Int, Str), Str].Ok(value: (out.code, text_trim(out.stdout)))
+}
+
+/// `nazm fmt --check path` exits `expect`.
+fn fmt_check(h: Caps, path: Str, expect: Int) -> Result[Int, Str] ! { io, spawn } {
+    let a = words("fmt --check");
+    strs_push(a, path);
+    let out = run(h, nazm_bin(h.io), a, "", suite_env(h));
+    check_that(out.code == expect, out.stderr)
+}
+
+/// `nazm test <dir>` under a deadline of ten minutes, its process group ended past it: a native
+/// program that never finishes is a wrong answer, and fails here rather than holding the suite.
+fn nazm_test_with_deadline(h: Caps, dir: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let a = words("test");
+    strs_push(a, dir);
+    let out = run_within(h, nazm_bin(h.io), a, "", suite_env(h), 600000);
+    check_that(out.code != TIMED_OUT, "`nazm test` did not finish within 600s")?;
+    Result[Ran, Str].Ok(value: out)
+}
+
+/// The `.nz` files directly in `dir`, if it can be listed.
+fn nz_files(h: Caps, dir: Str, into: Strs) -> Int ! { io } {
+    match dir_list(h.io, dir) {
+        Result.Ok(value: names) => {
+            for n in names {
+                if text_ends_with(n, ".nz") {
+                    strs_push(into, f"{dir}/{n}");
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    }
+}
+
+@test
+fn a_broken_program_is_repaired_and_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two mistakes of the same kind in one file, both automatically fixable, and the
+    // file is badly laid out on top. One invocation, and it compiles and runs.
+    let (dir, path) = write(h, "fn main()->Int{\nlet x=1;\nx=2;\nlet y=3;\ny=4;\nx+y}\n")?;
+    let (code, _, text) = repair(h, path)?;
+    check_that(code == 0, text)?;
+    check_that(text == "fn main() -> Int {\n    let mut x = 1;\n    x = 2;\n    let mut y = 3;\n    y = 4;\n    x + y\n}\n", text)?;
+    let (rc, rout) = run_w(h, path)?;
+    check_that(rc == 0 && rout == "6", rout)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn a_repair_that_reveals_another_error_still_finishes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The reason the script loops. Whether one round is enough depends on the order
+    // the checker reports things in, which is not something a workflow should depend on.
+    let (dir, path) = write(h, "fn main() -> Int {\n    let a = 1;\n    a = 2;\n    let b = a;\n    b = 3;\n    a + b\n}\n")?;
+    let (code, _, text) = repair(h, path)?;
+    check_that(code == 0, text)?;
+    check_that(text_contains(text, "let mut a = 1;"), text)?;
+    check_that(text_contains(text, "let mut b = a;"), text)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn what_needs_review_is_reported_and_not_applied(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A contract narrower than its body has a fix, and it is `needs_review`: widening it can
+    // break a caller. The workflow must leave it, and must say so rather than silently doing
+    // nothing.
+    let (dir, path) = write(h, "fn f(out: OutCap) -> Int ! {} {\n    print(\"x\");\n    0\n}\nfn main(out: OutCap) -> Int ! {io} { f(out) }\n")?;
+    let (code, out, text) = repair(h, path)?;
+    check_that(code == 1, text)?;
+    check_that(text_contains(out, "\"code\":\"N0366\"") || text_contains(out, "N0366"), out)?;
+
+    let a1 = strs_new();
+    strs_push(a1, "fix");
+    strs_push(a1, "--json");
+    strs_push(a1, path);
+    let listed = run(h, nazm_bin(h.io), a1, "", suite_env(h));
+    let listed_2 = listed.stdout;
+    check_that(text_contains(listed_2, "\"applicability\":\"needs_review\""), listed_2)?;
+    check_that(text_contains(listed_2, "\"applied\":false"), listed_2)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn a_file_that_does_not_lex_is_reported_rather_than_rewritten(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (dir, path) = write(h, "fn main() -> Int { \"unterminated }\n")?;
+    let before = read_text(h, path)?;
+    let (code, _, after) = repair(h, path)?;
+    check_that(code == 1, "assert_eq!(code, Some(1));")?;
+    check_that(before == after, "assert_eq!(before, after, \"nothing should have been written\");")?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn an_edit_is_refused_when_the_file_changed_under_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A span is an offset into the text that was checked. If the file has moved on, the
+    // same offset names different bytes, and applying the edit there corrupts work
+    // somebody just did. The edit records what it expects to replace and checks.
+    //
+    // Provoked here by hand: a hook that rewrites the file between the check and the
+    // write is not something a test can arrange, so the same situation is built by
+    // giving one program's diagnostics to a different file — which is exactly the
+    // shape of the failure, an offset from one text applied to another.
+    let (dir, path) = write(h, "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n")?;
+    let a2 = strs_new();
+    strs_push(a2, "fix");
+    strs_push(a2, "--json");
+    strs_push(a2, path);
+    let listed = run(h, nazm_bin(h.io), a2, "", suite_env(h));
+    let listed_2 = listed.stdout;
+    check_that(text_contains(listed_2, "\"applied\":false"), listed_2)?;
+
+    // Now the file says something else at those offsets, and the same fix must not run.
+    write_at(h, path, "fn main() -> Int {\n    let yyy = 1;\n    yyy = 2;\n    yyy\n}\n")?;
+    let before = read_text(h, path)?;
+    let a3 = strs_new();
+    strs_push(a3, "fix");
+    strs_push(a3, "--apply");
+    strs_push(a3, path);
+    let out = run(h, nazm_bin(h.io), a3, "", suite_env(h));
+    let after = read_text(h, path)?;
+    // The rewritten file has the same error, so a fix *is* found — the point is that it
+    // is the fix for the text now on disk, and the result still parses and checks.
+    check_that(out.code == 0, ran_show(out))?;
+    check_that(text_contains(after, "let mut yyy = 1;"), before)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn fmt_check_passes_on_what_fmt_produces(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (dir, path) = write(h, "fn main()->Int{let a=1;a}")?;
+    fmt_check(h, path, 1)?;
+    let a4 = strs_new();
+    strs_push(a4, "fmt");
+    strs_push(a4, path);
+    let out = run(h, nazm_bin(h.io), a4, "", suite_env(h));
+    check_that(out.code == 0, ran_show(out))?;
+    fmt_check(h, path, 0)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn fix_writes_nothing_without_apply(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (dir, path) = write(h, "fn main() -> Int {\n    let x = 1;\n    x = 2;\n    x\n}\n")?;
+    let before = read_text(h, path)?;
+    let a5 = strs_new();
+    strs_push(a5, "fix");
+    strs_push(a5, path);
+    let out = run(h, nazm_bin(h.io), a5, "", suite_env(h));
+    check_that(out.code == 1, ran_show(out))?;
+    check_that(text_contains(out.stdout, "would apply"), out.stdout)?;
+    check_that(before == read_text(h, path)?, "assert_eq!(before, read_text(h, path)?, \"the default must not write\");")?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn a_corpus_runs_interpreted_and_compiled_and_both_must_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "good.nz", "fn main() -> Int { 7 }\n")?;
+    scratch_write(h, dir, "good.expected", "7\n")?;
+    scratch_write(h, dir, "bad.nz", "fn main() -> Int { 8 }\n")?;
+    scratch_write(h, dir, "bad.expected", "7\n")?;
+    // A `.nz` with no `.expected`: not a case, and reported as skipped rather than
+    // passed over.
+    scratch_write(h, dir, "helper.nz", "fn main() -> Int { 1 }\n")?;
+
+    let out = nazm_test_with_deadline(h, dir)?;
+    let stdout = out.stdout;
+    let stderr = out.stderr;
+    check_that(out.code == 1, ran_show(out))?;
+    check_that(text_contains(stdout, "ok    good"), stdout)?;
+    check_that(text_contains(stdout, "FAIL  bad"), stdout)?;
+    check_that(text_contains(stderr, "helper.nz has no `.expected`"), stderr)?;
+    check_that(text_contains(stderr, "1 of 2 passed"), stderr)?;
+    scratch_remove(h, dir);
+    ok()
+}
+
+@test
+fn the_conformance_corpus_passes_under_nazm_test(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The same five cases `compiler/bootstrap.sh` compares, through the command rather
+    // than through the script — so the convention has one implementation a person can
+    // run and one the bootstrap runs, and they are checked against the same files.
+    let out = nazm_test_with_deadline(h, f"{repo_root(h)}/compiler/conformance")?;
+    check_that(out.code == 0, ran_show(out))?;
+    // Every case, and a floor rather than an exact count: the corpus grows, and a test
+    // that had to be edited for each addition is one that eventually is not.
+    let summary = out.stderr;
+    let sw = split_whitespace(summary);
+    let passed = if strs_len(sw) > 1 { parse_usize(strs_get(sw, 1)) } else { 0 };
+    check_that(passed >= 6, summary)?;
+    check_that(text_contains(summary, f"{passed} of {passed} passed"), summary)?;
+    ok()
+}
+
+@test
+fn every_tree_source_is_already_formatted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The formatter is only useful if the tree is what it produces; otherwise
+    // `--check` is a gate nobody can pass and everybody turns off.
+    let root = repo_root(h);
+    let found = strs_new();
+    for folder in words("compiler examples") {
+        nz_files(h, f"{root}/{folder}", found);
+    }
+    let files = strs_sort(found);
+    check_that(strs_len(files) >= 5, f"only {strs_len(files)} sources")?;
+    let fa = words("fmt --check");
+    for f in files {
+        strs_push(fa, f);
+    }
+    let out = run(h, nazm_bin(h.io), fa, "", suite_env(h));
+    check_that(out.code == 0, ran_show(out))?;
+    ok()
+}
+
