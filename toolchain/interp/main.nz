@@ -83,6 +83,43 @@ fn report(out: OutCap, io: IoCap, p: Prog, vm: Vm, root: Str, std: Str, json: Bo
     }
 }
 
+/// What the program is refused for before it starts (`Prog.refusal`), rendered as `report` renders a
+/// failure. A span given by a name is that name's first occurrence from the span's start.
+fn refused(out: OutCap, io: IoCap, p: Prog, root: Str, std: Str, json: Bool) {
+    let r = p.refusal
+    let m = ints_get(p.refat, 1)
+    let key = if m >= 0 { strs_get(p.mods, m) } else { "" }
+    let root_key = module_of(strs_get(p.fkey, p.entry))
+    let text = source(io, key, root_key, root, std)
+    let mut lo = ints_get(p.refat, 2)
+    let mut hi = ints_get(p.refat, 3)
+    let find = strs_get(r, 4)
+    if find != "" {
+        let n = str_len(find)
+        let mut i = lo
+        while i + n <= str_len(text) {
+            if str_slice(text, i, i + n) == find {
+                lo = i
+                hi = i + n
+                break
+            }
+            i += 1
+        }
+    }
+    if json {
+        let mut base = 0
+        for i in 0..strs_len(p.morder) {
+            let k = strs_get(p.morder, i)
+            if k == key { break }
+            base += str_len(source(io, k, root_key, root, std))
+        }
+        eprint(render_json_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3), base + lo, base + hi) + "\n")
+    } else {
+        eprint(render_labelled(strs_get(r, 0), strs_get(r, 1), strs_get(r, 2), strs_get(r, 3),
+                display(key, root_key, root), text, lo, hi))
+    }
+}
+
 /// The name a module's file goes by: the root as the user named it, another of the program's
 /// modules its key beside the root, a library module (`@std/seq`) its key with `.nz`.
 fn display(key: Str, root_key: Str, root: Str) -> Str {
@@ -177,6 +214,15 @@ fn main(out: OutCap, io: IoCap, time: TimeCap, net: NetCap, proc: ProcessCap, rn
         return 2
     }
     let vm = vm_new(heap_new(), max_iterations, max_depth, program_args)
+    if ints_get(p.refat, 0) < 99 {
+        // Refused before it starts (`nazm_core::pipeline`): the reports, with nothing counted,
+        // the diagnostic and the count, and the check's status (`interpret.rs`).
+        if memory { memory_line(out, vm.heap) }
+        if sched_report { eprint("nazm-sched: spawned=0 joined=0 selects=0 timeouts=0\n") }
+        refused(out, io, p, root, std, json)
+        eprint("nazm: 1 error\n")
+        return 1
+    }
     let caps = Caps(out: out, io: io, time: time, net: net, proc: proc, rnd: rnd)
     let ran = run_program(p, vm, caps)
     if ran == 2 {

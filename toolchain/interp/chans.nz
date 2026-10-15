@@ -129,8 +129,8 @@ pub fn channel_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, time: TimeCap)
         }
         return wait(vm)
     }
-    if op == B_TIME_NOW_MS { return V.Int(v: time_now_ms()) }
-    if op == B_TIME_NOW_NS { return V.Int(v: time_now_ns()) }
+    if op == B_TIME_NOW_MS { return V.Int(v: clock_ms(vm.heap, time)) }
+    if op == B_TIME_NOW_NS { return V.Int(v: clock_ns(vm.heap, time)) }
     if op == B_TIME_WALL_NS { return V.Int(v: time_wall_ns()) }
     fail(p, vm, pc, "N0900", "a channel built-in this interpreter does not know", "")
 }
