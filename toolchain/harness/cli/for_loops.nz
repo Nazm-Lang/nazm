@@ -1,0 +1,191 @@
+// R1a's `for` loops: every rule alike under the interpreter, the LIR oracle and every native tier,
+// with everything reclaimed; a `for` loop printing and reclaiming what its `while` loop does; what
+// a `for` refuses, by code; and `fmt` on a range. Ported from `crates/nazm-cli/tests/for_loops.rs`
+// (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/tiers.nz"
+use "../lib/differential.nz"
+
+/// The program under the interpreter and the LIR oracle, and built and run by each backend, each
+/// with the memory report asked for.
+fn everywhere_f(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    tiers_of(h, "prog.nz", src, Tiers(oracle: true, interp_memory: true, native_memory: true, native_in_dir: false))
+}
+
+/// The memory report's line, which every implementation but the LIR oracle writes when asked.
+fn report(r: Ran) -> Result[Str, Str] ! {} {
+    let line = memory_line(r);
+    if str_len(line) == 0 {
+        return Result[Str, Str].Err(error: f"no memory report: {ran_show(r)}");
+    }
+    Result[Str, Str].Ok(value: line)
+}
+
+/// `nazm check` on `src`: its exit status and its first error's code (`""` for none).
+fn first_error(h: Caps, src: Str) -> Result[(Int, Str), Str] ! { io, spawn } {
+    let d = prog_dir(h, "r.nz", src)?;
+    let r = nazm(h, d, words("check r.nz"));
+    scratch_remove(h, d);
+    let parts = text_split(r.stderr, "error[");
+    let code = if strs_len(parts) > 1 { str_slice(strs_get(parts, 1), 0, 5) } else { "" };
+    Result[(Int, Str), Str].Ok(value: (r.code, code))
+}
+
+/// The `for` loops and their `while` twins agree, run for run.
+fn for_and_while(with_for: Vec[Labeled], with_while: Vec[Labeled]) -> Result[Int, Str] ! {} {
+    let mut i = 0;
+    while i < vec_len(with_for) && i < vec_len(with_while) {
+        let who = vec_get(with_for, i).label;
+        let f = vec_get(with_for, i).ran;
+        let w = vec_get(with_while, i).ran;
+        check_that(f.code == 0, f"{who}: {ran_show(f)}")?;
+        check_that(f.stdout == w.stdout, f"{who}: {f.stdout} vs {w.stdout}")?;
+        check_that(text_starts_with(f.stdout, "29xx\n"), f"{who}: {f.stdout}")?;
+        if who != "lir oracle" {
+            check_that(report(f)? == report(w)?, who)?;
+        }
+        i = i + 1;
+    }
+    ok()
+}
+
+const HEADER: Str = "struct P { name: Str, n: Int, }\n\nfn show(out: OutCap, s: Str) -> Int ! {io} {\n    print(str_concat(s, \"\\n\"))\n}\n";
+
+/// Every rule of the section, each loop printing one line.
+const LOOPS: Str = "\nfn main(out: OutCap) -> Int ! {io} {\n    // An element pushed during the loop is visited: the length is read before every step.\n    let xs = ints_new();\n    ints_push(xs, 1);\n    ints_push(xs, 2);\n    ints_push(xs, 3);\n    let mut a = \"\";\n    for x in xs {\n        a = str_concat(a, num_to_str(x));\n        if x == 1 { ints_push(xs, 9); }\n    }\n    show(out, a);\n    // A pop that shortens the sequence ends the loop sooner.\n    let mut b = \"\";\n    for x in xs {\n        b = str_concat(b, num_to_str(x));\n        b = str_concat(b, num_to_str(ints_pop(xs)));\n    }\n    show(out, b);\n    // `continue` moves on, `break` leaves.\n    let ss = strs_new();\n    strs_push(ss, \"a\");\n    strs_push(ss, \"skip\");\n    strs_push(ss, \"b\");\n    strs_push(ss, \"stop\");\n    strs_push(ss, \"c\");\n    let mut c = \"\";\n    for s in ss {\n        if s == \"skip\" { continue; }\n        if s == \"stop\" { break; }\n        c = str_concat(c, s);\n    }\n    show(out, c);\n    // Records, with a range nested inside, bounded by a field.\n    let ps = vec_new[P]();\n    vec_push(ps, P(name: \"x\", n: 2));\n    vec_push(ps, P(name: \"y\", n: 0));\n    vec_push(ps, P(name: \"z\", n: 1));\n    let mut d = \"\";\n    for p in ps {\n        for k in 0..p.n { d = str_concat(d, p.name); }\n        d = str_concat(d, \".\");\n    }\n    show(out, d);\n    // Bytes, each a `UInt8`.\n    let bs = bytes_from_str(\"AB\");\n    let mut e = 0;\n    for v in bs { e = e + Int(v); }\n    show(out, num_to_str(e));\n    // Ranges: an empty and a backwards one run no step; a negative start counts up.\n    let mut f = \"\";\n    for i in 3..3 { f = str_concat(f, \"never\"); }\n    for i in 5..2 { f = str_concat(f, \"never\"); }\n    for i in -2..1 { f = str_concat(f, num_to_str(i)); }\n    show(out, f);\n    // `in` is still an ordinary name.\n    let in = 7;\n    show(out, num_to_str(in));\n    0\n}\n";
+
+/// What the section's rules give, worked out by hand.
+const EXPECTED: Str = "1239\n1923\nab\nxx..z.\n131\n-2-10\n7\n";
+
+@test
+fn every_rule_holds_in_every_implementation_and_everything_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = f"{HEADER}{LOOPS}";
+    for run1 in everywhere_f(h, src)? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_starts_with(r.stdout, EXPECTED), who)?;
+        if who != "lir oracle" {
+            let line = report(r)?;
+            check_that(nothing_live(line), who)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+/// The first two loops above, written as the `while` loops the specification says they mean —
+/// with the hidden names spelled out — and the same loops written with `for`.
+const AS_FOR: Str = "\nfn main(out: OutCap) -> Int ! {io} {\n    let xs = ints_new();\n    ints_push(xs, 1);\n    ints_push(xs, 2);\n    let ps = vec_new[P]();\n    vec_push(ps, P(name: \"x\", n: 2));\n    vec_push(ps, P(name: \"y\", n: 1));\n    let mut a = \"\";\n    for x in xs {\n        if x == 1 { ints_push(xs, 9); continue; }\n        a = str_concat(a, num_to_str(x));\n    }\n    for p in ps {\n        if p.n == 1 { break; }\n        for k in 0..p.n { a = str_concat(a, p.name); }\n    }\n    show(out, a);\n    0\n}\n";
+
+const AS_WHILE: Str = "\nfn main(out: OutCap) -> Int ! {io} {\n    let xs = ints_new();\n    ints_push(xs, 1);\n    ints_push(xs, 2);\n    let ps = vec_new[P]();\n    vec_push(ps, P(name: \"x\", n: 2));\n    vec_push(ps, P(name: \"y\", n: 1));\n    let mut a = \"\";\n    {\n        let seq = xs;\n        let mut i = 0;\n        while i < ints_len(seq) {\n            let x = ints_get(seq, i);\n            i = i + 1;\n            if x == 1 { ints_push(xs, 9); continue; }\n            a = str_concat(a, num_to_str(x));\n        }\n    }\n    {\n        let seq = ps;\n        let mut i = 0;\n        while i < vec_len(seq) {\n            let p = vec_get(seq, i);\n            i = i + 1;\n            if p.n == 1 { break; }\n            {\n                let mut j = 0;\n                let end = p.n;\n                while j < end {\n                    let k = j;\n                    j = j + 1;\n                    a = str_concat(a, p.name);\n                }\n            }\n        }\n    }\n    show(out, a);\n    0\n}\n";
+
+@test
+fn a_for_loop_prints_and_reclaims_exactly_what_its_while_loop_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let with_for = everywhere_f(h, f"{HEADER}{AS_FOR}")?;
+    let with_while = everywhere_f(h, f"{HEADER}{AS_WHILE}")?;
+    for_and_while(with_for, with_while)?;
+    ok()
+}
+
+@test
+fn what_a_for_loop_refuses_and_by_which_code(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs2 = strs_new();
+    strs_push(srcs2, "fn main() -> Int { for x in 5 { } 0 }");
+    strs_push(srcs2, "fn main() -> Int { for x { 1 } }");
+    strs_push(srcs2, "fn main() -> Int { let xs = ints_new(); for for in xs { } 0 }");
+    strs_push(srcs2, "fn main() -> Int { let xs = ints_new(); for x in xs { x = 1; } 0 }");
+    strs_push(srcs2, "fn main() -> Int { let xs = ints_new(); for x in xs { let x = 1; } 0 }");
+    strs_push(srcs2, "fn main() -> Int { let xs = ints_new(); for x in xs { } x }");
+    strs_push(srcs2, "fn main() -> Int { for i in 0..\"a\" { } 0 }");
+    strs_push(srcs2, "fn main() -> Int { let r = 0..3; 0 }");
+    strs_push(srcs2, "fn main() -> Int { for i in 0..3 { } break; 0 }");
+    let codes2 = strs_new();
+    strs_push(codes2, "N0628");
+    strs_push(codes2, "N0101");
+    strs_push(codes2, "N0101");
+    strs_push(codes2, "N0310");
+    strs_push(codes2, "N0202");
+    strs_push(codes2, "N0200");
+    strs_push(codes2, "N0300");
+    strs_push(codes2, "N0100");
+    strs_push(codes2, "N0312");
+    let mut k2 = 0 - 1;
+    for src in srcs2 {
+        k2 = k2 + 1;
+        let code = strs_get(codes2, k2);
+        let (status, first) = first_error(h, src)?;
+        check_that(status == 1, src)?;
+        check_that(first == code, src)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_name_outside_shadows_nothing_and_in_is_a_name_everywhere_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn in(in: Int) -> Int { in + 1 }\nfn main() -> Int {\n    let x = 1;\n    let xs = ints_new();\n    ints_push(xs, 5);\n    let mut t = 0;\n    for x in xs { t = t + x; }\n    let y = in(x);\n    t + y\n}\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "p.nz", src)?;
+    let r = run(h, nazm_bin(h.io), words("run --interpret p.nz"), d, suite_env(h));
+    check_that(r.code == 0, ran_show(r))?;
+    // The loop's `x` is the body's: after it, `x` is the outer `1` again.
+    check_that(text_starts_with(r.stdout, "7"), r.stdout)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_formatter_keeps_a_range_glued_and_is_idempotent(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let path = f"{d}/f.nz";
+    write_at(h, path, "fn main() -> Int {\n    let mut t = 0;\n    for i in 0 .. 3 {\n        t = t + i;\n    }\n    t\n}\n")?;
+    let r = run(h, nazm_bin(h.io), words("fmt f.nz"), d, suite_env(h));
+    check_that(r.code == 0, ran_show(r))?;
+    let once = read_text(h, path)?;
+    check_that(text_contains(once, "for i in 0..3 {"), once)?;
+    let again = run(h, nazm_bin(h.io), words("fmt --check f.nz"), d, suite_env(h));
+    check_that(again.code == 0, ran_show(again))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn an_element_carries_its_sequences_provenance_and_a_range_its_starts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A file's contents, through a sequence and a `for` loop, may not name a written file
+    // (`N0372`), as through `strs_get` they may not; a literal through the same loop may.
+    let w3 = strs_new();
+    strs_push(w3, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"cfg\")); for p in xs { write_file(p, \"x\"); } 0 }\n"), w3)?;
+    let w4 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, \"out.txt\"); for p in xs { write_file(p, \"x\"); } 0 }\n"), w4)?;
+    // The cell is the sequence's type's: since R1 (5b.18) a `Strs` is a `Vec[Str]`, one type
+    // and one cell, so a file's contents in one reach the elements of every other.
+    let w5 = strs_new();
+    strs_push(w5, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"cfg\")); let ys = vec_new[Str](); vec_push(ys, \"out.txt\"); for p in ys { write_file(p, \"x\"); } 0 }\n"), w5)?;
+    // A `Vec[Int]` is another type, and another cell.
+    let w6 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { let xs = strs_new(); strs_push(xs, read_file(\"cfg\")); let ys = vec_new[Int](); vec_push(ys, 1); for n in ys { write_file(num_to_str(n), \"x\"); } 0 }\n"), w6)?;
+    // A range's name is its start's: a file's length as the start restricts it; as the end,
+    // only compared, it does not.
+    let w7 = strs_new();
+    strs_push(w7, "N0372");
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { for i in str_len(read_file(\"cfg\"))..9 { write_file(num_to_str(i), \"x\"); } 0 }\n"), w7)?;
+    let w8 = strs_new();
+    same_strs("codes", codes(h, "fn main(io: IoCap) -> Int ! { io } { for i in 0..str_len(read_file(\"cfg\")) { write_file(num_to_str(i), \"x\"); } 0 }\n"), w8)?;
+    ok()
+}
+

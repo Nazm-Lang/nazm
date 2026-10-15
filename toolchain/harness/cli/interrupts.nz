@@ -1,0 +1,196 @@
+// Gate 3D-5: `@interrupt` handlers on the AArch64 board — a handler is a function the board can
+// call, one for each interrupt; what the board's manifest must say; the GIC and the timer in the
+// build. The QEMU runs are `#[ignore]`d in Rust and stay there (design decision 10). Ported from
+// `crates/nazm-cli/tests/interrupts.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `src` built for the AArch64 board with `manifest` as `board.toml` (none when `""`), into `o`.
+fn build(h: Caps, src: Str, manifest: Str, opt: Str) -> Result[(Str, Ran), Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let args = words(f"build --opt-level {opt} --target aarch64-unknown-none --objects o");
+    if str_len(manifest) > 0 {
+        scratch_write(h, d, "board.toml", manifest)?;
+        strs_push(args, "--board");
+        strs_push(args, "board.toml");
+    }
+    strs_push(args, "prog.nz");
+    let r = nazm(h, d, args);
+    Result[(Str, Ran), Str].Ok(value: (d, r))
+}
+
+/// The codes `nazm check` refuses a program with: the error diagnostics' codes on standard error.
+fn refused(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"expected a refusal: {ran_show(r)}\n{src}")?;
+    let out = strs_new();
+    for l in lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if jstr(doc, "severity") == "error" {
+                    let c = jq(doc, "code");
+                    if c >= 0 {
+                        match json_str(doc, c) {
+                            Option.Some(value: s) => strs_push(out, s),
+                            Option.None() => 0,
+                        };
+                    }
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// QEMU `virt`'s AArch64 board with its GICv2, a 1 ms timer, and line 40 named `poke`.
+const BOARD: Str = "name = \"virt, with its GIC\"\nisa = \"aarch64\"\nload_address = 0x40080000\n\n[uart]\nkind = \"pl011\"\naddress = 0x9000000\n\n[stop]\nkind = \"semihosting\"\n\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = 0x8000000\ncpu = 0x8010000\ntimer_period_us = 1000\n\n[interrupts.lines]\npoke = 40\n";
+
+/// The timer counts; `main` waits for five ticks.
+const TICKS: Str = "static TICKS: Atomic = atomic_new(0);\n\n@interrupt(\"timer\")\nfn tick() -> Int ! {} { atomic_add(TICKS, 1) }\n\nfn main(m: MmioCap) -> Int ! {} {\n    while atomic_load(TICKS) < 5 {\n        0;\n    }\n    atomic_load(TICKS)\n}\n";
+
+/// Line 40 made pending through the distributor's set-pending register: its handler, given the
+/// device's authority, writes `!` to the UART and records that it ran.
+const POKE: Str = "static SEEN: Atomic = atomic_new(0);\n\n@interrupt(\"poke\")\nfn poked(m: MmioCap) -> Int ! {} {\n    mmio_write8(150994944, 33);\n    atomic_store(SEEN, 1)\n}\n\nfn main(m: MmioCap) -> Int ! {} {\n    mmio_write32(134218244, 256);\n    while atomic_load(SEEN) == 0 {\n        0;\n    }\n    40\n}\n";
+
+/// A handler whose addition overflows: reported as `main`'s failure would be, status 2.
+const FAILS: Str = "static BIG: Atomic = atomic_new(9223372036854775807);\n\n@interrupt(\"timer\")\nfn tick() -> Int ! {} { atomic_add(BIG, 1) }\n\nfn main(m: MmioCap) -> Int ! {} {\n    while true {\n        0;\n    }\n    0\n}\n";
+
+@test
+fn a_handler_is_a_function_the_board_can_call_and_one_for_each_interrupt(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let MAIN = "fn main(m: MmioCap) -> Int ! {} { 0 }\n";
+    let handlers1 = strs_new();
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h(n: Int) -> Int ! {} { n }\n");
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h() -> Bool ! {} { true }\n");
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h(io: IoCap) -> Int ! {io} { 0 }\n");
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h() -> Int { 0 }\n");
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h[T]() -> Int ! {} { 0 }\n");
+    strs_push(handlers1, "@interrupt(\"timer\")\nfn h() -> Int ! {} { 0 }\n@interrupt(\"timer\")\nfn g() -> Int ! {} { 0 }\n");
+    for handler in handlers1 {
+        let w2 = strs_new();
+        strs_push(w2, "N0627");
+        same_strs("codes", refused(h, f"{handler}{MAIN}")?, w2)?;
+    
+    }
+    let misuses3 = strs_new();
+    strs_push(misuses3, "@interrupt(\"timer\")\nstruct P { x: Int, }\n");
+    strs_push(misuses3, "@interrupt\nfn h() -> Int ! {} { 0 }\n");
+    strs_push(misuses3, "@interrupt(\"two words\")\nfn h() -> Int ! {} { 0 }\n");
+    for misuse in misuses3 {
+        let w4 = strs_new();
+        strs_push(w4, "N0619");
+        same_strs("codes", refused(h, f"{misuse}{MAIN}")?, w4)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_handler_names_an_interrupt_the_boards_manifest_has(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A board with no interrupts at all.
+    let (_d, r) = build(h, TICKS, "", "0")?;
+    scratch_remove(h, _d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0627"), r.stderr)?;
+    check_that(text_contains(r.stderr, "has no interrupts"), r.stderr)?;
+    // A name the manifest does not give.
+    let (_d, r) = build(h, text_replace(TICKS, "\"timer\"", "\"uart\""), BOARD, "0")?;
+    scratch_remove(h, _d);
+    check_that(text_contains(r.stderr, "N0627"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`uart`"), r.stderr)?;
+    // The timer, on a board whose manifest gives it no period.
+    let (_d, r) = build(h, TICKS, text_replace(BOARD, "timer_period_us = 1000\n", ""), "0")?;
+    scratch_remove(h, _d);
+    check_that(text_contains(r.stderr, "timer_period_us"), r.stderr)?;
+    // And every handler that does name one builds.
+    let srcs5 = strs_new();
+    strs_push(srcs5, TICKS);
+    strs_push(srcs5, POKE);
+    strs_push(srcs5, FAILS);
+    for src in srcs5 {
+        let (_d, r) = build(h, src, BOARD, "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 0, ran_show(r))?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_manifests_interrupts_are_a_gicv2_on_an_aarch64_board(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let froms6 = strs_new();
+    strs_push(froms6, "controller = \"gicv2\"");
+    strs_push(froms6, "timer_period_us = 1000");
+    strs_push(froms6, "poke = 40");
+    strs_push(froms6, "poke = 40");
+    strs_push(froms6, "poke = 40");
+    strs_push(froms6, "cpu = 0x8010000");
+    let tos6 = strs_new();
+    strs_push(tos6, "controller = \"gicv3\"");
+    strs_push(tos6, "timer_period_us = 0");
+    strs_push(tos6, "poke = 27");
+    strs_push(tos6, "poke = 3");
+    strs_push(tos6, "timer = 41");
+    strs_push(tos6, "cpu = 0x8010000\nvector = 1");
+    let keys6 = strs_new();
+    strs_push(keys6, "`interrupts.controller`");
+    strs_push(keys6, "`interrupts.timer_period_us`");
+    strs_push(keys6, "`interrupts.lines.poke`");
+    strs_push(keys6, "`interrupts.lines.poke`");
+    strs_push(keys6, "`interrupts.lines.timer`");
+    strs_push(keys6, "`interrupts.vector`");
+    let mut k6 = 0 - 1;
+    for from in froms6 {
+        k6 = k6 + 1;
+        let to = strs_get(tos6, k6);
+        let key = strs_get(keys6, k6);
+        let (_d, r) = build(h, TICKS, text_replace(BOARD, from, to), "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 1, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0626"), to)?;
+        check_that(text_contains(r.stderr, key), to)?;
+    
+    }
+    // A RISC-V board's machine-mode interrupts are not this runtime's.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    scratch_write(h, d, "board.toml", "name = \"rv\"\nisa = \"riscv64\"\nload_address = 0x80000000\n\n[uart]\nkind = \"ns16550a\"\naddress = 0x10000000\n\n[stop]\nkind = \"sifive-test\"\naddress = 0x100000\n\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = 0\ncpu = 0\n")?;
+    let r = nazm(h, d, words("build --target riscv64gc-unknown-none-elf --board board.toml --objects o prog.nz"));
+    check_that(text_contains(r.stderr, "`interrupts`"), r.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_handler_is_a_boards_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", TICKS)?;
+    let built = nazm(h, d, words("build prog.nz -o x"));
+    check_that(built.code == 1, ran_show(built))?;
+    check_that(text_contains(built.stderr, "N0392"), built.stderr)?;
+    check_that(text_contains(built.stderr, "`@interrupt` on `tick`"), built.stderr)?;
+    let ran = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(text_contains(ran.stderr, "N0392"), ran.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The three programs built here for `BOARD`, at `-O0` and `-O2`, then linked and booted under
+/// QEMU in the `nazm-qemu:n86` image. The timer's five ticks: `5`, status 0. Line 40, made pending
+/// by `main`: its handler's `!` on the UART, then `40`, status 0. A handler's overflow: its
+/// diagnostic and status 2, as `main`'s would be.
+// `interrupts_are_taken_under_qemu` is `#[ignore]`d in Rust "starts a container": it stays Rust (design decision 10).
+

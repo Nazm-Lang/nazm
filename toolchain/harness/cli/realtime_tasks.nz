@@ -1,0 +1,155 @@
+// Gate 3F: `@task` — a function the scheduler can call, with a priority and a period; a board's
+// timer to itself; the realtime profile's refusals. The QEMU runs are `#[ignore]`d in Rust and stay
+// there (design decision 10). Ported from `crates/nazm-cli/tests/realtime_tasks.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `crates/nazm-cli/tests/realtime_tasks/`: the boards' manifests and the periodic program.
+fn fixtures(h: Caps) -> Str ! { io } {
+    f"{repo_root(h)}/crates/nazm-cli/tests/realtime_tasks"
+}
+
+/// `src` built for `board` (its manifest when `manifest`, else none) at `opt`, into `o`.
+fn build(h: Caps, src: Str, board: Str, target: Str, manifest: Bool, opt: Str) -> Result[(Str, Ran), Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let args = words(f"build --opt-level {opt} --target {target} --objects o");
+    let toml = f"{board}.toml";
+    if manifest {
+        scratch_write(h, d, toml, read_raw(h, f"{fixtures(h)}/{toml}")?)?;
+        strs_push(args, "--board");
+        strs_push(args, toml);
+    }
+    strs_push(args, "prog.nz");
+    let r = nazm(h, d, args);
+    Result[(Str, Ran), Str].Ok(value: (d, r))
+}
+
+/// The codes `nazm check` refuses a program with, under `profile` where one is given (`""`).
+fn refused(h: Caps, src: Str, profile: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let args = words("check --json");
+    if str_len(profile) > 0 {
+        strs_push(args, "--profile");
+        strs_push(args, profile);
+    }
+    strs_push(args, "prog.nz");
+    let r = nazm(h, d, args);
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"expected a refusal: {ran_show(r)}\n{src}")?;
+    let out = strs_new();
+    for l in lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if jstr(doc, "severity") == "error" {
+                    let c = jq(doc, "code");
+                    if c >= 0 {
+                        match json_str(doc, c) {
+                            Option.Some(value: s) => strs_push(out, s),
+                            Option.None() => 0,
+                        };
+                    }
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+// (`BOARDS`, a Rust table, is written in the port's own terms where it is used.)
+
+const MAIN: Str = "fn main(m: MmioCap) -> Int ! {} { 0 }\n";
+
+@test
+fn a_task_is_a_function_the_scheduler_can_call_with_a_priority_and_a_period(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let tasks1 = strs_new();
+    strs_push(tasks1, "@task(priority = \"1\", period = \"2\")\nfn t(n: Int) -> Int ! {} { n }\n");
+    strs_push(tasks1, "@task(priority = \"1\", period = \"2\")\nfn t() -> Int { 0 }\n");
+    strs_push(tasks1, "@task(priority = \"1\", period = \"2\")\n@on_failure\nfn t(code: Int) -> Int ! {} { 0 }\n");
+    for task in tasks1 {
+        check_that(strs_has(refused(h, f"{task}{MAIN}", "")?, "N0627"), task)?;
+    
+    }
+    let misuses2 = strs_new();
+    strs_push(misuses2, "@task\nfn t() -> Int ! {} { 0 }\n");
+    strs_push(misuses2, "@task(priority = \"256\", period = \"2\")\nfn t() -> Int ! {} { 0 }\n");
+    strs_push(misuses2, "@task(priority = \"1\", period = \"0\")\nfn t() -> Int ! {} { 0 }\n");
+    strs_push(misuses2, "@task(priority = \"1\")\nfn t() -> Int ! {} { 0 }\n");
+    strs_push(misuses2, "@task(priority = \"1\", period = \"2\", deadline = \"1\")\nfn t() -> Int ! {} { 0 }\n");
+    strs_push(misuses2, "@task(priority = \"1\", period = \"2\")\nstruct P { x: Int, }\n");
+    for misuse in misuses2 {
+        let w3 = strs_new();
+        strs_push(w3, "N0619");
+        same_strs("codes", refused(h, f"{misuse}{MAIN}", "")?, w3)?;
+    
+    }
+    ok()
+}
+
+@test
+fn a_task_needs_a_boards_timer_to_itself(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let periodic = read_text(h, f"{fixtures(h)}/periodic.nz")?;
+    // No manifest: the built-in board has no interrupts.
+    let (_d, r) = build(h, periodic, "virt", "aarch64-unknown-none", false, "0")?;
+    scratch_remove(h, _d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0627"), r.stderr)?;
+    check_that(text_contains(r.stderr, "no timer"), r.stderr)?;
+    // A program that handles the timer itself.
+    let both = f"{periodic}\n@interrupt(\"timer\")\nfn tick() -> Int ! {{}} {{ 0 }}\n";
+    let (_d, r) = build(h, both, "virt", "aarch64-unknown-none", true, "0")?;
+    scratch_remove(h, _d);
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0627"), r.stderr)?;
+    // And each board builds the periodic tasks with its manifest.
+    for bt in words("virt:aarch64-unknown-none mps2:thumbv7m-none-eabi") {
+        let board = strs_get(text_split(bt, ":"), 0);
+        let (_d, r) = build(h, periodic, board, strs_get(text_split(bt, ":"), 1), true, "0")?;
+        scratch_remove(h, _d);
+        check_that(r.code == 0, f"{board}: {r.stderr}")?;
+    }
+    // Nothing but a board has a scheduler.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", periodic)?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(text_contains(r.stderr, "N0392"), r.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn realtime_refuses_what_has_no_stack_bound_or_allocates(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let cycle = "fn down(n: Int) -> Int ! {} { if n == 0 { 0 } else { down(n - 1) } }\nfn main() -> Int ! {} { down(3) }\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "a.nz", cycle)?;
+    let r = nazm(h, d, words("check --profile realtime a.nz"));
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0510"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`bounded-stack`"), r.stderr)?;
+    scratch_write(h, d, "b.nz", "fn main() -> Int ! {} { let v = vec_new[Int](); vec_push(v, 1); vec_len(v) }\n")?;
+    let r_2 = nazm(h, d, words("check --profile realtime b.nz"));
+    check_that(text_contains(r_2.stderr, "`no-heap`"), r_2.stderr)?;
+    // The periodic tasks are realtime's.
+    scratch_write(h, d, "p.nz", read_raw(h, f"{fixtures(h)}/periodic.nz")?)?;
+    let r_3 = nazm(h, d, words("check --profile realtime p.nz"));
+    check_that(r_3.code == 0, ran_show(r_3))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Booted under QEMU on both boards at `-O0` and `-O2`: the higher priority's task has run ten
+/// times when the lower's fourth run ends the loop at tick 20 (`1004`, status 0), and a task whose
+/// run outlasts its period is reported (`N0414`, status 2).
+// `the_scheduler_runs_by_priority_and_reports_a_missed_deadline_under_qemu` is `#[ignore]`d in Rust "starts a container": it stays Rust (design decision 10).
+

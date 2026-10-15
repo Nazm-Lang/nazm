@@ -1,0 +1,152 @@
+// Files: `@std/file` opens, writes, seeks, lists, renames and replaces alike everywhere; a closed
+// handle answers closed; a handed file needs no other authority; the platform family; a short stat
+// buffer stops the program; standard input read alike; what a handle needs. Ported from
+// `crates/nazm-cli/tests/files.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// `1` on Linux, `0` elsewhere: `os_family()` on this host.
+fn host_family(h: Caps) -> Str ! { io, spawn } {
+    let r = run(h, "uname", words("-s"), "", env_here(h.io));
+    if text_trim(r.stdout) == "Linux" { "1" } else { "0" }
+}
+
+fn stdin_runs(h: Caps, d: Str, input: Str) -> Result[Int, Str] ! { io, spawn } {
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: run_input(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, suite_env(h), input)));
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/{backend}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {backend} prog.nz -o {exe}"));
+        check_that(b.code == 0, ran_show(b))?;
+        let a = strs_new();
+        strs_push(a, "-c");
+        strs_push(a, bounded_script());
+        strs_push(a, exe);
+        vec_push(runs, Labeled(label: backend, ran: run_input(h, "sh", a, "", suite_env(h), input)));
+    }
+    for run_ in runs {
+        let who = run_.label;
+        let o = run_.ran;
+        check_that(o.code == 0, f"{who}: {o.stderr}")?;
+        check_that(text_trim_end(o.stdout) == "first line\nsecond\n|18|Other|Other|00", f"{who}: {o.stdout}")?;
+    }
+    ok()
+}
+
+/// Every operation `@std/file` offers, in a directory the program makes and removes, so each of
+/// the four runs starts from the same tree.
+const SCENARIO: Str = "use \"@std/ioerror\";\nuse \"@std/file\";\n\nfn line(io: IoCap, s: Str) -> Int ! { io } { print(str_concat(s, \"\\n\")) }\n\nfn kind(r: Result[Int, IoError]) -> Str ! {} {\n    match r {\n        Result.Ok(value: n) => str_concat(\"ok \", int_to_str(n)),\n        Result.Err(error: e) => io_kind_name(e.kind),\n    }\n}\n\nfn opened(r: Result[File, IoError]) -> Str ! {} {\n    match r {\n        Result.Ok(value: f) => \"opened\",\n        Result.Err(error: e) => io_kind_name(e.kind),\n    }\n}\n\nfn text(r: Result[Bytes, IoError]) -> Str ! {} {\n    match r {\n        Result.Ok(value: b) => bytes_to_str(b),\n        Result.Err(error: e) => io_kind_name(e.kind),\n    }\n}\n\nfn main(io: IoCap) -> Int ! { io } {\n    line(io, kind(dir_create_all(io, \"w/a/b\")));\n    line(io, kind(dir_create_all(io, \"w/a/b\")));\n    match file_create(io, \"w/one.txt\") {\n        Result.Ok(value: f) => {\n            line(io, kind(file_write_str(f, \"alpha\\nbeta\\n\")));\n            line(io, kind(file_position(f)));\n            line(io, kind(file_sync(f)));\n            line(io, kind(file_close(f)));\n            line(io, kind(file_close(f)));\n            line(io, kind(file_write_str(f, \"late\")));\n        },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    match file_append(io, \"w/one.txt\") {\n        Result.Ok(value: f) => { file_write_str(f, \"gamma\\n\"); file_close(f); },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    line(io, text(file_read_all(io, \"w/one.txt\")));\n    match file_open(io, \"w/one.txt\") {\n        Result.Ok(value: f) => {\n            line(io, kind(file_seek(f, 6)));\n            let buf = bytes_new(4);\n            line(io, kind(file_read(f, buf)));\n            line(io, bytes_to_str(buf));\n            line(io, kind(file_seek_end(f, 0 - 6)));\n            line(io, text(file_read_rest(f)));\n            line(io, kind(file_write_str(f, \"x\")));\n            file_close(f);\n        },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    match file_metadata(io, \"w/one.txt\") {\n        Result.Ok(value: m) => {\n            line(io, int_to_str(m.size));\n            line(io, if m.kind == FileKind.Regular() { \"regular\" } else { \"not regular\" });\n            line(io, if m.modified_ns > 0 { \"has a time\" } else { \"no time\" });\n        },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    match file_metadata(io, \"w/a\") {\n        Result.Ok(value: m) => { line(io, if m.kind == FileKind.Directory() { \"directory\" } else { \"not a directory\" }); },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    line(io, kind(file_replace_atomic(io, \"w/one.txt\", bytes_from_str(\"replaced\"))));\n    line(io, text(file_read_all(io, \"w/one.txt\")));\n    line(io, kind(file_replace_atomic(io, \"w/fresh.txt\", bytes_from_str(\"new\"))));\n    file_create(io, \"w/c.txt\");\n    file_create(io, \"w/B.txt\");\n    match dir_list(io, \"w\") {\n        Result.Ok(value: names) => { line(io, str_join(names, \",\")); },\n        Result.Err(error: e) => { line(io, io_error_show(e)); },\n    };\n    line(io, kind(file_rename(io, \"w/c.txt\", \"w/a/c.txt\")));\n    line(io, opened(file_open(io, \"w/c.txt\")));\n    line(io, opened(file_open(io, \"w/a/c.txt\")));\n    line(io, opened(file_create_new(io, \"w/a/c.txt\")));\n    line(io, kind(dir_remove(io, \"w/a\")));\n    line(io, kind(dir_create(io, \"w/a\")));\n    line(io, text(file_read_all(io, \"w/a\")));\n    line(io, kind(file_remove(io, \"w/a/c.txt\")));\n    line(io, kind(dir_remove(io, \"w/a/b\")));\n    line(io, kind(dir_remove(io, \"w/a\")));\n    match dir_list(io, \"w/one.txt\") {\n        Result.Ok(value: names) => { line(io, \"listed a file\"); },\n        Result.Err(error: e) => { line(io, io_kind_name(e.kind)); },\n    };\n    file_remove(io, \"w/one.txt\");\n    file_remove(io, \"w/fresh.txt\");\n    file_remove(io, \"w/B.txt\");\n    line(io, kind(dir_remove(io, \"w\")));\n    line(io, opened(file_open(io, \"w/one.txt\")));\n    0\n}\n";
+
+@test
+fn the_library_opens_writes_seeks_lists_renames_and_replaces_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, SCENARIO, "ok 0\nok 0\nok 11\nok 11\nok 0\nok 0\nClosed\nClosed\nalpha\nbeta\ngamma\n\nok 6\nok 4\nbeta\nok 11\ngamma\n\nOther\n17\nregular\nhas a time\ndirectory\nok 8\nreplaced\nok 3\nB.txt,a,c.txt,fresh.txt,one.txt\nok 0\nNotFound\nopened\nAlreadyExists\nDirectoryNotEmpty\nAlreadyExists\nIsADirectory\nok 0\nok 0\nok 0\nNotADirectory\nok 0\nNotFound\n0")?;
+    ok()
+}
+
+@test
+fn a_closed_handle_answers_closed_and_never_reaches_a_reused_descriptor(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `b` is opened after `a` is closed, so the system may give it `a`'s descriptor: a write
+    // through the closed `a` must reach nothing, and `b` must hold only its own bytes.
+    let src = "use \"@std/ioerror\";\nfn line(io: IoCap, s: Str) -> Int ! { io } { print(str_concat(s, \"\\n\")) }\nfn main(io: IoCap) -> Int ! { io } {\nlet a = os_open_write(\"a.txt\", 0);\nline(io, int_to_str(os_close(a)));\nlet b = os_open_write(\"b.txt\", 0);\nlet s = os_write(a, bytes_from_str(\"stray\"));\nline(io, io_kind_name(io_kind_of(s)));\nline(io, os_error_text(s));\nline(io, int_to_str(os_status(a)));\nline(io, int_to_str(os_write(b, bytes_from_str(\"own\"))));\nos_close(b);\nline(io, read_file(\"b.txt\"));\nline(io, int_to_str(os_close(a)));\nlet missing = os_open_read(\"missing.txt\");\nline(io, io_kind_name(io_kind_of(os_status(missing))));\nline(io, if str_len(os_error_text(os_status(missing))) > 0 { \"a message\" } else { \"no message\" });\nline(io, io_kind_name(io_kind_of(os_status(os_open_write(\"x\", 7)))));\nline(io, io_kind_name(io_kind_of(os_seek(b, 0, 9))));\nline(io, int_to_str(str_len(os_error_text(0))));\nos_unlink(\"a.txt\");\nos_unlink(\"b.txt\");\n0\n}\n";
+    agrees(h, src, "0\nClosed\nthe handle is closed\n-65536\n3\nown\n-65536\nNotFound\na message\nInvalidInput\nClosed\n0\n0")?;
+    ok()
+}
+
+@test
+fn a_function_handed_a_file_uses_it_with_no_other_authority(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Opening names a path and needs an `IoCap`; reading what was opened needs only the file.
+    let src = "use \"@std/ioerror\";\nuse \"@std/file\";\nfn first(f: File) -> Int ! { io } {\nlet b = bytes_new(3);\nmatch file_read(f, b) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, }\n}\nfn main(io: IoCap) -> Int ! { io } {\nmatch file_open(io, \"prog.nz\") { Result.Ok(value: f) => first(f), Result.Err(error: e) => 0 - 1, }\n}\n";
+    agrees(h, src, "3")?;
+    // And it can open nothing.
+    let opens = "use \"@std/ioerror\";\nuse \"@std/file\";\nfn sneak(f: File) -> Int ! { io } { os_status(os_open_read(\"other\")) }\nfn main() -> Int { 0 }\n";
+    check_that(strs_has(codes(h, opens), "N0369"), "assert!(strs_has(codes(h, opens), \"N0369\"), \"{:?}\", codes(h, opens));")?;
+    ok()
+}
+
+@test
+fn the_platform_family_is_the_hosts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main(io: IoCap) -> Int ! { io } { print(int_to_str(os_family())); 0 }\n";
+    let family = host_family(h);
+    agrees(h, src, f"{family}0")?;
+    ok()
+}
+
+@test
+fn a_buffer_too_short_for_a_stat_stops_the_program_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main(io: IoCap) -> Int ! { io } { os_stat(\"prog.nz\", bytes_new(31)) }\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", src)?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(r.code == 2, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0405"), r.stderr)?;
+    check_that(text_contains(r.stderr, "this buffer is too short for the answer"), r.stderr)?;
+    let backends1 = strs_new();
+    strs_push(backends1, "llvm");
+    strs_push(backends1, "cranelift");
+    for backend in backends1 {
+        let exe = f"{d}/{backend}";
+        let l2 = strs_new();
+        strs_push(l2, "build");
+        strs_push(l2, "--no-cache");
+        strs_push(l2, "--backend");
+        strs_push(l2, backend);
+        strs_push(l2, "prog.nz");
+        strs_push(l2, "-o");
+        strs_push(l2, exe);
+        let b = nazm(h, d, l2);
+        check_that(b.code == 0, ran_show(b))?;
+        let o = bounded_exe(h, exe, d, suite_env(h));
+        check_that(o.code == 2, ran_show(o))?;
+        let err = o.stderr;
+        check_that(text_contains(err, "this buffer is too short for the answer"), backend)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn standard_input_is_read_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "use \"@std/ioerror\";\nfn main(io: IoCap) -> Int ! { io } {\nlet h = os_stdin();\nlet buf = bytes_new(5);\nlet mut total = 0;\nlet mut n = os_read(h, buf);\nwhile n > 0 {\nprint(bytes_to_str(bytes_slice(buf, 0, n)));\ntotal = total + n;\nn = os_read(h, buf);\n}\nprint(str_concat(\"|\", int_to_str(total)));\nprint(str_concat(\"|\", io_kind_name(io_kind_of(os_write(h, buf)))));\nprint(str_concat(\"|\", io_kind_name(io_kind_of(os_seek(h, 0, 0)))));\nprint(str_concat(\"|\", int_to_str(os_status(os_stdin()))));\n0\n}\n";
+    let input = "first line\nsecond\n";
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", src)?;
+    stdin_runs(h, d, input)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_handle_needs_authority_has_no_equality_and_a_file_does_not_choose_where_to_write(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Every `os_` built-in that reaches the system needs an `IoCap` held.
+    check_that(strs_has(codes(h, "fn f() -> Int ! { io } { os_status(os_open_read(\"a\")) }\nfn main() -> Int { 0 }\n"), "N0369"), "assert!(strs_has(codes(h, \"fn f() -> Int ! { io } { os_status(os_open_read(\\\"a\\\")) }\\nfn main() -> Int { 0 }\\n\"), \"N0369\"));")?;
+    // A handle is not a value with an identity a program may compare.
+    check_that(strs_has(codes(h, "fn main(io: IoCap) -> Int ! { io } { if os_stdin() == os_stdin() { 1 } else { 0 } }\n"), "N0304"), "assert!(strs_has(codes(h, \"fn main(io: IoCap) -> Int ! { io } { if os_stdin() == os_stdin() { 1 } else { 0 } }\\n\"), \"N0304\"));")?;
+    // What a file says may not name the file a program writes, renames or removes (N38's sink).
+    let calls5 = strs_new();
+    strs_push(calls5, "os_status(os_open_write(p, 0))");
+    strs_push(calls5, "os_mkdir(p)");
+    strs_push(calls5, "os_unlink(p)");
+    strs_push(calls5, "os_rmdir(p)");
+    strs_push(calls5, "os_rename(\"a\", p)");
+    for call in calls5 {
+        let src = f"fn main(io: IoCap) -> Int ! {{ io }} {{ let p = read_file(\"cfg\"); {call} }}\n";
+        check_that(strs_has(codes(h, src), "N0372"), call)?;
+    
+    }
+    // A path to read may come from anywhere.
+    check_that((strs_len(codes(h, "fn main(io: IoCap) -> Int ! { io } { os_status(os_open_read(read_file(\"cfg\"))) }\n")) == 0), "assert!((strs_len(codes(h, \"fn main(io: IoCap) -> Int ! { io } { os_status(os_open_read(read_file(\\\"cfg\\\"))) }\\n\")) == 0));")?;
+    ok()
+}
+

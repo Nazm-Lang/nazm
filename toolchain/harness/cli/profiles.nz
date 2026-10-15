@@ -1,0 +1,243 @@
+// Restriction profiles: every profile's rules and verdicts in its report, the report's outcome the
+// command's, a dependency's own profile and the locked build. Ported from
+// `crates/nazm-cli/tests/profiles.rs` (R7).
+
+use "@std/file"
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+fn err(o: Ran) -> Str ! {} {
+    o.stderr
+}
+
+fn out(o: Ran) -> Str ! {} {
+    o.stdout
+}
+
+/// `text` at `root/rel`, its directories made.
+fn write(h: Caps, root: Str, rel: Str, text: Str) -> Result[Int, Str] ! { io } {
+    scratch_write(h, root, rel, text)
+}
+
+/// The rules a profile judged `src` by, from its report, as `id=verdict`; and whether the check
+/// passed — which the report's outcome must say too.
+fn verdicts(h: Caps, src: Str, profile: Str) -> Result[(Bool, Strs), Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let o = nazm(h, d, words(f"check --profile {profile} --profile-report prog.nz"));
+    scratch_remove(h, d);
+    let mut report = "";
+    for l in lines(o.stdout) {
+        if str_len(report) == 0 && text_contains(l, "nazm.profile-report/1") {
+            report = l;
+        }
+    }
+    check_that(str_len(report) > 0, f"no report: {o.stdout}{o.stderr}")?;
+    let v = jparse(report)?;
+    check_that((jstr(v, "outcome") == "accepted") == (o.code == 0), report)?;
+    let rules = strs_new();
+    let n = jlen(v, "rules");
+    let mut i = 0;
+    while i < n {
+        strs_push(rules, f"{jstr(v, f"rules/{i}/id")}={jstr(v, f"rules/{i}/verdict")}");
+        i = i + 1;
+    }
+    Result[(Bool, Strs), Str].Ok(value: (o.code == 0, rules))
+}
+
+/// A library package `lib` (with `profile` its own when given, `""` for none) and an application
+/// `app` that depends on it, under `root`.
+fn package(h: Caps, root: Str, dep_profile: Str) -> Result[Int, Str] ! { io } {
+    let profile = if str_len(dep_profile) > 0 { f"profile = \"{dep_profile}\"\n" } else { "" };
+    write(h, root, "lib/nazm.toml", f"schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n{profile}")?;
+    write(h, root, "lib/src/lib.nz", "pub fn twice(n: Int) -> Int ! {} { n * 2 }\n")?;
+    write(h, root, "app/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n")?;
+    write(h, root, "app/src/main.nz", "use \"lib:lib.nz\";\nfn main(io: IoCap) -> Int ! { io } { print(int_to_str(twice(21))) }\n")
+}
+
+const AMBIENT: Str = "fn w(c: Chan) -> Int { chan_send(c, 1); 0 }\nfn show(io: IoCap, n: Int) -> Int { print(int_to_str(n)) }\nfn main(io: IoCap, t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn w(c); } show(io, 1); 0 }\n";
+
+const PURE: Str = "fn sq(n: Int) -> Int ! {} { n * n }\nfn main() -> Int ! {} { sq(7) }\n";
+
+const DECLARED_TASKS: Str = "fn w(c: Chan) -> Int ! {} { chan_send(c, 1); 0 }\nfn main(t: SpawnCap) -> Int ! { spawn } { let c = chan_new(1); scope { spawn w(c); } 0 }\n";
+
+@test
+fn every_profile_s_rules_and_verdicts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let (vok, vrules) = verdicts(h, AMBIENT, "general")?;
+    check_that(vok == true, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words(""))?;
+    let (vok, vrules) = verdicts(h, AMBIENT, "embedded")?;
+    check_that(vok == false, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words("no-io=fail no-spawn=fail bounded-allocation=pass no-recursion=pass"))?;
+    let (vok, vrules) = verdicts(h, AMBIENT, "critical")?;
+    check_that(vok == false, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words("declared-effects=fail no-spawn=fail no-foreign=pass locked-build=fail no-declassification=pass no-ambient-time=pass no-select=pass no-unknown-calls=pass"))?;
+    let (vok, vrules) = verdicts(h, AMBIENT, "cyber")?;
+    check_that(vok == false, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words("declared-effects=fail no-foreign=pass locked-build=fail contents-stay-in-files=pass checked-paths=pass no-unknown-calls=pass"))?;
+    // A pure, declared program passes everything that is about the program; only the build
+    // rule is left, and it is about how the program was built.
+    let (vok, vrules) = verdicts(h, PURE, "embedded")?;
+    check_that(vok == true, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words("no-io=pass no-spawn=pass bounded-allocation=pass no-recursion=pass"))?;
+    // `cyber` allows tasks; `critical` does not.
+    let (_, cy) = verdicts(h, DECLARED_TASKS, "cyber")?;
+    check_that(strs_has(cy, "declared-effects=pass"), "assert!(strs_has(cy, \"declared-effects=pass\"), \"{cy:?}\");")?;
+    let (_, cr) = verdicts(h, DECLARED_TASKS, "critical")?;
+    check_that(strs_has(cr, "no-spawn=fail"), "assert!(strs_has(cr, \"no-spawn=fail\"), \"{cr:?}\");")?;
+    ok()
+}
+
+@test
+fn a_refusal_names_the_profile_the_rule_and_the_chain_of_calls(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    write(h, d, "prog.nz", "fn deep(io: IoCap) -> Int ! { io } { print(\"x\") }\nfn mid(io: IoCap) -> Int ! { io } { deep(io) }\nfn main(io: IoCap) -> Int ! { io } { mid(io) }\n")?;
+    let o = nazm(h, d, words("check --profile embedded prog.nz"));
+    check_that(!(o.code == 0), "assert!(!(o.code == 0));")?;
+    let e = err(o);
+    check_that(text_contains(e, "error[N0510]"), e)?;
+    check_that(text_contains(e, "`embedded`") && text_contains(e, "`no-io`"), e)?;
+    check_that(text_contains(e, "`mid` declares `io`"), e)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_ambient_bridge_is_refused_by_the_strict_profiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An undeclared function exercising its caller's authority is fine under `general`, and
+    // refused wherever `declared-effects` is in force — named, each one.
+    let (ok, _) = verdicts(h, AMBIENT, "general")?;
+    check_that(ok, "assert!(ok);")?;
+    let d = scratch_new(h);
+    write(h, d, "prog.nz", AMBIENT)?;
+    let o = nazm(h, d, words("check --profile cyber prog.nz"));
+    let e = err(o);
+    let fs1 = strs_new();
+    strs_push(fs1, "`w` declares no effect set");
+    strs_push(fs1, "`show` declares no effect set");
+    strs_push(fs1, "`main` declares no effect set");
+    for f in fs1 {
+        check_that(text_contains(e, f), f)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_foreign_call_is_refused_where_no_foreign_is_in_force(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "extern \"C\" fn c_add(a: Int, b: Int) -> Int = \"c_add\";\nfn main(f: ForeignCap) -> Int ! { foreign } { c_add(1, 2) }\n";
+    let (vok, vrules) = verdicts(h, src, "embedded")?;
+    check_that(vok == true, str_join(vrules, ", "))?;
+    same_strs("rules", vrules, words("no-io=pass no-spawn=pass bounded-allocation=pass no-recursion=pass"))?;
+    let (ok, cyber) = verdicts(h, src, "cyber")?;
+    check_that(!ok, "assert!(!ok);")?;
+    check_that(strs_has(cyber, "no-foreign=fail"), "assert!(strs_has(cyber, \"no-foreign=fail\"), \"{cyber:?}\");")?;
+    ok()
+}
+
+@test
+fn a_standard_wrapper_carries_its_effect_into_the_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `io_println` is Nazm source: the profile sees `io` through it, not by its name.
+    let src = "use \"@std/io\";\nfn main(io: IoCap) -> Int ! { io } { io_println(io, \"hi\") }\n";
+    let d = scratch_new(h);
+    write(h, d, "prog.nz", src)?;
+    let o = nazm(h, d, words("check --profile embedded prog.nz"));
+    let e = err(o);
+    check_that(text_contains(e, "`no-io`") && text_contains(e, "`io_println` declares `io`"), e)?;
+    // A pure standard function that allocates nothing is no obstacle.
+    let pure = "use \"@std/seq\";\nfn main() -> Int ! {} { ints_sum(ints_new()) }\n";
+    check_that(verdicts(h, pure, "embedded")?.0, "assert!(verdicts(h, pure, \"embedded\")?.0);")?;
+    // One that allocates in a loop is, since N52: what it allocates is not bounded.
+    let trims = "use \"@std/text\";\nfn main() -> Int ! {} { str_len(text_trim(\" a \")) }\n";
+    let (ok, rules) = verdicts(h, trims, "embedded")?;
+    check_that(!ok, "assert!(!ok, \"{rules:?}\");")?;
+    check_that(strs_has(rules, "bounded-allocation=fail"), "assert!(strs_has(rules, \"bounded-allocation=fail\"), \"{rules:?}\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_locked_package_build_satisfies_the_build_rule_and_a_tampered_one_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    package(h, d, "")?;
+    let o = nazm(h, d, words("check --profile cyber app"));
+    check_that(text_contains(err(o), "`locked-build`"), err(o))?;
+    check_that((nazm(h, d, words("lock app")).code == 0), "assert!((nazm(h, d, words(\"lock app\")).code == 0));")?;
+    let o_2 = nazm(h, d, words("run --interpret --profile cyber app"));
+    check_that(out(o_2) == "422\n", "assert_eq!(out(o), \"422\\n\", \"{}\", err(o));")?;
+    write(h, d, "lib/src/lib.nz", "pub fn twice(n: Int) -> Int ! {} { n * 3 }\n")?;
+    let o_3 = nazm(h, d, words("run --interpret --profile cyber app"));
+    check_that(!(o_3.code == 0) && text_contains(err(o_3), "`locked-build`"), err(o_3))?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_dependency_s_required_profile_holds_the_whole_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `lib` requires `embedded`; the program prints, so the build is refused however it is
+    // asked for — and names both reasons for the profile.
+    let d = scratch_new(h);
+    package(h, d, "embedded")?;
+    let o = nazm(h, d, words("check app"));
+    check_that(!(o.code == 0), "assert!(!(o.code == 0), \"{}\", out(o));")?;
+    check_that(text_contains(err(o), "`embedded`") && text_contains(err(o), "`no-io`"), err(o))?;
+    // And an unknown one is refused by name, whoever wrote it.
+    let e = scratch_new(h);
+    package(h, e, "strict")?;
+    let o_2 = nazm(h, e, words("check app"));
+    check_that(text_contains(err(o_2), "N0511") && text_contains(err(o_2), "`lib`"), err(o_2))?;
+    let o_3 = nazm(h, e, words("check --profile bogus app/src/main.nz"));
+    check_that(text_contains(err(o_3), "N0511"), err(o_3))?;
+    scratch_remove(h, d);
+    scratch_remove(h, e);
+    ok()
+}
+
+@test
+fn a_profile_refuses_and_never_changes_what_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    write(h, d, "prog.nz", PURE)?;
+    let general = nazm(h, d, words("run --interpret prog.nz"));
+    let embedded = nazm(h, d, words("run --interpret --profile embedded prog.nz"));
+    check_that(out(general) == out(embedded), "assert_eq!(out(general), out(embedded));")?;
+    check_that(out(general) == "49\n", "assert_eq!(out(general), \"49\\n\");")?;
+    // And a profile is evaluated every time: a check cached under `general` is no reason to
+    // accept under `embedded`.
+    write(h, d, "nazm.root", "")?;
+    write(h, d, "prog.nz", AMBIENT)?;
+    check_that((nazm(h, d, words("check prog.nz")).code == 0), "assert!((nazm(h, d, words(\"check prog.nz\")).code == 0));")?;
+    check_that((nazm(h, d, words("check prog.nz")).code == 0), "assert!((nazm(h, d, words(\"check prog.nz\")).code == 0));")?;
+    check_that(!(nazm(h, d, words("check --profile embedded prog.nz")).code == 0), "assert!(!(nazm(h, d, words(\"check --profile embedded prog.nz\")).code == 0));")?;
+    check_that(!(nazm(h, d, words("build --profile embedded prog.nz -o x")).code == 0), "assert!(!(nazm(h, d, words(\"build --profile embedded prog.nz -o x\")).code == 0));")?;
+    check_that(!file_exists_at(h.io, f"{d}/x"), "assert!(!file_exists_at(h.io, f\"{d}/x\"));")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_report_is_the_same_bytes_every_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    write(h, d, "prog.nz", AMBIENT)?;
+    let a = out(nazm(h, d, words("check --profile critical --profile-report prog.nz")));
+    let b = out(nazm(h, d, words("check --profile critical --profile-report prog.nz")));
+    check_that(a == b, "assert_eq!(a, b);")?;
+    check_that(text_contains(a, "not a certification"), a)?;
+    scratch_remove(h, d);
+    ok()
+}
+

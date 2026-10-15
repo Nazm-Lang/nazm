@@ -1,0 +1,154 @@
+// `nazm accel`: the OpenCL kernel carries every checked operation and the lowest-index rule; an
+// ineligible function, input that is not `Int`s and a zip of unequal inputs are refused before any
+// device. The GPU runs are `#[ignore]`d in Rust and stay there (design decision 10). Ported from
+// `crates/nazm-cli/tests/accel.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// A fresh directory holding the kernels as `k.nz` and `input` as `in.txt`.
+fn setup(h: Caps, input: Str) -> Result[Str, Str] ! { io } {
+    let d = prog_dir(h, "k.nz", KERNELS)?;
+    scratch_write(h, d, "in.txt", input)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// `nazm accel ARGS` in `dir`.
+fn accel(h: Caps, dir: Str, args: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    let a = words("accel");
+    for x in args {
+        strs_push(a, x);
+    }
+    Result[Ran, Str].Ok(value: nazm(h, dir, a))
+}
+
+/// The OpenCL C `nazm accel --print-kernel` writes for the kernel `name`.
+fn kernel_source(h: Caps, name: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = setup(h, "1\n")?;
+    let a = words("--print-kernel k.nz");
+    strs_push(a, name);
+    strs_push(a, "--input");
+    strs_push(a, "in.txt");
+    let o = accel(h, d, a)?;
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    Result[Str, Str].Ok(value: o.stdout)
+}
+
+const KERNELS: Str = "fn square(x: Int) -> Int ! {} { x * x }\nfn collatz(n: Int) -> Int ! {} {\nlet mut x = n;\nlet mut steps = 0;\nwhile x > 1 {\nif x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; }\nsteps = steps + 1;\n}\nsteps + square(n % 7)\n}\nfn grow(x: Int) -> Int ! {} { x * 3037000500 }\nfn inverse(x: Int) -> Int ! {} { 100 / (x - 3) }\nfn edges(x: Int) -> Int ! {} { if x == 0 { (0 - 9223372036854775807 - 1) % -1 } else { if x == 1 { (0 - 9223372036854775807 - 1) / 2 } else { -x } } }\nfn record(x: Int) -> Int ! {} { let p = Option[Int].Some(value: x); 0 }\nfn rec(x: Int) -> Int ! {} { if x == 0 { 0 } else { rec(x - 1) } }\nfn loud(x: Int) -> Int ! { io } { 0 }\nfn strs(x: Int) -> Int ! {} { str_len(\"ab\") + x }\nfn two(x: Int, y: Int) -> Int ! {} { x + y }\nfn three(x: Int, y: Int, z: Int) -> Int ! {} { x + y + z }\nfn main() -> Int { 0 }\n";
+
+@test
+fn the_kernel_carries_every_checked_operation_and_the_lowest_index_rule(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let c = kernel_source(h, "collatz")?;
+    check_that(text_contains(c, "__kernel void nz_kernel(__global const long *nz_in, __global long *nz_out, __global int *nz_fail)"), c)?;
+    check_that(text_contains(c, "atomic_min(nz_fail, (int)(nz_index * 256 + (site)))"), c)?;
+    // A helper is compiled before its caller, and a failure in it stops the caller.
+    let square = found(c, "static long nz_f0(")?;
+    let collatz = found(c, "static long nz_f1(")?;
+    check_that(square < collatz, c)?;
+    check_that(text_contains(c, "if (*nz_failed) return 0;"), c)?;
+    // Multiplication by the high word; addition by the sign rule; division by zero first.
+    check_that(text_contains(c, "mul_hi("), c)?;
+    check_that(text_contains(c, ") & ((1L) ^ "), c)?;
+    check_that(text_contains(c, "if (2L == 0L) NZ_FAIL("), c)?;
+    let e = kernel_source(h, "edges")?;
+    // `i64::MIN % -1` is 0, where C's is undefined; `i64::MIN / -1` fails.
+    check_that(text_contains(e, "== -1L) ? 0L : "), e)?;
+    check_that(text_contains(e, "== (-9223372036854775807L - 1L) && "), e)?;
+    // Negation fails on the one `Int` it cannot negate.
+    check_that(text_contains(e, "if (l0 == (-9223372036854775807L - 1L)) NZ_FAIL("), e)?;
+    ok()
+}
+
+@test
+fn an_ineligible_function_is_refused_by_name_before_any_device(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let names1 = strs_new();
+    strs_push(names1, "record");
+    strs_push(names1, "rec");
+    strs_push(names1, "loud");
+    strs_push(names1, "strs");
+    strs_push(names1, "three");
+    strs_push(names1, "two");
+    strs_push(names1, "nothere");
+    let whys1 = strs_new();
+    strs_push(whys1, "it has a value that is not an `Int` or a `Bool`");
+    strs_push(whys1, "it is in a call cycle");
+    strs_push(whys1, "it is not pure");
+    strs_push(whys1, "it calls the built-in `str_len`, which has no device form");
+    strs_push(whys1, "`(T) -> T` or `(T, T) -> T`, `T` being `Int`, `Float32` or `Float64`");
+    strs_push(whys1, "`two` takes 2 `Int`s, so it runs over 2 inputs, and 1 was given");
+    strs_push(whys1, "there is no function `nothere`");
+    let mut k1 = 0 - 1;
+    for name in names1 {
+        k1 = k1 + 1;
+        let why = strs_get(whys1, k1);
+        let d = setup(h, "1\n")?;
+        let l2 = strs_new();
+        strs_push(l2, "k.nz");
+        strs_push(l2, name);
+        strs_push(l2, "--input");
+        strs_push(l2, "in.txt");
+        let o = accel(h, d, l2)?;
+        check_that(o.code == 1, ran_show(o))?;
+        let e = o.stderr;
+        check_that(text_contains(e, "error[N0394]"), name)?;
+        check_that(text_contains(e, why), name)?;
+        check_that((str_len(o.stdout) == 0), name)?;
+    
+        scratch_remove(h, d);
+    }
+    ok()
+}
+
+@test
+fn input_that_is_not_ints_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h, "1 2 three\n")?;
+    let o = accel(h, d, words("k.nz collatz --input in.txt"))?;
+    check_that(!(o.code == 0), "assert!(!(o.code == 0));")?;
+    check_that(text_contains(o.stderr, "is not whitespace-separated `Int`s"), o.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Needs macOS's OpenCL and a GPU: `cargo test -p nazm-cli --test cli_a_b -- --ignored accel::`.
+// `a_kernel_runs_on_the_gpu_and_agrees_with_the_interpreter` is `#[ignore]`d in Rust "runs on the GPU": it stays Rust (design decision 10).
+
+// `a_failure_on_the_gpu_is_the_lowest_failing_index_at_its_site` is `#[ignore]`d in Rust "runs on the GPU": it stays Rust (design decision 10).
+
+@test
+fn a_zip_needs_two_inputs_of_one_length_before_any_device(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = setup(h, "1 2 3\n")?;
+    scratch_write(h, d, "four.txt", "1 2 3 4\n")?;
+    let o = accel(h, d, words("k.nz two --input in.txt --input four.txt"))?;
+    check_that(o.code == 1, ran_show(o))?;
+    let e = o.stderr;
+    check_that(text_contains(e, "error[N0394]") && text_contains(e, "these have 3 and 4"), e)?;
+    check_that((str_len(o.stdout) == 0), "assert!((str_len(o.stdout) == 0));")?;
+    // A zip's kernel reads two buffers, element by element.
+    let source = kernel_source(h, "two")?;
+    check_that(text_contains(source, "__global const long *nz_in2"), source)?;
+    check_that(text_contains(source, "nz_in[nz_index], nz_in2[nz_index]"), source)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Needs macOS's OpenCL and a GPU (N88): a zip and the three reductions, each held to the
+/// interpreter and to an independent computation; `add` fails where the running sum overflows.
+// `a_zip_and_a_reduction_run_on_the_gpu_and_agree` is `#[ignore]`d in Rust "runs on the GPU": it stays Rust (design decision 10).
+
+// (`EDGES`, a Rust table, is written in the port's own terms where it is used.)
+
+/// The numeric oracle on generated inputs (N88, §7.89): kernels generated over `+ - * / %`,
+/// comparisons, `if` and literals at `Int`'s edges, over elements across its range, each run on
+/// the GPU and held to the interpreter (inside `nazm accel`) and to the spec's arithmetic in 128
+/// bits (here): the results, or the lowest failing index and its code. Needs macOS's OpenCL.
+// `generated_kernels_agree_with_the_interpreter_and_with_128_bit_arithmetic` is `#[ignore]`d in Rust "runs on the GPU": it stays Rust (design decision 10).
+

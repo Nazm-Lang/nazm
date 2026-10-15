@@ -1,0 +1,318 @@
+// The scheduler under load: thousands of short tasks, thirty nested scopes joined innermost first,
+// a scope's first failure in start order, records and enums released by the tasks they were
+// handed to, a waiting receiver woken, what a task may not be handed — every implementation, with
+// a deadline. Ported from `crates/nazm-cli/tests/scheduler.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// How long one run may take here: a deadlock or a lost wakeup fails rather than hangs.
+const DEADLINE_S: Int = 120000;
+
+/// `cmd` run under the deadline, or `Err` naming `what`.
+fn bounded(h: Caps, program: Str, args: Strs, env: Strs, what: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let r = run_within(h, program, args, "", env, DEADLINE_S);
+    check_that(r.code != TIMED_OUT, f"{what} did not finish within 120s: a deadlock or a lost wakeup")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+fn four_in(h: Caps, dir: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let path = f"{dir}/prog.nz";
+    let out = vec_new[Labeled]();
+    let ia = words("run --interpret");
+    strs_push(ia, path);
+    vec_push(out, Labeled(label: "interpreter", ran: bounded(h, nazm_bin(h.io), ia, suite_env(h), "nazm run")?));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = bounded(h, nazm_bin(h.io), words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} {path} -o {exe}"), suite_env(h), "nazm build")?;
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        // Many live tasks are this file's subject: `TASKS_ADDRESS_SPACE_KB`.
+        let a = strs_new();
+        strs_push(a, "-c");
+        strs_push(a, bounded_script_kb(TASKS_ADDRESS_SPACE_KB));
+        strs_push(a, exe);
+        vec_push(out, Labeled(label: who, ran: bounded(h, "sh", a, env, who)?));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// The program run by the interpreter and by three native builds, with the memory report.
+fn four(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = four_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// The memory report of `stderr` has four `live=0`.
+fn reclaimed(who: Str, stderr: Str) -> Result[Int, Str] ! {} {
+    let mut report = "";
+    for l in lines(stderr) {
+        if str_len(report) == 0 && text_starts_with(l, "nazm-memory:") {
+            report = l;
+        }
+    }
+    check_that(str_len(report) > 0, f"{who}: no memory report in {stderr}")?;
+    check_that(count_matches(report, "live=0") == 4, f"{who}: {report}")
+}
+
+/// Every implementation prints `expected` and exits 0, and every native build reclaims all it
+/// allocated.
+fn agrees_s(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for run_ in four(h, src)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}")?;
+        check_that(text_trim_end(r.stdout) == expected, f"{who}: {r.stdout}")?;
+        if who != "interpreter" {
+            reclaimed(who, r.stderr)?;
+        }
+    }
+    ok()
+}
+
+/// The codes `nazm check --json` reports on standard error (a line's own `code`).
+fn codes_c(h: Caps, src: Str) -> Strs ! { io, spawn } {
+    let out = strs_new();
+    let d = match prog_dir(h, "prog.nz", src) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => {
+            return out;
+        },
+    };
+    let a = words("check --json");
+    strs_push(a, f"{d}/prog.nz");
+    let o = run(h, nazm_bin(h.io), a, "", suite_env(h));
+    scratch_remove(h, d);
+    for l in lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                let c = jq(doc, "code");
+                if c >= 0 {
+                    match json_str(doc, c) {
+                        Option.Some(value: s) => strs_push(out, s),
+                        Option.None() => 0,
+                    };
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    out
+}
+
+/// Thirty scopes nested, each starting a task that sends its depth, each closing with a send of
+/// its depth on `order`.
+fn nested_body(depth: Int) -> Str ! {} {
+    let parts = strs_new();
+    let mut d = 0;
+    while d < depth {
+        strs_push(parts, f"scope {{ spawn send(c, {d}); ");
+        d = d + 1;
+    }
+    d = depth - 1;
+    while d >= 0 {
+        strs_push(parts, f"}} chan_send(order, {d}); ");
+        d = d - 1;
+    }
+    str_join(parts, "")
+}
+
+/// The type a task argument has, by how it is written.
+fn type_of(arg: Str) -> Str ! {} {
+    if text_starts_with(arg, "Holder") { "Holder" } else if text_starts_with(arg, "Outer") { "Outer" } else if text_starts_with(arg, "Maybe") { "Maybe" } else if text_starts_with(arg, "ints") { "Ints" } else { "Strs" }
+}
+
+// (`DEADLINE`, a Rust table, is written in the port's own terms where it is used.)
+
+@test
+fn five_thousand_short_tasks_finish_and_reclaim_everything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two hundred scopes in sequence, twenty-five tasks each; every task takes a string it did
+    // not allocate and one it did, and reports on a channel the parent drains after the join.
+    // Twenty-five at a time, not more: v1 starts one OS thread per task (§7.46), and a bounded
+    // host — the contained gate's 512-process ceiling, shared with every test running beside
+    // this one — may refuse a thread, which is the contract but not this test's subject.
+    let src = "fn work(c: Chan, s: Str, n: Int) -> Int { let t = str_concat(s, int_to_str(n)); chan_send(c, str_len(t)); 0 }\nfn main(t: SpawnCap) -> Int {\nlet c = chan_new(25); let buf = ints_new(); let mut round = 0; let mut total = 0;\nwhile round < 200 {\nlet s = str_concat(\"task\", \"-\");\nscope { let mut i = 0; while i < 25 { spawn work(c, s, i); i = i + 1; } }\nlet mut k = 0; while k < 25 { chan_recv(c, buf); k = k + 1; }\nround = round + 1;\n}\nlet mut j = 0; while j < ints_len(buf) { total = total + ints_get(buf, j); j = j + 1; }\ntotal }\n";
+    // Each string is "task-" (5) and the decimal of 0..24: 10 of one digit and 15 of two.
+    let per_round = 25 * 5 + 10 + 15 * 2;
+    agrees_s(h, src, int_to_str(200 * per_round))?;
+    ok()
+}
+
+@test
+fn thirty_nested_scopes_join_innermost_first(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Each level starts a task that sends its depth; the parent drains after every scope has
+    // closed. Innermost-first joining is observable as a record of which closed first: each
+    // level sends its depth on a second channel right after its inner scope closes.
+    let depth = 30;
+    let body = nested_body(depth);
+    let src = f"fn send(c: Chan, v: Int) -> Int {{ chan_send(c, v); 0 }}\nfn main(t: SpawnCap) -> Int {{\nlet c = chan_new({depth}); let order = chan_new({depth}); let buf = ints_new(); let seen = ints_new();\n{body}\nlet mut k = 0; let mut sum = 0; while k < {depth} {{ chan_recv(c, buf); chan_recv(order, seen); sum = sum + ints_get(buf, k); k = k + 1; }}\nlet mut ok = 1; let mut i = 0; while i < {depth} {{ if ints_get(seen, i) != {depth} - 1 - i {{ ok = 0; }} i = i + 1; }}\nsum * ok }}\n";
+    agrees_s(h, src, int_to_str(depth * (depth - 1) / 2))?;
+    ok()
+}
+
+@test
+fn a_scope_reports_its_first_failure_in_start_order_not_in_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `first` is started first and fails only after `second` has failed and let it go: the
+    // report must be `first`'s overflow, not `second`'s division by zero.
+    let src = "fn first(go: Chan, seen: Ints) -> Int { chan_recv(go, seen); 9223372036854775807 + ints_len(seen) }\nfn second(go: Chan, z: Int) -> Int { chan_send(go, 1); 10 / z }\nfn main(t: SpawnCap) -> Int {\nlet go = chan_new(1);\nscope { spawn first(go, ints_new()); spawn second(go, 0); }\n0 }\n";
+    // A sequence may not be handed to a task, so `first` gets its buffer another way.
+    let src_2 = text_replace(src, "fn first(go: Chan, seen: Ints) -> Int { chan_recv(go, seen); 9223372036854775807 + ints_len(seen) }", "fn first(go: Chan, n: Int) -> Int { let seen = ints_new(); chan_recv(go, seen); 9223372036854775807 + ints_len(seen) + n }");
+    let src_3 = text_replace(src_2, "spawn first(go, ints_new());", "spawn first(go, 0);");
+    for run2 in four(h, src_3)? {
+        let who = run2.label;
+        let r = run2.ran;
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0400"), who)?;
+        check_that(!text_contains(r.stderr, "N0401"), who)?;
+        if who != "interpreter" {
+            reclaimed(who, r.stderr)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+@test
+fn a_failure_deep_in_nested_scopes_joins_every_level_and_reclaims_everything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn ok(c: Chan, s: Str) -> Int { chan_send(c, str_len(s)); 0 }\nfn bad(n: Int) -> Int { 9223372036854775807 + n }\nfn main(t: SpawnCap) -> Int {\nlet c = chan_new(8); let s = str_concat(\"a\", \"b\");\nscope { spawn ok(c, s); scope { spawn ok(c, s); scope { spawn ok(c, s); spawn bad(1); spawn ok(c, s); } spawn ok(c, s); } }\n0 }\n";
+    for run3 in four(h, src)? {
+        let who = run3.label;
+        let r = run3.ran;
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0400"), who)?;
+        if who != "interpreter" {
+            reclaimed(who, r.stderr)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+@test
+fn records_and_enums_handed_to_tasks_are_released_by_them(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // What may cross into a task includes records and enums holding strings; each task holds
+    // its own references and gives them back, so everything is reclaimed however many do.
+    let src = "struct Job { name: Str, n: Int }\nenum Tag { Plain, Named(label: Str) }\nfn run(c: Chan, j: Job, t: Tag) -> Int { let extra = match t { Tag.Plain() => 0, Tag.Named(label: l) => str_len(l) }; chan_send(c, str_len(j.name) + j.n + extra); 0 }\nfn main(t: SpawnCap) -> Int {\nlet c = chan_new(64); let buf = ints_new(); let mut r = 0;\nwhile r < 20 { scope { let mut i = 0; while i < 32 { let j = Job(name: str_concat(\"job\", int_to_str(i)), n: 1); if i % 2 == 0 { spawn run(c, j, Tag.Plain()); } else { spawn run(c, j, Tag.Named(label: str_concat(\"x\", \"y\"))); } i = i + 1; } } let mut k = 0; while k < 32 { chan_recv(c, buf); k = k + 1; } r = r + 1; }\nlet mut total = 0; let mut j = 0; while j < ints_len(buf) { total = total + ints_get(buf, j); j = j + 1; } total }\n";
+    // Per round: names are "job" + 0..31 (10 of 4 bytes, 22 of 5), each n is 1, and the 16 odd
+    // jobs carry a two-byte who.
+    let per_round = 10 * 4 + 22 * 5 + 32 + 16 * 2;
+    agrees_s(h, src, int_to_str(20 * per_round))?;
+    ok()
+}
+
+@test
+fn a_receiver_waiting_on_an_empty_channel_is_woken_by_a_send(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The task computes for a while before it sends, so the parent is certainly waiting when
+    // the value arrives: a send that woke nobody would leave it waiting for ever.
+    let src = "fn late(c: Chan, n: Int) -> Int { let mut i = 0; let mut x = 0; while i < n { x = (x + i) % 97; i = i + 1; } chan_send(c, x + 1000); 0 }\nfn main(t: SpawnCap) -> Int { let c = chan_new(1); let buf = ints_new(); scope { spawn late(c, 3000000); chan_recv(c, buf); } ints_get(buf, 0) }\n";
+    // x = (x + i) % 97 for each i below 3,000,000, from 0, plus 1000: worked out once (the Rust test
+    // computes it each run; the harness's interpreted leg would spend its iteration budget on it).
+    let expected = "1039";
+    agrees_s(h, src, expected)?;
+    ok()
+}
+
+@test
+fn a_task_has_exactly_the_authority_it_is_handed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Passed: a declared child prints with the `IoCap` it was given.
+    let passed = "fn child(io: IoCap, n: Int) -> Int ! { io } { print(int_to_str(n)) }\nfn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(io, 7); } 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
+    agrees_s(h, passed, "70")?;
+    // Withheld: a declared child cannot write a file without one, whatever its spawner holds.
+    // (A file, not printing: since D8 every function of the program holds `main`'s output.)
+    let withheld = "fn child(n: Int) -> Int ! { io } { write_file(\"f\", int_to_str(n)) }\nfn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(7); } 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
+    check_that(strs_has(codes_c(h, withheld), "N0369"), "assert!(strs_has(codes_c(h, withheld), \"N0369\"));")?;
+    // An undeclared child has no authority of its own to borrow (N104): it is refused where it
+    // writes, whatever its spawner holds.
+    let bridged = "fn child() -> Int { write_file(\"f\", \"x\") }\nfn run(t: SpawnCap) -> Int ! { io, spawn } { scope { spawn child(); } 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int { run(t) }\n";
+    check_that(strs_has(codes_c(h, bridged), "N0369"), "assert!(strs_has(codes_c(h, bridged), \"N0369\"));")?;
+    // And starting a task at all needs a `SpawnCap`, declared set or not.
+    let unspawnable = "fn child() -> Int ! {} { 0 }\nfn run() -> Int ! { spawn } { scope { spawn child(); } 0 }\nfn main(t: SpawnCap) -> Int { run() }\n";
+    check_that(strs_has(codes_c(h, unspawnable), "N0369"), "assert!(strs_has(codes_c(h, unspawnable), \"N0369\"));")?;
+    ok()
+}
+
+@test
+fn a_task_s_arguments_carry_their_provenance_into_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn save(io: IoCap, path: Str) -> Int ! { io } { write_file(path, \"x\") }\nfn run(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } { let p = read_file(\"config\"); scope { spawn save(io, p); } 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int { run(io, t) }\n";
+    let w4 = strs_new();
+    strs_push(w4, "N0372");
+    same_strs("codes", codes_c(h, src), w4)?;
+    // The same task handed a path the program computed is fine.
+    let ok = text_replace(src, "let p = read_file(\\\"config\\\");", "let p = str_concat(\"out\", \".txt\");");
+    let ok_2 = text_replace(ok, "let p = read_file(\"config\");", "let p = str_concat(\"out\", \".txt\");");
+    check_that((strs_len(codes_c(h, ok_2)) == 0), ok_2)?;
+    ok()
+}
+
+@test
+fn nothing_mutable_crosses_into_a_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let decls5 = strs_new();
+    strs_push(decls5, "");
+    strs_push(decls5, "");
+    strs_push(decls5, "struct Holder { v: Ints }\n");
+    strs_push(decls5, "struct Outer { h: Inner }\nstruct Inner { v: Strs }\n");
+    strs_push(decls5, "enum Maybe { None, Some(v: Ints) }\n");
+    let args5 = strs_new();
+    strs_push(args5, "ints_new()");
+    strs_push(args5, "strs_new()");
+    strs_push(args5, "Holder(v: ints_new())");
+    strs_push(args5, "Outer(h: Inner(v: strs_new()))");
+    strs_push(args5, "Maybe.None()");
+    let mut k5 = 0 - 1;
+    for decl in decls5 {
+        k5 = k5 + 1;
+        let arg = strs_get(args5, k5);
+        let ty = type_of(arg);
+        let src = f"{decl}fn child(x: {ty}) -> Int {{ 0 }}\nfn main(t: SpawnCap) -> Int {{ scope {{ spawn child({arg}); }} 0 }}\n";
+        check_that(strs_has(codes_c(h, src), "N0321"), src)?;
+    
+    }
+    ok()
+}
+
+@test
+fn exit_with_in_a_task_ends_the_process_with_its_status(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn quit(io: IoCap) -> Int { exit_with(3); 0 }\nfn wait(c: Chan) -> Int { let b = ints_new(); chan_recv(c, b); 0 }\nfn main(io: IoCap, t: SpawnCap) -> Int { let c = chan_new(1); scope { spawn wait(c); spawn quit(io); } 5 }\n";
+    for run6 in four(h, src)? {
+        let who = run6.label;
+        let r = run6.ran;
+        // Its sibling is still blocked when the process ends: nothing is joined, nothing is
+        // reported, and `main`'s result is never printed.
+        check_that(r.code == 3, ran_show(r))?;
+        check_that(r.stdout == "", "assert_eq!(r.stdout, \"\");")?;
+        check_that(!text_contains(r.stderr, "nazm-memory"), who)?;
+    
+    }
+    ok()
+}
+
+/// Measurements for `docs/performance.md`: task start-and-join, channel round trips, and
+/// scaling over independent CPU-bound tasks. Run with `--ignored --nocapture`.
+// `what_tasks_and_channels_cost` is `#[ignore]`d in Rust "a measurement, run by the benchmark gate": it stays Rust (design decision 10).
+
