@@ -1534,19 +1534,11 @@ fn derives_encoding(c: Ck, decl: Int) -> Bool {
 // What a module may hold that the checker does not carry yet.
 fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
-    let consts = kids(c, p, "consts");
-    let mut k = 0;
-    while k < ints_len(consts) {
-        let decl = ints_get(consts, k);
-        k = k + 1;
-    }
     let records = kids(c, p, "records");
     let mut i = 0;
     while i < ints_len(records) {
         let r = ints_get(records, i);
         if derives_encoding(c, r) { stop(c, "a derived encoding"); }
-        let n = fname_of(c, r, "name");
-        if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
         i = i + 1;
     }
     let enums = kids(c, p, "enums");
@@ -1554,8 +1546,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while i < ints_len(enums) {
         let e = ints_get(enums, i);
         if derives_encoding(c, e) { stop(c, "a derived encoding"); }
-        let n = fname_of(c, e, "name");
-        if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
         i = i + 1;
     }
     let functions = kids(c, p, "functions");
@@ -1826,7 +1816,13 @@ fn type_environment(c: Ck, m: Int, report: Bool) -> Int {
                     // The prelude's standard modules (R1.5, D9) yield, silently.
                 } else {
                     if own >= 0 {
-                        // The prelude's names are reserved (N0363), which the checker stops at.
+                        // The prelude's names are reserved rather than colliding at an import: no
+                        // `use` was written, and the rule is about the declaration (N0363).
+                        if on == prelude(c) && report {
+                            dg_error(c.d, "N0363", type_start(c, own), type_end(c, own), cat3("`", name, "` is a core prelude type"), "",
+                                    "every module sees the prelude's `Result` and `Option` without importing them, and there is no way to shadow one. Give this type another name");
+                            sec_at(c, type_start(c, t), type_end(c, t), "declared by the core prelude here");
+                        }
                         if on != prelude(c) && report {
                             dg_error(c.d, "N0208", ints_get(c.dats, d), ints_get(c.date, d),
                                     cat3("this import brings in the type `", name, "`, which this module declares"), "",
@@ -6302,6 +6298,12 @@ fn why_invisible(c: Ck, name: Str, at: Int) -> Bool {
 
 // A numeric conversion (Gate 2): `T(x)` exactly, or `try_convert[T](x)`, `wrap_convert[T](x)`,
 // `saturate_convert[T](x)`; `Text(s)` and `try_convert[Text](s)`.
+// An attempt to build a capability, which nothing but the runtime may (N37).
+fn forged(c: Ck, k: Str, at: Int) -> Int {
+    err(c, "N0370", at, cat3("`", k, "` is a capability, and a capability cannot be constructed"),
+            cat5("authority comes only from `main`: give it ", cap_article(cap_bit(k)), " `", k, "` parameter, which the runtime supplies, and pass that to what needs it"))
+}
+
 fn check_conversion(c: Ck, name: Str, at: Int, has_targs: Bool, targs: Int, args: Ints, span: Int) -> Int {
     let exact = name != "try_convert" && name != "wrap_convert" && name != "saturate_convert";
     let mut to = t_int();
@@ -6411,11 +6413,8 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
             unknown_qualified(c, c.d, callee, sorted(c.alname), sps(c, cs), spe(c, cs), "function");
         } else {
             if why_invisible(c, callee, cs) == false {
-                if is_cap_name(callee) {
-                    stop(c, "a capability constructed");
-                    return or_int(expected);
-                }
-                err(c, "N0201", cs, cat3("`", callee, "` is not a function"), "");
+                // `IoCap()`: the question is where authority comes from (N37).
+                if is_cap_name(callee) { forged(c, callee, cs); } else { err(c, "N0201", cs, cat3("`", callee, "` is not a function"), ""); }
             }
         }
         let mut i = 0;
@@ -7541,12 +7540,13 @@ fn check_construction(c: Ck, ty: Str, ty_span: Int, targs: Int, inits: Inits, sp
             err(c, "N0341", ty_span, cat3("`", name, "` is an enum, so a value of it names one of its variants"), help);
         } else {
             if is_cap_name(ty) {
-                stop(c, "a capability constructed");
-                return 0 - 1;
-            }
-            if is_builtin_name(ty) {
-                err(c, "N0333", ty_span, cat3("`", show(c, def), "` is not a record, so it has no fields to name"),
-                        "this form builds a record. A built-in type is built by its own operations");
+                // Authority is not constructible (N37): the only capabilities are `main`'s.
+                forged(c, ty, ty_span);
+            } else {
+                if is_builtin_name(ty) {
+                    err(c, "N0333", ty_span, cat3("`", show(c, def), "` is not a record, so it has no fields to name"),
+                            "this form builds a record. A built-in type is built by its own operations");
+                }
             }
         }
         check_values(c, inits);
