@@ -50,6 +50,7 @@ mod realtime_tasks;
 mod reexports;
 mod regex;
 mod registry;
+mod release_build;
 mod release_examples;
 mod repository;
 mod resolution;

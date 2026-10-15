@@ -29,6 +29,8 @@ pub(crate) struct Request<'a> {
     pub target: Option<&'a str>,
     pub layout: &'a str,
     pub debug: bool,
+    /// `--release` (R1.5, D15).
+    pub release: bool,
     pub library: bool,
     pub objects: Option<&'a Path>,
     pub stack_watermark: bool,
@@ -196,6 +198,13 @@ fn record(r: &Request<'_>) -> Result<Value, String> {
         }),
         "cranelift": nazm_codegen_clif::CRANELIFT_VERSION,
     });
+    // A hardened build (R1.5, D15), named only where it was asked for, so a default build's
+    // record is what it was.
+    if r.release {
+        if let Some(map) = backend.as_object_mut() {
+            map.insert("release".into(), json!(true));
+        }
+    }
     // Nazm's own code generator, when it built the program (R9, D15): the program that compiled
     // every unit is named by its digest, the same one in each object's key.
     if r.backend == "nazm" {

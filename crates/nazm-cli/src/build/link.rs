@@ -23,10 +23,29 @@ pub(super) fn linked(
         backend.link_shared(tmp_exe, objects)
     } else if choice.library {
         archive(tmp_exe, objects)
+    } else if choice.release {
+        backend.link_release(tmp_exe, objects)
     } else {
         backend.link(tmp_exe, objects)
     };
     match linked {
+        // A release build (R1.5, D15) is stripped and signed once it is linked.
+        Outcome::Ran(o) if o.status.success() && choice.release => {
+            if let Err(e) = super::release::finish(tmp_exe) {
+                cleanup(false);
+                eprintln!("nazm: the release build was not finished: {e}");
+                if summary {
+                    return Err(summarized(
+                        Status::ToolchainFailed,
+                        exit::TOOLCHAIN_FAILED,
+                        &[],
+                        Some(map),
+                        None,
+                    ));
+                }
+                return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+            }
+        }
         Outcome::Ran(o) if o.status.success() => {}
         Outcome::Ran(o) if !foreign.is_empty() => {
             // A program that calls C links against what `--link` named, so an unresolved

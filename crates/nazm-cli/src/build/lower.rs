@@ -174,7 +174,19 @@ pub(super) fn lowered(
                 &mut reached,
                 choice.stack_size,
                 heap_limit,
-            );
+            )
+            // A release build (R1.5, D15): every function of every unit, the runtime's and the
+            // entry's among them, guarded by a stack canary.
+            .map(|mut made| {
+                if choice.release {
+                    for a in &mut made {
+                        if let nazm_lir::backend::Code::Llvm(text) = &mut a.code {
+                            *text = super::release::stack_protected(text);
+                        }
+                    }
+                }
+                made
+            });
             clock.mark("codegen");
             made
         },

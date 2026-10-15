@@ -19710,6 +19710,38 @@ replace = "                && !(hole_arm && !self.at(&TokenKind::RBrace))\n     
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written" }]
 
 [[mutation]]
+name = "r1-5-d15-a-release-build-has-no-canary"
+why = "`nazm build --release` writes no `sspstrong`, so no function checks a stack canary (D15)"
+file = "crates/nazm-cli/src/build/release.rs"
+find = "                    return Some(format!(\"{before} sspstrong{after}\"));"
+replace = "                    return Some(format!(\"{before}{after}\"));"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_checks_a_stack_canary_and_the_default_one_does_not" }]
+
+[[mutation]]
+name = "r1-5-d15-a-release-build-is-not-stripped"
+why = "`nazm build --release` signs the executable without stripping it, so every function's name is left in it (D15)"
+file = "crates/nazm-cli/src/build/release.rs"
+find = "    tool(\"strip\", &[exe.as_os_str()])?;"
+replace = ""
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_has_no_symbols_or_debug_information_left" }]
+
+[[mutation]]
+name = "r1-5-d15-a-release-build-is-signed-without-the-hardened-runtime"
+why = "`nazm build --release` signs ad hoc without `--options runtime` (D15)"
+file = "crates/nazm-cli/src/build/release.rs"
+find = "            \"runtime\".as_ref(),"
+replace = "            \"kill\".as_ref(),"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::a_release_executable_is_signed_ad_hoc_with_the_hardened_runtime_and_the_default_one_is_not" }]
+
+[[mutation]]
+name = "r1-5-d15-a-cranelift-release-build-is-built-unprotected"
+why = "`nazm build --release --backend cranelift` is built, without the stack canary it promises, rather than refused (D15)"
+file = "crates/nazm-cli/src/build/preflight.rs"
+find = "        let why = if choice.backend != nazm_lir::backend::BackendId::Llvm {"
+replace = "        let why = if choice.backend == nazm_lir::backend::BackendId::Nazm {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "release_build::release_is_refused_where_it_cannot_hold" }]
+
+[[mutation]]
 name = "r3-a-generic-channel-s-helper-named-by-the-checker-s-id"
 why = "a generic channel's helper is named by the checker's channel id again, which depends on what other channel types the session interned first, so the symbol is not durable and the pipeline cannot derive it (R3 6.3.6)"
 file = "crates/nazm-lir/src/op/lower.rs"
