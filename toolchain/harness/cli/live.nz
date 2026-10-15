@@ -1,0 +1,143 @@
+// N65: the interactive tier — `nazm repl`, `nazm comptime`, `nazm reload-check`
+// (`docs/architecture.md` §7.67). Ported from `crates/nazm-cli/tests/live.rs` (R7).
+//
+// A REPL session checks every edit as one program, so a redefinition reaches its callers and one
+// that breaks a caller is refused by the caller's name; comptime evaluates a parameterless pure
+// function and refuses any other by name, and a runaway evaluation stops at its budget; a reload
+// check says, per definition, whether a running image could take the change.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// `nazm repl` with `input` on standard input, which must succeed: its standard output.
+fn repl(h: Caps, input: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let o = run_input(h, nazm_bin(h.io), words("repl"), d, suite_env(h), input);
+    scratch_remove(h, d);
+    check_that(o.code == 0, ran_show(o))?;
+    Result[Str, Str].Ok(value: o.stdout)
+}
+
+@test
+fn a_session_is_checked_as_one_program_on_every_edit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let out = repl(h, "fn g(x: Int) -> Int { x + 1 }\nfn f(x: Int) -> Int { g(x) * 2 }\nf(3)\nfn g(x: Int) -> Int { x + 10 }\nf(3)\nfn g(x: Bool) -> Int { 0 }\nf(3)\nf(3) == 26\n\"text\"\n:defs\n:quit\nf(4)\n")?;
+    let want = "defined `g`\ndefined `f`\n= 8\nredefined `g`\n= 26\nredefining `g` is refused: `f` no longer checks against it\n";
+    check_that(text_starts_with(out, want), out)?;
+    // Refused, the session is unchanged: `f` still calls the second `g`.
+    let after = str_slice(out, str_len(want), str_len(out));
+    check_that(text_contains(after, "= 26\n= true\ntext\n"), out)?;
+    check_that(text_contains(after, "fn g(x: Int) -> Int { x + 10 }\nfn f(x: Int) -> Int { g(x) * 2 }\n"), out)?;
+    // Nothing after `:quit` runs.
+    check_that(!text_contains(out, "= 10"), out)
+}
+
+@test
+fn a_failure_in_the_repl_is_the_language_s_failure(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let out = repl(h, "9223372036854775807 + 1\nfn main() -> Int { 0 }\n")?;
+    check_that(text_contains(out, "error[N0400]"), out)?;
+    check_that(text_contains(out, "`main` is the REPL's"), out)
+}
+
+fn constants() -> Str ! {} {
+    "fn table() -> Int ! {} { let mut i = 0; let mut s = 0; while i < 10 { s = s + i * i; i = i + 1; } s }\nfn reads(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\nfn loud() -> Int ! { io } { 0 }\nfn ambient(out: OutCap) -> Int { print(\"hi\"); 0 }\nfn forever() -> Int ! {} { let mut i = 0; while i >= 0 { i = i + 0; } i }\nfn main() -> Int { table() }\n"
+}
+
+fn comptime_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "c.nz", constants())?;
+    let o = nazm(h, d, words("comptime c.nz table"));
+    check_that(o.code == 0, o.stderr)?;
+    check_that(o.stdout == "285\n", o.stdout)?;
+    let fs = words("reads loud ambient nothere");
+    let whys = strs_new();
+    strs_push(whys, "it has parameters, so it is not a constant");
+    strs_push(whys, "it is not pure");
+    // It exercises authority, so it takes it as a parameter (N104): comptime has none to hand
+    // it, and a function with parameters is no constant.
+    strs_push(whys, "it has parameters, so it is not a constant");
+    strs_push(whys, "there is no function `nothere`");
+    let mut i = 0;
+    while i < 4 {
+        let f = strs_get(fs, i);
+        let r = nazm(h, d, words(f"comptime c.nz {f}"));
+        check_that(r.code != 0, f"{f} was evaluated")?;
+        check_that(text_contains(r.stderr, "N0393"), f"{f}: {r.stderr}")?;
+        check_that(text_contains(r.stderr, strs_get(whys, i)), f"{f}: {r.stderr}")?;
+        check_that(str_len(r.stdout) == 0, f"{f} printed")?;
+        i = i + 1;
+    }
+    // A runaway evaluation stops at its budget, with the interpreter's own code.
+    let o2 = nazm(h, d, words("comptime c.nz forever --max-iterations 10000"));
+    check_that(o2.code != 0, ran_show(o2))?;
+    check_that(text_contains(o2.stderr, "N0402"), o2.stderr)
+}
+
+@test
+fn comptime_evaluates_a_pure_constant_and_refuses_anything_that_could_reach_the_host(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = comptime_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn reload_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "v1/prog.nz", "struct P { x: Int, y: Int }\nfn f(p: P) -> Int { p.x + p.y }\nfn main() -> Int { f(P(x: 1, y: 2)) }\n")?;
+    // Fields reordered (not a layout change), a body edited, a function added.
+    scratch_write(h, d, "v2/prog.nz", "struct P { y: Int, x: Int }\nfn f(p: P) -> Int { p.x * p.y }\nfn g() -> Int { 4 }\nfn main() -> Int { f(P(x: 1, y: 2)) + g() }\n")?;
+    scratch_write(h, d, "v3/prog.nz", "struct P { x: Int, y: Int, z: Int }\nfn f(p: P, k: Int) -> Int { p.x + p.y + k }\nfn main() -> Int { f(P(x: 1, y: 2, z: 3), 1) }\n")?;
+    let o = nazm(h, d, words("reload-check v1/prog.nz v2/prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let v = jparse(o.stdout)?;
+    check_that(jstr(v, "schema") == "nazm.reload-check/1", o.stdout)?;
+    check_that(jstr(v, "outcome") == "reloadable", o.stdout)?;
+    let names = strs_new();
+    let mut i = 0;
+    while jq(v, f"changes/{i}") >= 0 {
+        strs_push(names, f"{jstr(v, f"changes/{i}/name")}:{jstr(v, f"changes/{i}/verdict")}");
+        i = i + 1;
+    }
+    same_strs("changes", names, words("f:reloadable g:reloadable main:reloadable"))?;
+    let o3 = nazm(h, d, words("reload-check v1/prog.nz v3/prog.nz"));
+    check_that(o3.code != 0, ran_show(o3))?;
+    let v3 = jparse(o3.stdout)?;
+    check_that(jstr(v3, "outcome") == "restart", o3.stdout)?;
+    check_that(text_contains(o3.stderr, "`P` needs a restart: the record's layout changed"), o3.stderr)?;
+    check_that(text_contains(o3.stderr, "`f` needs a restart: its signature changed from `(P) -> Int ! {}` to `(P, Int) -> Int ! {}`"), o3.stderr)?;
+    // The same version against itself changes nothing.
+    let o1 = nazm(h, d, words("reload-check v1/prog.nz v1/prog.nz"));
+    check_that(o1.code == 0, ran_show(o1))?;
+    let v1 = jparse(o1.stdout)?;
+    check_that(jq(v1, "changes") >= 0 && jq(v1, "changes/0") < 0, o1.stdout)
+}
+
+@test
+fn a_reload_check_names_what_a_running_image_can_take_and_what_needs_a_restart(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = reload_cases(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn effect_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "a/prog.nz", "fn f() -> Int ! {} { 1 }\nfn main() -> Int { f() }\n")?;
+    scratch_write(h, d, "b/prog.nz", "fn f(io: IoCap) -> Int ! { io } { print(\"x\"); 1 }\nfn main(io: IoCap) -> Int ! { io } { f(io) }\n")?;
+    let o = nazm(h, d, words("reload-check a/prog.nz b/prog.nz"));
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "`f` needs a restart"), o.stderr)
+}
+
+@test
+fn an_effect_added_to_a_signature_needs_a_restart(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = effect_cases(h, d);
+    scratch_remove(h, d);
+    r
+}

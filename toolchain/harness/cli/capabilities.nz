@@ -1,0 +1,154 @@
+// N37: authority is checked when a program is, and what runs is unchanged by it. Ported from
+// `crates/nazm-cli/tests/capabilities.rs` (R7).
+//
+// A capability parameter lowers exactly as an `Int` one; the entry wrapper hands `main` one erased
+// word per capability it declares; every program in `examples/capabilities/` gives the same
+// output interpreted and compiled at `-O0` and `-O2`.
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// One IR unit `nazm build --emit-ir` wrote: its file name and text.
+struct Unit {
+    name: Str,
+    ir: Str,
+}
+
+/// Every IR unit `nazm build --emit-ir` writes for the one-file program `text`, by name.
+fn ir_units(h: Caps, text: Str) -> Result[Vec[Unit], Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", text)?;
+    let built = nazm(h, d, words("build m.nz -o prog --emit-ir --no-cache --opt-level 0"));
+    if built.code != 0 {
+        scratch_remove(h, d);
+        return Result[Vec[Unit], Str].Err(error: f"building failed: {built.stderr}");
+    }
+    let names = match dir_list(h.io, d) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => strs_new(),
+    };
+    let lls = strs_new();
+    for n in names {
+        if text_ends_with(n, ".ll") {
+            strs_push(lls, n);
+        }
+    }
+    let sorted = strs_sort(lls);
+    let out = vec_new[Unit]();
+    for n in sorted {
+        match read_text(h, f"{d}/{n}") {
+            Result.Ok(value: ir) => vec_push(out, Unit(name: n, ir: ir)),
+            Result.Err(error: e) => 0,
+        };
+    }
+    scratch_remove(h, d);
+    Result[Vec[Unit], Str].Ok(value: out)
+}
+
+/// The definition of the Nazm function `name` — its symbol ends `.name` — from `define` to `}`.
+fn definition(units: Vec[Unit], name: Str) -> Result[Str, Str] ! {} {
+    let key = f".{name}(";
+    for u in units {
+        let ls = text_lines(u.ir);
+        let mut i = 0;
+        while i < strs_len(ls) {
+            let l = strs_get(ls, i);
+            if text_starts_with(l, "define") && text_contains(l, key) {
+                let body = strs_new();
+                let mut j = i;
+                while j < strs_len(ls) {
+                    strs_push(body, strs_get(ls, j));
+                    if strs_get(ls, j) == "}" {
+                        return Result[Str, Str].Ok(value: str_join(body, "\n"));
+                    }
+                    j = j + 1;
+                }
+                return Result[Str, Str].Err(error: "the end");
+            }
+            i = i + 1;
+        }
+    }
+    Result[Str, Str].Err(error: f"no definition of {name}")
+}
+
+fn entry_of(units: Vec[Unit]) -> Result[Str, Str] ! {} {
+    for u in units {
+        if text_contains(u.name, "entry") {
+            return Result[Str, Str].Ok(value: u.ir);
+        }
+    }
+    Result[Str, Str].Err(error: "the entry unit")
+}
+
+@test
+fn a_capability_parameter_lowers_exactly_as_an_int_one_and_main_is_handed_its_roots(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Signatures on lines of their own, so each body is at the same position in both.
+    let cap = "fn say(io: IoCap, n: Int) -> Int\n{ n * 3 + 1 }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(io, 4); 0 }\n";
+    let int = "fn say(io: Int, n: Int) -> Int\n{ n * 3 + 1 }\nfn main(io: IoCap, tasks: SpawnCap) -> Int\n{ say(0, 4); 0 }\n";
+    let with_cap = ir_units(h, cap)?;
+    let with_int = ir_units(h, int)?;
+    let a = definition(with_cap, "say")?;
+    let b = definition(with_int, "say")?;
+    check_that(a == b, f"{a}\nvs\n{b}")?;
+    // The entry hands `main` one word per capability, and `main` takes them as words.
+    let entry = entry_of(with_cap)?;
+    // Two, not three: a `main` that writes an `IoCap` is given no `out` (R1, 5b.1).
+    check_that(text_contains(entry, "(i64 0, i64 0)"), entry)?;
+    check_that(!text_contains(entry, "(i64 0, i64 0, i64 0)"), entry)?;
+    let m = definition(with_cap, "main")?;
+    check_that(text_contains(m, "(i64 %"), m)?;
+    // A `main` that writes no capability is given `out: OutCap`, and handed that one word.
+    let plain = ir_units(h, "fn main() -> Int { 0 }\n")?;
+    let e = entry_of(plain)?;
+    check_that(text_contains(e, ".main(i64 0)"), e)?;
+    check_that(!text_contains(e, "i64 0, i64 0)"), e)
+}
+
+@test
+fn a_main_that_takes_anything_but_authority_is_refused_before_it_is_built(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "fn main(n: Int) -> Int { n }\n")?;
+    let built = nazm(h, d, words("build m.nz -o prog --no-cache"));
+    let exists = file_exists_at(io, f"{d}/prog");
+    scratch_remove(h, d);
+    check_that(built.code != 0, ran_show(built))?;
+    check_that(text_contains(built.stderr, "N0371"), built.stderr)?;
+    check_that(!exists, "a refused program was built")
+}
+
+fn copy_examples(h: Caps, from: Str, to: Str) -> Result[Int, Str] ! { io } {
+    let src = f"{repo_root(h)}/{from}";
+    let names = match dir_list(h.io, src) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: "examples"); },
+    };
+    for n in names {
+        if text_ends_with(n, ".nz") {
+            scratch_write(h, to, n, read_text(h, f"{src}/{n}")?)?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn examples_agree(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    copy_examples(h, "examples/capabilities", d)?;
+    let w = agree_native(h, d, "workers.nz")?;
+    check_that(w == "1\n4\n9\n16\n30\n", f"workers.nz: {w}")?;
+    let l = agree_native(h, d, "ledger.nz")?;
+    check_that(l == "books: 12\n", f"ledger.nz: {l}")
+}
+
+@test
+fn every_capability_example_runs_the_same_interpreted_and_compiled(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = examples_agree(h, d);
+    scratch_remove(h, d);
+    r
+}

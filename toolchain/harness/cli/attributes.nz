@@ -1,0 +1,195 @@
+// Gate 2: attributes and conditional compilation (`docs/general-purpose.md` §16 and §17,
+// `docs/spec.md` *Attributes* and *Conditional compilation*). Ported from
+// `crates/nazm-cli/tests/attributes.rs` (R7).
+//
+// A declaration whose `@cfg` does not hold is not there — not resolved, not checked, not a
+// duplicate — in every implementation; the build's target and profiles decide, and a check filed
+// under one configuration is not reused under another; the vocabulary is closed and refused by
+// name (`N0619`); a malformed attribute is one error; and the formatter's layout.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The host's operating system as `@cfg(os = …)` names it, another one, and a triple for it.
+struct Hosts {
+    host: Str,
+    other: Str,
+    triple: Str,
+}
+
+fn host_and_other(h: Caps) -> Hosts ! { io, spawn } {
+    if on_macos(h) {
+        Hosts(host: "macos", other: "linux", triple: "x86_64-unknown-linux-gnu")
+    } else {
+        Hosts(host: "linux", other: "macos", triple: "aarch64-apple-darwin")
+    }
+}
+
+@test
+fn the_declaration_whose_condition_holds_is_the_one_every_implementation_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let hs = host_and_other(h);
+    let host = hs.host;
+    let other = hs.other;
+    let src = f"@cfg(os = \"{host}\")\nfn place() -> Str {{ \"{host}\" }}\n\n@cfg(os = \"{other}\")\nfn place() -> Str {{ \"{other}\" }}\n\n@cfg(not(os = \"{host}\"))\nfn place() -> Str {{ \"not here\" }}\n\n@cfg(all(os = \"{host}\", not(os = \"{other}\"), any(arch = \"nowhere\", target = \"nowhere\")))\nfn never() -> Int {{ 1 }}\n\n@cfg(any(arch = \"nowhere\", os = \"{host}\"))\nfn never() -> Int {{ 0 }}\n\nfn main(out: OutCap) -> Int {{\n    print(str_concat(place(), \"\\n\"));\n    never()\n}}\n";
+    agrees(h, src, f"{host}\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn an_impl_left_out_takes_its_methods_and_is_not_a_second_impl(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees(h, "trait Show { fn show(self: Self) -> Int; }\n\n@cfg(os = \"nowhere\")\nimpl Show for Int { fn show(self: Int) -> Int { \"never checked\" } }\n\n@cfg(not(os = \"nowhere\"))\nimpl Show for Int { fn show(self: Int) -> Int { self + 2 } }\n\nfn main(out: OutCap) -> Int {\n    print(str_concat(int_to_str(5.show()), \"\\n\"));\n    0\n}\n", "7\n0")?;
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn code_only_another_target_compiles_is_not_checked_until_built_for_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let hs = host_and_other(h);
+    let other = hs.other;
+    // Ill-typed on purpose: only a build for `other` reaches it.
+    let src = f"@cfg(os = \"{other}\")\nfn f() -> Int {{ \"not an Int\" }}\n\n@cfg(not(os = \"{other}\"))\nfn f() -> Int {{ 0 }}\n\nfn main() -> Int {{ f() }}\n";
+    let d = prog_dir(h, "prog.nz", src)?;
+    let here = nazm(h, d, words("check prog.nz"));
+    let there = nazm(h, d, words(f"build --target {hs.triple} --objects objs prog.nz"));
+    scratch_remove(h, d);
+    check_that(here.code == 0, here.stderr)?;
+    check_that(there.code != 0, there.stderr)?;
+    check_that(text_contains(there.stderr, "N0300"), there.stderr)
+}
+
+@test
+fn the_profiles_held_decide_and_a_check_is_not_reused_across_them(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Ill-typed only under `general`: the check that passes without the profile is cached, and
+    // the one with it must not reuse it.
+    let d = prog_dir(h, "prog.nz", "@cfg(profile = \"general\")\nfn f() -> Int { \"held\" }\n\n@cfg(not(profile = \"general\"))\nfn f() -> Int { 0 }\n\nfn main() -> Int { f() }\n")?;
+    let plain = nazm(h, d, words("check prog.nz"));
+    let held = nazm(h, d, words("check --profile general prog.nz"));
+    let ran = nazm(h, d, words("run --interpret --profile general prog.nz"));
+    let again = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(plain.code == 0, plain.stderr)?;
+    check_that(held.code != 0, held.stderr)?;
+    check_that(text_contains(held.stderr, "N0300"), held.stderr)?;
+    check_that(text_contains(ran.stderr, "N0300"), ran.stderr)?;
+    check_that(again.code == 0, again.stderr)
+}
+
+@test
+fn every_attribute_outside_the_vocabulary_or_its_place_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let whys = strs_new();
+    strs_push(srcs, "@bogus\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "unknown");
+    strs_push(srcs, "@test\n@test\nfn f() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\nfn main() -> Int { 0 }\n"); strs_push(whys, "twice");
+    strs_push(srcs, "@test\nstruct P { x: Int, }\nfn main() -> Int { 0 }\n"); strs_push(whys, "test on a type");
+    strs_push(srcs, "@bench\nconst K: Int = 1;\nfn main() -> Int { 0 }\n"); strs_push(whys, "bench on a constant");
+    strs_push(srcs, "@test(often)\nfn f() -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\nfn main() -> Int { 0 }\n"); strs_push(whys, "test's argument");
+    strs_push(srcs, "@fuzz(often)\nfn f(input: Bytes) -> Result[Int, Str] { Result[Int, Str].Ok(value: 0) }\nfn main() -> Int { 0 }\n"); strs_push(whys, "fuzz's argument");
+    strs_push(srcs, "trait T { fn t(self: Self) -> Int; }\n@deprecated\nimpl T for Int { fn t(self: Int) -> Int { 0 } }\nfn main() -> Int { 0 }\n"); strs_push(whys, "deprecated on an impl");
+    strs_push(srcs, "@deprecated(why)\npub fn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "deprecated's argument");
+    strs_push(srcs, "@deprecated\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "deprecated on a private function");
+    strs_push(srcs, "@deprecated\nconst K: Int = 1;\nfn main() -> Int { K }\n"); strs_push(whys, "deprecated on a constant");
+    strs_push(srcs, "@deprecated\npub trait T { fn t(self: Self) -> Int; }\nfn main() -> Int { 0 }\n"); strs_push(whys, "deprecated on a trait");
+    strs_push(srcs, "@cfg\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "no condition");
+    strs_push(srcs, "@cfg(os = \"linux\", arch = \"x86_64\")\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "two conditions");
+    strs_push(srcs, "@cfg(colour = \"red\")\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "an unknown key");
+    strs_push(srcs, "@cfg(either(os = \"linux\"))\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "an unknown combiner");
+    strs_push(srcs, "@cfg(not(os = \"a\", os = \"b\"))\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "not of two");
+    strs_push(srcs, "@cfg(linux)\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"); strs_push(whys, "a bare word");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        same_strs(strs_get(whys, i), codes(h, strs_get(srcs, i)), words("N0619"))?;
+        i = i + 1;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_malformed_attribute_is_one_syntax_error_and_an_attribute_before_a_use_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    same_strs("os = 1", codes(h, "@cfg(os = 1)\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0100"))?;
+    same_strs("no comma", codes(h, "@cfg(all(os = \"a\" os = \"b\"))\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0100"))?;
+    same_strs("a bare @", codes(h, "@\nfn f() -> Int { 0 }\nfn main() -> Int { 0 }\n"), words("N0100"))?;
+    let names = strs_new();
+    strs_push(names, "prog.nz");
+    strs_push(names, "other.nz");
+    let texts = strs_new();
+    strs_push(texts, "@cfg(os = \"linux\")\nuse \"other.nz\";\nfn main() -> Int { 0 }\n");
+    strs_push(texts, "pub fn g() -> Int { 0 }\n");
+    same_strs("before a use", check_codes(h, names, texts), words("N0100"))
+}
+
+@test
+fn the_formatter_puts_each_attribute_on_its_own_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "@ test @cfg( all( os = \"linux\" , not( arch=\"x86_64\" ) ) ) fn f() -> Int { 0 }\n@deprecated( \"use f\" )\nfn g() -> Int { 0 }\nfn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("fmt prog.nz"));
+    let text = read_text(h, f"{d}/prog.nz");
+    let again = nazm(h, d, words("fmt --check prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    let want = "@test\n@cfg(all(os = \"linux\", not(arch = \"x86_64\")))\nfn f() -> Int { 0 }\n@deprecated(\"use f\")\nfn g() -> Int { 0 }\nfn main() -> Int { 0 }\n";
+    let got = text?;
+    check_that(got == want, f"{got}\nexpected\n{want}")?;
+    check_that(again.code == 0, again.stdout)
+}
+
+/// The path of the item named `name` in any module of `nazm doc`'s output, or `""`.
+fn item(doc: JsonDoc, name: Str) -> Str ! {} {
+    let mut m = 0;
+    while jq(doc, f"modules/{m}") >= 0 {
+        let mut i = 0;
+        while jq(doc, f"modules/{m}/items/{i}") >= 0 {
+            if jstr(doc, f"modules/{m}/items/{i}/name") == name {
+                return f"modules/{m}/items/{i}";
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    ""
+}
+
+fn deprecation_cases(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "lib.nz", "@deprecated(\"use `area` instead\")\npub fn size(n: Int) -> Int { n * n }\n\npub fn area(n: Int) -> Int { n * n }\n\n@deprecated\npub struct Old { x: Int, }\n\n@deprecated(\"one shape now\")\npub enum Shape { Square, }\n\nfn main() -> Int { size(2) }\n")?;
+    let checked = nazm(h, d, words("check lib.nz"));
+    check_that(checked.code == 0, checked.stderr)?;
+    // A use of `size` is reported nowhere: no warning severity exists in 1.0.
+    check_that(str_len(checked.stderr) == 0, checked.stderr)?;
+    let r = nazm(h, d, words("doc lib.nz"));
+    check_that(r.code == 0, r.stderr)?;
+    let doc = jparse(r.stdout)?;
+    for name in words("size Old Shape area") {
+        check_that(str_len(item(doc, name)) > 0, f"{name}: {r.stdout}")?;
+    }
+    check_that(jtext(doc, f"{item(doc, "size")}/deprecated") == "\"use `area` instead\"", r.stdout)?;
+    check_that(jtext(doc, f"{item(doc, "Old")}/deprecated") == "\"\"", r.stdout)?;
+    check_that(jtext(doc, f"{item(doc, "Shape")}/deprecated") == "\"one shape now\"", r.stdout)?;
+    check_that(jq(doc, f"{item(doc, "area")}/deprecated") < 0, r.stdout)?;
+    let a = words("doc lib.nz -o");
+    strs_push(a, f"{d}/api");
+    let w = nazm(h, d, a);
+    check_that(w.code == 0, w.stderr)?;
+    let md = read_text(h, f"{d}/api/api.md")?;
+    check_that(text_contains(md, "**Deprecated:** use `area` instead"), md)?;
+    check_that(text_contains(md, "**Deprecated.**"), md)
+}
+
+/// G2-C1: `@deprecated` is metadata-only — no diagnostic reports a use — and `nazm doc` publishes
+/// it on the `pub` function, `struct` or `enum` it marks, with its reason or none, in the JSON and
+/// the Markdown alike.
+@test
+fn deprecation_is_metadata_the_api_documentation_publishes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = deprecation_cases(h, d);
+    scratch_remove(h, d);
+    r
+}

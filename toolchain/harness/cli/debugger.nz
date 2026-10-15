@@ -1,0 +1,115 @@
+// N58: debugger and profiler v2 — variables, and the runtime's counters as a profile
+// (`docs/architecture.md` §7.60). Ported from `crates/nazm-cli/tests/debugger.rs` (R7). The live
+// session beside them is `#[ignore]`d and needs Docker, which stays Rust (`design.md`).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn program() -> Str ! {} {
+    "fn greet(name: Str, times: Int, loud: Bool) -> Int {\n    let line = str_concat(\"hello \", name);\n    let n = str_len(line) * times;\n    if loud { n + 1 } else { n }\n}\n\nfn main() -> Int {\n    let who = str_concat(\"wor\", \"ld\");\n    greet(who, 2, true)\n}\n"
+}
+
+/// `nazm ARGS` in `dir`, Nazm's own code generator named where `--backend nazm` asks for it.
+fn nz(h: Caps, dir: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let env = if text_contains(args, "--backend nazm") { env_set(suite_env(h), "NAZM_NZCG", nzcg(h, dir)?) } else { suite_env(h) };
+    Result[Ran, Str].Ok(value: run(h, nazm_bin(h.io), words(args), dir, env))
+}
+
+fn variables(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", program())?;
+    let b = nz(h, d, "build --debug --no-cache --emit-ir prog.nz -o prog")?;
+    check_that(b.code == 0, b.stderr)?;
+    let ir = read_text(h, f"{d}/prog.m0.ll")?;
+    let wants = strs_new();
+    strs_push(wants, "!DILocalVariable(name: \"name\", arg: 1,");
+    strs_push(wants, "!DILocalVariable(name: \"times\", arg: 2,");
+    strs_push(wants, "!DILocalVariable(name: \"loud\", arg: 3,");
+    strs_push(wants, "!DILocalVariable(name: \"line\", scope:");
+    strs_push(wants, "!DILocalVariable(name: \"n\", scope:");
+    strs_push(wants, "!DILocalVariable(name: \"who\", scope:");
+    // `main`'s `out: OutCap`, given it though nothing wrote it (R1, 5b.1), is a parameter a
+    // debugger can read like any other.
+    strs_push(wants, "!DILocalVariable(name: \"out\", arg: 1,");
+    strs_push(wants, "!DIBasicType(name: \"Int\", size: 64, encoding: DW_ATE_signed)");
+    strs_push(wants, "!DIBasicType(name: \"Bool\", size: 8, encoding: DW_ATE_boolean)");
+    strs_push(wants, "!DICompositeType(tag: DW_TAG_structure_type, name: \"Str\", size: 192,");
+    strs_push(wants, "name: \"data\"");
+    strs_push(wants, "name: \"len\"");
+    strs_push(wants, "name: \"owner\"");
+    strs_push(wants, "declare void @llvm.dbg.declare(metadata, metadata, metadata)");
+    // A function is found by its Nazm name.
+    strs_push(wants, "DISubprogram(name: \"greet\", scope:");
+    for want in wants {
+        check_that(text_contains(ir, want), f"{want}\n{ir}")?;
+    }
+    // Every described variable is one the source wrote, or `main`'s `out`: no compiler-made
+    // temporary.
+    for line in lines(ir) {
+        if text_contains(line, "DILocalVariable") {
+            check_that(!text_contains(line, "#"), f"a temporary described: {line}")?;
+        }
+    }
+    check_that(count_matches(ir, "DILocalVariable(") == 7, ir)?;
+    // Each declared on its storage — a LIR variable's or slot's `alloca` (N105).
+    check_that(count_matches(ir, "call void @llvm.dbg.declare(metadata ptr %") == 7, ir)?;
+    // Without `--debug`, none of it.
+    let plain = nz(h, d, "build --no-cache --emit-ir prog.nz -o plain")?;
+    check_that(plain.code == 0, plain.stderr)?;
+    let plain_ir = read_text(h, f"{d}/plain.m0.ll")?;
+    check_that(!text_contains(plain_ir, "DILocalVariable") && !text_contains(plain_ir, "nz.var"), plain_ir)
+}
+
+@test
+fn parameters_and_bindings_are_described_and_temporaries_are_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = variables(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+fn profiles(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "prog.nz", "fn one(c: Chan[Int]) -> Bool ! {} { chan_send_of(c, 1) }\nfn main(io: IoCap, sp: SpawnCap) -> Int ! { io, spawn } {\n    let c = chan_new_of[Int](4);\n    scope { spawn one(c); spawn one(c); }\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, c);\n    let got = vec_new[Int]();\n    chan_select_of(cs, got);\n    print(\"ok\");\n    0\n}\n")?;
+    // The backends a profile is taken under: Nazm's own code generator too where it builds.
+    let backends = words("llvm cranelift");
+    if on_macos(h) {
+        strs_push(backends, "nazm");
+    }
+    for backend in backends {
+        let o = nz(h, d, f"profile --backend {backend} prog.nz")?;
+        check_that(o.code == 0, o.stderr)?;
+        let v = jparse(o.stdout)?;
+        check_that(jstr(v, "schema") == "nazm.profile/2", o.stdout)?;
+        // Not sampled unless asked (N91).
+        check_that(jtext(v, "samples") == "null", o.stdout)?;
+        check_that(jstr(v, "backend") == backend, o.stdout)?;
+        check_that(jtext(v, "exit") == "0", o.stdout)?;
+        // `ok`, and main's result line.
+        check_that(jtext(v, "stdout_bytes") == "4", o.stdout)?;
+        check_that(jtext(v, "scheduler/spawned") == "2", o.stdout)?;
+        check_that(jtext(v, "scheduler/joined") == "2", o.stdout)?;
+        check_that(jtext(v, "scheduler/selects") == "1", o.stdout)?;
+        check_that(jtext(v, "scheduler/timeouts") == "0", o.stdout)?;
+        for kind in words("sequences strings channels closures") {
+            check_that(jtext(v, f"memory/{kind}/live") == "0", f"{kind}: {o.stdout}")?;
+        }
+        check_that(jtext(v, "memory/channels/allocated") == "1", o.stdout)?;
+        let wall = jtext(v, "wall_ms");
+        check_that(parse_usize(wall) >= 0, o.stdout)?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_profile_reports_what_one_run_did_under_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = profiles(h, d);
+    scratch_remove(h, d);
+    r
+}

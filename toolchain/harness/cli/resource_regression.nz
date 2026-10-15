@@ -1,0 +1,29 @@
+// The stage drivers must assemble their output in one allocation. Ported from
+// `crates/nazm-cli/tests/resource_regression.rs` (R7): the source guard. The measured bound
+// beside it is `#[ignore]`d and needs Docker, which stays Rust (`design.md`).
+//
+// `lexer.nz`, `parser.nz` and `check.nz` each used to build their output with
+// `out = str_concat(out, ..)` in a loop: retained bytes quadratic in the output, which once
+// stopped the machine.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+
+@test
+fn no_stage_driver_rebuilds_its_output_with_str_concat(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for driver in words("compiler/lexer.nz compiler/parser.nz compiler/check.nz") {
+        let src = read_text(h, f"{repo_root(h)}/{driver}")?;
+        let mut n = 0;
+        for line in lines(src) {
+            n = n + 1;
+            let code = strs_get(split(line, "//"), 0);
+            check_that(!(text_contains(code, "str_concat(out") || text_contains(code, "out = str_concat")), f"{driver}:{n}: the output accumulator is being rebuilt with `str_concat`, which is quadratic in time and memory and has already stopped this machine once. Push the parts with `strs_push` and assemble them with `str_join`, the way `compiler/emit.nz` does.\n    {trim_ws(line)}")?;
+        }
+        check_that(text_contains(src, "str_join("), f"{driver}: expected the output to be assembled with `str_join`")?;
+    }
+    Result[Int, Str].Ok(value: 0)
+}
