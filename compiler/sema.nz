@@ -292,6 +292,12 @@ pub struct Ck {
     fnpb: Ints,
     capcl: Ints,
     capbd: Ints,
+    // Where among the bindings each capture's copy is made (`bind` in the closure, as the
+    // reference makes it): how many bindings there were then.
+    capat: Ints,
+    // Each closure checked and the type it was given (`ClosureInfo::ty`).
+    clid: Ints,
+    clty: Ints,
     // By the span each is written at: the binding a name is (`var`), the closure an expression
     // makes (`closure_at`), the sequence a `for` reads (`for_seq`), whether a construction is a
     // record's (`construction`), and the call site a call is (`callee`).
@@ -1419,7 +1425,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -5353,6 +5359,7 @@ fn lookup_var(c: Ck, name: Str, at: Int) -> Int {
             ints_push(c.capb, b);
             ints_push(c.capcl, ints_get(c.cfid, k));
             ints_push(c.capbd, ints_get(c.sbid, b));
+            ints_push(c.capat, ints_len(c.bfn));
         }
         k = k + 1;
     }
@@ -6137,6 +6144,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
             err(c, "N0202", fld(c, p, "span"), cat3("`", pn, "` is listed twice in this parameter list"), "");
         }
         define(c, pn, ints_get(ptys, i), false, 0 - 1, 0 - 1);
+        declared_at(c, fld(c, p, "name_span"));
         i = i + 1;
     }
     let body = fld(c, e, "body");
@@ -6175,6 +6183,8 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ss(c, s_loop(), saved_loop);
     ss(c, s_defer(), saved_defer);
     ss(c, s_scope(), saved_scope);
+    ints_push(c.clid, id);
+    ints_push(c.clty, ty);
     ty
 }
 
@@ -11154,7 +11164,8 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
         if ints_get(c.fnfor, me) == 1 {
             ints_set(c.fnreq, me, 4);
         } else {
-            if some(c, ints_get(c.fnnode, me), "body") { ints_set(c.fnreq, me, ints_get(sets, n)); }
+            // A closure's body is its expression's, always there (N50).
+            if ints_get(c.fnclos, me) >= 0 || some(c, ints_get(c.fnnode, me), "body") { ints_set(c.fnreq, me, ints_get(sets, n)); }
         }
         n = n + 1;
     }
@@ -14246,6 +14257,28 @@ pub fn ck_binding_name(c: Ck, b: Int) -> Str { strs_get(c.bnm, b) }
 pub fn ck_binding_mutable(c: Ck, b: Int) -> Bool { ints_get(c.bmut, b) == 1 }
 // Whether a closure shares it (R1b, L10): Core IR keeps it in a cell.
 pub fn ck_binding_shared(c: Ck, b: Int) -> Bool { ints_get(c.bshr, b) == 1 }
+// The captures every closure made, in the order made (N50): the closure, the binding it
+// captured (the one declared, through every closure between) and how many bindings there were
+// when its copy was made.
+pub fn ck_capture_count(c: Ck) -> Int { ints_len(c.capcl) }
+pub fn ck_capture_closure(c: Ck, k: Int) -> Int { ints_get(c.capcl, k) }
+pub fn ck_capture_binding(c: Ck, k: Int) -> Int { ints_get(c.capbd, k) }
+pub fn ck_capture_at(c: Ck, k: Int) -> Int { ints_get(c.capat, k) }
+// The `Cell` a binding a closure shares is kept in (R1b, L10).
+pub fn ck_cell_of(c: Ck, t: Int) -> Int { holder_of(c, tag_cell(), t) }
+// The type closure `i` was given, or -1.
+pub fn ck_closure_ty(c: Ck, i: Int) -> Int {
+    let mut k = 0;
+    while k < ints_len(c.clid) {
+        if ints_get(c.clid, k) == i { return ints_get(c.clty, k); }
+        k = k + 1;
+    }
+    0 - 1
+}
+// The closure the expression written at `s..e` (absolute) makes, or -1.
+pub fn ck_closure_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mclo, s, e) }
+// The function a closure is written in, or -1 for a declared function.
+pub fn ck_fn_enclosing(c: Ck, i: Int) -> Int { ints_get(c.fnclos, i) }
 // Where it is declared (absolute), or -1.
 pub fn ck_binding_start(c: Ck, b: Int) -> Int { ints_get(c.bds, b) }
 pub fn ck_binding_end(c: Ck, b: Int) -> Int { ints_get(c.bde, b) }
