@@ -1,0 +1,255 @@
+// N63: real-time bounds — what is bounded, what is measured, what is unknown
+// (`docs/architecture.md` §7.65). Ported from `crates/nazm-cli/tests/realtime.rs` (R7).
+//
+// `the_watermark_is_the_board_s` reads the board entry's LLVM text from
+// `nazm_lir::runtime::board::emit_entry`, which the CLI writes only as an object, and stays Rust
+// (`tests/stays-rust.txt`); `a_run_stays_inside_the_stated_stack_bound` is `#[ignore]`d for a
+// container and stays Rust (design decision 10).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const BOARD: Str = "aarch64-unknown-none";
+
+/// Three counted loops: 10 turns, 4 (10, 7, 4, 1), and 3 (0, 2, 4 against an immutable 5).
+const BOUNDED: Str = "fn sum(n: Int) -> Int {\n    let mut i = 0;\n    let mut s = n;\n    while i < 10 {\n        let mut j = 10;\n        while j >= 1 { s = s + j; j = j - 3; }\n        i = i + 1;\n    }\n    s\n}\nfn main() -> Int ! {} {\n    let limit = 5;\n    let mut k = 0;\n    while k <= limit { k = k + 2; }\n    sum(k)\n}\n";
+
+/// A realtime report: whether the check passed, and the report.
+struct Report {
+    ok: Bool,
+    v: JsonDoc,
+}
+
+fn report(h: Caps, src: Str) -> Result[Report, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let o = nazm(h, d, words("check --profile realtime --profile-report prog.nz"));
+    scratch_remove(h, d);
+    let mut line = "";
+    for l in text_lines(o.stdout) {
+        if line == "" && text_contains(l, "nazm.profile-report/1") {
+            line = l;
+        }
+    }
+    check_that(line != "", f"no report: {o.stderr}")?;
+    Result[Report, Str].Ok(value: Report(ok: o.code == 0, v: jparse(line)?))
+}
+
+fn verdict(v: JsonDoc, id: Str) -> Result[Str, Str] ! {} {
+    let mut i = 0;
+    while i < jlen(v, "rules") {
+        if jstr(v, f"rules/{i}/id") == id {
+            return Result[Str, Str].Ok(value: jstr(v, f"rules/{i}/verdict"));
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"no rule {id}: {jv(v, "")}")
+}
+
+@test
+fn realtime_states_every_bound_it_establishes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = report(h, BOUNDED)?;
+    let v = r.v;
+    check_that(r.ok, jv(v, ""))?;
+    check_that(jstr(v, "outcome") == "accepted", jv(v, "outcome"))?;
+    let rules = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "rules") {
+        strs_push(rules, jstr(v, f"rules/{i}/id"));
+        i = i + 1;
+    }
+    check_that(str_join(rules, ",") == "no-io,no-spawn,bounded-allocation,no-ambient-time,no-recursion,no-blocking,bounded-loops,no-heap,bounded-stack", str_join(rules, ","))?;
+    let loops = strs_new();
+    let mut k = 0;
+    while k < jlen(v, "bounds/loops") {
+        strs_push(loops, jv(v, f"bounds/loops/{k}/bound"));
+        k = k + 1;
+    }
+    check_that(str_join(loops, ",") == "10,4,3", str_join(loops, ","))?;
+    check_that(jstr(v, "bounds/loops/0/function") == "sum", jv(v, "bounds/loops/0"))?;
+    check_that(jstr(v, "bounds/loops/2/function") == "main", jv(v, "bounds/loops/2"))?;
+    check_that(jv(v, "bounds/call_depth") == "2", jv(v, "bounds/call_depth"))?;
+    check_that(jv(v, "bounds/allocation_sites") == "0", jv(v, "bounds"))?;
+    check_that(jv(v, "bounds/task_sites") == "0", jv(v, "bounds"))?;
+    check_that(jv(v, "bounds/queue_sites") == "0", jv(v, "bounds"))?;
+    // Not computed, and said so: never a number that looks like a bound.
+    check_that(jv(v, "bounds/wcet") == "null", jv(v, "bounds/wcet"))?;
+    check_that(jv(v, "bounds/stack_bytes") == "null", jv(v, "bounds/stack_bytes"))?;
+    check_that(jstr(v, "bounds/kinds/wcet") == "unknown: not computed", jv(v, "bounds/kinds"))?;
+    check_that(jstr(v, "bounds/kinds/sites") == "static count of sites, not executions", jv(v, "bounds/kinds"))
+}
+
+@test
+fn a_counted_loop_s_bound_is_its_exact_trip_count(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // init; cond; step; want — the last the widest span an `Int` has, computed in 128 bits.
+    let cases = "0;i < 10;i + 1;10|0;i < 10;i + 3;4|0;i <= 10;i + 5;3|10;i < 10;i + 1;0|11;i <= 10;i + 1;0|10;i > 0;i - 1;10|10;i >= 0;i - 4;3|-5;i < 5;i + 2;5|-9223372036854775807;i < 9223372036854775807;i + 9223372036854775807;2";
+    for case in text_split(cases, "|") {
+        let c = text_split(case, ";");
+        let init = strs_get(c, 0);
+        let cond = strs_get(c, 1);
+        let step = strs_get(c, 2);
+        let want = strs_get(c, 3);
+        let src = f"fn main() -> Int ! {{}} {{ let mut i = {init}; let mut t = 0; while {cond} {{ t = t + 1; i = {step}; }} t }}\n";
+        let r = report(h, src)?;
+        check_that(jv(r.v, "bounds/loops/0/bound") == want, f"{init}; {cond}; {step}: {jv(r.v, "bounds/loops/0")}")?;
+        check_that(jv(r.v, "bounds/loops/0/reason") == "null", jv(r.v, "bounds/loops/0"))?;
+    }
+    ok()
+}
+
+@test
+fn a_loop_without_the_counted_form_is_unknown_and_says_why(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let whys = strs_new();
+    strs_push(srcs, "fn main() -> Int ! {} { let mut x = 100; while x > 1 { if x % 2 == 0 { x = x / 2; } else { x = 3 * x + 1; } } x }\n");
+    strs_push(whys, "the counter is not written exactly once in the body");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; let mut c = 1; while i < 10 { i = i + c; } i }\n");
+    strs_push(whys, "the counter is not stepped by a literal");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; while i < 10 { i = i - 1; } i }\n");
+    strs_push(whys, "the counter does not step towards its limit");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; let mut t = 0; while i < 10 { i = i + 1; if t > 3 { continue; } t = t + 1; } t }\n");
+    strs_push(whys, "a `continue` to the loop skips the counter's step");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; while i != 10 { i = i + 1; } i }\n");
+    strs_push(whys, "its condition is an equality, not an ordering");
+    strs_push(srcs, "fn start() -> Int ! {} { 0 }\nfn main() -> Int ! {} { let mut i = start(); while i < 10 { i = i + 1; } i }\n");
+    strs_push(whys, "the counter's start is not a literal");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; let mut n = 10; while i < n { i = i + 1; } i }\n");
+    strs_push(whys, "its condition does not compare the counter with a literal");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; while i < 10 { if i > 4 { i = i + 2; } else { i = i + 1; } } i }\n");
+    strs_push(whys, "the counter is not written exactly once in the body");
+    strs_push(srcs, "fn main() -> Int ! {} { let mut i = 0; if true { i = 3; } while i < 10 { i = i + 1; } i }\n");
+    strs_push(whys, "the counter is written before the loop where the compiler does not follow");
+    let mut k = 0;
+    while k < strs_len(srcs) {
+        let src = strs_get(srcs, k);
+        let r = report(h, src)?;
+        check_that(!r.ok, f"accepted: {src}")?;
+        check_that(verdict(r.v, "bounded-loops")? == "unknown", src)?;
+        check_that(jv(r.v, "bounds/loops/0/bound") == "null", jv(r.v, "bounds/loops/0"))?;
+        check_that(jstr(r.v, "bounds/loops/0/reason") == strs_get(whys, k), src)?;
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn an_unknown_loop_is_refused_with_its_reason(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int ! {} { let mut i = 0; while i != 10 { i = i + 1; } i }\n")?;
+    let o = nazm(h, d, words("check --profile realtime prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    let e = o.stderr;
+    check_that(text_contains(e, "N0510"), e)?;
+    check_that(text_contains(e, "rule `bounded-loops`"), e)?;
+    check_that(text_contains(e, "its condition is an equality, not an ordering"), e)?;
+    check_that(text_contains(e, "unknown: the compiler could not establish"), e)
+}
+
+@test
+fn realtime_refuses_waiting_and_the_clock_by_site(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let send = "fn main() -> Int ! {} { let c = chan_new(1); if chan_send(c, 4) { 1 } else { 0 } }\n";
+    let a = report(h, send)?;
+    check_that(!a.ok, jv(a.v, ""))?;
+    check_that(verdict(a.v, "no-blocking")? == "fail", jv(a.v, "rules"))?;
+    check_that(jv(a.v, "bounds/queue_sites") == "1", jv(a.v, "bounds"))?;
+    let b = report(h, "fn main(t: TimeCap) -> Int ! {} { time_now_ms() }\n")?;
+    check_that(!b.ok, jv(b.v, ""))?;
+    check_that(verdict(b.v, "no-ambient-time")? == "fail", jv(b.v, "rules"))?;
+    check_that(verdict(b.v, "no-blocking")? == "pass", jv(b.v, "rules"))?;
+    // `embedded` does not have the rule: a send is not refused there.
+    let d = prog_dir(h, "prog.nz", send)?;
+    let o = nazm(h, d, words("check --profile embedded prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+@test
+fn recursion_and_a_function_value_leave_the_call_depth_unknown(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = report(h, "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) } }\nfn main() -> Int ! {} { f(3) }\n")?;
+    check_that(jv(r.v, "bounds/call_depth") == "null", jv(r.v, ""))?;
+    check_that(verdict(r.v, "no-recursion")? == "fail", jv(r.v, "rules"))
+}
+
+/// The integer a JSON node holds, or `-1`.
+fn node_int(doc: JsonDoc, node: Int) -> Int ! {} {
+    match json_int(doc, node) {
+        Option.Some(value: i) => i,
+        Option.None() => 0 - 1,
+    }
+}
+
+/// The value of the key `key` of the object `obj`, or `-1`.
+fn frame_of(doc: JsonDoc, obj: Int, key: Str) -> Int ! {} {
+    match json_get(doc, obj, key) {
+        Option.Some(value: n) => node_int(doc, n),
+        Option.None() => 0 - 1,
+    }
+}
+
+@test
+fn a_board_build_states_its_stack_bound_with_the_path(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", BOUNDED)?;
+    let o = nazm(h, d, words(f"build --target {BOARD} --objects out prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let text = read_text(h, f"{d}/out/bounds.json")?;
+    let v = jparse(text)?;
+    check_that(jstr(v, "schema") == "nazm.bounds/1", jv(v, "schema"))?;
+    check_that(jstr(v, "target") == BOARD, jv(v, "target"))?;
+    check_that(jstr(v, "stack/kind") == "static bound", text)?;
+    check_that(jv(v, "stack/reserved") == "65536", jv(v, "stack"))?;
+    check_that(jv(v, "stack/within") == "true", jv(v, "stack"))?;
+    let path = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "stack/path") {
+        strs_push(path, jstr(v, f"stack/path/{i}"));
+        i = i + 1;
+    }
+    check_that(strs_len(path) > 0 && strs_get(path, 0) == "nz_board_main", jv(v, "stack/path"))?;
+    // The bound is the frames along the path, summed: nothing else is added.
+    let frames = jq(v, "frames");
+    check_that(frames >= 0 && json_kind(v, frames) == "object", text)?;
+    let mut sum = 0;
+    for f in path {
+        let n = frame_of(v, frames, f);
+        check_that(n >= 0, f"no frame for {f}: {text}")?;
+        sum = sum + n;
+    }
+    check_that(jv(v, "stack/bytes") == int_to_str(sum), f"{jv(v, "stack/bytes")} != {sum}")?;
+    check_that(frame_of(v, frames, "nz.m.prog_2Enz.main") >= 0, text)?;
+    check_that(frame_of(v, frames, "nz.m.prog_2Enz.sum") >= 0, text)?;
+    // The deepest path: no function has a deeper chain beneath it than the one chosen.
+    check_that(frame_of(v, frames, "nz.uart_int") >= 0, text)?;
+    check_that(sum >= frame_of(v, frames, "nz_board_main") + frame_of(v, frames, "nz.uart_int"), text)?;
+    check_that(jv(v, "heap_bytes/bytes") == "0", jv(v, "heap_bytes"))?;
+    check_that(jv(v, "wcet/cycles") == "null", jv(v, "wcet"))?;
+    // Two builds, the same bound: the frames are the code generator's, for this build.
+    let again = nazm(h, d, words(f"build --target {BOARD} --objects again prog.nz"));
+    check_that(again.code == 0, again.stderr)?;
+    let second = read_text(h, f"{d}/again/bounds.json")?;
+    scratch_remove(h, d);
+    check_that(second == text, "two builds, two bounds")
+}
+
+@test
+fn a_call_cycle_leaves_the_stack_unbounded_and_says_where(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn down(n: Int) -> Int { if n == 0 { 0 } else { 1 + down(n - 1) } }\nfn main() -> Int { down(10) }\n")?;
+    let o = nazm(h, d, words(f"build --target {BOARD} --objects out prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let v = jparse(read_text(h, f"{d}/out/bounds.json")?)?;
+    scratch_remove(h, d);
+    check_that(jstr(v, "stack/kind") == "unknown", jv(v, "stack"))?;
+    check_that(jv(v, "stack/bytes") == "null", jv(v, "stack"))?;
+    check_that(jstr(v, "stack/reason") == "`nz.m.prog_2Enz.down` is in a call cycle", jv(v, "stack"))
+}

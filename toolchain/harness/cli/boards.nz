@@ -1,0 +1,169 @@
+// N86: boards as data, a second architecture, device registers by width (`docs/architecture.md`
+// §7.87). Ported from `crates/nazm-cli/tests/boards.rs` (R7).
+//
+// `every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does` reads the
+// runtime's and the entry's LLVM text from `nazm_lir::runtime::board`, which the CLI writes only
+// as objects, and stays Rust (`tests/stays-rust.txt`); `both_boards_boot_and_agree_under_qemu` is
+// `#[ignore]`d for a container and stays Rust (design decision 10).
+
+use "@std/json"
+use "@std/text"
+use "@std/env"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const RISCV: Str = "riscv64gc-unknown-none-elf";
+
+const PUT_RV: Str = "fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write8(268435456, c) }\nfn main(m: MmioCap) -> Int ! {} { put(m, 72); 0 }\n";
+
+@test
+fn inspect_lists_the_riscv_board_and_every_board_s_description(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    let o = nazm(h, d, words("inspect prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    let v = jparse(o.stdout)?;
+    let mut riscv = 0 - 1;
+    let mut i = 0;
+    while i < jlen(v, "toolchain/targets") {
+        if jstr(v, f"toolchain/targets/{i}/triple") == RISCV {
+            riscv = i;
+        }
+        i = i + 1;
+    }
+    check_that(riscv >= 0, jv(v, "toolchain/targets"))?;
+    check_that(jstr(v, f"toolchain/targets/{riscv}/output") == "objects", jv(v, f"toolchain/targets/{riscv}"))?;
+    check_that(jlen(v, "toolchain/boards") == 3, jv(v, "toolchain/boards"))?;
+    check_that(jstr(v, "toolchain/boards/1/triple") == RISCV, jv(v, "toolchain/boards/1"))?;
+    check_that(jstr(v, "toolchain/boards/1/load_address") == "0x80000000", jv(v, "toolchain/boards/1"))?;
+    check_that(jstr(v, "toolchain/boards/1/uart") == "0x10000000", jv(v, "toolchain/boards/1"))?;
+    check_that(jstr(v, "toolchain/boards/1/stop/kind") == "sifive-test", jv(v, "toolchain/boards/1"))?;
+    check_that(jstr(v, "toolchain/boards/0/stop/kind") == "arm-semihosting", jv(v, "toolchain/boards/0"))?;
+    let mut k = 0;
+    while k < jlen(v, "toolchain/boards") {
+        check_that(jv(v, f"toolchain/boards/{k}/hardware") == "false", jv(v, f"toolchain/boards/{k}"))?;
+        k = k + 1;
+    }
+    ok()
+}
+
+/// Whether this host's `clang` lists a RISC-V code generator.
+fn host_generates_riscv(h: Caps) -> Bool ! { io, spawn } {
+    let r = run(h, "clang", words("-print-targets"), "", env_here(h.io));
+    for l in text_lines(r.stdout) {
+        let ws = text_split(text_trim(l), " ");
+        if strs_len(ws) > 0 && strs_get(ws, 0) == "riscv64" {
+            return true;
+        }
+    }
+    false
+}
+
+@test
+fn a_riscv_board_is_built_where_clang_can_and_refused_by_name_where_it_cannot(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PUT_RV)?;
+    let o = nazm(h, d, words(f"build --target {RISCV} --objects out prog.nz"));
+    if host_generates_riscv(h) {
+        check_that(o.code == 0, o.stderr)?;
+        let listed = read_text(h, f"{d}/out/link.txt")?;
+        check_that(text_contains(listed, f"target {RISCV}\n"), listed)?;
+        // ELF, `EM_RISCV` (243).
+        let obj = read_raw(h, f"{d}/out/00-m0.o")?;
+        check_that(str_len(obj) > 20 && str_byte(obj, 0) == 127 && str_slice(obj, 1, 4) == "ELF", "an ELF object")?;
+        check_that(str_byte(obj, 18) + str_byte(obj, 19) * 256 == 243, "EM_RISCV")?;
+    } else {
+        check_that(o.code == 4, ran_show(o))?;
+        check_that(text_contains(o.stderr, "has no RISC-V code generator"), o.stderr)?;
+        check_that(!file_exists(f"{d}/out"), "out was written")?;
+    }
+    // Cranelift builds no board, RISC-V's included.
+    let c = nazm(h, d, words(f"build --backend cranelift --target {RISCV} --objects out prog.nz"));
+    scratch_remove(h, d);
+    check_that(c.code == 5, ran_show(c))?;
+    check_that(text_contains(c.stderr, "`--backend cranelift` builds no freestanding target"), c.stderr)
+}
+
+/// A driver on `PATH` whose `-print-targets` lists RISC-V only when `riscv` is true, and which
+/// refuses every other request — so the question N86 asks has the same answer on every host.
+fn fake_clang(h: Caps, riscv: Bool) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let extra = if riscv { "    riscv64    - 64-bit RISC-V\\n" } else { "" };
+    let script = f"#!/bin/sh\nif [ \"$1\" = -print-targets ]; then\nprintf '  Registered Targets:\\n    aarch64    - AArch64 (little endian)\\n{extra}    x86-64     - 64-bit X86: EM64T and AMD64\\n'\nexit 0\nfi\necho 'fake clang: refused' >&2\nexit 1\n";
+    scratch_write(h, d, "clang", script)?;
+    let a = words("755");
+    strs_push(a, f"{d}/clang");
+    let r = run(h, "chmod", a, "", env_here(h.io));
+    check_that(r.code == 0, ran_show(r))?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// N86, decided by the driver's answer rather than by which `clang` the host happens to have: a
+/// driver without a RISC-V code generator is refused by name before anything is compiled; one that
+/// has it is not refused for it (here it then fails to compile, being a fake — a different failure).
+@test
+fn a_riscv_board_is_refused_by_name_exactly_when_the_driver_has_no_riscv_generator(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PUT_RV)?;
+    let path_now = match env_get(h.io, "PATH") {
+        Option.Some(value: x) => x,
+        Option.None() => "",
+    };
+    for riscv in vec_of_bools() {
+        let fake = fake_clang(h, riscv)?;
+        let env = env_set(suite_env(h), "PATH", f"{fake}:{path_now}");
+        let out = f"out-{riscv}";
+        let o = run(h, nazm_bin(h.io), words(f"build --target {RISCV} --objects {out} prog.nz"), d, env);
+        scratch_remove(h, fake);
+        let named = text_contains(o.stderr, "has no RISC-V code generator");
+        check_that(o.code == 4, f"riscv={riscv}: {o.stderr}")?;
+        check_that(named == !riscv, f"riscv={riscv}: {o.stderr}")?;
+        if !riscv {
+            check_that(!file_exists(f"{d}/{out}"), "nothing is written")?;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+fn vec_of_bools() -> Vec[Bool] ! {} {
+    let v = vec_new[Bool]();
+    vec_push(v, false);
+    vec_push(v, true);
+    v
+}
+
+@test
+fn a_device_register_of_any_width_is_a_board_s_and_needs_an_mmio_cap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let calls = text_split("mmio_read8(4096)|mmio_write8(4096, 1)|mmio_read16(4096)|mmio_write16(4096, 1)", "|");
+    let widths = words("mmio_read8 mmio_write8 mmio_read16 mmio_write16");
+    let mut k = 0;
+    while k < 4 {
+        let call = strs_get(calls, k);
+        let width = strs_get(widths, k);
+        let d = prog_dir(h, "prog.nz", f"fn main(m: MmioCap) -> Int ! {{}} {{ {call} }}\n")?;
+        let r = nazm(h, d, words("run --interpret prog.nz"));
+        check_that(r.code != 0, ran_show(r))?;
+        check_that(text_contains(r.stderr, "N0392") && text_contains(r.stderr, width), r.stderr)?;
+        let hosted = nazm(h, d, words("build prog.nz -o x"));
+        check_that(hosted.code != 0, ran_show(hosted))?;
+        check_that(text_contains(hosted.stderr, "N0392"), hosted.stderr)?;
+        // A board builds it.
+        let board = nazm(h, d, words("build --target aarch64-unknown-none --objects o prog.nz"));
+        check_that(board.code == 0, board.stderr)?;
+        scratch_remove(h, d);
+        // And without an `MmioCap` it is refused wherever it is built.
+        let e = prog_dir(h, "prog.nz", f"fn f() -> Int ! {{}} {{ {call} }}\nfn main() -> Int {{ 0 }}\n")?;
+        let checked = nazm(h, e, words("check prog.nz"));
+        scratch_remove(h, e);
+        check_that(checked.code != 0, ran_show(checked))?;
+        check_that(text_contains(checked.stderr, "MmioCap"), checked.stderr)?;
+        k = k + 1;
+    }
+    ok()
+}

@@ -1,0 +1,19 @@
+# The Rust tests that stay Rust (R7; the coordinator's decision of 2026-10-15): each reaches a Rust
+# API the `nazm` binary does not offer, so a black-box port has nothing to compare. `tests/run.sh`
+# reports them as "stays Rust (N)", never as agreeing, and fails when one of them is ported or no
+# longer exists. The list is revisited after the cut-over (R8).
+#
+# One test a line, `FILE::TEST` and why, one of:
+#   table not printed      a table of the compiler's the CLI does not print
+#   LLVM text not written  LLVM text the CLI does not write on its own
+#   library entry          a library entry point the CLI does not offer
+#   stage R2-R3 replace    the compiler's own stages, which the rewrite replaces (R2, R3)
+
+boards::every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does  LLVM text not written
+cranelift::the_same_mir_gives_the_same_object_bytes  library entry
+cranelift::a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those  library entry
+cross::inspect_names_every_target_and_what_this_host_makes_of_it  library entry
+domain_profiles::each_domain_profile_is_its_composition  table not printed
+freestanding::the_board_runtime_has_no_thread_local_storage_and_no_c_library  LLVM text not written
+realtime::the_watermark_is_the_board_s  LLVM text not written
+repository::the_map_and_every_answer_are_one_object_on_stdout_with_their_exit_status  library entry

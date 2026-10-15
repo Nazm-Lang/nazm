@@ -1,0 +1,32 @@
+// The host a ported test runs on (R7): what `uname` says, and `common::skip_without` — a test the
+// Rust suite `cfg_attr`-ignores off a host, or skips without a tool, does the same here (design
+// decision 10).
+
+use "@std/env"
+use "@std/text"
+use "run.nz"
+
+/// `uname FLAG`'s answer (`-s` the system, `-m` the machine), trimmed.
+pub fn uname(h: Caps, flag: Str) -> Str ! { io, spawn } {
+    text_trim(run(h, "uname", words(flag), "", env_here(h.io)).stdout)
+}
+
+/// Whether this host is macOS on Apple silicon: `cfg(all(target_os = "macos", target_arch =
+/// "aarch64"))`.
+pub fn macos_aarch64(h: Caps) -> Bool ! { io, spawn } {
+    uname(h, "-s") == "Darwin" && uname(h, "-m") == "arm64"
+}
+
+/// `common::skip_without`: `true` (skip) when `present` is false, unless
+/// `NAZM_REQUIRE_HOST_TOOLS=1` turns the skip into a failure.
+pub fn skip_without(h: Caps, present: Bool, what: Str) -> Result[Bool, Str] ! { io } {
+    if present {
+        return Result[Bool, Str].Ok(value: false);
+    }
+    let required = match env_get(h.io, "NAZM_REQUIRE_HOST_TOOLS") {
+        Option.Some(value: x) => x == "1",
+        Option.None() => false,
+    };
+    check_that(!required, f"NAZM_REQUIRE_HOST_TOOLS=1, and {what}")?;
+    Result[Bool, Str].Ok(value: true)
+}

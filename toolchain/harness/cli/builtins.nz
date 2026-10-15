@@ -1,0 +1,73 @@
+// Every built-in is named somewhere an answer is asserted: a test source, the conformance corpus,
+// an example or a benchmark program. Ported from `crates/nazm-cli/tests/builtins.rs` (R7).
+//
+// The Rust test lists the built-ins from `nazm_core::Intrinsic::ALL`; the binary prints the same
+// table (`nazm capabilities --json`'s `builtins`, built from `Intrinsic::ALL`), so the port reads
+// it there.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// Everything that asserts an answer: test sources, the conformance corpus, examples.
+fn everything_that_asserts(h: Caps) -> Str ! { io } {
+    let io = h.io;
+    let root = repo_root(h);
+    let out = strs_new();
+    for dir in words("crates/nazm-core/tests crates/nazm-cli/tests crates/nazm-syntax/tests compiler/conformance examples bench/programs") {
+        let entries = match dir_list(io, f"{root}/{dir}") {
+            Result.Ok(value: xs) => xs,
+            Result.Err(error: e) => strs_new(),
+        };
+        for name in entries {
+            // Not the Rust file: it is about to be searched for the very names it lists in its own
+            // failure message, which would make the check pass on its own text.
+            if name != "builtins.rs" && (text_ends_with(name, ".rs") || text_ends_with(name, ".nz") || text_ends_with(name, ".expected")) {
+                match read_text(h, f"{root}/{dir}/{name}") {
+                    Result.Ok(value: text) => { strs_push(out, text); },
+                    Result.Err(error: e) => {},
+                };
+            }
+        }
+    }
+    str_join(out, "")
+}
+
+/// The names of `names` that `corpus` does not contain: one `sh` asking `grep -F` for each name —
+/// the Rust test's `contains`, two hundred times over megabytes, which the interpreted leg of
+/// `nazm test` cannot do inside its iteration budget.
+fn not_in(h: Caps, corpus: Str, names: Strs) -> Result[Strs, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    scratch_write(h, d, "corpus", corpus)?;
+    scratch_write(h, d, "names", f"{str_join(names, "\n")}\n")?;
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, "while IFS= read -r n; do grep -qF -- \"$n\" corpus || printf '%s\\n' \"$n\"; done < names");
+    let r = run(h, "sh", a, d, env_here(h.io));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    Result[Strs, Str].Ok(value: text_lines(r.stdout))
+}
+
+@test
+fn every_builtin_is_exercised_where_an_answer_is_asserted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let corpus = everything_that_asserts(h);
+    let inv = jparse(nazm(h, "", words("capabilities --json")).stdout)?;
+    check_that(jlen(inv, "builtins") > 0, "the inventory lists no built-ins")?;
+    let names = strs_new();
+    let mut i = 0;
+    while i < jlen(inv, "builtins") {
+        strs_push(names, jstr(inv, f"builtins/{i}/name"));
+        i = i + 1;
+    }
+    let missing = not_in(h, corpus, names)?;
+    check_that(strs_len(missing) == 0, f"these built-ins are never named in a test, a conformance case or an example: {str_join(missing, ", ")}. Being used by `compiler/*.nz` is not enough — the bootstrap reaching a fixpoint says a built-in behaves the same way twice, not that it behaves correctly.")
+}

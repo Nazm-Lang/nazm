@@ -1,0 +1,232 @@
+// N60: restriction profiles v2 — stack and determinism rules, and the `unknown` verdict
+// (`docs/architecture.md` §7.62). Ported from `crates/nazm-cli/tests/profiles_v2.rs` (R7).
+//
+// The Rust test of every command's `--profile` help lists the profiles from
+// `nazm_service::profile::Profile::ALL`; the binary prints the same list (N0511's help, built from
+// `Profile::ALL`), so the port reads it there.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// What `--profile-report` says of `src` under `profile`.
+struct Verdicts {
+    accepted: Bool,
+    rules: Strs,
+    stderr: Str,
+}
+
+/// `(accepted, [rule verdict])` from `nazm.profile-report/1`, with the refusal's stderr.
+fn verdicts(h: Caps, src: Str, profile: Str) -> Result[Verdicts, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let o = nazm(h, d, words(f"check --profile {profile} --profile-report prog.nz"));
+    scratch_remove(h, d);
+    let mut line = "";
+    for l in text_lines(o.stdout) {
+        if line == "" && text_contains(l, "nazm.profile-report/1") {
+            line = l;
+        }
+    }
+    check_that(line != "", f"no report: {o.stdout}")?;
+    let v = jparse(line)?;
+    check_that((jstr(v, "outcome") == "accepted") == (o.code == 0), line)?;
+    let rules = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "rules") {
+        strs_push(rules, f"{jstr(v, f"rules/{i}/id")} {jstr(v, f"rules/{i}/verdict")}");
+        i = i + 1;
+    }
+    Result[Verdicts, Str].Ok(value: Verdicts(accepted: o.code == 0, rules: rules, stderr: o.stderr))
+}
+
+fn verdict_of(rules: Strs, id: Str) -> Str ! {} {
+    for r in rules {
+        let parts = text_split(r, " ");
+        if strs_get(parts, 0) == id {
+            return strs_get(parts, 1);
+        }
+    }
+    ""
+}
+
+fn shown(rules: Strs) -> Str ! {} {
+    str_join(rules, ", ")
+}
+
+@test
+fn embedded_refuses_a_call_cycle_and_names_each_function_in_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let direct = "fn count(n: Int) -> Int ! {} { if n == 0 { 0 } else { count(n - 1) + 1 } }\nfn main() -> Int ! {} { count(3) }\n";
+    let a = verdicts(h, direct, "embedded")?;
+    check_that(!a.accepted, shown(a.rules))?;
+    check_that(verdict_of(a.rules, "no-recursion") == "fail", shown(a.rules))?;
+    check_that(text_contains(a.stderr, "`count` is in a call cycle"), a.stderr)?;
+    let mutual = "fn even(n: Int) -> Bool ! {} { if n == 0 { true } else { odd(n - 1) } }\nfn odd(n: Int) -> Bool ! {} { if n == 0 { false } else { even(n - 1) } }\nfn main() -> Int ! {} { if even(4) { 1 } else { 0 } }\n";
+    let b = verdicts(h, mutual, "embedded")?;
+    check_that(!b.accepted, shown(b.rules))?;
+    check_that(verdict_of(b.rules, "no-recursion") == "fail", shown(b.rules))?;
+    check_that(text_contains(b.stderr, "`even` is in a call cycle") && text_contains(b.stderr, "`odd`"), b.stderr)?;
+    // No cycle: a stack bound exists.
+    let flat = "fn sq(n: Int) -> Int ! {} { n * n }\nfn main() -> Int ! {} { sq(sq(2)) }\n";
+    let c = verdicts(h, flat, "embedded")?;
+    check_that(c.accepted, shown(c.rules))?;
+    check_that(verdict_of(c.rules, "no-recursion") == "pass", shown(c.rules))?;
+    ok()
+}
+
+/// Q1-C-01: an allocation in a loop is refused however it is reached — a helper, a trait method,
+/// a generic — because a call of a function that may allocate is an allocation site of its own.
+/// Allocating once outside a loop stays accepted.
+@test
+fn bounded_allocation_sees_an_allocation_behind_a_call(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let lp = "fn main() -> Int ! {} { let mut i = 0; let mut t = 0; while i < 3 { t = t + CALL; i = i + 1; } t }\n";
+    let whats = text_split("a helper|a helper's helper|a trait method|a generic", "|");
+    let defs = strs_new();
+    strs_push(defs, "fn mk(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\n");
+    strs_push(defs, "fn mk2(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\nfn mk(i: Int) -> Int ! {} { mk2(i) }\n");
+    strs_push(defs, "trait A { fn mk(self: Self) -> Int ! {}; }\nimpl A for Int { fn mk(self: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, self); ints_len(xs) } }\n");
+    strs_push(defs, "fn mk[X](x: X) -> Int ! {} { let v = vec_new[X](); vec_push(v, x); vec_len(v) }\n");
+    let calls = text_split("mk(i)|mk(i)|i.mk()|mk(i)", "|");
+    let mut k = 0;
+    while k < 4 {
+        let what = strs_get(whats, k);
+        let src = f"{strs_get(defs, k)}{text_replace(lp, "CALL", strs_get(calls, k))}";
+        let r = verdicts(h, src, "embedded")?;
+        check_that(!r.accepted, f"{what}: {shown(r.rules)}")?;
+        check_that(verdict_of(r.rules, "bounded-allocation") == "fail", f"{what}: {shown(r.rules)}")?;
+        check_that(text_contains(r.stderr, "call of `"), f"{what}: {r.stderr}")?;
+        k = k + 1;
+    }
+    let once = "fn mk(i: Int) -> Int ! {} { let xs = ints_new(); ints_push(xs, i); ints_len(xs) }\nfn main() -> Int ! {} { mk(1) }\n";
+    let o = verdicts(h, once, "embedded")?;
+    check_that(o.accepted, shown(o.rules))?;
+    check_that(verdict_of(o.rules, "bounded-allocation") == "pass", shown(o.rules))?;
+    ok()
+}
+
+fn alloc_loop(body: Str) -> Str ! {} {
+    f"fn main() -> Int ! {{}} {{ let b = bytes_new(4); let s = \"ab\"; let mut i = 0; let mut t = 0; while i < 3 {{ t = t + {body}; i = i + 1; }} t }}\n"
+}
+
+/// Q1-C-02: every built-in that makes storage is an allocation site, Gate 2's included. A view
+/// (`bytes_slice`, `text_slice`) shares an owner and is not.
+@test
+fn bounded_allocation_counts_every_built_in_that_allocates(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for body in text_split("bytes_len(bytes_new(8))|bytes_len(bytes_from_str(s))|str_len(bytes_to_str(b))|str_len(num_to_str(i))|text_len(text_concat(Text(s), Text(s)))|text_len(scalar_text(97))", "|") {
+        let r = verdicts(h, alloc_loop(body), "embedded")?;
+        check_that(!r.accepted, f"{body}: {shown(r.rules)}")?;
+        check_that(verdict_of(r.rules, "bounded-allocation") == "fail", body)?;
+    }
+    for body in text_split("bytes_len(bytes_slice(b, 0, 2))|text_len(text_slice(Text(s), 0, 1))", "|") {
+        let r = verdicts(h, alloc_loop(body), "embedded")?;
+        check_that(r.accepted, f"{body}: {shown(r.rules)}")?;
+    }
+    ok()
+}
+
+/// Q1-C-04: a `nazm.root` marker beside a package's entry does not take the package out from
+/// under its manifest. The manifest's profile holds for `check DIR`, `run DIR`, `build DIR` and
+/// for the entry file named directly.
+@test
+fn a_root_marker_inside_a_package_does_not_drop_its_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "pkg/nazm.toml", "schema = \"nazm.package/1\"\n\n[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\nprofile = \"embedded\"\n")?;
+    scratch_write(h, d, "pkg/src/main.nz", "fn main(o: OutCap) -> Int ! { io } { print(\"io\\n\"); 0 }\n")?;
+    scratch_write(h, d, "pkg/src/nazm.root", "")?;
+    for args in text_split("check pkg|run --interpret pkg|build pkg -o out|check pkg/src/main.nz", "|") {
+        let o = nazm(h, d, words(args));
+        check_that(o.code != 0, f"{args}: {o.stderr}")?;
+        check_that(text_contains(o.stderr, "N0510") && text_contains(o.stderr, "no-io"), f"{args}: {o.stderr}")?;
+    }
+    let left = file_exists(f"{d}/out");
+    scratch_remove(h, d);
+    check_that(!left, "out was written")
+}
+
+@test
+fn a_call_through_a_function_value_is_unknown_and_unknown_refuses(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn apply(f: fn(Int) -> Int ! {}, x: Int) -> Int ! {} { f(x) }\nfn inc(x: Int) -> Int ! {} { x + 1 }\nfn main() -> Int ! {} { apply(inc, 1) }\n";
+    let r = verdicts(h, src, "embedded")?;
+    check_that(!r.accepted, f"unknown is not a pass: {shown(r.rules)}")?;
+    check_that(verdict_of(r.rules, "no-recursion") == "unknown", shown(r.rules))?;
+    check_that(text_contains(r.stderr, "N0510") && text_contains(r.stderr, "unknown:"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`apply` calls a function value here"), r.stderr)?;
+    // `general` has no rules; the same program is accepted there.
+    let d = prog_dir(h, "prog.nz", src)?;
+    let g = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(g.code == 0, ran_show(g))
+}
+
+@test
+fn critical_refuses_a_select_by_its_call_site(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "fn main() -> Int ! {} {\n    let c = chan_new_of[Int](1);\n    chan_send_of(c, 1);\n    let cs = vec_new[Chan[Int]]();\n    vec_push(cs, c);\n    chan_select_of(cs, vec_new[Int]())\n}\n";
+    let r = verdicts(h, src, "critical")?;
+    check_that(!r.accepted, shown(r.rules))?;
+    check_that(verdict_of(r.rules, "no-select") == "fail", shown(r.rules))?;
+    check_that(text_contains(r.stderr, "depends on which channel is ready first"), r.stderr)?;
+    // A receive from one channel is allowed: its order is the program's.
+    let one = "fn main() -> Int ! {} {\n    let c = chan_new_of[Int](1);\n    chan_send_of(c, 1);\n    let got = vec_new[Int]();\n    if chan_recv_of(c, got) { vec_pop(got) } else { 0 }\n}\n";
+    let o = verdicts(h, one, "critical")?;
+    check_that(verdict_of(o.rules, "no-select") == "pass", shown(o.rules))
+}
+
+@test
+fn a_dependency_declaring_general_does_not_weaken_the_root_s_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "lib/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\nprofile = \"general\"\n")?;
+    scratch_write(h, d, "lib/src/lib.nz", "pub fn spin(n: Int) -> Int ! {} { if n == 0 { 0 } else { spin(n - 1) } }\n")?;
+    scratch_write(h, d, "app/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\nprofile = \"embedded\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n")?;
+    scratch_write(h, d, "app/src/main.nz", "use \"lib:lib.nz\";\nfn main() -> Int ! {} { spin(3) }\n")?;
+    let o = nazm(h, d, words("check app"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, f"the root's embedded still holds: {o.stderr}")?;
+    check_that(text_contains(o.stderr, "`no-recursion`") && text_contains(o.stderr, "`spin` is in a call cycle"), o.stderr)
+}
+
+/// Every profile, as the binary names them: N0511's help, which lists `Profile::ALL`.
+fn every_profile(h: Caps) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", "fn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("check --profile no-such-profile m.nz"));
+    scratch_remove(h, d);
+    let marker = "the profiles are ";
+    for l in text_lines(r.stderr) {
+        match text_find(l, marker) {
+            Option.Some(value: at) => {
+                return Result[Strs, Str].Ok(value: text_split(str_slice(l, at + str_len(marker), str_len(l)), ", "));
+            },
+            Option.None() => {},
+        };
+    }
+    Result[Strs, Str].Err(error: f"no list of profiles: {ran_show(r)}")
+}
+
+@test
+fn every_command_offering_a_profile_names_every_profile_in_its_help(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // M1: the `--profile` help named four of the eight profiles for three commands, written by
+    // hand when there were four. The help is held to the list of every profile.
+    let all = every_profile(h)?;
+    check_that(strs_len(all) > 0, "no profiles")?;
+    let mut offered = 0;
+    for cmd in words("check build run test inspect") {
+        let help = nazm(h, "", words(f"{cmd} --help")).stdout;
+        if text_contains(help, "--profile") {
+            offered = offered + 1;
+            for name in all {
+                check_that(text_contains(help, f"`{name}`"), f"`nazm {cmd} --help` does not name the profile `{name}`")?;
+            }
+        }
+    }
+    check_that(offered > 0, "no command offers --profile any more")
+}

@@ -1,0 +1,244 @@
+// N41: the Cranelift backend, behind the backend boundary. A program compiled by Cranelift behaves
+// exactly as the LLVM backend's and the interpreter's do — stdout, stderr, exit status and the
+// runtime's memory report — including every trap; an unchanged unit's object is reused by its key
+// and a changed one is not; a target other than the host is refused rather than built for the
+// host; choosing Cranelift never quietly produces LLVM text for a unit. Ported from
+// `crates/nazm-cli/tests/cranelift.rs` (R7).
+//
+// Where the Rust test asks `Target::host()`, the port asks `nazm inspect` (`toolchain.target`).
+// `the_same_mir_gives_the_same_object_bytes` and
+// `a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those` drive the Cranelift
+// backend as a library (`nazm_codegen_clif::Cranelift`, its `plan` and `emit`) and stay Rust
+// (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn build(h: Caps, path: Str, backend: Str, exe: Str, extra: Str) -> Ran ! { io, spawn } {
+    let a = words(f"build --backend {backend} {extra}");
+    strs_push(a, path);
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    nazm(h, "", a)
+}
+
+/// `exe` under `bounded_exe`, with the memory report, ended at 30 s (the Rust file's own deadline).
+fn run_exe(h: Caps, exe: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let a = strs_new();
+    strs_push(a, "-c");
+    strs_push(a, bounded_script());
+    strs_push(a, exe);
+    let r = run_within(h, "sh", a, "", env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"), 30000);
+    check_that(r.code != TIMED_OUT, f"{exe} did not terminate within 30s")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// The three runs of one file: LLVM's, Cranelift's (both with the memory report), the interpreter's.
+struct Three {
+    llvm: Ran,
+    clif: Ran,
+    interp: Ran,
+}
+
+fn three(h: Caps, path: Str) -> Result[Three, Str] ! { io, spawn } {
+    let dir = scratch_new(h);
+    let runs = vec_new[Ran]();
+    for backend in words("llvm cranelift") {
+        let exe = f"{dir}/{backend}";
+        let b = build(h, path, backend, exe, "--no-cache");
+        check_that(b.code == 0, f"{backend}: {b.stderr}")?;
+        vec_push(runs, run_exe(h, exe)?);
+    }
+    let a = words("run --interpret");
+    strs_push(a, path);
+    let interp = run_within(h, nazm_bin(h.io), a, "", suite_env(h), 30000);
+    check_that(interp.code != TIMED_OUT, "the interpreter did not terminate within 30s")?;
+    scratch_remove(h, dir);
+    Result[Three, Str].Ok(value: Three(llvm: vec_get(runs, 0), clif: vec_get(runs, 1), interp: interp))
+}
+
+fn same_run(a: Ran, b: Ran) -> Bool ! {} {
+    a.code == b.code && a.stdout == b.stdout && a.stderr == b.stderr
+}
+
+fn agree_src(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let dir = prog_dir(h, "prog.nz", src)?;
+    let r = three(h, f"{dir}/prog.nz")?;
+    scratch_remove(h, dir);
+    check_that(same_run(r.clif, r.llvm), f"Cranelift and LLVM disagree: {ran_show(r.clif)} {ran_show(r.llvm)}")?;
+    check_that(r.clif.code == r.interp.code, f"status against the interpreter: {ran_show(r.clif)} {ran_show(r.interp)}")?;
+    check_that(r.clif.stdout == r.interp.stdout, "stdout against the interpreter")
+}
+
+@test
+fn every_example_compiled_by_cranelift_agrees_with_llvm_and_the_interpreter(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for example in words("examples/sum.nz examples/max.nz examples/primes.nz examples/search.nz examples/pipeline.nz examples/worker-pool.nz") {
+        let r = three(h, f"{repo_root(h)}/{example}")?;
+        check_that(same_run(r.clif, r.llvm), example)?;
+        check_that(r.clif.stdout == r.interp.stdout, example)?;
+        check_that(r.clif.code == r.interp.code, example)?;
+    }
+    ok()
+}
+
+@test
+fn signed_arithmetic_and_its_edges_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree_src(h, "\nfn main() -> Int {\n    let min = -9223372036854775807 - 1;\n    let a = min % -1;\n    let b = -7 / 2;\n    let c = -7 % 2;\n    let d = 7 % -2;\n    let e = if -1 < 0 { 1 } else { 0 };\n    let f = if min < 0 { 10 } else { 0 };\n    let g = 9223372036854775807 - 9223372036854775806;\n    a + b + c + d + e + f + g\n}\n")
+}
+
+/// The code of a diagnostic's first `error[…]`, or `""`.
+fn code_of(s: Str) -> Str ! {} {
+    let parts = text_split(s, "error[");
+    if strs_len(parts) < 2 {
+        return "";
+    }
+    strs_get(text_split(strs_get(parts, 1), "]"), 0)
+}
+
+@test
+fn every_trap_is_the_same_trap(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let bodies = "let x = 9223372036854775807; x + 1|let x = -9223372036854775807 - 1; x - 1|let x = 4611686018427387904; x * 2|let x = -9223372036854775807 - 1; -x|let x = 0; 1 / x|let x = 0; 1 % x|let x = -9223372036854775807 - 1; x / -1|str_byte(\"ab\", 2)|str_len(str_slice(\"abc\", 2, 1))|ints_get(ints_new(), 0)|ints_pop(ints_new())|str_len(str_from_byte(256))|let c = chan_new(0); 0";
+    for body in text_split(bodies, "|") {
+        let dir = prog_dir(h, "prog.nz", f"fn main() -> Int {{\n    {body}\n}}\n")?;
+        let r = three(h, f"{dir}/prog.nz")?;
+        scratch_remove(h, dir);
+        check_that(same_run(r.clif, r.llvm), body)?;
+        check_that(r.clif.code == 2, f"{body}: {r.clif.stderr}")?;
+        check_that(r.interp.code == 2, body)?;
+        // The same code as the interpreter's diagnostic, which is rendered with its source.
+        check_that(code_of(r.clif.stderr) != "", f"{body}: {r.clif.stderr}")?;
+        check_that(code_of(r.clif.stderr) == code_of(r.interp.stderr), body)?;
+    }
+    ok()
+}
+
+@test
+fn records_enums_matches_and_managed_values_agree(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree_src(h, "\nstruct Pair { name: Str, n: Int, flag: Bool, }\nenum Shape { Circle(r: Int), Named(title: Str, sides: Int), Empty }\nstruct Nest { inner: Pair, shape: Shape, }\nfn area(s: Shape) -> Int {\n    match s {\n        Shape.Circle(r: r) => 3 * r * r,\n        Shape.Named(title: t, sides: n) => str_len(t) + n,\n        Shape.Empty() => 0,\n    }\n}\nfn parse(s: Str) -> Result[Int, Str] {\n    if str_len(s) == 0 { return Result[Int, Str].Err(error: \"empty\"); }\n    Result[Int, Str].Ok(value: str_len(s))\n}\nfn twice(s: Str) -> Result[Int, Str] {\n    let a = parse(s)?;\n    let b = parse(str_concat(s, s))?;\n    Result[Int, Str].Ok(value: a + b)\n}\nfn make(i: Int) -> Nest {\n    Nest(inner: Pair(name: int_to_str(i), n: i, flag: i % 2 == 0), shape: Shape.Named(title: str_concat(\"t\", int_to_str(i)), sides: i))\n}\nfn main() -> Int {\n    let mut total = 0;\n    let shapes = vec_new[Shape]();\n    let names = strs_new();\n    let mut i = 0;\n    while i < 30 {\n        vec_push(shapes, Shape.Circle(r: i));\n        vec_push(shapes, Shape.Named(title: int_to_str(i), sides: 3));\n        vec_push(shapes, Shape.Empty());\n        strs_push(names, str_concat(\"n\", int_to_str(i)));\n        let m = make(i);\n        let copy = m;\n        total = total + str_len(copy.inner.name) + area(m.shape);\n        if copy.inner.flag { total = total + 1; }\n        if m == make(i) { total = total + 100; }\n        if m != make(i + 1) { total = total + 1000; }\n        i = i + 1;\n    }\n    let mut k = 0;\n    while k < vec_len(shapes) { total = total + area(vec_get(shapes, k)); k = k + 1; }\n    vec_set(shapes, 0, Shape.Named(title: \"replaced\", sides: 9));\n    let last = vec_pop(shapes);\n    total = total + area(last) + area(vec_get(shapes, 0));\n    strs_set(names, 1, \"x\");\n    total = total + str_len(str_join(names, \",\"));\n    total = total + match twice(\"xy\") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) };\n    total = total + match twice(\"\") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) + 7 };\n    total\n}\n")
+}
+
+@test
+fn cleanup_on_every_exit_and_on_failure_agrees(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree_src(h, "\nstruct Box { s: Str, t: Str, }\nfn inner(k: Int) -> Result[Int, Str] {\n    if k == 3 { return Result[Int, Str].Err(error: int_to_str(k)); }\n    Result[Int, Str].Ok(value: k)\n}\nfn build(k: Int) -> Result[Box, Str] {\n    let b = Box(s: int_to_str(k), t: int_to_str(inner(k)?));\n    Result[Box, Str].Ok(value: b)\n}\nfn early(n: Int) -> Int {\n    let a = int_to_str(n);\n    let mut i = 0;\n    while i < 10 {\n        let x = str_concat(a, \"x\");\n        i = i + 1;\n        if i == 2 { continue; }\n        if i == n { return str_len(x); }\n        if i == 7 { break; }\n    }\n    str_len(a)\n}\nfn main() -> Int {\n    let mut total = 0;\n    let mut k = 0;\n    while k < 6 {\n        total = total + early(k);\n        total = total + match build(k) { Result.Ok(value: b) => str_len(b.s) + str_len(b.t), Result.Err(error: e) => str_len(e) };\n        k = k + 1;\n    }\n    let z = k - 6;\n    total / z\n}\n")
+}
+
+@test
+fn recursion_compiles_under_both_backends_and_agrees(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Refused by both until N49; both now emit the stack check MIR places first in each function
+    // of a call cycle (`docs/spec.md`, *Native recursion*).
+    agree_src(h, "fn f(n: Int) -> Int { if n == 0 { 0 } else { f(n - 1) + 1 } }\nfn even(n: Int) -> Bool { if n == 0 { true } else { odd(n - 1) } }\nfn odd(n: Int) -> Bool { if n == 0 { false } else { even(n - 1) } }\nfn main() -> Int { if even(10) { f(30) } else { 0 } }\n")
+}
+
+/// The host's triple, as `nazm inspect` names it: `Target::host()`.
+fn host_triple(h: Caps) -> Result[Str, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", "fn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("inspect m.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    let target = jstr(jparse(r.stdout)?, "toolchain/target");
+    check_that(target != "", "inspect names no target")?;
+    Result[Str, Str].Ok(value: target)
+}
+
+@test
+fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Until N57 every other target was refused; since, one the host has no linker for is.
+    let host = host_triple(h)?;
+    let foreign = if text_starts_with(host, "aarch64") { "x86_64-unknown-linux-gnu" } else { "aarch64-unknown-linux-gnu" };
+    let dir = scratch_new(h);
+    let exe = f"{dir}/prog";
+    let sum = f"{repo_root(h)}/examples/sum.nz";
+    // A host with no linker for the target is the machine's (4); a triple that is no target is
+    // the command line's (5) — the v1 exit contract (Q1-C1).
+    let triples = strs_new();
+    strs_push(triples, foreign);
+    strs_push(triples, "riscv64gc-unknown-linux-gnu");
+    let says = text_split("has no linker for|not a target", "|");
+    let mut k = 0;
+    while k < 2 {
+        let triple = strs_get(triples, k);
+        let status = if k == 0 { 4 } else { 5 };
+        for backend in words("llvm cranelift") {
+            let b = build(h, sum, backend, exe, f"--target {triple}");
+            check_that(b.code == status, f"{triple} {backend}")?;
+            check_that(text_contains(b.stderr, strs_get(says, k)), b.stderr)?;
+            check_that(!file_exists(exe), exe)?;
+        }
+        k = k + 1;
+    }
+    // The host, named, is the host.
+    let b = build(h, sum, "cranelift", exe, f"--target {host}");
+    scratch_remove(h, dir);
+    check_that(b.code == 0, b.stderr)
+}
+
+@test
+fn choosing_cranelift_writes_no_llvm_text_for_any_unit(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    let b = build(h, f"{repo_root(h)}/examples/pipeline.nz", "cranelift", f"{dir}/prog", "--emit-ir --no-cache");
+    check_that(b.code == 0, b.stderr)?;
+    let ll = strs_new();
+    for n in match dir_list(h.io, dir) { Result.Ok(value: xs) => xs, Result.Err(error: e) => strs_new(), } {
+        if text_ends_with(n, ".ll") {
+            strs_push(ll, n);
+        }
+    }
+    scratch_remove(h, dir);
+    // Only the runtime, the platform entry, the task pool's switch (N83), the target's `errno`
+    // (N85), its `os` unit (Gate 2) and its `stack` unit (Gate 3) are LLVM text; every unit is an
+    // object.
+    let got = str_join(strs_sort(ll), ",");
+    check_that(got == "prog.entry.ll,prog.errno.ll,prog.os.ll,prog.runtime.ll,prog.stack.ll,prog.switch.ll", got)
+}
+
+/// `nazm build --backend cranelift --build-report main.nz -o prog` in `dir`: its report.
+fn report(h: Caps, dir: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let out = nazm(h, dir, words("build --backend cranelift --build-report main.nz -o prog"));
+    check_that(out.code == 0, out.stderr)?;
+    for l in text_lines(out.stdout) {
+        if text_starts_with(l, "{") {
+            return jparse(l);
+        }
+    }
+    Result[JsonDoc, Str].Err(error: f"no report: {out.stdout}")
+}
+
+@test
+fn an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "main.nz", "use \"lib.nz\";\nfn main() -> Int { twice(21) }\n")?;
+    scratch_write(h, dir, "lib.nz", "pub fn twice(n: Int) -> Int { n * 2 }\n")?;
+    let first = report(h, dir)?;
+    check_that(jv(first, "native/reused") == "0", jv(first, ""))?;
+    let second = report(h, dir)?;
+    // Both Cranelift units come from the store; only the runtime and the entry are LLVM text,
+    // and those are reused by clang's cache as before.
+    let units = jint(second, "native/units");
+    check_that(units >= 0 && jint(second, "native/reused") == units, jv(second, ""))?;
+    // Change the library's body only: its unit is regenerated, the caller's is not.
+    scratch_write(h, dir, "lib.nz", "pub fn twice(n: Int) -> Int { n + n }\n")?;
+    let third = report(h, dir)?;
+    check_that(jv(third, "native/compiled") == "1", jv(third, ""))?;
+    check_that(jint(third, "native/reused") == units - 1, jv(third, ""))?;
+    let ran = run(h, f"{dir}/prog", strs_new(), dir, suite_env(h));
+    scratch_remove(h, dir);
+    check_that(text_trim(ran.stdout) == "42", ran_show(ran))
+}

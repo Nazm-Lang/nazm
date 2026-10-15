@@ -1,0 +1,112 @@
+// Gate 3G: the domain profiles — each a composition of other profiles' rules and its own, refusing
+// by the rules it composes. Ported from `crates/nazm-cli/tests/domain_profiles.rs` (R7);
+// `each_domain_profile_is_its_composition` compares `Profile::rules()` tables, which the binary
+// prints only merged and deduplicated (`--profile-report`), and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// The verdict `--profile-report` gives each rule of `profile` for `src`, a loose file:
+/// `id verdict` each.
+fn verdicts(h: Caps, src: Str, profile: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words(f"check --profile {profile} --profile-report prog.nz"));
+    scratch_remove(h, d);
+    let mut line = "";
+    for l in text_lines(r.stdout) {
+        if line == "" && text_contains(l, "nazm.profile-report/1") {
+            line = l;
+        }
+    }
+    check_that(line != "", f"no report: {ran_show(r)}")?;
+    let v = jparse(line)?;
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "rules") {
+        strs_push(out, f"{jstr(v, f"rules/{i}/id")} {jstr(v, f"rules/{i}/verdict")}");
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn verdict_of(v: Strs, id: Str) -> Str ! {} {
+    for r in v {
+        let parts = text_split(r, " ");
+        if strs_get(parts, 0) == id {
+            return strs_get(parts, 1);
+        }
+    }
+    "absent"
+}
+
+fn float_prog(f: Str) -> Str ! {} {
+    f"fn f(x: Float64) -> Float64 ! {{}} {{ {f} }}\nfn main() -> Int ! {{}} {{ if f(2.0) > 0.0 {{ 0 }} else {{ 1 }} }}\n"
+}
+
+@test
+fn aerospace_refuses_a_float_the_host_library_answers_by_its_site(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn heading(x: Float64, y: Float64) -> Float64 ! {} { float_atan2(y, x) }\nfn main() -> Int ! {} { if heading(1.0, 1.0) > 0.0 { 0 } else { 1 } }\n")?;
+    let r = nazm(h, d, words("check --profile aerospace prog.nz"));
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "`no-float-nondeterminism`"), r.stderr)?;
+    check_that(text_contains(r.stderr, "prog.nz:1:"), r.stderr)?;
+    // Every transcendental built-in is refused, and the correctly rounded ones are not.
+    for f in text_split("float_sin(x)|float_cos(x)|float_tan(x)|float_exp(x)|float_ln(x)|float_log2(x)|float_log10(x)|float_pow(x, x)|float_atan2(x, x)", "|") {
+        check_that(verdict_of(verdicts(h, float_prog(f), "aerospace")?, "no-float-nondeterminism") == "fail", f)?;
+    }
+    for f in text_split("float_sqrt(x)|float_abs(x)|float_floor(x)|x * x + 1.0", "|") {
+        check_that(verdict_of(verdicts(h, float_prog(f), "aerospace")?, "no-float-nondeterminism") == "pass", f)?;
+    }
+    // Without the profile, the program is the language's.
+    let plain = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(plain.code == 0, ran_show(plain))
+}
+
+@test
+fn the_domain_profiles_refuse_by_the_rules_they_compose(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A call cycle: `assurance` and `automotive` have no stack bound for it.
+    let cycle = "fn down(n: Int) -> Int ! {} { if n == 0 { 0 } else { down(n - 1) } }\nfn main() -> Int ! {} { down(3) }\n";
+    for p_ in words("assurance automotive robotics aerospace") {
+        check_that(verdict_of(verdicts(h, cycle, p_)?, "bounded-stack") == "fail", p_)?;
+    }
+    // A loose file is no locked package.
+    let plain = "fn main() -> Int ! {} { 0 }\n";
+    for p_ in words("assurance automotive aerospace") {
+        check_that(verdict_of(verdicts(h, plain, p_)?, "locked-build") == "fail", p_)?;
+    }
+    check_that(verdict_of(verdicts(h, plain, "robotics")?, "locked-build") == "absent", "robotics")?;
+    // An allocation: `assurance` holds memory to the stack and the statics.
+    let alloc = "fn main() -> Int ! {} { let v = vec_new[Int](); vec_push(v, 1); vec_len(v) }\n";
+    check_that(verdict_of(verdicts(h, alloc, "assurance")?, "no-heap") == "fail", "assurance: no-heap")
+}
+
+/// A board's periodic program as a locked package: accepted by every domain profile it is written
+/// for, and built for the board under each.
+@test
+fn a_locked_board_package_meets_each_domain_profile(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let tests = f"{repo_root(h)}/crates/nazm-cli/tests";
+    scratch_write(h, d, "ecu/nazm.toml", "schema = \"nazm.package/1\"\n[package]\nname = \"ecu\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\n")?;
+    scratch_write(h, d, "ecu/src/main.nz", read_raw(h, f"{tests}/realtime_tasks/periodic.nz")?)?;
+    scratch_write(h, d, "virt.toml", read_raw(h, f"{tests}/realtime_tasks/virt.toml")?)?;
+    let r = nazm(h, d, words("lock ecu"));
+    check_that(r.code == 0, r.stderr)?;
+    for p_ in words("robotics automotive aerospace assurance") {
+        let c = nazm(h, d, words(f"check --locked --profile {p_} ecu"));
+        check_that(c.code == 0, f"{p_}: {c.stderr}")?;
+        let b = nazm(h, d, words(f"build --locked --profile {p_} --target aarch64-unknown-none --board virt.toml --objects {p_} ecu"));
+        check_that(b.code == 0, f"{p_}: {b.stderr}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}

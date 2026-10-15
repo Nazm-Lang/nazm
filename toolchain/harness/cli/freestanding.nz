@@ -1,0 +1,212 @@
+// N62: a freestanding target — `aarch64-unknown-none`, no OS, no libc, no heap
+// (`docs/architecture.md` §7.64). Ported from `crates/nazm-cli/tests/freestanding.rs` (R7).
+//
+// `the_board_runtime_has_no_thread_local_storage_and_no_c_library` reads the board runtime's and
+// entry's LLVM text from `nazm_lir::runtime::board`, which the CLI writes only as objects, and
+// stays Rust (`tests/stays-rust.txt`); `the_image_boots_on_qemu_and_reports_on_the_uart` is
+// `#[ignore]`d for a container and stays Rust (design decision 10).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+const BOARD: Str = "aarch64-unknown-none";
+
+/// Writes `Hi` through the PL011 UART's data register and returns 45 + fib(10) = 100.
+const PROGRAM: Str = "fn put(m: MmioCap, c: Int) -> Int ! {} { mmio_write32(150994944, c) }\nfn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main(m: MmioCap) -> Int ! {} {\n    put(m, 72);\n    put(m, 105);\n    put(m, 10);\n    let mut i = 0;\n    let mut s = 0;\n    while i < 10 { s = s + i; i = i + 1; }\n    s + fib(10)\n}\n";
+
+/// The little-endian unsigned integer of `n` bytes at `at` in `b`.
+fn le(b: Str, at: Int, n: Int) -> Int ! {} {
+    let mut v = 0;
+    let mut k = n - 1;
+    while k >= 0 {
+        v = v * 256 + str_byte(b, at + k);
+        k = k - 1;
+    }
+    v
+}
+
+fn is_elf(b: Str) -> Bool ! {} {
+    str_len(b) > 20 && str_byte(b, 0) == 127 && str_slice(b, 1, 4) == "ELF"
+}
+
+@test
+fn a_board_program_is_built_to_objects_a_link_list_and_a_linker_script(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let o = nazm(h, d, words(f"build --target {BOARD} --objects out prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    for name in words("00-m0.o 01-runtime.o 02-entry.o") {
+        let b = read_raw(h, f"{d}/out/{name}")?;
+        check_that(is_elf(b), f"{name} is not ELF")?;
+        // EM_AARCH64.
+        check_that(le(b, 18, 2) == 183, name)?;
+    }
+    let list = read_text(h, f"{d}/out/link.txt")?;
+    check_that(text_contains(list, "target aarch64-unknown-none"), list)?;
+    check_that(text_contains(list, "objects 00-m0.o 01-runtime.o 02-entry.o"), list)?;
+    check_that(text_contains(list, "ld.lld -T link.ld"), list)?;
+    let script = read_text(h, f"{d}/out/link.ld")?;
+    scratch_remove(h, d);
+    for want in text_split("ENTRY(_start)|. = 0x40080000;|__stack_bottom = .;|__stack_top = .;", "|") {
+        check_that(text_contains(script, want), script)?;
+    }
+    ok()
+}
+
+@test
+fn a_hosted_target_writes_no_linker_script(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { 0 }\n")?;
+    let o = nazm(h, d, words("build --target x86_64-unknown-linux-gnu --objects out prog.nz"));
+    let there = file_exists(f"{d}/out/link.ld");
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)?;
+    check_that(!there, "a hosted target wrote link.ld")
+}
+
+/// How many symbols of an ELF64 object are thread-local (`STT_TLS`), from its symbol tables.
+fn tls_symbols(h: Caps, path: Str) -> Result[Int, Str] ! { io } {
+    let b = read_raw(h, path)?;
+    let shoff = le(b, 40, 8);
+    let shentsize = le(b, 58, 2);
+    let shnum = le(b, 60, 2);
+    let mut n = 0;
+    let mut k = 0;
+    while k < shnum {
+        let sh = shoff + k * shentsize;
+        // SHT_SYMTAB.
+        if le(b, sh + 4, 4) == 2 {
+            let off = le(b, sh + 24, 8);
+            let size = le(b, sh + 32, 8);
+            let mut e = off;
+            while e < off + size {
+                if str_byte(b, e + 4) % 16 == 6 {
+                    n = n + 1;
+                }
+                e = e + 24;
+            }
+        }
+        k = k + 1;
+    }
+    Result[Int, Str].Ok(value: n)
+}
+
+@test
+fn a_unit_for_the_board_refers_to_no_thread_local_storage(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // An addition that can overflow records a failure, and a recursion checks the stack: in a
+    // hosted unit whose `main` may start a thread that state is thread-local; on the board, and
+    // in a hosted program of one thread, an ordinary global.
+    let add = "fn add(a: Int, b: Int) -> Int { if a == 0 { b } else { add(a - 1, b + 1) } }\n";
+    let mains = text_split("fn main(n: NetCap) -> Int { add(1, 2) }\n|fn main() -> Int { add(1, 2) }\n|fn main() -> Int { add(1, 2) }\n", "|");
+    let targets = words(f"x86_64-unknown-linux-gnu x86_64-unknown-linux-gnu {BOARD}");
+    let mut k = 0;
+    while k < 3 {
+        let target = strs_get(targets, k);
+        let tls = k == 0;
+        let d = prog_dir(h, "prog.nz", f"{add}{strs_get(mains, k)}")?;
+        let o = nazm(h, d, words(f"build --target {target} --objects {target} prog.nz"));
+        check_that(o.code == 0, o.stderr)?;
+        let unit = tls_symbols(h, f"{d}/{target}/00-m0.o")?;
+        check_that((unit > 0) == tls, f"{target}: the unit")?;
+        let runtime = tls_symbols(h, f"{d}/{target}/01-runtime.o")?;
+        check_that((runtime > 0) == tls, f"{target}: the runtime")?;
+        scratch_remove(h, d);
+        k = k + 1;
+    }
+    ok()
+}
+
+@test
+fn what_a_board_cannot_have_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { let v = ints_new(); ints_push(v, 4); ints_len(v) + str_len(str_concat(\"a\", \"b\")) }\n")?;
+    let o = nazm(h, d, words(f"build --target {BOARD} --objects out prog.nz"));
+    let wrote = file_exists(f"{d}/out");
+    scratch_remove(h, d);
+    check_that(o.code == 1, o.stderr)?;
+    let e = o.stderr;
+    check_that(text_contains(e, "`aarch64-unknown-none` has no operating system"), e)?;
+    // Each part, with the symbols that reach it.
+    check_that(text_contains(e, "strings (`nz.str_alloc`"), e)?;
+    check_that(text_contains(e, "), sequences (`nz.arr_grow`"), e)?;
+    check_that(!wrote, "objects were written for a refused build")?;
+    let d2 = prog_dir(h, "prog.nz", "fn main(io: IoCap) -> Int ! { io } { print(\"x\"); 0 }\n")?;
+    let o2 = nazm(h, d2, words(f"build --target {BOARD} --objects out prog.nz"));
+    scratch_remove(h, d2);
+    check_that(o2.code == 1, o2.stderr)?;
+    // `print` of a static string is a C library call: nothing allocates, but `write` is libc's.
+    check_that(text_contains(o2.stderr, "only a hosted runtime has: C library (`write`)"), o2.stderr)
+}
+
+@test
+fn a_static_string_needs_no_runtime(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A literal's length is a constant in the unit: nothing of the string runtime is reached.
+    let d = prog_dir(h, "prog.nz", "fn main() -> Int { str_len(\"abc\") }\n")?;
+    let o = nazm(h, d, words(f"build --target {BOARD} --objects out prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 0, o.stderr)
+}
+
+@test
+fn a_device_register_is_refused_where_there_is_none(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let o = nazm(h, d, words("run --interpret prog.nz"));
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "N0392"), o.stderr)?;
+    check_that(text_contains(o.stderr, "`nazm run` cannot perform the built-in `mmio_write32`"), o.stderr)?;
+    let b = nazm(h, d, words("build prog.nz -o prog"));
+    let wrote = file_exists(f"{d}/prog");
+    scratch_remove(h, d);
+    check_that(b.code != 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "N0392"), b.stderr)?;
+    check_that(text_contains(b.stderr, "a build for `"), b.stderr)?;
+    check_that(!wrote, "prog was written")?;
+    let d2 = prog_dir(h, "prog.nz", "fn main(m: MmioCap) -> Int ! {} { mmio_read32(150994944) }\n")?;
+    let r = nazm(h, d2, words("run --interpret prog.nz"));
+    scratch_remove(h, d2);
+    check_that(text_contains(r.stderr, "the built-in `mmio_read32`"), r.stderr)
+}
+
+@test
+fn a_device_register_needs_an_mmio_cap_held(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn poke() -> Int ! {} { mmio_write32(0, 0) }\nfn main() -> Int { poke() }\n")?;
+    let o = nazm(h, d, words("check prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code != 0, ran_show(o))?;
+    check_that(text_contains(o.stderr, "N0369"), o.stderr)?;
+    check_that(text_contains(o.stderr, "MmioCap"), o.stderr)?;
+    // Held where it is called, in every function: an undeclared helper is not bridged to its
+    // caller's `MmioCap`, as it would be for `io`.
+    let d2 = prog_dir(h, "prog.nz", "fn poke() -> Int { mmio_write32(0, 0) }\nfn main(m: MmioCap) -> Int ! {} { poke() }\n")?;
+    let o2 = nazm(h, d2, words("check prog.nz"));
+    scratch_remove(h, d2);
+    check_that(o2.code != 0, "an undeclared helper used its caller's MmioCap")?;
+    check_that(text_contains(o2.stderr, "`poke` holds no `MmioCap` here"), o2.stderr)
+}
+
+@test
+fn cranelift_builds_no_board(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let o = nazm(h, d, words(f"build --backend cranelift --target {BOARD} --objects out prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 5, ran_show(o))?;
+    check_that(text_contains(o.stderr, "`--backend cranelift` builds no freestanding target"), o.stderr)
+}
+
+@test
+fn a_board_image_needs_objects(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let o = nazm(h, d, words(f"build --target {BOARD} prog.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 4, ran_show(o))?;
+    check_that(text_contains(o.stderr, "--objects DIR"), o.stderr)
+}

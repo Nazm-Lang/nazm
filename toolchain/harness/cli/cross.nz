@@ -1,0 +1,230 @@
+// N57: targets and cross-compilation (`docs/architecture.md` §7.59). Every triple of the matrix
+// is built by both backends from this host — to an executable where the host's toolchain links
+// it, to objects and a link list where it cannot — each object in the target's own format and
+// architecture. Ported from `crates/nazm-cli/tests/cross.rs` (R7).
+//
+// Where the Rust test asks `Target::links_on(Target::host())`, the port asks `nazm inspect`, which
+// prints that answer for every target (`toolchain.targets[].output`). The test that holds
+// `inspect`'s answer to `links_on` itself (`inspect_names_every_target_and_what_this_host_makes_of_it`)
+// has nothing else to compare it with and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+const TARGETS: Str = "aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu x86_64-pc-windows-gnu";
+
+const PROGRAM: Str = "fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }\nfn main(io: IoCap) -> Int ! { io } { print(int_to_str(fib(20))); 0 }\n";
+
+fn le(b: Str, at: Int, n: Int) -> Int ! {} {
+    let mut v = 0;
+    let mut k = n - 1;
+    while k >= 0 {
+        v = v * 256 + str_byte(b, at + k);
+        k = k - 1;
+    }
+    v
+}
+
+/// What an object or executable says it is, from its header: `format arch`.
+fn header(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    let b = read_raw(h, path)?;
+    if str_len(b) >= 8 && str_byte(b, 0) == 207 && str_byte(b, 1) == 250 && str_byte(b, 2) == 237 && str_byte(b, 3) == 254 {
+        let cpu = le(b, 4, 4);
+        let arch = if cpu == 16777223 { "x86_64" } else if cpu == 16777228 { "aarch64" } else { "other" };
+        return Result[Str, Str].Ok(value: f"mach-o {arch}");
+    }
+    if str_len(b) >= 2 && str_byte(b, 0) == 100 && str_byte(b, 1) == 134 {
+        // A COFF object's machine word: IMAGE_FILE_MACHINE_AMD64.
+        return Result[Str, Str].Ok(value: "coff x86_64");
+    }
+    if str_len(b) >= 64 && str_slice(b, 0, 2) == "MZ" {
+        // A PE executable: the COFF header follows the `PE\0\0` signature `e_lfanew` points to.
+        let at = le(b, 60, 4);
+        let machine = le(b, at + 4, 2);
+        return Result[Str, Str].Ok(value: if machine == 34404 { "coff x86_64" } else { "coff other" });
+    }
+    if str_len(b) >= 20 && str_byte(b, 0) == 127 && str_slice(b, 1, 4) == "ELF" {
+        let machine = le(b, 18, 2);
+        let arch = if machine == 62 { "x86_64" } else if machine == 183 { "aarch64" } else { "other" };
+        return Result[Str, Str].Ok(value: f"elf {arch}");
+    }
+    Result[Str, Str].Ok(value: "unknown unknown")
+}
+
+fn expected(triple: Str) -> Str ! {} {
+    let format = if text_contains(triple, "apple") { "mach-o" } else if text_contains(triple, "windows") { "coff" } else { "elf" };
+    let arch = if text_starts_with(triple, "x86_64") { "x86_64" } else { "aarch64" };
+    f"{format} {arch}"
+}
+
+/// The triples `nazm inspect` says this host links to an executable.
+fn linked_here(h: Caps, d: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let o = nazm(h, d, words("inspect prog.nz"));
+    check_that(o.code == 0, o.stderr)?;
+    let v = jparse(o.stdout)?;
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "toolchain/targets") {
+        if jstr(v, f"toolchain/targets/{i}/output") == "executable" {
+            strs_push(out, jstr(v, f"toolchain/targets/{i}/triple"));
+        }
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+@test
+fn every_target_is_built_by_both_backends_in_its_own_format(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    let links = linked_here(h, d)?;
+    for triple in words(TARGETS) {
+        for backend in words("llvm cranelift") {
+            let dir = f"obj-{triple}-{backend}";
+            let o = nazm(h, d, words(f"build --no-cache --backend {backend} --target {triple} --objects {dir} prog.nz"));
+            check_that(o.code == 0, f"{triple} {backend}: {o.stderr}")?;
+            let listed = read_text(h, f"{d}/{dir}/link.txt")?;
+            check_that(text_contains(listed, f"target {triple}\n"), listed)?;
+            let windows = text_contains(triple, "windows");
+            let want = if backend == "cranelift" && !windows {
+                "objects 00-m0.o 01-runtime.o 02-switch.o 03-stack.o 04-errno.o 05-os.o 06-entry.o\n"
+            } else if backend == "cranelift" {
+                "objects 00-m0.o 01-runtime.o 02-switch.o 03-init.o 04-stack.o 05-errno.o 06-os.o 07-entry.o\n"
+            } else if !windows {
+                "objects 00-m0.o 01-runtime.o 02-stack.o 03-entry.o\n"
+            } else {
+                "objects 00-m0.o 01-runtime.o 02-init.o 03-stack.o 04-entry.o\n"
+            };
+            check_that(text_contains(listed, want), listed)?;
+            let libs = if text_contains(triple, "linux") { "-lpthread -lm" } else if windows { "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608" } else { "" };
+            check_that(text_ends_with(listed, f"libraries {libs}\n"), listed)?;
+            // Every object listed, the switch's too, is for the target.
+            let mut objects = "";
+            for l in text_lines(listed) {
+                if objects == "" && text_starts_with(l, "objects ") {
+                    objects = str_slice(l, 8, str_len(l));
+                }
+            }
+            for obj in text_split(objects, " ") {
+                check_that(header(h, f"{d}/{dir}/{obj}")? == expected(triple), f"{triple} {backend} {obj}")?;
+            }
+            // An executable only where the host's toolchain links the target.
+            let exe = f"{d}/exe-{triple}-{backend}";
+            let a = words(f"build --no-cache --backend {backend} --target {triple} prog.nz -o");
+            strs_push(a, exe);
+            let b = nazm(h, d, a);
+            if strs_has(links, triple) {
+                check_that(b.code == 0, f"{triple} {backend}: {b.stderr}")?;
+                check_that(header(h, exe)? == expected(triple), f"{triple} {backend}")?;
+            } else {
+                check_that(b.code == 4, f"{triple} {backend}")?;
+                check_that(text_contains(b.stderr, "has no linker for"), b.stderr)?;
+                check_that(!file_exists(exe), exe)?;
+            }
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_program_for_the_other_macos_architecture_runs_where_rosetta_does(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `cfg_attr`-ignored off Apple silicon: Rosetta 2 only.
+    if !macos_aarch64(h) {
+        return ok();
+    }
+    // Rosetta is an optional part of the host, not of the build; without it this is compile-only.
+    let rosetta = run(h, "arch", words("-x86_64 /usr/bin/true"), "", env_here(h.io)).code == 0;
+    if skip_without(h, rosetta, "no Rosetta 2 on this machine")? {
+        return ok();
+    }
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    for backend in words("llvm cranelift") {
+        let exe = f"{d}/x86-{backend}";
+        let a = words(f"build --no-cache --backend {backend} --target x86_64-apple-darwin prog.nz -o");
+        strs_push(a, exe);
+        let b = nazm(h, d, a);
+        check_that(b.code == 0, b.stderr)?;
+        let r = run(h, exe, strs_new(), d, suite_env(h));
+        check_that(r.stdout == "67650\n", f"{backend}: {ran_show(r)}")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// A float converted to an 8- or 16-bit integer, saturating or tried, is code Cranelift's x86-64
+/// backend emits only at 32 and 64 bits (Gate 3): it is built for every target by both backends.
+@test
+fn a_float_converted_to_a_narrow_integer_builds_for_every_target(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", "fn main(io: IoCap) -> Int ! { io } {\nprint(num_to_str(saturate_convert[Int8](-300.5)));\nprint(num_to_str(saturate_convert[UInt16](70000.0)));\nmatch try_convert[Int8](-128.9) { Option.Some(value: v) => print(num_to_str(v)), Option.None() => print(\"none\"), };\nmatch try_convert[UInt8](200.0) { Option.Some(value: v) => print(num_to_str(v)), Option.None() => print(\"none\"), };\n0\n}\n")?;
+    for triple in words(TARGETS) {
+        for backend in words("llvm cranelift") {
+            let o = nazm(h, d, words(f"build --no-cache --backend {backend} --target {triple} --objects narrow-{triple}-{backend} prog.nz"));
+            check_that(o.code == 0, f"{triple} {backend}: {o.stderr}")?;
+        }
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The `nazm.build-report/1` line of a run.
+fn build_report(o: Ran) -> Result[JsonDoc, Str] ! {} {
+    for l in text_lines(o.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            return jparse(l);
+        }
+    }
+    Result[JsonDoc, Str].Err(error: f"no build report: {o.stderr}")
+}
+
+@test
+fn objects_for_two_targets_are_never_one_cache_entry(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A project of its own per backend: a unit both backends hand to clang (the `stack` unit,
+    // Gate 3) is rightly one object for one target, whichever backend asked for it first.
+    for backend in words("llvm cranelift") {
+        let d = prog_dir(h, "prog.nz", PROGRAM)?;
+        scratch_write(h, d, "nazm.root", "")?;
+        let triples = words("aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu");
+        let mut second = "";
+        let mut i = 0;
+        while i < 2 {
+            let o = nazm(h, d, words(f"build --build-report --backend {backend} --target {strs_get(triples, i)} --objects o-{backend}-{i} prog.nz"));
+            check_that(o.code == 0, o.stderr)?;
+            let r = build_report(o)?;
+            if i == 1 {
+                // The second target reuses nothing the first stored.
+                check_that(jv(r, "native/reused") == "0", f"{backend}: {jv(r, "")}")?;
+            }
+            i = i + 1;
+        }
+        // And the first, built again, reuses its own.
+        let again = nazm(h, d, words(f"build --build-report --backend {backend} --target aarch64-unknown-linux-gnu --objects again prog.nz"));
+        let r = build_report(again)?;
+        scratch_remove(h, d);
+        check_that(jint(r, "native/reused") >= 1, f"{backend}: {jv(r, "")}")?;
+    }
+    ok()
+}
+
+@test
+fn a_triple_outside_the_matrix_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROGRAM)?;
+    for triple in words("riscv64gc-unknown-linux-gnu x86_64-pc-windows-msvc i686-unknown-linux-gnu") {
+        let o = nazm(h, d, words(f"build --target {triple} --objects o prog.nz"));
+        check_that(o.code == 5, triple)?;
+        check_that(text_contains(o.stderr, "not a target this compiler generates code for"), o.stderr)?;
+        check_that(!file_exists(f"{d}/o"), "o was written")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
