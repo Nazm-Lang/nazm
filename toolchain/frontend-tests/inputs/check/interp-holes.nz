@@ -1,0 +1,13 @@
+struct P { x: Int }
+enum E { A, B(n: Int) }
+fn get[T: Equality](v: T) -> Str { f"{v}" }
+fn main(io: IoCap) -> Int {
+    let p = P(x: 1);
+    let n = 3;
+    let s = f"n={n:>5} b={true} s={"x"} p={p} e={E.A} prec={n:.2}";
+    print(p);
+    println(E.B(n: 2));
+    print(f"{n + 1} {p.x} {ints_new()}");
+    print(f"{s:<3.1}");
+    0
+}

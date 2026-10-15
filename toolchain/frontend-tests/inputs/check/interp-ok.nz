@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let name = "w";
+    let n = 2;
+    println(f"hello {name}, {n * 2:>4} {n == 2}");
+    print(n);
+    println(true);
+    0
+}
