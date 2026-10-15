@@ -1,0 +1,33 @@
+// Result types taken from an expression body (R1.5, D2): settled callees first, cycles refused,
+// a body without a value refused, and each body's own mistakes in the order the bodies are
+// checked.
+trait Size { fn size(self: Self): Int; }
+impl Size for Str { fn size(self: Str) = str_len(self) }
+
+fn top(n: Int) = mid(n) + low(n) + other(n) + wrong(true)
+fn mid(n: Int) = low(n) * 2 + bad_name
+fn low(n: Int) = { let k = n + "x"; k }
+fn other(n: Int) = if n > 0 { low(n) } else { mid(n) }
+fn wrong(b: Bool) = b + 1
+fn nothing(n: Int) = { let k = n; }
+fn loud(out: OutCap) = print("hi")
+fn ring_a(n: Int) = ring_b(n)
+fn ring_b(n: Int) = ring_c(n)
+fn ring_c(n: Int) = ring_a(n) + ring_b(n)
+fn twice(n: Int) = n
+fn twice(n: Int) = n * 2
+fn pair(a: Int, b: Str) = (a, b)
+fn pick[T](a: T, b: T) = a
+fn maybe(n: Int) = if n > 0 { Some(n) } else { None }
+fn closure(n: Int) = fn(x: Int) -> Int { x + n }
+
+fn main(out: OutCap): Int {
+    let f = top
+    let g: fn(Int) -> Str = low
+    let p = pair(1, "a")
+    let q: Str = pick(1, 2)
+    let m: Option[Int] = maybe(3)
+    let h = closure(2)
+    loud(out)
+    f(1) + p.0 + h(3) + twice(2) + "a".size()
+}
