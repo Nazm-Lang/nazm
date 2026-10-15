@@ -22,8 +22,8 @@
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
 // `Int`, `Bool` and `Str`, imported ones included; function types, named functions as values,
-// calls through values and closures with their captures (N50); traits, impls of non-generic
-// types, bounds, method calls, default methods and `Show` in interpolation (N78); effects
+// calls through values and closures with their captures (N50); traits, impls,
+// bounds, method calls, default methods and `Show` in interpolation (N78); effects
 // and authority; the rules about `main`.
 
 use "syntax.nz";
@@ -243,6 +243,11 @@ pub struct Ck {
     imie: Ints,
     imff: Ints,
     imfn: Ints,
+    // What each parameter of an impl of a generic type requires (R1b, L11b), a run of `imreq`:
+    // -1 nothing, -2 `Equality`, else a trait. Empty for an impl of a type that is not generic.
+    imrf: Ints,
+    imrc: Ints,
+    imreq: Ints,
     // The impl headers of the module being declared: the `impl` keyword's span, the trait and the
     // type, -1 where either did not resolve.
     hds: Ints,
@@ -847,7 +852,7 @@ fn new_ck(t: Tree) -> Ck {
             capf: ints_new(), capb: ints_new(), sind: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
             trname: strs_new(), trmod: ints_new(), trns: ints_new(), trne: ints_new(), trpub: ints_new(), trmf: ints_new(), trmc: ints_new(),
             tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(), tmdef: ints_new(),
-            imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(),
+            imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new());
     let mut i = 0;
@@ -1134,7 +1139,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while t < ints_len(impls) {
         let im = ints_get(impls, t);
         if ints_len(kids(c, im, "attrs")) > 0 { stop(c, "an attribute"); }
-        if ints_len(kids(c, im, "type_params")) > 0 { stop(c, "an impl of a generic type"); }
         t = t + 1;
     }
     let consts = kids(c, p, "consts");
@@ -2178,9 +2182,11 @@ fn impl_headers(c: Ck, m: Int) -> Int {
         let tr = named_trait(c, fld(c, im, "trait_name"));
         let w = fld(c, im, "self_ty");
         let before = dg_len(c.d);
-        let mut ty = resolve_written(c, w, strs_new(), ints_new(), c.d);
+        let generic = ints_len(kids(c, im, "type_params")) > 0;
+        let mut ty = 0 - 1;
+        if generic { ty = generic_impl_type(c, im); } else { ty = resolve_written(c, w, strs_new(), ints_new(), c.d); }
         if dg_len(c.d) != before { ty = 0 - 1; }
-        if ty >= 0 {
+        if ty >= 0 && generic == false {
             let why = not_implementable(c, ty);
             if why != "" {
                 err(c, "N0604", fld(c, w, "span"), cat4("`", fname_of(c, w, "name"), "` cannot have an impl: it is ", why),
@@ -2200,6 +2206,66 @@ fn impl_headers(c: Ck, m: Int) -> Int {
         }
         i = i + 1;
     }
+    0
+}
+
+// An impl of a generic type's header (`generic_impl_type`, L11b): `D[T1, …]`, a generic record or
+// enum applied to exactly the impl's parameters, in order. Its definition, or -1 having said why.
+fn generic_impl_type(c: Ck, im: Int) -> Int {
+    let w = fld(c, im, "self_ty");
+    let name = fname_of(c, w, "name");
+    let template = type_named(c, written_key(c, w, "name"));
+    let mut params = 0;
+    if template >= 0 {
+        if is_record(c, template) { params = ints_get(c.rnp, ta(c, template)); }
+        if is_enum(c, template) { params = ints_get(c.enp, ta(c, template)); }
+    }
+    let help = "an impl with type parameters is written `impl[T: Show] Show for Pair[T]`, for a generic record or enum";
+    if params == 0 {
+        err(c, "N0604", fld(c, w, "span"), cat3("`", name, "` is not a generic record or enum"), help);
+        return 0 - 1;
+    }
+    let tps = kids(c, im, "type_params");
+    let mut args = ints_new();
+    if some(c, w, "args") { args = sx_items(c.t, unwrap(c, w, "args")); }
+    let mut exact = params == ints_len(tps) && ints_len(args) == params;
+    let wanted = strs_new();
+    let mut i = 0;
+    while i < ints_len(tps) {
+        let pn = fname_of(c, ints_get(tps, i), "name");
+        strs_push(wanted, pn);
+        if exact {
+            let a = ints_get(args, i);
+            if some(c, a, "qualifier") || some(c, a, "args") || some(c, a, "function") || fname_of(c, a, "name") != pn { exact = false; }
+        }
+        i = i + 1;
+    }
+    if exact == false {
+        err(c, "N0604", fld(c, w, "span"), cat5("an impl with type parameters is for `", name, "[", str_join(wanted, ", "),
+                "]`: the type applied to exactly its parameters, in order"), help);
+        return 0 - 1;
+    }
+    template
+}
+
+// A generic definition applied to the function `id`'s first type parameters: an impl's method's
+// `Self` (L11b).
+fn applied_to_own(c: Ck, template: Int, id: Int) -> Int {
+    let n = targc_of_def(c, template);
+    let own = ints_new();
+    let mut i = 0;
+    while i < n {
+        ints_push(own, fn_param_ty(c, id, i));
+        i = i + 1;
+    }
+    if is_record(c, template) { return record_ty(c, ta(c, template), own); }
+    enum_ty(c, ta(c, template), own)
+}
+
+// How many type parameters a record's or an enum's definition declares.
+fn targc_of_def(c: Ck, t: Int) -> Int {
+    if is_record(c, t) { return ints_get(c.rnp, ta(c, t)); }
+    if is_enum(c, t) { return ints_get(c.enp, ta(c, t)); }
     0
 }
 
@@ -2292,6 +2358,23 @@ fn register_impl(c: Ck, m: Int, im: Int, tr: Int, ty: Int, functions: Ints) -> I
         ints_push(c.imfn, ints_get(methods, k));
         k = k + 1;
     }
+    let tps = kids(c, im, "type_params");
+    ints_push(c.imrf, ints_len(c.imreq));
+    ints_push(c.imrc, ints_len(tps));
+    k = 0;
+    while k < ints_len(tps) {
+        let p = ints_get(tps, k);
+        let mut req = 0 - 1;
+        if some(c, p, "requires") {
+            let rn = fname_of(c, unwrap(c, p, "requires"), "name");
+            if rn == "Equality" { req = 0 - 2; } else {
+                let at = strs_find(c.tsname, rn);
+                if at >= 0 { req = ints_get(c.tsid, at); }
+            }
+        }
+        ints_push(c.imreq, req);
+        k = k + 1;
+    }
     if first >= 0 {
         err(c, "N0600", is, cat5("`", shown, "` already implements `", tname, "`"),
                 "a type implements a trait at most once in a program, so every call means one function");
@@ -2313,14 +2396,17 @@ fn impl_method(c: Ck, f: Int, id: Int, tr: Int, ty: Int) -> Int {
         sec_at(c, ints_get(c.trns, tr), ints_get(c.trne, tr), "the trait is declared here");
         return 0 - 1;
     }
+    let n = targc_of_def(c, ty);
+    let mut me = ty;
+    if n > 0 { me = applied_to_own(c, ty, id); }
     let params = ints_new();
-    ints_push(params, ty);
+    ints_push(params, me);
     let mut k = 0;
     while k < ints_get(c.tmpc, tm) {
-        ints_push(params, subst(c, ints_get(c.ptys, ints_get(c.tmpf, tm) + k), own_trait(), tr, one(ty)));
+        ints_push(params, subst(c, ints_get(c.ptys, ints_get(c.tmpf, tm) + k), own_trait(), tr, one(me)));
         k = k + 1;
     }
-    let ret = subst(c, ints_get(c.tmret, tm), own_trait(), tr, one(ty));
+    let ret = subst(c, ints_get(c.tmret, tm), own_trait(), tr, one(me));
     let mut same = ints_get(c.fnpc, id) == ints_len(params) && ints_get(c.fnret, id) == ret;
     if same {
         k = 0;
@@ -2336,7 +2422,7 @@ fn impl_method(c: Ck, f: Int, id: Int, tr: Int, ty: Int) -> Int {
     let mut eff = ints_get(c.fneff, id);
     if eff < 0 { eff = 0; }
     if eff != ints_get(c.tmeff, tm) { same = false; }
-    if ints_get(c.fntpc, id) != 0 { same = false; }
+    if ints_get(c.fntpc, id) != n { same = false; }
     if same { return tm; }
     let wanted = strs_new();
     k = 0;
@@ -2363,13 +2449,42 @@ fn impl_of(c: Ck, tr: Int, ty: Int) -> Int {
 
 // Whether `ty` satisfies `T: tr` in the module being checked (`satisfies`): a type parameter
 // bound by it, or an impl in this module or one it imports directly.
-fn satisfies(c: Ck, tr: Int, ty: Int) -> Bool {
+fn satisfies(c: Ck, tr: Int, ty: Int) -> Bool { satisfies_within(c, tr, ty, 0) }
+
+fn satisfies_within(c: Ck, tr: Int, ty: Int, depth: Int) -> Bool {
+    if depth > max_depth() { return false; }
     if tag(c, ty) == tag_param() { return param_bound(c, ty) == tr; }
-    let im = impl_of(c, tr, ty);
+    let im = applying(c, tr, ty);
     if im < 0 { return false; }
     let m = gs(c, s_module());
     let at = ints_get(c.immod, im);
-    at == m || imports_module(c, m, at)
+    if at != m && imports_module(c, m, at) == false { return false; }
+    // An impl of a generic definition: its parameters' requirements, of `ty`'s arguments.
+    let mut i = 0;
+    while i < ints_get(c.imrc, im) && i < targc(c, ty) {
+        let req = ints_get(c.imreq, ints_get(c.imrf, im) + i);
+        let a = targ(c, ty, i);
+        if req == 0 - 2 {
+            if derived(c, a, true) != "" { return false; }
+        }
+        if req >= 0 {
+            if satisfies_within(c, req, a, depth + 1) == false { return false; }
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// The impl of `tr` that applies to `ty` (`applying`): the one for exactly `ty`, or the one for the
+// generic definition `ty` is an instance of. -1 for none.
+fn applying(c: Ck, tr: Int, ty: Int) -> Int {
+    let im = impl_of(c, tr, ty);
+    if im >= 0 { return im; }
+    if (is_record(c, ty) || is_enum(c, ty)) && targc(c, ty) > 0 {
+        if is_record(c, ty) { return impl_of(c, tr, record_ty(c, ta(c, ty), ints_new())); }
+        return impl_of(c, tr, enum_ty(c, ta(c, ty), ints_new()));
+    }
+    0 - 1
 }
 
 // The trait a type parameter is bound by, or -1.
@@ -2431,8 +2546,18 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
         k = k + 1;
     }
     if method {
+        let mut me = ints_get(c.hty, hdr);
+        if targc_of_def(c, me) > 0 {
+            let own = ints_new();
+            k = 0;
+            while k < targc_of_def(c, me) && k < ints_len(pt) {
+                ints_push(own, ints_get(pt, k));
+                k = k + 1;
+            }
+            if is_record(c, me) { me = record_ty(c, ta(c, me), own); } else { me = enum_ty(c, ta(c, me), own); }
+        }
         strs_push(pn, "Self");
-        ints_push(pt, ints_get(c.hty, hdr));
+        ints_push(pt, me);
     }
     let pf = ints_len(c.ptys);
     k = 0;
@@ -4078,7 +4203,7 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
     } else {
         let mut target = 0 - 1;
         if satisfies(c, tr, recv_ty) {
-            let im = impl_of(c, tr, recv_ty);
+            let im = applying(c, tr, recv_ty);
             target = ints_get(c.imfn, ints_get(c.imff, im) + tm - ints_get(c.trmf, tr));
             // Where the impl leaves the method to its default, the default (L11a).
             if target < 0 && ints_get(c.tmdef, tm) == 1 {
@@ -4179,7 +4304,7 @@ fn lookup_method(c: Ck, t: Int, method: Str, at: Int, report: Bool) -> Int {
     let mut tr = 0;
     while tr < strs_len(c.trname) {
         let tm = trait_method(c, tr, method);
-        if tm >= 0 && impl_of(c, tr, t) >= 0 {
+        if tm >= 0 && applying(c, tr, t) >= 0 {
             if trait_in_scope(c, tr) && satisfies(c, tr, t) { ints_push(found, tm); } else { strs_push(elsewhere, tick(strs_get(c.trname, tr))); }
         }
         tr = tr + 1;
