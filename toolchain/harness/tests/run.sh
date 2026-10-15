@@ -5,6 +5,7 @@
 #                                             beside its Rust file, every ported gate beside
 #                                             `cargo xtask check`
 #   toolchain/harness/tests/run.sh tests      only the CLI test files
+#   toolchain/harness/tests/run.sh tests F…   only the CLI test files named (`line_breaks` …)
 #   toolchain/harness/tests/run.sh checks     only the gates
 #
 # Prints one line per comparison and ends with `N agree, M differ`; exits 1 when anything
@@ -26,6 +27,8 @@ export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$HOME/.cache/nazm-target-R7}
 export NAZM=${NAZM:-$CARGO_TARGET_DIR/debug/nazm}
 export NAZM_HARNESS_ROOT=$root
 what=${1:-all}
+[ $# -gt 0 ] && shift
+only=("$@")
 
 agree=0
 differ=0
@@ -71,7 +74,13 @@ compare_tests() {
         if [ $? -eq 0 ]; then note_agree "$own ($(tail -1 "$log/$own.out"))"; else
             note_differ "$own: $(grep FAIL "$log/$own.out" | head -3)"; fi
     done
-    for f in "$here"/cli/*.nz; do
+    local files=()
+    if [ ${#only[@]} -gt 0 ]; then
+        for f in "${only[@]}"; do files+=("$here/cli/$f.nz"); done
+    else
+        files=("$here"/cli/*.nz)
+    fi
+    for f in "${files[@]}"; do
         local file bin
         file=$(basename "$f" .nz)
         bin=$(binary_of "$file")

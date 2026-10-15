@@ -1,0 +1,191 @@
+// N81 and N105: `nazm lir` — the target's data layout, every record's and enum's byte layout, which
+// types own anything, and every unit's instructions (`docs/architecture.md` §7.82 and §7.106).
+// Ported from `crates/nazm-cli/tests/lir.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+fn program() -> Str ! {} {
+    "struct Q { flag: Bool, name: Str, n: Int }\nstruct H { a: Ints, b: Strs }\nstruct Plain { x: Int, y: Bool }\nenum S { Num(n: Int), Pair(q: Q, k: Int), Empty }\nenum T { One(x: Int), Two }\nfn val(s: S) -> Int { match s { S.Num(n: n) => n, S.Pair(q: q, k: k) => (if q.flag { str_len(q.name) } else { 0 }) + q.n + k, S.Empty() => 0, } }\nfn tee(t: T) -> Int { match t { T.One(x: x) => x, T.Two() => 7, } }\nfn main(out: OutCap) -> Int {\nlet h = H(a: ints_new(), b: strs_new());\nints_push(h.a, 5);\nstrs_push(h.b, \"hello\");\nlet p = Plain(x: 3, y: false);\nprint(int_to_str(val(S.Pair(q: Q(flag: true, name: \"abc\", n: 10), k: 4))));\nprint(int_to_str(tee(T.One(x: 2)) + tee(T.Two()) + p.x + ints_get(h.a, 0) + str_len(strs_get(h.b, 0))));\n0\n}\n"
+}
+
+fn lir(h: Caps, d: Str, target: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let o = nazm(h, d, words(f"lir --target {target} p.nz"));
+    if o.code != 0 {
+        return Result[JsonDoc, Str].Err(error: o.stderr);
+    }
+    jparse(o.stdout)
+}
+
+/// The path of the `kind` (`records` or `enums`) entry named `name` in any unit, or `""`.
+fn find_in(doc: JsonDoc, kind: Str, name: Str) -> Str ! {} {
+    let mut u = 0;
+    while jq(doc, f"units/{u}") >= 0 {
+        let mut i = 0;
+        while jq(doc, f"units/{u}/{kind}/{i}") >= 0 {
+            if jstr(doc, f"units/{u}/{kind}/{i}/name") == name {
+                return f"units/{u}/{kind}/{i}";
+            }
+            i = i + 1;
+        }
+        u = u + 1;
+    }
+    ""
+}
+
+/// `type@offset` for each field of the entry at `path`, joined by spaces.
+fn offsets(doc: JsonDoc, path: Str) -> Str ! {} {
+    let out = strs_new();
+    let mut i = 0;
+    while jq(doc, f"{path}/fields/{i}") >= 0 {
+        let ty = jstr(doc, f"{path}/fields/{i}/type");
+        let at = jint(doc, f"{path}/fields/{i}/offset");
+        strs_push(out, f"{ty}@{at}");
+        i = i + 1;
+    }
+    str_join(out, " ")
+}
+
+@test
+fn the_tables_are_the_same_bytes_every_time(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let a = nazm(h, d, words("lir --target x86_64-unknown-linux-gnu p.nz"));
+    let b = nazm(h, d, words("lir --target x86_64-unknown-linux-gnu p.nz"));
+    let ops = nazm(h, d, words("lir --ops --target x86_64-unknown-linux-gnu p.nz"));
+    scratch_remove(h, d);
+    check_that(a.code == 0, a.stderr)?;
+    check_that(a.stdout == b.stdout, "two runs, two tables")?;
+    check_that(strs_len(text_lines(a.stdout)) == 1, a.stdout)?;
+    let doc = jparse(a.stdout)?;
+    check_that(jstr(doc, "schema") == "nazm.lir/2", jtext(doc, "schema"))?;
+    check_that(jstr(doc, "target") == "x86_64-unknown-linux-gnu", jtext(doc, "target"))?;
+    // N105: every unit carries the instructions both backends translate, with their digest.
+    let texts = strs_new();
+    let mut u = 0;
+    while jq(doc, f"units/{u}") >= 0 {
+        let text = jstr(doc, f"units/{u}/lir/text");
+        check_that(text_contains(text, "\nfunction @"), text)?;
+        let digest = jstr(doc, f"units/{u}/lir/digest");
+        check_that(str_len(digest) == 64, digest)?;
+        strs_push(texts, f"{text}\n");
+        u = u + 1;
+    }
+    check_that(ops.stdout == str_join(texts, ""), "`--ops` is not every unit's text")
+}
+
+@test
+fn fields_follow_the_canonical_order_at_natural_alignment(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let got = lir(h, d, "aarch64-apple-darwin");
+    scratch_remove(h, d);
+    let doc = got?;
+    // `flag`, `n`, `name`: canonical by name, each aligned, the whole a multiple of 8.
+    let q = find_in(doc, "records", "Q");
+    check_that(offsets(doc, q) == "Bool@0 Int@8 Str@16", offsets(doc, q))?;
+    check_that(jint(doc, f"{q}/size") == 40 && jint(doc, f"{q}/align") == 8, jtext(doc, q))?;
+    let plain = find_in(doc, "records", "Plain");
+    check_that(offsets(doc, plain) == "Int@0 Bool@8", offsets(doc, plain))?;
+    check_that(jint(doc, f"{plain}/size") == 16, jtext(doc, plain))?;
+    // An enum: the tag word at 0, the payload area at 8, as large as its largest variant.
+    let s = find_in(doc, "enums", "S");
+    check_that(jint(doc, f"{s}/tag") == 0 && jint(doc, f"{s}/payload") == 8, jtext(doc, s))?;
+    let mut pair = "";
+    let mut i = 0;
+    while jq(doc, f"{s}/variants/{i}") >= 0 {
+        if jstr(doc, f"{s}/variants/{i}/name") == "Pair" {
+            pair = f"{s}/variants/{i}";
+        }
+        i = i + 1;
+    }
+    check_that(str_len(pair) > 0, jtext(doc, s))?;
+    check_that(offsets(doc, pair) == "Int@0 Q@8", offsets(doc, pair))?;
+    check_that(jint(doc, f"{pair}/size") == 48, jtext(doc, pair))?;
+    check_that(jint(doc, f"{s}/size") == 56, jtext(doc, s))?;
+    check_that(jint(doc, "data_layout/pointer") == 8, jtext(doc, "data_layout"))?;
+    check_that(jint(doc, "data_layout/str/pointer") == 0 && jint(doc, "data_layout/str/length") == 8 && jint(doc, "data_layout/str/owner") == 16, jtext(doc, "data_layout"))
+}
+
+@test
+fn a_pointer_is_four_bytes_on_wasm32_and_nothing_else_moves(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let host_got = lir(h, d, "aarch64-unknown-linux-gnu");
+    let wasm_got = lir(h, d, "wasm32-unknown-unknown");
+    scratch_remove(h, d);
+    let host = host_got?;
+    let wasm = wasm_got?;
+    check_that(jint(wasm, "data_layout/pointer") == 4, jtext(wasm, "data_layout"))?;
+    // Two handles: one word each on a 64-bit target, four bytes each on wasm32.
+    let h64 = find_in(host, "records", "H");
+    let h32 = find_in(wasm, "records", "H");
+    check_that(offsets(host, h64) == "Ints@0 Strs@8", offsets(host, h64))?;
+    check_that(jint(host, f"{h64}/size") == 16, jtext(host, h64))?;
+    check_that(offsets(wasm, h32) == "Ints@0 Strs@4", offsets(wasm, h32))?;
+    check_that(jint(wasm, f"{h32}/size") == 4 + 4, jtext(wasm, h32))?;
+    // A record of an `Int` and a `Bool` does not depend on the pointer.
+    check_that(jtext(host, find_in(host, "records", "Plain")) == jtext(wasm, find_in(wasm, "records", "Plain")), "Plain moved")?;
+    // A `Str` is still 24 bytes, its length still 8: the pointer and owner narrow, padded.
+    check_that(jint(wasm, "data_layout/str/size") == 24, jtext(wasm, "data_layout"))
+}
+
+fn owns(doc: JsonDoc, kind: Str, name: Str) -> Str ! {} {
+    let at = find_in(doc, kind, name);
+    jtext(doc, f"{at}/owns")
+}
+
+@test
+fn ownership_is_closed_under_containment(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let got = lir(h, d, "aarch64-apple-darwin");
+    scratch_remove(h, d);
+    let doc = got?;
+    check_that(owns(doc, "records", "Q") == "true", "a `Str` field owns")?;
+    check_that(owns(doc, "records", "H") == "true", "a handle owns")?;
+    check_that(owns(doc, "records", "Plain") == "false", "Plain owns nothing")?;
+    check_that(owns(doc, "enums", "S") == "true", "through `Pair`'s `Q`")?;
+    check_that(owns(doc, "enums", "T") == "false", "T owns nothing")
+}
+
+@test
+fn an_unknown_target_and_a_program_that_does_not_check_are_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "p.nz", program())?;
+    let o = nazm(h, d, words("lir --target riscv64-unknown-linux-gnu p.nz"));
+    scratch_write(h, d, "bad.nz", "fn main() -> Int { \"x\" }\n")?;
+    let bad = nazm(h, d, words("lir bad.nz"));
+    scratch_remove(h, d);
+    check_that(o.code == 5, ran_show(o))?;
+    check_that(text_contains(o.stderr, "is not a target this compiler generates code for"), o.stderr)?;
+    check_that(bad.code == 1, ran_show(bad))?;
+    check_that(str_len(bad.stdout) == 0, bad.stdout)
+}
+
+@test
+fn every_shape_in_the_tables_runs_the_same_on_both_backends(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The Cranelift backend lays every value out by these tables (N81); LLVM lays its own
+    // aggregates out. Both must agree with the interpreter.
+    let d = prog_dir(h, "p.nz", program())?;
+    let r = nazm(h, d, words("run p.nz"));
+    let mut failure = "";
+    for backend in words("llvm cranelift") {
+        let o = nazm(h, d, words(f"build --backend {backend} p.nz -o {backend}"));
+        let native = run(h, f"{d}/{backend}", strs_new(), "", suite_env(h));
+        if str_len(failure) == 0 && o.code != 0 {
+            failure = f"{backend}: {o.stderr}";
+        } else if str_len(failure) == 0 && native.stdout != r.stdout {
+            failure = f"{backend}: {native.stdout} vs {r.stdout}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(r.code == 0, r.stderr)?;
+    check_that(r.stdout == "17220\n", r.stdout)?;
+    check_that(str_len(failure) == 0, failure)
+}

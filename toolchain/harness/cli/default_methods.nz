@@ -1,0 +1,107 @@
+// R1b: a trait's default method bodies (`docs/spec.md`, *Traits and methods*). A default body means
+// the same everywhere and is reclaimed, crosses modules to an impl in another, and is checked once,
+// held to its signature. Ported from `crates/nazm-cli/tests/default_methods.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+fn defaults() -> Str ! {} {
+    r#"trait Describe {
+    fn name(self: Self) -> Str;
+    fn describe(self: Self) -> Str { str_concat("<", str_concat(self.name(), ">")) }
+    fn twice(self: Self) -> Str { str_concat(self.describe(), self.describe()) }
+    fn shout(self: Self, out: OutCap) -> Int ! {io} { print(str_concat(self.name(), "!\n")) }
+}
+
+struct Dog { n: Int, }
+struct Cat { n: Int, }
+
+impl Describe for Dog {
+    fn name(self: Dog) -> Str { "dog" }
+}
+// An impl may still define a method its trait gives a body: it replaces it for this type.
+impl Describe for Cat {
+    fn name(self: Cat) -> Str { "cat" }
+    fn describe(self: Cat) -> Str { "a cat" }
+}
+
+fn through[T: Describe](x: T) -> Str { x.twice() }
+
+fn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, "\n")) }
+
+fn main(out: OutCap) -> Int ! {io} {
+    let d = Dog(n: 1);
+    let c = Cat(n: 2);
+    show(out, d.describe());
+    show(out, c.describe());
+    show(out, through(d));
+    show(out, through(c));
+    show(out, Describe.twice(d));
+    d.shout(out);
+    0
+}
+"#
+}
+
+@test
+fn a_default_body_means_the_same_everywhere_and_is_reclaimed(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for r in everywhere_with_oracle(h, defaults(), true)? {
+        check_that(r.ran.code == 0, f"{r.label}: {ran_show(r.ran)}")?;
+        check_that(text_starts_with(r.ran.stdout, "<dog>\na cat\n<dog><dog>\na cata cat\n<dog><dog>\ndog!\n"), f"{r.label}: {r.ran.stdout}")?;
+        if r.label != "lir oracle" {
+            let line = memory_line(r.ran);
+            check_that(str_len(line) > 0, f"no memory report: {ran_show(r.ran)}")?;
+            check_that(all_reclaimed(line), f"{r.label}: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn a_default_body_crosses_modules_to_an_impl_in_another(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "t.nz", "pub trait Named {\n    fn name(self: Self) -> Str;\n    fn greet(self: Self) -> Str { str_concat(\"hi \", self.name()) }\n}\n")?;
+    scratch_write(h, d, "p.nz", "use \"t.nz\";\npub struct P { x: Int, }\nimpl Named for P { fn name(self: P) -> Str { \"p\" } }\n")?;
+    scratch_write(h, d, "main.nz", "use \"t.nz\";\nuse \"p.nz\";\nfn g[T: Named](x: T) -> Str { x.greet() }\nfn main(out: OutCap) -> Int ! {io} { let p = P(x: 1); print(str_concat(p.greet(), g(p))); 0 }\n")?;
+    let r = nazm(h, d, words("run main.nz"));
+    let mut failure = "";
+    if !text_starts_with(r.stdout, "hi phi p") {
+        failure = ran_show(r);
+    }
+    for backend in words("llvm cranelift") {
+        let a = words(f"build --backend {backend} main.nz -o");
+        strs_push(a, f"{d}/{backend}");
+        let b = nazm(h, d, a);
+        let ran = bounded_exe(h, f"{d}/{backend}", "", suite_env(h));
+        if str_len(failure) == 0 && b.code != 0 {
+            failure = f"{backend}: {b.stderr}";
+        } else if str_len(failure) == 0 && !text_starts_with(ran.stdout, "hi phi p") {
+            failure = f"{backend}: {ran_show(ran)}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}
+
+fn codes_are(h: Caps, src: Str, want: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = check_errors(h, src)?;
+    let got = str_join(r.codes, " ");
+    check_that(got == want, f"{src}: [{got}], expected [{want}]")
+}
+
+@test
+fn a_default_body_is_checked_once_and_held_to_its_signature(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Once, whatever number of impls use it.
+    codes_are(h, "trait T { fn n(self: Self) -> Int; fn bad(self: Self) -> Int { self.n() + \"x\" } }\nstruct A { x: Int, }\nstruct B { x: Int, }\nimpl T for A { fn n(self: A) -> Int { 1 } }\nimpl T for B { fn n(self: B) -> Int { 2 } }\nfn main() -> Int { 0 }\n", "N0304")?;
+    // Generic over `Self`: nothing is known of it but the trait.
+    codes_are(h, "trait T { fn n(self: Self) -> Int; fn len(self: Self) -> Int { str_len(self) } }\nfn main() -> Int { 0 }\n", "N0300")?;
+    // Its effects are its signature's: none written is none.
+    codes_are(h, "trait T { fn n(self: Self) -> Int; fn say(self: Self, out: OutCap) -> Int { print(\"x\") } }\nfn main() -> Int { 0 }\n", "N0366")?;
+    // A method without a default body is still required.
+    codes_are(h, "trait T { fn n(self: Self) -> Int; fn m(self: Self) -> Int { 0 } }\nstruct A { x: Int, }\nimpl T for A { fn m(self: A) -> Int { 1 } }\nfn main() -> Int { 0 }\n", "N0602")
+}

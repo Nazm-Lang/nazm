@@ -159,3 +159,32 @@ pub fn refused_with(h: Caps, src: Str, code: Str) -> Result[Int, Str] ! { io, sp
         Result[Int, Str].Err(error: f"[{shown}], expected [{code}]\n{src}")
     }
 }
+
+/// What `nazm check` (human output) refused a program with: every error code, in order — the five
+/// characters after each `error[` — and the first `error[` line.
+pub struct Refusal {
+    codes: Strs,
+    first: Str,
+}
+
+/// `src` as `p.nz`, checked: the `refused` of `string_literals.rs` and `interpolation.rs`.
+pub fn check_errors(h: Caps, src: Str) -> Result[Refusal, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words("check p.nz"));
+    scratch_remove(h, d);
+    let codes = strs_new();
+    let parts = text_split(r.stderr, "error[");
+    let mut i = 1;
+    while i < strs_len(parts) {
+        let s = strs_get(parts, i);
+        strs_push(codes, if str_len(s) >= 5 { str_slice(s, 0, 5) } else { s });
+        i = i + 1;
+    }
+    let mut first = "";
+    for l in text_lines(r.stderr) {
+        if str_len(first) == 0 && text_starts_with(l, "error[") {
+            first = l;
+        }
+    }
+    Result[Refusal, Str].Ok(value: Refusal(codes: codes, first: first))
+}

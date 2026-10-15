@@ -1,0 +1,176 @@
+// N11 and N49: generics — polymorphic recursion runs interpreted and is refused natively by name;
+// ordinary recursion through a generic compiles; an instance nested past the stated bound is
+// refused; one too long to spell builds with a bounded symbol; a failure inside an instance names
+// the definition's line; and instances are told apart by every argument. Ported from
+// `crates/nazm-cli/tests/generics.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+/// `nazm ARGS` in `d`: whether it succeeded, its standard output trimmed, its errors.
+fn nz(h: Caps, d: Str, args: Str) -> Ran ! { io, spawn } {
+    let r = nazm(h, d, words(args));
+    Ran(code: r.code, stdout: text_trim(r.stdout), stderr: r.stderr)
+}
+
+fn ran_prog(h: Caps, d: Str) -> Ran ! { io, spawn } {
+    run(h, f"{d}/prog", strs_new(), "", suite_env(h))
+}
+
+@test
+fn polymorphic_recursion_runs_interpreted_and_is_refused_natively_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // `grow[T]` calls `grow[Vec[T]]`: every instance needs a larger one.
+    let d = prog_dir(h, "m.nz", "fn grow[T](x: T, n: Int) -> Int {\n    if n == 0 { 0 } else {\n        let v = vec_new[T]();\n        vec_push(v, x);\n        grow(v, n - 1) + 1\n    }\n}\nfn main() -> Int { grow(1, 3) }\n")?;
+    let r = nz(h, d, "run m.nz");
+    let b = nz(h, d, "build m.nz -o prog");
+    scratch_remove(h, d);
+    check_that(r.code == 0 && r.stdout == "3", ran_show(r))?;
+    check_that(b.code != 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "N0357"), b.stderr)?;
+    check_that(text_contains(b.stderr, "m.nz:5:9"), f"the call that expands: {b.stderr}")?;
+    check_that(!text_contains(b.stderr, "N0101"), f"one mistake, one error: {b.stderr}")
+}
+
+@test
+fn ordinary_recursion_through_a_generic_function_compiles(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "fn count[T](x: T, n: Int) -> Int { if n == 0 { 0 } else { count(x, n - 1) + 1 } }\nfn main() -> Int { count(\"a\", 3) }\n")?;
+    let r = nz(h, d, "run m.nz");
+    let b = nz(h, d, "build m.nz -o prog");
+    let ran = ran_prog(h, d);
+    scratch_remove(h, d);
+    check_that(r.code == 0 && r.stdout == "3", ran_show(r))?;
+    check_that(b.code == 0, b.stderr)?;
+    check_that(text_trim(ran.stdout) == "3", ran_show(ran))
+}
+
+@test
+fn an_instance_nested_past_the_stated_bound_is_refused_rather_than_generated(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Seventy generic functions, each passing a `Box` of its argument to the next.
+    let parts = strs_new();
+    strs_push(parts, "struct Box[T] { v: T, }\n");
+    for i in 0..70 {
+        strs_push(parts, f"fn f{i}[T](x: T) -> Int {{ f{i + 1}(Box[T](v: x)) }}\n");
+    }
+    strs_push(parts, "fn f70[T](x: T) -> Int { 0 }\nfn main() -> Int { f0(1) }\n");
+    let d = prog_dir(h, "m.nz", str_join(parts, ""))?;
+    let r = nz(h, d, "run m.nz");
+    let b = nz(h, d, "build m.nz -o prog");
+    scratch_remove(h, d);
+    check_that(r.code == 0, "the interpreter has no such bound")?;
+    check_that(r.stdout == "0", ran_show(r))?;
+    check_that(b.code != 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "N0358"), b.stderr)
+}
+
+/// Q1-B-06: an instance whose type arguments nest sixteen deep builds and runs natively under both
+/// backends, its symbol a bounded digest; the interpreter agrees.
+@test
+fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let parts = strs_new();
+    strs_push(parts, "struct P[A, B] { a: A, b: B }\nfn g0[T](x: T) -> Int { 1 }\n");
+    for i in 1..17 {
+        let q = i - 1;
+        strs_push(parts, f"fn g{i}[T](x: T) -> Int {{ g{q}(P[T, T](a: x, b: x)) + g{q}(x) }}\n");
+    }
+    strs_push(parts, "fn main() -> Int { g16(1) }\n");
+    let d = prog_dir(h, "m.nz", str_join(parts, ""))?;
+    let r = nz(h, d, "run m.nz");
+    let mut failure = "";
+    if r.code != 0 || r.stdout != "65536" {
+        failure = ran_show(r);
+    }
+    for backend in words("llvm cranelift") {
+        let b = nz(h, d, f"build --no-cache --backend {backend} m.nz -o prog");
+        let ran = ran_prog(h, d);
+        if str_len(failure) == 0 && b.code != 0 {
+            failure = f"{backend}: {b.stderr}";
+        } else if str_len(failure) == 0 && text_trim(ran.stdout) != "65536" {
+            failure = f"{backend}: {ran_show(ran)}";
+        }
+    }
+    let ir = nz(h, d, "build --no-cache --emit-ir m.nz -o ir");
+    let mut longest = 0;
+    match dir_list(io, d) {
+        Result.Ok(value: names) => {
+            for n in names {
+                if text_ends_with(n, ".ll") {
+                    for line in text_lines(read_text(h, f"{d}/{n}")?) {
+                        if text_starts_with(line, "define ") && str_len(line) > longest {
+                            longest = str_len(line);
+                        }
+                    }
+                }
+            }
+            0
+        },
+        Result.Err(error: e) => 0,
+    };
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)?;
+    check_that(ir.code == 0, ir.stderr)?;
+    check_that(longest > 0 && longest < 1024, f"a define line of {longest} bytes")
+}
+
+@test
+fn a_failure_inside_an_instance_names_the_generic_definitions_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "fn pick[T](xs: Vec[T], i: Int) -> T {\n    vec_get(xs, i)\n}\nfn main() -> Int {\n    let xs = vec_new[Str]();\n    str_len(pick(xs, 3))\n}\n")?;
+    let interpreted = nz(h, d, "run m.nz");
+    let b = nz(h, d, "build m.nz -o prog");
+    let ran = ran_prog(h, d);
+    scratch_remove(h, d);
+    check_that(interpreted.code != 0, ran_show(interpreted))?;
+    check_that(text_contains(interpreted.stderr, "N0405"), interpreted.stderr)?;
+    check_that(text_contains(interpreted.stderr, "m.nz:2:5"), interpreted.stderr)?;
+    check_that(b.code == 0, b.stderr)?;
+    check_that(ran.code == 2, ran_show(ran))?;
+    check_that(text_contains(ran.stderr, "N0405"), ran.stderr)?;
+    check_that(text_contains(ran.stderr, "m.nz:2:5"), ran.stderr)
+}
+
+@test
+fn a_generic_program_behaves_the_same_at_both_optimisation_levels(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "enum Maybe[T] { None, Some(value: T), }\nfn or[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }\nfn main() -> Int {\n    let xs = vec_new[Maybe[Int]]();\n    let mut i = 0;\n    while i < 10 {\n        if i % 2 == 0 { vec_push(xs, Maybe[Int].Some(value: i)); } else { vec_push(xs, Maybe[Int].None()); }\n        i = i + 1;\n    }\n    let mut total = 0;\n    let mut k = 0;\n    while k < vec_len(xs) { total = total + or(vec_get(xs, k), 100); k = k + 1; }\n    total\n}\n")?;
+    let mut failure = "";
+    for level in words("0 2") {
+        let b = nz(h, d, f"build m.nz -o prog --opt-level {level}");
+        let ran = ran_prog(h, d);
+        if str_len(failure) == 0 && b.code != 0 {
+            failure = b.stderr;
+        } else if str_len(failure) == 0 && text_trim(ran.stdout) != "520" {
+            failure = f"-O{level}: {ran_show(ran)}";
+        }
+    }
+    scratch_remove(h, d);
+    check_that(str_len(failure) == 0, failure)
+}
+
+@test
+fn a_call_carries_the_types_its_callee_is_declared_with(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "enum Maybe[T] { Some(value: T), None, }\nfn some[T](x: T) -> Maybe[T] { Maybe[T].Some(value: x) }\nfn or_else[T](m: Maybe[T], d: T) -> T { match m { Maybe.None() => d, Maybe.Some(value: v) => v, } }\nfn main() -> Int { str_len(or_else(some(\"abc\"), \"none\")) }\n")?;
+    let b = nz(h, d, "build m.nz -o prog");
+    let ran = ran_prog(h, d);
+    scratch_remove(h, d);
+    check_that(b.code == 0, b.stderr)?;
+    check_that(text_trim(ran.stdout) == "3", ran_show(ran))
+}
+
+@test
+fn two_instances_that_differ_only_in_a_later_argument_are_two_functions(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "m.nz", "fn second[A, B](a: A, b: B) -> B { b }\nfn main() -> Int {\n    let s = second(1, \"four\");\n    if second(2, true) { str_len(s) } else { 0 }\n}\n")?;
+    let b = nz(h, d, "build m.nz -o prog --emit-ir");
+    let ran = ran_prog(h, d);
+    scratch_remove(h, d);
+    check_that(b.code == 0, b.stderr)?;
+    check_that(text_trim(ran.stdout) == "4", ran_show(ran))
+}

@@ -30,13 +30,17 @@ pub fn nazm(h: Caps, dir: Str, args: Strs) -> Ran ! { io, spawn } {
 /// An executable under the address-space ceiling `bounded_exe` sets: 512 MiB, by `ulimit -v`,
 /// which macOS treats as advice and Linux enforces.
 pub fn bounded_exe(h: Caps, exe: Str, dir: Str, env: Strs) -> Ran ! { io, spawn } {
-    let kb = 524288;
-    let script = f"if [ \"$(uname -s)\" = Linux ]; then\n    ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS\n' >&2; exit 97; }}\n    got=$(ulimit -v)\n    if [ \"$got\" != {kb} ]; then\n        printf 'bounded_exe: RLIMIT_AS reads %s, expected {kb}\n' \"$got\" >&2\n        exit 97\n    fi\nelse\n    ulimit -v {kb} 2>/dev/null || true\nfi\nexec \"$0\" \"$@\"";
     let args = strs_new();
     strs_push(args, "-c");
-    strs_push(args, script);
+    strs_push(args, bounded_script());
     strs_push(args, exe);
     run(h, "sh", args, dir, env)
+}
+
+/// The `sh -c` script `bounded_exe` runs its executable under, `$0` the executable.
+pub fn bounded_script() -> Str ! {} {
+    let kb = 524288;
+    f"if [ \"$(uname -s)\" = Linux ]; then\n    ulimit -v {kb} || {{ printf 'bounded_exe: cannot set RLIMIT_AS\n' >&2; exit 97; }}\n    got=$(ulimit -v)\n    if [ \"$got\" != {kb} ]; then\n        printf 'bounded_exe: RLIMIT_AS reads %s, expected {kb}\n' \"$got\" >&2\n        exit 97\n    fi\nelse\n    ulimit -v {kb} 2>/dev/null || true\nfi\nexec \"$0\" \"$@\""
 }
 
 /// The `nazm-memory:` line of a run's standard error, or `""`.
@@ -111,6 +115,17 @@ fn live_part(line: Str, kind: Str) -> Str ! {} {
         }
     }
     if strs_len(fields) > 2 { strs_get(fields, 2) } else { "" }
+}
+
+/// Sequences, strings, channels and closures each reclaimed in a memory line — the third word
+/// after each kind's name is `live=0` — as `agrees_on` checks it.
+pub fn kinds_reclaimed(line: Str) -> Bool ! {} {
+    for kind in words("sequences strings channels closures") {
+        if live_part(line, kind) != "live=0" {
+            return false;
+        }
+    }
+    true
 }
 
 /// Every implementation prints `expected`, exits with `code`, writes the same memory report and
