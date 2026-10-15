@@ -1,0 +1,46 @@
+// `nazm repo` against the real binary: the repository map and task contexts of this repository,
+// their channels and exit statuses. N33. Ported from `crates/nazm-cli/tests/repository.rs` (R7);
+// `the_map_and_every_answer_are_one_object_on_stdout_with_their_exit_status` compares the map
+// with `nazm_repo::map`, a library entry the CLI does not offer, and stays Rust
+// (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+/// The one object on stdout, with nothing on stderr: the document and the run.
+fn json_of(h: Caps, args: Strs) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let r = nazm(h, "", args);
+    let shown = str_join(args, " ");
+    check_that(strs_len(text_lines(r.stdout)) == 1, f"one line: {shown}")?;
+    check_that(r.stderr == "", f"nothing on stderr: {shown}")?;
+    jparse(r.stdout)
+}
+
+@test
+fn without_json_the_same_object_is_indented(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let seed = "doc:spec:returns";
+    let compact = json_of(h, words(f"repo --task --seed {seed} --intent understand --json"))?;
+    let r = nazm(h, "", words(f"repo --task --seed {seed} --intent understand"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(strs_len(text_lines(r.stdout)) > 1, r.stdout)?;
+    let indented = jparse(r.stdout)?;
+    check_that(jv(indented, "") == jv(compact, ""), "the indented object is the compact one")?;
+    ok()
+}
+
+@test
+fn an_ambiguous_request_is_refused_by_the_parser(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let cases = "repo|repo --map --task|repo --map --seed package:nazm-docs|repo --map --intent edit|repo --map --state x|repo --map --max-entities 3|repo --task --intent guess --seed package:nazm-docs|repo --task --seed package:nazm-docs --max-entities -1";
+    for args in text_split(cases, "|") {
+        let r = nazm(h, "", words(args));
+        check_that(r.code == 5, f"{args}: {ran_show(r)}")?;
+        check_that(r.stdout == "", args)?;
+    }
+    ok()
+}

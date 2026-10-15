@@ -1,0 +1,335 @@
+// Claims the documentation makes that the build can check: the README's command table against
+// `nazm --help`, every schema file documented, every example run by a test, the documented target,
+// the support page against the compiler's own matrix, the spec's 1.0 classification and the
+// stability contract. Ported from `crates/nazm-cli/tests/docs.rs` (R7).
+//
+// Three Rust tests read constants from the compiler's crates (`nazm_lir::TARGET_NOTE`,
+// `backend::SUPPORT` and `NON_GOALS`, `SEMANTIC_EPOCH`, `RUNTIME_ABI_REVISION`, the interface
+// `SCHEMA`); the binary prints every one of them — `nazm capabilities --json`'s `native_target`,
+// `nazm inspect`'s `toolchain` — so the port reads them there.
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn read(h: Caps, path: Str) -> Result[Str, Str] ! { io } {
+    read_text(h, f"{repo_root(h)}/{path}")
+}
+
+/// The text with every run of whitespace collapsed to one space.
+fn flowed(text: Str) -> Str ! {} {
+    str_join(split_whitespace(text), " ")
+}
+
+/// The names in the directory `rel` of the tree ending in `ext`, sorted.
+fn names_ending(h: Caps, rel: Str, ext: Str) -> Result[Strs, Str] ! { io } {
+    let io = h.io;
+    let all = match dir_list(io, f"{repo_root(h)}/{rel}") {
+        Result.Ok(value: xs) => xs,
+        Result.Err(error: e) => { return Result[Strs, Str].Err(error: f"{rel}/: {e.message}"); },
+    };
+    let out = strs_new();
+    for n in all {
+        if text_ends_with(n, ext) {
+            strs_push(out, n);
+        }
+    }
+    Result[Strs, Str].Ok(value: strs_sort(out))
+}
+
+/// `nazm inspect`'s document for a one-line program: the toolchain's identities and tables.
+fn inspected(h: Caps) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let d = prog_dir(h, "m.nz", "fn main() -> Int { 0 }\n")?;
+    let r = nazm(h, d, words("inspect m.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    jparse(r.stdout)
+}
+
+@test
+fn the_readme_lists_exactly_the_commands_the_binary_has(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let help = nazm(h, "", words("--help")).stdout;
+    // clap's `Commands:` block, one per line, name first.
+    let real = strs_new();
+    let mut inside = false;
+    let mut done = false;
+    for line in text_lines(help) {
+        if !done {
+            if text_starts_with(line, "Commands:") {
+                inside = true;
+            } else if inside {
+                if str_len(text_trim(line)) == 0 {
+                    done = true;
+                } else {
+                    let ws = split_whitespace(line);
+                    // `help` is clap's, not this compiler's.
+                    if strs_len(ws) > 0 && strs_get(ws, 0) != "help" && !strs_has(real, strs_get(ws, 0)) {
+                        strs_push(real, strs_get(ws, 0));
+                    }
+                }
+            }
+        }
+    }
+    check_that(strs_len(real) >= 5, f"only found {str_join(real, ", ")} in --help")?;
+    // The README's command table: rows beginning `| \`nazm NAME`.
+    let readme = read(h, "README.md")?;
+    let documented = strs_new();
+    for line in text_lines(readme) {
+        match strip_prefix(text_trim(line), "| `nazm ") {
+            Option.Some(value: rest) => {
+                let ws = split_whitespace(rest);
+                if strs_len(ws) > 0 {
+                    let name = trim_end_matches(strs_get(ws, 0), "`");
+                    if !strs_has(documented, name) {
+                        strs_push(documented, name);
+                    }
+                }
+            },
+            Option.None() => {},
+        };
+    }
+    let d = str_join(strs_sort(documented), ", ");
+    let r = str_join(strs_sort(real), ", ");
+    check_that(d == r, f"README.md's command table and `nazm --help` disagree.\n  documented: {d}\n  real:       {r}")
+}
+
+@test
+fn every_schema_file_is_documented_and_every_documented_schema_exists(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let files = names_ending(h, "schema", ".json")?;
+    check_that(strs_len(files) >= 4, f"only {str_join(files, ", ")}")?;
+    let doc = read(h, "docs/diagnostics.md")?;
+    for f in files {
+        // `nazm.fix-1.json` is documented under its identifier, `nazm.fix/1`.
+        let stem = trim_end_matches(f, ".json");
+        let dash = rfind(stem, "-");
+        let identifier = if dash >= 0 { f"{str_slice(stem, 0, dash)}/{str_slice(stem, dash + 1, str_len(stem))}" } else { "" };
+        check_that(text_contains(doc, identifier), f"schema/{f} exists and `{identifier}` is not mentioned in docs/diagnostics.md")?;
+    }
+    // And each schema agrees with itself: the title is the identifier it stamps on every object.
+    for f in files {
+        let value = jparse(read(h, f"schema/{f}")?)?;
+        check_that(jv(value, "title") == jv(value, "properties/schema/const"), f"schema/{f}: the title and the `schema` constant differ")?;
+    }
+    ok()
+}
+
+@test
+fn every_example_is_checked_by_a_test(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let present = names_ending(h, "examples", ".nz")?;
+    check_that(strs_len(present) >= 4, f"only {str_join(present, ", ")}")?;
+    let build = read(h, "crates/nazm-cli/tests/build.rs")?;
+    let missing = strs_new();
+    for f in present {
+        if !text_contains(build, f"examples/{f}") {
+            strs_push(missing, f);
+        }
+    }
+    check_that(strs_len(missing) == 0, f"these examples are run by nothing: {str_join(missing, ", ")}. Add each to the list in          crates/nazm-cli/tests/build.rs with the value it should produce.")
+}
+
+@test
+fn the_documented_target_is_the_one_the_emitter_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // One sentence, in one place, quoted rather than paraphrased wherever it appears.
+    let inv = jparse(nazm(h, "", words("capabilities --json")).stdout)?;
+    let note = jstr(inv, "native_target");
+    let target = "aarch64-apple-darwin";
+    check_that(text_contains(note, target), f"the emitter's note changed: {note}")?;
+    for file in words("README.md docs/releases/4fb1554.md") {
+        let text = flowed(read(h, file)?);
+        check_that(text_contains(text, target), f"{file} does not name the only verified target")?;
+        check_that(text_contains(text, "unverified rather than unsupported"), f"{file} names the target without the qualification the emitter carries")?;
+    }
+    ok()
+}
+
+/// What `docs/support.md` writes for a status the compiler names: a QEMU run is
+/// `emulator-verified`, a kind of run-verified.
+fn shown_status(status: Str, row: Str) -> Str ! {} {
+    if status == "run-verified" && text_contains(row, "QEMU") { "emulator-verified" } else { status }
+}
+
+@test
+fn the_support_page_states_the_compilers_own_matrix(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let page = read(h, "docs/support.md")?;
+    let inv = inspected(h)?;
+    let n = jlen(inv, "toolchain/support");
+    let mut seen = 0;
+    for line in text_lines(page) {
+        let trimmed = trim_end_matches(trim_start_matches(text_trim(line), "|"), "|");
+        let cells = strs_new();
+        for c in split(trimmed, " | ") {
+            strs_push(cells, text_trim(c));
+        }
+        let first = if strs_len(cells) > 0 { strs_get(cells, 0) } else { "" };
+        if str_len(first) >= 2 && text_starts_with(first, "`") && text_ends_with(first, "`") {
+            let triple = str_slice(first, 1, str_len(first) - 1);
+            let mut at = 0 - 1;
+            let mut i = 0;
+            while i < n {
+                if at < 0 && jstr(inv, f"toolchain/support/{i}/triple") == triple {
+                    at = i;
+                }
+                i = i + 1;
+            }
+            if at >= 0 {
+                check_that(strs_len(cells) == 5, f"docs/support.md: the row for {triple} is malformed: {line}")?;
+                let llvm = jstr(inv, f"toolchain/support/{at}/llvm/status");
+                let clif = jstr(inv, f"toolchain/support/{at}/cranelift/status");
+                check_that(shown_status(llvm, line) == strs_get(cells, 1), f"docs/support.md says {triple} is `{strs_get(cells, 1)}` under LLVM; the compiler says {llvm}")?;
+                check_that(shown_status(clif, line) == strs_get(cells, 2), f"docs/support.md says {triple} is `{strs_get(cells, 2)}` under Cranelift; the compiler says {clif}")?;
+                check_that(strs_get(cells, 4) == jstr(inv, f"toolchain/support/{at}/debugger"), f"docs/support.md: the debugger cell for {triple}")?;
+                seen = seen + 1;
+            }
+        }
+    }
+    check_that(seen == n, "docs/support.md must have one row per target the compiler accepts")?;
+    let mut k = 0;
+    while k < jlen(inv, "toolchain/non_goals") {
+        let what = jstr(inv, f"toolchain/non_goals/{k}/what");
+        let why = jstr(inv, f"toolchain/non_goals/{k}/why");
+        check_that(text_contains(page, f"| {what} | {why} |"), f"docs/support.md does not state the non-goal `{what}` as the compiler does")?;
+        k = k + 1;
+    }
+    ok()
+}
+
+/// Every anchored section of `docs/spec.md` is classified for 1.0, once, in one of the classes,
+/// and the table names no section that does not exist (Gate 1).
+@test
+fn every_spec_section_is_classified_for_1_0(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let spec = read(h, "docs/spec.md")?;
+    let ids = strs_new();
+    for l in text_lines(spec) {
+        match strip_prefix(text_trim(l), "<!-- id:") {
+            Option.Some(value: r) => match strip_suffix(r, "-->") {
+                Option.Some(value: id) => {
+                    let id2 = text_trim(id);
+                    if !strs_has(ids, id2) {
+                        strs_push(ids, id2);
+                    }
+                },
+                Option.None() => {},
+            },
+            Option.None() => {},
+        };
+    }
+    check_that(strs_len(ids) > 60, f"only {strs_len(ids)} anchors")?;
+    let parts = split(spec, "## Stability classification for 1.0");
+    check_that(strs_len(parts) > 1, "the classification section")?;
+    let table = strs_get(split(strs_get(parts, 1), "\n## "), 0);
+    let classes = text_split("STABLE 1.0|COMPATIBLE EXTENSION POINT|EXPERIMENTAL|RESEARCH/OPEN|NON-GOAL|HISTORICAL|DEBUG", "|");
+    let classified = strs_new();
+    let mut open_family = false;
+    for row in text_lines(table) {
+        if text_starts_with(row, "| `") {
+            let cells = strs_new();
+            for c in split(row, "|") {
+                strs_push(cells, text_trim(c));
+            }
+            let section = strs_get(cells, 1);
+            let class = strs_get(cells, 2);
+            for c in split(class, " / ") {
+                check_that(strs_has(classes, c), f"`{section}` has class `{class}`")?;
+            }
+            if text_contains(section, "every `open-*`") {
+                open_family = true;
+            }
+            let ticks = split(section, "`");
+            let id = if strs_len(ticks) > 1 { strs_get(ticks, 1) } else { "" };
+            check_that(strs_has(ids, id), f"the table classifies `{id}`, which is no section")?;
+            check_that(!strs_has(classified, id), f"`{id}` is classified twice")?;
+            strs_push(classified, id);
+        }
+    }
+    for id in ids {
+        let covered = strs_has(classified, id) || (open_family && text_starts_with(id, "open-"));
+        check_that(covered, f"spec section `{id}` has no 1.0 classification")?;
+    }
+    ok()
+}
+
+/// `docs/stability.md` puts every command of this build in exactly one class, and classifies
+/// every schema `schema/` holds (Gate 1).
+@test
+fn the_stability_contract_classifies_every_command_and_schema_file(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let inv = jparse(nazm(h, "", words("capabilities --json")).stdout)?;
+    let stability = read(h, "docs/stability.md")?;
+    let after = split(stability, "### The command line");
+    check_that(strs_len(after) > 1, "the command-line section")?;
+    let rows = strs_new();
+    for l in text_lines(strs_get(after, 1)) {
+        if text_starts_with(l, "| **Stable public**") || text_starts_with(l, "| **Experimental**") || text_starts_with(l, "| **Debug/internal**") {
+            strs_push(rows, l);
+        }
+    }
+    check_that(strs_len(rows) == 3, str_join(rows, "\n"))?;
+    let mut i = 0;
+    while i < jlen(inv, "commands") {
+        let c = jstr(inv, f"commands/{i}");
+        let mut n = 0;
+        for r in rows {
+            if text_contains(r, f"`{c}`") {
+                n = n + 1;
+            }
+        }
+        check_that(n == 1, f"`nazm {c}` is in {n} classes of docs/stability.md")?;
+        i = i + 1;
+    }
+    let ms = split(stability, "### Machine-readable output");
+    check_that(strs_len(ms) > 1, "the schema section")?;
+    let schemas = strs_get(ms, 1);
+    for file in names_ending(h, "schema", ".json")? {
+        // `nazm.api-doc-2.json` is `nazm.api-doc/2`.
+        let stem = trim_end_matches(file, ".json");
+        let dash = rfind(stem, "-");
+        check_that(dash >= 0, file)?;
+        let id = f"`{str_slice(stem, 0, dash)}/{str_slice(stem, dash + 1, str_len(stem))}`";
+        check_that(text_contains(schemas, id), f"{id} ({file}) is not classified in docs/stability.md")?;
+    }
+    ok()
+}
+
+@test
+fn the_stability_contract_states_the_current_identities(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // M1: `docs/stability.md` restates the identities a build carries, held to the binary's own.
+    let text = read(h, "docs/stability.md")?;
+    let inv = inspected(h)?;
+    let rows = "Semantic epoch|Runtime ABI|Interface schema|Toolchain version";
+    let wants = strs_new();
+    strs_push(wants, f"**{jint(inv, "toolchain/semantic_epoch")}**");
+    strs_push(wants, f"**{jint(inv, "toolchain/runtime_abi")}**");
+    strs_push(wants, f"**`{jstr(inv, "toolchain/interface")}`**");
+    strs_push(wants, f"**{jstr(inv, "toolchain/compiler")}**");
+    let mut k = 0;
+    for name in text_split(rows, "|") {
+        let mut row = "";
+        for l in text_lines(text) {
+            if row == "" && text_starts_with(l, f"| **{name}** |") {
+                row = l;
+            }
+        }
+        check_that(row != "", f"docs/stability.md has no `{name}` row")?;
+        // The third cell: what the identity is now.
+        let cells = split(row, "|");
+        let current = if strs_len(cells) > 3 { text_trim(strs_get(cells, 3)) } else { "" };
+        check_that(current == strs_get(wants, k), f"docs/stability.md's {name} row is stale: {row}")?;
+        k = k + 1;
+    }
+    ok()
+}

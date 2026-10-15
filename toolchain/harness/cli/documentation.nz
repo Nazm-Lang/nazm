@@ -1,0 +1,203 @@
+// `nazm docs` against the real binary: the index and a section of Nazm's own documentation, their
+// channels and exit statuses, and the same bytes from any copy of the repository. N32. Ported from
+// `crates/nazm-cli/tests/documentation.rs` (R7).
+//
+// The Rust test reads the corpus's manifest (`nazm_docs::CORPUS`) and the root the binary was
+// built from (`nazm_docs::default_root`); the port reads the manifest from the binary's own index
+// (`nazm docs --index --json` lists every document and its path) and the root from
+// `$NAZM_HARNESS_ROOT`, the tree the binary under test is built from.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// The one object on stdout, with nothing on stderr: the document and the exit status.
+fn json_of(h: Caps, args: Strs) -> Result[JsonDoc, Str] ! { io, spawn } {
+    let r = json_run(h, args)?;
+    jparse(r.stdout)
+}
+
+/// `json_of`'s run, for its exit status.
+fn json_run(h: Caps, args: Strs) -> Result[Ran, Str] ! { io, spawn } {
+    let r = nazm(h, "", args);
+    let shown = str_join(args, " ");
+    check_that(strs_len(text_lines(r.stdout)) == 1, f"one line: {shown}: {ran_show(r)}")?;
+    check_that(r.stderr == "", f"nothing on stderr: {shown}")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// The path of every document of the corpus, as the binary's index lists them.
+fn corpus_paths(h: Caps) -> Result[Strs, Str] ! { io, spawn } {
+    let index = json_of(h, words("docs --index --json"))?;
+    let out = strs_new();
+    let mut i = 0;
+    while i < jlen(index, "documents") {
+        strs_push(out, jstr(index, f"documents/{i}/path"));
+        i = i + 1;
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+/// A copy of the corpus's documents, and nothing else, under a fresh directory.
+fn copy(h: Caps) -> Result[Str, Str] ! { io, spawn } {
+    let dir = scratch_new(h);
+    check_that(str_len(dir) > 0, "no scratch directory")?;
+    let root = repo_root(h);
+    for path in corpus_paths(h)? {
+        let text = read_raw(h, f"{root}/{path}")?;
+        scratch_write(h, dir, path, text)?;
+    }
+    Result[Str, Str].Ok(value: dir)
+}
+
+/// `args` and then `more`, as one list.
+fn plus(args: Str, more: Str) -> Strs ! {} {
+    let a = words(args);
+    for m in words(more) {
+        strs_push(a, m);
+    }
+    a
+}
+
+@test
+fn the_index_and_a_section_are_one_object_each_on_stdout(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = json_run(h, words("docs --index --json"))?;
+    let index = jparse(r.stdout)?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(jstr(index, "schema") == "nazm.docs-index/1", jv(index, "schema"))?;
+    check_that(jstr(index, "status") == "available", jv(index, "status"))?;
+    let state = jstr(index, "state");
+    // No body in an index.
+    check_that(!text_contains(jv(index, ""), "\"body\""), "an index has no body")?;
+    let r2 = json_run(h, words(f"docs --section goals:G78 --state {state} --json"))?;
+    let s = jparse(r2.stdout)?;
+    check_that(r2.code == 0, ran_show(r2))?;
+    check_that(jstr(s, "schema") == "nazm.docs-section/1", jv(s, "schema"))?;
+    check_that(jstr(s, "authority") == "goal", jv(s, "authority"))?;
+    check_that(text_starts_with(jstr(s, "body"), "## G78 — Documentation Token Efficiency\n"), jv(s, "body"))?;
+    // Refusals are objects too, on stdout, with exit 1.
+    let zeros = text_repeat("0", 64);
+    let cases = f"docs --section goals:G999 --json=not_found|docs --section ../README.md --json=not_found|docs --section /etc/passwd --json=not_found|docs --section goals:G78 --state {zeros} --json=stale_state|docs --index --document nowhere --json=not_found";
+    for case in text_split(cases, "|") {
+        let parts = text_split(case, "=");
+        let args = strs_get(parts, 0);
+        let status = strs_get(parts, 1);
+        let r = json_run(h, words(args))?;
+        let v = jparse(r.stdout)?;
+        check_that(jstr(v, "status") == status, f"{args}: {jv(v, "status")}")?;
+        check_that(r.code == 1, args)?;
+    }
+    ok()
+}
+
+@test
+fn a_section_for_a_person_is_its_text_exactly(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let s = json_of(h, words("docs --section spec:generics --json"))?;
+    let plain = nazm(h, "", words("docs --section spec:generics"));
+    check_that(plain.code == 0, ran_show(plain))?;
+    check_that(plain.stdout == jstr(s, "body"), "the plain section is the JSON one's body")?;
+    let file = read_text(h, f"{repo_root(h)}/docs/spec.md")?;
+    check_that(text_contains(file, plain.stdout), "the section is the file's text")?;
+    // The index for a person: one id and title per section.
+    let index = json_of(h, words("docs --index --json"))?;
+    let listed = nazm(h, "", words("docs --index"));
+    let ls = text_lines(listed.stdout);
+    check_that(strs_len(ls) == jint(index, "corpus/sections"), f"{strs_len(ls)} lines, {jint(index, "corpus/sections")} sections")?;
+    check_that(strs_has(ls, "goals:G78\tG78 — Documentation Token Efficiency"), listed.stdout)?;
+    ok()
+}
+
+@test
+fn one_documents_index_is_that_documents_sections(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let all = json_of(h, words("docs --index --json"))?;
+    let r = json_run(h, words("docs --index --document spec --json"))?;
+    let spec = jparse(r.stdout)?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(jlen(spec, "documents") == 1, jv(spec, "documents"))?;
+    check_that(jstr(spec, "documents/0/authority") == "normative", jv(spec, "documents/0/authority"))?;
+    check_that(jv(spec, "state") == jv(all, "state"), "one state")?;
+    let mut whole = "";
+    let mut i = 0;
+    while i < jlen(all, "documents") {
+        if jstr(all, f"documents/{i}/id") == "spec" && whole == "" {
+            whole = jv(all, f"documents/{i}");
+        }
+        i = i + 1;
+    }
+    check_that(whole != "", "the whole index has spec")?;
+    check_that(jv(spec, "documents/0") == whole, "spec's own index is its entry in the whole")?;
+    ok()
+}
+
+@test
+fn any_copy_of_the_same_documents_gives_the_same_bytes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let one = copy(h)?;
+    let two = copy(h)?;
+    for args in text_split("docs --index --json|docs --section architecture:7.33 --json|docs --section grammar:expression --json", "|") {
+        let here = nazm(h, "", words(args)).stdout;
+        let a = nazm(h, "", plus(args, f"--root {one}")).stdout;
+        let b = nazm(h, "", plus(args, f"--root {two}")).stdout;
+        check_that(a == b, args)?;
+        check_that(a == here, args)?;
+        check_that(!text_contains(a, one), args)?;
+    }
+    scratch_remove(h, one);
+    scratch_remove(h, two);
+    ok()
+}
+
+@test
+fn a_changed_document_is_a_new_state_and_a_broken_corpus_is_unavailable(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let root = copy(h)?;
+    let before = json_of(h, plus("docs --index --json --root", root))?;
+    let state = jstr(before, "state");
+    let text = read_text(h, f"{root}/docs/spec.md")?;
+    let reworded = "### `while` is a statement, and there is still no loop value\n";
+    scratch_write(h, root, "docs/spec.md", text_replace(text, "### `while` is a statement, and there is no loop value\n", reworded))?;
+    let r = json_run(h, plus(f"docs --section spec:while --state {state} --json --root", root))?;
+    let s = jparse(r.stdout)?;
+    check_that(jstr(s, "status") == "stale_state" && r.code == 1, ran_show(r))?;
+    // Without a state, the current corpus answers: the anchored id survived the rewording.
+    let s2 = json_of(h, plus("docs --section spec:while --json --root", root))?;
+    check_that(jstr(s2, "title") == "`while` is a statement, and there is still no loop value", jv(s2, "title"))?;
+    // Rewording the heading a link names breaks the link, and the corpus says so.
+    scratch_write(h, root, "docs/spec.md", text_replace(text, "### `return`\n", "### `return` again\n"))?;
+    let r3 = json_run(h, plus("docs --index --json --root", root))?;
+    let broken = jparse(r3.stdout)?;
+    check_that(jstr(broken, "status") == "unavailable" && r3.code == 1, ran_show(r3))?;
+    check_that(jstr(broken, "problems/0/kind") == "broken_link", jv(broken, "problems/0/kind"))?;
+    // A directory with no documentation.
+    let empty = scratch_new(h);
+    let i = json_of(h, plus("docs --index --json --root", empty))?;
+    check_that(jstr(i, "status") == "unavailable", jv(i, "status"))?;
+    let corpus = strs_len(corpus_paths(h)?);
+    check_that(jlen(i, "problems") == corpus, f"{jlen(i, "problems")} problems, {corpus} documents")?;
+    let mut k = 0;
+    while k < jlen(i, "problems") {
+        check_that(jstr(i, f"problems/{k}/kind") == "missing_document", jv(i, f"problems/{k}"))?;
+        k = k + 1;
+    }
+    scratch_remove(h, root);
+    scratch_remove(h, empty);
+    ok()
+}
+
+@test
+fn an_ambiguous_request_is_refused_by_the_parser(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for args in text_split("docs|docs --json|docs --index --section spec|docs --index --state x|docs --section spec --document spec|docs --section spec --path docs/spec.md", "|") {
+        let r = nazm(h, "", words(args));
+        check_that(r.code == 5, f"{args}: {ran_show(r)}")?;
+    }
+    ok()
+}
