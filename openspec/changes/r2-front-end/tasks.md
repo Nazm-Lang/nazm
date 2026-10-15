@@ -209,6 +209,16 @@
       argument) and its step in the chain. `inputs/check/foreign.nz`,
       `inputs/check/foreign-flows.nz`. `run.sh check`: 2,759 agree, 37 differ; the checker
       carries 2,717, all agree (2,761 and 2,719 with the new cases)
+- [ ] 3.1za Constant tables (L8, `constants::evaluate_aggregates`): constants of record, enum,
+      tuple and array types — their types resolved in a second phase (one error where one does
+      not resolve), held to being values (N0622), each built of constant parts by its type
+      (`agg`: constructions and variants by the type's own name, fields each once or all by
+      position, tuples, arrays and `[v; n]`, other constants; N0300, N0622, N0003, N0623), a
+      cycle refused (N0622), a scalar constant naming one refused (N0622); exported and imported
+      by name and as `alias::NAME`; a public one's type naming a private one (N0337); a use in a
+      body its type. `inputs/check/const-tables.nz`, `inputs/modules/const-tables.nz`.
+      `run.sh check`: 2,771 agree, 27 differ; the checker carries 2,732, all agree (2,774 and
+      2,735 with the new cases)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
