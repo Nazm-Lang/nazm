@@ -35,8 +35,9 @@ objects with `--objects` elsewhere; an unknown triple is refused rather than bui
 A native program can call C. `extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";` declares a
 C function by its signature and its symbol, and `nazm build --link add.o` hands the object that
 defines it to the linker. Only `Int` (`int64_t`) and `Bool` (`bool`) cross; every call needs a
-`ForeignCap` in scope and is the effect `foreign`; and `nazm run` refuses such a program rather
-than pretend to run C. See `docs/spec.md`, *Foreign functions*.
+`ForeignCap` in scope and is the effect `foreign`. `nazm run` compiles, so it calls C from the
+system's libraries (since R1.5, D11); `nazm run --interpret` refuses such a program rather than
+pretend to run C. See `docs/spec.md`, *Foreign functions*.
 
 ### Writing a program the way v1 prefers
 
@@ -899,7 +900,7 @@ its C symbol, with no body. `extern` is not a keyword — it is recognised only 
 declaration starts, before a string — so it is an IDENT here, and the string before `fn`
 is the ABI, which must be `"C"`. Only `Int` and `Bool` cross; no type parameters and no
 written effect set: calling one is always the effect `foreign`, and needs a `ForeignCap`.
-`nazm run` refuses a program that calls one; `nazm build --link FILE` links it. See
+`nazm run --interpret` refuses a program that calls one; `nazm run` calls one from the system's libraries and `nazm build --link FILE` links any. See
 `docs/spec.md`, *Foreign functions*.
 
 ```nazm
