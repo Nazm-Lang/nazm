@@ -2574,7 +2574,16 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
 // `Atomic`'s, its cell.
 fn co_const_use(lo: Lo, u: Int, name: Str, span: Int) -> Str {
     let c = lo.c;
-    if ck_const_agg(c, u) { return co_stopped(lo, "a constant of a record, enum, tuple or array type"); }
+    // A record, enum, tuple or array (L8): its value built, every part at the name (`const_value`).
+    if ck_const_agg(c, u) {
+        let toks = co_words(ck_const_text(c, u));
+        let pos = ints_new();
+        ints_push(pos, 0);
+        let v = co_agg_value(lo, toks, pos, span);
+        if co_halted(lo) { return ""; }
+        if ints_get(pos, 0) != strs_len(toks) { return co_stopped(lo, "a constant whose value was not computed whole"); }
+        return v;
+    }
     let ty = ck_const_ty(c, u);
     if ck_const_cell(c, u) {
         let key = str_concat(str_concat(fx_module_identity(lo.f, co_g(lo, co_s_module())), "::static "), name);
@@ -2592,8 +2601,136 @@ fn co_const_use(lo: Lo, u: Int, name: Str, span: Int) -> Str {
         id = co_constant(lo, "Str", co_str_value(v));
     }
     if class == "integer" { id = co_constant(lo, co_durable(lo, ty), json_str(ck_const_text(c, u))); }
+    if class == "float" { id = co_float_constant(lo, ty, ck_const_text(c, u)); }
     if id < 0 { return co_stopped(lo, "a constant of a type not carried yet"); }
     co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, span)
+}
+
+// A float constant of type `ty` whose text is `text` (a literal, perhaps negated), or -1 where
+// none was kept: its value printed as `numeric::to_str` prints it.
+fn co_float_constant(lo: Lo, ty: Int, text: Str) -> Int {
+    if text == "" { return 0 - 1; }
+    let name = co_durable(lo, ty);
+    let single = name == "Float32";
+    let bits = cdg_float_bits(text, single);
+    if bits < 0 { return 0 - 1; }
+    co_constant(lo, name, json_str(cdg_float_text(cdg_float_negative(text), bits, single)))
+}
+
+// `s` split at its spaces.
+fn co_words(s: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i <= str_len(s) {
+        if i == str_len(s) || str_byte(s, i) == 32 {
+            if i > from { strs_push(out, str_slice(s, from, i)); }
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The numbers in a token after its letter, split at `:`.
+fn co_token_ints(tok: Str) -> Ints {
+    let out = ints_new();
+    let mut from = 1;
+    let mut i = 1;
+    while i <= str_len(tok) {
+        if i == str_len(tok) || str_byte(tok, i) == 58 {
+            ints_push(out, int_from_digits(str_slice(tok, from, i)));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// The bytes `hex` spells.
+fn co_unhex(hex: Str) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i + 1 < str_len(hex) {
+        let hi = co_hex_digit(str_byte(hex, i));
+        let lo = co_hex_digit(str_byte(hex, i + 1));
+        strs_push(out, str_from_byte(hi * 16 + lo));
+        i = i + 2;
+    }
+    str_join(out, "")
+}
+fn co_hex_digit(b: Int) -> Int {
+    if b >= 97 { return b - 87; }
+    b - 48
+}
+
+// One part of an aggregate constant's value, from token `pos` on (`const_value`), at `span`.
+fn co_agg_value(lo: Lo, toks: Strs, pos: Ints, span: Int) -> Str {
+    let c = lo.c;
+    let p = ints_get(pos, 0);
+    if p >= strs_len(toks) { return co_stopped(lo, "a constant whose value was not computed whole"); }
+    let tok = strs_get(toks, p);
+    ints_set(pos, 0, p + 1);
+    let head = str_byte(tok, 0);
+    if head == 70 {
+        let colon = co_index_byte(tok, 58);
+        let ty = ck_kind_type(c, int_from_digits(str_slice(tok, 1, colon)));
+        let id = co_float_constant(lo, ty, str_slice(tok, colon + 1, str_len(tok)));
+        if id < 0 { return co_stopped(lo, "a float constant computed from more than a literal"); }
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, span);
+    }
+    if head == 83 {
+        let id = co_constant(lo, "Str", co_str_value(co_unhex(str_slice(tok, 1, str_len(tok)))));
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
+    }
+    if head == 78 {
+        let colon = co_index_byte(tok, 58);
+        let kind = int_from_digits(str_slice(tok, 1, colon));
+        let value = str_slice(tok, colon + 1, str_len(tok));
+        let ty = ck_kind_type(c, kind);
+        let class = ck_type_class(c, ty);
+        let mut id = 0 - 1;
+        if class == "int" { id = co_constant(lo, "Int", value); }
+        if class == "bool" {
+            if value == "1" { id = co_constant(lo, "Bool", "true"); } else { id = co_constant(lo, "Bool", "false"); }
+        }
+        if class == "integer" { id = co_constant(lo, co_durable(lo, ty), json_str(value)); }
+        if id < 0 { return co_stopped(lo, "a constant of a type not carried yet"); }
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, span);
+    }
+    let ns = co_token_ints(tok);
+    let ty = ints_get(ns, 0);
+    let n = ints_get(ns, ints_len(ns) - 1);
+    let items = strs_new();
+    let mut i = 0;
+    while i < n {
+        let v = co_agg_value(lo, toks, pos, span);
+        if head == 65 {
+            strs_push(items, v);
+        } else {
+            let mut name = "";
+            if head == 86 { name = ck_payload_name(c, ty, ints_get(ns, 1), i); } else { name = ck_record_field_name(c, ty, i); }
+            let o = strs_new();
+            strs_push(o, co_field_first("field", int_to_str(i)));
+            strs_push(o, co_field("name", json_str(name)));
+            strs_push(o, co_field("value", v));
+            strs_push(items, co_object(o));
+        }
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    if head == 65 { return co_node(lo, "array", co_field_first("elems", co_list(items)), ty, span); }
+    if head == 86 { return co_variant_value(lo, ty, ints_get(ns, 1), items, span); }
+    let members = strs_new();
+    strs_push(members, co_field_first("arity", int_to_str(n)));
+    strs_push(members, co_field("fields", co_list(items)));
+    co_node(lo, "record", str_join(members, ""), ty, span)
+}
+
+fn co_index_byte(s: Str, b: Int) -> Int {
+    let mut i = 0;
+    while i < str_len(s) && str_byte(s, i) != b { i = i + 1; }
+    i
 }
 
 // A numeric conversion (`conversion`): `convert` in its mode; `try_convert[T](x)` as

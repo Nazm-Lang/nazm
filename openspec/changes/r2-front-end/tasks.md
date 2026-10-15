@@ -476,6 +476,15 @@
         `run.sh core`: 3,095 agree, 0 differ; of 76,284 functions the lowering carries 75,769,
         all agree; the other parts 10,644, all agree; 1,562 whole documents, all the
         reference's bytes
+  - [x] Aggregate constants (`const_value`): a constant of a record, enum, tuple or array type
+        as the value it is built of, every part at the name — fields in declared order, a
+        `[v; n]` its element `n` times. sema.nz's evaluator now keeps that value (`parts`, one
+        token a part, as the constant's text, exported with it), and a float literal's text,
+        negated or not, so a `Float32` or `Float64` constant is its value printed as
+        `numeric::to_str` prints it. `run.sh`: core 3,095 agree, 0 differ; of 76,328 functions
+        the lowering carries 75,882, all agree; the other parts 10,644, all agree; 1,578 whole
+        documents, all the reference's bytes. check 3,093 agree, 2 differ (carried 3,089, all
+        agree); facts 3,089 agree, 6 differ (carried 3,089, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
