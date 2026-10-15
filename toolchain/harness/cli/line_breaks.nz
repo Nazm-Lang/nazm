@@ -137,7 +137,7 @@ fn the_formatter_lays_out_a_program_without_semicolons_and_keeps_it(io: IoCap, p
     let once = read_text(h, f"{d}/p.nz")?;
     let want = "fn main(out: OutCap) -> Int ! { io } {\n    let a = 1\n    let b = a +\n            2\n    if a > 0 { print(\"x\\n\") } else if b > 0 { print(\"y\\n\") }\n    b\n}\n";
     let again = nazm(h, d, words("fmt --check p.nz"));
-    let r = nazm(h, d, words("run p.nz"));
+    let r = nazm(h, d, words("run --interpret p.nz"));
     scratch_remove(h, d);
     if once != want {
         return Result[Int, Str].Err(error: f"fmt wrote:\n{once}\nexpected:\n{want}");

@@ -67,7 +67,7 @@ fn a_default_body_crosses_modules_to_an_impl_in_another(io: IoCap, p: ProcessCap
     let d = prog_dir(h, "t.nz", "pub trait Named {\n    fn name(self: Self) -> Str;\n    fn greet(self: Self) -> Str { str_concat(\"hi \", self.name()) }\n}\n")?;
     scratch_write(h, d, "p.nz", "use \"t.nz\";\npub struct P { x: Int, }\nimpl Named for P { fn name(self: P) -> Str { \"p\" } }\n")?;
     scratch_write(h, d, "main.nz", "use \"t.nz\";\nuse \"p.nz\";\nfn g[T: Named](x: T) -> Str { x.greet() }\nfn main(out: OutCap) -> Int ! {io} { let p = P(x: 1); print(str_concat(p.greet(), g(p))); 0 }\n")?;
-    let r = nazm(h, d, words("run main.nz"));
+    let r = nazm(h, d, words("run --interpret main.nz"));
     let mut failure = "";
     if !text_starts_with(r.stdout, "hi phi p") {
         failure = ran_show(r);

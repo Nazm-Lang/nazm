@@ -21,7 +21,9 @@ const PROGRAM: Str = "fn twice(x: Int) -> Int { x * 2 }\nfn main() -> Int { twic
 fn build(h: Caps, dir: Str, src: Str, extra: Str) -> Result[JsonDoc, Str] ! { io, spawn } {
     scratch_write(h, dir, "p.nz", src)?;
     let args = words(f"build p.nz -o p --provenance p.json {extra}");
-    let o = nazm(h, dir, args);
+    // Nazm's own code generator (R9, D15), where it is asked for.
+    let env = if text_contains(extra, "--backend nazm") { env_set(suite_env(h), "NAZM_NZCG", nzcg(h, dir)?) } else { suite_env(h) };
+    let o = run(h, nazm_bin(h.io), args, dir, env);
     if o.code != 0 {
         return Result[JsonDoc, Str].Err(error: o.stderr);
     }
@@ -109,7 +111,52 @@ fn the_backend_that_built_it_is_the_one_recorded(io: IoCap, p: ProcessCap, sp: S
     scratch_remove(h, d);
     let doc = built?;
     check_that(jstr(doc, "backend/name") == "cranelift", jtext(doc, "backend"))?;
-    check_that(jstr(doc, "output/files/0/digest") == out_digest?, "the output's digest")
+    check_that(jstr(doc, "output/files/0/digest") == out_digest?, "the output's digest")?;
+    // Only Nazm's own code generator is named by its digest, and only when it built the program.
+    check_that(jq(doc, "backend/nzcg") < 0, jtext(doc, "backend"))
+}
+
+/// The path of the SBOM's tool component named `name`, or `""`.
+fn tool(doc: JsonDoc, name: Str) -> Str ! {} {
+    let mut i = 0;
+    while jq(doc, f"metadata/tools/components/{i}") >= 0 {
+        if jstr(doc, f"metadata/tools/components/{i}/name") == name {
+            return f"metadata/tools/components/{i}";
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+fn nzcg_named(h: Caps, d: Str, e: Str) -> Result[Int, Str] ! { io, spawn } {
+    let doc = build(h, d, PROGRAM, "--backend nazm --sbom p.cdx.json")?;
+    check_that(jstr(doc, "backend/name") == "nazm", jtext(doc, "backend"))?;
+    check_that(jstr(doc, "backend/nzcg") == b3(h, nzcg(h, d)?)?, jtext(doc, "backend"))?;
+    check_that(jstr(doc, "output/files/0/digest") == b3(h, f"{d}/p")?, "the output's digest")?;
+    let sbom = jparse(read_text(h, f"{d}/p.cdx.json")?)?;
+    let t = tool(sbom, "nzcg");
+    check_that(str_len(t) > 0, "nzcg")?;
+    check_that(f"blake3:{jstr(sbom, f"{t}/hashes/0/content")}" == jstr(doc, "backend/nzcg"), jtext(sbom, t))?;
+    // The LLVM build of the same program names none.
+    let w = build(h, e, PROGRAM, "")?;
+    check_that(jq(w, "backend/nzcg") < 0, jtext(w, "backend"))
+}
+
+/// R9, D15: a program `--backend nazm` built names the generator that compiled it by its digest —
+/// the file `NAZM_NZCG` named, as anyone can recompute — and the SBOM lists it among the tools.
+/// macOS only before 1.0, where the Rust test is ignored elsewhere.
+@test
+fn a_program_nazms_own_generator_built_names_it_by_its_digest(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return Result[Int, Str].Ok(value: 0);
+    }
+    let d = scratch_new(h);
+    let e = scratch_new(h);
+    let r = nzcg_named(h, d, e);
+    scratch_remove(h, d);
+    scratch_remove(h, e);
+    r
 }
 
 @test
