@@ -5,7 +5,8 @@
 // It knows where it stops. A function using anything this lowering does not carry yet is not
 // printed: `cr_function` says what it stopped at instead, and the comparison (`run.sh core`)
 // counts it apart, so every function it does print is compared whole. Carried today: functions
-// with a body — generic ones and impls' methods included — and no effect parameters, contracts or
+// with a body — generic ones, impls' methods and closures (their captures, and the bindings they
+// share kept in cells) included — and no effect parameters, contracts or
 // attributes but `@deprecated`; `let` of a name, assignment to a binding, `while`, `return`,
 // `break`, `continue`, an expression as a statement, `if`, blocks and `match` of plain arms;
 // literals of `Int`, `Bool` and `Str`, bindings, `-`, `!`, `&&`, `||`, the arithmetic operators and
@@ -33,6 +34,8 @@ struct Lo {
     lty: Ints,
     lorig: Strs,
     lat: Strs,
+    // For a local a closure shares (R1b, L10), kept in a cell: the type the cell holds; else -1.
+    lshr: Ints,
     // Its constants, by value: each one's key, type and printed value.
     ckey: Strs,
     cty: Strs,
@@ -412,7 +415,7 @@ pub fn cr_function(f: Facts, i: Int) -> Str {
         m = m + 1;
     }
     let lo = Lo(f: f, c: c, t: fx_tree(f), st: ints_new(), stop: strs_new(), lb: ints_new(), lname: strs_new(), lty: ints_new(), lorig: strs_new(),
-            lat: strs_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), cstatic: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
+            lat: strs_new(), lshr: ints_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), cstatic: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
             last: ints_new(), idents: idents);
     ints_push(lo.st, i);
     ints_push(lo.st, ck_fn_module(c, i));
@@ -428,32 +431,53 @@ pub fn cr_function(f: Facts, i: Int) -> Str {
 fn co_function(lo: Lo, i: Int) -> Str {
     let c = lo.c;
     let t = lo.t;
-    if ck_fn_closure(c, i) { return co_stopped(lo, "a closure"); }
-    if ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
-    if ck_fn_effect_param(c, i) { return co_stopped(lo, "an effect parameter"); }
+    let closure = ck_fn_closure(c, i);
+    if closure == false {
+        if ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
+        if ck_fn_effect_param(c, i) { return co_stopped(lo, "an effect parameter"); }
+    }
     let node = ck_fn_node(c, i);
-    if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
-    if ints_len(sx_items(t, sx_field(t, node, "contracts"))) > 0 { return co_stopped(lo, "a contract"); }
+    let mut body_node = 0 - 1;
+    if closure {
+        body_node = sx_field(t, node, "body");
+    } else {
+        if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
+        if ints_len(sx_items(t, sx_field(t, node, "contracts"))) > 0 { return co_stopped(lo, "a contract"); }
+        body_node = sx_unwrap(t, sx_field(t, node, "body"));
+    }
     if ck_fn_required(c, i) < 0 { return co_stopped(lo, "a function whose effects were not settled"); }
-    // Its locals are its bindings, parameters first, in the order the checker made them.
+    // A closure's body is handed the closure first (N50): what its captures are read from.
+    let seed = ints_new();
+    if closure {
+        let cty = ck_closure_ty(c, i);
+        if cty < 0 { return co_stopped(lo, "a closure the checker gave no type"); }
+        co_local(lo, 0 - 2, "env", cty, 0 - 1, "param", co_tree_span(lo, sx_field(t, node, "span")));
+    }
+    // Its locals are its bindings, parameters first, in the order the checker made them; a
+    // closure's copy of each binding it captures where the checker made it, among them (`bind`).
     let mut b = 0;
     let mut n = 0;
-    while b < ck_binding_count(c) {
-        if ck_binding_fn(c, b) == i {
-            if ck_binding_shared(c, b) { co_halt(lo, "a binding a closure shares"); }
+    let mut k = 0;
+    let caps = ck_capture_count(c);
+    while b <= ck_binding_count(c) {
+        while k < caps && ck_capture_at(c, k) <= b {
+            if ck_capture_closure(c, k) == i {
+                let r = ck_capture_binding(c, k);
+                ints_push(seed, co_local(lo, r, ck_binding_name(c, r), ck_binding_ty(c, r), co_shared_elem(lo, r), "let", "synthetic"));
+                n = n + 1;
+            }
+            k = k + 1;
+        }
+        if b < ck_binding_count(c) && ck_binding_fn(c, b) == i {
             if ck_binding_start(c, b) < 0 { co_halt(lo, "a binding declared nowhere"); }
-            ints_push(lo.lb, b);
-            strs_push(lo.lname, ck_binding_name(c, b));
-            ints_push(lo.lty, ck_binding_ty(c, b));
             let mut origin = "let";
             if n < ck_fn_param_count(c, i) { origin = "param"; } else { if ck_binding_mutable(c, b) { origin = "let mut"; } }
-            strs_push(lo.lorig, origin);
-            strs_push(lo.lat, co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
+            co_local(lo, b, ck_binding_name(c, b), ck_binding_ty(c, b), co_shared_elem(lo, b), origin, co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
             n = n + 1;
         }
         b = b + 1;
     }
-    let body = co_value_block(lo, sx_unwrap(t, sx_field(t, node, "body")));
+    let body = co_value_block_in(lo, body_node, seed);
     if co_halted(lo) { return ""; }
     let f = lo.f;
     let declared = ck_fn_declared(c, i);
@@ -464,8 +488,14 @@ fn co_function(lo: Lo, i: Int) -> Str {
     strs_push(out, co_field_first("def", json_str(fx_fn_identity(f, i))));
     strs_push(out, co_field("module", json_str(fx_module_identity(f, co_g(lo, co_s_module())))));
     strs_push(out, co_field("name", json_str(ck_fn_name(c, i))));
-    strs_push(out, co_field("type_params", int_to_str(ck_fn_type_params(c, i))));
-    strs_push(out, co_field("params", int_to_str(ck_fn_param_count(c, i))));
+    // A closure in a generic function is generic over that function's parameters (L10), and
+    // is handed itself first.
+    let mut owner = i;
+    while ck_fn_closure(c, owner) { owner = ck_fn_enclosing(c, owner); }
+    let mut params = ck_fn_param_count(c, i);
+    if closure { params = params + 1; }
+    strs_push(out, co_field("type_params", int_to_str(ck_fn_type_params(c, owner))));
+    strs_push(out, co_field("params", int_to_str(params)));
     strs_push(out, co_field("ret", json_str(co_durable(lo, ck_fn_ret_ty(c, i)))));
     let effects = strs_new();
     if declared < 0 { strs_push(effects, co_field_first("declared", "null")); } else { strs_push(effects, co_field_first("declared", co_effect_list(declared))); }
@@ -478,14 +508,28 @@ fn co_function(lo: Lo, i: Int) -> Str {
     strs_push(out, co_field("consts", co_consts(lo)));
     strs_push(out, co_field("loops", int_to_str(co_g(lo, co_s_loops()))));
     strs_push(out, co_field("pub", co_json_bool(ck_fn_public(c, i))));
-    strs_push(out, co_field("closure", "false"));
-    strs_push(out, co_field("captures", "[]"));
+    strs_push(out, co_field("closure", co_json_bool(closure)));
+    let captured = strs_new();
+    let mut s = 0;
+    while s < ints_len(seed) {
+        strs_push(captured, int_to_str(ints_get(seed, s)));
+        s = s + 1;
+    }
+    strs_push(out, co_field("captures", co_list(captured)));
     let attributes = strs_new();
-    strs_push(attributes, co_field_first("export", co_json_or_null(ck_fn_export(c, i))));
-    strs_push(attributes, co_field("section", co_json_or_null(co_section(t, node))));
-    strs_push(attributes, co_field("interrupt", co_json_or_null(co_string_attr(t, node, "interrupt"))));
-    strs_push(attributes, co_field("task", co_task(t, node)));
-    strs_push(attributes, co_field("on_failure", co_json_bool(co_attr(t, node, "on_failure") >= 0)));
+    if closure {
+        strs_push(attributes, co_field_first("export", "null"));
+        strs_push(attributes, co_field("section", "null"));
+        strs_push(attributes, co_field("interrupt", "null"));
+        strs_push(attributes, co_field("task", "null"));
+        strs_push(attributes, co_field("on_failure", "false"));
+    } else {
+        strs_push(attributes, co_field_first("export", co_json_or_null(ck_fn_export(c, i))));
+        strs_push(attributes, co_field("section", co_json_or_null(co_section(t, node))));
+        strs_push(attributes, co_field("interrupt", co_json_or_null(co_string_attr(t, node, "interrupt"))));
+        strs_push(attributes, co_field("task", co_task(t, node)));
+        strs_push(attributes, co_field("on_failure", co_json_bool(co_attr(t, node, "on_failure") >= 0)));
+    }
     strs_push(out, co_field("attributes", co_object(attributes)));
     strs_push(out, co_field("at", json_str(co_tree_span(lo, sx_field(t, node, "span")))));
     strs_push(out, co_field("body", body));
@@ -500,6 +544,24 @@ fn co_function(lo: Lo, i: Int) -> Str {
         m = m + 1;
     }
     co_object(whole)
+}
+
+// A local: the binding it is (-1 for a temporary, -2 for a closure's own), its name, type, the
+// type its cell holds where a closure shares it (-1), origin and where; its id.
+fn co_local(lo: Lo, b: Int, name: Str, ty: Int, shared: Int, origin: Str, at: Str) -> Int {
+    ints_push(lo.lb, b);
+    strs_push(lo.lname, name);
+    ints_push(lo.lshr, shared);
+    if shared >= 0 { ints_push(lo.lty, ck_cell_of(lo.c, shared)); } else { ints_push(lo.lty, ty); }
+    strs_push(lo.lorig, origin);
+    strs_push(lo.lat, at);
+    strs_len(lo.lname) - 1
+}
+
+// The type binding `b` holds if a closure shares it, and so a cell (R1b, L10); else -1.
+fn co_shared_elem(lo: Lo, b: Int) -> Int {
+    if ck_binding_shared(lo.c, b) { return ck_binding_ty(lo.c, b); }
+    0 - 1
 }
 
 fn co_stopped(lo: Lo, why: Str) -> Str {
@@ -781,8 +843,10 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
     if k == "Expr" { return co_effect(lo, n); }
     if k == "Let" {
         if co_some_field(lo, n, "pattern") { return co_stopped_stmt(lo, "a `let` of a pattern"); }
-        let value = co_expr(lo, sx_field(t, n, "value"));
+        let mut value = co_expr(lo, sx_field(t, n, "value"));
         let local = co_local_at(lo, sx_field(t, n, "name_span"));
+        // Shared with a closure (R1b, L10): a cell made holding the value.
+        if co_halted(lo) == false && ints_get(lo.lshr, local) >= 0 { value = co_made_cell(lo, local, value, sx_field(t, n, "span")); }
         co_bind(lo, local);
         let o = strs_new();
         strs_push(o, co_op_first("let"));
@@ -797,6 +861,16 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
         if ints_len(sx_items(t, sx_field(t, place, "path"))) > 0 { return co_stopped_stmt(lo, "an assignment to a field or an element"); }
         let mut value = co_expr(lo, sx_field(t, n, "value"));
         let local = co_local_at(lo, sx_field(t, place, "name_span"));
+        // `x = v` on a shared binding (R1b, L10): the cell's one value replaced.
+        if co_halted(lo) == false && ints_get(lo.lshr, local) >= 0 {
+            let set = co_through_cell(lo, local, value, sx_field(t, n, "span"));
+            let o = strs_new();
+            strs_push(o, co_op_first("eval"));
+            strs_push(o, co_field("value", set));
+            strs_push(o, co_field("ends", co_ends(false)));
+            co_set_last(lo, 0 - 1, false);
+            return co_object(o);
+        }
         // `s = str_concat(s, t)`, `s = s + t`, `s += t` (R1b, D2): an append (`appends_to`).
         if co_appends(lo, local, sx_field(t, n, "value"), value) {
             value = str_concat(co_append_head(), str_slice(value, str_len(co_concat_head()), str_len(value)));
@@ -1071,6 +1145,7 @@ fn co_split_call_of(lo: Lo, name: Str, s: Int, sep: Int, last: Str, at: Int) -> 
 // A local made by the lowering (`temp`): its name, type and where.
 fn co_temp(lo: Lo, name: Str, ty: Int, span: Int) -> Int {
     ints_push(lo.lb, 0 - 1);
+    ints_push(lo.lshr, 0 - 1);
     strs_push(lo.lname, name);
     ints_push(lo.lty, ty);
     strs_push(lo.lorig, str_concat("temp ", name));
@@ -1278,6 +1353,7 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
     }
     if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
+    if k == "Closure" { return co_closure(lo, e); }
     if k == "Neg" {
         // A literal negated, of a type the checker gave it (`integer`): the negative constant,
         // at the literal.
@@ -2559,7 +2635,68 @@ fn co_var(lo: Lo, name: Str, span: Int) -> Str {
     }
     let l = co_local_at(lo, span);
     if co_halted(lo) { return ""; }
+    // A shared binding is read out of its cell (R1b, L10).
+    if ints_get(lo.lshr, l) >= 0 { return co_through_cell(lo, l, "", span); }
     co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span)
+}
+
+// `vec_get(cell, 0)`, or `vec_set(cell, 0, value)` where `value` is given, on shared local `l`
+// (`through_cell`).
+fn co_through_cell(lo: Lo, l: Int, value: Str, span: Int) -> Str {
+    let elem = ints_get(lo.lshr, l);
+    let zero = co_int_const(lo, 0, span);
+    let read = co_read(lo, l, span);
+    let targs = co_list_one(json_str(co_durable(lo, elem)));
+    let args = strs_new();
+    strs_push(args, read);
+    strs_push(args, zero);
+    if value == "" { return co_builtin(lo, "vec_get", targs, str_join(args, ","), elem, span); }
+    strs_push(args, value);
+    co_builtin(lo, "vec_set", targs, str_join(args, ","), ck_t_int(), span)
+}
+
+// `{ let made = vec_new(); vec_push(made, value); made }` at `span` (`made_holding`): the cell
+// shared local `l` is, made holding `value`.
+fn co_made_cell(lo: Lo, l: Int, value: Str, span: Int) -> Str {
+    let cell = ints_get(lo.lty, l);
+    let elem = ints_get(lo.lshr, l);
+    let made = co_temp(lo, "made", cell, span);
+    let targs = co_list_one(json_str(co_durable(lo, elem)));
+    let stmts = strs_new();
+    strs_push(stmts, co_let(made, co_builtin(lo, "vec_new", targs, "", cell, span)));
+    let fill = strs_new();
+    strs_push(fill, co_read(lo, made, span));
+    strs_push(fill, value);
+    let o = strs_new();
+    strs_push(o, co_op_first("eval"));
+    strs_push(o, co_field("value", co_builtin(lo, "vec_push", targs, str_join(fill, ","), ck_t_int(), span)));
+    strs_push(o, co_field("ends", co_ends(false)));
+    strs_push(stmts, co_object(o));
+    let tail = co_read(lo, made, span);
+    let body = co_block_json(lo, false, co_list_one(int_to_str(made)), stmts, tail, span);
+    co_node(lo, "block", co_field_first("body", body), cell, span)
+}
+
+// A closure made (N50): its function, and the locals it captures, in the order it captured them.
+fn co_closure(lo: Lo, e: Int) -> Str {
+    let c = lo.c;
+    let span = sx_field(lo.t, e, "span");
+    let id = ck_closure_at(c, co_abs_s(lo, span), co_abs_e(lo, span));
+    if id < 0 { return co_stopped(lo, "a closure the checker did not declare"); }
+    let caps = strs_new();
+    let mut k = 0;
+    while k < ck_capture_count(c) {
+        if ck_capture_closure(c, k) == id {
+            let l = co_index_of(lo.lb, ck_capture_binding(c, k));
+            if l < 0 { return co_stopped(lo, "a capture of a binding this function does not have"); }
+            strs_push(caps, int_to_str(l));
+        }
+        k = k + 1;
+    }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("function", json_str(fx_fn_identity(lo.f, id))));
+    strs_push(fields, co_field("captures", co_list(caps)));
+    co_node(lo, "closure", str_join(fields, ""), ck_closure_ty(c, id), span)
 }
 
 // `x.m(args)` (`method_call`), the method named at `ms`, the whole at `span`; the receiver the
