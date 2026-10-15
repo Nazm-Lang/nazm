@@ -25,7 +25,7 @@
 // numbers, `Bool` and `Str`, imported ones included, and statics (Gate 3); function types, named
 // functions as values, calls through values and closures with their captures (N50); traits,
 // impls, bounds, method calls, default methods and `Show` in interpolation (N78); effects
-// and authority; the rules about `main`.
+// and authority; provenance and its one rule, `N0372` (N38, N80); the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -127,6 +127,7 @@ pub struct Ck {
     bpath: Ints,
     bflow: Strs,
     bcont: Strs,
+    bsk: Strs,
     // The type names the module being checked may write, and what each names.
     tnames: Strs,
     ttys: Ints,
@@ -271,6 +272,87 @@ pub struct Ck {
     // The traits the module being checked may name (`trait_scope`), -1 for an ambiguous name.
     tsname: Strs,
     tsid: Ints,
+    // What provenance reads of the bodies (N38, N80; the reference's `Resolution`). Each binding:
+    // the function it is declared in, its type and name, and whether a closure shares it (R1b,
+    // L10); beside the scopes, each binding's id; each function's first parameter's binding;
+    // each closure's captures, in the order it made them.
+    bfn: Ints,
+    bty: Ints,
+    bnm: Strs,
+    bshr: Ints,
+    sbid: Ints,
+    fnpb: Ints,
+    capcl: Ints,
+    capbd: Ints,
+    // By the span each is written at: the binding a name is (`var`), the closure an expression
+    // makes (`closure_at`), the sequence a `for` reads (`for_seq`), whether a construction is a
+    // record's (`construction`), and the call site a call is (`callee`).
+    mvar: Smap,
+    mclo: Smap,
+    mfor: Smap,
+    mcons: Smap,
+    msite: Smap,
+    // Per call site: the trait method a call through a bound is (or -1), and the first type
+    // argument a generic call was settled with (or -1).
+    stm: Ints,
+    starg: Ints,
+    // The names a later alternative of an or-pattern binds, and where (`aliases`).
+    pan: Strs,
+    pas: Ints,
+    pae: Ints,
+}
+
+// A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
+// a chain per start, the last value put for a span the one it holds.
+pub struct Smap {
+    hd: Ints,
+    ks: Ints,
+    ke: Ints,
+    kv: Ints,
+    nx: Ints,
+}
+
+fn sm_new() -> Smap { Smap(hd: ints_new(), ks: ints_new(), ke: ints_new(), kv: ints_new(), nx: ints_new()) }
+
+fn sm_put(m: Smap, s: Int, e: Int, v: Int) -> Int {
+    if s < 0 { return 0; }
+    while ints_len(m.hd) <= s { ints_push(m.hd, 0 - 1); }
+    let mut i = ints_get(m.hd, s);
+    while i >= 0 {
+        if ints_get(m.ke, i) == e {
+            ints_set(m.kv, i, v);
+            return 0;
+        }
+        i = ints_get(m.nx, i);
+    }
+    ints_push(m.ks, s);
+    ints_push(m.ke, e);
+    ints_push(m.kv, v);
+    ints_push(m.nx, ints_get(m.hd, s));
+    ints_set(m.hd, s, ints_len(m.ks) - 1);
+    0
+}
+
+fn sm_get(m: Smap, s: Int, e: Int) -> Int {
+    if s < 0 || s >= ints_len(m.hd) { return 0 - 1; }
+    let mut i = ints_get(m.hd, s);
+    while i >= 0 {
+        if ints_get(m.ke, i) == e { return ints_get(m.kv, i); }
+        i = ints_get(m.nx, i);
+    }
+    0 - 1
+}
+
+// Empty a map that is used again, touching only what was put.
+fn sm_clear(m: Smap) -> Int {
+    while ints_len(m.ks) > 0 {
+        let s = ints_pop(m.ks);
+        ints_pop(m.ke);
+        ints_pop(m.kv);
+        ints_pop(m.nx);
+        ints_set(m.hd, s, 0 - 1);
+    }
+    0
 }
 
 // The module graph as the loader resolved it, handed to `ck_check`: per module, whether it is a
@@ -930,7 +1012,7 @@ fn new_ck(t: Tree) -> Ck {
             fnpf: ints_new(), fnpc: ints_new(), fnret: ints_new(), fnnores: ints_new(), fneff: ints_new(), fnws: ints_new(), fnwe: ints_new(), sfn: ints_new(), sstart: ints_new(),
             send: ints_new(), sbuiltin: ints_new(), suser: ints_new(), sheld: ints_new(), ptys: ints_new(), bname: strs_new(),
             bpf: ints_new(), bpc: ints_new(), bret: ints_new(), bok: ints_new(), bprelude: ints_new(), beff: strs_new(),
-            bcaps: strs_new(), bpath: ints_new(), bflow: strs_new(), bcont: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
+            bcaps: strs_new(), bpath: ints_new(), bflow: strs_new(), bcont: strs_new(), bsk: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
             sds: ints_new(), sde: ints_new(), frames: ints_new(), fntpf: ints_new(), fntpc: ints_new(), tpname: strs_new(),
             tpeq: ints_new(), bgen: ints_new(), bclass: strs_new(), bshapes: strs_new(), bretshape: strs_new(), tsn: strs_new(),
             tst: ints_new(), pkind: ints_new(), pval: ints_new(), pkey: strs_new(), pty: ints_new(), paf: ints_new(), pac: ints_new(),
@@ -944,7 +1026,9 @@ fn new_ck(t: Tree) -> Ck {
             tmname: strs_new(), tmns: ints_new(), tmne: ints_new(), tmpf: ints_new(), tmpc: ints_new(), tmret: ints_new(), tmeff: ints_new(), tmdef: ints_new(),
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
-            tsname: strs_new(), tsid: ints_new());
+            tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1008,6 +1092,7 @@ fn load_builtins(c: Ck) -> Int {
         if str_has(strs_get(cols, 8), ":path") { ints_push(c.bpath, 1); } else { ints_push(c.bpath, 0); }
         strs_push(c.bflow, strs_get(cols, 9));
         strs_push(c.bcont, strs_get(cols, 10));
+        strs_push(c.bsk, strs_get(cols, 8));
         i = i + 1;
     }
     0
@@ -1132,9 +1217,9 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         analyse_effects(c, i);
         i = i + 1;
     }
-    // The rules about `main`.
-    main_rules(c);
+    // Provenance (N38), solved over every module's bodies; then the rules about `main`.
     restricted_flow(c);
+    main_rules(c);
     c
 }
 
@@ -1145,68 +1230,6 @@ fn note_flow(c: Ck, bi: Int) -> Int {
     let flow = strs_get(c.bflow, bi);
     if flow == "source:file" || flow == "source:unknown" { ss(c, s_source(), 1); }
     if ints_get(c.bpath, bi) == 1 { ss(c, s_sink(), 1); }
-    0
-}
-
-// Provenance (N38, N80; `provenance::solve`): the language's one flow rule, `N0372`, refuses a
-// restricted origin reaching a path that a function declaring its effects writes to, or hands
-// to what writes to one, through a call, a function value, a bound or a closure's captures. The
-// flows are not carried yet, but the rule cannot fire where no restricted origin enters the
-// compilation, nor in a function that cannot reach a restricted sink: such a compilation is
-// carried, and anywhere else the checker stops. A function reaches a sink where it calls one,
-// calls a function that reaches one, makes a closure that does, or calls through a value or a
-// bound while any function reaches one.
-fn restricted_flow(c: Ck) -> Int {
-    if gs(c, s_source()) == 0 || gs(c, s_sink()) == 0 { return 0; }
-    let n = strs_len(c.fnname);
-    let reach = ints_new();
-    let mut f = 0;
-    while f < n {
-        ints_push(reach, 0);
-        f = f + 1;
-    }
-    let mut any = false;
-    let mut grew = true;
-    while grew {
-        grew = false;
-        let mut i = 0;
-        while i < ints_len(c.sfn) {
-            let g = ints_get(c.sfn, i);
-            if ints_get(reach, g) == 0 {
-                let b = ints_get(c.sbuiltin, i);
-                let u = ints_get(c.suser, i);
-                let mut hit = false;
-                if b >= 0 { hit = ints_get(c.bpath, b) == 1; }
-                if u >= 0 { hit = ints_get(reach, u) == 1; }
-                if ints_get(c.sind, i) >= 0 { hit = any; }
-                if hit {
-                    ints_set(reach, g, 1);
-                    any = true;
-                    grew = true;
-                }
-            }
-            i = i + 1;
-        }
-        f = 0;
-        while f < n {
-            let maker = ints_get(c.fnclos, f);
-            if maker >= 0 && ints_get(reach, f) == 1 && ints_get(reach, maker) == 0 {
-                ints_set(reach, maker, 1);
-                grew = true;
-            }
-            f = f + 1;
-        }
-    }
-    f = 0;
-    while f < n {
-        // A closure, an impl's method and a trait's default method always declare theirs.
-        let explicit = ints_get(c.fneff, f) >= 0 || ints_get(c.fnclos, f) >= 0 || ints_get(c.fnmeth, f) == 1 || str_has(strs_get(c.fnname, f), "/");
-        if explicit && ints_get(reach, f) == 1 {
-            stop(c, "a restricted origin and a restricted sink (provenance, N38)");
-            return 0;
-        }
-        f = f + 1;
-    }
     0
 }
 
@@ -2812,6 +2835,7 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             strs_push(c.fnname, name);
             ints_push(c.fnmod, m);
             ints_push(c.fnclos, 0 - 1);
+            ints_push(c.fnpb, 0 - 1);
             if method { ints_push(c.fnmeth, 1); } else { ints_push(c.fnmeth, 0); }
             let public = some(c, f, "pub_span") && method == false;
             if public { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
@@ -3119,6 +3143,10 @@ fn check_function(c: Ck, f: Int) -> Int {
     }
     open_scope(c);
     let params = kids(c, f, "params");
+    // Its parameters are its first bindings (provenance reads them by position).
+    if id >= 0 {
+        if ints_get(c.fnnode, id) == f { ints_set(c.fnpb, id, ints_len(c.bfn)); }
+    }
     let mut i = 0;
     while i < ints_len(params) {
         let p = ints_get(params, i);
@@ -3195,6 +3223,7 @@ fn close_scope(c: Ck) -> Int {
         ints_pop(c.smut);
         ints_pop(c.sds);
         ints_pop(c.sde);
+        ints_pop(c.sbid);
     }
     0
 }
@@ -3206,8 +3235,20 @@ fn define(c: Ck, name: Str, ty: Int, mutable: Bool, ds: Int, de: Int) -> Int {
     if mutable { ints_push(c.smut, 1); } else { ints_push(c.smut, 0); }
     ints_push(c.sds, ds);
     ints_push(c.sde, de);
+    // A binding of its own, for provenance: the function it is declared in.
+    ints_push(c.sbid, ints_len(c.bfn));
+    ints_push(c.bfn, gs(c, s_fn()));
+    ints_push(c.bty, ty);
+    strs_push(c.bnm, name);
+    ints_push(c.bshr, 0);
     0
 }
+
+// The binding the last `define` made.
+fn last_binding(c: Ck) -> Int { ints_len(c.bfn) - 1 }
+
+// The binding scope entry `b` is, recorded as what the name written at `s..e` refers to.
+fn note_var(c: Ck, s: Int, e: Int, b: Int) -> Int { sm_put(c.mvar, s, e, ints_get(c.sbid, b)) }
 
 fn lookup(c: Ck, name: Str) -> Int {
     let mut i = strs_len(c.sname) - 1;
@@ -3257,9 +3298,13 @@ fn lookup_var(c: Ck, name: Str, at: Int) -> Int {
         if b < ints_get(c.cfbound, k) && captured_by(c, k, b) == false {
             ints_push(c.capf, k);
             ints_push(c.capb, b);
+            ints_push(c.capcl, ints_get(c.cfid, k));
+            ints_push(c.capbd, ints_get(c.sbid, b));
         }
         k = k + 1;
     }
+    // A `let mut` binding a closure captures is shared with it (R1b, L10): one cell.
+    if ints_get(c.smut, b) == 1 { ints_set(c.bshr, ints_get(c.sbid, b), 1); }
     if ints_get(c.smut, b) == 0 { ss(c, s_captured(), 1); }
     b
 }
@@ -3461,6 +3506,7 @@ fn check_let(c: Ck, l: Int) -> Int {
                 "Nazm allows shadowing in a nested scope but not in the same one, so a later mention of a name is never ambiguous");
     }
     define(c, name, ty, flag(c, l, "mutable"), sps(c, ns), spe(c, ns));
+    sm_put(c.mvar, sps(c, ns), spe(c, ns), last_binding(c));
     0
 }
 
@@ -3485,6 +3531,7 @@ fn check_assign(c: Ck, a: Int) -> Int {
         check_expr(c, value, none());
         return 0;
     }
+    note_var(c, sps(c, ns), spe(c, ns), b);
     let path = kids(c, place, "path");
     let shown = strs_new();
     let mut i = 0;
@@ -3566,6 +3613,8 @@ fn check_for(c: Ck, f: Int) -> Int {
         }
         if tag(c, t) == tag_vec() {
             element = targ(c, t, 0);
+            let fsp = fld(c, f, "name_span");
+            sm_put(c.mfor, sps(c, fsp), spe(c, fsp), t);
         } else {
             err(c, "N0628", espan(c, e), cat3("a `for` loop cannot iterate `", show(c, t), "`"),
                     "a `for` loop iterates an `Ints`, a `Strs`, a `Vec[T]` or a `Bytes`, or integers written `a..b`");
@@ -3576,6 +3625,7 @@ fn check_for(c: Ck, f: Int) -> Int {
     open_scope(c);
     let ns = fld(c, f, "name_span");
     define(c, fname_of(c, f, "name"), element, false, sps(c, ns), spe(c, ns));
+    sm_put(c.mvar, sps(c, ns), spe(c, ns), last_binding(c));
     // Its last line's value is discarded, as a `while` body's is (R1, 5b.19).
     ss(c, s_discard(), 1);
     check_block_inner(c, body, none());
@@ -3747,7 +3797,10 @@ fn check_var(c: Ck, e: Int, expected: Int) -> Int { check_var_named(c, fname_of(
 
 fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
     let b = lookup_var(c, name, span);
-    if b >= 0 { return ints_get(c.sty, b); }
+    if b >= 0 {
+        note_var(c, sps(c, span), spe(c, span), b);
+        return ints_get(c.sty, b);
+    }
     // A constant (Gate 2): its type.
     let k = strs_find(c.kname, name);
     if k >= 0 { return kind_type(c, ints_get(c.kkind, k)); }
@@ -3799,6 +3852,7 @@ fn function_value(c: Ck, name: Str, callee: Int, at: Int, expected: Int) -> Int 
 // A call through a binding of a function type (`check_indirect_call`).
 fn check_indirect_call(c: Ck, name: Str, at: Int, args: Ints, span: Int) -> Int {
     let b = lookup_var(c, name, at);
+    note_var(c, sps(c, at), spe(c, at), b);
     let t = ints_get(c.sty, b);
     let n = fn_arity(c, t);
     if ints_len(args) != n {
@@ -3889,6 +3943,8 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     strs_push(c.fnname, cat3(base, "#", int_to_str(count)));
     ints_push(c.fnmod, gs(c, s_module()));
     ints_push(c.fnclos, enclosing);
+    ints_push(c.fnpb, 0 - 1);
+    sm_put(c.mclo, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), id);
     ints_push(c.fnmeth, 0);
     ints_push(c.fnpub, 0);
     ints_push(c.fnns, sps(c, fs));
@@ -3923,6 +3979,7 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ints_push(c.cfid, id);
     ints_push(c.cfbound, strs_len(c.sname));
     open_scope(c);
+    ints_set(c.fnpb, id, ints_len(c.bfn));
     i = 0;
     while i < ints_len(params) {
         let p = ints_get(params, i);
@@ -4703,7 +4760,9 @@ fn check_method_call(c: Ck, e: Int, recv: Int, known: Int, method: Str, at: Int,
             ints_push(all, ints_get(params, k));
             k = k + 1;
         }
+        let sites = ints_len(c.sfn);
         record_indirect_site(c, at, fn_ty(c, all, ret, ints_get(c.tmeff, tm)));
+        if ints_len(c.sfn) > sites { ints_set(c.stm, sites, tm); }
     } else {
         let mut target = 0 - 1;
         if satisfies(c, tr, recv_ty) {
@@ -5125,7 +5184,9 @@ fn check_generic_call(c: Ck, call: Call, targs: Int, expected: Int) -> Int {
         // The one generic built-in that makes a `Chan[T]` from a written `T` (N53).
         if strs_get(c.bname, call.oid) == "chan_new_of" { channel_element(c, c.d, t, call.at); }
     }
+    let sites = ints_len(c.sfn);
     record_site(c, call.at, call.target);
+    if ints_len(c.sfn) > sites && call.n > 0 { ints_set(c.starg, sites, ints_get(settled, 0)); }
     let ret = subst(c, call.ret, call.owner, call.oid, settled);
     if nesting(c, ret) > max_depth() {
         err(c, "N0338", call.span, "this call produces a type nested more than 32 deep",
@@ -5430,6 +5491,7 @@ fn check_construction(c: Ck, ty: Str, ty_span: Int, targs: Int, inits: Inits, sp
         return 0 - 1;
     }
     let r = ta(c, t);
+    sm_put(c.mcons, sps(c, ty_span), spe(c, ty_span), 1);
     let given = strs_new();
     let gstart = ints_new();
     let gend = ints_new();
@@ -6197,6 +6259,11 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
         open_scope(c);
         let binds = no_binds();
         let before = dg_len(c.d);
+        while strs_len(c.pan) > 0 {
+            strs_pop(c.pan);
+            ints_pop(c.pas);
+            ints_pop(c.pae);
+        }
         let pat = check_pattern(c, pattern, sty, scrutinee, binds);
         if dg_len(c.d) > before {
             // The pattern is the mistake: its arm's body would only repeat it.
@@ -6211,7 +6278,15 @@ fn check_match(c: Ck, m: Int, expected: Int) -> Int {
                             "each part of a pattern binds a name of its own, or is `_`");
                 } else {
                     define(c, name, ints_get(binds.tys, k), false, ints_get(binds.starts, k), ints_get(binds.ends, k));
+                    sm_put(c.mvar, ints_get(binds.starts, k), ints_get(binds.ends, k), last_binding(c));
                 }
+                k = k + 1;
+            }
+            // An or-pattern's later alternatives bind the same names: the same bindings.
+            k = 0;
+            while k < strs_len(c.pan) {
+                let b = lookup(c, strs_get(c.pan, k));
+                if b >= ints_get(c.frames, ints_len(c.frames) - 1) { note_var(c, ints_get(c.pas, k), ints_get(c.pae, k), b); }
                 k = k + 1;
             }
             let guarded = some(c, arm, "guard");
@@ -6458,6 +6533,13 @@ fn check_pattern(c: Ck, p: Int, ty: Int, scrutinee: Int, binds: Binds) -> Int {
             first = own;
             have_first = true;
         } else {
+            let mut j = 0;
+            while j < strs_len(own.names) {
+                strs_push(c.pan, strs_get(own.names, j));
+                ints_push(c.pas, ints_get(own.starts, j));
+                ints_push(c.pae, ints_get(own.ends, j));
+                j = j + 1;
+            }
             if same_bindings(c, first, own) == false {
                 err(c, "N0629", pattern_span(c.t, alt), "this alternative binds other names, or other types, than the first",
                         "the arm's body sees the same names whichever alternative matched, so each binds them all, with one type each");
@@ -7672,6 +7754,9 @@ fn held_caps(c: Ck) -> Int {
 fn record_site(c: Ck, at: Int, target: Int) -> Int {
     let f = gs(c, s_fn());
     if f < 0 { return 0; }
+    sm_put(c.msite, sps(c, at), spe(c, at), ints_len(c.sfn));
+    ints_push(c.stm, 0 - 1);
+    ints_push(c.starg, 0 - 1);
     ints_push(c.sfn, f);
     ints_push(c.sstart, sps(c, at));
     ints_push(c.send, spe(c, at));
@@ -7692,6 +7777,9 @@ fn record_site(c: Ck, at: Int, target: Int) -> Int {
 fn record_indirect_site(c: Ck, at: Int, t: Int) -> Int {
     let f = gs(c, s_fn());
     if f < 0 { return 0; }
+    sm_put(c.msite, sps(c, at), spe(c, at), ints_len(c.sfn));
+    ints_push(c.stm, 0 - 1);
+    ints_push(c.starg, 0 - 1);
     ints_push(c.sfn, f);
     ints_push(c.sstart, sps(c, at));
     ints_push(c.send, spe(c, at));
@@ -8070,5 +8158,2611 @@ fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
     sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), cat3("declared `! ", shown, "` here"));
     dg_fix(c.d, ints_get(c.fnws, me), ints_get(c.fnwe, me), str_concat("! ", wider), cat3("declare `! ", wider, "`"), "needs_review",
             cat5(who, " is meant to exercise ", list, ". Widening a contract can break a caller whose own declared set lacks ", list));
+    0
+}
+
+// --- provenance (N38, N80; `nazm-core/src/provenance.rs`, `nazm-sema/src/provenance.rs`) ---------
+//
+// Each body reduced to flows over its parameters, its calls, the containers it reads and writes
+// and the function values it makes and calls (`facts`), the whole program's summaries solved
+// from them (`solve`), and the language's flow rule checked against them: `N0372`, a restricted
+// origin reaching a path a function that declares its effects writes to, with the chain that
+// shows how (`Tracer`). A port, rule for rule and in the reference's order, since the chain's
+// steps — which span is shown for an origin, which cell, which caller — follow from the order
+// the bodies are walked in.
+
+// Origins (`Origin`): 0 the command line, 1 a file's contents, 2 the runtime's root authority,
+// 3 what the checker does not follow. A set of them is a mask.
+fn o_restricted() -> Int { 10 }
+
+fn o_describe(o: Int) -> Str {
+    if o == 0 { return "the command line"; }
+    if o == 1 { return "the contents of a file"; }
+    if o == 2 { return "the runtime's root authority"; }
+    "a device or foreign code the checker does not follow"
+}
+
+fn o_enters(o: Int) -> Str {
+    if o == 0 { return "the command line is read here"; }
+    if o == 1 { return "a file's contents are read here"; }
+    if o == 2 { return "the runtime's root authority is handed over here"; }
+    "a device register is read here, which the checker does not follow"
+}
+
+// Sink classes (`SinkClass`): 0 a path written to, 1 output, 2 what is written, 3 a vouch.
+fn sink_class(name: Str) -> Int {
+    if name == "path" { return 0; }
+    if name == "output" { return 1; }
+    if name == "file-data" { return 2; }
+    3
+}
+
+// Masks of up to 62 bits, without bit operators: union, intersection, membership.
+fn bor(a: Int, b: Int) -> Int {
+    if a == b || b == 0 { return a; }
+    if a == 0 { return b; }
+    let mut out = a;
+    let mut x = b;
+    let mut y = a;
+    let mut bit = 1;
+    while x > 0 {
+        if x % 2 == 1 && y % 2 == 0 { out = out + bit; }
+        x = x / 2;
+        y = y / 2;
+        bit = bit * 2;
+    }
+    out
+}
+
+fn band(a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 { return 0; }
+    let mut out = 0;
+    let mut x = b;
+    let mut y = a;
+    let mut bit = 1;
+    while x > 0 && y > 0 {
+        if x % 2 == 1 && y % 2 == 1 { out = out + bit; }
+        x = x / 2;
+        y = y / 2;
+        bit = bit * 2;
+    }
+    out
+}
+
+fn bhas(m: Int, i: Int) -> Bool {
+    if m == 0 { return false; }
+    (m / pow2(i)) % 2 == 1
+}
+
+// The positions a mask holds, in order.
+fn bits_of(m: Int) -> Ints {
+    let out = ints_new();
+    let mut x = m;
+    let mut i = 0;
+    while x > 0 {
+        if x % 2 == 1 { ints_push(out, i); }
+        x = x / 2;
+        i = i + 1;
+    }
+    out
+}
+
+// The first origin of a set, in id order, or -1.
+fn first_origin(m: Int) -> Int {
+    let mut o = 0;
+    while o < 4 {
+        if bhas(m, o) { return o; }
+        o = o + 1;
+    }
+    0 - 1
+}
+
+// Add `x` to a sorted set; whether it was not there.
+fn set_add(xs: Ints, x: Int) -> Bool {
+    let mut i = 0;
+    while i < ints_len(xs) && ints_get(xs, i) < x { i = i + 1; }
+    if i < ints_len(xs) && ints_get(xs, i) == x { return false; }
+    ints_push(xs, x);
+    let mut j = ints_len(xs) - 1;
+    while j > i {
+        ints_set(xs, j, ints_get(xs, j - 1));
+        j = j - 1;
+    }
+    ints_set(xs, i, x);
+    true
+}
+
+fn ints_same(a: Ints, b: Ints) -> Bool {
+    if ints_len(a) != ints_len(b) { return false; }
+    let mut i = 0;
+    while i < ints_len(a) {
+        if ints_get(a, i) != ints_get(b, i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn strs_same(a: Strs, b: Strs) -> Bool {
+    if strs_len(a) != strs_len(b) { return false; }
+    let mut i = 0;
+    while i < strs_len(a) {
+        if strs_get(a, i) != strs_get(b, i) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// What one value carries (`Flow`): in `m`, its origins, the parameters it carries (a mask of
+// positions) and, for each origin, where it was first met (start, then end, -1 for none); then the
+// calls whose results it carries and the indirect calls', by their indices in the program, and the
+// cells it was read out of with where each was first read — each sorted. Its arrays are its own:
+// a flow is changed in place, and copied where the reference clones one.
+pub struct Fl {
+    m: Ints,
+    cs: Ints,
+    vs: Ints,
+    cn: Strs,
+    cp: Ints,
+}
+
+fn fl_new() -> Fl {
+    let m = ints_new();
+    ints_push(m, 0);
+    ints_push(m, 0);
+    let mut i = 0;
+    while i < 8 {
+        ints_push(m, 0 - 1);
+        i = i + 1;
+    }
+    Fl(m: m, cs: ints_new(), vs: ints_new(), cn: strs_new(), cp: ints_new())
+}
+
+fn fl_origin(o: Int, s: Int, e: Int) -> Fl {
+    let f = fl_new();
+    ints_set(f.m, 0, pow2(o));
+    ints_set(f.m, 2 + o, s);
+    ints_set(f.m, 6 + o, e);
+    f
+}
+
+fn fl_param(i: Int) -> Fl {
+    let f = fl_new();
+    ints_set(f.m, 1, pow2(i));
+    f
+}
+
+fn fl_call(i: Int) -> Fl {
+    let f = fl_new();
+    ints_push(f.cs, i);
+    f
+}
+
+fn fl_via(i: Int) -> Fl {
+    let f = fl_new();
+    ints_push(f.vs, i);
+    f
+}
+
+fn fl_cell(name: Str, s: Int, e: Int) -> Fl {
+    let f = fl_new();
+    strs_push(f.cn, name);
+    ints_push(f.cp, s);
+    ints_push(f.cp, e);
+    f
+}
+
+fn fl_origins(f: Fl) -> Int { ints_get(f.m, 0) }
+fn fl_params(f: Fl) -> Int { ints_get(f.m, 1) }
+
+fn fl_copy(f: Fl) -> Fl {
+    let g = fl_new();
+    fl_join(g, f);
+    g
+}
+
+fn fl_local(f: Fl) -> Bool { ints_get(f.m, 0) == 0 && ints_get(f.m, 1) == 0 && ints_len(f.cs) == 0 && ints_len(f.vs) == 0 && strs_len(f.cn) == 0 }
+
+fn fl_same(a: Fl, b: Fl) -> Bool { ints_same(a.m, b.m) && ints_same(a.cs, b.cs) && ints_same(a.vs, b.vs) && strs_same(a.cn, b.cn) && ints_same(a.cp, b.cp) }
+
+// Join `b` into `a` (`Flow::join`), and say whether anything was added: a first reason already
+// held for an origin is kept.
+fn fl_join(a: Fl, b: Fl) -> Bool {
+    let mut grew = false;
+    let mut o = 0;
+    while o < 4 {
+        if ints_get(b.m, 2 + o) >= 0 && bhas(ints_get(a.m, 0), o) == false {
+            ints_set(a.m, 0, ints_get(a.m, 0) + pow2(o));
+            ints_set(a.m, 2 + o, ints_get(b.m, 2 + o));
+            ints_set(a.m, 6 + o, ints_get(b.m, 6 + o));
+            grew = true;
+        }
+        o = o + 1;
+    }
+    let origins = bor(ints_get(a.m, 0), ints_get(b.m, 0));
+    if origins != ints_get(a.m, 0) {
+        ints_set(a.m, 0, origins);
+        grew = true;
+    }
+    let params = bor(ints_get(a.m, 1), ints_get(b.m, 1));
+    if params != ints_get(a.m, 1) {
+        ints_set(a.m, 1, params);
+        grew = true;
+    }
+    let mut i = 0;
+    while i < ints_len(b.cs) {
+        if set_add(a.cs, ints_get(b.cs, i)) { grew = true; }
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(b.vs) {
+        if set_add(a.vs, ints_get(b.vs, i)) { grew = true; }
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(b.cn) {
+        let name = strs_get(b.cn, i);
+        let mut at = 0;
+        while at < strs_len(a.cn) && str_less(strs_get(a.cn, at), name) { at = at + 1; }
+        if at >= strs_len(a.cn) || strs_get(a.cn, at) != name {
+            strs_push(a.cn, name);
+            ints_push(a.cp, 0);
+            ints_push(a.cp, 0);
+            let mut j = strs_len(a.cn) - 1;
+            while j > at {
+                strs_set(a.cn, j, strs_get(a.cn, j - 1));
+                ints_set(a.cp, 2 * j, ints_get(a.cp, 2 * j - 2));
+                ints_set(a.cp, 2 * j + 1, ints_get(a.cp, 2 * j - 1));
+                j = j - 1;
+            }
+            strs_set(a.cn, at, name);
+            ints_set(a.cp, 2 * at, ints_get(b.cp, 2 * i));
+            ints_set(a.cp, 2 * at + 1, ints_get(b.cp, 2 * i + 1));
+            grew = true;
+        }
+        i = i + 1;
+    }
+    grew
+}
+
+// `a` joined with `b`, `a` itself changed.
+fn fl_joined(a: Fl, b: Fl) -> Fl {
+    fl_join(a, b);
+    a
+}
+
+// Every body's facts (`ModuleFacts`, `FunctionFacts`), in the order the reference walks them: per
+// function its calls, sinks, stores, indirect calls and the function values it makes, each a run
+// of the pools below; argument and capture flows in one pool.
+pub struct Pf {
+    ffn: Ints,
+    fres: Vec[Fl],
+    fcf: Ints,
+    fcc: Ints,
+    fsf: Ints,
+    fsc: Ints,
+    fof: Ints,
+    foc: Ints,
+    fif: Ints,
+    fic: Ints,
+    fmf: Ints,
+    fmc: Ints,
+    // Calls: the callee, where its name is, whether it is a `spawn`'s, and its arguments.
+    ccal: Ints,
+    cs: Ints,
+    ce: Ints,
+    csp: Ints,
+    caf: Ints,
+    cac: Ints,
+    args: Vec[Fl],
+    // Sinks: where, which class, and the flow into it.
+    kss: Ints,
+    kse: Ints,
+    kcl: Ints,
+    kfl: Vec[Fl],
+    // Stores into a container's cell: which cell, where, what.
+    ocl: Strs,
+    oss: Ints,
+    ose: Ints,
+    ofl: Vec[Fl],
+    // Indirect calls: their target, where, and their arguments.
+    itg: Strs,
+    iss: Ints,
+    ise: Ints,
+    iaf: Ints,
+    iac: Ints,
+    // Function values made: the function, its target, where, and what it captures.
+    mfn: Ints,
+    mtg: Strs,
+    mss: Ints,
+    mse: Ints,
+    mcf: Ints,
+    mcc: Ints,
+}
+
+fn pf_new() -> Pf {
+    Pf(ffn: ints_new(), fres: vec_new[Fl](), fcf: ints_new(), fcc: ints_new(), fsf: ints_new(), fsc: ints_new(), fof: ints_new(), foc: ints_new(),
+            fif: ints_new(), fic: ints_new(), fmf: ints_new(), fmc: ints_new(), ccal: ints_new(), cs: ints_new(), ce: ints_new(), csp: ints_new(),
+            caf: ints_new(), cac: ints_new(), args: vec_new[Fl](), kss: ints_new(), kse: ints_new(), kcl: ints_new(), kfl: vec_new[Fl](), ocl: strs_new(),
+            oss: ints_new(), ose: ints_new(), ofl: vec_new[Fl](), itg: strs_new(), iss: ints_new(), ise: ints_new(), iaf: ints_new(), iac: ints_new(),
+            mfn: ints_new(), mtg: strs_new(), mss: ints_new(), mse: ints_new(), mcf: ints_new(), mcc: ints_new())
+}
+
+// One body being walked (`Walk`): its function, its bindings' flows and shapes, which it has read,
+// the `defer`s pending, the closures it wrote, where its facts begin in the pools, and an arena of
+// shaped values (`Shaped`) — a flow, and for a record or variant built here each field's own,
+// keyed by variant and field — each immutable once made.
+pub struct Wk {
+    // The function, its parameter count, whether a binding grew after it was read, and where its
+    // calls, sinks, stores, indirect calls and makes begin in the pools.
+    st: Ints,
+    lb: Ints,
+    lf: Vec[Fl],
+    // Each binding's shape: 0 nothing built assigned yet, 1 built (its parts a run), 2 whole.
+    lk: Ints,
+    lpf: Ints,
+    lpc: Ints,
+    lr: Ints,
+    defers: Ints,
+    clos: Ints,
+    shfl: Vec[Fl],
+    shpf: Ints,
+    shpc: Ints,
+    pkv: Strs,
+    pkf: Strs,
+    pval: Ints,
+    // What the body returns (`result`).
+    res: Vec[Fl],
+}
+
+fn w_fn(w: Wk) -> Int { ints_get(w.st, 0) }
+
+fn wk_new(f: Int, params: Int, pf: Pf) -> Wk {
+    let st = ints_new();
+    ints_push(st, f);
+    ints_push(st, params);
+    ints_push(st, 0);
+    ints_push(st, ints_len(pf.ccal));
+    ints_push(st, ints_len(pf.kss));
+    ints_push(st, strs_len(pf.ocl));
+    ints_push(st, strs_len(pf.itg));
+    ints_push(st, ints_len(pf.mfn));
+    Wk(st: st, lb: ints_new(), lf: vec_new[Fl](), lk: ints_new(), lpf: ints_new(), lpc: ints_new(), lr: ints_new(), defers: ints_new(),
+            clos: ints_new(), shfl: vec_new[Fl](), shpf: ints_new(), shpc: ints_new(), pkv: strs_new(), pkf: strs_new(), pval: ints_new(),
+            res: one_flow())
+}
+
+fn one_flow() -> Vec[Fl] {
+    let v = vec_new[Fl]();
+    vec_push(v, fl_new());
+    v
+}
+
+// --- shaped values ---------------------------------------------------------------------------
+
+fn sh_make(w: Wk, f: Fl, pf: Int, pc: Int) -> Int {
+    vec_push(w.shfl, f);
+    ints_push(w.shpf, pf);
+    ints_push(w.shpc, pc);
+    ints_len(w.shpf) - 1
+}
+
+// A value with no shape: its flow, whole.
+fn sh_whole(w: Wk, f: Fl) -> Int { sh_make(w, f, 0 - 1, 0) }
+fn sh_none(w: Wk) -> Int { sh_whole(w, fl_new()) }
+fn sh_fl(w: Wk, s: Int) -> Fl { vec_get(w.shfl, s) }
+fn sh_has_parts(w: Wk, s: Int) -> Bool { ints_get(w.shpf, s) >= 0 }
+
+// A shape's flow, copied: what a caller may change.
+fn sh_flow(w: Wk, s: Int) -> Fl { fl_copy(sh_fl(w, s)) }
+
+fn sh_neutral(w: Wk, s: Int) -> Bool { sh_has_parts(w, s) == false && fl_local(sh_fl(w, s)) }
+
+// Whether part key (v, f) sorts before (v2, f2), as a `(String, String)` does.
+fn key_less(v: Str, f: Str, v2: Str, f2: Str) -> Bool {
+    if v != v2 { return str_less(v, v2); }
+    str_less(f, f2)
+}
+
+// A run of parts, sorted, from parallel lists.
+fn parts_run(w: Wk, vs: Strs, fs: Strs, xs: Ints) -> Int {
+    let start = ints_len(w.pval);
+    let mut i = 0;
+    while i < ints_len(xs) {
+        strs_push(w.pkv, strs_get(vs, i));
+        strs_push(w.pkf, strs_get(fs, i));
+        ints_push(w.pval, ints_get(xs, i));
+        i = i + 1;
+    }
+    start
+}
+
+// The part (v, f) of a run, or -1.
+fn part_of(w: Wk, pf: Int, pc: Int, v: Str, f: Str) -> Int {
+    let mut i = 0;
+    while i < pc {
+        if strs_get(w.pkv, pf + i) == v && strs_get(w.pkf, pf + i) == f { return ints_get(w.pval, pf + i); }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Two shaped values the same (`Shaped`'s equality).
+fn sh_same(w: Wk, a: Int, b: Int) -> Bool {
+    if a == b { return true; }
+    if fl_same(sh_fl(w, a), sh_fl(w, b)) == false { return false; }
+    if sh_has_parts(w, a) != sh_has_parts(w, b) { return false; }
+    if sh_has_parts(w, a) == false { return true; }
+    parts_same(w, ints_get(w.shpf, a), ints_get(w.shpc, a), ints_get(w.shpf, b), ints_get(w.shpc, b))
+}
+
+fn parts_same(w: Wk, af: Int, ac: Int, bf: Int, bc: Int) -> Bool {
+    if ac != bc { return false; }
+    let mut i = 0;
+    while i < ac {
+        if strs_get(w.pkv, af + i) != strs_get(w.pkv, bf + i) || strs_get(w.pkf, af + i) != strs_get(w.pkf, bf + i) { return false; }
+        if sh_same(w, ints_get(w.pval, af + i), ints_get(w.pval, bf + i)) == false { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// `a` joined with `b`, as an `if` or a `match` joins its arms (`Shaped::join`).
+fn sh_join(w: Wk, a: Int, b: Int) -> Int {
+    if sh_neutral(w, b) { return a; }
+    if sh_neutral(w, a) { return b; }
+    let f = sh_flow(w, a);
+    fl_join(f, sh_fl(w, b));
+    if sh_has_parts(w, a) && sh_has_parts(w, b) {
+        let merged = merge_parts(w, ints_get(w.shpf, a), ints_get(w.shpc, a), ints_get(w.shpf, b), ints_get(w.shpc, b));
+        return sh_make(w, f, merged, ints_len(w.pval) - merged);
+    }
+    sh_whole(w, f)
+}
+
+// The runs `a` and `b` merged (`merge_parts`): a new run, the last in the pool.
+fn merge_parts(w: Wk, af: Int, ac: Int, bf: Int, bc: Int) -> Int {
+    let vs = strs_new();
+    let fs = strs_new();
+    let xs = ints_new();
+    let mut i = 0;
+    while i < ac {
+        strs_push(vs, strs_get(w.pkv, af + i));
+        strs_push(fs, strs_get(w.pkf, af + i));
+        ints_push(xs, ints_get(w.pval, af + i));
+        i = i + 1;
+    }
+    i = 0;
+    while i < bc {
+        let v = strs_get(w.pkv, bf + i);
+        let f = strs_get(w.pkf, bf + i);
+        let x = ints_get(w.pval, bf + i);
+        let mut at = 0;
+        while at < ints_len(xs) && key_less(strs_get(vs, at), strs_get(fs, at), v, f) { at = at + 1; }
+        if at < ints_len(xs) && strs_get(vs, at) == v && strs_get(fs, at) == f {
+            ints_set(xs, at, sh_join(w, ints_get(xs, at), x));
+        } else {
+            strs_push(vs, "");
+            strs_push(fs, "");
+            ints_push(xs, 0);
+            let mut j = ints_len(xs) - 1;
+            while j > at {
+                strs_set(vs, j, strs_get(vs, j - 1));
+                strs_set(fs, j, strs_get(fs, j - 1));
+                ints_set(xs, j, ints_get(xs, j - 1));
+                j = j - 1;
+            }
+            strs_set(vs, at, v);
+            strs_set(fs, at, f);
+            ints_set(xs, at, x);
+        }
+        i = i + 1;
+    }
+    parts_run(w, vs, fs, xs)
+}
+
+// A shape cut to `depth` (`Shaped::truncated`): below `SHAPE_DEPTH` (4) a field is whole.
+fn sh_truncated(w: Wk, s: Int, depth: Int) -> Int {
+    if sh_has_parts(w, s) == false { return s; }
+    if depth >= 4 { return sh_whole(w, sh_fl(w, s)); }
+    let pf = ints_get(w.shpf, s);
+    let pc = ints_get(w.shpc, s);
+    let vs = strs_new();
+    let fs = strs_new();
+    let xs = ints_new();
+    let mut i = 0;
+    while i < pc {
+        strs_push(vs, strs_get(w.pkv, pf + i));
+        strs_push(fs, strs_get(w.pkf, pf + i));
+        ints_push(xs, sh_truncated(w, ints_get(w.pval, pf + i), depth + 1));
+        i = i + 1;
+    }
+    sh_make(w, sh_fl(w, s), parts_run(w, vs, fs, xs), pc)
+}
+
+// --- one body's facts (`walk`) ----------------------------------------------------------------
+
+// Whether a type mentions no type parameter (`Types::is_concrete`).
+fn concrete(c: Ck, t: Int) -> Bool {
+    if t < 0 { return false; }
+    if tag(c, t) == tag_param() { return false; }
+    let mut i = 0;
+    while i < targc(c, t) {
+        if concrete(c, targ(c, t, i)) == false { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// The cell of a vector whose element is shown `elem` (`vec_cell`).
+fn vec_cell(elem: Str) -> Str {
+    if elem == "Int" { return "Ints"; }
+    if elem == "Str" { return "Strs"; }
+    cat3("Vec[", elem, "]")
+}
+
+// The target a function value of this signature answers to: its type up to effects
+// (`value_target`), or the wild one where it mentions a type parameter.
+fn value_target(c: Ck, params: Ints, ret: Int) -> Str {
+    let shown = strs_new();
+    let mut i = 0;
+    while i < ints_len(params) {
+        if concrete(c, ints_get(params, i)) == false { return "fn *"; }
+        strs_push(shown, show(c, ints_get(params, i)));
+        i = i + 1;
+    }
+    if concrete(c, ret) == false { return "fn *"; }
+    cat4("fn (", str_join(shown, ", "), ") -> ", show(c, ret))
+}
+
+fn fn_type_target(c: Ck, t: Int) -> Str {
+    if t >= 0 && is_fn(c, t) { return value_target(c, fn_params(c, t), fn_ret(c, t)); }
+    "fn *"
+}
+
+// A function's own target: its parameters' types and its result.
+fn function_target(c: Ck, f: Int) -> Str {
+    let params = ints_new();
+    let mut i = 0;
+    while i < ints_get(c.fnpc, f) {
+        ints_push(params, ints_get(c.ptys, ints_get(c.fnpf, f) + i));
+        i = i + 1;
+    }
+    value_target(c, params, ints_get(c.fnret, f))
+}
+
+// The cell a binding a closure shares is kept in (R1b, L10), named as a `Cell`'s is.
+fn shared_cell(c: Ck, b: Int) -> Str {
+    let t = ints_get(c.bty, b);
+    if concrete(c, t) { return cat3("Cell[", show(c, t), "]"); }
+    "*"
+}
+
+// The call site at a span, or -1.
+fn site_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.msite, s, e) }
+
+// The local slot of binding `b` in the body being walked, made on first sight.
+fn w_local(w: Wk, bloc: Ints, b: Int) -> Int {
+    let l = ints_get(bloc, b);
+    if l >= 0 { return l; }
+    w_add_local(w, bloc, b, fl_new(), 0)
+}
+
+fn w_add_local(w: Wk, bloc: Ints, b: Int, f: Fl, kind: Int) -> Int {
+    ints_push(w.lb, b);
+    vec_push(w.lf, f);
+    ints_push(w.lk, kind);
+    ints_push(w.lpf, 0 - 1);
+    ints_push(w.lpc, 0);
+    ints_push(w.lr, 0);
+    ints_set(bloc, b, ints_len(w.lb) - 1);
+    ints_len(w.lb) - 1
+}
+
+fn w_stale(w: Wk) -> Int {
+    ints_set(w.st, 2, 1);
+    0
+}
+
+// A value written into a container's cell (`store`), joined into the store already at its place.
+fn w_store(pf: Pf, w: Wk, cell: Str, s: Int, e: Int, v: Fl) -> Int {
+    let mut i = ints_get(w.st, 5);
+    while i < strs_len(pf.ocl) {
+        if ints_get(pf.oss, i) == s && ints_get(pf.ose, i) == e && strs_get(pf.ocl, i) == cell {
+            fl_join(vec_get(pf.ofl, i), v);
+            return 0;
+        }
+        i = i + 1;
+    }
+    strs_push(pf.ocl, cell);
+    ints_push(pf.oss, s);
+    ints_push(pf.ose, e);
+    vec_push(pf.ofl, fl_copy(v));
+    0
+}
+
+// A flow into a sink of a class (`sink`).
+fn w_sink(pf: Pf, w: Wk, s: Int, e: Int, class: Int, v: Fl) -> Int {
+    let mut i = ints_get(w.st, 4);
+    while i < ints_len(pf.kss) {
+        if ints_get(pf.kss, i) == s && ints_get(pf.kse, i) == e && ints_get(pf.kcl, i) == class {
+            fl_join(vec_get(pf.kfl, i), v);
+            return 0;
+        }
+        i = i + 1;
+    }
+    ints_push(pf.kss, s);
+    ints_push(pf.kse, e);
+    ints_push(pf.kcl, class);
+    vec_push(pf.kfl, fl_copy(v));
+    0
+}
+
+// A call of a function of the program (`call`): its arguments joined into the call already at its
+// place; the flow of its result.
+fn w_call(pf: Pf, w: Wk, callee: Int, s: Int, e: Int, args: Vec[Fl], spawned: Bool) -> Fl {
+    let mut i = ints_get(w.st, 3);
+    while i < ints_len(pf.ccal) {
+        if ints_get(pf.cs, i) == s && ints_get(pf.ce, i) == e {
+            let mut k = 0;
+            while k < vec_len(args) && k < ints_get(pf.cac, i) {
+                fl_join(vec_get(pf.args, ints_get(pf.caf, i) + k), vec_get(args, k));
+                k = k + 1;
+            }
+            return fl_call(i);
+        }
+        i = i + 1;
+    }
+    ints_push(pf.ccal, callee);
+    ints_push(pf.cs, s);
+    ints_push(pf.ce, e);
+    if spawned { ints_push(pf.csp, 1); } else { ints_push(pf.csp, 0); }
+    ints_push(pf.caf, vec_len(pf.args));
+    ints_push(pf.cac, vec_len(args));
+    let mut k = 0;
+    while k < vec_len(args) {
+        vec_push(pf.args, vec_get(args, k));
+        k = k + 1;
+    }
+    fl_call(ints_len(pf.ccal) - 1)
+}
+
+// A call whose callee is not named, through a value or a bound (`indirect`).
+fn w_indirect(pf: Pf, w: Wk, target: Str, s: Int, e: Int, args: Vec[Fl]) -> Fl {
+    let mut i = ints_get(w.st, 6);
+    while i < strs_len(pf.itg) {
+        if ints_get(pf.iss, i) == s && ints_get(pf.ise, i) == e {
+            let mut k = 0;
+            while k < vec_len(args) && k < ints_get(pf.iac, i) {
+                fl_join(vec_get(pf.args, ints_get(pf.iaf, i) + k), vec_get(args, k));
+                k = k + 1;
+            }
+            return fl_via(i);
+        }
+        i = i + 1;
+    }
+    strs_push(pf.itg, target);
+    ints_push(pf.iss, s);
+    ints_push(pf.ise, e);
+    ints_push(pf.iaf, vec_len(pf.args));
+    ints_push(pf.iac, vec_len(args));
+    let mut k = 0;
+    while k < vec_len(args) {
+        vec_push(pf.args, vec_get(args, k));
+        k = k + 1;
+    }
+    fl_via(strs_len(pf.itg) - 1)
+}
+
+fn joined_all(args: Vec[Fl]) -> Fl {
+    let f = fl_new();
+    let mut i = 0;
+    while i < vec_len(args) {
+        fl_join(f, vec_get(args, i));
+        i = i + 1;
+    }
+    f
+}
+
+// `assign`: a binding is everything ever assigned to it; a shared one's cell is written too.
+fn w_assign(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int, e: Int, v: Int) -> Int {
+    let b = sm_get(c.mvar, s, e);
+    if b < 0 { return 0; }
+    if ints_get(c.bshr, b) == 1 { w_store(pf, w, shared_cell(c, b), s, e, sh_fl(w, v)); }
+    let l = w_local(w, bloc, b);
+    let mut grew = fl_join(vec_get(w.lf, l), sh_fl(w, v));
+    let kind = ints_get(w.lk, l);
+    let mut next = 0 - 1;
+    let mut npf = 0 - 1;
+    let mut npc = 0;
+    if kind != 2 {
+        if sh_has_parts(w, v) == false {
+            if sh_neutral(w, v) == false { next = 2; }
+        } else {
+            if kind == 0 {
+                next = 1;
+                npf = ints_get(w.shpf, v);
+                npc = ints_get(w.shpc, v);
+            } else {
+                let merged = merge_parts(w, ints_get(w.lpf, l), ints_get(w.lpc, l), ints_get(w.shpf, v), ints_get(w.shpc, v));
+                let count = ints_len(w.pval) - merged;
+                if parts_same(w, ints_get(w.lpf, l), ints_get(w.lpc, l), merged, count) == false {
+                    next = 1;
+                    npf = merged;
+                    npc = count;
+                }
+            }
+        }
+    }
+    if next >= 0 {
+        let mut differs = next != kind;
+        if next == 1 && kind == 1 { differs = parts_same(w, ints_get(w.lpf, l), ints_get(w.lpc, l), npf, npc) == false; }
+        if differs {
+            ints_set(w.lk, l, next);
+            ints_set(w.lpf, l, npf);
+            ints_set(w.lpc, l, npc);
+            grew = true;
+        }
+    }
+    if grew && ints_get(w.lr, l) == 1 { w_stale(w); }
+    0
+}
+
+// `a.b = v` (`assign_field`): the binding is whole from then on.
+fn w_assign_field(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int, e: Int, v: Fl) -> Int {
+    let b = sm_get(c.mvar, s, e);
+    if b < 0 { return 0; }
+    if ints_get(c.bshr, b) == 1 { w_store(pf, w, shared_cell(c, b), s, e, v); }
+    let l = w_local(w, bloc, b);
+    let mut grew = fl_join(vec_get(w.lf, l), v);
+    if ints_get(w.lk, l) != 2 {
+        ints_set(w.lk, l, 2);
+        grew = true;
+    }
+    if grew && ints_get(w.lr, l) == 1 { w_stale(w); }
+    0
+}
+
+// A name read (`expr_var`): its binding as it stands, or a named function written as a value.
+fn w_var(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int, e: Int) -> Int {
+    let b = sm_get(c.mvar, s, e);
+    if b < 0 {
+        let mut i = 0;
+        while i < ints_len(c.vfn) {
+            if ints_get(c.vstart, i) == s && ints_get(c.vend, i) == e {
+                let f = ints_get(c.vfn, i);
+                let mut made = false;
+                let mut k = ints_get(w.st, 7);
+                while k < ints_len(pf.mfn) {
+                    if ints_get(pf.mss, k) == s && ints_get(pf.mse, k) == e && ints_get(pf.mfn, k) == f { made = true; }
+                    k = k + 1;
+                }
+                if made == false {
+                    ints_push(pf.mfn, f);
+                    strs_push(pf.mtg, function_target(c, f));
+                    ints_push(pf.mss, s);
+                    ints_push(pf.mse, e);
+                    ints_push(pf.mcf, vec_len(pf.args));
+                    ints_push(pf.mcc, 0);
+                }
+                return sh_none(w);
+            }
+            i = i + 1;
+        }
+        return sh_none(w);
+    }
+    let l = w_local(w, bloc, b);
+    ints_set(w.lr, l, 1);
+    if ints_get(c.bshr, b) == 1 { return sh_whole(w, fl_cell(shared_cell(c, b), s, e)); }
+    let f = fl_copy(vec_get(w.lf, l));
+    if ints_get(w.lk, l) == 1 { return sh_make(w, f, ints_get(w.lpf, l), ints_get(w.lpc, l)); }
+    sh_whole(w, f)
+}
+
+fn w_expr(c: Ck, pf: Pf, w: Wk, bloc: Ints, e: Int) -> Fl { sh_flow(w, w_shaped(c, pf, w, bloc, e)) }
+
+fn w_block(c: Ck, pf: Pf, w: Wk, bloc: Ints, b: Int) -> Int {
+    let mark = ints_len(w.defers);
+    let statements = kids(c, b, "statements");
+    let mut i = 0;
+    while i < ints_len(statements) {
+        w_stmt(c, pf, w, bloc, ints_get(statements, i));
+        i = i + 1;
+    }
+    let mut tail = sh_none(w);
+    if some(c, b, "tail") { tail = w_shaped(c, pf, w, bloc, unwrap(c, b, "tail")); }
+    // What this block deferred runs as it ends, after everything written in it (L12).
+    let ran = ints_new();
+    while ints_len(w.defers) > mark { ints_push(ran, ints_pop(w.defers)); }
+    i = 0;
+    while i < ints_len(ran) {
+        w_block(c, pf, w, bloc, ints_get(ran, i));
+        i = i + 1;
+    }
+    tail
+}
+
+fn w_stmt(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int) -> Int {
+    if sx_kind(c.t, s) != tk_tuple() { return 0; }
+    let k = kind_of(c, s);
+    let n = sx_kid(c.t, s, 0);
+    if k == "Expr" {
+        w_expr(c, pf, w, bloc, n);
+        return 0;
+    }
+    if k == "Let" {
+        let v = w_shaped(c, pf, w, bloc, fld(c, n, "value"));
+        let ns = fld(c, n, "name_span");
+        w_assign(c, pf, w, bloc, sps(c, ns), spe(c, ns), v);
+        return 0;
+    }
+    if k == "Assign" {
+        let place = fld(c, n, "place");
+        let v = w_shaped(c, pf, w, bloc, fld(c, n, "value"));
+        let ns = fld(c, place, "name_span");
+        if ints_len(kids(c, place, "path")) == 0 {
+            w_assign(c, pf, w, bloc, sps(c, ns), spe(c, ns), v);
+        } else {
+            w_assign_field(c, pf, w, bloc, sps(c, ns), spe(c, ns), sh_fl(w, v));
+        }
+        return 0;
+    }
+    if k == "While" {
+        w_expr(c, pf, w, bloc, fld(c, n, "cond"));
+        w_block(c, pf, w, bloc, fld(c, n, "body"));
+        return 0;
+    }
+    if k == "For" {
+        let iter = fld(c, n, "iter");
+        let ns = fld(c, n, "name_span");
+        let s0 = sps(c, ns);
+        let e0 = spe(c, ns);
+        let mut v = 0;
+        if kind_of(c, iter) == "Range" {
+            v = sh_whole(w, w_expr(c, pf, w, bloc, fld(c, iter, "start")));
+            w_expr(c, pf, w, bloc, fld(c, iter, "end"));
+        } else {
+            let handle = w_expr(c, pf, w, bloc, sx_kid(c.t, iter, 0));
+            // The cell its sequence's `*_get` reads (R1a).
+            let t = sm_get(c.mfor, s0, e0);
+            let mut cell = "*";
+            if t >= 0 {
+                if tag(c, t) == tag_vec() && concrete(c, targ(c, t, 0)) { cell = vec_cell(show(c, targ(c, t, 0))); }
+            }
+            v = sh_whole(w, fl_joined(fl_cell(cell, s0, e0), handle));
+        }
+        w_assign(c, pf, w, bloc, s0, e0, v);
+        w_block(c, pf, w, bloc, fld(c, n, "body"));
+        return 0;
+    }
+    if k == "Return" {
+        let v = w_expr(c, pf, w, bloc, fld(c, n, "value"));
+        fl_join(vec_get(w.res, 0), v);
+        return 0;
+    }
+    if k == "Scope" {
+        w_block(c, pf, w, bloc, fld(c, n, "body"));
+        return 0;
+    }
+    if k == "Defer" {
+        let body = fld(c, n, "body");
+        w_block(c, pf, w, bloc, body);
+        ints_push(w.defers, body);
+        return 0;
+    }
+    if k == "Spawn" {
+        let args = kids(c, n, "args");
+        let flows = vec_new[Fl]();
+        let mut i = 0;
+        while i < ints_len(args) {
+            vec_push(flows, w_expr(c, pf, w, bloc, ints_get(args, i)));
+            i = i + 1;
+        }
+        let cs = fld(c, n, "callee_span");
+        let site = site_at(c, sps(c, cs), spe(c, cs));
+        if site >= 0 {
+            if ints_get(c.suser, site) >= 0 { w_call(pf, w, ints_get(c.suser, site), sps(c, cs), spe(c, cs), flows, true); }
+        }
+        return 0;
+    }
+    0
+}
+
+// Whether a construction gives its fields by position (R1.5, D4).
+fn positional_fields(c: Ck, fields: Ints) -> Bool {
+    let mut i = 0;
+    while i < ints_len(fields) {
+        if fname_of(c, ints_get(fields, i), "name") == "" { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// A record or variant built here, whole (`built_whole`), or each field kept apart (`built`).
+fn w_built(c: Ck, pf: Pf, w: Wk, bloc: Ints, variant: Str, fields: Ints, parts: Bool) -> Int {
+    let flow = fl_new();
+    let vs = strs_new();
+    let fs = strs_new();
+    let xs = ints_new();
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let v = sh_truncated(w, w_shaped(c, pf, w, bloc, fld(c, f, "value")), 1);
+        fl_join(flow, sh_fl(w, v));
+        if parts {
+            // A later field of the same name replaces an earlier one, as a map's insert does.
+            let name = fname_of(c, f, "name");
+            let mut at = 0;
+            while at < ints_len(xs) && key_less(strs_get(vs, at), strs_get(fs, at), variant, name) { at = at + 1; }
+            if at < ints_len(xs) && strs_get(fs, at) == name && strs_get(vs, at) == variant {
+                ints_set(xs, at, v);
+            } else {
+                strs_push(vs, "");
+                strs_push(fs, "");
+                ints_push(xs, 0);
+                let mut j = ints_len(xs) - 1;
+                while j > at {
+                    strs_set(vs, j, strs_get(vs, j - 1));
+                    strs_set(fs, j, strs_get(fs, j - 1));
+                    ints_set(xs, j, ints_get(xs, j - 1));
+                    j = j - 1;
+                }
+                strs_set(vs, at, variant);
+                strs_set(fs, at, name);
+                ints_set(xs, at, v);
+            }
+        }
+        i = i + 1;
+    }
+    if parts { return sh_make(w, flow, parts_run(w, vs, fs, xs), ints_len(xs)); }
+    sh_whole(w, flow)
+}
+
+// What each name a pattern binds carries (`bind_pattern`).
+fn w_bind(c: Ck, pf: Pf, w: Wk, bloc: Ints, p: Int, v: Int) -> Int {
+    let k = kind_of(c, p);
+    if sx_kind(c.t, p) == tk_tuple() {
+        if k == "Literal" {
+            w_expr(c, pf, w, bloc, sx_kid(c.t, p, 0));
+            return 0;
+        }
+        if k == "Variant" {
+            let vp = sx_kid(c.t, p, 0);
+            let variant = fname_of(c, vp, "variant");
+            let fields = kids(c, vp, "fields");
+            let mut i = 0;
+            while i < ints_len(fields) {
+                let f = ints_get(fields, i);
+                let name = fname_of(c, f, "name");
+                let mut part = 0 - 1;
+                if sh_has_parts(w, v) {
+                    if name == "" {
+                        part = sh_whole(w, sh_flow(w, v));
+                    } else {
+                        part = part_of(w, ints_get(w.shpf, v), ints_get(w.shpc, v), variant, name);
+                        if part < 0 { part = sh_none(w); }
+                    }
+                } else {
+                    part = sh_whole(w, sh_flow(w, v));
+                }
+                w_bind(c, pf, w, bloc, fld(c, f, "pattern"), part);
+                i = i + 1;
+            }
+        }
+        return 0;
+    }
+    if k == "Bind" {
+        let span = fld(c, p, "span");
+        w_assign(c, pf, w, bloc, sps(c, span), spe(c, span), v);
+        return 0;
+    }
+    if k == "Or" || k == "Tuple" {
+        let mut alts = kids(c, p, "alts");
+        if k == "Tuple" { alts = kids(c, p, "elems"); }
+        let mut i = 0;
+        while i < ints_len(alts) {
+            w_bind(c, pf, w, bloc, ints_get(alts, i), v);
+            i = i + 1;
+        }
+    }
+    0
+}
+
+// A method call's flow (`method`), receiver first: a call of the impl's function, or through a
+// bound every impl of that trait method.
+fn w_method(c: Ck, pf: Pf, w: Wk, s: Int, e: Int, flows: Vec[Fl]) -> Fl {
+    let site = site_at(c, s, e);
+    if site < 0 { return joined_all(flows); }
+    if ints_get(c.suser, site) >= 0 { return w_call(pf, w, ints_get(c.suser, site), s, e, flows, false); }
+    if ints_get(c.sind, site) >= 0 {
+        let tm = ints_get(c.stm, site);
+        if tm < 0 { return fl_joined(fl_origin(3, s, e), joined_all(flows)); }
+        let target = cat5("trait ", strs_get(c.trname, method_trait(c, tm)), ".", strs_get(c.tmname, tm), "");
+        return w_indirect(pf, w, target, s, e, flows);
+    }
+    joined_all(flows)
+}
+
+// The cell of a container of the shape `shape` (`cell_of_shape`), the call at `s..e` settling its
+// element type; the wild cell where it does not.
+fn cell_of_shape(c: Ck, shape: Str, s: Int, e: Int) -> Str {
+    if shape == "Ints" || shape == "Strs" || shape == "Chan" || shape == "Bytes" || shape == "Atomic" { return shape; }
+    let mut elem = "";
+    let site = site_at(c, s, e);
+    if site >= 0 {
+        let t = ints_get(c.starg, site);
+        if t >= 0 && concrete(c, t) { elem = show(c, t); }
+    }
+    if elem == "" { return "*"; }
+    if shape == "Vec[T]" { return vec_cell(elem); }
+    if shape == "Cell[T]" { return cat3("Cell[", elem, "]"); }
+    if shape == "Chan[T]" || shape == "Vec[Chan[T]]" { return cat3("Chan[", elem, "]"); }
+    "*"
+}
+
+// The shape of argument `arg` of built-in `b`, as the table spells it.
+fn arg_shape(c: Ck, b: Int, arg: Int) -> Str {
+    let shapes = split(strs_get(c.bshapes, b), 44);
+    if arg < strs_len(shapes) { return strs_get(shapes, arg); }
+    ""
+}
+
+fn w_cell(c: Ck, b: Int, s: Int, e: Int, arg: Int) -> Str { cell_of_shape(c, arg_shape(c, b, arg), s, e) }
+
+fn flow_at(flows: Vec[Fl], i: Int) -> Fl {
+    if i < vec_len(flows) { return fl_copy(vec_get(flows, i)); }
+    fl_new()
+}
+
+// A call's flow from its arguments' (`call_flows`).
+fn w_call_flows(c: Ck, pf: Pf, w: Wk, bloc: Ints, s: Int, e: Int, flows: Vec[Fl]) -> Fl {
+    let site = site_at(c, s, e);
+    if site < 0 { return joined_all(flows); }
+    let b = ints_get(c.sbuiltin, site);
+    if b >= 0 {
+        let all = joined_all(flows);
+        // Every argument that takes data out of the program, by class (N52).
+        let table = split(strs_get(c.bsk, b), 44);
+        let mut i = 0;
+        while i < strs_len(table) {
+            let one = strs_get(table, i);
+            if one != "" {
+                let parts = split(one, 58);
+                let arg = parse_int(strs_get(parts, 0));
+                if arg < vec_len(flows) { w_sink(pf, w, s, e, sink_class(strs_get(parts, 1)), vec_get(flows, arg)); }
+            }
+            i = i + 1;
+        }
+        // What it reads out of, or writes into, a container's cell (N80).
+        let cu = split(strs_get(c.bcont, b), 58);
+        let how = strs_get(cu, 0);
+        let mut contained = 0 - 1;
+        let cont = vec_new[Fl]();
+        if how == "read" {
+            let cell = w_cell(c, b, s, e, parse_int(strs_get(cu, 1)));
+            vec_push(cont, fl_joined(fl_cell(cell, s, e), all));
+            contained = 0;
+        }
+        if how == "write" {
+            let cell = w_cell(c, b, s, e, parse_int(strs_get(cu, 1)));
+            w_store(pf, w, cell, s, e, flow_at(flows, parse_int(strs_get(cu, 2))));
+        }
+        if how == "make" {
+            let cell = cell_of_shape(c, strs_get(c.bretshape, b), s, e);
+            w_store(pf, w, cell, s, e, flow_at(flows, parse_int(strs_get(cu, 1))));
+        }
+        if how == "exchange" {
+            let cell = w_cell(c, b, s, e, parse_int(strs_get(cu, 1)));
+            w_store(pf, w, cell, s, e, flow_at(flows, parse_int(strs_get(cu, 2))));
+            vec_push(cont, fl_joined(fl_cell(cell, s, e), all));
+            contained = 0;
+        }
+        if how == "receive" {
+            let source = w_cell(c, b, s, e, parse_int(strs_get(cu, 1)));
+            let target = w_cell(c, b, s, e, parse_int(strs_get(cu, 2)));
+            let moved = fl_cell(source, s, e);
+            w_store(pf, w, target, s, e, moved);
+            vec_push(cont, fl_joined(moved, all));
+            contained = 0;
+        }
+        if how == "fill" {
+            let flow = strs_get(c.bflow, b);
+            if str_starts(flow, "source:") {
+                let o = origin_named(str_slice(flow, 7, str_len(flow)));
+                let into = split(strs_get(cu, 1), 59);
+                let mut k = 0;
+                while k < strs_len(into) {
+                    let cell = w_cell(c, b, s, e, parse_int(strs_get(into, k)));
+                    w_store(pf, w, cell, s, e, fl_origin(o, s, e));
+                    k = k + 1;
+                }
+            }
+        }
+        if how == "select" {
+            let source = w_cell(c, b, s, e, parse_int(strs_get(cu, 1)));
+            let target = w_cell(c, b, s, e, parse_int(strs_get(cu, 2)));
+            w_store(pf, w, target, s, e, fl_cell(source, s, e));
+            vec_push(cont, fl_new());
+            contained = 0;
+        }
+        let flow = strs_get(c.bflow, b);
+        if str_starts(flow, "source:") { return fl_joined(fl_origin(origin_named(str_slice(flow, 7, str_len(flow))), s, e), all); }
+        if flow == "derive" || flow == "write-path" { return all; }
+        if flow == "read" {
+            if contained >= 0 { return vec_get(cont, 0); }
+            return fl_joined(fl_origin(3, s, e), all);
+        }
+        return fl_new();
+    }
+    if ints_get(c.suser, site) >= 0 { return w_call(pf, w, ints_get(c.suser, site), s, e, flows, false); }
+    if ints_get(c.sind, site) >= 0 {
+        // Through a function value (N80): every function value of a matching type may run, and
+        // the value itself carries what it captured.
+        let bid = sm_get(c.mvar, s, e);
+        let mut target = "fn *";
+        if bid >= 0 { target = fn_type_target(c, ints_get(c.bty, bid)); }
+        let callee = sh_flow(w, w_var(c, pf, w, bloc, s, e));
+        return fl_joined(w_indirect(pf, w, target, s, e, flows), callee);
+    }
+    joined_all(flows)
+}
+
+fn origin_named(name: Str) -> Int {
+    if name == "argument" { return 0; }
+    if name == "file" { return 1; }
+    if name == "authority" { return 2; }
+    3
+}
+
+fn w_call_expr(c: Ck, pf: Pf, w: Wk, bloc: Ints, span: Int, args: Ints) -> Fl {
+    let flows = vec_new[Fl]();
+    let mut i = 0;
+    while i < ints_len(args) {
+        vec_push(flows, w_expr(c, pf, w, bloc, ints_get(args, i)));
+        i = i + 1;
+    }
+    w_call_flows(c, pf, w, bloc, sps(c, span), spe(c, span), flows)
+}
+
+// What an expression carries (`shaped`).
+fn w_shaped(c: Ck, pf: Pf, w: Wk, bloc: Ints, e: Int) -> Int {
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() {
+        if k == "Block" { return w_block(c, pf, w, bloc, sx_kid(c.t, e, 0)); }
+        return sh_none(w);
+    }
+    if k == "Closure" {
+        // A closure is walked as a function of its own; making one moves no data.
+        let span = fld(c, e, "span");
+        let mut seen = false;
+        let mut i = 0;
+        while i < ints_len(w.clos) {
+            let o = fld(c, ints_get(w.clos, i), "span");
+            if sx_s(c.t, o) == sx_s(c.t, span) && sx_e(c.t, o) == sx_e(c.t, span) { seen = true; }
+            i = i + 1;
+        }
+        if seen == false { ints_push(w.clos, e); }
+        return sh_none(w);
+    }
+    if k == "Int" || k == "WideInt" || k == "Float" || k == "Bool" || k == "Str" { return sh_none(w); }
+    if k == "Var" {
+        let span = fld(c, e, "span");
+        return w_var(c, pf, w, bloc, sps(c, span), spe(c, span));
+    }
+    if k == "Neg" || k == "BitNot" { return sh_whole(w, w_expr(c, pf, w, bloc, fld(c, e, "operand"))); }
+    if k == "Array" || k == "Tuple" {
+        let elems = kids(c, e, "elems");
+        if ints_len(elems) == 0 { return sh_none(w); }
+        let flow = fl_new();
+        let mut i = 0;
+        while i < ints_len(elems) {
+            fl_join(flow, w_expr(c, pf, w, bloc, ints_get(elems, i)));
+            i = i + 1;
+        }
+        return sh_whole(w, flow);
+    }
+    if k == "ArrayRepeat" {
+        w_expr(c, pf, w, bloc, fld(c, e, "count"));
+        return sh_whole(w, w_expr(c, pf, w, bloc, fld(c, e, "value")));
+    }
+    if k == "Index" {
+        let b = w_expr(c, pf, w, bloc, fld(c, e, "base"));
+        let i = w_expr(c, pf, w, bloc, fld(c, e, "index"));
+        return sh_whole(w, fl_joined(b, i));
+    }
+    if k == "Not" {
+        w_expr(c, pf, w, bloc, fld(c, e, "operand"));
+        return sh_none(w);
+    }
+    if k == "Binary" {
+        let op = sx_text(c.t, fld(c, e, "op"));
+        if op == "And" || op == "Or" {
+            w_expr(c, pf, w, bloc, fld(c, e, "lhs"));
+            return sh_whole(w, w_expr(c, pf, w, bloc, fld(c, e, "rhs")));
+        }
+        let l = w_expr(c, pf, w, bloc, fld(c, e, "lhs"));
+        let r = w_expr(c, pf, w, bloc, fld(c, e, "rhs"));
+        return sh_whole(w, fl_joined(l, r));
+    }
+    if k == "Call" { return sh_whole(w, w_call_expr(c, pf, w, bloc, fld(c, e, "callee_span"), kids(c, e, "args"))); }
+    if k == "Variant" {
+        let fields = kids(c, e, "fields");
+        let vsp = fld(c, e, "variant_span");
+        // `x.m()` the checker read as a method call (N78).
+        if ints_len(fields) == 0 && site_at(c, sps(c, vsp), spe(c, vsp)) >= 0 {
+            let flows = vec_new[Fl]();
+            let ts = fld(c, e, "ty_span");
+            if sm_get(c.mvar, sps(c, ts), spe(c, ts)) >= 0 { vec_push(flows, sh_flow(w, w_var(c, pf, w, bloc, sps(c, ts), spe(c, ts)))); }
+            return sh_whole(w, w_method(c, pf, w, sps(c, vsp), spe(c, vsp), flows));
+        }
+        if positional_fields(c, fields) { return w_built(c, pf, w, bloc, "", fields, false); }
+        return w_built(c, pf, w, bloc, fname_of(c, e, "variant"), fields, true);
+    }
+    if k == "Interp" {
+        let parts = kids(c, e, "parts");
+        let mut flow = fl_new();
+        let mut any = false;
+        let mut i = 0;
+        while i < ints_len(parts) {
+            let part = ints_get(parts, i);
+            if sx_kind(c.t, part) != tk_tuple() {
+                let mut f = w_expr(c, pf, w, bloc, fld(c, part, "expr"));
+                let hs = fld(c, part, "span");
+                if site_at(c, sps(c, hs), spe(c, hs)) >= 0 {
+                    let one = vec_new[Fl]();
+                    vec_push(one, f);
+                    f = w_method(c, pf, w, sps(c, hs), spe(c, hs), one);
+                }
+                if any { fl_join(flow, f); } else { flow = f; }
+                any = true;
+            }
+            i = i + 1;
+        }
+        if any { return sh_whole(w, flow); }
+        return sh_none(w);
+    }
+    if k == "MethodCall" {
+        let receiver = fld(c, e, "receiver");
+        let flows = vec_new[Fl]();
+        let mut ufcs = false;
+        if sx_kind(c.t, receiver) != tk_tuple() && kind_of(c, receiver) == "Var" {
+            let rs = fld(c, receiver, "span");
+            ufcs = sm_get(c.mvar, sps(c, rs), spe(c, rs)) < 0;
+        }
+        if ufcs == false { vec_push(flows, w_expr(c, pf, w, bloc, receiver)); }
+        let args = kids(c, e, "args");
+        let mut i = 0;
+        while i < ints_len(args) {
+            vec_push(flows, w_expr(c, pf, w, bloc, ints_get(args, i)));
+            i = i + 1;
+        }
+        let ms = fld(c, e, "method_span");
+        return sh_whole(w, w_method(c, pf, w, sps(c, ms), spe(c, ms), flows));
+    }
+    if k == "Construct" {
+        let fields = kids(c, e, "fields");
+        let ts = fld(c, e, "ty_span");
+        if sm_get(c.mcons, sps(c, ts), spe(c, ts)) < 0 || positional_fields(c, fields) { return w_built(c, pf, w, bloc, "", fields, false); }
+        return w_built(c, pf, w, bloc, "", fields, true);
+    }
+    if k == "Match" {
+        let s = w_shaped(c, pf, w, bloc, fld(c, e, "scrutinee"));
+        let mut out = sh_none(w);
+        let arms = kids(c, e, "arms");
+        let mut i = 0;
+        while i < ints_len(arms) {
+            let arm = ints_get(arms, i);
+            w_bind(c, pf, w, bloc, fld(c, arm, "pattern"), s);
+            if some(c, arm, "guard") { w_expr(c, pf, w, bloc, unwrap(c, arm, "guard")); }
+            let v = w_shaped(c, pf, w, bloc, fld(c, arm, "body"));
+            out = sh_join(w, out, v);
+            i = i + 1;
+        }
+        return out;
+    }
+    if k == "Field" {
+        let b = w_shaped(c, pf, w, bloc, fld(c, e, "base"));
+        if sh_has_parts(w, b) == false { return sh_whole(w, sh_flow(w, b)); }
+        let name = fname_of(c, e, "name");
+        let mut out = sh_none(w);
+        let pf0 = ints_get(w.shpf, b);
+        let mut i = 0;
+        while i < ints_get(w.shpc, b) {
+            if strs_get(w.pkf, pf0 + i) == name { out = sh_join(w, out, ints_get(w.pval, pf0 + i)); }
+            i = i + 1;
+        }
+        return out;
+    }
+    if k == "Propagate" {
+        let o = w_shaped(c, pf, w, bloc, fld(c, e, "operand"));
+        if sh_has_parts(w, o) == false { return sh_whole(w, sh_flow(w, o)); }
+        let mut out = sh_none(w);
+        let pf0 = ints_get(w.shpf, o);
+        let mut i = 0;
+        while i < ints_get(w.shpc, o) {
+            let v = strs_get(w.pkv, pf0 + i);
+            if v != "Err" && v != "None" { out = sh_join(w, out, ints_get(w.pval, pf0 + i)); }
+            i = i + 1;
+        }
+        return out;
+    }
+    if k == "If" {
+        w_expr(c, pf, w, bloc, fld(c, e, "cond"));
+        let t = w_block(c, pf, w, bloc, fld(c, e, "then_block"));
+        let mut other = sh_none(w);
+        if some(c, e, "else_block") { other = w_block(c, pf, w, bloc, unwrap(c, e, "else_block")); }
+        return sh_join(w, t, other);
+    }
+    sh_none(w)
+}
+
+// --- every body's facts (`facts`) ---------------------------------------------------------------
+
+// Walk one body to its fixed point (`walk`): again only while a binding grew after it was read.
+fn walk_body(c: Ck, pf: Pf, w: Wk, bloc: Ints, body: Int) -> Int {
+    let mut pass = 0;
+    while pass < 256 {
+        ints_set(w.st, 2, 0);
+        let mut i = 0;
+        while i < ints_len(w.lr) {
+            ints_set(w.lr, i, 0);
+            i = i + 1;
+        }
+        let tail = w_block(c, pf, w, bloc, body);
+        fl_join(vec_get(w.res, 0), sh_fl(w, tail));
+        if ints_get(w.st, 2) == 0 { pass = 256; }
+        pass = pass + 1;
+    }
+    0
+}
+
+// The walk's facts filed, the closures it wrote made (`with_makes`) with what each capture holds
+// as the body left it and queued on `pending`, and its bindings forgotten.
+fn file_facts(c: Ck, pf: Pf, w: Wk, bloc: Ints, pending: Ints) -> Int {
+    let i = 0;
+    let mut k = 0;
+    while k < ints_len(w.clos) {
+        let e = ints_get(w.clos, k);
+        let span = fld(c, e, "span");
+        let cid = sm_get(c.mclo, sps(c, span), spe(c, span));
+        if cid >= 0 {
+            ints_push(pf.mfn, cid);
+            strs_push(pf.mtg, function_target(c, cid));
+            ints_push(pf.mss, sps(c, span));
+            ints_push(pf.mse, spe(c, span));
+            ints_push(pf.mcf, vec_len(pf.args));
+            let mut n = 0;
+            let mut j = 0;
+            while j < ints_len(c.capcl) {
+                if ints_get(c.capcl, j) == cid {
+                    let l = ints_get(bloc, ints_get(c.capbd, j));
+                    if l >= 0 { vec_push(pf.args, fl_copy(vec_get(w.lf, l))); } else { vec_push(pf.args, fl_new()); }
+                    n = n + 1;
+                }
+                j = j + 1;
+            }
+            ints_push(pf.mcc, n);
+            ints_push(pending, e);
+        }
+        k = k + 1;
+    }
+    ints_push(pf.ffn, w_fn(w));
+    vec_push(pf.fres, vec_get(w.res, 0));
+    ints_push(pf.fcf, ints_get(w.st, 3));
+    ints_push(pf.fcc, ints_len(pf.ccal) - ints_get(w.st, 3));
+    ints_push(pf.fsf, ints_get(w.st, 4));
+    ints_push(pf.fsc, ints_len(pf.kss) - ints_get(w.st, 4));
+    ints_push(pf.fof, ints_get(w.st, 5));
+    ints_push(pf.foc, strs_len(pf.ocl) - ints_get(w.st, 5));
+    ints_push(pf.fif, ints_get(w.st, 6));
+    ints_push(pf.fic, strs_len(pf.itg) - ints_get(w.st, 6));
+    ints_push(pf.fmf, ints_get(w.st, 7));
+    ints_push(pf.fmc, ints_len(pf.mfn) - ints_get(w.st, 7));
+    k = 0;
+    while k < ints_len(w.lb) {
+        ints_set(bloc, ints_get(w.lb, k), 0 - 1);
+        k = k + 1;
+    }
+    i
+}
+
+// How many captures closure `f` has.
+fn captures_of(c: Ck, f: Int) -> Int {
+    let mut n = 0;
+    let mut j = 0;
+    while j < ints_len(c.capcl) {
+        if ints_get(c.capcl, j) == f { n = n + 1; }
+        j = j + 1;
+    }
+    n
+}
+
+// Every function of every module, in load order and each module's order, then each closure it
+// wrote, the last written first (`facts`).
+fn all_facts(c: Ck, pf: Pf, bloc: Ints) -> Int {
+    let entry = defined_fn(c, 0, "main");
+    let mut m = 0;
+    while m < ints_len(c.mprog) {
+        ss(c, s_module(), m);
+        let functions = kids(c, ints_get(c.mprog, m), "functions");
+        let mut i = 0;
+        while i < ints_len(functions) {
+            let f = ints_get(functions, i);
+            let mut id = 0 - 1;
+            if some(c, f, "method_of") { id = fn_of_node(c, f); } else { id = defined_fn(c, m, fname_of(c, f, "name")); }
+            if id >= 0 && some(c, f, "body") {
+                if ints_get(c.fnnode, id) == f { walk_function(c, pf, bloc, f, id, id == entry); }
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    0
+}
+
+fn walk_function(c: Ck, pf: Pf, bloc: Ints, f: Int, id: Int, entry: Bool) -> Int {
+    let n = ints_get(c.fnpc, id);
+    let w = wk_new(id, n, pf);
+    let first = ints_get(c.fnpb, id);
+    let params = kids(c, f, "params");
+    let mut i = 0;
+    while i < n && first >= 0 {
+        let mut flow = fl_param(i);
+        if entry {
+            flow = fl_new();
+            if is_cap(c, ints_get(c.ptys, ints_get(c.fnpf, id) + i)) {
+                // `main`'s parameters have no caller: what they hold is the runtime's root
+                // authority (N37).
+                let mut at = fld(c, f, "name_span");
+                if i < ints_len(params) { at = fld(c, ints_get(params, i), "name_span"); }
+                flow = fl_origin(2, sps(c, at), spe(c, at));
+            }
+        }
+        w_add_local(w, bloc, first + i, flow, 2);
+        i = i + 1;
+    }
+    walk_body(c, pf, w, bloc, unwrap(c, f, "body"));
+    let pending = ints_new();
+    file_facts(c, pf, w, bloc, pending);
+    // Each closure the body wrote is a function of its own, walked after the body that made it.
+    let mut guard = 0;
+    while ints_len(pending) > 0 && guard <= 4096 {
+        guard = guard + 1;
+        let e = ints_pop(pending);
+        let span = fld(c, e, "span");
+        let cid = sm_get(c.mclo, sps(c, span), spe(c, span));
+        if cid >= 0 {
+            let cn = ints_get(c.fnpc, cid);
+            let cw = wk_new(cid, cn, pf);
+            let cfirst = ints_get(c.fnpb, cid);
+            let mut k = 0;
+            while k < cn && cfirst >= 0 {
+                w_add_local(cw, bloc, cfirst + k, fl_param(k), 2);
+                k = k + 1;
+            }
+            let mut j = 0;
+            let mut x = 0;
+            while x < ints_len(c.capcl) {
+                if ints_get(c.capcl, x) == cid {
+                    w_add_local(cw, bloc, ints_get(c.capbd, x), fl_param(cn + j), 2);
+                    j = j + 1;
+                }
+                x = x + 1;
+            }
+            walk_body(c, pf, cw, bloc, fld(c, e, "body"));
+            file_facts(c, pf, cw, bloc, pending);
+        }
+    }
+    0
+}
+
+// --- the whole program (`solve`) ------------------------------------------------------------------
+
+// The program as it is solved: by function, which facts are its, its summary (origins and
+// parameters its result always carries), its arity, which parameters reach each class of sink, and
+// what each parameter and capture is handed; each cell's origins; which functions each indirect
+// target may run; and each call's and indirect call's value, as last settled.
+pub struct Ps {
+    at: Ints,
+    so: Ints,
+    sp: Ints,
+    ar: Ints,
+    reach: Ints,
+    rcf: Ints,
+    rcc: Ints,
+    rcv: Ints,
+    cn: Strs,
+    co: Ints,
+    tn: Strs,
+    tf: Ints,
+    tc: Ints,
+    tv: Ints,
+    vco: Ints,
+    vcp: Ints,
+    vio: Ints,
+    vip: Ints,
+    // Each indirect call's candidates, a run of `tv` (`resolved`).
+    icf: Ints,
+    icc: Ints,
+}
+
+// A value solved (`Val`): origins, and the enclosing function's parameters it carries.
+pub struct Vl {
+    o: Int,
+    p: Int,
+}
+
+fn ps_cell(ps: Ps, name: Str) -> Int {
+    let mut o = 0;
+    let mut i = 0;
+    while i < strs_len(ps.cn) {
+        if name == "*" || strs_get(ps.cn, i) == name || strs_get(ps.cn, i) == "*" { o = bor(o, ints_get(ps.co, i)); }
+        i = i + 1;
+    }
+    o
+}
+
+fn ps_received(ps: Ps, g: Int, p: Int) -> Int {
+    if p < ints_get(ps.rcc, g) { return ints_get(ps.rcv, ints_get(ps.rcf, g) + p); }
+    0
+}
+
+fn ps_eval(ps: Ps, f: Fl) -> Vl {
+    let mut o = fl_origins(f);
+    let mut p = fl_params(f);
+    let mut i = 0;
+    while i < ints_len(f.cs) {
+        o = bor(o, ints_get(ps.vco, ints_get(f.cs, i)));
+        p = bor(p, ints_get(ps.vcp, ints_get(f.cs, i)));
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(f.vs) {
+        o = bor(o, ints_get(ps.vio, ints_get(f.vs, i)));
+        p = bor(p, ints_get(ps.vip, ints_get(f.vs, i)));
+        i = i + 1;
+    }
+    i = 0;
+    while i < strs_len(f.cn) {
+        o = bor(o, ps_cell(ps, strs_get(f.cn, i)));
+        i = i + 1;
+    }
+    Vl(o: o, p: p)
+}
+
+// What `flow` can carry in function `g`: its value's origins and what its parameters are handed.
+fn ps_reaching(ps: Ps, g: Int, f: Fl) -> Int {
+    let v = ps_eval(ps, f);
+    let mut o = v.o;
+    let ps_ = bits_of(v.p);
+    let mut i = 0;
+    while i < ints_len(ps_) {
+        o = bor(o, ps_received(ps, g, ints_get(ps_, i)));
+        i = i + 1;
+    }
+    o
+}
+
+// What a call of `g` with the arguments `af..af+ac` returns (`applied`).
+fn ps_applied(ps: Ps, pf: Pf, g: Int, af: Int, ac: Int) -> Vl {
+    let mut o = ints_get(ps.so, g);
+    let mut p = 0;
+    let qs = bits_of(ints_get(ps.sp, g));
+    let mut i = 0;
+    while i < ints_len(qs) {
+        let q = ints_get(qs, i);
+        if q < ints_get(ps.ar, g) {
+            if q < ac {
+                let v = ps_eval(ps, vec_get(pf.args, af + q));
+                o = bor(o, v.o);
+                p = bor(p, v.p);
+            }
+        } else {
+            o = bor(o, ps_received(ps, g, q));
+        }
+        i = i + 1;
+    }
+    Vl(o: o, p: p)
+}
+
+// Every call's result in fact `k`, against the current summaries (`values`): a small fixed point.
+fn ps_values(ps: Ps, pf: Pf, k: Int) -> Int {
+    let cf = ints_get(pf.fcf, k);
+    let cc = ints_get(pf.fcc, k);
+    let xf = ints_get(pf.fif, k);
+    let xc = ints_get(pf.fic, k);
+    let mut i = 0;
+    while i < cc {
+        ints_set(ps.vco, cf + i, 0);
+        ints_set(ps.vcp, cf + i, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < xc {
+        ints_set(ps.vio, xf + i, 0);
+        ints_set(ps.vip, xf + i, 0);
+        i = i + 1;
+    }
+    let mut round = 0;
+    while round <= cc + xc {
+        let mut changed = false;
+        i = 0;
+        while i < cc {
+            let x = cf + i;
+            let v = ps_applied(ps, pf, ints_get(pf.ccal, x), ints_get(pf.caf, x), ints_get(pf.cac, x));
+            if v.o != ints_get(ps.vco, x) || v.p != ints_get(ps.vcp, x) {
+                ints_set(ps.vco, x, v.o);
+                ints_set(ps.vcp, x, v.p);
+                changed = true;
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < xc {
+            let x = xf + i;
+            let mut o = 0;
+            let mut p = 0;
+            let mut j = 0;
+            while j < ints_get(ps.icc, x) {
+                let v = ps_applied(ps, pf, ints_get(ps.tv, ints_get(ps.icf, x) + j), ints_get(pf.iaf, x), ints_get(pf.iac, x));
+                o = bor(o, v.o);
+                p = bor(p, v.p);
+                j = j + 1;
+            }
+            if o != ints_get(ps.vio, x) || p != ints_get(ps.vip, x) {
+                ints_set(ps.vio, x, o);
+                ints_set(ps.vip, x, p);
+                changed = true;
+            }
+            i = i + 1;
+        }
+        if changed { round = round + 1; } else { round = cc + xc + 1; }
+    }
+    0
+}
+
+fn ps_reach(ps: Ps, g: Int, class: Int) -> Int { ints_get(ps.reach, 4 * g + class) }
+
+// Summaries to their least fixed point (`settle`), whole passes until none grows.
+fn ps_settle(ps: Ps, pf: Pf) -> Int {
+    let count = ints_len(pf.ffn);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut k = count - 1;
+        while k >= 0 {
+            ps_values(ps, pf, k);
+            let r = ps_eval(ps, vec_get(pf.fres, k));
+            let g = ints_get(pf.ffn, k);
+            if r.o != ints_get(ps.so, g) || r.p != ints_get(ps.sp, g) {
+                ints_set(ps.so, g, r.o);
+                ints_set(ps.sp, g, r.p);
+                changed = true;
+            }
+            k = k - 1;
+        }
+    }
+    0
+}
+
+// Which parameters reach a sink of each class (`settle_reach`).
+fn ps_settle_reach(ps: Ps, pf: Pf) -> Int {
+    let count = ints_len(pf.ffn);
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut k = 0;
+        while k < count {
+            let g = ints_get(pf.ffn, k);
+            let mut i = 0;
+            while i < ints_get(pf.fsc, k) {
+                let s = ints_get(pf.fsf, k) + i;
+                let slot = 4 * g + ints_get(pf.kcl, s);
+                let grown = bor(ints_get(ps.reach, slot), ps_eval(ps, vec_get(pf.kfl, s)).p);
+                if grown != ints_get(ps.reach, slot) {
+                    ints_set(ps.reach, slot, grown);
+                    changed = true;
+                }
+                i = i + 1;
+            }
+            let mut class = 0;
+            while class < 4 {
+                let mut add = 0;
+                i = 0;
+                while i < ints_get(pf.fcc, k) {
+                    let x = ints_get(pf.fcf, k) + i;
+                    let rs = bits_of(ps_reach(ps, ints_get(pf.ccal, x), class));
+                    let mut j = 0;
+                    while j < ints_len(rs) {
+                        let a = ints_get(rs, j);
+                        if a < ints_get(pf.cac, x) { add = bor(add, ps_eval(ps, vec_get(pf.args, ints_get(pf.caf, x) + a)).p); }
+                        j = j + 1;
+                    }
+                    i = i + 1;
+                }
+                i = 0;
+                while i < ints_get(pf.fic, k) {
+                    let x = ints_get(pf.fif, k) + i;
+                    let mut q = 0;
+                    while q < ints_get(ps.icc, x) {
+                        let h = ints_get(ps.tv, ints_get(ps.icf, x) + q);
+                        let rs = bits_of(ps_reach(ps, h, class));
+                        let mut j = 0;
+                        while j < ints_len(rs) {
+                            let a = ints_get(rs, j);
+                            if a < ints_get(ps.ar, h) && a < ints_get(pf.iac, x) { add = bor(add, ps_eval(ps, vec_get(pf.args, ints_get(pf.iaf, x) + a)).p); }
+                            j = j + 1;
+                        }
+                        q = q + 1;
+                    }
+                    i = i + 1;
+                }
+                i = 0;
+                while i < ints_get(pf.fmc, k) {
+                    let x = ints_get(pf.fmf, k) + i;
+                    let h = ints_get(pf.mfn, x);
+                    let base = ints_get(ps.ar, h);
+                    let rs = bits_of(ps_reach(ps, h, class));
+                    let mut j = 0;
+                    while j < ints_len(rs) {
+                        let a = ints_get(rs, j) - base;
+                        if a >= 0 && a < ints_get(pf.mcc, x) { add = bor(add, ps_eval(ps, vec_get(pf.args, ints_get(pf.mcf, x) + a)).p); }
+                        j = j + 1;
+                    }
+                    i = i + 1;
+                }
+                let slot = 4 * g + class;
+                let grown = bor(ints_get(ps.reach, slot), add);
+                if grown != ints_get(ps.reach, slot) {
+                    ints_set(ps.reach, slot, grown);
+                    changed = true;
+                }
+                class = class + 1;
+            }
+            k = k + 1;
+        }
+    }
+    0
+}
+
+// What each parameter and capture is handed (`settle_receives`): every edge evaluated once, then
+// grown to a fixed point.
+fn ps_settle_receives(ps: Ps, pf: Pf) -> Int {
+    let eg = ints_new();
+    let ei = ints_new();
+    let eo = ints_new();
+    let efrom = ints_new();
+    let ep = ints_new();
+    let count = ints_len(pf.ffn);
+    let mut k = 0;
+    while k < count {
+        let from = ints_get(pf.ffn, k);
+        let mut i = 0;
+        while i < ints_get(pf.fcc, k) {
+            let x = ints_get(pf.fcf, k) + i;
+            let mut a = 0;
+            while a < ints_get(pf.cac, x) {
+                let v = ps_eval(ps, vec_get(pf.args, ints_get(pf.caf, x) + a));
+                ints_push(eg, ints_get(pf.ccal, x));
+                ints_push(ei, a);
+                ints_push(eo, v.o);
+                ints_push(efrom, from);
+                ints_push(ep, v.p);
+                a = a + 1;
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < ints_get(pf.fic, k) {
+            let x = ints_get(pf.fif, k) + i;
+            let mut q = 0;
+            while q < ints_get(ps.icc, x) {
+                let h = ints_get(ps.tv, ints_get(ps.icf, x) + q);
+                let mut a = 0;
+                while a < ints_get(pf.iac, x) && a < ints_get(ps.ar, h) {
+                    let v = ps_eval(ps, vec_get(pf.args, ints_get(pf.iaf, x) + a));
+                    ints_push(eg, h);
+                    ints_push(ei, a);
+                    ints_push(eo, v.o);
+                    ints_push(efrom, from);
+                    ints_push(ep, v.p);
+                    a = a + 1;
+                }
+                q = q + 1;
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < ints_get(pf.fmc, k) {
+            let x = ints_get(pf.fmf, k) + i;
+            let h = ints_get(pf.mfn, x);
+            let base = ints_get(ps.ar, h);
+            let mut a = 0;
+            while a < ints_get(pf.mcc, x) {
+                let v = ps_eval(ps, vec_get(pf.args, ints_get(pf.mcf, x) + a));
+                ints_push(eg, h);
+                ints_push(ei, base + a);
+                ints_push(eo, v.o);
+                ints_push(efrom, from);
+                ints_push(ep, v.p);
+                a = a + 1;
+            }
+            i = i + 1;
+        }
+        k = k + 1;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut e = 0;
+        while e < ints_len(eg) {
+            let mut o = ints_get(eo, e);
+            let qs = bits_of(ints_get(ep, e));
+            let mut j = 0;
+            while j < ints_len(qs) {
+                o = bor(o, ps_received(ps, ints_get(efrom, e), ints_get(qs, j)));
+                j = j + 1;
+            }
+            let g = ints_get(eg, e);
+            let i = ints_get(ei, e);
+            if i < ints_get(ps.rcc, g) {
+                let slot = ints_get(ps.rcf, g) + i;
+                let grown = bor(ints_get(ps.rcv, slot), o);
+                if grown != ints_get(ps.rcv, slot) {
+                    ints_set(ps.rcv, slot, grown);
+                    changed = true;
+                }
+            }
+            e = e + 1;
+        }
+    }
+    0
+}
+
+// Which functions each target may run: the program's function values by type up to effects and
+// each impl's method by its trait method (`targets`), then each indirect call's candidates
+// (`resolve_candidates`), sorted.
+fn ps_targets(c: Ck, ps: Ps, pf: Pf) -> Int {
+    let names = strs_new();
+    let fns = ints_new();
+    let mut i = 0;
+    while i < ints_len(pf.mfn) {
+        strs_push(names, strs_get(pf.mtg, i));
+        ints_push(fns, ints_get(pf.mfn, i));
+        i = i + 1;
+    }
+    let mut im = 0;
+    while im < ints_len(c.imtrait) {
+        let tr = ints_get(c.imtrait, im);
+        let mut m = 0;
+        while m < ints_get(c.trmc, tr) {
+            let g = ints_get(c.imfn, ints_get(c.imff, im) + m);
+            if g >= 0 {
+                strs_push(names, cat4("trait ", strs_get(c.trname, tr), ".", strs_get(c.tmname, ints_get(c.trmf, tr) + m)));
+                ints_push(fns, g);
+            }
+            m = m + 1;
+        }
+        im = im + 1;
+    }
+    // Each indirect call's candidates.
+    let x = 0;
+    i = 0;
+    while i < strs_len(pf.itg) {
+        let target = strs_get(pf.itg, i);
+        let run = ints_new();
+        let mut j = 0;
+        while j < strs_len(names) {
+            let n = strs_get(names, j);
+            let mut takes = n == target;
+            if target == "fn *" { takes = str_starts(n, "fn "); }
+            if str_starts(target, "fn ") && n == "fn *" { takes = true; }
+            if takes { set_add(run, ints_get(fns, j)); }
+            j = j + 1;
+        }
+        ints_push(ps.icf, ints_len(ps.tv));
+        ints_push(ps.icc, ints_len(run));
+        j = 0;
+        while j < ints_len(run) {
+            ints_push(ps.tv, ints_get(run, j));
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    x
+}
+
+fn ps_candidates_has(ps: Ps, x: Int, g: Int) -> Bool {
+    let mut j = 0;
+    while j < ints_get(ps.icc, x) {
+        if ints_get(ps.tv, ints_get(ps.icf, x) + j) == g { return true; }
+        j = j + 1;
+    }
+    false
+}
+
+// --- witness chains (`Tracer`) --------------------------------------------------------------------
+
+// One chain being built: its steps, nearest the sink first, and where it has been, so a cycle
+// through calls or cells ends (`Seen`).
+pub struct Tr {
+    ss: Ints,
+    se: Ints,
+    notes: Strs,
+    seen: Ints,
+}
+
+fn tr_new() -> Tr { Tr(ss: ints_new(), se: ints_new(), notes: strs_new(), seen: ints_new()) }
+
+fn tr_step(t: Tr, s: Int, e: Int, note: Str) -> Int {
+    ints_push(t.ss, s);
+    ints_push(t.se, e);
+    strs_push(t.notes, note);
+    0
+}
+
+// Mark (a, b, x) seen; whether it was not.
+fn tr_insert(t: Tr, a: Int, b: Int, x: Int) -> Bool {
+    let mut i = 0;
+    while i + 2 < ints_len(t.seen) {
+        if ints_get(t.seen, i) == a && ints_get(t.seen, i + 1) == b && ints_get(t.seen, i + 2) == x { return false; }
+        i = i + 3;
+    }
+    ints_push(t.seen, a);
+    ints_push(t.seen, b);
+    ints_push(t.seen, x);
+    true
+}
+
+fn fn_named(c: Ck, g: Int) -> Str { tick(strs_get(c.fnname, g)) }
+
+// How a parameter, or a capture past the parameters, is named in a message.
+fn pv_param_name(c: Ck, g: Int, i: Int) -> Str {
+    let n = ints_get(c.fnpc, g);
+    if i < n {
+        if ints_get(c.fnpb, g) >= 0 { return tick(strs_get(c.bnm, ints_get(c.fnpb, g) + i)); }
+        return str_concat("#", int_to_str(i));
+    }
+    let mut j = 0;
+    let mut x = 0;
+    while x < ints_len(c.capcl) {
+        if ints_get(c.capcl, x) == g {
+            if j == i - n { return tick(strs_get(c.bnm, ints_get(c.capbd, x))); }
+            j = j + 1;
+        }
+        x = x + 1;
+    }
+    str_concat("#", int_to_str(i))
+}
+
+fn cell_words(cell: Str) -> Str {
+    if cell == "*" { return "a container in generic code, which may be any container"; }
+    cat5("a `", cell, "`, which holds whatever is written into any `", cell, "`")
+}
+
+// How parameter `i` of `g` reaches a sink of `class`: one chain to it (`reaching`).
+fn tr_reaching(c: Ck, ps: Ps, pf: Pf, t: Tr, g: Int, i: Int, class: Int, depth: Int) -> Int {
+    if depth > 32 { return 0; }
+    let k = ints_get(ps.at, g);
+    if k < 0 { return 0; }
+    let mut x = 0;
+    while x < ints_get(pf.fsc, k) {
+        let s = ints_get(pf.fsf, k) + x;
+        if ints_get(pf.kcl, s) == class && bhas(ps_eval(ps, vec_get(pf.kfl, s)).p, i) {
+            tr_step(t, ints_get(pf.kss, s), ints_get(pf.kse, s), cat3("in ", fn_named(c, g), ": it is the path written here"));
+            return 0;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fcc, k) {
+        let cx = ints_get(pf.fcf, k) + x;
+        let callee = ints_get(pf.ccal, cx);
+        let rs = bits_of(ps_reach(ps, callee, class));
+        let mut j = 0;
+        while j < ints_len(rs) {
+            let a = ints_get(rs, j);
+            if a < ints_get(pf.cac, cx) {
+                if bhas(ps_eval(ps, vec_get(pf.args, ints_get(pf.caf, cx) + a)).p, i) {
+                    tr_step(t, ints_get(pf.cs, cx), ints_get(pf.ce, cx), cat4("in ", fn_named(c, g), ": it is passed to ", fn_named(c, callee)));
+                    tr_reaching(c, ps, pf, t, callee, a, class, depth + 1);
+                    return 0;
+                }
+            }
+            j = j + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fic, k) {
+        let ix = ints_get(pf.fif, k) + x;
+        let mut q = 0;
+        while q < ints_get(ps.icc, ix) {
+            let h = ints_get(ps.tv, ints_get(ps.icf, ix) + q);
+            let rs = bits_of(ps_reach(ps, h, class));
+            let mut j = 0;
+            while j < ints_len(rs) {
+                let a = ints_get(rs, j);
+                if a < ints_get(pf.iac, ix) {
+                    if bhas(ps_eval(ps, vec_get(pf.args, ints_get(pf.iaf, ix) + a)).p, i) {
+                        tr_step(t, ints_get(pf.iss, ix), ints_get(pf.ise, ix),
+                                cat4("in ", fn_named(c, g), ": it is passed through a value that may be ", fn_named(c, h)));
+                        tr_reaching(c, ps, pf, t, h, a, class, depth + 1);
+                        return 0;
+                    }
+                }
+                j = j + 1;
+            }
+            q = q + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fmc, k) {
+        let mx = ints_get(pf.fmf, k) + x;
+        let h = ints_get(pf.mfn, mx);
+        let base = ints_get(ps.ar, h);
+        let rs = bits_of(ps_reach(ps, h, class));
+        let mut j = 0;
+        while j < ints_len(rs) {
+            let a = ints_get(rs, j);
+            let q = a - base;
+            if q >= 0 && q < ints_get(pf.mcc, mx) {
+                if bhas(ps_eval(ps, vec_get(pf.args, ints_get(pf.mcf, mx) + q)).p, i) {
+                    tr_step(t, ints_get(pf.mss, mx), ints_get(pf.mse, mx), cat3("in ", fn_named(c, g), ": a closure captures it here"));
+                    tr_reaching(c, ps, pf, t, h, a, class, depth + 1);
+                    return 0;
+                }
+            }
+            j = j + 1;
+        }
+        x = x + 1;
+    }
+    0
+}
+
+// Where `o` entered `flow`, in fact `k`: one chain, through calls, cells and callers to its source
+// (`flow`).
+fn tr_flow(c: Ck, ps: Ps, pf: Pf, t: Tr, k: Int, f: Fl, o: Int, depth: Int) -> Int {
+    if depth > 32 { return 0; }
+    if ints_get(f.m, 2 + o) >= 0 {
+        tr_step(t, ints_get(f.m, 2 + o), ints_get(f.m, 6 + o), o_enters(o));
+        return 0;
+    }
+    let me = ints_get(pf.ffn, k);
+    let mut x = 0;
+    while x < ints_len(f.cs) {
+        let cx = ints_get(f.cs, x);
+        let callee = ints_get(pf.ccal, cx);
+        let s = ints_get(pf.cs, cx);
+        let e = ints_get(pf.ce, cx);
+        if bhas(ints_get(ps.so, callee), o) {
+            tr_step(t, s, e, cat4(fn_named(c, callee), " returns data from ", o_describe(o), ""));
+            let j = ints_get(ps.at, callee);
+            if j >= 0 {
+                if tr_insert(t, j, 0, 0 - 1) { tr_flow(c, ps, pf, t, j, vec_get(pf.fres, j), o, depth + 1); }
+            }
+            return 0;
+        }
+        let qs = bits_of(ints_get(ps.sp, callee));
+        let mut y = 0;
+        while y < ints_len(qs) {
+            let q = ints_get(qs, y);
+            if q >= ints_get(ps.ar, callee) {
+                if bhas(ps_received(ps, callee, q), o) {
+                    tr_step(t, s, e, str_concat(fn_named(c, callee), " returns what it captured"));
+                    tr_param(c, ps, pf, t, callee, q, o, depth + 1);
+                    return 0;
+                }
+            } else {
+                if q < ints_get(pf.cac, cx) {
+                    let a = vec_get(pf.args, ints_get(pf.caf, cx) + q);
+                    if bhas(ps_reaching(ps, me, a), o) {
+                        tr_step(t, s, e, str_concat(fn_named(c, callee), " passes on what it is given"));
+                        tr_flow(c, ps, pf, t, k, a, o, depth + 1);
+                        return 0;
+                    }
+                }
+            }
+            y = y + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_len(f.vs) {
+        let ix = ints_get(f.vs, x);
+        let s = ints_get(pf.iss, ix);
+        let e = ints_get(pf.ise, ix);
+        let mut q0 = 0;
+        while q0 < ints_get(ps.icc, ix) {
+            let g = ints_get(ps.tv, ints_get(ps.icf, ix) + q0);
+            if bhas(ints_get(ps.so, g), o) {
+                tr_step(t, s, e, cat4("a call through this value may run ", fn_named(c, g), ", which returns data from ", o_describe(o)));
+                let j = ints_get(ps.at, g);
+                if j >= 0 {
+                    if tr_insert(t, j, 0, 0 - 1) { tr_flow(c, ps, pf, t, j, vec_get(pf.fres, j), o, depth + 1); }
+                }
+                return 0;
+            }
+            let qs = bits_of(ints_get(ps.sp, g));
+            let mut y = 0;
+            while y < ints_len(qs) {
+                let q = ints_get(qs, y);
+                if q >= ints_get(ps.ar, g) {
+                    if bhas(ps_received(ps, g, q), o) {
+                        tr_step(t, s, e, cat3("a call through this value may run ", fn_named(c, g), ", which returns what it captured"));
+                        tr_param(c, ps, pf, t, g, q, o, depth + 1);
+                        return 0;
+                    }
+                } else {
+                    if q < ints_get(pf.iac, ix) {
+                        let a = vec_get(pf.args, ints_get(pf.iaf, ix) + q);
+                        if bhas(ps_reaching(ps, me, a), o) {
+                            tr_step(t, s, e, cat3("a call through this value may run ", fn_named(c, g), ", which passes on what it is given"));
+                            tr_flow(c, ps, pf, t, k, a, o, depth + 1);
+                            return 0;
+                        }
+                    }
+                }
+                y = y + 1;
+            }
+            q0 = q0 + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < strs_len(f.cn) {
+        let cell = strs_get(f.cn, x);
+        if bhas(ps_cell(ps, cell), o) {
+            tr_step(t, ints_get(f.cp, 2 * x), ints_get(f.cp, 2 * x + 1), str_concat("this is read out of ", cell_words(cell)));
+            if tr_cell(c, ps, pf, t, cell, o, depth + 1) { return 0; }
+        }
+        x = x + 1;
+    }
+    let ps_ = bits_of(ps_eval(ps, f).p);
+    x = 0;
+    while x < ints_len(ps_) {
+        let p = ints_get(ps_, x);
+        if bhas(ps_received(ps, me, p), o) {
+            tr_param(c, ps, pf, t, me, p, o, depth + 1);
+            return 0;
+        }
+        x = x + 1;
+    }
+    0
+}
+
+// A write into `cell` that carries `o`, and where that came from (`cell`).
+fn tr_cell(c: Ck, ps: Ps, pf: Pf, t: Tr, cell: Str, o: Int, depth: Int) -> Bool {
+    let mut j = 0;
+    while j < ints_len(pf.ffn) {
+        let g = ints_get(pf.ffn, j);
+        let mut x = 0;
+        while x < ints_get(pf.foc, j) {
+            let si = ints_get(pf.fof, j) + x;
+            let sc = strs_get(pf.ocl, si);
+            let matches = cell == "*" || sc == cell || sc == "*";
+            if matches && bhas(ps_reaching(ps, g, vec_get(pf.ofl, si)), o) {
+                if tr_insert(t, j, 1, x) {
+                    let mut into = cat3("a `", sc, "`");
+                    if sc == "*" { into = "a container in generic code"; }
+                    tr_step(t, ints_get(pf.oss, si), ints_get(pf.ose, si), cat5(cat3("in ", fn_named(c, g), ": data from "), o_describe(o), " is written into ", into, " here"));
+                    tr_flow(c, ps, pf, t, j, vec_get(pf.ofl, si), o, depth);
+                    return true;
+                }
+            }
+            x = x + 1;
+        }
+        j = j + 1;
+    }
+    false
+}
+
+// Who hands parameter (or capture) `p` of `g` the origin `o` (`param`).
+fn tr_param(c: Ck, ps: Ps, pf: Pf, t: Tr, g: Int, p: Int, o: Int, depth: Int) -> Int {
+    if depth > 32 { return 0; }
+    if tr_insert(t, g, 2, p) == false { return 0; }
+    let pname = pv_param_name(c, g, p);
+    let base = ints_get(ps.ar, g);
+    let mut j = 0;
+    while j < ints_len(pf.ffn) {
+        let h = ints_get(pf.ffn, j);
+        if p < base {
+            let mut x = 0;
+            while x < ints_get(pf.fcc, j) {
+                let cx = ints_get(pf.fcf, j) + x;
+                if ints_get(pf.ccal, cx) == g && p < ints_get(pf.cac, cx) {
+                    let a = vec_get(pf.args, ints_get(pf.caf, cx) + p);
+                    if bhas(ps_reaching(ps, h, a), o) {
+                        tr_step(t, ints_get(pf.cs, cx), ints_get(pf.ce, cx),
+                                cat5(fn_named(c, g), " is called here, and its parameter ", pname, " is handed data from ", o_describe(o)));
+                        tr_flow(c, ps, pf, t, j, a, o, depth + 1);
+                        return 0;
+                    }
+                }
+                x = x + 1;
+            }
+            x = 0;
+            while x < ints_get(pf.fic, j) {
+                let ix = ints_get(pf.fif, j) + x;
+                if ps_candidates_has(ps, ix, g) && p < ints_get(pf.iac, ix) {
+                    let a = vec_get(pf.args, ints_get(pf.iaf, ix) + p);
+                    if bhas(ps_reaching(ps, h, a), o) {
+                        tr_step(t, ints_get(pf.iss, ix), ints_get(pf.ise, ix),
+                                cat5(cat3("a call through a value may run ", fn_named(c, g), " here, and hands its parameter "), pname, " data from ", o_describe(o), ""));
+                        tr_flow(c, ps, pf, t, j, a, o, depth + 1);
+                        return 0;
+                    }
+                }
+                x = x + 1;
+            }
+        } else {
+            let mut x = 0;
+            while x < ints_get(pf.fmc, j) {
+                let mx = ints_get(pf.fmf, j) + x;
+                if ints_get(pf.mfn, mx) == g && p - base < ints_get(pf.mcc, mx) {
+                    let a = vec_get(pf.args, ints_get(pf.mcf, mx) + p - base);
+                    if bhas(ps_reaching(ps, h, a), o) {
+                        tr_step(t, ints_get(pf.mss, mx), ints_get(pf.mse, mx), cat5("this closure captures ", pname, ", which holds data from ", o_describe(o), ""));
+                        tr_flow(c, ps, pf, t, j, a, o, depth + 1);
+                        return 0;
+                    }
+                }
+                x = x + 1;
+            }
+        }
+        j = j + 1;
+    }
+    0
+}
+
+fn flow_help() -> Str {
+    "in a function that declares its effects, the path a program writes to may come from the command line or be computed in the program, but not from the contents of a file, nor from a device or foreign (C) function the checker does not follow. `str_vouch`, under a `VouchCap`, declassifies a value on purpose"
+}
+
+fn tr_publish(c: Ck, t: Tr, s: Int, e: Int, message: Str, primary: Str) -> Int {
+    dg_error(c.d, "N0372", s, e, message, primary, flow_help());
+    let mut i = 0;
+    while i < ints_len(t.ss) {
+        dg_secondary(c.d, ints_get(t.ss, i), ints_get(t.se, i), strs_get(t.notes, i));
+        i = i + 1;
+    }
+    0
+}
+
+// The path a function writes to comes from `o` (`direct`).
+fn tr_direct(c: Ck, ps: Ps, pf: Pf, k: Int, si: Int, o: Int) -> Int {
+    let t = tr_new();
+    tr_flow(c, ps, pf, t, k, vec_get(pf.kfl, si), o, 0);
+    tr_publish(c, t, ints_get(pf.kss, si), ints_get(pf.kse, si), str_concat("the path `write_file` writes to comes from ", o_describe(o)),
+            str_concat("this path comes from ", o_describe(o)))
+}
+
+// A call of `g` at `s..e` hands `arg`, carrying `o`, to its parameter `i`, which reaches the path;
+// `via` 1 through a value, 2 a capture (`through`).
+fn tr_through(c: Ck, ps: Ps, pf: Pf, k: Int, g: Int, s: Int, e: Int, i: Int, arg: Fl, o: Int, via: Int) -> Int {
+    let callee = fn_named(c, g);
+    let param = pv_param_name(c, g, i);
+    let mut message = cat5(callee, " writes to a path made from its parameter ", param, ", and this argument comes from ", o_describe(o));
+    if via == 1 {
+        message = cat5(cat3("a call through this value may run ", callee, ", which writes to a path made from its parameter "), param,
+                ", and this argument comes from ", o_describe(o), "");
+    }
+    if via == 2 { message = cat5("this closure writes to a path made from what it captures, ", param, ", and that comes from ", o_describe(o), ""); }
+    let t = tr_new();
+    tr_reaching(c, ps, pf, t, g, i, 0, 0);
+    tr_flow(c, ps, pf, t, k, arg, o, 0);
+    tr_publish(c, t, s, e, message, cat4(callee, "'s parameter ", param, " reaches `write_file`'s path"))
+}
+
+// The first restricted origin a flow carries in fact `k`, or -1 (`FlowRule::LANGUAGE`).
+fn refused_origin(ps: Ps, f: Fl) -> Int { first_origin(band(ps_eval(ps, f).o, o_restricted())) }
+
+// --- the language's flow rule (`solve`, `FlowRule::LANGUAGE`) -------------------------------------
+
+fn zeros(n: Int) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < n {
+        ints_push(out, 0);
+        i = i + 1;
+    }
+    out
+}
+
+fn ps_new(c: Ck, pf: Pf) -> Ps {
+    let n = strs_len(c.fnname);
+    let at = ints_new();
+    let rcf = ints_new();
+    let rcc = ints_new();
+    let mut size = 0;
+    let mut g = 0;
+    while g < n {
+        ints_push(at, 0 - 1);
+        ints_push(rcf, size);
+        let k = ints_get(c.fnpc, g) + captures_of(c, g);
+        ints_push(rcc, k);
+        size = size + k;
+        g = g + 1;
+    }
+    let mut k = 0;
+    while k < ints_len(pf.ffn) {
+        ints_set(at, ints_get(pf.ffn, k), k);
+        k = k + 1;
+    }
+    let ar = ints_new();
+    g = 0;
+    while g < n {
+        ints_push(ar, ints_get(c.fnpc, g));
+        g = g + 1;
+    }
+    Ps(at: at, so: zeros(n), sp: zeros(n), ar: ar, reach: zeros(4 * n), rcf: rcf, rcc: rcc, rcv: zeros(size), cn: strs_new(), co: ints_new(), tn: strs_new(),
+            tf: ints_new(), tc: ints_new(), tv: ints_new(), vco: zeros(ints_len(pf.ccal)), vcp: zeros(ints_len(pf.ccal)), vio: zeros(strs_len(pf.itg)),
+            vip: zeros(strs_len(pf.itg)), icf: ints_new(), icc: ints_new())
+}
+
+fn copy_ints(xs: Ints) -> Ints {
+    let out = ints_new();
+    let mut i = 0;
+    while i < ints_len(xs) {
+        ints_push(out, ints_get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+// Provenance (N38, N80): every body's facts, the whole program solved, and `N0372` where a
+// function that declares its effects lets a restricted origin reach a path it writes to or hands
+// to what writes to one. Where no restricted origin enters the compilation, nothing writes to a
+// path, or no function declares its effects, the rule cannot fire and nothing is solved.
+fn restricted_flow(c: Ck) -> Int {
+    if strs_len(c.stop) > 0 { return 0; }
+    if gs(c, s_source()) == 0 || gs(c, s_sink()) == 0 { return 0; }
+    let n = strs_len(c.fnname);
+    let mut explicit = false;
+    let mut g = 0;
+    while g < n {
+        if ints_get(c.fneff, g) >= 0 { explicit = true; }
+        // A position is a bit of a mask: past 60 parameters and captures it does not fit.
+        if ints_get(c.fnpc, g) + captures_of(c, g) > 60 {
+            stop(c, "a function of more than 60 parameters and captures (provenance)");
+            return 0;
+        }
+        g = g + 1;
+    }
+    if explicit == false { return 0; }
+    let saved = gs(c, s_module());
+    let bloc = ints_new();
+    let mut b = 0;
+    while b < ints_len(c.bfn) {
+        ints_push(bloc, 0 - 1);
+        b = b + 1;
+    }
+    let pf = pf_new();
+    all_facts(c, pf, bloc);
+    let ps = ps_new(c, pf);
+    ps_targets(c, ps, pf);
+    // Around everything, the cells and what parameters and captures are handed: each round solves
+    // summaries, values and reaches against them, until nothing grows.
+    let mut first = true;
+    let mut again = true;
+    while again {
+        let old_cn = strs_new();
+        let mut i = 0;
+        while i < strs_len(ps.cn) {
+            strs_push(old_cn, strs_get(ps.cn, i));
+            i = i + 1;
+        }
+        let old_co = copy_ints(ps.co);
+        let old_rcv = copy_ints(ps.rcv);
+        ps_settle(ps, pf);
+        if first { ps_settle_reach(ps, pf); }
+        ps_settle_receives(ps, pf);
+        // What each container holds: every value written into its cell.
+        let names = strs_new();
+        let origins = ints_new();
+        let mut k = 0;
+        while k < ints_len(pf.ffn) {
+            let fg = ints_get(pf.ffn, k);
+            let mut x = 0;
+            while x < ints_get(pf.foc, k) {
+                let si = ints_get(pf.fof, k) + x;
+                let o = ps_reaching(ps, fg, vec_get(pf.ofl, si));
+                let at = strs_find(names, strs_get(pf.ocl, si));
+                if at >= 0 {
+                    ints_set(origins, at, bor(ints_get(origins, at), o));
+                } else {
+                    strs_push(names, strs_get(pf.ocl, si));
+                    ints_push(origins, o);
+                }
+                x = x + 1;
+            }
+            k = k + 1;
+        }
+        let mut grown = false;
+        i = 0;
+        while i < strs_len(old_cn) {
+            let at = strs_find(names, strs_get(old_cn, i));
+            if at >= 0 {
+                ints_set(origins, at, bor(ints_get(origins, at), ints_get(old_co, i)));
+            } else {
+                strs_push(names, strs_get(old_cn, i));
+                ints_push(origins, ints_get(old_co, i));
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(names) {
+            let at = strs_find(old_cn, strs_get(names, i));
+            if at < 0 {
+                grown = true;
+            } else {
+                if ints_get(old_co, at) != ints_get(origins, i) { grown = true; }
+            }
+            i = i + 1;
+        }
+        let captures_grew = ints_same(old_rcv, ps.rcv) == false;
+        while strs_len(ps.cn) > 0 {
+            strs_pop(ps.cn);
+            ints_pop(ps.co);
+        }
+        i = 0;
+        while i < strs_len(names) {
+            strs_push(ps.cn, strs_get(names, i));
+            ints_push(ps.co, ints_get(origins, i));
+            i = i + 1;
+        }
+        again = grown || captures_grew;
+        first = false;
+    }
+    // The language's policy, in functions that declared an effect set: one diagnostic per site,
+    // in module and body order.
+    let mut k = 0;
+    while k < ints_len(pf.ffn) {
+        if ints_get(c.fneff, ints_get(pf.ffn, k)) >= 0 { refuse_flows(c, ps, pf, k); }
+        k = k + 1;
+    }
+    ss(c, s_module(), saved);
+    0
+}
+
+// One function's refusals, by where each is.
+fn refuse_flows(c: Ck, ps: Ps, pf: Pf, k: Int) -> Int {
+    let fs_ = ints_new();
+    let fe = ints_new();
+    let fkind = ints_new();
+    let fa = ints_new();
+    let fi = ints_new();
+    let fo = ints_new();
+    let fflow = vec_new[Fl]();
+    let mut x = 0;
+    while x < ints_get(pf.fsc, k) {
+        let si = ints_get(pf.fsf, k) + x;
+        if ints_get(pf.kcl, si) == 0 {
+            let o = refused_origin(ps, vec_get(pf.kfl, si));
+            if o >= 0 {
+                ints_push(fs_, ints_get(pf.kss, si));
+                ints_push(fe, ints_get(pf.kse, si));
+                ints_push(fkind, 0 - 1);
+                ints_push(fa, si);
+                ints_push(fi, 0);
+                ints_push(fo, o);
+                vec_push(fflow, fl_new());
+            }
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fcc, k) {
+        let cx = ints_get(pf.fcf, k) + x;
+        let callee = ints_get(pf.ccal, cx);
+        let rs = bits_of(ps_reach(ps, callee, 0));
+        let mut j = 0;
+        while j < ints_len(rs) {
+            let i = ints_get(rs, j);
+            if i < ints_get(pf.cac, cx) {
+                let a = vec_get(pf.args, ints_get(pf.caf, cx) + i);
+                let o = refused_origin(ps, a);
+                if o >= 0 {
+                    ints_push(fs_, ints_get(pf.cs, cx));
+                    ints_push(fe, ints_get(pf.ce, cx));
+                    ints_push(fkind, 0);
+                    ints_push(fa, callee);
+                    ints_push(fi, i);
+                    ints_push(fo, o);
+                    vec_push(fflow, a);
+                    j = ints_len(rs);
+                }
+            }
+            j = j + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fic, k) {
+        let ix = ints_get(pf.fif, k) + x;
+        let mut done = false;
+        let mut q = 0;
+        while q < ints_get(ps.icc, ix) && done == false {
+            let h = ints_get(ps.tv, ints_get(ps.icf, ix) + q);
+            let rs = bits_of(ps_reach(ps, h, 0));
+            let mut j = 0;
+            while j < ints_len(rs) && done == false {
+                let i = ints_get(rs, j);
+                if i < ints_get(ps.ar, h) && i < ints_get(pf.iac, ix) {
+                    let a = vec_get(pf.args, ints_get(pf.iaf, ix) + i);
+                    let o = refused_origin(ps, a);
+                    if o >= 0 {
+                        ints_push(fs_, ints_get(pf.iss, ix));
+                        ints_push(fe, ints_get(pf.ise, ix));
+                        ints_push(fkind, 1);
+                        ints_push(fa, h);
+                        ints_push(fi, i);
+                        ints_push(fo, o);
+                        vec_push(fflow, a);
+                        done = true;
+                    }
+                }
+                j = j + 1;
+            }
+            q = q + 1;
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_get(pf.fmc, k) {
+        let mx = ints_get(pf.fmf, k) + x;
+        let h = ints_get(pf.mfn, mx);
+        let base = ints_get(ps.ar, h);
+        let rs = bits_of(ps_reach(ps, h, 0));
+        let mut j = 0;
+        while j < ints_len(rs) {
+            let i = ints_get(rs, j);
+            let q = i - base;
+            if q >= 0 && q < ints_get(pf.mcc, mx) {
+                let a = vec_get(pf.args, ints_get(pf.mcf, mx) + q);
+                let o = refused_origin(ps, a);
+                if o >= 0 {
+                    ints_push(fs_, ints_get(pf.mss, mx));
+                    ints_push(fe, ints_get(pf.mse, mx));
+                    ints_push(fkind, 2);
+                    ints_push(fa, h);
+                    ints_push(fi, i);
+                    ints_push(fo, o);
+                    vec_push(fflow, a);
+                    j = ints_len(rs);
+                }
+            }
+            j = j + 1;
+        }
+        x = x + 1;
+    }
+    // Sorted by where each is, stably.
+    let order = ints_new();
+    let mut i = 0;
+    while i < ints_len(fs_) {
+        let mut at = ints_len(order);
+        while at > 0 && (ints_get(fs_, ints_get(order, at - 1)) > ints_get(fs_, i)
+                || (ints_get(fs_, ints_get(order, at - 1)) == ints_get(fs_, i) && ints_get(fe, ints_get(order, at - 1)) > ints_get(fe, i))) {
+            at = at - 1;
+        }
+        ints_push(order, 0);
+        let mut j = ints_len(order) - 1;
+        while j > at {
+            ints_set(order, j, ints_get(order, j - 1));
+            j = j - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(order) {
+        let d = ints_get(order, i);
+        if ints_get(fkind, d) < 0 {
+            tr_direct(c, ps, pf, k, ints_get(fa, d), ints_get(fo, d));
+        } else {
+            tr_through(c, ps, pf, k, ints_get(fa, d), ints_get(fs_, d), ints_get(fe, d), ints_get(fi, d), vec_get(fflow, d), ints_get(fo, d), ints_get(fkind, d));
+        }
+        i = i + 1;
+    }
     0
 }
