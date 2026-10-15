@@ -1,0 +1,302 @@
+// Structured concurrency compiled to native code, checked against two oracles: a written
+// expected value and `nazm run`, at `-O0` and `-O2`. Every subprocess has a deadline: a
+// deadlock fails the suite rather than stopping it. Ported from
+// `crates/nazm-cli/tests/concurrent.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `nazm ARGS` in `d`, or `Err` when it did not finish within the deadline.
+fn bounded_nazm(h: Caps, d: Str, args: Strs, what: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let r = nazm(h, d, args);
+    check_that(r.code != TIMED_OUT, f"{what}: did not finish within 60s")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// The executable `exe` under `bounded_exe`, or `Err` when it did not finish.
+fn bounded_run(h: Caps, exe: Str, d: Str, what: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let r = bounded_exe(h, exe, d, suite_env(h));
+    check_that(r.code != TIMED_OUT, f"{what}: the executable did not finish within 60s. A timeout is a failure, not a result — this is what a deadlock or a lost wake-up looks like.")?;
+    Result[Ran, Str].Ok(value: r)
+}
+
+fn three_ways_in(h: Caps, d: Str, what: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let interp = bounded_nazm(h, d, words(f"run --interpret {d}/prog.nz"), f"{what}: `nazm run` deadlocked")?;
+    check_that(interp.code == 0, f"{what}: the interpreter rejected this program: {interp.stderr}")?;
+    check_that(text_trim(interp.stdout) == expected, f"{what}: the *expectation* disagrees with the interpreter: {interp.stdout}")?;
+    for opt in words("0 2") {
+        let exe = f"{d}/prog{opt}";
+        let built = bounded_nazm(h, d, words(f"build {d}/prog.nz -o {exe} --opt-level {opt}"), f"{what}: `nazm build -O{opt}`")?;
+        check_that(built.code == 0, f"{what}: -O{opt} build failed: {built.stderr}")?;
+        let ran = bounded_run(h, exe, d, f"{what}: -O{opt}")?;
+        check_that(ran.code == 0, f"{what}: the -O{opt} executable failed: {ran.stderr}")?;
+        check_that(text_trim(ran.stdout) == expected, f"{what}: the -O{opt} executable disagrees with the interpreter and with the expectation: {ran.stdout}")?;
+    }
+    ok()
+}
+
+/// Run one program three ways and require one answer.
+fn three_ways(h: Caps, what: Str, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = three_ways_in(h, d, what, expected);
+    scratch_remove(h, d);
+    r
+}
+
+fn task_fails_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let built = bounded_nazm(h, d, words(f"build {d}/prog.nz -o {d}/prog"), "build")?;
+    check_that(built.code == 0, ran_show(built))?;
+    let ran = bounded_run(h, f"{d}/prog", d, "the executable")?;
+    check_that(ran.code == 2, ran_show(ran))?;
+    check_that(text_contains(ran.stderr, "N0402") || text_contains(ran.stderr, "zero"), ran.stderr)?;
+    let interp = bounded_nazm(h, d, words(f"run --interpret {d}/prog.nz"), "`nazm run`")?;
+    check_that(interp.code == ran.code, ran_show(interp))
+}
+
+fn failure_joins_in(h: Caps, d: Str, what: Str, code: Str, markers: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreted", ran: bounded_nazm(h, d, words(f"run --interpret {d}/prog.nz"), f"{what}: `nazm run`")?));
+    for opt in words("0 2") {
+        let exe = f"{d}/prog{opt}";
+        let built = bounded_nazm(h, d, words(f"build {d}/prog.nz -o {exe} --opt-level {opt}"), f"{what}: -O{opt} build")?;
+        check_that(built.code == 0, f"{what}: -O{opt}: {built.stderr}")?;
+        vec_push(runs, Labeled(label: f"-O{opt}", ran: bounded_run(h, exe, d, f"{what}: -O{opt}")?));
+    }
+    for r in runs {
+        let how = r.label;
+        check_that(r.ran.code == 2, f"{what} ({how}): {r.ran.stderr}")?;
+        check_that(text_contains(r.ran.stderr, code), f"{what} ({how}): expected {code}, got {r.ran.stderr}")?;
+        for marker in markers {
+            check_that(text_contains(r.ran.stdout, marker), f"{what} ({how}): {marker} is missing from stdout, which is what a failure that did not join its scope looks like. stdout: {r.ran.stdout}")?;
+        }
+    }
+    ok()
+}
+
+/// One program, run three ways, all three required to agree: status 2, `code` reported, and
+/// every marker printed (the scope joined before the failure was reported).
+fn failure_joins(h: Caps, what: Str, src: Str, code: Str, markers: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = failure_joins_in(h, d, what, code, markers);
+    scratch_remove(h, d);
+    r
+}
+
+@test
+fn a_worker_pool_runs_natively(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_ways(h, "worker pool", "\n        fn worker(jobs: Chan, results: Chan) -> Int {\n            let buf = ints_new();\n            while chan_recv(jobs, buf) { chan_send(results, ints_pop(buf) * 2); }\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let jobs = chan_new(4);\n            let results = chan_new(64);\n            scope {\n                spawn worker(jobs, results);\n                spawn worker(jobs, results);\n                spawn worker(jobs, results);\n                let mut i = 1;\n                while i <= 10 { chan_send(jobs, i); i = i + 1; }\n                chan_close(jobs);\n            }\n            chan_close(results);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(results, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "110")?;
+    ok()
+}
+
+@test
+fn back_pressure_delivers_everything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Capacity one: the sender is at most one message ahead, so every send but the first
+    // blocks until a receive makes room. 1 + ... + 200.
+    three_ways(h, "capacity one", "\n        fn drain(jobs: Chan, results: Chan) -> Int {\n            let buf = ints_new();\n            let mut sum = 0;\n            while chan_recv(jobs, buf) { sum = sum + ints_pop(buf); }\n            chan_send(results, sum);\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let jobs = chan_new(1);\n            let results = chan_new(1);\n            scope {\n                spawn drain(jobs, results);\n                let mut i = 1;\n                while i <= 200 { chan_send(jobs, i); i = i + 1; }\n                chan_close(jobs);\n            }\n            let buf = ints_new();\n            chan_recv(results, buf);\n            ints_pop(buf)\n        }\n        ", "20100")?;
+    ok()
+}
+
+@test
+fn closing_wakes_every_blocked_receiver(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Four tasks blocked on a channel nothing is ever sent to. Only the close can end
+    // them, and only the wake-up can end the join.
+    three_ways(h, "close wakes receivers", "\n        fn waiter(jobs: Chan) -> Int {\n            let buf = ints_new();\n            while chan_recv(jobs, buf) { ints_pop(buf); }\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let jobs = chan_new(4);\n            scope {\n                spawn waiter(jobs);\n                spawn waiter(jobs);\n                spawn waiter(jobs);\n                spawn waiter(jobs);\n                chan_close(jobs);\n            }\n            7\n        }\n        ", "7")?;
+    ok()
+}
+
+@test
+fn closing_wakes_a_blocked_sender_and_refuses_its_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_ways(h, "close wakes sender", "\n        fn flood(jobs: Chan, results: Chan) -> Int {\n            let mut refused = 0;\n            let mut i = 0;\n            while i < 100 {\n                if chan_send(jobs, i) == false { refused = refused + 1; }\n                i = i + 1;\n            }\n            chan_send(results, refused);\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let jobs = chan_new(2);\n            let results = chan_new(1);\n            scope {\n                spawn flood(jobs, results);\n                chan_close(jobs);\n            }\n            let buf = ints_new();\n            chan_recv(results, buf);\n            if ints_pop(buf) > 0 { 1 } else { 0 }\n        }\n        ", "1")?;
+    ok()
+}
+
+@test
+fn a_close_keeps_what_is_already_queued(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_ways(h, "close keeps the queue", "\n        fn main() -> Int {\n            let c = chan_new(4);\n            chan_send(c, 3);\n            chan_send(c, 4);\n            chan_close(c);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(c, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "7")?;
+    ok()
+}
+
+@test
+fn scopes_nest(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_ways(h, "nested scopes", "\n        fn add(out: Chan, n: Int) -> Int { chan_send(out, n); 0 }\n        fn main(tasks: SpawnCap) -> Int {\n            let inner = chan_new(4);\n            let outer = chan_new(4);\n            scope {\n                scope {\n                    spawn add(inner, 10);\n                    spawn add(inner, 20);\n                }\n                chan_close(inner);\n                let buf = ints_new();\n                let mut stage = 0;\n                while chan_recv(inner, buf) { stage = stage + ints_pop(buf); }\n                spawn add(outer, stage);\n            }\n            chan_close(outer);\n            let buf = ints_new();\n            chan_recv(outer, buf);\n            ints_pop(buf)\n        }\n        ", "30")?;
+    ok()
+}
+
+@test
+fn every_message_is_delivered_exactly_once_under_contention(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Three producers and three consumers over a channel of capacity one, which forces a
+    // hand-off on every message. 3 x (1 + ... + 300). A message lost or delivered twice
+    // changes the total; no ordering is asserted, because none is promised.
+    three_ways(h, "contention", "\n        fn produce(jobs: Chan) -> Int {\n            let mut i = 1;\n            while i <= 300 { chan_send(jobs, i); i = i + 1; }\n            0\n        }\n        fn consume(jobs: Chan, results: Chan) -> Int {\n            let buf = ints_new();\n            let mut sum = 0;\n            while chan_recv(jobs, buf) { sum = sum + ints_pop(buf); }\n            chan_send(results, sum);\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let jobs = chan_new(1);\n            let results = chan_new(8);\n            scope {\n                spawn consume(jobs, results);\n                spawn consume(jobs, results);\n                spawn consume(jobs, results);\n                scope {\n                    spawn produce(jobs);\n                    spawn produce(jobs);\n                    spawn produce(jobs);\n                }\n                chan_close(jobs);\n            }\n            chan_close(results);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(results, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "135450")?;
+    ok()
+}
+
+@test
+fn many_scopes_in_sequence_leave_nothing_running(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A thousand tasks over two hundred scopes: a thousand real threads, created and
+    // joined. If a scope ever returned without joining, the total would be short.
+    three_ways(h, "scope cleanup", "\n        fn one(out: Chan) -> Int { chan_send(out, 1); 0 }\n        fn main(tasks: SpawnCap) -> Int {\n            let out = chan_new(2048);\n            let mut round = 0;\n            while round < 200 {\n                scope {\n                    spawn one(out);\n                    spawn one(out);\n                    spawn one(out);\n                    spawn one(out);\n                    spawn one(out);\n                }\n                round = round + 1;\n            }\n            chan_close(out);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(out, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "1000")?;
+    ok()
+}
+
+// ---------------------------------------------------------------------------
+// Leaving a scope early
+//
+// The join has to happen on *every* way out of a scope, not just on falling off the end.
+// Emission writes it before the `ret` and before the branch a `break` takes, and these
+// two are what hold that.
+//
+// # These are stress cases, and say so
+//
+// A missing join is a race, not a fault: the program would usually still finish, and
+// might still print the right number. Each task therefore does several million
+// iterations of real work before it sends, so that a scope which did not wait would
+// close the channel first and lose the value — with overwhelming probability rather than
+// with certainty. That is what a stress case is for, and pretending otherwise would be
+// the dishonest part.
+// ---------------------------------------------------------------------------
+
+@test
+fn a_return_out_of_a_scope_still_waits_for_its_tasks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    three_ways(h, "return through a scope", "\n        fn slow(out: Chan, n: Int) -> Int {\n            let mut i = 0;\n            while i < 3000000 { i = i + 1; }\n            chan_send(out, n);\n            0\n        }\n        fn early(out: Chan, tasks: SpawnCap) -> Int {\n            scope {\n                spawn slow(out, 5);\n                spawn slow(out, 5);\n                return 1;\n            }\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let out = chan_new(8);\n            early(out, tasks);\n            chan_close(out);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(out, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "10")?;
+    ok()
+}
+
+@test
+fn a_break_out_of_a_scope_still_waits_for_its_tasks(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The `break` leaves both the scope and the loop. The scope opened inside the loop is
+    // joined; a scope *around* the loop would not be, which is why the loop records how
+    // many were open when it started.
+    three_ways(h, "break through a scope", "\n        fn slow(out: Chan, n: Int) -> Int {\n            let mut i = 0;\n            while i < 3000000 { i = i + 1; }\n            chan_send(out, n);\n            0\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let out = chan_new(16);\n            let mut round = 0;\n            while round < 3 {\n                scope {\n                    spawn slow(out, 1);\n                    spawn slow(out, 1);\n                    if round == 1 { break; }\n                }\n                round = round + 1;\n            }\n            chan_close(out);\n            let buf = ints_new();\n            let mut total = 0;\n            while chan_recv(out, buf) { total = total + ints_pop(buf); }\n            total\n        }\n        ", "4")?;
+    ok()
+}
+
+@test
+fn a_task_that_fails_ends_the_whole_program(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A task has no private failure mode: the division is reported exactly as it would be
+    // on the main thread, and the process exits 2.
+    let src = "\n        fn bad(c: Chan) -> Int {\n            let buf = ints_new();\n            chan_recv(c, buf);\n            1 / ints_pop(buf)\n        }\n        fn main(tasks: SpawnCap) -> Int {\n            let c = chan_new(1);\n            scope {\n                spawn bad(c);\n                chan_send(c, 0);\n            }\n            0\n        }\n    ";
+    let d = prog_dir(h, "prog.nz", src)?;
+    let got = task_fails_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+// ---------------------------------------------------------------------------
+// A failure waits for the scope's tasks
+//
+// `docs/spec.md` promises the closing brace joins every task *including when the body
+// itself failed*, so a failure is reported once nothing is still running. The diagnostic
+// code cannot check that: a run that joined first and a run that exited on the spot
+// produce the same code and the same exit status. The difference is only visible in
+// whether the task's own effect happened.
+//
+// # Why the ordering is deterministic
+//
+// An earlier version of these programs gave the worker a long counting loop and relied on
+// it still being inside it when the failure happened. That is not ordering, it is a race
+// that usually goes one way — a slower machine, a busier one, or a different optimisation
+// level could finish the loop first and the test would pass on a runtime that had not
+// joined anything.
+//
+// These use the channels instead. The worker announces itself on `started` and then
+// blocks on `go`; the body cannot reach its failure until it has *received* that
+// announcement, so the worker is provably running, and it cannot finish until the body
+// sends `go`, so it is provably unfinished. Both facts are enforced by `chan_recv`
+// blocking, not by how fast anything runs.
+// ---------------------------------------------------------------------------
+
+/// The worker half every program below shares.
+const WORKER: Str = "\nfn worker(started: Chan, go: Chan, out: OutCap) -> Int {\n    let buf = ints_new();\n    chan_send(started, 1);\n    chan_recv(go, buf);\n    ints_pop(buf);\n    print(\"worker finished\");\n    0\n}\n";
+
+/// The body overflows while a worker it has just released is still running.
+const BODY_FAILS: Str = "\nfn main(io: IoCap, tasks: SpawnCap) -> Int {\n    let started = chan_new(1);\n    let go = chan_new(1);\n    let buf = ints_new();\n    let mut top = 1;\n    scope {\n        spawn worker(started, go, io);\n        chan_recv(started, buf);\n        ints_pop(buf);\n        chan_send(go, 1);\n        let mut n = 0;\n        while n < 64 { top = top + top; n = n + 1; }\n    }\n    top\n}\n";
+
+/// A sibling task divides by zero while the worker is still running.
+const TASK_FAILS: Str = "\nfn bad(dead: Chan) -> Int {\n    let buf = ints_new();\n    chan_recv(dead, buf);\n    1 / ints_pop(buf)\n}\nfn main(io: IoCap, tasks: SpawnCap) -> Int {\n    let started = chan_new(1);\n    let go = chan_new(1);\n    let dead = chan_new(1);\n    let buf = ints_new();\n    scope {\n        spawn worker(started, go, io);\n        spawn bad(dead);\n        chan_recv(started, buf);\n        ints_pop(buf);\n        chan_send(go, 1);\n        chan_send(dead, 0);\n    }\n    0\n}\n";
+
+/// The failure is two calls below the scope's body, so it has to travel out through both
+/// before the join can happen.
+const HELPER_FAILS: Str = "\nfn divide(a: Int, b: Int) -> Int { a / b }\nfn deeper(a: Int, b: Int) -> Int { divide(a, b) + 1 }\nfn main(io: IoCap, tasks: SpawnCap) -> Int {\n    let started = chan_new(1);\n    let go = chan_new(1);\n    let buf = ints_new();\n    let mut r = 0;\n    scope {\n        spawn worker(started, go, io);\n        chan_recv(started, buf);\n        ints_pop(buf);\n        chan_send(go, 1);\n        r = deeper(1, 0);\n    }\n    r\n}\n";
+
+const MARKER: Str = "worker finished";
+
+@test
+fn a_failing_body_joins_its_tasks_before_reporting(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    strs_push(l1, MARKER);
+    failure_joins(h, "body fails", f"{WORKER}{BODY_FAILS}", "N0400", l1)?;
+    ok()
+}
+
+@test
+fn a_failing_task_lets_its_siblings_finish_before_reporting(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l2 = strs_new();
+    strs_push(l2, MARKER);
+    failure_joins(h, "task fails", f"{WORKER}{TASK_FAILS}", "N0401", l2)?;
+    ok()
+}
+
+@test
+fn a_failure_below_the_body_still_joins_the_scope(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l3 = strs_new();
+    strs_push(l3, MARKER);
+    failure_joins(h, "helper fails", f"{WORKER}{HELPER_FAILS}", "N0401", l3)?;
+    ok()
+}
+
+@test
+fn nested_scopes_each_join_before_the_failure_is_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Two scopes, a worker in each, and the failure in the inner body. Both workers must
+    // finish: the inner scope's join is reached on the way out, and the outer's after it.
+    let src = "\nfn worker(started: Chan, go: Chan, which: Int, out: OutCap) -> Int {\n    let buf = ints_new();\n    chan_send(started, 1);\n    chan_recv(go, buf);\n    ints_pop(buf);\n    if which == 1 { print(\"inner finished\"); } else { print(\"outer finished\"); }\n    0\n}\nfn main(io: IoCap, tasks: SpawnCap) -> Int {\n    let os = chan_new(1);\n    let og = chan_new(1);\n    let is = chan_new(1);\n    let ig = chan_new(1);\n    let buf = ints_new();\n    let mut top = 1;\n    scope {\n        spawn worker(os, og, 2, io);\n        chan_recv(os, buf);\n        ints_pop(buf);\n        chan_send(og, 1);\n        scope {\n            spawn worker(is, ig, 1, io);\n            chan_recv(is, buf);\n            ints_pop(buf);\n            chan_send(ig, 1);\n            let mut n = 0;\n            while n < 64 { top = top + top; n = n + 1; }\n        }\n    }\n    top\n}\n";
+    let l4 = strs_new();
+    strs_push(l4, "inner finished");
+    strs_push(l4, "outer finished");
+    failure_joins(h, "nested scopes", src, "N0400", l4)?;
+    ok()
+}
+
+@test
+fn when_both_the_body_and_a_task_fail_the_bodys_failure_is_reported(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The task's failure strictly *precedes* the body's: the body does not begin
+    // overflowing until it has received `done`, which the task sends immediately before
+    // dividing by zero. So this cannot pass by reporting whichever happened first —
+    // `docs/spec.md` says the body's is the cause and the task's the consequence.
+    let src = "\nfn bad(dead: Chan, done: Chan) -> Int {\n    let buf = ints_new();\n    chan_recv(dead, buf);\n    let z = ints_pop(buf);\n    chan_send(done, 1);\n    1 / z\n}\nfn main(tasks: SpawnCap) -> Int {\n    let dead = chan_new(1);\n    let done = chan_new(1);\n    let buf = ints_new();\n    let mut top = 1;\n    scope {\n        spawn bad(dead, done);\n        chan_send(dead, 0);\n        chan_recv(done, buf);\n        ints_pop(buf);\n        let mut n = 0;\n        while n < 64 { top = top + top; n = n + 1; }\n    }\n    top\n}\n";
+    let l5 = strs_new();
+    failure_joins(h, "both fail", src, "N0400", l5)?;
+    ok()
+}
+
+@test
+fn a_scope_that_joins_cleanly_still_produces_its_value(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The other half: nothing above may be achieved by reporting a failure that is not
+    // there. An uninitialised slot in a task's argument block would do exactly that.
+    three_ways(h, "clean scope", "\nfn w(c: Chan) -> Int { chan_send(c, 5); 0 }\nfn main(tasks: SpawnCap) -> Int {\n    let c = chan_new(2);\n    let buf = ints_new();\n    let mut t = 0;\n    scope {\n        spawn w(c);\n        spawn w(c);\n        chan_recv(c, buf);\n        t = t + ints_pop(buf);\n        chan_recv(c, buf);\n        t = t + ints_pop(buf);\n    }\n    t\n}\n", "10")?;
+    ok()
+}
+

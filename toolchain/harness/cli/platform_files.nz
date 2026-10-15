@@ -1,0 +1,188 @@
+// The platform's files, alike everywhere: standard output as a handle, a path's own metadata, its
+// permissions and canonical form, private directories, advisory locks and the library over them —
+// each run by the interpreter and every native tier in a fresh directory; what naming a path
+// needs; WASI and Windows builds. Ported from `crates/nazm-cli/tests/platform_files.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/platform.nz"
+use "../lib/differential.nz"
+
+/// A file, a directory, a link to the file, a dangling link, a hard link to the file and a
+/// directory with a file in it, with known permissions: `tree`.
+const TREE: Str = "printf hello > file.txt && chmod 644 file.txt && mkdir dir && chmod 755 dir && ln -s file.txt link && ln -s nowhere dangling && ln file.txt hard";
+
+/// `lockable`: a file to lock.
+const LOCKABLE: Str = "printf data > lockme";
+
+const STREAMS: Str = "fn main(io: IoCap) -> Int ! { io } {\n    let o = os_stdout();\n    print(\"a\\n\");\n    os_write(o, bytes_from_str(\"b\\n\"));\n    print(\"c\\n\");\n    let e = os_stderr();\n    os_write(e, bytes_from_str(\"to errors\\n\"));\n    let buf = bytes_new(4);\n    print(f\"read {os_read(o, buf)} seek {os_seek(o, 0, 0)} sync {os_sync(e)} list {os_dir_next(e, buf)}\\n\");\n    print(f\"lock {os_lock(o, true)} try {os_try_lock(e, false)} unlock {os_unlock(o)}\\n\");\n    print(f\"close {os_close(os_stdout())} again {os_status(o)} write {os_write(os_stdout(), buf)}\\n\");\n    print(\"still printed\\n\");\n    0\n}\n";
+
+@test
+fn standard_output_is_a_handle_in_order_with_print_and_closing_it_keeps_the_stream(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, STREAMS, strs_new(), "")?;
+    alike(runs, 0, "a\nb\nc\nread -9 seek -29 sync -22 list -20\nlock -22 try -22 unlock -22\nclose 0 again -65536 write -65536\nstill printed\n0")?;
+    for run1 in runs {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(text_contains(r.stderr, "to errors\n"), who)?;
+    
+    }
+    ok()
+}
+
+const PATHS: Str = "use \"@std/ioerror\";\n\nfn word(out: Bytes, i: Int) -> Int ! {} { bytes_read_le[Int](out, i * 8) }\n\nfn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }\n\nfn show(io: IoCap, path: Str) -> Int ! { io } { shown(io, path, path) }\n\nfn shown(io: IoCap, path: Str, name: Str) -> Int ! { io } {\n    let out = bytes_new(48);\n    let s = os_lstat(path, out);\n    if s < 0 {\n        print(f\"{name}: {kind(s)}\\n\");\n        return 0;\n    }\n    let k = word(out, 1);\n    // A directory's size, and a link's permissions, are the file system's own.\n    if k == 1 { print(f\"{name}: dir perms {word(out, 3)}\\n\"); }\n    if k == 0 { print(f\"{name}: file size {word(out, 0)} perms {word(out, 3)} dated {word(out, 2) > 0}\\n\"); }\n    if k == 3 { print(f\"{name}: link size {word(out, 0)}\\n\"); }\n    0\n}\n\nfn same(io: IoCap, a: Str, b: Str) -> Bool ! { io } {\n    let x = bytes_new(48);\n    let y = bytes_new(48);\n    os_lstat(a, x);\n    os_lstat(b, y);\n    word(x, 4) == word(y, 4) && word(x, 5) == word(y, 5)\n}\n\nfn letters(s: Str, from: Int) -> Bool ! {} {\n    let mut ok = true;\n    for i in from..str_len(s) {\n        let c = str_byte(s, i);\n        if !((c >= 48 && c <= 57) || (c >= 97 && c <= 122)) { ok = false; }\n    }\n    ok\n}\n\nfn main(io: IoCap) -> Int ! { io } {\n    show(io, \"file.txt\");\n    show(io, \"dir\");\n    show(io, \"link\");\n    show(io, \"dangling\");\n    show(io, \"missing\");\n    let hard = same(io, \"file.txt\", \"hard\");\n    let other = same(io, \"file.txt\", \"dir\");\n    let itself = same(io, \"file.txt\", \"link\");\n    print(f\"same {hard} {other} {itself}\\n\");\n    let c1 = os_chmod(\"file.txt\", 384);\n    let c2 = kind(os_chmod(\"file.txt\", 4096));\n    let c3 = kind(os_chmod(\"missing\", 420));\n    print(f\"chmod {c1} {c2} {c3}\\n\");\n    show(io, \"file.txt\");\n    let through = os_chmod(\"link\", 416);\n    print(f\"through the link {through}\\n\");\n    show(io, \"file.txt\");\n    show(io, \"link\");\n    let here = bytes_new(4096);\n    let n = os_realpath(\".\", here);\n    let base = bytes_to_str(bytes_slice(here, 0, n));\n    let full = bytes_new(4096);\n    let m = os_realpath(\"dir/../link\", full);\n    let wanted = str_concat(base, \"/file.txt\");\n    let resolved = bytes_to_str(bytes_slice(full, 0, m));\n    print(f\"real {str_byte(base, 0) == 47} {resolved == wanted}\\n\");\n    let short = kind(os_realpath(\".\", bytes_new(1)));\n    let gone = kind(os_realpath(\"missing\", full));\n    let dangling = kind(os_realpath(\"dangling\", full));\n    print(f\"real short {short} missing {gone} dangling {dangling}\\n\");\n    let t = os_mkdtemp(\".\");\n    let u = os_mkdtemp(\"./\");\n    print(f\"temp {str_len(t)} {str_slice(t, 0, 7)} {str_len(u)} {str_slice(u, 0, 7)} {t == u} {letters(t, 7)}\\n\");\n    shown(io, t, \"temp\");\n    let n1 = os_mkdtemp(\"\");\n    let n2 = os_mkdtemp(\"missing\");\n    let n3 = os_mkdtemp(\"file.txt\");\n    print(f\"temp none [{n1}] [{n2}] [{n3}]\\n\");\n    let inside = f\"{t}/x\";\n    let h = os_open_write(inside, 2);\n    let wrote = os_write(h, bytes_from_str(\"x\"));\n    print(f\"written under it {wrote} {os_close(h)} {os_unlink(inside)}\\n\");\n    print(f\"removed {os_rmdir(t)} {os_rmdir(u)}\\n\");\n    0\n}\n";
+
+@test
+fn a_path_itself_its_permissions_its_canonical_form_and_a_private_directory_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, PATHS, strs_new(), TREE)?;
+    alike(runs, 0, "file.txt: file size 5 perms 420 dated true\ndir: dir perms 493\nlink: link size 8\ndangling: link size 7\nmissing: NotFound\nsame true false false\nchmod 0 InvalidInput NotFound\nfile.txt: file size 5 perms 384 dated true\nthrough the link 0\nfile.txt: file size 5 perms 416 dated true\nlink: link size 8\nreal true true\nreal short InvalidInput missing NotFound dangling NotFound\ntemp 19 ./nazm- 19 ./nazm- false true\ntemp: dir perms 448\ntemp none [] [] []\nwritten under it 1 0 0\nremoved 0 0\n0")?;
+    ok()
+}
+
+@test
+fn a_buffer_too_short_for_an_lstat_stops_the_program_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, "fn main(io: IoCap) -> Int ! { io } { os_lstat(\"x\", bytes_new(47)) }\n", strs_new(), "")?;
+    for run2 in runs {
+        let who = run2.label;
+        let r = run2.ran;
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(text_contains(r.stderr, "this buffer is too short for the answer"), who)?;
+    
+    }
+    check_that(text_contains(vec_get(runs, 0).ran.stderr, "N0405"), vec_get(runs, 0).ran.stderr)?;
+    ok()
+}
+
+const LOCKS: Str = "use \"@std/ioerror\";\nuse \"@std/file\";\n\nfn kind(s: Int) -> Str ! {} { if s >= 0 { int_to_str(s) } else { io_kind_name(io_kind_of(s)) } }\n\nfn held(r: Result[Bool, IoError]) -> Str ! {} {\n    match r {\n        Result.Ok(value: b) => if b { \"taken\" } else { \"held elsewhere\" },\n        Result.Err(error: e) => io_kind_name(e.kind),\n    }\n}\n\nfn main(io: IoCap) -> Int ! { io } {\n    let a = os_open_read(\"lockme\");\n    let b = os_open_read(\"lockme\");\n    let c = os_open_write(\"lockme\", 3);\n    print(f\"a exclusive {kind(os_lock(a, true))}; b {kind(os_try_lock(b, true))} {kind(os_try_lock(b, false))}\\n\");\n    print(f\"a shared {kind(os_lock(a, false))}; b shared {kind(os_try_lock(b, false))}; c {kind(os_try_lock(c, true))}\\n\");\n    print(f\"unlocked {kind(os_unlock(a))} {kind(os_unlock(b))}; c {kind(os_try_lock(c, true))}; a {kind(os_try_lock(a, false))}\\n\");\n    print(f\"closing c lets go {kind(os_close(c))}; a {kind(os_try_lock(a, false))}\\n\");\n    print(f\"unlock unheld {kind(os_unlock(b))}\\n\");\n    let d = os_dir_open(\".\");\n    print(f\"directory {kind(os_lock(d, true))} stdin {kind(os_lock(os_stdin(), true))}\\n\");\n    os_close(b);\n    print(f\"closed {kind(os_lock(b, true))} {kind(os_unlock(b))}\\n\");\n    os_unlock(a);\n    match file_open(io, \"lockme\") {\n        Result.Ok(value: f) => match file_open(io, \"lockme\") {\n            Result.Ok(value: g) => {\n                print(f\"library {held(file_try_lock(f, true))} {held(file_try_lock(g, false))}\\n\");\n                file_unlock(f);\n                print(f\"library after {held(file_try_lock(g, false))}\\n\");\n            },\n            Result.Err(error: e) => { print(\"open failed\\n\"); },\n        },\n        Result.Err(error: e) => { print(\"open failed\\n\"); },\n    };\n    0\n}\n";
+
+@test
+fn an_advisory_lock_belongs_to_the_open_file_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, LOCKS, strs_new(), LOCKABLE)?;
+    alike(runs, 0, "a exclusive 0; b WouldBlock WouldBlock\na shared 0; b shared 0; c WouldBlock\nunlocked 0 0; c 0; a WouldBlock\nclosing c lets go 0; a 0\nunlock unheld 0\ndirectory IsADirectory stdin InvalidInput\nclosed Closed Closed\nlibrary taken held elsewhere\nlibrary after taken\n0")?;
+    ok()
+}
+
+const LIBRARY: Str = "use \"@std/ioerror\";\nuse \"@std/file\";\nuse \"@std/fs\";\n\nfn named(k: EntryKind) -> Str ! {} {\n    match k {\n        EntryKind.Regular() => \"regular\",\n        EntryKind.Directory() => \"directory\",\n        EntryKind.Symlink() => \"symlink\",\n        EntryKind.Other() => \"other\",\n    }\n}\n\nfn main(io: IoCap) -> Int ! { io } {\n    file_write_str(file_stdout(io), \"raw\\n\");\n    file_write_str(file_stderr(io), \"raw errors\\n\");\n    match file_symlink_metadata(io, \"link\") {\n        Result.Ok(value: m) => { print(f\"link {named(m.kind)} {m.size}\\n\"); },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match file_symlink_metadata(io, \"file.txt\") {\n        Result.Ok(value: m) => match file_symlink_metadata(io, \"hard\") {\n            Result.Ok(value: h) => { print(f\"file {named(m.kind)} same {m.device == h.device && m.inode == h.inode}\\n\"); },\n            Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match file_set_permissions(io, \"file.txt\", 256) {\n        Result.Ok(value: z) => match file_metadata(io, \"file.txt\") {\n            Result.Ok(value: m) => { print(f\"permissions {m.permissions}\\n\"); },\n            Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match file_canonical(io, \"dir/../link\") {\n        Result.Ok(value: p) => { print(f\"canonical ends {str_slice(p, str_len(p) - 9, str_len(p))}\\n\"); },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match file_canonical(io, \"missing\") {\n        Result.Ok(value: p) => { print(\"found\\n\"); },\n        Result.Err(error: e) => { print(f\"canonical missing {io_kind_name(e.kind)}\\n\"); },\n    };\n    match dir_create_temp(io, \".\") {\n        Result.Ok(value: t) => {\n            match file_create(io, f\"{t}/inside\") {\n                Result.Ok(value: f) => { file_close(f); },\n                Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n            };\n            print(f\"temp {str_len(t)} {file_exists_at(io, f\"{t}/inside\")}\\n\");\n            file_remove(io, f\"{t}/inside\");\n            dir_remove(io, t);\n        },\n        Result.Err(error: e) => { print(io_kind_name(e.kind)); },\n    };\n    match dir_create_temp(io, \"missing\") {\n        Result.Ok(value: t) => { print(\"made\\n\"); },\n        Result.Err(error: e) => { print(f\"temp missing {io_kind_name(e.kind)}\\n\"); },\n    };\n    match fs_temp_dir(io) {\n        Result.Ok(value: t) => { print(f\"fs temp {str_len(t) > 17}\\n\"); os_rmdir(t); },\n        Result.Err(error: e) => { print(e); },\n    };\n    0\n}\n";
+
+@test
+fn the_library_wraps_them_alike_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, LIBRARY, strs_new(), TREE)?;
+    alike(runs, 0, "raw\nlink symlink 8\nfile regular same true\npermissions 256\ncanonical ends /file.txt\ncanonical missing NotFound\ntemp 19 true\ntemp missing Other\nfs temp true\n0")?;
+    for run3 in runs {
+        let who = run3.label;
+        let r = run3.ran;
+        check_that(text_contains(r.stderr, "raw errors\n"), who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn naming_a_path_needs_an_io_cap_and_a_file_does_not_choose_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs4 = strs_new();
+    strs_push(srcs4, "fn main() -> Int ! { io } { os_lstat(\"x\", bytes_new(48)) }\n");
+    strs_push(srcs4, "fn main() -> Int ! { io } { os_chmod(\"x\", 420) }\n");
+    strs_push(srcs4, "fn main() -> Int ! { io } { os_realpath(\"x\", bytes_new(8)) }\n");
+    strs_push(srcs4, "fn main() -> Int ! { io } { str_len(os_mkdtemp(\".\")) }\n");
+    strs_push(srcs4, "fn main() -> Int ! { io } { os_status(os_stdout()) }\n");
+    strs_push(srcs4, "fn main() -> Int ! { io } { os_status(os_stderr()) }\n");
+    strs_push(srcs4, "fn main(io: IoCap) -> Int ! { io } { os_chmod(read_file(\"cfg\"), 420) }\n");
+    strs_push(srcs4, "fn main(io: IoCap) -> Int ! { io } { str_len(os_mkdtemp(read_file(\"cfg\"))) }\n");
+    let codes4 = strs_new();
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0369");
+    strs_push(codes4, "N0372");
+    strs_push(codes4, "N0372");
+    let mut k4 = 0 - 1;
+    for src in srcs4 {
+        k4 = k4 + 1;
+        let code = strs_get(codes4, k4);
+        check_that(strs_has(codes(h, src), code), src)?;
+    
+    }
+    // A handle already open is its own authority: locking one needs nothing held.
+    let held = "fn lock(h: OsHandle) -> Int ! { io } { os_lock(h, true) + os_try_lock(h, false) + os_unlock(h) }\nfn main(io: IoCap) -> Int ! { io } { lock(os_open_read(\"x\")) }\n";
+    check_that((strs_len(codes(h, held)) == 0), "assert!((strs_len(codes(h, held)) == 0), \"{:?}\", codes(held));")?;
+    // A temporary directory's path is as clean as its parent: a program writes under it.
+    let under = "fn main(io: IoCap) -> Int ! { io } { let t = os_mkdtemp(\".\"); write_file(str_concat(t, \"/x\"), \"y\"); os_unlink(str_concat(t, \"/x\")); os_rmdir(t) }\n";
+    check_that((strs_len(codes(h, under)) == 0), "assert!((strs_len(codes(h, under)) == 0), \"{:?}\", codes(under));")?;
+    ok()
+}
+
+@test
+fn a_program_that_names_a_function_like_one_keeps_its_own(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let runs = runs_in(h, "fn os_lstat(a: Int) -> Int ! {} { a + 1 }\nfn os_mkdtemp() -> Int ! {} { 5 }\nfn main() -> Int ! {} { os_lstat(1) + os_mkdtemp() }\n", strs_new(), "")?;
+    alike(runs, 0, "7")?;
+    ok()
+}
+
+@test
+fn wasi_builds_the_file_system_and_refuses_a_process_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // WASI has the streams' handles, a path's own facts and a temporary directory; what it keeps
+    // no notion of — permissions, canonical paths, locks — answers ENOSYS there, as listing a
+    // directory does; a process it has not got at all, and a program reaching one is refused.
+    let d = scratch_new(h);
+    scratch_write(h, d, "files.nz", "use \"@std/file\";\nfn main(io: IoCap) -> Int ! { io } {\nlet out = bytes_new(48);\nlet a = os_write(os_stdout(), bytes_from_str(\"x\")) + os_lstat(\"x\", out) + str_len(os_mkdtemp(\".\"));\nlet b = os_chmod(\"x\", 420) + os_realpath(\"x\", out) + os_lock(os_open_read(\"x\"), true);\na + b\n}\n")?;
+    let o = nazm(h, d, words("build --target wasm32-wasip1 --objects files files.nz"));
+    check_that(o.code == 0, ran_show(o))?;
+    let srcs5 = strs_new();
+    strs_push(srcs5, "fn main(io: IoCap) -> Int ! { io } { os_pid() }\n");
+    strs_push(srcs5, "fn main(p: ProcessCap) -> Int ! { io } { os_status(os_spawn_in(\"x\", strs_new(), \"\", strs_new())) }\n");
+    let symbols5 = strs_new();
+    strs_push(symbols5, "networking (`nz.os_pid`)");
+    strs_push(symbols5, "networking (`nz.os_spawn_in`)");
+    let mut k5 = 0 - 1;
+    for src in srcs5 {
+        k5 = k5 + 1;
+        let symbol = strs_get(symbols5, k5);
+        scratch_write(h, d, "prog.nz", src)?;
+        let o = nazm(h, d, words("build --target wasm32-wasip1 --objects out prog.nz"));
+        check_that(o.code == 1, ran_show(o))?;
+        check_that(text_contains(o.stderr, "is WASI preview 1"), o.stderr)?;
+        check_that(text_contains(o.stderr, symbol), symbol)?;
+        check_that(!file_exists_at(h.io, f"{d}/out"), src)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn the_windows_units_are_built_for_every_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn main(io: IoCap, p: ProcessCap) -> Int ! { io } {\nlet out = bytes_new(48);\nlet h = os_spawn_with(\"x\", strs_new(), \"d\", strs_new(), 3);\nlet a = os_lstat(\"x\", out) + os_chmod(\"x\", 420) + os_realpath(\"x\", out) + str_len(os_mkdtemp(\".\"));\nlet b = os_lock(os_stdout(), true) + os_try_lock(os_stderr(), false) + os_unlock(h) + os_pid();\nlet c = os_child_pid(h) + os_try_wait(h) + os_wait_until(h, 0) + os_child_rusage(h);\nlet e = os_kill_group(2, 0) + os_status(os_spawn_in(\"x\", strs_new(), \"\", strs_new()));\na + b + c + e\n}\n")?;
+    for backend in words("llvm cranelift") {
+        let l6 = strs_new();
+        strs_push(l6, "build");
+        strs_push(l6, "--backend");
+        strs_push(l6, backend);
+        strs_push(l6, "--target");
+        strs_push(l6, "x86_64-pc-windows-gnu");
+        strs_push(l6, "--objects");
+        strs_push(l6, backend);
+        strs_push(l6, "prog.nz");
+        let o = nazm(h, d, l6);
+        check_that(o.code == 0, ran_show(o))?;
+        check_that(file_exists_at(h.io, f"{d}/{backend}/link.txt"), backend)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+

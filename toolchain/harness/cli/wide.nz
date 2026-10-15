@@ -1,0 +1,214 @@
+// `Int128` and `UInt128`: every operation, literal, failure, hash and constant at 128 bits, the
+// same under the interpreter, the LIR oracle, LLVM at `-O0` and `-O2`, and Cranelift; and what
+// 128 bits cannot do, refused. Ported from `crates/nazm-cli/tests/wide.rs` (R7).
+
+use "@std/file"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+fn everywhere_in(h: Caps, d: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret prog.nz"), d, env)));
+    vec_push(out, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, env)));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{d}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(out, Labeled(label: who, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// `body` inside a `main` that can print, under every implementation, each with the memory
+/// report asked for.
+fn everywhere_w(h: Caps, header: Str, body: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let src = f"{header}fn show(out: OutCap, s: Str) -> Int ! {{io}} {{ print(str_concat(s, \"\\n\")) }}\nfn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n0\n}}\n";
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = everywhere_in(h, d);
+    scratch_remove(h, d);
+    r
+}
+
+/// `body` prints `expected`, one line each, everywhere, and leaves nothing live where a memory
+/// report is written.
+fn agrees_w(h: Caps, header: Str, body: Str, expected: Strs) -> Result[Int, Str] ! { io, spawn } {
+    let want = f"{str_join(expected, "\n")}\n0\n";
+    for run_ in everywhere_w(h, header, body)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {ran_show(r)}")?;
+        check_that(r.stdout == want, f"{who}: {r.stdout}")?;
+        if who != "lir oracle" {
+            let line = memory_line(r);
+            check_that(str_len(line) > 0, f"{who}: no memory report: {ran_show(r)}")?;
+            for w in split_whitespace(line) {
+                check_that(!text_starts_with(w, "live=") || w == "live=0", f"{who}: {line}")?;
+            }
+        }
+    }
+    ok()
+}
+
+/// `nazm check r.nz` on `src`, written into `d`.
+fn check_in(h: Caps, d: Str, src: Str) -> Result[Ran, Str] ! { io, spawn } {
+    scratch_write(h, d, "r.nz", src)?;
+    Result[Ran, Str].Ok(value: nazm(h, d, words("check r.nz")))
+}
+
+@test
+fn every_operation_at_128_bits_agrees_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_w(h, "", "let mx = ~UInt128(0);\nlet imax = Int128(mx >> 1);\nlet imin = -imax - Int128(1);\nshow(out, num_to_str(mx));\nshow(out, num_to_str(imax));\nshow(out, num_to_str(imin));\nshow(out, num_to_str(Int128(9223372036854775807) * Int128(1000) / Int128(7)));\nshow(out, num_to_str(UInt128(18446744073709551615) * UInt128(18446744073709551615)));\nshow(out, num_to_str(Int128(-3) * Int128(5)));\nshow(out, num_to_str(Int128(-85070591730234615865843651857942052864) * Int128(2)));\nshow(out, num_to_str(imin % Int128(-1)));\nshow(out, num_to_str(Int128(-7) % Int128(3)));\nshow(out, num_to_str(imin >> 127));\nshow(out, num_to_str(UInt128(1) << 127));\nshow(out, num_to_str(rotate_left(UInt128(3), 127)));\nshow(out, num_to_str(swap_bytes(UInt128(1))));\nshow(out, num_to_str(leading_zeros(UInt128(1))));\nshow(out, num_to_str(trailing_zeros(UInt128(0))));\nshow(out, num_to_str(count_ones(imin)));\nshow(out, num_to_str(saturating_add(mx, UInt128(5))));\nshow(out, num_to_str(saturating_mul(imin, Int128(2))));\nshow(out, num_to_str(saturating_sub(Int128(0), imin)));\nshow(out, num_to_str(wrapping_mul(mx, mx)));\nshow(out, num_to_str(wrapping_add(imax, Int128(1))));\nshow(out, num_to_str(saturate_convert[Int](mx)));\nshow(out, num_to_str(saturate_convert[Int128](mx)));\nshow(out, num_to_str(saturate_convert[UInt128](imin)));\nshow(out, num_to_str(wrap_convert[Int](mx)));\nshow(out, num_to_str(wrap_convert[Int128](mx)));\nshow(out, num_to_str(saturate_convert[Int128](1.0e40)));\nshow(out, num_to_str(saturate_convert[UInt128](-5.0)));\nshow(out, num_to_str(saturate_convert[UInt128](0.0 / 0.0)));\nshow(out, num_to_str(Int128(1.0e30)));\nshow(out, num_to_str(Float32(mx)));\nshow(out, num_to_str(Float64(imin)));\nshow(out, num_to_str(UInt128(UInt64(18446744073709551615))));\nif mx - UInt128(1) > UInt128(imax) { show(out, \"unsigned\"); } else { show(out, \"wrong\"); }\nif imin < Int128(0) { show(out, \"signed\"); } else { show(out, \"wrong\"); }\nmatch try_convert[Int](imax) { Option.Some(value: v) => show(out, \"wrong\"), Option.None() => show(out, \"none\"), };\nmatch checked_mul(imax, Int128(2)) { Option.Some(value: v) => show(out, \"wrong\"), Option.None() => show(out, \"none\"), };\nlet xs = vec_new[UInt128]();\nvec_push(xs, mx);\nvec_push(xs, UInt128(7));\nshow(out, num_to_str(vec_get(xs, 0) - vec_get(xs, 1)));\nshow(out, num_to_str(widening_mul(UInt64(18446744073709551615), UInt64(18446744073709551615))));\nshow(out, num_to_str(widening_mul(UInt64(4294967296), UInt64(4294967296)) >> 64));", words("340282366920938463463374607431768211455 170141183460469231731687303715884105727 -170141183460469231731687303715884105728 1317624576693539401000 340282366920938463426481119284349108225 -15 -170141183460469231731687303715884105728 0 -1 -1 170141183460469231731687303715884105728 170141183460469231731687303715884105729 1329227995784915872903807060280344576 127 128 1 340282366920938463463374607431768211455 -170141183460469231731687303715884105728 170141183460469231731687303715884105727 1 -170141183460469231731687303715884105728 9223372036854775807 170141183460469231731687303715884105727 0 -1 -1 170141183460469231731687303715884105727 0 0 1000000000000000019884624838656 inf -1.7014118346046923e+38 18446744073709551615 unsigned signed none none 340282366920938463463374607431768211448 340282366920938463426481119284349108225 1"))?;
+    ok()
+}
+
+@test
+fn literals_and_bytes_reach_the_whole_width(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_w(h, "", "show(out, num_to_str(UInt128(340282366920938463463374607431768211455)));\nshow(out, num_to_str(Int128(-170141183460469231731687303715884105728)));\nlet b = bytes_new(32);\nbytes_write_le(b, 0, UInt128(1) << 100 | UInt128(258));\nbytes_write_be(b, 16, Int128(-2));\nshow(out, num_to_str(bytes_read_le[UInt128](b, 0)));\nshow(out, num_to_str(bytes_read_be[Int128](b, 16)));\nshow(out, num_to_str(bytes_read_le[UInt64](b, 0)));\nshow(out, num_to_str(bytes_get(b, 31)));", words("340282366920938463463374607431768211455 -170141183460469231731687303715884105728 1267650600228229401496703205634 -2 258 254"))?;
+    ok()
+}
+
+@test
+fn every_128_bit_failure_traps_with_its_code_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let bodys1 = strs_new();
+    strs_push(bodys1, "show(out, num_to_str(~UInt128(0) + UInt128(1)));");
+    strs_push(bodys1, "show(out, num_to_str(Int128(~UInt128(0) >> 1) * Int128(2)));");
+    strs_push(bodys1, "show(out, num_to_str(~UInt128(0) * UInt128(2)));");
+    strs_push(bodys1, "let m = -Int128(~UInt128(0) >> 1) - Int128(1); show(out, num_to_str(m / Int128(-1)));");
+    strs_push(bodys1, "show(out, num_to_str(Int128(5) % Int128(0)));");
+    strs_push(bodys1, "show(out, num_to_str(-UInt128(1)));");
+    strs_push(bodys1, "show(out, num_to_str(Int(~UInt128(0))));");
+    strs_push(bodys1, "show(out, num_to_str(Int128(1.0e39)));");
+    strs_push(bodys1, "show(out, num_to_str(UInt128(0.0 / 0.0)));");
+    let codes1 = strs_new();
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0401");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    strs_push(codes1, "N0400");
+    let whats1 = strs_new();
+    strs_push(whats1, "addition overflows `UInt128`");
+    strs_push(whats1, "multiplication overflows `Int128`");
+    strs_push(whats1, "multiplication overflows `UInt128`");
+    strs_push(whats1, "division overflows `Int128`");
+    strs_push(whats1, "division by zero");
+    strs_push(whats1, "negation overflows `UInt128`");
+    strs_push(whats1, "conversion overflows `Int`");
+    strs_push(whats1, "conversion overflows `Int128`");
+    strs_push(whats1, "conversion overflows `UInt128`");
+    let mut k1 = 0 - 1;
+    for body in bodys1 {
+        k1 = k1 + 1;
+        let code = strs_get(codes1, k1);
+        let what = strs_get(whats1, k1);
+        for run2 in everywhere_w(h, "", body)? {
+            let who = run2.label;
+            let r = run2.ran;
+            check_that(r.code == 2, ran_show(r))?;
+            check_that((str_len(r.stdout) == 0), who)?;
+            check_that(text_contains(r.stderr, f"error[{code}]") && text_contains(r.stderr, what), who)?;
+        
+        }
+    
+    }
+    ok()
+}
+
+@test
+fn a_128_bit_key_hashes_as_its_two_words_combined(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l3 = strs_new();
+    strs_push(l3, "3");
+    strs_push(l3, "words");
+    strs_push(l3, "signed words");
+    strs_push(l3, "derived");
+    strs_push(l3, "equal");
+    strs_push(l3, "ordered");
+    agrees_w(h, "use \"@std/hash\";\nuse \"@std/hashmap\";\nstruct P { a: UInt128, b: Int128, }\n", "let big = ~UInt128(0);\nlet m = hashmap_new[UInt128, Int]();\nhashmap_set(m, big, 1);\nhashmap_set(m, UInt128(5), 2);\nhashmap_set(m, big, 3);\nhashmap_set(m, big - UInt128(1), 4);\nshow(out, num_to_str(hashmap_len(m)));\nlet w = hash_combine(hash_u64(UInt64(18446744073709551615)), hash_u64(UInt64(18446744073709551615)));\nif Hash.hash(big) == w { show(out, \"words\"); } else { show(out, \"wrong\"); }\nif Hash.hash(Int128(-1)) == w { show(out, \"signed words\"); } else { show(out, \"wrong\"); }\nlet p = P(a: UInt128(1) << 100, b: Int128(-3));\nlet derived = hash_combine(hash_combine(hash_u64(UInt64(0)), Hash.hash(p.a)), Hash.hash(p.b));\nif Hash.hash(p) == derived { show(out, \"derived\"); } else { show(out, \"wrong\"); }\nif p == P(a: UInt128(1) << 100, b: Int128(-3)) { show(out, \"equal\"); } else { show(out, \"wrong\"); }\nif p < P(a: UInt128(1) << 100, b: Int128(-2)) { show(out, \"ordered\"); } else { show(out, \"wrong\"); }", l3)?;
+    ok()
+}
+
+@test
+fn a_128_bit_constant_crosses_modules_and_the_cache(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "lib.nz", "pub const BIG: UInt128 = 340282366920938463463374607431768211455;\npub const LOW: Int128 = -170141183460469231731687303715884105728;\npub const SMALL: Int8 = -5;\n")?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\";\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\nfn main(out: OutCap) -> Int ! {io} {\nshow(out, num_to_str(BIG));\nshow(out, num_to_str(LOW));\nshow(out, num_to_str(SMALL));\n0\n}\n")?;
+    let want = "340282366920938463463374607431768211455\n-170141183460469231731687303715884105728\n-5\n0\n";
+    // Twice, then built. `nazm run` keeps no check cache; the interface's copy of each value is
+    // read back by `durable_identity::a_128_bit_constant_reads_back_from_its_interface_whole`.
+    let mut i4 = 0;
+    while i4 < 2 {
+        let r = nazm(h, d, words("run --interpret main.nz"));
+        check_that(r.stdout == want, "assert_eq!(r.stdout, want, \"{r:?}\");")?;
+    
+        i4 = i4 + 1;
+    }
+    let b = nazm(h, d, words("build main.nz -o m"));
+    check_that(b.code == 0, ran_show(b))?;
+    let r = bounded_exe(h, f"{d}/m", "", suite_env(h));
+    check_that(r.stdout == want, "assert_eq!(r.stdout, want, \"{r:?}\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn what_128_bits_cannot_do_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    // One past `UInt128`.
+    let r = check_in(h, d, "fn main() -> Int { let x = UInt128(340282366920938463463374607431768211456); 0 }\n")?;
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0003"), r.stderr)?;
+    // A negated literal past `Int`'s magnitude, where an `Int` is expected.
+    let r_2 = check_in(h, d, "fn main() -> Int { -9223372036854775809 }\n")?;
+    check_that(r_2.code != 0, ran_show(r_2))?;
+    check_that(text_contains(r_2.stderr, "N0003"), r_2.stderr)?;
+    // C has no standard 128-bit type.
+    let r_3 = check_in(h, d, "pub extern \"C\" fn twice(x: Int128) -> Int128 ! {} = \"twice\" { x * Int128(2) }\nfn main() -> Int { 0 }\n")?;
+    check_that(r_3.code != 0, ran_show(r_3))?;
+    check_that(text_contains(r_3.stderr, "N0391"), r_3.stderr)?;
+    // WebAssembly has no wide part.
+    scratch_write(h, d, "w.nz", "fn main() -> Int { Int(Int128(42) / Int128(2)) }\n")?;
+    let r_4 = nazm(h, d, words("build --target wasm32-wasip1 w.nz --objects objs"));
+    check_that(r_4.code != 0, ran_show(r_4))?;
+    check_that(text_contains(r_4.stderr, "128-bit integers"), r_4.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_128_bit_value_crosses_a_call_in_a_cranelift_build_for_x86_64(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // x86_64's System V passes an `Int128` as a register pair, which Cranelift does only with
+    // LLVM's ABI extensions on; without them it refuses the signature. A cross build writes
+    // the objects without a linker, so this host can show it.
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", "fn wide(a: Int128, b: Int128) -> Int128 { a + b }\nfn main() { println(num_to_str(wide(Int128(1), Int128(2)))) }\n")?;
+    let b = nazm(h, d, words("build --backend cranelift --target x86_64-unknown-linux-gnu --objects out prog.nz"));
+    check_that(b.code == 0, ran_show(b))?;
+    check_that(file_exists_at(h.io, f"{d}/out/link.txt"), "assert!(file_exists_at(h.io, f\"{d}/out/link.txt\"), \"{b:?}\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+

@@ -73,3 +73,12 @@ pub fn jtext(doc: JsonDoc, path: Str) -> Str ! {} {
     let n = jq(doc, path);
     if n < 0 { "null" } else { json_encode_node(doc, n) }
 }
+
+/// The length of the array at `path`, `-1` where there is none: `v[..].as_array().unwrap().len()`.
+pub fn jlen(doc: JsonDoc, path: Str) -> Int ! {} {
+    let n = jq(doc, path);
+    if n < 0 || json_kind(doc, n) != "array" {
+        return 0 - 1;
+    }
+    json_len(doc, n)
+}

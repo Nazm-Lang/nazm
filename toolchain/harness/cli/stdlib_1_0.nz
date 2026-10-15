@@ -1,0 +1,220 @@
+// The standard library at 1.0: each module behaves as documented at its edges on every tier, the
+// representative programs of `examples/std/` run on the library alone, and the public surface is
+// exactly `library/std/API-1.0`. Ported from `crates/nazm-cli/tests/stdlib_1_0.rs` (R7).
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `prog.nz` in `dir` on every tier: the interpreter, then LLVM at `-O0` and `-O2` and
+/// Cranelift, each native one with the memory report on.
+fn tiers(h: Caps, dir: Str, args: Strs) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let path = f"{dir}/prog.nz";
+    let ia = words("run --interpret");
+    strs_push(ia, path);
+    strs_push(ia, "--");
+    for a in args {
+        strs_push(ia, a);
+    }
+    let out = vec_new[Labeled]();
+    vec_push(out, Labeled(label: "interpreter", ran: nazm(h, dir, ia)));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, dir, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} {path} -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        let sa = strs_new();
+        strs_push(sa, "-c");
+        strs_push(sa, bounded_script());
+        strs_push(sa, exe);
+        for a in args {
+            strs_push(sa, a);
+        }
+        vec_push(out, Labeled(label: who, ran: run(h, "sh", sa, dir, env)));
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+fn agrees_in(h: Caps, d: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    for run_ in tiers(h, d, strs_new())? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}")?;
+        check_that(r.stdout == expected, f"{who}: {r.stdout}")?;
+        if who != "interpreter" {
+            let report = memory_line(r);
+            check_that(str_len(report) > 0, f"{who}: {r.stderr}")?;
+            check_that(count_matches(report, "live=0") == 4, f"{who}: {report}")?;
+        }
+    }
+    ok()
+}
+
+/// `src` as `prog.nz` gives `expected` on every tier, exits 0, and reclaims everything natively.
+fn agrees_t(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = agrees_in(h, d, expected);
+    scratch_remove(h, d);
+    r
+}
+
+fn representative_in(h: Caps, d: Str, name: Str, args: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let dir = f"{repo_root(h)}/examples/std";
+    let names = match dir_list(h.io, dir) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => {
+            return Result[Int, Str].Err(error: f"{dir}: {e.message}");
+        },
+    };
+    for n in names {
+        let text = read_raw(h, f"{dir}/{n}")?;
+        let to = if n == f"{name}.nz" { "prog.nz" } else { n };
+        scratch_write(h, d, to, text)?;
+    }
+    for run_ in tiers(h, d, args)? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{name} {who}: {r.stderr}")?;
+        check_that(r.stdout == expected, f"{name} {who}: {r.stdout}")?;
+    }
+    ok()
+}
+
+/// A representative program from `examples/std/`, with its data, run on every tier.
+fn representative(h: Caps, name: Str, args: Strs, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let r = representative_in(h, d, name, args, expected);
+    scratch_remove(h, d);
+    r
+}
+
+/// The public surface of `library/std/`, regenerated from the modules exactly as
+/// `library/std/API-1.0` was written.
+fn surface(h: Caps, std_dir: Str) -> Result[Strs, Str] ! { io } {
+    let names = match dir_list(h.io, std_dir) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => {
+            return Result[Strs, Str].Err(error: f"{std_dir}: {e.message}");
+        },
+    };
+    let modules = strs_new();
+    for n in names {
+        match strip_suffix(n, ".nz") {
+            Option.Some(value: m) => strs_push(modules, m),
+            Option.None() => 0,
+        };
+    }
+    let lines_ = strs_new();
+    for m in strs_sort(modules) {
+        let text = read_text(h, f"{std_dir}/{m}.nz")?;
+        for l in lines(text) {
+            if text_starts_with(l, "pub fn ") || text_starts_with(l, "pub struct ") || text_starts_with(l, "pub enum ") || text_starts_with(l, "pub trait ") {
+                let sig = match strip_suffix(l, " {") {
+                    Option.Some(value: s) => s,
+                    Option.None() => l,
+                };
+                strs_push(lines_, f"@std/{m} {sig}");
+            }
+        }
+    }
+    Result[Strs, Str].Ok(value: lines_)
+}
+
+@test
+fn text_1_0_behaves_as_documented_at_its_edges(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_t(h, "use \"@std/text\";\nfn main(io: IoCap) -> Int ! { io } {\nprint(text_to_upper(\"ab-Cz\")); print(\"|\"); print(text_to_lower(\"AB-cZ\")); print(\"|\");\nprint(text_replace(\"a,b,,c\", \",\", \";\")); print(\"|\"); print(text_replace(\"abc\", \"\", \"x\")); print(\"|\");\nprint(int_to_str(text_count(\"aaaa\", \"aa\"))); print(int_to_str(text_count(\"a\", \"\"))); print(\"|\");\nprint(text_pad_left(\"7\", 3, \"0\")); print(text_pad_left(\"1234\", 3, \"0\")); print(text_pad_right(\"ab\", 4, \".\")); print(text_pad_right(\"ab\", 4, \"\")); print(\"|\");\nlet ls = text_lines(\"x\\r\\ny\\n\\nz\\n\"); print(int_to_str(strs_len(ls))); print(int_to_str(str_len(strs_get(ls, 0)))); print(strs_get(ls, 1)); print(int_to_str(strs_len(text_lines(\"\")))); print(\"|\");\nprint(int_to_str(text_compare(\"ab\", \"abc\") + 10 * text_compare(\"b\", \"a\") + 100 * text_compare(\"q\", \"q\"))); print(\"|\");\nprint(text_trim_start(\" \\t a \")); print(\"|\"); print(text_trim_end(\" a \\n\")); print(\"|\");\nprint(if text_is_digit(48) && !text_is_digit(58) && text_is_alpha(90) && !text_is_alpha(91) { \"T\" } else { \"F\" });\n0 }\n", "AB-CZ|ab-cz|a;b;;c|abc|20|0071234ab..ab|41y0|9|a | a|T0\n")?;
+    ok()
+}
+
+@test
+fn the_sort_is_stable_does_what_its_function_does_and_the_seq_helpers_clamp(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_t(h, "use \"@std/seq\";\nuse \"@std/sort\";\nstruct P { k: Int, tag: Str }\nfn main(io: IoCap) -> Int ! { io } {\nlet v = vec_new[P]();\nvec_push(v, P(k: 2, tag: \"a\")); vec_push(v, P(k: 1, tag: \"b\")); vec_push(v, P(k: 2, tag: \"c\")); vec_push(v, P(k: 0, tag: \"d\")); vec_push(v, P(k: 1, tag: \"e\"));\nlet s = vec_sort_by(v, fn(x: P, y: P) -> Bool { x.k < y.k });\nlet mut i = 0; while i < vec_len(s) { print(vec_get(s, i).tag); i = i + 1; } print(\"|\");\nprint(vec_get(v, 0).tag); print(\"|\");\nlet e = vec_sort_by(vec_new[Int](), fn(a: Int, b: Int) -> Bool { a < b }); print(int_to_str(vec_len(e))); print(\"|\");\nlet xs = ints_new(); ints_push(xs, 5); ints_push(xs, 0 - 2); ints_push(xs, 9); ints_push(xs, 5);\nlet ys = ints_sort(xs); i = 0; while i < ints_len(ys) { print(int_to_str(ints_get(ys, i))); print(\",\"); i = i + 1; } print(\"|\");\nlet ss = strs_new(); strs_push(ss, \"b\"); strs_push(ss, \"ab\"); strs_push(ss, \"a\"); strs_push(ss, \"\");\nlet zs = strs_sort(ss); i = 0; while i < strs_len(zs) { print(\"[\"); print(strs_get(zs, i)); print(\"]\"); i = i + 1; } print(\"|\");\nprint(int_to_str(vec_len(vec_slice(s, 0 - 5, 99)))); print(int_to_str(vec_len(vec_slice(s, 4, 2)))); print(\"|\");\nlet r = vec_reverse(vec_slice(s, 1, 4)); i = 0; while i < vec_len(r) { print(vec_get(r, i).tag); i = i + 1; } print(\"|\");\nlet asked = vec_any(s, fn(x: P) -> Bool ! { io } { print(\"?\"); x.k == 1 });\nprint(if asked { \"T\" } else { \"F\" });\nprint(if vec_all(vec_concat(s, s), fn(x: P) -> Bool { x.k >= 0 }) { \"T\" } else { \"F\" });\nprint(if vec_all(vec_new[P](), fn(x: P) -> Bool { false }) { \"T\" } else { \"F\" });\n0 }\n", "dbeac|a|0|-2,5,5,9,|[][a][ab][b]|50|aeb|??TTT0\n")?;
+    ok()
+}
+
+@test
+fn fmt_and_num_behave_as_documented_at_their_edges(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_t(h, "use \"@std/fmt\";\nuse \"@std/num\";\nfn o(x: Option[Int]) -> Str { match x { Option.Some(value: v) => int_to_str(v), Option.None() => \"none\" } }\nfn main(io: IoCap) -> Int ! { io } {\nprint(fmt_int_zero(0 - 42, 5)); print(\"|\"); print(fmt_int_zero(123456, 3)); print(\"|\"); print(fmt_int_width(7, 3)); print(\"|\");\nprint(fmt_hex(255)); print(\"|\"); print(fmt_hex(0 - 1)); print(\"|\"); print(fmt_hex(0)); print(\"|\"); print(fmt_bool(true)); print(\"|\");\nlet xs = ints_new(); ints_push(xs, 1); ints_push(xs, 2); print(fmt_ints(xs, \"+\")); print(\"|\");\nlet ss = strs_new(); print(fmt_list(ss, \",\", \"[\", \"]\")); print(\"|\");\nprint(int_to_str(num_gcd(0 - 12, 18))); print(int_to_str(num_gcd(0, 0))); print(\"|\");\nprint(int_to_str(num_clamp(15, 0, 10))); print(int_to_str(num_clamp(5, 10, 0))); print(\"|\");\nprint(o(num_pow(2, 62))); print(\"|\"); print(o(num_pow(2, 63))); print(\"|\"); print(o(num_pow(0 - 3, 3))); print(\"|\"); print(o(num_pow(2, 0 - 1))); print(\"|\");\nprint(int_to_str(num_abs(0 - 9) + num_sign(0 - 4) + num_min(3, 1) + num_max(3, 1)));\n0 }\n", "-00042|123456|  7|ff|ffffffffffffffff|0|true|1+2|[]|60|1010|4611686018427387904|none|-27|none|120\n")?;
+    ok()
+}
+
+@test
+fn map_path_fs_time_test_and_chan_behave_as_documented(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_t(h, "use \"@std/map\";\nuse \"@std/path\";\nuse \"@std/fs\";\nuse \"@std/time\";\nuse \"@std/test\";\nuse \"@std/chan\";\nfn producer(io: IoCap, c: Chan[Int]) -> Int ! { io } {\nlet xs = vec_new[Int](); vec_push(xs, 1); vec_push(xs, 2); vec_push(xs, 3);\nlet n = chan_send_all_ints(c, xs); chan_close_of(c); n }\nfn check() -> Result[Int, Str] ! {} {\nlet a = test_int(\"sum\", 1 + 1, 2)?;\nlet b = test_str(\"name\", \"x\", \"y\")?;\nResult[Int, Str].Ok(value: a) }\nfn lines2() -> Strs { let s = strs_new(); strs_push(s, \"one\"); strs_push(s, \"two\"); s }\nfn main(io: IoCap, tm: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {\nlet m = map_new[Int]();\nlet r1 = map_set(m, \"b\", 2); let r2 = map_set(m, \"a\", 1); let r3 = map_set(m, \"c\", 3); let r4 = map_set(m, \"b\", 20);\nprint(str_join(map_keys(m), \",\")); print(if r4 && !r1 { \"R\" } else { \"?\" }); print(\"|\");\nprint(match map_get(m, \"b\") { Option.Some(value: v) => int_to_str(v), Option.None() => \"none\" }); print(\"|\");\nprint(match map_remove(m, \"a\") { Option.Some(value: v) => int_to_str(v), Option.None() => \"none\" });\nprint(match map_remove(m, \"zz\") { Option.Some(value: v) => int_to_str(v), Option.None() => \"none\" }); print(int_to_str(map_len(m))); print(\"|\");\nprint(path_join(\"a/b\", \"c.txt\")); print(\" \"); print(path_join(\"a/\", \"/abs\")); print(\" \"); print(path_base(\"/x/y/z.tar.gz\")); print(\" \"); print(path_dir(\"/x\")); print(\" \"); print(path_dir(\"z\")); print(\" \");\nprint(path_ext(\"/x/y/z.tar.gz\")); print(\" \"); print(path_stem(\"z.tar.gz\")); print(\" \"); print(path_ext(\".profile\")); print(\" \");\nprint(path_normalize(\"/a/./b/../../../c//d\")); print(\" \"); print(path_normalize(\"x/../../y\")); print(\" \"); print(path_normalize(\"\")); print(\"|\");\nlet w = fs_write_lines(io, \"t.txt\", lines2());\nprint(match fs_read_lines(io, \"t.txt\") { Result.Ok(value: ls) => int_to_str(strs_len(ls)), Result.Err(error: e) => e }); print(\" \");\nprint(match fs_read(io, \"nope.txt\") { Result.Ok(value: s) => s, Result.Err(error: e) => e }); print(\"|\");\nlet d = time_deadline(tm, 0); print(if time_passed(tm, d) && time_since(tm, time_ms(tm)) >= 0 { \"passed\" } else { \"not\" }); print(\"|\");\nprint(match check() { Result.Ok(value: v) => \"ok\", Result.Err(error: e) => e }); print(\"|\");\nlet c = chan_new_of[Int](1);\nlet mut got = vec_new[Int]();\nscope { spawn producer(io, c); got = chan_drain_ints(c); }\nprint(int_to_str(vec_len(got)));\n0 }\n", "a,b,cR|20|1none2|a/b/c.txt /abs z.tar.gz / . gz z.tar  /c/d ../y .|2 no such file: nope.txt|passed|name: expected \"y\", found \"x\"|30\n")?;
+    ok()
+}
+
+@test
+fn json_round_trips_and_names_where_malformed_text_went_wrong(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_t(h, "use \"@std/json\";\nfn show(r: Result[JsonDoc, Str]) -> Str { match r { Result.Ok(value: d) => json_encode(d), Result.Err(error: e) => str_concat(\"ERR \", e) } }\nfn main(io: IoCap) -> Int ! { io } {\nprint(show(json_parse(\" {\\\"a\\\": [1, -2, true, null, \\\"x\\\\ny\\\\u0041\\\\u00e9\\\"], \\\"b\\\": {}, \\\"c\\\": [] } \"))); print(\"|\");\nprint(show(json_parse(\"[1, 2\"))); print(\"|\");\nprint(show(json_parse(\"1.5\"))); print(\"|\");\nprint(show(json_parse(\"{\\\"a\\\" 1}\"))); print(\"|\");\nprint(show(json_parse(\"-9223372036854775808\"))); print(\"|\");\nprint(show(json_parse(\"9223372036854775808\"))); print(\"|\");\nprint(show(json_parse(\"[1] x\"))); print(\"|\");\nprint(show(json_parse(\"01\"))); print(\"|\");\nprint(show(json_parse(\"\"))); print(\"|\");\nlet b = json_new(); let ks = strs_new(); strs_push(ks, \"k\"); strs_push(ks, \"q\\\"t\"); let vs = ints_new(); ints_push(vs, json_add_int(b, 7)); ints_push(vs, json_add_bool(b, false));\nlet built = json_with_root(b, json_add_object(b, ks, vs));\nprint(json_encode(built)); print(\"|\");\nprint(show(json_parse(json_encode(built)))); print(\"|\");\nlet r = json_root(built);\nprint(json_kind(built, r)); print(json_kind(built, 999));\nprint(match json_get(built, r, \"k\") { Option.Some(value: n) => match json_int(built, n) { Option.Some(value: v) => int_to_str(v), Option.None() => \"?\" }, Option.None() => \"none\" });\n0 }\n", "{\"a\":[1,-2,true,null,\"x\\nyAé\"],\"b\":{},\"c\":[]}|ERR expected , or ] at byte 5|ERR a number with a fraction or exponent is not supported at byte 1|ERR expected : at byte 5|-9223372036854775808|ERR a number outside Int's range at byte 19|ERR text after the value at byte 4|ERR a number with a leading zero at byte 2|ERR unexpected end at byte 0|{\"k\":7,\"q\\\"t\":false}|{\"k\":7,\"q\\\"t\":false}|object70\n")?;
+    ok()
+}
+
+@test
+fn a_command_line_tool_counts_words_with_the_library_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    representative(h, "wordfreq", words("words.txt"), "  4 the\n  2 a\n  2 cat\n0\n")?;
+    ok()
+}
+
+@test
+fn a_data_tool_sums_a_table_with_the_library_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l1 = strs_new();
+    representative(h, "tablesum", l1, "{apple=80, fig=20, pear=30} skipped 1\n0\n")?;
+    ok()
+}
+
+@test
+fn a_concurrent_service_runs_on_the_library_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let l2 = strs_new();
+    representative(h, "service", l2, "1 2 3 4\n0\n")?;
+    ok()
+}
+
+@test
+fn a_package_tool_edits_a_json_manifest_with_the_library_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    representative(h, "pkgtool", words("extra"), "src/main.nz nz\nsrc/util/fmt.nz nz\nsrc/tool \n{\"name\":\"demo\",\"deps\":[\"core\",\"extra\"],\"modules\":[\"src/main.nz\",\"src/util/fmt.nz\",\"src/tool\"]}\n0\n")?;
+    ok()
+}
+
+@test
+fn every_public_standard_item_is_in_the_1_0_manifest(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // The surface, regenerated from the modules exactly as `library/std/API-1.0` was written.
+    let std_dir = f"{repo_root(h)}/library/std";
+    let generated = surface(h, std_dir)?;
+    let manifest = read_text(h, f"{std_dir}/API-1.0")?;
+    let listed = strs_new();
+    for l in lines(manifest) {
+        if !text_starts_with(l, "#") && str_len(l) > 0 {
+            strs_push(listed, l);
+        }
+    }
+    check_that(str_join(listed, "\n") == str_join(generated, "\n"), "the public surface moved: 1.x may add a line to library/std/API-1.0, never remove or change one")?;
+    check_that(strs_len(listed) >= 120, f"{strs_len(listed)}")?;
+    ok()
+}
+

@@ -1,0 +1,112 @@
+// One program run by every implementation, each in a fresh directory prepared the same way (R7):
+// `crates/nazm-cli/tests/platform_files.rs`'s `runs_in` and `alike`, shared with
+// `process_control.rs` as the Rust files share them.
+//
+// The Rust helper prepares each directory with a Rust function; here a directory is prepared by
+// the files it is given (name, text, name, text, …; a name's parent directories are made) and
+// then a shell script run in it — permissions, links and hard links are the shell's own words.
+
+use "@std/text"
+use "run.nz"
+use "scratch.nz"
+use "strings.nz"
+use "differential.nz"
+
+/// A fresh directory with `files` written into it and `script` run there (`sh -c`), or `Err`.
+pub fn prepared(h: Caps, files: Strs, script: Str) -> Result[Str, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i + 1 < strs_len(files) {
+        let rel = strs_get(files, i);
+        let parts = text_split(rel, "/");
+        let mut at = "";
+        let mut k = 0;
+        while k + 1 < strs_len(parts) {
+            at = if str_len(at) == 0 { strs_get(parts, k) } else { f"{at}/{strs_get(parts, k)}" };
+            scratch_mkdir(h, d, at)?;
+            k = k + 1;
+        }
+        scratch_write(h, d, rel, strs_get(files, i + 1))?;
+        i = i + 2;
+    }
+    if str_len(script) > 0 {
+        let a = strs_new();
+        strs_push(a, "-c");
+        strs_push(a, script);
+        let r = run(h, "sh", a, d, env_here(h.io));
+        if r.code != 0 {
+            scratch_remove(h, d);
+            return Result[Str, Str].Err(error: f"the setup failed: {ran_show(r)}");
+        }
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn runs_built(h: Caps, build: Str, files: Strs, script: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let exes = strs_new();
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{build}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, build, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        strs_push(exes, exe);
+        k = k + 1;
+    }
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let out = vec_new[Labeled]();
+    let d = prepared(h, files, script)?;
+    let ia = words("run --interpret");
+    strs_push(ia, f"{build}/prog.nz");
+    vec_push(out, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), ia, d, env)));
+    scratch_remove(h, d);
+    k = 0;
+    while k < 3 {
+        let dk = prepared(h, files, script)?;
+        vec_push(out, Labeled(label: strs_get(whos, k), ran: bounded_exe(h, strs_get(exes, k), dk, env)));
+        scratch_remove(h, dk);
+        k = k + 1;
+    }
+    Result[Vec[Labeled], Str].Ok(value: out)
+}
+
+/// `src` built by each backend at each optimisation level, then run — and run by the interpreter
+/// — each in a fresh directory prepared by `files` and `script`, with the memory report on: each
+/// label and its run.
+pub fn runs_in(h: Caps, src: Str, files: Strs, script: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    let build = prog_dir(h, "prog.nz", src)?;
+    let r = runs_built(h, build, files, script);
+    scratch_remove(h, build);
+    r
+}
+
+/// Every run ended with `code`, printed `interpreted` (the interpreter) or `native` (the rest),
+/// and wrote the interpreter's memory report with nothing live.
+pub fn alike_split(runs: Vec[Labeled], code: Int, interpreted: Str, native: Str) -> Result[Int, Str] ! {} {
+    let first = memory_line(vec_get(runs, 0).ran);
+    for run_ in runs {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == code, f"{who}: {r.stderr}")?;
+        let want = if who == "interpreter" { interpreted } else { native };
+        check_that(text_trim_end(r.stdout) == want, f"{who}: {r.stdout}")?;
+        let line = memory_line(r);
+        check_that(line == first, f"{who} and the interpreter disagree about storage: {line} vs {first}")?;
+        for kind in words("sequences strings channels closures") {
+            let parts = text_split(line, kind);
+            let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+            let ws = split_whitespace(part);
+            let live = if strs_len(ws) > 2 { strs_get(ws, 2) } else { "" };
+            check_that(live == "live=0", f"{who}: {kind} not all reclaimed: {line}")?;
+        }
+    }
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `alike_split` with one answer for every label.
+pub fn alike(runs: Vec[Labeled], code: Int, expected: Str) -> Result[Int, Str] ! {} {
+    alike_split(runs, code, expected, expected)
+}

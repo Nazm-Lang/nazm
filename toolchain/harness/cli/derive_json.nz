@@ -1,0 +1,198 @@
+// `@derive(Json)`: a derived codec and schema, and a shaped encoding, alike under the interpreter,
+// the LIR oracle and every native tier with nothing live; a derived type of another module; and
+// what a derive cannot do, refused by name. Ported from `crates/nazm-cli/tests/derive_json.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+fn everywhere_in(h: Caps, d: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let env = env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1");
+    let runs = vec_new[Labeled]();
+    vec_push(runs, Labeled(label: "interpreter", ran: run(h, nazm_bin(h.io), words("run --interpret d.nz"), d, env)));
+    vec_push(runs, Labeled(label: "lir oracle", ran: run(h, nazm_bin(h.io), words("lir --run d.nz"), d, env)));
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let exe = f"{d}/{text_replace(text_replace(who, " ", ""), "-", "")}";
+        let b = nazm(h, d, words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} d.nz -o {exe}"));
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(runs, Labeled(label: who, ran: bounded_exe(h, exe, "", env)));
+        k = k + 1;
+    }
+    for run_ in runs {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {ran_show(r)}")?;
+        check_that(r.stdout == expected, f"{who}: {r.stdout}")?;
+        if who != "lir oracle" {
+            let line = memory_line(r);
+            check_that(str_len(line) > 0, f"{who}: no memory report: {ran_show(r)}")?;
+            for w in split_whitespace(line) {
+                check_that(!text_starts_with(w, "live=") || w == "live=0", f"{who}: {line}")?;
+            }
+        }
+    }
+    ok()
+}
+
+/// `program` under every implementation prints `expected`, leaving nothing live.
+fn everywhere_j(h: Caps, program: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = prog_dir(h, "d.nz", program)?;
+    let r = everywhere_in(h, d, expected);
+    scratch_remove(h, d);
+    r
+}
+
+/// The lines of `stderr` that begin `error`.
+fn errors_of(stderr: Str) -> Strs ! {} {
+    let out = strs_new();
+    for l in lines(stderr) {
+        if text_starts_with(l, "error") {
+            strs_push(out, l);
+        }
+    }
+    out
+}
+
+const PROGRAM: Str = "@derive(json)\npub enum Shape {\n    Empty,\n    Circle(r: Float64),\n    Rect(w: Int, h: Int),\n}\n\n@derive(json)\npub struct Point {\n    x: Int,\n    small: UInt8,\n    label: Option[Str],\n    tags: Vec[Str],\n    shape: Shape,\n    kids: Chain[Point],\n    ok: Bool,\n}\n\nfn show(out: OutCap, s: Str) -> Int ! {io} { print(str_concat(s, \"\\n\")) }\n\nfn main(out: OutCap) -> Int ! {io} {\n    let tags = vec_new[Str]();\n    vec_push(tags, \"a\");\n    vec_push(tags, \"b\\\"q\");\n    let leaf = Point(x: 2, small: UInt8(7), label: Option[Str].Some(value: \"leaf\"), tags: vec_new[Str](), shape: Shape.Empty(), kids: chain_empty[Point](), ok: false);\n    let kids = vec_new[Point]();\n    vec_push(kids, leaf);\n    let p = Point(x: -1, small: UInt8(255), label: Option[Str].None(), tags: tags, shape: Shape.Rect(w: 3, h: 4), kids: chain_from_vec(kids), ok: true);\n    let text = point_to_json(p);\n    show(out, text);\n    match point_from_json(text) {\n        Result.Ok(value: q) => show(out, if point_to_json(q) == text { \"decoded: same text\" } else { \"decoded: DIFFERENT\" }),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    match point_from_json(\"{\\\"x\\\": 1, \\\"small\\\": 300, \\\"tags\\\": [], \\\"shape\\\": \\\"Empty\\\", \\\"kids\\\": [], \\\"ok\\\": true}\") {\n        Result.Ok(value: q) => show(out, \"WRONG: accepted\"),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    match point_from_json(\"{\\\"x\\\": 1, \\\"small\\\": 3, \\\"tags\\\": [1], \\\"shape\\\": {\\\"Circle\\\": {\\\"r\\\": 2}}, \\\"kids\\\": [], \\\"ok\\\": true}\") {\n        Result.Ok(value: q) => show(out, \"WRONG: accepted\"),\n        Result.Err(error: e) => show(out, f\"error: {e}\"),\n    };\n    show(out, shape_to_json(Shape.Circle(r: 1.5)));\n    show(out, point_json_schema());\n    0\n}\n";
+
+const CODEC: Str = "@derive(json)\n@codec(rename_all = \"camelCase\", deny_unknown)\npub struct User {\n    @codec(rename = \"id\")\n    user_id: Int,\n    display_name: Str,\n    @codec(omit_none)\n    email: Option[Str],\n    @codec(default)\n    tags: Vec[Str],\n}\n\n@derive(json)\n@codec(tag = \"kind\")\npub enum Event { Started, Moved(x: Int, y: Int), }\n\n@derive(json)\n@codec(untagged)\npub enum Value { Nothing, Num(n: Int), Text(s: Str, @codec(default) lang: Str), }\n\n@derive(json)\n@codec(rename_all = \"SCREAMING_SNAKE_CASE\")\npub enum Level { LowPower, @codec(rename = \"hi\") High, }\n\nfn show(out: OutCap, s: Str) -> Int ! { io } { print(str_concat(s, \"\\n\")) }\n\nfn user(out: OutCap, text: Str) -> Int ! { io } {\n    match user_from_json(text) {\n        Result.Ok(value: u) => show(out, f\"ok: {user_to_json(u)}\"),\n        Result.Err(error: e) => show(out, f\"err: {e}\"),\n    }\n}\n\nfn main(out: OutCap) -> Int ! { io } {\n    let u = User(user_id: 7, display_name: \"Ann\", email: Option[Str].None(), tags: vec_new[Str]());\n    show(out, user_to_json(u));\n    user(out, \"{\\\"id\\\": 1, \\\"displayName\\\": \\\"B\\\"}\");\n    user(out, \"{\\\"id\\\": 1, \\\"displayName\\\": \\\"B\\\", \\\"email\\\": \\\"b@x\\\", \\\"tags\\\": [\\\"t\\\"]}\");\n    user(out, \"{\\\"id\\\": 1, \\\"displayName\\\": \\\"B\\\", \\\"extra\\\": 1}\");\n    user(out, \"{\\\"id\\\": 1}\");\n    show(out, event_to_json(Event.Started()));\n    show(out, event_to_json(Event.Moved(x: 1, y: 2)));\n    match event_from_json(\"{\\\"kind\\\": \\\"Moved\\\", \\\"x\\\": 3, \\\"y\\\": 4}\") { Result.Ok(value: e) => show(out, event_to_json(e)), Result.Err(error: e) => show(out, e), };\n    match event_from_json(\"{\\\"kind\\\": \\\"Jumped\\\"}\") { Result.Ok(value: e) => show(out, \"WRONG\"), Result.Err(error: e) => show(out, e), };\n    show(out, value_to_json(Value.Num(n: 5)));\n    show(out, value_to_json(Value.Text(s: \"hi\", lang: \"en\")));\n    show(out, value_to_json(Value.Nothing()));\n    match value_from_json(\"{\\\"s\\\": \\\"yo\\\"}\") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };\n    match value_from_json(\"{\\\"n\\\": 9}\") { Result.Ok(value: v) => show(out, value_to_json(v)), Result.Err(error: e) => show(out, e), };\n    match value_from_json(\"{\\\"q\\\": true}\") { Result.Ok(value: v) => show(out, \"WRONG\"), Result.Err(error: e) => show(out, e), };\n    show(out, level_to_json(Level.LowPower()));\n    show(out, level_to_json(Level.High()));\n    show(out, user_json_schema());\n    show(out, event_json_schema());\n    show(out, value_json_schema());\n    0\n}\n";
+
+const CODEC_EXPECTED: Str = "{\"id\":7,\"displayName\":\"Ann\",\"tags\":[]}\nok: {\"id\":1,\"displayName\":\"B\",\"tags\":[]}\nok: {\"id\":1,\"displayName\":\"B\",\"email\":\"b@x\",\"tags\":[\"t\"]}\nerr: $: unknown member `extra`\nerr: $: no member `displayName`\n{\"kind\":\"Started\"}\n{\"kind\":\"Moved\",\"x\":1,\"y\":2}\n{\"kind\":\"Moved\",\"x\":3,\"y\":4}\n$: `Jumped` is not a variant of `Event`\n{\"n\":5}\n{\"s\":\"hi\",\"lang\":\"en\"}\n\"Nothing\"\n{\"s\":\"yo\",\"lang\":\"\"}\n{\"n\":9}\n$: matches no variant of `Value`\n\"LOW_POWER\"\n\"hi\"\n{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/User\",\"$defs\":{\"User\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"integer\"},\"displayName\":{\"type\":\"string\"},\"email\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"id\",\"displayName\"],\"additionalProperties\":false}}}\n{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/Event\",\"$defs\":{\"Event\":{\"oneOf\":[{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"Started\"}},\"required\":[\"kind\"]},{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"Moved\"},\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"kind\",\"x\",\"y\"]}]}}}\n{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/Value\",\"$defs\":{\"Value\":{\"anyOf\":[{\"const\":\"Nothing\"},{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\"}},\"required\":[\"n\"]},{\"type\":\"object\",\"properties\":{\"s\":{\"type\":\"string\"},\"lang\":{\"type\":\"string\"}},\"required\":[\"s\"]}]}}}\n0\n";
+
+const EXPECTED: Str = "{\"x\":-1,\"small\":255,\"label\":null,\"tags\":[\"a\",\"b\\\"q\"],\"shape\":{\"Rect\":{\"w\":3,\"h\":4}},\"kids\":[{\"x\":2,\"small\":7,\"label\":\"leaf\",\"tags\":[],\"shape\":\"Empty\",\"kids\":[],\"ok\":false}],\"ok\":true}\ndecoded: same text\nerror: $.small: 300 is outside `UInt8`\nerror: $.tags[0]: expected a string\n{\"Circle\":{\"r\":1.5}}\n{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/Point\",\"$defs\":{\"Point\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"small\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":255},\"label\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]},\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"shape\":{\"$ref\":\"#/$defs/Shape\"},\"kids\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Point\"}},\"ok\":{\"type\":\"boolean\"}},\"required\":[\"x\",\"small\",\"tags\",\"shape\",\"kids\",\"ok\"]},\"Shape\":{\"oneOf\":[{\"const\":\"Empty\"},{\"type\":\"object\",\"properties\":{\"Circle\":{\"type\":\"object\",\"properties\":{\"r\":{\"type\":\"number\"}},\"required\":[\"r\"]}},\"required\":[\"Circle\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"Rect\":{\"type\":\"object\",\"properties\":{\"w\":{\"type\":\"integer\"},\"h\":{\"type\":\"integer\"}},\"required\":[\"w\",\"h\"]}},\"required\":[\"Rect\"],\"additionalProperties\":false}]}}}\n0\n";
+
+@test
+fn a_derived_codec_and_schema_agree_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    everywhere_j(h, PROGRAM, EXPECTED)?;
+    ok()
+}
+
+@test
+fn a_shaped_encoding_agrees_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    everywhere_j(h, CODEC, CODEC_EXPECTED)?;
+    ok()
+}
+
+@test
+fn a_derived_type_of_another_module_is_carried_plain_and_qualified(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "geo.nz", "@derive(json)\npub struct Pt { x: Int, y: Int, }\n")?;
+    scratch_write(h, d, "main.nz", "use \"geo.nz\";\nuse \"geo.nz\" as g;\n\n@derive(json)\nstruct Line { a: Pt, b: g::Pt, }\n\nfn main(out: OutCap) -> Int ! {io} {\n    print(str_concat(line_to_json(Line(a: Pt(x: 1, y: 2), b: Pt(x: 3, y: 4))), \"\\n\"));\n    print(str_concat(line_json_schema(), \"\\n\"));\n    0\n}\n")?;
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(r.stdout == "{\"a\":{\"x\":1,\"y\":2},\"b\":{\"x\":3,\"y\":4}}\n{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/Line\",\"$defs\":{\"Line\":{\"type\":\"object\",\"properties\":{\"a\":{\"$ref\":\"#/$defs/Pt\"},\"b\":{\"$ref\":\"#/$defs/Pt\"}},\"required\":[\"a\",\"b\"]},\"Pt\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"]}}}\n0\n", "assert_eq!(r.stdout, \"{\\\"a\\\":{\\\"x\\\":1,\\\"y\\\":2},\\\"b\\\":{\\\"x\\\":3,\\\"y\\\":4}}\\n{\\\"$schema\\\":\\\"https://json-schema.org/draft/2020-12/schema\\\",\\\"$ref\\\":\\\"#/$defs/Line\\\",\\\"$defs\\\":{\\\"Line\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"a\\\":{\\\"$ref\\\":\\\"#/$defs/Pt\\\"},\\\"b\\\":{\\\"$ref\\\":\\\"#/$defs/Pt\\\"}},\\\"required\\\":[\\\"a\\\",\\\"b\\\"]},\\\"Pt\\\":{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"x\\\":{\\\"type\\\":\\\"integer\\\"},\\\"y\\\":{\\\"type\\\":\\\"integer\\\"}},\\\"required\\\":[\\\"x\\\",\\\"y\\\"]}}}\\n0\\n\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn what_a_derive_cannot_carry_is_refused_where_it_is_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let srcs1 = strs_new();
+    strs_push(srcs1, "@derive(json)\nstruct A { n: UInt64, }\n");
+    strs_push(srcs1, "@derive(json)\nstruct B[T] { v: T, }\n");
+    strs_push(srcs1, "@derive(yaml)\nstruct C { n: Int, }\n");
+    strs_push(srcs1, "@derive(json)\nfn f() -> Int { 0 }\n");
+    strs_push(srcs1, "@derive(json)\nstruct F { b: Bytes, }\n");
+    strs_push(srcs1, "struct Plain { n: Int, }\n@derive(json)\nstruct G { p: Option[Plain], }\n");
+    strs_push(srcs1, "@derive(json)\nstruct H { n: Int, }\nfn h_to_json(v: H) -> Str { \"\" }\n");
+    let wants1 = strs_new();
+    strs_push(wants1, "error[N0619]: `@derive(json)` cannot carry the field `n`: `UInt64` has values past `Int`");
+    strs_push(wants1, "error[N0619]: `B` is generic, and `@derive(json)` is for a type that is not");
+    strs_push(wants1, "error[N0619]: `@derive` takes the formats it derives");
+    strs_push(wants1, "error[N0619]: `@derive` marks a `struct` or an `enum`, not a function");
+    strs_push(wants1, "error[N0619]: `@derive(json)` cannot carry the field `b`: `Bytes` has no JSON form");
+    strs_push(wants1, "error[N0619]: `@derive(json)` cannot carry the field `p`: `Plain` does not derive `json`");
+    strs_push(wants1, "error[N0203]: `h_to_json` is defined more than once in this module");
+    let mut k1 = 0 - 1;
+    for src in srcs1 {
+        k1 = k1 + 1;
+        let want = strs_get(wants1, k1);
+        scratch_write(h, d, "r.nz", f"{src}fn main() -> Int {{ 0 }}\n")?;
+        let r = nazm(h, d, words("check r.nz"));
+        check_that(r.code != 0, ran_show(r))?;
+        let errors = errors_of(r.stderr);
+        check_that(strs_len(errors) == 1, f"{src}: {str_join(errors, " | ")}")?;
+        check_that(text_starts_with(strs_get(errors, 0), want), f"{src}: {str_join(errors, " | ")}")?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn every_misuse_of_codec_is_refused_alone(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let srcs2 = strs_new();
+    strs_push(srcs2, "@codec(deny_unknown)\nstruct A { n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\n@codec(tag = \"k\")\nstruct B { n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\n@codec(tag = \"k\", untagged)\nenum C { X, }\n");
+    strs_push(srcs2, "@derive(json)\n@codec(rename_all = \"Title Case\")\nstruct D { n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\nstruct E { @codec(omit_none) n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\nstruct F { @codec(default) p: Box[Int], }\n");
+    strs_push(srcs2, "@derive(json)\nstruct G { @codec(rename = \"a\") x: Int, a: Int, }\n");
+    strs_push(srcs2, "@derive(json)\n@codec(tag = \"x\")\nenum H { V(x: Int), }\n");
+    strs_push(srcs2, "@derive(json)\nstruct I { @cfg(os = \"linux\") n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\nenum J { @codec(default) X, }\n");
+    strs_push(srcs2, "@derive(json)\nstruct K { @codec(rename = \"a\", rename = \"b\") n: Int, }\n");
+    strs_push(srcs2, "@derive(json)\n@codec(rename_all = \"camelCase\")\nenum L { FooBar, @codec(rename = \"fooBar\") Other, }\n");
+    strs_push(srcs2, "@codec(untagged)\nfn g() -> Int { 0 }\n");
+    let wants2 = strs_new();
+    strs_push(wants2, "error[N0619]: `@codec` shapes a derived encoding, and `A` derives none");
+    strs_push(wants2, "error[N0619]: `tag` and `untagged` shape an enum");
+    strs_push(wants2, "error[N0619]: an enum is tagged or untagged, not both");
+    strs_push(wants2, "error[N0619]: `@codec` does not take this here");
+    strs_push(wants2, "error[N0619]: `omit_none` leaves out a `None`, and `n` is not an `Option`");
+    strs_push(wants2, "error[N0619]: `default` gives a missing `p` its type's empty value, and this type has none");
+    strs_push(wants2, "error[N0619]: `a` names two members of one object");
+    strs_push(wants2, "error[N0619]: `x` names two members of one object");
+    strs_push(wants2, "error[N0619]: `@cfg` is not written before a field");
+    strs_push(wants2, "error[N0619]: `@codec` does not take this here");
+    strs_push(wants2, "error[N0619]: `rename` is written twice");
+    strs_push(wants2, "error[N0619]: two variants of `L` are both named `fooBar`");
+    strs_push(wants2, "error[N0619]: `@codec` shapes a derived encoding: it marks a type, a field or a variant, not a function");
+    let mut k2 = 0 - 1;
+    for src in srcs2 {
+        k2 = k2 + 1;
+        let want = strs_get(wants2, k2);
+        scratch_write(h, d, "r.nz", f"{src}fn main() -> Int {{ 0 }}\n")?;
+        let r = nazm(h, d, words("check r.nz"));
+        check_that(r.code != 0, ran_show(r))?;
+        let errors = errors_of(r.stderr);
+        check_that(strs_len(errors) == 1, f"{src}: {str_join(errors, " | ")}")?;
+        check_that(text_starts_with(strs_get(errors, 0), want), f"{src}: {str_join(errors, " | ")}")?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_fields_attribute_is_formatted_on_its_own_line_and_inline_where_its_list_is(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let written = "@derive(json)\nstruct S {\n    @codec(rename = \"a\") x: Int,\n    @codec(omit_none)   y: Option[Int],\n}\n\n@derive(json)\nenum E { A, @codec(rename = \"b\")   B, C(n: Int, @codec(default) m: Int), }\n";
+    let want = "@derive(json)\nstruct S {\n    @codec(rename = \"a\")\n    x: Int,\n    @codec(omit_none)\n    y: Option[Int],\n}\n\n@derive(json)\nenum E { A, @codec(rename = \"b\") B, C(n: Int, @codec(default) m: Int), }\n";
+    scratch_write(h, d, "f.nz", written)?;
+    let r = nazm(h, d, words("fmt f.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(read_text(h, f"{d}/f.nz")? == want, "assert_eq!(read_text(h, f\"{d}/f.nz\")?, want);")?;
+    let r_2 = nazm(h, d, words("fmt --check f.nz"));
+    check_that(r_2.code == 0, ran_show(r_2))?;
+    scratch_remove(h, d);
+    ok()
+}
+

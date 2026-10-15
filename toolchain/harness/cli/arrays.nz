@@ -1,0 +1,234 @@
+// Fixed-size arrays `[T; n]`: copied as values, indexed with a bounds check, alike everywhere;
+// what they refuse, by name. Ported from `crates/nazm-cli/tests/arrays.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/port.nz"
+use "../lib/tiers.nz"
+use "../lib/differential.nz"
+
+fn shape() -> Tiers ! {} {
+    Tiers(oracle: false, interp_memory: false, native_memory: false, native_in_dir: false)
+}
+
+/// Every implementation prints exactly `expected` — then `main`'s result, `0` — and exits 0.
+fn agrees_a(h: Caps, body: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    let want = f"{expected}0\n";
+    let src = f"fn show(out: OutCap, s: Str) -> Int ! {{io}} {{ print(str_concat(s, \"\\n\")) }}\nfn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n0\n}}\n";
+    for run_ in tiers_of(h, "prog.nz", src, shape())? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 0, f"{who}: {r.stderr}\n{src}")?;
+        check_that(r.stdout == want, f"{who}: {r.stdout}\n{src}")?;
+    }
+    ok()
+}
+
+/// Every implementation stops with exit status 2 and `code`.
+fn traps(h: Caps, body: Str, code: Str) -> Result[Int, Str] ! { io, spawn } {
+    let src = f"fn main(out: OutCap) -> Int ! {{io}} {{\n{body}\n}}\n";
+    for run_ in tiers_of(h, "prog.nz", src, shape())? {
+        let who = run_.label;
+        let r = run_.ran;
+        check_that(r.code == 2, f"{who}: {ran_show(r)}\n{src}")?;
+        check_that(text_contains(r.stderr, code), f"{who}: {r.stderr}\n{src}")?;
+    }
+    ok()
+}
+
+/// The codes `nazm check` refuses a program with: the error diagnostics' codes on standard error.
+fn refused(h: Caps, src: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "prog.nz", src)?;
+    let r = nazm(h, d, words("check --json prog.nz"));
+    scratch_remove(h, d);
+    check_that(r.code == 1, f"expected a refusal: {ran_show(r)}\n{src}")?;
+    let out = strs_new();
+    for l in lines(r.stderr) {
+        match jparse(l) {
+            Result.Ok(value: doc) => {
+                if jstr(doc, "severity") == "error" {
+                    let c = jq(doc, "code");
+                    if c >= 0 {
+                        match json_str(doc, c) {
+                            Option.Some(value: s) => strs_push(out, s),
+                            Option.None() => 0,
+                        };
+                    }
+                }
+            },
+            Result.Err(error: e) => 0,
+        };
+    }
+    Result[Strs, Str].Ok(value: out)
+}
+
+fn everywhere_a(h: Caps, src: Str) -> Result[Vec[Labeled], Str] ! { io, spawn } {
+    tiers_of(h, "prog.nz", src, shape())
+}
+
+/// `fn main() -> Int { body }`.
+fn main_of(body: Str) -> Str ! {} {
+    f"fn main() -> Int {{ {body} }}\n"
+}
+
+@test
+fn an_array_is_a_value_built_copied_and_written_in_place(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agrees_a(h, "\nlet mut a: [Int; 4] = [1, 2, 3, 4];\na[2] = 30;\nlet b = a;\na[0] = 100;\nshow(out, int_to_str(a[0] + a[1] + a[2] + a[3]));\nshow(out, int_to_str(b[0]));\nlet mut grid = [[0; 3]; 2];\ngrid[1][2] = 7;\ngrid[0][0] = grid[1][2] * 2;\nshow(out, int_to_str(grid[0][0] + grid[1][2] + grid[1][1]));\nlet zeros = [UInt8(0); 64];\nshow(out, num_to_str(zeros[63]));\nlet fives = [5; 300];\nshow(out, int_to_str(fives[0] + fives[299]));\nlet fs: [Float64; 3] = [0.5, 1.5, 2.5];\nshow(out, num_to_str(fs[0] + fs[1] + fs[2]));\nlet p: [Int; 3] = [1, 2, 3];\nlet q: [Int; 3] = [1, 2, 3];\nlet r: [Int; 3] = [1, 2, 4];\nif p == q && p != r { show(out, \"equal by elements\"); } else { show(out, \"wrong\"); };\nlet n1: [Float64; 1] = [0.0 / 0.0];\nlet n2: [Float64; 1] = [0.0 / 0.0];\nif n1 == n2 { show(out, \"nan equal\"); } else { show(out, \"a nan array is not equal to itself\"); };\n", "136\n1\n21\n0\n10\n4.5\nequal by elements\na nan array is not equal to itself\n")?;
+    ok()
+}
+
+@test
+fn arrays_live_in_records_and_records_in_arrays(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "\nconst SIZE: Int = 4;\nconst STEP: Float64 = 0.25;\n\nstruct Point { x: Int, y: Float64, }\nstruct Frame { data: [UInt8; SIZE], tag: Bool, }\nenum Cell { Empty, Full(value: [Int; 2]), }\n\nfn total(f: Frame) -> Int {\n    let mut t = 0;\n    let mut i = 0;\n    while i < SIZE {\n        t = t + Int(f.data[i]);\n        i = i + 1;\n    }\n    t\n}\n\nfn make(n: Int) -> [Point; 3] {\n    let mut ps = [Point(x: 0, y: 0.0); 3];\n    let mut i = 0;\n    while i < 3 {\n        ps[i].x = n + i;\n        ps[i].y = Float64(i) * STEP;\n        i = i + 1;\n    }\n    ps\n}\n\nfn main(out: OutCap) -> Int ! {io} {\n    let mut f = Frame(data: [UInt8(1), 2, 3, 4], tag: true);\n    f.data[3] = 40;\n    print(str_concat(int_to_str(total(f)), \"\\n\"));\n    let ps = make(10);\n    print(str_concat(int_to_str(ps[2].x), \"\\n\"));\n    print(str_concat(num_to_str(ps[2].y), \"\\n\"));\n    let c = Cell.Full(value: [5, 6]);\n    match c {\n        Cell.Empty() => print(\"empty\\n\"),\n        Cell.Full(value: v) => print(str_concat(int_to_str(v[0] * v[1]), \"\\n\")),\n    };\n    let g = Frame(data: [UInt8(1), 2, 3, 40], tag: true);\n    if f == g { print(\"frames equal\\n\"); } else { print(\"frames differ\\n\"); };\n    0\n}\n";
+    for run1 in everywhere_a(h, src)? {
+        let who = run1.label;
+        let r = run1.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(r.stdout == "46\n12\n0.5\n30\nframes equal\n0\n", who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn an_array_crosses_into_a_task_as_a_copy(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "\nfn worker(c: Chan[Int], xs: [Int; 3]) -> Int ! {spawn} {\n    chan_send_of(c, xs[0] + xs[1] + xs[2]);\n    0\n}\n\nfn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {\n    let mut xs: [Int; 3] = [1, 2, 3];\n    let c = chan_new_of[Int](1);\n    scope { spawn worker(c, xs); }\n    xs[0] = 100;\n    let got = vec_new[Int]();\n    chan_recv_of(c, got);\n    print(str_concat(int_to_str(vec_get(got, 0) + xs[0]), \"\\n\"));\n    0\n}\n";
+    for run2 in everywhere_a(h, src)? {
+        let who = run2.label;
+        let r = run2.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(r.stdout == "106\n0\n", who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn every_index_is_checked_against_the_length_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    traps(h, "let a: [Int; 3] = [1, 2, 3]; let i = 3; let x = a[i]; 0", "N0405")?;
+    traps(h, "let a: [Int; 3] = [1, 2, 3]; let i = -1; let x = a[i]; 0", "N0405")?;
+    traps(h, "let mut a: [Int; 3] = [1, 2, 3]; let i = 5; a[i] = 1; 0", "N0405")?;
+    traps(h, "let mut g = [[0; 2]; 2]; let i = 2; g[0][i] = 1; 0", "N0405")?;
+    ok()
+}
+
+@test
+fn constants_are_computed_where_they_are_declared(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "\nconst A: Int = 6 * 7;\nconst B: Int = A - 2;\nconst MASK: UInt32 = 0xFF << 8;\nconst HALF: Float32 = 0.5;\nconst ON: Bool = A > B && !false;\nconst GREETING: Str = \"hello\";\nconst BIG: UInt64 = 18446744073709551615;\nconst NEG: Int8 = -128;\nconst WIDE: Int = Int(UInt16(65535));\n\nfn main(out: OutCap) -> Int ! {io} {\n    print(str_concat(int_to_str(A + B), \"\\n\"));\n    print(str_concat(num_to_str(MASK), \"\\n\"));\n    print(str_concat(num_to_str(HALF + HALF), \"\\n\"));\n    if ON { print(\"on\\n\"); } else { print(\"off\\n\"); };\n    print(str_concat(GREETING, \"\\n\"));\n    print(str_concat(num_to_str(BIG), \"\\n\"));\n    print(str_concat(num_to_str(NEG), \"\\n\"));\n    print(str_concat(int_to_str(WIDE), \"\\n\"));\n    0\n}\n";
+    for run3 in everywhere_a(h, src)? {
+        let who = run3.label;
+        let r = run3.ran;
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(r.stdout == "82\n65280\n1\non\nhello\n18446744073709551615\n-128\n65535\n0\n", who)?;
+    
+    }
+    ok()
+}
+
+@test
+fn array_and_constant_misuse_is_refused_before_anything_runs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Values only — no handle, since R1a (L8) strings included — and at most 64 KiB.
+    let w4 = strs_new();
+    strs_push(w4, "N0621");
+    same_strs("codes", refused(h, main_of("let a: [Vec[Int]; 2] = [vec_new[Int](), vec_new[Int]()]; 0"))?, w4)?;
+    let w5 = strs_new();
+    strs_push(w5, "N0621");
+    same_strs("codes", refused(h, "struct S { v: Vec[Int], }\nfn f(a: [S; 2]) -> Int { 0 }\nfn main() -> Int { 0 }\n")?, w5)?;
+    let w6 = strs_new();
+    strs_push(w6, "N0618");
+    same_strs("codes", refused(h, main_of("let a = [0; 9000]; 0"))?, w6)?;
+    let w7 = strs_new();
+    strs_push(w7, "N0618");
+    same_strs("codes", refused(h, main_of("let a = [UInt8(0); 70000]; 0"))?, w7)?;
+    // The bound is exact: 65,536 bytes is an array, one more is not.
+    let w8 = strs_new();
+    strs_push(w8, "N0618");
+    same_strs("codes", refused(h, main_of("let a = [UInt8(0); 65537]; 0"))?, w8)?;
+    let d = scratch_new(h);
+    scratch_write(h, d, "prog.nz", main_of("let a = [UInt8(0); 65536]; 0"))?;
+    let r = nazm(h, d, words("check prog.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    // One element type.
+    let w9 = strs_new();
+    strs_push(w9, "N0300");
+    same_strs("codes", refused(h, main_of("let a: [Int; 2] = [1, true]; 0"))?, w9)?;
+    // A constant index outside the array, and an index into something that is not one.
+    let w10 = strs_new();
+    strs_push(w10, "N0624");
+    same_strs("codes", refused(h, main_of("let a: [Int; 2] = [1, 2]; a[2]"))?, w10)?;
+    // A `Vec`'s `v[0]` is `vec_get(v, 0)` since R1, 5b.15; a record is still no array.
+    let w11 = strs_new();
+    strs_push(w11, "N0624");
+    same_strs("codes", refused(h, "struct Q { y: Int }\nfn main() -> Int { let q = Q(y: 1); q[0] }\n")?, w11)?;
+    let w12 = strs_new();
+    strs_push(w12, "N0300");
+    same_strs("codes", refused(h, main_of("let a: [Int; 2] = [1, 2]; a[true]"))?, w12)?;
+    // A length is a literal or an `Int` constant.
+    let w13 = strs_new();
+    strs_push(w13, "N0622");
+    same_strs("codes", refused(h, main_of("let n = 3; let a = [0; n]; 0"))?, w13)?;
+    // Constants: computed, of a value type, private, and never self-referential.
+    let w14 = strs_new();
+    strs_push(w14, "N0623");
+    same_strs("codes", refused(h, "const X: Int = 9223372036854775807 + 1;\nfn main() -> Int { X }\n")?, w14)?;
+    let w15 = strs_new();
+    strs_push(w15, "N0622");
+    same_strs("codes", refused(h, "const X: Int = Y;\nconst Y: Int = X;\nfn main() -> Int { X }\n")?, w15)?;
+    let w16 = strs_new();
+    strs_push(w16, "N0622");
+    same_strs("codes", refused(h, "const V: Vec[Int] = 0;\nfn main() -> Int { 0 }\n")?, w16)?;
+    let w17 = strs_new();
+    strs_push(w17, "N0622");
+    same_strs("codes", refused(h, "fn f() -> Int { 1 }\nconst X: Int = f();\nfn main() -> Int { X }\n")?, w17)?;
+    // A static is its module's storage (a constant is exported since R1a, L8).
+    let w18 = strs_new();
+    strs_push(w18, "N0101");
+    same_strs("codes", refused(h, "pub static X: Int = 1;\nfn main() -> Int { X }\n")?, w18)?;
+    let w19 = strs_new();
+    strs_push(w19, "N0003");
+    same_strs("codes", refused(h, "const X: UInt8 = 256;\nfn main() -> Int { 0 }\n")?, w19)?;
+    // `const` is a word only at the start of an item: a binding may still be called `const`.
+    scratch_remove(h, d);
+    let d_2 = scratch_new(h);
+    scratch_write(h, d_2, "prog.nz", "fn main() -> Int { let const = 2; const }\n")?;
+    check_that(nazm(h, d_2, words("check prog.nz")).code == 0, ran_show(nazm(h, d_2, words("check prog.nz"))))?;
+    scratch_remove(h, d_2);
+    ok()
+}
+
+@test
+fn an_array_in_a_public_signature_crosses_modules(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "lib.nz", "pub fn sum3(xs: [Int; 3]) -> Int { xs[0] + xs[1] + xs[2] }\npub fn make() -> [UInt8; 2] { [UInt8(7), 8] }\n")?;
+    scratch_write(h, d, "main.nz", "use \"lib.nz\";\nfn main() -> Int { sum3([1, 2, 3]) + Int(make()[1]) }\n")?;
+    let r = nazm(h, d, words("run --interpret main.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(text_trim(r.stdout) == "14", "assert_eq!(text_trim(r.stdout), \"14\");")?;
+    // And again, against the interface the first check persisted.
+    let r_2 = nazm(h, d, words("run --interpret main.nz"));
+    check_that(text_trim(r_2.stdout) == "14", "assert_eq!(text_trim(r.stdout), \"14\", \"{}\", r.stderr);")?;
+    let exe = f"{d}/prog";
+    let l20 = strs_new();
+    strs_push(l20, "build");
+    strs_push(l20, "main.nz");
+    strs_push(l20, "-o");
+    strs_push(l20, exe);
+    let b = nazm(h, d, l20);
+    check_that(b.code == 0, ran_show(b))?;
+    let o = run(h, exe, strs_new(), "", suite_env(h));
+    check_that(text_trim(o.stdout) == "14", "assert_eq!(text_trim(o.stdout), \"14\");")?;
+    scratch_remove(h, d);
+    ok()
+}
+

@@ -1,0 +1,689 @@
+// R1.5 (`docs/spec.md`, *Shorter forms*): each spelling means what the longer one did — a result
+// type after `:` (D1), an expression body (D2), a short closure (D3), fields by position and a
+// variant without its enum (D4), map literals (D5), list literals (D6), `use std.json` and
+// `List[T]` (D7), printing without `out` (D8), the prelude's standard modules (D9), `top` and
+// `sort_by` on maps (D10), `@std/option` and `@std/result` in the prelude (4.5), and match arms
+// separated by a line break (4.6). Ported from `crates/nazm-cli/tests/shorter_forms.rs` (R7).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/differential.nz"
+
+fn ok() -> Result[Int, Str] ! {} {
+    Result[Int, Str].Ok(value: 0)
+}
+
+/// `agrees`, its first memory line dropped: a test passes when every implementation agrees.
+fn agree(h: Caps, src: Str, expected: Str) -> Result[Int, Str] ! { io, spawn } {
+    agrees(h, src, expected)?;
+    ok()
+}
+
+/// `nazm ARGS` on the one file `p.nz` holding `src`, in a directory of its own.
+fn on_p(h: Caps, src: Str, args: Str) -> Result[Ran, Str] ! { io, spawn } {
+    let d = prog_dir(h, "p.nz", src)?;
+    let r = nazm(h, d, words(args));
+    scratch_remove(h, d);
+    Result[Ran, Str].Ok(value: r)
+}
+
+/// Files written under a fresh directory: `rels[i]` holds `texts[i]`.
+fn tree_of(h: Caps, rels: Strs, texts: Strs) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    let mut i = 0;
+    while i < strs_len(rels) {
+        let rel = strs_get(rels, i);
+        let parts = text_split(rel, "/");
+        if strs_len(parts) > 1 {
+            let mut at = strs_get(parts, 0);
+            scratch_mkdir(h, d, at)?;
+            let mut k = 1;
+            while k + 1 < strs_len(parts) {
+                at = f"{at}/{strs_get(parts, k)}";
+                scratch_mkdir(h, d, at)?;
+                k = k + 1;
+            }
+        }
+        scratch_write(h, d, rel, strs_get(texts, i))?;
+        i = i + 1;
+    }
+    Result[Str, Str].Ok(value: d)
+}
+
+fn lib_toml() -> Str ! {} {
+    "schema = \"nazm.package/1\"\n[package]\nname = \"lib\"\nversion = \"1.0.0\"\n"
+}
+
+fn app_toml() -> Str ! {} {
+    "schema = \"nazm.package/1\"\n[package]\nname = \"app\"\nversion = \"1.0.0\"\nmain = \"main.nz\"\n[dependencies]\nlib = { path = \"../lib\", version = \"1.0.0\" }\n"
+}
+
+/// A package `lib` with one source `lib/src/<lib_file>`, and a program `app` depending on it.
+fn two_packages(h: Caps, lib_file: Str, lib_src: Str, app_src: Str) -> Result[Str, Str] ! { io } {
+    let rels = strs_new();
+    let texts = strs_new();
+    strs_push(rels, "lib/nazm.toml");
+    strs_push(texts, lib_toml());
+    strs_push(rels, f"lib/src/{lib_file}");
+    strs_push(texts, lib_src);
+    strs_push(rels, "app/nazm.toml");
+    strs_push(texts, app_toml());
+    strs_push(rels, "app/src/main.nz");
+    strs_push(texts, app_src);
+    tree_of(h, rels, texts)
+}
+
+@test
+fn a_result_type_after_a_colon_means_the_arrow_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"trait Shape { fn area(self: Self): Int; fn name(self: Self): Str { "shape" } }
+struct Sq { side: Int, }
+impl Shape for Sq { fn area(self: Sq): Int { self.side * self.side } }
+
+fn fib(n: Int): Int {
+    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn apply(f: fn(Int): Int, x: Int): Int { f(x) }
+
+fn old(n: Int) -> Int { n + 1 }
+
+fn parse(s: Str): Result[Int, Str] {
+    if s == "" { Err("empty") } else { Ok(str_len(s)) }
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let twice = fn(n: Int): Int { n * 2 }
+    let k = match parse("abc") { Ok(n) => n, Err(e) => 0 }
+    print(f"{fib(15)} {apply(twice, 21)} {Sq(side: 3).area()} {Sq(side: 1).name()} {old(1)} {k}\n")
+    0
+}
+"#, "610 42 9 shape 2 3\n0")
+}
+
+@test
+fn fmt_keeps_the_result_marker_as_written_until_r2(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // The formatter neither adds nor removes a `:` or a `->`.
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn a(n: Int): Int { n }\nfn b(n: Int) -> Int { n }\nfn main() { println(a(1) + b(2)) }\n", "fmt --check p.nz")?;
+    check_that(r.code == 0, ran_show(r))
+}
+
+@test
+fn a_colon_without_a_type_is_refused_where_the_type_was_expected(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn f(n: Int): { n }\nfn main() { }\n", "check p.nz")?;
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "type"), ran_show(r))
+}
+
+@test
+fn an_expression_body_and_its_inferred_result_type_mean_the_block_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // `main` first, and `quad` before what it calls: each inferred type is settled before any
+    // caller is checked, wherever the caller is written.
+    agree(caps(io, p, sp, v, t), r#"fn main(out: OutCap): Int ! {io} {
+    let f = quad
+    print(f"{double(21)} {add(2, 3)} {greet("nazm")} {f(5)} {even(4)} {first(7, 8)} {pick(Some(9))}\n")
+    0
+}
+
+fn quad(n: Int) = add(double(n), double(n))
+fn double(n: Int): Int = n * 2
+fn add(a: Int, b: Int) = a + b
+fn greet(name: Str) = f"hello {name}"
+fn even(n: Int) = n % 2 == 0
+fn first[T](a: T, b: T) = a
+fn pick(o: Option[Int]) = match o { Some(v) => v, None => 0 }
+"#, "42 5 hello nazm 20 true 7 9\n0")
+}
+
+@test
+fn a_result_type_that_must_be_written_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let whys = strs_new();
+    strs_push(srcs, "pub fn p(n: Int) = n\nfn main() { }\n");
+    strs_push(whys, "`pub`");
+    strs_push(srcs, "fn r(n: Int) = if n < 1 { 0 } else { r(n - 1) }\nfn main() { }\n");
+    strs_push(whys, "reaches itself");
+    strs_push(srcs, "fn a(n: Int) = b(n)\nfn b(n: Int) = a(n)\nfn main() { }\n");
+    strs_push(whys, "reaches itself");
+    strs_push(srcs, "trait T { fn m(self: Self): Int; }\nimpl T for Int { fn m(self: Int) = self }\nfn main() { }\n");
+    strs_push(whys, "method");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        let src = strs_get(srcs, i);
+        let r = on_p(h, src, "check p.nz")?;
+        check_that(r.code != 0, f"{src}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "N0634"), f"{src}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, strs_get(whys, i)), f"{src}: {ran_show(r)}")?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn a_short_closure_takes_its_types_from_what_is_expected_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"fn apply(f: fn(Int, Int) -> Bool, a: Int, b: Int) -> Bool { f(a, b) }
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+
+fn main(out: OutCap): Int ! {io} {
+    let inc = |n: Int| n + 1
+    let k = 10
+    let add_k = |n: Int| { n + k }
+    let zero = || 0
+    let shout = |s: Str| str_concat(s, "!")
+    let typed: fn(Int) -> Int = |x| x - 1
+    print(f"{apply(|a, b| a < b, 1, 2)} {apply(|a, b| a > b, 1, 2)} {twice(|x| x * 3, 2)} ")
+    print(f"{inc(41)} {add_k(5)} {zero()} {typed(1)} {shout("hi")}\n")
+    0
+}
+"#, "true false 18 42 15 0 0 hi!\n0")
+}
+
+@test
+fn a_short_closure_parameter_with_nothing_to_take_its_type_from_is_refused(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn main() { let f = |a, b| a < b }\n", "check p.nz")?;
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(count_matches(r.stderr, "N0635") == 2, ran_show(r))
+}
+
+@test
+fn fields_by_position_and_variants_without_their_enum_mean_the_long_forms_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"enum Shape { Circle(r: Int), Rect(w: Int, h: Int), Dot, }
+struct Point { x: Int, y: Int, }
+struct Twice { n: Int, }
+
+// A function of a capitalised name is still called by it, a record of that name or not.
+fn Twice(n: Int) -> Int { n * 2 }
+
+fn area(s: Shape) -> Int {
+    match s { Circle(r) => 3 * r * r, Rect(w, h) => w * h, Dot => 0, }
+}
+
+fn describe(s: Shape) -> Str {
+    match s {
+        Shape.Circle(r) if r > 5 => "big",
+        Circle(_) => "circle",
+        Shape.Rect(w: w, h: _) => f"rect {w}",
+        Dot => "dot",
+    }
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let p = Point(1, 2)
+    // A built-in type's `Name(x)` is still a conversion, never a construction.
+    let b = Int(UInt8(3))
+    let shapes: Vec[Shape] = [Circle(2), Shape.Rect(3, 4), Dot, Circle(b)]
+    let mut total = p.x * 100 + p.y * 10 + Twice(1)
+    for s in shapes {
+        total += area(s)
+        print(f"{describe(s)} ")
+    }
+    print(f"{total}\n")
+    0
+}
+"#, "circle rect 3 dot circle 173\n0")
+}
+
+@test
+fn a_shared_variant_name_and_a_mixed_or_short_field_list_are_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let codes_ = strs_new();
+    let whys = strs_new();
+    strs_push(srcs, "enum A { X(n: Int), }\nenum B { X(n: Int), }\nfn main() { let a = X(1) }\n");
+    strs_push(codes_, "N0636");
+    strs_push(whys, "both");
+    strs_push(srcs, "enum E { V(x: Int, y: Int), }\nfn main() { let a = E.V(1, y: 2) }\n");
+    strs_push(codes_, "N0334");
+    strs_push(whys, "both by position and by name");
+    strs_push(srcs, "struct P { x: Int, y: Int, }\nfn main() { let p = P(1) }\n");
+    strs_push(codes_, "N0334");
+    strs_push(whys, "given by position");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        let src = strs_get(srcs, i);
+        let r = on_p(h, src, "check p.nz")?;
+        check_that(r.code != 0, f"{src}: {ran_show(r)}")?;
+        check_that(count_matches(r.stderr, "error[") == 1, f"one error: {src}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, strs_get(codes_, i)) && text_contains(r.stderr, strs_get(whys, i)), f"{src}: {ran_show(r)}")?;
+        i = i + 1;
+    }
+    ok()
+}
+
+@test
+fn a_secret_bound_by_position_is_still_a_secret(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // A file's contents, carried in a payload and bound by position, still reach the path of the
+    // write that uses it (`N0372`), as they do bound by name.
+    let h = caps(io, p, sp, v, t);
+    for pattern in text_split("Wrap(p)|Holder.Wrap(v: p)", "|") {
+        let src = f"enum Holder {{ Wrap(v: Str), }}\nfn main(io: IoCap) -> Int ! {{ io }} {{\nlet h = Holder.Wrap(v: read_file(\"cfg\"));\nmatch h {{ {pattern} => {{ write_file(p, \"x\"); }}, }}\n0\n}}\n";
+        let r = on_p(h, src, "check p.nz")?;
+        check_that(text_contains(r.stderr, "N0372"), f"{pattern}: {ran_show(r)}")?;
+    }
+    ok()
+}
+
+@test
+fn a_map_literal_builds_the_map_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"use "@std/hash";
+use "@std/hashmap";
+
+fn total(m: Map[Str, Int]) -> Int { m["a"] + m["b"] }
+
+fn main(out: OutCap): Int ! {io} {
+    let k = "c"
+    let m = {"a": 1, "b": 2, k: 3}
+    let ages: Map[Str, Int] = {"x": 40}
+    m["d"] = 4
+    let squares = {1: 1, 2: 4, 3: 9}
+    print(f"{total(m)} {hashmap_len(m)} {ages["x"]} {squares[3]} {hashmap_len(squares)}\n")
+    0
+}
+"#, "3 4 40 9 3\n0")
+}
+
+@test
+fn map_without_the_hash_map_names_the_import(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // Since D9 the prelude gives a program's module the hash map when it names `Map`; a
+    // dependency's module imports only what it writes, so there `Map` still names the import.
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn f(m: Map[Str, Int]) -> Int { 0 }\nfn main() { }\n", "check p.nz")?;
+    check_that(r.code == 0, ran_show(r))?;
+    let d = two_packages(h, "f.nz", "pub fn f(m: Map[Str, Int]) -> Int { 0 }\n", "use \"lib:f.nz\";\nfn main() { }\n")?;
+    let r2 = nazm(h, d, words("check app"));
+    scratch_remove(h, d);
+    check_that(r2.code != 0, ran_show(r2))?;
+    check_that(text_contains(r2.stderr, "@std/hashmap"), ran_show(r2))
+}
+
+@test
+fn a_standard_module_by_its_dotted_path_is_the_quoted_import_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"use std.hash
+use std.hashmap
+use std.text as t
+
+fn main(out: OutCap): Int ! {io} {
+    let m = {"a": 1}
+    print(f"{m["a"] + str_len(t::text_to_upper("abc"))}\n")
+    0
+}
+"#, "4\n0")
+}
+
+@test
+fn the_programs_own_functions_print_without_being_passed_out_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    agree(caps(io, p, sp, v, t), r#"fn greet(name: Str) {
+    println(f"hello {name}")
+}
+
+fn twice(name: Str) {
+    greet(name)
+    greet(name)
+}
+
+fn main(out: OutCap): Int ! {io} {
+    twice("nazm")
+    0
+}
+"#, "hello nazm\nhello nazm\n0")
+}
+
+fn packages_need_out_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    // The dependency's function prints with nothing passed: refused there, in its own module.
+    let r = nazm(h, d, words("check app"));
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0369") && text_contains(r.stderr, "`say`"), ran_show(r))?;
+    check_that(!text_contains(r.stderr, "`shout`"), f"an `IoCap` gives an `OutCap`: {ran_show(r)}")?;
+    // In the program itself, a file is still written only with an `IoCap` passed.
+    scratch_write(h, d, "p.nz", "fn save(p: Str) { write_file(p, \"x\") }\nfn main() { }\n")?;
+    let r2 = nazm(h, d, words("check p.nz"));
+    check_that(text_contains(r2.stderr, "N0369") && text_contains(r2.stderr, "IoCap"), ran_show(r2))
+}
+
+@test
+fn a_packages_function_still_needs_out_and_files_still_need_io(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // `say` holds nothing and is refused; `shout` holds an `IoCap`, which gives an `OutCap`.
+    let h = caps(io, p, sp, v, t);
+    let d = two_packages(h, "say.nz", "pub fn say(s: Str) { println(s) }\npub fn shout(io: IoCap, s: Str) { println(s) }\n", "use \"lib:say.nz\";\nfn main() { say(\"hi\") }\n")?;
+    let got = packages_need_out_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+@test
+fn list_is_the_growable_list_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // `List[T]` is `Vec[T]` (D7): pushed to, indexed, passed where a `Vec[Int]` or an `Ints` is
+    // expected, a field's type and a generic parameter's.
+    agree(caps(io, p, sp, v, t), r#"struct Bag { items: List[Int], }
+
+fn total(v: Vec[Int]): Int {
+    let mut s = 0
+    for x in v { s += x }
+    s
+}
+
+fn first[T](xs: List[T]): T { xs[0] }
+
+fn names(): List[Str] {
+    let n: List[Str] = vec_new[Str]()
+    n.push("a")
+    n
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let v: List[Int] = vec_new[Int]()
+    v.push(1)
+    v.push(2)
+    let w: Ints = v
+    let b = Bag(items: v)
+    ints_push(b.items, 3)
+    print(f"{total(v)} {ints_len(w)} {first(names())} {b.items[2]} {first(v)}\n")
+    0
+}
+"#, "6 3 a 3 1\n0")
+}
+
+@test
+fn a_chain_is_what_r1a_called_a_list_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // `Chain[T]` and `chain_*` (D7) are R1a's immutable sequence.
+    agree(caps(io, p, sp, v, t), r#"struct Node { name: Str, kids: Chain[Node], }
+
+fn count(n: Node): Int {
+    let mut c = 1
+    for k in n.kids { c += count(k) }
+    c
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let leaves = vec_new[Node]()
+    leaves.push(Node(name: "a", kids: chain_empty[Node]()))
+    leaves.push(Node(name: "b", kids: chain_empty[Node]()))
+    let root = Node(name: "r", kids: chain_from_vec(leaves))
+    leaves.push(Node(name: "late", kids: chain_empty[Node]()))
+    let xs: List[Int] = [1, 2]
+    let c = chain_from_vec(xs)
+    let same = c == chain_from_vec(xs)
+    print(f"{count(root)} {chain_len(root.kids)} {chain_get(root.kids, 1).name} {chain_len(c)} {same}\n")
+    0
+}
+"#, "3 2 b 2 true\n0")
+}
+
+@test
+fn an_old_list_built_in_is_refused_naming_its_chain_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let srcs = strs_new();
+    let news = strs_new();
+    strs_push(srcs, "fn main() { let l = list_empty[Int]() }\n");
+    strs_push(news, "chain_empty");
+    strs_push(srcs, "fn main() { let l = chain_empty[Int](); let n = list_len(l) }\n");
+    strs_push(news, "chain_len");
+    strs_push(srcs, "fn main() { let v = vec_new[Int](); list_from_vec(v) }\n");
+    strs_push(news, "chain_from_vec");
+    let mut i = 0;
+    while i < strs_len(srcs) {
+        let src = strs_get(srcs, i);
+        let r = on_p(h, src, "check p.nz")?;
+        check_that(r.code != 0, f"{src}: {ran_show(r)}")?;
+        check_that(count_matches(r.stderr, "error[") == 1, f"{src}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "N0637") && text_contains(r.stderr, strs_get(news, i)), f"{src}: {ran_show(r)}")?;
+        i = i + 1;
+    }
+    // A module's own function of the name keeps it, as a prelude name's would.
+    let r = on_p(h, "fn list_len(n: Int) -> Int { n }\nfn main() -> Int { list_len(0) }\n", "check p.nz")?;
+    check_that(r.code == 0, ran_show(r))
+}
+
+@test
+fn a_list_literal_is_a_shared_list_and_a_typed_one_an_array_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // D6: `[1, 2]` where no `[T; n]` is expected is a `Vec[Int]`; written where its type says
+    // `[Int; 2]` it is an array, copied on assignment.
+    agree(caps(io, p, sp, v, t), r#"fn total(xs: Vec[Int]): Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let a = [1, 2]
+    let b = a
+    b.push(3)
+    let c: [Int; 2] = [1, 2]
+    let mut d = c
+    d[0] = 10
+    let words = ["x", "y"]
+    print(f"{a.len()} {b.len()} {a[2]} {total(a)} {c[0]} {d[0]} {words.len()}\n")
+    0
+}
+"#, "3 3 3 6 1 10 2\n0")
+}
+
+@test
+fn an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn main() { let v = [] }\n", "check p.nz")?;
+    check_that(r.code == 1, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0618"), ran_show(r))?;
+    check_that(text_contains(r.stderr, "List[Int]"), f"the help writes the type: {ran_show(r)}")?;
+    let r2 = on_p(h, "fn main() {\n    let v: List[Int] = []\n    println(v.len())\n}\n", "check p.nz")?;
+    check_that(r2.code == 0, ran_show(r2))
+}
+
+@test
+fn the_prelude_imports_the_standard_modules_a_program_names_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // D9 and D10: no `use`.
+    agree(caps(io, p, sp, v, t), r#"fn count(text: Str): Map[Str, Int] {
+    let counts = hashmap_new[Str, Int]()
+    for w in text.split(" ") {
+        if w.len() > 0 { counts[w] += 1 }
+    }
+    counts
+}
+
+fn main() {
+    let counts = count("b a c a b a d e e e")
+    for (w, n) in counts.top(3) { println(f"{w} {n}") }
+    println(f"{counts.top(0).len()} {counts.top(99).len()} {"x".compare("y")}")
+    let mut keys = ""
+    for (k, _) in counts.sort_by(|a, b| a.0 < b.0) { keys = keys + k }
+    let m = {"one": 1}
+    println(f"{keys} {m["one"]}")
+}
+"#, "a 3\ne 3\nb 2\n0 5 -1\nabcde 1\n0")
+}
+
+@test
+fn a_module_s_own_name_hides_the_prelude_s_and_a_written_use_does_not(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // D9: the module's `text_split` is the one called; written, the same import collides
+    // (`N0208`).
+    let h = caps(io, p, sp, v, t);
+    agree(h, r#"fn text_split(s: Str, sep: Str): Int = 7
+
+fn main() {
+    println(text_split("a b", " "))
+    println("a b".split(" "))
+}
+"#, "7\n7\n0")?;
+    let got = codes(h, "use \"@std/text\"\n\nfn text_split(s: Str, sep: Str): Int = 7\n\nfn main() {\n    println(text_split(\"a b\", \" \"))\n}\n");
+    same_strs("codes", got, words("N0208"))
+}
+
+@test
+fn a_module_that_names_none_of_them_imports_none(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // D9: `v.len()` is a built-in's, and names none; `s.split` names `@std/text`, which
+    // `embedded` refuses.
+    let h = caps(io, p, sp, v, t);
+    let r = on_p(h, "fn main(): Int {\n    let v = vec_new[Int]()\n    vec_push(v, 1)\n    v.len()\n}\n", "check --profile embedded p.nz")?;
+    check_that(r.code == 0, ran_show(r))?;
+    let r2 = on_p(h, "fn main(): Int {\n    \"a b\".split(\" \").len()\n}\n", "check --profile embedded p.nz")?;
+    check_that(r2.code != 0, ran_show(r2))?;
+    check_that(text_contains(r2.stderr, "@std/text"), ran_show(r2))
+}
+
+@test
+fn a_package_s_module_imports_only_what_it_writes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // D9 is the program's: a dependency's module that calls `text_split` with no `use` is
+    // refused there.
+    let h = caps(io, p, sp, v, t);
+    let d = two_packages(h, "words.nz", "pub fn words(s: Str): Int { text_split(s, \" \").len() }\n", "use \"lib:words.nz\";\nfn main(): Int { words(\"a b\") + \"c d\".split(\" \").len() }\n")?;
+    let r = nazm(h, d, words("check app"));
+    scratch_remove(h, d);
+    check_that(r.code != 0, ran_show(r))?;
+    check_that(text_contains(r.stderr, "N0201") && text_contains(r.stderr, "words.nz"), f"the package's call is refused in its own module: {ran_show(r)}")?;
+    check_that(!text_contains(r.stderr, "main.nz"), f"and the program's `split` is not: {ran_show(r)}")
+}
+
+@test
+fn option_and_result_methods_need_no_use_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // 4.5: `@std/option` and `@std/result` are prelude modules.
+    agree(caps(io, p, sp, v, t), r#"fn parse(s: Str): Result[Int, Str] {
+    if s == "x" { Err("bad") } else { Ok(5) }
+}
+
+fn main() {
+    let r = parse("x")
+    let o: Option[Int] = None
+    println(f"{r.unwrap_or(1)} {o.unwrap_or(0)} {parse("y").unwrap_or(1)}")
+    println(f"{r.is_err()} {r.is_ok()} {o.is_none()} {parse("y").ok().is_some()}")
+    println(option_unwrap_or(r.err(), "none"))
+}
+"#, "1 0 5\ntrue false true true\nbad\n0")
+}
+
+fn option_profile_in(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("check --profile embedded p.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    // `unwrap_or` names both modules; `is_none` only `@std/option`.
+    let r2 = nazm(h, d, words("inspect p.nz"));
+    check_that(text_contains(r2.stdout, "@std/result::fn result_unwrap_or"), ran_show(r2))?;
+    scratch_write(h, d, "p.nz", "fn main(): Int {\n    let o: Option[Int] = None\n    if o.is_none() { 3 } else { 4 }\n}\n")?;
+    let r3 = nazm(h, d, words("inspect p.nz"));
+    check_that(text_contains(r3.stdout, "@std/option::fn option_is_none"), ran_show(r3))?;
+    check_that(!text_contains(r3.stdout, "@std/result"), f"only what is named: {ran_show(r3)}")
+}
+
+@test
+fn a_module_s_own_option_function_hides_the_prelude_s_and_a_profile_sees_what_is_named(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // 4.5: a module's own `option_unwrap_or` is what `o.unwrap_or` calls; the two modules are
+    // pure, so `--profile embedded` accepts a program that names them.
+    let h = caps(io, p, sp, v, t);
+    agree(h, r#"fn option_unwrap_or(o: Option[Int], fallback: Int): Int = 42
+
+fn main() {
+    let o: Option[Int] = None
+    let r: Result[Int, Int] = Err(2)
+    println(f"{o.unwrap_or(0)} {r.unwrap_or(3)}")
+}
+"#, "42 3\n0")?;
+    let d = prog_dir(h, "p.nz", "fn main(): Int {\n    let o: Option[Int] = None\n    o.unwrap_or(3)\n}\n")?;
+    let got = option_profile_in(h, d);
+    scratch_remove(h, d);
+    got
+}
+
+@test
+fn match_arms_on_their_own_lines_need_no_comma_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // 4.6: a line break separates two arms; `,` is still read, the two mix, an arm's expression
+    // still spans lines, and a line beginning with `(` begins a pattern, not a call.
+    agree(caps(io, p, sp, v, t), r#"enum Shape {
+    Circle(r: Int),
+    Rect(w: Int, h: Int),
+    Dot,
+}
+
+fn area(s: Shape): Int {
+    match s {
+        Circle(r) => 3 * r * r
+        Rect(w, h) => w
+            * h
+        Dot => 0
+    }
+}
+
+fn name(n: Int): Str {
+    match n {
+        0 => "zero",
+        1 => "one"
+        n if n < 0 => {
+            "negative"
+        }
+        (_) => "many"
+    }
+}
+
+fn main() {
+    println(f"{area(Circle(2))} {area(Rect(3, 4))} {area(Dot)}")
+    println(f"{name(0)} {name(1)} {name(-5)} {name(9)}")
+}
+"#, "12 12 0\nzero one negative many\n0")
+}
+
+fn fmt_keeps_in(h: Caps, d: Str, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let r = nazm(h, d, words("fmt --check p.nz"));
+    check_that(r.code == 0, ran_show(r))?;
+    let after = read_text(h, f"{d}/p.nz")?;
+    check_that(after == src, after)
+}
+
+@test
+fn two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // 4.6: only a line break stands for the `,`; and `nazm fmt` neither adds nor removes one.
+    let h = caps(io, p, sp, v, t);
+    let got = codes(h, "fn main(): Int {\n    match 1 { 0 => 1 _ => 2 }\n}\n");
+    same_strs("codes", got, words("N0100"))?;
+    let src = "fn f(n: Int): Int {\n    match n {\n        0 => 1,\n        1 => 2\n        _ => 3\n    }\n}\n";
+    let d = prog_dir(h, "p.nz", src)?;
+    let res = fmt_keeps_in(h, d, src);
+    scratch_remove(h, d);
+    res
+}
+
+/// How many times the Core IR calls `@std/text`'s function `name`.
+fn calls(ir: Str, name: Str) -> Int ! {} {
+    count_matches(ir, f"\"callee\": \"@std/text::fn {name}\"")
+}
+
+@test
+fn a_for_over_a_split_reads_its_pieces_without_a_list_everywhere(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    // R1.5, 3.3: `for w in s.split(sep)` is lowered through `text_split_end` and
+    // `text_split_next`, building no list.
+    let h = caps(io, p, sp, v, t);
+    let src = r#"fn show(s: Str, sep: Str) {
+    let mut out = ""
+    let mut n = 0
+    for w in s.split(sep) {
+        out = out + "[" + w + "]"
+        n += 1
+        if w == "stop" { break }
+        if w == "skip" { continue }
+    }
+    println(f"{n} {out}")
+}
+
+fn main() {
+    show("a b  c", " ")
+    show("", " ")
+    show(" ", " ")
+    show("abc", "")
+    show("a--b--", "--")
+    show("a-b--c-", "--")
+    show("x skip y stop z", " ")
+    for w in text_split("p,q", ",") { print(w) }
+    println("")
+}
+"#;
+    agree(h, src, "4 [a][b][][c]\n1 []\n2 [][]\n1 [abc]\n3 [a][b][]\n2 [a-b][c-]\n4 [x][skip][y][stop]\npq\n0")?;
+    let r = on_p(h, src, "core-ir p.nz")?;
+    check_that(r.code == 0, ran_show(r))?;
+    check_that(calls(r.stdout, "text_split_end") == 2, "each loop reads its pieces one at a time")?;
+    // `text_split` is called as often as in a program with no loop over one.
+    let in_loops = calls(r.stdout, "text_split");
+    let r2 = on_p(h, "fn main() {\n    println(text_split(\"a b\", \" \").len())\n}\n", "core-ir p.nz")?;
+    let once = calls(r2.stdout, "text_split");
+    check_that(in_loops + 1 == once, "no list is built")
+}
