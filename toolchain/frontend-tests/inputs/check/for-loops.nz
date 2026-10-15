@@ -1,0 +1,25 @@
+struct P { x: Int }
+fn main() -> Int {
+    let mut total = 0;
+    let xs = vec_new();
+    vec_push(xs, P(x: 1));
+    for p in xs {
+        total = total + p.x;
+        let p = 2;
+        total = total + p;
+    }
+    for i in 0..true {
+        if i > 3 { break; }
+        continue;
+        total = total + 1;
+    }
+    for s in "abc" {
+        total = total + s;
+    }
+    for n in ints_new() {
+        n = 1;
+        total = total + n
+    }
+    for w in strs_new() { total = total + w; }
+    total
+}

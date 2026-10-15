@@ -14,7 +14,7 @@
 // and another module's undeclared effects; records and enums, generic ones included, and
 // `Vec`s and applications of any type; functions with type parameters (and `Equality`
 // requirements) but no effect parameters, contracts or attributes; `let`, assignment to a binding
-// or its fields, `while`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary
+// or its fields, `while`, `for`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary
 // operators but shifts, calls of the module's functions and of the built-ins (generic ones by
 // inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
@@ -3281,6 +3281,11 @@ fn check_stmt(c: Ck, s: Int) -> Bool {
         check_while(c, n);
         return false;
     }
+    if k == "For" {
+        // A `for` always completes, as the `while` it means does.
+        check_for(c, n);
+        return false;
+    }
     if k == "Return" {
         check_return(c, n);
         return true;
@@ -3378,6 +3383,51 @@ fn check_assign(c: Ck, a: Int) -> Int {
         err(c, "N0300", espan(c, value), cat5(cat3("`", written, "` is `"), want, "`, but this is `", show(c, vt), "`"), "");
         if ds >= 0 { sec_at(c, ds, de, cat3("declared `", want, "` here")); }
     }
+    0
+}
+
+// `for x in e { … }` and `for i in a..b { … }` (`check_for`): an `Ints`, a `Strs` or a `Vec[T]`
+// iterated, or `Int` bounds; the binding is the element, in the body's own scope.
+fn check_for(c: Ck, f: Int) -> Int {
+    let iter = fld(c, f, "iter");
+    let mut element = t_int();
+    if kind_of(c, iter) == "Range" {
+        let bounds = ints_new();
+        ints_push(bounds, fld(c, iter, "start"));
+        ints_push(bounds, fld(c, iter, "end"));
+        let mut i = 0;
+        while i < 2 {
+            let b = ints_get(bounds, i);
+            let t = value_type(c, b, t_int());
+            if t != t_int() {
+                err(c, "N0300", espan(c, b), cat3("a range's bounds are `Int`s, but this is `", show(c, t), "`"), "convert it with `Int(…)`");
+            }
+            i = i + 1;
+        }
+    } else {
+        let e = sx_kid(c.t, iter, 0);
+        let t = value_type(c, e, none());
+        if bname_of(c, t) == "Bytes" {
+            stop(c, "a `for` over `Bytes`");
+            return 0;
+        }
+        if tag(c, t) == tag_vec() {
+            element = targ(c, t, 0);
+        } else {
+            err(c, "N0628", espan(c, e), cat3("a `for` loop cannot iterate `", show(c, t), "`"),
+                    "a `for` loop iterates an `Ints`, a `Strs`, a `Vec[T]` or a `Bytes`, or integers written `a..b`");
+        }
+    }
+    ss(c, s_loop(), gs(c, s_loop()) + 1);
+    let body = fld(c, f, "body");
+    open_scope(c);
+    let ns = fld(c, f, "name_span");
+    define(c, fname_of(c, f, "name"), element, false, sps(c, ns), spe(c, ns));
+    // Its last line's value is discarded, as a `while` body's is (R1, 5b.19).
+    ss(c, s_discard(), 1);
+    check_block_inner(c, body, none());
+    close_scope(c);
+    ss(c, s_loop(), gs(c, s_loop()) - 1);
     0
 }
 
