@@ -116,9 +116,11 @@ among them every difference is a defect, not a gap; coverage grows group by grou
 
 The checker is `compiler/sema.nz`, driven by `diagnose.nz`. Standard error is kept apart from the
 diagnostics: `run.sh check` writes each input's stop reason beside its result and reports how many
-inputs the checker carries whole and how many of those agree. A module that did not parse is a
-stop (the reference checks what did parse), and so is the loader's refusal of a package, which it
-does not resolve yet.
+inputs the checker carries whole and how many of those agree. After a syntax error the checker
+checks the trees the parser recovered, as `analyse` does — their `Debug` dumps agree with the
+reference's on every input (D3) — and publishes its errors after the parser's, never the missing
+`main` and never a warning. The loader's refusal of a package is a stop: it does not resolve
+packages yet.
 
 **D14 — The built-in table is generated, never transcribed.** `compiler/builtins.nz` is printed by
 the reference dumper's `builtins` mode from `nazm_sema::Intrinsic::ALL` — each built-in's name,

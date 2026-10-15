@@ -194,9 +194,24 @@ pub struct Graph {
     first: Ints,
     count: Ints,
     target: Ints,
+    // Whether a module had a syntax error (its tree is the parser's recovery).
+    syntax: Ints,
 }
 
-pub fn ck_graph() -> Graph { Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new()) }
+pub fn ck_graph() -> Graph {
+    let g = Graph(standard: ints_new(), first: ints_new(), count: ints_new(), target: ints_new(), syntax: ints_new());
+    ints_push(g.syntax, 0);
+    g
+}
+
+// The compilation had a syntax error: what the checker says of the trees the parser recovered is
+// published after the parser's diagnostics, without the missing `main` — a function that failed to
+// parse was never registered — and without warnings, which are published only where there is
+// no error (`analyse`, `check_map_with_warnings`).
+pub fn ck_graph_syntax_error(g: Graph) -> Int {
+    ints_set(g.syntax, 0, 1);
+    0
+}
 
 pub fn ck_graph_module(g: Graph, standard: Bool) -> Int {
     if standard { ints_push(g.standard, 1); } else { ints_push(g.standard, 0); }
@@ -223,7 +238,9 @@ fn s_module() -> Int { 6 }
 fn s_fn() -> Int { 7 }
 // The core prelude's module.
 fn s_prelude() -> Int { 8 }
-fn s_slots() -> Int { 9 }
+// Whether the compilation had a syntax error.
+fn s_syntax() -> Int { 9 }
+fn s_slots() -> Int { 10 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -243,7 +260,7 @@ pub fn ck_stopped(c: Ck) -> Str {
 
 // The errors; where there are none, the warnings (`check_map_with_warnings`).
 pub fn ck_diags(c: Ck) -> Diags {
-    if dg_len(c.d) == 0 { return c.w; }
+    if dg_len(c.d) == 0 && gs(c, s_syntax()) == 0 { return c.w; }
     c.d
 }
 
@@ -844,6 +861,7 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         return c;
     }
     ss(c, s_prelude(), count - 1);
+    ss(c, s_syntax(), ints_get(graph.syntax, 0));
     i = 0;
     while i < count {
         refuse_unsupported_items(c, i);
@@ -1025,7 +1043,8 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         if some(c, f, "export") { stop(c, "an export"); }
         if some(c, f, "method_of") { stop(c, "a method"); }
         if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
-        if some(c, f, "body") == false { stop(c, "a function without a body"); }
+        // A function without a body is a foreign one, or one whose body did not parse.
+        if some(c, f, "body") == false && gs(c, s_syntax()) == 0 { stop(c, "a function without a body"); }
         i = i + 1;
     }
     0
@@ -1920,6 +1939,7 @@ fn main_rules(c: Ck) -> Int {
         }
         return 0;
     }
+    if gs(c, s_syntax()) == 1 { return 0; }
     dg_error(c.d, "N0204", 0, 0, "this program has no `main` function", "", "`nazm run` evaluates `fn main() -> Int` in the file you named");
     0
 }
@@ -2081,6 +2101,12 @@ fn check_function(c: Ck, f: Int) -> Int {
     let rt = fld(c, f, "return_type");
     let declared = signature_type(c, rt);
     let rts = fld(c, rt, "span");
+    // A body that failed to parse: anything said about statements never built would be about
+    // the parser's guess, not the program.
+    if some(c, f, "body") == false {
+        close_scope(c);
+        return 0;
+    }
     let body = unwrap(c, f, "body");
     ss(c, s_ret(), declared);
     ss(c, s_rs(), rts);

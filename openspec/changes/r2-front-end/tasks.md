@@ -68,6 +68,10 @@
       on a float (N0006), a `Str`, a number or a `Bool` written as it is, anything else refused
       (N0300: no compilation the checker carries has a trait, so none has a `Show`). `run.sh check`:
       2,375 agree, 388 differ; the checker carries 1,793, all agree
+- [ ] 3.1i A compilation with a syntax error (`analyse`): the checker checks what the parser
+      recovered, every module, a function whose body did not parse declared and its body skipped;
+      its errors follow the parser's, without the missing `main` and without warnings.
+      `run.sh check`: 2,392 agree, 375 differ; the checker carries 1,890, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

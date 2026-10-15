@@ -1,0 +1,2 @@
+use "lib/broken.nz";
+fn main() -> Int { works() + fails() + mistyped() + "x" }

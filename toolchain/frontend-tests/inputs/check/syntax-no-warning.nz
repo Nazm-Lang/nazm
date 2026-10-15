@@ -1,0 +1,8 @@
+enum Light { Red, Amber, Green }
+fn h(l: Light) -> Int {
+    match l {
+        Red => 0,
+        _ => 1,
+    }
+}
+fn broken() -> Int { 1 +

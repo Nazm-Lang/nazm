@@ -1,0 +1,3 @@
+pub fn works() -> Int { 1 }
+pub fn fails() -> Int { let = 2; 3 }
+fn mistyped() -> Bool { 1 }
