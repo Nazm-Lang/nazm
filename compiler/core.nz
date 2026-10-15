@@ -855,7 +855,7 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
     }
     if k == "Assign" {
         let place = sx_field(t, n, "place");
-        if ints_len(sx_items(t, sx_field(t, place, "path"))) > 0 { return co_stopped_stmt(lo, "an assignment to a field or an element"); }
+        if ints_len(sx_items(t, sx_field(t, place, "path"))) > 0 { return co_assign_path(lo, n); }
         let mut value = co_expr(lo, sx_field(t, n, "value"));
         let local = co_local_at(lo, sx_field(t, place, "name_span"));
         // `x = v` on a shared binding (R1b, L10): the cell's one value replaced.
@@ -1375,6 +1375,13 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     }
     if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
     if k == "Closure" { return co_closure(lo, e); }
+    // `~x` (`ExprKind::Complement`), of its operand's type, at the operator.
+    if k == "BitNot" {
+        let operand = co_expr(lo, sx_field(t, e, "operand"));
+        let mut ty = co_last_ty(lo);
+        if ty < 0 { ty = ck_t_int(); }
+        return co_node(lo, "~", co_field_first("operand", operand), ty, sx_field(t, e, "op_span"));
+    }
     if k == "Array" || k == "ArrayRepeat" { return co_array(lo, e, k == "ArrayRepeat"); }
     if k == "Neg" {
         // A literal negated, of a type the checker gave it (`integer`): the negative constant,
@@ -2661,6 +2668,102 @@ fn co_var(lo: Lo, name: Str, span: Int) -> Str {
     co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span)
 }
 
+// `x.f = v`, `a[i] = v` and their mixtures (`Stmt::Assign` with a path): the value first, then
+// each step — a field by the checker's record of it, an element of an array with its length.
+// `xs[i] = v` on a sequence is the call the checker read it as; on a shared binding, its value
+// is copied out of its cell, changed, and set back.
+fn co_assign_path(lo: Lo, n: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let place = sx_field(t, n, "place");
+    let steps = sx_items(t, sx_field(t, place, "path"));
+    let at = sx_field(t, n, "span");
+    if ints_len(steps) == 1 && sx_kind(t, ints_get(steps, 0)) != tk_tuple() {
+        let step = ints_get(steps, 0);
+        let ss = sx_field(t, step, "span");
+        if ck_site_at(c, co_abs_s(lo, ss), co_abs_e(lo, ss)) >= 0 {
+            let pre = strs_new();
+            strs_push(pre, co_var(lo, sx_text(t, sx_field(t, place, "name")), sx_field(t, place, "name_span")));
+            let list = ints_new();
+            ints_push(list, sx_field(t, step, "index"));
+            ints_push(list, sx_field(t, n, "value"));
+            let call = co_call_parts(lo, ss, pre, list, ss);
+            let o = strs_new();
+            strs_push(o, co_op_first("eval"));
+            strs_push(o, co_field("value", call));
+            strs_push(o, co_field("ends", co_ends(false)));
+            co_set_last(lo, 0 - 1, false);
+            return co_object(o);
+        }
+    }
+    let value = co_expr(lo, sx_field(t, n, "value"));
+    let mut local = co_local_at(lo, sx_field(t, place, "name_span"));
+    if co_halted(lo) { return ""; }
+    // On a shared binding (R1b, L10): a copy of its value, read out of the cell.
+    let cell = local;
+    let shared = ints_get(lo.lshr, local) >= 0;
+    let mut read = "";
+    if shared {
+        let elem = ints_get(lo.lshr, local);
+        local = co_temp(lo, "made", elem, at);
+        read = co_through_cell(lo, cell, "", at);
+    }
+    let path = strs_new();
+    let mut target = ints_get(lo.lty, local);
+    let mut i = 0;
+    while i < ints_len(steps) {
+        let step = ints_get(steps, i);
+        if sx_kind(t, step) == tk_tuple() {
+            let f = sx_kid(t, step, 0);
+            let ns = sx_field(t, f, "name_span");
+            let index = ck_field_index(c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+            if index < 0 { return co_stopped_stmt(lo, "a field written the checker did not record"); }
+            if ck_type_class(c, target) != "record" { return co_stopped_stmt(lo, "a field written of something not a record"); }
+            let o = strs_new();
+            strs_push(o, co_field_first("record", json_str(co_durable(lo, target))));
+            strs_push(o, co_field("field", int_to_str(index)));
+            strs_push(o, co_field("name", json_str(ck_field_name(c, co_abs_s(lo, ns), co_abs_e(lo, ns)))));
+            strs_push(path, co_object(o));
+            target = ck_field_ty(c, co_abs_s(lo, ns), co_abs_e(lo, ns));
+        } else {
+            if ck_type_class(c, target) != "array" { return co_stopped_stmt(lo, "an element written of something not an array"); }
+            let index = co_expr(lo, sx_field(t, step, "index"));
+            let o = strs_new();
+            strs_push(o, co_field_first("index", index));
+            strs_push(o, co_field("len", int_to_str(ck_array_len(c, target))));
+            strs_push(path, co_object(o));
+            target = ck_array_elem(c, target);
+        }
+        i = i + 1;
+    }
+    if co_halted(lo) { return ""; }
+    let o = strs_new();
+    strs_push(o, co_op_first("assign"));
+    strs_push(o, co_field("local", int_to_str(local)));
+    strs_push(o, co_field("path", co_list(path)));
+    strs_push(o, co_field("value", value));
+    strs_push(o, co_field("ends", co_ends(false)));
+    strs_push(o, co_field("at", json_str(co_tree_span(lo, at))));
+    let assign = co_object(o);
+    co_set_last(lo, 0 - 1, false);
+    if shared == false { return assign; }
+    let stmts = strs_new();
+    strs_push(stmts, co_let(local, read));
+    strs_push(stmts, assign);
+    let back = co_read(lo, local, at);
+    let set = strs_new();
+    strs_push(set, co_op_first("eval"));
+    strs_push(set, co_field("value", co_through_cell(lo, cell, back, at)));
+    strs_push(set, co_field("ends", co_ends(false)));
+    strs_push(stmts, co_object(set));
+    let b = strs_new();
+    strs_push(b, co_op_first("block"));
+    strs_push(b, co_field("body", co_block_json(lo, false, co_list_one(int_to_str(local)), stmts, "null", at)));
+    strs_push(b, co_field("ends", co_ends(false)));
+    co_set_last(lo, 0 - 1, false);
+    co_object(b)
+}
+
 // `vec_get(cell, 0)`, or `vec_set(cell, 0, value)` where `value` is given, on shared local `l`
 // (`through_cell`).
 fn co_through_cell(lo: Lo, l: Int, value: Str, span: Int) -> Str {
@@ -2858,6 +2961,10 @@ fn co_index(lo: Lo, e: Int) -> Str {
         let list = ints_new();
         ints_push(list, sx_field(t, e, "base"));
         ints_push(list, sx_field(t, e, "index"));
+        // A compound update's read of a map's entry: the value type's zero where it is absent
+        // (`map_fallback`).
+        let zero = ck_zero_at(c, co_abs_s(lo, bs), co_abs_e(lo, bs));
+        if zero >= 0 { ints_push(list, zero); }
         return co_call_parts(lo, bs, strs_new(), list, bs);
     }
     let base = co_expr(lo, sx_field(t, e, "base"));
