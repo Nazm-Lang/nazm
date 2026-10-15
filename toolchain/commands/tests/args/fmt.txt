@@ -1,0 +1,69 @@
+# `nazm fmt`'s command lines, one per line, its words as the shell reads them. Each runs in a
+# directory holding `a.nz` (formatted), `b.nz` (not) and `sub/`, a directory; its output, error,
+# status and the files afterwards are compared with the reference's.
+
+-h
+--help
+-h a.nz
+a.nz --help
+a.nz -h
+--check a.nz
+--check b.nz
+a.nz b.nz
+--check a.nz b.nz
+a.nz --check b.nz
+--chec a.nz
+a.nz --chec
+--check --check a.nz
+--check=1 a.nz
+--check= a.nz
+--check=
+-x a.nz
+-check a.nz
+--hel
+--he a.nz
+--help=x
+-h=x
+-hx
+-xh
+--xyz a.nz
+---check a.nz
+--=x
+--=
+-- --check
+-- a.nz
+--
+-- -h
+-
+""
+a.nz ""
+"" --check
+"" --chec
+"" --check --check
+--check ""
+--check -- ""
+a.nz -- --check
+--check -- b.nz
+-é a.nz
+--é a.nz
+--chéck a.nz
+--checks a.nz
+--cheque a.nz
+--hlep
+--version
+-V
+--help --check
+--check --help
+--check -h
+help
+fmt a.nz
+a.nz -- -- b.nz
+-1
+--1
+--check=a=b a.nz
+--help --hel
+--hel --help
+sub
+--check sub
+b.nz sub a.nz
+b.nz a.nz missing.nz

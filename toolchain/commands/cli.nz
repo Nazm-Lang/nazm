@@ -1,0 +1,775 @@
+// The command line the commands share (R5, `openspec/changes/r5-commands/design.md`, D8): each
+// command's arguments read, and its usage errors and `--help` printed, exactly as clap 4 does for
+// the Rust `nazm` (`crates/nazm-cli/src/cli.rs`).
+//
+// A port of the part of `clap_builder` the commands use — its parser (`parser/parser.rs`: long and
+// short options, clusters, `=`, `--`, values pending until the next argument, the empty path
+// refused), its validator (required arguments), its usage strings (`output/usage.rs`, the
+// "smart" usage of the arguments used), its error messages (`error/format.rs`, with the
+// suggestion of a similar long option by `strsim::jaro`) and its help template
+// (`output/help_template.rs`, short and long). A command declares its arguments in the order
+// `cli.rs` declares them, with the help text clap derives from their doc comments; `cli_parse`
+// then answers the arguments, or prints help (standard output, status 0) or the usage error
+// (standard error, status 5, the contract's `USAGE`) and exits.
+//
+// Not carried, because no command ported so far has them: subcommands, aliases, possible values,
+// groups, conflicts, environment variables, `num_args` other than a flag's none, an option's one
+// and a positional's one-or-more, hyphen values, and terminal-width wrapping (the reference is built
+// without `wrap_help`).
+
+fn cli_nl() -> Str { str_from_byte(10) }
+
+fn cli_k_pos() -> Int { 0 }
+fn cli_k_flag() -> Int { 1 }
+fn cli_k_opt() -> Int { 2 }
+fn cli_k_help() -> Int { 3 }
+
+// How an argument was given: as clap's `Identifier`.
+fn cli_by_short() -> Int { 0 }
+fn cli_by_long() -> Int { 1 }
+fn cli_by_index() -> Int { 2 }
+
+pub struct Cli {
+    // The command's name after `nazm`, its `about` and its `long_about` ("" for none).
+    name: Str,
+    about: Str,
+    long_about: Str,
+    // Per argument, in the order `cli.rs` declares them; the help flag is added last.
+    kind: Ints,
+    short: Strs,
+    long: Strs,
+    value: Strs,
+    required: Ints,
+    multiple: Ints,
+    // Whether the value is a path, which clap's `PathBuf` parser refuses when empty.
+    path: Ints,
+    default: Strs,
+    has_default: Ints,
+    help: Strs,
+    long_help: Strs,
+    // The matcher: the arguments present in the order they were first matched, whether each was
+    // given on the command line, and every value with the argument it belongs to.
+    order: Ints,
+    explicit: Ints,
+    val_arg: Ints,
+    val_text: Strs,
+    // The pending argument (-1 for none), how it was given, and its values so far.
+    pend: Ints,
+    pend_vals: Strs,
+}
+
+pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
+    Cli(name: name, about: about, long_about: long_about, kind: ints_new(), short: strs_new(), long: strs_new(),
+            value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
+            has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
+            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new())
+}
+
+fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool, multiple: Bool, path: Bool,
+        default: Str, has_default: Bool, help: Str, long_help: Str) -> Int {
+    ints_push(c.kind, kind)
+    strs_push(c.short, short)
+    strs_push(c.long, long)
+    strs_push(c.value, value)
+    ints_push(c.required, if required { 1 } else { 0 })
+    ints_push(c.multiple, if multiple { 1 } else { 0 })
+    ints_push(c.path, if path { 1 } else { 0 })
+    strs_push(c.default, default)
+    ints_push(c.has_default, if has_default { 1 } else { 0 })
+    strs_push(c.help, help)
+    strs_push(c.long_help, long_help)
+    ints_push(c.explicit, 0)
+    ints_len(c.kind) - 1
+}
+
+// A positional argument named `value` (`FILES`); `multiple` is a `Vec` of them, one or more.
+pub fn cli_positional(c: Cli, value: Str, required: Bool, multiple: Bool, path: Bool, help: Str, long_help: Str) -> Int {
+    cli_add(c, cli_k_pos(), "", "", value, required, multiple, path, "", false, help, long_help)
+}
+
+// A `bool` flag: `--long`, and `-short` when `short` is not "".
+pub fn cli_flag(c: Cli, short: Str, long: Str, help: Str, long_help: Str) -> Int {
+    cli_add(c, cli_k_flag(), short, long, "", false, false, false, "", false, help, long_help)
+}
+
+// An option taking one value, shown as `<VALUE>`; `default` applies when `has_default`.
+pub fn cli_option(c: Cli, short: Str, long: Str, value: Str, path: Bool, default: Str, has_default: Bool, help: Str,
+        long_help: Str) -> Int {
+    cli_add(c, cli_k_opt(), short, long, value, false, false, path, default, has_default, help, long_help)
+}
+
+pub fn cli_present(c: Cli, a: Int) -> Bool { ints_get(c.explicit, a) == 1 }
+
+// The values argument `a` was given, or its default.
+pub fn cli_values(c: Cli, a: Int) -> Strs {
+    let out = strs_new()
+    for i in 0..ints_len(c.val_arg) {
+        if ints_get(c.val_arg, i) == a { strs_push(out, strs_get(c.val_text, i)) }
+    }
+    out
+}
+
+pub fn cli_value(c: Cli, a: Int) -> Str {
+    let vs = cli_values(c, a)
+    if strs_len(vs) == 0 { "" } else { strs_get(vs, 0) }
+}
+
+// --- text helpers -------------------------------------------------------------------------------
+
+fn cli_starts(s: Str, p: Str) -> Bool {
+    str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p
+}
+
+fn cli_spaces(n: Int) -> Str {
+    let parts = strs_new()
+    for _ in 0..n { strs_push(parts, " ") }
+    str_join(parts, "")
+}
+
+// Characters, as `display_width` counts the text the commands use.
+fn cli_width(s: Str) -> Int {
+    let mut w = 0
+    for i in 0..str_len(s) {
+        let b = str_byte(s, i)
+        if b < 128 || b >= 192 { w += 1 }
+    }
+    w
+}
+
+// The width of the UTF-8 character starting at byte `i`.
+fn cli_char_len(s: Str, i: Int) -> Int {
+    let b = str_byte(s, i)
+    if b < 192 { return 1 }
+    if b < 224 { return 2 }
+    if b < 240 { return 3 }
+    4
+}
+
+fn cli_replace_nl(s: Str, with: Str) -> Str {
+    let parts = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) {
+        if str_byte(s, i) == 10 {
+            strs_push(parts, str_slice(s, from, i))
+            from = i + 1
+        }
+    }
+    strs_push(parts, str_slice(s, from, str_len(s)))
+    str_join(parts, cli_nl() + with)
+}
+
+// Rust's `str::trim_end` over the ASCII whitespace help text can end with.
+fn cli_trim_end(s: Str) -> Str {
+    let mut end = str_len(s)
+    while end > 0 {
+        let b = str_byte(s, end - 1)
+        if b == 32 || (b >= 9 && b <= 13) { end -= 1 } else { break }
+    }
+    str_slice(s, 0, end)
+}
+
+// The characters of `s`, one `Str` each.
+fn cli_chars(s: Str) -> Strs {
+    let out = strs_new()
+    let mut i = 0
+    while i < str_len(s) {
+        let w = cli_char_len(s, i)
+        strs_push(out, str_slice(s, i, i + w))
+        i += w
+    }
+    out
+}
+
+// `strsim::jaro`, over characters, in `f64` as the reference computes it.
+fn cli_jaro(x: Str, y: Str) -> Float64 {
+    let a = cli_chars(x)
+    let b = cli_chars(y)
+    let a_len = strs_len(a)
+    let b_len = strs_len(b)
+    if a_len == 0 && b_len == 0 { return 1.0 }
+    if a_len == 0 || b_len == 0 { return 0.0 }
+    let mut range = if a_len > b_len { a_len / 2 } else { b_len / 2 }
+    if range > 0 { range -= 1 }
+    let a_flags = ints_new()
+    let b_flags = ints_new()
+    for _ in 0..a_len { ints_push(a_flags, 0) }
+    for _ in 0..b_len { ints_push(b_flags, 0) }
+    let mut matches = 0
+    for i in 0..a_len {
+        let lo = if i > range { i - range } else { 0 }
+        let mut hi = i + range + 1
+        if hi > b_len { hi = b_len }
+        let mut j = lo
+        while j < hi {
+            if strs_get(a, i) == strs_get(b, j) && ints_get(b_flags, j) == 0 {
+                ints_set(a_flags, i, 1)
+                ints_set(b_flags, j, 1)
+                matches += 1
+                break
+            }
+            j += 1
+        }
+    }
+    if matches == 0 { return 0.0 }
+    let mut transpositions = 0
+    let mut k = 0
+    for i in 0..a_len {
+        if ints_get(a_flags, i) == 1 {
+            while ints_get(b_flags, k) == 0 { k += 1 }
+            if strs_get(a, i) != strs_get(b, k) { transpositions += 1 }
+            k += 1
+        }
+    }
+    transpositions = transpositions / 2
+    let m = Float64(matches)
+    ((m / Float64(a_len)) + (m / Float64(b_len)) + (Float64(matches - transpositions) / m)) / 3.0
+}
+
+// --- how an argument is written -----------------------------------------------------------------
+
+fn cli_is_pos(c: Cli, a: Int) -> Bool { ints_get(c.kind, a) == cli_k_pos() }
+fn cli_takes_value(c: Cli, a: Int) -> Bool { ints_get(c.kind, a) == cli_k_pos() || ints_get(c.kind, a) == cli_k_opt() }
+fn cli_is_required(c: Cli, a: Int) -> Bool { ints_get(c.required, a) == 1 }
+fn cli_is_multiple(c: Cli, a: Int) -> Bool { ints_get(c.multiple, a) == 1 }
+
+// `render_arg_val`: `<NAME>`, or `[NAME]` for a positional that is not required, `...` after a
+// positional that takes several.
+fn cli_arg_val(c: Cli, a: Int, required: Bool) -> Str {
+    let name = strs_get(c.value, a)
+    let mut s = if cli_is_pos(c, a) && !required { "[" + name + "]" } else { "<" + name + ">" }
+    if cli_is_pos(c, a) && cli_is_multiple(c, a) { s = s + "..." }
+    s
+}
+
+// `stylize_arg_suffix`.
+fn cli_suffix(c: Cli, a: Int, required: Bool) -> Str {
+    if cli_is_pos(c, a) { return cli_arg_val(c, a, required) }
+    if cli_takes_value(c, a) { return " " + cli_arg_val(c, a, required) }
+    ""
+}
+
+// `Arg::stylized`: `--long`, else `-s`, then the suffix.
+fn cli_stylized(c: Cli, a: Int, required: Bool) -> Str {
+    let mut s = ""
+    if strs_get(c.long, a) != "" {
+        s = "--" + strs_get(c.long, a)
+    } else if strs_get(c.short, a) != "" {
+        s = "-" + strs_get(c.short, a)
+    }
+    s + cli_suffix(c, a, required)
+}
+
+// `Arg`'s `Display`.
+fn cli_display(c: Cli, a: Int) -> Str { cli_stylized(c, a, cli_is_required(c, a)) }
+
+// --- usage --------------------------------------------------------------------------------------
+
+fn cli_contains(xs: Strs, s: Str) -> Bool {
+    for i in 0..strs_len(xs) {
+        if strs_get(xs, i) == s { return true }
+    }
+    false
+}
+
+// `Usage::write_args`: the required options and those used, then every positional in order.
+fn cli_write_args(c: Cli, used: Ints) -> Str {
+    let incl = ints_new()
+    for a in 0..ints_len(c.kind) {
+        if cli_is_required(c, a) { ints_push(incl, a) }
+    }
+    for i in 0..ints_len(used) { ints_push(incl, ints_get(used, i)) }
+    let opts = strs_new()
+    let pos_set = ints_new()
+    for a in 0..ints_len(c.kind) { ints_push(pos_set, 0) }
+    for i in 0..ints_len(incl) {
+        let a = ints_get(incl, i)
+        if cli_is_pos(c, a) {
+            ints_set(pos_set, a, 1)
+        } else {
+            let s = cli_stylized(c, a, true)
+            if !cli_contains(opts, s) { strs_push(opts, s) }
+        }
+    }
+    let parts = strs_new()
+    for i in 0..strs_len(opts) { strs_push(parts, strs_get(opts, i) + " ") }
+    for a in 0..ints_len(c.kind) {
+        if cli_is_pos(c, a) { strs_push(parts, cli_stylized(c, a, ints_get(pos_set, a) == 1) + " ") }
+    }
+    str_join(parts, "")
+}
+
+fn cli_needs_options_tag(c: Cli) -> Bool {
+    for a in 0..ints_len(c.kind) {
+        let k = ints_get(c.kind, a)
+        if (k == cli_k_flag() || k == cli_k_opt()) && !cli_is_required(c, a) { return true }
+    }
+    false
+}
+
+// The usage with no title: the help's usage when nothing is used, the "smart" usage otherwise.
+fn cli_usage_no_title(c: Cli, used: Ints) -> Str {
+    let mut s = "nazm " + c.name + " "
+    if ints_len(used) == 0 && cli_needs_options_tag(c) { s = s + "[OPTIONS] " }
+    cli_trim_end(s + cli_write_args(c, used))
+}
+
+fn cli_usage(c: Cli, used: Ints) -> Str { "Usage: " + cli_usage_no_title(c, used) }
+
+// --- errors -------------------------------------------------------------------------------------
+
+fn cli_fail(io: IoCap, text: Str) -> Int {
+    eprint("error: " + text + cli_nl() + cli_nl() + "For more information, try '--help'." + cli_nl())
+    exit_with(5)
+    0
+}
+
+fn cli_fail_usage(io: IoCap, c: Cli, text: Str, used: Ints) -> Int {
+    cli_fail(io, text + cli_nl() + cli_nl() + cli_usage(c, used))
+}
+
+fn cli_empty_value(io: IoCap, c: Cli, a: Int) -> Int {
+    cli_fail(io, "a value is required for '" + cli_display(c, a) + "' but none was supplied")
+}
+
+fn cli_unknown(io: IoCap, c: Cli, shown: Str, similar: Str, trailing_tip: Bool, used: Ints) -> Int {
+    let mut text = "unexpected argument '" + shown + "' found"
+    let mut suggested = false
+    if similar != "" {
+        text = text + cli_nl() + cli_nl() + "  tip: a similar argument exists: '" + similar + "'"
+        suggested = true
+    }
+    if trailing_tip {
+        if !suggested { text = text + cli_nl() }
+        text = text + cli_nl() + "  tip: to pass '" + shown + "' as a value, use '-- " + shown + "'"
+    }
+    cli_fail_usage(io, c, text, used)
+}
+
+// The arguments given on the command line so far, in the order they were matched, leaving out the
+// required ones when `skip_required`.
+fn cli_used(c: Cli, skip_required: Bool) -> Ints {
+    let out = ints_new()
+    for i in 0..ints_len(c.order) {
+        let a = ints_get(c.order, i)
+        if ints_get(c.explicit, a) == 1 && !(skip_required && cli_is_required(c, a)) { ints_push(out, a) }
+    }
+    out
+}
+
+fn cli_has_positionals(c: Cli) -> Bool {
+    for a in 0..ints_len(c.kind) {
+        if cli_is_pos(c, a) { return true }
+    }
+    false
+}
+
+// --- help ---------------------------------------------------------------------------------------
+
+fn cli_long_help_exists(c: Cli) -> Bool {
+    if c.long_about != "" { return true }
+    for a in 0..ints_len(c.kind) {
+        if strs_get(c.long_help, a) != "" { return true }
+    }
+    false
+}
+
+fn cli_spec_vals(c: Cli, a: Int) -> Str {
+    if cli_takes_value(c, a) && ints_get(c.has_default, a) == 1 { return "[default: " + strs_get(c.default, a) + "]" }
+    ""
+}
+
+fn cli_arg_help(c: Cli, a: Int, use_long: Bool) -> Str {
+    let short = strs_get(c.help, a)
+    let long = strs_get(c.long_help, a)
+    if use_long { if long != "" { long } else { short } } else { if short != "" { short } else { long } }
+}
+
+// The width `write_args` measures an argument at.
+fn cli_measure(c: Cli, a: Int) -> Int {
+    let w = cli_width(cli_display(c, a))
+    if strs_get(c.long, a) != "" { w + 4 } else { w }
+}
+
+// One section of `write_args`: its arguments aligned, or each help on the line after it.
+fn cli_section(c: Cli, args: Ints, use_long: Bool) -> Str {
+    let mut longest = 2
+    for i in 0..ints_len(args) {
+        let w = cli_measure(c, ints_get(args, i))
+        if w > longest { longest = w }
+    }
+    let mut next_line = use_long
+    if !next_line {
+        // `arg_next_line_help`'s forced case, at the 100 columns clap assumes without a terminal.
+        let taken = longest + 4
+        for i in 0..ints_len(args) {
+            let a = ints_get(args, i)
+            let h_w = cli_width(cli_arg_help(c, a, false)) + cli_width(cli_spec_vals(c, a))
+            if 100 >= taken && Float32(taken) / Float32(100) > Float32(0.40) && h_w > 100 - taken { next_line = true }
+        }
+    }
+    let parts = strs_new()
+    for i in 0..ints_len(args) {
+        let a = ints_get(args, i)
+        if i != 0 {
+            strs_push(parts, cli_nl())
+            if next_line && use_long { strs_push(parts, cli_nl()) }
+        }
+        strs_push(parts, "  ")
+        let short = strs_get(c.short, a)
+        let long = strs_get(c.long, a)
+        if short != "" {
+            strs_push(parts, "-" + short)
+        } else if long != "" {
+            strs_push(parts, "    ")
+        }
+        if long != "" {
+            if short != "" { strs_push(parts, ", ") }
+            strs_push(parts, "--" + long)
+        }
+        strs_push(parts, cli_suffix(c, a, cli_is_required(c, a)))
+        if !next_line {
+            if cli_is_pos(c, a) {
+                strs_push(parts, cli_spaces(longest + 2 - cli_width(cli_display(c, a))))
+            } else {
+                let pad = if long != "" { 2 } else { 6 }
+                strs_push(parts, cli_spaces(longest + pad - (cli_width(cli_display(c, a)) + 4)))
+            }
+        }
+        let spaces = if next_line { 10 } else { longest + 4 }
+        if next_line { strs_push(parts, cli_nl() + "          ") }
+        let mut help = cli_arg_help(c, a, use_long)
+        let specs = cli_spec_vals(c, a)
+        let help_empty = help == ""
+        if specs != "" && !use_long {
+            if !help_empty { help = help + " " }
+            help = help + specs
+        }
+        strs_push(parts, cli_replace_nl(help, cli_spaces(spaces)))
+        if specs != "" && use_long {
+            let mut more = ""
+            if !help_empty { more = cli_nl() + cli_nl() }
+            strs_push(parts, cli_replace_nl(more + specs, cli_spaces(spaces)))
+        }
+    }
+    str_join(parts, "")
+}
+
+fn cli_help_text(c: Cli, use_long: Bool) -> Str {
+    let about = if use_long && c.long_about != "" { c.long_about } else { c.about }
+    let mut s = ""
+    if about != "" { s = about + cli_nl() }
+    s = s + cli_nl() + "Usage: " + cli_usage_no_title(c, ints_new()) + cli_nl() + cli_nl()
+    let pos = ints_new()
+    let opts = ints_new()
+    for a in 0..ints_len(c.kind) {
+        if cli_is_pos(c, a) { ints_push(pos, a) } else { ints_push(opts, a) }
+    }
+    let mut first = true
+    if ints_len(pos) > 0 {
+        first = false
+        s = s + "Arguments:" + cli_nl() + cli_section(c, pos, use_long)
+    }
+    if ints_len(opts) > 0 {
+        if !first { s = s + cli_nl() + cli_nl() }
+        s = s + "Options:" + cli_nl() + cli_section(c, opts, use_long)
+    }
+    // `trim_start_lines`: a first line that is only whitespace goes.
+    let mut i = 0
+    while i < str_len(s) && str_byte(s, i) != 10 { i += 1 }
+    if i < str_len(s) && cli_trim_end(str_slice(s, 0, i)) == "" { s = str_slice(s, i + 1, str_len(s)) }
+    cli_trim_end(s) + cli_nl()
+}
+
+fn cli_show_help(io: IoCap, c: Cli, use_long: Bool) -> Int {
+    print(cli_help_text(c, use_long && cli_long_help_exists(c)))
+    exit_with(0)
+    0
+}
+
+// --- the parser ---------------------------------------------------------------------------------
+
+fn cli_find_long(c: Cli, name: Str) -> Int {
+    for a in 0..ints_len(c.kind) {
+        if strs_get(c.long, a) != "" && strs_get(c.long, a) == name { return a }
+    }
+    0 - 1
+}
+
+fn cli_find_short(c: Cli, ch: Str) -> Int {
+    for a in 0..ints_len(c.kind) {
+        if strs_get(c.short, a) != "" && strs_get(c.short, a) == ch { return a }
+    }
+    0 - 1
+}
+
+// The `index`th positional (1-based), or -1.
+fn cli_positional_at(c: Cli, index: Int) -> Int {
+    let mut n = 0
+    for a in 0..ints_len(c.kind) {
+        if cli_is_pos(c, a) {
+            n += 1
+            if n == index { return a }
+        }
+    }
+    0 - 1
+}
+
+fn cli_pending(c: Cli) -> Int { ints_get(c.pend, 0) }
+
+fn cli_start_pending(c: Cli, a: Int, by: Int) -> Int {
+    ints_set(c.pend, 0, a)
+    ints_set(c.pend, 1, by)
+    while strs_len(c.pend_vals) > 0 { strs_pop(c.pend_vals) }
+    0
+}
+
+// `start_custom_arg`: the argument is present, first matched now unless it was before.
+fn cli_start(c: Cli, a: Int, explicit: Bool) -> Int {
+    let mut seen = false
+    for i in 0..ints_len(c.order) {
+        if ints_get(c.order, i) == a { seen = true }
+    }
+    if !seen { ints_push(c.order, a) }
+    if explicit { ints_set(c.explicit, a, 1) }
+    0
+}
+
+// `matcher.remove`: whether it was there.
+fn cli_remove(c: Cli, a: Int) -> Bool {
+    let mut was = false
+    let order = ints_new()
+    for i in 0..ints_len(c.order) {
+        if ints_get(c.order, i) == a { was = true } else { ints_push(order, ints_get(c.order, i)) }
+    }
+    while ints_len(c.order) > 0 { ints_pop(c.order) }
+    for i in 0..ints_len(order) { ints_push(c.order, ints_get(order, i)) }
+    ints_set(c.explicit, a, 0)
+    let va = ints_new()
+    let vt = strs_new()
+    for i in 0..ints_len(c.val_arg) {
+        if ints_get(c.val_arg, i) != a {
+            ints_push(va, ints_get(c.val_arg, i))
+            strs_push(vt, strs_get(c.val_text, i))
+        }
+    }
+    while ints_len(c.val_arg) > 0 {
+        ints_pop(c.val_arg)
+        strs_pop(c.val_text)
+    }
+    for i in 0..ints_len(va) {
+        ints_push(c.val_arg, ints_get(va, i))
+        strs_push(c.val_text, strs_get(vt, i))
+    }
+    was
+}
+
+// `react` for a command-line occurrence: 0, or 1 when it failed and `quiet` asked for the error
+// not to be reported (clap's `let _ = self.resolve_pending(..)`).
+fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int {
+    cli_resolve(io, c, false)
+    let k = ints_get(c.kind, a)
+    // `verify_num_args`.
+    if (k == cli_k_opt() || k == cli_k_pos()) && strs_len(vals) == 0 {
+        if quiet { return 1 }
+        cli_empty_value(io, c, a)
+    }
+    if k == cli_k_help() {
+        if quiet { return 1 }
+        cli_show_help(io, c, by != cli_by_short())
+    }
+    let appends = k == cli_k_pos() && cli_is_multiple(c, a)
+    if !appends && cli_remove(c, a) {
+        if quiet { return 1 }
+        cli_fail_usage(io, c, "the argument '" + cli_display(c, a) + "' cannot be used multiple times", ints_new())
+    }
+    cli_start(c, a, true)
+    if k == cli_k_flag() {
+        ints_push(c.val_arg, a)
+        strs_push(c.val_text, "true")
+        return 0
+    }
+    for i in 0..strs_len(vals) {
+        let v = strs_get(vals, i)
+        if v == "" && ints_get(c.path, a) == 1 {
+            if quiet { return 1 }
+            cli_empty_value(io, c, a)
+        }
+        ints_push(c.val_arg, a)
+        strs_push(c.val_text, v)
+    }
+    0
+}
+
+fn cli_resolve(io: IoCap, c: Cli, quiet: Bool) -> Int {
+    let a = cli_pending(c)
+    if a < 0 { return 0 }
+    ints_set(c.pend, 0, 0 - 1)
+    let vals = strs_new()
+    for i in 0..strs_len(c.pend_vals) { strs_push(vals, strs_get(c.pend_vals, i)) }
+    cli_react(io, c, a, ints_get(c.pend, 1), vals, quiet)
+}
+
+fn cli_one(v: Str) -> Strs {
+    let s = strs_new()
+    strs_push(s, v)
+    s
+}
+
+// `did_you_mean_error`, for `--NAME` that matched nothing.
+fn cli_did_you_mean(io: IoCap, c: Cli, name: Str, trailing: Bool) -> Int {
+    let mut best = 0 - 1
+    let mut best_score = 0.0
+    for a in 0..ints_len(c.kind) {
+        let long = strs_get(c.long, a)
+        if long == "" { continue }
+        let score = cli_jaro(name, long)
+        // Ties go to the later candidate, as clap's sorted insertion and `pop` do.
+        if score > 0.7 && (best < 0 || score >= best_score) {
+            best = a
+            best_score = score
+        }
+    }
+    if best >= 0 { cli_start(c, best, true) }
+    let similar = if best >= 0 { "--" + strs_get(c.long, best) } else { "" }
+    cli_unknown(io, c, "--" + name, similar, best < 0 && !trailing && cli_has_positionals(c), cli_used(c, false))
+}
+
+// Read the command line into `c`; prints help or a usage error and exits instead when clap would.
+pub fn cli_parse(io: IoCap, c: Cli) -> Int {
+    let has_long = cli_long_help_exists(c)
+    let help_short = if has_long { "Print help (see more with '--help')" } else { "Print help" }
+    let help_long = if has_long { "Print help (see a summary with '-h')" } else { "" }
+    let help = cli_add(c, cli_k_help(), "h", "help", "", false, false, false, "", false, help_short, help_long)
+    ints_push(c.pend, 0 - 1)
+    ints_push(c.pend, 0)
+    let mut trailing = false
+    // 0: values done; 1: an option waits for its value; 2: a positional takes more.
+    let mut state = 0
+    let mut pos_counter = 1
+    for i in 0..args_count() {
+        let s = arg(i)
+        let n = str_len(s)
+        if !trailing {
+            if s == "--" {
+                trailing = true
+                continue
+            }
+            if n > 2 && cli_starts(s, "--") {
+                let body = str_slice(s, 2, n)
+                let mut eq = 0 - 1
+                for j in 0..str_len(body) {
+                    if eq < 0 && str_byte(body, j) == 61 { eq = j }
+                }
+                let name = if eq >= 0 { str_slice(body, 0, eq) } else { body }
+                let a = cli_find_long(c, name)
+                if a < 0 {
+                    cli_resolve(io, c, true)
+                    cli_did_you_mean(io, c, name, trailing)
+                }
+                if cli_takes_value(c, a) {
+                    if eq >= 0 {
+                        cli_react(io, c, a, cli_by_long(), cli_one(str_slice(body, eq + 1, str_len(body))), false)
+                        state = 0
+                    } else {
+                        cli_resolve(io, c, false)
+                        cli_start_pending(c, a, cli_by_long())
+                        state = 1
+                    }
+                    continue
+                }
+                if eq >= 0 {
+                    let used = cli_used(c, true)
+                    ints_push(used, a)
+                    cli_resolve(io, c, true)
+                    cli_fail_usage(io, c, "unexpected value '" + str_slice(body, eq + 1, str_len(body)) + "' for '" + cli_display(c, a)
+                            + "' found; no more were expected", used)
+                }
+                cli_react(io, c, a, cli_by_long(), strs_new(), false)
+                state = 0
+                continue
+            }
+            if n > 1 && str_byte(s, 0) == 45 && str_byte(s, 1) != 45 {
+                let mut j = 1
+                let mut done = false
+                while j < n && !done {
+                    let w = cli_char_len(s, j)
+                    let ch = str_slice(s, j, j + w)
+                    j += w
+                    let a = cli_find_short(c, ch)
+                    if a < 0 {
+                        cli_resolve(io, c, true)
+                        cli_unknown(io, c, "-" + ch, "", !trailing && cli_has_positionals(c), ints_new())
+                    }
+                    if !cli_takes_value(c, a) {
+                        cli_react(io, c, a, cli_by_short(), strs_new(), false)
+                        state = 0
+                        continue
+                    }
+                    let mut rest = str_slice(s, j, n)
+                    if cli_starts(rest, "=") { rest = str_slice(rest, 1, str_len(rest)) }
+                    if j < n {
+                        cli_react(io, c, a, cli_by_short(), cli_one(rest), false)
+                        state = 0
+                    } else {
+                        cli_resolve(io, c, false)
+                        cli_start_pending(c, a, cli_by_short())
+                        state = 1
+                    }
+                    done = true
+                }
+                continue
+            }
+            if state == 1 {
+                strs_push(c.pend_vals, s)
+                state = 0
+                continue
+            }
+        }
+        let a = cli_positional_at(c, pos_counter)
+        if a < 0 {
+            cli_resolve(io, c, true)
+            let looks = (n > 2 && cli_starts(s, "--")) || (n > 1 && str_byte(s, 0) == 45 && str_byte(s, 1) != 45)
+            cli_unknown(io, c, s, "", !trailing && cli_has_positionals(c) && looks, ints_new())
+        }
+        if cli_pending(c) != a || !cli_is_multiple(c, a) {
+            cli_resolve(io, c, false)
+            cli_start_pending(c, a, cli_by_index())
+        }
+        strs_push(c.pend_vals, s)
+        if cli_is_multiple(c, a) { state = 2 } else {
+            pos_counter += 1
+            state = 0
+        }
+    }
+    cli_resolve(io, c, false)
+    // `add_defaults`.
+    for a in 0..ints_len(c.kind) {
+        if ints_get(c.has_default, a) == 1 && ints_get(c.explicit, a) == 0 {
+            cli_start(c, a, false)
+            ints_push(c.val_arg, a)
+            strs_push(c.val_text, strs_get(c.default, a))
+        }
+    }
+    // `validate_required`.
+    let missing = ints_new()
+    for a in 0..ints_len(c.kind) {
+        if cli_is_required(c, a) && ints_get(c.explicit, a) == 0 { ints_push(missing, a) }
+    }
+    if ints_len(missing) > 0 {
+        let lines = strs_new()
+        for i in 0..ints_len(missing) {
+            let a = ints_get(missing, i)
+            if !cli_is_pos(c, a) { strs_push(lines, cli_stylized(c, a, true)) }
+        }
+        for i in 0..ints_len(missing) {
+            let a = ints_get(missing, i)
+            if cli_is_pos(c, a) { strs_push(lines, cli_stylized(c, a, true)) }
+        }
+        let used = cli_used(c, false)
+        for i in 0..ints_len(missing) { ints_push(used, ints_get(missing, i)) }
+        let mut text = "the following required arguments were not provided:"
+        for i in 0..strs_len(lines) { text = text + cli_nl() + "  " + strs_get(lines, i) }
+        cli_fail_usage(io, c, text, used)
+    }
+    help
+}

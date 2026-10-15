@@ -12,7 +12,9 @@
       statuses, reading as `read_to_string` (D4)
 - [x] 2.3 Lexing diagnostics rendered as `Diagnostic::render` (D3)
 - [x] 2.4 Every input agrees: 2,984 of 2,984 (2026-10-15), the batch run and the missing file too
-- [ ] 2.5 clap's usage errors and `--help` for `fmt` (with the command-line grammar, 11.1)
+- [x] 2.5 clap's usage errors and `--help` for `fmt`: the shared parser (`toolchain/commands/cli.nz`,
+      design D8); a directory named as a file is `cannot read` (D4); every command line of
+      `tests/args/fmt.txt` agrees (2026-10-15)
 - [ ] 2.6 Future: drop a statement's `;` once the repository's sources may use the new syntax
       (design, *Future work*) — in both formatters together
 
@@ -43,6 +45,8 @@
 
 ## 11. The rest
 - [ ] 11.1 The command-line grammar: one `nazm` dispatching to every command, `--help`, `-V`, usage
-      errors
+      errors (each command's own arguments, usage errors and help are `cli.nz`'s since 2.5; what is
+      left is the top level and what `cli.nz` does not carry yet: subcommands, aliases, possible
+      values, groups, conflicts)
 - [ ] 11.2 `bindgen`, `contract`, `accel`, `bench`, `profile`, `explain-cost`, `explain-flow`,
       `obligations`, `trace`, `reload-check`, `repl`, `comptime`, `capabilities`

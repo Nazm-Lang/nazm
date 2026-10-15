@@ -20,8 +20,9 @@ code generator (R3, R4, R9), which the commands that build or run programs will 
 ## Decisions
 
 **D1 — One program per command, then one dispatcher.** `toolchain/commands/<command>.nz` is a
-program taking the command's own arguments (`fmt [--check] FILE...`, as after `nazm fmt`). The
-command-line grammar — one `nazm` binary with `--help`, `-V` and clap's usage errors — is the last
+program taking the command's own arguments (`fmt [--check] FILE...`, as after `nazm fmt`), read by
+the shared parser (D8), which prints `nazm <command>` in its usage and help as the reference does.
+The one `nazm` binary dispatching to them, with the top level's own `--help` and `-V`, is the last
 item (proposal, 10); until then the comparison calls the Rust `nazm fmt …` and the Nazm `fmt …`.
 
 **D2 — `fmt` is a port of `nazm_syntax::format` over `compiler/lex.nz`'s tokens.** The reference
@@ -43,16 +44,17 @@ listing of changed files. `fmt` renders `compiler/diag.nz`'s records the same wa
 with line and column (characters, not bytes), the source line, the caret clamped to it, secondary
 labels, help, and each fix as `fix:` or `suggestion:` with its precondition.
 
-**D4 — Reading a file is the reference's `read_to_string`.** A missing file, or one that is not
-UTF-8, is `nazm: cannot read PATH` and exit 3, at once, after any earlier file was already
-written. `fmt` validates UTF-8 itself (no overlong forms, no surrogates, nothing past U+10FFFF),
-since `read_file` returns any bytes.
+**D4 — Reading a file is the reference's `read_to_string`.** A missing file, one that does not
+open, a directory (whose read fails with `IsADirectory`), or a file that is not UTF-8 is
+`nazm: cannot read PATH` and exit 3, at once, after any earlier file was already written. `fmt`
+asks `os_stat` and `os_open_read` first, since `read_file` traps (`N0407`) where `read_to_string`
+returns an error, and validates UTF-8 itself (no overlong forms, no surrogates, nothing past
+U+10FFFF), since `read_file` returns any bytes.
 
-**D5 — What is not carried refuses with exit status 6.** An option other than `--check`, or no
-file at all, is a usage error clap words and `nazm` exits 5 for; `fmt` does not reproduce clap's text
-yet, so it says `fmt: not carried: …` and exits 6. A directory named as a file is not detected
-(`read_file` fails at run time with `N0407`, where the reference says `cannot read`); the
-comparison has none. Every other path of `crates/nazm-cli/src/fmt.rs` is ported.
+**D5 — What is not carried refuses with exit status 6.** A command meeting what its port does not
+carry says `CMD: not carried: …` on standard error and exits 6 — never an output the reference
+would not give — and the comparison counts it apart. Since the shared parser (D8), `fmt` carries
+every path of `crates/nazm-cli/src/fmt.rs`, so it refuses nothing today.
 
 **D6 — The comparison (`toolchain/commands/tests/run.sh`).** The reference is `nazm` built from
 the same checkout (`CARGO_TARGET_DIR=$HOME/.cache/nazm-target-track5`, `-j 4`; `NAZM_REF` to name
@@ -67,9 +69,30 @@ rewritten. One summary line: `fmt: N agree, M differ, R refused (of T inputs); b
 
 **D7 — The comparisons of later commands** follow D6: a temporary copy per input, both sides' whole
 observable behaviour recorded and compared, refusals counted apart. `check` compares text and
-`--json`; `doc` its `nazm.api-doc/2` line and `-o` files; `init` the tree written; `test` and the
-commands that build or run programs compare after R3/R4/R9 are integrated; `lsp` and the MCP server
-by a scripted session of requests and the responses, byte for byte.
+`--json`; `doc` its `nazm.api-doc/2` line and `-o` files; `init` the tree written; `test` and
+the commands that build or run programs compare after R3/R4/R9 are integrated; `lsp` and the MCP
+server by a scripted session of requests and the responses, byte for byte. Every ported command's
+command lines are compared too (D8): `run.sh`'s `args` part runs each line of
+`tests/args/CMD.txt` on both sides in the same fixture directory — the output, the error, the status
+and every file left afterwards — and prints `args: N agree, M differ, R refused (of T command
+lines)`.
+
+**D8 — The command line is clap's, ported once (`toolchain/commands/cli.nz`).** The reference reads
+its arguments with clap 4.6 (`crates/nazm-cli/src/cli.rs`, derive), and a usage error or `--help`
+is part of what a command prints. `cli.nz` ports the part of `clap_builder` the commands use: the
+parser (long options with and without `=`, short clusters with attached values, `--`, values pending
+until the next argument and resolved as clap resolves them — including the errors clap drops with
+`let _ =` — and `PathBuf`'s refusal of an empty value); the validator's required arguments; the
+usage strings, plain for help and "smart" — the arguments used — for errors; the error messages
+with their tips, the similar long option chosen by `strsim::jaro` above 0.7 computed in `Float64` as
+the reference does; and the help template, short and long (`-h` and `--help` differ only when some
+help text has a long form), aligned as clap aligns it at the 100 columns it assumes without a
+terminal, unwrapped (the reference is built without `wrap_help`). Help is standard output and status
+0, an error standard error and status 5 (`exit::USAGE`; `main.rs`, `parse_cli`). A command declares
+its arguments in `cli.rs`'s order with the text clap derives from their doc comments — the first
+paragraph, its final period dropped, as `about`, and the whole as `long_about` when there is more
+than one paragraph. Subcommands, aliases, possible values, groups, conflicts, environment variables,
+other `num_args` and hyphen values are not carried yet: no command ported so far declares them.
 
 ## Risks / Trade-offs
 
