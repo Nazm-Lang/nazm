@@ -1,0 +1,7 @@
+// Constant tables a module exports (L8).
+pub struct Entry { key: Str, value: Int, }
+pub enum Shade { Dark, Light(level: UInt8), }
+pub const ENTRIES: [Entry; 2] = [Entry(key: "a", value: 1), Entry(key: "b", value: 2)];
+pub const PAIR: (Int, Str) = (7, "seven");
+pub const PALE: Shade = Shade.Light(level: 200);
+const HIDDEN: Entry = Entry(key: "h", value: 0);

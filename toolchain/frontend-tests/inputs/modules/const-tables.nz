@@ -1,0 +1,17 @@
+// Constant tables across modules (L8): exported ones used plainly and under a name, a private one
+// not, and one built from another's.
+use "lib/tables.nz";
+use "lib/tables.nz" as t;
+
+const MINE: [Entry; 2] = ENTRIES;
+const ALSO: [Entry; 2] = t::ENTRIES;
+const BOTH: ((Int, Str), Shade) = (PAIR, t::PALE);
+const WRONG: (Int, Str) = PALE;
+const SECRET: Entry = HIDDEN;
+const N: Int = PAIR;
+
+fn main() -> Int {
+    let e = MINE[1];
+    let n = match BOTH.1 { Shade.Light(level: l) => Int(l), Shade.Dark => 0, };
+    e.value + ALSO[0].value + BOTH.0.0 + n + t::PAIR.0
+}
