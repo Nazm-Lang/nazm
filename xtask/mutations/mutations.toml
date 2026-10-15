@@ -19683,6 +19683,26 @@ find = "            while i < m && str_byte(s, i) != first { i = i + 1; }"
 replace = "            while i + 1 < m && str_byte(s, i) != first { i = i + 1; }"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
 
+# --- Performance leadership: the standard library's speed ---------------------------------------
+
+[[mutation]]
+name = "pl-lib-a-probe-never-finds-entry-zero"
+why = "the probe tests a used slot first and takes the first entry's position, 0, for an unused slot, so the first key put in a map is never found again"
+file = "library/std/hashmap.nz"
+find = '''        if e >= 0 {
+            if vec_get(m.hashes, e) == h'''
+replace = '''        if e > 0 {
+            if vec_get(m.hashes, e) == h'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "speed_text::the_hash_map_agrees_with_a_model_of_itself" }]
+
+[[mutation]]
+name = "pl-lib-a-split-matches-a-separator-by-its-first-byte"
+why = "a separator of several bytes is matched where only its first byte is, so a loop over `\"a-b--c-\".split(\"--\")` cuts at the lone `-`"
+file = "library/std/text.nz"
+find = "                    while j < n && str_byte(s, i + j) == str_byte(sep, j) { j = j + 1; }"
+replace = "                    j = n;"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_a_split_reads_its_pieces_without_a_list_everywhere" }]
+
 # --- Performance leadership 4.2: failures by unwinding ------------------------------------------
 
 [[mutation]]
