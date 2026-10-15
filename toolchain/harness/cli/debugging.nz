@@ -1,0 +1,320 @@
+// N48: debugging, inspection and profiling surfaces. What a build with `--debug` carries and a
+// debugger reads — checked with `lldb` where it is installed, statically, so no process is launched
+// under a debugger; `--debug` changes nothing a program does and nothing an ordinary build writes;
+// `nazm inspect` is one deterministic document of the program's facts; `--timings` accounts for
+// every phase. Ported from `crates/nazm-cli/tests/debugging.rs` (R7).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/jsonq.nz"
+use "../lib/host.nz"
+use "../lib/differential.nz"
+
+const PROG: Str = "fn compute(n: Int) -> Int {\n    let a = n * 2;\n    let b = a + 1;\n    b\n}\nfn main() -> Int {\n    compute(20)\n}\n";
+
+fn exe(h: Caps, path: Str) -> Ran ! { io, spawn } {
+    bounded_exe(h, path, "", suite_env(h))
+}
+
+fn is_dir(h: Caps, path: Str) -> Bool ! { io } {
+    match file_metadata(h.io, path) {
+        Result.Ok(value: m) => match m.kind {
+            FileKind.Directory() => true,
+            _ => false,
+        },
+        Result.Err(error: e) => false,
+    }
+}
+
+/// Every instruction of a function with a subprogram has a location — except its prologue (N58):
+/// the slots and the stores into them carry none, and the entry block's branch takes the first
+/// statement's.
+fn every_instruction_located(ir: Str) -> Result[Int, Str] ! {} {
+    let mut inside = false;
+    let mut prologue = false;
+    for line in text_lines(ir) {
+        if text_starts_with(line, "define ") {
+            inside = text_contains(line, "!dbg");
+            prologue = inside;
+        } else {
+            if line == "}" {
+                inside = false;
+            } else {
+                let lead = trim_start_ws(line);
+                let is_instruction = text_starts_with(line, "  ") && !text_starts_with(line, "    ") && !text_starts_with(lead, ";") && !text_ends_with(trim_end_ws(line), "[");
+                if inside && is_instruction {
+                    // An `invoke` is a call (4.2).
+                    let call = text_contains(line, " call ") || text_starts_with(lead, "call ") || text_contains(line, " invoke ") || text_starts_with(lead, "invoke ");
+                    if prologue && text_starts_with(lead, "br ") {
+                        check_that(text_contains(line, "!dbg"), f"the entry branch has no location: {line}")?;
+                        prologue = false;
+                    } else {
+                        if prologue && !call {
+                            check_that(!text_contains(line, "!dbg"), f"a prologue instruction with a line: {line}")?;
+                        } else {
+                            check_that(text_contains(line, "!dbg"), f"an instruction without a location: {line}")?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ok()
+}
+
+@test
+fn a_debug_build_runs_as_an_ordinary_one_and_an_ordinary_one_carries_no_debug_information(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROG)?;
+    let plain = nazm(h, d, words("build --no-cache --emit-ir prog.nz -o plain"));
+    check_that(plain.code == 0, plain.stderr)?;
+    let debug = nazm(h, d, words("build --no-cache --debug --emit-ir prog.nz -o debug"));
+    check_that(debug.code == 0, debug.stderr)?;
+    let a = exe(h, f"{d}/plain");
+    let b = exe(h, f"{d}/debug");
+    check_that(a.code == b.code && a.stdout == b.stdout, f"{ran_show(a)} / {ran_show(b)}")?;
+    check_that(a.stdout == "41\n", ran_show(a))?;
+    let plain_ir = read_text(h, f"{d}/plain.m0.ll")?;
+    let debug_ir = read_text(h, f"{d}/debug.m0.ll")?;
+    check_that(!text_contains(plain_ir, "!dbg") && !text_contains(plain_ir, "nz.loc"), "an ordinary build carries debug information")?;
+    for want in text_split("DISubprogram(name: \"compute\"|DISubprogram(name: \"main\"|DILocation(line: 3, column:|emissionKind: FullDebug", "|") {
+        check_that(text_contains(debug_ir, want), want)?;
+    }
+    every_instruction_located(debug_ir)?;
+    let mac = on_macos(h);
+    if mac {
+        check_that(is_dir(h, f"{d}/debug.dSYM"), "no .dSYM beside the executable")?;
+    }
+    // Cranelift writes debug information too since N91, and its debug build behaves as an
+    // ordinary one.
+    let c = nazm(h, d, words("build --no-cache --debug --backend cranelift prog.nz -o c"));
+    check_that(c.code == 0, c.stderr)?;
+    let r = exe(h, f"{d}/c");
+    check_that(r.code == a.code && r.stdout == a.stdout, ran_show(r))?;
+    if mac {
+        check_that(is_dir(h, f"{d}/c.dSYM"), "no .dSYM beside the executable")?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// Off macOS the Rust test is ignored, and this one passes without looking.
+@test
+fn a_debugger_finds_nazm_functions_and_lines(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    if !on_macos(h) {
+        return ok();
+    }
+    let runs = run(h, "lldb", words("--version"), "", env_here(h.io)).code == 0;
+    if skip_without(h, runs, "no lldb that runs on this machine")? {
+        return ok();
+    }
+    let d = prog_dir(h, "prog.nz", PROG)?;
+    let b = nazm(h, d, words("build --debug prog.nz -o prog"));
+    check_that(b.code == 0, b.stderr)?;
+    // Static queries only: resolving a breakpoint reads the debug information and launches nothing.
+    let a = words("--batch");
+    for q in text_split("breakpoint set -n compute|breakpoint set -f prog.nz -l 3|image lookup -n compute -v", "|") {
+        strs_push(a, "-o");
+        strs_push(a, q);
+    }
+    strs_push(a, "./prog");
+    let text = run(h, "lldb", a, d, env_here(h.io)).stdout;
+    scratch_remove(h, d);
+    check_that(text_contains(text, "compute") && text_contains(text, "at prog.nz:1"), text)?;
+    check_that(text_contains(text, "at prog.nz:3:"), f"a breakpoint by line resolves to that line: {text}")?;
+    check_that(text_contains(text, "CompileUnit") && text_contains(text, "prog.nz"), text)
+}
+
+@test
+fn inspect_is_one_deterministic_document_of_the_program_s_facts(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROG)?;
+    let a = nazm(h, d, words("inspect prog.nz"));
+    check_that(a.code == 0, a.stderr)?;
+    let b = nazm(h, d, words("inspect prog.nz"));
+    let one = nazm(h, d, words("inspect --def compute prog.nz"));
+    scratch_remove(h, d);
+    check_that(a.stdout == b.stdout, "the same bytes every time")?;
+    let doc = jparse(text_trim(a.stdout))?;
+    check_that(jstr(doc, "schema") == "nazm.inspect/2", "schema")?;
+    check_that(jv(doc, "mir/validated") == "true", "mir/validated")?;
+    for key in words("compiler semantic_epoch interface runtime_abi cranelift target") {
+        let n = jq(doc, f"toolchain/{key}");
+        check_that(n >= 0 && json_kind(doc, n) != "null", key)?;
+    }
+    let mut compute = "";
+    let mut i = 0;
+    while i < jlen(doc, "definitions") {
+        if jstr(doc, f"definitions/{i}/identity") == "prog.nz::fn compute" {
+            compute = f"definitions/{i}";
+        }
+        i = i + 1;
+    }
+    check_that(compute != "", "no compute")?;
+    check_that(jis(doc, f"{compute}/params", "[\"Int\"]"), jv(doc, compute))?;
+    check_that(jis(doc, f"{compute}/effects/required", "[]"), jv(doc, compute))?;
+    check_that(str_len(jstr(doc, f"{compute}/native/0/digest")) == 64, jv(doc, compute))?;
+    check_that(!text_contains(a.stdout, d), "no absolute path")?;
+    // One definition, by name.
+    let o = jparse(text_trim(one.stdout))?;
+    check_that(jlen(o, "definitions") == 1, one.stdout)
+}
+
+@test
+fn timings_account_for_every_phase(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = prog_dir(h, "prog.nz", PROG)?;
+    for backend in words("llvm cranelift") {
+        let o = nazm(h, d, words(f"build --no-cache --timings --backend {backend} prog.nz -o t"));
+        check_that(o.code == 0, o.stderr)?;
+        let mut line = "";
+        for l in text_lines(o.stderr) {
+            if line == "" && text_contains(l, "nazm.timings/1") {
+                line = l;
+            }
+        }
+        let tm = jparse(line)?;
+        let phases = strs_new();
+        let mut sum = 0.0;
+        let mut i = 0;
+        while i < jlen(tm, "phases") {
+            strs_push(phases, jstr(tm, f"phases/{i}/phase"));
+            sum = sum + match json_float(tm, jq(tm, f"phases/{i}/ms")) {
+                Option.Some(value: x) => x,
+                Option.None() => 0.0,
+            };
+            i = i + 1;
+        }
+        check_that(str_join(phases, " ") == "load front_end mir lir codegen native_compile link", f"{backend}: {str_join(phases, " ")}")?;
+        let total = match json_float(tm, jq(tm, "total_ms")) {
+            Option.Some(value: x) => x,
+            Option.None() => 0.0 - 1.0,
+        };
+        check_that(sum <= total + 0.01, line)?;
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+/// The line of the `!DILocation` the first instruction holding `op` and a location points at.
+fn line_of_op(ir: Str, op: Str) -> Result[Int, Str] ! {} {
+    let mut inst = "";
+    for l in text_lines(ir) {
+        if inst == "" && text_contains(l, op) && text_contains(l, "!dbg !") {
+            inst = l;
+        }
+    }
+    check_that(inst != "", f"no {op} with a location")?;
+    let id = text_trim(str_slice(inst, rfind(inst, "!dbg !") + 6, str_len(inst)));
+    line_of_id(ir, id)
+}
+
+/// The line `!ID = !DILocation(line: N, …)` names.
+fn line_of_id(ir: Str, id: Str) -> Result[Int, Str] ! {} {
+    let head = f"!{id} = !DILocation(line: ";
+    for l in text_lines(ir) {
+        if text_starts_with(l, head) {
+            let rest = str_slice(l, str_len(head), str_len(l));
+            return Result[Int, Str].Ok(value: parse_usize(strs_get(text_split(rest, ","), 0)));
+        }
+    }
+    Result[Int, Str].Err(error: f"no !{id}")
+}
+
+@test
+fn each_statement_carries_its_own_line_in_the_debug_information(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // What a debugger stops on, read without a debugger (N108): every statement's line is a
+    // location of its own, not the function's line repeated.
+    let d = prog_dir(h, "p.nz", "fn main() -> Int {\n    let a = 1;\n    let b = a + 2;\n    let c = b * 3;\n    c\n}\n")?;
+    let o = nazm(h, d, words("build --debug --emit-ir p.nz -o p"));
+    check_that(o.code == 0, o.stderr)?;
+    let ir = read_text(h, f"{d}/p.m0.ll")?;
+    scratch_remove(h, d);
+    check_that(line_of_op(ir, "llvm.sadd.with.overflow")? == 3, "a + 2")?;
+    check_that(line_of_op(ir, "llvm.smul.with.overflow")? == 4, "b * 3")
+}
+
+/// `function`'s body in a debug build's LLVM text of `src`, and the whole text.
+fn debug_ir_of(h: Caps, src: Str, function: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let d = prog_dir(h, "v.nz", src)?;
+    let o = nazm(h, d, words("build --debug --no-cache --emit-ir v.nz -o v"));
+    check_that(o.code == 0, o.stderr)?;
+    let ir = read_text(h, f"{d}/v.m0.ll")?;
+    scratch_remove(h, d);
+    let body = strs_new();
+    let mut started = false;
+    let mut done = false;
+    for l in text_lines(ir) {
+        if !started && text_starts_with(l, "define ") && text_contains(l, function) {
+            started = true;
+        }
+        if started && !done {
+            if l == "}" {
+                done = true;
+            } else {
+                strs_push(body, l);
+            }
+        }
+    }
+    strs_push(body, ir);
+    Result[Strs, Str].Ok(value: body)
+}
+
+// The live debugger test's program: the branch puts blocks between a statement and its
+// continuation in the printed text, which is what the position must survive.
+const GREET: Str = "fn greet(name: Str, times: Int, loud: Bool) -> Int {\n    let line = str_concat(\"hello \", name);\n    let n = str_len(line) * times;\n    if loud { n + 1 } else { n }\n}\nfn main() -> Int { greet(str_concat(\"wor\", \"ld\"), 2, true) }\n";
+
+@test
+fn the_prologue_carries_no_line_so_a_breakpoint_lands_after_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // N58's rule: the slots are zeroed before the first statement, by an `llvm.memset` since N105,
+    // and that call must carry no line.
+    let body = debug_ir_of(h, GREET, "greet")?;
+    let n = strs_len(body) - 1;
+    let mut zeroing = 0;
+    let mut i = 1;
+    let mut in_prologue = true;
+    while i < n && in_prologue {
+        let l = strs_get(body, i);
+        if text_starts_with(trim_start_ws(l), "br ") {
+            in_prologue = false;
+        } else {
+            if text_contains(l, "@llvm.memset") {
+                check_that(!text_contains(l, "!dbg"), f"the prologue's zeroing has a line: {l}")?;
+                zeroing = zeroing + 1;
+            }
+        }
+        i = i + 1;
+    }
+    check_that(zeroing > 0, "no zeroing in the prologue")
+}
+
+@test
+fn a_statements_continuation_keeps_the_statements_line(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A checked operation splits its statement across blocks, and the continuation is printed
+    // after unrelated ones; it must still say line 2 (`str_concat`'s copy) (N108).
+    let body = debug_ir_of(h, GREET, "greet")?;
+    let n = strs_len(body) - 1;
+    let ir = strs_get(body, n);
+    let mut copies = 0;
+    let mut i = 0;
+    while i < n {
+        let l = strs_get(body, i);
+        if text_contains(l, "@memcpy(") && text_contains(l, "!dbg !") {
+            let id = text_trim(str_slice(l, rfind(l, "!dbg !") + 6, str_len(l)));
+            let line = line_of_id(ir, id)?;
+            check_that(line == 2, f"a copy on line {line}: {l}")?;
+            copies = copies + 1;
+        }
+        i = i + 1;
+    }
+    check_that(copies > 0, "no copy with a location")
+}
