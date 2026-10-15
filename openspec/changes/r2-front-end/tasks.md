@@ -155,6 +155,13 @@
       type (N0622), exported (N0101) or assigned (N0625), and never among a module's exports.
       `inputs/check/statics.nz`, `inputs/modules/statics-across.nz`. `run.sh check`: 2,619
       agree, 172 differ; the checker carries 2,412, all agree
+- [ ] 3.1u Tuples (L5, `tuple_of`): the generic record of each arity, `(,)` with fields `0`, `1`, …,
+      made the first time it is asked for — written `(A, B)`, built `(a, b)` against the tuple
+      expected, read and assigned by `.0`, shown `(A, B)`, inferred through generic calls, compared
+      element by element; tuple patterns and their exhaustiveness (the one constructor, the witness
+      `(…)`). A field run is written once all its types are resolved, since resolving one may make a
+      tuple's record. `inputs/check/tuples.nz`. `run.sh check`: 2,654 agree, 139 differ; the checker
+      carries 2,497, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
