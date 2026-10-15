@@ -145,13 +145,16 @@ What 6.3.5 found, and decided:
   then its bits), an integer of any kind as its class's two's complement (decimal arithmetic
   past 64 bits), FNV-1a of a variant's name for an enum's hash (`UInt64` wrapping), and the
   powers of two `float_fits` compares with.
-- **A generic channel's helper** (`nz.h.vel.chan.N`) is named by the checker's channel id.
-  Core IR does not carry it, and it is not a function of the type: `Chan[Int]` is `chan.0` in
+- **A generic channel's helper** was named by the checker's channel id (`nz.h.vel.chan.N`).
+  Core IR does not carry it, and it is not a function of the type: `Chan[Int]` was `chan.0` in
   `select-004` and `chan.6` in `select-001` (the built-ins' `Chan[T]`s are interned first, in a
-  session-dependent order). Such a unit stops, named (19 front-end and example inputs). Asked
-  of the coordinator, one of: Core IR gives each `Chan[T]` type its id; or — better, since a
-  helper's symbol should be durable as a `Vec`'s is — LIR names it by the element's key
-  (`chan.KEY`, as `vec.KEY`), a change to `crates/nazm-lir` (`Lw::type_name`).
+  session-dependent order). Decided by the coordinator (6.3.6): LIR names it by its element's
+  key, as a `Vec`'s is (`chan.KEY`, `KEY` encoded as `vec.KEY`'s: `nz.h.vel.chan.Int`), a
+  change to `crates/nazm-lir` (`Lw::type_name`, from MIR's `Types::chans[id].elem_key`). The
+  symbol is now durable across sessions. No revision moves: an object's key is its unit's LIR
+  digest (§7.106), which covers the symbol's text, and the `nazm.lir/2` document's shape is
+  unchanged; no mutant's `find` text named the old line. Held by `lir::a_generic_channels_helper_is_named_by_its_element`
+  (`crates/nazm-cli/tests/lir.rs`) and its mutant `r3-a-generic-channel-s-helper-named-by-the-checker-s-id`, caught.
 
 ## Order of work
 
