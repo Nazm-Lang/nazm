@@ -1,0 +1,8 @@
+use "@std/hashmap"
+fn f(t: TimeCap) {
+    os_open_write()
+    os_stdin()
+}
+fn main() {
+    let (x, ok) = (1, 2)
+}

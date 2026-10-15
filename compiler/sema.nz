@@ -11461,8 +11461,10 @@ fn w_bind(c: Ck, pf: Pf, w: Wk, bloc: Ints, p: Int, v: Int) -> Int {
         return 0;
     }
     if k == "Or" || k == "Tuple" {
-        let mut alts = kids(c, p, "alts");
-        if k == "Tuple" { alts = kids(c, p, "elems"); }
+        // A tuple pattern's are its `elems`: it has no `alts` to read.
+        let mut field = "alts";
+        if k == "Tuple" { field = "elems"; }
+        let alts = kids(c, p, field);
         let mut i = 0;
         while i < ints_len(alts) {
             w_bind(c, pf, w, bloc, ints_get(alts, i), v);

@@ -257,6 +257,15 @@
       flows read through the `Bytes` cell. `inputs/check/map-literals.nz`,
       `inputs/check/bytes-flows.nz`. `run.sh check`: 2,813 agree, 2 differ; the checker carries
       2,807, all agree (2,815 and 2,809 with the new cases)
+- [ ] 3.1zg A trap fixed (found by R5 on `toolchain/interp`): provenance's walk read a tuple
+      pattern's `alts`, which only an or-pattern has (`w_bind`), and trapped on the missing field
+      wherever a compilation both reads a restricted origin and writes to a path. A root module
+      that is not UTF-8 is refused by the loader as the reference refuses it (N0205, "stream did
+      not contain valid UTF-8"). Every Nazm source under `toolchain/` is now an input of every
+      comparison, so the other tracks' programs keep the checker honest; the lexer and parser
+      comparisons skip a file that is not UTF-8 (the reference lexes text) and say so.
+      `inputs/check/trap-tuple-let.nz`. `run.sh check`: 2,958 agree, 2 differ; the checker
+      carries 2,952, all agree (tokens, tree, syntax: 2,959 agree, 0 differ, 1 skipped)
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
