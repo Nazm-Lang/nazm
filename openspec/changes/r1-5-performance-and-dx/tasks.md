@@ -29,6 +29,12 @@
       written, `fn add(a: Int, b: Int) = a + b` (inferred; a `pub` function still writes its type)
       — 2026-10-15 (D2): parser, checker (`check/infer.rs`), `N0634`, spec *Shorter forms*, epoch 77
 
+## 4b. Found writing the multicore benchmark (2026-10-15)
+- [ ] 4.5 `@std/option` and `@std/result` join D9's prelude modules, so `r.unwrap_or(1)` needs no
+      `use` (`result_unwrap_or` exists; the method was refused for want of the import)
+- [ ] 4.6 A line break separates `match` arms as it separates statements (5b.19): today an arm
+      without its `,` before the next on a new line is a syntax error (`N0100`)
+
 ## 6. Syntax: short and conventional (the copyright holder's choices, 2026-10-14)
 - [x] 6.1 Result types written with `:` like parameters — `fn fib(n: Int): Int`, function types
       `fn(Int): Int`; `->` still read, removed at 1.0; `nazm fmt` keeps the form written until R2
