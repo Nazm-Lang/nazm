@@ -67,6 +67,11 @@ pub struct Ck {
     fty: Ints,
     fns: Ints,
     fne: Ints,
+    fts: Ints,
+    fte: Ints,
+    // Whether each record and enum is `pub`.
+    rpub: Ints,
+    epub: Ints,
     // Functions: name, module, name span, tree node, parameter types (a run of `ptys`), result,
     // whether it returns nothing.
     fnname: Strs,
@@ -78,6 +83,20 @@ pub struct Ck {
     fnpc: Ints,
     fnret: Ints,
     fnnores: Ints,
+    // Each function's declared effect set, as a mask (`io` 1, `spawn` 2, `foreign` 4), or -1 for
+    // none written (or one with a word that is no effect); where it is written, or -1.
+    fneff: Ints,
+    fnws: Ints,
+    fnwe: Ints,
+    // Call sites, in the order the bodies are checked: the calling function, the callee's span,
+    // the built-in (or -1) or the module's function (or -1) it reached, and the authority the
+    // bindings in scope there held, as a mask over `CapabilityKind::ALL`.
+    sfn: Ints,
+    sstart: Ints,
+    send: Ints,
+    sbuiltin: Ints,
+    suser: Ints,
+    sheld: Ints,
     ptys: Ints,
     // The built-ins (`builtins.nz`): name, parameter types (a run of `ptys`), result, whether
     // each is carried, whether a module's function of its name hides it, effect, authority.
@@ -89,6 +108,8 @@ pub struct Ck {
     bprelude: Ints,
     beff: Strs,
     bcaps: Strs,
+    // Whether an argument of it is the restricted sink, a path written to (N38).
+    bpath: Ints,
     // The type names the module being checked may write, and what each names.
     tnames: Strs,
     ttys: Ints,
@@ -108,7 +129,9 @@ fn s_loop() -> Int { 3 }
 fn s_discard() -> Int { 4 }
 fn s_unwanted() -> Int { 5 }
 fn s_module() -> Int { 6 }
-fn s_slots() -> Int { 7 }
+// The function whose body is being checked, or -1.
+fn s_fn() -> Int { 7 }
+fn s_slots() -> Int { 8 }
 
 fn gs(c: Ck, slot: Int) -> Int { ints_get(c.st, slot) }
 fn ss(c: Ck, slot: Int, v: Int) -> Int { ints_set(c.st, slot, v); 0 }
@@ -574,10 +597,11 @@ fn new_ck(t: Tree) -> Ck {
             rnp: ints_new(), rff: ints_new(), rfc: ints_new(), ename: strs_new(), emod: ints_new(), ens: ints_new(),
             ene: ints_new(), enp: ints_new(), evf: ints_new(), evc: ints_new(), vname: strs_new(), vns: ints_new(),
             vne: ints_new(), vff: ints_new(), vfc: ints_new(), fname: strs_new(), fty: ints_new(), fns: ints_new(),
-            fne: ints_new(), fnname: strs_new(), fnmod: ints_new(), fnns: ints_new(), fnne: ints_new(), fnnode: ints_new(),
-            fnpf: ints_new(), fnpc: ints_new(), fnret: ints_new(), fnnores: ints_new(), ptys: ints_new(), bname: strs_new(),
+            fne: ints_new(), fts: ints_new(), fte: ints_new(), rpub: ints_new(), epub: ints_new(), fnname: strs_new(), fnmod: ints_new(), fnns: ints_new(), fnne: ints_new(), fnnode: ints_new(),
+            fnpf: ints_new(), fnpc: ints_new(), fnret: ints_new(), fnnores: ints_new(), fneff: ints_new(), fnws: ints_new(), fnwe: ints_new(), sfn: ints_new(), sstart: ints_new(),
+            send: ints_new(), sbuiltin: ints_new(), suser: ints_new(), sheld: ints_new(), ptys: ints_new(), bname: strs_new(),
             bpf: ints_new(), bpc: ints_new(), bret: ints_new(), bok: ints_new(), bprelude: ints_new(), beff: strs_new(),
-            bcaps: strs_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
+            bcaps: strs_new(), bpath: ints_new(), tnames: strs_new(), ttys: ints_new(), sname: strs_new(), sty: ints_new(), smut: ints_new(),
             sds: ints_new(), sde: ints_new(), frames: ints_new());
     let mut i = 0;
     while i < s_slots() {
@@ -624,6 +648,7 @@ fn load_builtins(c: Ck) -> Int {
         ints_push(c.bprelude, parse_int(strs_get(cols, 5)));
         strs_push(c.beff, strs_get(cols, 6));
         strs_push(c.bcaps, strs_get(cols, 7));
+        if str_has(strs_get(cols, 8), ":path") { ints_push(c.bpath, 1); } else { ints_push(c.bpath, 0); }
         i = i + 1;
     }
     0
@@ -688,6 +713,7 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs) -> Ck {
     declare_functions(c, 1);
     // Stage 2: the bodies.
     check_unit(c, 0);
+    analyse_effects(c, 0);
     // The rules about `main`.
     main_rules(c);
     c
@@ -706,7 +732,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         let r = ints_get(records, i);
         if ints_len(kids(c, r, "attrs")) > 0 { stop(c, "an attribute"); }
         if ints_len(kids(c, r, "type_params")) > 0 { stop(c, "a generic record"); }
-        if some(c, r, "pub_span") { stop(c, "a `pub` item"); }
         if some(c, r, "foreign") { stop(c, "a foreign record"); }
         let n = fname_of(c, r, "name");
         if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
@@ -724,7 +749,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         let e = ints_get(enums, i);
         if ints_len(kids(c, e, "attrs")) > 0 { stop(c, "an attribute"); }
         if ints_len(kids(c, e, "type_params")) > 0 { stop(c, "a generic enum"); }
-        if some(c, e, "pub_span") { stop(c, "a `pub` item"); }
         let n = fname_of(c, e, "name");
         if n == "Option" || n == "Result" { stop(c, "a type named as the prelude's"); }
         let variants = kids(c, e, "variants");
@@ -750,8 +774,7 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
         if ints_len(kids(c, f, "type_params")) > 0 { stop(c, "a generic function"); }
         if ints_len(kids(c, f, "effect_params")) > 0 { stop(c, "an effect parameter"); }
         if ints_len(kids(c, f, "contracts")) > 0 { stop(c, "a contract"); }
-        if some(c, f, "pub_span") { stop(c, "a `pub` item"); }
-        if some(c, f, "effects") { stop(c, "an effect set"); }
+
         if some(c, f, "foreign") { stop(c, "a foreign function"); }
         if some(c, f, "export") { stop(c, "an export"); }
         if some(c, f, "method_of") { stop(c, "a method"); }
@@ -781,6 +804,7 @@ fn declare_types(c: Ck, m: Int) -> Int {
             ints_push(c.rnp, ints_len(kids(c, r, "type_params")));
             ints_push(c.rff, 0);
             ints_push(c.rfc, 0);
+            if some(c, r, "pub_span") { ints_push(c.rpub, 1); } else { ints_push(c.rpub, 0); }
         }
         i = i + 1;
     }
@@ -798,6 +822,7 @@ fn declare_types(c: Ck, m: Int) -> Int {
             ints_push(c.enp, ints_len(kids(c, e, "type_params")));
             ints_push(c.evf, 0);
             ints_push(c.evc, 0);
+            if some(c, e, "pub_span") { ints_push(c.epub, 1); } else { ints_push(c.epub, 0); }
         }
         i = i + 1;
     }
@@ -1119,6 +1144,9 @@ fn resolve_fields(c: Ck, owner: Str, written: Ints, pn: Strs, pt: Ints) -> Int {
             ints_push(c.fty, ty);
             ints_push(c.fns, sps(c, ns));
             ints_push(c.fne, spe(c, ns));
+            let ts = fld(c, fld(c, f, "ty"), "span");
+            ints_push(c.fts, sps(c, ts));
+            ints_push(c.fte, spe(c, ts));
         }
         i = i + 1;
     }
@@ -1192,6 +1220,15 @@ fn declare_functions(c: Ck, m: Int) -> Int {
         }
         let rt = fld(c, f, "return_type");
         let ret = resolve_written(c, rt, strs_new(), ints_new(), c.d);
+        let mut eff = 0 - 1;
+        let mut ws = 0 - 1;
+        let mut we = 0 - 1;
+        if some(c, f, "effects") {
+            let decl = unwrap(c, f, "effects");
+            eff = declared_effects(c, decl);
+            ws = sps(c, fld(c, decl, "span"));
+            we = spe(c, fld(c, decl, "span"));
+        }
         let b = builtin_index(c, name);
         let mut refused = false;
         if b >= 0 {
@@ -1215,11 +1252,96 @@ fn declare_functions(c: Ck, m: Int) -> Int {
                 ints_push(c.fnpf, pf);
                 ints_push(c.fnpc, ints_len(params));
                 ints_push(c.fnret, ret);
+                ints_push(c.fneff, eff);
+                ints_push(c.fnws, ws);
+                ints_push(c.fnwe, we);
                 let rts = fld(c, rt, "span");
                 if sx_s(c.t, rts) == sx_e(c.t, rts) { ints_push(c.fnnores, 1); } else { ints_push(c.fnnores, 0); }
+                if some(c, f, "pub_span") {
+                    // A public signature naming a private type (`report_private_type`).
+                    k = 0;
+                    while k < ints_len(params) {
+                        let pt = fld(c, fld(c, ints_get(params, k), "ty"), "span");
+                        report_private_type(c, ints_get(c.ptys, pf + k), sps(c, pt), spe(c, pt), sps(c, ns), spe(c, ns), "function", name);
+                        k = k + 1;
+                    }
+                    report_private_type(c, ret, sps(c, rts), spe(c, rts), sps(c, ns), spe(c, ns), "function", name);
+                }
             }
         }
         i = i + 1;
+    }
+    report_exported_types(c, m);
+    0
+}
+
+// The same check for each exported type's own fields, after the functions.
+fn report_exported_types(c: Ck, m: Int) -> Int {
+    let mut r = 0;
+    while r < strs_len(c.rname) {
+        if ints_get(c.rmod, r) == m && ints_get(c.rpub, r) == 1 {
+            let mut i = 0;
+            while i < ints_get(c.rfc, r) {
+                let f = ints_get(c.rff, r) + i;
+                report_private_type(c, ints_get(c.fty, f), ints_get(c.fts, f), ints_get(c.fte, f), ints_get(c.rns, r), ints_get(c.rne, r), "record",
+                        strs_get(c.rname, r));
+                i = i + 1;
+            }
+        }
+        r = r + 1;
+    }
+    let mut e = 0;
+    while e < strs_len(c.ename) {
+        if ints_get(c.emod, e) == m && ints_get(c.epub, e) == 1 {
+            let mut v = 0;
+            while v < ints_get(c.evc, e) {
+                let vi = ints_get(c.evf, e) + v;
+                let mut i = 0;
+                while i < ints_get(c.vfc, vi) {
+                    let f = ints_get(c.vff, vi) + i;
+                    report_private_type(c, ints_get(c.fty, f), ints_get(c.fts, f), ints_get(c.fte, f), ints_get(c.ens, e), ints_get(c.ene, e), "enum",
+                            strs_get(c.ename, e));
+                    i = i + 1;
+                }
+                v = v + 1;
+            }
+        }
+        e = e + 1;
+    }
+    0
+}
+
+// `N0337`: a public item whose written type names a private definition, anywhere in it.
+fn report_private_type(c: Ck, t: Int, s: Int, e: Int, is: Int, ie: Int, kind: Str, name: Str) -> Int {
+    let work = ints_new();
+    ints_push(work, t);
+    while ints_len(work) > 0 {
+        let u = ints_pop(work);
+        let mut k = 0;
+        while k < targc(c, u) {
+            ints_push(work, targ(c, u, k));
+            k = k + 1;
+        }
+        let mut pname = "";
+        let mut ds = 0;
+        let mut de = 0;
+        if is_record(c, u) && ints_get(c.rpub, ta(c, u)) == 0 {
+            pname = strs_get(c.rname, ta(c, u));
+            ds = ints_get(c.rns, ta(c, u));
+            de = ints_get(c.rne, ta(c, u));
+        }
+        if is_enum(c, u) && ints_get(c.epub, ta(c, u)) == 0 {
+            pname = strs_get(c.ename, ta(c, u));
+            ds = ints_get(c.ens, ta(c, u));
+            de = ints_get(c.ene, ta(c, u));
+        }
+        if pname != "" {
+            dg_error(c.d, "N0337", s, e, cat5("this public ", kind, " exposes `", pname, "`, which is private to this module"), "",
+                    "an importer would have to name this type to use the item and cannot. Export the type with `pub`, or stop exporting the item");
+            sec_at(c, is, ie, cat3("`", name, "` is public"));
+            sec_at(c, ds, de, "declared without `pub` here");
+            return 0;
+        }
     }
     0
 }
@@ -1281,6 +1403,7 @@ fn signature_type(c: Ck, w: Int) -> Int { resolve_written(c, w, strs_new(), ints
 
 fn check_function(c: Ck, f: Int) -> Int {
     let name = fname_of(c, f, "name");
+    ss(c, s_fn(), defined_fn(c, gs(c, s_module()), name));
     open_scope(c);
     let params = kids(c, f, "params");
     let mut i = 0;
@@ -1909,10 +2032,12 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
             stop(c, cat3("the built-in `", callee, "`"));
             return or_int(expected);
         }
-        if strs_get(c.beff, bi) != "" || strs_get(c.bcaps, bi) != "" {
-            stop(c, cat3("the built-in `", callee, "`, which needs authority or has an effect"));
+        // Provenance (N38) is not carried yet: a call that writes to a path stops the checker.
+        if ints_get(c.bpath, bi) == 1 {
+            stop(c, cat3("the built-in `", callee, "`, whose path is a restricted sink"));
             return or_int(expected);
         }
+
         pf = ints_get(c.bpf, bi);
         pc = ints_get(c.bpc, bi);
         ret = ints_get(c.bret, bi);
@@ -1930,6 +2055,7 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
                 str_concat(int_to_str(ints_len(args)), verb)), "");
         sec_at(c, ds, de, "defined here");
     }
+    record_site(c, cs, target);
     let mut i = 0;
     while i < ints_len(args) {
         let a = ints_get(args, i);
@@ -2332,4 +2458,360 @@ fn check_projection(c: Ck, base: Int, name: Str, name_span: Int) -> Int {
         return 0 - 1;
     }
     field_ty_in(c, base, f)
+}
+
+// --- effects and authority (`nazm-core/src/effects.rs`) -----------------------------------------
+
+fn pow2(n: Int) -> Int {
+    let mut v = 1;
+    let mut i = 0;
+    while i < n {
+        v = v * 2;
+        i = i + 1;
+    }
+    v
+}
+fn has_bit(mask: Int, bit: Int) -> Bool { (mask / pow2(bit)) % 2 == 1 }
+fn with_bit(mask: Int, bit: Int) -> Int {
+    if has_bit(mask, bit) { return mask; }
+    mask + pow2(bit)
+}
+
+fn effect_names() -> Strs {
+    let s = strs_new();
+    strs_push(s, "io");
+    strs_push(s, "spawn");
+    strs_push(s, "foreign");
+    s
+}
+
+// A capability kind's bit: its place in `CapabilityKind::ALL`, which the built-in type names
+// list from `IoCap` on.
+fn cap_bit(name: Str) -> Int { strs_find(builtin_names(), name) - 6 }
+fn cap_name(bit: Int) -> Str { strs_get(builtin_names(), bit + 6) }
+fn cap_article(bit: Int) -> Str {
+    let n = cap_name(bit);
+    if n == "IoCap" || n == "MmioCap" || n == "OutCap" { return "an"; }
+    "a"
+}
+
+// The set a declaration writes (`effects::declared`), every unknown and duplicate name reported;
+// -1 when a name is no effect.
+fn declared_effects(c: Ck, decl: Int) -> Int {
+    let names = kids(c, decl, "names");
+    let mut set = 0;
+    let mut known = true;
+    let mut i = 0;
+    while i < ints_len(names) {
+        let pair = ints_get(names, i);
+        let name = sx_text(c.t, sx_kid(c.t, pair, 0));
+        let span = sx_kid(c.t, pair, 1);
+        let e = strs_find(effect_names(), name);
+        if e < 0 {
+            known = false;
+            err(c, "N0367", span, cat3("`", name, "` is not an effect"),
+                    "the effects are `io` and `spawn` and `foreign`. There are no user-defined effects");
+        } else {
+            if has_bit(set, e) {
+                err(c, "N0368", span, cat3("`", name, "` is written twice in this effect set"), "");
+                if i > 0 {
+                    let before = sx_kid(c.t, ints_get(names, i - 1), 1);
+                    dg_fix(c.d, spe(c, before), spe(c, span), "", cat3("remove the second `", name, "`"), "automatic",
+                            "a set holds an effect once, so the second one means nothing");
+                }
+            } else {
+                set = with_bit(set, e);
+            }
+        }
+        i = i + 1;
+    }
+    if known { return set; }
+    0 - 1
+}
+
+// The authority the bindings in scope hold: each capability-typed binding no later one hides.
+fn held_caps(c: Ck) -> Int {
+    let mut held = 0;
+    let mut i = 0;
+    while i < strs_len(c.sname) {
+        let t = ints_get(c.sty, i);
+        if is_cap(c, t) {
+            let mut hidden = false;
+            let mut k = i + 1;
+            while k < strs_len(c.sname) {
+                if strs_get(c.sname, k) == strs_get(c.sname, i) { hidden = true; }
+                k = k + 1;
+            }
+            if hidden == false { held = with_bit(held, cap_bit(bname_of(c, t))); }
+        }
+        i = i + 1;
+    }
+    held
+}
+
+// A resolved call, filed under the function whose body holds it (`record_site`).
+fn record_site(c: Ck, at: Int, target: Int) -> Int {
+    let f = gs(c, s_fn());
+    if f < 0 { return 0; }
+    ints_push(c.sfn, f);
+    ints_push(c.sstart, sps(c, at));
+    ints_push(c.send, spe(c, at));
+    if target >= 0 {
+        ints_push(c.sbuiltin, 0 - 1);
+        ints_push(c.suser, target);
+    } else {
+        ints_push(c.sbuiltin, 0 - 2 - target);
+        ints_push(c.suser, 0 - 1);
+    }
+    ints_push(c.sheld, held_caps(c));
+    0
+}
+
+fn builtin_effect(c: Ck, b: Int) -> Int { strs_find(effect_names(), strs_get(c.beff, b)) }
+
+fn builtin_caps(c: Ck, b: Int) -> Int {
+    let names = split(strs_get(c.bcaps, b), 44);
+    let mut set = 0;
+    let mut i = 0;
+    while i < strs_len(names) {
+        if strs_get(names, i) != "" { set = with_bit(set, cap_bit(strs_get(names, i))); }
+        i = i + 1;
+    }
+    set
+}
+
+// Why each function requires each effect: the first reason met. Each reason: the function, the
+// effect, where, its source (1 a built-in, 2 a declared callee, 3 an inferred one) and which.
+pub struct Reasons {
+    fnid: Ints,
+    effect: Ints,
+    start: Ints,
+    end: Ints,
+    source: Ints,
+    which: Ints,
+}
+
+fn reason_of(rs: Reasons, f: Int, effect: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(rs.fnid) {
+        if ints_get(rs.fnid, i) == f && ints_get(rs.effect, i) == effect { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn describe(c: Ck, rs: Reasons, r: Int) -> Str {
+    let e = tick(strs_get(effect_names(), ints_get(rs.effect, r)));
+    let src = ints_get(rs.source, r);
+    let w = ints_get(rs.which, r);
+    if src == 1 { return cat4("the built-in `", strs_get(c.bname, w), "` requires ", e); }
+    if src == 2 { return cat4("calls `", strs_get(c.fnname, w), "`, whose declared set includes ", e); }
+    cat4("calls `", strs_get(c.fnname, w), "`, which requires ", e)
+}
+
+fn set_text(set: Int) -> Str {
+    if set == 0 { return "{}"; }
+    let names = strs_new();
+    let mut e = 0;
+    while e < 3 {
+        if has_bit(set, e) { strs_push(names, strs_get(effect_names(), e)); }
+        e = e + 1;
+    }
+    cat3("{ ", str_join(names, ", "), " }")
+}
+
+// Settle the effects of the module's functions and check each declared set and each body's
+// authority (`effects::analyse`), for a module of the program itself (R1.5, D8: its functions
+// hold `main`'s output authority).
+fn analyse_effects(c: Ck, m: Int) -> Int {
+    let nodes = ints_new();
+    let mut f = 0;
+    while f < strs_len(c.fnname) {
+        if ints_get(c.fnmod, f) == m { ints_push(nodes, f); }
+        f = f + 1;
+    }
+    // Round zero, each body's own effects; then rounds over the edges until nothing changes.
+    let sets = ints_new();
+    let rs = Reasons(fnid: ints_new(), effect: ints_new(), start: ints_new(), end: ints_new(), source: ints_new(), which: ints_new());
+    let mut n = 0;
+    while n < ints_len(nodes) {
+        let me = ints_get(nodes, n);
+        let mut set = 0;
+        let mut s = 0;
+        while s < ints_len(c.sfn) {
+            if ints_get(c.sfn, s) == me {
+                let b = ints_get(c.sbuiltin, s);
+                let g = ints_get(c.suser, s);
+                if b >= 0 {
+                    let e = builtin_effect(c, b);
+                    if e >= 0 && has_bit(set, e) == false {
+                        set = with_bit(set, e);
+                        add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 1, b);
+                    }
+                }
+                if g >= 0 && ints_get(c.fneff, g) >= 0 {
+                    let mut e = 0;
+                    while e < 3 {
+                        if has_bit(ints_get(c.fneff, g), e) && has_bit(set, e) == false {
+                            set = with_bit(set, e);
+                            add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 2, g);
+                        }
+                        e = e + 1;
+                    }
+                }
+            }
+            s = s + 1;
+        }
+        ints_push(sets, set);
+        n = n + 1;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let before = ints_new();
+        n = 0;
+        while n < ints_len(sets) {
+            ints_push(before, ints_get(sets, n));
+            n = n + 1;
+        }
+        n = 0;
+        while n < ints_len(nodes) {
+            let me = ints_get(nodes, n);
+            let mut s = 0;
+            while s < ints_len(c.sfn) {
+                let g = ints_get(c.suser, s);
+                if ints_get(c.sfn, s) == me && g >= 0 {
+                    if ints_get(c.fneff, g) < 0 {
+                        let theirs = ints_get(before, index_of(nodes, g));
+                        let mut e = 0;
+                        while e < 3 {
+                            if has_bit(theirs, e) && has_bit(ints_get(sets, n), e) == false {
+                                ints_set(sets, n, with_bit(ints_get(sets, n), e));
+                                add_reason(rs, me, e, ints_get(c.sstart, s), ints_get(c.send, s), 3, g);
+                                changed = true;
+                            }
+                            e = e + 1;
+                        }
+                    }
+                }
+                s = s + 1;
+            }
+            n = n + 1;
+        }
+    }
+    // Authority first, then effects, function by function.
+    n = 0;
+    while n < ints_len(nodes) {
+        let me = ints_get(nodes, n);
+        check_authority(c, me);
+        let declared = ints_get(c.fneff, me);
+        if declared >= 0 {
+            let missing = without(ints_get(sets, n), declared);
+            if missing != 0 { undeclared(c, rs, me, declared, missing); }
+        }
+        n = n + 1;
+    }
+    0
+}
+
+fn add_reason(rs: Reasons, f: Int, effect: Int, s: Int, e: Int, source: Int, which: Int) -> Int {
+    ints_push(rs.fnid, f);
+    ints_push(rs.effect, effect);
+    ints_push(rs.start, s);
+    ints_push(rs.end, e);
+    ints_push(rs.source, source);
+    ints_push(rs.which, which);
+    0
+}
+
+fn index_of(xs: Ints, v: Int) -> Int {
+    let mut i = 0;
+    while i < ints_len(xs) {
+        if ints_get(xs, i) == v { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+fn without(a: Int, b: Int) -> Int {
+    let mut out = 0;
+    let mut i = 0;
+    while i < 10 {
+        if has_bit(a, i) && has_bit(b, i) == false { out = with_bit(out, i); }
+        i = i + 1;
+    }
+    out
+}
+
+// Every kind the body exercises without holding it, once each, at the first call that needs it
+// (`authority` and `missing_authority`).
+fn check_authority(c: Ck, me: Int) -> Int {
+    let who = tick(strs_get(c.fnname, me));
+    let mut reported = 0;
+    let mut s = 0;
+    while s < ints_len(c.sfn) {
+        let b = ints_get(c.sbuiltin, s);
+        if ints_get(c.sfn, s) == me && b >= 0 {
+            // A module of the program holds `main`'s output authority (R1.5, D8); an `IoCap`
+            // gives an `OutCap`.
+            let held = with_bit(ints_get(c.sheld, s), cap_bit("OutCap"));
+            let need = without(without(builtin_caps(c, b), held), reported);
+            let mut k = 0;
+            while k < 10 {
+                if has_bit(need, k) {
+                    reported = with_bit(reported, k);
+                    let kind = cap_name(k);
+                    let bn = strs_get(c.bname, b);
+                    dg_error(c.d, "N0369", ints_get(c.sstart, s), ints_get(c.send, s),
+                            cat5(cat3("the built-in `", bn, "` requires `"), kind, "` authority, and ", who, cat3(" holds no `", kind, "` here")),
+                            cat5("`", bn, "` is authorised by ", cap_article(k), cat3(" `", kind, "`")),
+                            cat5(cat3("authority is a value: give ", who, " "), cap_article(k), " `", kind,
+                            "` parameter and have each caller pass one. The only source of one is `main`'s parameters"));
+                    if ints_get(c.fnws, me) >= 0 {
+                        sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), "an effect set says what a function does, not what allows it");
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        s = s + 1;
+    }
+    0
+}
+
+// `N0366`: a declared set the body exceeds, with the chain of reasons to where it ends.
+fn undeclared(c: Ck, rs: Reasons, me: Int, declared: Int, missing: Int) -> Int {
+    let who = tick(strs_get(c.fnname, me));
+    let listed = strs_new();
+    let mut first = 0 - 1;
+    let mut e = 0;
+    while e < 3 {
+        if has_bit(missing, e) {
+            strs_push(listed, tick(strs_get(effect_names(), e)));
+            if first < 0 { first = e; }
+        }
+        e = e + 1;
+    }
+    let list = str_join(listed, " and ");
+    let shown = set_text(declared);
+    let r = reason_of(rs, me, first);
+    dg_error(c.d, "N0366", ints_get(rs.start, r), ints_get(rs.end, r), cat5(who, " declares `! ", shown, "`, but its body requires ", list),
+            describe(c, rs, r),
+            "a declared effect set is a contract: the body may require no effect outside it. Declare the effect, or stop calling what requires it");
+    let mut hop = r;
+    let mut seen = 0;
+    while ints_get(rs.source, hop) == 3 && seen <= 64 {
+        seen = seen + 1;
+        let g = ints_get(rs.which, hop);
+        let next = reason_of(rs, g, first);
+        if next < 0 { seen = 100; } else {
+            sec_at(c, ints_get(rs.start, next), ints_get(rs.end, next), cat4("in `", strs_get(c.fnname, g), "`: ", describe(c, rs, next)));
+            hop = next;
+        }
+    }
+    let wider = set_text(declared + missing);
+    sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), cat3("declared `! ", shown, "` here"));
+    dg_fix(c.d, ints_get(c.fnws, me), ints_get(c.fnwe, me), str_concat("! ", wider), cat3("declare `! ", wider, "`"), "needs_review",
+            cat5(who, " is meant to exercise ", list, ". Widening a contract can break a caller whose own declared set lacks ", list));
+    0
 }

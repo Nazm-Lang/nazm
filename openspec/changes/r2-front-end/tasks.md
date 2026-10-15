@@ -36,6 +36,10 @@
       names, fields, function declarations, bodies of the core subset, the `main` rules; the built-in
       table generated (D14). `run.sh check`: 1,908 agree before, 2,112 after; the checker carries
       922 inputs and all 922 agree (the loader stops at a package, which it does not resolve)
+- [ ] 3.1c Effects and authority (`effects::analyse`): declared sets (N0366, N0367, N0368), each body's
+      authority (N0369, R1.5 D8's output authority held), the generated table's sinks; a call that
+      writes to a path stops the checker until provenance (N38) is carried, and so does a module of a
+      package. `run.sh check`: 2,159 agree, 577 differ; the checker carries 1,247, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
