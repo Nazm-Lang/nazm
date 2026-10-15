@@ -72,6 +72,12 @@
       recovered, every module, a function whose body did not parse declared and its body skipped;
       its errors follow the parser's, without the missing `main` and without warnings.
       `run.sh check`: 2,392 agree, 375 differ; the checker carries 1,890, all agree
+- [ ] 3.1j Constants of `Int`, `Bool` and `Str` (`constants::evaluate`, L8): stage 1b in dependency
+      order, each module's refusals (N0622, N0623, N0003, N0300, N0203) and its `pub` ones exported to
+      its importers, plainly and as `alias::NAME`; a constant named in a body is its type. A
+      constant of another type, a static, a float, a shift, a bit operator or a conversion in a
+      constant stops the checker. `run.sh check`: 2,399 agree, 371 differ; the checker carries
+      1,899, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 

@@ -1,0 +1,10 @@
+use "lib/consts.nz";
+use "lib/consts.nz" as k;
+const LOCAL: Int = LIMIT * 2 + k::LATER;
+const LIMIT_TOO: Int = HIDDEN;
+const LABEL: Int = 1;
+fn main() -> Int {
+    let s: Str = LABEL;
+    let t: Str = k::LABEL;
+    LOCAL + LIMIT + k::FROM_B + BAD + HIDDEN
+}
