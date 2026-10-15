@@ -841,10 +841,11 @@ pub(crate) enum Command {
         /// unchanged. `--json` still gives every diagnostic in full.
         #[arg(long, conflicts_with_all = ["json", "build_report"])]
         summary_json: bool,
-        /// The code generator: `llvm` (the default: LLVM IR text compiled by clang) or
-        /// `cranelift` (in process). Neither falls back to the other; a program one cannot
-        /// compile is refused by name.
-        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift"])]
+        /// The code generator: `llvm` (the default: LLVM IR text compiled by clang),
+        /// `cranelift` (in process), or `nazm` (Nazm's own, `nzcg`, run per unit: installed as
+        /// `libexec/nazm/nzcg` beside `nazm`, or named by `NAZM_NZCG`; macOS only before 1.0).
+        /// None falls back to another; a program one cannot compile is refused by name.
+        #[arg(long, default_value = "llvm", value_parser = ["llvm", "cranelift", "nazm"])]
         backend: String,
         /// The target triple: one of the nine `nazm capabilities` lists (N57). A target this
         /// host links is built to an executable; any other needs `--objects`. An unknown

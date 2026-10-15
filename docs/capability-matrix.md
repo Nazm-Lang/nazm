@@ -119,6 +119,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
+| 12a | Nazm's own code generator (`--backend nazm`, R9) | EXPERIMENTAL — macOS aarch64 and x86_64 (under Rosetta) only before 1.0; every input of its differential suite agrees with LLVM, failures unwinding as LLVM's (`architecture.md` §7.116) |
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |
@@ -297,6 +298,17 @@ LLVM and Cranelift, on the pool and a thread per task; the refusals. **Corrected
 `main` failed exited 0 with its stand-in value; the thread now hands the state back for the entry's
 report. Found by CI, where a million-deep test's 512 MiB stacks passed Linux's address-space
 ceiling.
+
+**R9 D15 (2026-10-15)** · *`nazm build --backend nazm`* (`docs/architecture.md` §7.116;
+`openspec/changes/r9-code-generator`, D14, D15). A third backend: each unit's LIR, printed, compiled
+by Nazm's own code generator `nzcg` (`toolchain/codegen/`, written in Nazm), found by `NAZM_NZCG` or
+installed as `libexec/nazm/nzcg`; its digest in every object's key; `--one-thread` from the
+program's one-thread fact. A construct it refuses is `N0101` per construct with no fallback, any
+other failure `N0900`; a missing generator or a target it does not carry (anything but the two
+macOS targets before 1.0) is refused before compiling. Failures unwind as LLVM's do (its 7.5), so
+the two backends' objects link together. EXPERIMENTAL. Evidence: `crates/nazm-cli/tests/nazm_backend.rs`
+(117 inputs agree with LLVM, output, diagnostics, status and memory report), a `nazm` column in the
+backend-differential harness and `failure_convention.rs` on macOS; mutants `r9-…`.
 
 **Performance leadership (2026-10-15)** · *Failures by unwinding* (`docs/architecture.md` §7.115;
 `openspec/changes/performance-leadership`, 4.2). On the hosted targets under LLVM a Nazm function
