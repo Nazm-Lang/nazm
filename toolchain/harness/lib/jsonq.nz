@@ -83,6 +83,67 @@ pub fn jlen(doc: JsonDoc, path: Str) -> Int ! {} {
     json_len(doc, n)
 }
 
+/// Whether the node `na` of `a` and the node `nb` of `b` are one JSON value, an object's keys in
+/// any order: `serde_json::Value`'s `==` (a missing node, `-1`, is `null`).
+pub fn jsame_at(a: JsonDoc, na: Int, b: JsonDoc, nb: Int) -> Bool ! {} {
+    let ka = if na < 0 { "null" } else { json_kind(a, na) };
+    let kb = if nb < 0 { "null" } else { json_kind(b, nb) };
+    if ka != kb {
+        return false;
+    }
+    if ka == "null" {
+        return true;
+    }
+    if ka == "array" {
+        if json_len(a, na) != json_len(b, nb) {
+            return false;
+        }
+        let mut i = 0;
+        while i < json_len(a, na) {
+            let x = match json_at(a, na, i) { Option.Some(value: n) => n, Option.None() => 0 - 1, };
+            let y = match json_at(b, nb, i) { Option.Some(value: n) => n, Option.None() => 0 - 1, };
+            if !jsame_at(a, x, b, y) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    if ka == "object" {
+        if json_len(a, na) != json_len(b, nb) {
+            return false;
+        }
+        let mut i = 0;
+        while i < json_len(a, na) {
+            let key = match json_key_at(a, na, i) { Option.Some(value: k) => k, Option.None() => "", };
+            let x = match json_value_at(a, na, i) { Option.Some(value: n) => n, Option.None() => 0 - 1, };
+            let y = match json_get(b, nb, key) {
+                Option.Some(value: n) => n,
+                Option.None() => { return false; },
+            };
+            if !jsame_at(a, x, b, y) {
+                return false;
+            }
+            i = i + 1;
+        }
+        return true;
+    }
+    json_encode_node(a, na) == json_encode_node(b, nb)
+}
+
+/// Whether the values at `pa` in `a` and `pb` in `b` are one JSON value (`jsame_at`).
+pub fn jsame(a: JsonDoc, pa: Str, b: JsonDoc, pb: Str) -> Bool ! {} {
+    jsame_at(a, jq(a, pa), b, jq(b, pb))
+}
+
+/// Whether the value at `path` of `doc` is the JSON `text` (`assert_eq!(v[..], json!(..))`).
+pub fn jis(doc: JsonDoc, path: Str, text: Str) -> Bool ! {} {
+    match jparse(text) {
+        Result.Ok(value: want) => jsame(doc, path, want, ""),
+        Result.Err(error: e) => false,
+    }
+}
+
 /// The node at `path` written as JSON (`null` where there is none): a JSON value compared whole,
 /// as `assert_eq!` on two `serde_json::Value`s compares them.
 pub fn jv(doc: JsonDoc, path: Str) -> Str ! {} {

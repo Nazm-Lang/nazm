@@ -1,0 +1,340 @@
+// N103: re-exports — `pub use "PATH";` and `pub use "PATH" { a, b as c };`
+// (`docs/architecture.md` §7.104). A re-export offers another module's definition under this
+// module's name, and is the same definition. Ported from `crates/nazm-cli/tests/reexports.rs`
+// (R7); `the_persisted_interface_names_the_defining_identity_and_suffices_alone` checks against a
+// deserialised interface with the checker as a library, and stays Rust (`tests/stays-rust.txt`).
+
+use "@std/json"
+use "@std/text"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/differential.nz"
+
+const SHAPES: Str = "pub trait Area { fn area(self: Self) -> Int; }\npub struct Sq { s: Int }\nimpl Area for Sq { fn area(self: Sq) -> Int { self.s * self.s } }\npub fn double(n: Int) -> Int { n * 2 }\nfn hidden() -> Int { 9 }\n";
+const FACADE: Str = "pub use \"shapes.nz\" { Sq as Square, double as twice, Area };\n";
+const ALL: Str = "pub use \"shapes.nz\";\n";
+const MAIN: Str = "use \"facade.nz\";\nfn main() -> Int { Square(s: 3).area() + twice(4) }\n";
+const MAIN2: Str = "use \"all.nz\";\nfn tw[T: Area](x: T) -> Int { x.area() }\nfn main() -> Int { Sq(s: 2).area() + double(1) + tw(Sq(s: 1)) }\n";
+
+fn base(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "shapes.nz", SHAPES)?;
+    scratch_write(h, d, "facade.nz", FACADE)?;
+    scratch_write(h, d, "all.nz", ALL)?;
+    scratch_write(h, d, "main.nz", MAIN)?;
+    scratch_write(h, d, "main2.nz", MAIN2)?;
+    Result[Str, Str].Ok(value: d)
+}
+
+/// `code start end` of every diagnostic `nazm check --json` raises, sorted.
+fn codes_at(h: Caps, dir: Str, file: Str) -> Strs ! { io, spawn } {
+    let o = nazm(h, dir, words(f"check {file} --json"));
+    let out = strs_new();
+    for l in text_lines(o.stderr) {
+        match jparse(l) {
+            Result.Ok(value: d) => {
+                let c = jstr(d, "code");
+                let s = jint(d, "primary/span/start");
+                let e = jint(d, "primary/span/end");
+                if c != "" && s >= 0 && e >= 0 {
+                    // Zero-padded, so the text sorts as the Rust tuples do.
+                    strs_push(out, f"{c} {text_pad_left(int_to_str(s), 8, "0")} {text_pad_left(int_to_str(e), 8, "0")}");
+                }
+            },
+            Result.Err(error: x) => {},
+        };
+    }
+    strs_sort(out)
+}
+
+fn has_code(xs: Strs, code: Str) -> Bool ! {} {
+    for x in xs {
+        if text_starts_with(x, f"{code} ") {
+            return true;
+        }
+    }
+    false
+}
+
+fn at(code: Str, s: Int, e: Int) -> Str ! {} {
+    f"{code} {text_pad_left(int_to_str(s), 8, "0")} {text_pad_left(int_to_str(e), 8, "0")}"
+}
+
+@test
+fn a_reexport_offers_the_same_definition_under_its_names(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    // Interpreted and native, by both backends: `Square` is `Sq`, `twice` is `double`, and
+    // `Area`'s impl reaches the importer through the re-export.
+    let files = words("main.nz main2.nz");
+    let wants = text_split("17\n|7\n", "|");
+    let mut k = 0;
+    while k < 2 {
+        let file = strs_get(files, k);
+        let want = strs_get(wants, k);
+        let r = nazm(h, d, words(f"run --interpret {file}"));
+        check_that(r.stdout == want, r.stderr)?;
+        for backend in words("llvm cranelift") {
+            let b = nazm(h, d, words(f"build --backend {backend} {file} -o p"));
+            check_that(b.code == 0, b.stderr)?;
+            let o = run(h, f"{d}/p", strs_new(), d, suite_env(h));
+            check_that(o.stdout == want, f"{file} under {backend}")?;
+        }
+        k = k + 1;
+    }
+    // What is not offered is not reached: a re-export brings only what it names.
+    scratch_write(h, d, "only.nz", "use \"facade.nz\";\nfn main() -> Int { double(1) }\n")?;
+    let got = codes_at(h, d, "only.nz");
+    scratch_remove(h, d);
+    check_that(has_code(got, "N0201"), str_join(got, ", "))
+}
+
+@test
+fn what_a_reexport_may_not_do_is_refused_by_name(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    // A name the module does not export, one it does not have, and one this module offers.
+    scratch_write(h, d, "bad.nz", "pub use \"shapes.nz\" { hidden, nope, double };\npub fn double(n: Int) -> Int { n }\nfn main() -> Int { 0 }\n")?;
+    let got = str_join(codes_at(h, d, "bad.nz"), ", ");
+    let want = str_join(strs_sort(text_split(f"{at("N0208", 8, 19)}|{at("N0211", 22, 28)}|{at("N0211", 30, 34)}|{at("N0212", 36, 42)}", "|")), ", ");
+    check_that(got == want, got)?;
+    // A trait is offered under its own name only.
+    scratch_write(h, d, "tr.nz", "pub use \"shapes.nz\" { Area as Shape };\nfn main() -> Int { 0 }\n")?;
+    let tr = str_join(codes_at(h, d, "tr.nz"), ", ");
+    check_that(tr == at("N0211", 22, 26), tr)?;
+    // A cycle of re-exports.
+    scratch_write(h, d, "cyca.nz", "pub use \"cycb.nz\";\npub fn a() -> Int { 1 }\nfn main() -> Int { 0 }\n")?;
+    scratch_write(h, d, "cycb.nz", "pub use \"cyca.nz\";\npub fn b() -> Int { 2 }\n")?;
+    let cyc = codes_at(h, d, "cyca.nz");
+    check_that(strs_len(cyc) == 2, str_join(cyc, ", "))?;
+    // Each at its own `pub`.
+    for c in cyc {
+        let parts = text_split(c, " ");
+        let s = match text_parse_int(strs_get(parts, 1)) { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 100, };
+        let e = match text_parse_int(strs_get(parts, 2)) { Result.Ok(value: n) => n, Result.Err(error: x) => 0 - 100, };
+        check_that(strs_get(parts, 0) == "N0213" && e - s == 3, str_join(cyc, ", "))?;
+    }
+    // And `as` on the module, which a re-export does not take.
+    scratch_write(h, d, "named.nz", "pub use \"shapes.nz\" as s;\nfn main() -> Int { 0 }\n")?;
+    let named = nazm(h, d, words("check named.nz"));
+    scratch_remove(h, d);
+    check_that(named.code != 0, ran_show(named))
+}
+
+@test
+fn every_reference_is_to_the_defining_module(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    let a = strs_new();
+    strs_push(a, "references");
+    strs_push(a, "shapes.nz::fn double");
+    strs_push(a, "main.nz");
+    let o = nazm(h, d, a);
+    let v = jparse(o.stdout)?;
+    let uses = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "uses") {
+        strs_push(uses, f"{jstr(v, f"uses/{i}/module")} {jint(v, f"uses/{i}/start")}");
+        i = i + 1;
+    }
+    // `twice(4)` in `main.nz`, written under the alias, and the name in the re-export list.
+    check_that(strs_has(uses, f"main.nz {find(MAIN, "twice")}"), jv(v, ""))?;
+    check_that(strs_has(uses, f"facade.nz {find(FACADE, "double")}"), jv(v, ""))?;
+    check_that(jstr(v, "declaration/module") == "shapes.nz", jv(v, ""))?;
+    // The resolved units say the same, by durable identity: no second definition anywhere.
+    let r = nazm(h, d, words("resolve main.nz")).stdout;
+    scratch_remove(h, d);
+    check_that(!text_contains(r, "facade.nz::fn twice"), r)?;
+    check_that(!text_contains(r, "facade.nz::record Square"), r)?;
+    check_that(text_contains(r, "shapes.nz::record Sq"), r)
+}
+
+/// `accepted checked reused` from a cached check.
+fn check(h: Caps, dir: Str, file: Str) -> Result[Str, Str] ! { io, spawn } {
+    let o = nazm(h, dir, words(f"check {file} --cache-report --json"));
+    for l in text_lines(o.stdout) {
+        if text_contains(l, "nazm.check-report/1") {
+            let report = jparse(l)?;
+            return Result[Str, Str].Ok(value: f"{o.code == 0} {jint(report, "checked")} {jint(report, "reused")}");
+        }
+    }
+    Result[Str, Str].Err(error: f"no check report: {ran_show(o)}")
+}
+
+@test
+fn reuse_follows_what_a_reexport_offers_and_nothing_else(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    // Cold: every module checked — the three project modules and the prelude.
+    let c1 = check(h, d, "main.nz")?;
+    check_that(c1 == "true 4 0", c1)?;
+    // Unchanged: nothing checked.
+    let c2 = check(h, d, "main.nz")?;
+    check_that(c2 == "true 0 4", c2)?;
+    // A private body of the defining module: it alone is checked; its interface did not move, so
+    // the facade and its importer are reused.
+    scratch_write(h, d, "shapes.nz", text_replace(SHAPES, "{ 9 }", "{ 10 }"))?;
+    let c3 = check(h, d, "main.nz")?;
+    check_that(c3 == "true 1 3", c3)?;
+    // A re-exported signature: the facade's interface moves with it, so both are checked, and the
+    // importer is refused against the new contract.
+    scratch_write(h, d, "shapes.nz", text_replace(text_replace(SHAPES, "pub fn double(n: Int) -> Int", "pub fn double(n: Str) -> Int"), "{ n * 2 }", "{ str_len(n) }"))?;
+    let c4 = check(h, d, "main.nz")?;
+    check_that(text_starts_with(c4, "false 3 "), c4)?;
+    scratch_write(h, d, "shapes.nz", SHAPES)?;
+    let c5 = check(h, d, "main.nz")?;
+    check_that(text_starts_with(c5, "true "), c5)?;
+    // The alias renamed: the importer that wrote the old name is refused.
+    scratch_write(h, d, "facade.nz", text_replace(FACADE, "as twice", "as thrice"))?;
+    check_that(has_code(codes_at(h, d, "main.nz"), "N0201"), "N0201")?;
+    // And removed: the type it offered is gone too.
+    scratch_write(h, d, "facade.nz", "pub use \"shapes.nz\" { double as twice };\n")?;
+    check_that(has_code(codes_at(h, d, "main.nz"), "N0305"), "N0305")?;
+    // Back as it was: accepted, and the warm check reuses what it can.
+    scratch_write(h, d, "facade.nz", FACADE)?;
+    let c6 = check(h, d, "main.nz")?;
+    check_that(text_starts_with(c6, "true "), c6)?;
+    let c7 = check(h, d, "main.nz")?;
+    scratch_remove(h, d);
+    check_that(c7 == "true 0 4", c7)
+}
+
+@test
+fn a_rename_follows_the_definition_and_keeps_every_alias(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    scratch_write(h, d, "nazm.root", "")?;
+    let o = nazm(h, d, words(f"patch rename --root main2.nz --file shapes.nz --byte {find(SHAPES, "double")} --new-name dbl --json"));
+    let plan = match jparse(o.stdout) {
+        Result.Ok(value: x) => x,
+        Result.Err(error: e) => { return Result[Int, Str].Err(error: f"{e}: {o.stderr}"); },
+    };
+    check_that(jstr(plan, "status") == "available", jv(plan, ""))?;
+    scratch_write(h, d, "plan.json", jv(plan, ""))?;
+    let a = nazm(h, d, words("patch apply plan.json"));
+    check_that(a.code == 0, a.stderr)?;
+    check_that(text_contains(read_text(h, f"{d}/shapes.nz")?, "pub fn dbl("), "shapes.nz")?;
+    // The list names the definition, and is renamed; the alias is the facade's, and is not.
+    check_that(read_text(h, f"{d}/facade.nz")? == text_replace(FACADE, "double as", "dbl as"), "facade.nz")?;
+    check_that(read_text(h, f"{d}/main.nz")? == MAIN, "main.nz")?;
+    // Written by its own name through a re-export of everything: renamed.
+    check_that(read_text(h, f"{d}/main2.nz")? == text_replace(MAIN2, "double(1)", "dbl(1)"), "main2.nz")?;
+    let r1 = nazm(h, d, words("run --interpret main.nz"));
+    let r2 = nazm(h, d, words("run --interpret main2.nz"));
+    scratch_remove(h, d);
+    check_that(r1.stdout == "17\n", ran_show(r1))?;
+    check_that(r2.stdout == "7\n", ran_show(r2))
+}
+
+@test
+fn the_api_document_lists_each_reexport_by_its_definition(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    let o = nazm(h, d, words("doc main.nz"));
+    scratch_remove(h, d);
+    let v = jparse(o.stdout)?;
+    check_that(jstr(v, "schema") == "nazm.api-doc/2", jv(v, "schema"))?;
+    let got = strs_new();
+    let mut m = 0;
+    while m < jlen(v, "modules") {
+        let mut i = 0;
+        while i < jlen(v, f"modules/{m}/items") {
+            if jstr(v, f"modules/{m}/items/{i}/kind") == "reexport" {
+                strs_push(got, f"{jstr(v, f"modules/{m}/items/{i}/name")}={jstr(v, f"modules/{m}/items/{i}/of")}");
+            }
+            i = i + 1;
+        }
+        m = m + 1;
+    }
+    let all = str_join(strs_sort(got), ",");
+    check_that(all == "Area=shapes.nz::trait Area,Square=shapes.nz::record Sq,twice=shapes.nz::fn double", all)
+}
+
+/// `compiled reused` native objects from a build report.
+fn build(h: Caps, dir: Str, root: Str) -> Result[Strs, Str] ! { io, spawn } {
+    let o = nazm(h, dir, words(f"build {root} -o prog --build-report"));
+    check_that(o.code == 0, o.stderr)?;
+    for l in text_lines(o.stdout) {
+        if text_contains(l, "nazm.build-report/1") {
+            let v = jparse(l)?;
+            let out = strs_new();
+            strs_push(out, int_to_str(jint(v, "native/compiled")));
+            strs_push(out, int_to_str(jint(v, "native/reused")));
+            return Result[Strs, Str].Ok(value: out);
+        }
+    }
+    Result[Strs, Str].Err(error: "no build report")
+}
+
+fn num(s: Str) -> Int ! {} {
+    match text_parse_int(s) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+@test
+fn a_warm_build_reuses_what_a_reexport_did_not_change(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = base(h)?;
+    let cold = num(strs_get(build(h, d, "main.nz")?, 0));
+    check_that(cold >= 3, int_to_str(cold))?;
+    // Unchanged: every object reused.
+    let warm = str_join(build(h, d, "main.nz")?, " ");
+    check_that(warm == f"0 {cold}", warm)?;
+    // The defining module's private body: its object alone is rebuilt, and the program still gives
+    // its answer.
+    scratch_write(h, d, "shapes.nz", text_replace(SHAPES, "{ 9 }", "{ 10 }"))?;
+    let after = build(h, d, "main.nz")?;
+    check_that(strs_get(after, 0) == "1", f"{strs_get(after, 0)} compiled, {strs_get(after, 1)} reused")?;
+    let o = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    check_that(o.stdout == "17\n", ran_show(o))?;
+    // The re-exported definition's own body: rebuilt, and the importer sees the new answer through
+    // the alias.
+    scratch_write(h, d, "shapes.nz", text_replace(SHAPES, "{ n * 2 }", "{ n * 3 }"))?;
+    build(h, d, "main.nz")?;
+    let o2 = run(h, f"{d}/prog", strs_new(), d, suite_env(h));
+    scratch_remove(h, d);
+    check_that(o2.stdout == "21\n", ran_show(o2))
+}
+
+fn manifest(name: Str, version: Str, main: Bool, dep: Str) -> Str ! {} {
+    let m = if main { "main = \"main.nz\"\n" } else { "" };
+    let deps = if dep == "" { "" } else {
+        let parts = text_split(dep, " ");
+        f"[dependencies]\n{strs_get(parts, 0)} = {{ path = \"{strs_get(parts, 1)}\", version = \"{strs_get(parts, 2)}\" }}\n"
+    };
+    f"schema = \"nazm.package/1\"\n[package]\nname = \"{name}\"\nversion = \"{version}\"\n{m}{deps}"
+}
+
+@test
+fn a_package_reexports_another_packages_definition_and_reuse_follows_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "shapes/nazm.toml", manifest("shapes", "0.3.1", false, ""))?;
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n }\n")?;
+    scratch_write(h, d, "geo/nazm.toml", manifest("geo", "1.2.0", false, "shapes ../shapes 0.3.1"))?;
+    // Across the package boundary: `geo` offers `shapes`' function as its own `count`.
+    scratch_write(h, d, "geo/src/lib.nz", "pub use \"shapes:poly.nz\" { sides as count };\n")?;
+    scratch_write(h, d, "app/nazm.toml", manifest("app", "0.1.0", true, "geo ../geo 1.2.0"))?;
+    scratch_write(h, d, "app/src/main.nz", "use \"geo:lib.nz\";\nfn main() -> Int { count(7) }\n")?;
+    let r = nazm(h, d, words("run --interpret app"));
+    check_that(r.stdout == "7\n", r.stderr)?;
+    // The identity is the defining package's, not the re-exporting one's.
+    let i = nazm(h, f"{d}/geo/src", words("interface lib.nz"));
+    check_that(text_contains(i.stdout, "\"name\":\"count\""), f"{i.stdout}{i.stderr}")?;
+    check_that(text_contains(i.stdout, "poly.nz::fn sides"), i.stdout)?;
+    // The defining package's source changes: the program's answer follows.
+    scratch_write(h, d, "shapes/src/poly.nz", "pub fn sides(n: Int) -> Int { n + 1 }\n")?;
+    let r2 = nazm(h, d, words("run --interpret app"));
+    check_that(r2.stdout == "8\n", ran_show(r2))?;
+    // Its version moves past what `geo` requires: refused, never quietly the old one.
+    scratch_write(h, d, "shapes/nazm.toml", manifest("shapes", "0.4.0", false, ""))?;
+    let r3 = nazm(h, d, words("run --interpret app"));
+    scratch_remove(h, d);
+    check_that(r3.code != 0, ran_show(r3))
+}
