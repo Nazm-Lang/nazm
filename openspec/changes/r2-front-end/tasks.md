@@ -373,6 +373,15 @@
         `run.sh core`: 3,048 agree, 0 differ; of 56,861 functions the lowering carries 51,235,
         all agree; the other parts 10,374, all agree; 1,133 whole documents, all the
         reference's bytes
+  - [x] Constants and conversions: a constant's use is its value written as a literal of its type
+        (`const_value`; a record's, enum's, tuple's or array's, and a float's, still stop), a
+        static `Atomic`'s its cell (`Const::Cell`, with its `static` key); `T(x)`,
+        `wrap_convert` and `saturate_convert` as `convert`, `try_convert` as `{ let c = x;
+        if fits(c) { Some(T(c)) } else { None } }` (a conversion to `Text` still stops). The
+        checker records each constant's use with its value, and each conversion. `run.sh core`:
+        3,048 agree, 0 differ; of 56,919 functions the lowering carries 53,517, all agree; the
+        other parts 10,374, all agree; 1,164 whole documents, all the reference's bytes. check,
+        render and facts as before
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
