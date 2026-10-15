@@ -109,6 +109,51 @@ fn a_datagram_goes_and_comes_back_with_its_sender() {
     agrees(&src, "5\n4\nping\nfrom itself\nTimedOut\n0");
 }
 
+/// A deadline is honoured to the time it has left, on a thread and on a pool task alike. Twenty
+/// reads with a 1 ms deadline take tens of milliseconds. The deadline was once measured on the wall
+/// clock while the timed wait it was handed measures the monotonic one (Q1-M-12), so a thread
+/// waited out the wait's 100 ms cap on every read — two seconds — and a pool task, whose wait
+/// never reached a wall-clock time on the monotonic clock, never timed out at all.
+#[test]
+fn a_short_deadline_ends_the_wait_when_it_passes() {
+    let src = prog(
+        "fn twenty(u: UdpSocket, tm: TimeCap) -> Str ! { io } {\n\
+             let buf = bytes_new(4);\n\
+             let t0 = time_now_ms();\n\
+             let mut timed_out = 0;\n\
+             let mut i = 0;\n\
+             while i < 20 {\n\
+                 match udp_recv_from(u, buf) { Result.Ok(value: d) => {}, Result.Err(error: e) => { if io_kind_name(e.kind) == \"TimedOut\" { timed_out = timed_out + 1; } }, };\n\
+                 i = i + 1;\n\
+             }\n\
+             let took = time_now_ms() - t0;\n\
+             str_concat(int_to_str(timed_out), if took < 1000 { \" in time\" } else { str_concat(\" late: \", int_to_str(took)) })\n\
+         }\n\
+         fn on_a_task(u: UdpSocket, tm: TimeCap, answer: Chan[Str]) -> Int ! { io } {\n\
+             chan_send_of(answer, twenty(u, tm));\n\
+             0\n\
+         }\n\
+         fn main(net: NetCap, t: SpawnCap, tm: TimeCap, out: OutCap) -> Int {\n\
+             match udp_bind(net, \"127.0.0.1:0\") {\n\
+                 Result.Ok(value: u) => {\n\
+                     udp_set_timeout(u, 1);\n\
+                     line(out, twenty(u, tm));\n\
+                     let answer = chan_new_of[Str](1);\n\
+                     let v = vec_new[Str]();\n\
+                     scope {\n\
+                         spawn on_a_task(u, tm, answer);\n\
+                         if chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, \"no answer\"); };\n\
+                     }\n\
+                     udp_close(u);\n\
+                 },\n\
+                 Result.Err(error: e) => { line(out, io_error_show(e)); },\n\
+             };\n\
+             0\n\
+         }\n",
+    );
+    agrees(&src, "20 in time\n20 in time\n0");
+}
+
 #[test]
 fn failures_are_values_of_their_kind() {
     let src = prog(

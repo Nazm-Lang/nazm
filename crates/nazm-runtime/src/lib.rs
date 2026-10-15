@@ -808,7 +808,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.net_recv", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a read from a connected socket, waiting at most its deadline (Gate 2)", "writes the caller's buffer"),
     rt!("nz.net_send", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a connected socket, waiting at most its deadline (Gate 2)", "borrows the bytes"),
     rt!("nz.net_wake", "void" ("ptr") "", false, Net, "", Never, Any, "wake every task waiting on a wait record (Gate 2)", "takes the record's lock"),
-    rt!("nz.net_now", "i64" () "", false, Net, "", Never, Any, "the wall clock in nanoseconds (Gate 2)", "none"),
+    rt!("nz.net_now", "i64" () "", false, Net, "", Never, Any, "the monotonic clock in nanoseconds, which a socket's deadline is on (Gate 2, Q1-M-12)", "none"),
     rt!("nz.net_start", "void" () "", false, Net, "", Never, Any, "start the reactor, once (Gate 2)", "none"),
     rt!("nz.net_reactor", "ptr" ("ptr") "", false, Net, "", Never, Entry, "the reactor thread: wait for events and wake their handles (Gate 2)", "none"),
     rt!("nz.net_event", "void" ("i64") "", false, Net, "", Never, Any, "wake an event's handle if it is still that generation's (Gate 2)", "takes the table's lock, then the record's"),

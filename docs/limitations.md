@@ -457,6 +457,10 @@ classification and evidence of each is in `docs/security-qualification.md`, and 
   `time_now_ms`'s are, and a wait on a thread naps at most 100 ms of wall clock before looking again
   — the most a wall clock stepped back delays it. A blocking built-in (`read_file`, …) holds a pool
   worker while it blocks, as a C call does (Q1-M-13).
+- *Fixed (R4's finding):* Q1-M-12 left a socket's deadline (`os_set_timeout`, `tcp_connect`'s) on
+  the wall clock while the timed wait it is handed measures the monotonic one, so natively a short
+  deadline took the nap's 100 ms cap on a thread and never passed on a pool task. Socket deadlines
+  are on the monotonic clock now, and a wait ends when the time it has left runs out.
 - A `nazm build` stopped by a signal leaves its scratch directory beside the output (Q1-FI-01).
 
 **FFI**: `RESERVED_C_SYMBOLS` lists what the runtime imports, not the runtime's own definitions
