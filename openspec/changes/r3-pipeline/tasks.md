@@ -62,7 +62,7 @@
       (`tests/tables.py` re-serialises byte for byte): 1009 of 1009 inputs with LIR identical
       when `compiler/tests/inputs` was in the set; 161 of 161 when it moved to
       `toolchain/frontend-tests`, and 1000 of 1000 since `run.sh` reads it there (6.3.5)
-- [ ] 6.3 Instructions (`--ops`, `ops.nz`), growing by what the inputs need
+- [x] 6.3 Instructions (`--ops`, `ops.nz`), growing by what the inputs need
   - [x] 6.3.1 Module sources (`nazm core-ir --with-sources`, added read-only at the coordinator's
         decision) and each MIR statement's span (`Block.ats`, not printed)
   - [x] 6.3.2 The module: symbols in first-use order, data (literals, failure messages with
@@ -85,8 +85,7 @@
         set and the full set: lir ops 158 of 161 (base) and 981 of 1000 (full) identical,
         document and digests included; the 19 others all stop at a generic channel's helper
         (6.3.6), and none produces different text
-  - [ ] 6.3.6 A generic channel's helper (`nz.h.vel.chan.N`): named by the checker's channel id,
-        which Core IR does not carry and which is not a function of the type (`Chan[Int]` is
-        `chan.0` in one program and `chan.6` in another). Asked of the coordinator: either Core
-        IR gives each `Chan[T]` its id, or LIR names the helper durably by the element's key, as
-        a `Vec`'s is (`vec.KEY`) — design, *Instruction-level LIR*
+  - [x] 6.3.6 A generic channel's helper: LIR names it by its element's key (`nz.h.vel.chan.KEY`,
+        as `vec.KEY`) instead of the checker's channel id, the coordinator's decision, in
+        `crates/nazm-lir` (`Lw::type_name`); `ops.nz` derives it. `run.sh`: lir ops 161 of 161
+        (base) and 1002 of 1002 (full) identical, document and digests included

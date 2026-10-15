@@ -279,3 +279,39 @@ fn every_shape_in_the_tables_runs_the_same_on_both_backends() {
         assert_eq!(native.stdout, run.stdout, "{backend}");
     }
 }
+
+/// R3 (6.3.6): a generic channel's helper is named by its element's key, as a vector's is, not by
+/// the checker's channel id — so `Chan[Int]`'s is the same symbol whatever other channel types a
+/// program makes first, and a pipeline reading Core IR can derive it.
+#[test]
+fn a_generic_channels_helper_is_named_by_its_element() {
+    let only = "fn main(out: OutCap) -> Int {\n\
+    let cs = vec_new[Chan[Int]]();\n\
+    vec_push(cs, chan_new_of[Int](1));\n\
+    print(int_to_str(vec_len(cs)));\n\
+    0\n\
+}\n";
+    let after_others = "fn main(out: OutCap) -> Int {\n\
+    let s = chan_new_of[Str](1);\n\
+    let b = chan_new_of[Bool](1);\n\
+    chan_close_of(s);\n\
+    chan_close_of(b);\n\
+    let cs = vec_new[Chan[Int]]();\n\
+    vec_push(cs, chan_new_of[Int](1));\n\
+    print(int_to_str(vec_len(cs)));\n\
+    0\n\
+}\n";
+    for source in [only, after_others] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("p.nz"), source).unwrap();
+        let o = nazm(d.path(), &["lir", "--ops", "p.nz"]);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let text = String::from_utf8_lossy(&o.stdout);
+        assert!(text.contains("@nz.h.vel.chan.Int"), "{text}");
+        let by_id = text
+            .split(".chan.")
+            .skip(1)
+            .any(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+        assert!(!by_id, "{text}");
+    }
+}
