@@ -837,6 +837,8 @@ fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
     if seq_primitive(fx, dst, op, elem, args) { return }
     if chan_primitive(fx, dst, op, elem, args) { return }
     if bytes_text(fx, dst, op, elem, args) { return }
+    if files(fx, dst, op, args) { return }
+    if atomics(fx, dst, op, args) { return }
     if text_primitive(fx, dst, op, elem, args) { return }
     if misc_primitive(fx, dst, op, elem, args) { return }
     primitive_base(fx, dst, op, elem, args);
@@ -2324,6 +2326,239 @@ fn bytes_text(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> Bool 
         let ob = string_backing(fx, room)
         let n = rt_v(fx, "nz.utf8_encode", ints_of2(ints_get(ob, 1), c), "i64")
         write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+        return true
+    }
+    false
+}
+
+// --- files and handles (`files.rs`) -------------------------------------------------------------
+
+/// A path's (or buffer's) pointer and length, from argument `i`.
+fn parts_of(fx: Fx, args: Vec[Operand], i: Int) -> Ints {
+    let p = arg_place(fx, args, i)
+    str_parts(fx, p)
+}
+
+fn files(fx: Fx, dst: Int, op: Str, args: Vec[Operand]) -> Bool {
+    let mut v = 0 - 1
+    if op == "os_open_read" || op == "os_dir_open" {
+        let pp = parts_of(fx, args, 0)
+        v = rt_v(fx, "nz." + op, pp, "i64")
+    } else if op == "os_open_write" {
+        let p = arg_place(fx, args, 0)
+        let mode = arg_value(fx, args, 1)
+        let pp = str_parts(fx, p)
+        v = rt_v(fx, "nz.os_open_write", ints_of3(ints_get(pp, 0), ints_get(pp, 1), mode), "i64")
+    } else if op == "os_stdin" || op == "os_family" || op == "os_env_count" || op == "os_pid" {
+        v = rt_v(fx, "nz." + op, ints_new(), "i64")
+    } else if op == "os_status" || op == "os_sync" || op == "os_close" || op == "os_tcp_accept" || op == "os_wait" || op == "os_kill" || op == "os_child_pid" || op == "os_try_wait" || op == "os_child_rusage" {
+        let h = arg_value(fx, args, 0)
+        v = rt_v(fx, "nz." + op, ints_of(h), "i64")
+    } else if op == "os_unlock" {
+        let h = arg_value(fx, args, 0)
+        v = rt_v(fx, "nz.os_file_unlock", ints_of(h), "i64")
+    } else if op == "os_read" || op == "os_read_line" || op == "os_write" || op == "os_dir_next" {
+        let h = arg_value(fx, args, 0)
+        let bp = parts_of(fx, args, 1)
+        v = rt_v(fx, "nz." + op, ints_of3(h, ints_get(bp, 0), ints_get(bp, 1)), "i64")
+    } else if op == "os_seek" {
+        let h = arg_value(fx, args, 0)
+        let offset = arg_value(fx, args, 1)
+        let whence = arg_value(fx, args, 2)
+        v = rt_v(fx, "nz.os_seek", ints_of3(h, offset, whence), "i64")
+    } else if op == "os_stat" || op == "os_lstat" {
+        let p = arg_place(fx, args, 0)
+        let b = arg_place(fx, args, 1)
+        let pp = str_parts(fx, p)
+        let bp = str_parts(fx, b)
+        let short = cmp_imm(fx, "lt", ints_get(bp, 1), "i64", if op == "os_stat" { 32 } else { 48 })
+        guard(fx, short, "N0405", "this buffer is too short for the answer");
+        v = rt_v(fx, "nz." + op, ints_of3(ints_get(pp, 0), ints_get(pp, 1), ints_get(bp, 0)), "i64")
+    } else if op == "os_mkdir" || op == "os_rmdir" || op == "os_unlink" {
+        let pp = parts_of(fx, args, 0)
+        let which = iconst(fx, if op == "os_mkdir" { 0 } else if op == "os_rmdir" { 1 } else { 2 })
+        v = rt_v(fx, "nz.os_path_op", ints_of3(ints_get(pp, 0), ints_get(pp, 1), which), "i64")
+    } else if op == "os_rename" || op == "os_realpath" {
+        let a = arg_place(fx, args, 0)
+        let b = arg_place(fx, args, 1)
+        let ap = str_parts(fx, a)
+        let bp = str_parts(fx, b)
+        v = rt_v(fx, "nz." + op, ints_of4(ints_get(ap, 0), ints_get(ap, 1), ints_get(bp, 0), ints_get(bp, 1)), "i64")
+    } else if op == "os_error_text" {
+        let status = arg_value(fx, args, 0)
+        let room = iconst(fx, 256)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.os_error_text", ints_of3(status, ints_get(ob, 1), room), "i64")
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+        return true
+    } else if op == "os_tcp_listen" || op == "os_udp_bind" {
+        let ap = parts_of(fx, args, 0)
+        v = rt_v(fx, "nz." + op, ap, "i64")
+    } else if op == "os_tcp_connect" {
+        let a = arg_place(fx, args, 0)
+        let ms = arg_value(fx, args, 1)
+        let ap = str_parts(fx, a)
+        v = rt_v(fx, "nz.os_tcp_connect", ints_of3(ints_get(ap, 0), ints_get(ap, 1), ms), "i64")
+    } else if op == "os_set_timeout" || op == "os_shutdown" || op == "os_child_pipe" || op == "os_kill_group" || op == "os_wait_until" {
+        let h = arg_value(fx, args, 0)
+        let k = arg_value(fx, args, 1)
+        v = rt_v(fx, "nz." + op, ints_of2(h, k), "i64")
+    } else if op == "os_udp_send_to" || op == "os_udp_recv_from" {
+        let h = arg_value(fx, args, 0)
+        let d = arg_place(fx, args, 1)
+        let a = arg_place(fx, args, 2)
+        let dp = str_parts(fx, d)
+        let ap = str_parts(fx, a)
+        let xs = ints_of3(h, ints_get(dp, 0), ints_get(dp, 1))
+        ints_push(xs, ints_get(ap, 0))
+        ints_push(xs, ints_get(ap, 1))
+        v = rt_v(fx, "nz." + op, xs, "i64")
+    } else if op == "os_resolve" {
+        let name = arg_place(fx, args, 0)
+        let port = arg_value(fx, args, 1)
+        let out = arg_place(fx, args, 2)
+        let np = str_parts(fx, name)
+        let op_ = str_parts(fx, out)
+        let xs = ints_of3(ints_get(np, 0), ints_get(np, 1), port)
+        ints_push(xs, ints_get(op_, 0))
+        ints_push(xs, ints_get(op_, 1))
+        v = rt_v(fx, "nz.os_resolve", xs, "i64")
+    } else if op == "os_local_addr" || op == "os_peer_addr" {
+        let h = arg_value(fx, args, 0)
+        let peer = iconst(fx, if op == "os_peer_addr" { 1 } else { 0 })
+        let room = iconst(fx, 80)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.os_net_addr", ints_of4(h, peer, ints_get(ob, 1), room), "i64")
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+        return true
+    } else if op == "os_env_get" || op == "os_env_has" {
+        let name = arg_place(fx, args, 0)
+        let np = str_parts(fx, name)
+        let lenp = scratch(fx, 8)
+        let p = rt_v(fx, "nz.os_env_find", ints_of3(ints_get(np, 0), ints_get(np, 1), lenp), "ptr")
+        let len = load(fx, "i64", lenp, 0)
+        if op == "os_env_has" {
+            v = cmp_imm(fx, "ge", len, "i64", 0)
+        } else {
+            let zero = iconst(fx, 0)
+            let absent = cmp_imm(fx, "lt", len, "i64", 0)
+            let n = select(fx, absent, zero, len)
+            fresh_copy(fx, dst, p, n);
+            return true
+        }
+    } else if op == "os_random_bytes" {
+        let bp = parts_of(fx, args, 0)
+        v = rt_v(fx, "nz.os_random_bytes", bp, "i64")
+    } else if op == "os_env_at" {
+        let i = arg_value(fx, args, 0)
+        let count = rt_v(fx, "nz.os_env_count", ints_new(), "i64")
+        within(fx, i, 1, count, "this index is outside the environment");
+        let lenp = scratch(fx, 8)
+        let p = rt_v(fx, "nz.os_env_at", ints_of2(i, lenp), "ptr")
+        let len = load(fx, "i64", lenp, 0)
+        fresh_copy(fx, dst, p, len);
+        return true
+    } else if op == "os_spawn" {
+        let prog = arg_place(fx, args, 0)
+        let list = arg_value(fx, args, 1)
+        let pp = str_parts(fx, prog)
+        v = rt_v(fx, "nz.os_spawn", ints_of3(ints_get(pp, 0), ints_get(pp, 1), list), "i64")
+    } else if op == "os_stdout" || op == "os_stderr" {
+        let which = iconst(fx, if op == "os_stdout" { 1 } else { 2 })
+        v = rt_v(fx, "nz.os_std_stream", ints_of(which), "i64")
+    } else if op == "os_spawn_in" || op == "os_spawn_with" {
+        let prog = arg_place(fx, args, 0)
+        let list = arg_value(fx, args, 1)
+        let dir = arg_place(fx, args, 2)
+        let env = arg_value(fx, args, 3)
+        let flags = if op == "os_spawn_with" { arg_value(fx, args, 4) } else { iconst(fx, 0) }
+        let pp = str_parts(fx, prog)
+        let dp = str_parts(fx, dir)
+        let xs = ints_of4(ints_get(pp, 0), ints_get(pp, 1), list, ints_get(dp, 0))
+        ints_push(xs, ints_get(dp, 1))
+        ints_push(xs, env)
+        ints_push(xs, flags)
+        v = rt_v(fx, "nz.os_spawn_in", xs, "i64")
+    } else if op == "os_chmod" {
+        let p = arg_place(fx, args, 0)
+        let mode = arg_value(fx, args, 1)
+        let pp = str_parts(fx, p)
+        v = rt_v(fx, "nz.os_chmod", ints_of3(ints_get(pp, 0), ints_get(pp, 1), mode), "i64")
+    } else if op == "os_mkdtemp" {
+        let pp = parts_of(fx, args, 0)
+        let extra = iconst(fx, 18)
+        let room = bin(fx, "add", ints_get(pp, 1), extra)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.os_mkdtemp", ints_of4(ints_get(pp, 0), ints_get(pp, 1), ints_get(ob, 1), room), "i64")
+        let zero = iconst(fx, 0)
+        let failed = cmp_imm(fx, "lt", n, "i64", 0)
+        let len = select(fx, failed, zero, n)
+        write_str(fx, dst, ints_get(ob, 1), len, ints_get(ob, 0));
+        return true
+    } else if op == "os_lock" || op == "os_try_lock" {
+        let h = arg_value(fx, args, 0)
+        let exclusive = arg_value(fx, args, 1)
+        let wait = iconst(fx, if op == "os_lock" { 1 } else { 0 })
+        v = rt_v(fx, "nz.os_file_lock", ints_of3(h, exclusive, wait), "i64")
+    } else {
+        return false
+    }
+    set(fx, dst, v);
+    true
+}
+
+// --- atomics (`atomics.rs`) ---------------------------------------------------------------------
+
+fn atomics(fx: Fx, dst: Int, op: Str, args: Vec[Operand]) -> Bool {
+    if op == "atomic_new" {
+        let v = arg_value(fx, args, 0)
+        let eight = iconst(fx, 8)
+        let ob = string_backing(fx, eight)
+        // Not yet shared with anything: a plain store initialises it.
+        store(fx, ints_get(ob, 1), 0, v);
+        write_str(fx, dst, ints_get(ob, 1), eight, ints_get(ob, 0));
+        return true
+    }
+    if op == "atomic_load" {
+        let cell = ints_get(parts_of(fx, args, 0), 0)
+        set(fx, dst, rt_v(fx, "nz.atomic_load", ints_of(cell), "i64"));
+        return true
+    }
+    if op == "atomic_store" {
+        let cell = ints_get(parts_of(fx, args, 0), 0)
+        let v = arg_value(fx, args, 1)
+        rt(fx, "nz.atomic_store", ints_of2(cell, v))
+        set(fx, dst, iconst(fx, 0));
+        return true
+    }
+    if op == "atomic_swap" {
+        let cell = ints_get(parts_of(fx, args, 0), 0)
+        let v = arg_value(fx, args, 1)
+        set(fx, dst, rt_v(fx, "nz.atomic_swap", ints_of2(cell, v), "i64"));
+        return true
+    }
+    if op == "atomic_compare_swap" {
+        let cell = ints_get(parts_of(fx, args, 0), 0)
+        let expected = arg_value(fx, args, 1)
+        let new = arg_value(fx, args, 2)
+        set(fx, dst, rt_v(fx, "nz.atomic_cas", ints_of3(cell, expected, new), "bit"));
+        return true
+    }
+    if op == "atomic_add" {
+        // Read, add with the overflow check `+` has, and store only if nothing changed the
+        // cell in between; otherwise again.
+        let cell = ints_get(parts_of(fx, args, 0), 0)
+        let d = arg_value(fx, args, 1)
+        let again = new_lblock(fx.fb)
+        let done = new_lblock(fx.fb)
+        jump(fx, again);
+        switch_to(fx.fb, again);
+        let old = rt_v(fx, "nz.atomic_load", ints_of(cell), "i64")
+        let sum = checked(fx, "add.ovf", old, d, "this addition overflows `Int`")
+        let stored = rt_v(fx, "nz.atomic_cas", ints_of3(cell, old, sum), "bit")
+        branch(fx, stored, done, again);
+        switch_to(fx.fb, done);
+        set(fx, dst, old);
         return true
     }
     false
