@@ -157,6 +157,10 @@ fn main() -> Int {
 }
 ```
 
+An arm that ends its line needs no `,` before the next, as a statement needs no `;` (R1.5, 4.6):
+`Circle(r) => 3 * r * r` and `Dot => 0` on two lines are two arms. Two arms on one line still
+take the `,`, and `nazm fmt` keeps whichever was written.
+
 Six things to know, and then you know enums:
 
 - **A variant is always written with its enum, and always with brackets.** `State.Ready()`,
@@ -1961,8 +1965,15 @@ enum E { A(text: Str), } fn main() -> Int { match E.A(text: "hi") { E.A(text: s)
 match_arms = match_arm , { "," , match_arm } , [ "," ] ;
 ```
 
+R1.5, 4.6: the "," between two arms may be left out where a line break follows the first, as
+a statement's ";" may (5b.19); see spec.md, "Shorter forms".
+
 ```nazm
 enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } }
+```
+
+```nazm
+fn main() -> Int { match 2 { 1 => 10, _ => 0 } }
 ```
 
 ### `match_arm`

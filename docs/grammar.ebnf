@@ -612,6 +612,9 @@ if_let_expression = "if" , "let" , pattern , "=" , expression , block , [ "else"
 match_expression = "match" , expression , "{" , [ match_arms ] , "}" ;
 
 (* @example enum E { A, B, } fn main() -> Int { match E.A() { E.A() => 1, E.B() => 0, } } *)
+(* R1.5, 4.6: the "," between two arms may be left out where a line break follows the first, as
+   a statement's ";" may (5b.19); see spec.md, "Shorter forms". *)
+(* @example fn main() -> Int { match 2 { 1 => 10, _ => 0 } } *)
 match_arms = match_arm , { "," , match_arm } , [ "," ] ;
 
 (* A pattern names the enum and never its type arguments: the value being matched already

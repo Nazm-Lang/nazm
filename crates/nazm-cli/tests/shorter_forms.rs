@@ -12,6 +12,7 @@
 //! D9 — the prelude's standard modules, imported where a program's module names them.
 //! D10 — `m.top(n)` and `m.sort_by(less)` on maps.
 //! 4.5 — `@std/option` and `@std/result` among D9's prelude modules: `r.unwrap_or(1)` with no `use`.
+//! 4.6 — a line break separates `match` arms, as it ends a statement.
 
 #![allow(
     clippy::unwrap_used,
@@ -731,6 +732,60 @@ fn main() {
         !r.stdout.contains("@std/result"),
         "only what is named: {r:?}"
     );
+}
+
+#[test]
+fn match_arms_on_their_own_lines_need_no_comma_everywhere() {
+    // 4.6: a line break separates two arms; `,` is still read, the two mix, an arm's expression
+    // still spans lines (a line beginning with `*` continues it), and a line beginning with `(`
+    // begins a pattern, not a call.
+    differential::agrees(
+        "enum Shape {
+    Circle(r: Int),
+    Rect(w: Int, h: Int),
+    Dot,
+}
+
+fn area(s: Shape): Int {
+    match s {
+        Circle(r) => 3 * r * r
+        Rect(w, h) => w
+            * h
+        Dot => 0
+    }
+}
+
+fn name(n: Int): Str {
+    match n {
+        0 => \"zero\",
+        1 => \"one\"
+        n if n < 0 => {
+            \"negative\"
+        }
+        (_) => \"many\"
+    }
+}
+
+fn main() {
+    println(f\"{area(Circle(2))} {area(Rect(3, 4))} {area(Dot)}\")
+    println(f\"{name(0)} {name(1)} {name(-5)} {name(9)}\")
+}
+",
+        "12 12 0\nzero one negative many\n0",
+    );
+}
+
+#[test]
+fn two_arms_on_one_line_still_need_their_comma_and_fmt_keeps_what_was_written() {
+    // 4.6: only a line break stands for the `,`; and `nazm fmt` neither adds nor removes one.
+    let codes = differential::codes("fn main(): Int {\n    match 1 { 0 => 1 _ => 2 }\n}\n");
+    assert_eq!(codes, ["N0100"]);
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn f(n: Int): Int {\n    match n {\n        0 => 1,\n        1 => 2\n        _ => 3\n    }\n}\n";
+    std::fs::write(d.path().join("p.nz"), src).unwrap();
+    let r = nazm(d.path(), &["fmt", "--check", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    assert_eq!(std::fs::read_to_string(d.path().join("p.nz")).unwrap(), src);
 }
 
 #[test]
