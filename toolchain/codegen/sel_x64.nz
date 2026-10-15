@@ -871,7 +871,7 @@ fn unary(g: G, x: Ins) {
     let c = cls(g, x.a)
     let s = x.sub
     if c == C_I128 {
-        refuse(g, "an `i128` one-operand operation")
+        unary128(g, x)
         return
     }
     let dbl = c == C_F64
@@ -894,34 +894,9 @@ fn unary(g: G, x: Ins) {
     } else if s == U_FFLOOR || s == U_FCEIL || s == U_FTRUNC {
         round_sse2(g, s, dbl)
     } else if s == U_POPCNT {
-        // The baseline CPU has no `popcnt`: the bit-parallel count.
-        mov(b, B, A)
-        shift_imm(b, 5, B, 1)
-        mov_imm(b, D, 0x5555555555555555)
-        alu(b, ALU_AND, B, D)
-        alu(b, ALU_SUB, A, B)
-        mov(b, B, A)
-        shift_imm(b, 5, B, 2)
-        mov_imm(b, D, 0x3333333333333333)
-        alu(b, ALU_AND, A, D)
-        alu(b, ALU_AND, B, D)
-        alu(b, ALU_ADD, A, B)
-        mov(b, B, A)
-        shift_imm(b, 5, B, 4)
-        alu(b, ALU_ADD, A, B)
-        mov_imm(b, D, 0x0F0F0F0F0F0F0F0F)
-        alu(b, ALU_AND, A, D)
-        mov_imm(b, D, 0x0101010101010101)
-        imul(b, A, D)
-        shift_imm(b, 5, A, 56)
+        popcnt64(g)
     } else if s == U_CLZ {
-        // 63 - bsr(x), and 64 for a zero; then the width's share of it.
-        mov_imm(b, B, -1)
-        bsr(b, A, A)
-        cmov(b, CC_E, A, B)
-        mov_imm(b, B, 63)
-        alu(b, ALU_SUB, B, A)
-        mov(b, A, B)
+        clz64(g)
         if bits < 64 {
             mov_imm(b, B, 64 - bits)
             alu(b, ALU_SUB, A, B)
@@ -950,6 +925,94 @@ fn unary(g: G, x: Ins) {
     }
     norm(g, A, c)
     st(g, A, x.dst)
+}
+
+/// rax's bit count, at 64 bits (rcx and rdx clobbered). The baseline CPU has no `popcnt`: the
+/// bit-parallel count.
+fn popcnt64(g: G) {
+    let b = buf(g)
+    mov(b, B, A)
+    shift_imm(b, 5, B, 1)
+    mov_imm(b, D, 0x5555555555555555)
+    alu(b, ALU_AND, B, D)
+    alu(b, ALU_SUB, A, B)
+    mov(b, B, A)
+    shift_imm(b, 5, B, 2)
+    mov_imm(b, D, 0x3333333333333333)
+    alu(b, ALU_AND, A, D)
+    alu(b, ALU_AND, B, D)
+    alu(b, ALU_ADD, A, B)
+    mov(b, B, A)
+    shift_imm(b, 5, B, 4)
+    alu(b, ALU_ADD, A, B)
+    mov_imm(b, D, 0x0F0F0F0F0F0F0F0F)
+    alu(b, ALU_AND, A, D)
+    mov_imm(b, D, 0x0101010101010101)
+    imul(b, A, D)
+    shift_imm(b, 5, A, 56)
+}
+
+/// 63 - bsr(rax), and 64 for a zero (rcx clobbered).
+fn clz64(g: G) {
+    let b = buf(g)
+    mov_imm(b, B, -1)
+    bsr(b, A, A)
+    cmov(b, CC_E, A, B)
+    mov_imm(b, B, 63)
+    alu(b, ALU_SUB, B, A)
+    mov(b, A, B)
+}
+
+/// bsf(rax), and 64 for a zero (rcx clobbered).
+fn ctz64(g: G) {
+    let b = buf(g)
+    mov_imm(b, B, 64)
+    bsf(b, A, A)
+    cmov(b, CC_E, A, B)
+}
+
+/// Bit counts and the byte swap of an `i128` in rax:rdx, from each half's (r10 and r11 held).
+fn unary128(g: G, x: Ins) {
+    let b = buf(g)
+    let s = x.sub
+    ld128(g, A, D, x.a)
+    if s == U_POPCNT {
+        mov(b, R11, D)
+        popcnt64(g)
+        mov(b, R10, A)
+        mov(b, A, R11)
+        popcnt64(g)
+        alu(b, ALU_ADD, A, R10)
+        mov_imm(b, D, 0)
+    } else if s == U_CLZ || s == U_CTZ {
+        // The count of the half that decides, or 64 and the other half's where it is zero.
+        if s == U_CLZ {
+            mov(b, R11, A)
+            mov(b, A, D)
+            clz64(g)
+        } else {
+            mov(b, R11, D)
+            ctz64(g)
+        }
+        mov(b, R10, A)
+        mov(b, A, R11)
+        if s == U_CLZ { clz64(g) } else { ctz64(g) }
+        mov_imm(b, B, 64)
+        alu(b, ALU_ADD, A, B)
+        alu(b, ALU_CMP, R10, B)
+        cmov(b, CC_NE, A, R10)
+        mov_imm(b, D, 0)
+    } else if s == U_BSWAP {
+        bswap(b, true, A)
+        bswap(b, true, D)
+        mov(b, R10, A)
+        mov(b, A, D)
+        mov(b, D, R10)
+    } else {
+        refuse(g, f"`i128` one-operand operation {s}")
+        return
+    }
+    st128(g, A, D, x.dst)
 }
 
 fn convert(g: G, x: Ins) {
@@ -1204,6 +1267,18 @@ fn bin128(g: G, x: Ins) {
                 cmov(b, CC_NE, D, R10)
             }
         }
+    } else if s == B_ROTL || s == B_ROTR {
+        // The amount modulo 128 in cl (LLVM's `fshl`/`fshr`); a right rotation is a left one by
+        // its negation. The halves are swapped when bit 6 is set, then `shld` rotates the pair
+        // by cl mod 64 (unchanged at 0).
+        if s == B_ROTR { f7(b, 3, B) }
+        test_cl64(g)
+        mov(b, R10, A)
+        cmov(b, CC_NE, A, D)
+        cmov(b, CC_NE, D, R10)
+        mov(b, R10, D)
+        rr(b, true, 0x0FA5, A, D)
+        rr(b, true, 0x0FA5, R10, A)
     } else {
         refuse(g, f"`i128` binary operation {s}")
         return

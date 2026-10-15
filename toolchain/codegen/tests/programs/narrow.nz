@@ -1,0 +1,263 @@
+// Every comparison, wrapping operation, rotation, bit count and `match` on each integer width,
+// and results of each class returned directly and through function values (design D12).
+
+fn cmps_i8(a: Int8, b: Int8) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_u8(a: UInt8, b: UInt8) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_i16(a: Int16, b: Int16) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_u16(a: UInt16, b: UInt16) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_i32(a: Int32, b: Int32) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_u32(a: UInt32, b: UInt32) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_u64(a: UInt64, b: UInt64) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_i128(a: Int128, b: Int128) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_u128(a: UInt128, b: UInt128) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn cmps_f32(a: Float32, b: Float32) -> Str {
+    f"{a == b} {a != b} {a < b} {a <= b} {a > b} {a >= b}"
+}
+
+fn o8(o: Option[UInt8]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn o16(o: Option[UInt16]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn o32(o: Option[UInt32]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn o64(o: Option[UInt64]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn oi128(o: Option[Int128]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn ou128(o: Option[UInt128]) -> Str {
+    match o {
+        Some(v) => f"{v}",
+        None => "none",
+    }
+}
+
+fn wraps_i8(a: Int8, b: Int8) -> Str {
+    f"{wrapping_add(a, b)} {wrapping_sub(a, b)} {wrapping_mul(a, b)} {a & b} {a | b} {a ^ b} {a << 3}"
+}
+
+fn wraps_u8(a: UInt8, b: UInt8) -> Str {
+    f"{wrapping_add(a, b)} {wrapping_sub(a, b)} {wrapping_mul(a, b)} {o8(checked_mul(a, b))} {o8(checked_sub(a, b))} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)} {swap_bytes(a)}"
+}
+
+fn wraps_i16(a: Int16, b: Int16) -> Str {
+    f"{wrapping_add(a, b)} {wrapping_sub(a, b)} {wrapping_mul(a, b)} {a & b} {a | b} {a ^ b} {a << 2} {rotate_right(a, 3)}"
+}
+
+fn wraps_u16(a: UInt16, b: UInt16) -> Str {
+    f"{wrapping_sub(a, b)} {wrapping_mul(a, b)} {o16(checked_sub(a, b))} {a >> 3} {a << 3} {a % b} {a & b} {a | b} {a ^ b} {rotate_right(a, 3)}"
+}
+
+fn wraps_i32(a: Int32, b: Int32) -> Str {
+    f"{wrapping_add(a, b)} {wrapping_sub(a, b)} {wrapping_mul(a, b)} {a & b} {a | b} {a ^ b} {rotate_left(a, 5)}"
+}
+
+fn wraps_u32(a: UInt32, b: UInt32) -> Str {
+    f"{wrapping_sub(a, b)} {o32(checked_sub(a, b))} {a | b} {a ^ b} {rotate_left(a, 5)} {rotate_right(a, 5)}"
+}
+
+fn wraps_u64(a: UInt64, b: UInt64) -> Str {
+    f"{wrapping_sub(a, b)} {o64(checked_sub(a, b))} {o64(checked_mul(a, b))} {rotate_right(a, 11)}"
+}
+
+fn wraps_i128(a: Int128, b: Int128) -> Str {
+    f"{wrapping_add(a, b)} {wrapping_sub(a, b)} {wrapping_mul(a, b)} {oi128(checked_mul(a, b))} {rotate_left(a, 70)} {rotate_right(a, 3)} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)} {swap_bytes(a)}"
+}
+
+fn wraps_u128(a: UInt128, b: UInt128) -> Str {
+    f"{a / b} {a % b} {ou128(checked_mul(a, b))} {ou128(checked_add(a, b))} {ou128(checked_sub(a, b))} {a >= b}"
+}
+
+fn bits_u128(a: UInt128) -> Str {
+    f"{rotate_left(a, 0)} {rotate_left(a, 1)} {rotate_left(a, 63)} {rotate_left(a, 64)} {rotate_left(a, 127)} {rotate_right(a, 1)} {rotate_right(a, 64)} {rotate_right(a, 100)} {count_ones(a)} {leading_zeros(a)} {trailing_zeros(a)} {swap_bytes(a)}"
+}
+
+fn f32_ops(x: Float32) -> Str {
+    f"{float_sqrt(x)} {float_abs(-x)} {float_min(x, Float32(2.0))} {float_max(x, Float32(2.0))}"
+}
+
+fn name8(n: Int8) -> Str {
+    match n {
+        -3 => "minus three",
+        0 => "zero",
+        5 => "five",
+        _ => "other",
+    }
+}
+
+fn name16(n: UInt16) -> Str {
+    match n {
+        1 => "one",
+        300 => "three hundred",
+        65535 => "max",
+        _ => "other",
+    }
+}
+
+fn name32(n: Int32) -> Str {
+    match n {
+        -100000 => "minus a lakh",
+        7 => "seven",
+        2000000000 => "two billion",
+        _ => "other",
+    }
+}
+
+fn name128(n: Int128) -> Str {
+    match n {
+        -1 => "minus one",
+        100000000000000000000 => "ten to the twenty",
+        _ => "other",
+    }
+}
+
+fn half(x: Float32) -> Float32 {
+    x / Float32(2.0)
+}
+
+fn small(x: Int16) -> Int16 {
+    wrapping_mul(x, Int16(3))
+}
+
+fn tiny(x: UInt8) -> UInt8 {
+    wrapping_add(x, UInt8(9))
+}
+
+fn mid(x: Int32) -> Int32 {
+    wrapping_sub(x, Int32(1))
+}
+
+fn big(x: Int128) -> Int128 {
+    x * Int128(3)
+}
+
+fn dbl(x: Float64) -> Float64 {
+    x * 2.0
+}
+
+fn word(x: Str) -> Str {
+    x + "!"
+}
+
+fn yes(x: Bool) -> Bool {
+    !x
+}
+
+fn shout(v: Vec[Int]) {
+    v.push(v.len() * 10)
+}
+
+fn pick_f(c: Bool, a: Float64, b: Float64) -> Float64 {
+    if c { a } else { b }
+}
+
+fn pick_s(c: Bool, a: Str, b: Str) -> Str {
+    if c { a } else { b }
+}
+
+fn values() -> Str {
+    let f1: fn(Float32) -> Float32 = half
+    let f2: fn(Int16) -> Int16 = small
+    let f3: fn(UInt8) -> UInt8 = tiny
+    let f4: fn(Int32) -> Int32 = mid
+    let f5: fn(Int128) -> Int128 = big
+    let f6: fn(Float64) -> Float64 = dbl
+    let f7: fn(Str) -> Str = word
+    let f8: fn(Bool) -> Bool = yes
+    let f9 = shout
+    let log = vec_new[Int]()
+    f9(log)
+    f9(log)
+    let hi = "hi"
+    f"{f1(Float32(5.0))} {f2(Int16(-11))} {f3(UInt8(250))} {f4(Int32(-5))} {f5(Int128(7))} {f6(1.25)} {f7(hi)} {f8(true)} {log[1]}"
+}
+
+fn main() {
+    println(cmps_i8(Int8(-3), Int8(4)))
+    println(cmps_u8(UInt8(200), UInt8(4)))
+    println(cmps_i16(Int16(-300), Int16(-300)))
+    println(cmps_u16(UInt16(65000), UInt16(4)))
+    println(cmps_i32(Int32(-3), Int32(-4)))
+    println(cmps_u32(UInt32(3000000000), UInt32(3000000001)))
+    println(cmps_u64(UInt64(18000000000000000000), UInt64(5)))
+    println(cmps_i128(Int128(-3), Int128(4)))
+    println(cmps_u128(UInt128(300000000000000000000000), UInt128(4)))
+    println(cmps_f32(Float32(1.5), Float32(-2.0)))
+    println(cmps_f32(Float32(0.0) / Float32(0.0), Float32(1.0)))
+    println(wraps_i8(Int8(100), Int8(-77)))
+    println(wraps_u8(UInt8(200), UInt8(99)))
+    println(wraps_u8(UInt8(3), UInt8(2)))
+    println(wraps_i16(Int16(30000), Int16(-9999)))
+    println(wraps_u16(UInt16(5), UInt16(60000)))
+    println(wraps_i32(Int32(2000000000), Int32(-1999999999)))
+    println(wraps_u32(UInt32(5), UInt32(4000000000)))
+    println(wraps_u64(UInt64(5), UInt64(18000000000000000000)))
+    println(wraps_i128(Int128(-170141183460469231731687303715884105727), Int128(3)))
+    println(wraps_u128(UInt128(340282366920938463463374607431768211455), UInt128(7)))
+    println(bits_u128(UInt128(0)))
+    println(bits_u128(UInt128(1)))
+    println(bits_u128(UInt128(18446744073709551616)))
+    println(bits_u128(UInt128(340282366920938463463374607431768211455)))
+    println(bits_u128(UInt128(170141183460469231731687303715884105728) + UInt128(12345678901234567890)))
+    println(f32_ops(Float32(6.25)))
+    println(f"{name8(Int8(-3))} {name8(Int8(5))} {name8(Int8(1))}")
+    println(f"{name16(UInt16(300))} {name16(UInt16(65535))} {name16(UInt16(2))}")
+    println(f"{name32(Int32(-100000))} {name32(Int32(2000000000))} {name32(Int32(8))}")
+    println(f"{name128(Int128(-1))} {name128(Int128(100000000000000000000))} {name128(Int128(0))}")
+    println(f"{half(Float32(3.0))} {small(Int16(-11))} {tiny(UInt8(250))} {mid(Int32(0))}")
+    println(values())
+    let a = "a"
+    let b = "b"
+    println(f"{pick_f(true, 1.5, 2.5)} {pick_f(false, 1.5, 2.5)} {pick_s(true, a, b)} {pick_s(false, a, b)}")
+}

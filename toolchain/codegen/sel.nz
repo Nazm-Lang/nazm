@@ -988,7 +988,7 @@ fn unary(g: G, x: Ins) {
     let c = cls(g, x.a)
     let s = x.sub
     if c == C_I128 {
-        refuse(g, "an `i128` operation")
+        unary128(g, x)
         return
     }
     if s <= U_FTRUNC {
@@ -1046,6 +1046,51 @@ fn unary(g: G, x: Ins) {
     }
     norm(g, 9, c)
     st(g, 9, x.dst)
+}
+
+/// Bit counts and the byte swap of an `i128` in x9:x10, from each half's.
+fn unary128(g: G, x: Ins) {
+    let s = x.sub
+    ld128(g, 9, 10, x.a)
+    if s == U_POPCNT {
+        w(g, fmov_to_fp(true, 16, 9))
+        w(g, cnt8b(16, 16))
+        w(g, addv8b(16, 16))
+        w(g, fmov_from_fp(false, 9, 16))
+        w(g, fmov_to_fp(true, 16, 10))
+        w(g, cnt8b(16, 16))
+        w(g, addv8b(16, 16))
+        w(g, fmov_from_fp(false, 3, 16))
+        w(g, add(9, 9, 3))
+        mov_imm(g, 10, 0)
+    } else if s == U_CLZ || s == U_CTZ {
+        // The high half's count, or 64 and the low half's where the high half is zero (for
+        // `ctz`, the halves' roles exchanged).
+        let first = if s == U_CLZ { 10 } else { 9 }
+        let second = if s == U_CLZ { 9 } else { 10 }
+        if s == U_CTZ {
+            w(g, rbit(3, first))
+            w(g, clz(3, 3))
+            w(g, rbit(4, second))
+            w(g, clz(4, 4))
+        } else {
+            w(g, clz(3, first))
+            w(g, clz(4, second))
+        }
+        mov_imm(g, 5, 64)
+        w(g, add(4, 4, 5))
+        w(g, cmp_imm(first, 0))
+        w(g, csel(9, 4, 3, EQ))
+        mov_imm(g, 10, 0)
+    } else if s == U_BSWAP {
+        w(g, rev(3, 9))
+        w(g, rev(9, 10))
+        w(g, mov(10, 3))
+    } else {
+        refuse(g, f"`i128` unary operation {s}")
+        return
+    }
+    st128(g, 9, 10, x.dst)
 }
 
 fn convert(g: G, x: Ins) {
@@ -1304,6 +1349,27 @@ fn bin128(g: G, x: Ins) {
                 w(g, csel(10, 5, 3, NE))
             }
         }
+    } else if s == B_ROTL || s == B_ROTR {
+        // The amount modulo 128 (LLVM's `fshl`/`fshr`); a right rotation is a left one by the
+        // amount's negation. The halves are swapped when it is 64 or more, then rotated left by
+        // m = n mod 64 as a pair, `(x >> 1) >> (63 - m)` keeping m = 0 exact.
+        if s == B_ROTR { w(g, sub(11, ZR, 11)) }
+        w(g, lsr_imm(4, 11, 6))
+        mov_imm(g, 5, 1)
+        w(g, and(4, 4, 5))
+        w(g, cmp_imm(4, 0))
+        w(g, csel(3, 10, 9, NE))
+        w(g, csel(12, 9, 10, NE))
+        mov_imm(g, 5, 63)
+        w(g, sub(5, 5, 11))
+        w(g, lslv(10, 12, 11))
+        w(g, lsr_imm(4, 3, 1))
+        w(g, lsrv(4, 4, 5))
+        w(g, orr(10, 10, 4))
+        w(g, lslv(9, 3, 11))
+        w(g, lsr_imm(4, 12, 1))
+        w(g, lsrv(4, 4, 5))
+        w(g, orr(9, 9, 4))
     } else {
         refuse(g, f"`i128` binary operation {s}")
         return

@@ -64,10 +64,18 @@ for src in "${inputs[@]}"; do
   name=$(echo "$rel" | tr '/.' '__')
   W=$WORK/$name
   rm -rf "$W"; mkdir -p "$W/obj" "$W/gen"
-  if ! "$REF" build --target "$TARGET" "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
+  # A program with C beside it (FILE.c) is linked with it, as `nazm build --link` does.
+  link=()
+  if [ -f "${src%.nz}.c" ]; then
+    if ! cc -arch "$ARCH" -c "${src%.nz}.c" -o "$W/c.o" >"$W/c.build" 2>&1; then
+      echo "skipped  $rel (its C does not compile)"; skipped=$((skipped+1)); continue
+    fi
+    link=(--link "$W/c.o")
+  fi
+  if ! "$REF" build --target "$TARGET" ${link[@]+"${link[@]}"} "$src" -o "$W/ref" >"$W/ref.build" 2>&1; then
     echo "skipped  $rel (the reference does not build)"; skipped=$((skipped+1)); continue
   fi
-  if ! "$REF" build --target "$TARGET" --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
+  if ! "$REF" build --target "$TARGET" ${link[@]+"${link[@]}"} --objects "$W/obj" "$src" >"$W/obj.build" 2>&1 ||
      ! "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi

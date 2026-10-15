@@ -1,0 +1,66 @@
+// Conversions between every integer width and both float widths, both ways, signed and
+// unsigned (design D12: `stof`, `utof`, `ftos`, `ftou`, `sext`, `zext` and `trunc` on each class).
+
+fn from_i8(a: Int8) -> Str {
+    f"{Float32(a)} {Float64(a)} {Int16(a)} {Int32(a)} {Int(a)} {Int128(a)}"
+}
+
+fn from_u8(a: UInt8) -> Str {
+    f"{Float32(a)} {Float64(a)} {UInt16(a)} {UInt32(a)} {UInt64(a)} {UInt128(a)} {Int16(a)} {Int(a)}"
+}
+
+fn from_i16(a: Int16) -> Str {
+    f"{Float32(a)} {Float64(a)} {Int32(a)} {Int(a)} {Int128(a)} {Int8(a % Int16(100))}"
+}
+
+fn from_u16(a: UInt16) -> Str {
+    f"{Float32(a)} {Float64(a)} {UInt32(a)} {UInt64(a)} {UInt128(a)} {UInt8(a % UInt16(200))}"
+}
+
+fn from_i32(a: Int32) -> Str {
+    f"{Float32(a)} {Float64(a)} {Int(a)} {Int128(a)} {Int16(a % Int32(30000))} {Int8(a % Int32(100))}"
+}
+
+fn from_u32(a: UInt32) -> Str {
+    f"{Float32(a)} {Float64(a)} {UInt64(a)} {UInt128(a)} {UInt16(a % UInt32(60000))} {UInt8(a % UInt32(250))}"
+}
+
+fn from_i64(a: Int) -> Str {
+    f"{Float32(a)} {Float64(a)} {Int128(a)} {Int32(a % 2000000000)} {Int16(a % 30000)} {Int8(a % 100)}"
+}
+
+fn from_u64(a: UInt64) -> Str {
+    f"{Float32(a)} {Float64(a)} {UInt128(a)} {UInt32(a % UInt64(4000000000))} {UInt16(a % UInt64(60000))}"
+}
+
+fn from_i128(a: Int128) -> Str {
+    f"{Float32(a)} {Float64(a)} {Int(a % Int128(1000000000000))} {Int32(a % Int128(1000000))} {Int16(a % Int128(1000))} {Int8(a % Int128(100))}"
+}
+
+fn from_u128(a: UInt128) -> Str {
+    f"{Float32(a)} {Float64(a)} {UInt64(a % UInt128(1000000000000))} {UInt32(a % UInt128(1000000))} {UInt8(a % UInt128(100))}"
+}
+
+fn from_f64(x: Float64) -> Str {
+    f"{Int8(x)} {Int16(x)} {Int32(x)} {Int(x)} {Int128(x)} {UInt8(x)} {UInt16(x)} {UInt32(x)} {UInt64(x)} {UInt128(x)}"
+}
+
+fn from_f32(x: Float32) -> Str {
+    f"{Int8(x)} {Int16(x)} {Int32(x)} {Int(x)} {Int128(x)} {UInt8(x)} {UInt16(x)} {UInt32(x)} {UInt64(x)} {UInt128(x)}"
+}
+
+fn main() {
+    println(from_i8(Int8(-7)))
+    println(from_u8(UInt8(250)))
+    println(from_i16(Int16(-30001)))
+    println(from_u16(UInt16(65535)))
+    println(from_i32(Int32(-2000000001)))
+    println(from_u32(UInt32(4000000001)))
+    println(from_i64(-9007199254740993))
+    println(from_u64(UInt64(18000000000000000000)))
+    println(from_i128(Int128(-170141183460469231731687303715884105727)))
+    println(from_u128(UInt128(340282366920938463463374607431768211455)))
+    println(from_f64(99.75))
+    println(from_f64(-0.5))
+    println(from_f32(Float32(100.25)))
+}

@@ -1,0 +1,46 @@
+// Calls into C with every class Nazm passes it — `Int`, `Bool`, a borrowed `Str`, a handle, a
+// C struct by pointer, an export as a function pointer — more arguments than the registers hold,
+// and C calling back into exports that take and return every number (design D4). The C side is
+// ffi.c, which tests/run.sh compiles and links beside the program.
+
+extern "C" struct Pair { a: Int, flag: Bool, b: Int }
+extern "C" struct Box;
+
+extern "C" fn c_add(a: Int, b: Int) -> Int = "c_add";
+extern "C" fn c_both(a: Bool, b: Int) -> Bool = "c_both";
+extern "C" fn c_many(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Bool, k: Int) -> Int = "c_many";
+extern "C" fn c_len(s: Str) -> Int = "c_len";
+extern "C" fn c_word(n: Int) -> Str = "c_word";
+extern "C" fn c_maybe(n: Int) -> Option[Str] = "c_maybe";
+extern "C" fn c_pair(p: Pair) -> Int = "c_pair";
+extern "C" fn box_new(v: Int) -> Box = "box_new";
+extern "C" fn box_take(b: Box) -> Int = "box_take";
+extern "C" fn c_apply(f: fn(Int) -> Int, x: Int) -> Int = "c_apply";
+extern "C" fn c_numbers() -> Int = "c_numbers";
+
+pub extern "C" fn nz_scale(x: Float64, k: Int32) -> Float64 ! {} = "nz_scale" { x * Float64(k) }
+pub extern "C" fn nz_mask(x: UInt8, y: UInt16) -> UInt32 ! {} = "nz_mask" { UInt32(x) | (UInt32(y) << 8) }
+pub extern "C" fn nz_half(x: Float32) -> Float32 ! {} = "nz_half" { x / Float32(2.0) }
+pub extern "C" fn nz_small(x: Int8, y: Int16) -> Int16 ! {} = "nz_small" { Int16(x) * y }
+pub extern "C" fn nz_odd(x: Int) -> Bool ! {} = "nz_odd" { x % 2 != 0 }
+pub extern "C" fn nz_wide(a: Int, b: Int, c: Int, d: Int, e: Int, f: Int, g: Int, h: Int, i: Int, j: Int) -> Int ! {} = "nz_wide" { a + b + c + d + e + f + g + h + i * 100 + j * 1000 }
+pub extern "C" fn nz_triple(x: Int) -> Int ! {} = "nz_triple" { x * 3 }
+
+fn main(io: IoCap, f: ForeignCap) ! { io, foreign } {
+    println(f"{c_add(40, 2)} {c_both(true, 1)} {c_both(true, -1)} {c_both(false, 5)}")
+    println(c_many(1, 2, 3, 4, 5, 6, 7, 8, 9, true, 11))
+    let s = "four"
+    println(f"{c_len(s)} {c_word(2)}")
+    match c_maybe(0) {
+        Some(w) => println(w),
+        None => println("none"),
+    }
+    match c_maybe(1) {
+        Some(w) => println(w),
+        None => println("none"),
+    }
+    println(c_pair(Pair(a: 5, flag: true, b: 7)))
+    println(box_take(box_new(41)))
+    println(c_apply(nz_triple, 14))
+    println(c_numbers())
+}

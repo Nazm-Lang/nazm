@@ -72,3 +72,15 @@
       that it wrote as many as `link.txt` lists. `tests/run.sh`: 106 agree, 0 differ, 0 refused on
       aarch64 and on x86_64; `tests/lines.sh` 38 agree on each; `tests/unwind.sh` agrees on each
       (7 frames); `tests/encode.sh` 113 + 89 agree
+- [x] 7.2 The program set grown toward the whole LIR (D12): `nzcg --forms`/`--universe` and
+      `tests/cover.sh`; `tests/programs/` gains `conversions.nz` (every integer width to and from
+      both floats, widening and narrowing), `narrow.nz` (every comparison, wrapping operation,
+      rotation, bit count and `match` per width; `i128` rotations, bit counts and byte swap at
+      their edges; results of each class directly and through function values), `values.nz`
+      (a writable atomic static, `Float32` fields in memory, indirect calls with stack arguments
+      and an address result) and `ffi.nz` with `ffi.c` (calls into C with every FFI-safe class,
+      more than eight arguments, a C callback into an export, and C calling exports that take
+      and return every number; `run.sh` links a program's `FILE.c` beside it). New in the
+      generator: `i128` `rotl`/`rotr`, `popcnt`, `clz`, `ctz` and `bswap` on both targets (they
+      were refused). Coverage of the 485-form universe: 273 before, 393 after (aarch64);
+      `tests/run.sh` 110 agree, 0 differ, 0 refused on each target (393 of 485 forms on each)
