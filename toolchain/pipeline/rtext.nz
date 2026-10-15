@@ -10971,10 +10971,11 @@ pub fn rt_single_thread_state() -> Str ! {} {
 nz.errmsg
 nz.errlen
 nz.stack_limit
+nz.exc
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 33 }
+pub fn rt_abi_revision() -> Int ! {} { 34 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#
