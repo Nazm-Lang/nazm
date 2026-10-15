@@ -233,7 +233,12 @@ no `unsafe` yet.
 let x = 1;
 let x = 2;        // error: `x` is already defined in this scope
 if c { let x = 3; }   // fine: a different scope
+let (x, y) = (3, 4);  // error: `x` is already defined in this scope
 ```
+
+A pattern `let` binds its names in the scope it is written in, as a plain `let` does: a name the
+scope already binds, by either kind of `let`, is refused (`N0202`) once per name. A `match` arm,
+an `if let` and a `for` bind in a scope of their own.
 
 Rust permits same-scope shadowing and it is genuinely convenient. It is refused here
 because of what it does to *reading a change*: when a later line mentions `x`, telling

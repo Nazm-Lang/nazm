@@ -8344,10 +8344,11 @@ Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty
 Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused.
 Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused.
 Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused.
-Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused."""
+Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused.
+Repointed by the R5 fixes, which moved it to 88: an entry that accepted a pattern `let` rebinding a name in its own scope must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 87;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 86;"
+find = "pub const SEMANTIC_EPOCH: u32 = 88;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 87;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 

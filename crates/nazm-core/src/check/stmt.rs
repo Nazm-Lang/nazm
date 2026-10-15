@@ -5,7 +5,11 @@ use super::*;
 
 impl Checker<'_> {
     pub(super) fn check_block(&mut self, b: &Block, expected: Option<Type>) -> Completion {
-        self.open_scope(b.span);
+        if std::mem::take(&mut self.join_block) {
+            self.open_joined_scope(b.span);
+        } else {
+            self.open_scope(b.span);
+        }
         let completion = self.check_block_inner(b, expected);
         self.close_scope();
         completion
