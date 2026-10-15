@@ -419,3 +419,8 @@ why = "hyperfine over four build configurations on one loaded host, recorded wit
 heading = "R1.5 3.3: word frequency without a split list, measured (2026-10-15)"
 status = "dated"
 why = "hyperfine over release builds of three trees on one loaded host; a record of that date and machine — `bench/compare/compare.py` reproduces the current tree's row by its method, not the before rows"
+
+[[claim]]
+heading = "R1.5: the comparison re-run, measured (2026-10-15)"
+status = "dated"
+why = "bench/compare/compare.py over fifteen languages on one quiet but uncontrolled host; the method is reproducible by that command, these numbers are a record of that date and machine"
