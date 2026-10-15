@@ -14120,6 +14120,23 @@ pub fn ck_none(t: Tree) -> Ck {
 pub fn ck_t_int() -> Int { t_int() }
 pub fn ck_t_bool() -> Int { t_bool() }
 pub fn ck_t_str() -> Int { t_str() }
+// The built-in type of this name (`UInt8`, …).
+pub fn ck_t_named(c: Ck, name: Str) -> Int { builtin_ty(c, name) }
+// What a `for` loop iterates, as the reference's lowering reads it: `bytes`, `vec`, `chain`,
+// `ints` or `strs`, or "" for anything else; and a holder's element.
+pub fn ck_seq_kind(c: Ck, t: Int) -> Str {
+    if t < 0 { return ""; }
+    if tag(c, t) == tag_vec() { return "vec"; }
+    if tag(c, t) == tag_chain() { return "chain"; }
+    if tag(c, t) == tag_builtin() {
+        let n = bname_of(c, t);
+        if n == "Bytes" { return "bytes"; }
+        if n == "Ints" { return "ints"; }
+        if n == "Strs" { return "strs"; }
+    }
+    ""
+}
+pub fn ck_type_arg(c: Ck, t: Int, i: Int) -> Int { targ(c, t, i) }
 
 // The binding the name written at `s..e` (absolute) is, or -1.
 pub fn ck_binding_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvar, s, e) }
