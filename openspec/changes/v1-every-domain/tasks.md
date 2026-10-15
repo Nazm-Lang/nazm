@@ -2,8 +2,8 @@
 - [ ] 0.1 C cloud: libraries and the service model
 - [ ] 0.2 M microcontrollers: boards, flashing, debugging
 - [ ] 0.3 D drivers: Linux module and Windows driver under `kernel`
-- [ ] 0.4 H hardware: the synthesisable subset, its types and its Verilog backend
-- [ ] 0.5 Q quantum: linear qubit types, circuits, OpenQASM 3
+- [x] 0.4 H hardware: the synthesisable subset, its types and its Verilog backend — design.md ## H (2026-10-15)
+- [x] 0.5 Q quantum: linear qubit types, circuits, OpenQASM 3 — design.md ## Q (2026-10-15)
 
 ## Implementation and gates
 - [ ] 1.1 C gate: a TLS HTTP service under load, in a container and on WASI
