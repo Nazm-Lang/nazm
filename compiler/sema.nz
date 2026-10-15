@@ -25,7 +25,8 @@
 // numbers, `Bool` and `Str`, imported ones included, and statics (Gate 3); function types, named
 // functions as values, calls through values and closures with their captures (N50); traits,
 // impls, bounds, method calls, default methods and `Show` in interpolation (N78); effects
-// and authority; provenance and its one rule, `N0372` (N38, N80); the rules about `main`.
+// and authority; provenance and its one rule, `N0372` (N38, N80); the C boundary — foreign
+// functions, exports and `extern "C" struct`s (N42, N55, N85); the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -311,6 +312,11 @@ pub struct Ck {
     awty: Ints,
     aws: Ints,
     awe: Ints,
+    // How C sees each record (N85, `CRepr`): 0 not at all, 1 an opaque handle, 2 a C layout.
+    rrepr: Ints,
+    // Whether each function is a foreign declaration (N42) and whether it is an export (N55).
+    fnfor: Ints,
+    fnexp: Ints,
 }
 
 // A map from a span — its two absolute ends — to an `Int`, as the reference's `HashMap<Span, _>`:
@@ -675,6 +681,7 @@ fn tuple_ty(c: Ck, elems: Ints) -> Int {
         ints_push(c.rff, strs_len(c.fname));
         ints_push(c.rfc, n);
         ints_push(c.rpub, 1);
+        ints_push(c.rrepr, 0);
         i = 0;
         while i < n {
             strs_push(c.fname, int_to_str(i));
@@ -973,6 +980,8 @@ fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str
         if leaf_mode(c, t, mode) { return ""; }
         return str_concat("|", int_to_str(t));
     }
+    // A C handle has no equality, no order and never crosses into a task (N85).
+    if is_opaque(c, t) { return str_concat("|", int_to_str(t)); }
     let seen = ints_new();
     ints_push(seen, t);
     // The stack: each frame a node, the next edge to look at, and how many names it pushed.
@@ -1006,6 +1015,7 @@ fn derived_walk(c: Ck, top: Int, mode: Int, stop_trait: Int, exact: Bool) -> Str
             if stop_trait >= 0 && (is_record(c, ty) || is_enum(c, ty)) {
                 if exact { refused = impl_of(c, stop_trait, ty) >= 0; } else { refused = applying(c, stop_trait, ty) >= 0; }
             }
+            if is_opaque(c, ty) { refused = true; }
             if refused {
                 let mut k = 0;
                 while k < strs_len(names) {
@@ -1186,7 +1196,7 @@ fn new_ck(t: Tree) -> Ck {
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
             fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), mvar: sm_new(), mclo: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
-            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new());
+            sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -1530,7 +1540,6 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while i < ints_len(records) {
         let r = ints_get(records, i);
         if derives_encoding(c, r) { stop(c, "a derived encoding"); }
-        if some(c, r, "foreign") { stop(c, "a foreign record"); }
         let n = fname_of(c, r, "name");
         if (n == "Option" || n == "Result") && m != prelude(c) { stop(c, "a type named as the prelude's"); }
         i = i + 1;
@@ -1549,11 +1558,9 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
         if ints_len(kids(c, f, "effect_params")) > 0 && some(c, f, "method_of") { stop(c, "an effect parameter of a method"); }
-        if some(c, f, "foreign") { stop(c, "a foreign function"); }
-        if some(c, f, "export") { stop(c, "an export"); }
         if flag(c, f, "inferred_result") { stop(c, "a result type taken from the body"); }
         // A function without a body is a foreign one, or one whose body did not parse.
-        if some(c, f, "body") == false && gs(c, s_syntax()) != 1 { stop(c, "a function without a body"); }
+        if some(c, f, "body") == false && some(c, f, "foreign") == false && gs(c, s_syntax()) != 1 { stop(c, "a function without a body"); }
         i = i + 1;
     }
     0
@@ -1581,6 +1588,7 @@ fn declare_types(c: Ck, m: Int) -> Int {
             ints_push(c.rff, 0);
             ints_push(c.rfc, 0);
             if some(c, r, "pub_span") { ints_push(c.rpub, 1); } else { ints_push(c.rpub, 0); }
+            ints_push(c.rrepr, record_repr(c, r));
         }
         i = i + 1;
     }
@@ -2201,7 +2209,23 @@ fn resolve_type_fields(c: Ck, m: Int) -> Int {
             let written = kids(c, r, "fields");
             ints_set(c.rfc, id, resolve_fields(c, name, written, pn, pt));
             ints_set(c.rff, id, gs(c, s_fields()));
-            if ints_len(written) == 0 {
+            // A record C sees (N85): the C ABI, not generic, and only fields C has a layout for;
+            // an opaque handle's one field is a pointer no program can name.
+            if some(c, r, "foreign") {
+                foreign_struct(c, r, id);
+                if flag(c, unwrap(c, r, "foreign"), "opaque") {
+                    let ns = fld(c, r, "name_span");
+                    ints_set(c.rff, id, strs_len(c.fname));
+                    ints_set(c.rfc, id, 1);
+                    strs_push(c.fname, "#pointer");
+                    ints_push(c.fty, t_int());
+                    ints_push(c.fns, sps(c, ns));
+                    ints_push(c.fne, spe(c, ns));
+                    ints_push(c.fts, sps(c, ns));
+                    ints_push(c.fte, spe(c, ns));
+                }
+            }
+            if ints_get(c.rfc, id) == 0 && ints_len(written) == 0 {
                 err(c, "N0101", fld(c, r, "name_span"), cat3("`", name, "` has no fields, which is not supported yet"),
                         "a record with no fields would be built by writing `Name()`, which is exactly how a call to a function of that name is written — and types and functions are separate namespaces, so neither reading could be preferred. Give it a field, or use `Bool`");
             }
@@ -2326,6 +2350,233 @@ fn resolve_fields(c: Ck, owner: Str, written: Ints, pn: Strs, pt: Ints) -> Int {
     strs_len(names)
 }
 
+// --- the C boundary (N42, N55, N85; `check/foreign.rs`, `check/layout.rs`) -------------------
+
+// How C sees a record as declared (`CRepr`): 0 not at all, 1 an opaque handle, 2 a C layout.
+fn record_repr(c: Ck, r: Int) -> Int {
+    if some(c, r, "foreign") == false { return 0; }
+    if flag(c, unwrap(c, r, "foreign"), "opaque") { return 1; }
+    2
+}
+
+// Whether a type is an opaque C handle; whether it has a layout C shares (`c_layout_type`):
+// `Int`, `Bool`, or a record declared `extern "C"`.
+fn is_opaque(c: Ck, t: Int) -> Bool {
+    if t < 0 { return false; }
+    if is_record(c, t) == false { return false; }
+    ints_get(c.rrepr, ta(c, t)) == 1
+}
+fn c_layout_type(c: Ck, t: Int) -> Bool {
+    if t == t_int() || t == t_bool() { return true; }
+    if t >= 0 && is_record(c, t) { return ints_get(c.rrepr, ta(c, t)) != 0; }
+    false
+}
+
+// The rules an `extern "C" struct` meets (`foreign_struct`): the C ABI, no type parameters, and
+// fields of `Int`, `Bool`, an opaque handle or another C-layout record.
+fn foreign_struct(c: Ck, r: Int, id: Int) -> Int {
+    let fs = unwrap(c, r, "foreign");
+    let abi = fname_of(c, fs, "abi");
+    if abi != "C" {
+        err(c, "N0380", fld(c, fs, "abi_span"), cat3("`\"", abi, "\"` is not an ABI this compiler lays out"), "the one foreign ABI is `\"C\"`");
+    }
+    let tps = kids(c, r, "type_params");
+    if ints_len(tps) > 0 {
+        dg_error(c.d, "N0384", sps(c, fld(c, ints_get(tps, 0), "span")), spe(c, fld(c, ints_get(tps, ints_len(tps) - 1), "span")),
+                "a C struct cannot be generic", "", "C has one layout per struct; declare one per type");
+    }
+    let mut i = 0;
+    while i < ints_get(c.rfc, id) {
+        let f = ints_get(c.rff, id) + i;
+        if c_layout_type(c, ints_get(c.fty, f)) == false {
+            dg_error(c.d, "N0381", ints_get(c.fts, f), ints_get(c.fte, f), cat3("a C struct cannot have a field of this type (`", strs_get(c.fname, f), "`)"),
+                    "no C layout",
+                    "a C struct's fields are `Int` (`int64_t`), `Bool` (`bool`), an opaque handle (a pointer) or another C struct; a `Str`, a sequence, an enum or an ordinary record has no layout C shares");
+        }
+        i = i + 1;
+    }
+    0
+}
+
+// `N0611`: an opaque handle built or taken apart.
+fn opaque_refused(c: Ck, s: Int, e: Int, ty: Str, what: Str) -> Int {
+    dg_error(c.d, "N0611", s, e, cat5("`", ty, "` is an opaque C handle, which cannot be ", what, ""), "",
+            "a handle declared `extern \"C\" struct Name;` is a C pointer Nazm never reads: only a foreign function returns one, and only C reads what it points to")
+}
+
+// The C symbols the native runtime and the platform entry declare themselves
+// (`RESERVED_C_SYMBOLS`).
+fn reserved_c_symbols() -> Strs {
+    let a = cat5("exit,fclose,fopen,fread,free,fseek,ftell,fwrite,getenv,main,malloc,memcmp,memcpy,printf,pthread_cond_broadcast,pthread_cond_destroy,",
+            "getrlimit,pthread_attr_init,pthread_attr_setstacksize,pthread_attr_destroy,pthread_cond_init,pthread_cond_wait,pthread_cond_timedwait,clock_gettime,",
+            "atoll,getpagesize,posix_memalign,mprotect,memset,strtod,strtof,memmove,atan2,atan2f,cos,cosf,exp,expf,fmax,fmaxf,fmin,fminf,fmod,fmodf,log,log10,log10f,log2,log2f,logf,pow,powf,round,roundf,sin,sinf,tan,tanf,nz_ctx_switch,nz_ctx_prepare,nz_task_main,",
+            "nz_errno_location,__error,__errno_location,pthread_create,pthread_join,pthread_mutex_destroy,pthread_mutex_init,pthread_mutex_lock,pthread_mutex_unlock,realloc,snprintf,strlen,write,",
+            "read,close,lseek,fsync,rmdir,unlink,rename,dirfd,closedir,open,mkdir,stat,opendir,readdir,strerror_r,__xpg_strerror_r,nz_os_open,nz_os_mkdir,nz_os_stat,nz_os_opendir,nz_os_readdir,nz_os_family,nz_os_error_text,");
+    let b = cat5("bind,listen,accept,recvfrom,getsockname,getpeername,shutdown,inet_pton,inet_ntop,fcntl,socket,setsockopt,getsockopt,connect,send,sendto,getaddrinfo,freeaddrinfo,kqueue,kevent,epoll_create1,epoll_ctl,epoll_wait,",
+            "nz_net_fill,nz_net_format,nz_net_prepare,nz_net_open,nz_net_connect,nz_net_error,nz_net_send,nz_net_sendto,nz_net_eagain,nz_net_etimedout,nz_net_resolve,nz_net_poller,nz_net_arm,nz_net_poll,",
+            "pipe,posix_spawnp,posix_spawn_file_actions_init,posix_spawn_file_actions_adddup2,posix_spawn_file_actions_destroy,waitpid,kill,signal,environ,_NSGetEnviron,nz_os_environ,getentropy,",
+            "nz_os_page_size,nz_os_stack_alloc,nz_os_stack_free,nz_os_stack_size,nz_os_clock,nz_os_close,nz_os_read,nz_os_write,nz_os_lseek,nz_os_fsync,nz_os_unlink,nz_os_rmdir,nz_os_rename,nz_os_dirfd,nz_os_closedir,nz_os_entropy,nz_os_spawn,nz_os_reap,nz_os_terminate,nz_os_key,nz_os_args,",
+            "nz_net_read,nz_net_write,nz_net_bind,nz_net_listen,nz_net_accept,nz_net_recvfrom,nz_net_shutdown,nz_net_name,");
+    let d = cat4("nz_os_spawn_in,nz_os_child_id,nz_os_pid,nz_os_signal_group,nz_os_nap,nz_os_lstat,nz_os_chmod,nz_os_realpath,nz_os_flock,",
+            "posix_spawn_file_actions_addopen,posix_spawn_file_actions_addchdir_np,posix_spawnattr_init,posix_spawnattr_setflags,posix_spawnattr_setpgroup,posix_spawnattr_destroy,",
+            "wait4,getpid,nanosleep,lstat,chmod,realpath,flock", "");
+    split(cat3(a, b, d), 44)
+}
+
+// A string as Rust's `escape_debug` writes it, for the ASCII it can hold.
+fn debug_escape(s: Str) -> Str {
+    let slash = str_from_byte(92);
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let mut esc = "";
+        if b == 92 { esc = slash; }
+        if b == 34 { esc = "\""; }
+        if b == 39 { esc = "'"; }
+        if b == 10 { esc = "n"; }
+        if b == 9 { esc = "t"; }
+        if b == 13 { esc = "r"; }
+        if b == 0 { esc = "0"; }
+        if esc == "" && (b < 32 || b == 127) { esc = cat3("u{", hex_of(b), "}"); }
+        if esc == "" { strs_push(out, str_slice(s, i, i + 1)); } else { strs_push(out, str_concat(slash, esc)); }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+fn hex_of(n: Int) -> Str {
+    let digits = "0123456789abcdef";
+    let low = n - n / 16 * 16;
+    if n < 16 { return str_slice(digits, n, n + 1); }
+    str_concat(hex_of(n / 16), str_slice(digits, low, low + 1))
+}
+
+// The ABI and the symbol of a foreign declaration or an export (`c_abi_and_symbol`).
+fn c_abi_and_symbol(c: Ck, d: Int) -> Int {
+    let abi = fname_of(c, d, "abi");
+    if abi != "C" {
+        err(c, "N0380", fld(c, d, "abi_span"), cat3("`\"", abi, "\"` is not an ABI this compiler calls"),
+                "the one foreign ABI is `\"C\"`: the C calling convention of the target");
+    }
+    let sym = fname_of(c, d, "symbol");
+    let mut ok = str_len(sym) > 0 && str_len(sym) <= 255;
+    let mut i = 0;
+    while i < str_len(sym) {
+        let b = str_byte(sym, i);
+        let letter = (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95;
+        let digit = b >= 48 && b <= 57;
+        if letter == false && (digit == false || i == 0) { ok = false; }
+        i = i + 1;
+    }
+    if ok == false {
+        err(c, "N0382", fld(c, d, "symbol_span"), cat3("`\"", debug_escape(sym), "\"` is not a C symbol"),
+                "a foreign symbol is a C identifier: ASCII letters, digits and `_`, not starting with a digit, at most 255 bytes");
+    }
+    if strs_find(reserved_c_symbols(), sym) >= 0 {
+        err(c, "N0383", fld(c, d, "symbol_span"), cat3("`", sym, "` is a symbol the native runtime already declares"),
+                "the runtime and the platform entry call these themselves with their own signatures; a foreign declaration of one could disagree with it");
+    }
+    0
+}
+
+// Whether a foreign function may take, and return, a value of a type (`foreign_param`,
+// `foreign_result`).
+fn foreign_param_ok(c: Ck, t: Int) -> Bool {
+    if t == t_int() || t == t_bool() || t == t_str() { return true; }
+    if t >= 0 && is_record(c, t) { return ints_get(c.rrepr, ta(c, t)) != 0; }
+    if t >= 0 && is_fn(c, t) {
+        // A C function pointer (N85): an export's C entry, its parameters and result scalars.
+        let ps = fn_params(c, t);
+        let mut i = 0;
+        while i < ints_len(ps) {
+            let p = ints_get(ps, i);
+            if p != t_int() && p != t_bool() { return false; }
+            i = i + 1;
+        }
+        let r = fn_ret(c, t);
+        return r == t_int() || r == t_bool();
+    }
+    false
+}
+fn foreign_result_ok(c: Ck, t: Int) -> Bool {
+    if t == t_int() || t == t_bool() || t == t_str() { return true; }
+    if t < 0 { return false; }
+    if is_record(c, t) { return is_opaque(c, t); }
+    if prelude_enum(c, t, "Option") && targc(c, t) == 1 {
+        let inner = targ(c, t, 0);
+        return inner == t_str() || is_opaque(c, inner);
+    }
+    false
+}
+
+fn foreign_type(c: Ck, span: Int, what: Str) -> Int {
+    dg_error(c.d, "N0381", sps(c, span), spe(c, span), cat3("a foreign function cannot ", what, " this type"), "not FFI-safe",
+            "an argument is `Int`, `Bool`, a `Str` (borrowed), an opaque handle, an `extern \"C\" struct` (by borrowed pointer) or an export's function type; a result is `Int`, `Bool`, a handle or a `Str` (copied), or an `Option` of either when C may return null. An ordinary record or enum has no C layout, and a capability is never a word C can forge")
+}
+
+// The rules a foreign declaration meets (`check_foreign`).
+fn check_foreign(c: Ck, f: Int, d: Int, pf: Int, ret: Int) -> Int {
+    c_abi_and_symbol(c, d);
+    let tps = kids(c, f, "type_params");
+    if ints_len(tps) > 0 {
+        dg_error(c.d, "N0384", sps(c, fld(c, ints_get(tps, 0), "span")), spe(c, fld(c, ints_get(tps, ints_len(tps) - 1), "span")),
+                "a foreign function cannot be generic", "", "a C function has one signature; declare one per type");
+    }
+    if some(c, f, "effects") {
+        err(c, "N0384", fld(c, unwrap(c, f, "effects"), "span"), "a foreign function's effects are not written",
+                "calling one is always the effect `foreign`, which needs a `ForeignCap`");
+    }
+    let params = kids(c, f, "params");
+    let mut k = 0;
+    while k < ints_len(params) {
+        if foreign_param_ok(c, ints_get(c.ptys, pf + k)) == false { foreign_type(c, fld(c, fld(c, ints_get(params, k), "ty"), "span"), "take"); }
+        k = k + 1;
+    }
+    if foreign_result_ok(c, ret) == false { foreign_type(c, fld(c, fld(c, f, "return_type"), "span"), "return"); }
+    0
+}
+
+// The rules an export meets (`check_export`): the ABI and symbol rules, `pub`, `! {}`, not
+// generic, and only `Bool` and numbers of at most 64 bits across.
+fn export_scalar(c: Ck, t: Int) -> Bool {
+    if t == t_int() || t == t_bool() { return true; }
+    if t >= 0 && is_num(c, t) { return kind_bits(k_num(bname_of(c, t))) <= 64; }
+    false
+}
+fn export_shape(c: Ck, s: Int, e: Int, message: Str) -> Int {
+    dg_error(c.d, "N0391", s, e, message, "",
+            "an export is called by C, which can hand Nazm no capability and has no cleanup Nazm knows of: it is `pub`, declares `! {}`, is not generic, and takes and returns only numbers and `Bool`")
+}
+fn check_export(c: Ck, f: Int, d: Int, pf: Int, ret: Int) -> Int {
+    c_abi_and_symbol(c, d);
+    let who = cat3("`", fname_of(c, f, "name"), "` is exported to C, so it ");
+    let ns = fld(c, f, "name_span");
+    if some(c, f, "pub_span") == false { export_shape(c, sps(c, ns), spe(c, ns), str_concat(who, "is `pub`")); }
+    let rts = fld(c, fld(c, f, "return_type"), "span");
+    if some(c, f, "effects") {
+        let e = unwrap(c, f, "effects");
+        if ints_len(kids(c, e, "names")) > 0 { export_shape(c, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), str_concat(who, "performs no effect")); }
+    } else {
+        export_shape(c, sps(c, rts), spe(c, rts), str_concat(who, "declares `! {}`"));
+    }
+    let tps = kids(c, f, "type_params");
+    if ints_len(tps) > 0 {
+        export_shape(c, sps(c, fld(c, ints_get(tps, 0), "span")), spe(c, fld(c, ints_get(tps, ints_len(tps) - 1), "span")), str_concat(who, "cannot be generic"));
+    }
+    let params = kids(c, f, "params");
+    let mut k = 0;
+    while k < ints_len(params) {
+        if export_scalar(c, ints_get(c.ptys, pf + k)) == false {
+            let ts = fld(c, fld(c, ints_get(params, k), "ty"), "span");
+            export_shape(c, sps(c, ts), spe(c, ts), str_concat(who, "cannot take this type"));
+        }
+        k = k + 1;
+    }
+    if export_scalar(c, ret) == false { export_shape(c, sps(c, rts), spe(c, rts), str_concat(who, "cannot return this type")); }
+    0
+}
+
 // --- stage 0c: layouts --------------------------------------------------------------------------
 
 // A record or enum that contains itself, inline or through a `Vec`, is refused by
@@ -2388,6 +2639,7 @@ fn not_value(c: Ck, t: Int, strings: Bool) -> Int {
             let n = bname_of(c, ty);
             let plain = n == "Int" || n == "Bool" || is_num_name(n) || (strings && (n == "Str" || n == "Text"));
             if plain == false {
+                if is_opaque(c, ty) { return ty; }
                 if is_record(c, ty) || is_enum(c, ty) {
                     let edges = contained(c, ty);
                     let mut k = 0;
@@ -3591,13 +3843,18 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             sec(c, fld(c, first, "span"), "the first");
             k = k + 1;
         }
-        if some(c, f, "effects") == false {
-            err(c, "N0388", fld(c, first, "span"), cat3("`", fnm, "` has an effect parameter, so it declares its effect set"),
-                    cat3("write `! { ", fname_of(c, first, "name"), " }` after the result type: a function with an effect parameter states what it does in terms of it"));
+        if some(c, f, "foreign") {
+            // Calling C is always the effect `foreign`: the function has no parameter.
+            err(c, "N0388", fld(c, first, "span"), "a foreign function cannot have an effect parameter", "calling C is always the effect `foreign`");
+        } else {
+            if some(c, f, "effects") == false {
+                err(c, "N0388", fld(c, first, "span"), cat3("`", fnm, "` has an effect parameter, so it declares its effect set"),
+                        cat3("write `! { ", fname_of(c, first, "name"), " }` after the result type: a function with an effect parameter states what it does in terms of it"));
+            }
+            ints_push(c.epown, id);
+            strs_push(c.epnm, fname_of(c, first, "name"));
+            ss(c, s_eparam(), id + 1);
         }
-        ints_push(c.epown, id);
-        strs_push(c.epnm, fname_of(c, first, "name"));
-        ss(c, s_eparam(), id + 1);
     }
     let pf = ints_len(c.ptys);
     k = 0;
@@ -3639,11 +3896,23 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
             err(c, "N0203", ns, cat5("`", fname_of(c, f, "name"), "` is defined more than once in this ", place, ""), "");
             sec_at(c, ints_get(c.fnns, existing), ints_get(c.fnne, existing), "first defined here");
         } else {
+            // A foreign declaration (N42): its shape, ABI, symbol and types, and its symbol
+            // declared again only with the same signature; an export (N55) under its rules.
+            // What a foreign one declares is the effect `foreign` and nothing else.
+            if some(c, f, "foreign") {
+                let d = unwrap(c, f, "foreign");
+                check_foreign(c, f, d, pf, ret);
+                same_symbol(c, m, d, pf, ints_len(params), ret);
+                eff = with_bit(0, 2);
+            }
+            if some(c, f, "export") { check_export(c, f, unwrap(c, f, "export"), pf, ret); }
             strs_push(c.fnname, name);
             ints_push(c.fnmod, m);
             ints_push(c.fnclos, 0 - 1);
             ints_push(c.fnpb, 0 - 1);
             if method { ints_push(c.fnmeth, 1); } else { ints_push(c.fnmeth, 0); }
+            if some(c, f, "foreign") { ints_push(c.fnfor, 1); } else { ints_push(c.fnfor, 0); }
+            if some(c, f, "export") { ints_push(c.fnexp, 1); } else { ints_push(c.fnexp, 0); }
             let public = some(c, f, "pub_span") && method == false;
             if public { ints_push(c.fnpub, 1); } else { ints_push(c.fnpub, 0); }
             ints_push(c.fnns, sps(c, ns));
@@ -3678,6 +3947,33 @@ fn declare_function(c: Ck, m: Int, f: Int, hdr: Int) -> Int {
                 report_private_type(c, ret, sps(c, rts), spe(c, rts), sps(c, ns), spe(c, ns), "function", name);
             }
         }
+    }
+    0
+}
+
+// A C symbol declared again in this module must have the signature it was first declared with.
+fn same_symbol(c: Ck, m: Int, d: Int, pf: Int, pc: Int, ret: Int) -> Int {
+    let sym = fname_of(c, d, "symbol");
+    let mut g = 0;
+    while g < strs_len(c.fnname) {
+        if ints_get(c.fnmod, g) == m && ints_get(c.fnfor, g) == 1 {
+            let first = unwrap(c, ints_get(c.fnnode, g), "foreign");
+            if fname_of(c, first, "symbol") == sym {
+                let mut same = ints_get(c.fnpc, g) == pc && ints_get(c.fnret, g) == ret;
+                let mut k = 0;
+                while same && k < pc {
+                    if ints_get(c.ptys, ints_get(c.fnpf, g) + k) != ints_get(c.ptys, pf + k) { same = false; }
+                    k = k + 1;
+                }
+                if same == false {
+                    err(c, "N0383", fld(c, d, "symbol_span"), cat3("the C symbol `", sym, "` is declared again with another signature"),
+                            "a C function has one signature; declare it the same way");
+                    sec(c, fld(c, first, "symbol_span"), "declared differently here");
+                }
+                return 0;
+            }
+        }
+        g = g + 1;
     }
     0
 }
@@ -4579,6 +4875,12 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     }
     if k == "Field" {
         let bt = value_type(c, fld(c, e, "base"), none());
+        // Only C reads what a handle points to (N85).
+        if is_opaque(c, bt) {
+            let ns = fld(c, e, "name_span");
+            opaque_refused(c, sps(c, ns), spe(c, ns), show(c, bt), "taken apart");
+            return t_int();
+        }
         let t = check_projection(c, bt, fname_of(c, e, "name"), fld(c, e, "name_span"));
         if t < 0 { return t_int(); }
         return t;
@@ -4685,7 +4987,8 @@ fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
 fn function_value(c: Ck, name: Str, callee: Int, at: Int, expected: Int) -> Int {
     let mut why = "";
     if callee < 0 { why = "a built-in"; } else {
-        if ints_get(c.fntpc, callee) > 0 { why = "generic"; }
+        if ints_get(c.fnfor, callee) == 1 { why = "a foreign function"; }
+        if why == "" && ints_get(c.fntpc, callee) > 0 { why = "generic"; }
         // Its effect parameter is bound at each call, and a value has no call (N51).
         if why == "" && polymorphic(c, callee) { why = "polymorphic in its effects"; }
     }
@@ -4812,6 +5115,8 @@ fn check_closure(c: Ck, e: Int, expected: Int) -> Int {
     ints_push(c.fnpb, 0 - 1);
     sm_put(c.mclo, sps(c, fld(c, e, "span")), spe(c, fld(c, e, "span")), id);
     ints_push(c.fnmeth, 0);
+    ints_push(c.fnfor, 0);
+    ints_push(c.fnexp, 0);
     ints_push(c.fnpub, 0);
     ints_push(c.fnns, sps(c, fs));
     ints_push(c.fnne, spe(c, fs));
@@ -5868,8 +6173,33 @@ fn check_call(c: Ck, e: Int, expected: Int, unwanted: Bool) -> Int {
         }
         i = i + 1;
     }
+    if target >= 0 { check_callbacks(c, target, args, formals); }
     prove_preconditions(c, cs, target, args);
     ret
+}
+
+// A call of a foreign function passes each callback as an export's name (`check_callbacks`, N85):
+// a closure, a function value held in a binding, or a function that is not an export is `N0612`.
+fn check_callbacks(c: Ck, target: Int, args: Ints, formals: Ints) -> Int {
+    if ints_get(c.fnfor, target) == 0 { return 0; }
+    let mut i = 0;
+    while i < ints_len(args) && i < ints_len(formals) {
+        if is_fn(c, ints_get(formals, i)) {
+            let at = espan(c, ints_get(args, i));
+            let mut export = false;
+            let mut v = 0;
+            while v < ints_len(c.vfn) {
+                if ints_get(c.vstart, v) == sps(c, at) && ints_get(c.vend, v) == spe(c, at) { export = ints_get(c.fnexp, ints_get(c.vfn, v)) == 1; }
+                v = v + 1;
+            }
+            if export == false {
+                dg_error(c.d, "N0612", sps(c, at), spe(c, at), "a callback C calls is the name of an export", "not an export",
+                        "write the name of a `pub extern \"C\" fn … ! {} = \"symbol\" { … }`: its C entry needs no environment and lives as long as the process, which a closure or another function value does not");
+            }
+        }
+        i = i + 1;
+    }
+    0
 }
 
 // `spawn f(args);` (`check_spawn`): the call by the ordinary rule, inside a `scope`, with only
@@ -6898,6 +7228,16 @@ fn check_construction(c: Ck, ty: Str, ty_span: Int, targs: Int, inits: Inits, sp
     }
     let r = ta(c, t);
     sm_put(c.mcons, sps(c, ty_span), spe(c, ty_span), 1);
+    // Only C makes a handle (N85): it has no field a program could give a value.
+    if is_opaque(c, t) {
+        let mut k = 0;
+        while k < strs_len(inits.names) {
+            check_expr(c, ints_get(inits.vals, k), none());
+            k = k + 1;
+        }
+        opaque_refused(c, sps(c, ty_span), spe(c, ty_span), ty, "built");
+        return t;
+    }
     let given = strs_new();
     let gstart = ints_new();
     let gend = ints_new();
@@ -9496,6 +9836,33 @@ fn analyse_effects(c: Ck, m: Int) -> Int {
         }
         n = n + 1;
     }
+    // A foreign call needs a `ForeignCap` held, in every function (N42): the first call in each
+    // that does not hold one.
+    n = 0;
+    while n < ints_len(nodes) {
+        let me = ints_get(nodes, n);
+        let mut s = 0;
+        let mut done = false;
+        while s < ints_len(c.sfn) && done == false {
+            let g = ints_get(c.suser, s);
+            if ints_get(c.sfn, s) == me && g >= 0 {
+                if ints_get(c.fnfor, g) == 1 && has_bit(ints_get(c.sheld, s), cap_bit("ForeignCap")) == false {
+                    done = true;
+                    let who = fn_label(c, me);
+                    let callee = tick(strs_get(c.fnname, g));
+                    dg_error(c.d, "N0369", ints_get(c.sstart, s), ints_get(c.send, s),
+                            cat5("calling ", callee, " requires `ForeignCap` authority, and ", who, " holds no `ForeignCap` here"),
+                            str_concat(callee, " is a foreign function: calling C is authorised by a `ForeignCap`, with or without an effect set"),
+                            cat3("authority is a value: give ", who, " a `ForeignCap` parameter and have each caller pass one. The only source of one is `main`'s parameters"));
+                    if ints_get(c.fnws, me) >= 0 {
+                        sec_at(c, ints_get(c.fnws, me), ints_get(c.fnwe, me), "an effect set says what a function does, not what allows it");
+                    }
+                }
+            }
+            s = s + 1;
+        }
+        n = n + 1;
+    }
     0
 }
 
@@ -11736,7 +12103,11 @@ fn tr_flow(c: Ck, ps: Ps, pf: Pf, t: Tr, k: Int, f: Fl, o: Int, depth: Int) -> I
         let s = ints_get(pf.cs, cx);
         let e = ints_get(pf.ce, cx);
         if bhas(ints_get(ps.so, callee), o) {
-            tr_step(t, s, e, cat4(fn_named(c, callee), " returns data from ", o_describe(o), ""));
+            if ints_get(c.fnfor, callee) == 1 {
+                tr_step(t, s, e, str_concat(fn_named(c, callee), " is a foreign function, and what C returns is not followed"));
+            } else {
+                tr_step(t, s, e, cat4(fn_named(c, callee), " returns data from ", o_describe(o), ""));
+            }
             let j = ints_get(ps.at, callee);
             if j >= 0 {
                 if tr_insert(t, j, 0, 0 - 1) { tr_flow(c, ps, pf, t, j, vec_get(pf.fres, j), o, depth + 1); }
@@ -12016,12 +12387,19 @@ fn copy_ints(xs: Ints) -> Ints {
 // path, or no function declares its effects, the rule cannot fire and nothing is solved.
 fn restricted_flow(c: Ck) -> Int {
     if strs_len(c.stop) > 0 { return 0; }
-    if gs(c, s_source()) == 0 || gs(c, s_sink()) == 0 { return 0; }
+    // What a foreign function returns is C's, which may be anything: a restricted origin too.
     let n = strs_len(c.fnname);
-    let mut explicit = false;
+    let mut foreign = false;
     let mut g = 0;
     while g < n {
-        if ints_get(c.fneff, g) >= 0 { explicit = true; }
+        if ints_get(c.fnfor, g) == 1 { foreign = true; }
+        g = g + 1;
+    }
+    if (gs(c, s_source()) == 0 && foreign == false) || gs(c, s_sink()) == 0 { return 0; }
+    let mut explicit = false;
+    g = 0;
+    while g < n {
+        if ints_get(c.fneff, g) >= 0 && ints_get(c.fnfor, g) == 0 { explicit = true; }
         // A position is a bit of a mask: past 60 parameters and captures it does not fit.
         if ints_get(c.fnpc, g) + captures_of(c, g) > 60 {
             stop(c, "a function of more than 60 parameters and captures (provenance)");
@@ -12040,6 +12418,22 @@ fn restricted_flow(c: Ck) -> Int {
     let pf = pf_new();
     all_facts(c, pf, bloc);
     let ps = ps_new(c, pf);
+    // A foreign function (N42) has no body to reduce: its result is C's, which may be anything —
+    // `Unknown`, the worst origin — and may be derived from any argument.
+    g = 0;
+    while g < n {
+        if ints_get(c.fnfor, g) == 1 {
+            ints_set(ps.so, g, pow2(3));
+            let mut all = 0;
+            let mut i = 0;
+            while i < ints_get(c.fnpc, g) {
+                all = all + pow2(i);
+                i = i + 1;
+            }
+            ints_set(ps.sp, g, all);
+        }
+        g = g + 1;
+    }
     ps_targets(c, ps, pf);
     // Around everything, the cells and what parameters and captures are handed: each round solves
     // summaries, values and reaches against them, until nothing grows.
