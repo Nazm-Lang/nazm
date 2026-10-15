@@ -1,0 +1,9 @@
+use "lib/a.nz";
+fn main() -> Int {
+    let xs = ints_new();
+    ints_push(xs, 4);
+    match first(xs) {
+        Some(v) => v,
+        None => 0,
+    }
+}

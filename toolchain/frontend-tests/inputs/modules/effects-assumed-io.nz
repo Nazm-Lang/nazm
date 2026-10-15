@@ -1,0 +1,3 @@
+use "lib/a.nz";
+fn pure() -> Int ! { io } { noisy() }
+fn main() -> Int { pure() }

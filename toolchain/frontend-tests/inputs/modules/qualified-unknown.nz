@@ -1,0 +1,3 @@
+use "lib/a.nz" as a;
+fn f(p: a::Nope, q: z::Point) -> Int { 0 }
+fn main() -> Int { a::hidden() + a::missing() + z::shared(1) }

@@ -1,0 +1,6 @@
+use "lib/a.nz" as main;
+use "lib/b.nz" as Thing;
+use "lib/c.nz" as a;
+use "lib/leak.nz" as a;
+struct Thing { n: Int }
+fn main() -> Int { a::deep() }
