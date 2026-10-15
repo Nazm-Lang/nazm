@@ -331,6 +331,11 @@
       of the document's other parts 10,349 carried, all agree. check 3,045 agree, 2 differ
       (carried 3,041, all agree), render likewise, facts 3,041 agree, 6 differ (carried 3,041,
       all agree)
+- [ ] 5.1e The whole document, byte for byte, wherever every function and part is carried:
+      `cr_core` prints it as `print.rs` does (`cdg_pretty`), and `run.sh core` compares it with
+      `nazm core-ir`'s output. `run.sh core`: 3,047 inputs agree, 0 differ; of 56,701 functions
+      the lowering carries 43,490, all agree; of the other parts 10,349 carried, all agree; 944
+      whole documents carried, all 944 the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

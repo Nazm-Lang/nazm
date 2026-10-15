@@ -8,14 +8,18 @@
                                           part of the document — `%entry`, `%modules`, `%types`,
                                           `%statics`, `%impls`, `%derived_hash` — a tab and its
                                           value, compact
-    core-ir.py compare WANT GOT           compares them: prints `T C A P Q` — the reference's
-                                          functions, those the Nazm lowering carried, those of
-                                          them that agree, the parts the Nazm side carried, those
-                                          of them that agree — and exits 1 when a carried function
-                                          or part differs, or the two lists of functions do
+    core-ir.py compare WANT GOT DOC       compares them: prints `T C A P Q D E` — the
+                                          reference's functions, those the Nazm lowering carried,
+                                          those of them that agree, the parts the Nazm side
+                                          carried, those of them that agree, the documents it
+                                          printed whole (0 or 1) and those that are DOC (what
+                                          `nazm core-ir` printed) byte for byte — and exits 1 when
+                                          a carried function or part differs, the two lists of
+                                          functions do, or a whole document is not DOC's bytes
 
 The Nazm side (`diagnose --core`) prints `stops` where the checker stopped, `fails`, or a line per
-function and per part: its value, or `- REASON` where the lowering stopped.
+function and per part: its value, or `- REASON` where the lowering stopped; and where it carried
+every one, `%%document` on a line of its own and the whole document as `nazm core-ir` prints it.
 """
 
 import json
@@ -48,13 +52,21 @@ def lines(path: str) -> list:
         return f.read().splitlines()
 
 
-def compare(want_path: str, got_path: str) -> int:
-    w, g = lines(want_path), lines(got_path)
+def compare(want_path: str, got_path: str, doc_path: str) -> int:
+    w = lines(want_path)
+    with open(got_path, "rb") as f:
+        got = f.read()
+    marker = b"\n%%document\n"
+    document = None
+    if marker in got:
+        got, document = got.split(marker, 1)
+        got += b"\n"
+    g = got.decode("utf-8", errors="surrogateescape").splitlines()
     if g == ["stops"]:
-        print("0 0 0 0 0")
+        print("0 0 0 0 0 0 0")
         return 0
     if w == ["fails"] or g == ["fails"]:
-        print("0 0 0 0 0")
+        print("0 0 0 0 0 0 0")
         return 0 if w == g else 1
     wf = [x for x in w if not x.startswith("%")]
     gf = [x for x in g if not x.startswith("%")]
@@ -86,14 +98,22 @@ def compare(want_path: str, got_path: str) -> int:
             parts_agree += 1
         else:
             bad = True
-    print(f"{total} {carried} {agree} {parts} {parts_agree}")
+    documents = documents_agree = 0
+    if document is not None:
+        documents = 1
+        with open(doc_path, "rb") as f:
+            if f.read() == document:
+                documents_agree = 1
+            else:
+                bad = True
+    print(f"{total} {carried} {agree} {parts} {parts_agree} {documents} {documents_agree}")
     return 1 if bad else 0
 
 
 def main() -> int:
     if sys.argv[1] == "want":
         return want(int(sys.argv[2]))
-    return compare(sys.argv[2], sys.argv[3])
+    return compare(sys.argv[2], sys.argv[3], sys.argv[4])
 
 
 if __name__ == "__main__":
