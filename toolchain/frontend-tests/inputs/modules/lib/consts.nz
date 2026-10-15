@@ -1,0 +1,6 @@
+pub const LIMIT: Int = 10;
+pub const LABEL: Str = "x";
+const HIDDEN: Int = 3;
+pub const FROM_B: Int = LATER + 1;
+pub const LATER: Int = 2;
+pub const BAD: Int = 1 / 0;

@@ -20,8 +20,8 @@
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
-// prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; effects and
-// authority; the rules about `main`.
+// prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
+// `Int`, `Bool` and `Str`, imported ones included; effects and authority; the rules about `main`.
 
 use "syntax.nz";
 use "diag.nz";
@@ -185,6 +185,17 @@ pub struct Ck {
     almod: Ints,
     // Every alias the module's types may be written under (`Types::aliases`).
     taliases: Strs,
+    // The constants the module being checked may name, and each one's kind (`k_int` and on).
+    kname: Strs,
+    kkind: Ints,
+    // What each module exports of its constants (L8), once its stage 1b has run (`mexp`): the
+    // module, the name, the kind and the value.
+    mexp: Ints,
+    xmod: Ints,
+    xname: Strs,
+    xkind: Ints,
+    xint: Ints,
+    xstr: Strs,
 }
 
 // The module graph as the loader resolved it, handed to `ck_check`: per module, whether it is a
@@ -701,7 +712,8 @@ fn parse_int(s: Str) -> Int {
     let mut v = 0;
     let mut i = 0;
     while i < str_len(s) {
-        v = v * 10 + str_byte(s, i) - 48;
+        // The digit first, so `Int`'s largest value is read without passing it.
+        v = v * 10 + (str_byte(s, i) - 48);
         i = i + 1;
     }
     v
@@ -727,7 +739,8 @@ fn new_ck(t: Tree) -> Ck {
             pargs: ints_new(), cells: ints_new(), w: dg_new(), mstd: ints_new(), dfirst: ints_new(), dcount: ints_new(), don: ints_new(),
             dats: ints_new(), date: ints_new(), dplain: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
-            taliases: strs_new());
+            taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
+            xkind: ints_new(), xint: ints_new(), xstr: strs_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -854,6 +867,7 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         ints_push(c.mprog, ints_get(programs, i));
         ints_push(c.mbase, ints_get(bases, i));
         ints_push(c.mstd, ints_get(graph.standard, i));
+        ints_push(c.mexp, 0);
         i = i + 1;
     }
     if strs_get(names, count - 1) != "@core/prelude.nz" {
@@ -883,12 +897,13 @@ pub fn ck_check(t: Tree, programs: Ints, bases: Ints, names: Strs, graph: Graph)
         i = i + 1;
     }
     validate_layouts(c);
-    // Stage 1: each module's definitions.
+    // Stage 1: each module's definitions; stage 1b, each module's constants in dependency order.
     i = 0;
     while i < count {
         declare_functions(c, i);
         i = i + 1;
     }
+    declare_all_consts(c);
     // Stage 2: the bodies, module by module, each module's effects once its bodies are.
     i = 0;
     while i < count {
@@ -992,7 +1007,15 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
     if ints_len(kids(c, p, "traits")) > 0 { stop(c, "a trait"); }
     if ints_len(kids(c, p, "impls")) > 0 { stop(c, "an impl"); }
-    if ints_len(kids(c, p, "consts")) > 0 { stop(c, "a constant"); }
+    let consts = kids(c, p, "consts");
+    let mut k = 0;
+    while k < ints_len(consts) {
+        let decl = ints_get(consts, k);
+        if ints_len(kids(c, decl, "attrs")) > 0 { stop(c, "an attribute"); }
+        if flag(c, decl, "is_static") { stop(c, "a static"); }
+        if const_kind(c, decl) < 0 { stop(c, "a constant of this type"); }
+        k = k + 1;
+    }
     let records = kids(c, p, "records");
     let mut i = 0;
     while i < ints_len(records) {
@@ -1955,6 +1978,7 @@ fn check_unit(c: Ck, m: Int) -> Int {
     ss(c, s_module(), m);
     environment(c, m);
     type_environment(c, m, false);
+    const_environment(c, m);
     let p = ints_get(c.mprog, m);
     let functions = kids(c, p, "functions");
     let mut i = 0;
@@ -2491,6 +2515,9 @@ fn check_var(c: Ck, e: Int, expected: Int) -> Int {
     let span = fld(c, e, "span");
     let b = lookup(c, name);
     if b >= 0 { return ints_get(c.sty, b); }
+    // A constant (Gate 2): its type.
+    let k = strs_find(c.kname, name);
+    if k >= 0 { return kind_type(ints_get(c.kkind, k)); }
     if env_has(c, name) {
         stop(c, "a function as a value");
         return or_int(expected);
@@ -4684,6 +4711,412 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
                 "a pattern names every payload field, matching it or discarding it with `_`. There is no rest pattern, so adding a payload field breaks the patterns that did not know about it rather than ignoring it");
     }
     pat_new(c, pk_ctor(), at, "", ty, args)
+}
+
+// --- constants (`constants::evaluate`, Gate 2 and L8) ----------------------------------------------
+
+// A constant's kind: what this checker computes — an `Int`, a `Bool` or a `Str`. A constant of a
+// sized number, a float, a record, an enum, a tuple or an array, and a static, stop it.
+fn k_int() -> Int { 0 }
+fn k_bool() -> Int { 1 }
+fn k_str() -> Int { 2 }
+
+fn kind_type(k: Int) -> Int {
+    if k == k_bool() { return t_bool(); }
+    if k == k_str() { return t_str(); }
+    t_int()
+}
+
+fn kind_name(k: Int) -> Str {
+    if k == k_bool() { return "Bool"; }
+    if k == k_str() { return "Str"; }
+    "Int"
+}
+
+// A declaration's kind as its written type says (`declared`), or -1 for one this checker does not
+// compute.
+fn const_kind(c: Ck, decl: Int) -> Int {
+    let ty = fld(c, decl, "ty");
+    if some(c, ty, "args") || some(c, ty, "function") || some(c, ty, "qualifier") || some(c, ty, "length") { return 0 - 1; }
+    let name = fname_of(c, ty, "name");
+    if name == "Int" { return k_int(); }
+    if name == "Bool" { return k_bool(); }
+    if name == "Str" { return k_str(); }
+    0 - 1
+}
+
+// One module's constants as they are computed: the values done so far (an import's first, then
+// the module's own), the names being computed, and a pool of the values met on the way.
+pub struct Cev {
+    decls: Ints,
+    names: Strs,
+    kinds: Ints,
+    ints: Ints,
+    strs: Strs,
+    active: Strs,
+    vk: Ints,
+    vi: Ints,
+    vs: Strs,
+    d: Diags,
+}
+
+fn max_int() -> Int { 9223372036854775807 }
+fn min_int() -> Int { 0 - 9223372036854775807 - 1 }
+
+// The declaration of `name` a map collected from the module's would hold: its last.
+fn const_decl(c: Ck, ev: Cev, name: Str) -> Int {
+    let mut found = 0 - 1;
+    let mut i = 0;
+    while i < ints_len(ev.decls) {
+        if fname_of(c, ints_get(ev.decls, i), "name") == name { found = ints_get(ev.decls, i); }
+        i = i + 1;
+    }
+    found
+}
+
+fn ev_set(ev: Cev, name: Str, kind: Int, n: Int, s: Str) -> Int {
+    let at = strs_find(ev.names, name);
+    if at >= 0 {
+        ints_set(ev.kinds, at, kind);
+        ints_set(ev.ints, at, n);
+        strs_set(ev.strs, at, s);
+        return at;
+    }
+    strs_push(ev.names, name);
+    ints_push(ev.kinds, kind);
+    ints_push(ev.ints, n);
+    strs_push(ev.strs, s);
+    strs_len(ev.names) - 1
+}
+
+fn ev_val(ev: Cev, kind: Int, n: Int, s: Str) -> Int {
+    ints_push(ev.vk, kind);
+    ints_push(ev.vi, n);
+    strs_push(ev.vs, s);
+    ints_len(ev.vk) - 1
+}
+
+fn ev_bool(ev: Cev, b: Bool) -> Int {
+    if b { return ev_val(ev, k_bool(), 1, ""); }
+    ev_val(ev, k_bool(), 0, "")
+}
+
+// Compute module `m`'s constants (`evaluate`), each refusal into `d`: the constants its imports
+// export first — under each name it imports them by, a later import's hiding an earlier's — its
+// own names hiding them, then each declaration in order.
+fn evaluate_consts(c: Ck, m: Int, d: Diags) -> Cev {
+    ss(c, s_module(), m);
+    let ev = Cev(decls: kids(c, ints_get(c.mprog, m), "consts"), names: strs_new(), kinds: ints_new(), ints: ints_new(), strs: strs_new(),
+            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d);
+    let mut k = 0;
+    while k < deps(c, m) {
+        let dp = dep(c, m, k);
+        let on = ints_get(c.don, dp);
+        if ints_get(c.mexp, on) == 1 {
+            let mut x = 0;
+            while x < ints_len(c.xmod) {
+                if ints_get(c.xmod, x) == on {
+                    let name = strs_get(c.xname, x);
+                    let mut a = 0;
+                    while a < ints_get(c.dac, dp) {
+                        ev_set(ev, cat3(strs_get(c.aname, ints_get(c.daf, dp) + a), "::", name), ints_get(c.xkind, x), ints_get(c.xint, x),
+                                strs_get(c.xstr, x));
+                        a = a + 1;
+                    }
+                    if ints_get(c.dplain, dp) == 1 && const_decl(c, ev, name) < 0 {
+                        ev_set(ev, name, ints_get(c.xkind, x), ints_get(c.xint, x), strs_get(c.xstr, x));
+                    }
+                }
+                x = x + 1;
+            }
+        }
+        k = k + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(ev.decls) {
+        let decl = ints_get(ev.decls, i);
+        let name = fname_of(c, decl, "name");
+        let ns = fld(c, decl, "name_span");
+        // The first other declaration of the name; a later declaration than it is a duplicate.
+        let mut prior = 0 - 1;
+        let mut j = 0;
+        while j < ints_len(ev.decls) {
+            let other = ints_get(ev.decls, j);
+            if prior < 0 && j != i && fname_of(c, other, "name") == name { prior = other; }
+            j = j + 1;
+        }
+        if prior >= 0 && sx_s(c.t, fld(c, prior, "name_span")) < sx_s(c.t, ns) {
+            dg_error(d, "N0203", sps(c, ns), spe(c, ns), cat3("`", name, "` is declared twice in this module"), "", "");
+            dg_secondary(d, sps(c, fld(c, prior, "name_span")), spe(c, fld(c, prior, "name_span")), "first declared here");
+        } else {
+            ev_constant(c, ev, name);
+        }
+        i = i + 1;
+    }
+    ev
+}
+
+// A constant's value (`constant`): its index among the values done, or -1 where it has none.
+fn ev_constant(c: Ck, ev: Cev, name: Str) -> Int {
+    let done = strs_find(ev.names, name);
+    if done >= 0 { return done; }
+    let decl = const_decl(c, ev, name);
+    if decl < 0 { return 0 - 1; }
+    let ns = fld(c, decl, "name_span");
+    if strs_find(ev.active, name) >= 0 {
+        dg_error(ev.d, "N0622", sps(c, ns), spe(c, ns), cat3("`", name, "`'s value depends on itself"), "", "");
+        return 0 - 1;
+    }
+    let kind = const_kind(c, decl);
+    let value = fld(c, decl, "value");
+    strs_push(ev.active, name);
+    let v = ev_value(c, ev, value);
+    strs_pop(ev.active);
+    // One that could not be computed is still declared, at its type: one mistake, one error.
+    if v < 0 {
+        ev_set(ev, name, kind, 0, "");
+        return 0 - 1;
+    }
+    if ints_get(ev.vk, v) != kind {
+        dg_error(ev.d, "N0300", sps(c, espan(c, value)), spe(c, espan(c, value)),
+                cat5(cat3("`", name, "` is declared `"), kind_name(kind), "`, and this is `", kind_name(ints_get(ev.vk, v)), "`"), "", "");
+        return 0 - 1;
+    }
+    ev_set(ev, name, kind, ints_get(ev.vi, v), strs_get(ev.vs, v))
+}
+
+fn ev_refuse(c: Ck, ev: Cev, span: Int, why: Str) -> Int {
+    dg_error(ev.d, "N0622", sps(c, span), spe(c, span), str_concat("a constant's value cannot ", why), "",
+            "a constant is literals, other constants, operators and numeric conversions `T(x)`");
+    0 - 1
+}
+
+fn ev_fails(c: Ck, ev: Cev, span: Int, what: Str) -> Int {
+    dg_error(ev.d, "N0623", sps(c, span), spe(c, span), str_concat("this constant ", what), "", "");
+    0 - 1
+}
+
+// An expression's value (`value`): its index in the pool, or -1 where it was refused.
+fn ev_value(c: Ck, ev: Cev, e: Int) -> Int {
+    let k = kind_of(c, e);
+    if sx_kind(c.t, e) == tk_tuple() { return ev_refuse(c, ev, espan(c, e), "be computed from this"); }
+    if k == "Int" { return ev_val(ev, k_int(), parse_int(sx_text(c.t, fld(c, e, "value"))), ""); }
+    if k == "WideInt" {
+        let span = fld(c, e, "span");
+        dg_error(ev.d, "N0003", sps(c, span), spe(c, span), cat3("`", sx_text(c.t, fld(c, e, "value")), "` does not fit in `Int`"), "",
+                "`Int` holds -9223372036854775808 to 9223372036854775807");
+        return 0 - 1;
+    }
+    if k == "Bool" { return ev_bool(ev, sx_text(c.t, fld(c, e, "value")) == "true"); }
+    if k == "Str" { return ev_val(ev, k_str(), 0, sx_text(c.t, fld(c, e, "value"))); }
+    if k == "Var" {
+        let name = fname_of(c, e, "name");
+        let i = ev_constant(c, ev, name);
+        if i >= 0 { return ev_val(ev, ints_get(ev.kinds, i), ints_get(ev.ints, i), strs_get(ev.strs, i)); }
+        if const_decl(c, ev, name) >= 0 { return 0 - 1; }
+        return ev_refuse(c, ev, fld(c, e, "span"), cat3("name `", name, "`, which is not a constant"));
+    }
+    if k == "Neg" {
+        let v = ev_value(c, ev, fld(c, e, "operand"));
+        if v < 0 { return 0 - 1; }
+        if ints_get(ev.vk, v) != k_int() { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a number"); }
+        if ints_get(ev.vi, v) == min_int() { return ev_fails(c, ev, fld(c, e, "span"), "overflows its type"); }
+        return ev_val(ev, k_int(), 0 - ints_get(ev.vi, v), "");
+    }
+    if k == "Not" {
+        let v = ev_value(c, ev, fld(c, e, "operand"));
+        if v < 0 { return 0 - 1; }
+        if ints_get(ev.vk, v) != k_bool() { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a `Bool`"); }
+        return ev_bool(ev, ints_get(ev.vi, v) == 0);
+    }
+    if k == "Binary" { return ev_binary(c, ev, e); }
+    if k == "Float" || k == "BitNot" {
+        stop(c, cat3("the expression `", k, "` in a constant"));
+        return 0 - 1;
+    }
+    if k == "Call" {
+        if some(c, e, "qualifier") == false && some(c, e, "type_args") == false && is_num_name(fname_of(c, e, "callee")) && ints_len(kids(c, e, "args")) == 1 {
+            stop(c, "a numeric conversion in a constant");
+            return 0 - 1;
+        }
+    }
+    ev_refuse(c, ev, espan(c, e), "be computed from this")
+}
+
+fn ev_binary(c: Ck, ev: Cev, e: Int) -> Int {
+    let op = sx_text(c.t, fld(c, e, "op"));
+    let at = fld(c, e, "op_span");
+    if is_logical(op) {
+        let l = ev_value(c, ev, fld(c, e, "lhs"));
+        if l < 0 { return 0 - 1; }
+        if ints_get(ev.vk, l) != k_bool() { return ev_refuse(c, ev, at, "combine values that are not `Bool`s with this"); }
+        let a = ints_get(ev.vi, l) == 1;
+        if (op == "And" && a == false) || (op == "Or" && a) { return ev_bool(ev, a); }
+        return ev_value(c, ev, fld(c, e, "rhs"));
+    }
+    if op == "Shl" || op == "Shr" {
+        stop(c, "a shift in a constant");
+        return 0 - 1;
+    }
+    let l = ev_value(c, ev, fld(c, e, "lhs"));
+    if l < 0 { return 0 - 1; }
+    let r = ev_value(c, ev, fld(c, e, "rhs"));
+    if r < 0 { return 0 - 1; }
+    let lk = ints_get(ev.vk, l);
+    let rk = ints_get(ev.vk, r);
+    if lk == k_int() && rk == k_int() {
+        let a = ints_get(ev.vi, l);
+        let b = ints_get(ev.vi, r);
+        if op == "Add" {
+            if add_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
+            return ev_val(ev, k_int(), a + b, "");
+        }
+        if op == "Sub" {
+            if sub_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
+            return ev_val(ev, k_int(), a - b, "");
+        }
+        if op == "Mul" {
+            if mul_fits(a, b) == false { return ev_fails(c, ev, at, "overflows its type"); }
+            return ev_val(ev, k_int(), a * b, "");
+        }
+        if op == "Div" || op == "Rem" {
+            if b == 0 { return ev_fails(c, ev, at, "divides by zero"); }
+            // Truncating; `MIN / -1` is out of range, and `MIN % -1` is 0.
+            if b == 0 - 1 {
+                if op == "Rem" { return ev_val(ev, k_int(), 0, ""); }
+                if a == min_int() { return ev_fails(c, ev, at, "overflows its type"); }
+                return ev_val(ev, k_int(), 0 - a, "");
+            }
+            if op == "Div" { return ev_val(ev, k_int(), a / b, ""); }
+            return ev_val(ev, k_int(), a % b, "");
+        }
+        if op == "BitAnd" || op == "BitOr" || op == "BitXor" {
+            stop(c, "a bit operator in a constant");
+            return 0 - 1;
+        }
+        if op == "Eq" { return ev_bool(ev, a == b); }
+        if op == "NotEq" { return ev_bool(ev, a != b); }
+        if op == "Lt" { return ev_bool(ev, a < b); }
+        if op == "LtEq" { return ev_bool(ev, a <= b); }
+        if op == "Gt" { return ev_bool(ev, a > b); }
+        if op == "GtEq" { return ev_bool(ev, a >= b); }
+        return ev_refuse(c, ev, at, "apply this operator to these values");
+    }
+    if lk == k_bool() && rk == k_bool() {
+        if op == "Eq" { return ev_bool(ev, ints_get(ev.vi, l) == ints_get(ev.vi, r)); }
+        if op == "NotEq" { return ev_bool(ev, ints_get(ev.vi, l) != ints_get(ev.vi, r)); }
+        return ev_refuse(c, ev, at, "apply this operator to `Bool`s");
+    }
+    if lk == k_str() && rk == k_str() {
+        if op == "Eq" { return ev_bool(ev, strs_get(ev.vs, l) == strs_get(ev.vs, r)); }
+        if op == "NotEq" { return ev_bool(ev, strs_get(ev.vs, l) != strs_get(ev.vs, r)); }
+        return ev_refuse(c, ev, at, "apply this operator to `Str`s");
+    }
+    ev_refuse(c, ev, at, "combine values of two types")
+}
+
+// Whether `a + b`, `a - b` and `a * b` stay in `Int`'s range.
+fn add_fits(a: Int, b: Int) -> Bool {
+    if b > 0 { return a <= max_int() - b; }
+    a >= min_int() - b
+}
+fn sub_fits(a: Int, b: Int) -> Bool {
+    if b < 0 { return a <= max_int() + b; }
+    a >= min_int() + b
+}
+fn mul_fits(a: Int, b: Int) -> Bool {
+    if a > 0 {
+        if b > 0 { return a <= max_int() / b; }
+        return b >= min_int() / a;
+    }
+    if b > 0 { return a >= min_int() / b; }
+    a == 0 || b >= max_int() / a
+}
+
+// The modules in an order with each after the modules it imports (`dependency_order`), where the
+// imports allow it: a cycle's members in the order first reached.
+fn dependency_order(c: Ck) -> Ints {
+    let n = ints_len(c.mprog);
+    let state = ints_new();
+    let mut i = 0;
+    while i < n {
+        ints_push(state, 0);
+        i = i + 1;
+    }
+    let out = ints_new();
+    let mut start = 0;
+    while start < n {
+        if ints_get(state, start) == 0 {
+            let sn = ints_new();
+            let snext = ints_new();
+            ints_push(sn, start);
+            ints_push(snext, 0);
+            ints_set(state, start, 1);
+            while ints_len(sn) > 0 {
+                let m = ints_pop(sn);
+                let next = ints_pop(snext);
+                if next < deps(c, m) {
+                    let d = ints_get(c.don, dep(c, m, next));
+                    ints_push(sn, m);
+                    ints_push(snext, next + 1);
+                    if ints_get(state, d) == 0 {
+                        ints_set(state, d, 1);
+                        ints_push(sn, d);
+                        ints_push(snext, 0);
+                    }
+                } else {
+                    ints_set(state, m, 2);
+                    ints_push(out, m);
+                }
+            }
+        }
+        start = start + 1;
+    }
+    out
+}
+
+// Stage 1b (`declare_all_consts`): every module's constants in dependency order, each refusal
+// reported, and each module then exporting its `pub` ones.
+fn declare_all_consts(c: Ck) -> Int {
+    let order = dependency_order(c);
+    let mut i = 0;
+    while i < ints_len(order) {
+        let m = ints_get(order, i);
+        let ev = evaluate_consts(c, m, c.d);
+        let mut k = 0;
+        while k < ints_len(ev.decls) {
+            let decl = ints_get(ev.decls, k);
+            let name = fname_of(c, decl, "name");
+            let at = strs_find(ev.names, name);
+            if some(c, decl, "pub_span") && at >= 0 {
+                ints_push(c.xmod, m);
+                strs_push(c.xname, name);
+                ints_push(c.xkind, ints_get(ev.kinds, at));
+                ints_push(c.xint, ints_get(ev.ints, at));
+                strs_push(c.xstr, strs_get(ev.strs, at));
+            }
+            k = k + 1;
+        }
+        ints_set(c.mexp, m, 1);
+        i = i + 1;
+    }
+    0
+}
+
+// The constants module `m`'s bodies may name, computed again silently: its own and its imports'.
+fn const_environment(c: Ck, m: Int) -> Int {
+    while strs_len(c.kname) > 0 {
+        strs_pop(c.kname);
+        ints_pop(c.kkind);
+    }
+    let ev = evaluate_consts(c, m, dg_new());
+    let mut i = 0;
+    while i < strs_len(ev.names) {
+        strs_push(c.kname, strs_get(ev.names, i));
+        ints_push(c.kkind, ints_get(ev.kinds, i));
+        i = i + 1;
+    }
+    0
 }
 
 // --- `?` (`check_propagate`) ---------------------------------------------------------------------
