@@ -522,7 +522,7 @@ fn an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not() {
     assert_eq!(r.code, Some(1), "{r:?}");
     assert!(r.stderr.contains("N0618"), "{r:?}");
     assert!(
-        r.stderr.contains("Vec[Int]"),
+        r.stderr.contains("List[Int]"),
         "the help writes the type: {r:?}"
     );
     std::fs::write(
