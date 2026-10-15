@@ -10057,6 +10057,12 @@ pub struct Cev {
     // Each constant of a record, enum, tuple or array type whose type resolved (L8), by name.
     aggn: Strs,
     aggt: Ints,
+    // The value of the aggregate being computed, as `ev_agg` meets its parts (`ConstValue`):
+    // one token each — `R<type>:<n>` a record or tuple of `n` fields, `V<type>:<variant>:<n>` a
+    // variant, `A<type>:<n>` an array, `N<kind>:<value>` a number or a `Bool`, `S<hex>` a `Str`,
+    // `F` a float — each followed by its parts. Joined by spaces, it is the constant's value
+    // (`ev.strs`), which Core IR reads (`ck_const_text`).
+    parts: Strs,
 }
 
 // The declaration of `name` a map collected from the module's would hold: its last.
@@ -10103,7 +10109,7 @@ fn ev_bool(ev: Cev, b: Bool) -> Int {
 fn evaluate_consts(c: Ck, m: Int, d: Diags, aggregates: Bool) -> Cev {
     ss(c, s_module(), m);
     let ev = Cev(decls: kids(c, ints_get(c.mprog, m), "consts"), names: strs_new(), kinds: ints_new(), ints: ints_new(), strs: strs_new(),
-            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new(), cellv: ints_new(), aggn: strs_new(), aggt: ints_new());
+            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new(), cellv: ints_new(), aggn: strs_new(), aggt: ints_new(), parts: strs_new());
     let mut k = 0;
     while k < deps(c, m) {
         let dp = dep(c, m, k);
@@ -10208,9 +10214,49 @@ fn ev_aggregate(c: Ck, ev: Cev, name: Str, decl: Int, t: Int) -> Int {
         return 0 - 1;
     }
     strs_push(ev.active, name);
+    let mark = strs_len(ev.parts);
     ev_agg(c, ev, fld(c, decl, "value"), t);
     strs_pop(ev.active);
-    ev_set(ev, name, k_agg(t), 0, "")
+    let value = strs_new();
+    let mut i = mark;
+    while i < strs_len(ev.parts) {
+        strs_push(value, strs_get(ev.parts, i));
+        i = i + 1;
+    }
+    while strs_len(ev.parts) > mark { strs_pop(ev.parts); }
+    ev_set(ev, name, k_agg(t), 0, str_join(value, " "))
+}
+
+// A scalar value of the pool as a token of an aggregate's value (`parts`).
+fn ev_part(ev: Cev, v: Int) -> Int {
+    let k = ints_get(ev.vk, v);
+    if k == k_int() || k == k_bool() {
+        strs_push(ev.parts, cat4("N", int_to_str(k), ":", int_to_str(ints_get(ev.vi, v))));
+        return 0;
+    }
+    if k == k_str() {
+        strs_push(ev.parts, str_concat("S", hex_text(strs_get(ev.vs, v))));
+        return 0;
+    }
+    if k_is_float(k) {
+        strs_push(ev.parts, cat4("F", int_to_str(k), ":", strs_get(ev.vs, v)));
+        return 0;
+    }
+    strs_push(ev.parts, cat4("N", int_to_str(k), ":", strs_get(ev.vs, v)));
+    0
+}
+
+fn hex_text(s: Str) -> Str {
+    let digits = "0123456789abcdef";
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        strs_push(out, str_slice(digits, b / 16, b / 16 + 1));
+        strs_push(out, str_slice(digits, b % 16, b % 16 + 1));
+        i = i + 1;
+    }
+    str_join(out, "")
 }
 
 fn ev_mismatch(c: Ck, ev: Cev, span: Int, t: Int) -> Bool {
@@ -10237,6 +10283,7 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
         let v = ev_value(c, ev, e, sk);
         if v < 0 { return false; }
         if ints_get(ev.vk, v) != sk { return ev_mismatch(c, ev, espan(c, e), t); }
+        ev_part(ev, v);
         return true;
     }
     if sx_kind(c.t, e) == tk_tuple() { return ev_mismatch(c, ev, espan(c, e), t); }
@@ -10253,11 +10300,13 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
         let i = ev_constant(c, ev, name);
         if i < 0 { return false; }
         if kind_type(c, ints_get(ev.kinds, i)) != t { return ev_mismatch(c, ev, span, t); }
+        strs_push(ev.parts, strs_get(ev.strs, i));
         return true;
     }
     if is_record(c, t) && k == "Tuple" {
         let elems = kids(c, e, "elems");
         if is_tuple(c, t) == false || targc(c, t) != ints_len(elems) { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
+        strs_push(ev.parts, cat4("R", int_to_str(t), ":", int_to_str(ints_len(elems))));
         let mut i = 0;
         while i < ints_len(elems) {
             if ev_agg(c, ev, ints_get(elems, i), targ(c, t, i)) == false { return false; }
@@ -10276,6 +10325,7 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
                 ints_push(wty, field_ty_in(c, t, ints_get(c.rff, r) + i));
                 i = i + 1;
             }
+            strs_push(ev.parts, cat4("R", int_to_str(t), ":", int_to_str(strs_len(want))));
             return ev_fields(c, ev, want, wty, kids(c, e, "fields"), fld(c, e, "span"));
         }
     }
@@ -10298,12 +10348,14 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
                 ints_push(wty, field_ty_in(c, t, ints_get(c.vff, vi) + i));
                 i = i + 1;
             }
+            strs_push(ev.parts, cat4(cat3("V", int_to_str(t), ":"), int_to_str(vi - ints_get(c.evf, en)), ":", int_to_str(strs_len(want))));
             return ev_fields(c, ev, want, wty, kids(c, e, "fields"), fld(c, e, "span"));
         }
     }
     if is_array(c, t) && k == "Array" {
         let elems = kids(c, e, "elems");
         if ints_len(elems) != ta(c, t) { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
+        strs_push(ev.parts, cat4("A", int_to_str(t), ":", int_to_str(ints_len(elems))));
         let mut i = 0;
         while i < ints_len(elems) {
             if ev_agg(c, ev, ints_get(elems, i), array_elem(c, t)) == false { return false; }
@@ -10316,7 +10368,22 @@ fn ev_agg(c: Ck, ev: Cev, e: Int, t: Int) -> Bool {
         if n < 0 { return false; }
         let nk = ints_get(ev.vk, n);
         if k_is_integer(nk) == false || w_cmp(ev_wide(ev, n), w_from_int(ta(c, t))) != 0 { return ev_mismatch(c, ev, fld(c, e, "span"), t); }
-        return ev_agg(c, ev, fld(c, e, "value"), array_elem(c, t));
+        // Its element, once for each place.
+        strs_push(ev.parts, cat4("A", int_to_str(t), ":", int_to_str(ta(c, t))));
+        let mark = strs_len(ev.parts);
+        if ev_agg(c, ev, fld(c, e, "value"), array_elem(c, t)) == false { return false; }
+        let one = strs_new();
+        let mut i = mark;
+        while i < strs_len(ev.parts) {
+            strs_push(one, strs_get(ev.parts, i));
+            i = i + 1;
+        }
+        let mut k = 1;
+        while k < ta(c, t) {
+            strs_push(ev.parts, str_join(one, " "));
+            k = k + 1;
+        }
+        return true;
     }
     if k == "Call" {
         ev_refuse(c, ev, fld(c, e, "span"), "call a function");
@@ -10506,9 +10573,12 @@ fn ev_value(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
     let k = kind_of(c, e);
     if sx_kind(c.t, e) == tk_tuple() { return ev_refuse(c, ev, espan(c, e), "be computed from this"); }
     if k == "Int" || k == "WideInt" { return ev_integer(c, ev, sx_text(c.t, fld(c, e, "value")), want, fld(c, e, "span")); }
+    // A float literal keeps its text, which Core IR reads its value from; this checker computes
+    // no float, so anything made of one but its negation has none ("").
     if k == "Float" {
-        if kind_name(want) == "Float32" { return ev_val(ev, want, 0, ""); }
-        return ev_val(ev, k_num("Float64"), 0, "");
+        let text = sx_text(c.t, fld(c, e, "text"));
+        if kind_name(want) == "Float32" { return ev_val(ev, want, 0, text); }
+        return ev_val(ev, k_num("Float64"), 0, text);
     }
     if k == "Bool" { return ev_bool(ev, sx_text(c.t, fld(c, e, "value")) == "true"); }
     if k == "Str" { return ev_val(ev, k_str(), 0, sx_text(c.t, fld(c, e, "value"))); }
@@ -10532,7 +10602,12 @@ fn ev_value(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
         if v < 0 { return 0 - 1; }
         let vk = ints_get(ev.vk, v);
         if k_is_num(vk) == false { return ev_refuse(c, ev, fld(c, e, "span"), "negate something that is not a number"); }
-        if k_is_float(vk) { return ev_val(ev, vk, 0, ""); }
+        if k_is_float(vk) {
+            let text = strs_get(ev.vs, v);
+            if text == "" { return ev_val(ev, vk, 0, ""); }
+            if str_byte(text, 0) == 45 { return ev_val(ev, vk, 0, str_slice(text, 1, str_len(text))); }
+            return ev_val(ev, vk, 0, str_concat("-", text));
+        }
         return ev_checked(c, ev, vk, w_negate(ev_wide(ev, v)), fld(c, e, "span"));
     }
     if k == "BitNot" {
@@ -14329,6 +14404,8 @@ pub fn ck_const_cell(c: Ck, u: Int) -> Bool { ints_get(c.uk, u) == k_atomic() }
 pub fn ck_const_agg(c: Ck, u: Int) -> Bool { k_is_agg(ints_get(c.uk, u)) }
 pub fn ck_const_int(c: Ck, u: Int) -> Int { ints_get(c.ui, u) }
 pub fn ck_const_text(c: Ck, u: Int) -> Str { strs_get(c.us, u) }
+// The type of a constant's kind (a number's, `Bool`, `Str`, or an aggregate's).
+pub fn ck_kind_type(c: Ck, k: Int) -> Int { kind_type(c, k) }
 // The conversion whose callee is written at `s..e` (absolute), or -1: the type converted to, its
 // mode (`exact`, `try`, `wrap`, `saturate`) and what the call produces.
 pub fn ck_conv_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mconv, s, e) }
