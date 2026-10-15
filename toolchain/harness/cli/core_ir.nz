@@ -1,0 +1,317 @@
+// N39: `nazm core-ir`, and the two backends reading one Core IR: the printed form is the same
+// bytes from one run to the next, two modules' same-named definitions stay two identities, a
+// program which does not check prints nothing, and the interpreter and a compiled executable
+// agree about the shipped examples. Ported from `crates/nazm-cli/tests/core_ir.rs` (R7);
+// `what_each_phase_costs_on_the_compiler` is an `#[ignore]`d measurement and stays Rust.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/tools.nz"
+use "../lib/differential.nz"
+
+fn core_ir(h: Caps, file: Str, extra: Str) -> Ran ! { io, spawn } {
+    let a = words(f"core-ir {extra}");
+    strs_push(a, file);
+    nazm(h, "", a)
+}
+
+@test
+fn the_printed_core_ir_is_the_same_bytes_in_every_process(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    for example in words("examples/pipeline.nz examples/capabilities/ledger.nz compiler/emit.nz") {
+        let file = f"{repo_root(h)}/{example}";
+        let first = core_ir(h, file, "--json");
+        check_that(first.code == 0, f"{example}: {first.stderr}")?;
+        check_that(text_starts_with(first.stdout, "{\"schema\":\"nazm.core-ir/3\""), example)?;
+        // Megabytes for the compiler's own module: counted and compared by the native `jtool`.
+        check_that(line_count(h, first.stdout)? == 1, "--json is one line")?;
+        let mut k = 0;
+        while k < 2 {
+            check_that(core_ir(h, file, "--json").stdout == first.stdout, example)?;
+            k = k + 1;
+        }
+        // Indented, the same object.
+        let pretty = core_ir(h, file, "");
+        check_that(pretty.code == 0, pretty.stderr)?;
+        check_that(json_same(h, first.stdout, pretty.stdout)?, example)?;
+    }
+    ok()
+}
+
+/// The index of the function `def` in `v`'s `functions`, or `Err`.
+fn function(v: JsonDoc, def: Str) -> Result[Str, Str] ! {} {
+    let mut i = 0;
+    while i < jlen(v, "functions") {
+        if jstr(v, f"functions/{i}/def") == def {
+            return Result[Str, Str].Ok(value: f"functions/{i}");
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"no {def}")
+}
+
+/// Every `"callee"` the function `def`'s body names, in order.
+fn callees(v: JsonDoc, def: Str) -> Result[Str, Str] ! {} {
+    let text = jv(v, f"{function(v, def)?}/body");
+    let found = strs_new();
+    let marker = "\"callee\":\"";
+    let mut at = find(text, marker);
+    while at >= 0 {
+        let start = at + str_len(marker);
+        let end = find_from(text, "\"", start);
+        strs_push(found, str_slice(text, start, end));
+        at = find_from(text, marker, end);
+    }
+    Result[Str, Str].Ok(value: str_join(found, ","))
+}
+
+@test
+fn two_modules_same_named_helpers_are_two_identities(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "main.nz", "use \"lib.nz\";\nfn helper() -> Int { 1 }\nfn main() -> Int { helper() + twice() }\n")?;
+    scratch_write(h, dir, "lib.nz", "fn helper() -> Int { 20 }\npub fn twice() -> Int { helper() + helper() }\n")?;
+    let out = core_ir(h, f"{dir}/main.nz", "--json --no-spans");
+    scratch_remove(h, dir);
+    check_that(out.code == 0, ran_show(out))?;
+    let v = jparse(out.stdout)?;
+    check_that(callees(v, "main.nz::fn main")? == "main.nz::fn helper,lib.nz::fn twice", callees(v, "main.nz::fn main")?)?;
+    check_that(callees(v, "lib.nz::fn twice")? == "lib.nz::fn helper,lib.nz::fn helper", callees(v, "lib.nz::fn twice")?)?;
+    // No span was asked for, and none is printed.
+    check_that(!text_contains(out.stdout, "\"at\""), out.stdout)
+}
+
+/// `nazm.core-ir/3` (R3): what a lowering outside the workspace needs, printed as the checker
+/// settled it.
+@test
+fn core_ir_3_prints_the_tables_a_lowering_needs(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "prog.nz", "pub extern \"C\" fn nz_triple(x: Int) -> Int ! {} = \"nz_triple\" { x * 3 }\nstatic COUNT: Atomic = atomic_new(7);\ntrait Size {\n    fn size(self: Self) -> Int;\n    fn twice(self: Self) -> Int { self.size() * 2 }\n}\nstruct Holder[T] { item: T, n: Int, }\nimpl[T] Size for Holder[T] { fn size(self: Holder[T]) -> Int { self.n } }\npub fn sum(a: [Int; 3]) -> Int { a[0] + a[1] + a[2] }\nfn main() -> Int {\n    let k = 10;\n    let add = fn(x: Int) -> Int { x + k };\n    let h = Holder[Str](item: \"s\", n: 4);\n    add(sum([1, 2, 3])) + h.twice() + nz_triple(1) + atomic_load(COUNT)\n}\n")?;
+    let out = core_ir(h, f"{dir}/prog.nz", "--json --no-spans");
+    scratch_remove(h, dir);
+    check_that(out.code == 0, ran_show(out))?;
+    let v = jparse(out.stdout)?;
+    check_that(jstr(v, "schema") == "nazm.core-ir/3", jv(v, "schema"))?;
+    // Visibility, and an array type spelled where `/2` wrote `?`.
+    let sum = function(v, "prog.nz::fn sum")?;
+    check_that(jv(v, f"{sum}/pub") == "true", jv(v, sum))?;
+    check_that(jstr(v, f"{sum}/locals/0/type") == "[Int; 3]", jv(v, sum))?;
+    let main = function(v, "prog.nz::fn main")?;
+    check_that(jv(v, f"{main}/pub") == "false", jv(v, main))?;
+    let mut has_add = false;
+    let mut i = 0;
+    while i < jlen(v, f"{main}/locals") {
+        if jstr(v, f"{main}/locals/{i}/name") == "add" && jstr(v, f"{main}/locals/{i}/type") == "fn(Int) -> Int" {
+            has_add = true;
+        }
+        i = i + 1;
+    }
+    check_that(has_add, jv(v, main))?;
+    // The closure's body, and the local holding its one capture.
+    let closure = function(v, "prog.nz::fn main#0")?;
+    check_that(jv(v, f"{closure}/closure") == "true", jv(v, closure))?;
+    check_that(jis(v, f"{closure}/captures", "[2]"), jv(v, closure))?;
+    check_that(jstr(v, f"{closure}/locals/2/name") == "k", jv(v, closure))?;
+    check_that(jv(v, f"{main}/closure") == "false", jv(v, main))?;
+    // The export symbol.
+    let export = function(v, "prog.nz::fn nz_triple")?;
+    check_that(jstr(v, f"{export}/attributes/export") == "nz_triple", jv(v, export))?;
+    check_that(jv(v, f"{export}/attributes/on_failure") == "false", jv(v, export))?;
+    check_that(jv(v, f"{sum}/attributes/export") == "null", jv(v, sum))?;
+    // Modules in load order.
+    check_that(jstr(v, "modules/0/name") == "prog.nz", jv(v, "modules"))?;
+    check_that(jv(v, "modules/0/root") == "true", jv(v, "modules"))?;
+    let mut prelude = false;
+    let mut m = 0;
+    while m < jlen(v, "modules/0/imports") {
+        if jstr(v, f"modules/0/imports/{m}") == "@core/prelude" {
+            prelude = true;
+        }
+        m = m + 1;
+    }
+    check_that(prelude, jv(v, "modules/0"))?;
+    // The type table, in the checker's id order: the definition, then its instances.
+    let mut holder = "";
+    let mut r = 0;
+    while r < jlen(v, "types/records") {
+        if holder == "" && jstr(v, f"types/records/{r}/display") == "Holder[Str]" {
+            holder = f"types/records/{r}";
+        }
+        check_that(jint(v, f"types/records/{r}/id") == r, "records in id order")?;
+        r = r + 1;
+    }
+    check_that(holder != "", "Holder[Str] in the type table")?;
+    check_that(jstr(v, f"{holder}/type") == "prog.nz::record Holder[Str]", jv(v, holder))?;
+    check_that(jstr(v, f"{holder}/definition") == "prog.nz::record Holder", jv(v, holder))?;
+    check_that(jis(v, f"{holder}/type_args", "[\"Str\"]"), jv(v, holder))?;
+    check_that(jis(v, f"{holder}/fields", "[{\"name\": \"item\", \"type\": \"Str\"}, {\"name\": \"n\", \"type\": \"Int\"}]"), jv(v, holder))?;
+    check_that(jis(v, f"{holder}/canonical", "[0, 1]"), jv(v, holder))?;
+    // The static.
+    check_that(jis(v, "statics", "[{\"def\": \"prog.nz::static COUNT\", \"module\": \"prog.nz\", \"name\": \"COUNT\", \"type\": \"Atomic\", \"cell\": true, \"value\": 7, \"section\": null}]"), jv(v, "statics"))?;
+    // The impl table: the impl's own method, and the trait's default body at the impl's type.
+    let mut size = "";
+    let mut k = 0;
+    while k < jlen(v, "impls") {
+        if size == "" && jstr(v, f"impls/{k}/trait") == "prog.nz::trait Size" {
+            size = f"impls/{k}";
+        }
+        k = k + 1;
+    }
+    check_that(size != "", "the impl of Size")?;
+    check_that(jstr(v, f"{size}/self") == "prog.nz::record Holder", jv(v, size))?;
+    check_that(jstr(v, f"{size}/methods/0/function") == "prog.nz::fn Size/Holder/size", jv(v, size))?;
+    check_that(jv(v, f"{size}/methods/0/default") == "false", jv(v, size))?;
+    check_that(jstr(v, f"{size}/methods/1/method") == "prog.nz::trait Size.twice", jv(v, size))?;
+    check_that(jstr(v, f"{size}/methods/1/function") == "prog.nz::fn Size/default/twice", jv(v, size))?;
+    check_that(jv(v, f"{size}/methods/1/default") == "true", jv(v, size))?;
+    check_that(jis(v, f"{size}/methods/1/type_args", "[\"prog.nz::record Holder\"]"), jv(v, size))
+}
+
+/// The first `Atomic` constant of the function `def`.
+fn cell(v: JsonDoc, def: Str) -> Result[Str, Str] ! {} {
+    let f = function(v, def)?;
+    let mut i = 0;
+    while i < jlen(v, f"{f}/consts") {
+        if jstr(v, f"{f}/consts/{i}/type") == "Atomic" {
+            return Result[Str, Str].Ok(value: f"{f}/consts/{i}");
+        }
+        i = i + 1;
+    }
+    Result[Str, Str].Err(error: f"{def} has no Atomic constant")
+}
+
+/// Two modules each with a `static COUNT` are two cells, and Core IR says which one a use reaches.
+@test
+fn two_modules_same_named_statics_are_two_cells(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    scratch_write(h, dir, "main.nz", "use \"lib.nz\";\nstatic COUNT: Atomic = atomic_new(1);\nfn main() -> Int { atomic_add(COUNT, 1); bump(); atomic_load(COUNT) }\n")?;
+    scratch_write(h, dir, "lib.nz", "static COUNT: Atomic = atomic_new(40);\npub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }\n")?;
+    let out = core_ir(h, f"{dir}/main.nz", "--json --no-spans");
+    scratch_remove(h, dir);
+    check_that(out.code == 0, ran_show(out))?;
+    let v = jparse(out.stdout)?;
+    let defs = strs_new();
+    let mut i = 0;
+    while i < jlen(v, "statics") {
+        strs_push(defs, jstr(v, f"statics/{i}/def"));
+        i = i + 1;
+    }
+    check_that(str_join(defs, ",") == "main.nz::static COUNT,lib.nz::static COUNT", str_join(defs, ","))?;
+    let main = cell(v, "main.nz::fn main")?;
+    let bump = cell(v, "lib.nz::fn bump")?;
+    check_that(jstr(v, f"{main}/value") == "static COUNT", jv(v, main))?;
+    check_that(jstr(v, f"{bump}/value") == "static COUNT", jv(v, bump))?;
+    check_that(jstr(v, f"{main}/static") == "main.nz::static COUNT", jv(v, main))?;
+    check_that(jstr(v, f"{bump}/static") == "lib.nz::static COUNT", jv(v, bump))
+}
+
+@test
+fn with_sources_gives_each_module_its_text_and_only_then(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    let text = "fn main() -> Int {\n    1 + 2\n}\n";
+    scratch_write(h, dir, "prog.nz", text)?;
+    // By default no module carries its text: the document names no file's contents.
+    let plain = core_ir(h, f"{dir}/prog.nz", "--json");
+    check_that(plain.code == 0, ran_show(plain))?;
+    let a = jparse(plain.stdout)?;
+    let mut i = 0;
+    while i < jlen(a, "modules") {
+        check_that(jq(a, f"modules/{i}/source") < 0, jv(a, f"modules/{i}"))?;
+        check_that(jq(a, f"modules/{i}/file") < 0 && jq(a, f"modules/{i}/path") < 0, jv(a, f"modules/{i}"))?;
+        i = i + 1;
+    }
+    // Asked for, every module carries it, the root's exactly as written.
+    let with = core_ir(h, f"{dir}/prog.nz", "--json --with-sources");
+    scratch_remove(h, dir);
+    check_that(with.code == 0, ran_show(with))?;
+    let b = jparse(with.stdout)?;
+    let mut root = "";
+    let mut k = 0;
+    while k < jlen(b, "modules") {
+        if root == "" && jv(b, f"modules/{k}/root") == "true" {
+            root = f"modules/{k}";
+        }
+        let m = f"modules/{k}";
+        check_that(json_kind(b, jq(b, f"{m}/source")) == "string", jv(b, m))?;
+        check_that(jint(b, f"{m}/file") >= 0 && json_kind(b, jq(b, f"{m}/path")) == "string", jv(b, m))?;
+        k = k + 1;
+    }
+    check_that(root != "", "the root module")?;
+    check_that(jstr(b, f"{root}/source") == text, jv(b, root))?;
+    // And where a debugger finds it: the file's index a position names, the loader's name.
+    check_that(jv(b, f"{root}/file") == "0", jv(b, root))?;
+    check_that(text_ends_with(jstr(b, f"{root}/path"), "prog.nz"), jv(b, root))
+}
+
+/// R3 (debug information): beside the sources, a call names its callee's span and a `match`
+/// binding its own — and only then.
+@test
+fn with_sources_gives_the_spans_a_debugger_is_told(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = scratch_new(h);
+    scratch_write(h, dir, "nazm.root", "")?;
+    let text = "fn two(x: Int) -> Int { x * 2 }\nfn main() -> Int {\n    match Option.Some(value: two(3)) {\n        Option.Some(value: v) => v,\n        Option.None() => 0,\n    }\n}\n";
+    scratch_write(h, dir, "prog.nz", text)?;
+    let plain = core_ir(h, f"{dir}/prog.nz", "--json");
+    let with = core_ir(h, f"{dir}/prog.nz", "--json --with-sources");
+    scratch_remove(h, dir);
+    check_that(plain.code == 0 && with.code == 0, ran_show(with))?;
+    check_that(!text_contains(plain.stdout, "\"callee_at\""), plain.stdout)?;
+    // `two`'s name in the call, at its byte offset; `v` in the binding.
+    let call = find(text, "two(3)");
+    check_that(text_contains(with.stdout, f"\"callee_at\":\"prog.nz:{call}..{call + 3}\""), with.stdout)?;
+    let binding = find(text, "value: v") + 7;
+    check_that(text_contains(with.stdout, f"\"at\":\"prog.nz:{binding}..{binding + 1}\""), with.stdout)
+}
+
+@test
+fn a_program_that_does_not_check_prints_no_core_ir(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = prog_dir(h, "bad.nz", "fn main() -> Int { \"not an Int\" }\n")?;
+    let out = core_ir(h, f"{dir}/bad.nz", "");
+    scratch_remove(h, dir);
+    check_that(out.code == 1, ran_show(out))?;
+    check_that(out.stdout == "", out.stdout)?;
+    check_that(text_contains(out.stderr, "N0300"), out.stderr)?;
+    check_that(!text_contains(out.stderr, "N0900"), "a user's error is not a compiler defect")
+}
+
+@test
+fn the_interpreter_and_the_native_backend_agree_about_the_shipped_examples(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Every example that builds: both backends start from the one Core IR, so they must say the
+    // same thing — the value `main` produced and what was printed on the way.
+    for example in words("examples/sum.nz examples/max.nz examples/primes.nz examples/search.nz examples/pipeline.nz examples/worker-pool.nz examples/capabilities/workers.nz examples/capabilities/ledger.nz examples/effects/pure.nz examples/effects/tasks.nz examples/provenance/tally.nz") {
+        let src = f"{repo_root(h)}/{example}";
+        let dir = scratch_new(h);
+        let a = words("run --interpret");
+        strs_push(a, src);
+        let ran = nazm(h, dir, a);
+        let b = words("build --no-cache");
+        strs_push(b, src);
+        strs_push(b, "-o");
+        strs_push(b, f"{dir}/prog");
+        let built = nazm(h, "", b);
+        check_that(built.code == 0, f"{example}: {ran_show(built)}")?;
+        let native = bounded_exe(h, f"{dir}/prog", dir, suite_env(h));
+        scratch_remove(h, dir);
+        // Some need a file or an argument and stop with a runtime error without one; the two
+        // backends must agree about that too.
+        check_that(ran.code == 0 || ran.code == 2, f"{example}: {ran_show(ran)}")?;
+        check_that(ran.code == native.code && ran.stdout == native.stdout, f"{example}: the two backends disagree: {ran_show(ran)} {ran_show(native)}")?;
+    }
+    ok()
+}

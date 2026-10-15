@@ -1,0 +1,71 @@
+// The harness's own native tools (R7, design decision 16): what a test asks of a document too
+// large for `nazm test`'s interpreted leg to read inside its iteration budget is asked of
+// `tools/jtool.nz`, built natively once. `tests/run.sh` builds it with the release `nazm` that
+// builds the harness and hands it down as `$NAZM_HARNESS_JTOOL`; without that variable it is built
+// here, into the test's own scratch directory, by `$NAZM_HARNESS_BUILDER` or else the `nazm`
+// under test.
+
+use "@std/env"
+use "@std/text"
+use "run.nz"
+use "scratch.nz"
+use "tree.nz"
+
+fn env_or(h: Caps, name: Str) -> Str ! { io } {
+    match env_get(h.io, name) {
+        Option.Some(value: v) => v,
+        Option.None() => "",
+    }
+}
+
+/// The `jtool` executable: `$NAZM_HARNESS_JTOOL`, or built into `dir`.
+pub fn jtool(h: Caps, dir: Str) -> Result[Str, Str] ! { io, spawn } {
+    let given = env_or(h, "NAZM_HARNESS_JTOOL");
+    if str_len(given) > 0 {
+        return Result[Str, Str].Ok(value: given);
+    }
+    let builder = env_or(h, "NAZM_HARNESS_BUILDER");
+    let by = if str_len(builder) > 0 { builder } else { nazm_bin(h.io) };
+    let exe = f"{dir}/jtool";
+    let a = words("build");
+    strs_push(a, f"{repo_root(h)}/toolchain/harness/tools/jtool.nz");
+    strs_push(a, "-o");
+    strs_push(a, exe);
+    let r = run(h, by, a, dir, env_here(h.io));
+    check_that(r.code == 0, f"jtool does not build: {r.stderr}")?;
+    Result[Str, Str].Ok(value: exe)
+}
+
+/// Whether `a` and `b` are one JSON value, as `serde_json::Value`'s `==` says: `Err` when either is
+/// not JSON.
+pub fn json_same(h: Caps, a: Str, b: Str) -> Result[Bool, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let tool = jtool(h, d)?;
+    scratch_write(h, d, "a.json", a)?;
+    scratch_write(h, d, "b.json", b)?;
+    let args = words("same");
+    strs_push(args, f"{d}/a.json");
+    strs_push(args, f"{d}/b.json");
+    let r = run(h, tool, args, d, env_unset(env_here(h.io), "NAZM_RESULT_REPORT"));
+    scratch_remove(h, d);
+    check_that(r.code == 0 || r.code == 1, f"not JSON: {r.stderr}")?;
+    Result[Bool, Str].Ok(value: r.code == 0)
+}
+
+/// The number of lines of `s`: `str::lines().count()`.
+pub fn line_count(h: Caps, s: Str) -> Result[Int, Str] ! { io, spawn } {
+    let d = scratch_new(h);
+    check_that(str_len(d) > 0, "no scratch directory")?;
+    let tool = jtool(h, d)?;
+    scratch_write(h, d, "a.txt", s)?;
+    let args = words("lines");
+    strs_push(args, f"{d}/a.txt");
+    let r = run(h, tool, args, d, env_unset(env_here(h.io), "NAZM_RESULT_REPORT"));
+    scratch_remove(h, d);
+    check_that(r.code == 0, ran_show(r))?;
+    match text_parse_int(text_trim(r.stdout)) {
+        Result.Ok(value: n) => Result[Int, Str].Ok(value: n),
+        Result.Err(error: e) => Result[Int, Str].Err(error: r.stdout),
+    }
+}

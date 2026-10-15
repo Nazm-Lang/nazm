@@ -1,0 +1,327 @@
+// N40: MIR — the native backend reading it, as a whole run shows: programs over every construct
+// run natively as they are interpreted and reclaim everything; the printed MIR is the same bytes
+// in every process; every move and drop leaves its slot holding the zero. Ported from
+// `crates/nazm-cli/tests/mir.rs` (R7).
+//
+// The tests that lower, print, break or digest MIR in process (`nazm_mir::lower`, `verify`,
+// `digest`, the validator's refusals, lowering time) drive the compiler's own stage as a library
+// and stay Rust (`tests/stays-rust.txt`); `what_mir_looks_like_on_the_compiler` is an
+// `#[ignore]`d measurement.
+
+use "@std/json"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+use "../lib/strings.nz"
+use "../lib/jsonq.nz"
+use "../lib/tree.nz"
+use "../lib/differential.nz"
+
+/// The native run (with the memory report) and the interpreted one of `src`.
+struct Both {
+    native: Ran,
+    interp: Ran,
+}
+
+fn both(h: Caps, src: Str) -> Result[Both, Str] ! { io, spawn } {
+    let dir = prog_dir(h, "prog.nz", src)?;
+    let path = f"{dir}/prog.nz";
+    let a = words("build");
+    strs_push(a, path);
+    strs_push(a, "-o");
+    strs_push(a, f"{dir}/prog");
+    let built = nazm(h, "", a);
+    check_that(built.code == 0, built.stderr)?;
+    let native = bounded_exe(h, f"{dir}/prog", "", env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"));
+    let b = words("run --interpret");
+    strs_push(b, path);
+    let interp = nazm(h, "", b);
+    scratch_remove(h, dir);
+    Result[Both, Str].Ok(value: Both(native: native, interp: interp))
+}
+
+/// The number after `key` in `after`, or `-1`.
+fn num(after: Str, key: Str) -> Int ! {} {
+    let parts = split(after, key);
+    if strs_len(parts) < 2 {
+        return 0 - 1;
+    }
+    let ws = split_whitespace(strs_get(parts, 1));
+    if strs_len(ws) == 0 {
+        return 0 - 1;
+    }
+    match text_parse_int(strs_get(ws, 0)) {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => 0 - 1,
+    }
+}
+
+/// The native run's memory report says everything allocated was reclaimed.
+fn balanced(stderr: Str) -> Result[Int, Str] ! {} {
+    let mut line = "";
+    for l in text_lines(stderr) {
+        if line == "" && text_starts_with(l, "nazm-memory:") {
+            line = l;
+        }
+    }
+    check_that(line != "", f"no memory report in {stderr}")?;
+    for part in words("sequences strings channels") {
+        let parts = split(line, part);
+        check_that(strs_len(parts) > 1, part)?;
+        let after = strs_get(parts, 1);
+        check_that(num(after, "live=") == 0, f"{part} still live: {line}")?;
+        check_that(num(after, "allocated=") == num(after, "reclaimed="), f"{part}: {line}")?;
+    }
+    ok()
+}
+
+fn agree(h: Caps, src: Str) -> Result[Int, Str] ! { io, spawn } {
+    let b = both(h, src)?;
+    check_that(b.native.code == b.interp.code, f"status: {b.native.stderr} / {b.interp.stderr}")?;
+    check_that(b.native.stdout == b.interp.stdout, "stdout")?;
+    if b.native.code == 0 {
+        balanced(b.native.stderr)?;
+    }
+    ok()
+}
+
+const EVERYTHING: Str = "\nstruct Pair { name: Str, n: Int, }\nenum Shape { Circle(r: Int), Named(title: Str, sides: Int), Empty }\n\nfn area(s: Shape) -> Int {\n    match s {\n        Shape.Circle(r: r) => 3 * r * r,\n        Shape.Named(title: t, sides: n) => str_len(t) + n,\n        Shape.Empty() => 0,\n    }\n}\n\nfn parse(s: Str) -> Result[Int, Str] {\n    if str_len(s) == 0 { return Result[Int, Str].Err(error: \"empty\"); }\n    Result[Int, Str].Ok(value: str_len(s))\n}\n\nfn twice(s: Str) -> Result[Int, Str] {\n    let a = parse(s)?;\n    let b = parse(str_concat(s, s))?;\n    Result[Int, Str].Ok(value: a + b)\n}\n\nfn loops(n: Int) -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < n {\n        i = i + 1;\n        let text = int_to_str(i);\n        if i % 3 == 0 { continue; }\n        if i > 20 { break; }\n        let mut j = 0;\n        while j < i {\n            j = j + 1;\n            if j == 4 { break; }\n            total = total + str_len(text);\n        }\n    }\n    total\n}\n\nfn main() -> Int {\n    let p = Pair(name: \"abc\", n: 4);\n    let q = Pair(n: p.n + 1, name: str_concat(p.name, \"d\"));\n    let v = if q.n > 3 { str_len(q.name) } else { 0 };\n    let shapes = vec_new[Shape]();\n    vec_push(shapes, Shape.Circle(r: 2));\n    vec_push(shapes, Shape.Named(title: \"tri\", sides: 3));\n    vec_push(shapes, Shape.Empty());\n    let mut k = 0;\n    let mut sum = 0;\n    while k < vec_len(shapes) { sum = sum + area(vec_get(shapes, k)); k = k + 1; }\n    let r = match twice(\"xy\") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) };\n    let e = match twice(\"\") { Result.Ok(value: x) => x, Result.Err(error: e) => str_len(e) + 100 };\n    let same = if q == Pair(name: \"abcd\", n: 5) { 1000 } else { 0 };\n    v + sum + r + e + loops(30) + same\n}\n";
+
+@test
+fn every_construct_runs_natively_as_it_is_interpreted_and_reclaims_everything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree(h, EVERYTHING)
+}
+
+@test
+fn cleanup_on_every_exit_is_balanced(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // A managed value live across each kind of exit: return from inside nested regions, break and
+    // continue out of inner loops, `?` out of an initialiser, and a match arm that returns.
+    agree(h, "\nstruct Box { s: Str, t: Str, }\nfn inner(k: Int) -> Result[Int, Str] {\n    if k == 3 { return Result[Int, Str].Err(error: int_to_str(k)); }\n    Result[Int, Str].Ok(value: k)\n}\nfn build(k: Int) -> Result[Box, Str] {\n    let b = Box(s: int_to_str(k), t: int_to_str(inner(k)?));\n    Result[Box, Str].Ok(value: b)\n}\nfn early(n: Int) -> Int {\n    let a = int_to_str(n);\n    let mut i = 0;\n    while i < 10 {\n        let x = str_concat(a, \"x\");\n        i = i + 1;\n        if i == 2 { continue; }\n        if i == n {\n            let y = str_concat(x, \"y\");\n            return str_len(y);\n        }\n        if i == 7 { break; }\n    }\n    str_len(a)\n}\nfn main() -> Int {\n    let mut total = 0;\n    let mut k = 0;\n    while k < 6 {\n        total = total + early(k);\n        let r = match build(k) { Result.Ok(value: b) => str_len(b.s) + str_len(b.t), Result.Err(error: e) => str_len(e) };\n        total = total + r;\n        k = k + 1;\n    }\n    total\n}\n")
+}
+
+@test
+fn a_field_write_moves_its_value_and_releases_the_old_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree(h, "\nstruct Person { name: Str, age: Int, }\nstruct Pair { left: Person, right: Person, }\nfn main() -> Int {\n    let mut p = Person(name: int_to_str(1), age: 3);\n    let mut q = Pair(left: Person(name: \"a\", age: 1), right: Person(name: int_to_str(2), age: 2));\n    let mut i = 0;\n    while i < 30 {\n        p.name = str_concat(p.name, \"x\");\n        p.name = p.name;\n        q.left.name = int_to_str(i);\n        q.right = Person(name: str_concat(q.left.name, p.name), age: i);\n        i = i + 1;\n    }\n    str_len(p.name) + str_len(q.right.name) + q.right.age\n}\n")
+}
+
+@test
+fn a_failure_after_moves_drops_and_field_writes_reclaims_each_value_once(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let src = "\nstruct P { name: Str, n: Int, }\nfn main() -> Int {\n    let mut p = P(name: int_to_str(1), n: 0);\n    let mut s = int_to_str(7);\n    let mut i = 0;\n    while i < 5 {\n        let t = int_to_str(i);\n        s = str_concat(s, t);\n        p.name = str_concat(p.name, \"x\");\n        i = i + 1;\n    }\n    let z = i - 5;\n    str_len(s) / z\n}\n";
+    let b = both(h, src)?;
+    check_that(b.native.code == 2, b.native.stderr)?;
+    check_that(b.native.code == b.interp.code, ran_show(b.interp))?;
+    check_that(text_contains(b.native.stderr, "N0401"), b.native.stderr)?;
+    balanced(b.native.stderr)
+}
+
+/// The lines of `main.body`'s definition in `ir`, past its signature.
+fn main_body(ir: Str) -> Result[Strs, Str] ! {} {
+    let parts = split(ir, "main.body(i64 %p0) ");
+    check_that(strs_len(parts) > 1, "main")?;
+    let after = strs_get(parts, 1);
+    let brace = find(after, "{");
+    check_that(brace >= 0, "main")?;
+    let rest = str_slice(after, brace + 1, str_len(after));
+    let nl = find(rest, "\n");
+    check_that(nl >= 0, "main")?;
+    let body = strs_new();
+    let mut going = true;
+    for l in text_lines(str_slice(rest, nl + 1, str_len(rest))) {
+        if going && text_trim(l) == "}" {
+            going = false;
+        }
+        if going {
+            strs_push(body, l);
+        }
+    }
+    Result[Strs, Str].Ok(value: body)
+}
+
+/// The slot `alloca`d for the local annotated `name` (`; name : Type`), or `""`.
+fn slot_of(body: Strs, name: Str) -> Str ! {} {
+    for l in body {
+        let semi = find(l, ";");
+        if semi >= 0 {
+            let code = str_slice(l, 0, semi);
+            let note = text_trim(str_slice(l, semi + 1, str_len(l)));
+            if note == name && text_contains(code, " = alloca [") {
+                return strs_get(text_split(text_trim(code), " "), 0);
+            }
+        }
+    }
+    ""
+}
+
+fn zero_store(body: Strs, slot: Str) -> Int ! {} {
+    let mut n = 0;
+    for l in body {
+        if text_contains(l, f"@llvm.memset.p0.i64(ptr {slot}, i8 0,") {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+fn is_digit(b: Int) -> Bool ! {} {
+    b >= 48 && b <= 57
+}
+
+/// How many times `l` drops or moves `local`: `drop L` whole, and each `move L` not followed by a
+/// digit (so `move _1` is not `move _12`).
+fn empties_in(l: Str, local: Str) -> Int ! {} {
+    let mut n = if l == f"drop {local}" { 1 } else { 0 };
+    let needle = f"move {local}";
+    let mut at = find(l, needle);
+    while at >= 0 {
+        let end = at + str_len(needle);
+        if end >= str_len(l) || !is_digit(str_byte(l, end)) {
+            n = n + 1;
+        }
+        at = find_from(l, needle, at + 1);
+    }
+    n
+}
+
+@test
+fn every_move_and_drop_leaves_its_slot_holding_the_zero(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // For every managed slot of `main`: one zero stored in the entry block and exactly one more
+    // for each MIR `drop` and `move` of it.
+    let src = "\nstruct P { name: Str, n: Int, }\nfn main() -> Int {\n    let mut p = P(name: int_to_str(1), n: 0);\n    let mut s = int_to_str(7);\n    let mut i = 0;\n    while i < 5 {\n        let t = int_to_str(i);\n        s = str_concat(s, t);\n        p.name = str_concat(p.name, \"x\");\n        i = i + 1;\n    }\n    str_len(s) + str_len(p.name)\n}\n";
+    let dir = prog_dir(h, "prog.nz", src)?;
+    let path = f"{dir}/prog.nz";
+    let a = words("build --emit-ir");
+    strs_push(a, path);
+    strs_push(a, "-o");
+    strs_push(a, f"{dir}/prog");
+    let built = nazm(h, "", a);
+    check_that(built.code == 0, built.stderr)?;
+    let ir = read_text(h, f"{dir}/prog.m0.ll")?;
+    // `main`'s body: past its signature and any function attributes, under `main.body`.
+    let body = main_body(ir)?;
+    let b = words("mir --json");
+    strs_push(b, path);
+    let mir_run = nazm(h, "", b);
+    scratch_remove(h, dir);
+    let mir = jparse(mir_run.stdout)?;
+    let mut main = "";
+    let mut f = 0;
+    while f < jlen(mir, "functions") {
+        if main == "" && jstr(mir, f"functions/{f}/name") == "main" {
+            main = f"functions/{f}";
+        }
+        f = f + 1;
+    }
+    check_that(main != "", "main's MIR")?;
+    let lines = strs_new();
+    let mut bi = 0;
+    while bi < jlen(mir, f"{main}/blocks") {
+        let mut si = 0;
+        while si < jlen(mir, f"{main}/blocks/{bi}/stmts") {
+            let n = jq(mir, f"{main}/blocks/{bi}/stmts/{si}");
+            if json_kind(mir, n) == "string" {
+                strs_push(lines, jstr(mir, f"{main}/blocks/{bi}/stmts/{si}"));
+            }
+            si = si + 1;
+        }
+        bi = bi + 1;
+    }
+    // Since N105 a value held in memory lives in a LIR slot, annotated with the MIR local it holds
+    // (`name : Type`), and emptied by zeroing its bytes: one `memset` of the slot.
+    let mut checked = 0;
+    let mut li = 0;
+    while li < jlen(mir, f"{main}/locals") {
+        let l = f"{main}/locals/{li}";
+        let local = jstr(mir, f"{l}/local");
+        let nm = jstr(mir, f"{l}/name");
+        let ty = jstr(mir, f"{l}/ty");
+        if local != "" && json_kind(mir, jq(mir, f"{l}/name")) == "string" && json_kind(mir, jq(mir, f"{l}/ty")) == "string" {
+            let name = f"{nm} : {ty}";
+            let slot = slot_of(body, name);
+            if slot != "" && zero_store(body, slot) > 0 {
+                let mut empties = 0;
+                for line in lines {
+                    empties = empties + empties_in(line, local);
+                }
+                check_that(zero_store(body, slot) == 1 + empties, f"{local} ({name}, {slot}): one zero at entry and one per drop or move ({empties})\n{str_join(body, "\n")}")?;
+                checked = checked + 1;
+            }
+        }
+        li = li + 1;
+    }
+    check_that(checked >= 5, f"only {checked} managed slots checked")
+}
+
+@test
+fn a_pattern_binding_holds_its_own_reference_to_a_heap_payload(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    agree(h, "\nenum Tok { Word(text: Str), Pair(a: Str, b: Str), Nothing }\nfn size(t: Tok) -> Int {\n    match t {\n        Tok.Word(text: w) => str_len(w),\n        Tok.Pair(a: x, b: y) => str_len(str_concat(x, y)),\n        Tok.Nothing() => 0,\n    }\n}\nfn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 20 {\n        total = total + size(Tok.Word(text: int_to_str(i)));\n        total = total + size(Tok.Pair(a: int_to_str(i), b: str_concat(int_to_str(i), \"z\")));\n        let kept = Tok.Word(text: int_to_str(i * 3));\n        total = total + match kept { Tok.Word(text: w) => str_len(w), Tok.Pair(a: x, b: _) => str_len(x), Tok.Nothing() => 0 };\n        i = i + 1;\n    }\n    total\n}\n")
+}
+
+@test
+fn the_printed_mir_is_the_same_bytes_in_every_process(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let file = f"{repo_root(h)}/examples/pipeline.nz";
+    let a = words("mir --json");
+    strs_push(a, file);
+    let first = nazm(h, "", a);
+    check_that(first.code == 0, first.stderr)?;
+    let text = first.stdout;
+    check_that(text_starts_with(text, "{\"schema\": \"nazm.mir/1\"") || text_starts_with(text, "{\"schema\":\"nazm.mir/1\""), str_slice(text, 0, 60))?;
+    check_that(strs_len(text_lines(text_trim_end(text))) == 1, "one line")?;
+    let mut k = 0;
+    while k < 2 {
+        check_that(nazm(h, "", a).stdout == first.stdout, "another process, other bytes")?;
+        k = k + 1;
+    }
+    let b = words("mir");
+    strs_push(b, file);
+    let pretty = nazm(h, "", b);
+    check_that(jsame(jparse(first.stdout)?, "", jparse(pretty.stdout)?, ""), "the indented MIR is another object")
+}
+
+@test
+fn a_program_that_does_not_check_prints_no_mir(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let dir = prog_dir(h, "prog.nz", "fn main() -> Int { nope }\n")?;
+    let a = words("mir");
+    strs_push(a, f"{dir}/prog.nz");
+    let out = nazm(h, "", a);
+    scratch_remove(h, dir);
+    check_that(out.code == 1, ran_show(out))?;
+    check_that(out.stdout == "", out.stdout)
+}
+
+@test
+fn many_branches_over_managed_values_reclaim_everything(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let s = strs_new();
+    strs_push(s, "fn main() -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 50 {\n        let a = int_to_str(i);\n");
+    let mut k = 0;
+    while k < 40 {
+        let m = k % 5 + 2;
+        strs_push(s, f"        let b{k} = if i % {m} == 0 {{ str_concat(a, \"x\") }} else {{ int_to_str({k}) }};\n        if str_len(b{k}) == 99 {{ return 1; }}\n        total = total + str_len(b{k});\n");
+        k = k + 1;
+    }
+    strs_push(s, "        i = i + 1;\n    }\n    total\n}\n");
+    agree(h, str_join(s, ""))
+}
+
+@test
+fn many_nested_early_returns_neither_duplicate_nor_omit_cleanup(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let s = strs_new();
+    strs_push(s, "fn step(k: Int) -> Result[Int, Str] { if k == 17 { Result[Int, Str].Err(error: int_to_str(k)) } else { Result[Int, Str].Ok(value: k) } }\nfn chain(k: Int) -> Result[Int, Str] {\n    let s = int_to_str(k);\n");
+    let mut i = 0;
+    while i < 30 {
+        strs_push(s, f"    let v{i} = step(k + {i})?;\n");
+        i = i + 1;
+    }
+    strs_push(s, "    Result[Int, Str].Ok(value: str_len(s) + v0 + v29)\n}\nfn main() -> Int {\n    let mut t = 0;\n    let mut k = 0;\n    while k < 20 { t = t + match chain(k) { Result.Ok(value: v) => v, Result.Err(error: e) => str_len(e) }; k = k + 1; }\n    t\n}\n");
+    agree(h, str_join(s, ""))
+}

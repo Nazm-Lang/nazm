@@ -1,0 +1,51 @@
+// What a ported test asks of a document too large for `nazm test`'s interpreted leg to read
+// inside its iteration budget (R7, design decision 16): built natively once, it answers by its exit
+// status and what it prints.
+//
+//   jtool same A B     exit 0 when the files A and B hold one JSON value (an object's keys in any
+//                      order, as `serde_json::Value`'s `==`), 1 when they do not, 2 when either is
+//                      not JSON
+//   jtool lines A      the number of lines of A, as `str::lines().count()` counts them
+
+use "@std/json"
+use "@std/text"
+use "@std/process"
+use "../lib/jsonq.nz"
+
+fn lines_of(s: Str) -> Int ! {} {
+    let n = str_len(s);
+    if n == 0 {
+        return 0;
+    }
+    let mut count = 0;
+    let mut i = 0;
+    while i < n {
+        if str_byte(s, i) == 10 {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    // A last line without its line break is a line too.
+    if str_byte(s, n - 1) != 10 { count + 1 } else { count }
+}
+
+fn main(io: IoCap) -> Int ! { io } {
+    let args = process_args(io);
+    if strs_len(args) >= 2 && strs_get(args, 0) == "lines" {
+        print(f"{lines_of(read_file(strs_get(args, 1)))}\n");
+        return 0;
+    }
+    if strs_len(args) >= 3 && strs_get(args, 0) == "same" {
+        let a = match jparse(read_file(strs_get(args, 1))) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { eprint(f"{strs_get(args, 1)}: {e}\n"); return 2; },
+        };
+        let b = match jparse(read_file(strs_get(args, 2))) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { eprint(f"{strs_get(args, 2)}: {e}\n"); return 2; },
+        };
+        return if jsame(a, "", b, "") { 0 } else { 1 };
+    }
+    eprint("usage: jtool same A B | jtool lines A\n");
+    2
+}
