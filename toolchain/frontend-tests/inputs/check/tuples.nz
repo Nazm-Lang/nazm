@@ -1,0 +1,48 @@
+// Tuples (L5): the generic record of their arity, written `(A, B)`, built `(a, b)`, read `.0`,
+// taken apart by patterns — exhaustively, with a tuple witness — compared element by element, and
+// inferred through generic calls.
+
+struct Holder { pair: (Int, Str), nested: ((Bool, Int), Str) }
+
+enum Shape { Dot(at: (Int, Int)), Line(from: (Int, Int), to: (Int, Int)) }
+
+fn first[A, B](p: (A, B)) -> A { p.0 }
+
+fn swap[A, B](p: (A, B)) -> (B, A) { (p.1, p.0) }
+
+fn same(a: (Int, Str), b: (Int, Str)) -> Bool { a == b }
+
+fn cover(p: (Bool, Bool)) -> Int {
+    match p {
+        (true, true) => 1,
+        (false, _) => 2,
+    }
+}
+
+fn depth(s: Shape) -> Int {
+    match s {
+        Shape.Dot(at: (x, y)) => x + y,
+        Shape.Line(from: (a, _), to: (_, d)) => a + d,
+    }
+}
+
+fn wrong(p: (Int, Int)) -> Int {
+    match p {
+        (a, b, c) => a,
+        _ => 0,
+    }
+}
+
+fn main() -> Int {
+    let h = Holder(pair: (1, "a"), nested: ((true, 2), "b"));
+    let mut m = ((0, 0), "was");
+    m.0.1 = 7;
+    m.1 = 3;
+    let s: (Str, Int) = swap((2, "x"));
+    let t: (Int, Int) = swap((2, "x"));
+    let n: Int = first(("no", 1));
+    let r = h.pair.2;
+    let (q, w) = (1, 2);
+    if same(h.pair, (1, "a")) && (1, "a") != (2, "b") { return q + w + h.nested.0.1; }
+    cover((true, false)) + depth(Shape.Dot(at: (1, 2))) + wrong((1, 2)) + s.1 + t.0 + n
+}

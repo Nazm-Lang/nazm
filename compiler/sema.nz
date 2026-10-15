@@ -12,11 +12,11 @@
 // imports and imports under a name (`alias::f`, `alias::T`), their collisions (N0207, N0208,
 // N0209), private and unimported names (N0206, N0201, N0305), unknown qualified names (N0210)
 // and another module's undeclared effects; records and enums, generic ones included, and
-// `Vec`s and applications of any type; functions with type parameters (and `Equality`
-// requirements) but no effect parameters or contracts; attributes but `@derive`, configured
-// before the checker runs (`configure.nz`); `let`, assignment to a binding or its fields,
-// `while`, `for`, `return`, `break`, `continue`; literals, names, `-`, `!`, the binary operators
-// but shifts, calls of the module's functions and of the built-ins (generic ones by
+// `Vec`s, tuples (the generic record of their arity) and applications of any type; functions
+// with type parameters (and `Equality` requirements) but no effect parameters or contracts;
+// attributes but `@derive`, configured before the checker runs (`configure.nz`); `let`,
+// assignment to a binding or its fields, `while`, `for`, `return`, `break`, `continue`; literals,
+// names, `-`, `!`, the binary operators but shifts, calls of the module's functions and of the built-ins (generic ones by
 // inference, `Chan[T]`, `Box`, `Cell` and `Chain` aside), construction of records and of variants
 // (a generic enum's arguments inferred, `Some`/`None`/`Ok`/`Err` among them), field reads, `if`
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
@@ -444,7 +444,9 @@ fn s_scope() -> Int { 13 }
 // N38) is called anywhere in the compilation, and whether a restricted sink is.
 fn s_source() -> Int { 14 }
 fn s_sink() -> Int { 15 }
-fn s_slots() -> Int { 16 }
+// Where the run of fields `resolve_fields` wrote last begins.
+fn s_fields() -> Int { 16 }
+fn s_slots() -> Int { 17 }
 
 fn prelude(c: Ck) -> Int { gs(c, s_prelude()) }
 
@@ -603,6 +605,43 @@ fn chan_of(c: Ck, elem: Int) -> Int {
     intern(c, tag_chan(), 0, 0, 0, "", a)
 }
 fn record_ty(c: Ck, r: Int, args: Ints) -> Int { intern(c, tag_record(), r, 0, 0, "", args) }
+
+// `(elems…)` (R1a, L5): a tuple — an application of the generic record of its arity, made the
+// first time it is asked for (`tuple_of`): no name a program can write, `(,)`, no module, fields
+// `0`, `1`, … and one type parameter per element, so the checker takes a tuple as the record it is.
+fn tuple_ty(c: Ck, elems: Ints) -> Int {
+    let n = ints_len(elems);
+    let mut r = 0 - 1;
+    let mut i = 0;
+    while i < strs_len(c.rname) && r < 0 {
+        if strs_get(c.rname, i) == "(,)" && ints_get(c.rnp, i) == n { r = i; }
+        i = i + 1;
+    }
+    if r < 0 {
+        r = strs_len(c.rname);
+        strs_push(c.rname, "(,)");
+        ints_push(c.rmod, 0 - 1);
+        ints_push(c.rns, 0);
+        ints_push(c.rne, 0);
+        ints_push(c.rnp, n);
+        ints_push(c.rff, strs_len(c.fname));
+        ints_push(c.rfc, n);
+        ints_push(c.rpub, 1);
+        i = 0;
+        while i < n {
+            strs_push(c.fname, int_to_str(i));
+            ints_push(c.fty, param_ty(c, own_record(), r, i, str_concat("T", int_to_str(i))));
+            ints_push(c.fns, 0);
+            ints_push(c.fne, 0);
+            ints_push(c.fts, 0);
+            ints_push(c.fte, 0);
+            i = i + 1;
+        }
+    }
+    record_ty(c, r, elems)
+}
+
+fn is_tuple(c: Ck, t: Int) -> Bool { t >= 0 && is_record(c, t) && strs_get(c.rname, ta(c, t)) == "(,)" }
 fn enum_ty(c: Ck, e: Int, args: Ints) -> Int { intern(c, tag_enum(), e, 0, 0, "", args) }
 fn param_ty(c: Ck, owner: Int, id: Int, index: Int, name: Str) -> Int { intern(c, tag_param(), owner, id, index, name, ints_new()) }
 fn fn_ty(c: Ck, params: Ints, ret: Int, effects: Int) -> Int {
@@ -740,6 +779,16 @@ fn show(c: Ck, t: Int) -> Str {
     if g == tag_chan() { return cat3("Chan[", show(c, targ(c, t, 0)), "]"); }
     let mut name = "";
     if g == tag_record() { name = strs_get(c.rname, ta(c, t)); }
+    // A tuple (L5) spells its elements.
+    if g == tag_record() && name == "(,)" {
+        let parts = strs_new();
+        let mut i = 0;
+        while i < targc(c, t) {
+            strs_push(parts, show(c, targ(c, t, i)));
+            i = i + 1;
+        }
+        return cat3("(", str_join(parts, ", "), ")");
+    }
     if g == tag_enum() { name = strs_get(c.ename, ta(c, t)); }
     if targc(c, t) == 0 { return name; }
     let parts = strs_new();
@@ -1808,6 +1857,8 @@ fn resolve_written_inner(c: Ck, w: Int, pnames: Strs, ptys: Ints, d: Diags) -> I
         }
         return fn_ty(c, params, ret, effects);
     }
+    // `(A, B, …)` (L5): a tuple of the elements written.
+    if name == "()" && some(c, w, "qualifier") == false && some(c, w, "length") == false { return tuple_ty(c, args); }
     if some(c, w, "length") || str_len(name) == 0 || starts_upper(name) == false {
         stop(c, cat3("the type `", name, "`"));
         return t_int();
@@ -1991,8 +2042,8 @@ fn resolve_type_fields(c: Ck, m: Int) -> Int {
             let pt = ints_new();
             type_params(c, r, own_record(), id, pn, pt);
             let written = kids(c, r, "fields");
-            ints_set(c.rff, id, strs_len(c.fname));
             ints_set(c.rfc, id, resolve_fields(c, name, written, pn, pt));
+            ints_set(c.rff, id, gs(c, s_fields()));
             if ints_len(written) == 0 {
                 err(c, "N0101", fld(c, r, "name_span"), cat3("`", name, "` has no fields, which is not supported yet"),
                         "a record with no fields would be built by writing `Name()`, which is exactly how a call to a function of that name is written — and types and functions are separate namespaces, so neither reading could be preferred. Give it a field, or use `Bool`");
@@ -2037,8 +2088,8 @@ fn resolve_type_fields(c: Ck, m: Int) -> Int {
                     strs_push(vnames, vn);
                     ints_push(vstarts, sps(c, vs));
                     ints_push(vends, spe(c, vs));
-                    ints_push(vff, strs_len(c.fname));
                     ints_push(vfc, resolve_fields(c, vn, kids(c, v, "fields"), pn, pt));
+                    ints_push(vff, gs(c, s_fields()));
                 }
                 k = k + 1;
             }
@@ -2072,37 +2123,50 @@ fn type_params(c: Ck, decl: Int, owner: Int, id: Int, pn: Strs, pt: Ints) -> Int
     0
 }
 
-// Fields as written, each resolved, appended to the pool; how many were kept.
+// Fields as written, each resolved, appended to the pool as one run once all are (resolving one
+// may make a tuple's record, whose fields go in the pool too); how many were kept. The run's start
+// is `s_fields`.
 fn resolve_fields(c: Ck, owner: Str, written: Ints, pn: Strs, pt: Ints) -> Int {
-    let first = strs_len(c.fname);
+    let names = strs_new();
+    let tys = ints_new();
+    let nss = ints_new();
+    let nse = ints_new();
+    let tss = ints_new();
+    let tse = ints_new();
     let mut i = 0;
     while i < ints_len(written) {
         let f = ints_get(written, i);
         let name = fname_of(c, f, "name");
         let ns = fld(c, f, "name_span");
-        let mut dup = 0 - 1;
-        let mut k = first;
-        while k < strs_len(c.fname) {
-            if strs_get(c.fname, k) == name && dup < 0 { dup = k; }
-            k = k + 1;
-        }
+        let dup = strs_find(names, name);
         if dup >= 0 {
             err(c, "N0332", ns, cat5("`", owner, "` has two fields called `", name, "`"),
                     "a field is identified by its name, so two cannot share one");
-            sec_at(c, ints_get(c.fns, dup), ints_get(c.fne, dup), "first declared here");
+            sec_at(c, ints_get(nss, dup), ints_get(nse, dup), "first declared here");
         } else {
             let ty = resolve_written(c, fld(c, f, "ty"), pn, pt, c.d);
-            strs_push(c.fname, name);
-            ints_push(c.fty, ty);
-            ints_push(c.fns, sps(c, ns));
-            ints_push(c.fne, spe(c, ns));
+            strs_push(names, name);
+            ints_push(tys, ty);
+            ints_push(nss, sps(c, ns));
+            ints_push(nse, spe(c, ns));
             let ts = fld(c, fld(c, f, "ty"), "span");
-            ints_push(c.fts, sps(c, ts));
-            ints_push(c.fte, spe(c, ts));
+            ints_push(tss, sps(c, ts));
+            ints_push(tse, spe(c, ts));
         }
         i = i + 1;
     }
-    strs_len(c.fname) - first
+    ss(c, s_fields(), strs_len(c.fname));
+    i = 0;
+    while i < strs_len(names) {
+        strs_push(c.fname, strs_get(names, i));
+        ints_push(c.fty, ints_get(tys, i));
+        ints_push(c.fns, ints_get(nss, i));
+        ints_push(c.fne, ints_get(nse, i));
+        ints_push(c.fts, ints_get(tss, i));
+        ints_push(c.fte, ints_get(tse, i));
+        i = i + 1;
+    }
+    strs_len(names)
 }
 
 // --- stage 0c: layouts --------------------------------------------------------------------------
@@ -3746,6 +3810,21 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     if k == "Match" { return check_match(c, e, expected); }
     if k == "Propagate" { return check_propagate(c, e, expected); }
     if k == "Closure" { return check_closure(c, e, expected); }
+    // `(a, b, …)` (L5): a tuple of the elements' types, each checked against the one expected
+    // where a tuple of that many is expected.
+    if k == "Tuple" {
+        let elems = kids(c, e, "elems");
+        let wanted = is_tuple(c, expected) && targc(c, expected) == ints_len(elems);
+        let tys = ints_new();
+        let mut i = 0;
+        while i < ints_len(elems) {
+            let mut want = none();
+            if wanted { want = targ(c, expected, i); }
+            ints_push(tys, value_type(c, ints_get(elems, i), want));
+            i = i + 1;
+        }
+        return tuple_ty(c, tys);
+    }
     if k == "Interp" {
         // `f"…"` (L4), and what `print(x)` is written as: a `Str`, each hole a value
         // interpolation writes.
@@ -5801,6 +5880,8 @@ fn pk_bool() -> Int { 1 }
 fn pk_lit() -> Int { 2 }
 fn pk_ctor() -> Int { 3 }
 fn pk_or() -> Int { 4 }
+// A tuple (L5), its elements' patterns: the one constructor of a tuple type.
+fn pk_tuple() -> Int { 5 }
 
 fn pat_new(c: Ck, kind: Int, value: Int, key: Str, ty: Int, args: Ints) -> Int {
     ints_push(c.pkind, kind);
@@ -5830,7 +5911,7 @@ fn pargs_of(c: Ck, p: Int) -> Ints {
 }
 
 // Whether a pattern has a head constructor, and whether two heads are the same one.
-fn has_head(c: Ck, p: Int) -> Bool { pkind(c, p) == pk_bool() || pkind(c, p) == pk_lit() || pkind(c, p) == pk_ctor() }
+fn has_head(c: Ck, p: Int) -> Bool { pkind(c, p) == pk_bool() || pkind(c, p) == pk_lit() || pkind(c, p) == pk_ctor() || pkind(c, p) == pk_tuple() }
 fn same_head(c: Ck, p: Int, h: Int) -> Bool {
     if pkind(c, p) != pkind(c, h) { return false; }
     if pkind(c, p) == pk_lit() { return strs_get(c.pkey, p) == strs_get(c.pkey, h); }
@@ -5948,7 +6029,11 @@ fn specialise(c: Ck, m: Mat, head: Int, arity: Int) -> Mat {
                 mat_push(c, out, joined(wilds(c, arity), rest));
             } else {
                 if has_head(c, first) && same_head(c, first, head) {
-                    if pkind(c, first) == pk_ctor() { mat_push(c, out, joined(pargs_of(c, first), rest)); } else { mat_push(c, out, rest); }
+                    if pkind(c, first) == pk_ctor() || pkind(c, first) == pk_tuple() {
+                        mat_push(c, out, joined(pargs_of(c, first), rest));
+                    } else {
+                        mat_push(c, out, rest);
+                    }
                 }
             }
         }
@@ -5999,6 +6084,16 @@ fn ctors_of(c: Ck, t: Int) -> Ctors {
             v = v + 1;
         }
     }
+    if is_tuple(c, t) {
+        ints_push(out.heads, pat_new(c, pk_tuple(), 0, "", t, ints_new()));
+        ints_push(out.tf, ints_len(out.tys));
+        ints_push(out.tc, targc(c, t));
+        let mut k = 0;
+        while k < targc(c, t) {
+            ints_push(out.tys, targ(c, t, k));
+            k = k + 1;
+        }
+    }
     if t == t_bool() {
         ints_push(out.heads, pat_new(c, pk_bool(), 1, "", 0, ints_new()));
         ints_push(out.tf, 0);
@@ -6010,7 +6105,7 @@ fn ctors_of(c: Ck, t: Int) -> Ctors {
     out
 }
 
-fn finite(c: Ck, t: Int) -> Bool { is_enum(c, t) || t == t_bool() }
+fn finite(c: Ck, t: Int) -> Bool { is_enum(c, t) || t == t_bool() || is_tuple(c, t) }
 
 fn ctor_fields(k: Ctors, i: Int) -> Ints {
     let out = ints_new();
@@ -6083,6 +6178,17 @@ fn useful(c: Ck, m: Mat, row: Ints, tys: Ints, depth: Int) -> Bool {
     }
     let args = pargs_of(c, first);
     let mut fields = ints_new();
+    if pkind(c, first) == pk_tuple() {
+        if is_tuple(c, ty) {
+            fields = targs(c, ty);
+        } else {
+            let mut i = 0;
+            while i < ints_len(args) {
+                ints_push(fields, t_int());
+                i = i + 1;
+            }
+        }
+    }
     if pkind(c, first) == pk_ctor() {
         let k = ctors_of(c, ty);
         let v = ints_get(c.pval, first);
@@ -6184,6 +6290,7 @@ fn imin(a: Int, b: Int) -> Int {
 
 // A constructor applied to its arguments' witnesses, as `Witness::show` writes it.
 fn build_witness(c: Ck, head: Int, args: Strs, ty: Int) -> Str {
+    if pkind(c, head) == pk_tuple() { return cat3("(", str_join(args, ", "), ")"); }
     if pkind(c, head) == pk_bool() {
         if ints_get(c.pval, head) == 1 { return "true"; }
         return "false";
@@ -6514,9 +6621,19 @@ fn check_pattern(c: Ck, p: Int, ty: Int, scrutinee: Int, binds: Binds) -> Int {
     }
     if k == "Literal" { return check_literal_pattern(c, sx_kid(c.t, p, 0), ty); }
     if k == "Variant" { return check_variant_pattern(c, sx_kid(c.t, p, 0), ty, scrutinee, binds); }
+    // `(p, q, …)` (L5): a tuple of as many elements, each matching its pattern.
     if k == "Tuple" {
-        // No tuple type is carried, so the value is never one.
-        err(c, "N0300", fld(c, p, "span"), cat5("this pattern is a tuple of ", int_to_str(ints_len(kids(c, p, "elems"))), ", but the value is a `", show(c, ty), "`"), "");
+        let elems = kids(c, p, "elems");
+        if is_tuple(c, ty) && targc(c, ty) == ints_len(elems) {
+            let args = ints_new();
+            let mut i = 0;
+            while i < ints_len(elems) {
+                ints_push(args, check_pattern(c, ints_get(elems, i), targ(c, ty, i), scrutinee, binds));
+                i = i + 1;
+            }
+            return pat_new(c, pk_tuple(), 0, "", ty, args);
+        }
+        err(c, "N0300", fld(c, p, "span"), cat5("this pattern is a tuple of ", int_to_str(ints_len(elems)), ", but the value is a `", show(c, ty), "`"), "");
         return wild(c);
     }
     // `p | q | …`: each alternative binds the same names, with the same types.
