@@ -73,7 +73,9 @@
       hardened-runtime signing on macOS — 2026-10-15 (D15): `build/release.rs`, architecture
       §7.117, `tests/release_build.rs` (a test per property), four mutants; macOS and the LLVM
       backend only, the rest refused by name
-- [ ] 7.2 Every release archive signed (minisign or Sigstore) and checked reproducible in CI
+- [ ] 7.2 Every release archive signed (minisign or Sigstore) and checked reproducible in CI — 2026-10-15:
+      Sigstore chosen; `scripts/sign-release.sh` and `scripts/verify-release.sh` written (D16); the
+      first real signature is at 1.0, and the reproducibility check in CI is still to do
 
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
 - [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds; measured against the

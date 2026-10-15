@@ -157,7 +157,13 @@ is refused, as is any target but this host's macOS, `--debug`, `--lib`, `--objec
 `strip`, then `codesign --sign - --options runtime`, last; the provenance record says `release`.
 **D16 — signed, reproducible releases (7.2):** minisign, whose key is the copyright holder's to make
 and hold; until then the release checklist builds twice and compares, and the signing step is named
-as waiting for the key. **D17 — 8.2's eight-CPU profile** is calibrated like P4T4 and adopted only for
+as waiting for the key. *Revised 2026-10-15 by the copyright holder: **Sigstore, keyless**,* in place
+of minisign — no key file exists to lose or leak. `scripts/sign-release.sh DIR` checks that
+`SHA256SUMS` matches every archive in DIR, then signs it once with `cosign sign-blob` (a browser
+login; the signature in Rekor's public log) into `SHA256SUMS.sigstore.json`, and writes the signer's
+identity and issuer to `SIGNER`. `scripts/verify-release.sh DIR [IDENTITY ISSUER]` refuses an unsigned,
+wrongly signed or altered download. Signing is the copyright holder's step at release time, never an
+agent's or CI's; the identity is published in SECURITY.md at the first signed release. **D17 — 8.2's eight-CPU profile** is calibrated like P4T4 and adopted only for
 the workloads it measurably speeds up within a justified memory ceiling.
 
 ## Order
