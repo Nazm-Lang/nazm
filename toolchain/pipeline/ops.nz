@@ -170,6 +170,10 @@ fn message(lo: Lo, code: Str, what: Str, at: Str) -> Ints {
     out
 }
 
+fn runtime_data(lo: Lo, name: Str, c: Str) -> Int {
+    symbol(lo, name, "import", "data", c, "", false)
+}
+
 fn runtime_sym(lo: Lo, name: Str) -> Int {
     match hashmap_get(lo.runtime, name) {
         Some(sig) => {
@@ -810,9 +814,168 @@ fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
         let ob = string_backing(fx, room)
         let n = rt_v(fx, "nz.format_int", ints_of2(ints_get(ob, 1), x), "i64")
         write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+    } else if op == "int_to_str" {
+        let x = arg_value(fx, args, 0)
+        let room = iconst(fx, 21)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.format_int", ints_of2(ints_get(ob, 1), x), "i64")
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+    } else if op == "str_len" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        set(fx, dst, ints_get(pn, 1));
+    } else if op == "str_byte" {
+        let s = arg_place(fx, args, 0)
+        let i = arg_value(fx, args, 1)
+        let pn = str_parts(fx, s)
+        let neg = cmp_imm(fx, "lt", i, "i64", 0)
+        let past = cmp(fx, "ge", i, ints_get(pn, 1))
+        let bad = bin(fx, "or", neg, past)
+        guard(fx, bad, "N0405", "this byte index is outside the `Str`");
+        let a = ptr_add(fx, ints_get(pn, 0), i)
+        let byte = load(fx, "i8", a, 0)
+        set(fx, dst, ext(fx, "i64", byte, false));
+    } else if op == "str_from_byte" {
+        let b = arg_value(fx, args, 0)
+        let low = cmp_imm(fx, "lt", b, "i64", 0)
+        let high = cmp_imm(fx, "gt", b, "i64", 255)
+        let bad = bin(fx, "or", low, high)
+        guard(fx, bad, "N0405", "this is not a byte value");
+        let room = iconst(fx, 1)
+        let ob = string_backing(fx, room)
+        let narrow = trunc(fx, "i8", b)
+        store(fx, ints_get(ob, 1), 0, narrow);
+        let one = iconst(fx, 1)
+        write_str(fx, dst, ints_get(ob, 1), one, ints_get(ob, 0));
+    } else if op == "args_count" {
+        set(fx, dst, argc(fx));
+    } else if op == "arg" {
+        let i = arg_value(fx, args, 0)
+        let n = argc(fx)
+        let neg = cmp_imm(fx, "lt", i, "i64", 0)
+        let past = cmp(fx, "ge", i, n)
+        let bad = bin(fx, "or", neg, past)
+        guard(fx, bad, "N0405", "this index is outside the arguments");
+        let d = runtime_data(fx.lo, "nz.argv", "ptr")
+        let a = addr_of(fx, d)
+        let base = load(fx, "ptr", a, 0)
+        let shifted = add_imm(fx, i, 1)
+        let width = iconst(fx, 8)
+        let off = bin(fx, "mul", shifted, width)
+        let slot = ptr_add(fx, base, off)
+        let text = load(fx, "ptr", slot, 0)
+        let len = rt_v(fx, "strlen", ints_of(text), "i64")
+        let z = null(fx)
+        write_str(fx, dst, text, len, z);
+    } else if op == "ints_new" || op == "strs_new" || op == "vec_new" {
+        let h = rt_v(fx, "nz.seq_new", ints_new(), "ptr")
+        let none = is_null(fx, h)
+        guard(fx, none, "N0406", "out of memory");
+        set(fx, dst, h);
+    } else if op == "ints_len" || op == "strs_len" || op == "vec_len" {
+        let h = arg_value(fx, args, 0)
+        set(fx, dst, load(fx, "i64", h, 0));
     } else {
         defect(fx.lo, "the primitive `" + op + "` (not ported yet)");
     }
+}
+
+// --- records and enums --------------------------------------------------------------------------
+
+/// The position of declaration index `d` in a canonical order.
+fn position_of(order: Ints, d: Int) -> Int {
+    for i in 0..ints_len(order) { if ints_get(order, i) == d { return i } }
+    0
+}
+
+/// Field `d` (by declaration) of record `t`: `[offset, canonical position]`.
+fn field_offset(fx: Fx, t: Str, d: Int) -> Ints {
+    let lx = fx.lo.lx
+    let pos = position_of(canonical_order(lx, def_node(lx, t)), d)
+    let st = structure(lx, record_fields(lx, t))
+    ints_of2(if pos < ints_len(st) - 2 { ints_get(st, pos) } else { 0 }, pos)
+}
+
+/// Variant `v`'s (by declaration) tag: its position in the enum's canonical order.
+fn tag(fx: Fx, t: Str, v: Int) -> Int {
+    position_of(enum_variants(fx.lo.lx, t), v)
+}
+
+/// Where field `f` (by declaration) of variant `v` sits in a value of enum `t`.
+fn payload_offset(fx: Fx, t: Str, v: Int, f: Int) -> Int {
+    let lx = fx.lo.lx
+    let vn_ = at(lx.c, kid(lx.c, def_node(lx, t), "variants"), v)
+    let pos = position_of(canonical_order(lx, vn_), f)
+    let st = structure(lx, variant_fields(lx, t, v))
+    8 + (if pos < ints_len(st) - 2 { ints_get(st, pos) } else { 0 })
+}
+
+fn read_borrowed(fx: Fx, dst: Int, a: Int, t: Str) {
+    if in_memory(t) {
+        let d = addr(fx, dst)
+        copy(fx, d, a, size_of(fx, t));
+    } else {
+        set(fx, dst, load(fx, mclass(t), a, 0));
+    }
+}
+
+fn read_owned(fx: Fx, dst: Int, a: Int, t: Str) {
+    if in_memory(t) {
+        let d = addr(fx, dst)
+        copy(fx, d, a, size_of(fx, t));
+        retain_at(fx, d, t);
+    } else {
+        let v = load(fx, mclass(t), a, 0)
+        if owns_ty(fx, t) { retain_value(fx, v, t); }
+        set(fx, dst, v);
+    }
+}
+
+fn rvalue_name(v: Rvalue) -> Str {
+    match v {
+        Rvalue.Use(o: _) => "use",
+        Rvalue.Copy(l: _) => "copy",
+        Rvalue.Move(l: _) => "move",
+        Rvalue.Neg(o: _) => "neg",
+        Rvalue.Arith(op: _, a: _, b: _) => "arith",
+        Rvalue.Bits(op: _, a: _, b: _) => "bits",
+        Rvalue.Complement(o: _) => "complement",
+        Rvalue.Convert(mode: _, to: _, o: _) => "convert",
+        Rvalue.Fits(to: _, o: _) => "fits",
+        Rvalue.Array(elems: _) => "array",
+        Rvalue.ArrayRepeat(value: _, count: _) => "array-repeat",
+        Rvalue.Index(base: _, index: _) => "index",
+        Rvalue.Compare(op: _, law: _, operand: _, a: _, b: _) => "compare",
+        Rvalue.Hash(operand: _, value: _) => "hash",
+        Rvalue.Call(callee: _, args: _) => "call",
+        Rvalue.CallIndirect(callee: _, args: _) => "call_indirect",
+        Rvalue.Closure(func: _, captures: _) => "closure",
+        Rvalue.Capture(env: _, index: _) => "capture",
+        Rvalue.Primitive(op: _, elem: _, args: _) => "primitive",
+        Rvalue.Record(ty: _, fields: _, names: _, locals: _) => "record",
+        Rvalue.Variant(ty: _, variant: _, vname: _, fields: _, names: _, locals: _) => "variant",
+        Rvalue.Field(base: _, f: _) => "field",
+        Rvalue.FieldBorrow(base: _, f: _) => "field borrow",
+        Rvalue.Payload(base: _, ty: _, variant: _, vname: _, field: _, fname: _) => "payload",
+    }
+}
+
+fn argc(fx: Fx) -> Int {
+    let d = runtime_data(fx.lo, "nz.argc", "i64")
+    let a = addr_of(fx, d)
+    load(fx, "i64", a, 0)
+}
+
+fn ext(fx: Fx, to: Str, src: Int, signed: Bool) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = " + (if signed { "sext" } else { "zext" }) + " " + to + " " + vn(src))
+    v
+}
+
+fn trunc(fx: Fx, to: Str, src: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = trunc " + to + " " + vn(src))
+    v
 }
 
 // --- statements ---------------------------------------------------------------------------------
@@ -978,7 +1141,44 @@ fn assign(fx: Fx, dst: Int, v: Rvalue) {
         },
         Rvalue.Call(callee: g, args: args) => { direct_call(fx, dst, g, args); },
         Rvalue.Primitive(op: op, elem: e, args: args) => { primitive(fx, dst, op, e, args); },
-        _ => { defect(fx.lo, "an rvalue this stage does not lower yet"); },
+        Rvalue.Record(ty: t, fields: fs, names: _, locals: ls) => {
+            let d = addr(fx, dst)
+            for i in 0..ints_len(fs) {
+                let fo = field_offset(fx, t, ints_get(fs, i))
+                let a = ptr_off(fx, d, ints_get(fo, 0))
+                move_into(fx, a, ints_get(ls, i));
+            }
+        },
+        Rvalue.Variant(ty: t, variant: v, vname: _, fields: fs, names: _, locals: ls) => {
+            let d = addr(fx, dst)
+            let tg = tag(fx, t, v)
+            let k = iconst(fx, tg)
+            store(fx, d, 0, k);
+            for i in 0..ints_len(fs) {
+                let off = payload_offset(fx, t, v, ints_get(fs, i))
+                let a = ptr_off(fx, d, off)
+                move_into(fx, a, ints_get(ls, i));
+            }
+        },
+        Rvalue.Field(base: b, f: r) => {
+            let p = place(fx, b)
+            let fo = field_offset(fx, r.rec, r.field)
+            let a = ptr_off(fx, p, ints_get(fo, 0))
+            read_owned(fx, dst, a, field_ty(fx.lo.lx.tt, r.rec, int_to_str(r.field)));
+        },
+        Rvalue.FieldBorrow(base: b, f: r) => {
+            let p = place(fx, b)
+            let fo = field_offset(fx, r.rec, r.field)
+            let a = ptr_off(fx, p, ints_get(fo, 0))
+            read_borrowed(fx, dst, a, field_ty(fx.lo.lx.tt, r.rec, int_to_str(r.field)));
+        },
+        Rvalue.Payload(base: b, ty: t, variant: v, vname: _, field: fi, fname: _) => {
+            let p = addr(fx, b)
+            let off = payload_offset(fx, t, v, fi)
+            let a = ptr_off(fx, p, off)
+            read_owned(fx, dst, a, field_ty(fx.lo.lx.tt, t, int_to_str(v) + "." + int_to_str(fi)));
+        },
+        _ => { defect(fx.lo, "the rvalue `" + rvalue_name(v) + "` (not ported yet)"); },
     }
 }
 
@@ -1027,8 +1227,35 @@ fn terminator(fx: Fx, t: Term) {
             }
         },
         Term.Unwind => { term(fx.fb, "fail"); },
-        _ => {
-            defect(fx.lo, "a terminator this stage does not lower yet");
+        Term.Switch(scrutinee: s, ty: t, variants: vs, names: _, blocks: bs) => {
+            let a = addr(fx, s)
+            let tg = load(fx, "i64", a, 0)
+            let cases = strs_new()
+            let mut first = 0 - 1
+            for i in 0..ints_len(vs) {
+                let b = ints_get(fx.blocks, ints_get(bs, i))
+                if first < 0 { first = b }
+                strs_push(cases, int_to_str(tag(fx, t, ints_get(vs, i))) + ": b" + int_to_str(b))
+            }
+            let default = if first >= 0 { first } else { new_lblock(fx.fb) }
+            term(fx.fb, "switch " + vn(tg) + " [" + str_join(cases, ", ") + "] else b" + int_to_str(default));
+        },
+        Term.Exit(o: o) => {
+            let c = opvalue(fx, o)
+            let bad = cmp_imm(fx, "ugt", c, "i64", 255)
+            let failing = new_lblock(fx.fb)
+            let fine = new_lblock(fx.fb)
+            branch(fx, bad, failing, fine);
+            switch_to(fx.fb, failing);
+            let m = message(fx.lo, "N0416", "this exit status is outside 0 to 255", here(fx))
+            let p = addr_of(fx, ints_get(m, 0))
+            let n = iconst(fx, ints_get(m, 1))
+            rt(fx, "nz.fail", ints_of2(p, n))
+            rt(fx, "nz.report", ints_new())
+            term(fx.fb, "unreachable");
+            switch_to(fx.fb, fine);
+            let narrow = trunc(fx, "i32", c)
+            rt(fx, "exit", ints_of(narrow))
             term(fx.fb, "unreachable");
         },
     }
