@@ -284,6 +284,7 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
             }
         }
     }
+    failure_edges(f, &mut e);
     // Every use: defined, dominating, and of the class its consumer needs.
     for (bi, b) in f.blocks.iter().enumerate() {
         if dom.get(bi).copied().flatten().is_none() {
@@ -490,6 +491,98 @@ fn function(m: &Module, f: &Function) -> Result<(), Vec<String>> {
         Ok(())
     } else {
         Err(e)
+    }
+}
+
+/// A call's `failed` value is its failure edge (4.2, `docs/architecture.md` §7.115): only the
+/// condition of the branch that ends the call's block, the call its last instruction. So a backend
+/// can make it an unwind edge — a landing pad continuing where the branch's `then` goes — or keep
+/// it as a register on a target that returns the bit.
+fn failure_edges(f: &Function, e: &mut Vec<String>) {
+    let mut edges: BTreeMap<V, usize> = BTreeMap::new();
+    for (bi, b) in f.blocks.iter().enumerate() {
+        for (ii, i) in b.insts.iter().enumerate() {
+            let (Inst::Call {
+                failed: Some(fv), ..
+            }
+            | Inst::CallIndirect {
+                failed: Some(fv), ..
+            }) = i
+            else {
+                continue;
+            };
+            edges.insert(*fv, bi);
+            let ends = ii + 1 == b.insts.len()
+                && matches!(b.term, Term::Branch { cond, .. } if cond == *fv);
+            if !ends {
+                e.push(format!(
+                    "the failure edge v{} of a call in b{bi} is not the branch that ends its block",
+                    fv.0
+                ));
+            }
+        }
+    }
+    if edges.is_empty() {
+        return;
+    }
+    for (bi, b) in f.blocks.iter().enumerate() {
+        for v in b.insts.iter().flat_map(operands) {
+            if edges.contains_key(&v) {
+                e.push(format!(
+                    "v{}, a call's failure edge, is used as a value in b{bi}",
+                    v.0
+                ));
+            }
+        }
+        let used = match &b.term {
+            Term::Branch { cond, .. } => edges.get(cond).is_some_and(|d| *d != bi).then_some(*cond),
+            Term::Switch { value: v, .. } | Term::Return(Some(v)) => {
+                edges.contains_key(v).then_some(*v)
+            }
+            Term::Jump(_) | Term::Return(None) | Term::Fail | Term::Unreachable => None,
+        };
+        if let Some(v) = used {
+            e.push(format!(
+                "v{}, a call's failure edge, is used as a value in b{bi}",
+                v.0
+            ));
+        }
+    }
+}
+
+/// The values an instruction reads.
+fn operands(i: &Inst) -> Vec<V> {
+    match i {
+        Inst::Load { addr: a, .. }
+        | Inst::Un { a, .. }
+        | Inst::Conv { src: a, .. }
+        | Inst::Ext { src: a, .. }
+        | Inst::Trunc { src: a, .. }
+        | Inst::PtrToInt { src: a, .. }
+        | Inst::IntToPtr { src: a, .. }
+        | Inst::SetVar { src: a, .. }
+        | Inst::Zero { dst: a, .. } => vec![*a],
+        Inst::Store {
+            addr: a, value: b, ..
+        }
+        | Inst::Bin { a, b, .. }
+        | Inst::Ovf { a, b, .. }
+        | Inst::Cmp { a, b, .. }
+        | Inst::PtrAdd {
+            base: a, offset: b, ..
+        }
+        | Inst::Copy { dst: a, src: b, .. } => vec![*a, *b],
+        Inst::Select { cond, a, b, .. } => vec![*cond, *a, *b],
+        Inst::Call { args, .. } => args.clone(),
+        Inst::CallIndirect { addr, args, .. } => {
+            std::iter::once(*addr).chain(args.iter().copied()).collect()
+        }
+        Inst::Param { .. }
+        | Inst::Const { .. }
+        | Inst::Addr { .. }
+        | Inst::SlotAddr { .. }
+        | Inst::GetVar { .. }
+        | Inst::Loc(_) => Vec::new(),
     }
 }
 
@@ -760,28 +853,82 @@ mod tests {
             &plain(failing, 0),
             "fails from a function that returns no failure bit",
         );
-        let call = with(
-            vec![block(
-                vec![
-                    param(),
-                    Inst::Const {
-                        dst: V(1),
-                        class: Class::Ptr,
-                        value: 0,
-                    },
-                    Inst::Call {
-                        dst: None,
-                        failed: Some(V(2)),
-                        callee: SymId(1),
-                        args: vec![V(0), V(1)],
-                    },
-                ],
-                Term::Return(Some(V(0))),
-            )],
-            Vec::new(),
-        );
+        let call = with(edge(Vec::new(), V(2)), Vec::new());
         assert!(module(&call).is_ok(), "{:?}", module(&call));
         refused(&plain(call, 1), "the failure bit of");
+    }
+
+    /// `f` calling `g` with the bit, `tail` after the call, its block ending in a branch on `cond`
+    /// to a failure exit or a return of the parameter.
+    fn edge(tail: Vec<Inst>, cond: V) -> Vec<Block> {
+        let mut insts = vec![
+            param(),
+            Inst::Const {
+                dst: V(1),
+                class: Class::Ptr,
+                value: 0,
+            },
+            Inst::Call {
+                dst: None,
+                failed: Some(V(2)),
+                callee: SymId(1),
+                args: vec![V(0), V(1)],
+            },
+        ];
+        insts.extend(tail);
+        vec![
+            block(
+                insts,
+                Term::Branch {
+                    cond,
+                    then: B(1),
+                    otherwise: B(2),
+                },
+            ),
+            block(Vec::new(), Term::Fail),
+            block(Vec::new(), Term::Return(Some(V(0)))),
+        ]
+    }
+
+    #[test]
+    fn a_failure_edge_is_only_the_branch_that_ends_its_call_s_block() {
+        // 4.2: the `failed` value is the call's failure edge, which a backend may make an unwind
+        // edge — so it is never a value anything else reads, nor followed by an instruction.
+        let after = Inst::Const {
+            dst: V(3),
+            class: Class::Bit,
+            value: 0,
+        };
+        refused(
+            &with(edge(vec![after.clone()], V(3)), Vec::new()),
+            "is not the branch that ends its block",
+        );
+        refused(
+            &with(edge(vec![after], V(2)), Vec::new()),
+            "is not the branch that ends its block",
+        );
+        let read = Inst::Select {
+            dst: V(4),
+            cond: V(2),
+            a: V(0),
+            b: V(0),
+        };
+        let mut blocks = edge(Vec::new(), V(2));
+        blocks[2].insts.push(read);
+        refused(
+            &with(blocks, Vec::new()),
+            "a call's failure edge, is used as a value",
+        );
+        let mut blocks = edge(Vec::new(), V(2));
+        blocks[2].term = Term::Branch {
+            cond: V(2),
+            then: B(1),
+            otherwise: B(1),
+        };
+        refused(
+            &with(blocks, Vec::new()),
+            "a call's failure edge, is used as a value",
+        );
     }
 
     #[test]
