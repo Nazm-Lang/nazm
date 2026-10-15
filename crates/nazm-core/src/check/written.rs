@@ -133,6 +133,15 @@ pub(super) fn type_environment(
             let Some(declared_at) = user_type_span(res, offer) else {
                 continue;
             };
+            // The prelude's standard modules (R1.5, D9) yield to the module's own types and to
+            // a written import's.
+            if d.implicit
+                && (res.records().declared(unit.module, &name).is_some()
+                    || res.enums().declared(unit.module, &name).is_some()
+                    || brought_in.contains_key(&name))
+            {
+                continue;
+            }
             if let Some(own) = names
                 .get(&name)
                 .copied()

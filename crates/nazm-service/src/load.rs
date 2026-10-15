@@ -270,6 +270,8 @@ pub fn load_packaged(
     // Parallel to `parts`: for each file, the imports it named, as `(canonical path,
     // where it was written)`. Resolved to ids once every file has one.
     let mut named: Vec<Vec<Named>> = Vec::new();
+    // Parallel to `named`: the standard modules the prelude imports into each (R1.5, D9).
+    let mut implicit: Vec<Vec<PathBuf>> = Vec::new();
     let mut errors: Vec<Diagnostic> = Vec::new();
 
     // An explicit stack rather than recursion: an import chain has no bound, and the
@@ -346,6 +348,7 @@ pub fn load_packaged(
                 index.insert(canonical, parts.len());
                 keys.push(None);
                 named.push(Vec::new());
+                implicit.push(Vec::new());
                 parts.push((path.display().to_string(), String::new()));
                 errors.push(
                     Diagnostic::error(
@@ -466,11 +469,42 @@ pub fn load_packaged(
             }
         }
 
+        // The prelude's standard modules this one names (R1.5, D9): a program's own modules
+        // only, never a package's or a standard one.
+        let prelude: Vec<&'static str> =
+            if standard.is_none() && logical.as_ref().is_some_and(ModuleKey::is_program) {
+                let written: Vec<&str> = children
+                    .iter()
+                    .filter_map(|(c, _, _, _)| match c {
+                        Item::Std(name, _) => Some(*name),
+                        Item::File(_) => None,
+                    })
+                    .collect();
+                prelude_named(&text, &program, &written)
+            } else {
+                Vec::new()
+            };
+
         // Pushed in reverse so the stack pops them in source order: the map's order
-        // follows the program's text, which is what makes it reproducible.
+        // follows the program's text, which is what makes it reproducible. The prelude's
+        // come after the written ones.
+        for name in prelude.iter().rev() {
+            if let Some((name, source)) = nazm_core::sema::stdlib::MODULES
+                .iter()
+                .find(|(n, _)| n == name)
+            {
+                stack.push(Item::Std(name, source));
+            }
+        }
         for (child, _, _, _) in children.iter().rev() {
             stack.push(child.clone());
         }
+        implicit.push(
+            prelude
+                .iter()
+                .map(|n| PathBuf::from(nazm_core::sema::stdlib::file_name(n)))
+                .collect(),
+        );
 
         index.insert(canonical, parts.len());
         keys.push(logical);
@@ -516,6 +550,20 @@ pub fn load_packaged(
         }
     }
 
+    for (i, modules) in implicit.iter().enumerate() {
+        let Some(from) = graph.module_of(FileId::from_index(i)) else {
+            continue;
+        };
+        for target in modules {
+            let Some(&j) = index.get(target) else {
+                continue;
+            };
+            if let Some(to) = graph.module_of(FileId::from_index(j)) {
+                graph.import_implicit(from, to);
+            }
+        }
+    }
+
     graph.attach_prelude(FileId::from_index(core));
 
     let loaded = Loaded {
@@ -531,6 +579,153 @@ pub fn load_packaged(
 
 /// One import a file wrote, resolved to a path: the canonical path, where the quoted path is
 /// written, and the name it gives the module, if any (N49).
+/// The prelude's standard modules a program module names (R1.5, D9), in `PRELUDE`'s order,
+/// leaving out those it imports itself. A module names one by an identifier that is one of its
+/// items, its `Map`, or a method that resolves to one of its functions (`s.split` names
+/// `text_split`) and to no built-in; naming one names the prelude modules it imports, whose
+/// impls its signatures need (`hashmap_top`'s `Ord`). Attaching only what is named keeps a
+/// program that uses none of them as it was — a restriction profile refuses what a module
+/// imports, used or not.
+fn prelude_named(
+    text: &str,
+    program: &nazm_core::__syntax::Program,
+    written: &[&str],
+) -> Vec<&'static str> {
+    let table = prelude_table();
+    let (tokens, _) = nazm_core::__syntax::lex(text);
+    let mut idents: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut methods: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (n, t) in tokens.iter().enumerate() {
+        if let nazm_core::__syntax::TokenKind::Ident(name) = &t.kind {
+            idents.insert(name.as_str());
+            // `x.m(`: a field read, `p.first`, names no method.
+            let after_dot = n > 0
+                && tokens
+                    .get(n - 1)
+                    .is_some_and(|p| p.kind == nazm_core::__syntax::TokenKind::Dot);
+            let called = tokens
+                .get(n + 1)
+                .is_some_and(|p| p.kind == nazm_core::__syntax::TokenKind::LParen);
+            if after_dot && called {
+                methods.insert(name.as_str());
+            }
+        }
+    }
+    // Calls the parser wrote for a form (a map literal's `hashmap_single`).
+    let called: Vec<&str> = program
+        .functions
+        .iter()
+        .filter_map(|f| f.body.as_ref())
+        .flat_map(nazm_core::__syntax::Block::called_names)
+        .collect();
+    let mut wanted: Vec<&'static str> = Vec::new();
+    for entry in table {
+        let named = written.contains(&entry.name)
+            || entry
+                .names
+                .iter()
+                .any(|n| idents.contains(n.as_str()) || called.contains(&n.as_str()))
+            || entry.methods.iter().any(|m| methods.contains(m.as_str()));
+        if named {
+            wanted.push(entry.name);
+        }
+    }
+    // What those import, until nothing is added.
+    let mut i = 0;
+    while let Some(name) = wanted.get(i).copied() {
+        if let Some(entry) = table.iter().find(|e| e.name == name) {
+            for dep in &entry.imports {
+                if !wanted.contains(dep) {
+                    wanted.push(dep);
+                }
+            }
+        }
+        i += 1;
+    }
+    nazm_core::sema::stdlib::PRELUDE
+        .iter()
+        .copied()
+        .filter(|n| wanted.contains(n) && !written.contains(n))
+        .collect()
+}
+
+/// One prelude module, as [`prelude_named`] looks for it.
+struct PreludeEntry {
+    name: &'static str,
+    /// Its public items' names, and its traits' methods.
+    names: Vec<String>,
+    /// The method names its functions answer to and no built-in does.
+    methods: Vec<String>,
+    /// The prelude modules it imports.
+    imports: Vec<&'static str>,
+}
+
+/// The prelude modules' names, read once from their sources.
+fn prelude_table() -> &'static [PreludeEntry] {
+    static TABLE: std::sync::OnceLock<Vec<PreludeEntry>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let std = nazm_core::sema::stdlib::PRELUDE;
+        std.iter()
+            .filter_map(|name| {
+                let (name, source) = nazm_core::sema::stdlib::MODULES
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .copied()?;
+                let (program, _) = nazm_core::__syntax::parse_file(FileId::from_index(0), source);
+                let mut names: Vec<String> = Vec::new();
+                let mut methods: Vec<String> = Vec::new();
+                for f in &program.functions {
+                    if f.pub_span.is_none() || f.method_of.is_some() {
+                        continue;
+                    }
+                    names.push(f.name.clone());
+                    if let Some((_, m)) = f.name.split_once('_') {
+                        let builtin = ["vec", "ints", "strs", "bytes", "str", "int"]
+                            .iter()
+                            .any(|p| nazm_core::Intrinsic::by_name(&format!("{p}_{m}")).is_some());
+                        if !builtin {
+                            methods.push(m.to_owned());
+                        }
+                    }
+                }
+                names.extend(
+                    program
+                        .records
+                        .iter()
+                        .filter(|r| r.pub_span.is_some())
+                        .map(|r| r.name.clone()),
+                );
+                names.extend(
+                    program
+                        .enums
+                        .iter()
+                        .filter(|e| e.pub_span.is_some())
+                        .map(|e| e.name.clone()),
+                );
+                for t in program.traits.iter().filter(|t| t.pub_span.is_some()) {
+                    names.push(t.name.clone());
+                    methods.extend(t.methods.iter().map(|m| m.name.clone()));
+                }
+                if name == "hashmap" {
+                    names.push("Map".to_owned());
+                }
+                let imports = program
+                    .imports
+                    .iter()
+                    .filter_map(|i| i.path.strip_prefix(nazm_core::sema::stdlib::PREFIX))
+                    .filter_map(|n| std.iter().copied().find(|p| *p == n))
+                    .collect();
+                Some(PreludeEntry {
+                    name,
+                    names,
+                    methods,
+                    imports,
+                })
+            })
+            .collect()
+    })
+}
+
 type Named = (
     PathBuf,
     Span,

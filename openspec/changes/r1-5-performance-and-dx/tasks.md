@@ -18,8 +18,11 @@
 ## 4. Size and lines
 - [x] 4.1 Dead-stripping; unused standard functions left out (design D14) — 2026-10-15:
       architecture §7.114, `tests/dead_strip.rs`, sizes in `performance.md`, two mutants
-- [ ] 4.2 Prelude imports of the common standard modules
-- [ ] 4.3 `top(n)` and `sort_by(key)` on maps
+- [x] 4.2 Prelude imports of the common standard modules — 2026-10-15 (D9): loader
+      (`prelude_named`), implicit imports yield to the module's own names, spec *Shorter forms*,
+      epoch 85, four tests, four mutants
+- [x] 4.3 `top(n)` and `sort_by(key)` on maps — 2026-10-15 (D10): `hashmap_top`, `hashmap_sort_by`
+      (over `(key, value)` pairs), API-1.0, a test, a mutant
 - [x] 4.4 Expression-bodied functions: `fn f(n: Int): Int = …`, and a private one with no result type
       written, `fn add(a: Int, b: Int) = a + b` (inferred; a `pub` function still writes its type)
       — 2026-10-15 (D2): parser, checker (`check/infer.rs`), `N0634`, spec *Shorter forms*, epoch 77
@@ -32,7 +35,8 @@
       — 2026-10-15 (D6): checker (`check_array_literal`), `N0618` for an untyped `[]`, epoch 84,
       tests and corpus migrated by meaning, a breaking change listed; `nazm fix`'s annotation open
 - [ ] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]` — 2026-10-15 (D5): `{"a": 1}` and
-      `Map[K, V]` done (epoch 80); the empty `{}` waits for the prelude (D9)
+      `Map[K, V]` done (epoch 80), and with D9 they need no `use`; the empty `{}` is still an empty
+      block — an empty map is `hashmap_new()` — until a typed `let m: Map[K, V] = {}` is settled
 - [x] 6.4 Short closures `|a, b| a < b`, parameter and result types inferred — 2026-10-15 (D3):
       parser `short_closure`, types from the expected function type, `N0635`, epoch 78
 - [x] 6.5 Positional enum payloads `Circle(2)` and patterns `Circle(r)`; the enum prefix only where

@@ -64,6 +64,10 @@ pub const MODULES: &[(&str, &str)] = &[
     ("toml", include_str!("../../../library/std/toml.nz")),
 ];
 
+/// The standard modules the prelude imports into each module of a program (R1.5, D9), by name:
+/// a module that names one of their items sees them without a `use`.
+pub const PRELUDE: &[&str] = &["hash", "hashmap", "ordmap", "sort", "text"];
+
 /// The standard module an import path names, if it names one: its name and its source.
 #[must_use]
 pub fn module(import: &str) -> Option<(&'static str, &'static str)> {
