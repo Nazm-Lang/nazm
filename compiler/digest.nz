@@ -725,6 +725,89 @@ fn cn_new(j: Js, f: Int, kind: Str) -> Canon {
     c
 }
 
+// --- the printed document ---------------------------------------------------------------------
+
+// A compact JSON document as `print.rs` writes it indented (`J::write`): two spaces a level,
+// `"key": value`, an empty array or object on one line, strings quoted as `quote` quotes them, and
+// a line break at the end; "" where `compact` is not JSON this reader reads.
+pub fn cdg_pretty(compact: Str) -> Str {
+    let j = js_new();
+    let root = js_value(j, compact);
+    if root < 0 || js_failed(j) { return ""; }
+    let out = strs_new();
+    js_write(j, root, 0, out);
+    strs_push(out, str_from_byte(10));
+    str_join(out, "")
+}
+
+fn js_newline(out: Strs, level: Int) -> Int {
+    strs_push(out, str_from_byte(10));
+    let mut i = 0;
+    while i < level {
+        strs_push(out, "  ");
+        i = i + 1;
+    }
+    0
+}
+
+fn js_write(j: Js, n: Int, level: Int, out: Strs) -> Int {
+    let kind = ints_get(j.kind, n);
+    if kind == 3 { return js_quote(js_text(j, n), out); }
+    if kind < 3 {
+        strs_push(out, js_text(j, n));
+        return 0;
+    }
+    let count = ints_get(j.count, n);
+    if count == 0 {
+        if kind == 4 { strs_push(out, "[]"); } else { strs_push(out, "{}"); }
+        return 0;
+    }
+    if kind == 4 { strs_push(out, "["); } else { strs_push(out, "{"); }
+    let mut i = 0;
+    while i < count {
+        if i > 0 { strs_push(out, ","); }
+        js_newline(out, level + 1);
+        let k = js_at(j, n, i);
+        if kind == 5 {
+            js_quote(strs_get(j.key, k), out);
+            strs_push(out, ": ");
+        }
+        js_write(j, k, level + 1, out);
+        i = i + 1;
+    }
+    js_newline(out, level);
+    if kind == 4 { strs_push(out, "]"); } else { strs_push(out, "}"); }
+    0
+}
+
+// `quote`: `"` and `\` escaped, a line break, return and tab by name, any other byte below `0x20`
+// as `\u00XX`; every other byte as it is.
+fn js_quote(s: Str, out: Strs) -> Int {
+    let digits = "0123456789abcdef";
+    strs_push(out, str_from_byte(34));
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let mut rep = "";
+        if b == 34 { rep = str_concat(str_from_byte(92), str_from_byte(34)); }
+        if b == 92 { rep = str_concat(str_from_byte(92), str_from_byte(92)); }
+        if b == 10 { rep = str_concat(str_from_byte(92), "n"); }
+        if b == 13 { rep = str_concat(str_from_byte(92), "r"); }
+        if b == 9 { rep = str_concat(str_from_byte(92), "t"); }
+        if rep == "" && b < 32 { rep = str_concat(str_concat(str_from_byte(92), "u00"), str_concat(str_slice(digits, b / 16, b / 16 + 1), str_slice(digits, b % 16, b % 16 + 1))); }
+        if rep != "" {
+            strs_push(out, str_slice(s, from, i));
+            strs_push(out, rep);
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(s, from, str_len(s)));
+    strs_push(out, str_from_byte(34));
+    0
+}
+
 // The `digest` member for a function printed as `object` (without one) —
 // `{"semantic":"…","body":"…"}` — or "" where the printed form does not say enough.
 pub fn cdg_digest(object: Str) -> Str {

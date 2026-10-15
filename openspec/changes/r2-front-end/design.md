@@ -331,8 +331,11 @@ not rebuilt), which interns what they name — or, while field types are resolve
 last made first; each module checked first makes the built-ins' `Option[T]` (`environment`); a
 tuple's record is declared when first asked for and is the root module's. `sema.nz` keeps the
 table's order as it goes (`rlog`, `elog`) and prints it (`ck_types_json`). Statics are printed
-where there are none; a compilation with one says so and is counted apart. After the constructs
-below the comparison becomes the whole document, byte for byte (task 5.1).
+where there are none; a compilation with one says so and is counted apart. Where every function
+and every part is carried, the comparison is also the whole document, byte for byte: `cr_core`
+assembles it from the same values and prints it as `print.rs` indents it (`cdg_pretty`, its
+strings quoted as `quote` quotes them), and `run.sh core` compares it with `nazm core-ir`'s
+standard output (task 5.1). Each construct carried below adds to the inputs compared so.
 
 The constructs read what the checker recorded, by span, as the reference's lowering reads its
 `Resolution`: a construction's record type (`construction`), a variant's enum instance and index

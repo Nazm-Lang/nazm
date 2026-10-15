@@ -109,12 +109,12 @@ for mode in $modes; do
         status=0
         "$R2_NAZM" core-ir "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
         python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" want "$status" < "$want.json" > "$want"
-        rm -f "$want.json"
         timeout "$R2_DEADLINE" "$R2_EXE" --core "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
         [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop"
-        # Function by function: an input agrees when every function carried does.
-        if python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" compare "$want" "$got" > "$R2_DIR/$name.count"; then
-          [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got"
+        # Function by function and part by part: an input agrees when every one carried does,
+        # and a document printed whole is what the reference printed, byte for byte.
+        if python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" compare "$want" "$got" "$want.json" > "$R2_DIR/$name.count"; then
+          [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got" "$want.json"
           : > "$R2_DIR/$name.ok"
         else
           diff "$want" "$got" > "$R2_DIR/$name.diff" 2>&1 || true
@@ -135,9 +135,9 @@ for mode in $modes; do
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
   if [ "$mode" = core ]; then
     # Functions: the reference's, those the lowering carried, those of them that agree.
-    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5 } END { printf "%d %d %d %d %d", t, c, a, p, q }')
+    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5; d += $6; e += $7 } END { printf "%d %d %d %d %d %d %d", t, c, a, p, q, d, e }')
     set -- $counts
-    echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree"
+    echo "$mode: $agree agree, $differ differ; functions: $1, the lowering carries $2, of which $3 agree; the document's other parts: $4 carried, of which $5 agree; whole documents: $6 carried, of which $7 agree byte for byte"
   elif [ "$mode" = check ] || [ "$mode" = render ] || [ "$mode" = facts ]; then
     # The inputs the checker carries whole: no `.stop` left behind; among them, a difference is a
     # defect rather than a gap.

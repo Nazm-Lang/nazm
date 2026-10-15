@@ -80,8 +80,7 @@ fn main(io: IoCap) -> Int {
                 print(str_concat("fails", nl()));
                 return 0;
             }
-            print(cr_functions(f));
-            print(cr_parts(f));
+            print(cr_core(f));
             return 0;
         }
         if mode == "--facts" {

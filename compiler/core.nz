@@ -82,6 +82,74 @@ fn co_last_transfers(lo: Lo) -> Bool { ints_get(lo.last, 1) == 1 }
 // Every function of the compilation, in the checker's order, one line each: its identity, a tab,
 // and either its `nazm.core-ir/3` object without `digest` (compact, its members in the printed
 // order) or `-` and what the lowering stopped at.
+// The comparison's whole output (`run.sh core`): `cr_functions`, `cr_parts`, and — where every
+// function and every part was carried — `%%document` on a line of its own and the document
+// `nazm core-ir` prints, byte for byte (`print.rs`, indented), from the same values.
+pub fn cr_core(f: Facts) -> Str {
+    let functions = cr_functions(f);
+    let parts = cr_parts(f);
+    let lines = strs_new();
+    let fl = co_lines(functions);
+    let pl = co_lines(parts);
+    let mut whole = true;
+    let objects = strs_new();
+    let mut i = 0;
+    while i < strs_len(fl) {
+        let line = strs_get(fl, i);
+        let value = str_slice(line, co_tab(line) + 1, str_len(line));
+        if co_stopped_value(value) { whole = false; }
+        strs_push(objects, value);
+        i = i + 1;
+    }
+    let members = strs_new();
+    strs_push(members, co_field_first("schema", json_str("nazm.core-ir/3")));
+    i = 0;
+    while i < strs_len(pl) {
+        let line = strs_get(pl, i);
+        let tab = co_tab(line);
+        let name = str_slice(line, 1, tab);
+        let value = str_slice(line, tab + 1, str_len(line));
+        if co_stopped_value(value) { whole = false; }
+        strs_push(members, co_field(name, value));
+        if name == "entry" { strs_push(members, co_field("functions", co_list(objects))); }
+        i = i + 1;
+    }
+    strs_push(lines, functions);
+    strs_push(lines, parts);
+    if whole {
+        let doc = cdg_pretty(co_object(members));
+        if doc != "" {
+            strs_push(lines, str_concat("%%document", co_nl()));
+            strs_push(lines, doc);
+        }
+    }
+    str_join(lines, "")
+}
+
+// Where a line's tab is; whether a value is a stop (`- REASON`).
+fn co_tab(line: Str) -> Int {
+    let mut i = 0;
+    while i < str_len(line) && str_byte(line, i) != 9 { i = i + 1; }
+    i
+}
+fn co_stopped_value(v: Str) -> Bool { str_len(v) >= 2 && str_byte(v, 0) == 45 && str_byte(v, 1) == 32 }
+
+// `s`'s lines, without their line breaks.
+fn co_lines(s: Str) -> Strs {
+    let out = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        if str_byte(s, i) == 10 {
+            strs_push(out, str_slice(s, from, i));
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    if from < str_len(s) { strs_push(out, str_slice(s, from, str_len(s))); }
+    out
+}
+
 pub fn cr_functions(f: Facts) -> Str {
     let c = fx_checker(f);
     let out = strs_new();
