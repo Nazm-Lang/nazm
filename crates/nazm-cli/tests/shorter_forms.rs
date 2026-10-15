@@ -6,6 +6,7 @@
 //! D3 — a short closure, `|a, b| a < b`, its types taken from the function type expected.
 //! D4 — fields by position, `Point(1, 2)`, and a variant without its enum, `Circle(2)`, `Dot`.
 //! D5 — map literals, `{"a": 1}`, and `Map[K, V]`.
+//! D6 — `[1, 2, 3]` is a list where no fixed array is expected.
 //! D7 — `use std.json`, and `List[T]` the growable list, R1a's sequence `Chain[T]`.
 //! D8 — printing in your own program's functions without passing `out`.
 
@@ -480,6 +481,53 @@ fn an_old_list_built_in_is_refused_naming_its_chain_one() {
     std::fs::write(
         d.path().join("p.nz"),
         "fn list_len(n: Int) -> Int { n }\nfn main() -> Int { list_len(0) }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+}
+
+#[test]
+fn a_list_literal_is_a_shared_list_and_a_typed_one_an_array_everywhere() {
+    // D6: `[1, 2]` where no `[T; n]` is expected is a `Vec[Int]`, one list every name for it
+    // shares; written where its type says `[Int; 2]` it is an array, copied on assignment.
+    differential::agrees(
+        "fn total(xs: Vec[Int]): Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let a = [1, 2]
+    let b = a
+    b.push(3)
+    let c: [Int; 2] = [1, 2]
+    let mut d = c
+    d[0] = 10
+    let words = [\"x\", \"y\"]
+    print(f\"{a.len()} {b.len()} {a[2]} {total(a)} {c[0]} {d[0]} {words.len()}\\n\")
+    0
+}
+",
+        "3 3 3 6 1 10 2\n0",
+    );
+}
+
+#[test]
+fn an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("p.nz"), "fn main() { let v = [] }\n").unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert_eq!(r.code, Some(1), "{r:?}");
+    assert!(r.stderr.contains("N0618"), "{r:?}");
+    assert!(
+        r.stderr.contains("Vec[Int]"),
+        "the help writes the type: {r:?}"
+    );
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() {\n    let v: List[Int] = []\n    println(v.len())\n}\n",
     )
     .unwrap();
     let r = nazm(d.path(), &["check", "p.nz"]);

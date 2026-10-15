@@ -8340,10 +8340,11 @@ Repointed by R1.5 (D4), which moved it to 79: an entry that refused `Circle(2)` 
 Repointed by R1.5 (D5), which moved it to 80: an entry that refused `{"a": 1}` must not be reused.
 Repointed by R1.5 (D7), which moved it to 81: an entry that refused `use std.json` must not be reused.
 Repointed by R1.5 (D8), which moved it to 82: an entry that refused printing without `out` must not be reused.
-Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused."""
+Repointed by R1.5 (D7), which moved it to 83: an entry that accepted `list_empty[Int]()` must not be reused.
+Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as an array must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 83;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 82;"
+find = "pub const SEMANTIC_EPOCH: u32 = 84;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 83;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -19575,3 +19576,19 @@ file = "crates/nazm-core/src/check/written.rs"
 find = "            \"list_empty\" => Some(\"chain_empty\"),"
 replace = "            \"list_empty#\" => Some(\"chain_empty\"),"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_old_list_built_in_is_refused_naming_its_chain_one" }]
+
+[[mutation]]
+name = "r1-5-a-list-literal-stays-an-array"
+why = "`[1, 2]` where no `[T; n]` is expected is still an array, copied on assignment, not a shared list"
+file = "crates/nazm-core/src/check/operators.rs"
+find = "        if want.is_none() {\n            let Some(first) = elems.first() else {"
+replace = "        if want.is_some() && want.is_none() {\n            let Some(first) = elems.first() else {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_list_literal_is_a_shared_list_and_a_typed_one_an_array_everywhere" }]
+
+[[mutation]]
+name = "r1-5-an-empty-list-is-refused-as-a-type-mismatch"
+why = "an empty `[]` with no type to take is refused under another code than an empty array's `N0618`"
+file = "crates/nazm-core/src/check/operators.rs"
+find = "                        codes::ARRAY_TOO_LARGE,\n                        span,\n                        \"an empty list needs its element type written\","
+replace = "                        codes::TYPE_MISMATCH,\n                        span,\n                        \"an empty list needs its element type written\","
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not" }]

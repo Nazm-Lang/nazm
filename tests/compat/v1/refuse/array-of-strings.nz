@@ -1,6 +1,6 @@
 // expect: N0621
 // An array holds plain data only; a collection of strings is a Vec (spec: arrays).
 fn main() -> Int {
-    let names = ["a", "b"];
+    let names: [Str; 2] = ["a", "b"];
     0
 }

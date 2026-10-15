@@ -106,7 +106,7 @@ fn refused(src: &str) -> Vec<String> {
 fn an_array_is_a_value_built_copied_and_written_in_place() {
     agrees(
         r#"
-let mut a = [1, 2, 3, 4];
+let mut a: [Int; 4] = [1, 2, 3, 4];
 a[2] = 30;
 let b = a;
 a[0] = 100;
@@ -120,10 +120,15 @@ let zeros = [UInt8(0); 64];
 show(out, num_to_str(zeros[63]));
 let fives = [5; 300];
 show(out, int_to_str(fives[0] + fives[299]));
-let fs = [0.5, 1.5, 2.5];
+let fs: [Float64; 3] = [0.5, 1.5, 2.5];
 show(out, num_to_str(fs[0] + fs[1] + fs[2]));
-if [1, 2, 3] == [1, 2, 3] && [1, 2, 3] != [1, 2, 4] { show(out, "equal by elements"); } else { show(out, "wrong"); };
-if [0.0 / 0.0] == [0.0 / 0.0] { show(out, "nan equal"); } else { show(out, "a nan array is not equal to itself"); };
+let p: [Int; 3] = [1, 2, 3];
+let q: [Int; 3] = [1, 2, 3];
+let r: [Int; 3] = [1, 2, 4];
+if p == q && p != r { show(out, "equal by elements"); } else { show(out, "wrong"); };
+let n1: [Float64; 1] = [0.0 / 0.0];
+let n2: [Float64; 1] = [0.0 / 0.0];
+if n1 == n2 { show(out, "nan equal"); } else { show(out, "a nan array is not equal to itself"); };
 "#,
         "136\n1\n21\n0\n10\n4.5\nequal by elements\na nan array is not equal to itself\n",
     );
@@ -192,7 +197,7 @@ fn worker(c: Chan[Int], xs: [Int; 3]) -> Int ! {spawn} {
 }
 
 fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {
-    let mut xs = [1, 2, 3];
+    let mut xs: [Int; 3] = [1, 2, 3];
     let c = chan_new_of[Int](1);
     scope { spawn worker(c, xs); }
     xs[0] = 100;
@@ -210,9 +215,18 @@ fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {
 
 #[test]
 fn every_index_is_checked_against_the_length_everywhere() {
-    traps("let a = [1, 2, 3]; let i = 3; let x = a[i]; 0", "N0405");
-    traps("let a = [1, 2, 3]; let i = -1; let x = a[i]; 0", "N0405");
-    traps("let mut a = [1, 2, 3]; let i = 5; a[i] = 1; 0", "N0405");
+    traps(
+        "let a: [Int; 3] = [1, 2, 3]; let i = 3; let x = a[i]; 0",
+        "N0405",
+    );
+    traps(
+        "let a: [Int; 3] = [1, 2, 3]; let i = -1; let x = a[i]; 0",
+        "N0405",
+    );
+    traps(
+        "let mut a: [Int; 3] = [1, 2, 3]; let i = 5; a[i] = 1; 0",
+        "N0405",
+    );
     traps(
         "let mut g = [[0; 2]; 2]; let i = 2; g[0][i] = 1; 0",
         "N0405",
@@ -258,7 +272,9 @@ fn array_and_constant_misuse_is_refused_before_anything_runs() {
     let main = |body: &str| format!("fn main() -> Int {{ {body} }}\n");
     // Values only — no handle, since R1a (L8) strings included — and at most 64 KiB.
     assert_eq!(
-        refused(&main("let a = [vec_new[Int](), vec_new[Int]()]; 0")),
+        refused(&main(
+            "let a: [Vec[Int]; 2] = [vec_new[Int](), vec_new[Int]()]; 0"
+        )),
         ["N0621"]
     );
     assert_eq!(
@@ -280,15 +296,18 @@ fn array_and_constant_misuse_is_refused_before_anything_runs() {
     let r = nazm(d.path(), &["check", "prog.nz"]);
     assert_eq!(r.code, Some(0), "65,536 bytes is an array: {r:?}");
     // One element type.
-    assert_eq!(refused(&main("let a = [1, true]; 0")), ["N0300"]);
+    assert_eq!(refused(&main("let a: [Int; 2] = [1, true]; 0")), ["N0300"]);
     // A constant index outside the array, and an index into something that is not one.
-    assert_eq!(refused(&main("let a = [1, 2]; a[2]")), ["N0624"]);
+    assert_eq!(refused(&main("let a: [Int; 2] = [1, 2]; a[2]")), ["N0624"]);
     // A `Vec`'s `v[0]` is `vec_get(v, 0)` since R1, 5b.15; a record is still no array.
     assert_eq!(
         refused("struct Q { y: Int }\nfn main() -> Int { let q = Q(y: 1); q[0] }\n"),
         ["N0624"]
     );
-    assert_eq!(refused(&main("let a = [1, 2]; a[true]")), ["N0300"]);
+    assert_eq!(
+        refused(&main("let a: [Int; 2] = [1, 2]; a[true]")),
+        ["N0300"]
+    );
     // A length is a literal or an `Int` constant.
     assert_eq!(refused(&main("let n = 3; let a = [0; n]; 0")), ["N0622"]);
     // Constants: computed, of a value type, private, and never self-referential.

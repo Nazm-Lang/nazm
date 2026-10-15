@@ -1171,7 +1171,7 @@ fn what_mir_looks_like_on_the_compiler() {
 /// refusals below (Q1-D-19).
 const NUMBERS: &str = r#"
 fn main() -> Int {
-    let xs = [1, 2, 3];
+    let xs: [Int; 3] = [1, 2, 3];
     let ys = [0; 4];
     let f = 1.5;
     xs[1] + ys[2] + Int(f)
@@ -1269,7 +1269,7 @@ fn the_validator_refuses_a_leaked_array_of_strings() {
     // An array owns what its elements do (R1a, L8): an array of strings is tracked, so one whose
     // drop is gone is a leak at the return, as any owning local is.
     let mut p = valid(
-        "fn main() -> Int {\n    let a = [str_concat(\"a\", \"b\"), \"c\"];\n    str_len(a[0])\n}\n",
+        "fn main() -> Int {\n    let a: [Str; 2] = [str_concat(\"a\", \"b\"), \"c\"];\n    str_len(a[0])\n}\n",
     );
     let f = function_mut(&mut p, "main");
     let arrays: Vec<u32> = f

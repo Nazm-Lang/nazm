@@ -321,6 +321,18 @@ closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` — `List[T]` as a `V
 as R1a's list under every implementation, the refusal by name; `box_list.rs`, `order_hash.rs`,
 `derive_json.rs`, `toml.rs` and `build.rs`' coverage of every built-in, renamed; two mutants.
 
+**R1.5 (2026-10-15)** · *`[…]` is a list* (`spec.md`, *Shorter forms* and *Arrays*; R1.5 design D6).
+`[1, 2, 3]` where no fixed array `[T; n]` is expected is a `Vec[Int]`, its element type the first
+element's; a fixed array is written where its type says so, and `[v; n]` is always one. A changed
+meaning, listed as a breaking change for the next release: an unannotated `let a = [1, 2, 3]` was
+an array, copied on assignment, and is now a list every name shares. An empty `[]` with no type to
+take is refused (`N0618`). The tests, the compatibility corpus's three array cases (re-pinned) and
+the Nazm-written code generator's two array uses write `[T; n]` where they mean arrays. Semantic
+epoch 84; EXPERIMENTAL until R1.5 closes; `nazm fix`'s annotation (D6) is not yet written.
+Evidence: `crates/nazm-cli/tests/shorter_forms.rs` — a shared list and a copied typed array under
+every implementation, the empty list's refusal; `arrays.rs`, `const_tables.rs`, `compat_v1.rs`;
+two mutants.
+
 **R1.5 (2026-10-15)** · *Map literals and `Map[K, V]`* (`spec.md`, *Shorter forms*; R1.5 design D5).
 `{"a": 1, "b": 2}` is read by the parser as the block that builds it — `hashmap_single` for the
 first entry, which settles the types, then `hashmap_set` — and `Map[K, V]` is `HashMap[K, V]` where

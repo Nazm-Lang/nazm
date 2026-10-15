@@ -379,7 +379,10 @@ use crate::digest::{self, Framed};
 /// `83` — R1.5, 2026-10-15. `List[T]` became `Vec[T]`'s name and R1a's sequence `Chain[T]`, with
 /// built-ins `chain_*`, so `List[T]` where a `Vec[T]` is wanted moved from refused to accepted, and
 /// a call of a `list_` built-in from accepted to refused (`N0637`) (D7).
-pub const SEMANTIC_EPOCH: u32 = 83;
+/// `84` — R1.5, 2026-10-15. `[1, 2, 3]` where no `[T; n]` is expected became a list, `Vec[T]`, rather
+/// than a fixed array (D6): a program that copied such a value and wrote either copy changed
+/// meaning, and an empty `[]` with no type to take moved to refused (`N0618`).
+pub const SEMANTIC_EPOCH: u32 = 84;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

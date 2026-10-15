@@ -47,3 +47,9 @@ ordering, hashing and JSON, constant tables, and R1e's libraries.
 
 A new case is added with its pin: run the corpus test, which names the unpinned file, and add
 `DIGEST  PATH` — the file's BLAKE3 digest, two spaces, its path from this directory.
+
+**Edited before 1.0.** R1.5's D6 (2026-10-15) made `[a, b, c]` a list wherever no `[T; n]` is
+expected, a changed meaning recorded as a breaking change in
+`openspec/changes/r1-5-performance-and-dx/design.md`. `run/arrays.nz`,
+`refuse/constant-index-out-of-range.nz` and `refuse/array-of-strings.nz` now write the array type
+where they bind an array; their expectations are unchanged, and their pins were changed with them.
