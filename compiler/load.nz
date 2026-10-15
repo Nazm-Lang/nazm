@@ -242,6 +242,14 @@ fn pend(p: Pending, code: Str, file: Int, start: Int, end: Int, message: Str, he
     0
 }
 
+// Whether `path` is a directory, which `read_to_string` refuses to read (and `read_file` traps on).
+fn ld_is_directory(path: Str, io: IoCap) -> Bool {
+    let d = os_dir_open(path);
+    let open = os_status(d) >= 0;
+    if open { os_close(d); }
+    open
+}
+
 // Read `root` and everything it imports, the standard modules from `library/std` and the core
 // prelude from `library/core/prelude.nz`. Every loading error goes to `d`, published at its
 // global offset; the compilation is loaded even then, as far as it could be.
@@ -282,7 +290,11 @@ pub fn ld_load(root: Str, library: Str, source_root: Str, packages: Packages, d:
         if file_exists(file) == false {
             unreadable = "No such file or directory (os error 2)";
         } else {
-            if valid_utf8(read_file(file)) == false { unreadable = "stream did not contain valid UTF-8"; }
+            if ld_is_directory(file, io) {
+                unreadable = "Is a directory (os error 21)";
+            } else {
+                if valid_utf8(read_file(file)) == false { unreadable = "stream did not contain valid UTF-8"; }
+            }
         }
         if unreadable != "" {
             strs_push(identities, identity);
