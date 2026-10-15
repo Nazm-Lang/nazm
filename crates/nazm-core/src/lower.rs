@@ -928,6 +928,11 @@ impl<'a> Lower<'a> {
         let (bound, element): (Expr, Box<dyn Fn(Expr) -> Expr>) = match &f.iter {
             nazm_syntax::ForIter::Each(e) => {
                 let seq_value = self.expr(e)?;
+                if let ExprKind::Call { callee, args, .. } = &seq_value.kind {
+                    if let Some(each) = self.res.split_each().filter(|s| s.split == *callee) {
+                        return self.split_loop(f, id, index, each, args.clone(), stmts);
+                    }
+                }
                 let Some(seq_ty) = seq_value.ty else {
                     return defect(e.span(), "a `for` sequence the checker gave no type");
                 };
@@ -1057,6 +1062,133 @@ impl<'a> Lower<'a> {
                     lhs: Box::new(read_index),
                     rhs: Box::new(int(ExprKind::Const(one))),
                 }),
+                at,
+            },
+        ];
+        self.targets.push(id);
+        let body = self.statement_block(&f.body, vec![name]);
+        self.targets.pop();
+        let mut body = body?;
+        body.stmts.splice(0..0, step);
+        stmts.push(Stmt::Loop {
+            id,
+            cond,
+            body,
+            at: f.span,
+        });
+        Ok(stmts)
+    }
+
+    /// `for x in text_split(s, sep)` (R1.5, 3.3), as the loop over the list it would make means,
+    /// with no list: `let s = …; let sep = …; let mut i = 0; let mut end = 0;
+    /// while i < str_len(s) + 1 { end = text_split_end(s, sep, i); let x = str_slice(s, i, end);
+    /// i = text_split_next(s, sep, end); body }`. `@std/text`'s two functions find each piece as
+    /// `text_split` does, so the pieces, their order and the empty ones are the list's; the step
+    /// comes before the body, as every `for`'s does.
+    fn split_loop(
+        &mut self,
+        f: &nazm_syntax::For,
+        id: LoopId,
+        index: LocalId,
+        each: nazm_sema::resolve::SplitEach,
+        args: Vec<Expr>,
+        mut stmts: Vec<Stmt>,
+    ) -> Lowered<Vec<Stmt>> {
+        let at = f.name_span;
+        let int = |kind: ExprKind| Expr {
+            kind,
+            ty: Some(Type::Int),
+            at,
+        };
+        let [s_value, sep_value]: [Expr; 2] = match args.try_into() {
+            Ok(a) => a,
+            Err(_) => return defect(at, "a `text_split` call without two arguments"),
+        };
+        let s = self.temp(Temp::ForSeq, Type::Str, at);
+        stmts.push(Stmt::Let {
+            local: s,
+            value: s_value,
+        });
+        self.bind(s);
+        let sep = self.temp(Temp::ForSeq, Type::Str, at);
+        stmts.push(Stmt::Let {
+            local: sep,
+            value: sep_value,
+        });
+        self.bind(sep);
+        let zero = self.constant(Const::Int(0));
+        stmts.push(Stmt::Let {
+            local: index,
+            value: int(ExprKind::Const(zero)),
+        });
+        self.bind(index);
+        let end = self.temp(Temp::ForEnd, Type::Int, at);
+        stmts.push(Stmt::Let {
+            local: end,
+            value: int(ExprKind::Const(zero)),
+        });
+        self.bind(end);
+        let str_local = |l: LocalId| Expr {
+            kind: ExprKind::Local(l),
+            ty: Some(Type::Str),
+            at,
+        };
+        let read_index = int(ExprKind::Local(index));
+        let read_end = int(ExprKind::Local(end));
+        let one = self.constant(Const::Int(1));
+        let cond = Expr {
+            kind: ExprKind::Compare {
+                op: cir::CmpOp::Lt,
+                operand: Type::Int,
+                law: Law::Int,
+                lhs: Box::new(read_index.clone()),
+                rhs: Box::new(int(ExprKind::Arith {
+                    op: cir::ArithOp::Add,
+                    lhs: Box::new(int(ExprKind::Builtin {
+                        op: nazm_sema::Intrinsic::StrLen,
+                        type_args: Vec::new(),
+                        args: vec![str_local(s)],
+                        callee_at: at,
+                    })),
+                    rhs: Box::new(int(ExprKind::Const(one))),
+                })),
+            },
+            ty: Some(Type::Bool),
+            at,
+        };
+        let call = |callee: FnId, last: Expr| {
+            int(ExprKind::Call {
+                callee,
+                type_args: Vec::new(),
+                args: vec![str_local(s), str_local(sep), last],
+                callee_at: at,
+            })
+        };
+        let name = self.local_at(f.name_span)?;
+        let step = vec![
+            Stmt::Assign {
+                local: end,
+                path: Vec::new(),
+                value: call(each.end, read_index.clone()),
+                at,
+            },
+            Stmt::Let {
+                local: name,
+                value: Expr {
+                    kind: ExprKind::Builtin {
+                        op: nazm_sema::Intrinsic::StrSlice,
+                        type_args: Vec::new(),
+                        args: vec![str_local(s), read_index, read_end.clone()],
+                        callee_at: at,
+                    },
+                    ty: Some(Type::Str),
+                    at,
+                },
+            },
+            Stmt::Assign {
+                local: index,
+                path: Vec::new(),
+                value: call(each.next, read_end),
                 at,
             },
         ];

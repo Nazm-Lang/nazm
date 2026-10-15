@@ -25,7 +25,9 @@ Measured: 0.18 s, 20 MB peak, 61 KB executable for the comparison's input.
 
 1. **No list for `for w in s.split(sep)`** (R1.5 3.3): the loop takes each view as it is found, so
    the per-line allocation and its release go — the largest share that changes nothing a program
-   means. Expected: most of the 20%.
+   means. **Done 2026-10-15: 189 → 151 ms (−20%, hyperfine, 15 runs each, same host), 19 MB peak
+   unchanged.** The two functions are `pub` because a check reused from a cache sees a module's
+   interface, which has no private function.
 2. **A hash that reads a word at a time** (3.2): FNV-1a over bytes is a serial chain of multiplies.
    A native built-in with **the same values** keeps every map's order; a faster function changes
    the order of `hashmap_keys`, which the spec promises only to be the same in every run — a choice
