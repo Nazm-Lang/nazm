@@ -173,6 +173,19 @@ keeps its value as an `Int`, any other as its decimal digits. A float is never c
 constant has its type and no value, and where a value would decide something — a float compared,
 converted to an integer, or a shift's amount — the checker stops rather than guess IEEE 754.
 
+**D18 — Provenance is carried where it cannot refuse, before its flows are.** `N0372`
+(`provenance::solve`, `FlowRule::LANGUAGE`) is the only diagnostic provenance gives, and only in a
+function that declares its effects — a closure and an impl's or a trait's default method always do
+— at a path it writes to, or at a call, a call through a value or a bound, or a closure's capture
+that hands a value to what writes to one, when that value may carry a file's contents or what the
+checker does not follow. So a compilation is carried, with no provenance diagnostic, when no
+built-in of a restricted origin (`Origin::of_intrinsic`'s `File` and `Unknown` sources) is called
+anywhere in it, when no restricted sink (`SinkClass::Path`) is, or when no function that declares
+its effects reaches one — calling one, calling a function that reaches one, making a closure that
+does, or calling through a value or a bound while anything reaches one. Anywhere else the checker
+stops until the flows themselves are ported. The table (D14) gains each built-in's flow and
+container use, generated, for that port.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
