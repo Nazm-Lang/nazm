@@ -101,6 +101,22 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
 12. **The suite's environment follows `.cargo/config.toml`.** Since R1.5 (D12) it also sets
     `NAZM_USER_CACHE_DIR=` (the user cache off); `suite_env` sets it and `tests/run.sh` exports it.
 
+13. **What several Rust files share, the harness shares once.** `platform_files.rs`' `runs_in` and
+    `alike` (which `process_control.rs` imports) are `lib/platform.nz`; the "every implementation"
+    that a dozen files each write for themselves — the oracle or not, which runs ask for the memory
+    report, where an executable runs — is one function given a `Tiers` record (`lib/tiers.nz`);
+    `traits.rs`' and `usability.rs`' `agrees_on` is `lib/agree.nz`. Where a Rust helper prepares a
+    directory by calling a Rust function, the port gives the files to write and a shell script to
+    run there (`chmod`, `ln -s`, `ln`): the same tree, said in the shell's words.
+14. **A value a Rust test computes each run may be worked out once.** `scheduler.rs` folds
+    `(x + i) % 97` over three million steps to know what a task prints; the port writes the result
+    (`1039`) with the fold beside it, because the harness's interpreted leg would spend its
+    iteration budget on the computation, not on the test (risk *`nazm test` runs every test twice*).
+15. **A reference implementation the Rust test links is a library's in the port.** `hash_vectors.rs`
+    checks its table against the `blake3` crate and `compat_v1.rs` pins the corpus with it; the port
+    uses `@std/blake3` of the release that builds the harness — a second implementation, not the
+    tree's, so a table entry wrong in a way the tree's and the crate's agree on is still caught.
+
 ## Risks / Trade-offs
 
 - [`nazm test` runs every test twice] → the interpreter leg is a second reference for the harness
@@ -125,8 +141,37 @@ Things the comparisons turned up that belong outside `toolchain/harness/` — re
 - **Provenance and tree-walking tools** (decision 2): every path built from a `Strs` that ever held a
   file's contents is refused as a write's path, so a harness declassifies at its sinks.
 - **`label` is a reserved word** (`N0101`) that a natural parameter or binding name runs into.
+- **A tuple pattern may rebind in one scope what a name may not.** `let (a, b) = (1, 2); let (a, b) =
+  (3, 4);` checks and runs (both 0.10.0 and the tree), where `let x = 1; let x = 2;` is `N0202`
+  ("Nazm allows shadowing in a nested scope but not in the same one"). One of the two is a defect.
+- **`numbers.rs` and `resolution.rs` are black-box.** Listed among the files that call a Rust API,
+  they name `nazm_sema` and `nazm_core` only in their comments; both are ported.
 
 ## Open Questions
+
+- **The files that call a Rust API** (tasks 4.5). Most do so in one to three of their tests; the
+  rest of each file is black-box. Either a file is ported with those tests left in Rust (`run.sh`
+  learning a list of tests that stay Rust, so they are not reported missing), or each API becomes
+  reachable through the CLI first (`rewrite-in-nazm` decision 5). What each needs:
+  - a table the CLI does not print: `boards`, `manifests` (`board::BOARDS`), `cross`
+    (`backend::Target`), `builtins`, `build` (two of 140: `Intrinsic::ALL` with each one's shape),
+    `domain_profiles`, `profiles_v2` (`profile::Profile::ALL` and its rules), `documentation`
+    (`nazm_docs::CORPUS`), `docs` (`SEMANTIC_EPOCH`, the interface `SCHEMA`,
+    `RUNTIME_ABI_REVISION`, `TARGET_NOTE`, the support table's non-goals), `native_cache`
+    (`runtime::Word`), `ffi` (`runtime::IMPORTS`, `RESERVED_C_SYMBOLS`);
+  - LLVM text the CLI does not write alone: `freestanding`, `realtime` (`board::emit_entry`,
+    `emit_runtime`), `runtime` (`emit_runtime` for a given `Needs`, the platform and switch
+    emitters);
+  - a library entry point: `repository` (`nazm_repo::map`, which `nazm repo --map --json` is
+    compared with), `summary` (`nazm_service::summary::check`), `resolved_units` (a
+    `LanguageService` on a thread of `PARSE_STACK_BYTES`), `incremental` (the cache store's
+    types, which some five of its 46 tests read through `check_entries`);
+  - the compiler's own stages, which the rewrite replaces (R2, R3): `core_ir`, `cranelift`, `mir`,
+    `durable_identity`, `prelude`, `reexports`, `fuzz_replay`.
+- **The TCP files.** `distributed` binds a port to find a free one and starts nodes side by side;
+  `secure_service` starts a Nazm server and talks to it with a Rust `TcpStream`. Both port with
+  `@std/process`' `process_spawn_with` (a child left running, ended by its group) and `@std/net`'s
+  client: the harness gains a `NetCap` and a run that does not wait.
 
 - `NAZM` or `NAZM_BIN` (decision 3).
 - Whether a ported test file replaces its Rust file at integration or runs beside it until R8.

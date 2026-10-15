@@ -27,15 +27,29 @@
 - [x] 4.3 `short_variants` (the brief's `shorter_forms`)
 - [x] 4.4 Compared with the Rust tests on the tree and under every catalogued mutation they kill
       (`tests/mutants.sh`: 18 mutations, each caught by the Rust killer and the Nazm test)
-- [ ] 4.5 The remaining black-box files, `common`/`differential`/`memory_report`-only first — 85
-      of the 186 test files of `crates/nazm-cli/tests/` so far (every test agreeing with its Rust
-      test on the tree, `tests/run.sh`; `tests/mutants.sh` over the mutations the first files kill:
-      see each commit). Docker-only `#[ignore]`d tests stay Rust (design decision 10). Left: the
-      files that call a Rust API (`builtins`, `fuzz_replay`, `repository`, `resolution`,
-      `documentation`, `manifests`, `domain_profiles`, `profiles_v2`, `numbers`, `cross`, `docs`,
-      `boards`, `realtime`, `cranelift`, `core_ir`, `reexports`, `ffi`, `runtime`, `prelude`,
-      `summary`, `mir`, `durable_identity`, `native_cache`, `incremental`, `build`, …), two that
-      drive concurrent processes over TCP (`distributed`, `secure_service`), and the rest
+- [ ] 4.5 The remaining black-box files, `common`/`differential`/`memory_report`-only first — 124
+      of the 176 test files of `crates/nazm-cli/tests/` so far (the directory's 194 entries less
+      the five `cli_*` roots, `selfhost` and twelve fixture directories; every test agreeing with its
+      Rust test on the tree, `tests/run.sh`; `tests/mutants.sh` over the mutations the first files
+      kill: see each commit). `#[ignore]`d tests that start a container or need a GPU stay Rust
+      (design decision 10). Left, for the coordinator (design, *Open Questions*):
+      - the 25 that call a Rust API — most in one to three of their tests: `boards`, `build`,
+        `builtins`, `core_ir`, `cranelift`, `cross`, `docs`, `documentation`, `domain_profiles`,
+        `durable_identity`, `ffi`, `freestanding`, `fuzz_replay`, `incremental`, `manifests`, `mir`,
+        `native_cache`, `prelude`, `profiles_v2`, `realtime`, `reexports`, `repository`,
+        `resolved_units`, `runtime`, `summary` (`numbers` and `resolution` name a crate only in
+        their comments, and are ported);
+      - the two that drive concurrent processes and a TCP client from the test (`distributed`,
+        `secure_service`; `net`'s TCP is all in its Nazm programs, and it is black-box);
+      - 25 black-box files not yet ported: `accel_providers`, `bytes_text`, `cost_and_flow`,
+        `debugging`, `domains`, `ecosystem`, `ffi_v2`, `ffi_v3`, `flow_v3`, `native_units`,
+        `nazm_backend`, `packages`, `regex`, `schemas`, `stdlib`; six with some tests `#[ignore]`d
+        for a container, which stay Rust (`debugger_v3` 2 of 7, `evm` 1 of 4, `mobile` 2 of 4,
+        `wasm` 3 of 8, `wasm_contract` 1 of 3, `windows` 2 of 6); and four that need more of the
+        harness: `lsp` (an interactive
+        session over a child's standard input and output), `scheduler_pool` (a running child's CPU
+        time, read while it runs), `select` (a C shim preloaded into the program), `fuzz_diff` (a
+        seeded program generator reproduced bit for bit)
 - [x] 4.6 Re-run `tests/mutants.sh` over the files ported since the rebase onto `613047d2`: the 45
       of them a catalogued mutation names a killer in, the catalogue's first such mutation each
       (`MUTANTS_PER_FILE=1`; 281 mutation-killer pairs in all, each a rebuild of `nazm` and a test

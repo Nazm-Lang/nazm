@@ -1,0 +1,333 @@
+// `--heap-limit`: a program within its limit runs as it would and one past it ends with `N0406`;
+// a sequence's growth is counted; what is freed is counted back in every task; a manifest gives
+// the limit and the flag overrides it; a limit is a hosted program's, and a size; only the heap
+// unit reaches C's allocator. Ported from `crates/nazm-cli/tests/heap_limit.rs` (R7).
+
+use "@std/file"
+use "@std/sort"
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/strings.nz"
+use "../lib/port.nz"
+use "../lib/differential.nz"
+
+/// One native build: its label and its executable.
+struct Built {
+    label: Str,
+    exe: Str,
+}
+
+/// The three native builds of `prog.nz` in `dir`, each with `limit` when one is given (`""`).
+fn builds(h: Caps, dir: Str, limit: Str) -> Result[Vec[Built], Str] ! { io, spawn } {
+    let out = vec_new[Built]();
+    let whos = text_split("llvm -O0|llvm -O2|cranelift", "|");
+    let backends = words("llvm llvm cranelift");
+    let opts = words("0 2 0");
+    let mut k = 0;
+    while k < 3 {
+        let who = strs_get(whos, k);
+        let tag = if str_len(limit) > 0 { limit } else { "none" };
+        let exe = f"{dir}/{text_replace(text_replace(who, " ", ""), "-", "")}-{tag}";
+        let a = words(f"build --no-cache --backend {strs_get(backends, k)} --opt-level {strs_get(opts, k)} prog.nz -o {exe}");
+        if str_len(limit) > 0 {
+            strs_push(a, "--heap-limit");
+            strs_push(a, limit);
+        }
+        let b = nazm(h, dir, a);
+        check_that(b.code == 0, f"{who}: {b.stderr}")?;
+        vec_push(out, Built(label: who, exe: exe));
+        k = k + 1;
+    }
+    Result[Vec[Built], Str].Ok(value: out)
+}
+
+fn run_h(h: Caps, dir: Str, exe: Str) -> Ran ! { io, spawn } {
+    bounded_exe(h, exe, dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))
+}
+
+/// Every kind of storage the report counts was reclaimed.
+fn nothing_live_h(report: Str) -> Result[Int, Str] ! {} {
+    for kind in words("sequences strings channels closures") {
+        let parts = text_split(report, kind);
+        let part = if strs_len(parts) > 1 { strs_get(parts, 1) } else { "" };
+        let ws = split_whitespace(part);
+        let live = if strs_len(ws) > 2 { strs_get(ws, 2) } else { "" };
+        check_that(live == "live=0", f"{kind} not all reclaimed: {report}")?;
+    }
+    ok()
+}
+
+fn with(h: Caps, src: Str) -> Result[Str, Str] ! { io } {
+    prog_dir(h, "prog.nz", src)
+}
+
+fn interpreted(h: Caps, dir: Str) -> Ran ! { io, spawn } {
+    run(h, nazm_bin(h.io), words("run --interpret prog.nz"), dir, env_set(suite_env(h), "NAZM_MEMORY_REPORT", "1"))
+}
+
+/// An application package's manifest with `limit` as its heap limit.
+fn manifest(limit: Str) -> Str ! {} {
+    f"schema = \"nazm.package/1\"\n\n[package]\nname = \"app\"\nversion = \"0.1.0\"\nmain = \"main.nz\"\nheap-limit = \"{limit}\"\n"
+}
+
+/// `nazm build --no-cache app -o exe` and `extra`, in `d`.
+fn build_app(h: Caps, d: Str, exe: Str, extra: Strs) -> Ran ! { io, spawn } {
+    let a = words("build --no-cache app -o");
+    strs_push(a, exe);
+    for x in extra {
+        strs_push(a, x);
+    }
+    nazm(h, d, a)
+}
+
+/// `nazm build --no-cache prog.nz -o out` and `extra`, in `d`.
+fn refused_h(h: Caps, d: Str, extra: Strs) -> Ran ! { io, spawn } {
+    let a = words("build --no-cache prog.nz -o out");
+    for x in extra {
+        strs_push(a, x);
+    }
+    nazm(h, d, a)
+}
+
+fn two(a: Str, b: Str) -> Strs ! {} {
+    let x = strs_new();
+    strs_push(x, a);
+    strs_push(x, b);
+    x
+}
+
+/// The LLVM units `nazm build --emit-ir` writes for `prog.nz` with `limit` (`""` for none): each
+/// unit's name past the output's stem, and its text, in name order.
+fn ir_units(h: Caps, d: Str, limit: Str) -> Result[(Strs, Strs), Str] ! { io, spawn } {
+    let stem = f"ir-{if str_len(limit) > 0 { limit } else { "none" }}";
+    let a = words("build --no-cache --emit-ir prog.nz -o");
+    strs_push(a, f"{d}/{stem}");
+    if str_len(limit) > 0 {
+        strs_push(a, "--heap-limit");
+        strs_push(a, limit);
+    }
+    let b = nazm(h, d, a);
+    check_that(b.code == 0, b.stderr)?;
+    let all = match dir_list(h.io, d) {
+        Result.Ok(value: ns) => ns,
+        Result.Err(error: e) => strs_new(),
+    };
+    let picked = strs_new();
+    for n in all {
+        if text_starts_with(n, stem) && text_ends_with(n, ".ll") {
+            strs_push(picked, n);
+        }
+    }
+    let names = strs_new();
+    let texts = strs_new();
+    for n in strs_sort(picked) {
+        strs_push(names, str_slice(n, str_len(stem), str_len(n)));
+        strs_push(texts, read_text(h, f"{d}/{n}")?);
+    }
+    Result[(Strs, Strs), Str].Ok(value: (names, texts))
+}
+
+/// Without a limit C's allocator is called directly and no heap is counted; with one, the same
+/// units and one more, the heap's, which alone calls C's allocator (the stack unit keeps it too:
+/// a task's stack is not heap).
+fn ir_checks(plain: (Strs, Strs), counted: (Strs, Strs)) -> Result[Int, Str] ! {} {
+    let (pn, pt) = plain;
+    let (cn, ct) = counted;
+    check_that(strs_len(pn) > 0, "no units")?;
+    let mut any_malloc = false;
+    for t in pt {
+        check_that(!text_contains(t, "nz.heap_"), t)?;
+        if text_contains(t, "call ptr @malloc(") {
+            any_malloc = true;
+        }
+    }
+    check_that(any_malloc, "no unit calls malloc")?;
+    check_that(strs_len(cn) == strs_len(pn) + 1, str_join(cn, ", "))?;
+    let mut i = 0;
+    while i < strs_len(cn) {
+        let name = strs_get(cn, i);
+        let text = strs_get(ct, i);
+        if text_contains(name, "heap") {
+            check_that(text_contains(text, "@nz.heap_limit = internal global i64 1048576"), text)?;
+        } else if !text_contains(name, "stack") {
+            check_that(!text_contains(text, "@malloc(") && !text_contains(text, "@free(") && !text_contains(text, "@realloc("), f"{name} reaches C's allocator past the count")?;
+        }
+        i = i + 1;
+    }
+    ok()
+}
+
+/// Holds 3000 strings of about 20 bytes, and their vector, at once: some 120 KiB with the
+/// runtime's own allocations — past 64 KiB, well within 4 MiB.
+const HOLDS: Str = "fn main(out: OutCap) -> Int ! {io} {\n    print(\"start\\n\");\n    let xs = strs_new();\n    let mut i = 0;\n    while i < 3000 {\n        strs_push(xs, str_concat(\"the item numbered \", int_to_str(i)));\n        i = i + 1;\n    }\n    print(f\"{strs_len(xs)} {strs_get(xs, 2999)}\\n\");\n    0\n}\n";
+
+/// Builds and allocates a hundred thousand strings, holding one at a time, in four tasks on the
+/// pool five times over: millions of bytes allocated, a few KiB live.
+const CHURNS: Str = "fn work(c: Chan, k: Int) -> Int {\n    let mut total = 0;\n    let mut i = 0;\n    while i < 5000 {\n        let s = str_concat(\"piece \", int_to_str(i + k));\n        total = total + str_len(s);\n        i = i + 1;\n    }\n    chan_send(c, total);\n    0\n}\n\nfn main(t: SpawnCap) -> Int ! {spawn} {\n    let c = chan_new(32);\n    let mut round = 0;\n    while round < 5 {\n        scope { spawn work(c, 1); spawn work(c, 2); spawn work(c, 3); spawn work(c, 4); }\n        round = round + 1;\n    }\n    let got = ints_new();\n    let mut n = 0;\n    while n < 20 {\n        chan_recv(c, got);\n        n = n + 1;\n    }\n    let mut sum = 0;\n    let mut j = 0;\n    while j < ints_len(got) {\n        sum = sum + ints_get(got, j);\n        j = j + 1;\n    }\n    sum\n}\n";
+
+@test
+fn a_program_within_its_limit_runs_as_it_would_and_one_past_it_ends_with_n0406(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = with(h, HOLDS)?;
+    let expected = "start\n3000 the item numbered 2999\n0";
+    let reference = interpreted(h, d);
+    check_that(reference.code == 0, ran_show(reference))?;
+    check_that(text_trim_end(reference.stdout) == expected, "assert_eq!(text_trim_end(reference.stdout), expected);")?;
+    let report = memory_line(reference);
+    // The LIR oracle: the same answer from the instructions both backends translate.
+    let oracle = run(h, nazm_bin(h.io), words("lir --run prog.nz"), d, suite_env(h));
+    check_that(oracle.code == 0, ran_show(oracle))?;
+    check_that(text_trim_end(oracle.stdout) == expected, "assert_eq!(text_trim_end(oracle.stdout), expected);")?;
+    // Within the limit: what the interpreter printed, the same storage, nothing live.
+    for run1 in builds(h, d, "4M")? {
+        let who = run1.label;
+        let exe = run1.exe;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_trim_end(r.stdout) == expected, who)?;
+        check_that(memory_line(r) == report, who)?;
+        nothing_live_h(report)?;
+    
+    }
+    // Past it: what was printed stays printed, then the one fixed line and status 2, and no
+    // memory report — the process ended where the allocation was asked for.
+    for run2 in builds(h, d, "64K")? {
+        let who = run2.label;
+        let exe = run2.exe;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(r.stdout == "start\n", who)?;
+        check_that(r.stderr == "nazm: error[N0406]: out of memory: the heap limit of 65536 bytes is reached\n", who)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_sequence_s_growth_is_counted(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // One `Ints` of 20,000 numbers: 160,000 bytes, grown in place by `realloc`, past 64 KiB and
+    // within 4 MiB — each growth reserved before it is made.
+    let d = with(h, "fn main() -> Int {\n    let xs = ints_new();\n    let mut i = 0;\n    while i < 20000 {\n        ints_push(xs, i);\n        i = i + 1;\n    }\n    ints_get(xs, 19999)\n}\n")?;
+    for run3 in builds(h, d, "4M")? {
+        let who = run3.label;
+        let exe = run3.exe;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(text_trim_end(r.stdout) == "19999", who)?;
+        nothing_live_h(memory_line(r))?;
+    
+    }
+    for run4 in builds(h, d, "64K")? {
+        let who = run4.label;
+        let exe = run4.exe;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(text_contains(r.stderr, "the heap limit of 65536 bytes"), who)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn what_is_freed_is_counted_back_in_every_task(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    // Millions of bytes allocated through a limit of 64 KiB, a few held at once: every free,
+    // on every pool worker, gives its bytes back to the count.
+    let d = with(h, CHURNS)?;
+    let reference = interpreted(h, d);
+    check_that(reference.code == 0, ran_show(reference))?;
+    let report = memory_line(reference);
+    for run5 in builds(h, d, "64K")? {
+        let who = run5.label;
+        let exe = run5.exe;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 0, ran_show(r))?;
+        check_that(r.stdout == reference.stdout, who)?;
+        check_that(memory_line(r) == report, who)?;
+        nothing_live_h(report)?;
+    
+    }
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_manifest_gives_the_limit_and_the_flag_overrides_it(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    scratch_write(h, d, "app/src/main.nz", HOLDS)?;
+    scratch_write(h, d, "app/nazm.toml", manifest("64K"))?;
+    let exe = f"{d}/app-exe";
+    let backends6 = strs_new();
+    strs_push(backends6, "llvm");
+    strs_push(backends6, "cranelift");
+    for backend in backends6 {
+        // The manifest's 64 KiB.
+        let b = build_app(h, d, exe, two("--backend", backend));
+        check_that(b.code == 0, ran_show(b))?;
+        let r = run_h(h, d, exe);
+        check_that(r.code == 2, ran_show(r))?;
+        check_that(text_contains(r.stderr, "the heap limit of 65536 bytes"), r.stderr)?;
+        // The flag's 4 MiB in its place.
+        let more = two("--backend", backend);
+        strs_push(more, "--heap-limit");
+        strs_push(more, "4M");
+        let b_2 = build_app(h, d, exe, more);
+        check_that(b_2.code == 0, ran_show(b_2))?;
+        let r_2 = run_h(h, d, exe);
+        check_that(r_2.code == 0, ran_show(r_2))?;
+        check_that(text_trim_end(r_2.stdout) == "start\n3000 the item numbered 2999\n0", "assert_eq!(text_trim_end(r.stdout), \"start\\n3000 the item numbered 2999\\n0\");")?;
+    
+    }
+    // A manifest's limit that is not a size is the manifest's error.
+    scratch_write(h, d, "app/nazm.toml", manifest("lots"))?;
+    let b = build_app(h, d, exe, strs_new());
+    check_that(b.code != 0, ran_show(b))?;
+    check_that(text_contains(b.stderr, "N0500") && text_contains(b.stderr, "heap-limit"), b.stderr)?;
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn a_limit_is_a_hosted_programs_and_a_size(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = with(h, HOLDS)?;
+    let sizes7 = strs_new();
+    strs_push(sizes7, "1K");
+    strs_push(sizes7, "12X");
+    strs_push(sizes7, "2048G");
+    strs_push(sizes7, "");
+    for size in sizes7 {
+        let r = refused_h(h, d, two("--heap-limit", size));
+        check_that(r.code != 0, ran_show(r))?;
+        check_that(text_contains(r.stderr, "--heap-limit"), size)?;
+    
+    }
+    for extra in text_split("--target wasm32-unknown-unknown|--lib", "|") {
+        let a = words(extra);
+        strs_push(a, "--heap-limit");
+        strs_push(a, "1M");
+        let r = refused_h(h, d, a);
+        check_that(r.code == 5, f"{extra}: {ran_show(r)}")?;
+        check_that(text_contains(r.stderr, "a heap limit bounds a hosted program's heap"), f"{extra}: {ran_show(r)}")?;
+    }
+
+    scratch_remove(h, d);
+    ok()
+}
+
+@test
+fn without_a_limit_nothing_in_the_program_changes(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = with(h, HOLDS)?;
+    let plain = ir_units(h, d, "")?;
+    let counted = ir_units(h, d, "1M")?;
+    ir_checks(plain, counted)?;
+    scratch_remove(h, d);
+    ok()
+}
+
