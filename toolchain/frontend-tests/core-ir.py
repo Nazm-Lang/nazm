@@ -3,7 +3,7 @@
 
     core-ir.py want STATUS < CORE_IR      the reference's lines: `fails` for a program
                                           `nazm core-ir` refuses, else each function's identity,
-                                          a tab, and its object without `digest` as compact JSON
+                                          a tab, and its object, `digest` included, as compact JSON
                                           in the printed member order
     core-ir.py compare WANT GOT           compares them: prints `T C A` — the reference's
                                           functions, those the Nazm lowering carried, those of
@@ -26,7 +26,6 @@ def want(status: int) -> int:
     doc = json.loads(text)
     out = []
     for f in doc["functions"]:
-        f.pop("digest", None)
         out.append(f["def"] + "\t" + json.dumps(f, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.write("".join(out))
     return 0
