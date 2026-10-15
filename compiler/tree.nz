@@ -3,7 +3,7 @@
 // Usage: tree FILE
 // Output: the file's syntax tree as the reference parser's `{:#?}` prints it, spans written
 // `start..end`, then every lexing and parsing diagnostic, `error CODE start end message`. It is
-// what `compiler/tests/refdump tree` prints for the reference, byte for byte, when they agree.
+// what `toolchain/frontend-tests/refdump tree` prints for the reference, byte for byte, when they agree.
 
 use "syntax.nz";
 use "lex.nz";

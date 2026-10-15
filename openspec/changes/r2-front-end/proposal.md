@@ -14,7 +14,7 @@ The front end of `compiler/` is completed in five slices, each compared with the
 before it is called done:
 
 1. **This proposal** — the missing constructs in dependency order (below), the comparison forms and
-   the test harness (`compiler/tests/run.sh`, inputs in `compiler/tests/inputs/`).
+   the test harness (`toolchain/frontend-tests/run.sh`, inputs in `toolchain/frontend-tests/inputs/`).
 2. **Lexer and parser complete** — every token and every tree the Rust `nazm-syntax` produces, with
    its syntax diagnostics and recovery; compared token by token and tree by tree.
 3. **Names and types** — modules and packages, every type the language has, generics, traits,
@@ -86,7 +86,7 @@ None.
 
 ## Impact
 
-`compiler/*.nz` (lexer, parser, checker, emitter and their drivers), `compiler/tests/` (new: the
+`compiler/*.nz` (lexer, parser, checker, emitter and their drivers), `toolchain/frontend-tests/` (new: the
 comparison harness, extracted inputs, and a small Rust reference dumper outside the workspace),
 `compiler/parity.json` when the probes change. Asked of the coordinator, not changed here:
 `crates/nazm-cli/tests/selfhost.rs` (its token mapping and tree dump name the old subset),

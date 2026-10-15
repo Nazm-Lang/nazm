@@ -2,17 +2,17 @@
 # R2's comparisons (`openspec/changes/r2-front-end/design.md`): the front end written in Nazm
 # against the Rust toolchain, on every input.
 #
-#   compiler/tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check (default: the first three)
+#   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check (default: the first three)
 #
 # Each driver is built by the reference `nazm` ($NAZM) with a heap limit (design D6) and run
-# under a deadline; the reference side is `compiler/tests/refdump`, built from this checkout's
+# under a deadline; the reference side is `toolchain/frontend-tests/refdump`, built from this checkout's
 # `nazm-syntax`. Prints one line per mode, `MODE: N agree, M differ`, and writes every
 # difference to $OUT/MODE/NAME.diff (R2_KEEP=1 keeps both sides of every agreement too). Exits 1
 # when anything differs.
 #
 # Inputs (design D8): tests/compat/v1, corpus, examples, the compiler's own sources, the
-# conformance and parity corpora, the hand-written cases in compiler/tests/inputs/, and the
-# programs extracted from crates/nazm-cli/tests (compiler/tests/inputs/rs).
+# conformance and parity corpora, the hand-written cases in toolchain/frontend-tests/inputs/, and the
+# programs extracted from crates/nazm-cli/tests (toolchain/frontend-tests/inputs/rs).
 
 set -eu
 
@@ -30,7 +30,7 @@ modes=${*:-tokens tree syntax}
 mkdir -p "$out/bin"
 
 # The reference dumper, built from this checkout.
-(cd "$root/compiler/tests/refdump" && CARGO_TARGET_DIR="$ref_target" cargo build --release --quiet) \
+(cd "$root/toolchain/frontend-tests/refdump" && CARGO_TARGET_DIR="$ref_target" cargo build --release --quiet) \
   || { echo "run.sh: the reference dumper did not build" >&2; exit 2; }
 ref="$ref_target/release/nazm-r2-refdump"
 
@@ -38,7 +38,7 @@ ref="$ref_target/release/nazm-r2-refdump"
 list="$out/inputs.txt"
 (
   cd "$root"
-  find tests/compat/v1 corpus examples compiler/conformance compiler/parity compiler/tests/inputs \
+  find tests/compat/v1 corpus examples compiler/conformance compiler/parity toolchain/frontend-tests/inputs \
     crates/nazm-cli/tests crates/nazm-cli/templates \
     -name '*.nz' -type f 2>/dev/null
   ls compiler/*.nz

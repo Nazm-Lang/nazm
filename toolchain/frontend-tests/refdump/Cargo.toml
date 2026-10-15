@@ -1,7 +1,7 @@
 # The reference side of R2's comparisons (`openspec/changes/r2-front-end/`): the Rust lexer's
 # tokens and the Rust parser's tree, printed in the forms the compiler written in Nazm prints.
 # Outside the workspace on purpose — its own `[workspace]` — so nothing that ships depends on it
-# and no workspace gate reads it. Built by `compiler/tests/run.sh` into its own target directory.
+# and no workspace gate reads it. Built by `toolchain/frontend-tests/run.sh` into its own target directory.
 [package]
 name = "nazm-r2-refdump"
 version = "0.0.0"
