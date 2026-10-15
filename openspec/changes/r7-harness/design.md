@@ -117,6 +117,31 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
     uses `@std/blake3` of the release that builds the harness — a second implementation, not the
     tree's, so a table entry wrong in a way the tree's and the crate's agree on is still caught.
 
+16. **A document too large for the interpreted leg is read by a native tool.** `nazm test` runs a
+    test interpreted as well as native, and the interpreter's iteration budget is spent parsing a
+    Core IR document, a 300 KB docs index or a schema validation of either. `tools/jtool.nz` is
+    built once (by `tests/run.sh`, with the release that builds the harness; else into the test's
+    scratch directory) and answers by exit status and output: `same` (two JSON values equal as
+    `serde_json::Value`'s `==`), `lines`, `get` (the values at paths, an array's length) and
+    `validate` — `schemas.rs`' JSON Schema subset, keyword for keyword, as `lib/schema.nz`
+    (`lib/tools.nz`: `json_same`, `line_count`, `json_paths`, `check_against`).
+17. **A child the test talks to is started without waiting.** `lib/live.nz` starts a child in a
+    process group of its own with its streams piped, reads a line or N bytes as the test asks,
+    writes its standard input, waits with a deadline and kills the group: what `Command::spawn` and
+    a `Child` give the Rust tests (`distributed`'s nodes, `secure_service`'s server, `nazm lsp`).
+    `lib/lsp.nz` is the LSP client of `lsp.rs`: strict framing, responses matched by id, and a
+    watchdog child that ends the server's group 120 s after it started — the Rust client's 30 s
+    read deadline, said as a process, so a hung read fails instead of holding the suite.
+18. **What reaches a Rust API stays Rust, by name** (the coordinator's decision of 2026-10-15).
+    `tests/stays-rust.txt` lists each such test with one of four reasons; `tests/run.sh` reports
+    them as "stays Rust (N)", fails on an entry that is ported or no longer exists, and compares a
+    file whose every test stays Rust (`fuzz_replay`) only for the list. Where the CLI prints the
+    table a test reads, the port reads it there instead (*Findings*).
+19. **A Rust test's literals are carried over, not retyped.** Where a file's programs, tables and
+    expected lines are long (`regex`, `bytes_text`, `ffi_v3`, `stdlib`), they are read out of the
+    Rust source by a script that understands Rust's string literals and written as Nazm string
+    literals, so a byte the port's author would have mistyped cannot differ.
+
 ## Risks / Trade-offs
 
 - [`nazm test` runs every test twice] → the interpreter leg is a second reference for the harness
@@ -144,34 +169,25 @@ Things the comparisons turned up that belong outside `toolchain/harness/` — re
 - **A tuple pattern may rebind in one scope what a name may not.** `let (a, b) = (1, 2); let (a, b) =
   (3, 4);` checks and runs (both 0.10.0 and the tree), where `let x = 1; let x = 2;` is `N0202`
   ("Nazm allows shadowing in a nested scope but not in the same one"). One of the two is a defect.
+- **Most "table not printed" tables are printed.** `nazm capabilities --json` carries the native
+  target's note and the built-ins' names, `nazm inspect` the semantic epoch, the runtime ABI, the
+  interface schema, the support table and its non-goals, the boards with their manifests and the
+  targets; `N0511`'s help lists every profile; `nazm docs --index` the corpus; `nazm interface
+  --hash` the fingerprint. The ports read them there, and only five tests are left that read a
+  table the CLI does not print (`stays-rust.txt`).
+- **A profile report states each rule once.** `profiles_v2`' "no rule twice" is a property of the
+  report, which deduplicates, so the port cannot observe a profile that lists a rule twice.
+- **The sampled run is load-sensitive in both suites.** `debugger_v3`'s
+  `a_sampled_run_is_attributed_to_nazm_functions_and_lines` asks for more than 100 samples in
+  `work`; under a concurrent batch the Cranelift build drew 9 (it passes alone, as the Rust test
+  does).
+- **A child once failed to start under load.** Under a concurrent batch, one `nazm build` of
+  `windows.nz` was refused with `NotFound` for the binary that was there; it passed when rerun.
+  Seen once; not reproduced.
 - **`numbers.rs` and `resolution.rs` are black-box.** Listed among the files that call a Rust API,
   they name `nazm_sema` and `nazm_core` only in their comments; both are ported.
 
 ## Open Questions
-
-- **The files that call a Rust API** (tasks 4.5). Most do so in one to three of their tests; the
-  rest of each file is black-box. Either a file is ported with those tests left in Rust (`run.sh`
-  learning a list of tests that stay Rust, so they are not reported missing), or each API becomes
-  reachable through the CLI first (`rewrite-in-nazm` decision 5). What each needs:
-  - a table the CLI does not print: `boards`, `manifests` (`board::BOARDS`), `cross`
-    (`backend::Target`), `builtins`, `build` (two of 140: `Intrinsic::ALL` with each one's shape),
-    `domain_profiles`, `profiles_v2` (`profile::Profile::ALL` and its rules), `documentation`
-    (`nazm_docs::CORPUS`), `docs` (`SEMANTIC_EPOCH`, the interface `SCHEMA`,
-    `RUNTIME_ABI_REVISION`, `TARGET_NOTE`, the support table's non-goals), `native_cache`
-    (`runtime::Word`), `ffi` (`runtime::IMPORTS`, `RESERVED_C_SYMBOLS`);
-  - LLVM text the CLI does not write alone: `freestanding`, `realtime` (`board::emit_entry`,
-    `emit_runtime`), `runtime` (`emit_runtime` for a given `Needs`, the platform and switch
-    emitters);
-  - a library entry point: `repository` (`nazm_repo::map`, which `nazm repo --map --json` is
-    compared with), `summary` (`nazm_service::summary::check`), `resolved_units` (a
-    `LanguageService` on a thread of `PARSE_STACK_BYTES`), `incremental` (the cache store's
-    types, which some five of its 46 tests read through `check_entries`);
-  - the compiler's own stages, which the rewrite replaces (R2, R3): `core_ir`, `cranelift`, `mir`,
-    `durable_identity`, `prelude`, `reexports`, `fuzz_replay`.
-- **The TCP files.** `distributed` binds a port to find a free one and starts nodes side by side;
-  `secure_service` starts a Nazm server and talks to it with a Rust `TcpStream`. Both port with
-  `@std/process`' `process_spawn_with` (a child left running, ended by its group) and `@std/net`'s
-  client: the harness gains a `NetCap` and a run that does not wait.
 
 - `NAZM` or `NAZM_BIN` (decision 3).
 - Whether a ported test file replaces its Rust file at integration or runs beside it until R8.
