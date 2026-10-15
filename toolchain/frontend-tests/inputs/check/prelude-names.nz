@@ -1,0 +1,17 @@
+// The prelude's type names are reserved (N0363), and authority is never constructed (N0370).
+enum Option { Some(v: Int), Nothing, }
+struct Result { ok: Bool, }
+
+fn wrap(n: Int) -> Option { Option.Some(v: n) }
+fn done(r: Result) -> Bool { r.ok }
+fn lift(x: Int) -> Result[Int, Str] { Ok(x) }
+fn chain(x: Int) -> Result[Int, Str] { let y = lift(x)?; Ok(y + 1) }
+
+fn forge() -> Int {
+    let a = IoCap();
+    let b = OutCap(level: 1 + "x");
+    let c = SpawnCap(true + 1);
+    0
+}
+
+fn main() -> Int { done(Result(ok: true)); forge() }
