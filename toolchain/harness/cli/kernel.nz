@@ -1,0 +1,64 @@
+// Gate 3: the failure hook and the reference kernel-style workload (`docs/spec.md`, *Boards*;
+// `docs/systems-domains.md` Part B, *Reference workload*). Ported from
+// `crates/nazm-cli/tests/kernel.rs` (R7): what is built here. The `#[ignore]`d boot under QEMU
+// starts Docker and stays Rust (`design.md`).
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/differential.nz"
+use "../lib/native.nz"
+
+/// QEMU `virt`'s AArch64 board, its GICv2 and a 1 ms timer.
+fn board() -> Str ! {} {
+    "name = \"virt, the kernel workload's\"\nisa = \"aarch64\"\nload_address = 0x40080000\n\n[uart]\nkind = \"pl011\"\naddress = 0x9000000\n\n[stop]\nkind = \"semihosting\"\n\n[interrupts]\ncontroller = \"gicv2\"\ndistributor = 0x8000000\ncpu = 0x8010000\ntimer_period_us = 1000\n"
+}
+
+fn kernel() -> Str ! {} {
+    "static UART: Int = 150994944;\nstatic TICKS: Atomic = atomic_new(0);\n\n@interrupt(\"timer\")\nfn tick() -> Int ! {} { atomic_add(TICKS, 1) }\n\n// The PL011's flag register, 0x18 past its data register: bit 5 is \"transmit FIFO full\".\nfn ready(m: MmioCap) -> Bool ! {} { (mmio_read32(UART + 24) & 32) == 0 }\n\nfn put(m: MmioCap, c: Int) -> Int ! {} {\n    while !ready(m) {\n        0;\n    }\n    mmio_write8(UART, c)\n}\n\n@on_failure\nfn halted(code: Int, m: MmioCap) -> Int ! {} {\n    // `F` for the division the workload faults with, `?` for anything else.\n    if code == 401 { put(m, 70) } else { put(m, 63) };\n    put(m, 10)\n}\n\nfn main(m: MmioCap) -> Int ! {} {\n    while atomic_load(TICKS) < 3 {\n        0;\n    }\n    put(m, 75);\n    put(m, 10);\n    let t = atomic_load(TICKS);\n    100 / (t - t)\n}\n"
+}
+
+@test
+fn a_failure_hook_takes_the_number_and_there_is_one(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let main = "fn main(m: MmioCap) -> Int ! {} { 0 }\n";
+    let hooks = strs_new();
+    strs_push(hooks, "@on_failure\nfn h() -> Int ! {} { 0 }\n");
+    strs_push(hooks, "@on_failure\nfn h(code: Bool) -> Int ! {} { 0 }\n");
+    strs_push(hooks, "@on_failure\nfn h(code: Int, n: Int) -> Int ! {} { 0 }\n");
+    strs_push(hooks, "@on_failure\nfn h(code: Int) -> Int { 0 }\n");
+    strs_push(hooks, "@on_failure\nfn h(code: Int) -> Int ! {} { 0 }\n@on_failure\nfn g(code: Int) -> Int ! {} { 0 }\n");
+    for hook in hooks {
+        same_strs(hook, refused(h, f"{hook}{main}")?, words("N0627"))?;
+    }
+    let misuses = strs_new();
+    strs_push(misuses, "@on_failure(\"x\")\nfn h(code: Int) -> Int ! {} { 0 }\n");
+    strs_push(misuses, "@on_failure\nstatic S: Int = 1;\n");
+    for misuse in misuses {
+        same_strs(misuse, refused(h, f"{misuse}{main}")?, words("N0619"))?;
+    }
+    // A board's alone.
+    let d = prog_dir(h, "prog.nz", f"@on_failure\nfn h(code: Int) -> Int ! {{}} {{ code }}\n{main}")?;
+    let r = nazm(h, d, words("run --interpret prog.nz"));
+    scratch_remove(h, d);
+    check_that(text_contains(r.stderr, "N0392"), r.stderr)?;
+    check_that(text_contains(r.stderr, "`@on_failure` on `h`"), r.stderr)
+}
+
+fn workload(h: Caps, d: Str) -> Result[Int, Str] ! { io, spawn } {
+    scratch_write(h, d, "kernel.nz", kernel())?;
+    scratch_write(h, d, "board.toml", board())?;
+    let c = nazm(h, d, words("check --profile kernel kernel.nz"));
+    check_that(c.code == 0, c.stderr)?;
+    let b = nazm(h, d, words("build --target aarch64-unknown-none --board board.toml --objects o kernel.nz"));
+    check_that(b.code == 0, b.stderr)
+}
+
+@test
+fn the_workload_is_held_to_the_kernel_profile_and_builds_for_its_board(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let r = workload(h, d);
+    scratch_remove(h, d);
+    r
+}
