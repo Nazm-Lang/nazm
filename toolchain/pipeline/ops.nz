@@ -1,0 +1,1365 @@
+// Instruction-level LIR (`nazm lir --ops`, N105): each unit as a module of symbols, data and
+// functions in the text `crates/nazm-lir/src/op/print.rs` writes — what both backends translate.
+// The rules are `crates/nazm-lir/src/op/` (`lower.rs`, `func.rs`, `prims.rs`, `helpers.rs`): every
+// local in a variable, a frame slot or (a scalar temporary written once and read after, in one
+// block) a value; every failure a guard to a block that records the message and leaves by the
+// statement's failure edge; strings as `{ptr, len, owner}` triples whose owner is counted.
+//
+// Task 6.3 grows this by what the inputs need; a construct not ported yet is reported, not guessed.
+
+use "cir.nz"
+use "types.nz"
+use "mir.nz"
+use "lir.nz"
+use "runtime.nz"
+use "@std/hash"
+use "@std/hashmap"
+use "@std/json"
+use "@std/text"
+
+// --- the module ---------------------------------------------------------------------------------
+
+/// One unit's module as it is built: its symbols (in first-use order), its data and functions as
+/// text, and what the lowering remembers across functions.
+struct Lo {
+    lx: Lx,
+    c: Cir,
+    p: MirProgram,
+    unit: UnitPlan,
+    sym_name: Strs,
+    sym_link: Strs,
+    /// `func` or `data`; a function's signature text (`plain (i64) -> ptr`), its result class
+    /// (`""` for none) and whether it fails the Nazm way; a datum's class (`bytes`).
+    sym_kind: Strs,
+    sym_sig: Strs,
+    sym_ret: Strs,
+    sym_fails: Ints,
+    by_name: HashMap[Str, Int],
+    datas: Strs,
+    functions: Strs,
+    anon: Ints,
+    messages: HashMap[Str, Int],
+    blobs: HashMap[Str, Int],
+    strvals: HashMap[Str, Int],
+    /// MIR function position -> its symbol, and -> its plain entry's.
+    funcs: HashMap[Int, Int],
+    plain: HashMap[Int, Int],
+    runtime: HashMap[Str, Str],
+    /// Each module's source text and line starts, by module name.
+    sources: HashMap[Str, Str],
+    errors: Strs,
+}
+
+fn defect(lo: Lo, what: Str) {
+    strs_push(lo.errors, "LIR could not be lowered: " + what)
+}
+
+fn symbol(lo: Lo, name: Str, link: Str, kind: Str, sig: Str, ret: Str, fails: Bool) -> Int {
+    match hashmap_get(lo.by_name, name) {
+        Some(s) => { return s },
+        None => {},
+    }
+    let id = strs_len(lo.sym_name)
+    strs_push(lo.sym_name, name)
+    strs_push(lo.sym_link, link)
+    strs_push(lo.sym_kind, kind)
+    strs_push(lo.sym_sig, sig)
+    strs_push(lo.sym_ret, ret)
+    ints_push(lo.sym_fails, if fails { 1 } else { 0 })
+    hashmap_set(lo.by_name, name, id)
+    id
+}
+
+fn anonymous(lo: Lo, what: Str) -> Str {
+    let n = ints_get(lo.anon, 0)
+    ints_set(lo.anon, 0, n + 1)
+    "nz.l." + what + "." + int_to_str(n)
+}
+
+fn hex_of(bytes: Str) -> Str {
+    let parts = strs_new()
+    for i in 0..str_len(bytes) { strs_push(parts, hex_byte(str_byte(bytes, i))) }
+    str_join(parts, "")
+}
+
+/// Little-endian bytes of `n` in `width` bytes, as hex.
+fn le_hex(n: Int, width: Int) -> Str {
+    let parts = strs_new()
+    let mut x = n
+    for i in 0..width {
+        strs_push(parts, hex_byte(x % 256))
+        x = x / 256
+    }
+    str_join(parts, "")
+}
+
+fn define_data(lo: Lo, name: Str, hex: Str, align: Int, relocs: Str) -> Int {
+    let sym = symbol(lo, name, "local", "data", "bytes", "", false)
+    strs_push(lo.datas, "data @" + name + " align " + int_to_str(align) + " [" + hex + "]" + relocs)
+    sym
+}
+
+fn blob(lo: Lo, bytes: Str) -> Int {
+    match hashmap_get(lo.blobs, bytes) {
+        Some(d) => { return d },
+        None => {},
+    }
+    let name = anonymous(lo, "s")
+    let stored = if str_len(bytes) == 0 { "00" } else { hex_of(bytes) }
+    let d = define_data(lo, name, stored, 1, "")
+    hashmap_set(lo.blobs, bytes, d)
+    d
+}
+
+/// A string literal's `{ptr, len, owner}` value, its owner null: a static nothing frees.
+fn str_value(lo: Lo, bytes: Str) -> Int {
+    match hashmap_get(lo.strvals, bytes) {
+        Some(d) => { return d },
+        None => {},
+    }
+    let b = blob(lo, bytes)
+    let name = anonymous(lo, "v")
+    let hex = le_hex(0, 8) + le_hex(str_len(bytes), 8) + le_hex(0, 8)
+    let d = define_data(lo, name, hex, 8, " 0:@" + strs_get(lo.sym_name, b))
+    hashmap_set(lo.strvals, bytes, d)
+    d
+}
+
+/// Where span `at` (`FILE:START..END`) starts, as `FILE:LINE:COLUMN` (a column counts
+/// characters, as `SourceMap::line_col` does).
+fn position(lo: Lo, at: Str) -> Str {
+    let mut colon = 0 - 1
+    for i in 0..str_len(at) { if str_byte(at, i) == 58 { colon = i } }
+    if colon < 0 { return at }
+    let file = str_slice(at, 0, colon)
+    let rest = str_slice(at, colon + 1, str_len(at))
+    let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
+    let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(e) => 0 }
+    let text = match hashmap_get(lo.sources, file) { Some(t) => t, None => "" }
+    let mut line = 1
+    let mut col = 1
+    let mut i = 0
+    while i < start && i < str_len(text) {
+        let b = str_byte(text, i)
+        if b == 10 {
+            line += 1
+            col = 1
+        } else if b < 128 || b >= 192 {
+            col += 1
+        }
+        i += 1
+    }
+    file + ":" + int_to_str(line) + ":" + int_to_str(col)
+}
+
+/// A failure's message datum and its length.
+fn message(lo: Lo, code: Str, what: Str, at: Str) -> Ints {
+    let text = "nazm: error[" + code + "]: " + what + " at " + position(lo, at) + "\n"
+    let d = match hashmap_get(lo.messages, text) {
+        Some(d) => d,
+        None => {
+            let name = anonymous(lo, "m")
+            let d = define_data(lo, name, hex_of(text), 1, "")
+            hashmap_set(lo.messages, text, d)
+            d
+        },
+    }
+    let out = ints_new()
+    ints_push(out, d)
+    ints_push(out, str_len(text))
+    out
+}
+
+fn runtime_sym(lo: Lo, name: Str) -> Int {
+    match hashmap_get(lo.runtime, name) {
+        Some(sig) => {
+            let arrow = match text_find(sig, " -> ") { Some(i) => str_slice(sig, i + 4, str_len(sig)), None => "" }
+            symbol(lo, name, "import", "func", sig, arrow, false)
+        },
+        None => {
+            defect(lo, "`" + name + "` is not in the runtime registry");
+            0
+        },
+    }
+}
+
+// --- types --------------------------------------------------------------------------------------
+
+/// Whether a value of `t` lives in memory: a `Str`, a record, an enum, an array.
+fn in_memory(t: Str) -> Bool {
+    let k = class(t)
+    k == "str" || k == "record" || k == "enum" || k == "array"
+}
+
+/// The machine class of a scalar of `t`.
+fn mclass(t: Str) -> Str {
+    let k = class(t)
+    if k == "int" { return "i64" }
+    if k == "bool" { return "bit" }
+    if k == "num" {
+        if t == "Int8" || t == "UInt8" { return "i8" }
+        if t == "Int16" || t == "UInt16" { return "i16" }
+        if t == "Int32" || t == "UInt32" { return "i32" }
+        if t == "Int128" || t == "UInt128" { return "i128" }
+        if t == "Float32" { return "f32" }
+        if t == "Float64" { return "f64" }
+        return "i64"
+    }
+    "ptr"
+}
+
+/// A Nazm function's signature: an in-memory result through a first pointer; every in-memory
+/// parameter by address.
+fn nazm_sig(params: Strs, ret: Str, conv: Str) -> Str {
+    let ps = strs_new()
+    if in_memory(ret) { strs_push(ps, "ptr") }
+    for t in params { strs_push(ps, if in_memory(t) { "ptr" } else { mclass(t) }) }
+    let head = if conv == "" { "" } else { conv + " " }
+    head + "(" + str_join(ps, ", ") + ")" + (if in_memory(ret) { "" } else { " -> " + mclass(ret) })
+}
+
+fn c_class(t: Str) -> Str {
+    let k = class(t)
+    if k == "bool" || k == "int" || k == "num" { mclass(t) } else { "ptr" }
+}
+
+fn c_sig(params: Strs, ret: Str) -> Str {
+    let ps = strs_new()
+    for t in params { strs_push(ps, c_class(t)) }
+    "c (" + str_join(ps, ", ") + ") -> " + c_class(ret)
+}
+
+fn sig_ret(sig: Str) -> Str {
+    match text_find(sig, " -> ") { Some(i) => str_slice(sig, i + 4, str_len(sig)), None => "" }
+}
+
+fn entered(lo: Lo, i: Int) -> Bool {
+    let f = vec_get(lo.p.fns, i)
+    if i == lo.p.entry { return true }
+    if f.node < 0 { return false }
+    let a = kid(lo.c, f.node, "attributes")
+    sval(lo.c, a, "interrupt") != "" || kid(lo.c, a, "task") >= 0 || bval(lo.c, a, "on_failure")
+}
+
+/// Every function the unit defines or calls, declared in MIR order.
+fn declare_functions(lo: Lo) {
+    let wanted = ints_new()
+    for i in 0..ints_len(lo.unit.fns) {
+        let fi = ints_get(lo.unit.fns, i)
+        ints_push(wanted, fi)
+        let cs = callees_of(vec_get(lo.p.fns, fi))
+        for j in 0..ints_len(cs) { ints_push(wanted, ints_get(cs, j)) }
+    }
+    for id in 0..vec_len(lo.p.fns) {
+        if has(wanted, id) {
+            let f = vec_get(lo.p.fns, id)
+            let foreign = f.foreign != ""
+            let own = has(lo.unit.fns, id) && !foreign
+            let link = if !own { "import" } else if linkage(lo.lx, id) == "internal" { "local" } else { "hidden" }
+            let sig = if foreign { c_sig(params_of(f), f.ret) } else { nazm_sig(params_of(f), f.ret, "") }
+            let name = symbol_of(f)
+            if entered(lo, id) && !foreign {
+                if own {
+                    let plain = nazm_sig(params_of(f), f.ret, "plain")
+                    hashmap_set(lo.plain, id, symbol(lo, name, link, "func", plain, sig_ret(plain), false))
+                }
+                hashmap_set(lo.funcs, id, symbol(lo, name + ".body", link, "func", sig, sig_ret(sig), true))
+            } else {
+                hashmap_set(lo.funcs, id, symbol(lo, name, link, "func", sig, sig_ret(sig), !foreign))
+            }
+        }
+    }
+}
+
+// --- a function as it is built ------------------------------------------------------------------
+
+/// The function builder (`Fb`): blocks of instruction text and their terminators, the current
+/// block, the value counter, the variables' classes and the slots.
+struct Fb {
+    insts: Vec[Strs],
+    terms: Strs,
+    reg: Ints,
+    vars: Strs,
+    slots: Strs,
+    slot_sizes: Ints,
+    slot_aligns: Ints,
+}
+
+fn fb_new() -> Fb {
+    let reg = ints_new()
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0)
+    let fb = Fb(insts: vec_new(), terms: strs_new(), reg: reg, vars: strs_new(), slots: strs_new(), slot_sizes: ints_new(), slot_aligns: ints_new())
+    let entry = new_lblock(fb)
+    ints_set(fb.reg, 0, entry)
+    fb
+}
+
+fn new_lblock(fb: Fb) -> Int {
+    let b = vec_len(fb.insts)
+    vec_push(fb.insts, strs_new())
+    strs_push(fb.terms, "unreachable")
+    b
+}
+
+fn switch_to(fb: Fb, b: Int) { ints_set(fb.reg, 0, b) }
+
+fn value(fb: Fb) -> Int {
+    let v = ints_get(fb.reg, 1)
+    ints_set(fb.reg, 1, v + 1)
+    v
+}
+
+fn emit(fb: Fb, line: Str) {
+    let b = ints_get(fb.reg, 0)
+    if b >= 0 { strs_push(vec_get(fb.insts, b), line) }
+}
+
+fn term(fb: Fb, t: Str) {
+    let b = ints_get(fb.reg, 0)
+    if b >= 0 {
+        strs_set(fb.terms, b, t)
+        ints_set(fb.reg, 0, 0 - 1)
+    }
+}
+
+fn new_var(fb: Fb, c: Str) -> Int {
+    strs_push(fb.vars, c)
+    strs_len(fb.vars) - 1
+}
+
+fn new_slot(fb: Fb, size: Int, align: Int) -> Int {
+    let s = if size < 1 { 1 } else { size }
+    let a = if align < 1 { 1 } else { align }
+    strs_push(fb.slots, int_to_str(s) + " align " + int_to_str(a))
+    ints_push(fb.slot_sizes, s)
+    ints_push(fb.slot_aligns, a)
+    strs_len(fb.slots) - 1
+}
+
+fn finish(lo: Lo, fb: Fb, sym: Int, name: Str) -> Str {
+    let lines = strs_new()
+    strs_push(lines, "\nfunction @" + strs_get(lo.sym_name, sym) + " ; " + name)
+    for i in 0..strs_len(fb.vars) { strs_push(lines, "  var x" + int_to_str(i) + " " + strs_get(fb.vars, i)) }
+    for i in 0..strs_len(fb.slots) { strs_push(lines, "  slot s" + int_to_str(i) + " " + strs_get(fb.slots, i)) }
+    for b in 0..vec_len(fb.insts) {
+        strs_push(lines, "b" + int_to_str(b) + ":")
+        for x in vec_get(fb.insts, b) { strs_push(lines, "  " + x) }
+        strs_push(lines, "  " + strs_get(fb.terms, b))
+    }
+    str_join(lines, "\n") + "\n"
+}
+
+fn vn(v: Int) -> Str { "v" + int_to_str(v) }
+
+// --- one function: the lowering state -----------------------------------------------------------
+
+/// Where each local lives: `var` (variable `idx`), `value` (promoted: its current value in
+/// `promoted`), `slot` (frame slot `idx`), `borrowed` (the address in value `idx`) or `tasks`.
+struct Fx {
+    lo: Lo,
+    fb: Fb,
+    f: MirFn,
+    kinds: Strs,
+    idx: Ints,
+    tys: Strs,
+    promoted: Ints,
+    /// The LIR block of each MIR block.
+    blocks: Ints,
+    /// The in-memory result's address, the current failure edge, -1 for none.
+    reg: Ints,
+    at: Strs,
+}
+
+fn sret(fx: Fx) -> Int { ints_get(fx.reg, 0) }
+fn unwind_block(fx: Fx) -> Int { ints_get(fx.reg, 1) }
+
+fn param(fx: Fx, i: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = param " + int_to_str(i));
+    v
+}
+
+fn iconst_c(fx: Fx, c: Str, k: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = const " + c + " " + int_to_str(k));
+    v
+}
+
+fn iconst(fx: Fx, k: Int) -> Int { iconst_c(fx, "i64", k) }
+fn null(fx: Fx) -> Int { iconst_c(fx, "ptr", 0) }
+
+fn addr_of(fx: Fx, sym: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = addr @" + strs_get(fx.lo.sym_name, sym));
+    v
+}
+
+fn slot_addr(fx: Fx, s: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = slot s" + int_to_str(s));
+    v
+}
+
+fn load(fx: Fx, c: Str, a: Int, off: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = load " + c + " " + vn(a) + "+" + int_to_str(off));
+    v
+}
+
+fn store(fx: Fx, a: Int, off: Int, x: Int) {
+    emit(fx.fb, "store " + vn(a) + "+" + int_to_str(off) + ", " + vn(x));
+}
+
+fn bin(fx: Fx, op: Str, a: Int, b: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = " + op + " " + vn(a) + ", " + vn(b));
+    v
+}
+
+fn add_imm(fx: Fx, a: Int, k: Int) -> Int {
+    let c = iconst(fx, k)
+    bin(fx, "add", a, c)
+}
+
+fn cmp(fx: Fx, op: Str, a: Int, b: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = cmp " + op + " " + vn(a) + ", " + vn(b));
+    v
+}
+
+fn cmp_imm(fx: Fx, op: Str, a: Int, c: Str, k: Int) -> Int {
+    let x = iconst_c(fx, c, k)
+    cmp(fx, op, a, x)
+}
+
+fn is_null(fx: Fx, p: Int) -> Int {
+    let z = null(fx)
+    cmp(fx, "eq", p, z)
+}
+
+fn ptr_add(fx: Fx, base: Int, off: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = ptradd " + vn(base) + ", " + vn(off));
+    v
+}
+
+fn ptr_off(fx: Fx, base: Int, k: Int) -> Int {
+    if k == 0 { return base }
+    let c = iconst(fx, k)
+    ptr_add(fx, base, c)
+}
+
+fn get_var(fx: Fx, x: Int) -> Int {
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = get x" + int_to_str(x));
+    v
+}
+
+fn set_var(fx: Fx, x: Int, v: Int) { emit(fx.fb, "set x" + int_to_str(x) + ", " + vn(v)) }
+
+fn args_text(args: Ints) -> Str {
+    let out = strs_new()
+    for i in 0..ints_len(args) { strs_push(out, vn(ints_get(args, i))) }
+    str_join(out, ", ")
+}
+
+/// A call that is not checked for failure: its result, or -1.
+fn call(fx: Fx, callee: Int, args: Ints) -> Int {
+    let returns = strs_get(fx.lo.sym_ret, callee) != ""
+    let dst = if returns { value(fx.fb) } else { 0 - 1 }
+    let head = if returns { vn(dst) + " = " } else { "" }
+    emit(fx.fb, head + "call @" + strs_get(fx.lo.sym_name, callee) + "(" + args_text(args) + ")");
+    dst
+}
+
+/// A call returning its failure bit beside its result: `[result or -1, failed or -1]`.
+fn call_failing(fx: Fx, callee: Int, args: Ints) -> Ints {
+    let returns = strs_get(fx.lo.sym_ret, callee) != ""
+    let dst = if returns { value(fx.fb) } else { 0 - 1 }
+    let fails = ints_get(fx.lo.sym_fails, callee) == 1
+    let failed = if fails { value(fx.fb) } else { 0 - 1 }
+    let head = if returns && fails { vn(dst) + ", failed " + vn(failed) + " = " } else if returns { vn(dst) + " = " } else if fails { "failed " + vn(failed) + " = " } else { "" }
+    emit(fx.fb, head + "call @" + strs_get(fx.lo.sym_name, callee) + "(" + args_text(args) + ")");
+    let out = ints_new()
+    ints_push(out, dst)
+    ints_push(out, failed)
+    out
+}
+
+fn rt(fx: Fx, name: Str, args: Ints) -> Int { call(fx, runtime_sym(fx.lo, name), args) }
+
+fn rt_v(fx: Fx, name: Str, args: Ints, c: Str) -> Int {
+    let r = rt(fx, name, args)
+    if r >= 0 { r } else { iconst_c(fx, c, 0) }
+}
+
+fn ints_of(a: Int) -> Ints {
+    let out = ints_new()
+    ints_push(out, a)
+    out
+}
+
+fn ints_of2(a: Int, b: Int) -> Ints {
+    let out = ints_of(a)
+    ints_push(out, b)
+    out
+}
+
+fn ints_of3(a: Int, b: Int, c: Int) -> Ints {
+    let out = ints_of2(a, b)
+    ints_push(out, c)
+    out
+}
+
+fn copy(fx: Fx, dst: Int, src: Int, n: Int) { emit(fx.fb, "copy " + vn(dst) + ", " + vn(src) + ", " + int_to_str(n)) }
+fn zero(fx: Fx, dst: Int, n: Int) { emit(fx.fb, "zero " + vn(dst) + ", " + int_to_str(n)) }
+fn jump(fx: Fx, b: Int) { term(fx.fb, "jump b" + int_to_str(b)) }
+fn branch(fx: Fx, c: Int, a: Int, b: Int) { term(fx.fb, "branch " + vn(c) + ", b" + int_to_str(a) + ", b" + int_to_str(b)) }
+
+fn size_of(fx: Fx, t: Str) -> Int { lay(fx.lo.lx, t).size }
+fn owns_ty(fx: Fx, t: Str) -> Bool { owns(fx.lo.lx, t, 0) }
+
+fn ty(fx: Fx, l: Int) -> Str { strs_get(fx.tys, l) }
+
+fn addr(fx: Fx, l: Int) -> Int {
+    let k = strs_get(fx.kinds, l)
+    if k == "slot" { return slot_addr(fx, ints_get(fx.idx, l)) }
+    if k == "borrowed" { return ints_get(fx.idx, l) }
+    defect(fx.lo, "an address of a local held in a register");
+    null(fx)
+}
+
+fn get(fx: Fx, l: Int) -> Int {
+    let k = strs_get(fx.kinds, l)
+    if k == "var" || k == "tasks" { return get_var(fx, ints_get(fx.idx, l)) }
+    if k == "value" {
+        let v = ints_get(fx.promoted, l)
+        return if v >= 0 { v } else { iconst_c(fx, mclass(ty(fx, l)), 0) }
+    }
+    defect(fx.lo, "a scalar read of a local held in memory");
+    iconst(fx, 0)
+}
+
+fn set(fx: Fx, l: Int, v: Int) {
+    let k = strs_get(fx.kinds, l)
+    if k == "var" || k == "tasks" { set_var(fx, ints_get(fx.idx, l), v) } else if k == "value" { ints_set(fx.promoted, l, v) } else { defect(fx.lo, "a scalar write of a local held in memory") }
+}
+
+fn clear(fx: Fx, l: Int) {
+    let k = strs_get(fx.kinds, l)
+    let c = if k == "var" || k == "value" { mclass(ty(fx, l)) } else { "ptr" }
+    let z = iconst_c(fx, c, 0)
+    set(fx, l, z);
+}
+
+fn const_ty(c: MConst) -> Str {
+    match c {
+        MConst.Int(v: _) => "Int",
+        MConst.Bool(v: _) => "Bool",
+        MConst.Str(bytes: _) => "Str",
+        MConst.Num(text: _, kind: k) => k,
+        MConst.Cell(name: _) => "Atomic",
+    }
+}
+
+fn operand_ty(fx: Fx, o: Operand) -> Str {
+    match o {
+        Operand.Local(l: l) => ty(fx, l),
+        Operand.Const(c: c) => const_ty(c),
+    }
+}
+
+fn opvalue(fx: Fx, o: Operand) -> Int {
+    match o {
+        Operand.Local(l: l) => get(fx, l),
+        Operand.Const(c: c) => match c {
+            MConst.Int(v: v) => iconst(fx, v),
+            MConst.Bool(v: b) => iconst_c(fx, "bit", if b { 1 } else { 0 }),
+            _ => {
+                defect(fx.lo, "a constant this stage cannot read into a scalar yet");
+                iconst(fx, 0)
+            },
+        },
+    }
+}
+
+fn place(fx: Fx, o: Operand) -> Int {
+    match o {
+        Operand.Local(l: l) => addr(fx, l),
+        Operand.Const(c: c) => match c {
+            MConst.Str(bytes: b) => addr_of(fx, str_value(fx.lo, b)),
+            _ => {
+                defect(fx.lo, "the address of a constant this stage cannot place yet");
+                null(fx)
+            },
+        },
+    }
+}
+
+fn argument(fx: Fx, o: Operand) -> Int {
+    if in_memory(operand_ty(fx, o)) { place(fx, o) } else { opvalue(fx, o) }
+}
+
+// --- failure ------------------------------------------------------------------------------------
+
+/// The function's name span, for a stack check: the name after `fn` in its span.
+fn name_at(fx: Fx) -> Str {
+    let f = fx.f
+    if f.node < 0 { return "" }
+    let span = sval(fx.lo.c, f.node, "at")
+    let mut colon = 0 - 1
+    for i in 0..str_len(span) { if str_byte(span, i) == 58 { colon = i } }
+    let file = str_slice(span, 0, colon)
+    let rest = str_slice(span, colon + 1, str_len(span))
+    let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
+    let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(e) => 0 }
+    let text = match hashmap_get(fx.lo.sources, file) { Some(t) => t, None => "" }
+    let mut name = f.name
+    match text_find(name, "/") {
+        Some(_) => {
+            let mut slash = 0
+            for i in 0..str_len(name) { if str_byte(name, i) == 47 { slash = i + 1 } }
+            name = str_slice(name, slash, str_len(name))
+        },
+        None => {},
+    }
+    let tail = str_slice(text, start, str_len(text))
+    let at = match text_find(tail, "fn " + name) { Some(i) => start + i + 3, None => start }
+    file + ":" + int_to_str(at) + ".." + int_to_str(at + str_len(name))
+}
+
+fn here(fx: Fx) -> Str {
+    let a = strs_get(fx.at, 0)
+    if a == "@name" { name_at(fx) } else { a }
+}
+
+fn leave(fx: Fx) {
+    let u = unwind_block(fx)
+    if u >= 0 {
+        jump(fx, u);
+    } else {
+        defect(fx.lo, "a failure with no failure edge in MIR");
+        term(fx.fb, "unreachable");
+    }
+}
+
+fn fail_with(fx: Fx, code: Str, what: Str) {
+    let m = message(fx.lo, code, what, here(fx))
+    let p = addr_of(fx, ints_get(m, 0))
+    let n = iconst(fx, ints_get(m, 1))
+    rt(fx, "nz.fail", ints_of2(p, n))
+    leave(fx);
+}
+
+fn guard(fx: Fx, bad: Int, code: Str, what: Str) {
+    let failing = new_lblock(fx.fb)
+    let cont = new_lblock(fx.fb)
+    branch(fx, bad, failing, cont);
+    switch_to(fx.fb, failing);
+    fail_with(fx, code, what);
+    switch_to(fx.fb, cont);
+}
+
+fn leave_if(fx: Fx, failed: Int) {
+    let cont = new_lblock(fx.fb)
+    let u = unwind_block(fx)
+    if u >= 0 { branch(fx, failed, u, cont) } else {
+        defect(fx.lo, "a failure check with no failure edge");
+        jump(fx, cont);
+    }
+    switch_to(fx.fb, cont);
+}
+
+fn check_failed(fx: Fx) {
+    let f = rt_v(fx, "nz.failed_now", ints_new(), "i32")
+    let failed = cmp_imm(fx, "ne", f, "i32", 0)
+    leave_if(fx, failed);
+}
+
+fn check_call(fx: Fx, failed: Int) {
+    if failed >= 0 { leave_if(fx, failed) } else { check_failed(fx) }
+}
+
+// --- ownership ----------------------------------------------------------------------------------
+
+fn retain_value(fx: Fx, v: Int, t: Str) {
+    let s = spell(t)
+    if t == "Ints" || t == "Strs" || s.kind == "vec" && s.head != "Chan" { rt(fx, "nz.arr_retain", ints_of(v)); return }
+    if t == "Chan" || s.head == "Chan" { rt(fx, "nz.chan_retain", ints_of(v)); return }
+    if s.kind == "unknown" { rt(fx, "nz.closure_retain", ints_of(v)); return }
+}
+
+fn retain_at(fx: Fx, a: Int, t: Str) {
+    if !owns_ty(fx, t) { return }
+    let k = class(t)
+    if k == "str" {
+        let o = load(fx, "ptr", a, 16)
+        rt(fx, "nz.str_retain", ints_of(o))
+    } else if k == "record" || k == "enum" || k == "array" {
+        defect(fx.lo, "a retain helper (not ported yet)");
+    } else {
+        let v = load(fx, "ptr", a, 0)
+        retain_value(fx, v, t);
+    }
+}
+
+fn release_value(fx: Fx, v: Int, t: Str) {
+    let s = spell(t)
+    if t == "Ints" { rt(fx, "nz.seq_release", ints_of(v)); return }
+    if t == "Strs" { rt(fx, "nz.strs_release", ints_of(v)); return }
+    if t == "Chan" { rt(fx, "nz.chan_release", ints_of(v)); return }
+    if s.head == "Chan" && strs_len(s.args) > 0 { rt(fx, "nz.chanv_release", ints_of(v)); return }
+    if s.kind == "unknown" { rt(fx, "nz.closure_release", ints_of(v)); return }
+    if s.kind == "vec" {
+        let elem = strs_get(s.args, 0)
+        if s.head == "Vec" && (elem == "Int" || elem == "Str") {
+            // `Vec[Int]` and `Vec[Str]` are `Ints` and `Strs`.
+            release_value(fx, v, if elem == "Int" { "Ints" } else { "Strs" });
+        } else if owns_ty(fx, elem) {
+            defect(fx.lo, "an element release helper (not ported yet)");
+        } else {
+            rt(fx, "nz.seq_release", ints_of(v))
+        }
+    }
+}
+
+fn release_at(fx: Fx, a: Int, t: Str) {
+    if !owns_ty(fx, t) { return }
+    let k = class(t)
+    if k == "str" {
+        let o = load(fx, "ptr", a, 16)
+        rt(fx, "nz.str_release", ints_of(o))
+    } else if k == "record" || k == "enum" || k == "array" {
+        defect(fx.lo, "a release helper (not ported yet)");
+    } else {
+        let v = load(fx, "ptr", a, 0)
+        release_value(fx, v, t);
+    }
+}
+
+fn move_into(fx: Fx, to: Int, from: Int) {
+    let t = ty(fx, from)
+    if in_memory(t) {
+        let src = addr(fx, from)
+        let n = size_of(fx, t)
+        copy(fx, to, src, n);
+        if owns_ty(fx, t) { zero(fx, src, n) }
+    } else {
+        let v = get(fx, from)
+        store(fx, to, 0, v);
+        if owns_ty(fx, t) { clear(fx, from) }
+    }
+}
+
+// --- strings ------------------------------------------------------------------------------------
+
+fn str_parts(fx: Fx, s: Int) -> Ints {
+    let p = load(fx, "ptr", s, 0)
+    let n = load(fx, "i64", s, 8)
+    ints_of2(p, n)
+}
+
+fn write_str(fx: Fx, dst: Int, p: Int, n: Int, owner: Int) {
+    let d = addr(fx, dst)
+    store(fx, d, 0, p);
+    store(fx, d, 8, n);
+    store(fx, d, 16, owner);
+}
+
+/// A string backing of `bytes` usable bytes: `[owner, data]`.
+fn string_backing(fx: Fx, bytes: Int) -> Ints {
+    let owner = rt_v(fx, "nz.str_alloc", ints_of(bytes), "ptr")
+    let none = is_null(fx, owner)
+    guard(fx, none, "N0406", "out of memory");
+    let data = ptr_off(fx, owner, 16)
+    ints_of2(owner, data)
+}
+
+fn arg_place(fx: Fx, args: Vec[Operand], i: Int) -> Int {
+    if i < vec_len(args) { place(fx, vec_get(args, i)) } else { null(fx) }
+}
+
+fn arg_value(fx: Fx, args: Vec[Operand], i: Int) -> Int {
+    if i < vec_len(args) { opvalue(fx, vec_get(args, i)) } else { iconst(fx, 0) }
+}
+
+fn primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) {
+    if op == "str_concat" {
+        let a = arg_place(fx, args, 0)
+        let b = arg_place(fx, args, 1)
+        let pa = str_parts(fx, a)
+        let pb = str_parts(fx, b)
+        let n = bin(fx, "add", ints_get(pa, 1), ints_get(pb, 1))
+        let room = add_imm(fx, n, 1)
+        let ob = string_backing(fx, room)
+        let buf = ints_get(ob, 1)
+        rt(fx, "memcpy", ints_of3(buf, ints_get(pa, 0), ints_get(pa, 1)))
+        let rest = ptr_add(fx, buf, ints_get(pa, 1))
+        rt(fx, "memcpy", ints_of3(rest, ints_get(pb, 0), ints_get(pb, 1)))
+        write_str(fx, dst, buf, n, ints_get(ob, 0));
+    } else if op == "print" || op == "eprint" {
+        let s = arg_place(fx, args, 0)
+        let pn = str_parts(fx, s)
+        let fd = iconst_c(fx, "i32", if op == "print" { 1 } else { 2 })
+        let w = rt_v(fx, "write", ints_of3(fd, ints_get(pn, 0), ints_get(pn, 1)), "i64")
+        set(fx, dst, w);
+    } else if op == "num_to_str" && (elem == "Int" || elem == "") {
+        let x = arg_value(fx, args, 0)
+        let room = iconst(fx, 48)
+        let ob = string_backing(fx, room)
+        let n = rt_v(fx, "nz.format_int", ints_of2(ints_get(ob, 1), x), "i64")
+        write_str(fx, dst, ints_get(ob, 1), n, ints_get(ob, 0));
+    } else {
+        defect(fx.lo, "the primitive `" + op + "` (not ported yet)");
+    }
+}
+
+// --- statements ---------------------------------------------------------------------------------
+
+fn checked(fx: Fx, op: Str, x: Int, y: Int, what: Str) -> Int {
+    let dst = value(fx.fb)
+    let ovf = value(fx.fb)
+    emit(fx.fb, vn(dst) + ", " + vn(ovf) + " = " + op + " " + vn(x) + ", " + vn(y));
+    guard(fx, ovf, "N0400", what);
+    dst
+}
+
+fn min_over_minus_one(fx: Fx, x: Int, y: Int) -> Int {
+    let a = cmp_imm(fx, "eq", x, "i64", 0 - 9223372036854775807 - 1)
+    let b = cmp_imm(fx, "eq", y, "i64", 0 - 1)
+    bin(fx, "and", a, b)
+}
+
+fn arith(fx: Fx, op: Str, x: Int, y: Int) -> Int {
+    if op == "+" { return checked(fx, "add.ovf", x, y, "this addition overflows `Int`") }
+    if op == "-" { return checked(fx, "sub.ovf", x, y, "this subtraction overflows `Int`") }
+    if op == "*" { return checked(fx, "mul.ovf", x, y, "this multiplication overflows `Int`") }
+    let zero = cmp_imm(fx, "eq", y, "i64", 0)
+    guard(fx, zero, "N0401", "division by zero");
+    let special = min_over_minus_one(fx, x, y)
+    if op == "/" {
+        guard(fx, special, "N0400", "this division overflows `Int`");
+        return bin(fx, "sdiv", x, y)
+    }
+    let one = iconst(fx, 1)
+    let v = value(fx.fb)
+    emit(fx.fb, vn(v) + " = select " + vn(special) + ", " + vn(one) + ", " + vn(y));
+    bin(fx, "srem", x, v)
+}
+
+fn direct_call(fx: Fx, dst: Int, callee: Int, args: Vec[Operand]) {
+    let dt = ty(fx, dst)
+    let fsym = match hashmap_get(fx.lo.funcs, callee) { Some(s) => s, None => 0 - 1 }
+    if fsym < 0 {
+        defect(fx.lo, "a call to an undeclared function");
+        return
+    }
+    let g = vec_get(fx.lo.p.fns, callee)
+    let foreign = g.foreign != ""
+    let vals = ints_new()
+    if in_memory(dt) && !foreign { ints_push(vals, addr(fx, dst)) }
+    for a in args {
+        if foreign && in_memory(operand_ty(fx, a)) {
+            defect(fx.lo, "a string or record passed to C (not ported yet)");
+            return
+        }
+        ints_push(vals, argument(fx, a))
+    }
+    let rf = call_failing(fx, fsym, vals)
+    if foreign { rt(fx, "nz.errno_save", ints_new()) }
+    if !foreign { check_call(fx, ints_get(rf, 1)) }
+    if !in_memory(dt) && ints_get(rf, 0) >= 0 { set(fx, dst, ints_get(rf, 0)) }
+}
+
+fn compare(fx: Fx, op: Str, t: Str, a: Operand, b: Operand) -> Int {
+    let k = class(t)
+    if k == "str" && (op == "==" || op == "!=") {
+        let x = place(fx, a)
+        let y = place(fx, b)
+        let eq = string_equal(fx, x, y)
+        return if op == "!=" { negate(fx, eq) } else { eq }
+    }
+    if k == "int" || k == "bool" {
+        let x = opvalue(fx, a)
+        let y = opvalue(fx, b)
+        let bit = k == "bool"
+        let cc = if op == "==" { "eq" } else if op == "!=" { "ne" } else if op == "<" { if bit { "ult" } else { "lt" } } else if op == "<=" { if bit { "ule" } else { "le" } } else if op == ">" { if bit { "ugt" } else { "gt" } } else { if bit { "uge" } else { "ge" } }
+        return cmp(fx, cc, x, y)
+    }
+    defect(fx.lo, "a comparison of `" + t + "` (not ported yet)");
+    iconst_c(fx, "bit", 0)
+}
+
+fn negate(fx: Fx, v: Int) -> Int {
+    let one = iconst_c(fx, "bit", 1)
+    bin(fx, "xor", v, one)
+}
+
+fn string_equal(fx: Fx, a: Int, b: Int) -> Int {
+    let la = load(fx, "i64", a, 8)
+    let lb = load(fx, "i64", b, 8)
+    let same = cmp(fx, "eq", la, lb)
+    let out = new_var(fx.fb, "bit")
+    let no = iconst_c(fx, "bit", 0)
+    set_var(fx, out, no);
+    let compare_at = new_lblock(fx.fb)
+    let join = new_lblock(fx.fb)
+    branch(fx, same, compare_at, join);
+    switch_to(fx.fb, compare_at);
+    let pa = load(fx, "ptr", a, 0)
+    let pb = load(fx, "ptr", b, 0)
+    let diff = rt_v(fx, "memcmp", ints_of3(pa, pb, la), "i32")
+    let eq = cmp_imm(fx, "eq", diff, "i32", 0)
+    set_var(fx, out, eq);
+    jump(fx, join);
+    switch_to(fx.fb, join);
+    get_var(fx, out)
+}
+
+fn assign(fx: Fx, dst: Int, v: Rvalue) {
+    let dt = ty(fx, dst)
+    match v {
+        Rvalue.Use(o: o) => {
+            if in_memory(dt) {
+                let src = place(fx, o)
+                let d = addr(fx, dst)
+                copy(fx, d, src, size_of(fx, dt));
+            } else {
+                let x = opvalue(fx, o)
+                set(fx, dst, x);
+            }
+        },
+        Rvalue.Copy(l: l) => {
+            if in_memory(dt) {
+                let src = addr(fx, l)
+                let d = addr(fx, dst)
+                copy(fx, d, src, size_of(fx, dt));
+                retain_at(fx, d, dt);
+            } else {
+                let x = get(fx, l)
+                if owns_ty(fx, dt) { retain_value(fx, x, dt) }
+                set(fx, dst, x);
+            }
+        },
+        Rvalue.Move(l: l) => {
+            if in_memory(dt) {
+                let d = addr(fx, dst)
+                move_into(fx, d, l);
+            } else {
+                let x = get(fx, l)
+                clear(fx, l);
+                set(fx, dst, x);
+            }
+        },
+        Rvalue.Neg(o: o) => {
+            if dt != "Int" {
+                defect(fx.lo, "a negation of `" + dt + "` (not ported yet)");
+                return
+            }
+            let x = opvalue(fx, o)
+            let z = iconst(fx, 0)
+            let r = checked(fx, "sub.ovf", z, x, "this negation overflows `Int`")
+            set(fx, dst, r);
+        },
+        Rvalue.Arith(op: op, a: a, b: b) => {
+            if dt != "Int" {
+                defect(fx.lo, "arithmetic on `" + dt + "` (not ported yet)");
+                return
+            }
+            let x = opvalue(fx, a)
+            let y = opvalue(fx, b)
+            let r = arith(fx, op, x, y)
+            set(fx, dst, r);
+        },
+        Rvalue.Compare(op: op, law: _, operand: t, a: a, b: b) => {
+            let r = compare(fx, op, t, a, b)
+            set(fx, dst, r);
+        },
+        Rvalue.Call(callee: g, args: args) => { direct_call(fx, dst, g, args); },
+        Rvalue.Primitive(op: op, elem: e, args: args) => { primitive(fx, dst, op, e, args); },
+        _ => { defect(fx.lo, "an rvalue this stage does not lower yet"); },
+    }
+}
+
+fn statement(fx: Fx, s: Stmt) {
+    match s {
+        Stmt.Assign(dst: d, value: v, unwind: _) => { assign(fx, d, v); },
+        Stmt.Drop(l: l) => {
+            let t = ty(fx, l)
+            if owns_ty(fx, t) {
+                if in_memory(t) {
+                    let a = addr(fx, l)
+                    release_at(fx, a, t);
+                    zero(fx, a, size_of(fx, t));
+                } else {
+                    let x = get(fx, l)
+                    release_value(fx, x, t);
+                    clear(fx, l);
+                }
+            }
+        },
+        Stmt.CheckFailed(unwind: _) => { check_failed(fx); },
+        Stmt.StackCheck(unwind: _) => {
+            let past = rt_v(fx, "nz.stack_check", ints_new(), "i32")
+            let bad = cmp_imm(fx, "ne", past, "i32", 0)
+            guard(fx, bad, "N0408", "the native call stack is exhausted");
+        },
+        _ => { defect(fx.lo, "a statement this stage does not lower yet"); },
+    }
+}
+
+fn terminator(fx: Fx, t: Term) {
+    match t {
+        Term.Goto(b: b) => { jump(fx, ints_get(fx.blocks, b)); },
+        Term.Branch(cond: c, then: a, other: b) => {
+            let x = opvalue(fx, c)
+            branch(fx, x, ints_get(fx.blocks, a), ints_get(fx.blocks, b));
+        },
+        Term.Return(l: l) => {
+            if sret(fx) >= 0 {
+                let src = addr(fx, l)
+                copy(fx, sret(fx), src, size_of(fx, fx.f.ret));
+                term(fx.fb, "return");
+            } else {
+                let x = get(fx, l)
+                term(fx.fb, "return " + vn(x));
+            }
+        },
+        Term.Unwind => { term(fx.fb, "fail"); },
+        _ => {
+            defect(fx.lo, "a terminator this stage does not lower yet");
+            term(fx.fb, "unreachable");
+        },
+    }
+}
+
+// --- which locals are values --------------------------------------------------------------------
+
+fn operand_local(o: Operand, out: Ints) {
+    match o {
+        Operand.Local(l: l) => { ints_push(out, l); },
+        _ => {},
+    }
+}
+
+fn operands_locals(os: Vec[Operand], out: Ints) {
+    for o in os { operand_local(o, out) }
+}
+
+fn rvalue_reads(v: Rvalue, out: Ints) {
+    match v {
+        Rvalue.Use(o: o) => { operand_local(o, out); },
+        Rvalue.Neg(o: o) => { operand_local(o, out); },
+        Rvalue.Complement(o: o) => { operand_local(o, out); },
+        Rvalue.Convert(mode: _, to: _, o: o) => { operand_local(o, out); },
+        Rvalue.Fits(to: _, o: o) => { operand_local(o, out); },
+        Rvalue.Hash(operand: _, value: o) => { operand_local(o, out); },
+        Rvalue.Copy(l: l) => { ints_push(out, l); },
+        Rvalue.Move(l: l) => { ints_push(out, l); },
+        Rvalue.Capture(env: l, index: _) => { ints_push(out, l); },
+        Rvalue.Array(elems: es) => { operands_locals(es, out); },
+        Rvalue.ArrayRepeat(value: o, count: _) => { operand_local(o, out); },
+        Rvalue.Arith(op: _, a: a, b: b) => {
+            operand_local(a, out);
+            operand_local(b, out);
+        },
+        Rvalue.Bits(op: _, a: a, b: b) => {
+            operand_local(a, out);
+            operand_local(b, out);
+        },
+        Rvalue.Index(base: a, index: b) => {
+            operand_local(a, out);
+            operand_local(b, out);
+        },
+        Rvalue.Compare(op: _, law: _, operand: _, a: a, b: b) => {
+            operand_local(a, out);
+            operand_local(b, out);
+        },
+        Rvalue.Call(callee: _, args: args) => { operands_locals(args, out); },
+        Rvalue.Primitive(op: _, elem: _, args: args) => { operands_locals(args, out); },
+        Rvalue.CallIndirect(callee: c, args: args) => {
+            operand_local(c, out);
+            operands_locals(args, out);
+        },
+        Rvalue.Closure(func: _, captures: cs) => { operands_locals(cs, out); },
+        Rvalue.Record(ty: _, fields: _, names: _, locals: ls) => { for i in 0..ints_len(ls) { ints_push(out, ints_get(ls, i)) } },
+        Rvalue.Variant(ty: _, variant: _, vname: _, fields: _, names: _, locals: ls) => { for i in 0..ints_len(ls) { ints_push(out, ints_get(ls, i)) } },
+        Rvalue.Field(base: o, f: _) => { operand_local(o, out); },
+        Rvalue.FieldBorrow(base: o, f: _) => { operand_local(o, out); },
+        Rvalue.Payload(base: l, ty: _, variant: _, vname: _, field: _, fname: _) => { ints_push(out, l); },
+    }
+}
+
+fn mentions(s: Stmt) -> Ints {
+    let out = ints_new()
+    match s {
+        Stmt.Assign(dst: _, value: v, unwind: _) => { rvalue_reads(v, out); },
+        Stmt.SetField(base: b, path: _, value: v) => {
+            ints_push(out, b)
+            ints_push(out, v)
+        },
+        Stmt.SetElement(base: b, path: path, value: v, unwind: _) => {
+            ints_push(out, b)
+            for p in path {
+                match p {
+                    PathRef.Index(local: l, len: _) => { ints_push(out, l); },
+                    _ => {},
+                }
+            }
+            ints_push(out, v)
+        },
+        Stmt.Drop(l: l) => { ints_push(out, l); },
+        Stmt.ScopeOpen(list: l, unwind: _) => { ints_push(out, l); },
+        Stmt.ScopeJoin(list: l) => { ints_push(out, l); },
+        Stmt.Spawn(list: l, callee: _, args: args, unwind: _) => {
+            ints_push(out, l)
+            operands_locals(args, out);
+        },
+        _ => {},
+    }
+    out
+}
+
+fn term_reads(t: Term) -> Ints {
+    let out = ints_new()
+    match t {
+        Term.Branch(cond: c, then: _, other: _) => { operand_local(c, out); },
+        Term.Switch(scrutinee: l, ty: _, variants: _, names: _, blocks: _) => { ints_push(out, l); },
+        Term.Return(l: l) => { ints_push(out, l); },
+        Term.Exit(o: o) => { operand_local(o, out); },
+        _ => {},
+    }
+    out
+}
+
+/// Which locals are held as values: a scalar (`Int` or `Bool`) temporary assigned once, read
+/// only after that assignment and in its block.
+fn promotable(f: MirFn) -> Ints {
+    let n = vec_len(f.locals)
+    let defs = ints_new()
+    let def_b = ints_new()
+    let def_s = ints_new()
+    let ok = ints_new()
+    for i in 0..n {
+        ints_push(defs, 0)
+        ints_push(def_b, 0 - 1)
+        ints_push(def_s, 0 - 1)
+        ints_push(ok, 1)
+    }
+    // Definitions first, then every use against its local's one definition.
+    for b in 0..vec_len(f.blocks) {
+        let blk = vec_get(f.blocks, b)
+        for s in 0..vec_len(blk.stmts) {
+            match vec_get(blk.stmts, s) {
+                Stmt.Assign(dst: d, value: _, unwind: _) => {
+                    ints_set(defs, d, ints_get(defs, d) + 1)
+                    ints_set(def_b, d, b)
+                    ints_set(def_s, d, s)
+                },
+                _ => {},
+            }
+        }
+    }
+    for b in 0..vec_len(f.blocks) {
+        let blk = vec_get(f.blocks, b)
+        for s in 0..vec_len(blk.stmts) {
+            let ms = mentions(vec_get(blk.stmts, s))
+            for k in 0..ints_len(ms) {
+                let l = ints_get(ms, k)
+                if !(ints_get(def_b, l) == b && s > ints_get(def_s, l)) { ints_set(ok, l, 0) }
+            }
+        }
+        if vec_len(blk.term) > 0 {
+            let rs = term_reads(vec_get(blk.term, 0))
+            for k in 0..ints_len(rs) {
+                let l = ints_get(rs, k)
+                if ints_get(def_b, l) != b { ints_set(ok, l, 0) }
+            }
+        }
+    }
+    let out = ints_new()
+    for i in 0..n {
+        let l = vec_get(f.locals, i)
+        let k = class(l.ty)
+        let scalar = l.ty != "Tasks" && (k == "int" || k == "bool")
+        let temp = l.origin == "temp" && i >= f.params
+        ints_push(out, if scalar && temp && ints_get(defs, i) == 1 && ints_get(ok, i) == 1 { 1 } else { 0 })
+    }
+    out
+}
+
+// --- functions and units ------------------------------------------------------------------------
+
+fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
+    let f = vec_get(lo.p.fns, fi)
+    let reg = ints_new()
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
+    let at = strs_new()
+    strs_push(at, "")
+    let fx = Fx(lo: lo, fb: fb_new(), f: f, kinds: strs_new(), idx: ints_new(), tys: strs_new(), promoted: ints_new(),
+        blocks: ints_new(), reg: reg, at: at)
+    let prom = promotable(f)
+    let mut next_param = 0
+    if in_memory(f.ret) {
+        ints_set(fx.reg, 0, param(fx, 0))
+        next_param = 1
+    }
+    for i in 0..vec_len(f.locals) {
+        let l = vec_get(f.locals, i)
+        let is_param = i < f.params
+        strs_push(fx.tys, l.ty)
+        ints_push(fx.promoted, 0 - 1)
+        if l.ty == "Tasks" {
+            let v = new_var(fx.fb, "ptr")
+            let z = iconst_c(fx, "ptr", 0)
+            set_var(fx, v, z);
+            strs_push(fx.kinds, "tasks")
+            ints_push(fx.idx, v)
+        } else if in_memory(l.ty) {
+            if is_param {
+                let p = param(fx, next_param)
+                next_param += 1
+                strs_push(fx.kinds, "borrowed")
+                ints_push(fx.idx, p)
+            } else {
+                let ly = lay(lo.lx, l.ty)
+                let s = new_slot(fx.fb, ly.size, if ly.align < 8 { 8 } else { ly.align })
+                if owns_ty(fx, l.ty) {
+                    let a = slot_addr(fx, s)
+                    zero(fx, a, ly.size);
+                }
+                strs_push(fx.kinds, "slot")
+                ints_push(fx.idx, s)
+            }
+        } else if ints_get(prom, i) == 1 {
+            strs_push(fx.kinds, "value")
+            ints_push(fx.idx, 0 - 1)
+        } else {
+            let v = new_var(fx.fb, mclass(l.ty))
+            let init = if is_param {
+                let p = param(fx, next_param)
+                next_param += 1
+                p
+            } else {
+                iconst_c(fx, mclass(l.ty), 0)
+            }
+            set_var(fx, v, init);
+            strs_push(fx.kinds, "var")
+            ints_push(fx.idx, v)
+        }
+    }
+    for b in f.blocks { ints_push(fx.blocks, new_lblock(fx.fb)) }
+    if ints_len(fx.blocks) > 0 { jump(fx, ints_get(fx.blocks, 0)) }
+    for i in 0..vec_len(f.blocks) {
+        let blk = vec_get(f.blocks, i)
+        switch_to(fx.fb, ints_get(fx.blocks, i));
+        for k in 0..vec_len(blk.stmts) {
+            let s = vec_get(blk.stmts, k)
+            strs_set(fx.at, 0, strs_get(blk.ats, k))
+            let u = stmt_unwind(s)
+            ints_set(fx.reg, 1, if u >= 0 { ints_get(fx.blocks, u) } else { 0 - 1 })
+            statement(fx, s);
+        }
+        strs_set(fx.at, 0, if strs_len(blk.term_at) > 0 { strs_get(blk.term_at, 0) } else { "" })
+        if vec_len(blk.term) > 0 { terminator(fx, vec_get(blk.term, 0)) }
+    }
+    finish(lo, fx.fb, sym, f.name)
+}
+
+fn plain_entry(lo: Lo, sym: Int, body: Int) -> Str {
+    let reg = ints_new()
+    ints_push(reg, 0 - 1)
+    ints_push(reg, 0 - 1)
+    let at = strs_new()
+    strs_push(at, "")
+    let fx = Fx(lo: lo, fb: fb_new(), f: vec_get(lo.p.fns, 0), kinds: strs_new(), idx: ints_new(), tys: strs_new(),
+        promoted: ints_new(), blocks: ints_new(), reg: reg, at: at)
+    let sig = strs_get(lo.sym_sig, sym)
+    let open_at = match text_find(sig, "(") { Some(i) => i, None => 0 }
+    let close = match text_find(sig, ")") { Some(i) => i, None => 0 }
+    let inner = str_slice(sig, open_at + 1, close)
+    let n = if str_len(inner) == 0 { 0 } else { strs_len(text_split(inner, ", ")) }
+    let args = ints_new()
+    for i in 0..n { ints_push(args, param(fx, i)) }
+    let r = call(fx, body, args)
+    term(fx.fb, if r >= 0 { "return " + vn(r) } else { "return" });
+    finish(lo, fx.fb, sym, "a plain entry")
+}
+
+fn print_module(lo: Lo) -> Str {
+    let lines = strs_new()
+    strs_push(lines, "; unit " + lo.unit.module)
+    for i in 0..strs_len(lo.sym_name) {
+        let k = strs_get(lo.sym_kind, i)
+        strs_push(lines, strs_get(lo.sym_link, i) + " " + k + " @" + strs_get(lo.sym_name, i) + " " + strs_get(lo.sym_sig, i))
+    }
+    for d in lo.datas { strs_push(lines, d) }
+    str_join(lines, "\n") + "\n" + str_join(lo.functions, "")
+}
+
+fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], sources: HashMap[Str, Str]) -> Result[Str, Str] {
+    let anon = ints_new()
+    ints_push(anon, 0)
+    let lo = Lo(lx: lx, c: c, p: p, unit: u, sym_name: strs_new(), sym_link: strs_new(), sym_kind: strs_new(), sym_sig: strs_new(),
+        sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
+        messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
+        runtime: runtime, sources: sources, errors: strs_new())
+    declare_functions(lo)
+    for i in 0..ints_len(u.fns) {
+        let fi = ints_get(u.fns, i)
+        match hashmap_get(lo.funcs, fi) {
+            Some(sym) => {
+                strs_push(lo.functions, lower_fn(lo, fi, sym))
+                match hashmap_get(lo.plain, fi) {
+                    Some(ps) => { strs_push(lo.functions, plain_entry(lo, ps, sym)); },
+                    None => {},
+                }
+                if vec_get(p.fns, fi).export != "" { defect(lo, "an export's C entry (not ported yet)"); }
+            },
+            None => {},
+        }
+    }
+    if strs_len(lo.errors) > 0 { return Err(strs_get(lo.errors, 0)) }
+    Ok(print_module(lo))
+}
+
+/// Every unit's instruction text, in `unit_plans` order.
+pub fn lir_texts(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Strs, Str] ! {} {
+    if p.entry < 0 { return Err("this program has no `main` to compile") }
+    let lx = lx_new(c, tt, p)
+    let runtime: HashMap[Str, Str] = hashmap_new()
+    for row in text_split(runtime_table(), "\n") {
+        match text_find(row, "|") {
+            Some(i) => { hashmap_set(runtime, str_slice(row, 0, i), str_slice(row, i + 1, str_len(row))); },
+            None => {},
+        }
+    }
+    let sources: HashMap[Str, Str] = hashmap_new()
+    let mods = kid(c, json_root(c.doc), "modules")
+    for i in 0..count(c, mods) {
+        let m = at(c, mods, i)
+        hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
+    }
+    let out = strs_new()
+    for u in unit_plans(c, p) {
+        match lower_unit(c, lx, p, u, runtime, sources) {
+            Ok(t) => { strs_push(out, t); },
+            Err(e) => { return Err(e) },
+        }
+    }
+    Ok(out)
+}
+
+/// `nazm lir --ops`: every unit's instruction text, each followed by an empty line.
+pub fn lir_ops(c: Cir, tt: TypeTable, p: MirProgram) -> Result[Str, Str] ! {} {
+    match lir_texts(c, tt, p) {
+        Ok(ts) => {
+            let out = strs_new()
+            for t in ts { strs_push(out, t + "\n") }
+            Ok(str_join(out, ""))
+        },
+        Err(e) => Err(e),
+    }
+}
