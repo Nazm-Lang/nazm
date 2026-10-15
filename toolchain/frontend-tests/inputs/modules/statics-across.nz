@@ -1,0 +1,5 @@
+// Statics across modules (Gate 3): an imported module's statics are not its exports.
+use "lib/stored.nz";
+use "lib/stored.nz" as st;
+
+fn main() -> Int { level() + SHARED + LEVEL + st::LEVEL + st::SHARED + CELL }

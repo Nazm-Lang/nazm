@@ -1,0 +1,30 @@
+// Statics (Gate 3): storage of a number or a `Bool`, or an `Atomic` cell started by
+// `atomic_new(c)`; read in bodies, never assigned (`N0625`), never exported, never read by a
+// constant as an atomic.
+
+static LIMIT: Int = 10 * 4;
+static SMALL: UInt8 = 255;
+static FLAG: Bool = LIMIT > 3;
+static COUNT: Atomic = atomic_new(LIMIT + 2);
+static ODD: Atomic = atomic_new(true);
+static BAD: Atomic = 7;
+static WORDS: Str = "no";
+static POINT: Box[Int] = 1;
+pub static SHOWN: Int = 1;
+static TOO: UInt8 = 256;
+const FROM: Int = LIMIT + 1;
+const READ: Int = COUNT;
+static LIMIT: Int = 2;
+
+fn bump() -> Int ! {} { atomic_add(COUNT, 1) }
+
+fn main() -> Int {
+    LIMIT = 3;
+    COUNT = atomic_new(1);
+    FLAG = false;
+    let x: Bool = LIMIT;
+    let n: Int = SMALL;
+    let a: Int = COUNT;
+    WORDS;
+    atomic_load(COUNT) + FROM + bump()
+}

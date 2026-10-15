@@ -22,9 +22,9 @@
 // and blocks; `match` and what desugars to it (`if let`, `while let`, `let … else`, a `let` of a
 // pattern) with its patterns, exhaustiveness and reachability, and N0632's warning; `?` on the
 // prelude's `Result` and `Option`; interpolation and what `print(x)` is written as; constants of
-// `Int`, `Bool` and `Str`, imported ones included; function types, named functions as values,
-// calls through values and closures with their captures (N50); traits, impls,
-// bounds, method calls, default methods and `Show` in interpolation (N78); effects
+// numbers, `Bool` and `Str`, imported ones included, and statics (Gate 3); function types, named
+// functions as values, calls through values and closures with their captures (N50); traits,
+// impls, bounds, method calls, default methods and `Show` in interpolation (N78); effects
 // and authority; the rules about `main`.
 
 use "syntax.nz";
@@ -1335,8 +1335,7 @@ fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let mut k = 0;
     while k < ints_len(consts) {
         let decl = ints_get(consts, k);
-        if flag(c, decl, "is_static") { stop(c, "a static"); }
-        if const_kind(c, decl) < 0 { stop(c, "a constant of this type"); }
+        if flag(c, decl, "is_static") == false && const_kind(c, decl) < 0 { stop(c, "a constant of this type"); }
         k = k + 1;
     }
     let records = kids(c, p, "records");
@@ -3473,6 +3472,14 @@ fn check_assign(c: Ck, a: Int) -> Int {
     let b = lookup_var(c, name, fld(c, place, "span"));
     // Seen through a closure as a copy: neither mutable nor declared where it could be made so.
     let copy = gs(c, s_captured()) == 1;
+    // A static is read, never assigned (Gate 3): there are no mutable global variables.
+    if b < 0 && static_named(c, name) >= 0 {
+        err(c, "N0625", ns, cat3("`", name, "` is a static, and a static is never assigned"),
+                "a static is read-only; one shared, changing value is a static `Atomic`, changed by `atomic_store` and the other atomic operations");
+        sec(c, first_declared(c, name), "declared here");
+        check_expr(c, value, none());
+        return 0;
+    }
     if b < 0 {
         err(c, "N0200", ns, cat3("`", name, "` is not defined"), "assignment changes an existing binding; `let` introduces one");
         check_expr(c, value, none());
@@ -6661,6 +6668,8 @@ fn check_variant_pattern(c: Ck, v: Int, ty: Int, scrutinee: Int, binds: Binds) -
 fn k_int() -> Int { 0 }
 fn k_bool() -> Int { 1 }
 fn k_str() -> Int { 2 }
+// A static `Atomic` (Gate 3): a cell, named in a body as an `Atomic`, never a value.
+fn k_atomic() -> Int { 3 }
 
 fn k_num(name: Str) -> Int {
     if name == "Int" { return k_int(); }
@@ -6672,6 +6681,7 @@ fn k_is_float(k: Int) -> Bool { k >= 100 && is_float_name(kind_name(k)) }
 fn k_is_integer(k: Int) -> Bool { k_is_num(k) && k_is_float(k) == false }
 
 fn kind_type(c: Ck, k: Int) -> Int {
+    if k == k_atomic() { return builtin_ty(c, "Atomic"); }
     if k == k_bool() { return t_bool(); }
     if k == k_str() { return t_str(); }
     if k >= 100 { return builtin_ty(c, kind_name(k)); }
@@ -7006,6 +7016,8 @@ pub struct Cev {
     vi: Ints,
     vs: Strs,
     d: Diags,
+    // The module's static `Atomic`s (Gate 3): cells, not values.
+    cells: Strs,
 }
 
 // The declaration of `name` a map collected from the module's would hold: its last.
@@ -7052,7 +7064,7 @@ fn ev_bool(ev: Cev, b: Bool) -> Int {
 fn evaluate_consts(c: Ck, m: Int, d: Diags) -> Cev {
     ss(c, s_module(), m);
     let ev = Cev(decls: kids(c, ints_get(c.mprog, m), "consts"), names: strs_new(), kinds: ints_new(), ints: ints_new(), strs: strs_new(),
-            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d);
+            active: strs_new(), vk: ints_new(), vi: ints_new(), vs: strs_new(), d: d, cells: strs_new());
     let mut k = 0;
     while k < deps(c, m) {
         let dp = dep(c, m, k);
@@ -7094,11 +7106,48 @@ fn evaluate_consts(c: Ck, m: Int, d: Diags) -> Cev {
             dg_error(d, "N0203", sps(c, ns), spe(c, ns), cat3("`", name, "` is declared twice in this module"), "", "");
             dg_secondary(d, sps(c, fld(c, prior, "name_span")), spe(c, fld(c, prior, "name_span")), "first declared here");
         } else {
-            ev_constant(c, ev, name);
+            // A constant is exported by its value (L8); a static is storage, its module's.
+            if flag(c, decl, "is_static") && some(c, decl, "pub_span") {
+                let ps = unwrap(c, decl, "pub_span");
+                dg_error(d, "N0101", sps(c, ps), spe(c, ps), cat3("`", name, "` cannot be exported: a static is its own module's"), "",
+                        "a static is storage with one address in its module; export a function that reads it, or a constant if its value never changes");
+            }
+            if static_atomic(c, decl) { ev_cell(c, ev, decl); } else { ev_constant(c, ev, name); }
         }
         i = i + 1;
     }
     ev
+}
+
+// Whether a declaration is a static `Atomic`, its type written plainly (`is_atomic`).
+fn static_atomic(c: Ck, decl: Int) -> Bool {
+    let ty = fld(c, decl, "ty");
+    if flag(c, decl, "is_static") == false { return false; }
+    some(c, ty, "args") == false && some(c, ty, "function") == false && some(c, ty, "qualifier") == false && fname_of(c, ty, "name") == "Atomic"
+}
+
+// A static `Atomic` (`cell`): its value is `atomic_new(c)` of a constant `Int`, the one call a
+// static's value may make. A cell whose start could not be computed is still declared.
+fn ev_cell(c: Ck, ev: Cev, decl: Int) -> Int {
+    let name = fname_of(c, decl, "name");
+    let value = fld(c, decl, "value");
+    let mut call = false;
+    if sx_kind(c.t, value) != tk_tuple() && kind_of(c, value) == "Call" {
+        call = some(c, value, "qualifier") == false && fname_of(c, value, "callee") == "atomic_new" && ints_len(kids(c, value, "args")) == 1
+                && some(c, value, "type_args") == false;
+    }
+    if call {
+        let a = ints_get(kids(c, value, "args"), 0);
+        strs_push(ev.active, name);
+        let v = ev_value(c, ev, a, k_int());
+        strs_pop(ev.active);
+        if v >= 0 && ints_get(ev.vk, v) != k_int() { dg_error(ev.d, "N0300", sps(c, espan(c, a)), spe(c, espan(c, a)), "an atomic holds an `Int`", "", ""); }
+    } else {
+        dg_error(ev.d, "N0622", sps(c, espan(c, value)), spe(c, espan(c, value)), "a static `Atomic` starts as `atomic_new(c)` of a constant `c`", "",
+                "`atomic_new` is the one call a static's value may make");
+    }
+    strs_push(ev.cells, name);
+    0
 }
 
 // A constant's value (`constant`): its index among the values done, or -1 where it has none.
@@ -7113,6 +7162,14 @@ fn ev_constant(c: Ck, ev: Cev, name: Str) -> Int {
         return 0 - 1;
     }
     let kind = const_kind(c, decl);
+    // A static is a number or a `Bool` (an `Atomic` is a cell): storage, which a `Str` is not.
+    if flag(c, decl, "is_static") && (kind < 0 || kind == k_str()) {
+        let ty = fld(c, decl, "ty");
+        dg_error(ev.d, "N0622", sps(c, fld(c, ty, "span")), spe(c, fld(c, ty, "span")),
+                cat3("a static is a number, a `Bool` or an `Atomic`, and `", fname_of(c, ty, "name"), "` is none"), "",
+                "a static is storage with one address; a `Str` is a constant's");
+        return 0 - 1;
+    }
     let value = fld(c, decl, "value");
     strs_push(ev.active, name);
     let v = ev_value(c, ev, value, kind);
@@ -7189,6 +7246,9 @@ fn ev_value(c: Ck, ev: Cev, e: Int, want: Int) -> Int {
     if k == "Str" { return ev_val(ev, k_str(), 0, sx_text(c.t, fld(c, e, "value"))); }
     if k == "Var" {
         let name = fname_of(c, e, "name");
+        // A static atomic's cell changes as the program runs: no constant is made of it.
+        let decl = const_decl(c, ev, name);
+        if decl >= 0 && static_atomic(c, decl) { return ev_refuse(c, ev, fld(c, e, "span"), cat3("read the atomic `", name, "`")); }
         let i = ev_constant(c, ev, name);
         if i >= 0 { return ev_val(ev, ints_get(ev.kinds, i), ints_get(ev.ints, i), strs_get(ev.strs, i)); }
         if const_decl(c, ev, name) >= 0 { return 0 - 1; }
@@ -7384,7 +7444,7 @@ fn declare_all_consts(c: Ck) -> Int {
             let decl = ints_get(ev.decls, k);
             let name = fname_of(c, decl, "name");
             let at = strs_find(ev.names, name);
-            if some(c, decl, "pub_span") && at >= 0 {
+            if some(c, decl, "pub_span") && at >= 0 && flag(c, decl, "is_static") == false {
                 ints_push(c.xmod, m);
                 strs_push(c.xname, name);
                 ints_push(c.xkind, ints_get(ev.kinds, at));
@@ -7412,7 +7472,40 @@ fn const_environment(c: Ck, m: Int) -> Int {
         ints_push(c.kkind, ints_get(ev.kinds, i));
         i = i + 1;
     }
+    // Its static `Atomic`s, after its values: a name is a value's before it is a cell's.
+    i = 0;
+    while i < strs_len(ev.cells) {
+        if strs_find(c.kname, strs_get(ev.cells, i)) < 0 {
+            strs_push(c.kname, strs_get(ev.cells, i));
+            ints_push(c.kkind, k_atomic());
+        }
+        i = i + 1;
+    }
     0
+}
+
+// The module being checked's static of this name, or -1 (`Constants::statics`).
+fn static_named(c: Ck, name: Str) -> Int {
+    let consts = kids(c, ints_get(c.mprog, gs(c, s_module())), "consts");
+    let mut i = 0;
+    while i < ints_len(consts) {
+        let decl = ints_get(consts, i);
+        if flag(c, decl, "is_static") && fname_of(c, decl, "name") == name { return decl; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// Where a name is first declared among the module's constants and statics (`Constants::decls`).
+fn first_declared(c: Ck, name: Str) -> Int {
+    let consts = kids(c, ints_get(c.mprog, gs(c, s_module())), "consts");
+    let mut i = 0;
+    while i < ints_len(consts) {
+        let decl = ints_get(consts, i);
+        if fname_of(c, decl, "name") == name { return fld(c, decl, "name_span"); }
+        i = i + 1;
+    }
+    0 - 1
 }
 
 // --- `?` (`check_propagate`) ---------------------------------------------------------------------

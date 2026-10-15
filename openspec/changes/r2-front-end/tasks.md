@@ -146,6 +146,12 @@
       what it drops gone before the checker; a `@derive` stops the checker.
       `inputs/check/attributes-board.nz`, `inputs/modules/attributes-across.nz`. `run.sh check`:
       2,612 agree, 176 differ; the checker carries 2,386, all agree
+- [ ] 3.1t Statics (Gate 3, `constants::evaluate` and `check_assign`): a static of a number or a
+      `Bool` computed as a constant is, an `Atomic` a cell started by `atomic_new(c)` (N0300,
+      N0622), named in a body as an `Atomic` and never read by a constant; a static of another
+      type (N0622), exported (N0101) or assigned (N0625), and never among a module's exports.
+      `inputs/check/statics.nz`, `inputs/modules/statics-across.nz`. `run.sh check`: 2,619
+      agree, 172 differ; the checker carries 2,412, all agree
 - [ ] 3.2 Every type of group C resolved and typed
 - [ ] 3.3 Generics, traits, impls, default methods, closures and effects
 
