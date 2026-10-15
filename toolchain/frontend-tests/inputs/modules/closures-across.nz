@@ -1,0 +1,20 @@
+use "lib/a.nz";
+fn map_one[T, U](f: fn(T) -> U, x: T) -> U { f(x) }
+fn keep(f: fn(Int) -> Int ! {}) -> Int { f(1) }
+fn peek() -> Bool {
+    let look = fn() -> Bool { file_exists("x") };
+    look()
+}
+fn pure() -> Int ! {} {
+    let g = only_a;
+    let h = fn(x: Int) -> Int ! { io } { x };
+    h(g())
+}
+fn main() -> Int {
+    let s = map_one(fn(x: Int) -> Str { "a" }, 1);
+    let t: Int = map_one(fn(x: Int) -> Str { "a" }, 1);
+    let u = map_one(fn(x: Bool) -> Int { 1 }, 1);
+    let k = keep(shared);
+    let j = keep(fn(x: Int) -> Int ! { io } { x });
+    pure() + str_len(s)
+}
