@@ -37,6 +37,8 @@ struct Lo {
     ckey: Strs,
     cty: Strs,
     cval: Strs,
+    // A static `Atomic`'s cell's durable key, beside its constant ("" for any other constant).
+    cstatic: Strs,
     // The loops whose bodies enclose the point being lowered, innermost last.
     targets: Ints,
     // For each open region, the locals bound directly in it: a run of `owned` from `ofirst`.
@@ -349,7 +351,7 @@ pub fn cr_function(f: Facts, i: Int) -> Str {
         m = m + 1;
     }
     let lo = Lo(f: f, c: c, t: fx_tree(f), st: ints_new(), stop: strs_new(), lb: ints_new(), lname: strs_new(), lty: ints_new(), lorig: strs_new(),
-            lat: strs_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
+            lat: strs_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), cstatic: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
             last: ints_new(), idents: idents);
     ints_push(lo.st, i);
     ints_push(lo.st, ck_fn_module(c, i));
@@ -506,6 +508,7 @@ fn co_consts(lo: Lo) -> Str {
         strs_push(o, co_field_first("id", int_to_str(i)));
         strs_push(o, co_field("type", json_str(strs_get(lo.cty, i))));
         strs_push(o, co_field("value", strs_get(lo.cval, i)));
+        if strs_get(lo.cstatic, i) != "" { strs_push(o, co_field("static", json_str(strs_get(lo.cstatic, i)))); }
         strs_push(out, co_object(o));
         i = i + 1;
     }
@@ -570,6 +573,22 @@ fn co_constant(lo: Lo, ty: Str, value: Str) -> Int {
     strs_push(lo.ckey, key);
     strs_push(lo.cty, ty);
     strs_push(lo.cval, value);
+    strs_push(lo.cstatic, "");
+    strs_len(lo.ckey) - 1
+}
+
+// A static `Atomic`'s cell (`Const::Cell`), made once: `static NAME`, and its durable key.
+fn co_cell_constant(lo: Lo, name: Str, key: Str) -> Int {
+    let k = str_concat(str_concat("Atomic:", key), "");
+    let mut i = 0;
+    while i < strs_len(lo.ckey) {
+        if strs_get(lo.ckey, i) == k { return i; }
+        i = i + 1;
+    }
+    strs_push(lo.ckey, k);
+    strs_push(lo.cty, "Atomic");
+    strs_push(lo.cval, json_str(str_concat("static ", name)));
+    strs_push(lo.cstatic, key);
     strs_len(lo.ckey) - 1
 }
 
@@ -1170,6 +1189,12 @@ fn co_expr(lo: Lo, e: Int) -> Str {
         return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
     }
     if k == "Var" {
+        // A constant (Gate 2): the value the checker computed, written as a literal; a static
+        // `Atomic`, its cell.
+        if ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span)) < 0 {
+            let u = ck_const_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+            if u >= 0 { return co_const_use(lo, u, sx_text(t, sx_field(t, e, "name")), span); }
+        }
         let l = co_local_at(lo, span);
         if co_halted(lo) { return ""; }
         return co_node(lo, "local", co_field_first("local", int_to_str(l)), ints_get(lo.lty, l), span);
@@ -2300,6 +2325,8 @@ fn co_call(lo: Lo, e: Int) -> Str {
     let t = lo.t;
     let c = lo.c;
     let cs = sx_field(t, e, "callee_span");
+    let cv = ck_conv_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
+    if cv >= 0 { return co_conversion(lo, e, cv); }
     let site = ck_site_at(c, co_abs_s(lo, cs), co_abs_e(lo, cs));
     if site < 0 { return co_stopped(lo, "a call the checker did not record as a call"); }
     // Its arguments first, as `call` lowers them.
@@ -2348,6 +2375,92 @@ fn co_call(lo: Lo, e: Int) -> Str {
         return co_node(lo, "builtin", str_join(fields, ""), ret, span);
     }
     co_stopped(lo, "a call through a value")
+}
+
+// A constant's use (`const_value`): its value as a literal of its type, at the name; a static
+// `Atomic`'s, its cell.
+fn co_const_use(lo: Lo, u: Int, name: Str, span: Int) -> Str {
+    let c = lo.c;
+    if ck_const_agg(c, u) { return co_stopped(lo, "a constant of a record, enum, tuple or array type"); }
+    let ty = ck_const_ty(c, u);
+    if ck_const_cell(c, u) {
+        let key = str_concat(str_concat(fx_module_identity(lo.f, co_g(lo, co_s_module())), "::static "), name);
+        let id = co_cell_constant(lo, name, key);
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, span);
+    }
+    let class = ck_type_class(c, ty);
+    let mut id = 0 - 1;
+    if class == "int" { id = co_constant(lo, "Int", int_to_str(ck_const_int(c, u))); }
+    if class == "bool" {
+        if ck_const_int(c, u) == 1 { id = co_constant(lo, "Bool", "true"); } else { id = co_constant(lo, "Bool", "false"); }
+    }
+    if class == "str" {
+        let v = ck_const_text(c, u);
+        if co_plain_text(v) == false { return co_stopped(lo, "a string literal that is not plain ASCII"); }
+        id = co_constant(lo, "Str", json_str(v));
+    }
+    if class == "integer" { id = co_constant(lo, co_durable(lo, ty), json_str(ck_const_text(c, u))); }
+    if id < 0 { return co_stopped(lo, "a constant of a type not carried yet"); }
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, span)
+}
+
+// A numeric conversion (`conversion`): `convert` in its mode; `try_convert[T](x)` as
+// `{ let c = x; if fits(c) { Some(T(c)) } else { None } }`; at the call.
+fn co_conversion(lo: Lo, e: Int, cv: Int) -> Str {
+    let t = lo.t;
+    let c = lo.c;
+    let at = sx_field(t, e, "span");
+    let to = ck_conv_to(c, cv);
+    let mode = ck_conv_mode(c, cv);
+    let args = sx_items(t, sx_field(t, e, "args"));
+    if ints_len(args) == 0 { return co_stopped(lo, "a conversion with no argument"); }
+    if ck_type_class(c, to) == "text" { return co_stopped(lo, "a conversion to `Text`"); }
+    let operand = co_expr(lo, ints_get(args, 0));
+    let from = co_last_ty(lo);
+    if co_halted(lo) { return ""; }
+    if mode != "try" {
+        let fields = strs_new();
+        strs_push(fields, co_field_first("mode", json_str(mode)));
+        strs_push(fields, co_field("operand", operand));
+        return co_node(lo, "convert", str_join(fields, ""), to, at);
+    }
+    if from < 0 { return operand; }
+    let result = ck_conv_result(c, cv);
+    let none = ck_variant_named(c, result, "None");
+    let some = ck_variant_named(c, result, "Some");
+    if none < 0 || some < 0 { return co_stopped(lo, "an `Option` without `None` and `Some`"); }
+    let local = co_temp(lo, "convert", from, at);
+    let tf = strs_new();
+    strs_push(tf, co_field_first("to", json_str(co_durable(lo, to))));
+    strs_push(tf, co_field("operand", co_read(lo, local, at)));
+    let test = co_node(lo, "fits", str_join(tf, ""), ck_t_bool(), at);
+    let cf = strs_new();
+    strs_push(cf, co_field_first("mode", json_str("exact")));
+    strs_push(cf, co_field("operand", co_read(lo, local, at)));
+    let converted = co_node(lo, "convert", str_join(cf, ""), to, at);
+    let init = strs_new();
+    strs_push(init, co_field_first("field", "0"));
+    strs_push(init, co_field("name", json_str(ck_payload_name(c, result, some, 0))));
+    strs_push(init, co_field("value", converted));
+    let inits = strs_new();
+    strs_push(inits, co_object(init));
+    let somev = co_variant_value(lo, result, some, inits, at);
+    let nonev = co_variant_value(lo, result, none, strs_new(), at);
+    let choice = co_conditional(lo, test, somev, nonev, result, at);
+    let stmts = strs_new();
+    strs_push(stmts, co_let(local, operand));
+    let block = co_block_json(lo, false, co_list_one(int_to_str(local)), stmts, choice, at);
+    co_node(lo, "block", co_field_first("body", block), result, at)
+}
+
+// A variant of enum type `et` built of the printed fields `inits`, at `at`.
+fn co_variant_value(lo: Lo, et: Int, v: Int, inits: Strs, at: Int) -> Str {
+    let members = strs_new();
+    strs_push(members, co_field_first("variant", int_to_str(v)));
+    strs_push(members, co_field("name", json_str(ck_variant_name(lo.c, et, v))));
+    strs_push(members, co_field("arity", int_to_str(strs_len(inits))));
+    strs_push(members, co_field("fields", co_list(inits)));
+    co_node(lo, "variant", str_join(members, ""), et, at)
 }
 
 // A generic call's settled type arguments, by their durable names.
