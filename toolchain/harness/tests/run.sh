@@ -99,6 +99,14 @@ compare_tests() {
             note_differ "nzcg did not build: $(grep -m1 error "$log/nzcg.out")"
         fi
     fi
+    # The harness's native tool for documents too large for the interpreted leg (design decision
+    # 16), built once by the release that builds the harness.
+    if "$HARNESS_NAZM" build "$here/tools/jtool.nz" -o "$log/jtool" >"$log/jtool.out" 2>&1; then
+        export NAZM_HARNESS_JTOOL=$log/jtool
+    else
+        note_differ "jtool did not build: $(grep -m1 error "$log/jtool.out")"
+    fi
+    export NAZM_HARNESS_BUILDER=$HARNESS_NAZM
     # The harness's own tests: the library and the mutation core.
     for t in "$here"/tests/*_self.nz; do
         local own

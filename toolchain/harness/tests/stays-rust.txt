@@ -14,6 +14,16 @@ cranelift::the_same_mir_gives_the_same_object_bytes  library entry
 cranelift::a_cache_key_moves_with_every_setting_that_changes_the_code_and_only_those  library entry
 cross::inspect_names_every_target_and_what_this_host_makes_of_it  library entry
 domain_profiles::each_domain_profile_is_its_composition  table not printed
+durable_identity::a_dependent_checks_against_a_deserialised_interface_with_the_dependency_deleted  stage R2-R3 replace
+durable_identity::a_fingerprint_is_the_algorithm_and_the_digest  library entry
+durable_identity::a_dependent_checks_records_against_a_deserialised_interface_with_the_dependency_deleted  stage R2-R3 replace
+durable_identity::a_dependent_checks_enums_against_a_deserialised_interface_with_the_dependency_deleted  stage R2-R3 replace
+durable_identity::a_dependent_checks_generic_apis_against_a_deserialised_interface_with_the_dependency_deleted  stage R2-R3 replace
+durable_identity::a_call_checked_against_an_interface_alone_records_the_interfaces_signature  stage R2-R3 replace
+durable_identity::structure_checked_against_an_interface_alone_carries_its_fields_and_variants  stage R2-R3 replace
+durable_identity::a_dependent_derives_equality_from_a_deserialised_interface_with_the_dependency_deleted  stage R2-R3 replace
+durable_identity::a_dependent_is_held_to_a_requirement_read_from_a_deserialised_interface  stage R2-R3 replace
+durable_identity::a_128_bit_constant_reads_back_from_its_interface_whole  stage R2-R3 replace
 freestanding::the_board_runtime_has_no_thread_local_storage_and_no_c_library  LLVM text not written
 realtime::the_watermark_is_the_board_s  LLVM text not written
 prelude::a_dependent_checks_propagation_from_persisted_interfaces_with_the_dependency_deleted  stage R2-R3 replace
@@ -23,3 +33,34 @@ reexports::the_persisted_interface_names_the_defining_identity_and_suffices_alon
 repository::the_map_and_every_answer_are_one_object_on_stdout_with_their_exit_status  library entry
 resolved_units::references_agree_with_the_language_service_over_the_same_saved_compilation  library entry
 summary::the_check_summary_the_mcp_server_gives_is_nazm_check_s_with_or_without_its_cache  library entry
+mir::every_construct_lowers_to_mir_the_validator_accepts  stage R2-R3 replace
+mir::concurrency_lowers_to_scope_primitives_and_every_exit_joins  stage R2-R3 replace
+mir::a_function_in_a_call_cycle_checks_its_stack_first_and_no_other_does  stage R2-R3 replace
+mir::generic_functions_are_instances_in_mir  stage R2-R3 replace
+mir::lowering_twice_gives_the_same_mir  stage R2-R3 replace
+mir::the_validator_refuses_a_jump_to_a_block_that_does_not_exist  stage R2-R3 replace
+mir::the_validator_refuses_a_local_of_the_wrong_type  stage R2-R3 replace
+mir::the_validator_refuses_a_call_with_the_wrong_arguments  stage R2-R3 replace
+mir::the_validator_refuses_a_payload_read_outside_its_arm  stage R2-R3 replace
+mir::the_validator_refuses_a_primitive_with_a_bad_signature  stage R2-R3 replace
+mir::the_validator_refuses_a_leak_at_return  stage R2-R3 replace
+mir::the_validator_refuses_a_use_after_move  stage R2-R3 replace
+mir::the_validator_refuses_a_fallible_operation_without_a_failure_edge  stage R2-R3 replace
+mir::the_validator_refuses_a_switch_that_misses_a_variant  stage R2-R3 replace
+mir::the_validator_refuses_a_scope_left_without_its_join  stage R2-R3 replace
+mir::the_validator_refuses_dropping_a_parameter  stage R2-R3 replace
+mir::formatting_comments_and_local_names_leave_the_executable_digest_alone  stage R2-R3 replace
+mir::an_executable_change_moves_the_digest  stage R2-R3 replace
+mir::an_effect_only_change_leaves_the_executable_digest_alone  stage R2-R3 replace
+mir::a_capability_parameter_change_moves_the_digest  stage R2-R3 replace
+mir::an_unrelated_function_leaves_a_digest_alone  stage R2-R3 replace
+mir::a_large_function_lowers_in_time_proportional_to_its_size  stage R2-R3 replace
+mir::a_large_program_lowers_in_time_proportional_to_its_size  stage R2-R3 replace
+mir::deep_nesting_lowers_without_new_recursion_limits  stage R2-R3 replace
+mir::a_large_match_lowers_linearly  stage R2-R3 replace
+mir::the_validator_refuses_broken_arrays_indexes_and_conversions  stage R2-R3 replace
+mir::the_validator_refuses_a_leaked_array_of_strings  stage R2-R3 replace
+fuzz_replay::the_front_end_corpus_replays_without_a_panic  stage R2-R3 replace
+fuzz_replay::the_lowering_corpus_replays_and_its_mir_verifies  stage R2-R3 replace
+fuzz_replay::the_interpreter_corpus_replays_within_its_budgets  stage R2-R3 replace
+fuzz_replay::the_manifest_corpus_replays_without_a_panic  library entry
