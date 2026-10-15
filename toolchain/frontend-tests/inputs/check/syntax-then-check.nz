@@ -1,0 +1,13 @@
+enum Light { Red, Amber, Green }
+fn f() -> Int { true }
+fn g() -> Int { let x = ; 1 }
+fn h(l: Light) -> Int {
+    let s = Opt.None;
+    match l {
+        Red => 0,
+        _ => 1,
+    }
+}
+fn main() -> Int {
+    g() + k()
+}
