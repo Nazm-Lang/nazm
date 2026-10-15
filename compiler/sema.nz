@@ -204,6 +204,10 @@ pub struct Ck {
     // The constants the module being checked may name, and each one's kind (`k_int` and on).
     kname: Strs,
     kkind: Ints,
+    // Each constant's value beside its kind: an `Int`'s or a `Bool`'s as `kint`, any other
+    // number's or a `Str`'s as `kstr` (a float's is "").
+    kint: Ints,
+    kstr: Strs,
     // What each module exports of its constants (L8), once its stage 1b has run (`mexp`): the
     // module, the name, the kind and the value.
     mexp: Ints,
@@ -347,6 +351,18 @@ pub struct Ck {
     mvty: Smap,
     mvix: Smap,
     minit: Smap,
+    // What Core IR reads of a name that is a constant (`const_use`, `static_cell`): its value, by
+    // the name's span — an index into `uk`, `ui`, `us` (its kind and value, as `kint` and `kstr`
+    // hold them) — and of a conversion (`NumericFact::Convert`), by the callee's span: an index
+    // into `cvto`, `cvmode`, `cvres` (the type converted to, how, and what the call produces).
+    mconst: Smap,
+    uk: Ints,
+    ui: Ints,
+    us: Strs,
+    mconv: Smap,
+    cvto: Ints,
+    cvmode: Strs,
+    cvres: Ints,
     // Per call site, a generic call's settled type arguments (a run of `sargs`) and the result
     // type the checker formed for it (`type_args`, `checked_call`'s instance); -1 for none.
     sargf: Ints,
@@ -1395,7 +1411,7 @@ fn new_ck(t: Tree) -> Ck {
             pargs: ints_new(), cells: ints_new(), w: dg_new(), mstd: ints_new(), dfirst: ints_new(), dcount: ints_new(), don: ints_new(),
             dats: ints_new(), date: ints_new(), dplain: ints_new(), dimplicit: ints_new(), daf: ints_new(), dac: ints_new(), aname: strs_new(), aats: ints_new(),
             aate: ints_new(), fnpub: ints_new(), envname: strs_new(), envfn: ints_new(), alname: strs_new(), almod: ints_new(),
-            taliases: strs_new(), kname: strs_new(), kkind: ints_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
+            taliases: strs_new(), kname: strs_new(), kkind: ints_new(), kint: ints_new(), kstr: strs_new(), mexp: ints_new(), xmod: ints_new(), xname: strs_new(),
             xkind: ints_new(), xint: ints_new(), xstr: strs_new(), fnclos: ints_new(), cfid: ints_new(), cfbound: ints_new(),
             capf: ints_new(), capb: ints_new(), sind: ints_new(), sspawn: ints_new(), vfn: ints_new(), vstart: ints_new(), vend: ints_new(), vassumed: ints_new(),
             trname: strs_new(), trmod: ints_new(), trns: ints_new(), trne: ints_new(), trpub: ints_new(), trmf: ints_new(), trmc: ints_new(),
@@ -1407,7 +1423,8 @@ fn new_ck(t: Tree) -> Ck {
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
-            minit: sm_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
+            minit: sm_new(), mconst: sm_new(), uk: ints_new(), ui: ints_new(), us: strs_new(), mconv: sm_new(), cvto: ints_new(),
+            cvmode: strs_new(), cvres: ints_new(), sargf: ints_new(), sargc: ints_new(), sargs: ints_new(), sret: ints_new());
     let mut i = 0;
     while i < s_slots() {
         ints_push(c.st, 0);
@@ -5921,7 +5938,13 @@ fn check_var_named(c: Ck, name: Str, span: Int, expected: Int) -> Int {
     }
     // A constant (Gate 2): its type.
     let k = strs_find(c.kname, name);
-    if k >= 0 { return kind_type(c, ints_get(c.kkind, k)); }
+    if k >= 0 {
+        ints_push(c.uk, ints_get(c.kkind, k));
+        ints_push(c.ui, ints_get(c.kint, k));
+        strs_push(c.us, strs_get(c.kstr, k));
+        sm_put(c.mconst, sps(c, span), spe(c, span), ints_len(c.uk) - 1);
+        return kind_type(c, ints_get(c.kkind, k));
+    }
     let callee = callee_of(c, name);
     if callee != 0 - 1 { return function_value(c, name, callee, span, expected); }
     if starts_upper(name) && ints_len(variant_owners(c, name)) > 0 {
@@ -6995,12 +7018,21 @@ fn check_conversion(c: Ck, name: Str, at: Int, has_targs: Bool, targs: Int, args
             }
         }
     }
+    let mut mode = "exact";
+    if name == "try_convert" { mode = "try"; }
+    if name == "wrap_convert" { mode = "wrap"; }
+    if name == "saturate_convert" { mode = "saturate"; }
+    let mut result = to;
     if name == "try_convert" {
         let a = ints_new();
         ints_push(a, to);
-        return enum_ty(c, declared_enum(c, prelude(c), "Option"), a);
+        result = enum_ty(c, declared_enum(c, prelude(c), "Option"), a);
     }
-    to
+    ints_push(c.cvto, to);
+    strs_push(c.cvmode, mode);
+    ints_push(c.cvres, result);
+    sm_put(c.mconv, sps(c, at), spe(c, at), ints_len(c.cvto) - 1);
+    result
 }
 
 fn is_conversion(name: Str) -> Bool {
@@ -10572,12 +10604,16 @@ fn const_environment(c: Ck, m: Int) -> Int {
     while strs_len(c.kname) > 0 {
         strs_pop(c.kname);
         ints_pop(c.kkind);
+        ints_pop(c.kint);
+        strs_pop(c.kstr);
     }
     let ev = evaluate_consts(c, m, dg_new(), true);
     let mut i = 0;
     while i < strs_len(ev.names) {
         strs_push(c.kname, strs_get(ev.names, i));
         ints_push(c.kkind, ints_get(ev.kinds, i));
+        ints_push(c.kint, ints_get(ev.ints, i));
+        strs_push(c.kstr, strs_get(ev.strs, i));
         i = i + 1;
     }
     // Its static `Atomic`s, after its values: a name is a value's before it is a cell's.
@@ -10586,6 +10622,8 @@ fn const_environment(c: Ck, m: Int) -> Int {
         if strs_find(c.kname, strs_get(ev.cells, i)) < 0 {
             strs_push(c.kname, strs_get(ev.cells, i));
             ints_push(c.kkind, k_atomic());
+            ints_push(c.kint, 0);
+            strs_push(c.kstr, "");
         }
         i = i + 1;
     }
@@ -14147,6 +14185,21 @@ pub fn ck_seq_kind(c: Ck, t: Int) -> Str {
     ""
 }
 pub fn ck_type_arg(c: Ck, t: Int, i: Int) -> Int { targ(c, t, i) }
+// The constant a name written at `s..e` (absolute) is, or -1: its kind's type, and its value —
+// `ck_const_int` for an `Int` or a `Bool` (1 for `true`), `ck_const_text` for any other number
+// or a `Str` ("" for a float); an `Atomic`'s is a cell.
+pub fn ck_const_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mconst, s, e) }
+pub fn ck_const_ty(c: Ck, u: Int) -> Int { kind_type(c, ints_get(c.uk, u)) }
+pub fn ck_const_cell(c: Ck, u: Int) -> Bool { ints_get(c.uk, u) == k_atomic() }
+pub fn ck_const_agg(c: Ck, u: Int) -> Bool { k_is_agg(ints_get(c.uk, u)) }
+pub fn ck_const_int(c: Ck, u: Int) -> Int { ints_get(c.ui, u) }
+pub fn ck_const_text(c: Ck, u: Int) -> Str { strs_get(c.us, u) }
+// The conversion whose callee is written at `s..e` (absolute), or -1: the type converted to, its
+// mode (`exact`, `try`, `wrap`, `saturate`) and what the call produces.
+pub fn ck_conv_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mconv, s, e) }
+pub fn ck_conv_to(c: Ck, k: Int) -> Int { ints_get(c.cvto, k) }
+pub fn ck_conv_mode(c: Ck, k: Int) -> Str { strs_get(c.cvmode, k) }
+pub fn ck_conv_result(c: Ck, k: Int) -> Int { ints_get(c.cvres, k) }
 // Whether a type is a tuple, and the type of payload field `i` of variant `v` of an enum type,
 // its arguments substituted.
 pub fn ck_is_tuple(c: Ck, t: Int) -> Bool { is_tuple(c, t) }
