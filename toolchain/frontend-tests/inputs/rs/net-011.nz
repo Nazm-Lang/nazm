@@ -1,7 +1,4 @@
-fn main(net: NetCap, io: IoCap) -> Int ! { io } {
-let u = os_udp_bind("127.0.0.1:0");
-let b = bytes_new(64);
-let f = bytes_new(64);
-os_udp_recv_from(u, b, f);
-write_file(bytes_to_str(b), "x")
-}
+use "@std/ioerror";
+use "@std/net";
+fn reply(s: TcpStream) -> Int ! { io } { match tcp_write_str(s, "hi") { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, } }
+fn main() -> Int { 0 }

@@ -1,35 +1,29 @@
-fn reader(l: OsHandle, done: Chan) -> Int {
-let c = os_tcp_accept(l);
-let buf = bytes_new(8);
-let n = os_read(c, buf);
-os_close(c);
-chan_send(done, n);
-0
-}
-fn busy(result: Chan) -> Int {
-let mut i = 0;
-let mut s = 0;
-while i < 100000 { s = s + i % 7; i = i + 1; }
-chan_send(result, s);
+fn hang_up(l: TcpListener) -> Int ! { io } {
+match tcp_accept(l) { Result.Ok(value: c) => { tcp_close(c); }, Result.Err(error: e) => {}, };
 0
 }
 fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
-let l = os_tcp_listen("127.0.0.1:0");
-let addr = os_local_addr(l);
-let done = chan_new(16);
-let result = chan_new(1);
-let got = ints_new();
-let one = ints_new();
-scope {
-let mut k = 0;
-while k < 8 { spawn reader(l, done); k = k + 1; }
-spawn busy(result);
-chan_recv(result, got);
-let mut j = 0;
-while j < 8 { let c = os_tcp_connect(addr, 2000); os_write(c, bytes_from_str("x")); j = j + 1; }
-let mut m = 0;
-while m < 8 { chan_recv(done, one); m = m + 1; }
+match tcp_listen(net, "127.0.0.1:0") {
+Result.Ok(value: l) => {
+match tcp_connect(net, tcp_listener_addr(l), 2000) {
+Result.Ok(value: c) => {
+scope { spawn hang_up(l); }
+let data = bytes_from_str("0123456789abcdef");
+let buf = bytes_new(1);
+tcp_set_timeout(c, 5);
+let mut tries = 0;
+let mut failed = false;
+while tries < 400 && !failed {
+match tcp_write(c, data) { Result.Ok(value: n) => {}, Result.Err(error: e) => { failed = true; }, };
+tcp_read(c, buf);
+tries = tries + 1;
 }
-print(str_concat(int_to_str(ints_get(got, 0)), str_concat(" ", int_to_str(ints_len(one)))));
+line(out, if failed { "the write failed, and the program goes on" } else { "every write went" });
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
 0
 }

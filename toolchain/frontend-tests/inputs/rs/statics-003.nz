@@ -1,2 +1,2 @@
-static A: Atomic = atomic_new(1);
-fn main() -> Int { A = atomic_new(2); 0 }
+static A: Int = 1;
+fn main() -> Int { A = 2; 0 }

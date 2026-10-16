@@ -1,0 +1,32 @@
+fn opt(o: Option[Str]) -> Str { match o { Option.Some(value: v) => str_concat("=", v), Option.None() => "none", } }
+fn url(out: OutCap, s: Str) -> Int {
+line(out, match http_url_parse(s) { Result.Ok(value: u) => str_concat(str_concat(str_concat(u.scheme, " "), str_concat(u.host, " ")), str_concat(str_concat(int_to_str(u.port), " "), u.target)), Result.Err(error: e) => http_error_show(e), })
+}
+fn main(out: OutCap) -> Int {
+let h = http_header_add(http_header_add(http_header_add(http_headers(), "Connection", " keep-alive, Close "), "X", "1"), "x", "2");
+line(out, int_to_str(http_header_count(h)));
+line(out, str_concat(http_header_name_at(h, 0), str_concat(":", http_header_value_at(h, 0))));
+line(out, str_join(http_header_all(h, "X"), ","));
+line(out, opt(http_header_get(h, "CONNECTION")));
+line(out, if http_header_has_token(h, "connection", "close") { "close" } else { "open" });
+line(out, int_to_str(http_header_count(http_header_remove(h, "x"))));
+line(out, str_concat(http_header_name_at(h, 9), opt(http_header_get(Headers(lines: "broken"), "broken"))));
+let r = http_request("GET", "/s?a=1&b=x+y%21&c&a=2&d=%zz", "");
+line(out, str_join(strs_of(opt(http_query(r, "a")), opt(http_query(r, "b")), opt(http_query(r, "c"))), " "));
+line(out, str_concat(opt(http_query(r, "d")), opt(http_query(r, "e"))));
+line(out, str_concat(opt(http_percent_decode("a%2Fb%2")), opt(http_percent_decode("%41%62"))));
+line(out, opt(http_param(Request(method: "", target: "", path: "", query: "", version: "", headers: http_headers(), body: "", params: "9:x", peer: ""), "x")));
+url(out, "http://example.org");
+url(out, "HTTPS://example.org:8443/a?b");
+url(out, "http://[::1]:8080?q");
+url(out, "http://127.0.0.1:0/");
+url(out, "http://u@h/");
+url(out, "http://h/#f");
+url(out, "ftp://h/");
+url(out, "http://h:/");
+url(out, "http:///x");
+url(out, "http://[::1/");
+line(out, http_reason(431));
+0
+}
+fn strs_of(a: Str, b: Str, c: Str) -> Strs { let s = strs_new(); strs_push(s, a); strs_push(s, b); strs_push(s, c); s }

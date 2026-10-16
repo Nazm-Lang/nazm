@@ -1,0 +1,5 @@
+fn main(): Int {
+    let v = vec_new[Int]()
+    vec_push(v, 1)
+    v.len()
+}

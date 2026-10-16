@@ -1,0 +1,1 @@
+fn main(m: MmioCap) -> Int ! {} { let x = 2.5; Int(x) }

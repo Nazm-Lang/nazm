@@ -1,1 +1,15 @@
-fn main() -> Int { "not an Int" }
+pub extern "C" fn nz_triple(x: Int) -> Int ! {} = "nz_triple" { x * 3 }
+static COUNT: Atomic = atomic_new(7);
+trait Size {
+    fn size(self: Self) -> Int;
+    fn twice(self: Self) -> Int { self.size() * 2 }
+}
+struct Holder[T] { item: T, n: Int, }
+impl[T] Size for Holder[T] { fn size(self: Holder[T]) -> Int { self.n } }
+pub fn sum(a: [Int; 3]) -> Int { a[0] + a[1] + a[2] }
+fn main() -> Int {
+    let k = 10;
+    let add = fn(x: Int) -> Int { x + k };
+    let h = Holder[Str](item: "s", n: 4);
+    add(sum([1, 2, 3])) + h.twice() + nz_triple(1) + atomic_load(COUNT)
+}

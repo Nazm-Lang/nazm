@@ -1,0 +1,13 @@
+fn greet(name: Str) {
+    println(f"hello {name}")
+}
+
+fn twice(name: Str) {
+    greet(name)
+    greet(name)
+}
+
+fn main(out: OutCap): Int ! {io} {
+    twice("nazm")
+    0
+}

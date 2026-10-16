@@ -1,0 +1,11 @@
+fn parse(s: Str): Result[Int, Str] {
+    if s == "x" { Err("bad") } else { Ok(5) }
+}
+
+fn main() {
+    let r = parse("x")
+    let o: Option[Int] = None
+    println(f"{r.unwrap_or(1)} {o.unwrap_or(0)} {parse("y").unwrap_or(1)}")
+    println(f"{r.is_err()} {r.is_ok()} {o.is_none()} {parse("y").ok().is_some()}")
+    println(option_unwrap_or(r.err(), "none"))
+}

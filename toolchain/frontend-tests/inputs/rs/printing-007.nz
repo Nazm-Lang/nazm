@@ -1,0 +1,2 @@
+use "lib:say.nz";
+fn main() -> Int { say() }

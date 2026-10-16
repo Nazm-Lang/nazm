@@ -1,29 +1,33 @@
-fn kind_of_listen(net: NetCap, a: Str) -> Str ! { io } {
-match tcp_listen(net, a) { Result.Ok(value: l) => "listening", Result.Err(error: e) => io_kind_name(e.kind), }
+fn twenty(u: UdpSocket, tm: TimeCap) -> Str ! { io } {
+let buf = bytes_new(4);
+let t0 = time_now_ms();
+let mut timed_out = 0;
+let mut i = 0;
+while i < 20 {
+match udp_recv_from(u, buf) { Result.Ok(value: d) => {}, Result.Err(error: e) => { if io_kind_name(e.kind) == "TimedOut" { timed_out = timed_out + 1; } }, };
+i = i + 1;
 }
-fn main(net: NetCap, out: OutCap) -> Int {
-match tcp_listen(net, "127.0.0.1:0") {
-Result.Ok(value: l) => {
-let addr = tcp_listener_addr(l);
-line(out, kind_of_listen(net, addr));
-tcp_listener_set_timeout(l, 50);
-line(out, match tcp_accept(l) { Result.Ok(value: c) => "accepted", Result.Err(error: e) => io_kind_name(e.kind), });
-tcp_listener_close(l);
-line(out, match tcp_connect(net, addr, 2000) { Result.Ok(value: c) => "connected", Result.Err(error: e) => io_kind_name(e.kind), });
-line(out, match tcp_accept(l) { Result.Ok(value: c) => "accepted", Result.Err(error: e) => io_kind_name(e.kind), });
+let took = time_now_ms() - t0;
+str_concat(int_to_str(timed_out), if took < 1000 { " in time" } else { str_concat(" late: ", int_to_str(took)) })
+}
+fn on_a_task(u: UdpSocket, tm: TimeCap, answer: Chan[Str]) -> Int ! { io } {
+chan_send_of(answer, twenty(u, tm));
+0
+}
+fn main(net: NetCap, t: SpawnCap, tm: TimeCap, out: OutCap) -> Int {
+match udp_bind(net, "127.0.0.1:0") {
+Result.Ok(value: u) => {
+udp_set_timeout(u, 1);
+line(out, twenty(u, tm));
+let answer = chan_new_of[Str](1);
+let v = vec_new[Str]();
+scope {
+spawn on_a_task(u, tm, answer);
+if chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, "no answer"); };
+}
+udp_close(u);
 },
 Result.Err(error: e) => { line(out, io_error_show(e)); },
 };
-line(out, kind_of_listen(net, "localhost:80"));
-line(out, kind_of_listen(net, "127.0.0.1:65536"));
-line(out, kind_of_listen(net, "[127.0.0.1]:80"));
-line(out, kind_of_listen(net, "127.0.0.1"));
-line(out, match net_resolve(net, "127.0.0.1", 8080) { Result.Ok(value: all) => str_join(all, ","), Result.Err(error: e) => io_kind_name(e.kind), });
-line(out, match net_resolve(net, "localhost", 7) { Result.Ok(value: all) => if strs_contains_any(all, "127.0.0.1:7") { "localhost" } else { str_join(all, ",") }, Result.Err(error: e) => io_kind_name(e.kind), });
 0
-}
-fn strs_contains_any(xs: Strs, x: Str) -> Bool {
-let mut i = 0;
-while i < strs_len(xs) { if strs_get(xs, i) == x { return true; } i = i + 1; }
-false
 }

@@ -1,0 +1,6 @@
+fn main(out: OutCap) -> Int ! {io} {
+    let s = "a" + "b"
+    let t = s
+    print(t + "\n")
+    down(3)
+}

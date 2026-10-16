@@ -1,0 +1,12 @@
+use std.file
+
+fn main(io: IoCap) ! { io } {
+    match file_canonical(io, "sub/..") {
+        Ok(p) => print("found\n"),
+        Err(e) => print("refused\n"),
+    }
+    match file_canonical(io, "missing") {
+        Ok(p) => print("wrong\n"),
+        Err(e) => print("missing\n"),
+    }
+}

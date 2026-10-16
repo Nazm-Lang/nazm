@@ -1,4 +1,1 @@
-use "@std/ioerror";
-use "@std/net";
-fn reply(s: TcpStream) -> Int ! { io } { match tcp_write_str(s, "hi") { Result.Ok(value: n) => n, Result.Err(error: e) => 0 - 1, } }
-fn main() -> Int { 0 }
+fn main(io: IoCap) -> Int ! { io } { os_resolve("localhost", 1, bytes_new(64)) }

@@ -1,1 +1,1 @@
-fn main() -> Int { let fs = list_empty[fn() -> Int](); let f = fn() -> Int { list_len(fs) }; f() }
+fn main() -> Int { let fs = chain_empty[fn() -> Int](); let f = fn() -> Int { chain_len(fs) }; f() }

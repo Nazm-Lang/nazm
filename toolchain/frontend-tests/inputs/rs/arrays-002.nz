@@ -5,7 +5,7 @@ fn worker(c: Chan[Int], xs: [Int; 3]) -> Int ! {spawn} {
 }
 
 fn main(out: OutCap, s: SpawnCap) -> Int ! {io, spawn} {
-    let mut xs = [1, 2, 3];
+    let mut xs: [Int; 3] = [1, 2, 3];
     let c = chan_new_of[Int](1);
     scope { spawn worker(c, xs); }
     xs[0] = 100;

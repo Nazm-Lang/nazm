@@ -1,0 +1,23 @@
+fn show(s: Str, sep: Str) {
+    let mut out = ""
+    let mut n = 0
+    for w in s.split(sep) {
+        out = out + "[" + w + "]"
+        n += 1
+        if w == "stop" { break }
+        if w == "skip" { continue }
+    }
+    println(f"{n} {out}")
+}
+
+fn main() {
+    show("a b  c", " ")
+    show("", " ")
+    show(" ", " ")
+    show("abc", "")
+    show("a--b--", "--")
+    show("a-b--c-", "--")
+    show("x skip y stop z", " ")
+    for w in text_split("p,q", ",") { print(w) }
+    println("")
+}

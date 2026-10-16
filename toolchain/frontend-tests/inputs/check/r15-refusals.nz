@@ -1,0 +1,22 @@
+// R1.5's refusals (6.1): a `pub` function, a method and a recursive one leaving their result type
+// to an expression body (N0634), a short closure's untyped parameter with no type to take
+// (N0635), a variant without its enum that two enums have (N0636), an R1a `list_` built-in
+// renamed (N0637).
+enum A { Same, Other }
+enum B { Same, Third }
+
+struct S { n: Int }
+
+pub fn exported(n: Int) = n + 1
+
+fn again(n: Int) = if n == 0 { 0 } else { again(n - 1) }
+
+trait T { fn get(self: Self): Int; }
+impl T for S { fn get(self: S) = self.n }
+
+fn main() -> Int {
+    let f = |x| x + 1
+    let v = Same
+    let c = list_empty[Int]()
+    0
+}

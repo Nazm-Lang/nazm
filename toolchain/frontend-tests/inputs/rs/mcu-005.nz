@@ -1,0 +1,2 @@
+fn half(x: Float32) -> Float32 { x / Float32(2) }
+fn main(m: MmioCap) -> Int ! {} { Int(half(Float32(9))) }

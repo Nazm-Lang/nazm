@@ -1,0 +1,7 @@
+fn option_unwrap_or(o: Option[Int], fallback: Int): Int = 42
+
+fn main() {
+    let o: Option[Int] = None
+    let r: Result[Int, Int] = Err(2)
+    println(f"{o.unwrap_or(0)} {r.unwrap_or(3)}")
+}

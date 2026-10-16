@@ -1,29 +1,29 @@
-fn wait_for_data(c: TcpStream, ready: Chan, answer: Chan[Str]) -> Int ! { io } {
-chan_send(ready, 1);
-let buf = bytes_new(8);
-chan_send_of(answer, match tcp_read(c, buf) { Result.Ok(value: n) => int_to_str(n), Result.Err(error: e) => io_kind_name(e.kind), });
-0
+fn kind_of_listen(net: NetCap, a: Str) -> Str ! { io } {
+match tcp_listen(net, a) { Result.Ok(value: l) => "listening", Result.Err(error: e) => io_kind_name(e.kind), }
 }
-fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int {
+fn main(net: NetCap, out: OutCap) -> Int {
 match tcp_listen(net, "127.0.0.1:0") {
 Result.Ok(value: l) => {
-match tcp_connect(net, tcp_listener_addr(l), 2000) {
-Result.Ok(value: c) => {
-let ready = chan_new(1);
-let answer = chan_new_of[Str](1);
-let r = ints_new();
-let v = vec_new[Str]();
-scope {
-spawn wait_for_data(c, ready, answer);
-chan_recv(ready, r);
-tcp_close(c);
-if chan_recv_of(answer, v) { line(out, vec_get(v, 0)); } else { line(out, "no answer"); };
-}
+let addr = tcp_listener_addr(l);
+line(out, kind_of_listen(net, addr));
+tcp_listener_set_timeout(l, 50);
+line(out, match tcp_accept(l) { Result.Ok(value: c) => "accepted", Result.Err(error: e) => io_kind_name(e.kind), });
+tcp_listener_close(l);
+line(out, match tcp_connect(net, addr, 2000) { Result.Ok(value: c) => "connected", Result.Err(error: e) => io_kind_name(e.kind), });
+line(out, match tcp_accept(l) { Result.Ok(value: c) => "accepted", Result.Err(error: e) => io_kind_name(e.kind), });
 },
 Result.Err(error: e) => { line(out, io_error_show(e)); },
 };
-},
-Result.Err(error: e) => { line(out, io_error_show(e)); },
-};
+line(out, kind_of_listen(net, "localhost:80"));
+line(out, kind_of_listen(net, "127.0.0.1:65536"));
+line(out, kind_of_listen(net, "[127.0.0.1]:80"));
+line(out, kind_of_listen(net, "127.0.0.1"));
+line(out, match net_resolve(net, "127.0.0.1", 8080) { Result.Ok(value: all) => str_join(all, ","), Result.Err(error: e) => io_kind_name(e.kind), });
+line(out, match net_resolve(net, "localhost", 7) { Result.Ok(value: all) => if strs_contains_any(all, "127.0.0.1:7") { "localhost" } else { str_join(all, ",") }, Result.Err(error: e) => io_kind_name(e.kind), });
 0
+}
+fn strs_contains_any(xs: Strs, x: Str) -> Bool {
+let mut i = 0;
+while i < strs_len(xs) { if strs_get(xs, i) == x { return true; } i = i + 1; }
+false
 }

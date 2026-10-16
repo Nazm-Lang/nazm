@@ -1,2 +1,2 @@
-enum E { Leaf, Pair(a: Box[E], b: List[E]), }
+enum E { Leaf, Pair(a: Box[E], b: Chain[E]), }
 fn main() -> Int { 0 }

@@ -1,0 +1,1 @@
+fn main() -> Int { let static = 2; static * 21 - 42 }

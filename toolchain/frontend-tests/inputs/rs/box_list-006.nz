@@ -1,3 +1,3 @@
-struct W[T] { items: List[T], }
+struct W[T] { items: Chain[T], }
 struct Node { w: W[Node], }
 fn main() -> Int { 0 }

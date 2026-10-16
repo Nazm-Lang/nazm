@@ -1,0 +1,4 @@
+fn main(): Int {
+    let o: Option[Int] = None
+    o.unwrap_or(3)
+}

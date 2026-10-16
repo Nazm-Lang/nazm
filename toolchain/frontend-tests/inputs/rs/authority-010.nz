@@ -1,2 +1,2 @@
-fn helper() -> Int { print("x\n"); 0 }
+fn helper() -> Int { write_file("f", "x") }
 fn main(io: IoCap) -> Int ! {io} { helper() }

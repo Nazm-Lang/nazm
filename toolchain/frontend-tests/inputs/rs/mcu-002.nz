@@ -1,0 +1,1 @@
+fn board_start(m: MmioCap, n: Int) -> Int ! {}

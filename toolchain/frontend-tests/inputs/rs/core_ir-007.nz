@@ -1,0 +1,7 @@
+fn two(x: Int) -> Int { x * 2 }
+fn main() -> Int {
+    match Option.Some(value: two(3)) {
+        Option.Some(value: v) => v,
+        Option.None() => 0,
+    }
+}

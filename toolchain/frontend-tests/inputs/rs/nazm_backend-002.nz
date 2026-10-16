@@ -1,0 +1,6 @@
+fn work(n: Int) -> Int { n * 2 }
+fn main(tasks: SpawnCap, out: OutCap) -> Int {
+    scope { spawn work(3); }
+    println(7)
+    0
+}

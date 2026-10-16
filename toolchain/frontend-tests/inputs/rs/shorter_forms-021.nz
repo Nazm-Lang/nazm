@@ -1,0 +1,2 @@
+pub fn say(s: Str) { println(s) }
+pub fn shout(io: IoCap, s: Str) { println(s) }

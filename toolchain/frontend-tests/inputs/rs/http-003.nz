@@ -1,0 +1,22 @@
+fn case(out: OutCap, raw: Str, method: Str) -> Int {
+line(out, match http_parse_response(wire(raw), method, http_client_options()) {
+Result.Ok(value: r) => str_concat(str_concat(int_to_str(r.status), " ["), str_concat(r.body, "]")),
+Result.Err(error: e) => http_error_show(e),
+})
+}
+fn main(out: OutCap) -> Int {
+case(out, "HTTP/1.1 200 OK|Content-Length: 2||hi", "GET");
+case(out, "HTTP/1.1 200 OK|Content-Length: 2||", "HEAD");
+case(out, "HTTP/1.1 204 No Content|Content-Length: 9||", "GET");
+case(out, "HTTP/1.1 200 OK|Transfer-Encoding: chunked||2|hi|1|!|0||", "GET");
+case(out, "HTTP/1.0 200 OK||to the close", "GET");
+case(out, "HTTP/1.1 200|Content-Length: 0||", "GET");
+case(out, "HTTP/1.1 404 |Content-Length: 1||x", "GET");
+case(out, "HTTP/2 200 OK||", "GET");
+case(out, "HTTP/1.1 20 OK||", "GET");
+case(out, "HTTP/1.1 099 Low||", "GET");
+case(out, "HTTP/1.1 200 OK|Content-Length: 1|Content-Length: 2||xy", "GET");
+case(out, "HTTP/1.1 200 OK|Transfer-Encoding: gzip, chunked||0||", "GET");
+case(out, "HTTP/1.1 200 OK|Content-Length: 5||hi", "GET");
+0
+}

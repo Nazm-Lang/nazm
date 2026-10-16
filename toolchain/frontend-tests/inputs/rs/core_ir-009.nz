@@ -1,0 +1,2 @@
+fn f3000(x: Int) -> Int { x }
+fn main() -> Int { f0(0) }

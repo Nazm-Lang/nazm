@@ -1,0 +1,10 @@
+fn main(out: OutCap) -> Int {
+let s = chan_new_of[Str](1);
+let b = chan_new_of[Bool](1);
+chan_close_of(s);
+chan_close_of(b);
+let cs = vec_new[Chan[Int]]();
+vec_push(cs, chan_new_of[Int](1));
+print(int_to_str(vec_len(cs)));
+0
+}

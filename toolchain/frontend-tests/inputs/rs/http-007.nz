@@ -1,0 +1,16 @@
+fn hello(r: Request) -> Response ! {} {
+http_text(200, str_concat(str_concat(r.method, " "), str_concat(str_concat(match http_param(r, "name") { Option.Some(value: n) => n, Option.None() => "?", }, " "), r.body)))
+}
+fn routes() -> fn(Request) -> Response ! { io } ! {} {
+http_router_handler(http_router_post(http_router_get(http_router(), "/hello/{name}", hello), "/echo/{name}", hello))
+}
+fn shown(r: Result[Response, HttpError]) -> Str {
+match r {
+Result.Ok(value: x) => str_concat(str_concat(int_to_str(x.status), " "), x.body),
+Result.Err(error: e) => str_concat("ERR ", http_error_show(e)),
+}
+}
+fn quick() -> ServeOptions {
+let d = http_serve_options();
+ServeOptions(max_head: d.max_head, max_headers: d.max_headers, max_target: d.max_target, max_body: d.max_body, head_timeout_ms: 300, idle_timeout_ms: 2000, body_timeout_ms: 300, write_timeout_ms: 2000, max_requests: d.max_requests, max_connections: d.max_connections)
+}

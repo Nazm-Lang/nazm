@@ -1,0 +1,66 @@
+
+// Client: connect, report the session, send `total` bytes in 16 KiB pieces and read each echo.
+fn client(net: NetCap, out: OutCap, cfg: TlsConfig, addr: Str, host: Str, total: Int) -> Int ! { io } {
+    match tcp_connect(net, addr, 2000) {
+        Result.Ok(value: s) => {
+            tcp_set_timeout(s, 5000);
+            match tls_connect(cfg, s, host) {
+                Result.Ok(value: t) => {
+                    line(out, str_concat(str_concat(str_concat(tls_version(t), " ["), tls_alpn(t)), "]"));
+                    line(out, tls_peer(t));
+                    let piece = bytes_new(16384);
+                    let back = bytes_new(16384);
+                    let mut sent = 0;
+                    let mut same = true;
+                    while sent < total {
+                        let mut i = 0;
+                        while i < 16384 { bytes_set(piece, i, UInt8((sent + i) % 251)); i = i + 1; }
+                        tls_write(t, piece);
+                        let mut got = 0;
+                        while got < 16384 {
+                            match tls_read(t, bytes_slice(back, got, 16384)) {
+                                Result.Ok(value: n) => { if n == 0 { got = 16384; same = false; } else { got = got + n; } },
+                                Result.Err(error: e) => { got = 16384; same = false; },
+                            };
+                        }
+                        i = 0;
+                        while i < 16384 { if bytes_get(back, i) != bytes_get(piece, i) { same = false; } i = i + 1; }
+                        sent = sent + 16384;
+                    }
+                    line(out, str_concat(str_concat(int_to_str(sent), " bytes echoed "), if same { "intact" } else { "damaged" }));
+                    tls_close(t);
+                },
+                Result.Err(error: e) => { line(out, str_concat("client: ", kind(e))); tcp_close(s); },
+            };
+            0
+        },
+        Result.Err(error: e) => { line(out, "no connection"); 0 },
+    }
+}
+fn trial(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap, server: Strs, offered: Strs, total: Int) -> Int ! { io, spawn } {
+    let sc = server_config(io, "srv.pem", "srv.key", server);
+    let cc = client_config(io, "ca.pem", offered);
+    let seen = atomic_new(0);
+    match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => {
+            let addr = tcp_listener_addr(l);
+            scope {
+                spawn echo_one(sc, l, seen);
+                client(net, out, cc, addr, "localhost", total);
+            }
+            tcp_listener_close(l);
+        },
+        Result.Err(error: e) => { line(out, "no listener"); },
+    };
+    line(out, seen_as(atomic_load(seen)));
+    tls_config_close(sc);
+    tls_config_close(cc);
+    0
+}
+fn main(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap) -> Int ! { io, spawn } {
+    // The server's preference decides among what the client offers.
+    trial(io, net, tasks, out, names("http/1.1", "h2"), names("h2", "http/1.1"), 49152);
+    // Nothing in common: the handshake goes on without a name.
+    trial(io, net, tasks, out, names("http/1.1", ""), names("h2", ""), 16384);
+    0
+}

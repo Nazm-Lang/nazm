@@ -1,1 +1,1 @@
-fn f(x: Int) -> Int ! {} requires print("x") == 0 { x }
+fn f(x: Int) -> Int ! {} requires write_file("f", "x") == 0 { x }

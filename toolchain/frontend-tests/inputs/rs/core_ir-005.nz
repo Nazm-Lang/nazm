@@ -1,0 +1,2 @@
+static COUNT: Atomic = atomic_new(40);
+pub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }

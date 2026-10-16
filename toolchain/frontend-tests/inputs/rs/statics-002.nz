@@ -1,2 +1,5 @@
-static A: Int = 1;
-fn main() -> Int { A = 2; 0 }
+static COUNT: Atomic = atomic_new(40);
+static LIMIT: Int = 70;
+pub fn bump() -> Int ! {} { atomic_add(COUNT, 1) }
+pub fn count() -> Int ! {} { atomic_load(COUNT) }
+pub fn limit() -> Int ! {} { LIMIT }

@@ -1,1 +1,1 @@
-fn main(io: IoCap) -> Int ! { io } { let v = vec_new[Str](); vec_push(v, read_file("cfg")); let l = list_from_vec(v); for p in l { write_file(p, "x"); } 0 }
+fn main(io: IoCap) -> Int ! { io } { let b = box_new("out.txt"); write_file(box_get(b), "x") }

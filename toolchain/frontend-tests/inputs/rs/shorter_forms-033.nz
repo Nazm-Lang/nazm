@@ -1,0 +1,17 @@
+fn count(text: Str): Map[Str, Int] {
+    let counts = hashmap_new[Str, Int]()
+    for w in text.split(" ") {
+        if w.len() > 0 { counts[w] += 1 }
+    }
+    counts
+}
+
+fn main() {
+    let counts = count("b a c a b a d e e e")
+    for (w, n) in counts.top(3) { println(f"{w} {n}") }
+    println(f"{counts.top(0).len()} {counts.top(99).len()} {"x".compare("y")}")
+    let mut keys = ""
+    for (k, _) in counts.sort_by(|a, b| a.0 < b.0) { keys = keys + k }
+    let m = {"one": 1}
+    println(f"{keys} {m["one"]}")
+}

@@ -1,0 +1,2 @@
+fn list_len(n: Int) -> Int { n }
+fn main() -> Int { list_len(0) }

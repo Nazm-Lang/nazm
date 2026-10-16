@@ -1,0 +1,21 @@
+use "@std/ioerror";
+use "@std/net";
+use "@std/http";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, str_from_byte(10))) }
+// `|` is CRLF, `~` a bare LF, `^` a bare CR, a backtick a NUL byte.
+fn wire(s: Str) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 124 { strs_push(parts, str_concat(str_from_byte(13), str_from_byte(10))); } else {
+            if b == 126 { strs_push(parts, str_from_byte(10)); } else {
+                if b == 94 { strs_push(parts, str_from_byte(13)); } else {
+                    if b == 96 { strs_push(parts, str_from_byte(0)); } else { strs_push(parts, str_from_byte(b)); }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}

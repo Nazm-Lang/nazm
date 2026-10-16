@@ -1,0 +1,2 @@
+use "lib:words.nz";
+fn main(): Int { words("a b") + "c d".split(" ").len() }

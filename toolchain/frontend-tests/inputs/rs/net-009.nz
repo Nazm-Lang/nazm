@@ -1,1 +1,1 @@
-fn main(io: IoCap) -> Int ! { io } { os_resolve("localhost", 1, bytes_new(64)) }
+fn main(io: IoCap) -> Int ! { io } { os_status(os_tcp_listen("127.0.0.1:0")) }

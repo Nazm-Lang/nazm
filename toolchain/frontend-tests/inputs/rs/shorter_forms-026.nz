@@ -1,0 +1,1 @@
+fn main() { let l = list_empty[Int]() }

@@ -1,0 +1,4 @@
+fn main(): Int {
+    let o: Option[Int] = None
+    if o.is_none() { 3 } else { 4 }
+}

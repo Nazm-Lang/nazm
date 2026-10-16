@@ -1,0 +1,9 @@
+use std.hash
+use std.hashmap
+use std.text as t
+
+fn main(out: OutCap): Int ! {io} {
+    let m = {"a": 1}
+    print(f"{m["a"] + str_len(t::text_to_upper("abc"))}\n")
+    0
+}
