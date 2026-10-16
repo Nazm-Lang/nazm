@@ -2247,6 +2247,7 @@ const POOL_RUNTIME: &str = r#"
 @nz.pool_wait = hidden global ptr null
 @nz.pool_buckets = hidden global ptr null
 @nz.pool_join = hidden global ptr null
+@nz.pool_joiners = hidden global i64 0
 @nz.cur_task = hidden thread_local global ptr null
 @.pool.env.sched = private unnamed_addr constant [15 x i8] c"NAZM_SCHEDULER\00"
 @.pool.env.workers = private unnamed_addr constant [13 x i8] c"NAZM_WORKERS\00"
@@ -2405,11 +2406,11 @@ make:
   %more = icmp slt i64 %i, %count
   br i1 %more, label %one, label %publish
 one:
-  %w = call ptr @malloc(i64 384)
+  %w = call ptr @malloc(i64 448)
   %wnull = icmp eq ptr %w, null
   br i1 %wnull, label %fail, label %winit
 winit:
-  call void @llvm.memset.p0.i64(ptr %w, i8 0, i64 384, i1 false)
+  call void @llvm.memset.p0.i64(ptr %w, i8 0, i64 448, i1 false)
   %wmi = call i32 @pthread_mutex_init(ptr %w, ptr null)
   %wcv = getelementptr i8, ptr %w, i64 128
   %wci = call i32 @pthread_cond_init(ptr %wcv, ptr null)
@@ -2457,18 +2458,33 @@ ok:
   ret i1 true
 }
 
-; Queue a runnable task at its worker's tail and wake the worker. The worker's lock is held.
+; Queue a runnable task at its worker's tail, the lock held (6.3): a task that has never run on the
+; worker's unstarted queue, which other workers may steal from; one that has, on its resumed queue,
+; since its frames are on this worker's run stack. The worker is signalled only when it sleeps: a
+; worker that is running or spinning finds the task itself.
 define hidden void @nz.pool_push(ptr %w, ptr %t) {
 entry:
   %np = getelementptr i8, ptr %t, i64 48
   store ptr null, ptr %np
-  %hp = getelementptr i8, ptr %w, i64 256
-  %tp = getelementptr i8, ptr %w, i64 264
+  ; Its place in this worker's order: the two queues are taken from oldest first.
+  %sqp = getelementptr i8, ptr %w, i64 384
+  %sq = load i64, ptr %sqp
+  %sq1 = add i64 %sq, 1
+  store i64 %sq1, ptr %sqp
+  %tqp = getelementptr i8, ptr %t, i64 168
+  store i64 %sq, ptr %tqp
+  %stp = getelementptr i8, ptr %t, i64 160
+  %started = load i64, ptr %stp
+  %fresh = icmp eq i64 %started, 0
+  %hoff = select i1 %fresh, i64 352, i64 256
+  %toff = select i1 %fresh, i64 360, i64 264
+  %hp = getelementptr i8, ptr %w, i64 %hoff
+  %tp = getelementptr i8, ptr %w, i64 %toff
   %tail = load ptr, ptr %tp
   %empty = icmp eq ptr %tail, null
   br i1 %empty, label %first, label %append
 first:
-  store ptr %t, ptr %hp
+  store atomic ptr %t, ptr %hp monotonic, align 8
   br label %linked
 append:
   %tn = getelementptr i8, ptr %tail, i64 48
@@ -2476,9 +2492,229 @@ append:
   br label %linked
 linked:
   store ptr %t, ptr %tp
+  br i1 %fresh, label %count, label %wake
+count:
+  %cp = getelementptr i8, ptr %w, i64 368
+  %c = load atomic i64, ptr %cp monotonic, align 8
+  %c1 = add i64 %c, 1
+  store atomic i64 %c1, ptr %cp monotonic, align 8
+  br label %wake
+wake:
+  %slp = getelementptr i8, ptr %w, i64 376
+  %sl = load i64, ptr %slp
+  %asleep = icmp ne i64 %sl, 0
+  br i1 %asleep, label %signal, label %out
+signal:
   %cv = getelementptr i8, ptr %w, i64 128
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  br label %out
+out:
   ret void
+}
+
+; The next task this worker runs, its lock held, or null: the head of its two queues queued first,
+; so its runnable tasks still run first in, first out (§7.84).
+define hidden ptr @nz.pool_take(ptr %w) {
+entry:
+  %rp = getelementptr i8, ptr %w, i64 256
+  %r = load atomic ptr, ptr %rp monotonic, align 8
+  %fp = getelementptr i8, ptr %w, i64 352
+  %f = load atomic ptr, ptr %fp monotonic, align 8
+  %rnone = icmp eq ptr %r, null
+  %fnone = icmp eq ptr %f, null
+  %both = and i1 %rnone, %fnone
+  br i1 %both, label %none, label %order
+none:
+  ret ptr null
+order:
+  %either = or i1 %rnone, %fnone
+  br i1 %either, label %pick, label %compare
+compare:
+  %rqp = getelementptr i8, ptr %r, i64 168
+  %rq = load i64, ptr %rqp
+  %fqp = getelementptr i8, ptr %f, i64 168
+  %fq = load i64, ptr %fqp
+  %older = icmp ult i64 %fq, %rq
+  br label %pick
+pick:
+  %usef = phi i1 [ %rnone, %order ], [ %older, %compare ]
+  %hp = select i1 %usef, ptr %fp, ptr %rp
+  %h = select i1 %usef, ptr %f, ptr %r
+  %toff = select i1 %usef, i64 360, i64 264
+  %np = getelementptr i8, ptr %h, i64 48
+  %n = load ptr, ptr %np
+  store atomic ptr %n, ptr %hp monotonic, align 8
+  store ptr null, ptr %np
+  %last = icmp eq ptr %n, null
+  br i1 %last, label %cleartail, label %counted
+cleartail:
+  %tp = getelementptr i8, ptr %w, i64 %toff
+  store ptr null, ptr %tp
+  br label %counted
+counted:
+  br i1 %usef, label %fewer, label %out
+fewer:
+  %cp = getelementptr i8, ptr %w, i64 368
+  %c = load atomic i64, ptr %cp monotonic, align 8
+  %c1 = sub i64 %c, 1
+  store atomic i64 %c1, ptr %cp monotonic, align 8
+  br label %out
+out:
+  ret ptr %h
+}
+
+; With nothing of its own to run, take half (at most 64) of the first other worker's unstarted tasks
+; that has any, looking from the next worker on. Entered and left with this worker's lock held, but
+; never holding two workers' locks at once. True when tasks were taken.
+define hidden i1 @nz.pool_steal(ptr %w) {
+entry:
+  %count = load i64, ptr @nz.pool_count
+  %solo = icmp sle i64 %count, 1
+  br i1 %solo, label %nothing, label %let
+nothing:
+  ret i1 false
+let:
+  %u0 = call i32 @pthread_mutex_unlock(ptr %w)
+  %ip = getelementptr i8, ptr %w, i64 288
+  %me = load i64, ptr %ip
+  %arr = load ptr, ptr @nz.pool_workers
+  br label %scan
+scan:
+  %i = phi i64 [ 1, %let ], [ %inext, %pass ], [ %inext, %gone ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %probe, label %empty
+empty:
+  %l0 = call i32 @pthread_mutex_lock(ptr %w)
+  ret i1 false
+probe:
+  %inext = add i64 %i, 1
+  %vi0 = add i64 %me, %i
+  %vi = urem i64 %vi0, %count
+  %vp = getelementptr ptr, ptr %arr, i64 %vi
+  %v = load ptr, ptr %vp
+  %vcp = getelementptr i8, ptr %v, i64 368
+  %seen = load atomic i64, ptr %vcp monotonic, align 8
+  %has = icmp sgt i64 %seen, 0
+  br i1 %has, label %lockv, label %pass
+pass:
+  br label %scan
+lockv:
+  %lv = call i32 @pthread_mutex_lock(ptr %v)
+  %c = load atomic i64, ptr %vcp monotonic, align 8
+  %still = icmp sgt i64 %c, 0
+  br i1 %still, label %cut, label %gone
+gone:
+  %uv0 = call i32 @pthread_mutex_unlock(ptr %v)
+  br label %scan
+cut:
+  %c1 = add i64 %c, 1
+  %half = udiv i64 %c1, 2
+  %big = icmp sgt i64 %half, 64
+  %want = select i1 %big, i64 64, i64 %half
+  %vhp = getelementptr i8, ptr %v, i64 352
+  %first = load atomic ptr, ptr %vhp monotonic, align 8
+  br label %walk
+walk:
+  %t = phi ptr [ %first, %cut ], [ %tnext, %step ]
+  %k = phi i64 [ 1, %cut ], [ %knext, %step ]
+  %tw = getelementptr i8, ptr %t, i64 40
+  store ptr %w, ptr %tw
+  %tnp = getelementptr i8, ptr %t, i64 48
+  %tnext = load ptr, ptr %tnp
+  %enough = icmp sge i64 %k, %want
+  %atend = icmp eq ptr %tnext, null
+  %stop = or i1 %enough, %atend
+  %knext = add i64 %k, 1
+  br i1 %stop, label %detach, label %step
+step:
+  br label %walk
+detach:
+  store atomic ptr %tnext, ptr %vhp monotonic, align 8
+  store ptr null, ptr %tnp
+  br i1 %atend, label %vclear, label %vcount
+vclear:
+  %vtp = getelementptr i8, ptr %v, i64 360
+  store ptr null, ptr %vtp
+  br label %vcount
+vcount:
+  %left = sub i64 %c, %k
+  store atomic i64 %left, ptr %vcp monotonic, align 8
+  %uv = call i32 @pthread_mutex_unlock(ptr %v)
+  %l1 = call i32 @pthread_mutex_lock(ptr %w)
+  %whp = getelementptr i8, ptr %w, i64 352
+  %wtp = getelementptr i8, ptr %w, i64 360
+  %wtail = load ptr, ptr %wtp
+  %wempty = icmp eq ptr %wtail, null
+  br i1 %wempty, label %own, label %join
+own:
+  store atomic ptr %first, ptr %whp monotonic, align 8
+  br label %joined
+join:
+  %wtn = getelementptr i8, ptr %wtail, i64 48
+  store ptr %first, ptr %wtn
+  br label %joined
+joined:
+  store ptr %t, ptr %wtp
+  %wcp = getelementptr i8, ptr %w, i64 368
+  %wc = load atomic i64, ptr %wcp monotonic, align 8
+  %wc1 = add i64 %wc, %k
+  store atomic i64 %wc1, ptr %wcp monotonic, align 8
+  ret i1 true
+}
+
+; Before sleeping, look for work for up to 50 microseconds without the lock (6.3): a task queued for
+; this worker, or unstarted tasks on another. Entered and left with the lock held; true when there
+; may be something to run. Not with one worker, whose program has no one else to wait for.
+define hidden i1 @nz.pool_spin(ptr %w) {
+entry:
+  %count = load i64, ptr @nz.pool_count
+  %solo = icmp sle i64 %count, 1
+  br i1 %solo, label %no, label %let
+no:
+  ret i1 false
+let:
+  %u0 = call i32 @pthread_mutex_unlock(ptr %w)
+  %start = call i64 @nz.pool_now()
+  %rp = getelementptr i8, ptr %w, i64 256
+  %fp = getelementptr i8, ptr %w, i64 352
+  %arr = load ptr, ptr @nz.pool_workers
+  br label %round
+round:
+  %n = phi i64 [ 0, %let ], [ %nnext, %clock ]
+  %r = load atomic ptr, ptr %rp monotonic, align 8
+  %f = load atomic ptr, ptr %fp monotonic, align 8
+  %rs = icmp ne ptr %r, null
+  %fs = icmp ne ptr %f, null
+  %mine = or i1 %rs, %fs
+  br i1 %mine, label %found, label %others
+others:
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %others ], [ %inext, %next ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %probe, label %clock
+probe:
+  %vp = getelementptr ptr, ptr %arr, i64 %i
+  %v = load ptr, ptr %vp
+  %vcp = getelementptr i8, ptr %v, i64 368
+  %c = load atomic i64, ptr %vcp monotonic, align 8
+  %has = icmp sgt i64 %c, 1
+  %inext = add i64 %i, 1
+  br i1 %has, label %found, label %next
+next:
+  br label %scan
+clock:
+  %nnext = add i64 %n, 1
+  %now = call i64 @nz.pool_now()
+  %spent = sub i64 %now, %start
+  %over = icmp sgt i64 %spent, 50000
+  br i1 %over, label %give, label %round
+give:
+  %l1 = call i32 @pthread_mutex_lock(ptr %w)
+  ret i1 false
+found:
+  %l2 = call i32 @pthread_mutex_lock(ptr %w)
+  ret i1 true
 }
 
 ; The monotonic clock in nanoseconds, which every deadline is on (Q1-M-12).
@@ -2595,7 +2831,8 @@ entry:
   ret void
 }
 
-; A worker: run its tasks first in, first out, each until it parks, yields or ends.
+; A worker: run its tasks first in, first out, each until it parks, yields or ends; with none, steal
+; unstarted ones, spin a little, then sleep (6.3).
 define hidden ptr @nz.worker_main(ptr %w) {
 entry:
   %ts = alloca [2 x i64], align 8
@@ -2604,33 +2841,40 @@ entry:
   br label %look
 look:
   %timed = call i1 @nz.pool_timers(ptr %w, ptr %ts)
-  %hp = getelementptr i8, ptr %w, i64 256
-  %h = load ptr, ptr %hp
+  %h = call ptr @nz.pool_take(ptr %w)
   %empty = icmp eq ptr %h, null
-  br i1 %empty, label %idle, label %take
+  br i1 %empty, label %idle, label %go
 idle:
+  %stole = call i1 @nz.pool_steal(ptr %w)
+  br i1 %stole, label %look, label %spin
+spin:
+  %maybe = call i1 @nz.pool_spin(ptr %w)
+  br i1 %maybe, label %look, label %recheck
+recheck:
+  ; Under the lock again: a task queued while it spun is seen here, and one queued after this
+  ; finds the worker marked sleeping and signals it.
+  %h2 = call ptr @nz.pool_take(ptr %w)
+  %none = icmp eq ptr %h2, null
+  br i1 %none, label %sleep, label %back
+back:
+  call void @nz.pool_push(ptr %w, ptr %h2)
+  br label %look
+sleep:
+  %slp = getelementptr i8, ptr %w, i64 376
+  store i64 1, ptr %slp
   %cv = getelementptr i8, ptr %w, i64 128
   br i1 %timed, label %tw, label %fw
 tw:
   ; The soonest deadline is monotonic; the wait measures the wall clock (Q1-M-12).
   call void @nz.timed_nap(ptr %ts, ptr %nap)
   %a = call i32 @pthread_cond_timedwait(ptr %cv, ptr %w, ptr %nap)
+  store i64 0, ptr %slp
   br label %look
 fw:
   %b = call i32 @pthread_cond_wait(ptr %cv, ptr %w)
+  store i64 0, ptr %slp
   br label %look
-take:
-  %np = getelementptr i8, ptr %h, i64 48
-  %n = load ptr, ptr %np
-  store ptr %n, ptr %hp
-  %last = icmp eq ptr %n, null
-  br i1 %last, label %cleartail, label %go
-cleartail:
-  %tp = getelementptr i8, ptr %w, i64 264
-  store ptr null, ptr %tp
-  br label %go
 go:
-  store ptr null, ptr %np
   %sp = getelementptr i8, ptr %h, i64 24
   store i64 1, ptr %sp
   %u = call i32 @pthread_mutex_unlock(ptr %w)
@@ -2696,13 +2940,21 @@ finish:
   %buf = load ptr, ptr %bufp
   call void @free(ptr %buf)
   store ptr null, ptr %bufp
+  ; Done, then a wake only when a joiner waits (6.3): a joiner counts itself before it looks, so
+  ; one that looked too early is counted by the time this reads the count.
+  %donep = getelementptr i8, ptr %h, i64 72
+  store atomic i64 1, ptr %donep seq_cst, align 8
+  %joiners = load atomic i64, ptr @nz.pool_joiners seq_cst, align 8
+  %waits = icmp sgt i64 %joiners, 0
+  br i1 %waits, label %tell, label %told
+tell:
   %js = load ptr, ptr @nz.pool_join
   %jl = call i32 @pthread_mutex_lock(ptr %js)
-  %donep = getelementptr i8, ptr %h, i64 72
-  store i64 1, ptr %donep
   %jcv = getelementptr i8, ptr %js, i64 128
   call void @nz.cwake(ptr %jcv)
   %ju = call i32 @pthread_mutex_unlock(ptr %js)
+  br label %told
+told:
   %l3 = call i32 @pthread_mutex_lock(ptr %w)
   br label %look
 }
@@ -2723,12 +2975,25 @@ zero:
   store ptr %fn, ptr %fp
   %blp = getelementptr i8, ptr %t, i64 64
   store ptr %blk, ptr %blp
+  ; A task's own tasks start on its worker, which other workers steal from (6.3); `main`'s go
+  ; round robin.
+  %cur = load ptr, ptr @nz.cur_task
+  %intask = icmp ne ptr %cur, null
+  br i1 %intask, label %local, label %rr
+local:
+  %cwp = getelementptr i8, ptr %cur, i64 40
+  %cw = load ptr, ptr %cwp
+  br label %placed
+rr:
   %k = atomicrmw add ptr @nz.pool_next, i64 1 monotonic
   %count = load i64, ptr @nz.pool_count
   %idx = urem i64 %k, %count
   %arr = load ptr, ptr @nz.pool_workers
   %wp = getelementptr ptr, ptr %arr, i64 %idx
-  %w = load ptr, ptr %wp
+  %rw = load ptr, ptr %wp
+  br label %placed
+placed:
+  %w = phi ptr [ %cw, %local ], [ %rw, %rr ]
   %wfield = getelementptr i8, ptr %t, i64 40
   store ptr %w, ptr %wfield
   store ptr %t, ptr %blk
@@ -3130,13 +3395,19 @@ thread:
   %rc = call i32 @pthread_join(ptr %tid, ptr null)
   ret i32 %rc
 wait:
+  ; Already done: no lock (6.3).
+  %dp = getelementptr i8, ptr %tid, i64 72
+  %d0 = load atomic i64, ptr %dp acquire, align 8
+  %early = icmp ne i64 %d0, 0
+  br i1 %early, label %freed, label %count
+count:
+  %in = atomicrmw add ptr @nz.pool_joiners, i64 1 seq_cst
   %js = load ptr, ptr @nz.pool_join
   %jcv = getelementptr i8, ptr %js, i64 128
   %l = call i32 @pthread_mutex_lock(ptr %js)
   br label %check
 check:
-  %dp = getelementptr i8, ptr %tid, i64 72
-  %d = load i64, ptr %dp
+  %d = load atomic i64, ptr %dp seq_cst, align 8
   %done = icmp ne i64 %d, 0
   br i1 %done, label %free, label %sleep
 sleep:
@@ -3144,6 +3415,9 @@ sleep:
   br label %check
 free:
   %u = call i32 @pthread_mutex_unlock(ptr %js)
+  %out = atomicrmw sub ptr @nz.pool_joiners, i64 1 seq_cst
+  br label %freed
+freed:
   call void @free(ptr %tid)
   ret i32 0
 }

@@ -137,6 +137,29 @@ fn frames_on(h: Caps, d: Str, src: Str, backend: Str) -> Result[Int, Str] ! { io
 }
 
 @test
+fn tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn leaf(c: Chan, v: Int) -> Int { chan_send(c, v); 0 }\nfn branch(t: SpawnCap, c: Chan, v: Int) -> Int ! { spawn } { scope { spawn leaf(c, v); spawn leaf(c, v + 1); } 0 }\nfn waiter(gate: Chan, started: Atomic) -> Int { atomic_add(started, 1); let buf = ints_new(); if chan_recv(gate, buf) { 1 } else { 0 } }\nfn main(io: IoCap, tasks: SpawnCap, clock: TimeCap) {\nlet c = chan_new(64); let gate = chan_new(1); let started = atomic_new(0); let mut sum = 0;\nscope { let mut i = 0; while i < 5000 { spawn waiter(gate, started); i += 1; }\nlet mut j = 0; while j < 500 { spawn branch(tasks, c, j); j += 1; }\nlet buf = ints_new(); let mut k = 0; while k < 1000 { if chan_recv(c, buf) { sum += ints_pop(buf); } k += 1; }\nwhile atomic_load(started) < 5000 { time_sleep_ms(1); }\nchan_close(gate); }\nprintln(sum); println(atomic_load(started)) }\n";
+    stolen_on(h, d, src, "llvm")?;
+    stolen_on(h, d, src, "cranelift")?;
+    scratch_remove(h, d);
+    Ok(0)
+}
+
+fn stolen_on(h: Caps, d: Str, src: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    built(h, d, "steal", src, backend)?;
+    let one = run_prog(h, d, "steal", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=1"));
+    check_that(one.code == 0, one.stderr)?;
+    check_that(text_starts_with(one.stdout, "250000\n5000\n"), one.stdout)?;
+    check_that(text_contains(one.stderr, "spawned=6500 joined=6500"), one.stderr)?;
+    let four = run_prog(h, d, "steal", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=4"));
+    check_that(four.code == 0, four.stderr)?;
+    check_that(text_starts_with(four.stdout, "250000\n5000\n"), four.stdout)?;
+    check_that(text_contains(four.stderr, "spawned=6500 joined=6500"), four.stderr)
+}
+
+@test
 fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let d = scratch_new(h);

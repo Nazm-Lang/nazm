@@ -257,6 +257,47 @@ fn tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack() {
     }
 }
 
+/// Performance leadership 6.3: tasks a task spawns start on its worker and idle workers steal the
+/// unstarted ones; a worker spins briefly, then sleeps until signalled; a scope's join waits without
+/// a lock when its tasks are done. Five hundred tasks each spawn two that park on a full channel,
+/// beside five thousand parked on a gate: every one runs and is joined, on one worker and on four,
+/// under both backends.
+#[test]
+fn tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn leaf(c: Chan, v: Int) -> Int { chan_send(c, v); 0 }\n\
+               fn branch(t: SpawnCap, c: Chan, v: Int) -> Int ! { spawn } { scope { spawn leaf(c, v); spawn leaf(c, v + 1); } 0 }\n\
+               fn waiter(gate: Chan, started: Atomic) -> Int { atomic_add(started, 1); let buf = ints_new(); if chan_recv(gate, buf) { 1 } else { 0 } }\n\
+               fn main(io: IoCap, tasks: SpawnCap, clock: TimeCap) {\n\
+               let c = chan_new(64); let gate = chan_new(1); let started = atomic_new(0); let mut sum = 0;\n\
+               scope { let mut i = 0; while i < 5000 { spawn waiter(gate, started); i += 1; }\n\
+               let mut j = 0; while j < 500 { spawn branch(tasks, c, j); j += 1; }\n\
+               let buf = ints_new(); let mut k = 0; while k < 1000 { if chan_recv(c, buf) { sum += ints_pop(buf); } k += 1; }\n\
+               while atomic_load(started) < 5000 { time_sleep_ms(1); }\n\
+               chan_close(gate); }\n\
+               println(sum); println(atomic_load(started)) }\n";
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "steal", src, backend);
+        for workers in ["1", "4"] {
+            let (out, err, code) = run(
+                d.path(),
+                "steal",
+                &[],
+                &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", workers)],
+            );
+            assert_eq!(code, Some(0), "{backend} {workers}: {err}");
+            assert!(
+                out.starts_with("250000\n5000\n"),
+                "{backend} {workers}: {out}{err}"
+            );
+            assert!(
+                err.contains("spawned=6500 joined=6500"),
+                "{backend} {workers}: {err}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
     let d = tempfile::tempdir().unwrap();

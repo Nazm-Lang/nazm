@@ -10557,11 +10557,12 @@ Repointed by M1, which moved it to 36 for the microcontroller boards' runtime an
 Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused.
 Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused.
 Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's.
-Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do."""
+Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do.
+Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 40;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 39;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 41;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 40;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_one_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20640,6 +20641,42 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tas
 name = "pc-every-run-starts-the-task-afresh"
 why = "a task that has run is laid out again at the top of the run stack each time it resumes, so it restarts its body instead of continuing"
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  %fresh = icmp eq i64 %started, 0'''
-replace = '''  %fresh = icmp sge i64 %started, 0'''
+find = '''  %fresh = icmp eq i64 %started, 0
+  br i1 %fresh, label %first, label %restore'''
+replace = '''  %fresh = icmp sge i64 %started, 0
+  br i1 %fresh, label %first, label %restore'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
+
+# --- Performance leadership 6.3: per-worker queues, stealing, spinning, a join without a lock (2026-10-16)
+
+[[mutation]]
+name = "pr-a-stolen-task-keeps-its-old-worker"
+why = "a stolen task still names the worker it was taken from, so it suspends to that worker's saved stack pointer from the thief's thread"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store ptr %w, ptr %tw'''
+replace = '''  store ptr %v, ptr %tw'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run" }]
+
+[[mutation]]
+name = "pr-a-sleeping-worker-is-not-signalled"
+why = "a task queued for a worker asleep on its condition variable never wakes it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %asleep = icmp ne i64 %sl, 0'''
+replace = '''  %asleep = icmp eq i64 %sl, 2'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::ten_thousand_tasks_all_alive_at_once_run_on_two_workers" }]
+
+[[mutation]]
+name = "pr-a-waiting-joiner-is-not-woken"
+why = "a task that ends while its scope's joiner waits never wakes it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %waits = icmp sgt i64 %joiners, 0'''
+replace = '''  %waits = icmp sgt i64 %joiners, 1000000'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run" }]
+
+[[mutation]]
+name = "pr-stealing-takes-nothing-from-the-victims-queue"
+why = "a steal moves tasks to the thief but leaves them at the head of the victim's unstarted queue, so each runs twice"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store atomic ptr %tnext, ptr %vhp monotonic, align 8'''
+replace = '''  store atomic ptr %first, ptr %vhp monotonic, align 8'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run" }]

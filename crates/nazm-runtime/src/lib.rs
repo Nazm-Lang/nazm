@@ -332,7 +332,15 @@ pub fn escape(s: &str) -> String {
 /// when another is to run there, and back before it runs again; a worker record is 384 bytes (run
 /// stack at 320, its size at 328, the task in place at 336), and a task's record keeps its saved
 /// frames at 8, their capacity at 16, their length at 152 and whether it has run at 160.
-pub const RUNTIME_ABI_REVISION: u32 = 40;
+/// 41 is performance leadership 6.3's scheduler (2026-10-16): a worker keeps unstarted tasks
+/// (352, 360, their count at 368) apart from resumed ones (256, 264), runs both first in, first
+/// out by a sequence it stamps on each task (worker 384, task 168), steals half of another
+/// worker's unstarted tasks when it has none (`nz.pool_steal`), spins up to 50 µs before it sleeps
+/// (`nz.pool_spin`) and is signalled only when it sleeps (376); a task's own spawn starts on its
+/// worker; a worker record is 448 bytes; and a scope's join reads a done task without a lock,
+/// counting itself in `nz.pool_joiners` before it waits, so a task ending wakes no one unless
+/// someone waits.
+pub const RUNTIME_ABI_REVISION: u32 = 41;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -797,7 +805,10 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
     rt!("nz.pool_sync", "ptr" () "", false, Tasks, "", Null, Any, "a mutex and a condition variable in one allocation (N83)", "the process owns it"),
     rt!("nz.pool_start", "i1" () "", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
-    rt!("nz.pool_push", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue a runnable task on its worker and wake it (N83)", "the worker's queue holds the task"),
+    rt!("nz.pool_push", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue a runnable task on its worker, unstarted or resumed, and signal the worker if it sleeps (N83, 6.3)", "the worker's queue holds the task"),
+    rt!("nz.pool_take", "ptr" ("ptr") "", false, Tasks, "", Never, Locked, "the next task a worker runs: the older head of its resumed and unstarted queues (6.3)", "the worker runs the task"),
+    rt!("nz.pool_steal", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", "the tasks move to this worker"),
+    rt!("nz.pool_spin", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "look for work for up to 50 microseconds before a worker sleeps (6.3)", "none"),
     rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", "none"),
     rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
     rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
@@ -989,6 +1000,7 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_wait", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_buckets", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_join", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
+    RuntimeGlobal { symbol: "nz.pool_joiners", ty: "i64", thread_local: false, writers: "`nz.join_one`, atomically (6.3)" },
     RuntimeGlobal { symbol: "nz.cur_task", ty: "ptr", thread_local: true, writers: "`nz.task_enter` and `nz.task_leave`, on its own worker only (N83)" },
     RuntimeGlobal { symbol: "nz.errno_saved", ty: "i64", thread_local: true, writers: "`nz.errno_save`, on its own thread only (N85)" },
     RuntimeGlobal { symbol: "nz.os_lock", ty: "i32", thread_local: false, writers: "`nz.os_acquire` and `nz.os_release`, atomically (Gate 2)" },
@@ -1465,9 +1477,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.2's copied stacks: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 40);
+    fn the_runtime_is_revision_forty_one_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.3's scheduler: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 41);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(
