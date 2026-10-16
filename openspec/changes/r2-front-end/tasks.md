@@ -546,3 +546,19 @@
       `inferred_result`, `|a, b|` closures, map literals, fields and payloads by position, variants
       without their enum, `use std.json`
 - [ ] 6.1 Checked: R1.5's forms in the checker; D6–D8 once final
+
+## 7. What R5's commands ask of the front end (handed over by the coordinator)
+
+- [x] 7.1 Epoch 88: a name re-bound by a pattern `let` in the same scope is N0202 (5.1f's
+      follow-up of main's checker, `open_joined_scope`)
+- [x] 7.2 A source root given (`check --source-root`): `fx_check_in` and `fx_check_module_in`
+      take it, `pk_given` decides it as `root::decide` does with one — a directory, an ancestor
+      of the root module, the modules identified relative to it. Ancestry is found lexically
+      (no `realpath` here): a root reached through a link, or one the module is not under as
+      written, is not decided (the front end gives up rather than refuse what the reference's
+      `canonicalize` might accept); a path that is not a directory is refused with the
+      reference's words. Compared by hand with `nazm check --source-root` on a root above the
+      module, its parent's parent, one that does not exist and one the module is not under
+- [ ] 7.3 Loading from editor buffers (text overlays), for `lsp`'s unsaved documents
+- [ ] 7.4 A public way to show any type (`lsp` hover)
+- [ ] 7.5 A declaration index for names that are not local (`lsp` definition)

@@ -616,7 +616,7 @@ fn depth_of(path: Str) -> Int {
 // --- `root::decide` ----------------------------------------------------------------------------
 
 // Where a compilation's source root is and how it was chosen: `how` 0 derived, 1 a package's, 2 a
-// marker's; -1 a refusal the reference states without a diagnostic (an invalid manifest, a marker
+// marker's, 3 given (`--source-root`); -1 a refusal the reference states without a diagnostic (an invalid manifest, a marker
 // that is not empty), with `why`; -2 a manifest this front end does not read.
 pub struct Root {
     how: Ints,
@@ -638,6 +638,27 @@ fn root_of(how: Int, path: Str, why: Str) -> Root {
 
 // `decide` for the root module at the absolute path `module`: upwards from its directory, the first
 // manifest whose source root holds it, or the first `nazm.root` marker, or its own directory.
+// A source root given (`root::decide` with `--source-root`): a directory, and an ancestor of the
+// root module's — found among its ancestors as written (lexically: this front end has no
+// `realpath`, so a root reached through a link is not found; `-2`, as the reference's
+// `canonicalize` would decide it). A path that is not absolute is not read here either.
+pub fn pk_given(module: Str, given: Str, io: IoCap) -> Root {
+    if pk_starts(given, "/") == false { return root_of(0 - 2, "", "a relative source root"); }
+    let d = os_dir_open(given);
+    if os_status(d) < 0 { return root_of(0 - 1, "", pk_cat3("`", given, "` is not a directory")); }
+    os_close(d);
+    let want = pk_normalise(given);
+    let abs = pk_normalise(module);
+    let mut dir = pk_parent(abs);
+    while dir != "" {
+        if dir == want { return root_of(3, dir, ""); }
+        dir = pk_parent(dir);
+    }
+    root_of(0 - 2, "",
+            pk_cat3(pk_cat3("`", module, "` is not inside the source root `"), given,
+            "` as written; every module of a compilation is identified by its path relative to the root, and the root module cannot be outside it"))
+}
+
 pub fn pk_decide(module: Str, io: IoCap) -> Root {
     let abs = pk_normalise(module);
     let here = pk_parent(abs);
