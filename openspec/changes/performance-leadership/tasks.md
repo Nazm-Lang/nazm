@@ -65,3 +65,20 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the
 cut-over, written once in Nazm (the order rule above: nothing done twice).
+
+## 7. The compiler's own time and memory (the copyright holder, 2026-10-16)
+
+Both compilers — the Rust one and the one written in Nazm — measured phase by phase for how time
+and memory grow with the program, and made cheaper, nanoseconds first, then microseconds, then
+milliseconds. Measurement on both now; fixes in the Nazm-written compiler (it is `nazm` after R8),
+in the Rust compiler only where users would meet the cost before then (the order rule above).
+
+- [ ] 7.1 The complexity audit: for each phase (lexing, parsing, resolution, checking, Core IR, MIR,
+      LIR, code generation, linking, the caches), generated programs of n, 2n, 4n, 8n lines and of
+      deep nesting, long chains and many modules; time and peak memory fitted to a growth class;
+      anything worse than n log n flagged with the input that shows it; both compilers; quiet host
+- [ ] 7.2 Latency budgets: `nazm check` of a small program in microseconds, a warm `nazm build` in
+      milliseconds, per-function work in nanoseconds — set from 7.1 and enforced as tests
+- [ ] 7.3 Fixes in priority order: superlinear phases first, then the largest constant factors
+      (hashing, allocation per node, copies), each measured before and after
+- [ ] 7.4 A growth guard per phase in both compilers, like `…lowers_in_time_proportional_to_its_size`
