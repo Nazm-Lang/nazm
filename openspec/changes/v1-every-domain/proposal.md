@@ -4,7 +4,9 @@ The copyright holder decided (2026-10-15): **1.0 is a stable release meant to la
 waits until every domain is ready** — cloud computing, quantum computing, hardware and chip design,
 microcontrollers and microchip drivers — rather than shipping a stable core first and adding domains
 as 1.x. 1.0 therefore moves from the March–April 2027 estimate to whenever the last domain passes
-its gate.
+its gate — estimated on 2026-10-16, from the pace so far, as early 2027 if the boards, the quantum
+account, the Windows host and the licence review are started alongside the code (`docs/roadmap.md`,
+*When 1.0*).
 
 ## What Changes
 
