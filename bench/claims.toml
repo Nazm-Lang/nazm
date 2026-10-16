@@ -449,3 +449,8 @@ why = "two runs of `bench/compare/concurrency.sh --wait` on this Mac, each begun
 heading = "R1.5 5.1: the comparison with safety-equivalent rows and a checks column, measured (2026-10-16)"
 status = "dated"
 why = "one run of `bench/compare/compare.py` on this Mac, begun at load 2.11 with no other agent's work running (sampled every 15 s); a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "The compilers' growth, phase by phase, measured (performance leadership 7.1–7.2, 2026-10-17)"
+status = "dated"
+why = "one run of `bench/complexity/measure.py` (programs from `bench/complexity/gen.py`) on this Mac, every measurement begun below load 2 with no cargo, rustc or nextest running; a record of that date, machine and tree (e9d9fa40) — the script reproduces the method and the growth classes, not these numbers"
