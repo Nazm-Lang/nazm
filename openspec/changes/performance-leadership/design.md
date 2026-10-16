@@ -426,3 +426,63 @@ the next multicore question, not this change's.
 `nz_os_stack_size` with the target's constant, for Windows the function after `nz_os_page_size`.
 No other runtime text, signature or schema moves; R9's code generator calls the runtime and needs
 nothing.
+
+### Concurrency engineering: the runtime half of 6.2–6.4 (2026-10-16)
+
+The copyright holder chose (2026-10-16) to do the runtime half of stage P now; compiler passes stay
+after the cut-over. What 6.1 measured (`docs/performance.md`, *Concurrency*) names the causes: every
+`spawn` maps and unmaps a 256 KiB guarded stack (system time dominates `spawn`, and a blocked task
+keeps a whole 16 KiB page resident on this Mac), every wait and wake goes through one process-wide
+waiter lock, a wake broadcasts, and a worker sleeps in the kernel the moment its queue is empty.
+The guarantees stay: data races refused (`N0321`), no task outliving its scope (`N0320`),
+authority only as passed, `N0408` for recursion past a task's stack, failures and stack limits per
+task, and `NAZM_WORKERS=1` deterministic.
+
+**6.2 — tasks share their worker's stack; a parked task's frames are copied out.** Considered:
+(a) smaller `mmap`'d stacks, or pooled ones — a guarded stack can never cost less than one page
+resident, 16 KiB on Apple silicon, which is today's 17.4 KiB; (b) unguarded stacks packed in the
+heap — unsafe, since the stack check budgets Nazm frames only and the runtime's C calls (formatting,
+the resolver, TLS) below the limit would run into a neighbour; (c) segmented stacks — LLVM's
+`split-stack` has no `__morestack` on macOS or Windows, and a split in a C call is a crash;
+(d) Go's copying growth — it moves frames, which needs a precise map of every pointer into the
+stack, which Nazm's code generators do not keep. **Chosen: (e), copied stacks at a fixed address.**
+Each worker owns one guarded run stack of the task-stack size (`NAZM_TASK_STACK`, `--stack-size`,
+256 KiB by default). A task runs on its worker's run stack; when a *different* task is to run there,
+the frames of the one in place (from its saved stack pointer to the top) are copied into a heap
+buffer the task owns, and copied back to the same addresses before it next runs. Same addresses, so
+nothing moves: frame pointers, the unwinder's tables, stack probes, LLVM's spilled addresses and the
+saved registers all stay valid, and the stack check is unchanged — one load and two comparisons, the
+limit the run stack's. A task already pins to its worker (§7.84: a compiler may keep a thread-local's
+address across a call), so a shared stack costs no mobility a task had. The copy is lazy: a task
+resumed while its frames are still in place (one task, or two alternating on two workers) copies
+nothing. Sound because nothing outside a task reads its stack while it is parked: a task's arguments
+are a heap block (§7.84, N0321 refuses sharing), a waiter is registered by its heap record, and the
+runtime's waits keep only a condition variable's address as a key. A blocked task then costs its
+record and its frames' bytes; `spawn` costs a record, no system call. Not chosen for this: a pool of
+stacks per task (it fixes the start-up cost, not the memory).
+
+**6.3 — per-worker queues, stealing, spinning, and preemption at calls.** Each worker keeps two
+queues: tasks never started (which have no frames, so any worker may take them) and tasks resumed
+(pinned). A task spawned by a task goes to its own worker's queue — the spawner usually waits on it
+next — and one spawned by `main` round robin as today. A worker with nothing to run first steals
+half the unstarted tasks of the busiest-looking other worker, then spins for a short while
+(about 50 µs) before sleeping on its condition variable; a waker signals a worker only when it
+sleeps. Locks stay per worker (a deque under its own mutex; Chase–Lev lock-free deques are not
+needed while a steal is rare and the owner's own lock is uncontended). **Preemption at function
+entry, through the stack check:** a monitor thread, when a task has held its worker for 10 ms and
+the worker has others queued, writes the largest address into that worker's stack limit, so the
+next checked call in the task takes the slow path, which restores the limit and yields. The fast
+path costs nothing more. Loop back-edges without a call are not preempted: that needs a poll in
+every loop, which is a code-generation change for after the cut-over. Off with one worker
+(deterministic mode).
+
+**6.4 — channels.** The `Int` channel's text is the thread model's, line for line in
+`compiler/emit.nz` (`runtime parity`); its waits and wakes are already the pool's hooks, so the
+hooks are made cheap first: the waiter table's one lock becomes a lock per bucket, and a wake with
+nobody parked touches no lock. A direct hand-off to a parked receiver changes the channel text and
+its mirror; it is the next step, with `select` over channels of different element types (a language
+change: both checkers, the interpreter, the pipeline's built-ins, the semantic epoch).
+
+**Versions.** Runtime ABI 39 → 40 (copied stacks), 41 (scheduler), 42 (waiter table). Each bump
+regenerates `toolchain/pipeline/rtext.nz` and `runtime.nz` with `rt_abi_revision` in the same
+commit. No semantic epoch moves for 6.2–6.3.

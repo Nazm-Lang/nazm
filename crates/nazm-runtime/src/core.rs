@@ -2257,6 +2257,7 @@ const POOL_RUNTIME: &str = r#"
 ; program that calls C stores 1 before `main` runs; a library, which has no entry, keeps the pool.
 @nz.pool_policy = hidden global i64 2
 @.pool.fmt = private unnamed_addr constant [46 x i8] c"nazm-pool: workers=%lld peak=%lld stack=%lld\0A\00"
+@.pool.nomem = private unnamed_addr constant [69 x i8] c"nazm: out of memory: the frames of a parked task could not be saved\0A\00"
 
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
@@ -2404,16 +2405,27 @@ make:
   %more = icmp slt i64 %i, %count
   br i1 %more, label %one, label %publish
 one:
-  %w = call ptr @malloc(i64 320)
+  %w = call ptr @malloc(i64 384)
   %wnull = icmp eq ptr %w, null
   br i1 %wnull, label %fail, label %winit
 winit:
-  call void @llvm.memset.p0.i64(ptr %w, i8 0, i64 320, i1 false)
+  call void @llvm.memset.p0.i64(ptr %w, i8 0, i64 384, i1 false)
   %wmi = call i32 @pthread_mutex_init(ptr %w, ptr null)
   %wcv = getelementptr i8, ptr %w, i64 128
   %wci = call i32 @pthread_cond_init(ptr %wcv, ptr null)
   %ip = getelementptr i8, ptr %w, i64 288
   store i64 %i, ptr %ip
+  ; The worker's run stack (performance leadership 6.2): every task of this worker runs on it, at
+  ; the same addresses, from the platform's stack unit — page-aligned, its lowest page a guard.
+  %rtotal = add i64 %stack, %pg
+  %run = call ptr @nz_os_stack_alloc(i64 %rtotal, i64 %pg)
+  %norun = icmp eq ptr %run, null
+  br i1 %norun, label %fail, label %runstack
+runstack:
+  %rbp = getelementptr i8, ptr %w, i64 320
+  store ptr %run, ptr %rbp
+  %rtp = getelementptr i8, ptr %w, i64 328
+  store i64 %rtotal, ptr %rtp
   %slot = getelementptr ptr, ptr %arr, i64 %i
   store ptr %w, ptr %slot
   br label %made
@@ -2622,6 +2634,15 @@ go:
   %sp = getelementptr i8, ptr %h, i64 24
   store i64 1, ptr %sp
   %u = call i32 @pthread_mutex_unlock(ptr %w)
+  %placed = call i1 @nz.task_place(ptr %w, ptr %h)
+  br i1 %placed, label %enter, label %nomem
+nomem:
+  ; The frames in place could not be saved, so neither task can run: the program ends, as it
+  ; does when a thread cannot be had for `main`.
+  %nm = call i64 @write(i32 2, ptr @.pool.nomem, i64 68)
+  call void @exit(i32 2)
+  unreachable
+enter:
   call void @nz.task_enter(ptr %h)
   %wsp = getelementptr i8, ptr %w, i64 272
   %tsp = load ptr, ptr %h
@@ -2667,17 +2688,14 @@ yielded:
   call void @nz.pool_push(ptr %w, ptr %h)
   br label %look
 finish:
-  ; The task's stack goes, then it is marked done, last: a joiner may free its record at once.
-  %base = getelementptr i8, ptr %h, i64 8
-  %stk = load ptr, ptr %base
-  %pg = load i64, ptr @nz.pool_page
-  %stotp = getelementptr i8, ptr %h, i64 16
-  %stot = load i64, ptr %stotp
-  ; The platform's stack unit lifts the guard and releases the stack, or leaks it rather than
-  ; hand back a page that would be given out unreadable (Q1-A1-10).
-  call void @nz_os_stack_free(ptr %stk, i64 %stot, i64 %pg)
-  br label %keptstack
-keptstack:
+  ; Its frames on the run stack are dead and its saved copy goes; then it is marked done, last:
+  ; a joiner may free its record at once.
+  %ownp = getelementptr i8, ptr %w, i64 336
+  store ptr null, ptr %ownp
+  %bufp = getelementptr i8, ptr %h, i64 8
+  %buf = load ptr, ptr %bufp
+  call void @free(ptr %buf)
+  store ptr null, ptr %bufp
   %js = load ptr, ptr @nz.pool_join
   %jl = call i32 @pthread_mutex_lock(ptr %js)
   %donep = getelementptr i8, ptr %h, i64 72
@@ -2689,9 +2707,9 @@ keptstack:
   br label %look
 }
 
-; Start a task on the pool: a record, a guarded stack, a first frame, a worker by round robin, and
-; its place in the argument block's head, where a thread's handle goes otherwise. 0, or 1 when no
-; stack could be had.
+; Start a task on the pool: a record, a worker by round robin, and its place in the argument block's
+; head, where a thread's handle goes otherwise. No stack: the task will run on its worker's (6.2).
+; 0, or 1 when no record could be had.
 define hidden i32 @nz.task_start(ptr %fn, ptr %blk) {
 entry:
   %t = call ptr @malloc(i64 192)
@@ -2701,31 +2719,10 @@ nothread:
   ret i32 1
 zero:
   call void @llvm.memset.p0.i64(ptr %t, i8 0, i64 192, i1 false)
-  %pg = load i64, ptr @nz.pool_page
-  %size = load i64, ptr @nz.pool_stack
-  %total = add i64 %size, %pg
-  ; The platform's stack unit (Gate 3): page-aligned, its lowest page a guard. No guard, no
-  ; task: a stack without one would overflow into whatever lies below it (Q1-A1-10), so null
-  ; is reported as "no stack could be had".
-  %base = call ptr @nz_os_stack_alloc(i64 %total, i64 %pg)
-  %bad = icmp eq ptr %base, null
-  br i1 %bad, label %nostack, label %guarded
-nostack:
-  call void @free(ptr %t)
-  ret i32 1
-guarded:
-  %bp = getelementptr i8, ptr %t, i64 8
-  store ptr %base, ptr %bp
-  %tot = getelementptr i8, ptr %t, i64 16
-  store i64 %total, ptr %tot
-  %top = getelementptr i8, ptr %base, i64 %total
-  %sp = call ptr @nz_ctx_prepare(ptr %top, ptr %t)
-  store ptr %sp, ptr %t
   %fp = getelementptr i8, ptr %t, i64 56
   store ptr %fn, ptr %fp
   %blp = getelementptr i8, ptr %t, i64 64
   store ptr %blk, ptr %blp
-{SET_LIMIT}
   %k = atomicrmw add ptr @nz.pool_next, i64 1 monotonic
   %count = load i64, ptr @nz.pool_count
   %idx = urem i64 %k, %count
@@ -2742,6 +2739,80 @@ guarded:
   call void @nz.pool_push(ptr %w, ptr %t)
   %u = call i32 @pthread_mutex_unlock(ptr %w)
   ret i32 0
+}
+
+; Put a task's frames on its worker's run stack (6.2), on the worker's own thread, its lock not held.
+; The task whose frames are there already costs nothing. Otherwise the frames in place, from that
+; task's saved stack pointer to the top, are copied into a buffer it owns, and this task's copy is
+; put back at the same addresses — or, on its first run, its first frame is laid out at the top and
+; its stack limit set from the run stack. False when the frames in place could not be saved.
+define hidden i1 @nz.task_place(ptr %w, ptr %t) {
+entry:
+  %ownp = getelementptr i8, ptr %w, i64 336
+  %own = load ptr, ptr %ownp
+  %here = icmp eq ptr %own, %t
+  br i1 %here, label %done, label %swap
+swap:
+  %rbp = getelementptr i8, ptr %w, i64 320
+  %base = load ptr, ptr %rbp
+  %rtp = getelementptr i8, ptr %w, i64 328
+  %total = load i64, ptr %rtp
+  %top = getelementptr i8, ptr %base, i64 %total
+  %topi = ptrtoint ptr %top to i64
+  %vacant = icmp eq ptr %own, null
+  br i1 %vacant, label %bring, label %save
+save:
+  %osp = load ptr, ptr %own
+  %ospi = ptrtoint ptr %osp to i64
+  %n = sub i64 %topi, %ospi
+  %obufp = getelementptr i8, ptr %own, i64 8
+  %ocapp = getelementptr i8, ptr %own, i64 16
+  %ocap = load i64, ptr %ocapp
+  %fits = icmp ule i64 %n, %ocap
+  br i1 %fits, label %copyout, label %grow
+grow:
+  %old = load ptr, ptr %obufp
+  %nb = call ptr @realloc(ptr %old, i64 %n)
+  %oom = icmp eq ptr %nb, null
+  br i1 %oom, label %nomem, label %grown
+nomem:
+  ret i1 false
+grown:
+  store ptr %nb, ptr %obufp
+  store i64 %n, ptr %ocapp
+  br label %copyout
+copyout:
+  %obuf = load ptr, ptr %obufp
+  call void @llvm.memcpy.p0.p0.i64(ptr %obuf, ptr %osp, i64 %n, i1 false)
+  %olenp = getelementptr i8, ptr %own, i64 152
+  store i64 %n, ptr %olenp
+  br label %bring
+bring:
+  %startedp = getelementptr i8, ptr %t, i64 160
+  %started = load i64, ptr %startedp
+  %fresh = icmp eq i64 %started, 0
+  br i1 %fresh, label %first, label %restore
+first:
+  %sp = call ptr @nz_ctx_prepare(ptr %top, ptr %t)
+  store ptr %sp, ptr %t
+  store i64 1, ptr %startedp
+  %pg = load i64, ptr @nz.pool_page
+  %size = load i64, ptr @nz.pool_stack
+{SET_LIMIT}
+  br label %placed
+restore:
+  %tsp = load ptr, ptr %t
+  %tbufp = getelementptr i8, ptr %t, i64 8
+  %tbuf = load ptr, ptr %tbufp
+  %tlenp = getelementptr i8, ptr %t, i64 152
+  %tlen = load i64, ptr %tlenp
+  call void @llvm.memcpy.p0.p0.i64(ptr %tsp, ptr %tbuf, i64 %tlen, i1 false)
+  br label %placed
+placed:
+  store ptr %t, ptr %ownp
+  br label %done
+done:
+  ret i1 true
 }
 
 ; What the entry stub calls, on the task's own stack: the task's start routine, then the end.
