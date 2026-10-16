@@ -181,7 +181,7 @@ pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
         }
         m = m + 1;
     }
-    eprint(str_concat(str_concat(str_concat(str_concat("units: ", int_to_str(reused)), " reused, "), int_to_str(written)), " written\n"));
+    eprint(str_concat(str_concat(str_concat(str_concat("units: ", int_to_str(reused)), " reused, "), int_to_str(written)), str_concat(" written", co_nl())));
     cr_core_with(f, str_join(out, ""))
 }
 
