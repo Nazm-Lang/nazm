@@ -328,6 +328,9 @@ pub struct Ck {
     // The zero a compound update of a map's absent entry starts from (`map_fallback`), by the
     // brackets' span: the literal made for it.
     mzero: Smap,
+    // The record or enum each type name written resolved to, by the name's span (for `lsp`'s
+    // definition).
+    mtyn: Smap,
     // The type a list or array literal, or a `[v; n]`, was made as, by its span.
     marr: Smap,
     mfor: Smap,
@@ -1454,7 +1457,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), mtyn: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -2935,7 +2938,10 @@ fn resolve_name(c: Ck, name: Str, span: Int, d: Diags) -> Int {
     if name == "Strs" { return t_strs(); }
     if is_builtin_name(name) { return builtin_ty(c, name); }
     let t = type_named(c, name);
-    if t >= 0 { return t; }
+    if t >= 0 {
+        if is_record(c, t) || is_enum(c, t) { sm_put(c.mtyn, sps(c, span), spe(c, span), t); }
+        return t;
+    }
     // `Map[K, V]` (R1.5, D5): the standard hash map under a shorter name, where it is in scope.
     if name == "Map" && type_named(c, "HashMap") >= 0 { return type_named(c, "HashMap"); }
     if name == "Map" {
@@ -14555,6 +14561,9 @@ fn group_by(owner: Ints, n: Int, first: Ints, count: Ints, list: Ints) -> Int {
 
 // The `Cell` a binding a closure shares is kept in (R1b, L10).
 pub fn ck_cell_of(c: Ck, t: Int) -> Int { holder_of(c, tag_cell(), t) }
+// The record or enum type the type name written at `s..e` (absolute) resolved to, or -1.
+pub fn ck_type_name_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mtyn, s, e) }
+
 // The zero literal a compound update's read of a map at the brackets `s..e` (absolute) passes,
 // or -1.
 pub fn ck_zero_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mzero, s, e) }

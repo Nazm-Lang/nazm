@@ -590,7 +590,8 @@
       definition): a function called or used as a value, a record built, an enum's variant
       named — its declaration's module and name span; the declarations' name spans are public
       (`ck_fn_name_start`, `ck_record_name_start`, `ck_enum_name_start`, `ck_trait_name_start`
-      and their ends). A type written in a signature is not recorded by place, so not yet.
+      and their ends). A type written in a signature is not recorded by place, so not yet:
+      done since — see 7.7.
       7.3–7.5 tried by hand on two unsaved modules (an import, a call, a construction, a
       binding's type). `run.sh` after them: core 3,153 agree, 0 differ; of 93,807 functions the
       lowering carries every one, all agree; the other parts 10,992, all agree; 1,832 whole
@@ -606,3 +607,11 @@
       3,150, all agree), render likewise, facts 3,150 agree, 6 differ (carried 3,150, all
       agree). `selfhost.rs`'s `NOT_CARRIED` still lists them: that test reads
       `compiler/analyse.nz` (the bootstrap checker), which has no `Bytes`, not `sema.nz`
+- [x] 7.7 Type names written anywhere — a signature, an annotation, a construction's type — for
+      `lsp` definition: sema.nz records the record or enum each name resolves to by its span
+      (`ck_type_name_at`) and `fx_declaration_at` answers it with its declaration (signatures
+      unchanged). Tried by hand on an unsaved module naming an imported record and enum in a
+      signature, an annotation and a construction. `run.sh` after it: check 3,240 agree, 1
+      differ (carried 3,235, all agree); facts 3,235 agree, 6 differ (carried 3,235, all agree);
+      core 3,241 agree, 0 differ, every one of 96,572 functions carried and agreeing, the other
+      parts 11,310, all agree, 1,885 whole documents, all the reference's bytes
