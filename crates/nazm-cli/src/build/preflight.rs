@@ -370,6 +370,17 @@ pub(super) fn admitted(
         // the check below catches that rather than this guessing around it.
         None => PathBuf::from(input.file_stem().unwrap_or_default()),
     };
+    // A Windows executable is `prog.exe` (W2): MinGW-w64's driver adds `.exe` to a name with no
+    // extension, so the name the build publishes is the name the linker writes.
+    let windows = choice
+        .target
+        .map_or(cfg!(windows), |t| t.contains("windows"));
+    let output =
+        if windows && !choice.library && choice.objects.is_none() && output.extension().is_none() {
+            output.with_extension("exe")
+        } else {
+            output
+        };
 
     // The entry's source, or any module's the program loads (Q1-A1-07).
     let clobbers = same_file(input, &output)

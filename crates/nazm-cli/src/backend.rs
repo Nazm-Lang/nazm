@@ -61,6 +61,10 @@ pub(crate) const DRIVER: &str = "clang";
 ///   without it. Removing it would break a legitimate installation, which is a failure and
 ///   not a wrong answer, but a failure nobody asked for.
 /// * `TMPDIR` — where a crash report goes. It does not reach the object.
+/// * `TMP`, `TEMP` — `TMPDIR`'s names on Windows, where clang cannot link without one: with
+///   neither, its temporary files would go to the Windows directory, which a standard account
+///   may not write (W2). They do not reach the object.
+/// * `SystemRoot` — where Windows itself is, which its own libraries read as they start.
 /// * `DEVELOPER_DIR`, `SDKROOT` — which toolchain and which SDK. Both reach the object,
 ///   and both arrive in the key through the resolved configuration.
 /// * the deployment targets — same mechanism, same arrival.
@@ -71,6 +75,9 @@ pub(crate) const PASSED: &[&str] = &[
     "PATH",
     "LD_LIBRARY_PATH",
     "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SystemRoot",
     "DEVELOPER_DIR",
     "SDKROOT",
     "MACOSX_DEPLOYMENT_TARGET",
@@ -292,15 +299,21 @@ impl Backend {
 
     /// The driver, with an environment built from nothing.
     fn command(&self) -> Command {
-        let mut c = Command::new(DRIVER);
-        c.env_clear();
-        for name in PASSED {
-            if let Some(value) = std::env::var_os(name) {
-                c.env(name, value);
-            }
-        }
-        c
+        driver_command()
     }
+}
+
+/// The driver as every build runs it: an environment built from nothing but [`PASSED`]. `nazm
+/// doctor` asks it its questions the same way, so its answer is the build's.
+pub(crate) fn driver_command() -> Command {
+    let mut c = Command::new(DRIVER);
+    c.env_clear();
+    for name in PASSED {
+        if let Some(value) = std::env::var_os(name) {
+            c.env(name, value);
+        }
+    }
+    c
 }
 
 /// The arguments that turn one LLVM file into one object.
@@ -390,13 +403,35 @@ fn link_args(opt_level: u8, cross: Option<&str>, whole: bool) -> Vec<String> {
 /// Linux, the C library's mathematics (`-lm`), which Gate 2's float built-ins call (`round`,
 /// `sin`, `pow`, …) and which glibc keeps apart; on macOS they are in `libSystem`. M1: Gate 2C
 /// linked without it, so every Linux build calling one failed to link.
+/// On Windows, MinGW-w64's (W2): [`windows_libraries`], as `link.txt` names them.
 pub(crate) fn system_libraries(cross: Option<&str>) -> Vec<String> {
     let linux = cross.map_or(std::env::consts::OS == "linux", |t| t.contains("linux"));
+    let windows = cross.map_or(std::env::consts::OS == "windows", |t| t.contains("windows"));
     if linux {
         vec!["-lm".to_owned()]
+    } else if windows {
+        windows_libraries()
     } else {
         Vec::new()
     }
+}
+
+/// The bytes a Windows executable reserves for its main thread: 8 MiB, the main thread's stack
+/// on macOS and Linux. `--stack-size` still runs `main` on a thread of its own size.
+pub(crate) const WINDOWS_MAIN_STACK: u64 = 8 * 1024 * 1024;
+
+/// MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
+/// statically, so the executable needs no MinGW DLL beside it. The main thread reserves 8 MiB,
+/// as macOS and Linux give it, where Windows' default is 1 MiB (`docs/spec.md`, *The limit*):
+/// the same recursion meets `N0408` at the same depth everywhere.
+pub(crate) fn windows_libraries() -> Vec<String> {
+    vec![
+        "-static".to_owned(),
+        "-pthread".to_owned(),
+        "-lws2_32".to_owned(),
+        "-lbcrypt".to_owned(),
+        format!("-Wl,--stack,{WINDOWS_MAIN_STACK}"),
+    ]
 }
 
 /// `-target TRIPLE` for a cross build (N57), nothing for the host's; for the AArch64 board,
@@ -696,9 +731,14 @@ mod tests {
         ] {
             assert!(system_libraries(Some(t)).is_empty(), "{t}");
         }
+        // MinGW-w64's, as `link.txt` names them (W2: a Windows host's own build links them).
+        assert_eq!(
+            system_libraries(Some("x86_64-pc-windows-gnu")).join(" "),
+            "-static -pthread -lws2_32 -lbcrypt -Wl,--stack,8388608"
+        );
         assert_eq!(
             system_libraries(None).is_empty(),
-            std::env::consts::OS != "linux",
+            !matches!(std::env::consts::OS, "linux" | "windows"),
             "the host's own link"
         );
     }

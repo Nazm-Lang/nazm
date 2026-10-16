@@ -489,3 +489,28 @@ fn main() -> Int { tagged(10) }
         assert_eq!(names("__gcc_personality_v0"), unwinds, "{target}");
     }
 }
+
+/// `nazm doctor` (W2): with no clang on `PATH`, it names what is missing and exits 4, the
+/// toolchain's status; with this machine's own `PATH`, it answers either way and says so.
+#[test]
+fn doctor_names_what_a_native_build_lacks() {
+    let empty = tempfile::tempdir().unwrap();
+    let out = Command::new(NAZM)
+        .arg("doctor")
+        .env("PATH", empty.path())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(4), "{said}");
+    assert!(
+        said.contains("clang") && said.contains("MISSING") && said.contains("not found on PATH"),
+        "{said}"
+    );
+    let out = Command::new(NAZM).arg("doctor").output().unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    match out.status.code() {
+        Some(0) => assert!(said.contains("has what it needs"), "{said}"),
+        Some(4) => assert!(said.contains("MISSING"), "{said}"),
+        other => panic!("nazm doctor exited {other:?}: {said}"),
+    }
+}

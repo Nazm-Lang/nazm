@@ -281,7 +281,7 @@ output may change in any release.
 | Class | Commands |
 | --- | --- |
 | **Stable public** | `run`, `check`, `build`, `test`, `fmt`, `fix`, `init`, `capabilities`, `doc`, `inspect`, `lock`, `update`, `publish`, `yank` |
-| **Experimental** | `bench`, `lsp`, `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `repl`, `comptime`, `reload-check`, `contract`, `accel`, `bindgen`, `attest`, `trace`, `profile`, `explain-cost`, `explain-flow`, `obligations` |
+| **Experimental** | `bench`, `lsp`, `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `repl`, `comptime`, `reload-check`, `contract`, `accel`, `bindgen`, `attest`, `trace`, `profile`, `explain-cost`, `explain-flow`, `obligations`, `doctor` |
 | **Debug/internal** | `runtime`, `core-ir`, `mir`, `lir`, `resolve`, `references`, `interface` |
 
 A stable command's options are stable except these, which are experimental: `build --layout`,
