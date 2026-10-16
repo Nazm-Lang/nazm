@@ -14692,9 +14692,9 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "windows::a_large_fr
 [[mutation]]
 name = "windows-main-stack-default"
 why = "a Windows executable keeps the 1 MiB main stack Windows gives by default, so a recursion that runs on macOS and Linux meets N0408 on Windows only"
-file = "crates/nazm-cli/src/build/objects.rs"
-find = '            format!("-static -pthread -lws2_32 -lbcrypt -Wl,--stack,{WINDOWS_MAIN_STACK}")'
-replace = '            format!("-static -pthread -lws2_32 -lbcrypt{}", "")'
+file = "crates/nazm-cli/src/backend.rs"
+find = '        format!("-Wl,--stack,{WINDOWS_MAIN_STACK}"),'
+replace = '        format!("-Wl,--stack,{}", 1024 * 1024),'
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "windows::the_main_thread_reserves_what_macos_and_linux_give_it" }]
 
 [[mutation]]
