@@ -3917,3 +3917,33 @@ Not claimed: any lead in concurrency. On this baseline Go leads task start-up an
 an order of magnitude; Nazm leads memory for small programs and for an HTTP server, and is within
 15% of Go's HTTP throughput, with two compile-time guarantees Go does not give. The parallel CPU
 job is the multicore section's, measured there under load; its quiet re-run is still to be taken.
+
+## R1.5 5.1: the comparison with safety-equivalent rows and a checks column, measured (2026-10-16)
+
+`python3 bench/compare/compare.py NAZM OUT` (10 runs, hyperfine), now with a second build of each
+compiled language that can carry Nazm's checks — Rust `-C overflow-checks=on`, Zig `ReleaseSafe`,
+C and C++ with `-fsanitize=address,undefined` — and a `checks` column saying what each row checks
+and when (`SAFETY` in `compare.py`). Same host as the concurrency baseline; Nazm release from
+`b98b2f73` (3.5's streaming `file_lines` in `words.nz`); started at load 2.11 with no other
+agent's build or suite running, and none ran during it (sampled every 15 s); the load stayed
+between 2.1 and 4.1, the comparison's own builds and parallel runs. Medians, in milliseconds; the
+full tables are in the run's `compare.md`.
+
+| workload | Nazm (always checked) | Rust, overflow checks | Zig ReleaseSafe | C, ASan + UBSan | Swift `-O` | C `-O2`, unchecked | Rust `-O3` | Go |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hello | 1.9 | 2.1 | 2.4 | 14.4 | 1.9 | 1.8 | 2.2 | 2.9 |
+| fib(35) | 44.1 | 44.6 | 44.7 | 56.9 | 44.9 | 35.2 | 35.6 | 39.5 |
+| words, time | 115.6 | 66.8 | 53.6 | 112.2 | 479.3 | 73.6 | 66.0 | 88.6 |
+| words, peak RSS (MiB) | 8.7 | 14.9 | 14.9 | 32.1 | 178.8 | 15.3 | 14.9 | 61.5 |
+| primes, W = 1 | 171.7 | 166.9 | — | 198.1 | — | 176.1 | 191.2 | 144.3 |
+| primes, W = 8 (speed-up) | 23.8 (7.21×) | 23.3 (7.16×) | — | 38.3 (5.17×) | — | 24.5 (7.20×) | 26.3 (7.28×) | 21.4 (6.73×) |
+
+**Read with the checks column.** Against the languages that check what Nazm checks, Nazm is
+first or tied on `hello` and `fib` (44.1 ms against 44.6, 44.7 and 44.9 — within the runs' spread, so
+tied with Rust, Zig and Swift, and 22% ahead of sanitized C), and the unchecked rows' lead on `fib`
+— C 35.2, Rust 35.6 — is the cost of the overflow checks, as the checked Rust and Zig rows show.
+On `words` it is behind checked Rust (1.7×) and Zig (2.2×) and 3% behind sanitized C, while using
+the least memory of any compiled row but C++ and Ada (8.7 MiB; 19.1 MiB before 3.5's streaming
+`file_lines`). On the parallel job, Nazm's one-task time is between checked Rust's and C's, and it
+scales with them (7.2× at eight workers). Not claimed: a lead where the spread overlaps; any lead
+on `words` time.
