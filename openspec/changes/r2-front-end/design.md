@@ -382,6 +382,23 @@ text's spans reach Core IR and its digests. The templates are written with `«`,
 in `configure.nz` with the attributes (`derive_refusals`), from the same tables (`dv_refusal_for`,
 `dv_named`), and nothing is generated for it.
 
+**D28 — Per-module output is one Core IR unit per module, keyed by the reference's `CheckKey`
+(the coordinator's decision, 2026-10-16; `rewrite-in-nazm` 3.3).** The key is the one `nazm-cache`
+files a module's check under: the checker's identity, the module's durable key, its source
+fingerprint, and each direct import's key and `InterfaceHash` — so a unit is reused exactly when
+the reference's cache would reuse the module's check, and R6 rebuilds from those units. The Nazm
+front end computes every part byte for byte: `Framed` (`fx_framed`), the source fingerprint (the
+module's text as the compilation holds it, with the configuration where it writes `@cfg`), the
+checker's identity from its fields as the reference generates them into `builtins.nz` (the epoch,
+the version, both schemas, the built-in table, the type names, the checker's codes), and the
+published interface — `PersistentUnitInterface` as `serde_json` writes it (`ck_interface_json`):
+the dependencies, the records and enums its public surface reaches (`reachable_types`, which an
+array does not pass through), the exports and re-exports, traits and impls (a re-exporting
+module's too), re-exported types and constants, each in the reference's order. `run.sh keys`
+compares all of it, line by line, with the reference dumper's `keys` mode, which runs the
+reference's own `CheckKey`, `InterfaceHash` and `PersistentUnitInterface` under the host's
+configuration.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the

@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core (default: the first three)
+#                                                  core, keys (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -61,7 +61,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core) driver=diagnose ;;
+    syntax|check|render|facts|core|keys) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -120,6 +120,12 @@ for mode in $modes; do
           diff "$want" "$got" > "$R2_DIR/$name.diff" 2>&1 || true
         fi
         exit 0 ;;
+      keys)
+        # The keys of the cache (design D28): for each module its key, source fingerprint,
+        # published interface, interface hash and check key, as the reference computes them.
+        "$R2_REF" keys "$R2_ROOT/$f" > "$want" 2>/dev/null || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --keys "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" > "$got" 2> "$R2_DIR/$name.stop" || true
+        [ -s "$R2_DIR/$name.stop" ] || rm -f "$R2_DIR/$name.stop" ;;
       syntax)
         "$R2_REF" syntax "$R2_ROOT/$f" > "$want" 2>&1 || true
         timeout "$R2_DEADLINE" "$R2_EXE" --syntax "$R2_ROOT/$f" > "$got" 2>&1 || true ;;
