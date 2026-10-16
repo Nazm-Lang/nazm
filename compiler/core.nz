@@ -3499,20 +3499,45 @@ fn co_method(lo: Lo, ms: Int, span: Int, recv: Int, rname: Str, rspan: Int, rest
         rty = co_last_ty(lo);
     }
     let target = ck_site_fn(c, site);
-    if ck_site_builtin(c, site) >= 0 || (target >= 0 && ck_fn_method(c, target) == false) { return co_call_parts(lo, ms, pre, rest, span); }
+    // A trait's default body is no impl's method, and is called as one at the receiver's type.
+    let default = target >= 0 && co_contains(ck_fn_name(c, target), "/default/");
+    if ck_site_builtin(c, site) >= 0 || (target >= 0 && ck_fn_method(c, target) == false && default == false) { return co_call_parts(lo, ms, pre, rest, span); }
     let args = strs_new();
     co_push_all(args, pre);
     if target < 0 { return co_trait_call(lo, site, args, rest, span); }
     let mut i = 0;
+    let mut first_ty = 0 - 1;
     while i < ints_len(rest) {
         strs_push(args, co_expr(lo, ints_get(rest, i)));
+        if i == 0 { first_ty = co_last_ty(lo); }
         i = i + 1;
     }
     if co_halted(lo) { return ""; }
     let mut targs = "[]";
     if co_contains(ck_fn_name(c, target), "/default/") {
-        if ufcs || rty < 0 { return co_stopped(lo, "a default method called by its trait's name"); }
-        targs = co_list_one(json_str(co_durable(lo, rty)));
+        // Called by its trait's name (`Trait.m(x)`), the receiver is the first argument.
+        let mut on = rty;
+        if ufcs || on < 0 { on = first_ty; }
+        if on < 0 { return co_stopped(lo, "a default method with no receiver"); }
+        targs = co_list_one(json_str(co_durable(lo, on)));
+    }
+    // A generic impl's method (L11b): its type parameters are the receiver type's arguments,
+    // as the checker settled them where it recorded them.
+    if targs == "[]" && ck_fn_type_params(c, target) > 0 {
+        if ck_site_type_arg_count(c, site) == ck_fn_type_params(c, target) {
+            targs = co_site_type_args(lo, site);
+        } else {
+            let mut on = rty;
+            if on < 0 { on = first_ty; }
+            if on < 0 || ck_type_arg_count(c, on) != ck_fn_type_params(c, target) { return co_stopped(lo, "a generic impl's method whose type arguments the checker did not settle"); }
+            let ts = strs_new();
+            let mut k = 0;
+            while k < ck_type_arg_count(c, on) {
+                strs_push(ts, json_str(co_durable(lo, ck_type_arg(c, on, k))));
+                k = k + 1;
+            }
+            targs = co_list(ts);
+        }
     }
     let ret = ck_fn_ret_ty(c, target);
     if co_contains(co_durable(lo, ret), "$") { return co_stopped(lo, "a method whose result names a type parameter"); }
