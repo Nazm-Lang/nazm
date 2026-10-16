@@ -3847,3 +3847,73 @@ in a loop of divisions. Not claimed: any lead — the spread between rounds is l
 differences between languages — nor anything at W above the processors, where a pinned task cannot
 move to an idle worker (no stealing, §7.84's non-goal) and the blocks dealt round robin are what
 keeps the workers even.
+
+## Concurrency: the baseline against Go's goroutines, measured (performance leadership 6.1, 2026-10-16)
+
+Where Nazm's tasks stand against Go's goroutines before any scheduler work (6.2–6.5). Measurement
+only: no scheduler, channel or stack code changed. Each workload is written once in Nazm and once in
+Go, idiomatically, under `bench/compare/{nazm,go}/`: `spawn` (1,000,000 tasks in one `scope`, each
+adding 1 to a shared atomic, against goroutines and a `sync.WaitGroup`), `pingpong` (100,000 round
+trips between two tasks over two channels of capacity 1), `fanin` (8 producers each sending 125,000
+integers into one channel of capacity 1,024, one consumer summing), `idle` (100,000 tasks blocked on
+one channel at once; peak resident memory against the same program at 1,000), and `httpd` (an
+HTTP/1.1 server answering every `GET /` with `200 hello` — `@std/http`'s `http_serve_conn` in a task
+per connection, against `net/http`) under one shared load generator, `go/httpload.go` (`wrk` and
+`hey` are not installed: 64 keep-alive connections, one second's warm-up, 10 s counted).
+`bench/compare/concurrency.sh NAZM OUT --wait` builds both, checks they print the same answers
+(`spawn` 1000000, `pingpong` 5000050000, `fanin` 499999500000, `primes` 216816), waits until the
+1-minute load is below 2 with no cargo, nextest or rustc running, then measures.
+
+**Host and builds.** Apple M1 Pro (8 performance and 2 efficiency cores), 32 GiB, macOS 27.2; Go
+1.27.2 `go build`; Nazm release from `b98b2f73`, `--opt-level 2` (LLVM), the default scheduler — the
+pool, one worker per processor, 256 KiB guarded task stacks (architecture §7.84, N106).
+`hyperfine -N --warmup 2`, 5 runs for `spawn` and 10 for the rest, Go and Nazm in one invocation.
+The run began at load 1.94 with no other agent's build or suite running; the later loads in the
+table are the benchmark's own threads (ten processors busy in `spawn` raise the average they leave
+behind). Another agent's suite started 70 s later: the second and third HTTP rounds and the
+parallel `primes` job ran under it and are **not recorded** — they are still to be taken.
+
+| workload | Go | Nazm | Nazm against Go | load before |
+| --- | ---: | ---: | ---: | ---: |
+| spawn 1,000,000 tasks, wall | 275 ± 28 ms | 3,645 ± 15 ms | 13.2× slower | 1.94 |
+| spawn 1,000,000 tasks, peak RSS | 12.5 MiB | 244 MiB | 19.5× more | |
+| ping-pong, per round trip | 0.32 µs | 4.37 µs | 13.9× slower | 2.94 |
+| fan-in, 1,000,000 values from 8 producers | 68.1 ± 1.1 ms | 445 ± 7 ms | 6.5× slower | 2.87 |
+| memory per blocked task (100,000 against 1,000) | 2.7 KiB | 17.4 KiB | 6.5× more | 3.44 |
+| HTTP/1.1, 64 connections, one 10 s round | 93,630 requests/s | 80,735 requests/s | 0.86× | 3.44; 5.89 |
+| HTTP server RSS under that load | 21.7 MiB | 11.1 MiB | 0.51× | |
+| peak RSS of a small concurrent program (`pingpong`, `fanin`) | 4.3–4.9 MiB | 1.9–2.1 MiB | 0.44× | |
+
+**What the numbers say.**
+- **Starting a task is the largest gap, 13×,** and the same cause is the memory: each task `mmap`s
+  its 256 KiB stack and guard page at `spawn` and `munmap`s it when it ends (§7.84) — system time
+  dominates a run (on an earlier, loaded trial 10.4 s of system against 3.7 s of user time) — where a
+  goroutine starts on a small stack from Go's own allocator. A blocked task holds 17.4 KiB resident,
+  a goroutine 2.7 KiB. This is 6.2's subject: growable or stackless task frames.
+- **A channel hand-off between tasks costs 4.4 µs, Go's 0.3 µs.** A wait parks the task under the
+  channel's lock and the sender's wake broadcasts to every waiter (§7.84); tasks are pinned round
+  robin with no stealing, so ping-pong's two tasks sit on two workers and every hand-off crosses
+  threads. Fan-in, 6.5×, is the same cost with eight producers on one lock. 6.3 and 6.4's subject:
+  work stealing, and lock-free channels.
+- **HTTP is near Go: 0.86× its requests per second at half its memory.** Here a request is parsing
+  and writing within one connection's task, not hand-offs between tasks. One round only; the load
+  generator shared the ten processors with the server.
+- **A small concurrent program's memory is Nazm's:** 2 MiB against Go's 4–5 MiB.
+
+**What each side guarantees — the two sides do not pay for the same thing.**
+
+| | Nazm | Go |
+| --- | --- | --- |
+| Data races | refused at compile time: nothing shared and mutable unsynchronised reaches a task (`N0321`) | allowed; found at run time only under `-race`, and only when the race happens |
+| A task outliving its parent | refused at compile time: every task is joined by its `scope` (`N0320`) | allowed: a goroutine no one waits for leaks silently |
+| Authority | a task reaches only the capabilities passed to it | any goroutine may open files, sockets and processes |
+| Integer overflow | fails the program | wraps silently |
+| Preemption | none: a task computing without waiting holds its worker (§7.84) | asynchronous since Go 1.14 |
+| Work stealing | none: tasks pinned round robin | yes |
+| `select` | `chan_select_of` over channels of one element type | over any channels |
+| Deadlock | not detected | detected at run time when every goroutine is asleep |
+
+Not claimed: any lead in concurrency. On this baseline Go leads task start-up and every hand-off by
+an order of magnitude; Nazm leads memory for small programs and for an HTTP server, and is within
+15% of Go's HTTP throughput, with two compile-time guarantees Go does not give. The parallel CPU
+job is the multicore section's, measured there under load; its quiet re-run is still to be taken.

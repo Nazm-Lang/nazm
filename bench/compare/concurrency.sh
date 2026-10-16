@@ -10,11 +10,12 @@
 #   httpd ADDR        HTTP/1.1 requests/s under go/httpload (64 keep-alive connections, 10 s)
 #   primes W          the multicore section's parallel CPU job, W = 1 and the processors
 #
-#     bash bench/compare/concurrency.sh NAZM OUT [--force]
+#     bash bench/compare/concurrency.sh NAZM OUT [--wait | --force]
 #
 # NAZM is the release `nazm` to measure. Timing is refused while the 1-minute load average is 2 or
 # more, or a cargo, nextest or rustc process runs (the host must be quiet; numbers taken under load are not
-# recorded) unless --force, which marks every number as taken under load. Results go to
+# recorded) unless --force, which marks every number as taken under load; --wait waits up to an
+# hour for a quiet host first. Results go to
 # OUT/concurrency.txt, each with the load before it.
 set -euo pipefail
 NAZM=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
@@ -47,6 +48,13 @@ for args in "spawn 1000" "pingpong 1000" "fanin 8" "idle 1000" "primes 4"; do
 done
 
 busy=$(pgrep -l 'cargo|nextest|rustc' || true)
+quiet() { [ -z "$(pgrep -l 'cargo|nextest|rustc' || true)" ] && awk -v l="$(load)" 'BEGIN { exit !(l < 2) }'; }
+if [ "$FORCE" = "--wait" ]; then
+    # Up to an hour for the host to fall quiet (after this script's own builds).
+    tries=0
+    while ! quiet && [ $tries -lt 240 ]; do sleep 15; tries=$((tries + 1)); done
+    busy=$(pgrep -l 'cargo|nextest|rustc' || true)
+fi
 if [ "$FORCE" != "--force" ]; then
     if [ -n "$busy" ] || awk -v l="$(load)" 'BEGIN { exit !(l >= 2) }'; then
         note "REFUSED: the host is not quiet (load $(load)); nothing timed"
