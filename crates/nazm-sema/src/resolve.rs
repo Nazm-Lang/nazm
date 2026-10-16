@@ -411,6 +411,18 @@ pub struct SplitEach {
     pub next: FnId,
 }
 
+/// `@std/file`'s `file_lines`, and the reader a `for` over it goes through and closes (R1.5, 3.5): what
+/// `for line in file_lines(io, path)` is lowered through, so that it reads a chunk at a time and
+/// builds no list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinesEach {
+    pub lines: FnId,
+    pub open: FnId,
+    pub next: FnId,
+    pub line: FnId,
+    pub close: FnId,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolution {
     functions: Vec<FnDef>,
@@ -485,6 +497,9 @@ pub struct Resolution {
     /// `@std/text`'s `text_split` and the two functions a `for` over one reads its pieces
     /// through (R1.5, 3.3), when the compilation has them: such a loop builds no list.
     split_each: Option<SplitEach>,
+    /// `@std/file`'s `file_lines` and its reader's three functions (R1.5, 3.5), when the
+    /// compilation has them: a `for` over it reads the file a chunk at a time.
+    lines_each: Option<LinesEach>,
     /// Each closure expression's definition, by the expression's span (N50).
     closures: HashMap<Span, FnId>,
     /// The `let mut` bindings a closure captures (R1b, L10), by function and slot, with the
@@ -585,6 +600,17 @@ impl Resolution {
     #[must_use]
     pub const fn split_each(&self) -> Option<SplitEach> {
         self.split_each
+    }
+
+    /// Name `@std/file`'s line-reading functions (R1.5, 3.5).
+    pub fn set_lines_each(&mut self, l: Option<LinesEach>) {
+        self.lines_each = l;
+    }
+
+    /// `@std/file`'s line-reading functions, when the compilation has them (R1.5, 3.5).
+    #[must_use]
+    pub const fn lines_each(&self) -> Option<LinesEach> {
+        self.lines_each
     }
 
     /// The trait tables, for the checker that is building them.

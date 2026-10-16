@@ -1,6 +1,8 @@
+use "@std/file"
+
 fn main(io: IoCap) {
     let counts = hashmap_new[Str, Int]()
-    for line in read_file(arg(0)).lines() {
+    for line in file_lines(io, arg(0)) {
         for w in line.split(" ") {
             if w.len() > 0 { counts[w] += 1 }
         }
