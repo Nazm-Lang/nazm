@@ -4089,3 +4089,84 @@ flag is never set), so a single-threaded program pays it too. **This reopens the
 iterations (a counter in a register), leave the poll out of a program that starts no task, hoist
 the flag's address out of the loop, or a signal-based preemption that puts nothing in the loop at
 all, as Go 1.14 does.
+
+## Eighteen languages on every parameter the comparison measures, measured (2026-10-17)
+
+`python3 bench/compare/compare.py NAZM OUT --runs 10`, Nazm release from `e9d9fa40`, now with three
+more languages — **Fortran** (`gfortran -O2`, and `-fcheck=all -ftrapv` for Nazm's checks), **COBOL**
+(GnuCOBOL `cobc -x -free -O2`) and **hand-written aarch64 assembly** (`bench/compare/{fortran,cobol,asm}/`)
+— and three more columns: the run time's σ, the program's **characters** (of the counted lines,
+without indentation), and the **cold build** (the run's first, its work directory's caches empty)
+beside the warm median. `primes` gained C++, Java and C# programs (written for the concurrency
+section below). Not written: `words` in COBOL and assembly (neither has a hash map, and a faithful
+one is a program of its own), `primes` in the interpreted languages (the harness times the parallel
+job on compiled builds only) and in Zig, Swift, Pascal, Fortran, COBOL, assembly and Ada; Erlang,
+Elixir, Kotlin, Haskell, OCaml, Nim, Crystal, D and Odin are not installed on this Mac (nothing was
+installed for this). The COBOL `fib` returned its result through `RETURN-CODE`, which became the
+process's exit status (201), so the harness refused it; fixed (`MOVE 0 TO RETURN-CODE`) and timed
+by hand with the harness's method for slow programs (`hyperfine -N --warmup 1 --runs 3`).
+
+**Host.** Apple M1 Pro (8 performance and 2 efficiency cores), 32 GiB, macOS 27.2; Apple clang 21.0.0,
+Go 1.27.2, rustc 1.98.1, Zig 0.17.0, OpenJDK 27, .NET 10.0.402, Swift 6.4, Python 3.15.0, Ruby
+4.0.7, Node 24.13.0, Bun 1.3.10, Free Pascal 3.2.2, GNAT 16.1.0, GNU Fortran 16.2.0, GnuCOBOL 3.2.0,
+hyperfine 2.0.0. Begun at load 1.96 with no cargo, rustc or nextest running; the loads before
+`hello`, `fib`, `words` and `primes` W = 1 were 1.96, 1.68, 1.42 and 1.81; the parallel rows' later
+loads (2.0–4.2) are their own workers, nothing else.
+
+**Nazm's rank on each parameter**, among the languages (each language's best measured row; Nazm's
+figures from its `--no-cache` row, its warm build from its user-cache row; lower is better
+everywhere; the interpreter row left out):
+
+| workload | run time | peak RSS | binary | build cold | build warm | lines | characters | run time among rows checking overflow and bounds |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| hello (start-up) | 2.0 ms, **#3** of 18 (assembly 1.85, C 1.9) | 1.7 MiB, **#1** of 18 (tied with C, C++, assembly) | 34.6 KB, #5 of 13 (C 33.4) | 194 ms, #7 of 14 (assembly 65) | 164 ms, #8 of 14 (Go 62) | 1, **#1** of 18 | 38, #6 of 18 (Ruby 20) | **#1** of 8 (Swift 1.97, Rust 2.27) |
+| fib(35) | 44.8 ms, #9 of 17 (Fortran 3.8, Ada 13.5, C 35.2) | 1.7 MiB, #4 of 17 | 35.2 KB, #4 of 12 | 231 ms, #7 of 13 | 172 ms, #7 of 13 | 6, #8 of 17 | 99, #7 of 17 | #4 of 8 (Fortran 3.9, Ada 13.5, Rust 44.4) |
+| words | 115.4 ms, #6 of 16 (Zig 47.5, Rust 65.7, C 73.9, Fortran 85.5, Go 88.2) | 8.6 MiB, **#3** of 16 (C++ 2.3, Ada 3.0) | 87.9 KB, #5 of 11 | 1,166 ms, #10 of 12 | 718 ms, #7 of 12 | 11, #6 of 16 | 242, **#3** of 16 (Ruby 131, Python 195) | #4 of 8 (Zig 53.7, Rust 66.5, C sanitized 111.8) |
+| primes, W = 1 | 173.6 ms, **#3** of 7 (Go 145.1, Rust checked 167.9) | 2.0 MiB, #4 of 7 | 71.0 KB, #3 of 6 | 464 ms, #5 of 7 | 276 ms, #4 of 7 | 43, #6 of 7 | 734, #6 of 7 | **#2** of 4 (Rust checked 167.9) |
+| primes, W = 8 | 24.3 ms (7.14×), **#3** of 7 (Go 23.4, Rust checked 24.0) | 2.1 MiB, #4 of 7 | | | | | | **#2** of 4 |
+| primes, W = 10 | 31.8 ms (5.46×), #4 of 7 (Go 27.5) | 2.2 MiB, #4 of 7 | | | | | | #2 of 4 |
+
+Every row, medians in milliseconds (σ under 2% of the median except where given), peak RSS in MiB,
+build cold / warm in milliseconds:
+
+| language, build | checks | hello | fib | words | words RSS | primes W=1 | build cold / warm (words) | lines / chars (words) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Nazm** `--opt-level 2` | overflow, bounds, memory; races refused | 2.0 | 44.8 | 115.4 | 8.6 | 173.6 | 1,166 / 718 (user cache) | 11 / 242 |
+| C `clang -O2` | none | 1.9 | 35.2 | 73.9 | 15.3 | 176.7 | 79 / 79 | 41 / 1,219 |
+| C, ASan + UBSan | overflow, bounds, memory | 14.6 | 56.8 | 111.8 | 32.1 | 198.9 | 91 / 91 | |
+| C++ `clang++ -O2` | none | 2.1 | 35.3 | 158.9 | 2.3 | 177.9 | 814 / 804 | 18 / 589 |
+| C++, ASan + UBSan | overflow, bounds, memory | 15.7 | 57.4 | 484.8 | 18.3 | 199.9 | 1,269 / 1,276 | |
+| Rust `-C opt-level=3` | bounds, memory, races; overflow wraps | 2.4 | 35.9 | 65.7 | 14.9 | 192.0 | 324 / 236 | 15 / 438 |
+| Rust, overflow checks | overflow, bounds, memory, races | 2.3 | 44.4 | 66.5 | 14.9 | 167.9 | 236 / 236 | |
+| Zig `ReleaseFast` | none | 2.6 | 36.8 | 47.5 | 14.9 | — | 8,238 / 8,273 | 24 / 1,105 |
+| Zig `ReleaseSafe` | overflow, bounds | 2.5 | 45.9 | 53.7 | 14.9 | — | 9,271 / 9,223 | |
+| Go | bounds, memory; overflow wraps | 3.3 | 40.1 | 88.2 | 61.2 | 145.1 | 207 / 62 | 26 / 478 |
+| Swift `-O` | overflow, bounds, memory | 2.0 | 45.4 | 482.9 | 178.8 | — | 1,043 / 813 | 11 / 381 |
+| Fortran `gfortran -O2` | none | 3.6 | 3.8 ¹ | 85.5 | 15.9 | — | 163 / 164 | 63 / 1,490 |
+| Fortran, `-fcheck=all -ftrapv` | overflow, bounds | 3.7 | 3.9 ¹ | 150.6 | 15.9 | — | 190 / 191 | |
+| Ada `gnatmake -O2` | overflow, bounds | 2.8 | 13.5 ¹ | 249.9 | 3.0 | — | 3,137 / 3,063 | 56 / 1,476 |
+| Pascal `fpc -O3` | none | 2.1 | 74.9 | 592.9 | 37.7 | — | 994 / 934 | 31 / 842 |
+| COBOL `cobc -O2` | none | 7.5 | 7,684 | — | — | — | — | — |
+| Assembly, by hand | none | 1.85 | 44.3 | — | — | — | 65 / 65 (`fib`) | 39 / 757 (`fib`) |
+| Java (OpenJDK 27) | bounds, memory; overflow wraps | 30.7 | 63.4 | 387.2 | 216.7 | 208.3 | 361 / 357 | 18 / 640 |
+| C# (.NET 10) | bounds, memory; overflow wraps | 33.1 | 81.1 | 266.9 | 192.7 | 213.0 | 843 / 711 | 10 / 458 |
+| TypeScript (Bun) | bounds, memory | 11.4 | 67.5 | 294.8 | 237.9 | — | — | 8 / 362 |
+| JavaScript (Node) | bounds, memory | 30.7 | 136.3 | 380.5 | 297.3 | — | — | 8 / 340 |
+| Python 3 | bounds, memory; no overflow | 25.5 | 1,163 | 229.6 | 153.9 | — | — | 6 / 195 |
+| Ruby | bounds, memory; no overflow | 42.8 | 986 | 350.7 | 136.6 | — | — | 3 / 131 |
+| Nazm, interpreter | as Nazm | 7.3 | 5,233 | 25,709 | 21.2 | — | — | 11 / 242 |
+
+¹ GCC's optimiser (Fortran and Ada are both GCC) turns the doubly recursive `fib` into far fewer
+calls; the source is the same algorithm, so the row stands, but it measures GCC's recursion
+transformations rather than a call's cost. The hand-written assembly `fib` (44.3 ms, a plain
+recursive call per call) is the honest floor for a call-per-call `fib` on this core.
+
+**What changed since *R1.5 5.1*.** `words` 115.6 → 115.4 ms (no change: 3.4's gain is spent by
+preemption's poll, *Preemption's cost on hot loops*); `fib` 44.1 → 44.8; `primes` W = 8 23.8 → 24.3;
+the Nazm cold build of `words` 1,166 ms against the cached 718 ms. **Where Nazm leads:** start-up
+among checked languages (2.0 ms, first of eight), peak memory (first on `hello`, third of sixteen on
+`words`, with C++ and Ada), the shortest `hello`, the third-shortest `words` by characters, and the
+parallel job among checked rows (second only to checked Rust, within its spread at W = 8). **Where it
+is behind:** `words` time (Zig 2.4×, Rust 1.7×, C 1.6×, Go 1.3× faster), `fib` against unchecked
+C/C++/Rust/Zig (the overflow checks: checked Rust is 44.4), and build time (a cold `words` build is
+15× C's and 5× Rust's; warm, 718 ms against Go's 62 ms and C's 79 ms).
