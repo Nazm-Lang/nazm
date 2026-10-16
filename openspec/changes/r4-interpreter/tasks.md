@@ -46,3 +46,11 @@
       board-only placements
 - [x] 6.7 The clocks from the program's first reading; a child's pipes polled as sockets are; a
       waiting socket tried only after a round in which no other task progressed
+
+## 7. Following main to e7effe0e (epoch 88, @std/http, Windows hosts, R1.5 4.5/4.6, D15)
+
+- [x] 7.1 The reference rebuilt from this checkout; both suites re-run: nothing main's changes
+      broke (the pattern-let refusal is the checker's, before the Core IR; the @std/http programs
+      agree)
+- [x] 7.2 Coverage: the programs that do not check sorted (design.md, *The Rust tests' programs*);
+      programs of several modules and `\xNN` escapes carried by `tests/rust-tests.pl`
