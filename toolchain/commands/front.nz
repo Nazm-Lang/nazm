@@ -6,6 +6,7 @@
 // made absolute by prefixing the working directory, and that prefix is taken off every module's
 // name — and off any path a diagnostic's words name — before anything is shown (R5 design D11).
 
+use "../../compiler/lex.nz"
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
 use "../../compiler/sema.nz"
@@ -153,3 +154,119 @@ pub fn fe_unprefix_diags(io: IoCap, d: Diags, prefix: Str, abs: Str) -> Int {
 
 // Whether the loader stopped the compilation: diagnostics, and no module parsed.
 pub fn fe_load_failed(f: Facts) -> Bool { dg_len(fx_diags(f)) > 0 && ints_len(f.programs) == 0 }
+
+// `fs::metadata`'s kind of `p`: 0 a file, 1 a directory, -1 nothing there (as `os_stat` gives it).
+pub fn fe_stat_kind(io: IoCap, p: Str) -> Int {
+    let out = bytes_new(32)
+    if os_stat(p, out) != 0 { return 0 - 1 }
+    bytes_read_le[Int](out, 8)
+}
+
+// The same, of the link itself (`symlink_metadata`).
+pub fn fe_lstat_kind(io: IoCap, p: Str) -> Int {
+    let out = bytes_new(48)
+    if os_lstat(p, out) != 0 { return 0 - 1 }
+    bytes_read_le[Int](out, 8)
+}
+
+// `PathBuf`'s order: component by component.
+fn fe_path_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        let x = str_byte(a, i)
+        let y = str_byte(b, i)
+        if x != y {
+            if x == 47 { return true }
+            if y == 47 { return false }
+            return x < y
+        }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+// Every `.nz` file under `dir` (absolute), not through a symbolic link to a directory; false when a
+// directory cannot be read.
+pub fn fe_walk(io: IoCap, dir: Str, out: Strs) -> Bool {
+    let h = os_dir_open(dir)
+    if os_status(h) < 0 { return false }
+    let buf = bytes_new(1024)
+    let mut n = os_dir_next(h, buf)
+    let subdirs = strs_new()
+    while n > 0 {
+        let name = bytes_to_str(bytes_slice(buf, 0, n))
+        let p = if dir == "/" { "/" + name } else { dir + "/" + name }
+        let k = fe_lstat_kind(io, p)
+        if k == 1 {
+            strs_push(subdirs, p)
+        } else if fe_stat_kind(io, p) == 1 {
+            // a link to a directory: not walked
+        } else if str_len(name) > 3 && str_slice(name, str_len(name) - 3, str_len(name)) == ".nz" {
+            strs_push(out, p)
+        }
+        n = os_dir_next(h, buf)
+    }
+    os_close(h)
+    if n < 0 { return false }
+    for i in 0..strs_len(subdirs) {
+        if !fe_walk(io, strs_get(subdirs, i), out) { return false }
+    }
+    true
+}
+
+pub fn fe_sort_paths(xs: Strs) -> Strs {
+    let out = strs_new()
+    for i in 0..strs_len(xs) {
+        let x = strs_get(xs, i)
+        let mut at = 0
+        while at < strs_len(out) && fe_path_less(strs_get(out, at), x) { at += 1 }
+        strs_push(out, "")
+        let mut j = strs_len(out) - 1
+        while j > at {
+            strs_set(out, j, strs_get(out, j - 1))
+            j -= 1
+        }
+        strs_set(out, at, x)
+    }
+    out
+}
+
+
+// Byte order (`str`'s `Ord`).
+pub fn fe_str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+// Whether one of the program's own modules writes a pattern `let` — `let (a, b) = …`, `let P = e
+// else { … }`, anything but `let NAME =` or `let NAME:` — whose bindings the reference holds to the
+// scope the `let` is written in (epoch 88: a name that scope binds already is `N0202`) and R2's
+// checker does not yet: where one is, the front end's answer may not be the reference's.
+pub fn fe_pattern_let(f: Facts) -> Bool {
+    for m in 0..fx_modules(f) {
+        if fx_module_own(f, m) {
+            let kinds = ints_new()
+            let starts = ints_new()
+            let ends = ints_new()
+            let texts = strs_new()
+            let d = dg_new()
+            lex_all(fx_module_text(f, m), kinds, starts, ends, texts, d)
+            let n = ints_len(kinds)
+            for k in 0..n {
+                let before = if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 }
+                if ints_get(kinds, k) == k_let() && before != k_if() && before != k_while() {
+                    let mut j = k + 1
+                    if j < n && ints_get(kinds, j) == k_mut() { j += 1 }
+                    if j + 1 >= n || ints_get(kinds, j) != k_ident() { return true }
+                    let after = ints_get(kinds, j + 1)
+                    if after != k_eq() && after != k_colon() { return true }
+                }
+            }
+        }
+    }
+    false
+}

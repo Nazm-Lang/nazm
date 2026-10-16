@@ -1,6 +1,6 @@
 # `nazm check` command lines (design D8, D11), run in the fixture run.sh writes: a.nz checks, b.nz
 # does not, w.nz is warned of, m.nz imports a file that is not there, s.nz does not parse, and sub/
-# is a directory with no manifest.
+# is a directory with no manifest; app/, lib/, bad/, nopkg.nz and broken/ are packages and their failures.
 --help
 -h
 --version
@@ -46,3 +46,36 @@ a.nz b.nz
 -- --json
 --source-root= a.nz
 ''
+app
+app/
+--json app
+app/src/main.nz
+lib
+--json lib
+lib/src/a.nz
+lib/src/inner/b.nz
+bad
+--json bad
+bad/src/main.nz
+nopkg.nz
+--json nopkg.nz
+broken
+app --locked
+app --features x
+--no-cache --cache-report a.nz
+--no-cache --cache-report b.nz
+--no-cache --cache-report app
+--cache-report a.nz
+--profile general a.nz
+--profile general b.nz
+--profile nonesuch a.nz
+--profile= a.nz
+--profile embedded a.nz
+--profile-report a.nz
+--source-root . a.nz
+--summary-json a.nz
+app --features x,y --features x
+app/src/main.nz --locked
+--profile general app
+--json --profile general lib
+broken/
