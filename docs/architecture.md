@@ -9349,7 +9349,7 @@ optional field `nazm.provenance/1` gained for it, and a tool of the SBOM's); `na
 **Refusals, and no fallback.** Before anything is compiled: a target the generator does not carry
 before 1.0 — anything but `aarch64-apple-darwin`, `x86_64-apple-darwin` (its D13) and
 `x86_64-pc-windows-gnu` (its D16, section 8, 2026-10-16: PE/COFF and Windows x64's convention,
-compile- and link-verified, not yet run) — is refused (exit 5), and so is a generator that is not there (exit 4, naming the path looked at). After: the
+run-verified on a Windows host by `BACKEND=nazm scripts/windows-host.sh`) — is refused (exit 5), and so is a generator that is not there (exit 4, naming the path looked at). After: the
 generator's exit status 3, one `nzcg: refused: …` line per construct, is one `N0101` per line,
 naming the construct, with nothing written; any other failure is `N0900`, a compiler defect, with
 the generator's own words. Neither falls back to another backend.
