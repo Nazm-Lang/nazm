@@ -442,7 +442,7 @@ fn one(nazm: &Path, dir: &Path, index: usize, case: &Planned, interpret_only: bo
         None
     } else {
         // By position, not name: `a::t` and `a.nz`'s own case must not share an executable.
-        let exe = dir.join(format!("case{index}"));
+        let exe = dir.join(format!("case{index}{}", std::env::consts::EXE_SUFFIX));
         let built = Command::new(nazm)
             .arg("build")
             .args(&harness)

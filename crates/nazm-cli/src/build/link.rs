@@ -220,8 +220,9 @@ pub(super) fn report_clang(outcome: Outcome, kept: &Path, cleanup: impl Fn(bool)
             eprintln!(
                 "nazm: `{DRIVER}` was not found on PATH, and `nazm build` needs it to \
                  assemble the LLVM IR it generates.\n\
-                 nazm: install the Xcode command line tools (`xcode-select --install`) \
-                 or your platform's clang package. `nazm run` needs none of this."
+                 nazm: {} `nazm doctor` says what else is missing; `nazm run --interpret` \
+                 needs none of this.",
+                crate::doctor::advice(std::env::consts::OS)
             );
             ExitCode::from(exit::TOOLCHAIN_FAILED)
         }

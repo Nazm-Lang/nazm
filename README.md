@@ -99,6 +99,12 @@ cargo build --release -p nazm-cli            # target/release/nazm
 nazm --version                                # nazm 0.10.0
 ```
 
+On Windows x86_64 (`nazm.exe` built for `x86_64-pc-windows-gnu`; a Windows archive ships with 1.0),
+`nazm build` needs llvm-mingw — a portable clang, lld and MinGW-w64 C runtime,
+unpacked from its release zip with no installer or administrator, its `bin` on `PATH`; Microsoft's
+SDK is not used. [`docs/getting-started.md`](docs/getting-started.md), *On Windows*, has the steps,
+and `nazm doctor` says what a native build still lacks on any machine.
+
 The binary carries the standard library inside it and needs no installation directory. Nothing
 else is required for the language itself. Optional tools unlock optional features only:
 
@@ -295,6 +301,7 @@ tokenizers; and `nazm-bench` and `nazm-agent-bench`, the agent-cost evaluation h
 | `nazm fmt FILE…` | Lay files out canonically. `--check` writes nothing and fails if any would change |
 | `nazm fix FILE` | Apply the repairs the compiler already knows about. Nothing is written without `--apply`, and only fixes marked `automatic` are ever applied |
 | `nazm capabilities` | What this build supports, read from the compiler's own tables |
+| `nazm doctor` | Whether this machine has what `nazm build` needs — clang, a linker that links, `ar` — with their versions, and where to get what is missing |
 | `nazm obligations FILE` | Every obligation of a checked program, `nazm.obligations/1` (N87): each contract clause, call of a function with a precondition, overflow, division, index, allocation, call through a function value and call into C — proved (with its witness), checked as the program runs, or unknown. Compiler evidence, not certification; `--json` |
 | `nazm trace FILE --requirements FILE` | Requirements traced to what verifies them, `nazm.trace/1` (Gate 3): each requirement of a `requirements.toml` to its definitions — durable identity, digest and obligations — and to its `@test` functions, run; a broken link reported by name and failing the command. Not certification |
 | `nazm core-ir FILE` | What a checked program became — its Core IR, `nazm.core-ir/3`: typed, every name an identity, every transfer explicit. A debugging view of what `nazm run` and `nazm build` both start from; `--no-spans`, `--json` |

@@ -791,6 +791,10 @@ pub(crate) enum Command {
         #[arg(long, default_value = "cli", value_name = "NAME")]
         template: String,
     },
+    /// Say whether this machine has what `nazm build` needs: `clang`, a linker that links a
+    /// program, `ar` (and `dsymutil` on macOS), with their versions, and where to get what is
+    /// missing. Exit 4 when a native build cannot be made here.
+    Doctor,
     /// Report what this build of the compiler actually supports.
     ///
     /// Read from the compiler's own tables rather than from a written list, so it cannot
