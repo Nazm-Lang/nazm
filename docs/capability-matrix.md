@@ -5373,8 +5373,8 @@ to be the one the C compiler driver resolves for the triple.
 | `aarch64-unknown-none` | run-verified | unsupported | generic / none | not exercised |
 | `riscv64gc-unknown-none-elf` | run-verified | unsupported | generic-rv64 / none | not exercised |
 | `thumbv7m-none-eabi` | run-verified | unsupported | cortex-m3 / none | not exercised |
-| `thumbv8m.main-none-eabihf` | compile-only | unsupported | generic / none | not exercised |
-| `riscv32imc-unknown-none-elf` | compile-only | unsupported | generic-rv32 / none | not exercised |
+| `thumbv8m.main-none-eabihf` | run-verified | unsupported | generic / none | not exercised |
+| `riscv32imc-unknown-none-elf` | run-verified | unsupported | generic-rv32 / none | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | generic / none | DWARF present, not exercised |
 | `wasm32-wasip1` | run-verified | unsupported | generic / none | DWARF present, not exercised |
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | generic / none | not exercised |
