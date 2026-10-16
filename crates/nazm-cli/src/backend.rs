@@ -94,6 +94,12 @@ pub(crate) enum Outcome {
 #[derive(Debug, Clone)]
 pub(crate) struct Backend {
     opt_level: u8,
+    /// Whether every object is LLVM bitcode, optimised together at the link (R1.5 3.4, design
+    /// D13): the program's units, the standard library's and the runtime's as one program.
+    whole: bool,
+    /// Where the linker keeps what it optimised, by content, for the next link of a
+    /// whole-program build (ThinLTO's cache): the project's `.nazm/lto`, or none.
+    lto_cache: Option<PathBuf>,
     /// The triple to generate for when it is not the host's (N57): handed to clang as
     /// `-target`, and so part of the resolved configuration every key carries. `None` for a
     /// host build, whose command lines are unchanged.
@@ -120,10 +126,23 @@ impl Backend {
     /// the driver to resolve a command line against, because `-###` refuses an input that
     /// does not exist. Nothing else is written and nothing outside it is touched.
     pub(crate) fn discover(opt_level: u8, work: &Path, cross: Option<&str>) -> Self {
+        Self::discover_whole(opt_level, work, cross, false)
+    }
+
+    /// [`Self::discover`], every object bitcode optimised together at the link when `whole`
+    /// (R1.5 3.4): the probe resolves the same arguments, so every key says which it is.
+    pub(crate) fn discover_whole(
+        opt_level: u8,
+        work: &Path,
+        cross: Option<&str>,
+        whole: bool,
+    ) -> Self {
         Self {
             opt_level,
+            whole,
+            lto_cache: None,
             cross: cross.map(str::to_owned),
-            settled: probe(opt_level, work, cross),
+            settled: probe(opt_level, work, cross, whole),
         }
     }
 
@@ -132,12 +151,23 @@ impl Backend {
     /// The probe is skipped rather than ignored, so a cache-disabled build runs exactly
     /// the processes the build ran before there was a cache. That is what makes it a
     /// usable baseline for the equivalence tests.
-    pub(crate) fn unidentified(opt_level: u8, cross: Option<&str>) -> Self {
+    /// Whole-program when `whole` (R1.5 3.4), as [`Self::discover_whole`].
+    pub(crate) fn unidentified(opt_level: u8, cross: Option<&str>, whole: bool) -> Self {
         Self {
             opt_level,
+            whole,
+            lto_cache: None,
             cross: cross.map(str::to_owned),
             settled: None,
         }
+    }
+
+    /// The same backend, a whole-program link keeping what it optimised in `dir` (R1.5 3.4):
+    /// a link whose inputs are unchanged reuses it rather than optimising again. The cache is
+    /// keyed by content, so it changes no executable.
+    pub(crate) fn with_lto_cache(mut self, dir: Option<PathBuf>) -> Self {
+        self.lto_cache = dir;
+        self
     }
 
     pub(crate) fn settled(&self) -> Option<Settled> {
@@ -151,7 +181,11 @@ impl Backend {
     pub(crate) fn compile(&self, ir: &Path, object: &Path) -> Outcome {
         run(self
             .command()
-            .args(compile_args(self.opt_level, self.cross.as_deref()))
+            .args(compile_args(
+                self.opt_level,
+                self.cross.as_deref(),
+                self.whole,
+            ))
             .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
     }
 
@@ -160,7 +194,11 @@ impl Backend {
     pub(crate) fn compile_reporting_frames(&self, ir: &Path, object: &Path) -> Outcome {
         run(self
             .command()
-            .args(compile_args(self.opt_level, self.cross.as_deref()))
+            .args(compile_args(
+                self.opt_level,
+                self.cross.as_deref(),
+                self.whole,
+            ))
             .arg("-Rpass-analysis=prologepilog")
             .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
     }
@@ -218,7 +256,13 @@ impl Backend {
             // The Apple linker otherwise mixes a time into the executable's UUID, so two links
             // of the same objects differ (N46, reproducible builds). Ignored elsewhere.
             .env("ZERO_AR_DATE", "1")
-            .args(link_args(self.opt_level, self.cross.as_deref()))
+            .args(link_args(self.opt_level, self.cross.as_deref(), self.whole))
+            .args(
+                self.lto_cache
+                    .iter()
+                    .filter(|_| self.whole)
+                    .map(|d| format!("-Wl,-cache_path_lto,{}", d.display())),
+            )
             .arg("-o")
             .arg(output)
             .args(objects)
@@ -264,7 +308,7 @@ impl Backend {
 /// One function, used by the compilation and by the probe that describes it. Two lists
 /// would be two lists that can differ, and the difference would be a key describing an
 /// invocation nobody ran.
-fn compile_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
+fn compile_args(opt_level: u8, cross: Option<&str>, whole: bool) -> Vec<String> {
     let mut a = vec![
         format!("-O{opt_level}"),
         // The units carry no target triple, so clang supplies the host's and would
@@ -278,7 +322,24 @@ fn compile_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
     if family(cross) == Some(Family::Elf) {
         a.extend(["-ffunction-sections", "-fdata-sections"].map(str::to_owned));
     }
+    // Whole-program optimisation (R1.5 3.4): bitcode, which the link optimises as one module.
+    if whole {
+        a.push("-flto=thin".to_owned());
+    }
     a
+}
+
+/// Whether a build of an executable at `opt_level` for `cross` (the host's when `None`) is
+/// optimised as one program at the link (R1.5 3.4, design D13): `-O2` and above, on macOS, whose
+/// linker (`ld64`) reads the bitcode through the toolchain's own `libLTO`. Elsewhere — Linux,
+/// Windows through MinGW's linker, iOS, WebAssembly and the boards — each object is optimised
+/// alone, as before.
+pub(crate) fn whole_program(opt_level: u8, cross: Option<&str>) -> bool {
+    let macos = match cross {
+        None => std::env::consts::OS == "macos",
+        Some(t) => t.contains("-apple-darwin") || t.contains("-apple-macos"),
+    };
+    opt_level >= 2 && macos
 }
 
 /// The object format of a hosted target whose linker strips what is unreachable (R1.5, D14).
@@ -316,9 +377,12 @@ fn dead_strip_args(cross: Option<&str>) -> Vec<String> {
     }
 }
 
-fn link_args(opt_level: u8, cross: Option<&str>) -> Vec<String> {
+fn link_args(opt_level: u8, cross: Option<&str>, whole: bool) -> Vec<String> {
     let mut a = vec![format!("-O{opt_level}"), "-Wno-override-module".to_owned()];
     a.extend(target_args(cross));
+    if whole {
+        a.push("-flto=thin".to_owned());
+    }
     a
 }
 
@@ -417,7 +481,7 @@ fn run(command: &mut Command) -> Outcome {
 }
 
 /// Ask the driver to resolve a compilation without performing it.
-fn probe(opt_level: u8, work: &Path, cross: Option<&str>) -> Option<Settled> {
+fn probe(opt_level: u8, work: &Path, cross: Option<&str>, whole: bool) -> Option<Settled> {
     let input = work.join(format!("{PROBE}.ll"));
     let output = work.join(format!("{PROBE}.o"));
     // Empty is enough: `-###` resolves a command line and never reads the file.
@@ -432,7 +496,7 @@ fn probe(opt_level: u8, work: &Path, cross: Option<&str>) -> Option<Settled> {
     }
     let out = c
         .arg("-###")
-        .args(compile_args(opt_level, cross))
+        .args(compile_args(opt_level, cross, whole))
         .args(["-o".as_ref(), output.as_os_str(), input.as_os_str()])
         .output()
         .ok()?;
@@ -587,7 +651,7 @@ mod tests {
         ];
         for t in apple {
             assert_eq!(dead_strip_args(Some(t)), ["-Wl,-dead_strip"], "{t}");
-            assert!(!compile_args(0, Some(t)).contains(&"-ffunction-sections".to_owned()));
+            assert!(!compile_args(0, Some(t), false).contains(&"-ffunction-sections".to_owned()));
         }
         let elf = [
             "aarch64-unknown-linux-gnu",
@@ -596,7 +660,7 @@ mod tests {
         ];
         for t in elf {
             assert_eq!(dead_strip_args(Some(t)), ["-Wl,--gc-sections"], "{t}");
-            let args = compile_args(2, Some(t));
+            let args = compile_args(2, Some(t), false);
             assert!(args.contains(&"-ffunction-sections".to_owned()), "{t}");
             assert!(args.contains(&"-fdata-sections".to_owned()), "{t}");
         }
@@ -611,7 +675,7 @@ mod tests {
             "wasm32-wasip1",
         ] {
             assert!(dead_strip_args(Some(t)).is_empty(), "{t}");
-            assert!(!compile_args(0, Some(t)).contains(&"-ffunction-sections".to_owned()));
+            assert!(!compile_args(0, Some(t), false).contains(&"-ffunction-sections".to_owned()));
         }
     }
 
@@ -652,9 +716,9 @@ mod tests {
                 Some("thumbv8m.main-none-eabihf"),
                 Some("riscv32imc-unknown-none-elf"),
             ] {
-                for a in compile_args(opt, cross)
+                for a in compile_args(opt, cross, false)
                     .iter()
-                    .chain(link_args(opt, cross).iter())
+                    .chain(link_args(opt, cross, false).iter())
                 {
                     // RISC-V's `-march` is the target's ISA baseline (N86, M1), not a CPU.
                     assert!(
@@ -820,6 +884,42 @@ mod tests {
 
         // The probe leaves nothing behind but the directory it was given.
         assert!(!dir.path().join("probe.ll").exists());
+
+        // A whole-program build's objects are bitcode (R1.5 3.4), so its configuration, and
+        // every key it carries, is not a separately optimised build's.
+        let whole = Backend::discover_whole(2, dir.path(), None, true)
+            .settled()
+            .expect("settled");
+        assert_ne!(whole.config, two.config);
+    }
+
+    #[test]
+    fn only_an_optimised_macos_build_is_optimised_whole() {
+        // R1.5 3.4: ld64 reads the bitcode through the toolchain's libLTO; MinGW's linker, the
+        // boards' and WebAssembly's do not, and Linux is after 1.0.
+        for t in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+            assert!(whole_program(2, Some(t)), "{t}");
+            assert!(whole_program(3, Some(t)), "{t}");
+            assert!(!whole_program(0, Some(t)), "{t}");
+            assert!(!whole_program(1, Some(t)), "{t}");
+        }
+        for t in [
+            "x86_64-pc-windows-gnu",
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-apple-ios",
+            "aarch64-linux-android",
+            "wasm32-wasip1",
+            "aarch64-unknown-none",
+        ] {
+            assert!(!whole_program(2, Some(t)), "{t}");
+        }
+        assert_eq!(whole_program(2, None), std::env::consts::OS == "macos");
+        let flto = "-flto=thin".to_owned();
+        assert!(compile_args(2, None, true).contains(&flto));
+        assert!(link_args(2, None, true).contains(&flto));
+        assert!(!compile_args(2, None, false).contains(&flto));
+        assert!(!link_args(2, None, false).contains(&flto));
     }
 
     #[test]
@@ -840,7 +940,7 @@ mod tests {
     fn the_link_leaves_time_out_of_the_executable_on_every_host() {
         // Checked on the command rather than on two executables, so a host whose linker
         // ignores the variable still sees it go missing.
-        let c = Backend::unidentified(0, None).link_command(Path::new("out"), &[]);
+        let c = Backend::unidentified(0, None, false).link_command(Path::new("out"), &[]);
         let zero = c
             .get_envs()
             .find(|(k, _)| *k == "ZERO_AR_DATE")
