@@ -4060,3 +4060,32 @@ reading the Core IR's JSON, against 7.4 µs in the Rust build (`--timings`); cod
 
 Not done here: the budgets are proposed, not yet enforced as tests (7.2's tests, 7.4's growth
 guards), and nothing found is fixed (7.3).
+
+## Preemption's cost on hot loops, measured (performance leadership 6.3, 2026-10-17)
+
+**More than the 1–2% the design allows: a hot loop with no call pays 8–9%, word frequency 9–10%.**
+`bench/compare/preempt_cost.sh BASE NEW OUT --wait`: BASE a release `nazm` of `a4ac8e9f` (runtime ABI
+42, before preemption, built in its own target directory), NEW one of `e9d9fa40` (ABI 43, a poll of
+one process-wide flag at every loop back edge); `fib`, `words` and `primes` of `bench/compare/nazm/`
+and the script's tight arithmetic loop, each built `--opt-level 2`; `hyperfine -N --warmup 2 --runs
+15`. Apple M1 Pro, macOS 27.2, Apple clang 21.0.0. The script's run began at load 1.58; its later
+pairs started at 2.6–2.9, the 1-minute average still carrying its own 1.7-second loops (nothing else
+ran: no cargo, rustc or nextest), so the pairs that moved were run again on their own, each begun
+below load 2 (1.72–1.85), once with NEW first and once with BASE first:
+
+| program | BASE (no poll) | NEW (poll at back edges) | cost | load before |
+| --- | ---: | ---: | ---: | ---: |
+| tight loop, no call (400,000,000 iterations) | 1.656 ± 0.002 s | 1.803 ± 0.001 s; 1.807 ± 0.002 s | **+8.9%; +9.1%** | 1.58; 1.80 |
+| `words` (the comparison's input) | 105.0 ± 0.4 ms; 105.1 ± 0.4; 105.0 ± 0.6 | 115.2 ± 0.2 ms; 115.6 ± 0.5; 115.7 ± 0.5 | **+9.7%; +10.0%; +10.2%** | 2.92; 1.85; 1.78 |
+| `fib(35)` | 44.3 ± 0.2 ms; 44.7 ± 0.2 | 44.4 ± 0.2 ms; 44.8 ± 0.2 | +0.1%; +0.2% | 2.92; 1.72 |
+| `primes`, one worker | 173.3 ± 0.3 ms | 173.1 ± 0.3 ms | −0.1% | 2.77 |
+| `primes`, ten workers | 28.7 ± 2.9 ms | 29.4 ± 3.5 ms | within the spread | 2.63 |
+
+Peak memory is unchanged throughout. `fib` has no loop, and `primes`' inner loop is dominated by a
+division, which hides a load and a branch; the cost shows where a loop's body is a few instructions:
+the tight loop, and `words`' byte scan and hash. With one worker the poll is still compiled in (the
+flag is never set), so a single-threaded program pays it too. **This reopens the design (design.md,
+6.3: "more than 1-2% reopens the design").** Candidates, not measured here: poll once per N
+iterations (a counter in a register), leave the poll out of a program that starts no task, hoist
+the flag's address out of the loop, or a signal-based preemption that puts nothing in the loop at
+all, as Go 1.14 does.
