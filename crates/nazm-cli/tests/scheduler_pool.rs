@@ -218,6 +218,45 @@ fn ten_thousand_tasks_all_alive_at_once_run_on_two_workers() {
     assert!(err.contains("spawned=10000 joined=10000"), "{err}");
 }
 
+/// Performance leadership 6.2: a worker's tasks share its run stack, and a parked task's frames are
+/// copied out and back. Two hundred tasks each park at the bottom of a recursion of their own depth,
+/// with a live array in every frame, and are resumed fifty times in turn: every frame comes back as
+/// it was on one worker, on three, under both backends.
+#[test]
+fn tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn down(n: Int, k: Int, inp: Chan, out: Chan) -> Int {\n\
+               let mut pad = [0; 16]; pad[n % 16] = n + k;\n\
+               if n == 0 { let buf = ints_new(); let mut got = 0;\n\
+               while chan_recv(inp, buf) { let v = ints_pop(buf); got += v; chan_send(out, v + k); }\n\
+               got + pad[0] } else { let r = down(n - 1, k, inp, out); r + pad[n % 16] - n - k } }\n\
+               fn worker(k: Int, depth: Int, inp: Chan, out: Chan, res: Chan) -> Int { chan_send(res, down(depth, k, inp, out)); 0 }\n\
+               fn main(io: IoCap, tasks: SpawnCap) {\n\
+               let n = 200; let rounds = 50; let mut ins: Vec[Chan] = []; let res = chan_new(1000); let out = chan_new(1);\n\
+               let mut total = 0; let buf = ints_new();\n\
+               scope { let mut i = 0; while i < n { let c = chan_new(1); ins.push(c); spawn worker(i, 10 + i % 37, c, out, res); i += 1; }\n\
+               let mut r = 0; while r < rounds { let mut j = 0; while j < n { chan_send(ins[j], r); if chan_recv(out, buf) { total += ints_pop(buf); } j += 1; } r += 1; }\n\
+               let mut j = 0; while j < n { chan_close(ins[j]); j += 1; } }\n\
+               let mut sum = 0; let mut j = 0; while j < n { if chan_recv(res, buf) { sum += ints_pop(buf); } j += 1; }\n\
+               println(total); println(sum) }\n";
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "frames", src, backend);
+        for workers in ["1", "3"] {
+            let (out, err, code) = run(
+                d.path(),
+                "frames",
+                &[],
+                &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", workers)],
+            );
+            assert_eq!(code, Some(0), "{backend} {workers}: {err}");
+            assert!(
+                out.starts_with("1240000\n264900\n"),
+                "{backend} {workers}: {out}{err}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
     let d = tempfile::tempdir().unwrap();

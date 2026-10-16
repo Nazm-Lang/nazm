@@ -59,7 +59,6 @@ pub fn declarations(out: &mut String) {
         "declare i64 @atoll(ptr)",
         "declare i64 @nz_os_page_size()",
         "declare ptr @nz_os_stack_alloc(i64, i64)",
-        "declare void @nz_os_stack_free(ptr, i64, i64)",
         "declare i64 @nz_os_stack_size()",
         "declare i32 @nz_os_close(i32)",
         "declare i64 @nz_os_read(i32, ptr, i64)",
