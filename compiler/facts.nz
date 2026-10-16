@@ -555,7 +555,7 @@ pub fn fx_keys(f: Facts, os: Str, arch: Str) -> Str {
     let c = f.c;
     let checker = fx_checker_identity();
     let out = strs_new();
-    strs_push(out, str_concat(str_concat("checker ", checker), "\n"));
+    strs_push(out, str_concat(str_concat("checker ", checker), nl()));
     let keys = strs_new();
     let hashes = strs_new();
     let sources = strs_new();
@@ -578,15 +578,15 @@ pub fn fx_keys(f: Facts, os: Str, arch: Str) -> Str {
         let key = strs_get(keys, m);
         let mut shown = key;
         if shown == "" { shown = "-"; }
-        strs_push(out, str_concat(str_concat("module ", shown), "\n"));
-        strs_push(out, str_concat(str_concat("source ", strs_get(sources, m)), "\n"));
+        strs_push(out, str_concat(str_concat("module ", shown), nl()));
+        strs_push(out, str_concat(str_concat("source ", strs_get(sources, m)), nl()));
         let mut json = strs_get(jsons, m);
         if json == "" { json = "-"; }
-        strs_push(out, str_concat(str_concat("interface ", json), "\n"));
+        strs_push(out, str_concat(str_concat("interface ", json), nl()));
         let mut hash = strs_get(hashes, m);
         if hash == "" { hash = "-"; }
-        strs_push(out, str_concat(str_concat("hash ", hash), "\n"));
-        strs_push(out, str_concat(str_concat("key ", fx_check_key(f, m, checker, keys, sources, hashes)), "\n"));
+        strs_push(out, str_concat(str_concat("hash ", hash), nl()));
+        strs_push(out, str_concat(str_concat("key ", fx_check_key(f, m, checker, keys, sources, hashes)), nl()));
         m = m + 1;
     }
     str_join(out, "")
