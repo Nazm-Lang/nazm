@@ -441,10 +441,6 @@ fn elf32_sections(b: &[u8]) -> Vec<(String, SectionKind, u64, u64)> {
     header().unwrap_or_default()
 }
 
-/// The bytes a Windows executable reserves for its main thread: 8 MiB, the main thread's stack
-/// on macOS and Linux. `--stack-size` still runs `main` on a thread of its own size.
-const WINDOWS_MAIN_STACK: u64 = 8 * 1024 * 1024;
-
 /// `DIR/NN-NAME.o` for each object in link order, and `DIR/link.txt` (N57): the target, the
 /// objects in order, and the system libraries the runtime needs on it.
 fn write_objects(
@@ -473,13 +469,8 @@ fn write_objects(
         nazm_lir::backend::Os::Android => "-lm".to_owned(),
         // iOS (Gate 3): `xcrun --sdk iphoneos clang`; libSystem has everything.
         nazm_lir::backend::Os::Ios => String::new(),
-        // MinGW-w64 (Gate 3): Winsock and BCrypt, and the C runtime's own libraries linked in
-        // statically, so the executable needs no MinGW DLL beside it. The main thread reserves
-        // 8 MiB, as macOS and Linux give it, where Windows' default is 1 MiB (`docs/spec.md`,
-        // *The limit*): the same recursion meets `N0408` at the same depth everywhere.
-        nazm_lir::backend::Os::Windows => {
-            format!("-static -pthread -lws2_32 -lbcrypt -Wl,--stack,{WINDOWS_MAIN_STACK}")
-        }
+        // MinGW-w64 (Gate 3): the libraries a Windows host's own link names too.
+        nazm_lir::backend::Os::Windows => crate::backend::windows_libraries().join(" "),
         // A WASI module (Gate 3): itself, its imports WASI's.
         nazm_lir::backend::Os::Wasi => format!("none; {}", nazm_lir::runtime::wasi::LINK),
         // A WebAssembly module links nothing but itself, by `wasm-ld` (N64).

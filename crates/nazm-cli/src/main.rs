@@ -52,6 +52,7 @@ mod core_ir;
 mod derived;
 mod diagnostics;
 mod docs;
+mod doctor;
 mod exit;
 mod explain;
 mod fix;
@@ -374,6 +375,7 @@ fn dispatch(command: Command) -> ExitCode {
         ),
         Command::ReloadCheck { old, new } => live::reload_check(&old, &new),
         Command::Capabilities { json } => capabilities::run(json),
+        Command::Doctor => doctor::run(),
         Command::CoreIr {
             file,
             json,
