@@ -485,6 +485,16 @@
         the lowering carries 75,882, all agree; the other parts 10,644, all agree; 1,578 whole
         documents, all the reference's bytes. check 3,093 agree, 2 differ (carried 3,089, all
         agree); facts 3,089 agree, 6 differ (carried 3,089, all agree)
+  - [x] Calls through a value and functions as values (N50): a call through a binding of
+        function type as `call_indirect` of the binding, of the type the checker reached; a
+        named function used as a value as `fn_value`, of the type it was given (sema.nz now
+        keeps it). A call of an effect-polymorphic function has the result the checker formed,
+        its effect parameter bound. `core-ir.py` now quotes the reference's side as `print.rs`
+        does (`\b` and `\f` as `\u0008`, `\u000c`, not Python's short forms). Rebased on main
+        e7effe0e, reference rebuilt there. `run.sh`: core 3,153 agree, 0 differ; of 93,517
+        functions the lowering carries 93,369, all agree; the other parts 10,992, all agree;
+        1,749 whole documents, all the reference's bytes. check 3,151 agree, 2 differ (carried
+        3,147, all agree); facts 3,147 agree, 6 differ (carried 3,147, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
