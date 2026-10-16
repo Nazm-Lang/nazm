@@ -123,3 +123,39 @@ jobs:
 
       - name: test (host-safe subset)
         run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+
+  # The Windows TLS engine (SChannel, C1b) on a real Windows host, the server side included.
+  # SChannel keeps a server's key in the user's key storage, which needs a loaded user profile:
+  # the runner has one, the developer's laptop over a key-only OpenSSH logon has not
+  # (`NTE_BAD_KEYSET`). The engine driver (`crates/nazm-cli/tests/tls/engine_drive.c`) and the
+  # runtime's TLS part with the SChannel unit are built here for x86_64-pc-windows-gnu — clang
+  # for the IR, MSYS2's MinGW-w64 gcc to link, its OpenSSL 3 for the test certificates — run, and
+  # held to what the engine must print (trusted: TLSv1.2 [http/1.1], wrote 5, read 5; another
+  # name -65603; expired -65602; self-signed and the platform store -65601).
+  #
+  # **Evidence-gathering, not a gate**, until it has passed once. A pass is what lets a Windows
+  # build reach TLS (lifting `N0830`, `emit_tls` binding the unit); until then it is refused.
+  windows-tls:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+
+      - name: MinGW-w64's gcc and OpenSSL 3 (MSYS2)
+        shell: pwsh
+        run: |
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl
+          "C:\msys64\mingw64\bin", "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: the tools found
+        shell: pwsh
+        run: |
+          clang --version
+          x86_64-w64-mingw32-gcc --version
+          openssl version
+
+      - name: the Windows engine runs here
+        run: cargo test -p nazm-cli --locked --test cli_s_z -- --ignored --exact tls::the_windows_engine_runs_on_this_windows_host --nocapture
