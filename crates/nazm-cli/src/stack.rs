@@ -2,7 +2,7 @@
 //! for every function of the image, summed along the deepest path of the image's call graph.
 //!
 //! Both facts are read from what was generated, not from Nazm: the frames from clang's
-//! `prologepilog` remarks while it compiles each unit, and the calls from the LLVM text it
+//! prologue/epilogue remarks while it compiles each unit, and the calls from the LLVM text it
 //! compiled. The bound is that build's; a different optimisation level is a different bound.
 
 use std::collections::BTreeMap;
@@ -265,10 +265,13 @@ mod tests {
         let mut f = BTreeMap::new();
         frames(
             "remark: <unknown>:0:0: 80 stack bytes in function 'nz.m.x.main' [-Rpass-analysis=prologepilog]\n\
-             warning: something else\n",
+             warning: something else\n\
+             remark: <unknown>:0:0: 16 stack bytes in function 'nz.m.x.sum' [-Rpass-analysis=prolog-epilog]\n",
             &mut f,
         );
         assert_eq!(f.get("nz.m.x.main"), Some(&80));
+        // LLVM 23 renamed the pass; its remark reads the same.
+        assert_eq!(f.get("nz.m.x.sum"), Some(&16));
         let c = calls(&["define i64 @f(i64 %x) {\n  %a = call i64 @g(i64 %x)\n  %b = call i64 %fp(i64 1)\n  \
                          call void asm sideeffect \"nop\", \"\"()\n  %c = call {i64, i1} @llvm.sadd.with.overflow.i64(i64 1, i64 2)\n  ret i64 %a\n}\n"]);
         assert_eq!(c.get("f"), Some(&vec![Some("g".to_owned()), None]));
