@@ -1,0 +1,407 @@
+// The PE/COFF relocatable writer (section 8), for `x86_64-pc-windows-gnu`, AMD64 — the objects
+// MinGW-w64's `ld` links (Microsoft PE/COFF specification, "COFF File Header", "Section Table",
+// "COFF Relocations", "COFF Symbol Table"; "x64 exception handling" for `.pdata`/`.xdata`).
+//
+// Sections: `.text`; `.data` (writable data) and `.rdata` (the rest, addresses included — a PE
+// image relocates them itself); `.xdata` (each function's UNWIND_INFO, built by the selection)
+// and `.pdata` (a RUNTIME_FUNCTION per function: its start, its end and its UNWIND_INFO, each an
+// image-relative `ADDR32NB`); `.drectve` with `-exclude-symbols:` for each hidden definition, as
+// LLVM writes for this triple; and the DWARF sections when there are positions, their offsets
+// into each other `SECREL`. Every relocation's addend is in place (COFF has no RELA), so the
+// instruction fields the selection left zero stay zero. Deterministic (D7), as `elf.nz` is.
+
+use "@std/bytebuf"
+use "@std/text"
+use "lir.nz"
+use "common.nz"
+use "dwarf.nz"
+
+// IMAGE_REL_AMD64_*.
+const REL_ADDR64: Int = 1
+const REL_ADDR32: Int = 2
+const REL_ADDR32NB: Int = 3
+const REL_REL32: Int = 4
+const REL_SECREL: Int = 11
+
+fn put8(b: ByteBuf, v: Int) {
+    bytebuf_push(b, UInt8(v & 0xFF))
+}
+
+fn put16(b: ByteBuf, v: Int) {
+    put8(b, v)
+    put8(b, v >> 8)
+}
+
+fn put32(b: ByteBuf, v: Int) {
+    bytebuf_put_u32_le(b, UInt32(v & 0xFFFFFFFF))
+}
+
+fn pad_to(b: ByteBuf, at: Int) {
+    while bytebuf_len(b) < at { put8(b, 0) }
+}
+
+fn hexval(c: Int) -> Int {
+    if c >= 97 { c - 87 } else if c >= 65 { c - 55 } else { c - 48 }
+}
+
+fn sort_by_name(u: Unit, xs: Ints) {
+    let n = ints_len(xs)
+    let mut i = 1
+    while i < n {
+        let x = xs[i]
+        let mut j = i - 1
+        while j >= 0 && text_compare(u.syms[xs[j]].name, u.syms[x].name) > 0 {
+            xs[j + 1] = xs[j]
+            j -= 1
+        }
+        xs[j + 1] = x
+        i += 1
+    }
+}
+
+/// `IMAGE_SCN_ALIGN_*` for an alignment in bytes (1 to 8192).
+fn align_flag(a: Int) -> Int {
+    let mut n = 1
+    let mut v = 1
+    while v < a && n < 14 {
+        v = v * 2
+        n += 1
+    }
+    n << 20
+}
+
+/// A name as the symbol table holds it: eight bytes inline, or zero and an offset into the
+/// string table, which starts with its own four-byte size.
+fn put_name(b: ByteBuf, strtab: ByteBuf, s: Str) {
+    if str_len(s) <= 8 {
+        bytebuf_push_str(b, s)
+        let mut k = str_len(s)
+        while k < 8 {
+            put8(b, 0)
+            k += 1
+        }
+    } else {
+        put32(b, 0)
+        put32(b, 4 + bytebuf_len(strtab))
+        bytebuf_push_str(strtab, s)
+        put8(strtab, 0)
+    }
+}
+
+/// A section's name in its header: eight bytes inline, or `/N` for offset N in the string table.
+fn put_sect_name(b: ByteBuf, strtab: ByteBuf, s: Str) {
+    if str_len(s) <= 8 {
+        put_name(b, strtab, s)
+    } else {
+        let n = f"/{4 + bytebuf_len(strtab)}"
+        bytebuf_push_str(strtab, s)
+        put8(strtab, 0)
+        put_name(b, strtab, n)
+    }
+}
+
+fn put_reloc(b: ByteBuf, at: Int, sym: Int, typ: Int) {
+    put32(b, at)
+    put32(b, sym)
+    put16(b, typ)
+}
+
+/// The COFF relocation type for one of the selection's x86-64 relocation kinds: an absolute
+/// address, or a 32-bit field relative to the end of its four bytes — a call, a `rip`-relative
+/// `lea` or load (the kinds of `common.nz`; an import is addressed directly, there being no GOT).
+fn coff_type(kind: Int, len: Int) -> Int {
+    if kind == X_UNSIGNED {
+        if len == 3 { REL_ADDR64 } else { REL_ADDR32 }
+    } else {
+        REL_REL32
+    }
+}
+
+/// The unit's object, or the reasons it cannot be written (in `errors`).
+pub fn write_coff(u: Unit, c: Code, dbg: Dwarf, errors: Strs) -> Bytes {
+    let ns = u.syms.len()
+    // Contents, numbered from 1: .text, .data, .rdata, .xdata, .pdata, then .drectve when a
+    // definition is hidden, then the DWARF sections.
+    let names = strs_new()
+    let secs = vec_new[ByteBuf]()
+    let sec_align = ints_new()
+    let sec_flags = ints_new()
+    let lit_names: Strs = [".text", ".data", ".rdata", ".xdata", ".pdata"]
+    let lit_flags: Ints = [0x60000020, 0xC0000040, 0x40000040, 0x40000040, 0x40000040]
+    let mut i = 0
+    while i < 5 {
+        strs_push(names, lit_names[i])
+        secs.push(if i == 0 { c.buf } else if i == 3 { c.xdata } else { bytebuf_new() })
+        ints_push(sec_align, if i == 0 { 16 } else if i >= 3 { 4 } else { 1 })
+        ints_push(sec_flags, lit_flags[i])
+        i += 1
+    }
+    let sym_sec = ints_new()
+    let sym_off = ints_new()
+    i = 0
+    while i < ns {
+        ints_push(sym_sec, if c.sym_at[i] >= 0 { 1 } else { 0 })
+        ints_push(sym_off, c.sym_at[i])
+        i += 1
+    }
+    for d in u.data {
+        if str_len(d.section) > 0 {
+            strs_push(errors, f"data in section `{d.section}` (section placement, a board's, is not carried), in {u.source}")
+            continue
+        }
+        let s = if d.writable { 2 } else { 3 }
+        let buf = secs[s - 1]
+        let al = if d.align < 1 { 1 } else { d.align }
+        pad_to(buf, align_up(bytebuf_len(buf), al))
+        if al > sec_align[s - 1] { sec_align[s - 1] = al }
+        sym_sec[d.sym] = s
+        sym_off[d.sym] = bytebuf_len(buf)
+        let mut k = 0
+        while k + 1 < str_len(d.hex) {
+            put8(buf, hexval(str_byte(d.hex, k)) * 16 + hexval(str_byte(d.hex, k + 1)))
+            k += 2
+        }
+    }
+    // `.pdata`: one RUNTIME_FUNCTION per function, in code order (8.3).
+    let funcs = ints_new()
+    i = 0
+    while i < ns {
+        if c.sym_at[i] >= 0 && c.fn_xdata[i] >= 0 { ints_push(funcs, i) }
+        i += 1
+    }
+    let mut p = 1
+    while p < ints_len(funcs) {
+        let x = funcs[p]
+        let mut j = p - 1
+        while j >= 0 && c.sym_at[funcs[j]] > c.sym_at[x] {
+            funcs[j + 1] = funcs[j]
+            j -= 1
+        }
+        funcs[j + 1] = x
+        p += 1
+    }
+    i = 0
+    while i < ns {
+        if c.sym_at[i] >= 0 && c.fn_xdata[i] < 0 {
+            strs_push(errors, f"`{u.syms[i].name}` has no unwind information, in {u.source}")
+        }
+        i += 1
+    }
+    let pdata = secs[4]
+    for f in funcs {
+        put32(pdata, c.sym_at[f])
+        put32(pdata, func_end(c, c.sym_at[f]))
+        put32(pdata, c.fn_xdata[f])
+    }
+    // `.drectve`: the hidden definitions kept out of any export (as LLVM writes it).
+    let drectve = bytebuf_new()
+    i = 0
+    while i < ns {
+        if u.syms[i].link == L_HIDDEN && sym_sec[i] > 0 {
+            bytebuf_push_str(drectve, f" -exclude-symbols:\"{u.syms[i].name}\"")
+        }
+        i += 1
+    }
+    let mut abbrev_sec = 0
+    let mut info_sec = 0
+    let mut line_sec = 0
+    if bytebuf_len(drectve) > 0 {
+        strs_push(names, ".drectve")
+        secs.push(drectve)
+        ints_push(sec_align, 1)
+        ints_push(sec_flags, 0x00000A00)
+    }
+    if dbg.present {
+        abbrev_sec = secs.len() + 1
+        info_sec = abbrev_sec + 1
+        line_sec = abbrev_sec + 2
+        strs_push(names, ".debug_abbrev")
+        strs_push(names, ".debug_info")
+        strs_push(names, ".debug_line")
+        secs.push(dbg.abbrev)
+        secs.push(dbg.info)
+        secs.push(dbg.line)
+        let mut t = 0
+        while t < 3 {
+            ints_push(sec_align, 1)
+            ints_push(sec_flags, 0x42000040)
+            t += 1
+        }
+    }
+    let nsec = secs.len()
+    // Symbols: each section's (two entries: the symbol and its auxiliary record), then the
+    // unit's — locals, then definitions, then imports, each group by name.
+    let locals = ints_new()
+    let globals = ints_new()
+    let undefs = ints_new()
+    i = 0
+    while i < ns {
+        let s = u.syms[i]
+        if s.link == L_IMPORT {
+            ints_push(undefs, i)
+        } else if sym_sec[i] == 0 {
+            strs_push(errors, f"`{s.name}` is declared here but not defined, in {u.source}")
+        } else if s.link == L_LOCAL {
+            ints_push(locals, i)
+        } else {
+            ints_push(globals, i)
+        }
+        i += 1
+    }
+    if strs_len(errors) > 0 { return bytes_new(0) }
+    sort_by_name(u, locals)
+    sort_by_name(u, globals)
+    sort_by_name(u, undefs)
+    let order = ints_new()
+    for x in locals { ints_push(order, x) }
+    for x in globals { ints_push(order, x) }
+    for x in undefs { ints_push(order, x) }
+    let nidx = ints_new()
+    i = 0
+    while i < ns {
+        ints_push(nidx, 0)
+        i += 1
+    }
+    i = 0
+    while i < ints_len(order) {
+        nidx[order[i]] = 2 * nsec + i
+        i += 1
+    }
+    // Relocations, one buffer per section, and their counts.
+    let rel = vec_new[ByteBuf]()
+    let nrel = ints_new()
+    i = 0
+    while i < nsec {
+        rel.push(bytebuf_new())
+        ints_push(nrel, 0)
+        i += 1
+    }
+    i = 0
+    while i < ints_len(c.rel_at) {
+        put_reloc(rel[0], c.rel_at[i], nidx[c.rel_sym[i]], coff_type(c.rel_kind[i], c.rel_len[i]))
+        nrel[0] = nrel[0] + 1
+        i += 1
+    }
+    for d in u.data {
+        let s = sym_sec[d.sym]
+        let mut k = 0
+        while k < ints_len(d.reloc_at) {
+            put_reloc(rel[s - 1], sym_off[d.sym] + d.reloc_at[k], nidx[d.reloc_sym[k]], REL_ADDR64)
+            nrel[s - 1] = nrel[s - 1] + 1
+            k += 1
+        }
+    }
+    // `.pdata` against the section symbols of `.text` (0) and `.xdata` (2 * 3).
+    i = 0
+    while i < ints_len(funcs) {
+        put_reloc(rel[4], 12 * i, 0, REL_ADDR32NB)
+        put_reloc(rel[4], 12 * i + 4, 0, REL_ADDR32NB)
+        put_reloc(rel[4], 12 * i + 8, 6, REL_ADDR32NB)
+        nrel[4] = nrel[4] + 3
+        i += 1
+    }
+    if dbg.present {
+        i = 0
+        while i < ints_len(dbg.info_rel_at) {
+            put_reloc(rel[info_sec - 1], dbg.info_rel_at[i], nidx[dbg.info_rel_sym[i]], REL_ADDR64)
+            nrel[info_sec - 1] = nrel[info_sec - 1] + 1
+            i += 1
+        }
+        i = 0
+        while i < ints_len(dbg.info_sec_at) {
+            let to = if dbg.info_sec_to[i] == 0 { abbrev_sec } else { line_sec }
+            put_reloc(rel[info_sec - 1], dbg.info_sec_at[i], 2 * (to - 1), REL_SECREL)
+            nrel[info_sec - 1] = nrel[info_sec - 1] + 1
+            i += 1
+        }
+        i = 0
+        while i < ints_len(dbg.line_rel_at) {
+            put_reloc(rel[line_sec - 1], dbg.line_rel_at[i], nidx[dbg.line_rel_sym[i]], REL_ADDR64)
+            nrel[line_sec - 1] = nrel[line_sec - 1] + 1
+            i += 1
+        }
+    }
+    // File layout: the header, the section headers, each section's bytes and then its
+    // relocations, the symbol table, the string table.
+    let mut at = 20 + 40 * nsec
+    let offs = ints_new()
+    let rel_off = ints_new()
+    i = 0
+    while i < nsec {
+        at = align_up(at, 4)
+        ints_push(offs, at)
+        at += bytebuf_len(secs[i])
+        at = align_up(at, 2)
+        ints_push(rel_off, at)
+        // More than 65,535 relocations: the first entry holds the count (`NRELOC_OVFL`).
+        if nrel[i] > 0xFFFF { at += 10 }
+        at += bytebuf_len(rel[i])
+        i += 1
+    }
+    let symoff = align_up(at, 2)
+    let strtab = bytebuf_new()
+    let symtab = bytebuf_new()
+    i = 0
+    while i < nsec {
+        put_name(symtab, strtab, names[i])
+        put32(symtab, 0)
+        put16(symtab, i + 1)
+        put16(symtab, 0)
+        put8(symtab, 3)
+        put8(symtab, 1)
+        put32(symtab, bytebuf_len(secs[i]))
+        put16(symtab, if nrel[i] > 0xFFFF { 0xFFFF } else { nrel[i] })
+        put16(symtab, 0)
+        put32(symtab, 0)
+        put16(symtab, 0)
+        put8(symtab, 0)
+        put8(symtab, 0)
+        put16(symtab, 0)
+        i += 1
+    }
+    for x in order {
+        let s = u.syms[x]
+        put_name(symtab, strtab, s.name)
+        put32(symtab, if s.link == L_IMPORT { 0 } else { sym_off[x] })
+        put16(symtab, sym_sec[x])
+        put16(symtab, if s.kind == 0 && s.link != L_IMPORT { 0x20 } else { 0 })
+        put8(symtab, if s.link == L_LOCAL { 3 } else { 2 })
+        put8(symtab, 0)
+    }
+    let out = bytebuf_new()
+    put16(out, 0x8664)
+    put16(out, nsec)
+    put32(out, 0)
+    put32(out, symoff)
+    put32(out, 2 * nsec + ints_len(order))
+    put16(out, 0)
+    put16(out, 0)
+    i = 0
+    while i < nsec {
+        put_sect_name(out, strtab, names[i])
+        put32(out, 0)
+        put32(out, 0)
+        put32(out, bytebuf_len(secs[i]))
+        put32(out, if bytebuf_len(secs[i]) > 0 { offs[i] } else { 0 })
+        put32(out, if nrel[i] > 0 { rel_off[i] } else { 0 })
+        put32(out, 0)
+        put16(out, if nrel[i] > 0xFFFF { 0xFFFF } else { nrel[i] })
+        put16(out, 0)
+        put32(out, sec_flags[i] | align_flag(sec_align[i]) | (if nrel[i] > 0xFFFF { 0x01000000 } else { 0 }))
+        i += 1
+    }
+    i = 0
+    while i < nsec {
+        pad_to(out, offs[i])
+        bytebuf_push_bytes(out, bytebuf_to_bytes(secs[i]))
+        pad_to(out, rel_off[i])
+        if nrel[i] > 0xFFFF { put_reloc(out, nrel[i] + 1, 0, 0) }
+        bytebuf_push_bytes(out, bytebuf_to_bytes(rel[i]))
+        i += 1
+    }
+    pad_to(out, symoff)
+    bytebuf_push_bytes(out, bytebuf_to_bytes(symtab))
+    put32(out, 4 + bytebuf_len(strtab))
+    bytebuf_push_bytes(out, bytebuf_to_bytes(strtab))
+    bytebuf_to_bytes(out)
+}

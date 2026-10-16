@@ -196,6 +196,38 @@ A third `nazm_lir::backend::Backend`, beside LLVM's and Cranelift's, in a small 
    driving `--backend nazm` directly instead of substituting objects. In process (no subprocess)
    comes at R8, when the compiler driving it is itself Nazm.
 
+**D16. Windows x86_64 before 1.0 (tasks section 8).** R8 replaces Cranelift by this generator,
+and Cranelift builds `x86_64-pc-windows-gnu` today, so the generator carries it too (the copyright
+holder, 2026-10-16: "complete r9 without linux"; Linux stays after 1.0, D13). As LLVM does for
+the triple, read from its objects:
+
+- **Objects**: PE/COFF relocatable, AMD64 (`coff.nz`): `.text`, `.data`, `.rdata` (read-only data,
+  addresses included — the image relocates them), `.xdata`, `.pdata`, `.drectve`
+  (`-exclude-symbols:` per hidden definition) and the DWARF sections, offsets between them
+  `SECREL`; relocations `REL32` (calls, `rip`-relative addresses — an import too: PE has no GOT,
+  and LLVM addresses `nz.stack_limit` directly), `ADDR64` (data holding addresses, DWARF
+  addresses) and `ADDR32NB` (`.pdata`). Addends in place.
+- **Convention**: Windows x64 — four positions, rcx/rdx/r8/r9 or xmm0–xmm3 by position, then
+  the stack above 32 bytes of shadow space every call reserves; an `i128` two positions, split
+  between r9 and the stack when it falls there (LLVM splits it for this triple; Clang's
+  by-reference `__int128` does not apply to LIR's `i128`); results as System V's — rax, rax:rdx,
+  xmm0, and the failure bit in the next register, as LLVM returns `{T, i1}` here. rsi, rdi and
+  xmm6–xmm15 are callee-saved: the allocator's caller-saved pool's rsi and rdi are pushed when
+  used, and the scratch xmm pair is xmm4/xmm5 instead of xmm14/xmm15. The other targets' bytes do
+  not change.
+- **Failures**: the bit, as LLVM keeps it on Windows (`Target::failures`: no unwinder this
+  compiler uses there) — so no `nz.raise`, personality or LSDA; a Windows unit links with
+  LLVM's runtime objects and with LLVM's units alike.
+- **Frames and unwinding**: `push rbp; mov rbp, rsp`, the callee-saved pushes, the allocation —
+  from 4096 bytes through MinGW-w64's `___chkstk_ms` (`mov eax, N; call; sub rsp, rax`), as LLVM
+  probes for this triple (`Target::probes` = `Platform`) — and one UNWIND_INFO per function (no
+  frame register: rsp is fixed after the prologue), its `.pdata` entry for every function; the
+  epilogue is the form the Windows unwinder recognises (`add rsp`, pops, `ret`). LLVM gives no
+  entry to a frameless leaf; every function here has a frame, so every one has an entry.
+- **Evidence**: `tests/coff.sh` checks each object against LLVM's for the triple and links every
+  program with MinGW-w64; running them is `scripts/windows-host.sh` with `BACKEND=nazm` on a
+  Windows host. Until that has run, the triple is compile- and link-verified, not run-verified.
+
 ## Open Questions
 
 - Whether `--backend nazm` (D15) lands before R8, beside LLVM and Cranelift, or only at cut-over
