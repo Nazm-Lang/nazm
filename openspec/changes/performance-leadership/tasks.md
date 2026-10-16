@@ -82,12 +82,20 @@ and memory grow with the program, and made cheaper, nanoseconds first, then micr
 milliseconds. Measurement on both now; fixes in the Nazm-written compiler (it is `nazm` after R8),
 in the Rust compiler only where users would meet the cost before then (the order rule above).
 
-- [ ] 7.1 The complexity audit: for each phase (lexing, parsing, resolution, checking, Core IR, MIR,
+- [x] 7.1 The complexity audit: for each phase (lexing, parsing, resolution, checking, Core IR, MIR,
       LIR, code generation, linking, the caches), generated programs of n, 2n, 4n, 8n lines and of
       deep nesting, long chains and many modules; time and peak memory fitted to a growth class;
       anything worse than n log n flagged with the input that shows it; both compilers; quiet host
-- [ ] 7.2 Latency budgets: `nazm check` of a small program in microseconds, a warm `nazm build` in
+      — 2026-10-17: `bench/complexity/{gen,measure}.py`, `performance.md`, *The compilers' growth*:
+      flagged — the Nazm pipeline's LIR quadratic in a module (`ops.nz` `line_col`, 12.9 s at 16,104
+      lines), `nzcg`'s register allocation 2.67 in nesting (`common.nz` `allocate`), the Rust MIR
+      quadratic in a `+` chain (97 MiB for 480 terms), the Nazm Core IR's memory (29 KiB a line);
+      limits — 512 `+` terms refused (`N0102`), the pipeline's JSON reader refuses 256 levels
+- [x] 7.2 Latency budgets: `nazm check` of a small program in microseconds, a warm `nazm build` in
       milliseconds, per-function work in nanoseconds — set from 7.1 and enforced as tests
+      — 2026-10-17: budgets set (`performance.md`, the same section: check ≤ 15 ms wall / 5 ms in
+      process, warm build ≤ 100 ms, front end ≤ 40 µs, MIR ≤ 10 µs, LIR ≤ 1 µs a function, growth
+      ≤ 1.25); open: the tests that enforce them, with 7.4's growth guards
 - [ ] 7.3 Fixes in priority order: superlinear phases first, then the largest constant factors
       (hashing, allocation per node, copies), each measured before and after
 - [ ] 7.4 A growth guard per phase in both compilers, like `…lowers_in_time_proportional_to_its_size`
