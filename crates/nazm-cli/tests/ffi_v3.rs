@@ -325,6 +325,7 @@ fn a_c_pointer_on_a_32_bit_target_is_refused_by_name() {
         "wasm32-unknown-unknown",
         "wasm32-wasip1",
         "thumbv7m-none-eabi",
+        "thumbv8m.main-none-eabihf",
     ] {
         for (decl, call, what) in cases {
             let src = format!(

@@ -44,21 +44,25 @@ fn program(src: &str) -> tempfile::TempDir {
 
 #[test]
 fn every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does() {
-    assert_eq!(BOARDS.len(), 3);
+    assert_eq!(BOARDS.len(), 5);
     for b in &BOARDS {
         assert!(!b.hardware, "{}: no board has run on hardware", b.triple);
         let script = board::linker_script(b);
-        assert!(
-            script.contains(&format!(". = {:#x};", b.load_address)),
-            "{script}"
-        );
+        // An image loaded whole starts at the load address; one run from flash (M1) where flash
+        // does, which is the same address.
+        let start = if b.memory.is_some() {
+            format!("FLASH (rx) : ORIGIN = {:#x}", b.load_address)
+        } else {
+            format!(". = {:#x};", b.load_address)
+        };
+        assert!(script.contains(&start), "{script}");
         // `_start` is first: RISC-V's small-data sections and every unwind table are placed or
         // discarded by name, never left as orphans ahead of it.
         assert!(script.contains("*(.text.start) *(.text*)"), "{script}");
         // An M profile's vector table goes before even `_start` (Gate 3).
         assert_eq!(
             script.contains("KEEP(*(.vectors)) *(.text.start)"),
-            b.isa == Isa::Thumbv7m,
+            b.isa.m_profile(),
             "{script}"
         );
         for small in ["*(.srodata*)", "*(.sdata*)", "*(.sbss*)"] {
@@ -120,6 +124,15 @@ fn every_board_s_texts_are_generated_from_its_description_and_differ_where_it_do
                 assert!(entry.contains("call void @nz.uart_init()"), "{entry}");
                 assert!(entry.contains("bl nz_board_main"), "{entry}");
             }
+            // M1's microcontrollers: `mcu.rs` holds their startup and runtime.
+            (Isa::Thumbv8m, Stop::Semihosting) => {
+                assert!(rt.contains("bkpt 0xab"), "{rt}");
+                assert!(entry.contains(".word __stack_top"), "{entry}");
+            }
+            (Isa::Riscv32, Stop::SifiveTest { .. }) => {
+                assert!(rt.contains("or i32 %shifted, 13107"), "{rt}");
+                assert!(entry.contains("call nz_board_main"), "{entry}");
+            }
             other => panic!("a board this test does not know: {other:?}"),
         }
     }
@@ -143,7 +156,7 @@ fn inspect_lists_the_riscv_board_and_every_board_s_description() {
         .unwrap_or_else(|| panic!("{targets:?}"));
     assert_eq!(riscv["output"], "objects");
     let boards = v["toolchain"]["boards"].as_array().unwrap();
-    assert_eq!(boards.len(), 3);
+    assert_eq!(boards.len(), 5);
     assert_eq!(boards[1]["triple"], RISCV);
     assert_eq!(boards[1]["load_address"], "0x80000000");
     assert_eq!(boards[1]["uart"], "0x10000000");

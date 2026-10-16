@@ -556,6 +556,7 @@ fn lower_function(
             interrupt: None,
             on_failure: false,
             task: None,
+            board_init: false,
             export: None,
             closure: None,
         });
@@ -686,6 +687,7 @@ fn lower_function(
         interrupt: f.interrupt.clone(),
         on_failure: f.on_failure,
         task: f.task,
+        board_init: false,
         export: f.export.clone(),
         closure,
     })

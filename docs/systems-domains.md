@@ -151,6 +151,18 @@ interrupt.
 
 **Reference workload:** a timer + GPIO-style state machine under QEMU.
 
+**After the gate — 1.0's real boards (M1, 2026-10-16; `openspec/changes/v1-every-domain/design.md`,
+M).** Two more microcontroller targets, each with a built-in emulated board: `thumbv8m.main-none-eabihf`
+(Cortex-M33, the RP2350's core; QEMU `mps2-an505`) and `riscv32imc-unknown-none-elf` (RV32IMC, the
+ESP32-C3's ISA; QEMU RISC-V `virt` with an RV32IMC hart). A manifest gains what a chip needs and an
+emulator let the boards skip (`docs/spec.md`, *Boards*): `[memory]` — `flash` and `ram`, each
+`{ origin, length }` — so the image runs from flash and `_start` copies its data and zeroes the
+rest; `init = "NAME"`, a Nazm function of the program `_start` calls before the interrupts and
+`main` (clocks, pads, console); and `[image] format = "rp2350"`, the RP2350 boot ROM's `IMAGE_DEF`
+block. New refusals: `N0850` (an image, its data or its stack does not fit), `N0851` (no such
+`init`), `N0854` (`Float64` on the Cortex-M33, any float on RV32IMC). The atomics are the board
+runtime's with interrupts masked on both: ARMv8-M has no 64-bit exclusive, and RV32IMC no `A`.
+
 ## D. Realtime
 
 **Mechanism.** The `realtime` profile is strengthened with rules that can be enforced soundly:

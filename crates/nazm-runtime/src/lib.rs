@@ -301,7 +301,13 @@ pub fn escape(s: &str) -> String {
 /// 35 is performance leadership's multicore (2026-10-15): the `stack` unit defines `nz.os_cpus`,
 /// the processors online, and the pool starts that many workers unless `NAZM_WORKERS` says
 /// otherwise — four where the system will not say, as before on every system.
-pub const RUNTIME_ABI_REVISION: u32 = 35;
+/// 36 is M1's microcontroller boards: a board's runtime defines `nz.stack_limit`, the limit the
+/// inlined stack check reads (no board image that recursed linked without it); a Cortex-M33's
+/// runtime adds the run-time ABI's 64-bit integer and float conversions and the double widening
+/// and comparisons, an RV32IMC's the masked 64-bit atomics, libgcc's 64-bit division and the C
+/// memory functions with 32-bit sizes; and a board's entry copies data from flash, zeroes the
+/// rest and calls the manifest's `init` (`nz_board_init`) before the interrupts and `main`.
+pub const RUNTIME_ABI_REVISION: u32 = 36;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -1384,10 +1390,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_five_and_reaches_the_system_only_through_its_platform_layer()
-    {
-        // Multicore's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 35);
+    fn the_runtime_is_revision_thirty_six_and_reaches_the_system_only_through_its_platform_layer() {
+        // M1's revision: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 36);
         // The pool's default worker count is the processors online, from each target's stack unit.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("call i64 @nz.os_cpus()"));
         for t in crate::switch::SwitchTarget::ALL {

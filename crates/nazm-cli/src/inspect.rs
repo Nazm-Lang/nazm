@@ -29,6 +29,9 @@ pub(crate) const TARGETS: &[&str] = &[
     "aarch64-unknown-none",
     "riscv64gc-unknown-none-elf",
     "thumbv7m-none-eabi",
+    // The microcontroller targets (M1): objects and a `link.ld` that places them in flash and RAM.
+    "thumbv8m.main-none-eabihf",
+    "riscv32imc-unknown-none-elf",
     // WebAssembly (N64, §7.66): objects, `wasm-ld`'s line and a reference host.
     "wasm32-unknown-unknown",
     // WebAssembly with WASI preview 1 (Gate 3): objects, `wasm-ld`'s line and Node's WASI host.

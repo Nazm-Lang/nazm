@@ -630,6 +630,9 @@ given a different meaning. Codes are never reused (*What compatibility means*).
 | `N0636` | `VARIANT_AMBIGUOUS` | A variant written without its enum where two enums in scope have a variant of that name (R1.5, `docs/spec.md`, *Shorter forms*) |
 | `N0637` | `BUILTIN_RENAMED` | A call of one of R1a's `list_` built-ins, renamed `chain_` with their type, `Chain[T]` (R1.5, `docs/spec.md`, *Immutable indirection*) |
 | `N0634` | `RESULT_TYPE_NOT_INFERRED` | A function written `= e` with no result type that must write one: a `pub` function, a method, or one whose body reaches itself (R1.5, `docs/spec.md`, *Shorter forms*) |
+| `N0850` | `BOARD_MEMORY` | An image, its data or its stack that does not fit a microcontroller board's flash or RAM, naming the region and the overflow (M1) |
+| `N0851` | `BOARD_INIT` | A board manifest's `init` that names no function `fn NAME() -> Int ! {}` or `fn NAME(m: MmioCap) -> Int ! {}` of the program, or names more than one (M1) |
+| `N0854` | `BOARD_FLOAT` | A floating-point value a microcontroller target cannot compute with: `Float64` on `thumbv8m.main-none-eabihf`, whose FPU is single-precision, and either float on `riscv32imc-unknown-none-elf`, which has none (M1) |
 | `N0900` | `COMPILER_DEFECT` | The compiler contradicted itself (N39) |
 <!-- registry:end -->
 
