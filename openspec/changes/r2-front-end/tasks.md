@@ -538,7 +538,7 @@
         functions the lowering carries every one, all agree; the other parts 10,992, all
         agree; 1,832 whole documents, all the reference's bytes. Nothing is stopped: `@derive`
         needed nothing of its own (derived methods are reached through `call_trait`)
-- [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
+- [x] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
   - [x] The budgets measured and set (D26): `check` 7–9 times the reference's time in about its
         memory, Core IR 13–15 times and 4–5 times; gates at 10× / 1.5× and 16× / 5×. Core IR
         now reads each function's bindings and captures from an index the checker makes once
@@ -546,8 +546,14 @@
         `run.sh core` after it: 3,241 agree, 0 differ; of 96,561 functions every one carried,
         all agree; the other parts 11,310, all agree; 1,885 whole documents, all the
         reference's bytes
-  - [ ] Per-module output: what it is to be is not written down anywhere (`rewrite-in-nazm`
-        3.3 names it only) — asked of the coordinator
+  - [x] Per-module output (D28, the coordinator's decision): one Core IR unit per module — its
+        functions' lines — filed under the reference's `CheckKey` and read back instead of
+        lowered when that key is unchanged (`cr_core_units`, `diagnose --units DIR`). `run.sh
+        units` lowers and files every input's units, then builds its Core IR again from them
+        and compares that second document with the reference's: 3,247 agree, 0 differ; of
+        105,693 functions every one carried and agreeing; 1,895 whole documents, all the
+        reference's bytes; on the second runs 6,141 units reused, 0 written. `run.sh core`
+        3,247 agree, 0 differ (the same numbers), keys 3,247 agree, 0 differ
 
 ## 6. R1.5's forms (after the coordinator declares them final)
 

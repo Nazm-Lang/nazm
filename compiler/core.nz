@@ -101,8 +101,91 @@ fn co_last_transfers(lo: Lo) -> Bool { ints_get(lo.last, 1) == 1 }
 // The comparison's whole output (`run.sh core`): `cr_functions`, `cr_parts`, and — where every
 // function and every part was carried — `%%document` on a line of its own and the document
 // `nazm core-ir` prints, byte for byte (`print.rs`, indented), from the same values.
-pub fn cr_core(f: Facts) -> Str {
-    let functions = cr_functions(f);
+pub fn cr_core(f: Facts) -> Str { cr_core_with(f, cr_functions(f)) }
+
+// `cr_core`, its functions lowered per module (design D28): a module whose Core IR unit — its
+// functions' lines — is in `dir` under its check key is read from there, not lowered; every
+// other one is lowered and its unit written there. `keys` holds each module's check key, "-"
+// where it has none (and is then never filed). Standard error says how many were reused.
+pub fn cr_core_units(f: Facts, dir: Str, keys: Strs, io: IoCap) -> Str {
+    let c = fx_checker(f);
+    // Each module's unit, read where it is filed: its lines, and each line's identity.
+    let have = ints_new();
+    let ids = strs_new();
+    let lines = strs_new();
+    let owner = ints_new();
+    let mut m = 0;
+    let mut reused = 0;
+    while m < fx_modules(f) {
+        let key = strs_get(keys, m);
+        let file = str_concat(str_concat(str_concat(dir, "/"), key), ".unit");
+        if key != "-" && file_exists(file) {
+            ints_push(have, 1);
+            reused = reused + 1;
+            let ls = co_lines(read_file(file));
+            let mut k = 0;
+            while k < strs_len(ls) {
+                let line = strs_get(ls, k);
+                strs_push(ids, str_slice(line, 0, co_tab(line)));
+                strs_push(lines, line);
+                ints_push(owner, m);
+                k = k + 1;
+            }
+        } else {
+            ints_push(have, 0);
+        }
+        m = m + 1;
+    }
+    // Every function in the checker's order, from its module's unit or lowered.
+    let out = strs_new();
+    let fresh = strs_new();
+    let fresh_owner = ints_new();
+    let mut i = 0;
+    while i < ck_fn_count(c) {
+        let mm = ck_fn_module(c, i);
+        let id = fx_fn_identity(f, i);
+        let mut line = "";
+        if ints_get(have, mm) == 1 {
+            let mut k = 0;
+            while k < strs_len(ids) && line == "" {
+                if ints_get(owner, k) == mm && strs_get(ids, k) == id { line = strs_get(lines, k); }
+                k = k + 1;
+            }
+        }
+        if line == "" {
+            line = str_concat(str_concat(id, str_from_byte(9)), cr_function(f, i));
+            strs_push(fresh, line);
+            ints_push(fresh_owner, mm);
+        }
+        strs_push(out, line);
+        strs_push(out, co_nl());
+        i = i + 1;
+    }
+    // Each module lowered here, filed under its key.
+    let mut written = 0;
+    m = 0;
+    while m < fx_modules(f) {
+        let key = strs_get(keys, m);
+        if ints_get(have, m) == 0 && key != "-" {
+            let unit = strs_new();
+            let mut k = 0;
+            while k < strs_len(fresh) {
+                if ints_get(fresh_owner, k) == m {
+                    strs_push(unit, strs_get(fresh, k));
+                    strs_push(unit, co_nl());
+                }
+                k = k + 1;
+            }
+            write_file(str_concat(str_concat(str_concat(dir, "/"), key), ".unit"), str_join(unit, ""));
+            written = written + 1;
+        }
+        m = m + 1;
+    }
+    eprint(str_concat(str_concat(str_concat(str_concat("units: ", int_to_str(reused)), " reused, "), int_to_str(written)), " written\n"));
+    cr_core_with(f, str_join(out, ""))
+}
+
+fn cr_core_with(f: Facts, functions: Str) -> Str {
     let parts = cr_parts(f);
     let lines = strs_new();
     let fl = co_lines(functions);

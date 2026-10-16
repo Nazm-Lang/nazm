@@ -17,7 +17,7 @@
       floats, `Bytes`/`Text`, files, networking, processes, atomics, constants, arrays,
       attributes, `Chan[T]`, `select`) and R1's additions
 - [ ] 3.2 Diagnostics identical to Rust's, text and JSON, with error recovery
-- [ ] 3.3 Per-module output; the performance budgets measured
+- [x] 3.3 Per-module output; the performance budgets measured (R2: `r2-front-end` D26, D28)
 - [ ] 3.4 The black-box tests that check, build or run programs pass with `NAZM_BIN` = the Nazm compiler
 
 ## 4. R3 — the native pipeline

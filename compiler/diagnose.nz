@@ -33,7 +33,7 @@ fn main(io: IoCap) -> Int {
     let mut at = 0;
     let mut mode = "";
     if args_count() > 1 {
-        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" {
+        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" || arg(0) == "--units" {
             at = 1;
             mode = arg(0);
         }
@@ -60,7 +60,7 @@ fn main(io: IoCap) -> Int {
         let t = sx_tree();
         sx_parse_source(ld_with_newline(read_file(path)), t, d);
     } else {
-        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core", io);
+        let f = checked(path, library, os, arch, mode == "--facts" || mode == "--core" || mode == "--units", io);
         // Where the front end stopped, standard error says at what (design D13).
         if fx_why(f) != "" { eprint(str_concat(str_concat("diagnose: ", fx_why(f)), nl())); }
         if mode == "--text" {
@@ -86,6 +86,20 @@ fn main(io: IoCap) -> Int {
                 return 0;
             }
             print(fx_keys(f, os, arch));
+            return 0;
+        }
+        // Core IR as `--core` prints it, from the units filed in the directory after OS ARCH
+        // (design D28).
+        if mode == "--units" {
+            if fx_carried(f) == false {
+                print(str_concat("stops", nl()));
+                return 0;
+            }
+            if fx_failed(f) {
+                print(str_concat("fails", nl()));
+                return 0;
+            }
+            print(cr_core_units(f, arg(at + 4), fx_check_keys(f, os, arch), io));
             return 0;
         }
         if mode == "--core" {

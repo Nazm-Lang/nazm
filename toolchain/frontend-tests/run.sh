@@ -3,7 +3,7 @@
 # against the Rust toolchain, on every input.
 #
 #   toolchain/frontend-tests/run.sh [MODE...]      MODE: tokens, tree, syntax, check, render, facts,
-#                                                  core, keys (default: the first three)
+#                                                  core, keys, units (default: the first three)
 #
 # `render` compares the diagnostics' text, as `nazm check` writes them (design D4, task 4.2), and
 # `facts` what `nazm doc` reads of each compilation with what `compiler/facts.nz` answers (D24),
@@ -61,7 +61,7 @@ for mode in $modes; do
     tree) driver=tree ;;
     # Diagnostics as `nazm check --json` objects (design D4): `syntax` compares the lexer's and the
     # parser's alone, `check` every one — which needs the checker, slice by slice.
-    syntax|check|render|facts|core|keys) driver=diagnose ;;
+    syntax|check|render|facts|core|keys|units) driver=diagnose ;;
     *) echo "run.sh: unknown mode $mode" >&2; exit 2 ;;
   esac
   exe="$out/bin/$driver"
@@ -120,6 +120,26 @@ for mode in $modes; do
           diff "$want" "$got" > "$R2_DIR/$name.diff" 2>&1 || true
         fi
         exit 0 ;;
+      units)
+        # Core IR from units filed per module under its check key (design D28): lowered and
+        # filed on a first run, read back on a second, which is the run compared with the
+        # reference as `core` compares; then the units are removed.
+        status=0
+        "$R2_NAZM" core-ir "$R2_ROOT/$f" > "$want.json" 2>/dev/null || status=$?
+        python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" want "$status" < "$want.json" > "$want"
+        units="$R2_DIR/$name.units"
+        rm -rf "$units"
+        mkdir -p "$units"
+        timeout "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > /dev/null 2>&1 || true
+        timeout "$R2_DEADLINE" "$R2_EXE" --units "$R2_ROOT/$f" "$R2_ROOT/library" "$R2_OS" "$R2_ARCH" "$units" > "$got" 2> "$R2_DIR/$name.reuse" || true
+        rm -rf "$units"
+        if python3 "$R2_ROOT/toolchain/frontend-tests/core-ir.py" compare "$want" "$got" "$want.json" > "$R2_DIR/$name.count"; then
+          [ -n "${R2_KEEP:-}" ] || rm -f "$want" "$got" "$want.json"
+          : > "$R2_DIR/$name.ok"
+        else
+          diff "$want" "$got" > "$R2_DIR/$name.diff" 2>&1 || true
+        fi
+        exit 0 ;;
       keys)
         # The keys of the cache (design D28): for each module its key, source fingerprint,
         # published interface, interface hash and check key, as the reference computes them.
@@ -139,7 +159,13 @@ for mode in $modes; do
   ' sh
   agree=$(find "$out/$mode" -name '*.ok' | wc -l | tr -d ' ')
   differ=$(find "$out/$mode" -name '*.diff' | wc -l | tr -d ' ')
-  if [ "$mode" = core ]; then
+  if [ "$mode" = units ]; then
+    # How many units the second runs reused and wrote: every one reused where nothing changed.
+    reuse=$(cat "$out/$mode"/*.reuse 2>/dev/null | awk '/^units:/ { r += $2; w += $4 } END { printf "%d reused, %d written", r, w }')
+    counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; d += $6; e += $7 } END { printf "%d %d %d %d %d", t, c, a, d, e }')
+    set -- $counts
+    echo "$mode: $agree agree, $differ differ; functions: $1, carried $2, of which $3 agree; whole documents: $4, of which $5 agree byte for byte; on the second run, units $reuse"
+  elif [ "$mode" = core ]; then
     # Functions: the reference's, those the lowering carried, those of them that agree.
     counts=$(cat "$out/$mode"/*.count 2>/dev/null | awk '{ t += $1; c += $2; a += $3; p += $4; q += $5; d += $6; e += $7 } END { printf "%d %d %d %d %d %d %d", t, c, a, p, q, d, e }')
     set -- $counts
