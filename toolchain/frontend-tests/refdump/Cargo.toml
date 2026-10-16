@@ -15,3 +15,7 @@ nazm-syntax = { path = "../../../crates/nazm-syntax" }
 nazm-diag = { path = "../../../crates/nazm-diag" }
 nazm-span = { path = "../../../crates/nazm-span" }
 nazm-sema = { path = "../../../crates/nazm-sema" }
+nazm-core = { path = "../../../crates/nazm-core" }
+nazm-service = { path = "../../../crates/nazm-service" }
+nazm-cache = { path = "../../../crates/nazm-cache" }
+nazm-iface = { path = "../../../crates/nazm-iface" }

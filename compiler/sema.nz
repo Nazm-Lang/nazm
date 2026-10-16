@@ -14965,3 +14965,676 @@ pub fn ck_field_name(c: Ck, s: Int, e: Int) -> Str {
     strs_get(c.fname, f)
 }
 pub fn ck_field_ty(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mfldty, s, e) }
+
+// --- the published interface (`nazm-iface/src/wire.rs`, `PersistentUnitInterface::published`) ----
+//
+// What module `m` offers, as the reference persists it for the cache's keys (R2, design D28): its
+// dependencies' keys, the records and enums its public surface reaches, its exports, traits,
+// impls, re-exported types and constants — each by durable key, in the reference's order — written
+// as `serde_json` writes `PersistentUnitInterface`. `keys` holds each module's durable key, ""
+// for one with none; the answer is "" where a key it needs is missing (`PublishError`).
+
+// The effects of a mask by name, `*` for the effect parameter (`EffectSet::names`).
+fn pi_effects(mask: Int) -> Str {
+    let out = strs_new();
+    let mut e = 0;
+    while e < 4 {
+        if has_bit(mask, e) {
+            if e == 3 { strs_push(out, json_str("*")); } else { strs_push(out, json_str(strs_get(effect_names(), e))); }
+        }
+        e = e + 1;
+    }
+    cat3("[", str_join(out, ","), "]")
+}
+
+fn pi_key(keys: Strs, m: Int, kind: Str, name: Str) -> Str {
+    if m < 0 || m >= strs_len(keys) || strs_get(keys, m) == "" { return ""; }
+    cat5(strs_get(keys, m), "::", kind, " ", name)
+}
+
+// A type as the interface writes it (`persist`); "" where it names a module with no key.
+fn pi_type(c: Ck, t: Int, keys: Strs) -> Str {
+    if t < 0 { return ""; }
+    if is_tuple(c, t) {
+        let parts = strs_new();
+        let mut i = 0;
+        while i < targc(c, t) {
+            let p = pi_type(c, targ(c, t, i), keys);
+            if p == "" { return ""; }
+            strs_push(parts, p);
+            i = i + 1;
+        }
+        return cat3("{\"tuple\":[", str_join(parts, ","), "]}");
+    }
+    let g = tag(c, t);
+    if g == tag_param() { return cat3("{\"param\":", int_to_str(ints_get(c.tyc, t)), "}"); }
+    if g == tag_vec() || g == tag_chan() || g == tag_box() || g == tag_chain() || g == tag_cell() {
+        let inner = pi_type(c, targ(c, t, 0), keys);
+        if inner == "" { return ""; }
+        let mut word = "vec";
+        if g == tag_chan() { word = "chan"; }
+        if g == tag_box() { word = "box"; }
+        if g == tag_chain() { word = "list"; }
+        if g == tag_cell() { word = "cell"; }
+        return cat5("{\"", word, "\":", inner, "}");
+    }
+    if g == tag_array() {
+        let inner = pi_type(c, array_elem(c, t), keys);
+        if inner == "" { return ""; }
+        return cat5("{\"array\":", inner, ",\"len\":", int_to_str(ints_get(c.tya, t)), "}");
+    }
+    if g == tag_fn() {
+        let parts = strs_new();
+        let mut i = 0;
+        while i < fn_arity(c, t) {
+            let p = pi_type(c, targ(c, t, i), keys);
+            if p == "" { return ""; }
+            strs_push(parts, p);
+            i = i + 1;
+        }
+        let ret = pi_type(c, fn_ret(c, t), keys);
+        if ret == "" { return ""; }
+        return cat5(cat3("{\"fn\":[", str_join(parts, ","), "],\"ret\":"), ret, ",\"effects\":", pi_effects(ta(c, t)), "}");
+    }
+    if g == tag_record() || g == tag_enum() {
+        let mut def = "";
+        if g == tag_record() { def = pi_key(keys, ints_get(c.rmod, ta(c, t)), "record", strs_get(c.rname, ta(c, t))); } else {
+            def = pi_key(keys, ints_get(c.emod, ta(c, t)), "enum", strs_get(c.ename, ta(c, t)));
+        }
+        if def == "" { return ""; }
+        let parts = strs_new();
+        let mut i = 0;
+        while i < targc(c, t) {
+            let p = pi_type(c, targ(c, t, i), keys);
+            if p == "" { return ""; }
+            strs_push(parts, p);
+            i = i + 1;
+        }
+        return cat5("{\"def\":", json_str(def), ",\"args\":[", str_join(parts, ","), "]}");
+    }
+    json_str(strs_get(c.tyname, t))
+}
+
+// Whether `a` sorts before `b`, byte by byte (`str::cmp`).
+fn pi_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
+}
+
+// `items` sorted by `keys` (stably), and those with a key equal to the one before dropped where
+// `dedup`.
+fn pi_sorted(keys: Strs, items: Strs, dedup: Bool) -> Strs {
+    let order = ints_new();
+    let mut i = 0;
+    while i < strs_len(keys) {
+        let mut at = ints_len(order);
+        while at > 0 && pi_less(strs_get(keys, i), strs_get(keys, ints_get(order, at - 1))) { at = at - 1; }
+        ints_push(order, 0);
+        let mut j = ints_len(order) - 1;
+        while j > at {
+            ints_set(order, j, ints_get(order, j - 1));
+            j = j - 1;
+        }
+        ints_set(order, at, i);
+        i = i + 1;
+    }
+    let out = strs_new();
+    let mut last = "";
+    i = 0;
+    while i < ints_len(order) {
+        let k = strs_get(keys, ints_get(order, i));
+        if dedup == false || i == 0 || k != last { strs_push(out, strs_get(items, ints_get(order, i))); }
+        last = k;
+        i = i + 1;
+    }
+    out
+}
+
+// A run of fields as `PersistentField`s, sorted by name unless `declared` (a C struct's).
+fn pi_fields(c: Ck, first: Int, count: Int, declared: Bool, keys: Strs) -> Str {
+    let names = strs_new();
+    let items = strs_new();
+    let mut i = 0;
+    while i < count {
+        let ty = pi_type(c, ints_get(c.fty, first + i), keys);
+        if ty == "" { return "?"; }
+        let name = strs_get(c.fname, first + i);
+        strs_push(names, name);
+        strs_push(items, cat5("{\"name\":", json_str(name), ",\"ty\":", ty, "}"));
+        i = i + 1;
+    }
+    if declared { return cat3("[", str_join(items, ","), "]"); }
+    cat3("[", str_join(pi_sorted(names, items, false), ","), "]")
+}
+
+// The records and enums a set of root types reaches, closed over their fields (`reachable_types`):
+// into `recs` and `ens`, each once.
+fn pi_reach(c: Ck, t: Int, recs: Ints, ens: Ints) -> Int {
+    if t < 0 { return 0; }
+    let g = tag(c, t);
+    if g == tag_vec() || g == tag_box() || g == tag_chain() || g == tag_cell() || g == tag_chan() || g == tag_fn() || is_tuple(c, t) {
+        let mut i = 0;
+        while i < targc(c, t) {
+            pi_reach(c, targ(c, t, i), recs, ens);
+            i = i + 1;
+        }
+        return 0;
+    }
+    // An array reaches nothing: `reachable_types` has no arm for one.
+    if g == tag_array() { return 0; }
+    if g == tag_record() {
+        let r = ta(c, t);
+        if index_of(recs, r) < 0 {
+            ints_push(recs, r);
+            let mut f = 0;
+            while f < ints_get(c.rfc, r) {
+                pi_reach(c, ints_get(c.fty, ints_get(c.rff, r) + f), recs, ens);
+                f = f + 1;
+            }
+        }
+    }
+    if g == tag_enum() {
+        let e = ta(c, t);
+        if index_of(ens, e) < 0 {
+            ints_push(ens, e);
+            let mut v = 0;
+            while v < ints_get(c.evc, e) {
+                let vi = ints_get(c.evf, e) + v;
+                let mut f = 0;
+                while f < ints_get(c.vfc, vi) {
+                    pi_reach(c, ints_get(c.fty, ints_get(c.vff, vi) + f), recs, ens);
+                    f = f + 1;
+                }
+                v = v + 1;
+            }
+        }
+    }
+    if g == tag_record() || g == tag_enum() {
+        let mut i = 0;
+        while i < targc(c, t) {
+            pi_reach(c, targ(c, t, i), recs, ens);
+            i = i + 1;
+        }
+    }
+    0
+}
+
+// How many `requires` clauses a function states.
+fn pi_requires(c: Ck, f: Int) -> Int {
+    let cs = kids(c, ints_get(c.fnnode, f), "contracts");
+    let mut n = 0;
+    let mut i = 0;
+    while i < ints_len(cs) {
+        if sx_text(c.t, fld(c, ints_get(cs, i), "kind")) == "Requires" { n = n + 1; }
+        i = i + 1;
+    }
+    n
+}
+
+// Function `f` as an export (`PersistentExport`), offered under `name`; a re-export when `re`.
+fn pi_export(c: Ck, f: Int, name: Str, re: Bool, keys: Strs) -> Str {
+    let def = pi_key(keys, ints_get(c.fnmod, f), "fn", strs_get(c.fnname, f));
+    if def == "" { return ""; }
+    let o = strs_new();
+    strs_push(o, cat3("{\"def\":", json_str(def), ""));
+    if re { strs_push(o, ",\"reexport\":true"); }
+    strs_push(o, cat3(",\"name\":", json_str(name), ",\"kind\":\"fn\""));
+    let n = ints_get(c.fntpc, f);
+    strs_push(o, cat3(",\"generics\":", int_to_str(n), ""));
+    let eq = strs_new();
+    let tr = strs_new();
+    let mut k = 0;
+    while k < n {
+        let b = ints_get(c.tpbound, ints_get(c.fntpf, f) + k);
+        if ints_get(c.tpeq, ints_get(c.fntpf, f) + k) == 1 { strs_push(eq, int_to_str(k)); }
+        if b >= 0 {
+            let key = pi_key(keys, ints_get(c.trmod, b), "trait", strs_get(c.trname, b));
+            if key != "" { strs_push(tr, cat5("[", int_to_str(k), ",", json_str(key), "]")); }
+        }
+        k = k + 1;
+    }
+    if strs_len(eq) > 0 { strs_push(o, cat3(",\"requires_equality\":[", str_join(eq, ","), "]")); }
+    if strs_len(tr) > 0 { strs_push(o, cat3(",\"requires_traits\":[", str_join(tr, ","), "]")); }
+    let ps = strs_new();
+    k = 0;
+    while k < ints_get(c.fnpc, f) {
+        let p = pi_type(c, ints_get(c.ptys, ints_get(c.fnpf, f) + k), keys);
+        if p == "" { return ""; }
+        strs_push(ps, p);
+        k = k + 1;
+    }
+    strs_push(o, cat3(",\"params\":[", str_join(ps, ","), "]"));
+    let ret = pi_type(c, ints_get(c.fnret, f), keys);
+    if ret == "" { return ""; }
+    strs_push(o, str_concat(",\"ret\":", ret));
+    let declared = ck_fn_declared(c, f);
+    if declared >= 0 { strs_push(o, str_concat(",\"effects\":", pi_effects(declared))); }
+    if ints_get(c.fnfor, f) == 1 { strs_push(o, str_concat(",\"foreign\":", json_str(ck_fn_foreign(c, f)))); }
+    let req = pi_requires(c, f);
+    if req > 0 { strs_push(o, str_concat(",\"requires\":", int_to_str(req))); }
+    // Its result type left unwritten (R1, 5b.2): a return type of no width.
+    let rs = fld(c, fld(c, ints_get(c.fnnode, f), "return_type"), "span");
+    if sx_s(c.t, rs) == sx_e(c.t, rs) { strs_push(o, ",\"no_result\":true"); }
+    strs_push(o, "}");
+    str_join(o, "")
+}
+
+// The modules `m` re-exports from (`pub use`), each once.
+fn pi_reexporting(c: Ck, m: Int) -> Ints {
+    let out = ints_new();
+    let mut k = 0;
+    while k < deps(c, m) {
+        let d = dep(c, m, k);
+        if ints_get(c.rx.dk, d) > 0 && index_of(out, ints_get(c.don, d)) < 0 { ints_push(out, ints_get(c.don, d)); }
+        k = k + 1;
+    }
+    out
+}
+
+// The traits and impls module `m`'s interface carries: its own, and every one of a module it
+// re-exports from (`add_reexported_traits`), each once.
+fn pi_traits_of(c: Ck, m: Int, traits: Ints, impls: Ints, seen: Ints) -> Int {
+    if index_of(seen, m) >= 0 { return 0; }
+    ints_push(seen, m);
+    let mut t = 0;
+    while t < strs_len(c.trname) {
+        if ints_get(c.trmod, t) == m && ints_get(c.trpub, t) == 1 && index_of(traits, t) < 0 { ints_push(traits, t); }
+        t = t + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(c.imtrait) {
+        if ints_get(c.immod, i) == m && index_of(impls, i) < 0 { ints_push(impls, i); }
+        i = i + 1;
+    }
+    let from = pi_reexporting(c, m);
+    let mut k = 0;
+    while k < ints_len(from) {
+        pi_traits_of(c, ints_get(from, k), traits, impls, seen);
+        k = k + 1;
+    }
+    0
+}
+
+// A constant's value as the interface writes it (`persist_value`), from its kind and value; ""
+// where it is not computed here.
+fn pi_value(c: Ck, kind: Int, n: Int, s: Str) -> Str {
+    if kind == k_int() {
+        let mut v = n;
+        if v < 0 { return cat3("{\"bits\":\"", pi_u64(v), "\"}"); }
+        return cat3("{\"bits\":\"", int_to_str(v), "\"}");
+    }
+    if kind == k_bool() {
+        if n == 1 { return "{\"bool\":true}"; }
+        return "{\"bool\":false}";
+    }
+    if kind == k_str() { return cat3("{\"bytes\":\"", hex_text(s), "\"}"); }
+    ""
+}
+
+// A negative `Int` as the `u64` its bits are.
+fn pi_u64(v: Int) -> Str {
+    // 2^64 + v, in decimal: 18446744073709551616 + v for v < 0.
+    let w = w_add(w_parse("18446744073709551616"), w_from_int(v));
+    w_show(w)
+}
+
+// Module `m`'s published interface as JSON, or "" where it cannot be published.
+pub fn ck_interface_json(c: Ck, m: Int, keys: Strs) -> Str {
+    let module = strs_get(keys, m);
+    if module == "" { return ""; }
+    // Its dependencies' keys, sorted, once each.
+    let dk = strs_new();
+    let mut k = 0;
+    while k < deps(c, m) {
+        let key = strs_get(keys, ints_get(c.don, dep(c, m, k)));
+        if key == "" { return ""; }
+        strs_push(dk, key);
+        k = k + 1;
+    }
+    let dsorted = pi_sorted(dk, dk, true);
+    let dq = strs_new();
+    k = 0;
+    while k < strs_len(dsorted) {
+        strs_push(dq, json_str(strs_get(dsorted, k)));
+        k = k + 1;
+    }
+    // Its exports: own `pub` functions, then what it re-exports.
+    let enames = strs_new();
+    let eitems = strs_new();
+    let roots = ints_new();
+    let mut f = 0;
+    while f < strs_len(c.fnname) {
+        if ints_get(c.fnmod, f) == m && ints_get(c.fnpub, f) == 1 && ints_get(c.fnclos, f) < 0 {
+            let e = pi_export(c, f, strs_get(c.fnname, f), false, keys);
+            if e == "" { return ""; }
+            strs_push(enames, strs_get(c.fnname, f));
+            strs_push(eitems, e);
+            let p = 0;
+            let mut q = p;
+            while q < ints_get(c.fnpc, f) {
+                ints_push(roots, ints_get(c.ptys, ints_get(c.fnpf, f) + q));
+                q = q + 1;
+            }
+            ints_push(roots, ints_get(c.fnret, f));
+        }
+        f = f + 1;
+    }
+    let mut x = 0;
+    while x < ints_len(c.rx.fm) {
+        if ints_get(c.rx.fm, x) == m {
+            let g = ints_get(c.rx.ff, x);
+            let e = pi_export(c, g, strs_get(c.rx.fname, x), true, keys);
+            if e == "" { return ""; }
+            strs_push(enames, strs_get(c.rx.fname, x));
+            strs_push(eitems, e);
+        }
+        x = x + 1;
+    }
+    // Records and enums: its own `pub` ones, then what the surface reaches.
+    let recs = ints_new();
+    let ens = ints_new();
+    let mut r = 0;
+    while r < strs_len(c.rname) {
+        if ints_get(c.rmod, r) == m && ints_get(c.rpub, r) == 1 && index_of(recs, r) < 0 {
+            ints_push(recs, r);
+            let mut q = 0;
+            while q < ints_get(c.rfc, r) {
+                ints_push(roots, ints_get(c.fty, ints_get(c.rff, r) + q));
+                q = q + 1;
+            }
+        }
+        r = r + 1;
+    }
+    let mut e = 0;
+    while e < strs_len(c.ename) {
+        if ints_get(c.emod, e) == m && ints_get(c.epub, e) == 1 && index_of(ens, e) < 0 {
+            ints_push(ens, e);
+            let mut v = 0;
+            while v < ints_get(c.evc, e) {
+                let vi = ints_get(c.evf, e) + v;
+                let mut q = 0;
+                while q < ints_get(c.vfc, vi) {
+                    ints_push(roots, ints_get(c.fty, ints_get(c.vff, vi) + q));
+                    q = q + 1;
+                }
+                v = v + 1;
+            }
+        }
+        e = e + 1;
+    }
+    // Re-exported types (N103): each a member, nameable under its own name, or renamed.
+    let rt_names = strs_new();
+    let rt_items = strs_new();
+    x = 0;
+    while x < ints_len(c.rx.tm) {
+        if ints_get(c.rx.tm, x) == m {
+            let t = ints_get(c.rx.tt, x);
+            pi_reach(c, t, recs, ens);
+            if ints_get(c.rx.tn, x) == 1 {
+                let mut name = "";
+                let mut key = "";
+                if is_record(c, t) {
+                    name = strs_get(c.rname, ta(c, t));
+                    key = pi_key(keys, ints_get(c.rmod, ta(c, t)), "record", name);
+                    if ints_get(c.rmod, ta(c, t)) == m { key = ""; }
+                }
+                if is_enum(c, t) {
+                    name = strs_get(c.ename, ta(c, t));
+                    key = pi_key(keys, ints_get(c.emod, ta(c, t)), "enum", name);
+                    if ints_get(c.emod, ta(c, t)) == m { key = ""; }
+                }
+                if key != "" {
+                    strs_push(rt_names, cat3(name, str_from_byte(1), key));
+                    strs_push(rt_items, cat5("[", json_str(name), ",", json_str(key), "]"));
+                }
+            }
+        }
+        x = x + 1;
+    }
+    x = 0;
+    while x < ints_len(c.rx.nm) {
+        if ints_get(c.rx.nm, x) == m {
+            let t = ints_get(c.rx.nt, x);
+            let name = strs_get(c.rx.nname, x);
+            let mut key = "";
+            if is_record(c, t) { key = pi_key(keys, ints_get(c.rmod, ta(c, t)), "record", strs_get(c.rname, ta(c, t))); }
+            if is_enum(c, t) { key = pi_key(keys, ints_get(c.emod, ta(c, t)), "enum", strs_get(c.ename, ta(c, t))); }
+            if key != "" {
+                strs_push(rt_names, cat3(name, str_from_byte(1), key));
+                strs_push(rt_items, cat5("[", json_str(name), ",", json_str(key), "]"));
+            }
+        }
+        x = x + 1;
+    }
+    // Its exported constants: their types are roots too.
+    let cnames = strs_new();
+    let citems = strs_new();
+    x = 0;
+    while x < ints_len(c.xmod) {
+        if ints_get(c.xmod, x) == m {
+            let kind = ints_get(c.xkind, x);
+            let ty = kind_type(c, kind);
+            ints_push(roots, ty);
+            let tj = pi_type(c, ty, keys);
+            let vj = pi_const_value(c, kind, ints_get(c.xint, x), strs_get(c.xstr, x), keys);
+            if tj != "" && vj != "" {
+                strs_push(cnames, strs_get(c.xname, x));
+                strs_push(citems, cat5(cat3("{\"name\":", json_str(strs_get(c.xname, x)), ",\"type\":"), tj, ",\"value\":", vj, "}"));
+            }
+        }
+        x = x + 1;
+    }
+    let mut i = 0;
+    while i < ints_len(roots) {
+        pi_reach(c, ints_get(roots, i), recs, ens);
+        i = i + 1;
+    }
+    let rkeys = strs_new();
+    let ritems = strs_new();
+    i = 0;
+    while i < ints_len(recs) {
+        let rr = ints_get(recs, i);
+        if is_tuple_def(c, rr) == false {
+            let def = pi_key(keys, ints_get(c.rmod, rr), "record", strs_get(c.rname, rr));
+            if def == "" { return ""; }
+            let repr = ints_get(c.rrepr, rr);
+            let fields = pi_fields(c, ints_get(c.rff, rr), ints_get(c.rfc, rr), repr != 0, keys);
+            if fields == "?" { return ""; }
+            let mut cpart = "";
+            if repr == 1 { cpart = ",\"c\":\"handle\""; }
+            if repr > 1 { cpart = ",\"c\":\"struct\""; }
+            strs_push(rkeys, def);
+            strs_push(ritems, cat5(cat5("{\"def\":", json_str(def), ",\"name\":", json_str(strs_get(c.rname, rr)), ",\"generics\":"), int_to_str(ints_get(c.rnp, rr)),
+                    ",\"fields\":", fields, str_concat(cpart, "}")));
+        }
+        i = i + 1;
+    }
+    let enkeys = strs_new();
+    let enitems = strs_new();
+    i = 0;
+    while i < ints_len(ens) {
+        let en = ints_get(ens, i);
+        let def = pi_key(keys, ints_get(c.emod, en), "enum", strs_get(c.ename, en));
+        if def == "" { return ""; }
+        let vnames = strs_new();
+        let vitems = strs_new();
+        let mut v = 0;
+        while v < ints_get(c.evc, en) {
+            let vi = ints_get(c.evf, en) + v;
+            let fields = pi_fields(c, ints_get(c.vff, vi), ints_get(c.vfc, vi), false, keys);
+            if fields == "?" { return ""; }
+            strs_push(vnames, strs_get(c.vname, vi));
+            strs_push(vitems, cat5("{\"name\":", json_str(strs_get(c.vname, vi)), ",\"fields\":", fields, "}"));
+            v = v + 1;
+        }
+        strs_push(enkeys, def);
+        strs_push(enitems, cat5(cat5("{\"def\":", json_str(def), ",\"name\":", json_str(strs_get(c.ename, en)), ",\"generics\":"), int_to_str(ints_get(c.enp, en)),
+                ",\"variants\":[", str_join(pi_sorted(vnames, vitems, false), ","), "]}"));
+        i = i + 1;
+    }
+    // Traits and impls.
+    let traits = ints_new();
+    let impls = ints_new();
+    pi_traits_of(c, m, traits, impls, ints_new());
+    let tkeys = strs_new();
+    let titems = strs_new();
+    i = 0;
+    while i < ints_len(traits) {
+        let t = ints_get(traits, i);
+        let def = pi_key(keys, ints_get(c.trmod, t), "trait", strs_get(c.trname, t));
+        if def == "" { return ""; }
+        let ms = strs_new();
+        let mut q = 0;
+        while q < ints_get(c.trmc, t) {
+            let tm = ints_get(c.trmf, t) + q;
+            let ps = strs_new();
+            let mut p = 0;
+            while p < ints_get(c.tmpc, tm) {
+                let pj = pi_type(c, ints_get(c.ptys, ints_get(c.tmpf, tm) + p), keys);
+                if pj == "" { return ""; }
+                strs_push(ps, pj);
+                p = p + 1;
+            }
+            let rj = pi_type(c, ints_get(c.tmret, tm), keys);
+            if rj == "" { return ""; }
+            strs_push(ms, cat5(cat3("{\"name\":", json_str(strs_get(c.tmname, tm)), ",\"params\":["), str_join(ps, ","), "],\"ret\":", rj,
+                    cat3(",\"effects\":", pi_effects(ints_get(c.tmeff, tm)), "}")));
+            q = q + 1;
+        }
+        strs_push(tkeys, def);
+        strs_push(titems, cat5("{\"def\":", json_str(def), ",\"name\":", json_str(strs_get(c.trname, t)), cat3(",\"methods\":[", str_join(ms, ","), "]}")));
+        i = i + 1;
+    }
+    let ikeys = strs_new();
+    let iitems = strs_new();
+    i = 0;
+    while i < ints_len(impls) {
+        let im = ints_get(impls, i);
+        let tr = ints_get(c.imtrait, im);
+        let def = pi_key(keys, ints_get(c.trmod, tr), "trait", strs_get(c.trname, tr));
+        let self_ty = pi_type(c, ints_get(c.imty, im), keys);
+        if def == "" || self_ty == "" { return ""; }
+        let shown = show(c, ints_get(c.imty, im));
+        let ms = strs_new();
+        let mut q = 0;
+        while q < ints_get(c.trmc, tr) {
+            let key = pi_key(keys, ints_get(c.immod, im), "fn", cat5(strs_get(c.trname, tr), "/", shown, "/", strs_get(c.tmname, ints_get(c.trmf, tr) + q)));
+            if key == "" { return ""; }
+            strs_push(ms, json_str(key));
+            q = q + 1;
+        }
+        strs_push(ikeys, cat3(def, str_from_byte(1), self_ty));
+        strs_push(iitems, cat5("{\"trait\":", json_str(def), ",\"type\":", self_ty, cat3(",\"methods\":[", str_join(ms, ","), "]}")));
+        i = i + 1;
+    }
+    let o = strs_new();
+    strs_push(o, cat3("{\"schema\":\"nazm.interface/13\",\"module\":", json_str(module), ""));
+    strs_push(o, cat3(",\"dependencies\":[", str_join(dq, ","), "]"));
+    strs_push(o, cat3(",\"records\":[", str_join(pi_sorted(rkeys, ritems, true), ","), "]"));
+    strs_push(o, cat3(",\"enums\":[", str_join(pi_sorted(enkeys, enitems, true), ","), "]"));
+    strs_push(o, cat3(",\"exports\":[", str_join(pi_sorted(enames, eitems, false), ","), "]"));
+    if strs_len(titems) > 0 { strs_push(o, cat3(",\"traits\":[", str_join(pi_sorted(tkeys, titems, false), ","), "]")); }
+    if strs_len(iitems) > 0 { strs_push(o, cat3(",\"impls\":[", str_join(pi_sorted(ikeys, iitems, false), ","), "]")); }
+    if strs_len(rt_items) > 0 { strs_push(o, cat3(",\"reexported_types\":[", str_join(pi_sorted(rt_names, rt_items, true), ","), "]")); }
+    if strs_len(citems) > 0 { strs_push(o, cat3(",\"consts\":[", str_join(pi_sorted(cnames, citems, false), ","), "]")); }
+    strs_push(o, "}");
+    str_join(o, "")
+}
+
+fn is_tuple_def(c: Ck, r: Int) -> Bool { strs_get(c.rname, r) == "(,)" }
+
+// An exported constant's value (`persist_value`): a scalar from its kind and value, an aggregate
+// from the tokens its value is kept as (`parts`); "" where it was not computed.
+fn pi_const_value(c: Ck, kind: Int, n: Int, s: Str, keys: Strs) -> Str {
+    if k_is_agg(kind) == false {
+        if kind == k_int() || kind == k_bool() || kind == k_str() { return pi_value(c, kind, n, s); }
+        if k_is_float(kind) { return ""; }
+        // Another integer kind: its value's low 64 bits, or all 128 for a 128-bit kind.
+        let w = w_parse(s);
+        let name = kind_name(kind);
+        if name == "Int128" || name == "UInt128" {
+            if w_cmp(w, w_from_int(0)) < 0 { return cat3("{\"bits\":\"", w_show(w_add(w_parse("340282366920938463463374607431768211456"), w)), "\"}"); }
+            return cat3("{\"bits\":\"", w_show(w), "\"}");
+        }
+        if w_cmp(w, w_from_int(0)) < 0 { return cat3("{\"bits\":\"", w_show(w_add(w_parse("18446744073709551616"), w)), "\"}"); }
+        return cat3("{\"bits\":\"", w_show(w), "\"}");
+    }
+    // An aggregate: its value's tokens (`parts`), read back.
+    let toks = sx_split(s, 32);
+    let pos = ints_new();
+    ints_push(pos, 0);
+    let v = pi_agg(c, toks, pos);
+    if ints_get(pos, 0) != strs_len(toks) { return ""; }
+    v
+}
+
+// One part of an aggregate constant's value, from token `pos[0]` on, as `persist_value` writes
+// it; "" where a part is not computed here (a float's).
+fn pi_agg(c: Ck, toks: Strs, pos: Ints) -> Str {
+    let p = ints_get(pos, 0);
+    if p >= strs_len(toks) { return ""; }
+    let tok = strs_get(toks, p);
+    ints_set(pos, 0, p + 1);
+    let head = str_byte(tok, 0);
+    let colon = pi_byte(tok, 58);
+    if head == 83 { return cat3("{\"bytes\":\"", str_slice(tok, 1, str_len(tok)), "\"}"); }
+    if head == 70 { return ""; }
+    if head == 78 {
+        let kind = parse_int(str_slice(tok, 1, colon));
+        let value = str_slice(tok, colon + 1, str_len(tok));
+        if kind == k_bool() {
+            if value == "1" { return "{\"bool\":true}"; }
+            return "{\"bool\":false}";
+        }
+        if kind == k_int() {
+            let w = w_parse(value);
+            if w_cmp(w, w_from_int(0)) < 0 { return cat3("{\"bits\":\"", w_show(w_add(w_parse("18446744073709551616"), w)), "\"}"); }
+            return cat3("{\"bits\":\"", value, "\"}");
+        }
+        return pi_const_value(c, kind, 0, value, strs_new());
+    }
+    // `R<t>:<n>`, `V<t>:<v>:<n>`, `A<t>:<n>`.
+    let rest = str_slice(tok, 1, str_len(tok));
+    let parts = sx_split(rest, 58);
+    let t = parse_int(strs_get(parts, 0));
+    let n = parse_int(strs_get(parts, strs_len(parts) - 1));
+    let values = strs_new();
+    let mut i = 0;
+    while i < n {
+        let v = pi_agg(c, toks, pos);
+        if v == "" { return ""; }
+        strs_push(values, v);
+        i = i + 1;
+    }
+    if head == 65 { return cat3("{\"elems\":[", str_join(values, ","), "]}"); }
+    let names = strs_new();
+    let items = strs_new();
+    let mut variant = "";
+    if head == 86 { variant = strs_get(c.vname, ints_get(c.evf, ta(c, t)) + parse_int(strs_get(parts, 1))); }
+    i = 0;
+    while i < n {
+        let mut name = "";
+        if head == 86 {
+            let vi = ints_get(c.evf, ta(c, t)) + parse_int(strs_get(parts, 1));
+            name = strs_get(c.fname, ints_get(c.vff, vi) + i);
+        } else {
+            name = strs_get(c.fname, ints_get(c.rff, ta(c, t)) + i);
+        }
+        strs_push(names, name);
+        strs_push(items, cat5("[", json_str(name), ",", strs_get(values, i), "]"));
+        i = i + 1;
+    }
+    let fields = cat3("\"fields\":[", str_join(pi_sorted(names, items, false), ","), "]}");
+    if head == 86 { return cat5("{\"variant\":", json_str(variant), ",", fields, ""); }
+    str_concat("{", fields)
+}
+
+fn pi_byte(s: Str, b: Int) -> Int {
+    let mut i = 0;
+    while i < str_len(s) && str_byte(s, i) != b { i = i + 1; }
+    i
+}

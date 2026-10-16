@@ -33,7 +33,7 @@ fn main(io: IoCap) -> Int {
     let mut at = 0;
     let mut mode = "";
     if args_count() > 1 {
-        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" {
+        if arg(0) == "--syntax" || arg(0) == "--text" || arg(0) == "--facts" || arg(0) == "--core" || arg(0) == "--keys" {
             at = 1;
             mode = arg(0);
         }
@@ -71,6 +71,23 @@ fn main(io: IoCap) -> Int {
         }
         // Core IR, function by function (`core.nz`, design D25): `stops` where the checker
         // stopped, `fails` for a program that does not check.
+        // The cache's keys (design D28): each module's, as the reference's cache computes them.
+        if mode == "--keys" {
+            if fx_carried(f) == false {
+                print(str_concat("stops", nl()));
+                return 0;
+            }
+            if fx_refusal(f) != "" {
+                print(str_concat("refused", nl()));
+                return 0;
+            }
+            if fx_loaded(f) == false {
+                print(str_concat("fails", nl()));
+                return 0;
+            }
+            print(fx_keys(f, os, arch));
+            return 0;
+        }
         if mode == "--core" {
             if fx_carried(f) == false {
                 print(str_concat("stops", nl()));
