@@ -52,6 +52,10 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       channel ping-pong latency; fan-in throughput; memory per live task; HTTP/1.1 requests per
       second on loopback; a parallel CPU job — Nazm against Go on this Mac, quiet host, recorded in
       `docs/performance.md` with what each side guarantees
+      — 2026-10-16: the programs, `bench/compare/{nazm,go}/` (`spawn`, `pingpong`, `fanin`, `idle`,
+      `httpd`, the shared load generator `go/httpload.go`, and `primes`), and
+      `bench/compare/concurrency.sh`, which checks both print the same answers and refuses to time
+      on a loaded host; the numbers are still to be taken in a quiet window
 - [ ] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
 - [ ] 6.3 A work-stealing scheduler, and preemption at loop back-edges
 - [ ] 6.4 `select` over several channels, and lock-free channels
