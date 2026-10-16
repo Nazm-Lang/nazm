@@ -37,21 +37,44 @@ rewritten in Nazm, and Nazm's own code generator replaces Cranelift. The Rust im
 then frozen as the bootstrap seed. The language is made ready for that first. Releases come at
 large boundaries only, not one per stage (`releases/0.9.0.md`).
 
-| Stage | What | Status |
+| Stage | What | Status (2026-10-16) |
 | --- | --- | --- |
 | **R1** | The language the rewrite is written in: patterns, tuples, `for`, closures in generics, `defer`, 128-bit integers, serialisation, `@std/regex` and the other libraries, the platform built-ins, and the conveniences for a first program (`openspec/changes/archive/2026-10-14-r1-language-for-the-rewrite`) | **complete**, 2026-10-15; published as **0.10.0** |
-| **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | in progress: D1–D12 and D14 done, and 3.3 (word frequency 189 → 143 ms); the rest of D13, D15–D17 and the comparison's re-run open |
-| **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | in progress: the parser agrees on every input; the checker carries imports, generics, traits and impls, `match`, `?`, `for`, interpolation, constants, closures, every number type, `Chan[T]`, `scope` and `spawn`, and D9's prelude imports, and agrees on every compilation it carries (2,289) |
-| **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | in progress: MIR and LIR, instruction text and digests, identical to the reference on all 1,002 inputs; the runtime generator, the object cache and debug positions ported; every target next |
-| **R4** | The interpreter in Nazm | in progress |
-| **Performance** | The copyright holder's target, 2026-10-15: lead every compared language — C, C++, Rust, Zig, Go, C#, Java, Swift, Python, Ruby, JavaScript, TypeScript, Ada, Pascal, Fortran, COBOL and hand-written assembly — on every measured parameter, 10–30% faster than C, C++ and Rust, safety kept (`openspec/changes/performance-leadership`) | phase 1 begun: word frequency profiled, 24% faster; a research target, not a claim |
-| **R5** | Every command in Nazm: `fmt`, `check`, `fix`, `test`, `doc`, `init`, `lsp`, the MCP server and the rest | planned |
+| **R1.5** | Performance and ease: faster builds, `nazm run` compiled, word frequency and `fib` ahead in the cross-language comparison, `:` result types, `[…]` lists, `{…}` maps, short closures, hardened and signed reproducible releases (`openspec/changes/r1-5-performance-and-dx`) | in progress, 17 of 28 tasks: `fib` 55 → 44 ms (C's time with the same checks), word frequency 189 → about 125 ms, one pool worker per processor, `--release` hardening, Sigstore signing. Open: the size-class allocator, a native string hash, whole-program optimisation, streaming `file_lines`, map literals, the safety column, reproducibility checked in CI |
+| **R2** | The Nazm-written compiler carries the whole language, with diagnostics identical to the reference's | nearly complete: the parser agrees on every input; the checker agrees on every compilation it carries (3,235); Core IR identical for all 96,572 functions, every one of the 1,885 documents byte for byte. Open: `@derive`'s JSON and TOML encodings (6 inputs), per-module output |
+| **R3** | The native pipeline in Nazm: ownership and cleanup, LIR, the runtime, the object cache, debug info, every supported target | in progress: MIR (1,476), LIR (1,015), runtime units (990) and the object cache (4,610 units) identical to the reference on both Mac targets, runtime ABI 37. Open: the boards and Windows targets |
+| **R4** | The interpreter in Nazm | in progress: its suite 229 of 229; 2,672 of 2,686 comparisons with the Rust tests' programs agree, the rest varying between runs of the Rust interpreter itself; about 1.7× faster than at first |
+| **R5** | Every command in Nazm: `fmt`, `check`, `fix`, `test`, `doc`, `init`, `lsp`, the MCP server and the rest | in progress: `fmt`, `check` (packages too), `doc`, `fix`, `init`, `lsp`, the argument parser and the dispatcher, 0 differences; refusals being lifted |
 | **R6** | Host qualification: the Nazm toolchain builds itself under a bounded heap | planned |
-| **R7** | The harness and the tests in Nazm | in progress |
-| **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | in progress: every program of its suite agrees with LLVM on aarch64 and x86_64 Mach-O |
-| **R8** | Cut-over: the released `nazm` built by Nazm, then the 1.0 release gate | last |
-| **P** | Performance in Nazm, between the cut-over and the 1.0 gate: the optimisation passes and the compiler's own speed, written once in Nazm rather than in the Rust compiler and ported (2026-10-15) | after R8's cut-over |
-| **After 1.0** | Zero dependence on LLVM: Nazm's own optimiser and code generator for optimised builds too, measured against the LLVM build before replacing it; then the ecosystem, Linux and Windows | after 1.0 |
+| **R7** | The harness and the tests in Nazm | nearly complete: 175 of 176 test files ported, 0 differences; 64 tests stay in Rust by design |
+| **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | in progress: 119 of 119 programs agree with LLVM on both Mac targets; `nazm build --backend nazm` |
+| **R8** | Cut-over: the released `nazm` built by Nazm; the one interim release before 1.0 | after R6 |
+| **P** | Performance in Nazm, between the cut-over and the 1.0 gate: the optimisation passes and the compiler's own speed, written once in Nazm rather than in the Rust compiler and ported. Target (2026-10-15): lead every compared language on every measured parameter, 10–30% faster than C, C++ and Rust, safety kept (`openspec/changes/performance-leadership`) | after R8; a research target, not a claim |
+| **Domains** | 1.0 waits for every domain (2026-10-15, `openspec/changes/v1-every-domain`): C cloud, M microcontrollers, D drivers, H hardware (FPGA at 1.0), Q quantum | in progress: C — HTTP/1.1 server and client, TLS on macOS and Linux, calendar time, metrics, configuration, a drain with a deadline; Windows TLS written, not yet run. M1 — Cortex-M33 and RV32IMC, emulator-verified. D, H, Q designed |
+| **Windows** | The toolchain on Windows x86_64 (`openspec/changes/windows-toolchain`, W1–W4) | W1 complete: programs agree on a real Windows host (68 of 68); `nazm.exe` runs, checks and formats (60 of 60). W2–W4 open |
+| **1.0 gate** | The full mutation run, real-Windows and real-board evidence, signed reproducible archives, the licence and CLA review | last |
+| **After 1.0** | Zero dependence on LLVM: Nazm's own optimiser and code generator for optimised builds too, measured against the LLVM build before replacing it; then the ecosystem and Linux hosts | after 1.0 |
+
+### When 1.0
+
+Revised 2026-10-16. The code moves much faster than the domain plan's track-week costing
+(93–133 track-weeks) assumed: M1 took about half an hour of agent time against weeks planned, TLS
+about an hour and a half against two weeks. Estimated from the pace so far:
+
+| Part | Paced by | Estimate |
+| --- | --- | --- |
+| R2–R9 to the cut-over (R6, R8) | agent time | 1–2 weeks |
+| The domains' code (C, M, D, H, Q) | agent time | 2–4 months |
+| Real boards (Pico 2, ESP32-C3, iCEBreaker) | the boards being bought | when they arrive |
+| Quantum "accepted and executed" | an IBM Quantum account and its queue | days once the account exists |
+| Real-Windows evidence (TLS, W2–W4) | the Windows host, and an administrator for its tools | days once available |
+| Stage P | agent time and quiet benchmark runs | weeks, after the cut-over |
+| Licence and CLA review, signing the release | the copyright holder and counsel | outside the code |
+
+The code side of 1.0 can be complete around the end of 2026 or early 2027. The release date is
+set by the items outside the code: started in parallel, **1.0 in early 2027** is realistic; left
+until the code is done, it slips toward mid-2027. Usage limits on the agents, now one at a time,
+are the largest variable in the code's own estimate.
 
 The milestone tables below are the history that led here; the "R1" among them (2026-10-07) is the
 earlier release-readiness milestone, not this programme's first stage.
