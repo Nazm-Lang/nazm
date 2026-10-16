@@ -342,3 +342,61 @@ file = "crates/nazm-bench/src/selftest.rs"
 find = "#[test]\n    fn every_selftest_case_passes() {"
 replace = "#[test]\n    #[ignore = \"seeded\"]\n    fn every_selftest_case_passes() {"
 
+# --- the reach gates (`cargo metadata`, and `xtask/src/rules.rs` read from the tree) ---------------
+# A seed in `xtask/src/rules.rs` rebuilds the Rust gates, whose rules are compiled in.
+
+[[mutation]]
+name = "layering-forbids-a-dependency"
+why = "layering: nazm-diag's dependency on nazm-span is no longer allowed (the old rule left in a comment)"
+file = "xtask/src/rules.rs"
+find = "        \"nazm-diag\" => &[\"nazm-span\"],"
+replace = "        \"nazm-diag\" => &[], // \"nazm-span\" was here"
+
+[[mutation]]
+name = "layering-unplaces-a-crate"
+why = "layering: nazm-bench is not placed"
+file = "xtask/src/rules.rs"
+find = "        \"nazm-bench\" => &[],"
+replace = "        \"nazm-bench-renamed\" => &[],"
+
+[[mutation]]
+name = "tokenizer-owner-moved"
+why = "tokenizer reach: the owner named is a crate others depend on, and the real owner reaches a tokenizer"
+file = "xtask/src/rules.rs"
+find = "pub(crate) const TOKENIZER_OWNER: &str = \"nazm-tokens\";"
+replace = "pub(crate) const TOKENIZER_OWNER: &str = \"nazm-repo\";"
+
+[[mutation]]
+name = "codegen-crate-not-allowed"
+why = "codegen reach: the Cranelift backend may no longer depend on a code generator"
+file = "xtask/src/rules.rs"
+find = "        \"nazm-codegen-clif\" | \"nazm-codegen-llvm\" | \"nazm-driver\" | \"xtask\""
+replace = "        \"nazm-codegen-llvm\" | \"nazm-driver\" | \"xtask\""
+
+[[mutation]]
+name = "unsafe-allowed-while-forbidden"
+why = "unsafe policy: a crate allowed `unsafe` while the workspace lint forbids it"
+file = "xtask/src/rules.rs"
+find = "    const ALLOWED: &[(&str, &str)] = &[];"
+replace = "    const ALLOWED: &[(&str, &str)] = &[(\"nazm-bench\", \"seeded; a reason\")];"
+
+[[mutation]]
+name = "unsafe-lint-relaxed-without-an-exception"
+why = "unsafe policy: the lint is not `forbid` and nothing is allowed"
+file = "Cargo.toml"
+find = "unsafe_code = \"forbid\""
+replace = "unsafe_code = \"deny\""
+
+[[mutation]]
+name = "core-mentions-emission-and-the-toolchain"
+why = "emission reach: the check-only crate mentions emit_llvm and runs clang"
+file = "crates/nazm-core/src/lib.rs"
+find = "//! Checking, the one lowering to Core IR, and evaluation.\n"
+replace = "//! Checking, the one lowering to Core IR, and evaluation.\n//! (seeded: emit_llvm, \"clang\")\n"
+
+[[mutation]]
+name = "docs-mentions-a-network"
+why = "network reach: a crate that is not an evaluator mentions curl, a provider and a socket"
+file = "crates/nazm-docs/src/lib.rs"
+find = "//! exact id with its exact canonical text. N32.\n"
+replace = "//! exact id with its exact canonical text. N32.\n//! (seeded: \"curl\", api.anthropic.com, TcpStream)\n"

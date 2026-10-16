@@ -1,0 +1,542 @@
+// The reach gates (R7, ported from `xtask/src/checks/reach.rs` and `xtask/src/metadata.rs`): which
+// crate may depend on, emit or call what — layering, the tokenizer, the network, the code
+// generators, LLVM text emission and the toolchain, and `unsafe`.
+//
+// The rules are `xtask/src/rules.rs`, read from the tree being checked: the Rust gates compile
+// them in, so a copy of the tree with its rules changed is checked against its own rules by both.
+// The dependency graph is `cargo metadata --format-version 1 --no-deps --locked`, run in the root
+// as a child and read as JSON, as `metadata::workspace` reads it.
+//
+// The Rust gates list `crates/` and walk each `src/` in the order the file system returns, which
+// no file system promises to be by name; these walk them sorted, so where two problems are found
+// the order may differ from the Rust gate's (as with agent governance, design *Findings*).
+
+use "@std/json"
+use "@std/text"
+use "@std/file"
+use "@std/env"
+use "@std/sort"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+
+// --- rules.rs, read --------------------------------------------------------------------------
+
+/// The rules `xtask/src/rules.rs` states: each placed crate with its allowed internal
+/// dependencies (`placed[i]` may depend on the names in `allowed[i]`, space-separated), the
+/// tokenizer crates and their owner, the evaluators, the crates allowed `unsafe`, the emission
+/// allowlist (`emit_dirs[i]` may do the `|`-separated `emit_allowed[i]`), and the crates that may
+/// depend on a code generator.
+struct Rules {
+    placed: Strs,
+    allowed: Strs,
+    tokenizer_crates: Strs,
+    tokenizer_owner: Str,
+    evaluators: Strs,
+    unsafe_crates: Strs,
+    emit_dirs: Strs,
+    emit_allowed: Strs,
+    codegen_ok: Strs,
+}
+
+/// `text` with every `//` comment removed, string literals kept whole.
+fn strip_comments(text: Str) -> Str ! {} {
+    let out = strs_new();
+    let n = str_len(text);
+    let mut i = 0;
+    let mut start = 0;
+    let mut in_str = false;
+    while i < n {
+        let b = str_byte(text, i);
+        if in_str {
+            if b == 92 {
+                i = i + 2;
+                continue;
+            }
+            if b == 34 {
+                in_str = false;
+            }
+            i = i + 1;
+            continue;
+        }
+        if b == 34 {
+            in_str = true;
+            i = i + 1;
+            continue;
+        }
+        if b == 39 && i + 2 < n && str_byte(text, i + 2) == 39 {
+            // A character literal such as '"'.
+            i = i + 3;
+            continue;
+        }
+        if b == 47 && i + 1 < n && str_byte(text, i + 1) == 47 {
+            strs_push(out, str_slice(text, start, i));
+            while i < n && str_byte(text, i) != 10 {
+                i = i + 1;
+            }
+            start = i;
+            continue;
+        }
+        i = i + 1;
+    }
+    strs_push(out, str_slice(text, start, n));
+    str_join(out, "")
+}
+
+/// The string literals of `text` in order; `keys` gets, for each, whether the token before it
+/// (past white space) is `(` and whether the token after it is `=>`: `K` for a `=>` key, `T` for
+/// a tuple's first element, `-` otherwise.
+fn literals(text: Str, kinds: Strs) -> Strs ! {} {
+    let out = strs_new();
+    let n = str_len(text);
+    let mut i = 0;
+    let mut prev = 0;
+    while i < n {
+        let b = str_byte(text, i);
+        if b == 34 {
+            let start = i + 1;
+            let mut j = start;
+            while j < n && str_byte(text, j) != 34 {
+                if str_byte(text, j) == 92 {
+                    j = j + 1;
+                }
+                j = j + 1;
+            }
+            strs_push(out, str_slice(text, start, j));
+            let mut k = j + 1;
+            while k < n && text_is_space(str_byte(text, k)) {
+                k = k + 1;
+            }
+            let arrow = k + 1 < n && str_byte(text, k) == 61 && str_byte(text, k + 1) == 62;
+            strs_push(kinds, if arrow { "K" } else { if prev == 40 { "T" } else { "-" } });
+            i = j + 1;
+            prev = 34;
+            continue;
+        }
+        if !text_is_space(b) {
+            prev = b;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The text of `src` from the first `start` to the first `end` after it (empty when absent).
+fn between(src: Str, start: Str, end: Str) -> Str ! {} {
+    match text_find(src, start) {
+        Option.Some(value: a) => {
+            let rest = str_slice(src, a + str_len(start), str_len(src));
+            match text_find(rest, end) {
+                Option.Some(value: b) => str_slice(rest, 0, b),
+                Option.None() => rest,
+            }
+        },
+        Option.None() => "",
+    }
+}
+
+fn rules_read(h: Caps, root: Str) -> Result[Rules, Str] ! { io } {
+    let raw = match read_rust(h, f"{root}/xtask/src/rules.rs") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return Result[Rules, Str].Err(error: f"xtask/src/rules.rs: {e}"); },
+    };
+    let src = strip_comments(raw);
+    let kinds = strs_new();
+    let deps = literals(between(src, "fn allowed_internal_deps", "_ => return None"), kinds);
+    let placed = strs_new();
+    let allowed = strs_new();
+    let mut cur = strs_new();
+    let mut i = 0;
+    while i < strs_len(deps) {
+        if strs_get(kinds, i) == "K" {
+            if strs_len(placed) > 0 {
+                strs_push(allowed, str_join(cur, " "));
+            }
+            strs_push(placed, strs_get(deps, i));
+            cur = strs_new();
+        } else {
+            strs_push(cur, strs_get(deps, i));
+        }
+        i = i + 1;
+    }
+    if strs_len(placed) > 0 {
+        strs_push(allowed, str_join(cur, " "));
+    }
+    let k2 = strs_new();
+    let tokenizer_crates = literals(between(src, "const TOKENIZER_CRATES", ";"), k2);
+    let owner = literals(between(src, "const TOKENIZER_OWNER", ";"), k2);
+    let evaluators = literals(between(src, "const TOKEN_EVALUATORS", ";"), k2);
+    let pairs = literals(between(between(src, "const ALLOWED", "];"), "= &[", "\u{0}"), k2);
+    let unsafe_crates = strs_new();
+    i = 0;
+    while i < strs_len(pairs) {
+        strs_push(unsafe_crates, strs_get(pairs, i));
+        i = i + 2;
+    }
+    let ek = strs_new();
+    let emit = literals(between(src, "fn emission_allowlist", "\n}"), ek);
+    let emit_dirs = strs_new();
+    let emit_allowed = strs_new();
+    cur = strs_new();
+    i = 0;
+    while i < strs_len(emit) {
+        if strs_get(ek, i) == "T" {
+            if strs_len(emit_dirs) > 0 {
+                strs_push(emit_allowed, str_join(cur, "|"));
+            }
+            strs_push(emit_dirs, strs_get(emit, i));
+            cur = strs_new();
+        } else {
+            strs_push(cur, strs_get(emit, i));
+        }
+        i = i + 1;
+    }
+    if strs_len(emit_dirs) > 0 {
+        strs_push(emit_allowed, str_join(cur, "|"));
+    }
+    let codegen_ok = literals(between(src, "fn may_depend_on_codegen", "\n}"), k2);
+    let owner_name = if strs_len(owner) > 0 { strs_get(owner, 0) } else { "" };
+    Result[Rules, Str].Ok(value: Rules(placed: placed, allowed: allowed, tokenizer_crates: tokenizer_crates, tokenizer_owner: owner_name, evaluators: evaluators, unsafe_crates: unsafe_crates, emit_dirs: emit_dirs, emit_allowed: emit_allowed, codegen_ok: codegen_ok))
+}
+
+// --- cargo metadata --------------------------------------------------------------------------
+
+/// A workspace member: its name, its dependencies, and those that are workspace members.
+struct Member {
+    name: Str,
+    internal: Strs,
+    all: Strs,
+}
+
+fn node_str(doc: JsonDoc, node: Int, key: Str) -> Option[Str] ! {} {
+    match json_get(doc, node, key) {
+        Option.Some(value: v) => json_str(doc, v),
+        Option.None() => Option[Str].None(),
+    }
+}
+
+/// `metadata::workspace`: the members `cargo metadata` lists, run in `root`.
+fn members(h: Caps, root: Str) -> Result[Vec[Member], Str] ! { io, spawn } {
+    let io = h.io;
+    let cargo = match env_get(io, "CARGO") {
+        Option.Some(value: c) => c,
+        Option.None() => "cargo",
+    };
+    let r = run(h, cargo, words("metadata --format-version 1 --no-deps --locked"), root, env_here(io));
+    if r.code != 0 {
+        return Result[Vec[Member], Str].Err(error: text_trim(r.stderr));
+    }
+    let doc = match json_parse(r.stdout) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => { return Result[Vec[Member], Str].Err(error: e); },
+    };
+    let packages = match json_get(doc, json_root(doc), "packages") {
+        Option.Some(value: p) => if json_kind(doc, p) == "array" { p } else {
+            return Result[Vec[Member], Str].Err(error: "cargo metadata had no packages array");
+        },
+        Option.None() => { return Result[Vec[Member], Str].Err(error: "cargo metadata had no packages array"); },
+    };
+    let names = strs_new();
+    let mut i = 0;
+    while i < json_len(doc, packages) {
+        match json_at(doc, packages, i) {
+            Option.Some(value: p) => match node_str(doc, p, "name") {
+                Option.Some(value: n) => strs_push(names, n),
+                Option.None() => 0,
+            },
+            Option.None() => 0,
+        };
+        i = i + 1;
+    }
+    let out = vec_new[Member]();
+    i = 0;
+    while i < json_len(doc, packages) {
+        let p = match json_at(doc, packages, i) {
+            Option.Some(value: x) => x,
+            Option.None() => { i = i + 1; continue; },
+        };
+        i = i + 1;
+        let name = match node_str(doc, p, "name") {
+            Option.Some(value: n) => n,
+            Option.None() => { continue; },
+        };
+        let ds = match json_get(doc, p, "dependencies") {
+            Option.Some(value: d) => if json_kind(doc, d) == "array" { d } else { continue; },
+            Option.None() => { continue; },
+        };
+        let all = strs_new();
+        let internal = strs_new();
+        let mut j = 0;
+        while j < json_len(doc, ds) {
+            match json_at(doc, ds, j) {
+                Option.Some(value: d) => match node_str(doc, d, "name") {
+                    Option.Some(value: dn) => {
+                        strs_push(all, dn);
+                        if strs_has(names, dn) {
+                            strs_push(internal, dn);
+                        }
+                        0
+                    },
+                    Option.None() => 0,
+                },
+                Option.None() => 0,
+            };
+            j = j + 1;
+        }
+        vec_push(out, Member(name: name, internal: internal, all: all));
+    }
+    Result[Vec[Member], Str].Ok(value: out)
+}
+
+fn one(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    strs_push(out, s);
+    out
+}
+
+fn index_of(xs: Strs, s: Str) -> Int ! {} {
+    let mut i = 0;
+    while i < strs_len(xs) {
+        if strs_get(xs, i) == s {
+            return i;
+        }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// --- the gates -------------------------------------------------------------------------------
+
+pub fn gate_layering(h: Caps, root: Str) -> Strs ! { io, spawn } {
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let ms = match members(h, root) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { return one(f"could not read cargo metadata: {e}"); },
+    };
+    let problems = strs_new();
+    for m in ms {
+        let at = index_of(rules.placed, m.name);
+        if at < 0 {
+            strs_push(problems, f"{m.name} is not placed in the layering. Add it to xtask/src/rules.rs, deciding deliberately what it may depend on.");
+            continue;
+        }
+        let allowed = words(strs_get(rules.allowed, at));
+        for dep in m.internal {
+            if !strs_has(allowed, dep) {
+                strs_push(problems, f"{m.name} depends on {dep}, which the layering does not allow");
+            }
+        }
+    }
+    problems
+}
+
+pub fn gate_tokenizer_reach(h: Caps, root: Str) -> Strs ! { io, spawn } {
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let ms = match members(h, root) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { return one(f"could not read cargo metadata: {e}"); },
+    };
+    let owner = rules.tokenizer_owner;
+    let problems = strs_new();
+    for m in ms {
+        if m.name == owner {
+            continue;
+        }
+        for dep in m.all {
+            if strs_has(rules.tokenizer_crates, dep) {
+                strs_push(problems, f"{m.name} depends on {dep}: a tokenizer may only be reached through {owner}, which nothing that ships depends on");
+            }
+            if strs_has(rules.evaluators, dep) {
+                strs_push(problems, f"{m.name} depends on {dep}: an evaluator reaches a model provider, and nothing may depend on it");
+            }
+            if dep == owner && !strs_has(rules.evaluators, m.name) {
+                strs_push(problems, f"{m.name} depends on {owner}: token measurement must not reach the compiler, the service, the planner or a server");
+            }
+        }
+    }
+    problems
+}
+
+/// Every `.rs` file under `dir`, recursively, sorted (`collect_rs`); `Err` when `dir` cannot be
+/// listed.
+fn rust_files(h: Caps, under: Str) -> Result[Strs, Int] ! { io } {
+    let v = h.v;
+    let io = h.io;
+    let dir = str_vouch(under);
+    if !file_exists_at(io, dir) {
+        return Result[Strs, Int].Err(error: 0);
+    }
+    match file_walk(io, dir) {
+        Result.Ok(value: all) => {
+            let out = strs_new();
+            for p in all {
+                if text_ends_with(p, ".rs") {
+                    let regular = match file_metadata(io, str_vouch(p)) {
+                        Result.Ok(value: md) => match md.kind {
+                            FileKind.Directory() => false,
+                            _ => true,
+                        },
+                        Result.Err(error: e) => true,
+                    };
+                    if regular {
+                        strs_push(out, p);
+                    }
+                }
+            }
+            Result[Strs, Int].Ok(value: strs_sort(out))
+        },
+        Result.Err(error: e) => Result[Strs, Int].Err(error: 0),
+    }
+}
+
+/// `p` without the `root/` before it.
+fn relative(root: Str, p: Str) -> Str ! {} {
+    let pre = f"{root}/";
+    if text_starts_with(p, pre) { str_slice(p, str_len(pre), str_len(p)) } else { p }
+}
+
+pub fn gate_network_reach(h: Caps, root: Str) -> Strs ! { io } {
+    let v = h.v;
+    let program_network = "crates/nazm-core/src/eval/net.rs";
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let crates = match dir_list(h.io, f"{root}/crates") {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => { return one("could not read crates/"); },
+    };
+    let marks = strs_new();
+    strs_push(marks, "\"curl\"");
+    strs_push(marks, "\"claude\"");
+    strs_push(marks, "api.openai.com");
+    strs_push(marks, "api.anthropic.com");
+    strs_push(marks, "TcpStream");
+    let problems = strs_new();
+    for c in crates {
+        if strs_has(rules.evaluators, c) {
+            continue;
+        }
+        let files = match rust_files(h, f"{root}/crates/{c}/src") {
+            Result.Ok(value: f) => f,
+            Result.Err(error: e) => { continue; },
+        };
+        for file in files {
+            let text = match read_rust(h, str_vouch(file)) {
+                Result.Ok(value: t) => t,
+                Result.Err(error: e) => { continue; },
+            };
+            let rel = relative(root, file);
+            for mark in marks {
+                if mark == "TcpStream" && rel == program_network {
+                    continue;
+                }
+                if text_contains(text, mark) {
+                    strs_push(problems, f"{rel} mentions `{mark}`: only an evaluator may reach a network, and only {program_network} a program's own sockets");
+                }
+            }
+        }
+    }
+    problems
+}
+
+pub fn gate_codegen_reach(h: Caps, root: Str) -> Strs ! { io, spawn } {
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let ms = match members(h, root) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { return one(f"could not read cargo metadata: {e}"); },
+    };
+    let codegen = words("cranelift cranelift-codegen cranelift-jit cranelift-module inkwell llvm-sys");
+    let problems = strs_new();
+    for m in ms {
+        if strs_has(rules.codegen_ok, m.name) {
+            continue;
+        }
+        for dep in m.all {
+            if strs_has(codegen, dep) {
+                strs_push(problems, f"{m.name} depends on {dep}. Only the codegen crates and the driver may reach a code generator — everything else goes through LIR.");
+            }
+        }
+    }
+    problems
+}
+
+pub fn gate_emission_reach(h: Caps, root: Str) -> Strs ! { io } {
+    let v = h.v;
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let whats = strs_new();
+    strs_push(whats, "emits LLVM IR");
+    strs_push(whats, "invokes the native toolchain");
+    let needles = strs_new();
+    strs_push(needles, "emit_llvm");
+    strs_push(needles, "\"clang\"");
+    let problems = strs_new();
+    let mut i = 0;
+    while i < strs_len(rules.emit_dirs) {
+        let dir = strs_get(rules.emit_dirs, i);
+        let allowed = text_split(strs_get(rules.emit_allowed, i), "|");
+        i = i + 1;
+        let files = match rust_files(h, f"{root}/{dir}/src") {
+            Result.Ok(value: f) => f,
+            Result.Err(error: e) => { continue; },
+        };
+        for file in files {
+            let text = match read_rust(h, str_vouch(file)) {
+                Result.Ok(value: t) => t,
+                Result.Err(error: e) => { continue; },
+            };
+            let mut k = 0;
+            while k < 2 {
+                let what = strs_get(whats, k);
+                let needle = strs_get(needles, k);
+                if text_contains(text, needle) && !strs_has(allowed, what) {
+                    strs_push(problems, f"{relative(root, file)} mentions `{needle}`, so it {what} — but rules.rs does not allow it to. A check-only path that can reach native emission or the toolchain is the separation this rule exists to keep.");
+                }
+                k = k + 1;
+            }
+        }
+    }
+    problems
+}
+
+pub fn gate_unsafe_policy(h: Caps, root: Str) -> Strs ! { io, spawn } {
+    let rules = match rules_read(h, root) {
+        Result.Ok(value: r) => r,
+        Result.Err(error: e) => { return one(e); },
+    };
+    let manifest = match read_rust(h, f"{root}/Cargo.toml") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return one(f"could not read Cargo.toml: {e}"); },
+    };
+    let ms = match members(h, root) {
+        Result.Ok(value: m) => m,
+        Result.Err(error: e) => { return one(f"could not read cargo metadata: {e}"); },
+    };
+    let mut any_allowed = false;
+    for m in ms {
+        if strs_has(rules.unsafe_crates, m.name) {
+            any_allowed = true;
+        }
+    }
+    let forbids = text_contains(manifest, "unsafe_code = \"forbid\"");
+    let problems = strs_new();
+    if !any_allowed && !forbids {
+        strs_push(problems, "the unsafe allowlist in xtask/src/rules.rs is empty, but the workspace lint is not `forbid`. Either tighten the lint or record why the exception exists.");
+    }
+    if any_allowed && forbids {
+        strs_push(problems, "xtask/src/rules.rs allows `unsafe` in a crate while the workspace lint is still `forbid`, which cannot be overridden per-crate. Relax it to `deny` in the same change that grants the exception.");
+    }
+    problems
+}

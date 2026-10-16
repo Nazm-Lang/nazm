@@ -15,11 +15,15 @@
 - [x] 3.3 Guide from grammar
 - [x] 3.4 Third-party notices (`cargo metadata` as a child, `@std/json`; a text met before is found by itself, which is what the Rust gate's BLAKE3 of it stands for)
 - [x] 3.5 Module boundaries
-- [ ] 3.6 Doc claims, capability matrix, dependency sources, performance claims, agent governance
-      (done); mutations apply (its exactly-once half done, `nazm-mutate check`; `plan::validate`
-      open)
+- [x] 3.6 Doc claims, capability matrix, dependency sources, performance claims, agent governance;
+      mutations apply, both halves: exactly once (`mutate/core.nz`) and everything `plan::validate`
+      checks without a build (`mutate/plan.nz`: the schema, killers resolved through files, inline
+      modules and doc comments, ignored killers, profiles, `no_killer`), run as the gate in
+      `nazm-check` and by `nazm-mutate check`. `tests/plan_self.nz` ports `plan.rs`' tests (5)
 - [x] 3.7 Compared with the Rust gates on the tree and on seeded copies (`tests/seeded.sh`, every
-      gate ported so far; extended with each gate)
+      gate ported so far; extended with each gate). With 3.6, 5.3 and 6.1: sixteen gates, and
+      `--plan`, on the pristine copy, 53 seeds, 17 files removed one at a time, two other defects
+      and the copy restored — 74 agree, 0 differ
 
 ## 4. The black-box CLI tests
 - [x] 4.1 `release_examples`
@@ -55,9 +59,20 @@
 - [x] 5.1 Read the catalogue; apply exactly once; restore byte for byte, in the Rust runner's own
       backup record (`cargo xtask mutate-recover` repairs a tree `nazm-mutate` left mutated)
 - [x] 5.2 The verdict from a killer's results, pristine, mutated and restored (`nazm-mutate try`)
-- [ ] 5.3 Compared with the Rust runner's `--plan` and apply gate
+- [x] 5.3 Compared with the Rust runner's `--plan` and apply gate: `nazm-mutate plan ROOT [--only F]…`
+      prints `cargo xtask mutate --plan`'s plan byte for byte — the whole catalogue (2016 entries,
+      8092 lines), `--only` substring, exact (`=`) and repeated filters, a filter that selects
+      nothing — and `tests/seeded.sh` compares the plan, or the problems it refuses on, under every
+      seed. A schema violation (an unknown or missing field) is refused by both; the `toml` crate's
+      error text, with its source excerpt, is not reproduced (design, decision 20)
 
 ## 6. Later (not this track's first pass)
-- [ ] 6.1 The gates that start `cargo metadata` (layering, reach, unsafe policy)
-- [ ] 6.2 `bench`, `fuzz`
+- [x] 6.1 The gates that start `cargo metadata` (`check/reach.nz`): layering, tokenizer reach, codegen
+      reach and unsafe policy read `cargo metadata --no-deps --locked`, run in the root as a child;
+      network reach and emission reach, the other two reach gates, read files. The rules are
+      `xtask/src/rules.rs`, read from the tree being checked (decision 21)
+- [ ] 6.2 `bench`, `fuzz` — not ported in this pass (design, decision 22): every mode of `bench`
+      measures and runs only under the contained runner's ceiling, and `fuzz` is the compiler's
+      in-process entry points under SanitizerCoverage, a Rust API, run only by
+      `cargo xtask contained fuzz` (6.3)
 - [ ] 6.3 The contained runner — when the coordinator moves it
