@@ -35,7 +35,11 @@ is on PATH, else a wall clock around the process, as bench/cross.py), peak resid
 run (`/usr/bin/time`), the size of the executable where there is one, build time (the median of
 BUILD_RUNS builds after one unmeasured build, so a toolchain's caches of its own standard library
 are warm; Nazm's twice, as two rows — uncached with `--no-cache`, and with its user cache warm
-and its project store empty, R1.5 1.2), and lines of code (non-blank lines that are not wholly a comment). The host is not
+and its project store empty, R1.5 1.2), and lines of code (non-blank lines that are not wholly a comment). Each variant also states what
+it checks at run or compile time (R1.5 5.1, the `checks` column, SAFETY below), and the compiled
+languages that can are built a second time with the checks Nazm always has — Rust with overflow
+checks, Zig ReleaseSafe, C and C++ with AddressSanitizer and UndefinedBehaviorSanitizer — so a row
+compares like with like. The host is not
 controlled: thermal state, other processes and frequency scaling all reach these numbers, which
 is why each run time carries its spread.
 """
@@ -62,6 +66,34 @@ WORKLOADS = ["hello", "fib", "words"]
 # The parallel workload (performance leadership, multicore): run at each of worker_counts().
 PARALLEL = ["primes"]
 DASH = "—"
+
+# R1.5 5.1: what each variant checks — integer overflow, bounds, memory (use after free, double
+# free), data races — and when: at compile time, or at run time. Nazm's are checked in every build
+# (overflow and bounds at run time; memory by the language's ownership and reclamation; races and
+# leaked tasks refused at compile time, N0321 and N0320).
+SAFETY = {
+    "nazm build --opt-level 2": "overflow, bounds, memory; races refused at compile time",
+    "nazm build --opt-level 2 (user cache warm)": "as above",
+    "nazm run (interpreter)": "as above",
+    "clang -O2": "none",
+    "clang -O2 -fsanitize=address,undefined": "overflow, bounds, memory (sanitizers, run time)",
+    "clang++ -O2": "none",
+    "clang++ -O2 -fsanitize=address,undefined": "overflow, bounds, memory (sanitizers, run time)",
+    "go build": "bounds, memory; overflow wraps; races only under -race",
+    "rustc -C opt-level=3": "bounds, memory, races (compile time); overflow wraps",
+    "rustc -C opt-level=3 -C overflow-checks=on": "overflow, bounds, memory, races (compile time)",
+    "zig build-exe -O ReleaseFast": "none",
+    "zig build-exe -O ReleaseSafe": "overflow, bounds",
+    "javac + java": "bounds, memory; overflow wraps",
+    "dotnet build -c Release": "bounds, memory; overflow wraps",
+    "python3": "bounds, memory; integers do not overflow",
+    "ruby": "bounds, memory; integers do not overflow",
+    "node": "bounds, memory; numbers are doubles",
+    "bun": "bounds, memory; numbers are doubles",
+    "swiftc -O": "overflow, bounds, memory",
+    "fpc -O3": "none (range and overflow checks off by default)",
+    "gnatmake -O2": "overflow, bounds (GNAT's default checks)",
+}
 
 
 def worker_counts():
@@ -273,11 +305,20 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
         ("C", "c", "{n}.c", [
             ("clang -O2", "clang", lambda s, n: ["clang", "-O2", "-o", exe(n, "c"), s],
              lambda s, n: [exe(n, "c")], env, "-O2"),
+            ("clang -O2 -fsanitize=address,undefined", "clang",
+             lambda s, n: ["clang", "-O2", "-fsanitize=address,undefined", "-o", exe(n, "csan"),
+                           s],
+             lambda s, n: [exe(n, "csan")], env, "-O2, AddressSanitizer and UBSan: Nazm's checks"),
         ]),
         ("C++", "cpp", "{n}.cpp", [
             ("clang++ -O2", "clang++",
              lambda s, n: ["clang++", "-O2", "-std=c++20", "-o", exe(n, "cpp"), s],
              lambda s, n: [exe(n, "cpp")], env, "-O2 -std=c++20"),
+            ("clang++ -O2 -fsanitize=address,undefined", "clang++",
+             lambda s, n: ["clang++", "-O2", "-std=c++20", "-fsanitize=address,undefined", "-o",
+                           exe(n, "cppsan"), s],
+             lambda s, n: [exe(n, "cppsan")], env,
+             "-O2 -std=c++20, AddressSanitizer and UBSan: Nazm's checks"),
         ]),
         ("Go", "go", "{n}.go", [
             ("go build", "go", lambda s, n: ["go", "build", "-o", exe(n, "go"), s],
@@ -289,12 +330,20 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
              lambda s, n: ["rustc", "-C", "opt-level=3", "--edition", "2021", "-o",
                            exe(n, "rs"), s],
              lambda s, n: [exe(n, "rs")], env, "-C opt-level=3 (cargo --release)"),
+            ("rustc -C opt-level=3 -C overflow-checks=on", "rustc",
+             lambda s, n: ["rustc", "-C", "opt-level=3", "-C", "overflow-checks=on", "--edition",
+                           "2021", "-o", exe(n, "rss"), s],
+             lambda s, n: [exe(n, "rss")], env, "-C opt-level=3, overflow checks on: Nazm's checks"),
         ]),
         ("Zig", "zig", "{n}.zig", [
             ("zig build-exe -O ReleaseFast", "zig",
              lambda s, n: ["zig", "build-exe", "-O", "ReleaseFast", f"-femit-bin={exe(n, 'zig')}",
                            s],
              lambda s, n: [exe(n, "zig")], zigenv, "-O ReleaseFast"),
+            ("zig build-exe -O ReleaseSafe", "zig",
+             lambda s, n: ["zig", "build-exe", "-O", "ReleaseSafe",
+                           f"-femit-bin={exe(n, 'zigs')}", s],
+             lambda s, n: [exe(n, "zigs")], zigenv, "-O ReleaseSafe: overflow and bounds checked"),
         ]),
         ("Java", "java", "{N}.java", [
             ("javac + java", "javac",
@@ -445,6 +494,7 @@ def main():
                 label, tool, build, run, venv, flags = variant[:6]
                 prepare = variant[6] if len(variant) > 6 else None
                 row = {"language": lang, "variant": label, "flags": flags,
+                       "safety": SAFETY.get(label, DASH),
                        "source": str(src.relative_to(HERE.parent.parent))}
                 print(f"{key}: {lang}, {label}", file=sys.stderr, flush=True)
                 if not src.exists():
@@ -547,10 +597,10 @@ def render(record):
         if "load_before" in w:
             lines += [f"Load average (1, 5, 15 min): {w['load_before']} before, "
                       f"{w['load_after']} after.", ""]
-        lines += ["| language | variant | LOC | run median (ms) | run min–max (ms) | "
+        lines += ["| language | variant | checks | LOC | run median (ms) | run min–max (ms) | "
                   + ("speed-up over W=1 | " if parallel else "")
                   + "peak RSS (KiB) | binary (KiB) | build median (ms) | status |",
-                  "| --- | --- | ---: | ---: | ---: | " + ("---: | " if parallel else "")
+                  "| --- | --- | --- | ---: | ---: | ---: | " + ("---: | " if parallel else "")
                   + "---: | ---: | ---: | --- |"]
         for r in w["rows"]:
             run = r.get("run")
@@ -562,7 +612,8 @@ def render(record):
             gain = (f"{r['speedup']:.2f}× | " if r.get("speedup") else f"{DASH} | ") \
                 if parallel else ""
             lines.append(
-                f"| {r['language']} | {r['variant']} | {r.get('loc', DASH)} | {median} | "
+                f"| {r['language']} | {r['variant']} | {r.get('safety', DASH)} | "
+                f"{r.get('loc', DASH)} | {median} | "
                 f"{span} | {gain}{r.get('peak_rss_kib') or DASH} | {size} | {built} | "
                 f"{r['status']} |")
         lines.append("")
