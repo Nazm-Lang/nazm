@@ -10556,11 +10556,12 @@ Repointed by multicore, which moved it to 35 for the pool's default worker count
 Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry.
 Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused.
 Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused.
-Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's."""
+Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's.
+Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 39;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 38;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_nine_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 40;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 39;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20616,3 +20617,29 @@ file = "scripts/host-archive.sh"
 find = '''    with gzip.GzipFile(filename="", mode="wb", fileobj=out, mtime=0) as z:'''
 replace = '''    with gzip.GzipFile(filename="", mode="wb", fileobj=out) as z:'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_host_archive_is_the_same_bytes_when_packaged_twice" }]
+
+# --- Performance leadership 6.2: a worker's tasks share its run stack; parked frames are copied (2026-10-16)
+
+[[mutation]]
+name = "pc-a-parked-tasks-frames-are-not-put-back"
+why = "a task resumed after another ran on its worker's run stack finds that one's frames where its own were: nothing is copied back"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  call void @llvm.memcpy.p0.p0.i64(ptr %tsp, ptr %tbuf, i64 %tlen, i1 false)'''
+replace = '''  call void @llvm.memcpy.p0.p0.i64(ptr %tsp, ptr %tbuf, i64 0, i1 false)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
+
+[[mutation]]
+name = "pc-the-task-in-place-is-never-recorded"
+why = "the worker forgets which task's frames are on its run stack, so they are never saved before another task overwrites them"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store ptr %t, ptr %ownp'''
+replace = '''  store ptr null, ptr %ownp'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
+
+[[mutation]]
+name = "pc-every-run-starts-the-task-afresh"
+why = "a task that has run is laid out again at the top of the run stack each time it resumes, so it restarts its body instead of continuing"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %fresh = icmp eq i64 %started, 0'''
+replace = '''  %fresh = icmp sge i64 %started, 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]

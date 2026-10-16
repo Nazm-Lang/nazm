@@ -3500,8 +3500,6 @@ done:
 /// - `nz_os_page_size() -> i64`: the page a guard is made of.
 /// - `nz_os_stack_alloc(total, page) -> ptr`: `total` bytes, page-aligned, the lowest `page` of
 ///   them made inaccessible as a guard; null when either cannot be had (no guard, no stack).
-/// - `nz_os_stack_free(base, total, page)`: the stack back; leaked rather than handed back
-///   unreadable when its guard cannot be lifted (Q1-A1-10).
 /// - `nz_os_stack_size() -> i64`: the stack the calling thread has left below this frame, or 0
 ///   when the system will not say. Asked of the thread itself, not of `RLIMIT_STACK`, so a thread C
 ///   started with a small stack is budgeted from that stack (Q1-A1-04); `RLIMIT_STACK` only where
@@ -3569,18 +3567,6 @@ none:
   ret ptr null
 done:
   ret ptr %base
-}
-
-define hidden void @nz_os_stack_free(ptr %base, i64 %total, i64 %page) {
-entry:
-  %rw = call i32 @mprotect(ptr %base, i64 %page, i32 3)
-  %ok = icmp eq i32 %rw, 0
-  br i1 %ok, label %release, label %kept
-release:
-  call void @free(ptr %base)
-  br label %kept
-kept:
-  ret void
 }
 
 ; What a thread's own bounds cannot say is `RLIMIT_STACK`'s: the main thread's stack. RLIMIT_STACK
@@ -3778,13 +3764,6 @@ fail:
   ret ptr null
 done:
   ret ptr %base
-}
-
-define hidden void @nz_os_stack_free(ptr %base, i64 %total, i64 %page) {
-entry:
-  ; The whole reservation goes, guard and all: released pages are never handed out unreadable.
-  %r = call i32 @VirtualFree(ptr %base, i64 0, i32 32768)
-  ret void
 }
 
 ; The calling thread's reservation, so what is left of it below this frame (Q1-A1-04).

@@ -326,7 +326,13 @@ pub fn escape(s: &str) -> String {
 /// interpreter does not. 39 is R1.5 3.1's small-block heap (`heap::emit_small`): `nz.small_malloc`,
 /// `nz.small_free` and `nz.small_realloc`, which every unit but the stack's and the TLS engine's
 /// calls in place of C's allocator in a hosted executable that calls no C.
-pub const RUNTIME_ABI_REVISION: u32 = 39;
+/// 40 is performance leadership 6.2's copied stacks (2026-10-16): a pool task has no stack of its
+/// own — each worker has one guarded run stack (the task-stack size), its tasks run on it at the
+/// same addresses, and `nz.task_place` copies the frames of the task in place into a buffer it owns
+/// when another is to run there, and back before it runs again; a worker record is 384 bytes (run
+/// stack at 320, its size at 328, the task in place at 336), and a task's record keeps its saved
+/// frames at 8, their capacity at 16, their length at 152 and whether it has run at 160.
+pub const RUNTIME_ABI_REVISION: u32 = 40;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -796,8 +802,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
     rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
     rt!("nz.task_leave", "void" ("ptr") "", false, Tasks, "", Never, Owner, "save a task's failure state and stack limit and clear the thread's (N83)", "borrows the task"),
-    rt!("nz.worker_main", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "a pool worker: run its tasks first in, first out (N83)", "the worker owns its tasks' stacks"),
-    rt!("nz.task_start", "i32" ("ptr", "ptr") "", false, Tasks, "", Status, Any, "start a task on the pool with a guarded stack (N83)", "takes the argument block; 0, or 1 when no stack could be had"),
+    rt!("nz.worker_main", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "a pool worker: run its tasks first in, first out, on its run stack (N83, 6.2)", "the worker owns its run stack and its tasks' saved frames"),
+    rt!("nz.task_start", "i32" ("ptr", "ptr") "", false, Tasks, "", Status, Any, "start a task on the pool: a record, no stack (N83, 6.2)", "takes the argument block; 0, or 1 when no record could be had"),
+    rt!("nz.task_place", "i1" ("ptr", "ptr") "", false, Tasks, "", Status, Owner, "put a task's frames on its worker's run stack, saving those of the task in place (6.2)", "the worker's tasks own their saved frames; false when they could not be saved"),
     rt!("nz_task_main", "void" ("ptr") "", false, Tasks, "", Never, Owner, "a task's body on its own stack, then its end (N83)", "borrows the task"),
     rt!("nz.task_suspend", "void" ("ptr") "", false, Tasks, "", Never, Owner, "switch from a task back to its worker (N83)", "none"),
     rt!("nz.task_wake", "void" ("ptr") "", false, Tasks, "", Never, Any, "make a parked task runnable, or note the wake (N83)", "none"),
@@ -1458,10 +1465,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_nine_and_reaches_the_system_only_through_its_platform_layer()
-    {
-        // R4's atomics outside the strings: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 39);
+    fn the_runtime_is_revision_forty_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.2's copied stacks: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 40);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

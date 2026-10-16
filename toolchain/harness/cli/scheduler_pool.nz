@@ -116,6 +116,27 @@ fn list1(a: Str) -> Strs ! {} {
 }
 
 @test
+fn tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let d = scratch_new(h);
+    let src = "fn down(n: Int, k: Int, inp: Chan, out: Chan) -> Int {\nlet mut pad = [0; 16]; pad[n % 16] = n + k;\nif n == 0 { let buf = ints_new(); let mut got = 0;\nwhile chan_recv(inp, buf) { let v = ints_pop(buf); got += v; chan_send(out, v + k); }\ngot + pad[0] } else { let r = down(n - 1, k, inp, out); r + pad[n % 16] - n - k } }\nfn worker(k: Int, depth: Int, inp: Chan, out: Chan, res: Chan) -> Int { chan_send(res, down(depth, k, inp, out)); 0 }\nfn main(io: IoCap, tasks: SpawnCap) {\nlet n = 200; let rounds = 50; let mut ins: Vec[Chan] = []; let res = chan_new(1000); let out = chan_new(1);\nlet mut total = 0; let buf = ints_new();\nscope { let mut i = 0; while i < n { let c = chan_new(1); ins.push(c); spawn worker(i, 10 + i % 37, c, out, res); i += 1; }\nlet mut r = 0; while r < rounds { let mut j = 0; while j < n { chan_send(ins[j], r); if chan_recv(out, buf) { total += ints_pop(buf); } j += 1; } r += 1; }\nlet mut j = 0; while j < n { chan_close(ins[j]); j += 1; } }\nlet mut sum = 0; let mut j = 0; while j < n { if chan_recv(res, buf) { sum += ints_pop(buf); } j += 1; }\nprintln(total); println(sum) }\n";
+    frames_on(h, d, src, "llvm")?;
+    frames_on(h, d, src, "cranelift")?;
+    scratch_remove(h, d);
+    Ok(0)
+}
+
+fn frames_on(h: Caps, d: Str, src: Str, backend: Str) -> Result[Int, Str] ! { io, spawn } {
+    built(h, d, "frames", src, backend)?;
+    let one = run_prog(h, d, "frames", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=1"));
+    check_that(one.code == 0, one.stderr)?;
+    check_that(text_starts_with(one.stdout, "1240000\n264900\n"), one.stdout)?;
+    let three = run_prog(h, d, "frames", strs_new(), vars("NAZM_SCHEDULER=pool NAZM_WORKERS=3"));
+    check_that(three.code == 0, three.stderr)?;
+    check_that(text_starts_with(three.stdout, "1240000\n264900\n"), three.stdout)
+}
+
+@test
 fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
     let h = caps(io, p, sp, v, t);
     let d = scratch_new(h);

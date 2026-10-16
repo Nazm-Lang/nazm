@@ -7544,6 +7544,24 @@ under Cranelift, whose runtime is its whole baseline — and carried by a hosted
 (N82) as a second archive member. A test program that waits inside a scope for a task that fails
 first deadlocks on both models, as §7.56 says it must; the pool's tests receive after the scope.
 
+**Amended (performance leadership 6.2, 2026-10-16): copied stacks.** A task no longer has a stack of
+its own. Each worker has one guarded **run stack** of the task-stack size (`NAZM_TASK_STACK`,
+`--stack-size`, 256 KiB by default) for the life of the process, and its tasks run on it at the same
+addresses. When a task other than the one whose frames are on the run stack is to run, the worker
+copies those frames — from that task's saved stack pointer to the top — into a buffer the task owns
+(`nz.task_place`), and puts the new task's saved frames back where they were, or lays out its first
+frame on its first run. Same addresses, so nothing moves: frame pointers, unwinding, stack probes
+and the saved registers are untouched, and the stack check and its limit (`N0408`) are as before,
+the limit now the run stack's. Sound because a task is pinned (above) and nothing outside a task
+reads its stack while it is parked: its arguments are a heap block, a waiter is registered by its
+record, and a condition variable's address is only a key. What changes for a program: nothing it
+can observe but memory and speed — `spawn` makes no system call, and a parked task holds its record
+and the bytes of its frames instead of a page. A program whose own C reaches the pool would be the
+one exception (a C library keeping a pointer into a caller's stack across a wait); a program that
+calls C runs a thread per task (N106, §7.107). If the frames cannot be saved for want of memory,
+the process ends with a message. Runtime ABI 39 → 40 (design: `openspec/changes/
+performance-leadership/design.md`, *Concurrency engineering*).
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
