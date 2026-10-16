@@ -13,6 +13,8 @@ use "@std/bytebuf"
 use "lir.nz"
 use "common.nz"
 use "x64.nz"
+use "@std/hash"
+use "@std/hashmap"
 
 const A: Int = 0
 const B: Int = 1
@@ -21,6 +23,10 @@ const R10: Int = 10
 const R11: Int = 11
 const X0: Int = 14
 const X1: Int = 15
+// Windows x64 keeps xmm6–xmm15 across a call, so there the scratch pair is xmm4 and xmm5,
+// which it does not, and which carry no argument (8.2).
+const WX0: Int = 4
+const WX1: Int = 5
 
 /// One function being generated.
 struct G {
@@ -52,6 +58,11 @@ struct G {
     cs_blk: Ints,
     cs_pad: Ints,
     last_call: Ints,
+    /// The scratch xmm pair (`X0`, `X1`; `WX0`, `WX1` on Windows), and the bytes the prologue
+    /// subtracts from rsp, which a Windows epilogue adds back (8.2).
+    x0: Int,
+    x1: Int,
+    frame: Int,
 }
 
 /// The callee-saved registers the allocator hands out: rbx, r12–r15.
@@ -225,7 +236,8 @@ fn int_arg(k: Int) -> Int {
 /// register or stack offset, as pairs; the stack bytes used, last. System V: six integer
 /// registers, eight xmm, the stack in eight-byte slots; an `i128` in two integer registers or
 /// sixteen aligned bytes.
-fn assign(classes: Ints) -> Ints {
+fn assign(classes: Ints, win: Bool) -> Ints {
+    if win { return assign_win(classes) }
     let out = ints_new()
     let mut ngr = 0
     let mut nfr = 0
@@ -252,6 +264,56 @@ fn assign(classes: Ints) -> Ints {
     }
     ints_push(out, stack)
     out
+}
+
+/// Windows x64 (8.2): each argument takes the next of four positions — rcx, rdx, r8, r9 for an
+/// integer, xmm0–xmm3 for a float — and then eight stack bytes, above the 32 bytes of shadow
+/// space every call reserves; an `i128` takes two positions, as LLVM splits it for this triple,
+/// so its high half may be the first on the stack (kind 3: the low half in r9, the high half at
+/// the offset given). The stack bytes used, never fewer than the shadow space's 32, last.
+fn assign_win(classes: Ints) -> Ints {
+    let out = ints_new()
+    let mut k = 0
+    for c in classes {
+        if c == C_I128 && k + 2 <= 4 {
+            ints_push(out, 0)
+            ints_push(out, win_arg(k))
+            k += 2
+        } else if c == C_I128 && k == 3 {
+            ints_push(out, 3)
+            ints_push(out, 32)
+            k += 2
+        } else if k < 4 {
+            ints_push(out, if is_float(c) { 1 } else { 0 })
+            ints_push(out, if is_float(c) { k } else { win_arg(k) })
+            k += 1
+        } else {
+            ints_push(out, 2)
+            ints_push(out, 32 + 8 * (k - 4))
+            k += if c == C_I128 { 2 } else { 1 }
+        }
+    }
+    ints_push(out, if k > 4 { 32 + 8 * (k - 4) } else { 32 })
+    out
+}
+
+fn win_arg(k: Int) -> Int {
+    match k {
+        0 => RCX,
+        1 => RDX,
+        2 => 8,
+        _ => 9,
+    }
+}
+
+/// The register after `r` in an `i128`'s pair: System V's order, or Windows's.
+fn pair_next(g: G, r: Int) -> Int {
+    if !g.c.win { return pair_hi(r) }
+    match r {
+        1 => RDX,
+        2 => 8,
+        _ => 9,
+    }
 }
 
 /// The register after `r` in an `i128`'s pair.
@@ -292,7 +354,7 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         if x.dst + 1 > n { n = x.dst + 1 }
         if x.dst2 + 1 > n { n = x.dst2 + 1 }
         if x.op == OP_CALL || x.op == OP_CALLI {
-            let a = assign(call_params(u, x))
+            let a = assign(call_params(u, x), c.win)
             let s = a[ints_len(a) - 1]
             if s > out { out = s }
         }
@@ -318,7 +380,8 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         off += f.slot_size[k]
         k += 1
     }
-    let saved = used_regs(loc, NREGS)
+    // Windows keeps rsi and rdi across a call too: the caller-saved pool's first two (8.2).
+    let saved = used_regs(loc, if c.win { NREGS + 2 } else { NREGS })
     // After the pushes, the frame keeps rsp 16-aligned.
     let pushed = 8 * ints_len(saved)
     let size = align_up(off + pushed, 16) - pushed
@@ -327,7 +390,8 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
             fix_blk: ints_new(), loc: loc, nvals: n, saved: saved,
             fuse: fuse_new(), uses: use_counts(f, n),
             cs_start: ints_new(), cs_len: ints_new(), cs_blk: ints_new(), cs_pad: ints_new(),
-            last_call: ints_new())
+            last_call: ints_new(), x0: if c.win { WX0 } else { X0 },
+            x1: if c.win { WX1 } else { X1 }, frame: size)
     ints_push(g.last_call, 0)
     ints_push(g.last_call, 0)
     ints_set(c.sym_at, f.sym, here(g))
@@ -341,7 +405,8 @@ pub fn gen_function_x64(c: Code, u: Unit, f: Func) {
         e += 1
     }
     ints_set(c.fn_enc, f.sym, enc)
-    prologue(g, size)
+    if c.win { prologue_win(g, size) } else { prologue(g, size) }
+    receive_params(g)
     let nb = ints_len(f.block_first)
     let mut bi = 0
     while bi < nb {
@@ -447,8 +512,107 @@ fn prologue(g: G, size: Int) {
         rr(b, true, 0x81, 5, RSP)
         imm32(b, size)
     }
+}
+
+/// Windows x64's prologue (8.2, 8.3): `push rbp; mov rbp, rsp`, the callee-saved registers
+/// pushed, and the frame allocated — past a page through MinGW-w64's `___chkstk_ms`, which
+/// touches each page as Windows grows the stack, as LLVM calls it for this triple — then the
+/// function's UNWIND_INFO, which describes each step by where it ends. No frame register is
+/// declared: rsp is fixed after the prologue, so the unwinder works from it.
+fn prologue_win(g: G, size: Int) {
+    let b = buf(g)
+    let start = here(g)
+    // Each unwind code as (offset in the prologue, operation, information), in prologue order.
+    let at = ints_new()
+    let ops = ints_new()
+    let info = ints_new()
+    push_rbp(b)
+    ints_push(at, here(g) - start)
+    ints_push(ops, 0)
+    ints_push(info, RBP)
+    mov(b, RBP, RSP)
+    for r in g.saved {
+        push(b, areg(r))
+        ints_push(at, here(g) - start)
+        ints_push(ops, 0)
+        ints_push(info, areg(r))
+    }
+    if size >= 4096 {
+        mov_imm(b, A, size)
+        let k = chkstk_sym(g)
+        let call_at = call_rel(b)
+        add_reloc(g.c, call_at, X_BRANCH, k, 1, 2)
+        alu(b, ALU_SUB, RSP, A)
+    } else if size > 0 {
+        rr(b, true, 0x81, 5, RSP)
+        imm32(b, size)
+    }
+    if size > 0 {
+        ints_push(at, here(g) - start)
+        ints_push(ops, if size <= 128 { 2 } else { 1 })
+        ints_push(info, size)
+    }
+    // UNWIND_INFO: version 1, no handler; the prologue's size; the codes, last first.
+    let x = g.c.xdata
+    while bytebuf_len(x) % 4 != 0 { b1(x, 0) }
+    ints_set(g.c.fn_xdata, g.f.sym, bytebuf_len(x))
+    let mut slots = 0
+    let mut k = 0
+    while k < ints_len(ops) {
+        slots += if ops[k] == 1 { if info[k] <= 524280 { 2 } else { 3 } } else { 1 }
+        k += 1
+    }
+    b1(x, 1)
+    b1(x, here(g) - start)
+    b1(x, slots)
+    b1(x, 0)
+    k = ints_len(ops) - 1
+    while k >= 0 {
+        b1(x, at[k])
+        if ops[k] == 2 {
+            b1(x, 2 | ((info[k] / 8 - 1) << 4))
+        } else if ops[k] == 1 && info[k] <= 524280 {
+            b1(x, 1)
+            b1(x, info[k] / 8)
+            b1(x, (info[k] / 8) >> 8)
+        } else if ops[k] == 1 {
+            b1(x, 1 | (1 << 4))
+            imm32(x, info[k])
+        } else {
+            b1(x, ops[k] | (info[k] << 4))
+        }
+        k -= 1
+    }
+    if slots % 2 == 1 {
+        b1(x, 0)
+        b1(x, 0)
+    }
+}
+
+/// The unit's symbol for `___chkstk_ms`, imported, added when the first large frame needs it.
+fn chkstk_sym(g: G) -> Int {
+    let name = "___chkstk_ms"
+    match hashmap_get(g.u.index, name) {
+        Some(k) => k,
+        None => {
+            let k = g.u.syms.len()
+            g.u.syms.push(Sym(name: name, kind: 0, link: L_IMPORT, params: ints_new(),
+                    ret: C_NONE, conv: CONV_C))
+            hashmap_set(g.u.index, name, k)
+            ints_push(g.c.sym_at, -1)
+            ints_push(g.c.fn_enc, 0)
+            ints_push(g.c.fn_lsda, -1)
+            ints_push(g.c.fn_xdata, -1)
+            k
+        },
+    }
+}
+
+/// The parameters, from their registers and the caller's stack, to their slots.
+fn receive_params(g: G) {
+    let b = buf(g)
     let own = g.u.syms[g.f.sym]
-    let a = assign(own.params)
+    let a = assign(own.params, g.c.win)
     let mut i = 0
     while i < ints_len(own.params) {
         let c = own.params[i]
@@ -457,7 +621,11 @@ fn prologue(g: G, size: Int) {
         let to = g.param_offs[i]
         if kind == 0 && c == C_I128 {
             store(b, 8, r, RSP, to)
-            store(b, 8, pair_hi(r), RSP, to + 8)
+            store(b, 8, pair_next(g, r), RSP, to + 8)
+        } else if kind == 3 {
+            store(b, 8, 9, RSP, to)
+            load(b, 8, A, RBP, 16 + r)
+            store(b, 8, A, RSP, to + 8)
         } else if kind == 0 {
             norm(g, r, c)
             store(b, 8, r, RSP, to)
@@ -479,6 +647,21 @@ fn prologue(g: G, size: Int) {
 
 fn epilogue(g: G) {
     let b = buf(g)
+    if g.c.win {
+        // The form Windows's unwinder recognises (8.3): `add rsp`, the pops, `ret`.
+        if g.frame > 0 {
+            rr(b, true, 0x81, 0, RSP)
+            imm32(b, g.frame)
+        }
+        let mut p = ints_len(g.saved) - 1
+        while p >= 0 {
+            pop(b, areg(g.saved[p]))
+            p -= 1
+        }
+        pop_rbp(b)
+        ret(b)
+        return
+    }
     let mut q = 0
     while q < ints_len(g.saved) {
         load(b, 8, areg(g.saved[q]), RBP, -8 * (q + 1))
@@ -651,7 +834,9 @@ fn inst(g: G, x: Ins) {
 
 /// A symbol's address: a defined one `rip`-relative, an imported one from the GOT.
 fn sym_addr(g: G, reg: Int, s: Int) {
-    if g.u.syms[s].link == L_IMPORT {
+    // PE/COFF has no GOT: an imported symbol is in the image, `rip`-relative as LLVM addresses
+    // it for this triple (8.1).
+    if g.u.syms[s].link == L_IMPORT && !g.c.win {
         let at = mov_rip(buf(g), reg)
         add_reloc(g.c, at, X_GOT_LOAD, s, 1, 2)
     } else {
@@ -720,12 +905,12 @@ fn bin(g: G, x: Ins) {
     if s >= B_FADD {
         let dbl = c == C_F64
         ld(g, A, x.a)
-        movq_to_x(b, true, X0, A)
+        movq_to_x(b, true, g.x0, A)
         ld(g, A, x.b)
-        movq_to_x(b, true, X1, A)
+        movq_to_x(b, true, g.x1, A)
         let opc = if s == B_FADD { 0x58 } else if s == B_FSUB { 0x5C } else if s == B_FMUL { 0x59 } else { 0x5E }
-        farith(b, dbl, opc, X0, X1)
-        st_x(g, X0, c, x.dst)
+        farith(b, dbl, opc, g.x0, g.x1)
+        st_x(g, g.x0, c, x.dst)
         return
     }
     if (c == C_I64 || c == C_PTR) && (s == B_ADD || s == B_SUB || s == B_MUL || s == B_AND ||
@@ -927,11 +1112,11 @@ fn compare(g: G, x: Ins) {
     if k >= K_FEQ {
         let dbl = c == C_F64
         ld(g, A, x.a)
-        movq_to_x(b, true, X0, A)
+        movq_to_x(b, true, g.x0, A)
         ld(g, A, x.b)
-        movq_to_x(b, true, X1, A)
+        movq_to_x(b, true, g.x1, A)
         if k == K_FEQ || k == K_FNE {
-            ucomis(b, dbl, X0, X1)
+            ucomis(b, dbl, g.x0, g.x1)
             if k == K_FEQ {
                 setcc(b, CC_E, A)
                 setcc(b, CC_NP, B)
@@ -943,10 +1128,10 @@ fn compare(g: G, x: Ins) {
             }
         } else if k == K_FLT || k == K_FLE {
             // a < b is b > a: unordered sets CF, so `above` is false with a NaN.
-            ucomis(b, dbl, X1, X0)
+            ucomis(b, dbl, g.x1, g.x0)
             setcc(b, if k == K_FLT { CC_A } else { CC_AE }, A)
         } else {
-            ucomis(b, dbl, X0, X1)
+            ucomis(b, dbl, g.x0, g.x1)
             setcc(b, if k == K_FGT { CC_A } else { CC_AE }, A)
         }
         st(g, A, x.dst)
@@ -1004,9 +1189,9 @@ fn unary(g: G, x: Ins) {
             alu(b, ALU_AND, A, B)
         }
     } else if s == U_FSQRT {
-        movq_to_x(b, true, X0, A)
-        farith(b, dbl, 0x51, X0, X0)
-        movq_from_x(b, dbl, A, X0)
+        movq_to_x(b, true, g.x0, A)
+        farith(b, dbl, 0x51, g.x0, g.x0)
+        movq_from_x(b, dbl, A, g.x0)
     } else if s == U_FFLOOR || s == U_FCEIL || s == U_FTRUNC {
         round_sse2(g, s, dbl)
     } else if s == U_POPCNT {
@@ -1143,53 +1328,53 @@ fn convert(g: G, x: Ins) {
     ld(g, A, x.a)
     if s == V_STOF {
         sext(g, A, from)
-        cvtsi2f(b, to == C_F64, X0, A)
-        movq_from_x(b, to == C_F64, A, X0)
+        cvtsi2f(b, to == C_F64, g.x0, A)
+        movq_from_x(b, to == C_F64, A, g.x0)
     } else if s == V_UTOF {
         // Below 2^63 the signed conversion is exact enough; above, halve with the low bit kept
         // (round to odd), convert and double.
         alu(b, ALU_TEST, A, A)
         let big = jcc8(b, CC_S)
-        cvtsi2f(b, to == C_F64, X0, A)
+        cvtsi2f(b, to == C_F64, g.x0, A)
         let done = jmp8(b)
         land8(b, big)
         mov(b, B, A)
         shift_imm(b, 5, B, 1)
         and1(b, A)
         alu(b, ALU_OR, B, A)
-        cvtsi2f(b, to == C_F64, X0, B)
-        farith(b, to == C_F64, 0x58, X0, X0)
+        cvtsi2f(b, to == C_F64, g.x0, B)
+        farith(b, to == C_F64, 0x58, g.x0, g.x0)
         land8(b, done)
-        movq_from_x(b, to == C_F64, A, X0)
+        movq_from_x(b, to == C_F64, A, g.x0)
     } else if s == V_FTOS {
-        movq_to_x(b, true, X0, A)
-        cvttf2si(b, from == C_F64, A, X0)
+        movq_to_x(b, true, g.x0, A)
+        cvttf2si(b, from == C_F64, A, g.x0)
         norm(g, A, to)
     } else if s == V_FTOU {
         // Below 2^63 the signed conversion; at or above, subtract 2^63 first and set the top bit.
         let dbl = from == C_F64
-        movq_to_x(b, true, X0, A)
+        movq_to_x(b, true, g.x0, A)
         mov_imm(b, B, if dbl { 0x43E0000000000000 } else { 0x5F000000 })
-        movq_to_x(b, true, X1, B)
-        ucomis(b, dbl, X0, X1)
+        movq_to_x(b, true, g.x1, B)
+        ucomis(b, dbl, g.x0, g.x1)
         let big = jcc8(b, CC_AE)
-        cvttf2si(b, dbl, A, X0)
+        cvttf2si(b, dbl, A, g.x0)
         let done = jmp8(b)
         land8(b, big)
-        farith(b, dbl, 0x5C, X0, X1)
-        cvttf2si(b, dbl, A, X0)
+        farith(b, dbl, 0x5C, g.x0, g.x1)
+        cvttf2si(b, dbl, A, g.x0)
         mov_imm(b, B, 1 << 63)
         alu(b, ALU_XOR, A, B)
         land8(b, done)
         norm(g, A, to)
     } else if s == V_FEXT {
-        movq_to_x(b, true, X0, A)
-        cvtf2f(b, true, X0, X0)
-        movq_from_x(b, true, A, X0)
+        movq_to_x(b, true, g.x0, A)
+        cvtf2f(b, true, g.x0, g.x0)
+        movq_from_x(b, true, A, g.x0)
     } else if s == V_FTRUNC {
-        movq_to_x(b, true, X0, A)
-        cvtf2f(b, false, X0, X0)
-        movq_from_x(b, false, A, X0)
+        movq_to_x(b, true, g.x0, A)
+        cvtf2f(b, false, g.x0, g.x0)
+        movq_from_x(b, false, A, g.x0)
     } else {
         norm(g, A, to)
     }
@@ -1232,7 +1417,7 @@ fn call(g: G, x: Ins) {
         refuse(g, "a call whose arguments do not match its callee")
         return
     }
-    let a = assign(params)
+    let a = assign(params, g.c.win)
     let mut i = 0
     while i < ints_len(params) {
         let c = params[i]
@@ -1248,6 +1433,9 @@ fn call(g: G, x: Ins) {
         } else if a[2 * i] == 1 {
             ld(g, A, x.args[i])
             movq_to_x(b, true, a[2 * i + 1], A)
+        } else if a[2 * i] == 3 {
+            ld128(g, A, D, x.args[i])
+            store(b, 8, D, RSP, a[2 * i + 1])
         }
         i += 1
     }
@@ -1257,10 +1445,12 @@ fn call(g: G, x: Ins) {
         let c = params[i]
         if a[2 * i] == 0 {
             if c == C_I128 {
-                ld128(g, a[2 * i + 1], pair_hi(a[2 * i + 1]), x.args[i])
+                ld128(g, a[2 * i + 1], pair_next(g, a[2 * i + 1]), x.args[i])
             } else {
                 ld(g, a[2 * i + 1], x.args[i])
             }
+        } else if a[2 * i] == 3 {
+            ld(g, 9, x.args[i])
         }
         i += 1
     }
@@ -1547,18 +1737,18 @@ fn round_sse2(g: G, s: Int, dbl: Bool) {
     mov_imm(b, D, limit)
     alu(b, ALU_CMP, B, D)
     let done = jcc32(b, CC_AE)
-    movq_to_x(b, true, X0, A)
-    cvttf2si(b, dbl, R10, X0)
-    cvtsi2f(b, dbl, X1, R10)
+    movq_to_x(b, true, g.x0, A)
+    cvttf2si(b, dbl, R10, g.x0)
+    cvtsi2f(b, dbl, g.x1, R10)
     if s != U_FTRUNC {
-        if s == U_FFLOOR { ucomis(b, dbl, X1, X0) } else { ucomis(b, dbl, X0, X1) }
+        if s == U_FFLOOR { ucomis(b, dbl, g.x1, g.x0) } else { ucomis(b, dbl, g.x0, g.x1) }
         let exact = jcc32(b, CC_BE)
         mov_imm(b, R10, one)
         movq_to_x(b, true, 13, R10)
-        farith(b, dbl, if s == U_FFLOOR { 0x5C } else { 0x58 }, X1, 13)
+        farith(b, dbl, if s == U_FFLOOR { 0x5C } else { 0x58 }, g.x1, 13)
         land32(b, exact)
     }
-    movq_from_x(b, dbl, R10, X1)
+    movq_from_x(b, dbl, R10, g.x1)
     mov_imm(b, R11, sign)
     alu(b, ALU_AND, A, R11)
     alu(b, ALU_OR, A, R10)

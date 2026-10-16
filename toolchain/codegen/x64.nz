@@ -345,6 +345,12 @@ pub fn pop_rbp(b: ByteBuf) {
     b1(b, 0x5D)
 }
 
+/// `pop r`, 64 bits.
+pub fn pop(b: ByteBuf, r: Int) {
+    rex(b, false, 0, 0, r, false)
+    b1(b, 0x58 + (r & 7))
+}
+
 /// `bsr`/`bsf dst, src`, 64 bits.
 pub fn bsr(b: ByteBuf, dst: Int, src: Int) {
     rr(b, true, 0x0FBD, dst, src)
