@@ -73,20 +73,30 @@ fn give_up(f: Facts, why: Str) -> Facts {
 // `main`), the standard modules and the core prelude read from `library`, `@cfg` asked of `os`
 // and `arch` as Rust's `std::env::consts` names them ("" for unknown: a condition on either then
 // stops the checker).
-pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, library, os, arch, true, io) }
+pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", library, os, arch, true, io) }
+
+// The same, with the source root given (`check --source-root`, `root::decide`'s `given`): "" to
+// decide it as `fx_check` does.
+pub fn fx_check_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
+    check_as(path, source_root, library, os, arch, true, io)
+}
 
 // The same compilation as a module (`Entry::Absent`), as `nazm doc` checks one: whether anything
 // can run is not asked, so a root without `main` is no error.
-pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, library, os, arch, false, io) }
+pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", library, os, arch, false, io) }
+pub fn fx_check_module_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
+    check_as(path, source_root, library, os, arch, false, io)
+}
 
-fn check_as(path: Str, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
+fn check_as(path: Str, given: Str, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
     let f = facts_new();
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
     // the file, or the first `nazm.root` marker, or the file's own directory.
     if str_len(path) == 0 || str_byte(path, 0) != 47 { return give_up(f, "the loader stops at a relative path"); }
     strs_set(f.dir, 0, pk_parent(pk_normalise(path)));
-    let root = pk_decide(path, io);
+    let mut root = pk_decide(path, io);
+    if given != "" { root = pk_given(path, given, io); }
     let how = pk_root_how(root);
     if how == 0 - 2 { return give_up(f, str_concat("the loader stops at ", pk_root_why(root))); }
     // A manifest that is not one, or a marker that is not empty: the reference refuses the
