@@ -169,8 +169,28 @@
       `--debug` 1015 of 1015, runtime units 990 of 990 on the host (25 refused by `nazm build`)
       and 989 of 989 for x86_64 (26 refused), object cache 990 of 990 inputs (4610 units; host
       only), the runtime digest equal, 60049 of 60049 mutants caught
+- [x] 8.8 Windows (`x86_64-pc-windows-gnu`, the copyright holder's direction of 2026-10-16):
+      `pipeline --target x86_64-pc-windows-gnu`; its runtime units were generated already (the
+      digest's), the main stack, stack probes and libraries are the link's (design.md). `nazm
+      build --emit-ir` with `--objects` writes the IR beside `-o` (`write_ir`, a test in
+      `tests/cross.rs`), so `run.sh` compares a target this host cannot link; `probe.sh` probes
+      for `TARGET`, so the object cache is compared for every target. `run.sh` against the
+      reference at `e27b861c` (runtime ABI 39, epoch 90): for Windows MIR 1535 of 1535, LIR
+      tables, ops (document and digests) and `--debug` 1065 of 1065, runtime units 1045 of 1045
+      (20 refused by `nazm build`), object cache 1045 of 1045 inputs (6981 units); on the host
+      1039 of 1039 runtime units (26 refused) and 1039 inputs (5925 units); for x86_64 macOS 1037
+      of 1037 (28 refused) and 1037 inputs (5900 units, compared for the first time); every other
+      count the Windows one, the runtime digest equal, 68691 of 68691 mutants caught each time. At
+      `--opt-level 2` (ThinLTO's `-flto=thin` probe on macOS) 13 to 14 programs' units found
+      under the key computed here on each of the three targets. Run on a Windows 10 host: 13
+      programs (`examples/*.nz`, `examples/tour/*.nz`) linked with this pipeline's runtime units
+      in place of the reference's print and exit as natively built ones do
+- [x] 8.9 R1.5's small-block heap (`0b7f8749`) wrote `nz.seq_new`'s import as `[],Some(...)`,
+      which `runtime_table.py`'s pattern skipped, so `runtime.nz` lost it and a program that
+      makes a sequence (`examples/worker-pool.nz`) stopped at `ops`; the pattern takes any
+      spacing and the script now asserts it read every import (179)
 - [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
-      now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
+      now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
       boards (`aarch64-unknown-none`, `riscv64gc-unknown-none-elf`, `thumbv7m-none-eabi`, and
       M1's `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf`, with M1's flash and

@@ -814,7 +814,8 @@ pub(crate) enum Command {
         /// documentation for why a generated executable does not do this.
         #[arg(long)]
         json: bool,
-        /// Also write the generated LLVM IR next to the executable, as `<out>.ll`.
+        /// Also write the generated LLVM IR next to the executable, as `<out>.<unit>.ll` (with
+        /// `--objects` too, beside the `-o` path).
         #[arg(long)]
         emit_ir: bool,
         /// Optimisation level handed to `clang`.

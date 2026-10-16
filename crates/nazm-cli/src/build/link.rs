@@ -109,6 +109,20 @@ pub(super) fn linked(
     Ok(())
 }
 
+/// `--emit-ir`: beside the output, one file per unit, named as the artefacts are — for a linked
+/// build and for one whose objects a target's own toolchain links (`--objects`).
+pub(super) fn write_ir(artefacts: &[Artefact], output: &Path) {
+    for artefact in artefacts {
+        let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
+            continue;
+        };
+        let beside = with_suffix(output, &format!("{}.ll", artefact.name));
+        if let Err(e) = std::fs::write(&beside, ir) {
+            eprintln!("nazm: cannot write {}: {e}", beside.display());
+        }
+    }
+}
+
 /// The finished build: IR beside the output when asked, the debug information, a library's
 /// header, then the output published by rename, last, so an existing one survives every
 /// failure before it.
@@ -132,16 +146,7 @@ pub(super) fn published(
     summarized: &Summarize<'_>,
 ) -> ExitCode {
     if emit_ir {
-        // Beside the output, one file per unit, named as the artefacts are.
-        for artefact in artefacts {
-            let nazm_lir::backend::Code::Llvm(ir) = &artefact.code else {
-                continue;
-            };
-            let beside = with_suffix(output, &format!("{}.ll", artefact.name));
-            if let Err(e) = std::fs::write(&beside, ir) {
-                eprintln!("nazm: cannot write {}: {e}", beside.display());
-            }
-        }
+        write_ir(artefacts, output);
     }
     // On macOS the linker leaves debug information in the objects it read, which are about
     // to go, so a debug build gathers it into `OUTPUT.dSYM` first (N48). Elsewhere it is in

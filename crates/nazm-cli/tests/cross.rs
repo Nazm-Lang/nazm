@@ -389,3 +389,34 @@ fn inspect_names_every_target_and_what_this_host_makes_of_it() {
         assert_eq!(t["output"], want, "{t}");
     }
 }
+
+#[test]
+fn emit_ir_writes_each_unit_beside_the_output_when_the_objects_are_for_another_toolchain() {
+    // R3 8.8: a Windows build on a host that cannot link it still shows its IR, unit by unit,
+    // as a linked build does, for the pipeline written in Nazm to be compared with.
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
+    let o = nazm(
+        d.path(),
+        &[
+            "build",
+            "--no-cache",
+            "--target",
+            "x86_64-pc-windows-gnu",
+            "--objects",
+            "objs",
+            "--emit-ir",
+            "prog.nz",
+            "-o",
+            "prog.exe",
+        ],
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    for unit in ["m0", "runtime", "init", "entry"] {
+        let ir = std::fs::read_to_string(d.path().join(format!("prog.exe.{unit}.ll")))
+            .unwrap_or_else(|e| panic!("prog.exe.{unit}.ll: {e}"));
+        assert!(ir.contains("define"), "{unit}: {ir}");
+    }
+    assert!(d.path().join("objs/link.txt").exists());
+    assert!(!d.path().join("prog.exe").exists());
+}

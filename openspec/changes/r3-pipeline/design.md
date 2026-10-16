@@ -290,8 +290,17 @@ the boards are **deferred until after 1.0**, not ported now; the pipeline refuse
 --target` do; without it, `aarch64-apple-darwin`. The two targets share LIR's data layout and
 instruction text; the target is named in the LIR document and chooses the runtime's per-target
 units (`x86_64-darwin`'s task switch and stack entry). `run.sh` with `TARGET=x86_64-apple-darwin`
-passes `--target` to both sides and compares everything but the object cache (whose backend
-probe is the host's).
+passes `--target` to both sides and compares everything, the object cache keyed with a probe for
+that target (8.8).
+
+Windows (8.8, the copyright holder's direction of 2026-10-16: "whatever possible for now in mac
+and windows"): `x86_64-pc-windows-gnu` is ported too. Its LIR is the macOS targets' (LP64, the
+same instruction text), and its runtime units — `WINDOWS_INIT`, the Windows task switch, `errno`
+and stack units, the Winsock part of `os` and the `@nz_os_args` entry hook — were already
+generated for the runtime digest. The 8 MiB main stack, the stack probes and the link libraries
+are the link's (`link.txt`'s `-Wl,--stack,8388608 -lws2_32 -lbcrypt`), not a unit's, so nothing
+here writes them. This host cannot link Windows: `run.sh` builds its objects with `--objects`, and
+`nazm build --emit-ir` now writes a unit's IR beside `-o` for such a build as for a linked one.
 
 ## Order of work
 

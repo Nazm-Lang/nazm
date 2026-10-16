@@ -7,10 +7,11 @@
 #
 #     NAZM=PATH/TO/main/nazm [TARGET=TRIPLE] toolchain/pipeline/tests/run.sh [-v] [-j N] [FILE.nz ...]
 #
-# TARGET (rewrite-in-nazm 4.2, narrowed to macOS) is `x86_64-apple-darwin` or
-# `aarch64-apple-darwin`, passed as `--target` to `nazm lir`, `nazm build` and the pipeline alike;
-# unset, neither is given one and both use their default, the Apple silicon host's. With a
-# TARGET the object cache is not compared (the probe is the host's).
+# TARGET (rewrite-in-nazm 4.2, narrowed to macOS and Windows) is `x86_64-apple-darwin`,
+# `aarch64-apple-darwin` or `x86_64-pc-windows-gnu`, passed as `--target` to `nazm lir`, `nazm
+# build` and the pipeline alike; unset, neither is given one and both use their default, the Apple
+# silicon host's. The object cache's probe is made for TARGET (`probe.sh`). Windows is not linked
+# on this host: `nazm build` writes its objects (`--objects`) and its IR beside `-o`.
 #
 # The inputs: the base set — the brief's (tests/compat/v1, corpus, examples, bench/compare/nazm),
 # the Nazm compiler under compiler/ and this pipeline itself — and the front end's test programs
@@ -33,6 +34,7 @@ while [ $# -gt 0 ]; do
 done
 TARGET=${TARGET:-}
 TFLAG=${TARGET:+--target $TARGET}
+export TARGET
 ROOT=$(pwd)
 OUT="$ROOT/toolchain/pipeline/target"
 mkdir -p "$OUT/cmp"
@@ -108,13 +110,14 @@ one() {
     # The runtime's units (task 4.1's runtime generator): `pipeline runtime` against the units
     # `nazm build --emit-ir` wrote beside the program's, by default and with a stack size and a
     # heap limit (`units.py`); an input `nazm build` refuses is counted apart.
-    rm -f "$o".bin*
-    if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
+    rm -rf "$o".bin*
+    # A target this host does not link (Windows): its objects for its own toolchain, IR beside.
+    if [ "$TARGET" = x86_64-pc-windows-gnu ]; then xflag="--objects $o.bin.objects"; else xflag=""; fi
+    if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG $xflag --emit-ir "$f" -o "$o.bin" > /dev/null 2>&1; then
         # Every unit the build compiled, keyed here from its bytes, must be in the store under
         # that key, and the entry written again must be the one found, byte for byte.
         rm -rf "$o.scratch"
-        if [ -n "$TARGET" ]; then :
-        elif perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
+        if perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" objects "$OUT/cache" "$o.scratch" $TC "$o".bin.*.ll > "$o.objs" 2>&1; then
             echo "obj agree $(wc -l < "$o.objs" | tr -d ' ')" >> "$r"
         else
             echo "obj differ $(grep -v ' hit [0-9a-f]*$' "$o.objs" | head -1 | sed "s|$OUT/cmp/||")" >> "$r"
@@ -126,15 +129,15 @@ one() {
             v="differ $(head -1 "$o.rerr")"
         fi
         if [ "$v" = agree ]; then
-            rm -f "$o".bin*
-            if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
+            rm -rf "$o".bin*
+            if NAZM_CACHE_DIR="$OUT/cache" "$NAZM" build $TFLAG $xflag --emit-ir --stack-size 1048576 --heap-limit 268435456 "$f" -o "$o.bin" > /dev/null 2>&1 \
                 && perl -e 'alarm 300; exec @ARGV' "$OUT/pipeline" $TFLAG runtime "$o.cir" 1048576 268435456 > "$o.rgot" 2> "$o.rerr"; then
                 v=$(python3 toolchain/pipeline/tests/units.py "$o.rgot" "$o.bin")
                 [ "$v" = agree ] || v="$v (with a stack size and a heap limit)"
             fi
         fi
         echo "rt $v" >> "$r"
-        rm -f "$o".bin*
+        rm -rf "$o".bin*
     else
         echo "rt nobuild" >> "$r"
     fi
@@ -186,8 +189,7 @@ summary() {
             printf "[%s] lir ops: %d agree, %d differ (%d stops naming an unported construct, %d different text; the whole document: %d agree, %d differ)\n", label, oagree, ostop + owrong, ostop, owrong, fagree, fdiffer
             printf "[%s] lir ops --debug: %d agree, %d differ\n", label, dagree, ddiffer
             printf "[%s] runtime units: %d agree, %d differ (%d inputs with LIR that nazm build refuses)\n", label, ragree, rdiffer, rnobuild
-            if (ENVIRON["TARGET"] != "") printf "[%s] object cache: not compared for --target %s (the probe is the host'"'"'s)\n", label, ENVIRON["TARGET"]
-            else printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
+            printf "[%s] object cache: %d inputs agree (%d units found under the key computed here), %d differ\n", label, oba, obu, obd
         }' "$OUT/results.$label"
 }
 # The details once: with the full set's summary when there is one, else with the base set's.
