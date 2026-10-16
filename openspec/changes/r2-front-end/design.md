@@ -351,6 +351,28 @@ construction (with their positional forms), `match` and its desugarings, generic
 calls with their type arguments, impl methods and trait calls, `for`, `?`, interpolation, bit
 operators and every number type, closures, then the rest by count. `@derive` stays last (D19).
 
+**D26 — The budgets, measured (task 5.2; `rewrite-in-nazm` 1.4, 3.3).** Measured, not chased (a
+faster front end than the reference is a non-goal here): the drivers as `run.sh` builds them,
+against the reference built from the same commit, best of three on this host (load 18–35), peak
+resident memory from `time -l`. `check` (diagnostics) and `core` (Core IR with both digests of every
+function and the whole document):
+
+| input | check ref | check Nazm | core ref | core Nazm |
+| --- | --- | --- | --- | --- |
+| `compiler/emit.nz` | 0.12 s, 77 MB | 1.05 s, 79 MB | 0.21 s, 115 MB | 3.21 s, 513 MB |
+| `compiler/diagnose.nz` | 0.27 s, 143 MB | 2.32 s, 155 MB | 0.47 s, 226 MB | 6.99 s, 1,047 MB |
+| `toolchain/commands/check.nz` | 0.21 s, 114 MB | 1.73 s, 144 MB | 0.39 s, 193 MB | 5.62 s, 869 MB |
+| `toolchain/harness/cli/regex.nz` | 0.03 s, 17 MB | 0.14 s, 43 MB | 0.04 s, 30 MB | 0.58 s, 120 MB |
+| `examples/apps/jsonpipe/jsonpipe.nz` | 0.02 s, 14 MB | 0.11 s, 25 MB | 0.03 s, 25 MB | 0.43 s, 93 MB |
+
+So checking takes 7–9 times the reference's time in about its memory (a small program pays a
+fixed few MB more), and Core IR 13–15 times its time and 4–5 times its memory. Sampling the
+largest shows where Core IR's time goes: `@std/blake3`, the digests' hash written in Nazm, is the
+largest share, then `digest.nz` reading each printed function back (`js_value`) and string
+building. The budgets, as regression gates from here until R6/R8 tighten them: `check` at most 10
+times the reference's time and 1.5 times its peak memory on an input of 1,000 lines or more; Core
+IR at most 16 times its time and 5 times its peak memory.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
