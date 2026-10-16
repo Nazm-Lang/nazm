@@ -115,6 +115,28 @@ fn every_operation_answers_as_specified() {
 }
 
 #[test]
+fn an_atomic_is_no_string_in_the_memory_report_on_any_tier() {
+    // `docs/spec.md` (*Strings*): the interpreter and a compiled program allocate the same
+    // strings, and `atomic_new` allocates none. Until runtime ABI 38 a compiled program counted
+    // each atomic's cell as a string (R4's finding, on `http_listen`'s three).
+    // Nothing printed but `main`'s result (formatting a number would make a string).
+    let line = crate::differential::agrees(
+        "fn main() -> Int {
+    let a = atomic_new(0);
+    let b = atomic_new(1);
+    atomic_add(a, 2);
+    if atomic_load(a) + atomic_load(b) == 3 { 0 } else { 1 }
+}
+",
+        "0",
+    );
+    assert!(
+        line.contains(" strings allocated=0 reclaimed=0 live=0 "),
+        "{line}"
+    );
+}
+
+#[test]
 fn every_copy_and_every_task_reaches_one_cell() {
     let src = format!(
         "{SHOW}struct Counter {{ hits: Atomic, name: Int, }}

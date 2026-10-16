@@ -10553,11 +10553,12 @@ Repointed by R1d, which moved it to 33 for the counted heap, lines of input, pro
 Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets.
 Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`.
 Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry.
-Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused."""
+Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused.
+Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 37;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 36;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_seven_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 38;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 37;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_eight_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20384,3 +20385,21 @@ file = "library/std/http.nz"
 find = '''            if atomic_load(old.state) == 2 { atomic_add(s.entries, 0 - 1); }'''
 replace = '''            if atomic_load(old.state) == 3 { atomic_add(s.entries, 0 - 1); }'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::a_drain_closes_idle_connections_and_keeps_its_deadline" }]
+
+# --- R4: an atomic is no string (runtime ABI 38) ---------------------------------------
+
+[[mutation]]
+name = "r4-an-atomic-cell-is-marked-a-string"
+why = "`nz.atomic_cell` gives its backing a string's length, so its release counts a string reclaimed that was never counted allocated, and a compiled program's report differs from the interpreter's"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store i64 -1, ptr %lenp'''
+replace = '''  store i64 8, ptr %lenp'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "atomics::an_atomic_is_no_string_in_the_memory_report_on_any_tier" }]
+
+[[mutation]]
+name = "r4-a-string-release-counts-an-atomic-cell"
+why = "`nz.str_release` counts every backing it frees, an atomic's cell too, so a compiled program reports strings reclaimed that it never allocated"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %cell = icmp slt i64 %len, 0'''
+replace = '''  %cell = icmp slt i64 %len, -1'''
+killers = [{ package = "nazm-cli", test = "cli_a_b", name = "atomics::an_atomic_is_no_string_in_the_memory_report_on_any_tier" }]

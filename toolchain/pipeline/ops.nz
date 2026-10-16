@@ -2809,12 +2809,15 @@ fn files(fx: Fx, dst: Int, op: Str, args: Vec[Operand]) -> Bool {
 
 fn atomics(fx: Fx, dst: Int, op: Str, args: Vec[Operand]) -> Bool {
     if op == "atomic_new" {
+        // The runtime initialises the cell, in a backing a string's release frees without
+        // counting it: an atomic is not a string (runtime ABI 38).
         let v = arg_value(fx, args, 0)
+        let owner = rt_v(fx, "nz.atomic_cell", ints_of(v), "ptr")
+        let none = is_null(fx, owner)
+        guard(fx, none, "N0406", "out of memory");
+        let cell = ptr_off(fx, owner, 16)
         let eight = iconst(fx, 8)
-        let ob = string_backing(fx, eight)
-        // Not yet shared with anything: a plain store initialises it.
-        store(fx, ints_get(ob, 1), 0, v);
-        write_str(fx, dst, ints_get(ob, 1), eight, ints_get(ob, 0));
+        write_str(fx, dst, cell, eight, owner);
         return true
     }
     if op == "atomic_load" {

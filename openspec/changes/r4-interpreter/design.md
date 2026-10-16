@@ -367,9 +367,16 @@ Two differences, one on each side:
   backs an `Atomic` with a string backing that the `Str` triple counts
   (`crates/nazm-lir/src/op/atomics.rs`). `docs/spec.md` promises that "the interpreter and a
   compiled program allocate the same strings" (*Strings*, *Building*) and names no allocation in
-  `atomic_new` (*Atomics*), so this is the compiled side's: **a Rust-side defect for the
-  coordinator** — count an atomic's cell outside `strings` (or say in the spec that it is one).
-  Both interpreters agree with each other here.
+  `atomic_new` (*Atomics*), so this is the compiled side's. Both interpreters agree with each
+  other here. **Fixed at runtime ABI 38:** `nz.atomic_cell` allocates the cell in a backing of a
+  string's shape whose length is -1, which `nz.str_release` frees without counting; the LIR
+  lowering of `atomic_new` calls it instead of `nz.str_alloc`. Every tier — the interpreter, LLVM
+  at -O0 and -O2, Cranelift, and Nazm's own generator — now reports `strings allocated=0` for
+  `atomic_new(0); atomic_new(1)` (`atomics::an_atomic_is_no_string_in_the_memory_report_on_any_tier`,
+  mutants `r4-an-atomic-cell-is-marked-a-string` and `r4-a-string-release-counts-an-atomic-cell`).
+  The smaller change of the two the finding allowed: the cell keeps a string's shape, so every
+  retain and release of an `Atomic` is unchanged. R3's `toolchain/pipeline/rtext.nz` holds a copy
+  of the runtime's text and follows it at R3's next round.
 - **This interpreter read sockets later than threads do** (fixed, D10, *A connection made or bytes
   written give way*): one task ran on after writing or connecting, so its peer read two answers at
   once (two strings fewer) or, in a connect-close-drain, never accepted at all. Now equal to the
@@ -379,3 +386,8 @@ What remains between the interpreters and the compiled tiers is the system's: ho
 what it delivers (the LLVM count of the malformed-requests program varies run to run). The Rust
 interpreter itself is racy on a client that connects, closes and drains at once (`0 requests on
 0` or `on 1` under load), so that shape is not a case of the suite.
+
+After the fix, on main's `@std/http` of 2026-10-16 (C4's), three runs each: the loopback exchange
+924 strings on the Rust interpreter, LLVM and Cranelift every time; the malformed requests 2,172 on
+the Rust interpreter, 2,168–2,172 compiled (how the reads split); the connections in tasks 1,388 on
+the Rust interpreter, 1,389–1,390 compiled (four clients at once).
