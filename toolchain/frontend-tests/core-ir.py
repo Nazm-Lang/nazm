@@ -23,13 +23,18 @@ every one, `%%document` on a line of its own and the whole document as `nazm cor
 """
 
 import json
+import re
 import sys
 
 PARTS = ("entry", "modules", "types", "statics", "impls", "derived_hash")
 
 
 def compact(v) -> str:
-    return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+    # As `print.rs` quotes: only `\n`, `\r` and `\t` of the control characters by name, the rest
+    # as `\u00XX` — where Python's encoder also names `\b` and `\f`.
+    text = json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+    return re.sub(r"(?<!\\)((?:\\\\)*)\\([bf])",
+                  lambda m: m.group(1) + ("\\u0008" if m.group(2) == "b" else "\\u000c"), text)
 
 
 def want(status: int) -> int:

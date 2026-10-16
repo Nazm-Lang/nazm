@@ -2538,6 +2538,9 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
     if callee >= 0 {
         if ck_fn_is_foreign(c, callee) { return co_stopped(lo, "a foreign call"); }
         let mut ret = ck_fn_ret_ty(c, callee);
+        // A call binds the callee's effect parameter (N51): a function type in its result says
+        // what the call bound, as the checker formed it.
+        if ck_fn_effect_param(c, callee) && ck_site_ret(c, site) >= 0 { ret = ck_site_ret(c, site); }
         let mut targs = "[]";
         // A generic call: the type arguments the checker settled, and the result it formed.
         if ck_fn_type_params(c, callee) > 0 {
@@ -2567,7 +2570,16 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
         strs_push(fields, co_field("args", co_list_of(args)));
         return co_node(lo, "builtin", str_join(fields, ""), ret, span);
     }
-    co_stopped(lo, "a call through a value")
+    // Through a binding of function type (N50): the binding, at the callee, of the type the
+    // checker reached.
+    let ft = ck_site_indirect(c, site);
+    if ft < 0 { return co_stopped(lo, "a call the checker resolved to nothing"); }
+    let l = co_local_at(lo, cs);
+    if co_halted(lo) { return ""; }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("callee", co_node(lo, "local", co_field_first("local", int_to_str(l)), ft, cs)));
+    strs_push(fields, co_field("args", co_list_of(args)));
+    co_node(lo, "call_indirect", str_join(fields, ""), ck_fn_type_ret(c, ft), span)
 }
 
 // A constant's use (`const_value`): its value as a literal of its type, at the name; a static
@@ -2797,6 +2809,12 @@ fn co_var(lo: Lo, name: Str, span: Int) -> Str {
     if ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span)) < 0 {
         let u = ck_const_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
         if u >= 0 { return co_const_use(lo, u, name, span); }
+        // A named function as a value (N50): the checker recorded which, and its type.
+        let v = ck_fn_value_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+        if v >= 0 {
+            let f = co_field_first("function", json_str(fx_fn_identity(lo.f, ck_fn_value_fn(lo.c, v))));
+            return co_node(lo, "fn_value", f, ck_fn_value_ty(lo.c, v), span);
+        }
     }
     let l = co_local_at(lo, span);
     if co_halted(lo) { return ""; }
