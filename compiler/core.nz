@@ -1090,7 +1090,15 @@ fn co_value_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
                 ty = held_ty;
             }
         } else {
-            co_halt(lo, "a block whose value is wanted with no final expression");
+            // `{}` where a `Map[K, V]` is expected (R1.5, D5): the empty map, the call
+            // `hashmap_new()` the checker read at the braces.
+            let span = sx_field(t, b, "span");
+            if ints_len(sx_items(t, sx_field(t, b, "statements"))) == 0 && ck_site_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span)) >= 0 {
+                tail = co_call_parts(lo, span, strs_new(), ints_new(), span);
+                ty = co_last_ty(lo);
+            } else {
+                co_halt(lo, "a block whose value is wanted with no final expression");
+            }
         }
     }
     co_truncate_defers(lo, mark);

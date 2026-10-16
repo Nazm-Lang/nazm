@@ -8346,10 +8346,11 @@ Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" "
 Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused.
 Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused.
 Repointed by the R5 fixes, which moved it to 88: an entry that accepted a pattern `let` rebinding a name in its own scope must not be reused.
-Repointed by C1, which moved it to 89 for the TLS built-ins: an entry that refused `os_tls_read` must not be reused."""
+Repointed by C1, which moved it to 89 for the TLS built-ins: an entry that refused `os_tls_read` must not be reused.
+Repointed by R1.5 (D5), which moved it to 90 for the empty map: an entry that refused `let m: Map[Str, Int] = {}` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 89;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 88;"
+find = "pub const SEMANTIC_EPOCH: u32 = 90;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 89;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -20583,3 +20584,19 @@ file = "library/std/file.nz"
 find = "            if start < m {"
 replace = "            if start < m && false {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere" }]
+
+[[mutation]]
+name = "r1-5-braces-are-never-an-empty-map"
+why = "`{}` where a `Map[K, V]` is expected stays the empty block, so `let m: Map[Str, Int] = {}` is refused as producing no value (R1.5, D5)"
+file = "crates/nazm-core/src/check/expr.rs"
+find = '''        if !self.show(want).starts_with("HashMap[") {'''
+replace = '''        if want == want {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_map_is_braces_where_a_map_is_expected_everywhere" }]
+
+[[mutation]]
+name = "r1-5-an-empty-map-is-lowered-as-a-block"
+why = "the checker reads `{}` as the empty map but Core IR lowers it as an empty block, which has no value to give (R1.5, D5)"
+file = "crates/nazm-core/src/lower.rs"
+find = "                    (Ends::FallsThrough, None) if self.res.named_method(b.span) => {"
+replace = "                    (Ends::FallsThrough, None) if b.span.start > b.span.end => {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_map_is_braces_where_a_map_is_expected_everywhere" }]

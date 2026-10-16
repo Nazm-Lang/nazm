@@ -398,7 +398,10 @@ use crate::digest::{self, Framed};
 /// `os_tls_pull`, `os_tls_read`, `os_tls_write`, `os_tls_close`, `os_tls_info`) moved from refused
 /// (`N0200`) to accepted, and their names became the language's; the engine's `nz_tls_*` became
 /// reserved C symbols, so a foreign declaration of one moved from accepted to refused (`N0383`).
-pub const SEMANTIC_EPOCH: u32 = 89;
+/// `90` — R1.5, 2026-10-16. `{}` where a `Map[K, V]` is expected is the empty map (D5): `let m:
+/// Map[Str, Int] = {}`, and `{}` as such an argument or field, moved from refused (`N0300`) to
+/// accepted.
+pub const SEMANTIC_EPOCH: u32 = 90;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

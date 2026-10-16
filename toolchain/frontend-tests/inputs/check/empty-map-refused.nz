@@ -1,0 +1,5 @@
+// R1.5, D5: `{}` with no `Map` expected is the empty block, and a value wanted of it is refused.
+fn main() {
+    let e = {}
+    println(e)
+}
