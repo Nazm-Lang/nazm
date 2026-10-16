@@ -20,6 +20,7 @@
 use "../../compiler/syntax.nz"
 use "../../compiler/diag.nz"
 use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
 use "../../compiler/facts.nz"
 use "cli.nz"
 use "front.nz"
@@ -81,28 +82,6 @@ fn stat_kind(io: IoCap, p: Str) -> Int {
 fn is_dir(io: IoCap, p: Str) -> Bool { stat_kind(io, p) == 1 }
 
 fn exists(io: IoCap, p: Str) -> Bool { stat_kind(io, p) >= 0 }
-
-// The directory holding `path`, lexically: "." for a bare name.
-fn dir_of(path: Str) -> Str {
-    let mut i = str_len(path)
-    while i > 0 && str_byte(path, i - 1) != 47 { i -= 1 }
-    if i == 0 { return "." }
-    if i == 1 { return "/" }
-    str_slice(path, 0, i - 1)
-}
-
-// Whether a package manifest or a `nazm.root` marker is in the directory holding `path` or any
-// above it — `root::decide`'s and `package::profile_graph`'s walks, which this port does not carry.
-// Upwards by `..`, which ends at `/` as `/..`; deeper than 64 directories is not looked at.
-fn project_above(io: IoCap, path: Str) -> Str {
-    let mut dir = dir_of(path)
-    for _ in 0..64 {
-        if exists(io, dir + "/nazm.toml") { return "a package (a `nazm.toml` at or above the file)" }
-        if exists(io, dir + "/nazm.root") { return "a `nazm.root` marker" }
-        dir = if dir == "/" { "/" } else { dir + "/.." }
-    }
-    ""
-}
 
 // Whether `read_to_string` reads `path` whole: it opens, it is not a directory, and it is UTF-8.
 fn readable_text(io: IoCap, path: Str) -> Bool {
@@ -178,47 +157,248 @@ fn plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
 
 // --- the command ----------------------------------------------------------------------------------
 
+// The restriction profiles, in `Profile::ALL`'s order.
+fn profiles() -> Strs {
+    let out = strs_new()
+    strs_push(out, "general")
+    strs_push(out, "embedded")
+    strs_push(out, "critical")
+    strs_push(out, "cyber")
+    strs_push(out, "realtime")
+    strs_push(out, "web3")
+    strs_push(out, "accounts")
+    strs_push(out, "authority")
+    strs_push(out, "kernel")
+    strs_push(out, "robotics")
+    strs_push(out, "automotive")
+    strs_push(out, "aerospace")
+    strs_push(out, "assurance")
+    strs_push(out, "industrial")
+    strs_push(out, "medical")
+    out
+}
+
+// `profile::unknown`: a name no profile has (`N0511`), status 1.
+fn unknown_profile(io: IoCap, name: Str) -> Int {
+    eprint("error[N0511]: `--profile` names the profile `" + name + "`, which does not exist" + nl())
+    eprint("  = help: the profiles are " + str_join(profiles(), ", ") + nl())
+    exit_with(1)
+    0
+}
+
+fn contains(s: Str, p: Str) -> Bool {
+    let n = str_len(p)
+    let mut i = 0
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == p { return true }
+        i += 1
+    }
+    false
+}
+
+// The file of diagnostic `i`: the one the stage named, else the last whose text begins at or before
+// its offset (`dg_render`'s rule).
+fn file_at(d: Diags, i: Int, bases: Ints) -> Int {
+    if ints_get(d.file, i) >= 0 { return ints_get(d.file, i) }
+    let at = ints_get(d.start, i)
+    let mut f = 0
+    for k in 0..ints_len(bases) {
+        if ints_get(bases, k) <= at { f = k }
+    }
+    f
+}
+
+// `Graph::enable` of a package that declares no features (the front end reads no `[features]`):
+// each one asked for is refused, the messages sorted and each once, status 1.
+fn undeclared_features(io: IoCap, p: Packages, features: Strs) -> Int {
+    let name = pk_name(p, pk_root_package(p))
+    let out = strs_new()
+    for i in 0..strs_len(features) {
+        let m = "`--features` asks `" + name + "` for the feature `" + strs_get(features, i) + "`, which it does not declare"
+        let mut at = 0
+        while at < strs_len(out) && fe_str_less(strs_get(out, at), m) { at += 1 }
+        if at == strs_len(out) || strs_get(out, at) != m {
+            strs_push(out, "")
+            let mut j = strs_len(out) - 1
+            while j > at {
+                strs_set(out, j, strs_get(out, j - 1))
+                j -= 1
+            }
+            strs_set(out, at, m)
+        }
+    }
+    for i in 0..strs_len(out) { eprint("error[N0500]: " + strs_get(out, i) + nl()) }
+    exit_with(1)
+    0
+}
+
+// `checking::library` (N74): each module of a library package's source root checked as a module,
+// with what it imports, each error reported once however many modules reach it.
+fn check_library(io: IoCap, modules: Strs, library: Str, json: Bool) -> Int {
+    let seen = strs_new()
+    let mut errors = 0
+    for k in 0..strs_len(modules) {
+        let path = strs_get(modules, k)
+        let f = fx_check_module(path, library, fe_host_os(), fe_host_arch(), io)
+        if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
+        let d = fx_diags(f)
+        let names = fe_names(f, "")
+        let out = strs_new()
+        if fe_load_failed(f) {
+            if !fx_carried(f) { refuse(io, fx_why(f)) }
+            let all = ints_new()
+            let mut missing = true
+            for i in 0..dg_len(d) {
+                if strs_get(d.code, i) != "N0205" { missing = false }
+                ints_push(all, i)
+            }
+            emit(f, names, all, json, out)
+            eprint(str_join(out, ""))
+            exit_with(if missing { 3 } else { 1 })
+        }
+        if !fx_carried(f) { refuse(io, fx_why(f)) }
+        if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
+        let bases = fe_bases(f)
+        let fresh = ints_new()
+        for i in 0..dg_len(d) {
+            if dg_severity(d, i) == "error" {
+                let m = file_at(d, i, bases)
+                let base = ints_get(bases, m)
+                let key = strs_get(names, m) + str_from_byte(0) + int_to_str(ints_get(d.start, i) - base) + ":"
+                        + int_to_str(ints_get(d.end, i) - base) + ":" + strs_get(d.code, i)
+                let mut known = false
+                for s in 0..strs_len(seen) {
+                    if strs_get(seen, s) == key { known = true }
+                }
+                if !known {
+                    strs_push(seen, key)
+                    ints_push(fresh, i)
+                }
+            }
+        }
+        errors += ints_len(fresh)
+        emit(f, names, fresh, json, out)
+        eprint(str_join(out, ""))
+    }
+    if errors == 0 {
+        print("ok" + nl())
+        return 0
+    }
+    eprint("nazm: " + int_to_str(errors) + " error" + plural(errors) + nl())
+    exit_with(1)
+    0
+}
+
 // `nazm check`, its arguments read into `c` (`check_cli`) from where `cli_from` says.
 pub fn check_command(io: IoCap, c: Cli) -> Int {
     cli_parse(io, c)
-    let file = cli_value(c, 0)
+    let mut file = cli_value(c, 0)
+    let named = file
     let json = cli_present(c, 1)
+    let no_cache = cli_present(c, 3)
+    let report = cli_present(c, 4)
     let locked = cli_present(c, 6)
+    let profile = cli_value(c, 7)
     let features = cli_values(c, 8)
     let deny = cli_present(c, 10)
-    if cli_present(c, 2) { refuse(io, "`--source-root`") }
-    if cli_present(c, 4) { refuse(io, "`--cache-report`") }
-    if cli_present(c, 5) { refuse(io, "`--summary-json`") }
-    if cli_present(c, 7) { refuse(io, "`--profile`") }
-    if cli_present(c, 9) { refuse(io, "`--profile-report`") }
-
-    // `prepare`: a directory is a package or nothing.
-    if is_dir(io, file) {
-        if exists(io, file + "/nazm.toml") { refuse(io, "a package") }
-        eprint("nazm: `" + file + "` is a directory with no `nazm.toml`, so it is not a package" + nl())
-        exit_with(3)
-    }
-    let project = project_above(io, file)
-    if project != "" { refuse(io, project) }
-    if locked {
-        eprint("nazm: `--locked` holds a package build to its lockfile, and `" + file + "` is not in a package" + nl())
-        exit_with(5)
-    }
     let library = os_env_get("NAZM_LIBRARY")
     if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
-    if exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
-
     let prefix = fe_prefix(io, file)
-    let f = fx_check(prefix + file, library, fe_host_os(), fe_host_arch(), io)
+
+    // `prepare`: a directory is a package or nothing; a library package — no `main` — is checked as
+    // its modules before anything else is asked; a package's directory stands for its `main`.
+    let mut packaged = false
+    let mut entry = false
+    let mut packages = pk_none()
+    if is_dir(io, file) {
+        if fe_stat_kind(io, file + "/nazm.toml") != 0 {
+            if exists(io, file + "/nazm.toml") { refuse(io, "a manifest that is not a file") }
+            eprint("nazm: `" + file + "` is a directory with no `nazm.toml`, so it is not a package" + nl())
+            exit_with(3)
+        }
+        let dir = pk_normalise(prefix + file)
+        let m = pk_parse(read_file(pk_join(dir, "nazm.toml")))
+        // A manifest that is not one: `resolve`'s diagnostic, the manifest named as given.
+        if pk_state(m) == 0 {
+            let shown = if str_byte(file, str_len(file) - 1) == 47 { file + "nazm.toml" } else { file + "/nazm.toml" }
+            eprint("error[N0500]: `" + shown + "`: " + pk_why(m) + nl() + "nazm: 1 error" + nl())
+            exit_with(1)
+        }
+        if pk_state(m) != 1 { refuse(io, "a manifest that does not resolve here") }
+        let declared = pk_normalise(pk_join(dir, strs_get(m.root, 0)))
+        let source_root = fe_canonical(io, declared)
+        if source_root == "" { refuse(io, "a package without its source root") }
+        packages = pk_context(declared, io)
+        if pk_packages_state(packages) != 1 { refuse(io, "a package that does not resolve here") }
+        if ints_get(m.has_main, 0) == 0 {
+            let found = strs_new()
+            if !fe_walk(io, source_root, found) { refuse(io, "a source root that cannot be read") }
+            check_library(io, fe_sort_paths(found), library, json)
+            return 0
+        }
+        let main = strs_get(m.main, 0)
+        file = if fe_starts(main, "/") { main } else { pk_join(source_root, main) }
+        packaged = true
+        entry = true
+    }
+    // `package::entry`: the package the file lies in, held to its lockfile when asked.
+    let abs = if entry { file } else { prefix + file }
+    let root = pk_decide(abs, io)
+    if pk_root_how(root) == 1 && !entry {
+        packaged = true
+        packages = pk_context(pk_root_path(root), io)
+        if pk_packages_state(packages) != 1 { refuse(io, "a package that does not resolve here") }
+    }
+    if locked && !packaged {
+        eprint("nazm: `--locked` holds a package build to its lockfile, and `" + named + "` is not in a package" + nl())
+        exit_with(5)
+    }
+    if locked {
+        // `verify_locked`: a lockfile that is not there; one that is, is not read here.
+        let lock = fe_canonical(io, strs_get(packages.dirs, pk_root_package(packages))) + "/nazm.lock"
+        if exists(io, lock) { refuse(io, "`--locked` (the lockfile's verification)") }
+        eprint("error[N0505]: `--locked`, and there is no `" + lock + "`" + nl())
+        eprint("  = help: `nazm lock` writes it" + nl())
+        eprint("nazm: 1 error" + nl())
+        exit_with(1)
+    }
+    // `profile::enforce`: an unknown profile is refused before anything is checked; a profile
+    // other than `general`, and the report, are not carried.
+    if cli_present(c, 7) {
+        let known = profiles()
+        let mut found = false
+        for i in 0..strs_len(known) {
+            if strs_get(known, i) == profile { found = true }
+        }
+        if !found { unknown_profile(io, profile) }
+        if profile != "general" { refuse(io, "the profile `" + profile + "`") }
+    }
+    if cli_present(c, 9) { refuse(io, "`--profile-report`") }
+    if cli_present(c, 2) { refuse(io, "`--source-root` (the front end decides the root itself)") }
+    if cli_present(c, 5) { refuse(io, "`--summary-json` (the language service's diagnostic identities)") }
+    if report && !no_cache { refuse(io, "`--cache-report` with the check cache") }
+    if !entry && exists(io, file) && !readable_text(io, file) { refuse(io, "a root module that is not a readable UTF-8 file") }
+
+    let f = fx_check(abs, library, fe_host_os(), fe_host_arch(), io)
+    // `root::decide`'s refusal: a manifest that is not one, a marker that is not empty.
+    if fx_refusal(f) != "" {
+        // `root::decide`'s refusal, in its words: 3 for what cannot be read, else 1 (`root_status`).
+        let why = fx_refusal(f)
+        eprint("nazm: " + why + nl())
+        let unreadable = fe_starts(why, "could not read")
+                || (str_len(why) >= 18 && str_slice(why, str_len(why) - 18, str_len(why)) == "is not a directory")
+        exit_with(if unreadable { 3 } else { 1 })
+    }
     let d = fx_diags(f)
-    fe_unprefix_diags(io, d, prefix, prefix + file)
-    let names = fe_names(f, prefix)
+    let shown = if entry { "" } else { prefix }
+    fe_unprefix_diags(io, d, shown, abs)
+    let names = fe_names(f, shown)
     let out = strs_new()
     if fe_load_failed(f) {
+        if !fx_carried(f) { refuse(io, fx_why(f)) }
         let all = ints_new()
         let mut missing = true
         for i in 0..dg_len(d) {
-            if strs_get(d.code, i) == "N0508" { refuse(io, "a package's import") }
             if strs_get(d.code, i) != "N0205" { missing = false }
             ints_push(all, i)
         }
@@ -230,10 +410,24 @@ pub fn check_command(io: IoCap, c: Cli) -> Int {
         for i in 0..strs_len(features) {
             if strs_get(features, i) == "" { refuse(io, "an empty feature") }
         }
+        if packaged { undeclared_features(io, packages, features) }
         eprint("nazm: `--features` enables a package's features, and this program is not in a package" + nl())
         exit_with(5)
     }
     if !fx_carried(f) { refuse(io, fx_why(f)) }
+    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
+    // `--profile general` holds no rule, but `@cfg(profile = …)` sees it: not carried there.
+    if cli_present(c, 7) {
+        for m in 0..fx_modules(f) {
+            if contains(fx_module_text(f, m), "@cfg") { refuse(io, "`--profile` where a module asks `@cfg`") }
+        }
+    }
+    if report {
+        let how = if pk_root_how(root) == 1 { "package" } else { "derived" }
+        let n = int_to_str(fx_modules(f))
+        print("{\"schema\":\"nazm.check-report/1\",\"root\":\"" + how + "\",\"modules\":" + n + ",\"checked\":" + n
+                + ",\"reused\":0,\"missed\":0,\"rejected\":0,\"declined\":0,\"stored\":0}" + nl())
+    }
 
     let warnings = ints_new()
     let errors = ints_new()

@@ -38,8 +38,16 @@
       `tests/args/check.txt` agrees. Since 2026-10-15 run through `fx_check` (design D13): 3,097
       inputs, 3,048 agree, 0 differ, 49 refused (32 packages, 10 package imports, 6 the checker's
       stops, 1 not UTF-8)
-- [ ] 5.2 `--summary-json`, `--cache-report`, `--source-root`, `--profile`, `--profile-report`, packages
-      and `nazm.root` markers (refused today, design D11)
+- [x] 5.2 Packages and package imports (design D15, 2026-10-16): a package's directory (its `main`,
+      or a library's every module), a file in a package with its dependencies, `N0508`, manifests
+      that are not ones, `--locked` without a lockfile, `--features` in a package, `--profile`
+      naming none or `general`, `--cache-report --no-cache`. 3,163 inputs (the repository's
+      packages added): 3,112 agree, 0 differ, 51 refused (44 a pattern `let`, epoch 88, not in
+      R2's checker — hand-back; 6 the checker's stops; 1 not UTF-8); `tests/args/check.txt` 72 of
+      77 agree, 5 refused. Still refused, and why (D15): `--locked` with a lockfile (package
+      digests), other profiles and `--profile-report` (MIR facts), `--cache-report` with the cache,
+      `--source-root` (`fx_check` takes no root), `--summary-json` (N30's diagnostic ids and
+      `state.source`), `nazm.root` markers (the loader stops there)
 
 ## 6. `test`
 - [ ] 6.1 The corpus runner, interpreted and compiled (after R3, R4 and R9 are integrated)

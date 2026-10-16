@@ -64,6 +64,7 @@ fn checked(io: IoCap, file: Str, prefix: Str, library: Str, json: Bool) -> Facts
         exit_with(if fe_starts(why, "could not read") { 3 } else { 1 })
     }
     if !fx_carried(f) { refuse(io, fx_why(f)) }
+    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
     let d = fx_diags(f)
     fe_unprefix_diags(io, d, prefix, prefix + file)
     if fe_load_failed(f) {
