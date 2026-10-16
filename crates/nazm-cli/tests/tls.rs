@@ -834,12 +834,46 @@ fn the_windows_engine_runs_on_a_windows_host() {
     let r = ssh(&format!("cd {there} && drive.exe"));
     ssh(&format!("rmdir /s /q {there}"));
     assert_eq!(r.code, Some(0), "{}", r.stderr);
-    assert_eq!(
-        r.stdout.replace('\r', "").trim_end(),
-        "trusted: config ok, client 1, TLSv1.2 [http/1.1], wrote 5, read 5 [hello], closed 0\n\
-         another name: config ok, client -65603\n\
-         expired: config ok, client -65602\n\
-         self-signed: config ok, client -65601\n\
-         platform store: config ok, client -65601"
+    assert_eq!(r.stdout.replace('\r', "").trim_end(), WINDOWS_DRIVER_SAYS);
+}
+
+/// What the engine driver prints on Windows: TLS 1.2 (`SCHANNEL_CRED`), and each refusal's status.
+const WINDOWS_DRIVER_SAYS: &str =
+    "trusted: config ok, client 1, TLSv1.2 [http/1.1], wrote 5, read 5 [hello], closed 0\n\
+     another name: config ok, client -65603\n\
+     expired: config ok, client -65602\n\
+     self-signed: config ok, client -65601\n\
+     platform store: config ok, client -65601";
+
+/// The Windows engine on the Windows host this test runs on, the server side included. SChannel
+/// keeps a server's key in the user's key storage, which needs a loaded user profile: GitHub's
+/// `windows-latest` runner has one; a key-only OpenSSH logon (`win-dell`) has not
+/// (`NCryptOpenKey`: `NTE_BAD_KEYSET`). CI runs it by name (`.github/workflows/ci.yml`,
+/// `windows-tls`), with clang, MinGW-w64's gcc and OpenSSL 3 on `PATH`.
+#[cfg(windows)]
+#[test]
+#[ignore = "needs a Windows host with a loaded user profile, clang, MinGW-w64's gcc and OpenSSL 3"]
+fn the_windows_engine_runs_on_this_windows_host() {
+    assert!(tool_answers(MINGW_GCC), "{MINGW_GCC} is not on PATH");
+    let d = with_certificates().expect("OpenSSL 3's `openssl` on PATH");
+    let objects = engine_objects(
+        d.path(),
+        "x86_64-pc-windows-gnu",
+        &nazm_lir::runtime::tls::emit_schannel(),
     );
+    let mut link = Command::new(MINGW_GCC);
+    link.current_dir(d.path())
+        .arg("engine_drive.c")
+        .args(&objects);
+    link.args(["-lsecur32", "-lcrypt32", "-lncrypt", "-o", "drive.exe"]);
+    let r = run_bounded(&mut link, MINGW_GCC);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let r = run_bounded(
+        Command::new(d.path().join("drive.exe")).current_dir(d.path()),
+        "drive.exe",
+    );
+    // The driver's own lines, in the job's log whatever the verdict.
+    println!("{}", r.stdout);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    assert_eq!(r.stdout.replace('\r', "").trim_end(), WINDOWS_DRIVER_SAYS);
 }
