@@ -21,6 +21,7 @@ pub(crate) mod net;
 pub(crate) mod os;
 pub mod platform;
 pub mod switch;
+pub mod tls;
 pub mod wasi;
 pub mod wasm;
 
@@ -77,6 +78,9 @@ pub struct Needs {
     /// `Int128` and `UInt128`'s division, signed product, float conversions and text (R1b,
     /// L13b), which take the C toolchain's 128-bit helpers.
     pub wide: bool,
+    /// TLS (v1 track C1): the session table and the `nz.os_tls_*` entries, with the per-target
+    /// `tls` unit ([`tls::emit_tls`]) and the platform's TLS library linked beside the runtime.
+    pub tls: bool,
     /// The program has one thread (the speed milestone): its `main` holds no `SpawnCap`,
     /// `NetCap` or `ForeignCap` and it is not a library, so nothing can start another — the
     /// failure state and the stack limit are then plain globals, not thread-local ones, whose
@@ -103,6 +107,7 @@ impl Needs {
             files: self.files || other.files,
             net: self.net || other.net,
             wide: self.wide || other.wide,
+            tls: self.tls || other.tls,
             single: self.single || other.single,
         }
     }
@@ -126,6 +131,7 @@ impl Needs {
             (self.files, "files"),
             (self.net, "net"),
             (self.wide, "wide"),
+            (self.tls, "tls"),
         ]
         .into_iter()
         .filter_map(|(on, n)| on.then_some(n))
@@ -152,6 +158,7 @@ impl Needs {
                 "files" => n.files = true,
                 "net" => n.net = true,
                 "wide" => n.wide = true,
+                "tls" => n.tls = true,
                 _ => return None,
             }
         }
@@ -307,7 +314,13 @@ pub fn escape(s: &str) -> String {
 /// and comparisons, an RV32IMC's the masked 64-bit atomics, libgcc's 64-bit division and the C
 /// memory functions with 32-bit sizes; and a board's entry copies data from flash, zeroes the
 /// rest and calls the manifest's `init` (`nz_board_init`) before the interrupts and `main`.
-pub const RUNTIME_ABI_REVISION: u32 = 36;
+/// 37 is v1 track C1's TLS: the `tls` part — the session table `nz.tls_slots` and the entries
+/// `nz.os_tls_client_config`, `nz.os_tls_server_config`, `nz.os_tls_connect`, `nz.os_tls_accept`,
+/// `nz.os_tls_handshake`, `nz.os_tls_push`, `nz.os_tls_pull`, `nz.os_tls_read`, `nz.os_tls_write`,
+/// `nz.os_tls_close` and `nz.os_tls_info` — over the per-target `tls` unit's `nz_tls_*`
+/// ([`tls::emit_tls`]: OpenSSL 3 on macOS and Linux, with the Security framework's trust on macOS),
+/// linked with the platform's TLS library.
+pub const RUNTIME_ABI_REVISION: u32 = 37;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -327,6 +340,7 @@ pub const EVERYTHING: Needs = Needs {
     files: true,
     net: true,
     wide: true,
+    tls: true,
     single: false,
 };
 
@@ -349,6 +363,7 @@ pub fn digest() -> &'static str {
             h.update(platform::emit_os(t).as_bytes());
             h.update(platform::emit_stack(t).as_bytes());
             h.update(platform::emit_init(t).unwrap_or_default().as_bytes());
+            h.update(tls::emit_tls(t).unwrap_or_default().as_bytes());
         }
         for i in INVENTORY {
             h.update(format!("{i:?}").as_bytes());
@@ -396,6 +411,8 @@ pub enum Part {
     Net,
     /// `Int128` and `UInt128` (R1b, L13b).
     Wide,
+    /// TLS sessions over buffers (v1 track C1).
+    Tls,
     /// The counted heap (R1d, D5): its own unit, linked only by `nazm build --heap-limit`.
     Heap,
     /// The C library the runtime itself links against.
@@ -526,6 +543,17 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.os_shutdown", [I64, I64], Some(Word::I64), Net, "0, or -errno (Gate 2)"),
     import!("nz.os_net_addr", [I64, I64, Ptr, I64], Some(Word::I64), Net, "a socket's own or peer's address into the caller's buffer; its length (Gate 2)"),
     import!("nz.os_resolve", [Ptr, I64, I64, Ptr, I64], Some(Word::I64), Net, "borrows the name; the addresses into the caller's buffer; a length, or a status (Gate 2)"),
+    import!("nz.os_tls_client_config", [Ptr, I64, Ptr, I64], Some(Word::I64), Tls, "borrows the anchors and the ALPN names; a configuration's id, or a status (C1)"),
+    import!("nz.os_tls_server_config", [Ptr, I64, Ptr, I64, Ptr, I64], Some(Word::I64), Tls, "borrows the chain, the key and the ALPN names; a configuration's id, or a status (C1)"),
+    import!("nz.os_tls_connect", [I64, Ptr, I64], Some(Word::I64), Tls, "borrows the host name; a session's id, or a status (C1)"),
+    import!("nz.os_tls_accept", [I64], Some(Word::I64), Tls, "a session's id, or a status (C1)"),
+    import!("nz.os_tls_handshake", [I64], Some(Word::I64), Tls, "1 once the handshake is done, or a status (C1)"),
+    import!("nz.os_tls_push", [I64, Ptr, I64], Some(Word::I64), Tls, "borrows the ciphertext and takes a copy of all of it; its length, or a status (C1)"),
+    import!("nz.os_tls_pull", [I64, Ptr, I64], Some(Word::I64), Tls, "ciphertext to send into the caller's buffer; its length (C1)"),
+    import!("nz.os_tls_read", [I64, Ptr, I64], Some(Word::I64), Tls, "plaintext into the caller's buffer; its length, 0 at the peer's close, or a status (C1)"),
+    import!("nz.os_tls_write", [I64, Ptr, I64], Some(Word::I64), Tls, "borrows the plaintext; how much was taken, or a status (C1)"),
+    import!("nz.os_tls_close", [I64, Ptr, I64], Some(Word::I64), Tls, "the last ciphertext into the caller's buffer; its length, or a status; the id dies (C1)"),
+    import!("nz.os_tls_info", [I64, I64, Ptr, I64], Some(Word::I64), Tls, "a fact about the session into the caller's buffer; its length, or a status (C1)"),
     import!("nz.os_env_find", [Ptr, I64, Ptr], Some(Word::Ptr), Files, "borrows the name; the value inside the environment and its length through the pointer, or an empty string and -1 (Gate 2)"),
     import!("nz.os_env_count", [], Some(Word::I64), Files, "how many entries the environment has (Gate 2)"),
     import!("nz.os_random_bytes", [Ptr, I64], Some(Word::I64), Files, "fills the caller's buffer from the system's entropy; its length, or -errno (Gate 2)"),
@@ -838,6 +866,25 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_shutdown", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "shut a connection's reading or writing (Gate 2)", "none"),
     rt!("nz.os_net_addr", "i64" ("i64", "i64", "ptr", "i64") "", false, Net, "io", Never, Any, "a socket's own or peer's address (Gate 2)", "writes the caller's buffer"),
     rt!("nz.os_resolve", "i64" ("ptr", "i64", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "resolve a name (Gate 2)", "borrows the name; writes the caller's buffer"),
+    rt!("nz.os_tls_client_config", "i64" ("ptr", "i64", "ptr", "i64") "", false, Tls, "io", Status, Any, "a client's TLS configuration: the platform's trust store or the named anchors (C1)", "borrows both; the engine keeps copies"),
+    rt!("nz.os_tls_server_config", "i64" ("ptr", "i64", "ptr", "i64", "ptr", "i64") "", false, Tls, "io", Status, Any, "a server's TLS configuration: its chain and key, PEM (C1)", "borrows all three; the engine keeps copies"),
+    rt!("nz.os_tls_connect", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "a client session verifying a host (C1)", "borrows the host; holds the configuration's slot while it copies from it"),
+    rt!("nz.os_tls_accept", "i64" ("i64") "", false, Tls, "io", Status, Locked, "a server session (C1)", "holds the configuration's slot while it copies from it"),
+    rt!("nz.os_tls_handshake", "i64" ("i64") "", false, Tls, "io", Status, Locked, "one step of the handshake over what has been pushed (C1)", "holds the session's slot"),
+    rt!("nz.os_tls_push", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "ciphertext received, into the engine (C1)", "borrows the bytes; the engine copies them"),
+    rt!("nz.os_tls_pull", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Never, Locked, "ciphertext the engine wants sent (C1)", "writes the caller's buffer"),
+    rt!("nz.os_tls_read", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "plaintext from what has been pushed (C1)", "writes the caller's buffer"),
+    rt!("nz.os_tls_write", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "plaintext into the engine, to be pulled as ciphertext (C1)", "borrows the bytes; the engine copies them"),
+    rt!("nz.os_tls_close", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "end a session or a configuration (C1)", "writes the caller's buffer; frees the engine's objects"),
+    rt!("nz.os_tls_info", "i64" ("i64", "i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "the ALPN name, version, peer or last failure of a session (C1)", "writes the caller's buffer"),
+    rt!("nz.tls_table", "ptr" () "", false, Tls, "", Null, Any, "the session table, made zeroed on first use (C1)", "none"),
+    rt!("nz.tls_put", "i64" ("ptr", "i64") "", false, Tls, "", Status, Any, "a free slot for an engine object: its id, or -24 when the table is full (C1)", "takes the object into the slot"),
+    rt!("nz.tls_slot", "ptr" ("i64") "", false, Tls, "", Null, Any, "an id's slot, or null for an id no slot has (C1)", "none"),
+    rt!("nz.tls_hold", "ptr" ("ptr", "i64", "i64") "", false, Tls, "", Null, Locked, "hold a slot for a live id of a kind: its object, or null with nothing held (C1)", "takes the slot's hold"),
+    rt!("nz.tls_let_go", "void" ("ptr") "", false, Tls, "", Never, Locked, "let a held slot go (C1)", "releases the slot's hold"),
+    rt!("nz.tls_configure", "i64" ("i64", "ptr", "i64", "ptr", "i64", "ptr", "i64") "", false, Tls, "io", Status, Any, "a configuration from the engine, in a slot (C1)", "borrows the buffers"),
+    rt!("nz.tls_open", "i64" ("i64", "i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "a session from a configuration, in a slot (C1)", "holds the configuration's slot while the engine copies from it"),
+    rt!("nz.tls_call", "i64" ("i64", "i64", "ptr", "i64", "i64") "", false, Tls, "io", Status, Locked, "one engine call on a session, its slot held (C1)", "holds the session's slot"),
     rt!("nz.os_env_split", "i64" ("ptr") "", false, Files, "", Never, Any, "where an environment entry's name ends, or -1 (Gate 2)", "borrows the entry"),
     rt!("nz.os_env_nth", "ptr" ("i64", "ptr") "", false, Files, "", Never, Any, "the nth entry of the environment, or the count (Gate 2)", "none"),
     rt!("nz.os_env_count", "i64" () "", false, Files, "io", Never, Any, "how many entries the environment has (Gate 2)", "none"),
@@ -934,6 +981,8 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.net_state", ty: "i64", thread_local: false, writers: "`nz.net_start`, atomically, once (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_poller", ty: "i64", thread_local: false, writers: "`nz.net_start`, once, before the reactor runs (Gate 2)" },
     RuntimeGlobal { symbol: "nz.net_thread", ty: "i64", thread_local: false, writers: "`pthread_create`, once (Gate 2)" },
+    RuntimeGlobal { symbol: "nz.tls_slots", ty: "ptr", thread_local: false, writers: "`nz.tls_table`, atomically, once; the table's slots `nz.tls_put`, `nz.tls_hold`, `nz.tls_let_go` and `nz.os_tls_close`, each by its kind and hold words (C1)" },
+    RuntimeGlobal { symbol: "nz.tls_hint", ty: "i64", thread_local: false, writers: "`nz.tls_put`, atomically (C1)" },
     RuntimeGlobal { symbol: "nz.wd_reload", ty: "i64", thread_local: false, writers: "a board's scheduler, once, as it starts (Gate 3)" },
     RuntimeGlobal { symbol: "nz.wd_left", ty: "i64", thread_local: false, writers: "`nz.watchdog_feed`, and a board's timer tick, atomically (Gate 3)" },
     RuntimeGlobal {
@@ -1158,6 +1207,7 @@ mod tests {
             files: true,
             net: true,
             wide: true,
+            tls: true,
             single: false,
         }
     }
@@ -1390,9 +1440,25 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_six_and_reaches_the_system_only_through_its_platform_layer() {
-        // M1's revision: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 36);
+    fn the_runtime_is_revision_thirty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    {
+        // TLS's revision (C1): a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 37);
+        // The session table is the runtime's; the engine is each target's own unit, and a target
+        // without one has none.
+        assert!(
+            crate::emit_runtime(crate::EVERYTHING).contains("define hidden i64 @nz.os_tls_read(")
+        );
+        for t in crate::switch::SwitchTarget::ALL {
+            let bound = matches!(
+                t,
+                crate::switch::SwitchTarget::Aarch64Darwin
+                    | crate::switch::SwitchTarget::X86_64Darwin
+                    | crate::switch::SwitchTarget::Aarch64Linux
+                    | crate::switch::SwitchTarget::X86_64Linux
+            );
+            assert_eq!(crate::tls::emit_tls(t).is_some(), bound, "{t:?}");
+        }
         // The pool's default worker count is the processors online, from each target's stack unit.
         assert!(crate::emit_runtime(crate::EVERYTHING).contains("call i64 @nz.os_cpus()"));
         for t in crate::switch::SwitchTarget::ALL {

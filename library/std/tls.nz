@@ -1,0 +1,332 @@
+// `@std/tls`: TLS over a TCP socket, client and server, verification always on (v1 track C, C1).
+//
+// Imported with `use "@std/tls";` beside `use "@std/ioerror";` and `use "@std/net";`. The engine is
+// a runtime part (`docs/spec.md`, *TLS*): it works on buffers, and this module moves the bytes
+// through the socket with the parking `os_read` and `os_write`, so a wait for the peer parks the
+// task and never holds a worker. A client always verifies the server's chain and name — against
+// the platform's trust store, or only the anchors it names — and nothing here turns that off. TLS
+// 1.2 at least; the engine's own cipher suites. The design record is `openspec/changes/
+// v1-every-domain/design.md`, section C.3.
+
+use "@std/ioerror";
+use "@std/net";
+
+/// A configuration a session is made from: a client's trust and ALPN names, or a server's
+/// certificate chain, key and ALPN names. An id the runtime holds; it may cross into a task.
+pub struct TlsConfig {
+    id: Int,
+}
+
+/// A TLS session over a connected socket.
+pub struct TlsStream {
+    stream: TcpStream,
+    session: Int,
+}
+
+/// What failed: the socket; the peer's certificate — not trusted, out of its dates, or for another
+/// name; the protocol (an alert, a malformed record, no version or cipher in common); a
+/// certificate or key that could not be read; the peer's connection ended without TLS's close;
+/// or a session already closed.
+pub enum TlsError {
+    Io(error: IoError),
+    Untrusted(why: Str),
+    Expired(why: Str),
+    WrongHost(why: Str),
+    Protocol(why: Str),
+    BadKey(why: Str),
+    Truncated,
+    Closed,
+}
+
+// The runtime's statuses (`docs/spec.md`, *TLS*), and this module's own for a truncated stream.
+fn want() -> Int ! {} { 0 - 65600 }
+fn truncated() -> Int ! {} { 0 - 65606 }
+
+/// The error `status` is, with `why` the engine's sentence.
+pub fn tls_error_from(status: Int, why: Str) -> TlsError ! {} {
+    if status == 0 - 65601 { return TlsError.Untrusted(why: why); }
+    if status == 0 - 65602 { return TlsError.Expired(why: why); }
+    if status == 0 - 65603 { return TlsError.WrongHost(why: why); }
+    if status == 0 - 65604 { return TlsError.Protocol(why: why); }
+    if status == 0 - 65605 { return TlsError.BadKey(why: if str_len(why) == 0 { "a certificate or key that is not PEM, or a key that is not the certificate's" } else { why }); }
+    if status == 0 - 65606 { return TlsError.Truncated(); }
+    if status == 0 - 65536 { return TlsError.Closed(); }
+    TlsError.Io(error: io_error_from(status))
+}
+
+/// `e` as a sentence.
+pub fn tls_error_show(e: TlsError) -> Str ! {} {
+    match e {
+        TlsError.Io(error: x) => io_error_show(x),
+        TlsError.Untrusted(why: w) => str_concat("the peer's certificate is not trusted: ", w),
+        TlsError.Expired(why: w) => str_concat("the peer's certificate is outside its dates: ", w),
+        TlsError.WrongHost(why: w) => str_concat("the peer's certificate is for another name: ", w),
+        TlsError.Protocol(why: w) => str_concat("the TLS protocol failed: ", w),
+        TlsError.BadKey(why: w) => str_concat("the certificate or key was refused: ", w),
+        TlsError.Truncated() => "the peer's connection ended without closing TLS",
+        TlsError.Closed() => "the TLS session is closed",
+    }
+}
+
+// ALPN's wire form of `names`: each a length byte and its bytes. Empty for no names; `None` for a
+// name that is empty or longer than 255 bytes.
+fn alpn_wire(names: Strs) -> Option[Bytes] ! {} {
+    let mut n = 0;
+    let mut i = 0;
+    while i < strs_len(names) {
+        let l = str_len(strs_get(names, i));
+        if l < 1 || l > 255 { return Option[Bytes].None(); }
+        n = n + 1 + l;
+        i = i + 1;
+    }
+    let out = bytes_new(n);
+    let mut at = 0;
+    i = 0;
+    while i < strs_len(names) {
+        let s = strs_get(names, i);
+        bytes_set(out, at, UInt8(str_len(s)));
+        let mut j = 0;
+        while j < str_len(s) {
+            bytes_set(out, at + 1 + j, UInt8(str_byte(s, j)));
+            j = j + 1;
+        }
+        at = at + 1 + str_len(s);
+        i = i + 1;
+    }
+    Option[Bytes].Some(value: out)
+}
+
+fn configured(id: Int) -> Result[TlsConfig, TlsError] ! {} {
+    if id < 0 { Result[TlsConfig, TlsError].Err(error: tls_error_from(id, "")) } else { Result[TlsConfig, TlsError].Ok(value: TlsConfig(id: id)) }
+}
+
+fn no_names() -> Result[TlsConfig, TlsError] ! {} {
+    Result[TlsConfig, TlsError].Err(error: TlsError.Io(error: io_error_new(IoErrorKind.InvalidInput(), "an ALPN name that is empty or longer than 255 bytes")))
+}
+
+/// A client's configuration trusting only the certificates in `ca_pem` (PEM; empty: the
+/// platform's trust store) and offering the ALPN names `alpn`, in order of preference.
+pub fn tls_client(ca_pem: Bytes, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io } {
+    match alpn_wire(alpn) {
+        Option.Some(value: w) => configured(os_tls_client_config(ca_pem, w)),
+        Option.None() => no_names(),
+    }
+}
+
+/// A client's configuration trusting the platform's store, offering no ALPN names.
+pub fn tls_client_system() -> Result[TlsConfig, TlsError] ! { io } {
+    configured(os_tls_client_config(bytes_new(0), bytes_new(0)))
+}
+
+/// A server's configuration: its certificate chain `cert_pem` (the leaf first, PEM) and its key
+/// `key_pem` (PEM, unencrypted), choosing among the client's ALPN names by the order of `alpn`.
+pub fn tls_server(cert_pem: Bytes, key_pem: Bytes, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io } {
+    match alpn_wire(alpn) {
+        Option.Some(value: w) => configured(os_tls_server_config(cert_pem, key_pem, w)),
+        Option.None() => no_names(),
+    }
+}
+
+fn read_all(io: IoCap, path: Str) -> Result[Bytes, TlsError] ! { io } {
+    let h = os_open_read(path);
+    let s = os_status(h);
+    if s < 0 { return Result[Bytes, TlsError].Err(error: TlsError.Io(error: io_context(io_error_from(s), path))); }
+    let chunks = strs_new();
+    let buf = bytes_new(16384);
+    let mut n = os_read(h, buf);
+    while n > 0 {
+        strs_push(chunks, bytes_to_str(bytes_slice(buf, 0, n)));
+        n = os_read(h, buf);
+    }
+    os_close(h);
+    if n < 0 { return Result[Bytes, TlsError].Err(error: TlsError.Io(error: io_context(io_error_from(n), path))); }
+    Result[Bytes, TlsError].Ok(value: bytes_from_str(str_join(chunks, "")))
+}
+
+/// `tls_server` from the PEM files at `cert_file` and `key_file`.
+pub fn tls_server_from_files(io: IoCap, cert_file: Str, key_file: Str, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io } {
+    let cert = match read_all(io, cert_file) {
+        Result.Ok(value: b) => b,
+        Result.Err(error: e) => { return Result[TlsConfig, TlsError].Err(error: e); },
+    };
+    let key = match read_all(io, key_file) {
+        Result.Ok(value: b) => b,
+        Result.Err(error: e) => { return Result[TlsConfig, TlsError].Err(error: e); },
+    };
+    tls_server(cert, key, alpn)
+}
+
+/// Close `c`. Sessions made from it keep what they took and stay open.
+pub fn tls_config_close(c: TlsConfig) -> Int ! { io } {
+    os_tls_close(c.id, bytes_new(0))
+}
+
+// ---------------------------------------------------------------------------------------------
+// The wire: a session's bytes through a socket handle. `@std/http` reads and writes through these.
+
+// Every byte of `data` through `h`: 0, or a status.
+fn write_all(h: OsHandle, data: Bytes) -> Int ! { io } {
+    let mut at = 0;
+    while at < bytes_len(data) {
+        let n = os_write(h, bytes_slice(data, at, bytes_len(data)));
+        if n < 0 { return n; }
+        at = at + n;
+    }
+    0
+}
+
+// Everything session `s` wants sent, through `h`: 0, or a status.
+fn flush(h: OsHandle, s: Int, net: Bytes) -> Int ! { io } {
+    let mut n = os_tls_pull(s, net);
+    while n > 0 {
+        let w = write_all(h, bytes_slice(net, 0, n));
+        if w < 0 { return w; }
+        n = os_tls_pull(s, net);
+    }
+    n
+}
+
+// What arrives through `h`, into session `s`: 0, or a status — `truncated()` when the peer's
+// connection has ended.
+fn receive(h: OsHandle, s: Int, net: Bytes) -> Int ! { io } {
+    let m = os_read(h, net);
+    if m < 0 { return m; }
+    if m == 0 { return truncated(); }
+    let p = os_tls_push(s, bytes_slice(net, 0, m));
+    if p < 0 { p } else { 0 }
+}
+
+/// Session `s`'s handshake over socket `h`, to its end: 0, or a status (`tls_wire_error` says
+/// what it means). Each wait is the socket's deadline.
+pub fn tls_wire_handshake(h: OsHandle, s: Int) -> Int ! { io } {
+    let net = bytes_new(17408);
+    while true {
+        let r = os_tls_handshake(s);
+        let f = flush(h, s, net);
+        if r == 1 { return if f < 0 { f } else { 0 }; }
+        if r != want() { return r; }
+        if f < 0 { return f; }
+        let got = receive(h, s, net);
+        if got < 0 { return got; }
+    }
+    0
+}
+
+/// Plaintext from session `s` over socket `h` into `buf`: its count, `0` once the peer has closed
+/// TLS, or a status.
+pub fn tls_wire_read(h: OsHandle, s: Int, buf: Bytes) -> Int ! { io } {
+    let net = bytes_new(17408);
+    while true {
+        let n = os_tls_read(s, buf);
+        // A read may leave something to send: a key update, an alert.
+        let f = flush(h, s, net);
+        if n != want() { return n; }
+        if f < 0 { return f; }
+        let got = receive(h, s, net);
+        if got < 0 { return got; }
+    }
+    0
+}
+
+/// All of `data` through session `s` over socket `h`: 0, or a status.
+pub fn tls_wire_write(h: OsHandle, s: Int, data: Bytes) -> Int ! { io } {
+    let net = bytes_new(17408);
+    let mut at = 0;
+    while at < bytes_len(data) {
+        let n = os_tls_write(s, bytes_slice(data, at, bytes_len(data)));
+        if n == want() {
+            let got = receive(h, s, net);
+            if got < 0 { return got; }
+        } else {
+            if n < 0 { return n; }
+            at = at + n;
+            let f = flush(h, s, net);
+            if f < 0 { return f; }
+        }
+    }
+    0
+}
+
+/// End session `s`: its close sent through `h` (best effort), and the session freed.
+pub fn tls_wire_close(h: OsHandle, s: Int) -> Int ! { io } {
+    let out = bytes_new(1024);
+    let n = os_tls_close(s, out);
+    if n > 0 { write_all(h, bytes_slice(out, 0, n)); }
+    0
+}
+
+/// The error a wire status is for session `s`, with the engine's own sentence.
+pub fn tls_wire_error(s: Int, status: Int) -> TlsError ! { io } {
+    tls_error_from(status, tls_fact(s, 3))
+}
+
+fn tls_fact(s: Int, what: Int) -> Str ! { io } {
+    let buf = bytes_new(256);
+    let n = os_tls_info(s, what, buf);
+    if n <= 0 { "" } else { bytes_to_str(bytes_slice(buf, 0, n)) }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Streams
+
+fn opened(c: TlsConfig, sock: TcpStream, session: Int) -> Result[TlsStream, TlsError] ! { io } {
+    if session < 0 { return Result[TlsStream, TlsError].Err(error: tls_error_from(session, "")); }
+    let r = tls_wire_handshake(sock.handle, session);
+    if r < 0 {
+        let e = tls_wire_error(session, r);
+        os_tls_close(session, bytes_new(0));
+        return Result[TlsStream, TlsError].Err(error: e);
+    }
+    Result[TlsStream, TlsError].Ok(value: TlsStream(stream: sock, session: session))
+}
+
+/// A client session over `sock` with configuration `c`, verifying that the server is `host` (a
+/// name, or an IP address written without brackets); the handshake is done when it answers. The
+/// socket stays the caller's: `tls_close` closes both.
+pub fn tls_connect(c: TlsConfig, sock: TcpStream, host: Str) -> Result[TlsStream, TlsError] ! { io } {
+    opened(c, sock, os_tls_connect(c.id, host))
+}
+
+/// A server session over an accepted `sock` with configuration `c`, its handshake done.
+pub fn tls_accept(c: TlsConfig, sock: TcpStream) -> Result[TlsStream, TlsError] ! { io } {
+    opened(c, sock, os_tls_accept(c.id))
+}
+
+/// Plaintext into `buf`: how many bytes, `0` once the peer has closed TLS.
+pub fn tls_read(t: TlsStream, buf: Bytes) -> Result[Int, TlsError] ! { io } {
+    let n = tls_wire_read(t.stream.handle, t.session, buf);
+    if n < 0 { Result[Int, TlsError].Err(error: tls_wire_error(t.session, n)) } else { Result[Int, TlsError].Ok(value: n) }
+}
+
+/// Every byte of `data`.
+pub fn tls_write(t: TlsStream, data: Bytes) -> Result[Int, TlsError] ! { io } {
+    let n = tls_wire_write(t.stream.handle, t.session, data);
+    if n < 0 { Result[Int, TlsError].Err(error: tls_wire_error(t.session, n)) } else { Result[Int, TlsError].Ok(value: bytes_len(data)) }
+}
+
+/// `text`'s bytes, as `tls_write`.
+pub fn tls_write_str(t: TlsStream, text: Str) -> Result[Int, TlsError] ! { io } {
+    tls_write(t, bytes_from_str(text))
+}
+
+/// Close TLS (the peer is told) and the socket under it.
+pub fn tls_close(t: TlsStream) -> Int ! { io } {
+    tls_wire_close(t.stream.handle, t.session);
+    tcp_close(t.stream);
+    0
+}
+
+/// The ALPN name the two sides agreed on; empty for none.
+pub fn tls_alpn(t: TlsStream) -> Str ! { io } {
+    tls_fact(t.session, 0)
+}
+
+/// The protocol's version, as the engine names it (`TLSv1.3`).
+pub fn tls_version(t: TlsStream) -> Str ! { io } {
+    tls_fact(t.session, 1)
+}
+
+/// The subject of the peer's certificate (`/CN=example.org`); empty when it sent none.
+pub fn tls_peer(t: TlsStream) -> Str ! { io } {
+    tls_fact(t.session, 2)
+}

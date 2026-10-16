@@ -554,6 +554,7 @@ mod os;
 mod process;
 mod stack;
 mod task;
+mod tls;
 mod value;
 
 pub use channel::Channel;

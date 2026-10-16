@@ -44,6 +44,7 @@ mod string_literals;
 mod summary;
 mod tiers;
 mod time;
+mod tls;
 mod toml;
 mod trace;
 mod traits;

@@ -3020,6 +3020,18 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         ("os_local_addr", "Gate 2 networking"),
         ("os_peer_addr", "Gate 2 networking"),
         ("os_resolve", "Gate 2 networking"),
+        // v1 track C1 (TLS): the self-hosted checker carries no `Bytes`, so none of these.
+        ("os_tls_client_config", "C1 TLS"),
+        ("os_tls_server_config", "C1 TLS"),
+        ("os_tls_connect", "C1 TLS"),
+        ("os_tls_accept", "C1 TLS"),
+        ("os_tls_handshake", "C1 TLS"),
+        ("os_tls_push", "C1 TLS"),
+        ("os_tls_pull", "C1 TLS"),
+        ("os_tls_read", "C1 TLS"),
+        ("os_tls_write", "C1 TLS"),
+        ("os_tls_close", "C1 TLS"),
+        ("os_tls_info", "C1 TLS"),
         // Gate 2 (time): the self-hosted checker carries `time_now_ms` and no other clock.
         ("time_now_ns", "Gate 2 time"),
         ("time_wall_ns", "Gate 2 time"),

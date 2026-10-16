@@ -538,6 +538,10 @@ pub mod codes {
     /// A call of one of R1a's `list_` built-ins, renamed `chain_` with their type, `Chain[T]`,
     /// when `List[T]` became `Vec[T]`'s name (R1.5, D7; `docs/spec.md`, *Immutable indirection*).
     pub const BUILTIN_RENAMED: Code = Code::new("N0637");
+    /// A program reaching `@std/tls` built for a target with no TLS binding: a board, WebAssembly
+    /// (whose host terminates TLS), or one whose binding is not yet written (v1 track C1,
+    /// `docs/spec.md`, *TLS*). Reported by `nazm build`.
+    pub const TLS_TARGET: Code = Code::new("N0830");
     /// An attribute the language does not have, on a declaration it does not apply to, or with
     /// arguments it does not take (Gate 2, `docs/spec.md`, *Attributes*).
     pub const ATTRIBUTE: Code = Code::new("N0619");

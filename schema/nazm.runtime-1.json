@@ -14,7 +14,7 @@
     "profile": { "enum": ["hosted", "board", "wasm"] },
     "services": {
       "type": "array",
-      "items": { "enum": ["tasks", "channels", "sequences", "io", "join", "strings", "shims", "stack", "closures", "foreign", "numbers", "files", "net", "wide"] },
+      "items": { "enum": ["tasks", "channels", "sequences", "io", "join", "strings", "shims", "stack", "closures", "foreign", "numbers", "files", "net", "wide", "tls"] },
       "description": "The services it provides: every one for `hosted`; `stack` for a board or WebAssembly, whose missing services the freestanding build itself refuses."
     },
     "opt_level": { "type": "integer" },

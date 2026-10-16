@@ -270,6 +270,19 @@ impl CapabilityKind {
             | Intrinsic::OsShutdown
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr => CapabilitySet::EMPTY,
+            // TLS (C1) reaches nothing: bytes in and bytes out of an engine. The socket the
+            // bytes travel through is the authority, so nothing more is held.
+            Intrinsic::OsTlsClientConfig
+            | Intrinsic::OsTlsServerConfig
+            | Intrinsic::OsTlsConnect
+            | Intrinsic::OsTlsAccept
+            | Intrinsic::OsTlsHandshake
+            | Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsPull
+            | Intrinsic::OsTlsRead
+            | Intrinsic::OsTlsWrite
+            | Intrinsic::OsTlsClose
+            | Intrinsic::OsTlsInfo => CapabilitySet::EMPTY,
             // The environment is the outside world's, as the arguments are (Gate 2).
             Intrinsic::OsEnvGet
             | Intrinsic::OsEnvHas
@@ -569,6 +582,17 @@ mod tests {
                     | Intrinsic::OsShutdown
                     | Intrinsic::OsLocalAddr
                     | Intrinsic::OsPeerAddr
+                    | Intrinsic::OsTlsClientConfig
+                    | Intrinsic::OsTlsServerConfig
+                    | Intrinsic::OsTlsConnect
+                    | Intrinsic::OsTlsAccept
+                    | Intrinsic::OsTlsHandshake
+                    | Intrinsic::OsTlsPush
+                    | Intrinsic::OsTlsPull
+                    | Intrinsic::OsTlsRead
+                    | Intrinsic::OsTlsWrite
+                    | Intrinsic::OsTlsClose
+                    | Intrinsic::OsTlsInfo
                     | Intrinsic::OsChildPipe
                     | Intrinsic::OsWait
                     | Intrinsic::OsKill

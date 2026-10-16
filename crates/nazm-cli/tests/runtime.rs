@@ -343,6 +343,8 @@ fn all() -> nazm_lir::Needs {
         files: true,
         net: true,
         wide: true,
+        // TLS's engine is a unit of its own linked with the platform's library (`tls.rs` tests it).
+        tls: false,
         single: false,
     }
 }

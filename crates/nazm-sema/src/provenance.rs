@@ -222,7 +222,20 @@ impl Origin {
             // standard input's is, and so is the peer's address and a name's addresses.
             | Intrinsic::OsUdpRecvFrom
             | Intrinsic::OsPeerAddr
-            | Intrinsic::OsResolve => BuiltinFlow::Source(Self::File),
+            | Intrinsic::OsResolve
+            // What a TLS engine hands back — plaintext, ciphertext to send, a fact about the
+            // peer — came from the network, as a socket's data does (C1).
+            | Intrinsic::OsTlsPull
+            | Intrinsic::OsTlsRead
+            | Intrinsic::OsTlsClose
+            | Intrinsic::OsTlsInfo => BuiltinFlow::Source(Self::File),
+            Intrinsic::OsTlsClientConfig
+            | Intrinsic::OsTlsServerConfig
+            | Intrinsic::OsTlsConnect
+            | Intrinsic::OsTlsAccept
+            | Intrinsic::OsTlsHandshake
+            | Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsWrite => BuiltinFlow::Derive,
             Intrinsic::OsTcpListen
             | Intrinsic::OsTcpAccept
             | Intrinsic::OsTcpConnect
@@ -380,6 +393,18 @@ impl Origin {
             | Intrinsic::OsKill
             | Intrinsic::OsRandomBytes => ContainerUse::None,
             Intrinsic::OsResolve => ContainerUse::Fill { into: &[2] },
+            // TLS (C1): what the engine hands back lands in the buffer handed in.
+            Intrinsic::OsTlsPull | Intrinsic::OsTlsRead | Intrinsic::OsTlsClose => {
+                ContainerUse::Fill { into: &[1] }
+            }
+            Intrinsic::OsTlsInfo => ContainerUse::Fill { into: &[2] },
+            Intrinsic::OsTlsClientConfig
+            | Intrinsic::OsTlsServerConfig
+            | Intrinsic::OsTlsConnect
+            | Intrinsic::OsTlsAccept
+            | Intrinsic::OsTlsHandshake
+            | Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsWrite => ContainerUse::None,
             // The platform, further (R1d): what a path is lands in the buffer handed in; a
             // temporary directory's path is a string made from its parent, not read.
             Intrinsic::OsLstat | Intrinsic::OsRealpath => ContainerUse::Fill { into: &[1] },
@@ -743,6 +768,8 @@ impl SinkClass {
             Intrinsic::OsRename => &[(0, Self::Path), (1, Self::Path)],
             Intrinsic::OsWrite => &[(1, Self::FileData)],
             Intrinsic::OsUdpSendTo => &[(1, Self::FileData)],
+            // Plaintext a TLS session sends is data leaving the program, as `os_write`'s (C1).
+            Intrinsic::OsTlsWrite => &[(1, Self::FileData)],
             Intrinsic::OsSpawn => &[(0, Self::Path)],
             // Which program runs and in which directory (R1d).
             Intrinsic::OsSpawnIn | Intrinsic::OsSpawnWith => &[(0, Self::Path), (2, Self::Path)],
@@ -1178,6 +1205,11 @@ mod tests {
                 ("os_udp_recv_from", Origin::File),
                 ("os_peer_addr", Origin::File),
                 ("os_resolve", Origin::File),
+                // What a TLS engine hands back (C1).
+                ("os_tls_pull", Origin::File),
+                ("os_tls_read", Origin::File),
+                ("os_tls_close", Origin::File),
+                ("os_tls_info", Origin::File),
                 // The environment (Gate 2), as the arguments.
                 ("os_env_get", Origin::Argument),
                 ("os_env_has", Origin::Argument),

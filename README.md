@@ -105,6 +105,7 @@ else is required for the language itself. Optional tools unlock optional feature
 | Optional tool | For |
 | --- | --- |
 | Docker | `cargo xtask contained …`, the bounded runner the heavy gates (selfhost, bootstrap, fuzzing, mutation) must use, and the Linux, QEMU, WebAssembly and EVM test images |
+| OpenSSL 3 — `brew install openssl@3` on macOS (or `NAZM_OPENSSL_DIR`), the distribution's `libssl3` on Linux | a program that speaks TLS (`@std/tls`, an `https` URL in `@std/http`): linked dynamically from the system, never bundled, so its security updates reach the program; a program that does not speak TLS never needs it |
 | `lldb` / `gdb` | debugging a `nazm build --debug` executable |
 | Node.js, `wasm-ld` | running a `wasm32-unknown-unknown` build (the reference host) |
 | py-evm (in the `nazm-evm` image) | running `nazm contract --evm` output |

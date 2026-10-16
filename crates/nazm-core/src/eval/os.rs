@@ -579,7 +579,9 @@ fn os_value(op: Intrinsic, args: &[Value]) -> Option<Value> {
             };
             Some(Value::Str(Str::heap(text.into_bytes())))
         }
-        _ => super::net::net_value(op, args).or_else(|| super::process::process_value(op, args)),
+        _ => super::net::net_value(op, args)
+            .or_else(|| super::process::process_value(op, args))
+            .or_else(|| super::tls::tls_value(op, args)),
     }
 }
 

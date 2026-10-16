@@ -88,6 +88,7 @@ fn std_names() -> Strs {
     strs_push(s, "test");
     strs_push(s, "text");
     strs_push(s, "time");
+    strs_push(s, "tls");
     strs_push(s, "toml");
     s
 }

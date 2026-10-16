@@ -8345,10 +8345,11 @@ Repointed by R1.5 (D6), which moved it to 84: an entry that read `[1, 2, 3]` as 
 Repointed by R1.5 (D9), which moved it to 85: an entry that refused `s.split(" ")` with no `use` must not be reused.
 Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_or(1)` with no `use` must not be reused.
 Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused.
-Repointed by the R5 fixes, which moved it to 88: an entry that accepted a pattern `let` rebinding a name in its own scope must not be reused."""
+Repointed by the R5 fixes, which moved it to 88: an entry that accepted a pattern `let` rebinding a name in its own scope must not be reused.
+Repointed by C1, which moved it to 89 for the TLS built-ins: an entry that refused `os_tls_read` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 88;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 87;"
+find = "pub const SEMANTIC_EPOCH: u32 = 89;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 88;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10551,11 +10552,12 @@ Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part.
 Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part.
 Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets.
 Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`.
-Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry."""
+Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry.
+Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 36;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 35;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_six_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 37;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 36;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_seven_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13236,8 +13238,8 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ffi_v3::a_c_struct_
 name = "n85-a-shared-library-is-an-archive"
 why = "`--lib --shared` writes a static archive under the shared library's name"
 file = "crates/nazm-cli/src/build/link.rs"
-find = "    let linked = if choice.library && choice.shared {"
-replace = "    let linked = if choice.library && choice.shared && false {"
+find = "        if choice.library && choice.shared {"
+replace = "        if choice.library && choice.shared && false {"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ffi_v3::a_shared_library_build_writes_a_shared_object_not_an_archive" }]
 
 
@@ -20188,3 +20190,73 @@ file = "crates/nazm-runtime/src/board.rs"
 find = "                \"  orr r1, r1, #0xF00000\","
 replace = "                \"  orr r1, r1, #0x0\","
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::the_startup_copies_data_and_zeroes_the_rest_before_anything_runs" }]
+
+# --- v1 track C, C1: the `tls` runtime part and @std/tls (2026-10-16) --------------------------
+
+[[mutation]]
+name = "c1-sectrust-trusts-every-chain"
+why = "the macOS verifier answers trusted whatever SecTrust decided, so an expired, misnamed, self-signed or foreign certificate is accepted"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''  %good = icmp eq i64 %f, 0
+  %r = zext i1 %good to i32'''
+replace = '''  %good = icmp sge i64 %f, -99999999
+  %r = zext i1 %good to i32'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_client_refuses_every_certificate_it_cannot_verify_and_says_why" }]
+
+[[mutation]]
+name = "c1-an-expired-certificate-is-untrusted"
+why = "SecTrust's verdict on a certificate out of its dates is reported as an untrusted chain, so a program cannot tell an expired certificate from a forged one"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''  %v = select i1 %dated, i64 -65602, i64 %v1'''
+replace = '''  %v = select i1 false, i64 -65602, i64 %v1'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_client_refuses_every_certificate_it_cannot_verify_and_says_why" }]
+
+[[mutation]]
+name = "c1-a-slot-ignores-its-generation"
+why = "a slot is held for any id with its index, so an id closed long ago, or made up, reaches the object that has since taken the slot"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''  %a = and i1 %same, %live
+  %b = and i1 %a, %kok'''
+replace = '''  %a = and i1 true, %live
+  %b = and i1 %a, %kok'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_client_refuses_every_certificate_it_cannot_verify_and_says_why" }]
+
+[[mutation]]
+name = "c1-the-client-chooses-the-alpn-name"
+why = "the server picks the first name in the client's order rather than its own, so a server preferring HTTP/1.1 is pushed into a protocol it ranks lower"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''  %r = call i32 @SSL_select_next_proto(ptr %out, ptr %outlen, ptr %a, i32 %an32, ptr %in, i32 %inlen)'''
+replace = '''  %r = call i32 @SSL_select_next_proto(ptr %out, ptr %outlen, ptr %in, i32 %inlen, ptr %a, i32 %an32)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_server_and_a_client_agree_and_echo_over_loopback_on_every_backend" }]
+
+[[mutation]]
+name = "c1-expired-reads-as-untrusted-in-the-library"
+why = "@std/tls names the runtime's expired status as an untrusted chain"
+file = "library/std/tls.nz"
+find = '''    if status == 0 - 65602 { return TlsError.Expired(why: why); }'''
+replace = '''    if status == 0 - 65602 { return TlsError.Untrusted(why: why); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_client_refuses_every_certificate_it_cannot_verify_and_says_why" }]
+
+[[mutation]]
+name = "c1-http-reads-ciphertext-as-plaintext"
+why = "an HTTP connection with a TLS session reads the socket directly, so the parser sees TLS records as a request"
+file = "library/std/http.nz"
+find = '''    let n = if w.tls != 0 { tls_wire_read(w.handle, w.tls, w.buf) } else { os_read(w.handle, w.buf) };'''
+replace = '''    let n = if w.tls == 0 - 1 { tls_wire_read(w.handle, w.tls, w.buf) } else { os_read(w.handle, w.buf) };'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::http_is_served_and_fetched_over_tls" }]
+
+[[mutation]]
+name = "c1-the-interpreter-pretends-to-configure"
+why = "the interpreter answers a configuration's id it never made, so a program believes TLS is available where nothing can encrypt"
+file = "crates/nazm-core/src/eval/tls.rs"
+find = '''        Intrinsic::OsTlsClientConfig | Intrinsic::OsTlsServerConfig => Some(Value::Int(-ENOSYS)),'''
+replace = '''        Intrinsic::OsTlsClientConfig | Intrinsic::OsTlsServerConfig => Some(Value::Int(65537)),'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::the_interpreter_refuses_tls_as_a_value" }]
+
+[[mutation]]
+name = "c1-windows-gets-the-openssl-unit"
+why = "a target without a TLS binding is given OpenSSL's engine, so a Windows build reaching @std/tls is not refused by name (N0830)"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => None,'''
+replace = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => Some(OPENSSL.to_owned()),'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_target_without_a_tls_binding_refuses_the_build_by_name" }]

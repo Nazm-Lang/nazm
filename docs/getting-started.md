@@ -10,6 +10,8 @@ stops being true.
 You need the Rust toolchain pinned in `rust-toolchain.toml` (rustup installs it on first use)
 and `clang`, which `nazm build` uses to compile and link. On macOS, the Xcode command-line tools
 provide `clang`; on Linux, install your distribution's `clang` package.
+A program that speaks TLS (`@std/tls`, or an `https` URL) also links OpenSSL 3 from the system:
+`brew install openssl@3` on macOS; on Linux the distribution's `libssl3`, almost always present.
 
 ```sh
 git clone https://github.com/Nazm-Lang/nazm
