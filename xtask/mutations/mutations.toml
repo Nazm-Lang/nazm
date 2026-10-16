@@ -20600,3 +20600,19 @@ file = "crates/nazm-core/src/lower.rs"
 find = "                    (Ends::FallsThrough, None) if self.res.named_method(b.span) => {"
 replace = "                    (Ends::FallsThrough, None) if b.span.start > b.span.end => {"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_map_is_braces_where_a_map_is_expected_everywhere" }]
+
+[[mutation]]
+name = "r1-5-7-2-the-archive-keeps-its-files-times"
+why = "the archive's entries keep the times their files were staged at, so two packagings of the same files differ and no release is reproducible (R1.5 7.2)"
+file = "scripts/host-archive.sh"
+find = '''        info.mtime, info.uid, info.gid, info.uname, info.gname = when, 0, 0, "", ""'''
+replace = '''        info.uid, info.gid, info.uname, info.gname = 0, 0, "", ""'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_host_archive_is_the_same_bytes_when_packaged_twice" }]
+
+[[mutation]]
+name = "r1-5-7-2-the-gzip-header-keeps-the-time"
+why = "the gzip header records when the archive was written, so two packagings differ (R1.5 7.2)"
+file = "scripts/host-archive.sh"
+find = '''    with gzip.GzipFile(filename="", mode="wb", fileobj=out, mtime=0) as z:'''
+replace = '''    with gzip.GzipFile(filename="", mode="wb", fileobj=out) as z:'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_host_archive_is_the_same_bytes_when_packaged_twice" }]

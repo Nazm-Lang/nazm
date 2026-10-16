@@ -815,6 +815,34 @@ fn a_missing_generator_or_a_target_it_does_not_carry_is_refused_before_compiling
     assert!(!d.path().join("o").exists());
 }
 
+/// R1.5 7.2: `scripts/host-archive.sh` writes the same bytes for the same files, whenever it runs —
+/// entries sorted, every time `SOURCE_DATE_EPOCH`, owner 0, a gzip header with no name or time —
+/// so a release archive built twice compares equal (`scripts/reproducible-check.sh`, in CI).
+/// Packaged under a triple with no generator, so it runs on every host.
+#[test]
+fn the_host_archive_is_the_same_bytes_when_packaged_twice() {
+    let d = tempfile::tempdir().unwrap();
+    let mut bytes = Vec::new();
+    for n in 0..2 {
+        if n == 1 {
+            // Past the second the first run's files were staged in.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
+        let out = d.path().join(format!("archives-{n}"));
+        let r = run_bounded(
+            Command::new("sh")
+                .arg(repo().join("scripts/host-archive.sh"))
+                .args(["x86_64-unknown-linux-gnu", NAZM])
+                .arg(&out)
+                .env("SOURCE_DATE_EPOCH", "1760000000"),
+            "host-archive.sh",
+        );
+        assert_eq!(r.code, Some(0), "{r:?}");
+        bytes.push(std::fs::read(out.join("nazm-x86_64-unknown-linux-gnu.tar.gz")).unwrap());
+    }
+    assert!(bytes[0] == bytes[1], "the two archives differ");
+}
+
 /// The packaged layout (task 7.8): `scripts/host-archive.sh` builds `nzcg` with the `nazm` it
 /// packages and installs it as `libexec/nazm/nzcg`, where the unpacked `bin/nazm` finds it with
 /// `NAZM_NZCG` unset — and nowhere else: moved away, the build is refused naming that path. The
