@@ -100,11 +100,14 @@ through a worklist (never recursion), as Rust's `release` does. A slot of a free
 The memory report is the four classes' allocated and reclaimed counts, printed after the run —
 including after a failure, after which every frame has been unwound and released.
 
-**Aggregates count once.** A record or enum value whose fields hold a reference carries one heap
-object of its own (`K_AGG`, never in the memory report) that counts its copies, packed into its
-`def` with its type's name: copying it takes one reference, not one per field, and its fields are
-released only when its last copy goes. A value of plain data is copied at no cost. A field
-assignment on the only copy moves the fields into the new value. Built-in arguments that are a
+**Aggregates count once.** A record's or enum value's fields are a heap object of their own
+(`K_AGG`, never in the memory report; 0 for a value with no fields), and the value is
+`Rec(def, obj)` / `Enm(def, variant, obj)`: copying it is copying integers and taking one
+reference, and its fields are released, through the worklist, when its last copy goes. A field
+assignment on the only copy replaces the field in place; on a shared one it copies the fields into
+a new object. (Until 2026-10-16 the fields were a `List[V]` inside the value, which the 0.10.0 code
+generator retains and releases through the runtime on every copy and every `match` of a `V` — the
+better part of the time a map-heavy loop took; see *Speed*.) Built-in arguments that are a
 constant, a local or a local's projection are lent rather than copied (`OP_BORROW`, `OP_LFIELD`):
 nothing between their push and the built-in can fail or leave, so the slot keeps them alive. None
 of this is visible in the report; it is what keeps the interpreter's speed near the Rust one's.
@@ -299,6 +302,42 @@ comparisons (before this round: 1,808 programs, 939 that checked; 2,067 comparis
   suite records both times so a regression is visible.
 - **Messages copied by hand.** A sentence changed in Rust and not here is a difference the suite
   catches only where a case fails that way; the `trap/` corpus covers each code once.
+
+## Speed (2026-10-16)
+
+Profiled with macOS `sample` on 400,000 `@std/hashmap` updates and 60,000 `@std/ordmap` inserts.
+Two thirds of the time was not interpreting but the 0.10.0 code generator's bookkeeping around a
+`V`: every copy and every `match` of a `V` whose payload is a `List` or a `Str` retains and
+releases it through the runtime (atomically, for a `Str`), and every call — `inc`, `dec`, `release`
+for each operand — pays a prologue that zeroes some 600 bytes of frame and reads a thread-local for
+the stack check. Mine to fix, and fixed:
+
+- **Records and enum values hold their fields in the heap** (D4): `Rec(def, obj)`, so copying one
+  is copying integers. A record's field read was ~40 ns; it is ~8 ns.
+- **Plain values skip the calls**: pushing a local, storing, popping, a frame's release, a built-in's
+  arguments and comparing two `Int`s handle `Int`, `Bool`, `Unset` (and count a record or handle)
+  in the loop itself, calling `inc`/`dec`/`release` only for what holds a reference.
+- **Fast paths** for `str_byte` in range, `wrapping_mul` of two `UInt64`s, `&`/`|`/`^` of two numbers
+  of one kind, and a non-negative `Int` converted to `UInt64`, `UInt128` or `Int128` — what the
+  standard library's hashes do per byte.
+
+CPU seconds (user + system, one run each on a loaded machine; the Rust interpreter is the 0.10.0+main
+`nazm run --interpret`):
+
+| program | Rust | before | after |
+| --- | --- | --- | --- |
+| `bench/programs/arith.nz` | 0.74 | 1.98 | 1.00 |
+| `bench/programs/calls.nz` | 0.49 | 1.04 | 0.51 |
+| `bench/programs/sequences.nz` | 0.26 | 0.56 | 0.36 |
+| `bench/programs/sieve.nz` | 0.34 | 0.82 | 0.48 |
+| 10,000 ordered-map inserts, 5,000 removals | 1.10 | 1.83 | 1.03 |
+| 60,000 hash-map updates on `Str` keys | 0.70 | 1.59 | 1.19 |
+
+The `--rust-tests` run took 1,534 s against 1,990 s for the interpreter before (the two run side by side on a loaded machine). What remains on the hash map is
+the `Str` inside a `V`: each push or pop of a string operand is an atomic retain and release in the
+0.10.0 runtime. Keeping strings in the heap as records now are would remove it, at the cost of an
+entry per slice; it is left until the code generator's plain counts in programs of one thread (R3
+8.4) reach the compiler that builds this one, which would remove it for nothing.
 
 ## Open Questions
 
