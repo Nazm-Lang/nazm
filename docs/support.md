@@ -76,10 +76,10 @@ still shown only under Wine; the host run covers what the differential set print
 *Nazm's own code generator (`--backend nazm`, R9 section 8, 2026-10-16).* It builds
 `x86_64-pc-windows-gnu` too: PE/COFF objects with Windows x64's convention, a `.pdata`/`.xdata`
 unwind entry per function and `___chkstk_ms` probes, the failure bit as LLVM keeps it on Windows.
-**Compile- and link-verified only**: `toolchain/codegen/tests/coff.sh` compares each unit object
-with LLVM's for the triple and links every program of the differential set with MinGW-w64's
-`gcc` (120 of 120); nothing it built for Windows has run, because the Windows host did not
-answer. `BACKEND=nazm scripts/windows-host.sh` is the run that would make it run-verified.
+Run-verified on a Windows host: `BACKEND=nazm scripts/windows-host.sh` on the same laptop
+(10.0.18362.1256), 68 agree, 0 differ, 8 skipped, the native builds also `--backend nazm`; and
+`toolchain/codegen/tests/coff.sh` compares each unit object with LLVM's for the triple and links
+every program of the differential set with MinGW-w64's `gcc` (120 of 120).
 
 **x86_64 Linux.** Compile-only, because no Nazm-built program has been run on x86_64 Linux. It
 moves to run-verified when one is — the differential corpus built for it and run on such a machine

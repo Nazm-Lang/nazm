@@ -232,7 +232,10 @@
       `the_windows_objects_keep_the_win64_convention_and_describe_every_frame` (arguments, shadow
       space, xmm6–xmm15 untouched, rsi/rdi saved, `___chkstk_ms`, each UNWIND_INFO against its
       prologue, `.pdata`'s relocations). Mutants `r9-8-…` (eight), applied by hand, killed,
-      restored. **Compile- and link-verified only**
-- [ ] 8.5 Run on a Windows host: `BACKEND=nazm scripts/windows-host.sh` (each program's output,
-      error output and exit status against the native build). Open: the Windows host (`win-dell`)
-      did not answer on 2026-10-16, so nothing built by the generator for Windows has run
+      restored
+- [x] 8.5 Run on a Windows host: `BACKEND=nazm scripts/windows-host.sh` — each program built for
+      Windows by the generator, linked with MinGW-w64, run on the Windows 10 laptop (1903,
+      10.0.18362.1256) over `ssh`, its output, error output and exit status against the same
+      program built natively with `--backend nazm`: **68 agree, 0 differ, 8 skipped** (programs
+      that call C or read arguments, input or files, counted and never passed; 2026-10-16), as
+      LLVM's and Cranelift's 68 agree there
