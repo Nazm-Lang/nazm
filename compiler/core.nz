@@ -432,7 +432,7 @@ fn co_function(lo: Lo, i: Int) -> Str {
     let c = lo.c;
     let t = lo.t;
     let closure = ck_fn_closure(c, i);
-    if closure == false && ck_fn_is_foreign(c, i) { return co_stopped(lo, "a foreign function"); }
+    if closure == false && ck_fn_is_foreign(c, i) { return co_foreign_fn(lo, i); }
     let node = ck_fn_node(c, i);
     let mut body_node = 0 - 1;
     if closure {
@@ -541,6 +541,198 @@ fn co_function(lo: Lo, i: Int) -> Str {
         m = m + 1;
     }
     co_object(whole)
+}
+
+// A foreign function (N85): no body, only the C symbol it names; its parameters and result as
+// the C function has them (`raw_foreign`) — a handle or a callback an `Int`, and a result that
+// crosses as a pointer an `Int`.
+fn co_foreign_fn(lo: Lo, i: Int) -> Str {
+    let c = lo.c;
+    let t = lo.t;
+    let node = ck_fn_node(c, i);
+    let mut b = 0;
+    let mut n = 0;
+    while b < ck_binding_count(c) {
+        if ck_binding_fn(c, b) == i {
+            if ck_binding_start(c, b) < 0 { return co_stopped(lo, "a binding declared nowhere"); }
+            let mut ty = ck_binding_ty(c, b);
+            if n < ck_fn_param_count(c, i) {
+                let cross = ck_cross_in(c, ck_fn_param_ty(c, i, n));
+                if cross == "handle" || cross == "callback" { ty = ck_t_int(); }
+            }
+            co_local(lo, b, ck_binding_name(c, b), ty, 0 - 1, "param", co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
+            n = n + 1;
+        }
+        b = b + 1;
+    }
+    let mut ret = ck_fn_ret_ty(c, i);
+    let out_cross = ck_cross_out(c, ret);
+    if out_cross != "scalar" && out_cross != "" { ret = ck_t_int(); }
+    let f = lo.f;
+    let declared = ck_fn_declared(c, i);
+    let required = ck_fn_required(c, i);
+    let out = strs_new();
+    strs_push(out, co_field_first("def", json_str(fx_fn_identity(f, i))));
+    strs_push(out, co_field("module", json_str(fx_module_identity(f, co_g(lo, co_s_module())))));
+    strs_push(out, co_field("name", json_str(ck_fn_name(c, i))));
+    strs_push(out, co_field("type_params", "0"));
+    strs_push(out, co_field("params", int_to_str(ck_fn_param_count(c, i))));
+    strs_push(out, co_field("ret", json_str(co_durable(lo, ret))));
+    let effects = strs_new();
+    if declared < 0 { strs_push(effects, co_field_first("declared", "null")); } else { strs_push(effects, co_field_first("declared", co_effect_list(declared))); }
+    strs_push(effects, co_field("required", co_effect_list(required)));
+    let mut published = required;
+    if declared >= 0 { published = declared; }
+    strs_push(effects, co_field("published", co_effect_list(published)));
+    strs_push(effects, co_field("pure", co_json_bool(published == 0)));
+    strs_push(out, co_field("effects", co_object(effects)));
+    strs_push(out, co_field("authority", co_authority(lo, i)));
+    strs_push(out, co_field("locals", co_locals(lo)));
+    strs_push(out, co_field("consts", "[]"));
+    strs_push(out, co_field("loops", "0"));
+    strs_push(out, co_field("pub", co_json_bool(ck_fn_public(c, i))));
+    strs_push(out, co_field("closure", "false"));
+    strs_push(out, co_field("captures", "[]"));
+    let attributes = strs_new();
+    strs_push(attributes, co_field_first("export", "null"));
+    strs_push(attributes, co_field("section", "null"));
+    strs_push(attributes, co_field("interrupt", "null"));
+    strs_push(attributes, co_field("task", "null"));
+    strs_push(attributes, co_field("on_failure", "false"));
+    strs_push(out, co_field("attributes", co_object(attributes)));
+    strs_push(out, co_field("at", json_str(co_tree_span(lo, sx_field(t, node, "span")))));
+    strs_push(out, co_field("foreign", json_str(ck_fn_foreign(c, i))));
+    if co_halted(lo) { return ""; }
+    let digest = cdg_digest(co_object(out));
+    if digest == "" { return co_stopped(lo, "what its digest needs, not printed"); }
+    let whole = strs_new();
+    let mut m = 0;
+    while m < strs_len(out) {
+        strs_push(whole, strs_get(out, m));
+        if m == 7 { strs_push(whole, co_field("digest", digest)); }
+        m = m + 1;
+    }
+    co_object(whole)
+}
+
+// A node of `op` whose place is the printed (quoted) `at`.
+fn co_node_at(lo: Lo, op: Str, members: Str, ty: Int, at: Str) -> Str {
+    if co_halted(lo) { return ""; }
+    let o = strs_new();
+    strs_push(o, co_op_first(op));
+    if members != "" { strs_push(o, str_concat(",", members)); }
+    strs_push(o, co_field("type", json_str(co_durable(lo, ty))));
+    strs_push(o, co_field("at", at));
+    co_set_last(lo, ty, false);
+    co_object(o)
+}
+
+// A call of a foreign function (N85, `foreign_call`), as the C function sees it: each handle
+// argument its pointer, each callback the address of an export's C entry, and the result — a
+// pointer for a handle or a string — checked against null or tested for it, then made a
+// handle, a copied `Str` or an `Option` of either.
+fn co_foreign_call(lo: Lo, callee: Int, args: Strs, cs: Int, span: Int) -> Str {
+    let c = lo.c;
+    let raw = strs_new();
+    let mut k = 0;
+    while k < strs_len(args) {
+        let a = strs_get(args, k);
+        let pt = ck_fn_param_ty(c, callee, k);
+        let cross = ck_cross_in(c, pt);
+        if cross == "handle" {
+            let fields = strs_new();
+            strs_push(fields, co_field_first("field", "0"));
+            strs_push(fields, co_field("name", json_str(ck_record_field_name(c, pt, 0))));
+            strs_push(fields, co_field("base", a));
+            strs_push(raw, co_node_at(lo, "field", str_join(fields, ""), ck_t_int(), co_at_of(a)));
+        } else {
+            if cross == "callback" {
+                let v = co_fn_value_of(a);
+                if v == "" { return co_stopped(lo, "a callback that is not an export's name"); }
+                let g = co_fn_named(lo, v);
+                if g < 0 || ck_fn_export(c, g) == "" { return co_stopped(lo, "a callback that is not an export"); }
+                let id = co_constant(lo, "Str", co_str_value(ck_fn_export(c, g)));
+                let name = co_node_at(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), co_at_of(a));
+                strs_push(raw, co_internal(lo, "callback_address", name, ck_t_int()));
+            } else {
+                strs_push(raw, a);
+            }
+        }
+        k = k + 1;
+    }
+    let ty = ck_fn_ret_ty(c, callee);
+    let out = ck_cross_out(c, ty);
+    let mut raw_ty = ty;
+    if out != "scalar" && out != "" { raw_ty = ck_t_int(); }
+    let fields = strs_new();
+    strs_push(fields, co_field_first("callee", json_str(fx_fn_identity(lo.f, callee))));
+    strs_push(fields, co_field("type_args", "[]"));
+    strs_push(fields, co_field("args", co_list(raw)));
+    let call = co_node(lo, "call", str_join(fields, ""), raw_ty, span);
+    if out == "scalar" || out == "" { return call; }
+    if out == "handle" { return co_handle(lo, ty, co_internal_at(lo, "foreign_nonnull", call, ck_t_int(), span), span); }
+    if out == "cstring" {
+        let checked = co_internal_at(lo, "foreign_nonnull", call, ck_t_int(), span);
+        return co_internal_at(lo, "cstr_copy", checked, ck_t_str(), span);
+    }
+    // Nullable: `{ let c = call; if c == 0 { None } else { Some(<made of c>) } }`.
+    let none = ck_variant_named(c, ty, "None");
+    let some = ck_variant_named(c, ty, "Some");
+    if none < 0 || some < 0 { return co_stopped(lo, "an `Option` without `None` and `Some`"); }
+    let local = co_temp(lo, "c", ck_t_int(), span);
+    let read = co_read(lo, local, span);
+    let zero = co_int_const(lo, 0, span);
+    let is_null = co_equal(lo, ck_t_int(), read, zero, span);
+    let mut value = "";
+    if out == "handle?" { value = co_handle(lo, ck_type_arg(c, ty, 0), co_read(lo, local, span), span); } else { value = co_internal_at(lo, "cstr_copy", co_read(lo, local, span), ck_t_str(), span); }
+    let init = strs_new();
+    strs_push(init, co_field_first("field", "0"));
+    strs_push(init, co_field("name", json_str(ck_payload_name(c, ty, some, 0))));
+    strs_push(init, co_field("value", value));
+    let inits = strs_new();
+    strs_push(inits, co_object(init));
+    let somev = co_variant_value(lo, ty, some, inits, span);
+    let nonev = co_variant_value(lo, ty, none, strs_new(), span);
+    let choice = co_conditional(lo, is_null, nonev, somev, ty, span);
+    let stmts = strs_new();
+    strs_push(stmts, co_let(local, call));
+    let block = co_block_json(lo, false, co_list_one(int_to_str(local)), stmts, choice, span);
+    co_node(lo, "block", co_field_first("body", block), ty, span)
+}
+
+// A handle of record type `rt` holding `value`, at `span`.
+fn co_handle(lo: Lo, rt: Int, value: Str, span: Int) -> Str {
+    let init = strs_new();
+    strs_push(init, co_field_first("field", "0"));
+    strs_push(init, co_field("name", json_str(ck_record_field_name(lo.c, rt, 0))));
+    strs_push(init, co_field("value", value));
+    let members = strs_new();
+    strs_push(members, co_field_first("arity", "1"));
+    strs_push(members, co_field("fields", co_list_one(co_object(init))));
+    co_node(lo, "record", str_join(members, ""), rt, span)
+}
+
+// `internal` of a built-in whose argument is at `span` (already printed there).
+fn co_internal_at(lo: Lo, name: Str, arg: Str, ty: Int, span: Int) -> Str { co_internal(lo, name, arg, ty) }
+
+// The function a printed `fn_value` names, or "" for another expression.
+fn co_fn_value_of(e: Str) -> Str {
+    let head = "{\"op\":\"fn_value\",\"function\":";
+    if str_len(e) < str_len(head) || str_slice(e, 0, str_len(head)) != head { return ""; }
+    let rest = str_slice(e, str_len(head), str_len(e));
+    let mut i = 1;
+    while i < str_len(rest) && str_byte(rest, i) != 34 { i = i + 1; }
+    str_slice(rest, 1, i)
+}
+
+// The function whose identity is `id`, or -1.
+fn co_fn_named(lo: Lo, id: Str) -> Int {
+    let mut g = 0;
+    while g < ck_fn_count(lo.c) {
+        if fx_fn_identity(lo.f, g) == id { return g; }
+        g = g + 1;
+    }
+    0 - 1
 }
 
 // A local: the binding it is (-1 for a temporary, -2 for a closure's own), its name, type, the
@@ -2547,7 +2739,7 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
     let callee = ck_site_fn(c, site);
     let b = ck_site_builtin(c, site);
     if callee >= 0 {
-        if ck_fn_is_foreign(c, callee) { return co_stopped(lo, "a foreign call"); }
+        if ck_fn_is_foreign(c, callee) { return co_foreign_call(lo, callee, args, cs, span); }
         let mut ret = ck_fn_ret_ty(c, callee);
         // A call binds the callee's effect parameter (N51): a function type in its result says
         // what the call bound, as the checker formed it.

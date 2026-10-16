@@ -14487,6 +14487,37 @@ pub fn ck_fn_value_ty(c: Ck, v: Int) -> Int { ints_get(c.vty, v) }
 // What a call through a value of function type `t` gives.
 pub fn ck_fn_type_ret(c: Ck, t: Int) -> Int { fn_ret(c, t) }
 
+// How a foreign function's parameter of type `t` crosses (`foreign_param`, N85): `scalar`,
+// `cstring`, `handle`, `struct`, `callback`, or "" where it cannot.
+pub fn ck_cross_in(c: Ck, t: Int) -> Str {
+    if t == t_int() || t == t_bool() { return "scalar"; }
+    if t == t_str() { return "cstring"; }
+    if t >= 0 && is_record(c, t) {
+        if ints_get(c.rrepr, ta(c, t)) == 1 { return "handle"; }
+        if ints_get(c.rrepr, ta(c, t)) != 0 { return "struct"; }
+        return "";
+    }
+    if t >= 0 && is_fn(c, t) && foreign_param_ok(c, t) { return "callback"; }
+    ""
+}
+// How a foreign result of type `t` crosses back (`foreign_result`): `scalar`, `cstring`,
+// `handle`, `cstring?` or `handle?` (an `Option` of either, null being `None`), or "".
+pub fn ck_cross_out(c: Ck, t: Int) -> Str {
+    if t == t_int() || t == t_bool() { return "scalar"; }
+    if t == t_str() { return "cstring"; }
+    if t < 0 { return ""; }
+    if is_record(c, t) {
+        if is_opaque(c, t) { return "handle"; }
+        return "";
+    }
+    if prelude_enum(c, t, "Option") && targc(c, t) == 1 {
+        let inner = targ(c, t, 0);
+        if inner == t_str() { return "cstring?"; }
+        if is_opaque(c, inner) { return "handle?"; }
+    }
+    ""
+}
+
 // The type closure `i` was given, or -1.
 pub fn ck_closure_ty(c: Ck, i: Int) -> Int {
     let mut k = 0;

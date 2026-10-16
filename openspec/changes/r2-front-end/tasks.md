@@ -509,6 +509,15 @@
         precision as `float_to_str_fixed`. `run.sh core`: 3,153 agree, 0 differ; of 93,541
         functions the lowering carries 93,436, all agree; the other parts 10,992, all agree;
         1,776 whole documents, all the reference's bytes
+  - [x] Foreign functions and calls (N42, N85): a foreign function with no body, only its C
+        symbol (`foreign`), its parameters and result as C has them (`raw_foreign`: a handle or
+        a callback an `Int`, a result crossing as a pointer an `Int`), its digest's body the
+        empty block that transfers; a foreign call as C sees it (`foreign_call`): a handle
+        argument its pointer, a callback `callback_address` of the export's symbol, and the
+        result checked against null (`foreign_nonnull`), copied (`cstr_copy`), or tested for
+        null into an `Option`. `run.sh core`: 3,153 agree, 0 differ; of 93,575 functions the
+        lowering carries 93,536, all agree; the other parts 10,992, all agree; 1,799 whole
+        documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
