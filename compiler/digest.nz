@@ -343,7 +343,16 @@ fn cn_code(c: Canon) -> Int {
         cn_ty(c, js_str(j, js_at(j, locals, i), "type"));
         i = i + 1;
     }
-    if js_get(j, f, "body") >= 0 { cn_block(c, js_get(j, f, "body")); }
+    if js_get(j, f, "body") >= 0 {
+        cn_block(c, js_get(j, f, "body"));
+    } else {
+        // A foreign function's body (N42): an empty block that transfers.
+        cn_tag(c, "block");
+        cn_tag(c, "transfers");
+        cn_n(c, 0);
+        cn_n(c, 0);
+        cn_tag(c, "no-tail");
+    }
     0
 }
 
