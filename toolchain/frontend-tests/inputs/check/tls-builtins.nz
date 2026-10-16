@@ -1,0 +1,14 @@
+// C1 (epoch 89): `@std/tls` over the eleven `os_tls_*` built-ins, and their engine's C symbols
+// reserved.
+use "@std/tls";
+
+extern "C" fn nz_tls_push(s: Int) -> Int = "nz_tls_push";
+
+fn main(io: IoCap) -> Int ! { io } {
+    let out = bytes_new(16);
+    let n = os_tls_info(0, 1, out);
+    match tls_client_system() {
+        Ok(c) => tls_config_close(c) + n,
+        Err(e) => str_len(tls_error_show(e)),
+    }
+}
