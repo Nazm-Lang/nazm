@@ -9483,3 +9483,33 @@ only `small` and `stack` call C's allocator; a program of tasks has thread-local
 thread plain ones; a program calling C, and one with a heap limit, have no `small` unit; 200,000
 strings a task allocates and `main` frees peak at about 2 MiB, not the 50 MiB an unbounded list
 holds. Four mutants. Runtime ABI 39.
+
+## 7.120 Whole-program optimisation: the runtime and the program optimised together — R1.5 3.4, 2026-10-16
+
+Written with the code (`openspec/changes/r1-5-performance-and-dx/design.md`, D13). Each unit — a
+module, a generic instance, the runtime, the small-block heap, the entry — was optimised alone, so
+a call into another unit was never inlined: word frequency's hash, its map's probe and the
+runtime's allocator were each a call per word.
+
+**What is settled.**
+
+- **ThinLTO at the link.** An executable the LLVM backend builds at `-O2` or above for macOS
+  (aarch64 or x86_64, `crate::backend::whole_program`) compiles every unit with `-flto=thin` to
+  bitcode and links with `-flto=thin`; `ld64` optimises them as one program through the
+  toolchain's `libLTO`, so the runtime's and `@std`'s functions inline into the program.
+- **Keys.** The probe resolves the same arguments, so a bitcode object's configuration — and every
+  object key, in the project store and the user cache — differs from a machine object's; neither
+  is ever reused for the other.
+- **The link's cache.** Where the build has a store, the link keeps ThinLTO's cache in the
+  project's `.nazm/lto` (`-Wl,-cache_path_lto`), keyed by content, so a rebuild whose inputs are
+  unchanged does not optimise again; `--no-cache` uses none. It changes no executable.
+- **Where not.** `-O0` and `-O1`; Cranelift and `nzcg` (their units are machine code); a library
+  and `--objects` (their objects are for another linker); `--debug` (its `.dSYM` reads the
+  objects); every target but macOS — Windows links with MinGW-w64's `ld`, which reads no bitcode,
+  and Linux is after 1.0. What a program does is unchanged.
+
+**Evidence.** `crates/nazm-cli/tests/whole_program.rs`: a program over strings, a map and `@std`'s
+hash prints the same at `-O0`, `-O2`, `-O2` with Cranelift and `-O2 --debug`, built fresh and from
+the store; at `-O2` on macOS every object filed is bitcode, and none at the others.
+`backend::tests::only_an_optimised_macos_build_is_optimised_whole` holds the targets and levels,
+and the probe test the keys. Measured in `docs/performance.md`, *R1.5 3.4*. Four mutants.

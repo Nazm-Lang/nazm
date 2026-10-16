@@ -434,3 +434,8 @@ why = "interleaved hyperfine rounds and `bench/compare/compare.py --only primes`
 heading = "R1.5 3.1: the small-block heap, measured (2026-10-16)"
 status = "dated"
 why = "hyperfine over release builds of two trees on one loaded host, with small programs written for the measurement; a record of that date and machine, the gain itself held by tests/small_heap.rs only as the bound on memory"
+
+[[claim]]
+heading = "R1.5 3.4: whole-program optimisation, measured (2026-10-16)"
+status = "dated"
+why = "hyperfine over release builds of two trees on one loaded host; a record of that date and machine — bench/compare/compare.py reproduces the current tree's rows by its method, not the before column"
