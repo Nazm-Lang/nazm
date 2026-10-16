@@ -255,7 +255,20 @@ pub(super) fn objects_for_target(
                 })
                 .collect::<Vec<_>>(),
         );
-        let mut written = write_objects(dir, objects, target, &placed, &board_for(choice, target));
+        // TLS's engine (C1): the platform's library, named for the target's toolchain.
+        let tls = artefacts
+            .iter()
+            .any(|a| a.name == "tls")
+            .then(|| super::tls::link_args(target).ok())
+            .flatten();
+        let mut written = write_objects(
+            dir,
+            objects,
+            target,
+            &placed,
+            &board_for(choice, target),
+            tls.as_deref(),
+        );
         if freestanding && written.is_ok() {
             let texts: Vec<&str> = artefacts
                 .iter()
@@ -436,6 +449,7 @@ fn write_objects(
     target: &nazm_lir::backend::Target,
     placed: &nazm_lir::runtime::board::Placed,
     board: &nazm_lir::runtime::board::Board,
+    tls: Option<&[String]>,
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let mut listed = Vec::new();
@@ -470,6 +484,10 @@ fn write_objects(
         }
         // A freestanding image links nothing but itself, by `link.ld` (N62).
         nazm_lir::backend::Os::None => "none; ld.lld -T link.ld".to_owned(),
+    };
+    let libs = match tls {
+        Some(more) => format!("{libs} {}", more.join(" ")),
+        None => libs,
     };
     let text = format!(
         "# Written by nazm build --objects. Link these, in this order, with the target's toolchain.\n\
