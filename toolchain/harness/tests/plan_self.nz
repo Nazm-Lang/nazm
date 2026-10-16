@@ -1,0 +1,128 @@
+// The plan's own tests (R7): what `xtask/src/plan.rs`'s tests hold the Rust planner to — the
+// schema refuses an unknown field, a killer resolves through files, inline modules and doc
+// comments or is reported stale with the reason, an ignored killer is refused, the longest owning
+// prefix chooses the profile and an explicit one wins, and a selection of nothing is an error.
+
+use "@std/text"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../mutate/plan.nz"
+
+const ONE: Str = "[[mutation]]\nname = \"m\"\nwhy = \"w\"\nfile = \"crates/a/src/x.rs\"\nfind = \"f\"\nreplace = \"r\"\n";
+
+fn cat(text: Str) -> Result[Plan, Str] ! {} {
+    plan_load(text, "catalogue")
+}
+
+/// A tiny workspace on disk, for the resolution checks: `plan.rs`'s `workspace`.
+fn workspace(h: Caps) -> Result[Str, Str] ! { io } {
+    let d = scratch_new(h);
+    scratch_write(h, d, "Cargo.toml", "[workspace]\nmembers = [\"a\"]\n")?;
+    scratch_write(h, d, "a/Cargo.toml", "[package]\nname = \"a\"\n")?;
+    scratch_write(h, d, "a/src/lib.rs", "mod deep;\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn top() {}\n\n    #[test]\n    #[ignore = \"slow\"]\n    fn slow() {}\n}\n")?;
+    scratch_write(h, d, "a/src/deep.rs", "#[cfg(test)]\nmod tests {\n    /// doc\n    #[test]\n    fn inner() {}\n}\n")?;
+    scratch_write(h, d, "a/tests/it.rs", "#[test]\nfn whole() {}\n")?;
+    Result[Str, Str].Ok(value: d)
+}
+
+fn with_killer(h: Caps, root: Str, k: Str) -> Result[Strs, Str] ! { io } {
+    let c = cat(f"{ONE}killers = [{k}]\n")?;
+    Result[Strs, Str].Ok(value: validate(h, root, root, c))
+}
+
+@test
+fn an_unknown_field_is_refused_rather_than_ignored(io: IoCap) -> Result[Int, Str] ! { io } {
+    match cat(f"{ONE}killer = \"typo\"\n") {
+        Result.Ok(value: c) => Result[Int, Str].Err(error: "an unknown field was accepted"),
+        Result.Err(error: e) => check_that(text_contains(e, "unknown field `killer`"), e),
+    }
+}
+
+@test
+fn killers_that_exist_validate(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w = workspace(h)?;
+    let ks = strs_new();
+    strs_push(ks, "{ package = \"a\", lib = true, name = \"tests::top\" }");
+    strs_push(ks, "{ package = \"a\", lib = true, name = \"deep::tests::inner\" }");
+    strs_push(ks, "{ package = \"a\", test = \"it\", name = \"whole\" }");
+    for k in ks {
+        let bad = with_killer(h, w, k)?;
+        check_that(strs_len(bad) == 0, f"{k}: {str_join(bad, "; ")}")?;
+    }
+    scratch_remove(h, w);
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn stale_killer_metadata_fails_validation_before_any_campaign(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Result[Int, Str] ! { io, spawn } {
+    let h = caps(io, p, sp, v, t);
+    let w = workspace(h)?;
+    let ks = strs_new();
+    let says = strs_new();
+    strs_push(ks, "{ package = \"a\", lib = true, name = \"tests::gone\" }");
+    strs_push(says, "no `#[test] fn gone`");
+    strs_push(ks, "{ package = \"a\", lib = true, name = \"nowhere::tests::top\" }");
+    strs_push(says, "module `nowhere`");
+    strs_push(ks, "{ package = \"a\", test = \"missing\", name = \"whole\" }");
+    strs_push(says, "no integration test");
+    strs_push(ks, "{ package = \"b\", lib = true, name = \"x\" }");
+    strs_push(says, "not a workspace member");
+    strs_push(ks, "{ package = \"a\", bin = \"tool\", name = \"x\" }");
+    strs_push(says, "no binary");
+    strs_push(ks, "{ package = \"a\", lib = true, name = \"tests::slow\" }");
+    strs_push(says, "is `#[ignore]`d");
+    strs_push(ks, "{ package = \"a\", lib = true, test = \"it\", name = \"whole\" }");
+    strs_push(says, "exactly one of");
+    let mut i = 0;
+    while i < strs_len(ks) {
+        let bad = with_killer(h, w, strs_get(ks, i))?;
+        let joined = str_join(bad, "; ");
+        check_that(strs_len(bad) == 1 && text_contains(joined, strs_get(says, i)), f"{strs_get(ks, i)}: {joined}")?;
+        i = i + 1;
+    }
+    scratch_remove(h, w);
+    Result[Int, Str].Ok(value: 0)
+}
+
+@test
+fn the_longest_owning_prefix_chooses_the_profile_and_an_explicit_one_wins(io: IoCap) -> Result[Int, Str] ! { io } {
+    let profiles = "[[profile]]\nname = \"wide\"\nwhy = \"w\"\nowns = [\"crates/\"]\ntargets = [{ package = \"a\", lib = true }]\n[[profile]]\nname = \"narrow\"\nwhy = \"w\"\nowns = [\"crates/a/\"]\ntargets = [{ package = \"a\", lib = true }]\n";
+    let c = cat(f"{ONE}killers = [{{ package = \"a\", lib = true, name = \"tests::top\" }}]\n{profiles}")?;
+    let sel = select(c, strs_new())?;
+    let text = match render(c, sel) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: ps) => { return Result[Int, Str].Err(error: str_join(ps, "; ")); },
+    };
+    check_that(text_contains(text, "        tier 2  narrow (owns crates/a/): a --lib\n"), text)?;
+    let named = cat(f"{ONE}profile = \"wide\"\nno_killer = \"because\"\n{profiles}")?;
+    let text2 = match render(named, select(named, strs_new())?) {
+        Result.Ok(value: t) => t,
+        Result.Err(error: ps) => { return Result[Int, Str].Err(error: str_join(ps, "; ")); },
+    };
+    check_that(text_contains(text2, "        tier 2  wide (named by the entry): a --lib\n") && text_contains(text2, "1 selected: 0 with a killer, 1 with a profile only, 0 straight"), text2)?;
+    let undeclared = cat(f"{ONE}profile = \"nope\"\nno_killer = \"because\"\n")?;
+    match render(undeclared, select(undeclared, strs_new())?) {
+        Result.Ok(value: t) => Result[Int, Str].Err(error: "an undeclared profile was planned"),
+        Result.Err(error: ps) => check_that(str_join(ps, "") == "m: profile `nope` is not declared", str_join(ps, "; ")),
+    }
+}
+
+@test
+fn a_selection_of_nothing_is_an_error_and_an_exact_filter_selects_one_name(io: IoCap) -> Result[Int, Str] ! { io } {
+    let c = cat(f"{ONE}[[mutation]]\nname = \"selfhost-m\"\nwhy = \"w\"\nfile = \"x\"\nfind = \"f\"\nreplace = \"r\"\n")?;
+    let none = strs_new();
+    strs_push(none, "zzz");
+    match select(c, none) {
+        Result.Ok(value: s) => { return Result[Int, Str].Err(error: "a filter that selects nothing was accepted"); },
+        Result.Err(error: e) => check_that(e == "no mutation matches [\"zzz\"]. A filter that selects nothing would report a clean run having tested nothing.", e)?,
+    };
+    check_that(ints_len(select(c, strs_new())?) == 2, "no filter selects every entry")?;
+    let sub = strs_new();
+    strs_push(sub, "m");
+    check_that(ints_len(select(c, sub)?) == 2, "a substring selects both")?;
+    let exact = strs_new();
+    strs_push(exact, "=m");
+    let one = select(c, exact)?;
+    check_that(ints_len(one) == 1 && ints_get(one, 0) == 0, "`=m` selects exactly `m`")
+}

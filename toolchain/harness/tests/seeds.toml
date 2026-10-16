@@ -274,3 +274,71 @@ why = "agent governance: the shim's first sentence stops naming the root map; it
 file = "CLAUDE.md"
 find = "Read the root [`AGENTS.md`](AGENTS.md) and the nested `AGENTS.md` nearest the files you will change,"
 replace = "Read the root map and the nested maps nearest the files you will change,"
+
+# --- mutations apply: `plan::validate` ---------------------------------------------------------
+# Each also runs `cargo xtask mutate --plan` against `nazm-mutate plan`, which refuses on the same
+# problems.
+
+[[mutation]]
+name = "killer-test-renamed"
+why = "mutations apply: a killer naming a test that is not there"
+file = "xtask/mutations/mutations.toml"
+find = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]"
+replace = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::no_such_test\" }]"
+
+[[mutation]]
+name = "killer-module-missing"
+why = "mutations apply: a killer in a module that is neither a file nor inline"
+file = "xtask/mutations/mutations.toml"
+find = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]"
+replace = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"nowhere::tests::every_selftest_case_passes\" }]"
+
+[[mutation]]
+name = "killer-target-wrong"
+why = "mutations apply: a killer in an unknown package, with two kinds, in a missing test target and a missing binary"
+file = "xtask/mutations/mutations.toml"
+find = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]"
+replace = "count() as f64\"\nkillers = [{ package = \"nazm-gone\", lib = true, name = \"x\" }, { package = \"nazm-bench\", lib = true, test = \"t\", name = \"x\" }, { package = \"nazm-bench\", test = \"no_such_file\", name = \"x\" }, { package = \"nazm-cli\", bin = \"gone\", name = \"x\" }, { package = \"xtask\", lib = true, name = \"x\" }]"
+
+[[mutation]]
+name = "killer-listed-twice-and-a-reason"
+why = "mutations apply: the same killer twice, and a reason for having none beside it"
+file = "xtask/mutations/mutations.toml"
+find = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]"
+replace = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }, { package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]\nno_killer = \"seeded\""
+
+[[mutation]]
+name = "no-killer-no-reason"
+why = "mutations apply: an entry with no killer and a blank reason, another naming an undeclared profile"
+file = "xtask/mutations/mutations.toml"
+find = "count() as f64\"\nkillers = [{ package = \"nazm-bench\", lib = true, name = \"selftest::tests::every_selftest_case_passes\" }]"
+replace = "count() as f64\"\nno_killer = \"   \"\nprofile = \"nonesuch\""
+
+[[mutation]]
+name = "mutation-name-twice"
+why = "mutations apply: two entries of one name"
+file = "xtask/mutations/mutations.toml"
+find = "name = \"cost-numerator-drops-failures\""
+replace = "name = \"acceptance-rate-denominator\""
+
+[[mutation]]
+name = "profile-twice-sharing-a-prefix"
+why = "mutations apply: a profile declared twice, owning another's prefix, with a blank why"
+file = "xtask/mutations/mutations.toml"
+find = "name = \"mir\"\nwhy = \"MIR lowering, validation and its digest are observed by the MIR suite — laws, validator refusals, stress — and, through the native backend reading MIR, by compiling and running programs\"\nowns = [\"crates/nazm-mir/\"]"
+replace = "name = \"native\"\nwhy = \" \"\nowns = [\"crates/nazm-lir/\"]"
+
+[[mutation]]
+name = "profile-bad-targets"
+why = "mutations apply: a profile with no targets, and one whose targets are missing, doubled or wrongly kinded"
+file = "xtask/mutations/mutations.toml"
+find = "[[profile]]\nname = \"selfhost\""
+replace = "[[profile]]\nname = \"empty\"\nwhy = \"seeded\"\ntargets = []\n\n[[profile]]\nname = \"broken\"\nwhy = \"seeded\"\ntargets = [{ package = \"nazm-cli\", test = \"cli_m_r\", module = \"nowhere\" }, { package = \"nazm-lir\", lib = true, module = \"x\" }, { package = \"nazm-lir\", lib = true }, { package = \"nazm-lir\", lib = true }, { package = \"nazm-cli\", bin = \"gone\" }, { package = \"nazm-gone\", lib = true }, { package = \"nazm-lir\" }]\n\n[[profile]]\nname = \"selfhost\""
+
+[[mutation]]
+name = "killer-ignored"
+why = "mutations apply: a killer the workspace suite does not run"
+file = "crates/nazm-bench/src/selftest.rs"
+find = "#[test]\n    fn every_selftest_case_passes() {"
+replace = "#[test]\n    #[ignore = \"seeded\"]\n    fn every_selftest_case_passes() {"
+
