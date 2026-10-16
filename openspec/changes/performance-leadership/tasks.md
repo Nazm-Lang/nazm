@@ -48,16 +48,16 @@ Target: the best concurrency of any language — Go's goroutines first, then Rus
 Java's virtual threads and C#'s async — measured, with Nazm's safety kept: data races refused at
 compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only as passed.
 
-- [ ] 6.1 The baseline, now (on the reference, after R1.5's current task): spawn 1,000,000 tasks;
+- [x] 6.1 The baseline, now (on the reference, after R1.5's current task): spawn 1,000,000 tasks;
       channel ping-pong latency; fan-in throughput; memory per live task; HTTP/1.1 requests per
       second on loopback; a parallel CPU job — Nazm against Go on this Mac, quiet host, recorded in
       `docs/performance.md` with what each side guarantees
       — 2026-10-16: the programs, `bench/compare/{nazm,go}/` (`spawn`, `pingpong`, `fanin`, `idle`,
       `httpd`, the shared load generator `go/httpload.go`, and `primes`), and
       `bench/compare/concurrency.sh`, which checks both print the same answers and refuses to time
-      on a loaded host; measured at load 1.9–3.4 (`performance.md`, *Concurrency*): spawn 13× and
-      hand-offs 14× slower than Go, fan-in 6.5×, 17.4 against 2.7 KiB per blocked task, HTTP 0.86×
-      Go at half its memory. Still to take quietly: HTTP rounds two and three and `primes`
+      on a loaded host; measured from below load 2 (`performance.md`, *Concurrency*): spawn 13–14× and
+      hand-offs 14× slower than Go, fan-in 6.5×, 17.4 against 2.7 KiB per blocked task, HTTP 0.84–0.86×
+      Go at half its memory, parallel CPU 12–19% behind; two runs
 - [ ] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
 - [ ] 6.3 A work-stealing scheduler, and preemption at loop back-edges
 - [ ] 6.4 `select` over several channels, and lock-free channels
