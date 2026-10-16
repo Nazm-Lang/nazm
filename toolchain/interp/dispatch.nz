@@ -63,8 +63,8 @@ fn runtime_type(p: Prog, v: V) -> (Str, Int) {
         V.Str(s: x, obj: o, start: st) => ("Str", 0 - 4),
         V.Num(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
         V.Flt(kind: k, v: x) => (kind_name(k), 0 - 10 - k),
-        V.Rec(def: d, fields: fs) => (strs_get(p.names, dname(d)), dname(d)),
-        V.Enm(def: d, variant: x, fields: fs) => (strs_get(p.names, dname(d)), dname(d)),
+        V.Rec(def: d, obj: _) => (strs_get(p.names, dname(d)), dname(d)),
+        V.Enm(def: d, variant: _, obj: _) => (strs_get(p.names, dname(d)), dname(d)),
         _ => ("?", 0 - 1),
     }
 }

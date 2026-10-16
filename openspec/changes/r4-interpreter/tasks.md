@@ -57,3 +57,6 @@
 - [x] 7.3 The networked allocation counts: a connection made or bytes written give way (D10); the
       three networked programs of `http.rs` are cases; the compiled tiers' `atomic_new` counted as
       a string reported (design.md, *Allocation counts in networked programs*)
+- [x] 7.4 Speed: profiled with `sample`; records' and enum values' fields in the heap (D4); plain
+      values skip the calls to `inc`/`dec`/`release`; fast paths for the hashes' per-byte work
+      (design.md, *Speed*)

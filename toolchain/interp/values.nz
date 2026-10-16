@@ -33,11 +33,11 @@ pub fn equal(h: Heap, a: V, b: V) -> Int {
         (V.Num(kind: k, v: x), V.Num(kind: j, v: y)) => if x == y { 1 } else { 0 },
         // IEEE 754's: a NaN equals nothing.
         (V.Flt(kind: k, v: x), V.Flt(kind: j, v: y)) => if x == y { 1 } else { 0 },
-        (V.Rec(def: d, fields: xs), V.Rec(def: e, fields: ys)) => all_equal(h, xs, ys),
-        (V.Enm(def: d, variant: i, fields: xs), V.Enm(def: e, variant: j, fields: ys)) => {
-            if i != j { 0 } else { all_equal(h, xs, ys) }
+        (V.Rec(def: d, obj: x), V.Rec(def: e, obj: y)) => all_equal(h, fields_of(h, x), fields_of(h, y)),
+        (V.Enm(def: d, variant: i, obj: x), V.Enm(def: e, variant: j, obj: y)) => {
+            if i != j { 0 } else { all_equal(h, fields_of(h, x), fields_of(h, y)) }
         },
-        (V.Arr(items: xs), V.Arr(items: ys)) => all_equal(h, xs, ys),
+        (V.Arr(items: xs), V.Arr(items: ys)) => arr_equal(h, xs, ys),
         // A `Box` or `List`, which the interpreter holds as a sequence: by what it holds.
         (V.Ref(obj: x), V.Ref(obj: y)) => {
             if x == y { return 1 }
@@ -54,10 +54,19 @@ pub fn equal(h: Heap, a: V, b: V) -> Int {
     }
 }
 
-fn all_equal(h: Heap, xs: List[V], ys: List[V]) -> Int {
+fn arr_equal(h: Heap, xs: List[V], ys: List[V]) -> Int {
     if list_len(xs) != list_len(ys) { return 0 - 1 }
     for i in 0..list_len(xs) {
         let e = equal(h, list_get(xs, i), list_get(ys, i))
+        if e != 1 { return e }
+    }
+    1
+}
+
+fn all_equal(h: Heap, xs: Vec[V], ys: Vec[V]) -> Int {
+    if vec_len(xs) != vec_len(ys) { return 0 - 1 }
+    for i in 0..vec_len(xs) {
+        let e = equal(h, vec_get(xs, i), vec_get(ys, i))
         if e != 1 { return e }
     }
     1
@@ -69,7 +78,7 @@ fn str_order(a: Str, b: Str) -> Int {
 }
 
 /// The derived order (`arith.rs`, `order`): -1, 0, 1, or -2 for what has none.
-pub fn order(p: Prog, a: V, b: V) -> Int {
+pub fn order(p: Prog, h: Heap, a: V, b: V) -> Int {
     match (a, b) {
         (V.Int(v: x), V.Int(v: y)) => if x < y { 0 - 1 } else if x > y { 1 } else { 0 },
         (V.Num(kind: k, v: x), V.Num(kind: j, v: y)) => {
@@ -77,22 +86,24 @@ pub fn order(p: Prog, a: V, b: V) -> Int {
         },
         (V.Bool(v: x), V.Bool(v: y)) => if x == y { 0 } else if y { 0 - 1 } else { 1 },
         (V.Str(s: x, obj: o, start: s1), V.Str(s: y, obj: q, start: s2)) => str_order(x, y),
-        (V.Rec(def: d, fields: xs), V.Rec(def: e, fields: ys)) => {
-            let canon = record_order(p.shapes, strs_get(p.names, dname(d)), list_len(xs))
-            fields_order(p, canon, xs, ys)
+        (V.Rec(def: d, obj: x), V.Rec(def: e, obj: y)) => {
+            let xs = fields_of(h, x)
+            let canon = record_order(p.shapes, strs_get(p.names, dname(d)), vec_len(xs))
+            fields_order(p, h, canon, xs, fields_of(h, y))
         },
-        (V.Enm(def: d, variant: i, fields: xs), V.Enm(def: e, variant: j, fields: ys)) => {
+        (V.Enm(def: d, variant: i, obj: x), V.Enm(def: e, variant: j, obj: y)) => {
             let ty = strs_get(p.names, dname(d))
             if i != j { return variant_rank(p.shapes, ty, i, j) }
-            fields_order(p, payload_order(p.shapes, ty, i, list_len(xs)), xs, ys)
+            let xs = fields_of(h, x)
+            fields_order(p, h, payload_order(p.shapes, ty, i, vec_len(xs)), xs, fields_of(h, y))
         },
         _ => 0 - 2,
     }
 }
 
-fn fields_order(p: Prog, canon: Ints, xs: List[V], ys: List[V]) -> Int {
+fn fields_order(p: Prog, h: Heap, canon: Ints, xs: Vec[V], ys: Vec[V]) -> Int {
     for i in canon {
-        let o = order(p, list_get(xs, i), list_get(ys, i))
+        let o = order(p, h, vec_get(xs, i), vec_get(ys, i))
         if o != 0 { return o }
     }
     0
@@ -111,7 +122,7 @@ pub fn compare_values(p: Prog, vm: Vm, pc: Int, op: Int, l: V, r: V) -> V {
             return V.Bool(v: if op == 0 { e == 1 } else { e == 0 })
         }
     } else {
-        let o = order(p, l, r)
+        let o = order(p, vm.heap, l, r)
         if o > 0 - 2 {
             return V.Bool(v: if op == 2 { o < 0 } else if op == 3 { o <= 0 } else if op == 4 { o > 0 } else { o >= 0 })
         }
@@ -178,7 +189,7 @@ pub fn fnv_combine(a: UInt64, b: UInt64) -> UInt64 {
 }
 
 /// The derived hash of `v`, and whether it has one.
-pub fn derived_hash(p: Prog, v: V) -> (UInt64, Bool) {
+pub fn derived_hash(p: Prog, h: Heap, v: V) -> (UInt64, Bool) {
     match v {
         V.Int(v: x) => (fnv_word(wrap_convert[UInt64](x)), true),
         V.Num(kind: k, v: x) => {
@@ -192,21 +203,23 @@ pub fn derived_hash(p: Prog, v: V) -> (UInt64, Bool) {
         },
         V.Bool(v: b) => (fnv_word(if b { UInt64(1) } else { UInt64(0) }), true),
         V.Str(s: s, obj: o, start: st) => (fnv_bytes(s), true),
-        V.Rec(def: d, fields: xs) => {
-            fold(p, fnv_word(UInt64(0)), record_order(p.shapes, strs_get(p.names, dname(d)), list_len(xs)), xs)
+        V.Rec(def: d, obj: o) => {
+            let xs = fields_of(h, o)
+            fold(p, h, fnv_word(UInt64(0)), record_order(p.shapes, strs_get(p.names, dname(d)), vec_len(xs)), xs)
         },
-        V.Enm(def: d, variant: i, fields: xs) => {
+        V.Enm(def: d, variant: i, obj: o) => {
             let ty = strs_get(p.names, dname(d))
-            fold(p, fnv_bytes(variant_name(p.shapes, ty, i)), payload_order(p.shapes, ty, i, list_len(xs)), xs)
+            let xs = fields_of(h, o)
+            fold(p, h, fnv_bytes(variant_name(p.shapes, ty, i)), payload_order(p.shapes, ty, i, vec_len(xs)), xs)
         },
         _ => (UInt64(0), false),
     }
 }
 
-fn fold(p: Prog, start: UInt64, canon: Ints, xs: List[V]) -> (UInt64, Bool) {
+fn fold(p: Prog, heap: Heap, start: UInt64, canon: Ints, xs: Vec[V]) -> (UInt64, Bool) {
     let mut h = start
     for i in canon {
-        let (x, ok) = derived_hash(p, list_get(xs, i))
+        let (x, ok) = derived_hash(p, heap, vec_get(xs, i))
         if !ok { return (UInt64(0), false) }
         h = fnv_combine(h, x)
     }

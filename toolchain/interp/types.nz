@@ -7,7 +7,9 @@ use "shapes.nz"
 
 /// A run-time value. `Unset` is a slot not yet bound, or bound in a region since left.
 ///
-/// A record, an enum value and an array are immutable aggregates, as the language makes them;
+/// A record, an enum value and an array are immutable aggregates, as the language makes them. A
+/// record's or an enum value's fields are the heap's object `obj` (`K_AGG`, 0 for none), which
+/// counts the value's copies: copying one is copying two integers (`design.md`, D4);
 /// a `Str` is a view (`s`) of a backing, `obj` the heap object that counts it (0 for an immortal
 /// one: a literal or an argument) and `start` where the view begins in it. Every handle is
 /// `Ref(obj)`, an index into the heap.
@@ -16,8 +18,8 @@ pub enum V {
     Int(v: Int),
     Bool(v: Bool),
     Str(s: Str, obj: Int, start: Int),
-    Rec(def: Int, fields: List[V]),
-    Enm(def: Int, variant: Int, fields: List[V]),
+    Rec(def: Int, obj: Int),
+    Enm(def: Int, variant: Int, obj: Int),
     Arr(items: List[V]),
     Ref(obj: Int),
     Cap(kind: Int),
@@ -151,7 +153,7 @@ pub const K_CHAN: Int = 5
 pub const K_FUNC: Int = 6
 pub const K_ATOMIC: Int = 7
 pub const K_HANDLE: Int = 8
-// A record or enum value that holds references: one count for all its copies (D4).
+// A record's or enum value's fields: one count for all its copies (D4).
 pub const K_AGG: Int = 9
 
 // The counters of the memory report.

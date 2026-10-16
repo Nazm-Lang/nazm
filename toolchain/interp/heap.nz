@@ -67,30 +67,28 @@ pub fn heap_str(h: Heap, s: Str) -> V {
     V.Str(s: s, obj: alloc(h, K_STR, 0), start: 0)
 }
 
-// A record's or enum value's `def` packs three facts: whether one of its fields holds a reference
-// (bit 0), its definition's interned name (bits 1 to 23), and — when it holds one — the heap
-// object that counts the value's copies (above), so that copying a record of handles takes one
-// reference and not one per field. A value of plain data is retained and released at no cost.
-
-const NAME_SPAN: Int = 8388608
+// A record's or enum value's `def` is its definition's interned name, and its fields are a heap
+// object of their own (`K_AGG`), which counts the value's copies: copying a record is copying two
+// integers, and its fields are released when its last copy goes. A value with no fields has none
+// (0). The 0.10.0 code generator counts every copy of a `List` held in an enum through the
+// runtime, which made a record's copy cost what a dozen instructions do (`design.md`, D4).
 
 /// The interned name of a record's or enum value's type.
 pub fn dname(d: Int) -> Int {
-    (d / 2) % NAME_SPAN
+    d
 }
 
-/// The object that counts a record's or enum value's copies, or 0.
-pub fn drid(d: Int) -> Int {
-    d / (2 * NAME_SPAN)
+/// The object holding `fields`, with one reference, or 0 when there are none.
+pub fn agg(h: Heap, fields: Vec[V]) -> Int {
+    if vec_len(fields) == 0 { return 0 }
+    let o = alloc(h, K_AGG, 0)
+    vec_set(h.items, o, fields)
+    o
 }
 
-/// A new value's `def`, for its type `name` and its `fields`: one count of its own when a field
-/// holds a reference.
-pub fn def_bits(h: Heap, name: Int, fields: Vec[V]) -> Int {
-    for f in fields {
-        if holds(f) { return alloc(h, K_AGG, 0) * 2 * NAME_SPAN + name * 2 + 1 }
-    }
-    name * 2
+/// A record's or enum value's fields, by its `obj`.
+pub fn fields_of(h: Heap, o: Int) -> Vec[V] {
+    vec_get(h.items, o)
 }
 
 /// Take another reference to whatever `v` holds, given only the heap's counts — what the loop's
@@ -102,11 +100,11 @@ pub fn inc(rc: Ints, v: V) {
         },
         V.Ref(obj: o) => ints_set(rc, o, ints_get(rc, o) + 1),
         V.Byt(b: _, obj: o) => ints_set(rc, o, ints_get(rc, o) + 1),
-        V.Rec(def: d, fields: _) => {
-            if d % 2 == 1 { ints_set(rc, drid(d), ints_get(rc, drid(d)) + 1) }
+        V.Rec(def: _, obj: o) => {
+            if o > 0 { ints_set(rc, o, ints_get(rc, o) + 1) }
         },
-        V.Enm(def: d, variant: _, fields: _) => {
-            if d % 2 == 1 { ints_set(rc, drid(d), ints_get(rc, drid(d)) + 1) }
+        V.Enm(def: _, variant: _, obj: o) => {
+            if o > 0 { ints_set(rc, o, ints_get(rc, o) + 1) }
         },
         V.Arr(items: fs) => {
             for f in fs { inc(rc, f) }
@@ -122,8 +120,8 @@ pub fn dec(rc: Ints, v: V) -> Bool {
         V.Str(s: _, obj: x, start: _) => x,
         V.Ref(obj: x) => x,
         V.Byt(b: _, obj: x) => x,
-        V.Rec(def: d, fields: _) => if d % 2 == 1 { drid(d) } else { 0 },
-        V.Enm(def: d, variant: _, fields: _) => if d % 2 == 1 { drid(d) } else { 0 },
+        V.Rec(def: _, obj: x) => x,
+        V.Enm(def: _, variant: _, obj: x) => x,
         V.Arr(items: _) => { return false },
         _ => 0,
     }
@@ -144,8 +142,8 @@ pub fn holds(v: V) -> Bool {
         V.Str(s: _, obj: o, start: _) => o > 0,
         V.Ref(obj: o) => true,
         V.Byt(b: _, obj: o) => true,
-        V.Rec(def: d, fields: _) => d % 2 == 1,
-        V.Enm(def: d, variant: _, fields: _) => d % 2 == 1,
+        V.Rec(def: _, obj: o) => o > 0,
+        V.Enm(def: _, variant: _, obj: o) => o > 0,
         V.Arr(items: _) => true,
         _ => false,
     }
@@ -153,8 +151,9 @@ pub fn holds(v: V) -> Bool {
 
 /// Give up the references `v` holds. An object whose last reference goes is reclaimed, counted,
 /// and gives up what it holds in turn — through a worklist, never by recursion through objects, so
-/// a long chain of boxes is released in constant stack, as Rust's `release` does. An aggregate's
-/// fields are released in place: their nesting is the type's, which is bounded.
+/// a long chain of boxes is released in constant stack, as Rust's `release` does. A record's or
+/// enum value's fields are such an object; an array's are released in place: their nesting is the
+/// type's, which is bounded.
 pub fn release(h: Heap, v: V) {
     match v {
         V.Str(s: _, obj: o, start: _) => {
@@ -162,31 +161,17 @@ pub fn release(h: Heap, v: V) {
         },
         V.Ref(obj: o) => { drop_ref(h, o); },
         V.Byt(b: _, obj: o) => { drop_ref(h, o); },
-        V.Rec(def: d, fields: fs) => {
-            if d % 2 == 1 && last(h, drid(d)) {
-                for f in fs { release(h, f) }
-            }
+        V.Rec(def: _, obj: o) => {
+            if o > 0 { drop_ref(h, o); }
         },
-        V.Enm(def: d, variant: _, fields: fs) => {
-            if d % 2 == 1 && last(h, drid(d)) {
-                for f in fs { release(h, f) }
-            }
+        V.Enm(def: _, variant: _, obj: o) => {
+            if o > 0 { drop_ref(h, o); }
         },
         V.Arr(items: fs) => {
             for f in fs { release(h, f) }
         },
         _ => { },
     }
-}
-
-/// Give up one reference to aggregate object `o`: whether it was the last, the object then free.
-fn last(h: Heap, o: Int) -> Bool {
-    let n = ints_get(h.rc, o) - 1
-    ints_set(h.rc, o, n)
-    if n > 0 { return false }
-    ints_set(h.kind, o, K_FREE)
-    ints_push(h.free, o)
-    true
 }
 
 fn drop_ref(h: Heap, o: Int) {
