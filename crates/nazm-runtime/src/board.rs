@@ -941,6 +941,7 @@ stop:
     ));
     out.push_str(MMIO_RUNTIME);
     out.push_str(ATOMIC_RUNTIME);
+    out.push_str(PREEMPT_NONE);
     // What an ARMv7-M has no instruction for, and LLVM calls instead (Gate 3); an ARMv8-M
     // Mainline has none of it either, nor an instruction between a 64-bit integer and a float
     // (M1).
@@ -1879,6 +1880,18 @@ entry:
 /// consistent access to an aligned 8-byte cell each. A board's runtime and the hosted one both
 /// define them, as they do the device registers; on a target without threads LLVM makes each
 /// the plain access it is with one task.
+/// A board's preemption poll (performance leadership 6.3): a loop's back edge reads the flag, which
+/// nothing on a board sets, and the slow path calls nothing, so a board image's stack bound is
+/// still the sum of known frames.
+pub const PREEMPT_NONE: &str = r"
+@nz.preempt_req = hidden global i64 0
+
+define hidden void @nz.preempt() {
+entry:
+  ret void
+}
+";
+
 pub const ATOMIC_RUNTIME: &str = r"
 define hidden i64 @nz.atomic_load(ptr %cell) {
 entry:

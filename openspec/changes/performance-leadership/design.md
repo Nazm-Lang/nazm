@@ -465,16 +465,22 @@ stacks per task (it fixes the start-up cost, not the memory).
 queues: tasks never started (which have no frames, so any worker may take them) and tasks resumed
 (pinned). A task spawned by a task goes to its own worker's queue — the spawner usually waits on it
 next — and one spawned by `main` round robin as today. A worker with nothing to run first steals
-half the unstarted tasks of the busiest-looking other worker, then spins for a short while
+half the unstarted tasks of the first other worker that has any, then spins for a short while
 (about 50 µs) before sleeping on its condition variable; a waker signals a worker only when it
 sleeps. Locks stay per worker (a deque under its own mutex; Chase–Lev lock-free deques are not
-needed while a steal is rare and the owner's own lock is uncontended). **Preemption at function
-entry, through the stack check:** a monitor thread, when a task has held its worker for 10 ms and
-the worker has others queued, writes the largest address into that worker's stack limit, so the
-next checked call in the task takes the slow path, which restores the limit and yields. The fast
-path costs nothing more. Loop back-edges without a call are not preempted: that needs a poll in
-every loop, which is a code-generation change for after the cut-over. Off with one worker
-(deterministic mode).
+needed while a steal is rare and the owner's own lock is uncontended). **Preemption at loop back
+edges** (the copyright holder, 2026-10-16: part of 0.11.0): first designed at function entry by
+poisoning the stack limit, which would have cost nothing on the fast path but missed every loop
+without a call — the case that starves. Built instead: every loop's back edge (found when MIR is
+lowered: an edge to a block on the depth-first path) polls one process-wide flag, inlined by LLVM's
+lowering as a load and a branch past a call; a monitor thread every 10 ms sets the flag and a
+worker's request when that worker has run one task since the last look while others wait, and the
+task yields at its next back edge. Not the stack limit: it is thread-local (a call per read on
+macOS where LLVM cannot hoist it) and it is set in every task, where a plain global is read with
+one instruction. Off with one worker (deterministic mode). Its cost on hot loops (`fib`, `words`,
+`primes`, a tight loop with no call) is not measured yet: no quiet host came while it was built;
+`bench/compare/preempt_cost.sh BASE NEW OUT --wait` times it in the coordinator's quiet window, and
+more than 1-2% reopens the design.
 
 **6.4 — channels.** The `Int` channel's text is the thread model's, line for line in
 `compiler/emit.nz` (`runtime parity`); its waits and wakes are already the pool's hooks, so the
@@ -483,6 +489,25 @@ nobody parked touches no lock. A direct hand-off to a parked receiver changes th
 its mirror; it is the next step, with `select` over channels of different element types (a language
 change: both checkers, the interpreter, the pipeline's built-ins, the semantic epoch).
 
-**Versions.** Runtime ABI 39 → 40 (copied stacks), 41 (scheduler), 42 (waiter table). Each bump
-regenerates `toolchain/pipeline/rtext.nz` and `runtime.nz` with `rt_abi_revision` in the same
-commit. No semantic epoch moves for 6.2–6.3.
+**Versions.** Runtime ABI 39 → 40 (copied stacks), 41 (scheduler), 42 (waiter table), 43
+(preemption). Each bump regenerates `toolchain/pipeline/rtext.nz` and `runtime.nz` with
+`rt_abi_revision` in the same commit; preemption's LIR poll is mirrored in
+`toolchain/pipeline/ops.nz` (`loop_latches`), so the pipeline's LIR stays byte-identical. No
+semantic epoch moves for 6.2–6.3.
+
+**Not yet built: `select` over channels of different element types, and a direct hand-off.**
+The shape decided: built-ins rather than syntax, so no grammar moves — `sel_new() -> Select`;
+`sel_recv[T](s: Select, c: Chan[T], out: Vec[T]) -> Int` and `sel_send[T](s: Select, c: Chan[T],
+v: T) -> Int`, each adding a case and returning its index; `sel_wait(s: Select) -> Int` and
+`sel_wait_until(s: Select, ms: Int) -> Int` (a `TimeCap`), the lowest ready index, `-3 - i` for a
+closed case, `-2` timed out. The runtime keeps a case array of channel, stride, kind and the
+address of a slot the generated code owns, and parks once on every case's waiter bucket; the value
+moves into `out` (or out of `v`) in generated code after the wait returns the index, so each case
+keeps its own type. It needs: a `Select` type and five intrinsics in the Rust checker and
+`compiler/`'s checker (R2's `toolchain/frontend-tests` at 0 differ), MIR and LIR lowering and its
+mirror in `toolchain/pipeline/ops.nz`, the Rust interpreter and `toolchain/interp`, both code
+generators, `docs/spec.md` with its 1.0 classification row, `library/std/API-1.0` if `@std`
+wraps it, and the semantic epoch (90 → 91: the identity doc line and `SEMANTIC_EPOCH`, the
+`stability.md` row, two pins in `incremental.rs`, `n38-the-epoch-stays`). The direct hand-off to
+a parked receiver changes the `Int` channel's text and its mirror in `compiler/emit.nz`
+(`runtime parity`).

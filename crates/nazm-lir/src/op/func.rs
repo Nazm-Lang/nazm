@@ -58,6 +58,56 @@ pub(crate) struct Fx<'l, 'a> {
     pub queue: Option<V>,
 }
 
+/// The blocks whose terminator closes a loop (performance leadership 6.3): it has an edge to a
+/// block still on the depth-first path from the entry. MIR's loops are structured, so these are
+/// exactly the edges to a loop's header whatever order successors are taken in; failure edges go
+/// to cleanups, never back, and are not followed.
+fn loop_latches(f: &mir::Function) -> Vec<bool> {
+    let n = f.blocks.len();
+    let mut latch = vec![false; n];
+    // 0 not yet seen, 1 on the path, 2 finished.
+    let mut state = vec![0u8; n];
+    let succ = |b: usize| -> Vec<usize> {
+        f.blocks
+            .get(b)
+            .map(|blk| blk.term.successors().iter().map(|x| x.index()).collect())
+            .unwrap_or_default()
+    };
+    if n == 0 {
+        return latch;
+    }
+    let mut path: Vec<(usize, Vec<usize>)> = vec![(0, succ(0))];
+    if let Some(s0) = state.get_mut(0) {
+        *s0 = 1;
+    }
+    while let Some((b, rest)) = path.last_mut() {
+        let b = *b;
+        match rest.pop() {
+            Some(x) => match state.get(x).copied() {
+                Some(0) => {
+                    if let Some(sx) = state.get_mut(x) {
+                        *sx = 1;
+                    }
+                    path.push((x, succ(x)));
+                }
+                Some(1) => {
+                    if let Some(l) = latch.get_mut(b) {
+                        *l = true;
+                    }
+                }
+                _ => {}
+            },
+            None => {
+                if let Some(sb) = state.get_mut(b) {
+                    *sb = 2;
+                }
+                path.pop();
+            }
+        }
+    }
+    latch
+}
+
 /// Lower one MIR function.
 pub(crate) fn lower(
     lw: &mut Lw<'_>,
@@ -150,6 +200,7 @@ pub(crate) fn lower(
     if let Some(first) = fx.blocks.first().copied() {
         fx.b.term(Term::Jump(first));
     }
+    let latches = loop_latches(f);
     for (i, blk) in f.blocks.iter().enumerate() {
         let Some(lb) = fx.blocks.get(i).copied() else {
             continue;
@@ -166,6 +217,12 @@ pub(crate) fn lower(
         }
         fx.at = blk.term_at;
         fx.locate(blk.term_at);
+        // A loop's back edge polls for preemption (performance leadership 6.3): a load and a
+        // branch where nothing is asked, the runtime only where the pool asked this task to
+        // yield its worker.
+        if latches.get(i).copied().unwrap_or(false) {
+            fx.rt("nz.preempt", &[]);
+        }
         fx.terminator(&blk.term, sig.ret);
     }
     let at = fx

@@ -7573,9 +7573,22 @@ workers' locks; still with nothing, it looks for work for up to 50 µs before it
 queued for it signals it only when it sleeps. With one worker there is no stealing and no spin, so
 `NAZM_WORKERS=1` stays deterministic. A scope's join reads a task that is done without a lock; one
 not done counts itself as a joiner first, and a task that ends wakes joiners only when one is
-counted. Still no preemption: a task that computes without waiting holds its worker; the design
-for preemption at function entry through the stack check is in `openspec/changes/
-performance-leadership/design.md`. Runtime ABI 40 → 41.
+counted. Runtime ABI 40 → 41.
+
+**Amended (performance leadership 6.3, 2026-10-16): preemption at loop back edges.** *Scheduling*'s
+"no preemption" no longer holds with more than one worker. Every loop's back edge — an edge to a
+block on the depth-first path from the entry, found when MIR is lowered to LIR, so exactly the
+loops — polls: LLVM's lowering inlines the poll as one load of the process's flag
+`nz.preempt_req` and a branch past a call of `nz.preempt`; Cranelift's and Nazm's own code
+generator call it. A monitor thread looks at the workers every 10 ms; a worker that has run one
+task since the last look (its switch count unmoved) while others wait in its queues is asked to
+yield (its flag, then the process's), and the task, at its next back edge, yields its worker as a
+select that does not wait does: to the back of its worker's queue. A request a task never polls for
+is dropped when the worker next switches. With one worker there is no monitor, so
+`NAZM_WORKERS=1` keeps its order exactly. Unwinding, stack copying and `N0408` are unaffected: a
+yield at a back edge is a call like any other, inside the frame's own stack, and no back edge is
+taken during an unwind's search. A loop in a function no task runs pays the load and the branch;
+`main` and threads under the thread model are never asked. Runtime ABI 42 → 43.
 
 **Amended (performance leadership 6.4, 2026-10-16): the waiter table's locks.** The table of parked
 waiters keeps its 256 buckets, now under 64 locks (bucket `b` under lock `b mod 64`) in place of one
