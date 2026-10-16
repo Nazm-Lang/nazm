@@ -1688,4 +1688,52 @@ its Debug Probe and an ESP32-C3-DevKitM-1; probe-rs on the Mac host; Float64 ref
   unreachable, so `emit_tls` does not give it to Windows yet and `N0830` stands; the ignored
   `the_windows_engine_runs_on_a_windows_host` is the run that lifts it. No runtime contract moved:
   no ABI or epoch bump.
+## Decisions during C4 (2026-10-16, delegated)
+
+C4 is what a long-running service needs besides its protocol. Every piece is a library but the
+signals, which need the runtime.
+
+- **Configuration without a generic over derived types.** C.5's `config_from_env[T](io, prefix)`
+  would need the checker to find `T`'s derived functions, a language change (C.7's `N0833`). The
+  derive already gives every record its JSON Schema and its decoder, so `@std/config` takes both:
+  `config_load(io, path, prefix, settings_json_schema(), settings_from_json)`. The schema says which
+  members there are and what each holds; the decoder keeps every rule of the derived decoding. A
+  member an environment variable cannot carry is an `Err` naming the variable when it is set, not a
+  checker refusal, so `N0833` is not taken. The file is full TOML 1.0 through `@std/toml` (no
+  subset to specify), read first; each variable set wins over it. Variables are named by a prefix
+  and the member's name upper-cased, camel case split by `_`.
+- **Calendar time in `@std/time`**, not a new module: `Date`, `DateTime` (a date, a time of day and
+  an offset), the proleptic Gregorian calendar over days from the Unix epoch (Hinnant's
+  algorithms), RFC 3339 strictly (a leap second refused: Unix time has none), HTTP's IMF-fixdate,
+  durations as text (`1h30m`). No time-zone database: zones' rules change yearly and belong to a
+  package. All pure; only `time_wall` reads a clock, under its `TimeCap`.
+- **Metrics are integer-valued** sets of `Atomic` cells, so a metric crosses into a task and counts
+  without a lock. A histogram holds at most sixteen buckets as sixteen fields: a sequence of
+  `Atomic`s may not cross (`Vec`), nor may a `Box`, and the gate's latency histograms need about
+  eleven. The registry is a channel of metrics behind a channel used as a lock, so it crosses too
+  and a per-connection task can render it. Exposition is Prometheus text 0.0.4.
+- **The drain deadline without a new mechanism.** The server keeps a registry of its connections
+  (handle and state: idle, serving, ended) in a channel guarded by a lock channel; accepting adds
+  one and drops up to two ended ones, so it stays within about twice the open connections.
+  `http_drain` now also closes idle connections at once (C.6: an idle keep-alive connection is not a
+  request whose response has begun), and `http_drain_within(t, s, ms)` closes the rest at the
+  deadline through `os_close`, whose waiters wake `Closed`, the generation in each handle keeping a
+  stale entry harmless. A handler still running is not interrupted — nothing in the language can
+  preempt it — so a service's exit within `drain_ms` holds for handlers that wait on sockets or
+  channels, which is the gate's case. The server still sends no `Date` field: it holds no clock, and
+  a handler with a `TimeCap` adds one with `time_format_http`.
+- **Log fields** under OpenTelemetry's names: `request_id`, `trace_id`, `span_id`, and `time` as
+  RFC 3339 in UTC. The record's existing `level` and `msg` stay, since renaming them breaks 1.0
+  lines.
+- **Signals** (`@std/signal`): one built-in, `os_signal_watch(which) -> OsHandle` under an `IoCap`,
+  a handle a program reads with the existing parking read, so waiting for a signal parks like a
+  socket and no new wait exists. On POSIX the runtime makes a pipe per watch (at most sixteen in a
+  process) and installs a handler that writes the signal's number to each watch that asked for it;
+  on Windows a console control handler (Ctrl-C, Ctrl-Break: `Interrupt`; console close, log-off,
+  shut-down: `Terminate`) writes to the watches' pipes. `Hangup` exists only on POSIX and is simply
+  never delivered on Windows, so C.7's `N0831` is not taken. When every watch asking for a signal
+  is closed, the handler restores the default action and raises the signal again, so a program
+  that stopped watching ends as one that never watched. The interpreter written in Rust cannot
+  install a handler (its crate forbids `unsafe`), and refuses the watch (`Unsupported`). Runtime ABI
+  38 (37 is the TLS track's); the semantic epoch 90 (89 is TLS's).
 

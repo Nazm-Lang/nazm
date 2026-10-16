@@ -118,6 +118,10 @@
 @std/chan pub fn chan_send_all_strs(c: Chan[Str], xs: Vec[Str]) -> Int ! {}
 @std/chan pub fn chan_collect_strs(c: Chan[Str], n: Int) -> Vec[Str] ! {}
 @std/chan pub fn chan_drain_strs(c: Chan[Str]) -> Vec[Str] ! {}
+@std/config pub fn config_env_name(prefix: Str, member: Str) -> Str ! {}
+@std/config pub fn config_document(io: IoCap, path: Str, prefix: Str, schema: Str) -> Result[Str, Str] ! { io }
+@std/config pub fn config_load[T](io: IoCap, path: Str, prefix: Str, schema: Str, decode: fn(Str) -> Result[T, Str] ! {}) -> Result[T, Str] ! { io }
+@std/config pub fn config_from_env[T](io: IoCap, prefix: Str, schema: Str, decode: fn(Str) -> Result[T, Str] ! {}) -> Result[T, Str] ! { io }
 @std/deque pub struct Deque[T]
 @std/deque pub fn deque_new[T]() -> Deque[T] ! {}
 @std/deque pub fn deque_len[T](d: Deque[T]) -> Int ! {}
@@ -244,6 +248,7 @@
 @std/http pub struct ServeOptions
 @std/http pub struct ClientOptions
 @std/http pub struct HttpServer
+@std/http pub struct HttpLive
 @std/http pub struct HttpConn
 @std/http pub struct ServeStats
 @std/http pub struct Url
@@ -282,6 +287,7 @@
 @std/http pub fn http_listen_tls(net: NetCap, addr: Str, o: ServeOptions, c: TlsConfig) -> Result[HttpServer, IoError] ! { io }
 @std/http pub fn http_server_addr(s: HttpServer) -> Str ! { io }
 @std/http pub fn http_drain(s: HttpServer) -> Int ! { io }
+@std/http pub fn http_drain_within(t: TimeCap, s: HttpServer, ms: Int) -> Int ! { io }
 @std/http pub fn http_draining(s: HttpServer) -> Bool ! {}
 @std/http pub fn http_accept(s: HttpServer) -> Result[HttpConn, IoError] ! { io }
 @std/http pub fn http_serve_conn(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) -> Int ! { io }
@@ -368,6 +374,9 @@
 @std/log pub fn log_str(key: Str, value: Str) -> Str ! {}
 @std/log pub fn log_int(key: Str, value: Int) -> Str ! {}
 @std/log pub fn log_bool(key: Str, value: Bool) -> Str ! {}
+@std/log pub fn log_request_id(id: Str) -> Str ! {}
+@std/log pub fn log_trace(trace_id: Str, span_id: Str) -> Strs ! {}
+@std/log pub fn log_time(w: WallTime) -> Str ! {}
 @std/log pub fn log_fields() -> Strs ! {}
 @std/log pub fn log_line(l: Logger, level: LogLevel, message: Str, fields: Strs) -> Str ! {}
 @std/log pub fn log_at(out: OutCap, l: Logger, level: LogLevel, message: Str, fields: Strs) -> Int ! { io }
@@ -387,6 +396,33 @@
 @std/map pub fn map_remove[T](m: StrMap[T], key: Str) -> Option[T] ! {}
 @std/map pub fn map_keys[T](m: StrMap[T]) -> Strs ! {}
 @std/map pub fn map_values[T](m: StrMap[T]) -> Vec[T] ! {}
+@std/metrics pub struct Bucket
+@std/metrics pub struct Counter
+@std/metrics pub struct Gauge
+@std/metrics pub struct Histogram
+@std/metrics pub enum Metric
+@std/metrics pub struct Metrics
+@std/metrics pub fn metrics_counter(name: Str, help: Str) -> Counter ! {}
+@std/metrics pub fn metrics_counter_labelled(name: Str, help: Str, labels: Strs) -> Counter ! {}
+@std/metrics pub fn metrics_inc(c: Counter) -> Int ! {}
+@std/metrics pub fn metrics_add(c: Counter, n: Int) -> Bool ! {}
+@std/metrics pub fn metrics_counter_value(c: Counter) -> Int ! {}
+@std/metrics pub fn metrics_gauge(name: Str, help: Str) -> Gauge ! {}
+@std/metrics pub fn metrics_gauge_labelled(name: Str, help: Str, labels: Strs) -> Gauge ! {}
+@std/metrics pub fn metrics_gauge_set(g: Gauge, v: Int) -> Int ! {}
+@std/metrics pub fn metrics_gauge_add(g: Gauge, d: Int) -> Int ! {}
+@std/metrics pub fn metrics_gauge_value(g: Gauge) -> Int ! {}
+@std/metrics pub fn metrics_histogram(name: Str, help: Str, bounds: Ints) -> Histogram ! {}
+@std/metrics pub fn metrics_histogram_labelled(name: Str, help: Str, bounds: Ints, labels: Strs) -> Histogram ! {}
+@std/metrics pub fn metrics_observe(h: Histogram, v: Int) -> Int ! {}
+@std/metrics pub fn metrics_histogram_count(h: Histogram) -> Int ! {}
+@std/metrics pub fn metrics_histogram_sum(h: Histogram) -> Int ! {}
+@std/metrics pub fn metrics_registry() -> Metrics ! {}
+@std/metrics pub fn metrics_register_counter(reg: Metrics, c: Counter) -> Result[Int, Str] ! {}
+@std/metrics pub fn metrics_register_gauge(reg: Metrics, g: Gauge) -> Result[Int, Str] ! {}
+@std/metrics pub fn metrics_register_histogram(reg: Metrics, h: Histogram) -> Result[Int, Str] ! {}
+@std/metrics pub fn metrics_render(reg: Metrics) -> Str ! {}
+@std/metrics pub fn metrics_content_type() -> Str ! {}
 @std/net pub struct TcpListener
 @std/net pub struct TcpStream
 @std/net pub struct UdpSocket
@@ -568,6 +604,28 @@
 @std/time pub fn time_between(a: Instant, b: Instant) -> Duration ! {}
 @std/time pub fn time_wall(t: TimeCap) -> WallTime ! {}
 @std/time pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {}
+@std/time pub struct Date
+@std/time pub struct DateTime
+@std/time pub fn time_is_leap_year(year: Int) -> Bool ! {}
+@std/time pub fn time_days_in_month(year: Int, month: Int) -> Int ! {}
+@std/time pub fn time_date(year: Int, month: Int, day: Int) -> Option[Date] ! {}
+@std/time pub fn time_date_to_days(d: Date) -> Int ! {}
+@std/time pub fn time_date_from_days(days: Int) -> Date ! {}
+@std/time pub fn time_weekday(d: Date) -> Int ! {}
+@std/time pub fn time_date_add_days(d: Date, n: Int) -> Date ! {}
+@std/time pub fn time_datetime(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, nanos: Int, offset_minutes: Int) -> Option[DateTime] ! {}
+@std/time pub fn time_datetime_date(dt: DateTime) -> Date ! {}
+@std/time pub fn time_unix_seconds(dt: DateTime) -> Int ! {}
+@std/time pub fn time_from_unix(secs: Int, nanos: Int) -> DateTime ! {}
+@std/time pub fn time_utc(w: WallTime) -> DateTime ! {}
+@std/time pub fn time_to_utc(dt: DateTime) -> DateTime ! {}
+@std/time pub fn time_to_wall(dt: DateTime) -> Option[WallTime] ! {}
+@std/time pub fn time_format_rfc3339(dt: DateTime) -> Str ! {}
+@std/time pub fn time_parse_rfc3339(s: Str) -> Result[DateTime, Str] ! {}
+@std/time pub fn time_format_http(dt: DateTime) -> Str ! {}
+@std/time pub fn time_duration_secs(s: Int) -> Duration ! {}
+@std/time pub fn time_duration_parse(s: Str) -> Result[Duration, Str] ! {}
+@std/time pub fn time_duration_show(d: Duration) -> Str ! {}
 @std/tls pub struct TlsConfig
 @std/tls pub struct TlsStream
 @std/tls pub enum TlsError

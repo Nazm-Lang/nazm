@@ -97,3 +97,345 @@ pub fn time_wall(t: TimeCap) -> WallTime ! {} {
 pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {} {
     time_sleep_ms(d.nanos / 1000000)
 }
+
+// v1 track C, C4 (`docs/spec.md`, *Calendar time*): the proleptic Gregorian calendar, UTC and
+// fixed offsets, RFC 3339 text and HTTP's date, and durations as text. All of it is pure
+// arithmetic on values: only `time_wall` reads a clock. There is no time-zone database and no
+// leap second; a `DateTime` is a date, a time of day and the offset from UTC it was written at.
+
+/// A day of the proleptic Gregorian calendar.
+pub struct Date {
+    year: Int,
+    month: Int,
+    day: Int,
+}
+
+/// A date and a time of day at `offset_minutes` east of UTC (`0`: UTC itself).
+pub struct DateTime {
+    year: Int,
+    month: Int,
+    day: Int,
+    hour: Int,
+    minute: Int,
+    second: Int,
+    nanos: Int,
+    offset_minutes: Int,
+}
+
+// `a / b` rounded toward negative infinity, `b` above zero.
+fn floor_div(a: Int, b: Int) -> Int ! {} {
+    let q = a / b;
+    if a % b != 0 && a < 0 { q - 1 } else { q }
+}
+
+/// Whether `year` has a 29 February.
+pub fn time_is_leap_year(year: Int) -> Bool ! {} {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// The days in `month` (1–12) of `year`; `0` for a month that is none.
+pub fn time_days_in_month(year: Int, month: Int) -> Int ! {} {
+    if month < 1 || month > 12 { return 0; }
+    if month == 2 { return if time_is_leap_year(year) { 29 } else { 28 }; }
+    if month == 4 || month == 6 || month == 9 || month == 11 { 30 } else { 31 }
+}
+
+/// The date, if it is one: a year from 0 to 9999, a month from 1 to 12, a day in that month.
+pub fn time_date(year: Int, month: Int, day: Int) -> Option[Date] ! {} {
+    if year < 0 || year > 9999 || day < 1 || day > time_days_in_month(year, month) { return Option[Date].None(); }
+    Option[Date].Some(value: Date(year: year, month: month, day: day))
+}
+
+/// The days from 1970-01-01 to `d` (negative before it).
+pub fn time_date_to_days(d: Date) -> Int ! {} {
+    let y = if d.month <= 2 { d.year - 1 } else { d.year };
+    let era = floor_div(y, 400);
+    let yoe = y - era * 400;
+    let mp = if d.month > 2 { d.month - 3 } else { d.month + 9 };
+    let doy = (153 * mp + 2) / 5 + d.day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+/// The date `days` after 1970-01-01 (before it, for a negative count).
+pub fn time_date_from_days(days: Int) -> Date ! {} {
+    let z = days + 719468;
+    let era = floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    Date(year: year, month: month, day: day)
+}
+
+/// The day of the week of `d`, ISO 8601's: 1 Monday to 7 Sunday.
+pub fn time_weekday(d: Date) -> Int ! {} {
+    let w = time_date_to_days(d) % 7;
+    (w + 10) % 7 + 1
+}
+
+/// The date `n` days after `d` (before it, for a negative `n`).
+pub fn time_date_add_days(d: Date, n: Int) -> Date ! {} {
+    time_date_from_days(time_date_to_days(d) + n)
+}
+
+/// The date and time, if each part is in range: `time_date`'s date, an hour to 23, a minute and
+/// a second to 59, nanoseconds to 999 999 999, an offset within ±23:59.
+pub fn time_datetime(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, nanos: Int, offset_minutes: Int) -> Option[DateTime] ! {} {
+    let ok = match time_date(year, month, day) { Option.Some(value: d) => true, Option.None() => false, };
+    if !ok || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 || nanos < 0 || nanos > 999999999 || offset_minutes < 0 - 1439 || offset_minutes > 1439 {
+        return Option[DateTime].None();
+    }
+    Option[DateTime].Some(value: DateTime(year: year, month: month, day: day, hour: hour, minute: minute, second: second, nanos: nanos, offset_minutes: offset_minutes))
+}
+
+/// The date `dt` was written at, at its own offset.
+pub fn time_datetime_date(dt: DateTime) -> Date ! {} {
+    Date(year: dt.year, month: dt.month, day: dt.day)
+}
+
+/// The whole seconds from 1970-01-01T00:00:00Z to `dt`; its `nanos` are the fraction after them.
+pub fn time_unix_seconds(dt: DateTime) -> Int ! {} {
+    let days = time_date_to_days(Date(year: dt.year, month: dt.month, day: dt.day));
+    days * 86400 + dt.hour * 3600 + dt.minute * 60 + dt.second - dt.offset_minutes * 60
+}
+
+/// `secs` whole seconds after 1970-01-01T00:00:00Z and `nanos` more, in UTC.
+pub fn time_from_unix(secs: Int, nanos: Int) -> DateTime ! {} {
+    let days = floor_div(secs, 86400);
+    let rest = secs - days * 86400;
+    let d = time_date_from_days(days);
+    DateTime(year: d.year, month: d.month, day: d.day, hour: rest / 3600, minute: rest % 3600 / 60, second: rest % 60, nanos: nanos, offset_minutes: 0)
+}
+
+/// The wall-clock reading `w` as a date and time in UTC.
+pub fn time_utc(w: WallTime) -> DateTime ! {} {
+    let secs = floor_div(w.unix_nanos, 1000000000);
+    time_from_unix(secs, w.unix_nanos - secs * 1000000000)
+}
+
+/// The same instant as `dt`, in UTC.
+pub fn time_to_utc(dt: DateTime) -> DateTime ! {} {
+    time_from_unix(time_unix_seconds(dt), dt.nanos)
+}
+
+/// The instant `dt` as a wall-clock reading; `None` outside what one holds (about 1677 to 2262).
+pub fn time_to_wall(dt: DateTime) -> Option[WallTime] ! {} {
+    let secs = time_unix_seconds(dt);
+    if secs > 9223372035 || secs < 0 - 9223372036 { return Option[WallTime].None(); }
+    Option[WallTime].Some(value: WallTime(unix_nanos: secs * 1000000000 + dt.nanos))
+}
+
+fn digits(n: Int, width: Int) -> Str ! {} {
+    let mut out = int_to_str(n);
+    while str_len(out) < width { out = str_concat("0", out); }
+    out
+}
+
+/// `dt` as RFC 3339 text: `2026-10-16T09:30:00Z`, a fraction only when there are nanoseconds
+/// (without trailing zeros), and the offset as `Z` or `+hh:mm`.
+pub fn time_format_rfc3339(dt: DateTime) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, digits(dt.year, 4));
+    strs_push(parts, "-");
+    strs_push(parts, digits(dt.month, 2));
+    strs_push(parts, "-");
+    strs_push(parts, digits(dt.day, 2));
+    strs_push(parts, "T");
+    strs_push(parts, digits(dt.hour, 2));
+    strs_push(parts, ":");
+    strs_push(parts, digits(dt.minute, 2));
+    strs_push(parts, ":");
+    strs_push(parts, digits(dt.second, 2));
+    if dt.nanos > 0 {
+        let mut f = digits(dt.nanos, 9);
+        while str_byte(f, str_len(f) - 1) == 48 { f = str_slice(f, 0, str_len(f) - 1); }
+        strs_push(parts, ".");
+        strs_push(parts, f);
+    }
+    if dt.offset_minutes == 0 {
+        strs_push(parts, "Z");
+    } else {
+        let m = if dt.offset_minutes < 0 { 0 - dt.offset_minutes } else { dt.offset_minutes };
+        strs_push(parts, if dt.offset_minutes < 0 { "-" } else { "+" });
+        strs_push(parts, digits(m / 60, 2));
+        strs_push(parts, ":");
+        strs_push(parts, digits(m % 60, 2));
+    }
+    str_join(parts, "")
+}
+
+// The number in the `n` bytes of `s` from `at`, all of them decimal digits; -1 when it is not.
+fn fixed_digits(s: Str, at: Int, n: Int) -> Int ! {} {
+    if at + n > str_len(s) { return 0 - 1; }
+    let mut v = 0;
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(s, at + i);
+        if b < 48 || b > 57 { return 0 - 1; }
+        v = v * 10 + (b - 48);
+        i = i + 1;
+    }
+    v
+}
+
+fn is_byte(s: Str, at: Int, b: Int) -> Bool ! {} {
+    at < str_len(s) && str_byte(s, at) == b
+}
+
+fn bad_time(why: Str) -> Result[DateTime, Str] ! {} {
+    Result[DateTime, Str].Err(error: why)
+}
+
+/// RFC 3339's `date-time` (§5.6): `YYYY-MM-DDTHH:MM:SS`, an optional fraction of one to nine
+/// digits, then `Z` or `±hh:mm`; `t` and `z` may be lower-case. A date that is not one, a field out
+/// of range and a leap second (`:60`, which Unix time has no place for) are an `Err` saying which.
+pub fn time_parse_rfc3339(s: Str) -> Result[DateTime, Str] ! {} {
+    let year = fixed_digits(s, 0, 4);
+    let month = fixed_digits(s, 5, 2);
+    let day = fixed_digits(s, 8, 2);
+    if year < 0 || !is_byte(s, 4, 45) || month < 0 || !is_byte(s, 7, 45) || day < 0 { return bad_time("not a full-date, YYYY-MM-DD"); }
+    if !is_byte(s, 10, 84) && !is_byte(s, 10, 116) { return bad_time("no T between the date and the time"); }
+    let hour = fixed_digits(s, 11, 2);
+    let minute = fixed_digits(s, 14, 2);
+    let second = fixed_digits(s, 17, 2);
+    if hour < 0 || !is_byte(s, 13, 58) || minute < 0 || !is_byte(s, 16, 58) || second < 0 { return bad_time("not a partial-time, HH:MM:SS"); }
+    let mut at = 19;
+    let mut nanos = 0;
+    if is_byte(s, at, 46) {
+        at = at + 1;
+        let mut n = 0;
+        while at < str_len(s) && str_byte(s, at) >= 48 && str_byte(s, at) <= 57 {
+            if n == 9 { return bad_time("more than nine fractional digits"); }
+            nanos = nanos * 10 + (str_byte(s, at) - 48);
+            n = n + 1;
+            at = at + 1;
+        }
+        if n == 0 { return bad_time("a fraction without digits"); }
+        while n < 9 { nanos = nanos * 10; n = n + 1; }
+    }
+    let mut offset = 0;
+    if is_byte(s, at, 90) || is_byte(s, at, 122) {
+        at = at + 1;
+    } else {
+        if !is_byte(s, at, 43) && !is_byte(s, at, 45) { return bad_time("no offset, Z or +hh:mm"); }
+        let oh = fixed_digits(s, at + 1, 2);
+        let om = fixed_digits(s, at + 4, 2);
+        if oh < 0 || !is_byte(s, at + 3, 58) || om < 0 { return bad_time("an offset that is not +hh:mm"); }
+        if oh > 23 || om > 59 { return bad_time("an offset out of range"); }
+        offset = if str_byte(s, at) == 45 { 0 - (oh * 60 + om) } else { oh * 60 + om };
+        at = at + 6;
+    }
+    if at != str_len(s) { return bad_time("text after the date-time"); }
+    if second == 60 { return bad_time("a leap second"); }
+    match time_datetime(year, month, day, hour, minute, second, nanos, offset) {
+        Option.Some(value: dt) => Result[DateTime, Str].Ok(value: dt),
+        Option.None() => bad_time("a date or time out of range"),
+    }
+}
+
+fn name_of(names: Str, i: Int) -> Str ! {} {
+    str_slice(names, i * 3, i * 3 + 3)
+}
+
+/// `dt` as HTTP's date (RFC 9110 §5.6.7, IMF-fixdate), in GMT: `Fri, 16 Oct 2026 09:30:00 GMT`.
+pub fn time_format_http(dt: DateTime) -> Str ! {} {
+    let u = time_to_utc(dt);
+    let d = Date(year: u.year, month: u.month, day: u.day);
+    let parts = strs_new();
+    strs_push(parts, name_of("MonTueWedThuFriSatSun", time_weekday(d) - 1));
+    strs_push(parts, ", ");
+    strs_push(parts, digits(u.day, 2));
+    strs_push(parts, " ");
+    strs_push(parts, name_of("JanFebMarAprMayJunJulAugSepOctNovDec", u.month - 1));
+    strs_push(parts, " ");
+    strs_push(parts, digits(u.year, 4));
+    strs_push(parts, " ");
+    strs_push(parts, digits(u.hour, 2));
+    strs_push(parts, ":");
+    strs_push(parts, digits(u.minute, 2));
+    strs_push(parts, ":");
+    strs_push(parts, digits(u.second, 2));
+    strs_push(parts, " GMT");
+    str_join(parts, "")
+}
+
+/// `s` seconds.
+pub fn time_duration_secs(s: Int) -> Duration ! {} {
+    Duration(nanos: s * 1000000000)
+}
+
+fn unit_nanos(u: Str) -> Int ! {} {
+    if u == "ns" { return 1; }
+    if u == "us" { return 1000; }
+    if u == "ms" { return 1000000; }
+    if u == "s" { return 1000000000; }
+    if u == "m" { return 60000000000; }
+    if u == "h" { return 3600000000000; }
+    0
+}
+
+fn bad_duration(why: Str) -> Result[Duration, Str] ! {} {
+    Result[Duration, Str].Err(error: why)
+}
+
+/// A duration written as whole numbers with units: `250ms`, `1h30m`, `-2s`, `0`. The units are
+/// `h`, `m`, `s`, `ms`, `us` and `ns`; anything else, a number without a unit (but a lone `0`),
+/// and a total past what a `Duration` holds are an `Err`.
+pub fn time_duration_parse(s: Str) -> Result[Duration, Str] ! {} {
+    let n = str_len(s);
+    if s == "0" { return Result[Duration, Str].Ok(value: Duration(nanos: 0)); }
+    let neg = n > 0 && str_byte(s, 0) == 45;
+    let mut at = if neg { 1 } else { 0 };
+    if at >= n { return bad_duration("an empty duration"); }
+    let mut total = 0;
+    while at < n {
+        let mut v = 0;
+        let start = at;
+        while at < n && str_byte(s, at) >= 48 && str_byte(s, at) <= 57 {
+            if v > 922337203685477579 { return bad_duration("a duration too long to hold"); }
+            v = v * 10 + (str_byte(s, at) - 48);
+            at = at + 1;
+        }
+        if at == start { return bad_duration("a unit without a number"); }
+        let ustart = at;
+        while at < n && (str_byte(s, at) < 48 || str_byte(s, at) > 57) { at = at + 1; }
+        let unit = unit_nanos(str_slice(s, ustart, at));
+        if unit == 0 { return bad_duration(if at == ustart { "a number without a unit" } else { "a unit that is not h, m, s, ms, us or ns" }); }
+        if v > (9223372036854775807 - total) / unit { return bad_duration("a duration too long to hold"); }
+        total = total + v * unit;
+    }
+    Result[Duration, Str].Ok(value: Duration(nanos: if neg { 0 - total } else { total }))
+}
+
+/// `d` as `time_duration_parse` reads it, each unit from hours down to nanoseconds that is not
+/// zero: `1h30m`, `1s500ms`, `-2s`; `0s` for none.
+pub fn time_duration_show(d: Duration) -> Str ! {} {
+    if d.nanos == 0 { return "0s"; }
+    let parts = strs_new();
+    if d.nanos < 0 { strs_push(parts, "-"); }
+    let units = strs_new();
+    strs_push(units, "h");
+    strs_push(units, "m");
+    strs_push(units, "s");
+    strs_push(units, "ms");
+    strs_push(units, "us");
+    strs_push(units, "ns");
+    // Each unit's share, taken from the signed remainder so the most negative span has one too.
+    let mut rest = d.nanos;
+    let mut i = 0;
+    while i < 6 {
+        let u = strs_get(units, i);
+        let q = rest / unit_nanos(u);
+        rest = rest - q * unit_nanos(u);
+        if q != 0 {
+            strs_push(parts, int_to_str(if q < 0 { 0 - q } else { q }));
+            strs_push(parts, u);
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
