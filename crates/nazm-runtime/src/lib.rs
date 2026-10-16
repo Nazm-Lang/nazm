@@ -320,7 +320,11 @@ pub fn escape(s: &str) -> String {
 /// `nz.os_tls_close` and `nz.os_tls_info` — over the per-target `tls` unit's `nz_tls_*`
 /// ([`tls::emit_tls`]: OpenSSL 3 on macOS and Linux, with the Security framework's trust on macOS),
 /// linked with the platform's TLS library.
-pub const RUNTIME_ABI_REVISION: u32 = 37;
+/// 38 is R4's atomics outside the strings (2026-10-16): `nz.atomic_cell` allocates an `Atomic`'s
+/// cell in a backing of a string's shape whose length is -1, and `nz.str_release` frees such a
+/// backing without counting it, so the memory report counts no string for `atomic_new`, as the
+/// interpreter does not.
+pub const RUNTIME_ABI_REVISION: u32 = 38;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -456,6 +460,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.str_alloc", [I64], Some(Word::Ptr), Strings, "a string backing with this many usable bytes after a 16-byte header, holding one reference the caller owns, or null"),
     import!("nz.str_retain", [Ptr], None, Strings, "one more reference to a backing; null is a no-op"),
     import!("nz.str_release", [Ptr], None, Strings, "one reference fewer; the last frees it; null is a no-op"),
+    import!("nz.atomic_cell", [I64], Some(Word::Ptr), Strings, "an atomic's cell holding this value, in a backing a string's release frees uncounted, holding one reference the caller owns, or null"),
     import!("nz.seq_new", [], Some(Word::Ptr), Sequences, "an empty sequence with one reference the caller owns, or null"),
     import!("nz.seq_release", [Ptr], None, Sequences, "releases a sequence whose elements own nothing; null is a no-op"),
     import!("nz.strs_release", [Ptr], None, Sequences, "releases a sequence of strings, and on the last reference each string"),
@@ -732,6 +737,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.str_alloc", "ptr" ("i64") "", true, Strings, "", Null, Any, "a string backing with this many bytes after its 16-byte header", "one reference, owned by the caller"),
     rt!("nz.str_retain", "void" ("ptr") "", true, Strings, "", Never, Any, "one more reference to a backing", "adds a reference, atomically; null is a no-op"),
     rt!("nz.str_release", "void" ("ptr") "", true, Strings, "", Never, Any, "one reference fewer; the last frees it", "takes a reference, atomically; null is a no-op"),
+    rt!("nz.atomic_cell", "ptr" ("i64") "", true, Strings, "", Null, Any, "an atomic's cell holding a value, not counted as a string", "one reference, owned by the caller"),
     rt!("nz.spawn", "i32" ("ptr", "ptr", "ptr") "", true, Tasks, "spawn", Status, Any, "start a thread for a task and record it in its scope's list, record first", "takes the argument block; 0, -1 out of memory, >0 no thread"),
     rt!("nz.scope_join", "{ptr, i64}" ("ptr") "", true, Tasks, "", Never, Any, "join every task in a list and hand back the first failure", "frees the list and each task's block"),
     rt!("nz.chan_new", "ptr" ("i64") "", true, Channels, "", Null, Any, "a bounded channel", "one reference, owned by the caller"),
@@ -1440,10 +1446,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_thirty_eight_and_reaches_the_system_only_through_its_platform_layer()
     {
-        // TLS's revision (C1): a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 37);
+        // R4's atomics outside the strings: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 38);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

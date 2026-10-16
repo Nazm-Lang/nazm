@@ -1379,11 +1379,38 @@ drop:
   br i1 %last, label %free, label %done
 free:
   fence acquire
+  ; An atomic's cell (`nz.atomic_cell`) marks its length -1: it is not a string, and the
+  ; memory report does not count it.
+  %lenp = getelementptr i8, ptr %b, i64 8
+  %len = load i64, ptr %lenp
   call void @free(ptr %b)
+  %cell = icmp slt i64 %len, 0
+  br i1 %cell, label %done, label %count
+count:
   %c = atomicrmw add ptr @nz.str_reclaimed, i64 1 monotonic
   br label %done
 done:
   ret void
+}
+
+; An `Atomic`'s cell (`docs/spec.md`, *Atomics*): a backing of the string's shape, so it is
+; retained and released as a `Str`'s is, holding `v` in its 8 bytes, with its length -1 so that
+; `nz.str_release` frees it uncounted. An atomic is not a string: the memory report counts
+; neither its allocation nor its reclamation, as the interpreter does not (runtime ABI 38).
+define hidden ptr @nz.atomic_cell(i64 %v) {
+entry:
+  %b = call ptr @malloc(i64 24)
+  %bad = icmp eq ptr %b, null
+  br i1 %bad, label %fail, label %ok
+fail:
+  ret ptr null
+ok:
+  store i64 1, ptr %b
+  %lenp = getelementptr i8, ptr %b, i64 8
+  store i64 -1, ptr %lenp
+  %cellp = getelementptr i8, ptr %b, i64 16
+  store i64 %v, ptr %cellp
+  ret ptr %b
 }
 
 ; A `Strs` owns a reference to every string in it, so its storage cannot be released by
