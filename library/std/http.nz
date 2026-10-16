@@ -71,7 +71,9 @@ pub struct ClientOptions {
 }
 
 /// A listening server: its listener, whether it is draining, what it has served and accepted, the
-/// gate that caps open connections, its options and its TLS configuration (`0`: plain TCP).
+/// gate that caps open connections, its options and its TLS configuration (`0`: plain TCP); and
+/// (C4) its connections, for a drain to close: `open` of them open, `entries` in `conns` (ended
+/// ones among them until they are dropped), looked through under `lock`.
 pub struct HttpServer {
     listener: TcpListener,
     draining: Atomic,
@@ -80,12 +82,25 @@ pub struct HttpServer {
     gate: Chan,
     options: ServeOptions,
     tls: Int,
+    conns: Chan[HttpLive],
+    entries: Atomic,
+    open: Atomic,
+    lock: Chan,
 }
 
-/// An accepted connection and its TLS session (`0`: plain TCP).
+/// A connection as its server keeps it (C4): its socket and its state — `0` idle, `1` serving a
+/// request, `2` ended.
+pub struct HttpLive {
+    handle: OsHandle,
+    state: Atomic,
+}
+
+/// An accepted connection and its TLS session (`0`: plain TCP); (C4) its state as its server
+/// keeps it.
 pub struct HttpConn {
     stream: TcpStream,
     tls: Int,
+    state: Atomic,
 }
 
 /// What `http_serve` did: requests answered and connections accepted.
@@ -1079,7 +1094,10 @@ fn set_wait(w: Wire, ms: Int) -> Int ! { io } {
 /// A server listening on `addr` (port `0`: one the system picks) with options `o`.
 pub fn http_listen(net: NetCap, addr: Str, o: ServeOptions) -> Result[HttpServer, IoError] ! { io } {
     match tcp_listen(net, addr) {
-        Result.Ok(value: l) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: l, draining: atomic_new(0), served: atomic_new(0), accepted: atomic_new(0), gate: chan_new(if o.max_connections > 0 { o.max_connections } else { 1 }), options: o, tls: 0)),
+        Result.Ok(value: l) => {
+            let cap = if o.max_connections > 0 { o.max_connections } else { 1 };
+            Result[HttpServer, IoError].Ok(value: HttpServer(listener: l, draining: atomic_new(0), served: atomic_new(0), accepted: atomic_new(0), gate: chan_new(cap), options: o, tls: 0, conns: chan_new_of[HttpLive](2 * cap + 2), entries: atomic_new(0), open: atomic_new(0), lock: chan_new(1)))
+        },
         Result.Err(error: e) => Result[HttpServer, IoError].Err(error: e),
     }
 }
@@ -1089,7 +1107,7 @@ pub fn http_listen(net: NetCap, addr: Str, o: ServeOptions) -> Result[HttpServer
 /// `head_timeout_ms`. `c` stays the caller's.
 pub fn http_listen_tls(net: NetCap, addr: Str, o: ServeOptions, c: TlsConfig) -> Result[HttpServer, IoError] ! { io } {
     match http_listen(net, addr, o) {
-        Result.Ok(value: s) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: s.listener, draining: s.draining, served: s.served, accepted: s.accepted, gate: s.gate, options: s.options, tls: c.id)),
+        Result.Ok(value: s) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: s.listener, draining: s.draining, served: s.served, accepted: s.accepted, gate: s.gate, options: s.options, tls: c.id, conns: s.conns, entries: s.entries, open: s.open, lock: s.lock)),
         Result.Err(error: e) => Result[HttpServer, IoError].Err(error: e),
     }
 }
@@ -1099,12 +1117,81 @@ pub fn http_server_addr(s: HttpServer) -> Str ! { io } {
     tcp_listener_addr(s.listener)
 }
 
-/// Stop accepting: the listener closes, so a waiting accept wakes `Closed`, and each connection
-/// ends after the request it is serving, answering it with `connection: close`. The hook a
-/// termination signal (C4) calls; idle connections end at their idle deadline.
+/// Stop accepting: the listener closes, so a waiting accept wakes `Closed`; each idle connection
+/// (no request under way on it) is closed at once, and each other ends after the request it is
+/// serving, answering it with `connection: close`. Answers how many idle connections it closed.
 pub fn http_drain(s: HttpServer) -> Int ! { io } {
     atomic_store(s.draining, 1);
     tcp_listener_close(s.listener);
+    sweep(s, false)
+}
+
+/// Drain `s` with a deadline (C4), what a termination signal asks of a service: `http_drain`, then
+/// a wait of at most `ms` milliseconds for the connections serving a request to finish; any still
+/// open then are closed, each wait on them waking `Closed`. Answers how many were closed at the
+/// deadline.
+pub fn http_drain_within(t: TimeCap, s: HttpServer, ms: Int) -> Int ! { io } {
+    let deadline = time_now_ms() + ms;
+    http_drain(s);
+    while atomic_load(s.open) > 0 && time_now_ms() < deadline {
+        time_sleep_ms(5);
+    }
+    if atomic_load(s.open) > 0 { sweep(s, true) } else { 0 }
+}
+
+// The registry of connections: `entries` of them in `conns`, each taken out and put back, or
+// dropped once ended, only while `lock` is held, so a holder may wait for each knowing that no
+// one else has taken it away for good.
+fn lock(s: HttpServer) -> Int ! {} {
+    chan_send(s.lock, 1);
+    0
+}
+
+fn unlock(s: HttpServer) -> Int ! {} {
+    let got = ints_new();
+    chan_recv(s.lock, got);
+    0
+}
+
+// Close each open connection of `s` — only the idle ones unless `all` — and answer how many.
+fn sweep(s: HttpServer, all: Bool) -> Int ! { io } {
+    lock(s);
+    let n = atomic_load(s.entries);
+    let got = vec_new[HttpLive]();
+    let mut closed = 0;
+    let mut i = 0;
+    while i < n {
+        if chan_recv_of(s.conns, got) {
+            let e = vec_pop(got);
+            let st = atomic_load(e.state);
+            if st == 0 || (all && st == 1) {
+                os_close(e.handle);
+                closed = closed + 1;
+            }
+            chan_send_of(s.conns, e);
+        }
+        i = i + 1;
+    }
+    unlock(s);
+    closed
+}
+
+// Register a connection: first drop up to two ended ones met at the front, so the registry holds
+// at most about twice the open connections.
+fn enter(s: HttpServer, e: HttpLive) -> Int ! {} {
+    lock(s);
+    let got = vec_new[HttpLive]();
+    let mut k = 0;
+    while k < 2 && k < atomic_load(s.entries) {
+        if chan_recv_of(s.conns, got) {
+            let old = vec_pop(got);
+            if atomic_load(old.state) == 2 { atomic_add(s.entries, 0 - 1); } else { chan_send_of(s.conns, old); }
+        }
+        k = k + 1;
+    }
+    chan_send_of(s.conns, e);
+    atomic_add(s.entries, 1);
+    unlock(s);
     0
 }
 
@@ -1121,15 +1208,20 @@ pub fn http_accept(s: HttpServer) -> Result[HttpConn, IoError] ! { io } {
     match tcp_accept(s.listener) {
         Result.Ok(value: c) => {
             atomic_add(s.accepted, 1);
-            if s.tls == 0 { return Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: 0)); }
-            // A session for the connection; its handshake is the connection's task's to run.
-            let t = os_tls_accept(s.tls);
-            if t < 0 {
-                tcp_close(c);
-                release(s);
-                return Result[HttpConn, IoError].Err(error: io_error_new(IoErrorKind.Other(), tls_error_show(tls_error_from(t, ""))));
+            let mut t = 0;
+            if s.tls != 0 {
+                // A session for the connection; its handshake is the connection's task's to run.
+                t = os_tls_accept(s.tls);
+                if t < 0 {
+                    tcp_close(c);
+                    release(s);
+                    return Result[HttpConn, IoError].Err(error: io_error_new(IoErrorKind.Other(), tls_error_show(tls_error_from(t, ""))));
+                }
             }
-            Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: t))
+            let state = atomic_new(0);
+            atomic_add(s.open, 1);
+            enter(s, HttpLive(handle: c.handle, state: state));
+            Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: t, state: state))
         },
         Result.Err(error: e) => {
             release(s);
@@ -1151,6 +1243,8 @@ fn release(s: HttpServer) -> Int ! {} {
 pub fn http_serve_conn(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) -> Int ! { io } {
     let n = conn_loop(s, c, h);
     if c.tls != 0 { tls_wire_close(c.stream.handle, c.tls); }
+    atomic_store(c.state, 2);
+    atomic_add(s.open, 0 - 1);
     tcp_close(c.stream);
     release(s);
     n
@@ -1192,6 +1286,7 @@ fn conn_loop(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) ->
                     if f.at == 0 && str_len(trim_crlf(pending)) > 0 { answer_error(w, 400, "the connection ended inside a head"); }
                 }
             } else {
+                atomic_store(c.state, 1);
                 pending = str_concat(pending, f.value);
                 head = find_head(pending, head.at, o.max_head);
             }
@@ -1267,7 +1362,10 @@ fn conn_loop(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) ->
         };
         if o.write_timeout_ms != wait { set_wait(w, o.write_timeout_ms); wait = o.write_timeout_ms; }
         if send(w, text) < 0 { return served; }
-        if close { open = false; }
+        // Idle again, unless a pipelined request is already here; a drain that began meanwhile
+        // either sees it idle and closes it, or is seen here.
+        atomic_store(c.state, if str_len(pending) > 0 { 1 } else { 0 });
+        if close || (str_len(pending) == 0 && atomic_load(s.draining) != 0) { open = false; }
     }
     served
 }

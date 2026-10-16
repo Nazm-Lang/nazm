@@ -54,6 +54,7 @@ fn std_names() -> Strs {
     strs_push(s, "blake3");
     strs_push(s, "bytebuf");
     strs_push(s, "chan");
+    strs_push(s, "config");
     strs_push(s, "deque");
     strs_push(s, "dist");
     strs_push(s, "env");
@@ -72,6 +73,7 @@ fn std_names() -> Strs {
     strs_push(s, "linalg");
     strs_push(s, "log");
     strs_push(s, "map");
+    strs_push(s, "metrics");
     strs_push(s, "net");
     strs_push(s, "num");
     strs_push(s, "option");

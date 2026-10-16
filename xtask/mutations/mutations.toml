@@ -20279,3 +20279,108 @@ find = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => 
 replace = '''        SwitchTarget::X86_64Windows => Some(SCHANNEL.to_owned()),
         SwitchTarget::Aarch64Android => None,'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::the_windows_engine_compiles_and_links_with_mingw" }]
+# --- v1 track C, C4: calendar time, metrics, configuration, log fields, the drain (2026-10-16) ---
+
+[[mutation]]
+name = "c4-every-century-is-leap"
+why = "a year divisible by 100 but not 400 counts as a leap year, so 1900 and 2100 gain a 29 February and every later day shifts"
+file = "library/std/time.nz"
+find = '''    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0'''
+replace = '''    (year % 4 == 0 && year % 100 != 1) || year % 400 == 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::calendar_dates_rfc_3339_and_durations_agree_everywhere" }]
+
+[[mutation]]
+name = "c4-division-truncates-before-the-epoch"
+why = "days and seconds before 1970 are divided toward zero, so an instant before the epoch lands a day or a second late"
+file = "library/std/time.nz"
+find = '''    if a % b != 0 && a < 0 { q - 1 } else { q }'''
+replace = '''    if a % b != 0 && a < 0 { q } else { q }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::calendar_dates_rfc_3339_and_durations_agree_everywhere" }]
+
+[[mutation]]
+name = "c4-a-leap-second-is-not-named"
+why = "a leap second is no longer refused for what it is, but reaches the range check and is reported as some other fault"
+file = "library/std/time.nz"
+find = '''    if second == 60 { return bad_time("a leap second"); }'''
+replace = '''    if second == 61 { return bad_time("a leap second"); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::calendar_dates_rfc_3339_and_durations_agree_everywhere" }]
+
+[[mutation]]
+name = "c4-a-duration-overflows"
+why = "the bound before a duration's next part is added is one unit too generous, so text past Duration's range overflows and stops the program instead of being refused"
+file = "library/std/time.nz"
+find = '''        if v > (9223372036854775807 - total) / unit { return bad_duration("a duration too long to hold"); }'''
+replace = '''        if v > (9223372036854775807 - total) / unit + 1 { return bad_duration("a duration too long to hold"); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::calendar_dates_rfc_3339_and_durations_agree_everywhere" }]
+
+[[mutation]]
+name = "c4-a-bound-excludes-itself"
+why = "an observation equal to a bucket's bound is counted in the next bucket, though Prometheus's le means less than or equal"
+file = "library/std/metrics.nz"
+find = '''        if v <= b.le {'''
+replace = '''        if v < b.le {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::metrics_count_across_tasks_and_are_written_as_prometheus_text" }]
+
+[[mutation]]
+name = "c4-a-label-quote-is-not-escaped"
+why = "a double quote in a label's value is written raw, ending the value early and making the exposition unreadable"
+file = "library/std/metrics.nz"
+find = '''if quote && b == 34 {'''
+replace = '''if quote && b == 35 {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::metrics_count_across_tasks_and_are_written_as_prometheus_text" }]
+
+[[mutation]]
+name = "c4-one-name-one-label-set"
+why = "a second metric of one name is refused whatever its labels, so a family such as http_requests_total by method can hold one series only"
+file = "library/std/metrics.nz"
+find = '''            if labels_text(o) == labels_text(m) {'''
+replace = '''            if labels_text(o) == labels_text(m) || true {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::metrics_count_across_tasks_and_are_written_as_prometheus_text" }]
+
+[[mutation]]
+name = "c4-the-file-wins-over-the-environment"
+why = "a variable set for a member the file also gives is ignored, so a container cannot override the file's setting"
+file = "library/std/config.nz"
+find = '''                if at >= 0 { ints_set(values, at, made.node); } else'''
+replace = '''                if at >= 0 { ints_set(values, at, ints_get(values, at)); } else'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::settings_come_from_a_file_and_the_environment_into_a_derived_record" }]
+
+[[mutation]]
+name = "c4-camel-case-is-not-split"
+why = "a camel-case member's variable is written without the underscore between its words, so DISPLAY_NAME is looked up as DISPLAYNAME"
+file = "library/std/config.nz"
+find = '''            if (p >= 97 && p <= 122) || (p >= 48 && p <= 57) { strs_push(parts, "_"); }'''
+replace = '''            if (p >= 97 && p <= 122) || (p >= 48 && p <= 57) { strs_push(parts, ""); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::settings_come_from_a_file_and_the_environment_into_a_derived_record" }]
+
+[[mutation]]
+name = "c4-the-request-field-renamed"
+why = "the request's field is written under another name, so a collector no longer gathers a request's records by request_id"
+file = "library/std/log.nz"
+find = '''    log_str("request_id", id)'''
+replace = '''    log_str("requestId", id)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::a_log_record_carries_its_request_its_trace_and_its_time" }]
+
+[[mutation]]
+name = "c4-a-drain-leaves-idle-connections"
+why = "a drain closes no idle connection, so a keep-alive client holds the server until its idle deadline"
+file = "library/std/http.nz"
+find = '''            if st == 0 || (all && st == 1) {'''
+replace = '''            if all && st == 1 {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::a_drain_closes_idle_connections_and_keeps_its_deadline" }]
+
+[[mutation]]
+name = "c4-the-deadline-closes-nothing"
+why = "at the drain's deadline the connections still serving a request are left open, so a stuck request holds the shutdown"
+file = "library/std/http.nz"
+find = '''    if atomic_load(s.open) > 0 { sweep(s, true) } else { 0 }'''
+replace = '''    if atomic_load(s.open) > 0 { sweep(s, false) } else { 0 }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::a_drain_closes_idle_connections_and_keeps_its_deadline" }]
+
+[[mutation]]
+name = "c4-ended-connections-are-kept"
+why = "the registry never drops an ended connection, so after about twice max_connections connections it is full and accepting stops"
+file = "library/std/http.nz"
+find = '''            if atomic_load(old.state) == 2 { atomic_add(s.entries, 0 - 1); }'''
+replace = '''            if atomic_load(old.state) == 3 { atomic_add(s.entries, 0 - 1); }'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "service_ops::a_drain_closes_idle_connections_and_keeps_its_deadline" }]

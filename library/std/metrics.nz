@@ -1,0 +1,431 @@
+// `@std/metrics`: counters, gauges and histograms, and the Prometheus text exposition (v1 track C,
+// C4).
+//
+// Imported with `use "@std/metrics";`. `docs/spec.md`, *Metrics*, states the rules; the design
+// record is `openspec/changes/v1-every-domain/design.md`, section C. A metric is a set of atomic
+// cells, so a `Counter`, `Gauge` or `Histogram` may cross into a task and every copy counts into
+// the same cells; a registry (`Metrics`) may cross too, and `metrics_render` writes what it holds
+// as text format 0.0.4, which every Prometheus-compatible collector reads. Values are integers: a
+// unit belongs in the name (`request_duration_milliseconds`). Nothing here performs an effect.
+
+/// One bucket of a histogram: its upper bound and the observations at most it and above the
+/// previous bound.
+pub struct Bucket {
+    le: Int,
+    count: Atomic,
+}
+
+/// A value that only goes up.
+pub struct Counter {
+    name: Str,
+    help: Str,
+    labels: Str,
+    why: Str,
+    value: Atomic,
+}
+
+/// A value that goes up and down.
+pub struct Gauge {
+    name: Str,
+    help: Str,
+    labels: Str,
+    why: Str,
+    value: Atomic,
+}
+
+/// Observations counted into at most sixteen buckets by upper bound, with their count and sum.
+pub struct Histogram {
+    name: Str,
+    help: Str,
+    labels: Str,
+    why: Str,
+    bounds: Int,
+    b0: Bucket,
+    b1: Bucket,
+    b2: Bucket,
+    b3: Bucket,
+    b4: Bucket,
+    b5: Bucket,
+    b6: Bucket,
+    b7: Bucket,
+    b8: Bucket,
+    b9: Bucket,
+    b10: Bucket,
+    b11: Bucket,
+    b12: Bucket,
+    b13: Bucket,
+    b14: Bucket,
+    b15: Bucket,
+    sum: Atomic,
+    count: Atomic,
+}
+
+/// What a registry holds.
+pub enum Metric {
+    OfCounter(c: Counter),
+    OfGauge(g: Gauge),
+    OfHistogram(h: Histogram),
+}
+
+/// A registry: the metrics `metrics_render` writes, in the order their names were first
+/// registered. `lock` lets one registration or rendering at a time look at `items`.
+pub struct Metrics {
+    items: Chan[Metric],
+    count: Atomic,
+    lock: Chan,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Names and labels
+
+fn name_ok(s: Str, colons: Bool) -> Bool ! {} {
+    if str_len(s) == 0 { return false; }
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let letter = (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 95 || (colons && b == 58);
+        if !letter && !(i > 0 && b >= 48 && b <= 57) { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+fn escaped(s: Str, quote: Bool) -> Str ! {} {
+    let parts = strs_new();
+    let mut from = 0;
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        let with = if b == 92 { "\\\\" } else { if b == 10 { "\\n" } else { if quote && b == 34 { "\\\"" } else { "" } } };
+        if str_len(with) > 0 {
+            strs_push(parts, str_slice(s, from, i));
+            strs_push(parts, with);
+            from = i + 1;
+        }
+        i = i + 1;
+    }
+    strs_push(parts, str_slice(s, from, str_len(s)));
+    str_join(parts, "")
+}
+
+// The labels `pairs` (key, value, key, value, …) as the exposition writes them inside braces, and
+// what is wrong with them, `""` when nothing is.
+struct Labels {
+    text: Str,
+    why: Str,
+}
+
+fn labels_of(pairs: Strs) -> Labels ! {} {
+    if strs_len(pairs) % 2 != 0 { return Labels(text: "", why: "a label without a value"); }
+    let parts = strs_new();
+    let mut i = 0;
+    while i < strs_len(pairs) {
+        let k = strs_get(pairs, i);
+        if !name_ok(k, false) || (str_len(k) >= 2 && str_slice(k, 0, 2) == "__") || k == "le" {
+            return Labels(text: "", why: str_concat("a label name that is not one: ", k));
+        }
+        let mut j = 0;
+        while j < i {
+            if strs_get(pairs, j) == k { return Labels(text: "", why: str_concat("a label given twice: ", k)); }
+            j = j + 2;
+        }
+        strs_push(parts, str_concat(str_concat(str_concat(k, "=\""), escaped(strs_get(pairs, i + 1), true)), "\""));
+        i = i + 2;
+    }
+    Labels(text: str_join(parts, ","), why: "")
+}
+
+fn checked(name: Str, l: Labels) -> Str ! {} {
+    if !name_ok(name, true) { return str_concat("a metric name that is not one: ", name); }
+    l.why
+}
+
+// ---------------------------------------------------------------------------------------------
+// Counters and gauges
+
+/// A counter at zero, without labels.
+pub fn metrics_counter(name: Str, help: Str) -> Counter ! {} {
+    metrics_counter_labelled(name, help, strs_new())
+}
+
+/// A counter at zero with `labels`, given as key, value, key, value, ….
+pub fn metrics_counter_labelled(name: Str, help: Str, labels: Strs) -> Counter ! {} {
+    let l = labels_of(labels);
+    Counter(name: name, help: help, labels: l.text, why: checked(name, l), value: atomic_new(0))
+}
+
+/// Add one.
+pub fn metrics_inc(c: Counter) -> Int ! {} {
+    atomic_add(c.value, 1);
+    0
+}
+
+/// Add `n`; a counter never goes down, so a negative `n` changes nothing and answers `false`.
+pub fn metrics_add(c: Counter, n: Int) -> Bool ! {} {
+    if n < 0 { return false; }
+    atomic_add(c.value, n);
+    true
+}
+
+/// The counter's value.
+pub fn metrics_counter_value(c: Counter) -> Int ! {} {
+    atomic_load(c.value)
+}
+
+/// A gauge at zero, without labels.
+pub fn metrics_gauge(name: Str, help: Str) -> Gauge ! {} {
+    metrics_gauge_labelled(name, help, strs_new())
+}
+
+/// A gauge at zero with `labels`, given as key, value, key, value, ….
+pub fn metrics_gauge_labelled(name: Str, help: Str, labels: Strs) -> Gauge ! {} {
+    let l = labels_of(labels);
+    Gauge(name: name, help: help, labels: l.text, why: checked(name, l), value: atomic_new(0))
+}
+
+/// Set the gauge to `v`.
+pub fn metrics_gauge_set(g: Gauge, v: Int) -> Int ! {} {
+    atomic_store(g.value, v)
+}
+
+/// Add `d` (negative: take it away).
+pub fn metrics_gauge_add(g: Gauge, d: Int) -> Int ! {} {
+    atomic_add(g.value, d);
+    0
+}
+
+/// The gauge's value.
+pub fn metrics_gauge_value(g: Gauge) -> Int ! {} {
+    atomic_load(g.value)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Histograms
+
+fn bucket_new(bounds: Ints, i: Int) -> Bucket ! {} {
+    Bucket(le: if i < ints_len(bounds) { ints_get(bounds, i) } else { 0 }, count: atomic_new(0))
+}
+
+/// A histogram with no observations, without labels; `bounds` are the buckets' upper bounds,
+/// increasing, at most sixteen (the `+Inf` bucket is always there besides).
+pub fn metrics_histogram(name: Str, help: Str, bounds: Ints) -> Histogram ! {} {
+    metrics_histogram_labelled(name, help, bounds, strs_new())
+}
+
+/// A histogram with `labels`, given as key, value, key, value, ….
+pub fn metrics_histogram_labelled(name: Str, help: Str, bounds: Ints, labels: Strs) -> Histogram ! {} {
+    let l = labels_of(labels);
+    let mut why = checked(name, l);
+    if str_len(why) == 0 && ints_len(bounds) > 16 { why = "more than sixteen bucket bounds"; }
+    let mut i = 1;
+    while str_len(why) == 0 && i < ints_len(bounds) {
+        if ints_get(bounds, i) <= ints_get(bounds, i - 1) { why = "bucket bounds that do not increase"; }
+        i = i + 1;
+    }
+    let n = if ints_len(bounds) > 16 { 16 } else { ints_len(bounds) };
+    Histogram(name: name, help: help, labels: l.text, why: why, bounds: n,
+        b0: bucket_new(bounds, 0), b1: bucket_new(bounds, 1), b2: bucket_new(bounds, 2), b3: bucket_new(bounds, 3),
+        b4: bucket_new(bounds, 4), b5: bucket_new(bounds, 5), b6: bucket_new(bounds, 6), b7: bucket_new(bounds, 7),
+        b8: bucket_new(bounds, 8), b9: bucket_new(bounds, 9), b10: bucket_new(bounds, 10), b11: bucket_new(bounds, 11),
+        b12: bucket_new(bounds, 12), b13: bucket_new(bounds, 13), b14: bucket_new(bounds, 14), b15: bucket_new(bounds, 15),
+        sum: atomic_new(0), count: atomic_new(0))
+}
+
+fn bucket_at(h: Histogram, i: Int) -> Bucket ! {} {
+    if i < 8 {
+        if i < 4 { if i == 0 { h.b0 } else { if i == 1 { h.b1 } else { if i == 2 { h.b2 } else { h.b3 } } } }
+        else { if i == 4 { h.b4 } else { if i == 5 { h.b5 } else { if i == 6 { h.b6 } else { h.b7 } } } }
+    } else {
+        if i < 12 { if i == 8 { h.b8 } else { if i == 9 { h.b9 } else { if i == 10 { h.b10 } else { h.b11 } } } }
+        else { if i == 12 { h.b12 } else { if i == 13 { h.b13 } else { if i == 14 { h.b14 } else { h.b15 } } } }
+    }
+}
+
+/// Count `v` into the first bucket whose bound is at least it (or only `+Inf`'s), and into the
+/// sum and count.
+pub fn metrics_observe(h: Histogram, v: Int) -> Int ! {} {
+    let mut i = 0;
+    let mut placed = false;
+    while i < h.bounds && !placed {
+        let b = bucket_at(h, i);
+        if v <= b.le {
+            atomic_add(b.count, 1);
+            placed = true;
+        }
+        i = i + 1;
+    }
+    atomic_add(h.sum, v);
+    atomic_add(h.count, 1);
+    0
+}
+
+/// How many observations there have been.
+pub fn metrics_histogram_count(h: Histogram) -> Int ! {} {
+    atomic_load(h.count)
+}
+
+/// The sum of the observations.
+pub fn metrics_histogram_sum(h: Histogram) -> Int ! {} {
+    atomic_load(h.sum)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The registry and the exposition
+
+/// An empty registry, holding at most 1024 metrics.
+pub fn metrics_registry() -> Metrics ! {} {
+    Metrics(items: chan_new_of[Metric](1024), count: atomic_new(0), lock: chan_new(1))
+}
+
+fn name_of(m: Metric) -> Str ! {} {
+    match m { Metric.OfCounter(c: c) => c.name, Metric.OfGauge(g: g) => g.name, Metric.OfHistogram(h: h) => h.name, }
+}
+
+fn labels_text(m: Metric) -> Str ! {} {
+    match m { Metric.OfCounter(c: c) => c.labels, Metric.OfGauge(g: g) => g.labels, Metric.OfHistogram(h: h) => h.labels, }
+}
+
+fn kind_of(m: Metric) -> Str ! {} {
+    match m { Metric.OfCounter(c: c) => "counter", Metric.OfGauge(g: g) => "gauge", Metric.OfHistogram(h: h) => "histogram", }
+}
+
+fn help_of(m: Metric) -> Str ! {} {
+    match m { Metric.OfCounter(c: c) => c.help, Metric.OfGauge(g: g) => g.help, Metric.OfHistogram(h: h) => h.help, }
+}
+
+// Every metric of `reg`, in order; the lock is held. They are taken out and put back in turn.
+fn all_of(reg: Metrics) -> Vec[Metric] ! {} {
+    let n = atomic_load(reg.count);
+    let got = vec_new[Metric]();
+    let one = vec_new[Metric]();
+    let mut i = 0;
+    while i < n {
+        if chan_recv_of(reg.items, one) {
+            let m = vec_pop(one);
+            vec_push(got, m);
+            chan_send_of(reg.items, m);
+        }
+        i = i + 1;
+    }
+    got
+}
+
+fn unlock(reg: Metrics) -> Int ! {} {
+    let got = ints_new();
+    chan_recv(reg.lock, got);
+    0
+}
+
+fn register(reg: Metrics, m: Metric, why: Str) -> Result[Int, Str] ! {} {
+    if str_len(why) > 0 { return Result[Int, Str].Err(error: why); }
+    chan_send(reg.lock, 1);
+    let all = all_of(reg);
+    let mut i = 0;
+    while i < vec_len(all) {
+        let o = vec_get(all, i);
+        if name_of(o) == name_of(m) {
+            if kind_of(o) != kind_of(m) {
+                unlock(reg);
+                return Result[Int, Str].Err(error: str_concat(str_concat(name_of(m), " is already a "), kind_of(o)));
+            }
+            if labels_text(o) == labels_text(m) {
+                unlock(reg);
+                return Result[Int, Str].Err(error: str_concat(name_of(m), " is already registered with these labels"));
+            }
+        }
+        i = i + 1;
+    }
+    if vec_len(all) >= 1024 {
+        unlock(reg);
+        return Result[Int, Str].Err(error: "a registry holds at most 1024 metrics");
+    }
+    chan_send_of(reg.items, m);
+    atomic_add(reg.count, 1);
+    unlock(reg);
+    Result[Int, Str].Ok(value: vec_len(all))
+}
+
+/// Add `c` to `reg`: an `Err` for a name or labels that are not valid, a name already registered
+/// as another kind, or the same name with the same labels.
+pub fn metrics_register_counter(reg: Metrics, c: Counter) -> Result[Int, Str] ! {} {
+    register(reg, Metric.OfCounter(c: c), c.why)
+}
+
+/// Add `g` to `reg`, as `metrics_register_counter` adds a counter.
+pub fn metrics_register_gauge(reg: Metrics, g: Gauge) -> Result[Int, Str] ! {} {
+    register(reg, Metric.OfGauge(g: g), g.why)
+}
+
+/// Add `h` to `reg`, as `metrics_register_counter` adds a counter; bounds that do not increase,
+/// or more than sixteen, are an `Err` too.
+pub fn metrics_register_histogram(reg: Metrics, h: Histogram) -> Result[Int, Str] ! {} {
+    register(reg, Metric.OfHistogram(h: h), h.why)
+}
+
+fn sample(out: Strs, name: Str, labels: Str, extra: Str, value: Int) -> Int ! {} {
+    let both = if str_len(labels) > 0 && str_len(extra) > 0 { str_concat(str_concat(labels, ","), extra) } else { str_concat(labels, extra) };
+    let braces = if str_len(both) > 0 { str_concat(str_concat("{", both), "}") } else { "" };
+    strs_push(out, str_concat(str_concat(str_concat(name, braces), " "), str_concat(int_to_str(value), "\n")));
+    0
+}
+
+fn samples(out: Strs, m: Metric) -> Int ! {} {
+    match m {
+        Metric.OfCounter(c: c) => { sample(out, c.name, c.labels, "", atomic_load(c.value)); },
+        Metric.OfGauge(g: g) => { sample(out, g.name, g.labels, "", atomic_load(g.value)); },
+        Metric.OfHistogram(h: h) => {
+            // The count first, so that no bucket shows more than `_count` while observations land.
+            let count = atomic_load(h.count);
+            let sum = atomic_load(h.sum);
+            let mut running = 0;
+            let mut i = 0;
+            while i < h.bounds {
+                let b = bucket_at(h, i);
+                running = running + atomic_load(b.count);
+                sample(out, str_concat(h.name, "_bucket"), h.labels, str_concat(str_concat("le=\"", int_to_str(b.le)), "\""), if running > count { count } else { running });
+                i = i + 1;
+            }
+            sample(out, str_concat(h.name, "_bucket"), h.labels, "le=\"+Inf\"", count);
+            sample(out, str_concat(h.name, "_sum"), h.labels, "", sum);
+            sample(out, str_concat(h.name, "_count"), h.labels, "", count);
+        },
+    };
+    0
+}
+
+/// What `reg` holds as Prometheus text format 0.0.4: each name once with its `# HELP` (when it
+/// has help) and `# TYPE`, in the order names were first registered, then its samples in registration order.
+pub fn metrics_render(reg: Metrics) -> Str ! {} {
+    chan_send(reg.lock, 1);
+    let all = all_of(reg);
+    unlock(reg);
+    let out = strs_new();
+    let mut i = 0;
+    while i < vec_len(all) {
+        let m = vec_get(all, i);
+        let mut first = true;
+        let mut j = 0;
+        while j < i {
+            if name_of(vec_get(all, j)) == name_of(m) { first = false; }
+            j = j + 1;
+        }
+        if first {
+            if str_len(help_of(m)) > 0 {
+                strs_push(out, str_concat(str_concat(str_concat("# HELP ", name_of(m)), " "), str_concat(escaped(help_of(m), false), "\n")));
+            }
+            strs_push(out, str_concat(str_concat(str_concat("# TYPE ", name_of(m)), " "), str_concat(kind_of(m), "\n")));
+            let mut k = i;
+            while k < vec_len(all) {
+                if name_of(vec_get(all, k)) == name_of(m) { samples(out, vec_get(all, k)); }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+/// The `content-type` of `metrics_render`'s text.
+pub fn metrics_content_type() -> Str ! {} {
+    "text/plain; version=0.0.4; charset=utf-8"
+}

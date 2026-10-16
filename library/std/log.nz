@@ -8,6 +8,7 @@
 // logger's level are dropped. `docs/general-purpose.md` §20.
 
 use "@std/json";
+use "@std/time";
 
 /// The levels, least to most severe.
 pub enum LogLevel {
@@ -76,6 +77,27 @@ pub fn log_int(key: Str, value: Int) -> Str ! {} {
 /// A field whose value is true or false.
 pub fn log_bool(key: Str, value: Bool) -> Str ! {} {
     str_concat(str_concat(json_quote(key), ":"), if value { "true" } else { "false" })
+}
+
+/// The request a record belongs to, as the field `request_id` (v1 track C, C4): the one name every
+/// record of a request carries, so a collector can gather them.
+pub fn log_request_id(id: Str) -> Str ! {} {
+    log_str("request_id", id)
+}
+
+/// A W3C Trace Context's identifiers under OpenTelemetry's names, `trace_id` and `span_id`
+/// (v1 track C, C4), as two fields; each is written as given.
+pub fn log_trace(trace_id: Str, span_id: Str) -> Strs ! {} {
+    let f = strs_new();
+    strs_push(f, log_str("trace_id", trace_id));
+    strs_push(f, log_str("span_id", span_id));
+    f
+}
+
+/// When, as the field `time`: the wall-clock reading `w` as RFC 3339 text in UTC (v1 track C, C4).
+/// Reading the clock stays the program's, under its `TimeCap`.
+pub fn log_time(w: WallTime) -> Str ! {} {
+    log_str("time", time_format_rfc3339(time_utc(w)))
 }
 
 /// No fields.

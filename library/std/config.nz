@@ -1,0 +1,217 @@
+// `@std/config`: a service's settings from a TOML file and the environment, into a typed record
+// (v1 track C, C4).
+//
+// Imported with `use "@std/config";`. `docs/spec.md`, *Configuration*, states the rules; the
+// design record is `openspec/changes/v1-every-domain/design.md`, section C. The record is one the
+// program declares with `@derive(json)`: its JSON Schema (`settings_json_schema()`) says which
+// members there are and what each holds, and its decoder (`settings_from_json`) makes the value,
+// so every rule of a derived decoding — renamed members, defaults, `Option`s, ranges — holds here
+// too. A file is read as TOML 1.0; each top-level member may then be set by an environment variable
+// named by a prefix and the member's name, which wins over the file. No new language: the type is
+// carried by the schema and the decoder, which the derive already gives every such record.
+
+use "@std/ioerror";
+use "@std/file";
+use "@std/env";
+use "@std/text";
+use "@std/json";
+use "@std/toml";
+
+fn fail(why: Str) -> Result[Str, Str] ! {} {
+    Result[Str, Str].Err(error: why)
+}
+
+/// The environment variable for member `member` under `prefix`: the member's name upper-cased, a
+/// word boundary inside it (`displayName`, `drain-ms`, `log.level`) written `_`, after the prefix.
+pub fn config_env_name(prefix: Str, member: Str) -> Str ! {} {
+    let parts = strs_new();
+    strs_push(parts, prefix);
+    let mut i = 0;
+    while i < str_len(member) {
+        let b = str_byte(member, i);
+        if b >= 65 && b <= 90 && i > 0 {
+            let p = str_byte(member, i - 1);
+            if (p >= 97 && p <= 122) || (p >= 48 && p <= 57) { strs_push(parts, "_"); }
+        }
+        if b >= 97 && b <= 122 {
+            strs_push(parts, str_from_byte(b - 32));
+        } else {
+            if (b >= 65 && b <= 90) || (b >= 48 && b <= 57) { strs_push(parts, str_from_byte(b)); } else { strs_push(parts, "_"); }
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+
+// What one member's schema says an environment variable may carry: `integer`, `number`, `boolean`
+// or `string`, or `""` for a member it cannot (an object or an array).
+fn carried(s: JsonDoc, node: Int, defs: Int) -> Str ! {} {
+    match json_get(s, node, "anyOf") {
+        Option.Some(value: any) => {
+            return match json_at(s, any, 0) { Option.Some(value: inner) => carried(s, inner, defs), Option.None() => "", };
+        },
+        Option.None() => {},
+    };
+    match json_get(s, node, "$ref") {
+        Option.Some(value: r) => {
+            let target = match json_str(s, r) { Option.Some(value: t) => t, Option.None() => "", };
+            let name = if text_starts_with(target, "#/$defs/") { str_slice(target, 8, str_len(target)) } else { "" };
+            let def = if defs >= 0 { json_get(s, defs, name) } else { Option[Int].None() };
+            return match def {
+                Option.Some(value: d) => {
+                    let t = match json_get(s, d, "type") { Option.Some(value: k) => match json_str(s, k) { Option.Some(value: x) => x, Option.None() => "", }, Option.None() => "", };
+                    if t == "object" { "" } else { "string" }
+                },
+                Option.None() => "",
+            };
+        },
+        Option.None() => {},
+    };
+    let t = match json_get(s, node, "type") { Option.Some(value: k) => match json_str(s, k) { Option.Some(value: x) => x, Option.None() => "", }, Option.None() => "", };
+    if t == "integer" || t == "number" || t == "boolean" || t == "string" { t } else { "" }
+}
+
+// The node `value` makes in `doc` as a `kind`, or the error naming the variable.
+struct Made {
+    node: Int,
+    why: Str,
+}
+
+fn from_env(doc: JsonDoc, var: Str, kind: Str, value: Str) -> Made ! {} {
+    if kind == "string" { return Made(node: json_add_str(doc, value), why: ""); }
+    if kind == "boolean" {
+        if value == "true" { return Made(node: json_add_bool(doc, true), why: ""); }
+        if value == "false" { return Made(node: json_add_bool(doc, false), why: ""); }
+        return Made(node: 0, why: str_concat(var, ": expected true or false"));
+    }
+    if kind == "integer" {
+        return match text_parse_int(value) {
+            Result.Ok(value: n) => Made(node: json_add_int(doc, n), why: ""),
+            Result.Err(error: e) => Made(node: 0, why: str_concat(str_concat(var, ": expected an integer, "), e)),
+        };
+    }
+    if kind == "number" {
+        let ok = str_len(value) > 0 && float_parses(value);
+        if !ok { return Made(node: 0, why: str_concat(var, ": expected a number")); }
+        let x = float_parse_raw(value);
+        if !float_is_finite(x) { return Made(node: 0, why: str_concat(var, ": expected a finite number")); }
+        return Made(node: json_add_float(doc, x), why: "");
+    }
+    Made(node: 0, why: str_concat(var, ": a member an environment variable cannot carry"))
+}
+
+// `t` as nodes of `doc`: a table an object, an array an array, a date or time its text.
+fn from_toml(doc: JsonDoc, t: Toml) -> Int ! {} {
+    match t {
+        Toml.Str(value: v) => json_add_str(doc, v),
+        Toml.Int(value: v) => json_add_int(doc, v),
+        Toml.Float(value: v) => json_add_float(doc, v),
+        Toml.Bool(value: v) => json_add_bool(doc, v),
+        Toml.OffsetDatetime(value: v) => json_add_str(doc, v),
+        Toml.LocalDatetime(value: v) => json_add_str(doc, v),
+        Toml.LocalDate(value: v) => json_add_str(doc, v),
+        Toml.LocalTime(value: v) => json_add_str(doc, v),
+        Toml.Array(items: items) => {
+            let ns = ints_new();
+            let mut i = 0;
+            while i < chain_len(items) { ints_push(ns, from_toml(doc, chain_get(items, i))); i = i + 1; }
+            json_add_array(doc, ns)
+        },
+        Toml.Table(keys: keys, values: values) => {
+            let ks = strs_new();
+            let ns = ints_new();
+            let mut i = 0;
+            while i < chain_len(keys) {
+                strs_push(ks, chain_get(keys, i));
+                ints_push(ns, from_toml(doc, chain_get(values, i)));
+                i = i + 1;
+            }
+            json_add_object(doc, ks, ns)
+        },
+    }
+}
+
+/// The settings as one JSON document: the TOML file at `path` (`""`: none), then for each member
+/// of the record `schema` describes, the variable `config_env_name(prefix, member)` when it is
+/// set, which replaces the file's value. An `Err` names the file and `line:column`, or the variable
+/// and what it should have held — a member that is a record or a sequence cannot be set from the
+/// environment, only from the file.
+pub fn config_document(io: IoCap, path: Str, prefix: Str, schema: Str) -> Result[Str, Str] ! { io } {
+    let s = match json_parse(schema) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => { return fail(str_concat("the schema is not JSON: ", e)); },
+    };
+    let defs = match json_get(s, json_root(s), "$defs") { Option.Some(value: d) => d, Option.None() => 0 - 1, };
+    let mut record = json_root(s);
+    match json_get(s, record, "$ref") {
+        Option.Some(value: r) => {
+            let target = match json_str(s, r) { Option.Some(value: t) => t, Option.None() => "", };
+            let name = if text_starts_with(target, "#/$defs/") { str_slice(target, 8, str_len(target)) } else { "" };
+            match if defs >= 0 { json_get(s, defs, name) } else { Option[Int].None() } {
+                Option.Some(value: d) => { record = d; },
+                Option.None() => { return fail(str_concat("the schema has no definition of ", target)); },
+            };
+        },
+        Option.None() => {},
+    };
+    let props = match json_get(s, record, "properties") {
+        Option.Some(value: p) => p,
+        Option.None() => { return fail("the schema is not a record's"); },
+    };
+    let doc = json_new();
+    let keys = strs_new();
+    let values = ints_new();
+    if str_len(path) > 0 {
+        let text = match file_read_all(io, path) {
+            Result.Ok(value: b) => bytes_to_str(b),
+            Result.Err(error: e) => { return fail(str_concat(str_concat(path, ": "), io_error_show(e))); },
+        };
+        match toml_parse(text) {
+            Result.Ok(value: t) => {
+                if let Toml.Table(keys: tk, values: tv) = t {
+                    let mut i = 0;
+                    while i < chain_len(tk) {
+                        strs_push(keys, chain_get(tk, i));
+                        ints_push(values, from_toml(doc, chain_get(tv, i)));
+                        i = i + 1;
+                    }
+                }
+            },
+            Result.Err(error: e) => { return fail(str_concat(str_concat(path, ":"), e)); },
+        };
+    }
+    let mut p = 0;
+    while p < json_len(s, props) {
+        let member = match json_key_at(s, props, p) { Option.Some(value: k) => k, Option.None() => "", };
+        let var = config_env_name(prefix, member);
+        match env_get(io, var) {
+            Option.Some(value: v) => {
+                let kind = match json_value_at(s, props, p) { Option.Some(value: n) => carried(s, n, defs), Option.None() => "", };
+                let made = from_env(doc, var, kind, v);
+                if str_len(made.why) > 0 { return fail(made.why); }
+                let mut at = 0 - 1;
+                let mut i = 0;
+                while i < strs_len(keys) { if strs_get(keys, i) == member { at = i; } i = i + 1; }
+                if at >= 0 { ints_set(values, at, made.node); } else { strs_push(keys, member); ints_push(values, made.node); }
+            },
+            Option.None() => {},
+        };
+        p = p + 1;
+    }
+    let root = json_add_object(doc, keys, values);
+    Result[Str, Str].Ok(value: json_encode(json_with_root(doc, root)))
+}
+
+/// The settings `config_document` gathers, decoded by `decode` — the record's derived
+/// `…_from_json` — whose `Err`, a path into the document, is answered as it is.
+pub fn config_load[T](io: IoCap, path: Str, prefix: Str, schema: Str, decode: fn(Str) -> Result[T, Str] ! {}) -> Result[T, Str] ! { io } {
+    match config_document(io, path, prefix, schema) {
+        Result.Ok(value: text) => decode(text),
+        Result.Err(error: e) => Result[T, Str].Err(error: e),
+    }
+}
+
+/// `config_load` without a file: the environment alone.
+pub fn config_from_env[T](io: IoCap, prefix: Str, schema: Str, decode: fn(Str) -> Result[T, Str] ! {}) -> Result[T, Str] ! { io } {
+    config_load(io, "", prefix, schema, decode)
+}
