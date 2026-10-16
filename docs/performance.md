@@ -3953,3 +3953,110 @@ the least memory of any compiled row but C++ and Ada (8.7 MiB; 19.1 MiB before 3
 `file_lines`). On the parallel job, Nazm's one-task time is between checked Rust's and C's, and it
 scales with them (7.2× at eight workers). Not claimed: a lead where the spread overlaps; any lead
 on `words` time.
+
+## The compilers' growth, phase by phase, measured (performance leadership 7.1–7.2, 2026-10-17)
+
+Both compilers, every phase each exposes, on generated programs of n, 2n, 4n and 8n
+(`bench/complexity/gen.py`, timed by `bench/complexity/measure.py`): **lines** (functions of ten
+lines — a loop, a branch, a call — n = 2,000 lines, so 2,104 to 16,104), **nest** (one function of
+`if`s nested 25 to 200 deep; the parser refuses more than 512 levels, `N0102`), **chain** (one
+expression of 60 to 480 terms joined by `+`, ten to a line) and **modules** (10 to 80 modules of
+ten functions, `main` importing each). Phases: the Rust `nazm` — lexing and parsing through
+`toolchain/frontend-tests/refdump` (`tokens`, `tree`), `check --no-cache` and `check` with its
+cache warm, `core-ir`, `mir`, `lir` (each runs the phases before it), and `build --timings` (load,
+front end, MIR, LIR, IR generation, native compile, link) uncached, warm (the object cache) and at
+`--opt-level 2`; the Nazm-written compiler — `compiler/tokens.nz`, `tree.nz` and `diagnose.nz`
+(`--syntax`, the whole check, `--core`) built as `toolchain/frontend-tests/run.sh` builds them,
+`toolchain/pipeline` (`mir`, `lir`, reading `nazm core-ir --json --with-sources`) and
+`toolchain/codegen`'s `nzcg` (reading `nazm lir --ops`), built as their `run.sh` build them.
+Resolution and checking are one pass in both compilers and no option times them apart.
+
+**Host and method.** Apple M1 Pro (8 performance and 2 efficiency cores), 32 GiB, macOS 27.2, Apple
+clang 21.0.0; release `nazm` from `e9d9fa40`, the drivers built by it. Each point is the median of 5
+runs after one warm-up (σ under 2% of the median almost everywhere), peak memory the largest
+`maximum resident set size` of `/usr/bin/time -l` over the runs; every measurement waited for a
+1-minute load below 2 with no cargo, rustc or nextest running: 360 measurements, begun at load
+1.12–1.91 (2.46 at most after one). The growth exponent is log2(t(8n)/t(4n)) after subtracting the
+same phase on a program of a few lines; above 1.25 is flagged. A phase whose whole range lies
+within 3 ms is reported as flat (below resolution).
+
+| phase | lines 2,104 → 16,104 | exp. | nest 25 → 200 | exp. | chain 60 → 480 | exp. | modules 10 → 80 | exp. |
+| --- | --- | ---: | --- | ---: | --- | ---: | --- | ---: |
+| **Rust** `check --no-cache` | 20.0 → 82.8 ms, 15 → 69 MiB | 1.03 | 11.4 → 14.5 ms | 1.17 | flat (11.7 → 12.7 ms) | — | 17.0 → 57.5 ms | 1.06 |
+| Rust `check`, cache warm | 20.2 → 85.6 ms | 1.05 | 11.6 → 14.8 ms | 1.53 | flat | — | 17.3 → 58.2 ms | 1.05 |
+| Rust `core-ir` | 31.1 → 168.0 ms, 21 → 117 MiB | 1.01 | 11.8 → 23.0 ms, 10 → 25 MiB | **1.53** | 12.1 → 19.7 ms, 9 → 19 MiB | 1.21 | 22.5 → 100.0 ms | 1.02 |
+| Rust `mir` | 25.8 → 126.2 ms | 1.02 | 11.6 → 15.5 ms | 1.25 | 12.2 → 46.6 ms, **11 → 97 MiB** | **1.78** | 20.2 → 79.6 ms | 1.01 |
+| Rust `lir` | 44.8 → 253.8 ms | 1.00 | 12.2 → 18.4 ms | 1.18 | 14.4 → 56.5 ms, 12 → 100 MiB | **1.49** | 28.5 → 142.0 ms | 1.02 |
+| Rust `build --no-cache` (LLVM, `-O0`) | 295 → 976 ms, 41 → 162 MiB | 0.97 | 181 → 199 ms | 1.23 | 190 → 265 ms, 38 → 103 MiB | **1.31** | 522 → 2,985 ms | 1.01 |
+| Rust `build`, warm | 127 → 371 ms | 0.99 | 89 → 98 ms | flat | 89 → 136 ms | **1.61** | 114 → 252 ms | 1.01 |
+| Rust `build --opt-level 2 --no-cache` | 942 → 4,908 ms | 1.16 | 199 → 214 ms | 1.34 | 204 → 269 ms | **1.39** | 649 → 3,715 ms | 0.99 |
+| **Nazm** lexer (`tokens.nz`) | 16.4 → 82.8 ms, 10 → 50 MiB | 0.98 | flat | — | flat | — | flat (`main.nz` only) | — |
+| Nazm parser (`tree.nz`, with its dump) | 41.9 → 270.5 ms, 26 → 162 MiB | 0.97 | 7.6 → 23.3 ms, 4 → 24 MiB | **1.50** | 9.2 → 18.8 ms, 4 → 18 MiB | 1.13 (memory 1.52) | flat | — |
+| Nazm `diagnose --syntax` | 23.3 → 130.0 ms | 0.94 | 6.9 → 11.9 ms | 1.14 | flat | — | flat | — |
+| Nazm check (`diagnose`) | 85.3 → 598.8 ms, 15 → 84 MiB | 1.13 | 22.0 → 44.1 ms, 8 → 18 MiB | **1.41** | 22.8 → 32.8 ms | 0.99 | 51.5 → 280.2 ms | 1.06 |
+| Nazm Core IR (`diagnose --core`) | 362 → 2,640 ms, **71 → 471 MiB** | 1.02 | 30.9 → 167.3 ms, 12 → 126 MiB | **1.49** | 31.5 → 143.0 ms, **15 → 123 MiB** | **1.34** | 180 → 1,306 ms, 37 → 241 MiB | 1.03 |
+| Nazm MIR (`pipeline mir`) | 275 → 2,018 ms, 21 → 137 MiB | 1.00 | refused from 100 deep | — | refused at 480 terms | — | 131 → 1,003 ms | 1.02 |
+| Nazm LIR (`pipeline lir`) | **579 → 12,943 ms** | **1.69** | refused from 100 deep | — | refused at 480 terms | — | 180 → 1,405 ms | 1.03 |
+| Nazm code generator (`nzcg`) | 108 → 780 ms, 14 → 79 MiB | 1.18 | **8.9 → 233.9 ms** | **2.67** | 12.8 → 159.1 ms, 4 → 21 MiB | **1.70** | 49 → 337 ms | 1.04 |
+
+Where the Rust build's time goes (`--timings`, medians; lines 16,104 / modules 80): load 37.3 / 26.5
+ms, front end 43.4 / 28.9, MIR 11.9 / 6.8, LIR 0.6 / 0.5, IR generation 144.8 / 68.5, native
+compile 646.5 / 2,778.5 uncached and 37.9 / 53.6 warm, link 55.6 / 63.5. On a program of a few
+lines: load 3.3, front end 0.5, native compile 116.8 (uncached; the runtime's units) or 24.6 (warm),
+link 49.5 — **a warm build of a small program is 78 ms, of which 74 ms is the native compile's
+cache and the link.** Many modules cost far more native compile than one large module (2.8 s for
+80 modules of 100 lines against 0.65 s for one of 16,000: a clang process per module), linearly.
+`check` with its cache warm costs what an uncached check costs on these single-package programs.
+
+**Flagged: worse than n log n, with the input that shows it.**
+1. **The Nazm pipeline's LIR, quadratic in a module's size** (exponent 1.69, 0.58 → 12.9 s on the
+   lines program, where its MIR is linear, 2.0 s). A sample at 16,104 lines puts 2,374 of about
+   2,900 samples in `toolchain/pipeline/ops.nz`'s `line_col`, which finds a position's line and
+   column by scanning the source from its first byte for every position asked — positions × file
+   size. A table of line starts searched by halving makes it n log n. The Rust LIR on the same
+   input is linear (254 ms).
+2. **The Nazm code generator, quadratic or worse in a function's blocks** (2.67 on `nest`, 1.70 on
+   `chain`): `toolchain/codegen/common.nz`'s `allocate` keeps live-in and live-out as dense bit sets
+   of every name for every block and iterates them to a fixed point — B × N / 32 words a pass, and
+   more passes the deeper the nesting (a sample of a 250-deep function: `allocate` 172 of about
+   200 samples).
+3. **The Rust MIR, quadratic in an expression chain's length** (1.78: 480 terms, 31.9 ms of MIR in a
+   build against 0.6 ms at 60 terms, and peak memory 11 → 97 MiB for a 54-line program); the warm
+   build follows it (1.61), and Rust's `core-ir` grows 1.53 with nesting (25 MiB at 200 deep).
+4. **The Nazm Core IR lowering's memory**: 123 MiB for the 54-line chain and 126 MiB for the
+   200-deep function (exponents 1.3–1.5 in time and memory); on ordinary code it is linear but
+   heavy — 471 MiB, about 29 KiB a line, at 16,104 lines, where the Rust `core-ir` peaks at 117 MiB.
+5. **The Nazm checker and parser grow 1.4–1.5 with nesting** (check 22 → 44 ms, parser memory
+   4 → 24 MiB at 200 deep); small in absolute terms below the parser's 512-level limit.
+
+Not compiler findings: `refdump tree`'s time on `nest` and `chain` grows as n³ (47 ms → 18.6 s at
+200 deep) because its `{:#?}` dump indents every line by the depth (840 KB of output at 50 deep, 3.1
+MB at 100); the Rust parser itself is inside `check`, 14.5 ms there. **Two limits found:** a flat
+chain of `+` counts each operator as a level, so a sum of 512 terms is refused by the Rust parser
+(`N0102`) — ordinary in generated code; and **the Nazm pipeline refuses Core IR nested deeper than
+256 JSON levels** (`pipeline: not JSON: nesting deeper than 256`) — on a 100-deep `if` nest and a
+480-term chain the Rust compiler builds — so the Nazm pipeline refuses programs the Rust compiler
+accepts until the reader's limit follows the parser's (or the interchange stops being JSON).
+
+**Constant factors, Nazm-written against Rust (lines, 16,104).** Lexing 4.8 against 2.4 µs a line
+(the Rust figure includes `refdump`'s printing); the whole check 359 against 45 µs a function (8×);
+Core IR 1.6 ms a function and 4× the memory; MIR 1.25 ms a function in the pipeline, most of it
+reading the Core IR's JSON, against 7.4 µs in the Rust build (`--timings`); code generation by
+`nzcg` 480 µs a function, against 90 µs for the Rust compiler's LLVM IR text and 330 µs for clang's
+`-O0` compile of it.
+
+**Latency budgets proposed (7.2), from these figures** — today's value, and what a test should hold:
+
+| what | today (Rust `nazm`) | budget now | target |
+| --- | ---: | ---: | ---: |
+| `nazm check` of a program of ≤ 100 lines | 10.5 ms wall (load 3.3 + front end 0.5 ms in process) | ≤ 15 ms wall, ≤ 5 ms in process | ≤ 1 ms in process |
+| warm `nazm build` of a small program | 78 ms (object cache 24.6 + link 49.5) | ≤ 100 ms | ≤ 25 ms (no relink when nothing changed) |
+| front end, per function of ten lines | 27 µs (45 µs as `check`) | ≤ 40 µs | ≤ 10 µs |
+| MIR, per function | 7.4 µs | ≤ 10 µs | ≤ 2 µs |
+| LIR, per function | 370 ns | ≤ 1 µs | ≤ 500 ns |
+| IR generation, per function | 90 µs | ≤ 120 µs | the own code generator's |
+| Nazm-written check, per function | 359 µs | ≤ 450 µs | ≤ 2× the Rust compiler's |
+| growth of every phase on `lines`, `nest`, `chain`, `modules` | five phases above 1.25 | exponent ≤ 1.25 | ≤ 1.1 |
+
+Not done here: the budgets are proposed, not yet enforced as tests (7.2's tests, 7.4's growth
+guards), and nothing found is fixed (7.3).
