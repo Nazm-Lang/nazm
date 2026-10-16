@@ -41,3 +41,21 @@ reference before R3 and R9 port that part, so the rewrite copies only what stays
 - [ ] 3.1 Runtime and memory
 - [ ] 3.2 Hardware-aware code generation
 - [ ] 3.3 Independent verification before any claim
+
+## 6. Concurrency: lead Go's goroutines (the copyright holder, 2026-10-16)
+
+Target: the best concurrency of any language — Go's goroutines first, then Rust (tokio), Erlang/BEAM,
+Java's virtual threads and C#'s async — measured, with Nazm's safety kept: data races refused at
+compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only as passed.
+
+- [ ] 6.1 The baseline, now (on the reference, after R1.5's current task): spawn 1,000,000 tasks;
+      channel ping-pong latency; fan-in throughput; memory per live task; HTTP/1.1 requests per
+      second on loopback; a parallel CPU job — Nazm against Go on this Mac, quiet host, recorded in
+      `docs/performance.md` with what each side guarantees
+- [ ] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
+- [ ] 6.3 A work-stealing scheduler, and preemption at loop back-edges
+- [ ] 6.4 `select` over several channels, and lock-free channels
+- [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
+
+6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the
+cut-over, written once in Nazm (the order rule above: nothing done twice).
