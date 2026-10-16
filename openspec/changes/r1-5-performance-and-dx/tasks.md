@@ -92,7 +92,12 @@
       backend only, the rest refused by name
 - [ ] 7.2 Every release archive signed (minisign or Sigstore) and checked reproducible in CI — 2026-10-15:
       Sigstore chosen; `scripts/sign-release.sh` and `scripts/verify-release.sh` written (D16); the
-      first real signature is at 1.0, and the reproducibility check in CI is still to do
+      first real signature is at 1.0. 2026-10-16: the reproducibility check is in CI —
+      `scripts/reproducible-check.sh` builds `nazm` twice in two target directories (paths
+      remapped), packages each, and compares the bytes; `host-archive.sh` writes a deterministic
+      archive (sorted entries, `SOURCE_DATE_EPOCH`, owner 0, no gzip name or time); the `reproducible`
+      job runs it on each push to main; on this Mac (aarch64-apple-darwin) both builds and archives
+      were the same bytes; a test, two mutants. Open: the signature itself, the copyright holder's at 1.0
 
 ## 8. Faster verification (the copyright holder's choices, 2026-10-14)
 - [ ] 8.1 A faster linker (mold or lld) for the contained image's Rust builds; measured against the

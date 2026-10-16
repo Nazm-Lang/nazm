@@ -51,5 +51,30 @@ clang package on Linux). Rust is never needed.$nzcg_note
 
 What this host has shown is in docs/support.md.
 TXT
-tar -C "$stage" -czf "$outdir/nazm-$triple.tar.gz" "nazm-$triple"
+# The archive is the same bytes for the same files (R1.5 7.2, scripts/reproducible-check.sh):
+# entries sorted by name, every time SOURCE_DATE_EPOCH (0 when unset), owner 0, permissions as
+# staged, and a gzip header with no name and no time — which neither BSD nor GNU tar gives alone.
+python3 - "$stage" "nazm-$triple" "$outdir/nazm-$triple.tar.gz" "${SOURCE_DATE_EPOCH:-0}" <<'PY'
+import gzip, io, os, sys, tarfile
+stage, top, dest, when = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+paths = []
+for d, dirs, files in os.walk(os.path.join(stage, top)):
+    dirs.sort()
+    paths.append(d)
+    paths.extend(os.path.join(d, f) for f in sorted(files))
+raw = io.BytesIO()
+with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as t:
+    for p in paths:
+        info = t.gettarinfo(p, os.path.relpath(p, stage))
+        info.mtime, info.uid, info.gid, info.uname, info.gname = when, 0, 0, "", ""
+        info.pax_headers = {}
+        if info.isfile():
+            with open(p, "rb") as f:
+                t.addfile(info, f)
+        else:
+            t.addfile(info)
+with open(dest, "wb") as out:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=out, mtime=0) as z:
+        z.write(raw.getvalue())
+PY
 printf 'host-archive: %s/nazm-%s.tar.gz\n' "$outdir" "$triple"
