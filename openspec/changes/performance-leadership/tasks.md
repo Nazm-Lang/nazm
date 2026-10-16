@@ -58,9 +58,18 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       on a loaded host; measured from below load 2 (`performance.md`, *Concurrency*): spawn 13–14× and
       hand-offs 14× slower than Go, fan-in 6.5×, 17.4 against 2.7 KiB per blocked task, HTTP 0.84–0.86×
       Go at half its memory, parallel CPU 12–19% behind; two runs
-- [ ] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
-- [ ] 6.3 A work-stealing scheduler, and preemption at loop back-edges
+- [x] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
+      — 2026-10-16: copied stacks (design.md, *Concurrency engineering*): a worker's tasks share its
+      run stack and a parked task's frames are copied out; 826 bytes per blocked task against
+      17.9 KiB (peak RSS, 20,000 against 1,000 blocked); runtime ABI 40. Timings wait for a quiet host
+- [x] 6.3 A work-stealing scheduler, and preemption at loop back-edges
+      — 2026-10-16: unstarted and resumed queues per worker, stealing of unstarted tasks, a 50 µs
+      spin, a join without a lock (ABI 41); preemption at every loop back edge through a polled flag
+      and a 10 ms monitor, off with one worker (ABI 43). Timings, and the poll's cost on hot loops
+      (`bench/compare/preempt_cost.sh`), wait for a quiet host
 - [ ] 6.4 `select` over several channels, and lock-free channels
+      — 2026-10-16, part: the waiter table's 64 locks and no lock for an empty bucket (ABI 42).
+      Open: `select` over channels of different types (designed, design.md) and a direct hand-off
 - [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the
