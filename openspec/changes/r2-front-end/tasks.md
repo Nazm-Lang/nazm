@@ -502,6 +502,13 @@
         divided back (`checked`), `chain_from_vec` as its copying loop. `run.sh core`: 3,153
         agree, 0 differ; of 93,537 functions the lowering carries 93,424, all agree; the other
         parts 10,992, all agree; 1,768 whole documents, all the reference's bytes
+  - [x] `Text` and the last holes: a string literal where a `Text` is expected as
+        `text_assume` of its bytes; `Text(s)` as `text_from_str`, `try_convert[Text](s)` as
+        `utf8_valid` and `text_assume` (each at its argument, as `internal` places it); a hole
+        read through `show()` as the method call the checker recorded; a float's hole with a
+        precision as `float_to_str_fixed`. `run.sh core`: 3,153 agree, 0 differ; of 93,541
+        functions the lowering carries 93,436, all agree; the other parts 10,992, all agree;
+        1,776 whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)

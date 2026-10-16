@@ -1368,10 +1368,15 @@ fn co_expr(lo: Lo, e: Int) -> Str {
     }
     if k == "Str" {
         let lt = ck_literal_ty(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
-        if lt != ck_t_str() { return co_stopped(lo, "a string literal of a type other than `Str`"); }
+        let text = ck_type_class(lo.c, lt) == "text";
+        if lt != ck_t_str() && text == false { return co_stopped(lo, "a string literal of a type other than `Str`"); }
         let v = sx_text(t, sx_field(t, e, "value"));
         let id = co_constant(lo, "Str", co_str_value(v));
-        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
+        let s = co_node(lo, "const", co_field_first("const", int_to_str(id)), ck_t_str(), span);
+        // Where a `Text` is expected (Gate 2): the literal's bytes, which are UTF-8, as the
+        // `Text` they are.
+        if text { return co_internal(lo, "text_assume", s, lt); }
+        return s;
     }
     if k == "Var" { return co_var(lo, sx_text(t, sx_field(t, e, "name")), span); }
     if k == "Closure" { return co_closure(lo, e); }
@@ -1665,17 +1670,23 @@ fn co_hole(lo: Lo, p: Int, piece: Strs) -> Int {
     let t = lo.t;
     let c = lo.c;
     let at = sx_field(t, p, "span");
-    if ck_site_at(c, co_abs_s(lo, at), co_abs_e(lo, at)) >= 0 {
-        co_halt(lo, "a hole's `show()`");
-        return 0;
-    }
-    let v = co_expr(lo, sx_field(t, p, "expr"));
-    let ty = co_last_ty(lo);
-    if co_halted(lo) { return 0; }
-    let class = ck_type_class(c, ty);
     let spec = sx_field(t, p, "spec");
     let mut text = "";
     let mut numeric = false;
+    let mut v = "";
+    let mut class = "";
+    let mut name = "";
+    // Read through its `show()` (R1b): the method call the checker recorded at the hole.
+    if ck_site_at(c, co_abs_s(lo, at), co_abs_e(lo, at)) >= 0 {
+        text = co_method(lo, at, at, sx_field(t, p, "expr"), "", 0 - 1, ints_new());
+        if co_halted(lo) { return 0; }
+    } else {
+        v = co_expr(lo, sx_field(t, p, "expr"));
+        let ty = co_last_ty(lo);
+        if co_halted(lo) { return 0; }
+        class = ck_type_class(c, ty);
+        name = co_durable(lo, ty);
+    }
     if class == "str" { text = v; }
     if class == "bool" {
         let yes = co_str_const(lo, "true", at);
@@ -1683,11 +1694,11 @@ fn co_hole(lo: Lo, p: Int, piece: Strs) -> Int {
         text = co_conditional(lo, v, yes, no, ck_t_str(), at);
     }
     if class == "float" && sx_is_some(t, sx_field(t, spec, "precision")) {
-        co_halt(lo, "a float's hole with a precision");
-        return 0;
+        let digits = co_int_const(lo, int_from_digits(sx_text(t, sx_unwrap(t, sx_field(t, spec, "precision")))), at);
+        text = co_builtin(lo, "float_to_str_fixed", co_list_one(json_str(name)), str_concat(str_concat(v, ","), digits), ck_t_str(), at);
+        numeric = true;
     }
-    let name = co_durable(lo, ty);
-    if class == "int" || class == "integer" || class == "float" {
+    if text == "" && (class == "int" || class == "integer" || class == "float") {
         text = co_builtin(lo, "num_to_str", co_list_one(json_str(name)), v, ck_t_str(), at);
         numeric = true;
     }
@@ -2760,10 +2771,12 @@ fn co_conversion(lo: Lo, e: Int, cv: Int) -> Str {
     let mode = ck_conv_mode(c, cv);
     let args = sx_items(t, sx_field(t, e, "args"));
     if ints_len(args) == 0 { return co_stopped(lo, "a conversion with no argument"); }
-    if ck_type_class(c, to) == "text" { return co_stopped(lo, "a conversion to `Text`"); }
+    let text = ck_type_class(c, to) == "text";
     let operand = co_expr(lo, ints_get(args, 0));
     let from = co_last_ty(lo);
     if co_halted(lo) { return ""; }
+    // `Text(s)` checks; `try_convert[Text](s)` asks first (Gate 2).
+    if text && mode != "try" { return co_internal(lo, "text_from_str", operand, to); }
     if mode != "try" {
         let fields = strs_new();
         strs_push(fields, co_field_first("mode", json_str(mode)));
@@ -2776,14 +2789,21 @@ fn co_conversion(lo: Lo, e: Int, cv: Int) -> Str {
     let some = ck_variant_named(c, result, "Some");
     if none < 0 || some < 0 { return co_stopped(lo, "an `Option` without `None` and `Some`"); }
     let local = co_temp(lo, "convert", from, at);
-    let tf = strs_new();
-    strs_push(tf, co_field_first("to", json_str(co_durable(lo, to))));
-    strs_push(tf, co_field("operand", co_read(lo, local, at)));
-    let test = co_node(lo, "fits", str_join(tf, ""), ck_t_bool(), at);
-    let cf = strs_new();
-    strs_push(cf, co_field_first("mode", json_str("exact")));
-    strs_push(cf, co_field("operand", co_read(lo, local, at)));
-    let converted = co_node(lo, "convert", str_join(cf, ""), to, at);
+    let mut test = "";
+    let mut converted = "";
+    if text {
+        test = co_internal(lo, "utf8_valid", co_read(lo, local, at), ck_t_bool());
+        converted = co_internal(lo, "text_assume", co_read(lo, local, at), to);
+    } else {
+        let tf = strs_new();
+        strs_push(tf, co_field_first("to", json_str(co_durable(lo, to))));
+        strs_push(tf, co_field("operand", co_read(lo, local, at)));
+        test = co_node(lo, "fits", str_join(tf, ""), ck_t_bool(), at);
+        let cf = strs_new();
+        strs_push(cf, co_field_first("mode", json_str("exact")));
+        strs_push(cf, co_field("operand", co_read(lo, local, at)));
+        converted = co_node(lo, "convert", str_join(cf, ""), to, at);
+    }
     let init = strs_new();
     strs_push(init, co_field_first("field", "0"));
     strs_push(init, co_field("name", json_str(ck_payload_name(c, result, some, 0))));
@@ -2797,6 +2817,29 @@ fn co_conversion(lo: Lo, e: Int, cv: Int) -> Str {
     strs_push(stmts, co_let(local, operand));
     let block = co_block_json(lo, false, co_list_one(int_to_str(local)), stmts, choice, at);
     co_node(lo, "block", co_field_first("body", block), result, at)
+}
+
+// The built-in `name` of one argument, `arg` already printed, where `arg` is (`internal`).
+fn co_internal(lo: Lo, name: Str, arg: Str, ty: Int) -> Str {
+    if co_halted(lo) { return ""; }
+    let o = strs_new();
+    strs_push(o, co_op_first("builtin"));
+    strs_push(o, co_field("builtin", json_str(name)));
+    strs_push(o, co_field("type_args", "[]"));
+    strs_push(o, co_field("args", co_list_one(arg)));
+    strs_push(o, co_field("type", json_str(co_durable(lo, ty))));
+    strs_push(o, co_field("at", co_at_of(arg)));
+    co_set_last(lo, ty, false);
+    co_object(o)
+}
+
+// The `at` of a printed expression, quoted: its last member.
+fn co_at_of(e: Str) -> Str {
+    let key = ",\"at\":";
+    let mut i = str_len(e) - str_len(key);
+    while i >= 0 && str_slice(e, i, i + str_len(key)) != key { i = i - 1; }
+    if i < 0 { return "\"\""; }
+    str_slice(e, i + str_len(key), str_len(e) - 1)
 }
 
 // A variant of enum type `et` built of the printed fields `inits`, at `at`.
