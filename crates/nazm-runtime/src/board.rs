@@ -19,7 +19,90 @@ pub enum Isa {
     Riscv64,
     /// ARMv7-M, Thumb-2 (Gate 3): a Cortex-M microcontroller.
     Thumbv7m,
+    /// ARMv8-M Mainline with a single-precision FPU (M1): a Cortex-M33, the RP2350's.
+    Thumbv8m,
+    /// RV32IMC with Zicsr (M1): a RISC-V microcontroller with no atomic instructions, the
+    /// ESP32-C3's.
+    Riscv32,
 }
+
+impl Isa {
+    /// Its name in a manifest.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Aarch64 => "aarch64",
+            Self::Riscv64 => "riscv64",
+            Self::Thumbv7m => "thumbv7m",
+            Self::Thumbv8m => "thumbv8m.main",
+            Self::Riscv32 => "riscv32",
+        }
+    }
+
+    /// An Arm M profile (Gate 3, M1): a vector table first in the image, an NVIC, SysTick, and
+    /// AArch32 semihosting.
+    #[must_use]
+    pub const fn m_profile(self) -> bool {
+        matches!(self, Self::Thumbv7m | Self::Thumbv8m)
+    }
+
+    /// A microcontroller (Gate 3, M1): 32-bit pointers and a 64-bit `Int`, whose 64-bit
+    /// division and atomics are the board runtime's, and which has no heap in 1.0.
+    #[must_use]
+    pub const fn microcontroller(self) -> bool {
+        matches!(self, Self::Thumbv7m | Self::Thumbv8m | Self::Riscv32)
+    }
+}
+
+/// One region of a microcontroller's memory (M1, `docs/spec.md`, *Boards*): where it
+/// starts and how many bytes it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Region {
+    pub origin: u64,
+    pub length: u64,
+}
+
+impl Region {
+    /// The first address past it.
+    #[must_use]
+    pub const fn end(self) -> u64 {
+        self.origin.saturating_add(self.length)
+    }
+}
+
+/// A board whose image runs from flash (M1): the code, read-only data and the initial values of
+/// writable data are in `flash`; writable data, zeroed data and the stack in `ram`. `_start`
+/// copies the data from its flash load address and zeroes the rest before anything else runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Memory {
+    pub flash: Region,
+    pub ram: Region,
+}
+
+/// What a chip's boot ROM expects of an image beyond its code (M1, `docs/spec.md`,
+/// *Boards*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Image {
+    /// The RP2350's: an `IMAGE_DEF` block — a secure Arm executable for the RP2350 — within the
+    /// first 4 KiB of flash, after the vector table (RP2350 datasheet, *Minimum viable image
+    /// metadata*). Without it the boot ROM boots nothing.
+    Rp2350,
+}
+
+impl Image {
+    /// Its name in a manifest.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Rp2350 => "rp2350",
+        }
+    }
+}
+
+/// The RP2350 boot ROM's minimum `IMAGE_DEF` (M1): the block's start marker; `IMAGE_TYPE`, one
+/// word, an executable for Arm in the secure state on the RP2350 (`0x1021`); the last item, one
+/// word of items before it; the link to the next block, 0 for this one alone; the end marker.
+pub const RP2350_IMAGE_DEF: [u32; 5] = [0xffff_ded3, 0x1021_0142, 0x0000_01ff, 0, 0xab12_3579];
 
 /// How a board's machine is stopped with a status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,17 +238,21 @@ pub struct Board {
     pub emulator: Cow<'static, str>,
     /// Whether it has been run on hardware. No board has.
     pub hardware: bool,
+    /// Flash and RAM (M1), for an image that runs from flash: `None` for an image loaded whole
+    /// into memory, as an emulator loads one.
+    pub memory: Option<Memory>,
+    /// The Nazm function `_start` calls after memory and before the interrupts and `main` (M1):
+    /// the chip's clocks, pads and console. A function of the program, by its name.
+    pub init: Option<Cow<'static, str>>,
+    /// What the boot ROM expects of the image (M1), or nothing beyond ELF.
+    pub image: Option<Image>,
 }
 
 impl Board {
     /// The board as a manifest (Gate 3): the text `nazm build --board` reads back as this board.
     #[must_use]
     pub fn manifest(&self) -> String {
-        let isa = match self.isa {
-            Isa::Aarch64 => "aarch64",
-            Isa::Riscv64 => "riscv64",
-            Isa::Thumbv7m => "thumbv7m",
-        };
+        let isa = self.isa.name();
         // A TOML basic string: only a quote and a backslash need escaping in a board's name.
         let name = self.name.replace('\\', "\\\\").replace('"', "\\\"");
         let mut out = format!(
@@ -180,6 +267,20 @@ impl Board {
             Stop::SifiveTest { address } => {
                 let _ = writeln!(out, "kind = \"sifive-test\"\naddress = {address:#x}");
             }
+        }
+        // M1: a top-level key, so written before the tables, as TOML reads it back.
+        if let Some(init) = &self.init {
+            out = out.replacen("\n[uart]\n", &format!("init = \"{init}\"\n\n[uart]\n"), 1);
+        }
+        if let Some(m) = self.memory {
+            let _ = write!(
+                out,
+                "\n[memory]\nflash = {{ origin = {:#x}, length = {:#x} }}\nram = {{ origin = {:#x}, length = {:#x} }}\n",
+                m.flash.origin, m.flash.length, m.ram.origin, m.ram.length
+            );
+        }
+        if let Some(i) = self.image {
+            let _ = write!(out, "\n[image]\nformat = \"{}\"\n", i.name());
         }
         if let Some(h) = self.heap {
             let _ = write!(out, "\n[heap]\nsize = {h:#x}\n");
@@ -217,7 +318,7 @@ impl Board {
 }
 
 /// Every board, in a fixed order.
-pub const BOARDS: [Board; 3] = [
+pub const BOARDS: [Board; 5] = [
     Board {
         triple: Cow::Borrowed("aarch64-unknown-none"),
         name: Cow::Borrowed("QEMU virt, AArch64 (Cortex-A53)"),
@@ -234,6 +335,9 @@ pub const BOARDS: [Board; 3] = [
             "qemu-system-aarch64 -M virt -cpu cortex-a53 -nographic -nic none -semihosting -kernel",
         ),
         hardware: false,
+        memory: None,
+        init: None,
+        image: None,
     },
     Board {
         triple: Cow::Borrowed("riscv64gc-unknown-none-elf"),
@@ -251,6 +355,9 @@ pub const BOARDS: [Board; 3] = [
             "qemu-system-riscv64 -M virt -bios none -nographic -nic none -kernel",
         ),
         hardware: false,
+        memory: None,
+        init: None,
+        image: None,
     },
     // Gate 3: an MCU-class board. The AN385 image's SSRAM1 is at 0, where the vector table must
     // be; its UART0 is a CMSDK APB UART.
@@ -270,6 +377,74 @@ pub const BOARDS: [Board; 3] = [
             "qemu-system-arm -M mps2-an385 -cpu cortex-m3 -nographic -nic none -semihosting -kernel",
         ),
         hardware: false,
+        memory: None,
+        init: None,
+        image: None,
+    },
+    // M1: the Cortex-M33, on the AN505 image of the MPS2+ (an SSE-200 subsystem). The core starts
+    // in the secure state from the secure alias of SSRAM1, which stands for flash; the image's
+    // data and stack are in the secure alias of SSRAM2, and its UART0 is the secure alias of a
+    // CMSDK APB UART.
+    Board {
+        triple: Cow::Borrowed("thumbv8m.main-none-eabihf"),
+        name: Cow::Borrowed("QEMU MPS2 AN505, Cortex-M33"),
+        isa: Isa::Thumbv8m,
+        load_address: 0x1000_0000,
+        uart: 0x5020_0000,
+        uart_kind: Uart::Cmsdk,
+        stop: Stop::Semihosting,
+        stack: STACK,
+        heap: None,
+        watchdog: None,
+        interrupts: None,
+        emulator: Cow::Borrowed(
+            "qemu-system-arm -M mps2-an505 -cpu cortex-m33 -nographic -nic none -semihosting -kernel",
+        ),
+        hardware: false,
+        memory: Some(Memory {
+            flash: Region {
+                origin: 0x1000_0000,
+                length: 0x40_0000,
+            },
+            ram: Region {
+                origin: 0x3800_0000,
+                length: 0x20_0000,
+            },
+        }),
+        init: None,
+        image: None,
+    },
+    // M1: RV32IMC on QEMU's RISC-V `virt`, machine mode, no firmware. Its memory is all RAM, so the
+    // board's first MiB stands for flash and the second for RAM: the image's data is copied
+    // between them as a chip's is.
+    Board {
+        triple: Cow::Borrowed("riscv32imc-unknown-none-elf"),
+        name: Cow::Borrowed("QEMU virt, RISC-V RV32IMC, machine mode"),
+        isa: Isa::Riscv32,
+        load_address: 0x8000_0000,
+        uart: 0x1000_0000,
+        uart_kind: Uart::Ns16550a,
+        stop: Stop::SifiveTest { address: 0x10_0000 },
+        stack: STACK,
+        heap: None,
+        watchdog: None,
+        interrupts: None,
+        emulator: Cow::Borrowed(
+            "qemu-system-riscv32 -M virt -bios none -nographic -nic none -kernel",
+        ),
+        hardware: false,
+        memory: Some(Memory {
+            flash: Region {
+                origin: 0x8000_0000,
+                length: 0x10_0000,
+            },
+            ram: Region {
+                origin: 0x8010_0000,
+                length: 0x10_0000,
+            },
+        }),
+        init: None,
+        image: None,
     },
 ];
 
@@ -350,11 +525,15 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
         |names: &[String]| -> String { names.iter().map(|n| format!(" KEEP(*({n}))")).collect() };
     let (code, rodata, data) = (keep(&placed.code), keep(&placed.rodata), keep(&placed.data));
     // An M profile's vector table first, at the load address (Gate 3).
-    let vectors = if board.isa == Isa::Thumbv7m {
+    let vectors = if board.isa.m_profile() {
         "KEEP(*(.vectors)) "
     } else {
         ""
     };
+    // An image that runs from flash (M1): its own script.
+    if let Some(m) = board.memory {
+        return flash_script(board, m, vectors, &code, &rodata, &data);
+    }
     // A heap (Gate 3): the arena after the stack, its bounds `__heap_start` and `__heap_end`.
     let heap = board.heap.map_or_else(String::new, |h| {
         format!("  . = ALIGN(16);\n  __heap_start = .;\n  . = . + {h:#x};\n  __heap_end = .;\n")
@@ -367,13 +546,56 @@ pub fn linker_script_placing(board: &Board, placed: &Placed) -> String {
     )
 }
 
+/// The linker script of an image that runs from flash (M1, `docs/spec.md`, *Boards*):
+/// the manifest's flash and RAM as `MEMORY`; the vector table, the boot ROM's block when the
+/// manifest's `[image]` asks for one, code and read-only data in flash; writable data in RAM with
+/// its initial values loaded in flash after the read-only data — `__data_start` to `__data_end`,
+/// loaded at `__data_load` — then zeroed data (`__bss_start` to `__bss_end`) and the stack. The
+/// linker refuses an image whose sections overflow a region, naming the region; the two
+/// assertions name `N0850`, as the build does when it can see the overflow first.
+fn flash_script(
+    board: &Board,
+    m: Memory,
+    vectors: &str,
+    code: &str,
+    rodata: &str,
+    data: &str,
+) -> String {
+    let triple = &board.triple;
+    let stack = board.stack;
+    let image = match board.image {
+        Some(Image::Rp2350) => "KEEP(*(.image_def)) ",
+        None => "",
+    };
+    format!(
+        "/* Written by nazm build for {triple} (N62, N86, M1). */\nMEMORY\n{{\n  \
+         FLASH (rx) : ORIGIN = {fo:#x}, LENGTH = {fl:#x}\n  RAM (rwx) : ORIGIN = {ro:#x}, LENGTH = {rl:#x}\n}}\n\
+         ENTRY(_start)\nSECTIONS\n{{\n  \
+         .text : {{ {vectors}{image}*(.text.start) *(.text*){code} }} > FLASH\n  \
+         .rodata : {{ *(.rodata*) *(.srodata*){rodata} }} > FLASH\n  \
+         .data : ALIGN(8) {{ __data_start = .; *(.data*) *(.sdata*){data} . = ALIGN(8); __data_end = .; }} > RAM AT > FLASH\n  \
+         __data_load = LOADADDR(.data);\n  \
+         .bss (NOLOAD) : ALIGN(8) {{ __bss_start = .; *(.bss*) *(.sbss*) *(COMMON) . = ALIGN(8); __bss_end = .; }} > RAM\n  \
+         .stack (NOLOAD) : ALIGN(16) {{ __stack_bottom = .; . = . + {stack:#x}; __stack_top = .; }} > RAM\n  \
+         /DISCARD/ : {{ *(.eh_frame*) }}\n}}\n\
+         ASSERT(__data_load + SIZEOF(.data) <= {fe:#x}, \"nazm: error[N0850]: the image does not fit the board's flash\")\n\
+         ASSERT(__stack_top <= {re:#x}, \"nazm: error[N0850]: the data and the stack do not fit the board's RAM\")\n",
+        fo = m.flash.origin,
+        fl = m.flash.length,
+        ro = m.ram.origin,
+        rl = m.ram.length,
+        fe = m.flash.end(),
+        re = m.ram.end(),
+    )
+}
+
 /// [`emit_runtime`] for a program that reaches `needs` (Gate 3): on a 64-bit board the memory
 /// functions; with a heap in the board's manifest, its arena and the runtime parts allocation
 /// admits.
 #[must_use]
 pub fn emit_runtime_for(board: &Board, needs: &crate::Needs) -> String {
     let mut out = emit_runtime(board, needs.stack);
-    if board.isa != Isa::Thumbv7m {
+    if !board.isa.microcontroller() {
         out.push_str(MEMORY_RUNTIME);
     }
     if board.heap.is_some() {
@@ -719,9 +941,19 @@ stop:
     ));
     out.push_str(MMIO_RUNTIME);
     out.push_str(ATOMIC_RUNTIME);
-    // What an ARMv7-M has no instruction for, and LLVM calls instead (Gate 3).
-    if board.isa == Isa::Thumbv7m {
+    // What an ARMv7-M has no instruction for, and LLVM calls instead (Gate 3); an ARMv8-M
+    // Mainline has none of it either, nor an instruction between a 64-bit integer and a float
+    // (M1).
+    if board.isa.m_profile() {
         out.push_str(THUMB_RUNTIME);
+    }
+    if board.isa == Isa::Thumbv8m {
+        out.push_str(THUMBV8M_FLOAT_RUNTIME);
+    }
+    // What an RV32IMC has no instruction for (M1): atomics, 64-bit division, and the C library's
+    // memory functions that code generation calls.
+    if board.isa == Isa::Riscv32 {
+        out.push_str(RISCV32_RUNTIME);
     }
     if stack {
         // The quarter of the board's stack kept in reserve below a recursive call (N49's).
@@ -732,12 +964,17 @@ stop:
 @__stack_bottom = external global i8
 declare ptr @llvm.frameaddress.p0(i32)
 
+; The limit a unit's inlined check compares its frame with (the speed milestone), unset until the
+; first check sets it (M1: a board's runtime had not defined it, so no image that recurses linked).
+@nz.stack_limit = hidden global i64 0
+
 define hidden i32 @nz.stack_check() {{
 entry:
   %fp = call ptr @llvm.frameaddress.p0(i32 0)
   %sp = ptrtoint ptr %fp to i64
   %bottom = ptrtoint ptr @__stack_bottom to i64
   %limit = add i64 %bottom, {headroom}
+  store i64 %limit, ptr @nz.stack_limit
   %past = icmp ult i64 %sp, %limit
   %r = zext i1 %past to i32
   ret i32 %r
@@ -769,7 +1006,7 @@ entry:
 fn board_exit(board: &Board) -> String {
     match board.stop {
         // AArch32's semihosting (Gate 3): `bkpt 0xab` on an M profile, and a block of words.
-        Stop::Semihosting if board.isa == Isa::Thumbv7m => "; ARM semihosting SYS_EXIT_EXTENDED (0x20) on an M profile: { ADP_Stopped_ApplicationExit, code }.
+        Stop::Semihosting if board.isa.m_profile() => "; ARM semihosting SYS_EXIT_EXTENDED (0x20) on an M profile: { ADP_Stopped_ApplicationExit, code }.
 define hidden void @nz.board_exit(i64 %code) noreturn {
 entry:
   %blk = alloca [2 x i32], align 4
@@ -1151,6 +1388,493 @@ entry:
 }
 "#;
 
+/// What LLVM calls on an ARMv8-M Mainline with a single-precision FPU for what it has no
+/// instruction for beyond [`THUMB_RUNTIME`] (M1): conversions between a 64-bit integer and a
+/// `Float32`, and the widening of a `Float32` to a double and the comparison of two, which the
+/// lowering's exact range check of a conversion from a float to an integer computes in (folded to
+/// single precision when optimised, called unoptimised). Each is the run-time ABI's helper, with
+/// the base procedure call standard's soft-float convention (`arm_aapcscc`) as the ABI requires
+/// even of a hard-float image, and computes only in integers, so none calls itself. An integer is
+/// rounded to the nearest float, ties to even; a float is truncated toward zero, a NaN is 0 and a
+/// value out of range saturates — what LLVM's saturating conversion, which Nazm's lowering uses,
+/// asks of them; a widening is exact; a comparison is IEEE 754's, false with a NaN. A program's
+/// own `Float64` is refused (`N0854`): these are not its arithmetic.
+pub const THUMBV8M_FLOAT_RUNTIME: &str = r#"
+declare i64 @llvm.ctlz.i64(i64, i1)
+
+define arm_aapcscc float @__aeabi_ul2f(i64 %x) "no-builtins" {
+entry:
+  %zero = icmp eq i64 %x, 0
+  br i1 %zero, label %none, label %some
+none:
+  ret float 0.0
+some:
+  %lz = call i64 @llvm.ctlz.i64(i64 %x, i1 true)
+  %n = shl i64 %x, %lz
+  %top = lshr i64 %n, 40
+  %rest = shl i64 %n, 24
+  %above = icmp ugt i64 %rest, -9223372036854775808
+  %tie = icmp eq i64 %rest, -9223372036854775808
+  %low = and i64 %top, 1
+  %odd = icmp ne i64 %low, 0
+  %even = and i1 %tie, %odd
+  %up = or i1 %above, %even
+  %inc = zext i1 %up to i64
+  %m = add i64 %top, %inc
+  %e = sub i64 189, %lz
+  %eb = shl i64 %e, 23
+  %bits = add i64 %eb, %m
+  %b32 = trunc i64 %bits to i32
+  %f = bitcast i32 %b32 to float
+  ret float %f
+}
+
+define arm_aapcscc float @__aeabi_l2f(i64 %x) "no-builtins" {
+entry:
+  %neg = icmp slt i64 %x, 0
+  %flip = sub i64 0, %x
+  %mag = select i1 %neg, i64 %flip, i64 %x
+  %f = call arm_aapcscc float @__aeabi_ul2f(i64 %mag)
+  %b = bitcast float %f to i32
+  %sign = select i1 %neg, i32 -2147483648, i32 0
+  %o = or i32 %b, %sign
+  %r = bitcast i32 %o to float
+  ret float %r
+}
+
+; The magnitude of a float that is at least 1 and below 2^64, truncated: its biased exponent and
+; its bits.
+define internal i64 @nz.f2u64(i32 %ex, i32 %b) {
+entry:
+  %frac = and i32 %b, 8388607
+  %m32 = or i32 %frac, 8388608
+  %m = zext i32 %m32 to i64
+  %up = icmp uge i32 %ex, 150
+  br i1 %up, label %left, label %right
+left:
+  %l = sub i32 %ex, 150
+  %l64 = zext i32 %l to i64
+  %v = shl i64 %m, %l64
+  ret i64 %v
+right:
+  %r = sub i32 150, %ex
+  %r64 = zext i32 %r to i64
+  %w = lshr i64 %m, %r64
+  ret i64 %w
+}
+
+define arm_aapcscc i64 @__aeabi_f2ulz(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %special = icmp eq i32 %ex, 255
+  %some = icmp ne i32 %frac, 0
+  %nan = and i1 %special, %some
+  %neg = icmp slt i32 %b, 0
+  %small = icmp ult i32 %ex, 127
+  %n0 = or i1 %nan, %neg
+  %nothing = or i1 %n0, %small
+  br i1 %nothing, label %zero, label %sized
+zero:
+  ret i64 0
+sized:
+  %huge = icmp uge i32 %ex, 191
+  br i1 %huge, label %max, label %fits
+max:
+  ret i64 -1
+fits:
+  %v = call i64 @nz.f2u64(i32 %ex, i32 %b)
+  ret i64 %v
+}
+
+define arm_aapcscc i64 @__aeabi_f2lz(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %special = icmp eq i32 %ex, 255
+  %some = icmp ne i32 %frac, 0
+  %nan = and i1 %special, %some
+  %small = icmp ult i32 %ex, 127
+  %nothing = or i1 %nan, %small
+  %neg = icmp slt i32 %b, 0
+  br i1 %nothing, label %zero, label %sized
+zero:
+  ret i64 0
+sized:
+  %huge = icmp uge i32 %ex, 190
+  br i1 %huge, label %bound, label %fits
+bound:
+  %edge = select i1 %neg, i64 -9223372036854775808, i64 9223372036854775807
+  ret i64 %edge
+fits:
+  %v = call i64 @nz.f2u64(i32 %ex, i32 %b)
+  %nv = sub i64 0, %v
+  %r = select i1 %neg, i64 %nv, i64 %v
+  ret i64 %r
+}
+
+declare i32 @llvm.ctlz.i32(i32, i1)
+
+define arm_aapcscc double @__aeabi_f2d(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %s32 = and i32 %b, -2147483648
+  %s64 = zext i32 %s32 to i64
+  %sign = shl i64 %s64, 32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %f64 = zext i32 %frac to i64
+  %special = icmp eq i32 %ex, 255
+  br i1 %special, label %inf, label %finite
+inf:
+  %im = shl i64 %f64, 29
+  %ib = or i64 %im, 9218868437227405312
+  %ir = or i64 %ib, %sign
+  %id = bitcast i64 %ir to double
+  ret double %id
+finite:
+  %sub = icmp eq i32 %ex, 0
+  br i1 %sub, label %small, label %normal
+normal:
+  %e32 = add i32 %ex, 896
+  %e64 = zext i32 %e32 to i64
+  %eb = shl i64 %e64, 52
+  %nm = shl i64 %f64, 29
+  %nb = or i64 %eb, %nm
+  %nr = or i64 %nb, %sign
+  %nd = bitcast i64 %nr to double
+  ret double %nd
+small:
+  %zero = icmp eq i32 %frac, 0
+  br i1 %zero, label %signed_zero, label %subnormal
+signed_zero:
+  %zd = bitcast i64 %sign to double
+  ret double %zd
+subnormal:
+  ; The value is frac * 2^-149: its top bit, at p, is 2^(p - 149), a double's exponent p + 874.
+  %lz = call i32 @llvm.ctlz.i32(i32 %frac, i1 true)
+  %p = sub i32 31, %lz
+  %se = add i32 %p, 874
+  %se64 = zext i32 %se to i64
+  %seb = shl i64 %se64, 52
+  %up = sub i32 52, %p
+  %up64 = zext i32 %up to i64
+  %sm0 = shl i64 %f64, %up64
+  %sm = and i64 %sm0, 4503599627370495
+  %sb = or i64 %seb, %sm
+  %sr = or i64 %sb, %sign
+  %sd = bitcast i64 %sr to double
+  ret double %sd
+}
+
+; Two doubles' order, IEEE 754's: 2 when either is a NaN, else -1, 0 or 1. Each is mapped to an
+; integer that orders as it does — its magnitude, negated when its sign is set — so both zeros are 0.
+define internal i32 @nz.dorder(double %a, double %b) "no-builtins" {
+entry:
+  %x = bitcast double %a to i64
+  %y = bitcast double %b to i64
+  %xm = and i64 %x, 9223372036854775807
+  %ym = and i64 %y, 9223372036854775807
+  %xn = icmp ugt i64 %xm, 9218868437227405312
+  %yn = icmp ugt i64 %ym, 9218868437227405312
+  %nan = or i1 %xn, %yn
+  br i1 %nan, label %unordered, label %ordered
+unordered:
+  ret i32 2
+ordered:
+  %xs = icmp slt i64 %x, 0
+  %ys = icmp slt i64 %y, 0
+  %xneg = sub i64 0, %xm
+  %yneg = sub i64 0, %ym
+  %xk = select i1 %xs, i64 %xneg, i64 %xm
+  %yk = select i1 %ys, i64 %yneg, i64 %ym
+  %lt = icmp slt i64 %xk, %yk
+  %gt = icmp sgt i64 %xk, %yk
+  %l = select i1 %lt, i32 -1, i32 0
+  %r = select i1 %gt, i32 1, i32 %l
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpeq(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 0
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmplt(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, -1
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmple(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp sle i32 %o, 0
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpge(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %ge = icmp sge i32 %o, 0
+  %num = icmp ne i32 %o, 2
+  %t = and i1 %ge, %num
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpgt(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 1
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpun(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 2
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+"#;
+
+/// What LLVM calls on an RV32IMC for what it has no instruction for (M1): the 64-bit atomics —
+/// with no `A` extension, every atomic operation — 64-bit division, and the C library's `memcpy`,
+/// `memmove` and `memset`, whose sizes are 32 bits here. Each atomic is the plain access with
+/// machine interrupts masked — `mstatus.MIE` cleared and restored — which on one hart no
+/// interrupt can tear, as [`THUMB_RUNTIME`]'s are on a Cortex-M; division is long division by
+/// shifts and subtractions, as there, in libgcc's names. Nazm never divides by zero: it stops
+/// first (`N0401`).
+pub const RISCV32_RUNTIME: &str = r#"
+define internal i32 @nz.mask() {
+entry:
+  %m = call i32 asm sideeffect "csrrci $0, mstatus, 8", "=r,~{memory}"()
+  ret i32 %m
+}
+
+define internal void @nz.unmask(i32 %m) {
+entry:
+  %mie = and i32 %m, 8
+  call void asm sideeffect "csrs mstatus, $0", "r,~{memory}"(i32 %mie)
+  ret void
+}
+
+define i64 @__atomic_load_8(ptr %p, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %v = load volatile i64, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %v
+}
+
+define void @__atomic_store_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret void
+}
+
+define i64 @__atomic_exchange_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define zeroext i1 @__atomic_compare_exchange_8(ptr %p, ptr %e, i64 %d, i32 %s, i32 %f) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %want = load i64, ptr %e
+  %same = icmp eq i64 %old, %want
+  br i1 %same, label %swap, label %differ
+swap:
+  store volatile i64 %d, ptr %p
+  br label %done
+differ:
+  store i64 %old, ptr %e
+  br label %done
+done:
+  call void @nz.unmask(i32 %m)
+  ret i1 %same
+}
+
+define i64 @__atomic_fetch_add_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = add i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define i64 @__atomic_fetch_sub_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = sub i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define ptr @memcpy(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %sp = getelementptr i8, ptr %s, i32 %i
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memmove(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  %di = ptrtoint ptr %d to i32
+  %si = ptrtoint ptr %s to i32
+  %forward = icmp ule i32 %di, %si
+  br i1 %forward, label %fwd, label %loop
+fwd:
+  %c = call ptr @memcpy(ptr %d, ptr %s, i32 %n)
+  ret ptr %d
+loop:
+  %i = phi i32 [ %n, %entry ], [ %k, %body ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %body, label %done
+body:
+  %k = sub i32 %i, 1
+  %sp = getelementptr i8, ptr %s, i32 %k
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %k
+  store i8 %b, ptr %dp
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memset(ptr %d, i32 %v, i32 %n) "no-builtins" {
+entry:
+  %b = trunc i32 %v to i8
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define internal { i64, i64 } @nz.udivmod64(i64 %n, i64 %d) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 64, %entry ], [ %i1, %next ]
+  %q = phi i64 [ 0, %entry ], [ %q2, %next ]
+  %r = phi i64 [ 0, %entry ], [ %r2, %next ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %step, label %done
+step:
+  %i1 = sub i32 %i, 1
+  %sh = zext i32 %i1 to i64
+  %bit = lshr i64 %n, %sh
+  %b1 = and i64 %bit, 1
+  %rs = shl i64 %r, 1
+  %r1 = or i64 %rs, %b1
+  %qs = shl i64 %q, 1
+  %fits = icmp uge i64 %r1, %d
+  br i1 %fits, label %take, label %keep
+take:
+  %rt = sub i64 %r1, %d
+  %qt = or i64 %qs, 1
+  br label %next
+keep:
+  br label %next
+next:
+  %r2 = phi i64 [ %rt, %take ], [ %r1, %keep ]
+  %q2 = phi i64 [ %qt, %take ], [ %qs, %keep ]
+  br label %loop
+done:
+  %a = insertvalue { i64, i64 } undef, i64 %q, 0
+  %b = insertvalue { i64, i64 } %a, i64 %r, 1
+  ret { i64, i64 } %b
+}
+
+define i64 @__udivdi3(i64 %n, i64 %d) {
+entry:
+  %u = call { i64, i64 } @nz.udivmod64(i64 %n, i64 %d)
+  %q = extractvalue { i64, i64 } %u, 0
+  ret i64 %q
+}
+
+define i64 @__umoddi3(i64 %n, i64 %d) {
+entry:
+  %u = call { i64, i64 } @nz.udivmod64(i64 %n, i64 %d)
+  %r = extractvalue { i64, i64 } %u, 1
+  ret i64 %r
+}
+
+define i64 @__divdi3(i64 %n, i64 %d) {
+entry:
+  %nneg = icmp slt i64 %n, 0
+  %dneg = icmp slt i64 %d, 0
+  %nm = sub i64 0, %n
+  %dm = sub i64 0, %d
+  %na = select i1 %nneg, i64 %nm, i64 %n
+  %da = select i1 %dneg, i64 %dm, i64 %d
+  %u = call { i64, i64 } @nz.udivmod64(i64 %na, i64 %da)
+  %uq = extractvalue { i64, i64 } %u, 0
+  %flip = xor i1 %nneg, %dneg
+  %qn = sub i64 0, %uq
+  %q = select i1 %flip, i64 %qn, i64 %uq
+  ret i64 %q
+}
+
+define i64 @__moddi3(i64 %n, i64 %d) {
+entry:
+  %nneg = icmp slt i64 %n, 0
+  %dneg = icmp slt i64 %d, 0
+  %nm = sub i64 0, %n
+  %dm = sub i64 0, %d
+  %na = select i1 %nneg, i64 %nm, i64 %n
+  %da = select i1 %dneg, i64 %dm, i64 %d
+  %u = call { i64, i64 } @nz.udivmod64(i64 %na, i64 %da)
+  %ur = extractvalue { i64, i64 } %u, 1
+  %rn = sub i64 0, %ur
+  %r = select i1 %nneg, i64 %rn, i64 %ur
+  ret i64 %r
+}
+"#;
+
 /// The atomic built-ins' operations (Gate 3, `docs/spec.md`, *Atomics*): one sequentially
 /// consistent access to an aligned 8-byte cell each. A board's runtime and the hosted one both
 /// define them, as they do the device registers; on a target without threads LLVM makes each
@@ -1193,12 +1917,15 @@ pub const STACK_PAINT: u64 = 0x5a5a_5a5a_5a5a_5a5a;
 /// the lowest word no longer painted — a measurement of that run, not a bound.
 #[must_use]
 pub fn emit_entry(board: &Board, entry: &str, roots: usize, watermark: bool) -> String {
-    emit_entry_with(board, entry, roots, watermark, &[], None, &[])
+    emit_entry_with(board, entry, roots, watermark, &[], None, &[], None)
 }
 
 /// [`emit_entry`], with the board's interrupts taken by `handlers` (Gate 3): the vector table,
-/// the GICv2 and the timer set up before `main`, and every interrupt dispatched to its handler.
+/// the GICv2 and the timer set up before `main`, and every interrupt dispatched to its handler;
+/// the failure hook, the scheduler's tasks, and (M1) the manifest's `init`, each by its symbol and
+/// whether it takes the device's authority.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn emit_entry_with(
     board: &Board,
     entry: &str,
@@ -1207,16 +1934,14 @@ pub fn emit_entry_with(
     handlers: &[Handler],
     on_failure: Option<(&str, bool)>,
     tasks: &[Task],
+    init: Option<(&str, bool)>,
 ) -> String {
     let irq = board
         .interrupts
         .as_ref()
         .filter(|_| board.isa == Isa::Aarch64);
     // A Cortex-M's interrupts (Gate 3): its vector table and an NVIC.
-    let nvic = board
-        .interrupts
-        .as_ref()
-        .filter(|_| board.isa == Isa::Thumbv7m);
+    let nvic = board.interrupts.as_ref().filter(|_| board.isa.m_profile());
     let mut out = String::new();
     preamble(&mut out, "<nazm freestanding entry>");
     // The UART, which the interrupt path, a fault and the watermark each write to: one declaration.
@@ -1279,6 +2004,110 @@ pub fn emit_entry_with(
             ],
             &["  bl nz_board_main", "1: b 1b", "  .ltorg"],
         ),
+        // ARMv8-M Mainline (M1): as ARMv7-M, and the single-precision FPU, off at reset, given
+        // full access in CPACR before anything can use it — the hard-float convention passes a
+        // `Float32` in its registers.
+        Isa::Thumbv8m => (
+            &[
+                "  ldr r0, =__stack_top",
+                "  mov sp, r0",
+                "  ldr r0, =0xE000ED88",
+                "  ldr r1, [r0]",
+                "  orr r1, r1, #0xF00000",
+                "  str r1, [r0]",
+                "  dsb",
+                "  isb",
+            ],
+            &[
+                "  ldr r0, =__stack_bottom",
+                "  ldr r1, =__stack_top",
+                "  ldr r2, =0x5a5a5a5a",
+                "2: cmp r0, r1",
+                "  bhs 3f",
+                "  str r2, [r0], #4",
+                "  b 2b",
+                "3:",
+            ],
+            &["  bl nz_board_main", "1: b 1b", "  .ltorg"],
+        ),
+        // RV32IMC in machine mode (M1): no floating point to enable; a trap — an illegal
+        // instruction, a misaligned or faulting access — goes to `nz_fault`, after `_start` and
+        // four-byte aligned as `mtvec`'s direct mode needs, which takes the stack afresh and
+        // reports and stops, rather than to whatever the reset value of `mtvec` points at.
+        Isa::Riscv32 => (
+            &[
+                "  la sp, __stack_top",
+                "  la t0, nz_fault",
+                "  csrw mtvec, t0",
+            ],
+            &[
+                "  la t0, __stack_bottom",
+                "  la t1, __stack_top",
+                "  li t2, 0x5a5a5a5a",
+                "2: bgeu t0, t1, 3f",
+                "  sw t2, 0(t0)",
+                "  addi t0, t0, 4",
+                "  j 2b",
+                "3:",
+            ],
+            &[
+                "  call nz_board_main",
+                "1: j 1b",
+                ".balign 4",
+                "nz_fault:",
+                "  la sp, __stack_top",
+                "  call nz_fault_report",
+            ],
+        ),
+    };
+    // An image that runs from flash (M1): its data copied from where it is loaded in flash, and
+    // its zeroed data zeroed, before anything reads either — the statics' initial values.
+    let memory: &[&str] = match (board.memory.is_some(), board.isa) {
+        (false, _) => &[],
+        (true, Isa::Riscv32) => &[
+            "  la t0, __data_start",
+            "  la t1, __data_end",
+            "  la t2, __data_load",
+            "4: bgeu t0, t1, 5f",
+            "  lw t3, 0(t2)",
+            "  sw t3, 0(t0)",
+            "  addi t0, t0, 4",
+            "  addi t2, t2, 4",
+            "  j 4b",
+            "5: la t0, __bss_start",
+            "  la t1, __bss_end",
+            "6: bgeu t0, t1, 7f",
+            "  sw zero, 0(t0)",
+            "  addi t0, t0, 4",
+            "  j 6b",
+            "7:",
+        ],
+        (true, Isa::Thumbv7m | Isa::Thumbv8m) => &[
+            "  ldr r0, =__data_start",
+            "  ldr r1, =__data_end",
+            "  ldr r2, =__data_load",
+            "4: cmp r0, r1",
+            "  bhs 5f",
+            "  ldr r3, [r2], #4",
+            "  str r3, [r0], #4",
+            "  b 4b",
+            "5: ldr r0, =__bss_start",
+            "  ldr r1, =__bss_end",
+            "  movs r2, #0",
+            "6: cmp r0, r1",
+            "  bhs 7f",
+            "  str r2, [r0], #4",
+            "  b 6b",
+            "7:",
+        ],
+        // A 64-bit board is loaded whole: a manifest gives `[memory]` to a microcontroller only.
+        (true, Isa::Aarch64 | Isa::Riscv64) => &[],
+    };
+    // The board's own start (M1): its `init`, after memory and before the interrupts and `main`.
+    let board_init: &[&str] = match (init.is_some(), board.isa) {
+        (false, _) => &[],
+        (true, Isa::Riscv32 | Isa::Riscv64) => &["  call nz_board_init"],
+        (true, _) => &["  bl nz_board_init"],
     };
     // With interrupts (Gate 3): the vector table installed and the controller and timer set up
     // before `main`, then IRQs unmasked.
@@ -1298,7 +2127,7 @@ pub fn emit_entry_with(
     // An M profile's vector table (Gate 3), first in the image at its load address: the initial
     // stack pointer, `_start` as the reset handler, and every other exception a fault — reported
     // and the machine stopped. The interrupts 3E adds take their own entries.
-    let head: Vec<String> = if board.isa == Isa::Thumbv7m {
+    let head: Vec<String> = if board.isa.m_profile() {
         // Every vector up to the highest one handled: a handled one names its handler's caller.
         let last = handlers.iter().map(|h| h.intid).max().unwrap_or(0).max(15);
         let mut v: Vec<String> = [
@@ -1346,11 +2175,32 @@ pub fn emit_entry_with(
         .map(|s| (*s).to_owned())
         .collect()
     };
-    for line in head
+    // The RP2350 boot ROM's block (M1), placed after the vector table by the linker script.
+    let image_def: Vec<String> = match board.image {
+        Some(Image::Rp2350) => {
+            let mut v = vec![
+                ".section .image_def, \\22a\\22".to_owned(),
+                ".p2align 2".to_owned(),
+                ".global nz_image_def".to_owned(),
+                "nz_image_def:".to_owned(),
+            ];
+            v.extend(
+                RP2350_IMAGE_DEF
+                    .iter()
+                    .map(|w| format!("  .word {w:#010x}")),
+            );
+            v
+        }
+        None => Vec::new(),
+    };
+    for line in image_def
         .iter()
+        .chain(head.iter())
         .map(String::as_str)
         .chain(start.iter().copied())
+        .chain(memory.iter().copied())
         .chain(if watermark { paint } else { &[] }.iter().copied())
+        .chain(board_init.iter().copied())
         .chain(arm.iter().copied())
         .chain(call.iter().copied())
     {
@@ -1393,11 +2243,24 @@ pub fn emit_entry_with(
     let _ = writeln!(out, "declare void @nz.uart_byte(i8)");
     let _ = writeln!(out, "declare void @nz.board_exit(i64) noreturn");
     let _ = writeln!(out, "declare void @nz.uart_init()");
-    if board.isa == Isa::Thumbv7m {
+    if board.isa.m_profile() || board.isa == Isa::Riscv32 {
         let _ = write!(
             out,
             "@.nz.fault = private constant [27 x i8] c\"nazm: a fault of the image\\0A\"\n\
              define void @nz_fault_report() noreturn {{\nentry:\n  call void @nz.uart_write(ptr @.nz.fault, i64 27)\n  call void @nz.board_exit(i64 2)\n  unreachable\n}}\n"
+        );
+    }
+    // The board's `init` (M1): the UART first, so a failure in it is reported, then the function;
+    // a failure stops the machine as `main`'s does, and its answer is not the image's.
+    if let Some((symbol, takes_cap)) = init {
+        let (param, arg) = if takes_cap {
+            ("i64", "i64 0")
+        } else {
+            ("", "")
+        };
+        let _ = write!(
+            out,
+            "declare i64 @{symbol}({param})\ndefine void @nz_board_init() {{\nentry:\n  call void @nz.uart_init()\n  %r = call i64 @{symbol}({arg})\n  %failed = load i1, ptr @nz.failed\n  br i1 %failed, label %reported, label %done\nreported:\n  call void @nz.report()\n  unreachable\ndone:\n  ret void\n}}\n"
         );
     }
     let _ = writeln!(out, "define void @nz_board_main() {{");

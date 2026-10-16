@@ -17,6 +17,13 @@
   - [ ] C6 `wasm32-wasip2` and `--http-handler`
   - [ ] C7 the gate harness
 - [ ] 1.2 M gate: HAL programs on real Cortex-M and RISC-V boards
+  - [x] M1 `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf`; manifests' `[memory]` (data copied, zeroed data zeroed), `init`, `[image]`; `N0850`, `N0851`, `N0854`; runtime ABI 36 (2026-10-16; `spec.md`, *Boards*; `crates/nazm-cli/tests/mcu.rs`; mutants `m1-*`)
+    - open: the emulator legs (`mcu::the_microcontroller_images_boot_and_agree_under_qemu`, on `mps2-an505` and RV32 `virt`) are written and await a contained run; both targets stay compile-only until it passes
+  - [ ] M2 RP2350: `@std/hal/rp2350`, the `IMAGE_DEF` checked against the datasheet, UF2
+  - [ ] M3 ESP32-C3: boot, watchdogs, USB-Serial-JTAG, the interrupt-matrix controller
+  - [ ] M4 `nazm flash` and `nazm debug` (`N0852`, `N0853`)
+  - [ ] M5 `@std/hal` growth: `Uart.get`, `Pin.configure`, `EdgeIrq`
+  - [ ] M6 the board runs
 - [ ] 1.3 D gate: a Linux module and a Windows driver load and serve a device
 - [ ] 1.4 H gate: designs simulate identically to a reference simulator; one runs on an FPGA
 - [ ] 1.5 Q gate: circuits match known results on a simulator; OpenQASM accepted by a provider

@@ -21,6 +21,7 @@ mod memory_report;
 mod main_ends;
 mod manifests;
 mod match_guards;
+mod mcu;
 mod memory;
 mod mir;
 mod mobile;

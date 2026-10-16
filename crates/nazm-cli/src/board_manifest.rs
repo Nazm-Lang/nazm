@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 
 use nazm_lir::runtime::board::{
-    Board, Controller, Interrupts, Isa, Stop, Uart, STACK, TIMER_INTID,
+    Board, Controller, Image, Interrupts, Isa, Memory, Region, Stop, Uart, STACK, TIMER_INTID,
 };
 
 /// Why a manifest is refused: the key, and what is wrong with it.
@@ -17,11 +17,13 @@ use nazm_lir::runtime::board::{
 pub(crate) struct Refused {
     pub(crate) key: String,
     pub(crate) why: String,
+    /// `N0626`, or `N0850` for a stack the board's RAM cannot hold (M1).
+    pub(crate) code: nazm_diag::Code,
 }
 
 impl std::fmt::Display for Refused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "error[N0626]: `{}`: {}", self.key, self.why)
+        write!(f, "error[{}]: `{}`: {}", self.code, self.key, self.why)
     }
 }
 
@@ -29,6 +31,7 @@ fn refuse(key: &str, why: impl Into<String>) -> Refused {
     Refused {
         key: key.to_owned(),
         why: why.into(),
+        code: nazm_diag::codes::BOARD_MANIFEST,
     }
 }
 
@@ -50,6 +53,9 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             "heap",
             "interrupts",
             "watchdog",
+            "memory",
+            "init",
+            "image",
         ],
     )?;
     let name = string(&doc, "name")?;
@@ -57,10 +63,15 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         "aarch64" => Isa::Aarch64,
         "riscv64" => Isa::Riscv64,
         "thumbv7m" => Isa::Thumbv7m,
+        "thumbv8m.main" => Isa::Thumbv8m,
+        "riscv32" => Isa::Riscv32,
         other => {
             return Err(refuse(
                 "isa",
-                format!("`{other}` is not `aarch64`, `riscv64` or `thumbv7m`"),
+                format!(
+                    "`{other}` is not `aarch64`, `riscv64`, `thumbv7m`, `thumbv8m.main` or \
+                     `riscv32`"
+                ),
             ))
         }
     };
@@ -70,7 +81,32 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             format!("the board is not `{triple}`'s architecture"),
         ));
     }
-    let load_address = address(&doc, "load_address")?;
+    // A microcontroller's flash and RAM (M1): with them the image runs from flash, so it starts
+    // where flash does and a load address, if written, says so too.
+    let memory = match doc.get("memory") {
+        None => None,
+        Some(_) if !isa.microcontroller() => {
+            return Err(refuse(
+                "memory",
+                "a 64-bit board's image is loaded whole; flash and RAM are a microcontroller's",
+            ))
+        }
+        Some(_) => Some(memory(table(&doc, "memory")?)?),
+    };
+    let load_address = match (memory, doc.get("load_address")) {
+        (Some(m), None) => m.flash.origin,
+        (Some(m), Some(_)) => {
+            let a = address(&doc, "load_address")?;
+            if a != m.flash.origin {
+                return Err(refuse(
+                    "load_address",
+                    "an image that runs from flash starts where `memory.flash` does",
+                ));
+            }
+            a
+        }
+        (None, _) => address(&doc, "load_address")?,
+    };
     let stack = match doc.get("stack") {
         None => STACK,
         Some(_) => {
@@ -109,7 +145,7 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             .as_str()
         {
             // ARM semihosting stops an AArch64 machine; RISC-V's is not this runtime's.
-            "semihosting" if isa != Isa::Riscv64 => {
+            "semihosting" if !matches!(isa, Isa::Riscv64 | Isa::Riscv32) => {
                 if stop_t.contains_key("address") {
                     return Err(refuse("stop.address", "semihosting has no address"));
                 }
@@ -133,10 +169,11 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         None => None,
         // The arena's runtime parts pass sizes as 64-bit words, a Cortex-M's C sizes are 32: not
         // this board's in 1.0 (Gate 3).
-        Some(_) if isa == Isa::Thumbv7m => {
+        Some(_) if isa.microcontroller() => {
             return Err(refuse(
                 "heap",
-                "a Cortex-M board has no heap in 1.0: the arena's runtime is a 64-bit board's",
+                "a microcontroller board has no heap in 1.0: the arena's runtime is a 64-bit \
+                 board's",
             ))
         }
         Some(_) => {
@@ -181,6 +218,64 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
             Some(ticks)
         }
     };
+    // The board's own start (M1): a Nazm function of the program, by name, which the build finds
+    // and checks (`N0851`).
+    let init = match doc.get("init") {
+        None => None,
+        Some(_) => {
+            let f = string(&doc, "init")?;
+            let mut chars = f.chars();
+            let ident = chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !ident {
+                return Err(refuse(
+                    "init",
+                    "the name of a function: letters, digits and `_`",
+                ));
+            }
+            Some(Cow::Owned(f))
+        }
+    };
+    // What the chip's boot ROM expects of the image (M1).
+    let image = match doc.get("image") {
+        None => None,
+        Some(_) => {
+            let t = table(&doc, "image")?;
+            allow(t, "image.", &["format"])?;
+            match string(t, "format")
+                .map_err(|r| prefix("image.", r))?
+                .as_str()
+            {
+                "rp2350" if isa == Isa::Thumbv8m && memory.is_some() => Some(Image::Rp2350),
+                "rp2350" => {
+                    return Err(refuse(
+                        "image.format",
+                        "the RP2350's image is a `thumbv8m.main` board's, run from flash: give it \
+                         `[memory]`",
+                    ))
+                }
+                other => return Err(refuse("image.format", format!("`{other}` is not `rp2350`"))),
+            }
+        }
+    };
+    // The stack is in RAM (M1): a manifest whose stack RAM cannot hold is `N0850`, as an image
+    // that does not fit is.
+    if let Some(m) = memory {
+        if stack > m.ram.length {
+            return Err(Refused {
+                key: "stack".to_owned(),
+                why: format!(
+                    "the stack of {stack:#x} bytes does not fit the board's RAM, {:#x} bytes; it \
+                     is over by {:#x}",
+                    m.ram.length,
+                    stack - m.ram.length
+                ),
+                code: nazm_diag::codes::BOARD_MEMORY,
+            });
+        }
+    }
     Ok(Board {
         triple: Cow::Owned(triple.to_owned()),
         name: Cow::Owned(name),
@@ -195,13 +290,45 @@ pub(crate) fn read(text: &str, triple: &str, isa: Isa) -> Result<Board, Refused>
         interrupts,
         emulator: Cow::Borrowed(""),
         hardware: false,
+        memory,
+        init,
+        image,
     })
+}
+
+/// `[memory]` (M1): `flash` and `ram`, each `{ origin, length }`, word-aligned, inside the 32-bit
+/// address space, and apart.
+fn memory(t: &toml::Table) -> Result<Memory, Refused> {
+    allow(t, "memory.", &["flash", "ram"])?;
+    let region = |key: &str| -> Result<Region, Refused> {
+        let at = format!("memory.{key}");
+        let r = table(t, key).map_err(|r| prefix("memory.", r))?;
+        allow(r, &format!("{at}."), &["origin", "length"])?;
+        let origin = address(r, "origin").map_err(|e| prefix(&format!("{at}."), e))?;
+        let length = address(r, "length").map_err(|e| prefix(&format!("{at}."), e))?;
+        if length == 0 || origin % 4 != 0 || length % 4 != 0 {
+            return Err(refuse(
+                &at,
+                "a region is a positive number of bytes from a word-aligned origin, a multiple of 4",
+            ));
+        }
+        if origin.saturating_add(length) > 1 << 32 {
+            return Err(refuse(&at, "a region ends within the 32-bit address space"));
+        }
+        Ok(Region { origin, length })
+    };
+    let flash = region("flash")?;
+    let ram = region("ram")?;
+    if flash.origin < ram.end() && ram.origin < flash.end() {
+        return Err(refuse("memory.ram", "RAM and flash overlap"));
+    }
+    Ok(Memory { flash, ram })
 }
 
 /// `[interrupts]` (Gate 3): a GICv2 on AArch64 or an NVIC on Cortex-M, the timer's period, and the
 /// further lines by name.
 fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
-    if isa == Isa::Riscv64 {
+    if matches!(isa, Isa::Riscv64 | Isa::Riscv32) {
         return Err(refuse(
             "interrupts",
             "a RISC-V board's machine-mode interrupts are not this runtime's in 1.0; AArch64's \
@@ -227,7 +354,7 @@ fn interrupts(t: &toml::Table, isa: Isa) -> Result<Interrupts, Refused> {
                 cpu: address(t, "cpu").map_err(|r| prefix("interrupts.", r))?,
             }
         }
-        ("nvic", Isa::Thumbv7m) => {
+        ("nvic", Isa::Thumbv7m | Isa::Thumbv8m) => {
             allow(
                 t,
                 "interrupts.",
@@ -325,6 +452,7 @@ fn prefix(p: &str, r: Refused) -> Refused {
     Refused {
         key: format!("{p}{}", r.key),
         why: r.why,
+        code: r.code,
     }
 }
 

@@ -91,12 +91,9 @@ pub(super) fn lowered(
                 }
             }
             // A C pointer crosses as a 64-bit word (N85), which is C's pointer only where pointers
-            // are 64 bits: on wasm32 and a Cortex-M3 it is refused by name rather than passed as
-            // the wrong type (Q1-A1-05).
-            if matches!(
-                target.arch,
-                nazm_lir::backend::Arch::Wasm32 | nazm_lir::backend::Arch::Thumbv7m
-            ) {
+            // are 64 bits: on wasm32 and a microcontroller it is refused by name rather than
+            // passed as the wrong type (Q1-A1-05, M1).
+            if target.narrow_pointers() {
                 if let Some(d) = narrow_pointer_refusal(resolution, &target.triple) {
                     return Err(vec![d]);
                 }
@@ -112,7 +109,16 @@ pub(super) fn lowered(
             // so the interpreter, reading the same program, still runs the loop.
             let mut core = core.clone();
             nazm_service::vectorize::rewrite(&mut core);
-            let program = crate::mir::lower(&core, resolution, &loaded.graph)?;
+            let mut program = crate::mir::lower(&core, resolution, &loaded.graph)?;
+            // The microcontroller targets (M1): a float the core cannot compute with, refused by
+            // name wherever the program holds one — a parameter, a binding or a temporary.
+            if let Some(d) = microcontroller_float_refusal(&program, target) {
+                return Err(vec![d]);
+            }
+            // The board's `init` (M1): the function its manifest names, entered by `_start`.
+            if target.is_board() && !target.is_wasm() {
+                board_init(&mut program, &super::board_for(choice, target))?;
+            }
             clock.mark("mir");
             let mut native =
                 nazm_lir::lower_as(program, &names, choice.library).map_err(|e| e.diagnostics)?;
@@ -468,6 +474,18 @@ fn emit_artefacts(
         // The fixed-priority scheduler's tasks (Gate 3), which own the board's timer.
         let tasks = board_tasks(native, &board, &mut handlers)?;
         board_watchdog(&out, &board, &tasks)?;
+        // The board's `init` (M1), by its symbol, and whether it takes the device's authority.
+        let init = native
+            .program
+            .functions
+            .iter()
+            .find(|f| f.board_init)
+            .and_then(|f| {
+                native
+                    .sigs
+                    .get(f.id.index())
+                    .map(|s| (s.symbol.as_str().to_owned(), f.param_types().count() == 1))
+            });
         // The failure hook (Gate 3): the one function `@on_failure` marks, by its symbol.
         let on_failure = native
             .program
@@ -513,6 +531,7 @@ fn emit_artefacts(
                         &handlers,
                         on_failure.as_ref().map(|(s, cap)| (s.as_str(), *cap)),
                         &tasks,
+                        init.as_ref().map(|(s, cap)| (s.as_str(), *cap)),
                     )
                 }),
                 instance: false,
@@ -896,6 +915,133 @@ fn cortex_m3_refusal(
         }
     }
     None
+}
+
+/// A float a microcontroller target cannot compute with (M1, `docs/spec.md`, *Boards*):
+/// `Float64` on `thumbv8m.main-none-eabihf`, whose FPU is single-precision, and either float on
+/// `riscv32imc-unknown-none-elf`, which has none — `N0854` at the first value of that type in the
+/// program's MIR, which holds every parameter, binding and temporary. A board has no library to
+/// compute them in software.
+fn microcontroller_float_refusal(
+    program: &nazm_mir::Program,
+    target: &nazm_lir::backend::Target,
+) -> Option<nazm_diag::Diagnostic> {
+    use nazm_core::sema::{NumKind, Type};
+    use nazm_lir::backend::Arch;
+    let (refused, help): (&[NumKind], &str) = match target.arch {
+        Arch::Thumbv8m => (
+            &[NumKind::F64],
+            "a Cortex-M33's FPU is single-precision, and a board has no library to compute in \
+             double precision: compute in `Float32`, or in integers",
+        ),
+        Arch::Riscv32 => (
+            &[NumKind::F32, NumKind::F64],
+            "an RV32IMC has no floating-point unit, and a board has no library to compute in \
+             software: compute in integers",
+        ),
+        _ => return None,
+    };
+    for f in &program.functions {
+        for l in &f.locals {
+            if let Some(Type::Num(k)) = l.ty.value() {
+                if refused.contains(&k) {
+                    let name = if k == NumKind::F64 {
+                        "Float64"
+                    } else {
+                        "Float32"
+                    };
+                    return Some(
+                        nazm_diag::Diagnostic::error(
+                            nazm_diag::codes::BOARD_FLOAT,
+                            l.at,
+                            format!(
+                                "a build for `{}` cannot compute with a `{name}`",
+                                target.triple
+                            ),
+                        )
+                        .help(help),
+                    );
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The board's `init` (M1, `docs/spec.md`, *Boards*): the one function of the program
+/// its manifest names, of the shape `fn NAME() -> Int ! {}` or `fn NAME(m: MmioCap) -> Int ! {}`,
+/// marked so that it is kept and entered by `_start`. No such function, more than one, or one of
+/// another shape is `N0851`.
+fn board_init(
+    program: &mut nazm_mir::Program,
+    board: &nazm_lir::runtime::board::Board,
+) -> Result<(), Vec<nazm_diag::Diagnostic>> {
+    use nazm_core::sema::{CapabilityKind, EffectSet, Type};
+    let Some(name) = board.init.as_deref() else {
+        return Ok(());
+    };
+    let named: Vec<usize> = program
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.name == name && f.type_args.is_empty() && f.foreign.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    let refuse = |at, why: String| {
+        vec![
+            nazm_diag::Diagnostic::error(nazm_diag::codes::BOARD_INIT, at, why).help(
+                "a board's `init` is a function of the program, `fn NAME() -> Int ! {}` or \
+                 `fn NAME(m: MmioCap) -> Int ! {}`, which `_start` calls before `main`",
+            ),
+        ]
+    };
+    let at = |i: usize| program.functions.get(i).map(|f| f.span);
+    let i = match named.as_slice() {
+        [] => {
+            let main = program
+                .entry
+                .and_then(|e| program.function(e))
+                .map(|f| f.span)
+                .unwrap_or_else(nazm_span::Span::synthetic);
+            return Err(refuse(
+                main,
+                format!(
+                    "the board `{}` names `{name}` its `init`, and the program has no function of \
+                     that name",
+                    board.name
+                ),
+            ));
+        }
+        [one] => *one,
+        [first, ..] => {
+            return Err(refuse(
+                at(*first).unwrap_or_else(nazm_span::Span::synthetic),
+                format!(
+                    "the board `{}` names `{name}` its `init`, and the program has more than one \
+                     function of that name",
+                    board.name
+                ),
+            ))
+        }
+    };
+    let Some(f) = program.functions.get_mut(i) else {
+        return Ok(());
+    };
+    let params: Vec<Type> = f.param_types().collect();
+    let shaped = f.ret == Type::Int
+        && f.effects == EffectSet::EMPTY
+        && (params.is_empty() || params == [Type::Cap(CapabilityKind::Mmio)]);
+    if !shaped || f.interrupt.is_some() || f.task.is_some() || f.on_failure {
+        return Err(refuse(
+            f.span,
+            format!(
+                "`{name}` is the board's `init`, and is not `fn {name}() -> Int ! {{}}` or \
+                 `fn {name}(m: MmioCap) -> Int ! {{}}`, nor anything else the board calls"
+            ),
+        ));
+    }
+    f.board_init = true;
+    Ok(())
 }
 
 /// Every `@interrupt` handler of the program, matched to the interrupt the board's manifest

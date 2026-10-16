@@ -1130,7 +1130,7 @@ Repointed by N40: linkage is decided from MIR's `exported`, `reached_from_generi
 
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-lir/src/lower.rs"
-find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n                || f.on_failure\n                || f.task.is_some()\n            {"
+find = "            let linkage = if f.exported\n                || f.reached_from_generic\n                || instance\n                || Some(f.id) == entry_id\n                || f.section.is_some()\n                || f.interrupt.is_some()\n                || f.on_failure\n                || f.task.is_some()\n                || f.board_init\n            {"
 replace = "            let linkage = if false {"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lir_oracle::control_flow_and_recursion_agree_with_the_oracle" }]
 
@@ -10550,11 +10550,12 @@ Repointed by R1b's stack size, which moved it to 31.
 Repointed by R1b's 128-bit integers, which moved it to 32 for the wide part.
 Repointed by R1d, which moved it to 33 for the counted heap, lines of input, process control and the file-system part.
 Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted targets.
-Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`."""
+Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`.
+Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 35;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 34;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_five_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 36;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 35;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_six_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13246,8 +13247,8 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "ffi_v3::a_shared_li
 name = "n86-the-riscv-uart-is-the-aarch64-one"
 why = "the RISC-V board's description names AArch64's UART, so its output goes to an address nothing decodes"
 file = "crates/nazm-runtime/src/board.rs"
-find = "        uart: 0x1000_0000,"
-replace = "        uart: 0x0900_0000,"
+find = "        isa: Isa::Riscv64,\n        load_address: 0x8000_0000,\n        uart: 0x1000_0000,"
+replace = "        isa: Isa::Riscv64,\n        load_address: 0x8000_0000,\n        uart: 0x0900_0000,"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "boards::inspect_lists_the_riscv_board_and_every_board_s_description" }]
 
 [[mutation]]
@@ -13264,16 +13265,16 @@ killers = [{ package = "nazm-cli", test = "cli_a_b", name = "boards::every_board
 name = "n86-small-data-is-an-orphan"
 why = "RISC-V's small-data sections are left to the linker, which may place them at the load address ahead of `_start`"
 file = "crates/nazm-runtime/src/board.rs"
-find = "*(.data*) *(.sdata*)"
-replace = "*(.data*)"
+find = "{{ *(.data*) *(.sdata*){data} }}"
+replace = "{{ *(.data*){data} }}"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "boards::every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
 
 [[mutation]]
 name = "n86-unwind-tables-lead-the-image"
 why = "unwind tables are not discarded, and an orphaned `.eh_frame` at the load address is where the machine starts"
 file = "crates/nazm-runtime/src/board.rs"
-find = "  /DISCARD/ : {{ *(.eh_frame*) }}\\n"
-replace = ""
+find = "{heap}  /DISCARD/ : {{ *(.eh_frame*) }}\\n"
+replace = "{heap}"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "boards::every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
 
 [[mutation]]
@@ -15454,8 +15455,8 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "manifests::a_manife
 name = "g3-the-manifests-stack-is-ignored"
 why = "the linker script reserves the built-in 64 KiB whatever stack the manifest gives, so the stack check guards the wrong bound"
 file = "crates/nazm-runtime/src/board.rs"
-find = "    let stack = board.stack;"
-replace = "    let stack = STACK;"
+find = "    let stack = board.stack;\n    let keep"
+replace = "    let stack = STACK;\n    let keep"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "manifests::a_manifests_load_address_and_stack_reach_the_script_and_the_bound" }]
 
 [[mutation]]
@@ -15507,7 +15508,7 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "interrupts::a_handl
 name = "g3-a-riscv-board-takes-a-gic"
 why = "a RISC-V board's manifest is given a GICv2, which its machine does not have"
 file = "crates/nazm-cli/src/board_manifest.rs"
-find = "    if isa == Isa::Riscv64 {"
+find = "    if matches!(isa, Isa::Riscv64 | Isa::Riscv32) {"
 replace = "    if false {"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "interrupts::a_manifests_interrupts_are_a_gicv2_on_an_aarch64_board" }]
 
@@ -15597,7 +15598,7 @@ killers = [{ package = "nazm-cli", bin = "nazm", name = "stack::tests::a_comment
 name = "g3-a-cortex-m-has-no-64-bit-helpers"
 why = "a Thumb board's runtime leaves out the 64-bit atomics and division ARMv7-M has no instruction for, so the image does not link"
 file = "crates/nazm-runtime/src/board.rs"
-find = "    if board.isa == Isa::Thumbv7m {\n        out.push_str(THUMB_RUNTIME);"
+find = "    if board.isa.m_profile() {\n        out.push_str(THUMB_RUNTIME);"
 replace = "    if false {\n        out.push_str(THUMB_RUNTIME);"
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "boards::every_board_s_texts_are_generated_from_its_description_and_differ_where_it_does" }]
 
@@ -15613,7 +15614,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cortex_m::what_a_co
 name = "g3-the-vector-table-is-not-first"
 why = "the Cortex-M linker script does not put the vector table at the load address, so the core boots from whatever is there"
 file = "crates/nazm-runtime/src/board.rs"
-find = "    let vectors = if board.isa == Isa::Thumbv7m {"
+find = "    let vectors = if board.isa.m_profile() {"
 replace = "    let vectors = if false {"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cortex_m::a_cortex_m_build_puts_its_vector_table_first" }]
 
@@ -15641,7 +15642,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cortex_m::a_cortex_
 name = "g3-a-cortex-m-board-takes-a-heap"
 why = "a Cortex-M manifest's heap is accepted, and the arena's 64-bit sizes meet a 32-bit board's C calls"
 file = "crates/nazm-cli/src/board_manifest.rs"
-find = "        Some(_) if isa == Isa::Thumbv7m => {"
+find = "        Some(_) if isa.microcontroller() => {"
 replace = "        Some(_) if false => {"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "embedded::a_cortex_m_board_has_no_heap" }]
 
@@ -15754,7 +15755,7 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "domains::the_profil
 name = "g3-a-heapless-board-has-no-memcpy"
 why = "a board without a heap has no memcpy, so an image that copies a large value does not link"
 file = "crates/nazm-runtime/src/board.rs"
-find = "    if board.isa != Isa::Thumbv7m {\n        out.push_str(MEMORY_RUNTIME);"
+find = "    if !board.isa.microcontroller() {\n        out.push_str(MEMORY_RUNTIME);"
 replace = "    if false {\n        out.push_str(MEMORY_RUNTIME);"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "domains::a_heapless_boards_runtime_has_the_memory_functions" }]
 
@@ -20113,3 +20114,77 @@ file = "library/std/http.nz"
 find = '''        if tried == 0 { return p; }'''
 replace = '''        if tried == 9 { return p; }'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "http::a_router_matches_parameters_wildcards_and_methods" }]
+
+# --- M1: the microcontroller targets (thumbv8m.main, riscv32imc), flash and RAM, init, image ---
+
+[[mutation]]
+name = "m1-the-data-is-not-copied"
+why = "`_start` neither copies a flash image's data into RAM nor zeroes the rest, so a static atomic starts as whatever RAM held"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    let memory: &[&str] = match (board.memory.is_some(), board.isa) {"
+replace = "    let memory: &[&str] = match (false, board.isa) {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::the_startup_copies_data_and_zeroes_the_rest_before_anything_runs" }]
+
+[[mutation]]
+name = "m1-float64-on-the-cortex-m33"
+why = "a `Float64` is accepted for the Cortex-M33, whose FPU is single-precision, and the image calls double-precision helpers no board has"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "            &[NumKind::F64],"
+replace = "            &[],"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::a_float_a_microcontroller_cannot_compute_with_is_refused_by_name" }]
+
+[[mutation]]
+name = "m1-the-init-is-not-entered"
+why = "the manifest's `init` is found and never marked, so `_start` does not call it and the chip's clocks are never set"
+file = "crates/nazm-cli/src/build/lower.rs"
+find = "    f.board_init = true;"
+replace = "    f.board_init = false;"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::a_boards_init_is_one_function_of_the_program_of_the_boards_shape" }]
+
+[[mutation]]
+name = "m1-the-flash-is-not-measured"
+why = "an image larger than the board's flash is written as if it fitted, and the linker is left to refuse it without N0850"
+file = "crates/nazm-cli/src/build/objects.rs"
+find = "    if need_flash > m.flash.length {"
+replace = "    if need_flash > m.flash.length.saturating_mul(4096) {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::an_image_that_does_not_fit_the_boards_memory_is_refused_naming_the_region" }]
+
+[[mutation]]
+name = "m1-a-stack-larger-than-ram"
+why = "a manifest's stack larger than its RAM is accepted, and the stack check guards memory that is not there"
+file = "crates/nazm-cli/src/board_manifest.rs"
+find = "        if stack > m.ram.length {"
+replace = "        if stack > m.ram.length.saturating_mul(4) {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::an_image_that_does_not_fit_the_boards_memory_is_refused_naming_the_region" }]
+
+[[mutation]]
+name = "m1-a-board-has-no-stack-limit"
+why = "a board's runtime leaves the inlined stack check's limit undefined, so no image that recurses links"
+file = "crates/nazm-runtime/src/board.rs"
+find = "@nz.stack_limit = hidden global i64 0"
+replace = "@nz.stack_limit_ = hidden global i64 0"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::the_startup_copies_data_and_zeroes_the_rest_before_anything_runs" }]
+
+[[mutation]]
+name = "m1-rv32-has-no-helpers"
+why = "an RV32IMC board's runtime leaves out the masked atomics, 64-bit division and memory functions its core has no instruction for, so the image does not link"
+file = "crates/nazm-runtime/src/board.rs"
+find = "    if board.isa == Isa::Riscv32 {\n        out.push_str(RISCV32_RUNTIME);"
+replace = "    if false {\n        out.push_str(RISCV32_RUNTIME);"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::the_startup_copies_data_and_zeroes_the_rest_before_anything_runs" }]
+
+[[mutation]]
+name = "m1-the-rp2350-image-block-is-dropped"
+why = "the RP2350's IMAGE_DEF block is not kept by the linker script, so the boot ROM finds no image to boot"
+file = "crates/nazm-runtime/src/board.rs"
+find = "        Some(Image::Rp2350) => \"KEEP(*(.image_def)) \","
+replace = "        Some(Image::Rp2350) => \"\","
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::a_manifest_gives_a_microcontroller_flash_ram_an_init_and_an_image" }]
+
+[[mutation]]
+name = "m1-the-cortex-m33-fpu-stays-off"
+why = "`_start` does not give the Cortex-M33's FPU access, so the first Float32 instruction faults"
+file = "crates/nazm-runtime/src/board.rs"
+find = "                \"  orr r1, r1, #0xF00000\","
+replace = "                \"  orr r1, r1, #0x0\","
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "mcu::the_startup_copies_data_and_zeroes_the_rest_before_anything_runs" }]

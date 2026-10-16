@@ -545,6 +545,19 @@ pub mod codes {
     // deprecated item, should a warning severity ever exist. `docs/diagnostics.md`'s registry
     // lists it as reserved, and `codes.rs` fails if it is ever declared with another meaning.
 
+    // Microcontrollers (M1, `docs/spec.md`, *Boards*): the block `N0850`–`N0869`.
+    /// An image, its data or its stack that does not fit a microcontroller board's flash or RAM,
+    /// naming the region and the overflow (M1). Reported by `nazm build`, and by the linker
+    /// script it writes.
+    pub const BOARD_MEMORY: Code = Code::new("N0850");
+    /// A board manifest's `init` that names no function `fn NAME() -> Int ! {}` or
+    /// `fn NAME(m: MmioCap) -> Int ! {}` of the program, or names more than one (M1).
+    pub const BOARD_INIT: Code = Code::new("N0851");
+    /// A floating-point value a microcontroller target cannot compute with: `Float64` on
+    /// `thumbv8m.main-none-eabihf`, whose FPU is single-precision, and either float on
+    /// `riscv32imc-unknown-none-elf`, which has none (M1).
+    pub const BOARD_FLOAT: Code = Code::new("N0854");
+
     // Compiler defects
     /// The compiler contradicted itself (N39): a program that parsed and checked with no
     /// diagnostic could not be lowered to Core IR, or its Core IR broke an invariant every

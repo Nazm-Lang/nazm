@@ -369,6 +369,25 @@ fn target_args(cross: Option<&str>) -> Vec<String> {
         Some("aarch64-unknown-none") => ["-target", "aarch64-unknown-none", "-mstrict-align"]
             .map(str::to_owned)
             .to_vec(),
+        // The Cortex-M33 (M1): its single-precision FPU, FPv5, and the hard-float convention.
+        Some("thumbv8m.main-none-eabihf") => [
+            "-target",
+            "thumbv8m.main-none-eabihf",
+            "-mfpu=fpv5-sp-d16",
+            "-mfloat-abi=hard",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        // RV32IMC (M1), in LLVM's spelling as RV64's is: Zicsr for the runtime's interrupt mask
+        // and trap vector, Zifencei, the `ilp32` ABI, and no atomic or floating-point extension.
+        Some("riscv32imc-unknown-none-elf") => [
+            "-target",
+            "riscv32-unknown-elf",
+            "-march=rv32imc_zicsr_zifencei",
+            "-mabi=ilp32",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
         Some(t) => vec!["-target".to_owned(), t.to_owned()],
     }
 }
@@ -586,6 +605,8 @@ mod tests {
             "aarch64-unknown-none",
             "riscv64gc-unknown-none-elf",
             "thumbv7m-none-eabi",
+            "thumbv8m.main-none-eabihf",
+            "riscv32imc-unknown-none-elf",
             "wasm32-unknown-unknown",
             "wasm32-wasip1",
         ] {
@@ -628,14 +649,18 @@ mod tests {
                 Some("x86_64-apple-darwin"),
                 Some("aarch64-unknown-none"),
                 Some("riscv64gc-unknown-none-elf"),
+                Some("thumbv8m.main-none-eabihf"),
+                Some("riscv32imc-unknown-none-elf"),
             ] {
                 for a in compile_args(opt, cross)
                     .iter()
                     .chain(link_args(opt, cross).iter())
                 {
-                    // RISC-V's `-march=rv64gc` is the target's ISA baseline (N86), not a CPU.
+                    // RISC-V's `-march` is the target's ISA baseline (N86, M1), not a CPU.
                     assert!(
-                        (!a.starts_with("-march") || a == "-march=rv64gc")
+                        (!a.starts_with("-march")
+                            || a == "-march=rv64gc"
+                            || a == "-march=rv32imc_zicsr_zifencei")
                             && !a.starts_with("-mcpu")
                             && !a.starts_with("-mtune")
                             && !a.contains("native"),

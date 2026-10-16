@@ -169,6 +169,13 @@ fn each_llvm_cpu_is_the_one_the_driver_resolves() {
                 "-march=rv64gc",
                 "-mabi=lp64d",
             ]
+        } else if triple == "riscv32imc-unknown-none-elf" {
+            vec![
+                "-target",
+                "riscv32-unknown-elf",
+                "-march=rv32imc_zicsr_zifencei",
+                "-mabi=ilp32",
+            ]
         } else {
             vec!["-target", triple]
         };
