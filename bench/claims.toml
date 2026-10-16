@@ -429,3 +429,8 @@ why = "bench/compare/compare.py over fifteen languages on one quiet but uncontro
 heading = "Multicore: the parallel workload and the pool's default, measured (2026-10-15)"
 status = "dated"
 why = "interleaved hyperfine rounds and `bench/compare/compare.py --only primes` on one host shared with other agents (load 17–81 on ten processors); a record of that date and machine, relative scaling only — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "R1.5 3.1: the small-block heap, measured (2026-10-16)"
+status = "dated"
+why = "hyperfine over release builds of two trees on one loaded host, with small programs written for the measurement; a record of that date and machine, the gain itself held by tests/small_heap.rs only as the bound on memory"

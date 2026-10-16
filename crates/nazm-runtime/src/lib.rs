@@ -323,8 +323,10 @@ pub fn escape(s: &str) -> String {
 /// 38 is R4's atomics outside the strings (2026-10-16): `nz.atomic_cell` allocates an `Atomic`'s
 /// cell in a backing of a string's shape whose length is -1, and `nz.str_release` frees such a
 /// backing without counting it, so the memory report counts no string for `atomic_new`, as the
-/// interpreter does not.
-pub const RUNTIME_ABI_REVISION: u32 = 38;
+/// interpreter does not. 39 is R1.5 3.1's small-block heap (`heap::emit_small`): `nz.small_malloc`,
+/// `nz.small_free` and `nz.small_realloc`, which every unit but the stack's and the TLS engine's
+/// calls in place of C's allocator in a hosted executable that calls no C.
+pub const RUNTIME_ABI_REVISION: u32 = 39;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -361,6 +363,7 @@ pub fn digest() -> &'static str {
         h.update(emit_runtime(EVERYTHING).as_bytes());
         h.update(emit_entry("@nz_main", 1, EVERYTHING).as_bytes());
         h.update(heap::emit_heap(1 << 30).as_bytes());
+        h.update(heap::emit_small(false).as_bytes());
         for t in switch::SwitchTarget::ALL {
             h.update(switch::emit_switch(t).as_bytes());
             h.update(switch::emit_errno(t).as_bytes());
@@ -417,7 +420,8 @@ pub enum Part {
     Wide,
     /// TLS sessions over buffers (v1 track C1).
     Tls,
-    /// The counted heap (R1d, D5): its own unit, linked only by `nazm build --heap-limit`.
+    /// The heap units: the counted heap (R1d, D5), linked only by `nazm build --heap-limit`, and
+    /// the small-block heap (R1.5 3.1), linked by a hosted executable that calls no C.
     Heap,
     /// The C library the runtime itself links against.
     Libc,
@@ -461,7 +465,10 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.str_retain", [Ptr], None, Strings, "one more reference to a backing; null is a no-op"),
     import!("nz.str_release", [Ptr], None, Strings, "one reference fewer; the last frees it; null is a no-op"),
     import!("nz.atomic_cell", [I64], Some(Word::Ptr), Strings, "an atomic's cell holding this value, in a backing a string's release frees uncounted, holding one reference the caller owns, or null"),
-    import!("nz.seq_new", [], Some(Word::Ptr), Sequences, "an empty sequence with one reference the caller owns, or null"),
+    import!("nz.small_malloc", [I64], Some(Word::Ptr), Heap, "C's `malloc` in a program that calls no C (R1.5 3.1): memory the caller owns, or null"),
+    import!("nz.small_realloc", [Ptr, I64], Some(Word::Ptr), Heap, "C's `realloc` of a small-block heap's block: takes the memory and returns memory the caller owns, or null with it unchanged"),
+    import!("nz.small_free", [Ptr], None, Heap, "C's `free` of a small-block heap's block; null is a no-op"),
+    import!("nz.seq_new", [],Some(Word::Ptr), Sequences, "an empty sequence with one reference the caller owns, or null"),
     import!("nz.seq_release", [Ptr], None, Sequences, "releases a sequence whose elements own nothing; null is a no-op"),
     import!("nz.strs_release", [Ptr], None, Sequences, "releases a sequence of strings, and on the last reference each string"),
     import!("nz.vec_release", [Ptr, Ptr, I64, Ptr], None, Sequences, "releases a sequence; on the last reference calls the release function on each element at the stride given, then frees it — queued on the release in progress, if one is (R1a)"),
@@ -834,6 +841,9 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.heap_malloc", "ptr" ("i64") "", false, Heap, "", Null, Any, "C's `malloc`, counted against the heap limit (R1d, D5)", "memory the caller owns, or null"),
     rt!("nz.heap_free", "void" ("ptr") "", false, Heap, "", Never, Any, "C's `free` of a counted block (R1d, D5)", "takes the memory; null is a no-op"),
     rt!("nz.heap_realloc", "ptr" ("ptr", "i64") "", false, Heap, "", Null, Any, "C's `realloc` of a counted block, its growth counted first (R1d, D5)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
+    rt!("nz.small_malloc", "ptr" ("i64") "", false, Heap, "", Null, Any, "C's `malloc`, a block of up to 512 bytes from this thread's list of its size class (R1.5 3.1)", "memory the caller owns, or null"),
+    rt!("nz.small_free", "void" ("ptr") "", false, Heap, "", Never, Any, "C's `free` of a small-block heap's block, kept on this thread's list while it is short (R1.5 3.1)", "takes the memory; null is a no-op"),
+    rt!("nz.small_realloc", "ptr" ("ptr", "i64") "", false, Heap, "", Null, Any, "C's `realloc` of a small-block heap's block (R1.5 3.1)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
     rt!("nz.os_read_line", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read a line of standard input into a buffer (R1d, P3)", "writes the caller's buffer"),
     rt!("nz.os_in_acquire", "void" () "", false, Files, "", Never, Any, "take standard input's spin lock (R1d, P3)", "none"),
     rt!("nz.os_in_release", "void" () "", false, Files, "", Never, Any, "give standard input's spin lock back (R1d, P3)", "none"),
@@ -1252,7 +1262,9 @@ mod tests {
     #[test]
     fn every_runtime_definition_is_inventoried_with_its_exact_signature() {
         // The counted heap's unit too (R1d, D5), which only a build with a limit links.
-        let text = crate::emit_runtime(all()) + &crate::heap::emit_heap(1 << 20);
+        let text = crate::emit_runtime(all())
+            + &crate::heap::emit_heap(1 << 20)
+            + &crate::heap::emit_small(false);
         let defs = definitions(&text);
         for (name, sig) in &defs {
             let f =
@@ -1446,10 +1458,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_thirty_eight_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_thirty_nine_and_reaches_the_system_only_through_its_platform_layer()
     {
         // R4's atomics outside the strings: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 38);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 39);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(
@@ -1540,7 +1552,8 @@ mod tests {
 
     #[test]
     fn a_runtime_entry_the_registry_names_is_one_the_runtime_defines() {
-        let text = crate::emit_runtime(all());
+        // The heap units are their own (R1d, R1.5 3.1), linked beside the runtime.
+        let text = crate::emit_runtime(all()) + &crate::heap::emit_small(false);
         for i in IMPORTS {
             if i.part == Part::Libc {
                 continue;

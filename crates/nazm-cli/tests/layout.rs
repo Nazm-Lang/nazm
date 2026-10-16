@@ -205,7 +205,8 @@ fn the_layout_is_in_every_objects_identity() {
             .and_then(serde_json::Value::as_u64)
     };
     // The unit whose code the layout changes is compiled afresh for the other layout — only the
-    // runtime and entry, whose bytes are the same in both, are reused — and every unit is reused
+    // runtime, the small-block heap and the entry, whose bytes are the same in both, are reused
+    // (R1.5 3.1) — and every unit is reused
     // when the first layout is asked for again.
     let compiled = |v: &serde_json::Value| {
         v.pointer("/native/compiled")
@@ -213,7 +214,7 @@ fn the_layout_is_in_every_objects_identity() {
     };
     assert!(first.is_object() && soa.is_object(), "{first} {soa}");
     assert_eq!(compiled(&soa), Some(1), "{soa}");
-    assert_eq!(reused(&again), Some(3), "{again}");
+    assert_eq!(reused(&again), Some(4), "{again}");
     // The emitted code differs, so so does every key derived from it.
     let ir = |layout: &str| {
         let o = nazm(

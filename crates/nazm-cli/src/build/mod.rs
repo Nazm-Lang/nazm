@@ -130,21 +130,33 @@ pub(crate) fn run(
         Ok(s) => s,
         Err(code) => return code,
     };
+    // The small-block heap (R1.5 3.1, design D13): a hosted executable allocates through it unless
+    // a heap limit counts every allocation, a prebuilt runtime calls C's allocator, or C may free
+    // what it allocated — a library's caller, a linked object, or (`calls_c`, decided per program)
+    // a foreign function.
+    let small = heap_limit.is_none()
+        && preflight::switch_target(&target).is_some()
+        && !choice.library
+        && choice.runtime.is_none()
+        && choice.link.is_empty();
     let llvm = nazm_lir::backend::LlvmText::new(target.clone())
         .with_debug(choice.debug)
         .with_soa(soa)
-        .with_counted_heap(heap_limit.is_some());
+        .with_counted_heap(heap_limit.is_some())
+        .with_small_heap(small);
     // Both backends write debug information (N48; Cranelift's since N91), and both allocate
     // through the counted heap under a heap limit (R1d, D5).
     let cranelift = nazm_codegen_clif::Cranelift::new(target.clone(), opt_level)
         .with_debug(choice.debug)
         .with_soa(soa)
-        .with_counted_heap(heap_limit.is_some());
+        .with_counted_heap(heap_limit.is_some())
+        .with_small_heap(small);
     // Nazm's own code generator (R9, D15): `nzcg`, found when first needed.
     let nzcg = nazm_codegen_nazm::NazmCodegen::new(target.clone())
         .with_debug(choice.debug)
         .with_soa(soa)
-        .with_counted_heap(heap_limit.is_some());
+        .with_counted_heap(heap_limit.is_some())
+        .with_small_heap(small);
     let chosen: &(dyn nazm_lir::backend::Backend + Sync) = match choice.backend {
         nazm_lir::backend::BackendId::Llvm => &llvm,
         nazm_lir::backend::BackendId::Cranelift => &cranelift,
@@ -194,6 +206,7 @@ pub(crate) fn run(
         &clif_key,
         &clock,
         heap_limit,
+        small,
         summary,
         &summarized,
     ) {

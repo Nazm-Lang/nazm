@@ -322,10 +322,10 @@ fn a_diamond_generates_the_shared_module_once() {
         1,
         "the shared module was generated more than once"
     );
-    // Four modules, plus the runtime and the entry.
+    // Four modules, plus the runtime, the small-block heap (R1.5 3.1) and the entry.
     assert_eq!(
         art.len(),
-        6,
+        7,
         "{:?}",
         art.iter().map(|(n, _)| n).collect::<Vec<_>>()
     );

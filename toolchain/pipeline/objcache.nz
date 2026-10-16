@@ -83,8 +83,9 @@ fn everything() -> Needs {
 }
 
 /// The runtime as text, hashed (`digest`): its ABI revision as four little-endian bytes, the
-/// whole runtime, the platform entry, the counted heap, every target's switch, `errno`, `os`,
-/// stack, start-up and TLS engine units, and each inventory entry as Rust's `Debug` writes it.
+/// whole runtime, the platform entry, the counted heap, the small-block heap, every target's
+/// switch, `errno`, `os`, stack, start-up and TLS engine units, and each inventory entry as Rust's
+/// `Debug` writes it.
 pub fn runtime_digest() -> Str ! {} {
     let parts = strs_new()
     let r = rt_abi_revision()
@@ -93,6 +94,7 @@ pub fn runtime_digest() -> Str ! {} {
     strs_push(parts, emit_runtime(all))
     strs_push(parts, emit_entry("@nz_main", 1, all, "", -1))
     strs_push(parts, emit_heap(1073741824))
+    strs_push(parts, emit_small(false))
     for t in text_split("aarch64-darwin aarch64-linux x86_64-darwin x86_64-linux x86_64-windows aarch64-android", " ") {
         strs_push(parts, emit_switch(t))
         strs_push(parts, emit_errno(t))
