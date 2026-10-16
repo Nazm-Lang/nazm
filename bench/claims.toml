@@ -440,6 +440,7 @@ heading = "R1.5 3.4: whole-program optimisation, measured (2026-10-16)"
 status = "dated"
 why = "hyperfine over release builds of two trees on one loaded host; a record of that date and machine — bench/compare/compare.py reproduces the current tree's rows by its method, not the before column"
 
+[[claim]]
 heading = "Concurrency: the baseline against Go's goroutines, measured (performance leadership 6.1, 2026-10-16)"
 status = "dated"
 why = "two runs of `bench/compare/concurrency.sh --wait` on this Mac, each begun below load 2 with no other agent's work running; a record of that date and machine — the script reproduces the method, not these numbers"
