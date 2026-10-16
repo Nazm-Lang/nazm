@@ -1,0 +1,29 @@
+// Concurrency 6.1: memory per live task — N tasks (100,000 by default) all blocked on one channel
+// at once; a reporter waits until every one has started, then closes the channel and they end.
+// Peak resident memory is read from outside (/usr/bin/time -l), against N = 0.
+use "@std/text"
+
+fn wait(gate: Chan, started: Atomic) -> Int {
+    atomic_add(started, 1)
+    let buf = ints_new()
+    if chan_recv(gate, buf) { 1 } else { 0 }
+}
+
+fn main(io: IoCap, tasks: SpawnCap, clock: TimeCap) {
+    let n = match text_parse_int(arg(0)) {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 100000,
+    }
+    let gate = chan_new(1)
+    let started = atomic_new(0)
+    scope {
+        let mut i = 0
+        while i < n {
+            spawn wait(gate, started)
+            i += 1
+        }
+        while atomic_load(started) < n { time_sleep_ms(1) }
+        chan_close(gate);
+    }
+    println(atomic_load(started))
+}

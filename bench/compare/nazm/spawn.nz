@@ -1,0 +1,23 @@
+// Concurrency 6.1: spawn N tasks (1,000,000 by default) in one scope, each adding 1 to a shared
+// atomic counter; the scope waits for all of them, then the count is printed.
+use "@std/text"
+
+fn work(done: Atomic) -> Int {
+    atomic_add(done, 1)
+}
+
+fn main(io: IoCap, tasks: SpawnCap) {
+    let n = match text_parse_int(arg(0)) {
+        Result.Ok(value: v) => v,
+        Result.Err(error: e) => 1000000,
+    }
+    let done = atomic_new(0)
+    scope {
+        let mut i = 0
+        while i < n {
+            spawn work(done)
+            i += 1
+        }
+    }
+    println(atomic_load(done))
+}

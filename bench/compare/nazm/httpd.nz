@@ -1,0 +1,33 @@
+// Concurrency 6.1: an HTTP/1.1 server on loopback — every connection served by a task of its own
+// (`http_serve_conn`), every request answered `200 hello` as text; serves on the address its
+// argument names (`127.0.0.1:8081`) until killed.
+use "@std/http"
+use "@std/ioerror"
+
+fn hello(r: Request) -> Response ! {io} {
+    http_text(200, "hello")
+}
+
+fn conn(s: HttpServer, c: HttpConn) -> Int ! {io} {
+    http_serve_conn(s, c, hello)
+}
+
+fn main(io: IoCap, net: NetCap, tasks: SpawnCap) -> Int ! {io, spawn} {
+    let o = http_serve_options()
+    let opts = ServeOptions(max_head: o.max_head, max_headers: o.max_headers, max_target: o.max_target, max_body: o.max_body, head_timeout_ms: o.head_timeout_ms, idle_timeout_ms: o.idle_timeout_ms, body_timeout_ms: o.body_timeout_ms, write_timeout_ms: o.write_timeout_ms, max_requests: 1000000000, max_connections: o.max_connections)
+    match http_listen(net, arg(0), opts) {
+        Result.Ok(value: s) => {
+            scope {
+                let mut running = true
+                while running {
+                    match http_accept(s) {
+                        Result.Ok(value: c) => { spawn conn(s, c) },
+                        Result.Err(error: e) => { running = false },
+                    }
+                }
+            }
+        },
+        Result.Err(error: e) => { println(io_error_show(e)) },
+    }
+    0
+}
