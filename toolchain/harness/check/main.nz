@@ -18,12 +18,14 @@ use "corpus.nz"
 use "notices.nz"
 use "claims.nz"
 use "governance.nz"
+use "mutations.nz"
 
 /// The ported gates, in `run_checks`'s order.
 fn gates() -> Strs ! {} {
     let out = strs_new();
     strs_push(out, "doc claims");
     strs_push(out, "capability matrix");
+    strs_push(out, "mutations apply");
     strs_push(out, "guide from grammar");
     strs_push(out, "docs corpus");
     strs_push(out, "performance claims");
@@ -40,6 +42,9 @@ fn run_gate(h: Caps, root: Str, name: Str) -> Strs ! { io, spawn } {
     }
     if name == "capability matrix" {
         return gate_capability_matrix(h, root);
+    }
+    if name == "mutations apply" {
+        return gate_mutations(h, root);
     }
     if name == "guide from grammar" {
         return gate_guide(h, root);

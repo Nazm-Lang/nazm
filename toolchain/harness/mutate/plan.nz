@@ -1,0 +1,854 @@
+// What a mutation campaign will do, decided before anything is injected (R7, ported from
+// `xtask/src/plan.rs`): the catalogue read with its schema (`load`), every check that can be made
+// without building (`validate`, the second half of `cargo xtask check`'s mutations-apply gate),
+// the selection `--only` makes (`select`), and the plan `cargo xtask mutate --plan` prints
+// (`plan`, `render`).
+//
+// Paths are kept relative to the repository and joined to a root only where a file is read or a
+// path is shown: the gate runs from the repository with the root `.` (`./crates/…` in its
+// messages), `--plan` from the root the runner was built in (an absolute path in its messages).
+
+use "@std/toml"
+use "@std/text"
+use "@std/file"
+use "@std/map"
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../lib/port.nz"
+
+/// A test target or a killer, as the catalogue spells one: its package, `lib = true`,
+/// `test = "…"` or `bin = "…"`; a profile's target may name a `module`, a killer names its test.
+pub struct Spec {
+    package: Str,
+    lib: Bool,
+    has_test: Bool,
+    test: Str,
+    has_bin: Bool,
+    bin: Str,
+    has_module: Bool,
+    module: Str,
+    name: Str,
+}
+
+/// One catalogued defect, with what says where it is seen.
+pub struct Defect {
+    name: Str,
+    file: Str,
+    killers: Vec[Spec],
+    has_profile: Bool,
+    profile: Str,
+    has_no_killer: Bool,
+    no_killer: Str,
+}
+
+/// A named group of whole test targets, and the source prefixes it is the default for.
+pub struct Profile {
+    name: Str,
+    why: Str,
+    owns: Strs,
+    targets: Vec[Spec],
+}
+
+pub struct Plan {
+    entries: Vec[Defect],
+    profiles: Vec[Profile],
+}
+
+// --- load ------------------------------------------------------------------------------------
+
+fn kind_of(t: Toml) -> Str ! {} {
+    match t {
+        Toml.Str(value: s) => "a string",
+        Toml.Int(value: i) => "an integer",
+        Toml.Float(value: x) => "a float",
+        Toml.Bool(value: b) => "a boolean",
+        Toml.Array(items: i) => "an array",
+        Toml.Table(keys: k, values: v) => "a table",
+        _ => "a date or time",
+    }
+}
+
+/// The keys of a table outside `allowed`, as serde's `deny_unknown_fields` refuses them.
+fn unknown_key(t: Toml, allowed: Strs, what: Str) -> Result[Int, Str] ! {} {
+    if let Toml.Table(keys: keys, values: values) = t {
+        for k in keys {
+            if !strs_has(allowed, k) {
+                return Result[Int, Str].Err(error: f"unknown field `{k}` in {what}");
+            }
+        }
+        return Result[Int, Str].Ok(value: 0);
+    }
+    Result[Int, Str].Err(error: f"{what} is {kind_of(t)}, not a table")
+}
+
+fn need_str(t: Toml, key: Str, what: Str) -> Result[Str, Str] ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: s) => Result[Str, Str].Ok(value: s),
+            _ => Result[Str, Str].Err(error: f"`{key}` in {what} is {kind_of(v)}, not a string"),
+        },
+        Option.None() => Result[Str, Str].Err(error: f"missing field `{key}` in {what}"),
+    }
+}
+
+/// An optional string field: `Ok("")` with `false` when absent.
+fn opt_str(t: Toml, key: Str, what: Str, present: Strs) -> Result[Str, Str] ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Str(value: s) => { strs_push(present, key); Result[Str, Str].Ok(value: s) },
+            _ => Result[Str, Str].Err(error: f"`{key}` in {what} is {kind_of(v)}, not a string"),
+        },
+        Option.None() => Result[Str, Str].Ok(value: ""),
+    }
+}
+
+fn opt_bool(t: Toml, key: Str, what: Str) -> Result[Bool, Str] ! {} {
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Bool(value: b) => Result[Bool, Str].Ok(value: b),
+            _ => Result[Bool, Str].Err(error: f"`{key}` in {what} is {kind_of(v)}, not a boolean"),
+        },
+        Option.None() => Result[Bool, Str].Ok(value: false),
+    }
+}
+
+/// An array field, absent as empty; `required` refuses its absence.
+fn array_of(t: Toml, key: Str, what: Str, required: Bool) -> Result[Vec[Toml], Str] ! {} {
+    let out = vec_new[Toml]();
+    match toml_get(t, key) {
+        Option.Some(value: v) => match v {
+            Toml.Array(items: items) => {
+                for x in items {
+                    vec_push(out, x);
+                }
+                Result[Vec[Toml], Str].Ok(value: out)
+            },
+            _ => Result[Vec[Toml], Str].Err(error: f"`{key}` in {what} is {kind_of(v)}, not an array"),
+        },
+        Option.None() => if required {
+            Result[Vec[Toml], Str].Err(error: f"missing field `{key}` in {what}")
+        } else {
+            Result[Vec[Toml], Str].Ok(value: out)
+        },
+    }
+}
+
+/// A killer (`killer = true`) or a profile's target.
+fn spec_of(t: Toml, killer: Bool, what: Str) -> Result[Spec, Str] ! {} {
+    let allowed = strs_new();
+    strs_push(allowed, "package");
+    strs_push(allowed, "lib");
+    strs_push(allowed, "test");
+    strs_push(allowed, "bin");
+    strs_push(allowed, if killer { "name" } else { "module" });
+    unknown_key(t, allowed, what)?;
+    let present = strs_new();
+    let package = need_str(t, "package", what)?;
+    let lib = opt_bool(t, "lib", what)?;
+    let test = opt_str(t, "test", what, present)?;
+    let bin = opt_str(t, "bin", what, present)?;
+    let module = opt_str(t, "module", what, present)?;
+    let name = if killer { need_str(t, "name", what)? } else { "" };
+    Result[Spec, Str].Ok(value: Spec(package: package, lib: lib, has_test: strs_has(present, "test"), test: test, has_bin: strs_has(present, "bin"), bin: bin, has_module: strs_has(present, "module"), module: module, name: name))
+}
+
+fn entry_of(t: Toml, i: Int) -> Result[Defect, Str] ! {} {
+    let what = f"[[mutation]] entry {i + 1}";
+    let allowed = strs_new();
+    for k in text_split("name why file find replace killers profile no_killer", " ") {
+        strs_push(allowed, k);
+    }
+    unknown_key(t, allowed, what)?;
+    let name = need_str(t, "name", what)?;
+    need_str(t, "why", what)?;
+    let file = need_str(t, "file", what)?;
+    need_str(t, "find", what)?;
+    need_str(t, "replace", what)?;
+    let killers = vec_new[Spec]();
+    for k in array_of(t, "killers", what, false)? {
+        vec_push(killers, spec_of(k, true, f"a killer of {name}")?);
+    }
+    let present = strs_new();
+    let profile = opt_str(t, "profile", what, present)?;
+    let no_killer = opt_str(t, "no_killer", what, present)?;
+    Result[Defect, Str].Ok(value: Defect(name: name, file: file, killers: killers, has_profile: strs_has(present, "profile"), profile: profile, has_no_killer: strs_has(present, "no_killer"), no_killer: no_killer))
+}
+
+fn profile_of(t: Toml, i: Int) -> Result[Profile, Str] ! {} {
+    let what = f"[[profile]] entry {i + 1}";
+    let allowed = strs_new();
+    for k in text_split("name why owns targets", " ") {
+        strs_push(allowed, k);
+    }
+    unknown_key(t, allowed, what)?;
+    let name = need_str(t, "name", what)?;
+    let why = need_str(t, "why", what)?;
+    let owns = strs_new();
+    for o in array_of(t, "owns", what, false)? {
+        match o {
+            Toml.Str(value: s) => strs_push(owns, s),
+            _ => {
+                return Result[Profile, Str].Err(error: f"`owns` in {what} holds {kind_of(o)}, not a string");
+            },
+        };
+    }
+    let targets = vec_new[Spec]();
+    for x in array_of(t, "targets", what, true)? {
+        vec_push(targets, spec_of(x, false, f"a target of profile {name}")?);
+    }
+    Result[Profile, Str].Ok(value: Profile(name: name, why: why, owns: owns, targets: targets))
+}
+
+/// `plan::load`: the catalogue in `text` with its schema — `Err` names `shown`, the path as the
+/// Rust runner shows it. A schema violation is refused as serde refuses it, in this port's words
+/// (the `toml` crate's error text, with its source excerpt, is not reproduced).
+pub fn plan_load(text: Str, shown: Str) -> Result[Plan, Str] ! {} {
+    let doc = match toml_parse(text) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => {
+            return Result[Plan, Str].Err(error: f"{shown}: {e}");
+        },
+    };
+    let top = strs_new();
+    strs_push(top, "mutation");
+    strs_push(top, "profile");
+    match unknown_key(doc, top, "the catalogue") {
+        Result.Ok(value: n) => n,
+        Result.Err(error: e) => {
+            return Result[Plan, Str].Err(error: f"{shown}: {e}");
+        },
+    };
+    let entries = vec_new[Defect]();
+    let profiles = vec_new[Profile]();
+    let ms = match array_of(doc, "mutation", "the catalogue", true) {
+        Result.Ok(value: a) => a,
+        Result.Err(error: e) => {
+            return Result[Plan, Str].Err(error: f"{shown}: {e}");
+        },
+    };
+    let mut i = 0;
+    for m in ms {
+        match entry_of(m, i) {
+            Result.Ok(value: e) => vec_push(entries, e),
+            Result.Err(error: e) => {
+                return Result[Plan, Str].Err(error: f"{shown}: {e}");
+            },
+        };
+        i = i + 1;
+    }
+    let ps = match array_of(doc, "profile", "the catalogue", false) {
+        Result.Ok(value: a) => a,
+        Result.Err(error: e) => {
+            return Result[Plan, Str].Err(error: f"{shown}: {e}");
+        },
+    };
+    i = 0;
+    for p in ps {
+        match profile_of(p, i) {
+            Result.Ok(value: x) => vec_push(profiles, x),
+            Result.Err(error: e) => {
+                return Result[Plan, Str].Err(error: f"{shown}: {e}");
+            },
+        };
+        i = i + 1;
+    }
+    if vec_len(entries) == 0 {
+        return Result[Plan, Str].Err(error: "catalogue has no [[mutation]] entries");
+    }
+    Result[Plan, Str].Ok(value: Plan(entries: entries, profiles: profiles))
+}
+
+// --- targets and selectors -------------------------------------------------------------------
+
+/// `Target::from_parts`: `lib`, `bin NAME` or `test NAME`, or `Err` when not exactly one is named.
+fn target_kind(s: Spec) -> Result[Str, Str] ! {} {
+    if s.lib && !s.has_test && !s.has_bin {
+        return Result[Str, Str].Ok(value: "lib");
+    }
+    if !s.lib && s.has_test && !s.has_bin {
+        return Result[Str, Str].Ok(value: f"test {s.test}");
+    }
+    if !s.lib && !s.has_test && s.has_bin {
+        return Result[Str, Str].Ok(value: f"bin {s.bin}");
+    }
+    Result[Str, Str].Err(error: f"a target in `{s.package}` must name exactly one of `lib = true`, `test = \"…\"` or `bin = \"…\"`")
+}
+
+/// `Target::label`: `PACKAGE --lib`, `PACKAGE --bin NAME`, `PACKAGE --test NAME`.
+fn target_label(package: Str, kind: Str) -> Str ! {} {
+    f"{package} --{kind}"
+}
+
+/// `TestSelector::label` of a profile's target: its target, and ` MODULE::` when it names one.
+fn module_label(s: Spec, kind: Str) -> Str ! {} {
+    if s.has_module {
+        f"{target_label(s.package, kind)} {s.module}::"
+    } else {
+        target_label(s.package, kind)
+    }
+}
+
+// --- the workspace ---------------------------------------------------------------------------
+
+struct Package {
+    name: Str,
+    dir: Str,
+    has_lib: Bool,
+    bin_names: Strs,
+    bin_paths: Strs,
+}
+
+struct Workspace {
+    packages: Vec[Package],
+}
+
+fn exists(h: Caps, root: Str, rel: Str) -> Bool ! { io } {
+    file_exists_at(h.io, f"{root}/{rel}")
+}
+
+/// `workspace`: every member's name, directory, library and binaries (all repository-relative).
+fn workspace(h: Caps, root: Str) -> Result[Workspace, Str] ! { io } {
+    let manifest = match read_rust(h, f"{root}/Cargo.toml") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => { return Result[Workspace, Str].Err(error: f"Cargo.toml: {e}"); },
+    };
+    let doc = match toml_parse(manifest) {
+        Result.Ok(value: d) => d,
+        Result.Err(error: e) => { return Result[Workspace, Str].Err(error: f"Cargo.toml: {e}"); },
+    };
+    let members = match toml_get(doc, "workspace") {
+        Option.Some(value: w) => match toml_get(w, "members") {
+            Option.Some(value: m) => match m {
+                Toml.Array(items: items) => items,
+                _ => { return Result[Workspace, Str].Err(error: "Cargo.toml has no [workspace] members"); },
+            },
+            Option.None() => { return Result[Workspace, Str].Err(error: "Cargo.toml has no [workspace] members"); },
+        },
+        Option.None() => { return Result[Workspace, Str].Err(error: "Cargo.toml has no [workspace] members"); },
+    };
+    let out = vec_new[Package]();
+    for item in members {
+        let m = match item {
+            Toml.Str(value: s) => s,
+            _ => { continue; },
+        };
+        let text = match read_rust(h, f"{root}/{m}/Cargo.toml") {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => { return Result[Workspace, Str].Err(error: f"{m}/Cargo.toml: {e}"); },
+        };
+        let pkg = match toml_parse(text) {
+            Result.Ok(value: d) => d,
+            Result.Err(error: e) => { return Result[Workspace, Str].Err(error: f"{m}/Cargo.toml: {e}"); },
+        };
+        let name = match toml_get(pkg, "package") {
+            Option.Some(value: p) => match toml_get(p, "name") {
+                Option.Some(value: n) => match n {
+                    Toml.Str(value: s) => s,
+                    _ => { continue; },
+                },
+                Option.None() => { continue; },
+            },
+            Option.None() => { continue; },
+        };
+        let bin_names = strs_new();
+        let bin_paths = strs_new();
+        let listed = match toml_get(pkg, "bin") {
+            Option.Some(value: b) => match b {
+                Toml.Array(items: items) => {
+                    for x in items {
+                        match toml_get(x, "name") {
+                            Option.Some(value: n) => match n {
+                                Toml.Str(value: bn) => {
+                                    let path = match toml_get(x, "path") {
+                                        Option.Some(value: pv) => match pv {
+                                            Toml.Str(value: ps) => ps,
+                                            _ => "src/main.rs",
+                                        },
+                                        Option.None() => "src/main.rs",
+                                    };
+                                    strs_push(bin_names, bn);
+                                    strs_push(bin_paths, f"{m}/{path}");
+                                    0
+                                },
+                                _ => 0,
+                            },
+                            Option.None() => 0,
+                        };
+                    }
+                    true
+                },
+                _ => false,
+            },
+            Option.None() => false,
+        };
+        if !listed && exists(h, root, f"{m}/src/main.rs") {
+            strs_push(bin_names, name);
+            strs_push(bin_paths, f"{m}/src/main.rs");
+        }
+        vec_push(out, Package(name: name, dir: m, has_lib: exists(h, root, f"{m}/src/lib.rs"), bin_names: bin_names, bin_paths: bin_paths));
+    }
+    Result[Workspace, Str].Ok(value: Workspace(packages: out))
+}
+
+/// `target_root`: the root source file of a target (repository-relative), or why there is none.
+fn target_root(h: Caps, root: Str, ws: Workspace, package: Str, kind: Str) -> Result[Str, Str] ! { io } {
+    for p in ws.packages {
+        if p.name != package {
+            continue;
+        }
+        if kind == "lib" {
+            if p.has_lib {
+                return Result[Str, Str].Ok(value: f"{p.dir}/src/lib.rs");
+            }
+            return Result[Str, Str].Err(error: f"package `{package}` has no library target");
+        }
+        if text_starts_with(kind, "bin ") {
+            let b = str_slice(kind, 4, str_len(kind));
+            // A later binary of the same name replaces an earlier one, as a map's insert does.
+            let mut found = "";
+            let mut i = 0;
+            while i < strs_len(p.bin_names) {
+                if strs_get(p.bin_names, i) == b {
+                    found = strs_get(p.bin_paths, i);
+                }
+                i = i + 1;
+            }
+            if str_len(found) > 0 {
+                return Result[Str, Str].Ok(value: found);
+            }
+            return Result[Str, Str].Err(error: f"package `{package}` has no binary `{b}`");
+        }
+        let t = str_slice(kind, 5, str_len(kind));
+        let flat = f"{p.dir}/tests/{t}.rs";
+        let nested = f"{p.dir}/tests/{t}/main.rs";
+        if exists(h, root, flat) {
+            return Result[Str, Str].Ok(value: flat);
+        }
+        if exists(h, root, nested) {
+            return Result[Str, Str].Ok(value: nested);
+        }
+        return Result[Str, Str].Err(error: f"package `{package}` has no integration test `{t}`");
+    }
+    Result[Str, Str].Err(error: f"package `{package}` is not a workspace member")
+}
+
+fn parent_of(rel: Str) -> Str ! {} {
+    let mut i = str_len(rel);
+    while i > 0 {
+        i = i - 1;
+        if str_byte(rel, i) == 47 {
+            return str_slice(rel, 0, i);
+        }
+    }
+    ""
+}
+
+fn join(dir: Str, name: Str) -> Str ! {} {
+    if str_len(dir) == 0 { name } else { f"{dir}/{name}" }
+}
+
+/// `resolve_module`: the file a module path inside a crate resolves to, and how many of its
+/// segments were left over to be found as inline modules (`rest` holds them).
+fn resolve_module(h: Caps, root: Str, crate_root: Str, segments: Strs, rest: Strs) -> Str ! { io } {
+    let mut file = crate_root;
+    let mut dir = parent_of(crate_root);
+    let mut i = 0;
+    while i < strs_len(segments) {
+        let seg = strs_get(segments, i);
+        let flat = join(dir, f"{seg}.rs");
+        let modrs = join(dir, f"{seg}/mod.rs");
+        if exists(h, root, flat) {
+            file = flat;
+            dir = join(dir, seg);
+        } else if exists(h, root, modrs) {
+            file = modrs;
+            dir = join(dir, seg);
+        } else {
+            break;
+        }
+        i = i + 1;
+    }
+    while i < strs_len(segments) {
+        strs_push(rest, strs_get(segments, i));
+        i = i + 1;
+    }
+    file
+}
+
+/// `str::lines`: split on `\n`, a `\r` before it dropped, no empty last line.
+fn rust_lines(s: Str) -> Strs ! {} {
+    let out = strs_new();
+    let n = str_len(s);
+    let mut start = 0;
+    let mut i = 0;
+    while i < n {
+        if str_byte(s, i) == 10 {
+            let mut end = i;
+            if end > start && str_byte(s, end - 1) == 13 {
+                end = end - 1;
+            }
+            strs_push(out, str_slice(s, start, end));
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < n {
+        let mut end = n;
+        if str_byte(s, end - 1) == 13 {
+            end = end - 1;
+        }
+        strs_push(out, str_slice(s, start, end));
+    }
+    out
+}
+
+/// `find_test`: is there a non-ignored `#[test] fn LAST` at this path? `Err` says why not.
+fn find_test(h: Caps, root: Str, disp: Str, crate_root: Str, name: Str, texts: StrMap[Str]) -> Result[Int, Str] ! { io } {
+    let segments = text_split(name, "::");
+    let last = strs_get(segments, strs_len(segments) - 1);
+    let modules = strs_new();
+    let mut i = 0;
+    while i + 1 < strs_len(segments) {
+        strs_push(modules, strs_get(segments, i));
+        i = i + 1;
+    }
+    let inline = strs_new();
+    let file = resolve_module(h, root, crate_root, modules, inline);
+    let shown = f"{disp}/{file}";
+    let text = match map_get(texts, file) {
+        Option.Some(value: t) => t,
+        Option.None() => match read_rust(h, f"{root}/{file}") {
+            Result.Ok(value: t) => { map_set(texts, file, t); t },
+            Result.Err(error: e) => { return Result[Int, Str].Err(error: f"{shown}: {e}"); },
+        },
+    };
+    for m in inline {
+        if !text_contains(text, f"mod {m} {{") && !text_contains(text, f"mod {m}{{") {
+            return Result[Int, Str].Err(error: f"`{name}`: module `{m}` is neither a file nor an inline module in {shown}");
+        }
+    }
+    let lines = rust_lines(text);
+    let needle = f"fn {last}(";
+    let pub_needle = f"pub {needle}";
+    let mut found = 0;
+    let mut ignored = false;
+    let mut at = 0;
+    while at < strs_len(lines) {
+        let t = text_trim_start(strs_get(lines, at));
+        if text_starts_with(t, needle) || text_starts_with(t, pub_needle) {
+            let mut is_test = false;
+            let mut is_ignored = false;
+            let mut j = at;
+            while j > 0 {
+                j = j - 1;
+                let p = text_trim(strs_get(lines, j));
+                if text_starts_with(p, "#[test]") {
+                    is_test = true;
+                } else if text_starts_with(p, "#[ignore") {
+                    is_ignored = true;
+                } else if text_starts_with(p, "#[") || text_starts_with(p, "//") || str_len(p) == 0 || text_ends_with(p, "]") {
+                    continue;
+                } else {
+                    break;
+                }
+            }
+            if is_test {
+                found = found + 1;
+                ignored = ignored || is_ignored;
+            }
+        }
+        at = at + 1;
+    }
+    if found == 0 {
+        return Result[Int, Str].Err(error: f"`{name}`: no `#[test] fn {last}` in {shown}");
+    }
+    if ignored {
+        return Result[Int, Str].Err(error: f"`{name}` is `#[ignore]`d, so the workspace suite does not run it and a failure there is not evidence the suite detects anything");
+    }
+    Result[Int, Str].Ok(value: found)
+}
+
+/// `str::trim().is_empty()`.
+fn blank(s: Str) -> Bool ! {} {
+    str_len(text_trim(s)) == 0
+}
+
+/// `plan::validate`: every check that can be made without building anything. `root` is where the
+/// files are read, `disp` how the Rust runner shows that root (`.` in the gate).
+pub fn validate(h: Caps, root: Str, disp: Str, cat: Plan) -> Strs ! { io } {
+    let bad = strs_new();
+    let ws = match workspace(h, root) {
+        Result.Ok(value: w) => w,
+        Result.Err(error: e) => {
+            strs_push(bad, e);
+            return bad;
+        },
+    };
+    let texts = map_new[Str]();
+
+    let names = map_new[Int]();
+    for m in cat.entries {
+        if map_has(names, m.name) {
+            strs_push(bad, f"{m.name}: the name is used by more than one mutation");
+        } else {
+            map_set(names, m.name, 0);
+        }
+    }
+
+    let profile_names = map_new[Int]();
+    let prefixes = map_new[Str]();
+    for p in cat.profiles {
+        if map_has(profile_names, p.name) {
+            strs_push(bad, f"profile {p.name}: declared twice");
+        } else {
+            map_set(profile_names, p.name, 0);
+        }
+        if vec_len(p.targets) == 0 {
+            strs_push(bad, f"profile {p.name}: has no targets");
+        }
+        if blank(p.why) {
+            strs_push(bad, f"profile {p.name}: does not say why these targets observe what it owns");
+        }
+        for prefix in p.owns {
+            match map_get(prefixes, prefix) {
+                Option.Some(value: other) => {
+                    strs_push(bad, f"profiles {other} and {p.name} both own `{prefix}`; ownership must be unique");
+                    0
+                },
+                Option.None() => 0,
+            };
+            map_set(prefixes, prefix, p.name);
+        }
+        let seen = map_new[Int]();
+        for t in p.targets {
+            match target_kind(t) {
+                Result.Err(error: e) => strs_push(bad, f"profile {p.name}: {e}"),
+                Result.Ok(value: kind) => {
+                    match target_root(h, root, ws, t.package, kind) {
+                        Result.Err(error: e) => strs_push(bad, f"profile {p.name}: {e}"),
+                        Result.Ok(value: crate_root) => {
+                            if t.has_module {
+                                if !text_starts_with(kind, "test ") {
+                                    strs_push(bad, f"profile {p.name}: only a test target has modules, not {target_label(t.package, kind)}");
+                                } else {
+                                    let one = strs_new();
+                                    strs_push(one, t.module);
+                                    let rest = strs_new();
+                                    resolve_module(h, root, crate_root, one, rest);
+                                    if strs_len(rest) == 1 {
+                                        strs_push(bad, f"profile {p.name}: {target_label(t.package, kind)} has no module `{t.module}`");
+                                    }
+                                }
+                            }
+                        },
+                    };
+                    let lab = module_label(t, kind);
+                    if map_has(seen, lab) {
+                        strs_push(bad, f"profile {p.name}: {lab} is listed twice");
+                    } else {
+                        map_set(seen, lab, 0);
+                    }
+                },
+            };
+        }
+    }
+
+    for m in cat.entries {
+        let seen = map_new[Int]();
+        for k in m.killers {
+            let kind = match target_kind(k) {
+                Result.Ok(value: x) => x,
+                Result.Err(error: e) => {
+                    strs_push(bad, f"{m.name}: {e}");
+                    continue;
+                },
+            };
+            let tl = target_label(k.package, kind);
+            let key = f"{k.package}\t{kind}\t{k.name}";
+            if map_has(seen, key) {
+                strs_push(bad, f"{m.name}: killer {tl} {k.name} is listed twice");
+            } else {
+                map_set(seen, key, 0);
+            }
+            match target_root(h, root, ws, k.package, kind) {
+                Result.Err(error: e) => strs_push(bad, f"{m.name}: {e}"),
+                Result.Ok(value: crate_root) => match find_test(h, root, disp, crate_root, k.name, texts) {
+                    Result.Ok(value: n) => n,
+                    Result.Err(error: e) => strs_push(bad, f"{m.name}: killer {tl} does not resolve: {e}. Stale killer metadata is a catalogue defect; repoint it at the test that observes the rule now, and verify it with `cargo xtask contained mutate --verify-killer {m.name}`"),
+                },
+            };
+        }
+        if m.has_profile && !map_has(profile_names, m.profile) {
+            strs_push(bad, f"{m.name}: profile `{m.profile}` is not declared");
+        }
+        if vec_len(m.killers) == 0 && (!m.has_no_killer || blank(m.no_killer)) {
+            strs_push(bad, f"{m.name}: has no killer, and does not say why in `no_killer`");
+        }
+        if vec_len(m.killers) > 0 && m.has_no_killer {
+            strs_push(bad, f"{m.name}: has killers and also says it has none");
+        }
+    }
+    bad
+}
+
+// --- selection and the plan ------------------------------------------------------------------
+
+/// `answers`: a substring, or — written `=NAME` — exactly that name.
+fn answers(name: Str, filter: Str) -> Bool ! {} {
+    if text_starts_with(filter, "=") {
+        return name == str_slice(filter, 1, str_len(filter));
+    }
+    text_contains(name, filter)
+}
+
+/// A string as Rust's `{:?}` shows it.
+fn debug_str(s: Str) -> Str ! {} {
+    let out = strs_new();
+    strs_push(out, "\"");
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 34 {
+            strs_push(out, "\\\"");
+        } else if b == 92 {
+            strs_push(out, "\\\\");
+        } else if b == 10 {
+            strs_push(out, "\\n");
+        } else if b == 13 {
+            strs_push(out, "\\r");
+        } else if b == 9 {
+            strs_push(out, "\\t");
+        } else {
+            strs_push(out, str_slice(s, i, i + 1));
+        }
+        i = i + 1;
+    }
+    strs_push(out, "\"");
+    str_join(out, "")
+}
+
+/// `select`: the indices of the mutations the filters choose, in catalogue order; every one when
+/// there are no filters, and `Err` when the filters choose nothing.
+pub fn select(cat: Plan, only: Strs) -> Result[Ints, Str] ! {} {
+    let out = ints_new();
+    let mut i = 0;
+    for m in cat.entries {
+        let mut chosen = strs_len(only) == 0;
+        for w in only {
+            if answers(m.name, w) {
+                chosen = true;
+            }
+        }
+        if chosen {
+            ints_push(out, i);
+        }
+        i = i + 1;
+    }
+    if ints_len(out) == 0 {
+        let shown = strs_new();
+        for w in only {
+            strs_push(shown, debug_str(w));
+        }
+        return Result[Ints, Str].Err(error: f"no mutation matches [{str_join(shown, ", ")}]. A filter that selects nothing would report a clean run having tested nothing.");
+    }
+    Result[Ints, Str].Ok(value: out)
+}
+
+fn pad4(n: Int) -> Str ! {} {
+    let s = f"{n}";
+    let mut out = s;
+    let mut k = str_len(s);
+    while k < 4 {
+        out = f" {out}";
+        k = k + 1;
+    }
+    out
+}
+
+/// `plan` then `render`: the plan of every selected mutation as `--plan` prints it, or the
+/// problems `plan` refuses on.
+pub fn render(cat: Plan, selected: Ints) -> Result[Str, Strs] ! {} {
+    let problems = strs_new();
+    let out = strs_new();
+    let mut with_killer = 0;
+    let mut profile_only = 0;
+    for i in selected {
+        let m = vec_get(cat.entries, i);
+        let block = strs_new();
+        strs_push(block, f"{pad4(i + 1)}  {m.name}  ({m.file})\n");
+        let mut killers = 0;
+        for k in m.killers {
+            match target_kind(k) {
+                Result.Ok(value: kind) => {
+                    killers = killers + 1;
+                    strs_push(block, f"        tier 1  {target_label(k.package, kind)} {k.name}\n");
+                    0
+                },
+                Result.Err(error: e) => { strs_push(problems, f"{m.name}: {e}"); 0 },
+            };
+        }
+        if vec_len(m.killers) == 0 {
+            strs_push(block, "        tier 1  —  no verified killer\n");
+        }
+        // The profile: named by the entry, or the one owning the longest prefix of its file.
+        let mut name = "";
+        let mut why = "";
+        if m.has_profile {
+            name = m.profile;
+            why = "named by the entry";
+        } else {
+            let mut best = "";
+            let mut has = false;
+            for p in cat.profiles {
+                for prefix in p.owns {
+                    if text_starts_with(m.file, prefix) && (!has || str_len(prefix) > str_len(best)) {
+                        has = true;
+                        best = prefix;
+                        name = p.name;
+                    }
+                }
+            }
+            if has {
+                why = f"owns {best}";
+            }
+        }
+        let mut has_profile = false;
+        if str_len(why) == 0 {
+            strs_push(block, "        tier 2  —  no profile owns this file\n");
+        } else {
+            let mut declared = false;
+            for p in cat.profiles {
+                if p.name == name && !declared {
+                    declared = true;
+                    let labels = strs_new();
+                    for t in p.targets {
+                        match target_kind(t) {
+                            Result.Ok(value: kind) => strs_push(labels, module_label(t, kind)),
+                            Result.Err(error: e) => strs_push(problems, f"profile {p.name}: {e}"),
+                        };
+                    }
+                    strs_push(block, f"        tier 2  {name} ({why}): {str_join(labels, ", ")}\n");
+                }
+            }
+            if declared {
+                has_profile = true;
+            } else {
+                strs_push(problems, f"{m.name}: profile `{name}` is not declared");
+                strs_push(block, "        tier 2  —  no profile owns this file\n");
+            }
+        }
+        strs_push(block, "        tier 3  workspace suite (the only tier that can report SURVIVED)\n");
+        if killers > 0 {
+            with_killer = with_killer + 1;
+        } else if has_profile {
+            profile_only = profile_only + 1;
+        }
+        strs_push(out, str_join(block, ""));
+    }
+    if strs_len(problems) > 0 {
+        return Result[Str, Strs].Err(error: problems);
+    }
+    let neither = ints_len(selected) - with_killer - profile_only;
+    strs_push(out, f"\n{ints_len(selected)} selected: {with_killer} with a killer, {profile_only} with a profile only, {neither} straight to the workspace suite\n");
+    Result[Str, Strs].Ok(value: str_join(out, ""))
+}

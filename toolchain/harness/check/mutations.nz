@@ -1,0 +1,42 @@
+// The mutations-apply gate (R7, ported from `xtask/src/checks/mutations.rs`): every catalogue
+// entry applies, exactly once, to the file it names (`applies_once`), and the catalogue passes
+// every check that needs no build (`plan.nz`'s `validate`) — killers that resolve to a test that
+// is not ignored, profiles declared once with targets that exist, no entry without a killer or a
+// reason. The gate runs from the repository, so its paths are shown under `.`.
+
+use "../lib/run.nz"
+use "../lib/scratch.nz"
+use "../mutate/catalogue.nz"
+use "../mutate/core.nz"
+use "../mutate/plan.nz"
+
+const CATALOGUE: Str = "xtask/mutations/mutations.toml";
+
+pub fn gate_mutations(h: Caps, root: Str) -> Strs ! { io } {
+    let text = match read_rust(h, f"{root}/{CATALOGUE}") {
+        Result.Ok(value: t) => t,
+        Result.Err(error: e) => {
+            let only = strs_new();
+            strs_push(only, f"{CATALOGUE}: {e}");
+            return only;
+        },
+    };
+    let cat = match catalogue_read(text, CATALOGUE) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => {
+            let only = strs_new();
+            strs_push(only, e);
+            return only;
+        },
+    };
+    let bad = applies_once(h, root, cat);
+    match plan_load(text, CATALOGUE) {
+        Result.Err(error: e) => strs_push(bad, e),
+        Result.Ok(value: p) => {
+            for x in validate(h, root, ".", p) {
+                strs_push(bad, x);
+            }
+        },
+    };
+    bad
+}

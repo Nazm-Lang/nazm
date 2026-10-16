@@ -11,7 +11,7 @@
 set -u
 
 here=$(cd "$(dirname "$0")/.." && pwd)
-tree=$(cd "${1:?usage: $0 SCRATCH_TREE}" && pwd)
+tree=$(cd "${1:?usage: $0 SCRATCH_TREE}" && pwd -P)
 if [ "$tree" = "$(cd "$here/../.." && pwd)" ]; then
     echo "refusing to seed defects into the working tree; give a scratch copy" >&2
     exit 2
@@ -26,7 +26,7 @@ for prog in check mutate; do
     "$HARNESS_NAZM" build "$here/$prog/main.nz" -o "$log/nazm-$prog" >"$log/$prog.build" 2>&1 || {
         cat "$log/$prog.build" >&2; exit 1; }
 done
-(cd "$tree" && cargo build -q -p xtask) || exit 1
+(cd "$tree" && cargo build -q -j "${CARGO_JOBS:-4}" -p xtask) || exit 1
 xtask=$CARGO_TARGET_DIR/debug/xtask
 
 agree=0
@@ -50,19 +50,18 @@ compare() {
             failed="$failed$gate: rust [$(echo "$r" | tr '\n' '|')] nazm [$(echo "$n" | tr '\n' '|')]; "
         fi
     done < <(sed -nE 's/^(ok|FAIL)  +//p' "$log/nazm.out")
-    # The mutations-apply gate's exactly-once half (`nazm-mutate check`): its lines against the
-    # Rust gate's lines of the same kinds, in order. The other half (`plan::validate`) is not
-    # ported, so its lines are left out of the Rust side here — and named as such.
-    (cd "$tree" && "$log/nazm-mutate" check "$tree") >"$log/nazm-mut.out" 2>&1
-    block "mutations apply" "$log/rust.out" | sed -n 's/^        //p' \
-        | grep -E ': its pattern is not in |: its pattern appears |: cannot read |has an entry missing' \
-        >"$log/rust-mut.out"
-    if ! cmp -s "$log/rust-mut.out" "$log/nazm-mut.out"; then
-        failed="${failed}mutations apply (exactly once): rust [$(tr '\n' '|' <"$log/rust-mut.out")] nazm [$(tr '\n' '|' <"$log/nazm-mut.out")]; "
+    # `cargo xtask mutate --plan` and `nazm-mutate plan`: the whole catalogue's plan, or the same
+    # problems, on the same tree.
+    (cd "$tree" && "$xtask" mutate --plan) >"$log/rust-plan.out" 2>&1
+    local rp=$?
+    "$log/nazm-mutate" plan "$tree" >"$log/nazm-plan.out" 2>&1
+    local np=$?
+    if [ $rp -ne $np ] || ! cmp -s "$log/rust-plan.out" "$log/nazm-plan.out"; then
+        failed="${failed}mutate --plan: exit $rp/$np, $(diff "$log/rust-plan.out" "$log/nazm-plan.out" | head -6 | tr '\n' '|'); "
     fi
     local verdicts
     verdicts=$(grep -E '^FAIL' "$log/nazm.out" | sed 's/^FAIL  //' | tr '\n' ',' | sed 's/,$//')
-    if [ -s "$log/nazm-mut.out" ]; then verdicts="${verdicts:+$verdicts,}mutations apply (exactly once)"; fi
+    [ $np -ne 0 ] && verdicts="${verdicts:+$verdicts,}mutate --plan refused"
     if [ -z "$failed" ]; then
         agree=$((agree + 1)); echo "agree   $label: ${verdicts:-every ported gate ok}"
     else
@@ -72,8 +71,11 @@ compare() {
 
 compare "the pristine copy"
 
-"$log/nazm-mutate" list "$seeds" | cut -f1 >"$log/names"
-while read -r name; do
+"$log/nazm-mutate" list "$seeds" | cut -f1,2 >"$log/names"
+# The Rust gates compile `xtask/src/rules.rs` in: a seed there rebuilds them, and so does its
+# restore. (A seed elsewhere in `xtask/src/` is a module-boundaries input, read, not built.)
+rebuild() { (cd "$tree" && cargo build -q -j "${CARGO_JOBS:-4}" -p xtask) || exit 1; }
+while IFS=$'\t' read -r name file; do
     out=$("$log/nazm-mutate" apply "$tree" "$seeds" "$name")
     if [ $? -ne 0 ]; then differ=$((differ + 1)); echo "DIFFER  $name: $out"; continue; fi
     made=""
@@ -81,16 +83,18 @@ while read -r name; do
         made=$tree/docs/research/evaluation-preregistration.md
         printf '# Pre-registration\n' >"$made"
     fi
+    case $file in xtask/src/rules.rs) rebuild ;; esac
     compare "$name"
     [ -n "$made" ] && rm -f "$made"
     "$log/nazm-mutate" restore "$tree" >/dev/null || { echo "could not restore $name" >&2; exit 1; }
+    case $file in xtask/src/rules.rs) rebuild ;; esac
 done <"$log/names"
 
 # A file a gate reads, gone: the failure is worded as the Rust gate words it.
 for gone in docs/research/evaluation.md docs/capability-matrix.md docs/guide.md Cargo.lock \
     crates/nazm-cli/src/build/mod.rs docs/mcp.md THIRD-PARTY-NOTICES.md bench/claims.toml \
     docs/performance.md AGENTS.md CLAUDE.md compiler/AGENTS.md .agent/templates/state.md \
-    docs/agent-evals.md; do
+    docs/agent-evals.md Cargo.toml xtask/mutations/mutations.toml crates/nazm-bench/src/selftest.rs; do
     mv "$tree/$gone" "$log/gone"
     compare "without $gone"
     mv "$log/gone" "$tree/$gone"
