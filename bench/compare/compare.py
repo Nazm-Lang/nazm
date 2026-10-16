@@ -35,7 +35,10 @@ is on PATH, else a wall clock around the process, as bench/cross.py), peak resid
 run (`/usr/bin/time`), the size of the executable where there is one, build time (the median of
 BUILD_RUNS builds after one unmeasured build, so a toolchain's caches of its own standard library
 are warm; Nazm's twice, as two rows — uncached with `--no-cache`, and with its user cache warm
-and its project store empty, R1.5 1.2), and lines of code (non-blank lines that are not wholly a comment). Each variant also states what
+and its project store empty, R1.5 1.2), and lines of code (non-blank lines that are not wholly a comment).
+Since 2026-10-17 also: the run time's σ, the program's characters (of those lines, without
+indentation), and the cold build — the first of the run, its work directory's caches empty — beside
+the warm median; and Fortran, COBOL and hand-written aarch64 assembly. Each variant also states what
 it checks at run or compile time (R1.5 5.1, the `checks` column, SAFETY below), and the compiled
 languages that can are built a second time with the checks Nazm always has — Rust with overflow
 checks, Zig ReleaseSafe, C and C++ with AddressSanitizer and UndefinedBehaviorSanitizer — so a row
@@ -93,6 +96,10 @@ SAFETY = {
     "swiftc -O": "overflow, bounds, memory",
     "fpc -O3": "none (range and overflow checks off by default)",
     "gnatmake -O2": "overflow, bounds (GNAT's default checks)",
+    "gfortran -O2": "none",
+    "gfortran -O2 -fcheck=all -ftrapv": "overflow, bounds (run time)",
+    "cobc -x -O2": "none (size errors only where ON SIZE ERROR is written)",
+    "clang (hand-written aarch64 assembly)": "none",
 }
 
 
@@ -190,26 +197,30 @@ def run_times(cmd, env, runs, warmup, work):
     return spread([timed(cmd, env=env)[0] for _ in range(runs)]), "wall clock"
 
 
-def loc(path):
-    """Non-blank lines that are not wholly a comment."""
+def loc_lines(path):
+    """Non-blank lines that are not wholly a comment, each without its indentation."""
     ext = path.suffix
-    if ext in (".py", ".rb"):
-        markers = ("#",)
-    elif ext == ".adb":
-        markers = ("--",)
-    elif ext == ".pas":
-        markers = ("//", "(*")
-    else:
-        markers = ("//",)
-    n = 0
+    markers = {".py": ("#",), ".rb": ("#",), ".adb": ("--",), ".pas": ("//", "(*"),
+               ".f90": ("!",), ".cob": ("*>",)}.get(ext, ("//",))
+    out = []
     for line in path.read_text().splitlines():
         s = line.strip()
         if not s or s.startswith(markers):
             continue
         if ext == ".pas" and s.startswith("{") and not s.startswith("{$"):
             continue
-        n += 1
-    return n
+        out.append(s)
+    return out
+
+
+def loc(path):
+    """Non-blank lines that are not wholly a comment."""
+    return len(loc_lines(path))
+
+
+def chars(path):
+    """Characters of the lines `loc` counts, without indentation or trailing space."""
+    return sum(len(s) for s in loc_lines(path))
 
 
 def first_glob(pattern):
@@ -221,7 +232,7 @@ def find_tools():
     """Each language's tools, or None where they are absent."""
     tools = {name: shutil.which(name) for name in
              ["clang", "clang++", "go", "rustc", "zig", "swiftc", "fpc", "dotnet", "python3",
-              "ruby", "node", "bun"]}
+              "ruby", "node", "bun", "gfortran", "cobc"]}
     # The plain `java` on a Mac's PATH may be a stub that only says Java is not installed.
     java = None
     for d in ["/opt/homebrew/opt/openjdk/bin", os.path.dirname(shutil.which("javac") or "")]:
@@ -377,6 +388,25 @@ def languages(nazm, tools, work, env, goenv, zigenv, gnatenv):
                            f"-o{exe(n, 'pas')}", s],
              lambda s, n: [exe(n, "pas")], env, "-O3 (Free Pascal)"),
         ]),
+        ("Fortran", "fortran", "{n}.f90", [
+            ("gfortran -O2", "gfortran",
+             lambda s, n: [tools["gfortran"] or "gfortran", "-O2", "-o", exe(n, "f90"), s],
+             lambda s, n: [exe(n, "f90")], env, "-O2 (GNU Fortran)"),
+            ("gfortran -O2 -fcheck=all -ftrapv", "gfortran",
+             lambda s, n: [tools["gfortran"] or "gfortran", "-O2", "-fcheck=all", "-ftrapv", "-o",
+                           exe(n, "f90c"), s],
+             lambda s, n: [exe(n, "f90c")], env, "-O2, bounds and overflow checked: Nazm's checks"),
+        ]),
+        ("COBOL", "cobol", "{n}.cob", [
+            ("cobc -x -O2", "cobc",
+             lambda s, n: [tools["cobc"] or "cobc", "-x", "-free", "-O2", "-o", exe(n, "cob"), s],
+             lambda s, n: [exe(n, "cob")], env, "-x -free -O2 (GnuCOBOL, through the C compiler)"),
+        ]),
+        ("Assembly", "asm", "{n}.s", [
+            ("clang (hand-written aarch64 assembly)", "clang",
+             lambda s, n: ["clang", "-o", exe(n, "asm"), s],
+             lambda s, n: [exe(n, "asm")], env, "hand-written for aarch64 macOS; assembled, linked"),
+        ]),
         ("Ada", "ada", "{n}.adb", [
             ("gnatmake -O2", "gnatmake",
              lambda s, n: [tools["gnatmake"] or "gnatmake", "-q", "-f", "-O2",
@@ -454,6 +484,8 @@ def main():
             "bun": tool_version("bun", ["bun", "--version"]),
             "swiftc": tool_version("swiftc", ["swiftc", "--version"]),
             "fpc": tool_version("fpc", ["fpc", "-iV"]),
+            "gfortran": tool_version("gfortran", ["gfortran", "--version"]),
+            "cobc": tool_version("cobc", ["cobc", "--version"]),
             "gnat": tool_version("gnatmake", [tools["gnatmake"] or "gnatmake", "--version"],
                                  gnatenv),
             "hyperfine": version(["hyperfine", "--version"]),
@@ -504,6 +536,7 @@ def main():
                         rows.append(row)
                     continue
                 row["loc"] = loc(src)
+                row["chars"] = chars(src)
                 if tool != nazm and not tools.get(tool):
                     row["status"] = f"absent: {tool} is not installed"
                     rows.append(row)
@@ -535,15 +568,21 @@ def main():
                             break
                         if i > 0:
                             times.append(t)
+                        else:
+                            # The first build of the run, its work directory's caches (Go's,
+                            # Zig's, Nazm's user cache) empty: the cold build.
+                            cold = t
                     if failed is not None:
                         row["status"] = f"unmeasured: the build failed: {failed}"
                         builds[(lang, label, name)] = {"status": row["status"]}
                         rows.append(row)
                         continue
                     row["build"] = spread(times)
+                    row["build_cold_ms"] = round(cold * 1000, 1)
                     row["build_command"] = " ".join(
                         Path(a).name if "/" in a else a for a in cmd)
                     builds[(lang, label, name)] = {"build": row["build"],
+                                                   "build_cold_ms": row["build_cold_ms"],
                                                    "build_command": row["build_command"]}
                 runc = run(srcs, name) + extra
                 exe_path = Path(runc[0])
@@ -597,11 +636,12 @@ def render(record):
         if "load_before" in w:
             lines += [f"Load average (1, 5, 15 min): {w['load_before']} before, "
                       f"{w['load_after']} after.", ""]
-        lines += ["| language | variant | checks | LOC | run median (ms) | run min–max (ms) | "
-                  + ("speed-up over W=1 | " if parallel else "")
-                  + "peak RSS (KiB) | binary (KiB) | build median (ms) | status |",
-                  "| --- | --- | --- | ---: | ---: | ---: | " + ("---: | " if parallel else "")
-                  + "---: | ---: | ---: | --- |"]
+        lines += ["| language | variant | checks | LOC | chars | run median (ms) | σ (ms) | "
+                  "run min–max (ms) | " + ("speed-up over W=1 | " if parallel else "")
+                  + "peak RSS (KiB) | binary (KiB) | build cold (ms) | build warm, median (ms) | "
+                  "status |",
+                  "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | "
+                  + ("---: | " if parallel else "") + "---: | ---: | ---: | ---: | --- |"]
         for r in w["rows"]:
             run = r.get("run")
             build = r.get("build")
@@ -611,10 +651,12 @@ def render(record):
             built = f"{build['median_ms']:.0f}" if build else DASH
             gain = (f"{r['speedup']:.2f}× | " if r.get("speedup") else f"{DASH} | ") \
                 if parallel else ""
+            sd = f"{run['stdev_ms']:.1f}" if run else DASH
+            cold = f"{r['build_cold_ms']:.0f}" if r.get("build_cold_ms") else DASH
             lines.append(
                 f"| {r['language']} | {r['variant']} | {r.get('safety', DASH)} | "
-                f"{r.get('loc', DASH)} | {median} | "
-                f"{span} | {gain}{r.get('peak_rss_kib') or DASH} | {size} | {built} | "
+                f"{r.get('loc', DASH)} | {r.get('chars', DASH)} | {median} | {sd} | "
+                f"{span} | {gain}{r.get('peak_rss_kib') or DASH} | {size} | {cold} | {built} | "
                 f"{r['status']} |")
         lines.append("")
     lines += ["Toolchains:", ""]

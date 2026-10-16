@@ -459,3 +459,8 @@ why = "one run of `bench/complexity/measure.py` (programs from `bench/complexity
 heading = "Preemption's cost on hot loops, measured (performance leadership 6.3, 2026-10-17)"
 status = "dated"
 why = "`bench/compare/preempt_cost.sh` over release builds of a4ac8e9f and e9d9fa40 on this Mac, the moved pairs re-run on their own below load 2 in both orders; a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "Eighteen languages on every parameter the comparison measures, measured (2026-10-17)"
+status = "dated"
+why = "one run of `bench/compare/compare.py --runs 10` on this Mac, begun at load 1.96 with no cargo, rustc or nextest running, and COBOL's fib timed by hand after its exit status was fixed; a record of that date and machine — the script reproduces the method, not these numbers"
