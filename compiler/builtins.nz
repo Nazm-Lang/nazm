@@ -226,7 +226,7 @@ pub fn bi_rows() -> Strs {
 // The checker's identity's fields (`CheckerIdentity::at_epoch`), framed in order.
 pub fn bi_identity() -> Strs {
     let s = strs_new();
-    strs_push(s, "89");
+    strs_push(s, "90");
     strs_push(s, "0.10.0");
     strs_push(s, "nazm.interface/13");
     strs_push(s, "nazm.check/5");

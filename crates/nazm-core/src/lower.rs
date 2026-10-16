@@ -569,6 +569,18 @@ impl<'a> Lower<'a> {
                 let tail = match (ends, &b.tail) {
                     (Ends::Transfers, _) => None,
                     (Ends::FallsThrough, Some(t)) => Some(Box::new(self.expr(t)?)),
+                    // `{}` where a `Map[K, V]` is expected (R1.5, D5): the empty map, the call
+                    // `hashmap_new()` the checker read at the braces.
+                    (Ends::FallsThrough, None) if self.res.named_method(b.span) => {
+                        Some(Box::new(self.expr(&AstExpr::Call {
+                            qualifier: None,
+                            callee: "hashmap_new".to_owned(),
+                            callee_span: b.span,
+                            type_args: None,
+                            args: Vec::new(),
+                            span: b.span,
+                        })?))
+                    }
                     (Ends::FallsThrough, None) => {
                         return defect(
                             b.span,
