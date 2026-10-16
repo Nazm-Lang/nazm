@@ -38,11 +38,7 @@ pub(crate) fn run() -> ExitCode {
     if linkable {
         rows.push(link());
     }
-    rows.push(present(
-        "ar",
-        &["--version"],
-        "`nazm build --library` (a static archive)",
-    ));
+    // No `ar`: nazm writes its static archives itself (`crate::archive`).
     if os == "macos" {
         rows.push(present(
             "dsymutil",
