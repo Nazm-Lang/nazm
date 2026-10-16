@@ -559,6 +559,19 @@
       `canonicalize` might accept); a path that is not a directory is refused with the
       reference's words. Compared by hand with `nazm check --source-root` on a root above the
       module, its parent's parent, one that does not exist and one the module is not under
-- [ ] 7.3 Loading from editor buffers (text overlays), for `lsp`'s unsaved documents
-- [ ] 7.4 A public way to show any type (`lsp` hover)
-- [ ] 7.5 A declaration index for names that are not local (`lsp` definition)
+- [x] 7.3 Loading from editor buffers, for `lsp`'s unsaved documents: `fx_check_over` (and
+      `ld_load_over`) take paths and texts that stand for those files, read, found by imports
+      and parsed instead of the disk's (a standard module is always the library's); `ld_load`
+      is the same with none
+- [x] 7.4 Any type shown as messages show it (`ck_show`, `fx_show`), and the type of the
+      binding a name at a place is (`fx_binding_type_at`), for `lsp` hover
+- [x] 7.5 Where a name that is no local is declared (`fx_declaration_at`, for `lsp`
+      definition): a function called or used as a value, a record built, an enum's variant
+      named — its declaration's module and name span; the declarations' name spans are public
+      (`ck_fn_name_start`, `ck_record_name_start`, `ck_enum_name_start`, `ck_trait_name_start`
+      and their ends). A type written in a signature is not recorded by place, so not yet.
+      7.3–7.5 tried by hand on two unsaved modules (an import, a call, a construction, a
+      binding's type). `run.sh` after them: core 3,153 agree, 0 differ; of 93,807 functions the
+      lowering carries every one, all agree; the other parts 10,992, all agree; 1,832 whole
+      documents, all the reference's bytes; check 3,151 agree, 2 differ (carried 3,147, all
+      agree), render likewise, facts 3,147 agree, 6 differ (carried 3,147, all agree)

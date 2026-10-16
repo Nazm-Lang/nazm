@@ -73,22 +73,28 @@ fn give_up(f: Facts, why: Str) -> Facts {
 // `main`), the standard modules and the core prelude read from `library`, `@cfg` asked of `os`
 // and `arch` as Rust's `std::env::consts` names them ("" for unknown: a condition on either then
 // stops the checker).
-pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", library, os, arch, true, io) }
+pub fn fx_check(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, true, io) }
 
 // The same, with the source root given (`check --source-root`, `root::decide`'s `given`): "" to
 // decide it as `fx_check` does.
 pub fn fx_check_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
-    check_as(path, source_root, library, os, arch, true, io)
+    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, true, io)
+}
+
+// The same, where the files at `paths` have the texts `texts` instead of what is on disk: the
+// language server's documents not yet saved (`lsp`). A standard module is always the library's.
+pub fn fx_check_over(path: Str, source_root: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
+    check_as(path, source_root, paths, texts, library, os, arch, true, io)
 }
 
 // The same compilation as a module (`Entry::Absent`), as `nazm doc` checks one: whether anything
 // can run is not asked, so a root without `main` is no error.
-pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", library, os, arch, false, io) }
+pub fn fx_check_module(path: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts { check_as(path, "", strs_new(), strs_new(), library, os, arch, false, io) }
 pub fn fx_check_module_in(path: Str, source_root: Str, library: Str, os: Str, arch: Str, io: IoCap) -> Facts {
-    check_as(path, source_root, library, os, arch, false, io)
+    check_as(path, source_root, strs_new(), strs_new(), library, os, arch, false, io)
 }
 
-fn check_as(path: Str, given: Str, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
+fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: Str, arch: Str, program: Bool, io: IoCap) -> Facts {
     let f = facts_new();
     let d = f.d;
     // The source root, as `root::decide` finds it: the first manifest upward whose source root holds
@@ -118,7 +124,7 @@ fn check_as(path: Str, given: Str, library: Str, os: Str, arch: Str, program: Bo
             return give_up(f, str_concat("the loader stops at ", why));
         }
     }
-    let loaded = ld_load(path, library, source_root, packages, d, io);
+    let loaded = ld_load_over(path, library, source_root, packages, paths, texts, d, io);
     let mut i = 0;
     while i < ld_count(loaded) {
         strs_push(f.names, ld_name(loaded, i));
@@ -285,6 +291,54 @@ pub fn fx_fn_identity(f: Facts, i: Int) -> Str { definition(f, ck_fn_module(f.c,
 pub fn fx_record_identity(f: Facts, r: Int) -> Str { definition(f, ck_record_module(f.c, r), "record", ck_record_name(f.c, r)) }
 pub fn fx_enum_identity(f: Facts, e: Int) -> Str { definition(f, ck_enum_module(f.c, e), "enum", ck_enum_name(f.c, e)) }
 pub fn fx_trait_identity(f: Facts, t: Int) -> Str { definition(f, ck_trait_module(f.c, t), "trait", ck_trait_name(f.c, t)) }
+
+// Any type as messages show it (`lsp` hover); the type of the binding the name written at
+// `start..end` of module `m` (local offsets) is, or -1.
+pub fn fx_show(f: Facts, t: Int) -> Str { ck_show(f.c, t) }
+pub fn fx_binding_type_at(f: Facts, m: Int, start: Int, end: Int) -> Int {
+    let base = fx_module_base(f, m);
+    let b = ck_binding_at(f.c, start + base, end + base);
+    if b < 0 { return 0 - 1; }
+    ck_binding_ty(f.c, b)
+}
+
+// Where what the name written at `start..end` of module `m` (local offsets) refers to is declared
+// (`lsp` definition), for a name that is no local: a function called or used as a value, a
+// record built or an enum's variant named, by its declaration's name. Three `Ints`: the module,
+// and the name's start and end, local to it; empty where the checker recorded nothing there.
+pub fn fx_declaration_at(f: Facts, m: Int, start: Int, end: Int) -> Ints {
+    let c = f.c;
+    let base = fx_module_base(f, m);
+    let s = start + base;
+    let e = end + base;
+    let out = ints_new();
+    let mut g = 0 - 1;
+    let site = ck_site_at(c, s, e);
+    if site >= 0 { g = ck_site_fn(c, site); }
+    if g < 0 {
+        let v = ck_fn_value_at(c, s, e);
+        if v >= 0 { g = ck_fn_value_fn(c, v); }
+    }
+    if g >= 0 { return declared_in(f, ck_fn_module(c, g), ck_fn_name_start(c, g), ck_fn_name_end(c, g)); }
+    let rt = ck_construction_at(c, s, e);
+    let mut r = 0 - 1;
+    if rt >= 0 { r = ck_type_record(c, rt); }
+    if r >= 0 { return declared_in(f, ck_record_module(c, r), ck_record_name_start(c, r), ck_record_name_end(c, r)); }
+    let et = ck_variant_at(c, s, e);
+    let mut en = 0 - 1;
+    if et >= 0 { en = ck_type_enum(c, et); }
+    if en >= 0 { return declared_in(f, ck_enum_module(c, en), ck_enum_name_start(c, en), ck_enum_name_end(c, en)); }
+    out
+}
+
+fn declared_in(f: Facts, m: Int, s: Int, e: Int) -> Ints {
+    let out = ints_new();
+    if m < 0 || s <= 0 && e <= 0 { return out; }
+    ints_push(out, m);
+    ints_push(out, s - fx_module_base(f, m));
+    ints_push(out, e - fx_module_base(f, m));
+    out
+}
 
 // A tree span's ends, local to its module's text.
 pub fn fx_start(f: Facts, span: Int) -> Int { sx_s(f.t, span) }
