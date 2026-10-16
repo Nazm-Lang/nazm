@@ -1667,3 +1667,25 @@ its Debug Probe and an ESP32-C3-DevKitM-1; probe-rs on the Mac host; Float64 ref
 - **Windows (SChannel) is C1's next step**; until it lands a Windows build reaching TLS is refused
   by name, `N0830`, the code C.7 reserved.
 
+## Decisions during C1b (2026-10-16, delegated)
+
+- **SChannel through SSPI, over buffers**, as OpenSSL is: `InitializeSecurityContextA` and
+  `AcceptSecurityContext` over what was pushed, `DecryptMessage` and `EncryptMessage` per record,
+  `ApplyControlToken(SCHANNEL_SHUTDOWN)` for the close. Reached through MinGW-w64's `libsecur32`,
+  `libcrypt32` and `libncrypt`; nothing of Microsoft's SDK, no licence accepted.
+- **Trust as on macOS:** the client asks for manual validation and the unit judges the chain itself —
+  `CertGetCertificateChain` against the user's roots, or an engine whose only roots are the named
+  anchors (`hExclusiveRoot`), no URL fetched — then `CertVerifyCertificateChainPolicy`'s SSL policy
+  for the host. `CERT_E_EXPIRED`, `CERT_E_CN_NO_MATCH` and the rest map to the same statuses.
+- **A server's key is persisted for its configuration's life.** SChannel runs in LSASS and cannot use
+  an ephemeral key, so the PKCS #8 key is imported into the user's key storage provider under a
+  name of the process's own and deleted when the configuration goes; a process that dies leaves
+  that key behind. Only PKCS #8 (`PRIVATE KEY`) PEM is read on Windows. A server sends its leaf
+  alone; intermediates come from the Windows store.
+- **TLS 1.2 on Windows** (`SCHANNEL_CRED` has no TLS 1.3; `SCH_CREDENTIALS` is Windows 11's), the
+  version the copyright holder's Windows 10 host speaks. A renegotiation is a protocol failure.
+- **Bound only once run.** The unit is compiled and linked on this Mac but the Windows host was
+  unreachable, so `emit_tls` does not give it to Windows yet and `N0830` stands; the ignored
+  `the_windows_engine_runs_on_a_windows_host` is the run that lifts it. No runtime contract moved:
+  no ABI or epoch bump.
+

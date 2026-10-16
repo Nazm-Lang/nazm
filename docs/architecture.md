@@ -9421,7 +9421,8 @@ the eleven `os_tls_*` built-ins and nothing else.
   the platform's library: OpenSSL 3 over two memory BIOs per session on macOS and Linux, with a
   macOS client's chain and name judged by `SecTrustEvaluateWithError` through OpenSSL's
   certificate-verify callback, and Linux's by OpenSSL with `SSL_set1_host`. A target without a unit
-  (Windows until SChannel, Android) is refused by `nazm build`, `N0830`; a freestanding target names
+  (Windows, whose SChannel unit `tls::emit_schannel` is compiled and linked but has not run on a
+  Windows host; Android) is refused by `nazm build`, `N0830`; a freestanding target names
   the part among what it cannot give, as for networking.
 - **No wait inside.** No entry reads or writes a socket. `@std/tls` moves ciphertext through the
   parking `os_read` and `os_write` (§ *Networking*'s waits), so a task waiting for its peer parks.

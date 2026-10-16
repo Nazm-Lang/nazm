@@ -96,6 +96,11 @@ pub(super) fn link_args(target: &Target) -> Result<Vec<String>, String> {
             args.extend(["-l:libssl.so.3".to_owned(), "-l:libcrypto.so.3".to_owned()]);
             Ok(args)
         }
+        // SChannel (C1b), through MinGW-w64's import libraries. Reached only once the target has
+        // the binding; until then the build is refused before anything is linked (`N0830`).
+        Os::Windows => Ok(["-lsecur32", "-lcrypt32", "-lncrypt"]
+            .map(str::to_owned)
+            .to_vec()),
         _ => Err(format!("TLS has no binding for `{}`", target.triple)),
     }
 }
@@ -121,8 +126,8 @@ mod tests {
 
     #[test]
     fn a_target_without_a_binding_is_refused_by_name() {
-        let t = Target::parse("x86_64-pc-windows-gnu").unwrap_or_else(|e| panic!("{e}"));
+        let t = Target::parse("aarch64-linux-android").unwrap_or_else(|e| panic!("{e}"));
         let why = link_args(&t).unwrap_err();
-        assert!(why.contains("x86_64-pc-windows-gnu"), "{why}");
+        assert!(why.contains("aarch64-linux-android"), "{why}");
     }
 }

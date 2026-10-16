@@ -9,7 +9,9 @@
 - [ ] 1.1 C gate: a TLS HTTP service under load, in a container and on WASI
   - [ ] C1 the `tls` runtime part and `@std/tls`
     - [x] C1a OpenSSL 3 over memory BIOs on macOS (trust by `SecTrust`) and Linux, `@std/tls`, `@std/http` over TLS (2026-10-16; `spec.md`, *TLS*; `crates/nazm-cli/tests/tls.rs`; mutants `c1-*`; runtime ABI 37, epoch 89, `N0830`)
-    - [ ] C1b SChannel on Windows (MinGW-w64's `libsecur32`, `libcrypt32`), checked statically on the Mac and run on the Windows host
+    - [ ] C1b SChannel on Windows (MinGW-w64's `libsecur32`, `libcrypt32`, `libncrypt`), checked statically on the Mac and run on the Windows host
+      - [x] the unit written, compiled for `x86_64-pc-windows-gnu` and linked with MinGW-w64 against the import libraries alone (2026-10-16; `tls::emit_schannel`; `tests/tls.rs`; mutants `c1b-*`)
+      - [ ] run on the Windows host (`the_windows_engine_runs_on_a_windows_host`, ignored until `win-dell` answers), then `emit_tls` gives Windows the unit and `N0830` is lifted there
     - [ ] C1c the Linux unit run-verified on Linux (exercised so far on macOS against Homebrew's OpenSSL through the runtime's entries)
     - open: the interpreter refuses TLS (it calls no C); a helper-process engine would bring it to the interpreter
   - [x] C2 `@std/http` HTTP/1.1 server, client and router over plain TCP (2026-10-16; `spec.md`, *HTTP*; `crates/nazm-cli/tests/http.rs`; mutants `c2-*`)
