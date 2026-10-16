@@ -127,11 +127,27 @@ const POLL_MS: Int = 25
 const POLL_MAX_MS: Int = 400
 
 /// Whether a task waiting on socket `k` waits on without trying: its next poll has not come.
+/// A connection made since the task last tried means try now: it may be the one it waits for.
 fn polling(vm: Vm, k: Int, time: TimeCap) -> Bool {
-    if k == 0 || ints_get(vm.st, ST_IOWAIT) == 0 { return false }
+    let seen = ints_get(vm.st, ST_SEEN)
+    let made = ints_get(vm.heap.sched, SC_CONNECTS)
+    ints_set(vm.st, ST_SEEN, made)
+    if k == 0 || ints_get(vm.st, ST_IOWAIT) == 0 || seen != made { return false }
     if time_now_ms() >= ints_get(vm.st, ST_DEADLINE) { return false }
     ints_set(vm.st, ST_BLOCKED, 1)
     true
+}
+
+/// After a connection made or bytes written on socket `k`: the task gives way, and a task waiting
+/// on a socket tries again at once - on the Rust interpreter the task at the other end runs on a
+/// thread of its own and takes them as they come, so it accepts a connection before this task can
+/// close the listener, and reads each answer as it is written rather than all of them at once.
+fn woke(vm: Vm, k: Int) {
+    let h = vm.heap
+    if k > 0 && ints_get(h.sched, SC_LIVE) > 1 {
+        ints_set(h.sched, SC_CONNECTS, ints_get(h.sched, SC_CONNECTS) + 1)
+        ints_set(vm.st, ST_GIVEWAY, 1)
+    }
 }
 
 /// An OS built-in on the top `n` operands.
@@ -155,7 +171,12 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         return V.Int(v: r)
     }
     if op == B_OS_READ_LINE { return V.Int(v: os_read_line(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
-    if op == B_OS_WRITE { return V.Int(v: os_write(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
+    if op == B_OS_WRITE {
+        let f = argo(vm, n, 0)
+        let r = os_write(h_of(io, f), b_of(argo(vm, n, 1)))
+        if r > 0 { woke(vm, sock_of(f)) }
+        return V.Int(v: r)
+    }
     if op == B_OS_SEEK { return V.Int(v: os_seek(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)), i_of(argo(vm, n, 2)))) }
     if op == B_OS_SYNC { return V.Int(v: os_sync(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_CLOSE { return V.Int(v: os_close(h_of(io, argo(vm, n, 0)))) }
@@ -244,7 +265,13 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         if sock_of(l) > 0 && waits(vm, sock_of(l), os_status(c), time) { return V.Unset }
         return socket(h, c)
     }
-    if op == B_OS_TCP_CONNECT { return socket(h, os_tcp_connect(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_TCP_CONNECT {
+        // A connection made gives way: on the Rust interpreter the task accepting it runs on a
+        // thread of its own and takes it at once, before this task can go on to close the listener.
+        let c = socket(h, os_tcp_connect(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1))))
+        woke(vm, sock_of(c))
+        return c
+    }
     if op == B_OS_UDP_BIND { return socket(h, os_udp_bind(s_of(argo(vm, n, 0)))) }
     if op == B_OS_UDP_SEND_TO { return V.Int(v: os_udp_send_to(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)), s_of(argo(vm, n, 2)))) }
     if op == B_OS_UDP_RECV_FROM {

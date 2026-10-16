@@ -1,0 +1,83 @@
+// crates/nazm-cli/tests/http.rs, a_server_and_a_client_talk_over_loopback_alike_everywhere: an
+// HTTP exchange over loopback, whose memory report agrees with the Rust interpreter's (design.md,
+// D10, *A connection made or bytes written give way*).
+use "@std/ioerror";
+use "@std/net";
+use "@std/http";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, str_from_byte(10))) }
+// `|` is CRLF, `~` a bare LF, `^` a bare CR, a backtick a NUL byte.
+fn wire(s: Str) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 124 { strs_push(parts, str_concat(str_from_byte(13), str_from_byte(10))); } else {
+            if b == 126 { strs_push(parts, str_from_byte(10)); } else {
+                if b == 94 { strs_push(parts, str_from_byte(13)); } else {
+                    if b == 96 { strs_push(parts, str_from_byte(0)); } else { strs_push(parts, str_from_byte(b)); }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+fn hello(r: Request) -> Response ! {} {
+http_text(200, str_concat(str_concat(r.method, " "), str_concat(str_concat(match http_param(r, "name") { Option.Some(value: n) => n, Option.None() => "?", }, " "), r.body)))
+}
+fn routes() -> fn(Request) -> Response ! { io } ! {} {
+http_router_handler(http_router_post(http_router_get(http_router(), "/hello/{name}", hello), "/echo/{name}", hello))
+}
+fn shown(r: Result[Response, HttpError]) -> Str {
+match r {
+Result.Ok(value: x) => str_concat(str_concat(int_to_str(x.status), " "), x.body),
+Result.Err(error: e) => str_concat("ERR ", http_error_show(e)),
+}
+}
+fn quick() -> ServeOptions {
+let d = http_serve_options();
+ServeOptions(max_head: d.max_head, max_headers: d.max_headers, max_target: d.max_target, max_body: d.max_body, head_timeout_ms: 300, idle_timeout_ms: 2000, body_timeout_ms: 300, write_timeout_ms: 2000, max_requests: d.max_requests, max_connections: d.max_connections)
+}
+fn client(net: NetCap, s: HttpServer, lines: Chan[Str]) -> Int ! { io } {
+let base = str_concat("http://", http_server_addr(s));
+let o = http_client_options();
+chan_send_of(lines, shown(http_get(net, str_concat(base, "/hello/world"), o)));
+chan_send_of(lines, shown(http_fetch(net, "POST", str_concat(base, "/echo/x"), "payload", o)));
+chan_send_of(lines, shown(http_get(net, str_concat(base, "/nowhere"), o)));
+chan_send_of(lines, shown(http_fetch(net, "DELETE", str_concat(base, "/hello/a"), "", o)));
+chan_send_of(lines, shown(http_get(net, "https://127.0.0.1:1/", o)));
+match http_connect(net, base, o) {
+Result.Ok(value: c) => {
+chan_send_of(lines, shown(http_send(c, http_request("GET", "/hello/one", ""))));
+chan_send_of(lines, shown(http_send(c, http_request("POST", "/echo/two", "2"))));
+chan_send_of(lines, shown(http_send(c, http_request("HEAD", "/hello/three", ""))));
+chan_send_of(lines, shown(http_send(c, http_request("GET", "/hello/four", ""))));
+http_close(c);
+},
+Result.Err(error: e) => { chan_send_of(lines, http_error_show(e)); },
+};
+http_drain(s);
+chan_close_of(lines)
+}
+fn main(net: NetCap, t: SpawnCap, out: OutCap) -> Int ! { io, spawn } {
+match http_listen(net, "127.0.0.1:0", quick()) {
+Result.Ok(value: s) => {
+let lines = chan_new_of[Str](64);
+let h = routes();
+let mut stats = "";
+scope {
+spawn client(net, s, lines);
+match http_serve(t, s, h) {
+Result.Ok(value: st) => { stats = str_concat(str_concat(int_to_str(st.requests), " requests on "), int_to_str(st.connections)); },
+Result.Err(error: e) => { stats = io_error_show(e); },
+};
+}
+let got = vec_new[Str]();
+while chan_recv_of(lines, got) { line(out, vec_pop(got)); }
+line(out, stats);
+line(out, if http_draining(s) { "drained" } else { "still open" });
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

@@ -54,3 +54,6 @@
       agree)
 - [x] 7.2 Coverage: the programs that do not check sorted (design.md, *The Rust tests' programs*);
       programs of several modules and `\xNN` escapes carried by `tests/rust-tests.pl`
+- [x] 7.3 The networked allocation counts: a connection made or bytes written give way (D10); the
+      three networked programs of `http.rs` are cases; the compiled tiers' `atomic_new` counted as
+      a string reported (design.md, *Allocation counts in networked programs*)
