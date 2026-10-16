@@ -165,6 +165,17 @@ pub fn bi_rows() -> Strs {
     strs_push(s, "os_local_addr|OsHandle|Str|0||0|io|||derive|none");
     strs_push(s, "os_peer_addr|OsHandle|Str|0||0|io|||source:file|none");
     strs_push(s, "os_resolve|Str,Int,Bytes|Int|0||0|io|NetCap||source:file|fill:2");
+    strs_push(s, "os_tls_client_config|Bytes,Bytes|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_server_config|Bytes,Bytes,Bytes|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_connect|Int,Str|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_accept|Int|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_handshake|Int|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_push|Int,Bytes|Int|0||0|io|||derive|none");
+    strs_push(s, "os_tls_pull|Int,Bytes|Int|0||0|io|||source:file|fill:1");
+    strs_push(s, "os_tls_read|Int,Bytes|Int|0||0|io|||source:file|fill:1");
+    strs_push(s, "os_tls_write|Int,Bytes|Int|0||0|io||1:file-data|derive|none");
+    strs_push(s, "os_tls_close|Int,Bytes|Int|0||0|io|||source:file|fill:1");
+    strs_push(s, "os_tls_info|Int,Int,Bytes|Int|0||0|io|||source:file|fill:2");
     strs_push(s, "os_env_get|Str|Str|0||0|io|IoCap||source:argument|none");
     strs_push(s, "os_env_has|Str|Bool|0||0|io|IoCap||source:argument|none");
     strs_push(s, "os_env_count||Int|0||0|io|IoCap||source:argument|none");
