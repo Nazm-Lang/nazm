@@ -78,13 +78,13 @@ fn everything() -> Needs {
     Needs(
         tasks: true, channels: true, sequences: true, io: true, join: true, strings: true,
         shims: true, stack: true, closures: true, foreign: true, numbers: true, files: true,
-        net: true, wide: true, single: false,
+        net: true, wide: true, tls: true, single: false,
     )
 }
 
 /// The runtime as text, hashed (`digest`): its ABI revision as four little-endian bytes, the
 /// whole runtime, the platform entry, the counted heap, every target's switch, `errno`, `os`,
-/// stack and start-up units, and each inventory entry as Rust's `Debug` writes it.
+/// stack, start-up and TLS engine units, and each inventory entry as Rust's `Debug` writes it.
 pub fn runtime_digest() -> Str ! {} {
     let parts = strs_new()
     let r = rt_abi_revision()
@@ -99,6 +99,7 @@ pub fn runtime_digest() -> Str ! {} {
         strs_push(parts, emit_os(t))
         strs_push(parts, emit_stack(t))
         strs_push(parts, emit_init(t))
+        strs_push(parts, emit_tls(t))
     }
     for line in text_lines(rt_inventory_debug()) { strs_push(parts, line) }
     blake3_hex(bytes_from_str(str_join(parts, "")))
