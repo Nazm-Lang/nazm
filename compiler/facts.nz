@@ -27,6 +27,8 @@ use "load.nz";
 use "sema.nz";
 use "configure.nz";
 use "package.nz";
+use "builtins.nz";
+use "@std/blake3";
 
 pub struct Facts {
     // Why the front end did not carry the compilation, as the driver says it ("the checker stops
@@ -214,6 +216,9 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
 // — whether it fails (`fx_failed`), with which diagnostics, and what it defines. A compilation the
 // reference refuses without a diagnostic of a module is carried, and fails.
 pub fn fx_carried(f: Facts) -> Bool { strs_get(f.why, 0) == "" }
+
+// Whether every module was loaded (no loading error): what the checker then reads.
+pub fn fx_loaded(f: Facts) -> Bool { ints_len(f.programs) == strs_len(f.names) && ints_len(f.programs) > 0 }
 
 // Why it did not; "" where it did.
 pub fn fx_why(f: Facts) -> Str { strs_get(f.why, 0) }
@@ -459,4 +464,165 @@ fn split_commas(s: Str) -> Strs {
         i = i + 1;
     }
     out
+}
+
+// --- the cache's keys (`nazm-cache`; R2, design D28) ------------------------------------------------
+
+// `fields` framed as `Framed` frames them (`digest.rs`): each `len:value`, the domain first; its
+// BLAKE3, in hexadecimal.
+pub fn fx_framed(domain: Str, fields: Strs) -> Str {
+    let out = strs_new();
+    strs_push(out, int_to_str(str_len(domain)));
+    strs_push(out, ":");
+    strs_push(out, domain);
+    let mut i = 0;
+    while i < strs_len(fields) {
+        let v = strs_get(fields, i);
+        strs_push(out, int_to_str(str_len(v)));
+        strs_push(out, ":");
+        strs_push(out, v);
+        i = i + 1;
+    }
+    blake3_hex(bytes_from_str(str_join(out, "")))
+}
+
+// The checker's identity (`CheckerIdentity::current`), from its fields as the reference generates
+// them into `builtins.nz`.
+pub fn fx_checker_identity() -> Str { fx_framed("nazm.checker/1", bi_identity()) }
+
+// The host's configuration line (`BuildConfig::host().describe()`).
+fn host_describe(os: Str, arch: Str) -> Str {
+    let mut target = str_concat(str_concat(arch, "-unknown-"), os);
+    if os == "macos" { target = str_concat(arch, "-apple-darwin"); }
+    if os == "linux" { target = str_concat(arch, "-unknown-linux-gnu"); }
+    if os == "windows" && arch == "x86_64" { target = "x86_64-pc-windows-gnu"; }
+    str_concat(str_concat(str_concat(str_concat("os=", os), str_concat(";arch=", arch)), str_concat(";target=", target)), ";features=;packages=;profiles=")
+}
+
+fn has_text(s: Str, part: Str) -> Bool {
+    let n = str_len(part);
+    let mut i = 0;
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// Module `m`'s source fingerprint (`SourceFingerprint`): its text as the compilation holds it,
+// with the configuration where it writes `@cfg`.
+pub fn fx_source_fingerprint(f: Facts, m: Int, os: Str, arch: Str) -> Str {
+    let mut text = fx_module_text(f, m);
+    if has_text(text, "@cfg") { text = str_concat(str_concat(text, str_concat(str_from_byte(0), "@cfg ")), host_describe(os, arch)); }
+    let fields = strs_new();
+    strs_push(fields, text);
+    fx_framed("nazm.source/1", fields)
+}
+
+// Each module's key, source fingerprint, published interface, its hash and its check key, as
+// the reference's cache computes them (`checking.rs`'s `plan`), one line each — what `run.sh
+// keys` compares.
+pub fn fx_keys(f: Facts, os: Str, arch: Str) -> Str {
+    let c = f.c;
+    let checker = fx_checker_identity();
+    let out = strs_new();
+    strs_push(out, str_concat(str_concat("checker ", checker), "\n"));
+    let keys = strs_new();
+    let hashes = strs_new();
+    let sources = strs_new();
+    let jsons = strs_new();
+    let mut m = 0;
+    while m < fx_modules(f) {
+        strs_push(keys, fx_module_key(f, m));
+        m = m + 1;
+    }
+    m = 0;
+    while m < fx_modules(f) {
+        strs_push(sources, fx_source_fingerprint(f, m, os, arch));
+        let json = ck_interface_json(c, m, keys);
+        strs_push(jsons, json);
+        if json == "" { strs_push(hashes, ""); } else { strs_push(hashes, blake3_hex(bytes_from_str(json))); }
+        m = m + 1;
+    }
+    m = 0;
+    while m < fx_modules(f) {
+        let key = strs_get(keys, m);
+        let mut shown = key;
+        if shown == "" { shown = "-"; }
+        strs_push(out, str_concat(str_concat("module ", shown), "\n"));
+        strs_push(out, str_concat(str_concat("source ", strs_get(sources, m)), "\n"));
+        let mut json = strs_get(jsons, m);
+        if json == "" { json = "-"; }
+        strs_push(out, str_concat(str_concat("interface ", json), "\n"));
+        let mut hash = strs_get(hashes, m);
+        if hash == "" { hash = "-"; }
+        strs_push(out, str_concat(str_concat("hash ", hash), "\n"));
+        strs_push(out, str_concat(str_concat("key ", fx_check_key(f, m, checker, keys, sources, hashes)), "\n"));
+        m = m + 1;
+    }
+    str_join(out, "")
+}
+
+// Module `m`'s check key (`CheckKey::of`): the checker, its key, its source, and each direct
+// import's key and interface hash, sorted and once each; "-" where any is missing.
+fn fx_check_key(f: Facts, m: Int, checker: Str, keys: Strs, sources: Strs, hashes: Strs) -> Str {
+    let key = strs_get(keys, m);
+    if key == "" { return "-"; }
+    let pairs = strs_new();
+    let mut k = 0;
+    while k < ck_module_deps(f.c, m) {
+        let d = ck_module_dep(f.c, m, k);
+        if strs_get(keys, d) == "" || strs_get(hashes, d) == "" { return "-"; }
+        strs_push(pairs, str_concat(str_concat(strs_get(keys, d), str_from_byte(1)), strs_get(hashes, d)));
+        k = k + 1;
+    }
+    // Sorted and deduplicated, by module key then interface (`Dependency`'s order).
+    let sorted = strs_new();
+    k = 0;
+    while k < strs_len(pairs) {
+        let p = strs_get(pairs, k);
+        let mut at = strs_len(sorted);
+        while at > 0 && str_less(p, strs_get(sorted, at - 1)) { at = at - 1; }
+        let dup = at > 0 && strs_get(sorted, at - 1) == p;
+        if dup == false {
+            strs_push(sorted, "");
+            let mut j = strs_len(sorted) - 1;
+            while j > at {
+                strs_set(sorted, j, strs_get(sorted, j - 1));
+                j = j - 1;
+            }
+            strs_set(sorted, at, p);
+        }
+        k = k + 1;
+    }
+    let fields = strs_new();
+    strs_push(fields, checker);
+    strs_push(fields, key);
+    strs_push(fields, strs_get(sources, m));
+    strs_push(fields, int_to_str(strs_len(sorted)));
+    k = 0;
+    while k < strs_len(sorted) {
+        let p = strs_get(sorted, k);
+        let cut = index_of_byte(p, 1);
+        strs_push(fields, str_slice(p, 0, cut));
+        strs_push(fields, str_slice(p, cut + 1, str_len(p)));
+        k = k + 1;
+    }
+    fx_framed("nazm.check-key/1", fields)
+}
+
+fn index_of_byte(s: Str, b: Int) -> Int {
+    let mut i = 0;
+    while i < str_len(s) && str_byte(s, i) != b { i = i + 1; }
+    i
+}
+
+// Whether `a` sorts before `b`, byte by byte.
+fn str_less(a: Str, b: Str) -> Bool {
+    let mut i = 0;
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i); }
+        i = i + 1;
+    }
+    str_len(a) < str_len(b)
 }

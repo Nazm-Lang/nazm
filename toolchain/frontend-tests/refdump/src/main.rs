@@ -162,7 +162,139 @@ fn builtins() -> String {
         ));
     }
     out.push_str("    s\n}\n");
+    // The checker's identity as `CheckerIdentity::at_epoch` frames it: its fields in order, numbers
+    // as their decimal text (R2, design D28). Generated, as the table above is.
+    let mut fields: Vec<String> = vec![
+        nazm_cache::SEMANTIC_EPOCH.to_string(),
+        "0.10.0".to_owned(),
+        nazm_iface::SCHEMA.to_owned(),
+        nazm_cache::SCHEMA.to_owned(),
+        Intrinsic::ALL.len().to_string(),
+    ];
+    for i in Intrinsic::ALL {
+        fields.push(i.name().to_owned());
+        fields.push(i.generics().to_string());
+        fields.push(i.params().len().to_string());
+        for p in i.params() {
+            fields.push(p.spelling().to_owned());
+        }
+        fields.push(i.ret().spelling().to_owned());
+    }
+    fields.push(nazm_sema::types::Type::ALL.len().to_string());
+    for t in nazm_sema::types::Type::ALL {
+        fields.push(t.builtin_name().unwrap_or("?").to_owned());
+    }
+    fields.push(nazm_cache::CHECKER_CODES.len().to_string());
+    for c in nazm_cache::CHECKER_CODES {
+        fields.push((*c).to_owned());
+    }
+    out.push_str("\n// The checker's identity's fields (`CheckerIdentity::at_epoch`), framed in order.\npub fn bi_identity() -> Strs {\n    let s = strs_new();\n");
+    for f in &fields {
+        out.push_str(&format!("    strs_push(s, \"{f}\");\n"));
+    }
+    out.push_str("    s\n}\n");
     out
+}
+
+/// Each module's durable key, source fingerprint, published interface, its hash and its check
+/// key, as `nazm check`'s cache computes them (`checking.rs`), under the host's configuration.
+struct Keys<'a> {
+    map: &'a nazm_span::SourceMap,
+    out: String,
+}
+
+impl nazm_core::Reuse for Keys<'_> {
+    fn plan(
+        &mut self,
+        graph: &nazm_core::sema::module::ModuleGraph,
+        interfaces: &[nazm_core::sema::interface::UnitInterface],
+        types: &nazm_core::sema::udt::UserTypes,
+    ) {
+        let checker = nazm_cache::CheckerIdentity::current();
+        self.out.push_str(&format!("checker {checker}\n"));
+        let mut rows = Vec::new();
+        for m in graph.ids() {
+            let source = graph.file(m).map(|f| {
+                let text = self.map.text(f);
+                if text.contains("@cfg") {
+                    let mut seen = text.as_bytes().to_vec();
+                    seen.extend_from_slice(b"\0@cfg ");
+                    seen.extend_from_slice(graph.config().describe().as_bytes());
+                    nazm_cache::SourceFingerprint::of(&seen)
+                } else {
+                    nazm_cache::SourceFingerprint::of(text.as_bytes())
+                }
+            });
+            let published = interfaces.get(m.index()).and_then(|i| {
+                nazm_iface::PersistentUnitInterface::published(i, graph, types).ok()
+            });
+            let interface = published
+                .as_ref()
+                .and_then(|p| nazm_iface::InterfaceHash::of(p).ok());
+            rows.push((graph.key(m).cloned(), source, published, interface));
+        }
+        for m in graph.ids() {
+            let Some((key, source, published, interface)) = rows.get(m.index()) else {
+                continue;
+            };
+            let deps: Option<Vec<nazm_cache::Dependency>> = graph
+                .imports(m)
+                .iter()
+                .map(|d| {
+                    let (k, _, _, i) = rows.get(d.on.index())?;
+                    Some(nazm_cache::Dependency {
+                        module: k.clone()?,
+                        interface: (*i)?,
+                    })
+                })
+                .collect();
+            let name = key.as_ref().map_or("-".to_owned(), |k| k.as_str().to_owned());
+            self.out.push_str(&format!("module {name}\n"));
+            let src = source.map_or("-".to_owned(), |s| s.to_string());
+            self.out.push_str(&format!("source {src}\n"));
+            let json = published
+                .as_ref()
+                .and_then(|p| p.to_json().ok())
+                .unwrap_or_else(|| "-".to_owned());
+            self.out.push_str(&format!("interface {json}\n"));
+            let hash = interface.map_or("-".to_owned(), |h| h.to_string());
+            self.out.push_str(&format!("hash {hash}\n"));
+            let check = match (key, source, deps) {
+                (Some(k), Some(s), Some(d)) => nazm_cache::CheckKey::of(checker, k, *s, &d).to_string(),
+                _ => "-".to_owned(),
+            };
+            self.out.push_str(&format!("key {check}\n"));
+        }
+    }
+
+    fn must_check(&self, _module: nazm_core::sema::module::ModuleId) -> bool {
+        true
+    }
+
+    fn checked_clean(
+        &mut self,
+        _module: nazm_core::sema::module::ModuleId,
+        _facts: &nazm_core::sema::provenance::ModuleFacts,
+        _res: &nazm_core::sema::Resolution,
+    ) {
+    }
+}
+
+fn keys(path: &str) -> String {
+    let path = std::path::Path::new(path);
+    let Ok(root) = nazm_service::root::decide(path, None) else {
+        return "refused\n".to_owned();
+    };
+    let Ok(mut loaded) = nazm_service::load::load(path, root.path()) else {
+        return "fails\n".to_owned();
+    };
+    loaded.graph = std::mem::take(&mut loaded.graph).with_config(nazm_core::sema::BuildConfig::host());
+    let mut k = Keys {
+        map: &loaded.map,
+        out: String::new(),
+    };
+    let _ = nazm_core::check_map_reusing_with_warnings(&loaded.map, &loaded.graph, &mut k);
+    k.out
 }
 
 fn main() {
@@ -175,6 +307,17 @@ fn main() {
         eprintln!("usage: refdump tokens|tree FILE");
         std::process::exit(2);
     };
+    if mode == "keys" {
+        let path = path.clone();
+        let out = std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(move || keys(&path))
+            .expect("spawn")
+            .join()
+            .expect("the check");
+        print!("{out}");
+        return;
+    }
     let text = std::fs::read_to_string(path).expect("read the source");
     let out = match mode.as_str() {
         "tokens" => {

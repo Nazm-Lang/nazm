@@ -623,3 +623,9 @@
       every one), render likewise, facts likewise; core 3,247 agree, 0 differ, every one of
       105,232 functions carried and agreeing, the other parts 11,370, all agree, 1,895 whole
       documents, all the reference's bytes. Nothing differs and nothing is stopped
+- [x] 7.9 The keys of the cache (D28): the published interface (`ck_interface_json`, a port of
+      `wire.rs`, `published` and its JSON), the identity of the checker (its fields generated into
+      `builtins.nz`), the source fingerprint and the check key (`fx_keys`), and `run.sh keys`
+      against the `keys` mode of the reference dumper. On 75895e00 (reference rebuilt at
+      5b132e5e, no Rust change since): keys 3,247 agree, 0 differ, for every module its key,
+      source fingerprint, interface, interface hash and check key; check 3,247 agree, 0 differ
