@@ -442,7 +442,7 @@ why = "hyperfine over release builds of two trees on one loaded host; a record o
 
 heading = "Concurrency: the baseline against Go's goroutines, measured (performance leadership 6.1, 2026-10-16)"
 status = "dated"
-why = "one run of `bench/compare/concurrency.sh --wait` on this Mac, begun at load 1.94 with no other agent's work running; a record of that date and machine — the script reproduces the method, not these numbers"
+why = "two runs of `bench/compare/concurrency.sh --wait` on this Mac, each begun below load 2 with no other agent's work running; a record of that date and machine — the script reproduces the method, not these numbers"
 
 [[claim]]
 heading = "R1.5 5.1: the comparison with safety-equivalent rows and a checks column, measured (2026-10-16)"
