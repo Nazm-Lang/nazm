@@ -34,8 +34,8 @@ No cell says just "supported".
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
 | `thumbv7m-none-eabi` | emulator-verified | unsupported | QEMU `mps2-an385`, Cortex-M3 (Gate 3) | not exercised |
-| `thumbv8m.main-none-eabihf` | compile-only | unsupported | nowhere yet: objects and a flash/RAM `link.ld` read back; the QEMU `mps2-an505` (Cortex-M33) leg is written, unrun (M1) | not exercised |
-| `riscv32imc-unknown-none-elf` | compile-only | unsupported | nowhere yet: objects and a flash/RAM `link.ld` read back where `clang` has a RISC-V code generator; the QEMU RISC-V `virt` leg (an RV32IMC hart) is written, unrun (M1) | not exercised |
+| `thumbv8m.main-none-eabihf` | emulator-verified | unsupported | QEMU `mps2-an505`, Cortex-M33 with its FPU (M1) | not exercised |
+| `riscv32imc-unknown-none-elf` | emulator-verified | unsupported | QEMU RISC-V `virt` with an RV32IMC hart (`lowrisc-ibex`), machine mode (M1) | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | Node.js's engine, the reference host | DWARF sections present; a debugger not exercised |
 | `wasm32-wasip1` | run-verified | unsupported | Node.js's `node:wasi`, preview 1, in the `nazm-wasm:n64` container (Gate 3) | DWARF sections present; a debugger not exercised |
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
