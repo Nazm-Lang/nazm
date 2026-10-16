@@ -20260,3 +20260,22 @@ file = "crates/nazm-runtime/src/tls.rs"
 find = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => None,'''
 replace = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => Some(OPENSSL.to_owned()),'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::a_target_without_a_tls_binding_refuses_the_build_by_name" }]
+
+# --- v1 track C, C1b: Windows' TLS engine, SChannel (2026-10-16) ------------------------------
+
+[[mutation]]
+name = "c1b-a-call-windows-does-not-have"
+why = "the SChannel unit decrypts through a function no Windows library exports, so a Windows program that reads TLS would not link"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''  %r = call i32 @DecryptMessage(ptr %ctx, ptr %desc, i32 0, ptr null)'''
+replace = '''  %r = call i32 @DecryptMessageW(ptr %ctx, ptr %desc, i32 0, ptr null)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::the_windows_engine_compiles_and_links_with_mingw" }]
+
+[[mutation]]
+name = "c1b-windows-is-bound-before-a-windows-host-ran-it"
+why = "Windows is given the SChannel unit while it has only been compiled and linked, so a Windows build reaching TLS is no longer refused (N0830) on no run's evidence"
+file = "crates/nazm-runtime/src/tls.rs"
+find = '''        SwitchTarget::X86_64Windows | SwitchTarget::Aarch64Android => None,'''
+replace = '''        SwitchTarget::X86_64Windows => Some(SCHANNEL.to_owned()),
+        SwitchTarget::Aarch64Android => None,'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "tls::the_windows_engine_compiles_and_links_with_mingw" }]

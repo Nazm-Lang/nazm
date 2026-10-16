@@ -644,3 +644,202 @@ fn a_target_without_a_tls_binding_refuses_the_build_by_name() {
     assert_ne!(r.code, Some(0));
     assert!(r.stderr.contains("TLS"), "{}", r.stderr);
 }
+
+// --- C1b: Windows' engine, SChannel ----------------------------------------------------------
+
+/// MinGW-w64's gcc, which links a Windows executable here.
+const MINGW_GCC: &str = "x86_64-w64-mingw32-gcc";
+
+fn tool_answers(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// The runtime's TLS text and an engine unit compiled for `triple` by clang, beside the driver
+/// `tests/tls/engine_drive.c` in `dir`: the objects' paths.
+fn engine_objects(dir: &Path, triple: &str, unit: &str) -> Vec<PathBuf> {
+    let mut objects = Vec::new();
+    for (name, text) in [
+        ("tls-runtime", nazm_lir::runtime::tls::runtime_text()),
+        ("tls-engine", unit),
+    ] {
+        let ll = dir.join(format!("{name}.ll"));
+        let o = dir.join(format!("{name}.o"));
+        // The runtime's TLS text names the C library's allocator as the rest of the runtime
+        // declares it.
+        let declared = if name == "tls-runtime" {
+            "declare ptr @malloc(i64)\ndeclare void @free(ptr)\n\
+             declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n"
+        } else {
+            ""
+        };
+        std::fs::write(&ll, format!("{declared}{text}")).unwrap();
+        let r = run_bounded(
+            Command::new("clang").args([
+                "-c",
+                "-x",
+                "ir",
+                "-target",
+                triple,
+                "-Wno-override-module",
+                ll.to_str().unwrap(),
+                "-o",
+                o.to_str().unwrap(),
+            ]),
+            "clang",
+        );
+        assert_eq!(r.code, Some(0), "{name} for {triple}: {}", r.stderr);
+        objects.push(o);
+    }
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls/engine_drive.c"),
+        dir.join("engine_drive.c"),
+    )
+    .unwrap();
+    objects
+}
+
+/// The Windows engine (SChannel through SSPI) compiles for `x86_64-pc-windows-gnu` and links, with
+/// the runtime's TLS part and a driver calling every entry, against MinGW-w64's `libsecur32`,
+/// `libcrypt32` and `libncrypt` alone: every function the unit names is one Windows exports. That
+/// it *works* is a Windows host's to show (`the_windows_engine_runs_on_a_windows_host`); until it
+/// has, a Windows build reaching TLS is refused (`N0830`).
+#[test]
+fn the_windows_engine_compiles_and_links_with_mingw() {
+    if common::skip_without(tool_answers(MINGW_GCC), "MinGW-w64's gcc links for Windows") {
+        return;
+    }
+    let d = tempfile::tempdir().unwrap();
+    let objects = engine_objects(
+        d.path(),
+        "x86_64-pc-windows-gnu",
+        &nazm_lir::runtime::tls::emit_schannel(),
+    );
+    let mut link = Command::new(MINGW_GCC);
+    link.current_dir(d.path()).arg("engine_drive.c");
+    link.args(&objects);
+    link.args(["-lsecur32", "-lcrypt32", "-lncrypt", "-o", "drive.exe"]);
+    let r = run_bounded(&mut link, MINGW_GCC);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let exe = std::fs::read(d.path().join("drive.exe")).unwrap();
+    let names = |s: &str| {
+        exe.windows(s.len())
+            .any(|w| w.eq_ignore_ascii_case(s.as_bytes()))
+    };
+    for dll in ["secur32.dll", "crypt32.dll", "ncrypt.dll"] {
+        assert!(names(dll), "drive.exe imports nothing from {dll}");
+    }
+    // The unit is not yet the Windows target's: a build reaching TLS is still refused.
+    assert!(nazm_lir::runtime::tls::emit_tls(
+        nazm_lir::runtime::switch::SwitchTarget::X86_64Windows
+    )
+    .is_none());
+}
+
+/// The driver itself, against this host's engine: what a Windows host should print but its
+/// version (TLS 1.2 under `SCHANNEL_CRED`) is what the engine here prints.
+#[test]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the driver's native check runs on macOS"
+)]
+fn the_engine_driver_agrees_with_this_host_s_engine() {
+    let Some(d) = with_certificates() else {
+        return;
+    };
+    let host = nazm_lir::runtime::switch::SwitchTarget::Aarch64Darwin;
+    let unit = nazm_lir::runtime::tls::emit_tls(host).unwrap();
+    let objects = engine_objects(d.path(), "arm64-apple-macos", &unit);
+    let dir = std::env::var_os("NAZM_OPENSSL_DIR").map_or_else(
+        || PathBuf::from("/opt/homebrew/opt/openssl@3"),
+        PathBuf::from,
+    );
+    let mut link = Command::new("clang");
+    link.current_dir(d.path())
+        .arg("engine_drive.c")
+        .args(&objects);
+    link.arg(format!("-L{}", dir.join("lib").display()));
+    link.args([
+        "-lssl",
+        "-lcrypto",
+        "-framework",
+        "Security",
+        "-framework",
+        "CoreFoundation",
+        "-o",
+        "drive",
+    ]);
+    let r = run_bounded(&mut link, "clang");
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let r = run_bounded(
+        Command::new(d.path().join("drive")).current_dir(d.path()),
+        "drive",
+    );
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    assert_eq!(
+        r.stdout.trim_end(),
+        "trusted: config ok, client 1, TLSv1.3 [http/1.1], wrote 5, read 5 [hello], closed 0\n\
+         another name: config ok, client -65603\n\
+         expired: config ok, client -65602\n\
+         self-signed: config ok, client -65601\n\
+         platform store: config ok, client -65601"
+    );
+}
+
+/// The Windows engine on a Windows host (`ssh win-dell`, a standard user): the driver built here,
+/// copied there with the certificates, run once and deleted. By hand: `cargo test … --ignored`.
+#[test]
+#[ignore = "needs the Windows host `win-dell` over ssh"]
+fn the_windows_engine_runs_on_a_windows_host() {
+    let Some(d) = with_certificates() else {
+        return;
+    };
+    let objects = engine_objects(
+        d.path(),
+        "x86_64-pc-windows-gnu",
+        &nazm_lir::runtime::tls::emit_schannel(),
+    );
+    let mut link = Command::new(MINGW_GCC);
+    link.current_dir(d.path())
+        .arg("engine_drive.c")
+        .args(&objects);
+    link.args(["-lsecur32", "-lcrypt32", "-lncrypt", "-o", "drive.exe"]);
+    let r = run_bounded(&mut link, MINGW_GCC);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    let there = "nz-tls-c1b";
+    let files = [
+        "drive.exe",
+        "ca.pem",
+        "srv.pem",
+        "srv.key",
+        "old.pem",
+        "self.pem",
+        "self.key",
+    ];
+    let ssh = |cmd: &str| {
+        run_bounded(
+            Command::new("ssh").args(["-o", "BatchMode=yes", "win-dell", cmd]),
+            "ssh",
+        )
+    };
+    assert_eq!(ssh(&format!("mkdir {there}")).code, Some(0));
+    let mut scp = Command::new("scp");
+    scp.current_dir(d.path())
+        .arg("-q")
+        .args(files)
+        .arg(format!("win-dell:{there}/"));
+    assert_eq!(run_bounded(&mut scp, "scp").code, Some(0));
+    let r = ssh(&format!("cd {there} && drive.exe"));
+    ssh(&format!("rmdir /s /q {there}"));
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    assert_eq!(
+        r.stdout.replace('\r', "").trim_end(),
+        "trusted: config ok, client 1, TLSv1.2 [http/1.1], wrote 5, read 5 [hello], closed 0\n\
+         another name: config ok, client -65603\n\
+         expired: config ok, client -65602\n\
+         self-signed: config ok, client -65601\n\
+         platform store: config ok, client -65601"
+    );
+}
