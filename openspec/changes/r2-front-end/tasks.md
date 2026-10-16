@@ -530,6 +530,14 @@
         carries 93,599, all agree; the other parts 10,992, all agree; 1,828 whole documents,
         all the reference's bytes. check 3,151 agree, 2 differ (carried 3,147, all agree),
         render likewise, facts 3,147 agree, 6 differ (carried 3,147, all agree)
+  - [x] The last stops — methods of a trait's default body and of a generic impl: a default
+        body (no impl's method) is called as a method at the receiver's type, the first
+        argument's where it is called by its trait's name (`Trait.m(x)`); a generic impl's
+        method takes the receiver type's arguments as its type arguments, where the checker
+        did not record them on the call. `run.sh core`: 3,153 agree, 0 differ; of 93,603
+        functions the lowering carries every one, all agree; the other parts 10,992, all
+        agree; 1,832 whole documents, all the reference's bytes. Nothing is stopped: `@derive`
+        needed nothing of its own (derived methods are reached through `call_trait`)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
