@@ -245,7 +245,7 @@ fn pend(p: Pending, code: Str, file: Int, start: Int, end: Int, message: Str, he
 }
 
 // Whether `path` is a directory, which `read_to_string` refuses to read (and `read_file` traps on).
-fn ld_is_directory(path: Str, io: IoCap) -> Bool {
+pub fn ld_is_directory(path: Str, io: IoCap) -> Bool {
     let d = os_dir_open(path);
     let open = os_status(d) >= 0;
     if open { os_close(d); }

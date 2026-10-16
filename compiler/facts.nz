@@ -102,7 +102,7 @@ fn check_as(path: Str, given: Str, paths: Strs, texts: Strs, library: Str, os: S
     if str_len(path) == 0 || str_byte(path, 0) != 47 { return give_up(f, "the loader stops at a relative path"); }
     strs_set(f.dir, 0, pk_parent(pk_normalise(path)));
     let mut root = pk_decide(path, io);
-    if given != "" { root = pk_given(path, given, io); }
+    if given != "" { root = pk_given(path, given, ld_is_directory(given, io)); }
     let how = pk_root_how(root);
     if how == 0 - 2 { return give_up(f, str_concat("the loader stops at ", pk_root_why(root))); }
     // A manifest that is not one, or a marker that is not empty: the reference refuses the
