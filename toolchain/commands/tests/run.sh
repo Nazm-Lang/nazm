@@ -2,7 +2,7 @@
 # R5's comparisons (`openspec/changes/r5-commands/design.md`): each command written in Nazm against
 # the Rust `nazm` built from this checkout, on every input.
 #
-#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix (all by default)
+#   toolchain/commands/tests/run.sh [-j N] [PART...] [FILE.nz ...]     PART: fmt, args, init, check, doc, fix, lsp (all by default)
 #
 # The Nazm `nazm` (toolchain/commands/nazm.nz, which dispatches to CMD.nz) is built by the 0.10.0
 # release ($NAZM) and run as the reference is run, `nazm CMD ARGS`. The reference is
@@ -27,6 +27,11 @@
 #   doc   For every input of check, the repository's package directories and a project of every
 #         template, `doc PATH` from the repository's root, and `doc -o DIR PATH` where the reference
 #         succeeds: status, output, error, `api.json` and `api.md` (design, D13).
+#   lsp   Every scripted session of tests/lsp — each message framed, `@ROOT@` the fixture's
+#         directory — run by both sides as `nazm lsp` in the same fixture: every byte of the output,
+#         the error and the status (design, D16). Then every input of check opened as it is on
+#         disk and closed, and again with hover at a few positions (tests/lsp-session.py, which
+#         needs python3 to write the sessions).
 #
 # NAZM_PORT names a port already built from this checkout, instead of building one.
 #
@@ -41,11 +46,11 @@ if [ "${1:-}" = "-j" ]; then jobs=$2; shift 2; fi
 parts=""
 while [ $# -gt 0 ]; do
   case $1 in
-    fmt|args|init|check|doc|fix) parts="$parts $1"; shift ;;
+    fmt|args|init|check|doc|fix|lsp) parts="$parts $1"; shift ;;
     *) break ;;
   esac
 done
-[ -n "$parts" ] || parts="fmt args init check doc fix"
+[ -n "$parts" ] || parts="fmt args init check doc fix lsp"
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 nazm=${NAZM:-"$HOME/.local/nazm-0.10.0/bin/nazm"}
@@ -214,6 +219,29 @@ fixture() {
       printf 'use "gone.nz";\nfn main() -> Int { 0 }\n' > "$dir/m.nz"
       mkdir -p "$dir/sub"
       ;;
+    lsp)
+      # What tests/lsp's sessions open: a type error (a.nz), CRLF lines after non-ASCII text (u.nz),
+      # warnings (w.nz), warnings beside an error (we.nz), an import with an error (i.nz, helper.nz),
+      # a syntax error (s.nz), functions and calls (f.nz, c.nz, h2.nz), a path with a space, and a
+      # package importing a dependency whose module has an error (app/, lib/).
+      printf 'fn main() -> Int {\n    let x: Bool = 1;\n    0\n}\n' > "$dir/a.nz"
+      printf 'fn main() -> Int {\r\n    let s: Str = "é𝄞"; let mut n = 1;\r\n    n = 2;\r\n    let t = s;\r\n    n\r\n}\r\n' > "$dir/u.nz"
+      printf 'enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n' > "$dir/w.nz"
+      printf 'enum E { A, B, C }\nfn f() -> Int {\n    match E.B {\n        E.B => 0,\n        _ => 1,\n    }\n}\nfn main() -> Int {\n    let x: Bool = 1;\n    match E.A {\n        E.A => 0,\n        _ => f(),\n    }\n}\n' > "$dir/we.nz"
+      printf 'use "helper.nz";\nfn main() -> Int { h() }\n' > "$dir/i.nz"
+      printf 'pub fn h() -> Int {\n    let v: Str = 1;\n    0\n}\n' > "$dir/helper.nz"
+      printf 'fn main() -> Int { 1 + }\n' > "$dir/s.nz"
+      printf 'fn add(a: Int, b: Int) -> Int { a + b }\nfn main() -> Int {\n    let total = add(1, 2);\n    total\n}\n' > "$dir/f.nz"
+      printf 'use "h2.nz";\nfn add(a: Int, b: Int) -> Int { a + b }\nfn quiet(n: Int) -> Int ! {} { n }\nfn main() -> Int {\n    let total = add(1, 2);\n    let q = quiet(total);\n    twice(q)\n}\n' > "$dir/c.nz"
+      printf 'pub fn twice(n: Int) -> Int { n * 2 }\n' > "$dir/h2.nz"
+      printf 'fn main() -> Int {\n    let q = 1;\n    q\n}\n' > "$dir/with space.nz"
+      mkdir -p "$dir/app/src" "$dir/lib/src/inner"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "app"\nversion = "0.1.0"\nmain = "main.nz"\n\n[dependencies]\nlib = { path = "../lib", version = "1.0.0" }\n' > "$dir/app/nazm.toml"
+      printf 'use "lib:a.nz";\nfn main() -> Int { twice(2) }\n' > "$dir/app/src/main.nz"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "lib"\nversion = "1.0.0"\n' > "$dir/lib/nazm.toml"
+      printf 'use "inner/b.nz";\npub fn twice(n: Int) -> Int { n * k() }\n' > "$dir/lib/src/a.nz"
+      printf 'pub fn k() -> Int {\n    let s: Str = 2;\n    2\n}\n' > "$dir/lib/src/inner/b.nz"
+      ;;
     init)
       mkdir -p "$dir/empty" "$dir/full/sub"
       printf 'kept\n' > "$dir/full/keep.txt"
@@ -232,7 +260,7 @@ tree_record() {
 # `record DIR CMD -- ARGS...`: run in DIR, then the status, output, error and tree, to DIR.record.
 record() {
   dir=$1; shift
-  (cd "$dir" && { rc=0; "$@" > "$dir.out" 2> "$dir.err" || rc=$?; echo "exit $rc" > "$dir.record"; })
+  (cd "$dir" && { rc=0; "$@" < /dev/null > "$dir.out" 2> "$dir.err" || rc=$?; echo "exit $rc" > "$dir.record"; })
   # A package's modules are named by their canonical paths, which hold the side's own directory.
   canon=$(cd "$dir" && pwd -P)
   { echo "[stdout]"; sed "s|$canon|DIR|g" "$dir.out"; echo "[stderr]"; sed "s|$canon|DIR|g" "$dir.err"; echo "[tree]"; tree_record "$dir"; } >> "$dir.record"
@@ -242,7 +270,7 @@ record() {
 
 part_args() {
   n=0 agree=0 differ=0 refused=0
-  for cmd in fmt init check doc fix nazm; do
+  for cmd in fmt init check doc fix lsp nazm; do
     file="$root/toolchain/commands/tests/args/$cmd.txt"
     [ -f "$file" ] || continue
     while IFS= read -r line; do
@@ -518,6 +546,98 @@ part_fix() {
   [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
 }
 
+# --- lsp: scripted sessions, and every input opened ----------------------------------------------------
+
+# `session SESSION DIR BIN`: SESSION's messages, `@ROOT@` made DIR's canonical path, each framed as an
+# editor frames it, given to `BIN lsp` in DIR; its status, output, error and the tree, to DIR.record.
+session() {
+  canon=$(cd "$2" && pwd -P)
+  while IFS= read -r line; do
+    case $line in '#'*|'') continue ;; esac
+    body=$(printf '%s' "$line" | sed "s|@ROOT@|$canon|g")
+    printf 'Content-Length: %s\r\n\r\n%s' "$(printf '%s' "$body" | wc -c | tr -d ' ')" "$body"
+  done < "$1" > "$2.in"
+  (cd "$2" && { rc=0; "$3" lsp < "$2.in" > "$2.out" 2> "$2.err" || rc=$?; echo "exit $rc" > "$2.record"; })
+  { echo "[stdout]"; sed "s|$canon|DIR|g" "$2.out"; echo; echo "[stderr]"; cat "$2.err"; echo "[tree]"; tree_record "$2"; } >> "$2.record"
+}
+
+part_lsp() {
+  n=0 agree=0 differ=0 refused=0
+  for s in "$root"/toolchain/commands/tests/lsp/*.txt; do
+    name=$(basename "$s" .txt)
+    n=$((n + 1))
+    d="$work/lsp/$name"
+    (fixture lsp "$d/ref")
+    (fixture lsp "$d/got")
+    session "$s" "$d/ref" "$ref"
+    session "$s" "$d/got" "$port"
+    if grep -q '^exit 6$' "$d/got.record"; then
+      refused=$((refused + 1)); echo "  refused: $name: $(grep 'not carried' "$d/got.err" | cut -c1-100)"
+    elif cmp -s "$d/ref.record" "$d/got.record"; then
+      agree=$((agree + 1))
+    else
+      differ=$((differ + 1)); echo "  differ: $name"
+      if [ -n "${KEEP:-}" ]; then
+        mkdir -p "$KEEP/lsp-$name" && cp "$d/ref.record" "$KEEP/lsp-$name/want" && cp "$d/got.record" "$KEEP/lsp-$name/got"
+      fi
+    fi
+    rm -rf "$d" "$d".*
+  done
+  echo "lsp: $agree agree, $differ differ, $refused refused (of $n sessions)"
+  [ "$differ" -eq 0 ] || status=1
+
+  # Every input of check opened as it is on disk — its diagnostics published, then closed — and
+  # again with hover at a few positions (tests/lsp-session.py writes both sessions).
+  command -v python3 > /dev/null || { echo "lsp corpus: skipped (no python3 to write the sessions)"; return; }
+  list="$work/lsp-inputs.txt"
+  if [ $# -gt 0 ]; then
+    printf '%s\n' "$@" > "$list"
+  else
+    (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+  fi
+  total=$(wc -l < "$list" | tr -d ' ')
+  mkdir -p "$work/lres"
+  export R5_ROOT="$root" R5_REF="$ref" R5_PORT="$port" R5_WORK="$work" R5_DEADLINE="${R5_DEADLINE:-60}"
+  # shellcheck disable=SC2016
+  tr '\n' '\0' < "$list" | xargs -0 -n 1 -P "$jobs" sh -c '
+    f=$1
+    name=$(printf "%s" "$f" | tr "/" "_")
+    d="$R5_WORK/l-$name"
+    mkdir -p "$d"
+    verdict=agree
+    why=""
+    for mode in open hover; do
+      if [ $mode = hover ]; then m=hover; else m=""; fi
+      if ! python3 -I "$R5_ROOT/toolchain/commands/tests/lsp-session.py" "$R5_ROOT/$f" $m > "$d/$mode.in"; then verdict=skipped; break; fi
+      (cd "$R5_ROOT" && { rc=0; "$R5_REF" lsp < "$d/$mode.in" > "$d/ref.$mode" 2>&1 || rc=$?; echo "exit $rc" >> "$d/ref.$mode"; })
+      (cd "$R5_ROOT" && { rc=0; timeout "$R5_DEADLINE" "$R5_PORT" lsp < "$d/$mode.in" > "$d/got.$mode" 2>&1 || rc=$?; echo "exit $rc" >> "$d/got.$mode"; })
+      if grep -q "^exit 6$" "$d/got.$mode"; then verdict=refused; why=$(grep -o "lsp: not carried.*" "$d/got.$mode"); break; fi
+      if grep -q "^exit 124$" "$d/got.$mode"; then verdict=timeout; break; fi
+      if ! cmp -s "$d/ref.$mode" "$d/got.$mode"; then
+        verdict=differ
+        if [ -n "${KEEP:-}" ]; then
+          mkdir -p "$KEEP/lsp-$name" && cp "$d/ref.$mode" "$KEEP/lsp-$name/want.$mode" && cp "$d/got.$mode" "$KEEP/lsp-$name/got.$mode"
+        fi
+        break
+      fi
+    done
+    printf "%s\n%s\n" "$verdict" "$why" > "$R5_WORK/lres/$name"
+    rm -rf "$d"
+  ' sh
+  agree=$(grep -l '^agree$' "$work/lres/"* 2>/dev/null | wc -l | tr -d ' ')
+  differ=$(grep -l '^differ$' "$work/lres/"* 2>/dev/null | wc -l | tr -d ' ')
+  refused=$(grep -l '^refused$' "$work/lres/"* 2>/dev/null | wc -l | tr -d ' ')
+  timeout=$(grep -l '^timeout$' "$work/lres/"* 2>/dev/null | wc -l | tr -d ' ')
+  skipped=$(grep -l '^skipped$' "$work/lres/"* 2>/dev/null | wc -l | tr -d ' ')
+  for r in $(grep -l -E '^(differ|timeout)$' "$work/lres/"* 2>/dev/null | head -20); do
+    echo "  $(head -1 "$r"): $(basename "$r")"
+  done
+  for r in "$work/lres/"*; do [ "$(head -1 "$r")" = refused ] && sed -n 2p "$r"; done \
+    | sed 's/^lsp: not carried: //' | cut -c1-90 | sort | uniq -c | sort -rn | head -12 | sed 's/^/  refused:/'
+  echo "lsp corpus: $agree agree, $differ differ, $refused refused, $timeout timed out, $skipped not UTF-8 (of $total inputs)"
+  [ "$differ" -eq 0 ] && [ "$timeout" -eq 0 ] || status=1
+}
+
 for p in $parts; do
   case $p in
     fix) part_fix "$@" ;;
@@ -526,6 +646,7 @@ for p in $parts; do
     init) part_init ;;
     check) part_check "$@" ;;
     doc) part_doc "$@" ;;
+    lsp) part_lsp "$@" ;;
   esac
 done
 exit $status

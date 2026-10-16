@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check` and `doc` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix` and `lsp` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -273,6 +273,52 @@ harness's programs it accepted what the reference refuses. Until it does, `check
 refuse a compilation whose own modules write a pattern `let` — any `let` but
 `let NAME =` and `let NAME:` (`front.nz`, `fe_pattern_let`, over the lexer's tokens) — a defect of
 `compiler/` handed back, not a guess at the rule.
+
+**D16 — `lsp` is `lsp.rs` over the same facts, and refuses wherever they do not answer
+(2026-10-16).** `toolchain/commands/lsp.nz` speaks the protocol as `lsp-server` does over
+standard input and output: `Content-Length` framing read with `os_read_line` and `os_read` (one
+buffer), each message parsed by a JSON reader of its own (the port must know exactly what it
+accepted; a message it reads differently from serde — a duplicate field, an `id` that is neither
+an `i32` nor a string, a header other than `Content-Length` — is refused), and every answer written
+as serde writes it: the outer message's fields in `lsp-server`'s order, every `Value` inside with
+its keys sorted (`serde_json::Map` is a `BTreeMap`). The handshake is `initialize_start` and
+`initialize_finish`: the first message must be `initialize` (input that ends first is `nazm lsp:
+initialize: disconnected channel`, status 4), answered with the reference's capabilities, then
+`initialized`. `shutdown` is answered `null` and must be followed by `exit`; `exit` at any other
+time ends the reader, and the server with it, status 0, as does the end of input. A request the
+reference does not implement is `MethodNotFound` (−32601) in its words — `textDocument/formatting`
+among them: the reference offers no formatting.
+
+Documents: `didOpen`, `didChange` (each change a UTF-16 range of the text the changes before it
+left, `LineIndex::offset`, or the whole text), `didClose` (the others published again, then the
+closed one cleared, without a version). Each publication is `refresh`'s: the document's
+compilation checked as a module (`fx_check_module`, `Entry::Absent`), its own file's errors, then
+the checker's warnings — kept beside the errors in `Ck.w` and published even where there are errors,
+as the service chains `nazm_core::warnings` — positions in UTF-16 (`LineIndex::position`). The
+front end reads files, not the editor's buffers, so a document whose text is not the file's on disk
+is refused; so are two documents open at once (the reference publishes them in its `HashMap`'s
+order), a document named by another spelling of an open one's path, a compilation that does not
+load (the service analyses what loaded) or that the front end stops at, a warning beside a syntax
+error, and a pattern `let` (D15).
+
+Hover and definition are answered from `name_at` (the lexer's identifier holding the position, or
+ending there) and the checker's indexes: a local (`ck_binding_at`) is `NAME: T` (`mut ` first
+where it is) when `T` is a built-in type, whose name is its `show`, and its declaration's span; a
+call to a plain function (`ck_site_at`, `ck_site_fn`) is `fn NAME(p: T, …) -> R` then ` ! {…}`
+or, where none is declared, a line of `inferred effects: {…}` (`Signature::render`,
+`EffectSet`'s `Display`), and its name where it is declared — `null` in the standard library or
+the prelude, which have no file. `null` where the reference answers nothing: no name there, a
+function's name at its declaration, a field or variant after `.` that is not called. Anything else
+is refused: a method, closure, generic or foreign function, a built-in, a call through a value, a
+local of another type, and any other name a binding or function of the compilation is called by —
+a definition of a name with no binding (a constant, a type, a variant, a field) included, since the
+facts index no declaration for it. Completion, references, signature help, rename, symbols,
+semantic tokens, code actions and call hierarchy are refused, and so is `--source-root`.
+
+`run.sh lsp` runs the scripted sessions of `tests/lsp/` in a fixture, both sides, every byte of
+the output compared; then every input of `check`, opened as it is on disk (and closed), and again
+with hover at seven positions — the sessions written by `tests/lsp-session.py`, the one part of the
+comparison that needs `python3`.
 
 ## Risks / Trade-offs
 

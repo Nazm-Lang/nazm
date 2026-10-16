@@ -1,0 +1,13 @@
+# Incremental changes that leave the document as the file is on disk: an insertion and its removal
+# in one notification, a whole-text change, and a change to a document that is not open; a version
+# moves with each.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/w.nz","languageId":"nazm","version":1,"text":"enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://@ROOT@/w.nz","version":2},"contentChanges":[{"range":{"start":{"line":1,"character":3},"end":{"line":1,"character":3}},"text":"x"},{"range":{"start":{"line":1,"character":3},"end":{"line":1,"character":4}},"text":""}]}}
+{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://@ROOT@/w.nz","version":3},"contentChanges":[{"text":"enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n"}]}}
+{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://@ROOT@/a.nz","version":3},"contentChanges":[{"text":"x"}]}}
+{"jsonrpc":"2.0","method":"$/setTrace","params":{"value":"off"}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"}}}
+{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}

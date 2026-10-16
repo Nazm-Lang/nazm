@@ -1,0 +1,5 @@
+# `exit` before `shutdown`: the reference's reader stops there, and the server with it, status 0.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"exit"}
+{"jsonrpc":"2.0","id":2,"method":"nazm/unknown"}
