@@ -2556,6 +2556,11 @@ fn co_call_parts(lo: Lo, cs: Int, pre: Strs, list: Ints, span: Int) -> Str {
     }
     if b >= 0 {
         let name = ck_builtin_name(c, b);
+        if co_made_builtin(name) {
+            let ret = ck_site_ret(c, site);
+            if ret < 0 || ck_site_type_arg_count(c, site) < 1 { return co_stopped(lo, "a generic call whose result the checker did not form"); }
+            return co_made_of(lo, name, ck_site_type_arg(c, site, 0), args, ret, cs, span);
+        }
         if co_special_builtin(name) { return co_stopped(lo, str_concat("the built-in ", name)); }
         let mut ret = ck_builtin_ret(c, b);
         let mut targs = "[]";
@@ -3174,6 +3179,192 @@ fn co_site_type_args(lo: Lo, site: Int) -> Str {
         k = k + 1;
     }
     co_list(out)
+}
+
+// The built-ins made of operations a program cannot name (R1a, R1b, L13).
+fn co_made_builtin(name: Str) -> Bool {
+    if name == "box_new" || name == "cell_new" || name == "cell_get" || name == "cell_set" { return true; }
+    name == "checked_add" || name == "checked_sub" || name == "checked_mul" || name == "list_from_vec" || name == "chain_from_vec"
+}
+
+// `box_new(v)` and `cell_new(v)` as `{ let made = <fresh>; <fill made with v>; made }`
+// (`made_holding`); `cell_get(c)` and `cell_set(c, v)` as `vec_get(c, 0)` and `vec_set(c, 0, v)`;
+// `checked_*` as wrapping and saturating operations (`checked`); `chain_from_vec(xs)` as a loop
+// (`chain_from_vec`). `args` are lowered, `elem` the type argument, `ty` the call's type.
+fn co_made_of(lo: Lo, name: Str, elem: Int, args: Strs, ty: Int, cs: Int, at: Int) -> Str {
+    let targs = co_list_one(json_str(co_durable(lo, elem)));
+    if name == "box_new" || name == "cell_new" {
+        if strs_len(args) < 1 { return co_stopped(lo, "a `box_new` or `cell_new` with no value"); }
+        let mut fresh = "vec_new";
+        let mut fill = "vec_push";
+        if name == "box_new" {
+            fresh = "box_fresh";
+            fill = "box_fill";
+        }
+        let made = co_temp(lo, "made", ty, at);
+        let stmts = strs_new();
+        strs_push(stmts, co_let(made, co_builtin(lo, fresh, targs, "", ty, at)));
+        let fa = strs_new();
+        strs_push(fa, co_read(lo, made, at));
+        strs_push(fa, strs_get(args, strs_len(args) - 1));
+        strs_push(stmts, co_eval(co_builtin(lo, fill, targs, str_join(fa, ","), ck_t_int(), at)));
+        let body = co_block_json(lo, false, co_list_one(int_to_str(made)), stmts, co_read(lo, made, at), at);
+        return co_node(lo, "block", co_field_first("body", body), ty, at);
+    }
+    if name == "cell_get" || name == "cell_set" {
+        let zero = co_int_const(lo, 0, cs);
+        let all = strs_new();
+        let mut i = 0;
+        while i < strs_len(args) {
+            strs_push(all, strs_get(args, i));
+            if i == 0 { strs_push(all, zero); }
+            i = i + 1;
+        }
+        let mut op = "vec_get";
+        if name == "cell_set" { op = "vec_set"; }
+        return co_builtin(lo, op, targs, str_join(all, ","), ty, at);
+    }
+    if name == "list_from_vec" || name == "chain_from_vec" { return co_chain_from_vec(lo, elem, targs, args, ty, at); }
+    co_checked(lo, name, elem, targs, args, ty, at)
+}
+
+fn co_eval(value: Str) -> Str {
+    let o = strs_new();
+    strs_push(o, co_op_first("eval"));
+    strs_push(o, co_field("value", value));
+    strs_push(o, co_field("ends", co_ends(false)));
+    co_object(o)
+}
+
+// An integer constant of type `ty` (`konst`): an `Int`'s, or another integer type's digits.
+fn co_typed_int(lo: Lo, digits: Str, ty: Int, at: Int) -> Str {
+    if ck_type_class(lo.c, ty) == "int" {
+        let id = co_constant(lo, "Int", digits);
+        return co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, at);
+    }
+    let id = co_constant(lo, co_durable(lo, ty), json_str(digits));
+    co_node(lo, "const", co_field_first("const", int_to_str(id)), ty, at)
+}
+
+// The smallest value of a signed integer type, or "" for an unsigned one.
+fn co_int_min(name: Str) -> Str {
+    if name == "Int8" { return "-128"; }
+    if name == "Int16" { return "-32768"; }
+    if name == "Int32" { return "-2147483648"; }
+    if name == "Int" { return "-9223372036854775808"; }
+    if name == "Int128" { return "-170141183460469231731687303715884105728"; }
+    ""
+}
+
+// `l == r` on `elem`, by its law.
+fn co_equal(lo: Lo, elem: Int, l: Str, r: Str, at: Int) -> Str {
+    let fields = strs_new();
+    strs_push(fields, co_field_first("operand", json_str(co_durable(lo, elem))));
+    strs_push(fields, co_field("law", json_str(co_eq_law(lo, elem))));
+    strs_push(fields, co_field("lhs", l));
+    strs_push(fields, co_field("rhs", r));
+    co_node(lo, "==", str_join(fields, ""), ck_t_bool(), at)
+}
+
+// `Some(e)` and `None` of the `Option` type `ty`.
+fn co_some(lo: Lo, ty: Int, e: Str, at: Int) -> Str {
+    let init = strs_new();
+    strs_push(init, co_field_first("field", "0"));
+    strs_push(init, co_field("name", json_str(ck_payload_name(lo.c, ty, 1, 0))));
+    strs_push(init, co_field("value", e));
+    let inits = strs_new();
+    strs_push(inits, co_object(init));
+    co_variant_value(lo, ty, 1, inits, at)
+}
+fn co_none(lo: Lo, ty: Int, at: Int) -> Str { co_variant_value(lo, ty, 0, strs_new(), at) }
+
+// `checked_add(a, b)`, `checked_sub(a, b)`, `checked_mul(a, b)` (R1b, L13, `checked`).
+fn co_checked(lo: Lo, name: Str, elem: Int, targs: Str, args: Strs, ty: Int, at: Int) -> Str {
+    if strs_len(args) != 2 { return co_stopped(lo, "a checked operation without two operands"); }
+    let cls = ck_type_class(lo.c, elem);
+    if cls != "int" && cls != "integer" { return co_stopped(lo, "a checked operation not over an integer"); }
+    let x = co_temp(lo, "convert", elem, at);
+    let y = co_temp(lo, "convert", elem, at);
+    let w = co_temp(lo, "convert", elem, at);
+    let stmts = strs_new();
+    strs_push(stmts, co_let(x, strs_get(args, 0)));
+    strs_push(stmts, co_let(y, strs_get(args, 1)));
+    let owns = strs_new();
+    strs_push(owns, int_to_str(x));
+    strs_push(owns, int_to_str(y));
+    strs_push(owns, int_to_str(w));
+    let xy = str_concat(str_concat(co_read(lo, x, at), ","), co_read(lo, y, at));
+    let mut tail = "";
+    if name == "checked_mul" {
+        strs_push(stmts, co_let(w, co_builtin(lo, "wrapping_mul", targs, xy, elem, at)));
+        let qf = strs_new();
+        strs_push(qf, co_field_first("lhs", co_read(lo, w, at)));
+        strs_push(qf, co_field("rhs", co_read(lo, x, at)));
+        let quotient = co_node(lo, "/", str_join(qf, ""), elem, at);
+        let divided = co_conditional(lo, co_equal(lo, elem, quotient, co_read(lo, y, at), at), co_some(lo, ty, co_read(lo, w, at), at), co_none(lo, ty, at), ty, at);
+        let mut past = divided;
+        let min = co_int_min(co_durable(lo, elem));
+        if min != "" {
+            let minus_one = co_typed_int(lo, "-1", elem, at);
+            let lowest = co_typed_int(lo, min, elem, at);
+            let inner = co_conditional(lo, co_equal(lo, elem, co_read(lo, y, at), lowest, at), co_none(lo, ty, at), co_some(lo, ty, co_read(lo, w, at), at), ty, at);
+            past = co_conditional(lo, co_equal(lo, elem, co_read(lo, x, at), minus_one, at), inner, divided, ty, at);
+        }
+        let zero = co_typed_int(lo, "0", elem, at);
+        tail = co_conditional(lo, co_equal(lo, elem, co_read(lo, x, at), zero, at), co_some(lo, ty, co_read(lo, w, at), at), past, ty, at);
+    } else {
+        let mut wrapping = "wrapping_add";
+        let mut saturating = "saturating_add";
+        if name == "checked_sub" {
+            wrapping = "wrapping_sub";
+            saturating = "saturating_sub";
+        }
+        let s = co_temp(lo, "convert", elem, at);
+        strs_push(owns, int_to_str(s));
+        strs_push(stmts, co_let(w, co_builtin(lo, wrapping, targs, xy, elem, at)));
+        strs_push(stmts, co_let(s, co_builtin(lo, saturating, targs, xy, elem, at)));
+        tail = co_conditional(lo, co_equal(lo, elem, co_read(lo, w, at), co_read(lo, s, at), at), co_some(lo, ty, co_read(lo, w, at), at), co_none(lo, ty, at), ty, at);
+    }
+    let body = co_block_json(lo, false, co_list(owns), stmts, tail, at);
+    co_node(lo, "block", co_field_first("body", body), ty, at)
+}
+
+// `chain_from_vec(xs)` (R1a): `{ let seq = xs; let made = chain_empty(); let mut i = 0;
+// while i < vec_len(seq) { chain_push(made, vec_get(seq, i)); i = i + 1; } made }`.
+fn co_chain_from_vec(lo: Lo, elem: Int, targs: Str, args: Strs, ty: Int, at: Int) -> Str {
+    if strs_len(args) < 1 { return co_stopped(lo, "a `chain_from_vec` with no vector"); }
+    let sty = co_last_ty(lo);
+    if sty < 0 { return co_stopped(lo, "a `chain_from_vec` vector the checker gave no type"); }
+    let seq = co_temp(lo, "seq", sty, at);
+    let made = co_temp(lo, "made", ty, at);
+    let index = co_temp(lo, "i", ck_t_int(), at);
+    let zero = co_int_const(lo, 0, at);
+    let one = co_int_const(lo, 1, at);
+    let id = co_g(lo, co_s_loops());
+    co_sv(lo, co_s_loops(), id + 1);
+    let cond = co_less(lo, co_read(lo, index, at), co_builtin(lo, "vec_len", targs, co_read(lo, seq, at), ck_t_int(), at), at);
+    let get = co_builtin(lo, "vec_get", targs, str_concat(str_concat(co_read(lo, seq, at), ","), co_read(lo, index, at)), elem, at);
+    let body = strs_new();
+    strs_push(body, co_eval(co_builtin(lo, "chain_push", targs, str_concat(str_concat(co_read(lo, made, at), ","), get), ck_t_int(), at)));
+    strs_push(body, co_assign(lo, index, co_add(lo, co_read(lo, index, at), one, at), at));
+    let lp = strs_new();
+    strs_push(lp, co_op_first("loop"));
+    strs_push(lp, co_field("loop", int_to_str(id)));
+    strs_push(lp, co_field("cond", cond));
+    strs_push(lp, co_field("body", co_block_json(lo, false, "[]", body, "null", at)));
+    strs_push(lp, co_field("ends", co_ends(false)));
+    strs_push(lp, co_field("at", json_str(co_tree_span(lo, at))));
+    let stmts = strs_new();
+    strs_push(stmts, co_let(seq, strs_get(args, strs_len(args) - 1)));
+    strs_push(stmts, co_let(made, co_builtin(lo, "chain_empty", targs, "", ty, at)));
+    strs_push(stmts, co_let(index, zero));
+    strs_push(stmts, co_object(lp));
+    let owns = strs_new();
+    strs_push(owns, int_to_str(seq));
+    strs_push(owns, int_to_str(made));
+    strs_push(owns, int_to_str(index));
+    let block = co_block_json(lo, false, co_list(owns), stmts, co_read(lo, made, at), at);
+    co_node(lo, "block", co_field_first("body", block), ty, at)
 }
 
 // The built-ins `call` lowers as something else: made of operations a program cannot name, or
