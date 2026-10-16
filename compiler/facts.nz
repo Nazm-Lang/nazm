@@ -304,7 +304,8 @@ pub fn fx_binding_type_at(f: Facts, m: Int, start: Int, end: Int) -> Int {
 
 // Where what the name written at `start..end` of module `m` (local offsets) refers to is declared
 // (`lsp` definition), for a name that is no local: a function called or used as a value, a
-// record built or an enum's variant named, by its declaration's name. Three `Ints`: the module,
+// record built or an enum's variant named, a record's or an enum's name written as a type, by its
+// declaration's name. Three `Ints`: the module,
 // and the name's start and end, local to it; empty where the checker recorded nothing there.
 pub fn fx_declaration_at(f: Facts, m: Int, start: Int, end: Int) -> Ints {
     let c = f.c;
@@ -320,7 +321,14 @@ pub fn fx_declaration_at(f: Facts, m: Int, start: Int, end: Int) -> Ints {
         if v >= 0 { g = ck_fn_value_fn(c, v); }
     }
     if g >= 0 { return declared_in(f, ck_fn_module(c, g), ck_fn_name_start(c, g), ck_fn_name_end(c, g)); }
-    let rt = ck_construction_at(c, s, e);
+    let mut rt = ck_construction_at(c, s, e);
+    // A type's name written in a signature, an annotation or a construction's type.
+    let tn = ck_type_name_at(c, s, e);
+    if rt < 0 && tn >= 0 && ck_type_class(c, tn) == "record" { rt = tn; }
+    if tn >= 0 && ck_type_class(c, tn) == "enum" {
+        let te = ck_type_enum(c, tn);
+        return declared_in(f, ck_enum_module(c, te), ck_enum_name_start(c, te), ck_enum_name_end(c, te));
+    }
     let mut r = 0 - 1;
     if rt >= 0 { r = ck_type_record(c, rt); }
     if r >= 0 { return declared_in(f, ck_record_module(c, r), ck_record_name_start(c, r), ck_record_name_end(c, r)); }
