@@ -1,7 +1,8 @@
 //! `Atomic` (Gate 3, `docs/spec.md`, *Atomics*): each built-in as the runtime calls it means.
 //!
-//! An atomic is `Str`'s triple, `{ptr, len, owner}`: `ptr` is the 8-byte cell, inside a string
-//! backing `atomic_new` allocates and the triple counts, or a static's, whose owner is null.
+//! An atomic is `Str`'s triple, `{ptr, len, owner}`: `ptr` is the 8-byte cell, inside a backing
+//! of a string's shape that `nz.atomic_cell` allocates and the triple counts — one the memory
+//! report does not count as a string (runtime ABI 38) — or a static's, whose owner is null.
 //! Every access is one of the runtime's sequentially consistent operations — LIR has no atomic
 //! instruction, and a call is the same on both backends. `atomic_add` is a loop of them, so
 //! that a sum leaving `Int` stops the program with the cell as it was.
@@ -11,6 +12,7 @@ use nazm_sema::Intrinsic;
 
 use super::func::Fx;
 use super::ir::{Class, OvfOp};
+use super::lower::rt;
 
 impl Fx<'_, '_> {
     /// `dst = op(args)` for an atomic built-in; `false` for any other.
@@ -22,11 +24,14 @@ impl Fx<'_, '_> {
     ) -> bool {
         match op {
             Intrinsic::AtomicNew => {
+                // The runtime initialises the cell, in a backing a string's release frees
+                // without counting it: an atomic is not a string (runtime ABI 38).
                 let v = self.arg(args, 0);
+                let owner = self.rt_v("nz.atomic_cell", &[v], Class::Ptr);
+                let null = self.is_null(owner);
+                self.guard(null, "N0406", "out of memory");
+                let cell = self.ptr_off(owner, rt::STRING_HEADER);
                 let eight = self.iconst(8);
-                let (owner, cell) = self.string_backing(eight);
-                // Not yet shared with anything: a plain store initialises it.
-                self.store(cell, 0, v);
                 self.write_str(dst, cell, eight, owner);
             }
             Intrinsic::AtomicLoad => {
