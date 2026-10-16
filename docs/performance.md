@@ -3868,20 +3868,24 @@ per connection, against `net/http`) under one shared load generator, `go/httploa
 1.27.2 `go build`; Nazm release from `b98b2f73`, `--opt-level 2` (LLVM), the default scheduler — the
 pool, one worker per processor, 256 KiB guarded task stacks (architecture §7.84, N106).
 `hyperfine -N --warmup 2`, 5 runs for `spawn` and 10 for the rest, Go and Nazm in one invocation.
-The run began at load 1.94 with no other agent's build or suite running; the later loads in the
-table are the benchmark's own threads (ten processors busy in `spawn` raise the average they leave
-behind). Another agent's suite started 70 s later: the second and third HTTP rounds and the
-parallel `primes` job ran under it and are **not recorded** — they are still to be taken.
+Two runs, each begun below load 2 with no other agent's build or suite running (the second at
+1.89, and no cargo, nextest or rustc at its end); the later loads in the table are the benchmark's
+own threads — ten processors busy in `spawn`, the HTTP server and its 64 clients — not other work.
+In the first run another agent's suite started during the second HTTP round, so that run's later
+rounds and its `primes` are not used; the second run supplies them. Where the two runs agree within
+their spread one figure is given; otherwise both, first; second.
 
 | workload | Go | Nazm | Nazm against Go | load before |
 | --- | ---: | ---: | ---: | ---: |
-| spawn 1,000,000 tasks, wall | 275 ± 28 ms | 3,645 ± 15 ms | 13.2× slower | 1.94 |
+| spawn 1,000,000 tasks, wall | 275 ± 28 ms; 265 ± 15 ms | 3,645 ± 15 ms; 3,691 ± 48 ms | 13.2×; 14.0× slower | 1.94; 1.89 |
 | spawn 1,000,000 tasks, peak RSS | 12.5 MiB | 244 MiB | 19.5× more | |
-| ping-pong, per round trip | 0.32 µs | 4.37 µs | 13.9× slower | 2.94 |
-| fan-in, 1,000,000 values from 8 producers | 68.1 ± 1.1 ms | 445 ± 7 ms | 6.5× slower | 2.87 |
-| memory per blocked task (100,000 against 1,000) | 2.7 KiB | 17.4 KiB | 6.5× more | 3.44 |
-| HTTP/1.1, 64 connections, one 10 s round | 93,630 requests/s | 80,735 requests/s | 0.86× | 3.44; 5.89 |
+| ping-pong, per round trip | 0.32 µs | 4.37 µs | 13.9× slower | 2.94; 3.30 |
+| fan-in, 1,000,000 values from 8 producers | 68.1 ± 1.1 ms; 67.6 ± 0.9 ms | 445 ± 7 ms; 455 ± 10 ms | 6.5×; 6.7× slower | 2.87; 3.35 |
+| memory per blocked task (100,000 against 1,000) | 2.7 KiB | 17.4 KiB | 6.5× more | 3.44; 3.41 |
+| HTTP/1.1, 64 connections, 10 s rounds (first run's one; second run's three) | 93,630; 96,529–97,155 requests/s | 80,735; 80,848–81,626 requests/s | 0.86×; 0.84× | 3.4–14.7 |
 | HTTP server RSS under that load | 21.7 MiB | 11.1 MiB | 0.51× | |
+| primes, W = 1 (second run) | 144.3 ± 0.3 ms | 171.6 ± 0.3 ms | 1.19× slower | 15.3 |
+| primes, W = 10 (second run) | 26.4 ± 1.4 ms | 29.5 ± 2.5 ms | 1.12× slower | 14.3 |
 | peak RSS of a small concurrent program (`pingpong`, `fanin`) | 4.3–4.9 MiB | 1.9–2.1 MiB | 0.44× | |
 
 **What the numbers say.**
@@ -3895,9 +3899,11 @@ parallel `primes` job ran under it and are **not recorded** — they are still t
   robin with no stealing, so ping-pong's two tasks sit on two workers and every hand-off crosses
   threads. Fan-in, 6.5×, is the same cost with eight producers on one lock. 6.3 and 6.4's subject:
   work stealing, and lock-free channels.
-- **HTTP is near Go: 0.86× its requests per second at half its memory.** Here a request is parsing
-  and writing within one connection's task, not hand-offs between tasks. One round only; the load
-  generator shared the ten processors with the server.
+- **HTTP is near Go: 0.84–0.86× its requests per second at half its memory.** Here a request is
+  parsing and writing within one connection's task, not hand-offs between tasks. The load generator
+  shared the ten processors with the server, as `wrk` would.
+- **Parallel CPU work scales like Go's:** one task's arithmetic is 19% slower (the checked
+  overflow of the inner loop), ten tasks 12% (*R1.5 5.1* has the job against C and Rust as well).
 - **A small concurrent program's memory is Nazm's:** 2 MiB against Go's 4–5 MiB.
 
 **What each side guarantees — the two sides do not pay for the same thing.**
@@ -3915,8 +3921,8 @@ parallel `primes` job ran under it and are **not recorded** — they are still t
 
 Not claimed: any lead in concurrency. On this baseline Go leads task start-up and every hand-off by
 an order of magnitude; Nazm leads memory for small programs and for an HTTP server, and is within
-15% of Go's HTTP throughput, with two compile-time guarantees Go does not give. The parallel CPU
-job is the multicore section's, measured there under load; its quiet re-run is still to be taken.
+16% of Go's HTTP throughput and 12–19% of its parallel CPU time, with two compile-time
+guarantees Go does not give.
 
 ## R1.5 5.1: the comparison with safety-equivalent rows and a checks column, measured (2026-10-16)
 
