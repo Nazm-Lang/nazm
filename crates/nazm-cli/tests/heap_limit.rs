@@ -7,7 +7,7 @@
 //! `N0406` line and status 2 in every backend, keeping what it printed before; a program that
 //! allocates many times its limit but holds little of it at once — tasks on the pool included —
 //! runs, so a free is counted back; the manifest gives a limit and the flag overrides it; a limit
-//! is refused where it cannot hold; and without one nothing in the generated program changes.
+//! is refused where it cannot hold; and without one no counted heap is in the program.
 
 #![allow(
     clippy::unwrap_used,
@@ -358,14 +358,18 @@ fn without_a_limit_nothing_in_the_program_changes() {
     let plain = ir(None);
     let counted = ir(Some("1M"));
     assert!(!plain.is_empty());
-    // Without a limit: C's allocator, called directly, and no counted heap anywhere.
+    // Without a limit: no counted heap anywhere, and C's allocator called by the small-block
+    // heap's unit (R1.5 3.1).
     assert!(
         plain.iter().all(|(_, t)| !t.contains("nz.heap_")),
         "{plain:?}"
     );
     assert!(plain.iter().any(|(_, t)| t.contains("call ptr @malloc(")));
-    // With one: the same units and one more, the heap's, which alone calls C's allocator.
-    assert_eq!(counted.len(), plain.len() + 1);
+    // With one: the same units, the counted heap's in place of the small-block heap's, which
+    // alone calls C's allocator.
+    assert!(plain.iter().any(|(n, _)| n.contains("small")), "{plain:?}");
+    assert_eq!(counted.len(), plain.len());
+    assert!(counted.iter().all(|(n, _)| !n.contains("small")));
     for (name, text) in &counted {
         if name.contains("heap") {
             assert!(

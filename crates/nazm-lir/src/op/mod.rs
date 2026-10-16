@@ -49,3 +49,20 @@ pub fn count_heap(m: &mut Module) {
         counted.clone_into(&mut s.name);
     }
 }
+
+/// `m` calling the small-block heap (R1.5 3.1; `nazm_runtime::heap::emit_small`) wherever it
+/// calls C's `malloc`, `realloc` or `free`, as [`count_heap`] makes them the counted heap's.
+pub fn small_heap(m: &mut Module) {
+    for s in &mut m.symbols {
+        if s.linkage != ir::Linkage::Import {
+            continue;
+        }
+        let small = match s.name.as_str() {
+            "malloc" => "nz.small_malloc",
+            "realloc" => "nz.small_realloc",
+            "free" => "nz.small_free",
+            _ => continue,
+        };
+        small.clone_into(&mut s.name);
+    }
+}

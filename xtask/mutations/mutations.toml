@@ -10554,11 +10554,12 @@ Repointed by 4.2, which moved it to 34 for failures by unwinding on the hosted t
 Repointed by multicore, which moved it to 35 for the pool's default worker count, `nz.os_cpus`.
 Repointed by M1, which moved it to 36 for the microcontroller boards' runtime and entry.
 Repointed by C1, which moved it to 37 for the `tls` part: an object built against a runtime without the session table must not be reused.
-Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused."""
+Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused.
+Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 38;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 37;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_eight_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 39;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 38;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_thirty_nine_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -11758,10 +11759,12 @@ name = "n105-cranelift-ignores-the-layout"
 why = "`--layout soa` reaches the LLVM backend and not Cranelift, which silently keeps every element whole: the refusal N68 had is gone, so nothing would say so"
 file = "crates/nazm-cli/src/build/mod.rs"
 find = '''        .with_soa(soa)
-        .with_counted_heap(heap_limit.is_some());
+        .with_counted_heap(heap_limit.is_some())
+        .with_small_heap(small);
     let chosen'''
 replace = '''        .with_soa(false)
-        .with_counted_heap(heap_limit.is_some());
+        .with_counted_heap(heap_limit.is_some())
+        .with_small_heap(small);
     let chosen'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "layout::the_layout_is_asked_for_by_name_and_both_backends_take_it" }]
 
@@ -20475,3 +20478,37 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  %cell = icmp slt i64 %len, 0'''
 replace = '''  %cell = icmp slt i64 %len, -1'''
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "atomics::an_atomic_is_no_string_in_the_memory_report_on_any_tier" }]
+
+# --- R1.5 3.1: the small-block heap (runtime ABI 39) ---------------------------------------
+
+[[mutation]]
+name = "r15-a-freed-block-is-kept-past-the-bound"
+why = "every freed small block joins the freeing thread's list, so a block one thread allocates and another frees is never reused and a producer and a consumer grow without bound"
+file = "crates/nazm-runtime/src/heap.rs"
+find = '''  %full = icmp uge i64 %k, {KEPT}'''
+replace = '''  %full = icmp eq i64 %k, -1'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "small_heap::blocks_freed_on_another_thread_go_back_to_c_past_the_bound" }]
+
+[[mutation]]
+name = "r15-a-small-block-grows-in-place-past-its-class"
+why = "`nz.small_realloc` keeps any small block for up to 512 bytes, so a list grown past its class writes past its block"
+file = "crates/nazm-runtime/src/heap.rs"
+find = '''  %fits = icmp ule i64 %n, %cap'''
+replace = '''  %fits = icmp ule i64 %n, 512'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "small_heap::a_program_that_calls_no_c_allocates_through_the_small_block_heap_on_every_backend" }]
+
+[[mutation]]
+name = "r15-a-program-that-calls-c-allocates-through-the-small-block-heap"
+why = "a program with a foreign function gets the small-block heap, so a buffer C allocated and the program frees, or the reverse, reaches the wrong allocator"
+file = "crates/nazm-lir/src/backend.rs"
+find = '''    allowed && !calls_c(native)'''
+replace = '''    allowed'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "small_heap::a_program_that_calls_c_or_has_a_heap_limit_keeps_c_s_allocator" }]
+
+[[mutation]]
+name = "r15-the-small-block-lists-are-shared-by-threads"
+why = "a program of tasks keeps its lists in plain globals, so two workers pop and push the same list at once"
+file = "crates/nazm-runtime/src/heap.rs"
+find = '''            .replace("{TLS}", if single { "" } else { "thread_local " })'''
+replace = '''            .replace("{TLS}", if single { "" } else { "" })'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "small_heap::a_program_of_tasks_keeps_its_lists_per_thread_and_one_of_one_thread_in_globals" }]

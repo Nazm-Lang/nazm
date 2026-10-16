@@ -115,6 +115,8 @@ pub struct NazmCodegen {
     soa: bool,
     /// Whether every object allocates through the counted heap (R1d, D5: `--heap-limit`).
     counted_heap: bool,
+    /// Whether a program that calls no C allocates through the small-block heap (R1.5 3.1).
+    small_heap: bool,
     /// The generator, when one was named rather than looked for.
     named: Option<PathBuf>,
     /// The generator and its digest, found and read once, when first needed: a build with
@@ -131,6 +133,7 @@ impl NazmCodegen {
             debug: false,
             soa: false,
             counted_heap: false,
+            small_heap: false,
             named: None,
             program: OnceLock::new(),
         }
@@ -162,6 +165,15 @@ impl NazmCodegen {
     #[must_use]
     pub const fn with_counted_heap(mut self, counted: bool) -> Self {
         self.counted_heap = counted;
+        self
+    }
+
+    /// The same backend, a program that calls no C allocating through the small-block heap
+    /// (R1.5 3.1, `nazm_lir::backend::small_heap`): its LIR's imports of C's allocator renamed,
+    /// which the object's key then covers.
+    #[must_use]
+    pub const fn with_small_heap(mut self, small: bool) -> Self {
+        self.small_heap = small;
         self
     }
 
@@ -198,6 +210,8 @@ impl NazmCodegen {
             .map_err(|e| vec![defect(format!("LIR does not validate: {}", e.join("; ")))])?;
         if self.counted_heap {
             nazm_lir::op::count_heap(&mut m);
+        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
+            nazm_lir::op::small_heap(&mut m);
         }
         Ok(m)
     }

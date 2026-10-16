@@ -344,6 +344,23 @@ pub fn units(native: &Native) -> Vec<(String, &crate::ir::Unit, bool)> {
         .collect()
 }
 
+/// Whether the program declares a foreign function anywhere (N42). A program that calls C keeps
+/// C's allocator (R1.5 3.1): C may free what the program allocated, or hand it memory to free.
+#[must_use]
+pub fn calls_c(native: &Native) -> bool {
+    units(native)
+        .iter()
+        .any(|(_, u, _)| u.externals.iter().any(|e| e.foreign))
+}
+
+/// Whether a build's units and runtime allocate through the small-block heap (R1.5 3.1, design
+/// D13; `nazm_runtime::heap::emit_small`): where the build allows it (`allowed`: a hosted
+/// executable with no heap limit and no prebuilt runtime) and the program calls no C.
+#[must_use]
+pub fn small_heap(allowed: bool, native: &Native) -> bool {
+    allowed && !calls_c(native)
+}
+
 /// The LLVM text backend.
 #[derive(Debug, Clone)]
 pub struct LlvmText {
@@ -354,6 +371,8 @@ pub struct LlvmText {
     soa: bool,
     /// Whether every unit allocates through the counted heap (R1d, D5: `--heap-limit`).
     counted_heap: bool,
+    /// Whether a program that calls no C allocates through the small-block heap (R1.5 3.1).
+    small_heap: bool,
 }
 
 impl LlvmText {
@@ -364,7 +383,16 @@ impl LlvmText {
             debug: false,
             soa: false,
             counted_heap: false,
+            small_heap: false,
         }
+    }
+
+    /// The same backend, a program that calls no C allocating through the small-block heap
+    /// (R1.5 3.1, [`small_heap`]).
+    #[must_use]
+    pub const fn with_small_heap(mut self, small: bool) -> Self {
+        self.small_heap = small;
+        self
     }
 
     /// The same backend, every unit allocating through the counted heap (R1d, D5).
@@ -495,6 +523,9 @@ impl Backend for LlvmText {
         // are the counted heap's.
         let ir = if self.counted_heap {
             nazm_runtime::heap::count_heap(&ir)
+        } else if small_heap(self.small_heap, native) {
+            // The small-block heap (R1.5 3.1): the unit's allocations, the copies above included.
+            nazm_runtime::heap::small_heap(&ir)
         } else {
             ir
         };

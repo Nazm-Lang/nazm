@@ -18,6 +18,7 @@ pub(super) fn lowered(
     clif_key: &(dyn Fn(&str) -> ObjectKey + Sync),
     clock: &Clock,
     heap_limit: Option<u64>,
+    small: bool,
     summary: bool,
     summarized: &Summarize<'_>,
 ) -> Result<Lowered, ExitCode> {
@@ -180,6 +181,7 @@ pub(super) fn lowered(
                 &mut reached,
                 choice.stack_size,
                 heap_limit,
+                small,
             )
             // A release build (R1.5, D15): every function of every unit, the runtime's and the
             // entry's among them, guarded by a stack canary.
@@ -373,6 +375,7 @@ fn emit_artefacts(
     reached: &mut nazm_lir::Needs,
     stack: Option<u64>,
     heap_limit: Option<u64>,
+    small: bool,
 ) -> Result<Vec<Artefact>, Vec<nazm_diag::Diagnostic>> {
     let mut out = Vec::new();
     let mut needs = backend.baseline();
@@ -661,6 +664,31 @@ fn emit_artefacts(
             shared: true,
         });
     }
+    // The small-block heap (R1.5 3.1, design D13), where the build allows it and the program
+    // calls no C: every part of the runtime allocates through it as the units already do — all
+    // but the stack unit, whose task stacks are not heap, and the TLS engine, which frees only
+    // what it allocated from C — and its own unit holds the per-thread lists.
+    let small =
+        small && heap_limit.is_none() && !prebuilt && nazm_lir::backend::small_heap(true, native);
+    if small {
+        for a in &mut out {
+            if let (false, nazm_lir::backend::Code::Llvm(text)) =
+                (a.name == "stack" || a.name == "tls", &mut a.code)
+            {
+                *text = nazm_lir::runtime::heap::small_heap(text);
+            }
+        }
+        out.push(Artefact {
+            name: "small".to_owned(),
+            code: nazm_lir::backend::Code::Llvm(nazm_lir::runtime::heap::emit_small(
+                native.single_thread,
+            )),
+            instance: false,
+            key: None,
+            reused: false,
+            shared: true,
+        });
+    }
     // A library has no process entry: C's `main` is the caller's (N55).
     if library {
         return Ok(out);
@@ -684,6 +712,8 @@ fn emit_artefacts(
     // The entry's allocator, under a heap limit, is the counted heap's as every unit's is (D5).
     let entry = if heap_limit.is_some() {
         nazm_lir::runtime::heap::count_heap(&entry)
+    } else if small {
+        nazm_lir::runtime::heap::small_heap(&entry)
     } else {
         entry
     };

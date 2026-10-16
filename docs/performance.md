@@ -3729,6 +3729,35 @@ Toolchains:
 - gnat: GNATMAKE 16.1.0
 - hyperfine: hyperfine 2.0.0
 
+## R1.5 3.1: the small-block heap, measured (2026-10-16)
+
+What changed (`docs/architecture.md` §7.119, runtime ABI 39): a hosted executable that calls no C
+allocates through the runtime's small-block heap — per-thread lists of freed blocks of up to 512
+bytes, at most 64 per size class — in place of C's `malloc` and `free`.
+
+Three programs, each built `--opt-level 2` (LLVM) by release binaries of `24c09da6` (before) and
+this change (after), `hyperfine -N --warmup 3 --runs 15`, interleaved, on an Apple M1 Pro, macOS
+27.2, Apple clang 21.0.0, load average 4 to 7 from other agents; every pair printed the same
+output, and `words` printed `words.expected`:
+
+| program | before | after | peak memory before → after |
+| --- | ---: | ---: | ---: |
+| a loop building a string and a one-element list 5,000,000 times, one thread | 284.7 ± 4.5 ms | 115.4 ± 1.4 ms (2.5× faster) | 1.8 → 1.7 MiB |
+| the same loop, Cranelift (`--backend cranelift`), ten runs | 393.3 ± 7.4 ms | 306.0 ± 1.6 ms (−22%) | — |
+| four tasks each building 1,000,000 strings (thread-local lists) | 465.6 ± 58.7 ms | 390.1 ± 23.2 ms (−16%, noisy) | 2.1 → 2.0 MiB |
+| `bench/compare/nazm/words.nz` | 118.7 ± 4.6 ms | 117.3 ± 2.3 ms (no change) | 19.2 → 19.2 MiB |
+
+A profile of the first loop before the change put about 95% of its samples in `malloc` and `free`.
+A program of tasks gains less because its lists are `thread_local`, whose every access on macOS is
+a call through the thread-local descriptor (a plain-global prototype of the same loop measured
+118 ms, a thread-local one 208 ms). Word frequency does not allocate in its loop since 3.3 —
+each word is a view of its line — so the allocator cannot speed it; its remaining time is the
+byte scan, the hash and the map's probe (3.2, 3.4). Memory: each small block carries a 16-byte
+header, and a thread keeps at most 64 freed blocks per class (at most about 270 KiB a thread);
+a test holds a producer and a consumer on two threads to about 2 MiB, where an unbounded list
+reached 51 MiB. The x86_64 macOS build (under Rosetta) printed what the arm64 build printed, and the
+Windows build links with MinGW-w64; the Windows host was down, so no Windows run is claimed.
+
 ## Multicore: the parallel workload and the pool's default, measured (2026-10-15)
 
 The comparison's first parallel program (`bench/compare/{nazm,c,go,rust}/primes.*`, performance
