@@ -2338,6 +2338,40 @@ default:
   ret i64 %dflt
 }
 
+; The waiter table's locks (6.4): 64 mutexes, 128 bytes apart, bucket `b`'s at `b mod 64`; or null.
+define hidden ptr @nz.pool_locks() {
+entry:
+  %ls = call ptr @malloc(i64 8192)
+  %oom = icmp eq ptr %ls, null
+  br i1 %oom, label %none, label %loop
+none:
+  ret ptr null
+loop:
+  %i = phi i64 [ 0, %entry ], [ %inext, %body ]
+  %more = icmp slt i64 %i, 64
+  br i1 %more, label %body, label %done
+body:
+  %off = mul i64 %i, 128
+  %m = getelementptr i8, ptr %ls, i64 %off
+  %mi = call i32 @pthread_mutex_init(ptr %m, ptr null)
+  %inext = add i64 %i, 1
+  br label %loop
+done:
+  ret ptr %ls
+}
+
+; The lock of the bucket a condition variable hashes to (6.4).
+define hidden ptr @nz.pool_lock_of(ptr %cv) {
+entry:
+  %a = ptrtoint ptr %cv to i64
+  %h = lshr i64 %a, 4
+  %i = and i64 %h, 63
+  %off = mul i64 %i, 128
+  %wl = load ptr, ptr @nz.pool_wait
+  %m = getelementptr i8, ptr %wl, i64 %off
+  ret ptr %m
+}
+
 ; A mutex at 0 and a condition variable at 128, in 256 bytes, or null.
 define hidden ptr @nz.pool_sync() {
 entry:
@@ -2380,7 +2414,7 @@ entry:
   %pages = udiv i64 %up, %pg
   %stack = mul i64 %pages, %pg
   store i64 %stack, ptr @nz.pool_stack
-  %wl = call ptr @nz.pool_sync()
+  %wl = call ptr @nz.pool_locks()
   %bk = call ptr @malloc(i64 2048)
   %js = call ptr @nz.pool_sync()
   %wsz = mul i64 %count, 8
@@ -3155,10 +3189,18 @@ entry:
 ; Take `%t` off the waiters of whatever it waits on, if it is still on them.
 define hidden void @nz.pool_unwait(ptr %t) {
 entry:
-  %wl = load ptr, ptr @nz.pool_wait
-  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  ; On no list: nothing to lock (6.4). A waker clears this under the bucket's lock, after
+  ; unlinking the task, so null means off the list; otherwise the bucket is the one it names.
   %cvp = getelementptr i8, ptr %t, i64 128
-  %cv = load ptr, ptr %cvp
+  %cv0 = load atomic ptr, ptr %cvp monotonic, align 8
+  %off = icmp eq ptr %cv0, null
+  br i1 %off, label %quiet, label %lock
+quiet:
+  ret void
+lock:
+  %wl = call ptr @nz.pool_lock_of(ptr %cv0)
+  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  %cv = load atomic ptr, ptr %cvp monotonic, align 8
   %none = icmp eq ptr %cv, null
   br i1 %none, label %out, label %find
 find:
@@ -3177,10 +3219,10 @@ next:
   br label %walk
 unlink:
   %after = load ptr, ptr %nlink
-  store ptr %after, ptr %link
+  store atomic ptr %after, ptr %link monotonic, align 8
   br label %clear
 clear:
-  store ptr null, ptr %cvp
+  store atomic ptr null, ptr %cvp monotonic, align 8
   %np = getelementptr i8, ptr %t, i64 120
   store ptr null, ptr %np
   br label %out
@@ -3279,15 +3321,15 @@ entry:
 ; waker needs `%m` to change anything, and finds the task registered and parking.
 define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) {
 entry:
-  %wl = load ptr, ptr @nz.pool_wait
+  %wl = call ptr @nz.pool_lock_of(ptr %cv)
   %l = call i32 @pthread_mutex_lock(ptr %wl)
   %slot = call ptr @nz.pool_bucket(ptr %cv)
   %head = load ptr, ptr %slot
   %np = getelementptr i8, ptr %t, i64 120
   store ptr %head, ptr %np
   %cvp = getelementptr i8, ptr %t, i64 128
-  store ptr %cv, ptr %cvp
-  store ptr %t, ptr %slot
+  store atomic ptr %cv, ptr %cvp monotonic, align 8
+  store atomic ptr %t, ptr %slot monotonic, align 8
   %u = call i32 @pthread_mutex_unlock(ptr %wl)
   %wp = getelementptr i8, ptr %t, i64 40
   %w = load ptr, ptr %wp
@@ -3313,12 +3355,19 @@ entry:
   %pool = icmp eq i64 %mode, 2
   br i1 %pool, label %tasks, label %out
 tasks:
-  %wl = load ptr, ptr @nz.pool_wait
-  %l = call i32 @pthread_mutex_lock(ptr %wl)
+  ; An empty bucket has no task waiting on `%cv` (6.4): a waiter registers under the lock its
+  ; caller holds while it looks at its condition, and a waker changes that condition under the
+  ; same lock before it wakes, so a registration this wake must see is already visible.
   %slot = call ptr @nz.pool_bucket(ptr %cv)
+  %first = load atomic ptr, ptr %slot monotonic, align 8
+  %vacant = icmp eq ptr %first, null
+  br i1 %vacant, label %out, label %lockit
+lockit:
+  %wl = call ptr @nz.pool_lock_of(ptr %cv)
+  %l = call i32 @pthread_mutex_lock(ptr %wl)
   br label %walk
 walk:
-  %link = phi ptr [ %slot, %tasks ], [ %nlink, %skip ], [ %link, %woke ]
+  %link = phi ptr [ %slot, %lockit ], [ %nlink, %skip ], [ %link, %woke ]
   %cur = load ptr, ptr %link
   %end = icmp eq ptr %cur, null
   br i1 %end, label %done, label %test
@@ -3332,9 +3381,9 @@ skip:
   br label %walk
 take:
   %after = load ptr, ptr %nlink
-  store ptr %after, ptr %link
+  store atomic ptr %after, ptr %link monotonic, align 8
   store ptr null, ptr %nlink
-  store ptr null, ptr %cvp
+  store atomic ptr null, ptr %cvp monotonic, align 8
   call void @nz.task_wake(ptr %cur)
   br label %woke
 woke:

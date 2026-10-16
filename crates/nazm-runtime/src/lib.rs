@@ -340,7 +340,11 @@ pub fn escape(s: &str) -> String {
 /// worker; a worker record is 448 bytes; and a scope's join reads a done task without a lock,
 /// counting itself in `nz.pool_joiners` before it waits, so a task ending wakes no one unless
 /// someone waits.
-pub const RUNTIME_ABI_REVISION: u32 = 41;
+/// 42 is performance leadership 6.4's waiter table (2026-10-16): `nz.pool_wait` is 64 mutexes
+/// 128 bytes apart (`nz.pool_locks`), bucket `b` under lock `b mod 64` (`nz.pool_lock_of`), in
+/// place of one lock for every wait and wake; a wake whose bucket is empty takes no lock, and a
+/// task resumed off every list takes none to leave it.
+pub const RUNTIME_ABI_REVISION: u32 = 42;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -820,6 +824,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.task_suspend", "void" ("ptr") "", false, Tasks, "", Never, Owner, "switch from a task back to its worker (N83)", "none"),
     rt!("nz.task_wake", "void" ("ptr") "", false, Tasks, "", Never, Any, "make a parked task runnable, or note the wake (N83)", "none"),
     rt!("nz.pool_bucket", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the waiter list a condition variable hashes to (N83)", "none"),
+    rt!("nz.pool_locks", "ptr" () "", false, Tasks, "", Null, Any, "the waiter table's 64 locks (6.4)", "the process owns them"),
+    rt!("nz.pool_lock_of", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the lock of the bucket a condition variable hashes to (6.4)", "none"),
     rt!("nz.pool_unwait", "void" ("ptr") "", false, Tasks, "", Never, Any, "take a task off the waiters it is still on (N83)", "none"),
     rt!("nz.cwait", "i32" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "wait on a condition variable: park a pool task, block a thread (N83)", "the mutex is held again on return"),
     rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "", false, Tasks, "", Never, Locked, "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", "the mutex is held again on return"),
@@ -1477,9 +1483,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_one_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.3's scheduler: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 41);
+    fn the_runtime_is_revision_forty_two_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.4's waiter locks: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 42);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

@@ -10558,11 +10558,12 @@ Repointed by C1, which moved it to 37 for the `tls` part: an object built agains
 Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built against a runtime that counts an atomic as a string must not be reused.
 Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's.
 Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do.
-Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448."""
+Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448.
+Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 41;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 40;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_one_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 42;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 41;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_two_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20680,3 +20681,21 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  store atomic ptr %tnext, ptr %vhp monotonic, align 8'''
 replace = '''  store atomic ptr %first, ptr %vhp monotonic, align 8'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run" }]
+
+# --- Performance leadership 6.4: the waiter table's lock per bucket group, no lock for an empty bucket (2026-10-16)
+
+[[mutation]]
+name = "pw-a-waker-takes-every-bucket-for-empty"
+why = "a wake believes every bucket empty and wakes no parked task, so a task waiting on a channel waits for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %vacant = icmp eq ptr %first, null'''
+replace = '''  %vacant = icmp eq ptr %first, %first'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::every_concurrency_shape_behaves_the_same_on_the_pool_on_both_backends" }]
+
+[[mutation]]
+name = "pw-a-parked-task-registers-in-no-bucket"
+why = "a parking task takes its bucket's lock but never links itself in, so no wake finds it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store atomic ptr %t, ptr %slot monotonic, align 8'''
+replace = '''  store atomic ptr %head, ptr %slot monotonic, align 8'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
