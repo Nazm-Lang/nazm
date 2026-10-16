@@ -57,6 +57,14 @@ pub enum Arch {
     /// Arm Cortex-M, ARMv7-M Thumb-2 (Gate 3, `docs/spec.md`, *Boards*): a microcontroller board
     /// only, with 32-bit pointers and a 64-bit `Int`, as wasm32 has.
     Thumbv7m,
+    /// Arm Cortex-M33, ARMv8-M Mainline with a single-precision FPU and the hard-float calling
+    /// convention (M1, `docs/spec.md`, *Boards*): a microcontroller board only, with
+    /// 32-bit pointers and a 64-bit `Int`. `Float64` is refused (`N0854`).
+    Thumbv8m,
+    /// RISC-V RV32IMC with Zicsr, and no atomic or floating-point instructions (M1): a
+    /// microcontroller board only, with 32-bit pointers and a 64-bit `Int`. Every float is
+    /// refused (`N0854`).
+    Riscv32,
 }
 
 /// An operating system this compiler links for.
@@ -108,13 +116,16 @@ impl Target {
             "aarch64-apple-ios" => (Arch::Aarch64, Os::Ios),
             "riscv64gc-unknown-none-elf" => (Arch::Riscv64, Os::None),
             "thumbv7m-none-eabi" => (Arch::Thumbv7m, Os::None),
+            "thumbv8m.main-none-eabihf" => (Arch::Thumbv8m, Os::None),
+            "riscv32imc-unknown-none-elf" => (Arch::Riscv32, Os::None),
             other => {
                 return Err(format!(
                     "`{other}` is not a target this compiler generates code for; the \
                      targets are aarch64-apple-darwin, aarch64-unknown-linux-gnu, \
                      x86_64-apple-darwin, x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and, \
                      freestanding, \
-                     aarch64-unknown-none, riscv64gc-unknown-none-elf, thumbv7m-none-eabi and \
+                     aarch64-unknown-none, riscv64gc-unknown-none-elf, thumbv7m-none-eabi, \
+                     thumbv8m.main-none-eabihf, riscv32imc-unknown-none-elf and \
                      wasm32-unknown-unknown, WebAssembly with WASI, wasm32-wasip1, and the mobile \
                      targets aarch64-linux-android and aarch64-apple-ios"
                 ))
@@ -157,6 +168,16 @@ impl Target {
                 crate::op::llvm::Probes::Inline
             }
         }
+    }
+
+    /// Whether pointers are 32 bits wide (Q1-A1-05, M1): WebAssembly and the microcontroller
+    /// boards, where a C pointer, which crosses as a 64-bit word, is refused by name.
+    #[must_use]
+    pub fn narrow_pointers(&self) -> bool {
+        matches!(
+            self.arch,
+            Arch::Wasm32 | Arch::Thumbv7m | Arch::Thumbv8m | Arch::Riscv32
+        )
     }
 
     /// Whether this is WebAssembly (N64): freestanding, its outside reached only by imports.
@@ -675,6 +696,22 @@ pub const SUPPORT: &[Cell] = &[
         debugger: "not exercised",
     },
     Cell {
+        triple: "thumbv8m.main-none-eabihf",
+        llvm_cpu: "generic",
+        cranelift_cpu: "none",
+        llvm: Support::Compile("an_image_for_each_microcontroller_target_is_laid_out_for_its_memory"),
+        cranelift: NO_CRANELIFT_BOARD,
+        debugger: "not exercised",
+    },
+    Cell {
+        triple: "riscv32imc-unknown-none-elf",
+        llvm_cpu: "generic-rv32",
+        cranelift_cpu: "none",
+        llvm: Support::Compile("an_image_for_each_microcontroller_target_is_laid_out_for_its_memory"),
+        cranelift: NO_CRANELIFT_BOARD,
+        debugger: "not exercised",
+    },
+    Cell {
         triple: "wasm32-unknown-unknown",
         llvm_cpu: "generic",
         cranelift_cpu: "none",
@@ -725,8 +762,9 @@ pub const NON_GOALS: &[(&str, &str)] = &[
     (
         "32-bit hosted targets",
         "a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — \
-         freestanding, or with WASI's imports and its own heap — and the Cortex-M board \
-         (`thumbv7m-none-eabi`) are the 32-bit targets, where a C handle, a C string result and a \
+         freestanding, or with WASI's imports and its own heap — and the microcontroller boards \
+         (`thumbv7m-none-eabi`, `thumbv8m.main-none-eabihf`, `riscv32imc-unknown-none-elf`) are \
+         the 32-bit targets, where a C handle, a C string result and a \
          callback are refused by name (`N0381`, Q1-A1-05) because a C pointer crosses as 64 bits",
     ),
     (

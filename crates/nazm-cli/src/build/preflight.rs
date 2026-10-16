@@ -153,6 +153,25 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
     }
+    // RV32 (M1) likewise: asked of the driver by its 32-bit RISC-V code generator's name.
+    if target.arch == nazm_lir::backend::Arch::Riscv32 && !crate::backend::generates("riscv32") {
+        if summary {
+            return Err(summarized(
+                Status::Refused,
+                exit::TOOLCHAIN_FAILED,
+                &[],
+                None,
+                None,
+            ));
+        }
+        eprintln!(
+            "nazm: this host's `{}` has no RISC-V code generator, so it cannot build `{}`; build \
+             where one does — the `nazm-qemu:n86` image's, or LLVM's own `clang`",
+            crate::backend::DRIVER,
+            target.triple
+        );
+        return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+    }
     // The field-by-field layout (N68, §7.70), asked for by name. LIR's since N105, so both
     // backends take it.
     let soa = match choice.layout {
@@ -438,6 +457,8 @@ pub(crate) fn read_board(
     let isa = match t.arch {
         Arch::Riscv64 => Isa::Riscv64,
         Arch::Thumbv7m => Isa::Thumbv7m,
+        Arch::Thumbv8m => Isa::Thumbv8m,
+        Arch::Riscv32 => Isa::Riscv32,
         _ => Isa::Aarch64,
     };
     let text = match std::fs::read_to_string(path) {

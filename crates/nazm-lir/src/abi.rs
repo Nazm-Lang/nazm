@@ -45,6 +45,8 @@ impl DataLayout {
         match target.arch {
             // A Cortex-M board's pointers are 4 bytes too (Gate 3): the same layout as wasm32's.
             Arch::Wasm32 | Arch::Thumbv7m => Self::WASM32,
+            // The microcontroller targets (M1): 4-byte pointers, and still an 8-byte `Int`.
+            Arch::Thumbv8m | Arch::Riscv32 => Self::WASM32,
             Arch::Aarch64 | Arch::X86_64 | Arch::Riscv64 => Self::LP64,
         }
     }

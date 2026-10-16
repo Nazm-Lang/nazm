@@ -34,6 +34,8 @@ No cell says just "supported".
 | `aarch64-unknown-none` | emulator-verified | unsupported | QEMU `virt`, Cortex-A53 | not exercised |
 | `riscv64gc-unknown-none-elf` | emulator-verified | unsupported | QEMU `virt`, RV64GC, machine mode | not exercised |
 | `thumbv7m-none-eabi` | emulator-verified | unsupported | QEMU `mps2-an385`, Cortex-M3 (Gate 3) | not exercised |
+| `thumbv8m.main-none-eabihf` | compile-only | unsupported | nowhere yet: objects and a flash/RAM `link.ld` read back; the QEMU `mps2-an505` (Cortex-M33) leg is written, unrun (M1) | not exercised |
+| `riscv32imc-unknown-none-elf` | compile-only | unsupported | nowhere yet: objects and a flash/RAM `link.ld` read back where `clang` has a RISC-V code generator; the QEMU RISC-V `virt` leg (an RV32IMC hart) is written, unrun (M1) | not exercised |
 | `wasm32-unknown-unknown` | run-verified | unsupported | Node.js's engine, the reference host | DWARF sections present; a debugger not exercised |
 | `wasm32-wasip1` | run-verified | unsupported | Node.js's `node:wasi`, preview 1, in the `nazm-wasm:n64` container (Gate 3) | DWARF sections present; a debugger not exercised |
 | `aarch64-linux-android` | run-verified on a Linux kernel | unsupported | static Bionic executables, linked by the NDK r27c's `clang` for API level 30, run on an aarch64 Linux kernel in a Debian container; no Android device or emulator (Gate 3) | not exercised |
@@ -47,7 +49,8 @@ program that calls C runs a thread per task unless `NAZM_SCHEDULER=pool`. A targ
 this host lacks is built to objects (`--objects`) for its own toolchain; there is no bundled
 sysroot. The boards are freestanding: no heap, `@std`, tasks, channels, closures or C library,
 objects and a `link.ld` linked by `ld.lld`, and RISC-V needs a `clang` with a RISC-V code generator
-(not Apple's). WebAssembly is the freestanding subset: no heap, so no strings built at run time,
+(not Apple's). The microcontrollers (M1) run from flash: `Float64` is refused on the Cortex-M33
+and every float on RV32IMC (`N0854`), and an image that does not fit is `N0850`. WebAssembly is the freestanding subset: no heap, so no strings built at run time,
 sequences, channels, tasks or closures; imports `nazm_host.write` and `nazm_host.report` only, no
 WASI. Details: `limitations.md`, *Native code*.
 
@@ -133,7 +136,7 @@ per call, expanded by SipHash, for the same reason. The benchmark harness's Post
 | | |
 | --- | --- |
 | Windows with Microsoft's toolchain, and Windows ARM64 | unsupported: `x86_64-pc-windows-msvc` needs Microsoft's SDK and C runtime, which are not downloaded or accepted here, and no Windows ARM64 machine or emulator is here; Windows x86_64 is `x86_64-pc-windows-gnu`, with MinGW-w64's |
-| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — freestanding, or with WASI's imports and its own heap — and the Cortex-M board (`thumbv7m-none-eabi`) are the 32-bit targets, where a C handle, a C string result and a callback are refused by name (`N0381`, Q1-A1-05) because a C pointer crosses as 64 bits |
+| 32-bit hosted targets | a non-goal: `Int` is 64-bit and every hosted layout assumes 64-bit pointers; wasm32 — freestanding, or with WASI's imports and its own heap — and the microcontroller boards (`thumbv7m-none-eabi`, `thumbv8m.main-none-eabihf`, `riscv32imc-unknown-none-elf`) are the 32-bit targets, where a C handle, a C string result and a callback are refused by name (`N0381`, Q1-A1-05) because a C pointer crosses as 64 bits |
 | big-endian targets | a non-goal: no big-endian machine or image is here to run one, and the DWARF writer and layouts assume little-endian |
 
 ## Optional features

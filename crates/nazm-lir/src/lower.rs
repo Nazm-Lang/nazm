@@ -335,6 +335,7 @@ pub fn lower_as(
                 || f.interrupt.is_some()
                 || f.on_failure
                 || f.task.is_some()
+                || f.board_init
             {
                 Linkage::Hidden
             } else {
@@ -355,7 +356,8 @@ pub fn lower_as(
                 entered: Some(f.id) == entry_id
                     || f.interrupt.is_some()
                     || f.on_failure
-                    || f.task.is_some(),
+                    || f.task.is_some()
+                    || f.board_init,
             }
         })
         .collect();

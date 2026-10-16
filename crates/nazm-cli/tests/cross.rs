@@ -373,8 +373,8 @@ fn inspect_names_every_target_and_what_this_host_makes_of_it() {
     let listed = v["toolchain"]["targets"].as_array().unwrap();
     // The four hosted triples and, since N62, the board, since N64, WebAssembly, since N86 the
     // RISC-V board, and since Gate 3 Windows x86_64, the Cortex-M board, WebAssembly with WASI and
-    // the two mobile targets.
-    assert_eq!(listed.len(), 12);
+    // the two mobile targets, and since M1 the two microcontroller targets.
+    assert_eq!(listed.len(), 14);
     for t in listed {
         let target = Target::parse(t["triple"].as_str().unwrap()).unwrap();
         let want = if target.links_on(&host) {

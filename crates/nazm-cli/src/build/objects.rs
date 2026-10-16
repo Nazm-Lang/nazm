@@ -234,6 +234,17 @@ pub(super) fn objects_for_target(
     // Objects for the target's own toolchain (N57): every object in link order, renamed by its
     // position so the order survives, and `link.txt` saying what to link them with.
     if let Some(dir) = choice.objects {
+        // A microcontroller's flash and RAM (M1): an image its objects already show will not fit
+        // is refused before anything is written.
+        if freestanding && target.is_board() {
+            if let Err(why) = fits(&board_for(choice, target), objects) {
+                cleanup(false);
+                if !summary {
+                    eprintln!("nazm: error[{}]: {why}", nazm_diag::codes::BOARD_MEMORY);
+                }
+                return Some(ExitCode::from(exit::CHECK_FAILED));
+            }
+        }
         // The sections `@section` names (Gate 3), read from what was compiled.
         let placed = nazm_lir::runtime::board::Placed::of(
             &artefacts
@@ -298,6 +309,119 @@ pub(super) fn objects_for_target(
         });
     }
     None
+}
+
+/// What a microcontroller board's image needs of its flash and RAM (M1, `docs/spec.md`,
+/// *Boards*), read from its objects' section headers: code, read-only data and the
+/// initial values of writable data in flash; writable and zeroed data and the stack in RAM. Each
+/// section is aligned as it asks, in object order, so this is what the linker will need at
+/// least — the linker script's own assertions hold the exact sum. A board loaded whole, or an
+/// object that is not 32-bit ELF, is not measured.
+pub(super) fn fits(
+    board: &nazm_lir::runtime::board::Board,
+    objects: &[PathBuf],
+) -> Result<(), String> {
+    let Some(m) = board.memory else {
+        return Ok(());
+    };
+    let (mut flash, mut data, mut zeroed) = (0u64, 0u64, 0u64);
+    for o in objects {
+        let Ok(bytes) = std::fs::read(o) else {
+            continue;
+        };
+        for (name, kind, size, align) in elf32_sections(&bytes) {
+            if name.starts_with(".eh_frame") {
+                continue;
+            }
+            let at = |n: u64| n.div_ceil(align.max(1)) * align.max(1) + size;
+            match kind {
+                SectionKind::Code => flash = at(flash),
+                SectionKind::Data => data = at(data),
+                SectionKind::Zeroed => zeroed = at(zeroed),
+            }
+        }
+    }
+    let need_flash = flash + data;
+    if need_flash > m.flash.length {
+        return Err(format!(
+            "the image does not fit the board `{}`'s flash: it needs at least {need_flash:#x} \
+             bytes and `memory.flash` has {:#x}, over by {:#x}",
+            board.name,
+            m.flash.length,
+            need_flash - m.flash.length
+        ));
+    }
+    let need_ram = data + zeroed + board.stack;
+    if need_ram > m.ram.length {
+        return Err(format!(
+            "the image's data and stack do not fit the board `{}`'s RAM: they need at least \
+             {need_ram:#x} bytes — the stack {:#x} of them — and `memory.ram` has {:#x}, over by \
+             {:#x}",
+            board.name,
+            board.stack,
+            m.ram.length,
+            need_ram - m.ram.length
+        ));
+    }
+    Ok(())
+}
+
+/// Where a section of an image goes (M1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SectionKind {
+    /// Code or read-only data: flash.
+    Code,
+    /// Writable data: RAM, its initial values in flash too.
+    Data,
+    /// Zeroed data: RAM.
+    Zeroed,
+}
+
+/// Every allocated section of a 32-bit little-endian ELF object: its name, where it goes, its
+/// size and its alignment. Nothing for anything else.
+fn elf32_sections(b: &[u8]) -> Vec<(String, SectionKind, u64, u64)> {
+    let u16_at = |at: usize| -> Option<u64> {
+        let s: [u8; 2] = b.get(at..at + 2)?.try_into().ok()?;
+        Some(u64::from(u16::from_le_bytes(s)))
+    };
+    let u32_at = |at: usize| -> Option<u64> {
+        let s: [u8; 4] = b.get(at..at + 4)?.try_into().ok()?;
+        Some(u64::from(u32::from_le_bytes(s)))
+    };
+    // `\x7fELF`, 32-bit, little-endian.
+    if !b.starts_with(b"\x7fELF") || b.get(4) != Some(&1) || b.get(5) != Some(&1) {
+        return Vec::new();
+    }
+    let header = || -> Option<Vec<(String, SectionKind, u64, u64)>> {
+        let shoff = usize::try_from(u32_at(0x20)?).ok()?;
+        let shentsize = usize::try_from(u16_at(0x2e)?).ok()?;
+        let shnum = usize::try_from(u16_at(0x30)?).ok()?;
+        let shstrndx = usize::try_from(u16_at(0x32)?).ok()?;
+        let sh = |i: usize, field: usize| u32_at(shoff + i * shentsize + field);
+        let names = usize::try_from(sh(shstrndx, 16)?).ok()?;
+        let mut out = Vec::new();
+        for i in 0..shnum {
+            let (kind, flags) = (sh(i, 4)?, sh(i, 8)?);
+            // SHF_ALLOC: in the image at all.
+            if flags & 0x2 == 0 {
+                continue;
+            }
+            let start = names + usize::try_from(sh(i, 0)?).ok()?;
+            let end = b.get(start..)?.iter().position(|c| *c == 0)? + start;
+            let name = String::from_utf8_lossy(b.get(start..end)?).into_owned();
+            // SHT_NOBITS is zeroed; SHF_WRITE is data; anything else is flash's.
+            let goes = if kind == 8 {
+                SectionKind::Zeroed
+            } else if flags & 0x1 != 0 {
+                SectionKind::Data
+            } else {
+                SectionKind::Code
+            };
+            out.push((name, goes, sh(i, 20)?, sh(i, 32)?));
+        }
+        Some(out)
+    };
+    header().unwrap_or_default()
 }
 
 /// The bytes a Windows executable reserves for its main thread: 8 MiB, the main thread's stack

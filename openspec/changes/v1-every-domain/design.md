@@ -1071,7 +1071,7 @@ The Hazard3 cores (`riscv32imac`) are M's first "after the gate" family: the sam
 
 | Target | Chip | New in the backend | Floats | Atomics |
 | --- | --- | --- | --- | --- |
-| `thumbv8m.main-none-eabihf` | RP2350 (and QEMU `mps2-an505`) | the triple; hard-float calling convention | `Float32` in hardware; `Float64` refused by name (`N0392`) at 1.0 — the FPU is single-precision | native (`LDREX`/`STREX`) |
+| `thumbv8m.main-none-eabihf` | RP2350 (and QEMU `mps2-an505`) | the triple; hard-float calling convention | `Float32` in hardware; `Float64` refused by name (`N0854`, M1) at 1.0 — the FPU is single-precision | an `Int` cell is 64 bits and ARMv8-M has no 64-bit exclusive (`LDREXD`): interrupts masked around each operation, as the Cortex-M3's (corrected by M1) |
 | `riscv32imc-unknown-none-elf` | ESP32-C3 (and QEMU `virt` with an RV32IMC CPU) | 32-bit RISC-V; the board runtime's 64-bit division | none: `Float32` and `Float64` refused by name | **no `A` extension**: interrupts masked around each operation, as the Cortex-M3's runtime does |
 
 Both are 32-bit-pointer targets like `thumbv7m-none-eabi`: `Int` stays 64-bit and means what it
