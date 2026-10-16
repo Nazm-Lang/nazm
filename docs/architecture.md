@@ -6318,7 +6318,8 @@ bound is computed, and none is implied.
 
 **The stack bound (board only).** A board build (§7.64) writes `bounds.json` (`nazm.bounds/1`) beside
 `link.ld`: the code generator's frame size for every function of the image — clang's own
-`prologepilog` figures, read at compile time, so the board build does not reuse cached objects — and
+prologue/epilogue figures (the remark pass `prologepilog` to LLVM 22, `prolog-epilog` from LLVM 23;
+both are asked for), read at compile time, so the board build does not reuse cached objects — and
 the deepest path through the image's call graph, read from the generated code from `nz_board_main`.
 The sum along that path is a static upper bound on stack bytes for that build, stated with its path,
 beside the 64 KiB the linker script reserves. A call cycle, a call through a value, or a function

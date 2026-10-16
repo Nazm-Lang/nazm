@@ -119,6 +119,28 @@ target made run-verified:
 
 The three new jobs gather evidence (`continue-on-error`) until each is green once.
 
+What they found, and what changed (2026-10-16):
+
+- **macOS: Nazm's own code generator's LSDAs.** The `--backend nazm` objects did not say
+  `MH_SUBSECTIONS_VIA_SYMBOLS` and named no symbol at each LSDA, so `__gcc_except_tab` was one
+  atom. The runner's linker (the selected Xcode's, older than the developer's) tied every
+  function with landing pads to that atom's start — the first function's LSDA — so no landing pad
+  was found below the first frame and every failure ended in `abort` (a signal, not status 2).
+  The developer's linker resolves the address inside the atom, which hid it. Inferred, not yet
+  observed on the runner: the failures were exactly the images with more than one function with
+  landing pads (a C export whose one LSDA is its entry's passed there), and the developer's
+  machine has no older linker to show it; the next run on the runner verifies it. The objects now carry
+  both, as LLVM's do (`toolchain/codegen/macho.nz`; the test
+  `nazm_backend::every_lsda_of_a_mach_o_object_is_an_atom_of_its_own`). LLVM's own builds were
+  never affected: their nazm functions describe their frames in `__eh_frame`.
+- **macOS: LLVM 23 renamed a remark.** The board's stack bound reads clang's frame-size remarks,
+  whose pass is `prologepilog` to LLVM 22 and `prolog-epilog` from LLVM 23, which says nothing for
+  the old name; `nazm` asks for both (`backend.rs`). Homebrew's `llvm` is 23 since October 2026.
+- **macOS: a mismatched SDK on the runner.** Homebrew's clang uses the Command Line Tools' SDK
+  (27.0 on the macos-26 image) while it links with the selected Xcode's older `ld`, which cannot
+  read that SDK's `libSystem.tbd` (`tapi error`, the x86_64 links). The job points Homebrew's clang
+  at the selected Xcode's SDK; a machine whose tools match needs nothing.
+
 ### The toolchain on a Windows host (W1, 2026-10-16)
 
 `nazm` itself, cross-built here for `x86_64-pc-windows-gnu` and run on the copyright holder's

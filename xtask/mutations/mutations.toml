@@ -11406,7 +11406,7 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "realtime::a_board_b
 name = "n63-frames-are-not-asked-for"
 why = "clang is not asked for its frame sizes, so every function's frame is missing and the bound is wrong"
 file = "crates/nazm-cli/src/backend.rs"
-find = '            .arg("-Rpass-analysis=prologepilog")'
+find = '            .arg("-Rpass-analysis=^prolog-?epilog$")'
 replace = '            .arg("-Wno-override-module")'
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "realtime::a_board_build_states_its_stack_bound_with_the_path" }]
 
@@ -19943,6 +19943,14 @@ file = "toolchain/codegen/macho.nz"
 find = '''put32(unwind, c.fn_enc[i] | (if has { 0x40000000 } else { 0 }))'''
 replace = '''put32(unwind, c.fn_enc[i])'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "failure_convention::a_failure_deep_in_a_direct_recursion_unwinds_every_frame" }]
+
+[[mutation]]
+name = "ci-every-lsda-shares-one-atom"
+why = "a Mach-O object of the generator's does not say MH_SUBSECTIONS_VIA_SYMBOLS, so its LSDAs are one atom and a linker that ties a function to the atom gives every function the first LSDA (GitHub's macOS 26 runner)"
+file = "toolchain/codegen/macho.nz"
+find = "    put32(out, 0x2000)"
+replace = "    put32(out, 0)"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_lsda_of_a_mach_o_object_is_an_atom_of_its_own" }]
 
 [[mutation]]
 name = "r9-7-8-the-archive-carries-no-generator"
