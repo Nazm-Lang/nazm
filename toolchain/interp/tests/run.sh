@@ -5,7 +5,7 @@
 # and result reports asked for. Prints each difference, then `N agree, M differ` (and how many
 # inputs did not check, which are not the interpreter's to run).
 #
-#   toolchain/interp/tests/run.sh [-v] [FILE.nz ...]
+#   toolchain/interp/tests/run.sh [-v] [FILE.nz ... | --rust-tests [PATTERN]]
 #
 # NAZM names the Rust toolchain compared with (default: the 0.10.0 release); NAZM_BUILD the one that
 # builds the interpreter, which is written in the 0.10.0 language (default: the 0.10.0 release).
@@ -41,39 +41,12 @@ fi
 
 # Every input: the compatibility corpus's run and trap cases, the examples and this track's own
 # (a case of several modules is a folder, run from its `main.nz`).
-# `--rust-tests` instead takes the programs the Rust CLI tests embed: each string literal of
-# `crates/nazm-cli/tests/*.rs` with a `fn main` in it — raw, or plain with Rust's escapes and line
-# continuations undone — written out as a file of its own. A format string (one with `{{`) is left
-# out: its text is not the program. Character literals are stepped over, so a `'"'` starts nothing.
+# `--rust-tests` instead takes the programs the Rust CLI tests embed, as `rust-tests.pl` writes
+# them: each string literal with a `fn main` in it as a file of its own, and the files a test
+# function names (`("lib.nz", "...")`) as one program of several modules.
 if [ "${1:-}" = "--rust-tests" ]; then
-    mkdir -p "$work/rs"
-    for t in "$repo"/crates/nazm-cli/tests/*.rs; do
-        perl -0777 -ne '
-            my $base = $ARGV; $base =~ s{.*/}{}; $base =~ s{\.rs$}{};
-            my $n = 0;
-            while (/\br(#*)"(.*?)"\1|(?<![\w])\x27(?:[^\x27\\\n]|\\.[^\x27\n]*)\x27|"((?:[^"\\]|\\.)*)"/sg) {
-                my $src;
-                if (defined $2) {
-                    $src = $2;
-                } elsif (defined $3) {
-                    $src = $3;
-                    next if $src =~ /\{\{|\}\}/;
-                    $src =~ s/\\\n\s*//g;
-                    $src =~ s/\\(u\{[0-9a-fA-F]+\}|.)/
-                        my $e = $1;
-                        $e eq "n" ? "\n" : $e eq "t" ? "\t" : $e eq "r" ? "\r" : $e eq "0" ? "\0" :
-                        $e =~ m{^u\{(.*)\}$} ? chr(hex($1)) : $e/ge;
-                } else {
-                    next;
-                }
-                next unless $src =~ /fn main\b/;
-                $n++;
-                open(my $f, ">", "'"$work"'/rs/$base-$n.nz") or die;
-                print $f $src;
-                close($f);
-            }' "$t"
-    done
-    cases=$(ls "$work"/rs/*.nz)
+    # `--rust-tests PATTERN`: only the programs whose path has PATTERN in it.
+    cases=$(perl "$here/rust-tests.pl" "$work/rs" "$repo"/crates/nazm-cli/tests/*.rs | grep -- "${2:-}")
     R4_BOUND=${R4_BOUND:-300}
 elif [ $# -gt 0 ]; then
     cases="$*"

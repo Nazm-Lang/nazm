@@ -239,18 +239,45 @@ To the coordinator — none blocks slices 2 and 3:
 
 ## Differences that remain
 
-`run.sh --rust-tests` (1,783 programs, 925 that check; 2,083 comparisons) leaves 15, none the
-interpreter's to remove:
+`run.sh --rust-tests` leaves 13 or 14 of the 2,686 comparisons, none the interpreter's to remove:
 
 - **Different on every run of the Rust interpreter too:** process and group ids
-  (`platform_files-18`, `-20`, `process_control-2`, `-3`, `-11`), a span's nanoseconds
-  (`stdlib-12`), the order 32 threads finish in (`scheduler_default-5`).
+  (`platform_files-18`, `platform_files-m1`, `process_control-2`, `-3`, `-11`), a span's
+  nanoseconds (`stdlib-12`), the order 32 threads finish in (`scheduler_default-5`), how often a
+  task polling with a zero timeout spins before the thread it waits for runs
+  (`scheduler_pool-10`: 78 to 2,158 selects on four Rust runs).
 - **Timing:** `process-1`'s memory report counts one string per read of a child's pipe, and how
   much a read finds depends on when it runs.
 - **The comparison itself:** `process-2` lists its environment, and the Rust run's has the three
   report variables, which this interpreter takes as flags.
-- **Speed:** `collections_r1e-2` (300,000 ordered-map inserts) takes about 38 s on the Rust
-  interpreter and 63 s here, past the 60 s bound; under the default 300 s it agrees.
+
+`collections_r1e-2` (300,000 ordered-map inserts) agrees under `--rust-tests`' 300 s bound.
+
+## The Rust tests' programs
+
+`run.sh --rust-tests` takes the programs `crates/nazm-cli/tests/*.rs` embeds, as
+`tests/rust-tests.pl` writes them (2026-10-16): each string literal with a `fn main` as a program of
+one file, as before (now with Rust's `\xNN` escapes undone too: 32 programs of `build.rs` indent
+with `\x20` and did not parse); and, new, the files a test names — `("lib.nz", "...")`,
+`write(dir, "lib.nz", "...")`, `.join("lib.nz"), r#"..."#`, a name beside a `const` — as programs
+of several modules, written as the test's directory holds them: a name written again first closes
+the program so far, and the root is the file with a `fn main` written last.
+
+Of the 869 programs that did not check with the old extraction (the brief's 858, plus main's new
+tests), none was a program `nazm run --interpret` runs: each one the checker refuses (status 1) or
+a module it cannot find (status 3). With this extraction 849 do not check; sorted:
+
+| | programs | what they are | carried? |
+| --- | --- | --- | --- |
+| Refused on purpose | 462 | the test asserts the code the checker gives (it appears in the test file) | no — the checker's, not the interpreter's |
+| A module not found | 164 | a module of a program of several modules, alone; most are now also part of a program of several modules that checks | yes, as those programs |
+| A name not found | 109 | a snippet the test completes with a prelude of its own (`format!`, `concat!`, a helper's text) | no — stale snippets |
+| Other refusals | 114 | text deliberately broken (`N0100`, 26 more), a package's module outside its package (`N0508`, 24), the rest refusals whose code the test does not spell | no |
+| No `main` | 0 | | |
+
+What the interpreter should carry, it now does: 409 programs of several modules, 274 of which
+check, and the 32 `\x20` programs. In all: 2,056 programs, 1,207 that check, 2,686
+comparisons (before this round: 1,808 programs, 939 that checked; 2,067 comparisons agreed).
 
 ## Risks / Trade-offs
 
