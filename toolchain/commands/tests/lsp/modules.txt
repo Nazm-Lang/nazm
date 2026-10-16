@@ -1,0 +1,10 @@
+# A document whose import has an error (only the document's own are published), one that does not
+# parse, and reopening at another version; the end of input without `shutdown`.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{"workspace":{"workspaceEdit":{"documentChanges":true}}}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/i.nz","languageId":"nazm","version":1,"text":"use \"helper.nz\";\nfn main() -> Int { h() }\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/i.nz"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/s.nz","languageId":"nazm","version":1,"text":"fn main() -> Int { 1 + }\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/s.nz","languageId":"nazm","version":2,"text":"fn main() -> Int { 1 + }\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/s.nz"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/helper.nz","languageId":"nazm","version":1,"text":"pub fn h() -> Int {\n    let v: Str = 1;\n    0\n}\n"}}}

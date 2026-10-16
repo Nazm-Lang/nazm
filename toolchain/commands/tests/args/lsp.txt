@@ -1,0 +1,11 @@
+# `nazm lsp` command lines (design D8, D16), run in check's fixture with standard input empty:
+# help, usage errors, and the server meeting the end of input before `initialize`.
+--help
+-h
+
+--bogus
+--source-root
+--source-root=
+--sorce-root x
+-- x
+x

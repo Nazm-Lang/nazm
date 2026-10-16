@@ -1,0 +1,9 @@
+# A package's `main`, which imports a dependency package whose module has an error: only the
+# document's own diagnostics are published, none here.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/app/src/main.nz","languageId":"nazm","version":3,"text":"use \"lib:a.nz\";\nfn main() -> Int { twice(2) }\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/app/src/main.nz"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/lib/src/inner/b.nz","languageId":"nazm","version":1,"text":"pub fn k() -> Int {\n    let s: Str = 2;\n    2\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}

@@ -1,0 +1,8 @@
+# Refused: two documents open at once, whose diagnostics the reference publishes in a hash map's
+# order.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/a.nz","languageId":"nazm","version":1,"text":"fn main() -> Int {\n    let x: Bool = 1;\n    0\n}\n"}}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/w.nz","languageId":"nazm","version":1,"text":"enum E { A, B, C }\nfn main() -> Int {\n    match E.A {\n        E.A => 0,\n        _ => 1,\n    }\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}
