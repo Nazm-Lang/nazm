@@ -4,7 +4,8 @@
 // verdicts, or containment, which stay with the Rust runner.
 //
 //   nazm-mutate list CATALOGUE                  one line per entry: name, file, killers
-//   nazm-mutate check ROOT                      every entry of ROOT's catalogue applies exactly once
+//   nazm-mutate check ROOT                      ROOT's catalogue passes the mutations-apply gate
+//   nazm-mutate plan ROOT [--only F]…           what `cargo xtask mutate --plan` prints for ROOT
 //   nazm-mutate apply ROOT CATALOGUE NAME       inject NAME into ROOT, the original kept first
 //   nazm-mutate restore ROOT                    put back what `apply` changed
 //   nazm-mutate try ROOT CATALOGUE NAME CMD     CMD (a shell command, run in ROOT) on the tree
@@ -23,9 +24,11 @@ use "../lib/run.nz"
 use "../lib/scratch.nz"
 use "catalogue.nz"
 use "core.nz"
+use "plan.nz"
+use "../check/mutations.nz"
 
 fn usage() -> Str ! {} {
-    "usage: nazm-mutate list CATALOGUE | check ROOT | apply ROOT CATALOGUE NAME | restore ROOT | try ROOT CATALOGUE NAME CMD [--deadline-secs N]"
+    "usage: nazm-mutate list CATALOGUE | check ROOT | plan ROOT [--only F]… | apply ROOT CATALOGUE NAME | restore ROOT | try ROOT CATALOGUE NAME CMD [--deadline-secs N]"
 }
 
 fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int ! { io, spawn } {
@@ -67,23 +70,58 @@ fn main(io: IoCap, p: ProcessCap, sp: SpawnCap, v: VouchCap, t: TimeCap) -> Int 
         return if strs_len(cat.problems) > 0 { 1 } else { 0 };
     }
     if cmd == "check" {
-        // The exactly-once half of `cargo xtask check`'s mutations-apply gate, over ROOT's own
-        // catalogue, named as that gate names it.
-        let root = strs_get(args, 1);
-        let shown = "xtask/mutations/mutations.toml";
-        let text = match read_rust(h, f"{root}/{shown}") {
-            Result.Ok(value: t) => t,
-            Result.Err(error: e) => { println(f"{shown}: {e}"); return 1; },
-        };
-        let cat = match catalogue_read(text, shown) {
-            Result.Ok(value: c) => c,
-            Result.Err(error: e) => { println(e); return 1; },
-        };
-        let bad = applies_once(h, root, cat);
+        // `cargo xtask check`'s mutations-apply gate over ROOT's own catalogue, named as that
+        // gate names it: exactly once, then everything `plan::validate` checks.
+        let bad = gate_mutations(h, strs_get(args, 1));
         for b in bad {
             println(b);
         }
         return if strs_len(bad) > 0 { 1 } else { 0 };
+    }
+    if cmd == "plan" {
+        // `cargo xtask mutate --plan [--only F]…` for the tree at ROOT: the catalogue validated,
+        // the selection made, every tier of every selected mutation printed.
+        let root = strs_get(args, 1);
+        let only = strs_new();
+        let mut i = 2;
+        while i < n {
+            if strs_get(args, i) == "--only" && i + 1 < n {
+                strs_push(only, strs_get(args, i + 1));
+                i = i + 2;
+            } else {
+                eprintln(f"mutate: unknown option {strs_get(args, i)}");
+                return 1;
+            }
+        }
+        let shown = f"{root}/xtask/mutations/mutations.toml";
+        let text = match read_rust(h, shown) {
+            Result.Ok(value: t) => t,
+            Result.Err(error: e) => { println(f"problem: {shown}: {e}"); return 1; },
+        };
+        let cat = match plan_load(text, shown) {
+            Result.Ok(value: c) => c,
+            Result.Err(error: e) => { println(f"problem: {e}"); return 1; },
+        };
+        let problems = validate(h, root, root, cat);
+        if strs_len(problems) > 0 {
+            for pr in problems {
+                println(f"problem: {pr}");
+            }
+            return 1;
+        }
+        let selected = match select(cat, only) {
+            Result.Ok(value: s) => s,
+            Result.Err(error: e) => { println(f"problem: {e}"); return 1; },
+        };
+        return match render(cat, selected) {
+            Result.Ok(value: text) => { print(text); 0 },
+            Result.Err(error: ps) => {
+                for pr in ps {
+                    println(f"problem: {pr}");
+                }
+                1
+            },
+        };
     }
     if cmd == "restore" {
         return match restore(h, strs_get(args, 1)) {
