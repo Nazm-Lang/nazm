@@ -9,7 +9,9 @@
     clippy::indexing_slicing
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use std::process::Command;
 
 const NAZM: &str = env!("CARGO_BIN_EXE_nazm");
@@ -40,6 +42,8 @@ fn nazm(dir: &Path, args: &[&str]) -> std::process::Output {
         .expect("nazm")
 }
 
+// Only the macOS tests below read a release build's properties.
+#[cfg(target_os = "macos")]
 /// The program built into `dir` as `name`, with `extra` arguments; it runs and prints `72`.
 fn built(dir: &Path, name: &str, extra: &[&str]) -> PathBuf {
     std::fs::write(dir.join("main.nz"), PROGRAM).unwrap();
@@ -58,6 +62,7 @@ fn built(dir: &Path, name: &str, extra: &[&str]) -> PathBuf {
     exe
 }
 
+#[cfg(target_os = "macos")]
 /// What a tool prints about `exe`, standard output and error together (`codesign` writes its
 /// description to standard error).
 fn tool(name: &str, args: &[&str], exe: &Path) -> String {
@@ -69,6 +74,7 @@ fn tool(name: &str, args: &[&str], exe: &Path) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 /// The release build and the default one of [`PROGRAM`], side by side.
 fn both() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let d = tempfile::tempdir().unwrap();
