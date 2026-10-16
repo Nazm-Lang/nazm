@@ -60,7 +60,7 @@ pub(crate) use release::link_args as release_link_args;
 use self::preflight::{preflight, Settled};
 pub(crate) use preflight::{board_for, board_of, read_board, switch_target};
 
-use link::{link_name, linked, published, sibling};
+use link::{link_name, linked, published, sibling, write_ir};
 use lower::{lowered, Lowered};
 use nazm_service::summary::Status;
 use objects::{compiled, objects_for_target, Compiled};
@@ -319,6 +319,11 @@ pub(crate) fn run(
     // the engine (`link::linked`).
     let tls_libraries = (reached.tls && !freestanding).then(|| tls::link_args(&target));
     clock.mark("native_compile");
+    // Objects for a target's own toolchain (`--objects`) are never linked here, so their IR is
+    // written now when asked, as a linked build's is when it is published.
+    if emit_ir && choice.objects.is_some() {
+        write_ir(&artefacts, &output);
+    }
     if let Some(code) = objects_for_target(
         choice,
         &objects,
