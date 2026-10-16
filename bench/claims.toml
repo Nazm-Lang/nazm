@@ -464,3 +464,8 @@ why = "`bench/compare/preempt_cost.sh` over release builds of a4ac8e9f and e9d9f
 heading = "Eighteen languages on every parameter the comparison measures, measured (2026-10-17)"
 status = "dated"
 why = "one run of `bench/compare/compare.py --runs 10` on this Mac, begun at load 1.96 with no cargo, rustc or nextest running, and COBOL's fib timed by hand after its exit status was fixed; a record of that date and machine — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "Build speed: `nazm check` and `nazm build`, cold and warm, beside every compiled language, measured (2026-10-17)"
+status = "dated"
+why = "hyperfine over a release nazm of e9d9fa40 on three programs, each measurement begun below load 2, and the build columns of that day's compare.py run; a record of that date and machine"
