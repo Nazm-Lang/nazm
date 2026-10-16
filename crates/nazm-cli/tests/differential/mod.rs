@@ -54,6 +54,14 @@ pub(crate) fn memory_line(r: &Ran) -> String {
 /// The program `files[0]` under the interpreter and built and run by each backend at each
 /// optimisation level, every one with the memory report on.
 pub(crate) fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
+    everywhere_with_env(files, &[])
+}
+
+/// [`everywhere`], each run with the environment variables `env` set besides the test's own.
+pub(crate) fn everywhere_with_env(
+    files: &[(&str, &str)],
+    env: &[(&str, &str)],
+) -> Vec<(String, Ran)> {
     let d = tempfile::tempdir().unwrap();
     for (name, text) in files {
         std::fs::write(d.path().join(name), text).unwrap();
@@ -63,7 +71,8 @@ pub(crate) fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
     interpreted
         .current_dir(d.path())
         .args(["run", "--interpret", main])
-        .env(nazm_lir::MEMORY_VARIABLE, "1");
+        .env(nazm_lir::MEMORY_VARIABLE, "1")
+        .envs(env.iter().copied());
     let mut out = vec![(
         "interpreter".to_owned(),
         run_bounded(&mut interpreted, "nazm run"),
@@ -99,7 +108,9 @@ pub(crate) fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
         // In the program's directory, as the interpreter ran: a program that touches files
         // must find the same tree in every implementation (Gate 2).
         let mut c = common::bounded_exe(&exe);
-        c.current_dir(d.path()).env(nazm_lir::MEMORY_VARIABLE, "1");
+        c.current_dir(d.path())
+            .env(nazm_lir::MEMORY_VARIABLE, "1")
+            .envs(env.iter().copied());
         out.push((label.to_owned(), run_bounded(&mut c, label)));
     }
     out

@@ -25,6 +25,7 @@ mod schemas;
 mod sections;
 mod secure_service;
 mod select;
+mod service_ops;
 mod short_variants;
 mod shorter_forms;
 mod simd;
