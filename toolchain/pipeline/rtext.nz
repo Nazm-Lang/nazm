@@ -246,6 +246,25 @@ done:
 "#
 }
 
+pub fn rt_core_PREEMPT_RUNTIME() -> Str ! {} {
+    r#"
+@nz.preempt_req = hidden global i64 0
+@nz.preempt_hook = hidden global ptr null
+
+define hidden void @nz.preempt() {
+entry:
+  %h = load atomic ptr, ptr @nz.preempt_hook acquire, align 8
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %out, label %ask
+ask:
+  call void %h()
+  br label %out
+out:
+  ret void
+}
+"#
+}
+
 pub fn rt_core_STACK_RUNTIME() -> Str ! {} {
     r#"
 define hidden i32 @nz.stack_check() {
@@ -1685,6 +1704,7 @@ pub fn rt_core_POOL_RUNTIME() -> Str ! {} {
 @nz.pool_buckets = hidden global ptr null
 @nz.pool_join = hidden global ptr null
 @nz.pool_joiners = hidden global i64 0
+@nz.pool_mon = hidden global i64 0
 @nz.cur_task = hidden thread_local global ptr null
 @.pool.env.sched = private unnamed_addr constant [15 x i8] c"NAZM_SCHEDULER\00"
 @.pool.env.workers = private unnamed_addr constant [13 x i8] c"NAZM_WORKERS\00"
@@ -1926,7 +1946,153 @@ started:
   %jnext = add i64 %j, 1
   br label %spawnw
 ok:
+  ; Preemption (6.3): with more than one worker, a monitor asks a task that has held its worker
+  ; for a time slice to yield it when others wait. One worker keeps its order: no monitor.
+  %several = icmp sgt i64 %count, 1
+  br i1 %several, label %monitor, label %done
+monitor:
+  store atomic ptr @nz.pool_preempt, ptr @nz.preempt_hook release, align 8
+  %mai = call i32 @pthread_attr_init(ptr %attr)
+  %mas = call i32 @pthread_attr_setstacksize(ptr %attr, i64 1048576)
+  %mrc = call i32 @pthread_create(ptr @nz.pool_mon, ptr %attr, ptr @nz.pool_monitor, ptr null)
+  %mad = call i32 @pthread_attr_destroy(ptr %attr)
+  br label %done
+done:
   ret i1 true
+}
+
+; The monitor (6.3): every 10 ms, look at the workers.
+define hidden ptr @nz.pool_monitor(ptr %arg) {
+entry:
+  %ts = alloca [2 x i64], align 8
+  %nap = alloca [2 x i64], align 8
+  %s = call ptr @nz.pool_sync()
+  %none = icmp eq ptr %s, null
+  br i1 %none, label %quit, label %start
+quit:
+  ret ptr null
+start:
+  %l = call i32 @pthread_mutex_lock(ptr %s)
+  %cv = getelementptr i8, ptr %s, i64 128
+  %tsn = getelementptr i8, ptr %ts, i64 8
+  br label %tick
+tick:
+  %now = call i64 @nz.pool_now()
+  %due = add i64 %now, 10000000
+  %sec = sdiv i64 %due, 1000000000
+  %ns = srem i64 %due, 1000000000
+  store i64 %sec, ptr %ts
+  store i64 %ns, ptr %tsn
+  call void @nz.timed_nap(ptr %ts, ptr %nap)
+  %w = call i32 @pthread_cond_timedwait(ptr %cv, ptr %s, ptr %nap)
+  call void @nz.pool_watch()
+  br label %tick
+}
+
+; A worker that has run one task since the last look (its switch count unmoved, a task in) while
+; others wait in its queues is asked to yield: its flag, then the process's. The process's flag is
+; set while any worker's is, and cleared when none is.
+define hidden void @nz.pool_watch() {
+entry:
+  %count = load i64, ptr @nz.pool_count
+  %arr = load ptr, ptr @nz.pool_workers
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %inext, %keep ]
+  %any = phi i1 [ false, %entry ], [ %any2, %keep ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %body, label %done
+body:
+  %wp = getelementptr ptr, ptr %arr, i64 %i
+  %w = load ptr, ptr %wp
+  %runp = getelementptr i8, ptr %w, i64 408
+  %run = load atomic i64, ptr %runp monotonic, align 8
+  %cntp = getelementptr i8, ptr %w, i64 392
+  %cnt = load atomic i64, ptr %cntp monotonic, align 8
+  %lastp = getelementptr i8, ptr %w, i64 400
+  %last = load i64, ptr %lastp
+  store i64 %cnt, ptr %lastp
+  %same = icmp eq i64 %cnt, %last
+  %running = icmp ne i64 %run, 0
+  %stuck = and i1 %same, %running
+  br i1 %stuck, label %check, label %keep
+check:
+  %rp = getelementptr i8, ptr %w, i64 256
+  %r = load atomic ptr, ptr %rp monotonic, align 8
+  %fp = getelementptr i8, ptr %w, i64 352
+  %f = load atomic ptr, ptr %fp monotonic, align 8
+  %rq = icmp ne ptr %r, null
+  %fq = icmp ne ptr %f, null
+  %queued = or i1 %rq, %fq
+  br i1 %queued, label %ask, label %keep
+ask:
+  %askp = getelementptr i8, ptr %w, i64 416
+  store atomic i64 1, ptr %askp monotonic, align 8
+  br label %keep
+keep:
+  %flagp = getelementptr i8, ptr %w, i64 416
+  %fl = load atomic i64, ptr %flagp monotonic, align 8
+  %set = icmp ne i64 %fl, 0
+  %any2 = or i1 %any, %set
+  %inext = add i64 %i, 1
+  br label %loop
+done:
+  %req = zext i1 %any to i64
+  store atomic i64 %req, ptr @nz.preempt_req monotonic, align 8
+  ret void
+}
+
+; The pool's preemption hook, on the thread whose loop found the flag (6.3): a task its worker was
+; asked to give up yields it; and the process's flag is cleared when no worker's is set.
+define hidden void @nz.pool_preempt() {
+entry:
+  %t = load ptr, ptr @nz.cur_task
+  %none = icmp eq ptr %t, null
+  br i1 %none, label %calm, label %mine
+mine:
+  %wp = getelementptr i8, ptr %t, i64 40
+  %w = load ptr, ptr %wp
+  %flagp = getelementptr i8, ptr %w, i64 416
+  %old = atomicrmw xchg ptr %flagp, i64 0 monotonic
+  %asked = icmp ne i64 %old, 0
+  call void @nz.pool_calm()
+  br i1 %asked, label %yield, label %out
+yield:
+  call void @nz.task_yield()
+  br label %out
+calm:
+  call void @nz.pool_calm()
+  br label %out
+out:
+  ret void
+}
+
+; Clear the process's preemption flag unless some worker's is set (6.3). A request that races
+; this is set again by the monitor's next look.
+define hidden void @nz.pool_calm() {
+entry:
+  %count = load i64, ptr @nz.pool_count
+  %arr = load ptr, ptr @nz.pool_workers
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %inext, %next ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %body, label %clear
+body:
+  %wp = getelementptr ptr, ptr %arr, i64 %i
+  %w = load ptr, ptr %wp
+  %flagp = getelementptr i8, ptr %w, i64 416
+  %fl = load atomic i64, ptr %flagp monotonic, align 8
+  %set = icmp ne i64 %fl, 0
+  %inext = add i64 %i, 1
+  br i1 %set, label %stay, label %next
+next:
+  br label %loop
+stay:
+  ret void
+clear:
+  store atomic i64 0, ptr @nz.preempt_req monotonic, align 8
+  ret void
 }
 
 ; Queue a runnable task at its worker's tail, the lock held (6.3): a task that has never run on the
@@ -2359,9 +2525,19 @@ nomem:
   unreachable
 enter:
   call void @nz.task_enter(ptr %h)
+  ; What the monitor reads (6.3): a switch count, a task in, and no request left from the last.
+  %askp = getelementptr i8, ptr %w, i64 416
+  store atomic i64 0, ptr %askp monotonic, align 8
+  %cntp = getelementptr i8, ptr %w, i64 392
+  %cnt = load atomic i64, ptr %cntp monotonic, align 8
+  %cnt1 = add i64 %cnt, 1
+  store atomic i64 %cnt1, ptr %cntp monotonic, align 8
+  %runp = getelementptr i8, ptr %w, i64 408
+  store atomic i64 1, ptr %runp monotonic, align 8
   %wsp = getelementptr i8, ptr %w, i64 272
   %tsp = load ptr, ptr %h
   call void @nz_ctx_switch(ptr %wsp, ptr %tsp)
+  store atomic i64 0, ptr %runp monotonic, align 8
   call void @nz.task_leave(ptr %h)
   %st = load i64, ptr %sp
   %ended = icmp eq i64 %st, 4
@@ -11414,6 +11590,17 @@ entry:
 "#
 }
 
+pub fn rt_board_PREEMPT_NONE() -> Str ! {} {
+    r#"
+@nz.preempt_req = hidden global i64 0
+
+define hidden void @nz.preempt() {
+entry:
+  ret void
+}
+"#
+}
+
 pub fn rt_board_ATOMIC_RUNTIME() -> Str ! {} {
     r#"
 define hidden i64 @nz.atomic_load(ptr %cell) {
@@ -14460,6 +14647,7 @@ pub fn rt_globals() -> Str ! {} {
 @nz.pool_buckets = external global ptr
 @nz.pool_join = external global ptr
 @nz.pool_joiners = external global i64
+@nz.pool_mon = external global i64
 @nz.cur_task = external thread_local global ptr
 @nz.errno_saved = external thread_local global i64
 @nz.os_lock = external global i32
@@ -14483,6 +14671,8 @@ pub fn rt_globals() -> Str ! {} {
 @nz.errmsg = external thread_local global ptr
 @nz.errlen = external thread_local global i64
 @nz.stack_limit = external thread_local global i64
+@nz.preempt_req = external global i64
+@nz.preempt_hook = external global ptr
 @nz.argc = external global i64
 @nz.argv = external global ptr
 @nz.seq_allocated = external global i64
@@ -14571,6 +14761,7 @@ pub fn rt_inventory_debug() -> Str ! {} {
 RuntimeSymbol { symbol: "nz.report", ret: "void", params: [], attrs: "noreturn", declared: true, part: Base, responsibility: "write the thread's failure to stderr and exit 2", ownership: "none", effect: "", failure: Ends, safety: Entry }
 RuntimeSymbol { symbol: "nz.stack_check", ret: "i32", params: [], attrs: "", declared: true, part: Base, responsibility: "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.stack_check_frame", ret: "i32", params: ["i64"], attrs: "", declared: true, part: Base, responsibility: "whether this thread's stack is past its limit or a frame of that many bytes would cross it (Q1-A1-01)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.preempt", ret: "void", params: [], attrs: "", declared: false, part: Base, responsibility: "a loop's back edge found the preemption flag set: call the pool's hook, if any (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_new", ret: "ptr", params: ["i64", "ptr", "ptr"], attrs: "", declared: true, part: Closures, responsibility: "a closure object with its code and release function (N50)", ownership: "one reference, owned by the caller; the caller stores the captures", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_retain", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Closures, responsibility: "one more reference to a closure object", ownership: "adds a reference, atomically; null is a no-op", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_release", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Closures, responsibility: "one reference fewer; the last releases the captures and frees it", ownership: "takes a reference, atomically; null is a no-op", effect: "", failure: Never, safety: Any }
@@ -14641,6 +14832,10 @@ RuntimeSymbol { symbol: "nz.pool_push", ret: "void", params: ["ptr", "ptr"], att
 RuntimeSymbol { symbol: "nz.pool_take", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the next task a worker runs: the older head of its resumed and unstarted queues (6.3)", ownership: "the worker runs the task", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.pool_steal", ret: "i1", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", ownership: "the tasks move to this worker", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.pool_spin", ret: "i1", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "look for work for up to 50 microseconds before a worker sleeps (6.3)", ownership: "none", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.pool_monitor", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the preemption monitor: look at the workers every 10 ms (6.3)", ownership: "none", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.pool_watch", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_preempt", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the pool's preemption hook: yield the worker if it was asked to (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_calm", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "clear the process's preemption flag unless a worker's is set (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_now", ret: "i64", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_timers", ret: "i1", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", ownership: "none", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.task_enter", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "make a task this thread's, with its own failure state and stack limit (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
@@ -14830,7 +15025,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 42 }
+pub fn rt_abi_revision() -> Int ! {} { 43 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

@@ -153,6 +153,14 @@ define hidden i64 @nz_os_stack_size() {{
 entry:
   ret i64 {STACK}
 }}
+
+; The preemption poll's flag and slow path (6.3): one thread and no pool, so never asked.
+@nz.preempt_req = hidden global i64 0
+
+define hidden void @nz.preempt() {{
+entry:
+  ret void
+}}
 "
     )
 }

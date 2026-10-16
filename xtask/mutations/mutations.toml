@@ -10559,11 +10559,12 @@ Repointed by R4, which moved it to 38 for `nz.atomic_cell`: an object built agai
 Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object built to call C's allocator must not be linked with units that call the small-block heap's.
 Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do.
 Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448.
-Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64."""
+Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64.
+Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 42;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 41;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_two_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 43;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 42;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_three_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -13042,8 +13043,8 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::ten
 name = "n83-a-polling-select-holds-its-worker"
 why = "a select that does not wait keeps its worker, so a task polling for a sibling on the same worker spins for ever"
 file = "crates/nazm-runtime/src/core.rs"
-find = "  call void @nz.task_yield()"
-replace = "  ; no yield"
+find = '''const POOL_YIELD: &str = "  call void @nz.task_yield()'''
+replace = '''const POOL_YIELD: &str = "  ; no yield'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_select_that_does_not_wait_lets_a_sibling_on_its_worker_run" }]
 
 [[mutation]]
@@ -20707,3 +20708,39 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  store atomic ptr %t, ptr %slot monotonic, align 8'''
 replace = '''  store atomic ptr %head, ptr %slot monotonic, align 8'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
+
+# --- Performance leadership 6.3: preemption at loop back edges (2026-10-16) ------------------------
+
+[[mutation]]
+name = "pp-a-back-edge-polls-nothing"
+why = "no loop polls for preemption, so a task looping without a call holds its worker while others wait behind it"
+file = "crates/nazm-lir/src/op/func.rs"
+find = '''        if latches.get(i).copied().unwrap_or(false) {'''
+replace = '''        if latches.get(i).copied().unwrap_or(false) && i == usize::MAX {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
+name = "pp-the-inlined-poll-never-calls"
+why = "LLVM's inlined poll reads the flag and branches past the call either way"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''                "  br i1 {asked}, label %pp.slow.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"'''
+replace = '''                "  br i1 {asked}, label %pp.on.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
+name = "pp-the-monitor-sees-no-one-waiting"
+why = "the monitor never finds a task queued behind one that holds its worker, so it never asks"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %queued = or i1 %rq, %fq
+  br i1 %queued, label %ask, label %keep'''
+replace = '''  %queued = and i1 %rq, false
+  br i1 %queued, label %ask, label %keep'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
+name = "pp-an-asked-task-does-not-yield"
+why = "the hook clears its worker's request but the task goes on running"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  br i1 %asked, label %yield, label %out'''
+replace = '''  br i1 %asked, label %out, label %out'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]

@@ -298,6 +298,32 @@ fn tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run() {
     }
 }
 
+/// Performance leadership 6.3: preemption. Two tasks loop until the last of four short ones, queued
+/// behind them on the same two workers, has run. Without preemption the loops hold both workers and
+/// the short tasks never start; with it a loop that has held its worker for a time slice while others
+/// wait yields at its back edge, so all four run and the loops end, under both backends.
+#[test]
+fn a_long_loop_yields_its_worker_to_tasks_waiting_behind_it() {
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn spin(stop: Atomic) -> Int { let mut x = 0; while atomic_load(stop) == 0 { x = (x + 1) % 1000; } x }\n\
+               fn short(stop: Atomic, done: Atomic) -> Int { atomic_add(done, 1); if atomic_load(done) == 4 { atomic_store(stop, 1); } 0 }\n\
+               fn main(io: IoCap, tasks: SpawnCap) {\n\
+               let stop = atomic_new(0); let done = atomic_new(0);\n\
+               scope { spawn spin(stop); spawn spin(stop); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); }\n\
+               println(atomic_load(done)) }\n";
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "starve", src, backend);
+        let (out, err, code) = run(
+            d.path(),
+            "starve",
+            &[],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")],
+        );
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with("4\n"), "{backend}: {out}{err}");
+    }
+}
+
 #[test]
 fn a_tasks_failure_and_stack_limit_are_its_own_on_a_shared_worker() {
     let d = tempfile::tempdir().unwrap();

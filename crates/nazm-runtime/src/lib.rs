@@ -344,7 +344,15 @@ pub fn escape(s: &str) -> String {
 /// 128 bytes apart (`nz.pool_locks`), bucket `b` under lock `b mod 64` (`nz.pool_lock_of`), in
 /// place of one lock for every wait and wake; a wake whose bucket is empty takes no lock, and a
 /// task resumed off every list takes none to leave it.
-pub const RUNTIME_ABI_REVISION: u32 = 42;
+/// 43 is performance leadership 6.3's preemption (2026-10-16): a loop's back edge calls
+/// `nz.preempt`, which LLVM's lowering inlines as a load of `nz.preempt_req` and a branch past the
+/// call; every hosted runtime defines the flag, the hook `nz.preempt_hook` and `nz.preempt`
+/// (`PREEMPT_RUNTIME`; a board's, WebAssembly's and WASI's runtimes a flag never set and an empty
+/// function); with more than one worker the pool starts a monitor that every
+/// 10 ms asks a worker whose task has held it since the last look, while others wait, to yield
+/// (`nz.pool_monitor`, `nz.pool_watch`; worker 392 its switch count, 400 the count last seen, 408
+/// a task in, 416 asked), and the hook `nz.pool_preempt` yields that task's worker.
+pub const RUNTIME_ABI_REVISION: u32 = 43;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -475,6 +483,7 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.report", [], None, Base, "writes this thread's failure and ends the process with status 2; does not return (an export's C entry, N55)"),
     import!("nz.stack_check", [], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted; takes nothing"),
     import!("nz.stack_check_frame", [I64], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted or a frame of this many bytes would cross its limit; takes nothing"),
+    import!("nz.preempt", [], None, Base, "a loop's back edge found preemption asked for: the pool's hook, which may yield the task's worker (6.3); takes nothing"),
     import!("nz.closure_new", [I64, Ptr, Ptr], Some(Word::Ptr), Closures, "a closure object of this many bytes with its code and release, holding one reference the caller owns, or null"),
     import!("nz.closure_retain", [Ptr], None, Closures, "one more reference to a closure object; null is a no-op"),
     import!("nz.closure_release", [Ptr], None, Closures, "one reference fewer; the last runs its release and frees it; null is a no-op"),
@@ -743,6 +752,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.report", "void" () "noreturn", true, Base, "", Ends, Entry, "write the thread's failure to stderr and exit 2", "none"),
     rt!("nz.stack_check", "i32" () "", true, Base, "", Never, Any, "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", "none"),
     rt!("nz.stack_check_frame", "i32" ("i64") "", true, Base, "", Never, Any, "whether this thread's stack is past its limit or a frame of that many bytes would cross it (Q1-A1-01)", "none"),
+    rt!("nz.preempt", "void" () "", false, Base, "", Never, Any, "a loop's back edge found the preemption flag set: call the pool's hook, if any (6.3)", "none"),
     rt!("nz.closure_new", "ptr" ("i64", "ptr", "ptr") "", true, Closures, "", Null, Any, "a closure object with its code and release function (N50)", "one reference, owned by the caller; the caller stores the captures"),
     rt!("nz.closure_retain", "void" ("ptr") "", true, Closures, "", Never, Any, "one more reference to a closure object", "adds a reference, atomically; null is a no-op"),
     rt!("nz.closure_release", "void" ("ptr") "", true, Closures, "", Never, Any, "one reference fewer; the last releases the captures and frees it", "takes a reference, atomically; null is a no-op"),
@@ -813,6 +823,10 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.pool_take", "ptr" ("ptr") "", false, Tasks, "", Never, Locked, "the next task a worker runs: the older head of its resumed and unstarted queues (6.3)", "the worker runs the task"),
     rt!("nz.pool_steal", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", "the tasks move to this worker"),
     rt!("nz.pool_spin", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "look for work for up to 50 microseconds before a worker sleeps (6.3)", "none"),
+    rt!("nz.pool_monitor", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "the preemption monitor: look at the workers every 10 ms (6.3)", "none"),
+    rt!("nz.pool_watch", "void" () "", false, Tasks, "", Never, Any, "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", "none"),
+    rt!("nz.pool_preempt", "void" () "", false, Tasks, "", Never, Any, "the pool's preemption hook: yield the worker if it was asked to (6.3)", "none"),
+    rt!("nz.pool_calm", "void" () "", false, Tasks, "", Never, Any, "clear the process's preemption flag unless a worker's is set (6.3)", "none"),
     rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", "none"),
     rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
     rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
@@ -1007,6 +1021,7 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
     RuntimeGlobal { symbol: "nz.pool_buckets", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_join", ty: "ptr", thread_local: false, writers: "`nz.pool_start`, once (N83)" },
     RuntimeGlobal { symbol: "nz.pool_joiners", ty: "i64", thread_local: false, writers: "`nz.join_one`, atomically (6.3)" },
+    RuntimeGlobal { symbol: "nz.pool_mon", ty: "i64", thread_local: false, writers: "`nz.pool_start`, once: the monitor thread's handle (6.3)" },
     RuntimeGlobal { symbol: "nz.cur_task", ty: "ptr", thread_local: true, writers: "`nz.task_enter` and `nz.task_leave`, on its own worker only (N83)" },
     RuntimeGlobal { symbol: "nz.errno_saved", ty: "i64", thread_local: true, writers: "`nz.errno_save`, on its own thread only (N85)" },
     RuntimeGlobal { symbol: "nz.os_lock", ty: "i32", thread_local: false, writers: "`nz.os_acquire` and `nz.os_release`, atomically (Gate 2)" },
@@ -1049,6 +1064,18 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
         ty: "i64",
         thread_local: true,
         writers: "`nz.stack_check`, on its own thread only, at the thread's first check (N49)",
+    },
+    RuntimeGlobal {
+        symbol: "nz.preempt_req",
+        ty: "i64",
+        thread_local: false,
+        writers: "the pool's monitor and `nz.pool_preempt`, atomically (6.3)",
+    },
+    RuntimeGlobal {
+        symbol: "nz.preempt_hook",
+        ty: "ptr",
+        thread_local: false,
+        writers: "`nz.pool_start`, once, before any worker runs (6.3)",
     },
     RuntimeGlobal {
         symbol: "nz.argc",
@@ -1483,9 +1510,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_two_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.4's waiter locks: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 42);
+    fn the_runtime_is_revision_forty_three_and_reaches_the_system_only_through_its_platform_layer()
+    {
+        // 6.3's preemption: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 43);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

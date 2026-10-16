@@ -214,6 +214,11 @@ pub fn module(m: &Module, failures: Failures, probes: Probes) -> String {
         );
         let _ = writeln!(out, "declare ptr @llvm.frameaddress.p0(i32)");
     }
+    // The preemption poll, inlined (6.3): the flag is read here and the runtime called only when
+    // the pool has asked some task to yield.
+    if m.symbols.iter().any(|s| s.name == "nz.preempt") {
+        let _ = writeln!(out, "@nz.preempt_req = external hidden global i64");
+    }
     for (i, s) in m.symbols.iter().enumerate() {
         if s.linkage != Linkage::Import {
             continue;
@@ -886,6 +891,31 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
         // sets on the thread's first check. Only then — the limit 0 — or past it is the runtime
         // called, and its answer is the check's; otherwise the answer is 0. One load and two
         // comparisons where every recursive call was a call into another module.
+        // The preemption poll at a loop's back edge (6.3), inlined: one load of a flag no thread
+        // writes until the pool asks a task to yield, and a branch weighted past the call.
+        Inst::Call {
+            dst: None,
+            callee,
+            args,
+            ..
+        } if args.is_empty() && m.symbol(*callee).is_some_and(|s| s.name == "nz.preempt") => {
+            let (flag, asked) = (p.temp(), p.temp());
+            let n = p.temp();
+            let n = n.trim_start_matches('%');
+            let _ = writeln!(
+                out,
+                "  {flag} = load atomic i64, ptr @nz.preempt_req monotonic, align 8"
+            );
+            let _ = writeln!(out, "  {asked} = icmp ne i64 {flag}, 0");
+            let _ = writeln!(
+                out,
+                "  br i1 {asked}, label %pp.slow.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"
+            );
+            let _ = writeln!(out, "pp.slow.{n}:");
+            let _ = writeln!(out, "  call void @nz.preempt()");
+            let _ = writeln!(out, "  br label %pp.on.{n}");
+            let _ = writeln!(out, "pp.on.{n}:");
+        }
         Inst::Call {
             dst: Some(d),
             callee,
