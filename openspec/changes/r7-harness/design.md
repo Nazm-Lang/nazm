@@ -142,6 +142,27 @@ through the CLI (`rewrite-in-nazm` design, decision 5).
     Rust source by a script that understands Rust's string literals and written as Nazm string
     literals, so a byte the port's author would have mistyped cannot differ.
 
+20. **The catalogue's schema is checked, its error text is not copied.** `plan.rs` reads the
+    catalogue with serde's `deny_unknown_fields`, and the `toml` crate words a refusal with a line,
+    a column and an excerpt of the source. `mutate/plan.nz` refuses the same documents (an unknown
+    field, a missing or mistyped one, the catalogue without `[[mutation]]`) in its own words, naming
+    the entry; everything after the schema — `validate`, `select`, `plan`, `render` — is byte for
+    byte, and the seeds hold no schema violation, so the comparison is of what both word alike.
+    Paths are kept relative and joined to a root only where a file is read or shown: the gate shows
+    `./…` (the Rust gate validates `.`), `--plan` the root it was built in.
+21. **The reach gates read their rules from the tree.** The Rust gates compile `xtask/src/rules.rs`
+    in; `check/reach.nz` reads the same file from the root it checks — its string literals, comments
+    stripped, in the shapes `rules.rs` writes them (`"crate" => &[…]`, `const NAME: … = …;`, the
+    emission allowlist's tuples, `matches!`'s alternatives) — so a copy of the tree with its rules
+    changed is checked against its own rules by both. `tests/seeded.sh` rebuilds the Rust gates
+    for a seed in `rules.rs` and after restoring it.
+22. **`bench` and `fuzz` wait.** `cargo xtask bench` refuses before reading anything unless it runs
+    under the contained runner's memory ceiling, and every mode (record, `--save`, `--check`)
+    measures first; the only behaviour a host can compare is that refusal. `fuzz` is `fuzz/run.sh`
+    (contained only) driving `nazm-fuzz`, whose targets are the compiler's entry points called in
+    process under SanitizerCoverage — a Rust API (decision 18), replaced by R2–R3. Both move with
+    the contained runner (6.3), where a port can be measured beside the Rust one.
+
 ## Risks / Trade-offs
 
 - [`nazm test` runs every test twice] → the interpreter leg is a second reference for the harness
@@ -163,6 +184,10 @@ Things the comparisons turned up that belong outside `toolchain/harness/` — re
 - **The governance gate's order is the file system's.** `xtask/src/governance.rs` lists
   `openspec/changes` with `read_dir`, unsorted — an order no file system promises to be by name — so
   two problems there would be reported in an order a reader cannot predict. The port sorts.
+- **The reach gates walk in the file system's order.** `network reach` lists `crates/` and
+  `collect_rs` walks each `src/` with `read_dir`, unsorted, so where two files are reported their
+  order is the file system's; the port walks sorted (as for governance). The seeds report one file
+  each.
 - **Provenance and tree-walking tools** (decision 2): every path built from a `Strs` that ever held a
   file's contents is refused as a write's path, so a harness declassifies at its sinks.
 - **`label` is a reserved word** (`N0101`) that a natural parameter or binding name runs into.

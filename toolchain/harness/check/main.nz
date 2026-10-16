@@ -19,10 +19,17 @@ use "notices.nz"
 use "claims.nz"
 use "governance.nz"
 use "mutations.nz"
+use "reach.nz"
 
 /// The ported gates, in `run_checks`'s order.
 fn gates() -> Strs ! {} {
     let out = strs_new();
+    strs_push(out, "layering");
+    strs_push(out, "tokenizer reach");
+    strs_push(out, "network reach");
+    strs_push(out, "codegen reach");
+    strs_push(out, "emission reach");
+    strs_push(out, "unsafe policy");
     strs_push(out, "doc claims");
     strs_push(out, "capability matrix");
     strs_push(out, "mutations apply");
@@ -37,6 +44,24 @@ fn gates() -> Strs ! {} {
 }
 
 fn run_gate(h: Caps, root: Str, name: Str) -> Strs ! { io, spawn } {
+    if name == "layering" {
+        return gate_layering(h, root);
+    }
+    if name == "tokenizer reach" {
+        return gate_tokenizer_reach(h, root);
+    }
+    if name == "network reach" {
+        return gate_network_reach(h, root);
+    }
+    if name == "codegen reach" {
+        return gate_codegen_reach(h, root);
+    }
+    if name == "emission reach" {
+        return gate_emission_reach(h, root);
+    }
+    if name == "unsafe policy" {
+        return gate_unsafe_policy(h, root);
+    }
     if name == "doc claims" {
         return gate_doc_claims(h, root);
     }
