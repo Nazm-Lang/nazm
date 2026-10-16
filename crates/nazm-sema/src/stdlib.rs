@@ -62,6 +62,7 @@ pub const MODULES: &[(&str, &str)] = &[
     ("test", include_str!("../../../library/std/test.nz")),
     ("text", include_str!("../../../library/std/text.nz")),
     ("time", include_str!("../../../library/std/time.nz")),
+    ("tls", include_str!("../../../library/std/tls.nz")),
     ("toml", include_str!("../../../library/std/toml.nz")),
 ];
 

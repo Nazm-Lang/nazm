@@ -167,6 +167,7 @@ The flow is semantic decision → Core IR → MIR → LIR → backend. Findings:
 | Object format and DWARF for Cranelift | `nazm-codegen-clif/src/dwarf.rs` (Mach-O, ELF) | yes |
 | Process control in the harness | `xtask/src/procs.rs`, `contained.rs`, `bench.rs` — Unix, unguarded | **no** |
 | Paths and URIs | `lsp.rs` (POSIX-only), `nazm-repo` (string joins); `nazm-sema/src/key.rs` normalises both separators | **no** |
+| TLS engines and the libraries they link | `nazm-runtime/src/tls.rs` (`emit_tls`, by target), `nazm-cli/src/build/tls.rs` | yes |
 | Reserved C symbols | `nazm-core/src/check/foreign.rs` | no (§2) |
 
 The semantic crates (`syntax`, `sema`, `cir`, `mir`) contain no platform code; `core` holds only the

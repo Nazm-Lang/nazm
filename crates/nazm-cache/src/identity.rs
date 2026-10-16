@@ -393,7 +393,12 @@ use crate::digest::{self, Framed};
 /// `88` — R5 fixes, 2026-10-16. A pattern `let` binds in the scope it is written in: `let (a, b) =
 /// e;` after another binding of `a` in that scope, by either kind of `let`, moved from accepted to
 /// refused (`N0202`), as `let a` twice already was.
-pub const SEMANTIC_EPOCH: u32 = 88;
+/// `89` — v1 track C1, 2026-10-16. The TLS built-ins (`os_tls_client_config`,
+/// `os_tls_server_config`, `os_tls_connect`, `os_tls_accept`, `os_tls_handshake`, `os_tls_push`,
+/// `os_tls_pull`, `os_tls_read`, `os_tls_write`, `os_tls_close`, `os_tls_info`) moved from refused
+/// (`N0200`) to accepted, and their names became the language's; the engine's `nz_tls_*` became
+/// reserved C symbols, so a foreign declaration of one moved from accepted to refused (`N0383`).
+pub const SEMANTIC_EPOCH: u32 = 89;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

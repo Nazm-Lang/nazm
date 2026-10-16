@@ -51,6 +51,7 @@ mod preflight;
 mod release;
 mod stores;
 mod timing;
+mod tls;
 
 use stores::Stores;
 
@@ -290,6 +291,9 @@ pub(crate) fn run(
     // The runtime artifact after every object that calls it, and before the foreign inputs.
     objects.extend(prebuilt);
     objects.extend(choice.link.iter().cloned());
+    // TLS (C1): the platform's library, for the link to add if the program's live code reaches
+    // the engine (`link::linked`).
+    let tls_libraries = (reached.tls && !freestanding).then(|| tls::link_args(&target));
     clock.mark("native_compile");
     if let Some(code) = objects_for_target(
         choice,
@@ -313,6 +317,7 @@ pub(crate) fn run(
         &tmp_exe,
         &objects,
         &foreign,
+        tls_libraries.as_ref(),
         &cleanup,
         &work,
         map,

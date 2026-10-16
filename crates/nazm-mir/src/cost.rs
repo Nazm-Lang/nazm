@@ -382,7 +382,20 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::OsUdpRecvFrom
         | Intrinsic::OsSetTimeout
         | Intrinsic::OsShutdown
-        | Intrinsic::OsResolve => false,
+        | Intrinsic::OsResolve
+        // TLS (C1): the engine's storage, and words; what it hands back fills a buffer the
+        // program already made.
+        | Intrinsic::OsTlsClientConfig
+        | Intrinsic::OsTlsServerConfig
+        | Intrinsic::OsTlsConnect
+        | Intrinsic::OsTlsAccept
+        | Intrinsic::OsTlsHandshake
+        | Intrinsic::OsTlsPush
+        | Intrinsic::OsTlsPull
+        | Intrinsic::OsTlsRead
+        | Intrinsic::OsTlsWrite
+        | Intrinsic::OsTlsClose
+        | Intrinsic::OsTlsInfo => false,
         // Files and handles (Gate 2): the system's storage, and words; a read fills a buffer
         // the program already made.
         Intrinsic::OsOpenRead

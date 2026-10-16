@@ -63,12 +63,24 @@ impl Profile {
     /// (N86).
     fn text(self, target: &Target) -> String {
         match self {
-            Self::Hosted => nazm_lir::emit_runtime(EVERYTHING),
+            Self::Hosted => nazm_lir::emit_runtime(hosted_services(target)),
             Self::Board => {
                 nazm_lir::runtime::board::emit_runtime(crate::build::board_of(target), true)
             }
             Self::Wasm => nazm_lir::runtime::wasm::emit_runtime(true),
         }
+    }
+}
+
+/// Every service a hosted runtime for `target` has: all of them, TLS only where the target has a
+/// binding (C1), whose engine is then a member of its own.
+fn hosted_services(target: &Target) -> Needs {
+    let bound = crate::build::switch_target(target)
+        .and_then(nazm_lir::runtime::tls::emit_tls)
+        .is_some();
+    Needs {
+        tls: bound,
+        ..EVERYTHING
     }
 }
 
@@ -167,12 +179,16 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     let os = per_target.map(nazm_lir::runtime::platform::emit_os);
     // And its task stacks and stack budget are the platform's (Gate 3): a fifth.
     let stack = per_target.map(nazm_lir::runtime::platform::emit_stack);
+    // And TLS's engine (C1), where the target has one: a sixth. The platform's library is linked
+    // by the program that reaches it.
+    let tls = per_target.and_then(nazm_lir::runtime::tls::emit_tls);
     let mut members = vec![obj.clone()];
     for (name, text) in [
         ("switch", &switch),
         ("errno", &errno),
         ("os", &os),
         ("stack", &stack),
+        ("tls", &tls),
     ] {
         let Some(text) = text else { continue };
         let sll = work.join(format!("{name}.ll"));
@@ -237,7 +253,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         "profile": profile.name(),
         // A board's or WebAssembly's runtime is the whole of it, with the stack check; what it
         // cannot do is refused by the freestanding build itself (N62), not by a service list.
-        "services": if profile == Profile::Hosted { EVERYTHING.names() } else { vec!["stack"] },
+        "services": if profile == Profile::Hosted { hosted_services(&target).names() } else { vec!["stack"] },
         "opt_level": opt,
         "toolchain": toolchain(),
         "text": digest(

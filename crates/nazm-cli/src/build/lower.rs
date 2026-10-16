@@ -614,6 +614,21 @@ fn emit_artefacts(
                 });
             }
         }
+        // The TLS engine (C1), wherever a session is used: the target's binding, or the build is
+        // refused by name — a TLS program never links without one.
+        if settled.tls {
+            match switch_target(backend.target()).and_then(nazm_lir::runtime::tls::emit_tls) {
+                Some(text) => out.push(Artefact {
+                    name: "tls".to_owned(),
+                    code: nazm_lir::backend::Code::Llvm(text),
+                    instance: false,
+                    key: None,
+                    reused: false,
+                    shared: true,
+                }),
+                None => return Err(vec![super::tls::no_binding(&backend.target().triple)]),
+            }
+        }
         // What this target's C library says about files (Gate 2): wherever a file is used.
         if settled.files {
             if let Some(t) = switch_target(backend.target()) {
@@ -1177,6 +1192,7 @@ fn freestanding_refusals(units: &[Artefact], runtime: &str, foreign: &[&str]) ->
         (Part::Files, "files and handles"),
         (Part::Net, "networking"),
         (Part::Wide, "128-bit integers"),
+        (Part::Tls, "TLS"),
         (
             Part::Foreign,
             "`c_errno()` (N0613: no C library keeps an `errno`)",

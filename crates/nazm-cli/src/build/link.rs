@@ -13,21 +13,40 @@ pub(super) fn linked(
     tmp_exe: &Path,
     objects: &[PathBuf],
     foreign: &[String],
+    tls: Option<&Result<Vec<String>, String>>,
     cleanup: &dyn Fn(bool),
     work: &Path,
     map: &nazm_span::SourceMap,
     summary: bool,
     summarized: &Summarize<'_>,
 ) -> Result<(), ExitCode> {
-    let linked = if choice.library && choice.shared {
-        backend.link_shared(tmp_exe, objects)
-    } else if choice.library {
-        archive(tmp_exe, objects)
-    } else if choice.release {
-        backend.link_release(tmp_exe, objects)
-    } else {
-        backend.link(tmp_exe, objects)
+    let attempt = |objects: &[PathBuf]| {
+        if choice.library && choice.shared {
+            backend.link_shared(tmp_exe, objects)
+        } else if choice.library {
+            archive(tmp_exe, objects)
+        } else if choice.release {
+            backend.link_release(tmp_exe, objects)
+        } else {
+            backend.link(tmp_exe, objects)
+        }
     };
+    let mut linked = attempt(objects);
+    // TLS (C1): a module that reaches the engine — `@std/http` does — makes no program need the
+    // platform's TLS library unless its live code calls it. An executable is dead-stripped, so it
+    // links without the library unless a call the stripping kept needs it; only then is the link
+    // run again with it (`build::tls`). A static archive's C host links it.
+    let failed = !matches!(&linked, Outcome::Ran(o) if o.status.success());
+    if let (true, false, Some(tls)) = (failed, choice.library && !choice.shared, tls) {
+        match tls {
+            Ok(libraries) => {
+                let mut with = objects.to_vec();
+                with.extend(libraries.iter().map(PathBuf::from));
+                linked = attempt(&with);
+            }
+            Err(why) => eprintln!("nazm: {why}"),
+        }
+    }
     match linked {
         // A release build (R1.5, D15) is stripped and signed once it is linked.
         Outcome::Ran(o) if o.status.success() && choice.release => {

@@ -112,6 +112,17 @@ impl Fx<'_, '_> {
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr
             | Intrinsic::OsResolve
+            | Intrinsic::OsTlsClientConfig
+            | Intrinsic::OsTlsServerConfig
+            | Intrinsic::OsTlsConnect
+            | Intrinsic::OsTlsAccept
+            | Intrinsic::OsTlsHandshake
+            | Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsPull
+            | Intrinsic::OsTlsRead
+            | Intrinsic::OsTlsWrite
+            | Intrinsic::OsTlsClose
+            | Intrinsic::OsTlsInfo
             | Intrinsic::OsEnvGet
             | Intrinsic::OsEnvHas
             | Intrinsic::OsEnvCount

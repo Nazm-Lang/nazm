@@ -1639,3 +1639,31 @@ its Debug Probe and an ESP32-C3-DevKitM-1; probe-rs on the Mac host; Float64 ref
   string allocations than compiled code on the same exchange) while every tier reclaims everything;
   the socket tests check output and full reclamation. Recorded for the interpreter's next round.
 
+## Decisions during C1 (2026-10-16, delegated)
+
+- **OpenSSL on macOS is found, not bundled.** C.3 planned a pinned static build carried in the
+  toolchain's archive; C1 links Homebrew's `openssl@3` dynamically instead (`NAZM_OPENSSL_DIR` for
+  another installation), as Linux links the distribution's `libssl.so.3`. Nothing of OpenSSL's is
+  shipped, so `THIRD-PARTY-NOTICES.md` gains nothing, and Homebrew's security updates reach every
+  program built against it. The cost: a TLS program built on a Mac needs `openssl@3` on the Mac it
+  runs on. C5's static musl executable keeps the plan of a pinned static OpenSSL, with its notice.
+- **Only live code links the library.** `@std/http` reaches the engine, and every module is lowered
+  whole, so every HTTP program reaches TLS's runtime part. An executable is dead-stripped, so the
+  link runs first without the TLS library and again with it only when a call the stripping kept
+  needs it: a plain HTTP program never needs OpenSSL installed.
+- **No capability.** The built-ins reach nothing but the engine — bytes in, bytes out — so each is
+  `io` and needs nothing held; the socket the bytes travel through is the authority, as C.7 said.
+- **Configurations and sessions are ids**, a slot and a generation in a table of 65 535, never an
+  address: a closed or made-up id answers `Closed`. A configuration is parsed once and shared by its
+  sessions, each keeping its own reference to what it took, so closing one early harms none.
+- **macOS trust without network fetches.** `SecTrustSetNetworkFetchAllowed(false)`: a chain the
+  server did not complete fails there as it does under OpenSSL's verification on Linux.
+- **ALPN by the server's preference**; no name in common goes on without one.
+- **The interpreter refuses TLS as a value** (`-ENOSYS`, then `Closed`): the workspace forbids
+  `unsafe`, so the interpreter cannot call C. TLS programs run on every compiled tier. An engine for
+  the interpreter would be a helper process built from the same runtime part — recorded, not built.
+- **`@std/http`'s surface:** `http_listen_tls` and `http_connect_tls` beside the plain ones, an
+  `https` URL verified against the platform's store by default, and `HttpError.Tls(error)`.
+- **Windows (SChannel) is C1's next step**; until it lands a Windows build reaching TLS is refused
+  by name, `N0830`, the code C.7 reserved.
+
