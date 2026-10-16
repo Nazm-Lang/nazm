@@ -14603,6 +14603,21 @@ pub fn ck_is_builtin(c: Ck, t: Int, name: Str) -> Bool { t >= 0 && tag(c, t) == 
 // What a construction at `s..e` (absolute) built: a record's type (`construction`), or -1; a
 // variant's enum and its index (`variant`), or -1; the field or payload field given at a name's
 // span (`field`, `payload`), or -1.
+// Any type as messages show it (`Types::show`), for a reader such as `lsp`'s hover.
+pub fn ck_show(c: Ck, t: Int) -> Str {
+    if t < 0 { return ""; }
+    show(c, t)
+}
+// Where each declaration's name is written (absolute): a function's, a record's, an enum's, a
+// trait's.
+pub fn ck_fn_name_start(c: Ck, i: Int) -> Int { ints_get(c.fnns, i) }
+pub fn ck_fn_name_end(c: Ck, i: Int) -> Int { ints_get(c.fnne, i) }
+pub fn ck_record_name_start(c: Ck, r: Int) -> Int { ints_get(c.rns, r) }
+pub fn ck_record_name_end(c: Ck, r: Int) -> Int { ints_get(c.rne, r) }
+pub fn ck_enum_name_start(c: Ck, e: Int) -> Int { ints_get(c.ens, e) }
+pub fn ck_enum_name_end(c: Ck, e: Int) -> Int { ints_get(c.ene, e) }
+pub fn ck_trait_name_start(c: Ck, t: Int) -> Int { ints_get(c.trns, t) }
+pub fn ck_trait_name_end(c: Ck, t: Int) -> Int { ints_get(c.trne, t) }
 pub fn ck_construction_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mcons, s, e) }
 pub fn ck_variant_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvty, s, e) }
 pub fn ck_variant_index_at(c: Ck, s: Int, e: Int) -> Int { sm_get(c.mvix, s, e) }
