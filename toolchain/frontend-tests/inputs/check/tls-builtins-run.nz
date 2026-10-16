@@ -1,0 +1,11 @@
+// C1 (epoch 89): `@std/tls` over the eleven `os_tls_*` built-ins, lowered
+// (tls-builtins.nz holds the reserved symbols).
+use "@std/tls";
+fn main(io: IoCap) -> Int ! { io } {
+    let out = bytes_new(16);
+    let n = os_tls_info(0, 1, out);
+    match tls_client_system() {
+        Ok(c) => tls_config_close(c) + n,
+        Err(e) => str_len(tls_error_show(e)),
+    }
+}
