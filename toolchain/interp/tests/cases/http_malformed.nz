@@ -1,0 +1,127 @@
+// crates/nazm-cli/tests/http.rs, malformed_requests_are_answered_on_the_wire...: raw clients
+// reading each answer as it is written, so the strings their reads make are counted as on the
+// Rust interpreter, whose server runs on a thread of its own (design.md, D10).
+use "@std/ioerror";
+use "@std/net";
+use "@std/http";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, str_from_byte(10))) }
+// `|` is CRLF, `~` a bare LF, `^` a bare CR, a backtick a NUL byte.
+fn wire(s: Str) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 124 { strs_push(parts, str_concat(str_from_byte(13), str_from_byte(10))); } else {
+            if b == 126 { strs_push(parts, str_from_byte(10)); } else {
+                if b == 94 { strs_push(parts, str_from_byte(13)); } else {
+                    if b == 96 { strs_push(parts, str_from_byte(0)); } else { strs_push(parts, str_from_byte(b)); }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    str_join(parts, "")
+}
+fn hello(r: Request) -> Response ! {} {
+http_text(200, str_concat(str_concat(r.method, " "), str_concat(str_concat(match http_param(r, "name") { Option.Some(value: n) => n, Option.None() => "?", }, " "), r.body)))
+}
+fn routes() -> fn(Request) -> Response ! { io } ! {} {
+http_router_handler(http_router_post(http_router_get(http_router(), "/hello/{name}", hello), "/echo/{name}", hello))
+}
+fn shown(r: Result[Response, HttpError]) -> Str {
+match r {
+Result.Ok(value: x) => str_concat(str_concat(int_to_str(x.status), " "), x.body),
+Result.Err(error: e) => str_concat("ERR ", http_error_show(e)),
+}
+}
+fn quick() -> ServeOptions {
+let d = http_serve_options();
+ServeOptions(max_head: d.max_head, max_headers: d.max_headers, max_target: d.max_target, max_body: d.max_body, head_timeout_ms: 300, idle_timeout_ms: 2000, body_timeout_ms: 300, write_timeout_ms: 2000, max_requests: d.max_requests, max_connections: d.max_connections)
+}
+fn raw(net: NetCap, addr: Str, text: Str) -> Str ! { io } {
+match tcp_connect(net, addr, 2000) {
+Result.Ok(value: c) => {
+tcp_set_timeout(c, 3000);
+tcp_write_str(c, wire(text));
+let mut all = "";
+let buf = bytes_new(4096);
+let mut going = true;
+while going {
+match tcp_read(c, buf) {
+Result.Ok(value: n) => { if n == 0 { going = false; } else { all = str_concat(all, bytes_to_str(bytes_slice(buf, 0, n))); } },
+Result.Err(error: e) => { all = str_concat(all, str_concat(" [", str_concat(io_kind_name(e.kind), "]"))); going = false; },
+};
+}
+tcp_close(c);
+statuses(all)
+},
+Result.Err(error: e) => io_error_show(e),
+}
+}
+// Every status line in what came back, and the last body.
+fn statuses(all: Str) -> Str {
+let p = strs_new();
+let mut i = 0;
+while i + 12 <= str_len(all) {
+if str_slice(all, i, i + 9) == "HTTP/1.1 " && str_byte(all, i + 9) >= 48 && str_byte(all, i + 9) <= 57 { strs_push(p, str_slice(all, i + 9, i + 12)); }
+i = i + 1;
+}
+str_join(p, ",")
+}
+fn continue_then_body(net: NetCap, addr: Str) -> Str ! { io } {
+match tcp_connect(net, addr, 2000) {
+Result.Ok(value: c) => {
+tcp_set_timeout(c, 3000);
+tcp_write_str(c, wire("POST /echo/e HTTP/1.1|Host: h|Expect: 100-continue|Content-Length: 4|Connection: close||"));
+let buf = bytes_new(25);
+let first = match tcp_read_exact(c, buf) { Result.Ok(value: n) => statuses(bytes_to_str(buf)), Result.Err(error: e) => io_kind_name(e.kind), };
+tcp_write_str(c, "body");
+let rest = bytes_new(4096);
+let mut all = "";
+let mut going = true;
+while going { match tcp_read(c, rest) { Result.Ok(value: n) => { if n == 0 { going = false; } else { all = str_concat(all, bytes_to_str(bytes_slice(rest, 0, n))); } }, Result.Err(error: e) => { going = false; }, }; }
+tcp_close(c);
+str_concat(str_concat(first, " then "), str_concat(statuses(all), if str_len(all) >= 11 && str_slice(all, str_len(all) - 11, str_len(all)) == "POST e body" { " POST e body" } else { " ?" }))
+},
+Result.Err(error: e) => io_error_show(e),
+}
+}
+fn client(net: NetCap, s: HttpServer, lines: Chan[Str], tm: TimeCap) -> Int ! { io } {
+let a = http_server_addr(s);
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1|Host: h|Connection: close||"));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1||"));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1~Host: h~~"));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/3.0|Host: h||"));
+chan_send_of(lines, raw(net, a, "POST /echo/a HTTP/1.1|Host: h|Transfer-Encoding: chunked|Content-Length: 3||abc"));
+chan_send_of(lines, raw(net, a, "POST /echo/a HTTP/1.1|Host: h|Transfer-Encoding: chunked||zz|"));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1|Host: h|Expect: magic||"));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1|Host: h"));
+chan_send_of(lines, raw(net, a, "POST /echo/a HTTP/1.1|Host: h|Content-Length: 10||abc"));
+chan_send_of(lines, raw(net, a, "GET /hello/1 HTTP/1.1|Host: h||POST /echo/2 HTTP/1.1|Host: h|Transfer-Encoding: chunked||1|x|0||GET /hello/3 HTTP/1.0||"));
+chan_send_of(lines, raw(net, a, "GET /hello/1 HTTP/1.1|Host: h||GET /nowhere HTTP/1.1|Host: h|Connection: close||GET /hello/3 HTTP/1.1|Host: h||"));
+chan_send_of(lines, continue_then_body(net, a));
+chan_send_of(lines, raw(net, a, "GET /hello/a HTTP/1.1|Host: h|Connection: close||"));
+http_drain(s);
+chan_close_of(lines)
+}
+fn main(net: NetCap, t: SpawnCap, tm: TimeCap, out: OutCap) -> Int ! { io, spawn } {
+match http_listen(net, "127.0.0.1:0", quick()) {
+Result.Ok(value: s) => {
+let lines = chan_new_of[Str](64);
+let h = routes();
+let mut stats = "";
+scope {
+spawn client(net, s, lines, tm);
+match http_serve(t, s, h) {
+Result.Ok(value: st) => { stats = str_concat(str_concat(int_to_str(st.requests), " requests on "), int_to_str(st.connections)); },
+Result.Err(error: e) => { stats = io_error_show(e); },
+};
+}
+let got = vec_new[Str]();
+while chan_recv_of(lines, got) { line(out, vec_pop(got)); }
+line(out, stats);
+},
+Result.Err(error: e) => { line(out, io_error_show(e)); },
+};
+0
+}

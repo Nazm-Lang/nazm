@@ -343,6 +343,11 @@ pub fn exec(p: Prog, vm: Vm, caps: Caps) -> Int {
             if failed(vm) { break }
             vec_push(ops, v)
             pc += 1
+            if ints_get(vm.st, ST_GIVEWAY) == 1 {
+                ints_set(vm.st, ST_GIVEWAY, 0)
+                status = X_YIELD
+                break
+            }
         } else if op == OP_DROPN {
             for i in 0..ints_get(pa, pc) {
                 let x = vec_pop(ops)
