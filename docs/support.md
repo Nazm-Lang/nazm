@@ -121,6 +121,11 @@ The three new jobs gather evidence (`continue-on-error`) until each is green onc
 
 What they found, and what changed (2026-10-16):
 
+- **Windows: CRLF.** The runner's git checks text out with CRLF (`core.autocrlf`), and the
+  repository reads its own sources as data — the mutation catalogue's multi-line patterns,
+  `compiler/emit.nz`'s runtime functions — so `cargo xtask check` failed there alone.
+  `.gitattributes` now checks every text file out with LF on every host; the fixtures whose line
+  endings are the point stay byte for byte.
 - **macOS: Nazm's own code generator's LSDAs.** The `--backend nazm` objects did not say
   `MH_SUBSECTIONS_VIA_SYMBOLS` and named no symbol at each LSDA, so `__gcc_except_tab` was one
   atom. The runner's linker (the selected Xcode's, older than the developer's) tied every
