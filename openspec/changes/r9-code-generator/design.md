@@ -225,8 +225,8 @@ the triple, read from its objects:
   epilogue is the form the Windows unwinder recognises (`add rsp`, pops, `ret`). LLVM gives no
   entry to a frameless leaf; every function here has a frame, so every one has an entry.
 - **Evidence**: `tests/coff.sh` checks each object against LLVM's for the triple and links every
-  program with MinGW-w64; running them is `scripts/windows-host.sh` with `BACKEND=nazm` on a
-  Windows host. Until that has run, the triple is compile- and link-verified, not run-verified.
+  program with MinGW-w64; `BACKEND=nazm scripts/windows-host.sh` runs them on a Windows host
+  against the native build (task 8.5: 68 agree, 0 differ).
 
 ## Open Questions
 
