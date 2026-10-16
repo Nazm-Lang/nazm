@@ -69,6 +69,22 @@ jobs:
       - name: accounting selftest
         run: cargo run -p nazm-bench -- selftest
 
+  # R1.5 7.2 (design D16): the release archive is reproducible. `nazm` is built in release twice,
+  # in two target directories, packaged twice by scripts/host-archive.sh, and both must be the
+  # same bytes (scripts/reproducible-check.sh). On pushes to main only, for its two release
+  # builds' cost. Nothing is signed here: signing is the copyright holder's step at release time.
+  reproducible:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+
+      - name: build twice and compare
+        run: scripts/reproducible-check.sh x86_64-unknown-linux-gnu "$RUNNER_TEMP/reproducible"
+
   # The other hosts GitHub gives a public repository (2026-10-15): real Windows x86_64, Linux
   # aarch64 and macOS on Apple Silicon, where until now the evidence was Wine in a container, a
   # container on a Mac, and the developer's own Mac. The same host-safe subset, nothing more.
