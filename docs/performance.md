@@ -4170,3 +4170,42 @@ parallel job among checked rows (second only to checked Rust, within its spread 
 is behind:** `words` time (Zig 2.4×, Rust 1.7×, C 1.6×, Go 1.3× faster), `fib` against unchecked
 C/C++/Rust/Zig (the overflow checks: checked Rust is 44.4), and build time (a cold `words` build is
 15× C's and 5× Rust's; warm, 718 ms against Go's 62 ms and C's 79 ms).
+
+## Build speed: `nazm check` and `nazm build`, cold and warm, beside every compiled language, measured (2026-10-17)
+
+`hyperfine -N` (10 runs, 5 for the cold builds) of the release `nazm` from `e9d9fa40` on three
+programs: `hello`, `words` (`bench/compare/nazm/`) and a large one, the Nazm-written front end
+`compiler/diagnose.nz` with the `compiler/` modules it imports (`compiler/` holds 50,315 lines).
+Cold is `--no-cache` (every unit and the runtime compiled); warm is the same build again with the
+user cache and the project store filled and nothing changed. Each measurement begun below load 2
+(1.43–1.98) with no cargo, rustc or nextest running; user and project caches in the run's own
+directory. Apple M1 Pro, macOS 27.2.
+
+| program | `check --no-cache` | `check`, cache warm | build cold `-O0` | build warm `-O0` | build cold `-O2` | build warm `-O2` | binary `-O0` / `-O2` | peak RSS of the build (cold `-O2`) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `hello` | 7.4 ± 0.2 ms | 7.5 ± 0.3 ms | 177.5 ± 0.9 ms | 88.5 ± 7.8 ms | 192.4 ± 2.6 ms | 85.5 ± 2.3 ms | 51,336 / 34,648 B | 56 MiB |
+| `words` | 18.7 ± 0.1 ms | 20.2 ± 0.2 ms | 861.7 ± 4.7 ms | 124.5 ± 1.0 ms | 1,156 ± 5 ms | 131.3 ± 1.3 ms | 106,280 / 87,880 B | 78 MiB |
+| `compiler/diagnose.nz` | 297.8 ± 3.0 ms | 331.5 ± 1.8 ms | 4.135 ± 0.011 s | 1.024 ± 0.002 s | **26.65 ± 0.14 s** | 1.114 ± 0.003 s | 5.45 / 5.03 MB | **724 MiB** |
+
+Start-up: the `-O2` `hello` runs in 2.0 ± 0.1 ms at 1.7 MiB.
+
+**Against every compiled language** (the comparison's run, *Eighteen languages*; each language's
+own release build; cold is the run's first build, its caches empty; warm is the median of three
+later builds; Nazm's warm is its user-cache row, the program's own units compiled each time):
+
+| | Nazm | C | C++ | Rust | Go | Zig | Swift | Fortran | Ada | Pascal | COBOL | Java (`javac`) | C# (`dotnet build`) | assembly | Nazm's rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `hello`, cold | 194 | 68 | 540 | 109 | 2,233 | 10,085 | 240 | 125 | 1,005 | 101 | 141 | 293 | 852 | 65 | 7 of 14 |
+| `hello`, warm | 164 | 67 | 528 | 110 | 62 | 7,416 | 244 | 125 | 984 | 102 | 140 | 293 | 724 | 65 | 8 of 14 |
+| `words`, cold | 1,166 | 79 | 814 | 324 | 207 | 8,238 | 1,043 | 163 | 3,137 | 994 | — | 361 | 843 | — | 10 of 12 |
+| `words`, warm | 718 | 79 | 804 | 236 | 62 | 8,273 | 813 | 164 | 3,063 | 934 | — | 357 | 711 | — | 7 of 12 |
+
+In milliseconds, medians. **Findings.** (1) `check` with its cache warm is *slower* than
+`--no-cache` — 20.2 against 18.7 ms on `words`, 331.5 against 297.8 ms on the front end (+11%): on
+one package the cache is read and checked and saves nothing. (2) A cold `-O2` build of the front end
+takes 26.6 s and 724 MiB (`-O0`: 4.1 s, 300 MiB); a warm one 1.1 s, which is the link and the
+cache's lookups. (3) Nazm's builds are behind C, Rust, Go and Fortran on both programs; a warm
+rebuild of an unchanged `words` (`nazm build`, 125–131 ms with the project store filled) is the
+fair figure against Go's 62 ms, and 7.2's budget (≤ 100 ms) is not met there. On `words` a cold
+Nazm build is ahead only of Ada and Zig; with the user cache warm it is also ahead of C++, Swift and
+Pascal.
