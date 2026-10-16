@@ -1,0 +1,16 @@
+# Every text file is checked out with LF line endings, on every host.
+#
+# Windows' git defaults to `core.autocrlf=true` (GitHub's windows-latest runner included), which
+# checks text out with CRLF. The repository reads its own sources as data — the mutation
+# catalogue's multi-line `find` patterns, the runtime-parity check's `fn runtime() -> Str` lines in
+# compiler/emit.nz, golden outputs, the compiler's own sources — and all of it is LF in the index,
+# so a CRLF checkout fails `cargo xtask check` and the tests on Windows alone (CI 2026-10-16).
+* text=auto eol=lf
+
+# Line endings that are the point of the file: fixtures for the lexer's CRLF handling and inputs
+# with a carriage return inside them, kept byte for byte.
+toolchain/frontend-tests/inputs/lex/crlf.nz -text
+toolchain/frontend-tests/inputs/lex/raw.nz -text
+toolchain/commands/tests/inputs/only-comment.nz -text
+fuzz/corpus/** -text
+THIRD-PARTY-NOTICES.md -text
