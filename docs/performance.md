@@ -3758,6 +3758,37 @@ a test holds a producer and a consumer on two threads to about 2 MiB, where an u
 reached 51 MiB. The x86_64 macOS build (under Rosetta) printed what the arm64 build printed, and the
 Windows build links with MinGW-w64; the Windows host was down, so no Windows run is claimed.
 
+## R1.5 3.4: whole-program optimisation, measured (2026-10-16)
+
+What changed (`docs/architecture.md` §7.120): an `-O2` LLVM build for macOS compiles every unit to
+bitcode and links with ThinLTO, so the runtime and the standard library are optimised with the
+program; the link keeps ThinLTO's cache in the project's `.nazm/lto`.
+
+`bench/compare/nazm/*.nz` and the allocation loop of *R1.5 3.1*, built `--no-cache --opt-level 2`
+by release binaries of `0deab3ef` (before, with 3.1) and this change (after), `hyperfine -N
+--warmup 3 --runs 15`, interleaved, on an Apple M1 Pro, macOS 27.2, Apple clang 21.0.0, load
+average about 8 from other agents; every pair printed the same output, `words` printed
+`words.expected`:
+
+| program | before | after | binary before → after |
+| --- | ---: | ---: | ---: |
+| `hello` | 2.1 ± 0.1 ms | 2.1 ± 0.1 ms | 51,312 → 34,648 B |
+| `fib` | 44.8 ± 0.1 ms | 44.7 ± 0.1 ms | 51,976 → 35,208 B |
+| `words` | 114.1 ± 0.3 ms | 103.6 ± 0.4 ms (−9.2%) | 76,880 → 86,728 B |
+| `primes 1` | 171.7 ± 0.2 ms | 173.0 ± 0.2 ms (+0.7%) | 72,208 → 71,040 B |
+| the allocation loop | 114.2 ± 0.1 ms | 81.0 ± 2.6 ms (−29%) | 51,600 → 34,776 B |
+
+The build, `hyperfine -N --runs 10`: `--no-cache` `fib` 251.8 → 234.7 ms and `words` 960.7 →
+840.2 ms (a bitcode object is cheaper to make than a machine object, and the link does the code
+generation once); a rebuild with the project store warm, `fib` 86.6 → 88.2 ms and `words` 110.3 →
+116.6 ms (+5.7%), the link's ThinLTO cache answering what it optimised before. A first attempt with
+full LTO (`-flto=full`, no cache) measured `words` −5.5% and a warm rebuild 2.4× slower, which is why
+it is ThinLTO with a cache. `fib` and `primes` are one unit's work and do not change; `words` is
+now 1.6× C's 74 ms of the 0.10.0 run, from 1.8×. Not measured: Windows, which keeps per-unit
+optimisation (MinGW's linker reads no bitcode). Two builds of the same program differ in their
+`LC_UUID` and signature, before this change as after it (`ld64` hashes the temporary directory's
+path into the UUID): byte-for-byte reproducibility is 7.2's to settle.
+
 ## Multicore: the parallel workload and the pool's default, measured (2026-10-15)
 
 The comparison's first parallel program (`bench/compare/{nazm,c,go,rust}/primes.*`, performance

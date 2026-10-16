@@ -13,11 +13,19 @@
       architecture §7.119, runtime ABI 39) for a hosted executable that calls no C; a string-and-list
       loop 284.7 → 115.4 ms (2.5×), four tasks −16%, words unchanged (no allocation in its loop);
       `tests/small_heap.rs`, four mutants
-- [ ] 3.2 Native string-hash built-in with the same values
+- [ ] 3.2 Native string-hash built-in with the same values — 2026-10-16, measured first: at `-O2`
+      `@std/hash`'s `hash_bytes` already compiles to a five-instruction loop with no checks (load,
+      xor, multiply, count, branch) and the finaliser inlined — what a native built-in of the same
+      values would be; its cost was the calls between units, which 3.4 removes. No built-in added
+      (it would be a checker change, epoch); left open for the copyright holder to close or keep
 - [x] 3.3 Allocation-free `split`/`words` iterator — 2026-10-15: `for w in s.split(sep)` lowered
       through `text_split_end`/`text_split_next` (Core IR, `split_loop`), no list; word frequency
       189 → 151 ms (−20%), one test, two mutants; `words` stays a list
-- [ ] 3.4 Whole-program optimisation of runtime and program
+- [x] 3.4 Whole-program optimisation of runtime and program — 2026-10-16: ThinLTO for `-O2` LLVM
+      builds on macOS, the link's cache in `.nazm/lto` (architecture §7.120); words 114.1 → 103.6 ms
+      (−9.2%), the allocation loop −29%, cold builds 7–13% faster, a warm rebuild of words +5.7%;
+      `tests/whole_program.rs`, four mutants; Windows keeps per-unit optimisation (MinGW reads no
+      bitcode)
 - [ ] 3.5 Streaming `file_lines`
 
 ## 4. Size and lines

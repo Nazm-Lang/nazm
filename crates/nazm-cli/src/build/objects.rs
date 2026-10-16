@@ -13,6 +13,7 @@ pub(super) fn compiled(
     artefacts: &[Artefact],
     work: &Path,
     opt_level: u8,
+    whole: bool,
     cache: bool,
     cross: Option<&str>,
     freestanding: bool,
@@ -29,9 +30,9 @@ pub(super) fn compiled(
     // do. `crate::backend` says why the answer comes from the compiler rather than from
     // the three arguments this one passes.
     let backend = if cache {
-        Backend::discover(opt_level, work, cross)
+        Backend::discover_whole(opt_level, work, cross, whole)
     } else {
-        Backend::unidentified(opt_level, cross)
+        Backend::unidentified(opt_level, cross, whole)
     };
     // A backend that would not say what it is gets no cache. Guessing a configuration is
     // how one target's objects end up in another's build.
@@ -42,6 +43,9 @@ pub(super) fn compiled(
     // The runtime's and the standard library's units are filed in the user cache (R1.5, D12),
     // under the same keys; the project's own in its `.nazm/`.
     let usable = backend.settled().filter(|_| !freestanding).is_some();
+    // A whole-program link's cache (R1.5 3.4) beside the project's objects, where they are kept.
+    let backend = backend
+        .with_lto_cache(usable.then(|| crate::derived::root(source_root.path()).join("lto")));
     let stores = Stores {
         project: usable.then(|| crate::derived::objects(source_root.path())),
         user: usable.then(crate::derived::user_objects).flatten(),

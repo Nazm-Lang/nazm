@@ -10956,8 +10956,8 @@ killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cross::every_target
 name = "n57-the-probe-ignores-the-target"
 why = "LLVM's object key is taken from a host command line, so two targets' objects share one entry"
 file = "crates/nazm-cli/src/backend.rs"
-find = "        .args(compile_args(opt_level, cross))"
-replace = "        .args(compile_args(opt_level, None))"
+find = "        .args(compile_args(opt_level, cross, whole))"
+replace = "        .args(compile_args(opt_level, None, whole))"
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "cross::objects_for_two_targets_are_never_one_cache_entry" }]
 
 [[mutation]]
@@ -20512,3 +20512,42 @@ file = "crates/nazm-runtime/src/heap.rs"
 find = '''            .replace("{TLS}", if single { "" } else { "thread_local " })'''
 replace = '''            .replace("{TLS}", if single { "" } else { "" })'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "small_heap::a_program_of_tasks_keeps_its_lists_per_thread_and_one_of_one_thread_in_globals" }]
+
+# --- R1.5 3.4: whole-program optimisation ---------------------------------------------------
+
+[[mutation]]
+name = "r15-no-build-is-optimised-whole"
+why = "an -O2 macOS build is linked from objects optimised one by one, so the runtime and the standard library are never inlined into the program"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''    opt_level >= 2 && macos'''
+replace = '''    opt_level >= 9 && macos'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "whole_program::an_optimised_macos_build_is_linked_from_bitcode_and_prints_what_the_others_print" }]
+
+[[mutation]]
+name = "r15-a-whole-program-unit-is-not-bitcode"
+why = "a whole-program build compiles each unit to machine code, so the link has nothing to optimise together"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''    // Whole-program optimisation (R1.5 3.4): bitcode, which the link optimises as one module.
+    if whole {'''
+replace = '''    // Whole-program optimisation (R1.5 3.4): bitcode, which the link optimises as one module.
+    if false {'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "whole_program::an_optimised_macos_build_is_linked_from_bitcode_and_prints_what_the_others_print" }]
+
+[[mutation]]
+name = "r15-a-whole-program-object-is-keyed-as-a-machine-object"
+why = "the probe leaves `-flto` out, so a bitcode object and a machine object of the same unit share a key and one build reuses the other's"
+file = "crates/nazm-cli/src/backend.rs"
+find = '''        .args(compile_args(opt_level, cross, whole))'''
+replace = '''        .args(compile_args(opt_level, cross, false))'''
+killers = [{ package = "nazm-cli", bin = "nazm", name = "backend::tests::this_machine_s_backend_identifies_itself_and_its_configuration" }]
+
+[[mutation]]
+name = "r15-a-debug-build-is-optimised-whole"
+why = "`--debug -O2` links bitcode, whose debug information the `.dSYM` would have to find in the linker's temporary object"
+file = "crates/nazm-cli/src/build/mod.rs"
+find = '''        && choice.objects.is_none()
+        && !choice.debug
+        && !freestanding'''
+replace = '''        && choice.objects.is_none()
+        && !freestanding'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "whole_program::an_optimised_macos_build_is_linked_from_bitcode_and_prints_what_the_others_print" }]

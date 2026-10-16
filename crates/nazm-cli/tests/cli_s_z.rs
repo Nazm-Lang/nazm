@@ -60,6 +60,7 @@ mod warnings;
 mod wasi;
 mod wasm;
 mod wasm_contract;
+mod whole_program;
 mod wide;
 mod windows;
 mod workflow;

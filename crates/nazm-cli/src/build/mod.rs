@@ -274,6 +274,16 @@ pub(crate) fn run(
         let _ = std::fs::remove_file(&tmp_exe);
     };
 
+    // Whole-program optimisation (R1.5 3.4, design D13): an executable built by the LLVM backend
+    // at `-O2` on macOS is linked from bitcode and optimised as one program, the runtime and the
+    // standard library with it. Not a library or `--objects` (their objects are for another
+    // linker), not `--debug` (whose `.dSYM` reads the objects), not a freestanding image.
+    let whole = choice.backend == nazm_lir::backend::BackendId::Llvm
+        && !choice.library
+        && choice.objects.is_none()
+        && !choice.debug
+        && !freestanding
+        && crate::backend::whole_program(opt_level, cross.as_deref());
     let Compiled {
         backend,
         mut objects,
@@ -283,6 +293,7 @@ pub(crate) fn run(
         &artefacts,
         &work,
         opt_level,
+        whole,
         cache,
         cross.as_deref(),
         freestanding,
