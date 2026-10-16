@@ -60,3 +60,6 @@
 - [x] 7.4 Speed: profiled with `sample`; records' and enum values' fields in the heap (D4); plain
       values skip the calls to `inc`/`dec`/`release`; fast paths for the hashes' per-byte work
       (design.md, *Speed*)
+- [x] 7.5 The eleven `os_tls_*` built-ins, refused as a value as the Rust interpreter refuses them
+      (`-ENOSYS`, then `Closed`); main's `@std/http` (C4's drain) followed: a write gives way at
+      the writer's next socket operation, a close lets waiting sockets try again (D10)

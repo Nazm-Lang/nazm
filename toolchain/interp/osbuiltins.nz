@@ -150,9 +150,38 @@ fn woke(vm: Vm, k: Int) {
     }
 }
 
+/// After bytes written to socket `k`: a task waiting on a socket tries again at its next turn,
+/// and this one gives way at its next socket operation (above).
+fn wrote(vm: Vm, k: Int) {
+    let h = vm.heap
+    if k > 0 && ints_get(h.sched, SC_LIVE) > 1 {
+        ints_set(h.sched, SC_CONNECTS, ints_get(h.sched, SC_CONNECTS) + 1)
+        ints_set(vm.st, ST_GIVEWAY, 2)
+    }
+}
+
+/// After a socket closed or shut down: a task waiting on a socket tries again at its next turn,
+/// held neither by its poll interval nor by the round-without-progress rule; this one goes on.
+fn stirred(vm: Vm, k: Int) {
+    let h = vm.heap
+    if k > 0 && ints_get(h.sched, SC_LIVE) > 1 {
+        ints_set(h.sched, SC_CONNECTS, ints_get(h.sched, SC_CONNECTS) + 1)
+    }
+}
+
 /// An OS built-in on the top `n` operands.
 pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: NetCap, proc: ProcessCap, rnd: RandomCap, time: TimeCap) -> V {
     let h = vm.heap
+    // A writer gives way at its next socket operation, not at once: on a thread of its own it
+    // would go on with what follows the write (a connection marking itself idle) while its peer
+    // wakes, and reach its next read or write after the peer has read what it wrote.
+    if ints_get(vm.st, ST_GIVEWAY) == 2 && n > 0 && sock_of(argo(vm, n, 0)) > 0 &&
+            (op == B_OS_READ || op == B_OS_WRITE || op == B_OS_CLOSE || op == B_OS_SHUTDOWN) {
+        ints_set(vm.st, ST_GIVEWAY, 0)
+        ints_set(vm.st, ST_DEADLINE, 0)
+        ints_set(vm.st, ST_BLOCKED, 1)
+        return V.Unset
+    }
     if op == B_OS_OPEN_READ { return V.Osh(h: os_open_read(s_of(argo(vm, n, 0))), sock: 0) }
     if op == B_OS_OPEN_WRITE { return V.Osh(h: os_open_write(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1))), sock: 0) }
     if op == B_OS_DIR_OPEN { return V.Osh(h: os_dir_open(s_of(argo(vm, n, 0))), sock: 0) }
@@ -174,12 +203,19 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
     if op == B_OS_WRITE {
         let f = argo(vm, n, 0)
         let r = os_write(h_of(io, f), b_of(argo(vm, n, 1)))
-        if r > 0 { woke(vm, sock_of(f)) }
+        if r > 0 { wrote(vm, sock_of(f)) }
         return V.Int(v: r)
     }
     if op == B_OS_SEEK { return V.Int(v: os_seek(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)), i_of(argo(vm, n, 2)))) }
     if op == B_OS_SYNC { return V.Int(v: os_sync(h_of(io, argo(vm, n, 0)))) }
-    if op == B_OS_CLOSE { return V.Int(v: os_close(h_of(io, argo(vm, n, 0)))) }
+    if op == B_OS_CLOSE {
+        // A socket closed is an end its peer reads on a thread of its own: a task waiting on a
+        // socket tries again at its next turn. The closer goes on, as its thread would.
+        let f = argo(vm, n, 0)
+        let r = os_close(h_of(io, f))
+        if r >= 0 { stirred(vm, sock_of(f)) }
+        return V.Int(v: r)
+    }
     if op == B_OS_DIR_NEXT { return V.Int(v: os_dir_next(h_of(io, argo(vm, n, 0)), b_of(argo(vm, n, 1)))) }
     if op == B_OS_STAT || op == B_OS_LSTAT {
         let out = b_of(argo(vm, n, 1))
@@ -290,7 +326,12 @@ pub fn os_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, io: IoCap, net: Net
         if r == 0 && k > 0 { ints_set(h.socktime, k, i_of(argo(vm, n, 1))) }
         return V.Int(v: r)
     }
-    if op == B_OS_SHUTDOWN { return V.Int(v: os_shutdown(h_of(io, argo(vm, n, 0)), i_of(argo(vm, n, 1)))) }
+    if op == B_OS_SHUTDOWN {
+        let f = argo(vm, n, 0)
+        let r = os_shutdown(h_of(io, f), i_of(argo(vm, n, 1)))
+        if r >= 0 { stirred(vm, sock_of(f)) }
+        return V.Int(v: r)
+    }
     if op == B_OS_LOCAL_ADDR { return heap_str(h, os_local_addr(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_PEER_ADDR { return heap_str(h, os_peer_addr(h_of(io, argo(vm, n, 0)))) }
     if op == B_OS_RESOLVE { return V.Int(v: os_resolve(s_of(argo(vm, n, 0)), i_of(argo(vm, n, 1)), b_of(argo(vm, n, 2)))) }
