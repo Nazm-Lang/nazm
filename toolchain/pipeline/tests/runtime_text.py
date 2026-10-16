@@ -10,7 +10,7 @@ import re
 import sys
 
 SRC = "crates/nazm-runtime/src/"
-FILES = ["core", "files", "net", "switch", "platform", "heap", "board"]
+FILES = ["core", "files", "net", "switch", "platform", "heap", "board", "tls"]
 
 
 def literal(s, i):

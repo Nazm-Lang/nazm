@@ -2684,6 +2684,43 @@ fn files(fx: Fx, dst: Int, op: Str, args: Vec[Operand]) -> Bool {
         ints_push(xs, ints_get(op_, 0))
         ints_push(xs, ints_get(op_, 1))
         v = rt_v(fx, "nz.os_resolve", xs, "i64")
+    } else if op == "os_tls_client_config" {
+        // TLS (C1): an id is a word, every buffer a `Bytes`'s pointer and length.
+        let ca = arg_place(fx, args, 0)
+        let alpn = arg_place(fx, args, 1)
+        let cp = str_parts(fx, ca)
+        let ap = str_parts(fx, alpn)
+        v = rt_v(fx, "nz.os_tls_client_config", ints_of4(ints_get(cp, 0), ints_get(cp, 1), ints_get(ap, 0), ints_get(ap, 1)), "i64")
+    } else if op == "os_tls_server_config" {
+        let cert = arg_place(fx, args, 0)
+        let key = arg_place(fx, args, 1)
+        let alpn = arg_place(fx, args, 2)
+        let cp = str_parts(fx, cert)
+        let kp = str_parts(fx, key)
+        let ap = str_parts(fx, alpn)
+        let xs = ints_of4(ints_get(cp, 0), ints_get(cp, 1), ints_get(kp, 0), ints_get(kp, 1))
+        ints_push(xs, ints_get(ap, 0))
+        ints_push(xs, ints_get(ap, 1))
+        v = rt_v(fx, "nz.os_tls_server_config", xs, "i64")
+    } else if op == "os_tls_connect" {
+        let config = arg_value(fx, args, 0)
+        let host = arg_place(fx, args, 1)
+        let hp = str_parts(fx, host)
+        v = rt_v(fx, "nz.os_tls_connect", ints_of3(config, ints_get(hp, 0), ints_get(hp, 1)), "i64")
+    } else if op == "os_tls_accept" || op == "os_tls_handshake" {
+        let id = arg_value(fx, args, 0)
+        v = rt_v(fx, "nz." + op, ints_of(id), "i64")
+    } else if op == "os_tls_push" || op == "os_tls_pull" || op == "os_tls_read" || op == "os_tls_write" || op == "os_tls_close" {
+        let id = arg_value(fx, args, 0)
+        let b = arg_place(fx, args, 1)
+        let bp = str_parts(fx, b)
+        v = rt_v(fx, "nz." + op, ints_of3(id, ints_get(bp, 0), ints_get(bp, 1)), "i64")
+    } else if op == "os_tls_info" {
+        let id = arg_value(fx, args, 0)
+        let what = arg_value(fx, args, 1)
+        let out = arg_place(fx, args, 2)
+        let op_ = str_parts(fx, out)
+        v = rt_v(fx, "nz.os_tls_info", ints_of4(id, what, ints_get(op_, 0), ints_get(op_, 1)), "i64")
     } else if op == "os_local_addr" || op == "os_peer_addr" {
         let h = arg_value(fx, args, 0)
         let peer = iconst(fx, if op == "os_peer_addr" { 1 } else { 0 })

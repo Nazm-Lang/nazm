@@ -28,6 +28,7 @@ pub struct Needs {
     files: Bool,
     net: Bool,
     wide: Bool,
+    tls: Bool,
     single: Bool,
 }
 
@@ -48,6 +49,7 @@ pub fn needs_of(names: HashMap[Str, Bool]) -> Needs ! {} {
         files: hashmap_has(names, "files"),
         net: hashmap_has(names, "net"),
         wide: hashmap_has(names, "wide"),
+        tls: hashmap_has(names, "tls"),
         single: hashmap_has(names, "single"),
     )
 }
@@ -69,6 +71,7 @@ pub fn settled(n: Needs) -> Needs ! {} {
         files: n.files || n.net,
         net: n.net,
         wide: n.wide,
+        tls: n.tls,
         single: n.single,
     )
 }
@@ -79,7 +82,7 @@ fn with_foreign(n: Needs, foreign: Bool) -> Needs {
         tasks: n.tasks, channels: n.channels, sequences: n.sequences, io: n.io, join: n.join,
         strings: n.strings, shims: n.shims, stack: n.stack, closures: n.closures,
         foreign: foreign, numbers: n.numbers, files: n.files, net: n.net, wide: n.wide,
-        single: n.single,
+        tls: n.tls, single: n.single,
     )
 }
 
@@ -328,6 +331,8 @@ pub fn emit_runtime(needs: Needs) -> Str ! {} {
     }
     if n.numbers { strs_push(out, rt_core_NUMBER_RUNTIME()) }
     if n.wide { strs_push(out, rt_core_WIDE_RUNTIME()) }
+    // TLS (C1): the session table, over the per-target engine unit.
+    if n.tls { strs_push(out, rt_tls_TLS_RUNTIME()) }
     if n.closures { strs_push(out, rt_core_CLOSURE_RUNTIME()) }
     if n.shims {
         strs_push(out, rt_core_SHIM_RUNTIME())
@@ -713,8 +718,16 @@ pub fn emit_heap(limit: Int) -> Str ! {} {
 
 // --- a program's units --------------------------------------------------------------------------
 
+/// The TLS engine unit for `t` (`tls::emit_tls`, C1): OpenSSL 3 over memory BIOs, with the
+/// Security framework's trust on macOS and OpenSSL's own on Linux; `""` where TLS has no binding.
+pub fn emit_tls(t: Str) -> Str ! {} {
+    if darwin(t) { return rt_tls_OPENSSL() + rt_tls_SECTRUST() }
+    if t == "aarch64-linux" || t == "x86_64-linux" { return rt_tls_OPENSSL() + rt_tls_OPENSSL_TRUST() }
+    ""
+}
+
 /// The runtime's units for a hosted program, in the order `nazm build` links them, as
-/// `NAME\tTEXT` pairs: `runtime`, then the target's `switch`, `init`, `stack`, `errno` and `os`
+/// `NAME\tTEXT` pairs: `runtime`, then the target's `switch`, `init`, `stack`, `errno`, `tls` and `os`
 /// where they are reached, `heap` under a heap limit (every unit but the stack's counted), and
 /// `entry`. `heap` is the limit in bytes, `stack` the stack size (`-1` for none of either).
 pub fn runtime_units(needs: Needs, triple: Str, entry: Str, roots: Int, calls_c: Bool, stack: Int, heap: Int) -> Vec[Strs] ! {} {
@@ -741,6 +754,15 @@ pub fn runtime_units(needs: Needs, triple: Str, entry: Str, roots: Int, calls_c:
         if n.foreign || n.files {
             strs_push(names, "errno")
             strs_push(texts, emit_errno(t))
+        }
+        // The TLS engine (C1), wherever a session is used: the target's binding (`emit_tls`).
+        // `nazm build` refuses a target without one; every target here has one.
+        if n.tls {
+            let engine = emit_tls(t)
+            if engine != "" {
+                strs_push(names, "tls")
+                strs_push(texts, engine)
+            }
         }
         if n.files {
             strs_push(names, "os")

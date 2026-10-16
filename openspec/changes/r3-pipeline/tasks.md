@@ -151,6 +151,24 @@
       `--debug` 1014 of 1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache
       989 of 989 inputs (4599 units; host only), the runtime digest equal, 58739 of 58739 mutants
       caught
+- [x] 8.7 TLS (v1 track C1, `98e271e0`, runtime ABI 37; C1b's `SCHANNEL`, `91f3da0a`, generated
+      but not yet bound): `runtime_text.py` reads `tls.rs` (`TLS_RUNTIME`, and the engine
+      `OPENSSL` with `SECTRUST` or `OPENSSL_TRUST`), `rtext.nz` and `runtime.nz` regenerated (the
+      eleven `nz.os_tls_*` imports, part `Tls`); `rtgen.nz`'s `Needs` gains `tls`, the runtime
+      the session table after the 128-bit part, `emit_tls` the per-target engine and
+      `runtime_units` the `tls` unit after `errno`; the runtime digest covers each target's
+      engine; `ops.nz` lowers the eleven `os_tls_*` built-ins as `op/files.rs` does; `units.py`
+      compares the `tls` unit. The link that retries without OpenSSL is `nazm build`'s, not this
+      pipeline's. No input of the full set reaches TLS, so `crates/nazm-cli/tests/tls.rs`'s three
+      programs (loopback, refusals, HTTPS) were compared too: all agree on the host, every stage
+      and the `tls` unit included (all eleven built-ins lowered); with
+      `TARGET=x86_64-apple-darwin` MIR and LIR agree, `nazm build` refuses them at the link (no
+      x86_64 OpenSSL here), and the units it kept agree with `pipeline runtime`'s. `run.sh`
+      against the reference built at `dfda47ac`, on the host and with
+      `TARGET=x86_64-apple-darwin`: MIR 1476 of 1476, LIR tables, ops (document and digests) and
+      `--debug` 1015 of 1015, runtime units 990 of 990 on the host (25 refused by `nazm build`)
+      and 989 of 989 for x86_64 (26 refused), object cache 990 of 990 inputs (4610 units; host
+      only), the runtime digest equal, 60049 of 60049 mutants caught
 - [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
       now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the

@@ -4,13 +4,13 @@
 
 GOT.txt is `pipeline runtime`'s output (each unit after `;;; unit NAME`); BASE is the `-o` path
 `nazm build --emit-ir` was given, beside which it wrote `BASE.NAME.ll` for every unit. Compares the
-runtime's units — `runtime`, `entry`, `switch`, `init`, `stack`, `errno`, `os`, `heap` — byte for
+runtime's units — `runtime`, `entry`, `switch`, `init`, `stack`, `errno`, `tls`, `os`, `heap` — byte for
 byte, and that the build wrote exactly the ones the pipeline did. Prints `agree`, or `differ` and
 the first differing unit and line."""
 import os
 import sys
 
-RUNTIME = ["runtime", "switch", "init", "stack", "errno", "os", "heap", "entry"]
+RUNTIME = ["runtime", "switch", "init", "stack", "errno", "tls", "os", "heap", "entry"]
 got_path, base = sys.argv[1], sys.argv[2]
 raw = open(got_path).read()
 got = {}
