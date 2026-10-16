@@ -206,6 +206,18 @@ same way: `process_run` reads the child's output while another task collects its
 child held writing a full pipe would otherwise hold the whole run. Writes and `connect` are not
 polled: they do not wait on another task of the same program in any input.
 
+**A connection made or bytes written give way** (2026-10-16). On the Rust interpreter the task at
+the other end of a socket runs on a thread of its own: it accepts a connection the moment it is
+made, and reads each answer as it is written. Here the task that connected or wrote would run on
+until it waited — a client that connects, closes and drains its server closed the listener before
+the server's accept was tried again (`0 requests on 0` where Rust says `on 1`), and a client
+reading a server's answers found them all in one read, two strings fewer than Rust counts. So a
+successful `os_tcp_connect`, and an `os_write` of at least a byte to a socket, while other tasks
+live, ends the task's turn, and every task waiting on a socket tries again at once, held neither
+by its poll interval nor by the round-without-progress rule (`SC_CONNECTS`, `ST_SEEN`,
+`ST_GIVEWAY`). The three networked programs of `crates/nazm-cli/tests/http.rs` are cases of the
+suite (`tests/cases/http_*.nz`); their memory reports agree with the Rust interpreter's exactly.
+
 **The clocks.** `time_now_ms` and `time_now_ns` count from the program's first reading of each, as
 the Rust interpreter's do (`intrinsic.rs`, `monotonic_ms`), and `os_wait_until`'s deadline is on
 that clock. A socket's deadline is the runtime's (`os_set_timeout`); the waits around it here are
@@ -296,3 +308,35 @@ comparisons (before this round: 1,808 programs, 939 that checked; 2,067 comparis
 2. `--max-depth` above what the Rust interpreter's stack can hold: the Rust one fails with
    "recursed deeper than the interpreter's stack holds"; this one does not. Recommendation: keep
    the difference; it is the Rust interpreter's limit, not the language's.
+
+## Allocation counts in networked programs (2026-10-16)
+
+The cloud track saw the interpreter count fewer strings than compiled code on one HTTP exchange.
+Measured on the three networked programs of `crates/nazm-cli/tests/http.rs`:
+
+| program | Rust `run --interpret` | this interpreter, before | after | LLVM build |
+| --- | --- | --- | --- | --- |
+| loopback exchange | 915 | 915 | 915 | 918 |
+| malformed requests | 2,172 | 2,167 | 2,172 | 2,173–2,174 (varies) |
+| connections in tasks | 1,388 | 1,388 | 1,388 | 1,391 |
+
+Two differences, one on each side:
+
+- **The compiled tiers count each `atomic_new` as a string.** A program of nothing but
+  `atomic_new(0); atomic_new(1)` reports `strings allocated=2` built, 0 interpreted;
+  `http_listen` makes three atomics, so every program that listens is 3 ahead. The LIR lowering
+  backs an `Atomic` with a string backing that the `Str` triple counts
+  (`crates/nazm-lir/src/op/atomics.rs`). `docs/spec.md` promises that "the interpreter and a
+  compiled program allocate the same strings" (*Strings*, *Building*) and names no allocation in
+  `atomic_new` (*Atomics*), so this is the compiled side's: **a Rust-side defect for the
+  coordinator** — count an atomic's cell outside `strings` (or say in the spec that it is one).
+  Both interpreters agree with each other here.
+- **This interpreter read sockets later than threads do** (fixed, D10, *A connection made or bytes
+  written give way*): one task ran on after writing or connecting, so its peer read two answers at
+  once (two strings fewer) or, in a connect-close-drain, never accepted at all. Now equal to the
+  Rust interpreter on all three.
+
+What remains between the interpreters and the compiled tiers is the system's: how a socket splits
+what it delivers (the LLVM count of the malformed-requests program varies run to run). The Rust
+interpreter itself is racy on a client that connects, closes and drains at once (`0 requests on
+0` or `on 1` under load), so that shape is not a case of the suite.

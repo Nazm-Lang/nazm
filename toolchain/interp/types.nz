@@ -182,7 +182,11 @@ pub const ST_TURNS: Int = 11
 pub const ST_IOWAIT: Int = 12
 /// How long a task waiting on a socket waits before its next try, doubling from `POLL_MS`.
 pub const ST_IOGAP: Int = 13
-pub const ST_SIZE: Int = 14
+/// The connections made (`SC_CONNECTS`) when the task last tried its socket; and 1 when the task
+/// gives way after the built-in it is running (a connection it made, which another may accept).
+pub const ST_SEEN: Int = 14
+pub const ST_GIVEWAY: Int = 15
+pub const ST_SIZE: Int = 16
 
 // `Heap.sched`: tasks started and joined, selects and their timeouts (`NAZM_SCHED_REPORT`), and
 // how many tasks are live.
@@ -191,3 +195,5 @@ pub const SC_JOINED: Int = 1
 pub const SC_SELECTS: Int = 2
 pub const SC_TIMEOUTS: Int = 3
 pub const SC_LIVE: Int = 4
+// Connections the program has made: a task waiting on a socket tries again at once after one.
+pub const SC_CONNECTS: Int = 5
