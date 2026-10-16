@@ -7562,6 +7562,20 @@ calls C runs a thread per task (N106, §7.107). If the frames cannot be saved fo
 the process ends with a message. Runtime ABI 39 → 40 (design: `openspec/changes/
 performance-leadership/design.md`, *Concurrency engineering*).
 
+**Amended (performance leadership 6.3, 2026-10-16): stealing, spinning, and a join without a lock.**
+*Scheduling* above changes in three ways and keeps its promise — a worker's runnable tasks run first
+in, first out. A worker keeps the tasks that have never run apart from those it resumes (their
+frames are on its run stack, so they stay); both are taken in the order they were queued. A task
+started by a task goes to that task's worker; one `main` starts goes round robin as before. A worker
+with nothing to run takes half (at most 64) of another worker's unstarted tasks, never holding two
+workers' locks; still with nothing, it looks for work for up to 50 µs before it sleeps, and a task
+queued for it signals it only when it sleeps. With one worker there is no stealing and no spin, so
+`NAZM_WORKERS=1` stays deterministic. A scope's join reads a task that is done without a lock; one
+not done counts itself as a joiner first, and a task that ends wakes joiners only when one is
+counted. Still no preemption: a task that computes without waiting holds its worker; the design
+for preemption at function entry through the stack check is in `openspec/changes/
+performance-leadership/design.md`. Runtime ABI 40 → 41.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
