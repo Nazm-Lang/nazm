@@ -365,8 +365,8 @@ fn choosing_cranelift_writes_no_llvm_text_for_any_unit() {
         .collect();
     ll.sort();
     // Only the runtime, the platform entry, the task pool's switch (N83), the target's
-    // `errno` (N85), its `os` unit (Gate 2) and its `stack` unit (Gate 3) are LLVM text; every
-    // unit is an object.
+    // `errno` (N85), its `os` unit (Gate 2), its `stack` unit (Gate 3) and the small-block heap's
+    // (R1.5 3.1) are LLVM text; every unit is an object.
     assert_eq!(
         ll,
         [
@@ -374,6 +374,7 @@ fn choosing_cranelift_writes_no_llvm_text_for_any_unit() {
             "prog.errno.ll",
             "prog.os.ll",
             "prog.runtime.ll",
+            "prog.small.ll",
             "prog.stack.ll",
             "prog.switch.ll"
         ],

@@ -9,7 +9,10 @@
       (2026-10-15: `crates/nazm-cli/src/compiled_run.rs`, tests `run_compiled.rs`; fib 5.24 s → 0.17 s)
 
 ## 3. Word frequency: speed and memory
-- [ ] 3.1 Size-class allocator in the runtime
+- [x] 3.1 Size-class allocator in the runtime — 2026-10-16: the small-block heap (`heap::emit_small`,
+      architecture §7.119, runtime ABI 39) for a hosted executable that calls no C; a string-and-list
+      loop 284.7 → 115.4 ms (2.5×), four tasks −16%, words unchanged (no allocation in its loop);
+      `tests/small_heap.rs`, four mutants
 - [ ] 3.2 Native string-hash built-in with the same values
 - [x] 3.3 Allocation-free `split`/`words` iterator — 2026-10-15: `for w in s.split(sep)` lowered
       through `text_split_end`/`text_split_next` (Core IR, `split_loop`), no list; word frequency

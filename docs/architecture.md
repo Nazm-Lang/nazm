@@ -9442,3 +9442,44 @@ the eleven `os_tls_*` built-ins and nothing else.
   `runtime_text.py` from the new module, the `Tls` part, the engine artefact, the eleven lowerings
   `crates/nazm-lir/src/op/files.rs` gained, and the retried link.
 
+
+## 7.119 The small-block heap: small blocks reused per thread — R1.5 3.1, 2026-10-16
+
+Written with the code (`openspec/changes/r1-5-performance-and-dx/design.md`, D13). A compiled
+program allocated every string backing, list header and growth through C's `malloc` and `free`; a
+loop that builds and drops a few small values spent almost all its time there (`docs/performance.md`,
+*R1.5 3.1*).
+
+**What is settled.**
+
+- **The unit.** `nazm_runtime::heap::emit_small` is a unit of its own, `small`, defining
+  `nz.small_malloc`, `nz.small_free` and `nz.small_realloc`. Every block has a 16-byte header
+  holding its size class: 1 to 32 for up to 512 bytes, the capacity sixteen times the class; 0 for
+  a larger block, which is C's. A thread keeps up to 64 freed blocks of each class on a list of its
+  own (`SMALL_KEPT`) and allocates from it without calling C; a block freed past that, and every
+  large one, goes back to C, so a block one thread allocates and another frees — a producer and a
+  consumer — costs at most the bound, never a list that grows with the program's lifetime. In a
+  program of one thread (`Native::single_thread`) the lists are plain globals; elsewhere they are
+  `thread_local`, whose access on macOS is a call, so the gain there is smaller (measured).
+- **How a program reaches it.** As the counted heap (R1d, D5) is reached: by renaming. Every unit
+  (`nazm_runtime::heap::small_heap` on LLVM text, `nazm_lir::op::small_heap` on Cranelift's and
+  `nzcg`'s LIR, so their object keys change with it), the runtime, the entry and every runtime
+  unit but `stack` (task stacks are not heap) and the TLS engine (`tls`, which allocates with
+  `calloc` and frees only what it allocated) call it in place of C's allocator.
+- **Where.** A hosted executable (a target with a `switch` unit: macOS, iOS, Linux, Android,
+  Windows) built with no heap limit, no prebuilt runtime (`--runtime`), no
+  `--link`, not a library, whose program declares no foreign function
+  (`nazm_lir::backend::small_heap`). Anywhere C may free what the program allocated, or hand it
+  memory to free, C's allocator stays. The runtime already never frees what C allocated
+  (`heap::tests::the_runtime_never_frees_what_the_c_library_allocated`).
+- **What a program does is unchanged**: the same output and memory report on every backend.
+- **What the self-hosted pipeline follows** (R3): `toolchain/pipeline/rtgen.nz`'s
+  `runtime_units` adds `small` and renames the same units for a hosted program with no heap limit
+  that calls no C; `objcache.nz`'s digest covers the unit; `units.py` compares it.
+
+**Evidence.** `crates/nazm-cli/tests/small_heap.rs`: a program of strings, a list grown past 512
+bytes and emptied, and a map agrees with the interpreter on every backend with nothing live, and
+only `small` and `stack` call C's allocator; a program of tasks has thread-local lists and one of one
+thread plain ones; a program calling C, and one with a heap limit, have no `small` unit; 200,000
+strings a task allocates and `main` frees peak at about 2 MiB, not the 50 MiB an unbounded list
+holds. Four mutants. Runtime ABI 39.

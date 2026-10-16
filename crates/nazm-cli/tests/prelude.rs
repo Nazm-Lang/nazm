@@ -615,7 +615,8 @@ fn the_prelude_has_no_native_unit_of_its_own() {
         .find(|l| l.contains("nazm.build-report/1"))
         .map(|l| serde_json::from_str(l).expect("a report"))
         .expect("a build report");
-    assert_eq!(v["native"]["units"].as_u64(), Some(4), "{v}");
+    // And the small-block heap's unit (R1.5 3.1).
+    assert_eq!(v["native"]["units"].as_u64(), Some(5), "{v}");
     for entry in std::fs::read_dir(dir.path()).expect("read dir").flatten() {
         let path = entry.path();
         if path.extension().is_some_and(|x| x == "ll") {

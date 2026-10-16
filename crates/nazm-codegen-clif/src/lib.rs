@@ -45,6 +45,8 @@ pub struct Cranelift {
     soa: bool,
     /// Whether every object allocates through the counted heap (R1d, D5: `--heap-limit`).
     counted_heap: bool,
+    /// Whether a program that calls no C allocates through the small-block heap (R1.5 3.1).
+    small_heap: bool,
 }
 
 impl Cranelift {
@@ -58,6 +60,7 @@ impl Cranelift {
             debug: false,
             soa: false,
             counted_heap: false,
+            small_heap: false,
         }
     }
 
@@ -66,6 +69,15 @@ impl Cranelift {
     #[must_use]
     pub const fn with_counted_heap(mut self, counted: bool) -> Self {
         self.counted_heap = counted;
+        self
+    }
+
+    /// The same backend, a program that calls no C allocating through the small-block heap
+    /// (R1.5 3.1, `nazm_lir::backend::small_heap`): its LIR's imports of C's allocator renamed,
+    /// which the object's key then covers.
+    #[must_use]
+    pub const fn with_small_heap(mut self, small: bool) -> Self {
+        self.small_heap = small;
         self
     }
 
@@ -142,6 +154,8 @@ impl Cranelift {
         })?;
         if self.counted_heap {
             nazm_lir::op::count_heap(&mut m);
+        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
+            nazm_lir::op::small_heap(&mut m);
         }
         Ok(m)
     }

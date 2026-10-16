@@ -30,6 +30,7 @@ mod short_variants;
 mod shorter_forms;
 mod simd;
 mod single_thread;
+mod small_heap;
 mod source_identity;
 mod source_root;
 mod speed_text;

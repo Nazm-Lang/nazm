@@ -125,18 +125,22 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
             // channels, the target's `errno` (N85) where C is called or a file used, and its `os`
             // unit (Gate 2) where a file is used — all three always under Cranelift, whose
             // runtime is its whole baseline. The `stack` unit (Gate 3) wherever the stack is
-            // checked, and Windows' `init` unit always.
+            // checked, and Windows' `init` unit always; the small-block heap's (R1.5 3.1) before
+            // the entry.
             let windows = triple.contains("windows");
             let want = match (backend, windows) {
                 ("cranelift", false) => {
-                    "objects 00-m0.o 01-runtime.o 02-switch.o 03-stack.o 04-errno.o 05-os.o 06-entry.o\n"
+                    "objects 00-m0.o 01-runtime.o 02-switch.o 03-stack.o 04-errno.o 05-os.o 06-small.o \
+                     07-entry.o\n"
                 }
                 ("cranelift", true) => {
                     "objects 00-m0.o 01-runtime.o 02-switch.o 03-init.o 04-stack.o 05-errno.o 06-os.o \
-                     07-entry.o\n"
+                     07-small.o 08-entry.o\n"
                 }
-                (_, false) => "objects 00-m0.o 01-runtime.o 02-stack.o 03-entry.o\n",
-                (_, true) => "objects 00-m0.o 01-runtime.o 02-init.o 03-stack.o 04-entry.o\n",
+                (_, false) => "objects 00-m0.o 01-runtime.o 02-stack.o 03-small.o 04-entry.o\n",
+                (_, true) => {
+                    "objects 00-m0.o 01-runtime.o 02-init.o 03-stack.o 04-small.o 05-entry.o\n"
+                }
             };
             assert!(listed.contains(want), "{listed}");
             let libs = if triple.contains("linux") {
