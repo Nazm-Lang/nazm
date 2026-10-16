@@ -182,6 +182,9 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     // And TLS's engine (C1), where the target has one: a sixth. The platform's library is linked
     // by the program that reaches it.
     let tls = per_target.and_then(nazm_lir::runtime::tls::emit_tls);
+    // And Windows' start of a program — `nz_os_args`, the entry's arguments, which the entry
+    // calls — as a generated runtime carries it (`build::lower`): a seventh.
+    let init = per_target.and_then(nazm_lir::runtime::platform::emit_init);
     let mut members = vec![obj.clone()];
     for (name, text) in [
         ("switch", &switch),
@@ -189,6 +192,7 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
         ("os", &os),
         ("stack", &stack),
         ("tls", &tls),
+        ("init", &init),
     ] {
         let Some(text) = text else { continue };
         let sll = work.join(format!("{name}.ll"));
@@ -223,23 +227,10 @@ pub(crate) fn build(triple: Option<&str>, profile: Option<&str>, opt: u8, out: &
     }
     let archive = out.join(ARCHIVE);
     let _ = std::fs::remove_file(&archive);
-    // `ZERO_AR_DATE`: the same object archives to the same bytes (Apple's `ar`; GNU `ar` is
-    // deterministic by default).
-    let archived = Command::new("ar")
-        .env("ZERO_AR_DATE", "1")
-        .arg("rcs")
-        .arg(&archive)
-        .args(&members)
-        .output();
-    match archived {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            return finish(refuse(format!(
-                "`ar` refused the runtime: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            )))
-        }
-        Err(e) => return finish(refuse(format!("`ar` could not run: {e}"))),
+    // Written by nazm itself, not the system's `ar`, whose index Apple's tools order differently
+    // from one run to the next: the same objects archive to the same bytes (`crate::archive`).
+    if let Err(e) = crate::archive::write(&archive, &members) {
+        return finish(refuse(format!("the runtime was not archived: {e}")));
     }
     let bytes = match std::fs::read(&archive) {
         Ok(b) => b,

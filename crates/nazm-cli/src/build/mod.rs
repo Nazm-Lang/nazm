@@ -37,7 +37,7 @@
 //! follows; it is the shape of the pipeline.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::ExitCode;
 
 use nazm_cache::{LlvmInput, ObjectArtifact, ObjectFound, ObjectKey};
 

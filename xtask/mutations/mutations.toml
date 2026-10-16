@@ -20744,3 +20744,61 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  br i1 %asked, label %yield, label %out'''
 replace = '''  br i1 %asked, label %out, label %out'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+# --- Static archives written by nazm (2026-10-17): Apple's CLT 27.0 `ar` index varied run to run
+
+[[mutation]]
+name = "ar-index-unsorted"
+why = "the Mach-O index is left in member order, not sorted by name as `__.SYMDEF SORTED` promises ld64"
+file = "crates/nazm-cli/src/archive.rs"
+find = "entries.sort_unstable();"
+replace = ""
+killers = [{ package = "nazm-cli", bin = "nazm", name = "archive::tests::a_mach_o_index_is_sorted_by_name_then_member_and_holds_only_defined_globals" }]
+
+[[mutation]]
+name = "ar-index-ties-by-later-member"
+why = "a symbol two members define is found in the later one first"
+file = "crates/nazm-cli/src/archive.rs"
+find = "entries.sort_unstable();"
+replace = "entries.sort_unstable_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "archive::tests::a_mach_o_index_is_sorted_by_name_then_member_and_holds_only_defined_globals" }]
+
+[[mutation]]
+name = "ar-mach-o-indexes-undefined"
+why = "an undefined external is indexed, so the linker pulls a member that does not define it"
+file = "crates/nazm-cli/src/archive.rs"
+find = "kind & N_STAB == 0 && kind & N_EXT != 0 && kind & N_TYPE != 0"
+replace = "kind & N_STAB == 0 && kind & N_EXT != 0"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "archive::tests::a_mach_o_index_is_sorted_by_name_then_member_and_holds_only_defined_globals" }]
+
+[[mutation]]
+name = "ar-bsd-member-bytes-unaligned"
+why = "a `#1/N` name is not padded, so a member's bytes are not 8-byte aligned and ld64 refuses it"
+file = "crates/nazm-cli/src/archive.rs"
+find = "let long = |name: &str| round_up(name.len(), 8) + 4;"
+replace = "let long = |name: &str| name.len() + 4;"
+killers = [{ package = "nazm-cli", bin = "nazm", name = "archive::tests::a_mach_o_index_is_sorted_by_name_then_member_and_holds_only_defined_globals" }]
+
+[[mutation]]
+name = "ar-elf-index-drops-globals"
+why = "an ELF member's global symbols are left out of the index, so a board's linker finds none of them"
+file = "crates/nazm-cli/src/archive.rs"
+find = "matches!(binding, 1 | 2 | 10)"
+replace = "matches!(binding, 2 | 10)"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::every_object_format_archives_with_an_index_and_the_same_bytes_twice" }]
+
+[[mutation]]
+name = "ar-coff-long-name-misread"
+why = "a COFF name longer than eight bytes is read from the wrong place in the string table"
+file = "crates/nazm-cli/src/archive.rs"
+find = "b.string(strings + b.at32(e + 4)?)?"
+replace = "b.string(strings + 4 + b.at32(e + 4)?)?"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::every_object_format_archives_with_an_index_and_the_same_bytes_twice" }]
+
+[[mutation]]
+name = "ar-wasm-defined-name-unread"
+why = "a defined WebAssembly symbol's name is not read, so the symbol table is misparsed"
+file = "crates/nazm-cli/src/archive.rs"
+find = "if defined || flags & EXPLICIT_NAME != 0 {"
+replace = "if flags & EXPLICIT_NAME != 0 {"
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::every_object_format_archives_with_an_index_and_the_same_bytes_twice" }]

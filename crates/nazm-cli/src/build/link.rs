@@ -20,11 +20,33 @@ pub(super) fn linked(
     summary: bool,
     summarized: &Summarize<'_>,
 ) -> Result<(), ExitCode> {
+    // A static archive of the objects (N55), written by nazm itself so two builds of one
+    // library are the same bytes (`crate::archive`).
+    if choice.library && !choice.shared {
+        if let Err(e) = crate::archive::write(tmp_exe, objects) {
+            cleanup(false);
+            eprintln!("nazm: the static archive was not written: {e}");
+            if summary {
+                return Err(summarized(
+                    Status::ToolchainFailed,
+                    exit::TOOLCHAIN_FAILED,
+                    &[],
+                    Some(map),
+                    None,
+                ));
+            }
+            return Err(ExitCode::from(exit::TOOLCHAIN_FAILED));
+        }
+    }
     let attempt = |objects: &[PathBuf]| {
         if choice.library && choice.shared {
             backend.link_shared(tmp_exe, objects)
         } else if choice.library {
-            archive(tmp_exe, objects)
+            Outcome::Ran(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
         } else if choice.release {
             backend.link_release(tmp_exe, objects)
         } else {
@@ -311,17 +333,6 @@ pub(super) fn link_name(work: &Path, output: &Path) -> PathBuf {
 /// holding it are removed: a debug build on macOS, whose linker leaves it in the objects (N48).
 fn gathers_debug_information(debug: bool, os: &str) -> bool {
     debug && os == "macos"
-}
-
-/// A static archive of `objects` (N55), with the system `ar` and the timestamps zeroed so two
-/// builds of one library are the same bytes.
-fn archive(output: &Path, objects: &[PathBuf]) -> Outcome {
-    let mut c = Command::new("ar");
-    c.env("ZERO_AR_DATE", "1")
-        .arg("rcs")
-        .arg(output)
-        .args(objects);
-    crate::backend::run_command(&mut c)
 }
 
 /// A library's C header (N55): every export, by symbol, in `<stdint.h>` and `<stdbool.h>` types.
