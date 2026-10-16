@@ -642,11 +642,11 @@ fn root_of(how: Int, path: Str, why: Str) -> Root {
 // root module's — found among its ancestors as written (lexically: this front end has no
 // `realpath`, so a root reached through a link is not found; `-2`, as the reference's
 // `canonicalize` would decide it). A path that is not absolute is not read here either.
-pub fn pk_given(module: Str, given: Str, io: IoCap) -> Root {
+// `is_dir` says whether `given` is a directory: the caller asks the file system (`ld_is_directory`),
+// so this module stays free of handles and the bootstrap checker can read it on its own.
+pub fn pk_given(module: Str, given: Str, is_dir: Bool) -> Root {
     if pk_starts(given, "/") == false { return root_of(0 - 2, "", "a relative source root"); }
-    let d = os_dir_open(given);
-    if os_status(d) < 0 { return root_of(0 - 1, "", pk_cat3("`", given, "` is not a directory")); }
-    os_close(d);
+    if is_dir == false { return root_of(0 - 1, "", pk_cat3("`", given, "` is not a directory")); }
     let want = pk_normalise(given);
     let abs = pk_normalise(module);
     let mut dir = pk_parent(abs);
