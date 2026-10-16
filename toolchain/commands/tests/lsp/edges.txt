@@ -1,0 +1,11 @@
+# A notification the server does not know, unknown requests
+# with string ids, and a URI with an escaped space.
+{"jsonrpc":"2.0","id":"init","method":"initialize","params":{"capabilities":{},"rootUri":null}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"workspace/didChangeConfiguration","params":{"settings":{}}}
+{"jsonrpc":"2.0","id":"x\"y","method":"nazm/unknown","params":null}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/rangeFormatting","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/with%20space.nz","languageId":"nazm","version":0,"text":"fn main() -> Int {\n    let q = 1;\n    q\n}\n"}}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/with%20space.nz"},"position":{"line":2,"character":4}}}
+{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}
+{"jsonrpc":"2.0","method":"exit"}

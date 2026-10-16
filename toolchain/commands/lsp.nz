@@ -1,0 +1,1072 @@
+// `nazm lsp`, written in Nazm (R5, `openspec/changes/r5-commands/`, design D15).
+//
+// `nazm lsp [--source-root DIR]`, run by the dispatcher (`nazm.nz`): the Language Server Protocol
+// over standard input and output, a port of `crates/nazm-cli/src/lsp.rs` (and of what it asks of
+// `lsp-server` and `nazm_service::LanguageService`) over R2's published facts
+// (`compiler/facts.nz`).
+//
+// Carried: the framing (`Content-Length`, a blank line, the JSON body), the handshake —
+// `initialize` answered with the reference's capabilities, then `initialized` — `shutdown` and
+// `exit`, the end of input, a method the reference does not implement (`MethodNotFound`, which is
+// `textDocument/formatting` too: the reference offers no formatting), the documents' lifecycle
+// (`didOpen`, `didChange` applied range by range in UTF-16 positions, `didClose`) with each
+// document's diagnostics published as the reference publishes them; `hover` of a local whose type
+// is a built-in one and of a call to a plain function (its signature and effects), `definition` of
+// a local and of such a call, and `null` where the reference answers nothing (no name, a function's
+// own name where it is declared, a field or variant after `.`).
+//
+// Not carried, refused with status 6 on standard error (design D5) before anything else is
+// written: what the facts do not answer — a document whose text is not the file's on disk (the
+// loader reads files, not the editor's buffers), more than one document open at once (the reference
+// publishes them in a hash map's order), a compilation that does not load or that the front end
+// stops at; hover and definition of anything else (a method, a generic function, a built-in, a
+// constant, a type, or a name the checker publishes no binding for); completion, references, signature help, rename, symbols, semantic tokens,
+// code actions and call hierarchy; `--source-root`; and any message the reference's parsers
+// would read differently from this port's.
+//
+// Standard output is the protocol: nothing else is ever written there.
+
+use "../../compiler/lex.nz"
+use "../../compiler/syntax.nz"
+use "../../compiler/diag.nz"
+use "../../compiler/sema.nz"
+use "../../compiler/package.nz"
+use "../../compiler/facts.nz"
+use "cli.nz"
+use "front.nz"
+
+fn nl() -> Str { str_from_byte(10) }
+fn crlf() -> Str { str_from_byte(13) + str_from_byte(10) }
+
+// The command line, as `crates/nazm-cli/src/cli.rs` declares `nazm lsp`.
+pub fn lsp_cli() -> Cli {
+    let c = cli_command("lsp", "Serve the Language Server Protocol to an editor, on stdin and stdout",
+            "Serve the Language Server Protocol to an editor, on stdin and stdout." + nl() + nl()
+            + "Started and owned by the editor; ends when it says `exit`. Diagnostics, definition and hover, from the same "
+            + "loader and checker every other command uses, over the editor's unsaved buffers. `docs/architecture.md` §7.18 "
+            + "says what it does and does not do.")
+    cli_option(c, "", "source-root", "SOURCE_ROOT", true, "", false, "Measure every module's durable identity from this directory, as "
+            + "`nazm check --source-root` does. Without it, each open file's root is decided exactly as `nazm check` decides "
+            + "it for that file", "")
+    c
+}
+
+fn refuse(io: IoCap, why: Str) -> Int {
+    eprint("lsp: not carried: " + why + nl())
+    exit_with(6)
+    0
+}
+
+// --- JSON in --------------------------------------------------------------------------------------
+
+// A parsed message: per node its kind (0 null, 1 true, 2 false, 3 number, 4 string, 5 array,
+// 6 object), its text (a string's decoded bytes, a number's as written), its key in its object,
+// its first child and its next sibling.
+struct J {
+    kind: Ints,
+    text: Strs,
+    key: Strs,
+    first: Ints,
+    next: Ints,
+    src: Strs,
+    at: Ints,
+    bad: Ints,
+}
+
+fn j_node(j: J, kind: Int, text: Str) -> Int {
+    ints_push(j.kind, kind)
+    strs_push(j.text, text)
+    strs_push(j.key, "")
+    ints_push(j.first, 0 - 1)
+    ints_push(j.next, 0 - 1)
+    ints_len(j.kind) - 1
+}
+
+fn j_fail(j: J) -> Int {
+    ints_set(j.bad, 0, 1)
+    0 - 1
+}
+
+fn j_peek(j: J) -> Int {
+    let s = strs_get(j.src, 0)
+    let mut i = ints_get(j.at, 0)
+    while i < str_len(s) && (str_byte(s, i) == 32 || str_byte(s, i) == 9 || str_byte(s, i) == 10 || str_byte(s, i) == 13) { i += 1 }
+    ints_set(j.at, 0, i)
+    if i >= str_len(s) { return 0 - 1 }
+    str_byte(s, i)
+}
+
+fn hex_digit(b: Int) -> Int {
+    if b >= 48 && b <= 57 { return b - 48 }
+    if b >= 97 && b <= 102 { return b - 87 }
+    if b >= 65 && b <= 70 { return b - 55 }
+    0 - 1
+}
+
+fn utf8_of(cp: Int) -> Str {
+    if cp < 128 { return str_from_byte(cp) }
+    if cp < 2048 { return str_from_byte(192 + cp / 64) + str_from_byte(128 + cp % 64) }
+    if cp < 65536 { return str_from_byte(224 + cp / 4096) + str_from_byte(128 + (cp / 64) % 64) + str_from_byte(128 + cp % 64) }
+    str_from_byte(240 + cp / 262144) + str_from_byte(128 + (cp / 4096) % 64) + str_from_byte(128 + (cp / 64) % 64) + str_from_byte(128 + cp % 64)
+}
+
+fn j_hex4(j: J, s: Str, i: Int) -> Int {
+    if i + 4 > str_len(s) { return j_fail(j) }
+    let mut v = 0
+    for k in 0..4 {
+        let h = hex_digit(str_byte(s, i + k))
+        if h < 0 { return j_fail(j) }
+        v = v * 16 + h
+    }
+    v
+}
+
+// A string at the cursor, decoded; the cursor after it.
+fn j_string(j: J) -> Str {
+    let s = strs_get(j.src, 0)
+    let mut i = ints_get(j.at, 0) + 1
+    let out = strs_new()
+    let mut from = i
+    while i < str_len(s) && str_byte(s, i) != 34 {
+        let b = str_byte(s, i)
+        if b < 32 {
+            j_fail(j)
+            return ""
+        }
+        if b == 92 {
+            strs_push(out, str_slice(s, from, i))
+            if i + 1 >= str_len(s) {
+                j_fail(j)
+                return ""
+            }
+            let e = str_byte(s, i + 1)
+            i += 2
+            if e == 34 { strs_push(out, "\"") } else if e == 92 { strs_push(out, "\\") } else if e == 47 { strs_push(out, "/") }
+            else if e == 98 { strs_push(out, str_from_byte(8)) } else if e == 102 { strs_push(out, str_from_byte(12)) }
+            else if e == 110 { strs_push(out, str_from_byte(10)) } else if e == 114 { strs_push(out, str_from_byte(13)) }
+            else if e == 116 { strs_push(out, str_from_byte(9)) } else if e == 117 {
+                let mut cp = j_hex4(j, s, i)
+                if cp < 0 { return "" }
+                i += 4
+                if cp >= 55296 && cp <= 56319 {
+                    // A high surrogate: its low half must follow, as serde_json requires.
+                    if i + 6 > str_len(s) || str_byte(s, i) != 92 || str_byte(s, i + 1) != 117 {
+                        j_fail(j)
+                        return ""
+                    }
+                    let lo = j_hex4(j, s, i + 2)
+                    if lo < 56320 || lo > 57343 {
+                        j_fail(j)
+                        return ""
+                    }
+                    i += 6
+                    cp = 65536 + (cp - 55296) * 1024 + (lo - 56320)
+                } else if cp >= 56320 && cp <= 57343 {
+                    j_fail(j)
+                    return ""
+                }
+                strs_push(out, utf8_of(cp))
+            } else {
+                j_fail(j)
+                return ""
+            }
+            from = i
+        } else {
+            i += 1
+        }
+    }
+    if i >= str_len(s) {
+        j_fail(j)
+        return ""
+    }
+    strs_push(out, str_slice(s, from, i))
+    ints_set(j.at, 0, i + 1)
+    str_join(out, "")
+}
+
+fn j_value(j: J, depth: Int) -> Int {
+    if depth > 100 { return j_fail(j) }
+    let c = j_peek(j)
+    let s = strs_get(j.src, 0)
+    let i = ints_get(j.at, 0)
+    if c == 34 {
+        let text = j_string(j)
+        return j_node(j, 4, text)
+    }
+    if c == 123 || c == 91 {
+        let n = j_node(j, if c == 123 { 6 } else { 5 }, "")
+        ints_set(j.at, 0, i + 1)
+        let close = if c == 123 { 125 } else { 93 }
+        if j_peek(j) == close {
+            ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            return n
+        }
+        let mut last = 0 - 1
+        while true {
+            let mut key = ""
+            if c == 123 {
+                if j_peek(j) != 34 { return j_fail(j) }
+                key = j_string(j)
+                if j_peek(j) != 58 { return j_fail(j) }
+                ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            }
+            let v = j_value(j, depth + 1)
+            if v < 0 { return j_fail(j) }
+            strs_set(j.key, v, key)
+            if last < 0 { ints_set(j.first, n, v) } else { ints_set(j.next, last, v) }
+            last = v
+            let p = j_peek(j)
+            ints_set(j.at, 0, ints_get(j.at, 0) + 1)
+            if p == close { return n }
+            if p != 44 { return j_fail(j) }
+        }
+        return n
+    }
+    if c == 116 && i + 4 <= str_len(s) && str_slice(s, i, i + 4) == "true" {
+        ints_set(j.at, 0, i + 4)
+        return j_node(j, 1, "true")
+    }
+    if c == 102 && i + 5 <= str_len(s) && str_slice(s, i, i + 5) == "false" {
+        ints_set(j.at, 0, i + 5)
+        return j_node(j, 2, "false")
+    }
+    if c == 110 && i + 4 <= str_len(s) && str_slice(s, i, i + 4) == "null" {
+        ints_set(j.at, 0, i + 4)
+        return j_node(j, 0, "null")
+    }
+    if c == 45 || (c >= 48 && c <= 57) {
+        let mut e = i + 1
+        while e < str_len(s) && (hex_digit(str_byte(s, e)) >= 0 && str_byte(s, e) <= 57 || str_byte(s, e) == 46
+                || str_byte(s, e) == 101 || str_byte(s, e) == 69 || str_byte(s, e) == 43 || str_byte(s, e) == 45) { e += 1 }
+        ints_set(j.at, 0, e)
+        return j_node(j, 3, str_slice(s, i, e))
+    }
+    j_fail(j)
+}
+
+// The message's tree, or one marked bad (`j_ok` false).
+fn j_parse(text: Str) -> J {
+    let j = J(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), next: ints_new(), src: strs_new(), at: ints_new(), bad: ints_new())
+    strs_push(j.src, text)
+    ints_push(j.at, 0)
+    ints_push(j.bad, 0)
+    let root = j_value(j, 0)
+    if root != 0 || j_peek(j) >= 0 { ints_set(j.bad, 0, 1) }
+    j
+}
+
+fn j_ok(j: J) -> Bool { ints_get(j.bad, 0) == 0 && ints_len(j.kind) > 0 }
+
+// The member `key` of object `n`, the last of that name; -1 for none (or `n` not an object).
+fn j_get(j: J, n: Int, key: Str) -> Int {
+    if n < 0 || ints_get(j.kind, n) != 6 { return 0 - 1 }
+    let mut found = 0 - 1
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        if strs_get(j.key, c) == key { found = c }
+        c = ints_get(j.next, c)
+    }
+    found
+}
+
+// Whether object `n` names `key` twice — serde refuses a duplicate field of a struct.
+fn j_twice(j: J, n: Int) -> Bool {
+    if n < 0 || ints_get(j.kind, n) != 6 { return false }
+    let seen = strs_new()
+    let mut c = ints_get(j.first, n)
+    while c >= 0 {
+        for i in 0..strs_len(seen) {
+            if strs_get(seen, i) == strs_get(j.key, c) { return true }
+        }
+        strs_push(seen, strs_get(j.key, c))
+        c = ints_get(j.next, c)
+    }
+    false
+}
+
+fn j_kind(j: J, n: Int) -> Int { if n < 0 { 0 - 1 } else { ints_get(j.kind, n) } }
+
+fn j_str(j: J, n: Int) -> Str { strs_get(j.text, n) }
+
+// A number that is an integer as written, within `lo..=hi`; else -1 is not a sentinel: `ok` says.
+fn j_int_in(j: J, n: Int, lo: Int, hi: Int) -> Bool {
+    if j_kind(j, n) != 3 { return false }
+    let t = j_str(j, n)
+    let mut i = 0
+    if str_len(t) > 0 && str_byte(t, 0) == 45 { i = 1 }
+    if i >= str_len(t) || str_len(t) - i > 10 { return false }
+    if str_len(t) - i > 1 && str_byte(t, i) == 48 { return false }
+    while i < str_len(t) {
+        if str_byte(t, i) < 48 || str_byte(t, i) > 57 { return false }
+        i += 1
+    }
+    let v = j_int(j, n)
+    v >= lo && v <= hi
+}
+
+fn j_int(j: J, n: Int) -> Int {
+    let t = j_str(j, n)
+    let mut i = 0
+    let mut neg = false
+    if str_byte(t, 0) == 45 {
+        neg = true
+        i = 1
+    }
+    let mut v = 0
+    while i < str_len(t) {
+        v = v * 10 + str_byte(t, i) - 48
+        i += 1
+    }
+    if neg { 0 - v } else { v }
+}
+
+// --- the documents --------------------------------------------------------------------------------
+
+struct Server {
+    paths: Strs,
+    versions: Ints,
+    texts: Strs,
+    // The facts of the one open document's current analysis (`facts` holds 0 or 1).
+    facts: Vec[Facts],
+    library: Strs,
+}
+
+fn doc_index(s: Server, path: Str) -> Int {
+    for i in 0..strs_len(s.paths) {
+        if strs_get(s.paths, i) == path { return i }
+    }
+    0 - 1
+}
+
+// The open document `path` names, refused where another spelling names the same file: the
+// reference keys documents by the file, this port by the path as written.
+fn doc_named(io: IoCap, s: Server, path: Str) -> Int {
+    let k = doc_index(s, path)
+    if k >= 0 { return k }
+    let canon = fe_canonical(io, path)
+    for i in 0..strs_len(s.paths) {
+        let other = fe_canonical(io, strs_get(s.paths, i))
+        if canon != "" && other == canon { refuse(io, "a document named by another spelling of its path") }
+        if canon == "" && pk_normalise(path) == pk_normalise(strs_get(s.paths, i)) { refuse(io, "a document named by another spelling of its path") }
+    }
+    0 - 1
+}
+
+// --- positions: byte offsets and UTF-16 lines and columns (`LineIndex`) ----------------------------
+
+fn line_starts(text: Str) -> Ints {
+    let out = ints_new()
+    ints_push(out, 0)
+    let n = str_len(text)
+    for i in 0..n {
+        let b = str_byte(text, i)
+        if b == 10 { ints_push(out, i + 1) }
+        if b == 13 && (i + 1 >= n || str_byte(text, i + 1) != 10) { ints_push(out, i + 1) }
+    }
+    out
+}
+
+// The UTF-16 units of the character whose first byte is `b`.
+fn units(b: Int) -> Int { if b >= 240 { 2 } else { 1 } }
+
+fn char_len(b: Int) -> Int {
+    if b >= 240 { return 4 }
+    if b >= 224 { return 3 }
+    if b >= 192 { return 2 }
+    1
+}
+
+// `{"character":C,"line":L}` of byte `offset`, clamped to the text's end.
+fn position(text: Str, starts: Ints, offset_in: Int) -> Str {
+    let mut offset = offset_in
+    if offset > str_len(text) { offset = str_len(text) }
+    if offset < 0 { offset = 0 }
+    let mut line = 0
+    for k in 0..ints_len(starts) {
+        if ints_get(starts, k) <= offset { line = k }
+    }
+    let mut col = 0
+    let mut i = ints_get(starts, line)
+    while i < offset {
+        let b = str_byte(text, i)
+        if b < 128 || b >= 192 { col += units(b) }
+        i += 1
+    }
+    "{\"character\":" + int_to_str(col) + ",\"line\":" + int_to_str(line) + "}"
+}
+
+fn range(text: Str, starts: Ints, s: Int, e: Int) -> Str {
+    "{\"end\":" + position(text, starts, e) + ",\"start\":" + position(text, starts, s) + "}"
+}
+
+// The byte offset of `line`, `character` (`LineIndex::offset`).
+fn offset(text: Str, starts: Ints, line: Int, character: Int) -> Int {
+    if line < 0 || line >= ints_len(starts) { return str_len(text) }
+    let start = ints_get(starts, line)
+    let mut end = if line + 1 < ints_len(starts) { ints_get(starts, line + 1) } else { str_len(text) }
+    while end > start && (str_byte(text, end - 1) == 10 || str_byte(text, end - 1) == 13) { end -= 1 }
+    let mut u = 0
+    let mut byte = start
+    while byte < end {
+        let b = str_byte(text, byte)
+        let next = u + units(b)
+        if next > character { return byte }
+        u = next
+        byte += char_len(b)
+    }
+    byte
+}
+
+// --- URIs -------------------------------------------------------------------------------------------
+
+// The path a `file:` URI names, percent-decoded; "" for none.
+fn path_of(uri: Str) -> Str {
+    if !fe_starts(uri, "file://") { return "" }
+    let mut rest = str_slice(uri, 7, str_len(uri))
+    if fe_starts(rest, "localhost") { rest = str_slice(rest, 9, str_len(rest)) }
+    if !fe_starts(rest, "/") { return "" }
+    let out = strs_new()
+    let mut i = 0
+    while i < str_len(rest) {
+        let b = str_byte(rest, i)
+        if b == 37 {
+            if i + 3 > str_len(rest) { return "" }
+            let h = hex_digit(str_byte(rest, i + 1))
+            let l = hex_digit(str_byte(rest, i + 2))
+            if h < 0 || l < 0 { return "" }
+            strs_push(out, str_from_byte(h * 16 + l))
+            i += 3
+        } else {
+            strs_push(out, str_from_byte(b))
+            i += 1
+        }
+    }
+    let p = str_join(out, "")
+    if !valid_utf8(p) { return "" }
+    p
+}
+
+// Whether a URI is one this port reads as the reference's `Uri` parser does: printable ASCII
+// without the characters a URI may not hold, and every `%` followed by two hex digits.
+fn plain_uri(uri: Str) -> Bool {
+    for i in 0..str_len(uri) {
+        let b = str_byte(uri, i)
+        if b <= 32 || b >= 127 || b == 34 || b == 60 || b == 62 || b == 92 || b == 94 || b == 96 || b == 123 || b == 124
+                || b == 125 || b == 35 || b == 63 || b == 91 || b == 93 { return false }
+        if b == 37 && (i + 2 >= str_len(uri) || hex_digit(str_byte(uri, i + 1)) < 0 || hex_digit(str_byte(uri, i + 2)) < 0) { return false }
+    }
+    true
+}
+
+fn uri_of(path: Str) -> Str {
+    let out = strs_new()
+    strs_push(out, "file://")
+    let digits = "0123456789ABCDEF"
+    for i in 0..str_len(path) {
+        let b = str_byte(path, i)
+        if (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 46 || b == 95 || b == 126 || b == 47 {
+            strs_push(out, str_from_byte(b))
+        } else {
+            strs_push(out, "%" + str_slice(digits, b / 16, b / 16 + 1) + str_slice(digits, b % 16, b % 16 + 1))
+        }
+    }
+    str_join(out, "")
+}
+
+fn valid_utf8(s: Str) -> Bool {
+    let n = str_len(s)
+    let mut i = 0
+    while i < n {
+        let b = str_byte(s, i)
+        if b < 128 {
+            i += 1
+            continue
+        }
+        let mut need = 0
+        let mut lo = 128
+        let mut hi = 191
+        if b >= 194 && b <= 223 { need = 1 } else if b == 224 {
+            need = 2
+            lo = 160
+        } else if b >= 225 && b <= 236 { need = 2 } else if b == 237 {
+            need = 2
+            hi = 159
+        } else if b >= 238 && b <= 239 { need = 2 } else if b == 240 {
+            need = 3
+            lo = 144
+        } else if b >= 241 && b <= 243 { need = 3 } else if b == 244 {
+            need = 3
+            hi = 143
+        } else { return false }
+        if i + need >= n { return false }
+        let c1 = str_byte(s, i + 1)
+        if c1 < lo || c1 > hi { return false }
+        for k in 2..need + 1 {
+            let c = str_byte(s, i + k)
+            if c < 128 || c > 191 { return false }
+        }
+        i += need + 1
+    }
+    true
+}
+
+// --- JSON out ---------------------------------------------------------------------------------------
+
+fn send(io: IoCap, body: Str) -> Int {
+    print("Content-Length: " + int_to_str(str_len(body)) + crlf() + crlf() + body)
+    0
+}
+
+// The request's `id` as serde writes it back: a number or a string.
+fn id_json(j: J, id: Int) -> Str {
+    if j_kind(j, id) == 4 { return json_str(j_str(j, id)) }
+    int_to_str(j_int(j, id))
+}
+
+fn respond(io: IoCap, id: Str, result: Str) -> Int { send(io, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":" + result + "}") }
+
+fn respond_error(io: IoCap, id: Str, code: Int, message: Str) -> Int {
+    send(io, "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + int_to_str(code) + ",\"message\":" + json_str(message) + "}}")
+}
+
+fn capabilities() -> Str {
+    "{\"capabilities\":{\"callHierarchyProvider\":true,\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\"],\"resolveProvider\":false},"
+            + "\"completionProvider\":{\"resolveProvider\":false,\"triggerCharacters\":[\".\"]},\"definitionProvider\":true,"
+            + "\"documentSymbolProvider\":true,\"hoverProvider\":true,\"positionEncoding\":\"utf-16\",\"referencesProvider\":true,"
+            + "\"renameProvider\":{\"prepareProvider\":true},\"semanticTokensProvider\":{\"full\":true,\"legend\":{\"tokenModifiers\":"
+            + "[\"declaration\",\"defaultLibrary\"],\"tokenTypes\":[\"type\",\"struct\",\"enum\",\"typeParameter\",\"parameter\","
+            + "\"variable\",\"property\",\"enumMember\",\"function\",\"interface\",\"method\"]},\"range\":false},"
+            + "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]},\"textDocumentSync\":{\"change\":2,\"openClose\":true},"
+            + "\"workspaceSymbolProvider\":{\"resolveProvider\":false}},\"serverInfo\":{\"name\":\"nazm\",\"version\":\"0.10.0\"}}"
+}
+
+// --- reading the protocol -----------------------------------------------------------------------------
+
+// One line of standard input, its line break included; "" at the end.
+fn read_line(io: IoCap, h: OsHandle) -> Str {
+    let out = strs_new()
+    let buf = bytes_new(4096)
+    while true {
+        let n = os_read_line(h, buf)
+        if n <= 0 { return str_join(out, "") }
+        let piece = bytes_to_str(bytes_slice(buf, 0, n))
+        strs_push(out, piece)
+        if str_byte(piece, n - 1) == 10 { return str_join(out, "") }
+    }
+    ""
+}
+
+// The next message's body; "" at the end of input before a message begins.
+fn read_message(io: IoCap, h: OsHandle) -> Str {
+    let mut length = 0 - 1
+    let mut first = true
+    while true {
+        let line = read_line(io, h)
+        if line == "" {
+            if first { return "" }
+            refuse(io, "input that ends inside a message's header")
+        }
+        first = false
+        if line == crlf() { break }
+        if !fe_starts(line, "Content-Length: ") || str_len(line) < 19 || str_byte(line, str_len(line) - 2) != 13 {
+            refuse(io, "a header other than `Content-Length: N`")
+        }
+        let digits = str_slice(line, 16, str_len(line) - 2)
+        if str_len(digits) == 0 || str_len(digits) > 9 { refuse(io, "a `Content-Length` this port does not read") }
+        let mut v = 0
+        for i in 0..str_len(digits) {
+            let b = str_byte(digits, i)
+            if b < 48 || b > 57 { refuse(io, "a `Content-Length` this port does not read") }
+            v = v * 10 + b - 48
+        }
+        length = v
+    }
+    if length < 0 { refuse(io, "a message without `Content-Length`") }
+    let out = strs_new()
+    let mut got = 0
+    while got < length {
+        let buf = bytes_new(length - got)
+        let n = os_read(h, buf)
+        if n <= 0 { refuse(io, "input that ends inside a message") }
+        strs_push(out, bytes_to_str(bytes_slice(buf, 0, n)))
+        got += n
+    }
+    let body = str_join(out, "")
+    if !valid_utf8(body) { refuse(io, "a message that is not UTF-8") }
+    body
+}
+
+// A message the reference reads as this port does: a JSON object with `"jsonrpc":"2.0"`, a
+// `method` string, and an integer or string `id` for a request; refused otherwise.
+fn message(io: IoCap, body: Str) -> J {
+    let j = j_parse(body)
+    if !j_ok(j) || j_kind(j, 0) != 6 || j_twice(j, 0) { refuse(io, "a message this port does not parse as the reference does") }
+    let v = j_get(j, 0, "jsonrpc")
+    if j_kind(j, v) != 4 || j_str(j, v) != "2.0" { refuse(io, "a message that is not JSON-RPC 2.0") }
+    let m = j_get(j, 0, "method")
+    if j_kind(j, m) != 4 { refuse(io, "a response, or a message without a method") }
+    let id = j_get(j, 0, "id")
+    if id >= 0 && j_kind(j, id) != 4 && !j_int_in(j, id, 0 - 2147483648, 2147483647) { refuse(io, "an `id` this port does not read") }
+    j
+}
+
+// --- diagnostics ---------------------------------------------------------------------------------------
+
+fn file_at(d: Diags, i: Int, bases: Ints) -> Int {
+    if ints_get(d.file, i) >= 0 { return ints_get(d.file, i) }
+    let at = ints_get(d.start, i)
+    let mut f = 0
+    for k in 0..ints_len(bases) {
+        if ints_get(bases, k) <= at { f = k }
+    }
+    f
+}
+
+fn diagnostic_json(d: Diags, i: Int, text: Str, starts: Ints) -> Str {
+    let sev = if dg_severity(d, i) == "error" { "1" } else { "2" }
+    "{\"code\":" + json_str(dg_code(d, i)) + ",\"message\":" + json_str(strs_get(d.message, i)) + ",\"range\":"
+            + range(text, starts, ints_get(d.start, i), ints_get(d.end, i)) + ",\"severity\":" + sev + ",\"source\":\"nazm\"}"
+}
+
+fn publish(io: IoCap, path: Str, version: Str, diagnostics: Strs) -> Int {
+    let v = if version == "" { "" } else { ",\"version\":" + version }
+    send(io, "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{\"diagnostics\":[" + str_join(diagnostics, ",")
+            + "],\"uri\":" + json_str(uri_of(path)) + v + "}}")
+}
+
+// `refresh`: every open document analysed again and its diagnostics published — its own file's
+// errors, then its warnings (`own_diagnostics`).
+fn refresh(io: IoCap, s: Server) -> Int {
+    while vec_len(s.facts) > 0 { vec_pop(s.facts) }
+    if strs_len(s.paths) > 1 { refuse(io, "more than one open document (the reference publishes them in a hash map's order)") }
+    if strs_len(s.paths) == 0 { return 0 }
+    let path = strs_get(s.paths, 0)
+    let text = strs_get(s.texts, 0)
+    if fe_stat_kind(io, path) != 0 || read_file(path) != text { refuse(io, "a document whose text is not the file's on disk") }
+    let f = fx_check_module(path, strs_get(s.library, 0), fe_host_os(), fe_host_arch(), io)
+    if fx_refusal(f) != "" { refuse(io, "a source root the reference refuses") }
+    if fe_load_failed(f) { refuse(io, "a compilation that does not load") }
+    if !fx_carried(f) { refuse(io, fx_why(f)) }
+    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
+    let d = fx_diags(f)
+    let bases = fe_bases(f)
+    // Positions are in the text the compilation holds for the file: the loader ends it with a line
+    // break where the file does not, and a diagnostic at its end is after that break.
+    let held = fx_module_text(f, 0)
+    let starts = line_starts(held)
+    let out = strs_new()
+    for i in 0..dg_len(d) {
+        if dg_severity(d, i) == "error" && file_at(d, i, bases) == 0 { strs_push(out, diagnostic_json(d, i, held, starts)) }
+    }
+    // The checker's warnings are kept beside its errors (`Ck.w`) and published with them, as the
+    // service chains `nazm_core::warnings` after the errors; after a syntax error they are not
+    // carried.
+    let w = fx_checker(f).w
+    // A parser's (or the attributes') diagnostic is the one whose file its stage named.
+    let mut syntax = false
+    for i in 0..dg_len(d) {
+        if ints_get(d.file, i) >= 0 { syntax = true }
+    }
+    for i in 0..dg_len(w) {
+        if file_at(w, i, bases) == 0 {
+            if syntax { refuse(io, "a warning beside a syntax error") }
+            strs_push(out, diagnostic_json(w, i, held, starts))
+        }
+    }
+    vec_push(s.facts, f)
+    publish(io, path, int_to_str(ints_get(s.versions, 0)), out)
+}
+
+// --- the document's names ----------------------------------------------------------------------------
+
+// The identifier at byte `at` of `text` (`name_at`): the one holding it, or the one ending there;
+// `s` and `e` its span, or -1 for none.
+fn name_at(io: IoCap, text: Str, at: Int) -> Ints {
+    let kinds = ints_new()
+    let starts = ints_new()
+    let ends = ints_new()
+    let texts = strs_new()
+    let d = dg_new()
+    lex_all(text, kinds, starts, ends, texts, d)
+    if dg_len(d) > 0 { refuse(io, "a position in a document that does not lex") }
+    let out = ints_new()
+    for k in 0..ints_len(kinds) {
+        if ints_get(starts, k) <= at && at < ints_get(ends, k) {
+            if ints_get(kinds, k) == k_ident() {
+                ints_push(out, ints_get(starts, k))
+                ints_push(out, ints_get(ends, k))
+                ints_push(out, if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 })
+                return out
+            }
+        }
+    }
+    for k in 0..ints_len(kinds) {
+        if ints_get(kinds, k) == k_ident() && ints_get(ends, k) == at {
+            ints_push(out, ints_get(starts, k))
+            ints_push(out, ints_get(ends, k))
+            ints_push(out, if k > 0 { ints_get(kinds, k - 1) } else { 0 - 1 })
+            return out
+        }
+    }
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    ints_push(out, 0 - 1)
+    out
+}
+
+// A built-in type's name as `Types::show` writes it, or "" for any other type.
+fn builtin_name(c: Ck, t: Int) -> Str {
+    let names = words("Int Bool Str Float64 Float32 Int8 Int16 Int32 Int64 UInt8 UInt16 UInt32 UInt64 Byte Char Text Bytes Ints Strs Unit")
+    for i in 0..strs_len(names) {
+        let n = strs_get(names, i)
+        let b = ck_t_named(c, n)
+        if b >= 0 && b == t { return n }
+    }
+    ""
+}
+
+// The located request: the open document, its text, and the identifier there; refused where the
+// reference may answer something this port does not know. -1 for `null`.
+fn locate(io: IoCap, s: Server, j: J) -> Ints {
+    let out = ints_new()
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    let pos = j_get(j, p, "position")
+    let line = j_get(j, pos, "line")
+    let ch = j_get(j, pos, "character")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) || !j_int_in(j, line, 0, 4294967295) || !j_int_in(j, ch, 0, 4294967295) {
+        refuse(io, "a request's parameters this port does not read as the reference does")
+    }
+    let path = path_of(j_str(j, uri))
+    let k = if path == "" { 0 - 1 } else { doc_named(io, s, path) }
+    if k < 0 || vec_len(s.facts) == 0 {
+        ints_push(out, 0 - 1)
+        return out
+    }
+    let text = strs_get(s.texts, k)
+    let at = offset(text, line_starts(text), j_int(j, line), j_int(j, ch))
+    let span = name_at(io, text, at)
+    ints_push(out, ints_get(span, 0))
+    ints_push(out, ints_get(span, 1))
+    ints_push(out, ints_get(span, 2))
+    out
+}
+
+// Whether a name with no binding there might still be something the reference answers about: a
+// function, a binding of that name elsewhere, or a call site.
+fn might_mean(io: IoCap, f: Facts, name: Str, s: Int, e: Int) -> Bool {
+    let c = fx_checker(f)
+    if ck_site_at(c, s, e) >= 0 { return true }
+    for i in 0..ck_fn_count(c) {
+        if ck_fn_name(c, i) == name { return true }
+    }
+    for b in 0..ck_binding_count(c) {
+        if ck_binding_name(c, b) == name { return true }
+    }
+    false
+}
+
+// An effect set as `EffectSet`'s `Display` writes it: `{}`, or `{ io, spawn }`.
+fn effect_set(mask: Int) -> Str {
+    let names = ck_effect_names(mask)
+    if strs_len(names) == 0 { return "{}" }
+    "{ " + str_join(names, ", ") + " }"
+}
+
+// What hover shows of a call to function `i` (`Signature::of_function`, rendered): `fn NAME(a: T,
+// …) -> R`, then its declared effects after ` ! `, or, where it declares none, a line of the
+// effects its body requires. Refused for a method, a closure, a generic or foreign function, a
+// built-in and a call through a value, whose signatures the facts do not spell.
+fn call_label(io: IoCap, f: Facts, i: Int) -> Str {
+    let c = fx_checker(f)
+    if i < 0 { refuse(io, "hover of a call to a built-in or through a value") }
+    if ck_fn_closure(c, i) || ck_fn_method(c, i) || ck_fn_generic(c, i) || ck_fn_foreign(c, i) != "" {
+        refuse(io, "hover of a call to a method, closure, generic or foreign function")
+    }
+    let name = ck_fn_name(c, i)
+    for k in 0..str_len(name) {
+        if str_byte(name, k) == 47 { refuse(io, "hover of a call to an impl's method") }
+    }
+    let t = fx_tree(f)
+    let params = sx_items(t, sx_field(t, ck_fn_node(c, i), "params"))
+    let tys = ck_fn_params(c, i)
+    if ints_len(params) != strs_len(tys) { refuse(io, "hover of a call whose parameters the facts do not name") }
+    let shown = strs_new()
+    for k in 0..ints_len(params) {
+        let p = sx_name(t, ints_get(params, k), "name")
+        if p == "" { refuse(io, "hover of a call whose parameters the facts do not name") }
+        strs_push(shown, p + ": " + strs_get(tys, k))
+    }
+    let sig = "fn " + name + "(" + str_join(shown, ", ") + ") -> " + ck_fn_ret(c, i)
+    let declared = ck_fn_declared(c, i)
+    if declared >= 0 { return sig + " ! " + effect_set(declared) }
+    let required = ck_fn_required(c, i)
+    if required < 0 { refuse(io, "hover of a call whose required effects the facts do not know") }
+    sig + nl() + "inferred effects: " + effect_set(required)
+}
+
+fn hover(io: IoCap, s: Server, j: J) -> Str {
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let en = ints_get(span, 1)
+    let text = strs_get(s.texts, 0)
+    let f = vec_get(s.facts, 0)
+    let c = fx_checker(f)
+    let name = str_slice(text, st, en)
+    let site = ck_site_at(c, st, en)
+    if site >= 0 {
+        let shown = call_label(io, f, ck_site_fn(c, site))
+        return "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
+    }
+    let b = ck_binding_at(c, st, en)
+    if b < 0 {
+        // After a `.` and not called, a name is a field or a variant: no local, no callee.
+        let mut after = en
+        while after < str_len(text) && (str_byte(text, after) == 32 || str_byte(text, after) == 9) { after += 1 }
+        let called = after < str_len(text) && (str_byte(text, after) == 40 || str_byte(text, after) == 91)
+        if st > 0 && str_byte(text, st - 1) == 46 && !called { return "null" }
+        // A function's name where it is declared: no call is there, and no local.
+        if ints_get(span, 2) == k_fn() { return "null" }
+        if might_mean(io, f, name, st, en) { refuse(io, "hover of what the facts publish no binding for") }
+        return "null"
+    }
+    let ty = builtin_name(c, ck_binding_ty(c, b))
+    if ty == "" { refuse(io, "hover of a local whose type is not a built-in one") }
+    let shown = (if ck_binding_mutable(c, b) { "mut " } else { "" }) + ck_binding_name(c, b) + ": " + ty
+    "{\"contents\":{\"kind\":\"plaintext\",\"value\":" + json_str(shown) + "},\"range\":" + range(text, line_starts(text), st, en) + "}"
+}
+
+fn definition(io: IoCap, s: Server, j: J) -> Str {
+    let span = locate(io, s, j)
+    let st = ints_get(span, 0)
+    if st < 0 { return "null" }
+    let en = ints_get(span, 1)
+    let text = strs_get(s.texts, 0)
+    let f = vec_get(s.facts, 0)
+    let c = fx_checker(f)
+    let name = str_slice(text, st, en)
+    let site = ck_site_at(c, st, en)
+    if site >= 0 {
+        // The function's name where it is declared: in its module's file, or none for the
+        // standard library's and the prelude's, which have no file to open.
+        let i = ck_site_fn(c, site)
+        call_label(io, f, i)
+        let m = ck_fn_module(c, i)
+        let mname = fx_module_name(f, m)
+        if fe_starts(mname, "@") { return "null" }
+        if !fe_starts(mname, "/") { refuse(io, "definition in a module this port does not name by its path") }
+        let t = fx_tree(f)
+        let span = sx_field(t, ck_fn_node(c, i), "name_span")
+        let mtext = fx_module_text(f, m)
+        return "{\"range\":" + range(mtext, line_starts(mtext), fx_start(f, span), fx_end(f, span)) + ",\"uri\":" + json_str(uri_of(mname)) + "}"
+    }
+    let b = ck_binding_at(c, st, en)
+    // A name that is no local's may be any other entity's — a constant, a type, a field, a
+    // variant, a function's own declaration — whose declaration the facts do not index.
+    if b < 0 { refuse(io, "definition of what the facts publish no binding for") }
+    let ds = ck_binding_start(c, b)
+    let de = ck_binding_end(c, b)
+    if ds < 0 || de > str_len(text) { refuse(io, "definition of a binding declared elsewhere") }
+    "{\"range\":" + range(text, line_starts(text), ds, de) + ",\"uri\":" + json_str(uri_of(strs_get(s.paths, 0))) + "}"
+}
+
+// --- the messages ----------------------------------------------------------------------------------------
+
+fn did_open(io: IoCap, s: Server, j: J) -> Int {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    let version = j_get(j, td, "version")
+    let text = j_get(j, td, "text")
+    let lang = j_get(j, td, "languageId")
+    if j_twice(j, p) || j_twice(j, td) { refuse(io, "a duplicate field") }
+    if j_kind(j, uri) != 4 || j_kind(j, text) != 4 || j_kind(j, lang) != 4 || !j_int_in(j, version, 0 - 2147483648, 2147483647) {
+        refuse(io, "a `didOpen` this port does not read as the reference does")
+    }
+    if !plain_uri(j_str(j, uri)) { refuse(io, "a URI this port does not read as the reference does") }
+    let path = path_of(j_str(j, uri))
+    if path == "" { return 0 }
+    let k = doc_named(io, s, path)
+    if k >= 0 {
+        ints_set(s.versions, k, j_int(j, version))
+        strs_set(s.texts, k, j_str(j, text))
+    } else {
+        strs_push(s.paths, path)
+        ints_push(s.versions, j_int(j, version))
+        strs_push(s.texts, j_str(j, text))
+    }
+    refresh(io, s)
+}
+
+fn did_change(io: IoCap, s: Server, j: J) -> Int {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    let version = j_get(j, td, "version")
+    let changes = j_get(j, p, "contentChanges")
+    if j_kind(j, uri) != 4 || !j_int_in(j, version, 0 - 2147483648, 2147483647) || j_kind(j, changes) != 5 || !plain_uri(j_str(j, uri)) {
+        refuse(io, "a `didChange` this port does not read as the reference does")
+    }
+    let path = path_of(j_str(j, uri))
+    if path == "" { return 0 }
+    let k = doc_named(io, s, path)
+    if k < 0 { return 0 }
+    let mut text = strs_get(s.texts, k)
+    let mut c = ints_get(j.first, changes)
+    while c >= 0 {
+        let r = j_get(j, c, "range")
+        let t = j_get(j, c, "text")
+        if j_kind(j, t) != 4 { refuse(io, "a change this port does not read") }
+        let mut a = 0
+        let mut b = str_len(text)
+        if r >= 0 && j_kind(j, r) != 0 {
+            let starts = line_starts(text)
+            let rs = j_get(j, r, "start")
+            let re = j_get(j, r, "end")
+            let l0 = j_get(j, rs, "line")
+            let c0 = j_get(j, rs, "character")
+            let l1 = j_get(j, re, "line")
+            let c1 = j_get(j, re, "character")
+            if !j_int_in(j, l0, 0, 4294967295) || !j_int_in(j, c0, 0, 4294967295) || !j_int_in(j, l1, 0, 4294967295) || !j_int_in(j, c1, 0, 4294967295) {
+                refuse(io, "a change's range this port does not read")
+            }
+            a = offset(text, starts, j_int(j, l0), j_int(j, c0))
+            b = offset(text, starts, j_int(j, l1), j_int(j, c1))
+        }
+        if a > b {
+            eprint("nazm lsp: a change outside the document; send it whole" + nl())
+            return 0
+        }
+        text = str_slice(text, 0, a) + j_str(j, t) + str_slice(text, b, str_len(text))
+        c = ints_get(j.next, c)
+    }
+    ints_set(s.versions, k, j_int(j, version))
+    strs_set(s.texts, k, text)
+    refresh(io, s)
+}
+
+fn did_close(io: IoCap, s: Server, j: J) -> Int {
+    let p = j_get(j, 0, "params")
+    let td = j_get(j, p, "textDocument")
+    let uri = j_get(j, td, "uri")
+    if j_kind(j, uri) != 4 || !plain_uri(j_str(j, uri)) { refuse(io, "a `didClose` this port does not read as the reference does") }
+    let path = path_of(j_str(j, uri))
+    if path == "" { return 0 }
+    let k = doc_named(io, s, path)
+    let paths = strs_new()
+    let versions = ints_new()
+    let texts = strs_new()
+    for i in 0..strs_len(s.paths) {
+        if i != k {
+            strs_push(paths, strs_get(s.paths, i))
+            ints_push(versions, ints_get(s.versions, i))
+            strs_push(texts, strs_get(s.texts, i))
+        }
+    }
+    while strs_len(s.paths) > 0 {
+        strs_pop(s.paths)
+        ints_pop(s.versions)
+        strs_pop(s.texts)
+    }
+    for i in 0..strs_len(paths) {
+        strs_push(s.paths, strs_get(paths, i))
+        ints_push(s.versions, ints_get(versions, i))
+        strs_push(s.texts, strs_get(texts, i))
+    }
+    refresh(io, s)
+    if k >= 0 { publish(io, path, "", strs_new()) }
+    0
+}
+
+// Every request method the reference implements, which this port refuses but for hover and
+// definition; any other is `MethodNotFound`.
+fn implemented(m: Str) -> Bool {
+    let all = words("textDocument/definition textDocument/hover textDocument/references textDocument/completion "
+            + "textDocument/signatureHelp textDocument/codeAction textDocument/documentSymbol workspace/symbol "
+            + "textDocument/semanticTokens/full textDocument/prepareCallHierarchy callHierarchy/incomingCalls "
+            + "callHierarchy/outgoingCalls textDocument/prepareRename textDocument/rename")
+    for i in 0..strs_len(all) {
+        if strs_get(all, i) == m { return true }
+    }
+    false
+}
+
+// The words of `s`, split at single spaces.
+fn words(s: Str) -> Strs {
+    let out = strs_new()
+    let mut from = 0
+    for i in 0..str_len(s) + 1 {
+        if i == str_len(s) || str_byte(s, i) == 32 {
+            strs_push(out, str_slice(s, from, i))
+            from = i + 1
+        }
+    }
+    out
+}
+
+fn request(io: IoCap, s: Server, j: J, method: Str, id: Str) -> Int {
+    if method == "textDocument/hover" { return respond(io, id, hover(io, s, j)) }
+    if method == "textDocument/definition" { return respond(io, id, definition(io, s, j)) }
+    if implemented(method) { refuse(io, "`" + method + "`") }
+    respond_error(io, id, 0 - 32601, "`" + method + "` is not implemented by nazm lsp")
+}
+
+// `nazm lsp`, its arguments read into `c` (`lsp_cli`) from where `cli_from` says.
+pub fn lsp_command(io: IoCap, c: Cli) -> Int {
+    cli_parse(io, c)
+    if cli_present(c, 0) { refuse(io, "`--source-root`") }
+    let library = os_env_get("NAZM_LIBRARY")
+    if library == "" { refuse(io, "the standard library's directory (set NAZM_LIBRARY)") }
+    let h = os_stdin()
+    // `initialize_start`: the first message must be `initialize`.
+    let first = read_message(io, h)
+    if first == "" {
+        eprint("nazm lsp: initialize: disconnected channel" + nl())
+        exit_with(4)
+    }
+    let j0 = message(io, first)
+    let id0 = j_get(j0, 0, "id")
+    if id0 < 0 || j_str(j0, j_get(j0, 0, "method")) != "initialize" { refuse(io, "a first message that is not `initialize`") }
+    if j_kind(j0, j_get(j0, 0, "params")) != 6 { refuse(io, "`initialize` without its parameters") }
+    respond(io, id_json(j0, id0), capabilities())
+    // `initialize_finish`: then `initialized`.
+    let second = read_message(io, h)
+    if second == "" { refuse(io, "input that ends before `initialized`") }
+    let j1 = message(io, second)
+    if j_get(j1, 0, "id") >= 0 || j_str(j1, j_get(j1, 0, "method")) != "initialized" { refuse(io, "a second message that is not `initialized`") }
+    let libs = strs_new()
+    strs_push(libs, library)
+    let s = Server(paths: strs_new(), versions: ints_new(), texts: strs_new(), facts: vec_new[Facts](), library: libs)
+    while true {
+        let body = read_message(io, h)
+        if body == "" { return 0 }
+        let j = message(io, body)
+        let method = j_str(j, j_get(j, 0, "method"))
+        let id = j_get(j, 0, "id")
+        if id >= 0 {
+            let idj = id_json(j, id)
+            if method == "shutdown" {
+                respond(io, idj, "null")
+                // `handle_shutdown`: then `exit`.
+                let next = read_message(io, h)
+                if next == "" { refuse(io, "input that ends after `shutdown`") }
+                let jn = message(io, next)
+                if j_get(jn, 0, "id") >= 0 || j_str(jn, j_get(jn, 0, "method")) != "exit" { refuse(io, "a message between `shutdown` and `exit`") }
+                return 0
+            }
+            request(io, s, j, method, idj)
+        } else if method == "exit" {
+            // `lsp-server`'s reader stops at `exit`, whenever it comes: the connection is closed.
+            return 0
+        } else if method == "textDocument/didOpen" {
+            did_open(io, s, j)
+        } else if method == "textDocument/didChange" {
+            did_change(io, s, j)
+        } else if method == "textDocument/didClose" {
+            did_close(io, s, j)
+        }
+    }
+    0
+}

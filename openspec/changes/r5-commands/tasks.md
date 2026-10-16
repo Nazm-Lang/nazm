@@ -60,7 +60,19 @@
 - [ ] 7.2 The plan form, `nazm patch fix` (`--root`, `--file`, `--byte`, `--fix`), with `patch`
 
 ## 8. `lsp`
-- [ ] 8.1 The Language Server over stdin/stdout, compared by scripted sessions
+- [x] 8.1 The Language Server over stdin/stdout, compared by scripted sessions (design D16,
+      2026-10-16): `toolchain/commands/lsp.nz` — framing, the handshake, `shutdown`/`exit`,
+      `MethodNotFound` (formatting included: the reference offers none), `didOpen`/`didChange`/
+      `didClose` with published diagnostics, hover (locals of built-in types, calls to plain
+      functions) and definition (locals, such calls). `tests/lsp/`: 13 sessions, 11 agree, 0
+      differ, 2 refused (two documents open; a document unlike its file). Every input opened, and
+      with hover at seven positions: 3,151 inputs, 2,147 agree, 0 differ, 1,003 refused (hover of
+      what the facts do not index, a compilation that does not load, pattern `let`s …), 1 not
+      UTF-8; `tests/args/lsp.txt` 8 of 8 agree
+- [ ] 8.2 What 8.1 refuses: the editor's unsaved buffers (the loader reads only files), two open
+      documents, hover and definition of what the facts do not index (methods, generics, built-ins,
+      constants, types, fields), completion, references, signature help, rename, symbols, semantic
+      tokens, code actions, call hierarchy, `--source-root`
 
 ## 9. The agent commands and the MCP server
 - [ ] 9.1 `context`, `snapshot`, `delta`, `diagnostics`, `docs`, `repo`, `patch`, `resolve`,

@@ -1,0 +1,1 @@
+# No message at all: the reference's `initialize_start` meets a closed channel.

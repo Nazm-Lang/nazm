@@ -1,0 +1,12 @@
+# The handshake, a document with a type error opened and closed, hover on the local the error is
+# about, a method the reference does not implement (formatting) and a position on no name.
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://@ROOT@/a.nz","languageId":"nazm","version":1,"text":"fn main() -> Int {\n    let x: Bool = 1;\n    0\n}\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"},"position":{"line":1,"character":9}}}
+{"jsonrpc":"2.0","id":3,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"},"options":{"tabSize":4,"insertSpaces":true}}}
+{"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"},"position":{"line":0,"character":0}}}
+{"jsonrpc":"2.0","id":"five","method":"textDocument/hover","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"},"position":{"line":2,"character":2}}}
+{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file://@ROOT@/a.nz"}}}
+{"jsonrpc":"2.0","id":6,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}
