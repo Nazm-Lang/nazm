@@ -2283,37 +2283,12 @@ fn rx_taken(c: Ck, name: Str, s: Int, e: Int) -> Int {
             "a module offers each name once: re-export it under another name with `as`, or rename the definition")
 }
 
-// Whether a record or enum derives an encoding (`@derive`), which is generated into the source
-// before it is parsed (`derive::expand`); this front end does not generate it.
-fn derives_encoding(c: Ck, decl: Int) -> Bool {
-    let attrs = kids(c, decl, "attrs");
-    let mut i = 0;
-    while i < ints_len(attrs) {
-        if fname_of(c, ints_get(attrs, i), "name") == "derive" { return true; }
-        i = i + 1;
-    }
-    false
-}
-
 // What a module may hold that the checker does not carry yet.
 fn refuse_unsupported_items(c: Ck, m: Int) -> Int {
     let p = ints_get(c.mprog, m);
-    let records = kids(c, p, "records");
-    let mut i = 0;
-    while i < ints_len(records) {
-        let r = ints_get(records, i);
-        if derives_encoding(c, r) { stop(c, "a derived encoding"); }
-        i = i + 1;
-    }
-    let enums = kids(c, p, "enums");
-    i = 0;
-    while i < ints_len(enums) {
-        let e = ints_get(enums, i);
-        if derives_encoding(c, e) { stop(c, "a derived encoding"); }
-        i = i + 1;
-    }
+    // A derived encoding is carried since R2 D27: the loader expands it (`derive.nz`).
     let functions = kids(c, p, "functions");
-    i = 0;
+    let mut i = 0;
     while i < ints_len(functions) {
         let f = ints_get(functions, i);
         if ints_len(kids(c, f, "effect_params")) > 0 && some(c, f, "method_of") { stop(c, "an effect parameter of a method"); }

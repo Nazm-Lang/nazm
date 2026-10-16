@@ -15,6 +15,7 @@
 
 use "syntax.nz";
 use "diag.nz";
+use "derive.nz";
 
 // The build the conditions are asked of (`BuildConfig::host`): outside a package, no feature and
 // no profile is enabled.
@@ -123,6 +124,15 @@ pub fn cf_configure(t: Tree, programs: Ints, bases: Ints, d: Diags, cfg: Config)
             codec_members(c, ints_get(enums, i), true);
             i = i + 1;
         }
+        m = m + 1;
+    }
+    // What a derive cannot carry (R1c, L2): nothing is generated for it (`derive.nz`), so this is
+    // the report.
+    m = 0;
+    while m < count {
+        ints_set(c.at, 0, ints_get(bases, m));
+        derive_refusals(c, ints_get(programs, m), "json");
+        derive_refusals(c, ints_get(programs, m), "toml");
         m = m + 1;
     }
     // Traits, constants and statics, impls.
@@ -919,4 +929,126 @@ fn task(c: Cf, f: Int) -> Int {
                 "the scheduler calls a task with nothing but the device's authority");
     }
     0
+}
+
+// A module's derives in `format` held to what the format carries: a generic type, or a field of a
+// type with no form in it, or of a type the module declares that does not derive it.
+fn derive_refusals(c: Cf, program: Int, format: Str) -> Int {
+    let t = c.t;
+    let records = items(c, program, "records");
+    let enums = items(c, program, "enums");
+    // Each held field list and the type it is of.
+    let lists = ints_new();
+    let owners = ints_new();
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        if dv_derives(t, items(c, r, "attrs"), format) {
+            ints_push(lists, sx_field(t, r, "fields"));
+            ints_push(owners, r);
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        if dv_derives(t, items(c, e, "attrs"), format) {
+            let variants = items(c, e, "variants");
+            let mut v = 0;
+            while v < ints_len(variants) {
+                ints_push(lists, sx_field(t, ints_get(variants, v), "fields"));
+                ints_push(owners, e);
+                v = v + 1;
+            }
+        }
+        i = i + 1;
+    }
+    let tick = str_from_byte(96);
+    let mut k = 0;
+    while k < ints_len(lists) {
+        let owner = ints_get(owners, k);
+        let name = sx_name(t, owner, "name");
+        let head = str_concat(str_concat(str_concat(tick, "@derive("), format), ")");
+        if ints_len(items(c, owner, "type_params")) > 0 {
+            refuse(c, sx_field(t, owner, "name_span"), str_concat(str_concat(str_concat(str_concat(tick, name), tick), " is generic, and "), str_concat(head, str_concat(tick, " is for a type that is not"))),
+                    "derive it for a type with no type parameters");
+        } else {
+            let fields = sx_items(t, ints_get(lists, k));
+            let mut f = 0;
+            while f < ints_len(fields) {
+                let fd = ints_get(fields, f);
+                let ty = sx_field(t, fd, "ty");
+                let lead = str_concat(str_concat(str_concat(head, tick), " cannot carry the field "), str_concat(str_concat(tick, sx_name(t, fd, "name")), str_concat(tick, ": ")));
+                let named = ints_new();
+                dv_named(t, ty, named);
+                let mut n = 0;
+                while n < ints_len(named) {
+                    let tn = ints_get(named, n);
+                    let other = dv_name(t, tn);
+                    if declared_without(c, records, enums, other, format) {
+                        refuse(c, sx_field(t, tn, "span"),
+                                str_concat(lead, str_concat(str_concat(str_concat(tick, other), tick), str_concat(str_concat(" does not derive ", tick), str_concat(format, tick)))),
+                                str_concat(str_concat("write ", tick), str_concat("@derive(json)", str_concat(tick, " before that type too"))));
+                    }
+                    n = n + 1;
+                }
+                let why = dv_refusal_for(t, format, ty);
+                if why != "" {
+                    refuse(c, sx_field(t, ty, "span"), str_concat(lead, why), derive_help());
+                }
+                f = f + 1;
+            }
+        }
+        k = k + 1;
+    }
+    0
+}
+
+fn derive_help() -> Str {
+    let tick = str_from_byte(96);
+    let parts = strs_new();
+    strs_push(parts, "give the field a type the format has: an integer ");
+    strs_push(parts, str_concat(str_concat(tick, "Int"), tick));
+    strs_push(parts, " holds, a float, ");
+    strs_push(parts, str_concat(str_concat(tick, "Bool"), tick));
+    strs_push(parts, ", ");
+    strs_push(parts, str_concat(str_concat(tick, "Str"), tick));
+    strs_push(parts, ", ");
+    strs_push(parts, str_concat(str_concat(tick, "Option"), tick));
+    strs_push(parts, ", ");
+    strs_push(parts, str_concat(str_concat(tick, "Vec"), tick));
+    strs_push(parts, " (");
+    strs_push(parts, str_concat(str_concat(tick, "List"), tick));
+    strs_push(parts, "), ");
+    strs_push(parts, str_concat(str_concat(tick, "Chain"), tick));
+    strs_push(parts, " or ");
+    strs_push(parts, str_concat(str_concat(tick, "Box"), tick));
+    strs_push(parts, " of one, or a type that derives it too");
+    str_join(parts, "")
+}
+
+// Whether the module declares a record or enum named `name` that does not derive `format`.
+fn declared_without(c: Cf, records: Ints, enums: Ints, name: Str, format: Str) -> Bool {
+    let t = c.t;
+    let mut known = false;
+    let mut derived = false;
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        if sx_name(t, r, "name") == name {
+            known = true;
+            if dv_derives(t, items(c, r, "attrs"), format) { derived = true; }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        if sx_name(t, e, "name") == name {
+            known = true;
+            if dv_derives(t, items(c, e, "attrs"), format) { derived = true; }
+        }
+        i = i + 1;
+    }
+    known && derived == false
 }
