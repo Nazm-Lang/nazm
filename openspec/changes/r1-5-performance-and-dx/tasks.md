@@ -83,10 +83,11 @@
       the prelude, or a package); epoch 82
 
 ## 5. The comparison
-- [ ] 5.1 Safety-equivalent rows and a safety column; re-run and publish
+- [x] 5.1 Safety-equivalent rows and a safety column; re-run and publish
       — 2026-10-16: `compare.py` builds Rust with `-C overflow-checks=on`, Zig `ReleaseSafe`, and C
       and C++ with AddressSanitizer and UBSan beside their usual rows, and every row states what it
-      checks (`SAFETY`, the `checks` column); the re-run and its publication wait for a quiet host
+      checks (`SAFETY`, the `checks` column); re-run on a quiet host, `performance.md`, *R1.5 5.1*:
+      `fib` tied with checked Rust, Zig and Swift; `words` 1.7× checked Rust, at the least memory
 
 ## 7. Security (the copyright holder's choices, 2026-10-14)
 - [x] 7.1 `nazm build --release`: symbols and debug information stripped, PIE, stack protection,
