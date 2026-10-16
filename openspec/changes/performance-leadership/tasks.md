@@ -55,7 +55,9 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       — 2026-10-16: the programs, `bench/compare/{nazm,go}/` (`spawn`, `pingpong`, `fanin`, `idle`,
       `httpd`, the shared load generator `go/httpload.go`, and `primes`), and
       `bench/compare/concurrency.sh`, which checks both print the same answers and refuses to time
-      on a loaded host; the numbers are still to be taken in a quiet window
+      on a loaded host; measured at load 1.9–3.4 (`performance.md`, *Concurrency*): spawn 13× and
+      hand-offs 14× slower than Go, fan-in 6.5×, 17.4 against 2.7 KiB per blocked task, HTTP 0.86×
+      Go at half its memory. Still to take quietly: HTTP rounds two and three and `primes`
 - [ ] 6.2 Small tasks: growable or stackless task frames, so millions fit in memory (design first)
 - [ ] 6.3 A work-stealing scheduler, and preemption at loop back-edges
 - [ ] 6.4 `select` over several channels, and lock-free channels
