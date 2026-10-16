@@ -132,7 +132,16 @@ jobs:
         run: cargo xtask check
 
       - name: test (host-safe subset)
-        run: cargo xtask workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
+        shell: bash
+        # The suite rebuilds the workspace, xtask included, and Windows refuses to replace the file
+        # of a running program ("failed to remove file … xtask.exe: Access is denied"); so the
+        # suite is driven by a copy of xtask outside target/debug, on every platform alike.
+        run: |
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          cargo build -p xtask --locked
+          mkdir -p target/xtask-runner
+          cp "target/debug/xtask$exe" "target/xtask-runner/xtask$exe"
+          "target/xtask-runner/xtask$exe" workspace-tests --host-safe --jobs 4 --workers 1 --test-threads 4 --shape ci
 
   # The Windows TLS engine (SChannel, C1b) on a real Windows host, the server side included.
   # SChannel keeps a server's key in the user's key storage, which needs a loaded user profile:
