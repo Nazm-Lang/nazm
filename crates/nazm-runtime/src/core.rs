@@ -398,6 +398,10 @@ pub fn emit_runtime(needs: Needs) -> String {
     if needs.wide {
         out.push_str(WIDE_RUNTIME);
     }
+    // TLS (C1): the session table, over the per-target engine unit.
+    if needs.tls {
+        out.push_str(super::tls::TLS_RUNTIME);
+    }
     if needs.closures {
         out.push_str(CLOSURE_RUNTIME);
     }

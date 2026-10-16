@@ -5,11 +5,12 @@
 // accepted and what is refused, and the design record is `openspec/changes/v1-every-domain/
 // design.md`, section C. The parsers are pure and see only bytes already received (sans-I/O), so
 // `@std/tls` (C1) supplies decrypted bytes to the same parsers without a change to them: a
-// connection's `tls` field is `0` for plain TCP until then. Every value a task needs — `Request`,
-// `Response`, `Headers`, `HttpServer`, `HttpConn` — may cross into one.
+// connection's `tls` field is its TLS session, `0` for plain TCP. Every value a task needs —
+// `Request`, `Response`, `Headers`, `HttpServer`, `HttpConn` — may cross into one.
 
 use "@std/ioerror";
 use "@std/net";
+use "@std/tls";
 
 /// Header fields in the order received: each name lower-cased, each value without the
 /// whitespace around it.
@@ -44,6 +45,7 @@ pub enum HttpError {
     Io(error: IoError),
     Protocol(status: Int, why: Str),
     Unsupported(why: Str),
+    Tls(error: TlsError),
 }
 
 /// A server's limits and deadlines. `http_serve_options()` gives the defaults.
@@ -612,6 +614,7 @@ pub fn http_error_show(e: HttpError) -> Str ! {} {
         HttpError.Io(error: x) => io_error_show(x),
         HttpError.Protocol(status: s, why: w) => str_concat(str_concat(int_to_str(s), " "), w),
         HttpError.Unsupported(why: w) => str_concat("unsupported: ", w),
+        HttpError.Tls(error: x) => tls_error_show(x),
     }
 }
 
@@ -1038,7 +1041,8 @@ pub fn http_format_request(r: Request, authority: Str, close: Bool) -> Result[St
 }
 
 // ---------------------------------------------------------------------------------------------
-// The wire: bytes in through a buffer, out in full. `@std/tls` (C1) decrypts and encrypts here.
+// The wire: bytes in through a buffer, out in full; through the connection's TLS session when it
+// has one (`@std/tls`, C1), which decrypts in and encrypts out.
 
 struct Wire {
     handle: OsHandle,
@@ -1048,13 +1052,14 @@ struct Wire {
 
 // What has arrived: `value` the bytes, `at` their count, 0 at the end, a status below 0.
 fn fill(w: Wire) -> Step ! { io } {
-    let n = os_read(w.handle, w.buf);
+    let n = if w.tls != 0 { tls_wire_read(w.handle, w.tls, w.buf) } else { os_read(w.handle, w.buf) };
     if n <= 0 { return Step(status: 0, value: "", at: n, why: ""); }
     Step(status: 0, value: bytes_to_str(bytes_slice(w.buf, 0, n)), at: n, why: "")
 }
 
 fn send(w: Wire, text: Str) -> Int ! { io } {
     let data = bytes_from_str(text);
+    if w.tls != 0 { return tls_wire_write(w.handle, w.tls, data); }
     let mut at = 0;
     while at < bytes_len(data) {
         let n = os_write(w.handle, bytes_slice(data, at, bytes_len(data)));
@@ -1075,6 +1080,16 @@ fn set_wait(w: Wire, ms: Int) -> Int ! { io } {
 pub fn http_listen(net: NetCap, addr: Str, o: ServeOptions) -> Result[HttpServer, IoError] ! { io } {
     match tcp_listen(net, addr) {
         Result.Ok(value: l) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: l, draining: atomic_new(0), served: atomic_new(0), accepted: atomic_new(0), gate: chan_new(if o.max_connections > 0 { o.max_connections } else { 1 }), options: o, tls: 0)),
+        Result.Err(error: e) => Result[HttpServer, IoError].Err(error: e),
+    }
+}
+
+/// A server listening on `addr` as `http_listen` does, every connection over TLS with configuration
+/// `c` (`tls_server`): the handshake is each connection's first exchange, bounded by
+/// `head_timeout_ms`. `c` stays the caller's.
+pub fn http_listen_tls(net: NetCap, addr: Str, o: ServeOptions, c: TlsConfig) -> Result[HttpServer, IoError] ! { io } {
+    match http_listen(net, addr, o) {
+        Result.Ok(value: s) => Result[HttpServer, IoError].Ok(value: HttpServer(listener: s.listener, draining: s.draining, served: s.served, accepted: s.accepted, gate: s.gate, options: s.options, tls: c.id)),
         Result.Err(error: e) => Result[HttpServer, IoError].Err(error: e),
     }
 }
@@ -1106,7 +1121,15 @@ pub fn http_accept(s: HttpServer) -> Result[HttpConn, IoError] ! { io } {
     match tcp_accept(s.listener) {
         Result.Ok(value: c) => {
             atomic_add(s.accepted, 1);
-            Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: 0))
+            if s.tls == 0 { return Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: 0)); }
+            // A session for the connection; its handshake is the connection's task's to run.
+            let t = os_tls_accept(s.tls);
+            if t < 0 {
+                tcp_close(c);
+                release(s);
+                return Result[HttpConn, IoError].Err(error: io_error_new(IoErrorKind.Other(), tls_error_show(tls_error_from(t, ""))));
+            }
+            Result[HttpConn, IoError].Ok(value: HttpConn(stream: c, tls: t))
         },
         Result.Err(error: e) => {
             release(s);
@@ -1127,6 +1150,7 @@ fn release(s: HttpServer) -> Int ! {} {
 /// connection, it is the parallel form: the task names its handler, which a task may not be given.
 pub fn http_serve_conn(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) -> Int ! { io } {
     let n = conn_loop(s, c, h);
+    if c.tls != 0 { tls_wire_close(c.stream.handle, c.tls); }
     tcp_close(c.stream);
     release(s);
     n
@@ -1143,6 +1167,11 @@ fn conn_loop(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) ->
     let o = s.options;
     let w = Wire(handle: c.stream.handle, tls: c.tls, buf: bytes_new(16384));
     let peer = tcp_peer_addr(c.stream);
+    // TLS's handshake first, within the head's deadline; a client that fails it is not served.
+    if c.tls != 0 {
+        set_wait(w, o.head_timeout_ms);
+        if tls_wire_handshake(w.handle, c.tls) < 0 { return 0; }
+    }
     let mut pending = "";
     let mut served = 0;
     let mut open = true;
@@ -1180,6 +1209,7 @@ fn conn_loop(s: HttpServer, c: HttpConn, h: fn(Request) -> Response ! { io }) ->
                     HttpError.Protocol(status: st, why: why) => { answer_error(w, st, why); },
                     HttpError.Io(error: x) => {},
                     HttpError.Unsupported(why: why) => { answer_error(w, 501, why); },
+                    HttpError.Tls(error: x) => {},
                 };
                 return served;
             },
@@ -1463,14 +1493,38 @@ fn is_ipv4_literal(host: Str) -> Bool ! {} {
     str_len(host) > 0
 }
 
-/// A connection to `url`'s host and port, for `http_send`. `Unsupported` for `https` until
-/// `@std/tls` (C1); `Io` for a name that does not resolve or a connection refused.
+/// A connection to `url`'s host and port, for `http_send`. An `https` URL is TLS, its server
+/// verified against the platform's trust store; `Io` for a name that does not resolve or a
+/// connection refused, `Tls` for a server that cannot be verified.
 pub fn http_connect(net: NetCap, url: Str, o: ClientOptions) -> Result[HttpClient, HttpError] ! { io } {
+    connect_with(net, url, o, 0)
+}
+
+/// `http_connect` with the TLS configuration `c` (`tls_client`) for an `https` URL — its own
+/// anchors in place of the platform's store. `c` stays the caller's.
+pub fn http_connect_tls(net: NetCap, url: Str, o: ClientOptions, c: TlsConfig) -> Result[HttpClient, HttpError] ! { io } {
+    connect_with(net, url, o, c.id)
+}
+
+// The ALPN names this module speaks.
+fn http_alpn() -> Strs ! {} {
+    let names = strs_new();
+    strs_push(names, "http/1.1");
+    names
+}
+
+// The host a certificate must name: the URL's, an IPv6 literal without its brackets.
+fn cert_host(host: Str) -> Str ! {} {
+    if str_len(host) > 1 && str_byte(host, 0) == 91 { str_slice(host, 1, str_len(host) - 1) } else { host }
+}
+
+// A connection to `url`; over TLS for `https`, with configuration `cfg`, or the platform's store
+// when it is `0`.
+fn connect_with(net: NetCap, url: Str, o: ClientOptions, cfg: Int) -> Result[HttpClient, HttpError] ! { io } {
     let u = match http_url_parse(url) {
         Result.Ok(value: u) => u,
         Result.Err(error: e) => { return Result[HttpClient, HttpError].Err(error: e); },
     };
-    if u.scheme == "https" { return Result[HttpClient, HttpError].Err(error: HttpError.Unsupported(why: "https needs @std/tls")); }
     let addr = if str_byte(u.host, 0) == 91 || is_ipv4_literal(u.host) {
         str_concat(str_concat(u.host, ":"), int_to_str(u.port))
     } else {
@@ -1487,7 +1541,30 @@ pub fn http_connect(net: NetCap, url: Str, o: ClientOptions) -> Result[HttpClien
             tcp_set_timeout(s, o.timeout_ms);
             let pending = vec_new[Str]();
             vec_push(pending, "");
-            Result[HttpClient, HttpError].Ok(value: HttpClient(stream: s, authority: authority_of(u), options: o, pending: pending, tls: 0))
+            let mut session = 0;
+            if u.scheme == "https" {
+                // No configuration given: the platform's trust store, for this connection alone.
+                let own = if cfg != 0 { 0 } else {
+                    match tls_client(bytes_new(0), http_alpn()) {
+                        Result.Ok(value: c) => c.id,
+                        Result.Err(error: e) => {
+                            tcp_close(s);
+                            return Result[HttpClient, HttpError].Err(error: HttpError.Tls(error: e));
+                        },
+                    }
+                };
+                let t = os_tls_connect(if cfg != 0 { cfg } else { own }, cert_host(u.host));
+                if own != 0 { os_tls_close(own, bytes_new(0)); }
+                let r = if t < 0 { t } else { tls_wire_handshake(s.handle, t) };
+                if r < 0 {
+                    let e = if t < 0 { tls_error_from(t, "") } else { tls_wire_error(t, r) };
+                    if t > 0 { os_tls_close(t, bytes_new(0)); }
+                    tcp_close(s);
+                    return Result[HttpClient, HttpError].Err(error: HttpError.Tls(error: e));
+                }
+                session = t;
+            }
+            Result[HttpClient, HttpError].Ok(value: HttpClient(stream: s, authority: authority_of(u), options: o, pending: pending, tls: session))
         },
         Result.Err(error: e) => Result[HttpClient, HttpError].Err(error: HttpError.Io(error: e)),
     }
@@ -1556,6 +1633,7 @@ fn exchange(c: HttpClient, r: Request, close: Bool) -> Result[Response, HttpErro
 
 /// Close `c`.
 pub fn http_close(c: HttpClient) -> Int ! { io } {
+    if c.tls != 0 { tls_wire_close(c.stream.handle, c.tls); }
     tcp_close(c.stream);
     0
 }

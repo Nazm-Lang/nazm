@@ -209,6 +209,18 @@ impl Effect {
             | Intrinsic::OsLocalAddr
             | Intrinsic::OsPeerAddr
             | Intrinsic::OsResolve
+            // TLS (C1): the engine's state is the outside world's, as a socket's is.
+            | Intrinsic::OsTlsClientConfig
+            | Intrinsic::OsTlsServerConfig
+            | Intrinsic::OsTlsConnect
+            | Intrinsic::OsTlsAccept
+            | Intrinsic::OsTlsHandshake
+            | Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsPull
+            | Intrinsic::OsTlsRead
+            | Intrinsic::OsTlsWrite
+            | Intrinsic::OsTlsClose
+            | Intrinsic::OsTlsInfo
             | Intrinsic::OsEnvGet
             | Intrinsic::OsEnvHas
             | Intrinsic::OsEnvCount
@@ -591,6 +603,17 @@ mod tests {
                 "os_local_addr",
                 "os_peer_addr",
                 "os_resolve",
+                "os_tls_client_config",
+                "os_tls_server_config",
+                "os_tls_connect",
+                "os_tls_accept",
+                "os_tls_handshake",
+                "os_tls_push",
+                "os_tls_pull",
+                "os_tls_read",
+                "os_tls_write",
+                "os_tls_close",
+                "os_tls_info",
                 "os_env_get",
                 "os_env_has",
                 "os_env_count",

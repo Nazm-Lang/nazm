@@ -162,6 +162,66 @@ impl Fx<'_, '_> {
                 let (op_, on) = self.str_parts(out);
                 self.rt_v("nz.os_resolve", &[np, nn, port, op_, on], Class::I64)
             }
+            // TLS (C1): an id is a word, every buffer a `Bytes`'s pointer and length.
+            Intrinsic::OsTlsClientConfig => {
+                let ca = self.arg_place(args, 0);
+                let alpn = self.arg_place(args, 1);
+                let (cp, cn) = self.str_parts(ca);
+                let (ap, an) = self.str_parts(alpn);
+                self.rt_v("nz.os_tls_client_config", &[cp, cn, ap, an], Class::I64)
+            }
+            Intrinsic::OsTlsServerConfig => {
+                let cert = self.arg_place(args, 0);
+                let key = self.arg_place(args, 1);
+                let alpn = self.arg_place(args, 2);
+                let (cp, cn) = self.str_parts(cert);
+                let (kp, kn) = self.str_parts(key);
+                let (ap, an) = self.str_parts(alpn);
+                self.rt_v(
+                    "nz.os_tls_server_config",
+                    &[cp, cn, kp, kn, ap, an],
+                    Class::I64,
+                )
+            }
+            Intrinsic::OsTlsConnect => {
+                let config = self.arg(args, 0);
+                let host = self.arg_place(args, 1);
+                let (hp, hn) = self.str_parts(host);
+                self.rt_v("nz.os_tls_connect", &[config, hp, hn], Class::I64)
+            }
+            Intrinsic::OsTlsAccept | Intrinsic::OsTlsHandshake => {
+                let id = self.arg(args, 0);
+                let name = if op == Intrinsic::OsTlsAccept {
+                    "nz.os_tls_accept"
+                } else {
+                    "nz.os_tls_handshake"
+                };
+                self.rt_v(name, &[id], Class::I64)
+            }
+            Intrinsic::OsTlsPush
+            | Intrinsic::OsTlsPull
+            | Intrinsic::OsTlsRead
+            | Intrinsic::OsTlsWrite
+            | Intrinsic::OsTlsClose => {
+                let id = self.arg(args, 0);
+                let b = self.arg_place(args, 1);
+                let (bp, bn) = self.str_parts(b);
+                let name = match op {
+                    Intrinsic::OsTlsPush => "nz.os_tls_push",
+                    Intrinsic::OsTlsPull => "nz.os_tls_pull",
+                    Intrinsic::OsTlsRead => "nz.os_tls_read",
+                    Intrinsic::OsTlsWrite => "nz.os_tls_write",
+                    _ => "nz.os_tls_close",
+                };
+                self.rt_v(name, &[id, bp, bn], Class::I64)
+            }
+            Intrinsic::OsTlsInfo => {
+                let id = self.arg(args, 0);
+                let what = self.arg(args, 1);
+                let out = self.arg_place(args, 2);
+                let (op_, on) = self.str_parts(out);
+                self.rt_v("nz.os_tls_info", &[id, what, op_, on], Class::I64)
+            }
             Intrinsic::OsLocalAddr | Intrinsic::OsPeerAddr => {
                 let h = self.arg(args, 0);
                 let peer = self.iconst(i64::from(op == Intrinsic::OsPeerAddr));

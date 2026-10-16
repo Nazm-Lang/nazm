@@ -279,6 +279,7 @@
 @std/http pub fn http_format_response(r: Response, head_only: Bool, close: Bool) -> Result[Str, HttpError] ! {}
 @std/http pub fn http_format_request(r: Request, authority: Str, close: Bool) -> Result[Str, HttpError] ! {}
 @std/http pub fn http_listen(net: NetCap, addr: Str, o: ServeOptions) -> Result[HttpServer, IoError] ! { io }
+@std/http pub fn http_listen_tls(net: NetCap, addr: Str, o: ServeOptions, c: TlsConfig) -> Result[HttpServer, IoError] ! { io }
 @std/http pub fn http_server_addr(s: HttpServer) -> Str ! { io }
 @std/http pub fn http_drain(s: HttpServer) -> Int ! { io }
 @std/http pub fn http_draining(s: HttpServer) -> Bool ! {}
@@ -293,6 +294,7 @@
 @std/http pub fn http_router_handler(rt: Router) -> fn(Request) -> Response ! { io } ! {}
 @std/http pub fn http_url_parse(url: Str) -> Result[Url, HttpError] ! {}
 @std/http pub fn http_connect(net: NetCap, url: Str, o: ClientOptions) -> Result[HttpClient, HttpError] ! { io }
+@std/http pub fn http_connect_tls(net: NetCap, url: Str, o: ClientOptions, c: TlsConfig) -> Result[HttpClient, HttpError] ! { io }
 @std/http pub fn http_send(c: HttpClient, r: Request) -> Result[Response, HttpError] ! { io }
 @std/http pub fn http_close(c: HttpClient) -> Int ! { io }
 @std/http pub fn http_fetch(net: NetCap, method: Str, url: Str, body: Str, o: ClientOptions) -> Result[Response, HttpError] ! { io }
@@ -566,6 +568,30 @@
 @std/time pub fn time_between(a: Instant, b: Instant) -> Duration ! {}
 @std/time pub fn time_wall(t: TimeCap) -> WallTime ! {}
 @std/time pub fn time_sleep(t: TimeCap, d: Duration) -> Int ! {}
+@std/tls pub struct TlsConfig
+@std/tls pub struct TlsStream
+@std/tls pub enum TlsError
+@std/tls pub fn tls_error_from(status: Int, why: Str) -> TlsError ! {}
+@std/tls pub fn tls_error_show(e: TlsError) -> Str ! {}
+@std/tls pub fn tls_client(ca_pem: Bytes, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io }
+@std/tls pub fn tls_client_system() -> Result[TlsConfig, TlsError] ! { io }
+@std/tls pub fn tls_server(cert_pem: Bytes, key_pem: Bytes, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io }
+@std/tls pub fn tls_server_from_files(io: IoCap, cert_file: Str, key_file: Str, alpn: Strs) -> Result[TlsConfig, TlsError] ! { io }
+@std/tls pub fn tls_config_close(c: TlsConfig) -> Int ! { io }
+@std/tls pub fn tls_wire_handshake(h: OsHandle, s: Int) -> Int ! { io }
+@std/tls pub fn tls_wire_read(h: OsHandle, s: Int, buf: Bytes) -> Int ! { io }
+@std/tls pub fn tls_wire_write(h: OsHandle, s: Int, data: Bytes) -> Int ! { io }
+@std/tls pub fn tls_wire_close(h: OsHandle, s: Int) -> Int ! { io }
+@std/tls pub fn tls_wire_error(s: Int, status: Int) -> TlsError ! { io }
+@std/tls pub fn tls_connect(c: TlsConfig, sock: TcpStream, host: Str) -> Result[TlsStream, TlsError] ! { io }
+@std/tls pub fn tls_accept(c: TlsConfig, sock: TcpStream) -> Result[TlsStream, TlsError] ! { io }
+@std/tls pub fn tls_read(t: TlsStream, buf: Bytes) -> Result[Int, TlsError] ! { io }
+@std/tls pub fn tls_write(t: TlsStream, data: Bytes) -> Result[Int, TlsError] ! { io }
+@std/tls pub fn tls_write_str(t: TlsStream, text: Str) -> Result[Int, TlsError] ! { io }
+@std/tls pub fn tls_close(t: TlsStream) -> Int ! { io }
+@std/tls pub fn tls_alpn(t: TlsStream) -> Str ! { io }
+@std/tls pub fn tls_version(t: TlsStream) -> Str ! { io }
+@std/tls pub fn tls_peer(t: TlsStream) -> Str ! { io }
 @std/toml pub enum Toml
 @std/toml pub fn toml_get(t: Toml, key: Str) -> Option[Toml] ! {}
 @std/toml pub fn toml_is_table(t: Toml) -> Bool ! {}

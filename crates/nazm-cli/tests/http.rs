@@ -309,7 +309,7 @@ fn damaged_requests_are_refused_and_never_trap() {
                  let raw = damage(rng, strs_get(seeds, n % 3));\n\
                  match http_parse_request(raw, o) {\n\
                      Result.Ok(value: r) => { ok = ok + 1; },\n\
-                     Result.Err(error: e) => { match e { HttpError.Protocol(status: s, why: w) => { if s >= 400 && s < 600 { refused = refused + 1; } else { other = other + 1; } }, HttpError.Io(error: x) => { other = other + 1; }, HttpError.Unsupported(why: w) => { other = other + 1; }, }; },\n\
+                     Result.Err(error: e) => { match e { HttpError.Protocol(status: s, why: w) => { if s >= 400 && s < 600 { refused = refused + 1; } else { other = other + 1; } }, HttpError.Io(error: x) => { other = other + 1; }, HttpError.Unsupported(why: w) => { other = other + 1; }, HttpError.Tls(error: t) => { other = other + 1; }, }; },\n\
                  };\n\
                  n = n + 1;\n\
              }\n\
@@ -555,7 +555,7 @@ fn a_server_and_a_client_talk_over_loopback_alike_everywhere() {
     agrees_networked(
         &src,
         "200 GET world \n200 POST x payload\n404 not found\n\n405 method not allowed\n\n\
-         ERR unsupported: https needs @std/tls\n200 GET one \n200 POST two 2\n200 \n200 GET four \n\
+         ERR 127.0.0.1:1: Connection refused (ConnectionRefused)\n200 GET one \n200 POST two 2\n200 \n200 GET four \n\
          8 requests on 5\ndrained\n0",
     );
 }

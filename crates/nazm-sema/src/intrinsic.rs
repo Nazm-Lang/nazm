@@ -533,6 +533,34 @@ pub enum Intrinsic {
     OsPeerAddr,
     OsResolve,
 
+    // --- TLS, v1 track C1 (`docs/spec.md`, *TLS*) ------------------------------------------
+    //
+    // A runtime part, never user FFI: the engine works on buffers, the program moves the bytes
+    // through its socket, so no wait is the engine's. Each answers a count, an id, or a status.
+    /// `os_tls_client_config(ca: Bytes, alpn: Bytes) -> Int` — a client configuration's id; `ca`
+    /// empty trusts the platform's store.
+    OsTlsClientConfig,
+    /// `os_tls_server_config(cert: Bytes, key: Bytes, alpn: Bytes) -> Int` — a server's.
+    OsTlsServerConfig,
+    /// `os_tls_connect(config: Int, host: Str) -> Int` — a client session verifying `host`.
+    OsTlsConnect,
+    /// `os_tls_accept(config: Int) -> Int` — a server session.
+    OsTlsAccept,
+    /// `os_tls_handshake(s: Int) -> Int` — `1` once done, or a status.
+    OsTlsHandshake,
+    /// `os_tls_push(s: Int, data: Bytes) -> Int` — ciphertext received, all of it taken.
+    OsTlsPush,
+    /// `os_tls_pull(s: Int, out: Bytes) -> Int` — ciphertext to send, into `out`.
+    OsTlsPull,
+    /// `os_tls_read(s: Int, out: Bytes) -> Int` — plaintext into `out`; `0` at the peer's end.
+    OsTlsRead,
+    /// `os_tls_write(s: Int, data: Bytes) -> Int` — plaintext taken.
+    OsTlsWrite,
+    /// `os_tls_close(s: Int, out: Bytes) -> Int` — the last ciphertext into `out`; the id dies.
+    OsTlsClose,
+    /// `os_tls_info(s: Int, what: Int, out: Bytes) -> Int` — a fact about the session.
+    OsTlsInfo,
+
     // --- process and environment, Gate 2 (`docs/general-purpose.md` §12; `docs/spec.md`,
     // *Process and environment*) -----------------------------------------------------------
     OsEnvGet,
@@ -666,7 +694,7 @@ pub enum Intrinsic {
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 203] = [
+    pub const ALL: [Self; 214] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -826,6 +854,17 @@ impl Intrinsic {
         Self::OsLocalAddr,
         Self::OsPeerAddr,
         Self::OsResolve,
+        Self::OsTlsClientConfig,
+        Self::OsTlsServerConfig,
+        Self::OsTlsConnect,
+        Self::OsTlsAccept,
+        Self::OsTlsHandshake,
+        Self::OsTlsPush,
+        Self::OsTlsPull,
+        Self::OsTlsRead,
+        Self::OsTlsWrite,
+        Self::OsTlsClose,
+        Self::OsTlsInfo,
         Self::OsEnvGet,
         Self::OsEnvHas,
         Self::OsEnvCount,
@@ -1038,6 +1077,17 @@ impl Intrinsic {
             Self::OsLocalAddr => "os_local_addr",
             Self::OsPeerAddr => "os_peer_addr",
             Self::OsResolve => "os_resolve",
+            Self::OsTlsClientConfig => "os_tls_client_config",
+            Self::OsTlsServerConfig => "os_tls_server_config",
+            Self::OsTlsConnect => "os_tls_connect",
+            Self::OsTlsAccept => "os_tls_accept",
+            Self::OsTlsHandshake => "os_tls_handshake",
+            Self::OsTlsPush => "os_tls_push",
+            Self::OsTlsPull => "os_tls_pull",
+            Self::OsTlsRead => "os_tls_read",
+            Self::OsTlsWrite => "os_tls_write",
+            Self::OsTlsClose => "os_tls_close",
+            Self::OsTlsInfo => "os_tls_info",
             Self::OsEnvGet => "os_env_get",
             Self::OsEnvHas => "os_env_has",
             Self::OsEnvCount => "os_env_count",
@@ -1331,6 +1381,17 @@ impl Intrinsic {
             Self::OsLocalAddr => &[Shape::OsHandle],
             Self::OsPeerAddr => &[Shape::OsHandle],
             Self::OsResolve => &[Shape::Str, Shape::Int, Shape::Bytes],
+            Self::OsTlsClientConfig => &[Shape::Bytes, Shape::Bytes],
+            Self::OsTlsServerConfig => &[Shape::Bytes, Shape::Bytes, Shape::Bytes],
+            Self::OsTlsConnect => &[Shape::Int, Shape::Str],
+            Self::OsTlsAccept => &[Shape::Int],
+            Self::OsTlsHandshake => &[Shape::Int],
+            Self::OsTlsPush => &[Shape::Int, Shape::Bytes],
+            Self::OsTlsPull => &[Shape::Int, Shape::Bytes],
+            Self::OsTlsRead => &[Shape::Int, Shape::Bytes],
+            Self::OsTlsWrite => &[Shape::Int, Shape::Bytes],
+            Self::OsTlsClose => &[Shape::Int, Shape::Bytes],
+            Self::OsTlsInfo => &[Shape::Int, Shape::Int, Shape::Bytes],
             Self::OsEnvGet => &[Shape::Str],
             Self::OsEnvHas => &[Shape::Str],
             Self::OsEnvCount => &[],
@@ -1526,6 +1587,17 @@ impl Intrinsic {
             Self::OsLocalAddr => Shape::Str,
             Self::OsPeerAddr => Shape::Str,
             Self::OsResolve => Shape::Int,
+            Self::OsTlsClientConfig => Shape::Int,
+            Self::OsTlsServerConfig => Shape::Int,
+            Self::OsTlsConnect => Shape::Int,
+            Self::OsTlsAccept => Shape::Int,
+            Self::OsTlsHandshake => Shape::Int,
+            Self::OsTlsPush => Shape::Int,
+            Self::OsTlsPull => Shape::Int,
+            Self::OsTlsRead => Shape::Int,
+            Self::OsTlsWrite => Shape::Int,
+            Self::OsTlsClose => Shape::Int,
+            Self::OsTlsInfo => Shape::Int,
             Self::OsEnvGet => Shape::Str,
             Self::OsEnvHas => Shape::Bool,
             Self::OsEnvCount => Shape::Int,

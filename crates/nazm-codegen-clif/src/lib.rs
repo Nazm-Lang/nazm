@@ -247,6 +247,8 @@ impl Backend for Cranelift {
             files: true,
             net: true,
             wide: true,
+            // TLS links the platform's library: only where the program reaches it.
+            tls: false,
             single: false,
         }
     }
