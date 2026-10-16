@@ -932,6 +932,9 @@ impl<'a> Lower<'a> {
                     if let Some(each) = self.res.split_each().filter(|s| s.split == *callee) {
                         return self.split_loop(f, id, index, each, args.clone(), stmts);
                     }
+                    if let Some(each) = self.res.lines_each().filter(|l| l.lines == *callee) {
+                        return self.lines_loop(f, id, index, each, args.clone(), stmts);
+                    }
                 }
                 let Some(seq_ty) = seq_value.ty else {
                     return defect(e.span(), "a `for` sequence the checker gave no type");
@@ -1203,6 +1206,85 @@ impl<'a> Lower<'a> {
             body,
             at: f.span,
         });
+        Ok(stmts)
+    }
+
+    /// `for line in file_lines(io, path)` (R1.5, 3.5), as the loop over the list it would make
+    /// means, with no list and the file read a chunk at a time: `let r = file_lines_open(io, path);
+    /// let mut i = 0; while file_lines_next(r) { let line = file_lines_line(r); body }
+    /// file_lines_close(r);` — the close for a loop left by `break`, the file still open.
+    /// `@std/file`'s reader cuts the lines as `file_lines` does, so they and their order are the
+    /// list's; the step comes before the body, as every `for`'s does.
+    fn lines_loop(
+        &mut self,
+        f: &nazm_syntax::For,
+        id: LoopId,
+        index: LocalId,
+        each: nazm_sema::resolve::LinesEach,
+        args: Vec<Expr>,
+        mut stmts: Vec<Stmt>,
+    ) -> Lowered<Vec<Stmt>> {
+        let at = f.name_span;
+        let Some(reader_ty) = self.res.function(each.open).map(|d| d.ret) else {
+            return defect(at, "a `file_lines_open` with no definition");
+        };
+        let reader = self.temp(Temp::ForSeq, reader_ty, at);
+        stmts.push(Stmt::Let {
+            local: reader,
+            value: Expr {
+                kind: ExprKind::Call {
+                    callee: each.open,
+                    type_args: Vec::new(),
+                    args,
+                    callee_at: at,
+                },
+                ty: Some(reader_ty),
+                at,
+            },
+        });
+        self.bind(reader);
+        let zero = self.constant(Const::Int(0));
+        stmts.push(Stmt::Let {
+            local: index,
+            value: Expr {
+                kind: ExprKind::Const(zero),
+                ty: Some(Type::Int),
+                at,
+            },
+        });
+        self.bind(index);
+        let call = |callee: FnId, ty: Type| Expr {
+            kind: ExprKind::Call {
+                callee,
+                type_args: Vec::new(),
+                args: vec![Expr {
+                    kind: ExprKind::Local(reader),
+                    ty: Some(reader_ty),
+                    at,
+                }],
+                callee_at: at,
+            },
+            ty: Some(ty),
+            at,
+        };
+        let cond = call(each.next, Type::Bool);
+        let name = self.local_at(f.name_span)?;
+        let step = vec![Stmt::Let {
+            local: name,
+            value: call(each.line, Type::Str),
+        }];
+        self.targets.push(id);
+        let body = self.statement_block(&f.body, vec![name]);
+        self.targets.pop();
+        let mut body = body?;
+        body.stmts.splice(0..0, step);
+        stmts.push(Stmt::Loop {
+            id,
+            cond,
+            body,
+            at: f.span,
+        });
+        stmts.push(Stmt::Eval(call(each.close, Type::Int)));
         Ok(stmts)
     }
 

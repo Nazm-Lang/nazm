@@ -154,6 +154,7 @@
 @std/file pub struct Metadata
 @std/file pub enum EntryKind
 @std/file pub struct LinkMetadata
+@std/file pub struct LineReader
 @std/file pub fn file_open(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
 @std/file pub fn file_create(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
 @std/file pub fn file_append(io: IoCap, path: Str) -> Result[File, IoError] ! { io }
@@ -188,6 +189,11 @@
 @std/file pub fn file_lock(f: File, exclusive: Bool) -> Result[Int, IoError] ! { io }
 @std/file pub fn file_try_lock(f: File, exclusive: Bool) -> Result[Bool, IoError] ! { io }
 @std/file pub fn file_unlock(f: File) -> Result[Int, IoError] ! { io }
+@std/file pub fn file_lines(io: IoCap, path: Str) -> Strs ! { io }
+@std/file pub fn file_lines_open(io: IoCap, path: Str) -> LineReader ! { io }
+@std/file pub fn file_lines_next(r: LineReader) -> Bool ! { io }
+@std/file pub fn file_lines_line(r: LineReader) -> Str ! {}
+@std/file pub fn file_lines_close(r: LineReader) -> Int ! { io }
 @std/fmt pub fn fmt_int_zero(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_int_width(n: Int, width: Int) -> Str ! {}
 @std/fmt pub fn fmt_hex(n: Int) -> Str ! {}

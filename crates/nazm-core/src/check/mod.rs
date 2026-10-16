@@ -911,5 +911,33 @@ pub fn check_reusing(
         _ => None,
     };
     res.set_split_each(split_each);
+    // `@std/file`'s `file_lines` and the four functions a `for` over it reads the file through, a
+    // chunk at a time, and closes it with (R1.5, 3.5).
+    let file_key = nazm_sema::stdlib::key("file");
+    let in_file = |name: &str| {
+        graph
+            .ids()
+            .find(|m| graph.key(*m) == Some(&file_key))
+            .and_then(|m| res.definition(m, name))
+    };
+    let lines_each = match (
+        in_file("file_lines"),
+        in_file("file_lines_open"),
+        in_file("file_lines_next"),
+        in_file("file_lines_line"),
+        in_file("file_lines_close"),
+    ) {
+        (Some(lines), Some(open), Some(next), Some(line), Some(close)) => {
+            Some(nazm_sema::resolve::LinesEach {
+                lines,
+                open,
+                next,
+                line,
+                close,
+            })
+        }
+        _ => None,
+    };
+    res.set_lines_each(lines_each);
     (res, errors)
 }
