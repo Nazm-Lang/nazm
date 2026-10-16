@@ -850,3 +850,70 @@ fn main() {
         .count();
     assert_eq!(in_loops + 1, once, "no list is built");
 }
+
+#[test]
+fn a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere() {
+    // R1.5, 3.5: `for line in file_lines(io, path)` is lowered through `@std/file`'s reader,
+    // which reads 64 KiB at a time and builds no list; its lines are `text_lines(read_file(path))`'s
+    // — a carriage return cut at a chunk's edge, a line longer than a chunk, empty lines, a last
+    // line without a newline — `break` and `continue` are the list's, and every reader is closed.
+    let mut input = "x".repeat(65535) + "\r\n";
+    for i in 0..3000 {
+        input += &format!("line {i}{}", if i % 3 == 0 { "\r\n" } else { "\n" });
+        if i % 7 == 0 {
+            input += "\n";
+        }
+    }
+    input += "skip\nstop\n";
+    input += &"y".repeat(200_000);
+    input += "\nend";
+    let lines: Vec<&str> = input
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+    let total: usize = lines.iter().map(|l| l.len()).sum();
+    let src = "use \"@std/file\"
+
+fn main(io: IoCap) {
+    let mut n = 0
+    let mut total = 0
+    for line in file_lines(io, \"in.txt\") {
+        if line == \"skip\" { continue }
+        n += 1
+        total += line.len()
+    }
+    let all = text_lines(read_file(\"in.txt\"))
+    let mut sum = 0
+    for l in all { sum += l.len() }
+    println(f\"{n} {total} {all.len()} {sum}\")
+    let mut seen = 0
+    for line in file_lines(io, \"in.txt\") {
+        if line == \"stop\" { break }
+        seen += 1
+    }
+    println(f\"{seen} {file_lines(io, \"in.txt\").len()}\")
+}
+";
+    let expected = format!(
+        "{} {} {} {}\n{} {}\n0",
+        lines.len() - 1,
+        total - 4,
+        lines.len(),
+        total,
+        lines.len() - 3,
+        lines.len()
+    );
+    differential::agrees_on(&[("prog.nz", src), ("in.txt", &input)], &expected, 0);
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("p.nz"), src).unwrap();
+    let r = nazm(d.path(), &["core-ir", "p.nz"]);
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let calls = |name: &str| {
+        r.stdout
+            .matches(&format!("\"callee\": \"@std/file::fn {name}\""))
+            .count()
+    };
+    assert_eq!(calls("file_lines_close"), 2, "each loop closes its reader");
+    // `file_lines` itself is called once, for the list: the loops build none.
+    assert_eq!(calls("file_lines"), 1, "only the list is built");
+}

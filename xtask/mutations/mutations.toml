@@ -20551,3 +20551,35 @@ find = '''        && choice.objects.is_none()
 replace = '''        && choice.objects.is_none()
         && !freestanding'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "whole_program::an_optimised_macos_build_is_linked_from_bitcode_and_prints_what_the_others_print" }]
+
+[[mutation]]
+name = "r1-5-a-for-over-file-lines-builds-its-list"
+why = "`for line in file_lines(io, path)` is lowered as a loop over the list `file_lines` builds, reading the whole file, not through `@std/file`'s reader (R1.5, 3.5)"
+file = "crates/nazm-core/src/check/mod.rs"
+find = "    res.set_lines_each(lines_each);"
+replace = "    res.set_lines_each(lines_each.filter(|_| false));"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere" }]
+
+[[mutation]]
+name = "r1-5-a-file-lines-loop-never-closes-its-file"
+why = "a `for` over `file_lines` left by `break` keeps its file open: no `file_lines_close` after the loop (R1.5, 3.5)"
+file = "crates/nazm-core/src/lower.rs"
+find = "        stmts.push(Stmt::Eval(call(each.close, Type::Int)));"
+replace = "        let _ = each.close;"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere" }]
+
+[[mutation]]
+name = "r1-5-file-lines-drops-a-line-cut-by-a-chunk"
+why = "the part of a line read before a chunk ended is dropped, so a line that crosses 64 KiB loses its start (R1.5, 3.5)"
+file = "library/std/file.nz"
+find = "            s = str_concat(str_slice(s, start, m), bytes_to_str(bytes_slice(r.chunk, 0, n)));"
+replace = "            s = bytes_to_str(bytes_slice(r.chunk, 0, n));"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere" }]
+
+[[mutation]]
+name = "r1-5-file-lines-loses-a-last-line-without-a-newline"
+why = "a last line with no newline after it is not a line, where `text_lines` keeps it (R1.5, 3.5)"
+file = "library/std/file.nz"
+find = "            if start < m {"
+replace = "            if start < m && false {"
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::a_for_over_file_lines_reads_a_chunk_at_a_time_everywhere" }]

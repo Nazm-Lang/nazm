@@ -49,6 +49,19 @@ pub struct LinkMetadata {
     inode: Int,
 }
 
+/// A file read a chunk at a time, a line at a time (R1.5, 3.5): what `for line in
+/// file_lines(io, path)` reads through. `text` holds the text read and not yet handed out, then the
+/// current line; `at` where the next line starts in it, where the scan for its end resumes, and
+/// whether the file has ended.
+pub struct LineReader {
+    io: IoCap,
+    path: Str,
+    handle: OsHandle,
+    chunk: Bytes,
+    text: Strs,
+    at: Ints,
+}
+
 fn opened(h: OsHandle) -> Result[File, IoError] ! {} {
     let s = os_status(h);
     if s < 0 { Result[File, IoError].Err(error: io_error_from(s)) } else { Result[File, IoError].Ok(value: File(handle: h)) }
@@ -504,4 +517,102 @@ pub fn file_try_lock(f: File, exclusive: Bool) -> Result[Bool, IoError] ! { io }
 /// Let `f`'s lock go.
 pub fn file_unlock(f: File) -> Result[Int, IoError] ! { io } {
     io_result(os_unlock(f.handle))
+}
+
+// R1.5, 3.5: the lines of a file, read a chunk at a time.
+
+/// The lines of the file at `path`, exactly as `text_lines(read_file(path))` gives them — each
+/// without its newline or one carriage return before it, a last line without a newline still a
+/// line — and failing as `read_file` does (`N0407`). In `for line in file_lines(io, path)` the
+/// file is read 64 KiB at a time through `file_lines_open`, `file_lines_next` and
+/// `file_lines_line`, and no list is made, so memory holds a chunk and a line, not the file.
+pub fn file_lines(io: IoCap, path: Str) -> Strs ! { io } {
+    let out = strs_new();
+    let r = file_lines_open(io, path);
+    while file_lines_next(r) {
+        strs_push(out, file_lines_line(r));
+    }
+    out
+}
+
+/// A reader of the lines of the file at `path`, before its first line. A file that cannot be
+/// read fails here, as `read_file(path)` would.
+pub fn file_lines_open(io: IoCap, path: Str) -> LineReader ! { io } {
+    let h = os_open_read(path);
+    if os_status(h) != 0 { read_file(path); }
+    let text = strs_new();
+    strs_push(text, "");
+    strs_push(text, "");
+    let at = ints_new();
+    ints_push(at, 0);
+    ints_push(at, 0);
+    ints_push(at, 0);
+    LineReader(io: io, path: path, handle: h, chunk: bytes_new(65536), text: text, at: at)
+}
+
+/// Whether `r` has another line, moving to it: `file_lines_line(r)` is then that line. A read that
+/// fails part way fails as `read_file(path)` would.
+pub fn file_lines_next(r: LineReader) -> Bool ! { io } {
+    let mut s = strs_get(r.text, 0);
+    let mut start = ints_get(r.at, 0);
+    let mut i = ints_get(r.at, 1);
+    while true {
+        let m = str_len(s);
+        while i < m && str_byte(s, i) != 10 { i = i + 1; }
+        if i < m {
+            strs_set(r.text, 1, line_end(s, start, i));
+            ints_set(r.at, 0, i + 1);
+            ints_set(r.at, 1, i + 1);
+            return true;
+        }
+        if ints_get(r.at, 2) != 0 {
+            if start < m {
+                strs_set(r.text, 1, line_end(s, start, m));
+                ints_set(r.at, 0, m);
+                ints_set(r.at, 1, m);
+                return true;
+            }
+            return false;
+        }
+        let n = os_read(r.handle, r.chunk);
+        if n <= 0 {
+            ints_set(r.at, 2, 1);
+            os_close(r.handle);
+            if n < 0 {
+                let io = r.io;
+                read_file(r.path);
+            }
+        } else {
+            s = str_concat(str_slice(s, start, m), bytes_to_str(bytes_slice(r.chunk, 0, n)));
+            i = m - start;
+            start = 0;
+            strs_set(r.text, 0, s);
+            ints_set(r.at, 0, 0);
+            ints_set(r.at, 1, i);
+        }
+    }
+    false
+}
+
+/// The line `file_lines_next` moved to.
+pub fn file_lines_line(r: LineReader) -> Str ! {} {
+    strs_get(r.text, 1)
+}
+
+/// Close `r`'s file, if its lines have not all been read: what a `for` over `file_lines` does
+/// when it is left before the end, by `break`. Answers 0.
+pub fn file_lines_close(r: LineReader) -> Int ! { io } {
+    if ints_get(r.at, 2) == 0 {
+        ints_set(r.at, 2, 1);
+        strs_set(r.text, 0, "");
+        ints_set(r.at, 0, 0);
+        ints_set(r.at, 1, 0);
+        os_close(r.handle);
+    }
+    0
+}
+
+/// `s` from `start` to `end`, without one `\r` before `end`, as `text_lines` cuts a line.
+fn line_end(s: Str, start: Int, end: Int) -> Str ! {} {
+    if end > start && str_byte(s, end - 1) == 13 { str_slice(s, start, end - 1) } else { str_slice(s, start, end) }
 }

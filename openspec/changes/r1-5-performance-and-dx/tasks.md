@@ -28,7 +28,10 @@
       (−9.2%), the allocation loop −29%, cold builds 7–13% faster, a warm rebuild of words +5.7%;
       `tests/whole_program.rs`, four mutants; Windows keeps per-unit optimisation (MinGW reads no
       bitcode)
-- [ ] 3.5 Streaming `file_lines`
+- [x] 3.5 Streaming `file_lines` — 2026-10-16: `@std/file`'s `file_lines(io, path)` and `LineReader`;
+      `for line in file_lines(…)` lowered through it (`lines_loop`), 64 KiB at a time, no list;
+      `bench/compare/nazm/words.nz` reads its input so; measured in 5.1's re-run; one test, four
+      mutants
 
 ## 4. Size and lines
 - [x] 4.1 Dead-stripping; unused standard functions left out (design D14) — 2026-10-15:
