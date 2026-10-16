@@ -518,6 +518,18 @@
         null into an `Option`. `run.sh core`: 3,153 agree, 0 differ; of 93,575 functions the
         lowering carries 93,536, all agree; the other parts 10,992, all agree; 1,799 whole
         documents, all the reference's bytes
+  - [x] Contracts and `defer` (N87, L12), one commit since both leave through `leave`: every
+        `requires` checked first (`contract_check(cond, 0)`), every `ensures` where the
+        function returns — its tail held in `result` (`ensured`), each `return` and `?` —
+        with `result` the held value; a `defer` registered where written (an empty block) and
+        run, last first, where its block is left: after a value block's tail (held in
+        `result`), as a statement block falls through, before a `break` or `continue` leaving
+        the loops it was registered in, and at every return. sema.nz makes `result` one
+        binding of the function's own at the first `ensures`, at its keyword, as the reference
+        allocates it. `run.sh`: core 3,153 agree, 0 differ; of 93,603 functions the lowering
+        carries 93,599, all agree; the other parts 10,992, all agree; 1,828 whole documents,
+        all the reference's bytes. check 3,151 agree, 2 differ (carried 3,147, all agree),
+        render likewise, facts 3,147 agree, 6 differ (carried 3,147, all agree)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
