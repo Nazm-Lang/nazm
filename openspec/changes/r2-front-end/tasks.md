@@ -539,6 +539,15 @@
         agree; 1,832 whole documents, all the reference's bytes. Nothing is stopped: `@derive`
         needed nothing of its own (derived methods are reached through `call_trait`)
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
+  - [x] The budgets measured and set (D26): `check` 7–9 times the reference's time in about its
+        memory, Core IR 13–15 times and 4–5 times; gates at 10× / 1.5× and 16× / 5×. Core IR
+        now reads each function's bindings and captures from an index the checker makes once
+        (`ck_fn_binding`, `ck_fn_capture`) rather than walking every binding per function.
+        `run.sh core` after it: 3,241 agree, 0 differ; of 96,561 functions every one carried,
+        all agree; the other parts 11,310, all agree; 1,885 whole documents, all the
+        reference's bytes
+  - [ ] Per-module output: what it is to be is not written down anywhere (`rewrite-in-nazm`
+        3.3 names it only) — asked of the coordinator
 
 ## 6. R1.5's forms (after the coordinator declares them final)
 
