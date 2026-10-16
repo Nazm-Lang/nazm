@@ -5822,9 +5822,42 @@ fn value_type(c: Ck, e: Int, expected: Int) -> Int {
     let k = check_expr(c, e, expected);
     if k >= 0 { return k; }
     if k == unit() {
-        err(c, "N0300", espan(c, e), "this produces no value",
-                "an `if` used as a value needs an `else`, and a block used as one needs a final expression with no `;` after it");
+        if is_empty_block(c, e) {
+            err(c, "N0300", espan(c, e), "this produces no value",
+                    "`{}` is an empty block here; it is an empty map only where a `Map` is expected, so write the type: `let m: Map[Str, Int] = {}`");
+        } else {
+            err(c, "N0300", espan(c, e), "this produces no value",
+                    "an `if` used as a value needs an `else`, and a block used as one needs a final expression with no `;` after it");
+        }
     }
+    or_int(expected)
+}
+
+// Whether `e` is the block `{}`, with no statement and no final expression (R1.5, D5).
+fn is_empty_block(c: Ck, e: Int) -> Bool {
+    if sx_kind(c.t, e) != tk_tuple() || kind_of(c, e) != "Block" { return false; }
+    let b = sx_kid(c.t, e, 0);
+    ints_len(kids(c, b, "statements")) == 0 && some(c, b, "tail") == false
+}
+
+// `{}` where a `Map[K, V]` is expected (`empty_map`, R1.5, D5): the empty map, `hashmap_new()`
+// checked at the braces' span, which Core IR lowering reads as that call. -1 for any other block,
+// or where nothing, or something other than the standard hash map, is expected.
+fn empty_map(c: Ck, b: Int, expected: Int) -> Int {
+    if expected < 0 { return 0 - 1; }
+    if ints_len(kids(c, b, "statements")) != 0 || some(c, b, "tail") { return 0 - 1; }
+    if index_of_text(show(c, expected), "HashMap[") != 0 { return 0 - 1; }
+    if callee_of(c, "hashmap_new") == 0 - 1 { return 0 - 1; }
+    let span = fld(c, b, "span");
+    let f = fs();
+    fa(f, "qualifier", sx_none(c.t));
+    fa(f, "callee", sx_str(c.t, "hashmap_new"));
+    fa(f, "callee_span", span);
+    fa(f, "type_args", sx_none(c.t));
+    fa(f, "args", mk_list(c.t, ints_new()));
+    fa(f, "span", span);
+    let r = check_again(c, 0 - 1, 0 - 1, mk_struct(c.t, "Call", f), expected);
+    if r >= 0 { return r; }
     or_int(expected)
 }
 
@@ -5852,7 +5885,11 @@ fn check_expr(c: Ck, e: Int, expected: Int) -> Int {
     ss(c, s_unwanted(), 0);
     let k = kind_of(c, e);
     if sx_kind(c.t, e) == tk_tuple() {
-        if k == "Block" { return check_block(c, sx_kid(c.t, e, 0), expected); }
+        if k == "Block" {
+            let em = empty_map(c, sx_kid(c.t, e, 0), expected);
+            if em >= 0 { return em; }
+            return check_block(c, sx_kid(c.t, e, 0), expected);
+        }
         stop(c, cat3("the expression `", k, "`"));
         return or_int(expected);
     }

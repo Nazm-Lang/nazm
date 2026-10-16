@@ -655,12 +655,18 @@ impl Checker<'_> {
             Completion::Value(t) => t,
             Completion::Diverges => expected.unwrap_or(Type::Int),
             Completion::Unit => {
+                // `{}` is an empty map only where a `Map` is expected (R1.5, D5).
+                let empty =
+                    matches!(e, Expr::Block(b) if b.statements.is_empty() && b.tail.is_none());
                 self.errors.push(
                     Diagnostic::error(codes::TYPE_MISMATCH, e.span(), "this produces no value")
-                        .help(
+                        .help(if empty {
+                            "`{}` is an empty block here; it is an empty map only where a `Map` is \
+                             expected, so write the type: `let m: Map[Str, Int] = {}`"
+                        } else {
                             "an `if` used as a value needs an `else`, and a block used as one \
-                         needs a final expression with no `;` after it",
-                        ),
+                         needs a final expression with no `;` after it"
+                        }),
                 );
                 expected.unwrap_or(Type::Int)
             }

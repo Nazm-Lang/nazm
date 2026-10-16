@@ -292,6 +292,54 @@ fn main(out: OutCap): Int ! {io} {
 }
 
 #[test]
+fn an_empty_map_is_braces_where_a_map_is_expected_everywhere() {
+    // R1.5, D5: `{}` is the empty map where a `Map[K, V]` is expected — a typed `let`, an
+    // argument, a field, a result, a `match` arm — and the empty block everywhere else, where a
+    // value wanted of it is refused with help that writes the type.
+    differential::agrees(
+        "struct Tally { counts: Map[Str, Int] }
+
+fn total(m: Map[Str, Int]): Int {
+    let mut n = 0
+    for (k, v) in m.top(10) { n += v }
+    n
+}
+
+fn fresh(): Map[Str, Int] = {}
+
+fn main() {
+    let mut m: Map[Str, Int] = {}
+    m[\"a\"] += 2
+    m[\"b\"] = 3
+    let t = Tally(counts: {})
+    let mut c = t.counts
+    c[\"x\"] = 1
+    let picked: Map[Str, Int] = match m.len() {
+        2 => {},
+        _ => fresh(),
+    }
+    if true {}
+    println(f\"{total(m)} {total({})} {t.counts.len()} {fresh().len()} {picked.len()}\")
+}
+",
+        "5 0 1 0 0\n0",
+    );
+    let codes = differential::codes("fn main() {\n    let m = {}\n    println(m)\n}\n");
+    assert!(codes.iter().any(|c| c == "N0300"), "{codes:?}");
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("p.nz"),
+        "fn main() {\n    let m = {}\n    println(m)\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "p.nz"]);
+    assert!(
+        r.stderr.contains("let m: Map[Str, Int] = {}"),
+        "the help writes the type: {r:?}"
+    );
+}
+
+#[test]
 fn map_without_the_hash_map_names_the_import() {
     // Since D9 the prelude gives a program's module the hash map when it names `Map`; a
     // dependency's module imports only what it writes, so there `Map` still names the import.

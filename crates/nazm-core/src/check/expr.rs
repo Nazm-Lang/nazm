@@ -581,8 +581,36 @@ impl Checker<'_> {
                 }
             }
 
-            Expr::Block(b) => self.check_block(b, expected),
+            Expr::Block(b) => match self.empty_map(b, expected) {
+                Some(t) => Completion::Value(t),
+                None => self.check_block(b, expected),
+            },
         }
+    }
+
+    /// `{}` where a `Map[K, V]` is expected (R1.5, D5): the empty map, `hashmap_new()` checked at
+    /// the braces' span, which Core IR lowering reads as that call. `None` for any other block, or
+    /// where nothing, or something other than the standard hash map, is expected: there `{}` is
+    /// the empty block it always was.
+    fn empty_map(&mut self, b: &Block, expected: Option<Type>) -> Option<Type> {
+        let want = expected?;
+        if !b.statements.is_empty() || b.tail.is_some() {
+            return None;
+        }
+        if !self.show(want).starts_with("HashMap[") {
+            return None;
+        }
+        self.env.get("hashmap_new")?;
+        let call = Expr::Call {
+            qualifier: None,
+            callee: "hashmap_new".to_owned(),
+            callee_span: b.span,
+            type_args: None,
+            args: Vec::new(),
+            span: b.span,
+        };
+        self.res.record_named_method(b.span);
+        self.check_again(&[], &call, expected)
     }
 
     /// An interpolation's hole (R1a, L4, `docs/spec.md`, *String interpolation*): a `Str`, an

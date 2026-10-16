@@ -1,0 +1,20 @@
+// R1.5, D5: `{}` is the empty map where a `Map[K, V]` is expected, the empty block elsewhere.
+struct Tally { counts: Map[Str, Int] }
+
+fn total(m: Map[Str, Int]): Int {
+    m.len()
+}
+
+fn fresh(): Map[Str, Int] = {}
+
+fn main() {
+    let mut m: Map[Str, Int] = {}
+    m["a"] += 2
+    let t = Tally(counts: {})
+    let picked: Map[Str, Int] = match m.len() {
+        1 => {},
+        _ => fresh(),
+    }
+    if true {}
+    println(total(m) + total({}) + t.counts.len() + picked.len())
+}

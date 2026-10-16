@@ -425,6 +425,13 @@ an empty block; an empty map is `hashmap_new()`. Semantic epoch 80; EXPERIMENTAL
 until R1.5 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` under every implementation;
 three mutants, one holding D4's conversions (`UInt64(x)` stays a call, found when D5's first test
 ran).
+**R1.5 (2026-10-16)** · *The empty map `{}`* (`spec.md`, *Shorter forms*; D5). `{}` where a
+`Map[K, V]` is expected — a typed `let`, an argument, a field, a result, a `match` arm — is the
+empty map, `hashmap_new()` checked at the braces; anywhere else it is the empty block, and a
+value wanted of it is refused (`N0300`) with help that writes the type. The front end written
+in Nazm follows (`compiler/sema.nz`, `compiler/core.nz`). Semantic epoch 90; EXPERIMENTAL until
+R1.5 closes. Evidence: `crates/nazm-cli/tests/shorter_forms.rs` under every implementation; two
+mutants.
 
 **R1.5 (2026-10-15)** · *Fields by position, variants without their enum* (`spec.md`, *Shorter
 forms*; R1.5 design D4). `Point(1, 2)`, `Shape.Rect(3, 4)`, `Circle(2)`, `Dot`, and in a pattern

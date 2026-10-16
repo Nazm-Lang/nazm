@@ -63,9 +63,10 @@
 - [x] 6.2 `[1, 2, 3]` is a list by default; a fixed array only where its type says `[Int; 3]`
       — 2026-10-15 (D6): checker (`check_array_literal`), `N0618` for an untyped `[]`, epoch 84,
       tests and corpus migrated by meaning, a breaking change listed; `nazm fix`'s annotation open
-- [ ] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]` — 2026-10-15 (D5): `{"a": 1}` and
-      `Map[K, V]` done (epoch 80), and with D9 they need no `use`; the empty `{}` is still an empty
-      block — an empty map is `hashmap_new()` — until a typed `let m: Map[K, V] = {}` is settled
+- [x] 6.3 Map literals `{}` and `{"a": 1}`, and the name `Map[K, V]` — 2026-10-15 (D5): `{"a": 1}` and
+      `Map[K, V]` done (epoch 80), and with D9 they need no `use`; 2026-10-16: `{}` is the empty
+      map where a `Map[K, V]` is expected and the empty block elsewhere (checker `empty_map`, the
+      Nazm front end following), epoch 90, a test, two mutants
 - [x] 6.4 Short closures `|a, b| a < b`, parameter and result types inferred — 2026-10-15 (D3):
       parser `short_closure`, types from the expected function type, `N0635`, epoch 78
 - [x] 6.5 Positional enum payloads `Circle(2)` and patterns `Circle(r)`; the enum prefix only where
