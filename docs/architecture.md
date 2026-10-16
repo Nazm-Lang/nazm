@@ -5947,6 +5947,24 @@ each export with `<stdint.h>` and `<stdbool.h>` types, in a fixed order. The arc
 stay hidden; only the exports are visible to a C link. One Nazm library per C program: two would
 both carry the runtime. Either backend builds a library, and the header is the same text for both.
 
+**The archive is written by nazm (2026-10-17).** Both static archives — a library's and the runtime
+artifact's (§7.83) — are written by `crates/nazm-cli/src/archive.rs`, not the system's `ar`. The
+cause: Apple's Command Line Tools 27.0 write the symbol index of `ar rcs` and `libtool -static`
+(`__.SYMDEF SORTED`) in an order that varies from run to run, so the same objects archived to
+different bytes (4 variants in 6 builds) and the runtime artifact was no longer reproducible; `ar rcS`,
+with no index, is stable, but `ld64` then refuses the members. The archive is now a function of its
+members' names and bytes alone: for Mach-O members, the BSD format `ld64` reads — `#1/N` names
+padded so every member's bytes are 8-byte aligned, zero dates, owners and groups, mode 644, and an
+index sorted by symbol name, ties by member offset; for ELF, COFF and WebAssembly members, the
+GNU/System V format with a `/` index in member order and a `//` table of long names, which GNU,
+MinGW and LLVM linkers read. Each index holds the member's defined global symbols, read from its own
+symbol table (Mach-O `nlist`, ELF `.symtab`, COFF's table, WebAssembly's `linking` section). Apple's
+`ar` had written an empty index for every non-Mach-O member, so a board's, WebAssembly's and
+Windows' archive now index what they define; `nazm doctor` no longer looks for `ar`. Linking a
+Windows program against its runtime artifact with MinGW then showed the artifact lacked the
+Windows `init` unit (`nz_os_args`, which the entry calls) that a generated runtime carries; the
+artifact now carries it.
+
 **Identity.** An export's symbol enters its function's Core IR and MIR digests and so its unit's
 object key. It is not persisted in the interface: to another Nazm module an export is an ordinary
 function, called by the internal ABI, and its C entry lives in the unit that defines it. Two exports
@@ -7458,7 +7476,8 @@ a generated runtime and the artifact; a mismatched or altered artifact that link
 **As built (N82, 2026-10-03).** As constituted. Three details the code settled: a board's and
 WebAssembly's manifests list only `stack`, since what those runtimes lack is refused by the
 freestanding build itself (N62), and the service check applies to the hosted profile; the archive is
-written with `ZERO_AR_DATE`, so the same runtime archives to the same bytes; an unknown target is
+written with `ZERO_AR_DATE`, so the same runtime archives to the same bytes (since 2026-10-17 nazm
+writes the archive itself, §7.57); an unknown target is
 exit 4, as a missing toolchain is (5 since Q1-C1, a usage error). The falsifier ran: every program in the repository built with a
 generated runtime and with the artifact, on both backends — 228 builds — printed, ended and reported
 memory identically.

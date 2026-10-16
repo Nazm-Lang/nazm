@@ -505,10 +505,6 @@ pub(crate) fn generates(arch: &str) -> bool {
         })
 }
 
-pub(crate) fn run_command(command: &mut Command) -> Outcome {
-    run(command)
-}
-
 fn run(command: &mut Command) -> Outcome {
     match command.output() {
         Ok(o) => Outcome::Ran(o),

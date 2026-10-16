@@ -321,3 +321,176 @@ fn the_provenance_record_names_the_archive_linked() {
             .unwrap();
     assert!(p["runtime"].get("archive").is_none());
 }
+
+/// The archive's symbol index, as (name, member offset), in its order: the BSD `__.SYMDEF SORTED`
+/// on a Mach-O target, the GNU `/` member elsewhere.
+fn archive_index(a: &[u8]) -> Vec<(String, u32)> {
+    assert_eq!(&a[..8], b"!<arch>\n");
+    let u32_at = |at: usize, big: bool| {
+        let b: [u8; 4] = a[at..at + 4].try_into().unwrap();
+        if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        }
+    };
+    let name_at = |at: usize| {
+        let end = a[at..].iter().position(|&b| b == 0).unwrap();
+        String::from_utf8(a[at..at + end].to_vec()).unwrap()
+    };
+    if &a[8..13] == b"#1/20" {
+        assert_eq!(&a[68..84], b"__.SYMDEF SORTED");
+        let body = 88;
+        let size = u32_at(body, false) as usize;
+        let strings = body + 4 + size + 4;
+        (0..size)
+            .step_by(8)
+            .map(|i| {
+                let e = body + 4 + i;
+                (
+                    name_at(strings + u32_at(e, false) as usize),
+                    u32_at(e + 4, false),
+                )
+            })
+            .collect()
+    } else {
+        assert_eq!(&a[8..10], b"/ ");
+        let count = u32_at(68, true) as usize;
+        let mut at = 72 + 4 * count;
+        (0..count)
+            .map(|i| {
+                let name = name_at(at);
+                at += name.len() + 1;
+                (name, u32_at(72 + 4 * i, true))
+            })
+            .collect()
+    }
+}
+
+/// Apple's Command Line Tools 27.0 write `ar`'s symbol index in a varying order, so nazm writes
+/// the archive itself: the same runtime is the same bytes every time, its index sorted (Mach-O)
+/// and naming the members that define each symbol.
+#[test]
+fn the_same_runtime_archives_to_the_same_bytes_ten_times() {
+    let d = setup();
+    artifact(d.path(), "r0", &[]);
+    let first = std::fs::read(d.path().join("r0/libnazmrt.a")).unwrap();
+    for i in 1..10 {
+        let name = format!("r{i}");
+        artifact(d.path(), &name, &[]);
+        let again = std::fs::read(d.path().join(&name).join("libnazmrt.a")).unwrap();
+        assert!(again == first, "build {i} differs from the first");
+    }
+    let index = archive_index(&first);
+    assert!(
+        index.iter().any(|(n, _)| n.ends_with("nz.chan_new")),
+        "{index:?}"
+    );
+    if cfg!(target_os = "macos") {
+        let mut sorted = index.clone();
+        sorted.sort();
+        assert_eq!(index, sorted, "the index is sorted by name, then member");
+    }
+    // Each entry names a member's header.
+    for (_, off) in &index {
+        let off = *off as usize;
+        assert_eq!(&first[off + 58..off + 60], b"`\n", "{off}");
+    }
+}
+
+/// An ELF board's, WebAssembly's and Windows' (COFF) runtime is the GNU format, its index naming
+/// every defined global symbol — MinGW's, LLVM's and GNU linkers find members by it — and the
+/// same bytes twice. Where MinGW-w64 is installed, a Windows program links against the archive.
+#[test]
+fn every_object_format_archives_with_an_index_and_the_same_bytes_twice() {
+    let d = setup();
+    for (target, symbol) in [
+        ("aarch64-unknown-none", "nz.stack_check"),
+        ("wasm32-unknown-unknown", "nz.stack_check"),
+        ("x86_64-pc-windows-gnu", "nz_os_args"),
+    ] {
+        let one = format!("{target}-1");
+        let two = format!("{target}-2");
+        artifact(d.path(), &one, &["--target", target]);
+        artifact(d.path(), &two, &["--target", target]);
+        let a = std::fs::read(d.path().join(&one).join("libnazmrt.a")).unwrap();
+        let b = std::fs::read(d.path().join(&two).join("libnazmrt.a")).unwrap();
+        assert!(a == b, "{target}: two builds differ");
+        let index = archive_index(&a);
+        assert!(
+            index.iter().any(|(n, _)| n == symbol),
+            "{target}: {index:?}"
+        );
+    }
+    const GCC: &str = "x86_64-w64-mingw32-gcc";
+    let mingw = Command::new(GCC)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if crate::common::skip_without(mingw, "no MinGW-w64 gcc on this machine") {
+        return;
+    }
+    let o = nazm(
+        d.path(),
+        &[
+            "build",
+            "--target",
+            "x86_64-pc-windows-gnu",
+            "--runtime",
+            "x86_64-pc-windows-gnu-1",
+            "--objects",
+            "wobj",
+            "p.nz",
+            "-o",
+            "p.exe",
+        ],
+    );
+    assert!(o.status.success(), "{}", text(&o));
+    let link = std::fs::read_to_string(d.path().join("wobj/link.txt")).unwrap();
+    let field = |key: &str| -> Vec<String> {
+        link.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .unwrap_or_else(|| panic!("{link}"))
+            .split(' ')
+            .map(str::to_owned)
+            .collect()
+    };
+    let objects = field("objects ");
+    assert!(objects.iter().any(|o| o.ends_with("libnazmrt.a")), "{link}");
+    let out = Command::new(GCC)
+        .current_dir(d.path().join("wobj"))
+        .arg("-o")
+        .arg("../p.exe")
+        .args(&objects)
+        .args(field("libraries "))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+/// A program for Intel macOS links against its target's archive and runs (under Rosetta on Apple
+/// silicon), as it does with a generated runtime.
+#[test]
+fn an_intel_mac_program_links_against_its_archive_and_runs() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let runs = Command::new("arch")
+        .args(["-x86_64", "/usr/bin/true"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if crate::common::skip_without(runs, "this Mac cannot run x86_64 programs") {
+        return;
+    }
+    let d = setup();
+    artifact(d.path(), "intel", &["--target", "x86_64-apple-darwin"]);
+    let intel = ["--target", "x86_64-apple-darwin"];
+    let with_artifact = built_and_run(
+        d.path(),
+        "pi",
+        &[&intel[..], &["--runtime", "intel"]].concat(),
+    );
+    let generated = built_and_run(d.path(), "pg", &intel);
+    assert_eq!(with_artifact.1, Some(0), "{}", with_artifact.0);
+    assert_eq!(with_artifact, generated);
+}
