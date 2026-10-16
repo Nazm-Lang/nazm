@@ -119,7 +119,7 @@ ignored; N34 ended at 1,773 across 104 with 22 ignored; N33 ended at 1,757 acros
 | 10b | Native object reuse | VERIFIED |
 | 11 | LLVM backend | VERIFIED |
 | 12 | Cranelift backend | VERIFIED (v1, native subset, host) |
-| 12a | Nazm's own code generator (`--backend nazm`, R9) | EXPERIMENTAL — macOS aarch64 and x86_64 (under Rosetta) only before 1.0; every input of its differential suite agrees with LLVM, failures unwinding as LLVM's (`architecture.md` §7.116) |
+| 12a | Nazm's own code generator (`--backend nazm`, R9) | EXPERIMENTAL — macOS aarch64 and x86_64 (under Rosetta) before 1.0; every input of its differential suite agrees with LLVM, failures unwinding as LLVM's (`architecture.md` §7.116). `x86_64-pc-windows-gnu` (R9 section 8: PE/COFF, Windows x64's convention, `.pdata`/`.xdata`, the failure bit as LLVM keeps it there) is **compile- and link-verified only**: `toolchain/codegen/tests/coff.sh`, 120 of 120 inputs structurally sound against LLVM's objects and linked by MinGW-w64; never run — no Windows host answered |
 | 13 | Runtime | VERIFIED (v1 contract; a built, versioned, verified artifact, N82; M:N tasks on bounded workers by default, N106) — no allocator of its own, runtime still text |
 | 14 | Structured concurrency | VERIFIED |
 | 15 | Advanced scheduler | VERIFIED as scoped (N83; the default since N106): an M:N pool, run on macOS aarch64 and x86-64 and on Linux aarch64; no stealing or preemption |

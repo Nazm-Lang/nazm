@@ -304,6 +304,305 @@ fn the_generators_own_programs_agree_with_llvm_on_x86_64_under_rosetta() {
     assert!(differ.is_empty(), "{differ:#?}");
 }
 
+/// The generator's own programs built for `x86_64-pc-windows-gnu` (its section 8): every unit
+/// object is PE/COFF for AMD64 with a `.pdata` entry per function, and MinGW-w64 links each
+/// program as its `link.txt` says, C beside it included. Compile- and link-verified only: running
+/// them is `scripts/windows-host.sh` with `BACKEND=nazm`, on a Windows host no test reaches.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn the_generators_own_programs_build_for_windows_and_link_with_mingw() {
+    const GCC: &str = "x86_64-w64-mingw32-gcc";
+    let mingw = Command::new(GCC)
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if common::skip_without(mingw, "no MinGW-w64 gcc on this machine") {
+        return;
+    }
+    let nzcg = differential::nzcg();
+    let work = tempfile::tempdir().unwrap();
+    let programs = nz_in(&repo().join("toolchain/codegen/tests/programs"));
+    assert!(programs.len() > 15, "{programs:?}");
+    let mut failed = Vec::new();
+    for src in &programs {
+        let name = src.file_stem().unwrap().to_string_lossy().into_owned();
+        let w = work.path().join(&name);
+        std::fs::create_dir_all(&w).unwrap();
+        let mut args: Vec<String> = vec![
+            "build".into(),
+            "--no-cache".into(),
+            "--backend".into(),
+            "nazm".into(),
+            "--target".into(),
+            "x86_64-pc-windows-gnu".into(),
+        ];
+        let c = src.with_extension("c");
+        if c.is_file() {
+            let o = w.join("c.o");
+            let r = run_bounded(Command::new(GCC).arg("-c").arg(&c).arg("-o").arg(&o), GCC);
+            assert_eq!(r.code, Some(0), "{name}: {}", r.stderr);
+            args.extend(["--link".to_owned(), o.display().to_string()]);
+        }
+        args.extend([
+            "--objects".to_owned(),
+            "o".to_owned(),
+            src.display().to_string(),
+        ]);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let b = nazm_with(&w, nzcg, &args);
+        if b.code != Some(0) {
+            failed.push(format!("{name}: does not build: {}", b.stderr));
+            continue;
+        }
+        let o = w.join("o");
+        let link = std::fs::read_to_string(o.join("link.txt")).unwrap();
+        let field = |key: &str| {
+            link.lines()
+                .find_map(|l| l.strip_prefix(key))
+                .unwrap_or("")
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        let objects = field("objects ");
+        for obj in objects.iter().filter(|f| {
+            let s = f.trim_end_matches(".o");
+            s.rsplit_once('-')
+                .is_some_and(|(_, k)| k.starts_with(['m', 'g']))
+        }) {
+            let bytes = std::fs::read(o.join(obj)).unwrap();
+            // IMAGE_FILE_MACHINE_AMD64, and a `.pdata` section name among the headers.
+            let pdata = bytes
+                .windows(8)
+                .take(20 + 40 * 16)
+                .any(|x| x == b".pdata\0\0");
+            if bytes.get(..2) != Some(&[0x64, 0x86][..]) || !pdata {
+                failed.push(format!("{name}: {obj} is not an AMD64 object with .pdata"));
+            }
+        }
+        let r = run_bounded(
+            Command::new(GCC)
+                .current_dir(&o)
+                .args(&objects)
+                .args(field("libraries "))
+                .arg("-o")
+                .arg("p.exe"),
+            GCC,
+        );
+        if r.code != Some(0) {
+            failed.push(format!("{name}: does not link: {}", r.stderr));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// Each function's prologue as Windows's unwinder must read it, from its code (MinGW-w64
+/// `objdump -d`): its start, the prologue's size, and its steps last first — `pc+0xOFF: push REG`
+/// or `pc+0xOFF: alloc 0xN` — as `objdump -x` prints UNWIND_INFO.
+fn prologues(dis: &str) -> Vec<(u64, u64, Vec<String>)> {
+    let mut out = Vec::new();
+    let mut insns: Vec<(u64, String)> = Vec::new();
+    let flush = |insns: &mut Vec<(u64, String)>, out: &mut Vec<(u64, u64, Vec<String>)>| {
+        let Some(&(start, _)) = insns.first() else {
+            return;
+        };
+        let mut steps = Vec::new();
+        let mut k = 0;
+        let end = |k: usize| insns.get(k + 1).map_or(0, |n| n.0 - start);
+        while let Some((_, text)) = insns.get(k) {
+            let (op, args) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+            let args: Vec<&str> = args.trim().split(',').collect();
+            match (op, args.as_slice()) {
+                ("push", [r]) => steps.push(format!("pc+0x{:02x}: push {}", end(k), &r[1..])),
+                ("mov", ["%rsp", "%rbp"]) => {}
+                ("sub", [n, "%rsp"]) if n.starts_with('$') => {
+                    steps.push(format!("pc+0x{:02x}: alloc {n}", end(k)));
+                }
+                ("mov", [n, "%eax"])
+                    if insns.get(k + 2).is_some_and(|x| x.1.contains("%rax,%rsp")) =>
+                {
+                    k += 2;
+                    steps.push(format!("pc+0x{:02x}: alloc {n}", end(k)));
+                }
+                _ => break,
+            }
+            k += 1;
+        }
+        let size = insns.get(k).map_or(0, |x| x.0 - start);
+        steps.reverse();
+        out.push((start, size, steps));
+        insns.clear();
+    };
+    for line in dis.lines() {
+        if line.ends_with(">:") {
+            flush(&mut insns, &mut out);
+        } else if let Some((a, t)) = line.trim_start().split_once(":\t") {
+            if let Ok(a) = u64::from_str_radix(a, 16) {
+                insns.push((a, t.to_owned()));
+            }
+        }
+    }
+    flush(&mut insns, &mut out);
+    out
+}
+
+/// Each UNWIND_INFO MinGW-w64's `objdump -x` reads back: the function's start, the prologue's
+/// size, and its codes as `prologues` writes them.
+fn unwind_infos(dump: &str) -> Vec<(u64, u64, Vec<String>)> {
+    let mut out: Vec<(u64, u64, Vec<String>)> = Vec::new();
+    let mut on = false;
+    for line in dump.lines() {
+        if line.starts_with("Dump of .xdata") {
+            on = true;
+        } else if on && line.contains("(rva: ") {
+            let begin = line.split("): ").nth(1).and_then(|r| r.split(" - ").next());
+            let begin = begin.and_then(|b| u64::from_str_radix(b.trim(), 16).ok());
+            out.push((begin.unwrap_or(u64::MAX), 0, Vec::new()));
+        } else if let (true, Some(e)) = (on, out.last_mut()) {
+            let l = line.trim();
+            if let Some(s) = l.split("Prologue size: 0x").nth(1) {
+                e.1 = u64::from_str_radix(s.split(',').next().unwrap_or(""), 16).unwrap_or(0);
+            } else if l.starts_with("pc+") {
+                let (at, what) = l.split_once(": ").unwrap_or((l, ""));
+                if let Some(n) = what
+                    .strip_prefix("alloc ")
+                    .and_then(|w| w.split("rsp - ").nth(1))
+                {
+                    e.2.push(format!("{at}: alloc ${n}"));
+                } else {
+                    e.2.push(format!("{at}: {what}"));
+                }
+            } else if l.is_empty() || l.starts_with("Sections") {
+                on = !l.starts_with("Sections");
+            }
+        }
+    }
+    out
+}
+
+/// Windows x64's convention and unwind tables in the objects the generator writes for
+/// `x86_64-pc-windows-gnu` (its section 8), read from MinGW-w64's `objdump`: a callee takes its
+/// first four arguments from rcx, xmm1 (a float in the second position), r8 and r9 and the fifth
+/// from above the caller's 32 bytes of shadow space; no xmm6–xmm15 is touched (callee-saved
+/// there); a function using rsi or rdi pushes it; a frame of a page or more is probed by
+/// `___chkstk_ms`; and every function's UNWIND_INFO says exactly what its prologue does.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn the_windows_objects_keep_the_win64_convention_and_describe_every_frame() {
+    let objdump = Command::new("x86_64-w64-mingw32-objdump")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if common::skip_without(objdump, "no MinGW-w64 objdump on this machine") {
+        return;
+    }
+    let nzcg = differential::nzcg();
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("conv.nz"),
+        "fn five(a: Int, b: Float64, c: Int, d: Int, e: Int) -> Int {\n    \
+         let x = b + 1.5\n    if x > 2.0 { a + c + d + e } else { a - c }\n}\n\n\
+         fn big_frame(n: Int) -> Int {\n    let a: [Int; 2000] = [0; 2000]\n    \
+         let mut b = a\n    let mut i = 0\n    while i < 2000 {\n        b[i] = i * n\n        \
+         i += 1\n    }\n    b[1999] + b[3] + a[5]\n}\n\n\
+         fn main() -> Int {\n    five(1, 2.5, 3, 4, 5) + big_frame(7) - 20\n}\n",
+    )
+    .unwrap();
+    let r = nazm_with(
+        d.path(),
+        nzcg,
+        &[
+            "build",
+            "--no-cache",
+            "--backend",
+            "nazm",
+            "--target",
+            "x86_64-pc-windows-gnu",
+            "--objects",
+            "o",
+            "conv.nz",
+        ],
+    );
+    assert_eq!(r.code, Some(0), "{r:?}");
+    let obj = d.path().join("o/00-m0.o");
+    let dump = |flag: &str| {
+        let r = run_bounded(
+            Command::new("x86_64-w64-mingw32-objdump")
+                .args([flag, "--no-show-raw-insn"])
+                .arg(&obj),
+            "objdump",
+        );
+        assert_eq!(r.code, Some(0), "{r:?}");
+        r.stdout
+    };
+    let dis = dump("-dr");
+    let five: String = dis
+        .split("<nz.m.conv_2Enz.five>:")
+        .nth(1)
+        .unwrap()
+        .lines()
+        .take(18)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for want in [
+        "mov    %rcx,",
+        "movq   %xmm1,%rax",
+        "mov    %r8,",
+        "mov    %r9,",
+        "mov    0x30(%rbp),%rax",
+    ] {
+        assert!(
+            five.contains(want),
+            "`{want}` not in five's prologue:\n{five}"
+        );
+    }
+    for x in 6..16 {
+        assert!(
+            !dis.contains(&format!("%xmm{x}")),
+            "xmm{x} is touched:\n{dis}"
+        );
+    }
+    for f in dis.split(">:\n").skip(1) {
+        let body = f.split("\n\n").next().unwrap_or(f);
+        for r in ["%rsi", "%rdi"] {
+            if body.contains(r) {
+                let prologue: String = body.lines().take(10).collect::<Vec<_>>().join("\n");
+                assert!(
+                    prologue.contains(&format!("push   {r}")),
+                    "{r} used, not saved:\n{body}"
+                );
+            }
+        }
+    }
+    // `big_frame`'s array lives in a frame of its own (`nz.l.frame.N`), probed page by page.
+    assert!(
+        dis.contains("IMAGE_REL_AMD64_REL32\t___chkstk_ms"),
+        "no frame is probed:\n{dis}"
+    );
+    // Each RUNTIME_FUNCTION: its start and end in `.text`, its UNWIND_INFO in `.xdata`.
+    let rel = dump("-r");
+    let pdata: Vec<&str> = rel
+        .split("RELOCATION RECORDS FOR [.pdata]:")
+        .nth(1)
+        .unwrap_or("")
+        .lines()
+        .filter(|l| l.contains("IMAGE_REL_AMD64_ADDR32NB"))
+        .collect();
+    assert!(pdata.len() >= 12, "{rel}");
+    for l in &pdata {
+        let at = u64::from_str_radix(l.split_whitespace().next().unwrap(), 16).unwrap();
+        let to = if at % 12 == 8 { ".xdata" } else { ".text" };
+        assert!(l.trim_end().ends_with(to), "{l}");
+    }
+    let code = prologues(&dump("-d"));
+    let infos = unwind_infos(&dump("-x"));
+    assert!(code.len() >= 4, "{code:?}");
+    assert_eq!(code.len(), infos.len(), "{code:?}\n{infos:?}");
+    for p in &code {
+        assert!(infos.contains(p), "{p:?} not among {infos:#?}");
+    }
+}
+
 /// A stand-in generator: a shell script that records its arguments and its input, then runs the
 /// real one, or does what `body` says.
 fn fake(dir: &Path, body: &str) -> PathBuf {

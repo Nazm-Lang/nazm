@@ -195,3 +195,44 @@
       N0300); `cmp ne ptr`; writable data holding addresses (a static's cell holds none);
       runtime calls returning `i8`, `i16` or `i128` or with stack arguments; and `loc`, which
       only `--debug` prints (`tests/lines.sh` covers it)
+
+## 8. Windows x86_64 (`x86_64-pc-windows-gnu`, before 1.0: R8 replaces Cranelift, which builds it; design D16)
+
+- [x] 8.1 The PE/COFF relocatable writer, AMD64 (`coff.nz`): `.text`, `.data`, `.rdata`, `.xdata`,
+      `.pdata`, `.drectve` (`-exclude-symbols:` per hidden definition, as LLVM writes) and the DWARF
+      sections; section symbols with their auxiliary records, a string table for long names
+      (`/N` section names), `NRELOC_OVFL` past 65,535 relocations; `REL32` (an import addressed
+      directly: no GOT), `ADDR64`, `ADDR32NB` (`.pdata`), `SECREL` (DWARF offsets), addends in
+      place. Objects MinGW-w64's `ld` links
+- [x] 8.2 Windows x64's convention in the x86-64 selection: four positions (rcx, rdx, r8, r9 or
+      xmm0–xmm3), then the stack above 32 bytes of shadow space; an `i128` two positions, split
+      between r9 and the stack as LLVM splits it for this triple; results and the failure bit as
+      LLVM returns `{T, i1}` here (rax, rax:rdx, xmm0; the bit in the next register); rsi and rdi
+      pushed when the allocator uses them and xmm4/xmm5 as the scratch pair (xmm6–xmm15 are
+      callee-saved); a frame of 4096 bytes or more allocated through `___chkstk_ms`
+      (`mov eax, N; call; sub rsp, rax`), as LLVM probes for MinGW. The other targets' bytes are
+      unchanged: the generator before and after writes identical objects for 156 inputs on
+      aarch64-apple-darwin, x86_64-apple-darwin and x86_64-unknown-linux-gnu
+- [x] 8.3 Unwind tables: an UNWIND_INFO in `.xdata` (version 1, the prologue's pushes and its
+      allocation, small or large, no frame register — rsp is fixed after the prologue) and a
+      RUNTIME_FUNCTION in `.pdata` for every function; the epilogue in the form Windows's unwinder
+      recognises (`add rsp`, pops, `ret`). Failures keep the bit, as hosted LLVM does on Windows
+      (`Target::failures`): no `nz.raise`, personality or LSDA there, so a unit links with LLVM's
+      units and runtime objects alike. LLVM gives no entry to a frameless leaf; every function
+      here has a frame and an entry
+- [x] 8.4 `tests/coff.sh`: every input of `run.sh` built for
+      `x86_64-pc-windows-gnu`, each unit object compared with LLVM's (same global symbols, every
+      local function, relocation kinds and symbols, imports, a RUNTIME_FUNCTION per function with
+      its UNWIND_INFO read back and every function LLVM's gives one among them, `llvm-dwarfdump
+      --verify` and every line row of LLVM's), written twice the same, and the program linked with
+      `x86_64-w64-mingw32-gcc` as link.txt says: **120 structurally sound and linked, 0 not,
+      0 refused, 0 skipped** (2026-10-16). `nazm build --backend nazm --target
+      x86_64-pc-windows-gnu` is carried (`nazm_codegen_nazm::carries`); `nazm_backend.rs` gains
+      `the_generators_own_programs_build_for_windows_and_link_with_mingw` and
+      `the_windows_objects_keep_the_win64_convention_and_describe_every_frame` (arguments, shadow
+      space, xmm6–xmm15 untouched, rsi/rdi saved, `___chkstk_ms`, each UNWIND_INFO against its
+      prologue, `.pdata`'s relocations). Mutants `r9-8-…` (eight), applied by hand, killed,
+      restored. **Compile- and link-verified only**
+- [ ] 8.5 Run on a Windows host: `BACKEND=nazm scripts/windows-host.sh` (each program's output,
+      error output and exit status against the native build). Open: the Windows host (`win-dell`)
+      did not answer on 2026-10-16, so nothing built by the generator for Windows has run

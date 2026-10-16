@@ -9347,8 +9347,9 @@ optional field `nazm.provenance/1` gained for it, and a tool of the SBOM's); `na
 --backend nazm` profiles the program as it builds it, its samples attributed by its line tables.
 
 **Refusals, and no fallback.** Before anything is compiled: a target the generator does not carry
-before 1.0 — anything but `aarch64-apple-darwin` and `x86_64-apple-darwin` (its D13) — is refused
-(exit 5), and so is a generator that is not there (exit 4, naming the path looked at). After: the
+before 1.0 — anything but `aarch64-apple-darwin`, `x86_64-apple-darwin` (its D13) and
+`x86_64-pc-windows-gnu` (its D16, section 8, 2026-10-16: PE/COFF and Windows x64's convention,
+compile- and link-verified, not yet run) — is refused (exit 5), and so is a generator that is not there (exit 4, naming the path looked at). After: the
 generator's exit status 3, one `nzcg: refused: …` line per construct, is one `N0101` per line,
 naming the construct, with nothing written; any other failure is `N0900`, a compiler defect, with
 the generator's own words. Neither falls back to another backend.
@@ -9357,7 +9358,9 @@ the generator's own words. Neither falls back to another backend.
 its D14, task 7.5): `fail` calls a forced unwind under the C personality, a call whose failure edge
 has work has a landing pad — the edge's own block — and every plain entry lands the unwind. Its
 `nz.raise` and stop function are local to each unit, and its exception object lives in `nz.raise`'s
-frame, so it needs no thread-local storage; objects of the two backends link into one program.
+frame, so it needs no thread-local storage; objects of the two backends link into one program. On
+`x86_64-pc-windows-gnu` it keeps the failure bit, as LLVM does there (no unwinder this compiler
+uses), with a `.pdata`/`.xdata` entry per function for the platform's own unwinder.
 
 **Evidence.** `crates/nazm-cli/tests/nazm_backend.rs`: every input of the generator's differential
 suite (`toolchain/codegen/tests/run.sh`'s 117) built with `--backend nazm` behaves as the LLVM build —
