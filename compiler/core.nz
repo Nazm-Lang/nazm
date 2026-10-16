@@ -52,6 +52,15 @@ struct Lo {
     last: Ints,
     // Every module's identity, for the durable names.
     idents: Strs,
+    // The `defer` bodies registered in the blocks being lowered, innermost last, each with how
+    // many loops enclosed it (R1b, L12).
+    dbody: Ints,
+    dloop: Ints,
+    // The function's `ensures` clauses (N87): each expression and clause; the binding `result`
+    // is and the local a return site holds it in (-1 for none).
+    ens: Ints,
+    ensp: Ints,
+    rres: Ints,
 }
 
 fn co_nl() -> Str { str_from_byte(10) }
@@ -60,6 +69,8 @@ fn co_s_fn() -> Int { 0 }
 fn co_s_module() -> Int { 1 }
 fn co_s_base() -> Int { 2 }
 fn co_s_loops() -> Int { 3 }
+// Set while the function's own body is about to be lowered: its tail is `ensured`.
+fn co_s_top() -> Int { 4 }
 
 fn co_g(lo: Lo, slot: Int) -> Int { ints_get(lo.st, slot) }
 fn co_sv(lo: Lo, slot: Int, v: Int) -> Int {
@@ -416,10 +427,13 @@ pub fn cr_function(f: Facts, i: Int) -> Str {
     }
     let lo = Lo(f: f, c: c, t: fx_tree(f), st: ints_new(), stop: strs_new(), lb: ints_new(), lname: strs_new(), lty: ints_new(), lorig: strs_new(),
             lat: strs_new(), lshr: ints_new(), ckey: strs_new(), cty: strs_new(), cval: strs_new(), cstatic: strs_new(), targets: ints_new(), ofirst: ints_new(), owned: ints_new(),
-            last: ints_new(), idents: idents);
+            last: ints_new(), idents: idents, dbody: ints_new(), dloop: ints_new(), ens: ints_new(), ensp: ints_new(), rres: ints_new());
+    ints_push(lo.rres, 0 - 1);
+    ints_push(lo.rres, 0 - 1);
     ints_push(lo.st, i);
     ints_push(lo.st, ck_fn_module(c, i));
     ints_push(lo.st, fx_module_base(f, ck_fn_module(c, i)));
+    ints_push(lo.st, 0);
     ints_push(lo.st, 0);
     ints_push(lo.last, 0 - 1);
     ints_push(lo.last, 0);
@@ -439,7 +453,6 @@ fn co_function(lo: Lo, i: Int) -> Str {
         body_node = sx_field(t, node, "body");
     } else {
         if sx_is_some(t, sx_field(t, node, "body")) == false { return co_stopped(lo, "a function without a body"); }
-        if ints_len(sx_items(t, sx_field(t, node, "contracts"))) > 0 { return co_stopped(lo, "a contract"); }
         body_node = sx_unwrap(t, sx_field(t, node, "body"));
     }
     if ck_fn_required(c, i) < 0 { return co_stopped(lo, "a function whose effects were not settled"); }
@@ -474,7 +487,33 @@ fn co_function(lo: Lo, i: Int) -> Str {
         }
         b = b + 1;
     }
-    let body = co_value_block_in(lo, body_node, seed);
+    // Contracts (N87, §7.88): every `requires` checked first, then the body; every `ensures`
+    // where it returns — its tail, each `return` and each `?` (`leave`).
+    let checks = strs_new();
+    if closure == false {
+        let cs = sx_items(t, sx_field(t, node, "contracts"));
+        ints_set(lo.rres, 0, ck_fn_result_binding(c, i));
+        let mut q = 0;
+        while q < ints_len(cs) {
+            let ct = ints_get(cs, q);
+            if sx_text(t, sx_field(t, ct, "kind")) == "Ensures" {
+                ints_push(lo.ens, sx_field(t, ct, "expr"));
+                ints_push(lo.ensp, sx_field(t, ct, "span"));
+            }
+            q = q + 1;
+        }
+        q = 0;
+        while q < ints_len(cs) {
+            let ct = ints_get(cs, q);
+            if sx_text(t, sx_field(t, ct, "kind")) == "Requires" {
+                let cond = co_expr(lo, sx_field(t, ct, "expr"));
+                strs_push(checks, co_eval(co_contract_check(lo, cond, 0, sx_field(t, ct, "span"))));
+            }
+            q = q + 1;
+        }
+    }
+    co_sv(lo, co_s_top(), 1);
+    let body = co_value_block_pre(lo, body_node, seed, checks);
     if co_halted(lo) { return ""; }
     let f = lo.f;
     let declared = ck_fn_declared(c, i);
@@ -846,6 +885,8 @@ fn co_abs_e(lo: Lo, span: Int) -> Int { sx_e(lo.t, span) + co_g(lo, co_s_base())
 // The local the name written at `span` is, or -1 having stopped.
 fn co_local_at(lo: Lo, span: Int) -> Int {
     let b = ck_binding_at(lo.c, co_abs_s(lo, span), co_abs_e(lo, span));
+    // `result` in an `ensures` clause is the value this return site holds (N87).
+    if b >= 0 && b == ints_get(lo.rres, 0) && ints_get(lo.rres, 1) >= 0 { return ints_get(lo.rres, 1); }
     if b < 0 {
         co_halt(lo, "a name that is no binding");
         return 0;
@@ -941,7 +982,10 @@ fn co_value_block_in(lo: Lo, b: Int, seed: Ints) -> Str { co_value_block_pre(lo,
 
 fn co_value_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
     let t = lo.t;
+    let top = co_g(lo, co_s_top()) == 1;
+    co_sv(lo, co_s_top(), 0);
     co_open_seeded(lo, seed);
+    let mark = ints_len(lo.dbody);
     let stmts = strs_new();
     co_push_all(stmts, prefix);
     let transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
@@ -951,13 +995,175 @@ fn co_value_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
         if sx_is_some(t, sx_field(t, b, "tail")) {
             tail = co_expr(lo, sx_unwrap(t, sx_field(t, b, "tail")));
             ty = co_last_ty(lo);
+            // What this block deferred runs after its value is computed (L12).
+            if ints_len(lo.dbody) > mark && co_halted(lo) == false {
+                let mut held_ty = ty;
+                if held_ty < 0 { held_ty = ck_t_int(); }
+                let span = sx_field(t, b, "span");
+                let held = co_temp(lo, "result", held_ty, span);
+                strs_push(stmts, co_let(held, tail));
+                co_push_all(stmts, co_deferred_since(lo, mark));
+                tail = co_read(lo, held, span);
+                ty = held_ty;
+            }
         } else {
             co_halt(lo, "a block whose value is wanted with no final expression");
         }
     }
+    co_truncate_defers(lo, mark);
     let owns = co_close_region(lo);
+    if top && tail != "null" && ints_len(lo.ens) > 0 { tail = co_ensured(lo, tail); }
     co_set_last(lo, ty, transfers);
     co_block_json(lo, transfers, owns, stmts, tail, sx_field(t, b, "span"))
+}
+
+fn co_truncate_defers(lo: Lo, mark: Int) -> Int {
+    while ints_len(lo.dbody) > mark {
+        ints_pop(lo.dbody);
+        ints_pop(lo.dloop);
+    }
+    0
+}
+
+// The `defer` bodies registered since `mark`, last first, each lowered where it runs: a block
+// statement (`deferred_since`). A body runs without the defers registered at or after its own.
+fn co_deferred_since(lo: Lo, mark: Int) -> Strs {
+    let bodies = ints_new();
+    let mut i = ints_len(lo.dbody) - 1;
+    while i >= mark {
+        ints_push(bodies, ints_get(lo.dbody, i));
+        i = i - 1;
+    }
+    let saved_b = ints_new();
+    let saved_l = ints_new();
+    i = 0;
+    while i < ints_len(lo.dbody) {
+        ints_push(saved_b, ints_get(lo.dbody, i));
+        ints_push(saved_l, ints_get(lo.dloop, i));
+        i = i + 1;
+    }
+    co_truncate_defers(lo, 0);
+    let out = strs_new();
+    i = 0;
+    while i < ints_len(bodies) {
+        let block = co_statement_block(lo, ints_get(bodies, i));
+        let transfers = co_last_transfers(lo);
+        let o = strs_new();
+        strs_push(o, co_op_first("block"));
+        strs_push(o, co_field("body", block));
+        strs_push(o, co_field("ends", co_ends(transfers)));
+        strs_push(out, co_object(o));
+        i = i + 1;
+    }
+    co_truncate_defers(lo, 0);
+    i = 0;
+    while i < ints_len(saved_b) {
+        ints_push(lo.dbody, ints_get(saved_b, i));
+        ints_push(lo.dloop, ints_get(saved_l, i));
+        i = i + 1;
+    }
+    out
+}
+
+// `leave` — a `break` or `continue`, printed — after the defers registered inside the loops it
+// leaves: those registered while `loops` loops, or more, enclosed them (`through_defers`).
+fn co_through_defers(lo: Lo, loops: Int, leave: Str, span: Int) -> Str {
+    let mut mark = 0;
+    while mark < ints_len(lo.dloop) && ints_get(lo.dloop, mark) < loops { mark = mark + 1; }
+    if mark == ints_len(lo.dbody) { return leave; }
+    let stmts = co_deferred_since(lo, mark);
+    strs_push(stmts, leave);
+    let o = strs_new();
+    strs_push(o, co_op_first("block"));
+    strs_push(o, co_field("body", co_block_json(lo, true, "[]", stmts, "null", span)));
+    strs_push(o, co_field("ends", co_ends(true)));
+    co_set_last(lo, 0 - 1, true);
+    co_object(o)
+}
+
+// Leave the function with `value` (`leave`, N87, L12): a `return`, after every pending `defer`
+// and every `ensures` clause; with neither, a `return` as it always was.
+fn co_leave(lo: Lo, value: Str, span: Int) -> Str {
+    if ints_len(lo.ens) == 0 && ints_len(lo.dbody) == 0 {
+        let o = strs_new();
+        strs_push(o, co_op_first("return"));
+        strs_push(o, co_field("value", value));
+        strs_push(o, co_field("ends", co_ends(true)));
+        strs_push(o, co_field("at", json_str(co_tree_span(lo, span))));
+        co_set_last(lo, 0 - 1, true);
+        return co_object(o);
+    }
+    let ty = ck_fn_ret_ty(lo.c, co_g(lo, co_s_fn()));
+    let held = co_temp(lo, "result", ty, span);
+    let stmts = strs_new();
+    strs_push(stmts, co_let(held, value));
+    co_push_all(stmts, co_deferred_since(lo, 0));
+    co_push_all(stmts, co_postconditions(lo, held));
+    let r = strs_new();
+    strs_push(r, co_op_first("return"));
+    strs_push(r, co_field("value", co_read(lo, held, span)));
+    strs_push(r, co_field("ends", co_ends(true)));
+    strs_push(r, co_field("at", json_str(co_tree_span(lo, span))));
+    strs_push(stmts, co_object(r));
+    let o = strs_new();
+    strs_push(o, co_op_first("block"));
+    strs_push(o, co_field("body", co_block_json(lo, true, co_list_one(int_to_str(held)), stmts, "null", span)));
+    strs_push(o, co_field("ends", co_ends(true)));
+    co_set_last(lo, 0 - 1, true);
+    co_object(o)
+}
+
+// The body's tail, once every `ensures` clause holds of it (`ensured`): held in `result` at
+// the tail's own place.
+fn co_ensured(lo: Lo, tail: Str) -> Str {
+    let ty = ck_fn_ret_ty(lo.c, co_g(lo, co_s_fn()));
+    let at = co_at_of(tail);
+    let held = co_local(lo, 0 - 1, "result", ty, 0 - 1, "temp result", json_unquote(at));
+    let stmts = strs_new();
+    strs_push(stmts, co_let(held, tail));
+    co_push_all(stmts, co_postconditions(lo, held));
+    let tyj = json_str(co_durable(lo, ty));
+    let read = str_concat(str_concat(str_concat(str_concat(str_concat(str_concat("{\"op\":\"local\",\"local\":", int_to_str(held)), ",\"type\":"), tyj), ",\"at\":"), at), "}");
+    let b = strs_new();
+    strs_push(b, co_field_first("ends", co_ends(false)));
+    strs_push(b, co_field("owns", co_list_one(int_to_str(held))));
+    strs_push(b, co_field("stmts", co_list(stmts)));
+    strs_push(b, co_field("tail", read));
+    strs_push(b, co_field("at", at));
+    let o = strs_new();
+    strs_push(o, co_op_first("block"));
+    strs_push(o, co_field("body", co_object(b)));
+    strs_push(o, co_field("type", tyj));
+    strs_push(o, co_field("at", at));
+    co_object(o)
+}
+
+// A JSON string's text, its quotes removed (a span's text needs no unescaping).
+fn json_unquote(s: Str) -> Str {
+    if str_len(s) < 2 { return s; }
+    str_slice(s, 1, str_len(s) - 1)
+}
+
+// Each `ensures` clause, checked with `result` the value `held` holds (`postconditions`).
+fn co_postconditions(lo: Lo, held: Int) -> Strs {
+    let out = strs_new();
+    let saved = ints_get(lo.rres, 1);
+    ints_set(lo.rres, 1, held);
+    let mut i = 0;
+    while i < ints_len(lo.ens) {
+        let cond = co_expr(lo, ints_get(lo.ens, i));
+        strs_push(out, co_eval(co_contract_check(lo, cond, 1, ints_get(lo.ensp, i))));
+        i = i + 1;
+    }
+    ints_set(lo.rres, 1, saved);
+    out
+}
+
+// A clause's check (`contract_check`): `contract_check(cond, which)`, 0 for a precondition and
+// 1 for a postcondition, at the clause.
+fn co_contract_check(lo: Lo, cond: Str, which: Int, span: Int) -> Str {
+    let w = co_int_const(lo, which, span);
+    co_builtin(lo, "contract_check", "[]", str_concat(str_concat(cond, ","), w), ck_t_int(), span)
 }
 
 // A region whose value is not wanted (`statement_block`): its tail, if written, a statement.
@@ -976,11 +1182,15 @@ fn co_statement_block_pre(lo: Lo, b: Int, seed: Ints, prefix: Strs) -> Str {
         strs_push(stmts, strs_get(prefix, p));
         p = p + 1;
     }
+    let mark = ints_len(lo.dbody);
     let mut transfers = co_statements(lo, sx_items(t, sx_field(t, b, "statements")), stmts);
     if transfers == false && sx_is_some(t, sx_field(t, b, "tail")) {
         strs_push(stmts, co_effect(lo, sx_unwrap(t, sx_field(t, b, "tail"))));
         transfers = co_last_transfers(lo);
     }
+    // What this block deferred runs as it falls through (L12).
+    if transfers == false && ints_len(lo.dbody) > mark { co_push_all(stmts, co_deferred_since(lo, mark)); }
+    co_truncate_defers(lo, mark);
     let owns = co_close_region(lo);
     co_set_last(lo, 0 - 1, transfers);
     co_block_json(lo, transfers, owns, stmts, "null", sx_field(t, b, "span"))
@@ -1025,7 +1235,7 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
         strs_push(o, co_field("ends", co_ends(true)));
         strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, s, "span")))));
         co_set_last(lo, 0 - 1, true);
-        return co_object(o);
+        return co_through_defers(lo, ints_len(lo.targets), co_object(o), sx_field(t, s, "span"));
     }
     if sx_kind(t, s) != tk_tuple() { return co_stopped_stmt(lo, str_concat("the statement ", k)); }
     let n = sx_kid(t, s, 0);
@@ -1141,12 +1351,17 @@ fn co_stmt(lo: Lo, s: Int) -> Str {
     }
     if k == "Return" {
         let value = co_expr(lo, sx_field(t, n, "value"));
+        return co_leave(lo, value, sx_field(t, n, "span"));
+    }
+    // Registered, and run where its block is left (L12): nothing happens here.
+    if k == "Defer" {
+        ints_push(lo.dbody, sx_field(t, n, "body"));
+        ints_push(lo.dloop, ints_len(lo.targets));
         let o = strs_new();
-        strs_push(o, co_op_first("return"));
-        strs_push(o, co_field("value", value));
-        strs_push(o, co_field("ends", co_ends(true)));
-        strs_push(o, co_field("at", json_str(co_tree_span(lo, sx_field(t, n, "span")))));
-        co_set_last(lo, 0 - 1, true);
+        strs_push(o, co_op_first("block"));
+        strs_push(o, co_field("body", co_block_json(lo, false, "[]", strs_new(), "null", sx_field(t, n, "span"))));
+        strs_push(o, co_field("ends", co_ends(false)));
+        co_set_last(lo, 0 - 1, false);
         return co_object(o);
     }
     co_stopped_stmt(lo, str_concat("the statement ", k))
@@ -1963,16 +2178,12 @@ fn co_propagate(lo: Lo, e: Int) -> Str {
     strs_push(members, co_field("arity", int_to_str(ck_variant_arity(c, into, into_err))));
     strs_push(members, co_field("fields", co_list(fields)));
     let rebuilt = co_node(lo, "variant", str_join(members, ""), into, at);
-    let leave = strs_new();
-    strs_push(leave, co_op_first("return"));
-    strs_push(leave, co_field("value", rebuilt));
-    strs_push(leave, co_field("ends", co_ends(true)));
-    strs_push(leave, co_field("at", json_str(co_tree_span(lo, at))));
+    let leave = co_leave(lo, rebuilt, at);
     let arms = strs_new();
     let ok_stmts = strs_new();
     strs_push(arms, co_propagate_arm(lo, ot, okv, ok, ok_stmts, co_read(lo, ok, at), false, at));
     let err_stmts = strs_new();
-    strs_push(err_stmts, co_object(leave));
+    strs_push(err_stmts, leave);
     strs_push(arms, co_propagate_arm(lo, ot, errv, err, err_stmts, "null", true, at));
     let m = strs_new();
     strs_push(m, co_field_first("origin", json_str("propagate")));
