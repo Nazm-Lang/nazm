@@ -373,6 +373,15 @@ building. The budgets, as regression gates from here until R6/R8 tighten them: `
 times the reference's time and 1.5 times its peak memory on an input of 1,000 lines or more; Core
 IR at most 16 times its time and 5 times its peak memory.
 
+**D27 — `@derive` is expanded as text, as the reference expands it.** `compiler/derive.nz` ports
+`nazm-core/src/derive.rs`: the loader hands every project file (never a standard module) to
+`dv_expand`, which appends the JSON and TOML functions each `@derive` means, with their `use`s,
+generated as the reference's `format!` strings generate them, byte for byte, since the appended
+text's spans reach Core IR and its digests. The templates are written with `«`, `»` and `¶` for
+`{`, `}` and a newline, so they read as the reference's do. What a derive cannot carry is refused
+in `configure.nz` with the attributes (`derive_refusals`), from the same tables (`dv_refusal_for`,
+`dv_named`), and nothing is generated for it.
+
 ## Risks / Trade-offs
 
 - **Size.** The Rust parser alone is 6k lines and the checker several times that; written in the
