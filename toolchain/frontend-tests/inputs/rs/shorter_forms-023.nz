@@ -1,0 +1,2 @@
+fn save(p: Str) { write_file(p, "x") }
+fn main() { }

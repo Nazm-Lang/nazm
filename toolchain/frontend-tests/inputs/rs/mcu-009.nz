@@ -1,0 +1,13 @@
+fn show(m: MmioCap, n: Int) -> Int ! {} {
+    let mut v = n;
+    if v < 0 { put(m, 45); v = 0 - v; }
+    let mut d = 1000000000000000000;
+    let mut started = false;
+    while d > 0 {
+        let q = v / d;
+        if q > 0 || started || d == 1 { put(m, 48 + q); started = true; }
+        v = v % d;
+        d = d / 10;
+    }
+    put(m, 10)
+}

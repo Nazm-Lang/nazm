@@ -1,3 +1,3 @@
-fn helper(o: OutCap) -> Int { print("x\n"); 0 }
+fn helper(io: IoCap) -> Int { write_file("f", "x") }
 fn pure(n: Int) -> Int { n + 1 }
 fn main(io: IoCap) -> Int ! {io} { helper(io) + pure(1) }

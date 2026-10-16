@@ -1,0 +1,34 @@
+fn hello(r: Request) -> Response ! {} {
+http_text(200, str_concat("hello ", match http_param(r, "name") { Option.Some(value: n) => n, Option.None() => "?", }))
+}
+fn files(r: Request) -> Response ! {} {
+http_text(200, str_concat("file ", match http_param(r, "*") { Option.Some(value: n) => n, Option.None() => "?", }))
+}
+fn first(r: Request) -> Response ! {} { http_text(201, "first") }
+fn any(r: Request) -> Response ! {} { http_text(202, r.method) }
+fn ask(out: OutCap, h: fn(Request) -> Response ! { io }, method: Str, target: Str) -> Int ! { io } {
+let r = h(http_request(method, target, ""));
+line(out, str_concat(str_concat(str_concat(int_to_str(r.status), " "), r.body), match http_header_get(r.headers, "allow") { Option.Some(value: a) => str_concat(" allow=", a), Option.None() => "", }))
+}
+fn main(out: OutCap) -> Int ! { io } {
+let rt = http_router_get(http_router(), "/hello/{name}", hello);
+let rt2 = http_router_post(rt, "/hello/{name}", hello);
+let rt3 = http_route(http_route(http_router_get(rt2, "/static/*", files), "PUT", "/x", first), "", "/any", any);
+let rt4 = http_router_get(http_router_get(rt3, "/dup", first), "/dup", hello);
+let h = http_router_handler(rt4);
+ask(out, h, "GET", "/hello/w%C3%A9rld?x=1");
+ask(out, h, "HEAD", "/hello/a");
+ask(out, h, "POST", "/hello/b");
+ask(out, h, "DELETE", "/hello/c");
+ask(out, h, "GET", "/hello/");
+ask(out, h, "GET", "/hello/a/b");
+ask(out, h, "GET", "/hello/%zz");
+ask(out, h, "GET", "/static/css/site.css");
+ask(out, h, "GET", "/static/");
+ask(out, h, "GET", "/x");
+ask(out, h, "PATCH", "/any");
+ask(out, h, "GET", "/dup");
+ask(out, h, "GET", "/nowhere");
+ask(out, h, "GET", "*");
+0
+}

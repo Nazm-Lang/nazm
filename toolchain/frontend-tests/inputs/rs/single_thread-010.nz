@@ -1,0 +1,7 @@
+fn main(t: SpawnCap, out: OutCap) -> Int ! {spawn, io} {
+    let s = "a" + "b"
+    let t2 = s
+    print(t2 + "\n")
+    scope { spawn down(3); }
+    0
+}

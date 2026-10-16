@@ -1,0 +1,70 @@
+
+fn hello(r: Request) -> Response ! {} {
+    match http_param(r, "name") {
+        Option.Some(value: n) => http_text(200, str_concat("hello ", n)),
+        Option.None() => http_text(400, "who?"),
+    }
+}
+fn size(r: Request) -> Response ! {} {
+    http_text(200, int_to_str(str_len(r.body)))
+}
+fn routes() -> fn(Request) -> Response ! { io } ! {} {
+    http_router_handler(http_router_post(http_router_get(http_router(), "/hello/{name}", hello), "/size", size))
+}
+fn shown(r: Result[Response, HttpError]) -> Str ! {} {
+    match r {
+        Result.Ok(value: x) => str_concat(str_concat(int_to_str(x.status), " "), x.body),
+        Result.Err(error: e) => match e {
+            HttpError.Tls(error: t) => str_concat("ERR tls ", kind(t)),
+            HttpError.Io(error: x) => str_concat("ERR io ", io_kind_name(x.kind)),
+            HttpError.Protocol(status: s, why: w) => str_concat("ERR ", int_to_str(s)),
+            HttpError.Unsupported(why: w) => "ERR unsupported",
+        },
+    }
+}
+fn client(io: IoCap, net: NetCap, s: HttpServer, lines: Chan[Str]) -> Int ! { io } {
+    let base = str_concat("https://", http_server_addr(s));
+    let o = http_client_options();
+    let cc = client_config(io, "ca.pem", names("http/1.1", ""));
+    match http_connect_tls(net, base, o, cc) {
+        Result.Ok(value: c) => {
+            chan_send_of(lines, shown(http_send(c, http_request("GET", "/hello/one", ""))));
+            chan_send_of(lines, shown(http_send(c, http_request("POST", "/size", str_pad_end("", 40000, "z")))));
+            chan_send_of(lines, shown(http_send(c, http_request("GET", "/hello/two", ""))));
+            http_close(c);
+        },
+        Result.Err(error: e) => { chan_send_of(lines, http_error_show(e)); },
+    };
+    // The platform's store does not know the test CA.
+    chan_send_of(lines, shown(http_get(net, str_concat(base, "/hello/three"), o)));
+    // Plain HTTP to a TLS server: no response the client can read.
+    chan_send_of(lines, shown(http_get(net, str_concat(str_concat("http://", http_server_addr(s)), "/hello/four"), o)));
+    tls_config_close(cc);
+    http_drain(s);
+    chan_close_of(lines)
+}
+fn main(io: IoCap, net: NetCap, t: SpawnCap, out: OutCap) -> Int ! { io, spawn } {
+    let sc = server_config(io, "srv.pem", "srv.key", names("http/1.1", ""));
+    let d = http_serve_options();
+    let o = ServeOptions(max_head: d.max_head, max_headers: d.max_headers, max_target: d.max_target, max_body: d.max_body, head_timeout_ms: 2000, idle_timeout_ms: 2000, body_timeout_ms: 2000, write_timeout_ms: 2000, max_requests: d.max_requests, max_connections: d.max_connections);
+    match http_listen_tls(net, "127.0.0.1:0", o, sc) {
+        Result.Ok(value: s) => {
+            let lines = chan_new_of[Str](64);
+            let h = routes();
+            let mut stats = "";
+            scope {
+                spawn client(io, net, s, lines);
+                match http_serve(t, s, h) {
+                    Result.Ok(value: st) => { stats = str_concat(str_concat(int_to_str(st.requests), " requests on "), int_to_str(st.connections)); },
+                    Result.Err(error: e) => { stats = io_error_show(e); },
+                };
+            }
+            let got = vec_new[Str]();
+            while chan_recv_of(lines, got) { line(out, vec_pop(got)); }
+            line(out, stats);
+        },
+        Result.Err(error: e) => { line(out, io_error_show(e)); },
+    };
+    tls_config_close(sc);
+    0
+}

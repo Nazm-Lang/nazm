@@ -17,7 +17,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "crates", "nazm-cli", "tests")
-OUT = os.path.join(ROOT, "compiler", "tests", "inputs", "rs")
+OUT = os.path.join(ROOT, "toolchain", "frontend-tests", "inputs", "rs")
 
 
 def literals(text):

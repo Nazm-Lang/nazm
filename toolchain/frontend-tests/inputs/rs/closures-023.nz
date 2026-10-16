@@ -1,2 +1,2 @@
-fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { print("a"); x }; f(1) }
+fn helper() -> Int ! { io } { let f = fn(x: Int) -> Int ! { io } { write_file("f", "a") + x }; f(1) }
 fn main() -> Int { 0 }

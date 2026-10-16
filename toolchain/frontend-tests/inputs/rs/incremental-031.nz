@@ -1,1 +1,1 @@
-pub fn old(n: Int) -> Int { print(int_to_str(n)) }
+pub fn old(n: Int) -> Int { write_file("f", int_to_str(n)) }

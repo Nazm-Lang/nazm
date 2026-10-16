@@ -1,0 +1,11 @@
+fn main(io: IoCap, out: OutCap) -> Int ! { io } {
+    match tls_client(bytes_new(0), names("", "")) {
+        Result.Ok(value: c) => { line(out, "configured"); },
+        Result.Err(error: e) => { line(out, kind(e)); },
+    };
+    match tls_read(TlsStream(stream: TcpStream(handle: os_stdin()), session: 70000), bytes_new(8)) {
+        Result.Ok(value: n) => { line(out, "read"); },
+        Result.Err(error: e) => { line(out, kind(e)); },
+    };
+    0
+}

@@ -1,0 +1,1 @@
+fn main() { let l = chain_empty[Int](); let n = list_len(l) }

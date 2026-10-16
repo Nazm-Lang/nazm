@@ -1,0 +1,1 @@
+fn main(m: MmioCap) -> Int ! {} { Int(Float64(Float32(1.5)) * 2.0) }

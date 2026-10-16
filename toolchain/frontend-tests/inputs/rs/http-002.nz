@@ -1,0 +1,41 @@
+use "@std/random";
+fn damage(rng: Rng, s: Str) -> Str {
+let k = random_int(rng, 1, 4);
+let mut t = s;
+let mut j = 0;
+while j < k && str_len(t) > 0 {
+let at = random_int(rng, 0, str_len(t));
+let how = random_int(rng, 0, 3);
+let picks = wire("|~^`: ;0aF");
+let b = random_int(rng, 0, str_len(picks));
+let rep = str_slice(picks, b, b + 1);
+if how == 0 { t = str_concat(str_concat(str_slice(t, 0, at), rep), str_slice(t, at + 1, str_len(t))); } else {
+if how == 1 { t = str_concat(str_slice(t, 0, at), str_slice(t, at + 1, str_len(t))); } else { t = str_concat(str_concat(str_slice(t, 0, at), str_slice(t, at, at + 1)), str_slice(t, at, str_len(t))); }
+}
+j = j + 1;
+}
+t
+}
+fn main(out: OutCap) -> Int {
+let rng = random_new(UInt64(20261016));
+let seeds = strs_new();
+strs_push(seeds, wire("GET /a?b=c HTTP/1.1|Host: h|Accept: */*||"));
+strs_push(seeds, wire("POST /p HTTP/1.1|Host: h|Content-Length: 5||hello"));
+strs_push(seeds, wire("POST /p HTTP/1.1|Host: h|Transfer-Encoding: chunked||5;x=y|hello|0|T: v||"));
+let o = http_serve_options();
+let mut ok = 0;
+let mut refused = 0;
+let mut other = 0;
+let mut n = 0;
+while n < 1500 {
+let raw = damage(rng, strs_get(seeds, n % 3));
+match http_parse_request(raw, o) {
+Result.Ok(value: r) => { ok = ok + 1; },
+Result.Err(error: e) => { match e { HttpError.Protocol(status: s, why: w) => { if s >= 400 && s < 600 { refused = refused + 1; } else { other = other + 1; } }, HttpError.Io(error: x) => { other = other + 1; }, HttpError.Unsupported(why: w) => { other = other + 1; }, HttpError.Tls(error: t) => { other = other + 1; }, }; },
+};
+n = n + 1;
+}
+line(out, str_concat(str_concat(int_to_str(ok + refused), " "), int_to_str(other)));
+line(out, if ok > 0 && refused > 0 { "both" } else { "one-sided" });
+0
+}

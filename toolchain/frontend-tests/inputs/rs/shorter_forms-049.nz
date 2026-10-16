@@ -1,0 +1,3 @@
+fn main() {
+    println(text_split("a b", " ").len())
+}

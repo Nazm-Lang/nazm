@@ -1,0 +1,2 @@
+fn main() -> Int { println(num_to_str(run(0))); 0 }
+fn run(m: Int) -> Int {

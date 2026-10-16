@@ -1,0 +1,4 @@
+fn main(out: OutCap) -> Int ! {io} {
+    println(7)
+    0
+}

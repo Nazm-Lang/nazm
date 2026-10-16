@@ -545,7 +545,19 @@
 - [x] 6.0 Parsed as main's reference parses them (D1–D5): `:` result types, `= e` bodies and
       `inferred_result`, `|a, b|` closures, map literals, fields and payloads by position, variants
       without their enum, `use std.json`
-- [ ] 6.1 Checked: R1.5's forms in the checker; D6–D8 once final
+- [x] 6.1 Checked: R1.5's forms in the checker (D1–D10, final on main), against the reference
+      on every input: `inputs/check/r15-forms.nz` (each form once where accepted) and
+      `r15-refusals.nz` (N0634 three ways, N0635, N0636, N0637), and the programs of main's
+      tests re-extracted (`extract-inputs.py` writes `toolchain/frontend-tests/inputs/rs` again:
+      2,392 programs). The tree dump now escapes the space separators but the ASCII space
+      (`\u{a0}`, `\u{3000}`, …) as Rust's `Debug` does — a regex test's literal showed it.
+      `run.sh` on main dfda47ac (reference rebuilt at 91f3da0a, no Rust change since): tokens,
+      tree, syntax 3,240 agree, 0 differ (1 not UTF-8, skipped); check 3,240 agree, 1 differ
+      (the checker carries 3,235, all agree), render likewise; facts 3,235 agree, 6 differ
+      (carried 3,235, all agree); core 3,241 agree, 0 differ, of 96,495 functions every one
+      carried and agreeing, the other parts 11,310, all agree, 1,885 whole documents, all the
+      reference's bytes. What the checker does not carry is `@derive`'s encodings (`Json`,
+      `Toml`: "the checker stops at a derived encoding", 6 inputs) — every difference above
 
 ## 7. What R5's commands ask of the front end (handed over by the coordinator)
 

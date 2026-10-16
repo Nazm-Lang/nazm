@@ -1,0 +1,2 @@
+use "tree.nz";
+fn main() -> Int { sum(pair(20, 22)) }

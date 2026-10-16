@@ -1,0 +1,20 @@
+struct Node { name: Str, kids: Chain[Node], }
+
+fn count(n: Node): Int {
+    let mut c = 1
+    for k in n.kids { c += count(k) }
+    c
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let leaves = vec_new[Node]()
+    leaves.push(Node(name: "a", kids: chain_empty[Node]()))
+    leaves.push(Node(name: "b", kids: chain_empty[Node]()))
+    let root = Node(name: "r", kids: chain_from_vec(leaves))
+    leaves.push(Node(name: "late", kids: chain_empty[Node]()))
+    let xs: List[Int] = [1, 2]
+    let c = chain_from_vec(xs)
+    let same = c == chain_from_vec(xs)
+    print(f"{count(root)} {chain_len(root.kids)} {chain_get(root.kids, 1).name} {chain_len(c)} {same}\n")
+    0
+}

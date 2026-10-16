@@ -1,0 +1,2 @@
+fn add(a: Int, b: Int) -> Int { if a == 0 { b } else { add(a - 1, b + 1) } }
+fn main() -> Int { add(1, 2) }
