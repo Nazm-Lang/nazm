@@ -13,11 +13,13 @@
       architecture §7.119, runtime ABI 39) for a hosted executable that calls no C; a string-and-list
       loop 284.7 → 115.4 ms (2.5×), four tasks −16%, words unchanged (no allocation in its loop);
       `tests/small_heap.rs`, four mutants
-- [ ] 3.2 Native string-hash built-in with the same values — 2026-10-16, measured first: at `-O2`
+- [x] 3.2 Native string-hash built-in with the same values — 2026-10-16, measured first: at `-O2`
       `@std/hash`'s `hash_bytes` already compiles to a five-instruction loop with no checks (load,
       xor, multiply, count, branch) and the finaliser inlined — what a native built-in of the same
       values would be; its cost was the calls between units, which 3.4 removes. No built-in added
-      (it would be a checker change, epoch); left open for the copyright holder to close or keep
+      (it would be a checker change, epoch). Closed by the coordinator on the copyright holder's
+      delegation (2026-10-16): no built-in — the library's loop is already the native code, and
+      ThinLTO (3.4) removes the calls
 - [x] 3.3 Allocation-free `split`/`words` iterator — 2026-10-15: `for w in s.split(sep)` lowered
       through `text_split_end`/`text_split_next` (Core IR, `split_loop`), no list; word frequency
       189 → 151 ms (−20%), one test, two mutants; `words` stays a list
