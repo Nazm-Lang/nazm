@@ -7576,6 +7576,16 @@ counted. Still no preemption: a task that computes without waiting holds its wor
 for preemption at function entry through the stack check is in `openspec/changes/
 performance-leadership/design.md`. Runtime ABI 40 → 41.
 
+**Amended (performance leadership 6.4, 2026-10-16): the waiter table's locks.** The table of parked
+waiters keeps its 256 buckets, now under 64 locks (bucket `b` under lock `b mod 64`) in place of one
+for the whole process, so waits and wakes on different channels no longer contend. A wake whose
+bucket is empty takes no lock: a waiter registers while its caller holds the lock under which it
+looked at its condition, and a waker changes that condition under the same lock before it wakes, so
+any registration the wake must see is already visible. A task resumed when it is on no list (a
+waker took it off) takes no lock to leave. Channel texts are unchanged (`runtime parity`); a direct
+hand-off to a parked receiver changes them and their mirror in `compiler/emit.nz`, and is not part
+of this. Runtime ABI 41 → 42.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
