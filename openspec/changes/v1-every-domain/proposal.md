@@ -1,12 +1,16 @@
 ## Why
 
+**Added 2026-10-16 (the copyright holder): a stable release comes first.** 0.11.0 is the stable,
+fast release of everything except these domain tracks — R1–R9, stage P, Windows — through the full
+gate; 1.0 then adds every domain below. 1.0 still waits for every domain.
+
 The copyright holder decided (2026-10-15): **1.0 is a stable release meant to last twenty years, and
 waits until every domain is ready** — cloud computing, quantum computing, hardware and chip design,
 microcontrollers and microchip drivers — rather than shipping a stable core first and adding domains
 as 1.x. 1.0 therefore moves from the March–April 2027 estimate to whenever the last domain passes
 its gate — estimated on 2026-10-16, from the pace so far, as early 2027 if the boards, the quantum
 account, the Windows host and the licence review are started alongside the code (`docs/roadmap.md`,
-*When 1.0*).
+*When 0.11.0 and 1.0*).
 
 ## What Changes
 

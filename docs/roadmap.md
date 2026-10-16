@@ -48,33 +48,32 @@ large boundaries only, not one per stage (`releases/0.9.0.md`).
 | **R6** | Host qualification: the Nazm toolchain builds itself under a bounded heap | planned |
 | **R7** | The harness and the tests in Nazm | nearly complete: 175 of 176 test files ported, 0 differences; 64 tests stay in Rust by design |
 | **R9** | Nazm's own code generator: LIR to Mach-O and ELF objects for aarch64 and x86_64, checked against LLVM | in progress: 119 of 119 programs agree with LLVM on both Mac targets; `nazm build --backend nazm` |
-| **R8** | Cut-over: the released `nazm` built by Nazm; the one interim release before 1.0 | after R6 |
+| **R8** | Cut-over: the released `nazm` built by Nazm | after R6 |
 | **P** | Performance in Nazm, between the cut-over and the 1.0 gate: the optimisation passes and the compiler's own speed, written once in Nazm rather than in the Rust compiler and ported. Target (2026-10-15): lead every compared language on every measured parameter, 10–30% faster than C, C++ and Rust, safety kept (`openspec/changes/performance-leadership`) | after R8; a research target, not a claim |
 | **Domains** | 1.0 waits for every domain (2026-10-15, `openspec/changes/v1-every-domain`): C cloud, M microcontrollers, D drivers, H hardware (FPGA at 1.0), Q quantum | in progress: C — HTTP/1.1 server and client, TLS on macOS and Linux, calendar time, metrics, configuration, a drain with a deadline; Windows TLS written, not yet run. M1 — Cortex-M33 and RV32IMC, emulator-verified. D, H, Q designed |
 | **Windows** | The toolchain on Windows x86_64 (`openspec/changes/windows-toolchain`, W1–W4) | W1 complete: programs agree on a real Windows host (68 of 68); `nazm.exe` runs, checks and formats (60 of 60). W2–W4 open |
-| **1.0 gate** | The full mutation run, real-Windows and real-board evidence, signed reproducible archives, the licence and CLA review | last |
+| **0.11.0** | The stable release before 1.0 (the copyright holder, 2026-10-16): everything above — R1–R9, R1.5 to its last item, stage P's runtime and compiler halves, Windows W1–W4 and its TLS — except the domain tracks, through the full gate (the whole mutation catalogue, signed reproducible archives) on macOS and Windows x86_64 | after P and Windows |
+| **1.0 gate** | 0.11.0 plus every domain track: the full mutation run again, real-board evidence, signed reproducible archives, the licence and CLA review | last |
 | **After 1.0** | Zero dependence on LLVM: Nazm's own optimiser and code generator for optimised builds too, measured against the LLVM build before replacing it; then the ecosystem and Linux hosts | after 1.0 |
 
-### When 1.0
+### When 0.11.0 and 1.0
 
-Revised 2026-10-16. The code moves much faster than the domain plan's track-week costing
-(93–133 track-weeks) assumed: M1 took about half an hour of agent time against weeks planned, TLS
-about an hour and a half against two weeks. Estimated from the pace so far:
+Revised 2026-10-16, evening. Two releases remain (the copyright holder, 2026-10-16): **0.11.0**, the
+stable, fast release of everything but the domains, and **1.0**, which adds every domain track.
 
-| Part | Paced by | Estimate |
-| --- | --- | --- |
-| R2–R9 to the cut-over (R6, R8) | agent time | 1–2 weeks |
-| The domains' code (C, M, D, H, Q) | agent time | 2–4 months |
-| Real boards (Pico 2, ESP32-C3, iCEBreaker) | the boards being bought | when they arrive |
-| Quantum "accepted and executed" | an IBM Quantum account and its queue | days once the account exists |
-| Real-Windows evidence (TLS, W2–W4) | the Windows host, and an administrator for its tools | days once available |
-| Stage P | agent time and quiet benchmark runs | weeks, after the cut-over |
-| Licence and CLA review, signing the release | the copyright holder and counsel | outside the code |
+| Part | For | Paced by | Estimate |
+| --- | --- | --- | --- |
+| R5, then R6 and R8 — the cut-over | 0.11.0 | agent time | 1–2 weeks |
+| Stage P — the runtime half (concurrency, now), the compiler's passes (after the cut-over) | 0.11.0 | agent time and quiet benchmark runs | weeks |
+| Windows W2–W4 and Windows TLS | 0.11.0 | the Windows host; GitHub's Windows runner | days to weeks |
+| R1.5's last items, R7's `bench`/`fuzz`, the contained runner in Nazm | 0.11.0 | agent and machine time | days |
+| The full gate: the whole mutation catalogue, signed reproducible archives | 0.11.0 and 1.0 | machine time; the copyright holder signs | about a day each |
+| The domains' code (C4 onward, M on real boards, D, H, Q) | 1.0 | agent time | 2–4 months |
+| Real boards (Pico 2, ESP32-C3, iCEBreaker), an IBM Quantum account | 1.0 | purchases and accounts | when they arrive |
+| The licence and CLA review | 1.0 (0.11.0 ships under the same terms as 0.10.0) | the copyright holder and counsel | outside the code |
 
-The code side of 1.0 can be complete around the end of 2026 or early 2027. The release date is
-set by the items outside the code: started in parallel, **1.0 in early 2027** is realistic; left
-until the code is done, it slips toward mid-2027. Usage limits on the agents, now one at a time,
-are the largest variable in the code's own estimate.
+From the pace so far, **0.11.0 around the end of 2026** and **1.0 in early-to-mid 2027**, paced by
+the domains, the boards and the review. Usage limits on the agents remain the largest variable.
 
 The milestone tables below are the history that led here; the "R1" among them (2026-10-07) is the
 earlier release-readiness milestone, not this programme's first stage.
