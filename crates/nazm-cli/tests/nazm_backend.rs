@@ -603,6 +603,106 @@ fn the_windows_objects_keep_the_win64_convention_and_describe_every_frame() {
     }
 }
 
+/// A little-endian `u32` or `u64` of a Mach-O object at `at`.
+fn le(b: &[u8], at: usize, n: usize) -> u64 {
+    b[at..at + n]
+        .iter()
+        .rev()
+        .fold(0, |v, x| (v << 8) | u64::from(*x))
+}
+
+/// [`le`] as an index into the object.
+fn us(b: &[u8], at: usize, n: usize) -> usize {
+    usize::try_from(le(b, at, n)).unwrap()
+}
+
+/// What a Mach-O object of the generator's says about its LSDAs: the header's flags, every
+/// address a compact unwind entry names as its LSDA, and the addresses of the symbols in
+/// `__TEXT,__gcc_except_tab`.
+fn lsdas(o: &[u8]) -> (u64, Vec<u64>, Vec<u64>) {
+    let flags = le(o, 24, 4);
+    let (mut at, mut sect_no) = (32, 0u64);
+    let (mut lsda_sect, mut entries, mut symbols) = (0, Vec::new(), Vec::new());
+    for _ in 0..le(o, 16, 4) {
+        let (cmd, size) = (le(o, at, 4), us(o, at + 4, 4));
+        if cmd == 0x19 {
+            for s in 0..us(o, at + 64, 4) {
+                let h = at + 72 + 80 * s;
+                sect_no += 1;
+                let name = String::from_utf8_lossy(&o[h..h + 16])
+                    .trim_end_matches('\0')
+                    .to_owned();
+                let (len, off) = (us(o, h + 40, 8), us(o, h + 48, 4));
+                if name == "__gcc_except_tab" {
+                    lsda_sect = sect_no;
+                } else if name == "__compact_unwind" {
+                    for e in (off..off + len).step_by(32) {
+                        if le(o, e + 12, 4) & 0x4000_0000 != 0 {
+                            entries.push(le(o, e + 24, 8));
+                        }
+                    }
+                }
+            }
+        } else if cmd == 0x2 {
+            let (symoff, nsyms) = (us(o, at + 8, 4), us(o, at + 12, 4));
+            for k in 0..nsyms {
+                let n = symoff + 16 * k;
+                if o[n + 4] & 0x0E == 0x0E && u64::from(o[n + 5]) == lsda_sect {
+                    symbols.push(le(o, n + 8, 8));
+                }
+            }
+        }
+        at += size;
+    }
+    (flags, entries, symbols)
+}
+
+/// Each LSDA the generator writes for Mach-O begins an atom of its own (2026-10-16): the object
+/// says `MH_SUBSECTIONS_VIA_SYMBOLS`, as LLVM's do, and a symbol stands at every LSDA a compact
+/// unwind entry names. Without them `__gcc_except_tab` was one atom, and the linker on GitHub's
+/// macOS 26 runner tied every function to that atom's start, the first function's LSDA: no
+/// landing pad was found below it and every failure aborted. The linker here resolves the
+/// address inside the atom, so only the object can show it.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn every_lsda_of_a_mach_o_object_is_an_atom_of_its_own() {
+    let nzcg = differential::nzcg();
+    let src = repo().join("toolchain/codegen/tests/programs/fail_deep.nz");
+    for target in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::copy(&src, d.path().join("prog.nz")).unwrap();
+        let r = nazm_with(
+            d.path(),
+            nzcg,
+            &[
+                "build",
+                "--no-cache",
+                "--backend",
+                "nazm",
+                "--target",
+                target,
+                "--objects",
+                "o",
+                "prog.nz",
+            ],
+        );
+        assert_eq!(r.code, Some(0), "{target}: {r:?}");
+        let (flags, entries, symbols) = lsdas(&std::fs::read(d.path().join("o/00-m0.o")).unwrap());
+        assert_eq!(
+            flags & 0x2000,
+            0x2000,
+            "{target}: no MH_SUBSECTIONS_VIA_SYMBOLS"
+        );
+        assert!(entries.len() >= 2, "{target}: {entries:?}");
+        for e in &entries {
+            assert!(
+                symbols.contains(e),
+                "{target}: no symbol at the LSDA {e:#x}: {symbols:x?}"
+            );
+        }
+    }
+}
+
 /// A stand-in generator: a shell script that records its arguments and its input, then runs the
 /// real one, or does what `body` says.
 fn fake(dir: &Path, body: &str) -> PathBuf {

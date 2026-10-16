@@ -197,7 +197,9 @@ impl Backend {
     }
 
     /// [`Self::compile`], with the code generator's frame size for every function on standard
-    /// error (N63): clang's `prologepilog` remarks, which the board's stack bound reads.
+    /// error (N63): clang's prologue/epilogue remarks, which the board's stack bound reads. The
+    /// remark's pass is `prologepilog` up to LLVM 22 and `prolog-epilog` from LLVM 23, which
+    /// reports nothing for the old name; the option is a regular expression, so it names both.
     pub(crate) fn compile_reporting_frames(&self, ir: &Path, object: &Path) -> Outcome {
         run(self
             .command()
@@ -206,7 +208,7 @@ impl Backend {
                 self.cross.as_deref(),
                 self.whole,
             ))
-            .arg("-Rpass-analysis=prologepilog")
+            .arg("-Rpass-analysis=^prolog-?epilog$")
             .args(["-o".as_ref(), object.as_os_str(), ir.as_os_str()]))
     }
 

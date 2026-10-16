@@ -232,10 +232,24 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     }
     sort_by_name(u, extdefs)
     sort_by_name(u, undefs)
+    // A local symbol at each LSDA, `GCC_except_tableN` as LLVM names it, numbered after the
+    // unit's symbols: with `MH_SUBSECTIONS_VIA_SYMBOLS` (below) the linker splits every section
+    // at its symbols, so each LSDA is an atom of its own and each function's unwind entry is tied
+    // to its own LSDA. Without them the section was one atom, and a linker that ties a function to
+    // the LSDA atom rather than to the address inside it (Xcode 26's, on GitHub's macOS 26 runner)
+    // gave every function the first LSDA: no landing pad was found and the forced unwind aborted.
+    let lsda_syms = ints_new()
+    i = 0
+    while i < ints_len(lsda_off) {
+        ints_push(lsda_syms, ns + i)
+        i += 1
+    }
     let order = ints_new()
     for x in locals { ints_push(order, x) }
+    for x in lsda_syms { ints_push(order, x) }
     for x in extdefs { ints_push(order, x) }
     for x in undefs { ints_push(order, x) }
+    let nlocal = ints_len(locals) + ints_len(lsda_syms)
     let nidx = ints_new()
     i = 0
     while i < ns {
@@ -244,7 +258,7 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     }
     i = 0
     while i < ints_len(order) {
-        nidx[order[i]] = i
+        if order[i] < ns { nidx[order[i]] = i }
         i += 1
     }
     // Relocations: the text's, then each data section's.
@@ -311,8 +325,13 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     let strx = ints_new()
     for x in order {
         ints_push(strx, bytebuf_len(strtab))
-        bytebuf_push(strtab, UInt8(95))
-        bytebuf_push_str(strtab, u.syms[x].name)
+        if x >= ns {
+            let k = x - ns
+            bytebuf_push_str(strtab, f"GCC_except_table{k}")
+        } else {
+            bytebuf_push(strtab, UInt8(95))
+            bytebuf_push_str(strtab, u.syms[x].name)
+        }
         bytebuf_push(strtab, UInt8(0))
     }
     pad_to(strtab, align_to(bytebuf_len(strtab), 8))
@@ -339,7 +358,8 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     put32(out, 1)
     put32(out, 4)
     put32(out, cmds)
-    put32(out, 0)
+    // MH_SUBSECTIONS_VIA_SYMBOLS, as LLVM's objects say: each symbol begins an atom.
+    put32(out, 0x2000)
     put32(out, 0)
     // LC_SEGMENT_64, unnamed, holding every section.
     put32(out, 0x19)
@@ -387,10 +407,10 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     put32(out, 0xB)
     put32(out, DYSYMTAB)
     put32(out, 0)
-    put32(out, ints_len(locals))
-    put32(out, ints_len(locals))
+    put32(out, nlocal)
+    put32(out, nlocal)
     put32(out, ints_len(extdefs))
-    put32(out, ints_len(locals) + ints_len(extdefs))
+    put32(out, nlocal + ints_len(extdefs))
     put32(out, ints_len(undefs))
     i = 0
     while i < 12 {
@@ -413,8 +433,16 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     i = 0
     while i < nsyms {
         let x = order[i]
-        let s = u.syms[x]
         put32(out, strx[i])
+        if x >= ns {
+            bytebuf_push(out, UInt8(0x0E))
+            bytebuf_push(out, UInt8(lsda_sec + 1))
+            put16(out, 0)
+            put64(out, sec_addr[lsda_sec] + lsda_off[x - ns])
+            i += 1
+            continue
+        }
+        let s = u.syms[x]
         if s.link == L_IMPORT {
             bytebuf_push(out, UInt8(0x01))
             bytebuf_push(out, UInt8(0))

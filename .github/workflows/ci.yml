@@ -109,11 +109,21 @@ jobs:
 
       # Apple's clang has no WebAssembly target, which the wasm tests build for; Homebrew's
       # LLVM, as on the developer's Mac, does.
+      #
+      # Homebrew's clang reads its SDK from its configuration files (`etc/clang/*.cfg`:
+      # `-isysroot` the Command Line Tools' `MacOSX.sdk`) while it links with `/usr/bin/ld`, the
+      # selected Xcode's. On the macos-26 image the Command Line Tools' SDK is 27.0 and Xcode's
+      # linker is older, and cannot read that SDK's `libSystem.tbd` (`tapi error: unknown
+      # architecture arm64e.x1-macos`, an x86_64 link; 2026-10-16). The SDK is pointed at the
+      # selected Xcode's, the one its linker was made for, as it is on a machine whose tools match.
       - name: clang with every target (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install llvm
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          sdk="$(xcrun --show-sdk-path)"
+          for cfg in "$(brew --prefix)"/etc/clang/*.cfg; do echo "-isysroot $sdk" > "$cfg"; done
+          xcrun --show-sdk-version; ld -v 2>&1 | head -1; sw_vers -productVersion
 
       - name: build
         run: cargo build --workspace --locked
