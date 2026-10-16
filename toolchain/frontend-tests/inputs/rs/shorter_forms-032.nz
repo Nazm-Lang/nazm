@@ -1,0 +1,4 @@
+fn main() {
+    let v: List[Int] = []
+    println(v.len())
+}

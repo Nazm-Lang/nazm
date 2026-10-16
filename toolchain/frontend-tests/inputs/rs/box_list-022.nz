@@ -1,2 +1,2 @@
-fn vec_new(x: Int) -> Int { x }
-fn main() -> Int { 0 }
+struct Chain { n: Int, }
+fn main() -> Int { Chain(n: 8).n }

@@ -1,0 +1,22 @@
+fn show(out: OutCap, r: Result[Str, HttpError]) -> Int {
+line(out, match r { Result.Ok(value: t) => text_vis(t), Result.Err(error: e) => http_error_show(e), })
+}
+fn text_vis(s: Str) -> Str {
+let p = strs_new(); let mut i = 0;
+while i < str_len(s) { let b = str_byte(s, i); if b == 13 { strs_push(p, ""); } else { if b == 10 { strs_push(p, "|"); } else { strs_push(p, str_from_byte(b)); } } i = i + 1; }
+str_join(p, "")
+}
+fn main(out: OutCap) -> Int {
+let r = http_with_header(http_with_header(http_text(200, "hi"), "Content-Length", "99"), "X-A", "1");
+show(out, http_format_response(r, false, false));
+show(out, http_format_response(r, true, true));
+show(out, http_format_response(http_with_header(http_empty(204), "x", "y"), false, false));
+show(out, http_format_response(http_with_header(http_text(200, ""), "bad name", "v"), false, false));
+show(out, http_format_response(http_with_header(http_text(200, ""), "n", wire("a|b")), false, false));
+show(out, http_format_response(http_text(1000, ""), false, false));
+show(out, http_format_request(http_request("POST", "/p?q", ""), "h:8", true));
+show(out, http_format_request(http_request_with_header(http_request("GET", "/", ""), "Host", "other"), "h", false));
+show(out, http_format_request(http_request("GE T", "/", ""), "h", false));
+show(out, http_format_request(http_request("GET", "/a b", ""), "h", false));
+0
+}

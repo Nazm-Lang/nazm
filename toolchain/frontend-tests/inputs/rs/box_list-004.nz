@@ -1,2 +1,2 @@
-struct T[X] { v: X, kids: List[T[X]], }
+struct T[X] { v: X, kids: Chain[T[X]], }
 fn main() -> Int { 0 }

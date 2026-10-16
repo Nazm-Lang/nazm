@@ -1,2 +1,3 @@
-use "tree.nz";
-fn main() -> Int { sum(pair(20, 22)) }
+pub enum T { Leaf(v: Int), Node(l: Box[T], r: Box[T]), }
+pub fn sum(t: T) -> Int { match t { T.Leaf(v: v) => v, T.Node(l: l, r: r) => sum(box_get(l)) + sum(box_get(r)), } }
+pub fn pair(a: Int, b: Int) -> T { T.Node(l: box_new(T.Leaf(v: a)), r: box_new(T.Leaf(v: b))) }

@@ -1,0 +1,83 @@
+
+// One connection to a server presenting `cert`, verified as `host` with `ca` (empty: the
+// platform's store): the client's verdict and what the server saw.
+fn case(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap, what: Str, cert: Str, key: Str, ca: Str, host: Str) -> Int ! { io, spawn } {
+    let sc = server_config(io, cert, key, names("http/1.1", ""));
+    let cc = client_config(io, ca, names("http/1.1", ""));
+    let seen = atomic_new(0);
+    let mut verdict = "";
+    match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => {
+            let addr = tcp_listener_addr(l);
+            scope {
+                spawn echo_one(sc, l, seen);
+                match tcp_connect(net, addr, 2000) {
+                    Result.Ok(value: s) => {
+                        tcp_set_timeout(s, 5000);
+                        match tls_connect(cc, s, host) {
+                            Result.Ok(value: t) => { verdict = str_concat("ok ", tls_version(t)); tls_close(t); },
+                            Result.Err(error: e) => { verdict = kind(e); tcp_close(s); },
+                        };
+                    },
+                    Result.Err(error: e) => { verdict = "no connection"; },
+                };
+            }
+            tcp_listener_close(l);
+        },
+        Result.Err(error: e) => { verdict = "no listener"; },
+    };
+    line(out, str_concat(str_concat(str_concat(str_concat(what, ": "), verdict), "; "), seen_as(atomic_load(seen))));
+    tls_config_close(sc);
+    tls_config_close(cc);
+    0
+}
+fn config_error(r: Result[TlsConfig, TlsError]) -> Str ! { io } {
+    match r {
+        Result.Ok(value: c) => { tls_config_close(c); "accepted" },
+        Result.Err(error: e) => kind(e),
+    }
+}
+fn main(io: IoCap, net: NetCap, tasks: SpawnCap, out: OutCap) -> Int ! { io, spawn } {
+    case(io, net, tasks, out, "trusted", "srv.pem", "srv.key", "ca.pem", "localhost");
+    case(io, net, tasks, out, "by address", "srv.pem", "srv.key", "ca.pem", "127.0.0.1");
+    case(io, net, tasks, out, "expired", "old.pem", "srv.key", "ca.pem", "localhost");
+    case(io, net, tasks, out, "another name", "srv.pem", "srv.key", "ca.pem", "example.org");
+    case(io, net, tasks, out, "self-signed", "self.pem", "self.key", "ca.pem", "localhost");
+    case(io, net, tasks, out, "untrusted root", "stranger.pem", "srv.key", "ca.pem", "localhost");
+    case(io, net, tasks, out, "platform store", "srv.pem", "srv.key", "", "localhost");
+    line(out, str_concat("a key not the certificate's: ", config_error(tls_server(bytes_of(io, "srv.pem"), bytes_of(io, "self.key"), names("", "")))));
+    line(out, str_concat("not PEM: ", config_error(tls_server(bytes_from_str("hello"), bytes_from_str("world"), names("", "")))));
+    line(out, str_concat("anchors not PEM: ", config_error(tls_client(bytes_from_str("hello"), names("", "")))));
+    let long = str_pad_end("", 256, "x");
+    line(out, str_concat("an ALPN name too long: ", config_error(tls_client(bytes_new(0), names(long, "")))));
+    let gone = client_config(io, "ca.pem", names("", ""));
+    tls_config_close(gone);
+    match tcp_listen(net, "127.0.0.1:0") {
+        Result.Ok(value: l) => {
+            match tcp_connect(net, tcp_listener_addr(l), 2000) {
+                Result.Ok(value: s) => {
+                    match tls_connect(gone, s, "localhost") {
+                        Result.Ok(value: t) => { line(out, "a closed configuration: accepted"); tls_close(t); },
+                        Result.Err(error: e) => { line(out, str_concat("a closed configuration: ", kind(e))); tcp_close(s); },
+                    };
+                    match tls_connect(TlsConfig(id: 12345), s, "localhost") {
+                        Result.Ok(value: t) => { line(out, "a made-up id: accepted"); },
+                        Result.Err(error: e) => { line(out, str_concat("a made-up id: ", kind(e))); },
+                    };
+                    // A live configuration's slot under a generation it does not have: closing it
+                    // answers `Closed` and leaves the live one open.
+                    let live = client_config(io, "ca.pem", names("", ""));
+                    let forged = os_tls_close(live.id + 65536, bytes_new(0));
+                    let session = os_tls_connect(live.id, "localhost");
+                    line(out, str_concat(str_concat("another generation: ", int_to_str(forged)), if session > 0 { ", the live one open" } else { ", the live one closed" }));
+                    if session > 0 { os_tls_close(session, bytes_new(0)); }
+                    tls_config_close(live);
+                },
+                Result.Err(error: e) => { line(out, "no connection"); },
+            };
+            tcp_listener_close(l);
+        },
+        Result.Err(error: e) => { line(out, "no listener"); },
+    };
+    0
+}

@@ -12,7 +12,7 @@ pub struct Point {
     label: Option[Str],
     tags: Vec[Str],
     shape: Shape,
-    kids: List[Point],
+    kids: Chain[Point],
     ok: Bool,
 }
 
@@ -22,10 +22,10 @@ fn main(out: OutCap) -> Int ! {io} {
     let tags = vec_new[Str]();
     vec_push(tags, "a");
     vec_push(tags, "b\"q");
-    let leaf = Point(x: 2, small: UInt8(7), label: Option[Str].Some(value: "leaf"), tags: vec_new[Str](), shape: Shape.Empty(), kids: list_empty[Point](), ok: false);
+    let leaf = Point(x: 2, small: UInt8(7), label: Option[Str].Some(value: "leaf"), tags: vec_new[Str](), shape: Shape.Empty(), kids: chain_empty[Point](), ok: false);
     let kids = vec_new[Point]();
     vec_push(kids, leaf);
-    let p = Point(x: -1, small: UInt8(255), label: Option[Str].None(), tags: tags, shape: Shape.Rect(w: 3, h: 4), kids: list_from_vec(kids), ok: true);
+    let p = Point(x: -1, small: UInt8(255), label: Option[Str].None(), tags: tags, shape: Shape.Rect(w: 3, h: 4), kids: chain_from_vec(kids), ok: true);
     let text = point_to_json(p);
     show(out, text);
     match point_from_json(text) {

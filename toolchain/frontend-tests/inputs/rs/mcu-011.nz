@@ -1,0 +1,23 @@
+fn bits(x: Float32) -> Int { Int(float32_to_bits(x)) }
+
+fn main(m: MmioCap) -> Int ! {} {
+    let x: Float32 = 1.5;
+    let y = x * Float32(3);
+    show(m, Int(y * Float32(2)));
+    show(m, bits(y / Float32(7)));
+    show(m, bits(Float32(9007199254740993)));
+    show(m, bits(Float32(-9223372036854775807)));
+    show(m, bits(Float32(UInt64(18446744073709551615))));
+    show(m, Int(Float32(-1234567.75)));
+    show(m, wrap_convert[Int](UInt64(Float32(1.5e19))));
+    show(m, bits(float_sqrt(y)));
+    show(m, bits(float_floor(Float32(-2.5))));
+    show(m, bits(float_ceil(Float32(-2.5))));
+    show(m, bits(float_trunc(Float32(-2.5))));
+    show(m, bits(float_abs(Float32(-3))));
+    show(m, saturate_convert[Int](Float32(1e30)));
+    show(m, saturate_convert[Int](Float32(-1e30)) + 1);
+    show(m, match try_convert[Int](Float32(2.5e18)) { Some(v) => v, None => 0 });
+    if float_is_nan(Float32(0) / Float32(0)) { show(m, 1); } else { show(m, 0); }
+    0
+}

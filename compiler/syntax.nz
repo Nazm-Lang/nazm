@@ -257,7 +257,9 @@ fn scalar_at(s: Str, i: Int, width: Int) -> Int {
 }
 
 fn invisible(c: Int) -> Bool {
-    if c >= 128 && c <= 159 { return true; }
+    if c >= 128 && c <= 160 { return true; }
+    // The space separators but the ASCII space, which `char::is_printable` does not count.
+    if c == 5760 || (c >= 8192 && c <= 8202) || c == 8239 || c == 8287 || c == 12288 { return true; }
     if c == 173 { return true; }
     if c >= 768 && c <= 879 { return true; }
     if c >= 8203 && c <= 8207 { return true; }

@@ -1,0 +1,76 @@
+use "@std/ioerror";
+use "@std/file";
+use "@std/net";
+use "@std/tls";
+fn line(out: OutCap, s: Str) -> Int { print(str_concat(s, str_from_byte(10))) }
+fn bytes_of(io: IoCap, path: Str) -> Bytes ! { io } {
+    match file_read_all(io, path) {
+        Result.Ok(value: b) => b,
+        Result.Err(error: e) => bytes_new(0),
+    }
+}
+fn names(a: Str, b: Str) -> Strs ! {} {
+    let n = strs_new();
+    if str_len(a) > 0 { strs_push(n, a); }
+    if str_len(b) > 0 { strs_push(n, b); }
+    n
+}
+fn kind(e: TlsError) -> Str ! {} {
+    match e {
+        TlsError.Io(error: x) => str_concat("Io ", io_kind_name(x.kind)),
+        TlsError.Untrusted(why: w) => "Untrusted",
+        TlsError.Expired(why: w) => "Expired",
+        TlsError.WrongHost(why: w) => "WrongHost",
+        TlsError.Protocol(why: w) => "Protocol",
+        TlsError.BadKey(why: w) => "BadKey",
+        TlsError.Truncated() => "Truncated",
+        TlsError.Closed() => "Closed",
+    }
+}
+fn server_config(io: IoCap, cert: Str, key: Str, alpn: Strs) -> TlsConfig ! { io } {
+    match tls_server(bytes_of(io, cert), bytes_of(io, key), alpn) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => TlsConfig(id: 0),
+    }
+}
+fn client_config(io: IoCap, ca: Str, alpn: Strs) -> TlsConfig ! { io } {
+    match tls_client(if str_len(ca) > 0 { bytes_of(io, ca) } else { bytes_new(0) }, alpn) {
+        Result.Ok(value: c) => c,
+        Result.Err(error: e) => TlsConfig(id: 0),
+    }
+}
+// Accept one connection: echo whatever arrives until the peer closes TLS. Into `seen`: the bytes
+// echoed, or -1 for a failure after the handshake, -2 for a handshake that failed.
+fn echo_one(cfg: TlsConfig, l: TcpListener, seen: Atomic) -> Int ! { io } {
+    match tcp_accept(l) {
+        Result.Ok(value: c) => {
+            tcp_set_timeout(c, 5000);
+            match tls_accept(cfg, c) {
+                Result.Ok(value: t) => {
+                    let buf = bytes_new(5000);
+                    let mut total = 0;
+                    let mut going = true;
+                    while going {
+                        match tls_read(t, buf) {
+                            Result.Ok(value: n) => {
+                                if n == 0 { going = false; } else {
+                                    tls_write(t, bytes_slice(buf, 0, n));
+                                    total = total + n;
+                                }
+                            },
+                            Result.Err(error: e) => { going = false; total = 0 - 1; },
+                        };
+                    }
+                    atomic_store(seen, total);
+                    tls_close(t);
+                    0
+                },
+                Result.Err(error: e) => { atomic_store(seen, 0 - 2); tcp_close(c); 0 },
+            }
+        },
+        Result.Err(error: e) => { atomic_store(seen, 0 - 3); 0 },
+    }
+}
+fn seen_as(n: Int) -> Str ! {} {
+    if n == 0 - 2 { "the server's handshake failed" } else { if n < 0 { "the server failed" } else { str_concat(str_concat("the server echoed ", int_to_str(n)), " bytes") } }
+}

@@ -1,0 +1,38 @@
+static HITS: Atomic = atomic_new(5);
+static ZERO: Atomic = atomic_new(0);
+static TABLE: UInt32 = 3735928559;
+
+struct Pair { a: Int, b: Int, }
+
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+fn sum(xs: [Int; 8]) -> Int {
+    let mut t = 0;
+    let mut i = 0;
+    while i < 8 { t = t + xs[i]; i = i + 1; }
+    t
+}
+
+fn main(m: MmioCap) -> Int ! {} {
+    show(m, atomic_load(HITS));
+    show(m, atomic_load(ZERO));
+    show(m, Int(TABLE));
+    show(m, -7 / 2);
+    show(m, -7 % 2);
+    show(m, 9223372036854775807 / 3);
+    show(m, -9223372036854775807 % 1000000007);
+    show(m, 3037000499 * 3037000499);
+    show(m, Int(count_ones(TABLE)));
+    show(m, Int(leading_zeros(12345)));
+    show(m, Int(UInt64(18446744073709551615) / UInt64(10)));
+    show(m, wrap_convert[Int](UInt64(18446744073709551615) % UInt64(1000)));
+    show(m, fib(20));
+    let p = Pair(a: 40, b: 2);
+    show(m, p.a + p.b);
+    let xs: [Int; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    show(m, sum(xs));
+    atomic_add(HITS, 10);
+    show(m, atomic_swap(HITS, 1));
+    show(m, if atomic_compare_swap(HITS, 1, 2) { atomic_load(HITS) } else { 0 });
+    atomic_load(HITS) + 40
+}

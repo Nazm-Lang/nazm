@@ -1,0 +1,31 @@
+// R1.5's forms, each once where it is accepted (6.1): `:` result types and function types (D1),
+// expression bodies (D2), short closures (D3), positional payloads and unprefixed variants (D4),
+// map literals and `Map[K, V]` (D5), `[…]` as a list (D6), `List[T]` (D7), printing without `out`
+// (D8), the prelude's modules (D9), `top` and `sort_by` on maps (D10).
+enum Shape {
+    Circle(r: Int),
+    Rect(w: Int, h: Int),
+}
+
+struct Point { x: Int, y: Int }
+
+fn area(s: Shape): Int = match s { Circle(r) => 3 * r * r, Rect(w, h) => w * h }
+
+fn twice(f: fn(Int): Int, x: Int): Int = f(f(x))
+
+fn sum(xs: List[Int]): Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main() {
+    let p = Point(1, 2)
+    let shapes = [Circle(2), Rect(3, 4)]
+    let mut total = 0
+    for s in shapes { total += area(s) }
+    let m: Map[Str, Int] = {"a": 1, "b": 2, "c": 3}
+    let best = m.top(2)
+    let byname = m.sort_by(|a, b| a.0 < b.0)
+    println(f"{total} {twice(|n| n + 1, p.x)} {sum([p.x, p.y])} {best.len()} {byname.len()}")
+}

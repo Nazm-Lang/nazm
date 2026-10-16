@@ -1,0 +1,26 @@
+struct Bag { items: List[Int], }
+
+fn total(v: Vec[Int]): Int {
+    let mut s = 0
+    for x in v { s += x }
+    s
+}
+
+fn first[T](xs: List[T]): T { xs[0] }
+
+fn names(): List[Str] {
+    let n: List[Str] = vec_new[Str]()
+    n.push("a")
+    n
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let v: List[Int] = vec_new[Int]()
+    v.push(1)
+    v.push(2)
+    let w: Ints = v
+    let b = Bag(items: v)
+    ints_push(b.items, 3)
+    print(f"{total(v)} {ints_len(w)} {first(names())} {b.items[2]} {first(v)}\n")
+    0
+}

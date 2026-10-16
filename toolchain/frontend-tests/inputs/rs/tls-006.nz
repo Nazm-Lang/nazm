@@ -1,0 +1,6 @@
+fn main(io: IoCap, out: OutCap) -> Int ! { io } {
+    match tls_client(bytes_new(0), names("", "")) {
+        Result.Ok(value: c) => 0,
+        Result.Err(error: e) => 1,
+    }
+}

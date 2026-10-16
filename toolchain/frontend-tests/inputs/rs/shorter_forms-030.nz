@@ -1,0 +1,17 @@
+fn total(xs: Vec[Int]): Int {
+    let mut t = 0
+    for x in xs { t += x }
+    t
+}
+
+fn main(out: OutCap): Int ! {io} {
+    let a = [1, 2]
+    let b = a
+    b.push(3)
+    let c: [Int; 2] = [1, 2]
+    let mut d = c
+    d[0] = 10
+    let words = ["x", "y"]
+    print(f"{a.len()} {b.len()} {a[2]} {total(a)} {c[0]} {d[0]} {words.len()}\n")
+    0
+}

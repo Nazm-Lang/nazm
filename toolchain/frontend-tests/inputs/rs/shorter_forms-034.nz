@@ -1,0 +1,6 @@
+fn text_split(s: Str, sep: Str): Int = 7
+
+fn main() {
+    println(text_split("a b", " "))
+    println("a b".split(" "))
+}

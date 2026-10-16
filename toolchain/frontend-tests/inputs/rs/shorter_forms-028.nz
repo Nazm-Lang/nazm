@@ -1,0 +1,1 @@
+fn main() { let v = vec_new[Int](); list_from_vec(v) }
