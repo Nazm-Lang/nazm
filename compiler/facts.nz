@@ -519,6 +519,35 @@ pub fn fx_source_fingerprint(f: Facts, m: Int, os: Str, arch: Str) -> Str {
     fx_framed("nazm.source/1", fields)
 }
 
+// Each module's check key (`CheckKey`), or "-" where it has none: what a Core IR unit is filed
+// under (design D28).
+pub fn fx_check_keys(f: Facts, os: Str, arch: Str) -> Strs {
+    let c = f.c;
+    let checker = fx_checker_identity();
+    let keys = strs_new();
+    let sources = strs_new();
+    let hashes = strs_new();
+    let mut m = 0;
+    while m < fx_modules(f) {
+        strs_push(keys, fx_module_key(f, m));
+        m = m + 1;
+    }
+    m = 0;
+    while m < fx_modules(f) {
+        strs_push(sources, fx_source_fingerprint(f, m, os, arch));
+        let json = ck_interface_json(c, m, keys);
+        if json == "" { strs_push(hashes, ""); } else { strs_push(hashes, blake3_hex(bytes_from_str(json))); }
+        m = m + 1;
+    }
+    let out = strs_new();
+    m = 0;
+    while m < fx_modules(f) {
+        strs_push(out, fx_check_key(f, m, checker, keys, sources, hashes));
+        m = m + 1;
+    }
+    out
+}
+
 // Each module's key, source fingerprint, published interface, its hash and its check key, as
 // the reference's cache computes them (`checking.rs`'s `plan`), one line each — what `run.sh
 // keys` compares.
