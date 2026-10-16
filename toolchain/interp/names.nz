@@ -219,6 +219,17 @@ pub fn builtin_names() -> Strs {
     strs_push(n, "str_concat_num")
     strs_push(n, "text_from_str")
     strs_push(n, "text_assume")
+    strs_push(n, "os_tls_client_config")
+    strs_push(n, "os_tls_server_config")
+    strs_push(n, "os_tls_connect")
+    strs_push(n, "os_tls_accept")
+    strs_push(n, "os_tls_handshake")
+    strs_push(n, "os_tls_push")
+    strs_push(n, "os_tls_pull")
+    strs_push(n, "os_tls_read")
+    strs_push(n, "os_tls_write")
+    strs_push(n, "os_tls_close")
+    strs_push(n, "os_tls_info")
     n
 }
 
@@ -436,3 +447,14 @@ pub const B_STR_APPEND: Int = 210
 pub const B_STR_CONCAT_NUM: Int = 211
 pub const B_TEXT_FROM_STR: Int = 212
 pub const B_TEXT_ASSUME: Int = 213
+pub const B_OS_TLS_CLIENT_CONFIG: Int = 214
+pub const B_OS_TLS_SERVER_CONFIG: Int = 215
+pub const B_OS_TLS_CONNECT: Int = 216
+pub const B_OS_TLS_ACCEPT: Int = 217
+pub const B_OS_TLS_HANDSHAKE: Int = 218
+pub const B_OS_TLS_PUSH: Int = 219
+pub const B_OS_TLS_PULL: Int = 220
+pub const B_OS_TLS_READ: Int = 221
+pub const B_OS_TLS_WRITE: Int = 222
+pub const B_OS_TLS_CLOSE: Int = 223
+pub const B_OS_TLS_INFO: Int = 224

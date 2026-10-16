@@ -221,6 +221,19 @@ by its poll interval nor by the round-without-progress rule (`SC_CONNECTS`, `ST_
 `ST_GIVEWAY`). The three networked programs of `crates/nazm-cli/tests/http.rs` are cases of the
 suite (`tests/cases/http_*.nz`); their memory reports agree with the Rust interpreter's exactly.
 
+C4's drain (2026-10-16) closes the connections that are idle when it runs, so what a writer does
+just after its write now shows: on its own thread the server marks a connection idle right after
+answering, before the client has read the answer. So a write no longer ends the writer's turn at
+once; it gives way at its next socket operation (`ST_GIVEWAY` 2), and a socket closed or shut down
+lets every waiting socket task try again at its next turn without ending the closer's. The
+loopback and malformed-request programs agree exactly again (924 and 2,172 strings). The
+connections-in-tasks program left the suite: the Rust interpreter itself counts 1,388 to 1,391
+strings on it from run to run.
+
+TLS (v1 track C1) is refused as a value, as `crates/nazm-core/src/eval/tls.rs` refuses it: the two
+configurations answer `-ENOSYS` (78 on macOS, 38 on Linux), and the other nine `os_tls_*` built-ins
+answer `Closed` (-65,536). Case `tests/cases/tls_refused.nz`.
+
 **The clocks.** `time_now_ms` and `time_now_ns` count from the program's first reading of each, as
 the Rust interpreter's do (`intrinsic.rs`, `monotonic_ms`), and `os_wait_until`'s deadline is on
 that clock. A socket's deadline is the runtime's (`os_set_timeout`); the waits around it here are

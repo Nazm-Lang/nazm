@@ -1,0 +1,20 @@
+// TLS in an interpreter is refused as a value (crates/nazm-core/src/eval/tls.rs): a configuration
+// answers -ENOSYS, and every id, never made, answers Closed. A TLS program runs compiled.
+use "@std/tls"
+
+fn main(out: OutCap, io: IoCap) -> Int ! { io } {
+    let none = strs_new()
+    match tls_client_system() {
+        Result.Ok(value: c) => { print("configured\n"); },
+        Result.Err(error: e) => { print(tls_error_show(e) + "\n"); },
+    }
+    match tls_server(bytes_new(0), bytes_new(0), none) {
+        Result.Ok(value: c) => { print("configured\n"); },
+        Result.Err(error: e) => { print(tls_error_show(e) + "\n"); },
+    }
+    print(int_to_str(tls_wire_handshake(os_stdin(), 7)) + "\n")
+    print(int_to_str(tls_wire_read(os_stdin(), 7, bytes_new(4))) + "\n")
+    print(int_to_str(tls_wire_write(os_stdin(), 7, bytes_new(4))) + "\n")
+    print(int_to_str(tls_wire_close(os_stdin(), 7)) + "\n")
+    0
+}

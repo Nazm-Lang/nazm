@@ -127,6 +127,15 @@ pub fn builtin(p: Prog, vm: Vm, pc: Int, id: Int, n: Int, caps: Caps) -> V {
     if is_os(op) {
         return os_builtin(p, vm, pc, op, n, caps.io, caps.net, caps.proc, caps.rnd, caps.time)
     }
+    // TLS (v1 track C1) is refused as a value, as the Rust interpreter refuses it
+    // (`crates/nazm-core/src/eval/tls.rs`): a configuration answers `-ENOSYS`, and every id,
+    // never made, answers `Closed`. A TLS program runs compiled.
+    if op == B_OS_TLS_CLIENT_CONFIG || op == B_OS_TLS_SERVER_CONFIG {
+        return V.Int(v: 0 - (if os_family() == 0 { 78 } else { 38 }))
+    }
+    if op >= B_OS_TLS_CONNECT && op <= B_OS_TLS_INFO {
+        return V.Int(v: 0 - 65536)
+    }
     if is_bytes_text(op) {
         return bytes_text(p, vm, pc, op, n, strs_get(p.names, ints_get(p.c, pc)))
     }
