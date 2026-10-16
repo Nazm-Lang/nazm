@@ -55,12 +55,6 @@ fn stat_kind(io: IoCap, p: Str) -> Int {
     bytes_read_le[Int](out, 8)
 }
 
-fn lstat_kind(io: IoCap, p: Str) -> Int {
-    let out = bytes_new(48)
-    if os_lstat(p, out) != 0 { return 0 - 1 }
-    bytes_read_le[Int](out, 8)
-}
-
 // `Path::parent` of a file argument, "." where it is empty.
 fn parent_or_dot(path: Str) -> Str {
     let mut end = str_len(path)
@@ -599,6 +593,7 @@ fn documented(f: Facts, m: Int) -> Bool { fx_module_own(f, m) && fx_module_key(f
 fn document(io: IoCap, path: Str, shown: Str, prefix: Str, base: Str, library: Str, items: Items) -> Int {
     let f = fx_check_module(path, library, fe_host_os(), fe_host_arch(), io)
     if !fx_carried(f) { refuse(io, fx_why(f)) }
+    if fe_pattern_let(f) { refuse(io, "a pattern `let` (the scope epoch 88 gives its names is not in R2's checker yet)") }
     if fx_refusal(f) != "" { fail(io, fx_refusal(f), 1) }
     let dg = fx_diags(f)
     fe_unprefix_diags(io, dg, prefix, path)
@@ -659,68 +654,6 @@ fn document(io: IoCap, path: Str, shown: Str, prefix: Str, base: Str, library: S
 
 // --- a package's directory ---------------------------------------------------------------------------
 
-// `PathBuf`'s order: component by component.
-fn path_less(a: Str, b: Str) -> Bool {
-    let mut i = 0
-    while i < str_len(a) && i < str_len(b) {
-        let x = str_byte(a, i)
-        let y = str_byte(b, i)
-        if x != y {
-            if x == 47 { return true }
-            if y == 47 { return false }
-            return x < y
-        }
-        i += 1
-    }
-    str_len(a) < str_len(b)
-}
-
-// Every `.nz` file under `dir` (absolute), not through a symbolic link to a directory; false when a
-// directory cannot be read.
-fn walk(io: IoCap, dir: Str, out: Strs) -> Bool {
-    let h = os_dir_open(dir)
-    if os_status(h) < 0 { return false }
-    let buf = bytes_new(1024)
-    let mut n = os_dir_next(h, buf)
-    let subdirs = strs_new()
-    while n > 0 {
-        let name = bytes_to_str(bytes_slice(buf, 0, n))
-        let p = if dir == "/" { "/" + name } else { dir + "/" + name }
-        let k = lstat_kind(io, p)
-        if k == 1 {
-            strs_push(subdirs, p)
-        } else if stat_kind(io, p) == 1 {
-            // a link to a directory: not walked
-        } else if str_len(name) > 3 && str_slice(name, str_len(name) - 3, str_len(name)) == ".nz" {
-            strs_push(out, p)
-        }
-        n = os_dir_next(h, buf)
-    }
-    os_close(h)
-    if n < 0 { return false }
-    for i in 0..strs_len(subdirs) {
-        if !walk(io, strs_get(subdirs, i), out) { return false }
-    }
-    true
-}
-
-fn sort_paths(xs: Strs) -> Strs {
-    let out = strs_new()
-    for i in 0..strs_len(xs) {
-        let x = strs_get(xs, i)
-        let mut at = 0
-        while at < strs_len(out) && path_less(strs_get(out, at), x) { at += 1 }
-        strs_push(out, "")
-        let mut j = strs_len(out) - 1
-        while j > at {
-            strs_set(out, j, strs_get(out, j - 1))
-            j -= 1
-        }
-        strs_set(out, at, x)
-    }
-    out
-}
-
 // The package object of the document: its name, version and every package's profile.
 fn package_json(p: Packages) -> Str {
     if pk_packages_state(p) != 1 { return "null" }
@@ -772,8 +705,8 @@ pub fn doc_command(io: IoCap, c: Cli) -> Int {
         packages = pk_context(declared, io)
         if pk_packages_state(packages) != 1 { refuse(io, "a package that does not resolve here") }
         let found = strs_new()
-        if !walk(io, source_root, found) { refuse(io, "a source root that cannot be read") }
-        let files = sort_paths(found)
+        if !fe_walk(io, source_root, found) { refuse(io, "a source root that cannot be read") }
+        let files = fe_sort_paths(found)
         for i in 0..strs_len(files) {
             let f = strs_get(files, i)
             document(io, f, f, "", dir, library, items)

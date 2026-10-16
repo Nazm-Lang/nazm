@@ -19,7 +19,8 @@
 #         fixture directory: clap's usage errors and help, and what the command then does (design,
 #         D8); and every line of tests/args/nazm.txt as `nazm LINE`: the top level (design, D12).
 #   init  `nazm init` of every template, the trees written compared file by file (design, D9).
-#   check For every input (as for fmt, or the FILEs named), `check --no-cache FILE` and
+#   check For every input (as for fmt, or the FILEs named) and the repository's package
+#         directories (a package's `main`, or a library's modules), `check --no-cache FILE` and
 #         `check --json --no-cache FILE` from the repository's root, and `--deny-warnings` too where
 #         the reference warns (design, D11). The standard library is the checkout's (NAZM_LIBRARY);
 #         the reference's check cache goes to a scratch directory (NAZM_CACHE_DIR).
@@ -178,6 +179,19 @@ fixture() {
       printf 'use "gone.nz";\nfn main() -> Int { 0 }\n' > "$dir/m.nz"
       printf 'fn main() -> Int { 1 + }\n' > "$dir/s.nz"
       mkdir -p "$dir/sub"
+      # app/ is a package whose `main` imports the library package lib/; lib/'s two modules share
+      # an error; bad/ imports a package it does not declare; nopkg.nz imports one outside a package;
+      # broken/'s manifest is not one.
+      mkdir -p "$dir/app/src" "$dir/lib/src/inner" "$dir/bad/src" "$dir/broken"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "app"\nversion = "0.1.0"\nmain = "main.nz"\n\n[dependencies]\nlib = { path = "../lib", version = "1.0.0" }\n' > "$dir/app/nazm.toml"
+      printf 'use "lib:a.nz";\nfn main() -> Int { twice(2) }\n' > "$dir/app/src/main.nz"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "lib"\nversion = "1.0.0"\n' > "$dir/lib/nazm.toml"
+      printf 'use "inner/b.nz";\npub fn twice(n: Int) -> Int { n * k() }\n' > "$dir/lib/src/a.nz"
+      printf 'pub fn k() -> Int {\n    let s: Str = 2;\n    2\n}\n' > "$dir/lib/src/inner/b.nz"
+      printf 'schema = "nazm.package/1"\n\n[package]\nname = "bad"\nversion = "0.1.0"\nmain = "main.nz"\n' > "$dir/bad/nazm.toml"
+      printf 'use "lib:a.nz";\nfn main() -> Int { 0 }\n' > "$dir/bad/src/main.nz"
+      printf 'use "lib:a.nz";\nfn main() -> Int { 0 }\n' > "$dir/nopkg.nz"
+      printf 'schema = "nazm.package/9"\n' > "$dir/broken/nazm.toml"
       ;;
     doc)
       printf '// Adds.\n//   Two lines.\npub fn add(a: Int, b: Int) -> Int { a + b }\n\n@deprecated("use add")\npub fn plus(a: Int) -> Int { a }\n\n/// Kept.\npub struct P { x: Int, y: Str }\n\npub enum E { A, B(n: Int) }\n' > "$dir/a.nz"
@@ -219,7 +233,9 @@ tree_record() {
 record() {
   dir=$1; shift
   (cd "$dir" && { rc=0; "$@" > "$dir.out" 2> "$dir.err" || rc=$?; echo "exit $rc" > "$dir.record"; })
-  { echo "[stdout]"; cat "$dir.out"; echo "[stderr]"; cat "$dir.err"; echo "[tree]"; tree_record "$dir"; } >> "$dir.record"
+  # A package's modules are named by their canonical paths, which hold the side's own directory.
+  canon=$(cd "$dir" && pwd -P)
+  { echo "[stdout]"; sed "s|$canon|DIR|g" "$dir.out"; echo "[stderr]"; sed "s|$canon|DIR|g" "$dir.err"; echo "[tree]"; tree_record "$dir"; } >> "$dir.record"
 }
 
 # --- args: every command line of every ported command ---------------------------------------------
@@ -302,6 +318,9 @@ part_check() {
     printf '%s\n' "$@" > "$list"
   else
     (cd "$root" && { git ls-files '*.nz'; find toolchain/frontend-tests/inputs toolchain/commands -name '*.nz' -type f; } | LC_ALL=C sort -u) > "$list"
+    # The packages, by their directories: a package's `main`, or a library's modules (N74).
+    (cd "$root" && { git ls-files '*nazm.toml'; find toolchain/frontend-tests/inputs -name nazm.toml -type f; } \
+      | grep -v '^crates/nazm-cli/templates/' | sed 's|/nazm.toml$||' | LC_ALL=C sort -u) >> "$list"
   fi
   total=$(wc -l < "$list" | tr -d ' ')
   mkdir -p "$work/cres"

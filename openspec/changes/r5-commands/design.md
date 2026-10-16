@@ -240,6 +240,40 @@ repository's root and, where the reference would apply an edit, `fix --apply` on
 compared too; `tests/args/fix.txt` covers both applicabilities, several edits in one file, an edit
 in an imported module, the failures and the options.
 
+**D15 — `check` carries packages (task 5.2, 2026-10-16), and says what still blocks the rest.**
+Since `fx_check` decides the source root and resolves the packages (R2's `compiler/package.nz`),
+`check` follows `prepare.rs` and `package.rs` for them instead of refusing every manifest at or
+above the file (D11's walk is gone): a directory with a manifest whose package has no `main` is a
+library, checked as `checking::library` checks it — every `.nz` file under the canonical source
+root, sorted as `PathBuf` sorts, each through `fx_check_module`, its errors (not its warnings) each
+reported once by file, local span and code, `--deny-warnings` and the other options not consulted,
+as the reference consults none; a package with a `main` is that file, named by its canonical path;
+a file in a package is checked whole with its dependencies, and an import of a package
+(`N0508`) is the loader's diagnostic like any other. A manifest that is not one is `resolve`'s
+`error[N0500]` for a directory and `root::decide`'s `nazm: N0500: …` for a file in it (status 1;
+`fx_refusal`, whose words R2 keeps the reference's). `--locked` in a package without a `nazm.lock`
+is `N0505` with its help; `--features` in a package — whose manifest declares none, since the
+front end reads no `[features]` — is `Graph::enable`'s `N0500` for each name asked, sorted and each
+once (status 1). `--profile` naming no profile is `N0511` with the list; `--profile general` holds
+no rule and is carried where no module asks `@cfg`. `--cache-report --no-cache` prints the tally a
+run without the cache has (every module checked, nothing reused, missed, rejected, declined or
+stored) and the root's kind, `derived` or `package`.
+
+Still refused, each with what blocks it: `--locked` where the lockfile exists (its digests —
+`nazm_package::digest`, BLAKE3 over the manifest and the source tree — are not ported), a profile
+other than `general` and `--profile-report` (the profile rules evaluate MIR facts, R3's),
+`--cache-report` with the cache (the port keeps no cache, so its tally would be invented),
+`--source-root` (`fx_check` decides the root itself and takes none: a parameter for R2 to add), and
+`--summary-json` (its references carry the ids of `nazm diagnostics` — N30's per-module language
+service — and that service's `state.source` digest; neither is published by `compiler/facts.nz`).
+
+Epoch 88 (main, 2026-10-16) holds a pattern `let`'s names to the scope the `let` is written in
+(`N0202` for a name that scope binds already); R2's checker does not yet, so on three of the
+harness's programs it accepted what the reference refuses. Until it does, `check`, `doc` and `fix`
+refuse a compilation whose own modules write a pattern `let` — any `let` but
+`let NAME =` and `let NAME:` (`front.nz`, `fe_pattern_let`, over the lexer's tokens) — a defect of
+`compiler/` handed back, not a guess at the rule.
+
 ## Risks / Trade-offs
 
 - **Two formatters until the Rust one retires.** A change to `format.rs` must be ported too; the
