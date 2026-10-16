@@ -129,9 +129,30 @@ was installed there: no Rust, no clang, no MinGW-w64.
 | --- | --- |
 | `cargo build --workspace` and `cargo clippy --workspace --all-targets -D warnings` for `x86_64-pc-windows-gnu` | passed (cross-built on macOS with MinGW-w64; the interpreter's files, processes and sockets have a Windows path, `crates/nazm-core/src/eval/host.rs`) |
 | `nazm run --interpret`, `nazm check`, `nazm fmt --check` on `bench/compare/nazm/*.nz`, `examples/*.nz`, `examples/tour/*.nz`, `examples/std/*.nz` (`scripts/windows-toolchain.sh`) | 60 agree with macOS's output, error output and exit status, 0 differ (20 files × 3 commands) |
-| `nazm build`, and `nazm run` without `--interpret` | exit 4: `clang` was not found on `PATH` — a native build needs clang and a linker on Windows (W2); its advice still names Xcode |
+| `nazm build`, and `nazm run` without `--interpret` | exit 4: `clang` was not found on `PATH` — a native build needs clang and a linker on Windows (W2, below); its advice then named Xcode |
 | The workspace's test binaries but `selfhost` (contained-only): 95, run on the laptop | 2014 passed, 892 failed, 83 ignored, none timed out. Of the failures, 785 are a native build without clang and about 40 more a tool the laptop has not got (clang or `cc` spawned directly, `cargo`, `ps`); the rest were ours: on a second run after W1's fixes, the language server's 20, workspace rename's 6, the user cache's and scratch directory's 2 and the MCP server's 7 passed; the mutation runner's 5 (`ps`, a locked file read) are POSIX-only now, campaigns running contained on Linux; `@cfg(os)` on a Windows host, a temporary directory named by `TMP`, and the DLL refusal are fixed in the tests or the compiler but wait on clang to be shown passing |
 | Not run on Windows | `selfhost` (contained); the interpreter's own POSIX tests (`platform_files`, `process_control`: links, modes, `sh` children); the mutation lifecycle; tests whose child is an `sh` script |
+
+### The toolchain's own dependencies on Windows (W2, 2026-10-16)
+
+On the same laptop and account, with llvm-mingw 20261006 (`llvm-mingw-20261006-ucrt-x86_64.zip`,
+Apache-2.0, SHA-256 `317492c456aa27ee607a5919f1d2d38dcdc1112516a24d0bf4b00d078f52d17a`, equal to
+the digest GitHub publishes for the release asset; the project publishes no checksum file of its
+own) unpacked under `C:\Users\nazmci\nazm-tools` and put on `PATH` for the session alone: no
+administrator, no installer, no system change, no Microsoft SDK, no licence accepted. It gives
+clang 23.1.3 (default target `x86_64-w64-windows-gnu`), LLD 23.1.3 and llvm-ar 23.1.3, which is what
+`nazm doctor` reports there.
+
+| What | Result |
+| --- | --- |
+| `nazm doctor` | clang, a program linked from IR through `ld.lld`, and `ar` all found; without llvm-mingw on `PATH` it names clang and `ar` as missing and says where to get them |
+| `nazm run --interpret`, `check`, `fmt --check`, native `nazm run`, and `nazm build` with the executable then run, on the 15 files `scripts/windows-toolchain.sh` takes by default, and `nazm test` over `examples/requirements/heater.nz` and `examples/apps/nbody` (both legs) — `TOOLS=… scripts/windows-toolchain.sh` | 74 agree with macOS's output, error output and exit status (15 × 5 commands and `nazm test`, its 3 cases passing), 2 differ: `httpd`'s native run and build, which reach TLS and are refused (`N0830`) until Windows' TLS engine has run on a Windows host |
+| The 95 test binaries again (all but `selfhost`), built for Windows and run on the laptop with llvm-mingw on `PATH` | 94 finished: 2392 passed, 544 failed, 89 ignored; `context` (the repository context packets) passed what it ran but stopped at the 20-minute bound. Of the failures, about 430 are tests spawning the program they built by its name without `.exe` — Windows starts nothing by that name, and a Windows executable is now `prog.exe` — and about 45 more expect the extensionless file (`native_cache`, `runtime_artifact`, `build`): the tests' names, not the builds, which `windows-toolchain.sh` shows working; 11 are TLS (`N0830`); 11 the benchmark harness's Postgres sandbox; 9 WebAssembly, which llvm-mingw's clang has no target for; about 30 a path or file a test names in POSIX form; 4 a C compiler or header the tests reach directly |
+
+W2 changed three things for this: clang is given `TMP`, `TEMP` and `SystemRoot` (with none of them
+it cannot make a temporary file to link with), a Windows host's link names MinGW-w64's libraries as
+`link.txt` does, and a Windows executable is published as `prog.exe`, the name MinGW-w64's driver
+writes.
 
 Interpreter differences on Windows, beside the spec's (*Windows x86_64*): `os_lstat`'s device and
 inode are `0` (the volume serial and file index need `GetFileInformationByHandle`, which a crate

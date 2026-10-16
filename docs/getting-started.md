@@ -24,6 +24,27 @@ nazm --version
 `cargo install --path crates/nazm-cli --locked` puts `nazm` in `~/.cargo/bin` instead. The binary
 carries the standard library inside it, so it needs no installation directory.
 
+### On Windows (x86_64)
+
+`nazm run --interpret`, `check`, `fmt` and `test --interpret` need nothing beside `nazm.exe`.
+`nazm build`, and `run` and `test` without `--interpret`, need clang and a linker for MinGW-w64
+(`x86_64-pc-windows-gnu`); Microsoft's SDK and C runtime are not used. llvm-mingw provides both as a
+portable archive — no installer, no administrator, no licence to accept beyond its own Apache-2.0:
+
+1. Download the `ucrt-x86_64` zip of the latest release from
+   <https://github.com/mstorsjo/llvm-mingw/releases> (checked with 20261006, LLVM 23.1.3) and
+   compare its SHA-256 with the digest the release page shows.
+2. Unpack it anywhere your account may write, for example in PowerShell:
+   `Expand-Archive llvm-mingw-20261006-ucrt-x86_64.zip -DestinationPath $HOME\nazm-tools`.
+3. Put its `bin` directory on `PATH` — for one session,
+   `$env:PATH = "$HOME\nazm-tools\llvm-mingw-20261006-ucrt-x86_64\bin;$env:PATH"`, or in your
+   account's environment variables to keep it.
+4. `nazm doctor` says whether clang links a program and which versions it found; what is missing,
+   it names.
+
+`nazm build hello.nz` then writes `hello.exe`. A program that speaks TLS is refused on Windows
+until its engine (SChannel) has been run there (`N0830`).
+
 ## 2. A first program
 
 Create `hello.nz`:
