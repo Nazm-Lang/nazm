@@ -41,6 +41,11 @@ pub struct Code {
     /// Each function symbol's LSDA, an offset in `lsda`, or -1 where it has no landing pad.
     fn_lsda: Ints,
     lsda: ByteBuf,
+    /// Whether the target is Windows x64 (section 8): its calling convention, PE/COFF.
+    win: Bool,
+    /// Each function symbol's UNWIND_INFO, an offset in `xdata`, or -1 (8.3, Windows only).
+    fn_xdata: Ints,
+    xdata: ByteBuf,
 }
 
 // The symbols an unwinding unit uses (`Code.uw`).
@@ -50,22 +55,25 @@ pub const UW_PERSONALITY: Int = 2
 pub const UW_FORCED: Int = 3
 pub const UW_ABORT: Int = 4
 
-pub fn code_new(nsyms: Int, apple: Bool, limit_sym: Int, uw: Ints) -> Code {
+pub fn code_new(nsyms: Int, apple: Bool, win: Bool, limit_sym: Int, uw: Ints) -> Code {
     let at = ints_new()
     let enc = ints_new()
     let lsda = ints_new()
+    let xd = ints_new()
     let mut i = 0
     while i < nsyms {
         ints_push(at, -1)
         ints_push(enc, 0)
         ints_push(lsda, -1)
+        ints_push(xd, -1)
         i += 1
     }
     Code(buf: bytebuf_new(), rel_at: ints_new(), rel_kind: ints_new(), rel_sym: ints_new(),
             rel_pcrel: ints_new(), rel_len: ints_new(),
             sym_at: at, errors: strs_new(), apple: apple, loc_at: ints_new(),
             loc_file: ints_new(), loc_line: ints_new(), loc_col: ints_new(), fn_enc: enc,
-            limit_sym: limit_sym, uw: uw, fn_lsda: lsda, lsda: bytebuf_new())
+            limit_sym: limit_sym, uw: uw, fn_lsda: lsda, lsda: bytebuf_new(), win: win,
+            fn_xdata: xd, xdata: bytebuf_new())
 }
 
 /// Whether a Nazm function's failure unwinds in this unit's code (7.5).

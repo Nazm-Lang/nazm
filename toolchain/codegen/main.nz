@@ -9,7 +9,8 @@
 // Reads a program's units as `nazm lir --ops` prints them from the file LIR, and writes one
 // relocatable object per unit, `OUTDIR/unit-K.o` for the K-th unit, for the target:
 // `aarch64-apple-darwin` (the default) and `x86_64-apple-darwin` as Mach-O,
-// `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` as ELF.
+// `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` as ELF, and
+// `x86_64-pc-windows-gnu` as PE/COFF with Windows x64's convention (section 8).
 // What it does not carry it refuses by name, on standard error, with exit status 3, and then
 // writes nothing (design D9).
 
@@ -23,6 +24,7 @@ use "sel_x64.nz"
 use "common.nz"
 use "macho.nz"
 use "elf.nz"
+use "coff.nz"
 use "dwarf.nz"
 use "forms.nz"
 
@@ -61,10 +63,11 @@ fn main(io: IoCap) {
         eprintln("usage: nzcg [--target TRIPLE] [--one-thread] LIR OUTDIR")
         exit_with(2)
     }
-    let x64 = target == "x86_64-apple-darwin" || target == "x86_64-unknown-linux-gnu"
+    let win = target == "x86_64-pc-windows-gnu"
+    let x64 = target == "x86_64-apple-darwin" || target == "x86_64-unknown-linux-gnu" || win
     let apple = target == "x86_64-apple-darwin" || target == "aarch64-apple-darwin"
     if !x64 && !apple && target != "aarch64-unknown-linux-gnu" {
-        eprintln(f"nzcg: refused: the target `{target}` (aarch64 and x86_64, apple-darwin and unknown-linux-gnu, are carried)")
+        eprintln(f"nzcg: refused: the target `{target}` (aarch64 and x86_64, apple-darwin and unknown-linux-gnu; x86_64-pc-windows-gnu, are carried)")
         exit_with(3)
     }
     let text = read_file(arg(first))
@@ -110,7 +113,8 @@ fn main(io: IoCap) {
                 ints_push(uw, if fails { unit_sym(u, "_Unwind_ForcedUnwind", L_IMPORT) } else { -1 })
                 ints_push(uw, if fails { unit_sym(u, "abort", L_IMPORT) } else { -1 })
             }
-            let c = code_new(u.syms.len(), apple, limit, uw)
+            // Windows keeps the failure bit, as hosted LLVM does for this triple (8.3).
+            let c = code_new(u.syms.len(), apple, win, limit, uw)
             for f in u.funcs {
                 if str_len(f.section) > 0 {
                     strs_push(errors, f"`{f.name}` in section `{f.section}` (section placement, a board's, is not carried)")
@@ -126,7 +130,13 @@ fn main(io: IoCap) {
             for e in c.errors { strs_push(errors, e) }
             if strs_len(errors) == 0 {
                 let dbg = build_dwarf(u, c)
-                objects.push(if apple { write_object(u, c, x64, dbg, errors) } else { write_elf(u, c, x64, dbg, errors) })
+                objects.push(if apple {
+                    write_object(u, c, x64, dbg, errors)
+                } else if win {
+                    write_coff(u, c, dbg, errors)
+                } else {
+                    write_elf(u, c, x64, dbg, errors)
+                })
             }
         }
     }
