@@ -495,6 +495,13 @@
         functions the lowering carries 93,369, all agree; the other parts 10,992, all agree;
         1,749 whole documents, all the reference's bytes. check 3,151 agree, 2 differ (carried
         3,147, all agree); facts 3,147 agree, 6 differ (carried 3,147, all agree)
+  - [x] The built-ins made of operations a program cannot name: `box_new` and `cell_new` as
+        `{ let made = box_fresh() | vec_new(); box_fill | vec_push(made, v); made }`
+        (`made_holding`), `cell_get` and `cell_set` as `vec_get` and `vec_set` at 0,
+        `checked_add`/`_sub` by wrapping and saturating and `checked_mul` by a wrapping product
+        divided back (`checked`), `chain_from_vec` as its copying loop. `run.sh core`: 3,153
+        agree, 0 differ; of 93,537 functions the lowering carries 93,424, all agree; the other
+        parts 10,992, all agree; 1,768 whole documents, all the reference's bytes
 - [ ] 5.2 Per-module output; the performance budgets measured (`rewrite-in-nazm` 3.3)
 
 ## 6. R1.5's forms (after the coordinator declares them final)
