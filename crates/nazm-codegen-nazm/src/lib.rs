@@ -34,11 +34,14 @@ pub const INSTALLED: &str = "../libexec/nazm/nzcg";
 /// The exit status with which the generator refuses what it does not carry (its design, D9).
 const REFUSED: i32 = 3;
 
-/// Whether the generator carries `target` before 1.0: the two macOS targets (its design, D13).
-/// Its ELF writer exists but is not run anywhere, so Linux is refused until after 1.0.
+/// Whether the generator carries `target` before 1.0: the two macOS targets (its design, D13),
+/// and `x86_64-pc-windows-gnu` (section 8: PE/COFF, Windows x64's convention, the failure bit as
+/// LLVM keeps it there), which R8 needs where Cranelift builds it today. Its ELF writer exists
+/// but is not run anywhere, so Linux is refused until after 1.0.
 #[must_use]
 pub fn carries(target: &Target) -> bool {
-    target.os == Os::Macos && matches!(target.arch, Arch::Aarch64 | Arch::X86_64)
+    (target.os == Os::Macos && matches!(target.arch, Arch::Aarch64 | Arch::X86_64))
+        || (target.os == Os::Windows && target.arch == Arch::X86_64)
 }
 
 /// The generator this process would run: [`VARIABLE`] when it is set, else [`INSTALLED`]
@@ -383,7 +386,7 @@ impl Backend for NazmCodegen {
         if !carries(&self.target) {
             return Err(vec![refusal(format!(
                 "the target `{}` (before 1.0 Nazm's code generator builds for \
-                 aarch64-apple-darwin and x86_64-apple-darwin)",
+                 aarch64-apple-darwin, x86_64-apple-darwin and x86_64-pc-windows-gnu)",
                 self.target.triple
             ))]);
         }
@@ -449,14 +452,17 @@ mod tests {
     }
 
     #[test]
-    fn only_the_macos_targets_are_carried_before_1_0() {
-        for t in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
+    fn only_the_macos_targets_and_windows_x64_are_carried_before_1_0() {
+        for t in [
+            "aarch64-apple-darwin",
+            "x86_64-apple-darwin",
+            "x86_64-pc-windows-gnu",
+        ] {
             assert!(carries(&Target::parse(t).unwrap()), "{t}");
         }
         for t in [
             "aarch64-unknown-linux-gnu",
             "x86_64-unknown-linux-gnu",
-            "x86_64-pc-windows-gnu",
             "wasm32-wasip1",
             "aarch64-apple-ios",
             "aarch64-unknown-none",

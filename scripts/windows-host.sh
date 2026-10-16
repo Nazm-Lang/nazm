@@ -10,8 +10,9 @@
 # program is built to objects with `nazm build --target x86_64-pc-windows-gnu --objects`, linked
 # here with MinGW-w64's gcc as its link.txt says, copied over, run once, and deleted there. A
 # program that reads an argument, a file or standard input, or calls C, is skipped and counted,
-# never passed. BACKEND (`llvm`, the default, or `cranelift`) builds both the Windows program and
-# the native one. Output: one line per program and a summary.
+# never passed. BACKEND (`llvm`, the default, `cranelift`, or `nazm` — Nazm's own code generator,
+# found by NAZM_NZCG or installed beside `nazm`) builds both the Windows program and the native
+# one. Output: one line per program and a summary.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HOST="${1:-win-dell}"; [ $# -gt 0 ] && shift

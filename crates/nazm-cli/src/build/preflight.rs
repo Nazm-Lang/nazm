@@ -103,8 +103,8 @@ pub(super) fn preflight(
         );
         return Err(ExitCode::from(exit::USAGE));
     }
-    // Nazm's own code generator (R9, D15) builds for the two macOS targets before 1.0 (its D13),
-    // and must be there to run: both asked before anything is compiled, so neither is reported
+    // Nazm's own code generator (R9, D15) builds for the two macOS targets before 1.0 (its D13)
+    // and for x86_64-pc-windows-gnu (its section 8), and must be there to run: both asked before anything is compiled, so neither is reported
     // later as the compiler's own fault, and nothing falls back to another backend.
     if choice.backend == nazm_lir::backend::BackendId::Nazm {
         if !nazm_codegen_nazm::carries(&target) {
@@ -112,8 +112,8 @@ pub(super) fn preflight(
                 return Err(summarized(Status::Refused, exit::USAGE, &[], None, None));
             }
             eprintln!(
-                "nazm: `--backend nazm` builds for aarch64-apple-darwin and x86_64-apple-darwin \
-                 before 1.0; `{}` is the LLVM backend's",
+                "nazm: `--backend nazm` builds for aarch64-apple-darwin, x86_64-apple-darwin and \
+                 x86_64-pc-windows-gnu before 1.0; `{}` is the LLVM backend's",
                 target.triple
             );
             return Err(ExitCode::from(exit::USAGE));

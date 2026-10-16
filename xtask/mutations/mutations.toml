@@ -19987,6 +19987,78 @@ find = '''                y.b = f.insts[i + 6].b'''
 replace = '''                y.b = r.b'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::every_input_of_the_generators_suite_agrees_with_the_llvm_build" }]
 
+[[mutation]]
+name = "r9-8-1-a-pc-relative-field-is-absolute"
+why = "on Windows a call's or rip-relative address's field is relocated as an absolute 32-bit address, which an image based above 4 GiB cannot hold"
+file = "toolchain/codegen/coff.nz"
+find = '''    } else {
+        REL_REL32
+    }'''
+replace = '''    } else {
+        REL_ADDR32
+    }'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_generators_own_programs_build_for_windows_and_link_with_mingw" }]
+
+[[mutation]]
+name = "r9-8-1-pdata-names-the-wrong-section"
+why = "each function's RUNTIME_FUNCTION points its UNWIND_INFO into .rdata, not .xdata, so the unwinder reads data as unwind codes"
+file = "toolchain/codegen/coff.nz"
+find = '''put_reloc(rel[4], 12 * i + 8, 6, REL_ADDR32NB)'''
+replace = '''put_reloc(rel[4], 12 * i + 8, 4, REL_ADDR32NB)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-2-the-first-two-arguments-are-swapped"
+why = "Windows x64's first two integer arguments are passed in rdx and rcx, so every call with two arguments swaps them"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''        0 => RCX,
+        1 => RDX,'''
+replace = '''        0 => RDX,
+        1 => RCX,'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-2-no-shadow-space"
+why = "calls reserve no 32 bytes of shadow space, so a fifth argument lands where the callee may spill its first and is read from the wrong place"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''            ints_push(out, 32 + 8 * (k - 4))'''
+replace = '''            ints_push(out, 8 * (k - 4))'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-2-the-scratch-xmm-pair-is-callee-saved"
+why = "on Windows the float scratch registers are xmm14/xmm15, which Windows x64 keeps across calls, so a caller's floats there are clobbered"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''x0: if c.win { WX0 } else { X0 },'''
+replace = '''x0: X0,'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-2-rsi-and-rdi-are-not-saved"
+why = "values allocated to rsi and rdi, callee-saved on Windows x64, are not pushed and popped, so a caller's are clobbered"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''used_regs(loc, if c.win { NREGS + 2 } else { NREGS })'''
+replace = '''used_regs(loc, NREGS)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-2-large-frames-are-not-probed"
+why = "a frame of a page or more is allocated without ___chkstk_ms, skipping Windows's guard page"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''    if size >= 4096 {
+        mov_imm(b, A, size)'''
+replace = '''    if size >= 4096 * 4096 {
+        mov_imm(b, A, size)'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
+[[mutation]]
+name = "r9-8-3-a-small-allocation-is-misdescribed"
+why = "a small frame's UWOP_ALLOC_SMALL says eight bytes more than the prologue subtracts, so unwinding reads the wrong return address"
+file = "toolchain/codegen/sel_x64.nz"
+find = '''b1(x, 2 | ((info[k] / 8 - 1) << 4))'''
+replace = '''b1(x, 2 | ((info[k] / 8) << 4))'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::the_windows_objects_keep_the_win64_convention_and_describe_every_frame" }]
+
 # --- performance leadership: plain reference counts in a program of one thread ------------------
 
 [[mutation]]
