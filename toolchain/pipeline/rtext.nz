@@ -10402,6 +10402,479 @@ entry:
 "#
 }
 
+pub fn rt_board_THUMBV8M_FLOAT_RUNTIME() -> Str ! {} {
+    r#"
+declare i64 @llvm.ctlz.i64(i64, i1)
+
+define arm_aapcscc float @__aeabi_ul2f(i64 %x) "no-builtins" {
+entry:
+  %zero = icmp eq i64 %x, 0
+  br i1 %zero, label %none, label %some
+none:
+  ret float 0.0
+some:
+  %lz = call i64 @llvm.ctlz.i64(i64 %x, i1 true)
+  %n = shl i64 %x, %lz
+  %top = lshr i64 %n, 40
+  %rest = shl i64 %n, 24
+  %above = icmp ugt i64 %rest, -9223372036854775808
+  %tie = icmp eq i64 %rest, -9223372036854775808
+  %low = and i64 %top, 1
+  %odd = icmp ne i64 %low, 0
+  %even = and i1 %tie, %odd
+  %up = or i1 %above, %even
+  %inc = zext i1 %up to i64
+  %m = add i64 %top, %inc
+  %e = sub i64 189, %lz
+  %eb = shl i64 %e, 23
+  %bits = add i64 %eb, %m
+  %b32 = trunc i64 %bits to i32
+  %f = bitcast i32 %b32 to float
+  ret float %f
+}
+
+define arm_aapcscc float @__aeabi_l2f(i64 %x) "no-builtins" {
+entry:
+  %neg = icmp slt i64 %x, 0
+  %flip = sub i64 0, %x
+  %mag = select i1 %neg, i64 %flip, i64 %x
+  %f = call arm_aapcscc float @__aeabi_ul2f(i64 %mag)
+  %b = bitcast float %f to i32
+  %sign = select i1 %neg, i32 -2147483648, i32 0
+  %o = or i32 %b, %sign
+  %r = bitcast i32 %o to float
+  ret float %r
+}
+
+; The magnitude of a float that is at least 1 and below 2^64, truncated: its biased exponent and
+; its bits.
+define internal i64 @nz.f2u64(i32 %ex, i32 %b) {
+entry:
+  %frac = and i32 %b, 8388607
+  %m32 = or i32 %frac, 8388608
+  %m = zext i32 %m32 to i64
+  %up = icmp uge i32 %ex, 150
+  br i1 %up, label %left, label %right
+left:
+  %l = sub i32 %ex, 150
+  %l64 = zext i32 %l to i64
+  %v = shl i64 %m, %l64
+  ret i64 %v
+right:
+  %r = sub i32 150, %ex
+  %r64 = zext i32 %r to i64
+  %w = lshr i64 %m, %r64
+  ret i64 %w
+}
+
+define arm_aapcscc i64 @__aeabi_f2ulz(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %special = icmp eq i32 %ex, 255
+  %some = icmp ne i32 %frac, 0
+  %nan = and i1 %special, %some
+  %neg = icmp slt i32 %b, 0
+  %small = icmp ult i32 %ex, 127
+  %n0 = or i1 %nan, %neg
+  %nothing = or i1 %n0, %small
+  br i1 %nothing, label %zero, label %sized
+zero:
+  ret i64 0
+sized:
+  %huge = icmp uge i32 %ex, 191
+  br i1 %huge, label %max, label %fits
+max:
+  ret i64 -1
+fits:
+  %v = call i64 @nz.f2u64(i32 %ex, i32 %b)
+  ret i64 %v
+}
+
+define arm_aapcscc i64 @__aeabi_f2lz(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %special = icmp eq i32 %ex, 255
+  %some = icmp ne i32 %frac, 0
+  %nan = and i1 %special, %some
+  %small = icmp ult i32 %ex, 127
+  %nothing = or i1 %nan, %small
+  %neg = icmp slt i32 %b, 0
+  br i1 %nothing, label %zero, label %sized
+zero:
+  ret i64 0
+sized:
+  %huge = icmp uge i32 %ex, 190
+  br i1 %huge, label %bound, label %fits
+bound:
+  %edge = select i1 %neg, i64 -9223372036854775808, i64 9223372036854775807
+  ret i64 %edge
+fits:
+  %v = call i64 @nz.f2u64(i32 %ex, i32 %b)
+  %nv = sub i64 0, %v
+  %r = select i1 %neg, i64 %nv, i64 %v
+  ret i64 %r
+}
+
+declare i32 @llvm.ctlz.i32(i32, i1)
+
+define arm_aapcscc double @__aeabi_f2d(float %f) "no-builtins" {
+entry:
+  %b = bitcast float %f to i32
+  %s32 = and i32 %b, -2147483648
+  %s64 = zext i32 %s32 to i64
+  %sign = shl i64 %s64, 32
+  %sh = lshr i32 %b, 23
+  %ex = and i32 %sh, 255
+  %frac = and i32 %b, 8388607
+  %f64 = zext i32 %frac to i64
+  %special = icmp eq i32 %ex, 255
+  br i1 %special, label %inf, label %finite
+inf:
+  %im = shl i64 %f64, 29
+  %ib = or i64 %im, 9218868437227405312
+  %ir = or i64 %ib, %sign
+  %id = bitcast i64 %ir to double
+  ret double %id
+finite:
+  %sub = icmp eq i32 %ex, 0
+  br i1 %sub, label %small, label %normal
+normal:
+  %e32 = add i32 %ex, 896
+  %e64 = zext i32 %e32 to i64
+  %eb = shl i64 %e64, 52
+  %nm = shl i64 %f64, 29
+  %nb = or i64 %eb, %nm
+  %nr = or i64 %nb, %sign
+  %nd = bitcast i64 %nr to double
+  ret double %nd
+small:
+  %zero = icmp eq i32 %frac, 0
+  br i1 %zero, label %signed_zero, label %subnormal
+signed_zero:
+  %zd = bitcast i64 %sign to double
+  ret double %zd
+subnormal:
+  ; The value is frac * 2^-149: its top bit, at p, is 2^(p - 149), a double's exponent p + 874.
+  %lz = call i32 @llvm.ctlz.i32(i32 %frac, i1 true)
+  %p = sub i32 31, %lz
+  %se = add i32 %p, 874
+  %se64 = zext i32 %se to i64
+  %seb = shl i64 %se64, 52
+  %up = sub i32 52, %p
+  %up64 = zext i32 %up to i64
+  %sm0 = shl i64 %f64, %up64
+  %sm = and i64 %sm0, 4503599627370495
+  %sb = or i64 %seb, %sm
+  %sr = or i64 %sb, %sign
+  %sd = bitcast i64 %sr to double
+  ret double %sd
+}
+
+; Two doubles' order, IEEE 754's: 2 when either is a NaN, else -1, 0 or 1. Each is mapped to an
+; integer that orders as it does — its magnitude, negated when its sign is set — so both zeros are 0.
+define internal i32 @nz.dorder(double %a, double %b) "no-builtins" {
+entry:
+  %x = bitcast double %a to i64
+  %y = bitcast double %b to i64
+  %xm = and i64 %x, 9223372036854775807
+  %ym = and i64 %y, 9223372036854775807
+  %xn = icmp ugt i64 %xm, 9218868437227405312
+  %yn = icmp ugt i64 %ym, 9218868437227405312
+  %nan = or i1 %xn, %yn
+  br i1 %nan, label %unordered, label %ordered
+unordered:
+  ret i32 2
+ordered:
+  %xs = icmp slt i64 %x, 0
+  %ys = icmp slt i64 %y, 0
+  %xneg = sub i64 0, %xm
+  %yneg = sub i64 0, %ym
+  %xk = select i1 %xs, i64 %xneg, i64 %xm
+  %yk = select i1 %ys, i64 %yneg, i64 %ym
+  %lt = icmp slt i64 %xk, %yk
+  %gt = icmp sgt i64 %xk, %yk
+  %l = select i1 %lt, i32 -1, i32 0
+  %r = select i1 %gt, i32 1, i32 %l
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpeq(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 0
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmplt(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, -1
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmple(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp sle i32 %o, 0
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpge(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %ge = icmp sge i32 %o, 0
+  %num = icmp ne i32 %o, 2
+  %t = and i1 %ge, %num
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpgt(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 1
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+
+define arm_aapcscc i32 @__aeabi_dcmpun(double %a, double %b) "no-builtins" {
+entry:
+  %o = call i32 @nz.dorder(double %a, double %b)
+  %t = icmp eq i32 %o, 2
+  %r = zext i1 %t to i32
+  ret i32 %r
+}
+"#
+}
+
+pub fn rt_board_RISCV32_RUNTIME() -> Str ! {} {
+    r#"
+define internal i32 @nz.mask() {
+entry:
+  %m = call i32 asm sideeffect "csrrci $0, mstatus, 8", "=r,~{memory}"()
+  ret i32 %m
+}
+
+define internal void @nz.unmask(i32 %m) {
+entry:
+  %mie = and i32 %m, 8
+  call void asm sideeffect "csrs mstatus, $0", "r,~{memory}"(i32 %mie)
+  ret void
+}
+
+define i64 @__atomic_load_8(ptr %p, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %v = load volatile i64, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %v
+}
+
+define void @__atomic_store_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret void
+}
+
+define i64 @__atomic_exchange_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  store volatile i64 %v, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define zeroext i1 @__atomic_compare_exchange_8(ptr %p, ptr %e, i64 %d, i32 %s, i32 %f) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %want = load i64, ptr %e
+  %same = icmp eq i64 %old, %want
+  br i1 %same, label %swap, label %differ
+swap:
+  store volatile i64 %d, ptr %p
+  br label %done
+differ:
+  store i64 %old, ptr %e
+  br label %done
+done:
+  call void @nz.unmask(i32 %m)
+  ret i1 %same
+}
+
+define i64 @__atomic_fetch_add_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = add i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define i64 @__atomic_fetch_sub_8(ptr %p, i64 %v, i32 %o) {
+entry:
+  %m = call i32 @nz.mask()
+  %old = load volatile i64, ptr %p
+  %new = sub i64 %old, %v
+  store volatile i64 %new, ptr %p
+  call void @nz.unmask(i32 %m)
+  ret i64 %old
+}
+
+define ptr @memcpy(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %sp = getelementptr i8, ptr %s, i32 %i
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memmove(ptr %d, ptr %s, i32 %n) "no-builtins" {
+entry:
+  %di = ptrtoint ptr %d to i32
+  %si = ptrtoint ptr %s to i32
+  %forward = icmp ule i32 %di, %si
+  br i1 %forward, label %fwd, label %loop
+fwd:
+  %c = call ptr @memcpy(ptr %d, ptr %s, i32 %n)
+  ret ptr %d
+loop:
+  %i = phi i32 [ %n, %entry ], [ %k, %body ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %body, label %done
+body:
+  %k = sub i32 %i, 1
+  %sp = getelementptr i8, ptr %s, i32 %k
+  %b = load i8, ptr %sp
+  %dp = getelementptr i8, ptr %d, i32 %k
+  store i8 %b, ptr %dp
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define ptr @memset(ptr %d, i32 %v, i32 %n) "no-builtins" {
+entry:
+  %b = trunc i32 %v to i8
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %body ]
+  %more = icmp ult i32 %i, %n
+  br i1 %more, label %body, label %done
+body:
+  %dp = getelementptr i8, ptr %d, i32 %i
+  store i8 %b, ptr %dp
+  %j = add i32 %i, 1
+  br label %loop
+done:
+  ret ptr %d
+}
+
+define internal { i64, i64 } @nz.udivmod64(i64 %n, i64 %d) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 64, %entry ], [ %i1, %next ]
+  %q = phi i64 [ 0, %entry ], [ %q2, %next ]
+  %r = phi i64 [ 0, %entry ], [ %r2, %next ]
+  %more = icmp ugt i32 %i, 0
+  br i1 %more, label %step, label %done
+step:
+  %i1 = sub i32 %i, 1
+  %sh = zext i32 %i1 to i64
+  %bit = lshr i64 %n, %sh
+  %b1 = and i64 %bit, 1
+  %rs = shl i64 %r, 1
+  %r1 = or i64 %rs, %b1
+  %qs = shl i64 %q, 1
+  %fits = icmp uge i64 %r1, %d
+  br i1 %fits, label %take, label %keep
+take:
+  %rt = sub i64 %r1, %d
+  %qt = or i64 %qs, 1
+  br label %next
+keep:
+  br label %next
+next:
+  %r2 = phi i64 [ %rt, %take ], [ %r1, %keep ]
+  %q2 = phi i64 [ %qt, %take ], [ %qs, %keep ]
+  br label %loop
+done:
+  %a = insertvalue { i64, i64 } undef, i64 %q, 0
+  %b = insertvalue { i64, i64 } %a, i64 %r, 1
+  ret { i64, i64 } %b
+}
+
+define i64 @__udivdi3(i64 %n, i64 %d) {
+entry:
+  %u = call { i64, i64 } @nz.udivmod64(i64 %n, i64 %d)
+  %q = extractvalue { i64, i64 } %u, 0
+  ret i64 %q
+}
+
+define i64 @__umoddi3(i64 %n, i64 %d) {
+entry:
+  %u = call { i64, i64 } @nz.udivmod64(i64 %n, i64 %d)
+  %r = extractvalue { i64, i64 } %u, 1
+  ret i64 %r
+}
+
+define i64 @__divdi3(i64 %n, i64 %d) {
+entry:
+  %nneg = icmp slt i64 %n, 0
+  %dneg = icmp slt i64 %d, 0
+  %nm = sub i64 0, %n
+  %dm = sub i64 0, %d
+  %na = select i1 %nneg, i64 %nm, i64 %n
+  %da = select i1 %dneg, i64 %dm, i64 %d
+  %u = call { i64, i64 } @nz.udivmod64(i64 %na, i64 %da)
+  %uq = extractvalue { i64, i64 } %u, 0
+  %flip = xor i1 %nneg, %dneg
+  %qn = sub i64 0, %uq
+  %q = select i1 %flip, i64 %qn, i64 %uq
+  ret i64 %q
+}
+
+define i64 @__moddi3(i64 %n, i64 %d) {
+entry:
+  %nneg = icmp slt i64 %n, 0
+  %dneg = icmp slt i64 %d, 0
+  %nm = sub i64 0, %n
+  %dm = sub i64 0, %d
+  %na = select i1 %nneg, i64 %nm, i64 %n
+  %da = select i1 %dneg, i64 %dm, i64 %d
+  %u = call { i64, i64 } @nz.udivmod64(i64 %na, i64 %da)
+  %ur = extractvalue { i64, i64 } %u, 1
+  %rn = sub i64 0, %ur
+  %r = select i1 %nneg, i64 %rn, i64 %ur
+  ret i64 %r
+}
+"#
+}
+
 pub fn rt_board_ATOMIC_RUNTIME() -> Str ! {} {
     r#"
 define hidden i64 @nz.atomic_load(ptr %cell) {
@@ -11005,7 +11478,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 35 }
+pub fn rt_abi_revision() -> Int ! {} { 36 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

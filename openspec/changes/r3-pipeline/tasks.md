@@ -141,8 +141,20 @@
       `c02d12e5`: MIR 1475 of 1475, LIR tables, ops (document and digests) and `--debug` 1014 of
       1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache 989 of 989 inputs
       (4599 units), the runtime digest equal, 58739 of 58739 mutants caught
+- [x] 8.6 M1's microcontroller boards (`f1570703`, runtime ABI 36): `rtext.nz` regenerated — ABI
+      36 and `board.rs`'s new texts (`THUMBV8M_FLOAT_RUNTIME`, `RISCV32_RUNTIME`). The boards stay
+      deferred (8.3): their units, `_start`, flash linker script, `init` and `[image]` are not
+      ported, and `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf` are refused by name
+      as the other boards are; MIR and LIR are unchanged on macOS (`board_init` is set only by a
+      board's build). `run.sh` against the reference built at `f1570703`, on the host and with
+      `TARGET=x86_64-apple-darwin`: MIR 1475 of 1475, LIR tables, ops (document and digests) and
+      `--debug` 1014 of 1014, runtime units 989 of 989 (25 refused by `nazm build`), object cache
+      989 of 989 inputs (4599 units; host only), the runtime digest equal, 58739 of 58739 mutants
+      caught
 - [ ] 8.3 **Deferred until after 1.0** (the copyright holder's decision, 2026-10-15; not ported
       now): Linux (`aarch64-`/`x86_64-unknown-linux-gnu`), Windows (`x86_64-pc-windows-gnu`),
       WebAssembly (`wasm32-unknown-unknown`), WASI (`wasm32-wasip1`), Android and iOS, and the
-      boards (`aarch64-unknown-none`, `riscv64gc-unknown-none-elf`, `thumbv7m-none-eabi`). The
-      pipeline refuses them by name; the runtime digest already covers their units
+      boards (`aarch64-unknown-none`, `riscv64gc-unknown-none-elf`, `thumbv7m-none-eabi`, and
+      M1's `thumbv8m.main-none-eabihf` and `riscv32imc-unknown-none-elf`, with M1's flash and
+      RAM, `init` and `[image]`). The pipeline refuses them by name; the runtime digest already
+      covers their units
