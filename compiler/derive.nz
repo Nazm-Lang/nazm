@@ -1,0 +1,1204 @@
+// Derived serialisation (R1c, L2; `docs/spec.md`, *Derived serialisation*): what `@derive(json)` and
+// `@derive(toml)` mean, as Nazm text — a port of `nazm-core/src/derive.rs` (R2, design D27).
+//
+// The loader hands every project file to `dv_expand` before reading its imports. A file none of
+// whose `struct`s or `enum`s derives anything comes back unchanged; otherwise the functions each
+// derive means are appended, with the `use` of `@std/json` or `@std/toml` they need. Appended, so
+// every span the file had keeps its offset. What a derive cannot carry is refused by the checker
+// (`configure.nz`, `dv_refusal_for`), and nothing is generated for it. The generated text is the
+// reference's byte for byte: its spans reach Core IR.
+
+use "syntax.nz";
+use "diag.nz";
+
+// --- the tree, as `derive.rs` reads it ----------------------------------------------------------
+
+fn dv_items(t: Tree, n: Int, name: Str) -> Ints { sx_items(t, sx_field(t, n, name)) }
+
+// A `TypeName`'s parts: whether it is plain (no qualifier, function or length), its name, its
+// arguments.
+pub fn dv_plain(t: Tree, ty: Int) -> Bool {
+    sx_is_some(t, sx_field(t, ty, "qualifier")) == false && sx_is_some(t, sx_field(t, ty, "function")) == false
+            && sx_is_some(t, sx_field(t, ty, "length")) == false
+}
+pub fn dv_name(t: Tree, ty: Int) -> Str { sx_name(t, ty, "name") }
+pub fn dv_args(t: Tree, ty: Int) -> Ints {
+    let a = sx_field(t, ty, "args");
+    if sx_is_some(t, a) { return sx_items(t, sx_unwrap(t, a)); }
+    ints_new()
+}
+
+// An attribute's arguments, or none.
+fn dv_attr_args(t: Tree, a: Int) -> Ints {
+    let x = sx_field(t, a, "args");
+    if sx_is_some(t, x) { return sx_items(t, sx_unwrap(t, x)); }
+    ints_new()
+}
+
+// Whether `attrs` derive `format` (`derives`).
+pub fn dv_derives(t: Tree, attrs: Ints, format: Str) -> Bool {
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if sx_name(t, a, "name") == "derive" {
+            let args = dv_attr_args(t, a);
+            let mut k = 0;
+            while k < ints_len(args) {
+                let x = ints_get(args, k);
+                if sx_text(t, x) == "Word" && sx_name(t, x, "name") == format { return true; }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// The integers a JSON number here carries, and the built-in type names (`Type::from_name`).
+fn dv_integer(n: Str) -> Bool {
+    n == "Int" || n == "Int8" || n == "Int16" || n == "Int32" || n == "UInt8" || n == "UInt16" || n == "UInt32"
+}
+fn dv_scalar(n: Str) -> Bool { dv_integer(n) || n == "Float64" || n == "Float32" || n == "Bool" || n == "Str" }
+fn dv_builtin(n: Str) -> Bool {
+    let names = "Int Bool Str Ints Strs Chan IoCap SpawnCap ForeignCap VouchCap TimeCap MmioCap OutCap NetCap RandomCap ProcessCap Int8 Int16 Int32 UInt8 UInt16 UInt32 UInt64 Float32 Float64 Bytes Text OsHandle Atomic Int128 UInt128";
+    let all = sx_split(names, 32);
+    let mut i = 0;
+    while i < strs_len(all) {
+        if strs_get(all, i) == n { return true; }
+        i = i + 1;
+    }
+    false
+}
+fn dv_holder(n: Str) -> Bool { n == "Option" || n == "Vec" || n == "List" || n == "Chain" || n == "Box" }
+
+// Why a field of type `ty` cannot be carried, or "" when it can (`refusal`).
+pub fn dv_refusal(t: Tree, ty: Int) -> Str {
+    if sx_is_some(t, sx_field(t, ty, "function")) { return "a function has no JSON form"; }
+    if sx_is_some(t, sx_field(t, ty, "length")) { return "an array has no JSON form here; a `Vec` has"; }
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    if dv_plain(t, ty) && ints_len(args) == 0 {
+        if dv_scalar(n) { return ""; }
+        if n == "UInt64" || n == "Int128" || n == "UInt128" {
+            return dv_c3("`", n, "` has values past `Int`, which every derived integer is read through; convert it to a type that has none");
+        }
+        if dv_builtin(n) { return dv_c3("`", n, "` has no JSON form"); }
+    }
+    if dv_plain(t, ty) && dv_holder(n) {
+        if ints_len(args) == 1 { return dv_refusal(t, ints_get(args, 0)); }
+        return dv_c3("`", n, "` takes one type");
+    }
+    if ints_len(args) > 0 { return dv_c3("`", n, "` is generic, and a derive is for a type that is not"); }
+    if str_len(n) > 0 && str_byte(n, 0) == 40 { return "a tuple has no JSON form here; a record has"; }
+    ""
+}
+
+// The same in `format` (`refusal_for`): TOML has no `null`, so an `Option` there is a field's whole
+// type or nothing.
+pub fn dv_refusal_for(t: Tree, format: Str, ty: Int) -> Str {
+    let why = dv_refusal(t, ty);
+    if why != "" { return why; }
+    if format == "toml" {
+        let args = dv_args(t, ty);
+        let mut i = 0;
+        while i < ints_len(args) {
+            if dv_has_option(t, ints_get(args, i)) { return "TOML has no `null`, so an `Option` may only be a field's whole type"; }
+            i = i + 1;
+        }
+    }
+    ""
+}
+fn dv_has_option(t: Tree, x: Int) -> Bool {
+    if dv_plain(t, x) && dv_name(t, x) == "Option" { return true; }
+    let args = dv_args(t, x);
+    let mut i = 0;
+    while i < ints_len(args) {
+        if dv_has_option(t, ints_get(args, i)) { return true; }
+        i = i + 1;
+    }
+    false
+}
+
+// The record and enum names a field's type reaches, unqualified (`named`): into `out`.
+pub fn dv_named(t: Tree, ty: Int, out: Ints) -> Int {
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    if dv_plain(t, ty) && dv_holder(n) {
+        let mut i = 0;
+        while i < ints_len(args) {
+            dv_named(t, ints_get(args, i), out);
+            i = i + 1;
+        }
+        return 0;
+    }
+    let builtin = dv_scalar(n) || dv_builtin(n);
+    if dv_plain(t, ty) && ints_len(args) == 0 && builtin == false { ints_push(out, ty); }
+    0
+}
+
+// `HttpRequest` as `http_request` (`snake`).
+pub fn dv_snake(name: Str) -> Str {
+    let out = strs_new();
+    let n = str_len(name);
+    let mut i = 0;
+    while i < n {
+        let b = str_byte(name, i);
+        if b >= 65 && b <= 90 {
+            let mut boundary = false;
+            if i > 0 {
+                let p = str_byte(name, i - 1);
+                if (p >= 97 && p <= 122) || (p >= 48 && p <= 57) { boundary = true; }
+                if p >= 65 && p <= 90 && i + 1 < n {
+                    let x = str_byte(name, i + 1);
+                    if x >= 97 && x <= 122 { boundary = true; }
+                }
+            }
+            if boundary { strs_push(out, "_"); }
+            strs_push(out, str_from_byte(b + 32));
+        } else {
+            strs_push(out, str_slice(name, i, i + 1));
+        }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+
+// A type as written (`text`).
+fn dv_text(t: Tree, ty: Int) -> Str {
+    let out = strs_new();
+    let q = sx_field(t, ty, "qualifier");
+    if sx_is_some(t, q) {
+        strs_push(out, sx_name(t, sx_unwrap(t, q), "name"));
+        strs_push(out, "::");
+    }
+    strs_push(out, dv_name(t, ty));
+    let a = sx_field(t, ty, "args");
+    if sx_is_some(t, a) {
+        let args = sx_items(t, sx_unwrap(t, a));
+        let inner = strs_new();
+        let mut i = 0;
+        while i < ints_len(args) {
+            strs_push(inner, dv_text(t, ints_get(args, i)));
+            i = i + 1;
+        }
+        strs_push(out, "[");
+        strs_push(out, str_join(inner, ", "));
+        strs_push(out, "]");
+    }
+    str_join(out, "")
+}
+
+// A derived type's function `suffix`, named as its module sees it (`named_fn`).
+fn dv_named_fn(t: Tree, ty: Int, suffix: Str) -> Str {
+    let mut q = "";
+    let qn = sx_field(t, ty, "qualifier");
+    if sx_is_some(t, qn) { q = str_concat(sx_name(t, sx_unwrap(t, qn), "name"), "::"); }
+    dv_c4(q, dv_snake(dv_name(t, ty)), "_", suffix)
+}
+
+// `s` as the text of a Nazm string literal (`literal`).
+fn dv_lit(s: Str) -> Str {
+    let out = strs_new();
+    strs_push(out, dv_q());
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b == 34 { strs_push(out, dv_c2(dv_bs(), dv_q())); } else {
+            if b == 92 { strs_push(out, dv_c2(dv_bs(), dv_bs())); } else { strs_push(out, str_slice(s, i, i + 1)); }
+        }
+        i = i + 1;
+    }
+    strs_push(out, dv_q());
+    str_join(out, "")
+}
+
+fn dv_q() -> Str { str_from_byte(34) }
+fn dv_bs() -> Str { str_from_byte(92) }
+fn dv_nl() -> Str { str_from_byte(10) }
+fn dv_lb() -> Str { str_from_byte(123) }
+fn dv_rb() -> Str { str_from_byte(125) }
+
+fn dv_c2(a: Str, b: Str) -> Str { str_concat(a, b) }
+fn dv_c3(a: Str, b: Str, c: Str) -> Str { str_concat(str_concat(a, b), c) }
+fn dv_c4(a: Str, b: Str, c: Str, d: Str) -> Str { str_concat(dv_c3(a, b, c), d) }
+fn dv_c5(a: Str, b: Str, c: Str, d: Str, e: Str) -> Str { str_concat(dv_c4(a, b, c, d), e) }
+
+// Text written with `«` and `»` for `{` and `}`, `¶` for a newline and `$1`…`$9` for the arguments
+// — so the templates below read as the reference's `format!` strings do.
+fn dv_t(tpl: Str, args: Strs) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    let n = str_len(tpl);
+    while i < n {
+        let b = str_byte(tpl, i);
+        if b == 36 && i + 1 < n && str_byte(tpl, i + 1) >= 49 && str_byte(tpl, i + 1) <= 57 {
+            strs_push(out, strs_get(args, str_byte(tpl, i + 1) - 49));
+            i = i + 2;
+        } else {
+            if i + 1 < n && b == 194 && str_byte(tpl, i + 1) == 171 {
+                strs_push(out, dv_lb());
+                i = i + 2;
+            } else {
+                if i + 1 < n && b == 194 && str_byte(tpl, i + 1) == 187 {
+                    strs_push(out, dv_rb());
+                    i = i + 2;
+                } else {
+                    if i + 1 < n && b == 194 && str_byte(tpl, i + 1) == 182 {
+                        strs_push(out, dv_nl());
+                        i = i + 2;
+                    } else {
+                        strs_push(out, str_slice(tpl, i, i + 1));
+                        i = i + 1;
+                    }
+                }
+            }
+        }
+    }
+    str_join(out, "")
+}
+fn dv_a1(a: Str) -> Strs {
+    let s = strs_new();
+    strs_push(s, a);
+    s
+}
+fn dv_a2(a: Str, b: Str) -> Strs {
+    let s = dv_a1(a);
+    strs_push(s, b);
+    s
+}
+fn dv_a3(a: Str, b: Str, c: Str) -> Strs {
+    let s = dv_a2(a, b);
+    strs_push(s, c);
+    s
+}
+fn dv_a4(a: Str, b: Str, c: Str, d: Str) -> Strs {
+    let s = dv_a3(a, b, c);
+    strs_push(s, d);
+    s
+}
+fn dv_a5(a: Str, b: Str, c: Str, d: Str, e: Str) -> Strs {
+    let s = dv_a4(a, b, c, d);
+    strs_push(s, e);
+    s
+}
+fn dv_a6(a: Str, b: Str, c: Str, d: Str, e: Str, f: Str) -> Strs {
+    let s = dv_a5(a, b, c, d, e);
+    strs_push(s, f);
+    s
+}
+
+// --- `@codec` (`type_codec`, `field_codec`, `recase`, `empty_value`) ----------------------------
+
+// A type's `@codec`: `rename_all` ("" for none), `tag` ("" for none, with `has_tag`), and the words.
+fn dv_codec_pair(t: Tree, attrs: Ints, key: Str) -> Str {
+    let mut found = "";
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if sx_name(t, a, "name") == "codec" {
+            let args = dv_attr_args(t, a);
+            let mut k = 0;
+            while k < ints_len(args) {
+                let x = ints_get(args, k);
+                if sx_text(t, x) == "Pair" && sx_name(t, x, "key") == key { found = str_concat("=", sx_name(t, x, "value")); }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    found
+}
+fn dv_codec_word(t: Tree, attrs: Ints, word: Str) -> Bool {
+    let mut i = 0;
+    while i < ints_len(attrs) {
+        let a = ints_get(attrs, i);
+        if sx_name(t, a, "name") == "codec" {
+            let args = dv_attr_args(t, a);
+            let mut k = 0;
+            while k < ints_len(args) {
+                let x = ints_get(args, k);
+                if sx_text(t, x) == "Word" && sx_name(t, x, "name") == word { return true; }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    false
+}
+// A pair's value without its marker `=`; "" for none.
+fn dv_val(p: Str) -> Str {
+    if p == "" { return ""; }
+    str_slice(p, 1, str_len(p))
+}
+
+// `name` — snake case or Pascal case — written in `case` (`recase`).
+pub fn dv_recase(name: Str, case: Str) -> Str {
+    let all = sx_split(dv_snake(name), 95);
+    let words = strs_new();
+    let mut i = 0;
+    while i < strs_len(all) {
+        if strs_get(all, i) != "" { strs_push(words, strs_get(all, i)); }
+        i = i + 1;
+    }
+    if case == "kebab-case" { return str_join(words, "-"); }
+    if case == "SCREAMING_SNAKE_CASE" { return dv_upper(str_join(words, "_")); }
+    if case == "camelCase" || case == "PascalCase" {
+        let out = strs_new();
+        i = 0;
+        while i < strs_len(words) {
+            let w = strs_get(words, i);
+            if i == 0 && case == "camelCase" { strs_push(out, w); } else { strs_push(out, dv_capital(w)); }
+            i = i + 1;
+        }
+        return str_join(out, "");
+    }
+    str_join(words, "_")
+}
+fn dv_upper(s: Str) -> Str {
+    let out = strs_new();
+    let mut i = 0;
+    while i < str_len(s) {
+        let b = str_byte(s, i);
+        if b >= 97 && b <= 122 { strs_push(out, str_from_byte(b - 32)); } else { strs_push(out, str_slice(s, i, i + 1)); }
+        i = i + 1;
+    }
+    str_join(out, "")
+}
+fn dv_capital(w: Str) -> Str {
+    if str_len(w) == 0 { return w; }
+    str_concat(dv_upper(str_slice(w, 0, 1)), str_slice(w, 1, str_len(w)))
+}
+
+// The empty value `default` gives a field of type `ty`, as Nazm text; "" for a type with none.
+pub fn dv_empty(t: Tree, ty: Int) -> Str {
+    if dv_plain(t, ty) == false { return ""; }
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    if ints_len(args) == 0 {
+        if n == "Int" { return "0"; }
+        if dv_integer(n) { return str_concat(n, "(0)"); }
+        if n == "Float64" { return "0.0"; }
+        if n == "Float32" { return "Float32(0.0)"; }
+        if n == "Bool" { return "false"; }
+        if n == "Str" { return str_concat(dv_q(), dv_q()); }
+        return "";
+    }
+    if ints_len(args) != 1 { return ""; }
+    let inner = dv_text(t, ints_get(args, 0));
+    if n == "Option" { return dv_c3("Option[", inner, "].None()"); }
+    if n == "Vec" || n == "List" { return dv_c3("vec_new[", inner, "]()"); }
+    if n == "Chain" { return dv_c3("chain_empty[", inner, "]()"); }
+    ""
+}
+
+// A field list's members (`members`): each field's key in the document, `rename_all` applied where
+// no `rename` is.
+fn dv_members(t: Tree, fields: Ints, rename_all: Str) -> Strs {
+    let keys = strs_new();
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let attrs = dv_items(t, f, "attrs");
+        let rename = dv_codec_pair(t, attrs, "rename");
+        let mut key = sx_name(t, f, "name");
+        if rename != "" { key = dv_val(rename); } else { if rename_all != "" { key = dv_recase(key, dv_val(rename_all)); } }
+        strs_push(keys, key);
+        i = i + 1;
+    }
+    keys
+}
+
+// --- `@derive(json)` (`Gen`) --------------------------------------------------------------------
+
+struct Gen {
+    t: Tree,
+    // The type's base name, `snake`'s; the text it writes; each helper's type text; the derived
+    // types a field names (their `TypeName` nodes).
+    base: Strs,
+    out: Strs,
+    helpers: Strs,
+    refs: Ints,
+    toml: Bool,
+}
+
+fn gen_new(t: Tree, name: Str, toml: Bool) -> Gen {
+    let g = Gen(t: t, base: strs_new(), out: strs_new(), helpers: strs_new(), refs: ints_new(), toml: toml);
+    strs_push(g.base, dv_snake(name));
+    g
+}
+fn gen_base(g: Gen) -> Str { strs_get(g.base, 0) }
+
+// The number of the helper pair for `ty`, written on first use (`helper`).
+fn gen_helper(g: Gen, ty: Int) -> Int {
+    let key = dv_text(g.t, ty);
+    let mut k = 0;
+    while k < strs_len(g.helpers) {
+        if strs_get(g.helpers, k) == key { return k; }
+        k = k + 1;
+    }
+    k = strs_len(g.helpers);
+    strs_push(g.helpers, key);
+    let wr = strs_new();
+    if g.toml { toml_bodies(g, ty, key, wr); } else { json_bodies(g, ty, key, wr); }
+    let ks = int_to_str(k);
+    if g.toml {
+        strs_push(g.out, dv_t("fn $1_toml_w$2(v: $3) -> Toml ! «» «¶$4¶»¶¶fn $1_toml_r$2(x: Toml, at: Str) -> Result[$3, Str] ! «» «¶$5¶»¶¶",
+                dv_a5(gen_base(g), ks, key, strs_get(wr, 0), strs_get(wr, 1))));
+    } else {
+        strs_push(g.out, dv_t("fn $1_json_w$2(doc: JsonDoc, v: $3) -> Int ! «» «¶$4¶»¶¶fn $1_json_r$2(doc: JsonDoc, node: Int, at: Str) -> Result[$3, Str] ! «» «¶$5¶»¶¶",
+                dv_a5(gen_base(g), ks, key, strs_get(wr, 0), strs_get(wr, 1))));
+    }
+    k
+}
+
+fn dv_ok(ty: Str, v: Str) -> Str { dv_t("Result[$1, Str].Ok(value: $2)", dv_a2(ty, v)) }
+fn dv_err(ty: Str, what: Str) -> Str { dv_t("Result[$1, Str].Err(error: f\"«at»: $2\")", dv_a2(ty, what)) }
+
+// A JSON helper pair's bodies for `ty`, written `tys`, into `wr` (`bodies`).
+fn json_bodies(g: Gen, ty: Int, tys: Str, wr: Strs) -> Int {
+    let t = g.t;
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    let base = gen_base(g);
+    if dv_plain(t, ty) && ints_len(args) == 0 {
+        if dv_integer(n) {
+            let mut w = "    json_add_int(doc, Int(v))";
+            if n == "Int" { w = "    json_add_int(doc, v)"; }
+            let mut fit = dv_ok(tys, "i");
+            if n != "Int" {
+                fit = dv_t("match try_convert[$1](i) « Option.Some(value: x) => $2, Option.None() => $3, »",
+                        dv_a3(n, dv_ok(tys, "x"), dv_err(tys, dv_t("«i» is outside `$1`", dv_a1(n)))));
+            }
+            strs_push(wr, w);
+            strs_push(wr, dv_t("    match json_int(doc, node) «¶        Option.Some(value: i) => $1,¶        Option.None() => $2,¶    »",
+                    dv_a2(fit, dv_err(tys, "expected an integer"))));
+            return 0;
+        }
+        if n == "Float64" || n == "Float32" {
+            let mut w = "    json_add_float(doc, Float64(v))";
+            let mut value = dv_ok(tys, "Float32(x)");
+            if n == "Float64" {
+                w = "    json_add_float(doc, v)";
+                value = dv_ok(tys, "x");
+            }
+            strs_push(wr, w);
+            strs_push(wr, dv_t("    match json_float(doc, node) «¶        Option.Some(value: x) => $1,¶        Option.None() => $2,¶    »",
+                    dv_a2(value, dv_err(tys, "expected a number"))));
+            return 0;
+        }
+        if n == "Bool" || n == "Str" {
+            let mut add = "json_add_str";
+            let mut get = "json_str";
+            let mut what = "expected a string";
+            if n == "Bool" {
+                add = "json_add_bool";
+                get = "json_bool";
+                what = "expected `true` or `false`";
+            }
+            strs_push(wr, dv_t("    $1(doc, v)", dv_a1(add)));
+            strs_push(wr, dv_t("    match $1(doc, node) «¶        Option.Some(value: x) => $2,¶        Option.None() => $3,¶    »",
+                    dv_a3(get, dv_ok(tys, "x"), dv_err(tys, what))));
+            return 0;
+        }
+    }
+    if dv_plain(t, ty) && dv_holder(n) {
+        let mut inner = ty;
+        if ints_len(args) > 0 { inner = ints_get(args, 0); }
+        let it = dv_text(t, inner);
+        let k = int_to_str(gen_helper(g, inner));
+        let w = dv_c3(base, "_json_w", k);
+        let r = dv_c3(base, "_json_r", k);
+        if n == "Option" {
+            strs_push(wr, dv_t("    match v «¶        Option.Some(value: x) => $1(doc, x),¶        Option.None() => json_add_null(doc),¶    »", dv_a1(w)));
+            strs_push(wr, dv_t("    if json_kind(doc, node) == \"null\" « return $1; »¶    match $2(doc, node, at) «¶        Result.Ok(value: x) => $3,¶        Result.Err(error: e) => Result[$4, Str].Err(error: e),¶    »",
+                    dv_a4(dv_ok(tys, dv_t("Option[$1].None()", dv_a1(it))), r, dv_ok(tys, dv_t("Option[$1].Some(value: x)", dv_a1(it))), tys)));
+            return 0;
+        }
+        if n == "Box" {
+            strs_push(wr, dv_t("    $1(doc, box_get(v))", dv_a1(w)));
+            strs_push(wr, dv_t("    match $1(doc, node, at) «¶        Result.Ok(value: x) => $2,¶        Result.Err(error: e) => Result[$3, Str].Err(error: e),¶    »",
+                    dv_a3(r, dv_ok(tys, "box_new(x)"), tys)));
+            return 0;
+        }
+        let mut done = dv_ok(tys, "out");
+        if n == "Chain" { done = dv_ok(tys, "chain_from_vec(out)"); }
+        strs_push(wr, dv_t("    let items = ints_new();¶    for x in v « ints_push(items, $1(doc, x)); »¶    json_add_array(doc, items)", dv_a1(w)));
+        strs_push(wr, dv_t("    if json_kind(doc, node) != \"array\" « return $1; »¶    let out = vec_new[$2]();¶    for i in 0..json_len(doc, node) «¶        let item = match json_at(doc, node, i) « Option.Some(value: c) => c, Option.None() => 0 - 1, »;¶        match $3(doc, item, f\"«at»[«i»]\") «¶            Result.Ok(value: x) => « vec_push(out, x); »,¶            Result.Err(error: e) => « return Result[$4, Str].Err(error: e); »,¶        »;¶    »¶    $5",
+                dv_a5(dv_err(tys, "expected an array"), it, r, tys, done)));
+        return 0;
+    }
+    gen_ref(g, ty);
+    strs_push(wr, dv_t("    $1(doc, v)", dv_a1(dv_named_fn(t, ty, "json_node"))));
+    strs_push(wr, dv_t("    $1(doc, node, at)", dv_a1(dv_named_fn(t, ty, "json_read"))));
+    0
+}
+
+// A derived record or enum a field names, kept once for the schema's `$defs`.
+fn gen_ref(g: Gen, ty: Int) -> Int {
+    let key = dv_text(g.t, ty);
+    let mut i = 0;
+    while i < ints_len(g.refs) {
+        if dv_text(g.t, ints_get(g.refs, i)) == key { return 0; }
+        i = i + 1;
+    }
+    ints_push(g.refs, ty);
+    0
+}
+
+// The members of a field list written into `keys` and `values`, each read as `{from}{name}`
+// (`write_fields`).
+fn json_write_fields(g: Gen, fields: Ints, keys: Strs, from: Str) -> Str {
+    let t = g.t;
+    let s = strs_new();
+    strs_push(s, "    let keys = strs_new();\n    let values = ints_new();\n");
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let k = int_to_str(gen_helper(g, sx_field(t, f, "ty")));
+        let name = sx_name(t, f, "name");
+        let key = dv_lit(strs_get(keys, i));
+        if dv_codec_word(t, dv_items(t, f, "attrs"), "omit_none") {
+            strs_push(s, dv_t("    if let Option.Some(value: x) = $1$2 «¶        strs_push(keys, $3);¶        ints_push(values, $4_json_w$5(doc, $1$2));¶    »¶",
+                    dv_a5(from, name, key, gen_base(g), k)));
+        } else {
+            strs_push(s, dv_t("    strs_push(keys, $1);¶    ints_push(values, $2_json_w$3(doc, $4$5));¶", dv_a5(key, gen_base(g), k, from, name)));
+        }
+        i = i + 1;
+    }
+    str_join(s, "")
+}
+
+// The test that a member's key is one of `names` (`deny_unknown`).
+fn dv_known(names: Strs) -> Str {
+    if strs_len(names) == 0 { return "false"; }
+    let parts = strs_new();
+    let mut i = 0;
+    while i < strs_len(names) {
+        strs_push(parts, str_concat("k == ", dv_lit(strs_get(names, i))));
+        i = i + 1;
+    }
+    str_join(parts, " || ")
+}
+
+// A field list read out of the object `obj` at path `at`, into bindings `f_<name>`
+// (`read_fields`); `deny` says whether unknown members are refused, `extra` the names besides the
+// members' that it lets through.
+fn json_read_fields(g: Gen, fields: Ints, keys: Strs, owner: Str, obj: Str, at: Str, deny: Bool, extra: Strs) -> Str {
+    let t = g.t;
+    let s = strs_new();
+    if deny {
+        let names = strs_new();
+        let mut i = 0;
+        while i < strs_len(keys) {
+            strs_push(names, strs_get(keys, i));
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(extra) {
+            strs_push(names, strs_get(extra, i));
+            i = i + 1;
+        }
+        strs_push(s, dv_t("    for i in 0..json_len(doc, $1) «¶        let k = match json_key_at(doc, $1, i) « Option.Some(value: x) => x, Option.None() => \"\", »;¶        if !($2) « return Result[$3, Str].Err(error: f\"«$4»: unknown member `«k»`\"); »¶    »¶",
+                dv_a4(obj, dv_known(names), owner, at)));
+    }
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let ty = sx_field(t, f, "ty");
+        let k = int_to_str(gen_helper(g, ty));
+        let key = strs_get(keys, i);
+        strs_push(s, dv_t("    let f_$1 = match json_get(doc, $2, $3) «¶        Option.Some(value: n) => match $4_json_r$5(doc, n, f\"«$6».$7\") «¶            Result.Ok(value: x) => x,¶            Result.Err(error: e) => « return Result[$8, Str].Err(error: e); »,¶        »,¶        Option.None() => $9,¶    »;¶",
+                dv_a9(sx_name(t, f, "name"), obj, dv_lit(key), gen_base(g), k, at, key, owner, dv_missing(t, f, ty, owner, at, key, "member"))));
+        i = i + 1;
+    }
+    str_join(s, "")
+}
+
+fn dv_a9(a: Str, b: Str, c: Str, d: Str, e: Str, f: Str, g: Str, h: Str, i: Str) -> Strs {
+    let s = dv_a6(a, b, c, d, e, f);
+    strs_push(s, g);
+    strs_push(s, h);
+    strs_push(s, i);
+    s
+}
+
+// What a missing member is: its empty value under `default`, `None` for an `Option`, else a return.
+fn dv_missing(t: Tree, f: Int, ty: Int, owner: Str, at: Str, key: Str, what: Str) -> Str {
+    let empty = dv_empty(t, ty);
+    if dv_codec_word(t, dv_items(t, f, "attrs"), "default") && empty != "" { return empty; }
+    if dv_plain(t, ty) && dv_name(t, ty) == "Option" {
+        let args = dv_args(t, ty);
+        let mut inner = ty;
+        if ints_len(args) > 0 { inner = ints_get(args, 0); }
+        return dv_t("Option[$1].None()", dv_a1(dv_text(t, inner)));
+    }
+    dv_t("« return Result[$1, Str].Err(error: f\"«$2»: no $3 `$4`\"); »", dv_a4(owner, at, what, key))
+}
+
+// --- schemas (`schema_of`, `object_schema`) ------------------------------------------------------
+
+fn dv_schema(t: Tree, ty: Int) -> Str {
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    if dv_plain(t, ty) && ints_len(args) == 0 {
+        if n == "Int" { return "{\"type\":\"integer\"}"; }
+        if n == "Int8" { return dv_bounds("-128", "127"); }
+        if n == "Int16" { return dv_bounds("-32768", "32767"); }
+        if n == "Int32" { return dv_bounds("-2147483648", "2147483647"); }
+        if n == "UInt8" { return dv_bounds("0", "255"); }
+        if n == "UInt16" { return dv_bounds("0", "65535"); }
+        if n == "UInt32" { return dv_bounds("0", "4294967295"); }
+        if n == "Float64" || n == "Float32" { return "{\"type\":\"number\"}"; }
+        if n == "Bool" { return "{\"type\":\"boolean\"}"; }
+        if n == "Str" { return "{\"type\":\"string\"}"; }
+    }
+    if dv_plain(t, ty) && dv_holder(n) {
+        let mut inner = "";
+        if ints_len(args) > 0 { inner = dv_schema(t, ints_get(args, 0)); }
+        if n == "Option" { return dv_c3("{\"anyOf\":[", inner, ",{\"type\":\"null\"}]}"); }
+        if n == "Box" { return inner; }
+        return dv_c3("{\"type\":\"array\",\"items\":", inner, "}");
+    }
+    dv_c3("{\"$ref\":\"#/$defs/", n, "\"}")
+}
+fn dv_bounds(lo: Str, hi: Str) -> Str { dv_c5("{\"type\":\"integer\",\"minimum\":", lo, ",\"maximum\":", hi, "}") }
+
+fn dv_object_schema(t: Tree, fields: Ints, keys: Strs, tag: Str, value: Str, closed: Bool) -> Str {
+    let props = strs_new();
+    let required = strs_new();
+    if tag != "" {
+        strs_push(props, dv_c5("\"", tag, "\":{\"const\":\"", value, "\"}"));
+        strs_push(required, dv_c3("\"", tag, "\""));
+    }
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let ty = sx_field(t, f, "ty");
+        let key = strs_get(keys, i);
+        strs_push(props, dv_c4("\"", key, "\":", dv_schema(t, ty)));
+        let optional = dv_plain(t, ty) && dv_name(t, ty) == "Option";
+        if optional == false && dv_codec_word(t, dv_items(t, f, "attrs"), "default") == false { strs_push(required, dv_c3("\"", key, "\"")); }
+        i = i + 1;
+    }
+    let mut close = "";
+    if closed { close = ",\"additionalProperties\":false"; }
+    dv_c5(dv_c3("{\"type\":\"object\",\"properties\":{", str_join(props, ","), "},\"required\":["), str_join(required, ","), "]", close, "}")
+}
+
+// --- the pattern and the bindings of a variant ---------------------------------------------------
+
+fn dv_binds(t: Tree, fields: Ints) -> Str {
+    let parts = strs_new();
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let n = sx_name(t, ints_get(fields, i), "name");
+        strs_push(parts, dv_c3(n, ": f_", n));
+        i = i + 1;
+    }
+    str_join(parts, ", ")
+}
+
+// A variant's name in the document (`variant_key`).
+fn dv_variant_key(t: Tree, attrs: Ints, name: Str, rename_all: Str) -> Str {
+    let rename = dv_codec_pair(t, attrs, "rename");
+    if rename != "" { return dv_val(rename); }
+    if rename_all != "" { return dv_recase(name, dv_val(rename_all)); }
+    name
+}
+
+// --- one type's JSON (`generate`) ---------------------------------------------------------------
+
+fn json_generate(t: Tree, decl: Int, is_enum: Bool) -> Str {
+    let name = sx_name(t, decl, "name");
+    let g = gen_new(t, name, false);
+    let base = gen_base(g);
+    let mut vis = "";
+    if sx_is_some(t, sx_field(t, decl, "pub_span")) { vis = "pub "; }
+    let attrs = dv_items(t, decl, "attrs");
+    let rename_all = dv_codec_pair(t, attrs, "rename_all");
+    let tagp = dv_codec_pair(t, attrs, "tag");
+    let has_tag = tagp != "";
+    let tag = dv_val(tagp);
+    let untagged = dv_codec_word(t, attrs, "untagged");
+    let deny = dv_codec_word(t, attrs, "deny_unknown");
+    let mut node = "";
+    let mut read = "";
+    let mut def = "";
+    if is_enum == false {
+        let fields = dv_items(t, decl, "fields");
+        let keys = dv_members(t, fields, rename_all);
+        let w = json_write_fields(g, fields, keys, "v.");
+        let r = json_read_fields(g, fields, keys, name, "node", "at", deny, strs_new());
+        node = str_concat(w, "    json_add_object(doc, keys, values)");
+        read = dv_t("    if json_kind(doc, node) != \"object\" « return Result[$1, Str].Err(error: f\"«at»: expected an object\"); »¶$2    Result[$1, Str].Ok(value: $1($3))",
+                dv_a3(name, r, dv_binds(t, fields)));
+        def = dv_object_schema(t, fields, keys, "", "", deny);
+    } else {
+        let variants = dv_items(t, decl, "variants");
+        let arms = strs_new();
+        let units = strs_new();
+        let tries = strs_new();
+        let one_of = strs_new();
+        let mut j = 0;
+        while j < ints_len(variants) {
+            let vd = ints_get(variants, j);
+            let v = sx_name(t, vd, "name");
+            let fields = dv_items(t, vd, "fields");
+            let key = dv_variant_key(t, dv_items(t, vd, "attrs"), v, rename_all);
+            let lit = dv_lit(key);
+            let keys = dv_members(t, fields, "");
+            let pattern = dv_t("$1.$2($3)", dv_a3(name, v, dv_binds(t, fields)));
+            let empty = ints_len(fields) == 0;
+            let mut arm = "";
+            if has_tag && empty {
+                arm = dv_t("    let keys = strs_new();¶    let values = ints_new();¶    strs_push(keys, $1);¶    ints_push(values, json_add_str(doc, $2));¶    json_add_object(doc, keys, values)",
+                        dv_a2(dv_lit(tag), lit));
+            }
+            if has_tag && empty == false {
+                let w = json_write_fields(g, fields, keys, "f_");
+                let marker = "    let values = ints_new();\n";
+                let at = dv_find(w, marker);
+                let with = dv_t("    let values = ints_new();¶    strs_push(keys, $1);¶    ints_push(values, json_add_str(doc, $2));¶", dv_a2(dv_lit(tag), lit));
+                let w2 = dv_c3(str_slice(w, 0, at), with, str_slice(w, at + str_len(marker), str_len(w)));
+                arm = str_concat(w2, "    json_add_object(doc, keys, values)");
+            }
+            if has_tag == false && empty { arm = dv_t("    json_add_str(doc, $1)", dv_a1(lit)); }
+            if has_tag == false && untagged && empty == false {
+                arm = str_concat(json_write_fields(g, fields, keys, "f_"), "    json_add_object(doc, keys, values)");
+            }
+            if has_tag == false && untagged == false && empty == false {
+                let w = json_write_fields(g, fields, keys, "f_");
+                arm = dv_t("$1    let outer = strs_new();¶    strs_push(outer, $2);¶    let inner = ints_new();¶    ints_push(inner, json_add_object(doc, keys, values));¶    json_add_object(doc, outer, inner)",
+                        dv_a2(w, lit));
+            }
+            strs_push(arms, dv_t("        $1 => «¶$2¶        »,¶", dv_a2(pattern, arm)));
+            let extra = strs_new();
+            if has_tag { strs_push(extra, tag); }
+            let r = json_read_fields(g, fields, keys, name, "obj", "at", deny, extra);
+            strs_push(g.out, dv_t("fn $1_json_v$2(doc: JsonDoc, obj: Int, at: Str) -> Result[$3, Str] ! «» «¶    if json_kind(doc, obj) != \"object\" « return Result[$3, Str].Err(error: f\"«at»: expected an object\"); »¶$4    Result[$3, Str].Ok(value: $5)¶»¶¶",
+                    dv_a5(base, int_to_str(j), name, r, pattern)));
+            let js = int_to_str(j);
+            if has_tag {
+                strs_push(tries, dv_t("    if tag == $1 « return $2_json_v$3(doc, node, at); »¶", dv_a3(lit, base, js)));
+                strs_push(one_of, dv_object_schema(t, fields, keys, tag, key, deny));
+            } else {
+                if empty {
+                    strs_push(units, dv_t("        if tag == $1 « return Result[$2, Str].Ok(value: $3); »¶", dv_a3(lit, name, pattern)));
+                    strs_push(one_of, dv_c3("{\"const\":\"", key, "\"}"));
+                } else {
+                    if untagged {
+                        strs_push(tries, dv_t("    match $1_json_v$2(doc, node, at) « Result.Ok(value: x) => « return Result[$3, Str].Ok(value: x); », Result.Err(error: e) => «», »;¶",
+                                dv_a3(base, js, name)));
+                        strs_push(one_of, dv_object_schema(t, fields, keys, "", "", deny));
+                    } else {
+                        strs_push(tries, dv_t("    if tag == $1 « return $2_json_v$3(doc, body, f\"«at».«tag»\"); »¶", dv_a3(lit, base, js)));
+                        strs_push(one_of, dv_c5(dv_c3("{\"type\":\"object\",\"properties\":{\"", key, "\":"), dv_object_schema(t, fields, keys, "", "", deny),
+                                "},\"required\":[\"", key, "\"],\"additionalProperties\":false}"));
+                    }
+                }
+            }
+            j = j + 1;
+        }
+        let strings = dv_t("    if json_kind(doc, node) == \"string\" «¶        let tag = match json_str(doc, node) « Option.Some(value: s) => s, Option.None() => \"\", »;¶$1        return Result[$2, Str].Err(error: f\"«at»: `«tag»` is not a variant of `$2` without a payload\");¶    »¶",
+                dv_a2(str_join(units, ""), name));
+        let tr = str_join(tries, "");
+        if has_tag {
+            read = dv_t("    if json_kind(doc, node) != \"object\" « return Result[$1, Str].Err(error: f\"«at»: expected an object\"); »¶    let tag = match json_get(doc, node, $2) «¶        Option.Some(value: n) => match json_str(doc, n) « Option.Some(value: s) => s, Option.None() => \"\", »,¶        Option.None() => « return Result[$1, Str].Err(error: f\"«at»: no member `$3`\"); »,¶    »;¶$4    Result[$1, Str].Err(error: f\"«at»: `«tag»` is not a variant of `$1`\")",
+                    dv_a4(name, dv_lit(tag), tag, tr));
+        } else {
+            if untagged {
+                read = dv_t("$1$2    Result[$3, Str].Err(error: f\"«at»: matches no variant of `$3`\")", dv_a3(strings, tr, name));
+            } else {
+                read = dv_t("$1    if json_kind(doc, node) != \"object\" || json_len(doc, node) != 1 «¶        return Result[$2, Str].Err(error: f\"«at»: expected a variant's name, or an object of one member\");¶    »¶    let tag = match json_key_at(doc, node, 0) « Option.Some(value: s) => s, Option.None() => \"\", »;¶    let body = match json_value_at(doc, node, 0) « Option.Some(value: n) => n, Option.None() => 0 - 1, »;¶$3    Result[$2, Str].Err(error: f\"«at»: `«tag»` is not a variant of `$2` with a payload\")",
+                        dv_a3(strings, name, tr));
+            }
+        }
+        node = dv_t("    match v «¶$1    »", dv_a1(str_join(arms, "")));
+        let mut kind = "oneOf";
+        if untagged { kind = "anyOf"; }
+        def = dv_c5("{\"", kind, "\":[", str_join(one_of, ","), "]}");
+    }
+    let calls = strs_new();
+    let mut i = 0;
+    while i < ints_len(g.refs) {
+        strs_push(calls, dv_t("    $1(seen, defs);¶", dv_a1(dv_named_fn(t, ints_get(g.refs, i), "json_defs"))));
+        i = i + 1;
+    }
+    let entry = dv_lit(dv_c4("\"", name, "\":", def));
+    let head = dv_lit(dv_c3("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"$ref\":\"#/$defs/", name, "\",\"$defs\":{"));
+    let lit = dv_lit(name);
+    let s = strs_new();
+    strs_push(s, str_join(g.out, ""));
+    strs_push(s, dv_t("$1fn $2_json_node(doc: JsonDoc, v: $3) -> Int ! «» «¶$4¶»¶¶", dv_a4(vis, base, name, node)));
+    strs_push(s, dv_t("$1fn $2_json_read(doc: JsonDoc, node: Int, at: Str) -> Result[$3, Str] ! «» «¶$4¶»¶¶", dv_a4(vis, base, name, read)));
+    strs_push(s, dv_t("$1fn $2_json_defs(seen: Strs, defs: Strs) -> Int ! «» «¶    for i in 0..strs_len(seen) « if strs_get(seen, i) == $3 « return 0; » »¶    strs_push(seen, $3);¶    strs_push(defs, $4);¶$5    0¶»¶¶",
+            dv_a5(vis, base, lit, entry, str_join(calls, ""))));
+    strs_push(s, dv_t("$1fn $2_to_json(v: $3) -> Str ! «» «¶    let doc = json_new();¶    let root = $2_json_node(doc, v);¶    json_encode(json_with_root(doc, root))¶»¶¶", dv_a3(vis, base, name)));
+    strs_push(s, dv_t("$1fn $2_from_json(text: Str) -> Result[$3, Str] ! «» «¶    match json_parse_floats(text) «¶        Result.Ok(value: doc) => $2_json_read(doc, json_root(doc), \"$\"),¶        Result.Err(error: e) => Result[$3, Str].Err(error: e),¶    »¶»¶¶",
+            dv_a3(vis, base, name)));
+    strs_push(s, dv_t("$1fn $2_json_schema() -> Str ! «» «¶    let seen = strs_new();¶    let defs = strs_new();¶    $2_json_defs(seen, defs);¶    str_concat(str_concat($3, str_join(defs, \",\")), \"»»\")¶»¶¶",
+            dv_a3(vis, base, head)));
+    str_join(s, "")
+}
+
+fn dv_find(s: Str, part: Str) -> Int {
+    let n = str_len(part);
+    let mut i = 0;
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return i; }
+        i = i + 1;
+    }
+    0 - 1
+}
+
+// --- `@derive(toml)` (`TomlGen`) -----------------------------------------------------------------
+
+fn toml_bodies(g: Gen, ty: Int, tys: Str, wr: Strs) -> Int {
+    let t = g.t;
+    let n = dv_name(t, ty);
+    let args = dv_args(t, ty);
+    let base = gen_base(g);
+    if dv_plain(t, ty) && ints_len(args) == 0 {
+        if dv_integer(n) {
+            let mut w = "    Toml.Int(value: Int(v))";
+            if n == "Int" { w = "    Toml.Int(value: v)"; }
+            let mut fit = dv_ok(tys, "i");
+            if n != "Int" {
+                fit = dv_t("match try_convert[$1](i) « Option.Some(value: y) => $2, Option.None() => $3, »",
+                        dv_a3(n, dv_ok(tys, "y"), dv_err(tys, dv_t("«i» is outside `$1`", dv_a1(n)))));
+            }
+            strs_push(wr, w);
+            strs_push(wr, dv_t("    if let Toml.Int(value: i) = x « $1 » else « $2 »", dv_a2(fit, dv_err(tys, "expected an integer"))));
+            return 0;
+        }
+        if n == "Float64" || n == "Float32" {
+            let mut w = "    Toml.Float(value: Float64(v))";
+            let mut cast = "Float32(f)";
+            let mut from_int = "Float32(Float64(i))";
+            if n == "Float64" {
+                w = "    Toml.Float(value: v)";
+                cast = "f";
+                from_int = "Float64(i)";
+            }
+            strs_push(wr, w);
+            strs_push(wr, dv_t("    if let Toml.Float(value: f) = x « return $1; »¶    if let Toml.Int(value: i) = x « return $2; »¶    $3",
+                    dv_a3(dv_ok(tys, cast), dv_ok(tys, from_int), dv_err(tys, "expected a number"))));
+            return 0;
+        }
+        if n == "Bool" || n == "Str" {
+            let mut what = "expected a string";
+            if n == "Bool" { what = "expected `true` or `false`"; }
+            strs_push(wr, dv_t("    Toml.$1(value: v)", dv_a1(n)));
+            strs_push(wr, dv_t("    if let Toml.$1(value: y) = x « $2 » else « $3 »", dv_a3(n, dv_ok(tys, "y"), dv_err(tys, what))));
+            return 0;
+        }
+    }
+    if dv_plain(t, ty) && (n == "Vec" || n == "List" || n == "Chain" || n == "Box") {
+        let mut inner = ty;
+        if ints_len(args) > 0 { inner = ints_get(args, 0); }
+        let it = dv_text(t, inner);
+        let k = int_to_str(gen_helper(g, inner));
+        let w = dv_c3(base, "_toml_w", k);
+        let r = dv_c3(base, "_toml_r", k);
+        if n == "Box" {
+            strs_push(wr, dv_t("    $1(box_get(v))", dv_a1(w)));
+            strs_push(wr, dv_t("    match $1(x, at) «¶        Result.Ok(value: y) => $2,¶        Result.Err(error: e) => Result[$3, Str].Err(error: e),¶    »",
+                    dv_a3(r, dv_ok(tys, "box_new(y)"), tys)));
+            return 0;
+        }
+        let mut done = dv_ok(tys, "out");
+        if n == "Chain" { done = dv_ok(tys, "chain_from_vec(out)"); }
+        strs_push(wr, dv_t("    let items = vec_new[Toml]();¶    for y in v « vec_push(items, $1(y)); »¶    Toml.Array(items: chain_from_vec(items))", dv_a1(w)));
+        strs_push(wr, dv_t("    if let Toml.Array(items: items) = x «¶        let out = vec_new[$1]();¶        for i in 0..chain_len(items) «¶            match $2(chain_get(items, i), f\"«at»[«i»]\") «¶                Result.Ok(value: y) => « vec_push(out, y); »,¶                Result.Err(error: e) => « return Result[$3, Str].Err(error: e); »,¶            »;¶        »¶        $4¶    » else « $5 »",
+                dv_a5(it, r, tys, done, dv_err(tys, "expected an array"))));
+        return 0;
+    }
+    strs_push(wr, dv_t("    $1(v)", dv_a1(dv_named_fn(t, ty, "toml_value"))));
+    strs_push(wr, dv_t("    $1(x, at)", dv_a1(dv_named_fn(t, ty, "toml_read"))));
+    0
+}
+
+// The members of a field list as a table's keys and values, each read as `{from}{name}`; a `None`
+// left out; `tag` first where given (`write_fields`).
+fn toml_write_fields(g: Gen, fields: Ints, keys: Strs, from: Str, tag: Str, value: Str) -> Str {
+    let t = g.t;
+    let s = strs_new();
+    strs_push(s, "    let keys = vec_new[Str]();\n    let values = vec_new[Toml]();\n");
+    if tag != "" { strs_push(s, dv_t("    vec_push(keys, $1);¶    vec_push(values, Toml.Str(value: $2));¶", dv_a2(dv_lit(tag), dv_lit(value)))); }
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let ty = sx_field(t, f, "ty");
+        let name = sx_name(t, f, "name");
+        let key = dv_lit(strs_get(keys, i));
+        if dv_plain(t, ty) && dv_name(t, ty) == "Option" {
+            let args = dv_args(t, ty);
+            let mut inner = ty;
+            if ints_len(args) > 0 { inner = ints_get(args, 0); }
+            let k = int_to_str(gen_helper(g, inner));
+            strs_push(s, dv_t("    if let Option.Some(value: y) = $1$2 «¶        vec_push(keys, $3);¶        vec_push(values, $4_toml_w$5(y));¶    »¶", dv_a5(from, name, key, gen_base(g), k)));
+        } else {
+            let k = int_to_str(gen_helper(g, ty));
+            strs_push(s, dv_t("    vec_push(keys, $1);¶    vec_push(values, $2_toml_w$3($4$5));¶", dv_a5(key, gen_base(g), k, from, name)));
+        }
+        i = i + 1;
+    }
+    strs_push(s, "    Toml.Table(keys: chain_from_vec(keys), values: chain_from_vec(values))");
+    str_join(s, "")
+}
+
+fn toml_read_fields(g: Gen, fields: Ints, keys: Strs, owner: Str, obj: Str, at: Str, deny: Bool, extra: Strs) -> Str {
+    let t = g.t;
+    let s = strs_new();
+    if deny {
+        let names = strs_new();
+        let mut i = 0;
+        while i < strs_len(keys) {
+            strs_push(names, strs_get(keys, i));
+            i = i + 1;
+        }
+        i = 0;
+        while i < strs_len(extra) {
+            strs_push(names, strs_get(extra, i));
+            i = i + 1;
+        }
+        strs_push(s, dv_t("    if let Toml.Table(keys: ks, values: vs) = $1 «¶        for i in 0..chain_len(ks) «¶            let k = chain_get(ks, i);¶            if !($2) « return Result[$3, Str].Err(error: f\"«$4»: unknown key `«k»`\"); »¶        »¶    »¶",
+                dv_a4(obj, dv_known(names), owner, at)));
+    }
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let ty = sx_field(t, f, "ty");
+        let optional = dv_plain(t, ty) && dv_name(t, ty) == "Option";
+        let mut inner = ty;
+        if optional {
+            let args = dv_args(t, ty);
+            if ints_len(args) > 0 { inner = ints_get(args, 0); }
+        }
+        let k = int_to_str(gen_helper(g, inner));
+        let key = strs_get(keys, i);
+        let mut got = "y";
+        if optional { got = dv_t("Option[$1].Some(value: y)", dv_a1(dv_text(t, inner))); }
+        let missing = dv_missing(t, f, ty, owner, at, key, "key");
+        let parts = dv_a9(sx_name(t, f, "name"), obj, dv_lit(key), gen_base(g), k, at, key, got, owner);
+        strs_push(parts, missing);
+        strs_push(s, dv_t10("    let f_$1 = match toml_get($2, $3) «¶        Option.Some(value: n) => match $4_toml_r$5(n, f\"«$6».$7\") «¶            Result.Ok(value: y) => $8,¶            Result.Err(error: e) => « return Result[$9, Str].Err(error: e); »,¶        »,¶        Option.None() => @0,¶    »;¶", parts));
+        i = i + 1;
+    }
+    str_join(s, "")
+}
+
+// `dv_t` with a tenth argument, written `@0`.
+fn dv_t10(tpl: Str, args: Strs) -> Str {
+    let at = dv_find(tpl, "@0");
+    if at < 0 { return dv_t(tpl, args); }
+    dv_c3(dv_t(str_slice(tpl, 0, at), args), strs_get(args, 9), dv_t(str_slice(tpl, at + 2, str_len(tpl)), args))
+}
+
+fn toml_generate(t: Tree, decl: Int, is_enum: Bool) -> Str {
+    let name = sx_name(t, decl, "name");
+    let g = gen_new(t, name, true);
+    let base = gen_base(g);
+    let mut vis = "";
+    if sx_is_some(t, sx_field(t, decl, "pub_span")) { vis = "pub "; }
+    let attrs = dv_items(t, decl, "attrs");
+    let rename_all = dv_codec_pair(t, attrs, "rename_all");
+    let tagp = dv_codec_pair(t, attrs, "tag");
+    let has_tag = tagp != "";
+    let tag = dv_val(tagp);
+    let untagged = dv_codec_word(t, attrs, "untagged");
+    let deny = dv_codec_word(t, attrs, "deny_unknown");
+    let mut value = "";
+    let mut read = "";
+    if is_enum == false {
+        let fields = dv_items(t, decl, "fields");
+        let keys = dv_members(t, fields, rename_all);
+        value = toml_write_fields(g, fields, keys, "v.", "", "");
+        let r = toml_read_fields(g, fields, keys, name, "x", "at", deny, strs_new());
+        read = dv_t("    if !toml_is_table(x) « return Result[$1, Str].Err(error: f\"«at»: expected a table\"); »¶$2    Result[$1, Str].Ok(value: $1($3))",
+                dv_a3(name, r, dv_binds(t, fields)));
+    } else {
+        let variants = dv_items(t, decl, "variants");
+        let arms = strs_new();
+        let units = strs_new();
+        let tries = strs_new();
+        let mut j = 0;
+        while j < ints_len(variants) {
+            let vd = ints_get(variants, j);
+            let v = sx_name(t, vd, "name");
+            let fields = dv_items(t, vd, "fields");
+            let key = dv_variant_key(t, dv_items(t, vd, "attrs"), v, rename_all);
+            let lit = dv_lit(key);
+            let keys = dv_members(t, fields, "");
+            let pattern = dv_t("$1.$2($3)", dv_a3(name, v, dv_binds(t, fields)));
+            let empty = ints_len(fields) == 0;
+            let mut arm = "";
+            if has_tag { arm = toml_write_fields(g, fields, keys, "f_", tag, key); } else {
+                if empty { arm = dv_t("    Toml.Str(value: $1)", dv_a1(lit)); } else {
+                    if untagged { arm = toml_write_fields(g, fields, keys, "f_", "", ""); } else {
+                        let w = toml_write_fields(g, fields, keys, "f_", "", "");
+                        arm = dv_t("    let body = «¶$1¶    »;¶    let outer = vec_new[Str]();¶    vec_push(outer, $2);¶    let inner = vec_new[Toml]();¶    vec_push(inner, body);¶    Toml.Table(keys: chain_from_vec(outer), values: chain_from_vec(inner))",
+                                dv_a2(w, lit));
+                    }
+                }
+            }
+            strs_push(arms, dv_t("        $1 => «¶$2¶        »,¶", dv_a2(pattern, arm)));
+            let extra = strs_new();
+            if has_tag { strs_push(extra, tag); }
+            let r = toml_read_fields(g, fields, keys, name, "obj", "at", deny, extra);
+            strs_push(g.out, dv_t("fn $1_toml_v$2(obj: Toml, at: Str) -> Result[$3, Str] ! «» «¶    if !toml_is_table(obj) « return Result[$3, Str].Err(error: f\"«at»: expected a table\"); »¶$4    Result[$3, Str].Ok(value: $5)¶»¶¶",
+                    dv_a5(base, int_to_str(j), name, r, pattern)));
+            let js = int_to_str(j);
+            if has_tag {
+                strs_push(tries, dv_t("    if tag == $1 « return $2_toml_v$3(x, at); »¶", dv_a3(lit, base, js)));
+            } else {
+                if empty {
+                    strs_push(units, dv_t("        if s == $1 « return Result[$2, Str].Ok(value: $3); »¶", dv_a3(lit, name, pattern)));
+                } else {
+                    if untagged {
+                        strs_push(tries, dv_t("    match $1_toml_v$2(x, at) « Result.Ok(value: y) => « return Result[$3, Str].Ok(value: y); », Result.Err(error: e) => «», »;¶",
+                                dv_a3(base, js, name)));
+                    } else {
+                        strs_push(tries, dv_t("    if tag == $1 « return $2_toml_v$3(body, f\"«at».«tag»\"); »¶", dv_a3(lit, base, js)));
+                    }
+                }
+            }
+            j = j + 1;
+        }
+        let strings = dv_t("    if let Toml.Str(value: s) = x «¶$1        return Result[$2, Str].Err(error: f\"«at»: `«s»` is not a variant of `$2` without a payload\");¶    »¶",
+                dv_a2(str_join(units, ""), name));
+        let tr = str_join(tries, "");
+        if has_tag {
+            read = dv_t("    let tag = match toml_get(x, $1) «¶        Option.Some(value: n) => if let Toml.Str(value: s) = n « s » else « \"\" »,¶        Option.None() => « return Result[$2, Str].Err(error: f\"«at»: no key `$3`\"); »,¶    »;¶$4    Result[$2, Str].Err(error: f\"«at»: `«tag»` is not a variant of `$2`\")",
+                    dv_a4(dv_lit(tag), name, tag, tr));
+        } else {
+            if untagged {
+                read = dv_t("$1$2    Result[$3, Str].Err(error: f\"«at»: matches no variant of `$3`\")", dv_a3(strings, tr, name));
+            } else {
+                read = dv_t("$1    let mut tag = \"\";¶    let mut body = x;¶    let mut one = false;¶    if let Toml.Table(keys: ks, values: vs) = x «¶        if chain_len(ks) == 1 « tag = chain_get(ks, 0); body = chain_get(vs, 0); one = true; »¶    »¶    if !one « return Result[$2, Str].Err(error: f\"«at»: expected a variant's name, or a table of one key\"); »¶$3    Result[$2, Str].Err(error: f\"«at»: `«tag»` is not a variant of `$2` with a payload\")",
+                        dv_a3(strings, name, tr));
+            }
+        }
+        value = dv_t("    match v «¶$1    »", dv_a1(str_join(arms, "")));
+    }
+    let s = strs_new();
+    strs_push(s, str_join(g.out, ""));
+    strs_push(s, dv_t("$1fn $2_toml_value(v: $3) -> Toml ! «» «¶$4¶»¶¶", dv_a4(vis, base, name, value)));
+    strs_push(s, dv_t("$1fn $2_toml_read(x: Toml, at: Str) -> Result[$3, Str] ! «» «¶$4¶»¶¶", dv_a4(vis, base, name, read)));
+    if is_enum == false {
+        strs_push(s, dv_t("$1fn $2_to_toml(v: $3) -> Str ! «» «¶    toml_encode($2_toml_value(v))¶»¶¶", dv_a3(vis, base, name)));
+        strs_push(s, dv_t("$1fn $2_from_toml(text: Str) -> Result[$3, Str] ! «» «¶    match toml_parse(text) «¶        Result.Ok(value: t) => $2_toml_read(t, \"$\"),¶        Result.Err(error: e) => Result[$3, Str].Err(error: e),¶    »¶»¶¶",
+                dv_a3(vis, base, name)));
+    }
+    str_join(s, "")
+}
+
+// --- `expand` ------------------------------------------------------------------------------------
+
+// Whether a type the program declares does not derive `format` (`underived`).
+fn dv_underived(t: Tree, records: Ints, enums: Ints, name: Str, format: Str) -> Bool {
+    let mut declared = false;
+    let mut derived = false;
+    let mut i = 0;
+    while i < ints_len(records) {
+        let r = ints_get(records, i);
+        if sx_name(t, r, "name") == name {
+            declared = true;
+            if dv_derives(t, dv_items(t, r, "attrs"), format) { derived = true; }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(enums) {
+        let e = ints_get(enums, i);
+        if sx_name(t, e, "name") == name {
+            declared = true;
+            if dv_derives(t, dv_items(t, e, "attrs"), format) { derived = true; }
+        }
+        i = i + 1;
+    }
+    declared && derived == false
+}
+
+// Whether every field of `fields` can be carried in `format` (`fields_ok`).
+fn dv_fields_ok(t: Tree, records: Ints, enums: Ints, fields: Ints, format: Str) -> Bool {
+    let mut i = 0;
+    while i < ints_len(fields) {
+        let f = ints_get(fields, i);
+        let ty = sx_field(t, f, "ty");
+        if dv_refusal_for(t, format, ty) != "" { return false; }
+        let named = ints_new();
+        dv_named(t, ty, named);
+        let mut k = 0;
+        while k < ints_len(named) {
+            if dv_underived(t, records, enums, dv_name(t, ints_get(named, k)), format) { return false; }
+            k = k + 1;
+        }
+        let attrs = dv_items(t, f, "attrs");
+        let optional = dv_plain(t, ty) && dv_name(t, ty) == "Option";
+        if dv_codec_word(t, attrs, "omit_none") && optional == false { return false; }
+        if dv_codec_word(t, attrs, "default") && dv_empty(t, ty) == "" { return false; }
+        i = i + 1;
+    }
+    true
+}
+
+// `text` with the functions its derives mean appended, or unchanged when it derives nothing.
+pub fn dv_expand(text: Str) -> Str {
+    if dv_find(text, "@derive") < 0 { return text; }
+    let t = sx_tree();
+    let program = sx_parse_source(text, t, dg_new());
+    let records = dv_items(t, program, "records");
+    let enums = dv_items(t, program, "enums");
+    let generated = strs_new();
+    let used = strs_new();
+    let formats = strs_new();
+    strs_push(formats, "json");
+    strs_push(formats, "toml");
+    let mut fi = 0;
+    while fi < 2 {
+        let format = strs_get(formats, fi);
+        let before = strs_len(generated);
+        let mut i = 0;
+        while i < ints_len(records) {
+            let r = ints_get(records, i);
+            if dv_derives(t, dv_items(t, r, "attrs"), format) && ints_len(dv_items(t, r, "type_params")) == 0
+                    && dv_fields_ok(t, records, enums, dv_items(t, r, "fields"), format) {
+                if format == "json" { strs_push(generated, json_generate(t, r, false)); } else { strs_push(generated, toml_generate(t, r, false)); }
+            }
+            i = i + 1;
+        }
+        i = 0;
+        while i < ints_len(enums) {
+            let e = ints_get(enums, i);
+            if dv_derives(t, dv_items(t, e, "attrs"), format) && ints_len(dv_items(t, e, "type_params")) == 0 {
+                let variants = dv_items(t, e, "variants");
+                let mut all = true;
+                let mut v = 0;
+                while v < ints_len(variants) {
+                    if dv_fields_ok(t, records, enums, dv_items(t, ints_get(variants, v), "fields"), format) == false { all = false; }
+                    v = v + 1;
+                }
+                if all {
+                    if format == "json" { strs_push(generated, json_generate(t, e, true)); } else { strs_push(generated, toml_generate(t, e, true)); }
+                }
+            }
+            i = i + 1;
+        }
+        if strs_len(generated) > before { strs_push(used, format); }
+        fi = fi + 1;
+    }
+    if strs_len(generated) == 0 { return text; }
+    let out = strs_new();
+    strs_push(out, text);
+    if str_len(text) == 0 || str_byte(text, str_len(text) - 1) != 10 { strs_push(out, dv_nl()); }
+    strs_push(out, "\n// --- generated by `@derive` (docs/spec.md, *Derived serialisation*) ---\n\n");
+    let mut u = 0;
+    while u < strs_len(used) {
+        strs_push(out, dv_t("use \"@std/$1\";¶", dv_a1(strs_get(used, u))));
+        u = u + 1;
+    }
+    strs_push(out, dv_nl());
+    strs_push(out, str_join(generated, ""));
+    str_join(out, "")
+}

@@ -615,3 +615,11 @@
       differ (carried 3,235, all agree); facts 3,235 agree, 6 differ (carried 3,235, all agree);
       core 3,241 agree, 0 differ, every one of 96,572 functions carried and agreeing, the other
       parts 11,310, all agree, 1,885 whole documents, all the reference's bytes
+- [x] 7.8 `@derive(json)` and `@derive(toml)` (D27): the expansion ported (`compiler/derive.nz`,
+      applied by the loader to every project file), its refusals in `configure.nz`, and the
+      checker's stop at a derived encoding removed. `inputs/check/derive-refusals.nz` holds the
+      refusals. `run.sh` on 5b132e5e (reference rebuilt there): tokens, tree, syntax 3,246
+      agree, 0 differ (1 not UTF-8, skipped); check 3,247 agree, 0 differ (the checker carries
+      every one), render likewise, facts likewise; core 3,247 agree, 0 differ, every one of
+      105,232 functions carried and agreeing, the other parts 11,370, all agree, 1,895 whole
+      documents, all the reference's bytes. Nothing differs and nothing is stopped

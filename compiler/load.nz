@@ -20,6 +20,7 @@ use "diag.nz";
 use "lex.nz";
 use "builtins.nz";
 use "package.nz";
+use "derive.nz";
 
 // A line break, written so that no string literal in this file holds one (`selfhost.rs` dumps a
 // string's value on one line).
@@ -341,6 +342,8 @@ pub fn ld_load_over(root: Str, library: Str, source_root: Str, packages: Package
         }
         let mut text = "";
         if over { text = ov_read(paths, texts_over, file, io); } else { text = read_file(file); }
+        // A project file's derives, expanded before its imports are read (`derive::expand`).
+        if is_std == false { text = dv_expand(text); }
         // Parsed for its imports only; its diagnostics are the caller's, from its own parse.
         let t = sx_tree();
         let scratch = dg_new();

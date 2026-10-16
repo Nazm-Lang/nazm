@@ -1,0 +1,26 @@
+// `@derive`'s refusals (R1c, L2; R2 D27): a generic type, a field of a type with no form in the
+// format, a type the program declares that does not derive it, an `Option` inside another type
+// under TOML; nothing is generated for any of them.
+struct Plain { n: Int }
+
+@derive(json)
+struct Box2[T] { v: T }
+
+@derive(json)
+struct Bad {
+    f: fn(Int) -> Int,
+    a: [Int; 2],
+    w: UInt64,
+    h: OsHandle,
+    p: Plain,
+    t: (Int, Int),
+    g: Vec[Int, Int],
+}
+
+@derive(toml)
+struct T1 { xs: Vec[Option[Int]], ok: Option[Int] }
+
+@derive(json)
+enum E { A(p: Plain), B }
+
+fn main() -> Int { 0 }
