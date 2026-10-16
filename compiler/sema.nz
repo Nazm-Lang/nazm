@@ -306,6 +306,14 @@ pub struct Ck {
     // Where among the bindings each capture's copy is made (`bind` in the closure, as the
     // reference makes it): how many bindings there were then.
     capat: Ints,
+    // Per function, its bindings and its captures, in order (a run of `fbl`, of `fcl`): made
+    // once, when Core IR first asks (`index_bindings`).
+    fbf: Ints,
+    fbc: Ints,
+    fbl: Ints,
+    fcf: Ints,
+    fcc: Ints,
+    fcl: Ints,
     // Each closure checked and the type it was given (`ClosureInfo::ty`).
     clid: Ints,
     clty: Ints,
@@ -1446,7 +1454,7 @@ fn new_ck(t: Tree) -> Ck {
             imtrait: ints_new(), imty: ints_new(), immod: ints_new(), imis: ints_new(), imie: ints_new(), imff: ints_new(), imfn: ints_new(), imrf: ints_new(), imrc: ints_new(), imreq: ints_new(),
             hds: ints_new(), hde: ints_new(), htr: ints_new(), hty: ints_new(), fnmeth: ints_new(), tpbound: ints_new(),
             tsname: strs_new(), tsid: ints_new(), bfn: ints_new(), bty: ints_new(), bnm: strs_new(), bshr: ints_new(), sbid: ints_new(),
-            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
+            fnpb: ints_new(), capcl: ints_new(), capbd: ints_new(), capat: ints_new(), fbf: ints_new(), fbc: ints_new(), fbl: ints_new(), fcf: ints_new(), fcc: ints_new(), fcl: ints_new(), clid: ints_new(), clty: ints_new(), mvar: sm_new(), mclo: sm_new(), crfn: ints_new(), crb: ints_new(), mzero: sm_new(), marr: sm_new(), mfor: sm_new(), mcons: sm_new(), msite: sm_new(),
             stm: ints_new(), starg: ints_new(), pan: strs_new(), pas: ints_new(), pae: ints_new(), epown: ints_new(), epnm: strs_new(),
             sbind: ints_new(), awty: ints_new(), aws: ints_new(), awe: ints_new(), rrepr: ints_new(), fnfor: ints_new(), fnexp: ints_new(), rx: rx_new(), fnreq: ints_new(), bds: ints_new(), bde: ints_new(),
             bmut: ints_new(), mlit: sm_new(), mfld: sm_new(), mfldty: sm_new(), ipend: ints_new(), rlog: ints_new(), elog: ints_new(), mvty: sm_new(), mvix: sm_new(),
@@ -14486,6 +14494,65 @@ pub fn ck_capture_count(c: Ck) -> Int { ints_len(c.capcl) }
 pub fn ck_capture_closure(c: Ck, k: Int) -> Int { ints_get(c.capcl, k) }
 pub fn ck_capture_binding(c: Ck, k: Int) -> Int { ints_get(c.capbd, k) }
 pub fn ck_capture_at(c: Ck, k: Int) -> Int { ints_get(c.capat, k) }
+// Function `i`'s bindings, in the order made, and the captures it made (indices into the
+// capture tables), in order: what Core IR reads of a function without walking every binding.
+pub fn ck_fn_binding_count(c: Ck, i: Int) -> Int {
+    index_bindings(c);
+    ints_get(c.fbc, i)
+}
+pub fn ck_fn_binding(c: Ck, i: Int, k: Int) -> Int { ints_get(c.fbl, ints_get(c.fbf, i) + k) }
+pub fn ck_fn_capture_count(c: Ck, i: Int) -> Int {
+    index_bindings(c);
+    ints_get(c.fcc, i)
+}
+pub fn ck_fn_capture(c: Ck, i: Int, k: Int) -> Int { ints_get(c.fcl, ints_get(c.fcf, i) + k) }
+
+fn index_bindings(c: Ck) -> Int {
+    if ints_len(c.fbf) > 0 { return 0; }
+    group_by(c.bfn, strs_len(c.fnname), c.fbf, c.fbc, c.fbl);
+    group_by(c.capcl, strs_len(c.fnname), c.fcf, c.fcc, c.fcl);
+    0
+}
+
+// The indices of `owner` grouped by their value (0 to `n` - 1), each group in index order.
+fn group_by(owner: Ints, n: Int, first: Ints, count: Ints, list: Ints) -> Int {
+    let mut i = 0;
+    while i < n {
+        ints_push(count, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(owner) {
+        let o = ints_get(owner, i);
+        if o >= 0 && o < n { ints_set(count, o, ints_get(count, o) + 1); }
+        i = i + 1;
+    }
+    let fill = ints_new();
+    let mut at = 0;
+    i = 0;
+    while i < n {
+        ints_push(first, at);
+        ints_push(fill, at);
+        at = at + ints_get(count, i);
+        i = i + 1;
+    }
+    i = 0;
+    while i < at {
+        ints_push(list, 0);
+        i = i + 1;
+    }
+    i = 0;
+    while i < ints_len(owner) {
+        let o = ints_get(owner, i);
+        if o >= 0 && o < n {
+            ints_set(list, ints_get(fill, o), i);
+            ints_set(fill, o, ints_get(fill, o) + 1);
+        }
+        i = i + 1;
+    }
+    0
+}
+
 // The `Cell` a binding a closure shares is kept in (R1b, L10).
 pub fn ck_cell_of(c: Ck, t: Int) -> Int { holder_of(c, tag_cell(), t) }
 // The zero literal a compound update's read of a map at the brackets `s..e` (absolute) passes,

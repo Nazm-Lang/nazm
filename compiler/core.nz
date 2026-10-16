@@ -465,27 +465,28 @@ fn co_function(lo: Lo, i: Int) -> Str {
     }
     // Its locals are its bindings, parameters first, in the order the checker made them; a
     // closure's copy of each binding it captures where the checker made it, among them (`bind`).
-    let mut b = 0;
+    let mut j = 0;
     let mut n = 0;
     let mut k = 0;
-    let caps = ck_capture_count(c);
-    while b <= ck_binding_count(c) {
-        while k < caps && ck_capture_at(c, k) <= b {
-            if ck_capture_closure(c, k) == i {
-                let r = ck_capture_binding(c, k);
-                ints_push(seed, co_local(lo, r, ck_binding_name(c, r), ck_binding_ty(c, r), co_shared_elem(lo, r), "let", "synthetic"));
-                n = n + 1;
-            }
+    let caps = ck_fn_capture_count(c, i);
+    let own = ck_fn_binding_count(c, i);
+    while j <= own {
+        let mut b = ck_binding_count(c);
+        if j < own { b = ck_fn_binding(c, i, j); }
+        while k < caps && ck_capture_at(c, ck_fn_capture(c, i, k)) <= b {
+            let r = ck_capture_binding(c, ck_fn_capture(c, i, k));
+            ints_push(seed, co_local(lo, r, ck_binding_name(c, r), ck_binding_ty(c, r), co_shared_elem(lo, r), "let", "synthetic"));
+            n = n + 1;
             k = k + 1;
         }
-        if b < ck_binding_count(c) && ck_binding_fn(c, b) == i {
+        if j < own {
             if ck_binding_start(c, b) < 0 { co_halt(lo, "a binding declared nowhere"); }
             let mut origin = "let";
             if n < ck_fn_param_count(c, i) { origin = "param"; } else { if ck_binding_mutable(c, b) { origin = "let mut"; } }
             co_local(lo, b, ck_binding_name(c, b), ck_binding_ty(c, b), co_shared_elem(lo, b), origin, co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
             n = n + 1;
         }
-        b = b + 1;
+        j = j + 1;
     }
     // Contracts (N87, §7.88): every `requires` checked first, then the body; every `ensures`
     // where it returns — its tail, each `return` and each `?` (`leave`).
@@ -589,20 +590,19 @@ fn co_foreign_fn(lo: Lo, i: Int) -> Str {
     let c = lo.c;
     let t = lo.t;
     let node = ck_fn_node(c, i);
-    let mut b = 0;
+    let mut j = 0;
     let mut n = 0;
-    while b < ck_binding_count(c) {
-        if ck_binding_fn(c, b) == i {
-            if ck_binding_start(c, b) < 0 { return co_stopped(lo, "a binding declared nowhere"); }
-            let mut ty = ck_binding_ty(c, b);
-            if n < ck_fn_param_count(c, i) {
-                let cross = ck_cross_in(c, ck_fn_param_ty(c, i, n));
-                if cross == "handle" || cross == "callback" { ty = ck_t_int(); }
-            }
-            co_local(lo, b, ck_binding_name(c, b), ty, 0 - 1, "param", co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
-            n = n + 1;
+    while j < ck_fn_binding_count(c, i) {
+        let b = ck_fn_binding(c, i, j);
+        if ck_binding_start(c, b) < 0 { return co_stopped(lo, "a binding declared nowhere"); }
+        let mut ty = ck_binding_ty(c, b);
+        if n < ck_fn_param_count(c, i) {
+            let cross = ck_cross_in(c, ck_fn_param_ty(c, i, n));
+            if cross == "handle" || cross == "callback" { ty = ck_t_int(); }
         }
-        b = b + 1;
+        co_local(lo, b, ck_binding_name(c, b), ty, 0 - 1, "param", co_span_text(lo, ck_binding_start(c, b), ck_binding_end(c, b)));
+        n = n + 1;
+        j = j + 1;
     }
     let mut ret = ck_fn_ret_ty(c, i);
     let out_cross = ck_cross_out(c, ret);
