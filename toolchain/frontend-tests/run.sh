@@ -191,5 +191,11 @@ for mode in $modes; do
     fi
   fi
   [ "$differ" -eq 0 ] || status=1
+  # Growth (performance leadership 7.4): the document printed for a function nested 200 deep is
+  # its size times its depth, but the work of printing it is no longer a part per indentation.
+  if [ "$mode" = core ]; then
+    python3 "$root/bench/complexity/growth.py" "Core IR (diagnose --core)" nest 25 5 src "$nazm" "$out/growth" -- \
+      "$exe" --core "{in}" "$root/library" "$host_os" "$host_arch" || status=1
+  fi
 done
 exit ${status:-0}

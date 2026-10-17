@@ -24,10 +24,12 @@ struct Js {
     kids: Ints,
     // The reading position, and whether the text was not JSON this reader reads.
     st: Ints,
+    // What `js_newline` writes at each level, made as the levels are reached.
+    indent: Strs,
 }
 
 fn js_new() -> Js {
-    let j = Js(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), count: ints_new(), kids: ints_new(), st: ints_new());
+    let j = Js(kind: ints_new(), text: strs_new(), key: strs_new(), first: ints_new(), count: ints_new(), kids: ints_new(), st: ints_new(), indent: strs_new());
     ints_push(j.st, 0);
     ints_push(j.st, 0);
     j
@@ -837,13 +839,15 @@ pub fn cdg_pretty(compact: Str) -> Str {
     str_join(out, "")
 }
 
-fn js_newline(out: Strs, level: Int) -> Int {
-    strs_push(out, str_from_byte(10));
-    let mut i = 0;
-    while i < level {
-        strs_push(out, "  ");
-        i = i + 1;
+// A line break and `level` indentations, as one part made once per level: a part for each
+// indentation made the parts of a deep document as many as its spaces (performance leadership
+// 7.3).
+fn js_newline(j: Js, out: Strs, level: Int) -> Int {
+    while strs_len(j.indent) <= level {
+        let n = strs_len(j.indent);
+        if n == 0 { strs_push(j.indent, str_from_byte(10)); } else { strs_push(j.indent, str_concat(strs_get(j.indent, n - 1), "  ")); }
     }
+    strs_push(out, strs_get(j.indent, level));
     0
 }
 
@@ -863,7 +867,7 @@ fn js_write(j: Js, n: Int, level: Int, out: Strs) -> Int {
     let mut i = 0;
     while i < count {
         if i > 0 { strs_push(out, ","); }
-        js_newline(out, level + 1);
+        js_newline(j, out, level + 1);
         let k = js_at(j, n, i);
         if kind == 5 {
             js_quote(strs_get(j.key, k), out);
@@ -872,7 +876,7 @@ fn js_write(j: Js, n: Int, level: Int, out: Strs) -> Int {
         js_write(j, k, level + 1, out);
         i = i + 1;
     }
-    js_newline(out, level);
+    js_newline(j, out, level);
     if kind == 4 { strs_push(out, "]"); } else { strs_push(out, "}"); }
     0
 }
