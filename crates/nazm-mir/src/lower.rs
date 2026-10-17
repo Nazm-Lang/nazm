@@ -1482,19 +1482,28 @@ impl Fx<'_> {
     }
 
     /// Operands in written order, each snapshotted if a later one could reassign it.
-    fn operands(&mut self, es: &[cir::Expr]) -> Option<(Vec<Operand>, Vec<LocalId>)> {
+    ///
+    /// Takes the operands by reference (`&[&Expr]` as well as `&[Expr]`): cloning a binary
+    /// operation's operands into an array copied the whole left subtree at every link of a chain
+    /// like `a + b + c + …`, quadratic in its length (performance leadership 7.3). Only the
+    /// operands after each one are asked whether they are hazardous, so the first, the deep one
+    /// of such a chain, is never walked here.
+    fn operands<E: std::borrow::Borrow<cir::Expr>>(
+        &mut self,
+        es: &[E],
+    ) -> Option<(Vec<Operand>, Vec<LocalId>)> {
         let mut later_hazard = vec![false; es.len()];
         let mut any = false;
-        for (i, e) in es.iter().enumerate().rev() {
-            if let Some(slot) = later_hazard.get_mut(i) {
+        for (i, e) in es.iter().enumerate().skip(1).rev() {
+            any = any || Self::hazardous(e.borrow());
+            if let Some(slot) = later_hazard.get_mut(i - 1) {
                 *slot = any;
             }
-            any = any || Self::hazardous(e);
         }
         let mut ops = Vec::with_capacity(es.len());
         let mut held = Vec::new();
         for (e, hazard) in es.iter().zip(later_hazard) {
-            let Some((op, h)) = self.operand(e, hazard) else {
+            let Some((op, h)) = self.operand(e.borrow(), hazard) else {
                 // Control left part way through: what was already held is on the stack, and
                 // the transfer that left dropped it. Forget it here.
                 for l in held.into_iter().rev() {
@@ -1553,7 +1562,7 @@ impl Fx<'_> {
                 self.release(h, at);
             }
             cir::ExprKind::Arith { op, lhs, rhs } => {
-                let Some((ops, held)) = self.operands(&[(**lhs).clone(), (**rhs).clone()]) else {
+                let Some((ops, held)) = self.operands(&[&**lhs, &**rhs]) else {
                     return;
                 };
                 let (a, b) = two(ops);
@@ -1561,7 +1570,7 @@ impl Fx<'_> {
                 self.release_all(held, at);
             }
             cir::ExprKind::Bits { op, lhs, rhs } => {
-                let Some((ops, held)) = self.operands(&[(**lhs).clone(), (**rhs).clone()]) else {
+                let Some((ops, held)) = self.operands(&[&**lhs, &**rhs]) else {
                     return;
                 };
                 let (a, b) = two(ops);
@@ -1618,8 +1627,7 @@ impl Fx<'_> {
                 self.release(h, at);
             }
             cir::ExprKind::Index { base, index } => {
-                let Some((ops, held)) = self.operands(&[(**base).clone(), (**index).clone()])
-                else {
+                let Some((ops, held)) = self.operands(&[&**base, &**index]) else {
                     return;
                 };
                 let (b, i) = two(ops);
@@ -1647,7 +1655,7 @@ impl Fx<'_> {
                 } else {
                     *law
                 };
-                let Some((ops, held)) = self.operands(&[(**lhs).clone(), (**rhs).clone()]) else {
+                let Some((ops, held)) = self.operands(&[&**lhs, &**rhs]) else {
                     return;
                 };
                 let (a, b) = two(ops);
@@ -1779,8 +1787,8 @@ impl Fx<'_> {
                 callee_at,
             } => {
                 let mut all = Vec::with_capacity(args.len() + 1);
-                all.push((**callee).clone());
-                all.extend(args.iter().cloned());
+                all.push(&**callee);
+                all.extend(args.iter());
                 let Some((mut ops, held)) = self.operands(&all) else {
                     return;
                 };
