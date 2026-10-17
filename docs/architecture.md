@@ -7637,6 +7637,25 @@ waker took it off) takes no lock to leave. Channel texts are unchanged (`runtime
 hand-off to a parked receiver changes them and their mirror in `compiler/emit.nz`, and is not part
 of this. Runtime ABI 41 → 42.
 
+**Amended (performance leadership 6.4, 2026-10-17): a direct hand-off on the `Int` channel.** A
+sender or receiver that must block no longer waits on the channel's one condition variable, which
+every change broadcast to every waiter. It parks on a wait record of its own, at the tail of the
+channel's list of receivers or of senders, and sleeps on the record's condition variable. A receiver
+parks only on an empty ring and a sender only on a full one, so a sender that finds a receiver
+parked writes its value into the record of the one parked longest, marks it done and wakes it alone
+— the ring is never touched — and a receiver that frees a slot while a sender is parked moves the
+value of the one parked longest into the ring's tail and wakes it alone, so values leave in the
+order they were offered. A close marks every record closed and wakes each: a parked receiver then
+finds the channel drained, a parked sender refused, as before. A record lives on the heap, never on
+the waiter's stack, because a parked pool task's frames are copied out and their addresses reused
+(6.2); records go back to the channel's spares and the last reference frees them, so a channel
+allocates no more records than it ever had waiters at once. Without memory for one a waiter waits
+the old way, on the channel's condition variable, counted so that every change broadcasts it while
+anyone does. The text is still the thread model's, joined to the pool by the same hooks, and
+`compiler/emit.nz` mirrors it line for line (`runtime parity`). The generic channel (`Chan[T]`) is
+unchanged except that its close is its own. Every function of the channel that takes its lock,
+parks or wakes is `noinline`, as 6.3's preemption by interrupt requires. Runtime ABI 44 → 45.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough

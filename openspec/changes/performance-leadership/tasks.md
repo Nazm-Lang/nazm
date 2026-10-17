@@ -77,6 +77,10 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
 - [ ] 6.4 `select` over several channels, and lock-free channels
       — 2026-10-16, part: the waiter table's 64 locks and no lock for an empty bucket (ABI 42).
       Open: `select` over channels of different types (designed, design.md) and a direct hand-off
+      — 2026-10-17, part: the direct hand-off on the `Int` channel — a send to a parked receiver
+      writes into its wait record and wakes it alone, a receive moves a parked sender's value into
+      the ring, both first come first served (runtime ABI 45; `compiler/emit.nz` mirrored). Timings
+      wait for the coordinator's quiet window (`bench/compare/concurrency.sh`)
 - [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the
