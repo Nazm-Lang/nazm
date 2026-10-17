@@ -731,3 +731,97 @@ fn parked_senders_and_receivers_are_served_first_come_first_served() {
         }
     }
 }
+
+// --- Performance leadership 6.4: the direct hand-off on a generic channel ------------------------
+
+/// `CLOSING_PARKED` over `Chan[Str]`: a parked receiver ends, a parked sender is refused and gives
+/// its string back, and every string is reclaimed.
+const CLOSING_PARKED_OF: &str = "fn taker(io: IoCap, c: Chan[Str], done: Chan) -> Int ! { io } {\n\
+    let got = vec_new[Str]();\n\
+    if chan_recv_of(c, got) { chan_send(done, 1); } else { chan_send(done, 10); }\n\
+    0 }\n\
+fn giver(io: IoCap, c: Chan[Str], done: Chan, v: Int) -> Int ! { io } {\n\
+    if chan_send_of(c, int_to_str(v)) { chan_send(done, 100); } else { chan_send(done, 1000); }\n\
+    0 }\n\
+fn closer(io: IoCap, a: Chan[Str], b: Chan[Str]) -> Int ! { io } { chan_close_of(a); chan_close_of(b); 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let empty = chan_new_of[Str](1); let full = chan_new_of[Str](1); let done = chan_new(64);\n\
+    let sent = chan_send_of(full, str_concat(\"se\", \"ven\"));\n\
+    scope {\n\
+        let mut i = 0;\n\
+        while i < 8 { spawn taker(io, empty, done); spawn giver(io, full, done, i); i = i + 1; }\n\
+        spawn closer(io, empty, full);\n\
+    }\n\
+    let got = ints_new(); let mut k = 0; let mut s = 0;\n\
+    while k < 16 { if chan_recv(done, got) { s = s + ints_pop(got); } k = k + 1; }\n\
+    let left = vec_new[Str]();\n\
+    let r = chan_recv_of(full, left);\n\
+    print(int_to_str(s)); print(\" \"); print(vec_get(left, 0)); 0 }\n";
+
+/// `SENDERS_IN_ORDER` over `Chan[Str]`: parked senders' strings arrive in the order they parked.
+const SENDERS_IN_ORDER_OF: &str = "fn giver(io: IoCap, c: Chan[Str], v: Int) -> Int ! { io } { let s = chan_send_of(c, int_to_str(v)); 0 }\n\
+fn taker(io: IoCap, c: Chan[Str], out: Chan, n: Int) -> Int ! { io } {\n\
+    let got = vec_new[Str](); let mut k = 0; let mut s = \"\";\n\
+    while k < n { if chan_recv_of(c, got) { s = str_concat(s, vec_pop(got)); } k = k + 1; }\n\
+    let r = chan_send(out, str_len(s) * 0 + 1); print(s); 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let c = chan_new_of[Str](1); let out = chan_new(1);\n\
+    scope {\n\
+        let mut i = 1;\n\
+        while i < 6 { spawn giver(io, c, i); i = i + 1; }\n\
+        spawn taker(io, c, out, 5);\n\
+    }\n\
+    let got = ints_new(); let r = chan_recv(out, got); 0 }\n";
+
+/// `RECEIVERS_IN_ORDER` over `Chan[Str]`: each parked receiver is handed the string sent for it.
+const RECEIVERS_IN_ORDER_OF: &str = "fn taker(io: IoCap, c: Chan[Str], out: Chan, want: Int) -> Int ! { io } {\n\
+    let got = vec_new[Str]();\n\
+    if chan_recv_of(c, got) { let r = chan_send(out, if vec_pop(got) == int_to_str(want) { 1 } else { 0 }); }\n\
+    0 }\n\
+fn giver(io: IoCap, c: Chan[Str]) -> Int ! { io } {\n\
+    let mut i = 1; while i < 4 { let s = chan_send_of(c, int_to_str(i)); i = i + 1; } 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let c = chan_new_of[Str](1); let out = chan_new(8);\n\
+    scope {\n\
+        let mut i = 1;\n\
+        while i < 4 { spawn taker(io, c, out, i); i = i + 1; }\n\
+        spawn giver(io, c);\n\
+    }\n\
+    let got = ints_new(); let mut k = 0; let mut s = 0;\n\
+    while k < 3 { if chan_recv(out, got) { s = s + ints_pop(got); } k = k + 1; }\n\
+    print(int_to_str(s)); 0 }\n";
+
+#[test]
+fn a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_parked_waiters() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "closing", CLOSING_PARKED_OF, backend);
+        built(d.path(), "senders", SENDERS_IN_ORDER_OF, backend);
+        built(d.path(), "receivers", RECEIVERS_IN_ORDER_OF, backend);
+        for env in [
+            &[("NAZM_SCHEDULER", "threads")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")][..],
+        ] {
+            let (out, err, code) = run(d.path(), "closing", &[], env);
+            assert_eq!(code, Some(0), "{backend} {env:?}: {err}");
+            assert!(out.starts_with("8080 seven"), "{backend} {env:?}: {out}");
+            assert!(
+                err.contains("strings allocated"),
+                "{backend} {env:?}: {err}"
+            );
+            for kind in ["sequences", "strings", "channels"] {
+                let part = err.split(kind).nth(1).unwrap_or("");
+                let live = part.split_whitespace().nth(2).unwrap_or("");
+                assert_eq!(live, "live=0", "{backend} {env:?}: {kind}: {err}");
+            }
+        }
+        let one = [("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")];
+        let (out, err, code) = run(d.path(), "senders", &[], &one);
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with("12345"), "{backend}: {out}");
+        let (out, err, code) = run(d.path(), "receivers", &[], &one);
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with('3'), "{backend}: {out}");
+    }
+}
