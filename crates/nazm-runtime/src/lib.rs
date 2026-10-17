@@ -361,7 +361,14 @@ pub fn escape(s: &str) -> String {
 /// `.text$nzM` — and no failure unwinds. `nz.preempt`, its flag and its hook are gone; every runtime
 /// function that takes a lock, spins or touches the small-block heap's lists or the pool is
 /// `noinline`, so whole-program optimisation never puts one inside generated code.
-pub const RUNTIME_ABI_REVISION: u32 = 44;
+/// 45 is performance leadership 6.4's direct hand-off (2026-10-17): an `Int` channel's header is
+/// 112 bytes — lists of parked receivers (64, tail 72) and senders (80, tail 88), spare wait
+/// records (96) and a count of waiters on its condition variable (104) — and a send to a channel
+/// with a parked receiver writes the value into that receiver's wait record and wakes it alone,
+/// as a receive from one with a parked sender moves that sender's value into the ring
+/// (`nz.chan_record`, `nz.chan_park`, `nz.chan_hand`, `nz.chan_wait_old`, `nz.chan_tell_old`);
+/// a generic channel's close (`nz.chanv_close`) no longer calls the `Int` channel's.
+pub const RUNTIME_ABI_REVISION: u32 = 45;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -810,7 +817,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.cstr_len", "i64" ("ptr") "", true, Strings, "", Never, Any, "the length of a C string a foreign function returned (N85)", "borrows the C string"),
     rt!("nz.errno_save", "void" () "", true, Foreign, "", Never, Owner, "save this thread's errno as a foreign call returns (N85)", "none"),
     rt!("nz.errno_last", "i64" () "", true, Foreign, "", Never, Owner, "the errno the last foreign call on this thread left (N85)", "none"),
-    rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
+    rt!("nz.chanv_close", "void" ("ptr") "noinline", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
     rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "noinline", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
     rt!("nz.time_now_ns", "i64" () "", false, Channels, "", Never, Any, "the same monotonic clock in nanoseconds (Gate 2)", "none"),
@@ -821,6 +828,11 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.sel_sync_get", "ptr" () "noinline", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
     rt!("nz.sel_signal", "void" () "noinline", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
     rt!("nz.chanv_try", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
+    rt!("nz.chan_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record for an `Int` channel: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
+    rt!("nz.chan_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr", "i64") "noinline", false, Channels, "", Never, Locked, "park on a wait record at the tail of a channel's list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
+    rt!("nz.chan_hand", "i64" ("ptr", "ptr", "i64", "i64") "noinline", false, Channels, "", Never, Locked, "take the head of a channel's wait list, give it a value and a state, and wake it alone (6.4)", "the value the record held"),
+    rt!("nz.chan_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on the channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
+    rt!("nz.chan_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on the channel's own condition variable, if anyone does (6.4)", "none"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
     rt!("nz.pool_mode_get", "i64" () "noinline", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", "none"),
     rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
@@ -1508,9 +1520,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_four_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.3's preemption by interrupt: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 44);
+    fn the_runtime_is_revision_forty_five_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.4's direct hand-off: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 45);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

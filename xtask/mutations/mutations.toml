@@ -9238,14 +9238,11 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler::a_failur
 
 [[mutation]]
 name = "n44-a-send-wakes-nobody"
-why = "`nz.chan_send` queues its value without waking the receivers waiting for one, so a receiver that was already waiting waits for ever"
+why = """`nz.chan_send` queues its value without waking the receivers waiting for one, so a receiver that was already waiting waits for ever.
+Repointed by performance leadership 6.4's direct hand-off: a waiting receiver is parked on its own record, and a send that does not hand to it queues the value where it never looks."""
 file = "crates/nazm-runtime/src/core.rs"
-find = """  %n1 = add i64 %len, 1
-  store i64 %n1, ptr %lenp
-  %b = call i32 @pthread_cond_broadcast(ptr %cv)"""
-replace = """  %n1 = add i64 %len, 1
-  store i64 %n1, ptr %lenp
-  %b = add i32 0, 0"""
+find = """  br i1 %parked, label %hand, label %space"""
+replace = """  br i1 false, label %hand, label %space"""
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler::a_receiver_waiting_on_an_empty_channel_is_woken_by_a_send" }]
 
 [[mutation]]
@@ -10564,11 +10561,12 @@ Repointed by performance leadership 6.2, which moved it to 40 for copied stacks:
 Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448.
 Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64.
 Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it.
-Repointed by performance leadership 6.3's preemption by interrupt, which moved it to 44: an object built to poll `nz.preempt_req` must not be linked with a runtime that no longer defines it."""
+Repointed by performance leadership 6.3's preemption by interrupt, which moved it to 44: an object built to poll `nz.preempt_req` must not be linked with a runtime that no longer defines it.
+Repointed by performance leadership 6.4's direct hand-off, which moved it to 45: an object built against a runtime whose `Int` channel header is 64 bytes must not be linked with one whose is 112."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 44;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 43;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_four_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 45;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 44;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_five_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20818,3 +20816,53 @@ file = "crates/nazm-cli/src/archive.rs"
 find = "if defined || flags & EXPLICIT_NAME != 0 {"
 replace = "if flags & EXPLICIT_NAME != 0 {"
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime_artifact::every_object_format_archives_with_an_index_and_the_same_bytes_twice" }]
+
+# --- Performance leadership 6.4: a direct hand-off on the `Int` channel (2026-10-17)
+
+[[mutation]]
+name = "ph-a-handed-waiter-is-never-woken"
+why = "a waker sets a parked waiter's record and never signals it, so a parked receiver or sender waits for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %b = call i32 @pthread_cond_broadcast(ptr %rcv)'''
+replace = '''  %b = add i32 0, 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+[[mutation]]
+name = "ph-a-send-hands-over-nothing"
+why = "a send to a parked receiver hands it 0 in place of the value"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %hh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 %v, i64 1)'''
+replace = '''  %hh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 1)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+[[mutation]]
+name = "ph-a-freed-slot-loses-the-parked-senders-value"
+why = "a receive that frees a slot while a sender is parked wakes it as sent but queues 0"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store i64 %sv, ptr %tslot'''
+replace = '''  store i64 0, ptr %tslot'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+[[mutation]]
+name = "ph-the-wait-lists-tail-never-moves"
+why = "a second waiter replaces the first at the head of the list, which is then never woken"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store ptr %rec, ptr %qtp'''
+replace = '''  store ptr %tail, ptr %qtp'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+[[mutation]]
+name = "ph-a-close-tells-parked-senders-they-sent"
+why = "a close wakes a parked sender as though a receiver took its value, so a lost value reports sent"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %sh = call i64 @nz.chan_hand(ptr %sqp, ptr %sqtp, i64 0, i64 2)'''
+replace = '''  %sh = call i64 @nz.chan_hand(ptr %sqp, ptr %sqtp, i64 0, i64 1)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_close_ends_every_parked_receiver_and_refuses_every_parked_sender" }]
+
+[[mutation]]
+name = "ph-a-close-hands-parked-receivers-a-value"
+why = "a close wakes a parked receiver as though a sender handed it 0, so a closed and drained channel yields a value"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 2)'''
+replace = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 1)'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_close_ends_every_parked_receiver_and_refuses_every_parked_sender" }]

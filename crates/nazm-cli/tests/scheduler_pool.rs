@@ -616,3 +616,116 @@ fn a_parked_tasks_deadline_fires_on_the_pool() {
     assert_eq!(out, "-2 waited0\n");
     assert!(err.contains("timeouts=1"), "{err}");
 }
+
+// --- Performance leadership 6.4: a direct hand-off on the `Int` channel --------------------------
+
+/// Parked receivers on an empty channel and parked senders on a full one, then a close: every
+/// receiver ends with `false`, every sender is refused, and the value queued before stays.
+const CLOSING_PARKED: &str = "fn taker(io: IoCap, c: Chan, done: Chan) -> Int ! { io } {\n\
+    let got = ints_new();\n\
+    if chan_recv(c, got) { chan_send(done, 1); } else { chan_send(done, 10); }\n\
+    0 }\n\
+fn giver(io: IoCap, c: Chan, done: Chan, v: Int) -> Int ! { io } {\n\
+    if chan_send(c, v) { chan_send(done, 100); } else { chan_send(done, 1000); }\n\
+    0 }\n\
+fn closer(io: IoCap, a: Chan, b: Chan) -> Int ! { io } { chan_close(a); chan_close(b); 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let empty = chan_new(1); let full = chan_new(1); let done = chan_new(64);\n\
+    let sent = chan_send(full, 7);\n\
+    scope {\n\
+        let mut i = 0;\n\
+        while i < 8 { spawn taker(io, empty, done); spawn giver(io, full, done, i); i = i + 1; }\n\
+        spawn closer(io, empty, full);\n\
+    }\n\
+    let got = ints_new(); let mut k = 0; let mut s = 0;\n\
+    while k < 16 { if chan_recv(done, got) { s = s + ints_pop(got); } k = k + 1; }\n\
+    let left = chan_recv(full, got);\n\
+    print(int_to_str(s)); print(\" \"); print(int_to_str(ints_pop(got))); 0 }\n";
+
+/// Five senders park on a full channel of one, in the order they ran; one receiver then takes
+/// every value. Each value it frees a slot for is the next parked sender's, first come first
+/// served — on one worker the run order is fixed, so the order received is too.
+const SENDERS_IN_ORDER: &str =
+    "fn giver(io: IoCap, c: Chan, v: Int) -> Int ! { io } { let s = chan_send(c, v); 0 }\n\
+fn taker(io: IoCap, c: Chan, out: Chan, n: Int) -> Int ! { io } {\n\
+    let got = ints_new(); let mut k = 0; let mut s = 0;\n\
+    while k < n { if chan_recv(c, got) { s = s * 10 + ints_pop(got); } k = k + 1; }\n\
+    let r = chan_send(out, s); 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let c = chan_new(1); let out = chan_new(1);\n\
+    scope {\n\
+        let mut i = 1;\n\
+        while i < 6 { spawn giver(io, c, i); i = i + 1; }\n\
+        spawn taker(io, c, out, 5);\n\
+    }\n\
+    let got = ints_new(); let r = chan_recv(out, got);\n\
+    print(int_to_str(ints_pop(got))); 0 }\n";
+
+/// Three receivers park on an empty channel in the order they ran; one sender then sends 1, 2
+/// and 3, each straight to the receiver parked longest, which reports whether it got its own.
+const RECEIVERS_IN_ORDER: &str =
+    "fn taker(io: IoCap, c: Chan, out: Chan, want: Int) -> Int ! { io } {\n\
+    let got = ints_new();\n\
+    if chan_recv(c, got) { let r = chan_send(out, if ints_pop(got) == want { 1 } else { 0 }); }\n\
+    0 }\n\
+fn giver(io: IoCap, c: Chan) -> Int ! { io } {\n\
+    let mut i = 1; while i < 4 { let s = chan_send(c, i); i = i + 1; } 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let c = chan_new(1); let out = chan_new(8);\n\
+    scope {\n\
+        let mut i = 1;\n\
+        while i < 4 { spawn taker(io, c, out, i); i = i + 1; }\n\
+        spawn giver(io, c);\n\
+    }\n\
+    let got = ints_new(); let mut k = 0; let mut s = 0;\n\
+    while k < 3 { if chan_recv(out, got) { s = s + ints_pop(got); } k = k + 1; }\n\
+    print(int_to_str(s)); 0 }\n";
+
+#[test]
+fn a_close_ends_every_parked_receiver_and_refuses_every_parked_sender() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "closing", CLOSING_PARKED, backend);
+        for env in [
+            &[("NAZM_SCHEDULER", "threads")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")][..],
+        ] {
+            let (out, err, code) = run(d.path(), "closing", &[], env);
+            assert_eq!(code, Some(0), "{backend} {env:?}: {err}");
+            assert!(out.starts_with("8080 7"), "{backend} {env:?}: {out}");
+            assert!(err.contains("live=0"), "{backend} {env:?}: {err}");
+        }
+    }
+}
+
+#[test]
+fn parked_senders_and_receivers_are_served_first_come_first_served() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "senders", SENDERS_IN_ORDER, backend);
+        built(d.path(), "receivers", RECEIVERS_IN_ORDER, backend);
+        let one = [("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")];
+        let (out, err, code) = run(d.path(), "senders", &[], &one);
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with("12345"), "{backend}: {out}");
+        let (out, err, code) = run(d.path(), "receivers", &[], &one);
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with('3'), "{backend}: {out}");
+        // Under more workers or threads the order is the schedule's; every value still arrives.
+        for env in [
+            &[("NAZM_SCHEDULER", "threads")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")][..],
+        ] {
+            let (out, err, code) = run(d.path(), "senders", &[], env);
+            assert_eq!(code, Some(0), "{backend} {env:?}: {err}");
+            let mut digits: Vec<char> = out.trim_end().chars().take(5).collect();
+            digits.sort_unstable();
+            assert_eq!(
+                digits,
+                ['1', '2', '3', '4', '5'],
+                "{backend} {env:?}: {out}"
+            );
+        }
+    }
+}
