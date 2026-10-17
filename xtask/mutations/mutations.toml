@@ -9198,15 +9198,16 @@ killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_runtime_call
 
 [[mutation]]
 name = "n43-a-close-discards-queued-values"
-why = "`nz.chan_recv` looks at the close flag before the queue, so closing a channel throws away what was already sent"
+why = """`nz.chan_recv` looks at the close flag before the queue, so closing a channel throws away what was already sent
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = """  %empty = icmp sle i64 %len, 0
-  br i1 %empty, label %maybe, label %take"""
-replace = """  %empty = icmp sle i64 %len, 0
-  %cl0 = load i64, ptr %closedp
-  %shut = icmp ne i64 %cl0, 0
-  %e2 = or i1 %empty, %shut
-  br i1 %e2, label %maybe, label %take"""
+find = '''  %ready = icmp eq i64 %seq, %want
+  br i1 %ready, label %claim, label %other'''
+replace = '''  %ready = icmp eq i64 %seq, %want
+  %cle = load atomic i64, ptr %eqp seq_cst, align 8
+  %open = icmp slt i64 %cle, 4611686018427387904
+  %ready2 = and i1 %ready, %open
+  br i1 %ready2, label %claim, label %other'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "runtime::the_runtime_s_services_keep_their_contract_when_called_directly" }]
 
 # --- N44: structured concurrency and the scheduler ---------------------------------------------
@@ -9240,10 +9241,14 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler::a_failur
 [[mutation]]
 name = "n44-a-send-wakes-nobody"
 why = """`nz.chan_send` queues its value without waking the receivers waiting for one, so a receiver that was already waiting waits for ever.
-Repointed by performance leadership 6.4's direct hand-off: a waiting receiver is parked on its own record, and a send that does not hand to it queues the value where it never looks."""
+Repointed by performance leadership 6.4's direct hand-off: a waiting receiver is parked on its own record, and a send that does not hand to it queues the value where it never looks.
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = """  br i1 %parked, label %hand, label %space"""
-replace = """  br i1 false, label %hand, label %space"""
+find = '''  call void @nz.chq_wake(ptr %hrec, i64 1)
+  %u3 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 true'''
+replace = '''  %u3 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 true'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler::a_receiver_waiting_on_an_empty_channel_is_woken_by_a_send" }]
 
 [[mutation]]
@@ -10385,19 +10390,21 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "generic_channels::a
 [[mutation]]
 name = "n53-queued-values-are-not-released"
 why = """the last reference to a channel frees its ring and leaks every value still queued in it
-Repointed by performance leadership 6.4's hand-off on the generic channel, after which the release walks to its spare records."""
+Repointed by performance leadership 6.4's hand-off on the generic channel, after which the release walks to its spare records.
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = "  br i1 %norel, label %records, label %walk"
-replace = "  br i1 true, label %records, label %walk"
+find = '''  br i1 %norel, label %destroy, label %walk'''
+replace = '''  br i1 true, label %destroy, label %walk'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "generic_channels::a_value_still_queued_when_the_channel_goes_is_released_once" }]
 
 [[mutation]]
 name = "n53-a-closed-typed-channel-accepts"
 why = """a send after close is queued, so a receiver drains what was sent after the end
-Repointed by performance leadership 6.4's hand-off on the generic channel, whose send offers through `nz.chanv_put`."""
+Repointed by performance leadership 6.4's hand-off on the generic channel, whose send offers through `nz.chanv_put`.
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  br i1 %isclosed, label %refuse, label %offer'''
-replace = '''  br i1 false, label %refuse, label %offer'''
+find = '''  br i1 %refused, label %closed, label %probe'''
+replace = '''  br i1 false, label %closed, label %probe'''
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "generic_channels::a_send_after_close_is_refused_and_its_value_released" }]
 
 [[mutation]]
@@ -10528,11 +10535,12 @@ Repointed by performance leadership 6.3's preemption by interrupt, which moved i
 Repointed by performance leadership 6.4's direct hand-off, which moved it to 45: an object built against a runtime whose `Int` channel header is 64 bytes must not be linked with one whose is 112.
 Repointed by performance leadership 6.4's select over channels of different types, which moved it to 46: an object that calls `nz.sel_wait` must not be linked with a runtime that does not define it.
 Repointed by performance leadership 6.3's preemption on every backend, which moved it to 47: an object of generated code in `.text$nzM` must not be linked with a runtime whose markers are `.text$nA` and `.text$nZ`.
-Repointed by performance leadership 6.4's hand-off on the generic channel, which moved it to 48: an object built against a runtime whose `Chan[T]` header is 80 bytes must not be linked with one whose is 128."""
+Repointed by performance leadership 6.4's hand-off on the generic channel, which moved it to 48: an object built against a runtime whose `Chan[T]` header is 80 bytes must not be linked with one whose is 128.
+Repointed by performance leadership 6.4's lock-free channel, which moved it to 49: an object built against a runtime whose `Int` channel header is 112 bytes, its ring plain `i64`s, must not be linked with one whose ring is sequenced slots."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 48;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 47;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_eight_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 49;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 48;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_nine_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -10547,15 +10555,14 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_select_ta
 
 [[mutation]]
 name = "n54-a-send-wakes-no-select"
-why = "a typed send advances nothing a select waits on, so a waiting select sleeps through it"
+why = """a typed send advances nothing a select waits on, so a waiting select sleeps through it
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = """
-  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+find = '''sent:
   call void @nz.sel_signal()
-  ret i1 true"""
-replace = """
-  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
-  ret i1 true"""
+  ret i1 true'''
+replace = '''sent:
+  ret i1 true'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_waiting_select_is_woken_by_another_task_s_send" }]
 
 [[mutation]]
@@ -20797,18 +20804,20 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::par
 
 [[mutation]]
 name = "ph-a-send-hands-over-nothing"
-why = "a send to a parked receiver hands it 0 in place of the value"
+why = """a send to a parked receiver hands it 0 in place of the value
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  %hh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 %v, i64 1)'''
-replace = '''  %hh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 1)'''
+find = '''  call void @llvm.memcpy.p0.p0.i64(ptr %hv, ptr %src, i64 %stride, i1 false)'''
+replace = ''''''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
 
 [[mutation]]
 name = "ph-a-freed-slot-loses-the-parked-senders-value"
-why = "a receive that frees a slot while a sender is parked wakes it as sent but queues 0"
+why = """a receive that frees a slot while a sender is parked wakes it as sent but queues 0
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  store i64 %sv, ptr %tslot'''
-replace = '''  store i64 0, ptr %tslot'''
+find = '''  %st = select i1 %queued, i64 1, i64 3'''
+replace = '''  %st = select i1 %queued, i64 3, i64 3'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
 
 [[mutation]]
@@ -20821,18 +20830,22 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::par
 
 [[mutation]]
 name = "ph-a-close-tells-parked-senders-they-sent"
-why = "a close wakes a parked sender as though a receiver took its value, so a lost value reports sent"
+why = """a close wakes a parked sender as though a receiver took its value, so a lost value reports sent
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  %sh = call i64 @nz.chan_hand(ptr %sqp, ptr %sqtp, i64 0, i64 2)'''
-replace = '''  %sh = call i64 @nz.chan_hand(ptr %sqp, ptr %sqtp, i64 0, i64 1)'''
+find = '''  call void @nz.chq_wake(ptr %srec, i64 3)'''
+replace = '''  call void @nz.chq_wake(ptr %srec, i64 1)'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_close_ends_every_parked_receiver_and_refuses_every_parked_sender" }]
 
 [[mutation]]
 name = "ph-a-close-hands-parked-receivers-a-value"
-why = "a close wakes a parked receiver as though a sender handed it 0, so a closed and drained channel yields a value"
+why = """a close wakes a parked receiver as though a sender handed it 0, so a closed and drained channel yields a value
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 2)'''
-replace = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 1)'''
+find = '''  call void @nz.chq_wake(ptr %rrec, i64 3)
+  br label %receivers'''
+replace = '''  call void @nz.chq_wake(ptr %rrec, i64 1)
+  br label %receivers'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_close_ends_every_parked_receiver_and_refuses_every_parked_sender" }]
 
 # --- Performance leadership 6.4: a select over channels of different types (2026-10-17)
@@ -20921,32 +20934,74 @@ killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_lon
 
 [[mutation]]
 name = "pg-a-handed-waiter-is-never-woken"
-why = "a waker gives a generic channel's parked waiter its state and never signals it, so it waits for ever"
+why = """a waker gives a generic channel's parked waiter its state and never signals it, so it waits for ever
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  %wb = call i32 @pthread_cond_broadcast(ptr %rcv)'''
-replace = '''  %wb = add i32 0, 0'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_parked_waiters" }]
+find = '''  call void @nz.chq_wake(ptr %hrec, i64 1)
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 1'''
+replace = '''  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 1'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_waiting_select_over_different_types_is_woken_by_a_send_a_receive_and_a_close" }]
 
 [[mutation]]
 name = "pg-a-woken-receiver-takes-nothing"
-why = "a receiver handed a value leaves it in its wait record and returns its buffer as it was"
+why = """a receiver handed a value leaves it in its wait record and returns its buffer as it was
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %rv, i64 %stride, i1 false)'''
+find = '''  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %gv, i64 %stride, i1 false)'''
 replace = ''''''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_parked_waiters" }]
 
 [[mutation]]
 name = "pg-a-freed-slot-keeps-the-old-value"
-why = "a receive that frees a slot while a sender is parked wakes it as sent but leaves the value just taken in the slot"
+why = """a receive that frees a slot while a sender is parked wakes it as sent but leaves the value just taken in the slot
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  call void @llvm.memcpy.p0.p0.i64(ptr %tslot, ptr %rv, i64 %stride, i1 false)'''
-replace = ''''''
+find = '''  %sv = getelementptr i8, ptr %srec, i64 160'''
+replace = '''  %sv = getelementptr i8, ptr %srec, i64 168'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_parked_waiters" }]
 
 [[mutation]]
 name = "pg-a-close-tells-parked-senders-they-sent"
-why = "a close wakes a generic channel's parked sender as though a receiver took its value: a lost value reports sent, and is never released"
+why = """a close wakes a generic channel's parked sender as though a receiver took its value: a lost value reports sent, and is never released
+Repointed by performance leadership 6.4's lock-free channel ring (runtime ABI 49), where the rule now lives in `nz.chq_*`."""
 file = "crates/nazm-runtime/src/core.rs"
-find = '''  call void @nz.chanv_wake(ptr %srec, i64 2)'''
-replace = '''  call void @nz.chanv_wake(ptr %srec, i64 1)'''
+find = '''  call void @nz.chq_close(ptr %c)
+  call void @nz.sel_signal()'''
+replace = '''  call void @nz.sel_signal()'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_parked_waiters" }]
+
+# --- Performance leadership 6.4: channels without a lock while nobody waits (2026-10-17)
+
+[[mutation]]
+name = "pl-a-queued-value-is-never-published"
+why = "a sender writes its value but publishes the slot as still free, so no receiver ever takes it and the next lap overwrites it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %pub = or i64 %e2, 1'''
+replace = '''  %pub = or i64 %e2, 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::contended_channels_deliver_every_value_once_without_a_lock_while_nobody_waits" }]
+
+[[mutation]]
+name = "pl-a-taken-value-is-read-from-its-sequence"
+why = "a receiver copies its value from the slot's sequence word, not the value after it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %out = getelementptr i8, ptr %slot, i64 8'''
+replace = '''  %out = getelementptr i8, ptr %slot, i64 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::contended_channels_deliver_every_value_once_without_a_lock_while_nobody_waits" }]
+
+[[mutation]]
+name = "pl-a-close-leaves-the-enqueue-position-open"
+why = "a close wakes the waiters but sets no close bit, so later sends succeed and receivers never find the channel drained"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %was = atomicrmw or ptr %eqp, i64 4611686018427387904 seq_cst'''
+replace = '''  %was = atomicrmw or ptr %eqp, i64 0 seq_cst'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::contended_channels_deliver_every_value_once_without_a_lock_while_nobody_waits" }]
+
+[[mutation]]
+name = "pl-a-parking-receiver-is-not-counted"
+why = "a receiver parks without counting itself as waiting, so senders keep the path without a lock and never hand it a value or wake it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %rw0 = atomicrmw add ptr %nwp, i64 1 seq_cst'''
+replace = '''  %rw0 = atomicrmw add ptr %nwp, i64 0 seq_cst'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
