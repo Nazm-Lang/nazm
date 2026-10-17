@@ -87,6 +87,10 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       pipeline); semantic epoch 91, runtime ABI 46. Open: lock-free channels
       — 2026-10-17, part: the direct hand-off on the generic channel `Chan[T]`, the same record,
       park and hand design, a select's offer and look included (runtime ABI 48)
+      — 2026-10-17, part: lock-free channels — both kinds one implementation over a ring of
+      sequenced slots taken by compare-and-swap while nobody waits (the close a bit of the
+      enqueue position), the mutex and the hand-off only once someone waits (runtime ABI 49).
+      Timings wait for the coordinator's quiet window
 - [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the

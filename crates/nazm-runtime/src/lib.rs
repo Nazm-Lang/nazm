@@ -383,7 +383,13 @@ pub fn escape(s: &str) -> String {
 /// alone, a receive moves a parked sender's value into the ring, and a select's offer and look do
 /// the same (`nz.chanv_record`, `nz.chanv_park`, `nz.chanv_take`, `nz.chanv_wake`, `nz.chanv_put`,
 /// `nz.chanv_get`, `nz.chanv_wait_old`, `nz.chanv_tell_old`).
-pub const RUNTIME_ABI_REVISION: u32 = 48;
+/// 49 is performance leadership 6.4's lock-free channel (2026-10-17): one 128-byte header and one
+/// implementation for both kinds (`nz.chq_*`) — `{ cap, dequeue, enqueue, waiting, ring, mutex,
+/// cond, rc, stride, release, receivers, receivers_tail, senders, senders_tail, spares, old }` — a
+/// ring of `{ i64 sequence, value }` slots taken by compare-and-swap while nobody waits, the close
+/// as bit 62 of the enqueue position, and the mutex and wait records only for parking; an `Int`
+/// channel's slots and records are a `Chan[T]`'s.
+pub const RUNTIME_ABI_REVISION: u32 = 49;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -855,19 +861,26 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.sel_sync_get", "ptr" () "noinline", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
     rt!("nz.sel_signal", "void" () "noinline", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
     rt!("nz.chanv_try", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
-    rt!("nz.chan_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record for an `Int` channel: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
-    rt!("nz.chan_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr", "i64") "noinline", false, Channels, "", Never, Locked, "park on a wait record at the tail of a channel's list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
-    rt!("nz.chan_hand", "i64" ("ptr", "ptr", "i64", "i64") "noinline", false, Channels, "", Never, Locked, "take the head of a channel's wait list, give it a value and a state, and wake it alone (6.4)", "the value the record held"),
-    rt!("nz.chan_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on the channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
-    rt!("nz.chan_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on the channel's own condition variable, if anyone does (6.4)", "none"),
-    rt!("nz.chanv_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record for a generic channel, its value at 160: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
-    rt!("nz.chanv_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "park on a generic channel's wait record at the tail of its list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
-    rt!("nz.chanv_take", "ptr" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the head of a generic channel's wait list, taken off it (6.4)", "the record stays the channel's"),
-    rt!("nz.chanv_wake", "void" ("ptr", "i64") "noinline", false, Channels, "", Never, Locked, "give a wait record its state and wake its waiter alone (6.4)", "none"),
-    rt!("nz.chanv_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on a generic channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
-    rt!("nz.chanv_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on a generic channel's own condition variable, if anyone does (6.4)", "none"),
-    rt!("nz.chanv_put", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "a value to a parked receiver or the ring's tail, the lock held (6.4)", "takes the slot's reference unless it returns 0"),
-    rt!("nz.chanv_get", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the ring's oldest value, a parked sender's taking its place, the lock held (6.4)", "hands the slot's reference over when it returns 1"),
+    rt!("nz.chq_new", "ptr" ("i64", "i64", "ptr") "", false, Channels, "", Null, Any, "a channel of slots of this stride, an `Int` channel's or a `Chan[T]`'s (6.4)", "one reference, owned by the caller"),
+    rt!("nz.chq_free", "void" ("ptr") "", false, Channels, "", Never, Any, "free a channel whose last reference went (6.4)", "takes the channel"),
+    rt!("nz.chq_enq", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Any, "one value in at the tail without a lock: 0 queued, 1 full, 2 closed (6.4)", "takes the slot's reference when it returns 0"),
+    rt!("nz.chq_deq", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Any, "one value out at the head without a lock: 0 taken, 1 empty, 2 closed and drained (6.4)", "hands the slot's reference over when it returns 0"),
+    rt!("nz.chq_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record, its value at 160: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
+    rt!("nz.chq_spare", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "a wait record back to the channel's spares (6.4)", "the channel owns it"),
+    rt!("nz.chq_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "park on a wait record at the tail of a channel's list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
+    rt!("nz.chq_take", "ptr" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the head of a channel's wait list, taken off it (6.4)", "the record stays the channel's"),
+    rt!("nz.chq_wake", "void" ("ptr", "i64") "noinline", false, Channels, "", Never, Locked, "give a wait record its state and wake its waiter alone (6.4)", "none"),
+    rt!("nz.chq_tell_old", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on a channel's own condition variable, if anyone does (6.4)", "none"),
+    rt!("nz.chq_rouse", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "after a value went in: the receiver parked longest looks again (6.4)", "none"),
+    rt!("nz.chq_refill", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "after a slot came free: the sender parked longest's value goes in (6.4)", "moves the parked sender's reference into the ring"),
+    rt!("nz.chq_after_put", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "after a value went in without the lock: tell anyone parked, under it (6.4)", "none"),
+    rt!("nz.chq_after_take", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "after a value came out without the lock: a parked sender's value in, under it (6.4)", "none"),
+    rt!("nz.chq_empty", "i1" ("ptr") "noinline", false, Channels, "", Never, Any, "whether a channel's ring is empty, nothing claimed in it (6.4)", "none"),
+    rt!("nz.chq_send", "i1" ("ptr", "ptr") "noinline", false, Channels, "", Status, Locked, "send a slot: without a lock while nobody waits, else to a parked receiver, the ring or a wait of its own (6.4)", "takes the slot's reference when it returns true"),
+    rt!("nz.chq_recv", "i1" ("ptr", "ptr") "noinline", false, Channels, "", Status, Locked, "receive a slot: without a lock while nobody waits, else from the ring, a parked sender or a wait of its own (6.4)", "hands the slot's reference over when it returns true"),
+    rt!("nz.chq_try", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one look at a channel without waiting (6.4)", "hands the slot's reference over when it returns 1"),
+    rt!("nz.chq_offer", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one offer to a channel without waiting (6.4)", "takes the slot's reference when it returns 1"),
+    rt!("nz.chq_close", "void" ("ptr") "noinline", false, Channels, "", Never, Locked, "close a channel: the close bit, then every parked waiter told to look again (6.4)", "borrows the channel"),
     rt!("nz.chanv_offer", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one offer of a slot to a channel without waiting (6.4)", "borrows the channel; takes the slot's reference when it returns 1"),
     rt!("nz.sel_case", "ptr" ("ptr") "noinline", false, Channels, "", Null, Owner, "room for one more case in a select (6.4)", "the select owns it; null when there is no memory"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
@@ -1557,10 +1570,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_eight_and_reaches_the_system_only_through_its_platform_layer()
-    {
-        // 6.4's hand-off on the generic channel: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 48);
+    fn the_runtime_is_revision_forty_nine_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.4's lock-free channel: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 49);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

@@ -7688,6 +7688,26 @@ fill the slot it frees; a send, a receive, a select's offer (`nz.chanv_offer`) a
 ends parked receivers and refuses parked senders, whose values stay theirs to release. Runtime ABI
 46 → 48 (47 is the preemption fix's).
 
+**Amended (performance leadership 6.4, 2026-10-17): channels without a lock while nobody waits.**
+Both channel kinds are one implementation (`nz.chq_*` in the `Int` channel's text, mirrored in
+`compiler/emit.nz`; `nz.chan_*` and `nz.chanv_*` call it), with one 128-byte header: `{ cap,
+dequeue, enqueue, waiting, ring, mutex, cond, rc, stride, release, receivers, receivers_tail,
+senders, senders_tail, spares, old }`. The ring is `cap` slots of `{ sequence, value }`: a sender
+claims enqueue position `p` by compare-and-swap when the slot's sequence is `2p` and publishes the
+value as `2p + 1`; a receiver claims dequeue position `p` when it reads `2p + 1` and frees the slot
+as `2(p + cap)` — doubled so that one slot is enough. The close is bit 62 of the enqueue position,
+so a send either claimed its position before the close or is refused, and a receiver reports the
+channel drained only when nothing is queued or claimed (one claimed but not yet written is waited
+for). A send or receive takes this path only while `waiting` is zero and reads it again after;
+a task that must block takes the mutex, counts itself in `waiting` and looks once more before it
+parks — sequentially consistent on both sides, so either its look finds the value or room, or
+the lock-free operation sees the count and comes under the mutex to wake it (a receiver told to
+look again; a sender's value moved into the ring). While anyone waits, operations take the mutex:
+a send hands its value to the receiver parked longest when the ring is empty, a receive refills
+from the sender parked longest, so the order values were offered in is the order they leave, and
+a select's look and offer (`nz.chq_try`, `nz.chq_offer`) go the same ways. Every function that
+locks, parks, wakes or spins is `noinline` (6.3). Runtime ABI 48 → 49.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
