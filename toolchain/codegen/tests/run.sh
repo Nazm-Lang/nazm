@@ -89,6 +89,14 @@ for src in "${inputs[@]}"; do
      ! "$REF" lir --target "$TARGET" --ops "$src" >"$W/lir.txt" 2>"$W/lir.err"; then
     echo "skipped  $rel (no objects or LIR)"; skipped=$((skipped+1)); continue
   fi
+  # A program the build gives the small-block heap (R1.5 3.1: link.txt names its `small` unit)
+  # allocates through it in every unit: the generator is given its LIR with C's allocator renamed,
+  # as `nazm build --backend nazm` gives it (`nazm_lir::op::small_heap`). Without that, a block
+  # generated code took from C's `malloc` is freed by the runtime's `nz.small_free` — a task's
+  # argument block, which `nz.scope_join` frees — and the program aborts in C's `free`.
+  if grep -qE '^objects .*-small\.o( |$)' "$W/obj/link.txt"; then
+    perl -pi -e 's/^(import func \@|  (?:v\d+ = )?call \@)(malloc|realloc|free)\b/$1nz.small_$2/' "$W/lir.txt"
+  fi
   "$NZCG" --target "$TARGET" $(one_thread "$W/obj") "$W/lir.txt" "$W/gen" >"$W/gen.out" 2>"$W/gen.err"
   st=$?
   if [ $st -eq 3 ]; then
