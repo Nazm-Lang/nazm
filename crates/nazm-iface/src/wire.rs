@@ -1278,18 +1278,26 @@ impl PersistentUnitInterface {
     pub fn from_json(text: &str) -> Result<Self, ReadError> {
         // The schema first, and by itself, so a future version is refused as *unknown*
         // rather than as whatever structural mismatch its new fields happen to cause.
+        // Parsed once where it parses: the envelope is read only when the whole does not, which
+        // gives the same answer as reading it first (a whole that parses has its `schema`).
         #[derive(Deserialize)]
         struct Envelope {
             schema: String,
         }
-        let envelope: Envelope =
-            serde_json::from_str(text).map_err(|e| ReadError::Malformed(e.to_string()))?;
-        if envelope.schema != SCHEMA {
-            return Err(ReadError::UnknownSchema(envelope.schema));
-        }
-
-        let parsed: Self =
-            serde_json::from_str(text).map_err(|e| ReadError::Malformed(e.to_string()))?;
+        let parsed: Self = match serde_json::from_str::<Self>(text) {
+            Ok(parsed) if parsed.schema != SCHEMA => {
+                return Err(ReadError::UnknownSchema(parsed.schema));
+            }
+            Ok(parsed) => parsed,
+            Err(whole) => {
+                let envelope: Envelope =
+                    serde_json::from_str(text).map_err(|e| ReadError::Malformed(e.to_string()))?;
+                if envelope.schema != SCHEMA {
+                    return Err(ReadError::UnknownSchema(envelope.schema));
+                }
+                return Err(ReadError::Malformed(whole.to_string()));
+            }
+        };
         parsed.validate()?;
         // And written the way this build writes it. The structural checks above catch the
         // orderings a reader could get wrong; this catches every other way two files could
@@ -1305,6 +1313,20 @@ impl PersistentUnitInterface {
     }
 
     /// Everything a well-formed interface must be, beyond deserialising.
+    /// Whether [`Self::from_json`] would accept this interface's own canonical bytes, short of
+    /// reading them: its schema is this build's and it is a valid interface. (The bytes are
+    /// [`Self::to_json`]'s, which read back as this same value, so they are canonical.)
+    ///
+    /// # Errors
+    ///
+    /// [`ReadError`], as `from_json` would refuse them.
+    pub fn readable(&self) -> Result<(), ReadError> {
+        if self.schema != SCHEMA {
+            return Err(ReadError::UnknownSchema(self.schema.clone()));
+        }
+        self.validate()
+    }
+
     fn validate(&self) -> Result<(), ReadError> {
         let module =
             ModuleKey::parse(&self.module).ok_or_else(|| ReadError::BadKey(self.module.clone()))?;

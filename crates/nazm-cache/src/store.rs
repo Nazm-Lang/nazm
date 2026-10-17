@@ -124,6 +124,25 @@ impl Store {
         }
     }
 
+    /// As [`Self::get`], for a checker that will only reuse an entry offering `offered`, whose
+    /// canonical bytes and fingerprint it has: [`CheckArtifact::read_expecting`].
+    #[must_use]
+    pub fn get_expecting(
+        &self,
+        key: &CheckKey,
+        offered: &nazm_iface::PersistentUnitInterface,
+        offered_json: &str,
+        fingerprint: nazm_iface::InterfaceHash,
+    ) -> Found {
+        let Ok(text) = std::fs::read_to_string(self.path(key)) else {
+            return Found::Miss;
+        };
+        match CheckArtifact::read_expecting(&text, key, offered, offered_json, fingerprint) {
+            Ok(r) => Found::Hit(Box::new(r)),
+            Err(e) => Found::Rejected(e),
+        }
+    }
+
     /// Publish a result, atomically.
     ///
     /// # Errors

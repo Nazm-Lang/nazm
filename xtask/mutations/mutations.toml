@@ -1047,6 +1047,8 @@ find = "            .field(module.as_str())"
 replace = "            .field(\"\")"
 killers = [{ package = "nazm-cache", lib = true, name = "key::tests::every_input_moves_it" }]
 
+# Repointed by the compiler-speed round (warm `nazm check`): the key is recomputed in `head`, which
+# both readers of an entry share, one indentation level out.
 [[mutation]]
 name = "a-cache-entry-is-trusted-because-it-parsed"
 why = """
@@ -1055,8 +1057,8 @@ edited after it was written is believed. The name of an entry is a digest and a 
 match is evidence, not proof; this is the check that turns it into proof
 """
 file = "crates/nazm-cache/src/artifact.rs"
-find = "        if CheckKey::of(checker, &module, source, &deps) != filed {"
-replace = "        if false {"
+find = "    if CheckKey::of(checker, &module, source, &deps) != filed {"
+replace = "    if false {"
 killers = [{ package = "nazm-cache", test = "store", name = "an_entry_from_another_checker_is_unreachable" }]
 
 [[mutation]]
@@ -12348,19 +12350,23 @@ killers = [{ package = "nazm-cli", test = "cli_e_l", name = "lsp::ranged_changes
 # durable identity, stored with its check and read only for its own module and text, the same
 # bytes in any process, and the compiler written in Nazm refuses what it does not resolve.
 
+# Repointed by the compiler-speed round: the unit's module and source are checked in one test of
+# the unit read with the entry, the source on a line of its own.
 [[mutation]]
 name = "n77-a-unit-of-other-text-is-read"
 why = "an entry's unit is read whatever source text it claims, so its ranges point into text the module does not contain"
 file = "crates/nazm-cache/src/artifact.rs"
-find = '        if unit.module != self.module || unit.source != self.source {'
-replace = '        if unit.module != self.module {'
+find = '                && u.source == parsed.source'
+replace = '                && true'
 killers = [{ package = "nazm-cache", test = "store", name = "a_unit_of_another_module_or_other_text_is_never_read" }]
 
+# Repointed by the compiler-speed round: a reused entry's unit is an `Option` now (a check does
+# not read it; `nazm resolve` does), passed on as it is.
 [[mutation]]
 name = "n77-a-reused-module-forgets-its-unit"
 why = "a reused module's stored unit is dropped, so a reader of its names finds none"
 file = "crates/nazm-cli/src/checking.rs"
-find = '                        resolved = Some(r.resolved);'
+find = '                        resolved = r.resolved;'
 replace = '                        let _ = r.resolved;'
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "resolved_units::references_read_a_reused_modules_unit_instead_of_checking_it" }]
 
@@ -14550,11 +14556,12 @@ replace = '''
 struct RawManifest {'''
 killers = [{ package = "nazm-package", lib = true, name = "tests::a_manifest_cannot_name_a_program_to_run" }]
 
+# Repointed by the compiler-speed round: `read` checks the digest of the entry it parsed.
 [[mutation]]
 name = "q1-an-entry-s-facts-are-believed"
 why = "a check entry's provenance facts are used without their digest, so an edited sink list turns a refused flow into `ok`"
 file = "crates/nazm-cache/src/artifact.rs"
-find = '        if self.facts_of().ok().as_deref() != Some(self.facts_digest.as_str()) {'
+find = '        if parsed.facts_of().ok().as_deref() != Some(parsed.facts_digest.as_str()) {'
 replace = '        if false {'
 killers = [{ package = "nazm-cache", test = "store", name = "an_entry_whose_facts_moved_is_refused" }, { package = "nazm-cli", test = "cli_e_l", name = "incremental::an_edited_provenance_fact_cannot_hide_a_flow" }]
 
@@ -21005,3 +21012,61 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  %rw0 = atomicrmw add ptr %nwp, i64 1 seq_cst'''
 replace = '''  %rw0 = atomicrmw add ptr %nwp, i64 0 seq_cst'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
+
+# The compiler-speed round: a check reads an entry without building its interface or unit.
+
+[[mutation]]
+name = "speed-a-checker-reuses-an-entry-offering-another-interface"
+why = "a checker reads an entry without comparing its interface with the one it published, so a module whose dependents saw another interface is reused"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '''                if parsed.interface.get() != offered_json {'''
+replace = '''                if false {'''
+killers = [{ package = "nazm-cache", test = "store", name = "a_checker_refuses_an_entry_offering_another_interface" }]
+
+[[mutation]]
+name = "speed-a-checker-reuses-an-interface-its-reader-refuses"
+why = "a checker reuses an entry offering an interface this build's reader would refuse, where `get` refuses it and the module is checked again"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '''                    .readable()'''
+replace = '''                    .readable().or_else(|_| Ok::<(), nazm_iface::ReadError>(()))'''
+killers = [{ package = "nazm-cache", test = "store", name = "a_checker_refuses_an_interface_its_reader_would_refuse" }]
+
+[[mutation]]
+name = "speed-a-checker-reads-a-unit-of-another-module"
+why = "a checker reuses an entry whose resolved unit is another module's, where `get` refuses it"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '''        if !unit.starts_with(&unit_head) {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cache", test = "store", name = "a_checker_refuses_an_entry_whose_unit_or_facts_moved" }]
+
+[[mutation]]
+name = "speed-a-checker-believes-moved-facts"
+why = "a checker reuses an entry whose provenance facts or unit no longer have the digest recorded beside them (Q1-M-07)"
+file = "crates/nazm-cache/src/artifact.rs"
+find = '''        if facts_digest(parsed.provenance.get().as_bytes(), unit.as_bytes()) != parsed.facts_digest'''
+replace = '''        if false'''
+killers = [{ package = "nazm-cache", test = "store", name = "a_checker_refuses_an_entry_whose_unit_or_facts_moved" }]
+
+[[mutation]]
+name = "speed-resolve-reads-entries-without-their-units"
+why = "`nazm resolve` reads reused entries as a checker does, without their resolved units, so a reused module's names are lost"
+file = "crates/nazm-cli/src/checking.rs"
+find = '''                (Some(offered), Some(json), Some(fingerprint)) if !self.units => self'''
+replace = '''                (Some(offered), Some(json), Some(fingerprint)) if self.units => self'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "resolved_units::references_read_a_reused_modules_unit_instead_of_checking_it" }]
+
+[[mutation]]
+name = "speed-a-gathered-field-is-hashed-twice"
+why = "a digest's gathered fields are given to the hasher and kept, so they are hashed again: every key, fingerprint and identity moves"
+file = "crates/nazm-cache/src/digest.rs"
+find = '''                self.pending.clear();'''
+replace = '''                let _ = 0;'''
+killers = [{ package = "nazm-cache", lib = true, name = "digest::tests::gathering_fields_is_the_digest_of_their_framing" }]
+
+[[mutation]]
+name = "speed-a-standard-key-with-a-digit-is-refused"
+why = "`@std/blake3` and `@std/sha256` do not read back as keys, so their importers' check results are never reused"
+file = "crates/nazm-sema/src/key.rs"
+find = '''                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());'''
+replace = '''                    .all(|b| b.is_ascii_lowercase());'''
+killers = [{ package = "nazm-sema", lib = true, name = "key::tests::every_standard_module_s_key_reads_back" }, { package = "nazm-cli", test = "cli_s_z", name = "stdlib::a_standard_module_with_a_digit_in_its_name_is_reused_from_the_cache_too" }]

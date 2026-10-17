@@ -33,7 +33,7 @@ fn units(
         }
     };
     let map = &loaded.map;
-    let mut cache = Cache::new(map, crate::derived::checks(source_root.path()));
+    let mut cache = Cache::with_units(map, crate::derived::checks(source_root.path()));
     let diagnostics = nazm_core::check_map_reusing(map, &loaded.graph, &mut cache);
     if !diagnostics.is_empty() {
         crate::emit(&diagnostics, map, json);

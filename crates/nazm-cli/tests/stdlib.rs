@@ -223,6 +223,47 @@ fn a_standard_module_is_reused_from_the_cache_like_any_module() {
 }
 
 #[test]
+fn a_standard_module_with_a_digit_in_its_name_is_reused_from_the_cache_too() {
+    // `@std/blake3` and `@std/sha256`: a key with a digit was refused when read back, so every
+    // warm check checked their importers — and the modules themselves — again, and filed them
+    // again (performance leadership, a warm `nazm check` slower than a cold one).
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("nazm.root"), "").unwrap();
+    std::fs::write(
+        dir.path().join("prog.nz"),
+        "use \"@std/blake3\";\nuse \"@std/sha256\";\n\
+         fn main() -> Int {\n    let h = blake3_new();\n    let k = blake3_update(h, bytes_from_str(\"a\"));\n    \
+         bytes_len(blake3_finish(h)) + bytes_len(sha256(bytes_from_str(\"b\"))) + k\n}\n",
+    )
+    .unwrap();
+    let report = |o: &std::process::Output| -> (u64, u64, u64) {
+        let text = String::from_utf8_lossy(&o.stdout).into_owned();
+        let line = text
+            .lines()
+            .find(|l| l.contains("nazm.check-report/1"))
+            .unwrap_or_else(|| panic!("{text}{}", String::from_utf8_lossy(&o.stderr)))
+            .to_owned();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        (
+            v["modules"].as_u64().unwrap(),
+            v["checked"].as_u64().unwrap(),
+            v["reused"].as_u64().unwrap(),
+        )
+    };
+    let check = || {
+        Command::new(NAZM)
+            .current_dir(dir.path())
+            .args(["check", "prog.nz", "--cache-report"])
+            .output()
+            .unwrap()
+    };
+    let (modules, checked, _) = report(&check());
+    assert_eq!(checked, modules);
+    let (modules, checked, reused) = report(&check());
+    assert_eq!((checked, reused), (0, modules), "every module reused");
+}
+
+#[test]
 fn a_standard_module_is_one_module_however_many_import_it() {
     let lib = "use \"@std/text\";\npub fn shout(s: Str) -> Str ! {} { str_concat(text_trim(s), \"!\") }\n";
     let prog = "use \"lib.nz\";\nuse \"@std/text\";\nfn main(io: IoCap) -> Int { print(shout(\"  hi \")); print(text_repeat(\"-\", 2)); 0 }\n";
