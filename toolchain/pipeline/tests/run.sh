@@ -200,6 +200,10 @@ else
     summary base base 1
 fi
 
+# Growth (performance leadership 7.4): a module's LIR costs work in proportion to its size — it
+# was quadratic while `line_col` scanned the source from its first byte for every position.
+python3 bench/complexity/growth.py "pipeline lir" lines 1000 10 core "$NAZM" "$OUT/growth" -- "$OUT/pipeline" lir "{in}"
+
 # The runtime's digest, which every object key carries, against the one `nazm build` records, and
 # the store's reader against the ways an entry can be broken.
 printf 'fn main(out: OutCap) -> Int {\n    print("x");\n    0\n}\n' > "$OUT/digest.nz"

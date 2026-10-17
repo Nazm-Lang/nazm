@@ -65,8 +65,9 @@ struct Lo {
     debug: Bool,
     files: HashMap[Str, Int],
     paths: HashMap[Int, Str],
-    /// Each module's source text and line starts, by module name.
+    /// Each module's source text and line starts (each line's first byte), by module name.
     sources: HashMap[Str, Str],
+    starts: HashMap[Str, Ints],
     errors: Strs,
 }
 
@@ -271,7 +272,9 @@ fn loc_of(lo: Lo, at: Str) -> Str {
 }
 
 /// A span's start as its line and column, counted from 1 (columns by character); empty for a
-/// span that names no place.
+/// span that names no place. The line is found by halving the file's table of line starts, the
+/// column by counting from its line's start: no scan from the file's first byte, which made the
+/// lowering quadratic in a module's size (performance leadership 7.3).
 fn line_col(lo: Lo, at: Str) -> Ints {
     let out = ints_new()
     let mut colon = 0 - 1
@@ -282,21 +285,33 @@ fn line_col(lo: Lo, at: Str) -> Ints {
     let dots = match text_find(rest, "..") { Some(i) => i, None => str_len(rest) }
     let start = match text_parse_int(str_slice(rest, 0, dots)) { Ok(v) => v, Err(e) => 0 }
     let text = match hashmap_get(lo.sources, file) { Some(t) => t, None => "" }
-    let mut line = 1
+    let mut stop = if start < str_len(text) { start } else { str_len(text) }
+    if stop < 0 { stop = 0 }
+    let starts = match hashmap_get(lo.starts, file) { Some(t) => t, None => line_starts("") }
+    // The last line start at or before `stop` (the first is 0, so there is one).
+    let mut line = 0
+    let mut top = ints_len(starts) - 1
+    while line < top {
+        let mid = (line + top + 1) / 2
+        if ints_get(starts, mid) <= stop { line = mid } else { top = mid - 1 }
+    }
     let mut col = 1
-    let mut i = 0
-    while i < start && i < str_len(text) {
+    let mut i = ints_get(starts, line)
+    while i < stop {
         let b = str_byte(text, i)
-        if b == 10 {
-            line += 1
-            col = 1
-        } else if b < 128 || b >= 192 {
-            col += 1
-        }
+        if b < 128 || b >= 192 { col += 1 }
         i += 1
     }
-    ints_push(out, line)
+    ints_push(out, line + 1)
     ints_push(out, col)
+    out
+}
+
+/// Each line's first byte in `text`: 0, then the byte after every line feed.
+fn line_starts(text: Str) -> Ints {
+    let out = ints_new()
+    ints_push(out, 0)
+    for i in 0..str_len(text) { if str_byte(text, i) == 10 { ints_push(out, i + 1) } }
     out
 }
 
@@ -831,9 +846,23 @@ fn name_at(fx: Fx) -> Str {
         },
         None => {},
     }
-    let tail = str_slice(text, start, str_len(text))
-    let at = match text_find(tail, "fn " + name) { Some(i) => start + i + 3, None => start }
+    let found = find_from(text, "fn " + name, start)
+    let at = if found >= 0 { found + 3 } else { start }
     file + ":" + int_to_str(at) + ".." + int_to_str(at + str_len(name))
+}
+
+/// Where `needle` first occurs in `s` at or after `from`, or -1: `text_find` on the tail without
+/// copying it, which every function's stack check did once for the whole rest of its file.
+fn find_from(s: Str, needle: Str, from: Int) -> Int {
+    let n = str_len(needle)
+    let mut i = if from < 0 { 0 } else { from }
+    while i + n <= str_len(s) {
+        let mut k = 0
+        while k < n && str_byte(s, i + k) == str_byte(needle, k) { k += 1 }
+        if k == n { return i }
+        i += 1
+    }
+    0 - 1
 }
 
 /// The function's own span (a thunk's is its target's).
@@ -4953,13 +4982,13 @@ fn print_module(lo: Lo) -> Str {
     str_join(lines, "\n") + "\n" + str_join(lo.functions, "")
 }
 
-fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], parts: HashMap[Str, Str], needs: HashMap[Str, Bool], sources: HashMap[Str, Str], debug: Bool, files: HashMap[Str, Int], paths: HashMap[Int, Str]) -> Result[Str, Str] {
+fn lower_unit(c: Cir, lx: Lx, p: MirProgram, u: UnitPlan, runtime: HashMap[Str, Str], parts: HashMap[Str, Str], needs: HashMap[Str, Bool], sources: HashMap[Str, Str], starts: HashMap[Str, Ints], debug: Bool, files: HashMap[Str, Int], paths: HashMap[Int, Str]) -> Result[Str, Str] {
     let anon = ints_new()
     ints_push(anon, 0)
     let lo = Lo(lx: lx, c: c, p: p, unit: u, sym_name: strs_new(), sym_link: strs_new(), sym_kind: strs_new(), sym_sig: strs_new(),
         sym_ret: strs_new(), sym_fails: ints_new(), by_name: hashmap_new(), datas: strs_new(), functions: strs_new(), anon: anon,
         messages: hashmap_new(), blobs: hashmap_new(), strvals: hashmap_new(), funcs: hashmap_new(), plain: hashmap_new(),
-        runtime: runtime, parts: parts, needs: needs, debug: debug, files: files, paths: paths, sources: sources, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
+        runtime: runtime, parts: parts, needs: needs, debug: debug, files: files, paths: paths, sources: sources, starts: starts, errors: strs_new(), helpers: hashmap_new(), pending: strs_new(),
         tramps: ints_new(), tramp_tys: vec_new(), tramp_offs: vec_new(), cellvals: hashmap_new())
     declare_functions(lo)
     define_statics(lo)
@@ -5028,19 +5057,21 @@ pub fn lir_texts_with(c: Cir, tt: TypeTable, p: MirProgram, needs: HashMap[Str, 
         }
     }
     let sources: HashMap[Str, Str] = hashmap_new()
+    let starts: HashMap[Str, Ints] = hashmap_new()
     let files: HashMap[Str, Int] = hashmap_new()
     let paths: HashMap[Int, Str] = hashmap_new()
     let mods = kid(c, json_root(c.doc), "modules")
     for i in 0..count(c, mods) {
         let m = at(c, mods, i)
         hashmap_set(sources, sval(c, m, "name"), sval(c, m, "source"))
+        hashmap_set(starts, sval(c, m, "name"), line_starts(sval(c, m, "source")))
         let fi = ival(c, m, "file")
         hashmap_set(files, sval(c, m, "name"), fi)
         hashmap_set(paths, fi, sval(c, m, "path"))
     }
     let out = strs_new()
     for u in unit_plans(c, p) {
-        match lower_unit(c, lx, p, u, runtime, parts, needs, sources, debug, files, paths) {
+        match lower_unit(c, lx, p, u, runtime, parts, needs, sources, starts, debug, files, paths) {
             Ok(t) => { strs_push(out, if debug { t + file_names(t, paths) } else { t }); },
             Err(e) => { return Err(e) },
         }
