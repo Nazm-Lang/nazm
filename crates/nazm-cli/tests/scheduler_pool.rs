@@ -825,3 +825,61 @@ fn a_generic_channel_hands_off_first_come_first_served_and_a_close_ends_its_park
         assert!(out.starts_with('3'), "{backend}: {out}");
     }
 }
+
+// --- Performance leadership 6.4: channels without a lock while nobody waits ---------------------
+
+/// Eight senders and four receivers on an `Int` channel of four and on a `Chan[Str]` of three, each
+/// value once, then a close: every value arrives exactly once and every string is reclaimed.
+const CONTENDED: &str = "fn producer(io: IoCap, c: Chan, s: Chan[Str], k: Int) -> Int ! { io } {\n\
+    let mut j = 0;\n\
+    while j < 500 { let a = chan_send(c, k * 1000 + j); let b = chan_send_of(s, int_to_str(j)); j = j + 1; }\n\
+    0 }\n\
+fn consumer(io: IoCap, c: Chan, out: Chan) -> Int ! { io } {\n\
+    let got = ints_new(); let mut sum = 0; let mut n = 0;\n\
+    while chan_recv(c, got) { sum = sum + ints_pop(got); n = n + 1; }\n\
+    let a = chan_send(out, sum * 100000 + n); 0 }\n\
+fn reader(io: IoCap, s: Chan[Str], out: Chan) -> Int ! { io } {\n\
+    let got = vec_new[Str](); let mut len = 0; let mut n = 0;\n\
+    while chan_recv_of(s, got) { len = len + str_len(vec_pop(got)); n = n + 1; }\n\
+    let a = chan_send(out, len * 100000 + n); 0 }\n\
+fn producers(io: IoCap, t: SpawnCap, c: Chan, s: Chan[Str]) -> Int ! { io, spawn } {\n\
+    scope { let mut k = 0; while k < 8 { spawn producer(io, c, s, k); k = k + 1; } }\n\
+    chan_close(c); chan_close_of(s); 0 }\n\
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {\n\
+    let c = chan_new(4); let s = chan_new_of[Str](3); let out = chan_new(16); let sout = chan_new(16);\n\
+    scope {\n\
+        let mut i = 0;\n\
+        while i < 4 { spawn consumer(io, c, out); spawn reader(io, s, sout); i = i + 1; }\n\
+        spawn producers(io, t, c, s);\n\
+    }\n\
+    let got = ints_new(); let mut total = 0; let mut texts = 0; let mut k = 0;\n\
+    while k < 4 { let a = chan_recv(out, got); total = total + ints_pop(got); let b = chan_recv(sout, got); texts = texts + ints_pop(got); k = k + 1; }\n\
+    print(int_to_str(total)); print(\" \"); print(int_to_str(texts)); 0 }\n";
+
+#[test]
+fn contended_channels_deliver_every_value_once_without_a_lock_while_nobody_waits() {
+    let d = tempfile::tempdir().unwrap();
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "contended", CONTENDED, backend);
+        for env in [
+            &[("NAZM_SCHEDULER", "threads")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "1")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")][..],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "4")][..],
+        ] {
+            for _ in 0..3 {
+                let (out, err, code) = run(d.path(), "contended", &[], env);
+                assert_eq!(code, Some(0), "{backend} {env:?}: {err}");
+                assert!(
+                    out.starts_with("1499800004000 1112004000"),
+                    "{backend} {env:?}: {out}"
+                );
+                for kind in ["sequences", "strings", "channels"] {
+                    let part = err.split(kind).nth(1).unwrap_or("");
+                    let live = part.split_whitespace().nth(2).unwrap_or("");
+                    assert_eq!(live, "live=0", "{backend} {env:?}: {kind}: {err}");
+                }
+            }
+        }
+    }
+}
