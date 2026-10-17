@@ -396,3 +396,140 @@ fn a_unit_of_another_module_or_other_text_is_never_read() {
     tamper(&f.store, &f.key, &v.to_string());
     assert_eq!(rejected(&f.store, &f.key), Invalid::ForeignResolution);
 }
+
+// --- the checker's read: `get_expecting` ----------------------------------------------------
+//
+// A checker holds the interface it has just published for the module and reuses no entry
+// offering anything else, and it never reads a resolved unit. So it reads an entry without
+// building its interface or its unit: the interface compared as bytes with what it published,
+// the unit's head and the facts' digest checked on the bytes as written. Each break of an
+// entry is refused here as `get` refuses it.
+
+/// `get_expecting` of the fixture's key, by a checker that published `offered`.
+fn expecting(f: &Fixture, offered: &PersistentUnitInterface) -> Found {
+    let json = offered.to_json().expect("json");
+    f.store.get_expecting(
+        &f.key,
+        offered,
+        &json,
+        InterfaceHash::of_bytes(json.as_bytes()),
+    )
+}
+
+fn rejected_expecting(f: &Fixture) -> Invalid {
+    match expecting(f, &one_export("a.nz", "twice", "Int")) {
+        Found::Rejected(e) => e,
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
+/// The fixture's entry as written, with `from` replaced by `to` once.
+fn edited(f: &Fixture, from: &str, to: &str) -> String {
+    let text = f.artifact.to_json().expect("json");
+    assert_eq!(text.matches(from).count(), 1, "{from} in {text}");
+    text.replacen(from, to, 1)
+}
+
+#[test]
+fn an_untouched_entry_is_found_by_a_checker_without_its_unit() {
+    let f = fixture();
+    let offered = one_export("a.nz", "twice", "Int");
+    match expecting(&f, &offered) {
+        Found::Hit(r) => {
+            assert_eq!(r.module, key("a.nz"));
+            assert_eq!(r.interface, offered);
+            assert_eq!(r.interface_hash, InterfaceHash::of(&offered).unwrap());
+            assert_eq!(r.provenance, f.artifact.provenance);
+            assert_eq!(r.resolved, None, "a checker never reads the unit");
+        }
+        other => panic!("expected a hit, got {other:?}"),
+    }
+    match f.store.get(&f.key) {
+        Found::Hit(r) => assert!(r.resolved.is_some(), "`get` reads it"),
+        other => panic!("expected a hit, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_checker_refuses_an_entry_offering_another_interface() {
+    let f = fixture();
+    match expecting(&f, &one_export("a.nz", "twice", "Str")) {
+        Found::Rejected(e) => assert_eq!(e, Invalid::InterfaceMoved),
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_checker_refuses_an_entry_whose_unit_or_facts_moved() {
+    let f = fixture();
+    tamper(
+        &f.store,
+        &f.key,
+        &edited(
+            &f,
+            r#""resolved":{"schema":"nazm.resolved/1","module":"a.nz""#,
+            r#""resolved":{"schema":"nazm.resolved/1","module":"b.nz""#,
+        ),
+    );
+    assert_eq!(rejected_expecting(&f), Invalid::ForeignResolution);
+    tamper(
+        &f.store,
+        &f.key,
+        &edited(&f, r#""occurrences":[]"#, r#""occurrences":[ ]"#),
+    );
+    assert_eq!(rejected_expecting(&f), Invalid::FactsMoved);
+    let digest = serde_json::from_str::<serde_json::Value>(&f.artifact.to_json().unwrap()).unwrap()
+        ["facts_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    tamper(&f.store, &f.key, &edited(&f, &digest, "blake3:00"));
+    assert_eq!(rejected_expecting(&f), Invalid::FactsMoved);
+}
+
+#[test]
+fn a_checker_refuses_an_interface_its_reader_would_refuse() {
+    // Exports out of order: deserialises, but the interface's reader refuses it as not
+    // canonical — so `get` refuses an entry offering it, and so does a checker that published
+    // it, rather than reuse what this build cannot read back.
+    let export = |name: &str| {
+        format!(
+            r#"{{"def":"a.nz::fn {name}","name":"{name}","kind":"fn","generics":0,"params":["Int"],"ret":"Int"}}"#
+        )
+    };
+    let text = format!(
+        r#"{{"schema":"nazm.interface/13","module":"a.nz","dependencies":[],"records":[],"enums":[],"exports":[{},{}]}}"#,
+        export("zeta"),
+        export("alpha")
+    );
+    let unreadable: PersistentUnitInterface = serde_json::from_str(&text).expect("deserialises");
+    assert!(PersistentUnitInterface::from_json(&text).is_err());
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::at(dir.path().join("check"));
+    let source = SourceFingerprint::of(b"fn main() -> Int { 1 }\n");
+    let artifact = CheckArtifact::of(
+        CheckerIdentity::current(),
+        &key("a.nz"),
+        source,
+        &[],
+        unreadable.clone(),
+    )
+    .expect("an artefact")
+    .with_resolved(unit("a.nz", source));
+    let k = CheckKey::parse(&artifact.key).expect("its key");
+    store.put(&artifact).expect("publish");
+    assert!(matches!(
+        store.get(&k),
+        Found::Rejected(Invalid::BadInterface(_))
+    ));
+    let json = unreadable.to_json().expect("json");
+    assert!(matches!(
+        store.get_expecting(
+            &k,
+            &unreadable,
+            &json,
+            InterfaceHash::of_bytes(json.as_bytes())
+        ),
+        Found::Rejected(Invalid::BadInterface(_))
+    ));
+}

@@ -154,8 +154,14 @@ impl ModuleKey {
             return Some(Self::prelude());
         }
         // A standard module's key (N45): `@std/` and a lowercase name.
+        // Digits after the first letter: `@std/blake3` and `@std/sha256` are standard modules,
+        // and a key refused here filed their importers' check results where no run could
+        // read them back — every warm `nazm check` checked them again and rewrote them.
         if let Some(name) = text.strip_prefix("@std/") {
-            let ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase());
+            let ok = name.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
             return ok.then(|| Self::std(name));
         }
         // A dependency package's module (N46): `NAME@VERSION/` and a relative key.
@@ -328,6 +334,18 @@ mod tests {
         // Windows separators normalise to the one spelling, so a key computed on one
         // platform equals the key computed on another.
         assert_eq!(key("lib\\util.nz").as_deref(), Some("lib/util.nz"));
+    }
+
+    #[test]
+    fn every_standard_module_s_key_reads_back() {
+        // `@std/blake3` was refused (a digit), so a check result naming it never read back.
+        for (name, _) in crate::stdlib::MODULES {
+            let k = ModuleKey::std(name);
+            assert_eq!(ModuleKey::parse(k.as_str()), Some(k), "{name}");
+        }
+        assert_eq!(ModuleKey::parse("@std/3d"), None);
+        assert_eq!(ModuleKey::parse("@std/Text"), None);
+        assert_eq!(ModuleKey::parse("@std/"), None);
     }
 
     #[test]

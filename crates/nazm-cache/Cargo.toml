@@ -21,7 +21,7 @@ nazm-iface = { workspace = true }
 # serde lives here for the same reason it lives in `nazm-iface` and not in `nazm-sema`:
 # the crate that holds session-local ids cannot serialise one by accident.
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["raw_value"] }
 # The same digest `architecture.md` §8 chose, for the same reason. A non-cryptographic
 # checksum here would make a collision an invalid cache hit, which is a miscompilation
 # that arrives with a plausible explanation.

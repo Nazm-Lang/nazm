@@ -22,27 +22,41 @@
 use std::fmt;
 
 /// A digest under construction: a domain, then a sequence of length-prefixed fields.
+///
+/// Small fields are gathered and given to the hasher together: BLAKE3 hashes the
+/// concatenation of what it is given however it is divided, so this is the same digest as
+/// giving it every length, colon and value apart — which, for an identity of a thousand short
+/// fields, was most of the work of computing it (performance leadership, `nazm check`).
 #[derive(Debug)]
-pub(crate) struct Framed(blake3::Hasher);
+pub(crate) struct Framed {
+    hasher: blake3::Hasher,
+    pending: Vec<u8>,
+}
+
+/// Fields up to this long are gathered; longer ones go to the hasher directly.
+const GATHER: usize = 4096;
 
 impl Framed {
     /// Begin a digest of `domain`.
     pub(crate) fn new(domain: &str) -> Self {
-        let mut h = blake3::Hasher::new();
-        push(&mut h, domain.as_bytes());
-        Self(h)
+        let mut f = Self {
+            hasher: blake3::Hasher::new(),
+            pending: Vec::with_capacity(GATHER),
+        };
+        f.push(domain.as_bytes());
+        f
     }
 
     /// Add one field.
     pub(crate) fn field(&mut self, value: &str) -> &mut Self {
-        push(&mut self.0, value.as_bytes());
+        self.push(value.as_bytes());
         self
     }
 
     /// Add one field of raw bytes — for source text, which is not required to be
     /// anything in particular.
     pub(crate) fn bytes(&mut self, value: &[u8]) -> &mut Self {
-        push(&mut self.0, value);
+        self.push(value);
         self
     }
 
@@ -52,14 +66,27 @@ impl Framed {
     }
 
     pub(crate) fn finish(&self) -> [u8; 32] {
-        *self.0.finalize().as_bytes()
+        let mut h = self.hasher.clone();
+        h.update(&self.pending);
+        *h.finalize().as_bytes()
     }
-}
 
-fn push(h: &mut blake3::Hasher, value: &[u8]) {
-    h.update(value.len().to_string().as_bytes());
-    h.update(b":");
-    h.update(value);
+    /// `<n>:<bytes>`, `n` the decimal byte length.
+    fn push(&mut self, value: &[u8]) {
+        use std::io::Write as _;
+        let _ = write!(self.pending, "{}:", value.len());
+        if value.len() <= GATHER {
+            self.pending.extend_from_slice(value);
+            if self.pending.len() >= GATHER {
+                self.hasher.update(&self.pending);
+                self.pending.clear();
+            }
+        } else {
+            self.hasher.update(&self.pending);
+            self.pending.clear();
+            self.hasher.update(value);
+        }
+    }
 }
 
 /// Read a digest back from its hexadecimal form.
@@ -106,6 +133,25 @@ mod tests {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_hex(f, self.0)
         }
+    }
+
+    #[test]
+    fn gathering_fields_is_the_digest_of_their_framing() {
+        // The framing written out by hand, given to BLAKE3 in one piece, against `Framed`'s
+        // gathering — short fields, one longer than it gathers, and a run that fills a batch.
+        let long = "x".repeat(GATHER + 7);
+        let many: Vec<String> = (0..3000).map(|i| i.to_string()).collect();
+        let mut fields: Vec<&str> = vec!["a", "", "bc", &long, "d"];
+        fields.extend(many.iter().map(String::as_str));
+        let mut framed = Framed::new("domain");
+        let mut by_hand = b"6:domain".to_vec();
+        for x in &fields {
+            framed.field(x);
+            by_hand.extend_from_slice(format!("{}:{x}", x.len()).as_bytes());
+        }
+        framed.bytes(b"\x00\xff").number(42);
+        by_hand.extend_from_slice(b"2:\x00\xff2:42");
+        assert_eq!(framed.finish(), *blake3::hash(&by_hand).as_bytes());
     }
 
     fn digest(domain: &str, fields: &[&str]) -> [u8; 32] {
