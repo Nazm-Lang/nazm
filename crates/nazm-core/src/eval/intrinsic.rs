@@ -1,7 +1,7 @@
 //! The built-in functions: I/O, strings and sequences, bytes and text, and the numeric ones.
 
 use super::arith::{as_num, from_num, num_failure};
-use super::channel::{select, Channel};
+use super::channel::{select, Channel, Select};
 use super::value::{seq, BytesView, Seq, Str, Value};
 use super::*;
 
@@ -649,6 +649,34 @@ impl Interpreter {
                     out.push(v);
                 }
                 Ok(Value::Int(at))
+            }
+            // A select over channels of different types (6.4).
+            (Intrinsic::SelNew, []) => Ok(Value::Select(Arc::new(Select::default()))),
+            (Intrinsic::SelRecv, [Value::Select(s), Value::Chan(c), Value::Vec(out)]) => {
+                s.recv(Arc::clone(c), Arc::clone(out)).map_or_else(
+                    || Err(bug("a select that could not be locked")),
+                    |i| Ok(Value::Int(i)),
+                )
+            }
+            (Intrinsic::SelSend, [Value::Select(s), Value::Chan(c), v]) => {
+                s.send(Arc::clone(c), v.clone()).map_or_else(
+                    || Err(bug("a select that could not be locked")),
+                    |i| Ok(Value::Int(i)),
+                )
+            }
+            (Intrinsic::SelWait, [Value::Select(s)])
+            | (Intrinsic::SelWaitUntil, [Value::Select(s), Value::Int(_)]) => {
+                let deadline = match args {
+                    [_, Value::Int(ms)] => Some(
+                        std::time::Instant::now()
+                            + std::time::Duration::from_millis(u64::try_from(*ms).unwrap_or(0)),
+                    ),
+                    _ => None,
+                };
+                s.wait(deadline).map_or_else(
+                    || Err(bug("a select that could not be locked")),
+                    |i| Ok(Value::Int(i)),
+                )
             }
             (Intrinsic::TimeNowMs, []) => Ok(Value::Int(monotonic_ms())),
             // Gate 2 (§11): nanoseconds on the same monotonic clock, the wall clock, and a wait.

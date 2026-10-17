@@ -662,6 +662,7 @@ impl<'a> Lw<'a> {
                 || format!("chan.{}", c.0),
                 |i| format!("chan.{}", crate::symbol::encoded(&i.elem_key)),
             ),
+            Ty::Select => "Select".to_owned(),
             // One per element type and length, by structure, so it is durable (Gate 2).
             Ty::Array(crate::ir::ArrayTy(id)) => match self.lay.arrays.get(&id).copied() {
                 Some((elem, len)) => format!("arr{len}.{}", self.type_name(elem)),

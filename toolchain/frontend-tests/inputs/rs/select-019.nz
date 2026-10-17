@@ -1,0 +1,6 @@
+fn w(s: Select) -> Int ! {} { sel_wait(s) }
+fn main(t: SpawnCap) -> Int {
+    let s = sel_new();
+    scope { spawn w(s); }
+    0
+}

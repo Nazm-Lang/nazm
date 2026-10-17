@@ -1,6 +1,14 @@
-fn bad(io: IoCap, c: Chan, z: Int) -> Int ! { io } { let r = chan_recv(c, ints_new()); 10 / z }
-fn good(io: IoCap, c: Chan, done: Chan) -> Int ! { io } { chan_send(c, 1); chan_send(done, 7); 0 }
-fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
-let c = chan_new(1); let done = chan_new(1); let got = ints_new();
-scope { spawn bad(io, c, str_len("")); spawn good(io, c, done); let r = chan_recv(done, got); }
-print(int_to_str(ints_get(got, 0))); 0 }
+fn down(n: Int, k: Int, inp: Chan, out: Chan) -> Int {
+let mut pad = [0; 16]; pad[n % 16] = n + k;
+if n == 0 { let buf = ints_new(); let mut got = 0;
+while chan_recv(inp, buf) { let v = ints_pop(buf); got += v; chan_send(out, v + k); }
+got + pad[0] } else { let r = down(n - 1, k, inp, out); r + pad[n % 16] - n - k } }
+fn worker(k: Int, depth: Int, inp: Chan, out: Chan, res: Chan) -> Int { chan_send(res, down(depth, k, inp, out)); 0 }
+fn main(io: IoCap, tasks: SpawnCap) {
+let n = 200; let rounds = 50; let mut ins: Vec[Chan] = []; let res = chan_new(1000); let out = chan_new(1);
+let mut total = 0; let buf = ints_new();
+scope { let mut i = 0; while i < n { let c = chan_new(1); ins.push(c); spawn worker(i, 10 + i % 37, c, out, res); i += 1; }
+let mut r = 0; while r < rounds { let mut j = 0; while j < n { chan_send(ins[j], r); if chan_recv(out, buf) { total += ints_pop(buf); } j += 1; } r += 1; }
+let mut j = 0; while j < n { chan_close(ins[j]); j += 1; } }
+let mut sum = 0; let mut j = 0; while j < n { if chan_recv(res, buf) { sum += ints_pop(buf); } j += 1; }
+println(total); println(sum) }

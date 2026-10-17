@@ -155,6 +155,10 @@ pub const K_ATOMIC: Int = 7
 pub const K_HANDLE: Int = 8
 // A record's or enum value's fields: one count for all its copies (D4).
 pub const K_AGG: Int = 9
+// A select over channels of different types (performance leadership 6.4): its cases, three
+// values each — the channel, the kind (0 a receive, 1 a send, 2 a send done) and the receive's
+// vector or the send's value. Not a class of the memory report, as the Rust interpreter's is not.
+pub const K_SEL: Int = 10
 
 // The counters of the memory report.
 pub const C_SEQ: Int = 0

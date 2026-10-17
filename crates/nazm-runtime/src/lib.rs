@@ -368,7 +368,12 @@ pub fn escape(s: &str) -> String {
 /// as a receive from one with a parked sender moves that sender's value into the ring
 /// (`nz.chan_record`, `nz.chan_park`, `nz.chan_hand`, `nz.chan_wait_old`, `nz.chan_tell_old`);
 /// a generic channel's close (`nz.chanv_close`) no longer calls the `Int` channel's.
-pub const RUNTIME_ABI_REVISION: u32 = 45;
+/// 46 is performance leadership 6.4's select over channels of different types (2026-10-17): a
+/// select record (`nz.sel_new`, `nz.sel_retain`, `nz.sel_release`, `nz.sel_recv`, `nz.sel_send`,
+/// `nz.sel_wait`; cases 32 bytes), a send case offered without waiting (`nz.chanv_offer`), and a
+/// generic channel's receive advancing the select event count, which `nz.sel_signal` now advances
+/// only while someone selects.
+pub const RUNTIME_ABI_REVISION: u32 = 46;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -557,6 +562,12 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.errno_last", [], Some(Word::I64), Foreign, "takes nothing; the errno last saved on this thread (N85)"),
     import!("nz.chanv_close", [Ptr], None, Channels, "borrows the channel; closes it and wakes every select (N54)"),
     import!("nz.chanv_select", [Ptr, Ptr, I64, I64], Some(Word::I64), Channels, "borrows the channels; copies one slot out to the second pointer, handing over its reference, when it returns an index; -3 - i closed, -1 none, -2 timed out, i64::MIN out of memory"),
+    import!("nz.sel_new", [], Some(Word::Ptr), Channels, "a select with no cases and one reference the caller owns, or null (6.4)"),
+    import!("nz.sel_retain", [Ptr], None, Channels, "one more reference to a select; null is a no-op (6.4)"),
+    import!("nz.sel_release", [Ptr], None, Channels, "one reference fewer; the last gives back its channels and vectors and releases a value unsent (6.4)"),
+    import!("nz.sel_recv", [Ptr, Ptr, Ptr], Some(Word::I64), Channels, "borrows the select; adds a receive case holding a reference to the channel and the vector; its index, or i64::MIN out of memory (6.4)"),
+    import!("nz.sel_send", [Ptr, Ptr, Ptr], Some(Word::I64), Channels, "borrows the select; adds a send case taking the slot's reference; its index, or i64::MIN out of memory with the reference still the caller's (6.4)"),
+    import!("nz.sel_wait", [Ptr, I64, I64], Some(Word::I64), Channels, "borrows the select; performs the lowest ready case: i, -3 - i closed, -1 none left, -2 timed out, i64::MIN out of memory (6.4)"),
     import!("nz.time_now_ms", [], Some(Word::I64), Channels, "takes nothing"),
     import!("nz.time_now_ns", [], Some(Word::I64), Channels, "takes nothing (Gate 2)"),
     import!("nz.time_wall_ns", [], Some(Word::I64), Channels, "takes nothing (Gate 2)"),
@@ -819,6 +830,12 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.errno_last", "i64" () "", true, Foreign, "", Never, Owner, "the errno the last foreign call on this thread left (N85)", "none"),
     rt!("nz.chanv_close", "void" ("ptr") "noinline", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
     rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "noinline", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
+    rt!("nz.sel_new", "ptr" () "noinline", true, Channels, "", Null, Any, "a select with no cases (6.4)", "one reference, owned by the caller"),
+    rt!("nz.sel_retain", "void" ("ptr") "", true, Channels, "", Never, Owner, "one more reference to a select (6.4)", "adds a reference; a select never crosses into a task"),
+    rt!("nz.sel_release", "void" ("ptr") "noinline", true, Channels, "", Never, Owner, "one reference fewer; the last releases the cases' channels, vectors and unsent values (6.4)", "takes a reference"),
+    rt!("nz.sel_recv", "i64" ("ptr", "ptr", "ptr") "noinline", true, Channels, "", Status, Owner, "add a receive case (6.4)", "borrows the select; the select takes a reference to the channel and the vector"),
+    rt!("nz.sel_send", "i64" ("ptr", "ptr", "ptr") "noinline", true, Channels, "", Status, Owner, "add a send case holding a slot (6.4)", "borrows the select; takes the slot's reference unless it returns i64::MIN"),
+    rt!("nz.sel_wait", "i64" ("ptr", "i64", "i64") "noinline", true, Channels, "", Status, Locked, "perform the lowest ready case of a select, or wait, or a deadline (6.4)", "borrows the select; a received value goes onto its case's vector, a sent one is the channel's"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
     rt!("nz.time_now_ns", "i64" () "", false, Channels, "", Never, Any, "the same monotonic clock in nanoseconds (Gate 2)", "none"),
     rt!("nz.time_wall_ns", "i64" () "", false, Channels, "", Never, Any, "the wall clock in nanoseconds since the Unix epoch (Gate 2)", "none"),
@@ -833,6 +850,8 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chan_hand", "i64" ("ptr", "ptr", "i64", "i64") "noinline", false, Channels, "", Never, Locked, "take the head of a channel's wait list, give it a value and a state, and wake it alone (6.4)", "the value the record held"),
     rt!("nz.chan_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on the channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
     rt!("nz.chan_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on the channel's own condition variable, if anyone does (6.4)", "none"),
+    rt!("nz.chanv_offer", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one offer of a slot to a channel without waiting (6.4)", "borrows the channel; takes the slot's reference when it returns 1"),
+    rt!("nz.sel_case", "ptr" ("ptr") "noinline", false, Channels, "", Null, Owner, "room for one more case in a select (6.4)", "the select owns it; null when there is no memory"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
     rt!("nz.pool_mode_get", "i64" () "noinline", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", "none"),
     rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
@@ -1520,9 +1539,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_five_and_reaches_the_system_only_through_its_platform_layer() {
-        // 6.4's direct hand-off: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 45);
+    fn the_runtime_is_revision_forty_six_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.4's select over several types: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 46);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

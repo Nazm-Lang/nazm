@@ -1,0 +1,7 @@
+fn waiter(io: IoCap, tm: TimeCap, c: Chan[Int], res: Chan[Int]) -> Int ! { io } {
+let cs = vec_new[Chan[Int]](); vec_push(cs, c); let out = vec_new[Int]();
+chan_send_of(res, chan_select_until(cs, out, 4000)); 0 }
+fn main(io: IoCap, t: SpawnCap, tm: TimeCap) -> Int ! { io, spawn } {
+let c = chan_new_of[Int](1); let res = chan_new_of[Int](1); let got = vec_new[Int]();
+scope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }
+print(int_to_str(vec_get(got, 0))); 0 }

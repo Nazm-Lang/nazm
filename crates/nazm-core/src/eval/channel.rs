@@ -1,7 +1,7 @@
 //! Channels between tasks, and `select` over several of them.
 
 use super::counters::{CHANNELS_ALLOCATED, CHANNELS_RECLAIMED, SCHED_SELECTS, SCHED_TIMEOUTS};
-use super::value::Value;
+use super::value::{seq, Seq, Value};
 use super::*;
 
 /// A bounded queue with a close flag.
@@ -63,6 +63,8 @@ impl Channel {
         drop(state);
         if matches!(ready, Ready::Value(_)) {
             self.changed.notify_all();
+            // Room made, which a select's send case waits for (6.4).
+            select_event();
         }
         Some(ready)
     }
@@ -78,6 +80,10 @@ impl Channel {
         let taken = state.queue.pop_front();
         drop(state);
         self.changed.notify_all();
+        if taken.is_some() {
+            // Room made, which a select's send case waits for (6.4).
+            select_event();
+        }
         Some(taken)
     }
 
@@ -162,5 +168,129 @@ pub(super) fn select(
 impl Drop for Channel {
     fn drop(&mut self) {
         CHANNELS_RECLAIMED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// What one offer to a channel found (6.4): taken, or refused with the value given back.
+enum Offer {
+    Sent,
+    Closed(Value),
+    Full(Value),
+}
+
+impl Channel {
+    /// One offer without waiting (6.4): queued, or the channel closed or full.
+    fn try_offer(&self, value: Value) -> Option<Offer> {
+        let mut state = self.state.lock().ok()?;
+        if state.closed {
+            return Some(Offer::Closed(value));
+        }
+        if state.queue.len() >= self.capacity {
+            return Some(Offer::Full(value));
+        }
+        state.queue.push_back(value);
+        drop(state);
+        self.changed.notify_all();
+        select_event();
+        Some(Offer::Sent)
+    }
+}
+
+/// One case of a [`Select`] (6.4).
+#[derive(Debug)]
+enum Case {
+    /// A receive onto `out`.
+    Recv {
+        chan: Arc<Channel>,
+        out: Arc<Seq<Vec<Value>>>,
+    },
+    /// A send of `value`; `None` once it was sent.
+    Send {
+        chan: Arc<Channel>,
+        value: Option<Value>,
+    },
+}
+
+/// A select over channels of different types (performance leadership 6.4, `docs/spec.md`,
+/// *Select over channels of different types*): its cases, in the order they were added. It
+/// holds a reference to each channel and each receive vector, as the native select does.
+#[derive(Debug, Default)]
+pub struct Select {
+    cases: Mutex<Vec<Case>>,
+}
+
+impl Select {
+    /// A receive case; its index.
+    pub(super) fn recv(&self, chan: Arc<Channel>, out: Arc<Seq<Vec<Value>>>) -> Option<i64> {
+        let mut cases = self.cases.lock().ok()?;
+        cases.push(Case::Recv { chan, out });
+        Some(i64::try_from(cases.len() - 1).unwrap_or(i64::MAX))
+    }
+
+    /// A send case holding `value`; its index.
+    pub(super) fn send(&self, chan: Arc<Channel>, value: Value) -> Option<i64> {
+        let mut cases = self.cases.lock().ok()?;
+        cases.push(Case::Send {
+            chan,
+            value: Some(value),
+        });
+        Some(i64::try_from(cases.len() - 1).unwrap_or(i64::MAX))
+    }
+
+    /// The lowest ready case performed: `i`, `-3 - i` for a closed channel, `-1` with no case
+    /// left, `-2` when the deadline passed first — `select`'s waiting, case by case.
+    pub(super) fn wait(&self, deadline: Option<std::time::Instant>) -> Option<i64> {
+        let mut cases = self.cases.lock().ok()?;
+        if !cases.iter().any(|c| match c {
+            Case::Recv { .. } => true,
+            Case::Send { value, .. } => value.is_some(),
+        }) {
+            return Some(-1);
+        }
+        SCHED_SELECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        loop {
+            let seen = *SELECT_EVENTS.lock().ok()?;
+            for (i, case) in cases.iter_mut().enumerate() {
+                let at = i64::try_from(i).unwrap_or(i64::MAX);
+                match case {
+                    Case::Recv { chan, out } => match chan.try_take()? {
+                        Ready::Value(v) => {
+                            seq(out)?.push(v);
+                            return Some(at);
+                        }
+                        Ready::Closed => return Some(-3 - at),
+                        Ready::Empty => {}
+                    },
+                    Case::Send { chan, value } => {
+                        let Some(v) = value.take() else { continue };
+                        match chan.try_offer(v)? {
+                            Offer::Sent => return Some(at),
+                            Offer::Closed(v) => {
+                                *value = Some(v);
+                                return Some(-3 - at);
+                            }
+                            Offer::Full(v) => *value = Some(v),
+                        }
+                    }
+                }
+            }
+            if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+                SCHED_TIMEOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Some(-2);
+            }
+            let mut g = SELECT_EVENTS.lock().ok()?;
+            while *g == seen {
+                match deadline {
+                    Some(d) => {
+                        let now = std::time::Instant::now();
+                        if now >= d {
+                            break;
+                        }
+                        g = SELECT_WOKEN.wait_timeout(g, d - now).ok()?.0;
+                    }
+                    None => g = SELECT_WOKEN.wait(g).ok()?,
+                }
+            }
+        }
     }
 }

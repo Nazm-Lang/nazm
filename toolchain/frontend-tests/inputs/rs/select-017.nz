@@ -1,0 +1,12 @@
+
+fn main(out: OutCap, tm: TimeCap) -> Int {
+    let c = chan_new_of[Int](1);
+    let got = vec_new[Int]();
+    let s = sel_new();
+    let i = sel_recv(s, c, got);
+    let before = time_now_ms();
+    print(int_to_str(sel_wait_until(s, 30)));
+    print(if time_now_ms() - before >= 30 { " waited " } else { " early " });
+    print(int_to_str(sel_wait_until(s, 0)));
+    0
+}

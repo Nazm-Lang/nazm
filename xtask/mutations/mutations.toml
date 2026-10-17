@@ -8350,10 +8350,11 @@ Repointed by R1.5 (4.5), which moved it to 86: an entry that refused `r.unwrap_o
 Repointed by R1.5 (4.6), which moved it to 87: an entry that refused a `match` arm without its `,` before a line break must not be reused.
 Repointed by the R5 fixes, which moved it to 88: an entry that accepted a pattern `let` rebinding a name in its own scope must not be reused.
 Repointed by C1, which moved it to 89 for the TLS built-ins: an entry that refused `os_tls_read` must not be reused.
-Repointed by R1.5 (D5), which moved it to 90 for the empty map: an entry that refused `let m: Map[Str, Int] = {}` must not be reused."""
+Repointed by R1.5 (D5), which moved it to 90 for the empty map: an entry that refused `let m: Map[Str, Int] = {}` must not be reused.
+Repointed by performance leadership 6.4, which moved it to 91 for `Select`: an entry that refused `sel_new` must not be reused."""
 file = "crates/nazm-cache/src/identity.rs"
-find = "pub const SEMANTIC_EPOCH: u32 = 90;"
-replace = "pub const SEMANTIC_EPOCH: u32 = 89;"
+find = "pub const SEMANTIC_EPOCH: u32 = 91;"
+replace = "pub const SEMANTIC_EPOCH: u32 = 90;"
 killers = [{ package = "nazm-cli", test = "cli_e_l", name = "incremental::an_entry_from_the_checker_before_requirements_is_never_read" }]
 
 
@@ -10562,11 +10563,12 @@ Repointed by performance leadership 6.3, which moved it to 41 for the scheduler:
 Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64.
 Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it.
 Repointed by performance leadership 6.3's preemption by interrupt, which moved it to 44: an object built to poll `nz.preempt_req` must not be linked with a runtime that no longer defines it.
-Repointed by performance leadership 6.4's direct hand-off, which moved it to 45: an object built against a runtime whose `Int` channel header is 64 bytes must not be linked with one whose is 112."""
+Repointed by performance leadership 6.4's direct hand-off, which moved it to 45: an object built against a runtime whose `Int` channel header is 64 bytes must not be linked with one whose is 112.
+Repointed by performance leadership 6.4's select over channels of different types, which moved it to 46: an object that calls `nz.sel_wait` must not be linked with a runtime that does not define it."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 45;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 44;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_five_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 46;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 45;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_six_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -10653,8 +10655,8 @@ name = "n54-a-clock-needs-no-authority"
 why = """a clock read needs no TimeCap, so time is ambient
 N108: the killer chosen on macOS does not see it on Linux (glibc, or the platform); this one does, on both."""
 file = "crates/nazm-sema/src/capability.rs"
-find = "            | Intrinsic::ChanSelectUntil => Some(Self::Time),"
-replace = "            | Intrinsic::ChanSelectUntil => None,"
+find = "            | Intrinsic::ChanSelectUntil\n            | Intrinsic::SelWaitUntil => Some(Self::Time),"
+replace = "            | Intrinsic::ChanSelectUntil\n            | Intrinsic::SelWaitUntil => None,"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::critical_refuses_a_clock" }]
 
 [[mutation]]
@@ -10688,8 +10690,10 @@ name = "n54-the-interpreter-counts-no-timeout"
 why = "the interpreter's select times out without counting it"
 file = "crates/nazm-core/src/eval/channel.rs"
 find = """
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
             SCHED_TIMEOUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);"""
-replace = ""
+replace = """
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {"""
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::the_scheduler_s_counters_agree_everywhere" }]
 
 [[mutation]]
@@ -20866,3 +20870,53 @@ file = "crates/nazm-runtime/src/core.rs"
 find = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 2)'''
 replace = '''  %rh = call i64 @nz.chan_hand(ptr %rqp, ptr %rqtp, i64 0, i64 1)'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_close_ends_every_parked_receiver_and_refuses_every_parked_sender" }]
+
+# --- Performance leadership 6.4: a select over channels of different types (2026-10-17)
+
+[[mutation]]
+name = "ps-a-sent-case-is-never-spent"
+why = "a send case that was sent stays live, so the select sends its value again — into a full channel, a wait for ever"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  store i64 2, ptr %kp'''
+replace = '''  store i64 1, ptr %kp'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_select_over_channels_of_different_types_performs_the_lowest_ready_case_everywhere" }]
+
+[[mutation]]
+name = "ps-a-closed-send-case-is-never-ready"
+why = "a send case whose channel closed is taken for full, so the select waits for room that never comes"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %refused = icmp eq i64 %got2, 2'''
+replace = '''  %refused = icmp eq i64 %got2, 3'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_send_case_refused_by_a_close_keeps_its_value_and_a_select_released_unsent_releases_it" }]
+
+[[mutation]]
+name = "ps-an-unsent-value-leaks"
+why = "the last reference to a select frees a send case's slot without releasing the value in it"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  call void %rel(ptr %sl, ptr null)'''
+replace = ''''''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_send_case_refused_by_a_close_keeps_its_value_and_a_select_released_unsent_releases_it" }]
+
+[[mutation]]
+name = "ps-a-signal-moves-no-event-count"
+why = "a change seen by a waiting selector wakes it without moving the event count, so it finds nothing changed and sleeps again"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst'''
+replace = '''  %gen = add i64 0, 0'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_waiting_select_over_different_types_is_woken_by_a_send_a_receive_and_a_close" }]
+
+[[mutation]]
+name = "ps-a-select-crosses-into-a-task"
+why = "a `Select`, which holds the vectors its receive cases fill, may be passed to a task: a data race the language invited"
+file = "crates/nazm-sema/src/types.rs"
+find = '''            && !matches!(self, Self::Select)'''
+replace = ''''''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_select_never_crosses_into_a_task_and_its_name_is_the_languages" }]
+
+[[mutation]]
+name = "ps-the-interpreter-hides-a-closed-case"
+why = "the interpreter answers a receive case's closed channel with its plain index, which no native build does"
+file = "crates/nazm-core/src/eval/channel.rs"
+find = '''                        Ready::Closed => return Some(-3 - at),'''
+replace = '''                        Ready::Closed => return Some(at),'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_select_over_channels_of_different_types_performs_the_lowest_ready_case_everywhere" }]

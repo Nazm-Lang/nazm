@@ -1,0 +1,20 @@
+fn taker(io: IoCap, c: Chan, done: Chan) -> Int ! { io } {
+let got = ints_new();
+if chan_recv(c, got) { chan_send(done, 1); } else { chan_send(done, 10); }
+0 }
+fn giver(io: IoCap, c: Chan, done: Chan, v: Int) -> Int ! { io } {
+if chan_send(c, v) { chan_send(done, 100); } else { chan_send(done, 1000); }
+0 }
+fn closer(io: IoCap, a: Chan, b: Chan) -> Int ! { io } { chan_close(a); chan_close(b); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let empty = chan_new(1); let full = chan_new(1); let done = chan_new(64);
+let sent = chan_send(full, 7);
+scope {
+let mut i = 0;
+while i < 8 { spawn taker(io, empty, done); spawn giver(io, full, done, i); i = i + 1; }
+spawn closer(io, empty, full);
+}
+let got = ints_new(); let mut k = 0; let mut s = 0;
+while k < 16 { if chan_recv(done, got) { s = s + ints_pop(got); } k = k + 1; }
+let left = chan_recv(full, got);
+print(int_to_str(s)); print(" "); print(int_to_str(ints_pop(got))); 0 }

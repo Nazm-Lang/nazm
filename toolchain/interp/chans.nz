@@ -118,6 +118,76 @@ pub fn channel_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, time: TimeCap)
         }
         return wait(vm)
     }
+    if op == B_SEL_NEW { return V.Ref(obj: alloc(h, K_SEL, 0)) }
+    if op == B_SEL_RECV || op == B_SEL_SEND {
+        // A case: the select holds a reference to the channel, and to the receive's vector or
+        // the send's value — a copy, as a send's is (6.4).
+        let cases = items(h, obj(argc(vm, n, 0)))
+        let c = argc(vm, n, 1)
+        let held = argc(vm, n, 2)
+        retain(h, c)
+        retain(h, held)
+        vec_push(cases, c)
+        vec_push(cases, V.Int(v: if op == B_SEL_RECV { 0 } else { 1 }))
+        vec_push(cases, held)
+        return V.Int(v: vec_len(cases) / 3 - 1)
+    }
+    if op == B_SEL_WAIT || op == B_SEL_WAIT_UNTIL {
+        // The lowest ready case performed: its index, `-3 - i` for a closed channel, `-1` with no
+        // case left, `-2` once the deadline passed (6.4).
+        let cases = items(h, obj(argc(vm, n, 0)))
+        let count = vec_len(cases) / 3
+        let mut live = 0
+        for i in 0..count {
+            if int_arg(vec_get(cases, i * 3 + 1)) != 2 { live = live + 1 }
+        }
+        if live == 0 { return V.Int(v: 0 - 1) }
+        if ints_get(vm.st, ST_PENDING) == 0 {
+            ints_set(vm.st, ST_PENDING, 1)
+            ints_set(h.sched, SC_SELECTS, ints_get(h.sched, SC_SELECTS) + 1)
+            if op == B_SEL_WAIT_UNTIL {
+                let ms = int_arg(argc(vm, n, 1))
+                ints_set(vm.st, ST_DEADLINE, time_now_ms() + (if ms > 0 { ms } else { 0 }) + 1)
+            }
+        }
+        for i in 0..count {
+            let kind = int_arg(vec_get(cases, i * 3 + 1))
+            let c = obj(vec_get(cases, i * 3))
+            let q = items(h, c)
+            if kind == 0 {
+                if vec_len(q) > 0 {
+                    vec_push(items(h, obj(vec_get(cases, i * 3 + 2))), take_front(q))
+                    done_waiting(vm)
+                    return V.Int(v: i)
+                }
+                if ints_get(h.flag, c) == 1 {
+                    done_waiting(vm)
+                    return V.Int(v: 0 - 3 - i)
+                }
+            } else if kind == 1 {
+                if ints_get(h.flag, c) == 1 {
+                    done_waiting(vm)
+                    return V.Int(v: 0 - 3 - i)
+                }
+                if vec_len(q) < ints_get(h.room, c) {
+                    // Moved into the channel: the select's reference is the channel's now.
+                    vec_push(q, vec_get(cases, i * 3 + 2))
+                    vec_set(cases, i * 3 + 2, V.Int(v: 0))
+                    vec_set(cases, i * 3 + 1, V.Int(v: 2))
+                    done_waiting(vm)
+                    return V.Int(v: i)
+                }
+            }
+        }
+        let deadline = ints_get(vm.st, ST_DEADLINE)
+        if op == B_SEL_WAIT_UNTIL && time_now_ms() >= deadline - 1 {
+            ints_set(h.sched, SC_TIMEOUTS, ints_get(h.sched, SC_TIMEOUTS) + 1)
+            done_waiting(vm)
+            ints_set(vm.st, ST_TURNS, 999)
+            return V.Int(v: 0 - 2)
+        }
+        return wait(vm)
+    }
     if op == B_TIME_SLEEP_MS {
         let ms = int_arg(argc(vm, n, 0))
         if ms <= 0 { return V.Int(v: 0) }
@@ -141,4 +211,5 @@ pub fn channel_builtin(p: Prog, vm: Vm, pc: Int, op: Int, n: Int, time: TimeCap)
 /// Whether built-in `op` is one of this family's.
 pub fn is_channel(op: Int) -> Bool {
     op == B_CHAN_NEW || op == B_CHAN_SEND || op == B_CHAN_RECV || op == B_CHAN_CLOSE || (op >= B_CHAN_NEW_OF && op <= B_TIME_SLEEP_MS)
+            || (op >= B_SEL_NEW && op <= B_SEL_WAIT_UNTIL)
 }

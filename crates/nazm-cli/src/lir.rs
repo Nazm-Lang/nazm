@@ -50,6 +50,7 @@ fn ty_name(u: &Unit, t: Ty) -> String {
             .map_or_else(|| "Vec".to_owned(), |v| v.source.clone()),
         Ty::Fn(_) => "fn".to_owned(),
         Ty::ChanOf(_) => "Chan[_]".to_owned(),
+        Ty::Select => "Select".to_owned(),
     }
 }
 

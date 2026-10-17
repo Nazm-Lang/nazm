@@ -1,8 +1,6 @@
-fn down(n: Int) -> Int { let mut pad = [0; 1024]; pad[n % 1024] = n;
-if n == 0 { 0 } else { pad[n % 1024] - n + 1 + down(n - 1) } }
-fn work(io: IoCap, c: Chan, n: Int) -> Int ! { io } { chan_send(c, down(n)); 0 }
+fn bad(io: IoCap, c: Chan, z: Int) -> Int ! { io } { let r = chan_recv(c, ints_new()); 10 / z }
+fn good(io: IoCap, c: Chan, done: Chan) -> Int ! { io } { chan_send(c, 1); chan_send(done, 7); 0 }
 fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
-let c = chan_new(1); let got = ints_new();
-scope { spawn work(io, c, str_len(arg(0)) * 10); }
-let r = chan_recv(c, got);
+let c = chan_new(1); let done = chan_new(1); let got = ints_new();
+scope { spawn bad(io, c, str_len("")); spawn good(io, c, done); let r = chan_recv(done, got); }
 print(int_to_str(ints_get(got, 0))); 0 }

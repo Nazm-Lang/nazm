@@ -70,6 +70,9 @@ pub enum Shape {
     OsHandle,
     /// `Atomic` (Gate 3, `docs/spec.md`, *Atomics*).
     Atomic,
+    /// `Select` (performance leadership 6.4, `docs/spec.md`, *Select over channels of
+    /// different types*).
+    Select,
 }
 
 /// Which numeric types a generic numeric built-in's `T` ranges over (Gate 2). Checked where
@@ -127,6 +130,7 @@ impl Shape {
             Self::Text => Some(Type::Text),
             Self::OsHandle => Some(Type::OsHandle),
             Self::Atomic => Some(Type::Atomic),
+            Self::Select => Some(Type::Select),
             Self::T
             | Self::VecT
             | Self::ChanT
@@ -166,6 +170,7 @@ impl Shape {
             Self::Text => "Text",
             Self::OsHandle => "OsHandle",
             Self::Atomic => "Atomic",
+            Self::Select => "Select",
         }
     }
 }
@@ -690,11 +695,29 @@ pub enum Intrinsic {
     /// written straight after `s`'s, rather than a string for the number and then a copy of it.
     /// No program can name it.
     StrConcatNum,
+
+    // --- select over channels of different types, performance leadership 6.4 (`docs/spec.md`,
+    // *Select over channels of different types*) -----------------------------------------------
+    //
+    // Prelude built-ins: a module's own function of the same name hides one.
+    /// `sel_new() -> Select` — a select with no cases.
+    SelNew,
+    /// `sel_recv[T](s: Select, c: Chan[T], out: Vec[T]) -> Int` — a receive case, its index.
+    SelRecv,
+    /// `sel_send[T](s: Select, c: Chan[T], v: T) -> Int` — a send case holding a copy of `v`,
+    /// its index.
+    SelSend,
+    /// `sel_wait(s: Select) -> Int` — the lowest ready case performed: `i`, `-3 - i` for a
+    /// closed one, `-1` with none left.
+    SelWait,
+    /// `sel_wait_until(s: Select, ms: Int) -> Int` — as `sel_wait`, or `-2` once `ms`
+    /// milliseconds pass. Needs a `TimeCap` held.
+    SelWaitUntil,
 }
 
 impl Intrinsic {
     /// Every built-in, for the checker to register and for tests to enumerate.
-    pub const ALL: [Self; 214] = [
+    pub const ALL: [Self; 219] = [
         Self::StrLen,
         Self::StrByte,
         Self::StrSlice,
@@ -909,6 +932,11 @@ impl Intrinsic {
         Self::CheckedAdd,
         Self::CheckedSub,
         Self::CheckedMul,
+        Self::SelNew,
+        Self::SelRecv,
+        Self::SelSend,
+        Self::SelWait,
+        Self::SelWaitUntil,
     ];
 
     #[must_use]
@@ -1139,6 +1167,11 @@ impl Intrinsic {
             Self::StrConcatNum => "str_concat_num",
             Self::TextFromStr => "text_from_str",
             Self::TextAssume => "text_assume",
+            Self::SelNew => "sel_new",
+            Self::SelRecv => "sel_recv",
+            Self::SelSend => "sel_send",
+            Self::SelWait => "sel_wait",
+            Self::SelWaitUntil => "sel_wait_until",
         }
     }
 
@@ -1170,7 +1203,9 @@ impl Intrinsic {
             | Self::ListPush
             | Self::CellNew
             | Self::CellGet
-            | Self::CellSet => 1,
+            | Self::CellSet
+            | Self::SelRecv
+            | Self::SelSend => 1,
             other if other.requires().is_some() => 1,
             _ => 0,
         }
@@ -1432,6 +1467,11 @@ impl Intrinsic {
             Self::CellSet => &[Shape::CellT, Shape::T],
             Self::TextFromStr => &[Shape::Str],
             Self::TextAssume => &[Shape::Str],
+            Self::SelNew => &[],
+            Self::SelRecv => &[Shape::Select, Shape::ChanT, Shape::VecT],
+            Self::SelSend => &[Shape::Select, Shape::ChanT, Shape::T],
+            Self::SelWait => &[Shape::Select],
+            Self::SelWaitUntil => &[Shape::Select, Shape::Int],
         }
     }
 
@@ -1636,6 +1676,8 @@ impl Intrinsic {
             Self::BoxFresh => Shape::BoxT,
             Self::TextFromStr => Shape::Text,
             Self::TextAssume => Shape::Text,
+            Self::SelNew => Shape::Select,
+            Self::SelRecv | Self::SelSend | Self::SelWait | Self::SelWaitUntil => Shape::Int,
         }
     }
 
@@ -1679,6 +1721,12 @@ impl Intrinsic {
                 | Self::OsLock
                 | Self::OsTryLock
                 | Self::OsUnlock
+                // Performance leadership 6.4.
+                | Self::SelNew
+                | Self::SelRecv
+                | Self::SelSend
+                | Self::SelWait
+                | Self::SelWaitUntil
         )
     }
 

@@ -274,9 +274,13 @@ impl ByteLayouts {
             // never crosses into C, and its loads and stores state the alignment.
             #[allow(clippy::integer_division)]
             Ty::Num(k) => Some(Lay::new(k.bits() / 8, (k.bits() / 8).min(8))),
-            Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
-                Some(Lay::new(p, p))
-            }
+            Ty::Ints
+            | Ty::Strs
+            | Ty::Chan
+            | Ty::Vec(_)
+            | Ty::Fn(_)
+            | Ty::ChanOf(_)
+            | Ty::Select => Some(Lay::new(p, p)),
             Ty::Bool => Some(Lay::new(1, 1)),
             Ty::Str => Some(self.data.str()),
             Ty::Record(RecordTy(id)) => self.records.get(&id).map(|s| s.lay),
@@ -298,9 +302,14 @@ impl ByteLayouts {
             Ty::Int | Ty::Bool | Ty::Num(_) => false,
             // What its element owns (L8).
             Ty::Array(ArrayTy(id)) => self.arrays.get(&id).is_some_and(|(e, _)| self.owns(*e)),
-            Ty::Str | Ty::Ints | Ty::Strs | Ty::Chan | Ty::Vec(_) | Ty::Fn(_) | Ty::ChanOf(_) => {
-                true
-            }
+            Ty::Str
+            | Ty::Ints
+            | Ty::Strs
+            | Ty::Chan
+            | Ty::Vec(_)
+            | Ty::Fn(_)
+            | Ty::ChanOf(_)
+            | Ty::Select => true,
             Ty::Record(RecordTy(id)) => self.owning_records.get(&id).copied().unwrap_or(false),
             Ty::Enum(EnumTy(id)) => self.owning_enums.get(&id).copied().unwrap_or(false),
         }
