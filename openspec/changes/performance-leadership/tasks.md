@@ -113,4 +113,15 @@ in the Rust compiler only where users would meet the cost before then (the order
       ≤ 1.25); open: the tests that enforce them, with 7.4's growth guards
 - [ ] 7.3 Fixes in priority order: superlinear phases first, then the largest constant factors
       (hashing, allocation per node, copies), each measured before and after
+      — 2026-10-17, superlinear phases fixed, each argued from the algorithm and output
+      byte-identical, the quiet re-measurement (`measure.py`) still to do: the pipeline's LIR
+      (`line_col` by a table of line starts), `nzcg`'s `allocate` (liveness name by name), the
+      Rust MIR's `+` chain (operands borrowed, not cloned), the Nazm Core IR document's printing
+      (one part per line's indentation). Open: the Core IR document is pretty-printed, so its
+      size is a nest's or chain's size times its depth in both compilers; the Nazm Core IR's
+      29 KiB a line; the Rust `core-ir` and the Nazm checker and parser on `nest`
 - [ ] 7.4 A growth guard per phase in both compilers, like `…lowers_in_time_proportional_to_its_size`
+      — 2026-10-17, for each phase fixed in 7.3: `bench/complexity/growth.py` counts the
+      instructions a Nazm-written phase retires at n and 8n (run by the pipeline's, `nzcg`'s and
+      the front end's `run.sh`), and `mir::a_long_plus_chain_lowers_in_time_proportional_to_its_length`;
+      the other phases still to guard
