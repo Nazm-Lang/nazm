@@ -133,6 +133,18 @@ pub(crate) fn object(
     // and `-fdata-sections` give LLVM's objects, so `--gc-sections` can leave out each one nothing
     // reaches. Mach-O's linker strips by symbol and needs none.
     let elf = isa.triple().binary_format == target_lexicon::BinaryFormat::Elf;
+    // Where the pool preempts (performance leadership 6.3): the generated code's own section, as
+    // LLVM's lowering names it (`nazm_lir::op::llvm::Code`), so an interrupted task is known to be
+    // in generated code — macOS's Mach-O and Windows's COFF.
+    let section = match (isa.triple().binary_format, isa.triple().operating_system) {
+        (target_lexicon::BinaryFormat::Macho, target_lexicon::OperatingSystem::Darwin(_)) => {
+            CodeSection::MachO
+        }
+        (target_lexicon::BinaryFormat::Coff, target_lexicon::OperatingSystem::Windows) => {
+            CodeSection::Coff
+        }
+        _ => CodeSection::Plain,
+    };
     let mut builder = ObjectBuilder::new(isa, name, cranelift_module::default_libcall_names())
         .map_err(|e| vec![defect(e.to_string())])?;
     builder
@@ -242,6 +254,7 @@ pub(crate) fn object(
     let bytes = product
         .emit()
         .map_err(|e| vec![defect(format!("could not write an object: {e}"))])?;
+    let bytes = in_code_section(bytes, section);
     if debug {
         crate::dwarf::settle_macho(bytes).map_err(|e| vec![defect(e)])
     } else {
@@ -839,4 +852,75 @@ mod tests {
             ArgumentExtension::None
         );
     }
+}
+
+/// Where an object's functions go (performance leadership 6.3).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CodeSection {
+    /// The default text section: no preemption on this target.
+    Plain,
+    /// `__TEXT,__nz_text`.
+    MachO,
+    /// `.text$nM`.
+    Coff,
+}
+
+/// `bytes`, an object `cranelift-object` wrote, with its one code section renamed to the generated
+/// code's (6.3): `cranelift-object` names no section for a function, and a section's name is only
+/// its header's bytes — relocations, symbols and unwind entries name it by number — so the name is
+/// written over in place. Mach-O: the `__text` section of an `LC_SEGMENT_64`; COFF: the `.text`
+/// section header. Anything else, or an object not as expected, is left as it is.
+fn in_code_section(mut bytes: Vec<u8>, section: CodeSection) -> Vec<u8> {
+    fn word(b: &[u8], at: usize, n: usize) -> Option<usize> {
+        let s = b.get(at..at + n)?;
+        Some(
+            s.iter()
+                .rev()
+                .fold(0usize, |v, x| (v << 8) | usize::from(*x)),
+        )
+    }
+    fn rename(b: &mut [u8], at: usize, from: &[u8], to: &[u8], width: usize) {
+        let mut want = from.to_vec();
+        want.resize(width, 0);
+        let mut new = to.to_vec();
+        new.resize(width, 0);
+        if let Some(slot) = b.get_mut(at..at + width) {
+            if slot == want.as_slice() {
+                slot.copy_from_slice(&new);
+            }
+        }
+    }
+    match section {
+        CodeSection::Plain => {}
+        CodeSection::MachO => {
+            let Some(ncmds) = word(&bytes, 16, 4) else {
+                return bytes;
+            };
+            let mut at = 32;
+            for _ in 0..ncmds {
+                let (Some(cmd), Some(size)) = (word(&bytes, at, 4), word(&bytes, at + 4, 4)) else {
+                    break;
+                };
+                if cmd == 0x19 {
+                    let nsects = word(&bytes, at + 64, 4).unwrap_or(0);
+                    for k in 0..nsects {
+                        let sh = at + 72 + 80 * k;
+                        if bytes.get(sh + 16..sh + 22) == Some(b"__TEXT".as_slice()) {
+                            rename(&mut bytes, sh, b"__text", b"__nz_text", 16);
+                        }
+                    }
+                }
+                at += size;
+            }
+        }
+        CodeSection::Coff => {
+            let (Some(n), Some(opt)) = (word(&bytes, 2, 2), word(&bytes, 16, 2)) else {
+                return bytes;
+            };
+            for k in 0..n {
+                rename(&mut bytes, 20 + opt + 40 * k, b".text", b".text$nM", 8);
+            }
+        }
+    }
+    bytes
 }

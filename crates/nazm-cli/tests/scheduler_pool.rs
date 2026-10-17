@@ -302,9 +302,9 @@ fn tasks_a_task_spawns_are_stolen_by_idle_workers_and_all_run() {
 /// behind them on the same two workers, has run. Without preemption the loops hold both workers and
 /// the short tasks never start; with it the monitor interrupts a loop that has held its worker for a
 /// time slice while others wait, and it yields where it was, so all four run and the loops end —
-/// with no instruction added to either loop. LLVM's code on macOS, where the generated code has its
-/// own section (`Code::MachO`); Linux preempts nothing yet, and Cranelift's code is not in the
-/// section.
+/// with no instruction added to either loop. On macOS, where generated code has its own section —
+/// LLVM's (`Code::MachO`) and Cranelift's (its object's code section renamed); Nazm's own code
+/// generator's is `nazm_backend.rs`'s; Linux preempts nothing yet.
 #[cfg(target_os = "macos")]
 #[test]
 fn a_long_loop_yields_its_worker_to_tasks_waiting_behind_it() {
@@ -315,15 +315,17 @@ fn a_long_loop_yields_its_worker_to_tasks_waiting_behind_it() {
                let stop = atomic_new(0); let done = atomic_new(0);\n\
                scope { spawn spin(stop); spawn spin(stop); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); }\n\
                println(atomic_load(done)) }\n";
-    built(d.path(), "starve", src, "llvm");
-    let (out, err, code) = run(
-        d.path(),
-        "starve",
-        &[],
-        &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")],
-    );
-    assert_eq!(code, Some(0), "{err}");
-    assert!(out.starts_with("4\n"), "{out}{err}");
+    for backend in ["llvm", "cranelift"] {
+        built(d.path(), "starve", src, backend);
+        let (out, err, code) = run(
+            d.path(),
+            "starve",
+            &[],
+            &[("NAZM_SCHEDULER", "pool"), ("NAZM_WORKERS", "2")],
+        );
+        assert_eq!(code, Some(0), "{backend}: {err}");
+        assert!(out.starts_with("4\n"), "{backend}: {out}{err}");
+    }
 }
 
 #[test]

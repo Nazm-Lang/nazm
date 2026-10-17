@@ -126,7 +126,9 @@ pub fn write_coff(u: Unit, c: Code, dbg: Dwarf, errors: Strs) -> Bytes {
     let secs = vec_new[ByteBuf]()
     let sec_align = ints_new()
     let sec_flags = ints_new()
-    let lit_names: Strs = [".text", ".data", ".rdata", ".xdata", ".pdata"]
+    // The code in the generated code's own section, `.text$nM`, which the linker sorts between the
+    // runtime's markers (performance leadership 6.3).
+    let lit_names: Strs = [".text$nM", ".data", ".rdata", ".xdata", ".pdata"]
     let lit_flags: Ints = [0x60000020, 0xC0000040, 0x40000040, 0x40000040, 0x40000040]
     let mut i = 0
     while i < 5 {

@@ -10895,12 +10895,12 @@ declare i32 @GetThreadContext(ptr, ptr)
 declare i32 @SetThreadContext(ptr, ptr)
 declare void @nz_os_preempt_stub()
 
-define hidden void @nz.text_lo() section ".text$nzA" {
+define hidden void @nz.text_lo() section ".text$nA" {
 entry:
   ret void
 }
 
-define hidden void @nz.text_hi() section ".text$nzZ" {
+define hidden void @nz.text_hi() section ".text$nZ" {
 entry:
   ret void
 }
@@ -15836,7 +15836,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 46 }
+pub fn rt_abi_revision() -> Int ! {} { 47 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

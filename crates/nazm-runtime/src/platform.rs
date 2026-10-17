@@ -3628,8 +3628,8 @@ entry:
 
 /// Windows's preemption (6.3): the worker's thread suspended, its context read (`CONTEXT`:
 /// `ContextFlags` at 0x30, `Rsp` at 0x98, `Rip` at 0xF8; `CONTEXT_CONTROL`), and — only where its
-/// `Rip` is inside the generated code's sections, `.text$nzM` between the markers in `.text$nzA`
-/// and `.text$nzZ`, which the linker sorts by name — its return pushed and its `Rip` set to
+/// `Rip` is inside the generated code's sections, `.text$nM` between the markers in `.text$nA`
+/// and `.text$nZ`, which the linker sorts by name — its return pushed and its `Rip` set to
 /// `nz_os_preempt_stub`, which saves what a call may clobber, calls `nz.pool_preempt` and returns
 /// to where the thread was. Windows keeps nothing below a thread's stack pointer, so the pushed
 /// return lands on free stack.
@@ -3641,12 +3641,12 @@ declare i32 @GetThreadContext(ptr, ptr)
 declare i32 @SetThreadContext(ptr, ptr)
 declare void @nz_os_preempt_stub()
 
-define hidden void @nz.text_lo() section ".text$nzA" {
+define hidden void @nz.text_lo() section ".text$nA" {
 entry:
   ret void
 }
 
-define hidden void @nz.text_hi() section ".text$nzZ" {
+define hidden void @nz.text_hi() section ".text$nZ" {
 entry:
   ret void
 }

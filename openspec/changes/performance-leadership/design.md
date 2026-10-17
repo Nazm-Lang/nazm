@@ -488,7 +488,7 @@ it runs only on entry to a function in a call cycle, never at a back edge, so a 
 is never reached. **Chosen: (a).** The monitor interrupts the worker's thread (`SIGURG` on macOS;
 `SuspendThread`, `GetThreadContext` and a redirected return on Windows); the task yields only when
 the interrupted address is in generated code, which the LLVM backend puts in a section of its own
-(`__TEXT,__nz_text`; `.text$nzM` between `.text$nzA` and `.text$nzZ` markers, which MinGW's linker
+(`__TEXT,__nz_text`; `.text$nM` between `.text$nA` and `.text$nZ` markers, which MinGW's linker
 sorts by name), and no failure unwinds. What makes an address in generated code safe: generated
 code holds no lock and touches no thread's allocator lists (data races are refused, so anything it
 shares is atomic or behind a channel), its thread-local state is saved per task by `task_leave`,
