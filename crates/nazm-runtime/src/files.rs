@@ -40,7 +40,7 @@ declare i64 @nz_os_readdir(ptr, ptr, i64)
 declare i64 @nz_os_family()
 declare i64 @nz_os_error_text(i64, ptr, i64)
 
-define hidden void @nz.os_acquire() {
+define hidden void @nz.os_acquire() noinline {
 entry:
   br label %spin
 spin:
@@ -162,7 +162,7 @@ dead:
 
 ; Pin `h`: its state (1 a file, 2 a directory, 3 standard input), or its status — -65536 for a
 ; handle that is closed, a number no system gives an error.
-define hidden i64 @nz.os_pin(i64 %h) {
+define hidden i64 @nz.os_pin(i64 %h) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -215,7 +215,7 @@ ok:
 }
 
 ; Unpin `h`; the last unpin of a handle closed meanwhile closes it.
-define hidden void @nz.os_unpin(i64 %h) {
+define hidden void @nz.os_unpin(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %fd = and i64 %h, 4294967295
@@ -246,7 +246,7 @@ close:
   ret void
 }
 
-define hidden i64 @nz.os_close(i64 %h) {
+define hidden i64 @nz.os_close(i64 %h) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -289,7 +289,7 @@ now:
 
 ; A handle for descriptor `fd` just opened as `kind`; on a table that cannot grow, the
 ; descriptor is closed and the status answered.
-define hidden i64 @nz.os_adopt(i32 %fd, i64 %kind, ptr %obj) {
+define hidden i64 @nz.os_adopt(i32 %fd, i64 %kind, ptr %obj) noinline {
 entry:
   %w = sext i32 %fd to i64
   call void @nz.os_acquire()
@@ -370,7 +370,7 @@ ok:
   ret i64 %h
 }
 
-define hidden i64 @nz.os_stdin() {
+define hidden i64 @nz.os_stdin() noinline {
 entry:
   call void @nz.os_acquire()
   %had = load i64, ptr @nz.os_stdin_h
@@ -392,7 +392,7 @@ done:
 }
 
 ; Standard output (`which` 1) or errors (2), R1d: one handle each, made the first time.
-define hidden i64 @nz.os_std_stream(i64 %which) {
+define hidden i64 @nz.os_std_stream(i64 %which) noinline {
 entry:
   %errors = icmp eq i64 %which, 2
   %slot = select i1 %errors, ptr @nz.os_stderr_h, ptr @nz.os_stdout_h
@@ -501,7 +501,7 @@ line:
 ; out, shared by `os_read` and `os_read_line`, so a line read never loses what follows its line.
 ; Made on the first line read; its lock is held across the system call, so standard input has
 ; one reader at a time.
-define hidden void @nz.os_in_acquire() {
+define hidden void @nz.os_in_acquire() noinline {
 entry:
   br label %spin
 spin:
@@ -760,7 +760,7 @@ sync:
   ret i64 %out
 }
 
-define hidden i64 @nz.os_dir_next(i64 %h, ptr %buf, i64 %n) {
+define hidden i64 @nz.os_dir_next(i64 %h, ptr %buf, i64 %n) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -1272,7 +1272,7 @@ entry:
   ret i64 -22
 }
 
-define hidden void @nz.net_wake(ptr %w) {
+define hidden void @nz.net_wake(ptr %w) noinline {
 entry:
   ret void
 }

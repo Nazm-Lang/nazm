@@ -83,6 +83,30 @@ pub enum Probes {
     Platform,
 }
 
+/// Where a target's generated functions go (performance leadership 6.3): their own section on a
+/// target whose pool preempts, so the thread interrupting a worker can tell generated code — where
+/// a task holds no lock and touches no thread's allocator — from the runtime's and the C library's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Code {
+    /// The default text section: no preemption on this target.
+    Plain,
+    /// Mach-O: `__TEXT,__nz_text`, bounded by ld64's `section$start` and `section$end`.
+    MachO,
+    /// COFF: `.text$nzM`, between the runtime's markers in `.text$nzA` and `.text$nzZ`.
+    Coff,
+}
+
+impl Code {
+    /// The section attribute of a generated function, with its leading space, or nothing.
+    const fn section(self) -> &'static str {
+        match self {
+            Self::Plain => "",
+            Self::MachO => " section \"__TEXT,__nz_text,regular,pure_instructions\"",
+            Self::Coff => " section \".text$nzM\"",
+        }
+    }
+}
+
 impl Probes {
     /// What a function's definition says about its probes, with its leading space, or nothing.
     const fn attribute(self) -> &'static str {
@@ -157,7 +181,7 @@ fn name(m: &Module, s: SymId) -> String {
 
 /// The text of one module.
 #[must_use]
-pub fn module(m: &Module, failures: Failures, probes: Probes) -> String {
+pub fn module(m: &Module, failures: Failures, probes: Probes, code: Code) -> String {
     let mut out = String::new();
     crate::runtime::preamble(&mut out, &m.source);
     // Every width's overflow-checked operations, bit counts and rotations, and the float
@@ -213,11 +237,6 @@ pub fn module(m: &Module, failures: Failures, probes: Probes) -> String {
             "@nz.stack_limit = external hidden thread_local global i64"
         );
         let _ = writeln!(out, "declare ptr @llvm.frameaddress.p0(i32)");
-    }
-    // The preemption poll, inlined (6.3): the flag is read here and the runtime called only when
-    // the pool has asked some task to yield.
-    if m.symbols.iter().any(|s| s.name == "nz.preempt") {
-        let _ = writeln!(out, "@nz.preempt_req = external hidden global i64");
     }
     for (i, s) in m.symbols.iter().enumerate() {
         if s.linkage != Linkage::Import {
@@ -311,7 +330,7 @@ pub fn module(m: &Module, failures: Failures, probes: Probes) -> String {
     }
     out.push('\n');
     for f in &m.functions {
-        function(&mut out, m, f, failures, probes);
+        function(&mut out, m, f, failures, probes, code);
     }
     out
 }
@@ -439,7 +458,14 @@ fn nazm_call(m: &Module, i: &Inst) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
-fn function(out: &mut String, m: &Module, f: &Function, failures: Failures, probes: Probes) {
+fn function(
+    out: &mut String,
+    m: &Module,
+    f: &Function,
+    failures: Failures,
+    probes: Probes,
+    code: Code,
+) {
     let Some(sym) = m.symbol(f.sym) else { return };
     let Some(sig) = m.sig(f.sym) else { return };
     let params = sig
@@ -454,10 +480,11 @@ fn function(out: &mut String, m: &Module, f: &Function, failures: Failures, prob
     // guard instead of landing in another task's stack or the heap. On Windows the platform's
     // probe does it, unasked ([`Probes::Platform`]).
     // A function `@section` places (Gate 3) names its section; a linker script keeps it.
-    let section = f
-        .section
-        .as_ref()
-        .map_or_else(String::new, |s| format!(" section \"{s}\""));
+    // Otherwise the code generator's own section where the pool preempts (6.3).
+    let section = f.section.as_ref().map_or_else(
+        || code.section().to_owned(),
+        |s| format!(" section \"{s}\""),
+    );
     // Where failures unwind, a function with a landing pad names the C personality (4.2): one
     // that calls a Nazm function other than straight into a bare failure exit.
     let unwind = failures == Failures::Unwind;
@@ -891,31 +918,6 @@ fn inst(out: &mut String, p: &mut Pr<'_>, own: &Sig, vars: &[Class], i: &Inst) {
         // sets on the thread's first check. Only then — the limit 0 — or past it is the runtime
         // called, and its answer is the check's; otherwise the answer is 0. One load and two
         // comparisons where every recursive call was a call into another module.
-        // The preemption poll at a loop's back edge (6.3), inlined: one load of a flag no thread
-        // writes until the pool asks a task to yield, and a branch weighted past the call.
-        Inst::Call {
-            dst: None,
-            callee,
-            args,
-            ..
-        } if args.is_empty() && m.symbol(*callee).is_some_and(|s| s.name == "nz.preempt") => {
-            let (flag, asked) = (p.temp(), p.temp());
-            let n = p.temp();
-            let n = n.trim_start_matches('%');
-            let _ = writeln!(
-                out,
-                "  {flag} = load atomic i64, ptr @nz.preempt_req monotonic, align 8"
-            );
-            let _ = writeln!(out, "  {asked} = icmp ne i64 {flag}, 0");
-            let _ = writeln!(
-                out,
-                "  br i1 {asked}, label %pp.slow.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"
-            );
-            let _ = writeln!(out, "pp.slow.{n}:");
-            let _ = writeln!(out, "  call void @nz.preempt()");
-            let _ = writeln!(out, "  br label %pp.on.{n}");
-            let _ = writeln!(out, "pp.on.{n}:");
-        }
         Inst::Call {
             dst: Some(d),
             callee,
@@ -1244,7 +1246,7 @@ mod tests {
             crate::op::validate::module(&m)
         );
         // The bit (WebAssembly, WASI, the boards, Windows): the pair, and the exit that sets it.
-        let bit = module(&m, Failures::Bit, Probes::Inline);
+        let bit = module(&m, Failures::Bit, Probes::Inline, super::Code::Plain);
         assert!(
             bit.contains("define internal {i64, i1} @f(i64 %p0)"),
             "{bit}"
@@ -1261,7 +1263,7 @@ mod tests {
         // Unwinding (the hosted targets, 4.2): the result alone; a call into a bare failure exit
         // is a plain call, one whose edge does something an invoke with a landing pad, the plain
         // entry's an invoke whose pad continues with a zero, and a failure exit raises.
-        let unwind = module(&m, Failures::Unwind, Probes::Inline);
+        let unwind = module(&m, Failures::Unwind, Probes::Inline, super::Code::Plain);
         assert!(unwind.contains("declare i64 @g(i64)"), "{unwind}");
         assert!(
             unwind.contains(
@@ -1304,8 +1306,8 @@ mod tests {
     #[test]
     fn a_definition_probes_inline_or_leaves_it_to_the_platform() {
         let m = calls();
-        let inline = module(&m, Failures::Bit, Probes::Inline);
-        let platform = module(&m, Failures::Bit, Probes::Platform);
+        let inline = module(&m, Failures::Bit, Probes::Inline, super::Code::Plain);
+        let platform = module(&m, Failures::Bit, Probes::Platform, super::Code::Plain);
         for (text, attribute) in [(&inline, true), (&platform, false)] {
             let defines: Vec<&str> = text.lines().filter(|l| l.starts_with("define ")).collect();
             assert!(!defines.is_empty(), "{text}");

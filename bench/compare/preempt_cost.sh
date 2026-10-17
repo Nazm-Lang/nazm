@@ -1,8 +1,8 @@
 #!/bin/bash
-# Performance leadership 6.3: what preemption's poll at every loop back edge costs on hot loops.
-# Builds bench/compare/nazm/{fib,words,primes} and a tight arithmetic loop with no call (written
+# Performance leadership 6.3: what preemption costs on hot loops (the poll of ABI 43, the interrupt
+# of ABI 44). Builds bench/compare/nazm/{fib,words,primes} and a tight arithmetic loop with no call (written
 # here) with BASE, a `nazm` from before preemption (runtime ABI 42 or earlier), and NEW, one with it
-# (43 or later), then times each pair with hyperfine:
+# (43 or later; 44 or later for the interrupt), then times each pair with hyperfine:
 #
 #     bash bench/compare/preempt_cost.sh BASE NEW OUT [--wait | --force]
 #

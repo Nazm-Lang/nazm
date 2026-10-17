@@ -320,7 +320,6 @@ pub fn emit_runtime(needs: Needs) -> String {
     // refuses for using them, and defined here so one inventory describes every runtime.
     out.push_str(crate::board::MMIO_RUNTIME);
     out.push_str(crate::board::ATOMIC_RUNTIME);
-    out.push_str(PREEMPT_RUNTIME);
 
     if needs.sequences {
         out.push_str(SEQUENCE_RUNTIME);
@@ -422,9 +421,10 @@ pub fn emit_runtime(needs: Needs) -> String {
         }
     }
     out.push('\n');
-    // A program of one thread: its strings', closures' and channels' counts are plain.
+    // A program of one thread: its strings', closures' and channels' counts are plain, and nothing
+    // preempts it, so what is `noinline` for preemption's sake (6.3) may be inlined again.
     if needs.single {
-        out = plain_reference_counts(&out);
+        out = plain_reference_counts(&out).replace(" noinline {", " {");
     }
     out
 }
@@ -658,26 +658,6 @@ overflow:
   ret i64 0
 done:
   ret i64 %ts
-}
-";
-
-/// Preemption (performance leadership 6.3), in every hosted runtime: a loop's back edge reads the
-/// flag and only when it is set calls `nz.preempt`, which calls the hook the pool sets when it
-/// starts more than one worker. Nothing else writes either.
-const PREEMPT_RUNTIME: &str = r"
-@nz.preempt_req = hidden global i64 0
-@nz.preempt_hook = hidden global ptr null
-
-define hidden void @nz.preempt() {
-entry:
-  %h = load atomic ptr, ptr @nz.preempt_hook acquire, align 8
-  %none = icmp eq ptr %h, null
-  br i1 %none, label %out, label %ask
-ask:
-  call void %h()
-  br label %out
-out:
-  ret void
 }
 ";
 
@@ -1641,7 +1621,7 @@ const SELECT_RUNTIME: &str = r"
 @nz.sel_waiters = hidden global i64 0
 @nz.sel_sync = hidden global ptr null
 
-define hidden ptr @nz.sel_sync_get() {
+define hidden ptr @nz.sel_sync_get() noinline {
 entry:
   %s = load atomic ptr, ptr @nz.sel_sync acquire, align 8
   %unmade = icmp eq ptr %s, null
@@ -1672,7 +1652,7 @@ theirs:
 }
 
 ; Called after a typed channel changed in a way a selector waits for: a value queued, or a close.
-define hidden void @nz.sel_signal() {
+define hidden void @nz.sel_signal() noinline {
 entry:
   %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst
   %who = load atomic i64, ptr @nz.sel_waiters seq_cst, align 8
@@ -1702,7 +1682,7 @@ entry:
 
 ; One look at one channel, without waiting: 1 and the oldest slot copied out to `%dst` (its
 ; reference handed over), 2 when closed and drained, 0 when neither.
-define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) {
+define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -1745,7 +1725,7 @@ take:
 ; `i` a value from channel `i` in `%dst`, `-3 - i` channel `i` closed and drained, `-1` no
 ; channels, `-2` timed out, and the most negative `i64` out of memory — which no `-3 - i`
 ; can be. The lowest ready index wins.
-define hidden i64 @nz.chanv_select(ptr %h, ptr %dst, i64 %ms, i64 %timed) {
+define hidden i64 @nz.chanv_select(ptr %h, ptr %dst, i64 %ms, i64 %timed) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %now = alloca [2 x i64], align 8
@@ -1901,7 +1881,7 @@ entry:
 /// A wait of `ms` milliseconds (Gate 2, §11), through the hooked timed wait, so on the task pool it
 /// parks the task and its worker runs others. Its own text: it needs the task part's waits.
 const SLEEP_RUNTIME: &str = r"
-define hidden i64 @nz.time_sleep_ms(i64 %ms) {
+define hidden i64 @nz.time_sleep_ms(i64 %ms) noinline {
 entry:
   %some = icmp sgt i64 %ms, 0
   br i1 %some, label %start, label %done
@@ -2285,11 +2265,13 @@ const POOL_RUNTIME: &str = r#"
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
 declare i64 @nz.os_cpus()
+declare void @nz.os_preempt_init(ptr)
+declare void @nz.os_preempt(ptr)
 
 ; The scheduler this process runs (N83, §7.84; the default N106's, §7.107): 1 one OS thread per
 ; task, 2 the pool, 4 a pool that could not start or a NAZM_SCHEDULER that names neither — no
 ; task starts. Decided once, at the first question; 3 while deciding.
-define hidden i64 @nz.pool_mode_get() {
+define hidden i64 @nz.pool_mode_get() noinline {
 entry:
   br label %top
 top:
@@ -2383,7 +2365,7 @@ done:
 }
 
 ; The lock of the bucket a condition variable hashes to (6.4).
-define hidden ptr @nz.pool_lock_of(ptr %cv) {
+define hidden ptr @nz.pool_lock_of(ptr %cv) noinline {
 entry:
   %a = ptrtoint ptr %cv to i64
   %h = lshr i64 %a, 4
@@ -2411,7 +2393,7 @@ init:
 
 ; Start the pool: its waiter table, its join lock, and its workers. False if any of it could not be
 ; made; the workers already started then wait for tasks that never come.
-define hidden i1 @nz.pool_start() {
+define hidden i1 @nz.pool_start() noinline {
 entry:
   %attr = alloca [128 x i8], align 16
   %pg = call i64 @nz_os_page_size()
@@ -2511,12 +2493,12 @@ started:
   %jnext = add i64 %j, 1
   br label %spawnw
 ok:
-  ; Preemption (6.3): with more than one worker, a monitor asks a task that has held its worker
-  ; for a time slice to yield it when others wait. One worker keeps its order: no monitor.
+  ; Preemption (6.3): with more than one worker, a monitor interrupts a task that has held its
+  ; worker for a time slice while others wait. One worker keeps its order: no monitor.
   %several = icmp sgt i64 %count, 1
   br i1 %several, label %monitor, label %done
 monitor:
-  store atomic ptr @nz.pool_preempt, ptr @nz.preempt_hook release, align 8
+  call void @nz.os_preempt_init(ptr @nz.pool_preempt)
   %mai = call i32 @pthread_attr_init(ptr %attr)
   %mas = call i32 @pthread_attr_setstacksize(ptr %attr, i64 1048576)
   %mrc = call i32 @pthread_create(ptr @nz.pool_mon, ptr %attr, ptr @nz.pool_monitor, ptr null)
@@ -2527,7 +2509,7 @@ done:
 }
 
 ; The monitor (6.3): every 10 ms, look at the workers.
-define hidden ptr @nz.pool_monitor(ptr %arg) {
+define hidden ptr @nz.pool_monitor(ptr %arg) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %nap = alloca [2 x i64], align 8
@@ -2555,16 +2537,16 @@ tick:
 }
 
 ; A worker that has run one task since the last look (its switch count unmoved, a task in) while
-; others wait in its queues is asked to yield: its flag, then the process's. The process's flag is
-; set while any worker's is, and cleared when none is.
-define hidden void @nz.pool_watch() {
+; others wait in its queues is asked to yield, and its thread interrupted (`nz.os_preempt`: a
+; signal, or on Windows a suspend and a redirected return), which yields only where the thread
+; is in generated code.
+define hidden void @nz.pool_watch() noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %arr = load ptr, ptr @nz.pool_workers
   br label %loop
 loop:
   %i = phi i64 [ 0, %entry ], [ %inext, %keep ]
-  %any = phi i1 [ false, %entry ], [ %any2, %keep ]
   %more = icmp slt i64 %i, %count
   br i1 %more, label %body, label %done
 body:
@@ -2593,70 +2575,40 @@ check:
 ask:
   %askp = getelementptr i8, ptr %w, i64 416
   store atomic i64 1, ptr %askp monotonic, align 8
+  %thp = getelementptr i8, ptr %w, i64 296
+  call void @nz.os_preempt(ptr %thp)
   br label %keep
 keep:
-  %flagp = getelementptr i8, ptr %w, i64 416
-  %fl = load atomic i64, ptr %flagp monotonic, align 8
-  %set = icmp ne i64 %fl, 0
-  %any2 = or i1 %any, %set
   %inext = add i64 %i, 1
   br label %loop
 done:
-  %req = zext i1 %any to i64
-  store atomic i64 %req, ptr @nz.preempt_req monotonic, align 8
   ret void
 }
 
-; The pool's preemption hook, on the thread whose loop found the flag (6.3): a task its worker was
-; asked to give up yields it; and the process's flag is cleared when no worker's is set.
-define hidden void @nz.pool_preempt() {
+; The interrupt's yield (6.3), on a worker's thread interrupted in generated code: a task whose
+; worker was asked to give it up yields it, as a select that does not wait does. A request that
+; finds another task in (the asked one parked or ended first) was cleared when that one came in.
+define hidden void @nz.pool_preempt() noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %none = icmp eq ptr %t, null
-  br i1 %none, label %calm, label %mine
+  br i1 %none, label %out, label %failing
+failing:
+  ; Not while a failure unwinds: the exception in flight is this thread's, and another task's
+  ; failure would take it.
+  %f = load i1, ptr @nz.failed
+  br i1 %f, label %out, label %mine
 mine:
   %wp = getelementptr i8, ptr %t, i64 40
   %w = load ptr, ptr %wp
   %flagp = getelementptr i8, ptr %w, i64 416
   %old = atomicrmw xchg ptr %flagp, i64 0 monotonic
   %asked = icmp ne i64 %old, 0
-  call void @nz.pool_calm()
   br i1 %asked, label %yield, label %out
 yield:
   call void @nz.task_yield()
   br label %out
-calm:
-  call void @nz.pool_calm()
-  br label %out
 out:
-  ret void
-}
-
-; Clear the process's preemption flag unless some worker's is set (6.3). A request that races
-; this is set again by the monitor's next look.
-define hidden void @nz.pool_calm() {
-entry:
-  %count = load i64, ptr @nz.pool_count
-  %arr = load ptr, ptr @nz.pool_workers
-  br label %loop
-loop:
-  %i = phi i64 [ 0, %entry ], [ %inext, %next ]
-  %more = icmp slt i64 %i, %count
-  br i1 %more, label %body, label %clear
-body:
-  %wp = getelementptr ptr, ptr %arr, i64 %i
-  %w = load ptr, ptr %wp
-  %flagp = getelementptr i8, ptr %w, i64 416
-  %fl = load atomic i64, ptr %flagp monotonic, align 8
-  %set = icmp ne i64 %fl, 0
-  %inext = add i64 %i, 1
-  br i1 %set, label %stay, label %next
-next:
-  br label %loop
-stay:
-  ret void
-clear:
-  store atomic i64 0, ptr @nz.preempt_req monotonic, align 8
   ret void
 }
 
@@ -2768,7 +2720,7 @@ out:
 ; With nothing of its own to run, take half (at most 64) of the first other worker's unstarted tasks
 ; that has any, looking from the next worker on. Entered and left with this worker's lock held, but
 ; never holding two workers' locks at once. True when tasks were taken.
-define hidden i1 @nz.pool_steal(ptr %w) {
+define hidden i1 @nz.pool_steal(ptr %w) noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %solo = icmp sle i64 %count, 1
@@ -2867,7 +2819,7 @@ joined:
 ; Before sleeping, look for work for up to 50 microseconds without the lock (6.3): a task queued for
 ; this worker, or unstarted tasks on another. Entered and left with the lock held; true when there
 ; may be something to run. Not with one worker, whose program has no one else to wait for.
-define hidden i1 @nz.pool_spin(ptr %w) {
+define hidden i1 @nz.pool_spin(ptr %w) noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %solo = icmp sle i64 %count, 1
@@ -2935,7 +2887,7 @@ entry:
 ; Every parked task on this worker whose deadline has passed is queued again; entries for tasks no
 ; longer parked with a deadline leave the list. The worker's lock is held. Writes the soonest
 ; remaining deadline into `%ts` and says whether there is one.
-define hidden i1 @nz.pool_timers(ptr %w, ptr %ts) {
+define hidden i1 @nz.pool_timers(ptr %w, ptr %ts) noinline {
 entry:
   %now = call i64 @nz.pool_now()
   %headp = getelementptr i8, ptr %w, i64 280
@@ -2995,7 +2947,7 @@ out:
 }
 
 ; Into a task: it becomes this thread's current task, with its own failure state and stack limit.
-define hidden void @nz.task_enter(ptr %t) {
+define hidden void @nz.task_enter(ptr %t) noinline {
 entry:
   store ptr %t, ptr @nz.cur_task
   %fp = getelementptr i8, ptr %t, i64 80
@@ -3013,7 +2965,7 @@ entry:
 }
 
 ; Out of a task: its failure state and stack limit are saved into it, and the worker's are clean.
-define hidden void @nz.task_leave(ptr %t) {
+define hidden void @nz.task_leave(ptr %t) noinline {
 entry:
   %fb = load i1, ptr @nz.failed
   %f = zext i1 %fb to i64
@@ -3035,7 +2987,7 @@ entry:
 
 ; A worker: run its tasks first in, first out, each until it parks, yields or ends; with none, steal
 ; unstarted ones, spin a little, then sleep (6.3).
-define hidden ptr @nz.worker_main(ptr %w) {
+define hidden ptr @nz.worker_main(ptr %w) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %nap = alloca [2 x i64], align 8
@@ -3174,7 +3126,7 @@ told:
 ; Start a task on the pool: a record, a worker by round robin, and its place in the argument block's
 ; head, where a thread's handle goes otherwise. No stack: the task will run on its worker's (6.2).
 ; 0, or 1 when no record could be had.
-define hidden i32 @nz.task_start(ptr %fn, ptr %blk) {
+define hidden i32 @nz.task_start(ptr %fn, ptr %blk) noinline {
 entry:
   %t = call ptr @malloc(i64 192)
   %tnull = icmp eq ptr %t, null
@@ -3223,7 +3175,7 @@ placed:
 ; task's saved stack pointer to the top, are copied into a buffer it owns, and this task's copy is
 ; put back at the same addresses — or, on its first run, its first frame is laid out at the top and
 ; its stack limit set from the run stack. False when the frames in place could not be saved.
-define hidden i1 @nz.task_place(ptr %w, ptr %t) {
+define hidden i1 @nz.task_place(ptr %w, ptr %t) noinline {
 entry:
   %ownp = getelementptr i8, ptr %w, i64 336
   %own = load ptr, ptr %ownp
@@ -3293,7 +3245,7 @@ done:
 }
 
 ; What the entry stub calls, on the task's own stack: the task's start routine, then the end.
-define hidden void @nz_task_main(ptr %t) {
+define hidden void @nz_task_main(ptr %t) noinline {
 entry:
   %fp = getelementptr i8, ptr %t, i64 56
   %fn = load ptr, ptr %fp
@@ -3325,7 +3277,7 @@ entry:
 }
 
 ; Make a parked task runnable, or note that it was woken while still running or parking.
-define hidden void @nz.task_wake(ptr %t) {
+define hidden void @nz.task_wake(ptr %t) noinline {
 entry:
   %wp = getelementptr i8, ptr %t, i64 40
   %w = load ptr, ptr %wp
@@ -3354,7 +3306,7 @@ out:
   ret void
 }
 
-define hidden ptr @nz.pool_bucket(ptr %cv) {
+define hidden ptr @nz.pool_bucket(ptr %cv) noinline {
 entry:
   %a = ptrtoint ptr %cv to i64
   %h = lshr i64 %a, 4
@@ -3365,7 +3317,7 @@ entry:
 }
 
 ; Take `%t` off the waiters of whatever it waits on, if it is still on them.
-define hidden void @nz.pool_unwait(ptr %t) {
+define hidden void @nz.pool_unwait(ptr %t) noinline {
 entry:
   ; On no list: nothing to lock (6.4). A waker clears this under the bucket's lock, after
   ; unlinking the task, so null means off the list; otherwise the bucket is the one it names.
@@ -3412,7 +3364,7 @@ out:
 ; Wait on a condition variable, its mutex held. On a pool task the task parks and its worker runs
 ; others; anywhere else the thread waits. Either way the mutex is held again on return, and the
 ; caller looks at its condition again, as with any condition variable.
-define hidden i32 @nz.cwait(ptr %cv, ptr %m) {
+define hidden i32 @nz.cwait(ptr %cv, ptr %m) noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %isthread = icmp eq ptr %t, null
@@ -3428,7 +3380,7 @@ task:
 ; As `nz.cwait`, giving up at the **monotonic** time `%ts` (Q1-M-12): a task parks until the pool's
 ; monotonic clock passes it; a thread naps on the wall clock `pthread_cond_timedwait` measures, at
 ; most 100 ms at a time, and its caller looks again — every caller loops on its own deadline check.
-define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) {
+define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) noinline {
 entry:
   %nap = alloca [2 x i64], align 8
   %t = load ptr, ptr @nz.cur_task
@@ -3497,7 +3449,7 @@ entry:
 ; and switch to the worker; on resuming, take `%m` again and leave the waiters if still there.
 ; The order makes a wake-up between the caller's last look and the switch impossible to lose: a
 ; waker needs `%m` to change anything, and finds the task registered and parking.
-define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) {
+define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) noinline {
 entry:
   %wl = call ptr @nz.pool_lock_of(ptr %cv)
   %l = call i32 @pthread_mutex_lock(ptr %wl)
@@ -3526,7 +3478,7 @@ entry:
 
 ; Wake every waiter on a condition variable: threads, by the variable, and pool tasks registered
 ; on it.
-define hidden void @nz.cwake(ptr %cv) {
+define hidden void @nz.cwake(ptr %cv) noinline {
 entry:
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
@@ -3574,7 +3526,7 @@ out:
 }
 
 ; A pool task that looked and did not wait lets the rest of its worker's tasks run first.
-define hidden void @nz.task_yield() {
+define hidden void @nz.task_yield() noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %none = icmp eq ptr %t, null
@@ -3594,7 +3546,7 @@ out:
 
 ; With the schedule report asked for, the pool's line: its workers, the most tasks alive at once,
 ; and each task's stack — only where the pool ran.
-define hidden void @nz.pool_report() {
+define hidden void @nz.pool_report() noinline {
 entry:
   %buf = alloca [128 x i8], align 8
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
@@ -3613,7 +3565,7 @@ out:
 }
 
 ; Wait for one task to end: its thread joined, or its pool record marked done and freed.
-define hidden i32 @nz.join_one(ptr %tid) {
+define hidden i32 @nz.join_one(ptr %tid) noinline {
 entry:
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
   %pool = icmp eq i64 %mode, 2
@@ -3849,7 +3801,7 @@ done:
 
 ; Copies one slot in from `%src` — the sender's own reference, which the channel now holds —
 ; or refuses, copying nothing, when closed.
-define hidden i1 @nz.chanv_send(ptr %c, ptr %src) {
+define hidden i1 @nz.chanv_send(ptr %c, ptr %src) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -3896,7 +3848,7 @@ store:
 
 ; Copies the oldest slot out to `%dst` — the reference moves to the receiver — or reports the
 ; channel closed and drained.
-define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) {
+define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -4057,7 +4009,7 @@ done:
   ret void
 }
 
-define hidden i1 @nz.chan_send(ptr %c, i64 %v) {
+define hidden i1 @nz.chan_send(ptr %c, i64 %v) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -4100,7 +4052,7 @@ store:
   ret i1 true
 }
 
-define hidden i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {
+define hidden i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -4161,7 +4113,7 @@ push:
   ret i1 true
 }
 
-define hidden void @nz.chan_close(ptr %c) {
+define hidden void @nz.chan_close(ptr %c) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp

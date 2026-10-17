@@ -57,7 +57,12 @@ pub const EXIT_STATUS: &str = "this exit status is outside 0 to 255";
 pub fn emit_unit(native: &Native, unit: &Unit, names: &SourceNames<'_>) -> (String, Needs) {
     match op::lower_unit(native, unit, names, abi::DataLayout::LP64, false, false) {
         Ok(m) => (
-            op::llvm::module(&m, op::llvm::Failures::Unwind, op::llvm::Probes::Inline),
+            op::llvm::module(
+                &m,
+                op::llvm::Failures::Unwind,
+                op::llvm::Probes::Inline,
+                op::llvm::Code::Plain,
+            ),
             m.needs,
         ),
         Err(_) => (String::new(), Needs::default()),

@@ -75,7 +75,7 @@ entry:
 }
 
 ; Start the reactor once: the first caller makes the poller and the thread, the rest wait for it.
-define hidden void @nz.net_start() {
+define hidden void @nz.net_start() noinline {
 entry:
   %st = load atomic i64, ptr @nz.net_state acquire, align 8
   %ready = icmp eq i64 %st, 2
@@ -124,7 +124,7 @@ woke:
 }
 
 ; An event for handle `h`: wake its waiters, if its descriptor is still that generation's.
-define hidden void @nz.net_event(i64 %h) {
+define hidden void @nz.net_event(i64 %h) noinline {
 entry:
   %fd = and i64 %h, 4294967295
   %gen = lshr i64 %h, 32
@@ -151,7 +151,7 @@ none:
 }
 
 ; Wake everyone waiting on record `w` (null: nobody ever has).
-define hidden void @nz.net_wake(ptr %w) {
+define hidden void @nz.net_wake(ptr %w) noinline {
 entry:
   %none = icmp eq ptr %w, null
   br i1 %none, label %done, label %wake
@@ -172,7 +172,7 @@ done:
 }
 
 ; The wait record of live handle `h`, made the first time; null for a handle that is not live.
-define hidden ptr @nz.net_waitrec(i64 %h) {
+define hidden ptr @nz.net_waitrec(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -204,7 +204,7 @@ init:
 }
 
 ; Whether `h` is no longer live — closed, or closing.
-define hidden i1 @nz.net_closing(i64 %h) {
+define hidden i1 @nz.net_closing(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -214,7 +214,7 @@ entry:
 }
 
 ; When a wait on `h` gives up, as the wall clock's nanoseconds; 0 for never.
-define hidden i64 @nz.net_deadline(i64 %h) {
+define hidden i64 @nz.net_deadline(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -240,7 +240,7 @@ none:
 
 ; Wait until `h` may be ready in direction `dir` (1 reading, 2 writing): 0 to try again, the
 ; status of a deadline that passed (-ETIMEDOUT), or -65536 for a handle closed meanwhile.
-define hidden i64 @nz.net_wait(i64 %h, i64 %dir, i64 %deadline) {
+define hidden i64 @nz.net_wait(i64 %h, i64 %dir, i64 %deadline) noinline {
 entry:
   %ts = alloca [16 x i8], align 8
   %w = call ptr @nz.net_waitrec(i64 %h)
@@ -703,7 +703,7 @@ stop:
   ret i64 %w
 }
 
-define hidden i64 @nz.os_set_timeout(i64 %h, i64 %ms) {
+define hidden i64 @nz.os_set_timeout(i64 %h, i64 %ms) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %range
@@ -1269,7 +1269,7 @@ outputs:
 }
 
 ; The record of child `h`, pinned; null (and unpinned) for a handle that is not a child.
-define hidden ptr @nz.os_child(i64 %h) {
+define hidden ptr @nz.os_child(i64 %h) noinline {
 entry:
   %k = call i64 @nz.os_pin(i64 %h)
   %child = icmp eq i64 %k, 8

@@ -58,7 +58,7 @@ declare i64 @nz_tls_close(ptr, ptr, i64)
 declare i64 @nz_tls_info(ptr, i64, ptr, i64)
 
 ; The table, made zeroed by the first caller that needs it; null when memory is refused.
-define hidden ptr @nz.tls_table() {
+define hidden ptr @nz.tls_table() noinline {
 entry:
   %t = load atomic ptr, ptr @nz.tls_slots acquire, align 8
   %none = icmp eq ptr %t, null
@@ -152,7 +152,7 @@ no:
 
 ; Hold slot `s` for `id`: its object when the id is live and of `kind` (0: any kind), the slot
 ; then held until `nz.tls_let_go`; null, and nothing held, otherwise.
-define hidden ptr @nz.tls_hold(ptr %s, i64 %id, i64 %kind) {
+define hidden ptr @nz.tls_hold(ptr %s, i64 %id, i64 %kind) noinline {
 entry:
   %bp = getelementptr i64, ptr %s, i64 3
   br label %spin

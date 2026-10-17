@@ -70,6 +70,10 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       — 2026-10-17, measured below load 2 (`performance.md`, *Preemption's cost on hot loops*): a
       tight loop +8.9%, `words` +9.7–10.2%, `fib` and `primes` unchanged — above the 1-2% the design
       allows, so the poll's design is reopened
+      — 2026-10-17, reopened: preemption by interrupt, no instruction in any loop (ABI 44; design.md,
+      *Preemption, second design*). macOS (arm64 and x86-64 under Rosetta) run-verified; Windows
+      built and linked with MinGW, not run (host off); Linux and Android preempt nothing yet. Its
+      cost waits for the quiet window
 - [ ] 6.4 `select` over several channels, and lock-free channels
       — 2026-10-16, part: the waiter table's 64 locks and no lock for an empty bucket (ABI 42).
       Open: `select` over channels of different types (designed, design.md) and a direct hand-off

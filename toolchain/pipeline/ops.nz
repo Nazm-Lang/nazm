@@ -4678,51 +4678,6 @@ fn define_helper(lo: Lo, key: Str) -> Str {
     finish(lo, fx.fb, sym, name)
 }
 
-/// The blocks whose terminator closes a loop (performance leadership 6.3), as `loop_latches` in
-/// `crates/nazm-lir/src/op/func.rs`: an edge to a block still on the depth-first path from the
-/// entry; 1 for such a block. MIR's loops are structured, so the set does not depend on the order
-/// successors are taken in.
-fn loop_latches(f: MirFn) -> Ints {
-    let n = vec_len(f.blocks)
-    let latch = ints_new()
-    let state = ints_new()
-    for i in 0..n {
-        ints_push(latch, 0)
-        ints_push(state, 0)
-    }
-    if n == 0 { return latch }
-    // The path: each block on it, and how many of its successors have been taken.
-    let path = ints_new()
-    let taken = ints_new()
-    ints_push(path, 0)
-    ints_push(taken, 0)
-    ints_set(state, 0, 1)
-    while ints_len(path) > 0 {
-        let top = ints_len(path) - 1
-        let b = ints_get(path, top)
-        let k = ints_get(taken, top)
-        let blk = vec_get(f.blocks, b)
-        let succ = if vec_len(blk.term) > 0 { successors(vec_get(blk.term, 0)) } else { ints_new() }
-        if k < ints_len(succ) {
-            ints_set(taken, top, k + 1)
-            let x = ints_get(succ, k)
-            let st = ints_get(state, x)
-            if st == 0 {
-                ints_set(state, x, 1)
-                ints_push(path, x)
-                ints_push(taken, 0)
-            } else if st == 1 {
-                ints_set(latch, b, 1)
-            }
-        } else {
-            ints_set(state, b, 2)
-            let p1 = ints_pop(path)
-            let t1 = ints_pop(taken)
-        }
-    }
-    latch
-}
-
 fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
     let f = vec_get(lo.p.fns, fi)
     let reg = ints_new()
@@ -4795,7 +4750,6 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
     }
     for b in f.blocks { ints_push(fx.blocks, new_lblock(fx.fb)) }
     if ints_len(fx.blocks) > 0 { jump(fx, ints_get(fx.blocks, 0)) }
-    let latches = loop_latches(f)
     for i in 0..vec_len(f.blocks) {
         let blk = vec_get(f.blocks, i)
         switch_to(fx.fb, ints_get(fx.blocks, i));
@@ -4809,8 +4763,6 @@ fn lower_fn(lo: Lo, fi: Int, sym: Int) -> Str {
         }
         strs_set(fx.at, 0, if strs_len(blk.term_at) > 0 { strs_get(blk.term_at, 0) } else { "" })
         locate(fx)
-        // A loop's back edge polls for preemption (performance leadership 6.3).
-        if ints_get(latches, i) != 0 { rt(fx, "nz.preempt", ints_new()) }
         if vec_len(blk.term) > 0 { terminator(fx, vec_get(blk.term, 0)) }
     }
     if lo.debug {

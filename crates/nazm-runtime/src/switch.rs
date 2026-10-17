@@ -163,6 +163,11 @@ const X86_64: &str = r"
 /// sees the stack it is on: a fresh task's base is its top and its limit 0, which every frame of it
 /// lies within. Frame, from the saved stack pointer: `xmm6`–`xmm15` (160 bytes), MXCSR, x87 word,
 /// the stack limit, the stack base, `r15` … `rbp`, the return address — 256 bytes in all.
+///
+/// `nz_os_preempt_stub` (performance leadership 6.3) is where a preempted thread's return is
+/// redirected (`platform::WINDOWS_PREEMPT`): it saves the flags, every register a call may clobber
+/// and `xmm0`–`xmm5`, aligns the stack, calls `nz.pool_preempt` with its shadow space, restores them
+/// all and returns to the interrupted instruction.
 const X86_64_WINDOWS: &str = r"
 .text
 .p2align 4
@@ -247,6 +252,45 @@ nz_ctx_prepare:
   subq $32, %rsp
   callq nz_task_main
   ud2
+.p2align 4
+.globl nz_os_preempt_stub
+nz_os_preempt_stub:
+  pushfq
+  pushq %rax
+  pushq %rcx
+  pushq %rdx
+  pushq %r8
+  pushq %r9
+  pushq %r10
+  pushq %r11
+  pushq %rbx
+  movq %rsp, %rbx
+  andq $-16, %rsp
+  subq $128, %rsp
+  movdqu %xmm0, 32(%rsp)
+  movdqu %xmm1, 48(%rsp)
+  movdqu %xmm2, 64(%rsp)
+  movdqu %xmm3, 80(%rsp)
+  movdqu %xmm4, 96(%rsp)
+  movdqu %xmm5, 112(%rsp)
+  callq nz.pool_preempt
+  movdqu 32(%rsp), %xmm0
+  movdqu 48(%rsp), %xmm1
+  movdqu 64(%rsp), %xmm2
+  movdqu 80(%rsp), %xmm3
+  movdqu 96(%rsp), %xmm4
+  movdqu 112(%rsp), %xmm5
+  movq %rbx, %rsp
+  popq %rbx
+  popq %r11
+  popq %r10
+  popq %r9
+  popq %r8
+  popq %rdx
+  popq %rcx
+  popq %rax
+  popfq
+  retq
 ";
 
 /// The switch for `target`, as an LLVM unit holding only module-level assembly.

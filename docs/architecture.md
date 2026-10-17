@@ -7609,6 +7609,24 @@ yield at a back edge is a call like any other, inside the frame's own stack, and
 taken during an unwind's search. A loop in a function no task runs pays the load and the branch;
 `main` and threads under the thread model are never asked. Runtime ABI 42 → 43.
 
+**Amended again (performance leadership 6.3, 2026-10-17): preemption by interrupt.** The poll cost
+8-10% on hot loops (`docs/performance.md`), so no loop carries one now: the code generator adds no
+instruction to a loop. The monitor, finding a worker asked, interrupts its thread
+(`nz.os_preempt`): on macOS a signal, `SIGURG`, whose handler reads the interrupted address from
+the signal's context; on Windows the thread suspended, its context read, and its return redirected
+through a stub that saves every register a call may clobber. The task yields — as at a back edge
+before — only where that address is in generated code, which the LLVM backend places in a section
+of its own on these targets (`__TEXT,__nz_text`; `.text$nzM` between markers), and only while no
+failure unwinds (the exception in flight is the thread's). Generated code holds no lock and
+touches no thread's allocator lists, and every runtime function that does — a pthread mutex, a
+spin lock, the small-block heap, the pool — is `noinline` in a program that has tasks, so
+whole-program optimisation never puts one inside generated code; a program of one thread is never
+preempted and inlines them as before. On macOS the yield runs inside the signal's handler, on the
+task's own stack, so the signal frame is part of the frames 6.2 copies out and back, and the
+handler returns when the task resumes. Linux and Android preempt nothing yet (after 1.0), nor do
+Cranelift's and Nazm's own code generator's builds, whose code is not in the section: a task there
+that computes without waiting holds its worker, as before 6.3. Runtime ABI 43 → 44.
+
 **Amended (performance leadership 6.4, 2026-10-16): the waiter table's locks.** The table of parked
 waiters keeps its 256 buckets, now under 64 locks (bucket `b` under lock `b mod 64`) in place of one
 for the whole process, so waits and wakes on different channels no longer contend. A wake whose

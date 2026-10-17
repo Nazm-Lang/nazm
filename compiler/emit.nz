@@ -6038,7 +6038,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  ret void");
     strs_push(r, "}");
     strs_push(r, "");
-    strs_push(r, "define internal i1 @nz.chan_send(ptr %c, i64 %v) {");
+    strs_push(r, "define internal i1 @nz.chan_send(ptr %c, i64 %v) noinline {");
     strs_push(r, "entry:");
     strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
     strs_push(r, "  %m = load ptr, ptr %mp");
@@ -6081,7 +6081,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  ret i1 true");
     strs_push(r, "}");
     strs_push(r, "");
-    strs_push(r, "define internal i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {");
+    strs_push(r, "define internal i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) noinline {");
     strs_push(r, "entry:");
     strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
     strs_push(r, "  %m = load ptr, ptr %mp");
@@ -6142,7 +6142,7 @@ fn channel_runtime() -> Str {
     strs_push(r, "  ret i1 true");
     strs_push(r, "}");
     strs_push(r, "");
-    strs_push(r, "define internal void @nz.chan_close(ptr %c) {");
+    strs_push(r, "define internal void @nz.chan_close(ptr %c) noinline {");
     strs_push(r, "entry:");
     strs_push(r, "  %mp = getelementptr i8, ptr %c, i64 40");
     strs_push(r, "  %m = load ptr, ptr %mp");
