@@ -72,6 +72,8 @@ struct Entry {
     /// What it offers, in the persisted form. `None` when it or one of its imports has no
     /// durable identity, which is also what makes it decline.
     published: Option<PersistentUnitInterface>,
+    /// Its canonical bytes, which its fingerprint is of.
+    published_json: Option<String>,
     interface: Option<InterfaceHash>,
     dependencies: Option<Vec<Dependency>>,
     must_check: bool,
@@ -91,6 +93,9 @@ pub(crate) struct Cache<'a> {
     tally: Tally,
     /// The compilation's graph, for writing and reading facts by durable name.
     graph: ModuleGraph,
+    /// Whether a reused module's resolved unit is read ([`Cache::units`]); a check alone
+    /// never looks at one, so it leaves it unread.
+    units: bool,
 }
 
 impl<'a> Cache<'a> {
@@ -102,6 +107,16 @@ impl<'a> Cache<'a> {
             entries: Vec::new(),
             tally: Tally::default(),
             graph: ModuleGraph::default(),
+            units: false,
+        }
+    }
+
+    /// As [`Cache::new`], for a caller of [`Cache::units`]: a reused module's resolved unit
+    /// is read from its entry.
+    pub(crate) fn with_units(map: &'a SourceMap, store: Store) -> Self {
+        Self {
+            units: true,
+            ..Self::new(map, store)
         }
     }
 
@@ -145,11 +160,17 @@ impl nazm_core::Reuse for Cache<'_> {
                 let published = interfaces
                     .get(m.index())
                     .and_then(|i| PersistentUnitInterface::published(i, graph, types).ok());
-                let interface = published.as_ref().and_then(|p| InterfaceHash::of(p).ok());
+                // Its bytes, kept: the fingerprint is of them (`InterfaceHash::of`), and a reused
+                // entry's interface is compared with them as written.
+                let published_json = published.as_ref().and_then(|p| p.to_json().ok());
+                let interface = published_json
+                    .as_ref()
+                    .map(|j| InterfaceHash::of_bytes(j.as_bytes()));
                 Entry {
                     key: graph.key(m).cloned(),
                     source,
                     published,
+                    published_json,
                     interface,
                     // Every module is checked unless something below decides otherwise.
                     // The default is the safe one on purpose: a bug in what follows costs
@@ -189,7 +210,16 @@ impl nazm_core::Reuse for Cache<'_> {
             };
 
             let check_key = CheckKey::of(self.checker, &key, source, &deps);
-            let found = self.store.get(&check_key);
+            // Only an entry offering what stage 1 has just published can be reused (below),
+            // so a checker tells the store what that is, and it reads no other: an entry
+            // offering anything else is refused, as the comparison below would refuse it. A
+            // caller of `units` reads entries whole, resolved units and all.
+            let found = match (&e.published, &e.published_json, e.interface) {
+                (Some(offered), Some(json), Some(fingerprint)) if !self.units => self
+                    .store
+                    .get_expecting(&check_key, offered, json, fingerprint),
+                _ => self.store.get(&check_key),
+            };
             let mut provenance = None;
             let mut resolved = None;
             let reuse = match found {
@@ -201,7 +231,7 @@ impl nazm_core::Reuse for Cache<'_> {
                     if e.published.as_ref() == Some(&r.interface) {
                         self.tally.reused += 1;
                         provenance = Some(r.provenance);
-                        resolved = Some(r.resolved);
+                        resolved = r.resolved;
                         true
                     } else {
                         self.tally.rejected += 1;

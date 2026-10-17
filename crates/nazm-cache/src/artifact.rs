@@ -170,7 +170,8 @@ pub struct Reusable {
     pub interface: PersistentUnitInterface,
     pub interface_hash: InterfaceHash,
     pub provenance: PersistentFacts,
-    pub resolved: ResolvedUnit,
+    /// `None` when the reader did not ask for it ([`CheckArtifact::read_expecting`]).
+    pub resolved: Option<ResolvedUnit>,
 }
 
 impl CheckArtifact {
@@ -243,12 +244,11 @@ impl CheckArtifact {
 
     /// The digest [`Self::facts_digest`] records: the two payloads' canonical JSON.
     fn facts_of(&self) -> Result<String, serde_json::Error> {
-        let mut h = blake3::Hasher::new();
-        h.update(b"nazm.check-facts/1\0");
-        h.update(serde_json::to_string(&self.provenance)?.as_bytes());
-        h.update(b"\0");
-        h.update(serde_json::to_string(&self.resolved)?.as_bytes());
-        Ok(format!("blake3:{}", h.finalize().to_hex()))
+        let unit = serde_json::to_string(&self.resolved)?;
+        Ok(facts_digest(
+            serde_json::to_string(&self.provenance)?.as_bytes(),
+            unit.as_bytes(),
+        ))
     }
 
     /// Read one back and establish that it is the entry that was asked for.
@@ -257,94 +257,269 @@ impl CheckArtifact {
     ///
     /// [`Invalid`] for anything this build may not act on. Every variant is a miss.
     pub fn read(text: &str, wanted: &CheckKey) -> Result<Reusable, Invalid> {
-        // The schema on its own and first: a future version may not have the shape this
-        // build's `Deserialize` expects, and "failed to parse" would be the wrong thing to
-        // conclude about a newer file.
-        #[derive(Deserialize)]
-        struct Envelope {
-            schema: String,
-        }
-        let envelope: Envelope =
-            serde_json::from_str(text).map_err(|e| Invalid::Malformed(e.to_string()))?;
-        if envelope.schema != SCHEMA {
-            return Err(Invalid::UnknownSchema(envelope.schema));
-        }
-
-        let parsed: Self =
-            serde_json::from_str(text).map_err(|e| Invalid::Malformed(e.to_string()))?;
-        parsed.validate(wanted)
-    }
-
-    /// Everything that must be true of an entry beyond its bytes parsing.
-    fn validate(&self, wanted: &CheckKey) -> Result<Reusable, Invalid> {
-        let checker = CheckerIdentity::parse(&self.checker).ok_or(Invalid::BadField("checker"))?;
-        let filed = CheckKey::parse(&self.key).ok_or(Invalid::BadField("key"))?;
-        let module = ModuleKey::parse(&self.module).ok_or(Invalid::BadField("module"))?;
-        let source = SourceFingerprint::parse(&self.source).ok_or(Invalid::BadField("source"))?;
-        let interface_hash = InterfaceHash::parse(&self.interface_hash)
-            .ok_or(Invalid::BadField("interface_hash"))?;
-
-        let mut deps = Vec::with_capacity(self.dependencies.len());
-        for d in &self.dependencies {
-            deps.push(Dependency {
-                module: ModuleKey::parse(&d.module).ok_or(Invalid::BadField("dependency"))?,
-                interface: InterfaceHash::parse(&d.interface)
-                    .ok_or(Invalid::BadField("dependency"))?,
-            });
-        }
-        if deps.windows(2).any(|w| w.first() >= w.last()) {
-            return Err(Invalid::NotCanonical);
-        }
-
-        // The interface is revalidated through the reader that owns the format rather
-        // than trusted because it deserialised. An entry is a file, and a file is data.
-        let bytes = self
-            .interface
-            .to_json()
-            .map_err(|e| Invalid::BadInterface(e.to_string()))?;
-        let interface = PersistentUnitInterface::from_json(&bytes)
-            .map_err(|e| Invalid::BadInterface(e.to_string()))?;
-        if interface.module_key().as_ref() != Some(&module) {
-            return Err(Invalid::ForeignInterface);
-        }
-        if InterfaceHash::of(&interface).map_err(|e| Invalid::BadInterface(e.to_string()))?
-            != interface_hash
-        {
-            return Err(Invalid::InterfaceMoved);
-        }
-
-        // The inputs must produce the key the entry claims, and that key must be the one
-        // asked for. Two separate failures: the first says the file disagrees with
-        // itself, the second that it is somebody else's entry.
-        if CheckKey::of(checker, &module, source, &deps) != filed {
-            return Err(Invalid::KeyDisagrees);
-        }
-        if filed != *wanted {
-            return Err(Invalid::WrongKey);
-        }
-
-        // The unit through its own reader, and of this module's exact source: an entry is
-        // a file, and a unit of another module or another text names ranges that mean
-        // nothing here.
-        let unit = self
-            .resolved
-            .as_ref()
-            .and_then(|u| u.to_json().ok())
-            .and_then(|j| ResolvedUnit::from_json(&j).ok())
-            .ok_or(Invalid::ForeignResolution)?;
-        if unit.module != self.module || unit.source != self.source {
+        let parsed: Self = parse_entry(text)?;
+        let (module, interface_hash) = head(
+            &Head {
+                checker: &parsed.checker,
+                key: &parsed.key,
+                module: &parsed.module,
+                source: &parsed.source,
+                dependencies: &parsed.dependencies,
+                interface_hash: &parsed.interface_hash,
+            },
+            wanted,
+            || reread(&parsed.interface),
+        )?;
+        // The unit, of this module's exact source: a unit of another module or another text
+        // names ranges that mean nothing here. It was deserialised with the entry, so writing
+        // it and reading it back through its own reader gives the same value; what that
+        // reader adds is its schema check, made here directly.
+        let unit_fits = parsed.resolved.as_ref().is_some_and(|u| {
+            u.schema == nazm_iface::resolved::SCHEMA
+                && u.module == parsed.module
+                && u.source == parsed.source
+        });
+        if !unit_fits {
             return Err(Invalid::ForeignResolution);
         }
-        if self.facts_of().ok().as_deref() != Some(self.facts_digest.as_str()) {
+        if parsed.facts_of().ok().as_deref() != Some(parsed.facts_digest.as_str()) {
             return Err(Invalid::FactsMoved);
         }
-
         Ok(Reusable {
             module,
-            interface,
+            interface: parsed.interface,
             interface_hash,
-            provenance: self.provenance.clone(),
-            resolved: unit,
+            provenance: parsed.provenance,
+            resolved: parsed.resolved,
         })
     }
+
+    /// As [`Self::read`], by a checker that holds the interface this build publishes for the
+    /// module — `offered`, its canonical bytes `offered_json` and their fingerprint — and will
+    /// reuse no entry offering anything else, and that never reads the resolved unit.
+    ///
+    /// Such an entry is read without building its interface or its unit: the interface's bytes
+    /// as written must be `offered_json` (anything else is [`Invalid::InterfaceMoved`]), and
+    /// the unit and the facts must have the digest recorded beside them over their bytes as
+    /// written. This build writes all three canonically, so an entry it wrote reads the same
+    /// way it would through [`Self::read`]; an entry spelling an equal value some other way is
+    /// a miss, and its module is checked again. [`Reusable::resolved`] is `None`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`].
+    pub fn read_expecting(
+        text: &str,
+        wanted: &CheckKey,
+        offered: &PersistentUnitInterface,
+        offered_json: &str,
+        fingerprint: InterfaceHash,
+    ) -> Result<Reusable, Invalid> {
+        let parsed: Unread<'_> = parse_entry(text)?;
+        let (module, interface_hash) = head(
+            &Head {
+                checker: &parsed.checker,
+                key: &parsed.key,
+                module: &parsed.module,
+                source: &parsed.source,
+                dependencies: &parsed.dependencies,
+                interface_hash: &parsed.interface_hash,
+            },
+            wanted,
+            || {
+                if parsed.interface.get() != offered_json {
+                    return Err(Invalid::InterfaceMoved);
+                }
+                // The bytes are `offered`'s own, which this build's reader accepts exactly when
+                // `offered.readable()` holds: they are canonical, and they read back as
+                // `offered` (`an_interface_round_trips_through_its_own_bytes`). So an interface
+                // that reader would refuse is still refused, and its module checked again.
+                offered
+                    .readable()
+                    .map_err(|err| Invalid::BadInterface(err.to_string()))?;
+                Ok((offered.module_key(), fingerprint))
+            },
+        )?;
+        // The unit's head is checked as the full reader checks it, on the bytes the digest
+        // covers: its schema, module and source are its first three members.
+        let raw = parsed.resolved.ok_or(Invalid::ForeignResolution)?;
+        let unit = raw.get();
+        let quoted =
+            |s: &str| serde_json::to_string(s).map_err(|e| Invalid::Malformed(e.to_string()));
+        let unit_head = format!(
+            "{{\"schema\":{},\"module\":{},\"source\":{},",
+            quoted(nazm_iface::resolved::SCHEMA)?,
+            quoted(&parsed.module)?,
+            quoted(&parsed.source)?
+        );
+        if !unit.starts_with(&unit_head) {
+            return Err(Invalid::ForeignResolution);
+        }
+        if facts_digest(parsed.provenance.get().as_bytes(), unit.as_bytes()) != parsed.facts_digest
+        {
+            return Err(Invalid::FactsMoved);
+        }
+        let provenance: PersistentFacts = serde_json::from_str(parsed.provenance.get())
+            .map_err(|e| Invalid::Malformed(e.to_string()))?;
+        Ok(Reusable {
+            module,
+            interface: offered.clone(),
+            interface_hash,
+            provenance,
+            resolved: None,
+        })
+    }
+}
+
+/// BLAKE3 over the provenance facts' and the resolved unit's JSON: [`CheckArtifact::facts_digest`].
+fn facts_digest(provenance: &[u8], unit: &[u8]) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(b"nazm.check-facts/1\0");
+    h.update(provenance);
+    h.update(b"\0");
+    h.update(unit);
+    format!("blake3:{}", h.finalize().to_hex())
+}
+
+/// An entry as a checker reads it ([`CheckArtifact::read_expecting`]): its interface, its
+/// provenance facts and its resolved unit left as their bytes, as written.
+#[derive(Deserialize)]
+struct Unread<'a> {
+    schema: String,
+    checker: String,
+    key: String,
+    module: String,
+    source: String,
+    dependencies: Vec<PersistentDependency>,
+    #[serde(borrow)]
+    interface: &'a serde_json::value::RawValue,
+    interface_hash: String,
+    #[serde(borrow)]
+    provenance: &'a serde_json::value::RawValue,
+    #[serde(borrow)]
+    resolved: Option<&'a serde_json::value::RawValue>,
+    #[serde(default)]
+    facts_digest: String,
+}
+
+/// What every reading of an entry has a `schema` for.
+trait Schema {
+    fn schema(&self) -> &str;
+}
+
+impl Schema for CheckArtifact {
+    fn schema(&self) -> &str {
+        &self.schema
+    }
+}
+
+impl Schema for Unread<'_> {
+    fn schema(&self) -> &str {
+        &self.schema
+    }
+}
+
+/// An entry's bytes as `T`, of this build's schema.
+///
+/// The schema on its own and first: a future version may not have the shape this build's
+/// `Deserialize` expects, and "failed to parse" would be the wrong thing to conclude about a
+/// newer file. Parsed once on the way that succeeds (performance leadership, a warm check):
+/// the envelope is read only when the whole does not parse, to tell a future schema from a
+/// damaged entry — the same answer as reading it first, since a whole that parses has the
+/// envelope's `schema`.
+fn parse_entry<'a, T: Deserialize<'a> + Schema>(text: &'a str) -> Result<T, Invalid> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        schema: String,
+    }
+    match serde_json::from_str::<T>(text) {
+        Ok(parsed) if parsed.schema() != SCHEMA => {
+            Err(Invalid::UnknownSchema(parsed.schema().to_owned()))
+        }
+        Ok(parsed) => Ok(parsed),
+        Err(whole) => {
+            let envelope: Envelope =
+                serde_json::from_str(text).map_err(|e| Invalid::Malformed(e.to_string()))?;
+            if envelope.schema != SCHEMA {
+                return Err(Invalid::UnknownSchema(envelope.schema));
+            }
+            Err(Invalid::Malformed(whole.to_string()))
+        }
+    }
+}
+
+/// The fields of an entry every reading validates the same way.
+struct Head<'a> {
+    checker: &'a str,
+    key: &'a str,
+    module: &'a str,
+    source: &'a str,
+    dependencies: &'a [PersistentDependency],
+    interface_hash: &'a str,
+}
+
+/// Everything that must be true of an entry's inputs and interface beyond its bytes parsing:
+/// its module and its interface's fingerprint. `interface` checks the entry's interface and
+/// returns the module key it names and its fingerprint, in the place of the order of checks
+/// where the interface is read.
+fn head(
+    e: &Head<'_>,
+    wanted: &CheckKey,
+    interface: impl FnOnce() -> Result<(Option<ModuleKey>, InterfaceHash), Invalid>,
+) -> Result<(ModuleKey, InterfaceHash), Invalid> {
+    let checker = CheckerIdentity::parse(e.checker).ok_or(Invalid::BadField("checker"))?;
+    let filed = CheckKey::parse(e.key).ok_or(Invalid::BadField("key"))?;
+    let module = ModuleKey::parse(e.module).ok_or(Invalid::BadField("module"))?;
+    let source = SourceFingerprint::parse(e.source).ok_or(Invalid::BadField("source"))?;
+    let interface_hash =
+        InterfaceHash::parse(e.interface_hash).ok_or(Invalid::BadField("interface_hash"))?;
+
+    let mut deps = Vec::with_capacity(e.dependencies.len());
+    for d in e.dependencies {
+        deps.push(Dependency {
+            module: ModuleKey::parse(&d.module).ok_or(Invalid::BadField("dependency"))?,
+            interface: InterfaceHash::parse(&d.interface).ok_or(Invalid::BadField("dependency"))?,
+        });
+    }
+    if deps.windows(2).any(|w| w.first() >= w.last()) {
+        return Err(Invalid::NotCanonical);
+    }
+
+    let (named, fingerprint) = interface()?;
+    if named.as_ref() != Some(&module) {
+        return Err(Invalid::ForeignInterface);
+    }
+    if fingerprint != interface_hash {
+        return Err(Invalid::InterfaceMoved);
+    }
+
+    // The inputs must produce the key the entry claims, and that key must be the one asked
+    // for. Two separate failures: the first says the file disagrees with itself, the second
+    // that it is somebody else's entry.
+    if CheckKey::of(checker, &module, source, &deps) != filed {
+        return Err(Invalid::KeyDisagrees);
+    }
+    if filed != *wanted {
+        return Err(Invalid::WrongKey);
+    }
+    Ok((module, interface_hash))
+}
+
+/// An entry's interface read through the reader that owns the format rather than trusted
+/// because it deserialised — an entry is a file, and a file is data: the module it names and
+/// its fingerprint.
+fn reread(
+    interface: &PersistentUnitInterface,
+) -> Result<(Option<ModuleKey>, InterfaceHash), Invalid> {
+    let bytes = interface
+        .to_json()
+        .map_err(|err| Invalid::BadInterface(err.to_string()))?;
+    PersistentUnitInterface::from_json(&bytes)
+        .map_err(|err| Invalid::BadInterface(err.to_string()))?;
+    // `from_json` has just required `bytes` to be the interface's own canonical form, so they
+    // are what `InterfaceHash::of` would serialise it to again.
+    Ok((
+        interface.module_key(),
+        InterfaceHash::of_bytes(bytes.as_bytes()),
+    ))
 }
