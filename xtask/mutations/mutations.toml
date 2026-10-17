@@ -10564,11 +10564,12 @@ Repointed by performance leadership 6.4, which moved it to 42 for the waiter tab
 Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it.
 Repointed by performance leadership 6.3's preemption by interrupt, which moved it to 44: an object built to poll `nz.preempt_req` must not be linked with a runtime that no longer defines it.
 Repointed by performance leadership 6.4's direct hand-off, which moved it to 45: an object built against a runtime whose `Int` channel header is 64 bytes must not be linked with one whose is 112.
-Repointed by performance leadership 6.4's select over channels of different types, which moved it to 46: an object that calls `nz.sel_wait` must not be linked with a runtime that does not define it."""
+Repointed by performance leadership 6.4's select over channels of different types, which moved it to 46: an object that calls `nz.sel_wait` must not be linked with a runtime that does not define it.
+Repointed by performance leadership 6.3's preemption on every backend, which moved it to 47: an object of generated code in `.text$nzM` must not be linked with a runtime whose markers are `.text$nA` and `.text$nZ`."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 46;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 45;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_six_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 47;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 46;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_seven_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20933,3 +20934,22 @@ find = '''        } else if nazm_lir::backend::small_heap(self.small_heap, nativ
 replace = '''        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
         }'''
 killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_task_program_from_each_backend_runs_on_any_number_of_workers" }]
+
+# --- Performance leadership 6.3: preemption on every backend (2026-10-17) ---------------------------
+
+[[mutation]]
+name = "pp-cranelift-code-stays-in-the-text-section"
+why = "Cranelift's object keeps its code in __text, outside the generated code's section, so a task looping in Cranelift's code is never preempted"
+file = "crates/nazm-codegen-clif/src/translate.rs"
+find = '''    let bytes = in_code_section(bytes, section);'''
+replace = '''    let bytes = in_code_section(bytes, CodeSection::Plain);
+    let _ = section;'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
+name = "pp-nzcg-code-stays-in-the-text-section"
+why = "Nazm's own code generator writes its code in __text, outside the generated code's section, so a task looping in its code is never preempted"
+file = "toolchain/codegen/macho.nz"
+find = '''    let sec_names: Strs = ["__nz_text", "__const", "__const", "__data"]'''
+replace = '''    let sec_names: Strs = ["__text", "__const", "__const", "__data"]'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_long_loop_from_nazms_own_code_generator_yields_its_worker" }]

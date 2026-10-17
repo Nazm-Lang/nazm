@@ -7616,7 +7616,7 @@ instruction to a loop. The monitor, finding a worker asked, interrupts its threa
 the signal's context; on Windows the thread suspended, its context read, and its return redirected
 through a stub that saves every register a call may clobber. The task yields — as at a back edge
 before — only where that address is in generated code, which the LLVM backend places in a section
-of its own on these targets (`__TEXT,__nz_text`; `.text$nzM` between markers), and only while no
+of its own on these targets (`__TEXT,__nz_text`; `.text$nM` between markers), and only while no
 failure unwinds (the exception in flight is the thread's). Generated code holds no lock and
 touches no thread's allocator lists, and every runtime function that does — a pthread mutex, a
 spin lock, the small-block heap, the pool — is `noinline` in a program that has tasks, so
@@ -7625,7 +7625,10 @@ preempted and inlines them as before. On macOS the yield runs inside the signal'
 task's own stack, so the signal frame is part of the frames 6.2 copies out and back, and the
 handler returns when the task resumes. Linux and Android preempt nothing yet (after 1.0), nor do
 Cranelift's and Nazm's own code generator's builds, whose code is not in the section: a task there
-that computes without waiting holds its worker, as before 6.3. Runtime ABI 43 → 44.
+that computes without waiting holds its worker, as before 6.3. Runtime ABI 43 → 44. **Then (runtime ABI 44 → 47):** Cranelift's and Nazm's own code generator's code goes in the same
+section — Cranelift's object has its code section renamed in its header after it is written, and
+`nzcg` writes the name itself — so their tasks are preempted too; and Windows's names are eight
+bytes, `.text$nM` between `.text$nA` and `.text$nZ`, which every writer keeps in the section header.
 
 **Amended (performance leadership 6.4, 2026-10-16): the waiter table's locks.** The table of parked
 waiters keeps its 256 buckets, now under 64 locks (bucket `b` under lock `b mod 64`) in place of one

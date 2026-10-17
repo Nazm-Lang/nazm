@@ -105,7 +105,9 @@ pub fn write_object(u: Unit, c: Code, x64: Bool, dbg: Dwarf, errors: Strs) -> By
     let sect = strs_new()
     let seg = strs_new()
     let flags = ints_new()
-    let sec_names: Strs = ["__text", "__const", "__const", "__data"]
+    // The code in the generated code's own section (performance leadership 6.3), as LLVM's and
+    // Cranelift's: a worker's thread interrupted there may yield its task.
+    let sec_names: Strs = ["__nz_text", "__const", "__const", "__data"]
     for x in sec_names { strs_push(sect, x) }
     let seg_names: Strs = ["__TEXT", "__TEXT", "__DATA", "__DATA"]
     for x in seg_names { strs_push(seg, x) }

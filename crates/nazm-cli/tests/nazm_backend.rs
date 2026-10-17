@@ -301,6 +301,38 @@ fn main(io: IoCap, tasks: SpawnCap) {\n\
     }
 }
 
+/// Performance leadership 6.3: Nazm's own code generator's code is preempted as LLVM's and
+/// Cranelift's is — it writes its code in the generated code's section (`__TEXT,__nz_text`), so the
+/// monitor's interrupt finds a looping task there and it yields. Two tasks loop until four short
+/// ones queued behind them on the same two workers have run; without preemption they never start.
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn a_long_loop_from_nazms_own_code_generator_yields_its_worker() {
+    let nzcg = differential::nzcg();
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn spin(stop: Atomic) -> Int { let mut x = 0; while atomic_load(stop) == 0 { x = (x + 1) % 1000; } x }\n\
+               fn short(stop: Atomic, done: Atomic) -> Int { atomic_add(done, 1); if atomic_load(done) == 4 { atomic_store(stop, 1); } 0 }\n\
+               fn main(io: IoCap, tasks: SpawnCap) {\n\
+               let stop = atomic_new(0); let done = atomic_new(0);\n\
+               scope { spawn spin(stop); spawn spin(stop); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); spawn short(stop, done); }\n\
+               println(atomic_load(done)) }\n";
+    std::fs::write(d.path().join("starve.nz"), src).unwrap();
+    let b = nazm_with(
+        d.path(),
+        nzcg,
+        &["build", "--backend", "nazm", "starve.nz", "-o", "starve"],
+    );
+    assert_eq!(b.code, Some(0), "{}{}", b.stdout, b.stderr);
+    let mut c = Command::new(d.path().join("starve"));
+    c.current_dir(d.path())
+        .env_remove("NAZM_SCHEDULER")
+        .env("NAZM_WORKERS", "2");
+    let r = run_within(&mut c, std::time::Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("the looping tasks were never preempted"));
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    assert!(r.stdout.starts_with("4\n"), "{}{}", r.stdout, r.stderr);
+}
+
 #[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
 #[test]
 fn every_input_of_the_generators_suite_agrees_with_the_llvm_build() {
@@ -670,7 +702,7 @@ fn the_windows_objects_keep_the_win64_convention_and_describe_every_frame() {
     assert!(pdata.len() >= 12, "{rel}");
     for l in &pdata {
         let at = u64::from_str_radix(l.split_whitespace().next().unwrap(), 16).unwrap();
-        let to = if at % 12 == 8 { ".xdata" } else { ".text" };
+        let to = if at % 12 == 8 { ".xdata" } else { ".text$nM" };
         assert!(l.trim_end().ends_with(to), "{l}");
     }
     let code = prologues(&dump("-d"));

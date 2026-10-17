@@ -373,7 +373,11 @@ pub fn escape(s: &str) -> String {
 /// `nz.sel_wait`; cases 32 bytes), a send case offered without waiting (`nz.chanv_offer`), and a
 /// generic channel's receive advancing the select event count, which `nz.sel_signal` now advances
 /// only while someone selects.
-pub const RUNTIME_ABI_REVISION: u32 = 46;
+/// 47 is performance leadership 6.3's preemption on every backend (2026-10-17): Windows's markers
+/// of the generated code's section are `.text$nA` and `.text$nZ` and the code's section `.text$nM`,
+/// eight bytes each, so Cranelift's objects and Nazm's own code generator's, whose code now goes
+/// in that section too (`__TEXT,__nz_text` on macOS), keep the name in the section header.
+pub const RUNTIME_ABI_REVISION: u32 = 47;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -1539,9 +1543,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_six_and_reaches_the_system_only_through_its_platform_layer() {
+    fn the_runtime_is_revision_forty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    {
         // 6.4's select over several types: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 46);
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 47);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(
