@@ -45,8 +45,95 @@ pub fn parse_source(text: &str) -> (Program, Vec<nazm_diag::Diagnostic>) {
 
 /// Parse one file, so every span it produces names that file.
 pub fn parse_file(file: nazm_span::FileId, text: &str) -> (Program, Vec<nazm_diag::Diagnostic>) {
-    let (program, _, errors) = parse_both(file, text);
+    let (program, errors, _) = parse_file_with_tokens(file, text);
     (program, errors)
+}
+
+/// As [`parse_file`], with the file's tokens — the ones [`lex_in`] gives, ending with
+/// [`TokenKind::Eof`] — for a caller that reads them too (the loader, which looks for the
+/// names a module uses).
+///
+/// The same scan and parse as [`parse_both`], without building the lossless tree it would
+/// drop: building it was most of a parse's work, paid for every module of every compilation
+/// (performance leadership, `nazm check`).
+pub fn parse_file_with_tokens(
+    file: nazm_span::FileId,
+    text: &str,
+) -> (Program, Vec<nazm_diag::Diagnostic>, Vec<Token>) {
+    let (lexemes, mut errors) = lex_lossless_in(file, text);
+    let tokens: Vec<&Token> = lexemes
+        .iter()
+        .filter_map(|l| match l {
+            Lexeme::Token(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    let (program, parse_errors, _) = parser::parse_with(file, text, &lexemes, &tokens, None, false);
+    errors.extend(parse_errors);
+    drop(tokens);
+    let tokens = lexemes
+        .into_iter()
+        .filter_map(|l| match l {
+            Lexeme::Token(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    (program, errors, tokens)
+}
+
+/// A parse kept for the next parse of the same file's same text: [`keep`].
+struct Kept {
+    text: String,
+    program: Program,
+    errors: Vec<nazm_diag::Diagnostic>,
+}
+
+/// At most one kept parse per file id; a later [`keep`] of the same id replaces it.
+static KEPT: std::sync::Mutex<Vec<(nazm_span::FileId, Kept)>> = std::sync::Mutex::new(Vec::new());
+
+/// Keep `file`'s parse of `text` for the next [`parse_map`] of it, which takes it instead of
+/// parsing the same text again. A loader parses every file for its imports and a checker
+/// parsed every one again (performance leadership, `nazm check`): parsing is a function of
+/// the file's id and text alone, so a parse of exactly this text under this id is the one
+/// that would be made. Taken once; a different text under the id is parsed afresh.
+pub fn keep(
+    file: nazm_span::FileId,
+    text: &str,
+    program: Program,
+    errors: Vec<nazm_diag::Diagnostic>,
+) {
+    let entry = Kept {
+        text: text.to_owned(),
+        program,
+        errors,
+    };
+    let replaced = if let Ok(mut kept) = KEPT.lock() {
+        match kept.iter_mut().find(|(id, _)| *id == file) {
+            Some((_, k)) => Some(std::mem::replace(k, entry)),
+            None => {
+                kept.push((file, entry));
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // Dropped outside the lock.
+    drop(replaced);
+}
+
+/// `file`'s parse of `text`: the kept one if there is one for exactly this text, else a new one.
+fn parse_kept(file: nazm_span::FileId, text: &str) -> (Program, Vec<nazm_diag::Diagnostic>) {
+    let taken = KEPT.lock().ok().and_then(|mut kept| {
+        let at = kept
+            .iter()
+            .position(|(id, k)| *id == file && k.text == text)?;
+        Some(kept.swap_remove(at).1)
+    });
+    match taken {
+        Some(k) => (k.program, k.errors),
+        None => parse_file(file, text),
+    }
 }
 
 /// Parse one file into its lossless concrete tree.
@@ -166,7 +253,7 @@ pub fn parse_map_with_root(
     for id in map.ids() {
         let (p, file_errors) = match reusable {
             Some(r) if id == nazm_span::FileId::ROOT => (r.program(), r.diagnostics()),
-            _ => parse_file(id, map.text(id)),
+            _ => parse_kept(id, map.text(id)),
         };
         program.functions.extend(p.functions);
         program.records.extend(p.records);
@@ -202,11 +289,18 @@ pub fn parse_map_at(
         } else {
             None
         };
-        let (program, cst, file_errors) = parse_both_at(id, map.text(id), at);
-        if id == nazm_span::FileId::ROOT && hole.is_some() {
+        // The concrete tree only where it is returned — a probe's root file. Every other file is
+        // parsed as `parse_file` parses it, which is `parse_both_at` with no hole and no tree:
+        // the tree was built for every file of every compilation `parse_map` read and dropped,
+        // most of a parse's work (performance leadership, a warm `nazm check`).
+        let (program, file_errors) = if id == nazm_span::FileId::ROOT && hole.is_some() {
+            let (program, cst, file_errors) = parse_both_at(id, map.text(id), at);
             found = program.hole;
             root = Some(cst);
-        }
+            (program, file_errors)
+        } else {
+            parse_kept(id, map.text(id))
+        };
         functions.extend(program.functions);
         records.extend(program.records);
         enums.extend(program.enums);
