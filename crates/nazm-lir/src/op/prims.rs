@@ -707,6 +707,57 @@ impl Fx<'_, '_> {
                 let result = self.select(shut, index, r);
                 self.set(dst, result);
             }
+            // A select over channels of different types (performance leadership 6.4): the
+            // runtime keeps the cases; a receive case's value is pushed onto its vector by the
+            // runtime, which knows the element's size from the channel; a send case's value is
+            // copied into the select, a reference of its own, given back if no memory was had.
+            Intrinsic::SelNew => {
+                let s = self.rt_v("nz.sel_new", &[], Class::Ptr);
+                let null = self.is_null(s);
+                self.guard(null, "N0406", "out of memory");
+                self.set(dst, s);
+            }
+            Intrinsic::SelRecv => {
+                let s = self.arg(args, 0);
+                let c = self.arg(args, 1);
+                let h = self.arg(args, 2);
+                let r = self.rt_v("nz.sel_recv", &[s, c, h], Class::I64);
+                let oom = self.cmp_imm(Cmp::Eq, r, Class::I64, i64::MIN);
+                self.guard(oom, "N0406", "out of memory");
+                self.set(dst, r);
+            }
+            Intrinsic::SelSend => {
+                let t = element(op, elem);
+                let s = self.arg(args, 0);
+                let c = self.arg(args, 1);
+                let slot = self.scratch(self.size(t));
+                self.store_element(slot, args.get(2), t, false);
+                let r = self.rt_v("nz.sel_send", &[s, c, slot], Class::I64);
+                let oom = self.cmp_imm(Cmp::Eq, r, Class::I64, i64::MIN);
+                if self.lw.lay.owns(t) {
+                    let undo = self.b.block();
+                    let cont = self.b.block();
+                    self.branch(oom, undo, cont);
+                    self.b.switch(undo);
+                    self.release_at(slot, t);
+                    self.jump(cont);
+                    self.b.switch(cont);
+                }
+                self.guard(oom, "N0406", "out of memory");
+                self.set(dst, r);
+            }
+            Intrinsic::SelWait | Intrinsic::SelWaitUntil => {
+                let s = self.arg(args, 0);
+                let (ms, timed) = if op == Intrinsic::SelWaitUntil {
+                    (self.arg(args, 1), self.iconst(1))
+                } else {
+                    (self.iconst(0), self.iconst(0))
+                };
+                let r = self.rt_v("nz.sel_wait", &[s, ms, timed], Class::I64);
+                let oom = self.cmp_imm(Cmp::Eq, r, Class::I64, i64::MIN);
+                self.guard(oom, "N0406", "out of memory");
+                self.set(dst, r);
+            }
             // A contract clause (N87): its kind is the constant second argument.
             Intrinsic::ContractCheck => {
                 let cond = self.arg(args, 0);

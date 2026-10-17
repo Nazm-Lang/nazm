@@ -1,0 +1,37 @@
+
+fn main(out: OutCap) -> Int {
+    let a = chan_new_of[Int](2);
+    let b = chan_new_of[Str](2);
+    let d = chan_new_of[Str](1);
+    chan_send_of(b, str_concat("x", "y"));
+    let ints = vec_new[Int]();
+    let strs = vec_new[Str]();
+    let s = sel_new();
+    let ia = sel_recv(s, a, ints);
+    let ib = sel_recv(s, b, strs);
+    let ic = sel_send(s, d, str_concat("se", "nt"));
+    print(int_to_str(ia * 100 + ib * 10 + ic));
+    print(":");
+    // `b` holds a value; `a` is empty.
+    print(int_to_str(sel_wait(s)));
+    print(vec_get(strs, 0));
+    // Nothing to receive; `d` has room, so the send case is performed, once.
+    print(int_to_str(sel_wait(s)));
+    let t = s;
+    chan_send_of(a, 7);
+    print(int_to_str(sel_wait(t)));
+    print(int_to_str(vec_get(ints, 0)));
+    // `b` closed and drained: its index, encoded; the spent send case is not looked at.
+    chan_close_of(b);
+    print(int_to_str(sel_wait(s)));
+    let got = vec_new[Str]();
+    if chan_recv_of(d, got) { print(vec_get(got, 0)); }
+    // A select whose only case is a spent send has nothing to wait on.
+    let e = sel_new();
+    let f = chan_new_of[Int](1);
+    let k = sel_send(e, f, 5);
+    print(int_to_str(sel_wait(e)));
+    print(int_to_str(sel_wait(e)));
+    print(int_to_str(sel_wait(sel_new())));
+    0
+}

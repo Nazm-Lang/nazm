@@ -3352,6 +3352,8 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
             // A failed open: a handle that touches nothing (Gate 2).
             Shape::OsHandle => "os_open_read(\"/nonexistent/nazm\")",
             Shape::Atomic => "atomic_new(0)",
+            // A select over several types (6.4).
+            Shape::Select => "sel_new()",
             Shape::VecT => "vec_new[Int]()",
             Shape::ChanT => "chan_new_of[Int](1)",
             Shape::ChansT => "vec_new[Chan[Int]]()",
@@ -3398,6 +3400,7 @@ fn builtin_program(i: nazm_core::Intrinsic) -> String {
         Shape::Text => format!("text_len({call})"),
         Shape::OsHandle => format!("os_status({call})"),
         Shape::Atomic => format!("atomic_load({call})"),
+        Shape::Select => format!("sel_wait({call})"),
         Shape::Int | Shape::T => call,
         Shape::Str => format!("str_len({call})"),
         Shape::Bool => format!("if {call} {{ 1 }} else {{ 0 }}"),

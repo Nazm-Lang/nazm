@@ -1096,14 +1096,17 @@ theirs:
   ret ptr %other
 }
 
-; Called after a typed channel changed in a way a selector waits for: a value queued, or a close.
+; Called after a typed channel changed in a way a selector waits for: a value queued or taken, or
+; a close. With nobody selecting it touches nothing but one load (6.4): a selector counts itself
+; in `nz.sel_waiters` before it reads the event count and looks at its channels, so a change made
+; before this load saw no selector is one that selector's look finds.
 define hidden void @nz.sel_signal() noinline {
 entry:
-  %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst
   %who = load atomic i64, ptr @nz.sel_waiters seq_cst, align 8
   %any = icmp sgt i64 %who, 0
   br i1 %any, label %wake, label %quiet
 wake:
+  %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst
   %s = call ptr @nz.sel_sync_get()
   %lost = icmp eq ptr %s, null
   br i1 %lost, label %quiet, label %tell
@@ -1173,6 +1176,7 @@ take:
   store i64 %left, ptr %lenp
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.sel_signal()
   ret i64 1
 }
 
@@ -1330,6 +1334,436 @@ entry:
   %ns = mul i64 %sec, 1000000000
   %t = add i64 %ns, %nsec
   ret i64 %t
+}
+
+; One offer to one channel, without waiting (6.4): 1 and the slot at `%src` copied in (its
+; reference the channel's now), 2 when closed, 0 when full.
+define hidden i64 @nz.chanv_offer(ptr %c, ptr %src) noinline {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %lenp = getelementptr i8, ptr %c, i64 8
+  %headp = getelementptr i8, ptr %c, i64 16
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %datap = getelementptr i8, ptr %c, i64 32
+  %sp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %sp
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %shut, label %space
+shut:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 2
+space:
+  %len = load i64, ptr %lenp
+  %cap = load i64, ptr %c
+  %full = icmp sge i64 %len, %cap
+  br i1 %full, label %nope, label %store
+nope:
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i64 0
+store:
+  %head = load i64, ptr %headp
+  %sum = add i64 %head, %len
+  %idx = urem i64 %sum, %cap
+  %data = load ptr, ptr %datap
+  %off = mul i64 %idx, %stride
+  %slot = getelementptr i8, ptr %data, i64 %off
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %src, i64 %stride, i1 false)
+  %grown = add i64 %len, 1
+  store i64 %grown, ptr %lenp
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %u3 = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.sel_signal()
+  ret i64 1
+}
+
+; A select over channels of different types (6.4): `{ i64 rc, i64 n, i64 cap, ptr cases }`, 32
+; bytes, its count plain — a select never crosses into a task. A case is 32 bytes, `{ ptr chan,
+; i64 kind, ptr slot, ptr out }`: kind 0 a receive onto the vector `out`, 1 a send of the value at
+; `slot` (the select's own reference), 2 a send done. The select holds a reference to each case's
+; channel and each receive case's vector.
+define hidden ptr @nz.sel_new() noinline {
+entry:
+  %s = call ptr @malloc(i64 32)
+  %bad = icmp eq ptr %s, null
+  br i1 %bad, label %none, label %init
+none:
+  ret ptr null
+init:
+  store i64 1, ptr %s
+  %np = getelementptr i8, ptr %s, i64 8
+  store i64 0, ptr %np
+  %cp = getelementptr i8, ptr %s, i64 16
+  store i64 0, ptr %cp
+  %dp = getelementptr i8, ptr %s, i64 24
+  store ptr null, ptr %dp
+  ret ptr %s
+}
+
+define hidden void @nz.sel_retain(ptr %s) {
+entry:
+  %none = icmp eq ptr %s, null
+  br i1 %none, label %done, label %bump
+bump:
+  %rc = load i64, ptr %s
+  %rc1 = add i64 %rc, 1
+  store i64 %rc1, ptr %s
+  br label %done
+done:
+  ret void
+}
+
+; The last reference gives back each case's channel and receive vector and frees a send case's
+; value still unsent, by the channel's own element release.
+define hidden void @nz.sel_release(ptr %s) noinline {
+entry:
+  %none = icmp eq ptr %s, null
+  br i1 %none, label %done, label %drop
+drop:
+  %rc = load i64, ptr %s
+  %rc1 = sub i64 %rc, 1
+  store i64 %rc1, ptr %s
+  %last = icmp sle i64 %rc1, 0
+  br i1 %last, label %walk, label %done
+walk:
+  %np = getelementptr i8, ptr %s, i64 8
+  %n = load i64, ptr %np
+  %dp = getelementptr i8, ptr %s, i64 24
+  %cases = load ptr, ptr %dp
+  br label %test
+test:
+  %i = phi i64 [ 0, %walk ], [ %inext, %next ]
+  %more = icmp slt i64 %i, %n
+  br i1 %more, label %one, label %free
+one:
+  %coff = mul i64 %i, 32
+  %k = getelementptr i8, ptr %cases, i64 %coff
+  %ch = load ptr, ptr %k
+  %kp = getelementptr i8, ptr %k, i64 8
+  %kind = load i64, ptr %kp
+  %slp = getelementptr i8, ptr %k, i64 16
+  %sl = load ptr, ptr %slp
+  %relp = getelementptr i8, ptr %ch, i64 72
+  %rel = load ptr, ptr %relp
+  %norel = icmp eq ptr %rel, null
+  %isrecv = icmp eq i64 %kind, 0
+  br i1 %isrecv, label %recv, label %send
+recv:
+  %outp = getelementptr i8, ptr %k, i64 24
+  %out = load ptr, ptr %outp
+  br i1 %norel, label %plain, label %count
+count:
+  ; The vector's last reference: its elements go by the channel's element release first.
+  %orcp = getelementptr i8, ptr %out, i64 24
+  %orc = load i64, ptr %orcp
+  %olast = icmp sle i64 %orc, 1
+  br i1 %olast, label %elems, label %plain
+elems:
+  %olen = load i64, ptr %out
+  %odp = getelementptr i8, ptr %out, i64 16
+  %odata = load ptr, ptr %odp
+  %stp = getelementptr i8, ptr %ch, i64 64
+  %stride = load i64, ptr %stp
+  br label %etest
+etest:
+  %j = phi i64 [ 0, %elems ], [ %jnext, %ebody ]
+  %emore = icmp slt i64 %j, %olen
+  br i1 %emore, label %ebody, label %emptied
+ebody:
+  %eoff = mul i64 %j, %stride
+  %eslot = getelementptr i8, ptr %odata, i64 %eoff
+  call void %rel(ptr %eslot, ptr null)
+  %jnext = add i64 %j, 1
+  br label %etest
+emptied:
+  store i64 0, ptr %out
+  br label %plain
+plain:
+  call void @nz.seq_release(ptr %out)
+  br label %chan
+send:
+  %unsent = icmp eq i64 %kind, 1
+  %hasrel = xor i1 %norel, true
+  %give = and i1 %unsent, %hasrel
+  br i1 %give, label %value, label %slotfree
+value:
+  call void %rel(ptr %sl, ptr null)
+  br label %slotfree
+slotfree:
+  call void @free(ptr %sl)
+  br label %chan
+chan:
+  call void @nz.chanv_release(ptr %ch)
+  br label %next
+next:
+  %inext = add i64 %i, 1
+  br label %test
+free:
+  call void @free(ptr %cases)
+  call void @free(ptr %s)
+  br label %done
+done:
+  ret void
+}
+
+; Room for one more case: its address, or null when there is no memory.
+define hidden ptr @nz.sel_case(ptr %s) noinline {
+entry:
+  %np = getelementptr i8, ptr %s, i64 8
+  %n = load i64, ptr %np
+  %cp = getelementptr i8, ptr %s, i64 16
+  %cap = load i64, ptr %cp
+  %dp = getelementptr i8, ptr %s, i64 24
+  %full = icmp sge i64 %n, %cap
+  br i1 %full, label %grow, label %room
+grow:
+  %twice = mul i64 %cap, 2
+  %tiny = icmp slt i64 %twice, 4
+  %want = select i1 %tiny, i64 4, i64 %twice
+  %bytes = mul i64 %want, 32
+  %old = load ptr, ptr %dp
+  %new = call ptr @realloc(ptr %old, i64 %bytes)
+  %failed = icmp eq ptr %new, null
+  br i1 %failed, label %nomem, label %kept
+nomem:
+  ret ptr null
+kept:
+  store ptr %new, ptr %dp
+  store i64 %want, ptr %cp
+  br label %room
+room:
+  %cases = load ptr, ptr %dp
+  %off = mul i64 %n, 32
+  %k = getelementptr i8, ptr %cases, i64 %off
+  %n1 = add i64 %n, 1
+  store i64 %n1, ptr %np
+  ret ptr %k
+}
+
+; `sel_recv`: a receive case onto `%out`, its index; the most negative `i64` out of memory.
+define hidden i64 @nz.sel_recv(ptr %s, ptr %c, ptr %out) noinline {
+entry:
+  %np = getelementptr i8, ptr %s, i64 8
+  %i = load i64, ptr %np
+  %k = call ptr @nz.sel_case(ptr %s)
+  %bad = icmp eq ptr %k, null
+  br i1 %bad, label %nomem, label %fill
+nomem:
+  ret i64 -9223372036854775808
+fill:
+  call void @nz.chan_retain(ptr %c)
+  call void @nz.arr_retain(ptr %out)
+  store ptr %c, ptr %k
+  %kp = getelementptr i8, ptr %k, i64 8
+  store i64 0, ptr %kp
+  %slp = getelementptr i8, ptr %k, i64 16
+  store ptr null, ptr %slp
+  %outp = getelementptr i8, ptr %k, i64 24
+  store ptr %out, ptr %outp
+  ret i64 %i
+}
+
+; `sel_send`: a send case holding the slot at `%src` — the caller's reference, the select's now —
+; its index; the most negative `i64` out of memory, the reference still the caller's.
+define hidden i64 @nz.sel_send(ptr %s, ptr %c, ptr %src) noinline {
+entry:
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
+  %sl = call ptr @malloc(i64 %stride)
+  %noslot = icmp eq ptr %sl, null
+  br i1 %noslot, label %nomem, label %have
+nomem:
+  ret i64 -9223372036854775808
+have:
+  %np = getelementptr i8, ptr %s, i64 8
+  %i = load i64, ptr %np
+  %k = call ptr @nz.sel_case(ptr %s)
+  %bad = icmp eq ptr %k, null
+  br i1 %bad, label %undo, label %fill
+undo:
+  call void @free(ptr %sl)
+  ret i64 -9223372036854775808
+fill:
+  call void @llvm.memcpy.p0.p0.i64(ptr %sl, ptr %src, i64 %stride, i1 false)
+  call void @nz.chan_retain(ptr %c)
+  store ptr %c, ptr %k
+  %kp = getelementptr i8, ptr %k, i64 8
+  store i64 1, ptr %kp
+  %slp = getelementptr i8, ptr %k, i64 16
+  store ptr %sl, ptr %slp
+  %outp = getelementptr i8, ptr %k, i64 24
+  store ptr null, ptr %outp
+  ret i64 %i
+}
+
+; `sel_wait` and `sel_wait_until` (`%timed` nonzero, after `%ms`): the lowest ready case performed —
+; `i` a value received onto its vector or sent; `-3 - i` case `i`'s channel closed; `-1` no case
+; left; `-2` timed out; the most negative `i64` out of memory. The waiting is `nz.chanv_select`'s.
+define hidden i64 @nz.sel_wait(ptr %sel, i64 %ms, i64 %timed) noinline {
+entry:
+  %ts = alloca [2 x i64], align 8
+  %now = alloca [2 x i64], align 8
+  %np = getelementptr i8, ptr %sel, i64 8
+  %count = load i64, ptr %np
+  %dp = getelementptr i8, ptr %sel, i64 24
+  %cdata = load ptr, ptr %dp
+  br label %live
+live:
+  %li = phi i64 [ 0, %entry ], [ %linext, %spent ]
+  %lmore = icmp slt i64 %li, %count
+  br i1 %lmore, label %lcase, label %none
+lcase:
+  %loff = mul i64 %li, 32
+  %lk = getelementptr i8, ptr %cdata, i64 %loff
+  %lkp = getelementptr i8, ptr %lk, i64 8
+  %lkind = load i64, ptr %lkp
+  %done2 = icmp eq i64 %lkind, 2
+  br i1 %done2, label %spent, label %setup
+spent:
+  %linext = add i64 %li, 1
+  br label %live
+none:
+  ret i64 -1
+setup:
+  %s = call ptr @nz.sel_sync_get()
+  %oom = icmp eq ptr %s, null
+  br i1 %oom, label %nomem, label %counted
+nomem:
+  ret i64 -9223372036854775808
+counted:
+  %selc = atomicrmw add ptr @nz.sched_selects, i64 1 monotonic
+  %in = atomicrmw add ptr @nz.sel_waiters, i64 1 seq_cst
+  %istimed = icmp ne i64 %timed, 0
+  br i1 %istimed, label %deadline, label %look
+deadline:
+  %r0 = call i32 @nz_os_clock(i32 4, ptr %ts)
+  %sec0 = load i64, ptr %ts
+  %tsn = getelementptr i8, ptr %ts, i64 8
+  %nsec0 = load i64, ptr %tsn
+  %pos = icmp sgt i64 %ms, 0
+  %waitms = select i1 %pos, i64 %ms, i64 0
+  %addsec = sdiv i64 %waitms, 1000
+  %addms = srem i64 %waitms, 1000
+  %addns = mul i64 %addms, 1000000
+  %ns1 = add i64 %nsec0, %addns
+  %carry = icmp sge i64 %ns1, 1000000000
+  %ns2 = sub i64 %ns1, 1000000000
+  %nsf = select i1 %carry, i64 %ns2, i64 %ns1
+  %sec1 = add i64 %sec0, %addsec
+  %sec2 = add i64 %sec1, 1
+  %secf = select i1 %carry, i64 %sec2, i64 %sec1
+  store i64 %secf, ptr %ts
+  store i64 %nsf, ptr %tsn
+  br label %look
+look:
+  %g0 = load atomic i64, ptr @nz.sel_gen seq_cst, align 8
+  br label %scan
+scan:
+  %i = phi i64 [ 0, %look ], [ %inext, %onward ]
+  %more = icmp slt i64 %i, %count
+  br i1 %more, label %probe, label %idle
+probe:
+  %coff = mul i64 %i, 32
+  %k = getelementptr i8, ptr %cdata, i64 %coff
+  %ch = load ptr, ptr %k
+  %kp = getelementptr i8, ptr %k, i64 8
+  %kind = load i64, ptr %kp
+  %isrecv = icmp eq i64 %kind, 0
+  br i1 %isrecv, label %recv, label %sendq
+recv:
+  ; Room on the vector first, so a value taken always has somewhere to go.
+  %outp = getelementptr i8, ptr %k, i64 24
+  %out = load ptr, ptr %outp
+  %stp = getelementptr i8, ptr %ch, i64 64
+  %stride = load i64, ptr %stp
+  %data = call ptr @nz.arr_grow(ptr %out, i64 %stride)
+  %nogrow = icmp eq ptr %data, null
+  br i1 %nogrow, label %grown_oom, label %try
+grown_oom:
+  %o0 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  ret i64 -9223372036854775808
+try:
+  %olen = load i64, ptr %out
+  %doff = mul i64 %olen, %stride
+  %dst = getelementptr i8, ptr %data, i64 %doff
+  %got = call i64 @nz.chanv_try(ptr %ch, ptr %dst)
+  %took = icmp eq i64 %got, 1
+  br i1 %took, label %received, label %closedq
+received:
+  %olen1 = add i64 %olen, 1
+  store i64 %olen1, ptr %out
+  br label %value
+sendq:
+  %unsent = icmp eq i64 %kind, 1
+  br i1 %unsent, label %offer, label %onward
+offer:
+  %slp = getelementptr i8, ptr %k, i64 16
+  %sl = load ptr, ptr %slp
+  %got2 = call i64 @nz.chanv_offer(ptr %ch, ptr %sl)
+  %sent = icmp eq i64 %got2, 1
+  br i1 %sent, label %gone, label %closedq2
+gone:
+  store i64 2, ptr %kp
+  br label %value
+closedq:
+  %rdrained = icmp eq i64 %got, 2
+  br i1 %rdrained, label %ended, label %onward
+closedq2:
+  %refused = icmp eq i64 %got2, 2
+  br i1 %refused, label %ended, label %onward
+onward:
+  %inext = add i64 %i, 1
+  br label %scan
+value:
+  %o1 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  ret i64 %i
+ended:
+  %o2 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  %enc = sub i64 -3, %i
+  ret i64 %enc
+idle:
+  br i1 %istimed, label %check, label %wait
+check:
+  %rn1 = call i32 @nz_os_clock(i32 4, ptr %now)
+  %nsec = load i64, ptr %now
+  %nwn = getelementptr i8, ptr %now, i64 8
+  %nnsec = load i64, ptr %nwn
+  %dsec = load i64, ptr %ts
+  %dtn = getelementptr i8, ptr %ts, i64 8
+  %dnsec = load i64, ptr %dtn
+  %later = icmp sgt i64 %nsec, %dsec
+  %samesec = icmp eq i64 %nsec, %dsec
+  %nslate = icmp sge i64 %nnsec, %dnsec
+  %atlast = and i1 %samesec, %nslate
+  %passed = or i1 %later, %atlast
+  br i1 %passed, label %timeout, label %wait
+timeout:
+  %o3 = atomicrmw sub ptr @nz.sel_waiters, i64 1 seq_cst
+  %to = atomicrmw add ptr @nz.sched_timeouts, i64 1 monotonic
+  ret i64 -2
+wait:
+  %wl = call i32 @pthread_mutex_lock(ptr %s)
+  %wcv = getelementptr i8, ptr %s, i64 128
+  br label %recheck
+recheck:
+  %g1 = load atomic i64, ptr @nz.sel_gen seq_cst, align 8
+  %still = icmp eq i64 %g1, %g0
+  br i1 %still, label %sleep, label %woke
+sleep:
+  br i1 %istimed, label %tsleep, label %fsleep
+tsleep:
+  %tw = call i32 @pthread_cond_timedwait(ptr %wcv, ptr %s, ptr %ts)
+  br label %woke
+fsleep:
+  %fw = call i32 @pthread_cond_wait(ptr %wcv, ptr %s)
+  br label %recheck
+woke:
+  %wu = call i32 @pthread_mutex_unlock(ptr %s)
+  br label %look
 }
 "#
 }
@@ -3304,6 +3738,8 @@ take:
   store i64 %grown, ptr %lenp
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  ; Room made, which a select's send case waits for (6.4).
+  call void @nz.sel_signal()
   ret i1 true
 }
 "#
@@ -15108,6 +15544,12 @@ declare void @nz.errno_save()
 declare i64 @nz.errno_last()
 declare void @nz.chanv_close(ptr) noinline
 declare i64 @nz.chanv_select(ptr, ptr, i64, i64) noinline
+declare ptr @nz.sel_new() noinline
+declare void @nz.sel_retain(ptr)
+declare void @nz.sel_release(ptr) noinline
+declare i64 @nz.sel_recv(ptr, ptr, ptr) noinline
+declare i64 @nz.sel_send(ptr, ptr, ptr) noinline
+declare i64 @nz.sel_wait(ptr, i64, i64) noinline
 declare i64 @nz.time_now_ms()
 declare void @nz.sched_note_spawn()
 declare void @nz.sched_note_join(ptr)
@@ -15171,6 +15613,12 @@ RuntimeSymbol { symbol: "nz.errno_save", ret: "void", params: [], attrs: "", dec
 RuntimeSymbol { symbol: "nz.errno_last", ret: "i64", params: [], attrs: "", declared: true, part: Foreign, responsibility: "the errno the last foreign call on this thread left (N85)", ownership: "none", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.chanv_close", ret: "void", params: ["ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "close a generic channel and wake every select (N54)", ownership: "borrows the channel", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.chanv_select", ret: "i64", params: ["ptr", "ptr", "i64", "i64"], attrs: "noinline", declared: true, part: Channels, responsibility: "wait for the lowest-indexed ready channel, or a deadline (N54)", ownership: "borrows the channels; hands one slot's reference to the caller when it returns an index", effect: "", failure: Status, safety: Locked }
+RuntimeSymbol { symbol: "nz.sel_new", ret: "ptr", params: [], attrs: "noinline", declared: true, part: Channels, responsibility: "a select with no cases (6.4)", ownership: "one reference, owned by the caller", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.sel_retain", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "one more reference to a select (6.4)", ownership: "adds a reference; a select never crosses into a task", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.sel_release", ret: "void", params: ["ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "one reference fewer; the last releases the cases' channels, vectors and unsent values (6.4)", ownership: "takes a reference", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.sel_recv", ret: "i64", params: ["ptr", "ptr", "ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "add a receive case (6.4)", ownership: "borrows the select; the select takes a reference to the channel and the vector", effect: "", failure: Status, safety: Owner }
+RuntimeSymbol { symbol: "nz.sel_send", ret: "i64", params: ["ptr", "ptr", "ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "add a send case holding a slot (6.4)", ownership: "borrows the select; takes the slot's reference unless it returns i64::MIN", effect: "", failure: Status, safety: Owner }
+RuntimeSymbol { symbol: "nz.sel_wait", ret: "i64", params: ["ptr", "i64", "i64"], attrs: "noinline", declared: true, part: Channels, responsibility: "perform the lowest ready case of a select, or wait, or a deadline (6.4)", ownership: "borrows the select; a received value goes onto its case's vector, a sent one is the channel's", effect: "", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.time_now_ms", ret: "i64", params: [], attrs: "", declared: true, part: Channels, responsibility: "a monotonic clock in milliseconds (N54)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.time_now_ns", ret: "i64", params: [], attrs: "", declared: false, part: Channels, responsibility: "the same monotonic clock in nanoseconds (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.time_wall_ns", ret: "i64", params: [], attrs: "", declared: false, part: Channels, responsibility: "the wall clock in nanoseconds since the Unix epoch (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
@@ -15185,6 +15633,8 @@ RuntimeSymbol { symbol: "nz.chan_park", ret: "i64", params: ["ptr", "ptr", "ptr"
 RuntimeSymbol { symbol: "nz.chan_hand", ret: "i64", params: ["ptr", "ptr", "i64", "i64"], attrs: "noinline", declared: false, part: Channels, responsibility: "take the head of a channel's wait list, give it a value and a state, and wake it alone (6.4)", ownership: "the value the record held", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.chan_wait_old", ret: "void", params: ["ptr", "ptr", "ptr"], attrs: "noinline", declared: false, part: Channels, responsibility: "wait on the channel's own condition variable, counted, when no wait record could be had (6.4)", ownership: "the mutex is held again on return", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.chan_tell_old", ret: "void", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Channels, responsibility: "wake whoever waits on the channel's own condition variable, if anyone does (6.4)", ownership: "none", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.chanv_offer", ret: "i64", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Channels, responsibility: "one offer of a slot to a channel without waiting (6.4)", ownership: "borrows the channel; takes the slot's reference when it returns 1", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.sel_case", ret: "ptr", params: ["ptr"], attrs: "noinline", declared: false, part: Channels, responsibility: "room for one more case in a select (6.4)", ownership: "the select owns it; null when there is no memory", effect: "", failure: Null, safety: Owner }
 RuntimeSymbol { symbol: "nz.failed_now", ret: "i32", params: [], attrs: "", declared: false, part: Base, responsibility: "whether this thread has failed, for a second backend", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_mode_get", ret: "i64", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_env", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Tasks, responsibility: "a positive count from an environment variable, or a default (N83)", ownership: "borrows the name", effect: "", failure: Never, safety: Any }
@@ -15386,7 +15836,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 45 }
+pub fn rt_abi_revision() -> Int ! {} { 46 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

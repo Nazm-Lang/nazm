@@ -38,7 +38,7 @@ pub fn alloc(h: Heap, kind: Int, room: Int) -> Int {
     if c >= 0 {
         ints_set(h.counts, c, ints_get(h.counts, c) + 1)
     }
-    let items = if kind == K_SEQ || kind == K_FUNC || kind == K_CHAN { vec_new[V]() } else { h.none }
+    let items = if kind == K_SEQ || kind == K_FUNC || kind == K_CHAN || kind == K_SEL { vec_new[V]() } else { h.none }
     if ints_len(h.free) > 0 {
         let id = ints_pop(h.free)
         ints_set(h.kind, id, kind)

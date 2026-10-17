@@ -7656,6 +7656,24 @@ anyone does. The text is still the thread model's, joined to the pool by the sam
 unchanged except that its close is its own. Every function of the channel that takes its lock,
 parks or wakes is `noinline`, as 6.3's preemption by interrupt requires. Runtime ABI 44 → 45.
 
+**Amended (performance leadership 6.4, 2026-10-17): a select over channels of different types.**
+`docs/spec.md`, *Select over channels of different types*: built-ins, no syntax. A `Select` is a
+runtime record, `{ count, cases, capacity, case array }`, its count plain because it never crosses
+into a task; a case is `{ channel, kind, slot, vector }` — a receive onto a vector, a send of the
+value in a slot the select owns, a send done. Each case holds a reference to its channel and a
+receive case to its vector; the last release gives them back and releases an unsent value by the
+channel's own element release. A wait is `nz.chanv_select`'s, case by case: it counts itself among
+the selectors, reads the event count, tries every case in index order — a receive by
+`nz.chanv_try` straight into room made on its vector first (so a value taken always has somewhere
+to go), a send by `nz.chanv_offer` — and sleeps only while the count has not moved. The value moves
+in the runtime, not in generated code: the code at a wait does not know its cases' types, while the
+runtime knows each element's size and release from its channel. A send case needs the event count
+to move when room is made, so a generic channel's receive advances it too; `nz.sel_signal` now
+reads the selector count first and touches nothing else while nobody selects — sound because a
+selector counts itself before it reads the count and looks, so a change made before a signaller saw
+no selector is one that selector's look finds. Every select function that allocates, takes a lock
+or waits is `noinline` (6.3). Semantic epoch 90 → 91; runtime ABI 45 → 46.
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough

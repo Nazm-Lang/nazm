@@ -2166,6 +2166,7 @@ fn managed_type(res: &Resolution, t: Type, depth: usize) -> bool {
         | Type::Bytes
         | Type::Text
         | Type::Atomic
+        | Type::Select
         | Type::Fn(_) => true,
         Type::Int | Type::Bool | Type::Cap(_) | Type::OsHandle | Type::Param(_) | Type::Num(_) => {
             false

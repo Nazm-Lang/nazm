@@ -1,0 +1,4 @@
+fn main(out: OutCap) -> Int {
+    let s = sel_new();
+    sel_wait_until(s, 5)
+}

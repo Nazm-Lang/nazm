@@ -1,0 +1,2 @@
+fn sel_new() -> Int { 4 }
+fn main(out: OutCap) -> Int { print(int_to_str(sel_new())); 0 }

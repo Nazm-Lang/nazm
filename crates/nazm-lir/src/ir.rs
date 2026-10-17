@@ -97,6 +97,8 @@ pub enum Ty {
     /// A `Chan[T]` (N53): a pointer to a generic channel, by its index in the program's
     /// channel types. Null when it owns nothing.
     ChanOf(ChanTy),
+    /// A `Select` (performance leadership 6.4): a pointer to the runtime's select record, counted.
+    Select,
     /// `[T; N]` (Gate 2): held in memory, `N` elements of plain data, owning nothing.
     Array(ArrayTy),
 }
@@ -318,6 +320,9 @@ pub enum Owns {
     Array(ArrayTy),
     /// A reference to a closure object, which releases its captures on the last one (N50).
     Closure,
+    /// A reference to a select, which releases its channels, its receive vectors and any value
+    /// unsent on the last one (6.4).
+    Select,
     /// A reference to a generic channel, which releases what it still holds on the last one
     /// (N53).
     GenericChannel,
@@ -351,6 +356,7 @@ impl Ty {
             Self::Vec(id) => Some(Owns::Vec(id)),
             Self::Fn(_) => Some(Owns::Closure),
             Self::ChanOf(_) => Some(Owns::GenericChannel),
+            Self::Select => Some(Owns::Select),
         }
     }
 
@@ -412,9 +418,13 @@ impl Ty {
             },
             Self::Bool => "i1",
             Self::Str => "{ ptr, i64, ptr }",
-            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) | Self::ChanOf(_) => {
-                "ptr"
-            }
+            Self::Ints
+            | Self::Strs
+            | Self::Chan
+            | Self::Vec(_)
+            | Self::Fn(_)
+            | Self::ChanOf(_)
+            | Self::Select => "ptr",
             // A record's spelling is its name, which is not static. Every site goes
             // through the emitter's own `ty`, which has the table; this arm exists so
             // that a site which has not been converted is a visible wrong answer in the
@@ -448,9 +458,13 @@ impl Ty {
             // the runtime's release functions. So a zeroed enum slot is safe to release
             // exactly as a zeroed record slot is.
             Self::Str | Self::Record(_) | Self::Enum(_) | Self::Array(_) => "zeroinitializer",
-            Self::Ints | Self::Strs | Self::Chan | Self::Vec(_) | Self::Fn(_) | Self::ChanOf(_) => {
-                "null"
-            }
+            Self::Ints
+            | Self::Strs
+            | Self::Chan
+            | Self::Vec(_)
+            | Self::Fn(_)
+            | Self::ChanOf(_)
+            | Self::Select => "null",
         }
     }
 
@@ -469,6 +483,7 @@ impl Ty {
             Self::Vec(_) => "a `Vec`",
             Self::Fn(_) => "a function value",
             Self::ChanOf(_) => "a `Chan[T]`",
+            Self::Select => "Select",
             Self::Array(_) => "an array",
         }
     }
@@ -521,6 +536,7 @@ impl Ty {
             nazm_sema::Type::Ints => Self::Ints,
             nazm_sema::Type::Strs => Self::Strs,
             nazm_sema::Type::Chan => Self::Chan,
+            nazm_sema::Type::Select => Self::Select,
             // A capability is authority the checker has already verified, and nothing at
             // runtime consults it (N37): what is left of one is a machine word that is
             // always 0. A word rather than a zero-sized `{}`, so every path that stores,
