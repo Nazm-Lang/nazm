@@ -20920,3 +20920,16 @@ file = "crates/nazm-core/src/eval/channel.rs"
 find = '''                        Ready::Closed => return Some(-3 - at),'''
 replace = '''                        Ready::Closed => return Some(at),'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "select::a_select_over_channels_of_different_types_performs_the_lowest_ready_case_everywhere" }]
+
+# --- Performance leadership 6.3, regression: a task program from Nazm's own code generator (2026-10-17)
+
+[[mutation]]
+name = "pt-nzcg-allocates-from-c-beside-the-small-heap"
+why = "Nazm's code generator is given LIR still calling C's allocator in a program whose runtime frees through the small-block heap, so the argument block a spawn allocates is freed by nz.small_free and the program aborts in C's free"
+file = "crates/nazm-codegen-nazm/src/lib.rs"
+find = '''        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
+            nazm_lir::op::small_heap(&mut m);
+        }'''
+replace = '''        } else if nazm_lir::backend::small_heap(self.small_heap, native) {
+        }'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "nazm_backend::a_task_program_from_each_backend_runs_on_any_number_of_workers" }]

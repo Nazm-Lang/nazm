@@ -222,6 +222,85 @@ fn one(src: &Path, nzcg: &Path, work: &Path, target: Option<&str>) -> Outcome {
     }
 }
 
+/// A program of tasks built by each backend runs under the pool on one, two and four workers and
+/// under the thread model, and gives the LLVM build's answer every time (performance leadership
+/// 6.2-6.4): tasks that allocate, recurse, park on channels deep in their frames (6.2's copied
+/// stacks), spawn tasks of their own (6.3's stealing) and are preempted while they compute. The
+/// argument block a generated `spawn` allocates is freed by the runtime's scope join, so it must
+/// come from the allocator the runtime frees with (R1.5 3.1's small-block heap).
+#[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
+#[test]
+fn a_task_program_from_each_backend_runs_on_any_number_of_workers() {
+    let nzcg = differential::nzcg();
+    let d = tempfile::tempdir().unwrap();
+    let src = "fn depth(n: Int) -> Int { if n == 0 { 0 } else { 1 + depth(n - 1) } }\n\
+fn leaf(c: Chan, v: Int) -> Int { chan_send(c, v); 0 }\n\
+fn work(t: SpawnCap, k: Int, inp: Chan, out: Chan) -> Int ! { spawn } {\n\
+    let mut total = 0\n\
+    let buf = ints_new()\n\
+    let mut round = 0\n\
+    while round < 40 {\n\
+        let v = ints_new()\n\
+        let mut i = 0\n\
+        while i < 500 { ints_push(v, (i * k + round) % 97); i += 1 }\n\
+        let mut s = \"\"\n\
+        let mut j = 0\n\
+        while j < 20 { s = s + int_to_str(ints_get(v, j * 7)); j += 1 }\n\
+        total = (total + str_len(s) + ints_pop(v) + depth(50 + k)) % 1000000007\n\
+        round += 1\n\
+    }\n\
+    if chan_recv(inp, buf) { total += ints_pop(buf) }\n\
+    let side = chan_new(4)\n\
+    scope { spawn leaf(side, k); spawn leaf(side, k + 1) }\n\
+    if chan_recv(side, buf) { total += ints_pop(buf) }\n\
+    if chan_recv(side, buf) { total += ints_pop(buf) }\n\
+    chan_send(out, total)\n\
+    0\n\
+}\n\
+fn main(io: IoCap, tasks: SpawnCap) {\n\
+    let inp = chan_new(1)\n\
+    let out = chan_new(64)\n\
+    let mut sum = 0\n\
+    scope {\n\
+        let mut k = 0\n\
+        while k < 12 { spawn work(tasks, k, inp, out); k += 1 }\n\
+        let mut r = 0\n\
+        while r < 12 { chan_send(inp, r * 1000); r += 1 }\n\
+        let buf = ints_new()\n\
+        let mut got = 0\n\
+        while got < 12 { if chan_recv(out, buf) { sum = (sum + ints_pop(buf)) % 1000000007 }; got += 1 }\n\
+    }\n\
+    println(sum)\n\
+}\n";
+    std::fs::write(d.path().join("tasks.nz"), src).unwrap();
+    let mut want: Option<String> = None;
+    for backend in ["llvm", "cranelift", "nazm"] {
+        let exe = format!("t-{backend}");
+        let b = nazm_with(
+            d.path(),
+            nzcg,
+            &["build", "--backend", backend, "tasks.nz", "-o", &exe],
+        );
+        assert_eq!(b.code, Some(0), "{backend}: {}{}", b.stdout, b.stderr);
+        for (var, val) in [
+            ("NAZM_WORKERS", "1"),
+            ("NAZM_WORKERS", "2"),
+            ("NAZM_WORKERS", "4"),
+            ("NAZM_SCHEDULER", "threads"),
+        ] {
+            let mut c = Command::new(d.path().join(&exe));
+            c.current_dir(d.path())
+                .env_remove("NAZM_SCHEDULER")
+                .env(var, val);
+            let r = run_within(&mut c, std::time::Duration::from_secs(120))
+                .unwrap_or_else(|| panic!("{backend} {var}={val}: did not end"));
+            assert_eq!(r.code, Some(0), "{backend} {var}={val}: {}", r.stderr);
+            let w = want.get_or_insert_with(|| r.stdout.clone());
+            assert_eq!(&r.stdout, w, "{backend} {var}={val}");
+        }
+    }
+}
+
 #[cfg_attr(not(target_os = "macos"), ignore = "macOS only before 1.0")]
 #[test]
 fn every_input_of_the_generators_suite_agrees_with_the_llvm_build() {
