@@ -477,10 +477,32 @@ lowering as a load and a branch past a call; a monitor thread every 10 ms sets t
 worker's request when that worker has run one task since the last look while others wait, and the
 task yields at its next back edge. Not the stack limit: it is thread-local (a call per read on
 macOS where LLVM cannot hoist it) and it is set in every task, where a plain global is read with
-one instruction. Off with one worker (deterministic mode). Its cost on hot loops (`fib`, `words`,
-`primes`, a tight loop with no call) is not measured yet: no quiet host came while it was built;
-`bench/compare/preempt_cost.sh BASE NEW OUT --wait` times it in the coordinator's quiet window, and
-more than 1-2% reopens the design.
+one instruction. Off with one worker (deterministic mode). Measured in the quiet window: 8-10% on
+a tight loop and `words` — reopened (2026-10-17).
+
+**Preemption, second design (2026-10-17): by interrupt, nothing in the loop.** Options weighed:
+(a) asynchronous preemption, as Go 1.14+; (b) a poll only in loops without a call, or every N
+iterations by a counter in a register — still a decrement and a branch per iteration in exactly the
+loops that starve, a few percent on a tight loop; (c) folding the request into the stack check —
+it runs only on entry to a function in a call cycle, never at a back edge, so a loop without a call
+is never reached. **Chosen: (a).** The monitor interrupts the worker's thread (`SIGURG` on macOS;
+`SuspendThread`, `GetThreadContext` and a redirected return on Windows); the task yields only when
+the interrupted address is in generated code, which the LLVM backend puts in a section of its own
+(`__TEXT,__nz_text`; `.text$nzM` between `.text$nzA` and `.text$nzZ` markers, which MinGW's linker
+sorts by name), and no failure unwinds. What makes an address in generated code safe: generated
+code holds no lock and touches no thread's allocator lists (data races are refused, so anything it
+shares is atomic or behind a channel), its thread-local state is saved per task by `task_leave`,
+and the frames are restored at the same addresses. What could break that: whole-program
+optimisation inlining a runtime function that holds a lock or updates the small-block heap's lists
+into generated code — so every runtime function that takes a pthread mutex or a spin lock, or
+touches the small heap or the pool, is `noinline` in a program with tasks (59 of them; in a program
+of one thread the attribute is dropped, so its code is unchanged). Cost, by instruction counts
+(LLVM -O2, whole-program, against a4ac8e9f, which had no preemption): the tight loop's function is
+the same 216 instructions; `fib`'s recursive function the same 42; `words`' functions the same but
+the once-called `hashmap_new`, which is no longer inlined into `main` (25 instructions); `primes`'
+task body has the same loop and its exit inlines a channel's release. Expected: no measurable
+change on a loop; a call where a task-using program inlined a small-heap allocation. To be
+confirmed in the quiet window with `bench/compare/preempt_cost.sh`.
 
 **6.4 — channels.** The `Int` channel's text is the thread model's, line for line in
 `compiler/emit.nz` (`runtime parity`); its waits and wakes are already the pool's hooks, so the

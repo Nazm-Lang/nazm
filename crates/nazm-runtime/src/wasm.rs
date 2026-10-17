@@ -57,14 +57,6 @@ entry:
   ret void
 }}
 
-; The preemption poll's flag and slow path (6.3): one thread and no pool, so never asked.
-@nz.preempt_req = hidden global i64 0
-
-define hidden void @nz.preempt() {{
-entry:
-  ret void
-}}
-
 define hidden i32 @nz.failed_now() {{
 entry:
   %f = load i1, ptr @nz.failed

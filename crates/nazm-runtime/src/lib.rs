@@ -352,7 +352,16 @@ pub fn escape(s: &str) -> String {
 /// 10 ms asks a worker whose task has held it since the last look, while others wait, to yield
 /// (`nz.pool_monitor`, `nz.pool_watch`; worker 392 its switch count, 400 the count last seen, 408
 /// a task in, 416 asked), and the hook `nz.pool_preempt` yields that task's worker.
-pub const RUNTIME_ABI_REVISION: u32 = 43;
+/// 44 replaces 43's poll (performance leadership 6.3, 2026-10-17: it cost 8-10% on hot loops): no
+/// instruction is added to a loop; the monitor interrupts a worker's thread instead
+/// (`nz.os_preempt`, the `stack` unit's: `SIGURG` on macOS, whose handler `nz.os_preempt_handler`
+/// reads the interrupted address; on Windows a suspend and a return redirected through the `switch`
+/// unit's `nz_os_preempt_stub`; nothing on Linux and Android yet), and the task yields only where
+/// the address is in generated code — the LLVM backend's own section, `__TEXT,__nz_text` or
+/// `.text$nzM` — and no failure unwinds. `nz.preempt`, its flag and its hook are gone; every runtime
+/// function that takes a lock, spins or touches the small-block heap's lists or the pool is
+/// `noinline`, so whole-program optimisation never puts one inside generated code.
+pub const RUNTIME_ABI_REVISION: u32 = 44;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -483,7 +492,6 @@ pub const IMPORTS: &[Import] = &[
     import!("nz.report", [], None, Base, "writes this thread's failure and ends the process with status 2; does not return (an export's C entry, N55)"),
     import!("nz.stack_check", [], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted; takes nothing"),
     import!("nz.stack_check_frame", [I64], Some(Word::I32), Base, "nonzero when this thread's stack is nearly exhausted or a frame of this many bytes would cross its limit; takes nothing"),
-    import!("nz.preempt", [], None, Base, "a loop's back edge found preemption asked for: the pool's hook, which may yield the task's worker (6.3); takes nothing"),
     import!("nz.closure_new", [I64, Ptr, Ptr], Some(Word::Ptr), Closures, "a closure object of this many bytes with its code and release, holding one reference the caller owns, or null"),
     import!("nz.closure_retain", [Ptr], None, Closures, "one more reference to a closure object; null is a no-op"),
     import!("nz.closure_release", [Ptr], None, Closures, "one reference fewer; the last runs its release and frees it; null is a no-op"),
@@ -752,7 +760,6 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.report", "void" () "noreturn", true, Base, "", Ends, Entry, "write the thread's failure to stderr and exit 2", "none"),
     rt!("nz.stack_check", "i32" () "", true, Base, "", Never, Any, "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", "none"),
     rt!("nz.stack_check_frame", "i32" ("i64") "", true, Base, "", Never, Any, "whether this thread's stack is past its limit or a frame of that many bytes would cross it (Q1-A1-01)", "none"),
-    rt!("nz.preempt", "void" () "", false, Base, "", Never, Any, "a loop's back edge found the preemption flag set: call the pool's hook, if any (6.3)", "none"),
     rt!("nz.closure_new", "ptr" ("i64", "ptr", "ptr") "", true, Closures, "", Null, Any, "a closure object with its code and release function (N50)", "one reference, owned by the caller; the caller stores the captures"),
     rt!("nz.closure_retain", "void" ("ptr") "", true, Closures, "", Never, Any, "one more reference to a closure object", "adds a reference, atomically; null is a no-op"),
     rt!("nz.closure_release", "void" ("ptr") "", true, Closures, "", Never, Any, "one reference fewer; the last releases the captures and frees it", "takes a reference, atomically; null is a no-op"),
@@ -776,14 +783,14 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.spawn", "i32" ("ptr", "ptr", "ptr") "", true, Tasks, "spawn", Status, Any, "start a thread for a task and record it in its scope's list, record first", "takes the argument block; 0, -1 out of memory, >0 no thread"),
     rt!("nz.scope_join", "{ptr, i64}" ("ptr") "", true, Tasks, "", Never, Any, "join every task in a list and hand back the first failure", "frees the list and each task's block"),
     rt!("nz.chan_new", "ptr" ("i64") "", true, Channels, "", Null, Any, "a bounded channel", "one reference, owned by the caller"),
-    rt!("nz.chan_send", "i1" ("ptr", "i64") "", true, Channels, "", Status, Locked, "send, blocking while full", "borrows the channel; false when closed"),
-    rt!("nz.chan_recv", "i1" ("ptr", "ptr", "ptr", "i64") "", true, Channels, "", Records, Locked, "receive into a sequence, blocking while empty", "borrows the channel and the sequence; false once closed and drained; records the call site's message only when the sequence cannot grow"),
-    rt!("nz.chan_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a channel, waking every waiter", "borrows the channel"),
+    rt!("nz.chan_send", "i1" ("ptr", "i64") "noinline", true, Channels, "", Status, Locked, "send, blocking while full", "borrows the channel; false when closed"),
+    rt!("nz.chan_recv", "i1" ("ptr", "ptr", "ptr", "i64") "noinline", true, Channels, "", Records, Locked, "receive into a sequence, blocking while empty", "borrows the channel and the sequence; false once closed and drained; records the call site's message only when the sequence cannot grow"),
+    rt!("nz.chan_close", "void" ("ptr") "noinline", true, Channels, "", Never, Locked, "close a channel, waking every waiter", "borrows the channel"),
     rt!("nz.chan_retain", "void" ("ptr") "", true, Channels, "", Never, Any, "one more reference to a channel", "adds a reference, atomically"),
     rt!("nz.chan_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last frees the channel", "takes a reference, atomically"),
     rt!("nz.chanv_new", "ptr" ("i64", "i64", "ptr") "", true, Channels, "", Null, Any, "a bounded generic channel (N53)", "one reference, owned by the caller"),
-    rt!("nz.chanv_send", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
-    rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
+    rt!("nz.chanv_send", "i1" ("ptr", "ptr") "noinline", true, Channels, "", Status, Locked, "send a slot, blocking while full", "borrows the channel; takes the slot's reference when it returns true"),
+    rt!("nz.chanv_recv", "i1" ("ptr", "ptr") "noinline", true, Channels, "", Status, Locked, "receive a slot, blocking while empty", "borrows the channel; hands the slot's reference to the caller when it returns true"),
     rt!("nz.chanv_release", "void" ("ptr") "", true, Channels, "", Never, Any, "one reference fewer; the last releases the queued slots and frees the channel", "takes a reference, atomically"),
     rt!("nz.atomic_load", "i64" ("ptr") "", true, Base, "", Never, Any, "a sequentially consistent load of an atomic's cell (Gate 3)", "borrows the cell"),
     rt!("nz.atomic_store", "void" ("ptr", "i64") "", true, Base, "", Never, Any, "a sequentially consistent store to an atomic's cell (Gate 3)", "borrows the cell"),
@@ -804,51 +811,50 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.errno_save", "void" () "", true, Foreign, "", Never, Owner, "save this thread's errno as a foreign call returns (N85)", "none"),
     rt!("nz.errno_last", "i64" () "", true, Foreign, "", Never, Owner, "the errno the last foreign call on this thread left (N85)", "none"),
     rt!("nz.chanv_close", "void" ("ptr") "", true, Channels, "", Never, Locked, "close a generic channel and wake every select (N54)", "borrows the channel"),
-    rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
+    rt!("nz.chanv_select", "i64" ("ptr", "ptr", "i64", "i64") "noinline", true, Channels, "", Status, Locked, "wait for the lowest-indexed ready channel, or a deadline (N54)", "borrows the channels; hands one slot's reference to the caller when it returns an index"),
     rt!("nz.time_now_ms", "i64" () "", true, Channels, "", Never, Any, "a monotonic clock in milliseconds (N54)", "none"),
     rt!("nz.time_now_ns", "i64" () "", false, Channels, "", Never, Any, "the same monotonic clock in nanoseconds (Gate 2)", "none"),
     rt!("nz.time_wall_ns", "i64" () "", false, Channels, "", Never, Any, "the wall clock in nanoseconds since the Unix epoch (Gate 2)", "none"),
-    rt!("nz.time_sleep_ms", "i64" ("i64") "", false, Tasks, "", Never, Any, "wait, parked on the pool, for milliseconds (Gate 2)", "none"),
+    rt!("nz.time_sleep_ms", "i64" ("i64") "noinline", false, Tasks, "", Never, Any, "wait, parked on the pool, for milliseconds (Gate 2)", "none"),
     rt!("nz.sched_note_spawn", "void" () "", true, Tasks, "", Never, Any, "count a started task (N54)", "none"),
     rt!("nz.sched_note_join", "void" ("ptr") "", true, Tasks, "", Never, Any, "count a scope's tasks as joined (N54)", "borrows the task list"),
-    rt!("nz.sel_sync_get", "ptr" () "", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
-    rt!("nz.sel_signal", "void" () "", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
-    rt!("nz.chanv_try", "i64" ("ptr", "ptr") "", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
+    rt!("nz.sel_sync_get", "ptr" () "noinline", false, Channels, "", Null, Any, "the select lock and condition variable, made on first use", "the process owns it"),
+    rt!("nz.sel_signal", "void" () "noinline", false, Channels, "", Never, Any, "advance the select event count and wake any select", "none"),
+    rt!("nz.chanv_try", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one look at a channel without waiting", "borrows the channel; hands the slot's reference over when it returns 1"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
-    rt!("nz.pool_mode_get", "i64" () "", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", "none"),
+    rt!("nz.pool_mode_get", "i64" () "noinline", false, Tasks, "", Never, Any, "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", "none"),
     rt!("nz.pool_env", "i64" ("ptr", "i64") "", false, Tasks, "", Never, Any, "a positive count from an environment variable, or a default (N83)", "borrows the name"),
     rt!("nz.pool_sync", "ptr" () "", false, Tasks, "", Null, Any, "a mutex and a condition variable in one allocation (N83)", "the process owns it"),
-    rt!("nz.pool_start", "i1" () "", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
+    rt!("nz.pool_start", "i1" () "noinline", false, Tasks, "", Status, Any, "start the pool's tables and workers (N83)", "the process owns them"),
     rt!("nz.pool_push", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue a runnable task on its worker, unstarted or resumed, and signal the worker if it sleeps (N83, 6.3)", "the worker's queue holds the task"),
     rt!("nz.pool_take", "ptr" ("ptr") "", false, Tasks, "", Never, Locked, "the next task a worker runs: the older head of its resumed and unstarted queues (6.3)", "the worker runs the task"),
-    rt!("nz.pool_steal", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", "the tasks move to this worker"),
-    rt!("nz.pool_spin", "i1" ("ptr") "", false, Tasks, "", Never, Locked, "look for work for up to 50 microseconds before a worker sleeps (6.3)", "none"),
-    rt!("nz.pool_monitor", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "the preemption monitor: look at the workers every 10 ms (6.3)", "none"),
-    rt!("nz.pool_watch", "void" () "", false, Tasks, "", Never, Any, "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", "none"),
-    rt!("nz.pool_preempt", "void" () "", false, Tasks, "", Never, Any, "the pool's preemption hook: yield the worker if it was asked to (6.3)", "none"),
-    rt!("nz.pool_calm", "void" () "", false, Tasks, "", Never, Any, "clear the process's preemption flag unless a worker's is set (6.3)", "none"),
+    rt!("nz.pool_steal", "i1" ("ptr") "noinline", false, Tasks, "", Never, Locked, "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", "the tasks move to this worker"),
+    rt!("nz.pool_spin", "i1" ("ptr") "noinline", false, Tasks, "", Never, Locked, "look for work for up to 50 microseconds before a worker sleeps (6.3)", "none"),
+    rt!("nz.pool_monitor", "ptr" ("ptr") "noinline", false, Tasks, "", Never, Owner, "the preemption monitor: look at the workers every 10 ms (6.3)", "none"),
+    rt!("nz.pool_watch", "void" () "noinline", false, Tasks, "", Never, Any, "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", "none"),
+    rt!("nz.pool_preempt", "void" () "noinline", false, Tasks, "", Never, Any, "the pool's preemption hook: yield the worker if it was asked to (6.3)", "none"),
     rt!("nz.pool_now", "i64" () "", false, Tasks, "", Never, Any, "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", "none"),
-    rt!("nz.pool_timers", "i1" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
-    rt!("nz.task_enter", "void" ("ptr") "", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
-    rt!("nz.task_leave", "void" ("ptr") "", false, Tasks, "", Never, Owner, "save a task's failure state and stack limit and clear the thread's (N83)", "borrows the task"),
-    rt!("nz.worker_main", "ptr" ("ptr") "", false, Tasks, "", Never, Owner, "a pool worker: run its tasks first in, first out, on its run stack (N83, 6.2)", "the worker owns its run stack and its tasks' saved frames"),
-    rt!("nz.task_start", "i32" ("ptr", "ptr") "", false, Tasks, "", Status, Any, "start a task on the pool: a record, no stack (N83, 6.2)", "takes the argument block; 0, or 1 when no record could be had"),
-    rt!("nz.task_place", "i1" ("ptr", "ptr") "", false, Tasks, "", Status, Owner, "put a task's frames on its worker's run stack, saving those of the task in place (6.2)", "the worker's tasks own their saved frames; false when they could not be saved"),
-    rt!("nz_task_main", "void" ("ptr") "", false, Tasks, "", Never, Owner, "a task's body on its own stack, then its end (N83)", "borrows the task"),
+    rt!("nz.pool_timers", "i1" ("ptr", "ptr") "noinline", false, Tasks, "", Never, Locked, "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", "none"),
+    rt!("nz.task_enter", "void" ("ptr") "noinline", false, Tasks, "", Never, Owner, "make a task this thread's, with its own failure state and stack limit (N83)", "borrows the task"),
+    rt!("nz.task_leave", "void" ("ptr") "noinline", false, Tasks, "", Never, Owner, "save a task's failure state and stack limit and clear the thread's (N83)", "borrows the task"),
+    rt!("nz.worker_main", "ptr" ("ptr") "noinline", false, Tasks, "", Never, Owner, "a pool worker: run its tasks first in, first out, on its run stack (N83, 6.2)", "the worker owns its run stack and its tasks' saved frames"),
+    rt!("nz.task_start", "i32" ("ptr", "ptr") "noinline", false, Tasks, "", Status, Any, "start a task on the pool: a record, no stack (N83, 6.2)", "takes the argument block; 0, or 1 when no record could be had"),
+    rt!("nz.task_place", "i1" ("ptr", "ptr") "noinline", false, Tasks, "", Status, Owner, "put a task's frames on its worker's run stack, saving those of the task in place (6.2)", "the worker's tasks own their saved frames; false when they could not be saved"),
+    rt!("nz_task_main", "void" ("ptr") "noinline", false, Tasks, "", Never, Owner, "a task's body on its own stack, then its end (N83)", "borrows the task"),
     rt!("nz.task_suspend", "void" ("ptr") "", false, Tasks, "", Never, Owner, "switch from a task back to its worker (N83)", "none"),
-    rt!("nz.task_wake", "void" ("ptr") "", false, Tasks, "", Never, Any, "make a parked task runnable, or note the wake (N83)", "none"),
-    rt!("nz.pool_bucket", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the waiter list a condition variable hashes to (N83)", "none"),
+    rt!("nz.task_wake", "void" ("ptr") "noinline", false, Tasks, "", Never, Any, "make a parked task runnable, or note the wake (N83)", "none"),
+    rt!("nz.pool_bucket", "ptr" ("ptr") "noinline", false, Tasks, "", Never, Any, "the waiter list a condition variable hashes to (N83)", "none"),
     rt!("nz.pool_locks", "ptr" () "", false, Tasks, "", Null, Any, "the waiter table's 64 locks (6.4)", "the process owns them"),
-    rt!("nz.pool_lock_of", "ptr" ("ptr") "", false, Tasks, "", Never, Any, "the lock of the bucket a condition variable hashes to (6.4)", "none"),
-    rt!("nz.pool_unwait", "void" ("ptr") "", false, Tasks, "", Never, Any, "take a task off the waiters it is still on (N83)", "none"),
-    rt!("nz.cwait", "i32" ("ptr", "ptr") "", false, Tasks, "", Never, Locked, "wait on a condition variable: park a pool task, block a thread (N83)", "the mutex is held again on return"),
-    rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "", false, Tasks, "", Never, Locked, "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", "the mutex is held again on return"),
+    rt!("nz.pool_lock_of", "ptr" ("ptr") "noinline", false, Tasks, "", Never, Any, "the lock of the bucket a condition variable hashes to (6.4)", "none"),
+    rt!("nz.pool_unwait", "void" ("ptr") "noinline", false, Tasks, "", Never, Any, "take a task off the waiters it is still on (N83)", "none"),
+    rt!("nz.cwait", "i32" ("ptr", "ptr") "noinline", false, Tasks, "", Never, Locked, "wait on a condition variable: park a pool task, block a thread (N83)", "the mutex is held again on return"),
+    rt!("nz.ctimedwait", "i32" ("ptr", "ptr", "ptr") "noinline", false, Tasks, "", Never, Locked, "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", "the mutex is held again on return"),
     rt!("nz.timed_nap", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "a monotonic deadline as the wall-clock time a timed wait measures, at most 100 ms ahead (Q1-M-12)", "writes the second timespec"),
-    rt!("nz.pool_park", "void" ("ptr", "ptr", "ptr", "i64") "", false, Tasks, "", Never, Locked, "register a task as a waiter, park it and give its worker back (N83)", "releases and retakes the mutex"),
-    rt!("nz.cwake", "void" ("ptr") "", false, Tasks, "", Never, Any, "wake every thread and pool task waiting on a condition variable (N83)", "none"),
-    rt!("nz.task_yield", "void" () "", false, Tasks, "", Never, Owner, "let a pool task's worker run its other tasks first (N83)", "none"),
-    rt!("nz.pool_report", "void" () "", false, Tasks, "", Never, Entry, "the pool's line of the schedule report, where it ran (N83)", "none"),
-    rt!("nz.join_one", "i32" ("ptr") "", false, Tasks, "", Status, Any, "wait for one task to end, its thread joined or its record freed (N83)", "frees the pool task's record"),
+    rt!("nz.pool_park", "void" ("ptr", "ptr", "ptr", "i64") "noinline", false, Tasks, "", Never, Locked, "register a task as a waiter, park it and give its worker back (N83)", "releases and retakes the mutex"),
+    rt!("nz.cwake", "void" ("ptr") "noinline", false, Tasks, "", Never, Any, "wake every thread and pool task waiting on a condition variable (N83)", "none"),
+    rt!("nz.task_yield", "void" () "noinline", false, Tasks, "", Never, Owner, "let a pool task's worker run its other tasks first (N83)", "none"),
+    rt!("nz.pool_report", "void" () "noinline", false, Tasks, "", Never, Entry, "the pool's line of the schedule report, where it ran (N83)", "none"),
+    rt!("nz.join_one", "i32" ("ptr") "noinline", false, Tasks, "", Status, Any, "wait for one task to end, its thread joined or its record freed (N83)", "frees the pool task's record"),
     rt!("nz.format_int", "i64" ("ptr", "i64") "", false, Base, "", Never, Any, "an Int's decimal digits into a 21-byte buffer", "writes into the caller's buffer"),
     rt!("nz.vec_release", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "release a sequence, each element with its type's release at its stride, through a queue rather than recursion (R1a)", "takes a reference; null is a no-op; the queue is null outside a release"),
     rt!("nz.vec_drain", "void" ("ptr", "ptr", "i64", "ptr") "", false, Sequences, "", Never, Owner, "empty a dead sequence: each element's release, given the queue, then its storage (R1a)", "takes the sequence's last reference"),
@@ -858,40 +864,40 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.scope_join_to", "void" ("ptr", "ptr") "", false, Tasks, "", Never, Any, "`nz.scope_join`, written through a pointer", "as `nz.scope_join`"),
     rt!("nz.task_publish", "void" ("ptr") "", false, Tasks, "", Never, Any, "copy this thread's failure into its task block", "borrows the block"),
     rt!("nz.cstr", "ptr" ("ptr", "i64") "", false, Io, "", Null, Any, "a NUL-terminated copy of a path, for the C library", "the copy is owned by the caller, who frees it"),
-    rt!("nz.os_acquire", "void" () "", false, Files, "", Never, Any, "take the handle table's spin lock (Gate 2)", "none"),
+    rt!("nz.os_acquire", "void" () "noinline", false, Files, "", Never, Any, "take the handle table's spin lock (Gate 2)", "none"),
     rt!("nz.os_release", "void" () "", false, Files, "", Never, Any, "give the handle table's spin lock back", "none"),
     rt!("nz.os_errno", "i64" () "", false, Files, "", Never, Any, "-errno, read after a failed system call", "none"),
     rt!("nz.os_slot", "ptr" ("i64") "", false, Files, "", Null, Locked, "a descriptor's slot, the table grown to hold it", "the lock is held"),
     rt!("nz.os_register", "i64" ("i64", "i64", "ptr") "", false, Files, "", Status, Locked, "a new generation's handle for a descriptor", "the lock is held"),
     rt!("nz.os_live", "ptr" ("i64") "", false, Files, "", Null, Locked, "the live slot a handle names", "the lock is held"),
-    rt!("nz.os_pin", "i64" ("i64") "", false, Files, "", Status, Any, "pin a live handle: its kind, or its status", "takes the lock"),
-    rt!("nz.os_unpin", "void" ("i64") "", false, Files, "", Never, Any, "unpin a handle; the last unpin of one closed meanwhile closes it", "takes the lock"),
+    rt!("nz.os_pin", "i64" ("i64") "noinline", false, Files, "", Status, Any, "pin a live handle: its kind, or its status", "takes the lock"),
+    rt!("nz.os_unpin", "void" ("i64") "noinline", false, Files, "", Never, Any, "unpin a handle; the last unpin of one closed meanwhile closes it", "takes the lock"),
     rt!("nz.os_shut", "i64" ("i64", "i64", "ptr") "", false, Files, "", Status, Any, "close a descriptor or a directory", "owns what it closes"),
-    rt!("nz.os_adopt", "i64" ("i32", "i64", "ptr") "", false, Files, "", Status, Any, "a handle for a descriptor just opened, closing it if the table cannot grow", "takes the descriptor"),
+    rt!("nz.os_adopt", "i64" ("i32", "i64", "ptr") "noinline", false, Files, "", Status, Any, "a handle for a descriptor just opened, closing it if the table cannot grow", "takes the descriptor"),
     rt!("nz.os_open_read", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "open a file to read (Gate 2)", "borrows the path"),
     rt!("nz.os_open_write", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "open a file to write, by mode (Gate 2)", "borrows the path"),
     rt!("nz.os_dir_open", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "open a directory to list (Gate 2)", "borrows the path"),
-    rt!("nz.os_stdin", "i64" () "", false, Files, "io", Status, Any, "standard input's handle (Gate 2)", "none"),
-    rt!("nz.os_std_stream", "i64" ("i64") "", false, Files, "io", Status, Any, "standard output's or errors' handle (R1d)", "none"),
+    rt!("nz.os_stdin", "i64" () "noinline", false, Files, "io", Status, Any, "standard input's handle (Gate 2)", "none"),
+    rt!("nz.os_std_stream", "i64" ("i64") "noinline", false, Files, "io", Status, Any, "standard output's or errors' handle (R1d)", "none"),
     rt!("nz.os_status", "i64" ("i64") "", false, Files, "", Status, Any, "whether a handle is live (Gate 2)", "none"),
     rt!("nz.os_read", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read into a buffer (Gate 2)", "writes the caller's buffer"),
     rt!("nz.heap_reserve", "void" ("i64") "", false, Heap, "", Ends, Any, "count bytes as live, or end the process past the heap limit (R1d, D5)", "none"),
     rt!("nz.heap_malloc", "ptr" ("i64") "", false, Heap, "", Null, Any, "C's `malloc`, counted against the heap limit (R1d, D5)", "memory the caller owns, or null"),
     rt!("nz.heap_free", "void" ("ptr") "", false, Heap, "", Never, Any, "C's `free` of a counted block (R1d, D5)", "takes the memory; null is a no-op"),
     rt!("nz.heap_realloc", "ptr" ("ptr", "i64") "", false, Heap, "", Null, Any, "C's `realloc` of a counted block, its growth counted first (R1d, D5)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
-    rt!("nz.small_malloc", "ptr" ("i64") "", false, Heap, "", Null, Any, "C's `malloc`, a block of up to 512 bytes from this thread's list of its size class (R1.5 3.1)", "memory the caller owns, or null"),
-    rt!("nz.small_free", "void" ("ptr") "", false, Heap, "", Never, Any, "C's `free` of a small-block heap's block, kept on this thread's list while it is short (R1.5 3.1)", "takes the memory; null is a no-op"),
-    rt!("nz.small_realloc", "ptr" ("ptr", "i64") "", false, Heap, "", Null, Any, "C's `realloc` of a small-block heap's block (R1.5 3.1)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
+    rt!("nz.small_malloc", "ptr" ("i64") "noinline", false, Heap, "", Null, Any, "C's `malloc`, a block of up to 512 bytes from this thread's list of its size class (R1.5 3.1)", "memory the caller owns, or null"),
+    rt!("nz.small_free", "void" ("ptr") "noinline", false, Heap, "", Never, Any, "C's `free` of a small-block heap's block, kept on this thread's list while it is short (R1.5 3.1)", "takes the memory; null is a no-op"),
+    rt!("nz.small_realloc", "ptr" ("ptr", "i64") "noinline", false, Heap, "", Null, Any, "C's `realloc` of a small-block heap's block (R1.5 3.1)", "takes the memory and returns memory the caller owns, or null with it unchanged"),
     rt!("nz.os_read_line", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "read a line of standard input into a buffer (R1d, P3)", "writes the caller's buffer"),
-    rt!("nz.os_in_acquire", "void" () "", false, Files, "", Never, Any, "take standard input's spin lock (R1d, P3)", "none"),
+    rt!("nz.os_in_acquire", "void" () "noinline", false, Files, "", Never, Any, "take standard input's spin lock (R1d, P3)", "none"),
     rt!("nz.os_in_release", "void" () "", false, Files, "", Never, Any, "give standard input's spin lock back (R1d, P3)", "none"),
     rt!("nz.os_in_read", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "read standard input, its buffer first (R1d, P3)", "writes the caller's buffer; takes standard input's lock"),
     rt!("nz.os_in_line", "i64" ("ptr", "i64") "", false, Files, "io", Status, Any, "read standard input to its next newline, keeping what follows (R1d, P3)", "writes the caller's buffer; makes standard input's buffer, which the process owns; takes standard input's lock"),
     rt!("nz.os_write", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "write bytes (Gate 2)", "borrows the bytes"),
     rt!("nz.os_seek", "i64" ("i64", "i64", "i64") "", false, Files, "io", Status, Any, "move a file's position (Gate 2)", "none"),
     rt!("nz.os_sync", "i64" ("i64") "", false, Files, "io", Status, Any, "a file's data on storage (Gate 2)", "none"),
-    rt!("nz.os_close", "i64" ("i64") "", false, Files, "io", Status, Any, "close a handle (Gate 2)", "none"),
-    rt!("nz.os_dir_next", "i64" ("i64", "ptr", "i64") "", false, Files, "io", Status, Any, "a directory's next entry (Gate 2)", "writes the caller's buffer"),
+    rt!("nz.os_close", "i64" ("i64") "noinline", false, Files, "io", Status, Any, "close a handle (Gate 2)", "none"),
+    rt!("nz.os_dir_next", "i64" ("i64", "ptr", "i64") "noinline", false, Files, "io", Status, Any, "a directory's next entry (Gate 2)", "writes the caller's buffer"),
     rt!("nz.os_stat", "i64" ("ptr", "i64", "ptr") "", false, Files, "io", Status, Any, "a path's size, kind, time and permissions (Gate 2)", "borrows the path; writes the caller's 32 bytes"),
     rt!("nz.os_path_op", "i64" ("ptr", "i64", "i64") "", false, Files, "io", Status, Any, "make or remove a directory, or remove a file (Gate 2)", "borrows the path"),
     rt!("nz.os_rename", "i64" ("ptr", "i64", "ptr", "i64") "", false, Files, "io", Status, Any, "rename a path (Gate 2)", "borrows both paths"),
@@ -899,15 +905,15 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_error_text", "i64" ("i64", "ptr", "i64") "", false, Files, "", Never, Any, "the system's message for a status (Gate 2)", "writes the caller's buffer"),
     rt!("nz.net_recv", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a read from a connected socket, waiting at most its deadline (Gate 2)", "writes the caller's buffer"),
     rt!("nz.net_send", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a connected socket, waiting at most its deadline (Gate 2)", "borrows the bytes"),
-    rt!("nz.net_wake", "void" ("ptr") "", false, Net, "", Never, Any, "wake every task waiting on a wait record (Gate 2)", "takes the record's lock"),
+    rt!("nz.net_wake", "void" ("ptr") "noinline", false, Net, "", Never, Any, "wake every task waiting on a wait record (Gate 2)", "takes the record's lock"),
     rt!("nz.net_now", "i64" () "", false, Net, "", Never, Any, "the monotonic clock in nanoseconds, which a socket's deadline is on (Gate 2, Q1-M-12)", "none"),
-    rt!("nz.net_start", "void" () "", false, Net, "", Never, Any, "start the reactor, once (Gate 2)", "none"),
+    rt!("nz.net_start", "void" () "noinline", false, Net, "", Never, Any, "start the reactor, once (Gate 2)", "none"),
     rt!("nz.net_reactor", "ptr" ("ptr") "", false, Net, "", Never, Entry, "the reactor thread: wait for events and wake their handles (Gate 2)", "none"),
-    rt!("nz.net_event", "void" ("i64") "", false, Net, "", Never, Any, "wake an event's handle if it is still that generation's (Gate 2)", "takes the table's lock, then the record's"),
-    rt!("nz.net_waitrec", "ptr" ("i64") "", false, Net, "", Null, Any, "a live handle's wait record, made the first time (Gate 2)", "takes the table's lock"),
-    rt!("nz.net_closing", "i1" ("i64") "", false, Net, "", Never, Any, "whether a handle is no longer live (Gate 2)", "takes the table's lock"),
-    rt!("nz.net_deadline", "i64" ("i64") "", false, Net, "", Never, Any, "when a wait on a handle gives up (Gate 2)", "takes the table's lock"),
-    rt!("nz.net_wait", "i64" ("i64", "i64", "i64") "", false, Net, "", Status, Any, "wait until a socket may be ready, its deadline passes or it closes (Gate 2)", "takes the record's lock"),
+    rt!("nz.net_event", "void" ("i64") "noinline", false, Net, "", Never, Any, "wake an event's handle if it is still that generation's (Gate 2)", "takes the table's lock, then the record's"),
+    rt!("nz.net_waitrec", "ptr" ("i64") "noinline", false, Net, "", Null, Any, "a live handle's wait record, made the first time (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_closing", "i1" ("i64") "noinline", false, Net, "", Never, Any, "whether a handle is no longer live (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_deadline", "i64" ("i64") "noinline", false, Net, "", Never, Any, "when a wait on a handle gives up (Gate 2)", "takes the table's lock"),
+    rt!("nz.net_wait", "i64" ("i64", "i64", "i64") "noinline", false, Net, "", Status, Any, "wait until a socket may be ready, its deadline passes or it closes (Gate 2)", "takes the record's lock"),
     rt!("nz.net_would_block", "i1" () "", false, Net, "", Never, Any, "whether the failure just reported would block (Gate 2)", "none"),
     rt!("nz.net_parse", "i64" ("ptr", "i64", "ptr") "", false, Net, "", Status, Any, "HOST:PORT into a socket address (Gate 2)", "borrows the text; writes the caller's 128 bytes"),
     rt!("nz.os_tcp_listen", "i64" ("ptr", "i64") "", false, Net, "io", Status, Any, "listen on an address (Gate 2)", "borrows the address"),
@@ -916,7 +922,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_udp_bind", "i64" ("ptr", "i64") "", false, Net, "io", Status, Any, "bind a datagram socket (Gate 2)", "borrows the address"),
     rt!("nz.os_udp_send_to", "i64" ("i64", "ptr", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "send a datagram (Gate 2)", "borrows the bytes and the address"),
     rt!("nz.os_udp_recv_from", "i64" ("i64", "ptr", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "receive a datagram and its sender (Gate 2)", "writes the caller's buffers"),
-    rt!("nz.os_set_timeout", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a handle's deadline (Gate 2)", "none"),
+    rt!("nz.os_set_timeout", "i64" ("i64", "i64") "noinline", false, Net, "io", Status, Any, "a handle's deadline (Gate 2)", "none"),
     rt!("nz.os_shutdown", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "shut a connection's reading or writing (Gate 2)", "none"),
     rt!("nz.os_net_addr", "i64" ("i64", "i64", "ptr", "i64") "", false, Net, "io", Never, Any, "a socket's own or peer's address (Gate 2)", "writes the caller's buffer"),
     rt!("nz.os_resolve", "i64" ("ptr", "i64", "i64", "ptr", "i64") "", false, Net, "io", Status, Any, "resolve a name (Gate 2)", "borrows the name; writes the caller's buffer"),
@@ -931,10 +937,10 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_tls_write", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "plaintext into the engine, to be pulled as ciphertext (C1)", "borrows the bytes; the engine copies them"),
     rt!("nz.os_tls_close", "i64" ("i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "end a session or a configuration (C1)", "writes the caller's buffer; frees the engine's objects"),
     rt!("nz.os_tls_info", "i64" ("i64", "i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "the ALPN name, version, peer or last failure of a session (C1)", "writes the caller's buffer"),
-    rt!("nz.tls_table", "ptr" () "", false, Tls, "", Null, Any, "the session table, made zeroed on first use (C1)", "none"),
+    rt!("nz.tls_table", "ptr" () "noinline", false, Tls, "", Null, Any, "the session table, made zeroed on first use (C1)", "none"),
     rt!("nz.tls_put", "i64" ("ptr", "i64") "", false, Tls, "", Status, Any, "a free slot for an engine object: its id, or -24 when the table is full (C1)", "takes the object into the slot"),
     rt!("nz.tls_slot", "ptr" ("i64") "", false, Tls, "", Null, Any, "an id's slot, or null for an id no slot has (C1)", "none"),
-    rt!("nz.tls_hold", "ptr" ("ptr", "i64", "i64") "", false, Tls, "", Null, Locked, "hold a slot for a live id of a kind: its object, or null with nothing held (C1)", "takes the slot's hold"),
+    rt!("nz.tls_hold", "ptr" ("ptr", "i64", "i64") "noinline", false, Tls, "", Null, Locked, "hold a slot for a live id of a kind: its object, or null with nothing held (C1)", "takes the slot's hold"),
     rt!("nz.tls_let_go", "void" ("ptr") "", false, Tls, "", Never, Locked, "let a held slot go (C1)", "releases the slot's hold"),
     rt!("nz.tls_configure", "i64" ("i64", "ptr", "i64", "ptr", "i64", "ptr", "i64") "", false, Tls, "io", Status, Any, "a configuration from the engine, in a slot (C1)", "borrows the buffers"),
     rt!("nz.tls_open", "i64" ("i64", "i64", "ptr", "i64") "", false, Tls, "io", Status, Locked, "a session from a configuration, in a slot (C1)", "holds the configuration's slot while the engine copies from it"),
@@ -947,7 +953,7 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.os_env_find", "ptr" ("ptr", "i64", "ptr") "", false, Files, "io", Never, Any, "a variable's value (Gate 2)", "returns a pointer into the environment"),
     rt!("nz.net_pipe_write", "i64" ("i64", "ptr", "i64") "", false, Net, "io", Status, Any, "a write to a pipe, waiting at most its deadline (Gate 2)", "borrows the bytes"),
     rt!("nz.os_spawn", "i64" ("ptr", "i64", "ptr") "", false, Net, "io", Status, Any, "run a program with three pipes (Gate 2)", "borrows the program and the arguments"),
-    rt!("nz.os_child", "ptr" ("i64") "", false, Net, "", Null, Any, "a child's record, pinned (Gate 2)", "pins the handle"),
+    rt!("nz.os_child", "ptr" ("i64") "noinline", false, Net, "", Null, Any, "a child's record, pinned (Gate 2)", "pins the handle"),
     rt!("nz.os_child_pipe", "i64" ("i64", "i64") "", false, Net, "io", Status, Any, "a child's pipe (Gate 2)", "none"),
     rt!("nz.os_wait", "i64" ("i64") "", false, Net, "io", Status, Any, "wait for a child's exit (Gate 2)", "none"),
     rt!("nz.os_kill", "i64" ("i64") "", false, Net, "io", Status, Any, "kill a child (Gate 2)", "none"),
@@ -1064,18 +1070,6 @@ pub const GLOBALS: &[RuntimeGlobal] = &[
         ty: "i64",
         thread_local: true,
         writers: "`nz.stack_check`, on its own thread only, at the thread's first check (N49)",
-    },
-    RuntimeGlobal {
-        symbol: "nz.preempt_req",
-        ty: "i64",
-        thread_local: false,
-        writers: "the pool's monitor and `nz.pool_preempt`, atomically (6.3)",
-    },
-    RuntimeGlobal {
-        symbol: "nz.preempt_hook",
-        ty: "ptr",
-        thread_local: false,
-        writers: "`nz.pool_start`, once, before any worker runs (6.3)",
     },
     RuntimeGlobal {
         symbol: "nz.argc",
@@ -1383,7 +1377,11 @@ mod tests {
                         .any(|n| l.contains(&format!(" @{n}(")));
                 }
                 if !skip {
-                    out.push(l.replacen(" thread_local ", " ", 1));
+                    // What is `noinline` for preemption's sake is inlined again (6.3).
+                    out.push(
+                        l.replacen(" thread_local ", " ", 1)
+                            .replace(" noinline {", " {"),
+                    );
                 }
                 if l == "}" {
                     skip = false;
@@ -1510,10 +1508,9 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_three_and_reaches_the_system_only_through_its_platform_layer()
-    {
-        // 6.3's preemption: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 43);
+    fn the_runtime_is_revision_forty_four_and_reaches_the_system_only_through_its_platform_layer() {
+        // 6.3's preemption by interrupt: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 44);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

@@ -740,8 +740,6 @@ impl Machine<'_> {
                 None
             }
             "nz.stack_check" | "nz.stack_check_frame" => Some(u64::from(self.depth > DEPTH - 100)),
-            // The oracle is one thread: nothing ever asks it to yield (6.3).
-            "nz.preempt" => None,
             // The oracle is one thread (Gate 3): an atomic access is the plain one.
             "nz.atomic_load" => Some(self.read(arg(0), 8)?),
             "nz.atomic_store" => {

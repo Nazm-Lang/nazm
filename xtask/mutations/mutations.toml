@@ -1114,10 +1114,13 @@ A two-module program then has two `@nz.fail`s and the link fails — which is th
 the bad one is a language that quietly grew a per-module failure state
 
 Repointed by N48: the unit's text is now bound before debug information may be attached, and the runtime is `crate::runtime::emit_runtime` since N43 — whose move left this replacement naming a function `emit.rs` no longer has.
-Repointed by N105: the rule is LIR's, made once for both backends."""
+Repointed by N105: the rule is LIR's, made once for both backends.
+Repointed by performance leadership 6.3, whose call names the target's code section too."""
 file = "crates/nazm-lir/src/backend.rs"
-find = '        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes());'
-replace = '        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes()) + &crate::runtime::emit_runtime(m.needs);'
+find = '''            self.target.code(),
+        );'''
+replace = '''            self.target.code(),
+        ) + &crate::runtime::emit_runtime(m.needs);'''
 killers = [{ package = "nazm-cli", test = "cli_a_b", name = "attestation::identical_input_gives_identical_artefacts_here_and_in_another_directory" }]
 
 [[mutation]]
@@ -10560,11 +10563,12 @@ Repointed by R1.5 3.1, which moved it to 39 for the small-block heap: an object 
 Repointed by performance leadership 6.2, which moved it to 40 for copied stacks: an object built against a runtime whose tasks own their stacks must not be linked with one whose workers do.
 Repointed by performance leadership 6.3, which moved it to 41 for the scheduler: an object built against a runtime whose worker record is 384 bytes must not be linked with one whose is 448.
 Repointed by performance leadership 6.4, which moved it to 42 for the waiter table's locks: an object built against a runtime whose `nz.pool_wait` is one lock must not be linked with one whose is 64.
-Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it."""
+Repointed by performance leadership 6.3's preemption, which moved it to 43: an object whose loops poll `nz.preempt_req` must not be linked with a runtime that does not define it.
+Repointed by performance leadership 6.3's preemption by interrupt, which moved it to 44: an object built to poll `nz.preempt_req` must not be linked with a runtime that no longer defines it."""
 file = "crates/nazm-runtime/src/lib.rs"
-find = '''pub const RUNTIME_ABI_REVISION: u32 = 43;'''
-replace = '''pub const RUNTIME_ABI_REVISION: u32 = 42;'''
-killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_three_and_reaches_the_system_only_through_its_platform_layer" }]
+find = '''pub const RUNTIME_ABI_REVISION: u32 = 44;'''
+replace = '''pub const RUNTIME_ABI_REVISION: u32 = 43;'''
+killers = [{ package = "nazm-runtime", lib = true, name = "tests::the_runtime_is_revision_forty_four_and_reaches_the_system_only_through_its_platform_layer" }]
 
 
 # --- N54: select, deadlines, cooperative cancellation, counters ---------------------------------
@@ -20093,9 +20097,9 @@ name = "pl-a-program-with-tasks-gets-plain-counts"
 why = "the runtime of a program that may start a task counts plainly, so two tasks holding one string race on its count and free it early or never"
 file = "crates/nazm-runtime/src/core.rs"
 find = '''    if needs.single {
-        out = plain_reference_counts(&out);'''
+        out = plain_reference_counts(&out).replace(" noinline {", " {");'''
 replace = '''    if true {
-        out = plain_reference_counts(&out);'''
+        out = plain_reference_counts(&out).replace(" noinline {", " {");'''
 killers = [{ package = "nazm-runtime", lib = true, name = "tests::a_program_of_one_thread_counts_without_atomics_and_any_other_with_them" }, { package = "nazm-cli", test = "cli_s_z", name = "single_thread::a_program_of_one_thread_counts_its_strings_without_atomics" }]
 
 [[mutation]]
@@ -20144,8 +20148,10 @@ killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_default::
 name = "pl-darwin-asks-for-the-wrong-processor-count"
 why = "Darwin's stack unit asks sysconf for _SC_PAGESIZE (29) rather than _SC_NPROCESSORS_ONLN (58), so the pool starts as many workers as a page has bytes, capped at 64"
 file = "crates/nazm-runtime/src/platform.rs"
-find = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(58))'''
-replace = '''            (POSIX_STACK, DARWIN_STACK_SIZE, posix_cpus(29))'''
+find = '''            posix_cpus(58),
+            DARWIN_PREEMPT.replace("{PC}", "272"),'''
+replace = '''            posix_cpus(29),
+            DARWIN_PREEMPT.replace("{PC}", "272"),'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_default::ten_thousand_tasks_run_on_one_worker_per_processor_by_default" }]
 
 # --- v1 track C, C2: @std/http, HTTP/1.1 over TCP (2026-10-16) ----------------------------------
@@ -20709,22 +20715,14 @@ find = '''  store atomic ptr %t, ptr %slot monotonic, align 8'''
 replace = '''  store atomic ptr %head, ptr %slot monotonic, align 8'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::tasks_parked_deep_in_recursion_keep_their_frames_on_a_shared_run_stack" }]
 
-# --- Performance leadership 6.3: preemption at loop back edges (2026-10-16) ------------------------
+# --- Performance leadership 6.3: preemption by interrupt (2026-10-17) -------------------------------
 
 [[mutation]]
-name = "pp-a-back-edge-polls-nothing"
-why = "no loop polls for preemption, so a task looping without a call holds its worker while others wait behind it"
-file = "crates/nazm-lir/src/op/func.rs"
-find = '''        if latches.get(i).copied().unwrap_or(false) {'''
-replace = '''        if latches.get(i).copied().unwrap_or(false) && i == usize::MAX {'''
-killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
-
-[[mutation]]
-name = "pp-the-inlined-poll-never-calls"
-why = "LLVM's inlined poll reads the flag and branches past the call either way"
-file = "crates/nazm-lir/src/op/llvm.rs"
-find = '''                "  br i1 {asked}, label %pp.slow.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"'''
-replace = '''                "  br i1 {asked}, label %pp.on.{n}, label %pp.on.{n}, !prof !{{!\"branch_weights\", i32 1, i32 2000}}"'''
+name = "pp-the-monitor-interrupts-no-one"
+why = "the monitor marks a stuck worker asked but never interrupts its thread, so a task looping without a call holds its worker while others wait"
+file = "crates/nazm-runtime/src/core.rs"
+find = '''  call void @nz.os_preempt(ptr %thp)'''
+replace = '''  ; no interrupt'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
 
 [[mutation]]
@@ -20738,8 +20736,26 @@ replace = '''  %queued = and i1 %rq, false
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
 
 [[mutation]]
+name = "pp-the-handler-finds-no-generated-code"
+why = "macOS's handler takes every interrupted address for one outside the generated code's section, so no task is ever preempted"
+file = "crates/nazm-runtime/src/platform.rs"
+find = '''  %in = and i1 %above, %below
+  br i1 %in, label %yield, label %out'''
+replace = '''  %in = and i1 %above, false
+  br i1 %in, label %yield, label %out'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
+name = "pp-generated-code-has-no-section"
+why = "the LLVM backend leaves generated functions in the default text section on macOS, so an interrupted task is never found in generated code"
+file = "crates/nazm-lir/src/op/llvm.rs"
+find = '''            Self::MachO => " section \"__TEXT,__nz_text,regular,pure_instructions\"",'''
+replace = '''            Self::MachO => "",'''
+killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::a_long_loop_yields_its_worker_to_tasks_waiting_behind_it" }]
+
+[[mutation]]
 name = "pp-an-asked-task-does-not-yield"
-why = "the hook clears its worker's request but the task goes on running"
+why = "the interrupt clears its worker's request but the task goes on running"
 file = "crates/nazm-runtime/src/core.rs"
 find = '''  br i1 %asked, label %yield, label %out'''
 replace = '''  br i1 %asked, label %out, label %out'''

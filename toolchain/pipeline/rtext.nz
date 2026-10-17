@@ -246,25 +246,6 @@ done:
 "#
 }
 
-pub fn rt_core_PREEMPT_RUNTIME() -> Str ! {} {
-    r#"
-@nz.preempt_req = hidden global i64 0
-@nz.preempt_hook = hidden global ptr null
-
-define hidden void @nz.preempt() {
-entry:
-  %h = load atomic ptr, ptr @nz.preempt_hook acquire, align 8
-  %none = icmp eq ptr %h, null
-  br i1 %none, label %out, label %ask
-ask:
-  call void %h()
-  br label %out
-out:
-  ret void
-}
-"#
-}
-
 pub fn rt_core_STACK_RUNTIME() -> Str ! {} {
     r#"
 define hidden i32 @nz.stack_check() {
@@ -1085,7 +1066,7 @@ pub fn rt_core_SELECT_RUNTIME() -> Str ! {} {
 @nz.sel_waiters = hidden global i64 0
 @nz.sel_sync = hidden global ptr null
 
-define hidden ptr @nz.sel_sync_get() {
+define hidden ptr @nz.sel_sync_get() noinline {
 entry:
   %s = load atomic ptr, ptr @nz.sel_sync acquire, align 8
   %unmade = icmp eq ptr %s, null
@@ -1116,7 +1097,7 @@ theirs:
 }
 
 ; Called after a typed channel changed in a way a selector waits for: a value queued, or a close.
-define hidden void @nz.sel_signal() {
+define hidden void @nz.sel_signal() noinline {
 entry:
   %gen = atomicrmw add ptr @nz.sel_gen, i64 1 seq_cst
   %who = load atomic i64, ptr @nz.sel_waiters seq_cst, align 8
@@ -1146,7 +1127,7 @@ entry:
 
 ; One look at one channel, without waiting: 1 and the oldest slot copied out to `%dst` (its
 ; reference handed over), 2 when closed and drained, 0 when neither.
-define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) {
+define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -1189,7 +1170,7 @@ take:
 ; `i` a value from channel `i` in `%dst`, `-3 - i` channel `i` closed and drained, `-1` no
 ; channels, `-2` timed out, and the most negative `i64` out of memory — which no `-3 - i`
 ; can be. The lowest ready index wins.
-define hidden i64 @nz.chanv_select(ptr %h, ptr %dst, i64 %ms, i64 %timed) {
+define hidden i64 @nz.chanv_select(ptr %h, ptr %dst, i64 %ms, i64 %timed) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %now = alloca [2 x i64], align 8
@@ -1345,7 +1326,7 @@ entry:
 
 pub fn rt_core_SLEEP_RUNTIME() -> Str ! {} {
     r#"
-define hidden i64 @nz.time_sleep_ms(i64 %ms) {
+define hidden i64 @nz.time_sleep_ms(i64 %ms) noinline {
 entry:
   %some = icmp sgt i64 %ms, 0
   br i1 %some, label %start, label %done
@@ -1720,11 +1701,13 @@ pub fn rt_core_POOL_RUNTIME() -> Str ! {} {
 declare void @nz_ctx_switch(ptr, ptr)
 declare ptr @nz_ctx_prepare(ptr, ptr)
 declare i64 @nz.os_cpus()
+declare void @nz.os_preempt_init(ptr)
+declare void @nz.os_preempt(ptr)
 
 ; The scheduler this process runs (N83, §7.84; the default N106's, §7.107): 1 one OS thread per
 ; task, 2 the pool, 4 a pool that could not start or a NAZM_SCHEDULER that names neither — no
 ; task starts. Decided once, at the first question; 3 while deciding.
-define hidden i64 @nz.pool_mode_get() {
+define hidden i64 @nz.pool_mode_get() noinline {
 entry:
   br label %top
 top:
@@ -1818,7 +1801,7 @@ done:
 }
 
 ; The lock of the bucket a condition variable hashes to (6.4).
-define hidden ptr @nz.pool_lock_of(ptr %cv) {
+define hidden ptr @nz.pool_lock_of(ptr %cv) noinline {
 entry:
   %a = ptrtoint ptr %cv to i64
   %h = lshr i64 %a, 4
@@ -1846,7 +1829,7 @@ init:
 
 ; Start the pool: its waiter table, its join lock, and its workers. False if any of it could not be
 ; made; the workers already started then wait for tasks that never come.
-define hidden i1 @nz.pool_start() {
+define hidden i1 @nz.pool_start() noinline {
 entry:
   %attr = alloca [128 x i8], align 16
   %pg = call i64 @nz_os_page_size()
@@ -1946,12 +1929,12 @@ started:
   %jnext = add i64 %j, 1
   br label %spawnw
 ok:
-  ; Preemption (6.3): with more than one worker, a monitor asks a task that has held its worker
-  ; for a time slice to yield it when others wait. One worker keeps its order: no monitor.
+  ; Preemption (6.3): with more than one worker, a monitor interrupts a task that has held its
+  ; worker for a time slice while others wait. One worker keeps its order: no monitor.
   %several = icmp sgt i64 %count, 1
   br i1 %several, label %monitor, label %done
 monitor:
-  store atomic ptr @nz.pool_preempt, ptr @nz.preempt_hook release, align 8
+  call void @nz.os_preempt_init(ptr @nz.pool_preempt)
   %mai = call i32 @pthread_attr_init(ptr %attr)
   %mas = call i32 @pthread_attr_setstacksize(ptr %attr, i64 1048576)
   %mrc = call i32 @pthread_create(ptr @nz.pool_mon, ptr %attr, ptr @nz.pool_monitor, ptr null)
@@ -1962,7 +1945,7 @@ done:
 }
 
 ; The monitor (6.3): every 10 ms, look at the workers.
-define hidden ptr @nz.pool_monitor(ptr %arg) {
+define hidden ptr @nz.pool_monitor(ptr %arg) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %nap = alloca [2 x i64], align 8
@@ -1990,16 +1973,16 @@ tick:
 }
 
 ; A worker that has run one task since the last look (its switch count unmoved, a task in) while
-; others wait in its queues is asked to yield: its flag, then the process's. The process's flag is
-; set while any worker's is, and cleared when none is.
-define hidden void @nz.pool_watch() {
+; others wait in its queues is asked to yield, and its thread interrupted (`nz.os_preempt`: a
+; signal, or on Windows a suspend and a redirected return), which yields only where the thread
+; is in generated code.
+define hidden void @nz.pool_watch() noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %arr = load ptr, ptr @nz.pool_workers
   br label %loop
 loop:
   %i = phi i64 [ 0, %entry ], [ %inext, %keep ]
-  %any = phi i1 [ false, %entry ], [ %any2, %keep ]
   %more = icmp slt i64 %i, %count
   br i1 %more, label %body, label %done
 body:
@@ -2028,70 +2011,40 @@ check:
 ask:
   %askp = getelementptr i8, ptr %w, i64 416
   store atomic i64 1, ptr %askp monotonic, align 8
+  %thp = getelementptr i8, ptr %w, i64 296
+  call void @nz.os_preempt(ptr %thp)
   br label %keep
 keep:
-  %flagp = getelementptr i8, ptr %w, i64 416
-  %fl = load atomic i64, ptr %flagp monotonic, align 8
-  %set = icmp ne i64 %fl, 0
-  %any2 = or i1 %any, %set
   %inext = add i64 %i, 1
   br label %loop
 done:
-  %req = zext i1 %any to i64
-  store atomic i64 %req, ptr @nz.preempt_req monotonic, align 8
   ret void
 }
 
-; The pool's preemption hook, on the thread whose loop found the flag (6.3): a task its worker was
-; asked to give up yields it; and the process's flag is cleared when no worker's is set.
-define hidden void @nz.pool_preempt() {
+; The interrupt's yield (6.3), on a worker's thread interrupted in generated code: a task whose
+; worker was asked to give it up yields it, as a select that does not wait does. A request that
+; finds another task in (the asked one parked or ended first) was cleared when that one came in.
+define hidden void @nz.pool_preempt() noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %none = icmp eq ptr %t, null
-  br i1 %none, label %calm, label %mine
+  br i1 %none, label %out, label %failing
+failing:
+  ; Not while a failure unwinds: the exception in flight is this thread's, and another task's
+  ; failure would take it.
+  %f = load i1, ptr @nz.failed
+  br i1 %f, label %out, label %mine
 mine:
   %wp = getelementptr i8, ptr %t, i64 40
   %w = load ptr, ptr %wp
   %flagp = getelementptr i8, ptr %w, i64 416
   %old = atomicrmw xchg ptr %flagp, i64 0 monotonic
   %asked = icmp ne i64 %old, 0
-  call void @nz.pool_calm()
   br i1 %asked, label %yield, label %out
 yield:
   call void @nz.task_yield()
   br label %out
-calm:
-  call void @nz.pool_calm()
-  br label %out
 out:
-  ret void
-}
-
-; Clear the process's preemption flag unless some worker's is set (6.3). A request that races
-; this is set again by the monitor's next look.
-define hidden void @nz.pool_calm() {
-entry:
-  %count = load i64, ptr @nz.pool_count
-  %arr = load ptr, ptr @nz.pool_workers
-  br label %loop
-loop:
-  %i = phi i64 [ 0, %entry ], [ %inext, %next ]
-  %more = icmp slt i64 %i, %count
-  br i1 %more, label %body, label %clear
-body:
-  %wp = getelementptr ptr, ptr %arr, i64 %i
-  %w = load ptr, ptr %wp
-  %flagp = getelementptr i8, ptr %w, i64 416
-  %fl = load atomic i64, ptr %flagp monotonic, align 8
-  %set = icmp ne i64 %fl, 0
-  %inext = add i64 %i, 1
-  br i1 %set, label %stay, label %next
-next:
-  br label %loop
-stay:
-  ret void
-clear:
-  store atomic i64 0, ptr @nz.preempt_req monotonic, align 8
   ret void
 }
 
@@ -2203,7 +2156,7 @@ out:
 ; With nothing of its own to run, take half (at most 64) of the first other worker's unstarted tasks
 ; that has any, looking from the next worker on. Entered and left with this worker's lock held, but
 ; never holding two workers' locks at once. True when tasks were taken.
-define hidden i1 @nz.pool_steal(ptr %w) {
+define hidden i1 @nz.pool_steal(ptr %w) noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %solo = icmp sle i64 %count, 1
@@ -2302,7 +2255,7 @@ joined:
 ; Before sleeping, look for work for up to 50 microseconds without the lock (6.3): a task queued for
 ; this worker, or unstarted tasks on another. Entered and left with the lock held; true when there
 ; may be something to run. Not with one worker, whose program has no one else to wait for.
-define hidden i1 @nz.pool_spin(ptr %w) {
+define hidden i1 @nz.pool_spin(ptr %w) noinline {
 entry:
   %count = load i64, ptr @nz.pool_count
   %solo = icmp sle i64 %count, 1
@@ -2370,7 +2323,7 @@ entry:
 ; Every parked task on this worker whose deadline has passed is queued again; entries for tasks no
 ; longer parked with a deadline leave the list. The worker's lock is held. Writes the soonest
 ; remaining deadline into `%ts` and says whether there is one.
-define hidden i1 @nz.pool_timers(ptr %w, ptr %ts) {
+define hidden i1 @nz.pool_timers(ptr %w, ptr %ts) noinline {
 entry:
   %now = call i64 @nz.pool_now()
   %headp = getelementptr i8, ptr %w, i64 280
@@ -2430,7 +2383,7 @@ out:
 }
 
 ; Into a task: it becomes this thread's current task, with its own failure state and stack limit.
-define hidden void @nz.task_enter(ptr %t) {
+define hidden void @nz.task_enter(ptr %t) noinline {
 entry:
   store ptr %t, ptr @nz.cur_task
   %fp = getelementptr i8, ptr %t, i64 80
@@ -2448,7 +2401,7 @@ entry:
 }
 
 ; Out of a task: its failure state and stack limit are saved into it, and the worker's are clean.
-define hidden void @nz.task_leave(ptr %t) {
+define hidden void @nz.task_leave(ptr %t) noinline {
 entry:
   %fb = load i1, ptr @nz.failed
   %f = zext i1 %fb to i64
@@ -2470,7 +2423,7 @@ entry:
 
 ; A worker: run its tasks first in, first out, each until it parks, yields or ends; with none, steal
 ; unstarted ones, spin a little, then sleep (6.3).
-define hidden ptr @nz.worker_main(ptr %w) {
+define hidden ptr @nz.worker_main(ptr %w) noinline {
 entry:
   %ts = alloca [2 x i64], align 8
   %nap = alloca [2 x i64], align 8
@@ -2609,7 +2562,7 @@ told:
 ; Start a task on the pool: a record, a worker by round robin, and its place in the argument block's
 ; head, where a thread's handle goes otherwise. No stack: the task will run on its worker's (6.2).
 ; 0, or 1 when no record could be had.
-define hidden i32 @nz.task_start(ptr %fn, ptr %blk) {
+define hidden i32 @nz.task_start(ptr %fn, ptr %blk) noinline {
 entry:
   %t = call ptr @malloc(i64 192)
   %tnull = icmp eq ptr %t, null
@@ -2658,7 +2611,7 @@ placed:
 ; task's saved stack pointer to the top, are copied into a buffer it owns, and this task's copy is
 ; put back at the same addresses — or, on its first run, its first frame is laid out at the top and
 ; its stack limit set from the run stack. False when the frames in place could not be saved.
-define hidden i1 @nz.task_place(ptr %w, ptr %t) {
+define hidden i1 @nz.task_place(ptr %w, ptr %t) noinline {
 entry:
   %ownp = getelementptr i8, ptr %w, i64 336
   %own = load ptr, ptr %ownp
@@ -2728,7 +2681,7 @@ done:
 }
 
 ; What the entry stub calls, on the task's own stack: the task's start routine, then the end.
-define hidden void @nz_task_main(ptr %t) {
+define hidden void @nz_task_main(ptr %t) noinline {
 entry:
   %fp = getelementptr i8, ptr %t, i64 56
   %fn = load ptr, ptr %fp
@@ -2760,7 +2713,7 @@ entry:
 }
 
 ; Make a parked task runnable, or note that it was woken while still running or parking.
-define hidden void @nz.task_wake(ptr %t) {
+define hidden void @nz.task_wake(ptr %t) noinline {
 entry:
   %wp = getelementptr i8, ptr %t, i64 40
   %w = load ptr, ptr %wp
@@ -2789,7 +2742,7 @@ out:
   ret void
 }
 
-define hidden ptr @nz.pool_bucket(ptr %cv) {
+define hidden ptr @nz.pool_bucket(ptr %cv) noinline {
 entry:
   %a = ptrtoint ptr %cv to i64
   %h = lshr i64 %a, 4
@@ -2800,7 +2753,7 @@ entry:
 }
 
 ; Take `%t` off the waiters of whatever it waits on, if it is still on them.
-define hidden void @nz.pool_unwait(ptr %t) {
+define hidden void @nz.pool_unwait(ptr %t) noinline {
 entry:
   ; On no list: nothing to lock (6.4). A waker clears this under the bucket's lock, after
   ; unlinking the task, so null means off the list; otherwise the bucket is the one it names.
@@ -2847,7 +2800,7 @@ out:
 ; Wait on a condition variable, its mutex held. On a pool task the task parks and its worker runs
 ; others; anywhere else the thread waits. Either way the mutex is held again on return, and the
 ; caller looks at its condition again, as with any condition variable.
-define hidden i32 @nz.cwait(ptr %cv, ptr %m) {
+define hidden i32 @nz.cwait(ptr %cv, ptr %m) noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %isthread = icmp eq ptr %t, null
@@ -2863,7 +2816,7 @@ task:
 ; As `nz.cwait`, giving up at the **monotonic** time `%ts` (Q1-M-12): a task parks until the pool's
 ; monotonic clock passes it; a thread naps on the wall clock `pthread_cond_timedwait` measures, at
 ; most 100 ms at a time, and its caller looks again — every caller loops on its own deadline check.
-define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) {
+define hidden i32 @nz.ctimedwait(ptr %cv, ptr %m, ptr %ts) noinline {
 entry:
   %nap = alloca [2 x i64], align 8
   %t = load ptr, ptr @nz.cur_task
@@ -2932,7 +2885,7 @@ entry:
 ; and switch to the worker; on resuming, take `%m` again and leave the waiters if still there.
 ; The order makes a wake-up between the caller's last look and the switch impossible to lose: a
 ; waker needs `%m` to change anything, and finds the task registered and parking.
-define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) {
+define hidden void @nz.pool_park(ptr %t, ptr %cv, ptr %m, i64 %deadline) noinline {
 entry:
   %wl = call ptr @nz.pool_lock_of(ptr %cv)
   %l = call i32 @pthread_mutex_lock(ptr %wl)
@@ -2961,7 +2914,7 @@ entry:
 
 ; Wake every waiter on a condition variable: threads, by the variable, and pool tasks registered
 ; on it.
-define hidden void @nz.cwake(ptr %cv) {
+define hidden void @nz.cwake(ptr %cv) noinline {
 entry:
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
@@ -3009,7 +2962,7 @@ out:
 }
 
 ; A pool task that looked and did not wait lets the rest of its worker's tasks run first.
-define hidden void @nz.task_yield() {
+define hidden void @nz.task_yield() noinline {
 entry:
   %t = load ptr, ptr @nz.cur_task
   %none = icmp eq ptr %t, null
@@ -3029,7 +2982,7 @@ out:
 
 ; With the schedule report asked for, the pool's line: its workers, the most tasks alive at once,
 ; and each task's stack — only where the pool ran.
-define hidden void @nz.pool_report() {
+define hidden void @nz.pool_report() noinline {
 entry:
   %buf = alloca [128 x i8], align 8
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
@@ -3048,7 +3001,7 @@ out:
 }
 
 ; Wait for one task to end: its thread joined, or its pool record marked done and freed.
-define hidden i32 @nz.join_one(ptr %tid) {
+define hidden i32 @nz.join_one(ptr %tid) noinline {
 entry:
   %mode = load atomic i64, ptr @nz.pool_mode acquire, align 8
   %pool = icmp eq i64 %mode, 2
@@ -3252,7 +3205,7 @@ done:
 
 ; Copies one slot in from `%src` — the sender's own reference, which the channel now holds —
 ; or refuses, copying nothing, when closed.
-define hidden i1 @nz.chanv_send(ptr %c, ptr %src) {
+define hidden i1 @nz.chanv_send(ptr %c, ptr %src) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -3299,7 +3252,7 @@ store:
 
 ; Copies the oldest slot out to `%dst` — the reference moves to the receiver — or reports the
 ; channel closed and drained.
-define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) {
+define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -3462,7 +3415,7 @@ done:
   ret void
 }
 
-define hidden i1 @nz.chan_send(ptr %c, i64 %v) {
+define hidden i1 @nz.chan_send(ptr %c, i64 %v) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -3505,7 +3458,7 @@ store:
   ret i1 true
 }
 
-define hidden i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) {
+define hidden i1 @nz.chan_recv(ptr %c, ptr %seq, ptr %msg, i64 %mn) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -3566,7 +3519,7 @@ push:
   ret i1 true
 }
 
-define hidden void @nz.chan_close(ptr %c) {
+define hidden void @nz.chan_close(ptr %c) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
@@ -4137,7 +4090,7 @@ declare i64 @nz_os_readdir(ptr, ptr, i64)
 declare i64 @nz_os_family()
 declare i64 @nz_os_error_text(i64, ptr, i64)
 
-define hidden void @nz.os_acquire() {
+define hidden void @nz.os_acquire() noinline {
 entry:
   br label %spin
 spin:
@@ -4259,7 +4212,7 @@ dead:
 
 ; Pin `h`: its state (1 a file, 2 a directory, 3 standard input), or its status — -65536 for a
 ; handle that is closed, a number no system gives an error.
-define hidden i64 @nz.os_pin(i64 %h) {
+define hidden i64 @nz.os_pin(i64 %h) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -4312,7 +4265,7 @@ ok:
 }
 
 ; Unpin `h`; the last unpin of a handle closed meanwhile closes it.
-define hidden void @nz.os_unpin(i64 %h) {
+define hidden void @nz.os_unpin(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %fd = and i64 %h, 4294967295
@@ -4343,7 +4296,7 @@ close:
   ret void
 }
 
-define hidden i64 @nz.os_close(i64 %h) {
+define hidden i64 @nz.os_close(i64 %h) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -4386,7 +4339,7 @@ now:
 
 ; A handle for descriptor `fd` just opened as `kind`; on a table that cannot grow, the
 ; descriptor is closed and the status answered.
-define hidden i64 @nz.os_adopt(i32 %fd, i64 %kind, ptr %obj) {
+define hidden i64 @nz.os_adopt(i32 %fd, i64 %kind, ptr %obj) noinline {
 entry:
   %w = sext i32 %fd to i64
   call void @nz.os_acquire()
@@ -4467,7 +4420,7 @@ ok:
   ret i64 %h
 }
 
-define hidden i64 @nz.os_stdin() {
+define hidden i64 @nz.os_stdin() noinline {
 entry:
   call void @nz.os_acquire()
   %had = load i64, ptr @nz.os_stdin_h
@@ -4489,7 +4442,7 @@ done:
 }
 
 ; Standard output (`which` 1) or errors (2), R1d: one handle each, made the first time.
-define hidden i64 @nz.os_std_stream(i64 %which) {
+define hidden i64 @nz.os_std_stream(i64 %which) noinline {
 entry:
   %errors = icmp eq i64 %which, 2
   %slot = select i1 %errors, ptr @nz.os_stderr_h, ptr @nz.os_stdout_h
@@ -4598,7 +4551,7 @@ line:
 ; out, shared by `os_read` and `os_read_line`, so a line read never loses what follows its line.
 ; Made on the first line read; its lock is held across the system call, so standard input has
 ; one reader at a time.
-define hidden void @nz.os_in_acquire() {
+define hidden void @nz.os_in_acquire() noinline {
 entry:
   br label %spin
 spin:
@@ -4857,7 +4810,7 @@ sync:
   ret i64 %out
 }
 
-define hidden i64 @nz.os_dir_next(i64 %h, ptr %buf, i64 %n) {
+define hidden i64 @nz.os_dir_next(i64 %h, ptr %buf, i64 %n) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %lock
@@ -5365,7 +5318,7 @@ entry:
   ret i64 -22
 }
 
-define hidden void @nz.net_wake(ptr %w) {
+define hidden void @nz.net_wake(ptr %w) noinline {
 entry:
   ret void
 }
@@ -5431,7 +5384,7 @@ entry:
 }
 
 ; Start the reactor once: the first caller makes the poller and the thread, the rest wait for it.
-define hidden void @nz.net_start() {
+define hidden void @nz.net_start() noinline {
 entry:
   %st = load atomic i64, ptr @nz.net_state acquire, align 8
   %ready = icmp eq i64 %st, 2
@@ -5480,7 +5433,7 @@ woke:
 }
 
 ; An event for handle `h`: wake its waiters, if its descriptor is still that generation's.
-define hidden void @nz.net_event(i64 %h) {
+define hidden void @nz.net_event(i64 %h) noinline {
 entry:
   %fd = and i64 %h, 4294967295
   %gen = lshr i64 %h, 32
@@ -5507,7 +5460,7 @@ none:
 }
 
 ; Wake everyone waiting on record `w` (null: nobody ever has).
-define hidden void @nz.net_wake(ptr %w) {
+define hidden void @nz.net_wake(ptr %w) noinline {
 entry:
   %none = icmp eq ptr %w, null
   br i1 %none, label %done, label %wake
@@ -5528,7 +5481,7 @@ done:
 }
 
 ; The wait record of live handle `h`, made the first time; null for a handle that is not live.
-define hidden ptr @nz.net_waitrec(i64 %h) {
+define hidden ptr @nz.net_waitrec(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -5560,7 +5513,7 @@ init:
 }
 
 ; Whether `h` is no longer live — closed, or closing.
-define hidden i1 @nz.net_closing(i64 %h) {
+define hidden i1 @nz.net_closing(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -5570,7 +5523,7 @@ entry:
 }
 
 ; When a wait on `h` gives up, as the wall clock's nanoseconds; 0 for never.
-define hidden i64 @nz.net_deadline(i64 %h) {
+define hidden i64 @nz.net_deadline(i64 %h) noinline {
 entry:
   call void @nz.os_acquire()
   %s = call ptr @nz.os_live(i64 %h)
@@ -5596,7 +5549,7 @@ none:
 
 ; Wait until `h` may be ready in direction `dir` (1 reading, 2 writing): 0 to try again, the
 ; status of a deadline that passed (-ETIMEDOUT), or -65536 for a handle closed meanwhile.
-define hidden i64 @nz.net_wait(i64 %h, i64 %dir, i64 %deadline) {
+define hidden i64 @nz.net_wait(i64 %h, i64 %dir, i64 %deadline) noinline {
 entry:
   %ts = alloca [16 x i8], align 8
   %w = call ptr @nz.net_waitrec(i64 %h)
@@ -6059,7 +6012,7 @@ stop:
   ret i64 %w
 }
 
-define hidden i64 @nz.os_set_timeout(i64 %h, i64 %ms) {
+define hidden i64 @nz.os_set_timeout(i64 %h, i64 %ms) noinline {
 entry:
   %neg = icmp slt i64 %h, 0
   br i1 %neg, label %failed, label %range
@@ -6615,7 +6568,7 @@ outputs:
 }
 
 ; The record of child `h`, pinned; null (and unpinned) for a handle that is not a child.
-define hidden ptr @nz.os_child(i64 %h) {
+define hidden ptr @nz.os_child(i64 %h) noinline {
 entry:
   %k = call i64 @nz.os_pin(i64 %h)
   %child = icmp eq i64 %k, 8
@@ -7081,6 +7034,45 @@ nz_ctx_prepare:
   subq $32, %rsp
   callq nz_task_main
   ud2
+.p2align 4
+.globl nz_os_preempt_stub
+nz_os_preempt_stub:
+  pushfq
+  pushq %rax
+  pushq %rcx
+  pushq %rdx
+  pushq %r8
+  pushq %r9
+  pushq %r10
+  pushq %r11
+  pushq %rbx
+  movq %rsp, %rbx
+  andq $-16, %rsp
+  subq $128, %rsp
+  movdqu %xmm0, 32(%rsp)
+  movdqu %xmm1, 48(%rsp)
+  movdqu %xmm2, 64(%rsp)
+  movdqu %xmm3, 80(%rsp)
+  movdqu %xmm4, 96(%rsp)
+  movdqu %xmm5, 112(%rsp)
+  callq nz.pool_preempt
+  movdqu 32(%rsp), %xmm0
+  movdqu 48(%rsp), %xmm1
+  movdqu 64(%rsp), %xmm2
+  movdqu 80(%rsp), %xmm3
+  movdqu 96(%rsp), %xmm4
+  movdqu 112(%rsp), %xmm5
+  movq %rbx, %rsp
+  popq %rbx
+  popq %r11
+  popq %r10
+  popq %r9
+  popq %r8
+  popq %rdx
+  popq %rcx
+  popq %rax
+  popfq
+  retq
 "#
 }
 
@@ -10149,6 +10141,147 @@ done:
 "#
 }
 
+pub fn rt_platform_DARWIN_PREEMPT() -> Str ! {} {
+    r#"
+declare i32 @sigaction(i32, ptr, ptr)
+declare i32 @pthread_kill(ptr, i32)
+
+; The pool's yield, given to `nz.os_preempt_init`: this unit is linked by images without a pool too.
+@nz.os_preempt_yield = hidden global ptr null
+@"\01section$start$__TEXT$__nz_text" = external global i8
+@"\01section$end$__TEXT$__nz_text" = external global i8
+
+define hidden void @nz.text_mark() section "__TEXT,__nz_text,regular,pure_instructions" {
+entry:
+  ret void
+}
+
+define hidden void @nz.os_preempt_handler(i32 %sig, ptr %info, ptr %uc) {
+entry:
+  %mcp = getelementptr i8, ptr %uc, i64 48
+  %mc = load ptr, ptr %mcp
+  %pcp = getelementptr i8, ptr %mc, i64 {PC}
+  %pc = load i64, ptr %pcp
+  %lo = ptrtoint ptr @"\01section$start$__TEXT$__nz_text" to i64
+  %hi = ptrtoint ptr @"\01section$end$__TEXT$__nz_text" to i64
+  %above = icmp uge i64 %pc, %lo
+  %below = icmp ult i64 %pc, %hi
+  %in = and i1 %above, %below
+  br i1 %in, label %yield, label %out
+yield:
+  %y = load ptr, ptr @nz.os_preempt_yield
+  call void %y()
+  br label %out
+out:
+  ret void
+}
+
+define hidden void @nz.os_preempt_init(ptr %yield) {
+entry:
+  store ptr %yield, ptr @nz.os_preempt_yield
+  %sa = alloca [16 x i8], align 8
+  store ptr @nz.os_preempt_handler, ptr %sa
+  %mp = getelementptr i8, ptr %sa, i64 8
+  store i32 0, ptr %mp
+  %fp = getelementptr i8, ptr %sa, i64 12
+  store i32 82, ptr %fp
+  %r = call i32 @sigaction(i32 16, ptr %sa, ptr null)
+  ret void
+}
+
+define hidden void @nz.os_preempt(ptr %thread) {
+entry:
+  %t = load ptr, ptr %thread
+  %r = call i32 @pthread_kill(ptr %t, i32 16)
+  ret void
+}
+"#
+}
+
+pub fn rt_platform_NO_PREEMPT() -> Str ! {} {
+    r#"
+define hidden void @nz.os_preempt_init(ptr %yield) {
+entry:
+  ret void
+}
+
+define hidden void @nz.os_preempt(ptr %thread) {
+entry:
+  ret void
+}
+"#
+}
+
+pub fn rt_platform_WINDOWS_PREEMPT() -> Str ! {} {
+    r#"
+declare ptr @pthread_gethandle(i64)
+declare i32 @SuspendThread(ptr)
+declare i32 @ResumeThread(ptr)
+declare i32 @GetThreadContext(ptr, ptr)
+declare i32 @SetThreadContext(ptr, ptr)
+declare void @nz_os_preempt_stub()
+
+define hidden void @nz.text_lo() section ".text$nzA" {
+entry:
+  ret void
+}
+
+define hidden void @nz.text_hi() section ".text$nzZ" {
+entry:
+  ret void
+}
+
+define hidden void @nz.os_preempt_init(ptr %yield) {
+entry:
+  ret void
+}
+
+define hidden void @nz.os_preempt(ptr %thread) {
+entry:
+  %ctx = alloca [1232 x i8], align 16
+  %t = load i64, ptr %thread
+  %h = call ptr @pthread_gethandle(i64 %t)
+  %none = icmp eq ptr %h, null
+  br i1 %none, label %out, label %stop
+stop:
+  %s = call i32 @SuspendThread(ptr %h)
+  %bad = icmp eq i32 %s, -1
+  br i1 %bad, label %out, label %look
+look:
+  %cfp = getelementptr i8, ptr %ctx, i64 48
+  store i32 1048577, ptr %cfp
+  %ok = call i32 @GetThreadContext(ptr %h, ptr %ctx)
+  %got = icmp ne i32 %ok, 0
+  br i1 %got, label %where, label %resume
+where:
+  %ripp = getelementptr i8, ptr %ctx, i64 248
+  %rip = load i64, ptr %ripp
+  %rspp = getelementptr i8, ptr %ctx, i64 152
+  %rsp = load i64, ptr %rspp
+  %lo = ptrtoint ptr @nz.text_lo to i64
+  %hi = ptrtoint ptr @nz.text_hi to i64
+  %above = icmp uge i64 %rip, %lo
+  %below = icmp ult i64 %rip, %hi
+  %in = and i1 %above, %below
+  br i1 %in, label %redirect, label %resume
+redirect:
+  %sp1 = sub i64 %rsp, 8
+  %spp = inttoptr i64 %sp1 to ptr
+  store i64 %rip, ptr %spp
+  store i64 %sp1, ptr %rspp
+  %stub = ptrtoint ptr @nz_os_preempt_stub to i64
+  store i64 %stub, ptr %ripp
+  %set = call i32 @SetThreadContext(ptr %h, ptr %ctx)
+  br label %resume
+resume:
+  %r = call i32 @ResumeThread(ptr %h)
+  br label %out
+out:
+  ret void
+}
+"#
+}
+
 pub fn rt_platform_POSIX_STACK() -> Str ! {} {
     r#"
 declare i32 @clock_gettime(i32, ptr)
@@ -10509,7 +10642,7 @@ declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
 ; `n` bytes the caller owns behind a 16-byte header holding the block's class, or null when C
 ; refuses: a block of up to 512 bytes from this thread's list of its class when the list has one,
 ; else from C.
-define hidden ptr @nz.small_malloc(i64 %n) {
+define hidden ptr @nz.small_malloc(i64 %n) noinline {
 entry:
   %big = icmp ugt i64 %n, 512
   br i1 %big, label %large, label %small
@@ -10559,7 +10692,7 @@ refused:
 
 ; Gives a block back: a small one to this thread's list of its class while that holds fewer than
 ; {KEPT}, any other to C; null is a no-op.
-define hidden void @nz.small_free(ptr %p) {
+define hidden void @nz.small_free(ptr %p) noinline {
 entry:
   %none = icmp eq ptr %p, null
   br i1 %none, label %done, label %give
@@ -10591,7 +10724,7 @@ done:
 
 ; A block of `n` bytes holding what `p` held, as C's `realloc`: a small block that already holds
 ; `n` is kept, a smaller one moved, a large one resized by C; a refusal leaves `p` as it was.
-define hidden ptr @nz.small_realloc(ptr %p, i64 %n) {
+define hidden ptr @nz.small_realloc(ptr %p, i64 %n) noinline {
 entry:
   %fresh = icmp eq ptr %p, null
   br i1 %fresh, label %new, label %resize
@@ -11590,17 +11723,6 @@ entry:
 "#
 }
 
-pub fn rt_board_PREEMPT_NONE() -> Str ! {} {
-    r#"
-@nz.preempt_req = hidden global i64 0
-
-define hidden void @nz.preempt() {
-entry:
-  ret void
-}
-"#
-}
-
 pub fn rt_board_ATOMIC_RUNTIME() -> Str ! {} {
     r#"
 define hidden i64 @nz.atomic_load(ptr %cell) {
@@ -11650,7 +11772,7 @@ declare i64 @nz_tls_close(ptr, ptr, i64)
 declare i64 @nz_tls_info(ptr, i64, ptr, i64)
 
 ; The table, made zeroed by the first caller that needs it; null when memory is refused.
-define hidden ptr @nz.tls_table() {
+define hidden ptr @nz.tls_table() noinline {
 entry:
   %t = load atomic ptr, ptr @nz.tls_slots acquire, align 8
   %none = icmp eq ptr %t, null
@@ -11744,7 +11866,7 @@ no:
 
 ; Hold slot `s` for `id`: its object when the id is live and of `kind` (0: any kind), the slot
 ; then held until `nz.tls_let_go`; null, and nothing held, otherwise.
-define hidden ptr @nz.tls_hold(ptr %s, i64 %id, i64 %kind) {
+define hidden ptr @nz.tls_hold(ptr %s, i64 %id, i64 %kind) noinline {
 entry:
   %bp = getelementptr i64, ptr %s, i64 3
   br label %spin
@@ -14671,8 +14793,6 @@ pub fn rt_globals() -> Str ! {} {
 @nz.errmsg = external thread_local global ptr
 @nz.errlen = external thread_local global i64
 @nz.stack_limit = external thread_local global i64
-@nz.preempt_req = external global i64
-@nz.preempt_hook = external global ptr
 @nz.argc = external global i64
 @nz.argv = external global ptr
 @nz.seq_allocated = external global i64
@@ -14721,14 +14841,14 @@ declare ptr @nz.atomic_cell(i64)
 declare i32 @nz.spawn(ptr, ptr, ptr)
 declare {ptr, i64} @nz.scope_join(ptr)
 declare ptr @nz.chan_new(i64)
-declare i1 @nz.chan_send(ptr, i64)
-declare i1 @nz.chan_recv(ptr, ptr, ptr, i64)
-declare void @nz.chan_close(ptr)
+declare i1 @nz.chan_send(ptr, i64) noinline
+declare i1 @nz.chan_recv(ptr, ptr, ptr, i64) noinline
+declare void @nz.chan_close(ptr) noinline
 declare void @nz.chan_retain(ptr)
 declare void @nz.chan_release(ptr)
 declare ptr @nz.chanv_new(i64, i64, ptr)
-declare i1 @nz.chanv_send(ptr, ptr)
-declare i1 @nz.chanv_recv(ptr, ptr)
+declare i1 @nz.chanv_send(ptr, ptr) noinline
+declare i1 @nz.chanv_recv(ptr, ptr) noinline
 declare void @nz.chanv_release(ptr)
 declare i64 @nz.atomic_load(ptr)
 declare void @nz.atomic_store(ptr, i64)
@@ -14749,7 +14869,7 @@ declare i64 @nz.cstr_len(ptr)
 declare void @nz.errno_save()
 declare i64 @nz.errno_last()
 declare void @nz.chanv_close(ptr)
-declare i64 @nz.chanv_select(ptr, ptr, i64, i64)
+declare i64 @nz.chanv_select(ptr, ptr, i64, i64) noinline
 declare i64 @nz.time_now_ms()
 declare void @nz.sched_note_spawn()
 declare void @nz.sched_note_join(ptr)
@@ -14761,7 +14881,6 @@ pub fn rt_inventory_debug() -> Str ! {} {
 RuntimeSymbol { symbol: "nz.report", ret: "void", params: [], attrs: "noreturn", declared: true, part: Base, responsibility: "write the thread's failure to stderr and exit 2", ownership: "none", effect: "", failure: Ends, safety: Entry }
 RuntimeSymbol { symbol: "nz.stack_check", ret: "i32", params: [], attrs: "", declared: true, part: Base, responsibility: "whether this thread's stack is past its limit, the limit set on the thread's first check (N49)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.stack_check_frame", ret: "i32", params: ["i64"], attrs: "", declared: true, part: Base, responsibility: "whether this thread's stack is past its limit or a frame of that many bytes would cross it (Q1-A1-01)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.preempt", ret: "void", params: [], attrs: "", declared: false, part: Base, responsibility: "a loop's back edge found the preemption flag set: call the pool's hook, if any (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_new", ret: "ptr", params: ["i64", "ptr", "ptr"], attrs: "", declared: true, part: Closures, responsibility: "a closure object with its code and release function (N50)", ownership: "one reference, owned by the caller; the caller stores the captures", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_retain", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Closures, responsibility: "one more reference to a closure object", ownership: "adds a reference, atomically; null is a no-op", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.closure_release", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Closures, responsibility: "one reference fewer; the last releases the captures and frees it", ownership: "takes a reference, atomically; null is a no-op", effect: "", failure: Never, safety: Any }
@@ -14785,14 +14904,14 @@ RuntimeSymbol { symbol: "nz.atomic_cell", ret: "ptr", params: ["i64"], attrs: ""
 RuntimeSymbol { symbol: "nz.spawn", ret: "i32", params: ["ptr", "ptr", "ptr"], attrs: "", declared: true, part: Tasks, responsibility: "start a thread for a task and record it in its scope's list, record first", ownership: "takes the argument block; 0, -1 out of memory, >0 no thread", effect: "spawn", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.scope_join", ret: "{ptr, i64}", params: ["ptr"], attrs: "", declared: true, part: Tasks, responsibility: "join every task in a list and hand back the first failure", ownership: "frees the list and each task's block", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.chan_new", ret: "ptr", params: ["i64"], attrs: "", declared: true, part: Channels, responsibility: "a bounded channel", ownership: "one reference, owned by the caller", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.chan_send", ret: "i1", params: ["ptr", "i64"], attrs: "", declared: true, part: Channels, responsibility: "send, blocking while full", ownership: "borrows the channel; false when closed", effect: "", failure: Status, safety: Locked }
-RuntimeSymbol { symbol: "nz.chan_recv", ret: "i1", params: ["ptr", "ptr", "ptr", "i64"], attrs: "", declared: true, part: Channels, responsibility: "receive into a sequence, blocking while empty", ownership: "borrows the channel and the sequence; false once closed and drained; records the call site's message only when the sequence cannot grow", effect: "", failure: Records, safety: Locked }
-RuntimeSymbol { symbol: "nz.chan_close", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "close a channel, waking every waiter", ownership: "borrows the channel", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.chan_send", ret: "i1", params: ["ptr", "i64"], attrs: "noinline", declared: true, part: Channels, responsibility: "send, blocking while full", ownership: "borrows the channel; false when closed", effect: "", failure: Status, safety: Locked }
+RuntimeSymbol { symbol: "nz.chan_recv", ret: "i1", params: ["ptr", "ptr", "ptr", "i64"], attrs: "noinline", declared: true, part: Channels, responsibility: "receive into a sequence, blocking while empty", ownership: "borrows the channel and the sequence; false once closed and drained; records the call site's message only when the sequence cannot grow", effect: "", failure: Records, safety: Locked }
+RuntimeSymbol { symbol: "nz.chan_close", ret: "void", params: ["ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "close a channel, waking every waiter", ownership: "borrows the channel", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.chan_retain", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "one more reference to a channel", ownership: "adds a reference, atomically", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.chan_release", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "one reference fewer; the last frees the channel", ownership: "takes a reference, atomically", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.chanv_new", ret: "ptr", params: ["i64", "i64", "ptr"], attrs: "", declared: true, part: Channels, responsibility: "a bounded generic channel (N53)", ownership: "one reference, owned by the caller", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.chanv_send", ret: "i1", params: ["ptr", "ptr"], attrs: "", declared: true, part: Channels, responsibility: "send a slot, blocking while full", ownership: "borrows the channel; takes the slot's reference when it returns true", effect: "", failure: Status, safety: Locked }
-RuntimeSymbol { symbol: "nz.chanv_recv", ret: "i1", params: ["ptr", "ptr"], attrs: "", declared: true, part: Channels, responsibility: "receive a slot, blocking while empty", ownership: "borrows the channel; hands the slot's reference to the caller when it returns true", effect: "", failure: Status, safety: Locked }
+RuntimeSymbol { symbol: "nz.chanv_send", ret: "i1", params: ["ptr", "ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "send a slot, blocking while full", ownership: "borrows the channel; takes the slot's reference when it returns true", effect: "", failure: Status, safety: Locked }
+RuntimeSymbol { symbol: "nz.chanv_recv", ret: "i1", params: ["ptr", "ptr"], attrs: "noinline", declared: true, part: Channels, responsibility: "receive a slot, blocking while empty", ownership: "borrows the channel; hands the slot's reference to the caller when it returns true", effect: "", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.chanv_release", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "one reference fewer; the last releases the queued slots and frees the channel", ownership: "takes a reference, atomically", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.atomic_load", ret: "i64", params: ["ptr"], attrs: "", declared: true, part: Base, responsibility: "a sequentially consistent load of an atomic's cell (Gate 3)", ownership: "borrows the cell", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.atomic_store", ret: "void", params: ["ptr", "i64"], attrs: "", declared: true, part: Base, responsibility: "a sequentially consistent store to an atomic's cell (Gate 3)", ownership: "borrows the cell", effect: "", failure: Never, safety: Any }
@@ -14813,51 +14932,50 @@ RuntimeSymbol { symbol: "nz.cstr_len", ret: "i64", params: ["ptr"], attrs: "", d
 RuntimeSymbol { symbol: "nz.errno_save", ret: "void", params: [], attrs: "", declared: true, part: Foreign, responsibility: "save this thread's errno as a foreign call returns (N85)", ownership: "none", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.errno_last", ret: "i64", params: [], attrs: "", declared: true, part: Foreign, responsibility: "the errno the last foreign call on this thread left (N85)", ownership: "none", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.chanv_close", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Channels, responsibility: "close a generic channel and wake every select (N54)", ownership: "borrows the channel", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.chanv_select", ret: "i64", params: ["ptr", "ptr", "i64", "i64"], attrs: "", declared: true, part: Channels, responsibility: "wait for the lowest-indexed ready channel, or a deadline (N54)", ownership: "borrows the channels; hands one slot's reference to the caller when it returns an index", effect: "", failure: Status, safety: Locked }
+RuntimeSymbol { symbol: "nz.chanv_select", ret: "i64", params: ["ptr", "ptr", "i64", "i64"], attrs: "noinline", declared: true, part: Channels, responsibility: "wait for the lowest-indexed ready channel, or a deadline (N54)", ownership: "borrows the channels; hands one slot's reference to the caller when it returns an index", effect: "", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.time_now_ms", ret: "i64", params: [], attrs: "", declared: true, part: Channels, responsibility: "a monotonic clock in milliseconds (N54)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.time_now_ns", ret: "i64", params: [], attrs: "", declared: false, part: Channels, responsibility: "the same monotonic clock in nanoseconds (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.time_wall_ns", ret: "i64", params: [], attrs: "", declared: false, part: Channels, responsibility: "the wall clock in nanoseconds since the Unix epoch (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.time_sleep_ms", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Tasks, responsibility: "wait, parked on the pool, for milliseconds (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.time_sleep_ms", ret: "i64", params: ["i64"], attrs: "noinline", declared: false, part: Tasks, responsibility: "wait, parked on the pool, for milliseconds (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.sched_note_spawn", ret: "void", params: [], attrs: "", declared: true, part: Tasks, responsibility: "count a started task (N54)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.sched_note_join", ret: "void", params: ["ptr"], attrs: "", declared: true, part: Tasks, responsibility: "count a scope's tasks as joined (N54)", ownership: "borrows the task list", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.sel_sync_get", ret: "ptr", params: [], attrs: "", declared: false, part: Channels, responsibility: "the select lock and condition variable, made on first use", ownership: "the process owns it", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.sel_signal", ret: "void", params: [], attrs: "", declared: false, part: Channels, responsibility: "advance the select event count and wake any select", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.chanv_try", ret: "i64", params: ["ptr", "ptr"], attrs: "", declared: false, part: Channels, responsibility: "one look at a channel without waiting", ownership: "borrows the channel; hands the slot's reference over when it returns 1", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.sel_sync_get", ret: "ptr", params: [], attrs: "noinline", declared: false, part: Channels, responsibility: "the select lock and condition variable, made on first use", ownership: "the process owns it", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.sel_signal", ret: "void", params: [], attrs: "noinline", declared: false, part: Channels, responsibility: "advance the select event count and wake any select", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.chanv_try", ret: "i64", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Channels, responsibility: "one look at a channel without waiting", ownership: "borrows the channel; hands the slot's reference over when it returns 1", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.failed_now", ret: "i32", params: [], attrs: "", declared: false, part: Base, responsibility: "whether this thread has failed, for a second backend", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_mode_get", ret: "i64", params: [], attrs: "", declared: false, part: Tasks, responsibility: "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_mode_get", ret: "i64", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "which scheduler this process runs, decided once from NAZM_SCHEDULER and the program's policy (N83, N106)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_env", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Tasks, responsibility: "a positive count from an environment variable, or a default (N83)", ownership: "borrows the name", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_sync", ret: "ptr", params: [], attrs: "", declared: false, part: Tasks, responsibility: "a mutex and a condition variable in one allocation (N83)", ownership: "the process owns it", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_start", ret: "i1", params: [], attrs: "", declared: false, part: Tasks, responsibility: "start the pool's tables and workers (N83)", ownership: "the process owns them", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_start", ret: "i1", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "start the pool's tables and workers (N83)", ownership: "the process owns them", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_push", ret: "void", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "queue a runnable task on its worker, unstarted or resumed, and signal the worker if it sleeps (N83, 6.3)", ownership: "the worker's queue holds the task", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.pool_take", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the next task a worker runs: the older head of its resumed and unstarted queues (6.3)", ownership: "the worker runs the task", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.pool_steal", ret: "i1", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", ownership: "the tasks move to this worker", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.pool_spin", ret: "i1", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "look for work for up to 50 microseconds before a worker sleeps (6.3)", ownership: "none", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.pool_monitor", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the preemption monitor: look at the workers every 10 ms (6.3)", ownership: "none", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.pool_watch", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_preempt", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the pool's preemption hook: yield the worker if it was asked to (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_calm", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "clear the process's preemption flag unless a worker's is set (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_steal", ret: "i1", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "move half of another worker's unstarted tasks, at most 64, to this one (6.3)", ownership: "the tasks move to this worker", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.pool_spin", ret: "i1", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "look for work for up to 50 microseconds before a worker sleeps (6.3)", ownership: "none", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.pool_monitor", ret: "ptr", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "the preemption monitor: look at the workers every 10 ms (6.3)", ownership: "none", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.pool_watch", ret: "void", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "ask a worker whose task has held it for a time slice, while others wait, to yield (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_preempt", ret: "void", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "the pool's preemption hook: yield the worker if it was asked to (6.3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_now", ret: "i64", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the monotonic clock in nanoseconds, which every deadline is on (N83, Q1-M-12)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_timers", ret: "i1", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", ownership: "none", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.task_enter", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "make a task this thread's, with its own failure state and stack limit (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.task_leave", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "save a task's failure state and stack limit and clear the thread's (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.worker_main", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "a pool worker: run its tasks first in, first out, on its run stack (N83, 6.2)", ownership: "the worker owns its run stack and its tasks' saved frames", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.task_start", ret: "i32", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "start a task on the pool: a record, no stack (N83, 6.2)", ownership: "takes the argument block; 0, or 1 when no record could be had", effect: "", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.task_place", ret: "i1", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "put a task's frames on its worker's run stack, saving those of the task in place (6.2)", ownership: "the worker's tasks own their saved frames; false when they could not be saved", effect: "", failure: Status, safety: Owner }
-RuntimeSymbol { symbol: "nz_task_main", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "a task's body on its own stack, then its end (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.pool_timers", ret: "i1", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "queue the worker's parked tasks whose deadline passed; the soonest left (N83)", ownership: "none", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.task_enter", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "make a task this thread's, with its own failure state and stack limit (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.task_leave", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "save a task's failure state and stack limit and clear the thread's (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.worker_main", ret: "ptr", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "a pool worker: run its tasks first in, first out, on its run stack (N83, 6.2)", ownership: "the worker owns its run stack and its tasks' saved frames", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.task_start", ret: "i32", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "start a task on the pool: a record, no stack (N83, 6.2)", ownership: "takes the argument block; 0, or 1 when no record could be had", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.task_place", ret: "i1", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "put a task's frames on its worker's run stack, saving those of the task in place (6.2)", ownership: "the worker's tasks own their saved frames; false when they could not be saved", effect: "", failure: Status, safety: Owner }
+RuntimeSymbol { symbol: "nz_task_main", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "a task's body on its own stack, then its end (N83)", ownership: "borrows the task", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.task_suspend", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "switch from a task back to its worker (N83)", ownership: "none", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.task_wake", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "make a parked task runnable, or note the wake (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_bucket", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the waiter list a condition variable hashes to (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.task_wake", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "make a parked task runnable, or note the wake (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_bucket", ret: "ptr", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "the waiter list a condition variable hashes to (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.pool_locks", ret: "ptr", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the waiter table's 64 locks (6.4)", ownership: "the process owns them", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_lock_of", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "the lock of the bucket a condition variable hashes to (6.4)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_unwait", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "take a task off the waiters it is still on (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.cwait", ret: "i32", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "wait on a condition variable: park a pool task, block a thread (N83)", ownership: "the mutex is held again on return", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.ctimedwait", ret: "i32", params: ["ptr", "ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", ownership: "the mutex is held again on return", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.pool_lock_of", ret: "ptr", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "the lock of the bucket a condition variable hashes to (6.4)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_unwait", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "take a task off the waiters it is still on (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.cwait", ret: "i32", params: ["ptr", "ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "wait on a condition variable: park a pool task, block a thread (N83)", ownership: "the mutex is held again on return", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.ctimedwait", ret: "i32", params: ["ptr", "ptr", "ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "as nz.cwait, until a monotonic time; a thread naps at most 100 ms on the wall clock and its caller looks again (N83, Q1-M-12)", ownership: "the mutex is held again on return", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.timed_nap", ret: "void", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "a monotonic deadline as the wall-clock time a timed wait measures, at most 100 ms ahead (Q1-M-12)", ownership: "writes the second timespec", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.pool_park", ret: "void", params: ["ptr", "ptr", "ptr", "i64"], attrs: "", declared: false, part: Tasks, responsibility: "register a task as a waiter, park it and give its worker back (N83)", ownership: "releases and retakes the mutex", effect: "", failure: Never, safety: Locked }
-RuntimeSymbol { symbol: "nz.cwake", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "wake every thread and pool task waiting on a condition variable (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.task_yield", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "let a pool task's worker run its other tasks first (N83)", ownership: "none", effect: "", failure: Never, safety: Owner }
-RuntimeSymbol { symbol: "nz.pool_report", ret: "void", params: [], attrs: "", declared: false, part: Tasks, responsibility: "the pool's line of the schedule report, where it ran (N83)", ownership: "none", effect: "", failure: Never, safety: Entry }
-RuntimeSymbol { symbol: "nz.join_one", ret: "i32", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "wait for one task to end, its thread joined or its record freed (N83)", ownership: "frees the pool task's record", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.pool_park", ret: "void", params: ["ptr", "ptr", "ptr", "i64"], attrs: "noinline", declared: false, part: Tasks, responsibility: "register a task as a waiter, park it and give its worker back (N83)", ownership: "releases and retakes the mutex", effect: "", failure: Never, safety: Locked }
+RuntimeSymbol { symbol: "nz.cwake", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "wake every thread and pool task waiting on a condition variable (N83)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.task_yield", ret: "void", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "let a pool task's worker run its other tasks first (N83)", ownership: "none", effect: "", failure: Never, safety: Owner }
+RuntimeSymbol { symbol: "nz.pool_report", ret: "void", params: [], attrs: "noinline", declared: false, part: Tasks, responsibility: "the pool's line of the schedule report, where it ran (N83)", ownership: "none", effect: "", failure: Never, safety: Entry }
+RuntimeSymbol { symbol: "nz.join_one", ret: "i32", params: ["ptr"], attrs: "noinline", declared: false, part: Tasks, responsibility: "wait for one task to end, its thread joined or its record freed (N83)", ownership: "frees the pool task's record", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.format_int", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Base, responsibility: "an Int's decimal digits into a 21-byte buffer", ownership: "writes into the caller's buffer", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.vec_release", ret: "void", params: ["ptr", "ptr", "i64", "ptr"], attrs: "", declared: false, part: Sequences, responsibility: "release a sequence, each element with its type's release at its stride, through a queue rather than recursion (R1a)", ownership: "takes a reference; null is a no-op; the queue is null outside a release", effect: "", failure: Never, safety: Owner }
 RuntimeSymbol { symbol: "nz.vec_drain", ret: "void", params: ["ptr", "ptr", "i64", "ptr"], attrs: "", declared: false, part: Sequences, responsibility: "empty a dead sequence: each element's release, given the queue, then its storage (R1a)", ownership: "takes the sequence's last reference", effect: "", failure: Never, safety: Owner }
@@ -14867,40 +14985,40 @@ RuntimeSymbol { symbol: "nz.str_join_to", ret: "void", params: ["ptr", "ptr", "p
 RuntimeSymbol { symbol: "nz.scope_join_to", ret: "void", params: ["ptr", "ptr"], attrs: "", declared: false, part: Tasks, responsibility: "`nz.scope_join`, written through a pointer", ownership: "as `nz.scope_join`", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.task_publish", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tasks, responsibility: "copy this thread's failure into its task block", ownership: "borrows the block", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.cstr", ret: "ptr", params: ["ptr", "i64"], attrs: "", declared: false, part: Io, responsibility: "a NUL-terminated copy of a path, for the C library", ownership: "the copy is owned by the caller, who frees it", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.os_acquire", ret: "void", params: [], attrs: "", declared: false, part: Files, responsibility: "take the handle table's spin lock (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.os_acquire", ret: "void", params: [], attrs: "noinline", declared: false, part: Files, responsibility: "take the handle table's spin lock (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_release", ret: "void", params: [], attrs: "", declared: false, part: Files, responsibility: "give the handle table's spin lock back", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_errno", ret: "i64", params: [], attrs: "", declared: false, part: Files, responsibility: "-errno, read after a failed system call", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_slot", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "a descriptor's slot, the table grown to hold it", ownership: "the lock is held", effect: "", failure: Null, safety: Locked }
 RuntimeSymbol { symbol: "nz.os_register", ret: "i64", params: ["i64", "i64", "ptr"], attrs: "", declared: false, part: Files, responsibility: "a new generation's handle for a descriptor", ownership: "the lock is held", effect: "", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.os_live", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "the live slot a handle names", ownership: "the lock is held", effect: "", failure: Null, safety: Locked }
-RuntimeSymbol { symbol: "nz.os_pin", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "pin a live handle: its kind, or its status", ownership: "takes the lock", effect: "", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_unpin", ret: "void", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "unpin a handle; the last unpin of one closed meanwhile closes it", ownership: "takes the lock", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.os_pin", ret: "i64", params: ["i64"], attrs: "noinline", declared: false, part: Files, responsibility: "pin a live handle: its kind, or its status", ownership: "takes the lock", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_unpin", ret: "void", params: ["i64"], attrs: "noinline", declared: false, part: Files, responsibility: "unpin a handle; the last unpin of one closed meanwhile closes it", ownership: "takes the lock", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_shut", ret: "i64", params: ["i64", "i64", "ptr"], attrs: "", declared: false, part: Files, responsibility: "close a descriptor or a directory", ownership: "owns what it closes", effect: "", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_adopt", ret: "i64", params: ["i32", "i64", "ptr"], attrs: "", declared: false, part: Files, responsibility: "a handle for a descriptor just opened, closing it if the table cannot grow", ownership: "takes the descriptor", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_adopt", ret: "i64", params: ["i32", "i64", "ptr"], attrs: "noinline", declared: false, part: Files, responsibility: "a handle for a descriptor just opened, closing it if the table cannot grow", ownership: "takes the descriptor", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_open_read", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "open a file to read (Gate 2)", ownership: "borrows the path", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_open_write", ret: "i64", params: ["ptr", "i64", "i64"], attrs: "", declared: false, part: Files, responsibility: "open a file to write, by mode (Gate 2)", ownership: "borrows the path", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_dir_open", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "open a directory to list (Gate 2)", ownership: "borrows the path", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_stdin", ret: "i64", params: [], attrs: "", declared: false, part: Files, responsibility: "standard input's handle (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_std_stream", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "standard output's or errors' handle (R1d)", ownership: "none", effect: "io", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_stdin", ret: "i64", params: [], attrs: "noinline", declared: false, part: Files, responsibility: "standard input's handle (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_std_stream", ret: "i64", params: ["i64"], attrs: "noinline", declared: false, part: Files, responsibility: "standard output's or errors' handle (R1d)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_status", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "whether a handle is live (Gate 2)", ownership: "none", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_read", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "read into a buffer (Gate 2)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.heap_reserve", ret: "void", params: ["i64"], attrs: "", declared: false, part: Heap, responsibility: "count bytes as live, or end the process past the heap limit (R1d, D5)", ownership: "none", effect: "", failure: Ends, safety: Any }
 RuntimeSymbol { symbol: "nz.heap_malloc", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Heap, responsibility: "C's `malloc`, counted against the heap limit (R1d, D5)", ownership: "memory the caller owns, or null", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.heap_free", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Heap, responsibility: "C's `free` of a counted block (R1d, D5)", ownership: "takes the memory; null is a no-op", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.heap_realloc", ret: "ptr", params: ["ptr", "i64"], attrs: "", declared: false, part: Heap, responsibility: "C's `realloc` of a counted block, its growth counted first (R1d, D5)", ownership: "takes the memory and returns memory the caller owns, or null with it unchanged", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.small_malloc", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Heap, responsibility: "C's `malloc`, a block of up to 512 bytes from this thread's list of its size class (R1.5 3.1)", ownership: "memory the caller owns, or null", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.small_free", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Heap, responsibility: "C's `free` of a small-block heap's block, kept on this thread's list while it is short (R1.5 3.1)", ownership: "takes the memory; null is a no-op", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.small_realloc", ret: "ptr", params: ["ptr", "i64"], attrs: "", declared: false, part: Heap, responsibility: "C's `realloc` of a small-block heap's block (R1.5 3.1)", ownership: "takes the memory and returns memory the caller owns, or null with it unchanged", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.small_malloc", ret: "ptr", params: ["i64"], attrs: "noinline", declared: false, part: Heap, responsibility: "C's `malloc`, a block of up to 512 bytes from this thread's list of its size class (R1.5 3.1)", ownership: "memory the caller owns, or null", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.small_free", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Heap, responsibility: "C's `free` of a small-block heap's block, kept on this thread's list while it is short (R1.5 3.1)", ownership: "takes the memory; null is a no-op", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.small_realloc", ret: "ptr", params: ["ptr", "i64"], attrs: "noinline", declared: false, part: Heap, responsibility: "C's `realloc` of a small-block heap's block (R1.5 3.1)", ownership: "takes the memory and returns memory the caller owns, or null with it unchanged", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.os_read_line", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "read a line of standard input into a buffer (R1d, P3)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_in_acquire", ret: "void", params: [], attrs: "", declared: false, part: Files, responsibility: "take standard input's spin lock (R1d, P3)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.os_in_acquire", ret: "void", params: [], attrs: "noinline", declared: false, part: Files, responsibility: "take standard input's spin lock (R1d, P3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_in_release", ret: "void", params: [], attrs: "", declared: false, part: Files, responsibility: "give standard input's spin lock back (R1d, P3)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_in_read", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "read standard input, its buffer first (R1d, P3)", ownership: "writes the caller's buffer; takes standard input's lock", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_in_line", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "read standard input to its next newline, keeping what follows (R1d, P3)", ownership: "writes the caller's buffer; makes standard input's buffer, which the process owns; takes standard input's lock", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_write", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "write bytes (Gate 2)", ownership: "borrows the bytes", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_seek", ret: "i64", params: ["i64", "i64", "i64"], attrs: "", declared: false, part: Files, responsibility: "move a file's position (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_sync", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "a file's data on storage (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_close", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Files, responsibility: "close a handle (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_dir_next", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "a directory's next entry (Gate 2)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_close", ret: "i64", params: ["i64"], attrs: "noinline", declared: false, part: Files, responsibility: "close a handle (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_dir_next", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "noinline", declared: false, part: Files, responsibility: "a directory's next entry (Gate 2)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_stat", ret: "i64", params: ["ptr", "i64", "ptr"], attrs: "", declared: false, part: Files, responsibility: "a path's size, kind, time and permissions (Gate 2)", ownership: "borrows the path; writes the caller's 32 bytes", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_path_op", ret: "i64", params: ["ptr", "i64", "i64"], attrs: "", declared: false, part: Files, responsibility: "make or remove a directory, or remove a file (Gate 2)", ownership: "borrows the path", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_rename", ret: "i64", params: ["ptr", "i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "rename a path (Gate 2)", ownership: "borrows both paths", effect: "io", failure: Status, safety: Any }
@@ -14908,15 +15026,15 @@ RuntimeSymbol { symbol: "nz.os_family", ret: "i64", params: [], attrs: "", decla
 RuntimeSymbol { symbol: "nz.os_error_text", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Files, responsibility: "the system's message for a status (Gate 2)", ownership: "writes the caller's buffer", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.net_recv", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "a read from a connected socket, waiting at most its deadline (Gate 2)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.net_send", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "a write to a connected socket, waiting at most its deadline (Gate 2)", ownership: "borrows the bytes", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.net_wake", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Net, responsibility: "wake every task waiting on a wait record (Gate 2)", ownership: "takes the record's lock", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.net_wake", ret: "void", params: ["ptr"], attrs: "noinline", declared: false, part: Net, responsibility: "wake every task waiting on a wait record (Gate 2)", ownership: "takes the record's lock", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.net_now", ret: "i64", params: [], attrs: "", declared: false, part: Net, responsibility: "the monotonic clock in nanoseconds, which a socket's deadline is on (Gate 2, Q1-M-12)", ownership: "none", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.net_start", ret: "void", params: [], attrs: "", declared: false, part: Net, responsibility: "start the reactor, once (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.net_start", ret: "void", params: [], attrs: "noinline", declared: false, part: Net, responsibility: "start the reactor, once (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.net_reactor", ret: "ptr", params: ["ptr"], attrs: "", declared: false, part: Net, responsibility: "the reactor thread: wait for events and wake their handles (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Entry }
-RuntimeSymbol { symbol: "nz.net_event", ret: "void", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "wake an event's handle if it is still that generation's (Gate 2)", ownership: "takes the table's lock, then the record's", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.net_waitrec", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "a live handle's wait record, made the first time (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.net_closing", ret: "i1", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "whether a handle is no longer live (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.net_deadline", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "when a wait on a handle gives up (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Never, safety: Any }
-RuntimeSymbol { symbol: "nz.net_wait", ret: "i64", params: ["i64", "i64", "i64"], attrs: "", declared: false, part: Net, responsibility: "wait until a socket may be ready, its deadline passes or it closes (Gate 2)", ownership: "takes the record's lock", effect: "", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.net_event", ret: "void", params: ["i64"], attrs: "noinline", declared: false, part: Net, responsibility: "wake an event's handle if it is still that generation's (Gate 2)", ownership: "takes the table's lock, then the record's", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.net_waitrec", ret: "ptr", params: ["i64"], attrs: "noinline", declared: false, part: Net, responsibility: "a live handle's wait record, made the first time (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.net_closing", ret: "i1", params: ["i64"], attrs: "noinline", declared: false, part: Net, responsibility: "whether a handle is no longer live (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.net_deadline", ret: "i64", params: ["i64"], attrs: "noinline", declared: false, part: Net, responsibility: "when a wait on a handle gives up (Gate 2)", ownership: "takes the table's lock", effect: "", failure: Never, safety: Any }
+RuntimeSymbol { symbol: "nz.net_wait", ret: "i64", params: ["i64", "i64", "i64"], attrs: "noinline", declared: false, part: Net, responsibility: "wait until a socket may be ready, its deadline passes or it closes (Gate 2)", ownership: "takes the record's lock", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.net_would_block", ret: "i1", params: [], attrs: "", declared: false, part: Net, responsibility: "whether the failure just reported would block (Gate 2)", ownership: "none", effect: "", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.net_parse", ret: "i64", params: ["ptr", "i64", "ptr"], attrs: "", declared: false, part: Net, responsibility: "HOST:PORT into a socket address (Gate 2)", ownership: "borrows the text; writes the caller's 128 bytes", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_tcp_listen", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "listen on an address (Gate 2)", ownership: "borrows the address", effect: "io", failure: Status, safety: Any }
@@ -14925,7 +15043,7 @@ RuntimeSymbol { symbol: "nz.os_tcp_connect", ret: "i64", params: ["ptr", "i64", 
 RuntimeSymbol { symbol: "nz.os_udp_bind", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "bind a datagram socket (Gate 2)", ownership: "borrows the address", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_udp_send_to", ret: "i64", params: ["i64", "ptr", "i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "send a datagram (Gate 2)", ownership: "borrows the bytes and the address", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_udp_recv_from", ret: "i64", params: ["i64", "ptr", "i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "receive a datagram and its sender (Gate 2)", ownership: "writes the caller's buffers", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_set_timeout", ret: "i64", params: ["i64", "i64"], attrs: "", declared: false, part: Net, responsibility: "a handle's deadline (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
+RuntimeSymbol { symbol: "nz.os_set_timeout", ret: "i64", params: ["i64", "i64"], attrs: "noinline", declared: false, part: Net, responsibility: "a handle's deadline (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_shutdown", ret: "i64", params: ["i64", "i64"], attrs: "", declared: false, part: Net, responsibility: "shut a connection's reading or writing (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_net_addr", ret: "i64", params: ["i64", "i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "a socket's own or peer's address (Gate 2)", ownership: "writes the caller's buffer", effect: "io", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.os_resolve", ret: "i64", params: ["ptr", "i64", "i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "resolve a name (Gate 2)", ownership: "borrows the name; writes the caller's buffer", effect: "io", failure: Status, safety: Any }
@@ -14940,10 +15058,10 @@ RuntimeSymbol { symbol: "nz.os_tls_read", ret: "i64", params: ["i64", "ptr", "i6
 RuntimeSymbol { symbol: "nz.os_tls_write", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "plaintext into the engine, to be pulled as ciphertext (C1)", ownership: "borrows the bytes; the engine copies them", effect: "io", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.os_tls_close", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "end a session or a configuration (C1)", ownership: "writes the caller's buffer; frees the engine's objects", effect: "io", failure: Status, safety: Locked }
 RuntimeSymbol { symbol: "nz.os_tls_info", ret: "i64", params: ["i64", "i64", "ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "the ALPN name, version, peer or last failure of a session (C1)", ownership: "writes the caller's buffer", effect: "io", failure: Status, safety: Locked }
-RuntimeSymbol { symbol: "nz.tls_table", ret: "ptr", params: [], attrs: "", declared: false, part: Tls, responsibility: "the session table, made zeroed on first use (C1)", ownership: "none", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.tls_table", ret: "ptr", params: [], attrs: "noinline", declared: false, part: Tls, responsibility: "the session table, made zeroed on first use (C1)", ownership: "none", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.tls_put", ret: "i64", params: ["ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "a free slot for an engine object: its id, or -24 when the table is full (C1)", ownership: "takes the object into the slot", effect: "", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.tls_slot", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Tls, responsibility: "an id's slot, or null for an id no slot has (C1)", ownership: "none", effect: "", failure: Null, safety: Any }
-RuntimeSymbol { symbol: "nz.tls_hold", ret: "ptr", params: ["ptr", "i64", "i64"], attrs: "", declared: false, part: Tls, responsibility: "hold a slot for a live id of a kind: its object, or null with nothing held (C1)", ownership: "takes the slot's hold", effect: "", failure: Null, safety: Locked }
+RuntimeSymbol { symbol: "nz.tls_hold", ret: "ptr", params: ["ptr", "i64", "i64"], attrs: "noinline", declared: false, part: Tls, responsibility: "hold a slot for a live id of a kind: its object, or null with nothing held (C1)", ownership: "takes the slot's hold", effect: "", failure: Null, safety: Locked }
 RuntimeSymbol { symbol: "nz.tls_let_go", ret: "void", params: ["ptr"], attrs: "", declared: false, part: Tls, responsibility: "let a held slot go (C1)", ownership: "releases the slot's hold", effect: "", failure: Never, safety: Locked }
 RuntimeSymbol { symbol: "nz.tls_configure", ret: "i64", params: ["i64", "ptr", "i64", "ptr", "i64", "ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "a configuration from the engine, in a slot (C1)", ownership: "borrows the buffers", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.tls_open", ret: "i64", params: ["i64", "i64", "ptr", "i64"], attrs: "", declared: false, part: Tls, responsibility: "a session from a configuration, in a slot (C1)", ownership: "holds the configuration's slot while the engine copies from it", effect: "io", failure: Status, safety: Locked }
@@ -14956,7 +15074,7 @@ RuntimeSymbol { symbol: "nz.os_env_at", ret: "ptr", params: ["i64", "ptr"], attr
 RuntimeSymbol { symbol: "nz.os_env_find", ret: "ptr", params: ["ptr", "i64", "ptr"], attrs: "", declared: false, part: Files, responsibility: "a variable's value (Gate 2)", ownership: "returns a pointer into the environment", effect: "io", failure: Never, safety: Any }
 RuntimeSymbol { symbol: "nz.net_pipe_write", ret: "i64", params: ["i64", "ptr", "i64"], attrs: "", declared: false, part: Net, responsibility: "a write to a pipe, waiting at most its deadline (Gate 2)", ownership: "borrows the bytes", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_spawn", ret: "i64", params: ["ptr", "i64", "ptr"], attrs: "", declared: false, part: Net, responsibility: "run a program with three pipes (Gate 2)", ownership: "borrows the program and the arguments", effect: "io", failure: Status, safety: Any }
-RuntimeSymbol { symbol: "nz.os_child", ret: "ptr", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "a child's record, pinned (Gate 2)", ownership: "pins the handle", effect: "", failure: Null, safety: Any }
+RuntimeSymbol { symbol: "nz.os_child", ret: "ptr", params: ["i64"], attrs: "noinline", declared: false, part: Net, responsibility: "a child's record, pinned (Gate 2)", ownership: "pins the handle", effect: "", failure: Null, safety: Any }
 RuntimeSymbol { symbol: "nz.os_child_pipe", ret: "i64", params: ["i64", "i64"], attrs: "", declared: false, part: Net, responsibility: "a child's pipe (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_wait", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "wait for a child's exit (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
 RuntimeSymbol { symbol: "nz.os_kill", ret: "i64", params: ["i64"], attrs: "", declared: false, part: Net, responsibility: "kill a child (Gate 2)", ownership: "none", effect: "io", failure: Status, safety: Any }
@@ -15025,7 +15143,7 @@ nz.chanv_release
 "#
 }
 
-pub fn rt_abi_revision() -> Int ! {} { 43 }
+pub fn rt_abi_revision() -> Int ! {} { 44 }
 
 pub fn rt_target_note() -> Str ! {} {
     r#"verified on aarch64-apple-darwin with Apple clang; other targets are unverified rather than unsupported"#

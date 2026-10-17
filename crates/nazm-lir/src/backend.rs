@@ -170,6 +170,18 @@ impl Target {
         }
     }
 
+    /// Where the LLVM backend puts generated functions (performance leadership 6.3): a section of
+    /// their own where the pool preempts — macOS (Mach-O) and Windows (COFF) — so a worker's thread
+    /// interrupted there is known to be in generated code; the default section elsewhere.
+    #[must_use]
+    pub fn code(&self) -> crate::op::llvm::Code {
+        match self.os {
+            Os::Macos => crate::op::llvm::Code::MachO,
+            Os::Windows => crate::op::llvm::Code::Coff,
+            Os::Linux | Os::Android | Os::Ios | Os::None | Os::Wasi => crate::op::llvm::Code::Plain,
+        }
+    }
+
     /// Whether pointers are 32 bits wide (Q1-A1-05, M1): WebAssembly and the microcontroller
     /// boards, where a C pointer, which crosses as a 64-bit word, is refused by name.
     #[must_use]
@@ -477,7 +489,12 @@ impl Backend for LlvmText {
                 format!("LIR does not validate: {}", e.join("; ")),
             )]);
         }
-        let text = crate::op::llvm::module(&m, self.target.failures(), self.target.probes());
+        let text = crate::op::llvm::module(
+            &m,
+            self.target.failures(),
+            self.target.probes(),
+            self.target.code(),
+        );
         let ir = if self.debug {
             crate::debug::attach(&text, &|i| names.debug_file(i))
         } else {
