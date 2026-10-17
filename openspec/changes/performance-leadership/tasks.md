@@ -85,6 +85,8 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       `sel_recv`, `sel_send`, `sel_wait`, `sel_wait_until` (spec *Select over channels of different
       types*), on every tier (both interpreters, LLVM, Cranelift, Nazm's code generator, the
       pipeline); semantic epoch 91, runtime ABI 46. Open: lock-free channels
+      — 2026-10-17, part: the direct hand-off on the generic channel `Chan[T]`, the same record,
+      park and hand design, a select's offer and look included (runtime ABI 48)
 - [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the

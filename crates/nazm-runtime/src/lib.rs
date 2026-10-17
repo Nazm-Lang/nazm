@@ -377,7 +377,13 @@ pub fn escape(s: &str) -> String {
 /// of the generated code's section are `.text$nA` and `.text$nZ` and the code's section `.text$nM`,
 /// eight bytes each, so Cranelift's objects and Nazm's own code generator's, whose code now goes
 /// in that section too (`__TEXT,__nz_text` on macOS), keep the name in the section header.
-pub const RUNTIME_ABI_REVISION: u32 = 47;
+/// 48 is performance leadership 6.4's direct hand-off on the generic channel (2026-10-17): a `Chan[T]` header is 128 bytes — parked receivers (80, tail 88) and senders
+/// (96, tail 104), spare wait records (112), waiters on its condition variable (120) — and a wait
+/// record carries the value at 160; a send to a parked receiver copies into its record and wakes it
+/// alone, a receive moves a parked sender's value into the ring, and a select's offer and look do
+/// the same (`nz.chanv_record`, `nz.chanv_park`, `nz.chanv_take`, `nz.chanv_wake`, `nz.chanv_put`,
+/// `nz.chanv_get`, `nz.chanv_wait_old`, `nz.chanv_tell_old`).
+pub const RUNTIME_ABI_REVISION: u32 = 48;
 
 /// Every part of the runtime this component can emit, for [`digest`].
 /// Every service the runtime has: what [`digest`] covers, and what a runtime artifact
@@ -854,6 +860,14 @@ pub const INVENTORY: &[RuntimeSymbol] = &[
     rt!("nz.chan_hand", "i64" ("ptr", "ptr", "i64", "i64") "noinline", false, Channels, "", Never, Locked, "take the head of a channel's wait list, give it a value and a state, and wake it alone (6.4)", "the value the record held"),
     rt!("nz.chan_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on the channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
     rt!("nz.chan_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on the channel's own condition variable, if anyone does (6.4)", "none"),
+    rt!("nz.chanv_record", "ptr" ("ptr") "noinline", false, Channels, "", Null, Locked, "a wait record for a generic channel, its value at 160: a spare, or a new one (6.4)", "the channel owns it; null when there is no memory"),
+    rt!("nz.chanv_park", "i64" ("ptr", "ptr", "ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "park on a generic channel's wait record at the tail of its list until a waker sets its state (6.4)", "the record goes back to the channel's spares; the mutex is held again on return"),
+    rt!("nz.chanv_take", "ptr" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the head of a generic channel's wait list, taken off it (6.4)", "the record stays the channel's"),
+    rt!("nz.chanv_wake", "void" ("ptr", "i64") "noinline", false, Channels, "", Never, Locked, "give a wait record its state and wake its waiter alone (6.4)", "none"),
+    rt!("nz.chanv_wait_old", "void" ("ptr", "ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wait on a generic channel's own condition variable, counted, when no wait record could be had (6.4)", "the mutex is held again on return"),
+    rt!("nz.chanv_tell_old", "void" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "wake whoever waits on a generic channel's own condition variable, if anyone does (6.4)", "none"),
+    rt!("nz.chanv_put", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "a value to a parked receiver or the ring's tail, the lock held (6.4)", "takes the slot's reference unless it returns 0"),
+    rt!("nz.chanv_get", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "the ring's oldest value, a parked sender's taking its place, the lock held (6.4)", "hands the slot's reference over when it returns 1"),
     rt!("nz.chanv_offer", "i64" ("ptr", "ptr") "noinline", false, Channels, "", Never, Locked, "one offer of a slot to a channel without waiting (6.4)", "borrows the channel; takes the slot's reference when it returns 1"),
     rt!("nz.sel_case", "ptr" ("ptr") "noinline", false, Channels, "", Null, Owner, "room for one more case in a select (6.4)", "the select owns it; null when there is no memory"),
     rt!("nz.failed_now", "i32" () "", false, Base, "", Never, Any, "whether this thread has failed, for a second backend", "none"),
@@ -1543,10 +1557,10 @@ mod tests {
     }
 
     #[test]
-    fn the_runtime_is_revision_forty_seven_and_reaches_the_system_only_through_its_platform_layer()
+    fn the_runtime_is_revision_forty_eight_and_reaches_the_system_only_through_its_platform_layer()
     {
-        // 6.4's select over several types: a bump is a decision, so a test says which one was made.
-        assert_eq!(crate::RUNTIME_ABI_REVISION, 47);
+        // 6.4's hand-off on the generic channel: a bump is a decision, so a test says which one was made.
+        assert_eq!(crate::RUNTIME_ABI_REVISION, 48);
         // The session table is the runtime's; the engine is each target's own unit, and a target
         // without one has none.
         assert!(

@@ -1687,18 +1687,40 @@ quiet:
   ret void
 }
 
-; `chan_close_of`: closed under the channel's lock, every waiter on its condition variable woken,
-; then the event a selector waits for. Not the `Int` channel's close, whose wait lists a generic
-; channel's header does not have (6.4).
+; `chan_close_of`: closed under the channel's lock — every parked receiver ended (the ring is empty
+; while one is parked) and every parked sender refused, in the order they came, whoever waits the
+; old way woken — then the event a selector waits for.
 define hidden void @nz.chanv_close(ptr %c) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
   %vp = getelementptr i8, ptr %c, i64 48
   %cv = load ptr, ptr %vp
+  %rqp = getelementptr i8, ptr %c, i64 80
+  %rqtp = getelementptr i8, ptr %c, i64 88
+  %sqp = getelementptr i8, ptr %c, i64 96
+  %sqtp = getelementptr i8, ptr %c, i64 104
   %l = call i32 @pthread_mutex_lock(ptr %m)
   %closedp = getelementptr i8, ptr %c, i64 24
   store i64 1, ptr %closedp
+  br label %receivers
+receivers:
+  %rq = load ptr, ptr %rqp
+  %rnone = icmp eq ptr %rq, null
+  br i1 %rnone, label %senders, label %rend
+rend:
+  %rrec = call ptr @nz.chanv_take(ptr %rqp, ptr %rqtp)
+  call void @nz.chanv_wake(ptr %rrec, i64 2)
+  br label %receivers
+senders:
+  %sq = load ptr, ptr %sqp
+  %snone = icmp eq ptr %sq, null
+  br i1 %snone, label %rest, label %send
+send:
+  %srec = call ptr @nz.chanv_take(ptr %sqp, ptr %sqtp)
+  call void @nz.chanv_wake(ptr %srec, i64 2)
+  br label %senders
+rest:
   %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u = call i32 @pthread_mutex_unlock(ptr %m)
   call void @nz.sel_signal()
@@ -1706,22 +1728,16 @@ entry:
 }
 
 ; One look at one channel, without waiting: 1 and the oldest slot copied out to `%dst` (its
-; reference handed over), 2 when closed and drained, 0 when neither.
+; reference handed over; a parked sender's value takes its place), 2 when closed and drained, 0
+; when neither.
 define hidden i64 @nz.chanv_try(ptr %c, ptr %dst) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
-  %vp = getelementptr i8, ptr %c, i64 48
-  %cv = load ptr, ptr %vp
-  %lenp = getelementptr i8, ptr %c, i64 8
-  %headp = getelementptr i8, ptr %c, i64 16
   %closedp = getelementptr i8, ptr %c, i64 24
-  %datap = getelementptr i8, ptr %c, i64 32
-  %sp = getelementptr i8, ptr %c, i64 64
-  %stride = load i64, ptr %sp
   %l = call i32 @pthread_mutex_lock(ptr %m)
-  %queued = load i64, ptr %lenp
-  %has = icmp sgt i64 %queued, 0
+  %got = call i64 @nz.chanv_get(ptr %c, ptr %dst)
+  %has = icmp ne i64 %got, 0
   br i1 %has, label %take, label %ask
 ask:
   %shut = load i64, ptr %closedp
@@ -1730,18 +1746,6 @@ ask:
   %u1 = call i32 @pthread_mutex_unlock(ptr %m)
   ret i64 %why
 take:
-  %head = load i64, ptr %headp
-  %cap = load i64, ptr %c
-  %data = load ptr, ptr %datap
-  %off = mul i64 %head, %stride
-  %slot = getelementptr i8, ptr %data, i64 %off
-  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %slot, i64 %stride, i1 false)
-  %h1 = add i64 %head, 1
-  %nh = urem i64 %h1, %cap
-  store i64 %nh, ptr %headp
-  %left = sub i64 %queued, 1
-  store i64 %left, ptr %lenp
-  %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
   call void @nz.sel_signal()
   ret i64 1
@@ -1903,20 +1907,13 @@ entry:
   ret i64 %t
 }
 
-; One offer to one channel, without waiting (6.4): 1 and the slot at `%src` copied in (its
-; reference the channel's now), 2 when closed, 0 when full.
+; One offer to one channel, without waiting (6.4): 1 and the slot at `%src` handed to a parked
+; receiver or queued (its reference theirs now), 2 when closed, 0 when full.
 define hidden i64 @nz.chanv_offer(ptr %c, ptr %src) noinline {
 entry:
   %mp = getelementptr i8, ptr %c, i64 40
   %m = load ptr, ptr %mp
-  %vp = getelementptr i8, ptr %c, i64 48
-  %cv = load ptr, ptr %vp
-  %lenp = getelementptr i8, ptr %c, i64 8
-  %headp = getelementptr i8, ptr %c, i64 16
   %closedp = getelementptr i8, ptr %c, i64 24
-  %datap = getelementptr i8, ptr %c, i64 32
-  %sp = getelementptr i8, ptr %c, i64 64
-  %stride = load i64, ptr %sp
   %l = call i32 @pthread_mutex_lock(ptr %m)
   %closed = load i64, ptr %closedp
   %isclosed = icmp ne i64 %closed, 0
@@ -1925,24 +1922,13 @@ shut:
   %u1 = call i32 @pthread_mutex_unlock(ptr %m)
   ret i64 2
 space:
-  %len = load i64, ptr %lenp
-  %cap = load i64, ptr %c
-  %full = icmp sge i64 %len, %cap
-  br i1 %full, label %nope, label %store
+  %put = call i64 @nz.chanv_put(ptr %c, ptr %src)
+  %placed = icmp ne i64 %put, 0
+  br i1 %placed, label %store, label %nope
 nope:
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
   ret i64 0
 store:
-  %head = load i64, ptr %headp
-  %sum = add i64 %head, %len
-  %idx = urem i64 %sum, %cap
-  %data = load ptr, ptr %datap
-  %off = mul i64 %idx, %stride
-  %slot = getelementptr i8, ptr %data, i64 %off
-  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %src, i64 %stride, i1 false)
-  %grown = add i64 %len, 1
-  store i64 %grown, ptr %lenp
-  %b = call i32 @pthread_cond_broadcast(ptr %cv)
   %u3 = call i32 @pthread_mutex_unlock(ptr %m)
   call void @nz.sel_signal()
   ret i64 1
@@ -4135,7 +4121,7 @@ entry:
 const GENERIC_CHANNEL_RUNTIME: &str = r"
 define hidden ptr @nz.chanv_new(i64 %cap, i64 %stride, ptr %release) {
 entry:
-  %c = call ptr @malloc(i64 80)
+  %c = call ptr @malloc(i64 128)
   %bad = icmp eq ptr %c, null
   br i1 %bad, label %fail, label %ring
 fail:
@@ -4192,12 +4178,26 @@ init:
   store i64 %stride, ptr %sp
   %relp = getelementptr i8, ptr %c, i64 72
   store ptr %release, ptr %relp
+  ; No receiver and no sender parked, no spare wait record, nobody waiting on `%v` (6.4).
+  %rqp = getelementptr i8, ptr %c, i64 80
+  store ptr null, ptr %rqp
+  %rqtp = getelementptr i8, ptr %c, i64 88
+  store ptr null, ptr %rqtp
+  %sqp = getelementptr i8, ptr %c, i64 96
+  store ptr null, ptr %sqp
+  %sqtp = getelementptr i8, ptr %c, i64 104
+  store ptr null, ptr %sqtp
+  %spp = getelementptr i8, ptr %c, i64 112
+  store ptr null, ptr %spp
+  %fbp = getelementptr i8, ptr %c, i64 120
+  store i64 0, ptr %fbp
   %n = atomicrmw add ptr @nz.chan_allocated, i64 1 monotonic
   ret ptr %c
 }
 
 ; The last reference releases what is still queued, slot by slot, by the element's own release
-; function — then everything `nz.chan_release` frees for an `Int` channel.
+; function — then its spare wait records, and everything `nz.chan_release` frees for an `Int`
+; channel. No record is in use: nothing holds a reference, so nobody waits.
 define hidden void @nz.chanv_release(ptr %c) {
 entry:
   %none = icmp eq ptr %c, null
@@ -4212,7 +4212,7 @@ contents:
   %relp = getelementptr i8, ptr %c, i64 72
   %rel = load ptr, ptr %relp
   %norel = icmp eq ptr %rel, null
-  br i1 %norel, label %destroy, label %walk
+  br i1 %norel, label %records, label %walk
 walk:
   %lenp = getelementptr i8, ptr %c, i64 8
   %len = load i64, ptr %lenp
@@ -4227,7 +4227,7 @@ walk:
 test:
   %i = phi i64 [ 0, %walk ], [ %next, %body ]
   %more = icmp slt i64 %i, %len
-  br i1 %more, label %body, label %destroy
+  br i1 %more, label %body, label %records
 body:
   %sum = add i64 %head, %i
   %idx = urem i64 %sum, %cap
@@ -4236,6 +4236,20 @@ body:
   call void %rel(ptr %slot, ptr null)
   %next = add i64 %i, 1
   br label %test
+records:
+  %spp = getelementptr i8, ptr %c, i64 112
+  %sp0 = load ptr, ptr %spp
+  br label %spares
+spares:
+  %sr = phi ptr [ %sp0, %records ], [ %srn, %spare ]
+  %nomore = icmp eq ptr %sr, null
+  br i1 %nomore, label %destroy, label %spare
+spare:
+  %srn = load ptr, ptr %sr
+  %srcv = getelementptr i8, ptr %sr, i64 32
+  %srd = call i32 @pthread_cond_destroy(ptr %srcv)
+  call void @free(ptr %sr)
+  br label %spares
 destroy:
   %vp = getelementptr i8, ptr %c, i64 48
   %v = load ptr, ptr %vp
@@ -4255,86 +4269,188 @@ done:
   ret void
 }
 
-; Copies one slot in from `%src` — the sender's own reference, which the channel now holds —
-; or refuses, copying nothing, when closed.
-define hidden i1 @nz.chanv_send(ptr %c, ptr %src) noinline {
+; A generic channel's wait record (6.4): the `Int` channel's — `{ ptr next, pad, i64 state, pad,
+; cond }` — with the slot's value at 160, so a record is 160 bytes and a slot. One of the channel's
+; spares, or a new one, or null when there is no memory; the channel's mutex held.
+define hidden ptr @nz.chanv_record(ptr %c) noinline {
 entry:
-  %mp = getelementptr i8, ptr %c, i64 40
-  %m = load ptr, ptr %mp
-  %vp = getelementptr i8, ptr %c, i64 48
-  %cv = load ptr, ptr %vp
-  %lenp = getelementptr i8, ptr %c, i64 8
-  %headp = getelementptr i8, ptr %c, i64 16
-  %closedp = getelementptr i8, ptr %c, i64 24
-  %datap = getelementptr i8, ptr %c, i64 32
-  %sp = getelementptr i8, ptr %c, i64 64
-  %stride = load i64, ptr %sp
-  %l = call i32 @pthread_mutex_lock(ptr %m)
-  br label %check
-check:
-  %closed = load i64, ptr %closedp
-  %isclosed = icmp ne i64 %closed, 0
-  br i1 %isclosed, label %refuse, label %space
+  %spp = getelementptr i8, ptr %c, i64 112
+  %sp = load ptr, ptr %spp
+  %have = icmp ne ptr %sp, null
+  br i1 %have, label %reuse, label %fresh
+reuse:
+  %spn = load ptr, ptr %sp
+  store ptr %spn, ptr %spp
+  ret ptr %sp
+fresh:
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
+  %size = add i64 %stride, 160
+  %rec = call ptr @malloc(i64 %size)
+  %nomem = icmp eq ptr %rec, null
+  br i1 %nomem, label %none, label %made
+none:
+  ret ptr null
+made:
+  %rcv = getelementptr i8, ptr %rec, i64 32
+  %ri = call i32 @pthread_cond_init(ptr %rcv, ptr null)
+  ret ptr %rec
+}
+
+; Park on `%rec`, its value already in place, at the tail of the list at `%qp` (tail `%qtp`), the
+; mutex held, until a waker sets its state; the record goes back to the spares, still readable
+; while the mutex is held, and the state is the result.
+define hidden i64 @nz.chanv_park(ptr %c, ptr %m, ptr %rec, ptr %lp, ptr %ltp) noinline {
+entry:
+  store ptr null, ptr %rec
+  %rsp = getelementptr i8, ptr %rec, i64 16
+  store i64 0, ptr %rsp
+  %tail = load ptr, ptr %ltp
+  %first = icmp eq ptr %tail, null
+  br i1 %first, label %head, label %link
+head:
+  store ptr %rec, ptr %lp
+  br label %queued
+link:
+  store ptr %rec, ptr %tail
+  br label %queued
+queued:
+  store ptr %rec, ptr %ltp
+  %rcv = getelementptr i8, ptr %rec, i64 32
+  br label %look
+look:
+  %st = load i64, ptr %rsp
+  %waiting = icmp eq i64 %st, 0
+  br i1 %waiting, label %sleep, label %woken
+sleep:
+  %w = call i32 @pthread_cond_wait(ptr %rcv, ptr %m)
+  br label %look
+woken:
+  %spp = getelementptr i8, ptr %c, i64 112
+  %sp = load ptr, ptr %spp
+  store ptr %sp, ptr %rec
+  store ptr %rec, ptr %spp
+  ret i64 %st
+}
+
+; The head of the list at `%qp` (tail `%qtp`), taken off it; the list is not empty.
+define hidden ptr @nz.chanv_take(ptr %qp, ptr %qtp) noinline {
+entry:
+  %rec = load ptr, ptr %qp
+  %next = load ptr, ptr %rec
+  store ptr %next, ptr %qp
+  %last = icmp eq ptr %next, null
+  br i1 %last, label %emptied, label %out
+emptied:
+  store ptr null, ptr %qtp
+  br label %out
+out:
+  ret ptr %rec
+}
+
+; Give a record taken off its list its state, and wake its waiter alone.
+define hidden void @nz.chanv_wake(ptr %rec, i64 %st) noinline {
+entry:
+  %rsp = getelementptr i8, ptr %rec, i64 16
+  store i64 %st, ptr %rsp
+  %rcv = getelementptr i8, ptr %rec, i64 32
+  %wb = call i32 @pthread_cond_broadcast(ptr %rcv)
+  ret void
+}
+
+; Without memory for a record: wait on the channel's own condition variable, counted at 120.
+define hidden void @nz.chanv_wait_old(ptr %c, ptr %cv, ptr %m) noinline {
+entry:
+  %fbp = getelementptr i8, ptr %c, i64 120
+  %fb0 = load i64, ptr %fbp
+  %fb1 = add i64 %fb0, 1
+  store i64 %fb1, ptr %fbp
+  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
+  %fb2 = load i64, ptr %fbp
+  %fb3 = sub i64 %fb2, 1
+  store i64 %fb3, ptr %fbp
+  ret void
+}
+
+define hidden void @nz.chanv_tell_old(ptr %c, ptr %cv) noinline {
+entry:
+  %fbp = getelementptr i8, ptr %c, i64 120
+  %fb = load i64, ptr %fbp
+  %any = icmp sgt i64 %fb, 0
+  br i1 %any, label %tell, label %quiet
+tell:
+  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  br label %quiet
+quiet:
+  ret void
+}
+
+; Room for one value, with the channel's mutex held: a parked receiver's record, the ring's tail,
+; or nothing. 1 handed to a receiver, 2 queued, 0 full; the closed flag is the caller's to test.
+define hidden i64 @nz.chanv_put(ptr %c, ptr %src) noinline {
+entry:
+  %cv0 = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %cv0
+  %rqp = getelementptr i8, ptr %c, i64 80
+  %rqtp = getelementptr i8, ptr %c, i64 88
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
+  ; A parked receiver means an empty ring: the value goes to the one parked longest.
+  %rq = load ptr, ptr %rqp
+  %waiting = icmp ne ptr %rq, null
+  br i1 %waiting, label %hand, label %space
+hand:
+  %rec = call ptr @nz.chanv_take(ptr %rqp, ptr %rqtp)
+  %rv = getelementptr i8, ptr %rec, i64 160
+  call void @llvm.memcpy.p0.p0.i64(ptr %rv, ptr %src, i64 %stride, i1 false)
+  call void @nz.chanv_wake(ptr %rec, i64 1)
+  ret i64 1
 space:
+  %lenp = getelementptr i8, ptr %c, i64 8
   %len = load i64, ptr %lenp
   %cap = load i64, ptr %c
   %full = icmp sge i64 %len, %cap
-  br i1 %full, label %wait, label %store
-wait:
-  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
-  br label %check
-refuse:
-  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
-  ret i1 false
+  br i1 %full, label %nope, label %store
+nope:
+  ret i64 0
 store:
+  %headp = getelementptr i8, ptr %c, i64 16
   %head = load i64, ptr %headp
   %sum = add i64 %head, %len
   %idx = urem i64 %sum, %cap
+  %datap = getelementptr i8, ptr %c, i64 32
   %data = load ptr, ptr %datap
   %off = mul i64 %idx, %stride
   %slot = getelementptr i8, ptr %data, i64 %off
   call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %src, i64 %stride, i1 false)
   %grown = add i64 %len, 1
   store i64 %grown, ptr %lenp
-  %b = call i32 @pthread_cond_broadcast(ptr %cv)
-  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
-  call void @nz.sel_signal()
-  ret i1 true
+  call void @nz.chanv_tell_old(ptr %c, ptr %cv)
+  ret i64 2
 }
 
-; Copies the oldest slot out to `%dst` — the reference moves to the receiver — or reports the
-; channel closed and drained.
-define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) noinline {
+; The oldest value, with the channel's mutex held: copied out to `%dst` from the ring's head — the
+; slot it frees taken at once by the sender parked longest, whose value joins the tail — or
+; nothing. 1 taken, 0 empty; the closed flag is the caller's to test.
+define hidden i64 @nz.chanv_get(ptr %c, ptr %dst) noinline {
 entry:
-  %mp = getelementptr i8, ptr %c, i64 40
-  %m = load ptr, ptr %mp
-  %vp = getelementptr i8, ptr %c, i64 48
-  %cv = load ptr, ptr %vp
+  %cv0 = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %cv0
+  %sqp = getelementptr i8, ptr %c, i64 96
+  %sqtp = getelementptr i8, ptr %c, i64 104
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
   %lenp = getelementptr i8, ptr %c, i64 8
-  %headp = getelementptr i8, ptr %c, i64 16
-  %closedp = getelementptr i8, ptr %c, i64 24
-  %datap = getelementptr i8, ptr %c, i64 32
-  %sp = getelementptr i8, ptr %c, i64 64
-  %stride = load i64, ptr %sp
-  %l = call i32 @pthread_mutex_lock(ptr %m)
-  br label %check
-check:
   %len = load i64, ptr %lenp
-  %nothing = icmp sle i64 %len, 0
-  br i1 %nothing, label %maybe, label %take
-maybe:
-  %closed = load i64, ptr %closedp
-  %isclosed = icmp ne i64 %closed, 0
-  br i1 %isclosed, label %drained, label %wait
-wait:
-  %w = call i32 @pthread_cond_wait(ptr %cv, ptr %m)
-  br label %check
-drained:
-  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
-  ret i1 false
+  %empty = icmp sle i64 %len, 0
+  br i1 %empty, label %nope, label %take
+nope:
+  ret i64 0
 take:
+  %headp = getelementptr i8, ptr %c, i64 16
   %head = load i64, ptr %headp
   %cap = load i64, ptr %c
+  %datap = getelementptr i8, ptr %c, i64 32
   %data = load ptr, ptr %datap
   %off = mul i64 %head, %stride
   %slot = getelementptr i8, ptr %data, i64 %off
@@ -4342,13 +4458,130 @@ take:
   %h1 = add i64 %head, 1
   %nh = urem i64 %h1, %cap
   store i64 %nh, ptr %headp
-  %grown = sub i64 %len, 1
-  store i64 %grown, ptr %lenp
-  %b = call i32 @pthread_cond_broadcast(ptr %cv)
+  %n1 = sub i64 %len, 1
+  %sq = load ptr, ptr %sqp
+  %sparked = icmp ne ptr %sq, null
+  br i1 %sparked, label %refill, label %shrink
+refill:
+  ; A parked sender means the ring was full: its value takes the place just freed, at the tail.
+  %rec = call ptr @nz.chanv_take(ptr %sqp, ptr %sqtp)
+  %rv = getelementptr i8, ptr %rec, i64 160
+  %tsum = add i64 %nh, %n1
+  %tidx = urem i64 %tsum, %cap
+  %toff = mul i64 %tidx, %stride
+  %tslot = getelementptr i8, ptr %data, i64 %toff
+  call void @llvm.memcpy.p0.p0.i64(ptr %tslot, ptr %rv, i64 %stride, i1 false)
+  call void @nz.chanv_wake(ptr %rec, i64 1)
+  ret i64 1
+shrink:
+  store i64 %n1, ptr %lenp
+  call void @nz.chanv_tell_old(ptr %c, ptr %cv)
+  ret i64 1
+}
+
+; Copies one slot in from `%src` — the sender's own reference, which the channel or a parked
+; receiver now holds — or refuses, copying nothing, when closed. Blocking while full on a wait
+; record of its own, which a receiver takes the value from (6.4).
+define hidden i1 @nz.chanv_send(ptr %c, ptr %src) noinline {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %sqp = getelementptr i8, ptr %c, i64 96
+  %sqtp = getelementptr i8, ptr %c, i64 104
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  br label %check
+check:
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %refuse, label %offer
+offer:
+  %put = call i64 @nz.chanv_put(ptr %c, ptr %src)
+  %placed = icmp ne i64 %put, 0
+  br i1 %placed, label %sent, label %wait
+sent:
+  %u2 = call i32 @pthread_mutex_unlock(ptr %m)
+  call void @nz.sel_signal()
+  ret i1 true
+wait:
+  %rec = call ptr @nz.chanv_record(ptr %c)
+  %norec = icmp eq ptr %rec, null
+  br i1 %norec, label %old, label %park
+old:
+  call void @nz.chanv_wait_old(ptr %c, ptr %cv, ptr %m)
+  br label %check
+park:
+  %rv = getelementptr i8, ptr %rec, i64 160
+  call void @llvm.memcpy.p0.p0.i64(ptr %rv, ptr %src, i64 %stride, i1 false)
+  ; Taken by a receiver (1), or refused by a close (2).
+  %st = call i64 @nz.chanv_park(ptr %c, ptr %m, ptr %rec, ptr %sqp, ptr %sqtp)
+  %u3 = call i32 @pthread_mutex_unlock(ptr %m)
+  %took = icmp eq i64 %st, 1
+  br i1 %took, label %told, label %refused
+told:
+  call void @nz.sel_signal()
+  ret i1 true
+refused:
+  ret i1 false
+refuse:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
+}
+
+; Copies the oldest slot out to `%dst` — the reference moves to the receiver — or reports the
+; channel closed and drained. Blocking while empty on a wait record of its own, which a sender
+; hands its value to (6.4).
+define hidden i1 @nz.chanv_recv(ptr %c, ptr %dst) noinline {
+entry:
+  %mp = getelementptr i8, ptr %c, i64 40
+  %m = load ptr, ptr %mp
+  %vp = getelementptr i8, ptr %c, i64 48
+  %cv = load ptr, ptr %vp
+  %closedp = getelementptr i8, ptr %c, i64 24
+  %rqp = getelementptr i8, ptr %c, i64 80
+  %rqtp = getelementptr i8, ptr %c, i64 88
+  %stp = getelementptr i8, ptr %c, i64 64
+  %stride = load i64, ptr %stp
+  %l = call i32 @pthread_mutex_lock(ptr %m)
+  br label %check
+check:
+  ; A queued value wins over the close flag.
+  %got = call i64 @nz.chanv_get(ptr %c, ptr %dst)
+  %took = icmp ne i64 %got, 0
+  br i1 %took, label %taken, label %maybe
+taken:
   %u2 = call i32 @pthread_mutex_unlock(ptr %m)
   ; Room made, which a select's send case waits for (6.4).
   call void @nz.sel_signal()
   ret i1 true
+maybe:
+  %closed = load i64, ptr %closedp
+  %isclosed = icmp ne i64 %closed, 0
+  br i1 %isclosed, label %drained, label %wait
+wait:
+  %rec = call ptr @nz.chanv_record(ptr %c)
+  %norec = icmp eq ptr %rec, null
+  br i1 %norec, label %old, label %park
+old:
+  call void @nz.chanv_wait_old(ptr %c, ptr %cv, ptr %m)
+  br label %check
+park:
+  ; Handed a value by a sender (1), or ended by a close (2).
+  %st = call i64 @nz.chanv_park(ptr %c, ptr %m, ptr %rec, ptr %rqp, ptr %rqtp)
+  %handed = icmp eq i64 %st, 1
+  br i1 %handed, label %given, label %drained
+given:
+  %rv = getelementptr i8, ptr %rec, i64 160
+  call void @llvm.memcpy.p0.p0.i64(ptr %dst, ptr %rv, i64 %stride, i1 false)
+  %u3 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 true
+drained:
+  %u1 = call i32 @pthread_mutex_unlock(ptr %m)
+  ret i1 false
 }
 ";
 
