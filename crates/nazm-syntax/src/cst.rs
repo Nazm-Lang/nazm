@@ -858,6 +858,19 @@ impl<'a> Sink<'a> {
         self.events.push(Event::Close);
     }
 
+    /// No tree: an empty `SourceFile`, for a parse whose caller drops the tree unread.
+    pub(crate) fn finish_empty(strings: Strings) -> (GreenNode, Strings) {
+        let mut builder: GreenNodeBuilder<'static, 'static, SyntaxKind, Strings> =
+            GreenNodeBuilder::from_interner(strings);
+        builder.start_node(SyntaxKind::SourceFile);
+        builder.finish_node();
+        let (green, cache) = builder.finish();
+        let strings = cache
+            .and_then(cstree::build::NodeCache::into_interner)
+            .unwrap_or_default();
+        (green, strings)
+    }
+
     /// Build the tree: every lexeme in order, the nodes around them, and — when the parse
     /// reached the end of the file — the trailing trivia last. Returns a `SourceFile` node
     /// and the strings its leaves use, which extend `strings` (N76).

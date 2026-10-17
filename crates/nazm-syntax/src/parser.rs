@@ -300,12 +300,24 @@ pub(crate) fn parse_lossless(
     tokens: &[&Token],
     hole: Option<u32>,
 ) -> (Program, Vec<Diagnostic>, Cst) {
+    parse_with(file, text, lexemes, tokens, hole, true)
+}
+
+/// As [`parse_lossless`], the lossless tree built only when `tree` (else an empty one).
+pub(crate) fn parse_with(
+    file: FileId,
+    text: &str,
+    lexemes: &[Lexeme],
+    tokens: &[&Token],
+    hole: Option<u32>,
+    tree: bool,
+) -> (Program, Vec<Diagnostic>, Cst) {
     let region = Region {
         start: 0,
         muted: false,
         landings: &[],
     };
-    let parsed = parse_region(
+    let parsed = parse_region_with(
         file,
         text,
         lexemes,
@@ -313,6 +325,7 @@ pub(crate) fn parse_lossless(
         region,
         hole,
         crate::cst::Strings::default(),
+        tree,
     );
     let mut program = Program {
         consts: Vec::new(),
@@ -412,6 +425,24 @@ pub(crate) fn parse_region(
     region: Region<'_>,
     hole: Option<u32>,
     strings: crate::cst::Strings,
+) -> RegionParse {
+    parse_region_with(file, text, lexemes, tokens, region, hole, strings, true)
+}
+
+/// As [`parse_region`]; when `tree` is false the lossless tree is not built and the result's
+/// `green` is an empty `SourceFile`. The abstract tree and the diagnostics are the same either
+/// way: the tree is built from the events the parse recorded, after it, and nothing the parse
+/// decides reads it. For a caller that drops the tree unread (`crate::parse_file`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn parse_region_with(
+    file: FileId,
+    text: &str,
+    lexemes: &[Lexeme],
+    tokens: &[&Token],
+    region: Region<'_>,
+    hole: Option<u32>,
+    strings: crate::cst::Strings,
+    tree: bool,
 ) -> RegionParse {
     let mut p = Parser {
         file,
@@ -573,7 +604,11 @@ pub(crate) fn parse_region(
     let Parser {
         sink, hole_site, ..
     } = p;
-    let (green, strings) = sink.finish_green(strings, at_end);
+    let (green, strings) = if tree {
+        sink.finish_green(strings, at_end)
+    } else {
+        crate::cst::Sink::finish_empty(strings)
+    };
     RegionParse {
         chunks,
         stop,

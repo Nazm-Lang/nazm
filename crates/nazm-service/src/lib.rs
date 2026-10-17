@@ -57,6 +57,7 @@ pub mod keccak;
 pub mod kernel;
 pub mod load;
 pub mod patch;
+mod prelude_table;
 pub mod profile;
 pub mod rename;
 pub mod root;

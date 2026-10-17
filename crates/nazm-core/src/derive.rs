@@ -1241,10 +1241,32 @@ fn generate_toml(name: &str, public: bool, codec: &TypeCodec, shape: &Shape<'_>)
 /// `text` with the functions its derives mean appended, or unchanged when it derives nothing.
 #[must_use]
 pub fn expand(text: &str) -> String {
+    expand_in(nazm_span::FileId::ROOT, text).0
+}
+
+/// As [`expand`], for the file `file`: and when `text` is unchanged and had to be parsed to
+/// know it, that parse — `nazm_syntax::parse_file(file, text)`'s — so a loader need not parse
+/// the same text again (performance leadership, `nazm check`).
+#[must_use]
+pub fn expand_in(
+    file: nazm_span::FileId,
+    text: &str,
+) -> (
+    String,
+    Option<(nazm_syntax::Program, Vec<nazm_diag::Diagnostic>)>,
+) {
     if !text.contains("@derive") {
-        return text.to_owned();
+        return (text.to_owned(), None);
     }
-    let (program, _) = nazm_syntax::parse_source(text);
+    let parsed = nazm_syntax::parse_file(file, text);
+    match generated_for(text, &parsed.0) {
+        Some(expanded) => (expanded, None),
+        None => (text.to_owned(), Some(parsed)),
+    }
+}
+
+/// `text` with what `program`'s derives generate appended, or `None` when they generate nothing.
+fn generated_for(text: &str, program: &nazm_syntax::Program) -> Option<String> {
     let mut generated = String::new();
     let mut used: Vec<&str> = Vec::new();
     for format in FORMATS {
@@ -1318,7 +1340,7 @@ pub fn expand(text: &str) -> String {
         }
     }
     if generated.is_empty() {
-        return text.to_owned();
+        return None;
     }
     let mut out = text.to_owned();
     if !out.ends_with('\n') {
@@ -1330,5 +1352,5 @@ pub fn expand(text: &str) -> String {
     }
     out.push('\n');
     out.push_str(&generated);
-    out
+    Some(out)
 }

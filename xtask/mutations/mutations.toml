@@ -17573,12 +17573,14 @@ find = '''            } else if plain(&f.ty) && f.ty.name == "Option" {'''
 replace = '''            } else if false {'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "derive_json::a_derived_codec_and_schema_agree_everywhere" }]
 
+# Repointed by the compiler-speed round: the loader expands through `expand_in`, which hands back
+# the parse it made when nothing was derived.
 [[mutation]]
 name = "r1c-the-loader-does-not-expand-derives"
 why = "the loader reads a file without expanding its derives, so no derived function exists"
 file = "crates/nazm-service/src/load.rs"
-find = '''            Ok(t) if standard.is_none() => nazm_core::derive::expand(&t),'''
-replace = '''            Ok(t) if false => nazm_core::derive::expand(&t),'''
+find = '''            Ok(t) if standard.is_none() => nazm_core::derive::expand_in(id, &t),'''
+replace = '''            Ok(t) if false => nazm_core::derive::expand_in(id, &t),'''
 killers = [{ package = "nazm-cli", test = "cli_c_d", name = "derive_json::a_derived_codec_and_schema_agree_everywhere" }]
 
 [[mutation]]
@@ -19611,12 +19613,14 @@ find = "                        codes::ARRAY_TOO_LARGE,\n                       
 replace = "                        codes::TYPE_MISMATCH,\n                        span,\n                        \"an empty list needs its element type written\","
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::an_empty_list_with_no_type_to_take_is_refused_and_a_typed_one_is_not" }]
 
+# Repointed by the compiler-speed round: `prelude_named` reads the tokens of the loader's own
+# parse rather than scanning the text again.
 [[mutation]]
 name = "r1-5-the-prelude-imports-nothing"
 why = "a program module that names `split`, `hashmap_new` or `top` with no `use` is not given the standard module that has it (D9)"
 file = "crates/nazm-service/src/load.rs"
-find = "            prelude_named(&text, &program, &written)"
-replace = "            { let _ = prelude_named(&text, &program, &written); Vec::new() }"
+find = "                prelude_named(&tokens, &program, &written)"
+replace = "                { let _ = prelude_named(&tokens, &program, &written); Vec::new() }"
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "shorter_forms::the_prelude_imports_the_standard_modules_a_program_names_everywhere" }]
 
 [[mutation]]
@@ -21013,7 +21017,8 @@ find = '''  %rw0 = atomicrmw add ptr %nwp, i64 1 seq_cst'''
 replace = '''  %rw0 = atomicrmw add ptr %nwp, i64 0 seq_cst'''
 killers = [{ package = "nazm-cli", test = "cli_s_z", name = "scheduler_pool::parked_senders_and_receivers_are_served_first_come_first_served" }]
 
-# The compiler-speed round: a check reads an entry without building its interface or unit.
+# The compiler-speed round: a check reads an entry without building its interface or unit, parses
+# each file once and without its lossless tree, and reads the prelude's names from a table.
 
 [[mutation]]
 name = "speed-a-checker-reuses-an-entry-offering-another-interface"
@@ -21070,3 +21075,27 @@ file = "crates/nazm-sema/src/key.rs"
 find = '''                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());'''
 replace = '''                    .all(|b| b.is_ascii_lowercase());'''
 killers = [{ package = "nazm-sema", lib = true, name = "key::tests::every_standard_module_s_key_reads_back" }, { package = "nazm-cli", test = "cli_s_z", name = "stdlib::a_standard_module_with_a_digit_in_its_name_is_reused_from_the_cache_too" }]
+
+[[mutation]]
+name = "speed-a-built-in-is-found-by-another-name"
+why = "the built-in table answers every name with one built-in"
+file = "crates/nazm-sema/src/intrinsic.rs"
+find = '''            .get(name)'''
+replace = '''            .get("str_len")'''
+killers = [{ package = "nazm-sema", lib = true, name = "intrinsic::tests::every_intrinsic_is_reachable_by_its_own_name" }]
+
+[[mutation]]
+name = "speed-a-kept-parse-stands-for-another-text"
+why = "a loader's kept parse is taken for a file id whatever its text now is, so an edited file is checked as it was"
+file = "crates/nazm-syntax/src/lib.rs"
+find = '''            .position(|(id, k)| *id == file && k.text == text)?;'''
+replace = '''            .position(|(id, _)| *id == file)?;'''
+killers = [{ package = "nazm-syntax", test = "cst", name = "a_kept_parse_stands_for_its_own_text_only" }]
+
+[[mutation]]
+name = "speed-the-prelude-table-drifts-from-its-sources"
+why = "the prelude's table forgets a name its module has (`Map`), so a program naming it is not given `@std/hashmap`"
+file = "crates/nazm-service/src/prelude_table.rs"
+find = '''            "Map",'''
+replace = ''''''
+killers = [{ package = "nazm-service", lib = true, name = "prelude_table::tests::the_prelude_table_is_read_from_the_prelude_sources" }]

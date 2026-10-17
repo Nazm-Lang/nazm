@@ -1733,7 +1733,22 @@ impl Intrinsic {
     /// The built-in of this name, if there is one.
     #[must_use]
     pub fn by_name(name: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|i| i.name() == name)
+        // A table made once, not a walk over `ALL` comparing every name: the checker asks for
+        // every call it reads, and the loader for every function of the prelude's modules
+        // (performance leadership, `nazm check`'s fixed cost). The first of a name wins, as the
+        // walk's `find` did.
+        static TABLE: std::sync::OnceLock<std::collections::HashMap<&'static str, Intrinsic>> =
+            std::sync::OnceLock::new();
+        TABLE
+            .get_or_init(|| {
+                let mut t = std::collections::HashMap::with_capacity(Self::ALL.len());
+                for i in Self::ALL {
+                    t.entry(i.name()).or_insert(i);
+                }
+                t
+            })
+            .get(name)
+            .copied()
     }
 }
 

@@ -1461,3 +1461,56 @@ fn an_effect_set_is_one_node_kept_byte_for_byte_and_a_broken_one_costs_nothing_a
         );
     }
 }
+
+#[test]
+fn a_parse_without_the_tree_is_the_parse_with_it_on_every_file() {
+    // `parse_file` builds no lossless tree (performance leadership, `nazm check`): the same
+    // scan and the same parser, the abstract tree and the diagnostics the same as
+    // `parse_both`'s for every `.nz` file in the repository, the malformed ones included.
+    let files = corpus();
+    assert!(files.len() >= 190, "only {} .nz files found", files.len());
+    on_the_documented_stack(move || {
+        for (name, text) in &files {
+            let (with, _, with_errors) = parse_both(FileId::ROOT, text);
+            let (without, without_errors) = nazm_syntax::parse_file(FileId::ROOT, text);
+            assert!(with == without, "{name}: the abstract trees differ");
+            assert_eq!(with_errors, without_errors, "{name}");
+        }
+    });
+}
+
+#[test]
+fn a_kept_parse_stands_for_its_own_text_only() {
+    // `keep` hands a loader's parse to the next `parse_map` of the same file id and text; any
+    // other text under that id is parsed afresh, and a kept parse is taken once.
+    on_the_documented_stack(|| {
+        let id = FileId::from_index(7);
+        let a = "fn f() -> Int { 1 }\n";
+        let b = "fn g() -> Int { 2 }\n";
+        let pad: Vec<(String, String)> = (0..7)
+            .map(|i| (format!("pad{i}.nz"), String::new()))
+            .collect();
+        let map_of = |text: &str| {
+            let mut parts = pad.clone();
+            parts.push(("x.nz".to_owned(), text.to_owned()));
+            nazm_span::SourceMap::from_parts(parts)
+        };
+        let (pa, ea) = nazm_syntax::parse_file(id, a);
+        nazm_syntax::keep(id, a, pa.clone(), ea);
+        // Another text under the same id: its own parse, not the kept one.
+        let (from_b, _) = nazm_syntax::parse_map(&map_of(b));
+        assert_eq!(
+            from_b
+                .functions
+                .iter()
+                .map(|f| f.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["g"]
+        );
+        // The kept text: the kept parse, the same as a fresh one.
+        let (from_a, _) = nazm_syntax::parse_map(&map_of(a));
+        assert!(from_a == pa);
+        let (again, _) = nazm_syntax::parse_map(&map_of(a));
+        assert!(again == pa);
+    });
+}
