@@ -1,0 +1,20 @@
+
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Str](1);
+    chan_send_of(c, str_concat("fu", "ll"));
+    let s = sel_new();
+    let i = sel_send(s, c, str_concat("wait", "ing"));
+    chan_close_of(c);
+    // Closed: refused, and the case is ready — refused — at every wait.
+    print(int_to_str(sel_wait(s)));
+    print(int_to_str(sel_wait(s)));
+    // A select dropped with a value it never sent, of a channel it holds the last reference to.
+    let u = sel_new();
+    let v = chan_new_of[Str](1);
+    chan_send_of(v, str_concat("a", "b"));
+    let w = sel_send(u, v, str_concat("c", "d"));
+    let ws = vec_new[Str]();
+    let r = sel_recv(u, chan_new_of[Str](1), ws);
+    print(int_to_str(i + w + r));
+    0
+}

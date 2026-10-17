@@ -533,3 +533,15 @@ wraps it, and the semantic epoch (90 → 91: the identity doc line and `SEMANTIC
 `stability.md` row, two pins in `incremental.rs`, `n38-the-epoch-stays`). The direct hand-off to
 a parked receiver changes the `Int` channel's text and its mirror in `compiler/emit.nz`
 (`runtime parity`).
+
+**Built (2026-10-17).** The direct hand-off (runtime ABI 45): a blocking sender or receiver parks on
+a heap wait record of its own at the tail of the channel's list — never its stack, whose addresses a
+parked pool task gives up (6.2) — and a waker writes into the record of the one parked longest and
+wakes it alone; every function of it that locks, parks or wakes is `noinline` (6.3's preemption by
+interrupt). The select (semantic epoch 91, runtime ABI 46) is the shape above with one change: the
+value moves in the runtime, not in generated code after the wait. The code at a wait cannot know its
+cases' element types; the runtime can, from each case's channel (its element size and release), so
+a receive case's value is pushed onto its vector and a send case's moved out of a slot the select
+owns. A send case is spent once sent; `-1` is a select with no case left. `nz.sel_signal` now reads
+the selector count before it moves the event count, since a generic receive signals too (a send
+case waits for room). Architecture §7.84, amended twice.

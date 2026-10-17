@@ -324,7 +324,8 @@ impl CapabilityKind {
             | Intrinsic::TimeNowNs
             | Intrinsic::TimeWallNs
             | Intrinsic::TimeSleepMs
-            | Intrinsic::ChanSelectUntil => CapabilitySet::of(Self::Time),
+            | Intrinsic::ChanSelectUntil
+            | Intrinsic::SelWaitUntil => CapabilitySet::of(Self::Time),
             // And a device register (N62).
             Intrinsic::MmioRead32
             | Intrinsic::MmioWrite32
@@ -374,6 +375,10 @@ impl CapabilityKind {
             | Intrinsic::ChanRecvOf
             | Intrinsic::ChanCloseOf
             | Intrinsic::ChanSelectOf
+            | Intrinsic::SelNew
+            | Intrinsic::SelRecv
+            | Intrinsic::SelSend
+            | Intrinsic::SelWait
             | Intrinsic::VecNew
             | Intrinsic::VecLen
             | Intrinsic::VecGet
@@ -410,7 +415,8 @@ impl CapabilityKind {
             | Intrinsic::TimeNowNs
             | Intrinsic::TimeWallNs
             | Intrinsic::TimeSleepMs
-            | Intrinsic::ChanSelectUntil => Some(Self::Time),
+            | Intrinsic::ChanSelectUntil
+            | Intrinsic::SelWaitUntil => Some(Self::Time),
             Intrinsic::MmioRead32
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioRead8

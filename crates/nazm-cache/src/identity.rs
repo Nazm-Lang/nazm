@@ -401,7 +401,11 @@ use crate::digest::{self, Framed};
 /// `90` — R1.5, 2026-10-16. `{}` where a `Map[K, V]` is expected is the empty map (D5): `let m:
 /// Map[Str, Int] = {}`, and `{}` as such an argument or field, moved from refused (`N0300`) to
 /// accepted.
-pub const SEMANTIC_EPOCH: u32 = 90;
+/// `91` — performance leadership 6.4, 2026-10-17. `Select` and the built-ins `sel_new`,
+/// `sel_recv`, `sel_send`, `sel_wait` and `sel_wait_until` moved from refused (`N0200`) to
+/// accepted, the built-ins as prelude names; `Type::ALL` gained `Select`, so a module's own type
+/// named `Select` moved from accepted to refused (`N0331`).
+pub const SEMANTIC_EPOCH: u32 = 91;
 
 /// Every diagnostic code `nazm_core::check` can raise, sorted, by the name the checker
 /// writes.

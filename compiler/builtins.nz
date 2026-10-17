@@ -220,17 +220,22 @@ pub fn bi_rows() -> Strs {
     strs_push(s, "checked_add|T,T|Option[T]|1|integer|1||||derive|none");
     strs_push(s, "checked_sub|T,T|Option[T]|1|integer|1||||derive|none");
     strs_push(s, "checked_mul|T,T|Option[T]|1|integer|1||||derive|none");
+    strs_push(s, "sel_new||Select|0||1||||fresh|none");
+    strs_push(s, "sel_recv|Select,Chan[T],Vec[T]|Int|1||1||||read|receive:1:2");
+    strs_push(s, "sel_send|Select,Chan[T],T|Int|1||1||||derive|write:1:2");
+    strs_push(s, "sel_wait|Select|Int|0||1||||derive|none");
+    strs_push(s, "sel_wait_until|Select,Int|Int|0||1||TimeCap||derive|none");
     s
 }
 
 // The checker's identity's fields (`CheckerIdentity::at_epoch`), framed in order.
 pub fn bi_identity() -> Strs {
     let s = strs_new();
-    strs_push(s, "90");
+    strs_push(s, "91");
     strs_push(s, "0.10.0");
     strs_push(s, "nazm.interface/13");
     strs_push(s, "nazm.check/5");
-    strs_push(s, "214");
+    strs_push(s, "219");
     strs_push(s, "str_len");
     strs_push(s, "0");
     strs_push(s, "1");
@@ -1406,7 +1411,36 @@ pub fn bi_identity() -> Strs {
     strs_push(s, "T");
     strs_push(s, "T");
     strs_push(s, "Option[T]");
-    strs_push(s, "31");
+    strs_push(s, "sel_new");
+    strs_push(s, "0");
+    strs_push(s, "0");
+    strs_push(s, "Select");
+    strs_push(s, "sel_recv");
+    strs_push(s, "1");
+    strs_push(s, "3");
+    strs_push(s, "Select");
+    strs_push(s, "Chan[T]");
+    strs_push(s, "Vec[T]");
+    strs_push(s, "Int");
+    strs_push(s, "sel_send");
+    strs_push(s, "1");
+    strs_push(s, "3");
+    strs_push(s, "Select");
+    strs_push(s, "Chan[T]");
+    strs_push(s, "T");
+    strs_push(s, "Int");
+    strs_push(s, "sel_wait");
+    strs_push(s, "0");
+    strs_push(s, "1");
+    strs_push(s, "Select");
+    strs_push(s, "Int");
+    strs_push(s, "sel_wait_until");
+    strs_push(s, "0");
+    strs_push(s, "2");
+    strs_push(s, "Select");
+    strs_push(s, "Int");
+    strs_push(s, "Int");
+    strs_push(s, "32");
     strs_push(s, "Int");
     strs_push(s, "Bool");
     strs_push(s, "Str");
@@ -1438,6 +1472,7 @@ pub fn bi_identity() -> Strs {
     strs_push(s, "Atomic");
     strs_push(s, "Int128");
     strs_push(s, "UInt128");
+    strs_push(s, "Select");
     strs_push(s, "109");
     strs_push(s, "ALIAS_COLLIDES");
     strs_push(s, "ALREADY_DEFINED_IN_SCOPE");

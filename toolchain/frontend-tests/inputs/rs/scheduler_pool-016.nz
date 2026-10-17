@@ -1,0 +1,14 @@
+fn giver(io: IoCap, c: Chan, v: Int) -> Int ! { io } { let s = chan_send(c, v); 0 }
+fn taker(io: IoCap, c: Chan, out: Chan, n: Int) -> Int ! { io } {
+let got = ints_new(); let mut k = 0; let mut s = 0;
+while k < n { if chan_recv(c, got) { s = s * 10 + ints_pop(got); } k = k + 1; }
+let r = chan_send(out, s); 0 }
+fn main(io: IoCap, t: SpawnCap) -> Int ! { io, spawn } {
+let c = chan_new(1); let out = chan_new(1);
+scope {
+let mut i = 1;
+while i < 6 { spawn giver(io, c, i); i = i + 1; }
+spawn taker(io, c, out, 5);
+}
+let got = ints_new(); let r = chan_recv(out, got);
+print(int_to_str(ints_pop(got))); 0 }

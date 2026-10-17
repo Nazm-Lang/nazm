@@ -81,6 +81,10 @@ compile time (`N0321`), no task outliving its `scope` (`N0320`), authority only 
       writes into its wait record and wakes it alone, a receive moves a parked sender's value into
       the ring, both first come first served (runtime ABI 45; `compiler/emit.nz` mirrored). Timings
       wait for the coordinator's quiet window (`bench/compare/concurrency.sh`)
+      — 2026-10-17, part: `select` over channels of different types — `Select` and `sel_new`,
+      `sel_recv`, `sel_send`, `sel_wait`, `sel_wait_until` (spec *Select over channels of different
+      types*), on every tier (both interpreters, LLVM, Cranelift, Nazm's code generator, the
+      pipeline); semantic epoch 91, runtime ABI 46. Open: lock-free channels
 - [ ] 6.5 The comparison re-run against Go, tokio, BEAM, Java and C#; a claim only where measured
 
 6.1 is measured now to know where Nazm stands; 6.2–6.5 are engineering for stage P, after the

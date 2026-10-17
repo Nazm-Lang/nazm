@@ -954,6 +954,7 @@ fn retain_value(fx: Fx, v: Int, t: Str) {
     let s = spell(t)
     if t == "Ints" || t == "Strs" || s.kind == "vec" && s.head != "Chan" { rt(fx, "nz.arr_retain", ints_of(v)); return }
     if t == "Chan" || s.head == "Chan" { rt(fx, "nz.chan_retain", ints_of(v)); return }
+    if t == "Select" { rt(fx, "nz.sel_retain", ints_of(v)); return }
     if s.kind == "unknown" { rt(fx, "nz.closure_retain", ints_of(v)); return }
 }
 
@@ -978,6 +979,7 @@ fn release_value(fx: Fx, v: Int, t: Str) {
     if t == "Strs" { rt(fx, "nz.strs_release", ints_of(v)); return }
     if t == "Chan" { rt(fx, "nz.chan_release", ints_of(v)); return }
     if s.head == "Chan" && strs_len(s.args) > 0 { rt(fx, "nz.chanv_release", ints_of(v)); return }
+    if t == "Select" { rt(fx, "nz.sel_release", ints_of(v)); return }
     if s.kind == "unknown" { rt(fx, "nz.closure_release", ints_of(v)); return }
     if s.kind == "vec" {
         // `Ints` and `Strs` are `Vec[Int]` and `Vec[Str]` (R1, 5b.18): a vector of strings
@@ -2984,6 +2986,63 @@ fn chan_primitive(fx: Fx, dst: Int, op: Str, elem: Str, args: Vec[Operand]) -> B
         set(fx, dst, select(fx, shut, index, r));
         return true
     }
+    // A select over channels of different types (performance leadership 6.4), as
+    // `op/prims.rs` lowers it: the runtime keeps the cases and moves the values.
+    if op == "sel_new" {
+        let s = rt_v(fx, "nz.sel_new", ints_new(), "ptr")
+        let null = is_null(fx, s)
+        guard(fx, null, "N0406", "out of memory");
+        set(fx, dst, s);
+        return true
+    }
+    if op == "sel_recv" {
+        let s = arg_value(fx, args, 0)
+        let c = arg_value(fx, args, 1)
+        let h = arg_value(fx, args, 2)
+        let r = rt_v(fx, "nz.sel_recv", ints_of3(s, c, h), "i64")
+        let oom = cmp_imm(fx, "eq", r, "i64", 0 - 9223372036854775807 - 1)
+        guard(fx, oom, "N0406", "out of memory");
+        set(fx, dst, r);
+        return true
+    }
+    if op == "sel_send" {
+        let t = element(op, elem)
+        let s = arg_value(fx, args, 0)
+        let c = arg_value(fx, args, 1)
+        let slot = scratch(fx, size_of(fx, t))
+        store_element(fx, slot, args, 2, t, false);
+        let r = rt_v(fx, "nz.sel_send", ints_of3(s, c, slot), "i64")
+        let oom = cmp_imm(fx, "eq", r, "i64", 0 - 9223372036854775807 - 1)
+        if owns_ty(fx, t) {
+            let refused = new_lblock(fx.fb)
+            let cont = new_lblock(fx.fb)
+            branch(fx, oom, refused, cont);
+            switch_to(fx.fb, refused);
+            release_at(fx, slot, t);
+            jump(fx, cont);
+            switch_to(fx.fb, cont);
+        }
+        guard(fx, oom, "N0406", "out of memory");
+        set(fx, dst, r);
+        return true
+    }
+    if op == "sel_wait" || op == "sel_wait_until" {
+        let s = arg_value(fx, args, 0)
+        let mut ms = 0
+        let mut timed = 0
+        if op == "sel_wait_until" {
+            ms = arg_value(fx, args, 1)
+            timed = iconst(fx, 1)
+        } else {
+            ms = iconst(fx, 0)
+            timed = iconst(fx, 0)
+        }
+        let r = rt_v(fx, "nz.sel_wait", ints_of3(s, ms, timed), "i64")
+        let oom = cmp_imm(fx, "eq", r, "i64", 0 - 9223372036854775807 - 1)
+        guard(fx, oom, "N0406", "out of memory");
+        set(fx, dst, r);
+        return true
+    }
     false
 }
 
@@ -4029,6 +4088,7 @@ fn ty_word(t: Str) -> Str {
     if k == "bool" || k == "num" { return t }
     if t == "Ints" || t == "Strs" || t == "Chan" { return t }
     if s.head == "Chan" { return "a `Chan[T]`" }
+    if t == "Select" { return "Select" }
     if s.kind == "vec" { return "a `Vec`" }
     "a function value"
 }

@@ -230,6 +230,11 @@ pub fn builtin_names() -> Strs {
     strs_push(n, "os_tls_write")
     strs_push(n, "os_tls_close")
     strs_push(n, "os_tls_info")
+    strs_push(n, "sel_new")
+    strs_push(n, "sel_recv")
+    strs_push(n, "sel_send")
+    strs_push(n, "sel_wait")
+    strs_push(n, "sel_wait_until")
     n
 }
 
@@ -458,3 +463,8 @@ pub const B_OS_TLS_READ: Int = 221
 pub const B_OS_TLS_WRITE: Int = 222
 pub const B_OS_TLS_CLOSE: Int = 223
 pub const B_OS_TLS_INFO: Int = 224
+pub const B_SEL_NEW: Int = 225
+pub const B_SEL_RECV: Int = 226
+pub const B_SEL_SEND: Int = 227
+pub const B_SEL_WAIT: Int = 228
+pub const B_SEL_WAIT_UNTIL: Int = 229

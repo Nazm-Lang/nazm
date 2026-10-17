@@ -838,6 +838,7 @@ impl Types {
             | Type::Bytes
             | Type::Text
             | Type::Atomic
+            | Type::Select
             | Type::Fn(_) => true,
             Type::Int
             | Type::Bool

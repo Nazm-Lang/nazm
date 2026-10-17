@@ -286,6 +286,12 @@ impl Effect {
             | Intrinsic::IntsSum
             | Intrinsic::ChanSelectOf
             | Intrinsic::ChanSelectUntil
+            // A select over several types (6.4): channel operations, which have no effect.
+            | Intrinsic::SelNew
+            | Intrinsic::SelRecv
+            | Intrinsic::SelSend
+            | Intrinsic::SelWait
+            | Intrinsic::SelWaitUntil
             | Intrinsic::IntsNew
             | Intrinsic::IntsLen
             | Intrinsic::IntsGet

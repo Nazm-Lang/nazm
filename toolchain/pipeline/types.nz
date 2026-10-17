@@ -288,7 +288,7 @@ fn managed_within(tt: TypeTable, t: Str, depth: Int) -> Bool {
         }
         return false
     }
-    t == "Str" || t == "Ints" || t == "Strs" || t == "Chan" || t == "Bytes" || t == "Text" || t == "Atomic"
+    t == "Str" || t == "Ints" || t == "Strs" || t == "Chan" || t == "Bytes" || t == "Text" || t == "Atomic" || t == "Select"
 }
 
 /// The bytes a value of `t` occupies in a frame, as the checker counts them.

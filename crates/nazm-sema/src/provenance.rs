@@ -200,6 +200,8 @@ impl Origin {
             // A mutable cell (R1b) is a container, as a `Vec` is: a new handle, a store whose
             // result is a constant, and a read out of its cell.
             Intrinsic::CellNew => BuiltinFlow::Fresh,
+            // A select with no cases (6.4).
+            Intrinsic::SelNew => BuiltinFlow::Fresh,
             Intrinsic::CellSet => BuiltinFlow::Derive,
             Intrinsic::CellGet => BuiltinFlow::Read,
             // Made by lowering only, after this analysis has run on the program as written.
@@ -314,6 +316,11 @@ impl Origin {
             | Intrinsic::ChanClose
             | Intrinsic::ChanSendOf
             | Intrinsic::ChanCloseOf
+            // A send case's index (6.4): the value went into the channel's cell. A wait's index
+            // says which case was ready — control, its select's and nothing read out of a cell.
+            | Intrinsic::SelSend
+            | Intrinsic::SelWait
+            | Intrinsic::SelWaitUntil
             // A store's result is a constant; what reaches the device is the caller's (N62).
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioWrite8
@@ -337,6 +344,8 @@ impl Origin {
             | Intrinsic::ChanSelectOf
             | Intrinsic::ChanSelectUntil
             | Intrinsic::ChanRecv
+            // A receive case (6.4), as a receive is.
+            | Intrinsic::SelRecv
             // Read out of a handle, as `ints_get` is (N66).
             | Intrinsic::IntsSum => BuiltinFlow::Read,
             // A device register holds whatever the device put there (N62): not followed.
@@ -581,6 +590,14 @@ impl Origin {
                 handle: 0,
                 value: 1,
             },
+            // A send case (6.4): its value is written into the channel's cell where the case is
+            // added, which is the flow the wait performs.
+            Intrinsic::SelSend => ContainerUse::Write {
+                handle: 1,
+                value: 2,
+            },
+            // A receive case (6.4): the channel's cell into `out`'s, where the case is added.
+            Intrinsic::SelRecv => ContainerUse::Receive { from: 1, into: 2 },
             Intrinsic::IntsSet | Intrinsic::StrsSet | Intrinsic::VecSet => ContainerUse::Write {
                 handle: 0,
                 value: 2,
@@ -606,6 +623,9 @@ impl Origin {
             | Intrinsic::EPrint
             | Intrinsic::ChanClose
             | Intrinsic::ChanCloseOf
+            | Intrinsic::SelNew
+            | Intrinsic::SelWait
+            | Intrinsic::SelWaitUntil
             | Intrinsic::MmioWrite32
             | Intrinsic::MmioRead32
             | Intrinsic::MmioWrite8

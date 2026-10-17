@@ -811,6 +811,7 @@ impl Law {
                 | Type::Cap(_)
                 | Type::OsHandle
                 | Type::Atomic
+                | Type::Select
                 | Type::Fn(_),
             ) => None,
         }

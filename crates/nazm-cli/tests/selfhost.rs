@@ -2876,6 +2876,13 @@ fn the_nazm_checker_knows_every_built_in_the_front_end_has() {
         // checker has the `TimeCap` type since N102, not the built-in. Refused by name there too.
         ("chan_select_of", "Vec[Chan[T]]"),
         ("chan_select_until", "Vec[Chan[T]]"),
+        // Performance leadership 6.4: a select over several types takes a `Select` and a
+        // `Chan[T]`, neither of which the bootstrap checker's type table has.
+        ("sel_new", "Select"),
+        ("sel_recv", "Select"),
+        ("sel_send", "Select"),
+        ("sel_wait", "Select"),
+        ("sel_wait_until", "Select"),
         ("time_now_ms", "TimeCap"),
         // N62: a device register needs an `MmioCap`, and exists only on a freestanding target
         // the compiler written in Nazm does not build for.

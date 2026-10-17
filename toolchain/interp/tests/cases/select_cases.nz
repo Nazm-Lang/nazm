@@ -1,0 +1,29 @@
+// A select over channels of different types (performance leadership 6.4): the lowest ready case
+// performed, a send case spent once sent, a closed channel's index encoded, a select with nothing
+// left answering -1, and a send case's unsent value released with the select.
+fn main() -> Int ! { io } {
+    let a = chan_new_of[Int](2)
+    let b = chan_new_of[Str](2)
+    let d = chan_new_of[Str](1)
+    chan_send_of(b, "x" + "y")
+    let ints = vec_new[Int]()
+    let strs = vec_new[Str]()
+    let s = sel_new()
+    let ia = sel_recv(s, a, ints)
+    let ib = sel_recv(s, b, strs)
+    let ic = sel_send(s, d, "se" + "nt")
+    println(ia * 100 + ib * 10 + ic)
+    println(sel_wait(s))
+    println(vec_get(strs, 0))
+    println(sel_wait(s))
+    chan_send_of(a, 7)
+    println(sel_wait(s))
+    println(vec_get(ints, 0))
+    chan_close_of(b)
+    println(sel_wait(s))
+    let e = sel_new()
+    let k = sel_send(e, chan_new_of[Str](1), "un" + "sent")
+    let f = sel_new()
+    println(sel_wait(f) + k)
+    0
+}

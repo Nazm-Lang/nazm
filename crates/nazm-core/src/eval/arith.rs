@@ -385,6 +385,7 @@ fn type_name(v: &Value) -> &'static str {
         Value::Bytes(_) => "Bytes",
         Value::OsHandle(_) => "OsHandle",
         Value::Atomic(_) => "Atomic",
+        Value::Select(_) => "Select",
         // Only reached by a built-in handed the wrong type, which checking has already
         // refused — and no built-in takes a record, so no message can name one usefully.
         Value::Record(_) => "a record",

@@ -526,3 +526,242 @@ fn main(io: IoCap, t: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {
         }
     }
 }
+
+// --- a select over channels of different types (performance leadership 6.4) ------------------
+
+/// `src` under the interpreter, both native backends at each level and — on macOS, where it
+/// runs before 1.0 — Nazm's own code generator: each prints `expected`, ends 0, writes the
+/// interpreter's memory report and scheduler counts, and reclaims everything.
+fn select_agrees(src: &str, expected: &str) {
+    let mut runs = everywhere(&[("prog.nz", src)]);
+    if cfg!(target_os = "macos") {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("prog.nz"), src).unwrap();
+        let exe = d.path().join("nzcg-built");
+        let mut build = Command::new(NAZM);
+        build
+            .current_dir(d.path())
+            .env(nazm_codegen_nazm::VARIABLE, crate::differential::nzcg())
+            .args([
+                "build",
+                "--no-cache",
+                "--backend",
+                "nazm",
+                "prog.nz",
+                "-o",
+                exe.to_str().unwrap(),
+            ]);
+        let b = run_bounded(&mut build, "nazm build --backend nazm");
+        assert_eq!(b.code, Some(0), "nazm backend: {}", b.stderr);
+        let mut c = common::bounded_exe(&exe);
+        c.env(nazm_lir::MEMORY_VARIABLE, "1")
+            .env(nazm_lir::runtime::SCHED_VARIABLE, "1");
+        runs.push((
+            "nazm backend".to_owned(),
+            run_bounded(&mut c, "nazm backend"),
+        ));
+    }
+    let first = memory_line(&runs[0].1);
+    for (label, r) in &runs {
+        assert_eq!(r.code, Some(0), "{label}: {}", r.stderr);
+        assert_eq!(r.stdout.trim_end(), expected, "{label}");
+        assert_eq!(
+            sched_line(r),
+            sched_line(&runs[0].1),
+            "{label}: scheduler counts"
+        );
+        let line = memory_line(r);
+        assert_eq!(
+            line, first,
+            "{label} and the interpreter disagree about storage"
+        );
+        for kind in ["sequences", "strings", "channels", "closures"] {
+            let part = line.split(kind).nth(1).unwrap_or("");
+            let live = part.split_whitespace().nth(2).unwrap_or("");
+            assert_eq!(live, "live=0", "{label}: {kind} not all reclaimed: {line}");
+        }
+    }
+}
+
+#[test]
+fn a_select_over_channels_of_different_types_performs_the_lowest_ready_case_everywhere() {
+    select_agrees(
+        r#"
+fn main(out: OutCap) -> Int {
+    let a = chan_new_of[Int](2);
+    let b = chan_new_of[Str](2);
+    let d = chan_new_of[Str](1);
+    chan_send_of(b, str_concat("x", "y"));
+    let ints = vec_new[Int]();
+    let strs = vec_new[Str]();
+    let s = sel_new();
+    let ia = sel_recv(s, a, ints);
+    let ib = sel_recv(s, b, strs);
+    let ic = sel_send(s, d, str_concat("se", "nt"));
+    print(int_to_str(ia * 100 + ib * 10 + ic));
+    print(":");
+    // `b` holds a value; `a` is empty.
+    print(int_to_str(sel_wait(s)));
+    print(vec_get(strs, 0));
+    // Nothing to receive; `d` has room, so the send case is performed, once.
+    print(int_to_str(sel_wait(s)));
+    let t = s;
+    chan_send_of(a, 7);
+    print(int_to_str(sel_wait(t)));
+    print(int_to_str(vec_get(ints, 0)));
+    // `b` closed and drained: its index, encoded; the spent send case is not looked at.
+    chan_close_of(b);
+    print(int_to_str(sel_wait(s)));
+    let got = vec_new[Str]();
+    if chan_recv_of(d, got) { print(vec_get(got, 0)); }
+    // A select whose only case is a spent send has nothing to wait on.
+    let e = sel_new();
+    let f = chan_new_of[Int](1);
+    let k = sel_send(e, f, 5);
+    print(int_to_str(sel_wait(e)));
+    print(int_to_str(sel_wait(e)));
+    print(int_to_str(sel_wait(sel_new())));
+    0
+}
+"#,
+        "12:1xy207-4sent0-1-10",
+    );
+}
+
+#[test]
+fn a_send_case_refused_by_a_close_keeps_its_value_and_a_select_released_unsent_releases_it() {
+    select_agrees(
+        r#"
+fn main(out: OutCap) -> Int {
+    let c = chan_new_of[Str](1);
+    chan_send_of(c, str_concat("fu", "ll"));
+    let s = sel_new();
+    let i = sel_send(s, c, str_concat("wait", "ing"));
+    chan_close_of(c);
+    // Closed: refused, and the case is ready — refused — at every wait.
+    print(int_to_str(sel_wait(s)));
+    print(int_to_str(sel_wait(s)));
+    // A select dropped with a value it never sent, of a channel it holds the last reference to.
+    let u = sel_new();
+    let v = chan_new_of[Str](1);
+    chan_send_of(v, str_concat("a", "b"));
+    let w = sel_send(u, v, str_concat("c", "d"));
+    let ws = vec_new[Str]();
+    let r = sel_recv(u, chan_new_of[Str](1), ws);
+    print(int_to_str(i + w + r));
+    0
+}
+"#,
+        "-3-310",
+    );
+}
+
+#[test]
+fn a_waiting_select_over_different_types_is_woken_by_a_send_a_receive_and_a_close() {
+    select_agrees(
+        r#"
+fn producer(c: Chan[Str], n: Int) -> Int ! {} {
+    let mut i = 0;
+    while i < n { chan_send_of(c, int_to_str(i)); i = i + 1; }
+    chan_close_of(c)
+}
+fn drainer(c: Chan[Int], n: Int, done: Chan[Int]) -> Int ! {} {
+    let got = vec_new[Int]();
+    let mut sum = 0;
+    let mut k = 0;
+    while k < n { if chan_recv_of(c, got) { sum = sum + vec_pop(got); } k = k + 1; }
+    chan_send_of(done, sum);
+    0
+}
+fn main(out: OutCap, t: SpawnCap) -> Int {
+    let words = chan_new_of[Str](1);
+    let nums = chan_new_of[Int](1);
+    let done = chan_new_of[Int](1);
+    let texts = vec_new[Str]();
+    let mut seen = 0;
+    let mut sent = 0;
+    scope {
+        spawn producer(words, 20);
+        spawn drainer(nums, 5, done);
+        while seen < 20 || sent < 5 {
+            // A select per round, built afresh: a receive of the next word while words are
+            // due, a send of the next number while numbers are.
+            let s = sel_new();
+            let mut r = 0 - 10;
+            let mut k = 0 - 10;
+            if seen < 20 { r = sel_recv(s, words, texts); }
+            if sent < 5 { k = sel_send(s, nums, sent + 1); }
+            let i = sel_wait(s);
+            if i == r { seen = seen + 1; } else if i == k { sent = sent + 1; }
+        }
+        let got = vec_new[Int]();
+        if chan_recv_of(done, got) { print(int_to_str(vec_pop(got))); }
+    }
+    print(":");
+    print(int_to_str(seen));
+    print(":");
+    print(vec_get(texts, 19));
+    0
+}
+"#,
+        "15:20:190",
+    );
+}
+
+#[test]
+fn a_select_deadline_needs_a_time_cap_and_is_a_lower_bound() {
+    select_agrees(
+        r#"
+fn main(out: OutCap, tm: TimeCap) -> Int {
+    let c = chan_new_of[Int](1);
+    let got = vec_new[Int]();
+    let s = sel_new();
+    let i = sel_recv(s, c, got);
+    let before = time_now_ms();
+    print(int_to_str(sel_wait_until(s, 30)));
+    print(if time_now_ms() - before >= 30 { " waited " } else { " early " });
+    print(int_to_str(sel_wait_until(s, 0)));
+    0
+}
+"#,
+        "-2 waited -20",
+    );
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("prog.nz"),
+        "fn main(out: OutCap) -> Int {\n    let s = sel_new();\n    sel_wait_until(s, 5)\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "prog.nz"]);
+    assert_ne!(r.code, Some(0), "{}", r.stderr);
+    assert!(r.stderr.contains("N0369"), "{}", r.stderr);
+}
+
+#[test]
+fn a_select_never_crosses_into_a_task_and_its_name_is_the_languages() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(
+        d.path().join("task.nz"),
+        "fn w(s: Select) -> Int ! {} { sel_wait(s) }\n\
+         fn main(t: SpawnCap) -> Int {\n    let s = sel_new();\n    scope { spawn w(s); }\n    0\n}\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "task.nz"]);
+    assert!(r.stderr.contains("N0321"), "{}", r.stderr);
+    std::fs::write(
+        d.path().join("name.nz"),
+        "struct Select { x: Int }\nfn main() -> Int { 0 }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["check", "name.nz"]);
+    assert!(r.stderr.contains("N0331"), "{}", r.stderr);
+    // A program's own function of a built-in's name hides it (a prelude name).
+    std::fs::write(
+        d.path().join("own.nz"),
+        "fn sel_new() -> Int { 4 }\nfn main(out: OutCap) -> Int { print(int_to_str(sel_new())); 0 }\n",
+    )
+    .unwrap();
+    let r = nazm(d.path(), &["run", "own.nz"]);
+    assert_eq!(r.code, Some(0), "{}", r.stderr);
+    assert!(r.stdout.starts_with('4'), "{}", r.stdout);
+}

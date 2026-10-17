@@ -258,6 +258,11 @@ fn statement(
                         | Intrinsic::ChanCloseOf
                         | Intrinsic::ChanSelectOf
                         | Intrinsic::ChanSelectUntil
+                        | Intrinsic::SelNew
+                        | Intrinsic::SelRecv
+                        | Intrinsic::SelSend
+                        | Intrinsic::SelWait
+                        | Intrinsic::SelWaitUntil
                 ) {
                     push(SiteKind::Channel, op.name());
                 }
@@ -269,6 +274,8 @@ fn statement(
                         | Intrinsic::ChanRecvOf
                         | Intrinsic::ChanSelectOf
                         | Intrinsic::ChanSelectUntil
+                        | Intrinsic::SelWait
+                        | Intrinsic::SelWaitUntil
                 ) {
                     push(SiteKind::Block, op.name());
                 }
@@ -329,6 +336,12 @@ const fn allocates(op: Intrinsic) -> bool {
         | Intrinsic::ChanRecvOf
         | Intrinsic::ChanSelectOf
         | Intrinsic::ChanSelectUntil
+        // A select (6.4): its record, a case, a send case's slot, a receive's growth.
+        | Intrinsic::SelNew
+        | Intrinsic::SelRecv
+        | Intrinsic::SelSend
+        | Intrinsic::SelWait
+        | Intrinsic::SelWaitUntil
         | Intrinsic::CStrCopy
         | Intrinsic::NumToStr
         | Intrinsic::FloatToStrFixed

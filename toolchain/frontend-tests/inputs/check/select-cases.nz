@@ -1,0 +1,27 @@
+// Performance leadership 6.4 (epoch 91): a select over channels of different types, and what is
+// refused around it — a `Select` passed to a task (`N0321`), a module's own type named `Select`
+// (`N0331`) and a deadline without a `TimeCap` (`N0369`).
+struct Select { x: Int }
+
+fn waits(s: Select) -> Int ! {} { 0 }
+
+fn serve(tm: TimeCap, jobs: Chan[Str], ticks: Chan[Int], done: Chan[Bool]) -> Int ! {} {
+    let names = vec_new[Str]();
+    let counts = vec_new[Int]();
+    let s = sel_new();
+    let a = sel_recv(s, jobs, names);
+    let b = sel_recv(s, ticks, counts);
+    let c = sel_send(s, done, true);
+    let i = sel_wait_until(s, 1000);
+    if i == a || i == b { c } else { sel_wait(s) }
+}
+
+fn untimed() -> Int ! {} {
+    sel_wait_until(sel_new(), 5)
+}
+
+fn main(t: SpawnCap) -> Int {
+    let s = sel_new();
+    scope { spawn waits(s); }
+    0
+}

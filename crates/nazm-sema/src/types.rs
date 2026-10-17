@@ -372,6 +372,11 @@ pub enum Type {
     /// counted like a `Chan`, crossing into a task as a `Chan` does, with no equality and not
     /// plain data. Every operation on it is sequentially consistent.
     Atomic,
+    /// A set of cases over channels of any element types (performance leadership 6.4,
+    /// `docs/spec.md`, *Select over channels of different types*): a counted handle holding
+    /// references to its channels and receive vectors, with no equality, that does not cross
+    /// into a task — it holds `Vec`s, which do not.
+    Select,
 }
 
 impl Type {
@@ -422,6 +427,8 @@ impl Type {
         // R1b, L13b: last, so every earlier entry keeps its place.
         Self::Num(NumKind::I128),
         Self::Num(NumKind::U128),
+        // Performance leadership 6.4: after every earlier entry.
+        Self::Select,
     ];
 
     /// The written name of a **built-in** type, which is also how it is spelled in
@@ -446,6 +453,7 @@ impl Type {
             Self::Text => Some("Text"),
             Self::OsHandle => Some("OsHandle"),
             Self::Atomic => Some("Atomic"),
+            Self::Select => Some("Select"),
             Self::Record(_)
             | Self::Enum(_)
             | Self::Vec(_)
@@ -571,6 +579,8 @@ impl Type {
             && !matches!(self, Self::Cell(_))
             && !self.is_param()
             && !matches!(self, Self::Fn(_))
+            // Nor a `Select` (6.4): it holds the vectors its receive cases fill.
+            && !matches!(self, Self::Select)
     }
 
     /// Parse a written **built-in** type name. `None` for anything else, including every
@@ -589,6 +599,7 @@ impl Type {
             "Text" => Some(Self::Text),
             "OsHandle" => Some(Self::OsHandle),
             "Atomic" => Some(Self::Atomic),
+            "Select" => Some(Self::Select),
             other => CapabilityKind::by_type_name(other)
                 .map(Self::Cap)
                 .or_else(|| NumKind::by_name(other).map(Self::of_num)),

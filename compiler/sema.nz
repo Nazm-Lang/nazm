@@ -1078,6 +1078,7 @@ fn builtin_names() -> Strs {
     strs_push(s, "Atomic");
     strs_push(s, "Int128");
     strs_push(s, "UInt128");
+    strs_push(s, "Select");
     s
 }
 
@@ -1340,12 +1341,12 @@ fn leaf_mode(c: Ck, t: Int, mode: Int) -> Bool {
 }
 
 // Whether a type that is not a record or an enum may cross into a task (`may_cross_into_a_task`):
-// not a sequence, a type parameter or a function value.
+// not a sequence, a type parameter or a function value, nor a `Select`, which holds sequences.
 fn crosses(c: Ck, t: Int) -> Bool {
     let g = tag(c, t);
     if is_holder_tag(g) || g == tag_param() || g == tag_fn() { return false; }
     let n = bname_of(c, t);
-    n != "Ints" && n != "Strs" && n != "Bytes"
+    n != "Ints" && n != "Strs" && n != "Bytes" && n != "Select"
 }
 
 fn leaf(c: Ck, t: Int, equality: Bool) -> Bool {

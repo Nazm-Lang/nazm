@@ -1,0 +1,44 @@
+
+fn producer(c: Chan[Str], n: Int) -> Int ! {} {
+    let mut i = 0;
+    while i < n { chan_send_of(c, int_to_str(i)); i = i + 1; }
+    chan_close_of(c)
+}
+fn drainer(c: Chan[Int], n: Int, done: Chan[Int]) -> Int ! {} {
+    let got = vec_new[Int]();
+    let mut sum = 0;
+    let mut k = 0;
+    while k < n { if chan_recv_of(c, got) { sum = sum + vec_pop(got); } k = k + 1; }
+    chan_send_of(done, sum);
+    0
+}
+fn main(out: OutCap, t: SpawnCap) -> Int {
+    let words = chan_new_of[Str](1);
+    let nums = chan_new_of[Int](1);
+    let done = chan_new_of[Int](1);
+    let texts = vec_new[Str]();
+    let mut seen = 0;
+    let mut sent = 0;
+    scope {
+        spawn producer(words, 20);
+        spawn drainer(nums, 5, done);
+        while seen < 20 || sent < 5 {
+            // A select per round, built afresh: a receive of the next word while words are
+            // due, a send of the next number while numbers are.
+            let s = sel_new();
+            let mut r = 0 - 10;
+            let mut k = 0 - 10;
+            if seen < 20 { r = sel_recv(s, words, texts); }
+            if sent < 5 { k = sel_send(s, nums, sent + 1); }
+            let i = sel_wait(s);
+            if i == r { seen = seen + 1; } else if i == k { sent = sent + 1; }
+        }
+        let got = vec_new[Int]();
+        if chan_recv_of(done, got) { print(int_to_str(vec_pop(got))); }
+    }
+    print(":");
+    print(int_to_str(seen));
+    print(":");
+    print(vec_get(texts, 19));
+    0
+}

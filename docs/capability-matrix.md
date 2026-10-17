@@ -2624,6 +2624,16 @@ woken by another task's send and cancelled by a close; N44's failure rule is unc
 `NAZM_SCHED_REPORT` counts tasks spawned and joined, selects and timeouts, and the interpreter, LLVM
 and Cranelift agree on it. `crates/nazm-cli/tests/select.rs`, 9 tests; sixteen N54 mutations.
 
+*Performance leadership 6.4, 2026-10-17: a select over channels of different types — VERIFIED.*
+`Select` with `sel_new`, `sel_recv[T](s, c, out)`, `sel_send[T](s, c, v)`, `sel_wait` and
+`sel_wait_until` (`docs/spec.md`, *Select over channels of different types*): the lowest ready case
+performed, a send case spent once sent, `-3 - i` for a closed channel, `-1` with no case left, `-2`
+after the deadline; a `Select` refused to a task (`N0321`), its name the language's (`N0331`), the
+deadline needing a `TimeCap` (`N0369`). The interpreter, LLVM `-O0`/`-O2`, Cranelift and Nazm's own
+code generator print the same, count the same selects and reclaim everything, an unsent value
+included. `crates/nazm-cli/tests/select.rs`, 5 tests more; `toolchain/interp` and the pipeline's
+`ops.nz` carry it; mutations `ps-*`.
+
 **Next dependency** · None for the current model; area 15 for anything beyond it.
 
 **Accepted when** · Met for the model as specified.

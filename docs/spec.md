@@ -114,6 +114,7 @@ historical wording: where a section's own sentence was superseded, the class nam
 | `declassification` | STABLE 1.0 | |
 | `generic-channels` | STABLE 1.0 | |
 | `select-deadlines` | STABLE 1.0 | |
+| `select-cases` | EXPERIMENTAL | performance leadership 6.4: `Select` and the `sel_*` built-ins, prelude names; stable when the comparison (6.5) has measured it |
 | `ffi-v2` | STABLE 1.0 | |
 | `ffi-v3` | STABLE 1.0 | |
 | `function-contracts` | STABLE 1.0 | what is proved at compile time may grow; a clause's run-time check is never removed |
@@ -4005,6 +4006,47 @@ fn worker(stop: Chan[Int], jobs: Chan[Int], out: Chan[Int]) -> Int ! {} {
 | **`TimeCap`** | A built-in capability type, like `IoCap`; `critical`'s `no-ambient-time` refuses any use |
 | **Cancellation** | Cooperative: close a channel the task selects on. Observed only where a task waits; a sibling's failure cancels nothing (N44 unchanged) |
 | **Counters** | `NAZM_SCHED_REPORT=1`: `nazm-sched: spawned=… joined=… selects=… timeouts=…` on standard error at exit |
+
+### Select over channels of different types — performance leadership 6.4
+<!-- id: select-cases -->
+
+```nazm
+fn serve(tm: TimeCap, jobs: Chan[Str], ticks: Chan[Int], done: Chan[Bool]) -> Int ! {} {
+    let names = vec_new[Str]();
+    let counts = vec_new[Int]();
+    let s = sel_new();
+    let a = sel_recv(s, jobs, names);    // case 0
+    let b = sel_recv(s, ticks, counts);  // case 1
+    let c = sel_send(s, done, true);     // case 2, sent at most once
+    let mut seen = 0;
+    let mut going = true;
+    while going {
+        let i = sel_wait_until(s, 1000);
+        if i == a || i == b {
+            seen = seen + 1;
+        } else if i < -2 {
+            going = false;               // a case's channel is closed
+        }
+    }
+    seen
+}
+```
+
+| | |
+| --- | --- |
+| **`Select`** | A set of cases, each over a channel of its own element type. A counted handle, as `Vec` is: copies share it, it has no equality, and it may not be passed to a task (`N0321`). A built-in type name, which no module may redefine (`N0331`) |
+| **`sel_new() -> Select`** | A select with no cases |
+| **`sel_recv[T](s: Select, c: Chan[T], out: Vec[T]) -> Int`** | Adds a receive case and returns its index, counting from 0 in the order cases are added. When the case is chosen, the value received is moved onto `out`. The select holds a reference to `c` and one to `out` while it lives |
+| **`sel_send[T](s: Select, c: Chan[T], v: T) -> Int`** | Adds a send case holding `v` — a copy, as `chan_send_of` sends one — and returns its index. Once the case is chosen the value is the channel's and the case is spent: no later wait considers it. A select released with a value unsent releases it |
+| **`sel_wait(s: Select) -> Int`** | Waits until a case is ready — a receive case's channel holds a value or is closed and drained, a send case's channel has room or is closed — and performs the lowest ready one: `i` when case `i` received or sent; `-3 - i` when case `i`'s channel is closed — a receive gives nothing, a send is refused and keeps its value, so the case is ready again at the next wait. `-1` when no case is left to wait on. Schedule-dependent, deterministically tie-broken by index, as `chan_select_of` is |
+| **`sel_wait_until(s: Select, ms: Int) -> Int`** | As `sel_wait`, or `-2` once at least `ms` milliseconds pass; `ms <= 0` looks once. No effect; needs a `TimeCap` held where it is written, in every function (`N0369` otherwise) |
+| **Effects, profiles** | No effect, as no channel operation has one. `critical`'s `no-select` refuses `sel_wait` and `sel_wait_until`, and a bound's `no-blocking` refuses both by their call sites; adding a case waits for nothing |
+| **Provenance** | Where a case is added, the flow the wait performs: a receive case moves `c`'s cell into `out`'s, as `chan_recv_of` does, and a send case writes `v`'s into `c`'s, as `chan_send_of` does. The index a wait returns is control and carries nothing |
+| **Counters** | A wait counts as a select in the scheduler's counters, and a wait that runs out its time as a timeout |
+
+`chan_select_of` stays: it waits over channels of one element type and returns a closed channel's
+index as it is. A `Select` is built once and waited on as often as the program likes; a wait
+allocates nothing.
 
 ### Foreign functions v2: strings in, exports out — N55
 <!-- id: ffi-v2 -->

@@ -804,6 +804,9 @@ impl<'l, 'a> Fx<'l, 'a> {
             Ty::Fn(_) => {
                 self.rt("nz.closure_retain", &[v]);
             }
+            Ty::Select => {
+                self.rt("nz.sel_retain", &[v]);
+            }
             _ => {}
         }
     }
@@ -845,6 +848,9 @@ impl<'l, 'a> Fx<'l, 'a> {
             }
             Ty::ChanOf(_) => {
                 self.rt("nz.chanv_release", &[v]);
+            }
+            Ty::Select => {
+                self.rt("nz.sel_release", &[v]);
             }
             Ty::Fn(_) => {
                 self.rt("nz.closure_release", &[v]);
