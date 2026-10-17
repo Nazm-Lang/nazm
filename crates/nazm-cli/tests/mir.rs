@@ -1077,6 +1077,28 @@ fn a_large_program_lowers_in_time_proportional_to_its_size() {
 }
 
 #[test]
+fn a_long_plus_chain_lowers_in_time_proportional_to_its_length() {
+    // `bench/complexity/gen.py`'s `chain`: one expression of K terms joined by `+`, ten to a
+    // line. Each `+` once cloned both operands to evaluate them, so every link copied the whole
+    // chain to its left: quadratic in time and memory (performance leadership 7.1: 97 MiB at
+    // 480 terms; 7.3). Eight times the terms: linear is about 8, quadratic up to 64.
+    let chain = |k: usize| {
+        let terms: Vec<String> = (0..k).map(|i| format!("(x + {})", i % 97)).collect();
+        let lines: Vec<String> = terms.chunks(10).map(|c| c.join(" + ")).collect();
+        format!(
+            "fn sum(x: Int) -> Int {{\n    let s = {};\n    s % 1000003\n}}\nfn main() -> Int {{ sum(3) }}\n",
+            lines.join(" +\n        ")
+        )
+    };
+    let small = mir_share(&chain(60));
+    let large = mir_share(&chain(480));
+    assert!(
+        large < small * 8.0 * 3.0 + 0.002,
+        "60 terms → {small:.5}s, 480 → {large:.5}s"
+    );
+}
+
+#[test]
 fn deep_nesting_lowers_without_new_recursion_limits() {
     // As deep as the parser's own bound comfortably allows: nested blocks, ifs and loops.
     let depth = 60;
