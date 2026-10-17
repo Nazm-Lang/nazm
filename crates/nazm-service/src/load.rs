@@ -334,17 +334,20 @@ pub fn load_packaged(
             Some(source) => Ok(source.to_owned()),
             None => sources.read(&path),
         };
-        let text = match read {
+        // The id this file is about to get. Known before the map exists, because it is
+        // the file's position in load order — which is what a `FileId` is.
+        let id = FileId::from_index(parts.len());
+        let (text, parsed) = match read {
             // A project file's derives, expanded (R1c, L2): the generated functions are part of
-            // the module from here on, its imports included.
-            Ok(t) if standard.is_none() => nazm_core::derive::expand(&t),
-            Ok(t) => t,
+            // the module from here on, its imports included. When it derives nothing, the parse
+            // that found so is this file's.
+            Ok(t) if standard.is_none() => nazm_core::derive::expand_in(id, &t),
+            Ok(t) => (t, None),
             Err(e) => {
                 // No text to point into: this file could not be read. It gets an empty entry
                 // of its own, so the report names it — not whichever file has id 0, which for
                 // an unreadable root was the prelude, loaded last and so first (v1, Q1-D-09).
                 // It is in the graph with no identity and no imports; the load fails anyway.
-                let id = FileId::from_index(parts.len());
                 index.insert(canonical, parts.len());
                 keys.push(None);
                 named.push(Vec::new());
@@ -362,14 +365,16 @@ pub fn load_packaged(
             }
         };
 
-        // The id this file is about to get. Known before the map exists, because it is
-        // the file's position in load order — which is what a `FileId` is.
-        let id = FileId::from_index(parts.len());
-
-        // Parsed for its imports only. Parse errors are ignored here and reported by the
-        // caller, which parses every file again with the same ids, so a syntax error is
-        // reported once at the position it will still have.
-        let (program, _) = nazm_core::__syntax::parse_file(id, &text);
+        // Parsed for its imports, and kept (`nazm_syntax::keep`) for the caller's parse of the
+        // same text with the same id: parse errors are not reported here but by the caller,
+        // at the position they will still have. The tokens are what `prelude_named` reads.
+        let (program, parse_errors, tokens) = match parsed {
+            Some((program, parse_errors)) => {
+                let (tokens, _) = nazm_core::__syntax::lex_in(id, &text);
+                (program, parse_errors, tokens)
+            }
+            None => nazm_core::__syntax::parse_file_with_tokens(id, &text),
+        };
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
 
         let mut children = Vec::new();
@@ -480,7 +485,7 @@ pub fn load_packaged(
                         Item::File(_) => None,
                     })
                     .collect();
-                prelude_named(&text, &program, &written)
+                prelude_named(&tokens, &program, &written)
             } else {
                 Vec::new()
             };
@@ -514,6 +519,7 @@ pub fn load_packaged(
                 .map(|(c, at, alias, re)| (c.canonical(), at, alias, re))
                 .collect(),
         );
+        nazm_core::__syntax::keep(id, &text, program, parse_errors);
         parts.push((path.display().to_string(), text));
     }
 
@@ -587,14 +593,14 @@ pub fn load_packaged(
 /// program that uses none of them as it was — a restriction profile refuses what a module
 /// imports, used or not.
 fn prelude_named(
-    text: &str,
+    tokens: &[nazm_core::__syntax::Token],
     program: &nazm_core::__syntax::Program,
     written: &[&str],
 ) -> Vec<&'static str> {
     let table = prelude_table();
     let mut idents: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut methods: std::collections::HashSet<String> = std::collections::HashSet::new();
-    named_in(text, &mut idents, &mut methods);
+    named_in_tokens(tokens, &mut idents, &mut methods);
     // Calls the parser wrote for a form (a map literal's `hashmap_single`).
     let called: Vec<&str> = program
         .functions
@@ -608,8 +614,8 @@ fn prelude_named(
             || entry
                 .names
                 .iter()
-                .any(|n| idents.contains(n) || called.contains(&n.as_str()))
-            || entry.methods.iter().any(|m| methods.contains(m));
+                .any(|n| idents.contains(*n) || called.contains(n))
+            || entry.methods.iter().any(|m| methods.contains(*m));
         if named {
             wanted.push(entry.name);
         }
@@ -618,9 +624,9 @@ fn prelude_named(
     let mut i = 0;
     while let Some(name) = wanted.get(i).copied() {
         if let Some(entry) = table.iter().find(|e| e.name == name) {
-            for dep in &entry.imports {
+            for dep in entry.imports {
                 if !wanted.contains(dep) {
-                    wanted.push(dep);
+                    wanted.push(*dep);
                 }
             }
         }
@@ -641,8 +647,17 @@ fn named_in(
     idents: &mut std::collections::HashSet<String>,
     methods: &mut std::collections::HashSet<String>,
 ) {
-    use nazm_core::__syntax::{FPiece, TokenKind};
     let (tokens, _) = nazm_core::__syntax::lex(text);
+    named_in_tokens(&tokens, idents, methods);
+}
+
+/// As [`named_in`], over a text's tokens already scanned: a file's, from its parse.
+fn named_in_tokens(
+    tokens: &[nazm_core::__syntax::Token],
+    idents: &mut std::collections::HashSet<String>,
+    methods: &mut std::collections::HashSet<String>,
+) {
+    use nazm_core::__syntax::{FPiece, TokenKind};
     for (n, t) in tokens.iter().enumerate() {
         match &t.kind {
             TokenKind::Ident(name) => {
@@ -670,80 +685,87 @@ fn named_in(
 }
 
 /// One prelude module, as [`prelude_named`] looks for it.
-struct PreludeEntry {
-    name: &'static str,
+pub(crate) struct PreludeEntry {
+    pub(crate) name: &'static str,
     /// Its public items' names, and its traits' methods.
-    names: Vec<String>,
+    pub(crate) names: &'static [&'static str],
     /// The method names its functions answer to and no built-in does.
-    methods: Vec<String>,
+    pub(crate) methods: &'static [&'static str],
     /// The prelude modules it imports.
-    imports: Vec<&'static str>,
+    pub(crate) imports: &'static [&'static str],
 }
 
-/// The prelude modules' names, read once from their sources.
+/// The prelude modules' names: `crate::prelude_table`, written from their sources and held to
+/// them by `the_prelude_table_is_read_from_the_prelude_sources`. Read at compile time rather
+/// than by parsing every prelude module on every run, which was a third of a small program's
+/// `nazm check` (performance leadership 7.2).
 fn prelude_table() -> &'static [PreludeEntry] {
-    static TABLE: std::sync::OnceLock<Vec<PreludeEntry>> = std::sync::OnceLock::new();
-    TABLE.get_or_init(|| {
-        let std = nazm_core::sema::stdlib::PRELUDE;
-        std.iter()
-            .filter_map(|name| {
-                let (name, source) = nazm_core::sema::stdlib::MODULES
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .copied()?;
-                let (program, _) = nazm_core::__syntax::parse_file(FileId::from_index(0), source);
-                let mut names: Vec<String> = Vec::new();
-                let mut methods: Vec<String> = Vec::new();
-                for f in &program.functions {
-                    if f.pub_span.is_none() || f.method_of.is_some() {
-                        continue;
-                    }
-                    names.push(f.name.clone());
-                    if let Some((_, m)) = f.name.split_once('_') {
-                        let builtin = ["vec", "ints", "strs", "bytes", "str", "int"]
-                            .iter()
-                            .any(|p| nazm_core::Intrinsic::by_name(&format!("{p}_{m}")).is_some());
-                        if !builtin {
-                            methods.push(m.to_owned());
-                        }
-                    }
+    crate::prelude_table::TABLE
+}
+
+/// A [`PreludeEntry`] as owned text: its name, names, methods and imports.
+#[cfg(test)]
+pub(crate) type PreludeRow = (String, Vec<String>, Vec<String>, Vec<String>);
+
+/// The table [`prelude_table`] holds, read from the prelude modules' sources: each module's
+/// name, its names, its methods and its imports, in `PRELUDE`'s order.
+#[cfg(test)]
+pub(crate) fn prelude_table_from_sources() -> Vec<PreludeRow> {
+    let std = nazm_core::sema::stdlib::PRELUDE;
+    std.iter()
+        .filter_map(|name| {
+            let (name, source) = nazm_core::sema::stdlib::MODULES
+                .iter()
+                .find(|(n, _)| n == name)
+                .copied()?;
+            let (program, _) = nazm_core::__syntax::parse_file(FileId::from_index(0), source);
+            let mut names: Vec<String> = Vec::new();
+            let mut methods: Vec<String> = Vec::new();
+            for f in &program.functions {
+                if f.pub_span.is_none() || f.method_of.is_some() {
+                    continue;
                 }
-                names.extend(
-                    program
-                        .records
+                names.push(f.name.clone());
+                if let Some((_, m)) = f.name.split_once('_') {
+                    let builtin = ["vec", "ints", "strs", "bytes", "str", "int"]
                         .iter()
-                        .filter(|r| r.pub_span.is_some())
-                        .map(|r| r.name.clone()),
-                );
-                names.extend(
-                    program
-                        .enums
-                        .iter()
-                        .filter(|e| e.pub_span.is_some())
-                        .map(|e| e.name.clone()),
-                );
-                for t in program.traits.iter().filter(|t| t.pub_span.is_some()) {
-                    names.push(t.name.clone());
-                    methods.extend(t.methods.iter().map(|m| m.name.clone()));
+                        .any(|p| nazm_core::Intrinsic::by_name(&format!("{p}_{m}")).is_some());
+                    if !builtin {
+                        methods.push(m.to_owned());
+                    }
                 }
-                if name == "hashmap" {
-                    names.push("Map".to_owned());
-                }
-                let imports = program
-                    .imports
+            }
+            names.extend(
+                program
+                    .records
                     .iter()
-                    .filter_map(|i| i.path.strip_prefix(nazm_core::sema::stdlib::PREFIX))
-                    .filter_map(|n| std.iter().copied().find(|p| *p == n))
-                    .collect();
-                Some(PreludeEntry {
-                    name,
-                    names,
-                    methods,
-                    imports,
-                })
-            })
-            .collect()
-    })
+                    .filter(|r| r.pub_span.is_some())
+                    .map(|r| r.name.clone()),
+            );
+            names.extend(
+                program
+                    .enums
+                    .iter()
+                    .filter(|e| e.pub_span.is_some())
+                    .map(|e| e.name.clone()),
+            );
+            for t in program.traits.iter().filter(|t| t.pub_span.is_some()) {
+                names.push(t.name.clone());
+                methods.extend(t.methods.iter().map(|m| m.name.clone()));
+            }
+            if name == "hashmap" {
+                names.push("Map".to_owned());
+            }
+            let imports = program
+                .imports
+                .iter()
+                .filter_map(|i| i.path.strip_prefix(nazm_core::sema::stdlib::PREFIX))
+                .filter_map(|n| std.iter().copied().find(|p| *p == n))
+                .map(str::to_owned)
+                .collect();
+            Some((name.to_owned(), names, methods, imports))
+        })
+        .collect()
 }
 
 type Named = (
