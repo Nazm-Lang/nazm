@@ -7677,6 +7677,17 @@ selector counts itself before it reads the count and looks, so a change made bef
 no selector is one that selector's look finds. Every select function that allocates, takes a lock
 or waits is `noinline` (6.3). Semantic epoch 90 → 91; runtime ABI 45 → 46.
 
+**Amended (performance leadership 6.4, 2026-10-17): the direct hand-off on the generic channel.**
+`Chan[T]` parks and hands off as the `Int` channel does: a 128-byte header with lists of parked
+receivers (80) and senders (96), spare wait records (112) and a count of old-way waiters (120); a
+wait record carries the value at 160, so a record is 160 bytes and a slot. Under the channel's
+mutex, `nz.chanv_put` gives a value to the receiver parked longest — the ring is empty while one is
+— or queues it, and `nz.chanv_get` takes the ring's oldest value and lets the sender parked longest
+fill the slot it frees; a send, a receive, a select's offer (`nz.chanv_offer`) and its look
+(`nz.chanv_try`) all go through the two, so a select and a blocked task see one channel. A close
+ends parked receivers and refuses parked senders, whose values stay theirs to release. Runtime ABI
+46 → 48 (47 is the preemption fix's).
+
 ## 7.85 The standard library 1.0 — N84, 2026-10-04
 
 Written before the code. Area 16 is PARTIAL: N45's foundation is 34 functions in eight modules, enough
