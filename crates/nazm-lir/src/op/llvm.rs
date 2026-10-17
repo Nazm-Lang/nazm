@@ -92,7 +92,8 @@ pub enum Code {
     Plain,
     /// Mach-O: `__TEXT,__nz_text`, bounded by ld64's `section$start` and `section$end`.
     MachO,
-    /// COFF: `.text$nzM`, between the runtime's markers in `.text$nzA` and `.text$nzZ`.
+    /// COFF: `.text$nM`, between the runtime's markers in `.text$nA` and `.text$nZ` — eight
+    /// bytes each, so every writer keeps them in the section header itself.
     Coff,
 }
 
@@ -102,7 +103,7 @@ impl Code {
         match self {
             Self::Plain => "",
             Self::MachO => " section \"__TEXT,__nz_text,regular,pure_instructions\"",
-            Self::Coff => " section \".text$nzM\"",
+            Self::Coff => " section \".text$nM\"",
         }
     }
 }
