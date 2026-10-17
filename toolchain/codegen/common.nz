@@ -453,13 +453,42 @@ fn succs(t: Ins, out: Ints) {
     }
 }
 
-fn bit_get(s: Ints, base: Int, i: Int) -> Bool {
-    ((s[base + (i >> 5)] >> (i & 31)) & 1) == 1
+/// Where each key's entries begin once `keys` (each below `n`) is sorted by key, and at `n` how
+/// many there are: the offsets of a counting sort.
+fn by_key(keys: Ints, n: Int) -> Ints {
+    let at = ints_new()
+    let mut i = 0
+    while i <= n {
+        ints_push(at, 0)
+        i += 1
+    }
+    for k in keys { at[k + 1] = at[k + 1] + 1 }
+    i = 0
+    while i < n {
+        at[i + 1] = at[i + 1] + at[i]
+        i += 1
+    }
+    at
 }
 
-fn bit_set(s: Ints, base: Int, i: Int) {
-    let w = base + (i >> 5)
-    s[w] = s[w] | (1 << (i & 31))
+/// `values` grouped by their `keys`, in their order within each key, at the offsets `by_key` gave.
+fn placed(keys: Ints, values: Ints, at: Ints) -> Ints {
+    let next = ints_new()
+    let out = ints_new()
+    for a in at { ints_push(next, a) }
+    let mut i = 0
+    while i < ints_len(values) {
+        ints_push(out, 0)
+        i += 1
+    }
+    i = 0
+    while i < ints_len(keys) {
+        let k = keys[i]
+        out[next[k]] = values[i]
+        next[k] = next[k] + 1
+        i += 1
+    }
+    out
 }
 
 /// Each name's register, or -1 for its frame slot: an index below `nregs` is one of the target's
@@ -484,88 +513,99 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int, colors: I
     }
     let nb = ints_len(f.block_first)
     if nregs == 0 || names == 0 || nb == 0 || f.terms.len() != nb { return loc }
-    let words = (names + 31) / 32
-    // Per block: what it reads before writing, what it writes; then live-in and live-out.
-    let use_s = ints_new()
-    let def_s = ints_new()
-    let live_in = ints_new()
-    let live_out = ints_new()
+    // Per block: the names it reads before writing them, and the names it writes, each once (a
+    // name's stamp is the block that last recorded it).
+    let use_b = ints_new()
+    let use_v = ints_new()
+    let def_b = ints_new()
+    let def_v = ints_new()
+    let used = ints_new()
+    let defd = ints_new()
+    let start = ints_new()
+    let end = ints_new()
     i = 0
-    while i < nb * words {
-        ints_push(use_s, 0)
-        ints_push(def_s, 0)
-        ints_push(live_in, 0)
-        ints_push(live_out, 0)
+    while i < names {
+        ints_push(used, -1)
+        ints_push(defd, -1)
+        ints_push(start, -1)
+        ints_push(end, -1)
         i += 1
     }
     let tmp = ints_new()
     let mut b = 0
     while b < nb {
-        let base = b * words
         let mut k = f.block_first[b]
         while k < f.block_end[b] {
             let x = f.insts[k]
             clear(tmp)
             uses_of(x, n, tmp)
             for v in tmp {
-                if v < names && !bit_get(def_s, base, v) { bit_set(use_s, base, v) }
+                if v < names && defd[v] != b && used[v] != b {
+                    used[v] = b
+                    ints_push(use_b, b)
+                    ints_push(use_v, v)
+                }
             }
             clear(tmp)
             defs_of(x, n, tmp)
             for v in tmp {
-                if v < names { bit_set(def_s, base, v) }
+                if v < names && defd[v] != b {
+                    defd[v] = b
+                    ints_push(def_b, b)
+                    ints_push(def_v, v)
+                }
             }
             k += 1
         }
         clear(tmp)
         term_uses(f.terms[b], tmp)
         for v in tmp {
-            if v < names && !bit_get(def_s, base, v) { bit_set(use_s, base, v) }
+            if v < names && defd[v] != b && used[v] != b {
+                used[v] = b
+                ints_push(use_b, b)
+                ints_push(use_v, v)
+            }
         }
         b += 1
     }
-    let mut changed = true
-    while changed {
-        changed = false
-        b = nb - 1
-        while b >= 0 {
-            let base = b * words
-            clear(tmp)
-            succs(f.terms[b], tmp)
-            let mut w = 0
-            while w < words {
-                let mut o = 0
-                for s in tmp {
-                    if s >= 0 && s < nb { o = o | live_in[s * words + w] }
-                }
-                let inn = use_s[base + w] | (o & ~def_s[base + w])
-                if o != live_out[base + w] || inn != live_in[base + w] {
-                    live_out[base + w] = o
-                    live_in[base + w] = inn
-                    changed = true
-                }
-                w += 1
+    // The same by name, and each block's predecessors (counting sorts).
+    let use_at = by_key(use_v, names)
+    let use_of = placed(use_v, use_b, use_at)
+    let def_at = by_key(def_v, names)
+    let def_of = placed(def_v, def_b, def_at)
+    let edge_from = ints_new()
+    let edge_to = ints_new()
+    b = 0
+    while b < nb {
+        clear(tmp)
+        succs(f.terms[b], tmp)
+        for s in tmp {
+            if s >= 0 && s < nb {
+                ints_push(edge_to, s)
+                ints_push(edge_from, b)
             }
-            b -= 1
         }
+        b += 1
     }
-    // Intervals over positions in block order: each block's start, one per instruction, its
-    // terminator. A name's interval spans every point it is defined, read, or live at a
-    // block's edge.
-    let start = ints_new()
-    let end = ints_new()
-    i = 0
-    while i < names {
-        ints_push(start, -1)
-        ints_push(end, -1)
-        i += 1
-    }
+    let pred_at = by_key(edge_to, nb)
+    let preds = placed(edge_to, edge_from, pred_at)
+    // Positions in block order: each block's start, one per instruction, its terminator.
+    let first_at = ints_new()
+    let last_at = ints_new()
     let mut pos = 0
+    b = 0
+    while b < nb {
+        ints_push(first_at, pos)
+        let last = pos + 1 + f.block_end[b] - f.block_first[b]
+        ints_push(last_at, last)
+        pos = last + 1
+        b += 1
+    }
+    // Intervals: a name's spans every point it is defined, read, or live at a block's edge.
+    pos = 0
     let calls = ints_new()
     b = 0
     while b < nb {
-        let base = b * words
-        let first = pos
         let mut k = f.block_first[b]
         let mut p = pos + 1
         while k < f.block_end[b] {
@@ -592,20 +632,62 @@ pub fn allocate(f: Func, n: Int, vcls: Ints, nregs: Int, ncaller: Int, colors: I
                 if last > end[v] { end[v] = last }
             }
         }
-        let mut v = 0
-        while v < names {
-            if bit_get(live_in, base, v) {
-                if start[v] < 0 || first < start[v] { start[v] = first }
-                if first > end[v] { end[v] = first }
-            }
-            if bit_get(live_out, base, v) {
-                if start[v] < 0 || last < start[v] { start[v] = last }
-                if last > end[v] { end[v] = last }
-            }
-            v += 1
-        }
         pos = last + 1
         b += 1
+    }
+    // Liveness, name by name: live-in where a block reads it first, then backwards — live-out
+    // at each predecessor, and live-in there too unless that block writes it. The least fixed
+    // point of the dataflow equations, as iterating dense bit sets of every name in every block
+    // reached; this costs what is live, not blocks × names a pass (performance leadership 7.3).
+    let live_in = ints_new()
+    let live_out = ints_new()
+    let writes = ints_new()
+    b = 0
+    while b < nb {
+        ints_push(live_in, -1)
+        ints_push(live_out, -1)
+        ints_push(writes, -1)
+        b += 1
+    }
+    let work = ints_new()
+    let mut v = 0
+    while v < names {
+        let mut j = def_at[v]
+        while j < def_at[v + 1] {
+            writes[def_of[j]] = v
+            j += 1
+        }
+        j = use_at[v]
+        while j < use_at[v + 1] {
+            let u = use_of[j]
+            if live_in[u] != v {
+                live_in[u] = v
+                ints_push(work, u)
+            }
+            j += 1
+        }
+        while ints_len(work) > 0 {
+            let w = ints_pop(work)
+            let first = first_at[w]
+            if start[v] < 0 || first < start[v] { start[v] = first }
+            if first > end[v] { end[v] = first }
+            let mut e = pred_at[w]
+            while e < pred_at[w + 1] {
+                let q = preds[e]
+                if live_out[q] != v {
+                    live_out[q] = v
+                    let last = last_at[q]
+                    if start[v] < 0 || last < start[v] { start[v] = last }
+                    if last > end[v] { end[v] = last }
+                    if writes[q] != v && live_in[q] != v {
+                        live_in[q] = v
+                        ints_push(work, q)
+                    }
+                }
+                e += 1
+            }
+        }
+        v += 1
     }
     // Names in order of their start (a counting sort over positions).
     let count = ints_new()
