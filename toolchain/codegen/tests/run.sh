@@ -150,7 +150,14 @@ for src in "${inputs[@]}"; do
     echo "differ   $rel:$what"; differ=$((differ+1))
   fi
 done
+# Growth (performance leadership 7.4): a function's register allocation costs work in proportion
+# to what is live — it grew as blocks × names a pass, with more passes the deeper the nesting.
+grown=0
+for g in "nest 25" "chain 60"; do
+  python3 "$ROOT/bench/complexity/growth.py" "nzcg" $g 10 ops "$REF" "$OUT/growth" -- "$NZCG" "{in}" "{dir}" ||
+    grown=$((grown+1))
+done
 note=""
 [ -n "$MIX" ] && note=" ($mixed linked from units of both backends)"
 echo "$agree agree, $differ differ, $refused refused, $skipped skipped$note"
-[ $differ -eq 0 ]
+[ $differ -eq 0 ] && [ $grown -eq 0 ]
