@@ -49,6 +49,7 @@ mod lower;
 mod objects;
 mod preflight;
 mod release;
+mod relink;
 mod stores;
 mod timing;
 mod tls;
@@ -340,20 +341,45 @@ pub(crate) fn run(
     ) {
         return code;
     }
-    if let Err(code) = linked(
-        choice,
-        &backend,
-        &tmp_exe,
-        &objects,
-        &foreign,
-        tls_libraries.as_ref(),
-        &cleanup,
-        &work,
-        map,
-        summary,
-        &summarized,
-    ) {
-        return code;
+    // A plain executable whose objects and link are those this output was last linked from is
+    // that executable (`relink`): no link. Not a library, `--objects`, a debug build (whose
+    // `.dSYM` is gathered from the link), a release build, one that may need the TLS library's
+    // second link, or a freestanding image; and never under `--no-cache`.
+    let relink = (cache
+        && !choice.library
+        && choice.objects.is_none()
+        && !choice.debug
+        && !choice.release
+        && tls_libraries.is_none()
+        && !freestanding)
+        .then(|| {
+            relink::Relink::of(
+                &crate::derived::root(source_root.path()),
+                &backend,
+                &output,
+                &objects,
+            )
+        })
+        .flatten();
+    if !relink.as_ref().is_some_and(|r| r.reuse(&tmp_exe)) {
+        if let Err(code) = linked(
+            choice,
+            &backend,
+            &tmp_exe,
+            &objects,
+            &foreign,
+            tls_libraries.as_ref(),
+            &cleanup,
+            &work,
+            map,
+            summary,
+            &summarized,
+        ) {
+            return code;
+        }
+        if let Some(r) = &relink {
+            r.keep(&tmp_exe);
+        }
     }
     published(
         choice,

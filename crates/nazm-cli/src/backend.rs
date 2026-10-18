@@ -224,6 +224,27 @@ impl Backend {
         run(&mut c)
     }
 
+    /// What [`Self::link`] does besides reading its objects, written out: the driver as it
+    /// answered, its arguments but the output and the objects, and the environment it is given.
+    /// `None` where the driver would not say what it is. A link of the same objects to the same
+    /// file name under the same description writes the same bytes (`link_command`: Mach-O's
+    /// UUID and signature are of the content and the file name), which is what lets a build
+    /// reuse an executable instead of linking it again (`build::link`).
+    pub(crate) fn link_description(&self) -> Option<String> {
+        let settled = self.settled?;
+        let env: Vec<String> = PASSED
+            .iter()
+            .map(|name| format!("{name}={:?}", std::env::var_os(name)))
+            .collect();
+        Some(format!(
+            "{settled:?}\n{:?}\n{:?}\n{:?}\n{}\nZERO_AR_DATE=1",
+            link_args(self.opt_level, self.cross.as_deref(), self.whole),
+            dead_strip_args(self.cross.as_deref()),
+            system_libraries(self.cross.as_deref()),
+            env.join("\n"),
+        ))
+    }
+
     /// [`Self::link`] for `nazm build --release` (R1.5, D15): position-independent as well.
     pub(crate) fn link_release(&self, output: &Path, objects: &[PathBuf]) -> Outcome {
         let mut c = self.link_command(output, objects);

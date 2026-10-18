@@ -21099,3 +21099,19 @@ file = "crates/nazm-service/src/prelude_table.rs"
 find = '''            "Map",'''
 replace = ''''''
 killers = [{ package = "nazm-service", lib = true, name = "prelude_table::tests::the_prelude_table_is_read_from_the_prelude_sources" }]
+
+[[mutation]]
+name = "speed-a-stale-link-is-reused"
+why = "a build reuses the executable this output was last linked to whatever its objects now are, so an edited program runs as it was"
+file = "crates/nazm-cli/src/build/relink.rs"
+find = '''        if key != self.key {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "native_cache::an_unchanged_rebuild_reuses_its_executable_byte_for_byte" }]
+
+[[mutation]]
+name = "speed-a-damaged-link-is-believed"
+why = "a build reuses a kept executable that is not the one linked, so a damaged file in derived data becomes the program"
+file = "crates/nazm-cli/src/build/relink.rs"
+find = '''        if blake3::hash(&bytes).to_hex().as_str() != digest {'''
+replace = '''        if false {'''
+killers = [{ package = "nazm-cli", test = "cli_m_r", name = "native_cache::an_unchanged_rebuild_reuses_its_executable_byte_for_byte" }]
