@@ -1871,15 +1871,47 @@ fn a_thousand_repository_calls_are_each_of_the_disk_and_keep_nothing() {
                 call_with(&client, TASK_CONTEXT, a.clone()).await;
             }
         }
-        let settled = rss_kb(pid);
-        for i in 0..1000 {
-            let k = i % asks.len();
-            let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
-            assert_eq!(v, first[k], "call {i}");
+        // Not a fixed 1 MB after 44 requests: the allocator (glibc) may still take one step of a
+        // megabyte or two after them (CI, Linux: 19,268 -> 20,580 kB, while macOS stays flat for
+        // 6,000 calls), when a worker thread meets a request shape for the first time. A leak is
+        // growth that goes on with the requests, so: warm up until RSS has agreed with itself
+        // over five samples (`settled`), then measure two windows of 1,000 calls. A one-time
+        // step is over by the second window; a leak of even 1 kB a call shows between them.
+        let mut samples = vec![rss_kb(pid)];
+        let mut warmup = 0;
+        while !settled(&samples) {
+            assert!(
+                warmup < MAX_WARMUP,
+                "RSS did not settle within {MAX_WARMUP} warm-up requests: {samples:?} kB"
+            );
+            for i in 0..SAMPLE_EVERY {
+                let k = i % asks.len();
+                call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+            }
+            warmup += SAMPLE_EVERY;
+            samples.push(rss_kb(pid));
         }
-        let after = rss_kb(pid);
-        assert!(after <= settled + 1024, "{settled} kB -> {after} kB");
-        eprintln!("nazm-mcp RSS: settled {settled} kB, after 1,000 task contexts {after} kB");
+        let settled_kb = rss_kb(pid);
+        let mut windows = Vec::new();
+        for _ in 0..2 {
+            for i in 0..1000 {
+                let k = i % asks.len();
+                let (v, _) = call_with(&client, TASK_CONTEXT, asks[k].clone()).await;
+                assert_eq!(v, first[k], "call {i}");
+            }
+            windows.push(rss_kb(pid));
+        }
+        eprintln!(
+            "nazm-mcp RSS: settled {settled_kb} kB after {warmup} warm-up calls, then {windows:?} kB after 2 x 1,000 task contexts"
+        );
+        assert!(
+            windows[1] <= windows[0] + 1024,
+            "growth continues with the requests: {settled_kb} -> {windows:?} kB"
+        );
+        assert!(
+            windows[1] <= settled_kb + TOLERANCE_KB,
+            "{settled_kb} -> {windows:?} kB"
+        );
         client.cancel().await.unwrap();
     });
 }
