@@ -229,7 +229,7 @@ fn recursion_through_a_function_value_checks_the_stack_natively() {
     )
     .unwrap();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[

@@ -53,7 +53,9 @@ fn everywhere(files: &[(&str, &str)]) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             d.path(),
             &[
@@ -496,7 +498,7 @@ fn main(io: IoCap, t: TimeCap, sp: SpawnCap) -> Int ! { io, spawn } {
         "LD_PRELOAD"
     };
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[
@@ -537,7 +539,7 @@ fn select_agrees(src: &str, expected: &str) {
     if cfg!(target_os = "macos") {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("prog.nz"), src).unwrap();
-        let exe = d.path().join("nzcg-built");
+        let exe = d.path().join(crate::common::exe_name("nzcg-built"));
         let mut build = Command::new(NAZM);
         build
             .current_dir(d.path())

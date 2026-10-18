@@ -199,6 +199,9 @@ fn a_hosted_unit_inlines_the_runtime_s_reference_counting() {
         "{units}"
     );
     assert!(!units.contains("declare void @nz.str_release("), "{units}");
-    let r = run_bounded(&mut common::bounded_exe(&d.path().join("p")), "p");
+    let r = run_bounded(
+        &mut common::bounded_exe(&d.path().join(crate::common::exe_name("p"))),
+        "p",
+    );
     assert_eq!((r.code, r.stdout.as_str()), (Some(0), "1\n"), "{r:?}");
 }

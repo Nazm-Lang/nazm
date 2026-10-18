@@ -100,7 +100,9 @@ fn status_2_is_a_program_that_ran_and_failed() {
     let d = project();
     let (built, err) = status(d.path(), &["build", "traps.nz", "-o", "traps"]);
     assert_eq!(built, Some(0), "{err}");
-    let o = Command::new(d.path().join("traps")).output().unwrap();
+    let o = Command::new(d.path().join(crate::common::exe_name("traps")))
+        .output()
+        .unwrap();
     assert_eq!(o.status.code(), Some(2));
 }
 

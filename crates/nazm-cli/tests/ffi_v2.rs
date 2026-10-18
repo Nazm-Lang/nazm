@@ -111,7 +111,7 @@ fn both(src: &str) -> Ran {
     d.clang(&["-c", "-O1", "fixture.c", "-o", "fixture.o"]);
     let mut out = Vec::new();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path(&format!("prog-{backend}"));
+        let exe = d.path(&crate::common::exe_name(format!("prog-{backend}")));
         let b = d.nazm(&[
             "build",
             "--no-cache",
@@ -333,7 +333,7 @@ fn a_library_and_its_header_link_into_a_c_program_under_both_backends() {
         d.clang(&["main.c", "libnz.a", "-o", "host"]);
         let r = run(&d.path("host"), &[]);
         assert_eq!(
-            (r.code, r.stdout.as_str()),
+            (r.code, r.stdout.replace("\r\n", "\n").as_str()),
             (Some(0), "25 1 0\n"),
             "{backend}: {r:?}"
         );

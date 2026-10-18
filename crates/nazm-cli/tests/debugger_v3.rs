@@ -129,7 +129,9 @@ fn a_binding_is_scoped_to_its_own_block() {
         "{ir}"
     );
     // The scopes change nothing the program does.
-    let r = common::bounded_exe(&d.path().join("s")).output().unwrap();
+    let r = common::bounded_exe(&d.path().join(crate::common::exe_name("s")))
+        .output()
+        .unwrap();
     assert_eq!(out(&r), "9\n");
 }
 
@@ -410,7 +412,7 @@ fn what_debugging_and_sampling_cost() {
         &["build", "--debug", "--no-cache", "spin.nz", "-o", "spin"],
     );
     assert!(b.status.success(), "{}", err(&b));
-    let exe = d.path().join("spin");
+    let exe = d.path().join(crate::common::exe_name("spin"));
     // The first launch of a fresh executable is not the program's time.
     Command::new(&exe).output().unwrap();
     let run = |interval: Option<&str>| {

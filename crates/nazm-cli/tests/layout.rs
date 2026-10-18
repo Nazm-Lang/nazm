@@ -66,7 +66,9 @@ fn everywhere(src: &str) -> Vec<(String, String, Option<i32>, String)> {
     // Both backends since N105: the layout is LIR's, and each translates it.
     for layout in ["aos", "soa"] {
         for (backend, opt) in [("llvm", "0"), ("llvm", "2"), ("cranelift", "2")] {
-            let exe = d.path().join(format!("p-{layout}-{backend}-{opt}"));
+            let exe = d.path().join(crate::common::exe_name(format!(
+                "p-{layout}-{backend}-{opt}"
+            )));
             let b = nazm(
                 d.path(),
                 &[
@@ -163,7 +165,7 @@ fn reordering_a_records_fields_changes_neither_meaning_nor_code() {
             ],
         );
         assert!(o.status.success(), "{}", err(&o));
-        let out = Command::new(d.path().join(name).join("p"))
+        let out = Command::new(d.path().join(name).join(crate::common::exe_name("p")))
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), "140\n");
@@ -251,7 +253,12 @@ fn an_ineligible_element_stays_whole_and_the_reason_is_reported() {
     );
     assert!(o.status.success(), "{}", err(&o));
     assert_eq!(
-        String::from_utf8_lossy(&Command::new(d.path().join("p")).output().unwrap().stdout),
+        String::from_utf8_lossy(
+            &Command::new(d.path().join(crate::common::exe_name("p")))
+                .output()
+                .unwrap()
+                .stdout
+        ),
         "175\n"
     );
     let o = nazm(d.path(), &["explain-cost", "--json", "prog.nz"]);
@@ -319,7 +326,9 @@ fn the_layout_is_asked_for_by_name_and_both_backends_take_it() {
         Some(1),
         "{soa}"
     );
-    let out = Command::new(d.path().join("p")).output().unwrap();
+    let out = Command::new(d.path().join(crate::common::exe_name("p")))
+        .output()
+        .unwrap();
     let interpreted = nazm(d.path(), &["run", "--interpret", "prog.nz"]);
     assert_eq!(out.stdout, interpreted.stdout);
 }

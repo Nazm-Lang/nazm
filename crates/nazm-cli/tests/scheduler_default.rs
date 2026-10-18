@@ -56,7 +56,7 @@ fn run(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> (String, String, Option<i32>) {
-    let mut c = Command::new(dir.join(name));
+    let mut c = Command::new(dir.join(crate::common::exe_name(name)));
     c.current_dir(dir)
         .args(args)
         .env_remove("NAZM_SCHEDULER")

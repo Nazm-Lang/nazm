@@ -60,14 +60,14 @@ fn built(args: &[&str]) -> (String, (usize, usize)) {
     all.extend(args);
     let b = nazm(d.path(), &all);
     assert_eq!(b.code, Some(0), "{args:?}: {}", b.stderr);
-    let out = std::process::Command::new(d.path().join("prog"))
+    let out = std::process::Command::new(d.path().join(crate::common::exe_name("prog")))
         .output()
         .unwrap();
     assert!(out.status.success(), "{args:?}");
     // Built again from the store: the same program.
     let again = nazm(d.path(), &all);
     assert_eq!(again.code, Some(0), "{args:?}: {}", again.stderr);
-    let out2 = std::process::Command::new(d.path().join("prog"))
+    let out2 = std::process::Command::new(d.path().join(crate::common::exe_name("prog")))
         .output()
         .unwrap();
     assert_eq!(out.stdout, out2.stdout, "{args:?}");

@@ -87,7 +87,9 @@ fn everywhere(src: &str) -> Ran {
         failure: failure(&err(&interpreted)),
     }];
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(format!("prog-{backend}"));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(format!("prog-{backend}")));
         let b = nazm(
             d.path(),
             &[

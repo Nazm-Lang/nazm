@@ -38,7 +38,7 @@ fn run_with_deadline(dir: &std::path::Path) -> (Option<i32>, String, String) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
     let out_path = dir.join("prog.out");
     let err_path = dir.join("prog.err");
-    let mut child = Command::new(dir.join("prog"))
+    let mut child = Command::new(dir.join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))

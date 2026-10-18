@@ -65,7 +65,7 @@ fn a_sleeping_task_does_not_hold_its_worker() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), POOL).unwrap();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[

@@ -173,7 +173,7 @@ fn both(src: &str) -> Ran {
     d.clang(&["-c", "-O1", "fixture.c", "-o", "fixture.o"]);
     let mut out = Vec::new();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path(&format!("prog-{backend}"));
+        let exe = d.path(&crate::common::exe_name(format!("prog-{backend}")));
         let b = d.nazm(&[
             "build",
             "--no-cache",
@@ -539,7 +539,7 @@ fn a_handle_and_a_c_struct_keep_what_they_are_across_a_module_boundary_and_in_th
     ]);
     d.clang(&["-c", "-O1", "fixture.c", "-o", "fixture.o"]);
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path(&format!("p-{backend}"));
+        let exe = d.path(&crate::common::exe_name(format!("p-{backend}")));
         for _ in 0..2 {
             // The second build reads the module's interface from the cache: the handle and the
             // struct's declaration order come back from it.

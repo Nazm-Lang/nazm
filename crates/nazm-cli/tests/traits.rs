@@ -33,7 +33,7 @@ fn everywhere(dir: &Path, main: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = dir.join(label.replace([' ', '-'], ""));
+        let exe = dir.join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             dir,
             &[

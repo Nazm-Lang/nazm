@@ -267,7 +267,7 @@ fn a_manifest_gives_the_limit_and_the_flag_overrides_it() {
     std::fs::create_dir_all(d.path().join("app/src")).unwrap();
     std::fs::write(d.path().join("app/src/main.nz"), HOLDS).unwrap();
     std::fs::write(d.path().join("app/nazm.toml"), manifest("64K")).unwrap();
-    let exe = d.path().join("app-exe");
+    let exe = d.path().join(crate::common::exe_name("app-exe"));
     let build = |extra: &[&str]| {
         let mut args = vec!["build", "--no-cache", "app", "-o", exe.to_str().unwrap()];
         args.extend(extra);

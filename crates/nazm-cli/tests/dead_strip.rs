@@ -49,7 +49,7 @@ fn an_unused_standard_function_is_left_out_and_the_program_still_runs() {
     std::fs::write(dir.path().join("main.nz"), PROGRAM).expect("program");
     for backend in ["llvm", "cranelift"] {
         for opt in ["0", "2"] {
-            let exe = format!("prog-{backend}-{opt}");
+            let exe = crate::common::exe_name(format!("prog-{backend}-{opt}"));
             nazm(
                 dir.path(),
                 &[
@@ -64,7 +64,7 @@ fn an_unused_standard_function_is_left_out_and_the_program_still_runs() {
                     &exe,
                 ],
             );
-            let exe = dir.path().join(&exe);
+            let exe = dir.path().join(crate::common::exe_name(&exe));
             let out = Command::new(&exe).output().expect("run");
             assert!(out.status.success(), "{backend} -O{opt}");
             assert!(
@@ -132,7 +132,7 @@ fn a_dead_stripped_executable_is_smaller_than_the_same_objects_linked_whole() {
     assert!(Command::new(&whole).output().expect("run").status.success());
 
     let size = |p: &Path| std::fs::metadata(p).expect("size").len();
-    let stripped = dir.path().join("stripped");
+    let stripped = dir.path().join(crate::common::exe_name("stripped"));
     assert!(
         size(&stripped) < size(&whole),
         "dead-stripping saved nothing: {} against {} bytes",

@@ -166,7 +166,9 @@ fn every_target_is_built_by_both_backends_in_its_own_format() {
                 );
             }
             // An executable only where the host's toolchain links the target.
-            let exe = d.path().join(format!("exe-{triple}-{backend}"));
+            let exe = d
+                .path()
+                .join(crate::common::exe_name(format!("exe-{triple}-{backend}")));
             let b = nazm(
                 d.path(),
                 &[
@@ -210,7 +212,9 @@ fn a_program_for_the_other_macos_architecture_runs_where_rosetta_does() {
     let d = tempfile::tempdir().unwrap();
     std::fs::write(d.path().join("prog.nz"), PROGRAM).unwrap();
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(format!("x86-{backend}"));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(format!("x86-{backend}")));
         let b = nazm(
             d.path(),
             &[

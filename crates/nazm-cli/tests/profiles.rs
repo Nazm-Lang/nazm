@@ -355,7 +355,7 @@ fn a_profile_refuses_and_never_changes_what_runs() {
     )
     .status
     .success());
-    assert!(!d.path().join("x").exists());
+    assert!(!d.path().join(crate::common::exe_name("x")).exists());
 }
 
 #[test]

@@ -69,7 +69,9 @@ fn four(files: &[(&str, &str)], args: &[&str]) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = dir.path().join(label.replace([' ', '-'], ""));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = Command::new(NAZM)
             .current_dir(dir.path())
             .args([
@@ -816,7 +818,9 @@ fn what_the_standard_library_costs() {
         let path = dir.path().join(format!("{name}.nz"));
         std::fs::write(&path, src).unwrap();
         for backend in ["llvm", "cranelift"] {
-            let exe = dir.path().join(format!("{name}-{backend}"));
+            let exe = dir
+                .path()
+                .join(crate::common::exe_name(format!("{name}-{backend}")));
             let b = Command::new(NAZM)
                 .args([
                     "build",

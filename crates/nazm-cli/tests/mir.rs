@@ -98,7 +98,7 @@ fn both(src: &str) -> (Ran, Ran) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).unwrap();
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", path.to_str().unwrap(), "-o"])
         .arg(&exe)
@@ -385,7 +385,7 @@ fn main() -> Int {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("prog.nz");
     std::fs::write(&path, src).unwrap();
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = Command::new(NAZM)
         .args(["build", "--emit-ir", path.to_str().unwrap(), "-o"])
         .arg(&exe)

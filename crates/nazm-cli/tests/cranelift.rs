@@ -94,7 +94,7 @@ fn three(path: &Path) -> (Ran, Ran, Ran) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut out = Vec::new();
     for backend in ["llvm", "cranelift"] {
-        let exe = dir.path().join(backend);
+        let exe = dir.path().join(crate::common::exe_name(backend));
         let b = build(path, backend, &exe, &["--no-cache"]);
         assert!(
             b.status.success(),
@@ -316,7 +316,7 @@ fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_writt
         "aarch64-unknown-linux-gnu"
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     // A host with no linker for the target is the machine's (4); a triple that is no target is
     // the command line's (5) — the v1 exit contract (Q1-C1).
     for (triple, says, status) in [
@@ -349,7 +349,7 @@ fn a_target_the_host_cannot_link_is_refused_without_objects_and_nothing_is_writt
 #[test]
 fn choosing_cranelift_writes_no_llvm_text_for_any_unit() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let b = build(
         &repo().join("examples/pipeline.nz"),
         "cranelift",
@@ -531,6 +531,8 @@ fn an_unchanged_unit_is_reused_by_its_key_and_a_changed_one_is_regenerated() {
         Some(units - 1),
         "{third}"
     );
-    let ran = Command::new(dir.path().join("prog")).output().unwrap();
+    let ran = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .unwrap();
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "42");
 }

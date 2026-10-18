@@ -75,7 +75,9 @@ fn agrees(what: &str, src: &str, expected: &str) {
     );
 
     for opt in ["0", "2"] {
-        let exe = dir.path().join(format!("prog{opt}"));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(format!("prog{opt}")));
         let built = run_bounded(
             Command::new(NAZM)
                 .args(["build", path.to_str().unwrap()])
@@ -470,7 +472,7 @@ fn a_task_that_fails_ends_the_whole_program() {
         }
     ";
     let (dir, path) = write_program(src);
-    let exe = dir.path().join("prog");
+    let exe = dir.path().join(crate::common::exe_name("prog"));
     let built = run_bounded(
         Command::new(NAZM)
             .args(["build", path.to_str().unwrap()])
@@ -610,7 +612,9 @@ fn failure_joins(what: &str, src: &str, code: &str, markers: &[&str]) {
             .unwrap_or_else(|| panic!("{what}: `nazm run` did not finish")),
     ));
     for opt in ["0", "2"] {
-        let exe = dir.path().join(format!("prog{opt}"));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(format!("prog{opt}")));
         let built = run_bounded(
             Command::new(NAZM)
                 .args(["build", path.to_str().unwrap()])

@@ -117,7 +117,7 @@ fn build(dir: &Path, root: &str) -> Did {
 
 /// Run a built program.
 fn run(dir: &Path, exe: &str) -> Produced {
-    let out = Command::new(dir.join(exe))
+    let out = Command::new(dir.join(crate::common::exe_name(exe)))
         .current_dir(dir)
         .output()
         .expect("run");
@@ -723,7 +723,9 @@ fn a_module_an_edit_puts_into_a_call_cycle_is_compiled_again_with_its_stack_chec
         did.compiled >= 2,
         "b.nz's object would be reused without the stack check its function now needs: {did:?}"
     );
-    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    let ran = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "3");
 }
 

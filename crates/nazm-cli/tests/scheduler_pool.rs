@@ -60,7 +60,7 @@ fn run(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> (String, String, Option<i32>) {
-    let mut c = Command::new(dir.join(name));
+    let mut c = Command::new(dir.join(crate::common::exe_name(name)));
     c.current_dir(dir)
         .args(args)
         .env_remove("NAZM_SCHEDULER")
@@ -524,7 +524,7 @@ fn a_pool_task_waiting_on_a_deadline_parks_without_spinning() {
                    scope { spawn waiter(io, tm, c, res); let r = chan_recv_of(res, got); }\n\
                    print(int_to_str(vec_get(got, 0))); 0 }\n";
     built(d.path(), "near", src, "llvm");
-    let child = Command::new(d.path().join("near"))
+    let child = Command::new(d.path().join(crate::common::exe_name("near")))
         .env("NAZM_SCHEDULER", "pool")
         .env("NAZM_WORKERS", "1")
         .stdout(std::process::Stdio::piped())
@@ -562,7 +562,7 @@ fn a_deadline_past_the_nanosecond_range_parks_without_spinning() {
                        chan_send_of(c, 42); let r = chan_recv_of(res, got); }\n\
                    print(int_to_str(vec_get(got, 0))); 0 }\n";
     built(d.path(), "far", src, "llvm");
-    let child = Command::new(d.path().join("far"))
+    let child = Command::new(d.path().join(crate::common::exe_name("far")))
         .env("NAZM_SCHEDULER", "pool")
         .env("NAZM_WORKERS", "1")
         .stdout(std::process::Stdio::piped())
