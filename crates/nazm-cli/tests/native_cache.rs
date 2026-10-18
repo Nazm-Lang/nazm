@@ -195,6 +195,55 @@ fn an_unchanged_rebuild_compiles_nothing() {
 }
 
 #[test]
+fn an_unchanged_rebuild_reuses_its_executable_byte_for_byte() {
+    // A warm build whose objects and link are those this output was last linked from writes
+    // that executable instead of linking again: the same bytes a link writes, as `--no-cache`
+    // (which always links) shows. A record whose executable is not the one linked is linked
+    // again, not believed.
+    let dir = tempfile::tempdir().expect("tempdir");
+    project(dir.path(), A_CALLS_B);
+    let bytes = |name: &str| std::fs::read(dir.path().join(name)).expect("the executable");
+    build(dir.path(), "a.nz");
+    let cold = bytes("prog");
+    let records = || {
+        std::fs::read_dir(dir.path().join(".nazm/link"))
+            .map(|d| d.flatten().count())
+            .unwrap_or(0)
+    };
+    assert_eq!(records(), 2, "the link's executable and its key");
+    build(dir.path(), "a.nz");
+    assert_eq!(
+        bytes("prog"),
+        cold,
+        "the reused executable is the linked one"
+    );
+    let (produced, _) = build_in(dir.path(), "a.nz", "prog", &["--no-cache"]);
+    assert!(produced.ok, "{}", produced.stderr);
+    assert_eq!(bytes("prog"), cold, "a link writes the same bytes");
+    assert!(run(dir.path(), "prog").stdout.starts_with("42"));
+    // The kept executable damaged: linked again, and the program still the program.
+    for entry in std::fs::read_dir(dir.path().join(".nazm/link"))
+        .expect("records")
+        .flatten()
+    {
+        if entry.path().extension().is_some_and(|x| x == "exe") {
+            std::fs::write(entry.path(), b"not an executable").expect("damage");
+        }
+    }
+    build(dir.path(), "a.nz");
+    assert_eq!(bytes("prog"), cold);
+    assert!(run(dir.path(), "prog").stdout.starts_with("42"));
+    // A changed object is a changed link: the program as it now reads.
+    write(
+        dir.path(),
+        "b.nz",
+        "pub fn twice(n: Int) -> Int { n * 3 }\nfn helper() -> Int { 1 }\n",
+    );
+    build(dir.path(), "a.nz");
+    assert!(run(dir.path(), "prog").stdout.starts_with("63"));
+}
+
+#[test]
 fn a_dependency_body_change_leaves_the_caller_s_object_reusable() {
     // N5 measured this and N6 turns it into behaviour: A's unit names B only through a
     // `declare` and a `call`, so B's implementation is not in it and cannot invalidate it.
