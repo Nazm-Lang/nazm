@@ -469,3 +469,8 @@ why = "one run of `bench/compare/compare.py --runs 10` on this Mac, begun at loa
 heading = "Build speed: `nazm check` and `nazm build`, cold and warm, beside every compiled language, measured (2026-10-17)"
 status = "dated"
 why = "hyperfine over a release nazm of e9d9fa40 on three programs, each measurement begun below load 2, and the build columns of that day's compare.py run; a record of that date and machine"
+
+[[claim]]
+heading = "Preemption by interrupt: the cost on hot loops, re-measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "`bench/compare/preempt_cost.sh` over release builds of a4ac8e9f and 0a52becf on this Mac, begun at load 1.4–1.96 with no cargo, rustc or nextest running; a record of that date and machine — the script reproduces the method, not these numbers"
