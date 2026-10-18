@@ -53,8 +53,9 @@ pub(crate) fn write(output: &Path, objects: &[PathBuf]) -> Result<(), String> {
 pub(crate) fn archive(members: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>, String> {
     let mut read = Vec::with_capacity(members.len());
     let mut mach_o = false;
-    for (name, data) in members {
+    for (name, mut data) in members {
         mach_o |= Format::of(&data) == Some(Format::MachO);
+        zero_coff_time(&mut data);
         let symbols = defined_globals(&data)
             .map_err(|e| format!("cannot read the symbols of `{name}`: {e}"))?;
         read.push(Member {
@@ -67,6 +68,20 @@ pub(crate) fn archive(members: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>, String
         bsd(&read)
     } else {
         gnu(&read)
+    }
+}
+
+/// A COFF object's `TimeDateStamp` zeroed: LLVM 23's clang writes the build's time there for a
+/// Windows target, so the same source archived twice differed (CI, macOS, LLVM 23). The stamp is
+/// at byte 4 of a COFF header and at byte 8 of a big-object's; nothing reads it from a member.
+fn zero_coff_time(data: &mut [u8]) {
+    let at = match Format::of(data) {
+        Some(Format::Coff) => 4,
+        Some(Format::BigObj) => 8,
+        _ => return,
+    };
+    if let Some(stamp) = data.get_mut(at..at + 4) {
+        stamp.fill(0);
     }
 }
 
@@ -673,6 +688,23 @@ mod tests {
         let (one, two) = (one.unwrap_or_default(), two.unwrap_or_default());
         // The objects differ, the index does not.
         assert_eq!(index(&one), index(&two));
+    }
+
+    #[test]
+    fn a_coff_member_s_time_stamp_is_not_part_of_the_archive() {
+        // x86-64 COFF: machine, sections, TimeDateStamp at byte 4; a big-object's is at byte 8.
+        let mut plain = vec![0x64, 0x86, 0, 0, 0x7f, 0x12, 0x34, 0x56, 9, 9];
+        let mut big = vec![
+            0, 0, 0xff, 0xff, 2, 0, 0x64, 0x86, 0x7f, 0x12, 0x34, 0x56, 9,
+        ];
+        zero_coff_time(&mut plain);
+        zero_coff_time(&mut big);
+        assert_eq!(plain, [0x64, 0x86, 0, 0, 0, 0, 0, 0, 9, 9]);
+        assert_eq!(big, [0, 0, 0xff, 0xff, 2, 0, 0x64, 0x86, 0, 0, 0, 0, 9]);
+        // Any other format is left as it is.
+        let mut elf = b"\x7fELF\x01\x02\x03\x04\x05".to_vec();
+        zero_coff_time(&mut elf);
+        assert_eq!(elf, b"\x7fELF\x01\x02\x03\x04\x05");
     }
 
     #[test]
