@@ -4472,7 +4472,7 @@ runtime's units and the program's compile side by side) and 1.3–2.4× on the l
 51,000 lines. The comparison with the other compiled languages' build times is in the run below (*Eighteen
 languages, re-run*).
 
-## Eighteen languages on every parameter, re-run (quiet window, 2026-10-19)
+## Eighteen languages on every parameter, re-run and measured (quiet window, 2026-10-19)
 
 `python3 bench/compare/compare.py NAZM OUT --runs 10`, Nazm release from `0a52becf`, against the same
 eighteen languages and toolchains as *Eighteen languages on every parameter the comparison measures* (Apple clang
