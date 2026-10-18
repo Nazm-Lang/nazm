@@ -1,0 +1,290 @@
+// What the commands share (R5, `openspec/changes/r5-commands/`): Rust's `str` and `Path` behaviour
+// that the standard library of the reference gives and Nazm's does not — Unicode whitespace
+// (`char::is_whitespace`), `String::from_utf8_lossy`, `Path::file_stem` / `with_extension` / `join`,
+// `fs::read_to_string` and `fs::write`.
+
+pub fn ut_nl() -> Str { str_from_byte(10) }
+
+// The width of the whitespace character starting at `i` in `s`, or 0.
+fn space_at(s: Str, i: Int) -> Int {
+    let n = str_len(s)
+    let b = str_byte(s, i)
+    if b == 32 || (b >= 9 && b <= 13) { return 1 }
+    if b == 194 && i + 1 < n {
+        let c = str_byte(s, i + 1)
+        if c == 133 || c == 160 { return 2 }
+        return 0
+    }
+    if i + 2 >= n { return 0 }
+    let m = str_byte(s, i + 1)
+    let c = str_byte(s, i + 2)
+    if b == 225 && m == 154 && c == 128 { return 3 }
+    if b == 226 && m == 128 && ((c >= 128 && c <= 138) || c == 168 || c == 169 || c == 175) { return 3 }
+    if b == 226 && m == 129 && c == 159 { return 3 }
+    if b == 227 && m == 128 && c == 128 { return 3 }
+    0
+}
+
+// The width of the whitespace character ending at `end` in `s`, or 0.
+fn space_before_end(s: Str, end: Int) -> Int {
+    if end < 1 { return 0 }
+    let b = str_byte(s, end - 1)
+    if b == 32 || (b >= 9 && b <= 13) { return 1 }
+    if end >= 2 && str_byte(s, end - 2) == 194 && (b == 133 || b == 160) { return 2 }
+    if end < 3 { return 0 }
+    let a = str_byte(s, end - 3)
+    let m = str_byte(s, end - 2)
+    if a == 225 && m == 154 && b == 128 { return 3 }
+    if a == 226 && m == 128 && ((b >= 128 && b <= 138) || b == 168 || b == 169 || b == 175) { return 3 }
+    if a == 226 && m == 129 && b == 159 { return 3 }
+    if a == 227 && m == 128 && b == 128 { return 3 }
+    0
+}
+
+// `str::trim`.
+pub fn ut_trim(s: Str) -> Str {
+    let mut end = str_len(s)
+    let mut w = space_before_end(s, end)
+    while w > 0 {
+        end -= w
+        w = space_before_end(s, end)
+    }
+    let mut from = 0
+    w = if from < end { space_at(s, from) } else { 0 }
+    while w > 0 {
+        from += w
+        w = if from < end { space_at(s, from) } else { 0 }
+    }
+    str_slice(s, from, end)
+}
+
+// `str::trim_start`.
+pub fn ut_trim_start(s: Str) -> Str {
+    let mut from = 0
+    let mut w = if from < str_len(s) { space_at(s, from) } else { 0 }
+    while w > 0 {
+        from += w
+        w = if from < str_len(s) { space_at(s, from) } else { 0 }
+    }
+    str_slice(s, from, str_len(s))
+}
+
+// `str::trim_end`.
+pub fn ut_trim_end(s: Str) -> Str {
+    let mut end = str_len(s)
+    let mut w = space_before_end(s, end)
+    while w > 0 {
+        end -= w
+        w = space_before_end(s, end)
+    }
+    str_slice(s, 0, end)
+}
+
+// Whether `s` is empty or only whitespace (`char::is_whitespace`).
+pub fn ut_blank(s: Str) -> Bool { str_len(ut_trim_start(s)) == 0 }
+
+// How many bytes of `s` from `i` are one well-formed character (1 to 4), or 0 where none is; and
+// in `bad` (a one-element list) how many bytes a lossy decoder replaces with one U+FFFD.
+fn char_at(s: Str, i: Int, bad: Ints) -> Int {
+    let n = str_len(s)
+    let b = str_byte(s, i)
+    ints_set(bad, 0, 1)
+    if b < 128 { return 1 }
+    let mut need = 0
+    let mut lo = 128
+    let mut hi = 191
+    if b >= 194 && b <= 223 {
+        need = 1
+    } else if b == 224 {
+        need = 2
+        lo = 160
+    } else if b >= 225 && b <= 236 {
+        need = 2
+    } else if b == 237 {
+        need = 2
+        hi = 159
+    } else if b >= 238 && b <= 239 {
+        need = 2
+    } else if b == 240 {
+        need = 3
+        lo = 144
+    } else if b >= 241 && b <= 243 {
+        need = 3
+    } else if b == 244 {
+        need = 3
+        hi = 143
+    } else {
+        return 0
+    }
+    for k in 1..need + 1 {
+        if i + k >= n { return 0 }
+        let c = str_byte(s, i + k)
+        let l = if k == 1 { lo } else { 128 }
+        let h = if k == 1 { hi } else { 191 }
+        if c < l || c > h { return 0 }
+        ints_set(bad, 0, k + 1)
+    }
+    need + 1
+}
+
+pub fn ut_utf8_ok(s: Str) -> Bool {
+    let bad = ints_new()
+    ints_push(bad, 1)
+    let mut i = 0
+    while i < str_len(s) {
+        let w = char_at(s, i, bad)
+        if w == 0 { return false }
+        i += w
+    }
+    true
+}
+
+// `String::from_utf8_lossy`: each maximal ill-formed run of a character's bytes is one U+FFFD.
+pub fn ut_lossy(s: Str) -> Str {
+    if ut_utf8_ok(s) { return s }
+    let out = strs_new()
+    let bad = ints_new()
+    ints_push(bad, 1)
+    let mut i = 0
+    let mut from = 0
+    while i < str_len(s) {
+        let w = char_at(s, i, bad)
+        if w == 0 {
+            strs_push(out, str_slice(s, from, i))
+            strs_push(out, str_from_byte(239) + str_from_byte(191) + str_from_byte(189))
+            i += ints_get(bad, 0)
+            from = i
+        } else {
+            i += w
+        }
+    }
+    strs_push(out, str_slice(s, from, str_len(s)))
+    str_join(out, "")
+}
+
+// `fs::read_to_string`: the text, or "" with `ok[0]` set to 0 where it cannot be read whole as UTF-8
+// (a missing file, a directory, bad bytes).
+pub fn ut_read_text(io: IoCap, path: Str, ok: Ints) -> Str {
+    let st = bytes_new(32)
+    if os_stat(path, st) != 0 || bytes_read_le[Int](st, 8) != 0 {
+        ints_set(ok, 0, 0)
+        return ""
+    }
+    let h = os_open_read(path)
+    if os_status(h) != 0 {
+        ints_set(ok, 0, 0)
+        return ""
+    }
+    os_close(h)
+    let text = read_file(path)
+    if !ut_utf8_ok(text) { ints_set(ok, 0, 0) }
+    text
+}
+
+// `fs::write`: created or truncated, every byte written.
+pub fn ut_write_all(io: IoCap, path: Str, text: Str) -> Bool {
+    let h = os_open_write(path, 0)
+    if os_status(h) < 0 { return false }
+    let data = bytes_from_str(text)
+    let n = bytes_len(data)
+    let mut done = 0
+    while done < n {
+        let w = os_write(h, bytes_slice(data, done, n))
+        if w < 0 {
+            os_close(h)
+            return false
+        }
+        done += w
+    }
+    os_close(h)
+    true
+}
+
+// An `io::Error` from a status, as it displays: the system's message and its number.
+pub fn ut_os_error(status: Int) -> Str { os_error_text(status) + " (os error " + int_to_str(0 - status) + ")" }
+
+// 0 for a regular file, 1 a directory, 2 anything else, -1 where `path` names nothing (`stat`).
+pub fn ut_kind(io: IoCap, path: Str) -> Int {
+    let st = bytes_new(32)
+    if os_stat(path, st) != 0 { return 0 - 1 }
+    let k = bytes_read_le[Int](st, 8)
+    if k == 0 { 0 } else if k == 1 { 1 } else { 2 }
+}
+
+// `Path::join` with a relative component.
+pub fn ut_join(base: Str, name: Str) -> Str {
+    if str_len(base) == 0 { return name }
+    if str_byte(base, str_len(base) - 1) == 47 { return base + name }
+    base + "/" + name
+}
+
+// The last component of `path` and the part before it (with its slash), as `Path::file_name` sees
+// them: trailing slashes do not count. "" for no file name (`..`, `/`, empty).
+pub fn ut_file_name(path: Str) -> Str {
+    let mut end = str_len(path)
+    while end > 0 && str_byte(path, end - 1) == 47 { end -= 1 }
+    let mut from = end
+    while from > 0 && str_byte(path, from - 1) != 47 { from -= 1 }
+    let name = str_slice(path, from, end)
+    if name == ".." || name == "." { "" } else { name }
+}
+
+// The index of the last `.` of a file name that makes an extension, or -1 (`Path::extension`: not
+// a name that begins with it).
+fn dot_at(name: Str) -> Int {
+    let mut i = str_len(name)
+    while i > 1 {
+        i -= 1
+        if str_byte(name, i) == 46 { return i }
+    }
+    0 - 1
+}
+
+// `Path::file_stem`.
+pub fn ut_stem(path: Str) -> Str {
+    let name = ut_file_name(path)
+    let d = dot_at(name)
+    if d < 0 { name } else { str_slice(name, 0, d) }
+}
+
+// `Path::extension`, or "" (a name ending in a dot has the empty one, also "").
+pub fn ut_extension(path: Str) -> Str {
+    let name = ut_file_name(path)
+    let d = dot_at(name)
+    if d < 0 { "" } else { str_slice(name, d + 1, str_len(name)) }
+}
+
+// `Path::with_extension`.
+pub fn ut_with_extension(path: Str, ext: Str) -> Str {
+    let name = ut_file_name(path)
+    if name == "" { return path }
+    let mut end = str_len(path)
+    while end > 0 && str_byte(path, end - 1) == 47 { end -= 1 }
+    let d = dot_at(name)
+    let cut = if d < 0 { end } else { end - (str_len(name) - d) }
+    str_slice(path, 0, cut) + "." + ext
+}
+
+// Bytes in order (`Ord` of `str`).
+pub fn ut_less(a: Str, b: Str) -> Bool {
+    let mut i = 0
+    while i < str_len(a) && i < str_len(b) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) < str_byte(b, i) }
+        i += 1
+    }
+    str_len(a) < str_len(b)
+}
+
+pub fn ut_contains(s: Str, part: Str) -> Bool {
+    let n = str_len(part)
+    let mut i = 0
+    while i + n <= str_len(s) {
+        if str_slice(s, i, i + n) == part { return true }
+        i += 1
+    }
+    false
+}
+
+pub fn ut_plural(n: Int) -> Str { if n == 1 { "" } else { "s" } }
+
+pub fn ut_bool(b: Bool) -> Str { if b { "true" } else { "false" } }

@@ -17,7 +17,7 @@
 // and a positional's one-or-more, hyphen values, and terminal-width wrapping (the reference is built
 // without `wrap_help`).
 
-fn cli_nl() -> Str { str_from_byte(10) }
+pub fn cli_nl() -> Str { str_from_byte(10) }
 
 fn cli_k_pos() -> Int { 0 }
 fn cli_k_flag() -> Int { 1 }
@@ -59,6 +59,10 @@ pub struct Cli {
     // Per argument, the delimiter its values are split at ("" for none); and the conflicts
     // declared, each a pair (`conflicts_with`: the first conflicts with the second).
     delim: Strs,
+    // Per argument, whether its value is a `u32` (clap's `value_parser` of the type).
+    numeric: Ints,
+    // The arguments of the one required group (`ArgGroup::new(..).required(true)`: exactly one of them).
+    grp: Ints,
     conf_a: Ints,
     conf_b: Ints,
     // Where the command's own arguments begin: after `nazm CMD`, the argument after the command.
@@ -69,7 +73,7 @@ pub fn cli_command(name: Str, about: Str, long_about: Str) -> Cli {
     Cli(name: name, about: about, long_about: long_about, kind: ints_new(), short: strs_new(), long: strs_new(),
             value: strs_new(), required: ints_new(), multiple: ints_new(), path: ints_new(), default: strs_new(),
             has_default: ints_new(), help: strs_new(), long_help: strs_new(), order: ints_new(), explicit: ints_new(),
-            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(),
+            val_arg: ints_new(), val_text: strs_new(), pend: ints_new(), pend_vals: strs_new(), delim: strs_new(), numeric: ints_new(), grp: ints_new(),
             conf_a: ints_new(), conf_b: ints_new(), first: ints_new())
 }
 
@@ -87,6 +91,7 @@ fn cli_add(c: Cli, kind: Int, short: Str, long: Str, value: Str, required: Bool,
     strs_push(c.help, help)
     strs_push(c.long_help, long_help)
     strs_push(c.delim, "")
+    ints_push(c.numeric, 0)
     ints_push(c.explicit, 0)
     ints_len(c.kind) - 1
 }
@@ -107,12 +112,55 @@ pub fn cli_option(c: Cli, short: Str, long: Str, value: Str, path: Bool, default
     cli_add(c, cli_k_opt(), short, long, value, false, false, path, default, has_default, help, long_help)
 }
 
+// A required option taking one value.
+pub fn cli_required_option(c: Cli, long: Str, value: Str, path: Bool, help: Str) -> Int {
+    cli_add(c, cli_k_opt(), "", long, value, true, false, path, "", false, help, "")
+}
+
 // An option that may be given again, each value split at `delim` (`Vec<String>` with
 // `value_delimiter`: clap's `ArgAction::Append`).
 pub fn cli_list(c: Cli, short: Str, long: Str, value: Str, delim: Str, help: Str, long_help: Str) -> Int {
     let a = cli_add(c, cli_k_opt(), short, long, value, false, true, false, "", false, help, long_help)
     strs_set(c.delim, a, delim)
     a
+}
+
+// Argument `a`'s values are `u32`s: another is refused as `invalid value`.
+pub fn cli_numeric(c: Cli, a: Int) -> Int {
+    ints_set(c.numeric, a, 1)
+    0
+}
+
+// Argument `a`'s values are `usize`s.
+pub fn cli_numeric_size(c: Cli, a: Int) -> Int {
+    ints_set(c.numeric, a, 2)
+    0
+}
+
+// The arguments `a` and `b` are a required group: one of them, never both (clap's `ArgGroup`).
+pub fn cli_require_one(c: Cli, a: Int, b: Int) -> Int {
+    ints_push(c.grp, a)
+    ints_push(c.grp, b)
+    ints_push(c.conf_a, a)
+    ints_push(c.conf_b, b)
+    0
+}
+
+fn cli_in_group(c: Cli, a: Int) -> Bool {
+    for i in 0..ints_len(c.grp) {
+        if ints_get(c.grp, i) == a { return true }
+    }
+    false
+}
+
+// The group as usage and the missing-arguments error write it: `<--index|--section <SECTION>>`.
+fn cli_group_text(c: Cli) -> Str {
+    let parts = strs_new()
+    for i in 0..ints_len(c.grp) {
+        let a = ints_get(c.grp, i)
+        if i == 0 || ints_get(c.grp, i - 1) != a { strs_push(parts, cli_stylized(c, a, true)) }
+    }
+    "<" + str_join(parts, "|") + ">"
 }
 
 // `a` conflicts with `b` (`conflicts_with`), and so `b` with `a`.
@@ -140,11 +188,11 @@ pub fn cli_value(c: Cli, a: Int) -> Str {
 
 // --- text helpers -------------------------------------------------------------------------------
 
-fn cli_starts(s: Str, p: Str) -> Bool {
+pub fn cli_starts(s: Str, p: Str) -> Bool {
     str_len(s) >= str_len(p) && str_slice(s, 0, str_len(p)) == p
 }
 
-fn cli_spaces(n: Int) -> Str {
+pub fn cli_spaces(n: Int) -> Str {
     let parts = strs_new()
     for _ in 0..n { strs_push(parts, " ") }
     str_join(parts, "")
@@ -301,7 +349,9 @@ fn cli_write_args(c: Cli, used: Ints) -> Str {
     for a in 0..ints_len(c.kind) {
         if cli_is_required(c, a) { ints_push(incl, a) }
     }
-    for i in 0..ints_len(used) { ints_push(incl, ints_get(used, i)) }
+    for i in 0..ints_len(used) {
+        if !cli_in_group(c, ints_get(used, i)) { ints_push(incl, ints_get(used, i)) }
+    }
     let opts = strs_new()
     let pos_set = ints_new()
     for a in 0..ints_len(c.kind) { ints_push(pos_set, 0) }
@@ -319,13 +369,14 @@ fn cli_write_args(c: Cli, used: Ints) -> Str {
     for a in 0..ints_len(c.kind) {
         if cli_is_pos(c, a) { strs_push(parts, cli_stylized(c, a, ints_get(pos_set, a) == 1) + " ") }
     }
+    if ints_len(c.grp) > 0 { strs_push(parts, cli_group_text(c) + " ") }
     str_join(parts, "")
 }
 
 fn cli_needs_options_tag(c: Cli) -> Bool {
     for a in 0..ints_len(c.kind) {
         let k = ints_get(c.kind, a)
-        if (k == cli_k_flag() || k == cli_k_opt()) && !cli_is_required(c, a) { return true }
+        if (k == cli_k_flag() || k == cli_k_opt()) && !cli_is_required(c, a) && !cli_in_group(c, a) { return true }
     }
     false
 }
@@ -349,6 +400,46 @@ pub fn cli_fail(io: IoCap, text: Str) -> Int {
 
 fn cli_fail_usage(io: IoCap, c: Cli, text: Str, used: Ints) -> Int {
     cli_fail(io, text + cli_nl() + cli_nl() + cli_usage(c, used))
+}
+
+// The digits of a number written as `v`, without a `+` or leading zeros.
+fn cli_digits(v: Str) -> Str {
+    let mut i = if str_byte(v, 0) == 43 { 1 } else { 0 }
+    while i < str_len(v) - 1 && str_byte(v, i) == 48 { i += 1 }
+    str_slice(v, i, str_len(v))
+}
+
+// Whether the digits `a` are more than the number `b` (both without leading zeros).
+fn cli_more(a: Str, b: Str) -> Bool {
+    if str_len(a) != str_len(b) { return str_len(a) > str_len(b) }
+    for i in 0..str_len(a) {
+        if str_byte(a, i) != str_byte(b, i) { return str_byte(a, i) > str_byte(b, i) }
+    }
+    false
+}
+
+// Why clap's parser for a `u32` (1: read as an `i64`, then held to the range) or a `usize` (2: read
+// as a `u64`) refuses `v`, or "" where it takes it.
+fn cli_int_error(v: Str, kind: Int) -> Str {
+    let n = str_len(v)
+    if n == 0 { return "cannot parse integer from empty string" }
+    let mut i = 0
+    if str_byte(v, 0) == 43 {
+        if n == 1 { return "invalid digit found in string" }
+        i = 1
+    }
+    for j in i..n {
+        let b = str_byte(v, j)
+        if b < 48 || b > 57 { return "invalid digit found in string" }
+    }
+    let d = cli_digits(v)
+    if kind == 2 {
+        if cli_more(d, "18446744073709551615") { return "number too large to fit in target type" }
+        return ""
+    }
+    if cli_more(d, "9223372036854775807") { return "number too large to fit in target type" }
+    if cli_more(d, "4294967295") { return d + " is not in 0..=4294967295" }
+    ""
 }
 
 fn cli_empty_value(io: IoCap, c: Cli, a: Int) -> Int {
@@ -646,6 +737,13 @@ fn cli_react(io: IoCap, c: Cli, a: Int, by: Int, vals: Strs, quiet: Bool) -> Int
             strs_push(c.val_text, str_slice(v, from, str_len(v)))
             continue
         }
+        if ints_get(c.numeric, a) > 0 {
+            let why = cli_int_error(v, ints_get(c.numeric, a))
+            if why != "" {
+                if quiet { return 1 }
+                cli_fail(io, "invalid value '" + v + "' for '" + cli_display(c, a) + "': " + why)
+            }
+        }
         if v == "" && ints_get(c.path, a) == 1 {
             if quiet { return 1 }
             cli_empty_value(io, c, a)
@@ -851,7 +949,11 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
     for a in 0..ints_len(c.kind) {
         if cli_is_required(c, a) && ints_get(c.explicit, a) == 0 { ints_push(missing, a) }
     }
-    if ints_len(missing) > 0 {
+    let mut group_missing = ints_len(c.grp) > 0
+    for i in 0..ints_len(c.grp) {
+        if ints_get(c.explicit, ints_get(c.grp, i)) == 1 { group_missing = false }
+    }
+    if ints_len(missing) > 0 || group_missing {
         let lines = strs_new()
         for i in 0..ints_len(missing) {
             let a = ints_get(missing, i)
@@ -861,6 +963,7 @@ pub fn cli_parse(io: IoCap, c: Cli) -> Int {
             let a = ints_get(missing, i)
             if cli_is_pos(c, a) { strs_push(lines, cli_stylized(c, a, true)) }
         }
+        if group_missing { strs_push(lines, cli_group_text(c)) }
         let used = cli_used(c, false)
         for i in 0..ints_len(missing) { ints_push(used, ints_get(missing, i)) }
         let mut text = "the following required arguments were not provided:"
