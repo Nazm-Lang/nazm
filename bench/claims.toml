@@ -479,3 +479,8 @@ why = "`bench/compare/preempt_cost.sh` over release builds of a4ac8e9f and 0a52b
 heading = "Concurrency against every installed language with a concurrency model, measured (quiet window, 2026-10-19)"
 status = "dated"
 why = "`bench/compare/concurrency_all.sh` over a release nazm of 0a52becf, each measurement begun below load 2 (the exceptions re-run alone) with no cargo, rustc or nextest running; a record of that date, machine and toolchain versions — the script reproduces the method, not these numbers"
+
+[[claim]]
+heading = "R1.5 3.1 (the small-block heap) and 3.4 (ThinLTO) re-measured, on a quiet host (2026-10-19)"
+status = "dated"
+why = "hyperfine over four release nazm builds (b0c57c59, 65ddcd60, a6f0fff2, 0a52becf) on bench/compare/nazm programs, each invocation begun below load 2 with no cargo, rustc or nextest running; a record of that date and machine — the allocation loops are reconstructions of 3.1's prose"
