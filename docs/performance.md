@@ -4311,3 +4311,62 @@ Not claimed: any lead in concurrency over Go. What the table supports: second of
 latency, third of nine on memory per task, first on HTTP server memory, ahead of every OS-thread
 language on spawn, hand-off and memory; behind on fan-in, and behind Go, Node, C# and Java on spawn.
 Python's `primes` rows serialise on the interpreter lock (W = 10 costs what W = 1 does).
+
+## R1.5 3.1 (the small-block heap) and 3.4 (ThinLTO) re-measured, on a quiet host (2026-10-19)
+
+The two sections above were measured at load 4–8 from other agents. Four release `nazm` builds on
+the same six programs, each program built `--no-cache --opt-level 2` by each: **v0** `b0c57c59`
+(before 3.1: C's `malloc`; the commit before `0b7f8749`), **v1** `65ddcd60` (3.1's heap, per-unit
+optimisation; `764997dd~2`), **v2** `a6f0fff2` (3.4's ThinLTO) and **v3** `0a52becf`, today's tree. The
+builds of v0–v2 are the release binaries left from the earlier quiet-window runs
+(`~/.cache/nazm-target-quiet-<commit>`); v3 was built for this one. `hyperfine -N --warmup 3 --runs 15`,
+the four builds in one invocation, each invocation begun below load 2 (1.76–1.99) with no cargo, rustc or
+nextest running; Apple M1 Pro, macOS 27.2, Apple clang 21.0.0. Every build printed the same answers
+(`fib` 9227465, `primes` 216816, `words` byte for byte `words.expected`). The allocation loops
+are new files (`bench/compare/nazm/alloc.nz`, `alloc4.nz`), written from 3.1's prose — the section
+gave no source — so they reproduce its shape, not its exact program; `words` is the source of its
+day (`read_file(..).lines()`, from `b0c57c59`) in the second table, since the current one
+(`file_lines`, 3.5) does not compile on the old builds.
+
+| program | v0 (before 3.1) | v1 (3.1) | v2 (3.4) | v3 (today) | 3.1 | 3.4 | v0 → v3 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| string and one-element list, 5,000,000 times | 322.7 ± 20.7 ms | 149.7 ± 0.2 ms | 104.8 ± 2.6 ms | 104.7 ± 0.1 ms | 2.2× faster | −30% | 3.1× faster |
+| the same, Cranelift (`--backend cranelift`) | 464.3 ± 4.1 ms | 305.3 ± 3.6 ms | 304.1 ± 3.2 ms | 304.6 ± 2.2 ms | −34% | 0 | −34% |
+| four tasks, 1,000,000 strings each | 256.0 ± 6.8 ms | 202.9 ± 5.4 ms | 228.9 ± 17.1 ms | 228.6 ± 4.7 ms | −21% | +13%, noisy | −11% |
+| `words`, current source (3.5's `file_lines`) | — | — | — | 103.7 ± 0.2 ms | | | |
+| `words`, 3.3's source | 114.1 ± 0.5 ms | 113.6 ± 0.3 ms | 104.0 ± 0.7 ms | 103.4 ± 0.2 ms | −0.4% | −8.4% | −9.4% |
+| `fib(35)` | 44.2 ± 0.1 ms | 44.3 ± 0.2 ms | 44.3 ± 0.2 ms | 44.2 ± 0.2 ms | 0 | 0 | 0 |
+| `primes`, one worker | 172.0 ± 0.2 ms | 172.0 ± 0.2 ms | 173.2 ± 0.3 ms | 173.3 ± 0.3 ms | 0 | +0.7% | +0.8% |
+| `hello` start-up | 1.9 ± 0.0 ms | 1.9 ± 0.0 ms | 1.9 ± 0.0 ms | 1.9 ± 0.0 ms | 0 | 0 | 0 |
+
+Binary sizes (bytes), v0 / v1 / v2 / v3: `hello` 51,208 / 51,304 / 34,648 / 34,632; `fib` 51,880 /
+51,976 / 35,208 / 35,096; `words` (3.3's source) 76,728 / 76,872 / 86,728 / 86,872 and v3's current
+`words` 87,880; the allocation loop 51,528 / 51,672 / 34,824 / 34,808. Peak memory: both allocation loops
+1.7–2.1 MiB on every build; 3.3's `words` 19.9 MiB on every build, the current `words` 8.6 MiB (`file_lines`
+reads a chunk at a time, 3.5).
+
+**What this confirms.** 3.1's heap: **2.2× on the string-and-list loop** (3.1 recorded 2.5×) and
+−34% on Cranelift's (−22% recorded); four tasks −21% (−16% recorded, noisy there too). 3.4: **`words`
+−8.4%** (−9.2% recorded), `fib` and `primes` unchanged, binaries 16,500 bytes smaller for the tiny
+programs, 10,000 bytes larger for `words`. **What it does not:** 3.4's recorded 81.0 ms on the allocation
+loop (−29%) is 104.8 ms here (−30% of this loop's 149.7 — the ratio holds, the absolute does not,
+because the loop is a reconstruction); four tasks got 13% slower with 3.4 (202.9 → 228.9 ms, σ 17 on v2, 5 on v1
+and v3; v3 agrees with v2, 228.6 against 228.9, so the slowdown has held since 3.4: the
+cause is not profiled here). The heap's cost on
+`words` is none: it allocates nothing in its loop.
+
+Builds with `NAZM_CACHE_DIR` private to each, `hyperfine -N --runs 10`, `-O2`, begun at load
+1.60–1.96 (`bench/compare/nazm/fib.nz`; `words` in 3.3's source so every build compiles it):
+
+| build | v0 | v1 | v2 | v3 | v2 → v3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `fib`, cold (`--no-cache`) | 209.1 ± 0.9 ms | 241.7 ± 0.8 ms | 223.5 ± 1.0 ms | 113.7 ± 0.7 ms | 2.0× faster |
+| `fib`, warm | 81.5 ± 0.5 ms | 82.1 ± 1.0 ms | 83.0 ± 0.9 ms | 30.7 ± 0.2 ms | 2.7× faster |
+| `words`, cold | 884.2 ± 1.3 ms | 918.8 ± 1.5 ms | 796.7 ± 2.5 ms | 241.5 ± 3.0 ms | 3.3× faster |
+| `words`, warm | 103.5 ± 0.6 ms | 106.0 ± 0.7 ms | 110.8 ± 1.1 ms | 47.1 ± 0.4 ms | 2.4× faster |
+
+3.4's own build numbers reproduce on v1 → v2: `words` cold 918.8 → 796.7 ms (−13%; recorded 960.7 → 840.2),
+warm 106.0 → 110.8 ms (+4.5%; recorded +5.7%). The step from v2 to v3 is the compiler-speed track
+(units generated and compiled side by side, no relink of an unchanged program, two quadratic loops
+removed): a warm `words` build is 47 ms, inside 7.2's 100 ms budget, where the *Build speed*
+section measured 125 ms.

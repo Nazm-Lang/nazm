@@ -1,0 +1,13 @@
+// R1.5 3.1's allocation loop: build a string and a one-element list 5,000,000 times on one thread; the
+// small-block heap's best case (every block is small and freed at once).
+fn main() {
+    let mut total = 0
+    let mut i = 0
+    while i < 5000000 {
+        let s = f"item {i}"
+        let v = [s]
+        total += v.len() + s.len()
+        i += 1
+    }
+    println(total)
+}
