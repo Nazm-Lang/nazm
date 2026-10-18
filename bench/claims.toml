@@ -484,3 +484,13 @@ why = "`bench/compare/concurrency_all.sh` over a release nazm of 0a52becf, each 
 heading = "R1.5 3.1 (the small-block heap) and 3.4 (ThinLTO) re-measured, on a quiet host (2026-10-19)"
 status = "dated"
 why = "hyperfine over four release nazm builds (b0c57c59, 65ddcd60, a6f0fff2, 0a52becf) on bench/compare/nazm programs, each invocation begun below load 2 with no cargo, rustc or nextest running; a record of that date and machine — the allocation loops are reconstructions of 3.1's prose"
+
+[[claim]]
+heading = "The compilers' growth, phase by phase, re-measured (quiet window, 2026-10-19)"
+status = "dated"
+why = "one run of `bench/complexity/measure.py` (programs from `bench/complexity/gen.py`) on this Mac, every measurement begun below load 2 (three at 2.01-2.16) with no cargo, rustc or nextest running; a record of that date, machine and tree (0a52becf) — the script reproduces the method and the growth classes, not these numbers"
+
+[[claim]]
+heading = "Build speed re-measured: `nazm check` and `nazm build`, cold and warm (quiet window, 2026-10-19)"
+status = "dated"
+why = "hyperfine over a release nazm of 0a52becf on three programs, each measurement begun below load 2 with no cargo, rustc or nextest running; a record of that date and machine"
