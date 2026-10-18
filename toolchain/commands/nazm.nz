@@ -7,7 +7,7 @@
 // command that does not exist (with the similar one `strsim::jaro` finds above 0.7), and the help
 // on standard error with status 5 when no command is named. Help and the version are standard output
 // and status 0; a usage error is standard error and status 5 (`main.rs`, `parse_cli`). Then the
-// command: `fmt`, `init`, `check`, `doc`, `fix` and `lsp` are carried (`fmt.nz`, `init.nz`,
+// command: `fmt`, `init`, `check`, `doc`, `fix`, `lsp` and `test` are carried (`fmt.nz`, `init.nz`,
 // `check.nz`, `doc.nz`, `fix.nz`, `lsp.nz`), every other says it is not carried and exits 6.
 
 use "cli.nz"
@@ -17,6 +17,7 @@ use "check.nz"
 use "doc.nz"
 use "fix.nz"
 use "lsp.nz"
+use "test.nz"
 
 fn nl() -> Str { str_from_byte(10) }
 
@@ -225,6 +226,7 @@ fn command_cli(name: Str) -> Cli {
     if name == "doc" { return doc_cli() }
     if name == "fix" { return fix_cli() }
     if name == "lsp" { return lsp_cli() }
+    if name == "test" { return test_cli() }
     cli_command("", "", "")
 }
 
@@ -251,7 +253,7 @@ fn help_command(io: IoCap, k: Int) -> Int {
     show(io, cli_help(c, true))
 }
 
-fn main(io: IoCap) -> Int {
+fn main(io: IoCap, proc: ProcessCap, sp: SpawnCap) -> Int {
     let n = args_count()
     if n == 0 { missing(io) }
     let s = arg(0)
@@ -307,6 +309,7 @@ fn main(io: IoCap) -> Int {
     if s == "doc" { return doc_command(io, c) }
     if s == "fix" { return fix_command(io, c) }
     if s == "lsp" { return lsp_command(io, c) }
+    if s == "test" { return test_command(io, proc, sp, c) }
     check_command(io, c)
 }
 

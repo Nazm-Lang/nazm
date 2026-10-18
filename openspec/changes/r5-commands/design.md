@@ -182,7 +182,7 @@ options: none is the long help, a command its `--help`, `help help` its own text
 a command that has no commands of its own is `unrecognized subcommand` under that command's usage
 (under `help`'s own, without the closing line). The commands and their `about`s are a table in
 `nazm.nz`, in `cli.rs`'s order with `help` last; a doc comment changed in `cli.rs` shows as a
-difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix` and `lsp` are carried; any other
+difference in `tests/args/nazm.txt`'s lines. `fmt`, `init`, `check`, `doc`, `fix`, `lsp` and `test` are carried; any other
 command, or `help` of one, is `nazm: not carried: nazm CMD`, status 6.
 
 **D13 — `doc` is `apidoc.rs` over R2's facts; `check` runs on the same interface.**
@@ -326,6 +326,34 @@ signature help, rename, symbols, semantic tokens, code actions and call hierarch
 the output compared; then every input of `check`, opened as it is on disk (and closed), and again
 with hover at seven positions — the sessions written by `tests/lsp-session.py`, the one part of the
 comparison that needs `python3`.
+
+**D17 — `test` is `test.rs`, its two legs another `nazm`'s (task 6.1, 2026-10-19).**
+`toolchain/commands/test.nz` gathers, runs and reports as `test.rs` does: a directory's `.nz` files
+in byte order (an entry that is itself a directory is walked), `NAME.nz` beside `NAME.expected` read
+as `read_to_string` reads it (a file that is not UTF-8 is no case), then every top-level `@test` and
+`@fuzz` function the file marks in source order, among the declarations the host builds (`@cfg`
+by `compiler/configure.nz`; the file parsed by `sx_parse_source`, a function with two such
+attributes a case for each), `@test(fails)` read from its arguments, `@bench` skipped; a file with
+no case is counted and named on standard error. Each case is two programs run to their end with
+standard input empty — `nazm run --interpret [--harness SPEC] FILE` and `nazm build [--harness SPEC]
+FILE -o EXE` then the executable, each with `NAZM_RESULT_REPORT=1` — their output and errors
+decoded as `String::from_utf8_lossy` decodes and trimmed by `char::is_whitespace`, compared as `met`
+compares (output equal to the trimmed `.expected`, exit status 0 for `passes`, 2 for `fails`); the
+text report, the `nazm.test/1` objects (`serde_json`'s escapes) and the `nazm.test-summary/1` line
+are the reference's, with its statuses (`no_cases` and `unreadable` 3, `toolchain_failed` 4, a
+failed case 1). The command line is `cli.nz`'s, which gained `--fuzz`'s `u32` (clap's `invalid value
+… for '--fuzz <N>'` with the integer parser's reasons, an `i64` read first and then the range) and
+`usize`, a required option and a required group.
+
+The port carries neither `run` nor `build`, so the legs are started from the `nazm` that
+`NAZM_TEST_DRIVER` names — the reference's own seam (`test.rs`, `DRIVER`), which names `current_exe`
+where it is unset — and without it the command refuses with status 6 before anything else. The
+comparison sets it to the reference for both sides, so what is compared is the command around the
+legs: gathering, `@cfg`, the harness arguments, the lossy decoding, the report, the summary and
+the exit statuses. An `@cfg` that names a feature, a package or a profile (it asks a manifest) is
+refused. `run.sh test` runs every tracked recorded case (`--interpret-only`, text and `--json`),
+the conformance corpus and a fixture whole (compiled legs included, `--summary-json`, `--filter`,
+`--fuzz`), and `tests/args/test.txt` the command lines.
 
 ## Risks / Trade-offs
 
