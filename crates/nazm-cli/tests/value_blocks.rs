@@ -94,7 +94,7 @@ fn run_with_deadline(dir: &std::path::Path) -> (Option<i32>, String, String) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
     let out_path = dir.join("prog.out");
     let err_path = dir.join("prog.err");
-    let mut child = Command::new(dir.join("prog"))
+    let mut child = Command::new(dir.join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
@@ -558,7 +558,7 @@ fn an_importer_matches_a_dependency_s_enum_with_arm_blocks() {
         "{}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .output()
         .expect("execute");
     // score(0) = 0; score(3) = len "w3" * 100 = 200; score(4) = 8 + len "44" = 10;

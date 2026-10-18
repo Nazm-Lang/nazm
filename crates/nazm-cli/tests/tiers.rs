@@ -126,7 +126,9 @@ fn native(dir: &Path, expr: &str, backend: &str) -> Answer {
         .output()
         .unwrap();
     assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
-    let o = common::bounded_exe(&dir.join("p")).output().unwrap();
+    let o = common::bounded_exe(&dir.join(crate::common::exe_name("p")))
+        .output()
+        .unwrap();
     if o.status.success() {
         Answer::Value(String::from_utf8(o.stdout).unwrap().trim().to_owned())
     } else {

@@ -125,7 +125,7 @@ fn run_exe(exe: &Path) -> Ran {
 /// Build `prog.nz` against the fixture with `backend` and run it.
 fn built(d: &Dir, backend: &str, extra: &[&str]) -> Ran {
     let obj = d.object();
-    let exe = d.path(&format!("prog-{backend}"));
+    let exe = d.path(&crate::common::exe_name(format!("prog-{backend}")));
     let mut args = vec!["build", "--backend", backend, "--link"];
     let obj = obj.to_string_lossy().into_owned();
     args.push(&obj);

@@ -106,7 +106,9 @@ fn main_may_hold_only_an_out_cap_on_every_engine() {
         &["build", "--backend", "cranelift", "p.nz", "-o", "p"],
     );
     assert!(o.status.success(), "{}", text(&o));
-    let o = Command::new(d.path().join("p")).output().unwrap();
+    let o = Command::new(d.path().join(crate::common::exe_name("p")))
+        .output()
+        .unwrap();
     assert!(o.status.success());
     assert_eq!(String::from_utf8_lossy(&o.stdout), "hi\n42\n");
 }
@@ -133,7 +135,9 @@ fn an_io_cap_given_for_an_out_cap_compiles_on_both_backends() {
             &["build", "--backend", backend, "p.nz", "-o", "p"],
         );
         assert!(o.status.success(), "{backend}: {}", text(&o));
-        let o = Command::new(d.path().join("p")).output().unwrap();
+        let o = Command::new(d.path().join(crate::common::exe_name("p")))
+            .output()
+            .unwrap();
         assert!(o.status.success(), "{backend}");
         assert_eq!(String::from_utf8_lossy(&o.stdout), "7!0\n", "{backend}");
     }
@@ -164,7 +168,9 @@ fn a_function_value_with_fewer_effects_is_accepted_passed_or_returned() {
         &["build", "--backend", "cranelift", "p.nz", "-o", "p"],
     );
     assert!(o.status.success(), "{}", text(&o));
-    let o = Command::new(d.path().join("p")).output().unwrap();
+    let o = Command::new(d.path().join(crate::common::exe_name("p")))
+        .output()
+        .unwrap();
     assert!(o.status.success());
     assert_eq!(String::from_utf8_lossy(&o.stdout), "42\n");
 }

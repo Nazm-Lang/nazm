@@ -55,7 +55,7 @@ fn built(dir: &Path, name: &str, extra: &[&str]) -> PathBuf {
         "nazm {args:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let exe = dir.join(name);
+    let exe = dir.join(crate::common::exe_name(name));
     let ran = Command::new(&exe).output().expect("run");
     assert!(String::from_utf8_lossy(&ran.stdout).starts_with("72\n"));
     assert!(ran.status.success());

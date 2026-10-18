@@ -57,7 +57,9 @@ fn everywhere(header: &str, body: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = nazm(
             d.path(),
             &[
@@ -337,7 +339,10 @@ fn a_128_bit_constant_crosses_modules_and_the_cache() {
     }
     let b = nazm(d.path(), &["build", "main.nz", "-o", "m"]);
     assert_eq!(b.code, Some(0), "{b:?}");
-    let r = run_bounded(&mut common::bounded_exe(&d.path().join("m")), "m");
+    let r = run_bounded(
+        &mut common::bounded_exe(&d.path().join(crate::common::exe_name("m"))),
+        "m",
+    );
     assert_eq!(r.stdout, want, "{r:?}");
 }
 

@@ -47,7 +47,9 @@ fn everywhere(src: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = d.path().join(label.replace([' ', '-'], ""));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = run_bounded(
             Command::new(NAZM).current_dir(d.path()).args([
                 "build",

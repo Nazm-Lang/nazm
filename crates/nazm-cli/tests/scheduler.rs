@@ -76,7 +76,9 @@ fn four(src: &str) -> Vec<(String, Ran)> {
         ("llvm -O2", "llvm", "2"),
         ("cranelift", "cranelift", "0"),
     ] {
-        let exe = dir.path().join(label.replace([' ', '-'], ""));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(label.replace([' ', '-'], "")));
         let b = bounded(
             Command::new(NAZM)
                 .args([
@@ -357,7 +359,9 @@ fn what_tasks_and_channels_cost() {
     let build = |name: &str, src: &str, backend: &str| {
         let path = dir.path().join(format!("{name}.nz"));
         std::fs::write(&path, src).unwrap();
-        let exe = dir.path().join(format!("{name}-{backend}"));
+        let exe = dir
+            .path()
+            .join(crate::common::exe_name(format!("{name}-{backend}")));
         let b = Command::new(NAZM)
             .args([
                 "build",

@@ -103,7 +103,7 @@ fn each_package_sees_its_own_features_in_every_implementation() {
         &["run", "--interpret", "--features", "all", "app/src/main.nz"],
     );
     assert_eq!(answer(&all), "402", "{}", text(&all));
-    let exe = d.path().join("app-all");
+    let exe = d.path().join(crate::common::exe_name("app-all"));
     let built = nazm(
         d.path(),
         &[

@@ -1411,6 +1411,10 @@ mod tests {
     /// a candidate; and pid 1, which `kill -0` reports as dead to an unprivileged user, is a
     /// live process.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "the contained runner is Unix-only: pid 1 is no Windows process, and `ps` is MSYS's"
+    )]
     fn a_foreign_container_named_like_ours_is_never_reaped() {
         let compose = Listed {
             name: "nazm-postgres-1".to_owned(),

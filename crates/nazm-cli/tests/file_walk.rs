@@ -94,7 +94,7 @@ fn walk_everywhere(dir: &Path, program: &str) -> Vec<(String, Ran)> {
         "interpreter".to_owned(),
         nazm(dir, &["run", "--interpret", "prog.nz"]),
     )];
-    let exe = dir.join("walker");
+    let exe = dir.join(crate::common::exe_name("walker"));
     let b = nazm(
         dir,
         &[

@@ -226,7 +226,7 @@ fn has_nothing_live(label: &str, r: &Ran) {
 }
 
 fn build(dir: &Path, label: &str, backend: &str, opt: &str) -> std::path::PathBuf {
-    let exe = dir.join(label.replace([' ', '-'], ""));
+    let exe = dir.join(crate::common::exe_name(label.replace([' ', '-'], "")));
     let b = nazm(
         dir,
         &[

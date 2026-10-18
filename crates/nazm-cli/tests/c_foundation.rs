@@ -74,6 +74,10 @@ fn the_header_names_every_numbers_c_type() {
     }
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "`--shared` builds no DLL for x86_64-pc-windows-gnu: a static library (`--lib`) is what Windows has from this compiler"
+)]
 #[test]
 fn c_and_python_get_the_same_answers_at_every_width_from_both_backends() {
     let python = Command::new("python3")
@@ -111,7 +115,9 @@ fn c_and_python_get_the_same_answers_at_every_width_from_both_backends() {
             "{backend}: {}",
             String::from_utf8_lossy(&o.stderr)
         );
-        let r = Command::new(d.path().join("static")).output().unwrap();
+        let r = Command::new(d.path().join(crate::common::exe_name("static")))
+            .output()
+            .unwrap();
         assert_eq!(
             String::from_utf8_lossy(&r.stdout).trim_end(),
             ANSWERS,
@@ -143,7 +149,7 @@ fn c_and_python_get_the_same_answers_at_every_width_from_both_backends() {
             "{backend}: {}",
             String::from_utf8_lossy(&o.stderr)
         );
-        let r = Command::new(d.path().join("dynamic"))
+        let r = Command::new(d.path().join(crate::common::exe_name("dynamic")))
             .env("DYLD_LIBRARY_PATH", d.path())
             .env("LD_LIBRARY_PATH", d.path())
             .output()

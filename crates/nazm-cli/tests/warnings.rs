@@ -91,11 +91,14 @@ fn deny_warnings_refuses_what_the_checker_warns_of() {
         &["build", "--deny-warnings", "w.nz", "-o", "denied"],
     );
     assert_ne!(b.code, Some(0), "{b:?}");
-    assert!(!d.path().join("denied").exists());
+    assert!(!d.path().join(crate::common::exe_name("denied")).exists());
     // Without it, a build reports the warnings and builds.
     let b = nazm(d.path(), &["build", "w.nz", "-o", "built"]);
     assert_eq!(b.code, Some(0), "{b:?}");
     assert!(b.stderr.contains("warning[N0632]"), "{b:?}");
-    let r = run_bounded(&mut common::bounded_exe(&d.path().join("built")), "built");
+    let r = run_bounded(
+        &mut common::bounded_exe(&d.path().join(crate::common::exe_name("built"))),
+        "built",
+    );
     assert!(r.stdout.starts_with('3'), "{r:?}");
 }

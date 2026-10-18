@@ -251,7 +251,7 @@ fn a_device_register_is_refused_where_there_is_none() {
     let e = err(&o);
     assert!(e.contains("N0392"), "{e}");
     assert!(e.contains("a build for `"), "{e}");
-    assert!(!d.path().join("prog").exists());
+    assert!(!d.path().join(crate::common::exe_name("prog")).exists());
 
     let d = program("fn main(m: MmioCap) -> Int ! {} { mmio_read32(150994944) }\n");
     let o = nazm(d.path(), &["run", "--interpret", "prog.nz"]);

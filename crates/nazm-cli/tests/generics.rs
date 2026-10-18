@@ -78,7 +78,9 @@ fn ordinary_recursion_through_a_generic_function_compiles() {
     assert_eq!(stdout, "3");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
     assert!(ok, "{stderr}");
-    let ran = Command::new(dir.path().join("prog")).output().expect("run");
+    let ran = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "3");
 }
 
@@ -136,7 +138,9 @@ fn an_instance_too_long_to_spell_builds_with_a_bounded_symbol() {
             ],
         );
         assert!(ok, "{backend}: {stderr}");
-        let out = Command::new(dir.path().join("prog")).output().expect("run");
+        let out = Command::new(dir.path().join(crate::common::exe_name("prog")))
+            .output()
+            .expect("run");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout).trim(),
             "65536",
@@ -183,7 +187,9 @@ fn a_failure_inside_an_instance_names_the_generic_definitions_line() {
     assert!(interpreted.contains("m.nz:2:5"), "{interpreted}");
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
     assert!(ok, "{stderr}");
-    let out = Command::new(dir.path().join("prog")).output().expect("run");
+    let out = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(out.status.code(), Some(2));
     let native = String::from_utf8_lossy(&out.stderr);
     assert!(native.contains("N0405"), "{native}");
@@ -210,7 +216,9 @@ fn a_generic_program_behaves_the_same_at_both_optimisation_levels() {
             &["build", "m.nz", "-o", "prog", "--opt-level", level],
         );
         assert!(ok, "{stderr}");
-        let out = Command::new(dir.path().join("prog")).output().expect("run");
+        let out = Command::new(dir.path().join(crate::common::exe_name("prog")))
+            .output()
+            .expect("run");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout).trim(),
             "520",
@@ -236,7 +244,9 @@ fn a_call_carries_the_types_its_callee_is_declared_with() {
     );
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog"]);
     assert!(ok, "{stderr}");
-    let out = Command::new(dir.path().join("prog")).output().expect("run");
+    let out = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "3");
 }
 
@@ -255,6 +265,8 @@ fn two_instances_that_differ_only_in_a_later_argument_are_two_functions() {
     );
     let (ok, _, stderr) = nazm(dir.path(), &["build", "m.nz", "-o", "prog", "--emit-ir"]);
     assert!(ok, "{stderr}");
-    let out = Command::new(dir.path().join("prog")).output().expect("run");
+    let out = Command::new(dir.path().join(crate::common::exe_name("prog")))
+        .output()
+        .expect("run");
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "4");
 }

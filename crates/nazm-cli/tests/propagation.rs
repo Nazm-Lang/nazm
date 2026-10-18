@@ -69,7 +69,7 @@ fn both(source: &str) -> Ran {
         "building failed: {}",
         String::from_utf8_lossy(&built.stderr)
     );
-    let native = Command::new(dir.path().join("prog"))
+    let native = Command::new(dir.path().join(crate::common::exe_name("prog")))
         .env(MEMORY_VARIABLE, "1")
         .current_dir(dir.path())
         .output()

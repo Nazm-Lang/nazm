@@ -53,7 +53,7 @@ fn oracle(dir: &Path, args: &[&str]) -> (Answer, String) {
 }
 
 fn native(dir: &Path, backend: &str, opt: &str, args: &[&str]) -> Answer {
-    let exe = dir.join(format!("p-{backend}-{opt}"));
+    let exe = dir.join(crate::common::exe_name(format!("p-{backend}-{opt}")));
     let b = Command::new(NAZM)
         .current_dir(dir)
         .args([

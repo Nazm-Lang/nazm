@@ -38,7 +38,10 @@ fn main(t: SpawnCap) -> Int ! {spawn} {
 ";
 
 fn build(dir: &std::path::Path, backend: &str, size: Option<&str>) -> std::path::PathBuf {
-    let exe = dir.join(format!("{backend}-{}", size.unwrap_or("default")));
+    let exe = dir.join(crate::common::exe_name(format!(
+        "{backend}-{}",
+        size.unwrap_or("default")
+    )));
     let mut args = vec![
         "build",
         "--backend",

@@ -87,7 +87,7 @@ fn a_scalar_temporary_has_no_slot_and_every_other_local_keeps_one() {
     );
     // The program means what it meant, at both optimisation levels.
     for opt in ["0", "2"] {
-        let exe = d.path().join(format!("o{opt}"));
+        let exe = d.path().join(crate::common::exe_name(format!("o{opt}")));
         let b = nazm(
             d.path(),
             &[

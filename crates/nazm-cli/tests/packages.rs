@@ -121,7 +121,9 @@ fn a_package_builds_from_its_directory_everywhere_and_a_diamond_is_one_package()
     let c = nazm(d.path(), &["check", "app"]);
     assert!(c.status.success(), "{}", err(&c));
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(format!("app-{backend}"));
+        let exe = d
+            .path()
+            .join(crate::common::exe_name(format!("app-{backend}")));
         let b = nazm(
             d.path(),
             &[
@@ -386,7 +388,10 @@ fn the_lockfile_is_a_function_of_the_packages_and_a_locked_build_is_held_to_it()
         "{}",
         err(&t)
     );
-    assert!(!d.path().join("x").exists(), "nothing was built");
+    assert!(
+        !d.path().join(crate::common::exe_name("x")).exists(),
+        "nothing was built"
+    );
     write(
         d.path(),
         "shapes/src/poly.nz",
@@ -484,7 +489,7 @@ fn two_copies_built_from_empty_caches_are_byte_identical() {
         for _ in 0..2 {
             let d = tempfile::tempdir().unwrap();
             diamond(d.path());
-            let exe = d.path().join("out");
+            let exe = d.path().join(crate::common::exe_name("out"));
             let b = nazm(
                 d.path(),
                 &[

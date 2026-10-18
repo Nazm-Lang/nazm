@@ -71,7 +71,12 @@ fn every_template_is_a_project_its_own_commands_hold() {
     );
     ok(&at("cli"), &["build", ".", "-o", "app"]);
     assert_eq!(
-        String::from_utf8_lossy(&Command::new(at("cli").join("app")).output().unwrap().stdout),
+        String::from_utf8_lossy(
+            &Command::new(at("cli").join(crate::common::exe_name("app")))
+                .output()
+                .unwrap()
+                .stdout
+        ),
         "hello, world\n0\n"
     );
     assert!(ok(&at("cli"), &["inspect", "."]).contains("\"nazm.inspect/2\""));
@@ -129,7 +134,7 @@ fn init_refuses_rather_than_overwrite_or_guess() {
             && String::from_utf8_lossy(&o.stderr)
                 .contains("cli, library, server, embedded, wasm, contract")
     );
-    assert!(!d.path().join("x").exists());
+    assert!(!d.path().join(crate::common::exe_name("x")).exists());
 }
 
 #[test]
@@ -340,7 +345,9 @@ fn what_bindgen_writes_links_against_real_c() {
         d.path(),
         &["build", "main.nz", "-o", "app", "--link", "m.o"],
     );
-    let out = Command::new(d.path().join("app")).output().unwrap();
+    let out = Command::new(d.path().join(crate::common::exe_name("app")))
+        .output()
+        .unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), "42\n");
 }
 

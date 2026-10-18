@@ -32,7 +32,7 @@ fn repo_root() -> PathBuf {
 fn run_native(dir: &Path) -> (Option<i32>, String) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
     let out_path = dir.join("prog.out");
-    let mut child = Command::new(dir.join("prog"))
+    let mut child = Command::new(dir.join(crate::common::exe_name("prog")))
         .current_dir(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
         .spawn()
@@ -152,7 +152,7 @@ fn a_main_that_takes_anything_but_authority_is_refused_before_it_is_built() {
         .expect("build");
     assert!(!built.status.success());
     assert!(String::from_utf8_lossy(&built.stderr).contains("N0371"));
-    assert!(!dir.path().join("prog").exists());
+    assert!(!dir.path().join(crate::common::exe_name("prog")).exists());
 }
 
 /// Interpret `root` in `dir`, then build and run it at `-O0` and `-O2`: all three agree.

@@ -30,7 +30,7 @@ fn repo_root() -> PathBuf {
 fn run_native(dir: &Path) -> (Option<i32>, String) {
     const LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
     let out_path = dir.join("prog.out");
-    let mut child = Command::new(dir.join("prog"))
+    let mut child = Command::new(dir.join(crate::common::exe_name("prog")))
         .current_dir(dir)
         .stdout(std::fs::File::create(&out_path).expect("stdout file"))
         .spawn()

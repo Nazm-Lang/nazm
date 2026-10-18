@@ -475,6 +475,10 @@ fn str_lt(a: Str, b: Str) -> Bool {
 }
 "#;
 
+#[cfg_attr(
+    windows,
+    ignore = "N0830: a Windows build reaching TLS is refused until the SChannel binding has passed on a Windows host"
+)]
 #[test]
 fn a_drain_closes_idle_connections_and_keeps_its_deadline() {
     // An idle keep-alive connection is closed at once; a request in flight is answered with

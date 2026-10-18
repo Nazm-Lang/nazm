@@ -213,7 +213,10 @@ int main(void) {
             .output()
             .unwrap();
         assert!(c.status.success(), "{}", String::from_utf8_lossy(&c.stderr));
-        let r = common::run_bounded(&mut common::bounded_exe(&d.path().join("host")), "host");
+        let r = common::run_bounded(
+            &mut common::bounded_exe(&d.path().join(crate::common::exe_name("host"))),
+            "host",
+        );
         assert_eq!(r.code, Some(2), "{backend} -O{opt}: {r:?}");
         assert_eq!(r.stdout, "5\n", "{backend} -O{opt}");
         assert!(
@@ -264,7 +267,7 @@ fn natively(d: &std::path::Path, extra: &[&str]) -> Vec<(String, common::Ran)> {
     }
     for (backend, opt) in backends {
         let label = format!("{backend} -O{opt}");
-        let exe = d.join(format!("p-{backend}-{opt}"));
+        let exe = d.join(crate::common::exe_name(format!("p-{backend}-{opt}")));
         let mut args = vec![
             "build",
             "--no-cache",
@@ -450,7 +453,10 @@ fn main() -> Int { tagged(10) }
         unit.contains("  call void @nz.raise()\n  unreachable"),
         "{unit}"
     );
-    let r = common::run_bounded(&mut common::bounded_exe(&d.path().join("p")), "p");
+    let r = common::run_bounded(
+        &mut common::bounded_exe(&d.path().join(crate::common::exe_name("p"))),
+        "p",
+    );
     // `main`'s result, fib(10) + 2: the exit status, or printed where the run asks for it.
     assert!(
         r.code == Some(57) || (r.code == Some(0) && r.stdout == "57\n"),

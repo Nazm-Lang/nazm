@@ -213,7 +213,7 @@ fn a_buffer_too_short_for_a_stat_stops_the_program_everywhere() {
         r.stderr
     );
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[
@@ -269,7 +269,7 @@ fn standard_input_is_read_alike_everywhere() {
         .args(["run", "--interpret", "prog.nz"]);
     runs.push(("interpreter".to_owned(), interp));
     for backend in ["llvm", "cranelift"] {
-        let exe = d.path().join(backend);
+        let exe = d.path().join(crate::common::exe_name(backend));
         let b = nazm(
             d.path(),
             &[

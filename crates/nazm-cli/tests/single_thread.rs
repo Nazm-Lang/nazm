@@ -106,7 +106,9 @@ fn a_program_of_one_thread_still_reports_its_failures() {
             ),
         ] {
             std::fs::write(d.path().join("p.nz"), format!("{DOWN}{main}")).unwrap();
-            let exe = d.path().join(format!("p-{backend}"));
+            let exe = d
+                .path()
+                .join(crate::common::exe_name(format!("p-{backend}")));
             let b = nazm(
                 d.path(),
                 &[
